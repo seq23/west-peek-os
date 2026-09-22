@@ -48,6 +48,49 @@ violations) on breach and proves its own detection with a self-test fixture run.
   dispatch, and holds them to one list in both directions; hard-fails on zero kinds or scripts;
   `--self-test` plants a missing script, an unregistered duty, a claimer without the kind, a sweep
   without the dispatch, a prompt file without a phase and a script without `run()`.
+- `a-switch-is-a-switch-on-both-sides.mjs` (`npm run validate:kind-rule-switches`, 22 Sep 2026) — a
+  `work_kind_rule` row that is a switch is a switch in BOTH places that decide. The Work page and
+  `handleSetWorkKindRule` each had `"land_on_green"` typed into them separately, so migration 0223's
+  editable `done_reply_preview_first` would have rendered as a read-only badge while the API took any
+  string for it. The scan requires `ON_OFF_RULE_KEYS` to live in `src/shared/work/localJobs.ts` (a
+  worker-only home pushes the page back to a literal), both sides to read it and neither to compare a
+  rule key to a literal, every key on the list to be seeded by some migration as `editable = 1` with
+  an `on`/`off` value, and — the direction that actually bit — every editable on/off rule any
+  migration seeds to be ON the list. Hard-fails on zero switches or zero seeded rules; `--self-test`
+  runs 22 Sep's real page and route through it, plus a ghost switch, a dropped rule, a switch seeded
+  uneditable, and the list moved out of shared.
+- `only-the-script-sets-delivery-config.mjs` (`npm run validate:delivery-config`, 22 Sep 2026) — a
+  Pages delivery variable (`EMAIL_FROM`, `LEAD_TO`, `RESEND_API_KEY`) on one of the three West Peek
+  projects is set by the DUTY SCRIPT, never by the model and never by a partner. The model may only
+  ask for one by name in its BUILD result (`pages_env: [{ project, name }]`). The scan holds the
+  allow-list in `scripts/duties/lib/pages-delivery.mjs` to exactly those three projects and three
+  variables, runs the real `classify`/`readRequests` over off-list projects, reserved names and
+  empty strings and requires each to come back REFUSED AND RECORDED, requires the duty script to
+  keep no second copy of a name, to feed the secret through `child.stdin` rather than an argument or
+  a shell string, to build the proof only from what it observed, and to build the model's prompt
+  without reading the environment — and requires the prompt file to tell Porter this is his, never a
+  named stop, and that he may not claim config he did not set. It exists because on 22 Sep 2026
+  Porter declared a named stop for a key in this repo's own vault AND reported two variables set
+  that he had never touched. Hard-fails on zero projects, variables or checks; `--self-test` plants
+  a fourth project, an open gate, a gate that drops refusals, a value on wrangler's command line, a
+  value through a shell, a printed value, a second list, an inert BUILD step, a prompt builder that
+  reads the environment, and the old named-stop prompt.
+- `only-the-script-sets-delivery-config.mjs` (`npm run validate:delivery-config`, 22 Sep 2026) — a
+  Pages delivery variable (`EMAIL_FROM`, `LEAD_TO`, `RESEND_API_KEY`) on one of the three West Peek
+  projects is set by the DUTY SCRIPT, never by the model and never by a partner. The model may only
+  ask for one by name in its BUILD result (`pages_env: [{ project, name }]`). The scan holds the
+  allow-list in `scripts/duties/lib/pages-delivery.mjs` to exactly those three projects and three
+  variables, runs the real `classify`/`readRequests` over off-list projects, reserved names and
+  empty strings and requires each to come back REFUSED AND RECORDED, requires the duty script to
+  keep no second copy of a name, to feed the secret through `child.stdin` rather than an argument or
+  a shell string, to build the proof only from what it observed, and to build the model's prompt
+  without reading the environment — and requires the prompt file to tell Porter this is his, never a
+  named stop, and that he may not claim config he did not set. It exists because on 22 Sep 2026
+  Porter declared a named stop for a key in this repo's own vault AND reported two variables set
+  that he had never touched. Hard-fails on zero projects, variables or checks; `--self-test` plants
+  a fourth project, an open gate, a gate that drops refusals, a value on wrangler's command line, a
+  value through a shell, a printed value, a second list, an inert BUILD step, a prompt builder that
+  reads the environment, and the old named-stop prompt.
 - `no-land-without-approval.mjs` (`npm run validate:no-land-without-approval`, 20 Sep 2026) — reads the
   Worker's `parkPhase`, the Mac script's `landGate` and `run()`, and migration 0219's trigger and
   rule seed, and requires each to refuse a landing without a recorded plan approval and a recorded

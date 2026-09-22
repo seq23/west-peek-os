@@ -61,6 +61,17 @@ export interface LocalJobKindSpec {
 
 export const WEB_PROPERTY_CHANGE_KIND = "WEB_PROPERTY_CHANGE" as const;
 
+/**
+ * THE STANDING RULES WHOSE VALUE IS A SWITCH — one list, read by the Work page (which renders a
+ * switch for them and a read-only badge for everything else) and by `handleSetWorkKindRule` (which
+ * refuses anything but on/off for them). SHARED, not worker-only, because the two sides had a copy
+ * each: the page typed `rule.rule_key === "land_on_green"` and the route typed `key ===
+ * "land_on_green"`, so migration 0223's `done_reply_preview_first` shipped as a rule a partner
+ * could read and not change, while the API would have taken any forty-character string for it.
+ * `validate:kind-rule-switches` fails the build if either side grows its own list again.
+ */
+export const ON_OFF_RULE_KEYS: readonly string[] = ["land_on_green", "done_reply_preview_first"];
+
 export const LOCAL_JOB_KINDS: readonly LocalJobKindSpec[] = [
   {
     kind: WEB_PROPERTY_CHANGE_KIND,

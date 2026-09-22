@@ -13,6 +13,7 @@ import { readWebPropertyAsk, type WebPropertyAsk } from "../../shared/intake/web
 import { approvedAnswers, askLines, decidedFromAsks, readApprovalReply, readAsks, type Ask } from "../../shared/work/approvalReply";
 import { abandonRun } from "../ai/subscriptionSeats";
 import { alreadyTold, recordNotice, type NoticeKind } from "./requestReply";
+import { doneReplyLaneFor, isOn, rulesFor, ON_OFF_RULE_KEYS, type KindRule } from "./kindRules";
 import { attachmentBytes } from "../effects/mimeAttachments";
 import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
 import { strippedSubject } from "../../shared/intake/emailTriggers";
@@ -174,6 +175,13 @@ async function tellRequester(
   const partner = to ? partnerByEmail(to) : null;
   if (!partner) return { sent: false, reason: "the card was not asked for by a partner's email" };
   if (await alreadyTold(env, card.id, notice.kind, notice.cause)) return { sent: false, reason: `${notice.kind} already sent for this cause` };
+  /*
+   * HER RULE, READ IN ONE PLACE (0223, 22 Sep 2026). A DONE reply takes the preview lane when
+   * `done_reply_preview_first` is on, whatever the card's own tick says; everything else — RECEIVED,
+   * PLAN, PREVIEW, QUESTION, STUCK — carries the card's tick exactly as before. `doneReplyLaneFor`
+   * is the only reader, and `services/requestReply.ts` asks the same function.
+   */
+  const lane = await doneReplyLaneFor(env, { kind: WEB_PROPERTY_CHANGE_KIND, preview_first: card.preview_first, preview_owner_id: card.preview_owner_id }, notice);
   let out: { sent: boolean; reason: string; threadToken?: string | null };
   try {
     out = await sendOrPreview(env, {
@@ -184,8 +192,8 @@ async function tellRequester(
       firmScope: card.firm_scope,
       cardKind: WEB_PROPERTY_CHANGE_KIND,
       workCardId: card.id,
-      cardAsked: card.preview_first === 1 ? true : card.preview_first === 0 ? false : null,
-      tickedByFirmUserId: card.preview_owner_id ?? null,
+      cardAsked: lane.cardAsked,
+      tickedByFirmUserId: lane.tickedByFirmUserId,
       requestedByEmail: to,
       what: card.title,
       replyOnThread,
@@ -269,28 +277,15 @@ export const PORTER_NAME = "Porter";
 
 // ── Rules ─────────────────────────────────────────────────────────────────────────────────────
 
-export interface KindRule {
-  kind: string;
-  rule_key: string;
-  label: string;
-  value: string;
-  editable: number;
-  note: string;
-  set_by: string | null;
-  set_at: string;
-}
-
-/** The standing rules of a kind, as rows. Seeded by 0219; a Managing Partner edits the editable ones. */
-export async function rulesFor(env: Env, kind: string): Promise<Record<string, string>> {
-  const rows = (
-    await env.WP_OS_DB.prepare("SELECT rule_key, value FROM work_kind_rule WHERE kind = ?1").bind(kind).all<{ rule_key: string; value: string }>()
-  ).results ?? [];
-  return Object.fromEntries(rows.map((r) => [r.rule_key, r.value]));
-}
-
-export function isOn(value: string | undefined): boolean {
-  return ["on", "1", "true", "yes"].includes((value ?? "").trim().toLowerCase());
-}
+/*
+ * THE RULES LIVE IN `kindRules.ts` (22 Sep 2026). They moved there when the DONE path got a rule of
+ * its own — `done_reply_preview_first` — because BOTH doors that can send a finished-work email
+ * have to read it, and the other one (`requestReply.ts`) is imported BY this file. A reader kept
+ * here would have made that a cycle, and a second copy over there would have been the defect the
+ * preview lane already produced once. Re-exported so every existing call site and test is unchanged
+ * and there is still exactly one implementation.
+ */
+export { isOn, rulesFor, type KindRule };
 
 /**
  * THE ONE READER of the model-per-phase decision. The rule row when it names a real alias, the
@@ -1306,8 +1301,15 @@ export async function handleSetWorkKindRule(ctx: RouteContext): Promise<Response
   if (key.startsWith("model_") && !(CLAUDE_MODEL_ALIASES as readonly string[]).includes(value)) {
     return json({ error: "invalid_input", detail: `A model is one of: ${CLAUDE_MODEL_ALIASES.join(", ")}.` }, { status: 400 });
   }
-  if (key === "land_on_green" && !["on", "off"].includes(value)) {
-    return json({ error: "invalid_input", detail: "Land on green is on or off." }, { status: 400 });
+  /*
+   * A SWITCH IS ON OR OFF, AND THE LIST OF SWITCHES IS ONE LIST (22 Sep 2026). This used to name
+   * `land_on_green` and only `land_on_green`, so 0223's `done_reply_preview_first` would have
+   * accepted any forty-character string here while the Work page — which had the same name typed
+   * into it separately — rendered it as a read-only badge. `ON_OFF_RULE_KEYS` is the one list both
+   * sides read, and `validate:kind-rule-switches` fails the build if they ever disagree again.
+   */
+  if (ON_OFF_RULE_KEYS.includes(key) && !["on", "off"].includes(value)) {
+    return json({ error: "invalid_input", detail: `"${row.label}" is on or off.` }, { status: 400 });
   }
   await ctx.env.WP_OS_DB.prepare("UPDATE work_kind_rule SET value = ?3, set_by = ?4, set_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE kind = ?1 AND rule_key = ?2")
     .bind(kind, key, value, ctx.identity!.id)
@@ -1322,6 +1324,22 @@ export async function handleSetWorkKindRule(ctx: RouteContext): Promise<Response
     payload: { from: row.value, to: value },
   });
   return json({ ok: true, kind, rule_key: key, value });
+}
+
+/**
+ * Her words on the card, with the author resolved to a first name (0224). Served with the panel's
+ * own row rather than from a second route: it is the same card and the same question — what is
+ * going to leave the firm about this piece of work.
+ */
+async function requesterNotesOf(env: Env, cardId: string): Promise<{ requester_notes: string | null; requester_notes_by_name: string | null; requester_notes_at: string | null }> {
+  const row = await env.WP_OS_DB.prepare("SELECT requester_notes, requester_notes_by, requester_notes_at FROM work_card WHERE id = ?1")
+    .bind(cardId)
+    .first<{ requester_notes: string | null; requester_notes_by: string | null; requester_notes_at: string | null }>();
+  return {
+    requester_notes: row?.requester_notes ?? null,
+    requester_notes_by_name: row?.requester_notes_by ? (PARTNERS.find((p) => p.firmUserId === row.requester_notes_by)?.firstName ?? row.requester_notes_by) : null,
+    requester_notes_at: row?.requester_notes_at ?? null,
+  };
 }
 
 /** GET /api/work-cards/:id/web-property-change — the row, for the card on the Work page. */
@@ -1342,6 +1360,9 @@ export async function handleGetWebPropertyChange(ctx: RouteContext): Promise<Res
     attachments: (await attachmentsFor(ctx.env, id)).map((a) => ({ id: a.id, filename: a.filename, media_type: a.media_type, bytes: a.bytes })),
     notices: ((await ctx.env.WP_OS_DB.prepare("SELECT kind, cause, sent, sent_at FROM work_card_notice WHERE work_card_id = ?1 ORDER BY sent_at").bind(id).all<{ kind: string; cause: string; sent: number; sent_at: string }>()).results ?? []),
     current_run: run ? { id: run.id, status: run.status, claimed_by: run.claimed_by, claimed_at: run.claimed_at, progressed_at: run.progressed_at, progress_note: run.progress_note } : null,
+    // 0224: her words for the finished email, served with the card's own facts so the panel does
+    // not need a second fetch to show a field the partner is expected to fill in.
+    ...(await requesterNotesOf(ctx.env, id)),
   });
 }
 

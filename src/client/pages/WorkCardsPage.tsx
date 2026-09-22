@@ -1054,7 +1054,7 @@ export function WorkCardsPage({
                       the live proof — and the standing rules of the kind, flippable by a partner. */}
                   {c.kind === "WEB_PROPERTY_CHANGE" && (
                     <>
-                      <WebPropertyChangePanel cardId={c.id} onNavigate={onNavigate} />
+                      <WebPropertyChangePanel cardId={c.id} onNavigate={onNavigate} canEdit={me.roles.includes("MANAGING_PARTNER")} />
                       <WorkKindRules kind="WEB_PROPERTY_CHANGE" canEdit={me.roles.includes("MANAGING_PARTNER")} />
                     </>
                   )}

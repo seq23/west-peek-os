@@ -1,7 +1,9 @@
 import type { Env } from "../env";
 import { ASSIGNING_PARTNERS } from "../../shared/intake/partnerAuthority";
-import { bulletsFrom } from "../../shared/email/execEmail";
+import { bulletsFrom, type ExecEmailSection } from "../../shared/email/execEmail";
+import { partnerByFirmUserId } from "../../shared/registry/partners";
 import { sendOrPreview } from "./previewApproval";
+import { doneReplyLaneFor } from "./kindRules";
 
 /**
  * A request that came in by email is answered by email.
@@ -59,15 +61,58 @@ export async function recordNotice(
     .run();
 }
 
+/**
+ * HER WORDS ON THE FINISHED EMAIL (0224, 22 Sep 2026). A Managing Partner may put a line or two on
+ * the card; they go out with the finished work as a section in her own name, immediately before
+ * "Your call", and on the DONE reply only. A card with none renders exactly the email it did before.
+ */
+export function requesterNotesSection(notes: string | null | undefined, byFirmUserId: string | null | undefined): ExecEmailSection | null {
+  const bullets = String(notes ?? "")
+    .split(/\r?\n/)
+    .map((l) => l.replace(/^(?:[•·\-*]|\d+[.)])\s+/, "").trim())
+    .filter(Boolean);
+  if (bullets.length === 0) return null;
+  const partner = partnerByFirmUserId(byFirmUserId ?? null);
+  // Only a Managing Partner can set them (the card API refuses anyone else), so a row whose author
+  // is not on the partner registry is a row from before that rule — it speaks for the firm, unnamed.
+  return { label: partner ? `From ${partner.firstName}` : "From the firm", bullets };
+}
+
+/**
+ * WHO ROUTED IT (her rule, 22 Sep 2026). `work_card.assigned_from_card_id` is the hand-off trail
+ * (0160): the card this one was created from, whose owner is whoever passed the work on. Resolved
+ * to a roster NAME here, because "aie_wren" in a partner's inbox is an id, not an answer.
+ */
+export async function routedByFor(env: Env, assignedFromCardId: string | null | undefined, who: string): Promise<string | null> {
+  const from = (assignedFromCardId ?? "").trim();
+  if (!from) return null;
+  const row = await env.WP_OS_DB.prepare(
+    `SELECT COALESCE(e.name, p.full_name) AS name
+       FROM work_card c
+       LEFT JOIN ai_employee e ON e.id = c.owner_id
+       LEFT JOIN firm_user p ON p.id = c.owner_id
+      WHERE c.id = ?1`,
+  )
+    .bind(from)
+    .first<{ name: string | null }>();
+  const name = (row?.name ?? "").trim();
+  // A hand-off to yourself is not a hand-off, and an owner nobody can name is not worth a sentence.
+  return name && name !== who ? name : null;
+}
+
 export async function replyToRequester(
   env: Env,
   card: {
     id: string;
     title: string;
+    kind?: string | null;
     requested_by_email?: string | null;
     firm_scope: string;
     preview_first?: number | null;
     preview_owner_id?: string | null;
+    requester_notes?: string | null;
+    requester_notes_by?: string | null;
+    assigned_from_card_id?: string | null;
   },
   outcome: "DONE" | "BLOCKED",
   who: string,
@@ -88,6 +133,17 @@ export async function replyToRequester(
   const asked = card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").trim() || card.title;
   const finding = bulletsFrom(detail);
   const cardLink = `https://os.joinwestpeek.com/#/work (card ${card.id})`;
+  /*
+   * HER RULE ON THE FINISHED EMAIL (0223, 22 Sep 2026), READ IN THE ONE PLACE BOTH DOORS ASK.
+   * `done_reply_preview_first` on the card's kind puts the DONE reply in the preview lane — filed
+   * for her on Home with Send it / Send it back / Dismiss — even when the card's own tick was never
+   * set. BLOCKED replies, and every notice kind but DONE, carry the card's tick exactly as before:
+   * a partner waiting on an answer to a question should not be waiting on a third person as well.
+   */
+  const lane = await doneReplyLaneFor(env, card, notice);
+  // Her words on the card, and who passed the work on — both DONE-only.
+  const notes = outcome === "DONE" && notice?.kind === "DONE" ? requesterNotesSection(card.requester_notes, card.requester_notes_by) : null;
+  const routedBy = notice?.kind === "DONE" ? await routedByFor(env, card.assigned_from_card_id, who) : null;
   /*
    * THROUGH THE LANE, LIKE EVERYTHING ELSE AN EMPLOYEE FINISHES (18 Sep 2026).
    *
@@ -115,6 +171,7 @@ export async function replyToRequester(
         outcome === "DONE"
           ? { label: "What I found", bullets: finding.length ? finding : ["Finished. The findings are on the card."] }
           : { label: "Where I am stuck", bullets: finding.length ? finding : ["I need a decision from you before I can go on."] },
+        ...(notes ? [notes] : []),
         {
           label: "Your call",
           bullets:
@@ -124,12 +181,13 @@ export async function replyToRequester(
         },
       ],
       details: detail,
+      routedBy,
     },
     objectType: "work_card",
     objectId: card.id,
     workCardId: card.id,
-    cardAsked: card.preview_first === 1 ? true : card.preview_first === 0 ? false : null,
-    tickedByFirmUserId: card.preview_owner_id ?? null,
+    cardAsked: lane.cardAsked,
+    tickedByFirmUserId: lane.tickedByFirmUserId,
     requestedByEmail: card.requested_by_email ?? null,
     firmScope: card.firm_scope,
     actorId: "work_sweep",

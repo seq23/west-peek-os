@@ -90,6 +90,14 @@ export interface SweepCard {
    * always hers. The sweep only carries it; `previewOwnerFor` resolves it against the registry.
    */
   preview_owner_id?: string | null;
+  /**
+   * 0224: a Managing Partner's own words for the finished email, and who wrote them. Carried, never
+   * interpreted here — `requesterNotesSection` decides what a DONE reply does with them.
+   */
+  requester_notes?: string | null;
+  requester_notes_by?: string | null;
+  /** 0160: the card this one was handed on from. Its owner is who routed the work. */
+  assigned_from_card_id?: string | null;
 }
 
 /** Who the sweep is when it works a card: the firm, acting on its own assignment. */
@@ -121,7 +129,10 @@ export async function claimNextCard(env: Env, now: Date): Promise<SweepCard | nu
   const nowIso = now.toISOString();
   const candidate = await env.WP_OS_DB.prepare(
     `SELECT id, title, kind, owner_id, state, COALESCE(work_attempts, 0) AS work_attempts, firm_scope,
-            requested_by_email, preview_first, result_recipient, preview_owner_id
+            requested_by_email, preview_first, result_recipient, preview_owner_id,
+            -- 0224: her words on the finished email. 0160: who handed the work on. Both ride to
+            -- replyToRequester on the card, because the reply is built in one place from one row.
+            requester_notes, requester_notes_by, assigned_from_card_id
        FROM work_card
       WHERE owner_type = 'AI' AND owner_id IS NOT NULL
         AND state IN ('OPEN', 'IN_PROGRESS')

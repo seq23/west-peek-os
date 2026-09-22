@@ -11,9 +11,11 @@
  *          Drive folder with the service account (BLOCK naming the folder on zero files) · one
  *          `claude -p` (the plan model) with the prompt file and the job context · read the
  *          result file · report the plan document, DECIDED and ASK.
- *   BUILD  same worktree · `claude -p` (the build model) · then THE SCRIPT, not the model, asks
- *          `gh` for the PR and watches `gh pr checks` to a terminal state · reports GREEN/RED/
- *          PENDING as observed. "Never take an agent's word that CI is green."
+ *   BUILD  same worktree · `claude -p` (the build model) · then THE SCRIPT, not the model, sets any
+ *          delivery config the model REQUESTED BY NAME (`pages_env`, against the allow-list in
+ *          `lib/pages-delivery.mjs`), asks `gh` for the PR and watches `gh pr checks` to a terminal
+ *          state · reports GREEN/RED/PENDING as observed. "Never take an agent's word that CI is
+ *          green" — and never that it set a variable either.
  *   LAND   REFUSED unless the job carries a recorded plan approval AND a recorded green check
  *          (`landGate` below; `validate:no-land-without-approval` reads it) · `~/bin/land <pr>`
  *          merges, watches main, deploys · the merge SHA from `gh` · `claude -p` (the land model)
@@ -23,8 +25,19 @@
  *
  * The model, the phase, the repo, the worktree path, the ceiling and the result path are all on
  * the job the Worker parked. The model may not land (the script does, behind the gate), may not
- * report a check state (the script observes it), and may not report success without writing the
- * result file (Rule 0: a phase that says nothing has not run).
+ * report a check state (the script observes it), may not set or report DELIVERY CONFIG (it asks by
+ * name in `pages_env`; the script sets what is on the allow-list and records what it observed), and
+ * may not report success without writing the result file (Rule 0: a phase that says nothing has
+ * not run).
+ *
+ * ── DELIVERY CONFIG IS THE SCRIPT'S, NEVER A NAMED STOP (22 Sep 2026) ─────────────────────────
+ *
+ * The three Pages projects and the three variables are in `lib/pages-delivery.mjs` — one list, read
+ * here and by `scripts/validate/only-the-script-sets-delivery-config.mjs`. A plain variable goes
+ * through the Cloudflare API with the vault's CLOUDFLARE_API_TOKEN; the secret goes through
+ * `wrangler pages secret put` with the value written to the child's STDIN. A value is never an
+ * argument, never printed, never in the prompt, never in the report. What is recorded is the
+ * project, the variable NAME and one of set / already set / failed / refused.
  *
  * ── SELF-CONTAINED, ON PURPOSE ───────────────────────────────────────────────────────────────
  *
@@ -39,6 +52,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { CLOUDFLARE_ACCOUNT_ID, classify, proofLine, readRequests } from "./lib/pages-delivery.mjs";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -98,6 +112,22 @@ export function readResult(text, phase) {
     return { result: null, problem: "every ask must be { question, recommended } — an ask without a recommended default cannot be approved with one word" };
   }
   if (parsed.status === "ok" && phase === "BUILD" && !(typeof parsed.pr_url === "string" && /^https?:\/\//.test(parsed.pr_url))) return { result: null, problem: "an ok BUILD must carry the PR url" };
+  /*
+   * `pages_env` IS A REQUEST, AND ONLY A REQUEST (22 Sep 2026). A name and a project, nothing else.
+   * A value here would be the model carrying a credential, so an entry that has one is refused
+   * outright rather than ignored — a result that tried is a result that was written wrong.
+   */
+  if (parsed.pages_env !== undefined) {
+    if (!Array.isArray(parsed.pages_env)) return { result: null, problem: "pages_env must be a list of { project, name }" };
+    for (const e of parsed.pages_env) {
+      if (!e || typeof e !== "object" || !String(e.project ?? "").trim() || !String(e.name ?? "").trim()) {
+        return { result: null, problem: "every pages_env entry is { project, name } — both named, both non-empty" };
+      }
+      if (Object.keys(e).some((k) => !["project", "name"].includes(k))) {
+        return { result: null, problem: "a pages_env entry carries ONLY project and name — never a value; the script holds the values" };
+      }
+    }
+  }
   if (parsed.status === "ok" && phase === "LAND" && !(typeof parsed.live_proof === "string" && parsed.live_proof.trim())) return { result: null, problem: "an ok LAND must carry the live proof" };
   return { result: parsed, problem: null };
 }
@@ -343,6 +373,113 @@ async function watchChecks(worktree, number, signal, progress) {
   return last;
 }
 
+// ── Delivery config: the SCRIPT sets it, the model only asks by name ─────────────────────────
+
+const CF_API = "https://api.cloudflare.com/client/v4";
+
+/** The production env vars a Pages project already has: name → type (+ value when it is plain). */
+async function pagesEnvTypes(project, token) {
+  const res = await fetch(`${CF_API}/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${encodeURIComponent(project)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(60_000),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok || !body?.success) throw new Error(`Cloudflare answered ${res.status} for ${project}`);
+  const vars = body.result?.deployment_configs?.production?.env_vars ?? {};
+  const out = {};
+  for (const [k, v] of Object.entries(vars)) {
+    const type = v?.type ?? "plain_text";
+    out[k] = { type, value: type === "secret_text" ? null : (v?.value ?? null) };
+  }
+  return out;
+}
+
+/**
+ * A PLAIN delivery variable, through the Cloudflare API. The value comes from the allow-list, not
+ * from the model and not from the environment, so what gets written is knowable by reading the list.
+ */
+async function setPagesPlain(entry, token, existing) {
+  const already = existing[entry.name];
+  if (already && already.type !== "secret_text" && already.value === entry.value) return "already set";
+  const res = await fetch(`${CF_API}/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${encodeURIComponent(entry.project)}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ deployment_configs: { production: { env_vars: { [entry.name]: { type: "plain_text", value: entry.value } } } } }),
+    signal: AbortSignal.timeout(60_000),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok || !body?.success) throw new Error(`Cloudflare answered ${res.status}`);
+  return "set";
+}
+
+/**
+ * A delivery SECRET, through `wrangler pages secret put`, with the value written to the child's
+ * STDIN. It is never an argument (a command line is readable by every other process on the
+ * machine), never interpolated into a string, and the child's own output never reaches the report —
+ * only its exit code becomes a word.
+ */
+function setPagesSecret(entry, env) {
+  return new Promise((resolve) => {
+    const value = env?.[entry.vaultKey];
+    if (typeof value !== "string" || value.length === 0) {
+      resolve({ outcome: "failed", why: `${entry.vaultKey} is not in the environment — the claimer must run under vault.mjs run` });
+      return;
+    }
+    const child = spawn("npx", ["wrangler", "pages", "secret", "put", entry.name, "--project-name", entry.project], {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...env, CI: "1" },
+    });
+    child.on("error", () => resolve({ outcome: "failed", why: "wrangler could not be started" }));
+    child.on("close", (code) => resolve(code === 0 ? { outcome: "set", why: null } : { outcome: "failed", why: `wrangler exited ${code ?? -1}` }));
+    // THE ONLY PLACE THE VALUE EXISTS in this function, and it goes straight down the pipe.
+    child.stdin.end(value);
+  });
+}
+
+/**
+ * Every allowed request, performed. Returns the proof LINES — project, variable NAME, outcome —
+ * and nothing that could carry a value. Refusals are recorded, never dropped: a model that asked
+ * for something off the list must be able to see that it was refused and why.
+ */
+export async function applyPagesEnv(pagesEnv, env, progress) {
+  const { allowed, refused } = readRequests(pagesEnv);
+  const lines = [];
+  for (const r of refused) {
+    lines.push(proofLine(r.project || "(no project)", r.name || "(no name)", "refused", r.why));
+    progress?.(lines[lines.length - 1]);
+  }
+  if (allowed.length === 0) return lines;
+  const token = env?.CLOUDFLARE_API_TOKEN;
+  if (!token) {
+    for (const a of allowed) lines.push(proofLine(a.project, a.name, "failed", "CLOUDFLARE_API_TOKEN is not in the environment"));
+    return lines;
+  }
+  const seen = new Map();
+  for (const a of allowed) {
+    let outcome = "failed";
+    let why = null;
+    try {
+      if (!seen.has(a.project)) seen.set(a.project, await pagesEnvTypes(a.project, token));
+      const existing = seen.get(a.project);
+      if (a.kind === "plain") {
+        outcome = await setPagesPlain(a, token, existing);
+      } else if (existing[a.name]?.type === "secret_text") {
+        outcome = "already set";
+      } else {
+        const out = await setPagesSecret(a, env);
+        outcome = out.outcome;
+        why = out.why;
+      }
+    } catch (err) {
+      outcome = "failed";
+      why = err instanceof Error ? err.message.slice(0, 160) : "the call did not complete";
+    }
+    lines.push(proofLine(a.project, a.name, outcome, why));
+    progress?.(lines[lines.length - 1]);
+  }
+  return lines;
+}
+
 // ── The duty ─────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -465,6 +602,12 @@ export async function run(job, ctx) {
   }
 
   if (phase === "BUILD") {
+    /*
+     * DELIVERY CONFIG, BEFORE THE PR IS READ. The model asked by name; the script is what acts, and
+     * what it observed is what goes in the proof. Nothing the model wrote about env vars is carried
+     * forward — `configLines` is built entirely from `applyPagesEnv`'s return.
+     */
+    const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress);
     // THE SCRIPT OBSERVES THE PR AND ITS CHECKS. The model's pr_url is a claim; gh is the fact.
     let pr;
     try {
@@ -484,7 +627,10 @@ export async function run(job, ctx) {
       check_state: checks.state,
       check_url: checks.url ?? undefined,
       preview_url: previewUrl ?? undefined,
-      proof: String(result.proof ?? "").slice(0, 8000),
+      // The model's own proof, then what the SCRIPT did about delivery config — in that order, so
+      // a reader sees the claim and the observation side by side and can tell which is which.
+      proof: [String(result.proof ?? "").slice(0, 8000), ...configLines].filter(Boolean).join("\n"),
+      pages_env_proof: configLines,
       reason: checks.state === "GREEN" ? undefined : `checks are ${checks.state} on ${pr.url}`,
       notes: `${result.notes ?? ""}${cost !== null ? ` (cost $${cost.toFixed(2)})` : ""}`.trim(),
     };
@@ -545,6 +691,31 @@ function selfTest() {
     ["the context lists attachments and says when no folder came", () => {
       const t = renderContext({ phase: "PLAN", card: { id: "wc_1", title: "T" }, request: "the photo is attached", rules: {} }, { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/j/r.json", attachments: [{ filename: "sensori.jpg", media_type: "image/jpeg", bytes: 1234, path: "/p/attachments/sensori.jpg" }] });
       return t.includes("ATTACHMENTS: sensori.jpg (image/jpeg, 1234 bytes) → /p/attachments/sensori.jpg") && t.includes("DRIVE_FOLDERS: none in the request");
+    }],
+    ["a BUILD may request delivery config BY NAME", () => {
+      const r = readResult(JSON.stringify({ phase: "BUILD", status: "ok", pr_url: "https://x/pull/1", pages_env: [{ project: "west-peek-ventures", name: "RESEND_API_KEY" }] }), "BUILD").result;
+      return r?.pages_env?.[0]?.name === "RESEND_API_KEY";
+    }],
+    ["a pages_env entry carrying a VALUE is refused outright", () => readResult(JSON.stringify({ phase: "BUILD", status: "ok", pr_url: "https://x/pull/1", pages_env: [{ project: "west-peek-ventures", name: "RESEND_API_KEY", value: "re_live" }] }), "BUILD").result === null],
+    ["a pages_env that is not a list is refused", () => readResult(JSON.stringify({ phase: "BUILD", status: "ok", pr_url: "https://x/pull/1", pages_env: "all of them" }), "BUILD").result === null],
+    ["a pages_env entry without a project is refused", () => readResult(JSON.stringify({ phase: "BUILD", status: "ok", pr_url: "https://x/pull/1", pages_env: [{ name: "LEAD_TO" }] }), "BUILD").result === null],
+    ["the allow-list accepts only the three projects and the three variables", () => {
+      return (
+        classify("west-peek-ventures", "RESEND_API_KEY").kind === "secret" &&
+        classify("join-west-peek-main", "EMAIL_FROM").kind === "plain" &&
+        classify("west-peek-productions", "LEAD_TO").kind === "plain" &&
+        classify("some-other-site", "LEAD_TO").ok === false &&
+        classify("west-peek-ventures", "ANTHROPIC_API_KEY").ok === false &&
+        classify("west-peek-ventures", "").ok === false
+      );
+    }],
+    ["an off-list request is REFUSED and recorded, never silently dropped", () => {
+      const { allowed, refused } = readRequests([{ project: "someone-elses-site", name: "EMAIL_FROM" }, { project: "west-peek-ventures", name: "LEAD_TO" }]);
+      return allowed.length === 1 && allowed[0].name === "LEAD_TO" && refused.length === 1 && refused[0].project === "someone-elses-site";
+    }],
+    ["a proof line carries the project, the NAME and an outcome — and has no room for a value", () => {
+      const line = proofLine("west-peek-ventures", "RESEND_API_KEY", "set");
+      return line === "pages-env: west-peek-ventures · RESEND_API_KEY · set" && proofLine("x", "y", "pwned").includes("· failed");
     }],
     ["the prompt file exists and names the three phases", () => {
       const p = readFileSync(PROMPT_FILE, "utf8");

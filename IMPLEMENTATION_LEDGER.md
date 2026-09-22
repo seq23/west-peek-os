@@ -6512,3 +6512,59 @@ tests (51) — the parsers, inference + RECEIVED assumption, "which site?", the 
 zero browser tasks, the Re: reply answering the block with no new card, the re-read superseding,
 the 4 MB message, the prompt's Sheet default; browser tests rewritten to the new rule (a read
 APPROVED with no card permission; login and submit REQUESTED).
+
+## Porter sets his own delivery config; his finished email is shown to her first (22 Sep 2026)
+
+**What happened.** Scooter emailed "westpeek.ventures forms are down". Porter planned it, built
+PR seq23/join-west-peek-main#16, landed it and closed the card DONE — and two things were done BY
+HAND that should never have needed a person. (a) The Pages projects had no delivery config, and
+Porter's plan declared a NAMED STOP: "a Cloudflare secret cannot be read back, Scooter/Sequoia
+must run `wrangler pages secret put RESEND_API_KEY`". The key is in this repo's own vault and the
+claimer already runs under `vault.mjs run --`; a coordinator did the whole job in four minutes with
+exactly the access the duty run had. Worse, Porter's BUILD report claimed in `decided_json` that it
+had set EMAIL_FROM and LEAD_TO itself. It had not. (b) She wanted to read Porter's DONE reply to a
+partner before it went, and to add her own words to it — which took five hand-written steps against
+production: `preview_first`/`preview_owner_id` on the card, a `work_card_notice` with `sent = 0` to
+suppress the automatic reply, the body rendered by hand, and a `preview_approval` row inserted.
+
+**Delivery config is the SCRIPT's, and only the script's.** One allow-list
+(`scripts/duties/lib/pages-delivery.mjs`, frozen): three Pages projects × `EMAIL_FROM`, `LEAD_TO`
+(plain, with the recorded values — the firm's own public addresses) and `RESEND_API_KEY` (secret,
+by vault-key NAME only). The model may only ASK, by name, in `pages_env: [{ project, name }]`; a
+request carrying a value is thrown away whole; an off-list project or variable is refused AND
+recorded. Plain variables go through the Cloudflare API with the vault's `CLOUDFLARE_API_TOKEN`;
+the secret goes to `wrangler pages secret put` on the child's STDIN — never an argument, never a
+shell string. The build proof is assembled only from what the script observed:
+`<project> · <NAME> · set | already set | failed | refused`.
+
+**Her rule, as a row.** Migration 0223 seeds `done_reply_preview_first` (editable, ON): Porter's
+finished-work email to a partner takes the preview lane — filed on her Home with Send it / Send it
+back / Dismiss — even when the card's own tick is unset. RECEIVED/PLAN/PREVIEW/QUESTION/STUCK are
+untouched. Read in ONE place, `doneReplyLaneFor` in the new `services/kindRules.ts`, which both
+doors that can send a finished email ask; `rulesFor`/`isOn` moved there and are re-exported, so
+there is one implementation and no import cycle. Migration 0224 adds `work_card.requester_notes`
+(+ `_by`/`_at`), a Managing Partner's only — `authorize()` then an explicit role check, because
+moving a card is not the same as speaking for the firm — rendered on the DONE reply and nowhere
+else as a section "From &lt;first name&gt;", bullets split on newlines, before "Your call".
+
+**And who routed it.** Her addition the same day: an employee email names who handed the work on as
+well as who did it. `work_card.assigned_from_card_id` (0160) resolves to that card's owner's name,
+and it rides on the footer — the one line of an exec email that is prose — so the format's own rule
+that nothing above the details is loose text still holds. No hand-off, no change to the footer.
+
+**Two defects found and fixed in passing.** The Work page and `handleSetWorkKindRule` each had
+`"land_on_green"` typed into them separately, so 0223's editable rule would have shipped as a badge
+a partner could read and not change while the API took any string for it; `ON_OFF_RULE_KEYS` now
+lives in `src/shared/work/localJobs.ts` and both sides read it. And `replyToRequester` was handed a
+card without its `kind`, so the DONE path could not tell one kind from another.
+
+**Guards:** `validate:delivery-config` (`only-the-script-sets-delivery-config.mjs`, 38 checks, 13
+planted defects — a fourth project, an open gate, a gate that drops refusals, a value on wrangler's
+command line, a value through a shell, a printed value, a second list, an inert BUILD step, a
+prompt builder reading the environment, the old named-stop prompt) and
+`validate:kind-rule-switches` (`a-switch-is-a-switch-on-both-sides.mjs`, 8 planted defects
+including 22 Sep's real page and route, and both directions of list-against-seed).
+
+**Proof:** `tests/doneReplyPreview.test.ts`, 15 new tests. Three existing pins in
+`tests/webPropertyChange.test.ts` became false and were rewritten STRICTER: each now asserts the
+same proof text in the filed preview AND that nothing reached the requester. Duty self-test 33 → 40.
