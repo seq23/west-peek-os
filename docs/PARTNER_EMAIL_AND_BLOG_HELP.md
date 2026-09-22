@@ -20,7 +20,7 @@ if any other service file calls a transport.
 | Line 1 | `**TL;DR:**` — one or two sentences: what was done and what, if anything, the partner decides |
 | Sections | bold label, bullets under it, no section over 6 lines (the rest is pointed at the details); numbers bolded |
 | `— Details —` | the full material, for those who want it; a run of more than 8 lines with no bullet or label is broken up |
-| Footer | `— <Employee>, <role>. Reply to this email or write to os@joinwestpeek.com for anything else.` |
+| Footer | `— <Employee>, <role>. Replies go to os@joinwestpeek.com — we don't check individual inboxes.` |
 
 A message that fails the lint is not sent; the refusal is an event with the violations.
 `tests/execEmail.test.ts` renders every kind the system sends — the reply to a request, Walker's
