@@ -531,6 +531,12 @@ jobs:
       - name: A standing rule that is a switch is a switch on both sides
         run: npm run validate:kind-rule-switches
 
+      # 22 Sep 2026: one card, one employee, TWO sender addresses on two domains — the intake notice
+      # as os@westpeek.ventures, the finished work as porter@joinwestpeek.com. The From was OMITTED,
+      # not wrong, so validate:employee-sender was green throughout.
+      - name: One employee, one address
+        run: npm run validate:one-employee-one-address
+
       # The four test shards above are a whole, disjoint partition of tests/ — or this fails.
       - name: Every test file runs in exactly one shard
         run: npm run validate:shards

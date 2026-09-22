@@ -7,6 +7,7 @@ import { assignCard, workCard } from "../src/worker/services/employeeWork";
 import { sweepOnce } from "../src/worker/services/workSweep";
 import { blockCard } from "../src/worker/services/blocks";
 import { replyToRequester } from "../src/worker/services/requestReply";
+import { employeeSenderHeader } from "../src/shared/registry/employeeMail";
 import { buildStepPrompt, parseDecision } from "../src/shared/work/employeeLoop";
 import type { Env } from "../src/worker/env";
 
@@ -127,7 +128,7 @@ describe("Sequoia emails a request", () => {
     expect(notice!.title).toMatch(/Wren handed .* to a colleague/);
   });
 
-  it("when Wyatt finishes, Sequoia's inbox gets the answer — from the firm, to the authenticated address only", async () => {
+  it("when Wyatt finishes, Sequoia's inbox gets the answer — from WYATT, naming Wren who routed it, to the authenticated address only", async () => {
     const out = await sweepOnce(env, new Date(NOW.getTime() + 5 * 60_000), {
       general: async (e, _ctx, cardId) => {
         await e.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE' WHERE id = ?1").bind(cardId).run();
@@ -139,7 +140,21 @@ describe("Sequoia emails a request", () => {
     expect(out.summary).toMatch(/sequoia@westpeek\.ventures emailed/);
     expect(sent).toHaveLength(1);
     expect(sent[0]!.to).toBe("sequoia@westpeek.ventures");
-    expect(sent[0]!.from).toBe("os@westpeek.ventures");
+    /*
+     * THE DOER SIGNS IT — REWRITTEN STRICTER, 22 Sep 2026.
+     *
+     * This line used to pin `os@westpeek.ventures`, the FIRM's address, and the test's own name
+     * said "from the firm". That was the defect written down as the expectation: `transport()`
+     * never set a `from`, so every employee's mail fell through to `WP_OS_EMAIL_FROM` — which is
+     * still set to exactly that value on this env, five lines up, so a regression lands here
+     * rather than on a missing field. One card, one employee, ONE address.
+     *
+     * The address is RESOLVED from the registry rather than retyped, so a roster change cannot
+     * leave this pin asserting an address nobody sends from.
+     */
+    expect(sent[0]!.from).toBe(employeeSenderHeader("Wyatt"));
+    expect(sent[0]!.from).toBe("Wyatt · West Peek <wyatt@joinwestpeek.com>");
+    expect(sent[0]!.from, "never the firm's LP-facing address, and never the fallback").not.toContain("@westpeek.ventures");
     // THE BUSY-EXECUTIVE FORMAT (16 Sep 2026): "<Employee>: <what>", TL;DR first, labelled
     // sections as bullets, the employee's full words under the rule, a footer that names them.
     expect(sent[0]!.subject).toMatch(/^Wyatt: done — Verify Sensori is real/);
@@ -151,7 +166,12 @@ describe("Sequoia emails a request", () => {
     expect(sent[0]!.text).toMatch(/Worth a call/);
     expect(sent[0]!.text).toMatch(/os\.joinwestpeek\.com\/#\/work/);
     expect(sent[0]!.text).toMatch(/— Details —/);
-    expect(sent[0]!.text.trim().split("\n").pop()).toMatch(/^— Wyatt, .*os@joinwestpeek\.com/);
+    // AND THE EMAIL NAMES WHO ROUTED THE WORK (her rule, 22 Sep 2026). Wren handed this card to
+    // Wyatt above (`assigned_from_card_id`), so the footer carries the whole chain in one line:
+    // who passed it on, and who actually did it.
+    expect(sent[0]!.text.trim().split("\n").pop()).toMatch(
+      /^— Wyatt, .* Wren routed this to me; the work is mine\. Reply to this email or write to os@joinwestpeek\.com/,
+    );
     expect(sent[0]!.html, "an HTML part with the same content").toMatch(/<strong>TL;DR:<\/strong>/);
     expect(sent[0]!.reply_to, "replies go to the intake mailbox, so 'reply to this email' is true").toBe("os@joinwestpeek.com");
     const ev = await env.WP_OS_DB.prepare("SELECT event_type FROM event_record WHERE object_id = ?1 AND event_type = 'work_card.replied_by_email'").bind(analystCard.id).first();

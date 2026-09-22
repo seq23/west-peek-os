@@ -12,7 +12,7 @@ import type { SweepCard } from "./workSweep";
 import { readWebPropertyAsk, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
 import { approvedAnswers, askLines, decidedFromAsks, readApprovalReply, readAsks, type Ask } from "../../shared/work/approvalReply";
 import { abandonRun } from "../ai/subscriptionSeats";
-import { alreadyTold, recordNotice, type NoticeKind } from "./requestReply";
+import { alreadyTold, recordNotice, routedByFor, threadRootFor, type NoticeKind } from "./requestReply";
 import { doneReplyLaneFor, isOn, rulesFor, ON_OFF_RULE_KEYS, type KindRule } from "./kindRules";
 import { attachmentBytes } from "../effects/mimeAttachments";
 import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
@@ -165,7 +165,7 @@ export async function noticeFor(env: Env, cardId: string, outcome: "DONE" | "BLO
 /** One short email through the lane, recorded as a notice; never twice for the same cause. */
 async function tellRequester(
   env: Env,
-  card: Pick<WebPropertyChangeCard, "id" | "title" | "firm_scope" | "requested_by_email" | "preview_first" | "preview_owner_id">,
+  card: Pick<WebPropertyChangeCard, "id" | "title" | "firm_scope" | "requested_by_email" | "preview_first" | "preview_owner_id"> & { assigned_from_card_id?: string | null },
   notice: { kind: NoticeKind; cause: string },
   email: { what: string; tldr: string; sections: Array<{ label: string; bullets: string[] }>; details?: string | null },
   /** An earlier note's thread token, so this lands in the partner's same conversation. */
@@ -182,11 +182,26 @@ async function tellRequester(
    * is the only reader, and `services/requestReply.ts` asks the same function.
    */
   const lane = await doneReplyLaneFor(env, { kind: WEB_PROPERTY_CHANGE_KIND, preview_first: card.preview_first, preview_owner_id: card.preview_owner_id }, notice);
+  /*
+   * HER TWO RULES, ON EVERY NOTICE PORTER SENDS (22 Sep 2026).
+   *
+   * WHO ROUTED IT — `routedByFor` reads `assigned_from_card_id`, so when Walker or Wren handed the
+   * change to Porter the footer says so ("Walker routed this to me; the work is mine."). No
+   * hand-off and it returns null, and the footer is byte-identical to what it was before.
+   *
+   * ONE CONVERSATION — every notice about this card lands under the first one sent about it, rather
+   * than each minting a thread of its own. Before this, only RECEIVED could be handed a token by
+   * its caller; PLAN, QUESTION, STUCK and DONE each started a new conversation in the partner's
+   * inbox about the same request. An explicit token from the caller still wins, because that is the
+   * inbound path naming the partner's own message.
+   */
+  const routedBy = await routedByFor(env, card.assigned_from_card_id, PORTER_NAME);
+  const onThread = replyOnThread ?? (await threadRootFor(env, card.id));
   let out: { sent: boolean; reason: string; threadToken?: string | null };
   try {
     out = await sendOrPreview(env, {
       to,
-      email: { employee: PORTER_NAME, ...email, details: email.details ?? null },
+      email: { employee: PORTER_NAME, ...email, details: email.details ?? null, routedBy },
       objectType: "work_card",
       objectId: card.id,
       firmScope: card.firm_scope,
@@ -196,7 +211,7 @@ async function tellRequester(
       tickedByFirmUserId: lane.tickedByFirmUserId,
       requestedByEmail: to,
       what: card.title,
-      replyOnThread,
+      replyOnThread: onThread,
     });
   } catch (err) {
     out = { sent: false, reason: err instanceof Error ? err.message : String(err) };
@@ -210,7 +225,7 @@ async function tellRequester(
  * with an apology folded in). Says what was understood and what comes next.
  */
 export async function sendReceived(env: Env, cardId: string, input: { tldr?: string | null; replyOnThread?: string | null } = {}): Promise<{ sent: boolean; reason: string }> {
-  const card = await env.WP_OS_DB.prepare("SELECT id, title, firm_scope, requested_by_email, preview_first, preview_owner_id FROM work_card WHERE id = ?1").bind(cardId).first<WebPropertyChangeCard>();
+  const card = await env.WP_OS_DB.prepare("SELECT id, title, firm_scope, requested_by_email, preview_first, preview_owner_id, assigned_from_card_id FROM work_card WHERE id = ?1").bind(cardId).first<WebPropertyChangeCard>();
   const row = await readWebPropertyChange(env, cardId);
   if (!card || !row) return { sent: false, reason: "no such web property change" };
   const attachments = await attachmentsFor(env, cardId);
@@ -1047,7 +1062,7 @@ function answerSince(card: WebPropertyChangeCard, since: string | null): string 
 export async function runWebPropertyChangeCard(env: Env, sweepCard: SweepCard): Promise<RunOutcome> {
   const card: WebPropertyChangeCard =
     (await env.WP_OS_DB.prepare(
-      "SELECT id, title, kind, owner_id, state, COALESCE(work_attempts,0) AS work_attempts, firm_scope, requested_by_email, preview_first, result_recipient, preview_owner_id, request_json, description, block_answer, block_answered_at, block_answered_by FROM work_card WHERE id = ?1",
+      "SELECT id, title, kind, owner_id, state, COALESCE(work_attempts,0) AS work_attempts, firm_scope, requested_by_email, preview_first, result_recipient, preview_owner_id, request_json, description, block_answer, block_answered_at, block_answered_by, assigned_from_card_id FROM work_card WHERE id = ?1",
     )
       .bind(sweepCard.id)
       .first<WebPropertyChangeCard>()) ?? sweepCard;
