@@ -28,6 +28,7 @@ const row = (over: Partial<RecordRow> = {}): RecordRow => ({
   id: "wc_1",
   title: "Parker — build the September 2026 Room packet",
   state: "DONE",
+  auto_resolution: null,
   owner_id: "aie_parker",
   owner_name: "Parker",
   month: "2026-09",

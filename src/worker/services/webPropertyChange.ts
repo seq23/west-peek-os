@@ -1,8 +1,9 @@
 import type { Env } from "../env";
 import { json, type RouteContext } from "../router";
 import { appendEvent } from "../events";
-import { actorFromIdentity } from "./authorize";
+import { actorFromIdentity, type Actor } from "./authorize";
 import { blockCard } from "./blocks";
+import { runAi } from "../ai/runAi";
 import { deliver } from "./deliverables";
 import { handOver } from "./employeeWork";
 import { parkRun, readRun, type SeatRunRow } from "../ai/subscriptionSeats";
@@ -19,6 +20,8 @@ import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
 import { strippedSubject } from "../../shared/intake/emailTriggers";
 import { decodeMimeHeader } from "../effects/inboundEmail";
 import { isTechnicalBlock } from "../../shared/work/blocks";
+import { INTAKE_JUDGMENT_STANDARD } from "../../shared/registry/aiEmployeePersonas";
+import { defaultGenerateBanterReply, replyToBanter, type BanterReplyGenerator } from "./banterReply";
 import {
   CLAUDE_MODEL_ALIASES,
   LOCAL_JOB_RUN_KIND,
@@ -521,6 +524,12 @@ export interface RunOutcome {
    * held card asks the sweep to leave it alone for a while (`lease_until`) and take the next one.
    */
   held?: boolean;
+  /**
+   * BANTER RESOLVED WITHOUT EVER REACHING THE MAC (Addendum 10, 22 Sep 2026). The card is already
+   * terminal — `state = 'CANCELLED'`, `auto_resolution = 'NO_ACTION_NEEDED'` — by the time this
+   * comes back; the sweep reads it to skip the DONE/BLOCKED bookkeeping and record its own outcome.
+   */
+  autoResolved?: boolean;
   detail: string;
 }
 
@@ -1049,6 +1058,175 @@ async function applyLand(env: Env, card: WebPropertyChangeCard, row: WebProperty
   return { finished: true, blocked: false, progressed: false, detail: finding };
 }
 
+// ── Catching banter and plain questions before they reach the Mac (Addendum 10, 22 Sep 2026) ────
+
+/**
+ * THE INCIDENT THIS EXISTS FOR. Scooter replied to a thread with pure banter — "'on our side' —
+ * we're all one team :)" — a joke, not a request. `dealIntake.ts`'s capture principle is "ONLY THE
+ * ADDRESS IS AUTHORITY, NEVER THE CONTENT": every authenticated partner email still opens a card,
+ * unconditionally, so a real ask is never silently guessed away. That is untouched. What was
+ * missing is a step AFTER capture and BEFORE the card's first PLAN ever dispatches to her Mac — the
+ * Mac tried to fulfil it literally: "I can't find 'on our side' anywhere on joinwestpeek.com. I
+ * searched every page." A wasted Claude Code invocation on nothing.
+ *
+ * THREE-WAY, NOT TWO (her follow-up). A plain question — "what are you asking of me?" — is neither
+ * actionable work nor banter: it has real content but nothing to build, so dispatching it for a
+ * PLAN attempt wastes a cycle exactly like a joke would, just differently. `ACTIONABLE_WORK`
+ * proceeds to PLAN exactly as today; `QUESTION_NEEDS_REPLY` skips the Mac and reuses the existing
+ * `a_question_for_you` block reason (services/blocks.ts) — the same "needs a reply" state a partner
+ * already answers elsewhere in this system, so nothing new has to be built for it to resolve;
+ * `BANTER_NO_ACTION` auto-resolves the card (see `autoResolveNoAction` below).
+ *
+ * BIAS HARD TOWARD `ACTIONABLE_WORK`. Any real ambiguity at either boundary — work-vs-question or
+ * question-vs-banter — must default to `ACTIONABLE_WORK`. Only a near-certain non-ask is ever
+ * caught, and the prompt says so explicitly rather than leaving it implicit in a model's mood.
+ */
+export const ACTIONABILITY_VERDICTS = ["ACTIONABLE_WORK", "QUESTION_NEEDS_REPLY", "BANTER_NO_ACTION"] as const;
+export type ActionabilityVerdict = (typeof ACTIONABILITY_VERDICTS)[number];
+
+export interface ActionabilityClassification {
+  verdict: ActionabilityVerdict;
+  /** Brief, one sentence — this is what lands on the card and in the event_record audit row. */
+  reason: string;
+  aiRunId: string | null;
+}
+
+export type ActionabilityClassifier = (
+  env: Env,
+  input: { cardId: string; firmScope: string; text: string },
+) => Promise<ActionabilityClassification>;
+
+/** Read from the classifier's fixed answer format. Any failure to parse defaults to ACTIONABLE_WORK. */
+export function parseActionabilityVerdict(outputText: string | null | undefined): { verdict: ActionabilityVerdict; reason: string } {
+  const text = (outputText ?? "").trim();
+  const verdictMatch = /VERDICT:\s*(ACTIONABLE_WORK|QUESTION_NEEDS_REPLY|BANTER_NO_ACTION)/i.exec(text);
+  const reasonMatch = /REASON:\s*(.+)/i.exec(text);
+  if (!verdictMatch) {
+    return {
+      verdict: "ACTIONABLE_WORK",
+      reason: text ? `could not read the classifier's answer — defaulting to actionable. Raw: "${text.slice(0, 200)}"` : "the classifier returned nothing — defaulting to actionable",
+    };
+  }
+  const verdict = verdictMatch[1]!.toUpperCase() as ActionabilityVerdict;
+  return { verdict, reason: (reasonMatch?.[1] ?? text).trim().slice(0, 400) || "(no reason given)" };
+}
+
+/**
+ * THE DEFAULT CLASSIFIER — one fast, cheap model call. NOT `judgement: true`: "mechanical steps
+ * leave it off and stay cheap" (runAi.ts), and catching only near-certain banter or a near-certain
+ * plain question is the mechanical end of "does this need an employee" rather than the drafting or
+ * deciding end. Injectable so tests can prove the ROUTING (three verdicts → three outcomes) without
+ * a model — see `defaultInterpreter`/`Interpreter` in instruction.ts and `Synthesise` in
+ * dailyIntelligence.ts for the same shape used elsewhere in this repo.
+ */
+const defaultClassifyActionability: ActionabilityClassifier = async (env, input) => {
+  const actor: Actor = { type: "AI", aiEmployeeId: PORTER_ID, roles: [], firmScopes: [input.firmScope] };
+  const { run } = await runAi(env, {
+    purpose: "checking whether a partner's email needs real work, a reply, or nothing at all",
+    actor,
+    inputs: [
+      `${INTAKE_JUDGMENT_STANDARD}\n\n` +
+        "A partner emailed the firm's work-intake address. Decide which of three things it is:\n\n" +
+        "ACTIONABLE_WORK — there is a real request or task to do, however casually worded.\n" +
+        "QUESTION_NEEDS_REPLY — a plain question, pushback, or something that needs an answer in " +
+        "words, but nothing to build or change (e.g. \"what are you asking of me?\", \"explain it " +
+        "like a sixth grader\").\n" +
+        "BANTER_NO_ACTION — pure banter, a joke, an acknowledgment (\"thanks\", \"sounds good\", " +
+        "\"lol true\"), or an emoji-only reply — nothing to do and nothing to answer.\n\n" +
+        "BIAS HARD TOWARD ACTIONABLE_WORK. When in doubt, when the message is ambiguous or " +
+        "borderline, or when it could plausibly contain a real ask however casually phrased, answer " +
+        "ACTIONABLE_WORK. Only answer QUESTION_NEEDS_REPLY when you are near-certain it is a plain " +
+        "question with nothing to build, and only answer BANTER_NO_ACTION when you are near-certain " +
+        "there is nothing to do and nothing to answer. A real ask must never be silently guessed " +
+        "away — when genuinely unsure between two of these, pick the one closer to ACTIONABLE_WORK.\n\n" +
+        `THE MESSAGE:\n"""\n${input.text.slice(0, 4000)}\n"""\n\n` +
+        "Answer in exactly this format and nothing else:\n" +
+        "VERDICT: ACTIONABLE_WORK|QUESTION_NEEDS_REPLY|BANTER_NO_ACTION\n" +
+        "REASON: <one short sentence>",
+    ],
+    sensitivity: "INTERNAL" as never,
+    // Mechanical and cheap on purpose (see the note above `defaultClassifyActionability`); a few
+    // words back is all this call needs.
+    budgetContext: { expectedOutputTokens: 60 },
+    routing: { category: "OPERATIONS", taskClass: "intake-actionability-classification", workCardId: input.cardId },
+  });
+  if (run.status !== "COMPLETED" || !run.output_text) {
+    return { verdict: "ACTIONABLE_WORK", reason: `classification unavailable (${run.failure_reason ?? run.status}) — defaulting to actionable`, aiRunId: run.id };
+  }
+  const { verdict, reason } = parseActionabilityVerdict(run.output_text);
+  return { verdict, reason, aiRunId: run.id };
+};
+
+/**
+ * A CAUGHT CARD IS RECOVERABLE, NEVER A SILENT DROP. `state = 'CANCELLED'` — the existing
+ * terminal, put-back-able state — carries a new `auto_resolution = 'NO_ACTION_NEEDED'` so Record
+ * (and the purge job, see noActionPurge.ts) can tell an auto-caught card apart from both a real
+ * DONE and a person's own Drop. Never `DONE`: no real work happened, and rendering it as if it did
+ * would corrupt completion stats and Record's history of what the firm actually built.
+ *
+ * ALONGSIDE THE RESOLUTION, NOT INSTEAD OF IT (Addendum 11): the sender's own chief of staff
+ * banters back before the card goes terminal — see `replyToBanter`. The reply step never blocks the
+ * resolution; a reply that fails to send still leaves the card correctly auto-resolved.
+ */
+async function autoResolveNoAction(
+  env: Env,
+  card: WebPropertyChangeCard,
+  classification: ActionabilityClassification,
+  senderMessage: string,
+  generateReply: BanterReplyGenerator = defaultGenerateBanterReply,
+): Promise<RunOutcome> {
+  await appendFinding(env, card.id, `Classified as banter/acknowledgment — auto-resolved without reaching the Mac. ${classification.reason}`);
+  await env.WP_OS_DB.prepare(
+    "UPDATE work_card SET state = 'CANCELLED', auto_resolution = 'NO_ACTION_NEEDED', next_action = NULL, lease_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
+  )
+    .bind(card.id)
+    .run();
+  await appendEvent(env, {
+    eventType: "work_card.auto_resolved_no_action",
+    actorType: "ai_employee",
+    actorId: PORTER_ID,
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope: card.firm_scope,
+    payload: { reason: classification.reason, ai_run_id: classification.aiRunId },
+  });
+  await replyToBanter(env, card, senderMessage, generateReply);
+  return {
+    finished: false,
+    blocked: false,
+    progressed: false,
+    autoResolved: true,
+    detail: `No actionable request found — auto-resolved without reaching the Mac. ${classification.reason}`.slice(0, 900),
+  };
+}
+
+/**
+ * A PLAIN QUESTION REUSES THE EXISTING "NEEDS A REPLY" BLOCK, rather than inventing a new state.
+ * `a_question_for_you` already has a catalogue entry (shared/work/blocks.ts), already resurfaces if
+ * nobody answers (`resurfaceStaleBlocks`), and already reopens through `answerBlock` exactly the
+ * way a partner clears any other question on this card kind — see `blockWithAsks` above for the
+ * same reason used for a plan's own asks.
+ */
+async function blockAsQuestion(env: Env, card: WebPropertyChangeCard, classification: ActionabilityClassification): Promise<RunOutcome> {
+  const why = await blockCard(env, card, {
+    reason: "a_question_for_you",
+    trying: card.title,
+    employee: PORTER_NAME,
+    who: whoFor(card),
+    detail: `This reads like a question rather than something to build (${classification.reason}). Reply here with what you'd like done, or just answer — nothing has been started.`.slice(0, 900),
+  });
+  await appendEvent(env, {
+    eventType: "work_card.classified_as_question",
+    actorType: "ai_employee",
+    actorId: PORTER_ID,
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope: card.firm_scope,
+    payload: { reason: classification.reason, ai_run_id: classification.aiRunId },
+  });
+  return { finished: false, blocked: true, progressed: false, detail: why };
+}
+
 // ── The runner ────────────────────────────────────────────────────────────────────────────────
 
 /** Has the partner answered since the plan (or the green) was recorded? */
@@ -1059,7 +1237,12 @@ function answerSince(card: WebPropertyChangeCard, since: string | null): string 
   return text.length > 0 ? text : null;
 }
 
-export async function runWebPropertyChangeCard(env: Env, sweepCard: SweepCard): Promise<RunOutcome> {
+export async function runWebPropertyChangeCard(
+  env: Env,
+  sweepCard: SweepCard,
+  classify: ActionabilityClassifier = defaultClassifyActionability,
+  generateBanterReply: BanterReplyGenerator = defaultGenerateBanterReply,
+): Promise<RunOutcome> {
   const card: WebPropertyChangeCard =
     (await env.WP_OS_DB.prepare(
       "SELECT id, title, kind, owner_id, state, COALESCE(work_attempts,0) AS work_attempts, firm_scope, requested_by_email, preview_first, result_recipient, preview_owner_id, request_json, description, block_answer, block_answered_at, block_answered_by, assigned_from_card_id FROM work_card WHERE id = ?1",
@@ -1140,6 +1323,17 @@ export async function runWebPropertyChangeCard(env: Env, sweepCard: SweepCard): 
   // 2 · No live run. Decide the next phase from the row.
   if (row.phase === "PLAN") {
     if (!row.plan_filed_at) {
+      /*
+       * ADDENDUM 10 (22 Sep 2026): CATCH BANTER AND PLAIN QUESTIONS RIGHT HERE, BEFORE THE FIRST
+       * PLAN EVER DISPATCHES TO THE MAC. This is the singular gate — `!row.plan_filed_at` is only
+       * ever true before PLAN has run once for this card, so the classification runs at most once
+       * per card in the ordinary path (a park failure that leaves plan_filed_at unset re-runs it
+       * next tick, which is harmless and idempotent).
+       */
+      const senderMessage = row.request_text ?? row.ask;
+      const classification = await classify(env, { cardId: card.id, firmScope: card.firm_scope, text: senderMessage });
+      if (classification.verdict === "BANTER_NO_ACTION") return autoResolveNoAction(env, card, classification, senderMessage, generateBanterReply);
+      if (classification.verdict === "QUESTION_NEEDS_REPLY") return blockAsQuestion(env, card, classification);
       // A Drive folder is OPTIONAL (21 Sep 2026): the request is the specification; Porter reads it
       // and asks only when something it references did not arrive.
       const parked = await parkPhase(env, card, row, "PLAN", rules);

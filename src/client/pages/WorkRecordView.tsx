@@ -178,7 +178,7 @@ export function WorkRecordView({ onMove, onNavigate, refreshNonce }: Props): JSX
               data-testid={`work-record-state-${s.toLowerCase()}`}
               onClick={() => setState(s)}
             >
-              {s === "ALL" ? "All" : s === "DONE" ? "Done" : "Dropped"}
+              {s === "ALL" ? "All" : s === "DONE" ? "Done" : s === "CANCELLED" ? "Dropped" : "Stowed"}
             </button>
           ))}
         </div>
@@ -242,8 +242,12 @@ export function WorkRecordView({ onMove, onNavigate, refreshNonce }: Props): JSX
                 <span className="record-what">
                   <strong className="record-title">{r.title}</strong>
                   <span className="record-meta">
-                    <span className={r.state === "CANCELLED" ? "badge" : "badge badge-ok"}>
-                      {r.state === "CANCELLED" ? "Dropped" : "Done"}
+                    <span className={r.state === "DONE" ? "badge badge-ok" : "badge"}>
+                      {/* STOWED IS ITS OWN LABEL, NEVER "DROPPED" (Addendum 10, 22 Sep 2026) — a
+                          card the intake classifier caught as banter shares `state = 'CANCELLED'`
+                          with a real Drop, but reads as something a person actually decided against
+                          only when it wasn't one. */}
+                      {r.auto_resolution === "NO_ACTION_NEEDED" ? "Stowed" : r.state === "CANCELLED" ? "Dropped" : "Done"}
                     </span>
                     {r.result && <span className="muted small record-result">{r.result}</span>}
                     {/* BOTH LABELS, HERE TOO. "So we can have a trail of how it's working" is a

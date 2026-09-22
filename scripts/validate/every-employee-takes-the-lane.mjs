@@ -78,6 +78,15 @@ export const DIRECT_SEND_REGISTER = {
     // …and the addressed note that the same packet produces must still take the lane.
     alsoUsesLane: true,
   },
+  "src/worker/services/banterReply.ts": {
+    why:
+      "Addendum 11 (22 Sep 2026, her decision): a card the intake classifier catches as pure " +
+      "banter gets one reply from the sender's own chief of staff, sent immediately, deliberately " +
+      "bypassing the preview-first gate — requiring her to approve every joke-reply would defeat " +
+      "the point, it is meant to feel like an actual back-and-forth. Scoped to this ONE file so " +
+      "webPropertyChange.ts's real employee-finished-work emails (RECEIVED/PLAN/PREVIEW/QUESTION/" +
+      "STUCK/DONE) still all take the lane and this scan would still catch a regression there.",
+  },
 };
 
 /** Comments out, line count preserved — prose must not decide the outcome in either direction. */

@@ -51,6 +51,35 @@ export const VETERAN_STANDARD = [
   "complete. Brevity is part of the standard.",
 ].join(" ");
 
+/**
+ * THE STANDARD FOR WHOEVER STANDS AT THE INTAKE DOOR (Addendum 10/11.1, 22 Sep 2026).
+ *
+ * Her pushback on a first draft that hardcoded exact reply-pacing rules (a counter, a fixed
+ * redirect line on message #2, silence on #3+): "trying to codify responses and intake is silly —
+ * just be intelligent and respond accordingly." Same shape as `VETERAN_STANDARD` — a shared block
+ * of PLAIN-LANGUAGE guidance prepended to a prompt, trusted judgement rather than a rulebook —
+ * prepended specifically for the intake-facing calls: Porter's actionable/question/banter
+ * classification (`webPropertyChange.ts`'s `defaultClassifyActionability`) and Walker/Wren's
+ * banter-back reply (`defaultGenerateBanterReply`).
+ *
+ * WHAT STAYS HARD, DELIBERATELY, AND IS NOT WHAT THIS STANDARD GOVERNS: the three-way system
+ * ROUTING (ACTIONABLE_WORK / QUESTION_NEEDS_REPLY / BANTER_NO_ACTION) gates real infrastructure —
+ * Mac dispatch, the block/reply mechanism, Record filtering, the stow/purge job — and has to answer
+ * firmly and auditably. This standard governs the softer question underneath it: how warmly, and
+ * for how long, to keep bantering about something that needed no action, which does not.
+ */
+export const INTAKE_JUDGMENT_STANDARD = [
+  "You are standing at the door work comes through. Every message gets a plain read: is there real",
+  "work here, however casually asked — a genuine question that needs an answer in words but nothing",
+  "built — or is it banter with nothing to do and nothing to answer. A real request, however",
+  "casually worded, always takes priority and resets the tone; when there is genuine doubt, read it",
+  "as real rather than guess it away.",
+  "When it is banter, engage warmly — you are a colleague, not a form letter — but you are not here",
+  "for an extended back-and-forth. Use your own judgement, informed by what this sender has sent",
+  "recently, about whether replying again still adds something or whether the better read is to let",
+  "it go quiet this time. There is no fixed number of replies and no script to fall back on.",
+].join(" ");
+
 const P = (name: string, expertise: string, voice: string): EmployeePersona => ({ name, expertise, voice });
 
 export const EMPLOYEE_PERSONAS: readonly EmployeePersona[] = [
