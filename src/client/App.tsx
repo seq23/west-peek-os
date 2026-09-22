@@ -8,6 +8,7 @@ import {
   mutationError,
   onFreshnessChanged,
   onNotificationsChanged,
+  requestNewWorkCard,
   signOut,
   useApi,
   wireFocusRevalidation,
@@ -2603,6 +2604,32 @@ function RefreshControl(): JSX.Element {
 }
 
 /**
+ * "ADD A CARD", FROM ANY PAGE (Wave B, plan §2: "one door reachable from the masthead and a
+ * keyboard shortcut, not a toggle buried on one page"). Before this the create door lived only
+ * inside `WorkCardsPage`'s own masthead — reaching it meant navigating to Work first and then
+ * finding the button, which is exactly what the plan calls "buried on one page". This button lives
+ * beside `RefreshControl` in the app-wide masthead, the same place every other cross-page control
+ * already sits, and does the same two things the keyboard shortcut does: go to Work, then ask the
+ * create door to open (`requestNewWorkCard`, `lib/api.ts`).
+ */
+function NewWorkCardControl({ onNavigate }: { onNavigate: (key: string) => void }): JSX.Element {
+  return (
+    <button
+      type="button"
+      className="link-button"
+      data-testid="global-new-work-card"
+      title="New work card (shortcut: c)"
+      onClick={() => {
+        onNavigate("work");
+        requestNewWorkCard();
+      }}
+    >
+      + Add a card
+    </button>
+  );
+}
+
+/**
  * Status bar (P20, GAP-20): unread exceptions, connection state, and any captures held on this
  * device. A queued capture is stated as NOT SAVED — the operator is never left thinking the firm
  * has something it does not.
@@ -2930,6 +2957,27 @@ function Shell() {
     if (SECONDARY_KEYS.has(key)) setSystemOpen(true);
   }, []);
 
+  /*
+   * "c" OPENS THE CREATE DOOR, FROM ANY PAGE (Wave B, plan §2). The same guard
+   * `WorkRecordView.tsx`'s "/" shortcut already uses: no modifier held, and never while she is
+   * typing somewhere — a plain letter key must not hijack a title she is mid-sentence on.
+   */
+  useEffect(() => {
+    if (!authed) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "c" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = document.activeElement;
+      const typing =
+        el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement || (el instanceof HTMLElement && el.isContentEditable);
+      if (typing) return;
+      e.preventDefault();
+      navigate("work");
+      requestNewWorkCard();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [authed, navigate]);
+
   return (
     <div className="shell">
       <a className="skip-link" href="#wp-surface">
@@ -3091,6 +3139,7 @@ function Shell() {
             */}
             <h2>{activeItem.label}</h2>
             <div className="surface-identity">
+              {authed && <NewWorkCardControl onNavigate={navigate} />}
               {authed && <RefreshControl />}
               <IdentityPanel me={me.data} status={me.status} loading={me.loading} onSignOut={handleSignOut} />
               {authed && <StatusBar onNavigate={navigate} refreshNonce={refreshNonce} />}

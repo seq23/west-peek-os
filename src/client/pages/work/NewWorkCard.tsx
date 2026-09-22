@@ -2,24 +2,29 @@ import { useState } from "react";
 import { api, type MeResponse } from "../../lib/api";
 import { previewStartsTicked } from "@shared/work/previewLane";
 import { PARTNERS, partnerFor } from "@shared/registry/partners";
+import { handStartableKinds } from "@shared/work/cardKinds";
+import { WEB_PROPERTIES } from "@shared/intake/webPropertyChange";
 import type { Assignable } from "./types";
+import { buildCreateWorkCardBody } from "./newWorkCardBody";
 
 /**
- * ADD A CARD — the form and the POST behind it, moved out of `WorkCardsPage.tsx` VERBATIM
- * (22 Sep 2026). Same fields, same testids, same copy, same request body.
+ * ADD A CARD — the form and the POST behind it, moved out of `WorkCardsPage.tsx` (22 Sep 2026),
+ * then finished (Wave B, same day): the dropped fields fixed, a kind selector, priority, a due
+ * date, the instruction box, and start-now-vs-hold-for-me, asked once, here.
  *
  * IT IS MOUNTED WHETHER OR NOT IT IS OPEN, and returns null when it is closed. That is not a
  * stylistic choice: in the one-file page the form's state lived in the page, so cancelling and
  * reopening kept what had been typed. A component that unmounts on close would silently lose it,
- * which would be a behaviour change dressed up as a refactor. Mounted-and-null keeps the old
- * behaviour exactly.
+ * which would be a behaviour change dressed up as a refactor. Mounted-and-null keeps that.
  *
- * ─── A KNOWN DEFECT, LEFT AS IT WAS ──────────────────────────────────────────────────────────
- * `create()` collects `result_recipient` and `preview_first` from the two fields the owner asked
- * for, says in its success message where the result will go — and does NOT put either field in the
- * POST body. So a card written here gets the default lane whatever she typed. This split is a
- * no-behaviour-change move and does not fix it; the fix, with the test that pins it, belongs to
- * the agent that owns the create door.
+ * ─── THE DEFECT THIS WAVE FIXES ──────────────────────────────────────────────────────────────
+ * `create()` used to collect `result_recipient` and `preview_first` from the two fields she asked
+ * for, say in its success message where the result would go — and never put either field in the
+ * POST body. So a card written here always got the default lane whatever she typed, silently. The
+ * fix is `buildCreateWorkCardBody` in `./newWorkCardBody.ts`: the mapping from this component's
+ * state to the request is now its own function, so `tests/newWorkCardBody.test.ts` can assert the
+ * actual request body — the lesson from PR #103, which tested everything downstream of this
+ * mapping and nothing about it.
  */
 export function NewWorkCard({
   me,
@@ -95,23 +100,70 @@ export function NewWorkCard({
   const previewBoxStartsTicked = previewStartsTicked(recipientAddress);
   const showFirst = previewTouched ? previewFirst : previewBoxStartsTicked;
 
+  // PRIORITY, DUE DATE, THE INSTRUCTION BOX (Wave B, plan §2 item 5). `priority` and `due_at` have
+  // always been accepted by the server (`createWorkCardSchema`); nothing on this form ever set
+  // them. `prompt` is the free-text "how to do it" box — also already accepted, never offered.
+  const [priority, setPriority] = useState("NORMAL");
+  const [dueAt, setDueAt] = useState("");
+  const [prompt, setPrompt] = useState("");
+
+  /*
+   * THE KIND SELECTOR, DRIVEN BY THE ONE REGISTRY (Wave B, plan §2 item 2/3). `handStartableKinds()`
+   * reads `@shared/work/cardKinds.ts` — the same list `validate:card-kinds` holds the worker to —
+   * so this form can never offer a kind that is actually opened by a job (`duplicateOf()` would
+   * silently join a hand-made one to the job's own card and this button would look broken). "" is
+   * "let it decide from the words", the behaviour every card typed here has always had.
+   */
+  const [kind, setKind] = useState("");
+  const kindOptions = handStartableKinds();
+  /*
+   * WEB_PROPERTY_CHANGE'S OWN QUESTION: WHICH SITE. A DROPDOWN OF `WEB_PROPERTIES` HOSTS, NEVER A
+   * TYPED FIELD — the plan's own words, "a deliberate anti-footgun rule". `services/workCards.ts`
+   * enforces the same rule server-side; this is the door that keeps a typo from ever reaching it.
+   */
+  const [propertyHost, setPropertyHost] = useState("");
+
+  /*
+   * START NOW VS. HOLD FOR ME, ASKED ONCE (Wave B, plan §2 item 7). Reuses Wave D's own hold door
+   * (`POST /api/work-cards/:id/hold`) rather than inventing a second mechanism — same required
+   * reason, same relay, same silence until she releases it. A card created held never touches the
+   * sweep: `holdCard` clears any live claim in the same write, and there is none yet to clear.
+   */
+  const [holdChoice, setHoldChoice] = useState<"START" | "HOLD">("START");
+  const [holdReason, setHoldReason] = useState("");
+
   async function create(e: React.FormEvent) {
     e.preventDefault();
     if (!title.trim()) return;
+    if (kind === "WEB_PROPERTY_CHANGE" && !propertyHost) {
+      setMessage("Pick which site from the list before adding a web property change.");
+      return;
+    }
+    if (holdChoice === "HOLD" && holdReason.trim().length < 2) {
+      setMessage("Say why you are holding it — the owner relays this to anyone who asks.");
+      return;
+    }
     setBusy(true);
+    const body = buildCreateWorkCardBody({
+      title,
+      nextAction,
+      owner,
+      modelAccess,
+      audience,
+      recipientAddress,
+      showFirst,
+      priority,
+      dueAt,
+      prompt,
+      kind,
+      propertyHost,
+    });
     const res = await api<{ id?: string; error?: string; detail?: string }>("/api/work-cards", {
       method: "POST",
-      body: {
-        title: title.trim(),
-        ...(nextAction.trim() ? { next_action: nextAction.trim() } : {}),
-        owner_type: owner.split(":")[0],
-        owner_id: owner.split(":").slice(1).join(":"),
-        model_access: modelAccess,
-        audience,
-      },
+      body,
     });
-    setBusy(false);
     if (res.status !== 201) {
+      setBusy(false);
       setMessage(`Not created: ${res.data?.detail ?? res.data?.error ?? res.status}`);
       return;
     }
@@ -123,6 +175,21 @@ export function NewWorkCard({
         body: { allows_browser: true },
       });
     }
+    // HOLD FOR ME, THE SAME DOOR WAVE D BUILT (`services/workCards.ts` `holdCard`) — not a second
+    // mechanism. A card that has never been picked up has no lease to clear, so this is exactly
+    // the shape of pulling a live one, minus the part that does not apply yet.
+    let heldNote = "";
+    if (holdChoice === "HOLD" && res.data?.id) {
+      const held = await api<{ error?: string; detail?: string }>(`/api/work-cards/${res.data.id}/hold`, {
+        method: "POST",
+        body: { reason: holdReason.trim() },
+      });
+      heldNote =
+        held.status === 200
+          ? " Held for you — nothing works it until you release it."
+          : ` (Added, but could not hold it: ${held.data?.detail ?? held.status}.)`;
+    }
+    setBusy(false);
     setMessage(
       (owner === `HUMAN:${me.id}` ? "Added, owned by you." : "Added and handed over.") +
         (newAllowsBrowser ? " It can look things up online." : "") +
@@ -130,7 +197,8 @@ export function NewWorkCard({
           ? showFirst
             ? ` When it is finished you see it before it goes to ${recipientAddress}.`
             : ` When it is finished it goes straight to ${recipientAddress}.`
-          : " The result lands on your Home; there is nobody to send it to."),
+          : " The result lands on your Home; there is nobody to send it to.") +
+        heldNote,
     );
     setNewAllowsBrowser(false);
     setTitle("");
@@ -138,6 +206,13 @@ export function NewWorkCard({
     setResultRecipient("");
     setPreviewTouched(false);
     setPreviewFirst(false);
+    setPriority("NORMAL");
+    setDueAt("");
+    setPrompt("");
+    setKind("");
+    setPropertyHost("");
+    setHoldChoice("START");
+    setHoldReason("");
     onClose();
     onCreated();
   }
@@ -284,6 +359,112 @@ export function NewWorkCard({
         A card without a next action is a wish. Naming the next step is what makes it work
         somebody can pick up.
       </p>
+
+      {/* THE KIND SELECTOR, DRIVEN BY THE REGISTRY (Wave B). Blank means "let it decide from the
+          words" — a hire search or a memo still becomes ARTIFACT the way it always has. */}
+      <div className="form-row">
+        <label style={{ flexGrow: 1 }}>
+          What kind of work is this?{" "}
+          <select data-testid="work-card-kind" value={kind} onChange={(e) => { setKind(e.target.value); setPropertyHost(""); }}>
+            <option value="">Let it figure out the kind</option>
+            {kindOptions.map((k) => (
+              <option key={k.key} value={k.key}>{k.label}</option>
+            ))}
+          </select>
+        </label>
+        {kind && (
+          <p className="muted small" data-testid="work-card-kind-explainer" style={{ flexBasis: "100%" }}>
+            {kindOptions.find((k) => k.key === kind)?.oneLine}
+          </p>
+        )}
+      </div>
+
+      {/* WEB_PROPERTY_CHANGE'S OWN QUESTION: WHICH SITE. A DROPDOWN, NEVER TYPED — the anti-footgun
+          rule the plan keeps by name; `services/workCards.ts` refuses anything else server-side too. */}
+      {kind === "WEB_PROPERTY_CHANGE" && (
+        <div className="form-row">
+          <label style={{ flexGrow: 1 }}>
+            Which site{" "}
+            <select data-testid="work-card-property-host" value={propertyHost} onChange={(e) => setPropertyHost(e.target.value)}>
+              <option value="">Choose the site</option>
+              {WEB_PROPERTIES.map((p) => (
+                <option key={p.host} value={p.host}>{p.host}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
+
+      {/* PRIORITY, DUE DATE, THE INSTRUCTION BOX — always accepted server-side, never offered here
+          until now. */}
+      <div className="form-row">
+        <label>
+          Priority{" "}
+          <select data-testid="work-card-priority" value={priority} onChange={(e) => setPriority(e.target.value)}>
+            <option value="NORMAL">Normal</option>
+            <option value="HIGH">High</option>
+            <option value="URGENT">Urgent</option>
+          </select>
+        </label>
+        <label>
+          Due{" "}
+          <input type="date" data-testid="work-card-due-at" value={dueAt} onChange={(e) => setDueAt(e.target.value)} />
+        </label>
+      </div>
+      <div className="form-row">
+        <label style={{ flexGrow: 1 }}>
+          How to do it (optional){" "}
+          <textarea
+            rows={2}
+            data-testid="work-card-prompt"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder="Any instruction for whoever carries it — tone, sources, what to avoid"
+          />
+        </label>
+      </div>
+
+      {/* START NOW VS. HOLD FOR ME, ASKED ONCE (Wave B, plan §2 item 7). Reuses Wave D's own hold
+          door — same required reason, same relay, same silence until she releases it. */}
+      <div className="form-row">
+        <label>
+          <input
+            type="radio"
+            name="new-work-card-hold-choice"
+            data-testid="work-card-start-now"
+            checked={holdChoice === "START"}
+            onChange={() => setHoldChoice("START")}
+          />{" "}
+          Start now
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="new-work-card-hold-choice"
+            data-testid="work-card-hold-for-me"
+            checked={holdChoice === "HOLD"}
+            onChange={() => setHoldChoice("HOLD")}
+          />{" "}
+          Hold for me
+        </label>
+      </div>
+      {holdChoice === "HOLD" && (
+        <div className="card-block-form" data-testid="work-card-new-hold-form">
+          <p className="lbl">Why are you holding this?</p>
+          <textarea
+            rows={2}
+            value={holdReason}
+            onChange={(e) => setHoldReason(e.target.value)}
+            placeholder={'e.g. "I want to be at my desk when this one runs — it is a big job."'}
+            aria-label="Why you are holding this card"
+            data-testid="work-card-new-hold-reason"
+          />
+          <p className="field-help">
+            The owner relays this to anyone who asks about the card. No nag while it is held —
+            nothing works it until you release it.
+          </p>
+        </div>
+      )}
     </form>
   );
 }

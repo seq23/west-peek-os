@@ -211,6 +211,38 @@ export function wireFocusRevalidation(): void {
   window.addEventListener("focus", onVisible);
 }
 
+/**
+ * "ADD A CARD", FROM ANYWHERE (Wave B, plan §2: "one door reachable from the masthead and a
+ * keyboard shortcut, not a toggle buried on one page"). The create door has always lived on the
+ * Work page's own masthead — pressing it from Home or any other surface meant navigating there
+ * first and THEN finding the button. This is the same channel shape as `onDataInvalidated` above:
+ * a global publish/subscribe pair, because threading a prop for "open the create form" through the
+ * shell into a page three levels down is exactly the kind of per-component bookkeeping that left
+ * `refreshNonce` reaching four components out of ninety.
+ *
+ * The shell's masthead button and its keyboard shortcut both call `requestNewWorkCard()` after
+ * navigating to Work; `WorkCardsPage` is the one subscriber, and it opens the form the same way its
+ * own "Add a card" toggle always has.
+ */
+const newWorkCardListeners = new Set<() => void>();
+
+/** Subscribe to "open the create-card door". Returns the unsubscribe. */
+export function onNewWorkCardRequested(listener: () => void): () => void {
+  newWorkCardListeners.add(listener);
+  return () => newWorkCardListeners.delete(listener);
+}
+
+/** Ask for the create door to open, wherever it is mounted. */
+export function requestNewWorkCard(): void {
+  for (const listener of [...newWorkCardListeners]) {
+    try {
+      listener();
+    } catch {
+      // One bad subscriber must not stop the others opening.
+    }
+  }
+}
+
 export async function api<T = unknown>(
   path: string,
   options: { method?: string; body?: unknown } = {},
