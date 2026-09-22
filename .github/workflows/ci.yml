@@ -522,6 +522,14 @@ jobs:
       # Nothing lands a web property change without a recorded plan approval AND a recorded green check — Worker, Mac script, row.
       - name: No land without approval and green
         run: npm run validate:no-land-without-approval
+      # 22 Sep 2026: Porter declared a named stop for a Cloudflare secret that sits in this repo's own
+      # vault, and his BUILD report claimed it had set two plain variables it had never touched.
+      - name: Only the script sets delivery config, and only on the allow-list
+        run: npm run validate:delivery-config
+      # 22 Sep 2026: the Work page and the PATCH route each typed "land_on_green" out for themselves,
+      # so 0223's editable rule would have shipped as a badge a partner could read and not change.
+      - name: A standing rule that is a switch is a switch on both sides
+        run: npm run validate:kind-rule-switches
 
       # The four test shards above are a whole, disjoint partition of tests/ — or this fails.
       - name: Every test file runs in exactly one shard

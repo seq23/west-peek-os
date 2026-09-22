@@ -184,6 +184,13 @@ const updateWorkCardSchema = z
      */
     result_recipient: z.string().trim().max(200).nullable().optional(),
     preview_first: z.boolean().nullable().optional(),
+    /*
+     * HER WORDS FOR THE FINISHED EMAIL (0224, 22 Sep 2026). A Managing Partner's own lines, carried
+     * out with the employee's finished work as a section in her name. A MANAGING PARTNER'S ONLY:
+     * `authorize()` lets an analyst move a card, and moving a card is not the same as speaking for
+     * the firm in an email that leaves it. The handler checks the role explicitly below.
+     */
+    requester_notes: z.string().max(2000).nullable().optional(),
   })
   .strict();
 
@@ -590,6 +597,19 @@ export async function handleUpdateWorkCard(ctx: RouteContext): Promise<Response>
   if (authz.decision !== "ALLOW") return json({ error: "forbidden", reason: authz.reason }, { status: 403 });
 
   /*
+   * A NOTE THAT GOES OUT IN THE FIRM'S NAME IS A MANAGING PARTNER'S (0224). Everything else on this
+   * handler is housekeeping — a title, an owner, a due date — and `work_card.update` is the right
+   * gate for it. `requester_notes` is not housekeeping: it is text that leaves the firm, under a
+   * partner's first name, on an employee's finished work. So it takes the second gate.
+   */
+  if (input.requester_notes !== undefined && (actor.type !== "HUMAN" || !actor.roles.includes("MANAGING_PARTNER"))) {
+    return json(
+      { error: "forbidden", detail: "Words that go out with the finished work are a Managing Partner's to write." },
+      { status: 403 },
+    );
+  }
+
+  /*
    * A PERSON DOES NOT BLOCK A CARD FROM HERE (0173). A block has to say what stopped the work,
    * what would clear it and who can clear it — the columns are NOT NULL at the row for that
    * reason — and this handler carries none of them, so the write would be refused by the trigger
@@ -614,11 +634,19 @@ export async function handleUpdateWorkCard(ctx: RouteContext): Promise<Response>
 
   const sets: string[] = [];
   const binds: unknown[] = [];
-  for (const field of ["title", "description", "owner_type", "owner_id", "priority", "next_action", "due_at", "state", "result_recipient", "preview_first"] as const) {
+  for (const field of ["title", "description", "owner_type", "owner_id", "priority", "next_action", "due_at", "state", "result_recipient", "preview_first", "requester_notes"] as const) {
     if (input[field] !== undefined) {
       binds.push(input[field]);
       sets.push(`${field} = ?${binds.length + 1}`);
     }
+  }
+  // WHO WROTE THEM AND WHEN, so the section can carry their own first name and the card can say
+  // when it was last said. Cleared together with the notes, never left pointing at nothing.
+  if (input.requester_notes !== undefined) {
+    const has = typeof input.requester_notes === "string" && input.requester_notes.trim() !== "";
+    binds.push(has ? identity!.id : null);
+    sets.push(`requester_notes_by = ?${binds.length + 1}`);
+    sets.push(`requester_notes_at = ${has ? "strftime('%Y-%m-%dT%H:%M:%fZ','now')" : "NULL"}`);
   }
   if (sets.length === 0) return json({ error: "invalid_input", detail: "no updatable fields provided" }, { status: 400 });
 

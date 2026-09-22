@@ -15,7 +15,9 @@ the JOB CONTEXT below. Read it before anything else.
 - **Decide or ask — the policy is fixed, not yours to reinterpret.**
   - **ASK** (never decide): brand or colourway; the *meaning* of copy; legal or regulatory
     wording; removing a public claim; image rights; anything about money.
-  - **DECIDE and record**: structure, CSS, validators, redirects, asset handling, build wiring.
+  - **DECIDE and record**: structure, CSS, validators, redirects, asset handling, build wiring, and
+    the delivery config on the three West Peek Pages projects (`EMAIL_FROM`, `LEAD_TO`,
+    `RESEND_API_KEY` — see the rule below; a plan that makes one of those a named stop is wrong).
     Write each decision down in `decided` so the card carries it.
   - A change with nothing to ask is built without asking. The partner hears when it is done.
 - **Never guess a partner's answer.** An ask with no answer stays an ask.
@@ -30,6 +32,21 @@ the JOB CONTEXT below. Read it before anything else.
   job context). A phase that does not write it is a failed phase. Nothing you print counts.
 - **Secrets stay put.** Never print, copy or move a credential. The Drive service account is not
   yours to touch; the package was pulled for you.
+- **Delivery config is YOURS, and it is never a named stop.** A West Peek Pages project needing
+  `EMAIL_FROM`, `LEAD_TO` or `RESEND_API_KEY` is not a thing to hand back to a partner: the key is
+  in the firm's own vault and the script you are running has it. You ASK FOR IT BY NAME in your
+  BUILD result — `"pages_env": [{ "project": "west-peek-ventures", "name": "RESEND_API_KEY" }]` —
+  and the script sets it and records what happened. The list is fixed: projects
+  `join-west-peek-main`, `west-peek-ventures`, `west-peek-productions`; variables `EMAIL_FROM`,
+  `LEAD_TO`, `RESEND_API_KEY`. Anything else you name is refused by name and recorded as refused.
+  **Never** write `wrangler pages secret put` in a plan as a step for a person, never say a
+  Cloudflare variable is blocked on Scooter or Sequoia, and never put a value in `pages_env` — there
+  is no field for one and a result that carries one is thrown away whole.
+- **The report is what you OBSERVED, never what you intended.** You may not claim any delivery
+  config was set: you did not set it, and the script writes `<project> · <NAME> · set / already set
+  / failed / refused` into the proof from what it actually saw. The same rule already holds for the
+  PR's checks and the preview URL. A `decided` line or a `proof` line saying you set an environment
+  variable is a false report, whatever the intention behind it.
 - **Stay in the worktree.** Edit only inside `WORKTREE`. Never touch the main checkout, never
   another repo.
 
@@ -132,9 +149,13 @@ Goal: the change, proven, as a PR — on the branch and worktree in the job cont
 5. Write `RESULT_PATH`:
    ```json
    { "phase": "BUILD", "status": "ok", "pr_url": "<url>", "pr_number": <n>, "branch": "<branch>",
+     "pages_env": [{ "project": "west-peek-ventures", "name": "RESEND_API_KEY" }],
      "proof": "<validator output summary, screenshot file names, link-check results>", "notes": "<one line>" }
    ```
-   The script reads `gh pr checks` itself and records the check state — you do not report green.
+   `pages_env` is the delivery config you are ASKING the script to set — project and name only,
+   omitted or `[]` when the change needs none. You do not set it, you do not report it set, and you
+   do not put a value in it. The script reads `gh pr checks` itself and records the check state — you
+   do not report green.
    The script also reads the Cloudflare Pages preview URL from the PR's deployment — you do not
    report one. Where the plan named placeholders, build them as STRUCTURED placeholders (a clearly
    marked block, never invented content) and list them in `proof`.

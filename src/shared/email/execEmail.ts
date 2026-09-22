@@ -45,6 +45,17 @@ export interface ExecEmailInput {
   sections: readonly ExecEmailSection[];
   /** The full material, below the rule. Markdown-ish plain text; may be long. */
   details?: string | null;
+  /**
+   * WHO ROUTED THE WORK, when somebody else did (her rule, 22 Sep 2026): "Walker routed this to me;
+   * the work is mine." A partner reading a finished piece of work should be able to see the whole
+   * chain in one line — who handed it on, and who actually did it — without opening the card.
+   *
+   * IT RIDES ON THE FOOTER, which is already the line that says who did it, and is the only line
+   * of an exec email that is prose rather than a label or a bullet. Putting it anywhere above the
+   * details would fail `lintExecEmail`'s own rule that nothing up there is loose text — and that
+   * rule is worth more than the placement. Omitted, the footer is byte-identical to before.
+   */
+  routedBy?: string | null;
 }
 
 export interface RenderedExecEmail {
@@ -65,8 +76,10 @@ function roleOf(name: string): string {
   return AI_EMPLOYEE_ROSTER.find((e) => e.name === name)?.role ?? "West Peek OS";
 }
 
-export function execFooter(employee: string): string {
-  return `— ${employee}, ${roleOf(employee)}. Reply to this email or write to ${INTAKE_MAILBOX} for anything else.`;
+export function execFooter(employee: string, routedBy?: string | null): string {
+  const routed = (routedBy ?? "").trim();
+  const chain = routed && routed !== employee ? ` ${routed} routed this to me; the work is mine.` : "";
+  return `— ${employee}, ${roleOf(employee)}.${chain} Reply to this email or write to ${INTAKE_MAILBOX} for anything else.`;
 }
 
 /** One line: no newlines, collapsed whitespace. */
@@ -154,7 +167,7 @@ export function renderExecEmail(input: ExecEmailInput): RenderedExecEmail {
   const sections = normaliseSections(input.sections);
   const tldr = boldNumbers(oneLine(input.tldr).replace(/^\**\s*TL;DR:?\**\s*/i, ""));
   const details = input.details ? breakProseRuns(input.details) : "";
-  const footer = execFooter(input.employee);
+  const footer = execFooter(input.employee, input.routedBy);
 
   const text = [
     `**TL;DR:** ${tldr}`,

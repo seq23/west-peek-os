@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, useApi } from "../lib/api";
 import { readableDate } from "../lib/dates";
+import { ON_OFF_RULE_KEYS } from "../../shared/work/localJobs";
 
 /**
  * A WEB PROPERTY CHANGE ON THE WORK PAGE (20 Sep 2026, Plan A).
@@ -56,6 +57,10 @@ interface ChangeRow {
   pre_approved_phrase: string | null;
   attachments: Array<{ id: string; filename: string; media_type: string; bytes: number }>;
   notices: Array<{ kind: string; cause: string; sent: number; sent_at: string }>;
+  /** 0224: a Managing Partner's own words for the finished email, and who last wrote them. */
+  requester_notes: string | null;
+  requester_notes_by_name: string | null;
+  requester_notes_at: string | null;
 }
 
 const PHASES: Array<{ key: ChangeRow["phase"]; label: string }> = [
@@ -69,8 +74,8 @@ function phaseIndex(p: ChangeRow["phase"]): number {
   return PHASES.findIndex((x) => x.key === p);
 }
 
-export function WebPropertyChangePanel({ cardId, onNavigate }: { cardId: string; onNavigate: (k: string) => void }): JSX.Element {
-  const { data, loading, status } = useApi<ChangeRow>(`/api/work-cards/${cardId}/web-property-change`);
+export function WebPropertyChangePanel({ cardId, onNavigate, canEdit = false }: { cardId: string; onNavigate: (k: string) => void; canEdit?: boolean }): JSX.Element {
+  const { data, loading, status, reload } = useApi<ChangeRow>(`/api/work-cards/${cardId}/web-property-change`);
   if (loading && !data) return <p className="small" data-testid={`wpc-loading-${cardId}`}>Reading where this change is…</p>;
   if (!data) return <p className="small" data-testid={`wpc-missing-${cardId}`}>{status === 404 ? "This card is marked as a web property change but carries no folder or repo yet — the next run asks for them." : "Could not read where this change is."}</p>;
   const r = data;
@@ -246,6 +251,82 @@ export function WebPropertyChangePanel({ cardId, onNavigate }: { cardId: string;
           </div>
         )}
       </dl>
+      <RequesterNotes cardId={cardId} notes={r.requester_notes} byName={r.requester_notes_by_name} at={r.requester_notes_at} canEdit={canEdit} onSaved={reload} />
+    </div>
+  );
+}
+
+/**
+ * HER WORDS ON THE FINISHED EMAIL (0224, 22 Sep 2026).
+ *
+ * Reading Porter's finished email before it goes out is worth little if the only two answers are
+ * "send it" and "send it back". What she actually wanted on Scooter's forms card was to send
+ * Porter's report WITH a line of her own in it, and doing that took editing a rendered email body
+ * in the database by hand. So the card carries the line, and the DONE reply carries a section in
+ * her name — and only the DONE reply: a question Porter is asking is his question, not hers.
+ *
+ * A MANAGING PARTNER'S ONLY. The API refuses anyone else; without the role the words still SHOW,
+ * because who spoke for the firm on a piece of work is a fact about it, not a control.
+ */
+function RequesterNotes({
+  cardId,
+  notes,
+  byName,
+  at,
+  canEdit,
+  onSaved,
+}: {
+  cardId: string;
+  notes: string | null;
+  byName: string | null;
+  at: string | null;
+  canEdit: boolean;
+  onSaved: () => void;
+}): JSX.Element | null {
+  const [draft, setDraft] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const value = draft ?? notes ?? "";
+
+  async function save(): Promise<void> {
+    setBusy(true);
+    setError(null);
+    const out = await api<{ detail?: string }>(`/api/work-cards/${cardId}`, { method: "PATCH", body: { requester_notes: value.trim() || null } });
+    setBusy(false);
+    if (out.status >= 400) {
+      setError(out.data?.detail ?? `Could not save your words (${out.status}).`);
+      return;
+    }
+    setDraft(null);
+    onSaved();
+  }
+
+  if (!canEdit && !notes) return null;
+  return (
+    <div className="card-block-form" data-testid={`wpc-requester-notes-${cardId}`}>
+      <p className="lbl">Your words on the finished email</p>
+      {canEdit ? (
+        <>
+          <textarea
+            rows={3}
+            value={value}
+            disabled={busy}
+            aria-label="Your words on the finished email"
+            data-testid={`wpc-requester-notes-text-${cardId}`}
+            placeholder="One line each. They go out with the finished work, as a section in your name, above Your call."
+            onChange={(e) => setDraft(e.target.value)}
+          />
+          <button type="button" className="btn-strong" disabled={busy} data-testid={`wpc-requester-notes-save-${cardId}`} onClick={() => void save()}>
+            {busy ? "Saving…" : "Save my words"}
+          </button>
+        </>
+      ) : (
+        <p data-testid={`wpc-requester-notes-read-${cardId}`}>{notes}</p>
+      )}
+      <p className="field-help" data-testid={`wpc-requester-notes-by-${cardId}`}>
+        {byName && at ? `${byName} wrote this ${readableDate(at)}. It goes out with the finished work and nothing else.` : "Nothing yet. Anything here goes out with the finished work and nothing else."}
+      </p>
+      {error && <p className="field-help err" data-testid={`wpc-requester-notes-error-${cardId}`}>{error}</p>}
     </div>
   );
 }
@@ -284,7 +365,14 @@ export function WorkKindRules({ kind, canEdit }: { kind: string; canEdit: boolea
       <p className="lbl">Standing rules for this kind</p>
       <ul className="kind-rules">
         {rules.map((rule) => {
-          const isSwitch = rule.rule_key === "land_on_green";
+          /*
+           * A SWITCH IS WHATEVER THE SHARED LIST SAYS IT IS (22 Sep 2026). This line used to name
+           * `land_on_green` and only `land_on_green`, and the Worker's PATCH route had its own copy
+           * of the same name. Migration 0223's "Show me the finished email before it goes" is
+           * editable and would have rendered here as a read-only badge — a rule a partner can read
+           * and cannot change. `validate:kind-rule-switches` holds the two sides to this one list.
+           */
+          const isSwitch = ON_OFF_RULE_KEYS.includes(rule.rule_key);
           const isModel = rule.rule_key.startsWith("model_");
           const on = ["on", "1", "true", "yes"].includes(rule.value.toLowerCase());
           return (
