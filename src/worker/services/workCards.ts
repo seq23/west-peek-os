@@ -1180,14 +1180,26 @@ export async function handleWorkRecord(ctx: RouteContext): Promise<Response> {
    * FINISHED MEANS DONE OR DROPPED, AND A DROPPED CARD IS PART OF THE RECORD. A decision not to do
    * something is still a decision; hiding it would make this a highlight reel. It is filterable and
    * labelled differently, and it is never silently absent.
+   *
+   * STOWED IS A SEPARATE ROOM, NOT A THIRD THING "ALL" QUIETLY INCLUDES (Addendum 10, 22 Sep 2026).
+   * A card the intake classifier caught as banter (`auto_resolution = 'NO_ACTION_NEEDED'`) shares
+   * `state = 'CANCELLED'` with a real Drop, so it is excluded from the ordinary DONE/CANCELLED/ALL
+   * listing by the second clause below, and reachable only through its own named `STOWED` filter —
+   * her instruction was an actual place these live, not just an invisible exclusion.
    */
-  const where: string[] = [visibility, "wc.state IN ('DONE', 'CANCELLED')"];
+  const isStowed = state === "STOWED";
+  const where: string[] = [
+    visibility,
+    isStowed
+      ? "wc.auto_resolution = 'NO_ACTION_NEEDED'"
+      : "wc.state IN ('DONE', 'CANCELLED') AND COALESCE(wc.auto_resolution, '') <> 'NO_ACTION_NEEDED'",
+  ];
   const binds: unknown[] = [];
   const bind = (value: unknown): string => {
     binds.push(value);
     return `?${binds.length}`;
   };
-  if (state !== "ALL") where.push(`wc.state = ${bind(state)}`);
+  if (!isStowed && state !== "ALL") where.push(`wc.state = ${bind(state)}`);
   if (who) where.push(`wc.owner_id = ${bind(who)}`);
   if (month) where.push(`substr(wc.created_at, 1, 7) = ${bind(month)}`);
   /*
@@ -1213,6 +1225,7 @@ export async function handleWorkRecord(ctx: RouteContext): Promise<Response> {
   const page = await ctx.env.WP_OS_DB.prepare(
     `SELECT wc.title    AS title,
             wc.state    AS state,
+            wc.auto_resolution AS auto_resolution,
             wc.owner_id AS owner_id,
             COALESCE(e.name, u.full_name) AS owner_name,
             substr(wc.created_at, 1, 7)   AS month,
@@ -1254,10 +1267,21 @@ export async function handleWorkRecord(ctx: RouteContext): Promise<Response> {
     .bind(...binds)
     .first<{ cards: number; row_count: number }>();
 
+  /*
+   * THESE FACETS ANSWER FOR THE ORDINARY RECORD ONLY (Addendum 10, 22 Sep 2026): "everything the
+   * firm has finished" excludes a card the intake classifier auto-resolved as banter, the same way
+   * DONE/CANCELLED/ALL do above. Stowed cards get their own facets only if a future wave needs
+   * them — this interim page does not filter Stowed by who or when.
+   *
+   * `totals` DOES switch with `isStowed`, unlike the other two facets: it is the denominator
+   * `recordSummary` prints as "N of TOTAL finished match", and printing the ordinary finished total
+   * while looking at the Stowed tab would be exactly the kind of denominator-does-not-match-the-
+   * screen defect this page was rebuilt to stop doing (see the file header).
+   */
   const totals = await ctx.env.WP_OS_DB.prepare(
     `SELECT COUNT(*) AS cards, COUNT(DISTINCT ${groupKey}) AS row_count, MIN(wc.created_at) AS since
        FROM work_card wc
-      WHERE ${visibility} AND wc.state IN ('DONE', 'CANCELLED')`,
+      WHERE ${visibility} AND ${isStowed ? "wc.auto_resolution = 'NO_ACTION_NEEDED'" : "wc.state IN ('DONE', 'CANCELLED') AND COALESCE(wc.auto_resolution, '') <> 'NO_ACTION_NEEDED'"}`,
   ).first<{ cards: number; row_count: number; since: string | null }>();
 
   /*
@@ -1267,7 +1291,7 @@ export async function handleWorkRecord(ctx: RouteContext): Promise<Response> {
   const months = await ctx.env.WP_OS_DB.prepare(
     `SELECT substr(wc.created_at, 1, 7) AS month, COUNT(*) AS cards
        FROM work_card wc
-      WHERE ${visibility} AND wc.state IN ('DONE', 'CANCELLED')
+      WHERE ${visibility} AND wc.state IN ('DONE', 'CANCELLED') AND COALESCE(wc.auto_resolution, '') <> 'NO_ACTION_NEEDED'
       GROUP BY month ORDER BY month DESC LIMIT 60`,
   ).all<{ month: string; cards: number }>();
 
@@ -1276,7 +1300,7 @@ export async function handleWorkRecord(ctx: RouteContext): Promise<Response> {
        FROM work_card wc
        LEFT JOIN ai_employee e ON e.id = wc.owner_id AND wc.owner_type = 'AI'
        LEFT JOIN firm_user u  ON u.id = wc.owner_id AND wc.owner_type = 'HUMAN'
-      WHERE ${visibility} AND wc.state IN ('DONE', 'CANCELLED') AND wc.owner_id IS NOT NULL
+      WHERE ${visibility} AND wc.state IN ('DONE', 'CANCELLED') AND COALESCE(wc.auto_resolution, '') <> 'NO_ACTION_NEEDED' AND wc.owner_id IS NOT NULL
       GROUP BY wc.owner_id, name ORDER BY cards DESC LIMIT 40`,
   ).all<{ owner_id: string; name: string; cards: number }>();
 
@@ -1288,6 +1312,7 @@ export async function handleWorkRecord(ctx: RouteContext): Promise<Response> {
         id: String(r.id),
         title: String(r.title),
         state: String(r.state),
+        auto_resolution: (r.auto_resolution as "NO_ACTION_NEEDED" | null) ?? null,
         owner_id: (r.owner_id as string | null) ?? null,
         owner_name: (r.owner_name as string | null) ?? null,
         month: String(r.month),

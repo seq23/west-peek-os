@@ -439,6 +439,25 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
   }
 
   /*
+   * THE STOWED-CARD PURGE (Addendum 10, 22 Sep 2026). A banter card the intake classifier caught —
+   * `work_card.auto_resolution = 'NO_ACTION_NEEDED'` — carries near-zero lasting value once nobody
+   * has disputed the classification, unlike real finished work, which is kept forever. Daily, so a
+   * card never sits stale for more than a day past its 30-day mark. See noActionPurge.ts for why
+   * the WHERE clause alone is the "was it disputed" check and why event_record is never touched.
+   */
+  if (job.job_key === "no_action_card_purge") {
+    const { purgeNoActionCards } = await import("./noActionPurge");
+    const out = await purgeNoActionCards(env, now);
+    return {
+      status: out.blobFailures.length > 0 ? "FAILED" : "SUCCEEDED",
+      summary:
+        `${out.examined} stowed card(s) past 30 days examined; ${out.purged.length} purged` +
+        `${out.blobFailures.length > 0 ? `. FAILED to delete ${out.blobFailures.length} stored blob(s): ${out.blobFailures.map((f) => `${f.r2Key} — ${f.detail}`).join("; ")}` : ""}`,
+      artifacts,
+    };
+  }
+
+  /*
    * Wyatt reading the decks that arrived. Lazily imported like every other job body so the module
    * is not pulled into an invocation that will never run it.
    *

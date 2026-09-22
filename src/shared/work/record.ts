@@ -75,8 +75,15 @@ export function searchTerms(q: string): string[] {
     .slice(0, LIKE_TERMS_MAX);
 }
 
-/** Which finished states the record can be narrowed to. `ALL` is both, and is the default. */
-export const RECORD_STATES = ["ALL", "DONE", "CANCELLED"] as const;
+/**
+ * Which finished states the record can be narrowed to. `ALL` is both DONE and CANCELLED — and,
+ * since Addendum 10 (22 Sep 2026), NEVER `NO_ACTION_NEEDED`: a card the intake classifier caught as
+ * banter is excluded from "everything the firm has finished" by default, the same way it is
+ * excluded from DONE and CANCELLED individually. `STOWED` is its own named filter rather than a
+ * fourth thing `ALL` quietly includes — her instruction was an actual reachable place these live,
+ * not just an invisible exclusion.
+ */
+export const RECORD_STATES = ["ALL", "DONE", "CANCELLED", "STOWED"] as const;
 export type RecordState = (typeof RECORD_STATES)[number];
 
 export interface RecordRow {
@@ -84,6 +91,8 @@ export interface RecordRow {
   id: string;
   title: string;
   state: "DONE" | "CANCELLED";
+  /** `NO_ACTION_NEEDED` when this row is a banter card the classifier auto-resolved (Addendum 10). */
+  auto_resolution: "NO_ACTION_NEEDED" | null;
   owner_id: string | null;
   owner_name: string | null;
   /** `YYYY-MM`, the spine this row hangs under. */

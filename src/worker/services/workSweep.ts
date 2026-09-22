@@ -272,7 +272,7 @@ export interface SweepResult {
   status: "SUCCEEDED" | "FAILED";
   summary: string;
   card: SweepCard | null;
-  outcome: "DONE" | "BLOCKED" | "HANDED_ON" | "PROGRESSED" | "FAILED" | "NOTHING_WAITING" | "WAITING_ON_DECK";
+  outcome: "DONE" | "BLOCKED" | "HANDED_ON" | "PROGRESSED" | "FAILED" | "NOTHING_WAITING" | "WAITING_ON_DECK" | "NO_ACTION_NEEDED";
 }
 
 /** How long a card waits for its deck to be read before the sweep looks at it again. */
@@ -457,7 +457,7 @@ export async function sweepOnce(
     roomPacket?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; detail: string }>;
     blogHelp?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     artifact?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
-    webPropertyChange?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; held?: boolean; detail: string }>;
+    webPropertyChange?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; held?: boolean; autoResolved?: boolean; detail: string }>;
   } = {},
 ): Promise<SweepResult> {
   await settleAbandonedCards(env, now);
@@ -503,6 +503,8 @@ export async function sweepOnce(
   let handedOn = false;
   // A card the Mac holds is left alone for HELD_MINUTES so the next card gets the tick.
   let held = false;
+  // Caught as banter and auto-resolved before it ever reached the Mac (Addendum 10, 22 Sep 2026).
+  let autoResolved = false;
   try {
     if (card.kind === "DECK_REWORK") {
       const run = runners.deckRework ?? (await import("./deck")).runDeckRework;
@@ -544,6 +546,7 @@ export async function sweepOnce(
       blocked = out.blocked;
       progressed = out.progressed;
       held = out.held === true;
+      autoResolved = out.autoResolved === true;
       detail = out.detail;
     } else if (card.kind === "PRODUCTIONS_HIRE_SEARCH") {
       // Walker's weekly hire search for West Peek Productions: search, every page checked, judged,
@@ -580,6 +583,23 @@ export async function sweepOnce(
     .bind(card.id)
     .first<{ state: string; next_action: string | null }>();
   const state = fresh?.state ?? card.state;
+
+  if (autoResolved) {
+    // The runner already wrote state = 'CANCELLED', auto_resolution = 'NO_ACTION_NEEDED' and its
+    // own `work_card.auto_resolved_no_action` event with the classification reasoning. This event
+    // is the generic one every other outcome gets, so a scan of `work_card.swept` events sees this
+    // outcome too, exactly like DONE/BLOCKED/HANDED_ON.
+    await appendEvent(env, {
+      eventType: "work_card.swept",
+      actorType: "system",
+      actorId: "work_sweep",
+      objectType: "work_card",
+      objectId: card.id,
+      firmScope: card.firm_scope,
+      payload: { outcome: "NO_ACTION_NEEDED", attempt: card.work_attempts },
+    });
+    return { status: "SUCCEEDED", summary: `"${card.title.slice(0, 60)}" needed no action: ${detail.slice(0, 160)}`, card, outcome: "NO_ACTION_NEEDED" };
+  }
 
   if (handedOn) {
     await announceOutcome(env, card, "HANDED_ON", detail);
