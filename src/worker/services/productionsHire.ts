@@ -103,6 +103,27 @@ export const HIRE_SOURCES = [
   "industry award lists (Ex Awards, Event Marketer It List, Clio, Cannes Brand Experience) naming producers",
 ];
 
+/**
+ * A REAL, BOUNDED CAPABILITY, NOT A SEPARATE LOOKUP (22 Sep 2026).
+ *
+ * Sequoia told Walker, via a recovered partner email and `work_steer`, to always attempt a
+ * legitimate contact-email lookup for reported candidates going forward. `steerFor` correctly read
+ * that against `HIRE_SEARCH_STEPS` and found nothing declared there covers it — correct behaviour
+ * for an undeclared capability, and the block on `wc_hire_followup_20260922` is the proof it works.
+ *
+ * The fix is not a second, hardcoded "look up an email" function — that shape was tried and
+ * reverted; it is closer to a narrow patch than to actually widening the job. This is the same
+ * capability `services/productions.ts` already trusts for press pitches (`email` / `contactUrl`,
+ * `parsePressPitches`): an address is kept only with the page it was read from, or it is a guess.
+ * Reused here as one more thing the SAME search-grounded call already looks for, not a new call.
+ */
+export const HIRE_CONTACT_RULE =
+  "When judging a candidate, note a public, self-published contact method if one clearly exists — " +
+  "their own site's About or contact page, a company page they run, or a press mention that " +
+  "directly quotes a self-provided email. Never a scraped third-party data-broker guess, never a " +
+  "pattern-guessed address, and never anything requiring a login. Say plainly when none is found " +
+  "rather than inventing one.";
+
 export const HIRE_CARD_KIND = "PRODUCTIONS_HIRE_SEARCH";
 
 export function hireCardTitle(week: string): string {
@@ -166,6 +187,14 @@ export interface HireCandidate {
   fit: number;
   /** How the profile answered: live (2xx/3xx), or exists-but-refused an automated read. Set by the check. */
   profileCheck?: "live" | "refused";
+  /**
+   * A public, self-published contact method — never a guess. Kept only alongside `contactUrl`; see
+   * `parseHireCandidates`, which is the actual enforcement (an email with no page is dropped in
+   * code, not merely discouraged in the prompt).
+   */
+  email: string | null;
+  /** The page the email was read from — their own site's About/contact page, a page they run, a press quote. */
+  contactUrl: string | null;
 }
 
 /** One row per URL. A URL is the identity, so it is normalised: https, no query, no trailing slash, lower-case host. */
@@ -198,6 +227,10 @@ export function parseHireCandidates(raw: string): HireCandidate[] {
     const url = canonicalProfileUrl(profileUrl);
     if (out.some((c) => c.profileUrl === url)) continue;
     const evidence = httpUrl(r.evidence_url);
+    // An address is kept only with the page it was read from; an address with no page is a guess
+    // (the same rule productions.ts uses for press-pitch contacts — see parsePressPitches).
+    const email = str(r.email);
+    const contactUrl = httpUrl(r.contact_url);
     out.push({
       name,
       title: str(r.title) ?? str(r.current_title) ?? "title not stated",
@@ -208,6 +241,8 @@ export function parseHireCandidates(raw: string): HireCandidate[] {
       why: str(r.why) ?? str(r.why_they_fit) ?? "",
       openingLine: str(r.opening_line) ?? "",
       fit: fitOf(r.fit ?? r.fit_score),
+      email: email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && contactUrl ? email : null,
+      contactUrl,
     });
   }
   return out;
@@ -278,6 +313,9 @@ export function buildHireSearchPrompt(week: string): string {
     "- evidence_url: a SECOND page that supports the fit and can be read without a login — an agency",
     "  team page, a conference speaker page, a portfolio, an award list. Give it whenever one exists;",
     "  LinkedIn refuses automated reads, so a candidate with only a LinkedIn URL may be dropped.",
+    `- ${HIRE_CONTACT_RULE}`,
+    "  Give contact_url as the page it came from; an email with no contact_url is discarded, so leave",
+    "  email null rather than write one you cannot point at a page for.",
     "- Freelance or open to freelance, senior (8+ years), in the United States, with brand-deal or",
     "  sponsorship-sales experience visible on the page. A producer who only delivers what others sold",
     "  is not the archetype. Say in `why` (2–3 lines) which page shows which claim.",
@@ -285,7 +323,7 @@ export function buildHireSearchPrompt(week: string): string {
     "- opening_line: one sentence Scooter can send himself, specific to that person's work, no flattery.",
     "- fit: 1–10 against the archetype, honestly. Fewer, all real, beats eight with guesses.",
     "",
-    'Return ONLY JSON: {"results":[{"name":"…","title":"…","company":"…","city":"…","profile_url":"https://…","evidence_url":"https://…","why":"…","opening_line":"…","fit":7}]}',
+    'Return ONLY JSON: {"results":[{"name":"…","title":"…","company":"…","city":"…","profile_url":"https://…","evidence_url":"https://…","email":null,"contact_url":"https://…","why":"…","opening_line":"…","fit":7}]}',
   ].join("\n");
 }
 
@@ -311,9 +349,11 @@ export function buildHireJudgePrompt(week: string, candidates: readonly HireCand
     "- The profile_url is that person's own profile or site, not a company page or a listing.",
     "DROP anyone whose `why` is the archetype restated, anyone whose evidence is a job posting, and",
     "anyone who reads as a recruiter, agency owner selling services, or a speaker bureau listing.",
+    "A missing email never disqualifies a candidate by itself — the search either found a legitimate,",
+    "page-backed contact method or it plainly did not; both are complete, honest answers.",
     "",
     "CANDIDATES:",
-    JSON.stringify(candidates.map((c) => ({ name: c.name, title: c.title, company: c.company, city: c.city, profile_url: c.profileUrl, evidence_url: c.evidenceUrl, why: c.why, opening_line: c.openingLine, fit: c.fit })), null, 1),
+    JSON.stringify(candidates.map((c) => ({ name: c.name, title: c.title, company: c.company, city: c.city, profile_url: c.profileUrl, evidence_url: c.evidenceUrl, email: c.email, contact_url: c.contactUrl, why: c.why, opening_line: c.openingLine, fit: c.fit })), null, 1),
     "",
     'Return ONLY JSON: {"verdicts":[{"name":"…","keep":true,"fit":7,"reason":"one line"}]} — one verdict per candidate, in order, name copied exactly.',
   ].join("\n");
@@ -389,6 +429,9 @@ export interface CandidateRow {
   company: string;
   city: string;
   evidence_url: string | null;
+  /** A legitimate, page-backed contact method, when one was found. See HIRE_CONTACT_RULE. */
+  email: string | null;
+  contact_url: string | null;
   why: string;
   opening_line: string;
   fit_score: number;
@@ -446,19 +489,21 @@ export async function rememberCandidates(
     const row = known.get(c.profileUrl) ?? null;
     if (!row) {
       await env.WP_OS_DB.prepare(
-        `INSERT INTO productions_candidate (id, url, name, title, company, city, evidence_url, why, opening_line, fit_score, first_seen, last_seen, week, last_card_id, status, firm_scope)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12, ?13, 'NEW', ?14)`,
+        `INSERT INTO productions_candidate (id, url, name, title, company, city, evidence_url, why, opening_line, fit_score, first_seen, last_seen, week, last_card_id, status, firm_scope, email, contact_url)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12, ?13, 'NEW', ?14, ?15, ?16)`,
       )
-        .bind(`pcd_${crypto.randomUUID()}`, c.profileUrl, c.name, c.title, c.company, c.city, c.evidenceUrl, c.why, c.openingLine, c.fit, at, week, cardId, firmScope)
+        .bind(`pcd_${crypto.randomUUID()}`, c.profileUrl, c.name, c.title, c.company, c.city, c.evidenceUrl, c.why, c.openingLine, c.fit, at, week, cardId, firmScope, c.email, c.contactUrl)
         .run();
     } else if (row.status === "CONTACTED" || row.status === "PASSED") {
       // Acted on: last_seen moves so the record says the search still finds them; nothing else does.
       await env.WP_OS_DB.prepare("UPDATE productions_candidate SET last_seen = ?2 WHERE id = ?1").bind(row.id, at).run();
     } else {
+      // email/contact_url use COALESCE, never overwriting a page-backed contact already on file with
+      // a null from a week the search did not surface one again — the fact does not un-happen.
       await env.WP_OS_DB.prepare(
-        "UPDATE productions_candidate SET last_seen = ?2, week = ?3, last_card_id = ?4, fit_score = ?5, why = ?6, opening_line = ?7, title = ?8, company = ?9, city = ?10, status = CASE WHEN ?11 = 1 THEN 'SEEN' ELSE status END WHERE id = ?1",
+        "UPDATE productions_candidate SET last_seen = ?2, week = ?3, last_card_id = ?4, fit_score = ?5, why = ?6, opening_line = ?7, title = ?8, company = ?9, city = ?10, status = CASE WHEN ?11 = 1 THEN 'SEEN' ELSE status END, email = COALESCE(?12, email), contact_url = COALESCE(?13, contact_url) WHERE id = ?1",
       )
-        .bind(row.id, at, week, cardId, c.fit, c.why, c.openingLine, c.title, c.company, c.city, row.week !== week ? 1 : 0)
+        .bind(row.id, at, week, cardId, c.fit, c.why, c.openingLine, c.title, c.company, c.city, row.week !== week ? 1 : 0, c.email, c.contactUrl)
         .run();
     }
   }
@@ -522,6 +567,9 @@ export function renderHireNote(
       `${n + 1}. ${c.name} — ${c.title}${c.company ? `, ${c.company}` : ""}${c.city ? ` · ${c.city}` : ""} · fit ${c.fit}/10`,
       `   ${checkLine(c)}`,
       ...c.why.split("\n").filter(Boolean).map((l) => `   Why: ${l}`),
+      // SAY WHAT WAS CHECKED, NEVER STAY SILENT — same rule as the page checks above: a real
+      // attempt was made either way, and this line says which of the two happened.
+      `   Contact: ${c.email ? `${c.email} — from ${c.contactUrl}` : "no public contact method found"}`,
       ...(c.openingLine ? [`   Opening line for you: "${c.openingLine}"`] : []),
       "",
     ]),
@@ -662,6 +710,7 @@ export const HIRE_SEARCH_STEPS: readonly string[] = [
   "Run one live search for a senior experiential producer, freelance, who can bring in brand deals.",
   "Check every profile and evidence page is live and readable without a login, dropping the rest.",
   "Judge each candidate against what the agency needs and reject the rest with a reason.",
+  HIRE_CONTACT_RULE,
   "Remember who has already been sent, across weeks, so nobody is sent twice.",
   "File one deliverable on Scooter's Home and send him ONE email.",
   "Nobody is contacted, no interview is arranged and no offer is made — the result is a shortlist he decides on.",
