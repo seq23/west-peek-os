@@ -50,11 +50,10 @@
  * module. `--self-test` restores each pre-fix shape and proves it is caught.
  */
 
-import { readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFileSync } from "node:child_process";
+import { loadTs } from "./lib/load-ts.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const P = (...p) => path.join(ROOT, ...p);
@@ -330,13 +329,24 @@ function stripComments(src) {
   return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
 }
 
-/** Bundle a TS module (it has relative imports without extensions) and import the result. */
+/**
+ * Bundle a TS module (it has relative imports without extensions) and import the result.
+ *
+ * FOUND BROKEN IN PASSING (22 Sep 2026) AND FIXED HERE, NOT WORKED AROUND. This used to shell out
+ * to `node_modules/.bin/esbuild` directly with `execFileSync` — a second, independent
+ * TS-bundle-and-import implementation, when `scripts/validate/lib/load-ts.mjs` (`loadTs`) already
+ * exists and every other TS-loading validator (`validate:card-kinds` among them) uses it. That is
+ * the repo's own named defect class: two components doing the same job, agreeing with nobody. The
+ * shared helper calls esbuild's own JS API (`build()` from the `esbuild` package) rather than
+ * assuming a `.bin/esbuild` binary is on disk at that exact path — which is not guaranteed in every
+ * environment this validator runs in, and was the actual cause the day this was found (`ENOENT`
+ * spawning it, with every other TS-loading validator in the repo passing in the same run). `cleanup`
+ * is kept as a no-op so the two call sites below need no change: `loadTs` removes its own temp
+ * directory on process exit rather than handing the caller one to manage.
+ */
 async function importTs(file) {
-  const dir = mkdtempSync(path.join(tmpdir(), "brief-lands-"));
-  const out = path.join(dir, "mod.mjs");
-  execFileSync(P("node_modules/.bin/esbuild"), [file, "--bundle", "--format=esm", "--platform=neutral", `--outfile=${out}`, "--log-level=silent"], { stdio: "inherit" });
-  const mod = await import(new URL(`file://${out}`).href);
-  return { mod, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  const mod = await loadTs(file);
+  return { mod, cleanup: () => {} };
 }
 
 function listSpecs() {

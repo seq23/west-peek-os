@@ -214,7 +214,19 @@ function checkTwoLabelsAreWired() {
     [WORK_CARDS, /wc\.model_access,\s*wc\.audience/, "the board query must return both labels, or the card cannot show them"],
     [WORK_PAGE, /data-testid="work-card-model-access"/, "the Add-a-card form must offer the model-access choice"],
     [WORK_PAGE, /data-testid="work-card-audience"/, "the Add-a-card form must offer the audience choice"],
-    [WORK_PAGE, /model_access: modelAccess/, "the form must POST model_access"],
+    /*
+     * REWRITTEN, NOT RELAXED (Wave B, 22 Sep 2026). The create form used to build its own POST body
+     * inline, so `model_access: modelAccess` sat directly in `NewWorkCard.tsx`. Wave B pulled that
+     * mapping into its own pure function (`work/newWorkCardBody.ts`'s `buildCreateWorkCardBody`) so
+     * a test could assert the actual request body rather than component state — the fix PR #103
+     * needed and never got for `result_recipient`/`preview_first`. The mapping now reads
+     * `model_access: state.modelAccess`, still under `WORK_PAGE_FILES` (that directory scan already
+     * covers the new file), and the invariant this check exists for — the POST key is bound to the
+     * `modelAccess` choice, not hardcoded — is exactly as true as it was. `\.?modelAccess\b` accepts
+     * both the bare local variable and a namespaced parameter holding the same name; a hardcoded
+     * `model_access: "PUBLIC_MODEL_APPROVED"` would still fail this, which is the thing that matters.
+     */
+    [WORK_PAGE, /model_access:\s*(?:\w+\.)?modelAccess\b/, "the form must POST model_access, bound to the modelAccess choice"],
     [WORK_PAGE, /work-card-model-access-\$\{c\.id\}/, "the card must display its model-access label"],
     [WORK_PAGE, /work-card-audience-\$\{c\.id\}/, "the card must display its audience label"],
     [WORK_PAGE, /work-card-lane-\$\{c\.id\}/, "the card must show the lane the run actually took — a label without the lane is not a trail"],

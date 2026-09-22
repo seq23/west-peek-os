@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { api, useApi, type MeResponse } from "../lib/api";
+import { api, onNewWorkCardRequested, useApi, type MeResponse } from "../lib/api";
 import { triage } from "@shared/work/workCards";
 import { deskAnswer, deskSubline } from "@shared/work/deskAnswer";
 import { WorkRecordView } from "./WorkRecordView";
@@ -83,6 +83,13 @@ export function WorkCardsPage({
   const [message, setMessage] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  /*
+   * THE CREATE DOOR, REACHABLE FROM ANYWHERE (Wave B). The shell's global masthead button and its
+   * keyboard shortcut both navigate here and then call `requestNewWorkCard()` — this is the one
+   * subscriber, and it opens the same form the page's own "Add a card" toggle always has.
+   */
+  useEffect(() => onNewWorkCardRequested(() => setAdding(true)), []);
 
   const all = board.data?.cards ?? [];
   const live = useMemo(() => triage(all), [all]);

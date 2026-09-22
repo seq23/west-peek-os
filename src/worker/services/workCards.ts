@@ -11,6 +11,9 @@ import { getVisibleCapture } from "./captures";
 import { blockOf } from "./blocks";
 import { RECORD_GROUP_COLUMNS, RECORD_GROUP_SQL, RECORD_STATES, monthLabel, searchTerms, type RecordState } from "../../shared/work/record";
 import { partnerByEmail, partnerByFirmUserId } from "../../shared/registry/partners";
+import { startableByHand } from "../../shared/work/cardKinds";
+import { WEB_PROPERTIES, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
+import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
 
 /**
  * Work spine (P3): the unit of governed work. State transitions are enforced
@@ -192,6 +195,20 @@ const createWorkCardSchema = z.object({
    */
   result_recipient: z.string().trim().max(200).nullable().optional(),
   preview_first: z.boolean().nullable().optional(),
+  /*
+   * `kind` WAS A SECOND NEVER-SENT FIELD (Wave B, plan §2/§8). `CreateWorkCardInput` has carried it
+   * and `createWorkCardInternal` has written it since 19 Sep — this schema simply never let it
+   * through, so a card typed directly in the OS could only ever become `ARTIFACT`, inferred from her
+   * words. Checked against `src/shared/work/cardKinds.ts` in the handler below, not restated as a
+   * second enum here: an enum copied from the registry is the same "two lists" defect the registry
+   * exists to end.
+   */
+  kind: z.string().trim().min(1).optional(),
+  /**
+   * WEB_PROPERTY_CHANGE ONLY. The site, chosen from a dropdown of `WEB_PROPERTIES` hosts — never
+   * free text. The handler below is where that rule is actually enforced; this is just the shape.
+   */
+  property_host: z.string().trim().min(1).optional(),
 });
 
 const updateWorkCardSchema = z
@@ -283,6 +300,15 @@ export interface CreateWorkCardInput {
   meeting_id?: string | null;
   /** The chain that works it. Left unset, an ask to build a dashboard, deck or document becomes `ARTIFACT` from the words. */
   kind?: string | null;
+  /**
+   * WEB_PROPERTY_CHANGE'S OWN BRIEF (Wave B, 22 Sep 2026), pre-built by `handleCreateWorkCard` from
+   * a dropdown-chosen `WEB_PROPERTIES` host — a `WebPropertyAsk` (`shared/intake/webPropertyChange`),
+   * JSON-stringified. `runWebPropertyChangeCard` already self-heals from this on its first tick when
+   * no `web_property_change` row exists yet (`readWebPropertyAsk` → `openWebPropertyChange`, see
+   * `services/webPropertyChange.ts:1069-1076`) — the same path an email-born card already takes, so
+   * a hand-created one needs nothing new written here beyond the column.
+   */
+  request_json?: string | null;
 }
 
 /** Shared creation path (HTTP handler and capture routing). Authorizes internally. */
@@ -503,9 +529,10 @@ export async function createWorkCardInternal(
     `INSERT INTO work_card
        (id, capture_id, title, description, domain_id, machine_id, owner_type, owner_id,
         state, priority, privacy_label, firm_scope, next_action, due_at, created_by, prompt,
-        model_access, audience, result_recipient, preview_first, preview_owner_id, meeting_id, kind)
+        model_access, audience, result_recipient, preview_first, preview_owner_id, meeting_id, kind,
+        request_json)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'OPEN', ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-             ?18, ?19, ?20, ?21, ?22)`,
+             ?18, ?19, ?20, ?21, ?22, ?23)`,
   )
     .bind(
       id,
@@ -543,6 +570,10 @@ export async function createWorkCardInternal(
       input.preview_first === true ? (partnerByFirmUserId(identity.id)?.firmUserId ?? null) : null,
       input.meeting_id ?? null,
       kind,
+      // WEB_PROPERTY_CHANGE'S OWN BRIEF, when `handleCreateWorkCard` built one from the dropdown —
+      // see `CreateWorkCardInput.request_json`. Any other caller leaves it unset and this is NULL,
+      // same as a plain card always has been.
+      input.request_json ?? null,
     )
     .run();
 
@@ -564,10 +595,57 @@ export async function handleCreateWorkCard(ctx: RouteContext): Promise<Response>
   const body = await parseJsonBody(ctx.request);
   const parsed = createWorkCardSchema.safeParse(body);
   if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
-  const input = parsed.data;
+  const { property_host, ...input } = parsed.data;
+
+  /*
+   * A KIND SOMEBODY CHOSE MUST BE ONE SHE CAN OPEN BY HAND. `startableByHand` reads
+   * `src/shared/work/cardKinds.ts` — the one registry — so a recurring, job-opened kind
+   * (`ROOM_PACKET`, the four `PRODUCTIONS_*`, `DECK_REWORK`) can never be typed here: `duplicateOf()`
+   * would silently join a hand-made one to the job's own live card and the person who wrote it would
+   * watch nothing happen. See the registry's own comment for why that is not a rough door — it is no
+   * door.
+   */
+  if (input.kind !== undefined && !startableByHand(input.kind)) {
+    return json(
+      { error: "invalid_input", detail: `"${input.kind}" cannot be started by hand — see the kind list on the create door for what can.` },
+      { status: 400 },
+    );
+  }
+
+  /*
+   * WEB_PROPERTY_CHANGE'S OWN BRIEF, BUILT FROM THE DROPDOWN — never from typed text. `property_host`
+   * must name one of `WEB_PROPERTIES` exactly; anything else is refused rather than guessed at,
+   * which is the anti-footgun rule the plan calls out by name. The `ask` — what actually changes —
+   * comes from whatever she wrote in the instruction box, falling back to the next action or the
+   * title so a card is never opened with nothing for Porter to read.
+   */
+  let requestJson: string | undefined;
+  if (input.kind === WEB_PROPERTY_CHANGE_KIND) {
+    const property = WEB_PROPERTIES.find((p) => p.host === property_host);
+    if (!property) {
+      return json(
+        { error: "invalid_input", detail: "Pick the site from the list — westpeek.ventures, westpeekproductions.com or joinwestpeek.com. Never typed." },
+        { status: 400 },
+      );
+    }
+    const ask: WebPropertyAsk = {
+      drive_folder_id: null,
+      drive_folder_url: null,
+      drive_file_url: null,
+      property_host: property.host,
+      target_repo: property.repo,
+      site: property.site,
+      ask: (input.prompt?.trim() || input.next_action?.trim() || input.title).slice(0, 6000),
+      pre_approval: null,
+      force: null,
+      addressee: null,
+      property_unresolved: false,
+    };
+    requestJson = JSON.stringify(ask);
+  }
 
   try {
-    let derived: CreateWorkCardInput = { ...input };
+    let derived: CreateWorkCardInput = { ...input, ...(requestJson !== undefined ? { request_json: requestJson } : {}) };
     if (input.capture_id) {
       const capture = await getVisibleCapture(env, identity!, input.capture_id);
       if (!capture) return json({ error: "not_found", detail: "capture not found or not visible" }, { status: 404 });
