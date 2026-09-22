@@ -9,9 +9,21 @@ import { privacyLabelSchema, DEFAULT_PRIVACY_LABEL } from "../../shared/privacy"
 import { actorFromIdentity, authorize, canAccessPrivacyLabel, privacyVisibilityClause } from "./authorize";
 import { getVisibleCapture } from "./captures";
 import { blockOf } from "./blocks";
-import { RECORD_GROUP_COLUMNS, RECORD_GROUP_SQL, RECORD_STATES, monthLabel, searchTerms, type RecordState } from "../../shared/work/record";
-import { partnerByEmail, partnerByFirmUserId } from "../../shared/registry/partners";
-import { startableByHand } from "../../shared/work/cardKinds";
+import {
+  NO_KIND_FILTER_VALUE,
+  RECORD_GROUP_COLUMNS,
+  RECORD_GROUP_SQL,
+  RECORD_ORIGIN_KINDS,
+  RECORD_STATES,
+  monthLabel,
+  recordOriginLabel,
+  searchTerms,
+  type RecordOriginKind,
+  type RecordState,
+} from "../../shared/work/record";
+import { PARTNERS, partnerByEmail, partnerByFirmUserId } from "../../shared/registry/partners";
+import { cardKind, startableByHand } from "../../shared/work/cardKinds";
+import { originBadgeText, originOf } from "../../shared/work/origin";
 import { WEB_PROPERTIES, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
 import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
 
@@ -1277,11 +1289,45 @@ export async function handleMarkWorkDeskSeen(ctx: RouteContext): Promise<Respons
  * packet is "Black lawyers" — which is in the line an employee wrote, not in the title the
  * machinery generated.
  */
+/**
+ * ORIGIN, IN SQL (Addendum 4, 22 Sep 2026): the same precedence `originOf()`
+ * (`@shared/work/origin`) reads off a row — hand-off, then meeting, then capture, then email, then
+ * a partner's own id, else the system — expressed once here so the record can filter on it BEFORE
+ * paging, at the scale `validate:record-scales` exists to hold. It cannot literally call the TS
+ * function (D1 runs SQL), so the two are pinned together by `tests/workRecordFilters.test.ts`,
+ * which asserts this CASE agrees with `originOf()` for one fixture of every kind. The two partner
+ * ids are inlined as SQL literals from `PARTNERS` — our own registry, never request input, exactly
+ * as `@shared/work/record`'s `RECURRING_KIND_LIST_SQL` inlines its own registry's keys.
+ */
+const PARTNER_ID_LIST_SQL = PARTNERS.map((p) => `'${p.firmUserId.replace(/'/g, "''")}'`).join(", ") || "''";
+const ORIGIN_CASE_SQL = `CASE
+          WHEN wc.assigned_from_card_id IS NOT NULL THEN 'ANOTHER_CARD'
+          WHEN wc.meeting_id IS NOT NULL THEN 'MEETING'
+          WHEN wc.capture_id IS NOT NULL THEN 'CAPTURE'
+          WHEN COALESCE(wc.requested_by_email, '') <> '' THEN 'EMAIL'
+          WHEN wc.created_by IN (${PARTNER_ID_LIST_SQL}) THEN 'PARTNER'
+          ELSE 'SYSTEM'
+        END`;
+
+/** `"2026-09-16"` → `"2026-09-17"`. UTC throughout — a date-only string carries no zone of its
+ *  own, and the record's date-range filter is a calendar day, not a moment in Chicago's zone. */
+function nextDay(dateOnly: string): string {
+  const d = new Date(`${dateOnly}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
 const recordQuerySchema = z.object({
   q: z.string().trim().max(200).optional(),
   who: z.string().trim().max(120).optional(),
   month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
   state: z.enum(RECORD_STATES).optional(),
+  /** `NO_KIND_FILTER_VALUE` is the plain, un-kinded card — a real sentinel, not empty-string-vs-
+   *  absent, so it is unambiguously "filtering" for `isFiltered()` on the client. */
+  kind: z.string().trim().min(1).max(80).optional(),
+  origin: z.enum(RECORD_ORIGIN_KINDS as unknown as [RecordOriginKind, ...RecordOriginKind[]]).optional(),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   cursor: z.coerce.number().int().min(0).max(100_000).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
 });
@@ -1293,7 +1339,7 @@ export async function handleWorkRecord(ctx: RouteContext): Promise<Response> {
   if (!parsed.success) {
     return json({ error: "invalid_input", detail: parsed.error.issues[0]?.message ?? "bad query" }, { status: 400 });
   }
-  const { q, who, month, cursor = 0 } = parsed.data;
+  const { q, who, month, kind, origin, from, to, cursor = 0 } = parsed.data;
   const state: RecordState = parsed.data.state ?? "ALL";
   const limit = parsed.data.limit ?? 40;
 
@@ -1323,6 +1369,15 @@ export async function handleWorkRecord(ctx: RouteContext): Promise<Response> {
   if (!isStowed && state !== "ALL") where.push(`wc.state = ${bind(state)}`);
   if (who) where.push(`wc.owner_id = ${bind(who)}`);
   if (month) where.push(`substr(wc.created_at, 1, 7) = ${bind(month)}`);
+  // KIND (Addendum 4): "by kind" — the literal `work_card.kind`, same values `cardKinds.ts` names.
+  if (kind) where.push(kind === NO_KIND_FILTER_VALUE ? "wc.kind IS NULL" : `wc.kind = ${bind(kind)}`);
+  // ORIGIN (Addendum 4): the same precedence `originOf()` reads, computed in SQL — see ORIGIN_CASE_SQL.
+  if (origin) where.push(`(${ORIGIN_CASE_SQL}) = ${bind(origin)}`);
+  // DATE RANGE (Addendum 4). `to` is a calendar day, inclusive — `< to + 1 day` rather than
+  // `<= to`, so a card finished at 23:59 on the last day of the range is not silently dropped by a
+  // string comparison against a bare `YYYY-MM-DD`.
+  if (from) where.push(`wc.created_at >= ${bind(`${from}T00:00:00.000Z`)}`);
+  if (to) where.push(`wc.created_at < ${bind(`${nextDay(to)}T00:00:00.000Z`)}`);
   /*
    * ONE TERM PER WORD, ANDed — see `searchTerms`. A single `%<the whole query>%` is what this used
    * to do, and D1 answers a LIKE pattern of 50 characters or more with `SQLITE_ERROR: LIKE or GLOB
@@ -1356,7 +1411,12 @@ export async function handleWorkRecord(ctx: RouteContext): Promise<Response> {
             wc.description  AS description,
             wc.model_access AS model_access,
             wc.audience     AS audience,
-            wc.kind         AS kind
+            wc.kind         AS kind,
+            wc.created_by            AS created_by,
+            wc.requested_by_email    AS requested_by_email,
+            wc.capture_id            AS capture_id,
+            wc.meeting_id            AS meeting_id,
+            wc.assigned_from_card_id AS assigned_from_card_id
        FROM work_card wc
        LEFT JOIN ai_employee e ON e.id = wc.owner_id AND wc.owner_type = 'AI'
        LEFT JOIN firm_user u  ON u.id = wc.owner_id AND wc.owner_type = 'HUMAN'
@@ -1425,10 +1485,42 @@ export async function handleWorkRecord(ctx: RouteContext): Promise<Response> {
       GROUP BY wc.owner_id, name ORDER BY cards DESC LIMIT 40`,
   ).all<{ owner_id: string; name: string; cards: number }>();
 
+  // KIND, AS A FACET (Addendum 4). `NULL` (the plain, un-kinded card) is a real, common value here
+  // and is named plainly rather than dropped — a facet that silently excluded the ordinary case
+  // would make it look rarer than it is.
+  const kinds = await ctx.env.WP_OS_DB.prepare(
+    `SELECT wc.kind AS kind, COUNT(*) AS cards
+       FROM work_card wc
+      WHERE ${visibility} AND wc.state IN ('DONE', 'CANCELLED') AND COALESCE(wc.auto_resolution, '') <> 'NO_ACTION_NEEDED'
+      GROUP BY wc.kind ORDER BY cards DESC LIMIT 40`,
+  ).all<{ kind: string | null; cards: number }>();
+
+  // ORIGIN, AS A FACET (Addendum 4). Same ORIGIN_CASE_SQL the WHERE clause filters on above.
+  const origins = await ctx.env.WP_OS_DB.prepare(
+    `SELECT (${ORIGIN_CASE_SQL}) AS origin, COUNT(*) AS cards
+       FROM work_card wc
+      WHERE ${visibility} AND wc.state IN ('DONE', 'CANCELLED') AND COALESCE(wc.auto_resolution, '') <> 'NO_ACTION_NEEDED'
+      GROUP BY origin ORDER BY cards DESC`,
+  ).all<{ origin: RecordOriginKind; cards: number }>();
+
   return json({
     rows: rows.map((r) => {
       // The verdict is the LAST "• …" line the employee wrote. Everything above it is working.
       const lines = String(r.description ?? "").split("\n").filter((l) => l.startsWith("• "));
+      // ORIGIN, FOR DISPLAY: `originOf()`/`originBadgeText()` themselves (`@shared/work/origin`,
+      // built by Wave C) — never re-derived. No viewer is passed (see RECORD_ORIGIN_KINDS above),
+      // so a partner-created card always reads `PARTNER` here, consistently for either reader.
+      const origin = originOf(
+        {
+          created_by: (r.created_by as string | null) ?? null,
+          requested_by_email: (r.requested_by_email as string | null) ?? null,
+          capture_id: (r.capture_id as string | null) ?? null,
+          meeting_id: (r.meeting_id as string | null) ?? null,
+          assigned_from_card_id: (r.assigned_from_card_id as string | null) ?? null,
+          created_at: String(r.at),
+        },
+        null,
+      );
       return {
         id: String(r.id),
         title: String(r.title),
@@ -1443,6 +1535,8 @@ export async function handleWorkRecord(ctx: RouteContext): Promise<Response> {
         model_access: String(r.model_access ?? "PUBLIC_MODEL_APPROVED"),
         audience: String(r.audience ?? "INTERNAL"),
         kind: (r.kind as string | null) ?? null,
+        origin_kind: origin.kind,
+        origin_label: originBadgeText(origin, (r.owner_name as string | null) ?? null),
       };
     }),
     matched: { cards: counts?.cards ?? 0, rows: counts?.row_count ?? 0 },
@@ -1450,6 +1544,12 @@ export async function handleWorkRecord(ctx: RouteContext): Promise<Response> {
     next_cursor: hasMore ? String(cursor + limit) : null,
     months: (months.results ?? []).map((m) => ({ ...m, label: monthLabel(m.month) })),
     people: people.results ?? [],
+    kinds: (kinds.results ?? []).map((k) => ({
+      kind: k.kind ?? NO_KIND_FILTER_VALUE,
+      label: k.kind ? (cardKind(k.kind)?.label ?? k.kind) : "No kind (a plain card)",
+      cards: k.cards,
+    })),
+    origins: (origins.results ?? []).map((o) => ({ origin: o.origin, label: recordOriginLabel(o.origin), cards: o.cards })),
     since: totals?.since ?? null,
   });
 }

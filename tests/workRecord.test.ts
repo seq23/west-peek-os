@@ -14,6 +14,8 @@ import {
   type RecordRow,
 } from "../src/shared/work/record";
 import { deskAnswer, deskSubline } from "../src/shared/work/deskAnswer";
+import { RECURRING_CARD_KINDS, isRecurringKind } from "../src/shared/work/recurring";
+import { CARD_KINDS } from "../src/shared/work/cardKinds";
 
 /**
  * THE RECORD AND THE DESK'S ANSWER, held to arithmetic and grammar.
@@ -38,6 +40,8 @@ const row = (over: Partial<RecordRow> = {}): RecordRow => ({
   model_access: "PUBLIC_MODEL_APPROVED",
   audience: "EXTERNAL",
   kind: null,
+  origin_kind: "SYSTEM",
+  origin_label: "from the scheduled sweep",
   ...over,
 });
 
@@ -58,6 +62,33 @@ describe("the collapse key", () => {
 
   it("includes the state, so a dropped attempt never hides inside a finished one", () => {
     expect(RECORD_GROUP_COLUMNS).toContain("state");
+  });
+
+  it("includes collapse_scope, so a one-off assignment is never folded into a sibling (Addendum 4)", () => {
+    expect(RECORD_GROUP_COLUMNS).toContain("collapse_scope");
+    // Constant for a recurring kind (so identical runs still fold together), the card's own id
+    // otherwise (so it can never equal another row's, however alike the other columns look).
+    expect(RECORD_GROUP_SQL.collapse_scope).toContain("wc.id");
+  });
+});
+
+describe("recurring vs one-off — the axis Record's collapse and Machinery's two buckets both read", () => {
+  it("is read straight from cardKinds.ts's door, not a second list", () => {
+    for (const k of CARD_KINDS) {
+      expect(isRecurringKind(k.key), `${k.key} (door: ${k.door})`).toBe(k.door === "JOB");
+    }
+  });
+
+  it("names the recurring duties she gave as examples — Room packets and the Productions jobs", () => {
+    expect(RECURRING_CARD_KINDS).toContain("ROOM_PACKET");
+    expect(RECURRING_CARD_KINDS).toContain("PRODUCTIONS_HIRE_SEARCH");
+  });
+
+  it("a one-off kind, and the plain hand-made card, are never recurring", () => {
+    expect(isRecurringKind("WEB_PROPERTY_CHANGE")).toBe(false);
+    expect(isRecurringKind("ARTIFACT")).toBe(false);
+    expect(isRecurringKind(null)).toBe(false);
+    expect(isRecurringKind(undefined)).toBe(false);
   });
 
   it("offers dropped work as a filter rather than omitting it — a record is not a highlight reel", () => {

@@ -49,6 +49,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadTs } from "./lib/load-ts.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const SERVICE = path.join(ROOT, "src", "worker", "services", "workCards.ts");
@@ -272,7 +273,14 @@ async function run() {
   const view = readFileSync(RECORD_VIEW, "utf8");
   const page = readFileSync(WORK_PAGE, "utf8");
 
-  const shared = await import(SHARED);
+  /*
+   * `record.ts` NOW IMPORTS `./recurring` (Addendum 4, 22 Sep 2026: the recurring/one-off
+   * collapse axis, shared with Machinery) and a type from `./origin` (the origin filter). Node
+   * resolves a bare `./sibling` specifier as JavaScript only, so a plain `import()` of this file
+   * stopped working the moment it gained a sibling import — `loadTs` (already used by
+   * `a-kind-has-one-registry.mjs` and others) bundles the entry and its imports with esbuild first.
+   */
+  const shared = await loadTs(SHARED);
   const columns = shared.RECORD_GROUP_COLUMNS;
   const sqlFor = shared.RECORD_GROUP_SQL;
 

@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { readableDate, shortDate } from "../lib/dates";
 import {
+  NO_KIND_FILTER_VALUE,
   RECORD_STATES,
   bandByMonth,
   isFiltered,
   monthLabel,
   recordSummary,
+  type RecordOriginKind,
   type RecordPage,
   type RecordRow,
   type RecordState,
@@ -41,6 +43,16 @@ import {
  * is what made 496 finished cards compete with two blocked ones, and no amount of collapsing fixes
  * that: a collapsed section is still a thing she scrolls past, and on the 199 days out of 200 when
  * she is not looking anything up, the desk should be the whole page.
+ *
+ * ── THE PERMANENT READ-ONLY VERSION OF THE CARD PAGE (Addendum 4, 22 Sep 2026) ──────────────────
+ *
+ * Her decision, settling "what Record does more of": a finished card is not summarised here a
+ * second time in a shape of its own — Wave A's `WorkCardPage.tsx` (`#/work/<id>`) already renders a
+ * DONE/CANCELLED card correctly, read-only, with its full message trail, decisions and artifacts.
+ * So a row's title is the door into that same page rather than a second renderer; Record's job is
+ * "list and filter well, then link into the real card page" — by kind, by owner, by origin
+ * (`originOf()`/`originBadgeText()`, `@shared/work/origin`, built by Wave C — reused, not
+ * reinvented), by outcome and by a date range, on top of the search and month it already had.
  */
 
 const PAGE_SIZE = 40;
@@ -60,6 +72,10 @@ export function WorkRecordView({ onMove, onNavigate, refreshNonce }: Props): JSX
   const [who, setWho] = useState("");
   const [month, setMonth] = useState("");
   const [state, setState] = useState<RecordState>("ALL");
+  const [kind, setKind] = useState("");
+  const [origin, setOrigin] = useState<RecordOriginKind | "">("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [page, setPage] = useState<RecordPage | null>(null);
   const [rows, setRows] = useState<RecordRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -80,6 +96,10 @@ export function WorkRecordView({ onMove, onNavigate, refreshNonce }: Props): JSX
       if (who) params.set("who", who);
       if (month) params.set("month", month);
       if (state !== "ALL") params.set("state", state);
+      if (kind) params.set("kind", kind);
+      if (origin) params.set("origin", origin);
+      if (from) params.set("from", from);
+      if (to) params.set("to", to);
       if (append) params.set("cursor", append);
       const res = await api<RecordPage & { error?: string; detail?: string }>(`/api/work-cards/record?${params}`);
       setLoading(false);
@@ -96,7 +116,7 @@ export function WorkRecordView({ onMove, onNavigate, refreshNonce }: Props): JSX
       setCursor(res.data.next_cursor);
       setRows((prev) => (append ? [...prev, ...res.data!.rows] : res.data!.rows));
     },
-    [applied, who, month, state],
+    [applied, who, month, state, kind, origin, from, to],
   );
 
   useEffect(() => {
@@ -118,7 +138,7 @@ export function WorkRecordView({ onMove, onNavigate, refreshNonce }: Props): JSX
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const filtered = isFiltered({ q: applied, who, month, state });
+  const filtered = isFiltered({ q: applied, who, month, state, kind, origin, from, to });
   const bands = bandByMonth(rows);
 
   return (
@@ -165,6 +185,43 @@ export function WorkRecordView({ onMove, onNavigate, refreshNonce }: Props): JSX
               </option>
             ))}
           </select>
+        </label>
+        {/* KIND, OWNER, ORIGIN, OUTCOME AND A DATE RANGE (Addendum 4) — not just full-text search.
+            Origin reuses `RecordOriginKind`/`recordOriginLabel`, the same six categories
+            `originOf()`/`originBadgeText()` name, never a second vocabulary invented here. */}
+        <label className="record-field">
+          <span className="lbl">Kind</span>
+          <select data-testid="work-record-kind" value={kind} onChange={(e) => setKind(e.target.value)}>
+            <option value="">Any kind</option>
+            {(page?.kinds ?? []).map((k) => (
+              <option key={k.kind || NO_KIND_FILTER_VALUE} value={k.kind || NO_KIND_FILTER_VALUE}>
+                {k.label} ({k.cards})
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="record-field">
+          <span className="lbl">Where it came from</span>
+          <select
+            data-testid="work-record-origin"
+            value={origin}
+            onChange={(e) => setOrigin(e.target.value as RecordOriginKind | "")}
+          >
+            <option value="">Any origin</option>
+            {(page?.origins ?? []).map((o) => (
+              <option key={o.origin} value={o.origin}>
+                {o.label} ({o.cards})
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="record-field">
+          <span className="lbl">From</span>
+          <input type="date" data-testid="work-record-from" value={from} onChange={(e) => setFrom(e.target.value)} />
+        </label>
+        <label className="record-field">
+          <span className="lbl">To</span>
+          <input type="date" data-testid="work-record-to" value={to} onChange={(e) => setTo(e.target.value)} />
         </label>
         {/* DONE AND DROPPED ARE BOTH THE RECORD. A decision not to do something is a decision, and
             a record that quietly omitted it would be a highlight reel. */}
@@ -218,6 +275,10 @@ export function WorkRecordView({ onMove, onNavigate, refreshNonce }: Props): JSX
                 setWho("");
                 setMonth("");
                 setState("ALL");
+                setKind("");
+                setOrigin("");
+                setFrom("");
+                setTo("");
               }}
             >
               Clear the filters
@@ -236,11 +297,26 @@ export function WorkRecordView({ onMove, onNavigate, refreshNonce }: Props): JSX
             </span>
           </div>
           <ul className="record-rows">
+            {/* KEYED ON r.id, NOT ON THE VISIBLE COLUMNS (Addendum 4): a one-off card never
+                collapses, so two of them can now legitimately share month/title/owner/state as
+                separate rows — a key built from those alone would collide between them. */}
             {band.rows.map((r) => (
-              <li key={`${r.month}-${r.title}-${r.owner_id}-${r.state}`} className="record-row" data-testid={`work-record-row-${r.id}`}>
+              <li key={r.id} className="record-row" data-testid={`work-record-row-${r.id}`}>
                 <span className="record-when">{shortDate(r.at)}</span>
                 <span className="record-what">
-                  <strong className="record-title">{r.title}</strong>
+                  {/* THE ROW OPENS THE REAL CARD PAGE (Addendum 4): `WorkCardPage.tsx` already
+                      renders a DONE/CANCELLED card correctly, read-only, with its full trail — the
+                      title is the door into it rather than a second, shallower renderer here. */}
+                  <button
+                    type="button"
+                    className="link-button record-title"
+                    data-testid={`work-record-open-${r.id}`}
+                    onClick={() => {
+                      window.location.hash = `#/work/${r.id}`;
+                    }}
+                  >
+                    {r.title}
+                  </button>
                   <span className="record-meta">
                     <span className={r.state === "DONE" ? "badge badge-ok" : "badge"}>
                       {/* STOWED IS ITS OWN LABEL, NEVER "DROPPED" (Addendum 10, 22 Sep 2026) — a
@@ -248,6 +324,11 @@ export function WorkRecordView({ onMove, onNavigate, refreshNonce }: Props): JSX
                           with a real Drop, but reads as something a person actually decided against
                           only when it wasn't one. */}
                       {r.auto_resolution === "NO_ACTION_NEEDED" ? "Stowed" : r.state === "CANCELLED" ? "Dropped" : "Done"}
+                    </span>
+                    {/* ORIGIN, AT A GLANCE (Addendum 4/Addendum 1's "origin isn't named at a
+                        glance"): `originBadgeText()`'s own words, computed server-side. */}
+                    <span className="badge" data-testid={`work-record-origin-${r.id}`}>
+                      {r.origin_label}
                     </span>
                     {r.result && <span className="muted small record-result">{r.result}</span>}
                     {/* BOTH LABELS, HERE TOO. "So we can have a trail of how it's working" is a

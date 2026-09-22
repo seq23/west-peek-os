@@ -24,7 +24,10 @@ interface ChangeRow {
   drive_folder_id: string | null;
   drive_folder_url: string | null;
   phase: "PLAN" | "BUILD" | "LAND" | "DONE";
+  /** Set only for a card planned before 0231 — a filed Document this card can still open. */
   plan_document_id: string | null;
+  /** 0231: the plan's own text, on the card — read here instead of navigating to Documents. */
+  plan_text: string | null;
   plan_filed_at: string | null;
   decided: string[];
   asks: string[];
@@ -148,7 +151,18 @@ export function WebPropertyChangePanel({ cardId, onNavigate, canEdit = false }: 
         <div>
           <dt>Plan</dt>
           <dd>
-            {r.plan_document_id ? (
+            {/* 0231, Addendum 4.3: the plan is on the card, never filed into Documents — "plans for
+                work to be done are not like real documents, like an LP deck or something." A card
+                planned before 0231 still carries a filed Document (`plan_document_id`), kept
+                openable rather than rewriting old data; every plan filed since reads inline here. */}
+            {r.plan_text ? (
+              <details data-testid={`wpc-plan-${cardId}`}>
+                <summary className="link-button" style={{ display: "inline" }}>
+                  Read the plan (filed {r.plan_filed_at ? readableDate(r.plan_filed_at) : ""})
+                </summary>
+                <pre className="wpc-proof" data-testid={`wpc-plan-text-${cardId}`}>{r.plan_text}</pre>
+              </details>
+            ) : r.plan_document_id ? (
               <button
                 type="button"
                 className="link-button"

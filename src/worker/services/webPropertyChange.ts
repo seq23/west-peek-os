@@ -84,8 +84,11 @@ export interface WebPropertyChangeRow {
   drive_folder_url: string | null;
   ask: string;
   phase: WebPropertyChangePhase | "DONE";
+  /** Kept for a card planned before 0231 — its plan is still a filed Document, still openable. */
   plan_deliverable_id: string | null;
   plan_document_id: string | null;
+  /** 0231. The plan's own text, on the row — never filed into Documents. Null for a pre-0231 card. */
+  plan_text: string | null;
   plan_filed_at: string | null;
   decided_json: string;
   asks_json: string;
@@ -454,11 +457,18 @@ export async function parkPhase(
     plan: row.plan_filed_at
       ? {
           document_id: row.plan_document_id,
-          // The plan's text rides on the job: the filed Document is the source of truth and the Mac
-          // that runs BUILD may not be the one that ran PLAN.
-          text: row.plan_deliverable_id
-            ? ((await env.WP_OS_DB.prepare("SELECT body FROM deliverable WHERE id = ?1").bind(row.plan_deliverable_id).first<{ body: string }>())?.body ?? null)
-            : null,
+          /*
+           * THE PLAN'S TEXT RIDES ON THE JOB, the Mac that runs BUILD may not be the one that ran
+           * PLAN. Since 0231 the row's own `plan_text` is the source of truth (0231, Addendum 4.3:
+           * the plan is not filed into Documents any more). `plan_deliverable_id` is read only as a
+           * fallback, for a card planned before 0231 whose plan still lives solely in the
+           * deliverable this row used to file.
+           */
+          text: row.plan_text
+            ? row.plan_text
+            : row.plan_deliverable_id
+              ? ((await env.WP_OS_DB.prepare("SELECT body FROM deliverable WHERE id = ?1").bind(row.plan_deliverable_id).first<{ body: string }>())?.body ?? null)
+              : null,
           decided: list(row.decided_json),
           asks: asksOf(row),
           answers: list(row.answers_json),
@@ -540,7 +550,7 @@ export interface RunOutcome {
  * that approves. The EMAIL carries the whole plan above them — `blockedEmailDetail` assembles it
  * where the partner email is composed, from the filed Document's text.
  */
-export function askBlockText(asks: readonly Ask[], planRef: string | null, readiness?: { publishReady: boolean; placeholders: string[] }): string {
+export function askBlockText(asks: readonly Ask[], readiness?: { publishReady: boolean; placeholders: string[] }): string {
   const lines = asks.length
     ? askLines(asks)
     : ["Nothing to decide — the plan is all structure and wiring."];
@@ -552,7 +562,10 @@ export function askBlockText(asks: readonly Ask[], planRef: string | null, readi
             `I will open the PR and send you the preview link; landing needs a second approval.`,
         ]
       : []),
-    `The plan is in this email and on the card as a Document${planRef ? ` (${planRef})` : ""}.${asks.length ? ` ${asks.length} decision${asks.length === 1 ? "" : "s"}, each with a recommendation:` : ""}`,
+    // NEVER "…on the card as a Document" (0231): the plan is not filed into Documents any more —
+    // it is on the card's own trail. The literal "The plan is in this email" substring stays,
+    // because `noticeFor()`/`blockedEmailDetail()` both match it to recognise a PLAN block.
+    `The plan is in this email and on the card.${asks.length ? ` ${asks.length} decision${asks.length === 1 ? "" : "s"}, each with a recommendation:` : ""}`,
     ...lines,
     notReady
       ? `Reply "approved" to take every recommendation and build the preview. Reply "approved to production" to skip the preview and land on green with the placeholders as they are — the DONE email will name them and you. Reply "no" or "changes: …" to hold it. Anything else is read as your answers.`
@@ -603,7 +616,7 @@ async function blockWithAsks(env: Env, card: WebPropertyChangeCard, row: WebProp
     trying: card.title,
     employee: PORTER_NAME,
     who: whoFor(card),
-    detail: askBlockText(asks, row.plan_document_id, { publishReady: row.publish_ready !== 0, placeholders: list(row.placeholders_json) }).slice(0, 900),
+    detail: askBlockText(asks, { publishReady: row.publish_ready !== 0, placeholders: list(row.placeholders_json) }).slice(0, 900),
   });
 }
 
@@ -622,15 +635,19 @@ async function blockOnPreview(env: Env, card: WebPropertyChangeCard, row: WebPro
 
 /**
  * WHAT THE BLOCKED EMAIL SAYS: the asks with their defaults, then the WHOLE PLAN, readable in the
- * mail. Read from the filed Document's text (`deliverable.body`), never from the card's capped
- * column. The sweep calls this for a BLOCKED card of this kind before it emails the requester.
+ * mail. Read from `plan_text` — the row's own column since 0231 — never from the card's capped
+ * `description`. `plan_deliverable_id` is read only for a card planned before 0231, whose plan
+ * still lives in the deliverable that PLAN filed back then. The sweep calls this for a BLOCKED
+ * card of this kind before it emails the requester.
  */
 export async function blockedEmailDetail(env: Env, cardId: string): Promise<string | null> {
   const row = await readWebPropertyChange(env, cardId);
   if (!row || !row.plan_filed_at) return null;
-  const plan = row.plan_deliverable_id
-    ? (await env.WP_OS_DB.prepare("SELECT body FROM deliverable WHERE id = ?1").bind(row.plan_deliverable_id).first<{ body: string }>())?.body ?? null
-    : null;
+  const plan = row.plan_text
+    ? row.plan_text
+    : row.plan_deliverable_id
+      ? (await env.WP_OS_DB.prepare("SELECT body FROM deliverable WHERE id = ?1").bind(row.plan_deliverable_id).first<{ body: string }>())?.body ?? null
+      : null;
   // THE PREVIEW EMAIL: the link, the PR, the placeholders and the proof — the second question.
   if (row.pr_url && row.check_state === "GREEN" && needsPreview(row) && !row.land_approved_at && !row.forced_by) {
     return [
@@ -647,7 +664,7 @@ export async function blockedEmailDetail(env: Env, cardId: string): Promise<stri
   if (row.plan_approved_at || !/The plan is in this email|NOT PUBLISH-READY/.test(blocked?.block_needed ?? "")) return null;
   const asks = asksOf(row);
   return [
-    askBlockText(asks, row.plan_document_id, { publishReady: row.publish_ready !== 0, placeholders: list(row.placeholders_json) }),
+    askBlockText(asks, { publishReady: row.publish_ready !== 0, placeholders: list(row.placeholders_json) }),
     "",
     "THE PLAN, in full:",
     "",
@@ -826,26 +843,18 @@ async function applyPlan(env: Env, card: WebPropertyChangeCard, row: WebProperty
   if (!report.document) {
     return { finished: false, blocked: false, progressed: false, detail: "PLAN came back without a plan document" };
   }
-  // THE PLAN IS A DOCUMENT ON THE CARD. Filed through the one deliverables road, so it is in
-  // Documents, on the partner's Home, and linked from the card — never a string in a column.
-  const filed = await deliver(
-    env,
-    { type: "SYSTEM", roles: [], firmScopes: [card.firm_scope] },
-    {
-      kind: "employee_finding",
-      title: `Plan: ${card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").slice(0, 120)}`,
-      body: report.document,
-      preparedBy: PORTER_NAME,
-      preparedFor: (card.requested_by_email ? partnerByEmail(card.requested_by_email)?.firmUserId : null) ?? PREVIEW_PARTNER.firmUserId,
-      sourceType: "work_card_plan",
-      sourceId: card.id,
-    },
-  );
+  /*
+   * THE PLAN LIVES ON THE CARD, NOT IN DOCUMENTS (0231, Addendum 4.3, 22 Sep 2026). Her words:
+   * "plans for work to be done are not like real documents, like an LP deck or something." It used
+   * to be filed through the deliverables road — a Document in Documents, a card on the partner's
+   * Home titled "Plan: …" — which read wrong beside a room packet or an LP statement: it is
+   * process, not a deliverable. `plan_text` holds the whole thing directly on the row, where the
+   * block/ask email and the BUILD job's payload already read every other fact of this phase.
+   */
   const now = new Date().toISOString();
   const asks = report.asks ?? [];
   await update(env, card.id, {
-    plan_deliverable_id: filed.id,
-    plan_document_id: filed.document_id ?? null,
+    plan_text: report.document,
     plan_filed_at: now,
     decided_json: JSON.stringify(report.decided ?? []),
     asks_json: JSON.stringify(asks),
@@ -859,9 +868,9 @@ async function applyPlan(env: Env, card: WebPropertyChangeCard, row: WebProperty
   await appendFinding(
     env,
     card.id,
-    `Plan filed as Document ${filed.document_id ?? filed.id}. Decided (${decided.length}): ${decided.join("; ") || "nothing"}. Asking (${asks.length}): ${askLines(asks).join("; ") || "nothing"}.`,
+    `Plan filed on the card. Decided (${decided.length}): ${decided.join("; ") || "nothing"}. Asking (${asks.length}): ${askLines(asks).join("; ") || "nothing"}.`,
   );
-  const fresh: WebPropertyChangeRow = { ...row, plan_document_id: filed.document_id ?? null, plan_filed_at: now, publish_ready: report.publish_ready === false ? 0 : 1, placeholders_json: JSON.stringify(report.placeholders ?? []) };
+  const fresh: WebPropertyChangeRow = { ...row, plan_text: report.document, plan_filed_at: now, publish_ready: report.publish_ready === false ? 0 : 1, placeholders_json: JSON.stringify(report.placeholders ?? []) };
   if (row.pre_approved_phrase) return approveAtFiling(env, card, fresh, asks, report.document);
   /*
    * NO PARTNER DECISIONS IN THIS CHANGE → BUILT WITHOUT ASKING (owner, 21 Sep 2026: "why does

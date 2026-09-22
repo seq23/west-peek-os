@@ -1,3 +1,6 @@
+import { RECURRING_CARD_KINDS } from "./recurring";
+import type { OriginKind } from "./origin";
+
 /**
  * THE RECORD — what the firm has finished, at day-200 volume.
  *
@@ -34,10 +37,28 @@
  * are two pieces of work and must stay two rows; three runs of the September packet in one week
  * are one piece of work attempted three times. Collapsing across the whole record would hide real
  * output; not collapsing at all is what the page does today.
+ *
+ * ── A ONE-OFF ASSIGNMENT NEVER COLLAPSES (Addendum 4, 22 Sep 2026) ───────────────────────────────
+ *
+ * Her decision: "identical runs collapsed" stays right for noisy recurring duties (the daily
+ * brief, the sweep) — but "a one-off assignment is never identical to anything else and should
+ * never collapse", even when it happens to share a month, title, owner and state with another. The
+ * fifth key column, `collapse_scope`, is how the group key still names EXACTLY
+ * `RECORD_GROUP_COLUMNS` (the validator's own invariant) while making that true: for a recurring
+ * kind (`isRecurringKind`, `@shared/work/recurring` — the same axis Machinery's two buckets read)
+ * its SQL is a constant, so identical runs of the same recurring duty still fold into one row; for
+ * every one-off kind — and the plain, hand-made `kind = NULL` card — its SQL is the card's own id,
+ * which cannot equal any other card's id, so a one-off row can never collapse into a sibling no
+ * matter how alike the other four columns look.
  */
 
 /** The columns that, taken together, mean "this is the same piece of work, run again". */
-export const RECORD_GROUP_COLUMNS = ["month", "title", "owner_id", "state"] as const;
+export const RECORD_GROUP_COLUMNS = ["month", "title", "owner_id", "state", "collapse_scope"] as const;
+
+/** `'KIND_A','KIND_B',…` — recurring kinds, inlined as SQL literals from our own registry, never
+ *  user input. Built once, at module load, so `RECORD_GROUP_SQL.collapse_scope` stays a plain
+ *  string like every other entry rather than needing its own binding mechanism. */
+const RECURRING_KIND_LIST_SQL = RECURRING_CARD_KINDS.map((k) => `'${k}'`).join(", ") || "''";
 
 /** How each group column is spelled in the record query's SELECT list. */
 export const RECORD_GROUP_SQL: Readonly<Record<(typeof RECORD_GROUP_COLUMNS)[number], string>> = {
@@ -45,6 +66,7 @@ export const RECORD_GROUP_SQL: Readonly<Record<(typeof RECORD_GROUP_COLUMNS)[num
   title: "wc.title",
   owner_id: "wc.owner_id",
   state: "wc.state",
+  collapse_scope: `CASE WHEN wc.kind IN (${RECURRING_KIND_LIST_SQL}) THEN '' ELSE wc.id END`,
 };
 
 /**
@@ -86,6 +108,50 @@ export function searchTerms(q: string): string[] {
 export const RECORD_STATES = ["ALL", "DONE", "CANCELLED", "STOWED"] as const;
 export type RecordState = (typeof RECORD_STATES)[number];
 
+/**
+ * ORIGIN, AS A FILTER (Addendum 4, 22 Sep 2026): "by origin (assignment vs scheduled vs started by
+ * her)". Reuses `OriginKind` from `@shared/work/origin` — built by Wave C, not reinvented here —
+ * minus `YOU`. The Record is read later, by either partner, with no fixed "viewer": `originOf()`
+ * only ever returns `YOU` when it is told who is looking, and a filter option whose meaning
+ * changed depending on who was browsing would be the wrong kind of control for a shared record. A
+ * card she made herself still answers `PARTNER` here, exactly as it does when Scooter looks at it.
+ */
+/**
+ * KIND FILTER SENTINEL for "no kind" (the plain, hand-made card). A real, non-empty string rather
+ * than an empty one, so the client and the server agree it means "filtering", never "no filter
+ * sent" — the ambiguity an empty-string-vs-absent convention would otherwise carry.
+ */
+export const NO_KIND_FILTER_VALUE = "__NO_KIND__";
+
+export const RECORD_ORIGIN_KINDS: readonly Exclude<OriginKind, "YOU">[] = [
+  "EMAIL",
+  "PARTNER",
+  "MEETING",
+  "CAPTURE",
+  "ANOTHER_CARD",
+  "SYSTEM",
+];
+export type RecordOriginKind = (typeof RECORD_ORIGIN_KINDS)[number];
+
+/** One short phrase per origin filter option, for the dropdown. */
+export function recordOriginLabel(kind: RecordOriginKind): string {
+  switch (kind) {
+    case "EMAIL":
+      return "An email";
+    case "PARTNER":
+      return "A partner, in the OS";
+    case "MEETING":
+      return "A meeting";
+    case "CAPTURE":
+      return "Something captured";
+    case "ANOTHER_CARD":
+      return "Handed off from another card";
+    case "SYSTEM":
+    default:
+      return "The system or the sweep";
+  }
+}
+
 export interface RecordRow {
   /** The most recent card in the group — the one "Open" and "Reopen" act on. */
   id: string;
@@ -99,13 +165,17 @@ export interface RecordRow {
   month: string;
   /** When the most recent run in this group finished. */
   at: string;
-  /** How many identical runs collapsed into this row. 1 means nothing was collapsed. */
+  /** How many identical runs collapsed into this row. Always 1 for a one-off card (Addendum 4) —
+   *  only a recurring kind can show more, and only when two runs are otherwise identical. */
   runs: number;
   /** The last "• …" line the employee wrote — the verdict, not the working. */
   result: string | null;
   model_access: string;
   audience: string;
   kind: string | null;
+  /** Computed server-side with `originOf()`/`originBadgeText()` — never re-derived on the client. */
+  origin_kind: OriginKind;
+  origin_label: string;
 }
 
 export interface RecordPage {
@@ -120,6 +190,10 @@ export interface RecordPage {
   months: Array<{ month: string; label: string; cards: number }>;
   /** Everyone who has finished anything, with how much. */
   people: Array<{ owner_id: string; name: string; cards: number }>;
+  /** Every kind the record covers, with how many cards — including `null` (the plain card) as "". */
+  kinds: Array<{ kind: string; label: string; cards: number }>;
+  /** Every origin the record covers, with how many cards. */
+  origins: Array<{ origin: RecordOriginKind; label: string; cards: number }>;
   /** The oldest card in the record — "everything since …". */
   since: string | null;
 }
@@ -190,11 +264,24 @@ export function recordSummary(page: Pick<RecordPage, "matched" | "total" | "rows
 }
 
 /** True when any control has narrowed the record — decides which sentence `recordSummary` says. */
-export function isFiltered(query: { q?: string; who?: string; month?: string; state?: RecordState }): boolean {
+export function isFiltered(query: {
+  q?: string;
+  who?: string;
+  month?: string;
+  state?: RecordState;
+  kind?: string;
+  origin?: string;
+  from?: string;
+  to?: string;
+}): boolean {
   return Boolean(
     (query.q ?? "").trim() ||
       (query.who ?? "") ||
       (query.month ?? "") ||
-      (query.state && query.state !== "ALL"),
+      (query.state && query.state !== "ALL") ||
+      (query.kind ?? "") ||
+      (query.origin ?? "") ||
+      (query.from ?? "") ||
+      (query.to ?? ""),
   );
 }

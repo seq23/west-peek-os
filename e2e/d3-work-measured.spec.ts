@@ -105,7 +105,16 @@ async function seedRecord(request: APIRequestContext): Promise<{ made: number; t
   for (let i = 0; i < 60; i += 1) {
     await finish(`Routine output ${i} — ${["brief", "triage", "packet", "pitch", "check-in"][i % 5]}`, `• result ${i}`);
   }
-  // Three identical runs of one job. Before the change these rendered as three achievements.
+  /*
+   * THREE IDENTICAL RUNS OF A HAND-MADE CARD (Addendum 4, 22 Sep 2026: superseding the plain
+   * "identical runs collapse" fix). `POST /api/work-cards` with no `kind` makes a plain,
+   * `startableByHand` card — the ordinary one-off case, never a recurring job's. Her decision:
+   * "a one-off assignment is never identical to anything else and should never collapse, even if
+   * it looks similar to another" — so these three stay three separate rows. Only a card whose
+   * `kind` is job-opened (Room/Workshop packets, the Productions jobs) collapses identical runs,
+   * and that path is not reachable through the hand door by design (`startableByHand: false`) —
+   * proven instead at the row level in `tests/workRecordFilters.test.ts`.
+   */
   for (let i = 0; i < 3; i += 1) {
     await finish(packetTitle(token), "• Room requested: an event for Black lawyers in our network");
   }
@@ -411,13 +420,14 @@ test("the desk stays short while the record grows, and the oldest row is still f
   await page.getByTestId("work-record-search").fill("needle in the record");
   await expect(page.getByText(NEEDLE, { exact: false }).first()).toBeVisible({ timeout: 10_000 });
 
-  // ── DUPLICATES COLLAPSE ───────────────────────────────────────────────────────────────────────
+  // ── A ONE-OFF NEVER COLLAPSES, EVEN WHEN IT LOOKS IDENTICAL (Addendum 4) ─────────────────────
   await page.getByTestId("work-record-search").fill(packetTitle(token));
   const packets = page.locator('[data-testid^="work-record-row-"]').filter({ hasText: token });
-  await expect(packets, "three identical runs of one job are one row, not three achievements").toHaveCount(1, {
-    timeout: 10_000,
-  });
-  await expect(packets.first()).toContainText("ran 3×");
+  await expect(
+    packets,
+    "a hand-made (one-off) card's three identical runs stay three separate rows, never folded into one",
+  ).toHaveCount(3, { timeout: 10_000 });
+  await expect(packets.first()).not.toContainText(/ran \d+×/);
 
   // ── AND A FILTER THAT MATCHES NOTHING SAYS SO ─────────────────────────────────────────────────
   await page.getByTestId("work-record-search").fill("zzz nothing has ever been called this zzz");
