@@ -31,7 +31,7 @@ export const workGuide: PageGuide = {
     { name: "Waiting on you", testid: "work-owner-", shows: "blocked, unowned or yours — nothing moves until you act; each block says what was asked and what would clear it." },
     { name: "In flight", shows: "cards being worked; the sweep picks each up within five minutes and it ends Done or Blocked." },
     { name: "The record", testid: "work-record", shows: "everything finished, by month, searchable by words, who did it and when." },
-    { name: "The machinery", testid: "jobs-page", shows: "every scheduled job — state, cadence, runs, and whether it is stalled or paused — and the on-request ones." },
+    { name: "The machinery", testid: "jobs-page", shows: "two lists of one-line rows: every scheduled job on a clock, sorted by time of day, and every one-off card moving on its own, tagged with where it came from." },
   ],
   acts: [
     { label: "Add a card", testids: ["work-card-add-toggle", "work-card-submit"], primary: true, does: "writes a card — what needs doing, what happens next, who carries it, who it is for, which models may see it — and Add hands it over.", then: "An employee's card is picked up by the sweep within five minutes." },
@@ -47,6 +47,7 @@ export const workGuide: PageGuide = {
     { label: "Reopen", testid: "work-card-undrop-", does: "puts a finished or dropped card back on the Desk." },
     { label: "Run everything due now", testid: "jobs-tick", does: "runs the tick by hand — every due job." },
     { label: "Run it now", testid: "job-run-", primary: true, does: "runs one job; Preview it to me runs it and emails only you; Pause… stops it with a reason; Put it back on resumes." },
+    { label: "Turn it on", testid: "oneoff-release-", primary: true, does: "flips on a one-off card she is holding for later — the same release Wave D's card page uses — right from its row on Machinery, no separate page visit.", then: "it re-queues fresh from the top and starts showing on the Desk too." },
     { label: "Decide on Fund strategy", does: "goes to the deck decision." },
   ],
   auto: [
@@ -69,6 +70,7 @@ export const workGuide: PageGuide = {
         { do: "Press **Send it over** to tell the employee something mid-work", then: "they pick it up on their next step." },
         { do: "Press **Done** when it is finished", then: "the card goes to **The record**; **Reopen** brings it back." },
         { do: "Under **The machinery**, press **Run it now** on a job, or **Run everything due now**", then: "the job runs by hand; Preview it to me runs it and emails only you." },
+        { do: "Still on **The machinery**, under One-off, press **Turn it on** on a card she is holding", then: "it re-queues fresh from the top and starts showing on the Desk too — no separate page visit." },
       ],
     },
   ],

@@ -1,22 +1,24 @@
 import { expect, test } from "@playwright/test";
-import { openWorkMachinery } from "./support/nav";
+import { openDisclosure, openWorkMachinery } from "./support/nav";
 import { provisionLocalD1 } from "./support/provision";
 
 /**
- * P19 browser journey — governed orchestration (GAP-21, GAP-22).
+ * P19 browser journey — governed orchestration (GAP-21, GAP-22) — and, since 22 Sep 2026, the
+ * Machinery redesign (Addendum 4 item 2 / Addendum 5.1): two buckets, "On a clock" and "One-off",
+ * each a stack of one-line rows that expand rather than a full card each.
  *
- * Journey: sign in → Scheduled Work → the seeded Daily Intelligence job is PAUSED and says why →
- * running it anyway records a REFUSED run → switch it on → run it → a SUCCEEDED run with its
- * outcome summary appears in the job's own history.
+ * Journey: sign in → Machinery → the seeded Daily Intelligence job is PAUSED and says why, once its
+ * row is opened → running it anyway records a REFUSED run → switch it on → run it → a SUCCEEDED run
+ * with its outcome summary appears in the job's own history.
  */
 
-async function signIn(page: import("@playwright/test").Page): Promise<void> {
+async function signIn(page: import("@playwright/test").Page, email = "scooter@westpeek.ventures"): Promise<void> {
   await page.goto("/");
   const login = page.getByTestId("dev-login-email");
   await login.waitFor({ state: "visible" });
-  await login.fill("scooter@westpeek.ventures");
+  await login.fill(email);
   await page.getByTestId("dev-login-submit").click();
-  await expect(page.getByTestId("identity-status")).toContainText("Scooter Taylor");
+  await expect(page.getByTestId("identity-status")).toContainText(email === "sequoia@westpeek.ventures" ? "Sequoia Taylor" : "Scooter Taylor");
 }
 
 test("recurring work starts paused, refuses to run, then runs once switched on", async ({ page }) => {
@@ -43,11 +45,12 @@ test("recurring work starts paused, refuses to run, then runs once switched on",
   await expect(page.getByTestId("how-this-works-jobs")).toBeVisible();
 
   /*
-   * The card says "Paused" with the reason beside it (15 Sep 2026: a job is on unless there is a
-   * stated reason, so the reason is the thing worth showing). The raw enum never reaches the page.
+   * ONE LINE, COLLAPSED, BY DEFAULT (22 Sep 2026). State and cadence are on the row's summary line
+   * and readable without opening it; the reason a job is paused is detail, so it needs a press.
    */
   const job = page.getByTestId("job-daily_intelligence");
   await expect(job.getByTestId("job-state-daily_intelligence")).toHaveText("Paused");
+  await openDisclosure(page, "job-details-daily_intelligence");
   await expect(job.getByTestId("job-paused-daily_intelligence")).toContainText("operator must switch recurring work on");
 
   /*
@@ -68,7 +71,7 @@ test("recurring work starts paused, refuses to run, then runs once switched on",
   // Still paused. Running it by hand is not putting it back on.
   await expect(page.getByTestId("job-state-daily_intelligence")).toHaveText("Paused");
 
-  // Put it back on deliberately, then run it. It sits under "Scheduled work" with an honest cadence.
+  // Put it back on deliberately, then run it. It sits under "On a clock" with an honest cadence.
   await page.getByTestId("job-resume-daily_intelligence").click();
   await expect(page.getByTestId("job-state-daily_intelligence")).toHaveText("Scheduled");
   await expect(page.getByTestId("job-list").getByTestId("job-daily_intelligence")).toBeVisible();
@@ -92,19 +95,24 @@ test("recurring work starts paused, refuses to run, then runs once switched on",
 });
 
 /**
- * Two sections (15 Sep 2026): work on a clock, and work that runs only when asked. The deck
- * rebuild is ON_REQUEST — no timer, "Only when asked" — and nothing on the page is hard-coded by
- * job key to say so.
+ * SUPERSEDES THE OLD "under its own heading, with no clock" TEST (22 Sep 2026). The 15 Sep design
+ * gave "On request" a second list of its own; Addendum 5.1 explicitly rejected a third Machinery
+ * bucket — an on-request job is still a `scheduled_job`, still machinery rather than a card, so it
+ * sits in the SAME "On a clock" list as every timed job, tagged and sorted after them (it has no
+ * literal time of day to read). What is still worth pinning: it reads honestly as on-request, and
+ * it never bleeds into the "One-off" bucket, which is `work_card` rows only.
  */
-test("the deck rebuild is on request, under its own heading, with no clock", async ({ page }) => {
+test("the deck rebuild is on request, in the same On a clock list as timed jobs, and never in One-off", async ({ page }) => {
   await signIn(page);
   await openWorkMachinery(page);
-  const onRequest = page.getByTestId("job-list-on-request");
-  await expect(onRequest.getByTestId("job-deck_rebuild")).toBeVisible();
+  const list = page.getByTestId("job-list");
+  await expect(list.getByTestId("job-deck_rebuild")).toBeVisible();
   await expect(page.getByTestId("job-state-deck_rebuild")).toHaveText("On request");
   await expect(page.getByTestId("job-cadence-deck_rebuild")).toContainText("Only when asked");
   await expect(page.getByTestId("job-cadence-deck_rebuild")).not.toContainText("next ");
-  await expect(page.getByTestId("job-list").getByTestId("job-deck_rebuild")).toHaveCount(0);
+  // Not a third bucket, and not a work card either — a job never shows in One-off.
+  await expect(page.getByTestId("oneoff-list").getByTestId("job-deck_rebuild")).toHaveCount(0);
+  await openDisclosure(page, "job-details-deck_rebuild");
   await expect(page.getByTestId("job-run-deck_rebuild")).toBeVisible();
 });
 
@@ -120,10 +128,11 @@ test("Walker's West Peek Productions duty is on the clock, one note a month, lab
   // two it replaced and the one-off introduction are RETIRED and off the page.
   const job = page.getByTestId("job-productions_monthly");
   await expect(job).toBeVisible();
-  await expect(job).toContainText("Scooter's own agency, not the fund");
-  await expect(job).toContainText("Walker");
   await expect(page.getByTestId("job-state-productions_monthly")).toHaveText("Scheduled");
   await expect(page.getByTestId("job-cadence-productions_monthly")).toContainText("On the 1st of every month at 14:00 UTC");
+  await openDisclosure(page, "job-details-productions_monthly");
+  await expect(job).toContainText("Scooter's own agency, not the fund");
+  await expect(job).toContainText("Walker");
   for (const key of ["productions_customer_ideas", "productions_press_pitches", "productions_intro_note"]) {
     await expect(page.getByTestId(`job-${key}`)).toHaveCount(0);
   }
@@ -146,13 +155,63 @@ test("Walker's weekly hire search is WEEKLY on Monday at 14:00 UTC, labelled as 
   await openWorkMachinery(page);
   const job = page.getByTestId("job-productions_hire_search");
   await expect(job).toBeVisible();
+  await expect(page.getByTestId("job-state-productions_hire_search")).toHaveText("Scheduled");
+  await expect(page.getByTestId("job-cadence-productions_hire_search")).toContainText("Every Monday at 14:00 UTC");
+  await openDisclosure(page, "job-details-productions_hire_search");
   await expect(job).toContainText("Scooter's own agency, not the fund");
   await expect(job).toContainText("senior experiential producer, freelance");
   await expect(job).toContainText("Walker");
-  await expect(page.getByTestId("job-state-productions_hire_search")).toHaveText("Scheduled");
-  await expect(page.getByTestId("job-cadence-productions_hire_search")).toContainText("Every Monday at 14:00 UTC");
   provisionLocalD1("UPDATE ai_employee SET status = 'ACTIVE' WHERE id = 'aie_walker';");
   await page.getByTestId("job-run-productions_hire_search").click();
   await expect(page.getByTestId("jobs-message")).toContainText("SUCCEEDED");
   await expect(page.getByTestId("job-runs-productions_hire_search")).toContainText("Walker's desk");
+});
+
+/**
+ * THE OTHER BUCKET (Addendum 5.1, 22 Sep 2026): "One-off" is every single-instance `work_card`
+ * moving on its own — an authenticated partner email, already running and tagged with the sender,
+ * or a card she created and is holding, tagged "held by you" with a flip-on control that calls
+ * Wave D's own `/release` door right from the row. Two fixture cards prove both halves and the
+ * boundary the redesign turns on: a released card stops being machinery, because now she is working
+ * it by hand.
+ */
+test("One-off shows an email assignment tagged by sender and a held card she can turn on from the row", async ({ page }) => {
+  const emailId = "wc_e2e_p19_email_assignment";
+  const heldId = "wc_e2e_p19_held_card";
+  provisionLocalD1(
+    `INSERT OR IGNORE INTO work_card (id, title, owner_type, owner_id, state, firm_scope, created_by, requested_by_email, created_at)
+     VALUES ('${emailId}', 'E2E-P19: change the pricing page', 'UNASSIGNED', NULL, 'OPEN', 'west-peek', 'system:inbound_email', 'scooter@westpeek.ventures', '2026-09-20T09:00:00.000Z');`,
+  );
+  provisionLocalD1(
+    `INSERT OR IGNORE INTO work_card (id, title, owner_type, owner_id, state, firm_scope, created_by, held_by, held_reason, held_at, created_at)
+     VALUES ('${heldId}', 'E2E-P19: rebuild the onboarding page', 'UNASSIGNED', NULL, 'OPEN', 'west-peek', 'fu_sequoia_taylor', 'fu_sequoia_taylor', 'e2e: wait until she is at her desk', '2026-09-21T09:00:00.000Z', '2026-09-21T09:00:00.000Z');`,
+  );
+
+  try {
+    await signIn(page, "sequoia@westpeek.ventures");
+    await openWorkMachinery(page);
+    const list = page.getByTestId("oneoff-list");
+
+    // The email assignment already started itself — tagged by sender, no flip-on control.
+    const emailRow = list.getByTestId(`oneoff-${emailId}`);
+    await expect(emailRow).toBeVisible();
+    await expect(emailRow.getByTestId(`oneoff-tag-${emailId}`)).toHaveText("from scooter@westpeek.ventures");
+    await expect(page.getByTestId(`oneoff-release-${emailId}`)).toHaveCount(0);
+
+    // The held card is tagged "held by you", carries her reason, and offers the flip-on control.
+    const heldRow = list.getByTestId(`oneoff-${heldId}`);
+    await expect(heldRow).toBeVisible();
+    await expect(heldRow.getByTestId(`oneoff-tag-${heldId}`)).toHaveText("held by you");
+    await expect(heldRow.getByTestId(`oneoff-held-${heldId}`)).toContainText("wait until she is at her desk");
+    await expect(page.getByTestId(`oneoff-release-${heldId}`)).toBeVisible();
+
+    // Turning it on calls Wave D's own release door, right from the row — no separate page visit.
+    await page.getByTestId(`oneoff-release-${heldId}`).click();
+    await expect(page.getByTestId("jobs-message")).toContainText("turned on");
+    // Released, it is no longer sitting on her flip or started by an authenticated email — she is
+    // now working it by hand through the ordinary Work flow, so it leaves Machinery altogether.
+    await expect(page.getByTestId(`oneoff-${heldId}`)).toHaveCount(0);
+  } finally {
+    provisionLocalD1(`DELETE FROM work_card WHERE id IN ('${emailId}', '${heldId}');`);
+  }
 });
