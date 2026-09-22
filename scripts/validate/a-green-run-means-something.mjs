@@ -319,13 +319,23 @@ export function checkGate(raw) {
     );
   }
   const matrix = /^\s+shard:\s*\[([^\]]*)\]/m.exec(source);
-  const divisors = [...source.matchAll(/--shard=\$\{\{\s*matrix\.shard\s*\}\}\/(\d+)/g)].map((m) => Number(m[1]));
+  // `--shard=n/N` was vitest's count split; `shard-tests.mjs --shard n/N` is the measured one.
+  const divisors = [...source.matchAll(/--shard[= ]\$\{\{\s*matrix\.shard\s*\}\}\/(\d+)/g)].map((m) => Number(m[1]));
   if (!matrix || divisors.length === 0) {
     bad.push(
-      "ci.yml no longer shards the vitest suite (no `shard: [..]` matrix with a `--shard=${{ matrix.shard }}/N` " +
+      "ci.yml no longer shards the vitest suite (no `shard: [..]` matrix with a `--shard ${{ matrix.shard }}/N` " +
         "step) — the 16-minute serial suite is back in the gate",
     );
   } else {
+    if (!/shard-tests\.mjs --shard/.test(source)) {
+      bad.push(
+        "the tests step splits by file count (`vitest --shard`) instead of by measured time " +
+          "(`scripts/ci/shard-tests.mjs --shard`) — on PR #155 that made shard 4 twice as long as shard 3",
+      );
+    }
+    if (!/npm run validate:shards/.test(source)) {
+      bad.push("no job runs `validate:shards` — nothing in CI proves the four shards are a whole partition of tests/");
+    }
     const entries = matrix[1].split(",").map((x) => Number(x.trim())).filter((x) => !Number.isNaN(x));
     const expected = entries.length;
     const ok = entries.every((v, i) => v === i + 1);
@@ -359,6 +369,21 @@ export function checkGate(raw) {
     }
   }
   return bad;
+}
+
+/** How many shards ci.yml's matrix declares, or 0. */
+export function shardCount(raw) {
+  const m = /^\s+shard:\s*\[([^\]]*)\]/m.exec(withoutComments(raw));
+  return m ? m[1].split(",").filter((x) => x.trim()).length : 0;
+}
+
+/** `validate:shards` must check the SAME shard count the matrix runs — the two are in different files. */
+export function checkShardScript(packageJson, ciRaw) {
+  const m = /shard-tests\.mjs --check (\d+)/.exec(packageJson);
+  if (!m) return ["package.json has no `validate:shards` running `shard-tests.mjs --check N` — the partition is never proven"];
+  const n = shardCount(ciRaw);
+  if (Number(m[1]) !== n) return [`\`validate:shards\` checks ${m[1]} shard(s) but ci.yml's matrix runs ${n} — the proof is about a different split`];
+  return [];
 }
 
 /** The deploy fires on the gate, and only the gate. */
@@ -466,10 +491,17 @@ function selfTest() {
   const GATE_OK =
     "name: CI\non:\n  push:\n    branches: [main]\njobs:\n  typecheck:\n    timeout-minutes: 5\n    steps:\n      - run: npm run typecheck\n" +
     "  tests:\n    timeout-minutes: 20\n    strategy:\n      matrix:\n        shard: [1, 2, 3, 4]\n    steps:\n      - run: |\n" +
-    "          npx vitest run --no-file-parallelism --shard=${{ matrix.shard }}/4 2>&1 | tee log\n" +
+    "          files=\"$(node scripts/ci/shard-tests.mjs --shard ${{ matrix.shard }}/4)\"\n" +
+    "          npx vitest run --no-file-parallelism $files 2>&1 | tee log\n" +
     "          files=\"$(grep -oE 'Test Files +[0-9]+ passed' log | grep -oE '[0-9]+' | head -1)\"\n" +
+    "  validators:\n    timeout-minutes: 12\n    steps:\n      - run: npm run validate:shards\n" +
     "  gate:\n    needs: [typecheck, tests]\n    timeout-minutes: 2\n    steps:\n      - run: echo ok\n";
   expectClean("the shipped gate shape", checkGate(GATE_OK));
+  expectCaught("the count split back in place of the measured one", checkGate(GATE_OK.replace("node scripts/ci/shard-tests.mjs --shard ${{ matrix.shard }}/4", "echo").replace("$files", "--shard=${{ matrix.shard }}/4")));
+  expectClean("validate:shards checking the matrix's count", checkShardScript('"validate:shards": "node scripts/ci/shard-tests.mjs --check 4"', GATE_OK));
+  expectCaught("validate:shards checking a different count than the matrix", checkShardScript('"validate:shards": "node scripts/ci/shard-tests.mjs --check 3"', GATE_OK));
+  expectCaught("no validate:shards script at all", checkShardScript('"validate:x": "node x.mjs"', GATE_OK));
+  expectCaught("no job proving the partition", checkGate(GATE_OK.replace("npm run validate:shards", "npm run build")));
   expectCaught("the journeys back in the gate", checkGate(GATE_OK + "  e2e:\n    timeout-minutes: 45\n    steps:\n      - run: npm run e2e && npm run e2e\n"));
   expectCaught("a /4 split over a three-entry matrix (a quarter of the suite runs nowhere)", checkGate(GATE_OK.replace("shard: [1, 2, 3, 4]", "shard: [1, 2, 3]")));
   expectCaught("a /3 split over a four-entry matrix (files run twice, the split is a lie)", checkGate(GATE_OK.replace("}}/4", "}}/3")));
@@ -582,6 +614,7 @@ function main() {
   }
   bad.push(...checkWorkflow(readFileSync(WORKFLOW, "utf8")));
   bad.push(...checkGate(readFileSync(GATE, "utf8")));
+  bad.push(...checkShardScript(readFileSync(path.join(ROOT, "package.json"), "utf8"), readFileSync(GATE, "utf8")));
   bad.push(...checkDeploy(readFileSync(DEPLOY, "utf8")));
 
   if (bad.length > 0) {

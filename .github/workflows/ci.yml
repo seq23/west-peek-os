@@ -106,10 +106,16 @@ jobs:
       - name: Install (reproducible, from package-lock)
         run: npm ci
 
-      # `--shard` splits the FILE list across the matrix; `--no-file-parallelism` keeps each shard
-      # serial inside, because every file boots its own Miniflare on its own port and past ~8 in
-      # flight the runner runs out of ephemeral ports (vitest.config.ts). Four shards, one runner
-      # each: the parallelism is between jobs, never inside one.
+      # THE SPLIT IS BY MEASURED TIME, NOT BY FILE COUNT. `vitest --shard=n/N` deals the file list
+      # out evenly by count; on the first sharded run (PR #155) that gave shard 3 3m18s and shard 4
+      # 7m04s, because 186 files run from 2ms to 95s. `scripts/ci/shard-tests.mjs` reads
+      # `tests/timings.json` (each file's last measured duration) and assigns longest-first to the
+      # emptiest shard, so all four project to ~228s. A file with no timing still runs (placed at
+      # the median); `validate:shards` in the validators job fails unless every test file is in
+      # exactly one shard. `--no-file-parallelism` keeps each shard serial inside, because every
+      # file boots its own Miniflare on its own port and past ~8 in flight the runner runs out of
+      # ephemeral ports (vitest.config.ts). Four shards, one runner each: the parallelism is
+      # between jobs, never inside one.
       #
       # RULE 0: A SHARD THAT RAN NOTHING IS A FAILED SHARD. vitest's summary line is read back and
       # the job fails unless at least one test file passed in this shard. Without this, a shard
@@ -126,7 +132,11 @@ jobs:
         run: |
           set -uo pipefail
           log="$RUNNER_TEMP/vitest-shard-${{ matrix.shard }}.log"
-          npx vitest run --no-file-parallelism --shard=${{ matrix.shard }}/4 2>&1 | tee "$log"
+          files="$(node scripts/ci/shard-tests.mjs --shard ${{ matrix.shard }}/4)"
+          [ -n "$files" ] || { echo "::error::shard ${{ matrix.shard }}/4 planned no files — Rule 0"; exit 1; }
+          # The plan is one path per line and each line is one argument, so it is deliberately unquoted.
+          # shellcheck disable=SC2086
+          npx vitest run --no-file-parallelism $files 2>&1 | tee "$log"
           rc=${PIPESTATUS[0]}
           [ "$rc" -eq 0 ] || exit "$rc"
           files="$(sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -oE 'Test Files +[0-9]+ passed' | grep -oE '[0-9]+' | head -1)"
@@ -512,6 +522,10 @@ jobs:
       # Nothing lands a web property change without a recorded plan approval AND a recorded green check — Worker, Mac script, row.
       - name: No land without approval and green
         run: npm run validate:no-land-without-approval
+
+      # The four test shards above are a whole, disjoint partition of tests/ — or this fails.
+      - name: Every test file runs in exactly one shard
+        run: npm run validate:shards
 
       - name: Build client
         run: npm run build

@@ -65,6 +65,7 @@
     "validate:seats": "node scripts/validate/two-seats-and-one-ladder.mjs && node scripts/validate/two-seats-and-one-ladder.mjs --self-test && node scripts/claimer/subscription-seat-claimer.mjs --self-test",
     "validate:stopped-runs": "node scripts/validate/what-stopped-is-counted-once.mjs && node scripts/validate/what-stopped-is-counted-once.mjs --self-test",
     "validate:chain-budget": "node scripts/validate/a-run-may-not-spend-the-morning-looking.mjs && node scripts/validate/a-run-may-not-spend-the-morning-looking.mjs --self-test",
+    "validate:shards": "node scripts/ci/shard-tests.mjs --check 4 && node scripts/ci/shard-tests.mjs --self-test",
     "validate:green-means-something": "node scripts/validate/a-green-run-means-something.mjs && node scripts/validate/a-green-run-means-something.mjs --self-test",
     "validate:companies-in-pipeline": "node scripts/validate/every-company-is-in-the-pipeline.mjs && node scripts/validate/every-company-is-in-the-pipeline.mjs --self-test",
     "validate:weekly-review-archived": "node scripts/validate/an-archived-lane-stays-archived.mjs && node scripts/validate/an-archived-lane-stays-archived.mjs --self-test",
