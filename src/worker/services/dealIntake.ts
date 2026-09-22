@@ -1,4 +1,5 @@
 import { describeModes, parseBlogAsk } from "../../shared/intake/blogHelp";
+import { parsePartnerMessageAsk } from "../../shared/intake/partnerMessage";
 import { WEB_PROPERTIES, isWebPropertyChange, parseWebPropertyAsk } from "../../shared/intake/webPropertyChange";
 import { requestAttachments, textBodyOf } from "../effects/mimeAttachments";
 import { splitQuoted } from "../../shared/intake/replyBody";
@@ -1129,6 +1130,88 @@ export async function openAssignmentCard(
     await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'BLOG_HELP', request_json = ?2, next_action = ?3 WHERE id = ?1")
       .bind(card.id, JSON.stringify(blog), `Blog help — ${describeModes(blog.modes)} on: ${blog.topic}. Research live and judged, write in the partner's voice, file it, email them once.`)
       .run();
+    return card.id;
+  }
+
+  /*
+   * "WALKER, TELL SCOOTER: …" IS READ AT THE DOOR (22 Sep 2026), the same way blog help and a web
+   * property change already are — a word-shape a partner can learn and repeat, not a model guessing
+   * what an email means. See `shared/intake/partnerMessage.ts`.
+   *
+   * THE NAMED EMPLOYEE, NOT ALWAYS THIS CHIEF OF STAFF. Blog help and a web property change both
+   * stay on, or move to, a FIXED seat; this ask names whoever the partner wants speaking, which is
+   * usually somebody other than their own chief of staff — Sequoia asking for Walker, not Wren.
+   * When it already names the chief of staff who owns this very card, the card is stamped in place;
+   * otherwise it is handed on through `assignCard`, exactly the move the web-property branch above
+   * makes for Porter. `assignCard` itself refuses a non-existent or non-ACTIVE employee, so a typo
+   * fails closed with a reason on THIS card rather than the message quietly going nowhere.
+   */
+  const partnerMessage = parsePartnerMessageAsk(input.subject, written);
+  if (partnerMessage) {
+    const targetEmployee = await env.WP_OS_DB.prepare(
+      "SELECT id, name, status FROM ai_employee WHERE lower(name) = lower(?1) OR id = ?2",
+    )
+      .bind(partnerMessage.employeeName.trim(), seatId(partnerMessage.employeeName.trim()))
+      .first<{ id: string; name: string; status: string }>();
+    const alreadyOnThisDesk =
+      targetEmployee !== null && targetEmployee.name.toLowerCase() === input.chiefOfStaff.trim().toLowerCase();
+
+    if (alreadyOnThisDesk) {
+      await env.WP_OS_DB.prepare(
+        "UPDATE work_card SET kind = 'PARTNER_MESSAGE', result_recipient = ?2, prompt = ?3, next_action = ?4 WHERE id = ?1",
+      )
+        .bind(
+          card.id,
+          partnerMessage.partner.email,
+          partnerMessage.instruction,
+          `Tell ${partnerMessage.partner.firstName}: ${partnerMessage.instruction}`.slice(0, 300),
+        )
+        .run();
+      return card.id;
+    }
+
+    const chief = await env.WP_OS_DB.prepare("SELECT id, name FROM ai_employee WHERE id = ?1")
+      .bind(seatId(input.chiefOfStaff))
+      .first<{ id: string; name: string }>();
+    const { assignCard } = await import("./employeeWork");
+    const handed = await assignCard(
+      env,
+      {
+        id: card.id,
+        title: card.title,
+        description: card.description ?? null,
+        next_action: card.next_action ?? null,
+        state: card.state,
+        owner_type: "AI",
+        owner_id: chief?.id ?? seatId(input.chiefOfStaff),
+        allows_browser: 0,
+        model_access: "PUBLIC_MODEL_APPROVED",
+        prompt: null,
+        firm_scope: FIRM_SCOPE,
+        requested_by_email: input.partnerAddress.toLowerCase(),
+      },
+      { id: chief?.id ?? seatId(input.chiefOfStaff), name: chief?.name ?? input.chiefOfStaff },
+      partnerMessage.employeeName,
+      `Tell ${partnerMessage.partner.firstName}: ${partnerMessage.instruction}`,
+    );
+    if (handed.ok) {
+      await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'PARTNER_MESSAGE', result_recipient = ?2, prompt = ?3 WHERE id = ?1")
+        .bind(handed.cardId, partnerMessage.partner.email, partnerMessage.instruction)
+        .run();
+      await env.WP_OS_DB.prepare(
+        "UPDATE work_card SET state = 'DONE', next_action = NULL, description = substr(COALESCE(description, '') || char(10) || '• Handed to ' || ?2 || ' as work card ' || ?3 || ': a message for ' || ?4 || '.', 1, 16000) WHERE id = ?1",
+      )
+        .bind(card.id, handed.toName, handed.cardId, partnerMessage.partner.fullName)
+        .run();
+    } else {
+      await env.WP_OS_DB.prepare("UPDATE work_card SET next_action = ?2 WHERE id = ?1")
+        .bind(
+          card.id,
+          `A message for ${partnerMessage.partner.fullName}, meant for ${partnerMessage.employeeName}, but it could not be handed to them: ${handed.reason}.`,
+        )
+        .run();
+    }
+    return card.id;
   }
   return card.id;
 }

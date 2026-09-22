@@ -99,6 +99,14 @@ export interface SweepCard {
   requester_notes_by?: string | null;
   /** 0160: the card this one was handed on from. Its owner is who routed the work. */
   assigned_from_card_id?: string | null;
+  /**
+   * "How to do it" — the Create door's own free-text box, and (for an email-born card) the parsed
+   * instruction a door like `services/dealIntake.ts` wrote. `PARTNER_MESSAGE`'s whole job comes from
+   * here; the sweep only carries it.
+   */
+  prompt?: string | null;
+  /** The fallback when `prompt` is empty — a hand-edited card that moved its instruction here. */
+  next_action?: string | null;
 }
 
 /** Who the sweep is when it works a card: the firm, acting on its own assignment. */
@@ -133,7 +141,11 @@ export async function claimNextCard(env: Env, now: Date): Promise<SweepCard | nu
             requested_by_email, preview_first, result_recipient, preview_owner_id,
             -- 0224: her words on the finished email. 0160: who handed the work on. Both ride to
             -- replyToRequester on the card, because the reply is built in one place from one row.
-            requester_notes, requester_notes_by, assigned_from_card_id
+            requester_notes, requester_notes_by, assigned_from_card_id,
+            -- PARTNER_MESSAGE's whole instruction lives here — "how to do it", the Create door's own
+            -- field, and the email door's parsed ask (services/dealIntake.ts). Carried, never
+            -- interpreted here; see services/partnerMessage.ts.
+            prompt, next_action
        FROM work_card
       WHERE owner_type = 'AI' AND owner_id IS NOT NULL
         AND state IN ('OPEN', 'IN_PROGRESS')
@@ -492,6 +504,7 @@ export async function sweepOnce(
     roomPacket?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; detail: string }>;
     blogHelp?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     artifact?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
+    partnerMessage?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     webPropertyChange?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; held?: boolean; autoResolved?: boolean; questionAnswered?: boolean; detail: string }>;
   } = {},
 ): Promise<SweepResult> {
@@ -512,7 +525,7 @@ export async function sweepOnce(
 
   // THE DECK COMES FIRST. If the company's deck is queued and not yet read, this attempt does not
   // count and the card is parked until the reader has had a turn; another card gets this tick.
-  const unread = card.kind === "DECK_REWORK" || isProductionsKind(card.kind) || card.kind === "ROOM_PACKET" || card.kind === "BLOG_HELP" || card.kind === "ARTIFACT" || card.kind === WEB_PROPERTY_CHANGE_KIND ? null : await deckStillBeingRead(env, card.title, card.id);
+  const unread = card.kind === "DECK_REWORK" || isProductionsKind(card.kind) || card.kind === "ROOM_PACKET" || card.kind === "BLOG_HELP" || card.kind === "ARTIFACT" || card.kind === "PARTNER_MESSAGE" || card.kind === WEB_PROPERTY_CHANGE_KIND ? null : await deckStillBeingRead(env, card.title, card.id);
   if (unread) {
     const until = new Date(now.getTime() + DECK_WAIT_MINUTES * 60_000).toISOString();
     await env.WP_OS_DB.prepare(
@@ -586,6 +599,14 @@ export async function sweepOnce(
       held = out.held === true;
       autoResolved = out.autoResolved === true;
       questionAnswered = out.questionAnswered === true;
+      detail = out.detail;
+    } else if (card.kind === "PARTNER_MESSAGE") {
+      // One named employee tells one named partner something short, composed and filed through
+      // the same preview door every other partner email uses. See services/partnerMessage.ts.
+      const run = runners.partnerMessage ?? (await import("./partnerMessage")).runPartnerMessageCard;
+      const out = await run(env, card);
+      finished = out.finished;
+      blocked = out.blocked;
       detail = out.detail;
     } else if (card.kind === "PRODUCTIONS_HIRE_SEARCH") {
       // Walker's weekly hire search for West Peek Productions: search, every page checked, judged,
