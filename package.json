@@ -89,7 +89,8 @@
     "validate:delivery-config": "node scripts/validate/only-the-script-sets-delivery-config.mjs && node scripts/validate/only-the-script-sets-delivery-config.mjs --self-test",
     "validate:kind-rule-switches": "node scripts/validate/a-switch-is-a-switch-on-both-sides.mjs && node scripts/validate/a-switch-is-a-switch-on-both-sides.mjs --self-test",
     "validate:one-employee-one-address": "node scripts/validate/one-employee-one-address.mjs && node scripts/validate/one-employee-one-address.mjs --self-test",
-    "validate:card-kinds": "node scripts/validate/a-kind-has-one-registry.mjs && node scripts/validate/a-kind-has-one-registry.mjs --self-test"
+    "validate:card-kinds": "node scripts/validate/a-kind-has-one-registry.mjs && node scripts/validate/a-kind-has-one-registry.mjs --self-test",
+    "validate:every-door-keeps-the-message": "node scripts/validate/every-door-keeps-the-message.mjs && node scripts/validate/every-door-keeps-the-message.mjs --self-test"
   },
   "dependencies": {
     "@cloudflare/puppeteer": "^1.3.0",

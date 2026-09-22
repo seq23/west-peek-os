@@ -118,6 +118,7 @@ import {
   handleRunAi,
 } from "./services/aiRuns";
 import { handleGetRequestAttachment, handleGetWebPropertyChange, handleReingestStoredEmail, handleSetWorkKindRule, handleWorkKindRules } from "./services/webPropertyChange";
+import { handleGetRequestMessage, handleGetRequestMessageRaw } from "./services/requestMessage";
 import {
   handleSubscriptionSeatClaim,
   handleSubscriptionSeatHeartbeat,
@@ -1118,6 +1119,10 @@ const router = new Router()
   // Plan A (20 Sep 2026): the state of a web property change, and the standing rules of a card kind.
   .get("/api/work-cards/:id/web-property-change", handleGetWebPropertyChange)
   .get("/api/work-cards/:id/attachments/:attId", handleGetRequestAttachment)
+  // 0226 — the email this card came from. The decoded body for anyone who may see the card; the
+  // raw `.eml` for a Managing Partner only (`inbound_message.read_raw`, restricted).
+  .get("/api/work-cards/:id/request-message", handleGetRequestMessage)
+  .get("/api/work-cards/:id/request-message/raw", handleGetRequestMessageRaw)
   .post("/api/inbound-email/reingest", handleReingestStoredEmail)
   .get("/api/work-kinds/:kind/rules", handleWorkKindRules)
   .patch("/api/work-kinds/:kind/rules/:key", handleSetWorkKindRule)

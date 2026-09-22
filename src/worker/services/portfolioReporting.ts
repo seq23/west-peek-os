@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { readableMessage, storedMessageLine } from "./dealIntake";
 import type { FirmUserIdentity } from "../auth";
 import type { RouteContext } from "../router";
 import { json } from "../router";
@@ -339,7 +340,16 @@ export async function handleDraftPortfolioSummary(ctx: RouteContext): Promise<Re
  */
 export async function openPortfolioUpdateCard(
   env: Env,
-  input: { subject: string; from: string; raw: string; company: string | null },
+  input: {
+    subject: string;
+    from: string;
+    raw: string;
+    company: string | null;
+    /** The stored `.eml` this message lives in, kept once at the door (0226). */
+    emlKey: string | null;
+    /** What to say when it was not kept, so the card is never silent about a missing original. */
+    storeNote?: string | null;
+  },
 ): Promise<string> {
   const firmScope = "west-peek";
 
@@ -381,7 +391,15 @@ export async function openPortfolioUpdateCard(
       held ?? "No company name could be read out of the message.",
       "",
       "--- the message ---",
-      input.raw.slice(0, 4000),
+      /*
+       * THE COMPANY'S OWN WORDS, DECODED. This was `input.raw.slice(0, 4000)`, which on any real
+       * email is four thousand characters of `Received:` and DKIM headers with the update itself
+       * cut off below them — and Winter is asked to "record only figures the message actually
+       * states". He could not read the message. See `readableMessage` in `dealIntake.ts`.
+       */
+      readableMessage(input.raw),
+      "",
+      storedMessageLine(input.emlKey, input.storeNote),
     ].join("\n"),
     owner_type: "AI",
     owner_id: PORTFOLIO_UPDATE_EMPLOYEE,

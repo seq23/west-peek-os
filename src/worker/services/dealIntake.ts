@@ -249,6 +249,10 @@ export interface EmailDeal {
   raw: string;
   /** The company came from a subject that carried no tag — accept only if the register knows it. */
   subjectUntagged?: boolean;
+  /** The stored `.eml` the message lives in, kept once at the door. Null when it was not kept. */
+  emlKey?: string | null;
+  /** What to say when it was not kept. */
+  storeNote?: string | null;
   /** Extra lines for the work card — what came attached, and what could not be read. */
   notes?: string[];
   /**
@@ -689,6 +693,14 @@ export async function openIntoFunnel(env: Env, arrival: FunnelArrival): Promise<
  * remaining opinion is that mail is EMAIL and the sender is the source.
  */
 export async function intakeDealFromEmail(env: Env, deal: EmailDeal): Promise<FunnelEntry> {
+  /*
+   * THE FOUNDER'S WORDS, NOT THEIR MIME ENVELOPE. `deal.raw` is whatever the caller read the
+   * company out of, which on the small-deck path is the WHOLE MESSAGE — so the analyst's card used
+   * to open with four thousand characters of `Received:` headers under "what came with it". The
+   * other three routes into the funnel (MANUAL, NETWORK_OS, SCOUT) hand `openIntoFunnel` a note a
+   * person typed, and `readableMessage` returns a non-MIME string unchanged, so this is decoded at
+   * the EMAIL route rather than inside the shared door.
+   */
   return openIntoFunnel(env, {
     route: "EMAIL",
     company: deal.company,
@@ -696,14 +708,15 @@ export async function intakeDealFromEmail(env: Env, deal: EmailDeal): Promise<Fu
     one_liner: deal.one_liner ?? null,
     website: deal.website ?? null,
     source: deal.from,
-    raw: deal.raw,
+    raw: readableMessage(deal.raw),
     is_deck: deal.isDeck,
     // FORWARDED, and they were not. This wrapper dropped both, so the PDF was extracted from the
     // MIME tree and then discarded one function later — the deck journey would have looked wired up
     // and stored nothing. A thin adapter that omits a field is the easiest place in a chain to lose
     // something, because it reads like plumbing rather than like logic.
     ...(deal.attachments ? { attachments: deal.attachments } : {}),
-    ...(deal.notes ? { notes: deal.notes } : {}),
+    // The line that says where the whole message is, on the analyst's card as on every other.
+    notes: [...(deal.notes ?? []), storedMessageLine(deal.emlKey, deal.storeNote)],
   });
 }
 
@@ -796,6 +809,39 @@ export async function handleScoutedIntake(ctx: RouteContext): Promise<Response> 
   }
 }
 
+/**
+ * THE WORDS A PERSON WROTE, out of whatever arrived — never the MIME envelope.
+ *
+ * WHY THIS IS A FUNCTION AND NOT A `slice`. `openRoutingCard` and `openPortfolioUpdateCard` each
+ * wrote `input.raw.slice(0, 4000)` into a work card's description. `raw` is the whole RFC 5322
+ * message, so on any real email the first four thousand characters are `Received:`, `ARC-Seal:` and
+ * `DKIM-Signature:` lines and the sender's actual words are cut off before they begin. That is
+ * exactly what happened to Scooter's reply on 21 Sep 2026 — the card carried headers, the words
+ * were never written anywhere, and they are unrecoverable.
+ *
+ * `openAssignmentCard` was fixed for its own door on the same day. The fix stayed in one door for
+ * one day too long; it is one function now, and `validate:every-door-keeps-the-message` fails the
+ * build if a `raw.slice(` reappears in any of them.
+ *
+ * THE SAME 4,000-CHARACTER CAP, deliberately: it is a readable cap on a readable body rather than a
+ * byte budget, and the whole message is in R2 for anyone who needs more than that.
+ */
+export function readableMessage(raw: string, cap = 4000): string {
+  const text = textBodyOf(raw ?? "");
+  const written = splitQuoted(text).written.trim() || text.trim();
+  return written.slice(0, cap);
+}
+
+/**
+ * The one line that says where the whole message is. Written identically by every door, because
+ * "where is the original" must not be a different question depending on which card you are looking
+ * at — and because migration 0226's backfill reads exactly this shape.
+ */
+export function storedMessageLine(emlKey: string | null | undefined, storeNote?: string | null): string {
+  if (emlKey) return `Stored message: ${emlKey}`;
+  return storeNote?.trim() || "The message could NOT be kept — its words are above, and the original is still in the mailbox.";
+}
+
 // ── The rung below: when nobody can tell what an arrival is ──
 
 /**
@@ -812,7 +858,18 @@ export async function handleScoutedIntake(ctx: RouteContext): Promise<Response> 
  */
 export async function openRoutingCard(
   env: Env,
-  input: { subject: string; from: string; raw: string; triggers: string[]; why: string; headline?: string },
+  input: {
+    subject: string;
+    from: string;
+    raw: string;
+    triggers: string[];
+    why: string;
+    headline?: string;
+    /** The stored `.eml` this message lives in. Handed down from the door — never put here. */
+    emlKey: string | null;
+    /** What to say instead, when it was not kept. Never silence: a card must say either way. */
+    storeNote?: string | null;
+  },
 ): Promise<string> {
   /*
    * THE HEADLINE IS THE CALLER'S, because not every routing card is an unclear email.
@@ -832,7 +889,10 @@ export async function openRoutingCard(
       input.triggers.length > 0 ? `Tags found: ${input.triggers.join(", ")}` : "No tag anybody recognised.",
       "",
       "--- the message ---",
-      input.raw.slice(0, 4000),
+      // DECODED AND QUOTE-STRIPPED, never `raw.slice`. See `readableMessage`.
+      readableMessage(input.raw),
+      "",
+      storedMessageLine(input.emlKey, input.storeNote),
     ].join("\n"),
     owner_type: "AI",
     owner_id: ROUTING_EMPLOYEE,
@@ -878,8 +938,19 @@ export async function openAssignmentCard(
     chiefOfStaff: string;
     raw: string;
     limits: readonly string[];
-    /** 21 Sep 2026: the stored `.eml` this message lives in, when the intake kept one (oversize). */
-    emlKey?: string | null;
+    /**
+     * The stored `.eml` this message lives in, kept ONCE at the door (22 Sep 2026).
+     *
+     * This function used to mint a key and `put` the message itself, inside a `catch {}` that
+     * swallowed the failure — so for a month every card said "Stored message: …" or said nothing,
+     * and nobody could tell which had happened. The store is now hoisted into
+     * `handleInboundEmailOnce`, which keeps EVERY message rather than the ones whose door happened
+     * to remember, and the key is handed down. Null means it was genuinely not kept, and the card
+     * says so.
+     */
+    emlKey: string | null;
+    /** What to say when it was not kept, so a card is never silent about a missing original. */
+    storeNote?: string | null;
     /** The RECEIVED email's first line, verbatim, when a person re-reads a stored message. */
     receivedTldr?: string | null;
     /** A thread token an earlier note to this partner carried, so the RECEIVED lands in the same conversation. */
@@ -891,8 +962,7 @@ export async function openAssignmentCard(
    * request reached Porter as 6,000 characters of Received: and DKIM headers. What the card
    * carries is the text the partner typed — decoded, and with any quoted reply stripped.
    */
-  const text = textBodyOf(input.raw);
-  const written = splitQuoted(text).written.trim() || text.trim();
+  const written = readableMessage(input.raw, 100_000);
   const card = await createWorkCardInternal(env, systemIdentity(), {
     title: `From ${input.partnerAddress}: ${strippedSubject(input.subject) || "(no subject)"}`,
     description: [
@@ -938,17 +1008,7 @@ export async function openAssignmentCard(
    * one already was. Extracted on demand by `GET /api/work-cards/:id/attachments/:attId`.
    */
   const { attachments, unread } = requestAttachments(input.raw);
-  let emlKey = input.emlKey ?? null;
-  // EVERY partner message is kept (21 Sep 2026): the .eml is the only thing that makes "read it
-  // again" possible, and they are small. Not only when a file is attached.
-  if (!emlKey && env.WP_OS_DOCUMENTS && input.raw.trim().length > 0) {
-    emlKey = `inbound-email/${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}.eml`;
-    try {
-      await env.WP_OS_DOCUMENTS.put(emlKey, input.raw, { httpMetadata: { contentType: "message/rfc822" } });
-    } catch {
-      emlKey = null;
-    }
-  }
+  const emlKey = input.emlKey;
   const attachedNames: string[] = [];
   if (emlKey) {
     for (const a of attachments) {
@@ -960,19 +1020,20 @@ export async function openAssignmentCard(
       attachedNames.push(a.filename);
     }
   }
-  if (attachments.length > 0 || unread.length > 0 || emlKey) {
-    await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || ?2, 1, 16000) WHERE id = ?1")
-      .bind(
-        card.id,
-        [
-          ...(attachedNames.length ? [`ATTACHED: ${attachedNames.join(", ")}`] : []),
-          ...(attachments.length > 0 && !emlKey ? ["The attachment(s) could NOT be kept — the store is off."] : []),
-          ...unread.map((u) => `Could NOT keep an attachment: ${u}.`),
-          ...(emlKey ? [`Stored message: ${emlKey}`] : []),
-        ].join("\n"),
-      )
-      .run();
-  }
+  // ALWAYS, not only when something was attached: the line that says where the original is has to
+  // be on every card, because "where is the email this came from" is the question this whole
+  // overhaul exists to answer.
+  await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || ?2, 1, 16000) WHERE id = ?1")
+    .bind(
+      card.id,
+      [
+        ...(attachedNames.length ? [`ATTACHED: ${attachedNames.join(", ")}`] : []),
+        ...(attachments.length > 0 && !emlKey ? ["The attachment(s) could NOT be kept — the message itself was not kept."] : []),
+        ...unread.map((u) => `Could NOT keep an attachment: ${u}.`),
+        storedMessageLine(emlKey, input.storeNote),
+      ].join("\n"),
+    )
+    .run();
 
   /*
    * INTAKE LEARNS DRIVE (20 Sep 2026, Plan A). Any Google Drive folder link in a partner's email

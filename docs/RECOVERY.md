@@ -135,3 +135,44 @@ rm -f /tmp/prod-export.sql
 - **R2 document restore.** The dump covers D1 only. Documents in `WP_OS_DOCUMENTS` are not
   included, so a full disaster recovery is not yet proven end to end.
 - **Point-in-time.** `wrangler d1 time-travel` exists and is untested here.
+
+## 7. Inbound email — what is kept, where, and for how long (0226, 22 Sep 2026)
+
+Owner: *"the original emails received for the work card or replied should be kept … we need to
+overhaul this."*
+
+**WHAT IS KEPT.** Every message that arrives at `os@joinwestpeek.com` and passes the
+`inbound_email_seen` dedupe is written to R2 **once**, at the entry (`keepTheMessage` in
+`src/worker/effects/inboundEmail.ts`), before anything decides what it is. That includes unrouted
+mail, a deal tag with no readable company, a `#wpnetwork` relay that failed, a reply that could not
+be acted on, `#wpupdate`, a small founder deck, an oversize deck, and a steering reply — all of
+which kept nothing before this.
+
+**THE ONE EXCEPTION, deliberately.** A message whose `From:` claims one of the two Managing
+Partners and which FAILED authentication is **not** kept. The mailbox is publicly addressable, so
+archiving a forgery under a partner's name would give an attacker durable storage inside the firm's
+bucket. Nothing is dropped by this: the message still opens a routing card carrying its words and
+the verdict that refused it, and `inbound_email.not_stored_spoof` is on the event spine.
+
+**WHERE.**
+
+| | |
+|---|---|
+| Bucket | `WP_OS_DOCUMENTS` → `west-peek-os-documents` |
+| Key | `inbound-email/<YYYY-MM-DD>/<uuid>.eml`, `message/rfc822` |
+| Index | `inbound_message` (migration 0226) — one row per stored message, written in the same place the object is written |
+| Link to the work | `inbound_message.work_card_id`, set once a door opens or steers a card |
+| Read back | `GET /api/work-cards/:id/request-message` (decoded body) and `…/raw` (the `.eml`, Managing Partner only) |
+
+**NOTHING EXPIRES.** There is no R2 lifecycle rule, no cleanup job, and nothing in the code or the
+migrations deletes a stored message. That is a decision, not an omission: the owner decided on
+22 Sep 2026 that **retention is decided after the index exists**, because "how long do we keep
+these" cannot be answered while nobody can say what is being kept. `inbound_message` is the answer
+to the second question; the first is still open.
+
+**R2 IS OUTSIDE THE BACKUP.** `npm run backup:local` and the proven production restore above cover
+**D1 only** — see *Not yet proven* — so a restored database will carry every `inbound_message` row
+and its `r2_key`, and the objects those keys name are **not** restored with it. A card's
+`Stored message:` line would then point at bytes that are gone. The index makes that gap visible
+(`has_raw: false` on the request-message route) rather than silent, which is the improvement; it
+does not close it.

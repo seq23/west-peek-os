@@ -122,3 +122,20 @@ violations) on breach and proves its own detection with a self-test fixture run.
   zero job-door kinds checked; 19-fixture self-test including a job kind offered by hand, a refusal
   with no reason, an unregistered write site, a stale register entry, a symbol whose union has
   drifted, and a job kind the block-sentence guard does not ban.
+- `every-door-keeps-the-message.mjs` (`npm run validate:every-door-keeps-the-message`, 22 Sep 2026) —
+  every inbound email is kept once, at the entry, and no work card is ever written raw MIME instead
+  of the sender's words. On 21 Sep Scooter's reply was read as a new request, 4,000 characters of
+  `Received:`/`ARC-Seal:`/DKIM headers went into the card's description, and no `.eml` was stored:
+  keeping the message was a PER-DOOR responsibility that one door of five discharged, and
+  `raw.slice(0, 4000)` was typed out separately in two more. The scan holds six things: every call
+  site of `openRoutingCard`/`openAssignmentCard`/`openPortfolioUpdateCard`/`intakeDealFromEmail`/
+  `steerFromReply` is reached with a stored key in hand (named in the call, or set on the variable
+  handed to it); no door slices `raw` into what it writes and each reads it through
+  `readableMessage`; no `catch` in the inbound path swallows an R2 `put` without appending an event;
+  `keepTheMessage` runs in `handleInboundEmailOnce` BEFORE any door, writes its `inbound_message`
+  row beside the object, refuses a forged partner message, and is the only place in `src/` that
+  mints an `inbound-email/` key; and the request-message routes gate on `getVisibleWorkCard` (scope
+  AND privacy label) rather than the notes routes' bare `SELECT id FROM work_card`, with the raw
+  route behind `authorize()` on `inbound_message.read_raw`. Hard-fails on zero sources, zero door
+  call sites or zero R2 puts; `--self-test` plants twelve bypasses including each real pre-fix
+  shape.

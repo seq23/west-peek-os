@@ -400,6 +400,8 @@ export async function runDeckReading(env: Env): Promise<{ read: number; failed: 
         from: fromMessage?.from ?? "",
         isDeck: true,
         raw: emlBody.slice(0, 4000),
+        // The stored message this deck was read out of: the analyst's card points at the original.
+        emlKey: deck.object_key,
       });
       companyId = opened.company_id;
       await env.WP_OS_DB.prepare("UPDATE pending_deck SET company_id = ?2 WHERE id = ?1")

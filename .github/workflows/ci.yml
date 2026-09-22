@@ -530,6 +530,11 @@ jobs:
       # so 0223's editable rule would have shipped as a badge a partner could read and not change.
       - name: A standing rule that is a switch is a switch on both sides
         run: npm run validate:kind-rule-switches
+      # 22 Sep 2026: Scooter's reply became 4,000 characters of Received: headers on a card and no
+      # `.eml` at all — one door of five kept the message, and two doors sliced raw MIME into a
+      # description. Every message is kept once at the entry now, and this refuses the regression.
+      - name: Every door keeps the message, and no card carries MIME instead of words
+        run: npm run validate:every-door-keeps-the-message
 
       # 22 Sep 2026: one card, one employee, TWO sender addresses on two domains — the intake notice
       # as os@westpeek.ventures, the finished work as porter@joinwestpeek.com. The From was OMITTED,

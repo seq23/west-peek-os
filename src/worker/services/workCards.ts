@@ -207,7 +207,15 @@ function firmScopesOf(identity: FirmUserIdentity): string[] {
   return scopes.length > 0 ? scopes : ["west-peek"];
 }
 
-async function getVisibleWorkCard(env: Env, identity: FirmUserIdentity, id: string): Promise<WorkCardRow | null> {
+/**
+ * The card, IF this identity may see it — firm scope AND privacy label, in one place.
+ *
+ * EXPORTED SINCE 22 SEP 2026 so a new route cannot invent a fourth answer to "may you see this
+ * card". The notes routes read `SELECT id FROM work_card WHERE id = ?1` with no scope or label
+ * clause at all, which is a known missing guard; the request-message routes (0226) import this one
+ * rather than copy that shape, and `validate:every-door-keeps-the-message` pins that they do.
+ */
+export async function getVisibleWorkCard(env: Env, identity: FirmUserIdentity, id: string): Promise<WorkCardRow | null> {
   const row = await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(id).first<WorkCardRow>();
   if (!row) return null;
   if (!firmScopesOf(identity).includes(row.firm_scope)) return null;

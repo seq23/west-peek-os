@@ -274,6 +274,231 @@ export async function handleInboundEmail(
   }
 }
 
+/**
+ * WHAT THE STORE DID, for the door that is about to decide what the message is.
+ *
+ * `text` is null only when the message was too big to read here — the one case where the bytes go
+ * to R2 without ever being decoded, because parsing seven megabytes would exhaust a Worker's 10ms
+ * CPU budget while streaming them costs almost nothing.
+ */
+export interface KeptMessage {
+  /** The R2 key the whole message lives at. Null when it was not stored, for whatever reason. */
+  key: string | null;
+  /** The `inbound_message` row, when one was written. */
+  rowId: string | null;
+  /** Why it was not stored, in words a card can carry. Empty when it was, or when it was refused. */
+  failure: string;
+  /** The whole message as text, when it was small enough to read at the door. */
+  text: string | null;
+  /** True when a message claiming a partner's address failed authentication and was NOT kept. */
+  refusedAsSpoof: boolean;
+}
+
+/**
+ * -- EVERY INBOUND MESSAGE IS KEPT, ONCE, BEFORE ANY DOOR DECIDES WHAT IT IS --------------------
+ *
+ * Owner, 22 Sep 2026: "the original emails received for the work card or replied should be kept ...
+ * we need to overhaul this."
+ *
+ * WHAT WENT WRONG AND WHERE. Since PR #150 exactly one door kept a copy — `openAssignmentCard` —
+ * and the oversize branch kept another. Every other arrival kept nothing: unrouted mail, a deal tag
+ * with no readable company, a `#wpnetwork` relay that failed, a reply that could not be acted on,
+ * `#wpupdate`, a small founder deck, and a STEERING REPLY. On 21 Sep Scooter's reply to a
+ * hire-search email took the last of those, was read as a new request, and the door wrote the first
+ * 4,000 characters of raw MIME into the card. His words are unrecoverable.
+ *
+ * A PER-DOOR STORE CANNOT BE COMPLETE, and that is the design error rather than any single missing
+ * call. There are nine call sites across five doors and the set grows; "did you remember to keep
+ * the message" is a question that has to be answered once, at the entry, for every message that
+ * passes the dedupe — which is what this does. Every door is HANDED the key, and the validator
+ * `validate:every-door-keeps-the-message` fails the build if one is reached without it.
+ *
+ * ONE PUT, ONE ROW, IN THE SAME PLACE. The `.eml` and its `inbound_message` row are written
+ * together, so the index and the bucket cannot disagree about what was kept.
+ *
+ * -- A SPOOF IS NOT KEPT, DELIBERATELY ----------------------------------------------------------
+ *
+ * A message whose `From:` claims one of the two Managing Partners and which FAILED authentication
+ * is the one shape this mailbox must not archive. `os@joinwestpeek.com` is publicly addressable, so
+ * anyone in the world can forge that From line; keeping the result would give an attacker durable
+ * storage inside the firm's own bucket, indexed under a partner's name, which is a worse outcome
+ * than losing bytes nobody sent. NOTHING IS DROPPED BY THIS: the message still becomes a routing
+ * card carrying its text and the verdict that refused it, exactly as before — see the
+ * `claimsToBePartner` branch below. Ordinary mail from anyone who is not claiming to be a partner
+ * is unaffected: a founder's email neither passes nor fails this test, because it never asserts
+ * partner authority in the first place.
+ */
+async function keepTheMessage(
+  env: Env,
+  input: {
+    message: { from: string; to: string; headers: Headers; raw: ReadableStream; rawSize: number };
+    subject: string;
+    sender: string;
+    authority: ReturnType<typeof mailAuthority>;
+    firmScope: string;
+  },
+): Promise<KeptMessage> {
+  const { message, subject, sender, authority, firmScope } = input;
+
+  /*
+   * READ HERE ONLY WHEN IT IS SAFE TO. An oversize message from anyone but a partner goes to R2 as
+   * a stream and is never decoded — the asymmetry the oversize branch has always depended on. A
+   * partner's oversize message IS read, because their words are the request (21 Sep 2026); it is
+   * bounded by Email Routing's 25 MB and the isolate has 128.
+   *
+   * NOT A `tee()`, and this is a recorded deadlock rather than a preference: in workerd a tee'd
+   * branch nobody is reading applies backpressure to the source once its buffer fills, so the R2
+   * branch stalls waiting on a text branch that is only read after the put. The bytes are read ONCE
+   * into memory and both the store and the text come from that buffer.
+   */
+  const readable = message.rawSize <= MAX_BODY_BYTES || authority.isAssignment;
+
+  const claimsToBePartner = ASSIGNING_PARTNERS.includes(addressIn(message.headers.get("from")) ?? "");
+  if (claimsToBePartner && !authority.verdict.passed) {
+    const text = readable ? await new Response(message.raw).text() : null;
+    await appendEvent(env, {
+      eventType: "inbound_email.not_stored_spoof",
+      actorType: "system",
+      actorId: "inbound_email",
+      objectType: "inbound_email",
+      objectId: `${message.from}:${subject}`.slice(0, 200),
+      firmScope,
+      payload: { from: sender, to: message.to, subject, bytes: message.rawSize, refused_because: authority.verdict.reason },
+    });
+    return { key: null, rowId: null, failure: "", text, refusedAsSpoof: true };
+  }
+
+  let text: string | null = null;
+  let buffered: ReadableStream | null = null;
+  if (readable) {
+    const bytes = new Uint8Array(await new Response(message.raw).arrayBuffer());
+    text = new TextDecoder().decode(bytes);
+    buffered = new Blob([bytes as BlobPart]).stream();
+  }
+
+  /*
+   * IDEMPOTENT BY THE INDEX. `POST /api/inbound-email/reingest` deliberately clears the dedupe row
+   * so a stored message can be read through the door AGAIN; without this, "again" would also mean a
+   * second identical copy of the same bytes in the bucket every time. The index answers "do we
+   * already have this message" in one read, and the existing key is handed straight to the doors.
+   */
+  const messageId = inboundMessageKey(message.headers);
+  if (messageId) {
+    const already = await env.WP_OS_DB.prepare("SELECT id, r2_key FROM inbound_message WHERE message_id = ?1")
+      .bind(messageId)
+      .first<{ id: string; r2_key: string }>();
+    if (already) return { key: already.r2_key, rowId: already.id, failure: "", text, refusedAsSpoof: false };
+  }
+
+  if (!env.WP_OS_DOCUMENTS) {
+    return { key: null, rowId: null, failure: "the document store is not bound", text, refusedAsSpoof: false };
+  }
+
+  const key = `inbound-email/${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}.eml`;
+  try {
+    if (buffered) {
+      await env.WP_OS_DOCUMENTS.put(key, buffered, {
+        httpMetadata: { contentType: "message/rfc822" },
+        customMetadata: { from: sender.slice(0, 200), subject: subject.slice(0, 200) },
+      });
+    } else {
+      /*
+       * THROUGH A `FixedLengthStream`, AND WITHOUT IT NOTHING WAS EVER STORED. R2 refuses a body
+       * whose length it does not know — `Provided readable stream must have a known length` — and
+       * the swallowed catch that used to sit here turned that into "this system did not keep a
+       * copy" on a card, every single time, for a month. `rawSize` is the length the runtime
+       * already knows. `pipeTo` is deliberately not awaited before the `put`: awaiting it would
+       * block on a writable nobody is draining yet.
+       */
+      const sized = new FixedLengthStream(message.rawSize);
+      const pumped = message.raw.pipeTo(sized.writable);
+      await env.WP_OS_DOCUMENTS.put(key, sized.readable, {
+        httpMetadata: { contentType: "message/rfc822" },
+        customMetadata: { from: sender.slice(0, 200), subject: subject.slice(0, 200) },
+      });
+      await pumped;
+    }
+  } catch (err) {
+    /*
+     * A FAILED STORE IS NEVER SILENT, AND NEVER LOSES THE MESSAGE. Both halves matter. The old
+     * `catch { storedKey = null }` here and in `openAssignmentCard` meant a store that had been
+     * broken since the day it shipped reported nothing at all; and the card must still open with
+     * the text, because storage failing is not a reason for a partner's request to disappear.
+     */
+    const reason = String(err).slice(0, 300);
+    await appendEvent(env, {
+      eventType: "inbound_email.store_failed",
+      actorType: "system",
+      actorId: "inbound_email",
+      objectType: "inbound_email",
+      objectId: `${message.from}:${subject}`.slice(0, 200),
+      firmScope,
+      payload: { from: sender, to: message.to, subject, bytes: message.rawSize, intended_key: key, reason },
+    });
+    return { key: null, rowId: null, failure: reason, text, refusedAsSpoof: false };
+  }
+
+  const rowId = `inm_${crypto.randomUUID()}`;
+  await env.WP_OS_DB.prepare(
+    `INSERT OR IGNORE INTO inbound_message
+       (id, message_id, r2_key, from_address, to_address, subject, received_at, bytes, mail_authority_json, firm_scope)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
+  )
+    .bind(
+      rowId,
+      // A message with no Message-ID is honestly unique rather than dishonestly merged with the
+      // next one: the dedupe table already treats it as unrecognisable, and so does this.
+      messageId ?? `no-message-id:${rowId}`,
+      key,
+      sender.slice(0, 320),
+      message.to.slice(0, 320),
+      subject.slice(0, 500),
+      new Date().toISOString(),
+      message.rawSize,
+      JSON.stringify({
+        spf: authority.verdict.spf,
+        dkim: authority.verdict.dkim,
+        dmarc: authority.verdict.dmarc,
+        signing_domain: authority.verdict.signing_domain,
+        passed: authority.verdict.passed,
+        partner: authority.partnerAddress,
+      }),
+      firmScope,
+    )
+    .run();
+
+  return { key, rowId, failure: "", text, refusedAsSpoof: false };
+}
+
+/**
+ * The card this message produced, recorded on the index row.
+ *
+ * WRITTEN FROM THE CALLER, once each door has returned, rather than inside the doors. The doors
+ * differ in what they open (a funnel entry, an assignment, a routing card, a steer on a card that
+ * already existed); what they have in common is that the handler holds both the stored key and the
+ * resulting card id at exactly one moment, which is here. `GET /api/work-cards/:id/request-message`
+ * is a join on this column and nothing else.
+ */
+function notKept(kept: KeptMessage): string {
+  if (kept.refusedAsSpoof) {
+    return (
+      "The message was NOT kept: its From line claims a Managing Partner and it did not authenticate, " +
+      "so it is not archived under their name. Its words are above and it is still in the mailbox."
+    );
+  }
+  return (
+    `The message could NOT be kept${kept.failure ? ` (${kept.failure})` : ""} — its words are above, ` +
+    "and the original is still in the mailbox. This is a fault: see the inbound_email.store_failed event."
+  );
+}
+
+async function linkStoredMessage(env: Env, kept: KeptMessage, cardId: string | null | undefined): Promise<void> {
+  if (!kept.rowId || !cardId) return;
+  await env.WP_OS_DB.prepare("UPDATE inbound_message SET work_card_id = ?2 WHERE id = ?1 AND work_card_id IS NULL")
+    .bind(kept.rowId, cardId)
+    .run();
+}
+
 async function handleInboundEmailOnce(
   message: { from: string; to: string; headers: Headers; raw: ReadableStream; rawSize: number },
   env: Env,
@@ -303,6 +528,27 @@ async function handleInboundEmailOnce(
    * can be absent and an envelope never is.
    */
   const sender = extractAddress(message.headers.get("from")) ?? message.from;
+
+  /*
+   * -- THE AUTHORITY VERDICT, READ ONCE ---------------------------------------------------------
+   *
+   * Hoisted here because the store below needs it (a forged partner message is not archived) and
+   * because two copies of it used to be computed in this function — one inside the oversize branch
+   * and one two hundred lines further down — which is the "two components each keeping their own
+   * list" shape this repo names. The OUTER `From:` and the OUTER headers, never `trueSender`: the
+   * forwarded origin is right for filing a founder and catastrophic for authority.
+   */
+  const authority = mailAuthority({
+    fromHeader: message.headers.get("from"),
+    authenticationResults: message.headers.get("authentication-results"),
+  });
+
+  /*
+   * THE MESSAGE IS KEPT BEFORE ANYTHING DECIDES WHAT IT IS. Unconditionally, once, for every
+   * message that got past the dedupe — see `keepTheMessage` for why this cannot live in the doors.
+   * It also CONSUMES the stream, so everything below reads `kept.text` rather than `message.raw`.
+   */
+  const kept = await keepTheMessage(env, { message, subject, sender, authority, firmScope });
 
   /*
    * A BIG MESSAGE IS NOT A REJECTED ONE. This dropped a real deck on the floor.
@@ -356,65 +602,15 @@ async function handleInboundEmailOnce(
      * founders remembering to compress a deck fails the first time somebody forgets, and the firm
      * loses the deal rather than the attachment.
      */
-    let storedKey: string | null = null;
     /*
-     * A PARTNER'S OVERSIZE MESSAGE IS STILL THEIR REQUEST (21 Sep 2026). "The photo is attached"
-     * came in at 3.9 MB, took this path, became "Deck: Sensori …", failed to read as a deck, and
-     * never reached Porter. So when the sender authenticated as a partner the message is read as
-     * text as well as stored, and the assignment card opens from the stored copy with the
-     * attachment kept by name. Founders' oversize decks are unchanged.
-     *
-     * NOT A `tee()`. The first version tee'd the stream — one branch to R2, one to `.text()` — and
-     * the first real re-read (21 Sep 2026, 21:27Z) hung the Worker at 14ms of CPU until the client
-     * gave up at 110s: in workerd a tee'd branch that nobody reads yet applies BACKPRESSURE to the
-     * source once its buffer fills, so the R2 branch stalled waiting on the text branch, which was
-     * only going to be read after the put. Two consumers of one stream with an ordering between
-     * them is a deadlock, not a design. The bytes are read ONCE into memory (a partner's message is
-     * bounded by Email Routing's 25 MB; the isolate has 128 MB) and both the store and the text
-     * come from that buffer. `wallTime`-with-no-CPU is the signature if this ever recurs.
+     * ALREADY KEPT, at the top of this function, and the code that used to live here is why the
+     * store moved. A PARTNER'S OVERSIZE MESSAGE IS STILL THEIR REQUEST (21 Sep 2026): "the photo is
+     * attached" came in at 3.9 MB, took this path, became "Deck: Sensori ...", failed to read as a
+     * deck, and never reached Porter. So a partner's oversize message is read as text as well as
+     * stored; a founder's oversize deck is streamed to R2 and never decoded, exactly as before.
      */
-    const partnerAuthority = mailAuthority({ fromHeader: message.headers.get("from"), authenticationResults: message.headers.get("authentication-results") });
-    let partnerText: string | null = null;
-    let rawForStore: ReadableStream = message.raw;
-    if (partnerAuthority.isAssignment) {
-      const bytes = new Uint8Array(await new Response(message.raw).arrayBuffer());
-      partnerText = new TextDecoder().decode(bytes);
-      rawForStore = new Blob([bytes as BlobPart]).stream();
-    }
-    if (env.WP_OS_DOCUMENTS) {
-      storedKey = `inbound-email/${new Date().toISOString().slice(0, 10)}/${crypto.randomUUID()}.eml`;
-      try {
-        /*
-         * THROUGH A `FixedLengthStream`, AND WITHOUT IT NOTHING WAS EVER STORED.
-         *
-         * R2 refuses a body whose length it does not know: passing `message.raw` straight in threw
-         *   TypeError: Provided readable stream must have a known length
-         *     (request/response body or readable half of FixedLengthStream)
-         * every single time. The `catch` below swallowed it, `storedKey` stayed null, and the card
-         * said "It could NOT be stored here… this system did not keep a copy." Which was true, and
-         * was exactly the failure this whole branch was written to fix after a 7MB deck for Sensori
-         * was logged `too_large` at 03:29 and discarded. The card was the half that worked; keeping
-         * the message — the half that makes the arrival recoverable — never did.
-         *
-         * `rawSize` is the length the runtime already knows, so this stays STREAMING: bytes go to
-         * R2 without being decoded, which is the asymmetry the oversize path depends on (I/O is
-         * nearly free; parsing seven megabytes would exhaust the 10ms CPU budget). `pipeTo` is
-         * deliberately not awaited before the `put` — awaiting it would block on a writable nobody
-         * is draining yet, and the two run against each other.
-         */
-        const sized = new FixedLengthStream(message.rawSize);
-        const pumped = rawForStore.pipeTo(sized.writable);
-        await env.WP_OS_DOCUMENTS.put(storedKey, sized.readable, {
-          httpMetadata: { contentType: "message/rfc822" },
-          customMetadata: { from: sender.slice(0, 200), subject: subject.slice(0, 200) },
-        });
-        await pumped;
-      } catch {
-        // A failed store must not also lose the notification. The card still opens and says the
-        // message is in the mailbox — which it is, whatever happened here.
-        storedKey = null;
-      }
-    }
+    const storedKey = kept.key;
+    const partnerText = kept.text;
 
     /*
      * QUEUED FOR READING, NOT ONLY STORED — the half that was missing.
@@ -438,18 +634,20 @@ async function handleInboundEmailOnce(
      * the card in from its own CPU budget before the sweep lets the analyst start. Size is not a
      * fact the analyst is ever told about.
      */
-    if (partnerAuthority.isAssignment && partnerText !== null) {
+    if (authority.isAssignment && partnerText !== null) {
       const rawText = partnerText;
       const cardId = await openAssignmentCard(env, {
         subject,
-        partnerAddress: partnerAuthority.partnerAddress!,
-        chiefOfStaff: partnerAuthority.chiefOfStaff!,
+        partnerAddress: authority.partnerAddress!,
+        chiefOfStaff: authority.chiefOfStaff!,
         raw: rawText,
         limits: EMAILED_TASK_LIMITS,
         emlKey: storedKey,
+        storeNote: notKept(kept),
         receivedTldr: options.receivedTldr ?? null,
         replyOnThread: options.replyOnThread ?? null,
       });
+      await linkStoredMessage(env, kept, cardId);
       await appendEvent(env, {
         eventType: "inbound_email.received",
         actorType: "system",
@@ -470,10 +668,12 @@ async function handleInboundEmailOnce(
         from: sender,
         isDeck: true,
         raw: `The message is ${(message.rawSize / 1024 / 1024).toFixed(1)}MB, so its body and attachments were not opened here — they are being read from the stored copy and the deck's reading is added to this card before you start.`,
-        notes: storedKey ? [`Stored message: ${storedKey}`] : ["The message could NOT be stored — ask the sender to send it again."],
+        emlKey: storedKey,
+        storeNote: notKept(kept),
       });
       oversizeCard = entry.work_card_id ?? "";
       oversizeCompanyId = entry.company_id ?? oversizeCompanyId;
+      await linkStoredMessage(env, kept, entry.work_card_id);
     } else {
       oversizeCard = await openRoutingCard(env, {
         headline: "Deck arriving",
@@ -484,9 +684,11 @@ async function handleInboundEmailOnce(
         why: [
           `It is ${(message.rawSize / 1024 / 1024).toFixed(1)}MB and its subject does not name the company, so it is being read from the stored copy to find out whose it is.`,
           "When it has been read this card is closed and the analyst's own card is opened. If it cannot be read, the reason is written here.",
-          storedKey ? `Stored message: ${storedKey}` : "It could NOT be stored here. Ask the sender to send it again once this is fixed, or get it from their sent mail — this system did not keep a copy.",
         ].join(" "),
+        emlKey: storedKey,
+        storeNote: notKept(kept),
       });
+      await linkStoredMessage(env, kept, oversizeCard);
     }
 
     /*
@@ -524,7 +726,11 @@ async function handleInboundEmailOnce(
     return;
   }
 
-  const raw = await new Response(message.raw).text();
+  /*
+   * READ FROM THE BUFFER THE STORE ALREADY MADE. `message.raw` was consumed by `keepTheMessage`
+   * above; a second `.text()` on a spent stream returns nothing, so this is the only correct read.
+   */
+  const raw = kept.text ?? "";
 
   /*
    * MOST OF THIS MAILBOX IS FORWARDS, so the envelope is the wrong answer to "who sent this".
@@ -613,7 +819,10 @@ async function handleInboundEmailOnce(
         `This looks like an answer to one of Parker's packets, and I did not act on it: ${replyDecision.capture}. ` +
         "Nothing was kept and nothing was dismissed. Open the packet on Events & Rooms and decide it there, " +
         "or ask the sender to reply again using the code in the email exactly as it is written.",
+      emlKey: kept.key,
+      storeNote: notKept(kept),
     });
+    await linkStoredMessage(env, kept, unsureCard);
     await appendEvent(env, {
       eventType: "inbound_email.unrouted",
       actorType: "system",
@@ -654,8 +863,15 @@ async function handleInboundEmailOnce(
     raw,
     inReplyTo,
     references,
+    emlKey: kept.key,
   });
   if (steer.steered) {
+    /*
+     * THE REPLY IS INDEXED AGAINST THE CARD IT STEERED, which is the whole of Scooter's 21 Sep
+     * failure closed. A steer keeps the written half only — correctly — and until now the quoted
+     * half, and the message itself, went nowhere at all.
+     */
+    await linkStoredMessage(env, kept, steer.thread!.object_type === "work_card" ? steer.thread!.object_id : null);
     await appendEvent(env, {
       eventType: "inbound_email.received",
       actorType: "system",
@@ -680,7 +896,10 @@ async function handleInboundEmailOnce(
       raw,
       triggers: [],
       why: `This replies to one of our own notes and I did not act on it: ${steer.reason}. Nothing was changed.`,
+      emlKey: kept.key,
+      storeNote: notKept(kept),
     });
+    await linkStoredMessage(env, kept, unsureCard);
     await appendEvent(env, {
       eventType: "inbound_email.unrouted",
       actorType: "system",
@@ -738,10 +957,6 @@ async function handleInboundEmailOnce(
    * with the failure written on it, exactly like any other unroutable email.
    */
   let assignmentCardId: string | null = null;
-  const authority = mailAuthority({
-    fromHeader: message.headers.get("from"),
-    authenticationResults: message.headers.get("authentication-results"),
-  });
 
   if (summary.unrouted && authority.isAssignment) {
     assignmentCardId = await openAssignmentCard(env, {
@@ -750,9 +965,12 @@ async function handleInboundEmailOnce(
       chiefOfStaff: authority.chiefOfStaff!,
       raw,
       limits: EMAILED_TASK_LIMITS,
+      emlKey: kept.key,
+      storeNote: notKept(kept),
       receivedTldr: options.receivedTldr ?? null,
       replyOnThread: options.replyOnThread ?? null,
     });
+    await linkStoredMessage(env, kept, assignmentCardId);
 
     /*
      * RECEIPT CONFIRMED IN THE OS, NOT BY EMAIL — a decision, not an omission.
@@ -806,7 +1024,10 @@ async function handleInboundEmailOnce(
       from: summary.from,
       raw,
       company: named?.company ?? null,
+      emlKey: kept.key,
+      storeNote: notKept(kept),
     });
+    await linkStoredMessage(env, kept, updateCardId);
   }
 
   let dealCompany: string | null = null;
@@ -879,7 +1100,13 @@ async function handleInboundEmailOnce(
       // Held for the network relay below: one email can carry both a company and its founder, and
       // the link between them is only free to record here.
       dealCompany = deal.company;
-      dealResult = await intakeDealFromEmail(env, deal);
+      // Handed the key the door already kept the message under, so the analyst's card points at the
+      // founder's own email rather than at nothing.
+      deal.emlKey = kept.key;
+      deal.storeNote = notKept(kept);
+      const entry = await intakeDealFromEmail(env, deal);
+      await linkStoredMessage(env, kept, entry.work_card_id);
+      dealResult = entry;
     } else {
       // A deal tag with no readable company is exactly the ambiguity Porter exists for. Guessing a
       // name out of prose would put a confidently wrong company at the top of the funnel.
@@ -889,7 +1116,10 @@ async function handleInboundEmailOnce(
         raw,
         triggers: summary.triggers,
         why: "Tagged for deal flow, but no company name could be read out of it.",
+        emlKey: kept.key,
+        storeNote: notKept(kept),
       });
+      await linkStoredMessage(env, kept, routingCardId);
       // Named from the shared routing table, not retyped: the seat is declared once and the mail
       // handler, Porter's method and the page a partner reads all say the same word.
       dealResult = { outcome: "AMBIGUOUS", detail: `No company name could be read, so ${ROUTING_EMPLOYEE} has it.` };
@@ -918,7 +1148,10 @@ async function handleInboundEmailOnce(
         ? `No recognised tag. It says it is from a Managing Partner, and it was NOT treated as an assignment because ${authority.reason}. ` +
           `A From line is not proof of anything, so this is a message to read rather than an instruction to follow.`
         : "No recognised tag, so nothing could route it automatically.",
+      emlKey: kept.key,
+      storeNote: notKept(kept),
     });
+    await linkStoredMessage(env, kept, routingCardId);
   }
 
   // People are Network OS's record. A #wpnetwork mail is relayed there as a proposal; the capture
@@ -968,7 +1201,10 @@ async function handleInboundEmailOnce(
         raw,
         triggers: summary.triggers,
         why: `Tagged for the network, but the person was not added: ${relayed.detail}.`,
+        emlKey: kept.key,
+        storeNote: notKept(kept),
       });
+      await linkStoredMessage(env, kept, routingCardId);
     }
   }
 
@@ -1004,6 +1240,12 @@ async function handleInboundEmailOnce(
        * partner's address" is a query over these fields, and it is only answerable because a
        * FAILED check writes as much as a passing one.
        */
+      // WHAT WAS KEPT, on every message rather than only the ones a door remembered. A key here and
+      // no `inbound_message` row, or a row and no key, is a fault a query can find.
+      stored: kept.key,
+      stored_row: kept.rowId,
+      ...(kept.refusedAsSpoof ? { not_stored_because: "the From claims a partner and the message did not authenticate" } : {}),
+      ...(kept.failure ? { store_failed: kept.failure } : {}),
       mail_authority: {
         assigned: Boolean(assignmentCardId),
         spf: authority.verdict.spf,
