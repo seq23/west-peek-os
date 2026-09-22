@@ -3337,9 +3337,11 @@ details.card > summary,
 }
 .work-legend-wrap > .work-legend { margin-top: var(--space-sm); }
 
-/* ── Scheduled work: cards, not rows ───────────────────────────────────────
-   Two-up on anything wide enough, one-up below. The grid is the point: a
-   recurring job is a thing the firm owns, and a bullet list read as a log. */
+/* ── Machinery: a grid of rows, not a full card each ───────────────────────
+   Two-up on anything wide enough, one-up below. SUPERSEDES the earlier "cards,
+   not rows" call (15 Sep 2026): the Addendum 4/5.1 redesign (22 Sep 2026)
+   collapses each job to one line by default (`.job-row > summary`), so the
+   grid now holds compact rows that expand, not full cards read open. */
 .job-grid {
   display: grid;
   /* `minmax(21rem, …)` is 336px, which is WIDER THAN A 320px PHONE — the track refused to shrink
@@ -3364,9 +3366,35 @@ details.card > summary,
 .job-card.is-on { border-left: 3px solid var(--wp-orange); }
 
 .job-card-head { display: flex; flex-wrap: wrap; gap: var(--space-xs); align-items: center; }
-.job-card-title { margin: var(--space-3xs) 0 0; }
+/* `display: inline-block` — Addendum 5.1's One-off row makes this text a real link
+   (`<a href="#/work/…">`), and a long card title wrapping to two lines inside a plain inline `<a>`
+   fragments into two `getClientRects()` boxes, which `d3-work-measured.spec.ts` reads as a
+   clickable "broken over more than one line" (the seam is where a thumb lands). inline-block keeps
+   it one box that can still wrap internally, and changes nothing for the plain `<span>` title the
+   job row already used it for. */
+.job-card-title { margin: var(--space-3xs) 0 0; display: inline-block; }
 .job-card-actions { margin-top: auto; padding-top: var(--space-sm); }
 .job-byline { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); }
+
+/* ── One line, collapsed, expandable (Addendum 4/5.1, 22 Sep 2026) ─────────
+   `<summary>` is the part of a closed `<details>` that still renders — state,
+   name, whether it is stuck, and the cadence sentence live there so a reader
+   (and a test) can read them without opening the row. Padding rather than a
+   fixed height, same reasoning as `.work-legend-wrap > summary`: a disclosure
+   is a control and needs a control's target. */
+.job-row > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: var(--space-xs) 0;
+}
+.job-row > summary::-webkit-details-marker { display: none; }
+.job-row-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+}
+.job-row-body { margin-top: var(--space-sm); display: flex; flex-direction: column; gap: var(--space-xs); }
 
 .job-deliverer { display: inline-flex; align-items: center; gap: var(--space-xs); }
 
