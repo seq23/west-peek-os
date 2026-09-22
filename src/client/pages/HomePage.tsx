@@ -507,10 +507,10 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
                       )}
                       <span className={risk}>{c.risk_level === "RESERVED" ? "Human-reserved" : c.risk_level === "UNCLASSIFIED" ? "Approval" : c.risk_level.charAt(0) + c.risk_level.slice(1).toLowerCase()}</span>{" "}
                       <strong className="home-waiting-title" title={c.title}>{c.title}</strong>
-                      <div className="muted small">
+                      <div className="muted small home-waiting-line" title={`${actionName(c.action_key)}${c.impact_note ? ` — ${c.impact_note}` : ""}`}>
                         {actionName(c.action_key)}{c.impact_note ? ` — ${c.impact_note}` : ""}
                       </div>
-                      <div className="muted small">
+                      <div className="muted small home-waiting-line">
                         {c.requested_by_type === "AI" ? "An employee" : c.requested_by_type === "SYSTEM" ? "The system" : "A partner"} raised it · {new Date(c.created_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
                         {c.expires_at ? ` · expires ${new Date(c.expires_at).toLocaleDateString()}` : ""}
                       </div>
@@ -549,8 +549,8 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
                     <span className={a.severity === "BLOCKING" ? "badge badge-bad" : a.severity === "DEGRADED" ? "badge badge-gate" : "badge"}>
                       {a.severity === "BLOCKING" ? "Blocked" : a.severity === "DEGRADED" ? "Degraded" : "Setup"}
                     </span>{" "}
-                    <strong>{a.headline}</strong>
-                    <div className="muted small">{a.action}</div>
+                    <strong className="home-waiting-title" title={a.headline}>{a.headline}</strong>
+                    <div className="muted small home-waiting-line" title={a.action}>{a.action}</div>
                   </div>
                   <span className="readiness"><span className="badge">not a signature</span></span>
                   <div className="deal-actions">
