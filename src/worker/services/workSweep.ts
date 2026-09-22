@@ -1,3 +1,4 @@
+import { PARTNERS } from "../../shared/registry/partners";
 import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import type { FirmUserIdentity } from "../auth";
@@ -229,6 +230,23 @@ export async function announceOutcome(
   if (card.kind === WEB_PROPERTY_CHANGE_KIND) {
     const { noticeFor } = await import("./webPropertyChange");
     notice = await noticeFor(env, card.id, outcome);
+  }
+  /*
+   * A BLOCK ADDRESSED TO THE OWNER IS THE OWNER'S EMAIL (21 Sep 2026). A lane fault — the Mac
+   * refusing three times, a lane down — names SEQUOIA as who can clear it; the requesting partner
+   * cannot, and "Porter: blocked — …" in his inbox for a stop he cannot act on is the bogus email
+   * she named twice today. So the requester is told nothing here (the 45-minute STUCK ceiling in
+   * webPropertyChange still speaks for a genuinely idle card), and the owner is written to instead,
+   * once per cause, with the lane's own words.
+   */
+  if (outcome === "BLOCKED" && card.kind === WEB_PROPERTY_CHANGE_KIND) {
+    const b = await env.WP_OS_DB.prepare("SELECT block_who FROM work_card WHERE id = ?1").bind(card.id).first<{ block_who: string | null }>();
+    const requester = (card.requested_by_email ?? "").trim().toLowerCase();
+    const owner = PARTNERS.find((p) => p.firstName.toUpperCase() === "SEQUOIA");
+    if (b?.block_who === "SEQUOIA" && owner && requester !== owner.email) {
+      const reply = await replyToRequester(env, { ...card, requested_by_email: owner.email }, outcome, who, detail, { kind: "STUCK", cause: `lane:${card.work_attempts}` });
+      return { emailed: reply.sent ? reply.to : null };
+    }
   }
   const reply = await replyToRequester(env, card, outcome, who, detail, notice);
   return { emailed: reply.sent ? reply.to : null };

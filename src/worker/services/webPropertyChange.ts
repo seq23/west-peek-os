@@ -764,14 +764,34 @@ export async function applyReport(
   await recordHistory(env, row, { run_id: run.id, phase: report.phase, status: report.status, reason: (report.reason ?? "").slice(0, 300) });
 
   if (report.status === "blocked") {
-    const why = await blockCard(env, card, {
-      reason: "a_question_for_you",
+    /*
+     * A MAC "BLOCKED" IS NEVER A QUESTION FOR THE PARTNER (21 Sep 2026). The partner's decisions
+     * travel as the plan's `asks`, through applyPlan and the plan email. A script that says
+     * "blocked" with free text is the LANE unable to proceed — on 21 Sep a stale claimer said
+     * "no Drive FOLDER is on the card" (a stop deleted from the repo eight hours earlier), this
+     * turned it into "a question for you", emailed Scooter to send a folder link for a photo he
+     * had attached, and parked the card for a 24-hour nag. Nothing would have moved it again but
+     * a person. So: the first two "blocked" reports are failed attempts (the sweep retries, the
+     * claimer may have been fixed or restarted in between); the third is a lane fault addressed
+     * to the OWNER, never to the requesting partner, and it says what the Mac said.
+     */
+    const why = report.reason!.slice(0, 900);
+    await appendFinding(env, card.id, `${report.phase} on the Mac could not proceed: ${why}`);
+    if (card.work_attempts < 3) {
+      return { finished: false, blocked: false, progressed: false, detail: `${report.phase} could not proceed on the Mac (attempt ${card.work_attempts}): ${why}` };
+    }
+    const blocked = await blockCard(env, card, {
+      reason: "a_lane_refused_the_work",
       trying: card.title,
       employee: PORTER_NAME,
-      who: whoFor(card),
-      detail: report.reason!.slice(0, 900),
+      who: "SEQUOIA",
+      lane: "Claude Code (her Mac)",
+      laneKey: "claude_code",
+      laneKind: "LANE_DOWN",
+      vendorWords: `the ${report.phase} script stopped itself three times: ${why}`,
+      raw: why,
     });
-    return { finished: false, blocked: true, progressed: false, detail: why };
+    return { finished: false, blocked: true, progressed: false, detail: blocked };
   }
   if (report.status === "failed") {
     await appendFinding(env, card.id, `${report.phase} failed on the Mac: ${report.reason}`);
