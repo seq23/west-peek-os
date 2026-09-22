@@ -6,14 +6,19 @@ import type { Actor } from "../src/worker/services/authorize";
 import { computeNextRun, isoWeekOf, occurrenceKey, runDueJobs, runJob, type ScheduledJobRow } from "../src/worker/services/jobs";
 import {
   HIRE_ARCHETYPE,
+  HIRE_CONTACT_RULE,
   HIRE_ROLE,
+  HIRE_SEARCH_STEPS,
   buildHireJudgePrompt,
   buildHireSearchPrompt,
   canonicalProfileUrl,
   checkCandidatePages,
   openHireSearchCard,
   parseHireCandidates,
+  rememberCandidates,
+  renderHireNote,
   runHireSearchCard,
+  type HireCandidate,
 } from "../src/worker/services/productionsHire";
 import { sweepOnce } from "../src/worker/services/workSweep";
 import { JOB_FACTS, cadenceInWords } from "../src/shared/work/scheduledWork";
@@ -216,6 +221,31 @@ describe("what Walker is told", () => {
     expect(judgePrompt).toMatch(/SALES experience is claimed from a page/);
   });
 
+  /*
+   * THE FIX FOR 22 SEP 2026: A DECLARED STEP, NOT A SEPARATE LOOKUP.
+   *
+   * Sequoia told Walker, via `work_steer`, to always attempt a legitimate contact-email lookup for
+   * reported candidates. `steerFor` correctly checked that against `HIRE_SEARCH_STEPS` — the job's
+   * own declared capability list — found nothing covering it, and correctly blocked
+   * (`wc_hire_followup_20260922`). That model call is not faked here; what IS provable in code is
+   * the contract the real model reads: the step is now declared, in the same terse voice as every
+   * other step, and it reaches the actual search-grounded call Walker already makes — not a new one.
+   */
+  it("now declares the contact-lookup capability she asked for, wired into the SAME search call — not a second lookup mechanism", () => {
+    expect(HIRE_SEARCH_STEPS.some((s) => s === HIRE_CONTACT_RULE)).toBe(true);
+    expect(HIRE_CONTACT_RULE).toMatch(/self-published contact method/);
+    expect(HIRE_CONTACT_RULE).toMatch(/self-provided email/);
+    expect(HIRE_CONTACT_RULE).toMatch(/[Nn]ever a scraped third-party data-broker guess/);
+    expect(HIRE_CONTACT_RULE).toMatch(/never a pattern-guessed address/);
+    expect(HIRE_CONTACT_RULE).toMatch(/never anything requiring a login/);
+    expect(HIRE_CONTACT_RULE).toMatch(/[Ss]ay plainly when none is found/);
+    // The RULES and the JSON schema of the search prompt — the call with real web-search grounding
+    // (defaultSearch, SEARCH_MODEL) — carry it, not the judge (which has no search capability).
+    const prompt = buildHireSearchPrompt("2026-W39");
+    expect(prompt).toContain(HIRE_CONTACT_RULE);
+    expect(prompt).toMatch(/"email":null,"contact_url":"https:\/\/…"/);
+  });
+
   it("has the method on Scooter's personal-office machine: the archetype, the sources, the memory, the one email", () => {
     const skill = skillsForMachines(["mp_personal_office"]).find((s) => s.key === "west_peek_productions_for_scooter");
     const text = skill!.guidance.join(" ");
@@ -255,6 +285,56 @@ describe("what survives the search", () => {
     expect(out.dropped.map((d) => d.name).sort()).toEqual(["Dead Link", "Only LinkedIn"]);
     expect(out.dropped.find((d) => d.name === "Only LinkedIn")!.reason).toMatch(/refused an automated read \(999\) and no second page/);
     expect(out.dropped.find((d) => d.name === "Dead Link")!.reason).toMatch(/did not answer/);
+  });
+});
+
+describe("the contact method a candidate may carry", () => {
+  it("keeps an email only alongside the page it was read from, and discards an unbacked or malformed one", () => {
+    const raw = JSON.stringify({
+      results: [
+        { name: "Has Both", profile_url: "https://a.example/x", email: "has@both.example", contact_url: "https://a.example/about" },
+        { name: "No Page", profile_url: "https://b.example/x", email: "no@page.example" },
+        { name: "Bad Address", profile_url: "https://c.example/x", email: "not-an-email", contact_url: "https://c.example/about" },
+        { name: "None Found", profile_url: "https://d.example/x" },
+      ],
+    });
+    const parsed = parseHireCandidates(raw);
+    expect(parsed.find((c) => c.name === "Has Both")).toMatchObject({ email: "has@both.example", contactUrl: "https://a.example/about" });
+    expect(parsed.find((c) => c.name === "No Page")!.email, "an address with no page is a guess").toBeNull();
+    expect(parsed.find((c) => c.name === "Bad Address")!.email, "not a valid-looking address").toBeNull();
+    expect(parsed.find((c) => c.name === "None Found")).toMatchObject({ email: null, contactUrl: null });
+  });
+
+  it("says it plainly in the note — the page it came from, or that none was found", () => {
+    const [jordan, sam] = parseHireCandidates(searchJson);
+    const withEmail: HireCandidate = { ...jordan!, email: "jordan@jordanexample.example", contactUrl: "https://jordanexample.example/about" };
+    const withoutEmail: HireCandidate = { ...sam!, email: null, contactUrl: null };
+    const text = renderHireNote("2026-W39", [withEmail, withoutEmail], [], [], []);
+    expect(text).toContain("Contact: jordan@jordanexample.example — from https://jordanexample.example/about");
+    expect(text).toContain("Contact: no public contact method found");
+  });
+
+  it("persists a found contact method across weeks; a week that resurfaces the same person with no email does not erase what is already known", async () => {
+    const url = "https://contactpersist.example/x";
+    await env.WP_OS_DB.prepare("DELETE FROM productions_candidate WHERE url IN (?1, ?2)").bind(url, "https://contactpersist.example/other").run();
+    const base: Omit<HireCandidate, "email" | "contactUrl"> = {
+      name: "Contact Persist", title: "Producer", company: "Freelance", city: "NY", profileUrl: url, evidenceUrl: null, why: "why", openingLine: "hi", fit: 7,
+    };
+    const week1 = await rememberCandidates(env, [{ ...base, email: "found@contactpersist.example", contactUrl: "https://contactpersist.example/about" }], "2026-W50", "wc_persist_1", new Date("2026-12-14T00:00:00.000Z"));
+    expect(week1.fresh).toHaveLength(1);
+    const afterWeek1 = await env.WP_OS_DB.prepare("SELECT email, contact_url AS contactUrl FROM productions_candidate WHERE url = ?1").bind(url).first<{ email: string; contactUrl: string }>();
+    expect(afterWeek1).toEqual({ email: "found@contactpersist.example", contactUrl: "https://contactpersist.example/about" });
+
+    // Week 2: the same person resurfaces with no email this time, alongside a genuinely fresh
+    // candidate so the write actually runs (a batch with nothing fresh writes nothing at all).
+    const other: HireCandidate = { ...base, name: "Other Fresh", profileUrl: "https://contactpersist.example/other", email: null, contactUrl: null };
+    await rememberCandidates(env, [{ ...base, email: null, contactUrl: null }, other], "2026-W51", "wc_persist_2", new Date("2026-12-21T00:00:00.000Z"));
+    const afterWeek2 = await env.WP_OS_DB.prepare("SELECT email, contact_url AS contactUrl FROM productions_candidate WHERE url = ?1").bind(url).first<{ email: string; contactUrl: string }>();
+    expect(afterWeek2, "a page-backed contact already on file must not be erased by a week that found nothing new").toEqual({ email: "found@contactpersist.example", contactUrl: "https://contactpersist.example/about" });
+
+    // This describe runs before "the weekly card on Walker's desk", which asserts an exact,
+    // otherwise-clean set of rows in productions_candidate — leave the table as this block found it.
+    await env.WP_OS_DB.prepare("DELETE FROM productions_candidate WHERE url IN (?1, ?2)").bind(url, "https://contactpersist.example/other").run();
   });
 });
 
@@ -312,7 +392,7 @@ describe("the weekly card on Walker's desk", () => {
 
     // The summary above the note renders clean through the formatter and names the top pick.
     const { hireSummary } = await import("../src/worker/services/productionsHire");
-    const rows = (await env.WP_OS_DB.prepare("SELECT name, title, company, city, url AS profileUrl, evidence_url AS evidenceUrl, why, opening_line AS openingLine, fit_score AS fit FROM productions_candidate WHERE last_card_id = ?1 ORDER BY fit_score DESC").bind(cardId).all<{ name: string; title: string; company: string; city: string; profileUrl: string; evidenceUrl: string | null; why: string; openingLine: string; fit: number }>()).results!;
+    const rows = (await env.WP_OS_DB.prepare("SELECT name, title, company, city, url AS profileUrl, evidence_url AS evidenceUrl, email, contact_url AS contactUrl, why, opening_line AS openingLine, fit_score AS fit FROM productions_candidate WHERE last_card_id = ?1 ORDER BY fit_score DESC").bind(cardId).all<{ name: string; title: string; company: string; city: string; profileUrl: string; evidenceUrl: string | null; email: string | null; contactUrl: string | null; why: string; openingLine: string; fit: number }>()).results!;
     const summary = hireSummary("2026-W39", rows, [], [], []);
     const rendered = renderExecEmail({ employee: "Walker", ...summary, details: dlv!.body });
     expect(lintExecEmail(rendered.subject, rendered.text, "Walker")).toEqual([]);
@@ -333,6 +413,26 @@ describe("the weekly card on Walker's desk", () => {
     const done = await env.WP_OS_DB.prepare("SELECT state, description FROM work_card WHERE id = ?1").bind(cardId).first<{ state: string; description: string }>();
     expect(done!.state).toBe("DONE");
     expect(done!.description).toMatch(/Deliverable dlv_/);
+  });
+
+  it("carries a found contact method end to end: search prompt → parse → note → the row remembered", async () => {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE kind = 'PRODUCTIONS_HIRE_SEARCH'").run();
+    await env.WP_OS_DB.prepare("DELETE FROM productions_candidate WHERE url = 'https://withcontact.example/x'").run();
+    const opened = await openHireSearchCard(env, new Date("2026-11-09T14:00:00.000Z"));
+    const withContact = JSON.stringify({
+      results: [
+        { name: "With Contact", title: "Executive Producer", company: "Freelance", city: "Denver, CO", profile_url: "https://withcontact.example/x", why: "Site lists sponsorship deals sold for three festivals.", opening_line: "hi", fit: 8, email: "with@contact.example", contact_url: "https://withcontact.example/about" },
+      ],
+    });
+    const out = await sweepOnce(env, new Date("2026-11-09T14:05:00.000Z"), {
+      productionsHire: (e, card) => runHireSearchCard(e, card, { search: async () => ({ ok: true, text: withContact, detail: "ok" }), judge, urlStatus: statusOf, now: new Date("2026-11-09T14:05:00.000Z") }),
+    });
+    expect(out.card?.id).toBe(opened.cardId);
+    expect(out.outcome, out.summary).toBe("DONE");
+    const dlv = await env.WP_OS_DB.prepare("SELECT body FROM deliverable WHERE source_id = ?1").bind(opened.cardId).first<{ body: string }>();
+    expect(dlv!.body).toMatch(/Contact: with@contact\.example — from https:\/\/withcontact\.example\/about/);
+    const row = await env.WP_OS_DB.prepare("SELECT email, contact_url AS contactUrl FROM productions_candidate WHERE url = ?1").bind("https://withcontact.example/x").first<{ email: string; contactUrl: string }>();
+    expect(row).toEqual({ email: "with@contact.example", contactUrl: "https://withcontact.example/about" });
   });
 
   it("THE ONLY OUTBOUND IS TO scooter@: with a real transport stubbed, one send, to him, and no request to any candidate page beyond a status check", async () => {

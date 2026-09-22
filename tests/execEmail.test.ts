@@ -78,8 +78,8 @@ function everyKind(): Array<{ name: string; input: ExecEmailInput }> {
       name: "Walker: weekly hire search",
       input: (() => {
         const fresh: HireCandidate[] = [
-          { name: "Jordan Example", title: "Senior Experiential Producer (freelance)", company: "Independent", city: "Brooklyn, NY", profileUrl: "https://linkedin.com/in/jordan-example", evidenceUrl: "https://agency.example/team/jordan", why: "Team page lists 12 brand activations produced end to end.\nBio says freelance since 2023 and names two sponsorship deals closed.", openingLine: "Your Nike House of Innovation build is the kind of thing we want more of.", fit: 8, profileCheck: "refused" },
-          { name: "Sam Sample", title: "Executive Producer", company: "Freelance", city: "Los Angeles, CA", profileUrl: "https://samsample.example", evidenceUrl: null, why: "Portfolio shows brand partnerships sold and produced.", openingLine: "Loved the Coachella activation.", fit: 7, profileCheck: "live" },
+          { name: "Jordan Example", title: "Senior Experiential Producer (freelance)", company: "Independent", city: "Brooklyn, NY", profileUrl: "https://linkedin.com/in/jordan-example", evidenceUrl: "https://agency.example/team/jordan", why: "Team page lists 12 brand activations produced end to end.\nBio says freelance since 2023 and names two sponsorship deals closed.", openingLine: "Your Nike House of Innovation build is the kind of thing we want more of.", fit: 8, profileCheck: "refused", email: "jordan@jordanexample.example", contactUrl: "https://jordanexample.example/about" },
+          { name: "Sam Sample", title: "Executive Producer", company: "Freelance", city: "Los Angeles, CA", profileUrl: "https://samsample.example", evidenceUrl: null, why: "Portfolio shows brand partnerships sold and produced.", openingLine: "Loved the Coachella activation.", fit: 7, profileCheck: "live", email: null, contactUrl: null },
         ];
         const seen = [{ ...fresh[1]!, firstSeen: "2026-09-14T14:00:00.000Z" }];
         // No "acted on" list any more: the two statuses Scooter used to set are retired, so the
