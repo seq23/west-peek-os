@@ -48,6 +48,26 @@ violations) on breach and proves its own detection with a self-test fixture run.
   dispatch, and holds them to one list in both directions; hard-fails on zero kinds or scripts;
   `--self-test` plants a missing script, an unregistered duty, a claimer without the kind, a sweep
   without the dispatch, a prompt file without a phase and a script without `run()`.
+- `an-effect-cannot-refetch-itself.mjs` (`npm run validate:effect-refetch`, 22 Sep 2026) — a
+  `useEffect` that WRITES may not depend on something a write changes the identity of. Wave F (#163)
+  made every accepted mutation call `invalidateAll()` and every `useApi` subscribe to it — the right
+  design — and that turned one pre-existing line in `App.tsx` into an unbounded loop:
+  `const authed = me.status === 200 && me.data` evaluates to the `/api/me` RESPONSE BODY, not a
+  boolean, and it was a dependency of the effect that POSTs `/api/mp-home/visited`. The POST
+  invalidated everything, `me.data` came back as a new object, React saw a changed dependency, and
+  the effect fired again — 182 writes for one page view, `useApi` holding `loading: true` throughout,
+  so EVERY surface in the client sat on its loading text and never settled. Twenty-eight Playwright
+  journeys red on `main` across employee lounge, fund strategy, notifications, duty roster and the
+  design-state sweeps, none of which had changed. Nothing caught it because every part was correct
+  alone; only the combination loops. The scan reads every `useEffect(..., [deps])` under `src/client`
+  whose body calls `api(...)` with a non-GET method, and refuses a dependency that is a `useApi`
+  response body (`x.data`) or a same-file alias for one whose initialiser mentions `.data` without
+  coercing it (`Boolean(…)`, `!== null`, `.length`, a field read). A write keyed on a stable
+  primitive — `HomePage.tsx`'s `[home.status]` — passes; the rule is about identity, not about
+  writing from an effect. Hard-fails on zero client files or zero writing effects. `--self-test`
+  runs the real 22 Sep line through it, plus a bare `me.data` dependency, a ternary alias, a writing
+  effect with no dependency array, the shipped boolean form (must pass), `HomePage`'s real shape
+  (must pass), a GET-only effect (not its business), and a commented-out copy of the old line.
 - `a-switch-is-a-switch-on-both-sides.mjs` (`npm run validate:kind-rule-switches`, 22 Sep 2026) — a
   `work_kind_rule` row that is a switch is a switch in BOTH places that decide. The Work page and
   `handleSetWorkKindRule` each had `"land_on_green"` typed into them separately, so migration 0223's

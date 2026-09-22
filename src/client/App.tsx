@@ -2805,7 +2805,8 @@ function roomArrivedArmed(): boolean {
 
 export function RoomStandalone({ meetingId }: { meetingId: string }): JSX.Element {
   const me = useApi<MeResponse>("/api/me");
-  const authed = me.status === 200 && me.data;
+  // A boolean, not the response body — see the note on `authed` in `Shell` below.
+  const authed = me.status === 200 && me.data !== null;
   const armed = typeof window !== "undefined" && roomArrivedArmed();
   return (
     <main className="surface-body room-standalone-shell" id="wp-surface" data-testid="room-standalone">
@@ -2927,7 +2928,18 @@ function Shell() {
   const activeItem = NAV_ITEMS.find((n) => n.key === active) ?? NAV_FALLBACK;
 
   const refresh = useCallback(() => setRefreshNonce((n) => n + 1), []);
-  const authed = me.status === 200 && me.data;
+  /*
+   * A BOOLEAN, NOT THE BODY. `me.status === 200 && me.data` evaluates to the RESPONSE OBJECT, and
+   * an object is a new identity on every refetch. That was harmless while `useApi` only fetched on
+   * mount; Wave F (#163) made every accepted mutation call `invalidateAll()`, which refetches every
+   * `useApi` in the client — including this `/api/me`. The visit-mark effect below depends on
+   * `authed`, so a fresh `me.data` object re-ran it, its POST invalidated everything again, and the
+   * client entered an unbounded POST → invalidate → refetch → POST loop. `useApi` sets
+   * `loading: true` on each reload, so EVERY surface sat on its loading text forever — 28 Playwright
+   * journeys red on main, 22 Sep 2026, and 182 `/api/mp-home/visited` writes for one page view.
+   * Guarded by `npm run validate:effect-refetch`.
+   */
+  const authed = me.status === 200 && me.data !== null;
 
   /*
    * VISITING A PAGE IS LOOKING AT IT. Home's "Who has something for you" counts what is new since
