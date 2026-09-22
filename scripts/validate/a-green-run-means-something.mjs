@@ -60,7 +60,15 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const E2E_DIR = path.join(ROOT, "e2e");
 const CONFIG = path.join(ROOT, "playwright.config.ts");
-const WORKFLOW = path.join(ROOT, ".github", "workflows", "ci.yml");
+// THE JOURNEYS MOVED (21 Sep 2026). `ci.yml` is the merge gate — typecheck, the vitest suite in
+// shards, the validators, the build — and the Playwright journeys run after the merge in
+// `playwright.yml`. `deploy.yml` fires on the gate alone. All three are read here, because the
+// shape is a set of promises that can each drift on its own: the journeys could stop running on
+// main, the gate could quietly grow them back, a shard could be dropped, the deploy could start
+// waiting on the journeys again (or on nothing).
+const WORKFLOW = path.join(ROOT, ".github", "workflows", "playwright.yml");
+const GATE = path.join(ROOT, ".github", "workflows", "ci.yml");
+const DEPLOY = path.join(ROOT, ".github", "workflows", "deploy.yml");
 const CLIENT_DIR = path.join(ROOT, "src", "client");
 
 /**
@@ -222,15 +230,37 @@ function clientFiles(dir = CLIENT_DIR, prefix = "") {
 export function checkWorkflow(raw) {
   const bad = [];
   const source = withoutComments(raw);
+  // The trigger block: from `on:` to the next top-level key.
+  const onStart = source.search(/^on:\s*$/m);
+  if (onStart === -1) {
+    bad.push("playwright.yml has no `on:` block — nothing triggers the journeys, which is Rule 0");
+  } else {
+    const afterOn = source.slice(onStart + 3);
+    const nextKey = afterOn.search(/\n[a-z][a-z0-9-]*:/);
+    const on = nextKey === -1 ? afterOn : afterOn.slice(0, nextKey);
+    if (!/push:\s*\n\s+branches:\s*(\[\s*main\s*\]|\n\s+-\s*main\b)/.test(on)) {
+      bad.push(
+        "playwright.yml does not run on `push` to `main` — the journeys would never run on the merge commit, " +
+          "which is the one commit whose behaviour ships",
+      );
+    }
+    if (/\bpull_request\b/.test(on)) {
+      bad.push(
+        "playwright.yml is triggered by `pull_request` — the journeys are post-merge by the owner's decision of " +
+          "21 Sep 2026 (a ~5-minute gate, long suites on main); running them on every PR is the ~9 minutes " +
+          "per PR that decision removed",
+      );
+    }
+  }
   const jobStart = source.indexOf("\n  e2e:");
   if (jobStart === -1) {
-    return ["ci.yml has no `e2e:` job — the journeys are not run by CI at all, which is Rule 0"];
+    bad.push(...["playwright.yml has no `e2e:` job — the journeys are not run by CI at all, which is Rule 0"]);
+    return bad;
   }
   // The job runs to the next top-level job key (two-space indent) or to the end of the file.
   const rest = source.slice(jobStart + 1);
   const nextJob = rest.slice(1).search(/\n {2}[a-z][a-z0-9-]*:\s*\n/);
   const job = nextJob === -1 ? rest : rest.slice(0, nextJob + 1);
-
   if (/npm run e2e\s*\|\|/.test(job)) {
     bad.push(
       "the e2e job runs `npm run e2e ||` — a shell `||` cannot tell a `workerd` crash from a wrong " +
@@ -241,27 +271,24 @@ export function checkWorkflow(raw) {
   if (/continue-on-error\s*:\s*true/.test(job)) {
     bad.push("the e2e job sets `continue-on-error: true` — the journeys then cannot fail the build");
   }
-  /*
-   * `if: always()` is CORRECT on the step that uploads the Playwright report — a failed run is
-   * exactly when somebody needs the trace. It is never correct on a step that RUNS the suite, which
-   * would let a second invocation report success over the first one's failure. So the rule is
-   * scoped to steps that invoke the suite, not to the word.
-   */
+  if (/^\s+if\s*:\s*.*\bpull_request\b/m.test(job) || /^\s+if\s*:\s*github\.event_name\s*[!=]=/m.test(job)) {
+    bad.push("the e2e job is conditioned on the event that triggered it — a job that runs only sometimes is a gate only sometimes");
+  }
   for (const step of job.split(/\n(?=\s*- )/)) {
     if (/npm run e2e\b/.test(step) && /if\s*:\s*(\$\{\{\s*)?always\(\)/.test(step)) {
       bad.push("a step that runs the journeys is conditioned on `always()` — it would report over an earlier failure");
     }
   }
-  /*
-   * THE SECOND PASS MAY BE SKIPPED ONLY ON A PULL REQUEST (19 Sep 2026). A PR run previews the
-   * claim; the push to main makes it in full. So the only permitted guard around a second
-   * invocation is `GITHUB_EVENT_NAME = "pull_request"` — a guard on anything else (a branch name,
-   * an input, `always()`) is a way to never run it twice, which is the defect this file exists for.
-   */
+  // NO PASS IS GUARDED ANY MORE. Until 21 Sep 2026 the second pass was allowed to skip on
+  // `pull_request`; there is no pull-request run now, so a guard on any pass is either dead code
+  // (a guard that cannot reach what it governs) or a way to skip the claim. Either is a defect.
   for (const m of job.matchAll(/\bif\s*\[[^\n]*\n([\s\S]*?)\n\s*fi\b/g)) {
-    const guard = m[0].split("\n")[0];
-    if (/npm run e2e\b/.test(m[1]) && !/pull_request/.test(guard)) {
-      bad.push("a second `npm run e2e` is guarded on something other than `pull_request` — main would not run it twice");
+    if (/npm run e2e\b/.test(m[1])) {
+      bad.push(
+        "a `npm run e2e` sits inside a shell `if [ … ]` — every run of this workflow is the claim about what " +
+          "shipped, and both passes run unconditionally. (The `workerd` crash re-run is `if grep`, on the " +
+          "crash's own signature, and is the one retry allowed.)",
+      );
     }
   }
   const runs = (job.match(/npm run e2e\b/g) ?? []).length;
@@ -275,71 +302,186 @@ export function checkWorkflow(raw) {
   return bad;
 }
 
+/**
+ * The merge gate (`ci.yml`). What can go wrong here is quieter than a lying journey: the
+ * journeys can creep back in (every PR pays them again, and the deploy that waits on CI waits on
+ * them again); the suite can be sharded `/4` against a three-entry matrix and a quarter of the
+ * files never run anywhere; a shard can exit 0 having found no files; a job can lose its
+ * ceiling and hang for six hours. None of those goes red on its own.
+ */
+export function checkGate(raw) {
+  const bad = [];
+  const source = withoutComments(raw);
+  if (/npm run e2e\b/.test(source)) {
+    bad.push(
+      "ci.yml runs `npm run e2e` — the journeys are back in the merge gate. They run post-merge in " +
+        "playwright.yml (owner, 21 Sep 2026); here they cost every PR ~9 minutes and make the deploy wait",
+    );
+  }
+  const matrix = /^\s+shard:\s*\[([^\]]*)\]/m.exec(source);
+  const divisors = [...source.matchAll(/--shard=\$\{\{\s*matrix\.shard\s*\}\}\/(\d+)/g)].map((m) => Number(m[1]));
+  if (!matrix || divisors.length === 0) {
+    bad.push(
+      "ci.yml no longer shards the vitest suite (no `shard: [..]` matrix with a `--shard=${{ matrix.shard }}/N` " +
+        "step) — the 16-minute serial suite is back in the gate",
+    );
+  } else {
+    const entries = matrix[1].split(",").map((x) => Number(x.trim())).filter((x) => !Number.isNaN(x));
+    const expected = entries.length;
+    const ok = entries.every((v, i) => v === i + 1);
+    if (!ok) {
+      bad.push(`the shard matrix is [${matrix[1].trim()}] — it must be exactly 1..${expected}, or some slice of the suite never runs`);
+    }
+    for (const n of divisors) {
+      if (n !== expected) {
+        bad.push(
+          `the tests step splits the suite \`/${n}\` but the matrix has ${expected} entr${expected === 1 ? "y" : "ies"} — ` +
+            `${n > expected ? "some files run NOWHERE" : "some files run twice and the split is a lie"}`,
+        );
+      }
+    }
+  }
+  if (!source.includes("Test Files +[0-9]+ passed")) {
+    bad.push(
+      "the tests step no longer reads vitest's `Test Files N passed` line back — a shard that ran no files " +
+        "would exit 0 and count as green (Rule 0)",
+    );
+  }
+  // Every job carries a ceiling. Jobs are the two-space-indented keys under `jobs:`.
+  const jobsStart = source.search(/^jobs:\s*$/m);
+  const jobsBlock = jobsStart === -1 ? "" : source.slice(jobsStart);
+  const jobBlocks = jobsBlock.split(/\n(?= {2}[a-z][a-z0-9-]*:\s*\n)/).slice(1);
+  if (jobBlocks.length === 0) bad.push("ci.yml has no jobs — Rule 0");
+  for (const block of jobBlocks) {
+    const name = block.trim().split(":")[0];
+    if (!/^\s+timeout-minutes:\s*\d+/m.test(block)) {
+      bad.push(`job \`${name}\` has no \`timeout-minutes\` — a hang there is reported after GitHub's six-hour default`);
+    }
+  }
+  return bad;
+}
+
+/** The deploy fires on the gate, and only the gate. */
+export function checkDeploy(raw) {
+  const bad = [];
+  const source = withoutComments(raw);
+  const m = /workflow_run:\s*\n\s+workflows:\s*\[([^\]]*)\]/.exec(source);
+  if (!m) {
+    bad.push("deploy.yml has no `workflow_run: workflows: [..]` trigger — nothing deploys a green main");
+    return bad;
+  }
+  const names = m[1].split(",").map((x) => x.trim().replace(/^["']|["']$/g, ""));
+  if (!names.includes("CI")) bad.push(`deploy.yml waits on [${names.join(", ")}] — it must fire on the merge gate, \`CI\``);
+  if (names.includes("Playwright")) {
+    bad.push("deploy.yml waits on `Playwright` — the deploy does not wait the journeys out (owner, 21 Sep 2026)");
+  }
+  return bad;
+}
+
 function selfTest() {
   const failures = [];
+  let cases = 0;
   const expectCaught = (label, bad) => {
+    cases += 1;
     if (bad.length === 0) failures.push(`NOT CAUGHT: ${label}`);
   };
   const expectClean = (label, bad) => {
+    cases += 1;
     if (bad.length > 0) failures.push(`FALSE POSITIVE on ${label}: ${bad.join(" / ")}`);
   };
+  const PW_ON = "name: Playwright\non:\n  push:\n    branches: [main]\n  workflow_dispatch:\n\njobs:";
 
-  // The real line, as it stood on origin/main before this change.
+  // The real line, as it stood on origin/main before 18 Sep 2026.
   expectCaught(
     "the shipped `npm run e2e || retry` step",
     checkWorkflow(
-      "\n  e2e:\n    name: Playwright journeys\n    steps:\n      - name: Playwright journeys\n" +
+      PW_ON + "\n  e2e:\n    name: Playwright journeys\n    steps:\n      - name: Playwright journeys\n" +
         '        run: npm run e2e || (echo "::warning::wrangler dev crashed or a journey failed — retrying the whole suite once" && npm run e2e)\n',
     ),
   );
   expectCaught(
     "a single run with no second pass",
-    checkWorkflow("\n  e2e:\n    steps:\n      - name: Playwright journeys\n        run: npm run e2e\n"),
+    checkWorkflow(PW_ON + "\n  e2e:\n    steps:\n      - name: Playwright journeys\n        run: npm run e2e\n"),
   );
   expectCaught(
     "continue-on-error on the journeys",
-    checkWorkflow(
-      "\n  e2e:\n    continue-on-error: true\n    steps:\n      - run: npm run e2e\n      - run: npm run e2e\n",
-    ),
+    checkWorkflow(PW_ON + "\n  e2e:\n    continue-on-error: true\n    steps:\n      - run: npm run e2e\n      - run: npm run e2e\n"),
   );
-  expectCaught("no e2e job at all", checkWorkflow("\n  build:\n    steps:\n      - run: npm run build\n"));
+  expectCaught("no e2e job at all", checkWorkflow(PW_ON + "\n  build:\n    steps:\n      - run: npm run build\n"));
   expectClean(
     "two runs that both have to pass",
-    checkWorkflow("\n  e2e:\n    steps:\n      - name: Playwright journeys\n        run: npm run e2e && npm run e2e\n"),
+    checkWorkflow(PW_ON + "\n  e2e:\n    steps:\n      - name: Playwright journeys\n        run: npm run e2e && npm run e2e\n"),
   );
   expectClean(
     "a report upload conditioned on always(), which is where always() belongs",
     checkWorkflow(
-      "\n  e2e:\n    steps:\n      - run: npm run e2e\n      - run: npm run e2e\n" +
+      PW_ON + "\n  e2e:\n    steps:\n      - run: npm run e2e\n      - run: npm run e2e\n" +
         "      - name: Upload the report\n        if: always()\n        uses: actions/upload-artifact@v4\n",
     ),
   );
   expectCaught(
     "a second suite run conditioned on always(), which is not",
-    checkWorkflow(
-      "\n  e2e:\n    steps:\n      - run: npm run e2e\n      - name: Again\n        if: always()\n        run: npm run e2e\n",
-    ),
+    checkWorkflow(PW_ON + "\n  e2e:\n    steps:\n      - run: npm run e2e\n      - name: Again\n        if: always()\n        run: npm run e2e\n"),
   );
   expectClean(
     "a job whose COMMENTS quote the forbidden line while its commands do not",
     checkWorkflow(
-      "\n  e2e:\n    steps:\n      # this used to be `npm run e2e || (… && npm run e2e)` and `if: always()`\n" +
+      PW_ON + "\n  e2e:\n    steps:\n      # this used to be `npm run e2e || (… && npm run e2e)` and `if: always()`\n" +
         "      - run: npm run e2e && npm run e2e\n",
     ),
   );
   expectCaught(
-    "a second pass guarded on a branch name instead of pull_request",
+    "a second pass guarded on a branch name",
     checkWorkflow(
-      "\n  e2e:\n    steps:\n      - run: |\n          npm run e2e\n          if [ \"$GITHUB_REF\" = \"refs/heads/main\" ]; then\n            npm run e2e\n          fi\n",
+      PW_ON + "\n  e2e:\n    steps:\n      - run: |\n          npm run e2e\n          if [ \"$GITHUB_REF\" = \"refs/heads/main\" ]; then\n            npm run e2e\n          fi\n",
+    ),
+  );
+  // Allowed until 21 Sep 2026, when the journeys still ran on pull requests. Not any more: there
+  // is no pull-request run, so this guard is dead code around the claim that matters.
+  expectCaught(
+    "the old second pass skipped on pull_request",
+    checkWorkflow(
+      PW_ON + "\n  e2e:\n    steps:\n      - run: |\n          npm run e2e\n          if [ \"${GITHUB_EVENT_NAME:-}\" = \"pull_request\" ]; then\n            echo skipped\n          else\n            npm run e2e\n          fi\n",
     ),
   );
   expectClean(
-    "a second pass skipped only on pull_request",
+    "the crash re-run under `if grep` on workerd's own signature, then the second pass",
     checkWorkflow(
-      "\n  e2e:\n    steps:\n      - run: |\n          npm run e2e\n          if [ \"${GITHUB_EVENT_NAME:-}\" = \"pull_request\" ]; then\n            echo skipped\n          else\n            npm run e2e\n          fi\n",
+      PW_ON + "\n  e2e:\n    steps:\n      - run: |\n          if ! npm run e2e 2>&1 | tee log; then\n" +
+        "            if grep -qiE 'workers-sdk' log; then\n              npm run e2e\n            else\n              exit 1\n            fi\n          fi\n          npm run e2e\n",
     ),
   );
-
+  expectCaught(
+    "the journeys triggered by pull_request",
+    checkWorkflow("name: Playwright\non:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\n\njobs:\n  e2e:\n    steps:\n      - run: npm run e2e && npm run e2e\n"),
+  );
+  expectCaught(
+    "the journeys not triggered by a push to main",
+    checkWorkflow("name: Playwright\non:\n  workflow_dispatch:\n\njobs:\n  e2e:\n    steps:\n      - run: npm run e2e && npm run e2e\n"),
+  );
+  expectCaught(
+    "the e2e job conditioned on the event name (boss-os's shape, where the journeys share the gate's run)",
+    checkWorkflow(PW_ON + "\n  e2e:\n    if: github.event_name != 'pull_request'\n    steps:\n      - run: npm run e2e && npm run e2e\n"),
+  );
+  const GATE_OK =
+    "name: CI\non:\n  push:\n    branches: [main]\njobs:\n  typecheck:\n    timeout-minutes: 5\n    steps:\n      - run: npm run typecheck\n" +
+    "  tests:\n    timeout-minutes: 20\n    strategy:\n      matrix:\n        shard: [1, 2, 3, 4]\n    steps:\n      - run: |\n" +
+    "          npx vitest run --no-file-parallelism --shard=${{ matrix.shard }}/4 2>&1 | tee log\n" +
+    "          files=\"$(grep -oE 'Test Files +[0-9]+ passed' log | grep -oE '[0-9]+' | head -1)\"\n" +
+    "  gate:\n    needs: [typecheck, tests]\n    timeout-minutes: 2\n    steps:\n      - run: echo ok\n";
+  expectClean("the shipped gate shape", checkGate(GATE_OK));
+  expectCaught("the journeys back in the gate", checkGate(GATE_OK + "  e2e:\n    timeout-minutes: 45\n    steps:\n      - run: npm run e2e && npm run e2e\n"));
+  expectCaught("a /4 split over a three-entry matrix (a quarter of the suite runs nowhere)", checkGate(GATE_OK.replace("shard: [1, 2, 3, 4]", "shard: [1, 2, 3]")));
+  expectCaught("a /3 split over a four-entry matrix (files run twice, the split is a lie)", checkGate(GATE_OK.replace("}}/4", "}}/3")));
+  expectCaught("a matrix that is not 1..N", checkGate(GATE_OK.replace("shard: [1, 2, 3, 4]", "shard: [1, 2, 4, 4]")));
+  expectCaught("the suite unsharded again", checkGate(GATE_OK.replace("shard: [1, 2, 3, 4]", "os: [ubuntu]").replace(" --shard=${{ matrix.shard }}/4", "")));
+  expectCaught("a shard that no longer proves it ran a file", checkGate(GATE_OK.replace("Test Files +[0-9]+ passed", "Tests +[0-9]+")));
+  expectCaught("a job without a ceiling", checkGate(GATE_OK.replace("  gate:\n    needs: [typecheck, tests]\n    timeout-minutes: 2\n", "  gate:\n    needs: [typecheck, tests]\n")));
+  expectCaught("a shard count only ever mentioned in a comment", checkGate(GATE_OK.replace("shard: [1, 2, 3, 4]", "# shard: [1, 2, 3, 4]")));
+  expectClean("the shipped deploy trigger", checkDeploy("name: Deploy\non:\n  workflow_run:\n    workflows: [CI]\n    types: [completed]\n"));
+  expectCaught("a deploy that waits on the journeys", checkDeploy("name: Deploy\non:\n  workflow_run:\n    workflows: [CI, Playwright]\n    types: [completed]\n"));
+  expectCaught("a deploy that waits on nothing", checkDeploy("name: Deploy\non:\n  workflow_dispatch:\n"));
+  expectCaught("a deploy that waits on the wrong workflow", checkDeploy("name: Deploy\non:\n  workflow_run:\n    workflows: [Playwright]\n"));
   expectCaught("retries: 1 in the config", checkConfig("export default defineConfig({\n  retries: 1,\n  workers: 1,\n"));
   expectCaught("parallel workers over one D1", checkConfig("export default defineConfig({\n  retries: 0,\n  workers: 4,\n"));
   expectClean("the shipped config shape", checkConfig("export default defineConfig({\n  retries: 0,\n  workers: 1,\n"));
@@ -370,8 +512,9 @@ function selfTest() {
     process.exit(1);
   }
   console.log(
-    "A-GREEN-RUN-MEANS-SOMETHING SELF-TEST PASSED: 24 case(s), including the real `npm run e2e || retry` " +
-      "line as it stood on origin/main, every one caught or cleared as intended.",
+    `A-GREEN-RUN-MEANS-SOMETHING SELF-TEST PASSED: ${cases} case(s), including the real \`npm run e2e || retry\` ` +
+      "line as it stood on origin/main and the shard/matrix mismatches that would run a quarter of the suite " +
+      "nowhere, every one caught or cleared as intended.",
   );
 }
 
@@ -427,11 +570,19 @@ function main() {
     process.exit(1);
   }
 
-  if (!existsSync(WORKFLOW)) {
-    console.error("A-GREEN-RUN-MEANS-SOMETHING SCAN FAILED — no .github/workflows/ci.yml to check. Rule 0.");
-    process.exit(1);
+  for (const [file, label] of [
+    [WORKFLOW, "playwright.yml (the journeys)"],
+    [GATE, "ci.yml (the merge gate)"],
+    [DEPLOY, "deploy.yml (the deploy)"],
+  ]) {
+    if (!existsSync(file)) {
+      console.error(`A-GREEN-RUN-MEANS-SOMETHING SCAN FAILED — no .github/workflows/${label} to check. Rule 0.`);
+      process.exit(1);
+    }
   }
   bad.push(...checkWorkflow(readFileSync(WORKFLOW, "utf8")));
+  bad.push(...checkGate(readFileSync(GATE, "utf8")));
+  bad.push(...checkDeploy(readFileSync(DEPLOY, "utf8")));
 
   if (bad.length > 0) {
     console.error("A-GREEN-RUN-MEANS-SOMETHING SCAN FAILED — something here lets a red run look green:");
@@ -450,8 +601,9 @@ function main() {
     `A-GREEN-RUN-MEANS-SOMETHING SCAN PASSED: ${specs.length} spec file(s) and ${files.length - specs.length} ` +
       `support file(s) under e2e/, ${expectations} assertion(s), 0 excused; retries 0 and workers 1; ` +
       `${sleeps} inventoried sleep(s) and no new ones; ${loadingRowsExamined} list(s) that draw an empty ` +
-      "row after loading, every one with a loading row in the same slot; the CI job runs the whole suite " +
-      "twice and needs both.",
+      "row after loading, every one with a loading row in the same slot; playwright.yml runs the whole suite " +
+      "twice on every push to main and needs both; ci.yml is the gate, sharded to its matrix, every shard proving " +
+      "it ran files and every job under a ceiling; deploy.yml fires on the gate alone.",
   );
 }
 

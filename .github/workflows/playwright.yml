@@ -1,0 +1,134 @@
+# West Peek OS — the Playwright journeys, AFTER the merge.
+#
+# WHY THIS IS ITS OWN WORKFLOW. Until 21 Sep 2026 the journeys ran inside `ci.yml` on every pull
+# request (~9 minutes, beside a 17-minute serial test job) and again on the merge commit, and
+# `deploy.yml` waited for the whole of CI — journeys included — before shipping. The owner's rule
+# is a merge gate of about five minutes with the long suites post-merge, and her decision the
+# same day was that a commit the gate has proved ships WITHOUT waiting the journeys out. So:
+#
+#   · This runs on `push` to `main` (the merge commit) and on demand. Never on a pull request.
+#   · `deploy.yml` fires on `CI` (the gate), not on this. A red run here is a NAMED RED on main
+#     for the CI sweep or the next session to root-cause — it never un-ships, and it never blocks
+#     the next gate-proven commit.
+#   · The suite runs TWICE from a clean database and both passes must succeed. There is no
+#     pull-request short-cut any more, because there is no pull-request run: every run here is
+#     the real claim about what shipped. `validate:green-means-something` reads this file and
+#     hard-fails if the second pass is ever guarded, retried on `||`, or excused.
+#
+# `concurrency` cancels a run that a later merge has superseded — the later run proves the later
+# commit, and the earlier commit is contained in it.
+name: Playwright
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: playwright-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: Playwright journeys
+    runs-on: ubuntu-latest
+    # Normal: ~18 minutes for both passes on run 35671568021; a workerd crash re-runs the first
+    # pass, so a real run can reach ~27. The ceiling is a fault detector, never a budget.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install (reproducible, from package-lock)
+        run: npm ci
+
+      # `--with-deps` runs `apt-get update`, which on a GitHub runner consults Google's own Chrome
+      # apt repository — a third-party source this job does not need and does not use. On 9 Sep 2026
+      # that repository served a corrupt index and `apt` failed the whole step twice in a row with
+      # "Hash Sum mismatch ... dl.google.com/linux/chrome-stable", before a single journey ran.
+      #
+      # Playwright ships its OWN Chromium build; `--with-deps` only wants shared libraries, and
+      # those come from Ubuntu's repositories. So the fix is to stop apt consulting a source that
+      # has nothing to do with this build, rather than to tolerate the failure.
+      #
+      # THIS IS NOT A WEAKENED GATE, and the distinction matters. There is no `continue-on-error`
+      # here, no `if: always()`, and nothing skipped: if the browser install genuinely fails, this
+      # step still fails and the job still fails. What changes is that an unrelated vendor's package
+      # index can no longer decide whether West Peek's journeys are allowed to run.
+      # Matched on CONTENT, not on a filename. The first attempt removed
+      # `google-chrome.list` by name and apt kept failing on the same URL, because the runner image
+      # declares the source somewhere else — a deb822 `.sources` file, or a differently named list.
+      # Grepping for the host finds it whatever it is called, and the step PRINTS what it removed so
+      # a silent no-op cannot masquerade as a fix.
+      - name: Remove the third-party apt source this job does not use
+        run: |
+          set -euo pipefail
+          found=$(sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list.d/ 2>/dev/null || true)
+          if [ -n "$found" ]; then
+            echo "Removing apt sources that point at dl.google.com:"
+            echo "$found"
+            echo "$found" | xargs -r sudo rm -f
+          else
+            echo "No apt source referencing dl.google.com is present; nothing to remove."
+          fi
+          # Ubuntu's own repositories are untouched and still have to work.
+          sudo apt-get update
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      # `npm run e2e` resets the local D1 and starts its own `wrangler dev --local` — offline,
+      # no credentials, safe to re-run back to back (AGENTS.md: "that is a hard requirement, not
+      # a nicety").
+      #
+      # THIS STEP USED TO BE `npm run e2e || (… && npm run e2e)`, AND THAT IS WHAT MADE A GREEN
+      # RUN WORTHLESS. The comment on it said the retry was for `wrangler dev` crashing and never
+      # for a failing assertion. A shell `||` cannot tell those apart — it retries on ANY non-zero
+      # exit. Measured on untouched origin/main on 18 Sep 2026, the suite failed 2 runs in 5; behind
+      # that `||` it reported green nearly nine times in ten, and the tenth got dismissed as
+      # "probably the flake". Eleven pull requests merged that day on the strength of this check.
+      #
+      # SO THE MEANING IS INVERTED, at the same wall clock the old retry already spent on a red run.
+      # The suite runs TWICE, each from a freshly reset database, and BOTH have to pass. One green
+      # run says almost nothing about a one-in-three failure; two independent clean runs is a claim
+      # worth reading. `&&` short-circuits, so a first-run failure still fails immediately.
+      #
+      # THE `workerd` CRASH THE OLD RETRY EXISTED FOR IS STILL HANDLED, and now only it. Observed
+      # twice on GitHub's Linux runners, never on macOS: an internal, message-less error ("please
+      # create an issue at workers-sdk") that drops the server and takes every later test down with
+      # ECONNREFUSED. The step below re-runs ONLY when that signature is in the output — matched on
+      # the crash, not on the exit code — so a journey that fails on its own merits fails the job,
+      # which is what the old comment claimed and the old code did not do.
+      #
+      # `npm run e2e` is deliberately named twice below rather than looped: `validate:green-means-
+      # something` counts the invocations in this job and hard-fails if the suite is run only once.
+      #
+      # TWICE, EVERY RUN. This job used to skip the second pass on a pull request (owner, 19 Sep
+      # 2026: "what is taking so long"). Since 21 Sep 2026 it does not run on pull requests at all —
+      # it runs on the merge commit and on demand — so every run is the claim about what shipped
+      # and every run makes both passes. `validate:green-means-something` pins this shape: two
+      # `npm run e2e` invocations that both have to pass, no guard on the second, and this
+      # workflow never triggered by `pull_request`.
+      - name: Playwright journeys — twice from a clean database
+        run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/e2e-1.log"
+          if ! npm run e2e 2>&1 | tee "$log"; then
+            if grep -qiE 'please create an issue at .*workers-sdk|internal error.*workerd' "$log"; then
+              echo "::warning::wrangler dev crashed (workerd internal error) — re-running the first pass"
+              npm run e2e
+            else
+              echo "::error::A journey failed on its own merits. This is NOT retried."
+              exit 1
+            fi
+          fi
+          npm run e2e

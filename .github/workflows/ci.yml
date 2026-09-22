@@ -1,14 +1,44 @@
 # West Peek OS — continuous validation.
 #
-# Runs the repo's real gate (typecheck, unit/integration tests, every static validator, the
-# client build, and the Playwright journeys) on every push and pull request against `main`.
+# Runs the repo's real gate (typecheck, unit/integration tests, every static validator, and the
+# client build) on every push and pull request against `main`.
+#
+# ─── THE SHAPE (21 Sep 2026) ────────────────────────────────────────────────
+#
+# THE MERGE GATE IS THE FAST HALF, RUN AS PARALLEL JOBS. Measured on run 35671568021 (the
+# merge commit of #154) the single serial `validate` job took 17m33s, of which the vitest suite
+# was 16m00s: 186 files, each booting its own Miniflare and D1 copy, run one file at a time
+# because parallel files exhausted the runner's ephemeral ports. The owner's rule
+# (~/.claude/CLAUDE.md, "CI time is a target, not a fact"): a merge gate of about five minutes,
+# and the long suites after the merge. So:
+#
+#   · `typecheck`   — npm ci + tsc. About a minute.
+#   · `tests`       — the vitest suite as FOUR SHARDS on four runners (`--shard=n/4`), each shard
+#                     still serial inside (`--no-file-parallelism`) so no shard can exhaust
+#                     its own ports. About 4–5 minutes a shard, side by side. Every shard has to
+#                     prove it ran something: a shard that exits 0 on zero test files is failed
+#                     by name (Rule 0). `validate:green-means-something` pins the shard count to
+#                     the matrix so a `/4` with a three-entry matrix cannot drop a quarter of the suite.
+#   · `validators`  — npm ci + every registered boundary scan + the client build. About 2–3 minutes.
+#   · `gate`        — a no-op that `needs` all three, so one check name means "the gate is green".
+#
+# The Playwright journeys are NOT here any more. They run after the merge, on `main` and on
+# demand, in `playwright.yml`. `deploy.yml` fires on THIS workflow's success, so a commit the
+# gate has proved ships without waiting the journeys out; a red journey on `main` is a named red
+# for the CI sweep or the next session, and never a reason a gate-proven commit sits undeployed.
+# That split is the owner's call, made 21 Sep 2026 after every PR paid ~9 minutes of Playwright
+# and the deploy then waited on it again.
+#
+# Every job carries `timeout-minutes` at roughly four times its normal wall time: a fault
+# detector that reports a hang inside the hour, never a budget a slow runner is expected to fit.
 #
 # Deliberately NOT in this workflow: a deploy step. BACKLOG.md records the decision already made
 # here — Cloudflare Workers Builds was connected on 14 Aug 2026 and switched off on 18 Aug 2026,
 # on purpose, because auto-deploy-on-push cannot run the safe migrate-then-deploy sequence
 # (`npm run deploy:production`) without a long-lived Cloudflare API token with D1 write access
 # living in the CI environment — real blast radius, for a firm that deploys from one laptop.
-# GitHub is source history and a validation gate. It is not the deploy mechanism.
+# GitHub is source history and a validation gate. The deploy is `deploy.yml`, on green `main`,
+# by the owner's later override (18 Sep 2026) recorded in that file.
 #
 # Also NOT here: `validate:value-shapes`. It queries production D1 directly
 # (`wrangler d1 execute --remote`) and needs the same production credentials this workflow
@@ -27,10 +57,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate:
-    name: Typecheck, tests, and boundary validators
+  typecheck:
+    name: Typecheck
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Normal: ~1 minute (install 9s, tsc 30s on run 35671568021).
+    timeout-minutes: 5
     permissions:
       contents: read
 
@@ -50,8 +81,81 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+  tests:
+    name: Unit and integration tests (shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    # Normal: ~4–5 minutes a shard (16m00s serial on run 35671568021, split four ways, plus install).
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install (reproducible, from package-lock)
+        run: npm ci
+
+      # `--shard` splits the FILE list across the matrix; `--no-file-parallelism` keeps each shard
+      # serial inside, because every file boots its own Miniflare on its own port and past ~8 in
+      # flight the runner runs out of ephemeral ports (vitest.config.ts). Four shards, one runner
+      # each: the parallelism is between jobs, never inside one.
+      #
+      # RULE 0: A SHARD THAT RAN NOTHING IS A FAILED SHARD. vitest's summary line is read back and
+      # the job fails unless at least one test file passed in this shard. Without this, a shard
+      # whose file list came up empty (a renamed `include`, a matrix wider than the suite) would
+      # exit 0 and the gate would count it green.
+      #
+      # READ WITHOUT COLOUR. On the first run of this shape (PR #155, shard 3/4) 47 files passed and
+      # the job failed here: vitest colours its summary on a TTY-less runner too, and the escape codes
+      # sit between "Test Files" and the number. NO_COLOR turns them off at the source, and the codes
+      # are stripped before the grep anyway, so a reporter change cannot fail a green shard again.
       - name: Unit and integration tests
-        run: npx vitest run --no-file-parallelism
+        env:
+          NO_COLOR: "1"
+        run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/vitest-shard-${{ matrix.shard }}.log"
+          npx vitest run --no-file-parallelism --shard=${{ matrix.shard }}/4 2>&1 | tee "$log"
+          rc=${PIPESTATUS[0]}
+          [ "$rc" -eq 0 ] || exit "$rc"
+          files="$(sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -oE 'Test Files +[0-9]+ passed' | grep -oE '[0-9]+' | head -1)"
+          if [ -z "$files" ] || [ "$files" -lt 1 ]; then
+            echo "::error::shard ${{ matrix.shard }}/4 exited 0 having run no test file — Rule 0, this is a failure"
+            exit 1
+          fi
+          echo "shard ${{ matrix.shard }}/4: $files test file(s) passed"
+
+  validators:
+    name: Boundary validators and client build
+    runs-on: ubuntu-latest
+    # Normal: ~2–3 minutes (install 9s, ~60 scans at 1–6s each, build 4s on run 35671568021).
+    timeout-minutes: 12
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install (reproducible, from package-lock)
+        run: npm ci
 
       # The governance boundary scans are part of the gate, not optional extras: they are what
       # keep authority, the AI boundary, cross-repo isolation, brand, design tokens, CSS
@@ -412,110 +516,17 @@ jobs:
       - name: Build client
         run: npm run build
 
-  e2e:
-    name: Playwright journeys
+  gate:
+    name: Merge gate
+    # ONE NAME FOR "THE GATE IS GREEN". `needs` all three, so a branch rule or a reader of
+    # `gh pr checks` has a single check to look at. `land` (~/bin) still reads every bucket
+    # of every check, so a failed shard is refused with or without this job.
+    needs: [typecheck, tests, validators]
     runs-on: ubuntu-latest
-    # Two full passes of the suite plus the browser install; the old single pass plus its retry
-    # already fitted in 30, and a timeout that trips is a red run nobody can read.
-    timeout-minutes: 45
+    timeout-minutes: 2
     permissions:
       contents: read
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install (reproducible, from package-lock)
-        run: npm ci
-
-      # `--with-deps` runs `apt-get update`, which on a GitHub runner consults Google's own Chrome
-      # apt repository — a third-party source this job does not need and does not use. On 9 Sep 2026
-      # that repository served a corrupt index and `apt` failed the whole step twice in a row with
-      # "Hash Sum mismatch ... dl.google.com/linux/chrome-stable", before a single journey ran.
-      #
-      # Playwright ships its OWN Chromium build; `--with-deps` only wants shared libraries, and
-      # those come from Ubuntu's repositories. So the fix is to stop apt consulting a source that
-      # has nothing to do with this build, rather than to tolerate the failure.
-      #
-      # THIS IS NOT A WEAKENED GATE, and the distinction matters. There is no `continue-on-error`
-      # here, no `if: always()`, and nothing skipped: if the browser install genuinely fails, this
-      # step still fails and the job still fails. What changes is that an unrelated vendor's package
-      # index can no longer decide whether West Peek's journeys are allowed to run.
-      # Matched on CONTENT, not on a filename. The first attempt removed
-      # `google-chrome.list` by name and apt kept failing on the same URL, because the runner image
-      # declares the source somewhere else — a deb822 `.sources` file, or a differently named list.
-      # Grepping for the host finds it whatever it is called, and the step PRINTS what it removed so
-      # a silent no-op cannot masquerade as a fix.
-      - name: Remove the third-party apt source this job does not use
-        run: |
-          set -euo pipefail
-          found=$(sudo grep -rl 'dl\.google\.com' /etc/apt/sources.list.d/ 2>/dev/null || true)
-          if [ -n "$found" ]; then
-            echo "Removing apt sources that point at dl.google.com:"
-            echo "$found"
-            echo "$found" | xargs -r sudo rm -f
-          else
-            echo "No apt source referencing dl.google.com is present; nothing to remove."
-          fi
-          # Ubuntu's own repositories are untouched and still have to work.
-          sudo apt-get update
-
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
-      # `npm run e2e` resets the local D1 and starts its own `wrangler dev --local` — offline,
-      # no credentials, safe to re-run back to back (AGENTS.md: "that is a hard requirement, not
-      # a nicety").
-      #
-      # THIS STEP USED TO BE `npm run e2e || (… && npm run e2e)`, AND THAT IS WHAT MADE A GREEN
-      # RUN WORTHLESS. The comment on it said the retry was for `wrangler dev` crashing and never
-      # for a failing assertion. A shell `||` cannot tell those apart — it retries on ANY non-zero
-      # exit. Measured on untouched origin/main on 18 Sep 2026, the suite failed 2 runs in 5; behind
-      # that `||` it reported green nearly nine times in ten, and the tenth got dismissed as
-      # "probably the flake". Eleven pull requests merged that day on the strength of this check.
-      #
-      # SO THE MEANING IS INVERTED, at the same wall clock the old retry already spent on a red run.
-      # The suite runs TWICE, each from a freshly reset database, and BOTH have to pass. One green
-      # run says almost nothing about a one-in-three failure; two independent clean runs is a claim
-      # worth reading. `&&` short-circuits, so a first-run failure still fails immediately.
-      #
-      # THE `workerd` CRASH THE OLD RETRY EXISTED FOR IS STILL HANDLED, and now only it. Observed
-      # twice on GitHub's Linux runners, never on macOS: an internal, message-less error ("please
-      # create an issue at workers-sdk") that drops the server and takes every later test down with
-      # ECONNREFUSED. The step below re-runs ONLY when that signature is in the output — matched on
-      # the crash, not on the exit code — so a journey that fails on its own merits fails the job,
-      # which is what the old comment claimed and the old code did not do.
-      #
-      # `npm run e2e` is deliberately named twice below rather than looped: `validate:green-means-
-      # something` counts the invocations in this job and hard-fails if the suite is run only once.
-      #
-      # ONCE ON A PULL REQUEST, TWICE ON MAIN. Owner, 19 Sep 2026: "what is taking so long" — every
-      # PR paid ~15 minutes of Playwright twice, then paid it again on the merge commit. The second
-      # clean pass is the claim that matters for what SHIPS, and what ships is main: a PR run is a
-      # preview of that claim, and the merge-commit run (push to main) and any dispatch still make it
-      # in full. `validate:green-means-something` pins this shape: the second pass may be skipped
-      # only on `pull_request`, never on push or dispatch, and never on the first pass's failure.
-      - name: Playwright journeys — twice from a clean database on main, once on a pull request
-        run: |
-          set -uo pipefail
-          log="$RUNNER_TEMP/e2e-1.log"
-          if ! npm run e2e 2>&1 | tee "$log"; then
-            if grep -qiE 'please create an issue at .*workers-sdk|internal error.*workerd' "$log"; then
-              echo "::warning::wrangler dev crashed (workerd internal error) — re-running the first pass"
-              npm run e2e
-            else
-              echo "::error::A journey failed on its own merits. This is NOT retried."
-              exit 1
-            fi
-          fi
-          if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
-            echo "::notice::second clean pass skipped on a pull request — the merge commit on main runs it"
-          else
-            npm run e2e
-          fi
+      - name: Typecheck, four test shards, and the validators are green
+        run: echo "gate green for ${{ github.sha }}"
