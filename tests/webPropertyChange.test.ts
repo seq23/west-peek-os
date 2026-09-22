@@ -44,6 +44,7 @@ let t: TestDb;
 let env: Env;
 const sent: Array<{ to: string; subject: string; text: string }> = [];
 
+const SEQUOIA_PARTNER_EMAIL = "sequoia@westpeek.ventures";
 const SCOOTER = "scooter@westpeek.ventures";
 const SEQUOIA = "sequoia@westpeek.ventures";
 const GOOD_AUTH = (who: string) => `mx.cloudflare.net; spf=pass smtp.mailfrom=${who}; dkim=pass header.d=westpeek.ventures; dmarc=pass`;
@@ -924,6 +925,40 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     const bytes = new Uint8Array(await res.arrayBuffer());
     expect(bytes[0]).toBe(0xff);
     expect(new TextDecoder().decode(bytes)).toMatch(/fake photo bytes/);
+  });
+
+  it("a Mac 'blocked' is never a question for Scooter: two retries with no email, then a lane fault addressed to Sequoia", async () => {
+    // 21 Sep 2026: a stale claimer answered "no Drive FOLDER is on the card" and the OS emailed
+    // Scooter to send a folder link for a photo he had attached, then parked the card for a
+    // 24-hour nag. The partner's decisions travel only as the plan's asks.
+    const before = sent.length;
+    const stale = { phase: "PLAN", status: "blocked", reason: "no Drive FOLDER is on the card — send the folder link (a file link is not enough)" };
+    await macReports(porterId, stale);
+    const first = await tickFor(porterId);
+    expect(first.outcome, "attempt 1: a retry, not a block").not.toBe("BLOCKED");
+    expect((await card(porterId)).state, "the card is not BLOCKED").not.toBe("BLOCKED");
+    expect(sent.length, "nobody is emailed for a lane stumble").toBe(before);
+    const again = await tickFor(porterId);
+    expect(again.summary, "PLAN is queued again on the next tick").toMatch(/PLAN queued/);
+    await macReports(porterId, stale);
+    const second = await tickFor(porterId);
+    expect(second.outcome).not.toBe("BLOCKED");
+    expect(sent.length).toBe(before);
+    const third = await tickFor(porterId);
+    expect(third.summary).toMatch(/PLAN queued/);
+    await macReports(porterId, stale);
+    const fault = await tickFor(porterId);
+    expect(fault.outcome, "attempt 3: a lane fault").toBe("BLOCKED");
+    const c = await card(porterId);
+    expect(c.block_who, "addressed to the owner of the lane, never the requesting partner").toBe("SEQUOIA");
+    expect(c.block_reason).toBe("a_lane_refused_the_work");
+    expect(sent.slice(before).filter((m) => m.to === SCOOTER).length, "Scooter got nothing").toBe(0);
+    expect(sent.slice(before).filter((m) => m.to === SEQUOIA_PARTNER_EMAIL && /stuck|blocked/i.test(m.subject)).length, "the owner got the lane fault, once").toBe(1);
+    // Put the card back the way the next test expects it: open, PLAN queued.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'OPEN', work_attempts = 0, block_reason = NULL, block_who = NULL, blocked_at = NULL, block_nag_at = NULL WHERE id = ?1").bind(porterId).run();
+    await env.WP_OS_DB.prepare("DELETE FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'STUCK'").bind(porterId).run();
+    const back = await tickFor(porterId);
+    expect(back.summary).toMatch(/PLAN queued/);
   });
 
   it("nothing to ask + publish-ready → built without asking: no plan email, BUILD parked, the card says why; then DONE only", async () => {
