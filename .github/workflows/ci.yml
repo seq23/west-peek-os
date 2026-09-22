@@ -115,14 +115,21 @@ jobs:
       # the job fails unless at least one test file passed in this shard. Without this, a shard
       # whose file list came up empty (a renamed `include`, a matrix wider than the suite) would
       # exit 0 and the gate would count it green.
+      #
+      # READ WITHOUT COLOUR. On the first run of this shape (PR #155, shard 3/4) 47 files passed and
+      # the job failed here: vitest colours its summary on a TTY-less runner too, and the escape codes
+      # sit between "Test Files" and the number. NO_COLOR turns them off at the source, and the codes
+      # are stripped before the grep anyway, so a reporter change cannot fail a green shard again.
       - name: Unit and integration tests
+        env:
+          NO_COLOR: "1"
         run: |
           set -uo pipefail
           log="$RUNNER_TEMP/vitest-shard-${{ matrix.shard }}.log"
           npx vitest run --no-file-parallelism --shard=${{ matrix.shard }}/4 2>&1 | tee "$log"
           rc=${PIPESTATUS[0]}
           [ "$rc" -eq 0 ] || exit "$rc"
-          files="$(grep -oE 'Test Files +[0-9]+ passed' "$log" | grep -oE '[0-9]+' | head -1)"
+          files="$(sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -oE 'Test Files +[0-9]+ passed' | grep -oE '[0-9]+' | head -1)"
           if [ -z "$files" ] || [ "$files" -lt 1 ]; then
             echo "::error::shard ${{ matrix.shard }}/4 exited 0 having run no test file — Rule 0, this is a failure"
             exit 1
