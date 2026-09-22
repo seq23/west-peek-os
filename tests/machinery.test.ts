@@ -88,6 +88,17 @@ describe("isOneOffMachineryCard", () => {
     expect(isOneOffMachineryCard({ id: "wc_5", assigned_from_card_id: "wc_parent", created_at: AT })).toBe(false);
     expect(isOneOffMachineryCard({ id: "wc_6", meeting_id: "mtg_1", created_at: AT })).toBe(false);
   });
+
+  it("counts a card a scheduled job opened on its own cadence, by kind — the job moved it, not her", () => {
+    // ROOM_PACKET is door: "JOB" in cardKinds.ts; created_by is the sweep's own identity, not an
+    // email or a hold, so only the kind check catches it.
+    expect(isOneOffMachineryCard({ id: "wc_7", kind: "ROOM_PACKET", created_by: "system:work_sweep", created_at: AT })).toBe(true);
+  });
+
+  it("excludes a plain hand-made card even when it shares no origin with anything above", () => {
+    // kind: null (or a HAND/EMAIL-door kind) is the ordinary, always-hand-startable case.
+    expect(isOneOffMachineryCard({ id: "wc_8", kind: "ARTIFACT", created_by: "fu_sequoia_taylor", created_at: AT }, SEQUOIA.firmUserId)).toBe(false);
+  });
 });
 
 describe("sortOneOff", () => {

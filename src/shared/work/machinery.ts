@@ -1,5 +1,6 @@
 import { isOnRequest } from "./scheduledWork";
 import { originBadgeText, originOf, type OriginCard } from "./origin";
+import { isRecurringKind } from "./recurring";
 
 /**
  * MACHINERY IS A LENS FILTERED BY RHYTHM, NOT A PLACE A CARD MOVES TO (Addendum 4 item 2 /
@@ -59,20 +60,27 @@ export interface OneOffCardLike extends OriginCard {
   id: string;
   state?: string | null;
   held_at?: string | null;
+  kind?: string | null;
 }
 
 /**
  * "ONE-OFF" (Addendum 5.1, correcting Addendum 4 item 2's three-bucket read): every single-
  * instance card that moves without her pressing anything, unless it blocks —
  *   (a) an authenticated partner email, which started itself the moment it arrived
- *       (`dealIntake.ts`'s `openAssignmentCard`, "only the address is authority"), or
- *   (b) a card she created and is holding for later, sitting on her one flip.
- * A card she created and started by hand through the ordinary Work flow is neither: she pressed
- * something to make it move, so it is not machinery — it is her, working. That is what keeps this
- * list from becoming "every card", which is Record's job, not this one's.
+ *       (`dealIntake.ts`'s `openAssignmentCard`, "only the address is authority"),
+ *   (b) a card she created and is holding for later, sitting on her one flip, or
+ *   (c) a card a SCHEDULED JOB opened on its own cadence (`cardKinds.ts`'s `door: "JOB"` —
+ *       November's Room packet, this month's Productions press, a sent-back deck's rework). The
+ *       card itself is a single instance, never re-run in place — it is the JOB behind it that is
+ *       recurring, which is exactly Record's `isRecurringKind` axis (`shared/work/recurring.ts`),
+ *       reused rather than re-decided so the two surfaces cannot disagree about the same card.
+ * A card she created and started by hand through the ordinary Work flow is none of these: she
+ * pressed something to make it move, so it is not machinery — it is her, working. That is what
+ * keeps this list from becoming "every card", which is Record's job, not this one's.
  */
 export function isOneOffMachineryCard(card: OneOffCardLike, viewerFirmUserId?: string | null): boolean {
   if (card.state === "HELD" || Boolean(card.held_at)) return true;
+  if (isRecurringKind(card.kind)) return true;
   return originOf(card, viewerFirmUserId).kind === "EMAIL";
 }
 

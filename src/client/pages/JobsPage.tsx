@@ -26,12 +26,17 @@ import type { WorkCardRow } from "./work/types";
  *   on-request job (no clock at all) last of all (`sortOnAClock`, `shared/work/machinery.ts`).
  *
  *   ONE-OFF — every single-instance `work_card` that is moving on its own: an authenticated
- *   partner email, which started itself the moment it arrived, or a card she created and is
- *   holding for later, sitting on her one flip. A card she created and started BY HAND through the
- *   ordinary Work flow is deliberately excluded — she pressed something, so it is not machinery,
- *   it is her working (`isOneOffMachineryCard`). Sorted by arrival, earliest to latest. Each row
- *   carries an origin tag ("from Scooter", "held by you") and a not-yet-started row gets an inline
- *   flip-on control that calls Wave D's `/release` directly — no separate page visit.
+ *   partner email, which started itself the moment it arrived; a card she created and is holding
+ *   for later, sitting on her one flip; or a card a SCHEDULED JOB opened on its own cadence
+ *   (`cardKinds.ts`'s `door: "JOB"` — November's Room packet, this month's Productions press, a
+ *   sent-back deck's rework) — the card is a single instance even though the job behind it recurs,
+ *   which is Record's `isRecurringKind` axis (`shared/work/recurring.ts`), reused rather than
+ *   re-decided so the two surfaces cannot disagree. A card she created and started BY HAND through
+ *   the ordinary Work flow is deliberately excluded — she pressed something, so it is not
+ *   machinery, it is her working (`isOneOffMachineryCard`). Sorted by arrival, earliest to latest.
+ *   Each row carries an origin tag ("from Scooter", "from the scheduled sweep", "held by you") and
+ *   a not-yet-started row gets an inline flip-on control that calls Wave D's `/release` directly —
+ *   no separate page visit.
  *
  * EACH ROW IS ONE LINE, COLLAPSED, NOT A FULL CARD. A job row expands in place (`<details>`) to
  * the facts, the run history and its controls — nothing here duplicates a work card's own page
