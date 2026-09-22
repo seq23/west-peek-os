@@ -17,6 +17,7 @@ function isProductionsKind(kind: string | null | undefined): boolean {
 import { replyToRequester } from "./requestReply";
 import { PRODUCTIONS_PARTNER } from "../../shared/registry/partners";
 import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
+import { isTechnicalBlock } from "../../shared/work/blocks";
 
 /**
  * The sweep that works the cards employees own (14 Sep 2026).
@@ -248,19 +249,53 @@ export async function announceOutcome(
     notice = await noticeFor(env, card.id, outcome);
   }
   /*
-   * A BLOCK ADDRESSED TO THE OWNER IS THE OWNER'S EMAIL (21 Sep 2026). A lane fault — the Mac
-   * refusing three times, a lane down — names SEQUOIA as who can clear it; the requesting partner
-   * cannot, and "Porter: blocked — …" in his inbox for a stop he cannot act on is the bogus email
-   * she named twice today. So the requester is told nothing here (the 45-minute STUCK ceiling in
-   * webPropertyChange still speaks for a genuinely idle card), and the owner is written to instead,
-   * once per cause, with the lane's own words.
+   * A BLOCK ADDRESSED TO A PARTNER REACHES THAT PARTNER BY EMAIL EVEN WHEN THEY NEVER ASKED FOR THE
+   * CARD (generalised 22 Sep 2026 from a WEB_PROPERTY_CHANGE-only fix written 21 Sep 2026).
+   *
+   * `replyToRequester`, below, sends only to `card.requested_by_email` — whoever happened to ASK for
+   * this card — which most of the time IS who a plain question-block should reach (a plan's own
+   * asks, addressed back to whoever asked for the plan), and that common shape must not change: a
+   * requester is always used as-is when one exists AND the block is an ordinary one.
+   *
+   * TWO SHAPES WHERE THAT IS THE WRONG ADDRESS, AND BOTH REDIRECT TO WHO `block_who` ACTUALLY NAMES:
+   *
+   *   1 · NO REQUESTER AT ALL. Most cards outside an emailed assignment — a weekly duty, an
+   *       internally-raised card, most of what `blocks.test.ts` exercises — carry no
+   *       `requested_by_email` to begin with, so `replyToRequester` below has nothing to send to,
+   *       whatever the block is addressed to. Confirmed directly: a card blocked today with
+   *       `block_who = 'SCOOTER'` produced no email at all, only an in-app notice — and given how he
+   *       actually operates, every real interaction arriving as an email reply or forward, never
+   *       through the OS UI, that silence made the block effectively invisible to him.
+   *   2 · A TECHNICAL BLOCK (`isTechnicalBlock` — a lane refused the work, or none could take it).
+   *       The 21 Sep fix noticed this shape for WEB_PROPERTY_CHANGE specifically: a lane fault names
+   *       SEQUOIA as who can clear it, the requesting partner cannot, and "Porter: blocked — …" in
+   *       his inbox for a stop he cannot act on was the bogus email she named twice that day. That
+   *       is not WEB_PROPERTY_CHANGE-shaped either — a lane fault on any kind is equally unanswerable
+   *       by whoever happened to request the work — so this generalises across every kind.
+   *
+   * An ORDINARY block (not technical) with a real requester keeps going to the requester regardless
+   * of what `block_who` says — `block_who` defaults to SEQUOIA on the catalogue whenever a caller
+   * does not name someone specific, and that default has never meant "ignore who actually asked";
+   * overriding it there would have been the regression, not the fix (`tests/requestByEmail.test.ts`
+   * — "a blocked request also reaches the inbox, as a question" — the requester, not the default).
    */
-  if (outcome === "BLOCKED" && card.kind === WEB_PROPERTY_CHANGE_KIND) {
-    const b = await env.WP_OS_DB.prepare("SELECT block_who FROM work_card WHERE id = ?1").bind(card.id).first<{ block_who: string | null }>();
+  const blockRow = outcome === "BLOCKED"
+    ? await env.WP_OS_DB.prepare("SELECT block_who, block_reason FROM work_card WHERE id = ?1").bind(card.id).first<{ block_who: string | null; block_reason: string | null }>()
+    : null;
+  const addressee = blockRow?.block_who && blockRow.block_who !== "ENGINEER" ? PARTNERS.find((p) => p.firstName.toUpperCase() === blockRow.block_who) : null;
+  if (outcome === "BLOCKED" && addressee) {
     const requester = (card.requested_by_email ?? "").trim().toLowerCase();
-    const owner = PARTNERS.find((p) => p.firstName.toUpperCase() === "SEQUOIA");
-    if (b?.block_who === "SEQUOIA" && owner && requester !== owner.email) {
-      const reply = await replyToRequester(env, { ...card, requested_by_email: owner.email }, outcome, who, detail, { kind: "STUCK", cause: `lane:${card.work_attempts}` });
+    const noRequesterToTell = !requester;
+    const technicalAndUnreachableByRequester = isTechnicalBlock(blockRow?.block_reason) && requester !== addressee.email;
+    if (noRequesterToTell || technicalAndUnreachableByRequester) {
+      const reply = await replyToRequester(
+        env,
+        { ...card, requested_by_email: addressee.email },
+        outcome,
+        who,
+        detail,
+        notice ?? { kind: "STUCK", cause: `blocked:${card.work_attempts}` },
+      );
       return { emailed: reply.sent ? reply.to : null };
     }
   }

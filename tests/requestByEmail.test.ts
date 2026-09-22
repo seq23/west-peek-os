@@ -201,6 +201,74 @@ describe("Sequoia emails a request", () => {
     expect(last.text).toMatch(/\*\*Where I am stuck\*\*\n• Wesley needs something from you/);
     expect(last.text).toMatch(/Which quarter do you mean\?/);
   });
+
+  /*
+   * A BLOCK ADDRESSED TO A PARTNER REACHES THEM, EVEN WITH NO REQUESTER TO FALL BACK TO (22 Sep
+   * 2026). Confirmed directly in production: a card blocked with `block_who = 'SCOOTER'` produced
+   * no email at all — only an in-app notice — because `replyToRequester` has nothing to send to when
+   * `requested_by_email` is empty, which is the ordinary shape for a card nobody emailed in for (a
+   * weekly duty, something raised by hand). Given how he actually operates, that silence made the
+   * block invisible to him. This is the case `announceOutcome`'s new redirect exists to close.
+   */
+  it("a block addressed to a partner reaches them by email even when nobody requested the card at all", async () => {
+    const card = await env.WP_OS_DB.prepare(
+      "INSERT INTO work_card (id, title, description, owner_type, owner_id, state, priority, privacy_label, firm_scope, requested_by_email, created_by) VALUES ('wc_t_blocked_no_requester', 'Approve the March newsletter subject line', 'x', 'AI', 'aie_wesley', 'OPEN', 'NORMAL', 'INTERNAL', 'west-peek', NULL, 'test')",
+    ).run();
+    expect(card.success).toBe(true);
+    const before = sent.length;
+    await sweepOnce(env, new Date(NOW.getTime() + 20 * 60_000), {
+      general: async (e, _ctx, cardId) => {
+        // A REAL, EXPLICIT ADDRESSEE — not the catalogue's SEQUOIA default — so this proves the
+        // redirect follows `block_who`, not merely "there was nobody to ask".
+        await blockCard(e, { id: cardId, title: "Approve the March newsletter subject line", firm_scope: "west-peek", owner_id: "aie_wesley" }, {
+          reason: "a_question_for_you",
+          trying: "Approve the March newsletter subject line",
+          employee: "Wesley",
+          who: "SCOOTER",
+          detail: "\"Spring is here\" or \"March in three deals\"?",
+        });
+        return { finished: false, blocked: true, detail: "which subject line", steps: [{ action: "blocked", detail: "which subject line" }] };
+      },
+    });
+    expect(sent.length, "an email now goes out where none did before").toBe(before + 1);
+    const last = sent[sent.length - 1]!;
+    expect(last.to, "block_who names Scooter, and Scooter is who hears about it").toBe("scooter@westpeek.ventures");
+    expect(last.subject).toBe("Wesley: blocked — Approve the March newsletter subject line");
+    expect(last.text).toMatch(/Spring is here.*March in three deals/s);
+  });
+
+  /*
+   * THE SAME REDIRECT REACHES A TECHNICAL BLOCK ON A GENERAL (NON-WEB_PROPERTY_CHANGE) CARD, EVEN
+   * WITH A REQUESTER PRESENT (22 Sep 2026). The 21 Sep fix this generalises only ever fired for
+   * `WEB_PROPERTY_CHANGE_KIND`; a lane fault on any OTHER kind is equally unanswerable by whoever
+   * happened to request the work, and previously fell through to `replyToRequester`'s ordinary path
+   * — mailing the requester a stop they have no way to act on.
+   */
+  it("a technical block (a lane refused the work) reaches the owner of the lane, not the requester, on a general card too", async () => {
+    const card = await env.WP_OS_DB.prepare(
+      "INSERT INTO work_card (id, title, description, owner_type, owner_id, state, priority, privacy_label, firm_scope, requested_by_email, created_by) VALUES ('wc_t_blocked_lane', 'Draft the investor update', 'x', 'AI', 'aie_wesley', 'OPEN', 'NORMAL', 'INTERNAL', 'west-peek', 'scooter@westpeek.ventures', 'test')",
+    ).run();
+    expect(card.success).toBe(true);
+    const before = sent.length;
+    await sweepOnce(env, new Date(NOW.getTime() + 30 * 60_000), {
+      general: async (e, _ctx, cardId) => {
+        await blockCard(e, { id: cardId, title: "Draft the investor update", firm_scope: "west-peek", owner_id: "aie_wesley" }, {
+          reason: "a_lane_refused_the_work",
+          trying: "Draft the investor update",
+          employee: "Wesley",
+          who: "SEQUOIA",
+          lane: "Claude Code (her Mac)",
+          laneKey: "claude_code",
+          laneKind: "LANE_DOWN",
+          vendorWords: "the account is out of credit",
+        });
+        return { finished: false, blocked: true, detail: "the lane is out of credit", steps: [{ action: "blocked", detail: "the lane is out of credit" }] };
+      },
+    });
+    expect(sent.length).toBe(before + 1);
+    const last = sent[sent.length - 1]!;
+    expect(last.to, "Scooter asked for this, but he cannot fix a dead lane — Sequoia can, so she is told").toBe("sequoia@westpeek.ventures");
+  });
 });
 
 describe("the reply cannot be steered", () => {
