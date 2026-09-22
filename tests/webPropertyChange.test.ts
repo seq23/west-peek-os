@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
+import { handleRequest } from "../src/worker/index";
 import { openAssignmentCard } from "../src/worker/services/dealIntake";
 import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
 import { sweepOnce } from "../src/worker/services/workSweep";
@@ -31,7 +32,8 @@ import { readFileSync } from "node:fs";
  *   · ONE LIVE RUN PER CARD. The runner parks exactly one LOCAL_JOB; a second tick while it is
  *     queued parks nothing and spends no attempt; the row refuses a second one outright.
  *   · THE QUESTION CLAIMER IS NEVER HANDED A JOB. `kinds` on the claim decides.
- *   · THE PLAN IS A DOCUMENT AND THE ASKS BLOCK THE CARD, addressed to the partner who asked.
+ *   · THE PLAN IS ON THE CARD'S OWN ROW, NEVER FILED INTO DOCUMENTS (0231, Addendum 4.3), and the
+ *     ASKS BLOCK THE CARD, addressed to the partner who asked.
  *   · A REPLY RESUMES. Scooter's email answer clears Scooter's block; Sequoia's does not; the next
  *     tick records the approval and parks BUILD with the plan and the answers on the job.
  *   · NO LAND WITHOUT APPROVAL AND GREEN, in the Worker and at the row (the 0219 trigger).
@@ -269,7 +271,7 @@ describe("Scooter emails a package for the ventures site", () => {
     expect(readLocalJobReport("noise\n{\"phase\":\"PLAN\",\"status\":\"ok\",\"document\":\"# plan\"}").report?.document).toBe("# plan");
   });
 
-  it("the PLAN comes back: a Document on the card, DECIDED and ASK recorded, the card BLOCKED to Scooter with the asks emailed", async () => {
+  it("the PLAN comes back: on the card's own row, never filed into Documents, DECIDED and ASK recorded, the card BLOCKED to Scooter with the asks emailed", async () => {
     await reportRun(env, {
       runId: planRun.id,
       deviceId: "mac-test-jobs",
@@ -295,13 +297,23 @@ describe("Scooter emails a package for the ventures site", () => {
     expect(String(c.block_needed)).toMatch(/orange accent/);
     expect(String(c.block_needed)).toMatch(/first cheque/);
     const row = (await readWebPropertyChange(env, porterCardId))!;
-    expect(row.plan_document_id, "the plan is filed as a Document").toBeTruthy();
-    expect(row.plan_deliverable_id).toBeTruthy();
+    // 0231, Addendum 4.3: the plan is on the row, never filed into Documents — strengthened from
+    // the old pin ("the plan is filed as a Document"), which asserted the behaviour this PR removes.
+    expect(row.plan_text, "the plan's text is on the card's own row").toContain("# Plan: ventures site update");
+    expect(row.plan_document_id, "no Document is filed for the plan any more").toBeNull();
+    expect(row.plan_deliverable_id, "no deliverable is filed for the plan any more").toBeNull();
     expect(JSON.parse(row.asks_json)).toHaveLength(2);
     expect(JSON.parse(row.decided_json)).toHaveLength(2);
     expect(row.current_run_id, "the lease is released").toBeNull();
-    const doc = await env.WP_OS_DB.prepare("SELECT title FROM document WHERE id = ?1").bind(row.plan_document_id).first<{ title: string }>();
-    expect(doc?.title).toMatch(/^Plan: /);
+    const docs = await env.WP_OS_DB.prepare("SELECT id FROM document WHERE title LIKE 'Plan: %'").all<{ id: string }>();
+    expect(docs.results ?? [], "Documents holds no 'Plan: …' row for this card").toHaveLength(0);
+
+    // The card's own API response carries the plan text, so the card page can render it without
+    // Documents — this is the surface that replaces "Open the plan" navigating to Documents.
+    const apiRes = await handleRequest(new Request(`https://test.local/api/work-cards/${porterCardId}/web-property-change`, { headers: { "x-wpos-dev-user": SCOOTER } }), env);
+    const apiBody = (await apiRes.json()) as { plan_text: string | null; plan_document_id: string | null };
+    expect(apiBody.plan_text).toContain("# Plan: ventures site update");
+    expect(apiBody.plan_document_id).toBeNull();
 
     const email = sent.find((m) => m.to === SCOOTER && /blocked/i.test(m.subject));
     expect(email, "the asks are emailed to the requesting partner").toBeDefined();
