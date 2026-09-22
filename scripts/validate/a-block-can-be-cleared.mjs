@@ -67,14 +67,39 @@ function readTree(dir) {
   return out;
 }
 
-/** 1 · Who writes BLOCKED on a work card. */
+/**
+ * 1 · Who WRITES BLOCKED on a work card — a WRITE, never a READ (22 Sep 2026).
+ *
+ * `state = 'BLOCKED'` is bare text that a SET clause and a WHERE clause are spelled identically:
+ * `UPDATE work_card SET state = 'BLOCKED' …` and `… WHERE wc.state = 'BLOCKED'` differ only in
+ * which keyword governs them, not in the substring this scan matched on. `STALE_REASON_SQL`
+ * (notifications.ts) reads whether a card IS BLOCKED — `NOT EXISTS (SELECT 1 FROM work_card wc
+ * WHERE wc.state = 'BLOCKED')` — to decide whether ITS OWN notice is stale, which is exactly the
+ * comparison the funnel rule was never meant to reach: nothing there sets a card's state at all.
+ * The un-narrowed regex flagged it anyway, which is a false alarm in the validator, not a new
+ * bypass of the funnel — the scan's job is to find where BLOCKED gets WRITTEN.
+ *
+ * So a candidate only counts as a write when the nearest governing keyword before the match is
+ * SET, not WHERE: a plain SQL assignment has no WHERE between its SET clause and the column it is
+ * setting, while a comparison is reached only after a WHERE (or an AND chained from one).
+ */
 export function checkFunnel(sources) {
   const violations = [];
   let sites = 0;
   for (const [file, raw] of Object.entries(sources)) {
     const src = stripComments(raw);
     // Any UPDATE/INSERT naming work_card and setting state to BLOCKED, however it is spaced.
-    const hits = src.match(/work_card[\s\S]{0,400}?state\s*=\s*'BLOCKED'/g) ?? [];
+    const candidates = src.matchAll(/work_card[\s\S]{0,400}?state\s*=\s*'BLOCKED'/g);
+    const hits = [];
+    for (const m of candidates) {
+      const window = m[0];
+      const lastSet = window.lastIndexOf("SET");
+      const lastWhere = window.lastIndexOf("WHERE");
+      // No SET governing it at all, or a WHERE sits between the SET and the match (so the match is
+      // actually inside that WHERE's own comparison, not the SET clause it followed): not a write.
+      if (lastSet === -1 || lastWhere > lastSet) continue;
+      hits.push(window);
+    }
     if (hits.length === 0) continue;
     sites += hits.length;
     if (!file.endsWith(FUNNEL)) {
@@ -138,6 +163,27 @@ const SELF_TEST = {
         const x = 1;
       `,
       "src/worker/services/blocks.ts": "UPDATE work_card SET state = 'BLOCKED'",
+    },
+    expect: null,
+  },
+  /*
+   * THE REAL FALSE ALARM (22 Sep 2026). `STALE_REASON_SQL` in notifications.ts asks whether a
+   * card IS BLOCKED so it can retire ITS OWN notice — a READ, never a write — and the un-narrowed
+   * scan flagged it anyway because `state = 'BLOCKED'` reads identically whether it follows SET or
+   * WHERE. This is the exact shape that regressed the validator; it must stay clean.
+   */
+  "a read-only WHERE comparison is NOT a violation": {
+    sources: {
+      "src/worker/services/notifications.ts": `
+        const STALE_REASON_SQL = \`CASE
+          WHEN n.object_type = 'work_card' AND NOT EXISTS (
+                 SELECT 1 FROM work_card wc
+                  WHERE wc.id = n.object_id
+                    AND wc.state = 'BLOCKED')
+            THEN 'RESOLVED'
+          ELSE NULL
+        END\`;
+      `,
     },
     expect: null,
   },
