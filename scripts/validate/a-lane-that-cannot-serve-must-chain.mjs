@@ -39,7 +39,21 @@ const MIGRATIONS_DIR = path.resolve("migrations");
 const CONTENT_CLASS = path.resolve("src/shared/ai/contentClass.ts");
 const PROVIDER_FAILURE = path.resolve("src/shared/ai/providerFailure.ts");
 const WORK_CARDS = path.resolve("src/worker/services/workCards.ts");
-const WORK_PAGE = path.resolve("src/client/pages/WorkCardsPage.tsx");
+/*
+ * THE WORK SURFACE IS A DIRECTORY NOW (22 Sep 2026). `WorkCardsPage.tsx` was split into a shell
+ * plus `pages/work/`, and all six things this check wants — the two form controls, the POST, and
+ * the three labels on the card — moved with it. `WORK_PAGE` is therefore the whole surface: the
+ * shell plus every file under `pages/work/`, read as one source. A check that looked only at the
+ * shell would look at a file none of its six patterns can match.
+ */
+const WORK_PAGE = "src/client/pages/ (the Work surface)";
+const WORK_PAGE_FILES = [
+  path.resolve("src/client/pages/WorkCardsPage.tsx"),
+  ...readdirSync(path.resolve("src/client/pages/work"))
+    .filter((n) => n.endsWith(".tsx") || n.endsWith(".ts"))
+    .sort()
+    .map((n) => path.resolve("src/client/pages/work", n)),
+];
 
 const failures = [];
 const summary = [];
@@ -215,10 +229,16 @@ function checkTwoLabelsAreWired() {
       "the AI boundary must classify content separately from the recipient label",
     ],
   ];
+  // A want against the Work surface is satisfied by any of its files; everything else reads one.
   for (const [file, pattern, why] of wants) {
     examined += 1;
-    const src = stripCommentsFor(file, readFileSync(file, "utf8"));
-    if (!pattern.test(src)) fail(CHECK, `${path.relative(process.cwd(), file)} — ${why} (looked for ${pattern})`);
+    const files = file === WORK_PAGE ? WORK_PAGE_FILES : [file];
+    if (files.length === 0) {
+      fail(CHECK, `${file} resolved to ZERO files — a want that reads nothing cannot pass. Rule 0.`);
+      continue;
+    }
+    const src = files.map((f) => stripCommentsFor(f, readFileSync(f, "utf8"))).join("\n");
+    if (!pattern.test(src)) fail(CHECK, `${file === WORK_PAGE ? file : path.relative(process.cwd(), file)} — ${why} (looked for ${pattern})`);
   }
   // The column must exist in a migration, or every one of the above is writing to nothing.
   const migration = readdirSync(MIGRATIONS_DIR)

@@ -7,7 +7,23 @@ export const workGuide: PageGuide = {
   purpose:
     "Three places: the Desk is what needs you and what is in flight, the Record is everything the firm has finished, the Machinery is what runs on a clock.",
   youCan: ["See what has stopped, and who is carrying what", "Write a card and hand it to an employee or your partner", "Search the record of everything finished", "Check the machinery is healthy"],
-  sources: ["src/client/pages/WorkCardsPage.tsx", "src/client/pages/WorkRecordView.tsx", "src/client/pages/JobsPage.tsx", "src/shared/work/blocks.ts"],
+  /*
+   * THE WORK SURFACE IS FIVE FILES NOW (22 Sep 2026). `WorkCardsPage.tsx` was 1,588 lines and was
+   * split into a shell plus `pages/work/`; naming only the shell here would leave
+   * `validate:page-guides` reading a file that no longer emits most of the page's testids, and it
+   * would pass having checked almost nothing.
+   */
+  sources: [
+    "src/client/pages/WorkCardsPage.tsx",
+    "src/client/pages/work/WorkDesk.tsx",
+    "src/client/pages/work/NewWorkCard.tsx",
+    "src/client/pages/work/BlockPanel.tsx",
+    "src/client/pages/work/NotesPanel.tsx",
+    "src/client/pages/work/LooksPanel.tsx",
+    "src/client/pages/WorkRecordView.tsx",
+    "src/client/pages/JobsPage.tsx",
+    "src/shared/work/blocks.ts",
+  ],
   bands: [
     { name: "The answer", testid: "work-answer", shows: "whether anything is waiting on you, with Add a card beside it." },
     { name: "Desk · Record · Machinery", testid: "work-view-", shows: "the three tabs." },

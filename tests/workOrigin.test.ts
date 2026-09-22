@@ -1,0 +1,75 @@
+import { describe, it, expect } from "vitest";
+import { originOf } from "../src/shared/work/origin";
+import { PARTNERS } from "../src/shared/registry/partners";
+
+/**
+ * WHERE A CARD CAME FROM. Six origins, one row, and an order that decides between them.
+ *
+ * The thing worth pinning is the ORDER. A card handed on by a colleague carries the address of
+ * whoever asked in the first place — `employeeWork.ts` copies `requested_by_email` onto the new
+ * card on purpose, so the reply still reaches the right person. Reading that first would say "an
+ * email from Scooter" about a card Wren handed to Wyatt this morning: true of its ancestor, false
+ * of it.
+ */
+
+const SEQUOIA = PARTNERS[0]!;
+const SCOOTER = PARTNERS[1]!;
+const AT = "2026-09-22T09:00:00.000Z";
+
+describe("originOf", () => {
+  it("reads a colleague's hand-on before anything else on the row", () => {
+    expect(
+      originOf({
+        assigned_from_card_id: "wc_parent",
+        requested_by_email: SCOOTER.email,
+        meeting_id: "mtg_1",
+        capture_id: "cap_1",
+        created_by: SEQUOIA.firmUserId,
+        created_at: AT,
+      }),
+    ).toEqual({ kind: "ANOTHER_CARD", who: "wc_parent", at: AT });
+  });
+
+  it("reads the meeting before the capture and the email", () => {
+    expect(originOf({ meeting_id: "mtg_7", capture_id: "cap_1", requested_by_email: "a@b.com", created_by: "fu_x", created_at: AT }))
+      .toEqual({ kind: "MEETING", who: "mtg_7", at: AT });
+  });
+
+  it("reads the capture before the email", () => {
+    expect(originOf({ capture_id: "cap_9", requested_by_email: "a@b.com", created_by: "fu_x", created_at: AT }))
+      .toEqual({ kind: "CAPTURE", who: "cap_9", at: AT });
+  });
+
+  it("names the address an email request came from, lowercased and trimmed", () => {
+    expect(originOf({ requested_by_email: "  Someone@Example.COM ", created_by: "fu_x", created_at: AT }))
+      .toEqual({ kind: "EMAIL", who: "someone@example.com", at: AT });
+  });
+
+  it("does not treat a blank requested_by_email as an email origin", () => {
+    const o = originOf({ requested_by_email: "   ", created_by: SEQUOIA.firmUserId, created_at: AT });
+    expect(o.kind).toBe("PARTNER");
+  });
+
+  it("says YOU when the viewer wrote it, and names the partner when somebody else did", () => {
+    expect(originOf({ created_by: SEQUOIA.firmUserId, created_at: AT }, SEQUOIA.firmUserId))
+      .toEqual({ kind: "YOU", who: SEQUOIA.fullName, at: AT });
+    expect(originOf({ created_by: SCOOTER.firmUserId, created_at: AT }, SEQUOIA.firmUserId))
+      .toEqual({ kind: "PARTNER", who: SCOOTER.fullName, at: AT });
+  });
+
+  it("names the partner rather than guessing when there is no viewer", () => {
+    expect(originOf({ created_by: SEQUOIA.firmUserId, created_at: AT }))
+      .toEqual({ kind: "PARTNER", who: SEQUOIA.fullName, at: AT });
+  });
+
+  it("calls anything that is not a partner SYSTEM, and still says who", () => {
+    expect(originOf({ created_by: "aie_wyatt", created_at: AT }))
+      .toEqual({ kind: "SYSTEM", who: "aie_wyatt", at: AT });
+  });
+
+  it("never returns a blank who, even on a row with nothing on it", () => {
+    const o = originOf({});
+    expect(o).toEqual({ kind: "SYSTEM", who: "the system", at: "" });
+    expect(o.who.length).toBeGreaterThan(0);
+  });
+});
