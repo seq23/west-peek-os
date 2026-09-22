@@ -665,6 +665,7 @@ export const HIRE_SEARCH_STEPS: readonly string[] = [
   "Remember who has already been sent, across weeks, so nobody is sent twice.",
   "File one deliverable on Scooter's Home and send him ONE email.",
   "Nobody is contacted, no interview is arranged and no offer is made — the result is a shortlist he decides on.",
+  "A Managing Partner's own instruction extends what you do here — apply it using judgement and whatever you already have access to, rather than treating it as out of scope. Only decline something that genuinely needs a tool, data source or integration that does not exist anywhere in this system, or that would need to pass through approval regardless of who asked.",
 ];
 
 export async function runHireSearchCard(

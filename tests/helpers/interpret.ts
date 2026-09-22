@@ -44,6 +44,17 @@ export function cannotDo(understood: string, ...cannot: string[]): Interpreter {
   });
 }
 
+/** An interpreter that hands part of the ask to a DIFFERENT employee's own registered domain. */
+export function handsOffTo(understood: string, kind: string, note: string, ...steer: string[]): Interpreter {
+  return async () => ({
+    ok: true,
+    text: [`UNDERSTOOD: ${understood}`, ...steer.map((s) => `STEER: ${s}`), `HANDOFF: ${kind} — ${note}`].join("\n"),
+    aiRunId: null,
+    model: "fake-test-model",
+    detail: "COMPLETED",
+  });
+}
+
 /** An interpreter whose model could not be reached at all. */
 export const unreachable: Interpreter = async () => ({
   ok: false,

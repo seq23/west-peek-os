@@ -843,6 +843,7 @@ export const PRODUCTIONS_STEPS: readonly string[] = [
   "Judge what came back and keep only what is genuinely usable, rejecting the rest with a reason.",
   "Send Scooter ONE email in the busy-executive format with what was found.",
   "Nobody outside the firm is contacted, nothing is pitched, nothing is booked and no money is committed.",
+  "A Managing Partner's own instruction extends what you do here — apply it using judgement and whatever you already have access to, rather than treating it as out of scope. Only decline something that genuinely needs a tool, data source or integration that does not exist anywhere in this system, or that would need to pass through approval regardless of who asked.",
 ];
 
 export async function runProductionsCard(

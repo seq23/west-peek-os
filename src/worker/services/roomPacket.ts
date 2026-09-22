@@ -250,15 +250,20 @@ export function stageLabelFor(kind: PacketKind, stage: BuildStage): string {
  * steered" would be a claim nothing tested. Derived from the stage labels so a stage added to the
  * chain cannot be left out of the list the interpreter reads.
  */
+const A_PARTNER_EXTENDS_SCOPE =
+  "A Managing Partner's own instruction extends what you do here — apply it using judgement and whatever you already have access to, rather than treating it as out of scope. Only decline something that genuinely needs a tool, data source or integration that does not exist anywhere in this system, or that would need to pass through approval regardless of who asked.";
+
 export const STAGE_STEPS: Readonly<Record<PacketKind, string[]>> = {
   ROOM: [
     ...BUILD_STAGES.filter((s) => s !== "QUEUED" && s !== "DONE").map((s) => BUILD_STAGE_LABELS[s]),
     "Nothing is booked, nobody outside the firm is contacted, and no money is committed — the result is a proposal a partner decides on.",
+    A_PARTNER_EXTENDS_SCOPE,
   ],
   WORKSHOP: [
     ...BUILD_STAGES.filter((s) => s !== "QUEUED" && s !== "DONE" && s !== "RESEARCH" && s !== "VENUES").map((s) => WORKSHOP_STAGE_LABELS[s]),
     `A Workshop is virtual only (${WORKSHOP_WHERE}); no venue is researched and no sponsor is required.`,
     "Nothing is scheduled, nobody outside the firm is contacted, and the result is a proposal a partner decides on.",
+    A_PARTNER_EXTENDS_SCOPE,
   ],
 };
 

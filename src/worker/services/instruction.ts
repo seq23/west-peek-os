@@ -4,12 +4,16 @@ import type { RouteContext } from "../router";
 import { appendEvent } from "../events";
 import { runAi } from "../ai/runAi";
 import type { Actor } from "./authorize";
+import { KIND_HOSTS, kindHost } from "../../shared/work/kindHosts";
+import { createWorkCardInternal } from "./workCards";
+import { sweepIdentity } from "./workSweep";
 import {
   INTERPRETATION_PROMPT_VERSION,
   buildInterpretationPrompt,
   isWorthInterpreting,
   parseInterpretation,
   steerBlock,
+  type HandoffAsk,
   type InstructionPiece,
   type InstructionReceipt,
   type Interpretation,
@@ -50,6 +54,17 @@ import {
  * the note changed, in the model's words, and is what she reads on the thread.
  */
 
+/** A HANDOFF `steerFor` resolved: a live card is now on another employee's own desk. */
+export interface ResolvedHandoff {
+  kind: string;
+  note: string;
+  /** True once a real, ACTIVE employee owns the kind and a card exists on their desk. */
+  resolved: boolean;
+  /** The registered owner's name, even when `resolved` is false (e.g. they are OFFBOARDING). */
+  employee: string | null;
+  cardId: string | null;
+}
+
 /** What a chain gets back. */
 export interface Steer {
   /** The block to put at the top of every stage prompt. Empty string when there is nothing to say. */
@@ -57,16 +72,30 @@ export interface Steer {
   /** Null when nobody has said anything about this card — the normal case for a scheduled duty. */
   interpretation: Interpretation | null;
   /**
-   * Set when the chain must STOP rather than run. Either she asked for something these steps
-   * cannot do, or her words could not be interpreted at all. Never silently ignored.
+   * Set when the chain must STOP rather than run. Either she asked for something structurally
+   * absent anywhere in this system, something that crosses a line `authorize()` would gate no
+   * matter who asked, or her words could not be interpreted at all. Never silently ignored.
+   *
+   * NO LONGER "not one of the numbered steps" (22 Sep 2026) — see `Interpretation.cannot` and
+   * `buildInterpretationPrompt`. A directive that only needed permission the partner already gave
+   * by asking is a STEER; one that belongs to a different, real employee is resolved into
+   * `handoffs` below rather than landing here at all.
    */
   cannot: string[];
   /** Why interpretation failed, when it did. The chain blocks with this rather than guessing. */
   failure: string | null;
   aiRunId: string | null;
+  /**
+   * Something she asked for that is not this chain's job but IS a different employee's real one —
+   * filed on their desk instead of stopping this card or being bolted onto an employee who does not
+   * own it. Empty in the normal case. An UNRESOLVED entry (`resolved: false` — no owner registered,
+   * or the registered owner is not ACTIVE) has already been folded into `cannot` above, so a chain
+   * only needs to read this for what to mention, never to decide whether to block.
+   */
+  handoffs: ResolvedHandoff[];
 }
 
-const NOTHING_SAID: Steer = { text: "", interpretation: null, cannot: [], failure: null, aiRunId: null };
+const NOTHING_SAID: Steer = { text: "", interpretation: null, cannot: [], failure: null, aiRunId: null, handoffs: [] };
 
 interface CardPromptRow {
   prompt: string | null;
@@ -190,6 +219,121 @@ function saidJson(pieces: InstructionPiece[]): string {
 }
 
 /**
+ * THE THIRD OUTCOME (22 Sep 2026). `steerFor` used to have two: a STEER the chain carries, or a
+ * CANNOT that stops the card in front of a human. A real third exists — the ask is not this chain's
+ * job at all, but IS a different, ACTIVE AI employee's real one, the same "who owns this" fact
+ * `kindHosts.ts` already answers for `services/questionRouting.ts` (Addendum 12). Bolting it onto an
+ * employee who does not own it, or bouncing it to a human who would only have to say "ask Porter",
+ * are both worse than filing it where it belongs.
+ *
+ * RESOLVED, NOT JUST NAMED: for each `HANDOFF` the model wrote, this opens — or finds, idempotently
+ * — a real card on the owning employee's desk and folds anything that could not be resolved (no
+ * registered owner, or the registered owner is not ACTIVE) straight into `cannot`, fail-closed,
+ * exactly the direction `answerQuestionForCard` already fails in.
+ */
+async function resolveHandoffs(env: Env, req: SteerRequest, asks: HandoffAsk[]): Promise<{ handoffs: ResolvedHandoff[]; extraCannot: string[] }> {
+  const handoffs: ResolvedHandoff[] = [];
+  const extraCannot: string[] = [];
+  for (const ask of asks) {
+    const host = kindHost(ask.kind);
+    if (!host) {
+      handoffs.push({ ...ask, resolved: false, employee: null, cardId: null });
+      extraCannot.push(`${ask.note} (no employee is registered to own "${ask.kind}")`);
+      continue;
+    }
+    const emp = await env.WP_OS_DB.prepare("SELECT id, name, status FROM ai_employee WHERE name = ?1")
+      .bind(host.name)
+      .first<{ id: string; name: string; status: string }>();
+    if (!emp || emp.status !== "ACTIVE") {
+      handoffs.push({ ...ask, resolved: false, employee: host.name, cardId: null });
+      extraCannot.push(`${ask.note} (${emp ? `${host.name} is ${emp.status.toLowerCase()}, not available to take it` : `nobody named ${host.name} is employed`})`);
+      continue;
+    }
+    const cardId = await openHandoffCard(env, req, ask, host, emp.id);
+    handoffs.push({ ...ask, resolved: true, employee: emp.name, cardId });
+  }
+  return { handoffs, extraCannot };
+}
+
+/**
+ * The card on the owning employee's desk. Idempotent by title, scoped to the originating card and
+ * kind — the same discipline `openHireSearchCard` holds a scheduled duty to — so a steer read again
+ * from cache on the next stage of a chain, or the next sweep tick before this one closes, never
+ * opens it twice.
+ *
+ * NEVER GUESSES THE TARGET'S OWN INTAKE SHAPE. A web property change needs a target repo that
+ * `openWebPropertyChange` refuses to accept from anywhere but its own door's parse of a partner's
+ * verified text (`services/webPropertyChange.ts`) — inventing one here from free-text prose would be
+ * exactly the guess this firm's discipline forbids everywhere else. The card carries the kind and
+ * the words and nothing invented; `runWebPropertyChangeCard` (and any future kind host) already
+ * self-heals a card of its kind with no structured row yet by asking the one thing only a person can
+ * answer, the same block a hand-created card without one gets today.
+ */
+async function openHandoffCard(
+  env: Env,
+  req: SteerRequest,
+  ask: HandoffAsk,
+  host: { name: string; because: string },
+  employeeId: string,
+): Promise<string> {
+  const firmScope = req.firmScope;
+  // SCOPED TO THE ORIGINATING CARD ID, NOT ITS TITLE, and the id sits BEFORE the truncation point.
+  // Two different cards can share a title — a scheduled duty's title repeats every week, and two
+  // brief-born packets can be named alike — and a title-only key would silently reuse one card's
+  // handoff for a completely different source.
+  const title = `${host.name}: handed "${ask.kind}" from ${req.cardId} — ${req.title}`.slice(0, 160);
+  const existing = await env.WP_OS_DB.prepare(
+    "SELECT id FROM work_card WHERE title = ?1 AND firm_scope = ?2 AND state != 'CANCELLED' LIMIT 1",
+  )
+    .bind(title, firmScope)
+    .first<{ id: string }>();
+  if (existing) return existing.id;
+
+  const card = await createWorkCardInternal(env, sweepIdentity(firmScope), {
+    title,
+    description: [
+      `HANDED OFF, not blocked. A partner's instruction on "${req.title}" (${req.employee}'s ${req.chain}) named something that is ${host.name}'s job here, not ${req.employee}'s: ${ask.note}`,
+      host.because,
+      `From card: ${req.cardId}.`,
+    ].join("\n"),
+    owner_type: "AI",
+    owner_id: employeeId,
+    priority: "NORMAL",
+    firm_scope: firmScope,
+    kind: ask.kind,
+    next_action: ask.note.slice(0, 300),
+  });
+  await appendEvent(env, {
+    eventType: "work_card.instruction_handed_off",
+    actorType: "system",
+    actorId: "instruction",
+    objectType: "work_card",
+    objectId: req.cardId,
+    firmScope,
+    payload: { to_card_id: card.id, to_kind: ask.kind, to_employee: host.name, note: ask.note, from_kind: req.cardKind, from_employee: req.employee },
+  });
+  return card.id;
+}
+
+/**
+ * The RESOLVED handoffs, in the narrower shape `steerBlock` reads. `resolved: true` is only ever set
+ * alongside a real `employee` and `cardId` (see `resolveHandoffs`), so this is a safe narrowing —
+ * spelled out explicitly because a `.filter` alone does not carry that guarantee to the type checker.
+ */
+function resolvedNotes(handoffs: readonly ResolvedHandoff[]): { employee: string; note: string }[] {
+  return handoffs.filter((h) => h.resolved && h.employee).map((h) => ({ employee: h.employee!, note: h.note }));
+}
+
+/** Every other registered domain (`kindHosts.ts`), so the model can tell "not mine, but somebody's" from "nobody's". */
+function otherDomainsFor(cardKind: string | null): { kind: string; employee: string; because: string }[] {
+  return Object.keys(KIND_HOSTS)
+    .filter((k) => k !== cardKind)
+    .map((k) => ({ kind: k, host: kindHost(k) }))
+    .filter((d): d is { kind: string; host: NonNullable<ReturnType<typeof kindHost>> } => d.host !== null)
+    .map((d) => ({ kind: d.kind, employee: d.host.name, because: d.host.because }));
+}
+
+/**
  * THE FUNCTION EVERY CHAIN CALLS. Returns the steer, or the reason it must stop.
  *
  * Never throws: a chain that cannot interpret must block with a sentence a partner can read, not
@@ -207,12 +351,19 @@ export async function steerFor(
   const prior = await cached(env, req.cardId, pieces);
   if (prior?.hit) {
     const interpretation = prior.row.interpreted_json ? (JSON.parse(prior.row.interpreted_json) as Interpretation) : null;
+    // Cached rows written before HANDOFF existed carry no `.handoff` at all.
+    const resolved = interpretation ? await resolveHandoffs(env, req, interpretation.handoff ?? []) : { handoffs: [], extraCannot: [] };
     return {
-      text: steerBlock(interpretation),
+      text: steerBlock(interpretation, resolvedNotes(resolved.handoffs)),
       interpretation,
-      cannot: interpretation?.cannot ?? (prior.row.failure_reason ? [prior.row.failure_reason] : []),
+      cannot: interpretation
+        ? [...interpretation.cannot, ...resolved.extraCannot]
+        : prior.row.failure_reason
+          ? [prior.row.failure_reason]
+          : [],
       failure: interpretation ? null : prior.row.failure_reason,
       aiRunId: prior.row.ai_run_id,
+      handoffs: resolved.handoffs,
     };
   }
 
@@ -222,6 +373,7 @@ export async function steerFor(
     chain: req.chain,
     steps: req.steps,
     pieces,
+    otherDomains: otherDomainsFor(req.cardKind),
   });
 
   let out: Awaited<ReturnType<Interpreter>>;
@@ -254,12 +406,15 @@ export async function steerFor(
     }
   }
 
+  const resolved = interpretation ? await resolveHandoffs(env, req, interpretation.handoff) : { handoffs: [], extraCannot: [] };
+
   return {
-    text: steerBlock(interpretation),
+    text: steerBlock(interpretation, resolvedNotes(resolved.handoffs)),
     interpretation,
-    cannot: interpretation ? interpretation.cannot : [failure ?? "her instruction could not be read"],
+    cannot: interpretation ? [...interpretation.cannot, ...resolved.extraCannot] : [failure ?? "her instruction could not be read"],
     failure,
     aiRunId: out.aiRunId,
+    handoffs: resolved.handoffs,
   };
 }
 

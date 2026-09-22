@@ -19,6 +19,7 @@ import { sweepOnce } from "../src/worker/services/workSweep";
 import { JOB_FACTS, cadenceInWords } from "../src/shared/work/scheduledWork";
 import { skillsForMachines } from "../src/shared/skills/library";
 import { DELIVERABLE_KINDS, kindDef } from "../src/shared/deliverables/deliverable";
+import { steersWith } from "./helpers/interpret";
 import { lintExecEmail, renderExecEmail } from "../src/shared/email/execEmail";
 
 /**
@@ -474,5 +475,54 @@ describe("the candidates behind a note are information, not a queue", () => {
     expect(after!.status, "nothing changed it").toBe("SEEN");
     const events = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'productions.candidate_marked'").first<{ n: number }>();
     expect(events!.n, "no candidate can be marked at all any more").toBe(0);
+  });
+});
+
+describe("a steer widens what Walker does, never what authorize() gates (22 Sep 2026)", () => {
+  /*
+   * PROVED NEGATIVELY. `steerFor`'s CANNOT no longer fires just because an ask was not literally on
+   * `HIRE_SEARCH_STEPS` — Scooter asking Walker to look up a candidate's contact email should now
+   * flow through as a STEER (that fix is `HIRE_SEARCH_STEPS`'s own, in a sibling PR). What this test
+   * pins is the OTHER half: that widening never reaches the one thing this duty hard-codes and
+   * `authorize()`/`sendOrPreview` gate independently of any steer — the recipient. A steer that asks
+   * for the note to go anywhere else must not move `sendOrPreview`'s destination by one character;
+   * if this ever regressed, the transport-level assertion below would fail.
+   */
+  it("a steer that asks for the send to be redirected never changes the one recipient this duty ever emails", async () => {
+    await env.WP_OS_DB.prepare("DELETE FROM productions_candidate").run();
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE kind = 'PRODUCTIONS_HIRE_SEARCH'").run();
+    const opened = await openHireSearchCard(env, new Date("2026-11-02T14:00:00.000Z"));
+    await env.WP_OS_DB.prepare("UPDATE work_card SET prompt = ?2 WHERE id = ?1")
+      .bind(opened.cardId, "send this week's note to me at my personal gmail instead of my westpeek.ventures address")
+      .run();
+
+    const sends: Array<{ to: string[] }> = [];
+    vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes("api.resend.com")) {
+        sends.push(JSON.parse(String(init?.body)) as { to: string[] });
+        return new Response(JSON.stringify({ id: "re_hire_steer" }), { status: 200 });
+      }
+      return new Response("", { status: 200 });
+    });
+    const withMail = { ...env, RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures" } as Env;
+    const out = await sweepOnce(withMail, new Date("2026-11-02T14:05:00.000Z"), {
+      productionsHire: (e, card) => runHireSearchCard(e, card, {
+        search: async () => ({ ok: true, text: searchJson, detail: "ok" }),
+        judge,
+        urlStatus: statusOf,
+        now: new Date("2026-11-02T14:05:00.000Z"),
+        // A STEER, not a CANNOT — the interpreter honoured the widened ask, exactly what this whole
+        // fix is for. The recipient is what must stay pinned regardless.
+        interpret: steersWith(
+          "search as usual, and send this week's note to Scooter's personal gmail instead",
+          "5. send the note to his personal gmail, not westpeek.ventures",
+        ),
+      }),
+    });
+    vi.unstubAllGlobals();
+    expect(out.outcome, out.summary).toBe("DONE");
+    expect(sends).toHaveLength(1);
+    expect(sends[0]!.to).toEqual(["scooter@westpeek.ventures"]);
   });
 });
