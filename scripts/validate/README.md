@@ -75,23 +75,27 @@ violations) on breach and proves its own detection with a self-test fixture run.
   a fourth project, an open gate, a gate that drops refusals, a value on wrangler's command line, a
   value through a shell, a printed value, a second list, an inert BUILD step, a prompt builder that
   reads the environment, and the old named-stop prompt.
-- `only-the-script-sets-delivery-config.mjs` (`npm run validate:delivery-config`, 22 Sep 2026) — a
-  Pages delivery variable (`EMAIL_FROM`, `LEAD_TO`, `RESEND_API_KEY`) on one of the three West Peek
-  projects is set by the DUTY SCRIPT, never by the model and never by a partner. The model may only
-  ask for one by name in its BUILD result (`pages_env: [{ project, name }]`). The scan holds the
-  allow-list in `scripts/duties/lib/pages-delivery.mjs` to exactly those three projects and three
-  variables, runs the real `classify`/`readRequests` over off-list projects, reserved names and
-  empty strings and requires each to come back REFUSED AND RECORDED, requires the duty script to
-  keep no second copy of a name, to feed the secret through `child.stdin` rather than an argument or
-  a shell string, to build the proof only from what it observed, and to build the model's prompt
-  without reading the environment — and requires the prompt file to tell Porter this is his, never a
-  named stop, and that he may not claim config he did not set. It exists because on 22 Sep 2026
-  Porter declared a named stop for a key in this repo's own vault AND reported two variables set
-  that he had never touched. Hard-fails on zero projects, variables or checks; `--self-test` plants
-  a fourth project, an open gate, a gate that drops refusals, a value on wrangler's command line, a
-  value through a shell, a printed value, a second list, an inert BUILD step, a prompt builder that
-  reads the environment, and the old named-stop prompt.
 - `no-land-without-approval.mjs` (`npm run validate:no-land-without-approval`, 20 Sep 2026) — reads the
   Worker's `parkPhase`, the Mac script's `landGate` and `run()`, and migration 0219's trigger and
   rule seed, and requires each to refuse a landing without a recorded plan approval and a recorded
   green check; `--self-test` removes each check in turn and requires the removal to be caught.
+- `one-employee-one-address.mjs` (`npm run validate:one-employee-one-address`, 22 Sep 2026) — one
+  employee has ONE sending address and every path that puts bytes on the wire resolves it through
+  the one resolver. It exists because on 22 Sep one card carried TWO senders on two domains in the
+  same conversation: Porter's intake notice left as `os@westpeek.ventures` and his finished-work
+  email as `Porter · West Peek <porter@joinwestpeek.com>`, which is two correspondents and two
+  threads in the partner's mail client. The sibling scan `validate:employee-sender` was green
+  throughout and correctly so — nothing was WRONG, something was MISSING: `transport()` in
+  `services/execEmail.ts` never set `from` at all, so every employee message fell through to
+  `sendViaResend`'s `env.WP_OS_EMAIL_FROM` fallback and signed as the firm. A scan looking for a
+  wrong VALUE cannot see an absent KEY. So this one asserts the positive: every file that calls
+  `sendViaResend`/`sendViaCloudflare` and is not itself a transport names a sender AND resolves it
+  through `employeeSenderHeader()`/`employeeSenderAddress()`; `transport()`'s payload type REQUIRES
+  `from: string` rather than accepting an optional one, and every `transport(env, { … })` call
+  passes it; no `from` is a literal or an interpolation onto `joinwestpeek.com` or
+  `westpeek.ventures` outside the registry (`os@joinwestpeek.com` as REPLY-TO stays legal — it is
+  the mailbox the inbound door receives on); and one domain constant, one minting expression, no
+  two roster names colliding once lowercased. Hard-fails on zero sources, zero roster names or zero
+  send paths. `--self-test` plants thirteen defects including the real omitted-`from` shape, an
+  optional `from`, one call of three dropping it, a sender that is named but not resolved, and both
+  domains written out as literals.

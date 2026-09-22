@@ -83,6 +83,40 @@ export function requesterNotesSection(notes: string | null | undefined, byFirmUs
  * (0160): the card this one was created from, whose owner is whoever passed the work on. Resolved
  * to a roster NAME here, because "aie_wren" in a partner's inbox is an id, not an answer.
  */
+/**
+ * THE ONE CONVERSATION A CARD HAS (22 Sep 2026).
+ *
+ * Every notice about a card — RECEIVED, PLAN, QUESTION, STUCK, DONE — must land in the SAME thread
+ * in the partner's mail client. Until now only the RECEIVED path could be handed an earlier token,
+ * by a caller that happened to have one; every other notice minted a fresh token and started a
+ * fresh conversation. A partner who asked one question got five unrelated messages.
+ *
+ * `work_card_notice.message_id` already records the thread token of every notice sent about a card,
+ * so the root of the conversation is the OLDEST one — asked for here, and carried as
+ * `replyOnThread` so the new message names it in `In-Reply-To` and repeats it in `References`.
+ *
+ * THE ROOT AND NOT THE PREVIOUS MESSAGE, deliberately. Every notice then descends from one common
+ * ancestor, so a client that never saw the middle of the chain — a partner added late, a message
+ * filtered — still puts the last one under the first. Chaining to the previous would make each
+ * message depend on the one before it arriving.
+ *
+ * A row whose send FAILED still holds a token and is still the right ancestor: the token is an
+ * address, not a receipt, and threading a later notice under a message that never arrived costs
+ * nothing.
+ */
+export async function threadRootFor(env: Env, cardId: string): Promise<string | null> {
+  const row = await env.WP_OS_DB.prepare(
+    `SELECT message_id FROM work_card_notice
+      WHERE work_card_id = ?1 AND message_id IS NOT NULL AND message_id <> ''
+      ORDER BY sent_at ASC, rowid ASC
+      LIMIT 1`,
+  )
+    .bind(cardId)
+    .first<{ message_id: string | null }>();
+  const token = (row?.message_id ?? "").trim();
+  return /^wpt_[0-9a-f]{32}$/i.test(token) ? token.toLowerCase() : null;
+}
+
 export async function routedByFor(env: Env, assignedFromCardId: string | null | undefined, who: string): Promise<string | null> {
   const from = (assignedFromCardId ?? "").trim();
   if (!from) return null;
@@ -143,7 +177,17 @@ export async function replyToRequester(
   const lane = await doneReplyLaneFor(env, card, notice);
   // Her words on the card, and who passed the work on — both DONE-only.
   const notes = outcome === "DONE" && notice?.kind === "DONE" ? requesterNotesSection(card.requester_notes, card.requester_notes_by) : null;
-  const routedBy = notice?.kind === "DONE" ? await routedByFor(env, card.assigned_from_card_id, who) : null;
+  /*
+   * WHO ROUTED IT, ON EVERY NOTICE AND NOT ONLY THE LAST ONE (22 Sep 2026). Her rule is that an
+   * employee email names who routed the work as well as who did it — and the FIRST message a
+   * partner gets about a hand-off is the one where "who is this and why are they writing to me"
+   * actually needs answering. #158 wired it to the DONE reply alone, which answered the question
+   * only after the work was over. `routedByFor` returns null when there was no hand-off, so a card
+   * nobody passed on renders the byte-identical footer it always did.
+   */
+  const routedBy = await routedByFor(env, card.assigned_from_card_id, who);
+  // One conversation per card: this note lands under the first notice sent about it.
+  const replyOnThread = await threadRootFor(env, card.id);
   /*
    * THROUGH THE LANE, LIKE EVERYTHING ELSE AN EMPLOYEE FINISHES (18 Sep 2026).
    *
@@ -186,6 +230,8 @@ export async function replyToRequester(
     objectType: "work_card",
     objectId: card.id,
     workCardId: card.id,
+    cardKind: card.kind ?? null,
+    replyOnThread,
     cardAsked: lane.cardAsked,
     tickedByFirmUserId: lane.tickedByFirmUserId,
     requestedByEmail: card.requested_by_email ?? null,

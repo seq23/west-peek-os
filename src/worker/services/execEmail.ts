@@ -9,6 +9,7 @@ import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
 import { lintExecEmail, renderExecEmail, type ExecEmailInput } from "../../shared/email/execEmail";
 import { recordThreadDelivery, startThread } from "./emailThread";
 import { threadReference } from "../../shared/email/thread";
+import { EmployeeSenderError, employeeSenderHeader } from "../../shared/registry/employeeMail";
 
 /**
  * THE ONE DOOR an email to a partner leaves through (16 Sep 2026).
@@ -72,9 +73,40 @@ export interface PartnerEmailOutcome {
   threadToken?: string | null;
 }
 
+/**
+ * WHOSE NAME IS ON IT — the one place any employee's outbound mail resolves its `From` (22 Sep 2026).
+ *
+ * THE DEFECT THIS CLOSES, seen in production the same day. One card, one employee, TWO sender
+ * addresses on TWO domains. Porter's intake notice left as `os@westpeek.ventures` and his
+ * finished-work email left as `Porter · West Peek <porter@joinwestpeek.com>` — the same
+ * conversation, split across the firm's LP-facing identity and the employee's own, which fragments
+ * the thread in the partner's mail client and reads as two correspondents.
+ *
+ * THE CAUSE WAS AN OMISSION, NOT A WRONG VALUE, which is why `validate:employee-sender` was green
+ * throughout: that scan catches a HARDCODED employee address, and there was none. `transport()`
+ * simply never set `from` at all, so every message through this door fell through to
+ * `sendViaResend`'s `env.WP_OS_EMAIL_FROM` fallback — the FIRM's address. Only
+ * `previewApproval.sendApproved` named a sender, so the one lane that went through her preview was
+ * the one lane that signed correctly. "Runs but inert" with a plausible-looking result.
+ *
+ * SO THE SENDER IS RESOLVED HERE AND NOWHERE ELSE, from the roster, through
+ * `employeeSenderHeader` — the same function `sendApproved` and `effects/executor.ts` already ask.
+ * It THROWS for a name that is not on the roster and that throw is kept: a caller that cannot name
+ * an employee has a bug, and a silent fall-back to the firm's address is precisely how this one
+ * stayed invisible for a week.
+ */
+function senderFor(employee: string): { from: string } | { refusal: string } {
+  try {
+    return { from: employeeSenderHeader(employee) };
+  } catch (err) {
+    const why = err instanceof EmployeeSenderError ? err.message : err instanceof Error ? err.message : String(err);
+    return { refusal: `not sent — no sender could be resolved for "${employee}": ${why}` };
+  }
+}
+
 async function transport(
   env: Env,
-  message: { to: string | readonly string[]; subject: string; text: string; html: string; headers?: Record<string, string> },
+  message: { to: string | readonly string[]; subject: string; text: string; html: string; from: string; headers?: Record<string, string> },
 ): Promise<EmailSendResult> {
   const payload = { ...message, replyTo: INTAKE_MAILBOX };
   return isCloudflareEmailEnabled(env) ? await sendViaCloudflare(env, payload) : await sendViaResend(env, payload);
@@ -118,6 +150,13 @@ export async function sendPartnerEmail(env: Env, input: PartnerEmailInput): Prom
     await record(env, actor, events.notSent, { to, subject: rendered.subject, detail: reason, provider_message_id: null, violations });
     return { sent: false, to, reason, subject: rendered.subject };
   }
+  // BEFORE THE THREAD IS MINTED. An unresolvable sender must not leave an `email_thread` row behind
+  // pointing at a conversation that never happened — a reply matched to it would steer real work.
+  const sender = senderFor(input.email.employee);
+  if ("refusal" in sender) {
+    await record(env, actor, events.notSent, { to, subject: rendered.subject, detail: sender.refusal, provider_message_id: null });
+    return { sent: false, to, reason: sender.refusal, subject: rendered.subject };
+  }
 
   /*
    * THE THREAD THIS NOTE STARTS — 7 · REPLIES.
@@ -145,7 +184,7 @@ export async function sendPartnerEmail(env: Env, input: PartnerEmailInput): Prom
     const headers = input.replyOnThread
       ? { References: `${threadReference(input.replyOnThread)} ${thread.headers.References}`, "In-Reply-To": threadReference(input.replyOnThread) }
       : thread.headers;
-    result = await transport(env, { to, subject: rendered.subject, text: rendered.text, html: rendered.html, headers });
+    result = await transport(env, { to, subject: rendered.subject, text: rendered.text, html: rendered.html, from: sender.from, headers });
   } catch (err) {
     result = { sent: false, provider: "resend", detail: err instanceof Error ? err.message : String(err), provider_message_id: null };
   }
@@ -196,10 +235,15 @@ export async function sendPartnersEmail(
     await record(env, actor, events.notSent, { to, subject: rendered.subject, detail: reason, provider_message_id: null, violations });
     return { sent: false, to: joined, recipients: to, reason, subject: rendered.subject };
   }
+  const sender = senderFor(input.email.employee);
+  if ("refusal" in sender) {
+    await record(env, actor, events.notSent, { to, subject: rendered.subject, detail: sender.refusal, provider_message_id: null });
+    return { sent: false, to: joined, recipients: to, reason: sender.refusal, subject: rendered.subject };
+  }
 
   let result: EmailSendResult;
   try {
-    result = await transport(env, { to, subject: rendered.subject, text: rendered.text, html: rendered.html });
+    result = await transport(env, { to, subject: rendered.subject, text: rendered.text, html: rendered.html, from: sender.from });
   } catch (err) {
     result = { sent: false, provider: "resend", detail: err instanceof Error ? err.message : String(err), provider_message_id: null };
   }
@@ -227,9 +271,19 @@ export async function sendFirmUserCopy(
     await record(env, actor, "deliverable.emailed", { to: input.recipient.id, sent: false, provider: null, detail: reason, violations });
     return { sent: false, to, reason, subject: rendered.subject };
   }
+  /*
+   * THE EMPLOYEE SIGNS THIS ONE TOO. A partner pressing "email me a copy" is asking for the copy
+   * of an employee's work; the message is that employee's words, so it carries that employee's
+   * name — not the firm's generic address, which is what the missing `from` used to make it.
+   */
+  const sender = senderFor(input.email.employee);
+  if ("refusal" in sender) {
+    await record(env, actor, "deliverable.emailed", { to: input.recipient.id, sent: false, provider: null, detail: sender.refusal });
+    return { sent: false, to, reason: sender.refusal, subject: rendered.subject };
+  }
   let result: EmailSendResult;
   try {
-    result = await transport(env, { to, subject: rendered.subject, text: rendered.text, html: rendered.html });
+    result = await transport(env, { to, subject: rendered.subject, text: rendered.text, html: rendered.html, from: sender.from });
   } catch (err) {
     result = { sent: false, provider: "resend", detail: err instanceof Error ? err.message : String(err), provider_message_id: null };
   }

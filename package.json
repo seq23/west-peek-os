@@ -87,7 +87,8 @@
     "validate:duty-executor": "node scripts/validate/a-duty-has-an-executor.mjs && node scripts/validate/a-duty-has-an-executor.mjs --self-test && node scripts/claimer/local-job-claimer.mjs --self-test && node scripts/duties/web-property-change.mjs --self-test && node scripts/drive/pull.mjs --self-test",
     "validate:no-land-without-approval": "node scripts/validate/no-land-without-approval.mjs && node scripts/validate/no-land-without-approval.mjs --self-test",
     "validate:delivery-config": "node scripts/validate/only-the-script-sets-delivery-config.mjs && node scripts/validate/only-the-script-sets-delivery-config.mjs --self-test",
-    "validate:kind-rule-switches": "node scripts/validate/a-switch-is-a-switch-on-both-sides.mjs && node scripts/validate/a-switch-is-a-switch-on-both-sides.mjs --self-test"
+    "validate:kind-rule-switches": "node scripts/validate/a-switch-is-a-switch-on-both-sides.mjs && node scripts/validate/a-switch-is-a-switch-on-both-sides.mjs --self-test",
+    "validate:one-employee-one-address": "node scripts/validate/one-employee-one-address.mjs && node scripts/validate/one-employee-one-address.mjs --self-test"
   },
   "dependencies": {
     "@cloudflare/puppeteer": "^1.3.0",
