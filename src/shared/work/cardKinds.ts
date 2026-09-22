@@ -80,6 +80,14 @@ export const CARD_KINDS: readonly CardKind[] = [
     door: "HAND",
   },
   {
+    key: "PARTNER_MESSAGE",
+    label: "Message a partner",
+    oneLine: "One named employee tells one named partner something short — composed by the employee, filed through the same preview door every partner email already goes through.",
+    startableByHand: true,
+    requires: ["which employee sends it", "which partner it is for", "what to say, in your words"],
+    door: "EMAIL",
+  },
+  {
     key: "DECK_REWORK",
     label: "Deck rework",
     oneLine: "Opened by the deck job when a proposed version is sent back; a hand-made one would be joined to that job's card and never worked.",

@@ -36,7 +36,7 @@ describe("the card-kind registry", () => {
   it("offers exactly the kinds a person drives, and each of them names what it needs", () => {
     const offered = handStartableKinds();
     expect(offered.length).toBeGreaterThan(0);
-    expect(offered.map((k) => k.key).sort()).toEqual(["ARTIFACT", "BLOG_HELP", "WEB_PROPERTY_CHANGE"]);
+    expect(offered.map((k) => k.key).sort()).toEqual(["ARTIFACT", "BLOG_HELP", "PARTNER_MESSAGE", "WEB_PROPERTY_CHANGE"]);
     for (const k of offered) {
       expect(k.door, k.key).not.toBe("JOB");
       expect(k.requires.length, k.key).toBeGreaterThan(0);
