@@ -217,3 +217,63 @@ describe("nothing stays stuck silently", () => {
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(c.id).run();
   });
 });
+
+/**
+ * DROP AUTO-NOTIFIES THE REQUESTER (Fix 3, her explicit ask, 22 Sep 2026).
+ *
+ * Dropping a card only ever cancelled it — the partner who originally asked for the work, if there
+ * was one, learned it was dropped by asking. One case (Scooter's) had to be hand-filed as a
+ * `preview_approval` because nothing did this automatically. `answerBlock`'s DROP branch now files
+ * one through the same lane every other partner-facing notice uses: PENDING, `lane_reason =
+ * 'ASKED_FOR'`, never sent directly.
+ */
+describe("dropping a card tells whoever asked for it (Fix 3)", () => {
+  async function cardAskedByEmail(title: string, requestedByEmail: string | null): Promise<{ id: string; firm_scope: string }> {
+    const c = await card(title);
+    if (requestedByEmail) {
+      await env.WP_OS_DB.prepare("UPDATE work_card SET requested_by_email = ?2 WHERE id = ?1").bind(c.id, requestedByEmail).run();
+    }
+    await blockCard(env, c, { reason: "a_question_for_you", trying: c.title, employee: "Parker", detail: "Which month?" }, NOW);
+    return { id: c.id, firm_scope: c.firm_scope };
+  }
+
+  it("files exactly one PENDING preview_approval, lane ASKED_FOR, when the card has a known requester", async () => {
+    const c = await cardAskedByEmail("Asked for by email, then dropped", "scooter@westpeek.ventures");
+
+    const before = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM preview_approval WHERE work_card_id = ?1").bind(c.id).first<{ n: number }>();
+    expect(before!.n, "nothing should exist before the drop").toBe(0);
+
+    const out = await answerBlock(env, c.id, PARTNER, { action: "DROP", text: "Not worth doing this quarter." });
+    expect(out.ok).toBe(true);
+    expect(out.state).toBe("CANCELLED");
+
+    const filed = await env.WP_OS_DB
+      .prepare("SELECT * FROM preview_approval WHERE work_card_id = ?1")
+      .bind(c.id)
+      .all<{ state: string; lane_reason: string; recipient: string; owner_firm_user_id: string; subject: string; body_text: string }>();
+    const rows = filed.results ?? [];
+    expect(rows, "dropping a card with a known requester must file exactly one notice").toHaveLength(1);
+    expect(rows[0]!.state).toBe("PENDING");
+    expect(rows[0]!.lane_reason).toBe("ASKED_FOR");
+    expect(rows[0]!.recipient).toBe("scooter@westpeek.ventures");
+    // Filed on the requester's own Home — Scooter's drop is Scooter's to send, send back or dismiss.
+    expect(rows[0]!.owner_firm_user_id).toBe("fu_scooter_taylor");
+    expect(rows[0]!.body_text, "the typed drop reason must reach the draft, not just the card").toMatch(/Not worth doing this quarter/);
+  });
+
+  it("never sends directly — the drop notice is never anything but PENDING", async () => {
+    const c = await cardAskedByEmail("Never sent directly", "sequoia@westpeek.ventures");
+    await answerBlock(env, c.id, PARTNER, { action: "DROP", text: "Superseded by other work." });
+    const filed = await env.WP_OS_DB.prepare("SELECT state FROM preview_approval WHERE work_card_id = ?1").bind(c.id).first<{ state: string }>();
+    expect(filed!.state, "a drop notice must wait for her Send it, never go out on its own").toBe("PENDING");
+  });
+
+  it("skips silently when the card has no known requester", async () => {
+    const c = await cardAskedByEmail("Nobody asked for this one", null);
+    const out = await answerBlock(env, c.id, PARTNER, { action: "DROP", text: "Cancelling this one." });
+    expect(out.ok).toBe(true);
+
+    const filed = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM preview_approval WHERE work_card_id = ?1").bind(c.id).first<{ n: number }>();
+    expect(filed!.n, "a card nobody asked for by email must not produce a notice to nobody").toBe(0);
+  });
+});
