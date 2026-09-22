@@ -10,7 +10,7 @@ import { actorFromIdentity, authorize, canAccessPrivacyLabel, privacyVisibilityC
 import { getVisibleCapture } from "./captures";
 import { blockOf } from "./blocks";
 import { RECORD_GROUP_COLUMNS, RECORD_GROUP_SQL, RECORD_STATES, monthLabel, searchTerms, type RecordState } from "../../shared/work/record";
-import { partnerByFirmUserId } from "../../shared/registry/partners";
+import { partnerByEmail, partnerByFirmUserId } from "../../shared/registry/partners";
 
 /**
  * Work spine (P3): the unit of governed work. State transitions are enforced
@@ -67,12 +67,32 @@ export interface WorkCardRow {
   preview_owner_id: string | null;
   /** The authenticated address this work was asked for from, when it was asked for by email (0160). */
   requested_by_email: string | null;
+  /**
+   * HELD (0227, Wave D). Her own words on why a card is paused, so its owning employee can relay
+   * them to anyone who asks — "I want to make sure I'm at my desk when this one is being done since
+   * it's a big job." Required by a row trigger whenever `held_at` is set; all three are NULL
+   * otherwise, and `releaseHeldCard` clears them together, never leaving a stale reason attributed
+   * to a card that is no longer held.
+   *
+   * NOT A `state` VALUE — see the long comment on migration 0227. `state` keeps whatever it
+   * legitimately was (OPEN, IN_PROGRESS or BLOCKED) while a card is held; `held_at IS NOT NULL` is
+   * the actual fact, and every route that hands a card to the client synthesises `state: "HELD"`
+   * in its place so the client never has to know the database did not widen a column to hold it.
+   */
+  held_reason: string | null;
+  held_by: string | null;
+  held_at: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export const WORK_CARD_STATES = ["OPEN", "IN_PROGRESS", "BLOCKED", "DONE", "CANCELLED"] as const;
 export type WorkCardState = (typeof WORK_CARD_STATES)[number];
+
+/** The state a card ACTUALLY reads as, `held_at` layered over the stored column (0227, Wave D). */
+export function displayState(card: { state: string; held_at?: string | null }): string {
+  return card.held_at ? "HELD" : card.state;
+}
 
 /**
  * Which moves are legal.
@@ -91,6 +111,12 @@ export type WorkCardState = (typeof WORK_CARD_STATES)[number];
  *
  * `tests/work-cards.test.ts` asserts this table against the moves the page can offer, so the two
  * cannot drift apart again in silence.
+ *
+ * HELD (0227, Wave D) IS NOT IN THIS TABLE AT ALL, because it is not a value of `state` — see the
+ * long comment on migration 0227. Holding and releasing go through their own doors (`holdCard`,
+ * `releaseHeldCard`), which read and write `held_at` directly rather than asking this table
+ * anything; `handleUpdateWorkCard` below refuses to let a plain state change touch a held card by
+ * hand, in either direction.
  */
 const ALLOWED_TRANSITIONS: Readonly<Record<WorkCardState, readonly WorkCardState[]>> = {
   OPEN: ["IN_PROGRESS", "BLOCKED", "DONE", "CANCELLED"],
@@ -115,7 +141,9 @@ export function canTransition(from: WorkCardState, to: WorkCardState): boolean {
  */
 export function offeredMoves(state: WorkCardState): readonly WorkCardState[] {
   // A finished or dropped card is out of the live board and offers exactly one move: back to open.
-  // Everything else is live and offers the working moves.
+  // Everything else is live and offers the working moves. HELD is not a `state` value (0227) — it
+  // is `held_at IS NOT NULL` layered on top — so it has no row in this table at all; the card page
+  // offers Release regardless of what `offeredMoves` says about the underlying stored state.
   if (state === "DONE" || state === "CANCELLED") return ["OPEN"];
   const out: WorkCardState[] = ["DONE", "CANCELLED"];
   if (state === "OPEN") out.unshift("IN_PROGRESS");
@@ -584,10 +612,79 @@ export async function handleListWorkCards(ctx: RouteContext): Promise<Response> 
   return json({ work_cards: rows.results ?? [] });
 }
 
+/**
+ * GET /api/work-cards/:id — the one card, enriched the same way `handleWorkByOwner`'s board is.
+ *
+ * WAVE A (22 Sep 2026). This route pre-dates the card detail page and returned the bare row
+ * (`SELECT *`) — every base column, `held_reason` and `requested_by_email` included, but no
+ * resolved owner name, no held-by name, no structured block and no run/look history. The board's
+ * per-card enrichment is repeated here in miniature rather than imported, because the board's query
+ * is a single JOIN over every live card and this one is a single JOIN over one row by id; sharing a
+ * function would mean either running the board's query for one card (wasteful) or splitting it in a
+ * way that has to stay in lockstep by hand — the same "two components, one list" trap this repo
+ * keeps a rule against. `tests/wave-a-card-page.test.ts` pins that the two never diverge in the
+ * fields they share.
+ */
 export async function handleGetWorkCard(ctx: RouteContext): Promise<Response> {
   const card = await getVisibleWorkCard(ctx.env, ctx.identity!, ctx.params.id!);
   if (!card) return json({ error: "not_found" }, { status: 404 });
-  return json(card);
+
+  const owner = await ctx.env.WP_OS_DB.prepare(
+    `SELECT COALESCE(e.name, u.full_name) AS owner_name, e.role AS owner_role
+       FROM work_card wc
+       LEFT JOIN ai_employee e ON e.id = wc.owner_id AND wc.owner_type = 'AI'
+       LEFT JOIN firm_user u  ON u.id = wc.owner_id AND wc.owner_type = 'HUMAN'
+      WHERE wc.id = ?1`,
+  )
+    .bind(card.id)
+    .first<{ owner_name: string | null; owner_role: string | null }>();
+
+  const heldBy = card.held_by
+    ? await ctx.env.WP_OS_DB.prepare("SELECT full_name FROM firm_user WHERE id = ?1").bind(card.held_by).first<{ full_name: string }>()
+    : null;
+
+  const looks = (
+    await ctx.env.WP_OS_DB.prepare(
+      `SELECT id, work_card_id, objective, start_url, status, result_text, refusal_reason, created_at
+         FROM browser_task WHERE work_card_id = ?1 ORDER BY created_at DESC`,
+    )
+      .bind(card.id)
+      .all<Record<string, unknown>>()
+  ).results ?? [];
+
+  const lastRun = await ctx.env.WP_OS_DB.prepare(
+    `SELECT p.provider_key, r.model, r.status, r.actual_usage_json, r.created_at
+       FROM ai_run_attribution a
+       JOIN ai_run r ON r.id = a.ai_run_id
+       LEFT JOIN provider_registry p ON p.id = r.provider_id
+      WHERE a.work_card_id = ?1
+      ORDER BY r.created_at DESC LIMIT 1`,
+  )
+    .bind(card.id)
+    .first<{ provider_key: string | null; model: string | null; status: string; actual_usage_json: string | null; created_at: string }>();
+  let lastRunCost: number | null = null;
+  try {
+    lastRunCost = lastRun?.actual_usage_json ? ((JSON.parse(lastRun.actual_usage_json) as { cost_usd?: number }).cost_usd ?? null) : null;
+  } catch {
+    lastRunCost = null;
+  }
+
+  return json({
+    ...card,
+    // HELD (0227): the client reads `state`, not `held_at`, everywhere it renders a badge, a
+    // masthead or a band — the same union `CARD_STATES` already has a HELD entry for. The database
+    // never stores the word (see migration 0227); this is the one place a single card is handed to
+    // the client, so it is the one place that has to say so. A held card's `block` is suppressed
+    // too — its underlying `state` can still be BLOCKED (holding does not clear it), and showing
+    // both a HELD banner and a live block callout together would read as two different cards.
+    state: displayState(card),
+    owner_name: owner?.owner_name ?? null,
+    owner_role: owner?.owner_role ?? null,
+    held_by_name: heldBy?.full_name ?? null,
+    block: card.held_at ? null : blockOf(card as never),
+    looks,
+    last_run: lastRun ? { provider_key: lastRun.provider_key, model: lastRun.model, status: lastRun.status, cost_usd: lastRunCost, at: lastRun.created_at } : null,
+  });
 }
 
 export async function handleUpdateWorkCard(ctx: RouteContext): Promise<Response> {
@@ -627,6 +724,22 @@ export async function handleUpdateWorkCard(ctx: RouteContext): Promise<Response>
   if (input.state === "BLOCKED" && card.state !== "BLOCKED") {
     return json(
       { error: "cannot_block_by_hand", detail: "Only an employee blocks work, and only with a reason and a way to clear it. If you have decided against this, drop it." },
+      { status: 409 },
+    );
+  }
+
+  /*
+   * NOR DOES A PERSON RELEASE A HELD CARD FROM HERE (0227). HELD is not a `state` value — it is
+   * `held_at IS NOT NULL` layered on top (see migration 0227) — so `state: "OPEN"` on a held card
+   * would pass `canTransition` from whatever the card's real underlying state is and silently walk
+   * it back to OPEN while leaving `held_reason`/`held_by`/`held_at` stale, attributed to a card that
+   * no longer reads as held anywhere else. `releaseHeldCard` clears all three in the same write;
+   * this generic handler has no field for them, so `POST /api/work-cards/:id/release` is the one
+   * door, the same shape as unblocking.
+   */
+  if (card.held_at && input.state !== undefined) {
+    return json(
+      { error: "cannot_release_by_hand", detail: "Releasing a held card clears the reason it was held for — use \"Release\" on the card." },
       { status: 409 },
     );
   }
@@ -703,8 +816,143 @@ export async function handleUpdateWorkCard(ctx: RouteContext): Promise<Response>
       : { fields: Object.keys(input) },
   });
 
-  const updated = await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(card.id).first<WorkCardRow>();
-  return json(updated);
+  const updated = (await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(card.id).first<WorkCardRow>())!;
+  // HELD (0227): a non-state edit (reassign, priority, …) is legal on a held card and this is the
+  // one other route that hands a single card straight back — without this it would show "OPEN"
+  // instead of "HELD" the moment anything else about a held card changed.
+  return json({ ...updated, state: displayState(updated) });
+}
+
+// ── HELD (0227, Wave D) ───────────────────────────────────────────────────────────────────────
+
+const holdWorkCardSchema = z.object({
+  reason: z.string().trim().min(2).max(2000),
+});
+
+/**
+ * Pull a card off the board with a reason, releasing any live claim on it in the same write.
+ *
+ * THE SINGLE MOST IMPORTANT CORRECTNESS RULE IN THIS WAVE. If the card is picked up right now —
+ * `lease_until` in the future, mid-`work_attempts` — this write clears the lease unconditionally,
+ * in the same UPDATE that sets `held_at`. Without that, the Mac keeps executing a card that now
+ * reads "held," which is the exact contradiction the feature exists to prevent. The row trigger in
+ * 0227 backs this up: a write that sets `held_at` while `lease_until` is still non-NULL is refused
+ * at the database regardless of what this function does.
+ *
+ * `state` ITSELF IS NEVER TOUCHED HERE — see migration 0227. A hold is legal while the card is OPEN,
+ * IN_PROGRESS or BLOCKED, because "pull it and save it for later" is meaningful for all three, and
+ * whichever it was stays the stored value; only `held_at`/`held_reason`/`held_by` change. It is
+ * illegal on DONE or CANCELLED (nothing to pull) and on a card already held.
+ */
+export async function holdCard(
+  env: Env,
+  identity: FirmUserIdentity,
+  cardId: string,
+  reason: string,
+): Promise<WorkCardRow | WorkCardError> {
+  const card = await getVisibleWorkCard(env, identity, cardId);
+  if (!card) return new WorkCardError(404, "not_found");
+
+  const actor = actorFromIdentity(identity);
+  const authz = await authorize(env, actor, "work_card.hold", { objectType: "work_card", objectId: card.id, firmScope: card.firm_scope });
+  if (authz.decision !== "ALLOW") return new WorkCardError(403, "forbidden", authz.reason);
+
+  if (card.held_at) {
+    return new WorkCardError(409, "already_held", "This card is already held.");
+  }
+  if (!(["OPEN", "IN_PROGRESS", "BLOCKED"] as const).includes(card.state as never)) {
+    return new WorkCardError(409, "illegal_transition", `${card.state} work cannot be held — nothing to pull`);
+  }
+  const trimmed = reason.trim();
+  if (trimmed.length < 2) {
+    return new WorkCardError(400, "invalid_input", "Say why you are holding it — the owner relays this to anyone who asks.");
+  }
+
+  await env.WP_OS_DB.prepare(
+    `UPDATE work_card
+        SET held_reason = ?2, held_by = ?3, held_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+            -- THE RULE: a live claim cannot survive a hold. Unconditional, not "only if leased" —
+            -- an already-NULL lease is a no-op write, and a live one is the whole point of the rule.
+            lease_until = NULL,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE id = ?1`,
+  )
+    .bind(card.id, trimmed.slice(0, 2000), identity.id)
+    .run();
+
+  await appendEvent(env, {
+    eventType: "work_card.held",
+    actorType: "firm_user",
+    actorId: identity.id,
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope: card.firm_scope,
+    payload: { underlying_state: card.state, reason: trimmed.slice(0, 400) },
+  });
+
+  return (await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(card.id).first<WorkCardRow>())!;
+}
+
+/**
+ * Release puts a held card back to OPEN with its attempts reset — it re-queues fresh, it does not
+ * resume mid-step. The reason, who held it and when are all cleared in the same write: a released
+ * card carries no stale claim to still be held.
+ */
+export async function releaseHeldCard(env: Env, identity: FirmUserIdentity, cardId: string): Promise<WorkCardRow | WorkCardError> {
+  const card = await getVisibleWorkCard(env, identity, cardId);
+  if (!card) return new WorkCardError(404, "not_found");
+
+  const actor = actorFromIdentity(identity);
+  const authz = await authorize(env, actor, "work_card.release", { objectType: "work_card", objectId: card.id, firmScope: card.firm_scope });
+  if (authz.decision !== "ALLOW") return new WorkCardError(403, "forbidden", authz.reason);
+
+  if (!card.held_at) {
+    return new WorkCardError(409, "not_held", "This card is not held, so there is nothing to release.");
+  }
+
+  await env.WP_OS_DB.prepare(
+    `UPDATE work_card
+        SET state = 'OPEN',
+            held_reason = NULL, held_by = NULL, held_at = NULL,
+            -- RE-QUEUES FRESH, NEVER MID-STEP (her rule). The same reset every other door that puts
+            -- a card back already performs — see the comment above handleUpdateWorkCard's own.
+            work_attempts = 0, work_steps = 0, lease_until = NULL,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE id = ?1`,
+  )
+    .bind(card.id)
+    .run();
+
+  await appendEvent(env, {
+    eventType: "work_card.released",
+    actorType: "firm_user",
+    actorId: identity.id,
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope: card.firm_scope,
+    payload: { held_reason: card.held_reason?.slice(0, 400) ?? null },
+  });
+
+  return (await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(card.id).first<WorkCardRow>())!;
+}
+
+/** POST /api/work-cards/:id/hold — always a required reason, never a bare toggle. */
+export async function handleHoldWorkCard(ctx: RouteContext): Promise<Response> {
+  const body = await parseJsonBody(ctx.request);
+  const parsed = holdWorkCardSchema.safeParse(body);
+  if (!parsed.success) {
+    return json({ error: "invalid_input", detail: "Say why you are holding it — the owner relays this to anyone who asks." }, { status: 400 });
+  }
+  const out = await holdCard(ctx.env, ctx.identity!, ctx.params.id!, parsed.data.reason);
+  if (out instanceof WorkCardError) return json({ error: out.code, detail: out.message }, { status: out.status });
+  return json({ ...out, state: displayState(out) });
+}
+
+/** POST /api/work-cards/:id/release — back to OPEN, attempts reset, re-queues fresh. */
+export async function handleReleaseWorkCard(ctx: RouteContext): Promise<Response> {
+  const out = await releaseHeldCard(ctx.env, ctx.identity!, ctx.params.id!);
+  if (out instanceof WorkCardError) return json({ error: out.code, detail: out.message }, { status: out.status });
+  return json({ ...out, state: displayState(out) });
 }
 
 /**
@@ -734,6 +982,15 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
             -- never see again cannot be corrected, and a wrong one is exactly what sends a room
             -- packet to the dearest model on the account.
             wc.model_access, wc.audience,
+            -- WAVE A (22 Sep 2026): the columns the card detail page needs that this route never
+            -- selected — who asked and how, her two fields, and the hand-off trail. Without these
+            -- an email-born card is invisible AS an email-born card, and the fix to the create form
+            -- that finally writes result_recipient/preview_first would still read as broken.
+            wc.requested_by_email, wc.request_json, wc.preview_first, wc.result_recipient,
+            wc.assigned_from_card_id,
+            -- originOf (shared/work/origin.ts) reads these two alongside the four above to answer
+            -- "where did this card come from" — it had no consumer until this page.
+            wc.created_by, wc.meeting_id,
             COALESCE(wc.work_attempts, 0) AS work_attempts,
             -- 0173: a block carries its own sentences and its own doors, so the page never has to
             -- guess what a partner can do about it.
@@ -749,11 +1006,15 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
             -- WHICH CHAIN WORKS IT. Served so the page can show an ARTIFACT card's build row
             -- (19 Sep 2026); the board read every column but this one and the row never rendered.
             wc.kind,
+            -- 0227, Wave D: silent by design, but not invisible. "Held by Sequoia — '…' — since
+            -- Tuesday" reads from these three, wherever the card is referenced.
+            wc.held_reason, wc.held_by, wc.held_at, held_user.full_name AS held_by_name,
             COALESCE(e.name, u.full_name) AS owner_name,
             e.role AS owner_role
        FROM work_card wc
        LEFT JOIN ai_employee e ON e.id = wc.owner_id AND wc.owner_type = 'AI'
        LEFT JOIN firm_user u  ON u.id = wc.owner_id AND wc.owner_type = 'HUMAN'
+       LEFT JOIN firm_user held_user ON held_user.id = wc.held_by
       WHERE ${visibility}
         -- LIVE WORK ONLY, AND THAT IS THE FIX RATHER THAN A TRIM.
         --
@@ -767,6 +1028,12 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
         -- Finished work is now served by /api/work-cards/record, which searches, groups and pages
         -- it properly. What is left here is bounded by the firm's actual capacity to have work in
         -- flight, so it needs no cap and can no longer push a waiting card out of its own list.
+        --
+        -- A HELD CARD IS STILL IN THIS LIST (0227, Wave D), FOR FREE. Holding does not change
+        -- state at all — see migration 0227 — so a held card's real underlying value (OPEN,
+        -- IN_PROGRESS or BLOCKED) already matches this filter. She can still see it, open it and
+        -- release it from the same board everything else lives on; the sweep skips it and the
+        -- resurfacing nag never fires, both keyed on held_at, not on this clause.
         AND wc.state IN ('OPEN', 'IN_PROGRESS', 'BLOCKED')
       ORDER BY wc.created_at DESC`,
   ).all<Record<string, unknown>>();
@@ -849,10 +1116,14 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
   return json({
     cards: (cards.results ?? []).map((c) => ({
       ...c,
+      // HELD (0227): synthesised the same way `handleGetWorkCard` does — the desk reads `state`,
+      // never `held_at` directly, and a held card's stale block columns (holding does not clear
+      // them) must not also render a live block callout beside the "held" banner.
+      state: displayState(c as { state: string; held_at?: string | null }),
       looks: looksByCard.get(String(c.id)) ?? [],
       /** Where the card's most recent run actually went. Immutable; a relabel cannot rewrite it. */
       last_run: lastRunByCard.get(String(c.id)) ?? null,
-      block: blockOf(c as never),
+      block: (c as { held_at?: string | null }).held_at ? null : blockOf(c as never),
     })),
     recent_runs: runs.results ?? [],
     /** Everyone a card can be given to, so the UI never offers an owner the server would refuse. */
@@ -1053,9 +1324,15 @@ export async function handleAddWorkCardNote(ctx: RouteContext): Promise<Response
   const text = typeof body?.body === "string" ? body.body.trim() : "";
   if (text.length < 2) return json({ error: "invalid_input", detail: "Say what you want them to do differently." }, { status: 400 });
 
-  const card = await ctx.env.WP_OS_DB.prepare("SELECT id, state FROM work_card WHERE id = ?1")
-    .bind(ctx.params.id!)
-    .first<{ id: string; state: string }>();
+  /*
+   * A MISSING AUTHORITY CHECK, FIXED WHILE THE FILE IS OPEN (22 Sep 2026, Wave A). This route read
+   * `SELECT id, state FROM work_card WHERE id = ?1` with no scope or privacy check at all — every
+   * other card route goes through `getVisibleWorkCard`, which checks firm scope AND privacy label.
+   * Sized honestly: latent, not live — every card in production is `firm_scope = 'west-peek'` and
+   * `privacy_label = 'INTERNAL'`, so nothing tighter existed to leak. It becomes real the first time
+   * a CONFIDENTIAL card or a second scope exists, and the fix belongs here, not filed for later.
+   */
+  const card = await getVisibleWorkCard(ctx.env, ctx.identity!, ctx.params.id!);
   if (!card) return json({ error: "not_found" }, { status: 404 });
 
   // A note on finished work would never be read: the loop only re-reads notes on a card it is
@@ -1088,6 +1365,9 @@ export async function handleAddWorkCardNote(ctx: RouteContext): Promise<Response
 
 /** What has been said on this card, and what came back. */
 export async function handleListWorkCardNotes(ctx: RouteContext): Promise<Response> {
+  // Same fix as the write side above: visibility is checked, not assumed.
+  const card = await getVisibleWorkCard(ctx.env, ctx.identity!, ctx.params.id!);
+  if (!card) return json({ error: "not_found" }, { status: 404 });
   const rows = await ctx.env.WP_OS_DB.prepare(
     `SELECT n.id, n.body, n.response, n.acknowledged_at, n.created_at, fu.full_name AS author
        FROM work_card_note n

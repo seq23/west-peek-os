@@ -1,4 +1,9 @@
+import { z } from "zod";
 import type { Env } from "../env";
+import type { RouteContext } from "../router";
+import { json } from "../router";
+import { appendEvent } from "../events";
+import { actorFromIdentity, authorize } from "./authorize";
 import { PREVIEW_PARTNER } from "../../shared/registry/partners";
 import type { NoticeKind } from "./requestReply";
 
@@ -65,6 +70,17 @@ export interface DoneReplyLane {
  *
  * Only DONE. RECEIVED, PLAN, PREVIEW, QUESTION and STUCK are the back-and-forth of the work; holding
  * one of those would make the partner who asked wait on somebody else to be asked a question.
+ *
+ * ── THE GLOBAL DIAL, AND WHY A ROW MEANS "OVERRIDE" (Addendum 8, 0228) ────────────────────────
+ *
+ * "Show me the finished email before it goes" was built as a WEB_PROPERTY_CHANGE setting and her
+ * real reason for wanting it is not about Porter — it is "I am still early days with these agents
+ * and I want to tail them." `email_preview_preference` is the firm-wide default every kind starts
+ * from. A kind's OWN `work_kind_rule` row for `done_reply_preview_first` — which today exists only
+ * for WEB_PROPERTY_CHANGE, seeded ON by 0223 — is an explicit override and always wins, in EITHER
+ * direction: `handleSetWorkKindRule` refuses to write a rule that has no seeded row (404), so the
+ * only way a kind acquires one is deliberate. A kind with no row has never been given its own
+ * answer and inherits the dial.
  */
 export async function doneReplyLaneFor(
   env: Env,
@@ -75,11 +91,89 @@ export async function doneReplyLaneFor(
   const base: DoneReplyLane = { cardAsked, tickedByFirmUserId: card.preview_owner_id ?? null, becauseOfRule: false };
   if (notice?.kind !== "DONE" || !card.kind) return base;
   const rules = await rulesFor(env, card.kind);
-  if (!isOn(rules[DONE_REPLY_PREVIEW_FIRST])) return base;
+  const hasOwnRule = Object.prototype.hasOwnProperty.call(rules, DONE_REPLY_PREVIEW_FIRST);
+  const effectiveOn = hasOwnRule ? isOn(rules[DONE_REPLY_PREVIEW_FIRST]) : await previewAllPartnerEmailsIsOn(env);
+  if (!effectiveOn) return base;
   return {
     cardAsked: true,
     // Whoever ticked the box still owns their own preview; otherwise it is hers, because the rule is.
     tickedByFirmUserId: card.preview_owner_id ?? PREVIEW_PARTNER.firmUserId,
     becauseOfRule: cardAsked !== true,
   };
+}
+
+// ── THE FIRM-WIDE TRUST DIAL (0228, Addendum 8) ──────────────────────────────────────────────
+
+export interface EmailPreviewPreferenceRow {
+  id: string;
+  version_no: number;
+  preview_all_partner_emails: number;
+  set_by: string;
+  firm_scope: string;
+  created_at: string;
+}
+
+/** The latest version, or null when nobody has ever set it — which means ON (her 22 Sep decision). */
+export async function latestEmailPreviewPreference(env: Env, firmScope = "west-peek"): Promise<EmailPreviewPreferenceRow | null> {
+  return env.WP_OS_DB.prepare(
+    "SELECT * FROM email_preview_preference WHERE firm_scope = ?1 ORDER BY version_no DESC LIMIT 1",
+  )
+    .bind(firmScope)
+    .first<EmailPreviewPreferenceRow>();
+}
+
+/** ON with zero rows: a firm that has never touched the dial is a firm still tailing its employees. */
+export async function previewAllPartnerEmailsIsOn(env: Env, firmScope = "west-peek"): Promise<boolean> {
+  const row = await latestEmailPreviewPreference(env, firmScope);
+  return row ? row.preview_all_partner_emails === 1 : true;
+}
+
+const setEmailPreviewPreferenceSchema = z.object({ preview_all_partner_emails: z.boolean() });
+
+/** GET /api/email-preview-preference — the dial, read for the settings surface. */
+export async function handleGetEmailPreviewPreference(ctx: RouteContext): Promise<Response> {
+  const firmScope = actorFromIdentity(ctx.identity!).firmScopes[0] ?? "west-peek";
+  const row = await latestEmailPreviewPreference(ctx.env, firmScope);
+  return json({
+    preview_all_partner_emails: row ? row.preview_all_partner_emails === 1 : true,
+    set_by: row?.set_by ?? null,
+    set_at: row?.created_at ?? null,
+  });
+}
+
+/** PATCH /api/email-preview-preference — a Managing Partner moves the dial, firm-wide. */
+export async function handleSetEmailPreviewPreference(ctx: RouteContext): Promise<Response> {
+  const actor = actorFromIdentity(ctx.identity!);
+  if (actor.type !== "HUMAN") {
+    return json({ error: "forbidden", detail: "The email preview dial belongs to a Managing Partner." }, { status: 403 });
+  }
+  const authz = await authorize(ctx.env, actor, "email_preview_preference.set", { objectType: "email_preview_preference", objectId: actor.firmUserId ?? "" });
+  if (authz.decision !== "ALLOW") return json({ error: "forbidden", detail: authz.reason }, { status: 403 });
+
+  const body = await ctx.request.json().catch(() => null);
+  const parsed = setEmailPreviewPreferenceSchema.safeParse(body);
+  if (!parsed.success) return json({ error: "invalid_input", detail: "Say on or off." }, { status: 400 });
+
+  const firmScope = actor.firmScopes[0] ?? "west-peek";
+  const current = await latestEmailPreviewPreference(ctx.env, firmScope);
+  const nextVersion = (current?.version_no ?? 0) + 1;
+  const id = `epp_${crypto.randomUUID()}`;
+  await ctx.env.WP_OS_DB.prepare(
+    `INSERT INTO email_preview_preference (id, version_no, preview_all_partner_emails, set_by, firm_scope)
+     VALUES (?1, ?2, ?3, ?4, ?5)`,
+  )
+    .bind(id, nextVersion, parsed.data.preview_all_partner_emails ? 1 : 0, actor.firmUserId ?? ctx.identity!.id, firmScope)
+    .run();
+
+  await appendEvent(ctx.env, {
+    eventType: "email_preview_preference.set",
+    actorType: "firm_user",
+    actorId: ctx.identity!.id,
+    objectType: "email_preview_preference",
+    objectId: id,
+    firmScope,
+    payload: { version_no: nextVersion, preview_all_partner_emails: parsed.data.preview_all_partner_emails },
+  });
+
+  return json({ preview_all_partner_emails: parsed.data.preview_all_partner_emails, set_by: actor.firmUserId ?? ctx.identity!.id, set_at: new Date().toISOString() });
 }

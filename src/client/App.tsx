@@ -57,6 +57,8 @@ import { MeetPanel } from "./pages/MeetPanel";
 import { CompaniesPage as CompanyRegister } from "./pages/CompaniesPage";
 import { BrowserTasksPage } from "./pages/BrowserTasksPage";
 import { WorkCardsPage as WorkSurface } from "./pages/WorkCardsPage";
+import { WorkCardPage } from "./pages/WorkCardPage";
+import { WorkKindRulesPage } from "./pages/WorkKindRulesPage";
 import { GOVERNANCE_UPDATE_TYPES, RECOMMENDED_GOVERNANCE, governanceType } from "@shared/governance/updateTypes";
 import { useSelectedFund } from "./lib/selectedFund";
 import { HelpCenterPage, type HelpGroup } from "./pages/HelpCenterPage";
@@ -424,6 +426,10 @@ const ALL_NAV_KEYS: ReadonlySet<string> = new Set([
   "allocation",
   // The private layer: reachable by URL and from Home's foot, never in the nav (design/HOME_DESIGN.md §2).
   "private",
+  // Wave A (22 Sep 2026): the standing-rules settings surface a card's page points at. Reachable
+  // by URL, never a nav item of its own — it is reached FROM a card, the same way `private` is
+  // reached from Home's foot.
+  "work-kind-rules",
   "follow-on",
   "market-map",
   "jobs",
@@ -2735,6 +2741,25 @@ function artifactIdFromHash(): string | null {
 }
 
 /**
+ * WAVE A (22 Sep 2026): `#/work/<id>` is the card's own page — a real URL a notification, an
+ * email link or a bookmark can point at, which did not exist before this. Null on `#/work` itself,
+ * which still renders the desk.
+ */
+function workCardIdFromHash(): string | null {
+  const m = window.location.hash.match(/^#\/work\/([A-Za-z0-9_-]+)(\?.*)?$/);
+  return m ? m[1]! : null;
+}
+
+/**
+ * Addendum 1/7 (Wave A): `#/work-kind-rules/<kind>` is the standing-rules surface a card's own page
+ * points at, rather than rendering its kind's global policy inline as if it belonged to one card.
+ */
+function workKindRulesKindFromHash(): string | null {
+  const m = window.location.hash.match(/^#\/work-kind-rules\/([A-Za-z0-9_-]+)(\?.*)?$/);
+  return m ? m[1]! : null;
+}
+
+/**
  * TIER 3 PREP (Phase C). `#/room/<meeting id>` renders the During face ALONE — no rail, no top
  * bar, no purpose block — behind the same `/api/me` gate as everything else. That is the shape a
  * Google Meet Add-on side panel hosts later: one route, one meeting, the whole live room. Nothing
@@ -2811,11 +2836,17 @@ function Shell() {
    * about what is on screen.
    */
   const [artifactId, setArtifactId] = useState<string | null>(() => (typeof window === "undefined" ? null : artifactIdFromHash()));
+  // Wave A (22 Sep 2026): the card's own page, and the standing-rules surface it points at —
+  // resolved from the URL the same way the artifact-inside-Documents address already is.
+  const [workCardId, setWorkCardId] = useState<string | null>(() => (typeof window === "undefined" ? null : workCardIdFromHash()));
+  const [workKindRulesKind, setWorkKindRulesKind] = useState<string | null>(() => (typeof window === "undefined" ? null : workKindRulesKindFromHash()));
   useEffect(() => {
     const onHash = () => {
       const key = keyFromHash((k) => ALL_NAV_KEYS.has(k));
       setActive(key);
       setArtifactId(artifactIdFromHash());
+      setWorkCardId(workCardIdFromHash());
+      setWorkKindRulesKind(workKindRulesKindFromHash());
       if (SECONDARY_KEYS.has(key)) setSystemOpen(true);
     };
     window.addEventListener("hashchange", onHash);
@@ -3127,13 +3158,33 @@ function Shell() {
             redesign was asked to separate. `WorkCardsPage` now owns the three addresses and renders
             this only on the one it belongs to; the shell still owns what the machinery IS.
           */}
+          {/*
+            WAVE A (22 Sep 2026): `#/work/<id>` renders the card's own page in the desk's place —
+            the same additive shape `#/documents/a/<id>` already uses for an artifact. The desk,
+            the masthead, the three tabs and every route besides this one are untouched.
+          */}
           {authed && active === "work" && (
-            <WorkSurface
-              me={me.data!}
-              onChanged={refresh}
-              onNavigate={navigate}
-              machinery={<JobsPage me={me.data!} />}
-            />
+            workCardId ? (
+              <WorkCardPage
+                cardId={workCardId}
+                me={me.data!}
+                onChanged={refresh}
+                onNavigate={navigate}
+                onBack={() => { window.location.hash = "#/work"; }}
+              />
+            ) : (
+              <WorkSurface
+                me={me.data!}
+                onChanged={refresh}
+                onNavigate={navigate}
+                machinery={<JobsPage me={me.data!} />}
+              />
+            )
+          )}
+          {/* Addendum 1/7 (Wave A): the standing-rules settings surface a card's page points at,
+              never rendered inline on the card itself. */}
+          {authed && active === "work-kind-rules" && workKindRulesKind && (
+            <WorkKindRulesPage kind={workKindRulesKind} me={me.data!} onBack={() => navigate("work")} />
           )}
           {authed && active === "approvals" && <ApprovalsPage me={me.data!} refreshNonce={refreshNonce} />}
           {authed && active === "companies" && (

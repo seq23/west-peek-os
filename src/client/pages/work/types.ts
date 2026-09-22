@@ -37,7 +37,33 @@ export interface WorkCardRow {
    */
   last_run?: { provider_key: string | null; model: string | null; status: string; cost_usd: number | null; at: string } | null;
   kind?: string | null;
+  /**
+   * WAVE A (22 Sep 2026): who asked and how, and the hand-off trail — selected by `handleWorkByOwner`
+   * since 22 Sep but never read by anything until the card detail page.
+   */
+  requested_by_email?: string | null;
+  request_json?: string | null;
+  preview_first?: number | null;
+  result_recipient?: string | null;
+  assigned_from_card_id?: string | null;
+  /**
+   * HELD (0227, Wave D). All three are set together and cleared together; `held_by_name` is the
+   * resolved partner name, because "fu_sequoia_taylor held this" is an id, not an answer.
+   */
+  held_reason?: string | null;
+  held_by?: string | null;
+  held_by_name?: string | null;
+  held_at?: string | null;
   work_attempts?: number;
+  /**
+   * WAVE A: live progress, server-side only until now — `work_steps` against
+   * `MAX_STEPS_PER_CARD` (shared/work/employeeLoop.ts) and the lease that says who is claiming the
+   * card right now, and until when.
+   */
+  work_steps?: number;
+  lease_until?: string | null;
+  created_by?: string | null;
+  meeting_id?: string | null;
   /**
    * 0185 — WHAT WENT WRONG ON THE LAST ATTEMPT, while the card is still retrying and not yet
    * blocked. This is the field that stops a failing card reading as a waiting one.

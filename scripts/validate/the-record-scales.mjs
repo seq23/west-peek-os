@@ -85,7 +85,18 @@ export function sqlContaining(src, marker) {
 
 export function checkBoardIsLiveOnly(serviceSrc) {
   const violations = [];
-  const sql = sqlContaining(serviceSrc, "COALESCE(e.name, u.full_name) AS owner_name");
+  /*
+   * MARKER SHARPENED 22 Sep 2026 (Wave A). "COALESCE(e.name, u.full_name) AS owner_name" used to
+   * name only the board query in `handleWorkByOwner` — it now also appears in `handleGetWorkCard`'s
+   * own single-row owner lookup (added so the card detail page can show "Working it: <employee>"
+   * without a second endpoint). `sqlContaining` returns the FIRST match in the file, and
+   * `handleGetWorkCard` sits above `handleWorkByOwner`, so the ambiguous marker silently started
+   * scanning the wrong query — a one-row lookup with no `state` clause at all, which is a false
+   * positive of exactly the shape this validator exists to catch, not a real defect. The board
+   * query alone selects `wc.next_action, wc.due_at, wc.capture_id` together; the single-row lookup
+   * selects neither.
+   */
+  const sql = sqlContaining(serviceSrc, "wc.next_action, wc.due_at, wc.capture_id");
   if (!sql) {
     return {
       examined: 0,
@@ -328,7 +339,7 @@ function selfTest() {
     "the board query as it actually shipped — no state constraint, capped at 500",
     () =>
       checkBoardIsLiveOnly(
-        'x = env.DB.prepare(`SELECT wc.id, COALESCE(e.name, u.full_name) AS owner_name FROM work_card wc WHERE ${v} ORDER BY wc.created_at DESC LIMIT 500`)',
+        'x = env.DB.prepare(`SELECT wc.id, wc.next_action, wc.due_at, wc.capture_id, COALESCE(e.name, u.full_name) AS owner_name FROM work_card wc WHERE ${v} ORDER BY wc.created_at DESC LIMIT 500`)',
       ).violations,
     /does not constrain wc.state/,
   );
@@ -411,7 +422,7 @@ function selfTest() {
       name: "the board query as it now stands",
       run: () =>
         checkBoardIsLiveOnly(
-          "x = env.DB.prepare(`SELECT COALESCE(e.name, u.full_name) AS owner_name FROM work_card wc WHERE ${v} AND wc.state IN ('OPEN', 'IN_PROGRESS', 'BLOCKED') ORDER BY wc.created_at DESC`)",
+          "x = env.DB.prepare(`SELECT wc.next_action, wc.due_at, wc.capture_id, COALESCE(e.name, u.full_name) AS owner_name FROM work_card wc WHERE ${v} AND wc.state IN ('OPEN', 'IN_PROGRESS', 'BLOCKED') ORDER BY wc.created_at DESC`)",
         ).violations,
     },
     {

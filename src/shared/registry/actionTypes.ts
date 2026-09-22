@@ -41,6 +41,13 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
    */
   { key: "inbound_message.read_raw", name: "Read a stored message raw", description: "Read the stored `.eml` of an inbound message exactly as it arrived, headers and all.", isExternalEffect: false },
   { key: "work_card.unblock", name: "Clear a block on an employee's work", description: "Answer the question an employee is stuck on, change what was asked for, drop the work, or send it to an engineer. An answer reaches the employee on their next run.", isExternalEffect: false },
+  // 0227, Wave D. Held is distinct from blocked: nothing stopped the work, she paused it on
+  // purpose, and it is silent until she releases it.
+  { key: "work_card.hold", name: "Hold a work card for later", description: "Pull a card off the board with a reason, releasing any live claim on it in the same write.", isExternalEffect: false },
+  { key: "work_card.release", name: "Release a held work card", description: "Put a held card back to OPEN with its attempts reset — it re-queues fresh, never mid-step.", isExternalEffect: false },
+  // 0228, Addendum 8. "Show me the finished email before it goes" is a firm-wide trust dial, not a
+  // per-kind setting — a kind with no rule of its own inherits this.
+  { key: "email_preview_preference.set", name: "Set the firm-wide email preview dial", description: "Turn \"preview every partner-facing email before it sends\" on or off for the whole firm — the default every card kind inherits unless it carries its own override.", isExternalEffect: false },
   { key: "approval.request", name: "Request approval", description: "Draft or submit an approval card for a governed action.", isExternalEffect: false },
   { key: "approval.decide", name: "Decide approval", description: "Approve, reject, or request revision on a pending approval card (human with required role only).", isExternalEffect: false },
   // Changing a decision and blocking one are separate authorities from making a decision, because

@@ -67,6 +67,8 @@ import {
   handleGetWorkCard,
   handleListWorkCards,
   handleUpdateWorkCard,
+  handleHoldWorkCard,
+  handleReleaseWorkCard,
 } from "./services/workCards";
 import {
   handleCreateApproval,
@@ -118,7 +120,8 @@ import {
   handleRunAi,
 } from "./services/aiRuns";
 import { handleGetRequestAttachment, handleGetWebPropertyChange, handleReingestStoredEmail, handleSetWorkKindRule, handleWorkKindRules } from "./services/webPropertyChange";
-import { handleGetRequestMessage, handleGetRequestMessageRaw } from "./services/requestMessage";
+import { handleGetRequestMessage, handleGetRequestMessageRaw, handleGetWorkCardMessageTrail } from "./services/requestMessage";
+import { handleGetEmailPreviewPreference, handleSetEmailPreviewPreference } from "./services/kindRules";
 import {
   handleSubscriptionSeatClaim,
   handleSubscriptionSeatHeartbeat,
@@ -1116,6 +1119,10 @@ const router = new Router()
   // 0173 — the four doors on a blocked card: answer it, change it, drop it, send it to an engineer.
   // An answer reopens the card and reaches the employee's next run; it is not a comment box.
   .post("/api/work-cards/:id/unblock", handleUnblockWorkCard)
+  // 0227, Wave D — HELD: pull a card and save it for later, with a required reason; release puts
+  // it back to OPEN with its attempts reset, never resuming mid-step.
+  .post("/api/work-cards/:id/hold", handleHoldWorkCard)
+  .post("/api/work-cards/:id/release", handleReleaseWorkCard)
   // Plan A (20 Sep 2026): the state of a web property change, and the standing rules of a card kind.
   .get("/api/work-cards/:id/web-property-change", handleGetWebPropertyChange)
   .get("/api/work-cards/:id/attachments/:attId", handleGetRequestAttachment)
@@ -1123,9 +1130,16 @@ const router = new Router()
   // raw `.eml` for a Managing Partner only (`inbound_message.read_raw`, restricted).
   .get("/api/work-cards/:id/request-message", handleGetRequestMessage)
   .get("/api/work-cards/:id/raw", handleGetRequestMessageRaw)
+  // Wave A, Addendum 2 — the message trail: every inbound_message and work_card_notice row for
+  // this card, merged and ordered, one chronological list rather than a terse summary line.
+  .get("/api/work-cards/:id/message-trail", handleGetWorkCardMessageTrail)
   .post("/api/inbound-email/reingest", handleReingestStoredEmail)
   .get("/api/work-kinds/:kind/rules", handleWorkKindRules)
   .patch("/api/work-kinds/:kind/rules/:key", handleSetWorkKindRule)
+  // 0228, Addendum 8 — the firm-wide "preview every partner-facing email" dial, the default every
+  // kind inherits unless it carries its own work_kind_rule override.
+  .get("/api/email-preview-preference", handleGetEmailPreviewPreference)
+  .patch("/api/email-preview-preference", handleSetEmailPreviewPreference)
   .post("/api/work-cards/:id/look", handleCardLook)
   .post("/api/work-cards/:id/browser-permission", handleSetCardBrowserPermission)
   .post("/api/browser-tasks/:id/approve", handleApproveBrowserTask)

@@ -23,8 +23,20 @@ import { PREVIEW_ACTION_DEFS, type PreviewAction } from "@shared/work/previewLan
  * off Home with nobody told and the second read as "sent" with nothing delivered.
  */
 
-interface Preview {
+/**
+ * Exported so the work card page (Wave A) can render a card's own pending preview inline, in
+ * "Artifacts & previews" — the same component Home uses, filtered to one card's `work_card_id`
+ * rather than to a partner's whole inbox.
+ */
+export interface Preview {
   id: string;
+  /**
+   * THE TWO-WAY LINK (Wave A, 22 Sep 2026). The server has returned this since `previewApproval.ts`
+   * — `work_card_id` is selected at the route — but nothing here carried it into the type, so a
+   * preview waiting on Home had no way back to the card it belongs to. Null for a preview raised
+   * with no card behind it.
+   */
+  work_card_id: string | null;
   employee: string;
   what: string;
   subject: string;
@@ -100,7 +112,7 @@ export function PreviewApprovals({
  * — the server refuses a noteless RETURN with `note_required`, and a button that fails on click is
  * a worse version of a button that explains itself.
  */
-function PreviewCard({ preview, onDone }: { preview: Preview; onDone: () => void }): JSX.Element {
+export function PreviewCard({ preview, onDone }: { preview: Preview; onDone: () => void }): JSX.Element {
   const [recipient, setRecipient] = useState(preview.recipient);
   const [note, setNote] = useState("");
   const [open, setOpen] = useState(false);
@@ -130,6 +142,14 @@ function PreviewCard({ preview, onDone }: { preview: Preview; onDone: () => void
         <span className="preview-what">{preview.what}</span>
         {preview.lane_reason === "ASKED_FOR" && (
           <span className="preview-flag">you asked to see this one</span>
+        )}
+        {/* THE TWO-WAY LINK (Wave A). The card already links forward to its pending preview
+            ("Send it" in Artifacts & previews); this is the link back, so a preview on Home is
+            never an orphaned draft with no way to see the work it came from. */}
+        {preview.work_card_id && (
+          <a className="small" href={`#/work/${preview.work_card_id}`} data-testid={`preview-card-link-${preview.id}`}>
+            View the card
+          </a>
         )}
       </div>
 
