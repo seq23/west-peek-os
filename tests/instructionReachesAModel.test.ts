@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
-import { cannotDo, steersWith, unreachable, unreadable } from "./helpers/interpret";
+import { cannotDo, handsOffTo, steersWith, unreachable, unreadable } from "./helpers/interpret";
 import type { Env } from "../src/worker/env";
 import { gatherInstruction, receiptsFor, steerFor, type Interpreter } from "../src/worker/services/instruction";
 import {
@@ -9,10 +9,15 @@ import {
   steerBlock,
   type InstructionPiece,
 } from "../src/shared/work/instruction";
-import { runRoomPacketCard } from "../src/worker/services/roomPacket";
+import { runRoomPacketCard, STAGE_STEPS } from "../src/worker/services/roomPacket";
 import { blockOf } from "../src/worker/services/blocks";
 import { sweepIdentity } from "../src/worker/services/workSweep";
 import { actorFromIdentity } from "../src/worker/services/authorize";
+import { HIRE_SEARCH_STEPS } from "../src/worker/services/productionsHire";
+import { DECK_REWORK_STEPS } from "../src/worker/services/deck";
+import { BLOG_STEPS } from "../src/worker/services/blogHelp";
+import { ARTIFACT_CARD_STEPS } from "../src/worker/services/artifacts";
+import { PRODUCTIONS_STEPS } from "../src/worker/services/productions";
 
 /**
  * WHAT SHE SAYS REACHES A THINKING MODEL, AND SHE CAN SEE WHAT IT TURNED INTO.
@@ -79,13 +84,25 @@ describe("reading a model's interpretation back", () => {
       understood: "a workshops packet in the same shape as the rooms ones",
       steer: ["2. compare only virtual formats"],
       cannot: ["book the venue"],
+      handoff: [],
     });
+  });
+
+  it("reads a HANDOFF line as a kind and a note, and falls back to a CANNOT when the kind will not parse", () => {
+    const out = parseInterpretation(
+      "UNDERSTOOD: update the pricing page and search for a candidate\nHANDOFF: WEB_PROPERTY_CHANGE — update the pricing page with the new tiers\nHANDOFF: not a real kind, no separator here properly",
+    );
+    expect(out!.handoff).toEqual([{ kind: "WEB_PROPERTY_CHANGE", note: "update the pricing page with the new tiers" }]);
+    // The second HANDOFF had no parseable "<KIND> — note" shape, so it fails closed into a CANNOT
+    // rather than being silently dropped or guessed at.
+    expect(out!.cannot).toEqual(["not a real kind, no separator here properly"]);
   });
 
   it("treats 'none' as nothing rather than as a directive", () => {
     const out = parseInterpretation("UNDERSTOOD: carry on as usual\nSTEER: none\nCANNOT: N/A");
     expect(out!.steer).toEqual([]);
     expect(out!.cannot).toEqual([]);
+    expect(out!.handoff).toEqual([]);
   });
 
   it("RETURNS NULL rather than guessing when the shape is not there", () => {
@@ -98,12 +115,21 @@ describe("reading a model's interpretation back", () => {
   });
 
   it("puts the steer ABOVE whatever the chain was going to say, and says so", () => {
-    const block = steerBlock({ understood: "workshops, in the rooms shape", steer: ["1. search workshops, not rooms"], cannot: [] });
+    const block = steerBlock({ understood: "workshops, in the rooms shape", steer: ["1. search workshops, not rooms"], cannot: [], handoff: [] });
     expect(block).toContain("outranks anything below it");
     expect(block).toContain("workshops, in the rooms shape");
     expect(block).toContain("1. search workshops, not rooms");
     expect(steerBlock(null)).toBe("");
-    expect(steerBlock({ understood: "x", steer: [], cannot: [] })).toBe("");
+    expect(steerBlock({ understood: "x", steer: [], cannot: [], handoff: [] })).toBe("");
+  });
+
+  it("mentions a resolved handoff as something NOT to attempt, even with no steer of its own", () => {
+    const block = steerBlock({ understood: "the pricing page and a search", steer: [], cannot: [], handoff: [] }, [
+      { employee: "Porter", note: "update the pricing page with the new tiers" },
+    ]);
+    expect(block).toContain("outranks anything below it");
+    expect(block).toContain("already handed to Porter");
+    expect(block).toContain("Do not attempt this part yourself");
   });
 
   it("shows the model the steps the work actually has, so it can tell a steer from something impossible", () => {
@@ -117,6 +143,25 @@ describe("reading a model's interpretation back", () => {
     expect(prompt).toContain("How you said you wanted it done");
     // The rule that makes a CANNOT possible at all.
     expect(prompt).toContain("Do not quietly downgrade something you cannot do into something you can");
+    // The standing principle (22 Sep 2026): an ask not on the numbered list is not automatically a
+    // CANNOT — it is a STEER when the employee can already do it with judgement and its own tools.
+    expect(prompt).toContain("standing authority to widen what");
+    expect(prompt).toContain("Do not call something a CANNOT only because it is not one of the numbered steps above");
+  });
+
+  it("names another employee's domain and asks for a HANDOFF rather than a CANNOT, only when one is registered", () => {
+    const withDomain = buildInterpretationPrompt({
+      ...req("wc_y"),
+      pieces: [{ source: "PROMPT", text: "also fix the pricing page" }],
+      otherDomains: [{ kind: "WEB_PROPERTY_CHANGE", employee: "Porter", because: "every web property change is his to run" }],
+    });
+    expect(withDomain).toContain("OTHER EMPLOYEES' OWN DOMAINS");
+    expect(withDomain).toContain("WEB_PROPERTY_CHANGE: Porter — every web property change is his to run");
+    expect(withDomain).toContain("HANDOFF: <KIND>");
+
+    const withoutDomain = buildInterpretationPrompt({ ...req("wc_z"), pieces: [] });
+    expect(withoutDomain).not.toContain("OTHER EMPLOYEES' OWN DOMAINS");
+    expect(withoutDomain).not.toContain("HANDOFF: <KIND>");
   });
 });
 
@@ -144,7 +189,7 @@ describe("everywhere a human's words can sit on a card", () => {
     const counting: Interpreter = async (...args) => { called += 1; return unreadable(...args); };
     const steer = await steerFor(env, actor(), req("wc_silent"), counting);
     expect(called, "a card with no human words must not reach a model at all").toBe(0);
-    expect(steer).toEqual({ text: "", interpretation: null, cannot: [], failure: null, aiRunId: null });
+    expect(steer).toEqual({ text: "", interpretation: null, cannot: [], failure: null, aiRunId: null, handoffs: [] });
   });
 });
 
@@ -215,6 +260,87 @@ describe("her words reach a model, and what comes back is acted on", () => {
   });
 });
 
+// ── The third outcome: not this chain's job, but somebody's ─────────────────────────────────────
+
+describe("something that is not this chain's job, but IS a different, real employee's (22 Sep 2026)", () => {
+  it("hands it to that employee's own desk instead of blocking or bolting it onto this chain", async () => {
+    await card("wc_handoff", { prompt: "also fix the pricing page with the new tiers while you're at it" });
+    const steer = await steerFor(
+      env,
+      actor(),
+      req("wc_handoff"),
+      handsOffTo(
+        "a workshops packet, and separately the pricing page fixed",
+        "WEB_PROPERTY_CHANGE",
+        "fix the pricing page with the new tiers",
+        "1. research workshops as usual",
+      ),
+    );
+    // Not blocked: the ask was real, and it now lives somewhere real.
+    expect(steer.cannot).toEqual([]);
+    expect(steer.handoffs).toHaveLength(1);
+    expect(steer.handoffs[0]).toMatchObject({ kind: "WEB_PROPERTY_CHANGE", resolved: true, employee: "Porter" });
+    expect(steer.handoffs[0]!.cardId).toBeTruthy();
+    expect(steer.text).toContain("already handed to Porter");
+    expect(steer.text).toContain("Do not attempt this part yourself");
+
+    const handed = await env.WP_OS_DB.prepare("SELECT kind, owner_id, description, state FROM work_card WHERE id = ?1")
+      .bind(steer.handoffs[0]!.cardId!)
+      .first<{ kind: string; owner_id: string; description: string; state: string }>();
+    expect(handed).toMatchObject({ kind: "WEB_PROPERTY_CHANGE", owner_id: "aie_porter" });
+    expect(handed!.description).toContain("fix the pricing page with the new tiers");
+    expect(handed!.description).toContain("wc_handoff");
+
+    const event = await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE event_type = 'work_card.instruction_handed_off' AND object_id = ?1")
+      .bind("wc_handoff")
+      .first<{ payload_json: string }>();
+    expect(JSON.parse(event!.payload_json)).toMatchObject({ to_kind: "WEB_PROPERTY_CHANGE", to_employee: "Porter" });
+  });
+
+  it("is idempotent by title: a second read of the same words, cached or not, never opens a second card", async () => {
+    await card("wc_handoff_twice", { prompt: "also fix the pricing page with the new tiers" });
+    const make = () =>
+      handsOffTo("a packet, and the pricing page separately", "WEB_PROPERTY_CHANGE", "fix the pricing page with the new tiers");
+    const first = await steerFor(env, actor(), req("wc_handoff_twice"), make());
+    // The SAME words, so this hits the cache branch — resolveHandoffs runs again on the cached
+    // interpretation, and must find the existing card rather than opening another.
+    const second = await steerFor(env, actor(), req("wc_handoff_twice"), make());
+    expect(first.handoffs[0]!.cardId).toBe(second.handoffs[0]!.cardId);
+    const rows = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card WHERE kind = 'WEB_PROPERTY_CHANGE' AND owner_id = 'aie_porter' AND description LIKE '%wc_handoff_twice%'").first<{ n: number }>();
+    expect(rows!.n).toBe(1);
+  });
+
+  it("fails closed into a CANNOT when no employee is registered for the kind named", async () => {
+    await card("wc_handoff_unknown", { prompt: "also do the quarterly LP tax filing" });
+    const steer = await steerFor(
+      env,
+      actor(),
+      req("wc_handoff_unknown"),
+      handsOffTo("a packet, and the tax filing separately", "LP_TAX_FILING", "file the quarterly LP tax paperwork"),
+    );
+    expect(steer.handoffs[0]).toMatchObject({ kind: "LP_TAX_FILING", resolved: false, employee: null, cardId: null });
+    expect(steer.cannot).toHaveLength(1);
+    expect(steer.cannot[0]).toContain("no employee is registered to own \"LP_TAX_FILING\"");
+  });
+
+  it("fails closed into a CANNOT when the registered employee is not ACTIVE right now", async () => {
+    await env.WP_OS_DB.prepare("UPDATE ai_employee SET status = 'INACTIVE' WHERE id = 'aie_porter'").run();
+    try {
+      await card("wc_handoff_inactive", { prompt: "also fix the pricing page" });
+      const steer = await steerFor(
+        env,
+        actor(),
+        req("wc_handoff_inactive"),
+        handsOffTo("a packet, and the pricing page separately", "WEB_PROPERTY_CHANGE", "fix the pricing page"),
+      );
+      expect(steer.handoffs[0]).toMatchObject({ kind: "WEB_PROPERTY_CHANGE", resolved: false, employee: "Porter", cardId: null });
+      expect(steer.cannot[0]).toContain("not available to take it");
+    } finally {
+      await env.WP_OS_DB.prepare("UPDATE ai_employee SET status = 'ACTIVE' WHERE id = 'aie_porter'").run();
+    }
+  });
+});
+
 // ── The chain stops ───────────────────────────────────────────────────────────────────────────
 
 describe("a chain whose input includes prose it cannot honour says so", () => {
@@ -247,6 +373,33 @@ describe("a chain whose input includes prose it cannot honour says so", () => {
     expect(row!.block_needed).toContain("invite the twenty people on the list");
     const block = blockOf({ state: "BLOCKED", ...row } as never)!;
     expect(block.actions.map((a) => a.key)).toEqual(["ANSWER", "CHANGE", "DROP"]);
+  });
+});
+
+// ── Every duty's own step list keeps its hard "never" lines, and adds the same one line ─────────
+
+const A_PARTNER_EXTENDS_SCOPE_LINE =
+  "A Managing Partner's own instruction extends what you do here — apply it using judgement and whatever you already have access to, rather than treating it as out of scope. Only decline something that genuinely needs a tool, data source or integration that does not exist anywhere in this system, or that would need to pass through approval regardless of who asked.";
+
+describe("every steerFor caller's declared step list (22 Sep 2026)", () => {
+  const namedLists: Array<{ name: string; steps: readonly string[]; hardNever: string | null }> = [
+    { name: "HIRE_SEARCH_STEPS", steps: HIRE_SEARCH_STEPS, hardNever: "Nobody is contacted, no interview is arranged and no offer is made — the result is a shortlist he decides on." },
+    { name: "DECK_REWORK_STEPS", steps: DECK_REWORK_STEPS, hardNever: "Nothing is sent to a limited partner — a person approves the version first." },
+    { name: "BLOG_STEPS", steps: BLOG_STEPS, hardNever: "Send the partner ONE email in the busy-executive format. Nobody outside the firm is contacted and nothing is published." },
+    { name: "ARTIFACT_CARD_STEPS", steps: ARTIFACT_CARD_STEPS, hardNever: null },
+    { name: "PRODUCTIONS_STEPS", steps: PRODUCTIONS_STEPS, hardNever: "Nobody outside the firm is contacted, nothing is pitched, nothing is booked and no money is committed." },
+    { name: "STAGE_STEPS.ROOM", steps: STAGE_STEPS.ROOM, hardNever: "Nothing is booked, nobody outside the firm is contacted, and no money is committed — the result is a proposal a partner decides on." },
+    { name: "STAGE_STEPS.WORKSHOP", steps: STAGE_STEPS.WORKSHOP, hardNever: "Nothing is scheduled, nobody outside the firm is contacted, and the result is a proposal a partner decides on." },
+  ];
+
+  it.each(namedLists)("$name carries the standing-scope line, byte-identical, and keeps its hard boundary untouched", ({ steps, hardNever }) => {
+    expect(steps).toContain(A_PARTNER_EXTENDS_SCOPE_LINE);
+    if (hardNever) expect(steps).toContain(hardNever);
+  });
+
+  it("the standing-scope line reaches the model's prompt through the ordinary steps path — no separate wiring", () => {
+    const prompt = buildInterpretationPrompt({ ...req("wc_steps"), steps: [...HIRE_SEARCH_STEPS], pieces: [{ source: "PROMPT", text: "look up their contact email while you're at it" }] });
+    expect(prompt).toContain(A_PARTNER_EXTENDS_SCOPE_LINE);
   });
 });
 

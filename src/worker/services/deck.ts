@@ -855,6 +855,7 @@ export const DECK_REWORK_STEPS: readonly string[] = [
   "Record the result as a PROPOSED version on Fund strategy and tell both partners.",
   "The deck is COPIED, never re-typeset: no page is rewritten, added, removed or reordered, no wording is changed, no image or chart is made, and no design is altered.",
   "Nothing is sent to a limited partner — a person approves the version first.",
+  "A Managing Partner's own instruction extends what you do here — apply it using judgement and whatever you already have access to, rather than treating it as out of scope. Only decline something that genuinely needs a tool, data source or integration that does not exist anywhere in this system, or that would need to pass through approval regardless of who asked.",
 ];
 
 export async function runDeckRework(

@@ -561,7 +561,13 @@ export async function serveArtifactsOnTick(env: Env, now: Date = new Date()): Pr
 
 // ── Door: the work card ────────────────────────────────────────────────────────────────────────
 
-export const ARTIFACT_CARD_STEPS = ["choose what to read from the record", "read the record", "write the findings", "lay it out and file it"] as const;
+export const ARTIFACT_CARD_STEPS = [
+  "choose what to read from the record",
+  "read the record",
+  "write the findings",
+  "lay it out and file it",
+  "A Managing Partner's own instruction extends what you do here — apply it using judgement and whatever you already have access to, rather than treating it as out of scope. Only decline something that genuinely needs a tool, data source or integration that does not exist anywhere in this system, or that would need to pass through approval regardless of who asked.",
+] as const;
 
 interface ArtifactCard {
   id: string;

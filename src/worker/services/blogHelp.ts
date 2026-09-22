@@ -556,6 +556,7 @@ export const BLOG_STEPS: readonly string[] = [
   "Write the outline, the draft or the repeatable phrase — whichever was asked for — in the partner's own voice, grounded in the kept sources.",
   "File the result as a deliverable on the partner's Home.",
   "Send the partner ONE email in the busy-executive format. Nobody outside the firm is contacted and nothing is published.",
+  "A Managing Partner's own instruction extends what you do here — apply it using judgement and whatever you already have access to, rather than treating it as out of scope. Only decline something that genuinely needs a tool, data source or integration that does not exist anywhere in this system, or that would need to pass through approval regardless of who asked.",
 ];
 
 export interface BlogHelpDeps {
