@@ -107,7 +107,11 @@ export const defaultGenerateBanterReply: BanterReplyGenerator = async (env, inpu
         "LINE: <your one-line reply — omit or leave blank if REPLY is no>",
     ],
     sensitivity: "INTERNAL" as never,
-    budgetContext: { expectedOutputTokens: 60 },
+    // JUDGEMENT, NOT MECHANICAL (found unclassified by `validate:call-classification`, 22 Sep
+    // 2026, and fixed here rather than left — Rule 0). This call decides whether a partner hears
+    // from the firm at all right now and, if so, writes the actual line they read; that is exactly
+    // "writes or decides something a human reads", never the cheapest-model default under CHEAPO.
+    budgetContext: { judgement: true, expectedOutputTokens: 60 },
     routing: { category: "OPERATIONS", taskClass: "banter-reply" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) return { shouldReply: false, line: null, aiRunId: run.id };
