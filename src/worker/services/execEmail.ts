@@ -31,8 +31,11 @@ import { EmployeeSenderError, employeeSenderHeader } from "../../shared/registry
  *      `lintExecEmail`. A message that fails the lint is NOT sent; the refusal is recorded with
  *      the violations so it is a diagnosable failure, not a quietly ugly email.
  *   4. THE TRANSPORT DEFUSES TRIGGERS, so a quoted "#wpdealflow" cannot re-enter the mailbox.
- *   5. REPLIES GO TO THE INTAKE MAILBOX. Reply-To is os@joinwestpeek.com, which is why the footer
- *      can honestly say "reply to this email" — a reply becomes a routed request like any other.
+ *   5. REPLIES GO TO THE INTAKE MAILBOX. Reply-To is os@joinwestpeek.com, so a reply becomes a
+ *      routed request like any other, whatever employee address shows as "From" — which is also
+ *      why the footer names os@joinwestpeek.com by address rather than inviting a reply to
+ *      whichever employee sent it: employee mailboxes carry no inbound MX and would hard-bounce
+ *      a reply typed to them directly (22 Sep 2026).
  *   6. IT IS ON THE RECORD either way: one event per attempt, sent or not.
  */
 

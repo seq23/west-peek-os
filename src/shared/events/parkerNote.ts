@@ -100,7 +100,7 @@ export function parkerAddressedNote(input: ParkerAddressedNoteInput): ExecEmailI
         label: "If you would rather not",
         bullets: [
           "Say so and I will not write again about this one.",
-          "Reply to this email and it reaches me directly.",
+          "Reply to this email and it reaches West Peek — I'll see it and follow up.",
         ],
       },
     ],

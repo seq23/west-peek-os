@@ -170,10 +170,10 @@ describe("Sequoia emails a request", () => {
     // Wyatt above (`assigned_from_card_id`), so the footer carries the whole chain in one line:
     // who passed it on, and who actually did it.
     expect(sent[0]!.text.trim().split("\n").pop()).toMatch(
-      /^— Wyatt, .* Wren routed this to me; the work is mine\. Reply to this email or write to os@joinwestpeek\.com/,
+      /^— Wyatt, .* Wren routed this to me; the work is mine\. Replies go to os@joinwestpeek\.com — we don't check individual inboxes\./,
     );
     expect(sent[0]!.html, "an HTML part with the same content").toMatch(/<strong>TL;DR:<\/strong>/);
-    expect(sent[0]!.reply_to, "replies go to the intake mailbox, so 'reply to this email' is true").toBe("os@joinwestpeek.com");
+    expect(sent[0]!.reply_to, "the mail client's Reply button also lands on the intake mailbox, belt-and-braces with the footer wording").toBe("os@joinwestpeek.com");
     const ev = await env.WP_OS_DB.prepare("SELECT event_type FROM event_record WHERE object_id = ?1 AND event_type = 'work_card.replied_by_email'").bind(analystCard.id).first();
     expect(ev).toBeTruthy();
   });

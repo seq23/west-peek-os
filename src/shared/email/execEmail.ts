@@ -17,7 +17,8 @@ import { AI_EMPLOYEE_ROSTER } from "../registry/aiEmployees";
  *                natural equivalent): bold label, bullets under it, never a paragraph, no section
  *                over six lines. Numbers are bolded automatically; names by the sender.
  *   — Details —  the full material, for those who want it, below a rule
- *   Footer       "— <Employee>, <role>. Reply to this email or write to os@joinwestpeek.com …"
+ *   Footer       "— <Employee>, <role>. Replies go to os@joinwestpeek.com — we don't check
+ *                individual inboxes."
  *
  * `renderExecEmail` produces plain text AND a light HTML part with the same content, and it
  * NORMALISES on the way (truncates the subject, caps a section at six lines and says where the
@@ -79,7 +80,7 @@ function roleOf(name: string): string {
 export function execFooter(employee: string, routedBy?: string | null): string {
   const routed = (routedBy ?? "").trim();
   const chain = routed && routed !== employee ? ` ${routed} routed this to me; the work is mine.` : "";
-  return `— ${employee}, ${roleOf(employee)}.${chain} Reply to this email or write to ${INTAKE_MAILBOX} for anything else.`;
+  return `— ${employee}, ${roleOf(employee)}.${chain} Replies go to ${INTAKE_MAILBOX} — we don't check individual inboxes.`;
 }
 
 /** One line: no newlines, collapsed whitespace. */
