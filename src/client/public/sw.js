@@ -1,5 +1,5 @@
 /*
- * West Peek OS service worker (P20, GAP-20).
+ * West Peek OS service worker (P20, GAP-20; cache keyed to the build, Wave F, 22 Sep 2026).
  *
  * Deliberately small and deliberately honest:
  *
@@ -10,9 +10,19 @@
  *   a cached portfolio alert would be a lie with a timestamp on it.
  * - There is no background sync and no push handler, because no push service is configured. When
  *   one exists, it belongs here — pretending otherwise would put a dead feature in the manifest.
+ *
+ * THE CACHE NAME IS KEYED TO THE BUILD, NOT HAND-BUMPED. `CACHE` used to be a literal
+ * ("wpos-shell-v2") that only changed when someone remembered to edit this file — so a deploy that
+ * changed every hashed asset in `dist/client/assets` could still leave a stale shell cached under
+ * the same key forever, with nothing to force `activate`'s cleanup to run. `__BUILD_ID__` is
+ * replaced by `scripts/build/stamp-sw-cache.mjs`, run as part of `npm run build`, with a hash of
+ * that build's own asset filenames — so a deploy that changes the bundle always changes the cache
+ * name, `activate` always deletes every other key, and yesterday's shell can never be served again.
+ * A `sw.js` checked out straight from source (no build run) is caught by the same script refusing
+ * to stamp a file with no placeholder in it — see `scripts/build/swCacheStamp.mjs`.
  */
 
-const CACHE = "wpos-shell-v2";
+const CACHE = "wpos-shell-__BUILD_ID__";
 const SHELL = ["/", "/index.html", "/manifest.webmanifest", "/icon.svg", "/wp-mark.svg"];
 
 self.addEventListener("install", (event) => {

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, useApi } from "../lib/api";
+import { api, usePollWhile, useApi } from "../lib/api";
 import { PREVIEW_ACTION_DEFS, type PreviewAction } from "@shared/work/previewLane";
 
 /**
@@ -57,7 +57,19 @@ interface PreviewListResponse {
  */
 export function usePreviewApprovals(): { previews: Preview[]; reload: () => void; loading: boolean } {
   const list = useApi<PreviewListResponse>("/api/preview-approvals");
-  return { previews: list.data?.previews ?? [], reload: list.reload, loading: list.loading };
+  const previews = list.data?.previews ?? [];
+  /*
+   * GENTLE POLLING WHILE ONE IS PENDING (Wave F — plan §6's named example, "a preview that is
+   * pending"). `useApi`'s shared invalidation channel already refetches this on any mutation and on
+   * focus, but a preview can also change with nobody touching this tab at all: it LAPSES after 72
+   * hours, or a send that was approved earlier can come back SEND_FAILED once the transport answers
+   * — both server-side state changes this page did not cause and would otherwise only see on the
+   * next reload. Polling only while `previews.length > 0` is the DailyBriefPanel precedent
+   * (`usePollWhile`, `lib/api.ts`): an empty list never polls, so this is not the "5,760 requests a
+   * day against a board that changes twice a week" the plan rejects.
+   */
+  usePollWhile(previews.length > 0, list.reload);
+  return { previews, reload: list.reload, loading: list.loading };
 }
 
 export function PreviewApprovals({

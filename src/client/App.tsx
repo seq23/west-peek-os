@@ -1,6 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { readableDate, shortDate } from "./lib/dates";
-import { api, getDevUser, mutationError, onNotificationsChanged, signOut, useApi, type MeResponse } from "./lib/api";
+import {
+  api,
+  getDevUser,
+  getLastFetchedAt,
+  invalidateAll,
+  mutationError,
+  onFreshnessChanged,
+  onNotificationsChanged,
+  signOut,
+  useApi,
+  wireFocusRevalidation,
+  type MeResponse,
+} from "./lib/api";
 import { DocumentPreview } from "./components/DocumentPreview";
 import { LpPage } from "./pages/LpPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
@@ -2537,6 +2549,54 @@ interface ExceptionRow {
 // ── Shell ──
 
 /**
+ * THE MASTHEAD REFRESH CONTROL (Wave F, 22 Sep 2026 — plan §6).
+ *
+ * `useApi` fetched on mount and never again, and there was no refresh control anywhere in the
+ * client — zero hits for a refresh or reload button. The pages that correctly said "waiting for
+ * the Mac to claim the job" never asked again; she sat reading a true sentence about a moment that
+ * had passed five minutes ago.
+ *
+ * ONE CONTROL, EVERY SURFACE. Pressing it calls `invalidateAll()`, the shared channel every
+ * `useApi` now subscribes to (`lib/api.ts`) — so it refetches whatever is mounted on the CURRENT
+ * page without this component needing to know what that is. The same channel already fires on any
+ * accepted mutation and on the tab regaining focus (`wireFocusRevalidation`, wired once below), so
+ * this button is the manual door on a mechanism that is already running.
+ *
+ * THE STAMP IS APP-WIDE ON PURPOSE, not per-page: the most recent time any GET succeeded anywhere
+ * in the client. A per-surface timestamp would need every page to report its own, which is exactly
+ * the kind of per-component bookkeeping that let `refreshNonce` reach four pages out of ninety.
+ * "As of HH:MM" answers the question she actually asks — is this stale — without it.
+ */
+function RefreshControl(): JSX.Element {
+  const [, forceRender] = useState(0);
+  useEffect(() => onFreshnessChanged(() => forceRender((n) => n + 1)), []);
+  const [busy, setBusy] = useState(false);
+  const lastFetchedAt = getLastFetchedAt();
+
+  function refresh() {
+    setBusy(true);
+    invalidateAll();
+    // The channel is fire-and-forget by design (every subscriber refetches on its own schedule),
+    // so there is no single promise to await here. A short, fixed pause keeps the button from
+    // reading as having done nothing when every fetch it triggered resolves in a few milliseconds.
+    window.setTimeout(() => setBusy(false), 400);
+  }
+
+  return (
+    <span className="form-row" data-testid="global-refresh-control">
+      <button type="button" className="link-button" data-testid="global-refresh" disabled={busy} onClick={refresh}>
+        {busy ? "Refreshing…" : "Refresh"}
+      </button>
+      <span className="muted small" data-testid="global-refresh-asof">
+        {lastFetchedAt
+          ? `as of ${new Date(lastFetchedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`
+          : "not loaded yet"}
+      </span>
+    </span>
+  );
+}
+
+/**
  * Status bar (P20, GAP-20): unread exceptions, connection state, and any captures held on this
  * device. A queued capture is stated as NOT SAVED — the operator is never left thinking the firm
  * has something it does not.
@@ -2733,6 +2793,13 @@ function Shell() {
   const [active, setActive] = useState<string>(() => keyFromHash((k) => ALL_NAV_KEYS.has(k)));
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [navOpen, setNavOpen] = useState(false);
+  // Revalidate-on-focus (Wave F). Wired here rather than inside `useApi` itself because `Shell` can
+  // mount and unmount across a session — the room and Meet-panel routes render in its place — and
+  // `wireFocusRevalidation` is guarded to attach its listeners at most once regardless of how many
+  // times that happens.
+  useEffect(() => {
+    wireFocusRevalidation();
+  }, []);
   // Open if the current destination lives there, so arriving at a system page by deep link or by
   // an in-app jump never leaves the operator looking at a collapsed region with no active item.
   const [systemOpen, setSystemOpen] = useState<boolean>(() => SECONDARY_KEYS.has("home"));
@@ -2993,6 +3060,7 @@ function Shell() {
             */}
             <h2>{activeItem.label}</h2>
             <div className="surface-identity">
+              {authed && <RefreshControl />}
               <IdentityPanel me={me.data} status={me.status} loading={me.loading} onSignOut={handleSignOut} />
               {authed && <StatusBar onNavigate={navigate} refreshNonce={refreshNonce} />}
             </div>

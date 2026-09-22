@@ -109,6 +109,108 @@ function mutatedNotifications(path: string, method: string, status: number): boo
   return status >= 200 && status < 300;
 }
 
+/**
+ * THE GENERAL INVALIDATION CHANNEL (Wave F, 22 Sep 2026 — plan §6, "A refresh that actually
+ * refreshes").
+ *
+ * `onNotificationsChanged` above is the model: publish from `api()` itself, because the write
+ * happening is what makes the data stale, and a caller who has to remember to say so will
+ * eventually forget. This generalises it from "a notification changed" to "ANYTHING changed" —
+ * every `useApi` subscribes to this one (see below), which is what actually closes the gap the
+ * diagnosis found: `refreshNonce` reached four components out of roughly ninety because reaching
+ * the rest meant threading one more prop through pages that were never going to remember it.
+ * Publishing from the one place every mutation already passes through means no page has to
+ * remember anything — it gets this by calling `useApi`, which it already had to do for the data.
+ *
+ * DELIBERATELY BROADER than the notification channel: any accepted mutation on any path. A
+ * surface with stale data is a worse failure than a surface that refetches once more than it had
+ * to — D1 reads here are cheap, and "approving a preview refreshes the preview list and leaves the
+ * Work board and the notification count stale" (the diagnosis) is exactly the bug this closes.
+ */
+const dataListeners = new Set<() => void>();
+
+/** Subscribe to "something changed, somewhere". Returns the unsubscribe. */
+export function onDataInvalidated(listener: () => void): () => void {
+  dataListeners.add(listener);
+  return () => dataListeners.delete(listener);
+}
+
+/** Announce it. Exported for the masthead refresh control and for tests. */
+export function invalidateAll(): void {
+  for (const listener of [...dataListeners]) {
+    try {
+      listener();
+    } catch {
+      // One bad subscriber must not stop the rest refreshing.
+    }
+  }
+}
+
+/** Did this call change anything, and did the server accept it? Mirrors `mutatedNotifications`
+ *  without the notification-only narrowing — a mutation anywhere is a reason for every surface to
+ *  ask again, not only the one that made it. */
+function mutatedSomething(method: string, status: number): boolean {
+  if (method === "GET") return false;
+  return status >= 200 && status < 300;
+}
+
+/**
+ * THE "AS OF" STAMP (Wave F). The masthead's refresh control says when the data on screen was last
+ * actually read, so staleness is visible before she has to ask. It is deliberately a single,
+ * app-wide fact — the most recent time ANY GET succeeded anywhere in the client — rather than a
+ * per-surface timestamp threaded through every page. That is enough to answer the question she
+ * asks ("is this stale") and needs no per-page bookkeeping to stay true, the same reasoning
+ * `StatusBar`'s online/offline badge already uses for a fact about the connection rather than
+ * about one page.
+ */
+let lastFetchedAt: number | null = null;
+const freshnessListeners = new Set<() => void>();
+
+/** Subscribe to "a read just landed". Returns the unsubscribe. */
+export function onFreshnessChanged(listener: () => void): () => void {
+  freshnessListeners.add(listener);
+  return () => freshnessListeners.delete(listener);
+}
+
+/** The last time any GET succeeded, or null before the first one has. */
+export function getLastFetchedAt(): number | null {
+  return lastFetchedAt;
+}
+
+function noteFetched(): void {
+  lastFetchedAt = Date.now();
+  for (const listener of [...freshnessListeners]) {
+    try {
+      listener();
+    } catch {
+      // One bad subscriber must not stop the stamp updating for the rest.
+    }
+  }
+}
+
+/**
+ * REVALIDATE ON FOCUS (Wave F). `visibilitychange` appears nowhere else in this client — a tab left
+ * open overnight showed last night's numbers forever, because nothing ever asked again. Wired once,
+ * module-wide, rather than once per mounted `useApi`: `Shell` (`App.tsx`) can legitimately mount and
+ * unmount across a session (the room and Meet-panel routes render in its place), and a plain
+ * `useEffect` here would re-register a listener on every remount. The guard makes calling this more
+ * than once a no-op instead of a leak.
+ */
+let focusWired = false;
+export function wireFocusRevalidation(): void {
+  if (focusWired) return;
+  if (typeof document === "undefined" || typeof window === "undefined") return;
+  focusWired = true;
+  const onVisible = () => {
+    if (document.visibilityState === "visible") invalidateAll();
+  };
+  document.addEventListener("visibilitychange", onVisible);
+  // Belt and braces: some browsers fire `focus` on the window without a `visibilitychange` when a
+  // background tab is clicked back into (observed inconsistently across engines); both are cheap
+  // to invalidate on, since a redundant refetch of already-fresh data is invisible to her.
+  window.addEventListener("focus", onVisible);
+}
+
 export async function api<T = unknown>(
   path: string,
   options: { method?: string; body?: unknown } = {},
@@ -140,7 +242,10 @@ export async function api<T = unknown>(
     return { status: 0, data: null };
   }
   const data = (await res.json().catch(() => null)) as T | null;
-  if (mutatedNotifications(path, options.method ?? "GET", res.status)) notificationsChanged();
+  const method = options.method ?? "GET";
+  if (mutatedNotifications(path, method, res.status)) notificationsChanged();
+  if (mutatedSomething(method, res.status)) invalidateAll();
+  if (method === "GET" && res.status >= 200 && res.status < 300) noteFetched();
   return { status: res.status, data };
 }
 
@@ -155,6 +260,18 @@ export function useApi<T>(
   });
   const [nonce, setNonce] = useState(0);
   const reload = useCallback(() => setNonce((n) => n + 1), []);
+  /*
+   * EVERY `useApi` SUBSCRIBES TO THE INVALIDATION CHANNEL. This is the fix, not a helper for one
+   * page to opt into: previously a surface refetched only on its own mount or its own explicit
+   * `reload()`, and the app-wide `refreshNonce` reached four of roughly ninety components because
+   * reaching the rest meant every page remembering to accept and forward one more prop. Subscribing
+   * here means a mutation ANYWHERE, the masthead refresh button, or the tab regaining focus
+   * refetches this call automatically — no page has to know the channel exists.
+   */
+  useEffect(() => {
+    if (!path) return;
+    return onDataInvalidated(reload);
+  }, [path, reload]);
   useEffect(() => {
     if (!path) {
       setState({ data: null, status: null, loading: false });
@@ -274,4 +391,24 @@ export function mutationError(
   const server = typeof detail?.detail === "string" ? detail.detail : null;
   if (server) return `${server} (HTTP ${result.status})`;
   return failureText(result.status);
+}
+
+/**
+ * GENTLE POLLING, ONLY WHILE SOMETHING IS ACTUALLY MOVING (Wave F, generalising the
+ * `DailyBriefPanel` precedent — `POLL_EVERY_MS` and `useEffect(() => { if (!moving) return; const
+ * t = setInterval(...); return () => clearInterval(t); }, [moving])`, `pages/DailyBriefPanel.tsx`).
+ *
+ * A live surface — a card being worked, a preview pending an answer — calls this with `active`
+ * true only while the thing it shows can still change on its own without her doing anything, and
+ * false the rest of the time. The plan rejects the alternative explicitly: polling an idle board
+ * is 5,760 requests a day against something that changes twice a week. This is the one place that
+ * pattern lives now, so a surface adopting it gets the same interval and the same cleanup
+ * discipline the brief already proved, rather than a fresh copy of `setInterval` per page.
+ */
+export function usePollWhile(active: boolean, reload: () => void, intervalMs = 5_000): void {
+  useEffect(() => {
+    if (!active) return;
+    const t = window.setInterval(reload, intervalMs);
+    return () => window.clearInterval(t);
+  }, [active, reload, intervalMs]);
 }
