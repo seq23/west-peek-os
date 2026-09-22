@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CARD_SOURCES, CARD_STATES, STATE_MEANINGS, stateMeaning, triage } from "@shared/work/workCards";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { WORK_CARD_STATES, canTransition, offeredMoves } from "../src/worker/services/workCards";
 
 /**
@@ -28,12 +29,47 @@ describe("what a work card is", () => {
     }
   });
 
-  it("covers exactly the states the database allows", () => {
-    const sql = readFileSync(new URL("../migrations/0003_work_authority_approval.sql", import.meta.url), "utf8");
-    for (const state of CARD_STATES) {
-      expect(sql, `${state} is not a real work_card state`).toContain(`'${state}'`);
+  /*
+   * STRENGTHENED 22 Sep 2026 (Wave D). This used to read migration 0003 alone, which was true only
+   * because every value ever written to `work_card.state` happened to be declared there. HELD
+   * (0227) is deliberately NOT one of them — `work_card.state` carries a CHECK constraint from 0003
+   * that would need a full table rebuild to widen (SQLite cannot ALTER a CHECK in place), and
+   * `work_card` is referenced by roughly twenty other tables. Migration 0189 already hit that exact
+   * failure class once, on a much smaller table, rebuilding `deliverable` and only later
+   * discovering a dependent (`deliverable_feedback`) whose foreign key had been silently rewritten
+   * to point at the rollback copy. So HELD is never written to the `state` column at all — it is
+   * `held_at IS NOT NULL`, synthesised into `state: "HELD"` only in the JSON a card is served as
+   * (`displayState` in `services/workCards.ts`). CARD_STATES therefore covers TWO different kinds
+   * of member: the five the database column itself is ever set to, and HELD, which is a display
+   * value the database never stores. Reading every migration for the first five is the stronger
+   * claim this sentence makes over reading 0003 alone; asserting HELD is enforced through held_at
+   * instead (the second test below) is what keeps that split honest rather than merely asserted.
+   */
+  it("covers exactly the states the database column itself allows, wherever they were declared", () => {
+    const dir = fileURLToPath(new URL("../migrations/", import.meta.url));
+    const files = readdirSync(dir).filter((f) => f.endsWith(".sql"));
+    expect(files.length, "no migrations found — the scan would pass over nothing").toBeGreaterThan(100);
+    const allSql = files.map((f) => readFileSync(`${dir}${f}`, "utf8")).join("\n");
+    const storedInTheColumn = CARD_STATES.filter((s) => s !== "HELD");
+    expect(storedInTheColumn.length, "HELD must be the only display-only member, or this filter is hiding a real gap").toBe(CARD_STATES.length - 1);
+    for (const state of storedInTheColumn) {
+      expect(allSql, `${state} is not a real work_card state — no migration declares it`).toContain(`'${state}'`);
     }
     expect(STATE_MEANINGS.map((s) => s.key).sort()).toEqual([...CARD_STATES].sort());
+  });
+
+  it("HELD is enforced at the row through held_at, not through a state value — a row trigger names it", () => {
+    // The correctness rule this repo keeps: a state that changes behaviour is refused at the
+    // database when a caller forgets it, not merely documented in TypeScript. Proven here against
+    // the actual migration text rather than assumed from ALLOWED_TRANSITIONS existing. And proven
+    // negatively that HELD was never smuggled back in as a `state` value anywhere in the migration
+    // corpus — the whole reason this test file needed rewriting once, it must not need it again.
+    const dir = fileURLToPath(new URL("../migrations/", import.meta.url));
+    const files = readdirSync(dir).filter((f) => f.endsWith(".sql"));
+    const allSql = files.map((f) => readFileSync(`${dir}${f}`, "utf8")).join("\n");
+    expect(allSql).toMatch(/WHEN\s+NEW\.held_at\s+IS\s+NOT\s+NULL/);
+    expect(allSql).toMatch(/NEW\.held_at\s+IS\s+NOT\s+NULL\s+AND\s+NEW\.lease_until\s+IS\s+NOT\s+NULL/);
+    expect(allSql, "HELD must never appear as a literal work_card.state value").not.toMatch(/state\s*=\s*'HELD'/i);
   });
 });
 

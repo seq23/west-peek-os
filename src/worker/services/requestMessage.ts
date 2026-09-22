@@ -53,6 +53,33 @@ interface StoredMessageRow {
   bytes: number;
   work_card_id: string | null;
   firm_scope: string;
+  /** The SPF/DKIM/DMARC verdict as it stood on arrival — see `inboundEmail.ts`'s write. */
+  mail_authority_json: string | null;
+}
+
+interface MailAuthoritySummary {
+  spf: string;
+  dkim: string;
+  dmarc: string;
+  passed: boolean;
+  signing_domain: string | null;
+}
+
+/** Read back exactly what `inboundEmail.ts` wrote. A malformed or absent record is honestly null. */
+function parseMailAuthority(json: string | null): MailAuthoritySummary | null {
+  if (!json) return null;
+  try {
+    const v = JSON.parse(json) as Record<string, unknown>;
+    return {
+      spf: String(v.spf ?? "none"),
+      dkim: String(v.dkim ?? "none"),
+      dmarc: String(v.dmarc ?? "none"),
+      passed: Boolean(v.passed),
+      signing_domain: typeof v.signing_domain === "string" ? v.signing_domain : null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -72,7 +99,7 @@ async function messageForVisibleCard(
   // the thing being withheld.
   if (!card) return { error: json({ error: "not_found" }, { status: 404 }) };
   const row = await ctx.env.WP_OS_DB.prepare(
-    `SELECT id, message_id, r2_key, from_address, to_address, subject, received_at, bytes, work_card_id, firm_scope
+    `SELECT id, message_id, r2_key, from_address, to_address, subject, received_at, bytes, work_card_id, firm_scope, mail_authority_json
        FROM inbound_message WHERE work_card_id = ?1 ORDER BY received_at DESC LIMIT 1`,
   )
     .bind(cardId)
@@ -127,6 +154,10 @@ export async function handleGetRequestMessage(ctx: RouteContext): Promise<Respon
     text,
     has_raw: hasRaw,
     r2_key: row.r2_key,
+    // Wave A: "who asked and how" needs the DKIM verdict beside the sender, not just the address —
+    // the same fact `partnerAuthority.ts` already computes on arrival, read back rather than
+    // re-derived (re-checking headers months later would re-trust them, not the resolver).
+    mail_authority: parseMailAuthority(row.mail_authority_json),
   });
 }
 
@@ -183,4 +214,68 @@ export async function handleGetRequestMessageRaw(ctx: RouteContext): Promise<Res
       "cache-control": "private, no-store",
     },
   });
+}
+
+// ── THE MESSAGE TRAIL (Wave A, Addendum 2, 22 Sep 2026) ─────────────────────────────────────────
+
+export interface MessageTrailEntry {
+  at: string;
+  /** RECEIVED_EMAIL for an inbound message; otherwise the notice kind (RECEIVED, PLAN, PREVIEW,
+   *  QUESTION, STUCK, DONE — see `NOTICE_KINDS` in requestReply.ts). */
+  kind: string;
+  who: string;
+  what: string;
+  /** True when this entry is an inbound message and can be opened whole on the card. */
+  hasMessage: boolean;
+}
+
+/**
+ * ONE CHRONOLOGICAL LIST, not the old terse "TOLD THE PARTNER: RECEIVED · PLAN · PREVIEW" one-liner.
+ *
+ * Her words: "I want to see the flow of information and what was said by whom, on the card." Two
+ * tables hold the halves — `inbound_message` (0226, what arrived) and `work_card_notice` (0221,
+ * what was sent back) — and until now nothing read them together. Merged here, ordered, each entry
+ * showing who said what and when.
+ */
+export async function handleGetWorkCardMessageTrail(ctx: RouteContext): Promise<Response> {
+  const identity = ctx.identity;
+  if (!identity) return json({ error: "unauthenticated" }, { status: 401 });
+  const cardId = ctx.params.id ?? "";
+  const card = await getVisibleWorkCard(ctx.env, identity, cardId);
+  if (!card) return json({ error: "not_found" }, { status: 404 });
+
+  const inbound = (
+    await ctx.env.WP_OS_DB.prepare(
+      `SELECT from_address, subject, received_at FROM inbound_message WHERE work_card_id = ?1 ORDER BY received_at ASC`,
+    )
+      .bind(cardId)
+      .all<{ from_address: string; subject: string | null; received_at: string }>()
+  ).results ?? [];
+
+  const notices = (
+    await ctx.env.WP_OS_DB.prepare(
+      `SELECT kind, cause, sent_to, sent, detail, sent_at FROM work_card_notice WHERE work_card_id = ?1 ORDER BY sent_at ASC`,
+    )
+      .bind(cardId)
+      .all<{ kind: string; cause: string; sent_to: string; sent: number; detail: string | null; sent_at: string }>()
+  ).results ?? [];
+
+  const trail: MessageTrailEntry[] = [
+    ...inbound.map((m) => ({
+      at: m.received_at,
+      kind: "RECEIVED_EMAIL",
+      who: m.from_address,
+      what: m.subject ? `emailed: ${m.subject}` : "emailed this in",
+      hasMessage: true,
+    })),
+    ...notices.map((n) => ({
+      at: n.sent_at,
+      kind: n.kind,
+      who: n.sent ? `told ${n.sent_to}` : `tried to tell ${n.sent_to}`,
+      what: n.cause || (n.kind === "RECEIVED" ? "Acknowledged the ask, no changes made yet." : n.kind === "DONE" ? "Finished." : n.kind),
+      hasMessage: false,
+    })),
+  ].sort((a, b) => a.at.localeCompare(b.at));
+
+  return json({ trail });
 }

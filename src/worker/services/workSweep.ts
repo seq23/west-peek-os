@@ -136,6 +136,11 @@ export async function claimNextCard(env: Env, now: Date): Promise<SweepCard | nu
        FROM work_card
       WHERE owner_type = 'AI' AND owner_id IS NOT NULL
         AND state IN ('OPEN', 'IN_PROGRESS')
+        -- HELD (0227, Wave D). Not a state value — see the long comment on that migration — so
+        -- this clause, not the one above, is what keeps a held card out of the sweep's hands. A
+        -- hold is silent on purpose: she put it down herself, and nothing should pick it back up
+        -- until she says so through releaseHeldCard.
+        AND held_at IS NULL
         AND (lease_until IS NULL OR lease_until < ?1)
         AND COALESCE(work_attempts, 0) < ?2
         -- A CARD THE MAC HOLDS IS NOT WAITING (21 Sep 2026). Its LOCAL_JOB is queued or running;
@@ -325,6 +330,10 @@ export async function settleAbandonedCards(env: Env, now: Date): Promise<SweepCa
          FROM work_card
         WHERE owner_type = 'AI'
           AND state IN ('OPEN', 'IN_PROGRESS')
+          -- HELD (0227). A spent-attempts card that is also held must not be auto-blocked out from
+          -- under her — she put it down on purpose, and settling it into BLOCKED would overwrite
+          -- the very fact (held_at) that is supposed to keep it silent.
+          AND held_at IS NULL
           AND COALESCE(work_attempts, 0) >= ?1
           AND (state = 'OPEN' OR lease_until IS NULL OR lease_until < ?2)`,
     )

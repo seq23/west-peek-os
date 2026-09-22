@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { shortDate } from "../../lib/dates";
 import { api, type MeResponse } from "../../lib/api";
-import { CARD_SOURCES, STATE_MEANINGS, stateMeaning } from "@shared/work/workCards";
+import { CARD_SOURCES, STATE_MEANINGS, heldBySentence, stateMeaning } from "@shared/work/workCards";
 import type { BlockActionKey } from "@shared/work/blocks";
 import { portraitFor } from "../../lib/employeePortraits";
 import { ArtifactShelf } from "../ArtifactShelf";
-import { WebPropertyChangePanel, WorkKindRules } from "../WebPropertyChangePanel";
+import { WebPropertyChangePanel } from "../WebPropertyChangePanel";
 import { BlockPanel } from "./BlockPanel";
 import { LookForm, LookResults } from "./LooksPanel";
 import { NotesPanel, SteerButton } from "./NotesPanel";
@@ -68,7 +68,10 @@ export function deskBands(live: WorkCardRow[], meId: string): DeskBand[] {
   for (const c of live) {
     const mine = c.owner_type === "HUMAN" && c.owner_id === meId;
     const nobody = c.owner_type === "UNASSIGNED" || !c.owner_id;
-    if (c.state === "BLOCKED" || nobody || mine) waiting.push(c);
+    // HELD (0227, Wave D) sits with "waiting on you" rather than "in flight" — nothing is being
+    // worked, and it is silent (no nag) precisely because she already knows: she is the one who
+    // put it there. It still belongs on the desk she reads every time, not hidden.
+    if (c.state === "BLOCKED" || c.state === "HELD" || nobody || mine) waiting.push(c);
     else flight.push(c);
   }
   return [
@@ -457,7 +460,10 @@ export function WorkDesk({
                     onClick={() => toggleCard(c.id)}
                   >
                     <span className="work-card-meta">
-                      <span className={c.state === "BLOCKED" ? "badge badge-bad" : "badge"}>
+                      <span
+                        className={c.state === "BLOCKED" ? "badge badge-bad" : c.state === "HELD" ? "badge badge-quiet" : "badge"}
+                        data-testid={`work-card-state-${c.id}`}
+                      >
                         {meaning?.label ?? c.state}
                       </span>
                       {/* HOW FAR ALONG. An employee gets three attempts; the count is what tells you
@@ -576,12 +582,11 @@ export function WorkDesk({
 
                   {/* PORTER'S WEB PROPERTY CHANGE (20 Sep 2026, Plan A): where it is — phase, folder,
                       the plan as a Document, decided and asked, the PR and its checks, the merge and
-                      the live proof — and the standing rules of the kind, flippable by a partner. */}
+                      the live proof. The kind's STANDING rules moved off the card (Addendum 1, Wave
+                      A, 22 Sep 2026) — they are policy for every card of this kind, not this card's
+                      own setting, and the pointer at the foot of the card's own page links there. */}
                   {c.kind === "WEB_PROPERTY_CHANGE" && (
-                    <>
-                      <WebPropertyChangePanel cardId={c.id} onNavigate={onNavigate} canEdit={me.roles.includes("MANAGING_PARTNER")} />
-                      <WorkKindRules kind="WEB_PROPERTY_CHANGE" canEdit={me.roles.includes("MANAGING_PARTNER")} />
-                    </>
+                    <WebPropertyChangePanel cardId={c.id} onNavigate={onNavigate} canEdit={me.roles.includes("MANAGING_PARTNER")} />
                   )}
 
                   {/*
@@ -600,6 +605,18 @@ export function WorkDesk({
                     setClearText={setClearText}
                     onClear={(id, action, choice) => void clearBlock(id, action, choice)}
                   />
+
+                  {/*
+                    HELD (0227, Wave D), OUTSIDE THE FOLD LIKE A BLOCK — but never a nag. This is the
+                    one sentence that says a card is paused ON PURPOSE, and it reads before opening
+                    anything for the same reason a block does: it changes what the row means.
+                  */}
+                  {c.state === "HELD" && (
+                    <p className="notice small" data-testid={`work-card-held-${c.id}`}>
+                      {heldBySentence({ held_reason: c.held_reason, held_by_name: c.held_by_name }, c.held_at ? shortDate(c.held_at) : "recently")}{" "}
+                      <a href={`#/work/${c.id}`}>Open the card to release it</a>.
+                    </p>
+                  )}
 
                   {isOpen && (
                     <>
@@ -643,6 +660,13 @@ export function WorkDesk({
               </div>
 
                   <div className="notification-actions">
+                    {/* WAVE A (22 Sep 2026): the card's own page — who asked and how, the message
+                        trail, live progress, decisions made without asking, artifacts and previews.
+                        The desk stays the working surface; this is where the whole record of one
+                        card lives at its own address. */}
+                    <a className="link-button" href={`#/work/${c.id}`} data-testid={`work-card-open-${c.id}`}>
+                      Open the full card
+                    </a>
                     <select
                       aria-label={`Hand ${c.title} to somebody else`}
                       data-testid={`work-card-assign-${c.id}`}

@@ -178,6 +178,12 @@ export async function resurfaceStaleBlocks(env: Env, now: Date): Promise<StoredB
     await env.WP_OS_DB.prepare(
       `SELECT ${BLOCK_COLUMNS} FROM work_card
         WHERE state = 'BLOCKED' AND block_answered_at IS NULL
+          -- HELD (0227, Wave D). A card blocked and then held keeps state = 'BLOCKED' underneath
+          -- — HELD is not a state value, held_at IS NOT NULL is the fact — so without this
+          -- clause a held card's stale pre-hold nag clock would still ring every 24 hours, which is
+          -- exactly the silence this feature promises and the thing tests/hold.test.ts proves
+          -- negatively.
+          AND held_at IS NULL
           AND block_nag_at IS NOT NULL AND block_nag_at < ?1
         ORDER BY blocked_at ASC LIMIT 5`,
     )

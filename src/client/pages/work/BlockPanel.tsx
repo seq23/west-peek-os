@@ -1,5 +1,6 @@
 import { isTechnicalBlock } from "@shared/work/blocks";
 import type { BlockActionKey } from "@shared/work/blocks";
+import { LinkedText } from "../../lib/linkedText";
 import type { Assignable, WorkCardRow } from "./types";
 
 /**
@@ -45,7 +46,15 @@ export function BlockPanel({
       </p>
       <p data-testid={`work-card-block-stopped-${c.id}`}><strong>{c.block.stopped}</strong></p>
       <p className="small">What was asked for: {c.block.trying}</p>
-      <p className="small" data-testid={`work-card-block-needed-${c.id}`}>What would clear it: {c.block.needed}</p>
+      {/*
+        A LINK IN PLAIN TEXT IS STILL A LINK (Addendum 1). `block.needed` can carry a bare preview
+        URL, or — the defect this repairs — a stray `<a href="...">...</a>` tag a model's own words
+        embedded and a service stored verbatim. `LinkedText` parses either into real anchors; it
+        never string-interpolates the raw text into a node the way `{c.block.needed}` alone did.
+      */}
+      <p className="small" data-testid={`work-card-block-needed-${c.id}`}>
+        What would clear it: <LinkedText text={c.block.needed} />
+      </p>
       {/*
         WHAT THE VENDOR ACTUALLY SAID — on demand, never by default.
 

@@ -65,7 +65,7 @@ export const CARD_SOURCES: readonly CardSource[] = [
   },
 ] as const;
 
-export const CARD_STATES = ["OPEN", "IN_PROGRESS", "BLOCKED", "DONE", "CANCELLED"] as const;
+export const CARD_STATES = ["OPEN", "IN_PROGRESS", "BLOCKED", "HELD", "DONE", "CANCELLED"] as const;
 export type CardState = (typeof CARD_STATES)[number];
 
 export interface StateMeaning {
@@ -83,12 +83,37 @@ export const STATE_MEANINGS: readonly StateMeaning[] = [
     label: "Blocked",
     means: "Waiting on something outside this card. Blocked without a stated reason is just stalled.",
   },
+  {
+    key: "HELD",
+    label: "Held",
+    means: "Waiting on you, on purpose — you pulled it and saved it for later, with a reason. Silent until you release it; nothing nags about it.",
+  },
   { key: "DONE", label: "Done", means: "Finished. Kept, because what got done is the record." },
   { key: "CANCELLED", label: "Dropped", means: "Deliberately not doing it. Also kept — a decision not to act is a decision." },
 ] as const;
 
 export function stateMeaning(key: string): StateMeaning | null {
   return STATE_MEANINGS.find((s) => s.key === key) ?? null;
+}
+
+/**
+ * HELD (0227, Wave D): "Held by Sequoia — "…" — since Tuesday." One function, read everywhere the
+ * sentence has to appear — the desk row, the card page, and (the employee prompt path, the same way
+ * `requester_notes` is) anywhere an employee relays why a card is paused to whoever asks about it —
+ * so the wording cannot drift into two different sentences that happen to say the same thing.
+ *
+ * Date-formatting is the caller's, not this function's: a server reply and a browser render want
+ * different clocks (a partner's local day vs. a fixed one for an email), and this file is shared
+ * between both runtimes.
+ */
+export function heldBySentence(
+  row: { held_reason?: string | null; held_by_name?: string | null },
+  sinceLabel: string,
+): string | null {
+  const reason = (row.held_reason ?? "").trim();
+  if (!reason) return null;
+  const who = row.held_by_name?.trim() || "a partner";
+  return `Held by ${who} — "${reason}" — since ${sinceLabel}.`;
 }
 
 /**

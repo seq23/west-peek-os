@@ -56,6 +56,25 @@ async function setRule(value: "on" | "off"): Promise<void> {
     .run();
 }
 
+/**
+ * THE FIRM-WIDE DIAL (Addendum 8, 0228). Append-only and versioned — `email_preview_preference`
+ * refuses UPDATE and DELETE at the row (0228's own triggers), so a test that needs a different
+ * value writes a NEW, higher version rather than resetting the table. The whole file shares one
+ * database (`createTestDb` stands up one per FILE, not per test); every other test here uses
+ * WEB_PROPERTY_CHANGE_KIND, which carries its own explicit rule and never reads the dial at all —
+ * so whatever this test leaves the dial at cannot change any other test's outcome.
+ */
+async function setFirmDial(on: boolean): Promise<void> {
+  const current = await env.WP_OS_DB.prepare(
+    "SELECT COALESCE(MAX(version_no), 0) AS v FROM email_preview_preference WHERE firm_scope = 'west-peek'",
+  ).first<{ v: number }>();
+  await env.WP_OS_DB.prepare(
+    "INSERT INTO email_preview_preference (id, version_no, preview_all_partner_emails, set_by, firm_scope) VALUES (?1, ?2, ?3, 'fu_sequoia_taylor', 'west-peek')",
+  )
+    .bind(`epp_test_${Math.random().toString(36).slice(2)}`, (current?.v ?? 0) + 1, on ? 1 : 0)
+    .run();
+}
+
 async function previews(): Promise<Array<{ id: string; state: string; owner_firm_user_id: string; lane_reason: string; body_text: string; body_html: string | null }>> {
   return (
     (await env.WP_OS_DB.prepare("SELECT id, state, owner_firm_user_id, lane_reason, body_text, body_html FROM preview_approval WHERE work_card_id = ?1").bind(CARD).all<never>()).results ?? []
@@ -91,6 +110,13 @@ beforeEach(async () => {
   await env.WP_OS_DB.prepare("DELETE FROM preview_approval WHERE work_card_id = ?1").bind(CARD).run();
   await env.WP_OS_DB.prepare("DELETE FROM work_card_notice WHERE work_card_id = ?1").bind(CARD).run();
   await env.WP_OS_DB.prepare("DELETE FROM work_card WHERE id IN (?1, 'wc_routed_from')").bind(CARD).run();
+  // NOTHING TO RESET HERE. `email_preview_preference` is append-only (0228's own triggers refuse
+  // both UPDATE and DELETE), so this file cannot clear it between tests the way it clears
+  // `work_card`/`preview_approval` above. `setFirmDial` reads the current MAX(version_no) and
+  // writes one higher, so it is safe to call from any test regardless of what an earlier test left
+  // behind — and every OTHER test here uses WEB_PROPERTY_CHANGE_KIND, which carries its own
+  // explicit rule and never reads the dial, so whatever the dial is left at cannot change their
+  // outcome.
   await env.WP_OS_DB.prepare(
     `INSERT INTO work_card (id, title, kind, state, owner_type, owner_id, priority, firm_scope, requested_by_email, created_by)
      VALUES (?1, ?2, ?3, 'IN_PROGRESS', 'AI', 'aie_porter', 'NORMAL', 'west-peek', ?4, 'fu_sequoia_taylor')`,
@@ -139,9 +165,30 @@ describe("the rule is read in one place, and only ever adds a preview", () => {
     expect(lane.tickedByFirmUserId, "her rule does not take Scooter's preview off him").toBe("fu_scooter_taylor");
   });
 
-  it("says nothing about a kind with no such rule", async () => {
-    const lane = await doneReplyLaneFor(env, { kind: "BLOG_HELP", preview_first: null }, { kind: "DONE" });
-    expect(lane.cardAsked).toBeNull();
+  /*
+   * STRENGTHENED (Addendum 8, 0228, 22 Sep 2026). This used to assert that a kind with no rule of
+   * its own said nothing at all — true before the firm-wide dial existed, and false the moment it
+   * shipped: her correction was that "show me the finished email first" is not a Porter setting,
+   * it is a trust dial across every employee while she is still tailing their work. A ruleless kind
+   * now inherits that dial rather than staying permanently silent; a kind WITH its own row (today,
+   * only WEB_PROPERTY_CHANGE) still overrides it in either direction, which is the stronger claim
+   * this test now makes rather than the weaker one it used to.
+   */
+  it("a kind with no rule of its own inherits the firm-wide dial, and a kind with one still overrides it", async () => {
+    // Zero rows in email_preview_preference — her 22 Sep default, nobody has touched the dial.
+    const untouched = await doneReplyLaneFor(env, { kind: "BLOG_HELP", preview_first: null }, { kind: "DONE" });
+    expect(untouched.cardAsked, "no rule for BLOG_HELP and the dial has never been set — the default is ON").toBe(true);
+    expect(untouched.becauseOfRule, "the dial put it there, not the card's own tick").toBe(true);
+
+    await setFirmDial(false);
+    const dialOff = await doneReplyLaneFor(env, { kind: "BLOG_HELP", preview_first: null }, { kind: "DONE" });
+    expect(dialOff.cardAsked, "the dial moved off, and BLOG_HELP has nothing of its own to override it").toBeNull();
+
+    // WEB_PROPERTY_CHANGE's own row (seeded ON by 0223) keeps deciding for itself either way.
+    const ownRule = await doneReplyLaneFor(env, { kind: WEB_PROPERTY_CHANGE_KIND, preview_first: null }, { kind: "DONE" });
+    expect(ownRule.cardAsked, "an explicit per-kind rule wins over the firm-wide dial, whichever way the dial points").toBe(true);
+
+    await setFirmDial(true);
   });
 });
 
