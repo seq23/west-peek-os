@@ -506,7 +506,7 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
                         </label>
                       )}
                       <span className={risk}>{c.risk_level === "RESERVED" ? "Human-reserved" : c.risk_level === "UNCLASSIFIED" ? "Approval" : c.risk_level.charAt(0) + c.risk_level.slice(1).toLowerCase()}</span>{" "}
-                      <strong>{c.title}</strong>
+                      <strong className="home-waiting-title" title={c.title}>{c.title}</strong>
                       <div className="muted small">
                         {actionName(c.action_key)}{c.impact_note ? ` — ${c.impact_note}` : ""}
                       </div>

@@ -5866,6 +5866,35 @@ body {
    pushing the row sideways — Hallmark responsive rule 63. The measurer flags a SQUEEZED title, never
    an unavoidable one. */
 .deal-name, .room-head h3, .masthead-answer { overflow-wrap: anywhere; min-width: 0; }
+/* THE WAITING ROW'S TITLE, BOUNDED TO ONE LINE — root-caused 22 Sep 2026, the third time the
+   390×844 fold assertion (`e2e/home-overhaul.spec.ts:76`) failed on the "first waiting row" after
+   two prior fixes (#172, #176) each trimmed masthead/band spacing and both re-broke: the number
+   that recurred each time (bottom=861) was never actually about spacing margin. `approval_card`
+   titles carry no max length (`createApprovalSchema` in `approvals.ts`) and the home feed is
+   sorted oldest-first across the WHOLE firm (`mpHome.ts`'s `approvalsModule`, `ORDER BY
+   created_at`), so "the first row" is whichever pending card is oldest — not necessarily the row
+   a given journey just created. `e2e/d1-design-states.spec.ts` deliberately raises one MP-role
+   card it never decides ("Design-state probe: a card this reader may not decide", 57 characters)
+   to test a disabled-approve state; because that spec sorts before `home-overhaul.spec.ts`
+   alphabetically, its card is often the oldest by the time the fold is measured. At the single
+   phone-width column (`@media (max-width: 60rem)` above) a title that long wraps to two lines,
+   and two lines of a title is ~24px taller than one — comfortably the entire "margin" the last two
+   fixes were chasing. A title's line count was never something CSS spacing could fix, because it
+   was never spacing: the row's height was a function of WHICH card the shared e2e database
+   happened to hand it, which font-substitution then nudged over or under the line. Bounding the
+   title to one line makes the row's height constant regardless of which card is first, how long
+   its title runs, or what CI's font stack does with it — the fold no longer depends on content it
+   does not control. `text-overflow: ellipsis`, not `.work-card-title`'s multi-line `max-height`
+   clamp (see that rule's own comment): a compact list row reads as one line by design here, not a
+   card that can afford three. */
+.home-waiting-title {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .deal-row-2 { grid-template-columns: minmax(0, 1fr) auto; }
 .deal-row-selected { background: var(--wp-tint); border-color: var(--wp-tint-line); }
 .deal-sub { font-size: var(--text-xs); color: var(--wp-muted); margin-top: var(--space-3xs); }
