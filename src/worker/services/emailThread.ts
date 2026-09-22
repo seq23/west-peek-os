@@ -133,6 +133,17 @@ export async function steerFromReply(
     raw: string;
     inReplyTo: string | null;
     references: string | null;
+    /**
+     * The stored `.eml` this reply lives in, kept once at the door (0226).
+     *
+     * A STEER KEEPS ONLY THE WRITTEN HALF, and that is correct — feeding the firm's own quoted note
+     * back to an interpreter as though a partner had written it is the wrong question. But until
+     * 22 Sep 2026 the quoted half was simply GONE: nothing stored the message a steer came from, so
+     * "what was he actually answering" had no answer at all. The whole message is now kept at the
+     * door and the key travels with the reply, so the written half drives the work and the complete
+     * original is one join away on `inbound_message.work_card_id`.
+     */
+    emlKey: string | null;
   },
 ): Promise<SteerFromReply> {
   const tokens = threadTokensIn({ inReplyTo: message.inReplyTo, references: message.references });
@@ -315,6 +326,9 @@ export async function steerFromReply(
       quoted_chars: split.quoted.length,
       said: written.slice(0, 400),
       answered_block: answered,
+      // Where the whole reply is, quoted half included — the half a steer deliberately does not act
+      // on and just as deliberately no longer throws away.
+      stored: message.emlKey,
     },
   });
 

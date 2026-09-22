@@ -32,6 +32,14 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   // would mean raising a card to stop raising cards.
   { key: "standing_authority.grant", name: "Delegate an approval ahead of time", description: "Grant standing authority for one action, bounded by a use count and an expiry. Can never cover a reserved action or an external effect — those come back to a partner every time.", isExternalEffect: false },
   { key: "work_card.update", name: "Update work card", description: "Change work-card state, owner, priority, or next action.", isExternalEffect: false },
+  /*
+   * 0226. A stored inbound message read EXACTLY AS IT ARRIVED — headers, routing, signatures.
+   *
+   * Ordinary in the registry and RESTRICTED in `restricted_action` (migration 0226), which is the
+   * tier that role-gates without raising an approval card for every read. The decoded body is on
+   * the work card for whoever may see the card; the raw MIME is a Managing Partner's.
+   */
+  { key: "inbound_message.read_raw", name: "Read a stored message raw", description: "Read the stored `.eml` of an inbound message exactly as it arrived, headers and all.", isExternalEffect: false },
   { key: "work_card.unblock", name: "Clear a block on an employee's work", description: "Answer the question an employee is stuck on, change what was asked for, drop the work, or send it to an engineer. An answer reaches the employee on their next run.", isExternalEffect: false },
   { key: "approval.request", name: "Request approval", description: "Draft or submit an approval card for a governed action.", isExternalEffect: false },
   { key: "approval.decide", name: "Decide approval", description: "Approve, reject, or request revision on a pending approval card (human with required role only).", isExternalEffect: false },

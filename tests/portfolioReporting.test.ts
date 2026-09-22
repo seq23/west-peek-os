@@ -254,6 +254,7 @@ describe("4. an emailed update opens a job, never a figure", () => {
       from: "founder@example.com",
       raw: "Revenue 120k, burn 40k, 14 months of runway.",
       company: company.name,
+      emlKey: null,
     });
 
     const card = await t.db
@@ -296,6 +297,7 @@ describe("4. an emailed update opens a job, never a figure", () => {
       from: "founder@example.com",
       raw: "doing well",
       company: company.name,
+      emlKey: null,
     });
     const card = await t.db.prepare("SELECT description FROM work_card WHERE id = ?1").bind(cardId).first<{ description: string }>();
     // A portfolio update about a company the fund does not own is either a mislabelled mail or a
@@ -309,6 +311,7 @@ describe("4. an emailed update opens a job, never a figure", () => {
       from: "stranger@example.com",
       raw: "hello",
       company: "A Company Nobody Has Heard Of",
+      emlKey: null,
     });
     const card = await t.db.prepare("SELECT description FROM work_card WHERE id = ?1").bind(cardId).first<{ description: string }>();
     expect(card!.description).toContain("No company on record matches");

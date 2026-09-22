@@ -122,7 +122,7 @@ async function replyFrom(who: string, written: string, token: string) {
     "On Sun, 20 Sep 2026 at 21:02, Porter <os@westpeek.ventures> wrote:",
     "> The plan is on the card.",
   ].join("\n");
-  return steerFromReply(env, { fromHeader: `<${who}>`, authenticationResults: GOOD_AUTH(who), subject: "Re: Porter: blocked", raw, inReplyTo: threadReference(token), references: null });
+  return steerFromReply(env, { fromHeader: `<${who}>`, authenticationResults: GOOD_AUTH(who), subject: "Re: Porter: blocked", raw, inReplyTo: threadReference(token), references: null, emlKey: null });
 }
 
 
@@ -183,7 +183,7 @@ describe("the door reads a Drive folder and a property", () => {
   });
 
   it("a folder with no property stays an ordinary assignment, with the link recorded", async () => {
-    const id = await openAssignmentCard(env, { subject: "look at this", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: `here: https://drive.google.com/drive/folders/${FOLDER}x\nthoughts?`, limits: EMAILED_TASK_LIMITS });
+    const id = await openAssignmentCard(env, { subject: "look at this", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: `here: https://drive.google.com/drive/folders/${FOLDER}x\nthoughts?`, limits: EMAILED_TASK_LIMITS, emlKey: null });
     const c = await card(id);
     expect(c.kind).toBeNull();
     expect(String(c.request_json)).toContain(`${FOLDER}x`);
@@ -200,7 +200,7 @@ describe("Scooter emails a package for the ventures site", () => {
   let blockThreadToken = "";
 
   it("lands on Walker's desk and is handed to Porter at the door, with the folder and the repo on the row", async () => {
-    chiefCardId = await openAssignmentCard(env, { subject: "ventures site update", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: EMAIL, limits: EMAILED_TASK_LIMITS });
+    chiefCardId = await openAssignmentCard(env, { subject: "ventures site update", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: EMAIL, limits: EMAILED_TASK_LIMITS, emlKey: null });
     const chief = await card(chiefCardId);
     expect(chief.state, "the chief's card closes as handed on").toBe("DONE");
     expect(String(chief.description)).toMatch(/Handed to Porter as work card (wc_[a-z0-9-]+)/);
@@ -459,7 +459,7 @@ describe("land on green OFF asks first", () => {
   it("a green BUILD blocks with the PR and a question when the rule is off; the answer lands it", async () => {
     await env.WP_OS_DB.prepare("UPDATE work_kind_rule SET value = 'off' WHERE kind = ?1 AND rule_key = 'land_on_green'").bind(WEB_PROPERTY_CHANGE_KIND).run();
     try {
-      const id = await openAssignmentCard(env, { subject: "productions site", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: `westpeekproductions.com refresh — package: https://drive.google.com/drive/folders/${FOLDER}zz`, limits: EMAILED_TASK_LIMITS });
+      const id = await openAssignmentCard(env, { subject: "productions site", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: `westpeekproductions.com refresh — package: https://drive.google.com/drive/folders/${FOLDER}zz`, limits: EMAILED_TASK_LIMITS, emlKey: null });
       const porterId = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(id)).description))![1]!;
       await tickFor(porterId); // parks PLAN
       // Nothing to ask and publish-ready: no plan email, BUILD parks at once.
@@ -495,7 +495,7 @@ describe("land on green OFF asks first", () => {
 
 /** Open a card for a partner, run PLAN with the given report, and return Porter's card id and the newest block thread token. */
 async function planned(who: string, chief: string, subject: string, plan: Record<string, unknown>): Promise<{ id: string; token: () => Promise<string> }> {
-  const chiefId = await openAssignmentCard(env, { subject, partnerAddress: who, chiefOfStaff: chief, raw: `${subject}: westpeek.ventures — package: https://drive.google.com/drive/folders/${FOLDER}${subject.replace(/\W/g, "").slice(0, 6)}`, limits: EMAILED_TASK_LIMITS });
+  const chiefId = await openAssignmentCard(env, { subject, partnerAddress: who, chiefOfStaff: chief, raw: `${subject}: westpeek.ventures — package: https://drive.google.com/drive/folders/${FOLDER}${subject.replace(/\W/g, "").slice(0, 6)}`, limits: EMAILED_TASK_LIMITS, emlKey: null });
   const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
   await tickFor(id); // parks PLAN
   await macReports(id, { phase: "PLAN", status: "ok", ...plan });
@@ -720,7 +720,7 @@ async function preApproved(who: string, chief: string, subject: string, phrase: 
     partnerAddress: who,
     chiefOfStaff: chief,
     raw: `${subject} on westpeek.ventures — package: https://drive.google.com/drive/folders/${FOLDER}${subject.replace(/\W/g, "").slice(0, 6)}\n\n${phrase}. ${extra}\n`,
-    limits: EMAILED_TASK_LIMITS,
+    limits: EMAILED_TASK_LIMITS, emlKey: null,
   });
   const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
   await tickFor(id); // parks PLAN
@@ -1151,7 +1151,7 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
   });
 
   it("with nothing recent to infer from, Porter asks which site — the one question only they can answer", async () => {
-    const chiefId = await openAssignmentCard(env, { subject: "Footer tweak", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Hey Porter — make the footer smaller on our site please.", limits: EMAILED_TASK_LIMITS });
+    const chiefId = await openAssignmentCard(env, { subject: "Footer tweak", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Hey Porter — make the footer smaller on our site please.", limits: EMAILED_TASK_LIMITS, emlKey: null });
     const porterId = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
     // Take the inference away: the row says the property is unresolved.
     await env.WP_OS_DB.prepare("UPDATE web_property_change SET target_repo = 'unresolved', property_host = NULL, property_assumed_from = NULL WHERE work_card_id = ?1").bind(porterId).run();
@@ -1163,7 +1163,7 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
 
   it("a chief of staff's card that reads as a website change is handed to Porter by the general runner, never browsed", async () => {
     // Simulate the hand-patched shape: kind NULL on Walker's desk with the request text.
-    const chiefId = await openAssignmentCard(env, { subject: "Spot on the site", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "please add a spot on westpeek.ventures for people to sign up", limits: EMAILED_TASK_LIMITS });
+    const chiefId = await openAssignmentCard(env, { subject: "Spot on the site", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "please add a spot on westpeek.ventures for people to sign up", limits: EMAILED_TASK_LIMITS, emlKey: null });
     // The door already handed it on; undo that to reproduce the defect shape.
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'OPEN', kind = NULL WHERE id = ?1").bind(chiefId).run();
     const out = await workCard(env, { request: new Request("https://os.joinwestpeek.com/internal/test"), env, identity: sweepIdentity(), params: {} }, chiefId, { maxSteps: 2 });
@@ -1175,7 +1175,7 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
   });
 
   it("a partner's 'Re: <our subject>' reply answers the block and creates no card, even without our token", async () => {
-    const chiefId = await openAssignmentCard(env, { subject: "Something Walker holds", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Walker, find me three podcast hosts who cover seed funds.", limits: EMAILED_TASK_LIMITS });
+    const chiefId = await openAssignmentCard(env, { subject: "Something Walker holds", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Walker, find me three podcast hosts who cover seed funds.", limits: EMAILED_TASK_LIMITS, emlKey: null });
     const { blockCard } = await import("../src/worker/services/blocks");
     await blockCard(env, { id: chiefId, title: "From scooter@westpeek.ventures: Something Walker holds", firm_scope: "west-peek" }, { reason: "permission_to_open_a_page", trying: "podcast hosts", employee: "Walker", url: "https://example.org" });
     const { replyToRequester } = await import("../src/worker/services/requestReply");
@@ -1200,12 +1200,15 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
     const raw = SCOOTER_MIME({ subject: "Newsletter signup on the site", body: "Hey Porter!\n\nCan we add a newsletter signup on the site? Just a spot where people can drop their email." });
     await (env.WP_OS_DOCUMENTS as unknown as { put: (k: string, b: string) => Promise<unknown> }).put(key, raw);
     // The live duplicate: the mis-read chief card, still BLOCKED.
-    const dup = await openAssignmentCard(env, { subject: "Newsletter signup on the site", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Received: from x\r\nSubject: Newsletter signup on the site\r\n\r\n(garbage)", limits: EMAILED_TASK_LIMITS });
+    const dup = await openAssignmentCard(env, { subject: "Newsletter signup on the site", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Received: from x\r\nSubject: Newsletter signup on the site\r\n\r\n(garbage)", limits: EMAILED_TASK_LIMITS, emlKey: key });
     await env.WP_OS_DB.prepare("UPDATE work_card SET kind = NULL WHERE id = ?1").bind(dup).run();
     await (await import("../src/worker/services/blocks")).blockCard(env, { id: dup, title: "From scooter@westpeek.ventures: Newsletter signup on the site", firm_scope: "west-peek" }, { reason: "the_brief_is_missing", trying: "Newsletter signup on the site", employee: "Walker" });
     const dupTitle = String((await card(dup)).title);
     expect(dupTitle).toBe("From scooter@westpeek.ventures: Newsletter signup on the site");
-    expect(String((await card(dup)).description), "every partner message is stored").toMatch(/Stored message: inbound-email\//);
+    // STRICTER THAN THE PREFIX IT USED TO ASSERT (22 Sep 2026): the door no longer mints a key of
+    // its own, so the card must name the EXACT key the message was kept under at the intake. A card
+    // pointing at some other stored message is the failure this line now catches.
+    expect(String((await card(dup)).description), "the card names the key the message was kept under").toContain(`Stored message: ${key}`);
     const res = await handleReingestStoredEmail({
       request: new Request("https://os.joinwestpeek.com/api/inbound-email/reingest", { method: "POST", body: JSON.stringify({ object_key: key, received_tldr: "Got it — and ignore the 'Walker: blocked' email you just got.", reply_on_thread: "wpt_04e85ca12a124c358b220e84d893cdcb" }) }),
       env,
@@ -1238,7 +1241,7 @@ describe("STUCK is sent once, only when idle past the ceiling inside the window"
   it("a run that dies mid-plan and is not re-claimed within the ceiling → exactly one STUCK; a second tick sends nothing", async () => {
     await env.WP_OS_DB.prepare("UPDATE work_kind_rule SET value = '00-24' WHERE kind = ?1 AND rule_key = 'stuck_window_ct'").bind(WEB_PROPERTY_CHANGE_KIND).run();
     const before = sent.length;
-    const chiefId = await openAssignmentCard(env, { subject: "stuck test", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Change the footer on westpeek.ventures.", limits: EMAILED_TASK_LIMITS });
+    const chiefId = await openAssignmentCard(env, { subject: "stuck test", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Change the footer on westpeek.ventures.", limits: EMAILED_TASK_LIMITS, emlKey: null });
     const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
     await tickFor(id); // PLAN parked
     // The Mac claimed it and died mid-plan: the reaper closes the run.

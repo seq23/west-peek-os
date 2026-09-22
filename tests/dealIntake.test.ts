@@ -352,6 +352,7 @@ describe("route 2 · email — a hashtag routes and never authorises, and the co
       raw: "have a look at this one",
       triggers: ["#wpdealflow"],
       why: "Tagged for deal flow, but no company name could be read out of it.",
+      emlKey: null,
     });
     const card = await cardOf(cardId);
     expect(card.owner_id).toBe("aie_porter");
@@ -376,6 +377,7 @@ describe("route 2 · email — a hashtag routes and never authorises, and the co
       raw: "",
       triggers: ["#wpdeck"],
       why: "It is 14.2MB — too large to open inside one request.",
+      emlKey: null,
     });
     const card = await cardOf(cardId);
     expect(card.title).toBe("Too big to read: Sensori — updated deck");

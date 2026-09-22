@@ -6568,3 +6568,74 @@ including 22 Sep's real page and route, and both directions of list-against-seed
 **Proof:** `tests/doneReplyPreview.test.ts`, 15 new tests. Three existing pins in
 `tests/webPropertyChange.test.ts` became false and were rewritten STRICTER: each now asserts the
 same proof text in the filed preview AND that nothing reached the requester. Duty self-test 33 → 40.
+
+## Every inbound message is kept, indexed, and readable — Movement E (22 Sep 2026)
+
+**What happened.** Scooter replied to a hire-search email. The door read the reply as a NEW
+request, wrote the first 4,000 characters of RAW MIME — `Received:`, `ARC-Seal:`, `DKIM-Signature:`
+— into the work card's description, and stored no `.eml`. His words are unrecoverable; they were
+never written anywhere. Her words: "the original emails received for the work card or replied
+should be kept … we need to overhaul this." The root cause was structural, not a missed call:
+keeping the message was a PER-DOOR responsibility. Since PR #150 exactly one door discharged it
+(`openAssignmentCard`) plus the oversize branch; the other seven call sites — unrouted mail, a deal
+tag with no readable company, a `#wpnetwork` relay that failed, a reply that could not be acted on,
+`#wpupdate`, a small founder deck, and a steering reply — kept nothing. `raw.slice(0, 4000)` was
+typed out separately in `openRoutingCard` and `openPortfolioUpdateCard` too — two components each
+keeping their own list, the shape this repo's Rule 0 names.
+
+**One store, one index row, at the entry, before any branch.** `keepTheMessage` in
+`effects/inboundEmail.ts` runs first in `handleInboundEmailOnce`, for every message that passes the
+`inbound_email_seen` dedupe — unconditionally, not gated on attachments or message size. It is the
+ONLY place in `src/` that mints an `inbound-email/` key, and it writes the `.eml` to R2 and the
+`inbound_message` row (migration 0226) in the same place, so the index and the bucket cannot
+disagree. Every door — `openRoutingCard`, `openAssignmentCard`, `openPortfolioUpdateCard`,
+`intakeDealFromEmail`, `steerFromReply` — is handed the key rather than minting its own; a card's
+description is built through the new `readableMessage()` (decoded, quote-stripped, capped for
+readability) and never `raw.slice`. A message whose `From:` claims a Managing Partner and FAILS
+authentication is deliberately NOT archived — `os@joinwestpeek.com` is publicly addressable, and
+keeping a forgery under a partner's name would give an attacker durable storage inside the firm's
+own bucket; nothing is dropped by this, the message still opens a routing card carrying its words
+and the refusal. A failed R2 store is never silent: the old `catch { emlKey = null }` (in
+`openAssignmentCard` and inside `keepTheMessage`'s own predecessor) said nothing for a month; both
+now append `inbound_email.store_failed` and still open the card with the text.
+
+**Read back.** `GET /api/work-cards/:id/request-message` returns the decoded body (through
+`getVisibleWorkCard`, scope AND privacy label, never the notes routes' bare `SELECT id FROM
+work_card`); `GET /api/work-cards/:id/raw` returns the `.eml` exactly as it arrived, gated through
+`authorize()` on the new `inbound_message.read_raw` (RESTRICTED to `MANAGING_PARTNER`) and recorded
+on the event spine on every read. Retention is deliberately NOT decided here — her call, 22 Sep
+2026: the index comes first, retention after — so nothing expires and nothing is deleted; see
+`docs/RECOVERY.md` §7.
+
+**A real bug found while writing the test suite.** `keepTheMessage`'s "readable" branch (any
+message ≤256KB, or any size from an authenticated partner) had the buffered bytes wrapped into
+`new Blob([bytes]).stream()` before the R2 `put` — a stream R2 cannot see the length of, which is
+exactly the shape the comment two lines below it warns against for the OTHER branch (`Provided
+readable stream must have a known length`). It silently stored empty objects. Fixed by handing R2
+the buffered `Uint8Array` directly — no stream, no ambiguity, and simpler code. Caught by
+`tests/webPropertyChange.test.ts`'s existing 4 MB-partner-email pin (byte-exact stored copy).
+
+**Guards:** `validate:every-door-keeps-the-message` (`every-door-keeps-the-message.mjs`, new,
+22 Sep 2026) — every door call site is reached with a stored key in hand, no door slices `raw`, no
+R2 `put` is swallowed silently, the store is hoisted and singular, the spoof refusal survives, and
+the request-message routes gate correctly. Hard-fails on zero sources, door sites or puts; twelve
+planted bypasses caught in `--self-test`. Two existing validators pinned to the PRE-0226 shape of
+this code and needed strengthening, not loosening, to the new one: `validate:no-land-without-approval`
+re-pointed its "the door decodes via `textBodyOf` → `splitQuoted().written`" check at the new shared
+`readableMessage()` (46 gates, was fewer); `validate:duty-executor` re-pointed its "read once,
+buffered, never tee'd" check at `keepTheMessage()` (where the read now lives, hoisted out of the
+oversize branch it used to be pinned to) and its "the .eml store is unconditional" check at "the
+door never mints its own key" (twenty planted bypasses, was eighteen).
+
+**Also fixed in passing.** `scripts/validate/README.md` carried a duplicate entry for
+`only-the-script-sets-delivery-config.mjs` (pasted twice by #158) — removed.
+
+**Proof:** `tests/everyInboundMessageIsKept.test.ts`, 17 new tests driving the WHOLE handler (never
+a single door) — every path that kept nothing before now keeps exactly one message and one index
+row, a steering reply is indexed and linked to the card it steered (the 21 Sep failure, closed
+directly), a spoof stores nothing but still opens a card with the refusal, a failed R2 store is
+never silent and never loses the message, and the read-back routes serve the right body to the
+right role and 404 rather than 403 outside firm scope. One existing pin in
+`tests/webPropertyChange.test.ts` became false and was rewritten STRICTER: a card's `Stored
+message:` line now must name the EXACT key the intake kept the message under, not merely match the
+`inbound-email/` prefix.

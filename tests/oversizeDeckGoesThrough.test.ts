@@ -24,17 +24,27 @@ const ANALYST = seatId(DEAL_INTAKE_EMPLOYEE);
 const ROUTER = seatId(ROUTING_EMPLOYEE);
 const NOW = new Date("2026-09-14T16:00:00.000Z");
 
+/*
+ * A FOUNDER'S ADDRESS, NOT A PARTNER'S (22 Sep 2026). This fixture used
+ * `scooter@westpeek.ventures` for a founder's deck, which was incidental when it was written and is
+ * now a contradiction: a message whose From claims a Managing Partner and which carries no
+ * `Authentication-Results` is a SPOOF, and `keepTheMessage` deliberately does not archive one under
+ * a partner's name. A founder's deck is what this suite is about, so it says so. The spoof rule has
+ * its own pins in `tests/everyInboundMessageIsKept.test.ts`.
+ */
+const FOUNDER = "ada@sensori.example";
+
 function deliver(subject: string, sizeBytes: number): Promise<void> {
   // A real body of the stated size: R2 stores through a FixedLengthStream and refuses a mismatch.
-  const head = `Subject: ${subject}\r\nFrom: scooter@westpeek.ventures\r\n\r\nDeck attached.\r\n`;
+  const head = `Subject: ${subject}\r\nFrom: ${FOUNDER}\r\n\r\nDeck attached.\r\n`;
   const bytes = new Uint8Array(sizeBytes);
   bytes.set(new TextEncoder().encode(head));
   bytes.fill(0x41, head.length);
   return handleInboundEmail(
     {
-      from: "scooter@westpeek.ventures",
+      from: FOUNDER,
       to: INTAKE_MAILBOX,
-      headers: new Headers({ subject, from: "scooter@westpeek.ventures" }),
+      headers: new Headers({ subject, from: FOUNDER }),
       raw: new Blob([bytes]).stream(),
       rawSize: sizeBytes,
     },

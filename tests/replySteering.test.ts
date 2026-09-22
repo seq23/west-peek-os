@@ -199,7 +199,7 @@ describe("a reply is matched to its conversation by References, never by a provi
       subject: "Re: Walker: hire search",
       raw,
       inReplyTo: threadReference(token),
-      references: null,
+      references: null, emlKey: null,
     });
     expect(forged.steered).toBe(false);
     expect(forged.reason).toMatch(/not accepted as coming from a Managing Partner/);
@@ -213,7 +213,7 @@ describe("a reply is matched to its conversation by References, never by a provi
       subject: "Re: Walker: hire search",
       raw,
       inReplyTo: threadReference(token),
-      references: null,
+      references: null, emlKey: null,
     });
     expect(ok.steered).toBe(true);
     expect(ok.thread!.card_kind).toBe("PRODUCTIONS_HIRE_SEARCH");
@@ -234,7 +234,7 @@ describe("a reply is matched to its conversation by References, never by a provi
       subject: "Re: something",
       raw,
       inReplyTo: `<${mintThreadToken()}@joinwestpeek.com>`,
-      references: null,
+      references: null, emlKey: null,
     });
     expect(stranger.steered).toBe(false);
     expect(stranger.reason).toMatch(/does not have a record of/);
