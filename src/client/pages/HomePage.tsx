@@ -12,6 +12,7 @@ import { bandsFor, effectiveFilter, readHomeFilter, writeHomeFilter, type HomeFi
 import type { BriefStatusResponse } from "../lib/briefBand";
 import { actionName } from "@shared/help/actionNames";
 import { chiefOfStaffFor } from "@shared/work/chiefOfStaff";
+import { mergeDecidedRows } from "@shared/home/decidedRows";
 import { ConnectPanel } from "./ConnectPanel";
 
 /**
@@ -272,6 +273,22 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
   const [rejecting, setRejecting] = useState<string | null>(null);
   const [rejectNote, setRejectNote] = useState("");
   const [decided, setDecided] = useState<Record<string, string>>({});
+  /**
+   * THE ROW SHE JUST DECIDED, KEPT ALIVE THROUGH THE REFETCH THAT WOULD OTHERWISE ERASE IT
+   * (found 22 Sep 2026, while re-verifying the 390×844 fold fix — this journey had never reached
+   * this far before, because the fold assertion always failed first).
+   *
+   * `decide()` below deliberately does not reload after a success, precisely so the row stays
+   * wearing its "approved 7:04 AM" badge instead of vanishing before she sees it. Wave F's global
+   * `invalidateAll()` (every `useApi`, on every accepted mutation anywhere) undoes that on its own:
+   * the decide POST is itself a mutation, so it refetches `home` regardless, and the server's own
+   * `/api/mp-home` naturally drops a card the moment it stops being pending — same flicker, back
+   * from a different door. This snapshot is the missing half: the one card object `decide()` had in
+   * hand at the moment she acted, kept only until the next full read of this page (this state is as
+   * ephemeral as `decided` itself), so the merged list below can still render it after the row's
+   * own upstream data is gone.
+   */
+  const [decidedSnapshot, setDecidedSnapshot] = useState<Record<string, ApprovalItem>>({});
 
   // Mark the visit AFTER the first read, so "what changed" is a diff against the previous visit.
   useEffect(() => {
@@ -295,6 +312,14 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
   const waiting = data.modules.find((m) => m.key === "approvals") ?? null;
   const deliveries = data.modules.filter((m) => m.key !== "approvals");
   const waitingItems = (waiting?.items ?? []) as unknown as ApprovalItem[];
+  /**
+   * THE RENDERED LIST, NOT THE FETCHED ONE. `waitingItems` is the server's current truth and is
+   * what the count and the empty-state question below have to answer from — but a card she just
+   * decided can be dropped from that same fetch by Wave F's own global invalidation before she has
+   * seen the row say so (see `decidedSnapshot` above). Union the two: everything still pending,
+   * plus anything decided this session whose snapshot is not already back in the fresh list.
+   */
+  const renderedWaitingItems = mergeDecidedRows(waitingItems, decided, decidedSnapshot);
   const freshDeliveries = deliveries.filter(hasNew);
   const quietDeliveries = deliveries.filter((m) => !hasNew(m));
   const chiefOfStaff = (() => { const mine = chiefOfStaffFor(me.fullName); return { name: mine, role: roleFor(mine) ?? "Chief of Staff" }; })();
@@ -361,6 +386,7 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
     const at = new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
     if (res.status === 200) {
       setDecided((d) => ({ ...d, [card.id]: `${decision} ${at}` }));
+      setDecidedSnapshot((s) => ({ ...s, [card.id]: card }));
       setRejecting(null);
       setRejectNote("");
       setNotice(decision === "approved" ? `Approved at ${at}. It runs now.` : `Rejected at ${at}.`);
@@ -464,11 +490,11 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
           {/* FIRST IN THE BAND: a preview decays if she does not answer it; its Approve and send is the page's one primary. */}
           <PreviewApprovals previews={previews.previews} onDecided={previews.reload} />
 
-          {waitingCount === 0 && previews.previews.length === 0 ? (
+          {renderedWaitingItems.length === 0 && visibleAttention.length === 0 && previews.previews.length === 0 ? (
             <p className="muted small" data-testid="home-waiting-empty">Nothing is blocked on you{silencedCount > 0 ? ` — ${silencedCount} ${silencedCount === 1 ? "item is" : "items are"} silenced` : ""}.</p>
           ) : (
             <ul className="deal-list" data-testid="home-waiting-list">
-              {waitingItems.map((c, i) => {
+              {renderedWaitingItems.map((c, i) => {
                 const outcome = decided[c.id];
                 const risk = c.risk_level === "RESERVED" ? "badge badge-bad" : c.risk_level === "HIGH" || c.risk_level === "MEDIUM" ? "badge badge-gate" : "badge";
                 return (

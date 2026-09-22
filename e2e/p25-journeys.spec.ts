@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { gotoSurface, openWorkMachinery } from "./support/nav";
+import { gotoSurface, openDisclosure, openWorkMachinery } from "./support/nav";
 
 /**
  * P25 — cross-system journeys (task §9 P25).
@@ -158,6 +158,9 @@ test("journey 4 — machine → scheduled run → artifact → notification → 
   // Switch the daily intelligence job on and run it. The machinery is Work's third address since
   // 18 Sep, and the helper pins that it is off the desk and one click away.
   await openWorkMachinery(page);
+  // ONE LINE, COLLAPSED, BY DEFAULT (22 Sep 2026 Machinery redesign): the row's controls live in
+  // its expandable body, not its always-visible summary — open it before reaching for either.
+  await openDisclosure(page, "job-details-daily_intelligence");
   // A paused job shows "Put it back on"; a running one shows "Pause… (why?)". Put it on if needed.
   const resume = page.getByTestId("job-resume-daily_intelligence");
   if (await resume.isVisible().catch(() => false)) {

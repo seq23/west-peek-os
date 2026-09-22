@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { provisionLocalD1, queryLocalD1 } from "./support/provision";
-import { openWorkMachinery } from "./support/nav";
+import { openDisclosure, openWorkMachinery } from "./support/nav";
 import { kindDef } from "../src/shared/deliverables/deliverable";
 
 /**
@@ -124,6 +124,9 @@ test("a partner can ask for a preview from the Work page, on the jobs that have 
   await expect(page.getByTestId("identity-status")).toContainText("Sequoia Taylor");
 
   await openWorkMachinery(page);
+  // ONE LINE, COLLAPSED, BY DEFAULT (22 Sep 2026 Machinery redesign): Preview it to me lives in the
+  // row's expandable body, not its always-visible summary.
+  await openDisclosure(page, "job-details-productions_hire_search");
   const button = page.getByTestId("job-preview-productions_hire_search");
   await expect(button, "the hire search can be previewed").toBeVisible();
   await expect(button).toHaveText("Preview it to me");
