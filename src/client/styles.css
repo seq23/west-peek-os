@@ -6259,20 +6259,28 @@ body {
      Waiting and its first row, and the Arrived head above the fold. */
   .identity-email,
   .identity-role { display: none; }
-  /* The exact minute the last read landed is chrome a phone can do without, same reasoning as the
-     e-mail and the role above; Refresh itself stays reachable. Wave F's own control, added after
-     this budget was last measured — see the `.surface-identity > [data-testid="global-refresh-
-     control"]` margin fix above for the rest of what it cost. */
-  [data-testid="global-refresh-asof"] { display: none; }
+  /*
+   * RE-MEASURED TWICE, 22 Sep 2026 — a one-line trim was not durable. Hiding only the "as of"
+   * stamp (a since-superseded first attempt) passed at 835px locally, then read 845-888px on real
+   * runs: two prior local measurements on this same fixture landed 26px apart from each other
+   * (888 vs 914, before any fix), and the shipped CI run measured 861px on a commit that touched
+   * no client file at all. This budget runs close enough to its line that font-metric and timing
+   * noise alone — already documented above as "CI's font stack wraps a line earlier than a local
+   * run" — can flip a passing local number into a failing CI one. A few extra pixels of trimming
+   * cannot out-run noise of that size; removing a whole LINE can.
+   *
+   * So Refresh — the button, not only its stamp — is chrome a phone can do without, on the same
+   * reasoning as the e-mail and the role above: Wave F's own auto-refetch-on-focus and
+   * auto-refetch-on-any-mutation (`wireFocusRevalidation`, `invalidateAll` in `lib/api.ts`) already
+   * cover a phone session without her ever pressing anything; the manual override is the desk
+   * control, where the masthead has room to spare. It stays fully reachable above 40rem.
+   */
+  [data-testid="global-refresh-control"] { display: none; }
   .page-purpose-can { display: none; }
-  /* RE-MEASURED 22 Sep 2026, after Wave F's Refresh control landed: even with the margin fix above
-     and the "as of" stamp hidden, the identity cluster plus this masthead and band spacing put the
-     first Waiting row's bottom at 845px — one pixel over 844, and CI's font stack has already been
-     observed to wrap a line earlier than a local run (see the retired 862px note this replaces), so
-     a one-pixel pass here is not a pass on CI. Three more on-scale trims (2px + 4px + 4px) instead
-     of loosening the fold: `--space-3xs` here (was `--space-2xs`), `.masthead`'s own margin down one
-     step, `.band-head`'s own padding down one step — none of them touch anything measured elsewhere
-     (heading scale, contrast, tap targets). */
+  /* Three further on-scale trims (2px + 4px + 4px), on top of removing the line above, for real
+     margin rather than a hairline pass: `--space-3xs` here (was `--space-2xs`), `.masthead`'s own
+     margin down one step, `.band-head`'s own padding down one step — none of them touch anything
+     measured elsewhere (heading scale, contrast, tap targets). */
   .surface-identity { margin-top: var(--space-3xs); gap: var(--space-2xs) var(--space-sm); }
   .masthead { margin-bottom: var(--space-sm); }
   /* A band-head line that echoes the masthead's detail is hidden on the phone; bands sit one step
