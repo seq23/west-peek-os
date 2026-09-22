@@ -9,11 +9,10 @@ import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
 import { WEB_PROPERTY_CHANGE_KIND } from "../src/shared/work/localJobs";
 import {
   parseActionabilityVerdict,
-  recentBanterContext,
   runWebPropertyChangeCard,
   type ActionabilityClassifier,
-  type BanterReplyGenerator,
 } from "../src/worker/services/webPropertyChange";
+import { recentBanterContext, type BanterReplyGenerator } from "../src/worker/services/banterReply";
 import { EMPLOYEE_PERSONAS } from "../src/shared/registry/aiEmployeePersonas";
 import { purgeNoActionCards } from "../src/worker/services/noActionPurge";
 import type { SweepCard } from "../src/worker/services/workSweep";
@@ -348,16 +347,18 @@ describe("recentBanterContext — the deterministic fact a real work item resets
 });
 
 describe("INTAKE_JUDGMENT_STANDARD reaches both intake-facing generation calls", () => {
-  it("is referenced by the classification prompt and the banter-reply prompt in source — not vibes, provably wired", () => {
-    const src = readFileSync(fileURLToPath(new URL("../src/worker/services/webPropertyChange.ts", import.meta.url)), "utf8");
-    const classifyBody = src.slice(src.indexOf("const defaultClassifyActionability"), src.indexOf("const defaultGenerateBanterReply"));
-    const replyBody = src.slice(src.indexOf("const defaultGenerateBanterReply"), src.indexOf("/** The reply, if any"));
+  it("is referenced by the classification prompt (webPropertyChange.ts) and the banter-reply prompt (banterReply.ts) in source — not vibes, provably wired", () => {
+    const classifySrc = readFileSync(fileURLToPath(new URL("../src/worker/services/webPropertyChange.ts", import.meta.url)), "utf8");
+    const classifyBody = classifySrc.slice(classifySrc.indexOf("const defaultClassifyActionability"), classifySrc.indexOf("if (run.status !== \"COMPLETED\" || !run.output_text) {"));
     expect(classifyBody).toContain("INTAKE_JUDGMENT_STANDARD");
-    expect(replyBody.length > 0 ? replyBody : src.slice(src.indexOf("const defaultGenerateBanterReply"))).toContain("INTAKE_JUDGMENT_STANDARD");
+
+    const replySrc = readFileSync(fileURLToPath(new URL("../src/worker/services/banterReply.ts", import.meta.url)), "utf8");
+    const replyBody = replySrc.slice(replySrc.indexOf("const defaultGenerateBanterReply"));
+    expect(replyBody).toContain("INTAKE_JUDGMENT_STANDARD");
   });
 
   it("no hardcoded reply-pacing counter or fixed redirect string survives in the banter-reply path (Addendum 11.1)", () => {
-    const src = readFileSync(fileURLToPath(new URL("../src/worker/services/webPropertyChange.ts", import.meta.url)), "utf8");
+    const src = readFileSync(fileURLToPath(new URL("../src/worker/services/banterReply.ts", import.meta.url)), "utf8");
     expect(src).not.toContain("BANTER_REDIRECT_LINE");
     expect(src).not.toContain("gotta get back to work");
   });
