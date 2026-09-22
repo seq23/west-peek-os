@@ -69,6 +69,7 @@ import {
   handleUpdateWorkCard,
   handleHoldWorkCard,
   handleReleaseWorkCard,
+  handleMarkWorkDeskSeen,
 } from "./services/workCards";
 import {
   handleCreateApproval,
@@ -734,6 +735,10 @@ const router = new Router()
   .post("/api/captures/:id/archive", handleArchiveCapture)
   // P3 — work spine.
   .post("/api/work-cards", handleCreateWorkCard)
+  // Wave C, 22 Sep 2026 — the desk remembers when she last looked (migration 0225,
+  // `work_desk_seen`). Literal, registered before any `:id`-shaped work-card route below so
+  // "desk-seen" is never read as a card id.
+  .post("/api/work-cards/desk-seen", handleMarkWorkDeskSeen)
   // Literal before the :id that would swallow it.
   .post("/api/intent/brief", handleWriteBrief)
   .post("/api/images/generate", handleGenerateImage)

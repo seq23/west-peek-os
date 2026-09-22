@@ -3052,6 +3052,13 @@ details.card > summary,
   overflow: hidden;
 }
 
+/* Just arrived — new since she last opened the desk, or opened in the last fifteen minutes
+   (Wave C, 22 Sep 2026). The same "arrived, not yet reviewed" treatment `.badge-attention` already
+   carries on a deal, reused here rather than a second colour invented for the same idea. Declared
+   BEFORE the blocked rule below so a card that is somehow both reads as blocked, which is the one
+   that actually needs her. */
+.work-card-grid > li:has(.badge-attention) { border-left: 3px solid var(--wp-orange); }
+
 /* Blocked earns a visible edge: it is the only state where work has stopped and
    somebody has to intervene. */
 .work-card-grid > li:has(.badge-bad) { border-left: 3px solid var(--wp-danger); }
@@ -5075,6 +5082,12 @@ body {
 .work-card-lean .work-card-summary { padding: var(--space-sm) 0; gap: var(--space-2xs); }
 .work-card-lean .work-card-title { font-weight: 600; }
 .work-card-lean.is-open { background: var(--wp-surface-2); }
+
+/* The lean, in-flight row gets the same "just arrived" edge as the card grid above. */
+.work-card-rows > li:has(.badge-attention) {
+  border-left: 3px solid var(--wp-orange);
+  padding-left: var(--space-sm);
+}
 
 /* A lean card that has stopped is not lean any more: it has been promoted out of this band, and if
    it is still here because the board has not reloaded yet, it still reads as stopped. */

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { originOf } from "../src/shared/work/origin";
+import { originOf, originBadgeText } from "../src/shared/work/origin";
 import { PARTNERS } from "../src/shared/registry/partners";
 
 /**
@@ -71,5 +71,44 @@ describe("originOf", () => {
     const o = originOf({});
     expect(o).toEqual({ kind: "SYSTEM", who: "the system", at: "" });
     expect(o.who.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * ONE PHRASE PER ORIGIN, FOR THE DESK'S BADGE (Wave C, 22 Sep 2026) — the same four categories she
+ * asked for: from an email (naming the sender), from her directly, from an AI employee, from the
+ * scheduled sweep. `originBadgeText` is a pure formatter over `originOf`'s own result, so a card
+ * whose origin changes (a new kind, a new call site) can never disagree with the sentence the card
+ * page already reads out in full.
+ */
+describe("originBadgeText", () => {
+  it("names the sender on an email origin", () => {
+    expect(originBadgeText({ kind: "EMAIL", who: "scooter@westpeek.ventures", at: "" })).toBe("from scooter@westpeek.ventures");
+  });
+
+  it("says 'from you' when she opened it herself", () => {
+    expect(originBadgeText({ kind: "YOU", who: SEQUOIA.fullName, at: "" })).toBe("from you");
+  });
+
+  it("names the partner when a colleague opened it", () => {
+    expect(originBadgeText({ kind: "PARTNER", who: SCOOTER.fullName, at: "" })).toBe(`from ${SCOOTER.fullName}`);
+  });
+
+  it("names the scheduled sweep when created_by is the sweep's own identity, with no join available", () => {
+    expect(originBadgeText({ kind: "SYSTEM", who: "system:work_sweep", at: "" })).toBe("from the scheduled sweep");
+  });
+
+  it("names the AI employee when the caller has already resolved one", () => {
+    expect(originBadgeText({ kind: "SYSTEM", who: "aie_wyatt", at: "" }, "Wyatt")).toBe("from Wyatt");
+  });
+
+  it("still says something honest when neither a resolved name nor 'sweep' is available", () => {
+    expect(originBadgeText({ kind: "SYSTEM", who: "system:inbound_email", at: "" })).toBe("from the system");
+  });
+
+  it("reads meetings, captures and hand-offs in words rather than raw ids", () => {
+    expect(originBadgeText({ kind: "MEETING", who: "mtg_7", at: "" })).toBe("from a meeting");
+    expect(originBadgeText({ kind: "CAPTURE", who: "cap_9", at: "" })).toBe("captured");
+    expect(originBadgeText({ kind: "ANOTHER_CARD", who: "wc_parent", at: "" })).toBe("handed off");
   });
 });

@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
 import { triage } from "@shared/work/workCards";
 import { deskAnswer, deskSubline } from "@shared/work/deskAnswer";
@@ -77,6 +77,8 @@ export function WorkCardsPage({
     cards: WorkCardRow[];
     recent_runs: RecentRun[];
     assignable: Assignable;
+    /** WAVE C (22 Sep 2026): the moment she last looked at the desk, before this visit marks it. */
+    desk_seen_at: string | null;
   }>("/api/work-cards/by-owner");
   const [message, setMessage] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -85,6 +87,21 @@ export function WorkCardsPage({
   const all = board.data?.cards ?? [];
   const live = useMemo(() => triage(all), [all]);
   const runs = board.data?.recent_runs ?? [];
+  const deskSeenAt = board.data?.desk_seen_at ?? null;
+
+  /*
+   * SHE OPENED THE DESK. Marked once the board has actually loaded, and only once per mount — the
+   * same "reaching the page is looking at it" shape `App.tsx`'s `POST /api/mp-home/visited` already
+   * uses for Home's modules, kept on its own door (migration 0225's comment) so it means "she read
+   * the Desk" rather than "a tab somewhere fetched it." Marking again on every `board.reload()`
+   * (a card moved, a note sent) would erase "new since you looked" the instant she acts on
+   * anything, so the dependency is deliberately just whether the first load landed.
+   */
+  useEffect(() => {
+    if (!board.data) return;
+    void api("/api/work-cards/desk-seen", { method: "POST", body: {} });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [Boolean(board.data)]);
 
   /** Which of the three addresses is on screen. A reading position, so it is not persisted. */
   const [view, setView] = useState<WorkView>("desk");
@@ -248,6 +265,7 @@ export function WorkCardsPage({
             me={me}
             bands={bands}
             live={live}
+            deskSeenAt={deskSeenAt}
             runs={runs}
             decksWaiting={decksWaiting}
             assignable={board.data?.assignable ?? null}

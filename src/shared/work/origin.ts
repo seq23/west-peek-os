@@ -66,3 +66,38 @@ export function originOf(card: OriginCard, viewerFirmUserId?: string | null): Or
   // the record, so it is reported rather than swallowed.
   return { kind: "SYSTEM", who: by || "the system", at };
 }
+
+/**
+ * ONE SHORT PHRASE FOR AN ORIGIN BADGE (Wave C, 22 Sep 2026) — the desk's answer to "where did this
+ * come from" at a glance, in the same four words the card page already reads out in full sentences
+ * (`originLabel` in `WorkCardPage.tsx`). Kept here, alongside `originOf`, rather than duplicated
+ * into the desk, so the desk and any future surface read the same four categories she asked for:
+ * from an email (naming the sender), from her directly, from an AI employee, from the scheduled
+ * sweep.
+ *
+ * `createdByName` is the one fact `originOf` cannot resolve on its own — it is a name, not
+ * something derivable from the row's ids — so a caller that has already joined it (the desk board
+ * query does) passes it through; without it a SYSTEM origin still says something honest rather than
+ * nothing.
+ */
+export function originBadgeText(origin: Origin, createdByName?: string | null): string {
+  switch (origin.kind) {
+    case "YOU":
+      return "from you";
+    case "PARTNER":
+      return `from ${origin.who}`;
+    case "EMAIL":
+      return `from ${origin.who}`;
+    case "MEETING":
+      return "from a meeting";
+    case "CAPTURE":
+      return "captured";
+    case "ANOTHER_CARD":
+      return "handed off";
+    case "SYSTEM":
+    default:
+      if (createdByName) return `from ${createdByName}`;
+      if (origin.who.toLowerCase().includes("sweep")) return "from the scheduled sweep";
+      return "from the system";
+  }
+}
