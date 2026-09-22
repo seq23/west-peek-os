@@ -41,6 +41,7 @@ export const workGuide: PageGuide = {
     { label: "Send it", testid: "work-card-block-send-", primary: true, does: "sends your answer, change or escalation on a block." },
     { label: "Yes — open it", testid: "work-card-block-choice-", primary: true, does: "answers a page-permission block; No — carry on without it refuses it." },
     { label: "Done", testid: "work-card-done-", primary: true, does: "finishes a card; it goes to the Record. Start and Drop are beside it." },
+    { label: "Do it now", testid: "work-card-doitnow-", primary: true, does: "starts an employee-owned card that has not been picked up yet, right on the Desk row, ahead of the sweep's next five-minute pass — the same door the card's own page uses.", then: "it moves to In flight on its next reload." },
     { label: "Send it over", testid: "work-card-steer-send-", primary: true, does: "tells the employee something mid-work; they pick it up on their next step." },
     { label: "Check a page", testid: "work-card-look-", does: "sends the employee to read a live page; Go and look runs now if the card has standing permission, otherwise Ask to look raises an approval card." },
     { label: "Reopen", testid: "work-card-undrop-", does: "puts a finished or dropped card back on the Desk." },

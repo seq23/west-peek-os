@@ -63,6 +63,12 @@ export interface WorkCardRow {
   work_steps?: number;
   lease_until?: string | null;
   created_by?: string | null;
+  /**
+   * WAVE C (22 Sep 2026): the AI employee who OPENED the row directly, when it was one — resolved
+   * server-side so the desk's origin badge does not need a second lookup. Null for every other
+   * origin, including a hand-off (which reads `assigned_from_card_id` first).
+   */
+  created_by_ai_name?: string | null;
   meeting_id?: string | null;
   /**
    * 0185 — WHAT WENT WRONG ON THE LAST ATTEMPT, while the card is still retrying and not yet

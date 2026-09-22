@@ -978,6 +978,11 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
   const cards = await ctx.env.WP_OS_DB.prepare(
     `SELECT wc.id, wc.title, wc.description, wc.state, wc.priority, wc.owner_type, wc.owner_id,
             wc.next_action, wc.due_at, wc.capture_id, wc.created_at, wc.allows_browser,
+            -- WAVE C (22 Sep 2026): who OPENED the row, resolved to a name when it was an AI
+            -- employee's own seat rather than a hand-off (a hand-off already carries
+            -- assigned_from_card_id, which originOf reads first). Feeds the desk's origin
+            -- badge, "from an AI employee", without a second query per row.
+            creator.name AS created_by_ai_name,
             -- THE TWO LABELS, SERVED SO THEY ARE VISIBLE ON THE CARD. A label you set once and
             -- never see again cannot be corrected, and a wrong one is exactly what sends a room
             -- packet to the dearest model on the account.
@@ -1015,6 +1020,7 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
        LEFT JOIN ai_employee e ON e.id = wc.owner_id AND wc.owner_type = 'AI'
        LEFT JOIN firm_user u  ON u.id = wc.owner_id AND wc.owner_type = 'HUMAN'
        LEFT JOIN firm_user held_user ON held_user.id = wc.held_by
+       LEFT JOIN ai_employee creator ON creator.id = wc.created_by
       WHERE ${visibility}
         -- LIVE WORK ONLY, AND THAT IS THE FIX RATHER THAN A TRIM.
         --
@@ -1113,7 +1119,18 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
     "SELECT id, full_name FROM firm_user WHERE status = 'ACTIVE' ORDER BY full_name",
   ).all<{ id: string; full_name: string }>();
 
+  /*
+   * WAVE C, 0225: THE MOMENT SHE LAST LOOKED — read, never written, here. Writing it is its own
+   * door (`handleMarkWorkDeskSeen`, POST /api/work-cards/desk-seen) pressed once the desk has
+   * actually rendered, so a board fetch that merely refreshes in the background can never quietly
+   * mark everything "seen" before she has read it.
+   */
+  const deskSeen = await ctx.env.WP_OS_DB.prepare("SELECT seen_at FROM work_desk_seen WHERE firm_user_id = ?1")
+    .bind(ctx.identity!.id)
+    .first<{ seen_at: string }>();
+
   return json({
+    desk_seen_at: deskSeen?.seen_at ?? null,
     cards: (cards.results ?? []).map((c) => ({
       ...c,
       // HELD (0227): synthesised the same way `handleGetWorkCard` does — the desk reads `state`,
@@ -1135,6 +1152,32 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
       "Cards are work somebody owns over time. Runs are single acts that already happened. They are " +
       "kept apart on purpose — turning every run into a card would make this a log.",
   });
+}
+
+/**
+ * POST /api/work-cards/desk-seen — she opened the Desk; record the moment (migration 0225,
+ * `work_desk_seen`).
+ *
+ * WHY A SEPARATE DOOR FROM THE BOARD FETCH ITSELF. `handleWorkByOwner` runs on every poll and every
+ * background refresh, not only when she is actually reading it — marking seen there would make
+ * "new since you last looked" mean "new since the tab last fetched," which is the same failure
+ * `work_desk_seen`'s own migration comment rejects for `mp_home_module_seen`. The client calls this
+ * once the Desk has rendered (`WorkCardsPage.tsx`), fire-and-forget, the same shape as Home's own
+ * `POST /api/mp-home/visited`.
+ *
+ * ONE ROW PER PARTNER, UPSERTED — there is exactly one desk, so there is exactly one "last looked",
+ * never a set keyed by anything else.
+ */
+export async function handleMarkWorkDeskSeen(ctx: RouteContext): Promise<Response> {
+  const firmScope = actorFromIdentity(ctx.identity!).firmScopes[0] ?? "west-peek";
+  const seenAt = new Date().toISOString();
+  await ctx.env.WP_OS_DB.prepare(
+    `INSERT INTO work_desk_seen (firm_user_id, seen_at, firm_scope) VALUES (?1, ?2, ?3)
+     ON CONFLICT (firm_user_id) DO UPDATE SET seen_at = excluded.seen_at, firm_scope = excluded.firm_scope`,
+  )
+    .bind(ctx.identity!.id, seenAt, firmScope)
+    .run();
+  return json({ ok: true, seen_at: seenAt });
 }
 
 /**

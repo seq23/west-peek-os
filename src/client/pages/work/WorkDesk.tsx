@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { shortDate } from "../../lib/dates";
 import { api, type MeResponse } from "../../lib/api";
 import { CARD_SOURCES, STATE_MEANINGS, heldBySentence, stateMeaning } from "@shared/work/workCards";
 import type { BlockActionKey } from "@shared/work/blocks";
+import { originOf, originBadgeText, type OriginKind } from "@shared/work/origin";
+import { cardKind } from "@shared/work/cardKinds";
 import { portraitFor } from "../../lib/employeePortraits";
 import { ArtifactShelf } from "../ArtifactShelf";
 import { WebPropertyChangePanel } from "../WebPropertyChangePanel";
@@ -10,6 +12,9 @@ import { BlockPanel } from "./BlockPanel";
 import { LookForm, LookResults } from "./LooksPanel";
 import { NotesPanel, SteerButton } from "./NotesPanel";
 import type { Assignable, InstructionReceipt, RecentRun, WorkCardNote, WorkCardRow } from "./types";
+
+/** How recently a card must have been opened to read as "just started" on the desk. */
+const JUST_STARTED_MS = 15 * 60 * 1000;
 
 /**
  * THE DESK — what needs you, what is in flight, and where the other two addresses went.
@@ -132,6 +137,7 @@ export function WorkDesk({
   onMove,
   onGoto,
   machineryHealth,
+  deskSeenAt,
 }: {
   me: MeResponse;
   bands: DeskBand[];
@@ -152,6 +158,8 @@ export function WorkDesk({
   onMove: (id: string, state: string) => void;
   onGoto: (view: "record" | "machinery") => void;
   machineryHealth: MachineryHealth;
+  /** WAVE C (22 Sep 2026): the moment she last looked at this desk, or null the first time ever. */
+  deskSeenAt: string | null;
 }): JSX.Element {
   const [looking, setLooking] = useState<string | null>(null);
   /**
@@ -196,6 +204,42 @@ export function WorkDesk({
   const [clearText, setClearText] = useState("");
   const [lookObjective, setLookObjective] = useState("");
   const [lookUrl, setLookUrl] = useState("");
+
+  /**
+   * SEARCH AND FILTER, ON THE DESK ITSELF (Wave C, 22 Sep 2026) — not only the Record tab, which
+   * only ever searched finished work. Purely a viewing lens over `bands`: it narrows which of the
+   * cards already on the desk are rendered, and never changes what the masthead's answer counts —
+   * that stays a fact about what actually needs her, not about what she happens to be looking at
+   * right now.
+   */
+  const [filterQ, setFilterQ] = useState("");
+  const [filterOwner, setFilterOwner] = useState("");
+  const [filterKind, setFilterKind] = useState("");
+  const [filterOrigin, setFilterOrigin] = useState<"" | OriginKind>("");
+  const filterActive = Boolean(filterQ.trim() || filterOwner || filterKind || filterOrigin);
+
+  const matchesFilter = (c: WorkCardRow): boolean => {
+    if (filterQ.trim() && !c.title.toLowerCase().includes(filterQ.trim().toLowerCase())) return false;
+    if (filterOwner) {
+      const cardKey = c.owner_type === "UNASSIGNED" ? "UNASSIGNED" : `${c.owner_type}:${c.owner_id ?? ""}`;
+      if (cardKey !== filterOwner) return false;
+    }
+    if (filterKind && (c.kind ?? "") !== filterKind) return false;
+    if (filterOrigin && originOf(c, me.id).kind !== filterOrigin) return false;
+    return true;
+  };
+
+  const visibleBands = useMemo(
+    () => bands.map((b) => ({ ...b, cards: b.cards.filter(matchesFilter) })).filter((b) => b.cards.length > 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [bands, filterQ, filterOwner, filterKind, filterOrigin],
+  );
+  /** Distinct kinds actually on the desk right now — a filter offers only choices that do something. */
+  const kindsOnDesk = useMemo(() => {
+    const seen = new Set<string>();
+    for (const c of live) if (c.kind) seen.add(c.kind);
+    return Array.from(seen).sort();
+  }, [live]);
 
   /** Hand a card to somebody. The same act whether it is an employee or a partner. */
   async function assign(id: string, ownerType: string, ownerId: string) {
@@ -259,6 +303,38 @@ export function WorkDesk({
     if (res.data?.ok) { setClearing(null); setClearText(""); }
     reload();
     onChanged();
+  }
+
+  /**
+   * DO IT NOW, FROM THE DESK ROW (Wave C, 22 Sep 2026) — the same door the card page's masthead
+   * already opens (`POST /api/work-cards/:id/work`, Wave A's `doItNow`), reused rather than
+   * reimplemented, so a card no longer needs its own page open just to be started ahead of the
+   * sweep's five-minute cycle.
+   */
+  async function doItNow(id: string) {
+    setBusy(true);
+    const res = await api<{ error?: string; detail?: string }>(`/api/work-cards/${id}/work`, { method: "POST" });
+    setBusy(false);
+    setMessage(res.status === 200 ? (res.data?.detail ?? "Started.") : `Could not start it: ${res.data?.detail ?? res.data?.error ?? res.status}`);
+    reload();
+    onChanged();
+  }
+
+  /**
+   * "SHOW ME FIRST", FROM THE DESK ROW, MID-FLIGHT (Wave C, 22 Sep 2026) — she asked for this
+   * without having to open the card. The column (`work_card.preview_first`) and the door
+   * (`updateWorkCardSchema`'s `preview_first`, `services/workCards.ts`) already existed; only this
+   * control was missing.
+   */
+  async function togglePreviewFirst(c: WorkCardRow) {
+    const next = c.preview_first !== 1;
+    const res = await api<{ error?: string; detail?: string }>(`/api/work-cards/${c.id}`, {
+      method: "PATCH",
+      body: { preview_first: next },
+    });
+    if (res.status !== 200) setMessage(`Could not change that: ${res.data?.detail ?? res.data?.error ?? res.status}`);
+    else setMessage(next ? "You will see this one before it goes out." : "No longer held for your preview.");
+    reload();
   }
 
   /** What has been said on a card, loaded only when you open the form — never on every render. */
@@ -352,6 +428,86 @@ export function WorkDesk({
       </details>
 
       {/*
+        SEARCH AND FILTER, ON THE DESK ITSELF (Wave C, 22 Sep 2026). The Record tab already
+        searches — but only what has finished. This is the same question asked of what is still
+        live: which owner, which kind, where it came from. A client-side lens over `bands`, because
+        the whole live board is already in hand — no second request to narrow a list this short.
+      */}
+      {live.length > 0 && (
+        <div className="record-controls" data-testid="work-desk-filters">
+          <label className="record-field record-field-grow">
+            <span className="lbl">Search the desk</span>
+            <input
+              type="search"
+              value={filterQ}
+              data-testid="work-desk-search"
+              placeholder="a title, a company, a kind of work…"
+              onChange={(e) => setFilterQ(e.target.value)}
+            />
+          </label>
+          <label className="record-field">
+            <span className="lbl">Owner</span>
+            <select data-testid="work-desk-filter-owner" value={filterOwner} onChange={(e) => setFilterOwner(e.target.value)}>
+              <option value="">Anyone</option>
+              <option value="UNASSIGNED">Nobody</option>
+              {(assignable?.employees ?? []).map((emp) => (
+                <option key={emp.id} value={`AI:${emp.id}`}>{emp.name}</option>
+              ))}
+              {(assignable?.partners ?? []).map((p) => (
+                <option key={p.id} value={`HUMAN:${p.id}`}>{p.full_name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="record-field">
+            <span className="lbl">Kind</span>
+            <select data-testid="work-desk-filter-kind" value={filterKind} onChange={(e) => setFilterKind(e.target.value)}>
+              <option value="">Any kind</option>
+              {kindsOnDesk.map((k) => (
+                <option key={k} value={k}>{cardKind(k)?.label ?? k}</option>
+              ))}
+            </select>
+          </label>
+          <label className="record-field">
+            <span className="lbl">Origin</span>
+            <select data-testid="work-desk-filter-origin" value={filterOrigin} onChange={(e) => setFilterOrigin(e.target.value as "" | OriginKind)}>
+              <option value="">Anywhere</option>
+              <option value="EMAIL">Email</option>
+              <option value="YOU">You</option>
+              <option value="PARTNER">A partner</option>
+              <option value="MEETING">A meeting</option>
+              <option value="CAPTURE">Something captured</option>
+              <option value="ANOTHER_CARD">Handed off</option>
+              <option value="SYSTEM">An employee or the sweep</option>
+            </select>
+          </label>
+          {filterActive && (
+            <button
+              type="button"
+              className="link-button"
+              data-testid="work-desk-filter-clear"
+              onClick={() => {
+                setFilterQ("");
+                setFilterOwner("");
+                setFilterKind("");
+                setFilterOrigin("");
+              }}
+            >
+              Clear the filters
+            </button>
+          )}
+        </div>
+      )}
+
+      {filterActive && visibleBands.length === 0 && live.length > 0 && (
+        <div className="card" data-testid="work-desk-filter-empty">
+          <p>
+            <strong>Nothing on the desk matches that.</strong>
+          </p>
+          <p className="muted small">Widen the search or clear the filters — nothing has been removed from the desk itself.</p>
+        </div>
+      )}
+
+      {/*
         WHEN THE DESK IS CLEAR. This is the state on most days and it is designed rather than left
         blank — a page that empties out reads as broken, and "nothing is waiting" is the single most
         valuable thing this surface can tell her. It says what would have to happen for something to
@@ -399,7 +555,7 @@ export function WorkDesk({
         </div>
       )}
 
-      {bands.map((group) => (
+      {visibleBands.map((group) => (
         <section key={group.key} data-testid={`work-owner-${group.key}`} className="work-region">
           <div className="work-band-head">
             <h3>
@@ -427,6 +583,26 @@ export function WorkDesk({
                 because it is not true of this card.
               */
               const failing = Boolean(c.work_last_failure) && c.state !== "BLOCKED" && c.state !== "DONE" && c.state !== "CANCELLED";
+              /*
+               * RECENCY AND ORIGIN, READ WITHOUT OPENING THE CARD (Wave C, 22 Sep 2026).
+               * `originOf` is the same function the card's own page reads (`@shared/work/origin`,
+               * built in Wave A) — the desk asks it the same question rather than guessing again.
+               * `deskSeenAt` comes from `work_desk_seen` (migration 0225), which existed with no
+               * reader until this page.
+               */
+              const origin = originOf(c, me.id);
+              const originText = originBadgeText(origin, c.created_by_ai_name ?? null);
+              const justStarted = Date.now() - Date.parse(c.created_at) < JUST_STARTED_MS;
+              const newSinceVisit = Boolean(deskSeenAt) && Date.parse(c.created_at) > Date.parse(deskSeenAt as string);
+              // "DO IT NOW" IS OFFERED WHEN THE SWEEP HAS NOT TOUCHED IT YET — the same reading the
+              // "queued — picked up within 5 min" line below already uses, so the button and the
+              // sentence never disagree about whether a card has started.
+              const notStarted = c.owner_type === "AI" && c.state === "OPEN" && !failing && (c.work_attempts ?? 0) === 0;
+              // "SHOW ME FIRST" IS OFFERED WHILE THE CARD IS ACTUALLY IN FLIGHT — the same gate
+              // `SteerButton` already uses, because pulling something into preview only means
+              // something for work that is still moving.
+              const canTogglePreview = c.owner_type === "AI" && ["OPEN", "IN_PROGRESS", "BLOCKED"].includes(c.state);
+              const previewOn = c.preview_first === 1;
               const rowClass = [
                 "card",
                 "work-card-row",
@@ -483,6 +659,25 @@ export function WorkDesk({
                         <span className="muted small">queued — picked up within 5 min</span>
                       )}
                       {c.priority !== "NORMAL" && <span className="badge badge-gate">{c.priority.toLowerCase()}</span>}
+                      {/* RECENCY (Wave C). "New" wins over "just started" when both are true — the
+                          more specific fact, since it is the one built on what she has actually
+                          seen rather than the clock alone. */}
+                      {newSinceVisit ? (
+                        <span className="badge badge-attention" data-testid={`work-card-new-${c.id}`} title="Created since you last opened the desk">
+                          new
+                        </span>
+                      ) : justStarted ? (
+                        <span className="badge badge-attention" data-testid={`work-card-juststarted-${c.id}`} title="Opened in the last 15 minutes">
+                          just started
+                        </span>
+                      ) : null}
+                      {/* ORIGIN (Wave C) — from email (naming the sender), from her, from a partner,
+                          from a meeting or capture, handed off, or from an employee or the
+                          scheduled sweep. Reuses `originOf`/`originBadgeText`, built for the card
+                          page, rather than a second reading of the same six columns. */}
+                      <span className="badge" data-testid={`work-card-origin-${c.id}`}>
+                        {originText}
+                      </span>
                       {/*
                           BOTH LABELS, ALWAYS, AND THE LANE BESIDE THEM.
 
@@ -543,6 +738,12 @@ export function WorkDesk({
                         </span>
                       )}
                       {c.due_at && <span className="muted small">due {shortDate(c.due_at)}</span>}
+                      {/* RECENCY (Wave C). `created_at` was fetched and never shown — the plan's own
+                          finding. Shown here, not only in the expanded body, because when a card
+                          arrived is part of reading the row, not a detail you go looking for. */}
+                      <span className="muted small" data-testid={`work-card-created-${c.id}`}>
+                        created {shortDate(c.created_at)}
+                      </span>
                       <span className={`work-card-chevron${isOpen ? " is-open" : ""}`} aria-hidden="true">›</span>
                     </span>
 
@@ -559,6 +760,47 @@ export function WorkDesk({
                     </span>
                   </button>
 
+                  {/*
+                    "DO IT NOW" AND "SHOW ME FIRST", WITHOUT OPENING THE CARD (Wave C, 22 Sep 2026).
+                    Both sit outside the fold, as siblings of the summary button rather than inside
+                    it — a `<button>` cannot nest another interactive control. "Do it now" calls the
+                    same `POST /api/work-cards/:id/work` Wave A's card-page masthead already calls;
+                    "Show me first" flips the same `preview_first` column that page already reads.
+                  */}
+                  {(notStarted || canTogglePreview) && (
+                    <div className="notification-actions" data-testid={`work-card-desk-actions-${c.id}`}>
+                      {notStarted && (
+                        <button
+                          type="button"
+                          className="btn-strong"
+                          disabled={busy}
+                          data-testid={`work-card-doitnow-${c.id}`}
+                          title="Starts it now, ahead of the sweep's next five-minute pass"
+                          onClick={() => void doItNow(c.id)}
+                        >
+                          Do it now
+                        </button>
+                      )}
+                      {canTogglePreview && (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2xs)" }}>
+                          <button
+                            type="button"
+                            className="switch"
+                            role="switch"
+                            aria-checked={previewOn}
+                            aria-label={`Show ${c.owner_name ?? "this"}'s finished work to you before it leaves, on ${c.title}`}
+                            disabled={busy}
+                            data-testid={`work-card-previewtoggle-${c.id}`}
+                            title={previewOn ? "You will see this before it goes out — click to turn off" : "Pull this into your preview lane before it goes out"}
+                            onClick={() => void togglePreviewFirst(c)}
+                          >
+                            <i aria-hidden="true" />
+                          </button>
+                          <span className="small">{previewOn ? "Showing you first" : "Show me first"}</span>
+                        </span>
+                      )}
+                    </div>
+                  )}
 
                   {/*
                     THE FAILURE, BEFORE IT BECOMES A BLOCK. One line, outside the fold, in the same

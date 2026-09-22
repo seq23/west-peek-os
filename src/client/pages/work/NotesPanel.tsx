@@ -120,6 +120,21 @@ export function NotesPanel({
           ))}
         </ul>
       )}
+      {/*
+        NAME THE STEERING VOCABULARY (Wave C, 22 Sep 2026) — her real words, typed here as the
+        requester, already change what happens: `webPropertyChange.ts`'s `heldByRequester` and
+        `readApprovalReply` read this exact box (`work_card_note.body`) for a WEB_PROPERTY_CHANGE
+        card, today, with nothing on the page saying so. Scoped to the one kind that actually reads
+        it — naming a word that does nothing on every other kind would be its own kind of lie.
+      */}
+      {c.kind === "WEB_PROPERTY_CHANGE" && (
+        <p className="field-help" data-testid={`work-card-steer-vocab-${c.id}`}>
+          If you are the one who asked for this: <strong>"stop"</strong> holds it, <strong>"preview"</strong>{" "}
+          asks to see it on a link before it lands, <strong>"approved"</strong> or{" "}
+          <strong>"approved to production"</strong> carries it forward, and <strong>"changes: …"</strong> sends it
+          back to re-plan with what you typed. Anything else is read as your answer to whatever it last asked.
+        </p>
+      )}
       <form onSubmit={(e) => { e.preventDefault(); onSend(c.id); }}>
         <input
           value={noteText}
