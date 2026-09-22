@@ -5,6 +5,9 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import { handleRequest } from "../src/worker/index";
 import type { Env } from "../src/worker/env";
 import { inQuietHours, notify } from "../src/worker/services/notifications";
+import { createWorkCardInternal } from "../src/worker/services/workCards";
+import { answerBlock, blockCard } from "../src/worker/services/blocks";
+import { sweepIdentity } from "../src/worker/services/workSweep";
 
 /**
  * P20 — Notifications + the mobile/PWA command surface (GAP-19, GAP-20).
@@ -116,6 +119,39 @@ describe("in-app delivery is the floor and push is honestly unavailable", () => 
     expect(res.body.unread_count).toBeGreaterThan(0);
     expect(res.body.critical_unread).toBe(1);
     expect(res.body.note).toContain("held notifications still appear here");
+  });
+
+  /**
+   * THE CHECK-THEN-INSERT RACE (Fix 2, 22 Sep 2026).
+   *
+   * Production wrote two near-identical "is blocked on" notifications 0.8 seconds apart for the
+   * same card/outcome/work_attempts — the same dedupe key — despite the SELECT-before-INSERT guard
+   * at the top of `notify()`. Two near-concurrent sweep ticks each ran that SELECT, each found
+   * nothing, and both reached the INSERT. Firing two truly concurrent calls with the same dedupe
+   * key is the direct reproduction of that race; `ON CONFLICT (dedupe_key) DO NOTHING` plus the
+   * `dedupe_key UNIQUE` constraint (migration 0019) is what closes the window between the two.
+   */
+  it("never lands two rows for the same dedupe key under a genuine race", async () => {
+    const dedupeKey = `test:race:${crypto.randomUUID()}`;
+    const [a, b] = await Promise.all([
+      notify(env, { kind: "MEETING", severity: "WARNING", title: "Race A", dedupeKey }),
+      notify(env, { kind: "MEETING", severity: "WARNING", title: "Race B", dedupeKey }),
+    ]);
+    // Exactly one of the two calls actually wrote the row; the other reports the winner's row
+    // rather than throwing or silently claiming a row that was never written.
+    expect([a.created, b.created].filter(Boolean).length, "exactly one of the two concurrent calls should have created the row").toBe(1);
+    expect(a.id, "both calls must agree on which row is the real one").toBe(b.id);
+    expect(a.id).not.toBeNull();
+
+    const rows = await t.db.prepare("SELECT id FROM notification WHERE dedupe_key = ?1").bind(dedupeKey).all<{ id: string }>();
+    expect(rows.results ?? [], "only one row may ever exist for one dedupe key").toHaveLength(1);
+
+    // And the loser's delivery rows were never written for a notification id that does not exist.
+    const deliveries = await t.db
+      .prepare("SELECT COUNT(*) AS n FROM notification_delivery WHERE notification_id = ?1")
+      .bind(a.id)
+      .first<{ n: number }>();
+    expect(deliveries!.n, "the surviving row should carry exactly its own two delivery rows (IN_APP + PUSH)").toBe(2);
   });
 });
 
@@ -514,6 +550,120 @@ describe("an answered approval stops asking", () => {
       (n) => n.object_type === "approval_card" && n.object_id === cardId,
     );
     expect(kept.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * A "SO-AND-SO IS BLOCKED ON…" NOTICE STOPS ASKING ONCE THE BLOCK IS CLEARED (Fix 1, 22 Sep 2026).
+ *
+ * `announceOutcome` (workSweep.ts) writes these with `object_type = 'work_card'`, `object_id =
+ * <card id>` and `dedupe_key = 'work_card:<id>:BLOCKED:<work_attempts>'`. Nothing marked one read
+ * when the block it describes was cleared, so a partner who answered a block that morning still
+ * had the notice in her centre that evening — the same shape of bug `STALE_REASON_SQL` already
+ * fixed for a resolved health fault and a superseded briefing, just never extended to this kind.
+ */
+describe("a blocked-card notice clears when the block is answered (Fix 1)", () => {
+  async function freshBlockedCard(title: string): Promise<{ id: string; work_attempts: number }> {
+    const c = await createWorkCardInternal(env, sweepIdentity(), {
+      title,
+      owner_type: "AI",
+      owner_id: "aie_parker",
+      priority: "NORMAL",
+      firm_scope: "west-peek",
+    });
+    await blockCard(env, { id: c.id, title, firm_scope: "west-peek", owner_id: "aie_parker" }, {
+      reason: "a_question_for_you",
+      trying: title,
+      employee: "Parker",
+      detail: "Which month?",
+    });
+    const attempts = await t.db.prepare("SELECT work_attempts FROM work_card WHERE id = ?1").bind(c.id).first<{ work_attempts: number }>();
+    return { id: c.id, work_attempts: attempts!.work_attempts };
+  }
+
+  async function blockNotice(cardId: string, attempts: number): Promise<string> {
+    const res = await notify(env, {
+      kind: "MEETING",
+      severity: "WARNING",
+      title: `Parker is blocked on "notice test ${cardId}"`,
+      objectType: "work_card",
+      objectId: cardId,
+      firmUserId: "fu_scooter_taylor",
+      dedupeKey: `work_card:${cardId}:BLOCKED:${attempts}`,
+    });
+    expect(res.created, "the fixture notice was not written, so the rest of this test proves nothing").toBe(true);
+    return res.id!;
+  }
+
+  async function staleReasonOf(notificationId: string): Promise<string | null> {
+    const centre = await call<{ notifications: Array<{ id: string; stale_reason: string | null }> }>("/api/notifications", MP);
+    const found = centre.body.notifications.find((n) => n.id === notificationId);
+    expect(found, `${notificationId} was not on the page at all`).toBeTruthy();
+    return found!.stale_reason;
+  }
+
+  async function stillUnread(notificationId: string): Promise<boolean> {
+    const unread = await call<{ notifications: Array<{ id: string }> }>("/api/notifications?unread=1", MP);
+    return unread.body.notifications.some((n) => n.id === notificationId);
+  }
+
+  it("stays unread while the card is still BLOCKED", async () => {
+    const c = await freshBlockedCard("Blocked card, notice still live");
+    const id = await blockNotice(c.id, c.work_attempts);
+    expect(await staleReasonOf(id), "a card still BLOCKED must not be treated as resolved").toBeNull();
+    expect(await stillUnread(id), "a live block must still count as unread").toBe(true);
+  });
+
+  it("goes stale once ANSWER clears the block", async () => {
+    const c = await freshBlockedCard("Blocked card resolved by Answer");
+    const id = await blockNotice(c.id, c.work_attempts);
+    const answered = await answerBlock(env, c.id, "fu_sequoia_taylor", { action: "ANSWER", text: "October." });
+    expect(answered.ok).toBe(true);
+    expect(await staleReasonOf(id), "answering the block did not clear its notice").toBe("RESOLVED");
+    expect(await stillUnread(id), "a resolved notice must drop out of the unread list").toBe(false);
+  });
+
+  it("goes stale once CHANGE clears the block", async () => {
+    const c = await freshBlockedCard("Blocked card resolved by Change");
+    const id = await blockNotice(c.id, c.work_attempts);
+    const changed = await answerBlock(env, c.id, "fu_sequoia_taylor", { action: "CHANGE", text: "Do it for Q1 instead of Q4." });
+    expect(changed.ok).toBe(true);
+    expect(await staleReasonOf(id), "changing the ask did not clear its notice").toBe("RESOLVED");
+    expect(await stillUnread(id)).toBe(false);
+  });
+
+  it("goes stale once DROP clears the block", async () => {
+    const c = await freshBlockedCard("Blocked card resolved by Drop");
+    const id = await blockNotice(c.id, c.work_attempts);
+    const dropped = await answerBlock(env, c.id, "fu_sequoia_taylor", { action: "DROP", text: "Not worth doing." });
+    expect(dropped.ok).toBe(true);
+    expect(await staleReasonOf(id), "dropping the card did not clear its notice").toBe("RESOLVED");
+    expect(await stillUnread(id)).toBe(false);
+  });
+
+  it("never touches a DONE or HANDED_ON notice for the same card shape", async () => {
+    // The LIKE-avoiding prefix check must only match the BLOCKED shape, never a sibling outcome on
+    // the same card whose card has since moved out of BLOCKED for an unrelated reason.
+    const c = await createWorkCardInternal(env, sweepIdentity(), {
+      title: "A card with a DONE notice, never blocked",
+      owner_type: "AI",
+      owner_id: "aie_parker",
+      priority: "NORMAL",
+      firm_scope: "west-peek",
+    });
+    const doneId = (
+      await notify(env, {
+        kind: "MEETING",
+        severity: "INFO",
+        title: `Parker finished "${c.title}"`,
+        objectType: "work_card",
+        objectId: c.id,
+        firmUserId: "fu_scooter_taylor",
+        dedupeKey: `work_card:${c.id}:DONE:0`,
+      })
+    ).id!;
+    expect(await staleReasonOf(doneId), "a DONE notice must not be derived stale by the BLOCKED rule").toBeNull();
+    expect(await stillUnread(doneId)).toBe(true);
   });
 });
 

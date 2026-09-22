@@ -155,9 +155,25 @@ export async function notify(env: Env, input: NotifyInput): Promise<{ created: b
   }
 
   const id = `ntf_${crypto.randomUUID()}`;
-  await env.WP_OS_DB.prepare(
+  /*
+   * ON CONFLICT DO NOTHING, NOT A SECOND `existing` READ — THE RACE THIS CLOSES (22 Sep 2026).
+   *
+   * The SELECT above is a fast path for the common, non-racing case; it is not what makes dedupe
+   * correct, because check-then-insert has a window between the two. Two near-concurrent sweep
+   * ticks calling `announceOutcome` for the same card/outcome/work_attempts both ran the SELECT,
+   * both found nothing, and both reached this INSERT — production wrote two rows 0.8 seconds apart
+   * for one fact. `dedupe_key` has carried `UNIQUE` since migration 0019 (`CREATE TABLE
+   * notification`), so the plain INSERT this replaced did not produce two rows either — it threw a
+   * constraint violation on the loser, which `notifyQuietly` swallowed silently and `notify` (its
+   * non-quiet callers) would have thrown into the caller's flow, breaking the "never throws" promise
+   * in the comment above this function. `ON CONFLICT (dedupe_key) DO NOTHING` makes the loser a
+   * no-op instead of an exception, and `changes` says which one happened — so the loser can report
+   * the WINNER's row rather than silently claiming it created one that does not belong to it.
+   */
+  const inserted = await env.WP_OS_DB.prepare(
     `INSERT INTO notification (id, kind, severity, title, body, object_type, object_id, firm_user_id, privacy_label, dedupe_key, delivery_status, firm_scope)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+     ON CONFLICT (dedupe_key) DO NOTHING`,
   )
     .bind(
       id,
@@ -174,6 +190,17 @@ export async function notify(env: Env, input: NotifyInput): Promise<{ created: b
       input.firmScope ?? "west-peek",
     )
     .run();
+
+  if ((inserted.meta?.changes ?? 0) === 0) {
+    // Lost the race: another call committed this dedupe key between our SELECT and our INSERT.
+    // That row is the real one; report it rather than a row that was never written.
+    const winner = await env.WP_OS_DB.prepare("SELECT id, delivery_status FROM notification WHERE dedupe_key = ?1")
+      .bind(input.dedupeKey)
+      .first<{ id: string; delivery_status: string }>();
+    return winner
+      ? { created: false, id: winner.id, status: winner.delivery_status }
+      : { created: false, id: null, status: "UNKNOWN" };
+  }
 
   await env.WP_OS_DB.prepare(
     "INSERT INTO notification_delivery (id, notification_id, channel, status, detail) VALUES (?1, ?2, 'IN_APP', ?3, ?4)",
@@ -305,8 +332,34 @@ const STALE_REASON_SQL = `CASE
             AND n2.firm_user_id IS n.firm_user_id
             AND n2.firm_scope = n.firm_scope)
     THEN 'SUPERSEDED'
+  -- A "X is blocked on Y" notice stops being outstanding once the card it names leaves BLOCKED
+  -- (22 Sep 2026, see the paragraph below this statement). A prefix comparison rather than a LIKE:
+  -- object_id is a work_card id and routinely contains underscores, which LIKE reads as a
+  -- single-character wildcard.
+  WHEN n.object_type = 'work_card'
+         AND substr(n.dedupe_key, 1, length('work_card:' || n.object_id || ':BLOCKED:')) = 'work_card:' || n.object_id || ':BLOCKED:'
+         AND NOT EXISTS (
+         SELECT 1 FROM work_card wc
+          WHERE wc.id = n.object_id
+            AND wc.state = 'BLOCKED')
+    THEN 'RESOLVED'
   ELSE NULL
 END`;
+
+/*
+ * THE WORK_CARD BRANCH ABOVE, IN FULL. `announceOutcome` (workSweep.ts) writes a "so-and-so is
+ * blocked on…" notice with object_type 'work_card', object_id the card's id, and dedupe_key
+ * shaped "work_card:<id>:BLOCKED:<work_attempts>" — the LIKE-avoiding prefix check above matches
+ * exactly that shape and nothing else, so a card's DONE or HANDED_ON notice (same object_type,
+ * different dedupe shape) is untouched and still governed by ordinary read_at.
+ *
+ * Answering the block — Answer, Change, Drop — or any other exit takes the card out of BLOCKED,
+ * but until now nothing marked the notice read: a partner who cleared it that morning still saw
+ * "is blocked on…" in the centre that evening. Derived exactly like the two cases above it —
+ * nothing is written to the notification row or to the card — so it self-maintains for every
+ * block this fires for from here on, not only the ones already on file.
+ */
+
 
 export async function handleListNotifications(ctx: RouteContext): Promise<Response> {
   const url = new URL(ctx.request.url);

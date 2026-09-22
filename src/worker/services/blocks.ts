@@ -4,6 +4,9 @@ import { appendEvent } from "../events";
 import { notifyPartners, notifyQuietly } from "./notifications";
 import { json } from "../router";
 import { partnerByName } from "../../shared/registry/partners";
+import { filePreview } from "./previewApproval";
+import { previewOwnerFor } from "../../shared/work/previewLane";
+import { renderExecEmail, bulletsFrom, type ExecEmailInput } from "../../shared/email/execEmail";
 import {
   BLOCK_ACTIONS,
   blockProblems,
@@ -273,10 +276,22 @@ export async function answerBlock(
   input: UnblockInput,
 ): Promise<UnblockResult> {
   const card = await env.WP_OS_DB.prepare(
-    `SELECT id, title, state, firm_scope, owner_id, block_reason, block_who, description FROM work_card WHERE id = ?1`,
+    `SELECT id, title, state, firm_scope, owner_id, block_reason, block_who, description, requested_by_email, kind
+       FROM work_card WHERE id = ?1`,
   )
     .bind(cardId)
-    .first<{ id: string; title: string; state: string; firm_scope: string; owner_id: string | null; block_reason: string | null; block_who: string | null; description: string | null }>();
+    .first<{
+      id: string;
+      title: string;
+      state: string;
+      firm_scope: string;
+      owner_id: string | null;
+      block_reason: string | null;
+      block_who: string | null;
+      description: string | null;
+      requested_by_email: string | null;
+      kind: string | null;
+    }>();
   if (!card) return { ok: false, state: "", said: "That card is not here." };
   if (card.state !== "BLOCKED") {
     return { ok: false, state: card.state, said: "This work is not blocked, so there is nothing to clear." };
@@ -298,6 +313,9 @@ export async function answerBlock(
       .bind(card.id, typed.slice(0, 1000), identityId)
       .run();
     await record(env, card, identityId, "DROP", typed);
+    // Fire-and-forget, like every other notification path in this file: the drop itself is already
+    // committed above, and a failure telling the requester must never undo or fail the drop.
+    await notifyRequesterOfDrop(env, card, who, typed).catch((err) => console.error("drop notice failed", err));
     return { ok: true, state: "CANCELLED", said: `Dropped. ${who} stops asking, and your reason is on the record.` };
   }
 
@@ -512,6 +530,71 @@ async function reopen(env: Env, cardId: string, identityId: string, action: stri
   )
     .bind(cardId, "Being tried again — you sent it back.", `${action}${typed ? `: ${typed}` : ""}`.slice(0, 1000), identityId)
     .run();
+}
+
+/**
+ * DROP TELLS WHOEVER ASKED, IN A PREVIEW SHE APPROVES BEFORE IT GOES (her explicit ask, 22 Sep
+ * 2026).
+ *
+ * "Dropped" used to be silent past the record on the card: the requester — if there was one — went
+ * on believing the work was still coming, and found out only by asking. One case (Scooter's) had to
+ * be hand-filed as a `preview_approval` because nothing did this automatically.
+ *
+ * SKIPPED WHEN THERE IS NOBODY TO TELL. `requested_by_email` is set only by `openAssignmentCard`
+ * after DKIM/DMARC passed (migration 0160); a card she opened herself, or a scheduled duty, has none
+ * — there is no requester who is owed an explanation, so this is silent, not a notice to nobody.
+ *
+ * FILED, NEVER SENT DIRECTLY. This goes through the exact door `filePreview` is — a PENDING
+ * `preview_approval` row with `laneReason: 'ASKED_FOR'`, on her Home and in her inbox with Send it /
+ * Send it back / Dismiss. There is no direct-send path here and none should exist: a drop notice is
+ * still outbound mail on the firm's behalf, and every one of those goes through the lane.
+ *
+ * THE BUSY-EXECUTIVE SHAPE, in the employee's own voice — the same `renderExecEmail` every other
+ * partner-facing notice in this codebase uses (see `replyToRequester` in `requestReply.ts`), with
+ * the already-required, already-captured drop reason (`block_answer`) as the finding.
+ */
+async function notifyRequesterOfDrop(
+  env: Env,
+  card: { id: string; title: string; firm_scope: string; requested_by_email: string | null; kind: string | null },
+  who: string,
+  reason: string,
+): Promise<void> {
+  const requester = (card.requested_by_email ?? "").trim().toLowerCase();
+  if (!requester) return;
+
+  const owner = previewOwnerFor({ requestedByEmail: requester });
+  const findings = bulletsFrom(reason);
+  const email: ExecEmailInput = {
+    employee: who,
+    what: `dropped — ${card.title.slice(0, 60)}`,
+    tldr: `${who} dropped what you asked for: ${card.title}. Nothing is coming unless you ask again.`,
+    sections: [
+      { label: "What you asked", bullets: [card.title] },
+      { label: "What's true", bullets: findings.length ? findings : ["No further detail was given."] },
+      {
+        label: "Your call",
+        bullets: [
+          "Nothing, if this no longer matters.",
+          `Ask again and ${who} will pick it back up — reply and say so.`,
+        ],
+      },
+    ],
+    details: reason,
+  };
+  const rendered = renderExecEmail(email);
+  await filePreview(env, {
+    employee: who,
+    what: `dropped — ${card.title.slice(0, 60)}`,
+    subject: rendered.subject,
+    bodyText: rendered.text,
+    bodyHtml: rendered.html,
+    recipient: requester,
+    laneReason: "ASKED_FOR",
+    owner,
+    workCardId: card.id,
+    cardKind: card.kind ?? null,
+    firmScope: card.firm_scope,
+  });
 }
 
 async function record(env: Env, card: { id: string; firm_scope: string }, actorId: string, action: string, text: string): Promise<void> {
