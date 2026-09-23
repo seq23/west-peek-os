@@ -48,6 +48,10 @@ back tests the database's vocabulary rather than the operator's.
   route for (a second firm user, an unemployed seat). `queryLocalD1(sql)` reads back the handful of
   facts no route serves — `pending_deck` above all, where the REASON a deck could not be read is
   stored and nothing exposes it.
+- `support/one-connection-per-request.ts` — loaded by `playwright.config.ts`, not by specs: every
+  Node-side request opens its own socket, because Playwright's shared keep-alive pool raced
+  `workerd`'s 5s idle close and lost requests as "socket hang up" (p3, p7). Do not import it from a
+  spec — it installs on import, and `zz-one-connection-per-request.spec.ts` must see the config's copy.
 - `support/mail.ts` — delivers a real RFC822 message to the Worker's `email()` handler through
   miniflare's `/cdn-cgi/handler/email`. The inbound mailbox is the one surface the firm does not
   control the input of, and it is where this system has already lost a real deck.

@@ -131,6 +131,18 @@ export function checkConfig(source) {
         "tell a product break from a collision",
     );
   }
+  // ONE CONNECTION PER REQUEST (23 Sep 2026). p3 and p7 died on "socket hang up": Playwright's
+  // process-wide keep-alive agent reused a socket `workerd` closes at 5000ms idle. A
+  // `connection: close` header was the first fix and was inert. The guard is a module the config
+  // must load, because only the config is evaluated in every worker; the behaviour itself is
+  // counted in tests/e2e-one-connection-per-request.test.ts and e2e/zz-one-connection-per-request.spec.ts.
+  if (!/^import\s+["']\.\/e2e\/support\/one-connection-per-request(\.ts)?["'];?\s*$/m.test(source)) {
+    bad.push(
+      "playwright.config.ts does not import ./e2e/support/one-connection-per-request — without it every " +
+        "journey worker pools sockets to `wrangler dev`, and a request that lands on one at ~5s idle dies " +
+        "as \"socket hang up\" (p7-meetings, 23 Sep 2026). A `connection: close` header does NOT do this",
+    );
+  }
   return bad;
 }
 
@@ -535,9 +547,22 @@ function selfTest() {
   expectCaught("a deploy that waits on the journeys", checkDeploy("name: Deploy\non:\n  workflow_run:\n    workflows: [CI, Playwright]\n    types: [completed]\n"));
   expectCaught("a deploy that waits on nothing", checkDeploy("name: Deploy\non:\n  workflow_dispatch:\n"));
   expectCaught("a deploy that waits on the wrong workflow", checkDeploy("name: Deploy\non:\n  workflow_run:\n    workflows: [Playwright]\n"));
-  expectCaught("retries: 1 in the config", checkConfig("export default defineConfig({\n  retries: 1,\n  workers: 1,\n"));
-  expectCaught("parallel workers over one D1", checkConfig("export default defineConfig({\n  retries: 0,\n  workers: 4,\n"));
-  expectClean("the shipped config shape", checkConfig("export default defineConfig({\n  retries: 0,\n  workers: 1,\n"));
+  const GUARD = 'import "./e2e/support/one-connection-per-request";\n';
+  expectCaught("retries: 1 in the config", checkConfig(GUARD + "export default defineConfig({\n  retries: 1,\n  workers: 1,\n"));
+  expectCaught("parallel workers over one D1", checkConfig(GUARD + "export default defineConfig({\n  retries: 0,\n  workers: 4,\n"));
+  expectCaught(
+    "the transport guard dropped from the config",
+    checkConfig("export default defineConfig({\n  retries: 0,\n  workers: 1,\n"),
+  );
+  expectCaught(
+    "the transport guard commented out",
+    checkConfig('// import "./e2e/support/one-connection-per-request";\nexport default defineConfig({\n  retries: 0,\n  workers: 1,\n'),
+  );
+  expectCaught(
+    "the inert 19 Sep header standing in for the guard",
+    checkConfig('export default defineConfig({\n  retries: 0,\n  workers: 1,\n  use: { extraHTTPHeaders: { connection: "close" } },\n'),
+  );
+  expectClean("the shipped config shape", checkConfig(GUARD + "export default defineConfig({\n  retries: 0,\n  workers: 1,\n"));
 
   expectCaught("a skipped spec", checkFile("x.spec.ts", 'test.skip("flaky", async () => { expect(1).toBe(2); });'));
   expectCaught("a .only spec", checkFile("x.spec.ts", 'test.only("just this", async () => { expect(a).toBe(b); });'));
@@ -655,8 +680,9 @@ function main() {
     `A-GREEN-RUN-MEANS-SOMETHING SCAN PASSED: ${specs.length} spec file(s) and ${files.length - specs.length} ` +
       `support file(s) under e2e/, ${expectations} assertion(s), 0 excused; retries 0 and workers 1; ` +
       `${sleeps} inventoried sleep(s) and no new ones; ${loadingRowsExamined} list(s) that draw an empty ` +
-      "row after loading, every one with a loading row in the same slot; playwright.yml runs the whole suite " +
-      "twice on every push to main and needs both; ci.yml is the gate, sharded to its matrix, every shard proving " +
+      "row after loading, every one with a loading row in the same slot; the config loads the one-connection-" +
+      "per-request transport guard; playwright.yml runs the whole suite twice, monthly and on demand, and " +
+      "needs both; ci.yml is the gate, sharded to its matrix, every shard proving " +
       "it ran files and every job under a ceiling; deploy.yml fires on the gate alone.",
   );
 }
