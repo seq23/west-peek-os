@@ -7,6 +7,9 @@ import { RUN_FRESH_MS, deskSummary, firstSentence, liveStatus, plainFailure, sen
 import { plainTitle, shortAsk, siteStage } from "../src/shared/work/siteChange";
 import { cardTimeline, trailSentence } from "../src/shared/work/cardTimeline";
 import { askedBy } from "../src/shared/work/origin";
+import { handleGetWebPropertyChange } from "../src/worker/services/webPropertyChange";
+import { APPROVED_REPLY, CHANGES_REPLY_PREFIX, MATERIALS_ADDED_PHRASE, PUBLISH_REPLY } from "../src/shared/work/previewReplies";
+import { readApprovalReply } from "../src/shared/work/approvalReply";
 
 /**
  * THE WORK-CARD REDESIGN (23 Sep 2026), HELD TO ITS WORDS.
@@ -230,11 +233,15 @@ describe("wc_c9e36e8b — the owner's review of #193, pinned on the real strings
       ...over,
     });
 
-  it("the title is the short ask and the site — not the subject's sentence, never cut mid-word", () => {
+  it("the title is the job's short name and the site — never the subject's whole sentence, never cut mid-word", () => {
     const t = plainTitle({ title: LIVE.title, kind: "WEB_PROPERTY_CHANGE", host: "joinwestpeek.com", subject: LIVE.parent_title, ask: LIVE.ask });
     expect(t).toBe("Community site redesign · joinwestpeek.com");
-    // With no ask on the row, the subject's own name — its first clause — is the fallback.
+    // The subject's own name — its first clause — is enough on its own…
     expect(plainTitle({ title: LIVE.title, kind: "WEB_PROPERTY_CHANGE", host: "joinwestpeek.com", subject: LIVE.parent_title, ask: null })).toBe("Community site redesign · joinwestpeek.com");
+    // …the ask names it when the subject is missing…
+    expect(plainTitle({ title: LIVE.title, kind: "WEB_PROPERTY_CHANGE", host: "joinwestpeek.com", subject: null, ask: LIVE.ask })).toBe("Community site redesign · joinwestpeek.com");
+    // …a subject that is all sentence and no name falls to the ask…
+    expect(plainTitle({ title: LIVE.title, kind: "WEB_PROPERTY_CHANGE", host: "joinwestpeek.com", subject: "From x@y.z: Here is everything you need for the site this week with all of the files", ask: LIVE.ask })).toBe("Community site redesign · joinwestpeek.com");
     // And with neither, the truncated card title still yields whole words.
     expect(plainTitle({ title: LIVE.title, kind: "WEB_PROPERTY_CHANGE", host: "joinwestpeek.com", subject: null, ask: null })).toBe("Community site redesign · joinwestpeek.com");
   });
@@ -393,5 +400,26 @@ describe("the board and the card page serve one title and one run", () => {
     expect(row.current_run).toBeNull();
     expect(row.plain_title).toBe("Plain card with nothing running");
     expect(liveStatus(row as never, ME).kind).toBe("QUEUED");
+  });
+});
+
+describe("the Preview-ready panel reads structured fields and speaks her four replies", () => {
+  it("serves ONE clean link for the card's own site, from the stored mess on wc_c9e36e8b", async () => {
+    const card = await createWorkCardInternal(env, SEQUOIA, { title: "Preview link fixture", owner_type: "AI", owner_id: "aie_porter", kind: "WEB_PROPERTY_CHANGE" } as never);
+    const mess =
+      "https://a782bc7d.west-peek-ventures.pages.dev' · https://a782bc7d.west-peek-ventures.pages.dev</a · https://work-wpc-c9e36e8b.west-peek-ventures.pages.dev' · " +
+      "https://73efcfc2.west-peek-productions.pages.dev' · https://work-wpc-c9e36e8b.west-peek-productions.pages.dev</a · https://fe42ec36.west-peek-community.pages.dev' · " +
+      "https://work-wpc-c9e36e8b.west-peek-community.pages.dev' · https://work-wpc-c9e36e8b.west-peek-community.pages.dev</a";
+    await env.WP_OS_DB.prepare("INSERT INTO web_property_change (work_card_id, target_repo, property_host, ask, phase, branch, preview_url, check_state) VALUES (?1, 'join-west-peek-main', 'joinwestpeek.com', 'x', 'BUILD', 'work/wpc-c9e36e8b', ?2, 'GREEN')").bind(card.id, mess).run();
+    const res = await handleGetWebPropertyChange({ env, identity: SEQUOIA as never, params: { id: card.id }, request: req() } as never);
+    const body = (await res.json()) as { preview_link: string | null };
+    expect(body.preview_link).toBe("https://work-wpc-c9e36e8b.west-peek-community.pages.dev");
+  });
+
+  it("each button's words mean what its label says, to the one reply reader", () => {
+    expect(readApprovalReply(APPROVED_REPLY).kind).toBe("APPROVED");
+    expect(readApprovalReply(`${CHANGES_REPLY_PREFIX} make the hero photo the group shot`)).toMatchObject({ kind: "REFUSED", changes: true });
+    expect(readApprovalReply(PUBLISH_REPLY).kind).toBe("PUBLISH");
+    expect(MATERIALS_ADDED_PHRASE).toBe("I added missing items");
   });
 });

@@ -13,9 +13,11 @@ import type { WorkCardRow } from "./types";
  * that. So this panel is drawn from STRUCTURED fields — the one clean link the server derives for
  * the card's own site, and the row's list of what is still missing — never from the block's text.
  *
- * Its four buttons are her four email replies, sent through the same door an emailed reply lands on
- * (the block's ANSWER door while the card is parked on her, a note otherwise), so the runner reads
- * them with the one reply reader and nothing here parses anything.
+ * Its four buttons are her four email replies, sent through the same door an emailed reply to the
+ * preview lands on — the ANSWER door of the card parked at its preview — so the runner reads them
+ * with the one reply reader and nothing here parses anything. Never a note: the note loop reads
+ * "changes: …" as "hold", which is not what "Ask for changes" means. While the card is not parked
+ * (a rebuild is running) the buttons are off and say why.
  */
 export function PreviewReadyPanel({
   card: c,
@@ -39,14 +41,13 @@ export function PreviewReadyPanel({
   const [changing, setChanging] = useState(false);
   const [changes, setChanges] = useState("");
   const owner = c.owner_name ?? "Porter";
+  const parked = c.state === "BLOCKED";
+  const off = busy || !parked;
 
   /** Her reply, through the door an emailed reply lands on. */
   async function reply(words: string, said: string): Promise<void> {
     setBusy(true);
-    const res =
-      c.state === "BLOCKED"
-        ? await api<{ ok?: boolean; said?: string; detail?: string }>(`/api/work-cards/${c.id}/unblock`, { method: "POST", body: { action: "ANSWER", text: words } })
-        : await api<{ ok?: boolean; said?: string; detail?: string }>(`/api/work-cards/${c.id}/notes`, { method: "POST", body: { body: words } });
+    const res = await api<{ ok?: boolean; said?: string; detail?: string }>(`/api/work-cards/${c.id}/unblock`, { method: "POST", body: { action: "ANSWER", text: words } });
     setBusy(false);
     const ok = res.status === 200 || res.status === 201;
     setMessage(ok ? said : `Could not send that: ${res.data?.detail ?? res.data?.said ?? res.status}`);
@@ -88,17 +89,18 @@ export function PreviewReadyPanel({
           </ul>
         </div>
       )}
+      {!parked && <p className="wc-quiet" data-testid={`work-card-preview-busy-${c.id}`}>{owner} is working on it right now; the replies open again when the next preview is ready.</p>}
       <div className="wc-foot-actions">
-        <button type="button" className="btn-strong" disabled={busy} data-testid={`work-card-preview-publish-${c.id}`} onClick={() => void reply(APPROVED_REPLY, `Sent: "${APPROVED_REPLY}". ${owner} publishes this preview as it is.`)}>
+        <button type="button" className="btn-strong" disabled={off} data-testid={`work-card-preview-publish-${c.id}`} onClick={() => void reply(APPROVED_REPLY, `Sent: "${APPROVED_REPLY}". ${owner} publishes this preview as it is.`)}>
           Publish it
         </button>
-        <button type="button" disabled={busy} aria-expanded={changing} data-testid={`work-card-preview-changes-${c.id}`} onClick={() => setChanging((v) => !v)}>
+        <button type="button" disabled={off} aria-expanded={changing} data-testid={`work-card-preview-changes-${c.id}`} onClick={() => setChanging((v) => !v)}>
           Ask for changes
         </button>
-        <button type="button" disabled={busy} data-testid={`work-card-preview-added-publish-${c.id}`} onClick={() => void reply(PUBLISH_REPLY, `Sent: "${PUBLISH_REPLY}". ${owner} fills in what you added and publishes, without another preview.`)}>
+        <button type="button" disabled={off} data-testid={`work-card-preview-added-publish-${c.id}`} onClick={() => void reply(PUBLISH_REPLY, `Sent: "${PUBLISH_REPLY}". ${owner} fills in what you added and publishes, without another preview.`)}>
           I added missing items → publish
         </button>
-        <button type="button" disabled={busy} data-testid={`work-card-preview-added-preview-${c.id}`} onClick={() => void materialsAdded()}>
+        <button type="button" disabled={off} data-testid={`work-card-preview-added-preview-${c.id}`} onClick={() => void materialsAdded()}>
           I added missing items → new preview
         </button>
       </div>
@@ -115,7 +117,7 @@ export function PreviewReadyPanel({
           </label>
           <textarea id={`work-card-preview-changes-text-${c.id}`} rows={3} value={changes} data-testid={`work-card-preview-changes-text-${c.id}`} onChange={(e) => setChanges(e.target.value)} placeholder="e.g. make the hero photo the group shot" />
           <div className="wc-pair-actions">
-            <button type="submit" className="btn-strong" disabled={busy || changes.trim().length < 3} data-testid={`work-card-preview-changes-send-${c.id}`}>
+            <button type="submit" className="btn-strong" disabled={off || changes.trim().length < 3} data-testid={`work-card-preview-changes-send-${c.id}`}>
               Send the changes
             </button>
             <span className="wc-quiet">You get a new preview with them in.</span>

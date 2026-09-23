@@ -68,7 +68,7 @@ interface ChangeRow {
   /** 0236: a job over several repos — one PR, check, preview and merge per repo. Empty for one repo. */
   /** The ONE preview link for the card's own site, derived server-side from structured fields. */
   preview_link?: string | null;
-  parts?: Array<{ repo: string; property_host: string; pr_url: string | null; pr_number: number | null; check_state: "PENDING" | "GREEN" | "RED" | null; check_url: string | null; preview_url: string | null; merge_sha: string | null }>;
+  parts?: Array<{ repo: string; property_host: string; preview_link?: string | null; pr_url: string | null; pr_number: number | null; check_state: "PENDING" | "GREEN" | "RED" | null; check_url: string | null; preview_url: string | null; merge_sha: string | null }>;
 }
 
 /**
@@ -179,10 +179,10 @@ export function SiteDetails({
                     <span className={p.check_state === "GREEN" ? "badge badge-ok" : p.check_state === "RED" ? "badge badge-bad" : "badge badge-gate"}>{checkWords(p.check_state)}</span>
                   </>
                 )}
-                {p.preview_url && (
+                {p.preview_link && (
                   <>
                     {" · "}
-                    <a href={p.preview_url} target="_blank" rel="noopener noreferrer">
+                    <a href={p.preview_link} target="_blank" rel="noopener noreferrer">
                       preview
                     </a>
                   </>

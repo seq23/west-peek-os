@@ -37,7 +37,7 @@ export const APPROVAL_WORDS = ["approved", "approve", "yes", "go", "land it", "o
 export const PREVIEW_WORDS = ["preview", "preview only", "preview first", "preview it"] as const;
 export const FORCE_WORDS = ["approved to production", "approve to production", "force production", "ship it anyway", "land anyway", "land it anyway"] as const;
 export const PUBLISH_WORDS = ["publish", "publish it", "publish now", "publish with them", "fill them in and publish"] as const;
-const CHANGE_STARTS = ["changes:", "change:"] as const;
+export const CHANGE_STARTS = ["changes:", "change:"] as const;
 const REFUSAL_STARTS = ["no", "not approved", "stop", "changes:", "change:", "don't", "do not"] as const;
 
 /** The first line the person wrote, without a signature, quoted text or punctuation noise. */

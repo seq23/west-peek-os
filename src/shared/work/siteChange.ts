@@ -152,12 +152,15 @@ function subjectName(subject: string, host: string | null): string {
 export function plainTitle(input: PlainTitleInput): string {
   if (input.kind !== "WEB_PROPERTY_CHANGE") return input.title;
   const host = input.host && input.host !== "unresolved" ? input.host : null;
-  // THE ASK FIRST (owner review, 23 Sep 2026): the first thing her request asks for is the job's
-  // name; a subject line often carries a sentence after the name. The subject's first clause is the
-  // fallback, then the card's own title.
+  // THE NAME SHE GAVE IT, NOT THE SENTENCE AFTER IT (owner review, 23 Sep 2026). On wc_c9e36e8b the
+  // whole subject became the title: "Community site redesign — everything is in the Drive folder".
+  // The subject's FIRST CLAUSE is the name when it is short (Porter's emails use the same title, so a
+  // "ventures site update" subject stays "Ventures site update"); otherwise the ask, when it names
+  // the job the way a request does ("we need to get started on …"); then the card's own title.
+  const subjectShort = input.subject ? subjectName(input.subject, host) : "";
+  const fromSubject = subjectShort && subjectShort.split(/\s+/).length <= 8 ? subjectShort : "";
   const fromAsk = askName(input.ask, host);
-  const fromSubject = input.subject ? atWord(subjectName(input.subject, host), 56) : "";
-  const short = fromAsk || fromSubject || shortAsk(input.ask, host) || shortAsk(input.title, host) || "Website change";
+  const short = fromSubject || fromAsk || (subjectShort ? atWord(subjectShort, 56) : "") || shortAsk(input.ask, host) || shortAsk(input.title, host) || "Website change";
   const name = capital(short);
   if (!host || name.toLowerCase().includes(host.toLowerCase())) return name;
   return `${name} · ${host}`;
