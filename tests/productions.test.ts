@@ -448,3 +448,19 @@ describe("the monthly card on Walker's desk", () => {
     expect(row.next_action).toMatch(/the judgement pass failed: provider 503/);
   });
 });
+
+describe("the finished email names what is still missing (0237, one list for every card)", () => {
+  it("a Productions card with a missing item sends Scooter's email with the shared \"Still missing\" section", async () => {
+    const LATER = new Date("2027-02-01T14:00:00.000Z");
+    const { cardId } = await openProductionsCard(env, "productions_customer_ideas", LATER);
+    // preview_first: the rendered email is held on the preview row, so its body can be read.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET preview_first = 1, missing_materials_json = ?2 WHERE id = ?1").bind(cardId, JSON.stringify([{ item: "the Productions showreel", where: "the customer pitch" }])).run();
+    const card = (await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(cardId).first())! as unknown as Parameters<typeof runProductionsCard>[1];
+    const out = await runProductionsCard(env, card, { search: async () => ({ ok: true, text: customerJson, detail: "ok" }), urlCheck, now: LATER });
+    expect(out.finished, out.detail).toBe(true);
+    const held = await env.WP_OS_DB.prepare("SELECT body_text FROM preview_approval WHERE work_card_id = ?1").bind(cardId).first<{ body_text: string }>();
+    expect(held!.body_text).toContain("Still missing");
+    expect(held!.body_text).toContain("the Productions showreel — for the customer pitch");
+    expect(held!.body_text.indexOf("Still missing")).toBeLessThan(held!.body_text.indexOf("Your call"));
+  });
+});

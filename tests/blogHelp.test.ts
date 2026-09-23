@@ -354,3 +354,17 @@ describe("the pieces, on their own", () => {
     expect(buildDraftPrompt({ ...base, band: { min: 900, max: 1400 } })).toMatch(/No invented quotes, no invented numbers/);
   });
 });
+
+describe("the finished email names what is still missing (0237, one list for every card)", () => {
+  it("a blog card with a missing item sends its DONE email with the shared \"Still missing\" section, before \"Your call\"", async () => {
+    await env.WP_OS_DB.prepare("INSERT INTO work_card (id, title, description, owner_type, owner_id, state, priority, privacy_label, firm_scope, created_by, kind, request_json, missing_materials_json) VALUES ('wc_blog_missing', 'Blog phrases for Sequoia', 'x', 'AI', 'aie_wren', 'OPEN', 'NORMAL', 'INTERNAL', 'west-peek', 'test', 'BLOG_HELP', ?1, ?2)")
+      .bind(JSON.stringify({ modes: ["PHRASE"], topic: "the blog", ask: "a phrase I can repeat" }), JSON.stringify([{ item: "the latest LP letter (PDF)", where: "the post's evidence section" }])).run();
+    const before = sent.length;
+    const out = await runBlogHelpCard(env, { id: "wc_blog_missing", title: "Blog phrases for Sequoia", kind: "BLOG_HELP", owner_id: "aie_wren", state: "OPEN", work_attempts: 1, firm_scope: "west-peek", requested_by_email: null }, { search, judge, write: async () => ({ ok: true, text: phraseJson, detail: "ok" }), urlCheck, interpret: saidNothing });
+    expect(out.finished, out.detail).toBe(true);
+    const mail = sent.slice(before).find((s) => s.to === "sequoia@westpeek.ventures")!;
+    expect(mail.text).toContain("Still missing");
+    expect(mail.text).toContain("the latest LP letter (PDF) — for the post's evidence section");
+    expect(mail.text.indexOf("Still missing")).toBeLessThan(mail.text.indexOf("Your call"));
+  });
+});

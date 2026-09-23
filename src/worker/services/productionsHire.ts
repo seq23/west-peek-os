@@ -11,6 +11,7 @@ import { urlStatus } from "../effects/urlLiveness";
 import { createWorkCardInternal } from "./workCards";
 import { sweepIdentity, type SweepCard } from "./workSweep";
 import { sendOrPreview } from "./previewApproval";
+import { withStillMissing } from "./requestMaterials";
 import { deliver } from "./deliverables";
 import { notifyQuietly } from "./notifications";
 import { isoWeekOf } from "./jobs";
@@ -850,7 +851,8 @@ export async function runHireSearchCard(
    */
   const mail = await sendOrPreview(env, {
     to: SCOOTER_EMAIL,
-    email: { employee: "Walker", what: summary.what, tldr: summary.tldr, sections: summary.sections, details: text },
+    // WHAT IS STILL MISSING (0237): the card's one list, the same section every employee's email carries.
+    email: { employee: "Walker", what: summary.what, tldr: summary.tldr, sections: await withStillMissing(env, card.id, summary.sections), details: text },
     objectType: "work_card",
     objectId: card.id,
     // The KIND goes with it, so a reply steers the SEARCH rather than a card that will be DONE

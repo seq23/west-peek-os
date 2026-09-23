@@ -16,6 +16,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from "n
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { vaultRunEnv } from "../lib/vault-env.mjs";
 
 const VAULT_DIR = join(homedir(), ".west-peek-os", "vault");
 const VAULT_FILE = join(VAULT_DIR, "secrets.vault");
@@ -267,7 +268,9 @@ async function main() {
       }
       const child = spawn(childArgs[0], childArgs.slice(1), {
         stdio: "inherit",
-        env: { ...process.env, ...secrets, ...aliased },
+        // The injected NAMES ride along (never a value) so a model child can be given the
+        // environment without them — scripts/lib/vault-env.mjs.
+        env: vaultRunEnv(process.env, { ...secrets, ...aliased }),
       });
       child.on("exit", (code) => process.exit(code ?? 1));
       break;

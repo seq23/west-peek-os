@@ -626,3 +626,20 @@ describe("a steer widens what Walker does, never what authorize() gates (22 Sep 
     expect(sends[0]!.to).toEqual(["scooter@westpeek.ventures"]);
   });
 });
+
+describe("the finished email names what is still missing (0237, one list for every card)", () => {
+  it("a hire-search card with a missing item sends Scooter's note with the shared \"Still missing\" section", async () => {
+    const MON = new Date("2027-03-01T14:00:30.000Z");
+    const { cardId } = await openHireSearchCard(env, MON);
+    // preview_first: the rendered email is held on the preview row, so its body can be read.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET preview_first = 1, missing_materials_json = ?2 WHERE id = ?1").bind(cardId, JSON.stringify([{ item: "the producer role's day rate", where: "the opening line to each candidate" }])).run();
+    const card = (await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(cardId).first())! as unknown as Parameters<typeof runHireSearchCard>[1];
+    // New people, so the week has something fresh to send (a week of repeats is BLOCKED, by design).
+    const fresh = searchJson.replace(/Jordan Example/g, "Riley Fresh").replace(/jordan-example|agency\.example\/team\/jordan/g, "riley-fresh").replace(/Sam Sample/g, "Casey Fresh").replace(/samsample/g, "caseyfresh");
+    const out = await runHireSearchCard(env, card, { search: async () => ({ ok: true, text: fresh, detail: "ok" }), judge, urlStatus: statusOf, now: new Date("2027-03-01T14:05:00.000Z") });
+    expect(out.finished, out.detail).toBe(true);
+    const held = await env.WP_OS_DB.prepare("SELECT body_text FROM preview_approval WHERE work_card_id = ?1").bind(cardId).first<{ body_text: string }>();
+    expect(held!.body_text).toContain("Still missing");
+    expect(held!.body_text).toContain("the producer role's day rate — for the opening line to each candidate");
+  });
+});

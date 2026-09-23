@@ -209,9 +209,11 @@ export function check(files) {
       if (spawns.length === 0) violations.push(`${e.script} never spawns claude — the phase could not run`);
       for (const sp of spawns) {
         if (/env:\s*process\.env\b/.test(sp)) violations.push(`${e.script} spawns claude with env: process.env — the vault's ANTHROPIC_API_KEY would take precedence over her seat and bill the API`);
-        if (!/env:\s*claudeChildEnv\(/.test(sp)) violations.push(`${e.script} spawns claude without claudeChildEnv() — the ANTHROPIC_*/CLAUDE_* strip is missing`);
+        if (!/env:\s*claudeChildEnv\(/.test(sp)) violations.push(`${e.script} spawns claude without claudeChildEnv() — the model would see the vault and her API key`);
       }
-      if (!/ANTHROPIC_API_KEY/.test(script.stripped) || !/ANTHROPIC_BASE_URL/.test(script.stripped)) violations.push(`${e.script}'s env strip no longer names ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL`);
+      // 23 Sep 2026: the strip is the vault's own list of names, through ONE shared helper; a local copy is a second list.
+      if (!/import\s*\{[^}]*\bclaudeChildEnv\b[^}]*\}\s*from\s*"\.\.\/lib\/vault-env\.mjs"/.test(script.stripped)) violations.push(`${e.script} does not import claudeChildEnv from scripts/lib/vault-env.mjs — the strip must come from the one shared helper`);
+      if (/function\s+claudeChildEnv\b/.test(script.stripped)) violations.push(`${e.script} defines its own claudeChildEnv — a second list; import the shared helper`);
     }
     if (duties[e.kind] !== e.script) violations.push(`the Mac claimer's DUTIES maps ${e.kind} → ${duties[e.kind] ?? "(nothing)"}, but the registry says ${e.script}`);
     const dispatched = new RegExp(`card\\.kind\\s*===\\s*(?:"${e.kind}"|${e.kind}_KIND)`).test(files.sweep);
@@ -278,10 +280,10 @@ function selfTest() {
   say(noAttachments.violations.some((v) => /does not render ATTACHMENTS:/.test(v)), "a duty script that drops ATTACHMENTS: from the context is caught");
   const noPayloadField = check({ ...files, registry: files.registry.replace(/attachments:\s*Array</, "files: Array<") });
   say(noPayloadField.violations.some((v) => /no longer declares/.test(v)), "a payload without `attachments` is caught");
-  const rawEnv = check({ ...files, dutyScripts: { ...files.dutyScripts, [scriptRel]: { ...files.dutyScripts[scriptRel], stripped: files.dutyScripts[scriptRel].stripped.replace("env: claudeChildEnv(process.env)", "env: process.env") } } });
+  const rawEnv = check({ ...files, dutyScripts: { ...files.dutyScripts, [scriptRel]: { ...files.dutyScripts[scriptRel], stripped: files.dutyScripts[scriptRel].stripped.replace("env: claudeChildEnv(process.env, (names) => (withheld = names))", "env: process.env") } } });
   say(rawEnv.violations.some((v) => /env: process\.env/.test(v)), "a claude spawn that passes process.env straight through (the vault's API key) is caught");
-  const noStrip = check({ ...files, dutyScripts: { ...files.dutyScripts, [scriptRel]: { ...files.dutyScripts[scriptRel], stripped: files.dutyScripts[scriptRel].stripped.replace(/ANTHROPIC_BASE_URL/g, "OTHER_URL") } } });
-  say(noStrip.violations.some((v) => /no longer names ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL/.test(v)), "a strip that forgets the base url is caught");
+  const noStrip = check({ ...files, dutyScripts: { ...files.dutyScripts, [scriptRel]: { ...files.dutyScripts[scriptRel], stripped: files.dutyScripts[scriptRel].stripped.replace('import { VAULT_INJECTED_VAR, claudeChildEnv, strippedNote } from "../lib/vault-env.mjs";', "const VAULT_INJECTED_VAR = 'X'; const strippedNote = String; function claudeChildEnv(b) { return { ...b }; }") } } });
+  say(noStrip.violations.some((v) => /does not import claudeChildEnv/.test(v)) && noStrip.violations.some((v) => /defines its own claudeChildEnv/.test(v)), "a duty script with its own env copy instead of the shared vault strip is caught");
   const blogFirst = check({ ...files, door: files.door.replace("const web = parseWebPropertyAsk(input.subject, written);", "const web0 = parseBlogAsk(input.subject, written); const web = parseWebPropertyAsk(input.subject, written);") });
   say(blogFirst.violations.some((v) => /parses blog help BEFORE/.test(v)), "a door that reads blog help before the web-property ask is caught");
   const emlMinted = check({ ...files, door: files.door.replace("const emlKey = input.emlKey;", "let emlKey = input.emlKey;\n  if (!emlKey && env.WP_OS_DOCUMENTS) { emlKey = `inbound-email/${crypto.randomUUID()}.eml`; env.WP_OS_DOCUMENTS.put(emlKey, input.raw); }") });

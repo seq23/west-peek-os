@@ -8,6 +8,7 @@ import { urlIsLive } from "../effects/urlLiveness";
 import { deliver, recentFeedbackFor } from "./deliverables";
 import { notifyQuietly } from "./notifications";
 import { sendOrPreview } from "./previewApproval";
+import { withStillMissing } from "./requestMaterials";
 import type { SweepCard } from "./workSweep";
 import { guidanceBlock } from "../../shared/skills/library";
 import { personaPrompt } from "../../shared/registry/aiEmployeePersonas";
@@ -777,7 +778,9 @@ export async function runBlogHelpCard(
     sourceId: card.id,
   });
 
-  const email = blogHelpEmail({ employee: employee.name, ask, outline, draft, phrases, research, strippedUrls, failures, body, deliverableId: delivered.id });
+  const built = blogHelpEmail({ employee: employee.name, ask, outline, draft, phrases, research, strippedUrls, failures, body, deliverableId: delivered.id });
+  // WHAT IS STILL MISSING (0237): the card's one list, the same section every employee's email carries.
+  const email = { ...built, sections: await withStillMissing(env, card.id, built.sections) };
   /*
    * THROUGH THE LANE, LIKE EVERYTHING ELSE AN EMPLOYEE FINISHES (18 Sep 2026).
    *
