@@ -772,6 +772,8 @@ export async function handleGetWorkCard(ctx: RouteContext): Promise<Response> {
             wpc.preview_url AS site_preview_url, wpc.land_approved_at AS site_land_approved_at,
             wpc.merge_sha AS site_merge_sha, wpc.publish_ready AS site_publish_ready,
             wpc.preview_only AS site_preview_only,
+            wpc.check_state AS site_check_state, wpc.forced_by AS site_forced_by,
+            wpc.plan_filed_at AS site_plan_filed_at, wpc.plan_approved_at AS site_plan_approved_at,
             substr(COALESCE(wpc.request_text, wpc.ask), 1, 600) AS site_ask
        FROM web_property_change wpc WHERE wpc.work_card_id = ?1`,
   )
@@ -781,7 +783,7 @@ export async function handleGetWorkCard(ctx: RouteContext): Promise<Response> {
   const parent = fromCard
     ? await ctx.env.WP_OS_DB.prepare("SELECT title FROM work_card WHERE id = ?1").bind(fromCard).first<{ title: string }>()
     : null;
-  const siteFacts = { site_host: null, site_repo: null, site_phase: null, site_preview_url: null, site_land_approved_at: null, site_merge_sha: null, site_publish_ready: null, site_preview_only: null, site_ask: null, ...(site ?? {}) };
+  const siteFacts = { site_host: null, site_repo: null, site_phase: null, site_preview_url: null, site_land_approved_at: null, site_merge_sha: null, site_publish_ready: null, site_preview_only: null, site_check_state: null, site_forced_by: null, site_plan_filed_at: null, site_plan_approved_at: null, site_ask: null, ...(site ?? {}) };
 
   return json({
     ...card,
@@ -1204,6 +1206,10 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
             wpc.property_host AS site_host, wpc.target_repo AS site_repo, wpc.phase AS site_phase,
             wpc.preview_url AS site_preview_url, wpc.land_approved_at AS site_land_approved_at,
             wpc.merge_sha AS site_merge_sha, wpc.publish_ready AS site_publish_ready,
+            -- Where it waits on her (liveStatus.siteWait): a green preview not yet approved, or a
+            -- filed plan not yet approved — read from the row, never from the block's text.
+            wpc.check_state AS site_check_state, wpc.forced_by AS site_forced_by,
+            wpc.plan_filed_at AS site_plan_filed_at, wpc.plan_approved_at AS site_plan_approved_at,
             -- (site_preview_only is served above, 0238.)
             substr(COALESCE(wpc.request_text, wpc.ask), 1, 600) AS site_ask,
             -- The card it was handed from — for an email-born job, "From <partner>: <her subject>",

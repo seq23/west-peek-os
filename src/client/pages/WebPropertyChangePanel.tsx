@@ -66,6 +66,8 @@ interface ChangeRow {
   requester_notes_by_name: string | null;
   requester_notes_at: string | null;
   /** 0236: a job over several repos — one PR, check, preview and merge per repo. Empty for one repo. */
+  /** The ONE preview link for the card's own site, derived server-side from structured fields. */
+  preview_link?: string | null;
   parts?: Array<{ repo: string; property_host: string; pr_url: string | null; pr_number: number | null; check_state: "PENDING" | "GREEN" | "RED" | null; check_url: string | null; preview_url: string | null; merge_sha: string | null }>;
 }
 

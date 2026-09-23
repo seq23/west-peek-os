@@ -7103,3 +7103,19 @@ body {
   .wc-details { grid-template-columns: minmax(0, 1fr); gap: var(--space-2xs); }
   .wc-details dd { margin-bottom: var(--space-sm); }
 }
+
+/* "Preview ready" — a website job waiting on her look, drawn from the row (23 Sep 2026). */
+.wc-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+  border-radius: var(--radius-lg);
+  background: var(--wp-tint);
+  border: 1px solid var(--wp-tint-line);
+  min-width: 0;
+}
+
+.wc-preview-title { margin: 0; font-size: var(--text-lg); font-weight: 700; color: var(--wp-ink); }
+.wc-preview-link { margin: 0; font-size: var(--text-base); overflow-wrap: anywhere; }
+.wc-missing { margin: 0; padding-left: var(--space-lg); display: flex; flex-direction: column; gap: var(--space-2xs); font-size: var(--text-base); }

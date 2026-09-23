@@ -5,12 +5,13 @@ import { LinkedText } from "../../lib/linkedText";
 import { heldBySentence } from "@shared/work/workCards";
 import { askedBy } from "@shared/work/origin";
 import { cardTimeline, timelineWhen, type TrailFact } from "@shared/work/cardTimeline";
-import type { LiveStatus } from "@shared/work/liveStatus";
+import { siteWait, type LiveStatus } from "@shared/work/liveStatus";
 import { partnerByEmail } from "@shared/registry/partners";
 import type { BlockActionKey } from "@shared/work/blocks";
 import { ArtifactShelf } from "../ArtifactShelf";
 import { RequesterNotes, WebPropertyChangePanel, useSiteChange } from "../WebPropertyChangePanel";
 import { BlockPanel } from "./BlockPanel";
+import { PreviewReadyPanel } from "./PreviewReadyPanel";
 import { LookForm, LookResults } from "./LooksPanel";
 import { NoteThread, SteerBox, canSteer } from "./NotesPanel";
 import { sitePreviewBadge } from "./sitePreviewBadge";
@@ -130,6 +131,7 @@ export function CardExpanded({
   const sitePreview = sitePreviewBadge(c);
   const recipient = recipientWords(c, me);
   const asked = askedBy(c, { id: me.id, email: me.email });
+  const wait = siteWait(c);
   const cc = ccNames(c.cc_emails);
   const recipientNode: ReactNode = (
     <span className="wc-inline-list">
@@ -301,16 +303,35 @@ export function CardExpanded({
     <div className="wc-expanded" data-testid={`work-card-body-${c.id}`}>
       {/* A BLOCK IS A QUESTION ADDRESSED TO HER, so it leads the expanded card — the four sentences
           and the doors, reused verbatim from `BlockPanel`. */}
-      <BlockPanel
-        card={c}
-        employees={assignable?.employees ?? []}
-        busy={busy}
-        clearing={clearing}
-        setClearing={setClearing}
-        clearText={clearText}
-        setClearText={setClearText}
-        onClear={(id, action, choice) => void clearBlock(id, action, choice)}
-      />
+      {/* A WEBSITE JOB AT ITS PREVIEW IS NOT BLOCKED (owner, 23 Sep 2026): it waits on her look,
+          so it opens on "Preview ready" drawn from the row — one link, what is still missing, her
+          four replies — and never on the stored block text. */}
+      {wait === "PREVIEW" ? (
+        <PreviewReadyPanel
+          card={c}
+          link={site.data?.preview_link ?? null}
+          missing={site.data?.placeholders ?? []}
+          busy={busy}
+          setBusy={setBusy}
+          setMessage={setMessage}
+          reload={() => {
+            site.reload();
+            reload();
+          }}
+        />
+      ) : (
+        <BlockPanel
+          card={c}
+          employees={assignable?.employees ?? []}
+          busy={busy}
+          clearing={clearing}
+          setClearing={setClearing}
+          clearText={clearText}
+          setClearText={setClearText}
+          onClear={(id, action, choice) => void clearBlock(id, action, choice)}
+          heading={wait === "PLAN" ? `The plan is ready — ${owner ?? "Porter"} is waiting on your answer` : undefined}
+        />
+      )}
 
       {c.state === "HELD" && (
         <div className="wc-held" data-testid={`work-card-held-${c.id}`}>

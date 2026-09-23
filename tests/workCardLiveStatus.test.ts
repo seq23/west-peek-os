@@ -3,7 +3,7 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import type { FirmUserIdentity } from "../src/worker/auth";
 import { createWorkCardInternal, handleGetWorkCard, handleWorkByOwner } from "../src/worker/services/workCards";
-import { RUN_FRESH_MS, deskSummary, firstSentence, liveStatus, type LiveStatusInput } from "../src/shared/work/liveStatus";
+import { RUN_FRESH_MS, deskSummary, firstSentence, liveStatus, plainFailure, sentenceCase, siteWait, type LiveStatusInput } from "../src/shared/work/liveStatus";
 import { plainTitle, shortAsk, siteStage } from "../src/shared/work/siteChange";
 import { cardTimeline, trailSentence } from "../src/shared/work/cardTimeline";
 import { askedBy } from "../src/shared/work/origin";
@@ -200,6 +200,82 @@ describe("plainTitle — never the raw email cut off mid-word", () => {
   });
 });
 
+/**
+ * THE LIVE CARD, wc_c9e36e8b, AS IT STOOD ON 23 SEP 2026 (read from production, owner review of #193).
+ * Its title came out as the whole email subject, its status line as "Needs you: PREVIEW READY", and
+ * its timeline as "A try failed: Attempt 1 of 3 did not get anywhere". These are its real strings.
+ */
+describe("wc_c9e36e8b — the owner's review of #193, pinned on the real strings", () => {
+  const LIVE = {
+    title: 'Change joinwestpeek.com: "Porter, We need to get started on the community site redesign (j',
+    parent_title: "From sequoia@westpeek.ventures: Community site redesign — everything is in the Drive folder",
+    ask: "Porter,\n\nWe need to get started on the community site redesign (joinwestpeek.com). Everything is in this Drive folder, and there's a README in it. Start there.",
+    needed:
+      "PREVIEW READY. Look at it here: https://a782bc7d.west-peek-ventures.pages.dev' · https://a782bc7d.west-peek-ventures.pages.dev</a · https://work-wpc-c9e36e8b.west-peek-community.pages.dev</a.",
+  };
+  const card = (over: Partial<LiveStatusInput> = {}): LiveStatusInput =>
+    porter({
+      kind: "WEB_PROPERTY_CHANGE",
+      state: "BLOCKED",
+      block: { needed: LIVE.needed, stopped: "Porter needs something from you before this can go any further.", who: "SEQUOIA" },
+      site_phase: "BUILD",
+      site_preview_url: "https://work-wpc-c9e36e8b.west-peek-community.pages.dev",
+      site_check_state: "GREEN",
+      site_preview_only: 1,
+      site_publish_ready: 0,
+      site_land_approved_at: null,
+      site_plan_filed_at: "2026-09-23T17:30:00Z",
+      site_plan_approved_at: "2026-09-23T17:48:18Z",
+      work_last_failure: "Attempt 1 of 3 did not get anywhere.",
+      ...over,
+    });
+
+  it("the title is the short ask and the site — not the subject's sentence, never cut mid-word", () => {
+    const t = plainTitle({ title: LIVE.title, kind: "WEB_PROPERTY_CHANGE", host: "joinwestpeek.com", subject: LIVE.parent_title, ask: LIVE.ask });
+    expect(t).toBe("Community site redesign · joinwestpeek.com");
+    // With no ask on the row, the subject's own name — its first clause — is the fallback.
+    expect(plainTitle({ title: LIVE.title, kind: "WEB_PROPERTY_CHANGE", host: "joinwestpeek.com", subject: LIVE.parent_title, ask: null })).toBe("Community site redesign · joinwestpeek.com");
+    // And with neither, the truncated card title still yields whole words.
+    expect(plainTitle({ title: LIVE.title, kind: "WEB_PROPERTY_CHANGE", host: "joinwestpeek.com", subject: null, ask: null })).toBe("Community site redesign · joinwestpeek.com");
+  });
+
+  it("the status line is 'Preview ready · look and reply', read from the row — never the block's shouting text", () => {
+    const s = liveStatus(card(), ME, NOW);
+    expect(s).toMatchObject({ kind: "NEEDS_YOU", section: "needs", pill: "Needs you", line: "Preview ready · look and reply", failing: false });
+    expect(s.line).not.toMatch(/PREVIEW READY|pages\.dev|Needs you/);
+    expect(siteWait(card())).toBe("PREVIEW");
+  });
+
+  it("every stage is sentence case: a plan waiting reads 'Plan ready · read it and reply'", () => {
+    const plan = card({ site_phase: "PLAN", site_plan_approved_at: null, site_preview_url: null, site_check_state: null });
+    expect(siteWait(plan)).toBe("PLAN");
+    expect(liveStatus(plan, ME, NOW).line).toBe("Plan ready · read it and reply");
+  });
+
+  it("the preview wait ends when she approves, when it is forced, or when the build is not green", () => {
+    expect(siteWait(card({ site_land_approved_at: "x" }))).toBeNull();
+    expect(siteWait(card({ site_forced_by: "fu_sequoia_taylor" }))).toBeNull();
+    expect(siteWait(card({ site_check_state: "PENDING" }))).toBeNull();
+    expect(siteWait(card({ kind: null }))).toBeNull();
+  });
+
+  it("a shouting block on any other card is said in sentence case", () => {
+    const s = liveStatus(porter({ state: "BLOCKED", block: { needed: "PREVIEW READY. Look at it." } }), ME, NOW);
+    expect(s.line).toBe("Needs you: Preview ready");
+    expect(sentenceCase("URGENT: CALL DAN today")).toBe("Urgent: call dan today");
+  });
+
+  it("the failed try says plainly whose it was: 'First try stalled on our side; retried automatically.'", () => {
+    expect(plainFailure("Attempt 1 of 3 did not get anywhere.")).toBe("First try stalled on our side; retried automatically.");
+    expect(plainFailure("Attempt 2 of 3 did not get anywhere")).toBe("Second try stalled on our side; retried automatically.");
+    const out = cardTimeline({ created_at: "2026-09-23T17:00:00Z", owner_name: "Porter", asked_by: "You", trail: [], last_failure: "Attempt 1 of 3 did not get anywhere.", last_failure_at: "2026-09-23T17:24:00Z" });
+    expect(out.map((e) => e.text)).toContain("First try stalled on our side; retried automatically.");
+    expect(out.map((e) => e.text).join(" ")).not.toMatch(/did not get anywhere|A try failed/);
+    const waiting = liveStatus(porter({ work_last_failure: "Attempt 1 of 3 did not get anywhere." }), ME, NOW);
+    expect(waiting.line).toBe("Next try within 5 min · first try stalled on our side; retried automatically");
+  });
+});
+
 describe("siteStage — Plan, Build, Preview, Live from the row's facts", () => {
   it("walks the four stages", () => {
     expect(siteStage({ phase: "PLAN" }).key).toBe("PLAN");
@@ -236,7 +312,7 @@ describe("the timeline and who asked, in words", () => {
     expect(out.map((e) => e.text)).toEqual([
       "You asked Porter.",
       'Porter replied "got it" and started.',
-      "A try failed: The first try stalled. It is tried again on its own.",
+      "A try failed: The first try stalled. Retried automatically.",
       "Try 2 started on your Mac.",
     ]);
     expect(out[3]!.now).toBe(true);
