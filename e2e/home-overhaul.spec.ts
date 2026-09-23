@@ -54,6 +54,12 @@ test.describe("Home", () => {
     await page.setViewportSize(PHONE);
     await openHome(page);
 
+    // ON A PHONE, HOME GIVES UP THE PURPOSE LINE AND THE STATUS BAR (owner, 23 Sep 2026): the
+    // masthead already answers both, and together they pushed the first waiting row under the
+    // fold on main (861 > 844). Hidden here; still shown on desktop and on every other page.
+    await expect(page.getByTestId("page-purpose-home"), "the purpose line still takes phone Home's first screen").toBeHidden();
+    await expect(page.getByTestId("status-bar"), "a second 'N waiting on you' still sits above phone Home").toBeHidden();
+
     // ONE COUNT: the answer's number is the pill's number, and the pill is the rail's Waiting count.
     const pill = page.getByTestId("home-waiting-pill");
     await expect(pill).toBeVisible();
@@ -118,6 +124,21 @@ test.describe("Home", () => {
     await page.getByTestId("home-undo").click();
     await expect(page.getByTestId("home-notice")).toContainText(/Back on the page: 2/);
     await expect(page.getByTestId(`deliverable-${ids[0]}`)).toBeVisible();
+  });
+
+  test("phone Home drops only its own purpose line and status bar: desktop Home and a phone on any other page keep both", async ({ page }) => {
+    await signIn(page);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await openHome(page);
+    await expect(page.getByTestId("page-purpose-home"), "desktop Home lost its purpose line").toBeVisible();
+    await expect(page.getByTestId("status-bar"), "desktop Home lost its status bar").toBeVisible();
+    await page.setViewportSize(PHONE);
+    await expect(page.getByTestId("page-purpose-home")).toBeHidden();
+    await expect(page.getByTestId("status-bar")).toBeHidden();
+    await gotoSurface(page, "Approvals");
+    await expect(page.getByTestId("approvals-page")).toBeVisible();
+    await expect(page.getByTestId("page-purpose-approvals"), "a phone on Approvals lost its purpose line").toBeVisible();
+    await expect(page.getByTestId("status-bar"), "a phone on Approvals lost its status bar").toBeVisible();
   });
 
   test("the rail filters, remembers per viewer, returns with ← Home, and never opens on an empty band", async ({ page }) => {

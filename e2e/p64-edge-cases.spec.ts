@@ -154,6 +154,11 @@ test("reopening a decided approval supersedes it, needs a reason, and the origin
 
   // ── Reopened by a person, in the browser, on the card they already decided ───────────────────
   await page.getByTestId("approval-filter").selectOption("approved");
+  // WAIT FOR THE FILTERED LIST, not the old one. Until /api/approvals?state=approved answers, the
+  // page still shows the previous list, where this card was `pending_review` and so already open;
+  // ensureOpen() passed on that row, then the new list arrived, the card's key (`id:state`)
+  // changed and it remounted closed - `reopen-reason-*` never appeared (30s timeout, main, 22 Sep).
+  await expect(page.getByTestId(`approval-toggle-${cardId}`), "the approved list never arrived").toContainText("Approved");
   await ensureOpen(page, cardId);
   await page.getByTestId(`reopen-reason-${cardId}`).fill("The valuation the approval rested on turned out to be stale");
   await page.getByTestId(`reopen-${cardId}`).click();
