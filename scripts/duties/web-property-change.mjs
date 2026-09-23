@@ -168,6 +168,14 @@ export function readResult(text, phase) {
     }
   }
   if (parsed.status === "ok" && phase === "LAND" && !(typeof parsed.live_proof === "string" && parsed.live_proof.trim())) return { result: null, problem: "an ok LAND must carry the live proof" };
+  // 0237: what is missing is a list of { item, where } — the thing, and where it goes on the site.
+  if (parsed.missing_materials !== undefined) {
+    if (!Array.isArray(parsed.missing_materials) || parsed.missing_materials.some((m) => !(m && typeof m === "object" && String(m.item ?? "").trim() && String(m.where ?? "").trim()))) {
+      return { result: null, problem: "missing_materials must be a list of { item, where } — both named, so the partner knows what to send and where it goes" };
+    }
+  }
+  if (parsed.assets !== undefined && !(Array.isArray(parsed.assets) && parsed.assets.every((a) => typeof a === "string" && a.trim()))) return { result: null, problem: "assets must be a list of DRIVE_MANIFEST paths" };
+  if (parsed.fetch !== undefined && !(Array.isArray(parsed.fetch) && parsed.fetch.every((a) => typeof a === "string" && a.trim()))) return { result: null, problem: "fetch must be a list of DRIVE_MANIFEST paths" };
   return { result: parsed, problem: null };
 }
 
@@ -230,7 +238,8 @@ export function renderContext(job, paths) {
     "",
     "ASSETS the request may reference:",
     `ATTACHMENTS: ${paths.attachments?.length ? paths.attachments.map((a) => `${a.filename} (${a.media_type}, ${a.bytes} bytes) → ${a.path}`).join("; ") : "none arrived"}`,
-    `DRIVE_FOLDERS: ${job.drive?.folder_id ? `${job.drive.folder_url ?? job.drive.folder_id} → pulled into ${paths.packageDir}` : "none in the request"}`,
+    `DRIVE_FOLDERS: ${job.drive?.folder_id ? `${job.drive.folder_url ?? job.drive.folder_id} → mapped into ${paths.packageDir}/drive` : "none in the request"}`,
+    ...(job.drive?.folder_id ? driveLines(job, paths) : []),
     "",
     "STANDING RULES OF THIS KIND:",
     ...Object.entries(job.rules ?? {}).map(([k, v]) => `- ${k}: ${v}`),
@@ -248,6 +257,21 @@ export function renderContext(job, paths) {
   }
   if (paths.landOutput) lines.push("", "WHAT ~/bin/land PRINTED:", "```", paths.landOutput.slice(-6000), "```", `MERGE SHA: ${paths.mergeSha ?? "(unknown)"}`);
   return lines.join("\n");
+}
+
+/** The rule for reading a package, the same words in every prompt that reads one. */
+export const PACKAGE_TRUTH_RULE =
+  "PACKAGE TRUTH: before you list anything as missing or ask about it, check DRIVE_MANIFEST.json (and fetch the file if you need to see it). A file that is present outweighs any document saying it is absent. When two package documents conflict, follow the one that declares precedence (\"this README controls\") and name the conflict in the plan — never ask the partner about it.";
+
+/** How the model reaches Drive: the manifest, the documents already here, and assets by name through the script. */
+function driveLines(job, paths) {
+  const driveDir = `${paths.packageDir}/drive`;
+  return [
+    `DRIVE_MANIFEST: ${driveDir}/DRIVE_MANIFEST.json — every file in the folder (path, size, fetched). Re-read for THIS run: a file added since the plan is listed.`,
+    `DOCUMENTS: every document (fetched: true) is already in ${driveDir}. Assets — images, logos, fonts, audio, video — stay in Drive until named.`,
+    `ASSETS: you do not hold the Drive credential and never fetch yourself. ${job.phase === "PLAN" ? "List every manifest path the build will use in `assets` in your result; the script fetches them before BUILD." : `The plan's assets are fetched into ${driveDir} before you start. If you need another, finish with status "failed", reason "needs assets" and \`fetch: ["<manifest path>", …]\`; the script fetches them and runs you once more.`}`,
+    PACKAGE_TRUTH_RULE,
+  ];
 }
 
 /** The SITES line: folders of TARGET_REPO, or the whole repo when the site IS the repo (".") . */
@@ -304,6 +328,8 @@ export function claudeChildEnv(base) {
   for (const [k, v] of Object.entries(base ?? {})) {
     if (/^(ANTHROPIC_|CLAUDE_(API|AUTH|CODE_OAUTH|CODE_USE|OAUTH|TOKEN)|CLAUDE_CODE_API)/i.test(k)) continue;
     if (k === "ANTHROPIC_API_KEY" || k === "ANTHROPIC_BASE_URL" || k === "ANTHROPIC_AUTH_TOKEN") continue;
+    // THE MODEL NEVER HOLDS THE DRIVE CREDENTIAL (23 Sep 2026): it names assets, the script fetches them.
+    if (k === "GSC_SERVICE_ACCOUNT_JSON") continue;
     out[k] = v;
   }
   return out;
@@ -591,40 +617,11 @@ export async function run(job, ctx) {
     };
   }
 
-  // THE ASSETS. The attachments the partner sent, fetched by name from the Worker into the
-  // package's attachments dir (every phase — BUILD needs the photo too); the Drive folder, when
-  // the request named one, pulled in PLAN. A folder is OPTIONAL: "the photo is attached" is a
-  // whole request. Zero files from a named folder blocks the card naming it.
-  const attachments = [];
-  if (Array.isArray(job.attachments) && job.attachments.length > 0) {
-    const attDir = path.join(packageDir, "attachments");
-    mkdirSync(attDir, { recursive: true });
-    for (const a of job.attachments) {
-      const target = path.join(attDir, String(a.filename).replace(/[\\/]/g, "_"));
-      try {
-        const got = await fetchAttachment(a.path, target, ctx.env);
-        attachments.push({ ...a, path: target, bytes: got });
-        progress(`attachment ${a.filename} (${got} bytes)`);
-      } catch (err) {
-        return { phase, status: "failed", reason: `could not fetch the attachment ${a.filename} from the OS: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}` };
-      }
-    }
-  }
-  if (phase === "PLAN" && job.drive?.folder_id) {
-    const folder = job.drive.folder_id;
-    if (!ctx.env?.GSC_SERVICE_ACCOUNT_JSON) return { phase, status: "failed", reason: "GSC_SERVICE_ACCOUNT_JSON is not in the environment — the claimer must run under vault.mjs run" };
-    rmSync(path.join(packageDir, "drive"), { recursive: true, force: true });
-    progress(`pulling Drive folder ${folder}`);
-    try {
-      // Abortable: the ceiling must be able to stop a 200-file pull, not only the model.
-      const { stdout } = await sh("node", [PULL_SCRIPT, folder, path.join(packageDir, "drive")], { env: ctx.env, signal: ctx.signal });
-      writeFileSync(path.join(jobDir, "pull.log"), stdout);
-      progress(stdout.trim().split("\n").pop() ?? "pulled");
-    } catch (err) {
-      const msg = `${err?.stderr ?? ""}${err?.stdout ?? ""}`.trim() || (err instanceof Error ? err.message : String(err));
-      return { phase, status: "blocked", reason: msg.slice(0, 800) };
-    }
-  }
+  // THE ASSETS — one gatherer for both roads (see gatherAssets): the attachments every phase, the
+  // Drive folder MAPPED on every phase that needs materials, and the plan's assets fetched for BUILD.
+  const assets = await gatherAssets(job, ctx, packageDir, jobDir, phase, progress);
+  if (assets.report) return assets.report;
+  const attachments = assets.attachments;
 
   let landOutput = null;
   let mergeSha = null;
@@ -659,11 +656,22 @@ export async function run(job, ctx) {
   const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments })}`;
   writeFileSync(path.join(jobDir, `prompt-${phase}.md`), prompt);
   progress(`claude -p (${job.model}) for ${phase}`);
-  const claude = await runClaude({ prompt, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
+  let claude = await runClaude({ prompt, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
   writeFileSync(path.join(jobDir, `claude-${phase}.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
-  const cost = costFrom(claude.out);
+  let cost = costFrom(claude.out);
 
-  const { result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", phase);
+  let { result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", phase);
+  // A BUILD that needs another Drive asset names it; the script fetches it and runs the model ONCE more.
+  const wanted = phase === "BUILD" && job.drive?.folder_id ? assetsRequested(result) : [];
+  if (wanted.length) {
+    const fetched = await fetchDriveAssets(path.join(packageDir, "drive"), wanted, ctx, jobDir, progress);
+    if (!fetched.ok) return { phase, status: "failed", reason: fetched.reason };
+    rmSync(resultPath, { force: true });
+    claude = await runClaude({ prompt: `${prompt}\n\nFETCHED FOR YOU SINCE YOUR LAST TRY: ${wanted.join(", ")} — now in ${path.join(packageDir, "drive")}.`, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
+    writeFileSync(path.join(jobDir, `claude-${phase}-2.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
+    cost = (cost ?? 0) + (costFrom(claude.out) ?? 0);
+    ({ result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", phase));
+  }
   if (!result) {
     return { phase, status: "failed", reason: `${phase} ended (claude exit ${claude.code}) but ${problem}${cost !== null ? ` — cost $${cost.toFixed(2)}` : ""}` };
   }
@@ -671,7 +679,7 @@ export async function run(job, ctx) {
 
   if (phase === "PLAN") {
     writeFileSync(path.join(jobDir, "plan.md"), result.document);
-    return { phase, status: "ok", document: result.document, decided: result.decided ?? [], asks: result.asks ?? [], publish_ready: result.publish_ready, placeholders: result.placeholders ?? [], notes: `${result.notes ?? ""}${cost !== null ? ` (cost $${cost.toFixed(2)})` : ""}`.trim() };
+    return { phase, status: "ok", document: result.document, decided: result.decided ?? [], asks: result.asks ?? [], publish_ready: result.publish_ready, placeholders: result.placeholders ?? [], missing_materials: result.missing_materials ?? [], assets: result.assets ?? [], notes: `${result.notes ?? ""}${cost !== null ? ` (cost $${cost.toFixed(2)})` : ""}`.trim() };
   }
 
   if (phase === "BUILD") {
@@ -704,6 +712,8 @@ export async function run(job, ctx) {
       // a reader sees the claim and the observation side by side and can tell which is which.
       proof: [String(result.proof ?? "").slice(0, 8000), ...configLines].filter(Boolean).join("\n"),
       pages_env_proof: configLines,
+      // What is still missing after this rebuild, re-checked against the re-mapped package (0237).
+      ...(Array.isArray(result.missing_materials) ? { missing_materials: result.missing_materials } : {}),
       reason: checks.state === "GREEN" ? undefined : `checks are ${checks.state} on ${pr.url}`,
       notes: `${result.notes ?? ""}${cost !== null ? ` (cost $${cost.toFixed(2)})` : ""}`.trim(),
     };
@@ -738,19 +748,65 @@ async function gatherAssets(job, ctx, packageDir, jobDir, phase, progress) {
       }
     }
   }
-  if (phase === "PLAN" && job.drive?.folder_id) {
+  const step = driveStepFor(job, phase);
+  if (step.map) {
     if (!ctx.env?.GSC_SERVICE_ACCOUNT_JSON) return { report: { phase, status: "failed", reason: "GSC_SERVICE_ACCOUNT_JSON is not in the environment — the claimer must run under vault.mjs run" } };
-    rmSync(path.join(packageDir, "drive"), { recursive: true, force: true });
-    progress(`pulling Drive folder ${job.drive.folder_id}`);
+    const driveDir = path.join(packageDir, "drive");
+    progress(`mapping Drive folder ${job.drive.folder_id}`);
     try {
-      const { stdout } = await sh("node", [PULL_SCRIPT, job.drive.folder_id, path.join(packageDir, "drive")], { env: ctx.env, signal: ctx.signal });
-      writeFileSync(path.join(jobDir, "pull.log"), stdout);
+      // MAP, NEVER A WHOLE-FOLDER DOWNLOAD (owner, 23 Sep 2026): the manifest and the documents.
+      const { stdout } = await sh("node", [PULL_SCRIPT, "--map", job.drive.folder_id, driveDir], { env: ctx.env, signal: ctx.signal });
+      writeFileSync(path.join(jobDir, `drive-map-${phase}.log`), stdout);
+      progress(stdout.trim().split("\n").pop() ?? "mapped");
     } catch (err) {
       const msg = `${err?.stderr ?? ""}${err?.stdout ?? ""}`.trim() || (err instanceof Error ? err.message : String(err));
       return { report: { phase, status: "blocked", reason: msg.slice(0, 800) } };
     }
+    if (step.fetch.length) {
+      const out = await fetchDriveAssets(driveDir, step.fetch, ctx, jobDir, progress);
+      if (!out.ok) return { report: { phase, status: "failed", reason: out.reason } };
+    }
   }
   return { attachments };
+}
+
+/**
+ * WHAT DRIVE WORK A PHASE DOES (23 Sep 2026). A folder is RE-READ on every phase that needs the
+ * materials — PLAN and BUILD — so a file she added after the plan is seen by the build. LAND needs
+ * none. BUILD also fetches the assets the approved plan named. Pure, so it is self-tested.
+ */
+export function driveStepFor(job, phase) {
+  const map = Boolean(job?.drive?.folder_id) && (phase === "PLAN" || phase === "BUILD");
+  const fetch = map && phase === "BUILD" ? [...new Set((Array.isArray(job?.plan?.assets) ? job.plan.assets : []).map((a) => String(a).trim()).filter(Boolean))] : [];
+  return { map, fetch };
+}
+
+/**
+ * FETCH NAMED ASSETS ON THE MODEL'S BEHALF. The model never holds the Drive credential
+ * (`claudeChildEnv` strips it): it names what it needs, and this runs `pull.mjs --fetch` from the
+ * duty script's own environment. A name the manifest does not know, or a file over the ceiling, is
+ * refused by pull.mjs by name — and that refusal is the reason reported.
+ */
+async function fetchDriveAssets(driveDir, wanted, ctx, jobDir, progress) {
+  progress(`fetching ${wanted.length} asset(s) from Drive`);
+  try {
+    const { stdout } = await sh("node", [PULL_SCRIPT, "--fetch", driveDir, ...wanted], { env: ctx.env, signal: ctx.signal });
+    writeFileSync(path.join(jobDir, `drive-fetch-${Date.now()}.log`), stdout);
+    return { ok: true };
+  } catch (err) {
+    const msg = `${err?.stderr ?? ""}${err?.stdout ?? ""}`.trim() || (err instanceof Error ? err.message : String(err));
+    return { ok: false, reason: `could not fetch the Drive asset(s) ${wanted.join(", ")}: ${msg.slice(0, 600)}` };
+  }
+}
+
+/**
+ * A BUILD MAY ASK FOR MORE ASSETS, ONCE (23 Sep 2026). The plan named what it expected; a build that
+ * finds it needs another file ends with `fetch: [paths]`. The script fetches them and runs the model
+ * one more time — never a loop. Returns the list to fetch, or [] when the result is not asking.
+ */
+export function assetsRequested(result) {
+  if (!result || result.status === "ok" || !Array.isArray(result.fetch)) return [];
+  return [...new Set(result.fetch.map((x) => String(x ?? "").trim()).filter(Boolean))].slice(0, 40);
 }
 
 const costNote = (notes, cost) => `${notes ?? ""}${cost !== null ? ` (cost $${cost.toFixed(2)})` : ""}`.trim();
@@ -793,11 +849,13 @@ async function runSeveral(job, ctx) {
     if (!result) return { phase, status: "failed", reason: `PLAN ended (claude exit ${claude.code}) but ${problem}` };
     if (result.status !== "ok") return { phase, status: result.status, reason: String(result.reason).slice(0, 1500) };
     writeFileSync(path.join(jobDir, "plan.md"), result.document);
-    return { phase, status: "ok", document: result.document, decided: result.decided ?? [], asks: result.asks ?? [], publish_ready: result.publish_ready, placeholders: result.placeholders ?? [], notes: costNote(result.notes, cost) };
+    return { phase, status: "ok", document: result.document, decided: result.decided ?? [], asks: result.asks ?? [], publish_ready: result.publish_ready, placeholders: result.placeholders ?? [], missing_materials: result.missing_materials ?? [], assets: result.assets ?? [], notes: costNote(result.notes, cost) };
   }
 
   if (phase === "BUILD") {
     const reports = [];
+    const stillMissing = [];
+    let anyRebuilt = false;
     for (const p of parts) {
       let proof = "";
       // A repo whose PR is already recorded GREEN is re-observed, never rebuilt.
@@ -808,13 +866,23 @@ async function runSeveral(job, ctx) {
         const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(partJob, { ...p.names, packageDir, jobDir, resultPath, planText: job.plan?.text ?? null, attachments: assets.attachments, thisPart: p.repo })}`;
         writeFileSync(path.join(jobDir, `prompt-BUILD-${p.repo}.md`), prompt);
         progress(`claude -p (${job.model}) for BUILD of ${p.repo}`);
-        const claude = await runClaude({ prompt, model: job.model, cwd: p.names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
+        let claude = await runClaude({ prompt, model: job.model, cwd: p.names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
         writeFileSync(path.join(jobDir, `claude-BUILD-${p.repo}.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
-        const { result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "BUILD");
+        let { result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "BUILD");
+        const wanted = job.drive?.folder_id ? assetsRequested(result) : [];
+        if (wanted.length) {
+          const fetched = await fetchDriveAssets(path.join(packageDir, "drive"), wanted, ctx, jobDir, progress);
+          if (!fetched.ok) return { phase, status: "failed", reason: `${p.repo}: ${fetched.reason}`, parts: reports };
+          rmSync(resultPath, { force: true });
+          claude = await runClaude({ prompt: `${prompt}\n\nFETCHED FOR YOU SINCE YOUR LAST TRY: ${wanted.join(", ")} — now in ${path.join(packageDir, "drive")}.`, model: job.model, cwd: p.names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
+          ({ result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "BUILD"));
+        }
+        if (Array.isArray(result?.missing_materials)) stillMissing.push(...result.missing_materials);
         if (!result) return { phase, status: "failed", reason: `BUILD of ${p.repo} ended (claude exit ${claude.code}) but ${problem}`, parts: reports };
         if (result.status !== "ok") return { phase, status: result.status, reason: `${p.repo}: ${String(result.reason).slice(0, 1400)}`, parts: reports };
         const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress);
         proof = [String(result.proof ?? "").slice(0, 6000), ...configLines].filter(Boolean).join("\n");
+        anyRebuilt = true;
       }
       let pr;
       try {
@@ -834,6 +902,8 @@ async function runSeveral(job, ctx) {
       check_state: red.some((r) => r.check_state === "RED") ? "RED" : red.length ? "PENDING" : "GREEN",
       proof: reports.map((r) => `── ${r.repo} ──\n${r.proof ?? "(re-observed; built in an earlier run)"}`).join("\n\n"),
       parts: reports,
+      // What is still missing after THIS rebuild, across every repo rebuilt (absent when none was).
+      ...(anyRebuilt ? { missing_materials: stillMissing } : {}),
       reason: red.length ? `not every PR is green: ${red.map((r) => `${r.repo} ${r.check_state} (${r.pr_url})`).join(", ")}` : undefined,
     };
   }
@@ -1029,6 +1099,32 @@ function selfTest() {
     ["a proof line carries the project, the NAME and an outcome — and has no room for a value", () => {
       const line = proofLine("west-peek-ventures", "RESEND_API_KEY", "set");
       return line === "pages-env: west-peek-ventures · RESEND_API_KEY · set" && proofLine("x", "y", "pwned").includes("· failed");
+    }],
+    // 23 Sep 2026 (0237): Drive is MAPPED on every phase that needs materials, assets are fetched
+    // on the model's behalf, and the package's own files outrank its stale checklists.
+    ["PLAN maps the folder and fetches nothing yet", () => { const d = driveStepFor({ drive: { folder_id: "F" } }, "PLAN"); return d.map === true && d.fetch.length === 0; }],
+    ["BUILD RE-MAPS the folder (a file added after the plan is seen) and fetches the plan's assets, once each", () => { const d = driveStepFor({ drive: { folder_id: "F" }, plan: { assets: ["logos/sengo.svg", " logos/sengo.svg", "fonts/maax.otf"] } }, "BUILD"); return d.map === true && d.fetch.join("|") === "logos/sengo.svg|fonts/maax.otf"; }],
+    ["LAND reads no Drive; no folder means no Drive work at all", () => !driveStepFor({ drive: { folder_id: "F" } }, "LAND").map && !driveStepFor({ drive: {} }, "BUILD").map && driveStepFor({ drive: {} }, "BUILD").fetch.length === 0],
+    ["a BUILD asking for more assets is read; an ok result is never a fetch request", () => assetsRequested({ status: "failed", reason: "needs assets", fetch: ["ep1/headshot.jpg", "ep1/headshot.jpg", ""] }).join() === "ep1/headshot.jpg" && assetsRequested({ status: "ok", fetch: ["x"] }).length === 0 && assetsRequested(null).length === 0],
+    ["the model's child never holds the Drive credential", () => !("GSC_SERVICE_ACCOUNT_JSON" in claudeChildEnv({ PATH: "/bin", GSC_SERVICE_ACCOUNT_JSON: "{}" })) && claudeChildEnv({ PATH: "/bin" }).PATH === "/bin"],
+    ["a job with a folder tells the model the manifest, that documents are here, how assets arrive, and the PACKAGE TRUTH rule", () => {
+      const paths = { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/r", attachments: [] };
+      const plan = renderContext({ phase: "PLAN", card: { id: "wc", title: "t" }, drive: { folder_id: "F", folder_url: "https://drive.google.com/drive/folders/F" }, request: "r", rules: {} }, paths);
+      const build = renderContext({ phase: "BUILD", card: { id: "wc", title: "t" }, drive: { folder_id: "F" }, request: "r", rules: {}, plan: { decided: [], asks: [], answers: [] } }, paths);
+      return plan.includes("DRIVE_MANIFEST: /p/drive/DRIVE_MANIFEST.json") && plan.includes("DOCUMENTS: every document (fetched: true) is already in /p/drive") && plan.includes("List every manifest path the build will use in `assets`") && plan.includes(PACKAGE_TRUTH_RULE) && build.includes('`fetch: ["<manifest path>"') && build.includes(PACKAGE_TRUTH_RULE) && !build.includes("pulled into");
+    }],
+    ["a job with no folder says so and carries no manifest lines", () => { const t = renderContext({ phase: "PLAN", card: { id: "wc", title: "t" }, drive: {}, request: "r", rules: {} }, { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/r" }); return t.includes("DRIVE_FOLDERS: none in the request") && !t.includes("DRIVE_MANIFEST"); }],
+    ["the PACKAGE TRUTH rule says: check the manifest, files outweigh documents, follow the one that declares precedence", () => /check DRIVE_MANIFEST\.json/.test(PACKAGE_TRUTH_RULE) && /present outweighs any document saying it is absent/.test(PACKAGE_TRUTH_RULE) && /declares precedence/.test(PACKAGE_TRUTH_RULE) && /never ask/.test(PACKAGE_TRUTH_RULE)],
+    ["the prompt file carries the PACKAGE TRUTH rule and the missing-materials and assets fields", () => { const p = readFileSync(PROMPT_FILE, "utf8"); return p.includes("**PACKAGE TRUTH:**") && p.includes("outweighs any document saying it is absent") && p.includes('"missing_materials"') && p.includes('"assets"') && p.includes("RE-MAPPED for this"); }],
+    ["missing_materials must name the item AND where it goes; assets and fetch must be paths", () =>
+      readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), publish_ready: true, missing_materials: [{ item: "Sengo logo" }] }), "PLAN").result === null &&
+      readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), publish_ready: true, missing_materials: [{ item: "Sengo logo", where: "portfolio grid" }], assets: ["logos/a.svg"] }), "PLAN").result?.missing_materials?.[0]?.where === "portfolio grid" &&
+      readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), publish_ready: true, assets: [3] }), "PLAN").result === null &&
+      readResult(JSON.stringify({ phase: "BUILD", status: "failed", reason: "needs assets", fetch: "all" }), "BUILD").result === null],
+    ["Drive is only ever MAPPED or FETCHED by name — never a whole-folder download", () => {
+      const src = readFileSync(fileURLToPath(import.meta.url), "utf8");
+      const calls = [...src.matchAll(/\[PULL_SCRIPT,\s*("[^"]*"|[A-Za-z_.?]+)/g)].map((m) => m[1]);
+      return calls.length >= 2 && calls.every((a) => a === '"--map"' || a === '"--fetch"');
     }],
     ["the prompt file exists and names the three phases", () => {
       const p = readFileSync(PROMPT_FILE, "utf8");

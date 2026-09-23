@@ -1,7 +1,8 @@
 import { describeModes, parseBlogAsk } from "../../shared/intake/blogHelp";
 import { parsePartnerMessageAsk } from "../../shared/intake/partnerMessage";
 import { WEB_PROPERTIES, isWebPropertyChange, parseWebPropertyAsk, partsFromHosts } from "../../shared/intake/webPropertyChange";
-import { requestAttachments, textBodyOf } from "../effects/mimeAttachments";
+import { textBodyOf } from "../effects/mimeAttachments";
+import { storeAttachments } from "./requestMaterials";
 import { splitQuoted } from "../../shared/intake/replyBody";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
@@ -1008,19 +1009,11 @@ export async function openAssignmentCard(
    * stored message they live in; a small message with a file is stored now, the way an oversize
    * one already was. Extracted on demand by `GET /api/work-cards/:id/attachments/:attId`.
    */
-  const { attachments, unread } = requestAttachments(input.raw);
+  // ONE MECHANISM (0237): the door and the thread keep a message's files the same way.
   const emlKey = input.emlKey;
-  const attachedNames: string[] = [];
-  if (emlKey) {
-    for (const a of attachments) {
-      await env.WP_OS_DB.prepare(
-        "INSERT INTO request_attachment (id, work_card_id, filename, media_type, bytes, eml_key, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-      )
-        .bind(`ratt_${crypto.randomUUID()}`, card.id, a.filename, a.mediaType, a.bytes, emlKey, FIRM_SCOPE)
-        .run();
-      attachedNames.push(a.filename);
-    }
-  }
+  const kept = await storeAttachments(env, { cardId: card.id, raw: input.raw, emlKey, firmScope: FIRM_SCOPE, source: "REQUEST" });
+  const attachedNames: string[] = kept.stored;
+  const unread = kept.unread;
   // ALWAYS, not only when something was attached: the line that says where the original is has to
   // be on every card, because "where is the email this came from" is the question this whole
   // overhaul exists to answer.
@@ -1029,7 +1022,7 @@ export async function openAssignmentCard(
       card.id,
       [
         ...(attachedNames.length ? [`ATTACHED: ${attachedNames.join(", ")}`] : []),
-        ...(attachments.length > 0 && !emlKey ? ["The attachment(s) could NOT be kept — the message itself was not kept."] : []),
+        ...(kept.attachments > 0 && !emlKey ? ["The attachment(s) could NOT be kept — the message itself was not kept."] : []),
         ...unread.map((u) => `Could NOT keep an attachment: ${u}.`),
         storedMessageLine(emlKey, input.storeNote),
       ].join("\n"),

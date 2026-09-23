@@ -104,6 +104,7 @@
   "tests/loadingRowsLiveInTheSlot.test.ts": 5,
   "tests/lp.test.ts": 23501,
   "tests/machines.test.ts": 9242,
+  "tests/missingMaterials.test.ts": 9000,
   "tests/mailAssignment.test.ts": 1937,
   "tests/marketMapCount.test.ts": 522,
   "tests/marketMapping.test.ts": 9,

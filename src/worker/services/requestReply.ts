@@ -1,6 +1,8 @@
 import type { Env } from "../env";
 import { ASSIGNING_PARTNERS } from "../../shared/intake/partnerAuthority";
 import { bulletsFrom, type ExecEmailSection } from "../../shared/email/execEmail";
+import { missingMaterialsSection } from "../../shared/work/missingMaterials";
+import { missingFor } from "./requestMaterials";
 import { partnerByFirmUserId } from "../../shared/registry/partners";
 import { sendOrPreview } from "./previewApproval";
 import { doneReplyLaneFor } from "./kindRules";
@@ -186,6 +188,12 @@ export async function replyToRequester(
    * nobody passed on renders the byte-identical footer it always did.
    */
   const routedBy = await routedByFor(env, card.assigned_from_card_id, who);
+  /*
+   * WHAT IS STILL MISSING, IN EVERY EMPLOYEE'S EMAIL (0237). One list on the card, one renderer:
+   * a question or a plan asks for each item and says how to send it; a preview or a finished piece
+   * of work names what went out without it. Every kind's ask, preview and DONE email passes here.
+   */
+  const missing = missingMaterialsSection(await missingFor(env, card.id), outcome === "DONE" || notice?.kind === "PREVIEW" ? "STILL" : "ASK");
   // One conversation per card: this note lands under the first notice sent about it.
   const replyOnThread = await threadRootFor(env, card.id);
   /*
@@ -215,6 +223,7 @@ export async function replyToRequester(
         outcome === "DONE"
           ? { label: "What I found", bullets: finding.length ? finding : ["Finished. The findings are on the card."] }
           : { label: "Where I am stuck", bullets: finding.length ? finding : ["I need a decision from you before I can go on."] },
+        ...(missing ? [missing] : []),
         ...(notes ? [notes] : []),
         {
           label: "Your call",

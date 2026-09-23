@@ -1,4 +1,5 @@
 import { personaPrompt } from "../registry/aiEmployeePersonas";
+import { readMissingMaterials, type MissingMaterial } from "./missingMaterials";
 
 /**
  * What an AI employee is allowed to decide while working a card (P52).
@@ -51,6 +52,8 @@ export interface EmployeeDecision {
   finding?: string;
   /** For `blocked`: what they need from a person, phrased as a question somebody can answer. */
   needs?: string;
+  /** For `blocked` and `done` (0237): the files or materials still needed from them, each with where it goes. */
+  missing?: MissingMaterial[];
   /** For `assign`: the first name of the employee whose job this is. */
   to?: string;
   /** For `assign`: the brief, in the assigner's own words — what to do and what "done" looks like. */
@@ -109,6 +112,8 @@ export interface LoopContext {
    * Empty when the caller does not allow hand-offs; the `assign` action is then not offered.
    */
   colleagues?: Array<{ name: string; role: string }>;
+  /** 0237: the files the partner sent with the request or a reply, named — the card's materials. */
+  materials?: string;
 }
 
 export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
@@ -125,6 +130,7 @@ export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
     `  ${ctx.title}`,
     ctx.next_action ? `  Next action as stated: ${ctx.next_action}` : "  No next action was stated.",
     ctx.description ? `  Context: ${ctx.description}` : "",
+    ctx.materials ? ctx.materials : "",
     "",
     // THE PARTNER'S OWN INSTRUCTION OUTRANKS THE DEFAULTS. It is placed after the work and before
     // the rules so it is read as part of the brief, and said to be authoritative so a model does
@@ -200,9 +206,13 @@ export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
       : []),
     '  blocked — you cannot go further without a person. Say exactly what you need, phrased as a',
     "           question somebody can answer. Use this for a judgement that is not yours to make,",
-    "           a credential you do not have, or a fact only the partners know.",
+    "           a credential you do not have, or a fact only the partners know. When what you need",
+    "           is a FILE or material from them (a logo, a deck, a spreadsheet), also list each in",
+    "           missing with where it goes — they are asked to add it to the Drive folder or attach",
+    "           it to a reply, and it reaches your next run.",
     "",
-    '  done   — the work is finished. Say what the answer is.',
+    '  done   — the work is finished. Say what the answer is. If you had to finish without a file',
+    "           or material they never sent, list it in missing so the finished email names it.",
     "",
     "RULES:",
     "- Never claim a fact you have not established. If you have not looked it up, you do not know it.",
@@ -219,8 +229,8 @@ export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
     '  {"action":"look_at","start_url":"https://…","objective":"what to judge about how it looks"}',
     '  {"action":"note","finding":"…"}',
     ...(ctx.colleagues && ctx.colleagues.length > 0 ? ['  {"action":"assign","to":"Wyatt","brief":"what to do and what finished looks like"}'] : []),
-    '  {"action":"blocked","needs":"…"}',
-    '  {"action":"done","finding":"…"}',
+    '  {"action":"blocked","needs":"…","missing":[{"item":"the thing","where":"where it goes"}]}',
+    '  {"action":"done","finding":"…","missing":[]}',
   ]
     .filter((l) => l !== "")
     .join("\n");
@@ -271,6 +281,10 @@ export function parseDecision(raw: string): EmployeeDecision | null {
   if (startUrl && /^https:\/\/\S+$/i.test(startUrl)) d.start_url = startUrl;
   if (finding) d.finding = finding;
   if (needs) d.needs = needs;
+  if (Array.isArray(parsed.missing)) {
+    const missing = readMissingMaterials(parsed.missing);
+    if (missing.length) d.missing = missing;
+  }
 
   // An action whose required field is missing is not a decision. `look` with no question would
   // search for nothing; `done` with no finding is a claim of success with no content.

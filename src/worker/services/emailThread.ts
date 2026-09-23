@@ -8,6 +8,7 @@ import { partnerByEmail, PREVIEW_PARTNER, type Partner } from "../../shared/regi
 import type { InstructionPiece } from "../../shared/work/instruction";
 import { answerBlock } from "./blocks";
 import { textBodyOf } from "../effects/mimeAttachments";
+import { storeAttachments } from "./requestMaterials";
 import { answerQuestionForCard, type QuestionAnswerer, type QuestionAnswerResult } from "./questionRouting";
 import { previewAllPartnerEmailsIsOn } from "./kindRules";
 import { routedByFor } from "./requestReply";
@@ -101,6 +102,8 @@ export interface SteerFromReply {
   thread: EmailThreadRow | null;
   /** What the partner WROTE. Never the quoted original. Empty when they wrote nothing above it. */
   written: string;
+  /** 0237: the files the reply carried, kept against the card for its next run. */
+  attached?: string[];
   /** Why it was not acted on, for the routing card. Empty when it was. */
   reason: string;
   /** True when the message carried one of our tokens at all — an ordinary email carries none. */
@@ -226,7 +229,32 @@ export async function steerFromReply(
     references: message.references,
     subject: message.subject,
   });
-  const written = split.written.trim();
+  let written = split.written.trim();
+  /*
+   * A REPLY'S FILES ARE KEPT, FOR EVERY CARD (23 Sep 2026, 0237). "Here's the logo" with the logo
+   * attached used to lose the logo: this door read the text and dropped the MIME. The files are now
+   * kept against the card by the same mechanism the door uses for an opening email, so the card's
+   * next run — whatever its kind, whoever's card it is — is handed them. A reply that is ONLY files
+   * is still an answer: it says what it carried.
+   */
+  let attached: string[] = [];
+  if (thread.object_type === "work_card") {
+    const kept = await storeAttachments(env, { cardId: thread.object_id, raw: message.raw, emlKey: message.emlKey, firmScope: thread.firm_scope, source: "REPLY" });
+    attached = kept.stored;
+    if (kept.stored.length || kept.unread.length || (kept.attachments > 0 && !message.emlKey)) {
+      await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || ?2, 1, 16000) WHERE id = ?1")
+        .bind(
+          thread.object_id,
+          [
+            ...(kept.stored.length ? [`• ATTACHED WITH A REPLY from ${authority.partnerAddress}: ${kept.stored.join(", ")}`] : []),
+            ...(kept.attachments > 0 && !message.emlKey ? ["• A reply's attachment(s) could NOT be kept — the message itself was not kept."] : []),
+            ...kept.unread.map((u) => `• Could NOT keep a reply's attachment: ${u}.`),
+          ].join("\n"),
+        )
+        .run();
+    }
+    if (written.length < 2 && attached.length) written = `Attached: ${attached.join(", ")}`;
+  }
   if (written.length < 2) {
     return {
       steered: false,
@@ -365,7 +393,7 @@ export async function steerFromReply(
     },
   });
 
-  return { steered: true, thread, written, reason: "", attempted: true, answered };
+  return { steered: true, thread, written, reason: "", attempted: true, answered, attached };
 }
 
 // ── A reply lands on a card that is neither BLOCKED nor OPEN/IN_PROGRESS (22 Sep 2026) ──────────

@@ -137,9 +137,13 @@ export function pdfAttachments(raw: string): { attachments: Attachment[]; unread
  * attached" is a specification, and the photo is an asset the plan needs. Same parser as the
  * decks, a wider net. Inline images (`Content-ID`, no disposition) count too: a photo dragged
  * into Gmail arrives that way.
+ *
+ * AND EVERY FILE SENT AS AN ATTACHMENT (23 Sep 2026, 0237). "Send me the fund model" is answered
+ * with an .xlsx, "the font is attached" with an .otf, a speaker list with a .csv. Any part the
+ * client marked `Content-Disposition: attachment` is a file she sent — kept, whatever its type.
  */
 export function requestAttachments(raw: string): { attachments: Attachment[]; unread: string[] } {
-  return attachmentsOf(raw, (type) => type.startsWith("image/") || type.includes("application/pdf"), 10);
+  return attachmentsOf(raw, (type, sentAsFile) => sentAsFile || type.startsWith("image/") || type.includes("application/pdf"), 10);
 }
 
 /**
@@ -218,7 +222,7 @@ export function attachmentBytes(raw: string, filename: string): { bytes: Uint8Ar
   }
 }
 
-function attachmentsOf(raw: string, accept: (type: string) => boolean, max = MAX_ATTACHMENTS): { attachments: Attachment[]; unread: string[] } {
+function attachmentsOf(raw: string, accept: (type: string, sentAsFile: boolean) => boolean, max = MAX_ATTACHMENTS): { attachments: Attachment[]; unread: string[] } {
   const attachments: Attachment[] = [];
   const unread: string[] = [];
 
@@ -246,9 +250,12 @@ function attachmentsOf(raw: string, accept: (type: string) => boolean, max = MAX
 
   for (const part of parts) {
     const type = (headerIn(part, "content-type") ?? "").toLowerCase();
-    if (!accept(type)) continue;
+    if (type.startsWith("multipart/")) continue;
+    // A part the client marked as an attachment is a file she sent, whatever its type (a .csv too).
+    const sentAsFile = (headerIn(part, "content-disposition") ?? "").toLowerCase().startsWith("attachment");
+    if (!accept(type, sentAsFile)) continue;
     // A text/html leaf is never a file; an unnamed image with no disposition is a body decoration.
-    if (type.startsWith("text/")) continue;
+    if (type.startsWith("text/") && !sentAsFile) continue;
 
     const filename = filenameIn(part);
     if (attachments.length >= max) {

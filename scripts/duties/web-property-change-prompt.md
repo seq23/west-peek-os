@@ -69,8 +69,16 @@ the photo is in ATTACHMENTS; use it. A request with no folder and no attachment 
 tagline to X") is a whole request.
 
 1. Read `RUNBOOK.md` in the worktree. Then read the request, then the assets it references
-   (attachments under `PACKAGE_DIR/attachments/`, a pulled folder under `PACKAGE_DIR/drive/` —
-   a Google Doc arrives as `.txt`, a Sheet as `.csv`, Slides as `.pdf`).
+   (attachments under `PACKAGE_DIR/attachments/`; a Drive folder is MAPPED, not downloaded:
+   `PACKAGE_DIR/drive/DRIVE_MANIFEST.json` lists every file, and the documents are already in
+   `PACKAGE_DIR/drive/` — a Google Doc arrives as `.txt`, a Sheet as `.csv`, Slides as `.pdf`).
+   Images, logos, fonts and media stay in Drive: you do not hold the Drive credential, so list
+   each manifest path the build will use in `assets` and the script fetches them before BUILD.
+   **PACKAGE TRUTH:** before you list anything as missing or ask about it, check
+   DRIVE_MANIFEST.json (and fetch the file if you need to see it). A file that is present
+   outweighs any document saying it is absent. When two package documents conflict, follow the
+   one that declares precedence ("this README controls") and name the conflict in the plan —
+   never ask the partner about it.
 2. **You have tools; use them for whatever the request needs to plan it.** You are Claude Code on
    the owner's Mac. A request may say "grab the founder photo from their site", "use the logo on
    this page", "make it look like this other page", "read the doc at this link". Fetch a public
@@ -128,6 +136,11 @@ tagline to X") is a whole request.
    in a few words ("Sengo logo", "episode records", "approved orange hex"). A plan that is not
    ready is BUILT to a preview link and lands only on a second approval; you do not decide that,
    you only say the truth about readiness. Never hide a gap to make the plan look ready.
+   **Every gap the partner can fill is a MISSING MATERIAL**: list it in `missing_materials` as
+   `{ "item": "<the thing, e.g. the Sengo logo (SVG or PNG)>", "where": "<where it goes, e.g. the
+   portfolio grid on the ventures home page>" }`. The OS emails that list with how to send each one
+   (the Drive folder, or attached to a reply) — you never write that request into the plan yourself.
+   Only what is truly absent from the manifest AND the attachments is missing.
 6. Do NOT edit the repo in this phase.
 7. Write `RESULT_PATH`:
    ```json
@@ -136,6 +149,8 @@ tagline to X") is a whole request.
      "asks": [{ "question": "…?", "recommended": "<your default, one line>" }],
      "publish_ready": true,
      "placeholders": [],
+     "missing_materials": [],
+     "assets": ["<DRIVE_MANIFEST path the build will use>"],
      "notes": "<one line>" }
    ```
    If something the request needs is missing, forbidden or out of reach:
@@ -146,7 +161,12 @@ tagline to X") is a whole request.
 Goal: the change, proven, as a PR — on the branch and worktree in the job context.
 
 1. Read `RUNBOOK.md`, the plan (its text is in the job context), the partner's answers, and the
-   package. The answers win over the plan where they differ.
+   package. The answers win over the plan where they differ. **The package was RE-MAPPED for this
+   run and new attachments were fetched**: before you build a placeholder, check each of the plan's
+   placeholders and missing materials against DRIVE_MANIFEST.json and ATTACHMENTS — a file the
+   partner added since the plan is used, not placeholdered. If you need a Drive asset that is not
+   fetched yet, finish with `"status": "failed"`, `"reason": "needs assets"` and
+   `"fetch": ["<manifest path>"]`; the script fetches it and runs you once more.
 2. Make the change following the RUNBOOK's "how to make a change" exactly (build outputs,
    `lastmod`, `dist/` if the repo commits it, redirects, canonical/title rules).
 3. Prove it: run the repo's `npm run validate` (or what the RUNBOOK names); take screenshots at
@@ -158,7 +178,9 @@ Goal: the change, proven, as a PR — on the branch and worktree in the job cont
    ```json
    { "phase": "BUILD", "status": "ok", "pr_url": "<url>", "pr_number": <n>, "branch": "<branch>",
      "pages_env": [{ "project": "west-peek-ventures", "name": "RESEND_API_KEY" }],
-     "proof": "<validator output summary, screenshot file names, link-check results>", "notes": "<one line>" }
+     "proof": "<validator output summary, screenshot file names, link-check results>",
+     "missing_materials": [{ "item": "…", "where": "…" }],
+     "notes": "<one line>" }
    ```
    `pages_env` is the delivery config you are ASKING the script to set — project and name only,
    omitted or `[]` when the change needs none. You do not set it, you do not report it set, and you
@@ -166,7 +188,8 @@ Goal: the change, proven, as a PR — on the branch and worktree in the job cont
    do not report green.
    The script also reads the Cloudflare Pages preview URL from the PR's deployment — you do not
    report one. Where the plan named placeholders, build them as STRUCTURED placeholders (a clearly
-   marked block, never invented content) and list them in `proof`.
+   marked block, never invented content) and list them in `proof`. `missing_materials` is what is
+   STILL missing after this rebuild — `[]` when everything arrived; the preview email names it.
    If you cannot finish, `{ "phase": "BUILD", "status": "failed", "reason": "<why, for an engineer>" }`;
    if a decision you were not given is needed, `"status": "blocked"` with the question.
 
