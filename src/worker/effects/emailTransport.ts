@@ -25,6 +25,12 @@ export interface EmailPayload {
    * type rather than a second send path.
    */
   to: string | readonly string[];
+  /**
+   * Copied, never addressed (0239, 23 Sep 2026: "cc Scooter"). PARTNERS ONLY in practice — the one
+   * writer is `services/ccPartners.ts`, and `assertPreviewLane` below holds cc to exactly the same
+   * rule as `to`, so a cc can never carry a message anywhere a To could not.
+   */
+  cc?: readonly string[];
   subject: string;
   /** Plain text. Always present: the part every client renders and every log can read. */
   text: string;
@@ -156,8 +162,9 @@ export function applyPreviewBoundary(env: unknown, payload: EmailPayload): Email
         });
         return {
           ...payload,
-          // Replaced, never filtered. This is the whole boundary.
+          // Replaced, never filtered. This is the whole boundary — and a cc goes with it.
           to: [PREVIEW_RECIPIENT],
+          cc: [],
           subject: previewSubject(payload.subject),
           text: `${header}${payload.text}`,
           ...(payload.html
@@ -245,7 +252,8 @@ export class SendBlocked extends Error {
 
 /** The check itself. Throws `SendBlocked`, or returns. */
 export function assertPreviewLane(env: unknown, payload: EmailPayload): void {
-  const recipients = [payload.to].flat().map((a) => a.trim().toLowerCase()).filter((a) => a.length > 0);
+  // To AND cc: a copied address is a recipient like any other (0239).
+  const recipients = [...[payload.to].flat(), ...(payload.cc ?? [])].map((a) => a.trim().toLowerCase()).filter((a) => a.length > 0);
   if (recipients.length === 0) return;
 
   const outside = recipients.filter((a) => !isPartnerEmail(a));

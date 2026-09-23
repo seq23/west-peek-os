@@ -98,8 +98,10 @@ export async function sendViaCloudflare(
   // A list when the message is addressed to more than one person; the binding takes either, and
   // the array form is spread because the payload's is readonly and the platform's type is not.
   const to: string | string[] = typeof payload.to === "string" ? payload.to : [...payload.to];
+  const cc = [...(payload.cc ?? [])];
   const result = await email.send({
     to,
+    ...(cc.length ? { cc } : {}),
     from: { email: from, name: "West Peek Ventures" },
     // Defused at the transport so neither send path can loop — see defuseTriggers.
     subject: defuseTriggers(payload.subject),
@@ -123,6 +125,6 @@ export async function sendViaCloudflare(
     sent: true,
     provider: "cloudflare",
     provider_message_id: messageId,
-    detail: `Sent to ${[payload.to].flat().join(", ")} via Cloudflare from ${from}${messageId ? ` (${messageId})` : ""}.`,
+    detail: `Sent to ${[payload.to].flat().join(", ")}${cc.length ? ` (cc ${cc.join(", ")})` : ""} via Cloudflare from ${from}${messageId ? ` (${messageId})` : ""}.`,
   };
 }

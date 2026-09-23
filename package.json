@@ -86,6 +86,7 @@
     "validate:artifacts": "node scripts/validate/a-build-has-one-producer.mjs && node scripts/validate/a-build-has-one-producer.mjs --self-test",
     "validate:duty-executor": "node scripts/validate/a-duty-has-an-executor.mjs && node scripts/validate/a-duty-has-an-executor.mjs --self-test && node scripts/claimer/local-job-claimer.mjs --self-test && node scripts/duties/web-property-change.mjs --self-test && node scripts/drive/pull.mjs --self-test",
     "validate:no-land-without-approval": "node scripts/validate/no-land-without-approval.mjs && node scripts/validate/no-land-without-approval.mjs --self-test",
+    "validate:cc-partners-only": "node scripts/validate/cc-partners-only.mjs && node scripts/validate/cc-partners-only.mjs --self-test",
     "validate:delivery-config": "node scripts/validate/only-the-script-sets-delivery-config.mjs && node scripts/validate/only-the-script-sets-delivery-config.mjs --self-test",
     "validate:kind-rule-switches": "node scripts/validate/a-switch-is-a-switch-on-both-sides.mjs && node scripts/validate/a-switch-is-a-switch-on-both-sides.mjs --self-test",
     "validate:effect-refetch": "node scripts/validate/an-effect-cannot-refetch-itself.mjs && node scripts/validate/an-effect-cannot-refetch-itself.mjs --self-test",

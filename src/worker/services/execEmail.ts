@@ -41,6 +41,8 @@ import { EmployeeSenderError, employeeSenderHeader } from "../../shared/registry
 
 export interface PartnerEmailInput {
   to: string;
+  /** 0239: partners copied on a finished email. Refused whole if any address is not a partner. */
+  cc?: readonly string[];
   email: ExecEmailInput;
   /** What the email is about, for the event spine. */
   objectType: string;
@@ -109,7 +111,7 @@ function senderFor(employee: string): { from: string } | { refusal: string } {
 
 async function transport(
   env: Env,
-  message: { to: string | readonly string[]; subject: string; text: string; html: string; from: string; headers?: Record<string, string> },
+  message: { to: string | readonly string[]; cc?: readonly string[]; subject: string; text: string; html: string; from: string; headers?: Record<string, string> },
 ): Promise<EmailSendResult> {
   const payload = { ...message, replyTo: INTAKE_MAILBOX };
   return isCloudflareEmailEnabled(env) ? await sendViaCloudflare(env, payload) : await sendViaResend(env, payload);
@@ -143,6 +145,12 @@ export async function sendPartnerEmail(env: Env, input: PartnerEmailInput): Prom
 
   if (!ASSIGNING_PARTNERS.includes(to)) {
     return { sent: false, to, reason: `${to} is not one of the two partner addresses; an employee's email goes nowhere else`, subject: rendered.subject };
+  }
+  // A CC IS HELD TO THE SAME RULE AS THE TO (0239): partners only, or nothing is sent.
+  const cc = [...new Set((input.cc ?? []).map((a) => a.trim().toLowerCase()).filter((a) => a && a !== to))];
+  const strangerCc = cc.find((a) => !ASSIGNING_PARTNERS.includes(a));
+  if (strangerCc) {
+    return { sent: false, to, reason: `not sent — cc ${strangerCc} is not one of the two partner addresses; a cc goes nowhere a To could not`, subject: rendered.subject };
   }
   if (!aiOutboundSwitches(env).toPartners) {
     return { sent: false, to, reason: "employees cannot email the partners: WP_OS_AI_EMAIL_PARTNERS is off", subject: rendered.subject };
@@ -187,13 +195,13 @@ export async function sendPartnerEmail(env: Env, input: PartnerEmailInput): Prom
     const headers = input.replyOnThread
       ? { References: `${threadReference(input.replyOnThread)} ${thread.headers.References}`, "In-Reply-To": threadReference(input.replyOnThread) }
       : thread.headers;
-    result = await transport(env, { to, subject: rendered.subject, text: rendered.text, html: rendered.html, from: sender.from, headers });
+    result = await transport(env, { to, cc, subject: rendered.subject, text: rendered.text, html: rendered.html, from: sender.from, headers });
   } catch (err) {
     result = { sent: false, provider: "resend", detail: err instanceof Error ? err.message : String(err), provider_message_id: null };
   }
   if (result.sent) await recordThreadDelivery(env, thread.token, result);
   await record(env, actor, result.sent ? events.sent : events.notSent, {
-    to, subject: rendered.subject, detail: result.detail, provider_message_id: result.provider_message_id,
+    to, ...(cc.length ? { cc } : {}), subject: rendered.subject, detail: result.detail, provider_message_id: result.provider_message_id,
     thread_token: thread.token,
   });
   return { sent: result.sent, to, reason: result.detail, subject: rendered.subject, threadToken: thread.token };

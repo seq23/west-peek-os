@@ -995,6 +995,10 @@ export async function openAssignmentCard(
   await env.WP_OS_DB.prepare("UPDATE work_card SET requested_by_email = ?2 WHERE id = ?1")
     .bind(card.id, input.partnerAddress.toLowerCase())
     .run();
+  // "CC SCOOTER" IN THE REQUEST ITSELF (0239) — the partner's own written words, never a quote.
+  // A hand-off below (`assignCard`) carries the list to the card that does the work.
+  const { recordCcFrom } = await import("./ccPartners");
+  await recordCcFrom(env, card.id, written, input.partnerAddress);
 
   /*
    * BLOG HELP IS READ AT THE DOOR (16 Sep 2026). "Help me make an outline for a blog post on X",

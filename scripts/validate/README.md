@@ -159,3 +159,8 @@ violations) on breach and proves its own detection with a self-test fixture run.
   route behind `authorize()` on `inbound_message.read_raw`. Hard-fails on zero sources, zero door
   call sites or zero R2 puts; `--self-test` plants twelve bypasses including each real pre-fix
   shape.
+- `cc-partners-only.mjs` (`npm run validate:cc-partners-only`, 23 Sep 2026, migration 0239) — a cc
+  on an employee's email reaches only a partner, only because the partner who asked for the work
+  said so, and only on finished work: one writer of `work_card.cc_emails`, the requester check
+  before the write, resolution through the partner registry, and the send and the preview lane
+  holding a cc to everything a To already is. Nine planted defects in its self-test.
