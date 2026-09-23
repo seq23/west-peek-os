@@ -6994,6 +6994,13 @@ body {
 
 .wc-inline-list { display: inline-flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-md); }
 .wc-quiet { color: var(--wp-muted); }
+.wc-chip {
+  padding: var(--space-3xs) var(--space-md);
+  border-radius: var(--radius-pill);
+  background: var(--wp-neutral-tint);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
 .wc-switch-row { display: flex; align-items: center; gap: var(--space-sm); }
 
 .wc-pair {

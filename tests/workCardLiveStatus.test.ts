@@ -280,7 +280,7 @@ describe("the board and the card page serve one title and one run", () => {
       owner_id: "aie_porter",
       kind: "WEB_PROPERTY_CHANGE",
     } as never);
-    await env.WP_OS_DB.prepare("UPDATE work_card SET assigned_from_card_id = ?2, requested_by_email = 'sequoia@westpeek.ventures' WHERE id = ?1").bind(card.id, parent.id).run();
+    await env.WP_OS_DB.prepare("UPDATE work_card SET assigned_from_card_id = ?2, requested_by_email = 'sequoia@westpeek.ventures', cc_emails = '[\"scooter@westpeek.ventures\"]' WHERE id = ?1").bind(card.id, parent.id).run();
     await env.WP_OS_DB.prepare("INSERT INTO web_property_change (work_card_id, target_repo, property_host, ask, phase, preview_only) VALUES (?1, 'join-west-peek-main', 'joinwestpeek.com', 'Porter, we need the redesign.', 'BUILD', 1)").bind(card.id).run();
     const claimed = new Date(Date.now() - 60_000).toISOString();
     await env.WP_OS_DB.prepare(
@@ -299,7 +299,9 @@ describe("the board and the card page serve one title and one run", () => {
     expect(row.current_run).toMatchObject({ status: "CLAIMED", progress_note: "building", run_kind: "LOCAL_JOB" });
 
     const page = (await (await handleGetWorkCard({ env, identity: SEQUOIA as never, params: { id: card.id }, request: req() } as never)).json()) as Record<string, unknown>;
-    for (const k of ["plain_title", "site_phase", "site_host", "site_preview_only", "current_run", "parent_title"]) expect(page[k], k).toEqual(row[k]);
+    // 0239: the cc the expanded card draws as "cc Scooter" is on the board too, not only on the card page.
+    expect(JSON.parse(String(row.cc_emails))).toEqual(["scooter@westpeek.ventures"]);
+    for (const k of ["plain_title", "site_phase", "site_host", "site_preview_only", "current_run", "parent_title", "cc_emails"]) expect(page[k], k).toEqual(row[k]);
 
     // And the one reader says the same thing about both.
     const a = liveStatus(row as never, ME);

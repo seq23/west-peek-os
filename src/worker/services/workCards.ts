@@ -1189,6 +1189,9 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
             -- reads to say "Working now" only while something actually holds the card — the
             -- sweep's lease — plus the step counter for the Technical line.
             wc.lease_until, COALESCE(wc.work_steps, 0) AS work_steps,
+            -- 0239: the partners cc'd on the finished email, for the expanded card's
+            -- "Finished email goes to" row (the single-card route serves it through SELECT *).
+            wc.cc_emails,
             -- A WEBSITE JOB'S OWN FACTS, for the plain title and the Plan → Build → Preview → Live
             -- track on the collapsed row (shared/work/siteChange.ts). NULL on every other card.
             wpc.property_host AS site_host, wpc.target_repo AS site_repo, wpc.phase AS site_phase,

@@ -99,6 +99,8 @@ export interface WorkCardRow {
   site_merge_sha?: string | null;
   site_publish_ready?: number | null;
   site_ask?: string | null;
+  /** 0239: a JSON list of partner addresses cc'd on the finished email. */
+  cc_emails?: string | null;
   looks?: Array<{
     id: string; objective: string; start_url: string; status: string;
     result_text: string | null; refusal_reason: string | null;

@@ -56,6 +56,20 @@ export interface CardExpandedProps {
 
 const TRIES = 3;
 
+/** The partners cc'd on the finished email (0239), by first name — "cc Scooter". */
+function ccNames(json: string | null | undefined): string[] {
+  if (!json) return [];
+  try {
+    const list = JSON.parse(json) as unknown;
+    if (!Array.isArray(list)) return [];
+    return list
+      .filter((e): e is string => typeof e === "string" && e.trim().length > 0)
+      .map((e) => partnerByEmail(e)?.fullName.split(" ")[0] ?? e);
+  } catch {
+    return [];
+  }
+}
+
 /** The request as she wrote it, from the card's own `request_json`, before the site row exists. */
 function askFromRequest(json: string | null | undefined): string | null {
   if (!json) return null;
@@ -116,6 +130,17 @@ export function CardExpanded({
   const sitePreview = sitePreviewBadge(c);
   const recipient = recipientWords(c, me);
   const asked = askedBy(c, { id: me.id, email: me.email });
+  const cc = ccNames(c.cc_emails);
+  const recipientNode: ReactNode = (
+    <span className="wc-inline-list">
+      {recipient}
+      {cc.map((n) => (
+        <span key={n} className="wc-chip" data-testid={`work-card-cc-${c.id}`}>
+          cc {n}
+        </span>
+      ))}
+    </span>
+  );
 
   async function sendNote(id: string): Promise<void> {
     setBusy(true);
@@ -302,7 +327,7 @@ export function CardExpanded({
           onNavigate={onNavigate}
           site={site}
           owner={owner ?? "Porter"}
-          recipient={recipient}
+          recipient={recipientNode}
           timeline={timeline}
           lead={lead}
           tail={showMeFirst}
@@ -362,10 +387,10 @@ export function CardExpanded({
                     <dd>{readableDate(c.due_at)}</dd>
                   </>
                 )}
-                {(c.result_recipient || c.requested_by_email) && (
+                {(c.result_recipient || c.requested_by_email || cc.length > 0) && (
                   <>
                     <dt>Finished work goes to</dt>
-                    <dd>{recipient}</dd>
+                    <dd>{recipientNode}</dd>
                   </>
                 )}
                 {showMeFirst}

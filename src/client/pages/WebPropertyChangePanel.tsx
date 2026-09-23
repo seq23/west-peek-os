@@ -149,7 +149,7 @@ export function SiteDetails({
   gate?: ReactNode;
   cardId: string;
   onNavigate: (k: string) => void;
-  recipient: string;
+  recipient: ReactNode;
   lead?: ReactNode;
   /** Rows every card shares that belong after the site's own (the "Hold for you first" switch). */
   tail?: ReactNode;
@@ -392,7 +392,7 @@ export function WebPropertyChangePanel({
   /** The row, already fetched by the card (`useSiteChange`), so it is read once for this panel and the note beside it. */
   site?: { data: ChangeRow | null; loading: boolean; status: number | null };
   owner?: string;
-  recipient?: string;
+  recipient?: ReactNode;
   timeline?: ReactNode;
   lead?: ReactNode;
 }): JSX.Element {
