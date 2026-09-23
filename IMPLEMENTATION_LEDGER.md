@@ -6697,3 +6697,26 @@ Owner approval: "hand a work card to the other partner, with primary and seconda
   primary, and a secondary equal to the primary. `validate:no-land-without-approval` gate 15 (eleven
   new planted defects, negative-proved against the real source by removing the unblock refusal).
   `tests/partnerHandOff.test.ts` (24).
+
+## Hand-off: a wider reader, confirm-when-unsure, and no emails to the secondary (23 Sep 2026)
+
+Owner, after the first live hand-off: "we need to be able to interpret more than just 'hand this to
+scooter' as the handoff", then: cc the previous primary on the one hand-off email, and after that the
+secondary gets no emails.
+
+- **One reader, wider.** `ownershipIntentIn` (shared/work/partnerOwnership.ts) reads the first written
+  paragraph, sentence by sentence, with partner names and addresses taken from the registry: "Scooter
+  will take it from here", "Scooter owns the rest", "let Scooter finish this", "Scooter's got it",
+  "over to Scooter", "assign to Scooter", and more; take-back: "I'll take it back", "give it back to
+  me", "I'm taking this over", "I've got it from here". Take-back words count only from the secondary.
+- **Unsure → confirm, never guess.** A sentence that names the other partner and sounds like ownership
+  without saying it gets one question from Porter ("Did you mean hand this card to Scooter? Reply
+  'yes' and I will.") and nothing else is done with it; "yes" on that question's thread (or the next
+  note) performs it. Talk about the partner ("ask Scooter…", "Scooter says…") is neither.
+  **Guard:** any message with "cc" plus a partner's name never hands off; cc keeps its 0239 meaning.
+- **Emails.** The one context email to the new primary now carries the previous primary in Cc, and
+  the ack sentence inside it; the separate ack email is gone. `ccOfCard` no longer adds the secondary:
+  after the hand-off the secondary gets no emails, and sees the card in the OS as Secondary.
+  An explicit "cc Scooter" from the primary still copies him.
+- **Tests.** `tests/partnerHandOff.test.ts`: 20 should-hand-off and 18 should-not phrasings, the cc
+  guard over every positive phrasing, take-back and unsure tables, confirm by reply and by note.
