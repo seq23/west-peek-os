@@ -27,6 +27,7 @@ import { cardKind, startableByHand } from "../../shared/work/cardKinds";
 import { originBadgeText, originOf } from "../../shared/work/origin";
 import { WEB_PROPERTIES, hostsSentence, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
 import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
+import { plainTitle } from "../../shared/work/siteChange";
 
 /**
  * Work spine (P3): the unit of governed work. State transitions are enforced
@@ -760,8 +761,32 @@ export async function handleGetWorkCard(ctx: RouteContext): Promise<Response> {
     lastRunCost = null;
   }
 
+  // THE SAME FACTS THE BOARD SERVES (23 Sep 2026, the work-card redesign): the run her Mac holds,
+  // the website job's own row, and the card it was handed from — so the card's page and the desk's
+  // expanded card read one status and one title, never two.
+  const runByCard = await liveRunsByCard(ctx.env, card.id);
+  const site = await ctx.env.WP_OS_DB.prepare(
+    `SELECT wpc.property_host AS site_host, wpc.target_repo AS site_repo, wpc.phase AS site_phase,
+            wpc.preview_url AS site_preview_url, wpc.land_approved_at AS site_land_approved_at,
+            wpc.merge_sha AS site_merge_sha, wpc.publish_ready AS site_publish_ready,
+            wpc.preview_only AS site_preview_only,
+            substr(COALESCE(wpc.request_text, wpc.ask), 1, 600) AS site_ask
+       FROM web_property_change wpc WHERE wpc.work_card_id = ?1`,
+  )
+    .bind(card.id)
+    .first<Record<string, unknown>>();
+  const fromCard = (card as { assigned_from_card_id?: string | null }).assigned_from_card_id ?? null;
+  const parent = fromCard
+    ? await ctx.env.WP_OS_DB.prepare("SELECT title FROM work_card WHERE id = ?1").bind(fromCard).first<{ title: string }>()
+    : null;
+  const siteFacts = { site_host: null, site_repo: null, site_phase: null, site_preview_url: null, site_land_approved_at: null, site_merge_sha: null, site_publish_ready: null, site_preview_only: null, site_ask: null, ...(site ?? {}) };
+
   return json({
     ...card,
+    ...siteFacts,
+    parent_title: parent?.title ?? null,
+    current_run: runByCard.get(card.id) ?? null,
+    plain_title: plainTitleOf({ ...card, ...siteFacts, parent_title: parent?.title ?? null }),
     // HELD (0227): the client reads `state`, not `held_at`, everywhere it renders a badge, a
     // masthead or a band — the same union `CARD_STATES` already has a HELD entry for. The database
     // never stores the word (see migration 0227); this is the one place a single card is handed to
@@ -1063,6 +1088,57 @@ export async function handleReleaseWorkCard(ctx: RouteContext): Promise<Response
  * UNASSIGNED WORK IS ITS OWN GROUP and deliberately first. A card nobody owns is the most likely
  * thing in this system to be quietly dropped.
  */
+/**
+ * THE RUN HER MAC HOLDS, PER CARD (23 Sep 2026, the work-card redesign). A QUEUED or CLAIMED
+ * `subscription_seat_run` is the only evidence that something is actually working a card on the
+ * Mac; `liveStatus` says "Working now" from a CLAIMED run that has pinged recently and from nothing
+ * weaker. The newest live run per card wins (the 0219 index allows one live LOCAL_JOB per card).
+ */
+export interface LiveRunRow {
+  work_card_id: string;
+  status: string;
+  run_kind: string | null;
+  claimed_by: string | null;
+  claimed_at: string | null;
+  progressed_at: string | null;
+  progress_note: string | null;
+  created_at: string;
+}
+
+export async function liveRunsByCard(env: Env, cardId?: string): Promise<Map<string, Omit<LiveRunRow, "work_card_id">>> {
+  const rows = (
+    await env.WP_OS_DB.prepare(
+      `SELECT work_card_id, status, run_kind, claimed_by, claimed_at, progressed_at, progress_note, created_at
+         FROM subscription_seat_run
+        WHERE work_card_id IS NOT NULL AND status IN ('QUEUED', 'CLAIMED')
+          ${cardId ? "AND work_card_id = ?1" : ""}
+        ORDER BY created_at ASC`,
+    )
+      .bind(...(cardId ? [cardId] : []))
+      .all<LiveRunRow>()
+  ).results ?? [];
+  const out = new Map<string, Omit<LiveRunRow, "work_card_id">>();
+  for (const { work_card_id, ...run } of rows) out.set(work_card_id, run);
+  return out;
+}
+
+/** The plain title of a board row, from the columns the board query selects. */
+function plainTitleOf(c: Record<string, unknown>): string {
+  let ask: { property_host?: string | null; ask?: string | null } = {};
+  try {
+    ask = c.request_json ? (JSON.parse(String(c.request_json)) as typeof ask) : {};
+  } catch {
+    ask = {};
+  }
+  return plainTitle({
+    title: String(c.title ?? ""),
+    kind: (c.kind as string | null) ?? null,
+    host: (c.site_host as string | null) ?? ask.property_host ?? null,
+    subject: (c.parent_title as string | null) ?? null,
+    ask: (c.site_ask as string | null) ?? ask.ask ?? null,
+  });
+}
+
 export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
   const visibility = privacyVisibilityClause(ctx.identity!, "wc.privacy_label");
 
@@ -1109,6 +1185,23 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
             -- 0227, Wave D: silent by design, but not invisible. "Held by Sequoia — '…' — since
             -- Tuesday" reads from these three, wherever the card is referenced.
             wc.held_reason, wc.held_by, wc.held_at, held_user.full_name AS held_by_name,
+            -- THE WORK-CARD REDESIGN (23 Sep 2026): what liveStatus (shared/work/liveStatus.ts)
+            -- reads to say "Working now" only while something actually holds the card — the
+            -- sweep's lease — plus the step counter for the Technical line.
+            wc.lease_until, COALESCE(wc.work_steps, 0) AS work_steps,
+            -- 0239: the partners cc'd on the finished email, for the expanded card's
+            -- "Finished email goes to" row (the single-card route serves it through SELECT *).
+            wc.cc_emails,
+            -- A WEBSITE JOB'S OWN FACTS, for the plain title and the Plan → Build → Preview → Live
+            -- track on the collapsed row (shared/work/siteChange.ts). NULL on every other card.
+            wpc.property_host AS site_host, wpc.target_repo AS site_repo, wpc.phase AS site_phase,
+            wpc.preview_url AS site_preview_url, wpc.land_approved_at AS site_land_approved_at,
+            wpc.merge_sha AS site_merge_sha, wpc.publish_ready AS site_publish_ready,
+            -- (site_preview_only is served above, 0238.)
+            substr(COALESCE(wpc.request_text, wpc.ask), 1, 600) AS site_ask,
+            -- The card it was handed from — for an email-born job, "From <partner>: <her subject>",
+            -- which is the name she gave the work.
+            parent.title AS parent_title,
             COALESCE(e.name, u.full_name) AS owner_name,
             e.role AS owner_role
        FROM work_card wc
@@ -1117,6 +1210,7 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
        LEFT JOIN firm_user held_user ON held_user.id = wc.held_by
        LEFT JOIN ai_employee creator ON creator.id = wc.created_by
        LEFT JOIN web_property_change wpc ON wpc.work_card_id = wc.id
+       LEFT JOIN work_card parent ON parent.id = wc.assigned_from_card_id
       WHERE ${visibility}
         -- LIVE WORK ONLY, AND THAT IS THE FIX RATHER THAN A TRIM.
         --
@@ -1207,6 +1301,8 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
     lastRunByCard.set(r.work_card_id, { provider_key: r.provider_key, model: r.model, status: r.status, cost_usd: cost, at: r.created_at });
   }
 
+  const runByCard = await liveRunsByCard(ctx.env);
+
   const employed = await ctx.env.WP_OS_DB.prepare(
     "SELECT id, name, role FROM ai_employee WHERE status = 'ACTIVE' ORDER BY name",
   ).all<{ id: string; name: string; role: string }>();
@@ -1237,6 +1333,10 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
       /** Where the card's most recent run actually went. Immutable; a relabel cannot rewrite it. */
       last_run: lastRunByCard.get(String(c.id)) ?? null,
       block: (c as { held_at?: string | null }).held_at ? null : blockOf(c as never),
+      /** The run her Mac holds for this card, if any — `liveStatus` reads it for "Working now". */
+      current_run: runByCard.get(String(c.id)) ?? null,
+      /** "Community site redesign · joinwestpeek.com" — never the raw email cut off mid-word. */
+      plain_title: plainTitleOf(c),
     })),
     recent_runs: runs.results ?? [],
     /** Everyone a card can be given to, so the UI never offers an owner the server would refuse. */

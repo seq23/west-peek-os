@@ -1,4 +1,5 @@
 import type { Block } from "@shared/work/blocks";
+import type { LiveRun } from "@shared/work/liveStatus";
 
 /**
  * The row shapes the Work surface reads, in one place.
@@ -80,6 +81,26 @@ export interface WorkCardRow {
   work_last_failure_at?: string | null;
   /** 0173 — present only while the card is blocked: the four sentences and the doors. */
   block?: (Block & { blockedAt: string | null; lane?: string | null; laneName?: string | null; raw?: string | null }) | null;
+  /** 0173 — when the card stopped, for the timeline. */
+  blocked_at?: string | null;
+  /**
+   * THE WORK-CARD REDESIGN (23 Sep 2026). The run her Mac holds for this card, the name the desk
+   * shows, and a website job's own facts — the three things `liveStatus` and `siteStage`
+   * (shared/work) read so the row, the expanded card and the card's page say one thing.
+   */
+  current_run?: LiveRun | null;
+  plain_title?: string | null;
+  parent_title?: string | null;
+  site_host?: string | null;
+  site_repo?: string | null;
+  site_phase?: string | null;
+  site_preview_url?: string | null;
+  site_land_approved_at?: string | null;
+  site_merge_sha?: string | null;
+  site_publish_ready?: number | null;
+  site_ask?: string | null;
+  /** 0239: a JSON list of partner addresses cc'd on the finished email. */
+  cc_emails?: string | null;
   looks?: Array<{
     id: string; objective: string; start_url: string; status: string;
     result_text: string | null; refusal_reason: string | null;

@@ -24,10 +24,15 @@ export interface SitePreviewBadge {
   on: boolean;
 }
 
+/*
+ * WORDED FOR ITS ROW (23 Sep 2026, the work-card redesign). The badge now sits in the expanded
+ * card's details under the label "Before it goes live" (work/CardExpanded.tsx), so its text is the
+ * value only, as on the approved canvas: "Preview first · always on".
+ */
 export function sitePreviewBadge(card: { kind?: string | null; site_preview_only?: number | null }): SitePreviewBadge | null {
   if (card.kind !== WEB_PROPERTY_CHANGE_KIND) return null;
   const on = card.site_preview_only === 1;
   return on
-    ? { on, text: "Preview before it goes live: always on", title: "Site work always stops at a preview link and asks you before it lands. The only way to skip it is to say \"approved to production\" in the request." }
-    : { on, text: "Preview before it goes live: off", title: "This change is not held at a preview — it lands on green once its plan is approved." };
+    ? { on, text: "Preview first · always on", title: "Site work always stops at a preview link and asks you before it lands. The only way to skip it is to say \"approved to production\" in the request." }
+    : { on, text: "Off · goes live when the checks pass", title: "This change is not held at a preview — it lands on green once its plan is approved." };
 }

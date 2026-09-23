@@ -59,6 +59,7 @@ const WORKER_DIR = path.join(ROOT, "src", "worker");
  */
 const PAGE = path.join(ROOT, "src", "client", "pages", "WorkCardsPage.tsx");
 const WORK_DIR = path.join(ROOT, "src", "client", "pages", "work");
+const LIVE_STATUS = path.join(ROOT, "src", "shared", "work", "liveStatus.ts");
 
 /** The Work surface as one source string: the shell plus every component split out of it. */
 export function workSurfaceSource() {
@@ -68,6 +69,13 @@ export function workSurfaceSource() {
     throw new Error("src/client/pages/work/ is empty — the Work surface was split into it, so zero files means this scan would read a shell and pass having checked nothing.");
   }
   for (const n of names) parts.push(readFileSync(path.join(WORK_DIR, n), "utf8"));
+  /*
+   * THE ONE STATUS READER (23 Sep 2026, the work-card redesign). The row, the expanded card and the
+   * card's page no longer word a card's state themselves: `liveStatus` does, and every surface calls
+   * it. So the "queued" reassurance and the failure it must never sit over live there now, and a scan
+   * that read only the components would pass having checked nothing.
+   */
+  parts.push(readFileSync(LIVE_STATUS, "utf8"));
   return parts.join("\n");
 }
 const FAULT_DOORS = ["RETRY", "ANOTHER_LANE", "PAUSE_LANE", "HAND_ON"];
@@ -286,12 +294,15 @@ export function checkPageTellsThemApart(pageSrc) {
   }
   // The reassurance must be conditioned on NOT failing. Matched on the literal line, because that
   // exact string is what the owner read three times while the card was broken.
-  const queued = /queued — picked up within 5 min/.exec(src);
+  // Since 23 Sep the line reads "Queued · picked up within 5 min" (shared/work/liveStatus.ts). The
+  // failure must be decided BEFORE it: an early `if (failing) return …` in the one reader, or a
+  // `!failing` guard beside the line in a component.
+  const queued = /[Qq]ueued (?:—|·) picked up within 5 min/.exec(src);
   if (!queued) {
     violations.push("the 'queued — picked up within 5 min' line has gone — it is correct for a healthy card and its absence means this scan is reading the wrong page");
   } else {
-    const window = src.slice(Math.max(0, queued.index - 400), queued.index);
-    if (!/!failing|!\s*c\.work_last_failure/.test(window)) {
+    const window = src.slice(Math.max(0, queued.index - 700), queued.index);
+    if (!/!failing|!\s*c\.work_last_failure|if \(failing\) \{?\s*return/.test(window)) {
       violations.push("'queued — picked up within 5 min' is shown regardless of whether the card has already failed — that is the sentence the owner read three times on 17 Sep");
     }
   }
@@ -332,6 +343,20 @@ const SELF_TEST = {
           }`,
       }).violations,
     expect: /returns a card to OPEN/,
+  },
+  "a status reader that says queued before it asks about failure": {
+    run: () =>
+      checkPageTellsThemApart(
+        'const failing = Boolean(card.work_last_failure);\nif (card.state === "OPEN") return { line: "Queued · picked up within 5 min" };\n' + "x".repeat(800) + "\nif (failing) { return { line: 'failed' }; } block.raw",
+      ).violations,
+    expect: /shown regardless of whether the card has already failed/,
+  },
+  "the one reader, failure first, is fine": {
+    run: () =>
+      checkPageTellsThemApart(
+        'const failing = Boolean(card.work_last_failure);\nif (failing) {\n    return { line: "failed" };\n  }\n  if (card.state === "OPEN") return { line: "Queued · picked up within 5 min" }; block.raw',
+      ).violations,
+    expect: null,
   },
   "the real pre-fix Work page": {
     run: () => checkPageTellsThemApart('{c.owner_type === "AI" && c.state === "OPEN" && (<span>queued — picked up within 5 min</span>)}').violations,

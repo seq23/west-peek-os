@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, onNewWorkCardRequested, useApi, type MeResponse } from "../lib/api";
 import { triage } from "@shared/work/workCards";
-import { deskAnswer, deskSubline } from "@shared/work/deskAnswer";
+import { deskSummary } from "@shared/work/liveStatus";
 import { WorkRecordView } from "./WorkRecordView";
 import { NewWorkCard } from "./work/NewWorkCard";
-import { WorkDesk, deskBands } from "./work/WorkDesk";
+import { WorkDesk, deskSections } from "./work/WorkDesk";
 import type { WorkCardRow, RecentRun, Assignable } from "./work/types";
 
 /**
@@ -140,18 +140,11 @@ export function WorkCardsPage({
   }, [jobs.data]);
 
   /*
-   * FOUR BANDS, not one section per person — see `deskBands` in `work/WorkDesk.tsx`, which owns
-   * the rule. The masthead counts what it returns rather than deciding again for itself.
+   * THE TWO SECTIONS, FROM ONE READER (23 Sep 2026). `deskSections` runs every card through
+   * `liveStatus` (shared/work/liveStatus.ts); the masthead's sentence below counts those same
+   * statuses rather than deciding again for itself.
    */
-  const bands = useMemo(() => deskBands(live, me.id), [live, me.id]);
-
-  const failingCount = useMemo(
-    () =>
-      live.filter(
-        (c) => Boolean(c.work_last_failure) && c.state !== "BLOCKED" && c.state !== "DONE" && c.state !== "CANCELLED",
-      ).length,
-    [live],
-  );
+  const sections = useMemo(() => deskSections(live, me.id, new Date(), deskSeenAt), [live, me.id, deskSeenAt]);
 
   // DECKS WAITING ON A DECISION ARE WORK WAITING ON YOU. "i dont see any indication of v12 deck
   // anywhere" — it was on Fund strategy, under the proposals, and nowhere on the page called Work.
@@ -171,10 +164,12 @@ export function WorkCardsPage({
     onChanged();
   }
 
-  const waitingCards = bands.find((b) => b.key === "waiting")?.cards.length ?? 0;
-  const inFlight = bands.find((b) => b.key === "flight")?.cards.length ?? 0;
-  const answer = deskAnswer({ waiting: waitingCards, decks: decksWaiting.length, inFlight, failing: failingCount });
-  const subline = deskSubline({ waiting: waitingCards, decks: decksWaiting.length, inFlight, failing: failingCount });
+  /*
+   * THE HEADER IS COUNTED FROM WHAT IS DRAWN. On 23 Sep it said "One thing is stopped until you
+   * answer" over a card that was merely unowned — the old count had its own idea of "waiting".
+   * `deskSummary` counts the statuses the sections are drawn from, decks included.
+   */
+  const summary = deskSummary([...sections.needs, ...sections.worked].map((e) => e.status), decksWaiting.length);
 
   return (
     <section data-testid="work-cards-page" className="work-surface">
@@ -190,11 +185,9 @@ export function WorkCardsPage({
       */}
       <header className="work-masthead">
         <div className="work-masthead-said">
-          <p className="work-eyebrow">The firm's work</p>
-          <h2 data-testid="work-answer" className={answer.clear ? "is-clear" : undefined}>
-            {answer.line}
+          <h2 data-testid="work-answer" className={board.data && summary.clear ? "is-clear" : undefined}>
+            {board.data ? summary.line : "Reading the desk…"}
           </h2>
-          {subline && <p className="work-subline muted">{subline}</p>}
         </div>
         <button type="button" className="btn-strong" data-testid="work-card-add-toggle" onClick={() => setAdding((a) => !a)}>
           {adding ? "Cancel" : "Add a card"}
@@ -222,7 +215,7 @@ export function WorkCardsPage({
                 prose where they name a region; on a 320px tab strip the two definite articles were
                 what pushed the third tab off the screen. */}
             {v === "desk" ? "Desk" : v === "record" ? "Record" : "Machinery"}
-            {v === "desk" && answer.count > 0 && <span className="work-view-dot" aria-hidden="true" />}
+            {v === "desk" && summary.needsYou > 0 && <span className="work-view-dot" aria-hidden="true" />}
             {v === "machinery" && machineryHealth.total > 0 && (
               <span className="work-view-n">{machineryHealth.total}</span>
             )}
@@ -263,6 +256,21 @@ export function WorkCardsPage({
             </p>
           </div>
           {machinery}
+          {/* WHAT EMPLOYEES HAVE BEEN DOING — single acts, not work anybody carries. Moved off the
+              desk on 23 Sep: it is a log of the machinery, and the desk is only what needs her and
+              what is being worked. */}
+          {runs.length > 0 && (
+            <details className="card" data-testid="work-recent-runs">
+              <summary>What your employees have been doing</summary>
+              <ul className="card-list small">
+                {runs.slice(0, 15).map((r, i) => (
+                  <li key={i}>
+                    <strong>{r.employee_name}</strong> · {r.purpose} <span className="muted small">{r.status.toLowerCase()}</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </div>
       )}
 
@@ -270,23 +278,21 @@ export function WorkCardsPage({
         <div role="tabpanel" id="work-panel-desk" aria-labelledby="work-tab-desk" className="work-panel">
           <WorkDesk
             me={me}
-            bands={bands}
+            sections={sections}
             live={live}
-            deskSeenAt={deskSeenAt}
-            runs={runs}
             decksWaiting={decksWaiting}
             assignable={board.data?.assignable ?? null}
-            answerIsClear={answer.clear}
+            answerIsClear={summary.clear}
             adding={adding}
             busy={busy}
             setBusy={setBusy}
             setMessage={setMessage}
             reload={() => board.reload()}
-            onChanged={onChanged}
             onNavigate={onNavigate}
             onMove={(id, state) => void move(id, state)}
             onGoto={(v) => setView(v)}
             machineryHealth={machineryHealth}
+            loaded={Boolean(board.data)}
           />
         </div>
       )}

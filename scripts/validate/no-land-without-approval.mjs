@@ -106,7 +106,13 @@ const MIGRATION_0220 = path.join(ROOT, "migrations", "0220_a_plan_that_is_not_pu
 const MIGRATION_0236 = path.join(ROOT, "migrations", "0236_one_website_job_can_span_several_repos.sql");
 const MIGRATION_0238 = path.join(ROOT, "migrations", "0238_every_site_change_previews_first.sql");
 const BOARD = path.join(ROOT, "src", "worker", "services", "workCards.ts");
-const DESK = path.join(ROOT, "src", "client", "pages", "work", "WorkDesk.tsx");
+/*
+ * THE CARD, NOT THE ROW (23 Sep 2026, the work-card redesign). The collapsed desk row carries only
+ * owner, title, status and the site track; the "Before it goes live" badge and the "Hold for you
+ * first" switch moved into the expanded card, `work/CardExpanded.tsx`, which the desk opens under
+ * the row and the card's own page renders. Gate 13 reads it there, with every check unchanged.
+ */
+const DESK = path.join(ROOT, "src", "client", "pages", "work", "CardExpanded.tsx");
 const BADGE = path.join(ROOT, "src", "client", "pages", "work", "sitePreviewBadge.ts");
 const read = (p) => stripTsComments(readFileSync(p, "utf8"));
 /** SQL: `--` line comments blanked, so a comment naming a column cannot satisfy or fail the trigger check. */
@@ -428,7 +434,10 @@ export function checkPreviewDefault({ worker, sql0238, board, desk, badge }) {
     if (!/UPDATE\s+web_property_change\s+SET\s+preview_only\s*=\s*1\b[\s\S]*?WHERE\s+merge_sha\s+IS\s+NULL/.test(sql0238)) violations.push("0238 does not set preview_only = 1 on every unmerged web_property_change row");
   }
   examined += 1;
-  if (!/LEFT JOIN web_property_change wpc ON wpc\.work_card_id = wc\.id/.test(board) || !/wpc\.preview_only AS site_preview_only/.test(board)) violations.push("handleWorkByOwner() does not serve web_property_change.preview_only as site_preview_only — the desk cannot show the site's preview gate");
+  // Read inside handleWorkByOwner() itself, not anywhere in the file: since 23 Sep the single-card
+  // route serves the same column too, and a whole-file match would let the board lose it unseen.
+  const boardFn = body(board, "export async function handleWorkByOwner(") ?? "";
+  if (!/LEFT JOIN web_property_change wpc ON wpc\.work_card_id = wc\.id/.test(boardFn) || !/wpc\.preview_only AS site_preview_only/.test(boardFn)) violations.push("handleWorkByOwner() does not serve web_property_change.preview_only as site_preview_only — the desk cannot show the site's preview gate");
   const fn = body(badge, "export function sitePreviewBadge(");
   if (!fn) violations.push("sitePreviewBadge() is gone — the desk shows no site preview gate");
   else {
@@ -438,7 +447,7 @@ export function checkPreviewDefault({ worker, sql0238, board, desk, badge }) {
     if (!/card\.kind\s*!==\s*WEB_PROPERTY_CHANGE_KIND\)\s*return null/.test(fn)) violations.push("sitePreviewBadge() is not limited to WEB_PROPERTY_CHANGE cards");
   }
   examined += 1;
-  if (!/const sitePreview = sitePreviewBadge\(c\)/.test(desk) || !/\{sitePreview\.text\}/.test(desk)) violations.push("WorkDesk does not render sitePreviewBadge() — the site's preview gate is invisible on the desk");
+  if (!/const sitePreview = sitePreviewBadge\(c\)/.test(desk) || !/\{sitePreview\.text\}/.test(desk)) violations.push("the expanded card (CardExpanded) does not render sitePreviewBadge() — the site's preview gate is invisible on the desk");
   if (!/const previewOn = c\.preview_first === 1;/.test(desk)) violations.push("the desk's \"Show me first\" switch no longer reads work_card.preview_first — its meaning (hold the result for her) changed");
   const toggle = body(desk, "async function togglePreviewFirst(");
   if (!toggle || /preview_only/.test(toggle) || !/preview_first:\s*next/.test(toggle)) violations.push("togglePreviewFirst() no longer writes only preview_first — the switch could turn off a site's preview gate, a land bypass nobody named");
@@ -587,7 +596,7 @@ async function selfTest() {
   pdCaught({ worker: worker.replace("preview_only = MAX(web_property_change.preview_only, excluded.preview_only)", "preview_only = excluded.preview_only") }, /MAX\(old, new\)/, "an upsert that can clear the preview is caught");
   pdCaught({ sql0238: sql0238Fixture("WHERE merge_sha IS NULL", "WHERE phase = 'PLAN'") }, /unmerged/, "a 0238 that misses in-flight rows is caught");
   pdCaught({ sql0238: "" }, /0238 is missing/, "a missing 0238 is caught");
-  pdCaught({ board: pd.board.replace("wpc.preview_only AS site_preview_only", "wc.preview_first AS site_preview_only") }, /site_preview_only/, "a board that serves preview_first as the site gate is caught");
+  pdCaught({ board: pd.board.replaceAll("wpc.preview_only AS site_preview_only", "wc.preview_first AS site_preview_only") }, /site_preview_only/, "a board that serves preview_first as the site gate is caught");
   pdCaught({ badge: pd.badge.replace("card.site_preview_only === 1", "card.preview_first === 1") }, /site_preview_only|preview_first/, "a badge that reads preview_first is caught");
   pdCaught({ badge: pd.badge.replace("if (card.kind !== WEB_PROPERTY_CHANGE_KIND) return null;", "") }, /limited to WEB_PROPERTY_CHANGE/, "a badge shown on every kind is caught");
   pdCaught({ desk: pd.desk.replace("{sitePreview.text}", "") }, /does not render sitePreviewBadge/, "a desk that never draws the badge is caught");

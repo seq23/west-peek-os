@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { api, useApi } from "../lib/api";
-import { readableDate } from "../lib/dates";
+import { readableDate, shortDate } from "../lib/dates";
 import { ON_OFF_RULE_KEYS } from "../../shared/work/localJobs";
+import { SITE_STAGES, siteStage } from "../../shared/work/siteChange";
 
 /**
  * A WEB PROPERTY CHANGE ON THE WORK PAGE (20 Sep 2026, Plan A).
@@ -68,228 +69,373 @@ interface ChangeRow {
   parts?: Array<{ repo: string; property_host: string; pr_url: string | null; pr_number: number | null; check_state: "PENDING" | "GREEN" | "RED" | null; check_url: string | null; preview_url: string | null; merge_sha: string | null }>;
 }
 
-const PHASES: Array<{ key: ChangeRow["phase"]; label: string }> = [
-  { key: "PLAN", label: "Plan" },
-  { key: "BUILD", label: "Build" },
-  { key: "LAND", label: "Land" },
-  { key: "DONE", label: "Done" },
-];
-
-function phaseIndex(p: ChangeRow["phase"]): number {
-  return PHASES.findIndex((x) => x.key === p);
+/**
+ * THE WORK-CARD REDESIGN (23 Sep 2026). Her words: "it should be truly collapsed with only the
+ * title and in progress and the necessary things showing then a big chevron … that has everything".
+ *
+ * This panel is the website half of that "everything": the four stages in plain English (Where it
+ * is), the dated list of what has happened beside the facts (The details), and nothing else. It no
+ * longer prints its own run line — "PLAN is running on …" was a second reading of what the card is
+ * doing, and `liveStatus` (shared/work/liveStatus.ts) is now the only one. It renders only inside the
+ * expanded card (`work/CardExpanded.tsx`), never on the collapsed row.
+ */
+export function useSiteChange(cardId: string | null): { data: ChangeRow | null; loading: boolean; status: number | null; reload: () => void } {
+  return useApi<ChangeRow>(cardId ? `/api/work-cards/${cardId}/web-property-change` : null, [cardId]);
 }
 
-export function WebPropertyChangePanel({ cardId, onNavigate, canEdit = false }: { cardId: string; onNavigate: (k: string) => void; canEdit?: boolean }): JSX.Element {
-  const { data, loading, status, reload } = useApi<ChangeRow>(`/api/work-cards/${cardId}/web-property-change`);
-  if (loading && !data) return <p className="small" data-testid={`wpc-loading-${cardId}`}>Reading where this change is…</p>;
-  if (!data) return <p className="small" data-testid={`wpc-missing-${cardId}`}>{status === 404 ? "This card is marked as a web property change but carries no folder or repo yet — the next run asks for them." : "Could not read where this change is."}</p>;
-  const r = data;
-  const at = phaseIndex(r.phase);
-  const run = r.current_run;
-  const runLine = run
-    ? run.status === "QUEUED"
-      ? `${r.phase} is queued for the Mac — waiting for it to claim the job`
-      : run.status === "CLAIMED"
-        ? `${r.phase} is running on ${run.claimed_by ?? "the Mac"}${run.progress_note ? ` — ${run.progress_note}` : ""}${run.progressed_at ? ` (heard ${readableDate(run.progressed_at)})` : ""}`
-        : `${r.phase}: last run ${run.status.toLowerCase()}`
-    : r.phase === "DONE"
-      ? "Landed and proven live."
-      : "Nothing is on the Mac right now; the next sweep decides the next step.";
+export type { ChangeRow as SiteChangeRow };
 
+function stageWords(r: ChangeRow, i: number, at: number, owner: string, done: boolean): string {
+  const host = r.property_host ?? r.target_repo;
+  const state = done || i < at ? "done" : i === at ? "now" : "next";
+  switch (SITE_STAGES[i]!.key) {
+    case "PLAN":
+      if (state === "done") return `Done. The plan was written${r.plan_filed_at ? ` ${shortDate(r.plan_filed_at)}` : ""}${r.plan_approved_at ? " and you approved it" : ""}.`;
+      return `${state === "now" ? "Now. " : ""}${owner} reads ${r.drive_folder_url ? "your Drive folder" : "your request"} and writes the plan, then emails you ${owner === "Porter" ? "his" : "the"} questions.`;
+    case "BUILD":
+      if (state === "done") return `Done.${r.pr_number ? ` Code change #${r.pr_number}` : ""}${r.check_state === "GREEN" ? ", checks passed" : ""}.`;
+      return state === "now" ? `Now. ${owner} changes only ${host} and opens a code change for the checks.` : `After you answer. Changes only ${host}.`;
+    case "PREVIEW":
+      if (!needsPreviewOf(r)) return r.forced_by_name ? `Skipped: ${r.forced_by_name} said "approved to production".` : "Skipped for this change.";
+      if (state === "done") return `Done. You approved it${r.land_approved_at ? ` ${shortDate(r.land_approved_at)}` : ""}.`;
+      return state === "now" ? `Now. The preview link is in your email; nothing goes live until you reply "approved".` : `You get a preview link. Nothing goes live until you reply "approved".`;
+    case "LIVE":
+    default:
+      if (done) return `Live${r.landed_at ? ` since ${shortDate(r.landed_at)}` : ""}. The done email went to you.`;
+      return state === "now" ? "Now. Putting it live, then a done email to you." : "Published, then a done email to you.";
+  }
+}
+
+function needsPreviewOf(r: Pick<ChangeRow, "preview_only" | "publish_ready" | "forced_by_name">): boolean {
+  return (r.preview_only === 1 || r.publish_ready === 0) && !r.forced_by_name;
+}
+
+/** Where it is — the four stages, each in a sentence. */
+export function SiteStages({ row: r, owner }: { row: ChangeRow; owner: string }): JSX.Element {
+  const stage = siteStage(r);
   return (
-    <div className="card-block" data-testid={`work-card-wpc-${cardId}`}>
-      <p className="lbl">Web property change · {r.property_host ?? r.target_repo}</p>
-      <ol className="wpc-phases" aria-label="Phases" data-testid={`wpc-phases-${cardId}`}>
-        {PHASES.map((p, i) => (
-          <li key={p.key} data-state={i < at ? "done" : i === at ? "now" : "next"} aria-current={i === at ? "step" : undefined}>
-            {p.label}
-          </li>
-        ))}
-      </ol>
-      <p className="small" role="status" data-testid={`wpc-run-${cardId}`}>{runLine}</p>
-      {r.plan_filed_at && (
-        <p className="wpc-readiness" data-testid={`wpc-readiness-${cardId}`}>
-          <span className={r.publish_ready === 1 ? "badge badge-ok" : "badge badge-gate"}>{r.publish_ready === 1 ? "publish-ready" : `not publish-ready · ${r.placeholders.length} placeholder${r.placeholders.length === 1 ? "" : "s"}`}</span>
-          {r.preview_only === 1 && <span className="badge">preview first, by request</span>}
-          {r.needs_preview && !r.forced_by_name && <span className="badge">{r.land_approved_at ? "landing approved after the preview" : "lands on a second approval"}</span>}
-          {r.forced_by_name && (
-            <span className="badge badge-bad" data-testid={`wpc-forced-${cardId}`} title={r.forced_at ? readableDate(r.forced_at) : undefined}>
-              forced to production by {r.forced_by_name}
+    <ol className="wc-stages" aria-label="Where it is" data-testid={`wpc-phases-${r.work_card_id}`}>
+      {SITE_STAGES.map((p, i) => {
+        const state = stage.finished || i < stage.index ? "done" : i === stage.index ? "now" : "next";
+        return (
+          <li key={p.key} className="wc-stage" data-state={state} aria-current={state === "now" ? "step" : undefined}>
+            <span className="wc-stage-name">
+              {i + 1} · {p.label}
             </span>
-          )}
-        </p>
-      )}
-      <dl className="wpc-facts">
-        {r.request_text && (
-          <div>
-            <dt>The request</dt>
-            <dd><pre className="wpc-proof" data-testid={`wpc-request-${cardId}`}>{r.request_text}</pre>{r.pre_approved_phrase && <span className="badge">pre-approved: "{r.pre_approved_phrase}"</span>}</dd>
-          </div>
-        )}
-        {r.attachments.length > 0 && (
-          <div>
-            <dt>Attached</dt>
-            <dd>
-              <ul className="wpc-list" data-testid={`wpc-attachments-${cardId}`}>
-                {r.attachments.map((a) => (
-                  <li key={a.id}>
-                    <a href={`/api/work-cards/${cardId}/attachments/${a.id}`} target="_blank" rel="noopener noreferrer">{a.filename}</a> <span className="small">({a.media_type}, {Math.round(a.bytes / 1024)} KB)</span>
-                  </li>
-                ))}
-              </ul>
-            </dd>
-          </div>
-        )}
-        <div>
-          <dt>Package</dt>
-          <dd>
-            {r.drive_folder_url ? (
-              <a href={r.drive_folder_url} target="_blank" rel="noopener noreferrer">Drive folder {r.drive_folder_id}</a>
-            ) : (
-              "no Drive folder on the card"
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>Plan</dt>
-          <dd>
-            {/* 0231, Addendum 4.3: the plan is on the card, never filed into Documents — "plans for
-                work to be done are not like real documents, like an LP deck or something." A card
-                planned before 0231 still carries a filed Document (`plan_document_id`), kept
-                openable rather than rewriting old data; every plan filed since reads inline here. */}
-            {r.plan_text ? (
-              <details data-testid={`wpc-plan-${cardId}`}>
-                <summary className="link-button" style={{ display: "inline" }}>
-                  Read the plan (filed {r.plan_filed_at ? readableDate(r.plan_filed_at) : ""})
-                </summary>
-                <pre className="wpc-proof" data-testid={`wpc-plan-text-${cardId}`}>{r.plan_text}</pre>
-              </details>
-            ) : r.plan_document_id ? (
-              <button
-                type="button"
-                className="link-button"
-                data-testid={`wpc-plan-${cardId}`}
-                onClick={() => {
-                  try {
-                    window.sessionStorage.setItem("wpos.documents.focus", r.plan_document_id!);
-                  } catch {
-                    /* fine */
-                  }
-                  onNavigate("documents");
-                }}
-              >
-                Open the plan (filed {r.plan_filed_at ? readableDate(r.plan_filed_at) : ""})
-              </button>
-            ) : (
-              "not written yet"
-            )}
-            {r.plan_approved_at && <span className="small"> · approved {readableDate(r.plan_approved_at)}</span>}
-          </dd>
-        </div>
-        {r.placeholders.length > 0 && (
-          <div>
-            <dt>Ships as placeholders</dt>
-            <dd>
-              <ul className="wpc-list" data-testid={`wpc-placeholders-${cardId}`}>{(r.forced_placeholders.length ? r.forced_placeholders : r.placeholders).map((p, i) => <li key={i}>{p}</li>)}</ul>
-            </dd>
-          </div>
-        )}
-        {r.preview_url && !r.parts?.length && (
-          <div>
-            <dt>Preview</dt>
-            <dd><a href={r.preview_url} target="_blank" rel="noopener noreferrer" data-testid={`wpc-preview-${cardId}`}>{r.preview_url}</a></dd>
-          </div>
-        )}
-        {r.decided.length > 0 && (
-          <div>
-            <dt>Decided without asking</dt>
-            <dd>
-              <ul className="wpc-list" data-testid={`wpc-decided-${cardId}`}>{r.decided.map((d, i) => <li key={i}>{d}</li>)}</ul>
-            </dd>
-          </div>
-        )}
-        {r.asks.length > 0 && (
-          <div>
-            <dt>Asked</dt>
-            <dd>
-              <ol className="wpc-list" data-testid={`wpc-asks-${cardId}`}>{r.asks.map((a, i) => <li key={i}>{a}</li>)}</ol>
-            </dd>
-          </div>
-        )}
-        {r.answers.length > 0 && (
-          <div>
-            <dt>Answered</dt>
-            <dd>
-              <ul className="wpc-list" data-testid={`wpc-answers-${cardId}`}>{r.answers.map((a, i) => <li key={i}>{a}</li>)}</ul>
-            </dd>
-          </div>
-        )}
-        <div>
-          <dt>{r.parts?.length ? `Pull requests — ${r.parts.length} repos, landed together` : "Pull request"}</dt>
-          <dd data-testid={`wpc-pr-${cardId}`}>
-            {r.parts?.length ? (
-              <ul className="wpc-list" data-testid={`wpc-parts-${cardId}`}>
-                {r.parts.map((p) => (
-                  <li key={p.repo}>
-                    {p.repo} ({p.property_host}){": "}
-                    {p.pr_url ? <a href={p.pr_url} target="_blank" rel="noopener noreferrer">#{p.pr_number ?? "?"}</a> : "not opened yet"}
-                    {p.pr_url && (
-                      <>
-                        {" · checks "}
-                        <span className={p.check_state === "GREEN" ? "badge badge-ok" : p.check_state === "RED" ? "badge badge-bad" : "badge badge-gate"}>{p.check_state ?? "not run"}</span>
-                      </>
-                    )}
-                    {p.preview_url && (
-                      <>
-                        {" · "}
-                        <a href={p.preview_url} target="_blank" rel="noopener noreferrer">preview</a>
-                      </>
-                    )}
-                    {p.merge_sha && ` · landed ${p.merge_sha.slice(0, 10)}`}
-                  </li>
-                ))}
-              </ul>
-            ) : r.pr_url ? (
-              <>
-                <a href={r.pr_url} target="_blank" rel="noopener noreferrer">#{r.pr_number ?? "?"}</a>
-                {" · checks "}
-                <span className={r.check_state === "GREEN" ? "badge badge-ok" : r.check_state === "RED" ? "badge badge-bad" : "badge badge-gate"}>{r.check_state ?? "not run"}</span>
-                {r.check_url && (
+            <span className="wc-stage-words">{stageWords(r, i, stage.index, owner, stage.finished)}</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/**
+ * The details — every fact on the row, one line each, and only the lines that have something to
+ * say beyond "not yet". `lead` carries the rows every card shares (Asked by), so the website facts
+ * sit under them in one list rather than in a box of their own.
+ */
+export function SiteDetails({
+  row: r,
+  cardId,
+  onNavigate,
+  recipient,
+  lead,
+  tail,
+  gate,
+}: {
+  row: ChangeRow;
+  /** The site's preview gate as the desk draws it (work/sitePreviewBadge.ts), for "Before it goes live". */
+  gate?: ReactNode;
+  cardId: string;
+  onNavigate: (k: string) => void;
+  recipient: ReactNode;
+  lead?: ReactNode;
+  /** Rows every card shares that belong after the site's own (the "Hold for you first" switch). */
+  tail?: ReactNode;
+}): JSX.Element {
+  const preview = needsPreviewOf(r);
+  return (
+    <dl className="wc-details" data-testid={`wpc-details-${cardId}`}>
+      {lead}
+      <dt>Site</dt>
+      <dd>
+        {r.parts?.length ? (
+          <ul className="wpc-list" data-testid={`wpc-parts-${cardId}`}>
+            {r.parts.map((p) => (
+              <li key={p.repo}>
+                {p.property_host}
+                {p.pr_url && (
                   <>
-                    {" "}
-                    <a href={r.check_url} target="_blank" rel="noopener noreferrer" className="small">what CI said</a>
+                    {" · "}
+                    <a href={p.pr_url} target="_blank" rel="noopener noreferrer">
+                      code change #{p.pr_number ?? "?"}
+                    </a>{" "}
+                    <span className={p.check_state === "GREEN" ? "badge badge-ok" : p.check_state === "RED" ? "badge badge-bad" : "badge badge-gate"}>{checkWords(p.check_state)}</span>
                   </>
                 )}
-              </>
-            ) : (
-              "not opened yet"
+                {p.preview_url && (
+                  <>
+                    {" · "}
+                    <a href={p.preview_url} target="_blank" rel="noopener noreferrer">
+                      preview
+                    </a>
+                  </>
+                )}
+                {p.merge_sha && " · live"}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          (r.property_host ?? "Not decided yet — the next run asks which site")
+        )}
+      </dd>
+      <dt>Materials</dt>
+      <dd>
+        {r.drive_folder_url || r.attachments.length > 0 ? (
+          <span className="wc-inline-list">
+            {r.drive_folder_url && (
+              <a href={r.drive_folder_url} target="_blank" rel="noopener noreferrer" data-testid={`wpc-folder-${cardId}`}>
+                Drive folder
+              </a>
             )}
+            {r.attachments.map((a) => (
+              <a key={a.id} href={`/api/work-cards/${cardId}/attachments/${a.id}`} target="_blank" rel="noopener noreferrer">
+                {a.filename}
+              </a>
+            ))}
+          </span>
+        ) : (
+          <span className="wc-quiet">None sent with the request</span>
+        )}
+      </dd>
+      <dt>Plan</dt>
+      <dd>
+        {/* 0231, Addendum 4.3: the plan is on the card, never filed into Documents. A card planned
+            before 0231 still carries a filed Document, kept openable rather than rewriting old data. */}
+        {r.plan_text ? (
+          <details data-testid={`wpc-plan-${cardId}`}>
+            <summary className="link-button">Read the plan{r.plan_approved_at ? " (you approved it)" : ""}</summary>
+            <pre className="wpc-proof" data-testid={`wpc-plan-text-${cardId}`}>{r.plan_text}</pre>
+          </details>
+        ) : r.plan_document_id ? (
+          <button
+            type="button"
+            className="link-button"
+            data-testid={`wpc-plan-${cardId}`}
+            onClick={() => {
+              try {
+                window.sessionStorage.setItem("wpos.documents.focus", r.plan_document_id!);
+              } catch {
+                /* fine */
+              }
+              onNavigate("documents");
+            }}
+          >
+            Open the plan
+          </button>
+        ) : (
+          <span className="wc-quiet">Not written yet</span>
+        )}
+      </dd>
+      <dt>Code change</dt>
+      <dd data-testid={`wpc-pr-${cardId}`}>
+        {r.parts?.length ? (
+          <span className="wc-quiet">One per site, listed above</span>
+        ) : r.pr_url ? (
+          <>
+            <a href={r.pr_url} target="_blank" rel="noopener noreferrer">
+              #{r.pr_number ?? "?"}
+            </a>{" "}
+            <span className={r.check_state === "GREEN" ? "badge badge-ok" : r.check_state === "RED" ? "badge badge-bad" : "badge badge-gate"}>{checkWords(r.check_state)}</span>
+            {r.check_url && (
+              <>
+                {" "}
+                <a href={r.check_url} target="_blank" rel="noopener noreferrer">
+                  what the checks said
+                </a>
+              </>
+            )}
+          </>
+        ) : (
+          <span className="wc-quiet">Not opened yet</span>
+        )}
+      </dd>
+      <dt>Preview link</dt>
+      <dd>
+        {r.preview_url && !r.parts?.length ? (
+          <a href={r.preview_url} target="_blank" rel="noopener noreferrer" data-testid={`wpc-preview-${cardId}`}>
+            {r.preview_url}
+          </a>
+        ) : (
+          <span className="wc-quiet">{r.parts?.length ? "One per site, listed above" : "Comes at step 3"}</span>
+        )}
+      </dd>
+      <dt>Before it goes live</dt>
+      <dd data-testid={`wpc-gate-${cardId}`}>
+        {r.forced_by_name ? (
+          <span className="badge badge-bad" data-testid={`wpc-forced-${cardId}`} title={r.forced_at ? readableDate(r.forced_at) : undefined}>
+            Straight to live: {r.forced_by_name} said "approved to production"
+          </span>
+        ) : gate ? (
+          gate
+        ) : preview ? (
+          <span className="badge badge-ok" data-testid={`wpc-preview-first-${cardId}`}>
+            Preview first · always on
+          </span>
+        ) : (
+          <span className="badge">Off · goes live when the checks pass</span>
+        )}
+      </dd>
+      <dt>Finished email goes to</dt>
+      <dd data-testid={`wpc-recipient-${cardId}`}>{recipient}</dd>
+      {tail}
+      {r.placeholders.length > 0 && (
+        <>
+          <dt>Still missing</dt>
+          <dd>
+            <ul className="wpc-list" data-testid={`wpc-placeholders-${cardId}`}>
+              {(r.forced_placeholders.length ? r.forced_placeholders : r.placeholders).map((p, i) => (
+                <li key={i}>{p}</li>
+              ))}
+            </ul>
           </dd>
+        </>
+      )}
+      {r.decided.length > 0 && (
+        <>
+          <dt>Decided without asking</dt>
+          <dd>
+            <ul className="wpc-list" data-testid={`wpc-decided-${cardId}`}>
+              {r.decided.map((d, i) => (
+                <li key={i}>{d}</li>
+              ))}
+            </ul>
+          </dd>
+        </>
+      )}
+      {r.asks.length > 0 && (
+        <>
+          <dt>Asked you</dt>
+          <dd>
+            <ol className="wpc-list" data-testid={`wpc-asks-${cardId}`}>
+              {r.asks.map((a, i) => (
+                <li key={i}>{a}</li>
+              ))}
+            </ol>
+          </dd>
+        </>
+      )}
+      {r.answers.length > 0 && (
+        <>
+          <dt>You answered</dt>
+          <dd>
+            <ul className="wpc-list" data-testid={`wpc-answers-${cardId}`}>
+              {r.answers.map((a, i) => (
+                <li key={i}>{a}</li>
+              ))}
+            </ul>
+          </dd>
+        </>
+      )}
+      {r.build_proof && (
+        <>
+          <dt>Build proof</dt>
+          <dd>
+            <pre className="wpc-proof" data-testid={`wpc-build-proof-${cardId}`}>{r.build_proof}</pre>
+          </dd>
+        </>
+      )}
+      {r.merge_sha && (
+        <>
+          <dt>Went live</dt>
+          <dd data-testid={`wpc-landed-${cardId}`}>{r.landed_at ? readableDate(r.landed_at) : "yes"}</dd>
+        </>
+      )}
+      {r.live_proof && (
+        <>
+          <dt>Live proof</dt>
+          <dd>
+            <pre className="wpc-proof" data-testid={`wpc-live-proof-${cardId}`}>{r.live_proof}</pre>
+          </dd>
+        </>
+      )}
+    </dl>
+  );
+}
+
+function checkWords(state: "PENDING" | "GREEN" | "RED" | null): string {
+  return state === "GREEN" ? "checks passed" : state === "RED" ? "checks failed" : state === "PENDING" ? "checks running" : "checks not run";
+}
+
+/**
+ * THE WEBSITE HALF OF THE EXPANDED CARD: where it is, then what has happened beside the details.
+ * `timeline` and `lead` come from the card (`work/CardExpanded.tsx`), which every kind shares; the
+ * row can be handed in so the card fetches it once for this panel and the note beside it.
+ */
+export function WebPropertyChangePanel({
+  cardId,
+  onNavigate,
+  site,
+  owner = "Porter",
+  recipient = "You",
+  timeline,
+  lead,
+  tail,
+  gate,
+}: {
+  cardId: string;
+  gate?: ReactNode;
+  onNavigate: (k: string) => void;
+  tail?: ReactNode;
+  canEdit?: boolean;
+  /** The row, already fetched by the card (`useSiteChange`), so it is read once for this panel and the note beside it. */
+  site?: { data: ChangeRow | null; loading: boolean; status: number | null };
+  owner?: string;
+  recipient?: ReactNode;
+  timeline?: ReactNode;
+  lead?: ReactNode;
+}): JSX.Element {
+  const own = useSiteChange(site ? null : cardId);
+  const { data, loading, status } = site ?? own;
+  if (loading && !data) return <p className="small" data-testid={`wpc-loading-${cardId}`}>Reading where this change is…</p>;
+  if (!data) {
+    return (
+      <div className="wc-where" data-testid={`work-card-wpc-${cardId}`}>
+        <p className="small" data-testid={`wpc-missing-${cardId}`}>
+          {status === 404
+            ? "Nothing has started on this site change yet. Its first run reads the request and asks for the folder or the site if either is missing."
+            : "Could not read where this change is."}
+        </p>
+        <div className="wc-columns">
+          <section className="wc-section">
+            <h4 className="wc-label">What has happened</h4>
+            {timeline}
+          </section>
+          <section className="wc-section">
+            <h4 className="wc-label">The details</h4>
+            <dl className="wc-details">{lead}{tail}</dl>
+          </section>
         </div>
-        {r.build_proof && (
-          <div>
-            <dt>Build proof</dt>
-            <dd><pre className="wpc-proof" data-testid={`wpc-build-proof-${cardId}`}>{r.build_proof}</pre></dd>
-          </div>
-        )}
-        <div>
-          <dt>Landed</dt>
-          <dd data-testid={`wpc-landed-${cardId}`}>{r.merge_sha ? `${r.merge_sha.slice(0, 10)} · ${r.landed_at ? readableDate(r.landed_at) : ""}` : "not yet"}</dd>
-        </div>
-        {r.notices.length > 0 && (
-          <div>
-            <dt>Told the partner</dt>
-            <dd data-testid={`wpc-notices-${cardId}`}>{r.notices.map((n) => `${n.kind}${n.sent ? "" : " (not sent)"} · ${readableDate(n.sent_at)}`).join(" · ")}</dd>
-          </div>
-        )}
-        {r.live_proof && (
-          <div>
-            <dt>Live proof</dt>
-            <dd><pre className="wpc-proof" data-testid={`wpc-live-proof-${cardId}`}>{r.live_proof}</pre></dd>
-          </div>
-        )}
-      </dl>
-      <RequesterNotes cardId={cardId} notes={r.requester_notes} byName={r.requester_notes_by_name} at={r.requester_notes_at} canEdit={canEdit} onSaved={reload} />
+      </div>
+    );
+  }
+  return (
+    <div className="wc-where" data-testid={`work-card-wpc-${cardId}`}>
+      <section className="wc-section">
+        <h4 className="wc-label">Where it is</h4>
+        <SiteStages row={data} owner={owner} />
+      </section>
+      <div className="wc-columns">
+        <section className="wc-section">
+          <h4 className="wc-label">What has happened</h4>
+          {timeline}
+        </section>
+        <section className="wc-section">
+          <h4 className="wc-label">The details</h4>
+          <SiteDetails row={data} cardId={cardId} onNavigate={onNavigate} recipient={recipient} lead={lead} tail={tail} gate={gate} />
+        </section>
+      </div>
     </div>
   );
 }
@@ -306,7 +452,7 @@ export function WebPropertyChangePanel({ cardId, onNavigate, canEdit = false }: 
  * A MANAGING PARTNER'S ONLY. The API refuses anyone else; without the role the words still SHOW,
  * because who spoke for the firm on a piece of work is a fact about it, not a control.
  */
-function RequesterNotes({
+export function RequesterNotes({
   cardId,
   notes,
   byName,
@@ -340,30 +486,42 @@ function RequesterNotes({
   }
 
   if (!canEdit && !notes) return null;
+  /* RELABELLED, NOT REBUILT (23 Sep 2026, the work-card redesign). "Your words on the finished
+     email" sat beside "Tell Porter something" and read as a second way to instruct him. It is not:
+     it is printed in the done email under her name. The label says which of the two boxes is which. */
   return (
-    <div className="card-block-form" data-testid={`wpc-requester-notes-${cardId}`}>
-      <p className="lbl">Your words on the finished email</p>
+    <div className="wc-pair-col" data-testid={`wpc-requester-notes-${cardId}`}>
+      <label className="wc-label" htmlFor={`wpc-requester-notes-text-${cardId}`}>
+        A note in the finished email
+      </label>
       {canEdit ? (
         <>
           <textarea
+            id={`wpc-requester-notes-text-${cardId}`}
             rows={3}
             value={value}
             disabled={busy}
-            aria-label="Your words on the finished email"
             data-testid={`wpc-requester-notes-text-${cardId}`}
-            placeholder="One line each. They go out with the finished work, as a section in your name, above Your call."
+            placeholder="Printed in the done email under your name. Not an instruction to Porter."
             onChange={(e) => setDraft(e.target.value)}
           />
-          <button type="button" className="btn-strong" disabled={busy} data-testid={`wpc-requester-notes-save-${cardId}`} onClick={() => void save()}>
-            {busy ? "Saving…" : "Save my words"}
-          </button>
+          <div className="wc-pair-actions">
+            <button type="button" disabled={busy} data-testid={`wpc-requester-notes-save-${cardId}`} onClick={() => void save()}>
+              {busy ? "Saving…" : "Save note"}
+            </button>
+            <span className="wc-quiet" data-testid={`wpc-requester-notes-by-${cardId}`}>
+              {byName && at ? `${byName} wrote this ${readableDate(at)}.` : "Goes out with the finished work and nothing else."}
+            </span>
+          </div>
         </>
       ) : (
-        <p data-testid={`wpc-requester-notes-read-${cardId}`}>{notes}</p>
+        <>
+          <p data-testid={`wpc-requester-notes-read-${cardId}`}>{notes}</p>
+          <p className="wc-quiet" data-testid={`wpc-requester-notes-by-${cardId}`}>
+            {byName && at ? `${byName} wrote this ${readableDate(at)}. It goes out with the finished work and nothing else.` : "Goes out with the finished work and nothing else."}
+          </p>
+        </>
       )}
-      <p className="field-help" data-testid={`wpc-requester-notes-by-${cardId}`}>
-        {byName && at ? `${byName} wrote this ${readableDate(at)}. It goes out with the finished work and nothing else.` : "Nothing yet. Anything here goes out with the finished work and nothing else."}
-      </p>
       {error && <p className="field-help err" data-testid={`wpc-requester-notes-error-${cardId}`}>{error}</p>}
     </div>
   );

@@ -1,4 +1,4 @@
-import { partnerByFirmUserId } from "../registry/partners";
+import { partnerByEmail, partnerByFirmUserId } from "../registry/partners";
 
 /**
  * WHERE A CARD CAME FROM, answered from the row itself (22 Sep 2026).
@@ -100,4 +100,37 @@ export function originBadgeText(origin: Origin, createdByName?: string | null): 
       if (origin.who.toLowerCase().includes("sweep")) return "from the scheduled sweep";
       return "from the system";
   }
+}
+
+/**
+ * WHO ACTUALLY ASKED, IN WORDS (23 Sep 2026, the work-card redesign).
+ *
+ * The card page said "Requested by a hand-off" on Porter's website job — true of the row (the
+ * intake card handed it to him) and useless to her, because she is the one who asked, by email.
+ * `originOf` answers "which door did the row come through", which the Record's filter needs; this
+ * answers "who asked", which is what a person reading the card wants. The requester's address is
+ * read FIRST, ahead of the hand-off, because a hand-off carries it forward.
+ */
+export function askedBy(
+  card: OriginCard & { created_by_ai_name?: string | null },
+  viewer: { id?: string | null; email?: string | null } = {},
+): { who: string; how: string | null; you: boolean } {
+  const email = (card.requested_by_email ?? "").trim().toLowerCase();
+  if (email) {
+    const partner = partnerByEmail(email);
+    const viewerPartner = partnerByEmail(viewer.email ?? "") ?? partnerByFirmUserId(viewer.id ?? "");
+    const you = Boolean(partner && viewerPartner && partner.firmUserId === viewerPartner.firmUserId) || email === (viewer.email ?? "").toLowerCase();
+    return { who: you ? "You" : (partner?.fullName ?? email), how: "by email", you };
+  }
+  const by = (card.created_by ?? "").trim();
+  const partner = partnerByFirmUserId(by);
+  if (partner) {
+    const you = Boolean(viewer.id) && by === viewer.id;
+    return { who: you ? "You" : partner.fullName, how: null, you };
+  }
+  if (card.meeting_id) return { who: "A meeting", how: "a promise made in it", you: false };
+  if (card.capture_id) return { who: "Something you captured", how: null, you: false };
+  if (card.created_by_ai_name) return { who: card.created_by_ai_name, how: null, you: false };
+  if (by.toLowerCase().includes("sweep") || by.toLowerCase().includes("job")) return { who: "The scheduled work", how: null, you: false };
+  return { who: "The firm's own machinery", how: null, you: false };
 }

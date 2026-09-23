@@ -50,12 +50,12 @@ describe("sitePreviewBadge reads the site gate, and only the site gate", () => {
   it("a web property change with preview_only = 1 shows ON, whatever preview_first says", () => {
     for (const preview_first of [null, 0, 1]) {
       const b = sitePreviewBadge({ kind: WEB_PROPERTY_CHANGE_KIND, site_preview_only: 1, preview_first } as never);
-      expect(b).toEqual({ on: true, text: "Preview before it goes live: always on", title: expect.stringMatching(/approved to production/) });
+      expect(b).toEqual({ on: true, text: "Preview first · always on", title: expect.stringMatching(/approved to production/) });
     }
   });
 
   it("a web property change with preview_only = 0 shows OFF, even when preview_first is 1 — never borrowed from the other flag", () => {
-    expect(sitePreviewBadge({ kind: WEB_PROPERTY_CHANGE_KIND, site_preview_only: 0, preview_first: 1 } as never)).toMatchObject({ on: false, text: "Preview before it goes live: off" });
+    expect(sitePreviewBadge({ kind: WEB_PROPERTY_CHANGE_KIND, site_preview_only: 0, preview_first: 1 } as never)).toMatchObject({ on: false, text: "Off · goes live when the checks pass" });
     expect(sitePreviewBadge({ kind: WEB_PROPERTY_CHANGE_KIND, site_preview_only: null } as never)?.on).toBe(false);
   });
 
@@ -77,7 +77,7 @@ describe("the board serves the site gate beside preview_first", () => {
     expect(found.kind).toBe(WEB_PROPERTY_CHANGE_KIND);
     expect(found.site_preview_only).toBe(1);
     expect(found.preview_first ?? null, "Show me first is a different hold and is not set by the site gate").toBeNull();
-    expect(sitePreviewBadge(found as never)).toMatchObject({ on: true, text: "Preview before it goes live: always on" });
+    expect(sitePreviewBadge(found as never)).toMatchObject({ on: true, text: "Preview first · always on" });
   });
 
   it("an ordinary card carries site_preview_only NULL and no badge", async () => {
