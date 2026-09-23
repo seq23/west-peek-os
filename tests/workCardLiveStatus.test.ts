@@ -3,10 +3,13 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import type { FirmUserIdentity } from "../src/worker/auth";
 import { createWorkCardInternal, handleGetWorkCard, handleWorkByOwner } from "../src/worker/services/workCards";
-import { RUN_FRESH_MS, deskSummary, firstSentence, liveStatus, type LiveStatusInput } from "../src/shared/work/liveStatus";
+import { RUN_FRESH_MS, deskSummary, firstSentence, liveStatus, plainFailure, sentenceCase, siteWait, type LiveStatusInput } from "../src/shared/work/liveStatus";
 import { plainTitle, shortAsk, siteStage } from "../src/shared/work/siteChange";
 import { cardTimeline, trailSentence } from "../src/shared/work/cardTimeline";
 import { askedBy } from "../src/shared/work/origin";
+import { handleGetWebPropertyChange } from "../src/worker/services/webPropertyChange";
+import { APPROVED_REPLY, CHANGES_REPLY_PREFIX, MATERIALS_ADDED_PHRASE, PUBLISH_REPLY } from "../src/shared/work/previewReplies";
+import { readApprovalReply } from "../src/shared/work/approvalReply";
 
 /**
  * THE WORK-CARD REDESIGN (23 Sep 2026), HELD TO ITS WORDS.
@@ -200,6 +203,86 @@ describe("plainTitle — never the raw email cut off mid-word", () => {
   });
 });
 
+/**
+ * THE LIVE CARD, wc_c9e36e8b, AS IT STOOD ON 23 SEP 2026 (read from production, owner review of #193).
+ * Its title came out as the whole email subject, its status line as "Needs you: PREVIEW READY", and
+ * its timeline as "A try failed: Attempt 1 of 3 did not get anywhere". These are its real strings.
+ */
+describe("wc_c9e36e8b — the owner's review of #193, pinned on the real strings", () => {
+  const LIVE = {
+    title: 'Change joinwestpeek.com: "Porter, We need to get started on the community site redesign (j',
+    parent_title: "From sequoia@westpeek.ventures: Community site redesign — everything is in the Drive folder",
+    ask: "Porter,\n\nWe need to get started on the community site redesign (joinwestpeek.com). Everything is in this Drive folder, and there's a README in it. Start there.",
+    needed:
+      "PREVIEW READY. Look at it here: https://a782bc7d.west-peek-ventures.pages.dev' · https://a782bc7d.west-peek-ventures.pages.dev</a · https://work-wpc-c9e36e8b.west-peek-community.pages.dev</a.",
+  };
+  const card = (over: Partial<LiveStatusInput> = {}): LiveStatusInput =>
+    porter({
+      kind: "WEB_PROPERTY_CHANGE",
+      state: "BLOCKED",
+      block: { needed: LIVE.needed, stopped: "Porter needs something from you before this can go any further.", who: "SEQUOIA" },
+      site_phase: "BUILD",
+      site_preview_url: "https://work-wpc-c9e36e8b.west-peek-community.pages.dev",
+      site_check_state: "GREEN",
+      site_preview_only: 1,
+      site_publish_ready: 0,
+      site_land_approved_at: null,
+      site_plan_filed_at: "2026-09-23T17:30:00Z",
+      site_plan_approved_at: "2026-09-23T17:48:18Z",
+      work_last_failure: "Attempt 1 of 3 did not get anywhere.",
+      ...over,
+    });
+
+  it("the title is the job's short name and the site — never the subject's whole sentence, never cut mid-word", () => {
+    const t = plainTitle({ title: LIVE.title, kind: "WEB_PROPERTY_CHANGE", host: "joinwestpeek.com", subject: LIVE.parent_title, ask: LIVE.ask });
+    expect(t).toBe("Community site redesign · joinwestpeek.com");
+    // The subject's own name — its first clause — is enough on its own…
+    expect(plainTitle({ title: LIVE.title, kind: "WEB_PROPERTY_CHANGE", host: "joinwestpeek.com", subject: LIVE.parent_title, ask: null })).toBe("Community site redesign · joinwestpeek.com");
+    // …the ask names it when the subject is missing…
+    expect(plainTitle({ title: LIVE.title, kind: "WEB_PROPERTY_CHANGE", host: "joinwestpeek.com", subject: null, ask: LIVE.ask })).toBe("Community site redesign · joinwestpeek.com");
+    // …a subject that is all sentence and no name falls to the ask…
+    expect(plainTitle({ title: LIVE.title, kind: "WEB_PROPERTY_CHANGE", host: "joinwestpeek.com", subject: "From x@y.z: Here is everything you need for the site this week with all of the files", ask: LIVE.ask })).toBe("Community site redesign · joinwestpeek.com");
+    // And with neither, the truncated card title still yields whole words.
+    expect(plainTitle({ title: LIVE.title, kind: "WEB_PROPERTY_CHANGE", host: "joinwestpeek.com", subject: null, ask: null })).toBe("Community site redesign · joinwestpeek.com");
+  });
+
+  it("the status line is 'Preview ready · look and reply', read from the row — never the block's shouting text", () => {
+    const s = liveStatus(card(), ME, NOW);
+    expect(s).toMatchObject({ kind: "NEEDS_YOU", section: "needs", pill: "Needs you", line: "Preview ready · look and reply", failing: false });
+    expect(s.line).not.toMatch(/PREVIEW READY|pages\.dev|Needs you/);
+    expect(siteWait(card())).toBe("PREVIEW");
+  });
+
+  it("every stage is sentence case: a plan waiting reads 'Plan ready · read it and reply'", () => {
+    const plan = card({ site_phase: "PLAN", site_plan_approved_at: null, site_preview_url: null, site_check_state: null });
+    expect(siteWait(plan)).toBe("PLAN");
+    expect(liveStatus(plan, ME, NOW).line).toBe("Plan ready · read it and reply");
+  });
+
+  it("the preview wait ends when she approves, when it is forced, or when the build is not green", () => {
+    expect(siteWait(card({ site_land_approved_at: "x" }))).toBeNull();
+    expect(siteWait(card({ site_forced_by: "fu_sequoia_taylor" }))).toBeNull();
+    expect(siteWait(card({ site_check_state: "PENDING" }))).toBeNull();
+    expect(siteWait(card({ kind: null }))).toBeNull();
+  });
+
+  it("a shouting block on any other card is said in sentence case", () => {
+    const s = liveStatus(porter({ state: "BLOCKED", block: { needed: "PREVIEW READY. Look at it." } }), ME, NOW);
+    expect(s.line).toBe("Needs you: Preview ready");
+    expect(sentenceCase("URGENT: CALL DAN today")).toBe("Urgent: call dan today");
+  });
+
+  it("the failed try says plainly whose it was: 'First try stalled on our side; retried automatically.'", () => {
+    expect(plainFailure("Attempt 1 of 3 did not get anywhere.")).toBe("First try stalled on our side; retried automatically.");
+    expect(plainFailure("Attempt 2 of 3 did not get anywhere")).toBe("Second try stalled on our side; retried automatically.");
+    const out = cardTimeline({ created_at: "2026-09-23T17:00:00Z", owner_name: "Porter", asked_by: "You", trail: [], last_failure: "Attempt 1 of 3 did not get anywhere.", last_failure_at: "2026-09-23T17:24:00Z" });
+    expect(out.map((e) => e.text)).toContain("First try stalled on our side; retried automatically.");
+    expect(out.map((e) => e.text).join(" ")).not.toMatch(/did not get anywhere|A try failed/);
+    const waiting = liveStatus(porter({ work_last_failure: "Attempt 1 of 3 did not get anywhere." }), ME, NOW);
+    expect(waiting.line).toBe("Next try within 5 min · first try stalled on our side; retried automatically");
+  });
+});
+
 describe("siteStage — Plan, Build, Preview, Live from the row's facts", () => {
   it("walks the four stages", () => {
     expect(siteStage({ phase: "PLAN" }).key).toBe("PLAN");
@@ -236,7 +319,7 @@ describe("the timeline and who asked, in words", () => {
     expect(out.map((e) => e.text)).toEqual([
       "You asked Porter.",
       'Porter replied "got it" and started.',
-      "A try failed: The first try stalled. It is tried again on its own.",
+      "A try failed: The first try stalled. Retried automatically.",
       "Try 2 started on your Mac.",
     ]);
     expect(out[3]!.now).toBe(true);
@@ -317,5 +400,26 @@ describe("the board and the card page serve one title and one run", () => {
     expect(row.current_run).toBeNull();
     expect(row.plain_title).toBe("Plain card with nothing running");
     expect(liveStatus(row as never, ME).kind).toBe("QUEUED");
+  });
+});
+
+describe("the Preview-ready panel reads structured fields and speaks her four replies", () => {
+  it("serves ONE clean link for the card's own site, from the stored mess on wc_c9e36e8b", async () => {
+    const card = await createWorkCardInternal(env, SEQUOIA, { title: "Preview link fixture", owner_type: "AI", owner_id: "aie_porter", kind: "WEB_PROPERTY_CHANGE" } as never);
+    const mess =
+      "https://a782bc7d.west-peek-ventures.pages.dev' · https://a782bc7d.west-peek-ventures.pages.dev</a · https://work-wpc-c9e36e8b.west-peek-ventures.pages.dev' · " +
+      "https://73efcfc2.west-peek-productions.pages.dev' · https://work-wpc-c9e36e8b.west-peek-productions.pages.dev</a · https://fe42ec36.west-peek-community.pages.dev' · " +
+      "https://work-wpc-c9e36e8b.west-peek-community.pages.dev' · https://work-wpc-c9e36e8b.west-peek-community.pages.dev</a";
+    await env.WP_OS_DB.prepare("INSERT INTO web_property_change (work_card_id, target_repo, property_host, ask, phase, branch, preview_url, check_state) VALUES (?1, 'join-west-peek-main', 'joinwestpeek.com', 'x', 'BUILD', 'work/wpc-c9e36e8b', ?2, 'GREEN')").bind(card.id, mess).run();
+    const res = await handleGetWebPropertyChange({ env, identity: SEQUOIA as never, params: { id: card.id }, request: req() } as never);
+    const body = (await res.json()) as { preview_link: string | null };
+    expect(body.preview_link).toBe("https://work-wpc-c9e36e8b.west-peek-community.pages.dev");
+  });
+
+  it("each button's words mean what its label says, to the one reply reader", () => {
+    expect(readApprovalReply(APPROVED_REPLY).kind).toBe("APPROVED");
+    expect(readApprovalReply(`${CHANGES_REPLY_PREFIX} make the hero photo the group shot`)).toMatchObject({ kind: "REFUSED", changes: true });
+    expect(readApprovalReply(PUBLISH_REPLY).kind).toBe("PUBLISH");
+    expect(MATERIALS_ADDED_PHRASE).toBe("I added missing items");
   });
 });

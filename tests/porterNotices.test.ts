@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   cleanPreviewUrls,
+  clauseLine,
   currentPreviewLine,
   decidedSoFar,
   doneNotice,
@@ -17,6 +18,7 @@ import {
 } from "../src/shared/work/porterNotices";
 import { boldNumbers, lintExecEmail, renderExecEmail } from "../src/shared/email/execEmail";
 import { readApprovalReply } from "../src/shared/work/approvalReply";
+import { plainTitle } from "../src/shared/work/siteChange";
 import { rebuildIntentFor } from "../src/worker/services/webPropertyChange";
 // The Mac's reader, held to the same answers as the Worker's (one rule, two runtimes).
 import { previewUrlsFrom, branchAlias } from "../scripts/duties/web-property-change.mjs";
@@ -111,10 +113,13 @@ describe("the preview email (owner's spec, 23 Sep 2026)", () => {
     const answers = SIX_ASKS.map((a, i) => `${i + 1}. ${a.recommended} (approved as recommended)`);
     const decided = decidedSoFar(SIX_ASKS, answers, "Sequoia");
     expect(decided).toHaveLength(6);
-    expect(decided[0]).toBe("Orange: Yes, #c45a3c, held in one CSS token so a later change is… (recommended; approved by Sequoia)");
+    // "<topic>: <chosen answer, short>" (owner review, 23 Sep 2026) — the answer, not its backstory,
+    // and never a line cut mid-sentence.
+    expect(decided[0]).toBe("Orange: #c45a3c");
+    expect(decided).toEqual(["Orange: #c45a3c", "Workshops copy: ship the brief's wording as written", "History gallery: those nine", "Replacing /about with the history retires public claims now on joinwestpeek.com: retire them", "Image rights: For Ep 2 and 3, use the founder photos already live on westpeek.ventures", "Fonts: self-host Maax"]);
     const r2 = render(previewNotice({ title: "Community site redesign", previewLine: currentPreviewLine(ROW_GREEN), placeholders: [], decided, cardId: "wc_x" }));
-    expect(r2.text).toMatch(/\*\*Decided so far\*\*\n(• .+\(recommended; approved by Sequoia\)\n){6}/);
-    expect(decidedSoFar(SIX_ASKS.slice(0, 1), ["use black, not orange"], "Scooter")).toEqual([`Orange: as Scooter answered — "use black, not orange"`]);
+    expect(r2.text).toMatch(/\*\*Decided so far\*\*\n(• [^\n(…]+\n){6}/);
+    expect(decidedSoFar(SIX_ASKS.slice(0, 1), ["use black, not orange"], "Scooter")).toEqual(["Orange: use black, as Scooter answered"]);
   });
 
   it("a rebuild is \"New preview ready\" and says what was filled in since the last preview", () => {
@@ -200,5 +205,49 @@ describe("the words", () => {
     expect(rebuildIntentFor("approved"), "approved lands; it is not a rebuild").toBeNull();
     expect(rebuildIntentFor("stop"), "stop holds").toBeNull();
     expect(rebuildIntentFor("approved to production")).toBeNull();
+  });
+});
+
+/**
+ * THE PREVIEW EMAIL ON wc_c9e36e8b, 14:48, 23 SEP 2026 (owner review). Its subject carried the whole
+ * email subject ("Community site redesign — everything is in…"), and three lines were cut mid-sentence
+ * with "…". These are the row's real strings.
+ */
+describe("the preview email, on the live card's real strings", () => {
+  const PLACEHOLDERS = [
+    "Sengo's current pitch-application link (their prior Airtable invitation is no longer accessible; no public URL found)",
+    "Sengo logo",
+    "Pitch competition winner records (headshot, company logo, company description, win date per winner)",
+    "Episode 4 (Meka Egwuekwe) and Episode 5 (Kimberly Gant) YouTube links",
+  ];
+  const email = previewNotice({
+    title: plainTitle({ title: 'Change joinwestpeek.com: "Porter, We need to get started on the community site redesign (j', kind: "WEB_PROPERTY_CHANGE", host: null, subject: "From sequoia@westpeek.ventures: Community site redesign — everything is in the Drive folder", ask: null }),
+    previewLine: currentPreviewLine(ROW_GREEN),
+    placeholders: PLACEHOLDERS,
+    decided: decidedSoFar(SIX_ASKS, SIX_ASKS.map((a, i) => `${i + 1}. ${a.recommended} (approved as recommended)`), "Sequoia"),
+    cardId: "wc_c9e36e8b",
+  });
+  const r = render(email);
+
+  it("the subject uses the card's own plain-title reader: \"Community site redesign: Preview ready\"", () => {
+    expect(r.subject).toBe("Porter: Community site redesign: Preview ready");
+    expect(stageSubject(plainTitle({ title: "x", kind: "WEB_PROPERTY_CHANGE", host: "joinwestpeek.com", subject: "From a@b.c: Community site redesign — everything is in the Drive folder", ask: null }), STAGE.PREVIEW)).toBe(
+      "Community site redesign · joinwestpeek.com: Preview ready",
+    );
+  });
+
+  it("no line ends in \"…\", and each missing item is its name without the backstory", () => {
+    for (const line of r.text.split("\n")) expect(line, `a line cut mid-sentence: ${line}`).not.toMatch(/…\s*$/);
+    expect(r.text).toMatch(/\*\*Still missing \(optional\)\*\*\n• Sengo's current pitch-application link\n• Sengo logo\n• Pitch competition winner records\n• Episode \*\*4\*\* \(Meka Egwuekwe\) and Episode \*\*5\*\* \(Kimberly Gant\) YouTube links\n/);
+    expect(r.text).toMatch(/• Orange: #c45a3c\n/);
+    expect(r.text).not.toMatch(/Airtable|win date|approved by Sequoia/);
+  });
+
+  it("clauseLine keeps whole clauses and never adds an ellipsis", () => {
+    expect(clauseLine("Yes, #c45a3c, held in one CSS token so a later change is one line", 30)).toBe("Yes, #c45a3c");
+    expect(clauseLine("A single very long clause without any boundary at all whatsoever here", 10)).toBe("A single very long clause without any boundary at all whatsoever here");
+    expect(clauseLine("Ends with an open (parenthesis that was cut", 90)).toBe("Ends with an open");
+    expect(clauseLine("Ep 6 guest headshot (JPG)", 90)).toBe("Ep 6 guest headshot (JPG)");
+    expect(clauseLine("Sengo logo (their old one is gone, find a new one)", 90)).toBe("Sengo logo");
   });
 });

@@ -65,6 +65,68 @@ export interface LiveStatusInput {
   held_reason?: string | null;
   block?: { stopped?: string | null; needed?: string | null; who?: string | null } | null;
   current_run?: LiveRun | null;
+  /**
+   * A WEBSITE JOB'S STAGE, FROM ITS ROW (23 Sep 2026). When the card waits on her at the plan or the
+   * preview, the line says so in words — "Preview ready · look and reply" — from these structured
+   * facts, never from the stored block text ("PREVIEW READY. Look at it here: <six URLs>").
+   */
+  kind?: string | null;
+  site_phase?: string | null;
+  site_preview_url?: string | null;
+  site_land_approved_at?: string | null;
+  site_preview_only?: number | null;
+  site_publish_ready?: number | null;
+  site_check_state?: string | null;
+  site_forced_by?: string | null;
+  site_plan_filed_at?: string | null;
+  site_plan_approved_at?: string | null;
+}
+
+/** Where a website job waits on her, if it does — read from the row, never from block text. */
+export type SiteWait = "PREVIEW" | "PLAN" | null;
+
+export function siteWait(card: LiveStatusInput): SiteWait {
+  if (card.kind !== "WEB_PROPERTY_CHANGE") return null;
+  if (["DONE", "CANCELLED", "HELD"].includes(card.state)) return null;
+  const phase = (card.site_phase ?? "").toUpperCase();
+  const gated = (card.site_preview_only === 1 || card.site_publish_ready === 0) && !card.site_forced_by;
+  if ((phase === "BUILD" || phase === "LAND") && gated && !card.site_land_approved_at && card.site_check_state === "GREEN" && Boolean(card.site_preview_url)) return "PREVIEW";
+  if (phase === "PLAN" && card.site_plan_filed_at && !card.site_plan_approved_at && card.state === "BLOCKED") return "PLAN";
+  return null;
+}
+
+/**
+ * A stored sentence in sentence case. Blocks and failures are written by several hands and some
+ * shout ("PREVIEW READY."); the row never does.
+ */
+export function sentenceCase(text: string): string {
+  const t = text.trim();
+  if (!t) return t;
+  const words = t.split(/(\s+)/);
+  let i = 0;
+  // Lower every leading ALL-CAPS word of two or more letters, then capitalise the first letter.
+  while (i < words.length && (/^\s+$/.test(words[i]!) || /^[A-Z][A-Z'’-]+[.:,!]?$/.test(words[i]!))) {
+    if (!/^\s+$/.test(words[i]!)) words[i] = words[i]!.toLowerCase();
+    i += 1;
+  }
+  const out = words.join("");
+  return out.charAt(0).toUpperCase() + out.slice(1);
+}
+
+/**
+ * A FAILED TRY, SAID PLAINLY, WITH THE BLAME WHERE IT BELONGS (owner review, 23 Sep 2026). "Attempt
+ * 1 of 3 did not get anywhere" is the sweep's own bookkeeping; to her it means our run stalled and
+ * we tried again. Anything else keeps its words, in sentence case.
+ */
+export function plainFailure(text: string | null | undefined): string {
+  const t = (text ?? "").replace(/\s+/g, " ").trim();
+  const m = /^Attempt (\d+) of \d+ did not get anywhere\.?$/i.exec(t);
+  if (m) {
+    const n = Number(m[1]);
+    const ord = ["First", "Second", "Third", "Fourth"][n - 1] ?? `Try ${n}`;
+    return `${ord} try stalled on our side; retried automatically.`;
+  }
+  return t ? sentenceCase(t) : "";
 }
 
 export interface LiveStatus {
@@ -128,6 +190,13 @@ function firstName(name: string | null | undefined): string {
   return (name ?? "").trim().split(/\s+/)[0] || "your partner";
 }
 
+/** The failure as a clause after "Next try within 5 min · ". */
+function failureClause(text: string | null | undefined): string {
+  const said = plainFailure(text);
+  if (/retried automatically\.$/.test(said)) return said.replace(/\.$/, "").replace(/^./, (c) => c.toLowerCase());
+  return `the last try failed: ${firstSentence(said, 90)}`;
+}
+
 export function liveStatus(card: LiveStatusInput, meId: string, now: Date = new Date()): LiveStatus {
   const who = card.owner_name ?? "They";
   const failing = Boolean(card.work_last_failure) && !["BLOCKED", "DONE", "CANCELLED", "HELD"].includes(card.state);
@@ -142,9 +211,14 @@ export function liveStatus(card: LiveStatusInput, meId: string, now: Date = new 
     const why = card.held_reason ? `: ${firstSentence(card.held_reason, 80)}` : "";
     return { ...base, kind: "HELD", section: "needs", pill: "On hold", line: `${by} put this on hold${why}. Nothing works it until it is released.` };
   }
+  // A website job waiting at its plan or its preview is waiting on HER, in words — even when the
+  // runner parked it as a block to hold it there.
+  const wait = siteWait(card);
+  if (wait === "PREVIEW") return { ...base, failing: false, kind: "NEEDS_YOU", section: "needs", pill: "Needs you", line: "Preview ready · look and reply" };
+  if (wait === "PLAN") return { ...base, failing: false, kind: "NEEDS_YOU", section: "needs", pill: "Needs you", line: "Plan ready · read it and reply" };
   if (card.state === "BLOCKED") {
     const whoFor = card.block?.who === "ENGINEER" ? "Needs an engineer" : "Needs you";
-    const what = firstSentence(card.block?.needed || card.block?.stopped || card.next_action) || "an answer before it can go on";
+    const what = sentenceCase(firstSentence(card.block?.needed || card.block?.stopped || card.next_action)) || "An answer before it can go on";
     return { ...base, kind: "NEEDS_YOU", section: "needs", pill: "Needs you", line: `${whoFor}: ${what}` };
   }
   if (card.owner_type === "UNASSIGNED" || !card.owner_id) {
@@ -203,7 +277,7 @@ export function liveStatus(card: LiveStatusInput, meId: string, now: Date = new 
       kind: "WAITING",
       section: "worked",
       pill: "Waiting",
-      line: `${NEXT_TRY} · the last try failed: ${firstSentence(card.work_last_failure, 90)}`,
+      line: `${NEXT_TRY} · ${failureClause(card.work_last_failure)}`,
     };
   }
   if (card.state === "OPEN" && (card.work_attempts ?? 0) === 0) {

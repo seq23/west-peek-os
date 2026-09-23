@@ -39,6 +39,51 @@ export function shorten(text: string, max: number): string {
   return `${(at > max * 0.5 ? cut.slice(0, at) : cut).replace(/[\s,;:.—-]+$/, "")}…`;
 }
 
+/**
+ * A LINE IN A PARTNER EMAIL, NEVER CUT MID-SENTENCE (owner review, 23 Sep 2026). The preview email
+ * read "…(their prior Airtable invitation is no longer…", "…win date…", and "Orange: Yes, #c45a3c,
+ * held in one CSS token so a later change is… (recommended; approved by Sequoia)". So: parenthetical
+ * backstory (three words or more, or a list) is dropped, and a long line keeps as many WHOLE clauses as fit — a clause ends at
+ * ; , : . — or before "so", "because", "which", "that", "but". If even the first clause is longer
+ * than `max`, the whole clause is kept: a long line is better than a broken one. Never adds "…". Pure.
+ */
+export function clauseLine(text: string, max = 90): string {
+  const t = String(text ?? "")
+    .replace(/\s+/g, " ")
+    // Backstory in brackets goes ("(their prior Airtable invitation is no longer accessible; …)");
+    // a short qualifier that is part of the name stays ("(JPG)", "(Meka Egwuekwe)").
+    .replace(/\s*\(([^()]*)\)/g, (all, inner: string) => (/[;,]/.test(inner) || inner.trim().split(/\s+/).length >= 3 ? "" : all))
+    .replace(/\s*\([^()]*$/, "")
+    .replace(/\s+([,.;:])/g, "$1")
+    .trim()
+    .replace(/[\s,;:—–-]+$/, "")
+    .replace(/…$/, "");
+  if (t.length <= max) return t.replace(/[.]$/, "");
+  const ends: number[] = [];
+  for (const m of t.matchAll(/[;,:.!?](?=\s)|\s[—–](?=\s)|\s(?=(?:so|because|which|that|but|while)\s)/g)) ends.push(m.index!);
+  const fit = ends.filter((i) => i > 0 && i <= max);
+  const at = fit.length ? fit[fit.length - 1]! : ends.find((i) => i > 0);
+  return (at === undefined ? t : t.slice(0, at)).trim().replace(/[\s,;:.—–-]+$/, "");
+}
+
+/** The chosen answer, short: "Yes, #c45a3c, held in one CSS token so …" → "#c45a3c". Pure. */
+export function answerShort(text: string): string {
+  const bare = String(text ?? "").replace(/^\s*(?:yes|no)\s*[,:—–-]\s*/i, "");
+  const first = clauseLine(bare, 1);
+  // A first clause that only sets the scene ("For Ep 2 and 3, use the founder photos …") is not the
+  // answer; the answer is the clause after it, so the two are kept together.
+  if (/^(?:for|in|on|at|with|if|when|where|after|before)\b/i.test(first)) {
+    const rest = clauseLine(bare.slice(first.length).replace(/^[\s,;:—–-]+/, ""), 1);
+    return rest ? `${first}, ${rest}` : first;
+  }
+  return first || clauseLine(text, 60);
+}
+
+/** The decision's topic: the question up to its first ":" or "?", as whole words. Pure. */
+export function topicOf(question: string): string {
+  return clauseLine(question.split(/[:?]/)[0]!.trim() || question, 40);
+}
+
 /** "12:40 CT" — the partners read Central time. Pure. */
 export function builtAt(iso: string | null | undefined): string | null {
   if (!iso || Number.isNaN(Date.parse(iso))) return null;
@@ -182,7 +227,7 @@ export function stageSubject(title: string, stage: string): string {
  * section at six lines, so a longer list continues in a second section of the same name. Pure.
  */
 export function listSections(label: string, items: readonly string[], tail: readonly string[] = [], maxLen = 90): NoticeEmail["sections"] {
-  const lines = [...items.map((x) => shorten(x, maxLen)), ...tail];
+  const lines = [...items.map((x) => clauseLine(x, maxLen)), ...tail];
   const out: NoticeEmail["sections"] = [];
   for (let i = 0; i < lines.length; i += MAX_LINES) out.push({ label: i === 0 ? label : `${label}, continued`, bullets: lines.slice(i, i + MAX_LINES) });
   return out;
@@ -198,7 +243,7 @@ export function planNotice(input: { title: string; asks: readonly Ask[]; missing
   const sections: NoticeEmail["sections"] = [];
   // A job over several sites says so once: one plan, one preview each, landing together (0236).
   if ((input.sites?.length ?? 0) > 1) sections.push({ label: `${input.sites!.length} sites, one job`, bullets: [`${input.sites!.join(", ")}: one plan, a preview of each, and they go live together.`] });
-  if (n) sections.push(...listSections(`${n} decision${n === 1 ? "" : "s"} (my recommendation in bold)`, input.asks.map((a) => `${shorten(a.question, 100)} → **${shorten(a.recommended, 70)}**`), [], 200));
+  if (n) sections.push(...listSections(`${n} decision${n === 1 ? "" : "s"} (my recommendation in bold)`, input.asks.map((a) => `${clauseLine(a.question, 160)} → **${clauseLine(a.recommended, 70)}**`), [], 240));
   if (m) sections.push(...listSections("Missing items (optional)", input.missing.map((x) => x.item), ["You don't need these to continue. I'll use placeholders; add them to Drive or attach them to any reply and I'll rebuild."]));
   sections.push({ label: "Preview", bullets: [input.previewLine ?? FIRST_PREVIEW_NEXT] });
   sections.push({ label: "The full plan", bullets: [`The full plan is on the card: ${cardLinkFor(input.cardId)}`] });
@@ -227,12 +272,14 @@ export function decidedSoFar(asks: readonly Ask[], answers: readonly string[], a
     else if (a !== "approved as written") own.push(a);
   }
   return asks.map((a, i) => {
-    const topic = shorten(a.question.split(/[:?]/)[0]!.trim() || a.question, 40);
+    // "<topic>: <chosen answer, short>" — "Orange: #c45a3c". Who approved it and how is on the card;
+    // the email says what was decided (owner review, 23 Sep 2026).
+    const topic = topicOf(a.question);
     const s = solved.get(i);
-    if (s) return `${topic}: ${shorten(s.chosen, 60)}. Solved: ${shorten(s.how, 80)}`;
-    if (approved.has(i)) return `${topic}: ${shorten(a.recommended, 60)} (recommended; approved by ${who})`;
-    if (own.length) return `${topic}: as ${who} answered — "${shorten(own.join(" / "), 60)}"`;
-    return `${topic}: ${shorten(a.recommended, 60)} (recommended; not yet approved)`;
+    if (s) return `${topic}: ${answerShort(s.chosen)}`;
+    if (approved.has(i)) return `${topic}: ${answerShort(a.recommended)}`;
+    if (own.length) return `${topic}: ${answerShort(own.join(" / "))}, as ${who} answered`;
+    return `${topic}: ${answerShort(a.recommended)}, if you approve`;
   });
 }
 
@@ -278,10 +325,10 @@ export function questionNotice(input: { title: string; question: readonly string
 
 /** STUCK — the one notice that says "Blocked", and says by what, in one line. Pure. */
 export function stuckNotice(input: { title: string; blockedBy: string; next: string; previewLine: string | null; cardId: string }): NoticeEmail {
-  const sections: NoticeEmail["sections"] = [{ label: "What happens next", bullets: [shorten(input.next, 200)] }];
+  const sections: NoticeEmail["sections"] = [{ label: "What happens next", bullets: [clauseLine(input.next, 200)] }];
   if (input.previewLine) sections.push({ label: "Current preview", bullets: [input.previewLine] });
   sections.push(ON_THE_CARD(input.cardId));
-  return { what: stageSubject(input.title, STAGE.STUCK), tldr: `Blocked: ${shorten(input.blockedBy, 200)}`, tldrBullets: [], sections };
+  return { what: stageSubject(input.title, STAGE.STUCK), tldr: `Blocked: ${clauseLine(input.blockedBy, 200)}`, tldrBullets: [], sections };
 }
 
 /** DONE — it is live; where, and anything still missing. Proof stays on the card. Pure. */

@@ -66,7 +66,9 @@ interface ChangeRow {
   requester_notes_by_name: string | null;
   requester_notes_at: string | null;
   /** 0236: a job over several repos — one PR, check, preview and merge per repo. Empty for one repo. */
-  parts?: Array<{ repo: string; property_host: string; pr_url: string | null; pr_number: number | null; check_state: "PENDING" | "GREEN" | "RED" | null; check_url: string | null; preview_url: string | null; merge_sha: string | null }>;
+  /** The ONE preview link for the card's own site, derived server-side from structured fields. */
+  preview_link?: string | null;
+  parts?: Array<{ repo: string; property_host: string; preview_link?: string | null; pr_url: string | null; pr_number: number | null; check_state: "PENDING" | "GREEN" | "RED" | null; check_url: string | null; preview_url: string | null; merge_sha: string | null }>;
 }
 
 /**
@@ -93,7 +95,10 @@ function stageWords(r: ChangeRow, i: number, at: number, owner: string, done: bo
       if (state === "done") return `Done. The plan was written${r.plan_filed_at ? ` ${shortDate(r.plan_filed_at)}` : ""}${r.plan_approved_at ? " and you approved it" : ""}.`;
       return `${state === "now" ? "Now. " : ""}${owner} reads ${r.drive_folder_url ? "your Drive folder" : "your request"} and writes the plan, then emails you ${owner === "Porter" ? "his" : "the"} questions.`;
     case "BUILD":
-      if (state === "done") return `Done.${r.pr_number ? ` Code change #${r.pr_number}` : ""}${r.check_state === "GREEN" ? ", checks passed" : ""}.`;
+      if (state === "done") {
+        const said = [r.pr_number ? `code change #${r.pr_number}` : null, r.check_state === "GREEN" ? "checks passed" : null].filter(Boolean).join(", ");
+        return said ? `Done: ${said}.` : "Done.";
+      }
       return state === "now" ? `Now. ${owner} changes only ${host} and opens a code change for the checks.` : `After you answer. Changes only ${host}.`;
     case "PREVIEW":
       if (!needsPreviewOf(r)) return r.forced_by_name ? `Skipped: ${r.forced_by_name} said "approved to production".` : "Skipped for this change.";
@@ -174,10 +179,10 @@ export function SiteDetails({
                     <span className={p.check_state === "GREEN" ? "badge badge-ok" : p.check_state === "RED" ? "badge badge-bad" : "badge badge-gate"}>{checkWords(p.check_state)}</span>
                   </>
                 )}
-                {p.preview_url && (
+                {p.preview_link && (
                   <>
                     {" · "}
-                    <a href={p.preview_url} target="_blank" rel="noopener noreferrer">
+                    <a href={p.preview_link} target="_blank" rel="noopener noreferrer">
                       preview
                     </a>
                   </>
@@ -263,12 +268,14 @@ export function SiteDetails({
       </dd>
       <dt>Preview link</dt>
       <dd>
-        {r.preview_url && !r.parts?.length ? (
-          <a href={r.preview_url} target="_blank" rel="noopener noreferrer" data-testid={`wpc-preview-${cardId}`}>
-            {r.preview_url}
+        {/* The ONE clean link the server derives for this card's own site — never the stored
+            preview_url, which has carried six URLs, other sites' previews and HTML fragments. */}
+        {r.preview_link && !r.parts?.length ? (
+          <a href={r.preview_link} target="_blank" rel="noopener noreferrer" data-testid={`wpc-preview-${cardId}`}>
+            {r.preview_link}
           </a>
         ) : (
-          <span className="wc-quiet">{r.parts?.length ? "One per site, listed above" : "Comes at step 3"}</span>
+          <span className="wc-quiet">{r.parts?.length ? "One per site, listed above" : r.preview_url ? "On its way" : "Comes at step 3"}</span>
         )}
       </dd>
       <dt>Before it goes live</dt>

@@ -2258,8 +2258,16 @@ export async function handleGetWebPropertyChange(ctx: RouteContext): Promise<Res
   const run = row.current_run_id ? await readRun(ctx.env, row.current_run_id) : null;
   return json({
     ...row,
-    // 0236: a multi-repo job's repos, each with its own PR, check, preview and merge.
-    parts: await readParts(ctx.env, id),
+    // 0236: a multi-repo job's repos, each with its own PR, check, preview and merge — and, since the
+    // work-card follow-up (23 Sep 2026), each with its ONE clean preview link for its own site.
+    parts: (await readParts(ctx.env, id)).map((p) => ({ ...p, preview_link: cleanPreviewUrls(p.preview_url, pagesHostsOf(p.property_host), row.branch ?? "") })),
+    /**
+     * THE ONE PREVIEW LINK FOR THIS CARD'S SITE (owner review of #193, 23 Sep 2026): the branch alias
+     * under the site's own Pages project, from `cleanPreviewUrls` — the same strict reading the
+     * emails use. The card never shows `preview_url` raw: on wc_c9e36e8b it held six URLs, two of
+     * them other sites' previews, with ' and </a fragments.
+     */
+    preview_link: cleanPreviewUrls(row.preview_url, pagesHostsOf(row.property_host), row.branch ?? ""),
     decided: list(row.decided_json),
     asks: askLines(asksOf(row)),
     answers: list(row.answers_json),

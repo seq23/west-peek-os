@@ -101,10 +101,20 @@ export function OwnerChip({ name }: { name: string | null }): JSX.Element {
 }
 
 /** The face and name on the left of a row. */
-function RowOwner({ name }: { name: string | null }): JSX.Element {
+function RowOwner({ name, partners = [] }: { name: string | null; partners?: Array<{ first_name: string; role: string }> }): JSX.Element {
   const src = name ? portraitFor(name) : null;
   return (
     <span className="wc-owner">
+      {/* THE TWO PARTNERS WHO HOLD IT (0241), primary first — beside who is doing the work. */}
+      {partners.length > 0 && (
+        <span className="wc-partner-faces" aria-label={partners.map((p) => `${p.role}: ${p.first_name}`).join(", ")}>
+          {partners.map((p) => (
+            <span key={p.role} className="wc-partner-face" title={`${p.role}: ${p.first_name}`} aria-hidden="true">
+              {p.first_name.slice(0, 1)}
+            </span>
+          ))}
+        </span>
+      )}
       {src ? (
         <img className="wc-avatar" src={src} alt="" loading="lazy" />
       ) : (
@@ -262,7 +272,13 @@ export function WorkDesk({
         data-failing={status.failing ? "yes" : "no"}
       >
         <div className="wc-row" data-testid={`work-card-row-${c.id}`}>
-          <RowOwner name={c.owner_type === "UNASSIGNED" ? null : (c.owner_name ?? null)} />
+          <RowOwner
+            name={c.owner_type === "UNASSIGNED" ? null : (c.owner_name ?? null)}
+            partners={[
+              ...(c.primary_partner && c.secondary_partner ? [{ first_name: c.primary_partner.first_name, role: "Owner" }] : []),
+              ...(c.secondary_partner ? [{ first_name: c.secondary_partner.first_name, role: "Secondary" }] : []),
+            ]}
+          />
           <div className="wc-row-main">
             <strong className="wc-title" data-testid={`work-card-title-${c.id}`}>
               {c.plain_title ?? c.title}

@@ -1,5 +1,6 @@
 import type { Block } from "@shared/work/blocks";
 import type { LiveRun } from "@shared/work/liveStatus";
+import type { PartnerView } from "@shared/work/partnerOwnership";
 
 /**
  * The row shapes the Work surface reads, in one place.
@@ -99,6 +100,15 @@ export interface WorkCardRow {
   site_merge_sha?: string | null;
   site_publish_ready?: number | null;
   site_ask?: string | null;
+  site_check_state?: string | null;
+  site_forced_by?: string | null;
+  site_plan_filed_at?: string | null;
+  site_plan_approved_at?: string | null;
+  /** 0241: the partner who owns the card and the one it was handed to — primary first. */
+  primary_partner?: PartnerView | null;
+  secondary_partner?: PartnerView | null;
+  /** "Owner: Sequoia · Secondary: Scooter", or null. */
+  partner_owner_line?: string | null;
   /** 0239: a JSON list of partner addresses cc'd on the finished email. */
   cc_emails?: string | null;
   looks?: Array<{

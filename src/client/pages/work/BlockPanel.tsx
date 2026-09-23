@@ -19,7 +19,10 @@ export function BlockPanel({
   clearText,
   setClearText,
   onClear,
+  heading,
 }: {
+  /** Overrides the heading when the card is waiting on her rather than blocked (a plan ready to read). */
+  heading?: string;
   card: WorkCardRow;
   employees: Assignable["employees"];
   busy: boolean;
@@ -40,7 +43,9 @@ export function BlockPanel({
         hit a wall and nothing is being tried until she moves it.
       */}
       <p className="lbl">
-        {technical
+        {heading
+          ? heading
+          : technical
           ? `Stopped${c.block.laneName ? ` — ${c.block.laneName} refused it` : ""} · nothing is being tried`
           : `Blocked — waiting on ${c.block.who === "ENGINEER" ? "an engineer" : c.block.who === "SCOOTER" ? "Scooter" : "you"}`}
       </p>

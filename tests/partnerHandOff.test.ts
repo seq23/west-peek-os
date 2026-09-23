@@ -276,8 +276,10 @@ describe("a hand-off through the route, on a card with three prior notices", () 
     expect(text).toContain("The preview is ready and waiting for your approval to go live.");
     expect(text).toMatch(/Current preview \(built [^)]*, \*{0,2}2\*{0,2} placeholders\): https:\/\/work-wpc-c9e36e8b\.west-peek-community\.pages\.dev/);
     expect(text).not.toContain("fe42ec36");
-    expect(text).toContain("Fonts: Maax self-hosted everywhere. Solved: Sequoia confirmed the licence covers web use (Sep 23)");
-    expect(text).toContain("Orange: Yes, #c45a3c, held in one CSS token (recommended; approved by Sequoia)");
+    // Each decision as "<topic>: <chosen answer, short>" — no backstory, no line cut mid-sentence.
+    expect(text).toContain("• Fonts: Maax self-hosted everywhere\n");
+    expect(text).toContain("• Orange: #c45a3c\n");
+    expect(text).not.toMatch(/…\n/);
     expect(text).toContain("Sep 23 · Porter → Sequoia: Got it, on it");
     expect(text).toContain("Sep 23 · Porter → Sequoia: The plan, for approval");
     expect(text).toContain("Sep 23 · Porter → Sequoia: Preview ready");

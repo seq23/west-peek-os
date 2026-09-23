@@ -91,8 +91,12 @@ function capital(s: string): string {
 
 /** The first thing the request asks for, as a short noun phrase where one can be found. */
 export function shortAsk(text: string | null | undefined, host: string | null = null, max = 56): string {
+  return readAsk(text, host, max).name;
+}
+
+function readAsk(text: string | null | undefined, host: string | null, max: number): { name: string; led: boolean } {
   let t = (text ?? "").replace(/\r/g, "").trim();
-  if (!t) return "";
+  if (!t) return { name: "", led: false };
   // The door's own brief wraps her words in `Change host: "…"` — unwrap it.
   const quoted = /^Change\s+[^:]+:\s*"([\s\S]*?)(?:"|$)/.exec(t);
   if (quoted) t = quoted[1]!;
@@ -100,10 +104,27 @@ export function shortAsk(text: string | null | undefined, host: string | null = 
   const firstLine = t.split(/\n+/).map((l) => l.trim()).find((l) => l.length > 0 && !/^[A-Z][a-z]+,?$/.test(l)) ?? "";
   const stop = firstLine.search(/[.!?](\s|$)/);
   let s = stop >= 0 ? firstLine.slice(0, stop) : firstLine;
-  for (const lead of LEADS) s = s.replace(lead, "");
+  let led = false;
+  for (const lead of LEADS) {
+    const next = s.replace(lead, "");
+    if (next !== s) led = true;
+    s = next;
+  }
   s = s.replace(/^the\s+/i, "");
   s = stripHost(s, host);
-  return capital(atWord(s, max));
+  // A parenthesis the cut left open ("(j") is a fragment, not a word.
+  s = s.replace(/\s*\([^)]*$/, "");
+  return { name: capital(atWord(s, max)), led };
+}
+
+/**
+ * The job's name from her request, but ONLY when the request names it in the shape a request does —
+ * "we need to get started on the community site redesign", "can you fix the footer links". Anything
+ * else ("we need the redesign") is not a name, and the subject's first clause is better.
+ */
+function askName(text: string | null | undefined, host: string | null): string {
+  const out = readAsk(text, host, 56);
+  return out.led ? out.name : "";
 }
 
 export interface PlainTitleInput {
@@ -117,11 +138,29 @@ export interface PlainTitleInput {
   ask?: string | null;
 }
 
+/**
+ * The subject's own name for the job: its first clause. "Community site redesign — everything is in
+ * the Drive folder" is a name followed by a sentence; the name is the part before the dash (live on
+ * wc_c9e36e8b, 23 Sep 2026, where the whole subject became the title).
+ */
+function subjectName(subject: string, host: string | null): string {
+  const clean = stripHost(cleanSubject(subject), host);
+  const first = clean.split(/\s+[—–-]\s+|:\s+|;\s+|\.\s+/)[0] ?? "";
+  return first.trim();
+}
+
 export function plainTitle(input: PlainTitleInput): string {
   if (input.kind !== "WEB_PROPERTY_CHANGE") return input.title;
   const host = input.host && input.host !== "unresolved" ? input.host : null;
-  const fromSubject = input.subject ? atWord(stripHost(cleanSubject(input.subject), host), 56) : "";
-  const short = fromSubject || shortAsk(input.ask, host) || shortAsk(input.title, host) || "Website change";
+  // THE NAME SHE GAVE IT, NOT THE SENTENCE AFTER IT (owner review, 23 Sep 2026). On wc_c9e36e8b the
+  // whole subject became the title: "Community site redesign — everything is in the Drive folder".
+  // The subject's FIRST CLAUSE is the name when it is short (Porter's emails use the same title, so a
+  // "ventures site update" subject stays "Ventures site update"); otherwise the ask, when it names
+  // the job the way a request does ("we need to get started on …"); then the card's own title.
+  const subjectShort = input.subject ? subjectName(input.subject, host) : "";
+  const fromSubject = subjectShort && subjectShort.split(/\s+/).length <= 8 ? subjectShort : "";
+  const fromAsk = askName(input.ask, host);
+  const short = fromSubject || fromAsk || (subjectShort ? atWord(subjectShort, 56) : "") || shortAsk(input.ask, host) || shortAsk(input.title, host) || "Website change";
   const name = capital(short);
   if (!host || name.toLowerCase().includes(host.toLowerCase())) return name;
   return `${name} · ${host}`;

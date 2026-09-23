@@ -184,7 +184,8 @@ describe("\"decision N: …\" settles one decision after the fact — recorded, 
     expect(sent.slice(before).filter((m) => m.to === SEQUOIA), "no email for a recorded decision").toHaveLength(0);
     const resent = await post(`/api/work-cards/${id}/resend-preview`, SEQUOIA);
     expect(resent.body.ok).toBe(true);
-    expect(sent.at(-1)!.text).toMatch(/\*\*Decided so far\*\*\n• Orange: #c45a3c everywhere\. Solved: Sequoia confirmed the brand guide confirms it \([A-Z][a-z]{2} \d{1,2}\)\n/);
+    // The settled decision reads as what was chosen; how it was settled stays on the card.
+    expect(sent.at(-1)!.text).toMatch(/\*\*Decided so far\*\*\n• Orange: #c45a3c everywhere\n/);
   });
 });
 

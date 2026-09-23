@@ -8,6 +8,8 @@
  * say the same thing.
  */
 
+import { plainFailure } from "./liveStatus";
+
 export interface TrailFact {
   at: string;
   /** RECEIVED_EMAIL for an inbound message; otherwise a notice kind (RECEIVED, PLAN, PREVIEW, QUESTION, STUCK, DONE). */
@@ -79,8 +81,9 @@ export function cardTimeline(input: TimelineInput): TimelineEntry[] {
   }
   for (const t of input.trail) out.push({ at: t.at, text: trailSentence(t, input.owner_name, input.my_emails) });
   if (input.last_failure && input.last_failure_at) {
-    const cause = input.last_failure.replace(/\s+/g, " ").trim();
-    out.push({ at: input.last_failure_at, text: `A try failed: ${cause.length > 160 ? `${cause.slice(0, 160).replace(/\s+\S*$/, "")}…` : cause} It is tried again on its own.` });
+    const said = plainFailure(input.last_failure);
+    const text = /retried automatically\.$/.test(said) ? said : `A try failed: ${said.length > 160 ? `${said.slice(0, 160).replace(/\s+\S*$/, "")}…` : said} Retried automatically.`;
+    out.push({ at: input.last_failure_at, text });
   }
   if (input.blocked_at) {
     out.push({ at: input.blocked_at, text: `Stopped and asked you${input.block_stopped ? `: ${input.block_stopped}` : "."}`, now: true });
