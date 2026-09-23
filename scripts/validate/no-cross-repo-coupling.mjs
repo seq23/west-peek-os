@@ -26,6 +26,16 @@ const SRC_DIR = path.join(ROOT, "src");
 const ADAPTER = "src/worker/services/networkAdapter.ts";
 
 const SIBLING_REPO_PATH = /(west-peek-network-os|agency-event-os|seq23\/secondaries|\.\.\/\.\.\/\.\.\/[a-z-]*network)/i;
+/*
+ * THE ONE NAMED EXCEPTION (23 Sep 2026): the web-property registry. Network OS is also a SITE a
+ * partner can ask Porter to change, so `WEB_PROPERTIES` names its checkout — `repo: "west-peek-network-os"`
+ * — for the Mac's duty script to open under ~/GitHub, exactly as it names join-west-peek-main. That is
+ * the name of a repo a local job edits through its own PR, never a path this Worker reads or a
+ * store it opens. Only that exact field, only in that file, is exempt; a path, a file, or the same
+ * field anywhere else is still a violation (the self-test plants all three).
+ */
+const WEB_PROPERTY_REGISTRY = "src/shared/intake/webPropertyChange.ts";
+const REGISTRY_REPO_FIELD = /\brepo:\s*"west-peek-network-os"/g;
 const FOREIGN_DB_FILE = /["'`][^"'`]*\.(sqlite3?|db)["'`]/i;
 const FOREIGN_BINDING = /env\.(?!WP_OS_)(?:[A-Z][A-Z0-9_]{2,})\b/;
 /**
@@ -100,7 +110,8 @@ export function checkSources(files) {
   const violations = [];
   for (const [rel, rawSource] of Object.entries(files)) {
     const source = stripComments(rawSource);
-    if (SIBLING_REPO_PATH.test(source)) {
+    const pathScanned = rel === WEB_PROPERTY_REGISTRY ? source.replace(REGISTRY_REPO_FIELD, " ") : source;
+    if (SIBLING_REPO_PATH.test(pathScanned)) {
       violations.push(`${rel}: reference to a partner repository path (cross-repo coupling; D5 forbids direct access)`);
     }
     if (FOREIGN_DB_FILE.test(source)) {
@@ -140,6 +151,8 @@ function selfTest() {
     "src/worker/services/portfolio.ts": "await env.WP_OS_DB.prepare('SELECT 1').first();",
     // P16: a declared provider credential is not another system's storage.
     "src/worker/ai/routing.ts": "const key = env.OPENROUTER_API_KEY;",
+    // A web property's checkout name, in the registry only, is not coupling.
+    "src/shared/intake/webPropertyChange.ts": '{ host: "network.joinwestpeek.com", repo: "west-peek-network-os", site: "." }',
   };
   const failures = [];
   if (checkSources(clean).length !== 0) failures.push("clean fixture was flagged");
@@ -149,6 +162,8 @@ function selfTest() {
     "database file literal": { ...clean, "src/worker/services/sneaky.ts": 'const p = "/var/data/contacts.sqlite";' },
     "foreign binding": { ...clean, "src/worker/services/sneaky.ts": "await env.NETWORK_OS_DB.prepare('SELECT 1').all();" },
     "network hostname outside the adapter": { ...clean, "src/worker/services/sneaky.ts": 'await get("https://network-os.example.com/api/contacts");' },
+    "a partner repo path hidden in the web-property registry": { ...clean, "src/shared/intake/webPropertyChange.ts": '{ repo: "west-peek-network-os" }; const f = read("../../west-peek-network-os/data/app.db");' },
+    "the registry's repo field copied into another file": { ...clean, "src/worker/services/sneaky.ts": '{ repo: "west-peek-network-os" }' },
     "direct fetch inside the adapter": {
       ...clean,
       "src/worker/services/networkAdapter.ts": 'await fetch("https://example.com/contacts");',

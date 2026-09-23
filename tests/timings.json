@@ -175,6 +175,7 @@
   "tests/subscriptionSeats.test.ts": 97926,
   "tests/university.test.ts": 1733,
   "tests/webPropertyChange.test.ts": 60764,
+  "tests/webPropertyChangeAcrossRepos.test.ts": 9000,
   "tests/weeklyReview.test.ts": 3760,
   "tests/workCardModel.test.ts": 16,
   "tests/workCardOwnerShape.test.ts": 1120,

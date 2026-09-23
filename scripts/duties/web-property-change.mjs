@@ -39,6 +39,19 @@
  * argument, never printed, never in the prompt, never in the report. What is recorded is the
  * project, the variable NAME and one of set / already set / failed / refused.
  *
+ * ── ONE JOB, SEVERAL REPOS (23 Sep 2026, migration 0236) ─────────────────────────────────────
+ *
+ * A job whose `parts` names two or more repos is one card over all of them. ONE run per phase:
+ *   PLAN   a worktree per repo, a RUNBOOK.md in EVERY repo (BLOCK naming the ones without), one
+ *          `claude -p` over all the worktrees → one plan covering every repo, one approval.
+ *   BUILD  per repo, in its own worktree: `claude -p` for that repo alone (its sites, its slice of
+ *          the request, its own validators), then gh observes its PR and checks. A repo already
+ *          GREEN is only re-observed, never rebuilt. The report carries one entry per repo.
+ *   LAND   ALL OR NOTHING. `landGate` refuses unless every part is recorded green; then
+ *          `liveLandGate` re-reads `gh pr checks` on EVERY PR and refuses unless all are green NOW;
+ *          only then does `~/bin/land` run, repo by repo. A later repo that refuses is reported
+ *          with what already merged, so the next attempt resumes and never lands a PR twice.
+ *
  * ── SELF-CONTAINED, ON PURPOSE ───────────────────────────────────────────────────────────────
  *
  * No import from src/. The Worker's registry (src/shared/work/localJobs.ts) and this file agree
@@ -66,12 +79,19 @@ const CHECK_POLL_MS = 30_000;
 // ── Pure parts (self-tested) ─────────────────────────────────────────────────────────────────
 
 /** The branch and worktree for a card. Stable across phases so BUILD resumes what PLAN made. */
-export function namesFor(cardId) {
+export function namesFor(cardId, repo = null) {
   const short = String(cardId).replace(/^wc_/, "").replace(/[^A-Za-z0-9]/g, "").slice(0, 8).toLowerCase() || "card";
+  // A multi-repo job has one worktree PER REPO; the branch name is the same in each repo.
+  const repoSlug = repo ? `-${String(repo).replace(/[^A-Za-z0-9-]/g, "").slice(0, 40).toLowerCase()}` : "";
   return {
     branch: `work/wpc-${short}`,
-    worktree: path.join(homedir(), "GitHub", "wpos-jobs", `wt-${short}`),
+    worktree: path.join(homedir(), "GitHub", "wpos-jobs", `wt-${short}${repoSlug}`),
   };
+}
+
+/** A job over several repos (0236). One repo, or none, is the single-repo road, unchanged. */
+export function isSeveral(job) {
+  return Array.isArray(job?.parts) && job.parts.length > 1;
 }
 
 /**
@@ -82,13 +102,32 @@ export function namesFor(cardId) {
 export function landGate(job) {
   if (!job?.plan?.approved_at) return { ok: false, why: "the plan has not been approved by the partner who asked — nothing lands" };
   if (!job?.pr?.url) return { ok: false, why: "there is no PR to land" };
-  // The number is what `land` takes; a URL alone is not a PR this script can land (21 Sep 2026: `land ""`).
-  if (!Number.isInteger(job?.pr?.number) || job.pr.number <= 0) return { ok: false, why: "the LAND job carries no PR number — the Worker parked it from a row without one; nothing lands" };
-  if (!job?.pr?.check_green_at || job.pr.check_state !== "GREEN") return { ok: false, why: "the PR has no recorded green check — nothing lands" };
+  if (isSeveral(job)) {
+    // ALL OR NOTHING (0236): every repo's PR recorded green with a number, or not one of them lands.
+    const notGreen = job.parts.filter((p) => !(p?.pr?.url && Number.isInteger(p.pr.number) && p.pr.number > 0 && p.pr.check_green_at && p.pr.check_state === "GREEN"));
+    if (notGreen.length) return { ok: false, why: `not every PR is recorded green — ${notGreen.map((p) => `${p?.repo ?? "?"} ${p?.pr?.check_state ?? "no PR"}`).join(", ")}; nothing lands, not even the green ones`, blocking: notGreen.map((p) => p?.repo) };
+  } else {
+    // The number is what `land` takes; a URL alone is not a PR this script can land (21 Sep 2026: `land ""`).
+    if (!Number.isInteger(job?.pr?.number) || job.pr.number <= 0) return { ok: false, why: "the LAND job carries no PR number — the Worker parked it from a row without one; nothing lands" };
+    if (!job?.pr?.check_green_at || job.pr.check_state !== "GREEN") return { ok: false, why: "the PR has no recorded green check — nothing lands" };
+  }
   // A change that previews first (not publish-ready, or the partner said "preview") needs the SECOND approval.
   const needsPreview = job?.plan?.publish_ready === false || job?.plan?.preview_only === true;
   if (needsPreview && !job?.pr?.land_approved_at && !job?.pr?.forced_by) return { ok: false, why: "this change previews first and the partner has not approved the landing after the preview, nor forced it to production — nothing lands" };
   return { ok: true, why: "approved and green" };
+}
+
+/**
+ * THE LIVE GATE FOR SEVERAL REPOS, read from `gh pr checks` the moment before landing (0236). The
+ * recorded green is hours old by the time a partner says "approved"; a PR that went red since holds
+ * every repo. `states` is [{ repo, state, merged }]; a part already merged by an earlier attempt is
+ * not re-checked. Pure, so it is self-tested.
+ */
+export function liveLandGate(states) {
+  if (!Array.isArray(states) || states.length === 0) return { ok: false, why: "no PRs were checked — nothing lands" };
+  const notGreen = states.filter((s) => !s.merged && s.state !== "GREEN");
+  if (notGreen.length) return { ok: false, why: `not every PR is green right now — ${notGreen.map((s) => `${s.repo} ${s.state}`).join(", ")}; nothing landed`, blocking: notGreen.map((s) => s.repo) };
+  return { ok: true, why: "every PR is green right now" };
 }
 
 /** Read a result file strictly. Null with a reason when the phase said nothing usable. */
@@ -146,6 +185,9 @@ export function previewUrlsFrom(deploymentStatuses, commentBodies) {
   }
   for (const body of Array.isArray(commentBodies) ? commentBodies : []) {
     for (const m of String(body ?? "").matchAll(/https?:\/\/[a-z0-9.-]+\.pages\.dev[^\s)>\]]*/gi)) urls.add(m[0].replace(/\/$/, ""));
+    // A Worker repo (westpeek-live) previews through Workers Builds: a VERSION url, `<8 hex>-<worker>.<account>.workers.dev`.
+    // The production workers.dev host has no version prefix and is never read as a preview.
+    for (const m of String(body ?? "").matchAll(/https?:\/\/[a-f0-9]{8}-[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev[^\s)>\]|]*/gi)) urls.add(m[0].replace(/\/$/, ""));
   }
   return urls.size === 0 ? null : [...urls].join(" · ");
 }
@@ -171,13 +213,14 @@ export function renderContext(job, paths) {
     `PROPERTY: ${job.property_host ?? "(see ask)"}`,
     // 23 Sep 2026: the folders this job may change. One site or several in the same repo, and
     // nothing else: a community redesign never touches sites/ventures.
-    `SITES: ${job.sites?.length ? `${job.sites.join(", ")} — change files ONLY under these folders of TARGET_REPO. A shared file outside them only when the request cannot be done without it, named in the plan with the reason.` : "(unresolved — see ask; BLOCK and ask which site before changing anything)"}`,
+    `SITES: ${sitesLine(job.sites)}`,
     `TARGET_REPO: ${job.target_repo}`,
     `WORKTREE: ${paths.worktree}`,
     `BRANCH: ${paths.branch}`,
     `PACKAGE_DIR: ${paths.packageDir}`,
     `JOB_DIR: ${paths.jobDir}`,
     `RESULT_PATH: ${paths.resultPath}`,
+    ...(isSeveral(job) ? reposBlock(job, paths) : []),
     ...(job.pre_approved ? [`PRE-APPROVED: the partner wrote "${job.pre_approved}" — decide everything yourself, asks: []`] : []),
     "",
     "REQUEST (the partner's own words — THE SPECIFICATION; read this first):",
@@ -205,6 +248,32 @@ export function renderContext(job, paths) {
   }
   if (paths.landOutput) lines.push("", "WHAT ~/bin/land PRINTED:", "```", paths.landOutput.slice(-6000), "```", `MERGE SHA: ${paths.mergeSha ?? "(unknown)"}`);
   return lines.join("\n");
+}
+
+/** The SITES line: folders of TARGET_REPO, or the whole repo when the site IS the repo (".") . */
+export function sitesLine(sites) {
+  if (!sites?.length) return "(unresolved — see ask; BLOCK and ask which site before changing anything)";
+  if (sites.every((x) => x === ".")) return ". (the repo root — this site IS the repo; the whole of TARGET_REPO is in scope, and nothing outside it)";
+  return `${sites.join(", ")} — change files ONLY under these folders of TARGET_REPO. A shared file outside them only when the request cannot be done without it, named in the plan with the reason.`;
+}
+
+/**
+ * THE REPOS OF A MULTI-REPO JOB, for the prompt (0236). PLAN sees every repo and writes ONE plan
+ * over all of them; BUILD sees them all but is told which ONE it is working (THIS RUN).
+ */
+function reposBlock(job, paths) {
+  const lines = ["", `REPOS: this ONE job spans ${job.parts.length} repos — one plan covering all of them, one PR in each, landed together or not at all.`];
+  for (const p of job.parts) {
+    const n = namesFor(job.card?.id ?? "card", p.repo);
+    lines.push(`- ${p.repo} (${p.property_host}) · worktree ${n.worktree} · branch ${n.branch} · SITES: ${sitesLine(p.sites)}`);
+    lines.push(`  ITS PART OF THE REQUEST: ${String(p.ask ?? "").replace(/\s+/g, " ").slice(0, 1500)}`);
+  }
+  if (paths.thisPart) {
+    lines.push("", `THIS RUN: BUILD ${paths.thisPart} ONLY. Change files only in its worktree, open its PR on its branch, and write RESULT_PATH for this repo alone. The other repos are built in their own runs.`);
+  } else if (job.phase === "PLAN") {
+    lines.push("", "THIS RUN: PLAN every repo above in ONE plan document, a section per repo; decided and asks cover the whole job.");
+  }
+  return lines;
 }
 
 // ── Shell ─────────────────────────────────────────────────────────────────────────────────────
@@ -492,6 +561,13 @@ export async function applyPagesEnv(pagesEnv, env, progress) {
 export async function run(job, ctx) {
   const progress = ctx.progress ?? (() => {});
   const phase = job.phase;
+  // LAND is gated BEFORE anything runs. Not after the worktree, not after the model — and before a
+  // job over several repos is handed on, so one gate governs both roads.
+  if (phase === "LAND") {
+    const gate = landGate(job);
+    if (!gate.ok) return { phase, status: "failed", reason: `LAND refused: ${gate.why}` };
+  }
+  if (isSeveral(job)) return runSeveral(job, ctx);
   const repoPath = path.join(homedir(), "GitHub", String(job.target_repo ?? ""));
   if (!job.target_repo || !existsSync(path.join(repoPath, ".git"))) {
     return { phase, status: "failed", reason: `the target repo is not checked out at ${repoPath} on this Mac` };
@@ -502,12 +578,6 @@ export async function run(job, ctx) {
   const packageDir = path.join(path.dirname(names.worktree), `pkg-${path.basename(names.worktree).replace(/^wt-/, "")}`);
   const resultPath = path.join(jobDir, `result-${phase}.json`);
   if (existsSync(resultPath)) rmSync(resultPath);
-
-  // LAND is gated BEFORE anything runs. Not after the worktree, not after the model.
-  if (phase === "LAND") {
-    const gate = landGate(job);
-    if (!gate.ok) return { phase, status: "failed", reason: `LAND refused: ${gate.why}` };
-  }
 
   await ensureWorktree(repoPath, names, phase, progress);
 
@@ -649,6 +719,205 @@ export async function run(job, ctx) {
   return { phase, status: "ok", merge_sha: mergeSha, live_proof: String(result.live_proof).slice(0, 8000), notes: `${result.notes ?? ""}${cost !== null ? ` (cost $${cost.toFixed(2)})` : ""}`.trim() };
 }
 
+// ── Several repos (0236) ─────────────────────────────────────────────────────────────────────
+
+/** Attachments and the Drive folder, into the shared package dir. Returns { attachments } or { report }. */
+async function gatherAssets(job, ctx, packageDir, jobDir, phase, progress) {
+  const attachments = [];
+  if (Array.isArray(job.attachments) && job.attachments.length > 0) {
+    const attDir = path.join(packageDir, "attachments");
+    mkdirSync(attDir, { recursive: true });
+    for (const a of job.attachments) {
+      const target = path.join(attDir, String(a.filename).replace(/[\\/]/g, "_"));
+      try {
+        const got = await fetchAttachment(a.path, target, ctx.env);
+        attachments.push({ ...a, path: target, bytes: got });
+        progress(`attachment ${a.filename} (${got} bytes)`);
+      } catch (err) {
+        return { report: { phase, status: "failed", reason: `could not fetch the attachment ${a.filename} from the OS: ${err instanceof Error ? err.message.slice(0, 200) : String(err)}` } };
+      }
+    }
+  }
+  if (phase === "PLAN" && job.drive?.folder_id) {
+    if (!ctx.env?.GSC_SERVICE_ACCOUNT_JSON) return { report: { phase, status: "failed", reason: "GSC_SERVICE_ACCOUNT_JSON is not in the environment — the claimer must run under vault.mjs run" } };
+    rmSync(path.join(packageDir, "drive"), { recursive: true, force: true });
+    progress(`pulling Drive folder ${job.drive.folder_id}`);
+    try {
+      const { stdout } = await sh("node", [PULL_SCRIPT, job.drive.folder_id, path.join(packageDir, "drive")], { env: ctx.env, signal: ctx.signal });
+      writeFileSync(path.join(jobDir, "pull.log"), stdout);
+    } catch (err) {
+      const msg = `${err?.stderr ?? ""}${err?.stdout ?? ""}`.trim() || (err instanceof Error ? err.message : String(err));
+      return { report: { phase, status: "blocked", reason: msg.slice(0, 800) } };
+    }
+  }
+  return { attachments };
+}
+
+const costNote = (notes, cost) => `${notes ?? ""}${cost !== null ? ` (cost $${cost.toFixed(2)})` : ""}`.trim();
+
+/**
+ * ONE PHASE OF A MULTI-REPO JOB. Called by run() only after the LAND gate for a LAND job. Never
+ * throws for a job-level failure; reports per repo what it did, so a partial LAND is resumable.
+ */
+async function runSeveral(job, ctx) {
+  const progress = ctx.progress ?? (() => {});
+  const phase = job.phase;
+  const cardId = job.card?.id ?? "card";
+  const parts = job.parts.map((p) => ({ ...p, repoPath: path.join(homedir(), "GitHub", String(p.repo ?? "")), names: namesFor(cardId, p.repo) }));
+  const missing = parts.filter((p) => !p.repo || !existsSync(path.join(p.repoPath, ".git"))).map((p) => p.repoPath);
+  if (missing.length) return { phase, status: "failed", reason: `not checked out on this Mac: ${missing.join(", ")}` };
+  const jobDir = ctx.jobDir;
+  mkdirSync(jobDir, { recursive: true });
+  const packageDir = path.join(path.dirname(parts[0].names.worktree), `pkg-${namesFor(cardId).worktree.split("wt-").pop()}`);
+  for (const p of parts) await ensureWorktree(p.repoPath, p.names, phase, progress);
+
+  // EVERY REPO NEEDS ITS RUNBOOK. One missing is a block that names it; nothing is planned half.
+  const noRunbook = parts.filter((p) => !existsSync(path.join(p.names.worktree, "RUNBOOK.md"))).map((p) => p.repo);
+  if (noRunbook.length) {
+    return { phase, status: "blocked", reason: `${noRunbook.join(" and ")} ${noRunbook.length === 1 ? "has" : "have"} no RUNBOOK.md. Write one (join-west-peek-main/RUNBOOK.md is the model), land it, then reply "go".` };
+  }
+  const assets = await gatherAssets(job, ctx, packageDir, jobDir, phase, progress);
+  if (assets.report) return assets.report;
+  const worktrees = parts.map((p) => p.names.worktree);
+
+  if (phase === "PLAN") {
+    const resultPath = path.join(jobDir, "result-PLAN.json");
+    if (existsSync(resultPath)) rmSync(resultPath);
+    const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext({ ...job, target_repo: parts.map((p) => p.repo).join(" + ") }, { ...parts[0].names, packageDir, jobDir, resultPath, planText: null, attachments: assets.attachments })}`;
+    writeFileSync(path.join(jobDir, "prompt-PLAN.md"), prompt);
+    progress(`claude -p (${job.model}) for PLAN over ${parts.length} repos`);
+    const claude = await runClaude({ prompt, model: job.model, cwd: worktrees[0], addDirs: [...worktrees.slice(1), jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
+    writeFileSync(path.join(jobDir, "claude-PLAN.out"), `${claude.out}\n--- stderr ---\n${claude.err}`);
+    const cost = costFrom(claude.out);
+    const { result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "PLAN");
+    if (!result) return { phase, status: "failed", reason: `PLAN ended (claude exit ${claude.code}) but ${problem}` };
+    if (result.status !== "ok") return { phase, status: result.status, reason: String(result.reason).slice(0, 1500) };
+    writeFileSync(path.join(jobDir, "plan.md"), result.document);
+    return { phase, status: "ok", document: result.document, decided: result.decided ?? [], asks: result.asks ?? [], publish_ready: result.publish_ready, placeholders: result.placeholders ?? [], notes: costNote(result.notes, cost) };
+  }
+
+  if (phase === "BUILD") {
+    const reports = [];
+    for (const p of parts) {
+      let proof = "";
+      // A repo whose PR is already recorded GREEN is re-observed, never rebuilt.
+      if (!(p.pr?.url && p.pr.check_state === "GREEN")) {
+        const resultPath = path.join(jobDir, `result-BUILD-${p.repo}.json`);
+        if (existsSync(resultPath)) rmSync(resultPath);
+        const partJob = { ...job, target_repo: p.repo, property_host: p.property_host, sites: p.sites, request: `${job.request ?? job.ask ?? ""}\n\n(${p.repo}'s part: ${p.ask})` };
+        const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(partJob, { ...p.names, packageDir, jobDir, resultPath, planText: job.plan?.text ?? null, attachments: assets.attachments, thisPart: p.repo })}`;
+        writeFileSync(path.join(jobDir, `prompt-BUILD-${p.repo}.md`), prompt);
+        progress(`claude -p (${job.model}) for BUILD of ${p.repo}`);
+        const claude = await runClaude({ prompt, model: job.model, cwd: p.names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
+        writeFileSync(path.join(jobDir, `claude-BUILD-${p.repo}.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
+        const { result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "BUILD");
+        if (!result) return { phase, status: "failed", reason: `BUILD of ${p.repo} ended (claude exit ${claude.code}) but ${problem}`, parts: reports };
+        if (result.status !== "ok") return { phase, status: result.status, reason: `${p.repo}: ${String(result.reason).slice(0, 1400)}`, parts: reports };
+        const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress);
+        proof = [String(result.proof ?? "").slice(0, 6000), ...configLines].filter(Boolean).join("\n");
+      }
+      let pr;
+      try {
+        pr = await prFor(p.names.worktree, p.names.branch);
+      } catch (err) {
+        return { phase, status: "failed", reason: `gh finds no PR on ${p.names.branch} in ${p.repo}: ${err instanceof Error ? err.message.slice(0, 300) : String(err)}`, parts: reports };
+      }
+      const checks = await watchChecks(p.names.worktree, pr.number, ctx.signal, progress);
+      const previewUrl = checks.state === "GREEN" ? await previewUrlFor(p.names.worktree, pr.number, progress) : null;
+      reports.push({ repo: p.repo, pr_url: pr.url, pr_number: pr.number, branch: p.names.branch, check_state: checks.state, check_url: checks.url ?? undefined, preview_url: previewUrl ?? undefined, proof: proof || undefined });
+    }
+    const red = reports.filter((r) => r.check_state !== "GREEN");
+    return {
+      phase,
+      status: "ok",
+      pr_url: reports.map((r) => r.pr_url).join(" · "),
+      check_state: red.some((r) => r.check_state === "RED") ? "RED" : red.length ? "PENDING" : "GREEN",
+      proof: reports.map((r) => `── ${r.repo} ──\n${r.proof ?? "(re-observed; built in an earlier run)"}`).join("\n\n"),
+      parts: reports,
+      reason: red.length ? `not every PR is green: ${red.map((r) => `${r.repo} ${r.check_state} (${r.pr_url})`).join(", ")}` : undefined,
+    };
+  }
+
+  // LAND. The recorded gate passed in run(); now EVERY PR's checks are read again, live, and one
+  // that is not green holds every repo. Only then does ~/bin/land run, one repo after another.
+  const land = path.join(homedir(), "bin", "land");
+  if (!existsSync(land)) return { phase, status: "failed", reason: `${land} is not on this Mac` };
+  const states = [];
+  for (const p of parts) {
+    let merged = Boolean(p.merge_sha);
+    if (!merged) {
+      try {
+        const j = JSON.parse((await sh("gh", ["pr", "view", String(p.pr.number), "--json", "state"], { cwd: p.names.worktree })).stdout);
+        merged = j.state === "MERGED";
+      } catch {
+        /* unreadable is not merged */
+      }
+    }
+    const checks = merged ? { state: "GREEN" } : await readChecksOnce(p.names.worktree, p.pr.number);
+    states.push({ repo: p.repo, state: checks.state, merged });
+  }
+  const live = liveLandGate(states);
+  if (!live.ok) return { phase, status: "failed", reason: `LAND refused: ${live.why}` };
+  const landed = [];
+  const outputs = [];
+  for (const p of parts) {
+    let mergeSha = p.merge_sha ?? null;
+    if (!mergeSha) {
+      progress(`landing ${p.repo}#${p.pr.number}`);
+      try {
+        const { stdout, stderr } = await sh(land, [String(p.pr.number)], { cwd: p.names.worktree, env: process.env, timeout: 30 * 60_000, signal: ctx.signal });
+        outputs.push(`── ${p.repo} ──\n${stdout}\n${stderr}`);
+      } catch (err) {
+        const out = `${err?.stdout ?? ""}\n${err?.stderr ?? ""}`;
+        return { phase, status: "failed", reason: `~/bin/land stopped on ${p.repo}${landed.length ? ` after ${landed.map((l) => l.repo).join(", ")} landed` : ""}: ${out.trim().split("\n").filter(Boolean).slice(-3).join(" | ").slice(0, 600)}`, parts: landed };
+      }
+      try {
+        const j = JSON.parse((await sh("gh", ["pr", "view", String(p.pr.number), "--json", "mergeCommit,state"], { cwd: p.names.worktree })).stdout);
+        mergeSha = j.mergeCommit?.oid ?? null;
+        if (j.state !== "MERGED" || !mergeSha) return { phase, status: "failed", reason: `after land, gh says ${p.repo}#${p.pr.number} is ${j.state} with no merge commit`, parts: landed };
+      } catch (err) {
+        return { phase, status: "failed", reason: `could not read the merge of ${p.repo} from gh: ${err instanceof Error ? err.message : String(err)}`, parts: landed };
+      }
+    }
+    landed.push({ repo: p.repo, merge_sha: mergeSha });
+  }
+  writeFileSync(path.join(jobDir, "land.log"), outputs.join("\n\n"));
+  const resultPath = path.join(jobDir, "result-LAND.json");
+  if (existsSync(resultPath)) rmSync(resultPath);
+  const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext({ ...job, target_repo: parts.map((p) => p.repo).join(" + ") }, { ...parts[0].names, packageDir, jobDir, resultPath, landOutput: outputs.join("\n\n"), mergeSha: landed.map((l) => `${l.repo}@${l.merge_sha}`).join(", "), attachments: assets.attachments })}`;
+  writeFileSync(path.join(jobDir, "prompt-LAND.md"), prompt);
+  const claude = await runClaude({ prompt, model: job.model, cwd: worktrees[0], addDirs: [...worktrees.slice(1), jobDir].filter(existsSync), signal: ctx.signal, onLine: progress });
+  writeFileSync(path.join(jobDir, "claude-LAND.out"), `${claude.out}\n--- stderr ---\n${claude.err}`);
+  const { result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "LAND");
+  // Every PR merged either way; the proof is what is missing, and that is recorded as such.
+  if (!result || result.status !== "ok") return { phase, status: "failed", reason: `every repo landed but the live proof did not come back: ${problem ?? result?.reason ?? "no result"}`, parts: landed };
+  const perRepo = Array.isArray(result.parts) ? result.parts : [];
+  for (const l of landed) l.live_proof = String(perRepo.find((x) => x?.repo === l.repo)?.live_proof ?? "").slice(0, 4000) || undefined;
+  for (const p of parts) {
+    try {
+      await git(p.repoPath, "worktree", "remove", "--force", p.names.worktree);
+      await git(p.repoPath, "branch", "-D", p.names.branch);
+    } catch {
+      /* a leftover worktree is untidy, not a failure */
+    }
+  }
+  return { phase, status: "ok", merge_sha: landed.map((l) => `${l.repo}@${l.merge_sha}`).join(", "), live_proof: String(result.live_proof).slice(0, 8000), parts: landed, notes: costNote(result.notes, costFrom(claude.out)) };
+}
+
+/** One read of a PR's checks (no waiting): GREEN / RED / PENDING, as `gh` says it now. */
+async function readChecksOnce(worktree, number) {
+  try {
+    const { stdout } = await sh("gh", ["pr", "checks", String(number), "--json", "name,state,link"], { cwd: worktree });
+    return { state: checkStateOf(JSON.parse(stdout)) };
+  } catch (err) {
+    try {
+      return { state: checkStateOf(JSON.parse(String(err?.stdout ?? ""))) };
+    } catch {
+      return { state: "PENDING" };
+    }
+  }
+}
+
 // ── Self-test ────────────────────────────────────────────────────────────────────────────────
 
 function selfTest() {
@@ -662,6 +931,35 @@ function selfTest() {
         ["SITES: one site -> only that folder, and ventures is not in a community job's scope", () => /SITES: sites\/community — change files ONLY under these folders/.test(ctx("joinwestpeek.com", ["sites/community"])) && !ctx("joinwestpeek.com", ["sites/community"]).includes("sites/ventures")],
         ["SITES: several sites in one repo -> one job over every folder", () => ctx("westpeekproductions.com, joinwestpeek.com", ["sites/productions", "sites/community"]).includes("SITES: sites/productions, sites/community — change files ONLY")],
         ["SITES: none known -> BLOCK and ask which site", () => /SITES: \(unresolved .*BLOCK and ask which site/.test(ctx(null, []))],
+      ];
+    })(),
+    // 23 Sep 2026 (0236): ONE JOB OVER SEVERAL REPOS lands all or nothing.
+    ...(() => {
+      const part = (repo, n, state = "GREEN", green = "2026-09-23T11:00:00Z") => ({ repo, property_host: repo, sites: ["."], ask: "x", pr: { url: `https://github.com/seq23/${repo}/pull/${n}`, number: n, check_state: state, check_green_at: green }, merge_sha: null });
+      const multi = { plan: { approved_at: "2026-09-23T10:00:00Z" }, pr: { url: "a · b", number: null, check_state: "GREEN", check_green_at: "2026-09-23T11:00:00Z" }, parts: [part("join-west-peek-main", 7), part("westpeek-live", 84)] };
+      const t = renderContext({ phase: "PLAN", card: { id: "wc_abc12345", title: "t" }, target_repo: "join-west-peek-main + westpeek-live", sites: ["sites/community", "."], parts: multi.parts, request: "r", drive: {}, rules: {} }, { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/r", attachments: [] });
+      return [
+        ["MULTI LAND passes when every repo's PR is recorded green (no top-level PR number needed)", () => landGate(multi).ok === true],
+        ["MULTI LAND refuses when ONE repo is RED — and names it; nothing lands, not even the green one", () => {
+          const g = landGate({ ...multi, parts: [part("join-west-peek-main", 7), part("westpeek-live", 84, "RED", null)] });
+          return g.ok === false && /westpeek-live RED/.test(g.why) && g.blocking.length === 1 && g.blocking[0] === "westpeek-live";
+        }],
+        ["MULTI LAND refuses a repo with no PR number", () => landGate({ ...multi, parts: [part("join-west-peek-main", 7), { ...part("westpeek-live", 84), pr: { ...part("westpeek-live", 84).pr, number: null } }] }).ok === false],
+        ["MULTI LAND refuses a repo with a GREEN state but no recorded green time", () => landGate({ ...multi, parts: [part("join-west-peek-main", 7), part("westpeek-live", 84, "GREEN", null)] }).ok === false],
+        ["MULTI LAND still refuses without the plan approval", () => landGate({ ...multi, plan: { approved_at: null } }).ok === false],
+        ["MULTI LAND still needs the second approval when it previews first", () => landGate({ ...multi, plan: { ...multi.plan, preview_only: true } }).ok === false && landGate({ ...multi, plan: { ...multi.plan, preview_only: true }, pr: { ...multi.pr, land_approved_at: "2026-09-23T12:00:00Z" } }).ok === true],
+        ["the LIVE gate: every PR green right now → lands", () => liveLandGate([{ repo: "a", state: "GREEN", merged: false }, { repo: "b", state: "GREEN", merged: false }]).ok === true],
+        ["the LIVE gate: one PR went red since it was recorded → none lands, and it is named", () => {
+          const g = liveLandGate([{ repo: "a", state: "GREEN", merged: false }, { repo: "b", state: "RED", merged: false }]);
+          return g.ok === false && g.blocking[0] === "b" && /b RED/.test(g.why);
+        }],
+        ["the LIVE gate: a PENDING check holds them all too", () => liveLandGate([{ repo: "a", state: "PENDING", merged: false }, { repo: "b", state: "GREEN", merged: false }]).ok === false],
+        ["the LIVE gate: a repo merged by an earlier attempt is not re-checked (a resumed LAND never lands twice)", () => liveLandGate([{ repo: "a", state: "RED", merged: true }, { repo: "b", state: "GREEN", merged: false }]).ok === true],
+        ["the LIVE gate: nothing checked is never ok", () => liveLandGate([]).ok === false],
+        ["one worktree per repo, same branch name", () => namesFor("wc_abc12345", "westpeek-live").worktree !== namesFor("wc_abc12345", "join-west-peek-main").worktree && namesFor("wc_abc12345", "westpeek-live").branch === namesFor("wc_abc12345").branch && namesFor("wc_abc12345").worktree.endsWith("wt-abc12345")],
+        ["a multi-repo PLAN prompt lists every repo, its worktree and its part, and asks for ONE plan", () => t.includes("REPOS: this ONE job spans 2 repos") && t.includes("- westpeek-live (westpeek-live)") && t.includes("wt-abc12345-westpeek-live") && t.includes("PLAN every repo above in ONE plan document")],
+        ["a single-repo prompt has no REPOS block", () => !renderContext({ phase: "PLAN", card: { id: "wc", title: "t" }, sites: ["sites/community"], request: "r", rules: {} }, { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/r" }).includes("REPOS:")],
+        ["a site that IS its repo says so on the SITES line", () => /^\. \(the repo root/.test(sitesLine(["."]))],
       ];
     })(),
     ["LAND passes with a recorded approval and a recorded green", () => landGate(approved).ok === true],
@@ -685,6 +983,8 @@ function selfTest() {
     ["a not-ready PLAN with placeholders reads", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), publish_ready: false, placeholders: ["Sengo logo"] }), "PLAN").result?.placeholders?.[0] === "Sengo logo"],
     ["a Pages deployment status yields the preview url", () => previewUrlsFrom([{ environment_url: "https://abc123.join-west-peek.pages.dev/" }], []) === "https://abc123.join-west-peek.pages.dev"],
     ["a Cloudflare PR comment yields the preview url", () => previewUrlsFrom([], ["Deploying with Cloudflare Pages\n| Preview URL | https://def456.ventures.pages.dev |"]) === "https://def456.ventures.pages.dev"],
+    ["a Workers Builds PR comment yields the version preview url", () => previewUrlsFrom([], ["| Preview URL | https://3f9a1c2e-west-peek-live.seq-taylor.workers.dev |"]) === "https://3f9a1c2e-west-peek-live.seq-taylor.workers.dev"],
+    ["the production workers.dev host is never read as a preview", () => previewUrlsFrom([], ["deployed to https://west-peek-live.seq-taylor.workers.dev"]) === null],
     ["a repo with no Pages deployment yields null, never a guess", () => previewUrlsFrom([{ environment_url: "" }], ["LGTM"]) === null],
     ["an ask without a recommended default is refused", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), asks: ["colour?"], publish_ready: true }), "PLAN").result === null],
     ["all-success checks are GREEN", () => checkStateOf([{ state: "SUCCESS" }, { state: "SKIPPED" }]) === "GREEN"],

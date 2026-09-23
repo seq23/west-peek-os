@@ -62,6 +62,14 @@
  *       reader, loaded from `shared/work/approvalReply.ts`, reads "no" as REFUSED, "approved" as
  *       APPROVED, and a paragraph as ANSWERS.
  *
+ *  12 · SEVERAL REPOS LAND ALL OR NOTHING (owner, 23 Sep 2026, migration 0236). `parkPhase`'s LAND
+ *       branch refuses unless `notGreenParts` is empty; the Mac's `landGate` checks every part's
+ *       recorded green; `run()` hands a multi-repo job to `runSeveral` only after `landGate(job)`;
+ *       `runSeveral` reads every PR's checks live through `liveLandGate` before its first
+ *       `~/bin/land`, and returns when it refuses; 0236's part trigger refuses a part's merge
+ *       unless every sibling is green and the approvals are on the parent; its DONE trigger
+ *       refuses DONE while any part is unmerged.
+ *
  * HARD-FAILS ON ZERO: zero gates examined exits 1.
  *
  * `--self-test` plants: the Worker's LAND branch with the approval check removed; with the green
@@ -86,6 +94,7 @@ const PARSER = path.join(ROOT, "src", "shared", "intake", "webPropertyChange.ts"
 const REPLY = path.join(ROOT, "src", "worker", "services", "requestReply.ts");
 const MIGRATION_0221 = path.join(ROOT, "migrations", "0221_porter_reads_the_email.sql");
 const MIGRATION_0220 = path.join(ROOT, "migrations", "0220_a_plan_that_is_not_publish_ready_previews_first.sql");
+const MIGRATION_0236 = path.join(ROOT, "migrations", "0236_one_website_job_can_span_several_repos.sql");
 const read = (p) => stripTsComments(readFileSync(p, "utf8"));
 /** SQL: `--` line comments blanked, so a comment naming a column cannot satisfy or fail the trigger check. */
 function stripSqlComments(sql) {
@@ -240,6 +249,49 @@ export function checkScript(src) {
   return { violations, examined };
 }
 
+/** 12 · several repos land all or nothing — in the Worker, on the Mac, and at the row (0236). */
+export function checkSeveral(worker, script, sql) {
+  const violations = [];
+  let examined = 0;
+  const park = body(worker, "export async function parkPhase(");
+  const landBranch = park?.match(/if\s*\(phase\s*===\s*"LAND"\)\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? "";
+  examined += 1;
+  if (!/notGreenParts\(/.test(landBranch) || !/blocking\.length\)\s*return\s*\{\s*parked:\s*false/.test(landBranch)) violations.push("parkPhase()'s LAND branch does not refuse a multi-repo job while any part is not green");
+  const gate = body(script, "export function landGate(") ?? "";
+  examined += 1;
+  if (!/isSeveral\(job\)/.test(gate) || !/job\.parts\.filter\([\s\S]*check_green_at[\s\S]*check_state === "GREEN"/.test(gate) || !/notGreen\.length\)\s*return\s*\{\s*ok:\s*false/.test(gate)) violations.push("landGate() does not require EVERY part's PR recorded green for a multi-repo job");
+  const run = body(script, "export async function run(") ?? "";
+  examined += 1;
+  const gateAt = run.indexOf("landGate(job)");
+  const handAt = run.indexOf("runSeveral(job");
+  if (handAt < 0) violations.push("run() never hands a multi-repo job to runSeveral — it would run as one repo");
+  else if (gateAt < 0 || gateAt > handAt) violations.push("run() hands a multi-repo job to runSeveral before landGate(job)");
+  const several = body(script, "async function runSeveral(") ?? "";
+  examined += 1;
+  const liveAt = several.indexOf("liveLandGate(states)");
+  const refuseAt = several.search(/if \(!live\.ok\) return/);
+  const landAt = several.search(/sh\(land,/);
+  if (!several) violations.push("web-property-change.mjs has no runSeveral()");
+  else if (landAt < 0) violations.push("runSeveral() never runs ~/bin/land — a multi-repo LAND does nothing");
+  else if (liveAt < 0 || refuseAt < 0 || liveAt > landAt || refuseAt > landAt) violations.push("runSeveral() reaches ~/bin/land before the live all-green gate refuses");
+  const live = body(script, "export function liveLandGate(") ?? "";
+  examined += 1;
+  if (!/!s\.merged && s\.state !== "GREEN"/.test(live)) violations.push("liveLandGate() does not refuse on any unmerged PR that is not GREEN right now");
+  const partTrigger = sql.match(/CREATE TRIGGER trg_web_property_change_part_lands_all_or_none[\s\S]*?END;/)?.[0] ?? "";
+  examined += 1;
+  if (!partTrigger) violations.push("0236 has no trg_web_property_change_part_lands_all_or_none — a part could be recorded merged while a sibling is red");
+  else {
+    if (!/s\.check_green_at IS NULL/.test(partTrigger) || !/s\.check_state IS NOT 'GREEN'/.test(partTrigger)) violations.push("the 0236 part trigger does not require every sibling part green");
+    if (!/w\.plan_approved_at IS NOT NULL/.test(partTrigger)) violations.push("the 0236 part trigger does not require the plan approval");
+    if (!/w\.land_approved_at IS NOT NULL/.test(partTrigger) || !/w\.forced_by IS NOT NULL/.test(partTrigger)) violations.push("the 0236 part trigger does not require the second approval (or a named force) on a previewing job");
+    if (!/RAISE\(ABORT/.test(partTrigger)) violations.push("the 0236 part trigger does not abort");
+  }
+  const doneTrigger = sql.match(/CREATE TRIGGER trg_web_property_change_done_needs_every_part[\s\S]*?END;/)?.[0] ?? "";
+  examined += 1;
+  if (!doneTrigger || !/p\.merge_sha IS NULL/.test(doneTrigger) || !/RAISE\(ABORT/.test(doneTrigger)) violations.push("0236 does not refuse DONE while a part is unmerged");
+  return { violations, examined };
+}
+
 export function checkMigration(sql) {
   const violations = [];
   let examined = 0;
@@ -379,7 +431,8 @@ async function selfTest() {
   const parser = read(PARSER);
   const reply = read(REPLY);
   const sql0221 = readSql(MIGRATION_0221);
-  const real = [checkWorker(worker), checkScript(script), checkMigration(sql), checkMigration0220(sql0220), await checkReader(reader), checkDoor(door, parser), checkNotices(reply, sql0221)];
+  const sql0236 = readSql(MIGRATION_0236);
+  const real = [checkWorker(worker), checkScript(script), checkMigration(sql), checkMigration0220(sql0220), await checkReader(reader), checkDoor(door, parser), checkNotices(reply, sql0221), checkSeveral(worker, script, sql0236)];
   say(real.every((r) => r.violations.length === 0) && real.reduce((n, r) => n + r.examined, 0) >= 8, `shipped source passes (${real.reduce((n, r) => n + r.examined, 0)} gates): ${real.flatMap((r) => r.violations).join("; ")}`);
 
   const unaskedWithAsks = worker.replace("if (asks.length === 0 && fresh.publish_ready === 1) return proceedWithoutAsking(", "if (fresh.publish_ready === 1) return proceedWithoutAsking(");
@@ -453,14 +506,32 @@ async function selfTest() {
   const ruleOff = sql.replace("'land_on_green', 'Land on green', 'on', 1,", "'land_on_green', 'Land on green', 'off', 1,");
   say(checkMigration(ruleOff).violations.some((v) => /seeded ON/.test(v)), "land_on_green seeded OFF is caught");
 
+  // 12 · several repos, all or nothing (0236).
+  const parkNoParts = worker.replace("if (blocking.length) return { parked: false,", "if (false) return { parked: false,");
+  say(checkSeveral(parkNoParts, script, sql0236).violations.some((v) => /any part is not green/.test(v)), "a Worker LAND gate that parks a multi-repo job with a red part is caught");
+  const gateNoParts = script.replace("if (notGreen.length) return { ok: false,", "if (false) return { ok: false,");
+  say(checkSeveral(worker, gateNoParts, sql0236).violations.some((v) => /EVERY part's PR/.test(v)), "a Mac gate that lands several repos without every part green is caught");
+  const handEarly = script.replace("if (isSeveral(job)) return runSeveral(job, ctx);", "").replace("const phase = job.phase;\n", "const phase = job.phase;\n  if (isSeveral(job)) return runSeveral(job, ctx);\n");
+  say(checkSeveral(worker, handEarly, sql0236).violations.some((v) => /before landGate/.test(v)), "run() handing a multi-repo LAND to runSeveral before the gate is caught");
+  const noLive = script.replace("if (!live.ok) return", "if (false) void");
+  say(checkSeveral(worker, noLive, sql0236).violations.some((v) => /live all-green gate/.test(v)), "runSeveral() landing without the live all-green refusal is caught");
+  const liveLoose = script.replace('!s.merged && s.state !== "GREEN"', '!s.merged && s.state === "RED"');
+  say(checkSeveral(worker, liveLoose, sql0236).violations.some((v) => /right now/.test(v)), "a live gate that lets a PENDING PR through is caught");
+  const trigLoose = sql0236.replace("s.check_green_at IS NULL OR ", "");
+  say(checkSeveral(worker, script, trigLoose).violations.some((v) => /every sibling part green/.test(v)), "a part trigger that no longer requires every sibling green is caught");
+  const trigNoPreview = sql0236.replace(" OR w.land_approved_at IS NOT NULL", "");
+  say(checkSeveral(worker, script, trigNoPreview).violations.some((v) => /second approval/.test(v)), "a part trigger that forgets the preview's second approval is caught");
+  const noDone = sql0236.replace(/CREATE TRIGGER trg_web_property_change_done_needs_every_part[\s\S]*?END;/, "");
+  say(checkSeveral(worker, script, noDone).violations.some((v) => /DONE while a part is unmerged/.test(v)), "a missing every-part DONE trigger is caught");
+
   if (failed > 0) process.exit(1);
-  console.log("SELF-TEST PASSED: thirty-two planted defects are each caught; the shipped source passes.");
+  console.log("SELF-TEST PASSED: forty planted defects are each caught; the shipped source passes.");
 }
 
 if (process.argv.includes("--self-test")) {
   await selfTest();
 } else {
-  const results = [checkWorker(read(WORKER)), checkScript(read(SCRIPT)), checkMigration(readSql(MIGRATION)), checkMigration0220(readSql(MIGRATION_0220)), await checkReader(await loadTs(READER)), checkDoor(read(DOOR), read(PARSER)), checkNotices(read(REPLY), readSql(MIGRATION_0221))];
+  const results = [checkWorker(read(WORKER)), checkScript(read(SCRIPT)), checkMigration(readSql(MIGRATION)), checkMigration0220(readSql(MIGRATION_0220)), await checkReader(await loadTs(READER)), checkDoor(read(DOOR), read(PARSER)), checkNotices(read(REPLY), readSql(MIGRATION_0221)), checkSeveral(read(WORKER), read(SCRIPT), readSql(MIGRATION_0236))];
   const examined = results.reduce((n, r) => n + r.examined, 0);
   const violations = results.flatMap((r) => r.violations);
   if (examined === 0) {
@@ -472,5 +543,5 @@ if (process.argv.includes("--self-test")) {
     for (const v of violations) console.error(`  ✗ ${v}`);
     process.exit(1);
   }
-  console.log(`NO-LAND-WITHOUT-APPROVAL SCAN PASSED: ${examined} gates examined — the Worker refuses to park LAND, the Mac script refuses to run it, and the row refuses DONE, each without a recorded plan approval and a recorded green check; land_on_green is seeded ON; a reply starting with "no" never approves, "preview" never lands, a previewing change needs a second approval after the preview email OR a named force ("approved to production") — never neither — pre-approval comes only from the partner's own verified request, and only the requesting partner gives any of them.`);
+  console.log(`NO-LAND-WITHOUT-APPROVAL SCAN PASSED: ${examined} gates examined — the Worker refuses to park LAND, the Mac script refuses to run it, and the row refuses DONE, each without a recorded plan approval and a recorded green check; land_on_green is seeded ON; a reply starting with "no" never approves, "preview" never lands, a previewing change needs a second approval after the preview email OR a named force ("approved to production") — never neither — pre-approval comes only from the partner's own verified request, only the requesting partner gives any of them, and a job over several repos lands every PR or none.`);
 }

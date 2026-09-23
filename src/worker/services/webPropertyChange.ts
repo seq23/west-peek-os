@@ -10,7 +10,7 @@ import { parkRun, readRun, type SeatRunRow } from "../ai/subscriptionSeats";
 import { PARTNERS, PREVIEW_PARTNER, partnerByEmail } from "../../shared/registry/partners";
 import { sendOrPreview } from "./previewApproval";
 import type { SweepCard } from "./workSweep";
-import { readWebPropertyAsk, sitesOf, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
+import { hostsSentence, readWebPropertyAsk, sitesOf, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
 import { approvedAnswers, askLines, decidedFromAsks, readApprovalReply, readAsks, type Ask } from "../../shared/work/approvalReply";
 import { abandonRun } from "../ai/subscriptionSeats";
 import { alreadyTold, recordNotice, routedByFor, threadRootFor, type NoticeKind } from "./requestReply";
@@ -30,6 +30,8 @@ import {
   localJobKind,
   readLocalJobReport,
   type ClaudeModelAlias,
+  type LocalJobPart,
+  type LocalJobPartReport,
   type LocalJobPayload,
   type LocalJobReport,
   type WebPropertyChangePhase,
@@ -75,6 +77,19 @@ import {
  * `emailThread.steerFromReply`. The runner reads the answer time against the plan's filing time
  * and records the approval; nothing here waits on a second reply once the PR is green, because
  * land-on-green is her rule (rule row `land_on_green`, ON).
+ *
+ * ─── ONE JOB, SEVERAL REPOS (0236, 23 Sep 2026) ──────────────────────────────────────────────
+ *
+ * Her words: "there is a world where we ask you to fix something on the community site and
+ * westpeek live in the same email." The door groups the named sites by repo; two or more repos
+ * make ONE card with one `web_property_change_part` row per repo. The parent row keeps what is one
+ * per job (the request, the plan and its approval, the preview gate, the force, the lease) and the
+ * AGGREGATE of its parts (every PR url, GREEN only when every part is GREEN, every merge), so every
+ * gate above reads the job as a whole. ONE Mac run per phase covers every repo — the one-live-run
+ * index makes that the only possible shape, and one run is what gives one plan, one approval, one
+ * preview email and one landing: PLAN writes a single plan over all the repos; BUILD works each
+ * repo in its own worktree and opens one PR each; LAND re-checks every PR live and lands them all
+ * or none. A single-repo job has no parts and runs exactly as it always did.
  */
 
 export interface WebPropertyChangeRow {
@@ -236,6 +251,7 @@ export async function sendReceived(env: Env, cardId: string, input: { tldr?: str
   const row = await readWebPropertyChange(env, cardId);
   if (!card || !row) return { sent: false, reason: "no such web property change" };
   const attachments = await attachmentsFor(env, cardId);
+  const parts = await readParts(env, cardId);
   const asked = card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").trim() || card.title;
   const next = row.pre_approved_phrase
     ? `You pre-approved this ("${row.pre_approved_phrase}"), so the next thing you'll get is the finished result${row.publish_ready === 0 ? " — or the preview link first if the package is not publish-ready" : ""}.`
@@ -250,6 +266,9 @@ export async function sendReceived(env: Env, cardId: string, input: { tldr?: str
         label: "What I understood",
         bullets: [
           `Property: ${row.target_repo === UNRESOLVED_REPO ? "unresolved — I'll ask" : row.property_host ?? row.target_repo}${assumption ? ` (${assumption})` : ""}`,
+          ...(parts.length
+            ? [`Repos: ${parts.map((p) => `${p.repo} (${p.property_host})`).join("; ")} — one job, one PR in each, and they land together or not at all`]
+            : []),
           `Attachments: ${attachments.length === 0 ? "none" : attachments.map((a) => a.filename).join(", ")}`,
           `Drive folder: ${row.drive_folder_url ? "yes" : "no"}`,
           `Your words: "${(row.request_text ?? row.ask).replace(/\s+/g, " ").slice(0, 200)}"`,
@@ -353,6 +372,18 @@ export async function openWebPropertyChange(
   // The readable request, the specification Porter reads first (0221); and, when "the site" was
   // inferred from a recent card, where the assumption came from (0222).
   await env.WP_OS_DB.prepare("UPDATE web_property_change SET request_text = ?2, property_assumed_from = ?3 WHERE work_card_id = ?1").bind(input.cardId, input.ask.ask.slice(0, 12000), input.assumedFrom ?? null).run();
+  // SEVERAL REPOS → ONE PART EACH (0236). Re-opening the same card rewrites its parts from the ask;
+  // a single-repo ask leaves none, so it runs exactly as before.
+  if ((input.ask.parts?.length ?? 0) > 1) {
+    await env.WP_OS_DB.prepare("DELETE FROM web_property_change_part WHERE work_card_id = ?1 AND merge_sha IS NULL").bind(input.cardId).run();
+    for (const [i, part] of input.ask.parts!.entries()) {
+      await env.WP_OS_DB.prepare(
+        "INSERT INTO web_property_change_part (work_card_id, repo, position, property_host, ask) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (work_card_id, repo) DO NOTHING",
+      )
+        .bind(input.cardId, part.repo, i, part.property_host, part.ask.slice(0, 12000))
+        .run();
+    }
+  }
   await env.WP_OS_DB.prepare("UPDATE work_card SET kind = ?2, request_json = ?3, next_action = ?4 WHERE id = ?1")
     .bind(
       input.cardId,
@@ -365,6 +396,113 @@ export async function openWebPropertyChange(
 
 export async function readWebPropertyChange(env: Env, cardId: string): Promise<WebPropertyChangeRow | null> {
   return env.WP_OS_DB.prepare("SELECT * FROM web_property_change WHERE work_card_id = ?1").bind(cardId).first<WebPropertyChangeRow>();
+}
+
+/** One repo of a multi-repo job (0236). */
+export interface WebPropertyChangePart {
+  work_card_id: string;
+  repo: string;
+  position: number;
+  property_host: string;
+  ask: string;
+  pr_url: string | null;
+  pr_number: number | null;
+  branch: string | null;
+  check_state: "PENDING" | "GREEN" | "RED" | null;
+  check_url: string | null;
+  check_green_at: string | null;
+  preview_url: string | null;
+  build_proof: string | null;
+  merge_sha: string | null;
+  landed_at: string | null;
+  live_proof: string | null;
+}
+
+/** The parts of a card, in order. [] for a single-repo job — the only test of "is this multi-repo". */
+export async function readParts(env: Env, cardId: string): Promise<WebPropertyChangePart[]> {
+  return (await env.WP_OS_DB.prepare("SELECT * FROM web_property_change_part WHERE work_card_id = ?1 ORDER BY position ASC").bind(cardId).all<WebPropertyChangePart>()).results ?? [];
+}
+
+async function updatePart(env: Env, cardId: string, repo: string, sets: Record<string, string | number | null>): Promise<void> {
+  const keys = Object.keys(sets);
+  if (keys.length === 0) return;
+  const assign = keys.map((k, i) => `${k} = ?${i + 3}`).join(", ");
+  await env.WP_OS_DB.prepare(`UPDATE web_property_change_part SET ${assign}, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE work_card_id = ?1 AND repo = ?2`)
+    .bind(cardId, repo, ...keys.map((k) => sets[k]!))
+    .run();
+}
+
+/**
+ * THE PARENT ROW CARRIES THE AGGREGATE OF ITS PARTS, so every gate that reads the row reads the
+ * whole job: GREEN only when every part is GREEN (RED when any is), a PR url for each part, a merge
+ * only when every part merged. Pure.
+ */
+export function aggregateParts(parts: readonly Pick<WebPropertyChangePart, "repo" | "pr_url" | "check_state" | "check_green_at" | "preview_url" | "build_proof" | "merge_sha">[]): {
+  pr_url: string | null;
+  check_state: "PENDING" | "GREEN" | "RED";
+  check_green_at: string | null;
+  preview_url: string | null;
+  build_proof: string | null;
+  merge_sha: string | null;
+} {
+  const states = parts.map((p) => p.check_state ?? "PENDING");
+  const check_state = states.some((x) => x === "RED") ? "RED" : parts.length > 0 && states.every((x) => x === "GREEN") ? "GREEN" : "PENDING";
+  const greens = parts.map((p) => p.check_green_at).filter((x): x is string => Boolean(x)).sort();
+  const withPr = parts.filter((p) => p.pr_url);
+  return {
+    pr_url: withPr.length ? withPr.map((p) => p.pr_url).join(" · ") : null,
+    check_state,
+    check_green_at: check_state === "GREEN" && greens.length === parts.length ? greens[greens.length - 1]! : null,
+    preview_url: parts.some((p) => p.preview_url) ? parts.map((p) => `${p.repo}: ${p.preview_url ?? "no preview deployment"}`).join(" · ") : null,
+    build_proof: parts.some((p) => p.build_proof) ? parts.map((p) => `── ${p.repo} ──\n${p.build_proof ?? "(no proof came back for this repo)"}`).join("\n\n").slice(0, 8000) : null,
+    merge_sha: parts.length > 0 && parts.every((p) => p.merge_sha) ? parts.map((p) => `${p.repo}@${p.merge_sha}`).join(", ") : null,
+  };
+}
+
+/** Which parts stop the job landing, in words for the card: "westpeek-live RED (url)". Empty when every part is green. */
+export function notGreenParts(parts: readonly Pick<WebPropertyChangePart, "repo" | "pr_url" | "pr_number" | "check_state" | "check_green_at">[]): string[] {
+  return parts
+    .filter((p) => !(p.pr_url && p.pr_number && p.check_state === "GREEN" && p.check_green_at))
+    .map((p) => `${p.repo} ${p.pr_url ? `${p.check_state ?? "PENDING"} (${p.pr_url})` : "has no PR yet"}`);
+}
+
+function partPayload(p: WebPropertyChangePart): LocalJobPart {
+  return {
+    repo: p.repo,
+    property_host: p.property_host,
+    sites: sitesOf(p.property_host),
+    ask: p.ask,
+    pr: p.pr_url ? { url: p.pr_url, number: p.pr_number, branch: p.branch, check_state: p.check_state, check_green_at: p.check_green_at, preview_url: p.preview_url } : null,
+    merge_sha: p.merge_sha,
+  };
+}
+
+/** Write what the Mac reported for each repo, then the parent's aggregate. Returns the fresh parts. */
+async function recordPartReports(env: Env, cardId: string, reports: readonly LocalJobPartReport[], phase: "BUILD" | "LAND"): Promise<WebPropertyChangePart[]> {
+  const known = await readParts(env, cardId);
+  const now = new Date().toISOString();
+  for (const r of reports) {
+    const part = known.find((p) => p.repo === r.repo);
+    if (!part) continue; // a repo this card never named is not written, whatever the Mac said
+    if (phase === "BUILD" && r.pr_url) {
+      const state = r.check_state ?? "PENDING";
+      await updatePart(env, cardId, r.repo, {
+        pr_url: r.pr_url,
+        pr_number: r.pr_number ?? part.pr_number ?? null,
+        branch: r.branch ?? part.branch ?? null,
+        check_state: state,
+        check_url: r.check_url ?? null,
+        check_green_at: state === "GREEN" ? (part.check_state === "GREEN" && part.check_green_at ? part.check_green_at : now) : null,
+        preview_url: r.preview_url ?? null,
+        build_proof: (r.proof ?? "").slice(0, 8000) || null,
+      });
+    }
+    if (phase === "LAND" && r.merge_sha && !part.merge_sha) {
+      // The 0236 trigger refuses this unless every part is green and the approvals are on the parent.
+      await updatePart(env, cardId, r.repo, { merge_sha: r.merge_sha, landed_at: now, live_proof: (r.live_proof ?? "").slice(0, 8000) || null });
+    }
+  }
+  return readParts(env, cardId);
 }
 
 function asksOf(row: WebPropertyChangeRow): Ask[] {
@@ -443,14 +581,20 @@ export async function parkPhase(
     if (!row.check_green_at || row.check_state !== "GREEN") return { parked: false, reason: "the PR has no recorded green check" };
     // A CHANGE THAT PREVIEWS FIRST NEEDS THE SECOND APPROVAL (0220). Land-on-green does not reach here.
     if (needsPreview(row) && !row.land_approved_at && !row.forced_by) return { parked: false, reason: "this change previews first and the partner has not approved the landing after the preview, nor forced it to production" };
+    // SEVERAL REPOS LAND ALL OR NOTHING (0236): every part's PR recorded green, or nothing is parked.
+    const blocking = notGreenParts(await readParts(env, card.id));
+    if (blocking.length) return { parked: false, reason: `not every PR is green, so none lands: ${blocking.join("; ")}` };
   }
   if (phase === "BUILD" && !row.plan_approved_at) return { parked: false, reason: "the plan has not been approved yet" };
 
+  const parts = await readParts(env, card.id);
+  // One run covers every repo; BUILD and LAND work them one after another, so the ceiling scales.
+  const maxSeconds = spec.phases[phase].maxSeconds * (phase === "PLAN" ? 1 : Math.max(1, parts.length));
   const payload: LocalJobPayload & { queue_max_seconds: number } = {
     card_kind: WEB_PROPERTY_CHANGE_KIND,
     phase,
     model: phaseModel(rules, phase),
-    max_seconds: spec.phases[phase].maxSeconds,
+    max_seconds: maxSeconds,
     prompt_file: spec.promptFile,
     script: spec.script,
     card: { id: card.id, title: card.title, requested_by: card.requested_by_email ?? null },
@@ -488,6 +632,7 @@ export async function parkPhase(
     attachments: (await attachmentsFor(env, card.id)).map((a) => ({ id: a.id, filename: a.filename, media_type: a.media_type, bytes: a.bytes, path: `/api/work-cards/${card.id}/attachments/${a.id}` })),
     pr: row.pr_url ? { url: row.pr_url, number: row.pr_number, branch: row.branch, check_state: row.check_state, check_green_at: row.check_green_at, preview_url: row.preview_url, land_approved_at: row.land_approved_at, forced_by: row.forced_by } : null,
     rules,
+    ...(parts.length ? { parts: parts.map(partPayload) } : {}),
     queue_max_seconds: spec.queueMaxSeconds,
   };
 
@@ -502,7 +647,7 @@ export async function parkPhase(
       aiEmployeeId: PORTER_ID,
       taskClass: "web-property-change",
       firmScope: card.firm_scope,
-      maxSeconds: spec.phases[phase].maxSeconds,
+      maxSeconds,
       runKind: LOCAL_JOB_RUN_KIND,
       jobJson: JSON.stringify(payload),
     });
@@ -585,9 +730,22 @@ export function askBlockText(asks: readonly Ask[], readiness?: { publishReady: b
   ].join("\n");
 }
 
-/** The second question: the preview is up, land it? */
-export function previewBlockText(row: Pick<WebPropertyChangeRow, "pr_url" | "preview_url" | "placeholders_json" | "publish_ready">): string {
+/** The second question: the preview is up, land it? One email for every repo of the job. */
+export function previewBlockText(
+  row: Pick<WebPropertyChangeRow, "pr_url" | "preview_url" | "placeholders_json" | "publish_ready">,
+  parts: readonly Pick<WebPropertyChangePart, "repo" | "property_host" | "pr_url" | "preview_url">[] = [],
+): string {
   const placeholders = list(row.placeholders_json);
+  if (parts.length) {
+    return [
+      `PREVIEW READY in ${parts.length} repos — one landing for all of them:`,
+      ...parts.map((p) =>
+        `• ${p.repo} (${p.property_host}): ${p.preview_url ? `look at it here: ${p.preview_url}` : "no preview deployment for this repo — the PR and its screenshots stand in for it"}. The PR: ${p.pr_url ?? "(none)"}.`,
+      ),
+      ...(placeholders.length ? [`Ships with ${placeholders.length} placeholder${placeholders.length === 1 ? "" : "s"}: ${placeholders.join("; ")}.`] : []),
+      `Reply "approved" to land every PR together, or "changes: …" to hold them all. Nothing lands without that word, and nothing lands unless every PR is green.${placeholders.length ? ` ("approved to production" also lands them and names the placeholders and you in the DONE email.)` : ""}`,
+    ].join("\n");
+  }
   return [
     `PREVIEW READY. ${row.preview_url ? `Look at it here: ${row.preview_url}` : "No preview deployment exists for this repo — the PR link and the screenshots stand in for it"}. The PR: ${row.pr_url ?? "(none)"}.`,
     ...(placeholders.length ? [`Ships with ${placeholders.length} placeholder${placeholders.length === 1 ? "" : "s"}: ${placeholders.join("; ")}.`] : []),
@@ -639,7 +797,7 @@ async function blockOnPreview(env: Env, card: WebPropertyChangeCard, row: WebPro
     trying: card.title,
     employee: PORTER_NAME,
     who: whoFor(card),
-    detail: previewBlockText(row).slice(0, 900),
+    detail: previewBlockText(row, await readParts(env, card.id)).slice(0, 900),
   });
   await update(env, card.id, { preview_emailed_at: new Date().toISOString() });
   return why;
@@ -663,7 +821,7 @@ export async function blockedEmailDetail(env: Env, cardId: string): Promise<stri
   // THE PREVIEW EMAIL: the link, the PR, the placeholders and the proof — the second question.
   if (row.pr_url && row.check_state === "GREEN" && needsPreview(row) && !row.land_approved_at && !row.forced_by) {
     return [
-      previewBlockText(row),
+      previewBlockText(row, await readParts(env, cardId)),
       "",
       "WHAT WAS PROVEN BEFORE THE PR:",
       "",
@@ -684,8 +842,27 @@ export async function blockedEmailDetail(env: Env, cardId: string): Promise<stri
   ].join("\n");
 }
 
-/** What the DONE email says: the proof, not the process. */
-export function doneSummary(row: WebPropertyChangeRow): string {
+/** What the DONE email says: the proof, not the process. A multi-repo job names every repo and its proof. */
+export function doneSummary(row: WebPropertyChangeRow, parts: readonly WebPropertyChangePart[] = []): string {
+  if (parts.length) {
+    return [
+      forcedLine(row) ?? "",
+      `Landed ${parts.length} PRs in ${parts.length} repos, together:`,
+      ...parts.map((p) =>
+        [
+          `• ${p.repo} (${p.property_host}): ${p.pr_url ?? "the PR"}${p.merge_sha ? ` as ${p.merge_sha.slice(0, 10)}` : ""}`,
+          p.live_proof ? `  Live proof:\n${p.live_proof}` : "",
+        ]
+          .filter((l) => l.length > 0)
+          .join("\n"),
+      ),
+      row.live_proof ? `Live proof:\n${row.live_proof}` : "",
+      row.build_proof ? `Build proof:\n${row.build_proof}` : "",
+      list(row.decided_json).length ? `Decided without asking: ${list(row.decided_json).join("; ")}` : "",
+    ]
+      .filter((l) => l.length > 0)
+      .join("\n\n");
+  }
   return [
     forcedLine(row) ?? "",
     `Landed ${row.pr_url ?? "the PR"}${row.merge_sha ? ` as ${row.merge_sha.slice(0, 10)}` : ""} on ${row.property_host ?? row.target_repo}.`,
@@ -698,7 +875,7 @@ export function doneSummary(row: WebPropertyChangeRow): string {
 }
 
 async function finishCard(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow): Promise<string> {
-  const finding = doneSummary(row);
+  const finding = doneSummary(row, await readParts(env, card.id));
   await appendFinding(env, card.id, finding);
   let deliverableId: string | null = null;
   try {
@@ -842,6 +1019,14 @@ export async function applyReport(
     return { finished: false, blocked: true, progressed: false, detail: blocked };
   }
   if (report.status === "failed") {
+    // A multi-repo BUILD or LAND that stopped part way still reports what it did per repo: PRs
+    // opened, or merges that happened before a later repo refused. Recorded, so the next attempt
+    // resumes rather than repeats (a merged part is never landed twice).
+    if (report.parts?.length && (report.phase === "BUILD" || report.phase === "LAND")) {
+      const parts = await recordPartReports(env, card.id, report.parts, report.phase);
+      const agg = aggregateParts(parts);
+      await update(env, card.id, { pr_url: agg.pr_url, check_state: agg.check_state, check_green_at: agg.check_green_at, preview_url: agg.preview_url, build_proof: agg.build_proof });
+    }
     await appendFinding(env, card.id, `${report.phase} failed on the Mac: ${report.reason}`);
     return { finished: false, blocked: false, progressed: false, detail: `${report.phase} failed: ${report.reason}` };
   }
@@ -1019,6 +1204,7 @@ async function holdCard(env: Env, card: WebPropertyChangeCard, row: WebPropertyC
 }
 
 async function applyBuild(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, report: LocalJobReport, rules: Record<string, string>): Promise<RunOutcome> {
+  if ((await readParts(env, card.id)).length) return applyBuildOfParts(env, card, row, report, rules);
   if (!report.pr_url) return { finished: false, blocked: false, progressed: false, detail: "BUILD came back without a PR link" };
   const state = report.check_state ?? "PENDING";
   const now = new Date().toISOString();
@@ -1070,7 +1256,57 @@ async function applyBuild(env: Env, card: WebPropertyChangeCard, row: WebPropert
   return { finished: false, blocked: true, progressed: false, detail: why };
 }
 
+/**
+ * A MULTI-REPO BUILD (0236): one PR per repo, each with its own checks and preview. The parent row
+ * takes the aggregate, and from there the job takes the same road a single PR does — the preview
+ * stop, land on green — because every gate reads the parent. Any part not GREEN is a failed
+ * attempt that names the repo; the next BUILD resumes only what is not green yet.
+ */
+async function applyBuildOfParts(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, report: LocalJobReport, rules: Record<string, string>): Promise<RunOutcome> {
+  if (!report.parts?.length) return { finished: false, blocked: false, progressed: false, detail: "BUILD came back without a PR for each repo" };
+  const parts = await recordPartReports(env, card.id, report.parts, "BUILD");
+  const agg = aggregateParts(parts);
+  await update(env, card.id, { pr_url: agg.pr_url, pr_number: null, branch: null, check_state: agg.check_state, check_green_at: agg.check_green_at, preview_url: agg.preview_url, build_proof: agg.build_proof, check_url: null });
+  await appendFinding(env, card.id, `PRs opened: ${parts.map((p) => `${p.repo} ${p.pr_url ?? "(none yet)"} — checks ${p.check_state ?? "PENDING"}`).join("; ")}.`);
+  const blocking = notGreenParts(parts);
+  if (agg.check_state !== "GREEN" || blocking.length) {
+    // ONE RED PR HOLDS THEM ALL. Nothing lands, and the card says which repo is holding it.
+    await appendFinding(env, card.id, `Not every PR is green, so nothing lands: ${blocking.join("; ")}.`);
+    return { finished: false, blocked: false, progressed: false, detail: `not every PR is green, so none lands: ${blocking.join("; ")}` };
+  }
+  const fresh: WebPropertyChangeRow = { ...row, pr_url: agg.pr_url, pr_number: null, branch: null, check_state: "GREEN", check_green_at: agg.check_green_at, preview_url: agg.preview_url, build_proof: agg.build_proof };
+  if (needsPreview(fresh) && !fresh.land_approved_at && !fresh.forced_by) {
+    const why = await blockOnPreview(env, card, fresh);
+    return { finished: false, blocked: true, progressed: false, detail: why };
+  }
+  if (isOn(rules.land_on_green)) {
+    const parked = await parkPhase(env, card, fresh, "LAND", rules);
+    if (!parked.parked) return { finished: false, blocked: false, progressed: false, detail: `green, but LAND could not be queued: ${parked.reason}` };
+    return { finished: false, blocked: false, progressed: true, detail: `All ${parts.length} PRs are green; landing all of them is queued for the Mac (land on green is on).` };
+  }
+  const why = await blockCard(env, card, {
+    reason: "a_question_for_you",
+    trying: card.title,
+    employee: PORTER_NAME,
+    who: whoFor(card),
+    detail: `All ${parts.length} PRs are green: ${agg.pr_url}. Land on green is OFF for this kind, so say "land it" to merge and deploy them together, or say what to change.`.slice(0, 900),
+  });
+  return { finished: false, blocked: true, progressed: false, detail: why };
+}
+
 async function applyLand(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, report: LocalJobReport): Promise<RunOutcome> {
+  if ((await readParts(env, card.id)).length) {
+    // EVERY REPO MERGED, OR THE CARD IS NOT DONE (0236). What merged is recorded either way.
+    const parts = await recordPartReports(env, card.id, report.parts ?? [], "LAND");
+    const unmerged = parts.filter((p) => !p.merge_sha).map((p) => p.repo);
+    if (unmerged.length) return { finished: false, blocked: false, progressed: false, detail: `LAND came back without a merge for ${unmerged.join(", ")} — the card is not done until every repo has landed` };
+    const agg = aggregateParts(parts);
+    const now = new Date().toISOString();
+    await update(env, card.id, { merge_sha: agg.merge_sha, landed_at: now, live_proof: (report.live_proof ?? "").slice(0, 8000) || null });
+    const fresh: WebPropertyChangeRow = { ...row, merge_sha: agg.merge_sha, landed_at: now, live_proof: report.live_proof ?? null };
+    const finding = await finishCard(env, card, fresh);
+    return { finished: true, blocked: false, progressed: false, detail: finding };
+  }
   if (!report.merge_sha) return { finished: false, blocked: false, progressed: false, detail: "LAND came back without a merge SHA — nothing is recorded as landed" };
   const now = new Date().toISOString();
   await update(env, card.id, { merge_sha: report.merge_sha, landed_at: now, live_proof: (report.live_proof ?? "").slice(0, 8000) || null });
@@ -1436,11 +1672,11 @@ export async function runWebPropertyChangeCard(
       trying: card.title,
       employee: PORTER_NAME,
       who: whoFor(card),
-      detail: "Send the Google Drive FOLDER link with the package and name the site (westpeek.ventures, westpeekproductions.com or joinwestpeek.com).",
+      detail: `Send the Google Drive FOLDER link with the package and name the site (${hostsSentence()}).`,
     });
     return { finished: false, blocked: true, progressed: false, detail: why };
   }
-  if (row.phase === "DONE") return { finished: true, blocked: false, progressed: false, detail: doneSummary(row) };
+  if (row.phase === "DONE") return { finished: true, blocked: false, progressed: false, detail: doneSummary(row, await readParts(env, card.id)) };
   if (row.target_repo === UNRESOLVED_REPO) {
     // "the site", and nothing recent to infer it from: the one question only they can answer.
     const why = await blockCard(env, card, {
@@ -1448,7 +1684,7 @@ export async function runWebPropertyChangeCard(
       trying: card.title,
       employee: PORTER_NAME,
       who: whoFor(card),
-      detail: "Which site? westpeek.ventures, westpeekproductions.com or joinwestpeek.com — reply with the one, and I'm on it.",
+      detail: `Which site? ${hostsSentence()} — reply with the one, and I'm on it.`,
     });
     return { finished: false, blocked: true, progressed: false, detail: why };
   }
@@ -1731,6 +1967,8 @@ export async function handleGetWebPropertyChange(ctx: RouteContext): Promise<Res
   const run = row.current_run_id ? await readRun(ctx.env, row.current_run_id) : null;
   return json({
     ...row,
+    // 0236: a multi-repo job's repos, each with its own PR, check, preview and merge.
+    parts: await readParts(ctx.env, id),
     decided: list(row.decided_json),
     asks: askLines(asksOf(row)),
     answers: list(row.answers_json),

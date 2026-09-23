@@ -1,6 +1,6 @@
 import { describeModes, parseBlogAsk } from "../../shared/intake/blogHelp";
 import { parsePartnerMessageAsk } from "../../shared/intake/partnerMessage";
-import { WEB_PROPERTIES, isWebPropertyChange, parseWebPropertyAsk } from "../../shared/intake/webPropertyChange";
+import { WEB_PROPERTIES, isWebPropertyChange, parseWebPropertyAsk, partsFromHosts } from "../../shared/intake/webPropertyChange";
 import { requestAttachments, textBodyOf } from "../effects/mimeAttachments";
 import { splitQuoted } from "../../shared/intake/replyBody";
 import type { Env } from "../env";
@@ -1071,6 +1071,12 @@ export async function openAssignmentCard(
         web.property_host = recent.property_host;
         web.target_repo = recent.target_repo;
         web.site = prop?.site ?? null;
+        // "The site" after a job over several repos is that same job's repos again (0236).
+        const parts = partsFromHosts(recent.property_host, web.ask);
+        if (parts.length) {
+          web.parts = parts;
+          web.site = parts.map((p) => p.site).join(", ");
+        }
         assumedFrom = `${recent.property_host} — the one you had me on ${recent.created_at.slice(0, 10) === new Date().toISOString().slice(0, 10) ? "this morning" : `on ${recent.created_at.slice(0, 10)}`} (card ${recent.id})`;
       }
     }

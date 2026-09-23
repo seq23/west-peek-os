@@ -35,18 +35,42 @@ export interface WebProperty {
   site: string;
   /** Words that name it without the host. */
   words: readonly string[];
+  /** Other hosts that serve the same site (pitch.joinwestpeek.com and pitchlab.joinwestpeek.com). */
+  aliases?: readonly string[];
 }
 
+/** The folder a site occupies when it IS its repo (no sites/ folder): the whole repo is the scope. */
+export const REPO_ROOT_SITE = ".";
+
 /**
- * The firm's public web properties and where each is built. Three sites, one repo, three Pages
- * projects — read from that repo's RUNBOOK.md on 20 Sep 2026. Adding a property is one row here
- * and a RUNBOOK.md in its repo; the PLAN phase blocks without the RUNBOOK.
+ * The firm's public web properties and where each is built. The first three share one repo and
+ * three Pages projects (read from that repo's RUNBOOK.md on 20 Sep 2026); every other property IS
+ * its repo, so its scope is the repo root (`REPO_ROOT_SITE`). Adding a property is one row here and
+ * a RUNBOOK.md in its repo; the PLAN phase blocks without the RUNBOOK. Hosts are read from each
+ * repo's own deploy config, never guessed (23 Sep 2026).
+ *
+ * SEVERAL HOSTS SHARE A PARENT DOMAIN (dilution.joinwestpeek.com, venturedeals.joinwestpeek.com
+ * and the community site joinwestpeek.com). `propertiesIn` matches the most specific host first
+ * and consumes what it matched, so a subdomain never also names its parent.
  */
 export const WEB_PROPERTIES: readonly WebProperty[] = [
   { host: "westpeek.ventures", repo: "join-west-peek-main", site: "sites/ventures", words: ["ventures site", "ventures website", "ventures page", "the fund site", "the fund website", "west peek ventures site"] },
   { host: "westpeekproductions.com", repo: "join-west-peek-main", site: "sites/productions", words: ["productions site", "productions website", "agency site", "agency website", "west peek productions site"] },
   { host: "joinwestpeek.com", repo: "join-west-peek-main", site: "sites/community", words: ["community site", "community website", "join west peek site", "the community page"] },
+  // Hosts below CONFIRMED 23 Sep 2026 from each repo's Cloudflare config (Pages custom domains,
+  // the west-peek-live Worker's routes) and a live curl — never guessed.
+  { host: "westpeek.live", repo: "westpeek-live", site: REPO_ROOT_SITE, words: ["westpeek live", "west peek live", "westpeek.live", "the live site", "the live website", "the events site", "the events platform", "the event platform"] },
+  { host: "pitch.joinwestpeek.com", aliases: ["pitchlab.joinwestpeek.com"], repo: "west-peek-pitch-lab", site: REPO_ROOT_SITE, words: ["pitch lab", "pitchlab", "the pitch site", "pitch lab site"] },
+  { host: "network.joinwestpeek.com", repo: "west-peek-network-os", site: REPO_ROOT_SITE, words: ["network os", "the network app", "network os app"] },
+  { host: "venturedeals.joinwestpeek.com", repo: "secondaries", site: REPO_ROOT_SITE, words: ["venture deals", "venturedeals", "secondaries site", "the secondaries page", "secondaries page", "secondaries website"] },
+  { host: "dilution.joinwestpeek.com", repo: "founder-dilution-dashboard", site: REPO_ROOT_SITE, words: ["dilution dashboard", "dilution calculator", "the dilution site", "dilution site", "founder dilution"] },
 ];
+
+/** Every registered host, for a sentence that lists them ("Which site? …"). One list, never retyped. */
+export function hostsSentence(): string {
+  const hosts = WEB_PROPERTIES.map((p) => p.host);
+  return hosts.length > 1 ? `${hosts.slice(0, -1).join(", ")} or ${hosts[hosts.length - 1]}` : hosts.join("");
+}
 
 /** The employee an authenticated partner opened the email to ("Hey Porter", "Porter,", "Hi Porter —"), or null. */
 export function addresseeIn(written: string): string | null {
@@ -82,6 +106,8 @@ export interface WebPropertyAsk {
   property_unresolved?: boolean;
   /** 23 Sep 2026: the preview request in the partner's OWN request text ("preview first", …), or null. */
   preview_first?: string | null;
+  /** 23 Sep 2026: sites in SEVERAL repos — one part per repo, one PR each, landed together. Absent for one repo. */
+  parts?: WebPropertyPart[];
 }
 
 const FOLDER_LINK = /https?:\/\/drive\.google\.com\/(?:drive\/(?:u\/\d+\/)?(?:mobile\/)?folders\/|open\?id=)([A-Za-z0-9_-]{10,})[^\s>)"']*/i;
@@ -110,7 +136,7 @@ export function propertyIn(text: string): WebProperty | null {
   // site and the agency site" is one plan, one preview and one PR over both folders. `host` and
   // `site` carry every one, comma-joined, in registry order; sitesOf() reads them back.
   const repos = new Set(named.map((p) => p.repo));
-  if (repos.size > 1) return null; // one job is one repo, one PR; the door infers or asks
+  if (repos.size > 1) return null; // several repos is several parts: parseWebPropertyAsk → partsFor
   if (named.length === 1) return named[0]!;
   return {
     host: named.map((p) => p.host).join(", "),
@@ -145,9 +171,88 @@ export function sitesOf(propertyHost: string | null | undefined): string[] {
  */
 export function propertiesIn(text: string): WebProperty[] {
   const lower = text.toLowerCase().replace(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/g, " ");
-  const asked = WEB_PROPERTIES.filter((p) => p.words.some((w) => lower.includes(w)));
+  const asked = matchMostSpecificFirst(lower, (p) => p.words);
   if (asked.length) return asked;
-  return WEB_PROPERTIES.filter((p) => lower.includes(p.host));
+  return matchMostSpecificFirst(lower, (p) => [p.host, ...(p.aliases ?? [])], true);
+}
+
+/**
+ * MOST SPECIFIC FIRST, AND WHAT MATCHED IS CONSUMED (23 Sep 2026). "dilution.joinwestpeek.com"
+ * contains "joinwestpeek.com", and "the dilution site" must never also be read as the community
+ * site. Every phrase of every property is tried longest first; a match blanks its span so a
+ * shorter phrase inside it cannot match again. A host must stand alone (not be the tail of a
+ * longer host she wrote). Returned in registry order, so a job over several sites reads the same
+ * whichever order the email named them in.
+ */
+function matchMostSpecificFirst(lower: string, phrasesOf: (p: WebProperty) => readonly string[], asHost = false): WebProperty[] {
+  const phrases = WEB_PROPERTIES.flatMap((p) => phrasesOf(p).map((phrase) => ({ p, phrase: phrase.toLowerCase() }))).sort((a, b) => b.phrase.length - a.phrase.length);
+  let rest = lower;
+  const hit = new Set<WebProperty>();
+  for (const { p, phrase } of phrases) {
+    const esc = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = asHost ? new RegExp(`(?<![a-z0-9.-])${esc}(?![a-z0-9-]|\\.[a-z0-9])`, "g") : new RegExp(esc, "g");
+    if (re.test(rest)) {
+      hit.add(p);
+      rest = rest.replace(re, (m) => " ".repeat(m.length));
+    }
+  }
+  return WEB_PROPERTIES.filter((p) => hit.has(p));
+}
+
+/** One repo's share of a job over several repos: its sites, and its slice of the request. */
+export interface WebPropertyPart {
+  repo: string;
+  /** The hosts of this repo the job names, comma-joined, registry order (sitesOf reads them back). */
+  property_host: string;
+  /** The site folders, comma-joined, for the prompt. */
+  site: string;
+  /** This repo's slice of the request when the email separates them; the whole request otherwise. */
+  ask: string;
+}
+
+/**
+ * ONE JOB OVER SEVERAL REPOS (23 Sep 2026, her words: "there is a world where we ask you to fix
+ * something on the community site and westpeek live in the same email"). The named properties are
+ * grouped by repo, in registry order; each repo is one PART — one worktree, one PR, one preview —
+ * and the job lands all of them or none. Fewer than two repos is not several: [].
+ */
+export function partsFor(named: readonly WebProperty[], request: string): WebPropertyPart[] {
+  const repos = [...new Set(named.map((p) => p.repo))];
+  if (repos.length < 2) return [];
+  const slices = slicesByRepo(request, repos);
+  return repos.map((repo) => {
+    const mine = named.filter((p) => p.repo === repo);
+    return { repo, property_host: mine.map((p) => p.host).join(", "), site: mine.map((p) => p.site).join(", "), ask: slices.get(repo) ?? request };
+  });
+}
+
+/** The parts of a job from its stored hosts (a re-read, or "the site" inferred from a multi-repo card). */
+export function partsFromHosts(propertyHost: string | null | undefined, request: string): WebPropertyPart[] {
+  const hosts = (propertyHost ?? "").split(",").map((h) => h.trim());
+  return partsFor(WEB_PROPERTIES.filter((p) => hosts.includes(p.host)), request);
+}
+
+/**
+ * EACH REPO'S SLICE, WHEN THE EMAIL SEPARATES THEM. The request is split into sentences; a sentence
+ * that names properties of exactly one repo belongs to that repo; a sentence naming none or several
+ * is shared context and goes to every repo. The email "separates them" only when EVERY repo has at
+ * least one sentence of its own — then each slice is the shared sentences plus its own, in the
+ * order written. Otherwise every repo gets the whole request (its SITES line still scopes it).
+ * Pure and deterministic, like everything else read at the door.
+ */
+export function slicesByRepo(request: string, repos: readonly string[]): Map<string, string> {
+  const sentences = request.replace(/\r/g, "").split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter((x) => x.length > 0);
+  const owner = sentences.map((sentence) => {
+    const inIt = [...new Set(propertiesIn(sentence).map((p) => p.repo))];
+    return inIt.length === 1 && repos.includes(inIt[0]!) ? inIt[0]! : null;
+  });
+  const out = new Map<string, string>();
+  if (!repos.every((r) => owner.includes(r))) {
+    for (const r of repos) out.set(r, request);
+    return out;
+  }
+  for (const r of repos) out.set(r, sentences.filter((_, i) => owner[i] === null || owner[i] === r).join("\n"));
+  return out;
 }
 
 /**
@@ -171,13 +276,21 @@ export function parseWebPropertyAsk(subject: string, body: string): WebPropertyA
   const written = writtenPart(text);
   const folder = FOLDER_LINK.exec(written);
   const file = FILE_LINK.exec(written);
-  const property = propertyIn(written);
-  // Sites in DIFFERENT repos cannot be one PR: unresolved, never a silent pick.
-  const severalNamed = !property && propertiesIn(written).length > 1;
+  const ask = body.trim().slice(0, 6000) || subject.trim();
+  /*
+   * SITES IN DIFFERENT REPOS ARE ONE JOB WITH ONE PART PER REPO (23 Sep 2026). Until today they
+   * were unresolved — one job was one repo. Now the card carries every host and every repo, and
+   * `parts` says which sites and which slice of the request each repo's PR is for.
+   */
+  const named = propertiesIn(written);
+  const parts = partsFor(named, ask);
+  const property: WebProperty | null = parts.length
+    ? { host: parts.map((p) => p.property_host).join(", "), repo: parts.map((p) => p.repo).join(" + "), site: parts.map((p) => p.site).join(", "), words: [] }
+    : propertyIn(written);
   // The greeting is the BODY's first line; the subject sits above it in `text`.
   const addressee = addresseeIn(writtenPart(body.replace(/\r/g, "")));
   // "Hey Porter — a spot on the site": addressed to Porter, a property named without its host.
-  const unresolved = (!property && addressee === "Porter" && THE_SITE.test(written)) || severalNamed;
+  const unresolved = !property && addressee === "Porter" && THE_SITE.test(written);
   if (!folder && !file && !property && !unresolved) return null;
   return {
     drive_folder_id: folder?.[1] ?? null,
@@ -186,7 +299,8 @@ export function parseWebPropertyAsk(subject: string, body: string): WebPropertyA
     property_host: property?.host ?? null,
     target_repo: property?.repo ?? null,
     site: property?.site ?? null,
-    ask: body.trim().slice(0, 6000) || subject.trim(),
+    ...(parts.length ? { parts } : {}),
+    ask,
     pre_approval: preApprovalIn(written),
     force: forcePhraseIn(written),
     addressee,
@@ -229,6 +343,7 @@ export function readWebPropertyAsk(json: string | null | undefined): WebProperty
       force: p.force ?? null,
       addressee: p.addressee ?? null,
       property_unresolved: p.property_unresolved === true,
+      ...(Array.isArray(p.parts) && p.parts.length > 1 ? { parts: p.parts } : {}),
     };
   } catch {
     return null;
