@@ -8,6 +8,9 @@ import { addressIn, mailAuthority } from "../../shared/intake/partnerAuthority";
 import { partnerByEmail, PREVIEW_PARTNER, type Partner } from "../../shared/registry/partners";
 import type { InstructionPiece } from "../../shared/work/instruction";
 import { answerBlock } from "./blocks";
+import { ownershipFromWords, tellPartner, tellSecondaryRefused } from "./handOff";
+import { ownershipOf, roleOf } from "../../shared/work/partnerOwnership";
+import { readApprovalReply } from "../../shared/work/approvalReply";
 import { textBodyOf } from "../effects/mimeAttachments";
 import { storeAttachments } from "./requestMaterials";
 import { answerQuestionForCard, type QuestionAnswerer, type QuestionAnswerResult } from "./questionRouting";
@@ -316,7 +319,7 @@ export async function steerFromReply(
   if (thread.object_type === "work_card") {
     const partner = partnerByEmail(authority.partnerAddress);
     const cardRow = await env.WP_OS_DB.prepare(
-      `SELECT id, title, kind, state, requested_by_email, preview_first, preview_owner_id, assigned_from_card_id, firm_scope
+      `SELECT id, title, kind, state, requested_by_email, secondary_partner_email, preview_first, preview_owner_id, assigned_from_card_id, firm_scope
          FROM work_card WHERE id = ?1`,
     )
       .bind(thread.object_id)
@@ -326,6 +329,7 @@ export async function steerFromReply(
         kind: string | null;
         state: string;
         requested_by_email: string | null;
+        secondary_partner_email: string | null;
         preview_first: number | null;
         preview_owner_id: string | null;
         assigned_from_card_id: string | null;
@@ -336,7 +340,27 @@ export async function steerFromReply(
     // `recordCcFrom` refuses anyone but the requesting partner and names non-partners it refused.
     if (cardRow && partner) await recordCcFrom(env, cardRow.id, written, partner.email);
 
-    if (cardRow && partner && cardRow.state === "BLOCKED") {
+    /*
+     * "HAND THIS TO SCOOTER" / "TAKE THIS BACK" (0241). Read before anything else acts on the reply:
+     * it moves the card and is never an answer to a block. The authenticated sender decides, through
+     * the same rules as the note and the route; a refusal is answered on the sender's own thread.
+     */
+    const owned = cardRow && partner ? await ownershipFromWords(env, { cardId: cardRow.id, writer: partner.email, text: written, via: "REPLY", ackOnThread: thread.token }) : null;
+    /*
+     * A SECONDARY'S "APPROVED" (0241): refused, and told who approves and how to take it over. The
+     * reply is still kept as a note below — read as context, never as an approval.
+     */
+    const secondarySaidApproved =
+      !owned && cardRow && partner && roleOf(cardRow, partner.email) === "SECONDARY" && ["APPROVED", "FORCED", "PREVIEW", "PUBLISH"].includes(readApprovalReply(written).kind);
+    if (owned && !owned.ok && cardRow && partner) {
+      await tellPartner(env, { cardId: cardRow.id, to: partner, label: "Not changed", line: owned.reason ?? "Not changed.", subjectTail: "not handed off", onThread: thread.token });
+    } else if (secondarySaidApproved && cardRow && partner) {
+      await tellSecondaryRefused(env, { cardId: cardRow.id, secondary: partner, primary: ownershipOf(cardRow).primary!, said: written, onThread: thread.token });
+    }
+
+    if (owned) {
+      // Handled: the card changed hands (or was refused, and said so). Nothing below reads it.
+    } else if (cardRow && partner && cardRow.state === "BLOCKED") {
       const asked = (cardRow.requested_by_email ?? "").trim().toLowerCase();
       if (!asked || asked === partner.email) {
         const out = await answerBlock(env, cardRow.id, partner.firmUserId, { action: "ANSWER", text: written.slice(0, 4000) });
@@ -345,7 +369,15 @@ export async function steerFromReply(
         await env.WP_OS_DB.prepare(
           "INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)",
         )
-          .bind(`wcn_${crypto.randomUUID()}`, cardRow.id, partner.firmUserId, `(Not the partner this question was addressed to; kept as a note.) ${written.slice(0, 3900)}`, thread.firm_scope)
+          .bind(
+            `wcn_${crypto.randomUUID()}`,
+            cardRow.id,
+            partner.firmUserId,
+            roleOf(cardRow, partner.email) === "SECONDARY"
+              ? `(From the secondary partner; read as context, not an approval.) ${written.slice(0, 3900)}`
+              : `(Not the partner this question was addressed to; kept as a note.) ${written.slice(0, 3900)}`,
+            thread.firm_scope,
+          )
           .run();
       }
     } else if (cardRow && partner && (cardRow.state === "OPEN" || cardRow.state === "IN_PROGRESS")) {

@@ -6666,3 +6666,34 @@ to see everything."
   scroll) — negative-proved by planting the panel on the row. `validate:stopped-cards` now reads the
   one reader too (two new self-test fixtures; negative-proved). p55 and p73 pins rewritten to the
   one-press truth, stricter.
+
+## Hand a work card to the other partner: primary and secondary (23 Sep 2026, migration 0241)
+
+Owner approval: "hand a work card to the other partner, with primary and secondary owners", plus
+"Take responsibility" on a work card's notification claiming the card.
+
+- **Primary is `requested_by_email`; secondary is the new `work_card.secondary_partner_email`.** Every
+  requester guard (the runner, the reply door, the Mac's gate, 0220's force trigger) already reads
+  the first column, so moving it moves every power. `services/handOff.ts#changeOwnership` is the one
+  writer of both during a hand-off; the rules are pure in `shared/work/partnerOwnership.ts` (partners
+  only, resolved through the registry; only the current primary hands off; only the current secondary
+  takes back; "Take responsibility" makes the presser primary and the other partner secondary).
+- **Doors.** `POST /api/work-cards/:id/hand-off {to}`, `POST /api/work-cards/:id/take-back`, a reply
+  on the card's thread or a note saying "hand this to Scooter" / "take this back", and
+  `POST /api/notifications/:id/acknowledge` on a work card's notice (CLAIM). History in
+  `work_card_hand_off`.
+- **Emails.** Exactly one to the new primary (`shared/work/handOffEmail.ts`, current state first: the
+  job, where it stands, the current preview, still missing, reply options, decided so far, how we got
+  here), in a new conversation; later notices thread under it (`threadRootFor` now roots the
+  conversation at the oldest message sent to the CURRENT primary). The old primary gets Porter's one
+  line on a hand-off; the other partner one line on a claim; a take-back sends only the one email.
+- **Powers.** A secondary's "approved" by reply is refused with "Only <Primary> can approve this now.
+  Reply 'take this back' to take it over."; the card's unblock button refuses the secondary; a
+  secondary's note is kept as context on the trail and never carried as an answer. The secondary is
+  cc'd on every PREVIEW and DONE through `ccOfCard` (the one cc reader `recipientsFor` asks).
+- **Desk payload.** `primary_partner`, `secondary_partner` ({firm_user_id, email, first_name,
+  full_name}) and `partner_owner_line` on `/api/work-cards/by-owner` cards and `/api/work-cards/:id`.
+- **Guards.** 0241 triggers refuse a plan or landing approval recorded against anyone but the current
+  primary, and a secondary equal to the primary. `validate:no-land-without-approval` gate 15 (eleven
+  new planted defects, negative-proved against the real source by removing the unblock refusal).
+  `tests/partnerHandOff.test.ts` (24).

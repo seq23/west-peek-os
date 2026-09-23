@@ -53,6 +53,11 @@ export interface Partner {
   /** Kept from `MANAGING_PARTNERS`, which is now derived from this. */
   ownershipPct: number;
   finalAuthority: boolean;
+  /**
+   * How Porter refers to them in a sentence ("Handed to Scooter. He'll get the next emails…", 0241).
+   * Written here, beside the name, so no second list of the partners has to exist to say it.
+   */
+  subjectPronoun: "She" | "He";
 }
 
 /**
@@ -68,6 +73,7 @@ export const PARTNERS: readonly Partner[] = [
     fullName: "Sequoia Taylor",
     ownershipPct: 49,
     finalAuthority: false,
+    subjectPronoun: "She",
   },
   {
     firmUserId: "fu_scooter_taylor",
@@ -76,6 +82,7 @@ export const PARTNERS: readonly Partner[] = [
     fullName: "Scooter Taylor",
     ownershipPct: 51,
     finalAuthority: true,
+    subjectPronoun: "He",
   },
 ] as const;
 

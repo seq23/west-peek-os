@@ -108,12 +108,27 @@ export function requesterNotesSection(notes: string | null | undefined, byFirmUs
  * address, not a receipt, and threading a later notice under a message that never arrived costs
  * nothing.
  */
+/*
+ * THE CONVERSATION WITH THE PARTNER WHO HOLDS THE CARD NOW (0241). After a hand-off the card's
+ * primary is someone who never saw the first notice, so its root is not theirs to thread under. The
+ * root is the oldest message this card sent to the CURRENT primary — a notice, or the one hand-off
+ * email they got — which for a card never handed off is exactly the oldest notice, as before.
+ */
 export async function threadRootFor(env: Env, cardId: string): Promise<string | null> {
   const row = await env.WP_OS_DB.prepare(
-    `SELECT message_id FROM work_card_notice
-      WHERE work_card_id = ?1 AND message_id IS NOT NULL AND message_id <> ''
-      ORDER BY sent_at ASC, rowid ASC
-      LIMIT 1`,
+    `SELECT message_id FROM (
+       SELECT n.message_id, n.sent_at AS at, 0 AS src, n.rowid AS seq
+         FROM work_card_notice n JOIN work_card c ON c.id = n.work_card_id
+        WHERE n.work_card_id = ?1 AND n.message_id IS NOT NULL AND n.message_id <> ''
+          AND (c.requested_by_email IS NULL OR lower(n.sent_to) = lower(c.requested_by_email))
+       UNION ALL
+       SELECT h.message_id, h.created_at AS at, 1 AS src, h.rowid AS seq
+         FROM work_card_hand_off h JOIN work_card c ON c.id = h.work_card_id
+        WHERE h.work_card_id = ?1 AND h.message_id IS NOT NULL AND h.message_id <> '' AND h.sent = 1
+          AND lower(h.primary_email) = lower(COALESCE(c.requested_by_email, ''))
+     )
+     ORDER BY at ASC, src ASC, seq ASC
+     LIMIT 1`,
   )
     .bind(cardId)
     .first<{ message_id: string | null }>();

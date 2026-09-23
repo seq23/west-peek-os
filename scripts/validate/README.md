@@ -99,6 +99,9 @@ violations) on breach and proves its own detection with a self-test fixture run.
   Worker's `parkPhase`, the Mac script's `landGate` and `run()`, and migration 0219's trigger and
   rule seed, and requires each to refuse a landing without a recorded plan approval and a recorded
   green check; `--self-test` removes each check in turn and requires the removal to be caught.
+  Gate 15 (23 Sep 2026, migration 0241): after a hand-off only the card's CURRENT primary approves or
+  forces — the 0241 triggers, the pure rules in `shared/work/partnerOwnership.ts` run against a handed
+  card, the one writer of `secondary_partner_email`, the unblock button and the reply door.
 - `one-employee-one-address.mjs` (`npm run validate:one-employee-one-address`, 22 Sep 2026) — one
   employee has ONE sending address and every path that puts bytes on the wire resolves it through
   the one resolver. It exists because on 22 Sep one card carried TWO senders on two domains in the

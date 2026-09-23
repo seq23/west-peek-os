@@ -86,6 +86,7 @@ import {
 } from "./services/approvals";
 import { handleDraftCard, handleWorkCard, handleWriteBrief } from "./services/employeeWork";
 import { handleUnblockWorkCard } from "./services/blocks";
+import { handleHandOffWorkCard, handleTakeBackWorkCard } from "./services/handOff";
 import { handleWorkCardInstructions } from "./services/instruction";
 import {
   handleGoogleCallback,
@@ -795,6 +796,10 @@ const router = new Router()
   // question was "tell me what my instructions turned into", asked of an agent, about a database.
   .get("/api/work-cards/:id/instructions", handleWorkCardInstructions)
   .post("/api/work-cards/:id/notes", handleAddWorkCardNote)
+  // 0241 — hand a card to the other partner (the current primary only) and take it back (the
+  // current secondary only). The same rules answer a reply or a note that says it.
+  .post("/api/work-cards/:id/hand-off", handleHandOffWorkCard)
+  .post("/api/work-cards/:id/take-back", handleTakeBackWorkCard)
   .get("/api/work-cards/by-owner", handleWorkByOwner)
   // THE RECORD. Finished work left the board because a slice of a cap is not a record — see
   // handleWorkRecord. Search, month spine, collapsed duplicates, paged.

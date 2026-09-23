@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import { ccAck, ccAsksIn, ccList, resolveCc } from "../../shared/work/ccPartners";
 import { partnerByEmail } from "../../shared/registry/partners";
+import { ccWithSecondary } from "../../shared/work/partnerOwnership";
 
 /**
  * THE ONE WRITER OF `work_card.cc_emails` (0239). Called wherever the requesting partner's own words
@@ -52,9 +53,16 @@ async function trail(env: Env, cardId: string, ack: string): Promise<void> {
     .run();
 }
 
-/** The cc a finished email carries, read from the card (0239). Partners only, whatever the row says. */
+/**
+ * The cc a finished email (DONE, a site change's PREVIEW) carries, read from the card (0239): the
+ * partners the primary asked to cc, AND the card's secondary partner (0241 — "cc'd on every PREVIEW /
+ * New preview email and the finished email"). Partners only, whatever the row says; the caller drops
+ * the recipient.
+ */
 export async function ccOfCard(env: Env, cardId: string | null | undefined): Promise<string[]> {
   if (!cardId) return [];
-  const row = await env.WP_OS_DB.prepare("SELECT cc_emails FROM work_card WHERE id = ?1").bind(cardId).first<{ cc_emails: string | null }>();
-  return ccList(row?.cc_emails);
+  const row = await env.WP_OS_DB.prepare("SELECT cc_emails, requested_by_email, secondary_partner_email FROM work_card WHERE id = ?1")
+    .bind(cardId)
+    .first<{ cc_emails: string | null; requested_by_email: string | null; secondary_partner_email: string | null }>();
+  return ccWithSecondary(ccList(row?.cc_emails), row, null);
 }
