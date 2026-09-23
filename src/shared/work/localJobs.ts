@@ -23,6 +23,7 @@
  */
 
 import { readAsks, type Ask } from "./approvalReply";
+import { readMissingMaterials, type MissingMaterial } from "./missingMaterials";
 
 export const LOCAL_JOB_RUN_KIND = "LOCAL_JOB" as const;
 
@@ -113,7 +114,7 @@ export interface LocalJobPayload {
   drive: { folder_id: string | null; folder_url: string | null };
   ask: string;
   /** From the PLAN phase onward, so BUILD and LAND work from the plan and the partner's answers. */
-  plan: { document_id: string | null; text: string | null; decided: string[]; asks: Ask[]; answers: string[]; approved_at: string | null; publish_ready: boolean; placeholders: string[]; preview_only: boolean } | null;
+  plan: { document_id: string | null; text: string | null; decided: string[]; asks: Ask[]; answers: string[]; approved_at: string | null; publish_ready: boolean; placeholders: string[]; preview_only: boolean; assets?: string[] } | null;
   /** 21 Sep 2026: the partner pre-approved in the request — PLAN decides everything, offers no asks. */
   pre_approved: string | null;
   /** 21 Sep 2026: THE SPECIFICATION — the partner's own words, quoted replies stripped. Handed to Porter verbatim under REQUEST:. */
@@ -196,6 +197,14 @@ export interface LocalJobReport {
   notes?: string;
   /** 23 Sep 2026: a multi-repo job's BUILD or LAND reports each repo here (see LocalJobPart). */
   parts?: LocalJobPartReport[];
+  /**
+   * 0237: what the partner must still send — PLAN's list, or what is STILL missing after a BUILD
+   * re-checked the re-mapped package. Absent means "not reported" (the card's list stands); [] means
+   * "nothing is missing any more".
+   */
+  missing_materials?: MissingMaterial[];
+  /** 0237, PLAN: the DRIVE_MANIFEST paths the build will use; BUILD fetches them. */
+  assets?: string[];
 }
 
 const PHASES = new Set<string>(WEB_PROPERTY_CHANGE_PHASES);
@@ -247,6 +256,8 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
     publish_ready: typeof r.publish_ready === "boolean" ? r.publish_ready : strs(r.placeholders).length === 0,
     preview_url: str(r.preview_url),
     ...(Array.isArray(r.parts) ? { parts: readPartReports(r.parts) } : {}),
+    ...(Array.isArray(r.missing_materials) ? { missing_materials: readMissingMaterials(r.missing_materials) } : {}),
+    ...(Array.isArray(r.assets) ? { assets: strs(r.assets) } : {}),
   };
   // A plan naming placeholders is not publish-ready whatever the flag says: the list is the fact.
   if (report.phase === "PLAN" && (report.placeholders?.length ?? 0) > 0) report.publish_ready = false;

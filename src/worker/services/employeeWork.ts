@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { materialsForPrompt, recordMissing } from "./requestMaterials";
 import { json } from "../router";
 import type { RouteContext } from "../router";
 import { appendEvent } from "../events";
@@ -570,6 +571,8 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string, opti
       steering: await unansweredNotes(env, card.id),
       // Everyone else who is employed, so the card can be handed to the seat whose job it is.
       colleagues: await colleaguesOf(env, employee.id),
+      // 0237: the files the partner sent — with the request or with any reply on this card's thread.
+      materials: await materialsForPrompt(env, card.id),
     };
 
     const { run } = await runAi(env, {
@@ -832,6 +835,8 @@ async function applyDecision(
     // THE EMPLOYEE'S OWN WORDS GO IN `needed`, NOT IN THE EXPLANATION. A question phrased for a
     // person is exactly what belongs under "what would clear it"; the sentence that says the work
     // has stopped is written by the catalogue so it can be held to a standard a model cannot be.
+    // 0237: files they need are recorded on the card, and every email about it asks for them.
+    if (d.missing?.length) await recordMissing(env, card.id, d.missing);
     await blockCard(env, card, {
       reason: "a_question_for_you",
       trying: card.title,
@@ -842,6 +847,9 @@ async function applyDecision(
   }
 
   // done
+  // 0237: a finish states what it had to go without ([] when nothing), so the finished email names
+  // only what is really still missing — a file that arrived by reply is no longer asked for.
+  await recordMissing(env, card.id, d.missing ?? []);
   await appendFinding(env, card, d.finding!);
   /*
    * ── FINISHING IS NOT DELIVERING ────────────────────────────────────────────────────────────

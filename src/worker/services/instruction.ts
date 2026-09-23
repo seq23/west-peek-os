@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { materialsForPrompt } from "./requestMaterials";
 import { json } from "../router";
 import type { RouteContext } from "../router";
 import { appendEvent } from "../events";
@@ -344,6 +345,23 @@ export async function steerFor(
   actor: Actor,
   req: SteerRequest,
   interpret: Interpreter = defaultInterpreter,
+): Promise<Steer> {
+  /*
+   * THE FILES THE PARTNER SENT RIDE ON EVERY STEER (0237, 23 Sep 2026). Every chain prepends
+   * `steer.text` to its prompt, so a file attached to the request or to a reply on the card's thread
+   * reaches the card's next run whatever its kind — Parker's packet, Walker's search, a deck. Kept
+   * out of the interpretation itself: a file is material, not an instruction to read.
+   */
+  const files = await materialsForPrompt(env, req.cardId);
+  const steer = await interpretSteer(env, actor, req, interpret);
+  return files ? { ...steer, text: [steer.text, files].filter(Boolean).join("\n\n") } : steer;
+}
+
+async function interpretSteer(
+  env: Env,
+  actor: Actor,
+  req: SteerRequest,
+  interpret: Interpreter,
 ): Promise<Steer> {
   const { pieces, noteIds } = await gatherInstruction(env, req.cardId, req.extra ?? []);
   if (!isWorthInterpreting(pieces)) return NOTHING_SAID;

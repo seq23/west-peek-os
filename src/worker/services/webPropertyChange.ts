@@ -148,21 +148,16 @@ export interface WebPropertyChangeRow {
   request_text: string | null;
   /** 0222. When "the site" was inferred: which card it came from, in a sentence for the RECEIVED email. */
   property_assumed_from: string | null;
+  /** 0237. The DRIVE_MANIFEST paths the approved plan uses; BUILD fetches exactly these. */
+  assets_json: string;
 }
 
-export interface RequestAttachment {
-  id: string;
-  filename: string;
-  media_type: string;
-  bytes: number;
-  eml_key: string;
-}
-
-export async function attachmentsFor(env: Env, cardId: string): Promise<RequestAttachment[]> {
-  return (
-    (await env.WP_OS_DB.prepare("SELECT id, filename, media_type, bytes, eml_key FROM request_attachment WHERE work_card_id = ?1 ORDER BY created_at ASC").bind(cardId).all<RequestAttachment>()).results ?? []
-  );
-}
+// A card's files and its missing materials live in one shared module (0237) — every employee's
+// runs read them the same way. Re-exported so existing callers and tests are unchanged.
+export { attachmentsFor };
+export type { RequestAttachment };
+import { attachmentsFor, recordMissing, type RequestAttachment } from "./requestMaterials";
+import type { MissingMaterial } from "../../shared/work/missingMaterials";
 
 /**
  * WHICH EMAIL THIS IS, so it is sent at most once per cause (her rule, 21 Sep 2026). PLAN when the
@@ -625,6 +620,8 @@ export async function parkPhase(
           publish_ready: row.publish_ready !== 0,
           placeholders: list(row.placeholders_json),
           preview_only: row.preview_only === 1,
+          // 0237: the Drive assets the plan will use; BUILD fetches exactly these.
+          assets: list(row.assets_json),
         }
       : null,
     pre_approved: row.pre_approved_phrase,
@@ -842,6 +839,12 @@ export async function blockedEmailDetail(env: Env, cardId: string): Promise<stri
   ].join("\n");
 }
 
+/** The plan's missing materials: its own list, else each named placeholder as an item to send. Pure. */
+export function missingFromPlan(report: Pick<LocalJobReport, "missing_materials" | "placeholders">): MissingMaterial[] {
+  if (report.missing_materials && report.missing_materials.length) return report.missing_materials;
+  return (report.placeholders ?? []).map((p) => ({ item: p, where: "the site, where the plan marks its placeholder" }));
+}
+
 /** What the DONE email says: the proof, not the process. A multi-repo job names every repo and its proof. */
 export function doneSummary(row: WebPropertyChangeRow, parts: readonly WebPropertyChangePart[] = []): string {
   if (parts.length) {
@@ -1032,6 +1035,13 @@ export async function applyReport(
   }
 
   if (report.phase === "PLAN") return applyPlan(env, card, row, report);
+  // AFTER A REBUILD (0237): what is STILL missing, re-checked against the re-mapped package, replaces
+  // the plan's list — the preview and DONE emails name only what did not arrive. Not reported: stands.
+  if (report.phase === "BUILD" && report.missing_materials) {
+    await recordMissing(env, card.id, report.missing_materials);
+    await update(env, card.id, { placeholders_json: JSON.stringify(report.missing_materials.map((m) => m.item)) });
+    row = { ...row, placeholders_json: JSON.stringify(report.missing_materials.map((m) => m.item)) };
+  }
   if (report.phase === "BUILD") return applyBuild(env, card, row, report, rules);
   return applyLand(env, card, row, report);
 }
@@ -1057,7 +1067,14 @@ async function applyPlan(env: Env, card: WebPropertyChangeCard, row: WebProperty
     asks_json: JSON.stringify(asks),
     publish_ready: report.publish_ready === false ? 0 : 1,
     placeholders_json: JSON.stringify(report.placeholders ?? []),
+    assets_json: JSON.stringify(report.assets ?? []),
   });
+  /*
+   * THE MISSING MATERIALS GO ON THE CARD (0237): the plan's own list, or — from a plan that named
+   * placeholders but no list — each placeholder as an item to send. The plan email (and every later
+   * email about this card) renders it through the one shared section, asking for each and saying how.
+   */
+  await recordMissing(env, card.id, missingFromPlan(report));
   const decided = report.decided ?? [];
   if (report.publish_ready === false) {
     await appendFinding(env, card.id, `NOT publish-ready: would ship ${(report.placeholders ?? []).length} placeholder(s) — ${(report.placeholders ?? []).join("; ")}. It will preview first; landing needs a second approval.`);
@@ -1765,6 +1782,16 @@ export async function runWebPropertyChangeCard(
     const requester = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
     if (requester && card.block_answered_by && card.block_answered_by !== requester.firmUserId) {
       await appendFinding(env, card.id, `An answer from ${card.block_answered_by} was recorded but not acted on — only ${requester.fullName} can approve this plan: "${answer.slice(0, 300)}"`);
+      const why = await blockWithAsks(env, card, row, asks);
+      return { finished: false, blocked: true, progressed: false, detail: why };
+    }
+    /*
+     * FILES ALONE ARE NOT AN APPROVAL (0237). A reply that only carried attachments ("Attached: …",
+     * written by the thread door) delivered materials; it did not approve the plan. The files are on
+     * the card and reach BUILD; the plan still waits for the word.
+     */
+    if (/^Attached: [^\n]+$/.test(answer.trim())) {
+      await appendFinding(env, card.id, `Files arrived with a reply (${answer.trim().slice(10, 300)}); they are on the card for the build. The plan still waits for "approved".`);
       const why = await blockWithAsks(env, card, row, asks);
       return { finished: false, blocked: true, progressed: false, detail: why };
     }
