@@ -108,6 +108,8 @@ export interface LocalJobPayload {
   card: { id: string; title: string; requested_by: string | null };
   target_repo: string;
   property_host: string | null;
+  /** 23 Sep 2026: the site folders of target_repo this job may change (sitesOf(property_host)); [] when unresolved. */
+  sites: string[];
   drive: { folder_id: string | null; folder_url: string | null };
   ask: string;
   /** From the PLAN phase onward, so BUILD and LAND work from the plan and the partner's answers. */

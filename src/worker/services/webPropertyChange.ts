@@ -10,7 +10,7 @@ import { parkRun, readRun, type SeatRunRow } from "../ai/subscriptionSeats";
 import { PARTNERS, PREVIEW_PARTNER, partnerByEmail } from "../../shared/registry/partners";
 import { sendOrPreview } from "./previewApproval";
 import type { SweepCard } from "./workSweep";
-import { readWebPropertyAsk, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
+import { readWebPropertyAsk, sitesOf, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
 import { approvedAnswers, askLines, decidedFromAsks, readApprovalReply, readAsks, type Ask } from "../../shared/work/approvalReply";
 import { abandonRun } from "../ai/subscriptionSeats";
 import { alreadyTold, recordNotice, routedByFor, threadRootFor, type NoticeKind } from "./requestReply";
@@ -456,6 +456,7 @@ export async function parkPhase(
     card: { id: card.id, title: card.title, requested_by: card.requested_by_email ?? null },
     target_repo: row.target_repo,
     property_host: row.property_host,
+    sites: sitesOf(row.property_host),
     drive: { folder_id: row.drive_folder_id, folder_url: row.drive_folder_url },
     ask: row.ask,
     plan: row.plan_filed_at

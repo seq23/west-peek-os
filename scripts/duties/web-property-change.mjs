@@ -169,6 +169,9 @@ export function renderContext(job, paths) {
     `CARD: ${job.card?.id} — ${job.card?.title}`,
     `ASKED BY: ${job.card?.requested_by ?? "a Managing Partner"}`,
     `PROPERTY: ${job.property_host ?? "(see ask)"}`,
+    // 23 Sep 2026: the folders this job may change. One site or several in the same repo, and
+    // nothing else: a community redesign never touches sites/ventures.
+    `SITES: ${job.sites?.length ? `${job.sites.join(", ")} — change files ONLY under these folders of TARGET_REPO. A shared file outside them only when the request cannot be done without it, named in the plan with the reason.` : "(unresolved — see ask; BLOCK and ask which site before changing anything)"}`,
     `TARGET_REPO: ${job.target_repo}`,
     `WORKTREE: ${paths.worktree}`,
     `BRANCH: ${paths.branch}`,
@@ -651,6 +654,16 @@ export async function run(job, ctx) {
 function selfTest() {
   const approved = { plan: { approved_at: "2026-09-20T10:00:00Z" }, pr: { url: "https://github.com/x/y/pull/1", number: 1, check_state: "GREEN", check_green_at: "2026-09-20T11:00:00Z" } };
   const cases = [
+    // 23 Sep 2026: the job names the exact site folders it may change; none known -> stop and ask.
+    ...(() => {
+      const paths = { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/r", attachments: [] };
+      const ctx = (property_host, sites) => renderContext({ phase: "PLAN", card: { id: "wc", title: "t" }, property_host, sites, target_repo: "join-west-peek-main", request: "r", drive: {}, rules: {} }, paths);
+      return [
+        ["SITES: one site -> only that folder, and ventures is not in a community job's scope", () => /SITES: sites\/community — change files ONLY under these folders/.test(ctx("joinwestpeek.com", ["sites/community"])) && !ctx("joinwestpeek.com", ["sites/community"]).includes("sites/ventures")],
+        ["SITES: several sites in one repo -> one job over every folder", () => ctx("westpeekproductions.com, joinwestpeek.com", ["sites/productions", "sites/community"]).includes("SITES: sites/productions, sites/community — change files ONLY")],
+        ["SITES: none known -> BLOCK and ask which site", () => /SITES: \(unresolved .*BLOCK and ask which site/.test(ctx(null, []))],
+      ];
+    })(),
     ["LAND passes with a recorded approval and a recorded green", () => landGate(approved).ok === true],
     ["LAND refuses without a plan approval", () => landGate({ ...approved, plan: { approved_at: null } }).ok === false],
     ["LAND refuses without a green check", () => landGate({ ...approved, pr: { ...approved.pr, check_green_at: null } }).ok === false],

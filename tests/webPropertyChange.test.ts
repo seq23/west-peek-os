@@ -6,7 +6,7 @@ import { openAssignmentCard } from "../src/worker/services/dealIntake";
 import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
 import { sweepOnce } from "../src/worker/services/workSweep";
 import { claimRun, parkRun, progressRun, reapSeatRuns, readRun, reportRun, JOB_SILENCE_MS, type SeatRunRow } from "../src/worker/ai/subscriptionSeats";
-import { parseWebPropertyAsk, isWebPropertyChange, driveFolderLinks, addresseeIn } from "../src/shared/intake/webPropertyChange";
+import { parseWebPropertyAsk, isWebPropertyChange, driveFolderLinks, addresseeIn, sitesOf } from "../src/shared/intake/webPropertyChange";
 import { parseBlogAsk } from "../src/shared/intake/blogHelp";
 import { workCard } from "../src/worker/services/employeeWork";
 import { sweepIdentity } from "../src/worker/services/workSweep";
@@ -200,10 +200,18 @@ describe("the door reads a Drive folder and a property", () => {
     expect(parseWebPropertyAsk("x", `update joinwestpeek.com from ${folder}`)?.site).toBe("sites/community");
     const mailboxOnly = parseWebPropertyAsk("x", `${folder} — questions to sequoia@westpeek.ventures`);
     expect(mailboxOnly?.property_host, "a mailbox named a site").toBeNull();
-    // Two sites asked for is a real ambiguity: unresolved, so the door infers or asks — never a silent pick.
+    // Two sites in one repo are ONE job over both folders — never a stop, never a silent pick of one.
     const both = parseWebPropertyAsk("x", `update the community site and the agency site from ${folder}`);
-    expect(both?.property_host).toBeNull();
-    expect(both?.property_unresolved).toBe(true);
+    expect(both?.property_host).toBe("westpeekproductions.com, joinwestpeek.com");
+    expect(both?.site).toBe("sites/productions, sites/community");
+    expect(both?.target_repo).toBe("join-west-peek-main");
+    expect(both?.property_unresolved).toBeFalsy();
+    expect(isWebPropertyChange(both)).toBe(true);
+    expect(sitesOf(both?.property_host)).toEqual(["sites/productions", "sites/community"]);
+    // All three in one email: one job over all three.
+    expect(sitesOf(parseWebPropertyAsk("x", `the ventures site, the agency site and the community site: ${folder}`)?.property_host)).toEqual(["sites/ventures", "sites/productions", "sites/community"]);
+    expect(sitesOf("joinwestpeek.com")).toEqual(["sites/community"]);
+    expect(sitesOf(null)).toEqual([]);
   });
 
   it("\"preview first\" in the opening email is read at the door, so she never has to say it twice", () => {
