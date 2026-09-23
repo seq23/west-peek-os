@@ -112,15 +112,11 @@ function NotificationRow({
           <button
             type="button"
             className="btn-strong"
-            title="Puts your name and the time against this on the audit trail."
+            title={ackTitle(n.object_type)}
             data-testid={`notification-ack-${n.id}`}
             onClick={async () => {
-              const res = await api<{ error?: string }>(`/api/notifications/${n.id}/acknowledge`, { method: "POST" });
-              onMessage(
-                res.status === 200
-                  ? "Acknowledged. Your name and the time are on the record against it."
-                  : "That did not go through. Nothing was recorded — try again.",
-              );
+              const res = await api<AckResponse>(`/api/notifications/${n.id}/acknowledge`, { method: "POST" });
+              onMessage(ackMessage(res.status, res.data));
               onChanged();
             }}
           >
@@ -135,6 +131,28 @@ function NotificationRow({
       </div>
     </li>
   );
+}
+
+/** What the acknowledge route answers; `claim` is there when the notice was about a work card (0241). */
+interface AckResponse {
+  error?: string;
+  claim?: { ok: boolean; already_primary?: boolean; reason?: string };
+}
+
+/** The button's hover text: on a work card's notice it also makes the card yours. */
+function ackTitle(objectType: string | null): string {
+  return objectType === "work_card"
+    ? "Puts your name and the time on the record, and makes the work card yours: you become primary."
+    : "Puts your name and the time against this on the audit trail.";
+}
+
+/** What the page says after the press. A WORK CARD'S NOTICE ALSO CLAIMS THE CARD (0241). */
+export function ackMessage(status: number, data: AckResponse | null): string {
+  if (status !== 200) return "That did not go through. Nothing was recorded — try again.";
+  const claim = data?.claim;
+  if (claim?.ok && !claim.already_primary) return "Acknowledged, and the card is yours now: you're primary, and the other partner is secondary. One email with where it stands is on its way.";
+  if (claim?.ok && claim.already_primary) return "Acknowledged. The card was already yours; your name and the time are on the record.";
+  return "Acknowledged. Your name and the time are on the record against it.";
 }
 
 /** 0–23, in the zone the reader picked. */

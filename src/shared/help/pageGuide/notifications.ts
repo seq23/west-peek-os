@@ -5,8 +5,8 @@ export const notificationsGuide: PageGuide = {
   navKey: "notifications",
   title: "Notifications",
   purpose:
-    "What is waiting on you, then what is worth knowing, then what you have already dealt with. Dismissing something says you saw it; taking responsibility puts your name and the time on the record.",
-  youCan: ["See what actually needs you, first", "Dismiss everything at once", "Take responsibility for a serious one, on the record", "Set the hours you would rather not hear from us"],
+    "What is waiting on you, then what is worth knowing, then what you have already dealt with. Dismissing says you saw it; taking responsibility puts your name on the record, and on a work card makes the card yours.",
+  youCan: ["See what actually needs you, first", "Dismiss everything at once", "Take responsibility for a serious one, on the record — and own its work card", "Set the hours you would rather not hear from us"],
   sources: ["src/client/pages/NotificationsPage.tsx"],
   bands: [
     { name: "The count", testid: "notifications-read-all", shows: "caught up, or how many are waiting, with Dismiss all beside it." },
@@ -16,7 +16,7 @@ export const notificationsGuide: PageGuide = {
     { name: "When you hear from us", testid: "notifications-settings", shows: "quiet hours in your own timezone, and what gets sent when. Nothing is sent to a phone yet." },
   ],
   acts: [
-    { label: "Take responsibility", testid: "notification-ack-", primary: true, does: "puts your name and the time against a serious one, on the record." },
+    { label: "Take responsibility", testid: "notification-ack-", primary: true, does: "puts your name and the time on the record; on a work card's notice it also makes the card yours (the other partner becomes secondary)." },
     { label: "Dismiss", testid: "notification-read-", does: "takes one off your list; nothing is recorded beyond your having seen it." },
     { label: "Dismiss all", testid: "notifications-read-all", does: "clears everything waiting in one press." },
     { label: "Save", testid: "quiet-submit", primary: true, does: "saves quiet hours; everything except critical is held until they end." },
@@ -34,7 +34,7 @@ export const notificationsGuide: PageGuide = {
       scenario: "Something serious arrives",
       steps: [
         { do: "Read **Needs you** first", then: "**The count** at the top says how many." },
-        { do: "Press **Take responsibility** on a serious one", then: "your name and the time go against it, on the record." },
+        { do: "Press **Take responsibility** on a serious one", then: "your name and the time go against it, on the record; if it is about a work card, the card is yours now and the other partner is secondary." },
         { do: "Press **Dismiss** on the rest, or **Dismiss all**", then: "they leave your list; nothing is recorded beyond your having seen them." },
         { do: "Under **When you hear from us**, set quiet hours and press **Save**", then: "everything except critical is held until they end." },
       ],

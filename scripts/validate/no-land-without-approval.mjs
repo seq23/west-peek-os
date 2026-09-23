@@ -87,6 +87,19 @@
  *       `rebuildIntentFor` reads only from "publish", and only from the requesting partner; and
  *       `applyUnchanged` withdraws a "publish" when nothing new arrived.
  *
+ *  15 · A SECONDARY OR AN EX-PRIMARY NEVER APPROVES OR FORCES (owner, 23 Sep 2026, migration 0241:
+ *       hand a card to the other partner, with a primary and a secondary). The primary IS
+ *       `requested_by_email`, so every guard above follows a hand-off — provided the hand-off moves
+ *       that column: `changeOwnership` writes `requested_by_email` and `secondary_partner_email`, and
+ *       nothing else in the Worker writes the secondary. 0241's triggers refuse a plan approval and a
+ *       landing approval recorded against any partner but the card's CURRENT primary, and refuse a
+ *       secondary equal to the primary (0220's force trigger already holds `forced_by` to the same
+ *       column). The rules, loaded from `shared/work/partnerOwnership.ts`, refuse the secondary and
+ *       the ex-primary on approve and force, let only the primary hand off and only the secondary
+ *       take back, and refuse a non-partner either way. The card's button (`handleUnblockWorkCard`)
+ *       refuses the secondary before `answerBlock`, and the reply door answers a block only for the
+ *       partner the card is addressed to.
+ *
  * HARD-FAILS ON ZERO: zero gates examined exits 1.
  *
  * `--self-test` plants: the Worker's LAND branch with the approval check removed; with the green
@@ -95,7 +108,7 @@
  * the runner approving without reading the reply; the REFUSED branch that no longer returns; a
  * reader that lets "no" through — and requires each to be caught. The shipped source must pass.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripTsComments } from "./lib/strip-comments.mjs";
@@ -114,6 +127,12 @@ const MIGRATION_0220 = path.join(ROOT, "migrations", "0220_a_plan_that_is_not_pu
 const MIGRATION_0236 = path.join(ROOT, "migrations", "0236_one_website_job_can_span_several_repos.sql");
 const MIGRATION_0238 = path.join(ROOT, "migrations", "0238_every_site_change_previews_first.sql");
 const MIGRATION_0240 = path.join(ROOT, "migrations", "0240_every_preview_binds_its_approval.sql");
+const MIGRATION_0241 = path.join(ROOT, "migrations", "0241_hand_a_card_to_the_other_partner.sql");
+const OWNERSHIP = path.join(ROOT, "src", "shared", "work", "partnerOwnership.ts");
+const HAND_OFF = path.join(ROOT, "src", "worker", "services", "handOff.ts");
+const BLOCKS = path.join(ROOT, "src", "worker", "services", "blocks.ts");
+const THREAD = path.join(ROOT, "src", "worker", "services", "emailThread.ts");
+const WORKER_DIR = path.join(ROOT, "src", "worker");
 const BOARD = path.join(ROOT, "src", "worker", "services", "workCards.ts");
 /*
  * THE CARD, NOT THE ROW (23 Sep 2026, the work-card redesign). The collapsed desk row carries only
@@ -530,6 +549,78 @@ export async function checkReader(mod) {
   return { violations, examined };
 }
 
+/** Every .ts file under src/worker, by path relative to the repo, comments stripped. */
+function workerSources() {
+  const out = {};
+  const walk = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (e.name.endsWith(".ts")) out[path.relative(ROOT, full)] = read(full);
+    }
+  };
+  walk(WORKER_DIR);
+  return out;
+}
+
+const SEQUOIA_ADDR = "sequoia@westpeek.ventures";
+const SCOOTER_ADDR = "scooter@westpeek.ventures";
+
+/** Gate 15 — a secondary or an ex-primary never approves or forces (0241). */
+export function checkOwnership({ sql0241, rules, handOff, blocks, thread, sources }) {
+  const violations = [];
+  let examined = 0;
+  // 1 · The row.
+  const trig = (name) => sql0241.match(new RegExp(`CREATE TRIGGER IF NOT EXISTS ${name}([\\s\\S]*?)END;`))?.[1] ?? null;
+  for (const [name, col] of [["trg_web_property_change_plan_approval_is_the_primary", "plan_approved_at"], ["trg_web_property_change_land_approval_is_the_primary", "land_approved_at"]]) {
+    const t = trig(name);
+    examined += 1;
+    if (!t) violations.push(`0241 has no ${name} trigger — a secondary's (or an ex-primary's) ${col.replace("_at", "")} would be recorded`);
+    else {
+      if (!new RegExp(`BEFORE UPDATE OF ${col} ON web_property_change`).test(t)) violations.push(`the 0241 ${name} trigger does not fire on ${col}`);
+      if (!/lower\(f\.email\)\s*<>\s*lower\(c\.requested_by_email\)/.test(t)) violations.push(`the 0241 ${name} trigger does not compare the approver with the card's CURRENT primary (requested_by_email)`);
+      if (!/RAISE\(ABORT/.test(t)) violations.push(`the 0241 ${name} trigger does not abort`);
+    }
+  }
+  const same = trig("trg_work_card_secondary_is_not_the_primary");
+  examined += 1;
+  if (!same || !/RAISE\(ABORT/.test(same)) violations.push("0241 has no trg_work_card_secondary_is_not_the_primary trigger — one partner could be both, and the other shut out");
+  // 2 · The rules, run.
+  examined += 1;
+  const handed = { requested_by_email: SCOOTER_ADDR, secondary_partner_email: SEQUOIA_ADDR };
+  const only = { requested_by_email: SEQUOIA_ADDR, secondary_partner_email: null };
+  if (rules.canApprove(handed, SEQUOIA_ADDR) !== false || rules.canApprove(handed, "fu_sequoia_taylor") !== false) violations.push("canApprove() lets the secondary (the ex-primary) approve");
+  if (rules.canForce(handed, SEQUOIA_ADDR) !== false) violations.push("canForce() lets the secondary (the ex-primary) force");
+  if (rules.canApprove(handed, SCOOTER_ADDR) !== true) violations.push("canApprove() refuses the primary — nothing could ever be approved");
+  if (rules.canApprove(handed, "bob@example.com") !== false) violations.push("canApprove() lets a non-partner approve");
+  if (rules.decideHandOff(handed, SEQUOIA_ADDR, "Sequoia").ok !== false) violations.push("decideHandOff() lets the secondary hand the card on");
+  if (rules.decideHandOff(only, "bob@example.com", "Scooter").ok !== false) violations.push("decideHandOff() lets a non-partner hand a card off");
+  if (rules.decideHandOff(only, SEQUOIA_ADDR, "bob@example.com").ok !== false) violations.push("decideHandOff() hands a card to a non-partner");
+  if (rules.decideTakeBack(handed, SCOOTER_ADDR).ok !== false || rules.decideTakeBack(only, SCOOTER_ADDR).ok !== false) violations.push("decideTakeBack() lets someone other than the current secondary take the card");
+  // 3 · The hand-off moves the column every guard reads, and is the only writer of the secondary.
+  const change = body(handOff, "export async function changeOwnership(");
+  examined += 1;
+  if (!change) violations.push("services/handOff.ts has no changeOwnership() — the one writer of a card's primary and secondary is gone");
+  else if (!/SET requested_by_email = \?2,\s*secondary_partner_email = \?3/.test(change)) violations.push("changeOwnership() does not move requested_by_email with the secondary — the requester guards would still obey the ex-primary");
+  for (const [file, src] of Object.entries(sources)) {
+    if (file.endsWith(path.join("services", "handOff.ts"))) continue;
+    if (/secondary_partner_email\s*=\s*(?!=)/.test(src.replace(/secondary_partner_email\s*=\s*=|===\s*secondary_partner_email/g, ""))) violations.push(`${file} writes secondary_partner_email — only services/handOff.ts may`);
+  }
+  // 4 · The doors.
+  const unblock = body(blocks, "export async function handleUnblockWorkCard(");
+  examined += 1;
+  const refuseAt = unblock ? unblock.search(/roleOf\(owners, ctx\.identity\.email\) === "SECONDARY"\)\s*\{\s*return json\(/) : -1;
+  const answerAt = unblock ? unblock.indexOf("answerBlock(") : -1;
+  if (refuseAt < 0 || answerAt < 0 || refuseAt > answerAt) violations.push("handleUnblockWorkCard() does not refuse the secondary before answerBlock() — the card's button would let them approve");
+  // The whole function from its name on: its signature opens a `{` of its own, so body() would stop there.
+  const steerAt = thread.indexOf("export async function steerFromReply(");
+  const steer = steerAt >= 0 ? thread.slice(steerAt) : null;
+  examined += 1;
+  const blocked = steer?.match(/if \(!asked \|\| asked === partner\.email\) \{\s*const out = await answerBlock\(/);
+  if (!blocked) violations.push("steerFromReply() answers a block for someone other than the partner the card is addressed to — a secondary's \"approved\" by reply would approve");
+  return { violations, examined };
+}
+
 async function selfTest() {
   let failed = 0;
   const say = (ok, what) => {
@@ -662,14 +753,30 @@ async function selfTest() {
   stCaught({ worker: worker.replace("const intent = landReading?.kind === \"APPROVED\" || !fromRequester || !answer ? null : rebuildIntentFor(answer);", "const intent = landReading?.kind === \"APPROVED\" || !answer ? null : rebuildIntentFor(answer);") }, /someone other than the requesting partner/, "a publish from the other partner is caught");
   stCaught({ worker: worker.replace("if (wasPublish) Object.assign(patch, { land_approved_at: null, land_approved_by: null, publish_approved_at: null", "if (false) Object.assign(patch, { land_approved_at: null, land_approved_by: null, publish_approved_at: null") }, /applyUnchanged/, "a publish kept when nothing new arrived is caught");
 
+
+  const ow = { sql0241: readSql(MIGRATION_0241), rules: await loadTs(OWNERSHIP), handOff: read(HAND_OFF), blocks: read(BLOCKS), thread: read(THREAD), sources: workerSources() };
+  const owCaught = (patch, re, what) => say(checkOwnership({ ...ow, ...patch }).violations.some((v) => re.test(v)), what);
+  say(checkOwnership(ow).violations.length === 0, "the shipped hand-off passes gate 15");
+  owCaught({ sql0241: ow.sql0241.replace(/CREATE TRIGGER IF NOT EXISTS trg_web_property_change_land_approval_is_the_primary[\s\S]*?END;/, "") }, /land_approval_is_the_primary trigger/, "a missing landing-approval trigger is caught");
+  owCaught({ sql0241: ow.sql0241.replace("AND lower(f.email) <> lower(c.requested_by_email)\n  )\nBEGIN\n  SELECT RAISE(ABORT, 'only the card''s primary partner can approve the plan", "AND 0\n  )\nBEGIN\n  SELECT RAISE(ABORT, 'only the card''s primary partner can approve the plan") }, /plan_approval_is_the_primary trigger does not compare/, "a plan trigger blind to who approves is caught");
+  owCaught({ sql0241: ow.sql0241.replace(/CREATE TRIGGER IF NOT EXISTS trg_work_card_secondary_is_not_the_primary[\s\S]*?END;/, "") }, /secondary_is_not_the_primary/, "a missing secondary-is-not-primary trigger is caught");
+  owCaught({ rules: { ...ow.rules, canApprove: () => true } }, /lets the secondary \(the ex-primary\) approve/, "rules that let the secondary approve are caught");
+  owCaught({ rules: { ...ow.rules, canForce: () => true } }, /lets the secondary \(the ex-primary\) force/, "rules that let the secondary force are caught");
+  owCaught({ rules: { ...ow.rules, decideTakeBack: () => ({ ok: true }) } }, /decideTakeBack/, "rules that let anyone take a card back are caught");
+  owCaught({ rules: { ...ow.rules, decideHandOff: () => ({ ok: true }) } }, /decideHandOff/, "rules that let anyone hand a card anywhere are caught");
+  owCaught({ handOff: ow.handOff.replace("SET requested_by_email = ?2,", "SET preview_first = preview_first, ignored = ?2,") }, /does not move requested_by_email/, "a hand-off that leaves the requester guards with the ex-primary is caught");
+  owCaught({ sources: { ...ow.sources, "src/worker/services/sneaky.ts": "await db.prepare(\"UPDATE work_card SET secondary_partner_email = ?2 WHERE id = ?1\")" } }, /sneaky\.ts writes secondary_partner_email/, "a second writer of the secondary is caught");
+  owCaught({ blocks: ow.blocks.replace('roleOf(owners, ctx.identity.email) === "SECONDARY")', 'roleOf(owners, ctx.identity.email) === "NOBODY")') }, /handleUnblockWorkCard\(\) does not refuse the secondary/, "a card button that lets the secondary answer is caught");
+  owCaught({ thread: ow.thread.replace("if (!asked || asked === partner.email) {", "if (true) {") }, /steerFromReply\(\) answers a block for someone other/, "a reply door that lets the secondary approve is caught");
+
   if (failed > 0) process.exit(1);
-  console.log("SELF-TEST PASSED: fifty-eight planted defects are each caught; the shipped source passes.");
+  console.log("SELF-TEST PASSED: sixty-nine planted defects are each caught; the shipped source passes.");
 }
 
 if (process.argv.includes("--self-test")) {
   await selfTest();
 } else {
-  const results = [checkWorker(read(WORKER)), checkScript(read(SCRIPT)), checkMigration(readSql(MIGRATION)), checkMigration0220(readSql(MIGRATION_0220)), await checkReader(await loadTs(READER)), checkDoor(read(DOOR), read(PARSER)), checkNotices(read(REPLY), readSql(MIGRATION_0221)), checkSeveral(read(WORKER), read(SCRIPT), readSql(MIGRATION_0236)), checkPreviewDefault({ worker: read(WORKER), sql0238: existsSync(MIGRATION_0238) ? readSql(MIGRATION_0238) : "", board: read(BOARD), desk: read(DESK), badge: read(BADGE) }), checkStaleApproval({ worker: read(WORKER), script: read(SCRIPT), sql0240: existsSync(MIGRATION_0240) ? readSql(MIGRATION_0240) : "" })];
+  const results = [checkWorker(read(WORKER)), checkScript(read(SCRIPT)), checkMigration(readSql(MIGRATION)), checkMigration0220(readSql(MIGRATION_0220)), await checkReader(await loadTs(READER)), checkDoor(read(DOOR), read(PARSER)), checkNotices(read(REPLY), readSql(MIGRATION_0221)), checkSeveral(read(WORKER), read(SCRIPT), readSql(MIGRATION_0236)), checkPreviewDefault({ worker: read(WORKER), sql0238: existsSync(MIGRATION_0238) ? readSql(MIGRATION_0238) : "", board: read(BOARD), desk: read(DESK), badge: read(BADGE) }), checkStaleApproval({ worker: read(WORKER), script: read(SCRIPT), sql0240: existsSync(MIGRATION_0240) ? readSql(MIGRATION_0240) : "" }), checkOwnership({ sql0241: existsSync(MIGRATION_0241) ? readSql(MIGRATION_0241) : "", rules: await loadTs(OWNERSHIP), handOff: read(HAND_OFF), blocks: read(BLOCKS), thread: read(THREAD), sources: workerSources() })];
   const examined = results.reduce((n, r) => n + r.examined, 0);
   const violations = results.flatMap((r) => r.violations);
   if (examined === 0) {
@@ -681,5 +788,5 @@ if (process.argv.includes("--self-test")) {
     for (const v of violations) console.error(`  ✗ ${v}`);
     process.exit(1);
   }
-  console.log(`NO-LAND-WITHOUT-APPROVAL SCAN PASSED: ${examined} gates examined — the Worker refuses to park LAND, the Mac script refuses to run it, and the row refuses DONE, each without a recorded plan approval and a recorded green check; land_on_green is seeded ON; a reply starting with "no" never approves, "preview" never lands, a previewing change needs a second approval after the preview email OR a named force ("approved to production") — never neither — pre-approval comes only from the partner's own verified request, only the requesting partner gives any of them, a job over several repos lands every PR or none, every site change previews first with the desk showing that gate from its own column, and an approval binds to the latest preview — a stale "approved" or a "publish" with no rebuild never lands.`);
+  console.log(`NO-LAND-WITHOUT-APPROVAL SCAN PASSED: ${examined} gates examined — the Worker refuses to park LAND, the Mac script refuses to run it, and the row refuses DONE, each without a recorded plan approval and a recorded green check; land_on_green is seeded ON; a reply starting with "no" never approves, "preview" never lands, a previewing change needs a second approval after the preview email OR a named force ("approved to production") — never neither — pre-approval comes only from the partner's own verified request, only the requesting partner gives any of them, a job over several repos lands every PR or none, every site change previews first with the desk showing that gate from its own column, an approval binds to the latest preview — a stale "approved" or a "publish" with no rebuild never lands — and after a hand-off only the card's current primary approves or forces, never the secondary or the ex-primary.`);
 }

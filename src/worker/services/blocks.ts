@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { ownershipOf, roleOf, secondaryApprovalRefusal } from "../../shared/work/partnerOwnership";
 import type { RouteContext } from "../router";
 import { appendEvent } from "../events";
 import { notifyPartners, notifyQuietly } from "./notifications";
@@ -637,6 +638,18 @@ export async function handleUnblockWorkCard(ctx: RouteContext): Promise<Response
   // A PERSON CLEARS A BLOCK. An employee answering the question it asked would be the loop talking
   // to itself, which is the failure work_card_note's author_id column already refuses.
   if (!ctx.identity) return json({ error: "human_required" }, { status: 403 });
+
+  /*
+   * THE SECONDARY DOES NOT CLEAR A BLOCK (0241). A block on a partner's card is that card's
+   * decision — the plan, the preview, the missing items — and it is the PRIMARY's. The secondary is
+   * told who decides and how to take the card over; their words can still go on the card as a note.
+   */
+  const owners = await ctx.env.WP_OS_DB.prepare("SELECT requested_by_email, secondary_partner_email FROM work_card WHERE id = ?1")
+    .bind(cardId)
+    .first<{ requested_by_email: string | null; secondary_partner_email: string | null }>();
+  if (owners && roleOf(owners, ctx.identity.email) === "SECONDARY") {
+    return json({ ok: false, error: "secondary", detail: secondaryApprovalRefusal(ownershipOf(owners).primary!) }, { status: 403 });
+  }
 
   const out = await answerBlock(ctx.env, cardId, ctx.identity.id, {
     action,

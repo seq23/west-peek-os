@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { claimFromNotification } from "./handOff";
 import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { json } from "../router";
@@ -444,14 +445,14 @@ export async function handleListNotifications(ctx: RouteContext): Promise<Respon
 async function actionableNotification(
   ctx: RouteContext,
   id: string,
-): Promise<{ id: string; kind: string; read_at: string | null; acked_at: string | null } | null> {
+): Promise<{ id: string; kind: string; read_at: string | null; acked_at: string | null; object_type: string | null; object_id: string | null } | null> {
   const visibility = privacyVisibilityClause(ctx.identity!, "privacy_label");
   return ctx.env.WP_OS_DB.prepare(
-    `SELECT id, kind, read_at, acked_at FROM notification
+    `SELECT id, kind, read_at, acked_at, object_type, object_id FROM notification
       WHERE id = ?1 AND ${visibility} AND (firm_user_id IS NULL OR firm_user_id = ?2)`,
   )
     .bind(id, ctx.identity!.id)
-    .first<{ id: string; kind: string; read_at: string | null; acked_at: string | null }>();
+    .first<{ id: string; kind: string; read_at: string | null; acked_at: string | null; object_type: string | null; object_id: string | null }>();
 }
 
 export async function handleReadNotification(ctx: RouteContext): Promise<Response> {
@@ -497,7 +498,16 @@ export async function handleAckNotification(ctx: RouteContext): Promise<Response
     objectId: row.id,
     payload: { kind: row.kind },
   });
-  return json(await ctx.env.WP_OS_DB.prepare("SELECT * FROM notification WHERE id = ?1").bind(row.id).first());
+  /*
+   * TAKING RESPONSIBILITY FOR A WORK CARD'S NOTICE CLAIMS THE CARD (owner, 23 Sep 2026; 0241). The
+   * name and the time are recorded above exactly as before; then, when the notice is about a work
+   * card, the partner who pressed it becomes the card's primary and the other partner its secondary
+   * (`services/handOff.ts#claimFromNotification`). Already primary: it only records.
+   */
+  const claim =
+    row.object_type === "work_card" && row.object_id ? await claimFromNotification(ctx.env, { cardId: row.object_id, actor: ctx.identity!.email }) : null;
+  const acked = await ctx.env.WP_OS_DB.prepare("SELECT * FROM notification WHERE id = ?1").bind(row.id).first<Record<string, unknown>>();
+  return json({ ...acked, ...(claim ? { claim } : {}) });
 }
 
 const preferenceSchema = z.object({

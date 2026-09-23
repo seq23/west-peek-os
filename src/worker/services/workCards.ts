@@ -1,4 +1,6 @@
 import { recordCcFrom } from "./ccPartners";
+import { ownershipFromWords } from "./handOff";
+import { ownershipView } from "../../shared/work/partnerOwnership";
 import { z } from "zod";
 import type { Env } from "../env";
 import { artifactAskFromWords } from "../../shared/artifacts/artifact";
@@ -787,6 +789,8 @@ export async function handleGetWorkCard(ctx: RouteContext): Promise<Response> {
     parent_title: parent?.title ?? null,
     current_run: runByCard.get(card.id) ?? null,
     plain_title: plainTitleOf({ ...card, ...siteFacts, parent_title: parent?.title ?? null }),
+    // 0241: the same primary / secondary the board serves.
+    ...ownershipView(card as { requested_by_email: string | null; secondary_partner_email?: string | null }),
     // HELD (0227): the client reads `state`, not `held_at`, everywhere it renders a badge, a
     // masthead or a band — the same union `CARD_STATES` already has a HELD entry for. The database
     // never stores the word (see migration 0227); this is the one place a single card is handed to
@@ -1192,6 +1196,9 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
             -- 0239: the partners cc'd on the finished email, for the expanded card's
             -- "Finished email goes to" row (the single-card route serves it through SELECT *).
             wc.cc_emails,
+            -- 0241: the card's secondary partner, for "Owner: <primary> · Secondary: <secondary>"
+            -- (served resolved, as primary_partner / secondary_partner, below).
+            wc.secondary_partner_email,
             -- A WEBSITE JOB'S OWN FACTS, for the plain title and the Plan → Build → Preview → Live
             -- track on the collapsed row (shared/work/siteChange.ts). NULL on every other card.
             wpc.property_host AS site_host, wpc.target_repo AS site_repo, wpc.phase AS site_phase,
@@ -1337,6 +1344,8 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
       current_run: runByCard.get(String(c.id)) ?? null,
       /** "Community site redesign · joinwestpeek.com" — never the raw email cut off mid-word. */
       plain_title: plainTitleOf(c),
+      /** 0241: primary first, then secondary, resolved through the partner registry. */
+      ...ownershipView(c as { requested_by_email: string | null; secondary_partner_email?: string | null }),
     })),
     recent_runs: runs.results ?? [],
     /** Everyone a card can be given to, so the UI never offers an owner the server would refuse. */
@@ -1694,6 +1703,16 @@ export async function handleAddWorkCardNote(ctx: RouteContext): Promise<Response
       { error: "not_in_flight", detail: "This work is finished, so nobody will read a note on it. Reopen the card first." },
       { status: 409 },
     );
+  }
+
+  /*
+   * "HAND THIS TO SCOOTER" / "TAKE THIS BACK" IN A NOTE (0241). The signed-in partner's own
+   * identity decides, through the same rules as the reply and the route; the note is not filed as
+   * steering, because it is not an instruction to the employee.
+   */
+  const owned = await ownershipFromWords(ctx.env, { cardId: card.id, writer: ctx.identity!.email, text, via: "NOTE" });
+  if (owned) {
+    return json(owned.ok ? { hand_off: owned, ack: owned.ack } : { error: "refused", detail: owned.reason }, { status: owned.ok ? 201 : owned.status });
   }
 
   const id = `wcn_${crypto.randomUUID()}`;

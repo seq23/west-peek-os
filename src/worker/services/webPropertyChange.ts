@@ -1,4 +1,5 @@
 import { ccAck, ccAsksIn, isOnlyACc, resolveCc } from "../../shared/work/ccPartners";
+import { secondaryNoteAck } from "../../shared/work/partnerOwnership";
 import type { Env } from "../env";
 import { json, type RouteContext } from "../router";
 import { appendEvent } from "../events";
@@ -791,7 +792,7 @@ export function previewBlockText(
 }
 
 /** "fu_sequoia_taylor" / "sequoia@…" → "Sequoia"; anything else (Porter's own approval) as it is. */
-function approverName(by: string | null | undefined): string | null {
+export function approverName(by: string | null | undefined): string | null {
   if (!by) return null;
   const p = PARTNERS.find((x) => x.firmUserId === by || x.email === by.toLowerCase());
   return p ? p.firstName : /built without asking/.test(by) ? "Porter (nothing to ask)" : /pre-approved/.test(by) ? `${PARTNERS.find((x) => by.startsWith(x.firmUserId))?.firstName ?? "the partner"} (pre-approved in the request)` : by;
@@ -1327,6 +1328,9 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
       .bind(card.id)
       .all<{ id: string; author_id: string; body: string }>()
   ).results ?? [];
+  const secondary = partnerByEmail(
+    (await env.WP_OS_DB.prepare("SELECT secondary_partner_email FROM work_card WHERE id = ?1").bind(card.id).first<{ secondary_partner_email: string | null }>())?.secondary_partner_email ?? null,
+  );
   let held: string | null = null;
   for (const n of notes) {
     const ack = async (response: string) =>
@@ -1337,6 +1341,16 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
     }
     const fromRequester = !requester || n.author_id === requester.firmUserId;
     if (!fromRequester) {
+      /*
+       * THE SECONDARY'S NOTE IS CONTEXT, NEVER A STEER (0241). Kept on the card's trail — which the
+       * Mac reads with the brief — and answered with who approves; it is not carried into the next
+       * phase as an answer, and it can hold, approve or publish nothing.
+       */
+      if (requester && secondary && n.author_id === secondary.firmUserId) {
+        await ack(secondaryNoteAck(requester));
+        await appendFinding(env, card.id, `Context from ${secondary.firstName} (secondary; not an approval): "${n.body.slice(0, 600)}"`);
+        continue;
+      }
       await ack(`Kept, not acted on: only ${requester?.fullName ?? "the partner who asked"} steers this card.`);
       continue;
     }

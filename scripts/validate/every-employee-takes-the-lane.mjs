@@ -78,6 +78,14 @@ export const DIRECT_SEND_REGISTER = {
     // …and the addressed note that the same packet produces must still take the lane.
     alsoUsesLane: true,
   },
+  "src/worker/services/handOff.ts": {
+    why:
+      "0241 (23 Sep 2026, her decision): a hand-off, take-back or claim is a PARTNER's own act on " +
+      "who owns a card, not an employee's finished work. Its one context email to the new primary " +
+      "and its one line to the other partner must arrive now — filed into a preview lane they would " +
+      "be a hand-off nobody hears about. Both addresses are partners only (sendPartnerEmail refuses " +
+      "anything else); every notice about the WORK itself still takes the lane in webPropertyChange.ts.",
+  },
   "src/worker/services/banterReply.ts": {
     why:
       "Addendum 11 (22 Sep 2026, her decision): a card the intake classifier catches as pure " +
