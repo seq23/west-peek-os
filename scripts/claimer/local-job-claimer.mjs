@@ -38,7 +38,7 @@
  */
 
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { hostname, homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -50,17 +50,44 @@ import { promisify } from "node:util";
  * before #149 and #150 landed ran Porter's first real job with the duty code of #144: it blocked
  * Scooter's photo card with "no Drive FOLDER is on the card", a stop that had been deleted from the
  * repo eight hours earlier. A deploy that the Mac never picks up is a deploy that did not happen
- * here. The import URL carries the repo's HEAD, so a new commit is a new module and a fresh load;
- * the same commit keeps the cached one. `land` need not restart anything.
+ * here. The import URL carries the repo's HEAD, so a new commit is a new DUTY module.
+ *
+ * THAT WAS NOT ENOUGH, AND THE CLAIMER NOW RESTARTS ITSELF (23 Sep 2026). The per-HEAD URL reloads
+ * the duty file only: everything the duty imports keeps its plain URL and stays cached, and this
+ * file's own code — the reload itself, the allowlist, the wire — can never be reloaded at all. The
+ * proof: a claimer started Mon 21 Sep 17:52, before the per-HEAD reload (#152) and before Drive was
+ * mapped (#186), ran today's community job on the 20 Sep duty and began copying the whole Drive
+ * folder, a 14.6 GB recording included. So the process remembers the HEAD it started on
+ * (`STARTED_HEAD`), and between jobs — only when idle, never mid-job — `restartIfRepoMoved` exits
+ * with EXIT_NEW_CODE when HEAD has moved. launchd's `KeepAlive` (true: restart on ANY exit) starts
+ * it again on the new code within one ThrottleInterval. `--self-test` pins both halves.
  */
-export function dutyModuleUrl(script, repoRoot = REPO_ROOT) {
-  let head = "unknown";
+export function repoHead(repoRoot = REPO_ROOT) {
   try {
-    head = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    return execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null;
   } catch {
-    /* no git here: the module loads once, as before */
+    return null;
   }
-  return `${pathToFileURL(path.join(repoRoot, script)).href}?head=${head}`;
+}
+
+export function dutyModuleUrl(script, repoRoot = REPO_ROOT) {
+  return `${pathToFileURL(path.join(repoRoot, script)).href}?head=${repoHead(repoRoot) ?? "unknown"}`;
+}
+
+/** Non-zero, so the log reads as a restart and not a clean stop; KeepAlive restarts on any exit. */
+export const EXIT_NEW_CODE = 75;
+
+/** True only when both HEADs are known and differ — a missing git never restarts anything. */
+export function headMoved(startedHead, currentHead) {
+  return Boolean(startedHead) && Boolean(currentHead) && startedHead !== currentHead;
+}
+
+/** Called only when idle. Exits so launchd starts this claimer again on the code now checked out. */
+export function restartIfRepoMoved(startedHead, currentHead = repoHead(), exit = process.exit) {
+  if (!headMoved(startedHead, currentHead)) return false;
+  console.log(`the repo moved from ${String(startedHead).slice(0, 10)} to ${String(currentHead).slice(0, 10)} since this claimer started; exiting ${EXIT_NEW_CODE} so launchd restarts it on the new code`);
+  exit(EXIT_NEW_CODE);
+  return true;
 }
 
 const execFileAsync = promisify(execFile);
@@ -261,7 +288,8 @@ async function main() {
     console.log(`This machine cannot run jobs: missing ${missing.join(", ")}. Exiting quietly.`);
     return;
   }
-  console.log(`claiming ${RUN_KIND} runs as ${DEVICE_ID}`);
+  const STARTED_HEAD = repoHead();
+  console.log(`claiming ${RUN_KIND} runs as ${DEVICE_ID} on ${STARTED_HEAD ?? "an unknown HEAD"}`);
   for (;;) {
     let worked = false;
     try {
@@ -270,7 +298,11 @@ async function main() {
       console.error(`cycle failed: ${err instanceof Error ? err.message : String(err)}`);
     }
     if (ONCE) return;
-    if (!worked) await new Promise((r) => setTimeout(r, HEARTBEAT_INTERVAL_S * 1000));
+    // IDLE: nothing is running, so this is the one safe moment to pick up new code.
+    if (!worked) {
+      restartIfRepoMoved(STARTED_HEAD);
+      await new Promise((r) => setTimeout(r, HEARTBEAT_INTERVAL_S * 1000));
+    }
   }
 }
 
@@ -282,6 +314,22 @@ function selfTest() {
       return /\?head=[0-9a-f]{40}$/.test(u) && u.includes("scripts/duties/web-property-change.mjs");
     }],
     ["a repo with no git still yields a loadable URL", () => dutyModuleUrl("scripts/duties/web-property-change.mjs", "/nonexistent-repo").endsWith("?head=unknown")],
+    ["a moved HEAD restarts the claimer with a non-zero exit; the same HEAD, or an unknown one, never does", () => {
+      const exits = [];
+      const exit = (code) => exits.push(code);
+      const a = "a".repeat(40), b = "b".repeat(40);
+      return restartIfRepoMoved(a, b, exit) === true && exits[0] === EXIT_NEW_CODE && EXIT_NEW_CODE !== 0 &&
+        restartIfRepoMoved(a, a, exit) === false && restartIfRepoMoved(null, b, exit) === false && restartIfRepoMoved(a, null, exit) === false && exits.length === 1;
+    }],
+    ["the idle branch of the loop — and only it — checks for new code, against the HEAD recorded at start", () => {
+      const src = readFileSync(fileURLToPath(import.meta.url), "utf8");
+      const loop = src.slice(src.indexOf("const STARTED_HEAD = repoHead();"), src.indexOf("function selfTest("));
+      return /const STARTED_HEAD = repoHead\(\);/.test(loop) && /if \(!worked\) \{\s*restartIfRepoMoved\(STARTED_HEAD\);/.test(loop) && (loop.match(/restartIfRepoMoved\(/g) ?? []).length === 1;
+    }],
+    ["launchd restarts the claimer on ANY exit (KeepAlive true), so a restart-for-new-code really restarts", () => {
+      const plist = readFileSync(path.join(REPO_ROOT, "deployment", "launchd", "ventures.westpeek.os.local-jobs.plist"), "utf8").replace(/<!--[\s\S]*?-->/g, "");
+      return /<key>KeepAlive<\/key>\s*<true\/>/.test(plist) && /local-job-claimer\.mjs/.test(plist);
+    }],
     ["a registered kind with its own script is accepted", () => dutyFor(good).ok === true],
     ["a kind this claimer does not run is refused", () => dutyFor({ ...good, card_kind: "ROOM_PACKET" }).ok === false],
     ["a job naming a different script is refused", () => dutyFor({ ...good, script: "scripts/duties/other.mjs" }).ok === false],
