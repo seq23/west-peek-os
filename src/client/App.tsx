@@ -464,7 +464,11 @@ function initials(fullName: string): string {
  * can see their own authority without leaving the screen they are working on.
  */
 function IdentityPanel({ me, status, loading, onSignOut }: { me: MeResponse | null; status: number | null; loading: boolean; onSignOut: () => void }) {
-  if (loading) return <p data-testid="identity-status">Checking identity…</p>;
+  // A RE-CHECK KEEPS THE LINE. Every refresh re-reads /api/me; showing "Checking identity…" again
+  // swapped the 34px avatar line for a bare sentence and back, and the whole page jumped under the
+  // reader (e2e/d2-home-measured.spec.ts "does not move", 34px, full suite, 23 Sep). Only the FIRST
+  // load, with nobody known yet, says it is checking.
+  if (loading && !(status === 200 && me)) return <p data-testid="identity-status">Checking identity…</p>;
   if (status === 200 && me) {
     return (
       <p data-testid="identity-status">
@@ -3154,7 +3158,11 @@ function Shell() {
               {authed && <NewWorkCardControl onNavigate={navigate} />}
               {authed && <RefreshControl />}
               <IdentityPanel me={me.data} status={me.status} loading={me.loading} onSignOut={handleSignOut} />
-              {authed && <StatusBar onNavigate={navigate} refreshNonce={refreshNonce} />}
+              {authed && (
+                <div className={active === "home" ? "phone-home-hidden" : "phone-home-kept"}>
+                  <StatusBar onNavigate={navigate} refreshNonce={refreshNonce} />
+                </div>
+              )}
             </div>
           </header>
           <div className="surface-body" id="wp-surface">
@@ -3165,7 +3173,16 @@ function Shell() {
           {/* Plain-English orientation, rendered once for every route (P40). Only when signed in:
               an anonymous visitor sees the login prompt, and explaining a page they cannot open
               would be noise. */}
-          {authed && <PagePurposeBlock navKey={active} label={activeItem.label} onNavigate={navigate} />}
+          {/* ON A PHONE, HOME GIVES BOTH OF THESE UP (owner's decision, 23 Sep 2026). Home's own
+              masthead answers "what is waiting on me" and the purpose line says it again; with
+              the status bar's second "N waiting on you" they cost ~130px of an 844px screen, and
+              the first waiting row fell under the fold (e2e/home-overhaul.spec.ts, 861 > 844 on
+              main). Help Center still carries the purpose; the menu still reaches Notifications. */}
+          {authed && (
+            <div className={active === "home" ? "phone-home-hidden" : "phone-home-kept"}>
+              <PagePurposeBlock navKey={active} label={activeItem.label} onNavigate={navigate} />
+            </div>
+          )}
           {/* WHO RUNS THIS PAGE, directly under what the page is for — the operator asked for the
               host's picture, name and title to be among the first things you see. Renders nothing on
               Admin and on the personal surfaces: `pageHost` returns null there, because Admin is

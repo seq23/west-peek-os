@@ -208,3 +208,39 @@ test("Home does not move under the reader when the setup strip arrives", async (
 
   expect(Math.abs(after - before), "the answer line moved when the setup strip landed").toBeLessThanOrEqual(1);
 });
+
+/**
+ * A RE-CHECK OF WHO SHE IS NEVER BLANKS THE LINE. Every mutation anywhere and every refocus re-reads
+ * /api/me (lib/api.ts, the invalidation channel). IdentityPanel used to answer each re-read with
+ * "Checking identity…", swapping the 34px avatar line for a bare sentence and back, so every page
+ * jumped under the reader; in the full suite the test above caught it at 34px (23 Sep). Proven here
+ * without timing: watch the line through a global refresh, which re-reads /api/me for certain.
+ */
+test("a refresh re-reads identity without ever showing 'Checking identity…' again, and Home stays put", async ({ page }) => {
+  await signIn(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await gotoSurface(page, "Home");
+  const identity = page.getByTestId("identity-status");
+  await expect(identity).toContainText("Signed in as");
+  const answer = page.getByTestId("home-answer");
+  await expect(answer).toBeVisible();
+  const before = (await answer.boundingBox())!.y;
+
+  await page.evaluate(() => {
+    const w = window as unknown as { __idSeen: string[] };
+    w.__idSeen = [];
+    new MutationObserver(() => {
+      const el = document.querySelector('[data-testid="identity-status"]');
+      w.__idSeen.push(el ? (el as HTMLElement).innerText : "<gone>");
+    }).observe(document.body, { subtree: true, childList: true, characterData: true });
+  });
+  const reread = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/me");
+  await page.getByTestId("global-refresh-control").getByRole("button").first().click();
+  await reread;
+  await expect(identity).toContainText("Signed in as");
+
+  const seen = await page.evaluate(() => (window as unknown as { __idSeen: string[] }).__idSeen);
+  expect(seen.length, "the observer saw no change at all - the refresh did not reach the page").toBeGreaterThan(0);
+  expect(seen.filter((t) => /Checking identity/.test(t)), "the identity line blanked during a re-check").toEqual([]);
+  expect(Math.abs((await answer.boundingBox())!.y - before), "Home moved during a refresh").toBeLessThanOrEqual(1);
+});

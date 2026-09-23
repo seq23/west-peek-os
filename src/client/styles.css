@@ -1422,7 +1422,13 @@ details h3 {
   .panel-head > .module-count { align-self: flex-start; }
 }
 
+/* Layout-neutral wrappers around the status bar and the purpose line (App.tsx): on a phone,
+   Home hides both so its first waiting row is on the first screen. */
+.phone-home-hidden,
+.phone-home-kept { display: contents; }
+
 @media (max-width: 420px) {
+  .phone-home-hidden { display: none; }
   .surface-body { padding: var(--space-md) var(--space-sm) var(--space-3xl); }
   .shell-header { padding: var(--space-md) var(--space-sm); }
   .card,
