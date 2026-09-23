@@ -446,8 +446,6 @@ const SECONDARY_KEYS: ReadonlySet<string> = new Set(
 /** Home is the shell's fallback surface; NAV_GROUPS is authored so it always exists. */
 const NAV_FALLBACK = NAV_ITEMS[0]!;
 
-const WORK_CARD_STATES = ["OPEN", "IN_PROGRESS", "BLOCKED", "DONE", "CANCELLED"];
-
 // ── Identity ──
 
 function initials(fullName: string): string {

@@ -6,6 +6,7 @@ import { heldBySentence } from "@shared/work/workCards";
 import { askedBy } from "@shared/work/origin";
 import { cardTimeline, timelineWhen, type TrailFact } from "@shared/work/cardTimeline";
 import { siteWait, type LiveStatus } from "@shared/work/liveStatus";
+import { readsPages } from "@shared/work/cardKinds";
 import { partnerByEmail } from "@shared/registry/partners";
 import type { BlockActionKey } from "@shared/work/blocks";
 import { ArtifactShelf } from "../ArtifactShelf";
@@ -13,6 +14,7 @@ import { RequesterNotes, WebPropertyChangePanel, useSiteChange } from "../WebPro
 import { BlockPanel } from "./BlockPanel";
 import { PreviewReadyPanel } from "./PreviewReadyPanel";
 import { handOffControl } from "./handOffControl";
+import { triesWords } from "./triesWords";
 import { LookForm, LookResults } from "./LooksPanel";
 import { NoteThread, SteerBox, canSteer } from "./NotesPanel";
 import { sitePreviewBadge } from "./sitePreviewBadge";
@@ -56,7 +58,6 @@ export interface CardExpandedProps {
   mode: "desk" | "page";
 }
 
-const TRIES = 3;
 
 /** The partners cc'd on the finished email (0239), by first name — "cc Scooter". */
 function ccNames(json: string | null | undefined): string[] {
@@ -522,7 +523,7 @@ export function CardExpanded({
         <p className="wc-technical" data-testid={`work-card-technical-${c.id}`}>
           Technical: card {c.id}
           {c.site_repo && c.site_repo !== "unresolved" ? ` · repo ${c.site_repo}` : ""}
-          {c.owner_type === "AI" && !finished ? ` · try ${Math.min(TRIES, Math.max(1, c.work_attempts ?? 1))} of ${TRIES}` : ""}
+          {triesWords(c, finished)}
           {" · "}
           <span data-testid={`work-card-model-access-${c.id}`}>{c.model_access === "PRIVATE_MODEL_ONLY" ? "private model only" : "public model approved"}</span>
           {" · "}
@@ -563,7 +564,8 @@ export function CardExpanded({
               Start
             </button>
           )}
-          {!finished && (
+          {/* Only where a look is read back: the general employee loop, a card with no kind. */}
+          {!finished && readsPages(c.kind) && (
             <button type="button" data-testid={`work-card-look-${c.id}`} title={c.allows_browser ? "Reads the page now — this card allows it" : "Raises a look for you to approve"} onClick={() => setLooking((l) => !l)}>
               {c.allows_browser ? "Check a page" : "Check a page…"}
             </button>

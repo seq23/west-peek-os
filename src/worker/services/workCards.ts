@@ -29,7 +29,8 @@ import { cardKind, startableByHand } from "../../shared/work/cardKinds";
 import { originBadgeText, originOf } from "../../shared/work/origin";
 import { WEB_PROPERTIES, hostsSentence, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
 import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
-import { plainTitle } from "../../shared/work/siteChange";
+import { plainTitle, siteTries } from "../../shared/work/siteChange";
+import { CARD_STATES } from "../../shared/work/workCards";
 
 /**
  * Work spine (P3): the unit of governed work. State transitions are enforced
@@ -105,7 +106,8 @@ export interface WorkCardRow {
   updated_at: string;
 }
 
-export const WORK_CARD_STATES = ["OPEN", "IN_PROGRESS", "BLOCKED", "DONE", "CANCELLED"] as const;
+/** The stored states — the shared list, never a second copy (shared/work/workCards.ts). */
+export const WORK_CARD_STATES = CARD_STATES;
 export type WorkCardState = (typeof WORK_CARD_STATES)[number];
 
 /** The state a card ACTUALLY reads as, `held_at` layered over the stored column (0227, Wave D). */
@@ -774,6 +776,7 @@ export async function handleGetWorkCard(ctx: RouteContext): Promise<Response> {
             wpc.preview_only AS site_preview_only,
             wpc.check_state AS site_check_state, wpc.forced_by AS site_forced_by,
             wpc.plan_filed_at AS site_plan_filed_at, wpc.plan_approved_at AS site_plan_approved_at,
+            wpc.run_history_json AS site_run_history,
             substr(COALESCE(wpc.request_text, wpc.ask), 1, 600) AS site_ask
        FROM web_property_change wpc WHERE wpc.work_card_id = ?1`,
   )
@@ -783,7 +786,7 @@ export async function handleGetWorkCard(ctx: RouteContext): Promise<Response> {
   const parent = fromCard
     ? await ctx.env.WP_OS_DB.prepare("SELECT title FROM work_card WHERE id = ?1").bind(fromCard).first<{ title: string }>()
     : null;
-  const siteFacts = { site_host: null, site_repo: null, site_phase: null, site_preview_url: null, site_land_approved_at: null, site_merge_sha: null, site_publish_ready: null, site_preview_only: null, site_check_state: null, site_forced_by: null, site_plan_filed_at: null, site_plan_approved_at: null, site_ask: null, ...(site ?? {}) };
+  const siteFacts = { site_host: null, site_repo: null, site_phase: null, site_preview_url: null, site_land_approved_at: null, site_merge_sha: null, site_publish_ready: null, site_preview_only: null, site_check_state: null, site_forced_by: null, site_plan_filed_at: null, site_plan_approved_at: null, site_run_history: null, site_ask: null, ...(site ?? {}) };
 
   return json({
     ...card,
@@ -791,6 +794,8 @@ export async function handleGetWorkCard(ctx: RouteContext): Promise<Response> {
     parent_title: parent?.title ?? null,
     current_run: runByCard.get(card.id) ?? null,
     plain_title: plainTitleOf({ ...card, ...siteFacts, parent_title: parent?.title ?? null }),
+    site_run_history: undefined,
+    site_tries: triesOf(siteFacts as Record<string, unknown>, runByCard.get(card.id) ?? null),
     // 0241: the same primary / secondary the board serves.
     ...ownershipView(card as { requested_by_email: string | null; secondary_partner_email?: string | null }),
     // HELD (0227): the client reads `state`, not `held_at`, everywhere it renders a badge, a
@@ -1128,6 +1133,12 @@ export async function liveRunsByCard(env: Env, cardId?: string): Promise<Map<str
   return out;
 }
 
+/** A website job's tries per phase, from its run history plus the run the Mac holds now. Null off site cards. */
+function triesOf(c: Record<string, unknown>, run: { status: string } | null): Array<{ phase: string; tries: number }> | null {
+  if (c.site_phase == null) return null;
+  return siteTries((c.site_run_history as string | null) ?? null, { phase: c.site_phase as string, status: run?.status ?? null });
+}
+
 /** The plain title of a board row, from the columns the board query selects. */
 function plainTitleOf(c: Record<string, unknown>): string {
   let ask: { property_host?: string | null; ask?: string | null } = {};
@@ -1210,6 +1221,8 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
             -- filed plan not yet approved — read from the row, never from the block's text.
             wpc.check_state AS site_check_state, wpc.forced_by AS site_forced_by,
             wpc.plan_filed_at AS site_plan_filed_at, wpc.plan_approved_at AS site_plan_approved_at,
+            -- The Mac runs so far, per phase (siteTries) — a website job's real try count.
+            wpc.run_history_json AS site_run_history,
             -- (site_preview_only is served above, 0238.)
             substr(COALESCE(wpc.request_text, wpc.ask), 1, 600) AS site_ask,
             -- The card it was handed from — for an email-born job, "From <partner>: <her subject>",
@@ -1350,6 +1363,8 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
       current_run: runByCard.get(String(c.id)) ?? null,
       /** "Community site redesign · joinwestpeek.com" — never the raw email cut off mid-word. */
       plain_title: plainTitleOf(c),
+      site_run_history: undefined,
+      site_tries: triesOf(c, runByCard.get(String(c.id)) ?? null),
       /** 0241: primary first, then secondary, resolved through the partner registry. */
       ...ownershipView(c as { requested_by_email: string | null; secondary_partner_email?: string | null }),
     })),

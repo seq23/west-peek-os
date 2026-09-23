@@ -165,3 +165,28 @@ export function plainTitle(input: PlainTitleInput): string {
   if (!host || name.toLowerCase().includes(host.toLowerCase())) return name;
   return `${name} · ${host}`;
 }
+
+/**
+ * HOW MANY TRIES EACH STAGE TOOK, from the row's run history (23 Sep 2026). A website job's tries
+ * are its runs on the Mac, not the sweep's `work_attempts` counter — on wc_c9e36e8b the counter read
+ * 1 while the plan had taken two runs (the first stalled). A live run not yet in the history counts
+ * as a try of its phase. Pure.
+ */
+export function siteTries(runHistoryJson: string | null | undefined, live: { phase: string | null | undefined; status: string | null | undefined } | null = null): Array<{ phase: string; tries: number }> {
+  let hist: Array<{ phase?: unknown; run_id?: unknown }> = [];
+  try {
+    const v = JSON.parse(runHistoryJson ?? "[]") as unknown;
+    hist = Array.isArray(v) ? (v as Array<{ phase?: unknown; run_id?: unknown }>) : [];
+  } catch {
+    hist = [];
+  }
+  const order: string[] = [];
+  const count = new Map<string, number>();
+  const add = (phase: string) => {
+    if (!count.has(phase)) order.push(phase);
+    count.set(phase, (count.get(phase) ?? 0) + 1);
+  };
+  for (const h of hist) if (typeof h.phase === "string" && h.phase) add(h.phase.toUpperCase());
+  if (live && live.phase && (live.status === "QUEUED" || live.status === "CLAIMED")) add(String(live.phase).toUpperCase());
+  return order.map((phase) => ({ phase, tries: count.get(phase)! }));
+}

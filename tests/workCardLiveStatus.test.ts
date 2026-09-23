@@ -4,7 +4,9 @@ import type { Env } from "../src/worker/env";
 import type { FirmUserIdentity } from "../src/worker/auth";
 import { createWorkCardInternal, handleGetWorkCard, handleWorkByOwner } from "../src/worker/services/workCards";
 import { RUN_FRESH_MS, deskSummary, firstSentence, liveStatus, plainFailure, sentenceCase, siteWait, type LiveStatusInput } from "../src/shared/work/liveStatus";
-import { plainTitle, shortAsk, siteStage } from "../src/shared/work/siteChange";
+import { plainTitle, shortAsk, siteStage, siteTries } from "../src/shared/work/siteChange";
+import { CARD_KINDS, readsPages } from "../src/shared/work/cardKinds";
+import { triesWords } from "../src/client/pages/work/triesWords";
 import { cardTimeline, trailSentence } from "../src/shared/work/cardTimeline";
 import { askedBy } from "../src/shared/work/origin";
 import { handleGetWebPropertyChange } from "../src/worker/services/webPropertyChange";
@@ -421,5 +423,31 @@ describe("the Preview-ready panel reads structured fields and speaks her four re
     expect(readApprovalReply(`${CHANGES_REPLY_PREFIX} make the hero photo the group shot`)).toMatchObject({ kind: "REFUSED", changes: true });
     expect(readApprovalReply(PUBLISH_REPLY).kind).toBe("PUBLISH");
     expect(MATERIALS_ADDED_PHRASE).toBe("I added missing items");
+  });
+});
+
+describe("the Technical line's try count and where Check a page is offered (23 Sep 2026)", () => {
+  // wc_c9e36e8b's real run history: the plan's first run went quiet and was closed, the second
+  // succeeded; then one build run. The sweep's counter read 1 throughout.
+  const HISTORY = JSON.stringify([
+    { at: "2026-09-23T17:24:18.318Z", run_id: "ccr_a313e6a1", phase: "PLAN", status: "ABANDONED", reason: "went quiet for 11 minutes" },
+    { at: "2026-09-23T17:42:18.591Z", run_id: "ccr_106ab7cb", phase: "PLAN", status: "ok", reason: "" },
+    { at: "2026-09-23T18:18:18.551Z", run_id: "ccr_4561d304", phase: "BUILD", status: "ok", reason: "" },
+  ]);
+
+  it("a website job counts its Mac runs per phase, a live run included", () => {
+    expect(siteTries(HISTORY)).toEqual([{ phase: "PLAN", tries: 2 }, { phase: "BUILD", tries: 1 }]);
+    expect(siteTries(HISTORY, { phase: "BUILD", status: "CLAIMED" })).toEqual([{ phase: "PLAN", tries: 2 }, { phase: "BUILD", tries: 2 }]);
+    expect(siteTries(HISTORY, { phase: "BUILD", status: "REPORTED" })).toEqual([{ phase: "PLAN", tries: 2 }, { phase: "BUILD", tries: 1 }]);
+    expect(siteTries("not json")).toEqual([]);
+    expect(triesWords({ owner_type: "AI", work_attempts: 1, site_tries: siteTries(HISTORY) }, false)).toBe(" · tries: plan 2, build 1");
+    expect(triesWords({ owner_type: "AI", work_attempts: 2, site_tries: null }, false)).toBe(" · try 2 of 3");
+    expect(triesWords({ owner_type: "HUMAN", work_attempts: 0, site_tries: null }, false)).toBe("");
+  });
+
+  it("Check a page is offered only on a plain card — the one runner that reads a look", () => {
+    expect(readsPages(null)).toBe(true);
+    expect(readsPages(undefined)).toBe(true);
+    for (const k of CARD_KINDS) expect(readsPages(k.key), k.key).toBe(false);
   });
 });

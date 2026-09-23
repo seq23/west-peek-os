@@ -65,8 +65,20 @@ export const CARD_SOURCES: readonly CardSource[] = [
   },
 ] as const;
 
-export const CARD_STATES = ["OPEN", "IN_PROGRESS", "BLOCKED", "HELD", "DONE", "CANCELLED"] as const;
-export type CardState = (typeof CARD_STATES)[number];
+/**
+ * THE STATES `work_card.state` STORES — exactly its CHECK list, and the one list the Worker's PATCH
+ * schema reads (services/workCards.ts `WORK_CARD_STATES`). `validate:value-shapes` pins it to the column.
+ *
+ * WHY HELD IS NOT HERE (23 Sep 2026). 0227 made "held" a fact about a card (`held_at`), never a
+ * state value, and added HELD to this constant for the legend. The constant then offered a value its
+ * column rejects, and value-shapes failed on every run since. HELD is a DISPLAY state, below.
+ */
+export const CARD_STATES = ["OPEN", "IN_PROGRESS", "BLOCKED", "DONE", "CANCELLED"] as const;
+export type StoredCardState = (typeof CARD_STATES)[number];
+
+/** What a card can SHOW as: the stored states plus HELD, which is read from `held_at` (0227). */
+export const DISPLAY_CARD_STATES = ["OPEN", "IN_PROGRESS", "BLOCKED", "HELD", "DONE", "CANCELLED"] as const;
+export type CardState = (typeof DISPLAY_CARD_STATES)[number];
 
 export interface StateMeaning {
   key: CardState;
