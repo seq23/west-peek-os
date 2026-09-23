@@ -5,7 +5,7 @@ export const workGuide: PageGuide = {
   navKey: "work",
   title: "Work",
   purpose:
-    "Three places: the Desk is what needs you and what is in flight, the Record is everything the firm has finished, the Machinery is what runs on a clock.",
+    "Three places: the Desk is what needs you and what is being worked, one collapsed row per card with Show everything opening the whole card in place; the Record is everything the firm has finished; the Machinery is what runs on a clock.",
   youCan: ["See what has stopped, and who is carrying what", "Write a card and hand it to an employee or your partner", "Search the record of everything finished", "Check the machinery is healthy"],
   /*
    * THE WORK SURFACE IS FIVE FILES NOW (22 Sep 2026). `WorkCardsPage.tsx` was 1,588 lines and was
@@ -16,6 +16,7 @@ export const workGuide: PageGuide = {
   sources: [
     "src/client/pages/WorkCardsPage.tsx",
     "src/client/pages/work/WorkDesk.tsx",
+    "src/client/pages/work/CardExpanded.tsx",
     "src/client/pages/work/NewWorkCard.tsx",
     "src/client/pages/work/BlockPanel.tsx",
     "src/client/pages/work/NotesPanel.tsx",
@@ -25,11 +26,10 @@ export const workGuide: PageGuide = {
     "src/shared/work/blocks.ts",
   ],
   bands: [
-    { name: "The answer", testid: "work-answer", shows: "whether anything is waiting on you, with Add a card beside it." },
+    { name: "The answer", testid: "work-answer", shows: "one line counted from the sections below — how many need you, how many are being worked, how many wait for their next try — with Add a card beside it." },
     { name: "Desk · Record · Machinery", testid: "work-view-", shows: "the three tabs." },
-    { name: "A deck is waiting on your decision", testid: "work-decks-waiting", shows: "proposed deck versions, with View and Decide on Fund strategy." },
-    { name: "Waiting on you", testid: "work-owner-", shows: "blocked, unowned or yours — nothing moves until you act; each block says what was asked and what would clear it." },
-    { name: "In flight", shows: "cards being worked; the sweep picks each up within five minutes and it ends Done or Blocked." },
+    { name: "Needs you", testid: "work-owner-needs", shows: "decks waiting on your decision, then cards that are blocked, unowned, held or yours — each one row: who has it, a plain title, one status and Show everything." },
+    { name: "Being worked", testid: "work-owner-worked", shows: "cards an employee or your partner is carrying; Working now pulses only while something is actually running it, otherwise it says when the next try is." },
     { name: "The record", testid: "work-record", shows: "everything finished, by month, searchable by words, who did it and when." },
     { name: "The machinery", testid: "jobs-page", shows: "two lists of one-line rows: every scheduled job on a clock, sorted by time of day, and every one-off card moving on its own, tagged with where it came from." },
   ],
@@ -40,9 +40,14 @@ export const workGuide: PageGuide = {
     { label: "Give it to them", testid: "work-card-block-handon-", primary: true, does: "hands a blocked card to another employee and restarts it." },
     { label: "Send it", testid: "work-card-block-send-", primary: true, does: "sends your answer, change or escalation on a block." },
     { label: "Yes — open it", testid: "work-card-block-choice-", primary: true, does: "answers a page-permission block; No — carry on without it refuses it." },
-    { label: "Done", testid: "work-card-done-", primary: true, does: "finishes a card; it goes to the Record. Start and Drop are beside it." },
-    { label: "Do it now", testid: "work-card-doitnow-", primary: true, does: "starts an employee-owned card that has not been picked up yet, right on the Desk row, ahead of the sweep's next five-minute pass — the same door the card's own page uses.", then: "it moves to In flight on its next reload." },
-    { label: "Send it over", testid: "work-card-steer-send-", primary: true, does: "tells the employee something mid-work; they pick it up on their next step." },
+    { label: "Show everything", testid: "work-card-toggle-", does: "opens the whole card right under its row: where it is, what has happened, the details, a box to tell the employee something, and your request. Hide closes it." },
+    { label: "Look and decide", testid: "work-deck-decide-", primary: true, does: "goes to the deck version waiting on your decision, to approve it or send it back." },
+    { label: "Done", testid: "work-card-done-", primary: true, does: "finishes a card done by hand; it goes to the Record. Not offered on an employee's card in flight, which the employee finishes." },
+    { label: "Stop this work", testid: "work-card-drop-", does: "decides not to do it; the card ends Stopped and is kept on the record." },
+    { label: "Give it to someone else", testid: "work-card-reassign-", does: "hands the card to another employee, your partner or nobody." },
+    { label: "Release it", testid: "work-card-release-", primary: true, does: "lets a card you put on hold be worked again; it re-queues fresh from the top." },
+    { label: "Do it now", testid: "work-card-doitnow-", primary: true, does: "starts an employee-owned card that has not been picked up yet, ahead of the sweep's next five-minute pass — the same door the card's own page uses.", then: "it shows Working now on its next reload." },
+    { label: "Send to", testid: "work-card-steer-send-", primary: true, does: "tells the employee something mid-work, from the box in the open card; they pick it up on their next step." },
     { label: "Check a page", testid: "work-card-look-", does: "sends the employee to read a live page; Go and look runs now if the card has standing permission, otherwise Ask to look raises an approval card." },
     { label: "Reopen", testid: "work-card-undrop-", does: "puts a finished or dropped card back on the Desk." },
     { label: "Run everything due now", testid: "jobs-tick", does: "runs the tick by hand — every due job." },
@@ -65,9 +70,9 @@ export const workGuide: PageGuide = {
     {
       scenario: "A card from Desk to Record",
       steps: [
-        { do: "Press **Add a card** under **Waiting on you** — what needs doing, who carries it, who it is for", then: "the card is on the Desk; an employee owner is worked by the sweep on its next tick." },
-        { do: "When a card stops under **A deck is waiting on your decision** or with a block, press **Answer it**, **Give it to them** or **Try it again now**", then: "the block clears and the card restarts; **Send it** carries your answer." },
-        { do: "Press **Send it over** to tell the employee something mid-work", then: "they pick it up on their next step." },
+        { do: "Press **Add a card** — what needs doing, who carries it, who it is for", then: "the card is on the Desk under **Being worked**; an employee owner is worked by the sweep on its next tick." },
+        { do: "When a card shows under **Needs you**, press **Show everything**, then **Answer it**, **Give it to them** or **Try it again now**; a deck there has **Look and decide**", then: "the block clears and the card restarts; **Send it** carries your answer." },
+        { do: "In an open card, type in the box and press **Send to** to tell the employee something mid-work", then: "they pick it up on their next step." },
         { do: "Press **Done** when it is finished", then: "the card goes to **The record**; **Reopen** brings it back." },
         { do: "Under **The machinery**, press **Run it now** on a job, or **Run everything due now**", then: "the job runs by hand; Preview it to me runs it and emails only you." },
         { do: "Still on **The machinery**, under One-off, press **Turn it on** on a card she is holding", then: "it re-queues fresh from the top and starts showing on the Desk too — no separate page visit." },

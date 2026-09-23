@@ -2691,7 +2691,13 @@ function StatusBar({ onNavigate, refreshNonce }: { onNavigate: (key: string) => 
           vocabulary on this subject, since the Notifications page has always said "N waiting".
           One definition, one word.
         */}
-        {unread} waiting on you{critical > 0 ? ` (${critical} critical)` : ""}
+        {/*
+          NAMED FOR WHAT IT COUNTS (23 Sep 2026). This number is outstanding NOTICES. The Work page
+          counts the cards that need her, from its own sections (`deskSummary`), and on 23 Sep the two
+          sat one above the other as "0 waiting on you" and "One thing is stopped until you answer".
+          Two different lists under one phrase read as a contradiction; each now says which list it is.
+        */}
+        {unread} notice{unread === 1 ? "" : "s"} for you{critical > 0 ? ` (${critical} critical)` : ""}
       </button>
       <span className={online ? "badge badge-ok" : "badge badge-bad"} data-testid="status-connection">
         {online ? "online" : "offline"}

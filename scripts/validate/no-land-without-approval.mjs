@@ -106,7 +106,13 @@ const MIGRATION_0220 = path.join(ROOT, "migrations", "0220_a_plan_that_is_not_pu
 const MIGRATION_0236 = path.join(ROOT, "migrations", "0236_one_website_job_can_span_several_repos.sql");
 const MIGRATION_0238 = path.join(ROOT, "migrations", "0238_every_site_change_previews_first.sql");
 const BOARD = path.join(ROOT, "src", "worker", "services", "workCards.ts");
-const DESK = path.join(ROOT, "src", "client", "pages", "work", "WorkDesk.tsx");
+/*
+ * THE CARD, NOT THE ROW (23 Sep 2026, the work-card redesign). The collapsed desk row carries only
+ * owner, title, status and the site track; the "Before it goes live" badge and the "Hold for you
+ * first" switch moved into the expanded card, `work/CardExpanded.tsx`, which the desk opens under
+ * the row and the card's own page renders. Gate 13 reads it there, with every check unchanged.
+ */
+const DESK = path.join(ROOT, "src", "client", "pages", "work", "CardExpanded.tsx");
 const BADGE = path.join(ROOT, "src", "client", "pages", "work", "sitePreviewBadge.ts");
 const read = (p) => stripTsComments(readFileSync(p, "utf8"));
 /** SQL: `--` line comments blanked, so a comment naming a column cannot satisfy or fail the trigger check. */
@@ -438,7 +444,7 @@ export function checkPreviewDefault({ worker, sql0238, board, desk, badge }) {
     if (!/card\.kind\s*!==\s*WEB_PROPERTY_CHANGE_KIND\)\s*return null/.test(fn)) violations.push("sitePreviewBadge() is not limited to WEB_PROPERTY_CHANGE cards");
   }
   examined += 1;
-  if (!/const sitePreview = sitePreviewBadge\(c\)/.test(desk) || !/\{sitePreview\.text\}/.test(desk)) violations.push("WorkDesk does not render sitePreviewBadge() — the site's preview gate is invisible on the desk");
+  if (!/const sitePreview = sitePreviewBadge\(c\)/.test(desk) || !/\{sitePreview\.text\}/.test(desk)) violations.push("the expanded card (CardExpanded) does not render sitePreviewBadge() — the site's preview gate is invisible on the desk");
   if (!/const previewOn = c\.preview_first === 1;/.test(desk)) violations.push("the desk's \"Show me first\" switch no longer reads work_card.preview_first — its meaning (hold the result for her) changed");
   const toggle = body(desk, "async function togglePreviewFirst(");
   if (!toggle || /preview_only/.test(toggle) || !/preview_first:\s*next/.test(toggle)) violations.push("togglePreviewFirst() no longer writes only preview_first — the switch could turn off a site's preview gate, a land bypass nobody named");

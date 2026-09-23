@@ -6639,3 +6639,30 @@ right role and 404 rather than 403 outside firm scope. One existing pin in
 `tests/webPropertyChange.test.ts` became false and was rewritten STRICTER: a card's `Stored
 message:` line now must name the EXACT key the intake kept the message under, not merely match the
 `inbound-email/` prefix.
+
+## Work cards collapsed by default; one press shows everything (23 Sep 2026)
+
+Owner approval of the "Work Card Redesign" canvas: "it's too much for a work home landing page. it
+should be truly collapsed with only the title and in progress and the necessary things showing then a
+big chevron or some obvious expansion button that has everything and i shouldnt have to click again
+to see everything."
+
+- **One status reader.** `src/shared/work/liveStatus.ts` turns card + the run her Mac holds + the
+  clock into one pill and one line. "Working now" (pulsing, reduced-motion respected) only for a
+  CLAIMED run that pinged within 3 min or a live sweep lease; otherwise Waiting / Queued / Needs you.
+  The desk row, the expanded card and `#/work/<id>` all call it. The board and the single-card route
+  serve `current_run`, the website job's facts and a server-derived `plain_title`
+  (`shared/work/siteChange.ts`: "Community site redesign · joinwestpeek.com", never the raw email).
+- **The desk.** Sections "Needs you" (decks + blocked/unowned/held/yours) and "Being worked"; the
+  header line is `deskSummary` over the same statuses, so it can no longer say "stopped" over a
+  section that shows nothing stopped. The status bar's count is renamed for what it counts (notices).
+  A collapsed row is owner, title, one status, the Plan→Build→Preview→Live track, and
+  "Show everything" (aria-expanded, ≥44px). `work/CardExpanded.tsx` opens directly under it.
+- **The card page** renders the same `CardExpanded` plus the full history; "Requested by a hand-off",
+  "step 0 of 8", "Decided without asking" over a failure, raw kind codes and empty boxes are gone.
+- **Guards.** `tests/workCardLiveStatus.test.ts` (27: every state, the header, the title, the stages,
+  the two routes agreeing); `e2e/work-card-collapsed.spec.ts` (the collapsed row holds no
+  WebPropertyChangePanel and aria-expanded reveals it as the row's next sibling; 390px has no sideways
+  scroll) — negative-proved by planting the panel on the row. `validate:stopped-cards` now reads the
+  one reader too (two new self-test fixtures; negative-proved). p55 and p73 pins rewritten to the
+  one-press truth, stricter.

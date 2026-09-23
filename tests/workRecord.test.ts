@@ -13,7 +13,6 @@ import {
   LIKE_TERMS_MAX,
   type RecordRow,
 } from "../src/shared/work/record";
-import { deskAnswer, deskSubline } from "../src/shared/work/deskAnswer";
 import { RECURRING_CARD_KINDS, isRecurringKind } from "../src/shared/work/recurring";
 import { CARD_KINDS } from "../src/shared/work/cardKinds";
 
@@ -197,62 +196,6 @@ describe("the search terms", () => {
   });
 });
 
-describe("the desk's answer", () => {
-  it("answers the question rather than printing a count", () => {
-    expect(deskAnswer({ waiting: 2, decks: 0, inFlight: 4, failing: 0 }).line).toBe(
-      "Two things are stopped until you answer.",
-    );
-  });
-
-  it("agrees with itself in number", () => {
-    expect(deskAnswer({ waiting: 1, decks: 0, inFlight: 0, failing: 0 }).line).toBe(
-      "One thing is stopped until you answer.",
-    );
-    expect(deskAnswer({ waiting: 0, decks: 1, inFlight: 0, failing: 0 }).line).toBe(
-      "One thing is stopped until you answer.",
-    );
-  });
-
-  it("counts a waiting deck alongside a waiting card — both are stopped on her", () => {
-    const a = deskAnswer({ waiting: 2, decks: 1, inFlight: 0, failing: 0 });
-    expect(a.line).toBe("Three things are stopped until you answer.");
-    expect(a.count).toBe(3);
-  });
-
-  it("uses a numeral past six rather than spelling out a sentence nobody reads", () => {
-    expect(deskAnswer({ waiting: 11, decks: 0, inFlight: 0, failing: 0 }).line).toBe(
-      "11 things are stopped until you answer.",
-    );
-  });
-
-  it("says the clear day plainly, and marks it clear so it can be said in the good tone", () => {
-    const a = deskAnswer({ waiting: 0, decks: 0, inFlight: 6, failing: 0 });
-    expect(a.line).toBe("Nothing is waiting on you.");
-    expect(a.clear).toBe(true);
-    expect(a.count).toBe(0);
-  });
-
-  it("does not say the desk is clear while a card is failing behind her back", () => {
-    /*
-     * 17 Sep: a card failed three times in fourteen minutes against a lane with no credit, and
-     * every reading of the page said it was queued. It is not waiting on her yet — the sweep is
-     * still retrying — but "nothing is waiting" full stop is how she found out by asking.
-     */
-    const a = deskAnswer({ waiting: 0, decks: 0, inFlight: 3, failing: 1 });
-    expect(a.clear).toBe(false);
-    expect(a.line).toContain("one card has failed once and is being tried again");
-    expect(a.count).toBe(0);
-  });
-
-  it("puts a real block ahead of a retry — she can act on one and not the other", () => {
-    expect(deskAnswer({ waiting: 1, decks: 0, inFlight: 0, failing: 5 }).line).toBe(
-      "One thing is stopped until you answer.",
-    );
-  });
-
-  it("renders no subline rather than an empty paragraph when nothing is in flight", () => {
-    expect(deskSubline({ waiting: 0, decks: 0, inFlight: 0, failing: 0 })).toBeNull();
-    expect(deskSubline({ waiting: 0, decks: 0, inFlight: 1, failing: 0 })).toBe("One card is being worked right now.");
-    expect(deskSubline({ waiting: 0, decks: 0, inFlight: 9, failing: 0 })).toBe("9 cards are being worked right now.");
-  });
-});
+// THE DESK'S ANSWER moved to `deskSummary` in shared/work/liveStatus.ts (23 Sep 2026): the header now
+// counts the statuses the sections are drawn from. Its arithmetic and grammar are pinned, stricter,
+// in tests/workCardLiveStatus.test.ts ("deskSummary — the header counts what the sections draw").

@@ -1,8 +1,8 @@
 import type { InstructionReceipt, WorkCardNote, WorkCardRow } from "./types";
 
 /**
- * SAY SOMETHING TO WHOEVER IS CARRYING IT — the button and the thread it opens, moved out of
- * `WorkCardsPage.tsx` verbatim (22 Sep 2026). Same testids, same conditions, same copy.
+ * SAY SOMETHING TO WHOEVER IS CARRYING IT — moved out of `WorkCardsPage.tsx` on 22 Sep 2026, and on
+ * 23 Sep made inline in the expanded card: the box and the thread, with no button in between.
  */
 
 /**
@@ -10,46 +10,75 @@ import type { InstructionReceipt, WorkCardNote, WorkCardRow } from "./types";
  * card it is still working — a note on finished work would be written into a void, and the server
  * refuses it for the same reason.
  */
-export function SteerButton({
-  card: c,
-  steering,
-  onOpen,
-}: {
-  card: WorkCardRow;
-  steering: string | null;
-  onOpen: (id: string) => void;
-}): JSX.Element | null {
-  if (!(c.owner_type === "AI" && ["OPEN", "IN_PROGRESS", "BLOCKED"].includes(c.state))) return null;
-  return (
-    <button
-      type="button"
-      data-testid={`work-card-steer-${c.id}`}
-      title="They pick this up on their next step, without stopping the work"
-      onClick={() => onOpen(c.id)}
-    >
-      {steering === c.id ? "Never mind" : `Tell ${c.owner_name ?? "them"} something`}
-    </button>
-  );
+export function canSteer(c: Pick<WorkCardRow, "owner_type" | "state">): boolean {
+  return c.owner_type === "AI" && ["OPEN", "IN_PROGRESS", "BLOCKED"].includes(c.state);
 }
 
-/** The conversation on one card: her words, what a model made of them, and the box to add more. */
-export function NotesPanel({
+/**
+ * "TELL PORTER SOMETHING", INLINE (23 Sep 2026, the work-card redesign). It used to be a button that
+ * opened a box — a second click inside a card that had already been opened, which is the one thing
+ * her approval ruled out: "i shouldnt have to click again to see everything". The box is simply
+ * there, named for who is listening, with the send button saying who it goes to.
+ */
+export function SteerBox({
   card: c,
-  notes,
-  receipts,
   noteText,
   setNoteText,
   onSend,
+  busy,
+}: {
+  card: WorkCardRow;
+  noteText: string;
+  setNoteText: (next: string) => void;
+  onSend: (id: string) => void;
+  busy?: boolean;
+}): JSX.Element {
+  const who = c.owner_name ?? "them";
+  return (
+    <form
+      className="wc-pair-col"
+      data-testid={`work-card-steer-form-${c.id}`}
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSend(c.id);
+      }}
+    >
+      <label className="wc-label" htmlFor={`work-card-steer-input-${c.id}`} data-testid={`work-card-steer-${c.id}`}>
+        Tell {who} something
+      </label>
+      <textarea
+        id={`work-card-steer-input-${c.id}`}
+        rows={3}
+        value={noteText}
+        onChange={(e) => setNoteText(e.target.value)}
+        placeholder="e.g. keep the current logo"
+        data-testid={`work-card-steer-input-${c.id}`}
+      />
+      <div className="wc-pair-actions">
+        <button type="submit" className="btn-strong" data-testid={`work-card-steer-send-${c.id}`} disabled={busy || noteText.trim().length < 2}>
+          Send to {who}
+        </button>
+        {/* Said plainly, because the natural fear is that saying something stops the work or
+            starts it again from the top. It does neither. */}
+        <span className="wc-quiet">{c.owner_name ?? "They"} keeps working and reads it at the next step.</span>
+      </div>
+    </form>
+  );
+}
+
+/** The conversation on one card: her words, and what a model made of them. The box is `SteerBox`. */
+export function NoteThread({
+  card: c,
+  notes,
+  receipts,
 }: {
   card: WorkCardRow;
   notes: WorkCardNote[];
   receipts: InstructionReceipt[];
-  noteText: string;
-  setNoteText: (next: string) => void;
-  onSend: (id: string) => void;
-}): JSX.Element {
+}): JSX.Element | null {
+  if (receipts.length === 0 && notes.length === 0 && c.kind !== "WEB_PROPERTY_CHANGE") return null;
   return (
-    <div className="work-card-look" data-testid={`work-card-steer-form-${c.id}`}>
+    <div className="wc-thread" data-testid={`work-card-thread-${c.id}`}>
       {/* WHAT HAS ALREADY BEEN SAID, and what came back. An acknowledgement here is
           never a bare tick: the table's CHECK makes seen-and-answered one event, so
           an employee cannot dismiss a partner's instruction without saying what it
@@ -135,23 +164,6 @@ export function NotesPanel({
           back to re-plan with what you typed. Anything else is read as your answer to whatever it last asked.
         </p>
       )}
-      <form onSubmit={(e) => { e.preventDefault(); onSend(c.id); }}>
-        <input
-          value={noteText}
-          onChange={(e) => setNoteText(e.target.value)}
-          placeholder="What should they do differently?"
-          aria-label={`Tell whoever is carrying ${c.title} something`}
-          data-testid={`work-card-steer-input-${c.id}`}
-        />
-        <div className="form-row">
-          <button type="submit" className="btn-strong" data-testid={`work-card-steer-send-${c.id}`} disabled={noteText.trim().length < 2}>
-            Send it over
-          </button>
-          {/* Said plainly, because the natural fear is that saying something stops
-              the work or starts it again from the top. It does neither. */}
-          <span className="muted small">They keep working. This lands on their next step.</span>
-        </div>
-      </form>
     </div>
   );
 }

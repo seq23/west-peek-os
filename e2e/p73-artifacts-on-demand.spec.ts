@@ -168,6 +168,13 @@ test("door B: 'Wyatt, build me a dashboard on <company>' is an ARTIFACT card; wo
   await page.getByTestId("dev-login-submit").click();
   await expect(page.getByTestId("identity-status")).toContainText("Scooter Taylor");
   await page.getByRole("button", { name: "Work", exact: true }).click();
+  // Collapsed by default (23 Sep 2026): the stopped card sits under "Needs you", and one press on
+  // "Show everything" opens the build row and the block together — no second press.
+  const needs = page.getByTestId("work-owner-needs");
+  await expect(needs.getByTestId(`work-card-${cardId}`)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId(`work-card-state-${cardId}`)).toHaveText("Needs you");
+  await expect(page.getByTestId(`work-card-artifact-${cardId}`)).toHaveCount(0);
+  await page.getByTestId(`work-card-toggle-${cardId}`).click();
   const row = page.getByTestId(`work-card-artifact-${cardId}`);
   await expect(row).toBeVisible({ timeout: 20_000 });
   await expect(row).toContainText("What it builds");

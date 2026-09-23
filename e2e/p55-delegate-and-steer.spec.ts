@@ -315,14 +315,21 @@ test("a partner can actually leave that note — through the screen, not the API
   await signIn(page);
   await gotoSurface(page, "Work");
 
-  // Cards rest collapsed, so the control lives one press in — the same press a person makes.
-  await page.getByTestId(`work-card-toggle-${cardId}`).click();
+  // Cards rest collapsed, so the control lives one press in — the same press a person makes —
+  // and ONLY one (23 Sep 2026): "i shouldnt have to click again to see everything". The box is
+  // there the moment the card opens; there is no second button to press to reveal it.
+  const toggle = page.getByTestId(`work-card-toggle-${cardId}`);
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId(`work-card-steer-input-${cardId}`)).toHaveCount(0);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
   const steer = page.getByTestId(`work-card-steer-${cardId}`);
   await expect(steer).toBeVisible();
-  // Named, not generic: "Tell Wyatt something" says who is listening.
+  // Named, not generic: "Tell Wyatt something" says who is listening, and the button says who it goes to.
   await expect(steer).toContainText("Wyatt");
+  await expect(page.getByTestId(`work-card-steer-send-${cardId}`)).toContainText("Send to Wyatt");
 
-  await steer.click();
+  await expect(page.getByTestId(`work-card-steer-input-${cardId}`)).toBeVisible();
   await page.getByTestId(`work-card-steer-input-${cardId}`).fill("Go through the introducer, not the founder.");
   await page.getByTestId(`work-card-steer-send-${cardId}`).click();
 
