@@ -12,6 +12,7 @@ import { ArtifactShelf } from "../ArtifactShelf";
 import { RequesterNotes, WebPropertyChangePanel, useSiteChange } from "../WebPropertyChangePanel";
 import { BlockPanel } from "./BlockPanel";
 import { PreviewReadyPanel } from "./PreviewReadyPanel";
+import { handOffControl } from "./handOffControl";
 import { LookForm, LookResults } from "./LooksPanel";
 import { NoteThread, SteerBox, canSteer } from "./NotesPanel";
 import { sitePreviewBadge } from "./sitePreviewBadge";
@@ -132,6 +133,24 @@ export function CardExpanded({
   const recipient = recipientWords(c, me);
   const asked = askedBy(c, { id: me.id, email: me.email });
   const wait = siteWait(c);
+  const handOff = handOffControl(c, me.id, assignable?.partners ?? []);
+
+  /**
+   * HAND IT TO THE OTHER PARTNER, OR TAKE IT BACK (0241). The server decides; a refusal comes back
+   * as { error: "refused", detail } and its detail is what she reads.
+   */
+  async function changeHands(): Promise<void> {
+    if (!handOff) return;
+    setBusy(true);
+    const res =
+      handOff.kind === "HAND_OFF"
+        ? await api<{ error?: string; detail?: string; said?: string }>(`/api/work-cards/${c.id}/hand-off`, { method: "POST", body: { to: handOff.to } })
+        : await api<{ error?: string; detail?: string; said?: string }>(`/api/work-cards/${c.id}/take-back`, { method: "POST", body: {} });
+    setBusy(false);
+    if (res.status >= 400 || res.data?.error) setMessage(res.data?.detail ?? `Could not do that (${res.status}).`);
+    else setMessage(res.data?.said ?? (handOff.kind === "HAND_OFF" ? `Handed to ${handOff.to}.` : "It is yours again."));
+    reload();
+  }
   const cc = ccNames(c.cc_emails);
   const recipientNode: ReactNode = (
     <span className="wc-inline-list">
@@ -264,6 +283,12 @@ export function CardExpanded({
   // ── The details every card shares ─────────────────────────────────────────────────────────
   const lead: ReactNode = (
     <>
+      {c.partner_owner_line && (
+        <>
+          <dt>Partners</dt>
+          <dd data-testid={`work-card-partner-owners-${c.id}`}>{c.partner_owner_line}</dd>
+        </>
+      )}
       <dt>Asked by</dt>
       <dd data-testid={`work-card-asked-by-${c.id}`}>
         {asked.who}
@@ -541,6 +566,11 @@ export function CardExpanded({
           {!finished && (
             <button type="button" data-testid={`work-card-look-${c.id}`} title={c.allows_browser ? "Reads the page now — this card allows it" : "Raises a look for you to approve"} onClick={() => setLooking((l) => !l)}>
               {c.allows_browser ? "Check a page" : "Check a page…"}
+            </button>
+          )}
+          {handOff && (
+            <button type="button" disabled={busy} data-testid={handOff.kind === "HAND_OFF" ? `work-card-hand-off-${c.id}` : `work-card-take-back-${c.id}`} onClick={() => void changeHands()}>
+              {handOff.label}
             </button>
           )}
           {!finished && (

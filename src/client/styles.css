@@ -7119,3 +7119,19 @@ body {
 .wc-preview-title { margin: 0; font-size: var(--text-lg); font-weight: 700; color: var(--wp-ink); }
 .wc-preview-link { margin: 0; font-size: var(--text-base); overflow-wrap: anywhere; }
 .wc-missing { margin: 0; padding-left: var(--space-lg); display: flex; flex-direction: column; gap: var(--space-2xs); font-size: var(--text-base); }
+
+/* The two partners who hold a handed-off card (0241), primary first, above the worker's face. */
+.wc-partner-faces { display: inline-flex; gap: var(--space-3xs); }
+.wc-partner-face {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--wp-ink);
+  color: var(--wp-shell-ink-max);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+}
+.wc-partner-face + .wc-partner-face { background: var(--wp-line-strong); color: var(--wp-ink); }
