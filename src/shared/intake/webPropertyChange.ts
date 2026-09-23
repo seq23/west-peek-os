@@ -104,7 +104,29 @@ export function driveFolderLinks(text: string): Array<{ id: string; url: string 
 /** Which property the text names, or null. Host first (exact), then the plain words. */
 export function propertyIn(text: string): WebProperty | null {
   const named = propertiesIn(text);
-  return named.length === 1 ? named[0]! : null;
+  if (!named.length) return null;
+  // ONE JOB FOR SEVERAL SITES IN ONE REPO (23 Sep 2026, her words: "why can't it open one large
+  // job working on both sites?"). The three sites share join-west-peek-main, so "the community
+  // site and the agency site" is one plan, one preview and one PR over both folders. `host` and
+  // `site` carry every one, comma-joined, in registry order; sitesOf() reads them back.
+  const repos = new Set(named.map((p) => p.repo));
+  if (repos.size > 1) return null; // one job is one repo, one PR; the door infers or asks
+  if (named.length === 1) return named[0]!;
+  return {
+    host: named.map((p) => p.host).join(", "),
+    repo: named[0]!.repo,
+    site: named.map((p) => p.site).join(", "),
+    words: [],
+  };
+}
+
+/** The site folders a job may change, from the row's `property_host` (one host or several, comma-joined). */
+export function sitesOf(propertyHost: string | null | undefined): string[] {
+  if (!propertyHost) return [];
+  return propertyHost
+    .split(",")
+    .map((h) => WEB_PROPERTIES.find((p) => p.host === h.trim())?.site)
+    .filter((s): s is string => Boolean(s));
 }
 
 /**
@@ -119,7 +141,7 @@ export function propertyIn(text: string): WebProperty | null {
  *   2. only if no site is named that way, a site ADDRESS she wrote (joinwestpeek.com) — never
  *      one inside an email address, which names a mailbox;
  *   3. otherwise nothing: the door infers from her last site card or asks.
- * Returns every property at the winning level; more than one there is a genuine ambiguity.
+ * Returns every property at the winning level; several in one repo are one job (propertyIn).
  */
 export function propertiesIn(text: string): WebProperty[] {
   const lower = text.toLowerCase().replace(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/g, " ");
@@ -150,7 +172,8 @@ export function parseWebPropertyAsk(subject: string, body: string): WebPropertyA
   const folder = FOLDER_LINK.exec(written);
   const file = FILE_LINK.exec(written);
   const property = propertyIn(written);
-  const severalNamed = propertiesIn(written).length > 1;
+  // Sites in DIFFERENT repos cannot be one PR: unresolved, never a silent pick.
+  const severalNamed = !property && propertiesIn(written).length > 1;
   // The greeting is the BODY's first line; the subject sits above it in `text`.
   const addressee = addresseeIn(writtenPart(body.replace(/\r/g, "")));
   // "Hey Porter — a spot on the site": addressed to Porter, a property named without its host.
