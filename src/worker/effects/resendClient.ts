@@ -106,6 +106,7 @@ export async function sendViaResend(
       body: JSON.stringify({
         from,
         to: recipients,
+        ...(payload.cc && payload.cc.length ? { cc: [...payload.cc] } : {}),
         subject,
         text,
         ...(html ? { html } : {}),

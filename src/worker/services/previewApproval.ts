@@ -1,3 +1,5 @@
+import { ccList } from "../../shared/work/ccPartners";
+import { ccOfCard } from "./ccPartners";
 import { z } from "zod";
 import type { Env } from "../env";
 import type { RouteContext } from "../router";
@@ -111,6 +113,8 @@ export interface PreviewApprovalRow {
   /** Why her Home copy could not be filed, when it could not. Recorded, never swallowed. */
   archive_error: string | null;
   archive_failed_at: string | null;
+  /** 0239: JSON list of partner addresses copied when it is sent. */
+  cc_emails?: string | null;
   privacy_label: string;
   firm_scope: string;
   created_at: string;
@@ -140,6 +144,8 @@ export interface FilePreviewInput {
   workCardId?: string | null;
   cardKind?: string | null;
   firmScope?: string;
+  /** 0239: partners copied when she sends it. Frozen on the row. */
+  cc?: readonly string[];
 }
 
 export interface FiledPreview {
@@ -169,13 +175,14 @@ export async function filePreview(env: Env, input: FilePreviewInput): Promise<Fi
     `INSERT INTO preview_approval
        (id, work_card_id, card_kind, employee, what, subject, body_text, body_html,
         recipient, recipient_set_by, proposed_recipient, lane_reason, owner_firm_user_id, state,
-        token_sha256, expires_at, firm_scope)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'EMPLOYEE', ?9, ?10, ?11, 'PENDING', ?12, ?13, ?14)`,
+        token_sha256, expires_at, firm_scope, cc_emails)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'EMPLOYEE', ?9, ?10, ?11, 'PENDING', ?12, ?13, ?14, ?15)`,
   )
     .bind(
       id, input.workCardId ?? null, input.cardKind ?? null, input.employee, input.what,
       input.subject, input.bodyText, input.bodyHtml ?? null,
       recipient, input.laneReason, input.owner.firmUserId, tokenHash, expiresAt, firmScope,
+      JSON.stringify(ccList(JSON.stringify(input.cc ?? []))),
     )
     .run();
 
@@ -363,6 +370,12 @@ export interface SendOrPreviewInput {
   what?: string;
   /** 21 Sep 2026: an earlier note's thread token, so this message threads under it in the partner's inbox. */
   replyOnThread?: string | null;
+  /**
+   * THIS IS FINISHED WORK (a DONE email, or a site change's PREVIEW) — so the partners the requester
+   * asked to cc on the card (`work_card.cc_emails`, 0239) are copied, read here from `workCardId`
+   * and nowhere else. Every other notice (RECEIVED, PLAN, QUESTION, STUCK) leaves it unset.
+   */
+  finished?: boolean;
 }
 
 export interface SendOrPreviewOutcome {
@@ -390,11 +403,14 @@ export interface SendOrPreviewOutcome {
  */
 export async function sendOrPreview(env: Env, input: SendOrPreviewInput): Promise<SendOrPreviewOutcome> {
   const to = input.to.trim().toLowerCase();
+  // THE CC, READ IN ONE PLACE (0239): finished work only, partners only, never the recipient.
+  const cc = input.finished ? (await ccOfCard(env, input.workCardId)).filter((a) => a !== to) : [];
   const lane = previewFirstFor({ recipient: to, cardAsked: input.cardAsked ?? null });
 
   if (!lane.previewFirst) {
     const out = await sendPartnerEmail(env, {
       to,
+      ...(cc.length ? { cc } : {}),
       email: input.email,
       objectType: input.objectType,
       objectId: input.objectId,
@@ -429,6 +445,7 @@ export async function sendOrPreview(env: Env, input: SendOrPreviewInput): Promis
     workCardId: input.workCardId ?? null,
     cardKind: input.cardKind ?? null,
     firmScope: input.firmScope,
+    cc,
   });
 
   return {
@@ -661,8 +678,11 @@ export async function decidePreview(
 async function sendApproved(env: Env, row: PreviewApprovalRow): Promise<EmailSendResult> {
   const marker: ApprovedSendMarker = { approvalId: row.id, recipient: row.recipient };
   const approvedEnv = { ...env, [APPROVED_SEND_ENV_KEY]: marker } as Env;
+  // 0239: the cc frozen on the row when it was filed; partners only (ccList), never the recipient.
+  const cc = ccList(row.cc_emails).filter((a) => a !== row.recipient.trim().toLowerCase());
   const payload = {
     to: row.recipient,
+    ...(cc.length ? { cc } : {}),
     subject: row.subject,
     text: row.body_text,
     ...(row.body_html ? { html: row.body_html } : {}),

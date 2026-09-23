@@ -1,3 +1,4 @@
+import { recordCcFrom } from "./ccPartners";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { mintThreadToken, threadHeaders, threadTokensIn, type EmailThreadRow } from "../../shared/email/thread";
@@ -330,6 +331,10 @@ export async function steerFromReply(
         assigned_from_card_id: string | null;
         firm_scope: string;
       }>();
+
+    // "CC SCOOTER" IN A REPLY (0239): recorded from the authenticated sender, whatever the state;
+    // `recordCcFrom` refuses anyone but the requesting partner and names non-partners it refused.
+    if (cardRow && partner) await recordCcFrom(env, cardRow.id, written, partner.email);
 
     if (cardRow && partner && cardRow.state === "BLOCKED") {
       const asked = (cardRow.requested_by_email ?? "").trim().toLowerCase();

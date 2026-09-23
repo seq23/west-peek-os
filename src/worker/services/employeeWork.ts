@@ -282,7 +282,8 @@ export async function assignCard(
       prompt: card.prompt ?? undefined,
     },
   );
-  await env.WP_OS_DB.prepare("UPDATE work_card SET requested_by_email = ?2, assigned_from_card_id = ?3 WHERE id = ?1")
+  // 0239: the requester's cc travels with the work, like the requester does.
+  await env.WP_OS_DB.prepare("UPDATE work_card SET requested_by_email = ?2, assigned_from_card_id = ?3, cc_emails = COALESCE((SELECT cc_emails FROM work_card WHERE id = ?3), '[]') WHERE id = ?1")
     .bind(created.id, card.requested_by_email ?? null, card.id)
     .run();
   /*
@@ -418,6 +419,7 @@ export async function handOver(
       firmScope: card.firm_scope,
       cardKind: card.kind ?? null,
       workCardId: card.id,
+      finished: true, // 0239: copies the partners the requester asked to cc
       cardAsked: card.preview_first === 1 ? true : card.preview_first === 0 ? false : null,
       tickedByFirmUserId: card.preview_owner_id ?? null,
       requestedByEmail: card.requested_by_email ?? null,

@@ -1,3 +1,4 @@
+import { recordCcFrom } from "./ccPartners";
 import { z } from "zod";
 import type { Env } from "../env";
 import { artifactAskFromWords } from "../../shared/artifacts/artifact";
@@ -1601,6 +1602,8 @@ export async function handleAddWorkCardNote(ctx: RouteContext): Promise<Response
   )
     .bind(id, card.id, ctx.identity!.id, text)
     .run();
+  // "CC SCOOTER" IN A NOTE (0239): the signed-in partner's own address, never one typed in the note.
+  const cc = await recordCcFrom(ctx.env, card.id, text, partnerByFirmUserId(ctx.identity!.id)?.email ?? null);
 
   await appendEvent(ctx.env, {
     eventType: "work_card.note_left",
@@ -1611,7 +1614,7 @@ export async function handleAddWorkCardNote(ctx: RouteContext): Promise<Response
     payload: { note_id: id },
   });
 
-  return json({ id, waiting: true }, { status: 201 });
+  return json({ id, waiting: true, ...(cc.ack ? { cc: cc.ack } : {}) }, { status: 201 });
 }
 
 /** What has been said on this card, and what came back. */

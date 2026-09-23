@@ -1027,6 +1027,7 @@ export async function runProductionsCard(
     objectType: "work_card",
     objectId: card.id,
     workCardId: card.id,
+    finished: true, // 0239: copies the partners the requester asked to cc
     cardKind: card.kind ?? null,
     cardAsked: card.preview_first === 1 ? true : card.preview_first === 0 ? false : null,
     tickedByFirmUserId: card.preview_owner_id ?? null,

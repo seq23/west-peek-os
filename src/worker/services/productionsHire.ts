@@ -859,6 +859,7 @@ export async function runHireSearchCard(
     // before he opens his inbox. See services/emailThread.ts and migration 0180.
     cardKind: HIRE_CARD_KIND,
     workCardId: card.id,
+    finished: true, // 0239: copies the partners the requester asked to cc
     cardAsked: card.preview_first === 1 ? true : card.preview_first === 0 ? false : null,
     // WHOSE PREVIEW IT BECOMES, if it becomes one: whoever ticked the box, else whoever asked for
     // the work by email, else her. A weekly scheduled card ticks nothing and asks nobody.

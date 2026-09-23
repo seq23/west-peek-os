@@ -1,3 +1,4 @@
+import { ccAck, ccAsksIn, isOnlyACc, resolveCc } from "../../shared/work/ccPartners";
 import type { Env } from "../env";
 import { json, type RouteContext } from "../router";
 import { appendEvent } from "../events";
@@ -229,6 +230,8 @@ async function tellRequester(
       requestedByEmail: to,
       what: card.title,
       replyOnThread: onThread,
+      // 0239: DONE and PREVIEW copy the partners the requester asked to cc; nothing else does.
+      finished: notice.kind === "DONE" || notice.kind === "PREVIEW",
     });
   } catch (err) {
     out = { sent: false, reason: err instanceof Error ? err.message : String(err) };
@@ -1195,6 +1198,16 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
       await ack(`Kept, not acted on: only ${requester?.fullName ?? "the partner who asked"} steers this card.`);
       continue;
     }
+    /*
+     * "CC SCOOTER" (0239). Recorded when the note arrived (`recordCcFrom`, at the door it came
+     * through); acknowledged here in the same words. A note that says nothing BUT the cc is not an
+     * answer for the next phase and is not carried as one.
+     */
+    const ccSaid = ccAck(resolveCc(ccAsksIn(n.body), requester?.email ?? null), true, requester?.firstName ?? null);
+    if (ccSaid && isOnlyACc(n.body)) {
+      await ack(ccSaid);
+      continue;
+    }
     if (!held && readApprovalReply(n.body).kind === "REFUSED") {
       await ack("Held: nothing is built or landed until you say otherwise.");
       held = n.body;
@@ -1207,7 +1220,7 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
       await appendFinding(env, card.id, `${card.requested_by_email ?? "The partner"} asked for a preview first ("${n.body.slice(0, 40)}").`);
       continue;
     }
-    await ack("Carried into the next phase as your answer.");
+    await ack(`Carried into the next phase as your answer.${ccSaid ? ` ${ccSaid}` : ""}`);
     await update(env, card.id, { answers_json: JSON.stringify([...list(row.answers_json), n.body.slice(0, 2000)]) });
   }
   return held;

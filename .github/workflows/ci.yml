@@ -529,6 +529,10 @@ jobs:
       # Nothing lands a web property change without a recorded plan approval AND a recorded green check — Worker, Mac script, row.
       - name: No land without approval and green
         run: npm run validate:no-land-without-approval
+      # 0239 (23 Sep 2026): "cc Scooter" copies a partner on finished work — partners only, only
+      # from the partner who asked, and a cc is held to everything a To already is.
+      - name: A cc reaches only a partner, only on the requester's word
+        run: npm run validate:cc-partners-only
       # 22 Sep 2026: Porter declared a named stop for a Cloudflare secret that sits in this repo's own
       # vault, and his BUILD report claimed it had set two plain variables it had never touched.
       - name: Only the script sets delivery config, and only on the allow-list
