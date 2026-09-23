@@ -184,6 +184,36 @@ describe("the door reads a Drive folder and a property", () => {
     expect(driveFolderLinks("a https://drive.google.com/drive/u/0/folders/1AbCdEfGhIjKlMnOp. and https://drive.google.com/open?id=1ZyXwVuTsRqPoNmLk").map((l) => l.id)).toEqual(["1AbCdEfGhIjKlMnOp", "1ZyXwVuTsRqPoNmLk"]);
   });
 
+  it("the site she ASKED about wins; an email address or a signature never picks the site (23 Sep 2026)", () => {
+    const folder = `https://drive.google.com/drive/folders/${FOLDER}`;
+    // Her real shape: a community redesign, sent from and signed with the ventures address.
+    const signed = parseWebPropertyAsk(
+      "Community site redesign",
+      `Porter, everything for the community site redesign is in ${folder}. Start with the README.\n\nSequoia Taylor\nsequoia@westpeek.ventures\nwww.westpeek.ventures`,
+    );
+    expect(signed?.property_host, "a signature's ventures address routed a community redesign").toBe("joinwestpeek.com");
+    expect(signed?.site).toBe("sites/community");
+    expect(signed?.property_unresolved).toBeFalsy();
+    // The agency is West Peek Productions.
+    expect(parseWebPropertyAsk("x", `the agency site needs this: ${folder} — reply to sequoia@westpeek.ventures`)?.site).toBe("sites/productions");
+    // A site address she WROTE (no site named in words) still names it; one inside an email address never does.
+    expect(parseWebPropertyAsk("x", `update joinwestpeek.com from ${folder}`)?.site).toBe("sites/community");
+    const mailboxOnly = parseWebPropertyAsk("x", `${folder} — questions to sequoia@westpeek.ventures`);
+    expect(mailboxOnly?.property_host, "a mailbox named a site").toBeNull();
+    // Two sites asked for is a real ambiguity: unresolved, so the door infers or asks — never a silent pick.
+    const both = parseWebPropertyAsk("x", `update the community site and the agency site from ${folder}`);
+    expect(both?.property_host).toBeNull();
+    expect(both?.property_unresolved).toBe(true);
+  });
+
+  it("\"preview first\" in the opening email is read at the door, so she never has to say it twice", () => {
+    const folder = `https://drive.google.com/drive/folders/${FOLDER}`;
+    for (const words of ["send me a preview first", "Preview first please", "I want to see it before it goes live", "email me a preview link"]) {
+      expect(parseWebPropertyAsk("x", `community site: ${folder}. ${words}.`)?.preview_first, words).toBeTruthy();
+    }
+    expect(parseWebPropertyAsk("x", `community site: ${folder}.`)?.preview_first).toBeNull();
+  });
+
   it("a folder with no property stays an ordinary assignment, with the link recorded", async () => {
     const id = await openAssignmentCard(env, { subject: "look at this", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: `here: https://drive.google.com/drive/folders/${FOLDER}x\nthoughts?`, limits: EMAILED_TASK_LIMITS, emlKey: null });
     const c = await card(id);
@@ -192,6 +222,17 @@ describe("the door reads a Drive folder and a property", () => {
     expect(c.state).toBe("OPEN");
     // Out of the sweep's way for the rest of the file: this file measures Porter's card.
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
+  });
+});
+
+describe("an opening email that asks for a preview first", () => {
+  it("opens Porter's row with preview_only = 1 — the same gate a \"preview\" reply sets", async () => {
+    const id = await openAssignmentCard(env, { subject: "Community site redesign", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: `Porter, the community site redesign is all in https://drive.google.com/drive/folders/${FOLDER}. Send me a preview first.\n\nsequoia@westpeek.ventures`, limits: EMAILED_TASK_LIMITS, emlKey: null });
+    const porterId = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(id)).description))![1]!;
+    const row = await readWebPropertyChange(env, porterId);
+    expect(row?.property_host, "routed by the signature again").toBe("joinwestpeek.com");
+    expect(row?.preview_only).toBe(1);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(porterId).run();
   });
 });
 

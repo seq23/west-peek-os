@@ -80,6 +80,8 @@ export interface WebPropertyAsk {
   addressee?: string | null;
   /** 21 Sep 2026: "the site" with no host named — the property is unresolved; the door infers it or asks. */
   property_unresolved?: boolean;
+  /** 23 Sep 2026: the preview request in the partner's OWN request text ("preview first", …), or null. */
+  preview_first?: string | null;
 }
 
 const FOLDER_LINK = /https?:\/\/drive\.google\.com\/(?:drive\/(?:u\/\d+\/)?(?:mobile\/)?folders\/|open\?id=)([A-Za-z0-9_-]{10,})[^\s>)"']*/i;
@@ -101,10 +103,39 @@ export function driveFolderLinks(text: string): Array<{ id: string; url: string 
 
 /** Which property the text names, or null. Host first (exact), then the plain words. */
 export function propertyIn(text: string): WebProperty | null {
-  const lower = text.toLowerCase();
-  for (const p of WEB_PROPERTIES) if (lower.includes(p.host)) return p;
-  for (const p of WEB_PROPERTIES) for (const w of p.words) if (lower.includes(w)) return p;
-  return null;
+  const named = propertiesIn(text);
+  return named.length === 1 ? named[0]! : null;
+}
+
+/**
+ * THE SITE SHE ASKED ABOUT, NOT THE FIRST ADDRESS IN THE EMAIL (23 Sep 2026).
+ *
+ * #144 took the first host string anywhere in the email, checking ventures first, so
+ * "sequoia@westpeek.ventures" in a signature or a "reply to" line sent a community-site redesign
+ * to the ventures site. The three sites share one repo; the site is the folder that gets changed,
+ * so reading it wrong changes the wrong site. Now, in order:
+ *   1. what she ASKED FOR: "the community site", "the agency site", "the ventures site" —
+ *      the words naming a site as the thing to change;
+ *   2. only if no site is named that way, a site ADDRESS she wrote (joinwestpeek.com) — never
+ *      one inside an email address, which names a mailbox;
+ *   3. otherwise nothing: the door infers from her last site card or asks.
+ * Returns every property at the winning level; more than one there is a genuine ambiguity.
+ */
+export function propertiesIn(text: string): WebProperty[] {
+  const lower = text.toLowerCase().replace(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/g, " ");
+  const asked = WEB_PROPERTIES.filter((p) => p.words.some((w) => lower.includes(w)));
+  if (asked.length) return asked;
+  return WEB_PROPERTIES.filter((p) => lower.includes(p.host));
+}
+
+/**
+ * "Preview first" in the request itself (23 Sep 2026). The preview gate existed, but only a REPLY
+ * of "preview" to the plan email set it — the opening email could not ask for it, so a partner who
+ * always wants to see the site first had to say so twice.
+ */
+const PREVIEW_FIRST = /\b(preview (?:it )?first|(?:send|show|email) me a preview|preview link|preview before|see a preview|see it before it (?:goes live|lands|ships))\b/i;
+export function previewFirstIn(text: string): string | null {
+  return PREVIEW_FIRST.exec(text)?.[0] ?? null;
 }
 
 /**
@@ -119,10 +150,11 @@ export function parseWebPropertyAsk(subject: string, body: string): WebPropertyA
   const folder = FOLDER_LINK.exec(written);
   const file = FILE_LINK.exec(written);
   const property = propertyIn(written);
+  const severalNamed = propertiesIn(written).length > 1;
   // The greeting is the BODY's first line; the subject sits above it in `text`.
   const addressee = addresseeIn(writtenPart(body.replace(/\r/g, "")));
   // "Hey Porter — a spot on the site": addressed to Porter, a property named without its host.
-  const unresolved = !property && addressee === "Porter" && THE_SITE.test(written);
+  const unresolved = (!property && addressee === "Porter" && THE_SITE.test(written)) || severalNamed;
   if (!folder && !file && !property && !unresolved) return null;
   return {
     drive_folder_id: folder?.[1] ?? null,
@@ -136,6 +168,7 @@ export function parseWebPropertyAsk(subject: string, body: string): WebPropertyA
     force: forcePhraseIn(written),
     addressee,
     property_unresolved: unresolved,
+    preview_first: previewFirstIn(written),
   };
 }
 

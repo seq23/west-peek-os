@@ -337,15 +337,18 @@ export async function openWebPropertyChange(
    * `validate:no-land-without-approval` holds it to that.
    */
   await env.WP_OS_DB.prepare(
-    `INSERT INTO web_property_change (work_card_id, target_repo, property_host, drive_folder_id, drive_folder_url, ask, firm_scope, pre_approved_phrase, force_phrase)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+    `INSERT INTO web_property_change (work_card_id, target_repo, property_host, drive_folder_id, drive_folder_url, ask, firm_scope, pre_approved_phrase, force_phrase, preview_only)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
      ON CONFLICT (work_card_id) DO UPDATE SET
        target_repo = excluded.target_repo, property_host = excluded.property_host,
        drive_folder_id = excluded.drive_folder_id, drive_folder_url = excluded.drive_folder_url,
        ask = excluded.ask, pre_approved_phrase = excluded.pre_approved_phrase, force_phrase = excluded.force_phrase,
+       preview_only = MAX(web_property_change.preview_only, excluded.preview_only),
        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
   )
-    .bind(input.cardId, input.ask.target_repo ?? UNRESOLVED_REPO, input.ask.property_host, input.ask.drive_folder_id, input.ask.drive_folder_url, input.ask.ask, input.firmScope, input.ask.pre_approval ?? null, input.ask.force ?? null)
+    // preview_only from the request itself ("preview first"): the same flag a "preview" reply sets,
+    // so the change stops at a preview link and asks before it lands. Never cleared by a re-read.
+    .bind(input.cardId, input.ask.target_repo ?? UNRESOLVED_REPO, input.ask.property_host, input.ask.drive_folder_id, input.ask.drive_folder_url, input.ask.ask, input.firmScope, input.ask.pre_approval ?? null, input.ask.force ?? null, input.ask.preview_first ? 1 : 0)
     .run();
   // The readable request, the specification Porter reads first (0221); and, when "the site" was
   // inferred from a recent card, where the assumption came from (0222).
