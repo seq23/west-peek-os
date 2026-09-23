@@ -401,10 +401,21 @@ export interface SendOrPreviewOutcome {
  * a sentence in a prompt. A partner recipient sends normally — which is exactly what keeps Walker's
  * Monday hire search landing in Scooter's inbox on Monday with nothing in between.
  */
-export async function sendOrPreview(env: Env, input: SendOrPreviewInput): Promise<SendOrPreviewOutcome> {
+/**
+ * WHO AN EMPLOYEE'S EMAIL GOES TO — THE ONE PLACE THE RECIPIENT LIST IS COMPUTED (To + Cc). Every
+ * notice about a card reaches a transport through `sendOrPreview`, which asks this and nothing else;
+ * anything that adds a recipient on a card (0239's cc, a card's secondary owner) adds it here, so no
+ * notice can disagree with another about who hears it. Cc is finished work only, partners only
+ * (`ccList`), never the recipient themselves.
+ */
+export async function recipientsFor(env: Env, input: { to: string; workCardId?: string | null; finished?: boolean }): Promise<{ to: string; cc: string[] }> {
   const to = input.to.trim().toLowerCase();
-  // THE CC, READ IN ONE PLACE (0239): finished work only, partners only, never the recipient.
   const cc = input.finished ? (await ccOfCard(env, input.workCardId)).filter((a) => a !== to) : [];
+  return { to, cc };
+}
+
+export async function sendOrPreview(env: Env, input: SendOrPreviewInput): Promise<SendOrPreviewOutcome> {
+  const { to, cc } = await recipientsFor(env, input);
   const lane = previewFirstFor({ recipient: to, cardAsked: input.cardAsked ?? null });
 
   if (!lane.previewFirst) {

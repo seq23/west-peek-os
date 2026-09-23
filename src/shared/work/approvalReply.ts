@@ -22,12 +22,22 @@ export type ApprovalReading =
   | { kind: "PREVIEW" }
   /** "approved to production" (21 Sep 2026): the named bypass — land a not-ready plan, placeholders and all. Separate and explicit; never plain "approved". */
   | { kind: "FORCED" }
-  | { kind: "REFUSED"; text: string }
+  /**
+   * "publish" AFTER A PREVIEW (owner, 23 Sep 2026, option 3): "attach them or add them to Drive,
+   * reply 'publish', and I'll fill them in and publish without another preview." A landing approval
+   * that binds to a rebuild with the new materials — never to the preview she is looking at, and
+   * never when nothing new arrived. Before a plan is approved it reads like "approved".
+   */
+  | { kind: "PUBLISH" }
+  /** `changes` is true for "changes: …" — after a preview that means "make them and send a new preview"; before the plan it holds. */
+  | { kind: "REFUSED"; text: string; changes?: boolean }
   | { kind: "ANSWERS"; text: string };
 
 export const APPROVAL_WORDS = ["approved", "approve", "yes", "go", "land it", "ok", "okay", "lgtm"] as const;
 export const PREVIEW_WORDS = ["preview", "preview only", "preview first", "preview it"] as const;
 export const FORCE_WORDS = ["approved to production", "approve to production", "force production", "ship it anyway", "land anyway", "land it anyway"] as const;
+export const PUBLISH_WORDS = ["publish", "publish it", "publish now", "publish with them", "fill them in and publish"] as const;
+const CHANGE_STARTS = ["changes:", "change:"] as const;
 const REFUSAL_STARTS = ["no", "not approved", "stop", "changes:", "change:", "don't", "do not"] as const;
 
 /** The first line the person wrote, without a signature, quoted text or punctuation noise. */
@@ -47,9 +57,10 @@ export function readApprovalReply(text: string | null | undefined): ApprovalRead
   if ((FORCE_WORDS as readonly string[]).includes(head)) return { kind: "FORCED" };
   if ((APPROVAL_WORDS as readonly string[]).includes(head)) return { kind: "APPROVED" };
   if ((PREVIEW_WORDS as readonly string[]).includes(head)) return { kind: "PREVIEW" };
+  if ((PUBLISH_WORDS as readonly string[]).includes(head)) return { kind: "PUBLISH" };
   for (const start of REFUSAL_STARTS) {
     if (head === start || head.startsWith(`${start} `) || head.startsWith(`${start},`) || head.startsWith(start + (start.endsWith(":") ? "" : "."))) {
-      return { kind: "REFUSED", text: trimmed };
+      return (CHANGE_STARTS as readonly string[]).includes(start) ? { kind: "REFUSED", text: trimmed, changes: true } : { kind: "REFUSED", text: trimmed };
     }
   }
   if (trimmed.length === 0) return { kind: "REFUSED", text: "" };

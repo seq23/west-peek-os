@@ -1,3 +1,6 @@
+import { isTechnicalBlock } from "../../shared/work/blocks";
+import { porterContext } from "./porterContext";
+import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
 import type { Env } from "../env";
 import { ASSIGNING_PARTNERS } from "../../shared/intake/partnerAuthority";
 import { bulletsFrom, type ExecEmailSection } from "../../shared/email/execEmail";
@@ -154,6 +157,13 @@ export async function replyToRequester(
   detail: string,
   /** The kind and cause this email is; when given, it is sent at most once per card per cause. */
   notice?: { kind: NoticeKind; cause: string },
+  /**
+   * A NOTICE COMPOSED BY ITS KIND (23 Sep 2026): Porter's PLAN and PREVIEW emails are built from data
+   * in `shared/work/porterNotices.ts` — the reply options as the TL;DR, the plan on the card, never
+   * "blocked". Everything else about the send (the lane, the cc, the thread, once per cause) is this
+   * function's, unchanged.
+   */
+  composed?: { what: string; tldr: string; tldrBullets: readonly string[]; sections: ReadonlyArray<{ label: string; bullets: string[] }> } | null,
 ): Promise<{ sent: boolean; to: string | null; reason: string }> {
   const to = (card.requested_by_email ?? "").trim().toLowerCase();
   if (!to) return { sent: false, to: null, reason: "the card was not asked for by email" };
@@ -165,7 +175,10 @@ export async function replyToRequester(
   }
 
   // The card's title is "From sequoia@…: <subject>" at the door; the partner knows who they are.
-  const asked = card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").trim() || card.title;
+  // A web property change reads its PLAIN title and its latest preview (porterContext): never the
+  // brief cut off mid-word, and the preview link on every email once one exists.
+  const porter = card.kind === WEB_PROPERTY_CHANGE_KIND ? await porterContext(env, card.id) : null;
+  const asked = porter?.title ?? (card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").trim() || card.title);
   const finding = bulletsFrom(detail);
   const cardLink = `https://os.joinwestpeek.com/#/work (card ${card.id})`;
   /*
@@ -208,33 +221,50 @@ export async function replyToRequester(
    * `scripts/validate/every-employee-takes-the-lane.mjs` fails the build if a new send path is
    * added that reaches a transport without passing through here.
    */
+  /*
+   * NEVER "BLOCKED" TO A PARTNER (owner, 23 Sep 2026: "it says blocked and i have no idea how to
+   * unblock"). A question is called a question, says what answers it, and puts that first. Shared by
+   * every employee, so every employee's question reads this way.
+   */
+  // STUCK only when the block is a fault on our side (a lane refused, attempts spent, stopped part way)
+  // — the same reading webPropertyChange's noticeFor uses; a question addressed to her is a question.
+  const blockReason = outcome === "BLOCKED" ? (await env.WP_OS_DB.prepare("SELECT block_reason FROM work_card WHERE id = ?1").bind(card.id).first<{ block_reason: string | null }>())?.block_reason ?? null : null;
+  const stuck = outcome === "BLOCKED" && (isTechnicalBlock(blockReason) || ["tried_and_could_not_finish", "stopped_part_way"].includes(blockReason ?? ""));
+  const previewSection = porter?.previewLine ? [{ label: "Current preview", bullets: [porter.previewLine] }] : [];
+  const email = composed
+    ? { employee: who, what: composed.what, tldr: composed.tldr, tldrBullets: [...composed.tldrBullets], sections: composed.sections.map((s) => ({ label: s.label, bullets: [...s.bullets] })), details: null, routedBy }
+    : {
+        employee: who,
+        // A LANE FAULT IS "STUCK", NOT A QUESTION: the reader cannot answer it, and it says so.
+        what: outcome === "DONE" ? `done — ${asked}` : stuck ? `stuck — ${asked}` : `a question — ${asked}`,
+        tldr:
+          outcome === "DONE"
+            ? `Finished what you asked for: ${asked}. Nothing needs deciding unless you want more.`
+            : stuck
+              ? `I'm stuck on ${asked}: something on our side has to be fixed first. What stopped me is below.`
+              : `One question before I go on with ${asked}: reply to this email with your answer and I carry on.`,
+        sections: [
+          { label: "What you asked", bullets: [asked] },
+          outcome === "DONE"
+            ? { label: "What I found", bullets: finding.length ? finding : ["Finished. The findings are on the card."] }
+            : { label: stuck ? "What stopped me" : "What I need from you", bullets: finding.length ? finding : ["One decision from you, and I carry on."] },
+          ...previewSection,
+          ...(missing ? [missing] : []),
+          ...(notes ? [notes] : []),
+          {
+            label: "Your call",
+            bullets:
+              outcome === "DONE"
+                ? ["Nothing, unless you want it taken further — reply and say how.", `Everything done on it is on the card: ${cardLink}`]
+                : ["Reply to this email with your answer, or answer on the card.", `The card: ${cardLink}`],
+          },
+        ],
+        details: detail,
+        routedBy,
+      };
   const out = await sendOrPreview(env, {
     to,
-    email: {
-      employee: who,
-      what: outcome === "DONE" ? `done — ${asked}` : `blocked — ${asked}`,
-      tldr:
-        outcome === "DONE"
-          ? `Finished what you asked for: ${asked}. Nothing needs deciding unless you want more.`
-          : `Blocked on what you asked for: ${asked}. One decision from you unblocks it.`,
-      sections: [
-        { label: "What you asked", bullets: [asked] },
-        outcome === "DONE"
-          ? { label: "What I found", bullets: finding.length ? finding : ["Finished. The findings are on the card."] }
-          : { label: "Where I am stuck", bullets: finding.length ? finding : ["I need a decision from you before I can go on."] },
-        ...(missing ? [missing] : []),
-        ...(notes ? [notes] : []),
-        {
-          label: "Your call",
-          bullets:
-            outcome === "DONE"
-              ? ["Nothing, unless you want it taken further — reply and say how.", `Everything done on it is on the card: ${cardLink}`]
-              : ["Answer the question above by replying to this email, or on the card.", `The card: ${cardLink}`],
-        },
-      ],
-      details: detail,
-      routedBy,
-    },
+    email,
     objectType: "work_card",
     objectId: card.id,
     workCardId: card.id,

@@ -306,7 +306,8 @@ describe("the runner: research judged, the piece written, filed, one email", () 
     expect(blocked!.block_who).toBe("SEQUOIA");
     // The only email is the sweep's BLOCKED reply — a question back to her — never a piece.
     expect(sent).toHaveLength(before + 1);
-    expect(sent[sent.length - 1]!.subject).toMatch(/^Wren: blocked — /);
+    expect(sent[sent.length - 1]!.subject).toMatch(/^Wren: a question — /);
+    expect(sent[sent.length - 1]!.subject, "never \"blocked\" to a partner (23 Sep 2026)").not.toMatch(/blocked/i);
     expect(sent[sent.length - 1]!.text).toMatch(/nothing solid enough to put in front of you/);
     const dlv = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM deliverable WHERE source_type = 'work_card' AND source_id = ?1").bind(out.card!.id).first<{ n: number }>();
     expect(dlv!.n).toBe(0);

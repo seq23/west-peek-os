@@ -256,9 +256,12 @@ export async function announceOutcome(
   // Porter's web property change tells the partner PLAN, PREVIEW, QUESTION or DONE — each once
   // per cause (her rule, 21 Sep 2026). Every other kind keeps its own two emails.
   let notice: { kind: "RECEIVED" | "PLAN" | "PREVIEW" | "QUESTION" | "STUCK" | "DONE"; cause: string } | undefined;
+  // Porter's PLAN and PREVIEW emails are composed from data (shared/work/porterNotices.ts).
+  let composed: Awaited<ReturnType<typeof import("./webPropertyChange").porterNoticeEmail>> = null;
   if (card.kind === WEB_PROPERTY_CHANGE_KIND) {
-    const { noticeFor } = await import("./webPropertyChange");
+    const { noticeFor, porterNoticeEmail } = await import("./webPropertyChange");
     notice = await noticeFor(env, card.id, outcome);
+    composed = await porterNoticeEmail(env, card.id, notice.kind, detail);
   }
   /*
    * A BLOCK ADDRESSED TO A PARTNER REACHES THAT PARTNER BY EMAIL EVEN WHEN THEY NEVER ASKED FOR THE
@@ -307,11 +310,12 @@ export async function announceOutcome(
         who,
         detail,
         notice ?? { kind: "STUCK", cause: `blocked:${card.work_attempts}` },
+        composed,
       );
       return { emailed: reply.sent ? reply.to : null };
     }
   }
-  const reply = await replyToRequester(env, card, outcome, who, detail, notice);
+  const reply = await replyToRequester(env, card, outcome, who, detail, notice, composed);
   return { emailed: reply.sent ? reply.to : null };
 }
 

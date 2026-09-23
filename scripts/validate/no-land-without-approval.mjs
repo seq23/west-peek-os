@@ -79,6 +79,14 @@
  *       for WEB_PROPERTY_CHANGE; WorkDesk renders it; and the "Show me first" switch keeps its own
  *       meaning (`work_card.preview_first`) — it neither reads nor writes preview_only.
  *
+ *  14 · A STALE APPROVAL NEVER LANDS (owner, 23 Sep 2026, migration 0240: a preview at every
+ *       stopping point, and "approval always binds to the latest preview"). `parkPhase`'s LAND branch
+ *       refuses a landing approval older than `preview_emailed_at`, and a "publish" approval with no
+ *       build green after it; the Mac's `landGate` refuses both; 0240's trigger refuses the merge on
+ *       both; `publish_approved_at` is written only by `requestRebuild` under intent PUBLISH, which
+ *       `rebuildIntentFor` reads only from "publish", and only from the requesting partner; and
+ *       `applyUnchanged` withdraws a "publish" when nothing new arrived.
+ *
  * HARD-FAILS ON ZERO: zero gates examined exits 1.
  *
  * `--self-test` plants: the Worker's LAND branch with the approval check removed; with the green
@@ -105,6 +113,7 @@ const MIGRATION_0221 = path.join(ROOT, "migrations", "0221_porter_reads_the_emai
 const MIGRATION_0220 = path.join(ROOT, "migrations", "0220_a_plan_that_is_not_publish_ready_previews_first.sql");
 const MIGRATION_0236 = path.join(ROOT, "migrations", "0236_one_website_job_can_span_several_repos.sql");
 const MIGRATION_0238 = path.join(ROOT, "migrations", "0238_every_site_change_previews_first.sql");
+const MIGRATION_0240 = path.join(ROOT, "migrations", "0240_every_preview_binds_its_approval.sql");
 const BOARD = path.join(ROOT, "src", "worker", "services", "workCards.ts");
 /*
  * THE CARD, NOT THE ROW (23 Sep 2026, the work-card redesign). The collapsed desk row carries only
@@ -153,7 +162,8 @@ export function checkWorker(src) {
     if (!landBranch) violations.push("parkPhase() has no `phase === \"LAND\"` branch — a LAND run would be parked with no gate");
     else {
       if (!/plan_approved_at/.test(landBranch) || !/return\s*\{\s*parked:\s*false/.test(landBranch)) violations.push("parkPhase()'s LAND branch does not refuse without row.plan_approved_at");
-      if (!/check_green_at/.test(landBranch)) violations.push("parkPhase()'s LAND branch does not refuse without row.check_green_at");
+      // The exact refusal, not the word: a later line naming check_green_at (0240's publish check) must not satisfy it.
+      if (!/if \(!row\.check_green_at \|\| row\.check_state !== "GREEN"\) return \{ parked: false/.test(landBranch)) violations.push("parkPhase()'s LAND branch does not refuse without row.check_green_at");
       if (!/pr_url/.test(landBranch)) violations.push("parkPhase()'s LAND branch does not refuse without row.pr_url");
       if (!/needsPreview\(row\)\s*&&\s*!row\.land_approved_at/.test(landBranch)) violations.push("parkPhase()'s LAND branch does not refuse a previewing change without row.land_approved_at — a not-ready plan could land on green");
       if (!/needsPreview\(row\)\s*&&\s*!row\.land_approved_at\s*&&\s*!row\.forced_by/.test(landBranch)) violations.push("parkPhase()'s LAND branch does not name BOTH ways past the preview (land_approved_at OR forced_by) — a named force could not land, or a nameless one could");
@@ -187,10 +197,14 @@ export function checkWorker(src) {
     const landAt = runner.indexOf("land_approved_at: now");
     if (landAt < 0) violations.push("the runner never records land_approved_at — a previewing change could never land");
     else {
-      const before = runner.slice(Math.max(0, landAt - 2600), landAt);
-      if (!/answerSince\(card,\s*row\.preview_emailed_at\)/.test(before)) violations.push("land_approved_at is not read against the preview email's time — an earlier 'approved' (the plan's) would count as the second");
-      if (!/landReading\?\.kind\s*!==\s*"APPROVED"/.test(before)) violations.push("land_approved_at is written without requiring the reply to read APPROVED — 'preview' or 'no' after the preview would land");
-      if (!/fromRequester/.test(before)) violations.push("the second approval is not checked against the requesting partner");
+      // Structural, not a character window (0240 put the decision and rebuild readings in between):
+      // the answer is read since the preview email, nothing re-reads it, and a non-APPROVED reading
+      // returns before the landing approval is written.
+      const readAt = runner.lastIndexOf("const answer = answerSince(card, row.preview_emailed_at);", landAt);
+      const between = readAt >= 0 ? runner.slice(readAt + 10, landAt) : "";
+      if (readAt < 0 || /const answer\s*=/.test(between) || !/if \(landReading\?\.kind !== "APPROVED"\) \{/.test(between)) violations.push("land_approved_at is not read against the preview email's time — an earlier 'approved' (the plan's) would count as the second");
+      if (!/landReading\?\.kind\s*!==\s*"APPROVED"/.test(between)) violations.push("land_approved_at is written without requiring the reply to read APPROVED — 'preview' or 'no' after the preview would land");
+      if (!/const landReading = answer && fromRequester \? readApprovalReply\(answer\) : null;/.test(between)) violations.push("the second approval is not checked against the requesting partner");
     }
   }
   // PRE-APPROVAL: written only at the door's open, from the verified request.
@@ -256,7 +270,8 @@ export function checkScript(src) {
     if (!/plan\??\.approved_at/.test(gate)) violations.push("landGate() does not test plan.approved_at");
     if (!/check_green_at/.test(gate)) violations.push("landGate() does not test pr.check_green_at");
     if (!/check_state\s*!==\s*"GREEN"/.test(gate)) violations.push("landGate() does not require check_state GREEN");
-    if (!/land_approved_at/.test(gate) || !/publish_ready|preview_only/.test(gate)) violations.push("landGate() does not refuse a previewing job without land_approved_at");
+    // The exact refusal, not the word: 0240's stale-approval line also names land_approved_at.
+    if (!/if \(needsPreview && !job\?\.pr\?\.land_approved_at && !job\?\.pr\?\.forced_by\) return \{ ok: false/.test(gate) || !/publish_ready|preview_only/.test(gate)) violations.push("landGate() does not refuse a previewing job without land_approved_at");
     if (!/forced_by/.test(gate)) violations.push("landGate() does not admit a named force — a forced landing would be refused on the Mac, or the Mac would ignore the force record");
   }
   const run = body(src, "export async function run(");
@@ -411,6 +426,39 @@ export function checkMigration0220(sql) {
   return { violations, examined };
 }
 
+/** 14 · A stale approval never lands. */
+export function checkStaleApproval({ worker, script, sql0240 }) {
+  const violations = [];
+  let examined = 0;
+  const park = body(worker, "export async function parkPhase(");
+  const landBranch = park?.match(/if\s*\(phase\s*===\s*"LAND"\)\s*\{([\s\S]*?)\n\s*\}/)?.[1] ?? "";
+  examined += 1;
+  if (!/row\.land_approved_at\s*<\s*row\.preview_emailed_at\)\s*return \{ parked: false/.test(landBranch)) violations.push("parkPhase()'s LAND branch does not refuse a landing approval older than the latest preview — a stale \"approved\" could land a superseded build");
+  if (!/row\.publish_approved_at && \(!row\.check_green_at \|\| row\.check_green_at <= row\.publish_approved_at\)\)\s*return \{ parked: false/.test(landBranch)) violations.push("parkPhase()'s LAND branch does not refuse a \"publish\" approval with no green build after it — the preview she saw would land without the new materials");
+  const gate = body(script, "export function landGate(");
+  examined += 1;
+  if (!gate || !/job\.pr\.land_approved_at < job\.pr\.preview_emailed_at\) return \{ ok: false/.test(gate)) violations.push("the Mac's landGate() does not refuse a landing approval older than the latest preview");
+  if (!gate || !/job\?\.pr\?\.publish_approved_at && !\(job\?\.pr\?\.check_green_at && job\.pr\.check_green_at > job\.pr\.publish_approved_at\)\) return \{ ok: false/.test(gate)) violations.push("the Mac's landGate() does not refuse a \"publish\" approval with no green build after it");
+  const trig = sql0240?.match(/CREATE TRIGGER trg_web_property_change_approval_binds_latest_preview([\s\S]*?)END;/)?.[1];
+  examined += 1;
+  if (!trig) violations.push("0240 has no trg_web_property_change_approval_binds_latest_preview — the row would take a merge on a stale approval");
+  else {
+    if (!/NEW\.land_approved_at < NEW\.preview_emailed_at/.test(trig)) violations.push("the 0240 trigger does not compare the landing approval with the latest preview");
+    if (!/NEW\.check_green_at <= NEW\.publish_approved_at/.test(trig)) violations.push("the 0240 trigger does not require a green build after a \"publish\" approval");
+    if (!/RAISE\(ABORT/.test(trig)) violations.push("the 0240 trigger does not abort");
+  }
+  examined += 1;
+  const writes = [...worker.matchAll(/publish_approved_at:\s*now/g)].length;
+  const rebuild = body(worker, "async function requestRebuild(");
+  if (writes !== 1 || !rebuild || !/if \(intent === "PUBLISH"\) Object\.assign\(patch, \{ land_approved_at: now, land_approved_by: by, publish_approved_at: now/.test(rebuild)) violations.push(`publish_approved_at is written ${writes} time(s); exactly once, in requestRebuild() under intent PUBLISH — anything else is a landing approval nobody gave`);
+  const intentFn = body(worker, "export function rebuildIntentFor(");
+  if (!intentFn || !/if \(r\.kind === "PUBLISH"\) return "PUBLISH";/.test(intentFn)) violations.push("rebuildIntentFor() reads PUBLISH from something other than the reader's \"publish\"");
+  if (!/const intent = landReading\?\.kind === "APPROVED" \|\| !fromRequester \|\| !answer \? null : rebuildIntentFor\(answer\);/.test(worker)) violations.push("the preview wait takes a rebuild (and a \"publish\") from someone other than the requesting partner");
+  const unchanged = body(worker, "async function applyUnchanged(");
+  if (!unchanged || !/if \(wasPublish\) Object\.assign\(patch, \{ land_approved_at: null, land_approved_by: null, publish_approved_at: null/.test(unchanged)) violations.push("applyUnchanged() keeps a \"publish\" approval when nothing new arrived — the old preview would land as if filled in");
+  return { violations, examined };
+}
+
 /** 13 · Preview first on every site change, and one truth for it on the desk. */
 export function checkPreviewDefault({ worker, sql0238, board, desk, badge }) {
   const violations = [];
@@ -499,7 +547,8 @@ async function selfTest() {
   const sql0221 = readSql(MIGRATION_0221);
   const sql0236 = readSql(MIGRATION_0236);
   const pd = { worker, sql0238: readSql(MIGRATION_0238), board: read(BOARD), desk: read(DESK), badge: read(BADGE) };
-  const real = [checkWorker(worker), checkScript(script), checkMigration(sql), checkMigration0220(sql0220), await checkReader(reader), checkDoor(door, parser), checkNotices(reply, sql0221), checkSeveral(worker, script, sql0236), checkPreviewDefault(pd)];
+  const st = { worker, script, sql0240: readSql(MIGRATION_0240) };
+  const real = [checkWorker(worker), checkScript(script), checkMigration(sql), checkMigration0220(sql0220), await checkReader(reader), checkDoor(door, parser), checkNotices(reply, sql0221), checkSeveral(worker, script, sql0236), checkPreviewDefault(pd), checkStaleApproval(st)];
   say(real.every((r) => r.violations.length === 0) && real.reduce((n, r) => n + r.examined, 0) >= 8, `shipped source passes (${real.reduce((n, r) => n + r.examined, 0)} gates): ${real.flatMap((r) => r.violations).join("; ")}`);
 
   const unaskedWithAsks = worker.replace("if (asks.length === 0 && fresh.publish_ready === 1) return proceedWithoutAsking(", "if (fresh.publish_ready === 1) return proceedWithoutAsking(");
@@ -603,14 +652,24 @@ async function selfTest() {
   pdCaught({ desk: pd.desk.replace("const previewOn = c.preview_first === 1;", "const previewOn = c.site_preview_only === 1;") }, /Show me first/, "a switch repointed at the site gate is caught");
   pdCaught({ desk: pd.desk.replace("body: { preview_first: next },", "body: { preview_first: next, preview_only: next },") }, /land bypass/, "a switch that writes preview_only is caught");
 
+  const stCaught = (patch, re, what) => say(checkStaleApproval({ ...st, ...patch }).violations.some((v) => re.test(v)), what);
+  stCaught({ worker: worker.replace("row.land_approved_at < row.preview_emailed_at) return { parked: false", "false) return { parked: false") }, /older than the latest preview/, "a Worker gate that lands a stale approval is caught");
+  stCaught({ worker: worker.replace("if (row.publish_approved_at && (!row.check_green_at || row.check_green_at <= row.publish_approved_at)) return { parked: false", "if (false) return { parked: false") }, /no green build after it/, "a Worker gate that lands a publish with no rebuild is caught");
+  stCaught({ script: script.replace("job.pr.land_approved_at < job.pr.preview_emailed_at) return { ok: false", "false) return { ok: false") }, /Mac's landGate\(\) does not refuse a landing approval older/, "a Mac gate that lands a stale approval is caught");
+  stCaught({ sql0240: st.sql0240.replace("NEW.land_approved_at < NEW.preview_emailed_at", "0") }, /compare the landing approval/, "a trigger blind to stale approvals is caught");
+  stCaught({ sql0240: "" }, /no trg_web_property_change_approval_binds_latest_preview/, "a missing 0240 trigger is caught");
+  stCaught({ worker: worker.replace("if (r.kind === \"PUBLISH\") return \"PUBLISH\";", "if (r.kind === \"ANSWERS\") return \"PUBLISH\";") }, /rebuildIntentFor/, "a publish read from any answer is caught");
+  stCaught({ worker: worker.replace("const intent = landReading?.kind === \"APPROVED\" || !fromRequester || !answer ? null : rebuildIntentFor(answer);", "const intent = landReading?.kind === \"APPROVED\" || !answer ? null : rebuildIntentFor(answer);") }, /someone other than the requesting partner/, "a publish from the other partner is caught");
+  stCaught({ worker: worker.replace("if (wasPublish) Object.assign(patch, { land_approved_at: null, land_approved_by: null, publish_approved_at: null", "if (false) Object.assign(patch, { land_approved_at: null, land_approved_by: null, publish_approved_at: null") }, /applyUnchanged/, "a publish kept when nothing new arrived is caught");
+
   if (failed > 0) process.exit(1);
-  console.log("SELF-TEST PASSED: fifty planted defects are each caught; the shipped source passes.");
+  console.log("SELF-TEST PASSED: fifty-eight planted defects are each caught; the shipped source passes.");
 }
 
 if (process.argv.includes("--self-test")) {
   await selfTest();
 } else {
-  const results = [checkWorker(read(WORKER)), checkScript(read(SCRIPT)), checkMigration(readSql(MIGRATION)), checkMigration0220(readSql(MIGRATION_0220)), await checkReader(await loadTs(READER)), checkDoor(read(DOOR), read(PARSER)), checkNotices(read(REPLY), readSql(MIGRATION_0221)), checkSeveral(read(WORKER), read(SCRIPT), readSql(MIGRATION_0236)), checkPreviewDefault({ worker: read(WORKER), sql0238: existsSync(MIGRATION_0238) ? readSql(MIGRATION_0238) : "", board: read(BOARD), desk: read(DESK), badge: read(BADGE) })];
+  const results = [checkWorker(read(WORKER)), checkScript(read(SCRIPT)), checkMigration(readSql(MIGRATION)), checkMigration0220(readSql(MIGRATION_0220)), await checkReader(await loadTs(READER)), checkDoor(read(DOOR), read(PARSER)), checkNotices(read(REPLY), readSql(MIGRATION_0221)), checkSeveral(read(WORKER), read(SCRIPT), readSql(MIGRATION_0236)), checkPreviewDefault({ worker: read(WORKER), sql0238: existsSync(MIGRATION_0238) ? readSql(MIGRATION_0238) : "", board: read(BOARD), desk: read(DESK), badge: read(BADGE) }), checkStaleApproval({ worker: read(WORKER), script: read(SCRIPT), sql0240: existsSync(MIGRATION_0240) ? readSql(MIGRATION_0240) : "" })];
   const examined = results.reduce((n, r) => n + r.examined, 0);
   const violations = results.flatMap((r) => r.violations);
   if (examined === 0) {
@@ -622,5 +681,5 @@ if (process.argv.includes("--self-test")) {
     for (const v of violations) console.error(`  ✗ ${v}`);
     process.exit(1);
   }
-  console.log(`NO-LAND-WITHOUT-APPROVAL SCAN PASSED: ${examined} gates examined — the Worker refuses to park LAND, the Mac script refuses to run it, and the row refuses DONE, each without a recorded plan approval and a recorded green check; land_on_green is seeded ON; a reply starting with "no" never approves, "preview" never lands, a previewing change needs a second approval after the preview email OR a named force ("approved to production") — never neither — pre-approval comes only from the partner's own verified request, only the requesting partner gives any of them, a job over several repos lands every PR or none, and every site change previews first with the desk showing that gate from its own column.`);
+  console.log(`NO-LAND-WITHOUT-APPROVAL SCAN PASSED: ${examined} gates examined — the Worker refuses to park LAND, the Mac script refuses to run it, and the row refuses DONE, each without a recorded plan approval and a recorded green check; land_on_green is seeded ON; a reply starting with "no" never approves, "preview" never lands, a previewing change needs a second approval after the preview email OR a named force ("approved to production") — never neither — pre-approval comes only from the partner's own verified request, only the requesting partner gives any of them, a job over several repos lands every PR or none, every site change previews first with the desk showing that gate from its own column, and an approval binds to the latest preview — a stale "approved" or a "publish" with no rebuild never lands.`);
 }

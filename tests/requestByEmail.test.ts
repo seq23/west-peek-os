@@ -196,9 +196,12 @@ describe("Sequoia emails a request", () => {
     });
     const last = sent[sent.length - 1]!;
     expect(last.to).toBe("scooter@westpeek.ventures");
-    expect(last.subject).toBe("Wesley: blocked — Find the LP letter");
-    expect(last.text).toMatch(/^\*\*TL;DR:\*\* Blocked on what you asked for/);
-    expect(last.text).toMatch(/\*\*Where I am stuck\*\*\n• Wesley needs something from you/);
+    // NEVER "BLOCKED" TO A PARTNER (owner, 23 Sep 2026): a question is called a question, and the
+    // first line says what answers it.
+    expect(last.subject).toBe("Wesley: a question — Find the LP letter");
+    expect(last.text).toMatch(/^\*\*TL;DR:\*\* One question before I go on with Find the LP letter: reply to this email with your answer and I carry on\./);
+    expect(last.text).toMatch(/\*\*What I need from you\*\*\n• Wesley needs something from you/);
+    expect(`${last.subject}\n${last.text}`.replaceAll("wc_t_blocked", "wc_t"), "the word she could not act on is gone").not.toMatch(/blocked|unblock|stuck/i);
     expect(last.text).toMatch(/Which quarter do you mean\?/);
   });
 
@@ -233,7 +236,8 @@ describe("Sequoia emails a request", () => {
     expect(sent.length, "an email now goes out where none did before").toBe(before + 1);
     const last = sent[sent.length - 1]!;
     expect(last.to, "block_who names Scooter, and Scooter is who hears about it").toBe("scooter@westpeek.ventures");
-    expect(last.subject).toBe("Wesley: blocked — Approve the March newsletter subject line");
+    expect(last.subject).toBe("Wesley: a question — Approve the March newsletter subject line");
+    expect(last.subject).not.toMatch(/blocked/i);
     expect(last.text).toMatch(/Spring is here.*March in three deals/s);
   });
 

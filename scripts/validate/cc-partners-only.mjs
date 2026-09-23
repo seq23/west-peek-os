@@ -113,8 +113,11 @@ export function check(src, all) {
   const approved = body(src.preview, "async function sendApproved(");
   if (!approved || !/ccList\(row\.cc_emails\)/.test(approved)) v.push("sendApproved() reads its cc without ccList");
   // 5 · FINISHED ONLY
+  // recipientsFor() is the ONE place To + Cc are computed; sendOrPreview() asks it and nothing else.
+  const rf = body(src.preview, "export async function recipientsFor(");
   const sop = body(src.preview, "export async function sendOrPreview(");
-  if (!sop || !/const cc = input\.finished \? \(await ccOfCard\(env, input\.workCardId\)\)/.test(sop)) v.push("sendOrPreview() copies the card's cc on something other than finished work");
+  if (!rf || !/const cc = input\.finished \? \(await ccOfCard\(env, input\.workCardId\)\)/.test(rf)) v.push("recipientsFor() copies the card's cc on something other than finished work");
+  else if (!sop || !/const \{ to, cc \} = await recipientsFor\(env, input\);/.test(sop) || /ccOfCard\(/.test(sop)) v.push("sendOrPreview() computes its recipients somewhere other than recipientsFor() — two lists of who hears it");
   else examined += 1;
   return { violations: v, examined };
 }
@@ -141,10 +144,11 @@ async function selfTest() {
   caught({ exec: src.exec.replace("if (strangerCc) {", "if (false) {") }, {}, /refuse a cc/, "a send that takes a stranger's cc is caught");
   caught({ transport: src.transport.replace("...(payload.cc ?? [])", "") }, {}, /count a cc/, "a lane blind to cc is caught");
   caught({ preview: src.preview.replace("const cc = input.finished ? (await ccOfCard(env, input.workCardId))", "const cc = (await ccOfCard(env, input.workCardId))") }, {}, /finished work/, "a cc on every notice is caught");
+  caught({ preview: src.preview.replace("const { to, cc } = await recipientsFor(env, input);", "const to = input.to.trim().toLowerCase(); const cc = await ccOfCard(env, input.workCardId);") }, {}, /two lists of who hears it/, "a second recipient list in sendOrPreview is caught");
   caught({ preview: src.preview.replace("ccList(row.cc_emails)", "JSON.parse(row.cc_emails ?? \"[]\")") }, {}, /sendApproved/, "an approved send reading raw cc is caught");
   caught({ employeeWork: src.employeeWork.replace("cc_emails = COALESCE((SELECT cc_emails FROM work_card WHERE id = ?3), '[]')", "cc_emails = ?4") }, {}, /assignCard/, "a hand-off that invents a cc is caught");
   if (failed > 0) process.exit(1);
-  console.log("SELF-TEST PASSED: nine planted defects are each caught; the shipped source passes.");
+  console.log("SELF-TEST PASSED: ten planted defects are each caught; the shipped source passes.");
 }
 
 if (process.argv.includes("--self-test")) {

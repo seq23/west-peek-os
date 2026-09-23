@@ -111,6 +111,8 @@ export interface LocalJobPayload {
   property_host: string | null;
   /** 23 Sep 2026: the site folders of target_repo this job may change (sitesOf(property_host)); [] when unresolved. */
   sites: string[];
+  /** 23 Sep 2026: the Pages subdomains those sites preview under — the Mac keeps only preview URLs under these. */
+  pages_hosts?: string[];
   drive: { folder_id: string | null; folder_url: string | null };
   ask: string;
   /** From the PLAN phase onward, so BUILD and LAND work from the plan and the partner's answers. */
@@ -122,7 +124,14 @@ export interface LocalJobPayload {
   /** 21 Sep 2026: the files they attached, fetched by the Mac by name through `path` (a Worker route) into the package's attachments dir. */
   attachments: Array<{ id: string; filename: string; media_type: string; bytes: number; path: string }>;
   /** From BUILD onward. */
-  pr: { url: string | null; number: number | null; branch: string | null; check_state: string | null; check_green_at: string | null; preview_url: string | null; land_approved_at: string | null; forced_by: string | null } | null;
+  pr: { url: string | null; number: number | null; branch: string | null; check_state: string | null; check_green_at: string | null; preview_url: string | null; land_approved_at: string | null; forced_by: string | null; preview_emailed_at?: string | null; publish_approved_at?: string | null } | null;
+  /**
+   * 0240: a MATERIALS CHECK before this BUILD — she replied, or pressed "I added missing items". The
+   * Mac re-maps the folder (documents only), reads the card's files, and reports "unchanged" rather
+   * than rebuilding when the set equals `materials_fingerprint`. Absent/false: build as always.
+   */
+  refresh?: boolean;
+  materials_fingerprint?: string | null;
   rules: Record<string, string>;
   /**
    * 23 Sep 2026: ONE JOB OVER SEVERAL REPOS — one entry per repo (migration 0236), in order. Absent
@@ -137,6 +146,8 @@ export interface LocalJobPart {
   property_host: string;
   /** The site folders of this repo the job may change; ["."] is the whole repo. */
   sites: string[];
+  /** The Pages subdomains this repo's sites preview under (23 Sep 2026). */
+  pages_hosts?: string[];
   /** This repo's slice of the request (the whole request when the email did not separate them). */
   ask: string;
   pr: { url: string | null; number: number | null; branch: string | null; check_state: string | null; check_green_at: string | null; preview_url: string | null } | null;
@@ -164,7 +175,14 @@ export interface LocalJobPartReport {
  */
 export interface LocalJobReport {
   phase: WebPropertyChangePhase;
-  status: "ok" | "blocked" | "failed";
+  /**
+   * "unchanged" (0240, BUILD only): the job asked for a materials check (`refresh`), the Mac re-mapped
+   * the folder and read the card's files, and the set is the same one the last build used — so it
+   * built nothing. Written by the SCRIPT, never the model.
+   */
+  status: "ok" | "blocked" | "failed" | "unchanged";
+  /** 0240: the material set this BUILD saw (Drive ids + size + modified time, and the attachments). */
+  materials?: string;
   /** Why it stopped, for a partner. Required for blocked and failed. */
   reason?: string;
   /** PLAN: the plan document, markdown. */
@@ -233,7 +251,8 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
   const phase = String(r.phase ?? "");
   const status = String(r.status ?? "");
   if (!PHASES.has(phase)) return { report: null, problem: `the report names no phase (got "${phase}")` };
-  if (!["ok", "blocked", "failed"].includes(status)) return { report: null, problem: `the report has no status (got "${status}")` };
+  if (!["ok", "blocked", "failed", "unchanged"].includes(status)) return { report: null, problem: `the report has no status (got "${status}")` };
+  if (status === "unchanged" && phase !== "BUILD") return { report: null, problem: `only a BUILD can report "unchanged" (got ${phase})` };
   const strs = (v: unknown): string[] => (Array.isArray(v) ? v.map((x) => String(x).trim()).filter((x) => x.length > 0) : []);
   const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim().length > 0 ? v : undefined);
   const report: LocalJobReport = {
@@ -255,13 +274,16 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
     placeholders: strs(r.placeholders),
     publish_ready: typeof r.publish_ready === "boolean" ? r.publish_ready : strs(r.placeholders).length === 0,
     preview_url: str(r.preview_url),
+    ...(str(r.materials) ? { materials: str(r.materials)!.slice(0, 200) } : {}),
     ...(Array.isArray(r.parts) ? { parts: readPartReports(r.parts) } : {}),
     ...(Array.isArray(r.missing_materials) ? { missing_materials: readMissingMaterials(r.missing_materials) } : {}),
     ...(Array.isArray(r.assets) ? { assets: strs(r.assets) } : {}),
   };
   // A plan naming placeholders is not publish-ready whatever the flag says: the list is the fact.
   if (report.phase === "PLAN" && (report.placeholders?.length ?? 0) > 0) report.publish_ready = false;
-  if (report.status !== "ok" && !report.reason) return { report: null, problem: `a ${report.status} report must say why` };
+  // "unchanged" is the script's own fact — the material set is the same — so its reason is that.
+  if (report.status === "unchanged" && !report.materials) return { report: null, problem: "an unchanged report must carry the material set it compared" };
+  if (report.status !== "ok" && report.status !== "unchanged" && !report.reason) return { report: null, problem: `a ${report.status} report must say why` };
   return { report, problem: null };
 }
 

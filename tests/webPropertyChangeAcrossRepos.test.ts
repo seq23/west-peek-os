@@ -82,7 +82,11 @@ async function porterCardFrom(subject: string, raw: string): Promise<string> {
   return m![1]!;
 }
 
-const blockedTo = (who: string) => sent.filter((m) => m.to === who && /blocked/i.test(m.subject));
+/**
+ * Every email that asks her for something — the plan, a preview, a question — by the stage word in
+ * its subject (23 Sep 2026: the stage in plain words, "blocked" only when he is). RECEIVED is not one.
+ */
+const blockedTo = (who: string) => sent.filter((m) => m.to === who && /: (Plan ready|Preview ready|New preview ready|A question for you|Blocked)$/.test(m.subject));
 
 const TWO_REPOS = "Porter, two things. On the community site, the footer link to the team page 404s — point it at /team. On westpeek live, change the homepage banner to say Fall Summit, 14 Oct.";
 const COMMUNITY_PR = "https://github.com/seq23/join-west-peek-main/pull/301";
@@ -233,8 +237,11 @@ describe("community site + westpeek live in one email, preview first, then land"
     expect((await tickFor(id)).outcome).toBe("BLOCKED");
     const plans = blockedTo(SEQUOIA);
     expect(plans, "one plan email for both repos").toHaveLength(1);
-    expect(plans[0]!.text).toMatch(/## join-west-peek-main/);
-    expect(plans[0]!.text).toMatch(/## westpeek-live/);
+    // One plan email for both sites — the plan itself on the card, the email naming both and saying
+    // they go live together (23 Sep 2026: one screen, the plan on the card).
+    expect(plans[0]!.subject).toMatch(/: Plan ready$/);
+    expect(plans[0]!.text).toMatch(/\*\*2 sites, one job\*\*\n• joinwestpeek\.com, westpeek\.live: one plan, a preview of each, and they go live together\./);
+    expect(plans[0]!.text, "the plan body stays on the card").not.toMatch(/## join-west-peek-main|## westpeek-live/);
     expect((await reply(id, "approved")).answered).toBe(true);
     const next = await tickFor(id);
     expect(next.summary).toMatch(/BUILD queued/);
@@ -313,7 +320,8 @@ describe("community site + westpeek live in one email, preview first, then land"
     expect(held.land_approved_at).toBeNull();
     const previews = blockedTo(SEQUOIA).slice(before);
     expect(previews, "ONE preview email for both repos").toHaveLength(1);
-    expect(previews[0]!.text).toMatch(/PREVIEW READY in 2 repos — one landing for all of them/);
+    expect(previews[0]!.subject).toMatch(/: Preview ready$/);
+    expect(previews[0]!.text).toMatch(/\*\*Preview of 2 sites — they go live together\*\*/);
     expect((await reply(id, "approved")).answered).toBe(true);
     expect((await tickFor(id)).summary).toMatch(/Landing approved after the preview; LAND queued/);
     const row = (await readWebPropertyChange(env, id))!;
@@ -350,11 +358,15 @@ describe("community site + westpeek live in one email, preview first, then land"
     expect(parts.every((p) => p.merge_sha && p.landed_at)).toBe(true);
     const done = await env.WP_OS_DB.prepare("SELECT body_text FROM preview_approval WHERE work_card_id = ?1 ORDER BY created_at DESC").bind(id).first<{ body_text: string }>();
     expect(done, "the finished email is waiting for her").not.toBeNull();
-    expect(done!.body_text).toMatch(/Landed 2 PRs in 2 repos, together/);
-    expect(done!.body_text).toMatch(/join-west-peek-main \(joinwestpeek\.com\): https:\/\/github\.com\/seq23\/join-west-peek-main\/pull\/301 as aaaaaaaaaa/);
-    expect(done!.body_text).toMatch(/westpeek-live \(westpeek\.live\): https:\/\/github\.com\/seq23\/westpeek-live\/pull\/88 as bbbbbbbbbb/);
-    expect(done!.body_text).toMatch(/joinwestpeek\.com\/team → 200/);
-    expect(done!.body_text).toMatch(/banner reads Fall Summit/);
+    // "Live" (23 Sep 2026): the stage in the subject, every site that went live, from each repo's own
+    // curl proof — the PRs, merges and proof text stay on the card.
+    const doneRow = await env.WP_OS_DB.prepare("SELECT subject, body_text FROM preview_approval WHERE work_card_id = ?1 ORDER BY created_at DESC").bind(id).first<{ subject: string; body_text: string }>();
+    expect(doneRow!.subject).toMatch(/: Live$/);
+    expect(done!.body_text).toMatch(/^\*\*TL;DR:\*\* Live: your change is published\./);
+    expect(done!.body_text).toMatch(/\*\*Live now\*\*\n• https:\/\/joinwestpeek\.com\/team\n• https:\/\/westpeek\.live\n/);
+    expect(done!.body_text, "the proof and the PRs stay on the card").not.toMatch(/github\.com|→ 200|as aaaaaaaaaa/);
+    const cardText = String((await card(id)).description);
+    expect(cardText, "…where they are").toMatch(/pull\/301|aaaaaaaaaa|joinwestpeek\.com\/team/);
   });
 });
 
@@ -374,7 +386,7 @@ describe("\"preview first\" across two repos", () => {
       pr_url: "x",
       check_state: "GREEN",
       parts: [
-        { repo: "join-west-peek-main", pr_url: "https://github.com/seq23/join-west-peek-main/pull/302", pr_number: 302, check_state: "GREEN", preview_url: "https://e5f6.join-west-peek-community.pages.dev", proof: "shots/community-390.png" },
+        { repo: "join-west-peek-main", pr_url: "https://github.com/seq23/join-west-peek-main/pull/302", pr_number: 302, branch: "work/wpc-banner12", check_state: "GREEN", preview_url: "https://e5f6a7b8.west-peek-community.pages.dev", proof: "shots/community-390.png" },
         { repo: "westpeek-live", pr_url: "https://github.com/seq23/westpeek-live/pull/89", pr_number: 89, check_state: "GREEN", proof: "shots/live-desktop.png shots/live-390.png" },
       ],
     });
@@ -383,11 +395,13 @@ describe("\"preview first\" across two repos", () => {
     const previews = blockedTo(SEQUOIA).slice(before);
     expect(previews, "ONE preview email for both repos").toHaveLength(1);
     const text = previews[0]!.text;
-    expect(text).toMatch(/PREVIEW READY in 2 repos — one landing for all of them/);
-    expect(text).toMatch(/join-west-peek-main \(joinwestpeek\.com\): look at it here: https:\/\/e5f6\.join-west-peek-community\.pages\.dev\. The PR: https:\/\/github\.com\/seq23\/join-west-peek-main\/pull\/302/);
-    expect(text).toMatch(/westpeek-live \(westpeek\.live\): no preview deployment for this repo — the PR and its screenshots stand in for it\. The PR: https:\/\/github\.com\/seq23\/westpeek-live\/pull\/89/);
-    expect(text).toMatch(/live-390\.png/);
-    expect(text).toMatch(/Reply "approved" to land every PR together/);
+    // ONE link per site: the community site's branch alias under ITS Pages project; westpeek-live has
+    // no preview deployment, so its PR stands in. The four reply options are the TL;DR.
+    expect(text).toMatch(/\*\*Preview of 2 sites — they go live together\*\*\n• Current preview \(built \d{1,2}:\d{2} CT, \*{0,2}0\*{0,2} placeholders\): join-west-peek-main: https:\/\/work-wpc-banner12\.west-peek-community\.pages\.dev · westpeek-live: no preview deployment for this site — the change and its screenshots are on the card\n/);
+    expect(text, "no PR link in her inbox").not.toMatch(/github\.com/);
+    expect(text, "never the per-commit hash").not.toMatch(/e5f6a7b8/);
+    expect(text).toMatch(/^\*\*TL;DR:\*\* Preview ready\. Reply with one of these:\n• \*\*approved\*\*: publish this preview as is/);
+    expect(text, "the proof is on the card, not in her inbox").not.toMatch(/live-390\.png/);
   });
 
   it("one \"approved\" parks ONE LAND over both; a LAND that stops part way records the merge and resumes without landing it twice", async () => {
