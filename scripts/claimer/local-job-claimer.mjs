@@ -90,6 +90,65 @@ export function restartIfRepoMoved(startedHead, currentHead = repoHead(), exit =
   return true;
 }
 
+/**
+ * THE CHECKOUT KEEPS ITSELF CURRENT (23 Sep 2026). `land` run from a worktree fetches but never
+ * moves ~/GitHub/west-peek-os, which is the checkout launchd runs this claimer from — so the HEAD
+ * check above never saw new code until someone pulled by hand (confirmed that afternoon: a manual
+ * pull, then "repo moved … exiting 75"). So, when idle, the claimer fetches origin/main and, ONLY
+ * if its checkout is on main, clean, and a fast-forward behind, runs `git merge --ff-only`; the HEAD
+ * check then restarts it on the new code. A dirty or non-main checkout, or one that has diverged, is
+ * never touched — it is said once in the log, not every minute. `git` is injectable for the tests.
+ */
+function runGit(repoRoot, args) {
+  try {
+    return { ok: true, out: execFileSync("git", ["-C", repoRoot, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 }).trim() };
+  } catch (err) {
+    return { ok: false, out: String(err?.stderr ?? err?.message ?? err).trim() };
+  }
+}
+
+const saidOnce = new Set();
+function onceLog(key, line, log) {
+  if (saidOnce.has(key)) return;
+  saidOnce.add(key);
+  log(line);
+}
+
+export function pullMainIfClean(repoRoot = REPO_ROOT, git = (args) => runGit(repoRoot, args), log = console.log) {
+  const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (!branch.ok) return { updated: false, reason: "no_git" };
+  if (branch.out !== "main") {
+    onceLog(`branch:${branch.out}`, `the checkout at ${repoRoot} is on ${branch.out}, not main; not updating it — new code reaches this claimer only from main`, log);
+    return { updated: false, reason: "not_main" };
+  }
+  const status = git(["status", "--porcelain", "--untracked-files=no"]);
+  if (!status.ok || status.out !== "") {
+    onceLog("dirty", `the checkout at ${repoRoot} has uncommitted changes; not updating it until it is clean`, log);
+    return { updated: false, reason: "dirty" };
+  }
+  const fetched = git(["fetch", "--quiet", "origin", "main"]);
+  if (!fetched.ok) {
+    onceLog("fetch", `could not fetch origin main (${fetched.out.split("\n")[0]}); will try again when idle`, log);
+    return { updated: false, reason: "fetch_failed" };
+  }
+  const head = git(["rev-parse", "HEAD"]);
+  const remote = git(["rev-parse", "origin/main"]);
+  if (!head.ok || !remote.ok) return { updated: false, reason: "no_git" };
+  if (head.out === remote.out) return { updated: false, reason: "current" };
+  const ff = git(["merge-base", "--is-ancestor", "HEAD", "origin/main"]);
+  if (!ff.ok) {
+    onceLog(`diverged:${head.out}`, `the checkout at ${repoRoot} has commits origin/main does not; not updating it — a fast-forward is the only move this claimer makes`, log);
+    return { updated: false, reason: "diverged" };
+  }
+  const merged = git(["merge", "--ff-only", "--quiet", "origin/main"]);
+  if (!merged.ok) {
+    onceLog(`merge:${remote.out}`, `could not fast-forward to ${remote.out.slice(0, 10)} (${merged.out.split("\n")[0]})`, log);
+    return { updated: false, reason: "merge_failed" };
+  }
+  log(`fast-forwarded ${repoRoot} from ${head.out.slice(0, 10)} to ${remote.out.slice(0, 10)}`);
+  return { updated: true, reason: "fast_forwarded" };
+}
+
 const execFileAsync = promisify(execFile);
 const ARGS = new Set(process.argv.slice(2));
 const ONCE = ARGS.has("--once");
@@ -300,6 +359,7 @@ async function main() {
     if (ONCE) return;
     // IDLE: nothing is running, so this is the one safe moment to pick up new code.
     if (!worked) {
+      pullMainIfClean();
       restartIfRepoMoved(STARTED_HEAD);
       await new Promise((r) => setTimeout(r, HEARTBEAT_INTERVAL_S * 1000));
     }
@@ -324,7 +384,32 @@ function selfTest() {
     ["the idle branch of the loop — and only it — checks for new code, against the HEAD recorded at start", () => {
       const src = readFileSync(fileURLToPath(import.meta.url), "utf8");
       const loop = src.slice(src.indexOf("const STARTED_HEAD = repoHead();"), src.indexOf("function selfTest("));
-      return /const STARTED_HEAD = repoHead\(\);/.test(loop) && /if \(!worked\) \{\s*restartIfRepoMoved\(STARTED_HEAD\);/.test(loop) && (loop.match(/restartIfRepoMoved\(/g) ?? []).length === 1;
+      // The pull comes first, so a fast-forward in this idle moment is seen by the HEAD check right after it.
+      return /const STARTED_HEAD = repoHead\(\);/.test(loop) && /if \(!worked\) \{\s*pullMainIfClean\(\);\s*restartIfRepoMoved\(STARTED_HEAD\);/.test(loop) && (loop.match(/restartIfRepoMoved\(/g) ?? []).length === 1 && (loop.match(/pullMainIfClean\(/g) ?? []).length === 1;
+    }],
+    ["idle self-update: only a clean main that is a fast-forward behind is merged; anything else is left alone and said once", () => {
+      const fake = (state) => (args) => {
+        const k = args.join(" ");
+        if (k === "rev-parse --abbrev-ref HEAD") return { ok: true, out: state.branch };
+        if (k.startsWith("status")) return { ok: true, out: state.dirty ? " M x" : "" };
+        if (k.startsWith("fetch")) return { ok: true, out: "" };
+        if (k === "rev-parse HEAD") return { ok: true, out: state.head };
+        if (k === "rev-parse origin/main") return { ok: true, out: state.remote };
+        if (k.startsWith("merge-base")) return { ok: state.ff, out: "" };
+        if (k.startsWith("merge --ff-only")) { state.merged = true; return { ok: true, out: "" }; }
+        return { ok: false, out: k };
+      };
+      const lines = [];
+      const log = (l) => lines.push(l);
+      const clean = { branch: "main", dirty: false, head: "a", remote: "b", ff: true };
+      const dirty = { branch: "main", dirty: true, head: "a", remote: "b", ff: true };
+      const other = { branch: "fix/x", dirty: false, head: "a", remote: "b", ff: true };
+      const diverged = { branch: "main", dirty: false, head: "a", remote: "b", ff: false };
+      const ok = pullMainIfClean("/r", fake(clean), log).updated === true && clean.merged === true;
+      const leftAlone = [dirty, other, diverged].every((st) => pullMainIfClean("/r", fake(st), log).updated === false && !st.merged);
+      const before = lines.length;
+      pullMainIfClean("/r", fake(dirty), log);
+      return ok && leftAlone && lines.length === before;
     }],
     ["launchd restarts the claimer on ANY exit (KeepAlive true), so a restart-for-new-code really restarts", () => {
       const plist = readFileSync(path.join(REPO_ROOT, "deployment", "launchd", "ventures.westpeek.os.local-jobs.plist"), "utf8").replace(/<!--[\s\S]*?-->/g, "");

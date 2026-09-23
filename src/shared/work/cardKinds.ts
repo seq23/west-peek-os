@@ -157,3 +157,13 @@ export function startableByHand(key: string | null | undefined): boolean {
 export function handStartableKinds(): CardKind[] {
   return CARD_KINDS.filter((k) => k.startableByHand);
 }
+
+/**
+ * WHETHER A CARD'S WORK READS WEB PAGES (23 Sep 2026). A page look (`browser_task`) is read back
+ * only by the general employee loop (`employeeWork.ts` historyFor), which runs a plain card — one
+ * with no kind. Every kind in the registry has its own runner that never reads a look, so offering
+ * "Check a page" on, say, a website change asked for work nothing would use.
+ */
+export function readsPages(kind: string | null | undefined): boolean {
+  return !kind;
+}

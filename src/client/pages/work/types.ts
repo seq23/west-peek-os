@@ -101,6 +101,8 @@ export interface WorkCardRow {
   site_publish_ready?: number | null;
   site_ask?: string | null;
   site_check_state?: string | null;
+  /** A website job's Mac runs per phase ("plan 2 · build 1"); null off site cards. */
+  site_tries?: Array<{ phase: string; tries: number }> | null;
   site_forced_by?: string | null;
   site_plan_filed_at?: string | null;
   site_plan_approved_at?: string | null;

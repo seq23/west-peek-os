@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CARD_SOURCES, CARD_STATES, STATE_MEANINGS, stateMeaning, triage } from "@shared/work/workCards";
+import { CARD_SOURCES, CARD_STATES, DISPLAY_CARD_STATES, STATE_MEANINGS, stateMeaning, triage } from "@shared/work/workCards";
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { WORK_CARD_STATES, canTransition, offeredMoves } from "../src/worker/services/workCards";
@@ -50,12 +50,15 @@ describe("what a work card is", () => {
     const files = readdirSync(dir).filter((f) => f.endsWith(".sql"));
     expect(files.length, "no migrations found — the scan would pass over nothing").toBeGreaterThan(100);
     const allSql = files.map((f) => readFileSync(`${dir}${f}`, "utf8")).join("\n");
-    const storedInTheColumn = CARD_STATES.filter((s) => s !== "HELD");
-    expect(storedInTheColumn.length, "HELD must be the only display-only member, or this filter is hiding a real gap").toBe(CARD_STATES.length - 1);
-    for (const state of storedInTheColumn) {
+    // 23 Sep 2026: CARD_STATES is now ONLY what the column stores (value-shapes pins it to the CHECK
+    // list), and HELD lives in DISPLAY_CARD_STATES alone. Stricter than the filter this replaced:
+    // the stored list may not contain HELD at all, and the display list is exactly stored + HELD.
+    expect(CARD_STATES as readonly string[]).not.toContain("HELD");
+    expect([...DISPLAY_CARD_STATES].sort()).toEqual([...CARD_STATES, "HELD"].sort());
+    for (const state of CARD_STATES) {
       expect(allSql, `${state} is not a real work_card state — no migration declares it`).toContain(`'${state}'`);
     }
-    expect(STATE_MEANINGS.map((s) => s.key).sort()).toEqual([...CARD_STATES].sort());
+    expect(STATE_MEANINGS.map((s) => s.key).sort()).toEqual([...DISPLAY_CARD_STATES].sort());
   });
 
   it("HELD is enforced at the row through held_at, not through a state value — a row trigger names it", () => {
