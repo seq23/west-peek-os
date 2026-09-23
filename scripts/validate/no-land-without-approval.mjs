@@ -70,6 +70,15 @@
  *       unless every sibling is green and the approvals are on the parent; its DONE trigger
  *       refuses DONE while any part is unmerged.
  *
+ *  13 · EVERY SITE CHANGE PREVIEWS FIRST, AND THE DESK SHOWS IT (owner, 23 Sep 2026: "we should
+ *       default to preview first for all repo work"). `openWebPropertyChange` binds preview_only to
+ *       the literal 1 — never to the request's phrase — and its upsert can never lower it; migration
+ *       0238 backfills preview_only = 1 on every unmerged row; the board payload
+ *       (`handleWorkByOwner`) serves `web_property_change.preview_only AS site_preview_only`; the
+ *       desk's read-only badge (`sitePreviewBadge`) reads exactly that column and nothing else, only
+ *       for WEB_PROPERTY_CHANGE; WorkDesk renders it; and the "Show me first" switch keeps its own
+ *       meaning (`work_card.preview_first`) — it neither reads nor writes preview_only.
+ *
  * HARD-FAILS ON ZERO: zero gates examined exits 1.
  *
  * `--self-test` plants: the Worker's LAND branch with the approval check removed; with the green
@@ -78,7 +87,7 @@
  * the runner approving without reading the reply; the REFUSED branch that no longer returns; a
  * reader that lets "no" through — and requires each to be caught. The shipped source must pass.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripTsComments } from "./lib/strip-comments.mjs";
@@ -95,12 +104,20 @@ const REPLY = path.join(ROOT, "src", "worker", "services", "requestReply.ts");
 const MIGRATION_0221 = path.join(ROOT, "migrations", "0221_porter_reads_the_email.sql");
 const MIGRATION_0220 = path.join(ROOT, "migrations", "0220_a_plan_that_is_not_publish_ready_previews_first.sql");
 const MIGRATION_0236 = path.join(ROOT, "migrations", "0236_one_website_job_can_span_several_repos.sql");
+const MIGRATION_0238 = path.join(ROOT, "migrations", "0238_every_site_change_previews_first.sql");
+const BOARD = path.join(ROOT, "src", "worker", "services", "workCards.ts");
+const DESK = path.join(ROOT, "src", "client", "pages", "work", "WorkDesk.tsx");
+const BADGE = path.join(ROOT, "src", "client", "pages", "work", "sitePreviewBadge.ts");
 const read = (p) => stripTsComments(readFileSync(p, "utf8"));
 /** SQL: `--` line comments blanked, so a comment naming a column cannot satisfy or fail the trigger check. */
 function stripSqlComments(sql) {
   return String(sql ?? "").replace(/--[^\n]*/g, "");
 }
 const readSql = (p) => stripSqlComments(readFileSync(p, "utf8"));
+/** 0238 with its statement whitespace collapsed, one clause replaced — for the self-test's plants. */
+function sql0238Fixture(from, to) {
+  return readSql(MIGRATION_0238).replace(/\s+/g, " ").replace(from, to);
+}
 
 function body(src, name) {
   const start = src.indexOf(name);
@@ -388,6 +405,46 @@ export function checkMigration0220(sql) {
   return { violations, examined };
 }
 
+/** 13 · Preview first on every site change, and one truth for it on the desk. */
+export function checkPreviewDefault({ worker, sql0238, board, desk, badge }) {
+  const violations = [];
+  let examined = 0;
+  const opener = body(worker, "export async function openWebPropertyChange(");
+  if (!opener) violations.push("openWebPropertyChange() is gone — nothing writes the preview default");
+  else {
+    examined += 1;
+    const bind = opener.match(/INSERT INTO web_property_change \([^)]*\bpreview_only\)[\s\S]*?\.bind\(([^;]*?)\)\s*\.run\(\)/)?.[1];
+    if (!bind) violations.push("openWebPropertyChange() no longer inserts preview_only — a site change would open without its preview");
+    else {
+      const last = bind.split(",").pop().trim();
+      if (last !== "1") violations.push(`openWebPropertyChange() binds preview_only to \`${last}\`, not the literal 1 — a site change could open without a preview (owner, 23 Sep 2026: preview first for all repo work)`);
+    }
+    if (/preview_first/.test(opener)) violations.push("openWebPropertyChange() reads preview_first — the request's phrase no longer decides the preview; it is always on");
+    if (!/preview_only\s*=\s*MAX\(web_property_change\.preview_only,\s*excluded\.preview_only\)/.test(opener)) violations.push("openWebPropertyChange()'s upsert no longer keeps preview_only at MAX(old, new) — a re-read could clear the preview");
+  }
+  if (!sql0238) violations.push("migration 0238 is missing — site changes already in flight keep preview_only = 0");
+  else {
+    examined += 1;
+    if (!/UPDATE\s+web_property_change\s+SET\s+preview_only\s*=\s*1\b[\s\S]*?WHERE\s+merge_sha\s+IS\s+NULL/.test(sql0238)) violations.push("0238 does not set preview_only = 1 on every unmerged web_property_change row");
+  }
+  examined += 1;
+  if (!/LEFT JOIN web_property_change wpc ON wpc\.work_card_id = wc\.id/.test(board) || !/wpc\.preview_only AS site_preview_only/.test(board)) violations.push("handleWorkByOwner() does not serve web_property_change.preview_only as site_preview_only — the desk cannot show the site's preview gate");
+  const fn = body(badge, "export function sitePreviewBadge(");
+  if (!fn) violations.push("sitePreviewBadge() is gone — the desk shows no site preview gate");
+  else {
+    examined += 1;
+    if (!/card\.site_preview_only\s*===\s*1/.test(fn)) violations.push("sitePreviewBadge() does not read site_preview_only — the badge would not show the site's real gate");
+    if (/preview_first/.test(fn)) violations.push("sitePreviewBadge() reads preview_first — two flags again; the badge must read the site gate only");
+    if (!/card\.kind\s*!==\s*WEB_PROPERTY_CHANGE_KIND\)\s*return null/.test(fn)) violations.push("sitePreviewBadge() is not limited to WEB_PROPERTY_CHANGE cards");
+  }
+  examined += 1;
+  if (!/const sitePreview = sitePreviewBadge\(c\)/.test(desk) || !/\{sitePreview\.text\}/.test(desk)) violations.push("WorkDesk does not render sitePreviewBadge() — the site's preview gate is invisible on the desk");
+  if (!/const previewOn = c\.preview_first === 1;/.test(desk)) violations.push("the desk's \"Show me first\" switch no longer reads work_card.preview_first — its meaning (hold the result for her) changed");
+  const toggle = body(desk, "async function togglePreviewFirst(");
+  if (!toggle || /preview_only/.test(toggle) || !/preview_first:\s*next/.test(toggle)) violations.push("togglePreviewFirst() no longer writes only preview_first — the switch could turn off a site's preview gate, a land bypass nobody named");
+  return { violations, examined };
+}
+
 export async function checkReader(mod) {
   const violations = [];
   let examined = 0;
@@ -432,7 +489,8 @@ async function selfTest() {
   const reply = read(REPLY);
   const sql0221 = readSql(MIGRATION_0221);
   const sql0236 = readSql(MIGRATION_0236);
-  const real = [checkWorker(worker), checkScript(script), checkMigration(sql), checkMigration0220(sql0220), await checkReader(reader), checkDoor(door, parser), checkNotices(reply, sql0221), checkSeveral(worker, script, sql0236)];
+  const pd = { worker, sql0238: readSql(MIGRATION_0238), board: read(BOARD), desk: read(DESK), badge: read(BADGE) };
+  const real = [checkWorker(worker), checkScript(script), checkMigration(sql), checkMigration0220(sql0220), await checkReader(reader), checkDoor(door, parser), checkNotices(reply, sql0221), checkSeveral(worker, script, sql0236), checkPreviewDefault(pd)];
   say(real.every((r) => r.violations.length === 0) && real.reduce((n, r) => n + r.examined, 0) >= 8, `shipped source passes (${real.reduce((n, r) => n + r.examined, 0)} gates): ${real.flatMap((r) => r.violations).join("; ")}`);
 
   const unaskedWithAsks = worker.replace("if (asks.length === 0 && fresh.publish_ready === 1) return proceedWithoutAsking(", "if (fresh.publish_ready === 1) return proceedWithoutAsking(");
@@ -524,14 +582,26 @@ async function selfTest() {
   const noDone = sql0236.replace(/CREATE TRIGGER trg_web_property_change_done_needs_every_part[\s\S]*?END;/, "");
   say(checkSeveral(worker, script, noDone).violations.some((v) => /DONE while a part is unmerged/.test(v)), "a missing every-part DONE trigger is caught");
 
+  const pdCaught = (patch, re, what) => say(checkPreviewDefault({ ...pd, ...patch }).violations.some((v) => re.test(v)), what);
+  pdCaught({ worker: worker.replace("input.ask.force ?? null, 1)", "input.ask.force ?? null, input.ask.preview_first ? 1 : 0)") }, /not the literal 1/, "an opener that previews only on the request's phrase is caught");
+  pdCaught({ worker: worker.replace("preview_only = MAX(web_property_change.preview_only, excluded.preview_only)", "preview_only = excluded.preview_only") }, /MAX\(old, new\)/, "an upsert that can clear the preview is caught");
+  pdCaught({ sql0238: sql0238Fixture("WHERE merge_sha IS NULL", "WHERE phase = 'PLAN'") }, /unmerged/, "a 0238 that misses in-flight rows is caught");
+  pdCaught({ sql0238: "" }, /0238 is missing/, "a missing 0238 is caught");
+  pdCaught({ board: pd.board.replace("wpc.preview_only AS site_preview_only", "wc.preview_first AS site_preview_only") }, /site_preview_only/, "a board that serves preview_first as the site gate is caught");
+  pdCaught({ badge: pd.badge.replace("card.site_preview_only === 1", "card.preview_first === 1") }, /site_preview_only|preview_first/, "a badge that reads preview_first is caught");
+  pdCaught({ badge: pd.badge.replace("if (card.kind !== WEB_PROPERTY_CHANGE_KIND) return null;", "") }, /limited to WEB_PROPERTY_CHANGE/, "a badge shown on every kind is caught");
+  pdCaught({ desk: pd.desk.replace("{sitePreview.text}", "") }, /does not render sitePreviewBadge/, "a desk that never draws the badge is caught");
+  pdCaught({ desk: pd.desk.replace("const previewOn = c.preview_first === 1;", "const previewOn = c.site_preview_only === 1;") }, /Show me first/, "a switch repointed at the site gate is caught");
+  pdCaught({ desk: pd.desk.replace("body: { preview_first: next },", "body: { preview_first: next, preview_only: next },") }, /land bypass/, "a switch that writes preview_only is caught");
+
   if (failed > 0) process.exit(1);
-  console.log("SELF-TEST PASSED: forty planted defects are each caught; the shipped source passes.");
+  console.log("SELF-TEST PASSED: fifty planted defects are each caught; the shipped source passes.");
 }
 
 if (process.argv.includes("--self-test")) {
   await selfTest();
 } else {
-  const results = [checkWorker(read(WORKER)), checkScript(read(SCRIPT)), checkMigration(readSql(MIGRATION)), checkMigration0220(readSql(MIGRATION_0220)), await checkReader(await loadTs(READER)), checkDoor(read(DOOR), read(PARSER)), checkNotices(read(REPLY), readSql(MIGRATION_0221)), checkSeveral(read(WORKER), read(SCRIPT), readSql(MIGRATION_0236))];
+  const results = [checkWorker(read(WORKER)), checkScript(read(SCRIPT)), checkMigration(readSql(MIGRATION)), checkMigration0220(readSql(MIGRATION_0220)), await checkReader(await loadTs(READER)), checkDoor(read(DOOR), read(PARSER)), checkNotices(read(REPLY), readSql(MIGRATION_0221)), checkSeveral(read(WORKER), read(SCRIPT), readSql(MIGRATION_0236)), checkPreviewDefault({ worker: read(WORKER), sql0238: existsSync(MIGRATION_0238) ? readSql(MIGRATION_0238) : "", board: read(BOARD), desk: read(DESK), badge: read(BADGE) })];
   const examined = results.reduce((n, r) => n + r.examined, 0);
   const violations = results.flatMap((r) => r.violations);
   if (examined === 0) {
@@ -543,5 +613,5 @@ if (process.argv.includes("--self-test")) {
     for (const v of violations) console.error(`  ✗ ${v}`);
     process.exit(1);
   }
-  console.log(`NO-LAND-WITHOUT-APPROVAL SCAN PASSED: ${examined} gates examined — the Worker refuses to park LAND, the Mac script refuses to run it, and the row refuses DONE, each without a recorded plan approval and a recorded green check; land_on_green is seeded ON; a reply starting with "no" never approves, "preview" never lands, a previewing change needs a second approval after the preview email OR a named force ("approved to production") — never neither — pre-approval comes only from the partner's own verified request, only the requesting partner gives any of them, and a job over several repos lands every PR or none.`);
+  console.log(`NO-LAND-WITHOUT-APPROVAL SCAN PASSED: ${examined} gates examined — the Worker refuses to park LAND, the Mac script refuses to run it, and the row refuses DONE, each without a recorded plan approval and a recorded green check; land_on_green is seeded ON; a reply starting with "no" never approves, "preview" never lands, a previewing change needs a second approval after the preview email OR a named force ("approved to production") — never neither — pre-approval comes only from the partner's own verified request, only the requesting partner gives any of them, a job over several repos lands every PR or none, and every site change previews first with the desk showing that gate from its own column.`);
 }

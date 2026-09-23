@@ -44,6 +44,8 @@ export interface WorkCardRow {
   requested_by_email?: string | null;
   request_json?: string | null;
   preview_first?: number | null;
+  /** 0238: `web_property_change.preview_only` — the site's own preview gate; NULL off web property cards. */
+  site_preview_only?: number | null;
   result_recipient?: string | null;
   assigned_from_card_id?: string | null;
   /**

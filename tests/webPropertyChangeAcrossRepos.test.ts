@@ -193,7 +193,7 @@ describe("the door reads sites in several repos as ONE job with a part per repo"
   });
 });
 
-describe("community site + westpeek live in one email, land on green", () => {
+describe("community site + westpeek live in one email, preview first, then land", () => {
   let id = "";
 
   it("is ONE Porter card with TWO parts; ONE PLAN run is parked carrying both repos", async () => {
@@ -273,14 +273,19 @@ describe("community site + westpeek live in one email, land on green", () => {
     // The Worker's LAND gate refuses even from a row that claims green overall, naming the red repo.
     const c = await card(id);
     const sweepCard = { id, title: String(c.title), kind: WEB_PROPERTY_CHANGE_KIND, owner_id: "aie_porter", state: "IN_PROGRESS", work_attempts: 0, firm_scope: "west-peek", requested_by_email: SEQUOIA };
-    const refused = await parkPhase(env, sweepCard, { ...row, check_state: "GREEN", check_green_at: "2026-09-23T12:00:00.000Z" }, "LAND", await rulesFor(env, WEB_PROPERTY_CHANGE_KIND));
+    // Preview-first (23 Sep 2026) refuses first; and even with the preview approved, the red repo holds both.
+    const rules = await rulesFor(env, WEB_PROPERTY_CHANGE_KIND);
+    const unpreviewed = await parkPhase(env, sweepCard, { ...row, check_state: "GREEN", check_green_at: "2026-09-23T12:00:00.000Z" }, "LAND", rules);
+    expect(unpreviewed.parked).toBe(false);
+    expect((unpreviewed as { reason: string }).reason).toMatch(/previews first/);
+    const refused = await parkPhase(env, sweepCard, { ...row, check_state: "GREEN", check_green_at: "2026-09-23T12:00:00.000Z", land_approved_at: "2026-09-23T12:05:00.000Z" }, "LAND", rules);
     expect(refused.parked).toBe(false);
     expect((refused as { reason: string }).reason).toMatch(/not every PR is green, so none lands: westpeek-live RED/);
     // And the row: the green repo cannot be recorded merged while its sibling is red.
     await expect(env.WP_OS_DB.prepare("UPDATE web_property_change_part SET merge_sha = 'abc' WHERE work_card_id = ?1 AND repo = 'join-west-peek-main'").bind(id).run()).rejects.toThrow(/all or nothing \(0236\)/);
   });
 
-  it("the next BUILD resumes: the green repo rides along as green; both GREEN → LAND is queued for both at once", async () => {
+  it("the next BUILD resumes: the green repo rides along as green; both GREEN → ONE preview email, nothing parked; her \"approved\" queues LAND for both at once", async () => {
     const again = await tickFor(id);
     expect(again.summary).toMatch(/BUILD queued/);
     const payload = await payloadOf(id);
@@ -297,12 +302,24 @@ describe("community site + westpeek live in one email, land on green", () => {
         { repo: "someone-elses-repo", pr_url: "https://github.com/x/y/pull/1", pr_number: 1, check_state: "GREEN" },
       ],
     });
+    const before = blockedTo(SEQUOIA).length;
     const out = await tickFor(id);
-    expect(out.summary).toMatch(/All 2 PRs are green; landing all of them is queued/);
+    expect(out.outcome, "every site change previews first (23 Sep 2026): green alone lands nothing").toBe("BLOCKED");
+    expect(await liveJob(id), "nothing parked to land").toBeNull();
     expect(await readParts(env, id), "a repo the card never named is never written").toHaveLength(2);
+    const held = (await readWebPropertyChange(env, id))!;
+    expect(held.check_state).toBe("GREEN");
+    expect(held.phase).toBe("BUILD");
+    expect(held.land_approved_at).toBeNull();
+    const previews = blockedTo(SEQUOIA).slice(before);
+    expect(previews, "ONE preview email for both repos").toHaveLength(1);
+    expect(previews[0]!.text).toMatch(/PREVIEW READY in 2 repos — one landing for all of them/);
+    expect((await reply(id, "approved")).answered).toBe(true);
+    expect((await tickFor(id)).summary).toMatch(/Landing approved after the preview; LAND queued/);
     const row = (await readWebPropertyChange(env, id))!;
     expect(row.check_state).toBe("GREEN");
     expect(row.phase).toBe("LAND");
+    expect(row.land_approved_by).toBe("fu_sequoia_taylor");
     const payload2 = await payloadOf(id);
     expect(payload2.phase).toBe("LAND");
     expect(payload2.parts!.map((p) => [p.repo, p.pr?.number, p.pr?.check_state])).toEqual([

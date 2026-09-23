@@ -248,9 +248,15 @@ export async function sendReceived(env: Env, cardId: string, input: { tldr?: str
   const attachments = await attachmentsFor(env, cardId);
   const parts = await readParts(env, cardId);
   const asked = card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").trim() || card.title;
+  // WHAT COMES NEXT, READ FROM THE GATE ITSELF (0238): every site change previews first unless the
+  // request carried the named force, so "the finished result" is only promised when it is true.
+  // (A force phrase acts only beside a pre-approval — `approveAtFiling` is its one reader.)
+  const afterBuild = needsPreview(row) && !(row.pre_approved_phrase && row.force_phrase)
+    ? `the preview link — reply "approved" and it goes live`
+    : "the finished result";
   const next = row.pre_approved_phrase
-    ? `You pre-approved this ("${row.pre_approved_phrase}"), so the next thing you'll get is the finished result${row.publish_ready === 0 ? " — or the preview link first if the package is not publish-ready" : ""}.`
-    : "If any decision is yours to make — brand, copy meaning, legal wording, a public claim, image rights, money — I'll send you the plan with those questions; one word back is enough. If none is, the next thing you'll get is the finished result.";
+    ? `You pre-approved this ("${row.pre_approved_phrase}"), so the next thing you'll get is ${afterBuild}.`
+    : `If any decision is yours to make — brand, copy meaning, legal wording, a public claim, image rights, money — I'll send you the plan with those questions; one word back is enough. If none is, the next thing you'll get is ${afterBuild}.`;
   const assumption = row.property_assumed_from ? `I'm reading "the site" as ${row.property_assumed_from} — reply if not.` : null;
   const unresolved = row.target_repo === UNRESOLVED_REPO ? "You said \"the site\" and I have nothing recent to go on — I'll ask you which one." : null;
   return tellRequester(env, card, { kind: "RECEIVED", cause: "" }, {
@@ -360,9 +366,15 @@ export async function openWebPropertyChange(
        preview_only = MAX(web_property_change.preview_only, excluded.preview_only),
        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
   )
-    // preview_only from the request itself ("preview first"): the same flag a "preview" reply sets,
-    // so the change stops at a preview link and asks before it lands. Never cleared by a re-read.
-    .bind(input.cardId, input.ask.target_repo ?? UNRESOLVED_REPO, input.ask.property_host, input.ask.drive_folder_id, input.ask.drive_folder_url, input.ask.ask, input.firmScope, input.ask.pre_approval ?? null, input.ask.force ?? null, input.ask.preview_first ? 1 : 0)
+    /*
+     * PREVIEW FIRST, ALWAYS (owner, 23 Sep 2026: "we should default to preview first for all repo
+     * work"). preview_only is written 1 on every open, whatever the request said — the request's own
+     * "preview first" phrase is still parsed and kept in request_json, but it no longer decides the
+     * default. The ONLY way past the preview is the named force ("approved to production" →
+     * `recordForce`), which leaves preview_only as it is and records `forced_by`. Never cleared by a
+     * re-read. `validate:no-land-without-approval` holds this bind to the literal 1.
+     */
+    .bind(input.cardId, input.ask.target_repo ?? UNRESOLVED_REPO, input.ask.property_host, input.ask.drive_folder_id, input.ask.drive_folder_url, input.ask.ask, input.firmScope, input.ask.pre_approval ?? null, input.ask.force ?? null, 1)
     .run();
   // The readable request, the specification Porter reads first (0221); and, when "the site" was
   // inferred from a recent card, where the assumption came from (0222).
@@ -723,7 +735,7 @@ export function askBlockText(asks: readonly Ask[], readiness?: { publishReady: b
     ...lines,
     notReady
       ? `Reply "approved" to take every recommendation and build the preview. Reply "approved to production" to skip the preview and land on green with the placeholders as they are — the DONE email will name them and you. Reply "no" or "changes: …" to hold it. Anything else is read as your answers.`
-      : `Reply "approved" to take every recommendation and build. Reply "preview" to see it on a preview link before it lands. Reply "no" or "changes: …" to hold it. Anything else is read as your answers.`,
+      : `Reply "approved" to take every recommendation and build; you'll get a preview link, and it goes live only when you approve that too. Reply "approved to production" to skip the preview and land on green. Reply "no" or "changes: …" to hold it. Anything else is read as your answers.`,
   ].join("\n");
 }
 
@@ -1103,7 +1115,7 @@ async function proceedWithoutAsking(env: Env, card: WebPropertyChangeCard, row: 
   const now = new Date().toISOString();
   const approvedBy = `${PORTER_ID} (no partner decisions in this change; built without asking)`;
   await update(env, card.id, { plan_approved_at: now, plan_approved_by: approvedBy, phase: "BUILD" });
-  await appendFinding(env, card.id, "No partner decisions in this change; built without asking. The plan is publish-ready and every decision was structure, CSS, validators, redirects, assets or build wiring — Porter's to make. It lands on green; the partner hears when it is done.");
+  await appendFinding(env, card.id, `No partner decisions in this change; built without asking. The plan is publish-ready and every decision was structure, CSS, validators, redirects, assets or build wiring — Porter's to make. ${needsPreview(row) && !row.forced_by ? "On green it stops at a preview link; it lands when the partner approves the preview." : "It lands on green; the partner hears when it is done."}`);
   const fresh: WebPropertyChangeRow = { ...row, plan_approved_at: now, plan_approved_by: approvedBy, phase: "BUILD" };
   const rules = await rulesFor(env, WEB_PROPERTY_CHANGE_KIND);
   const parked = await parkPhase(env, card, fresh, "BUILD", rules);
@@ -1134,7 +1146,7 @@ async function approveAtFiling(env: Env, card: WebPropertyChangeCard, row: WebPr
   await appendFinding(env, card.id, `Pre-approved in the request by ${requester?.fullName ?? card.requested_by_email ?? "the partner"} ("${row.pre_approved_phrase}"): every decision is Porter's recommendation, no options offered; the plan is approved as filed.`);
   let fresh: WebPropertyChangeRow = { ...row, decided_json: JSON.stringify(decided), asks_json: "[]", plan_approved_at: now, plan_approved_by: approvedBy, phase: "BUILD" };
   if (row.force_phrase && requester) {
-    await appendFinding(env, card.id, `The same request said "${row.force_phrase}": a plan that is not publish-ready lands anyway, named as forced by ${requester.fullName}.`);
+    await appendFinding(env, card.id, `The same request said "${row.force_phrase}": ${row.publish_ready === 0 ? "a plan that is not publish-ready lands anyway" : "the preview is skipped and it lands on green"}, named as forced by ${requester.fullName}.`);
     if (needsPreview(fresh)) fresh = await recordForce(env, card, fresh, requester.firmUserId);
   }
   // NO EMAIL (her rule, 21 Sep 2026: "I don't see why Scooter should get an email at all until
