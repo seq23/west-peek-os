@@ -1,4 +1,7 @@
 import { defineConfig } from "@playwright/test";
+// Loaded by the runner AND by every worker: no socket to the dev server is ever reused. Why the
+// `connection: close` header this replaced could not do that is in the file.
+import "./e2e/support/one-connection-per-request";
 
 /**
  * E2E against a real local `wrangler dev` server (offline miniflare; no credentials).
@@ -21,11 +24,10 @@ export default defineConfig({
   workers: 1,
   use: {
     baseURL: `http://localhost:${PORT}`,
-    // NO KEEP-ALIVE AGAINST THE DEV SERVER. `wrangler dev` closes idle sockets on its own clock, and
-    // a request reusing one it had just closed died as "socket hang up" (p14 on main, 19 Sep 2026,
-    // 189 others green) — a race in the transport, not a verdict from the Worker. One connection per
-    // request costs nothing here and makes that race impossible.
-    extraHTTPHeaders: { connection: "close" },
+    // NO KEEP-ALIVE AGAINST THE DEV SERVER is enforced by the import at the top of this file, not by
+    // a header. `extraHTTPHeaders: { connection: "close" }` sat here from 19 Sep 2026 and was inert:
+    // Node pooled and reused the socket anyway, and p3 (22 Sep) and p7 (23 Sep) died of the same
+    // "socket hang up" it was meant to end. See e2e/support/one-connection-per-request.ts.
   },
   projects: [{ name: "chromium", use: { browserName: "chromium" } }],
   webServer: {
