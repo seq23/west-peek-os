@@ -18,8 +18,8 @@
 #     merge commit — which has happened here, boss-os PR #16 passed on its head and
 #     went red on the merge — deploys nothing.
 #   · `CI` is the MERGE GATE: typecheck, the vitest suite in four shards, every
-#     boundary validator, the client build. The Playwright journeys run beside it
-#     in `playwright.yml` and this workflow does NOT wait for them — the owner's
+#     boundary validator, the client build. The Playwright journeys run once a month
+#     and on demand in `playwright.yml` and this workflow never waits for them — the owner's
 #     decision of 21 Sep 2026: a commit the gate has proved ships, and a red
 #     journey on main is a named red for the sweep or the next session, never a
 #     reason the deploy sits. `workflows: [CI]` below is that decision as code;

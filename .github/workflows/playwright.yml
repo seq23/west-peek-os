@@ -19,9 +19,13 @@
 # commit, and the earlier commit is contained in it.
 name: Playwright
 
+# ONCE A MONTH AND ON DEMAND (owner's decision, 23 Sep 2026: "annoying and cumbersome ... 1x per
+# month and on demand"). It ran on every push to main: ~20 minutes, 10+ times a day. The 1st of
+# each month at 10:30 UTC (05:30 CT), ahead of the 06:00 CT CI sweep, so a red run is found and
+# fixed that morning. Run it any time from the Actions tab or `gh workflow run playwright.yml`.
 on:
-  push:
-    branches: [main]
+  schedule:
+    - cron: "30 10 1 * *"
   workflow_dispatch:
 
 concurrency:
