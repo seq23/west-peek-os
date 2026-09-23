@@ -66,6 +66,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { CLOUDFLARE_ACCOUNT_ID, classify, proofLine, readRequests } from "./lib/pages-delivery.mjs";
+import { VAULT_INJECTED_VAR, claudeChildEnv, strippedNote } from "../lib/vault-env.mjs";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -311,29 +312,22 @@ async function git(cwd, ...args) {
   return sh("git", args, { cwd });
 }
 
-/**
- * THE ENVIRONMENT `claude` RUNS IN — HER SEAT, NEVER A KEY (21 Sep 2026).
- *
- * The claimer runs under `vault.mjs run --`, which injects the whole West Peek vault into the
- * process — and the vault holds ANTHROPIC_API_KEY for the Worker's paid lane. `claude -p` prefers
- * an API key in its environment over the subscription login, so with the key present every job
- * would bill the API and die with "Credit balance is too low" ("claude.ai connectors are disabled
- * because ANTHROPIC_API_KEY … takes precedence"), which is exactly how a sibling lane's two jobs
- * died at 13:00 CT. Reserved env names are never used (her rule); Claude Code runs on her seat.
- * So the child gets a COPY of the environment with every ANTHROPIC_* and CLAUDE_* auth variable
- * removed. `validate:duty-executor` holds this to the spawn and proves the strip negatively.
+/*
+ * THE ENVIRONMENT `claude` RUNS IN — HER SEAT, NEVER A KEY (21 Sep 2026), AND NOTHING FROM THE VAULT
+ * (23 Sep 2026). `claudeChildEnv` lives in scripts/lib/vault-env.mjs, shared with the seat claimer:
+ * the Mac's own environment minus every ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL / CLAUDE_* auth
+ * variable and minus every name the vault injected (read from the vault, never a list here). The
+ * job log names what was withheld. Drive, land, Pages config and the Worker calls stay on this
+ * script's own process.env. `validate:duty-executor` holds the spawn to it.
  */
-export function claudeChildEnv(base) {
-  const out = {};
-  for (const [k, v] of Object.entries(base ?? {})) {
-    if (/^(ANTHROPIC_|CLAUDE_(API|AUTH|CODE_OAUTH|CODE_USE|OAUTH|TOKEN)|CLAUDE_CODE_API)/i.test(k)) continue;
-    if (k === "ANTHROPIC_API_KEY" || k === "ANTHROPIC_BASE_URL" || k === "ANTHROPIC_AUTH_TOKEN") continue;
-    // THE MODEL NEVER HOLDS THE DRIVE CREDENTIAL (23 Sep 2026): it names assets, the script fetches them.
-    if (k === "GSC_SERVICE_ACCOUNT_JSON") continue;
-    out[k] = v;
-  }
-  return out;
-}
+export { claudeChildEnv };
+
+/*
+ * THE MODEL MAY NOT OPEN THE VAULT ITSELF. It runs as her macOS user, so it could run `vault.mjs`
+ * or read the Keychain with `security`; both are denied on its Bash tool. A deny rule is not a
+ * sandbox (a script it writes could still shell out) — it closes the obvious door, nothing more.
+ */
+const MODEL_DENIED_TOOLS = ["Bash(*vault.mjs*)", "Bash(security:*)", "Bash(*west-peek-os/vault*)"];
 
 /** Run `claude -p` in the worktree with the prompt, killable by the job's signal. */
 function runClaude({ prompt, model, cwd, addDirs, signal, onLine }) {
@@ -343,10 +337,13 @@ function runClaude({ prompt, model, cwd, addDirs, signal, onLine }) {
       "--model", model,
       "--permission-mode", "acceptEdits",
       "--allowedTools", "Bash,Read,Edit,Write,Glob,Grep,WebFetch",
+      "--disallowedTools", ...MODEL_DENIED_TOOLS,
       "--output-format", "json",
       ...addDirs.flatMap((d) => ["--add-dir", d]),
     ];
-    const child = spawn("claude", args, { cwd, stdio: ["pipe", "pipe", "pipe"], env: claudeChildEnv(process.env) });
+    let withheld = [];
+    const child = spawn("claude", args, { cwd, stdio: ["pipe", "pipe", "pipe"], env: claudeChildEnv(process.env, (names) => (withheld = names)) });
+    onLine?.(strippedNote(withheld));
     let out = "";
     let err = "";
     child.stdout.on("data", (d) => {
@@ -356,10 +353,11 @@ function runClaude({ prompt, model, cwd, addDirs, signal, onLine }) {
     child.stderr.on("data", (d) => (err += String(d)));
     const onAbort = () => child.kill("SIGKILL");
     signal?.addEventListener("abort", onAbort, { once: true });
-    child.on("error", (e) => resolve({ code: -1, out, err: `${err}\n${e.message}` }));
+    child.on("error", (e) => resolve({ code: -1, out, err: `${err}\n${e.message}\n${strippedNote(withheld)}` }));
     child.on("close", (code) => {
       signal?.removeEventListener("abort", onAbort);
-      resolve({ code, out, err });
+      // A failure names what the model was not given, so a missing variable is never a mystery.
+      resolve({ code, out, err: code === 0 ? err : `${err}\n${strippedNote(withheld)}` });
     });
     child.stdin.end(prompt);
   });
@@ -783,7 +781,7 @@ export function driveStepFor(job, phase) {
 
 /**
  * FETCH NAMED ASSETS ON THE MODEL'S BEHALF. The model never holds the Drive credential
- * (`claudeChildEnv` strips it): it names what it needs, and this runs `pull.mjs --fetch` from the
+ * (`claudeChildEnv` removes every vaulted name): it names what it needs, and this runs `pull.mjs --fetch` from the
  * duty script's own environment. A name the manifest does not know, or a file over the ceiling, is
  * refused by pull.mjs by name — and that refusal is the reason reported.
  */
@@ -1062,10 +1060,12 @@ function selfTest() {
     ["a pending check is PENDING", () => checkStateOf([{ state: "SUCCESS" }, { state: "PENDING" }]) === "PENDING"],
     ["no checks is PENDING, not green", () => checkStateOf([]) === "PENDING"],
     ["names are stable and safe", () => namesFor("wc_ABC-123_def").branch === "work/wpc-abc123de" && !namesFor("../x").worktree.includes("..")],
-    ["the claude child never sees an API key or base url from the vault", () => {
-      const e = claudeChildEnv({ PATH: "/bin", ANTHROPIC_API_KEY: "sk-x", ANTHROPIC_BASE_URL: "https://x", ANTHROPIC_AUTH_TOKEN: "t", CLAUDE_CODE_OAUTH_TOKEN: "o", HOME: "/h" });
-      return e.PATH === "/bin" && e.HOME === "/h" && !("ANTHROPIC_API_KEY" in e) && !("ANTHROPIC_BASE_URL" in e) && !("ANTHROPIC_AUTH_TOKEN" in e) && !("CLAUDE_CODE_OAUTH_TOKEN" in e);
+    ["the claude child never sees a vaulted secret or an API key, keeps the ordinary environment, and the NAMES withheld are reported", () => {
+      let told = [];
+      const e = claudeChildEnv({ PATH: "/bin", HOME: "/h", SSH_AUTH_SOCK: "/s", [VAULT_INJECTED_VAR]: "CLOUDFLARE_API_TOKEN,RESEND_API_KEY", CLOUDFLARE_API_TOKEN: "cf", RESEND_API_KEY: "re", ANTHROPIC_API_KEY: "sk-x", ANTHROPIC_BASE_URL: "https://x", ANTHROPIC_AUTH_TOKEN: "t", CLAUDE_CODE_OAUTH_TOKEN: "o" }, (n) => (told = n), new Set());
+      return Object.keys(e).sort().join() === "HOME,PATH,SSH_AUTH_SOCK" && told.join() === "ANTHROPIC_API_KEY,ANTHROPIC_AUTH_TOKEN,ANTHROPIC_BASE_URL,CLAUDE_CODE_OAUTH_TOKEN,CLOUDFLARE_API_TOKEN,RESEND_API_KEY" && !strippedNote(told).includes("cf");
     }],
+    ["the model's Bash may not run vault.mjs or read the Keychain", () => MODEL_DENIED_TOOLS.includes("Bash(*vault.mjs*)") && MODEL_DENIED_TOOLS.includes("Bash(security:*)") && /"--disallowedTools", \.\.\.MODEL_DENIED_TOOLS/.test(readFileSync(fileURLToPath(import.meta.url), "utf8"))],
     ["a pre-approved job tells the model to decide everything", () => renderContext({ phase: "PLAN", card: { id: "wc_1", title: "T" }, ask: "x", pre_approved: "your call" }, { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/j/r.json" }).includes('PRE-APPROVED: the partner wrote "your call"')],
     ["the context names the result path and the ask", () => {
       const t = renderContext({ phase: "PLAN", card: { id: "wc_1", title: "T" }, request: "add a page", rules: { land_on_green: "on" } }, { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/j/result-PLAN.json" });
@@ -1106,7 +1106,7 @@ function selfTest() {
     ["BUILD RE-MAPS the folder (a file added after the plan is seen) and fetches the plan's assets, once each", () => { const d = driveStepFor({ drive: { folder_id: "F" }, plan: { assets: ["logos/sengo.svg", " logos/sengo.svg", "fonts/maax.otf"] } }, "BUILD"); return d.map === true && d.fetch.join("|") === "logos/sengo.svg|fonts/maax.otf"; }],
     ["LAND reads no Drive; no folder means no Drive work at all", () => !driveStepFor({ drive: { folder_id: "F" } }, "LAND").map && !driveStepFor({ drive: {} }, "BUILD").map && driveStepFor({ drive: {} }, "BUILD").fetch.length === 0],
     ["a BUILD asking for more assets is read; an ok result is never a fetch request", () => assetsRequested({ status: "failed", reason: "needs assets", fetch: ["ep1/headshot.jpg", "ep1/headshot.jpg", ""] }).join() === "ep1/headshot.jpg" && assetsRequested({ status: "ok", fetch: ["x"] }).length === 0 && assetsRequested(null).length === 0],
-    ["the model's child never holds the Drive credential", () => !("GSC_SERVICE_ACCOUNT_JSON" in claudeChildEnv({ PATH: "/bin", GSC_SERVICE_ACCOUNT_JSON: "{}" })) && claudeChildEnv({ PATH: "/bin" }).PATH === "/bin"],
+    ["the model's child never holds the Drive credential", () => !("GSC_SERVICE_ACCOUNT_JSON" in claudeChildEnv({ PATH: "/bin", GSC_SERVICE_ACCOUNT_JSON: "{}", [VAULT_INJECTED_VAR]: "GSC_SERVICE_ACCOUNT_JSON" }, undefined, new Set())) && claudeChildEnv({ PATH: "/bin" }, undefined, new Set()).PATH === "/bin"],
     ["a job with a folder tells the model the manifest, that documents are here, how assets arrive, and the PACKAGE TRUTH rule", () => {
       const paths = { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/r", attachments: [] };
       const plan = renderContext({ phase: "PLAN", card: { id: "wc", title: "t" }, drive: { folder_id: "F", folder_url: "https://drive.google.com/drive/folders/F" }, request: "r", rules: {} }, paths);

@@ -9,6 +9,7 @@ import { pageTextOf, urlIsLive } from "../effects/urlLiveness";
 import { createWorkCardInternal } from "./workCards";
 import { sweepIdentity, type SweepCard } from "./workSweep";
 import { sendOrPreview } from "./previewApproval";
+import { withStillMissing } from "./requestMaterials";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
 import { guidanceBlock } from "../../shared/skills/library";
 import { personaPrompt } from "../../shared/registry/aiEmployeePersonas";
@@ -1021,7 +1022,8 @@ export async function runProductionsCard(
    */
   const mail = await sendOrPreview(env, {
     to: SCOOTER_EMAIL,
-    email: { employee: "Walker", what: summary.what, tldr: summary.tldr, sections: summary.sections, details: text },
+    // WHAT IS STILL MISSING (0237): the card's one list, the same section every employee's email carries.
+    email: { employee: "Walker", what: summary.what, tldr: summary.tldr, sections: await withStillMissing(env, card.id, summary.sections), details: text },
     objectType: "work_card",
     objectId: card.id,
     workCardId: card.id,

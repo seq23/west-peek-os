@@ -47,6 +47,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { hostname, homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
+import { VAULT_INJECTED_VAR, claudeChildEnv } from "../lib/vault-env.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -130,16 +132,6 @@ export function extractAnswer(stdout) {
   const blocks = trimmed.split(/\n{2,}/).map((b) => b.trim()).filter((b) => b.length > 0);
   if (blocks.length <= 1) return trimmed;
   return blocks[blocks.length - 1];
-}
-
-/** The environment a seat runs in: every ANTHROPIC_* / CLAUDE_* auth variable removed. */
-export function seatEnv(base) {
-  const out = {};
-  for (const [k, v] of Object.entries(base ?? {})) {
-    if (/^ANTHROPIC_/i.test(k) || /^CLAUDE_(API|AUTH|CODE_OAUTH|OAUTH|TOKEN)/i.test(k)) continue;
-    out[k] = v;
-  }
-  return out;
 }
 
 /** Is a seat's CLI actually on this machine? A seat we cannot run must never be claimed for. */
@@ -239,9 +231,11 @@ async function runOnSeat(seat, prompt) {
       // stdin closed. Both CLIs block for ever on an open stdin with no terminal, which under
       // launchd looks exactly like a hang and is the second of the two traps.
       stdio: ["ignore", "pipe", "pipe"],
-      // HER SEAT, NEVER A KEY (21 Sep 2026): the vault injects ANTHROPIC_API_KEY for the Worker's
-      // paid lane, and `claude -p` would prefer it over the subscription login and bill the API.
-      env: seatEnv(process.env),
+      // HER SEAT, NEVER A KEY, AND NOTHING FROM THE VAULT (23 Sep 2026): the vault injects
+      // ANTHROPIC_API_KEY and OPENAI_API_KEY (either CLI would prefer a key over the subscription
+      // and bill per token) and every other secret besides; the ONE shared claudeChildEnv removes
+      // them (scripts/lib/vault-env.mjs, the same function Porter's jobs use).
+      env: claudeChildEnv(process.env, (names) => names.length && console.log(`seat run: withheld ${names.join(", ")}`)),
     });
     let out = "";
     let err = "";
@@ -391,7 +385,8 @@ function selfTest() {
     ["chatgpt auth mode is on the subscription", () => codexOnSubscription('{"auth_mode":"chatgpt","OPENAI_API_KEY":null}')],
     ["apikey auth mode is refused — it would bill per token", () => !codexOnSubscription('{"auth_mode":"apikey"}')],
     ["unparseable auth.json is refused, not assumed", () => !codexOnSubscription("{{{")],
-    ["the seat never sees the vault's API key", () => { const e = seatEnv({ PATH: "/bin", ANTHROPIC_API_KEY: "sk", CLAUDE_CODE_OAUTH_TOKEN: "o" }); return e.PATH === "/bin" && !("ANTHROPIC_API_KEY" in e) && !("CLAUDE_CODE_OAUTH_TOKEN" in e); }],
+    ["the seat never sees a vaulted key (OPENAI_API_KEY included) and keeps the ordinary environment", () => { const e = claudeChildEnv({ PATH: "/bin", HOME: "/h", [VAULT_INJECTED_VAR]: "ANTHROPIC_API_KEY,OPENAI_API_KEY,CLOUDFLARE_API_TOKEN", ANTHROPIC_API_KEY: "sk", OPENAI_API_KEY: "ok", CLAUDE_CODE_OAUTH_TOKEN: "o", CLOUDFLARE_API_TOKEN: "cf" }, undefined, new Set()); return Object.keys(e).sort().join() === "HOME,PATH"; }],
+    ["the seat spawn goes through the shared claudeChildEnv", () => /env:\s*claudeChildEnv\(process\.env\b/.test(readFileSync(fileURLToPath(import.meta.url), "utf8").split("function runOnSeat")[1]?.split("\n}\n")[0] ?? "")],
   ];
   let failed = 0;
   for (const [name, fn] of cases) {

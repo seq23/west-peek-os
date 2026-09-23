@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import { requestAttachments } from "../effects/mimeAttachments";
-import { readMissingMaterials, type MissingMaterial } from "../../shared/work/missingMaterials";
+import { missingMaterialsSection, readMissingMaterials, type MissingMaterial } from "../../shared/work/missingMaterials";
+import type { ExecEmailSection } from "../../shared/email/execEmail";
 
 /**
  * A CARD'S MATERIALS, FOR EVERY EMPLOYEE (23 Sep 2026, migration 0237).
@@ -69,6 +70,24 @@ export async function materialsForPrompt(env: Env, cardId: string): Promise<stri
 export async function missingFor(env: Env, cardId: string): Promise<MissingMaterial[]> {
   const row = await env.WP_OS_DB.prepare("SELECT missing_materials_json FROM work_card WHERE id = ?1").bind(cardId).first<{ missing_materials_json: string | null }>();
   return readMissingMaterials(row?.missing_materials_json ?? "[]");
+}
+
+/**
+ * THE CARD'S SECTION, FOR ANY EMAIL ABOUT IT — the one list, rendered by the one renderer. Null when
+ * nothing is missing. `replyToRequester` (every ask, preview and generic DONE email) and the kinds
+ * that send their own finished email (blog help, Productions monthly, the Productions hire search)
+ * all read it here, so no email about a card can forget what is still missing.
+ */
+export async function missingSectionFor(env: Env, cardId: string, stage: "ASK" | "STILL"): Promise<ExecEmailSection | null> {
+  return missingMaterialsSection(await missingFor(env, cardId), stage);
+}
+
+/** A finished email's sections with "Still missing" placed before "Your call" (or last). Unchanged when nothing is missing. */
+export async function withStillMissing(env: Env, cardId: string, sections: readonly ExecEmailSection[]): Promise<ExecEmailSection[]> {
+  const missing = await missingSectionFor(env, cardId, "STILL");
+  if (!missing) return [...sections];
+  const at = sections.findIndex((s) => s.label === "Your call");
+  return at < 0 ? [...sections, missing] : [...sections.slice(0, at), missing, ...sections.slice(at)];
 }
 
 /** Replace the card's list with what the latest run found missing ([] clears it). */
