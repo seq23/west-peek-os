@@ -127,7 +127,8 @@ export function checkDutyScript(duty, listNames) {
   const s = duty.stripped;
   if (!/from\s+"\.\/lib\/pages-delivery\.mjs"/.test(s)) v.push("web-property-change.mjs does not import the delivery allow-list — a second list is the two-components-one-list defect");
   if (!/applyPagesEnv\s*\(/.test(s)) v.push("nothing in the duty script calls applyPagesEnv — the step exists but nothing invokes it");
-  if (!/const\s+configLines\s*=\s*await\s+applyPagesEnv\(/.test(s)) v.push("the BUILD phase does not perform the delivery config itself");
+  // TWO BUILD ROADS (23 Sep 2026, 0236): one repo in run(), several repos in runSeveral(). Each performs it.
+  if ((s.match(/const\s+configLines\s*=\s*await\s+applyPagesEnv\(/g) ?? []).length < 2) v.push("a BUILD road (one repo, or several) does not perform the delivery config itself");
   if (!/pages_env_proof:\s*configLines/.test(s)) v.push("the BUILD report does not carry what the script observed about delivery config");
   if (!/proof:\s*\[[^\]]*configLines/.test(s)) v.push("the build proof is not assembled from the script's own observation");
 
@@ -238,6 +239,9 @@ function selfTest() {
 
   const inert = { raw: duty.raw, stripped: duty.stripped.replace("const configLines = await applyPagesEnv(", "const configLines = []; void (") };
   say(checkDutyScript(inert, names).violations.some((x) => /does not perform the delivery config/.test(x)), "a BUILD phase that no longer performs the config is caught");
+  const at = duty.stripped.lastIndexOf("const configLines = await applyPagesEnv(");
+  const inertSeveral = { raw: duty.raw, stripped: `${duty.stripped.slice(0, at)}const configLines = []; void (${duty.stripped.slice(at + "const configLines = await applyPagesEnv(".length)}` };
+  say(checkDutyScript(inertSeveral, names).violations.some((x) => /does not perform the delivery config/.test(x)), "a multi-repo BUILD that no longer performs the config is caught");
 
   const envInPrompt = { raw: duty.raw, stripped: duty.stripped.replace("export function renderContext(job, paths) {", "export function renderContext(job, paths) {\n  const t = process.env.RESEND_API_KEY;") };
   say(checkDutyScript(envInPrompt, names).violations.some((x) => /renderContext reads the environment/.test(x)), "a prompt builder that reads the environment is caught");

@@ -64,6 +64,8 @@ interface ChangeRow {
   requester_notes: string | null;
   requester_notes_by_name: string | null;
   requester_notes_at: string | null;
+  /** 0236: a job over several repos — one PR, check, preview and merge per repo. Empty for one repo. */
+  parts?: Array<{ repo: string; property_host: string; pr_url: string | null; pr_number: number | null; check_state: "PENDING" | "GREEN" | "RED" | null; check_url: string | null; preview_url: string | null; merge_sha: string | null }>;
 }
 
 const PHASES: Array<{ key: ChangeRow["phase"]; label: string }> = [
@@ -192,7 +194,7 @@ export function WebPropertyChangePanel({ cardId, onNavigate, canEdit = false }: 
             </dd>
           </div>
         )}
-        {r.preview_url && (
+        {r.preview_url && !r.parts?.length && (
           <div>
             <dt>Preview</dt>
             <dd><a href={r.preview_url} target="_blank" rel="noopener noreferrer" data-testid={`wpc-preview-${cardId}`}>{r.preview_url}</a></dd>
@@ -223,9 +225,31 @@ export function WebPropertyChangePanel({ cardId, onNavigate, canEdit = false }: 
           </div>
         )}
         <div>
-          <dt>Pull request</dt>
+          <dt>{r.parts?.length ? `Pull requests — ${r.parts.length} repos, landed together` : "Pull request"}</dt>
           <dd data-testid={`wpc-pr-${cardId}`}>
-            {r.pr_url ? (
+            {r.parts?.length ? (
+              <ul className="wpc-list" data-testid={`wpc-parts-${cardId}`}>
+                {r.parts.map((p) => (
+                  <li key={p.repo}>
+                    {p.repo} ({p.property_host}){": "}
+                    {p.pr_url ? <a href={p.pr_url} target="_blank" rel="noopener noreferrer">#{p.pr_number ?? "?"}</a> : "not opened yet"}
+                    {p.pr_url && (
+                      <>
+                        {" · checks "}
+                        <span className={p.check_state === "GREEN" ? "badge badge-ok" : p.check_state === "RED" ? "badge badge-bad" : "badge badge-gate"}>{p.check_state ?? "not run"}</span>
+                      </>
+                    )}
+                    {p.preview_url && (
+                      <>
+                        {" · "}
+                        <a href={p.preview_url} target="_blank" rel="noopener noreferrer">preview</a>
+                      </>
+                    )}
+                    {p.merge_sha && ` · landed ${p.merge_sha.slice(0, 10)}`}
+                  </li>
+                ))}
+              </ul>
+            ) : r.pr_url ? (
               <>
                 <a href={r.pr_url} target="_blank" rel="noopener noreferrer">#{r.pr_number ?? "?"}</a>
                 {" · checks "}

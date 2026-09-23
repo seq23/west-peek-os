@@ -49,6 +49,14 @@ the JOB CONTEXT below. Read it before anything else.
   variable is a false report, whatever the intention behind it.
 - **Stay in the worktree.** Edit only inside `WORKTREE`. Never touch the main checkout, never
   another repo.
+- **One job can span several repos (REPOS in the job context).** When the context lists REPOS,
+  this ONE request covers every repo named there, each with its own SITES and its own part of the
+  request. PLAN writes ONE plan document with a section per repo — one set of `decided`, one set
+  of `asks`, one `publish_ready` for the whole job — because the partner approves once. BUILD is
+  run once per repo: THIS RUN names the one repo you build; change only its worktree, open its PR
+  on its branch, and write `RESULT_PATH` for it alone. The script lands every PR together or none.
+  LAND may add `"parts": [{ "repo": "<repo>", "live_proof": "<what curl saw for its sites>" }]`
+  beside `live_proof`, so the DONE email carries proof per site.
 
 ## Phase PLAN
 

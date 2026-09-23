@@ -123,6 +123,37 @@ export interface LocalJobPayload {
   /** From BUILD onward. */
   pr: { url: string | null; number: number | null; branch: string | null; check_state: string | null; check_green_at: string | null; preview_url: string | null; land_approved_at: string | null; forced_by: string | null } | null;
   rules: Record<string, string>;
+  /**
+   * 23 Sep 2026: ONE JOB OVER SEVERAL REPOS — one entry per repo (migration 0236), in order. Absent
+   * (or fewer than two) for a single-repo job, which runs exactly as before. PLAN writes one plan
+   * over all of them; BUILD opens one PR per repo; LAND lands every PR or none.
+   */
+  parts?: LocalJobPart[] | null;
+}
+
+export interface LocalJobPart {
+  repo: string;
+  property_host: string;
+  /** The site folders of this repo the job may change; ["."] is the whole repo. */
+  sites: string[];
+  /** This repo's slice of the request (the whole request when the email did not separate them). */
+  ask: string;
+  pr: { url: string | null; number: number | null; branch: string | null; check_state: string | null; check_green_at: string | null; preview_url: string | null } | null;
+  merge_sha: string | null;
+}
+
+/** One repo's result inside a multi-repo report. */
+export interface LocalJobPartReport {
+  repo: string;
+  pr_url?: string;
+  pr_number?: number;
+  branch?: string;
+  check_state?: "PENDING" | "GREEN" | "RED";
+  check_url?: string;
+  preview_url?: string;
+  proof?: string;
+  merge_sha?: string;
+  live_proof?: string;
 }
 
 /**
@@ -163,6 +194,8 @@ export interface LocalJobReport {
   live_proof?: string;
   /** Anything the model wants on the card as a finding. */
   notes?: string;
+  /** 23 Sep 2026: a multi-repo job's BUILD or LAND reports each repo here (see LocalJobPart). */
+  parts?: LocalJobPartReport[];
 }
 
 const PHASES = new Set<string>(WEB_PROPERTY_CHANGE_PHASES);
@@ -213,9 +246,35 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
     placeholders: strs(r.placeholders),
     publish_ready: typeof r.publish_ready === "boolean" ? r.publish_ready : strs(r.placeholders).length === 0,
     preview_url: str(r.preview_url),
+    ...(Array.isArray(r.parts) ? { parts: readPartReports(r.parts) } : {}),
   };
   // A plan naming placeholders is not publish-ready whatever the flag says: the list is the fact.
   if (report.phase === "PLAN" && (report.placeholders?.length ?? 0) > 0) report.publish_ready = false;
   if (report.status !== "ok" && !report.reason) return { report: null, problem: `a ${report.status} report must say why` };
   return { report, problem: null };
+}
+
+/** A multi-repo report's parts, read as strictly as the report: a part without a repo is dropped. */
+function readPartReports(v: unknown[]): LocalJobPartReport[] {
+  const str = (x: unknown): string | undefined => (typeof x === "string" && x.trim().length > 0 ? x : undefined);
+  const out: LocalJobPartReport[] = [];
+  for (const raw of v) {
+    if (!raw || typeof raw !== "object") continue;
+    const p = raw as Record<string, unknown>;
+    const repo = str(p.repo);
+    if (!repo) continue;
+    out.push({
+      repo,
+      pr_url: str(p.pr_url),
+      pr_number: typeof p.pr_number === "number" && Number.isFinite(p.pr_number) ? p.pr_number : undefined,
+      branch: str(p.branch),
+      check_state: ["PENDING", "GREEN", "RED"].includes(String(p.check_state)) ? (String(p.check_state) as LocalJobPartReport["check_state"]) : undefined,
+      check_url: str(p.check_url),
+      preview_url: str(p.preview_url),
+      proof: str(p.proof),
+      merge_sha: str(p.merge_sha),
+      live_proof: str(p.live_proof),
+    });
+  }
+  return out;
 }
