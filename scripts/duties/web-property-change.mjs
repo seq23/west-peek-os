@@ -115,6 +115,9 @@ export function landGate(job) {
   // A change that previews first (not publish-ready, or the partner said "preview") needs the SECOND approval.
   const needsPreview = job?.plan?.publish_ready === false || job?.plan?.preview_only === true;
   if (needsPreview && !job?.pr?.land_approved_at && !job?.pr?.forced_by) return { ok: false, why: "this change previews first and the partner has not approved the landing after the preview, nor forced it to production — nothing lands" };
+  // THE APPROVAL BINDS TO THE LATEST PREVIEW (0240): never a stale "approved"; "publish" only a build green after it.
+  if (needsPreview && !job?.pr?.forced_by && job?.pr?.land_approved_at && job?.pr?.preview_emailed_at && job.pr.land_approved_at < job.pr.preview_emailed_at) return { ok: false, why: "the landing approval predates the latest preview — a stale approval never lands" };
+  if (job?.pr?.publish_approved_at && !(job?.pr?.check_green_at && job.pr.check_green_at > job.pr.publish_approved_at)) return { ok: false, why: "\"publish\" was approved but no build with the new materials has gone green since — nothing lands" };
   return { ok: true, why: "approved and green" };
 }
 
@@ -186,19 +189,63 @@ export function readResult(text, phase) {
  * `*.pages.dev` link. Both are read; a repo with neither (a Worker, not Pages) yields null, and the
  * preview email says so and carries the PR and screenshots instead. Pure, so it is self-tested.
  */
-export function previewUrlsFrom(deploymentStatuses, commentBodies) {
-  const urls = new Set();
-  for (const st of Array.isArray(deploymentStatuses) ? deploymentStatuses : []) {
-    const u = String(st?.environment_url ?? "").trim();
-    if (/^https?:\/\//.test(u) && /pages\.dev|preview/i.test(u)) urls.add(u.replace(/\/$/, ""));
+/**
+ * THE PREVIEW LINK, READ STRICTLY (23 Sep 2026). The community PR's preview email carried six URLs
+ * joined with " · " — HTML fragments captured (…pages.dev' and …pages.dev&lt;/a), and the ventures
+ * and productions previews too, because the Pages bot comments on every project the repo builds.
+ * Now: a URL stops at a quote, an angle bracket, an ampersand or whitespace; only hosts under this
+ * job's `pagesHosts` (the site's own Pages subdomain) are kept; duplicates collapse to the origin;
+ * and the BRANCH ALIAS (`work-wpc-….west-peek-community.pages.dev`) wins over a per-commit hash,
+ * because it always shows the latest build of the PR. Pure, so it is self-tested with the real
+ * comment's shape. Workers Builds version URLs (westpeek-live) are read the same strict way.
+ */
+/** Cloudflare Pages' branch alias: lower-case, every run of non-alphanumerics one "-", at most 28 characters. Pure. */
+export function branchAlias(branch) {
+  return String(branch ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 28).replace(/-+$/, "");
+}
+
+export function previewUrlsFrom(deploymentStatuses, commentBodies, pagesHosts = [], branch = "") {
+  const found = [];
+  const add = (raw) => {
+    let u;
+    try {
+      u = new URL(String(raw).trim());
+    } catch {
+      return;
+    }
+    if (!/^https?:$/.test(u.protocol)) return;
+    const host = u.hostname.toLowerCase();
+    const isPages = host.endsWith(".pages.dev");
+    const isWorkerVersion = /^[a-f0-9]{8}-[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev$/.test(host);
+    if (!isPages && !isWorkerVersion) return;
+    if (isPages) {
+      const under = pagesHosts.length === 0 ? host.split(".").length > 3 : pagesHosts.some((h) => host.endsWith(`.${String(h).toLowerCase()}`));
+      if (!under) return;
+    }
+    found.push(`${u.protocol}//${host}`);
+  };
+  const URLS = /https?:\/\/[^\s"'<>&|)\]`]+/gi;
+  for (const st of Array.isArray(deploymentStatuses) ? deploymentStatuses : []) for (const m of String(st?.environment_url ?? "").matchAll(URLS)) add(m[0]);
+  for (const body of Array.isArray(commentBodies) ? commentBodies : []) for (const m of String(body ?? "").matchAll(URLS)) add(m[0]);
+  const unique = [...new Set(found)];
+  if (unique.length === 0) return null;
+  const alias = branchAlias(branch);
+  // THE BRANCH ALIAS, ONE PER SITE THIS CARD CHANGES (owner, 23 Sep 2026: "the only link … the stuff
+  // he just worked on"): when the site's Pages project is known, a deployment seen under it means its
+  // branch alias exists — that is the link, never a per-commit hash, never another site's.
+  if (alias && pagesHosts.length > 0) {
+    const links = pagesHosts.map((h) => String(h).toLowerCase()).filter((h) => unique.some((u) => new URL(u).hostname.endsWith(`.${h}`))).map((h) => `https://${alias}.${h}`);
+    if (links.length) return links.join(" · ");
   }
-  for (const body of Array.isArray(commentBodies) ? commentBodies : []) {
-    for (const m of String(body ?? "").matchAll(/https?:\/\/[a-z0-9.-]+\.pages\.dev[^\s)>\]]*/gi)) urls.add(m[0].replace(/\/$/, ""));
-    // A Worker repo (westpeek-live) previews through Workers Builds: a VERSION url, `<8 hex>-<worker>.<account>.workers.dev`.
-    // The production workers.dev host has no version prefix and is never read as a preview.
-    for (const m of String(body ?? "").matchAll(/https?:\/\/[a-f0-9]{8}-[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev[^\s)>\]|]*/gi)) urls.add(m[0].replace(/\/$/, ""));
+  // Unknown project: one link per Pages project, its alias when present, else its first hash URL.
+  const byProject = new Map();
+  for (const u of unique) {
+    const host = new URL(u).hostname;
+    const project = host.split(".").slice(1).join(".");
+    const isAlias = alias.length > 0 && host.split(".")[0] === alias;
+    if (!byProject.has(project) || isAlias) byProject.set(project, u);
   }
-  return urls.size === 0 ? null : [...urls].join(" · ");
+  return [...byProject.values()].join(" · ");
 }
 
 /** GREEN when every check passed, RED when any failed, PENDING otherwise. From `gh pr checks --json`. */
@@ -418,7 +465,7 @@ async function prFor(worktree, branch) {
   return JSON.parse(stdout);
 }
 
-async function previewUrlFor(worktree, number, progress) {
+async function previewUrlFor(worktree, number, progress, pagesHosts = [], branch = "") {
   const statuses = [];
   const comments = [];
   try {
@@ -439,7 +486,7 @@ async function previewUrlFor(worktree, number, progress) {
   } catch (err) {
     progress(`preview url: could not read deployments (${err instanceof Error ? err.message.slice(0, 120) : String(err)})`);
   }
-  const url = previewUrlsFrom(statuses, comments);
+  const url = previewUrlsFrom(statuses, comments, pagesHosts, branch);
   progress(url ? `preview: ${url}` : "preview: none (no Pages deployment on this PR)");
   return url;
 }
@@ -617,9 +664,25 @@ export async function run(job, ctx) {
 
   // THE ASSETS — one gatherer for both roads (see gatherAssets): the attachments every phase, the
   // Drive folder MAPPED on every phase that needs materials, and the plan's assets fetched for BUILD.
-  const assets = await gatherAssets(job, ctx, packageDir, jobDir, phase, progress);
+  // 0240: a materials check maps the folder (documents only) FIRST — cheap — and fetches the plan's
+  // assets only once it knows something changed.
+  const assets = await gatherAssets(job, ctx, packageDir, jobDir, phase, progress, { mapOnly: job.refresh === true });
   if (assets.report) return assets.report;
   const attachments = assets.attachments;
+  // 0240: what this build sees, and — when she asked for a materials check — nothing built if it is the same set.
+  const manifestPath = path.join(packageDir, "drive", "DRIVE_MANIFEST.json");
+  const materials = materialsFingerprint(existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, "utf8")) : null, attachments);
+  if (unchangedMaterials(job, materials)) {
+    progress("materials check: nothing new in the folder or attached — not rebuilding");
+    return { phase, status: "unchanged", materials };
+  }
+  if (job.refresh === true) {
+    const wantedAssets = driveStepFor(job, phase).fetch;
+    if (wantedAssets.length) {
+      const out = await fetchDriveAssets(path.join(packageDir, "drive"), wantedAssets, ctx, jobDir, progress);
+      if (!out.ok) return { phase, status: "failed", reason: out.reason };
+    }
+  }
 
   let landOutput = null;
   let mergeSha = null;
@@ -696,13 +759,14 @@ export async function run(job, ctx) {
     }
     const checks = await watchChecks(names.worktree, pr.number, ctx.signal, progress);
     // The preview link is read AFTER the checks settle: Pages posts its deployment beside them.
-    const previewUrl = checks.state === "GREEN" ? await previewUrlFor(names.worktree, pr.number, progress) : null;
+    const previewUrl = checks.state === "GREEN" ? await previewUrlFor(names.worktree, pr.number, progress, job.pages_hosts ?? [], names.branch) : null;
     return {
       phase,
       status: "ok",
       pr_url: pr.url,
       pr_number: pr.number,
       branch: names.branch,
+      materials,
       check_state: checks.state,
       check_url: checks.url ?? undefined,
       preview_url: previewUrl ?? undefined,
@@ -730,7 +794,7 @@ export async function run(job, ctx) {
 // ── Several repos (0236) ─────────────────────────────────────────────────────────────────────
 
 /** Attachments and the Drive folder, into the shared package dir. Returns { attachments } or { report }. */
-async function gatherAssets(job, ctx, packageDir, jobDir, phase, progress) {
+async function gatherAssets(job, ctx, packageDir, jobDir, phase, progress, opts = {}) {
   const attachments = [];
   if (Array.isArray(job.attachments) && job.attachments.length > 0) {
     const attDir = path.join(packageDir, "attachments");
@@ -760,7 +824,7 @@ async function gatherAssets(job, ctx, packageDir, jobDir, phase, progress) {
       const msg = `${err?.stderr ?? ""}${err?.stdout ?? ""}`.trim() || (err instanceof Error ? err.message : String(err));
       return { report: { phase, status: "blocked", reason: msg.slice(0, 800) } };
     }
-    if (step.fetch.length) {
+    if (step.fetch.length && !opts.mapOnly) {
       const out = await fetchDriveAssets(driveDir, step.fetch, ctx, jobDir, progress);
       if (!out.ok) return { report: { phase, status: "failed", reason: out.reason } };
     }
@@ -802,6 +866,28 @@ async function fetchDriveAssets(driveDir, wanted, ctx, jobDir, progress) {
  * finds it needs another file ends with `fetch: [paths]`. The script fetches them and runs the model
  * one more time — never a loop. Returns the list to fetch, or [] when the result is not asking.
  */
+/**
+ * THE MATERIAL SET, AS ONE STRING (0240): every Drive file's id, size and modified time from the
+ * manifest, and every attachment on the card by id and size. Two builds that saw the same set have
+ * the same fingerprint; a file added, replaced or attached changes it. Pure, so it is self-tested.
+ */
+export function materialsFingerprint(manifest, attachments) {
+  const files = (Array.isArray(manifest?.files) ? manifest.files : []).map((f) => `d:${f.id}:${f.size ?? ""}:${f.modified ?? ""}`);
+  const atts = (Array.isArray(attachments) ? attachments : []).map((a) => `a:${a.id ?? a.filename}:${a.bytes ?? ""}`);
+  const all = [...files, ...atts].sort();
+  let h = 0x811c9dc5;
+  for (const ch of all.join("|")) {
+    h ^= ch.codePointAt(0);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return `${all.length}:${h.toString(16).padStart(8, "0")}`;
+}
+
+/** A materials check she asked for that found the same set: build nothing (0240). Pure. */
+export function unchangedMaterials(job, fingerprint) {
+  return job?.phase === "BUILD" && job?.refresh === true && typeof job?.materials_fingerprint === "string" && job.materials_fingerprint.length > 0 && job.materials_fingerprint === fingerprint;
+}
+
 export function assetsRequested(result) {
   if (!result || result.status === "ok" || !Array.isArray(result.fetch)) return [];
   return [...new Set(result.fetch.map((x) => String(x ?? "").trim()).filter(Boolean))].slice(0, 40);
@@ -830,9 +916,17 @@ async function runSeveral(job, ctx) {
   if (noRunbook.length) {
     return { phase, status: "blocked", reason: `${noRunbook.join(" and ")} ${noRunbook.length === 1 ? "has" : "have"} no RUNBOOK.md. Write one (join-west-peek-main/RUNBOOK.md is the model), land it, then reply "go".` };
   }
-  const assets = await gatherAssets(job, ctx, packageDir, jobDir, phase, progress);
+  const assets = await gatherAssets(job, ctx, packageDir, jobDir, phase, progress, { mapOnly: job.refresh === true });
   if (assets.report) return assets.report;
   const worktrees = parts.map((p) => p.names.worktree);
+  // 0240: the same materials check as one repo — one folder, one set, one answer for every repo.
+  const manifestPath = path.join(packageDir, "drive", "DRIVE_MANIFEST.json");
+  const materials = materialsFingerprint(existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, "utf8")) : null, assets.attachments);
+  if (unchangedMaterials(job, materials)) return { phase, status: "unchanged", materials };
+  if (job.refresh === true && driveStepFor(job, phase).fetch.length) {
+    const out = await fetchDriveAssets(path.join(packageDir, "drive"), driveStepFor(job, phase).fetch, ctx, jobDir, progress);
+    if (!out.ok) return { phase, status: "failed", reason: out.reason };
+  }
 
   if (phase === "PLAN") {
     const resultPath = path.join(jobDir, "result-PLAN.json");
@@ -889,7 +983,7 @@ async function runSeveral(job, ctx) {
         return { phase, status: "failed", reason: `gh finds no PR on ${p.names.branch} in ${p.repo}: ${err instanceof Error ? err.message.slice(0, 300) : String(err)}`, parts: reports };
       }
       const checks = await watchChecks(p.names.worktree, pr.number, ctx.signal, progress);
-      const previewUrl = checks.state === "GREEN" ? await previewUrlFor(p.names.worktree, pr.number, progress) : null;
+      const previewUrl = checks.state === "GREEN" ? await previewUrlFor(p.names.worktree, pr.number, progress, p.pages_hosts ?? [], p.names.branch) : null;
       reports.push({ repo: p.repo, pr_url: pr.url, pr_number: pr.number, branch: p.names.branch, check_state: checks.state, check_url: checks.url ?? undefined, preview_url: previewUrl ?? undefined, proof: proof || undefined });
     }
     const red = reports.filter((r) => r.check_state !== "GREEN");
@@ -897,6 +991,7 @@ async function runSeveral(job, ctx) {
       phase,
       status: "ok",
       pr_url: reports.map((r) => r.pr_url).join(" · "),
+      materials,
       check_state: red.some((r) => r.check_state === "RED") ? "RED" : red.length ? "PENDING" : "GREEN",
       proof: reports.map((r) => `── ${r.repo} ──\n${r.proof ?? "(re-observed; built in an earlier run)"}`).join("\n\n"),
       parts: reports,
@@ -1050,6 +1145,22 @@ function selfTest() {
     ["a not-ready PLAN without named placeholders is refused", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), publish_ready: false }), "PLAN").result === null],
     ["a not-ready PLAN with placeholders reads", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), publish_ready: false, placeholders: ["Sengo logo"] }), "PLAN").result?.placeholders?.[0] === "Sengo logo"],
     ["a Pages deployment status yields the preview url", () => previewUrlsFrom([{ environment_url: "https://abc123.join-west-peek.pages.dev/" }], []) === "https://abc123.join-west-peek.pages.dev"],
+    ["THE REAL BOT COMMENT (wc_c9e36e8b, 23 Sep 2026): one clean link — the community project's branch alias — never HTML fragments or the other sites' previews", () => {
+      const comment = [
+        "## Deploying with &nbsp;<a href=\"https://pages.dev\"><img alt=\"Cloudflare workers\" src=\"x\" width=\"16\"></a> &nbsp;Cloudflare Pages",
+        "<table><tr><td><strong>Latest commit:</strong> </td><td><code>3f2a1b9</code></td></tr>",
+        "<tr><td><strong>Status:</strong></td><td>&nbsp;✅&nbsp; Deploy successful!</td></tr>",
+        "<tr><td><strong>Preview URL:</strong></td><td><a href='https://3f2a1b9c.west-peek-community.pages.dev'>https://3f2a1b9c.west-peek-community.pages.dev</a></td></tr>",
+        "<tr><td><strong>Branch Preview URL:</strong></td><td><a href='https://work-wpc-c9e36e8b.west-peek-community.pages.dev'>https://work-wpc-c9e36e8b.west-peek-community.pages.dev&lt;/a></td></tr></table>",
+      ].join("\n");
+      const ventures = comment.replaceAll("west-peek-community", "west-peek-ventures").replace("3f2a1b9c", "11aa22bb");
+      const productions = comment.replaceAll("west-peek-community", "west-peek-productions").replace("3f2a1b9c", "33cc44dd");
+      const got = previewUrlsFrom([], [comment, ventures, productions], ["west-peek-community.pages.dev"], "work/wpc-c9e36e8b");
+      return got === "https://work-wpc-c9e36e8b.west-peek-community.pages.dev";
+    }],
+    ["only the hash URL in the comment: still the branch alias for the site's project, never the hash", () => previewUrlsFrom([], ["<a href='https://3f2a1b9c.west-peek-community.pages.dev'>https://3f2a1b9c.west-peek-community.pages.dev</a>"], ["west-peek-community.pages.dev"], "work/wpc-c9e36e8b") === "https://work-wpc-c9e36e8b.west-peek-community.pages.dev"],
+    ["with no project known, a hash URL is kept once, with no trailing fragment", () => previewUrlsFrom([], ["<a href='https://3f2a1b9c.west-peek-community.pages.dev'>https://3f2a1b9c.west-peek-community.pages.dev&lt;/a>"], [], "") === "https://3f2a1b9c.west-peek-community.pages.dev"],
+    ["a preview under another site's Pages project is never this job's preview", () => previewUrlsFrom([], ["https://11aa22bb.west-peek-ventures.pages.dev"], ["west-peek-community.pages.dev"], "b") === null],
     ["a Cloudflare PR comment yields the preview url", () => previewUrlsFrom([], ["Deploying with Cloudflare Pages\n| Preview URL | https://def456.ventures.pages.dev |"]) === "https://def456.ventures.pages.dev"],
     ["a Workers Builds PR comment yields the version preview url", () => previewUrlsFrom([], ["| Preview URL | https://3f9a1c2e-west-peek-live.seq-taylor.workers.dev |"]) === "https://3f9a1c2e-west-peek-live.seq-taylor.workers.dev"],
     ["the production workers.dev host is never read as a preview", () => previewUrlsFrom([], ["deployed to https://west-peek-live.seq-taylor.workers.dev"]) === null],
@@ -1105,6 +1216,27 @@ function selfTest() {
     ["PLAN maps the folder and fetches nothing yet", () => { const d = driveStepFor({ drive: { folder_id: "F" } }, "PLAN"); return d.map === true && d.fetch.length === 0; }],
     ["BUILD RE-MAPS the folder (a file added after the plan is seen) and fetches the plan's assets, once each", () => { const d = driveStepFor({ drive: { folder_id: "F" }, plan: { assets: ["logos/sengo.svg", " logos/sengo.svg", "fonts/maax.otf"] } }, "BUILD"); return d.map === true && d.fetch.join("|") === "logos/sengo.svg|fonts/maax.otf"; }],
     ["LAND reads no Drive; no folder means no Drive work at all", () => !driveStepFor({ drive: { folder_id: "F" } }, "LAND").map && !driveStepFor({ drive: {} }, "BUILD").map && driveStepFor({ drive: {} }, "BUILD").fetch.length === 0],
+    ["the material set changes when a Drive file is added, replaced or modified, or a file is attached — and not otherwise", () => {
+      const m = { files: [{ id: "a", size: 10, modified: "t1" }, { id: "b", size: 20, modified: "t1" }] };
+      const base = materialsFingerprint(m, []);
+      return base === materialsFingerprint({ files: [...m.files].reverse() }, []) &&
+        base !== materialsFingerprint({ files: [...m.files, { id: "c", size: 1, modified: "t2" }] }, []) &&
+        base !== materialsFingerprint({ files: [{ id: "a", size: 10, modified: "t2" }, m.files[1]] }, []) &&
+        base !== materialsFingerprint(m, [{ id: "att_1", bytes: 5 }]);
+    }],
+    ["a materials check that finds the same set builds nothing; without a check, or with a new set, it builds", () =>
+      unchangedMaterials({ phase: "BUILD", refresh: true, materials_fingerprint: "2:abc" }, "2:abc") &&
+      !unchangedMaterials({ phase: "BUILD", refresh: false, materials_fingerprint: "2:abc" }, "2:abc") &&
+      !unchangedMaterials({ phase: "BUILD", refresh: true, materials_fingerprint: "2:abc" }, "3:def") &&
+      !unchangedMaterials({ phase: "BUILD", refresh: true, materials_fingerprint: null }, "2:abc") &&
+      !unchangedMaterials({ phase: "LAND", refresh: true, materials_fingerprint: "2:abc" }, "2:abc")],
+    ["a stale approval never lands on the Mac: approved before the latest preview, or publish with no green build after it", () => {
+      const job = { plan: { approved_at: "t0", publish_ready: false }, pr: { url: "u", number: 1, check_state: "GREEN", check_green_at: "2026-09-23T12:00:00Z", land_approved_at: "2026-09-23T12:05:00Z", preview_emailed_at: "2026-09-23T12:01:00Z" } };
+      const stale = { ...job, pr: { ...job.pr, preview_emailed_at: "2026-09-23T12:10:00Z" } };
+      const publishNoBuild = { ...job, pr: { ...job.pr, publish_approved_at: "2026-09-23T12:05:00Z" } };
+      const publishBuilt = { ...job, pr: { ...job.pr, publish_approved_at: "2026-09-23T12:05:00Z", check_green_at: "2026-09-23T12:30:00Z" } };
+      return landGate(job).ok && !landGate(stale).ok && !landGate(publishNoBuild).ok && landGate(publishBuilt).ok;
+    }],
     ["a BUILD asking for more assets is read; an ok result is never a fetch request", () => assetsRequested({ status: "failed", reason: "needs assets", fetch: ["ep1/headshot.jpg", "ep1/headshot.jpg", ""] }).join() === "ep1/headshot.jpg" && assetsRequested({ status: "ok", fetch: ["x"] }).length === 0 && assetsRequested(null).length === 0],
     ["the model's child never holds the Drive credential", () => !("GSC_SERVICE_ACCOUNT_JSON" in claudeChildEnv({ PATH: "/bin", GSC_SERVICE_ACCOUNT_JSON: "{}", [VAULT_INJECTED_VAR]: "GSC_SERVICE_ACCOUNT_JSON" }, undefined, new Set())) && claudeChildEnv({ PATH: "/bin" }, undefined, new Set()).PATH === "/bin"],
     ["a job with a folder tells the model the manifest, that documents are here, how assets arrive, and the PACKAGE TRUTH rule", () => {

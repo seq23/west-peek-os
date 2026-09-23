@@ -120,7 +120,7 @@ import {
   handleListQuarantinedOutputs,
   handleRunAi,
 } from "./services/aiRuns";
-import { handleGetRequestAttachment, handleGetWebPropertyChange, handleReingestStoredEmail, handleSetWorkKindRule, handleWorkKindRules } from "./services/webPropertyChange";
+import { handleGetRequestAttachment, handleGetWebPropertyChange, handleMaterialsAdded, handleResendPreview, handleReingestStoredEmail, handleSetWorkKindRule, handleWorkKindRules } from "./services/webPropertyChange";
 import { handleGetRequestMessage, handleGetRequestMessageRaw, handleGetWorkCardMessageTrail } from "./services/requestMessage";
 import { handleGetEmailPreviewPreference, handleSetEmailPreviewPreference } from "./services/kindRules";
 import {
@@ -1130,6 +1130,9 @@ const router = new Router()
   .post("/api/work-cards/:id/release", handleReleaseWorkCard)
   // Plan A (20 Sep 2026): the state of a web property change, and the standing rules of a card kind.
   .get("/api/work-cards/:id/web-property-change", handleGetWebPropertyChange)
+  // 0240: "I added missing items" (her label, exactly) and the preview re-sent in the current template.
+  .post("/api/work-cards/:id/materials-added", handleMaterialsAdded)
+  .post("/api/work-cards/:id/resend-preview", handleResendPreview)
   .get("/api/work-cards/:id/attachments/:attId", handleGetRequestAttachment)
   // 0226 — the email this card came from. The decoded body for anyone who may see the card; the
   // raw `.eml` for a Managing Partner only (`inbound_message.read_raw`, restricted).

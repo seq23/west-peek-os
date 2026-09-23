@@ -372,13 +372,19 @@ describe("Scooter emails a package for the ventures site", () => {
     expect(apiBody.plan_text).toContain("# Plan: ventures site update");
     expect(apiBody.plan_document_id).toBeNull();
 
-    const email = sent.find((m) => m.to === SCOOTER && /blocked/i.test(m.subject));
+    // THE PLAN EMAIL, ONE SCREEN (owner, 23 Sep 2026: "too long and i have no idea what he wants
+    // from me. it says blocked"). The reply options ARE the TL;DR, first; each decision one line
+    // with the recommendation in bold; the plan is on the card, not in the mail; never "blocked".
+    const email = sent.find((m) => m.to === SCOOTER && /plan ready/i.test(m.subject));
     expect(email, "the asks are emailed to the requesting partner").toBeDefined();
-    expect(email!.text).toMatch(/orange accent/);
-    expect(email!.text, "each ask carries Porter's recommended default").toMatch(/Porter recommends: keep black\/white/);
-    expect(email!.text, "THE PLAN ITSELF is in the mail, not only a link").toMatch(/# Plan: ventures site update/);
-    expect(email!.text).toMatch(/portfolio logos/);
-    expect(email!.text).toMatch(/Reply "approved"/);
+    expect(email!.subject).toBe("Porter: Ventures site update: Plan ready");
+    expect(email!.subject).not.toMatch(/blocked/i);
+    expect(email!.text).toMatch(/^\*\*TL;DR:\*\* Plan ready\. Reply \*\*approved\*\* and I'll build the preview now\. Nothing goes live until you approve the preview\.\n• \*\*approved\*\*: take my 2 recommendations and build the preview\n• \*\*approved to production\*\*: skip the preview and land on green\n• \*\*changes: …\*\*: hold it and tell me what to change\n• anything else: read as your answers to the decisions below\n/);
+    expect(email!.text).toMatch(/\*\*2 decisions \(my recommendation in bold\)\*\*\n• Use the orange accent on the team page headings, or keep black\/white\? → \*\*keep black\/white — the ventures visual system is frozen\*\*\n/);
+    expect(email!.text, "the plan itself stays on the card; the mail links to it").not.toMatch(/# Plan: ventures site update|portfolio logos/);
+    expect(email!.text).toMatch(/The full plan is on the card: https:\/\/os\.joinwestpeek\.com\/#\/work \(card wc_/);
+    expect(email!.text).toMatch(/The first preview comes right after you approve the plan\./);
+    expect(email!.text.match(/\*\*approved\*\*:/g), "the options appear once, at the top").toHaveLength(1);
     expect(String(c.block_needed).length, "the card's column stays short").toBeLessThanOrEqual(900);
     const thread = await env.WP_OS_DB.prepare("SELECT token FROM email_thread WHERE object_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(porterCardId).first<{ token: string }>();
     blockThreadToken = thread!.token;
@@ -496,10 +502,17 @@ describe("Scooter emails a package for the ventures site", () => {
     expect(gate.parked).toBe(false);
     expect((gate as { reason: string }).reason).toMatch(/previews first/);
     await expect(env.WP_OS_DB.prepare("UPDATE web_property_change SET merge_sha = 'deadbeef' WHERE work_card_id = ?1").bind(porterCardId).run()).rejects.toThrow(/second approval after the preview/);
-    // RECEIVED at intake, then three blocked emails (the plan, his "no", the preview) and nothing else.
-    expect(sent.filter((m) => m.to === SCOOTER && /blocked/i.test(m.subject)).length).toBe(3);
-    expect(sent.filter((m) => m.to === SCOOTER && /blocked/i.test(m.subject)).pop()!.text).toMatch(/pull\/15/);
-    expect(sent.filter((m) => m.to === SCOOTER && !/blocked/i.test(m.subject) && !/got it/i.test(m.subject)).length, "no other email between green and the preview").toBe(0);
+    // RECEIVED at intake, then exactly three: the plan, the question after his "no", the preview —
+    // and never the word "blocked" in any of them (owner, 23 Sep 2026).
+    const toScooter = sent.filter((m) => m.to === SCOOTER && !/got it/i.test(m.subject));
+    expect(toScooter.map((m) => m.subject.replace(/:.*?: /, ": ").replace(/ — .*/, "")), "plan, question, preview — nothing else").toEqual(["Porter: Plan ready", "Porter: A question for you", "Porter: Preview ready"]);
+    expect(toScooter.every((m) => !/blocked/i.test(m.subject))).toBe(true);
+    const previewMail = toScooter.at(-1)!;
+    expect(previewMail.subject).toBe("Porter: Ventures site update: Preview ready");
+    // No preview deployment for this repo: the line says so, and the PR stays on the card — never a
+    // PR link in her inbox (23 Sep 2026).
+    expect(previewMail.text).toMatch(/Current preview \(built \d{1,2}:\d{2} CT, \*{0,2}0\*{0,2} placeholders\): no preview deployment for this site — the change and its screenshots are on the card\n/);
+    expect(previewMail.text).not.toMatch(/github\.com/);
 
     // Sequoia's "approved" is not his: it lands nothing.
     const token = (await env.WP_OS_DB.prepare("SELECT token FROM email_thread WHERE object_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(porterCardId).first<{ token: string }>())!.token;
@@ -541,8 +554,11 @@ describe("Scooter emails a package for the ventures site", () => {
     const done = await finishedEmailFor(porterCardId);
     expect(done.state).toBe("PENDING");
     expect(done.owner).toBe("fu_sequoia_taylor");
-    expect(done.text).toMatch(/pull\/15/);
-    expect(done.text).toMatch(/westpeek\.ventures\/team/);
+    // "Live" names where it went live (from the LAND's own curl); the PR and the proof are on the card.
+    expect(done.text).toMatch(/^\*\*TL;DR:\*\* Live: your change is published\./);
+    expect(done.text).toMatch(/\*\*Live now\*\*\n• https:\/\/westpeek\.ventures\/team\n• https:\/\/westpeek\.ventures\/assets\/img\/portfolio\/x\.png\n/);
+    expect(done.text, "no PR link in her inbox").not.toMatch(/github\.com|pull\/15/);
+    expect(String((await card(porterCardId)).description), "the PR is on the card").toMatch(/pull\/15/);
     const filed = await env.WP_OS_DB.prepare("SELECT kind, prepared_for FROM deliverable WHERE source_type = 'work_card' AND source_id = ?1").bind(porterCardId).first<{ kind: string; prepared_for: string }>();
     expect(filed?.kind).toBe("employee_finding");
     expect(filed?.prepared_for).toBe("fu_scooter_taylor");
@@ -570,7 +586,8 @@ describe("land on green OFF asks first", () => {
       expect(c.block_who).toBe("SEQUOIA");
       expect(String(c.block_needed)).toMatch(/Land on green is OFF/);
       expect(await liveJobFor(porterId), "nothing queued for the Mac while she decides").toBeNull();
-      const question = sent.filter((m) => m.to === SEQUOIA && /blocked/i.test(m.subject)).pop()!;
+      const question = sent.filter((m) => m.to === SEQUOIA && /: A question for you$/.test(m.subject)).pop()!;
+      expect(question.subject, "never \"blocked\" to a partner").not.toMatch(/blocked/i);
       expect(question.text, "the question email carries the question, not the plan").toMatch(/Land on green is OFF/);
       expect(question.text).not.toMatch(/THE PLAN, in full/);
       await answerBlock(env, porterId, "fu_sequoia_taylor", { action: "ANSWER", text: "land it" });
@@ -625,42 +642,73 @@ describe("a plan that is not publish-ready previews first (21 Sep 2026)", () => 
     expect(c.state).toBe("BLOCKED");
     expect(String(c.block_needed)).toMatch(/^NOT PUBLISH-READY\. This will ship with 4 placeholders: Airtable links; Sengo logo/);
     expect(String(c.block_needed)).toMatch(/landing needs a second approval/);
-    const email = sent.filter((m) => m.to === SEQUOIA && /blocked/i.test(m.subject)).pop()!;
-    expect(email.text).toMatch(/This will ship with 4 placeholders/);
-    expect(email.text).toMatch(/# Plan: community site rebuild/);
+    // The plan email: the placeholders are OPTIONAL missing items, the preview is built with
+    // placeholders for them, and nothing goes live until she approves the preview (23 Sep 2026).
+    const email = sent.filter((m) => m.to === SEQUOIA && /plan ready/i.test(m.subject)).pop()!;
+    expect(email.subject).toBe("Porter: Community rebuild: Plan ready");
+    expect(email.text).toMatch(/^\*\*TL;DR:\*\* Plan ready\. Reply \*\*approved\*\* and I'll build the preview now, with placeholders for the \*{0,2}4\*{0,2} missing items\. Nothing goes live until you approve the preview\./);
+    expect(email.text).toMatch(/\*\*Missing items \(optional\)\*\*\n• Airtable links\n• Sengo logo\n• episode records\n• approved orange hex\n• You don't need these to continue\./);
+    expect(email.text, "the plan is on the card, not in the mail").not.toMatch(/# Plan: community site rebuild|Twelve open items/);
   });
 
-  it("\"approved\" builds; GREEN does NOT land — the preview email goes out with the link, the PR, the placeholders and the proof, and the card is BLOCKED", async () => {
+  it("\"approved\" builds; GREEN does NOT land — the preview email goes out with the four reply options, the link and the placeholders still showing, and the card waits", async () => {
     const out = await replyFrom(SEQUOIA, "approved", await porter.token());
     expect(out.answered).toBe(true);
     const next = await tickFor(id);
     expect(next.summary).toMatch(/BUILD queued/);
     expect((await readWebPropertyChange(env, id))!.plan_approved_at).toBeTruthy();
-    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/21", pr_number: 21, check_state: "GREEN", preview_url: "https://a1b2c3d4.join-west-peek-community.pages.dev", proof: "npm run validate green · shots/community-desktop.png shots/community-390.png" });
+    // The card is for westpeek.ventures (planned() names it), so its preview lives under that site's
+    // Pages project, and the link she gets is the branch alias — the build she is approving.
+    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/21", pr_number: 21, branch: "work/wpc-comm1234", check_state: "GREEN", preview_url: "https://a1b2c3d4.west-peek-ventures.pages.dev", proof: "npm run validate green · shots/community-desktop.png shots/community-390.png" });
     const green = await tickFor(id);
     expect(green.outcome, "green stops at the preview, land-on-green notwithstanding").toBe("BLOCKED");
     const row = (await readWebPropertyChange(env, id))!;
     expect(row.check_state).toBe("GREEN");
-    expect(row.preview_url).toBe("https://a1b2c3d4.join-west-peek-community.pages.dev");
+    expect(row.preview_url).toBe("https://a1b2c3d4.west-peek-ventures.pages.dev");
     expect(row.preview_emailed_at).toBeTruthy();
     expect(row.land_approved_at).toBeNull();
     expect(row.phase, "never reached LAND").toBe("BUILD");
     expect(await liveJobFor(id), "nothing parked for the Mac").toBeNull();
     const c = await card(id);
-    expect(String(c.block_needed)).toMatch(/^PREVIEW READY\. Look at it here: https:\/\/a1b2c3d4\.join-west-peek-community\.pages\.dev/);
+    expect(String(c.block_needed)).toMatch(/^PREVIEW READY\. Look at it here: https:\/\/work-wpc-comm1234\.west-peek-ventures\.pages\.dev\./);
     expect(String(c.block_needed)).toMatch(/reply "approved" to land it/i);
-    const email = sent.filter((m) => m.to === SEQUOIA && /blocked/i.test(m.subject)).pop()!;
-    expect(email.text).toMatch(/a1b2c3d4\.join-west-peek-community\.pages\.dev/);
-    expect(email.text).toMatch(/pull\/21/);
-    expect(email.text).toMatch(/Sengo logo/);
-    expect(email.text).toMatch(/community-390\.png/);
+    // THE PREVIEW EMAIL (owner's spec, 23 Sep 2026): the four reply options ARE the TL;DR; then
+    // the link, the placeholders still showing, and the card. No proof dump, never "blocked".
+    const email = sent.filter((m) => m.to === SEQUOIA && /preview ready/i.test(m.subject)).pop()!;
+    expect(email.subject).toBe("Porter: Community rebuild: Preview ready");
+    expect(email.text).toMatch(/^\*\*TL;DR:\*\* Preview ready, with \*{0,2}4\*{0,2} placeholders\. Reply with one of these:\n• \*\*approved\*\*: publish this preview as is \(placeholders included\)\.\n• \*\*changes: …\*\*: I'll make them and send you a new preview\.\n• \*\*Missing items \+ "publish"\*\*: attach them or add them to Drive, reply "publish", and I'll fill them in and publish without another preview\.\n• \*\*Missing items \+ "preview"\*\*: attach them or add them to Drive, reply "preview", and I'll fill them in and send you another preview\.\n/);
+    expect(email.text).toMatch(/Current preview \(built \d{1,2}:\d{2} CT, \*{0,2}4\*{0,2} placeholders\): https:\/\/work-wpc-comm1234\.west-peek-ventures\.pages\.dev\n/);
+    expect(email.text, "never the per-commit hash").not.toMatch(/a1b2c3d4/);
+    expect(email.text).toMatch(/\*\*Still missing \(optional\)\*\*\n• Airtable links\n• Sengo logo\n/);
+    expect(email.text, "no proof dump in her inbox; it is on the card").not.toMatch(/community-390\.png|npm run validate/);
+    expect(email.text.replace(/card wc_\S+/, "")).not.toMatch(/blocked/i);
   });
 
-  it("\"changes: …\" after the preview holds it; the other partner's \"approved\" holds it; the row refuses a merge", async () => {
+  it("\"changes: …\" after the preview rebuilds with them and sends a NEW preview (her option 2); the old preview's approval is gone; the other partner's \"approved\" holds it; the row refuses a merge", async () => {
+    const firstPreviewAt = (await readWebPropertyChange(env, id))!.preview_emailed_at!;
     await replyFrom(SEQUOIA, "changes: the Sengo logo is wrong, swap it", await porter.token());
+    const rebuild = await tickFor(id);
+    expect(rebuild.outcome).toBe("PROGRESSED");
+    expect(rebuild.summary).toMatch(/Changes after the preview; BUILD queued/);
+    const queued = (await readWebPropertyChange(env, id))!;
+    expect(queued.land_approved_at).toBeNull();
+    expect(queued.refresh_intent).toBe("CHANGES");
+    expect(JSON.parse(queued.answers_json).at(-1), "her words go to the build").toMatch(/^changes: the Sengo logo is wrong/);
+    const job = JSON.parse((await liveJobFor(id))!.job_json!) as { phase: string; refresh: boolean };
+    expect(job.phase).toBe("BUILD");
+    expect(job.refresh, "a change is rebuilt whatever the materials").toBe(false);
+    expect(String((await card(id)).description)).toMatch(/asked for changes \("changes: the Sengo logo is wrong/);
+    const beforeMail = sent.length;
+    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/21", pr_number: 21, branch: "work/wpc-comm1234", check_state: "GREEN", preview_url: "https://e9f8a7b6.west-peek-ventures.pages.dev", materials: "5:aaaa", proof: "validate green" });
     expect((await tickFor(id)).outcome).toBe("BLOCKED");
-    expect((await readWebPropertyChange(env, id))!.land_approved_at).toBeNull();
-    expect(String((await card(id)).description)).toMatch(/Held by sequoia@westpeek.ventures: "changes: the Sengo logo is wrong/);
+    const second = (await readWebPropertyChange(env, id))!;
+    expect(second.preview_url).toBe("https://e9f8a7b6.west-peek-ventures.pages.dev");
+    expect(second.preview_emailed_at! > firstPreviewAt, "the approval now binds to the NEW preview").toBe(true);
+    const newPreview = sent.slice(beforeMail).filter((m) => m.to === SEQUOIA);
+    expect(newPreview, "one new preview email").toHaveLength(1);
+    expect(newPreview[0]!.subject).toBe("Porter: Community rebuild: New preview ready");
+    expect(newPreview[0]!.text, "the same branch alias shows the rebuilt site").toMatch(/Current preview \(built [^)]+\): https:\/\/work-wpc-comm1234\.west-peek-ventures\.pages\.dev\n/);
+    expect(String((await card(id)).description)).toMatch(/Preview ready — Current preview \(built [^)]+\): https:\/\/work-wpc-comm1234\.west-peek-ventures\.pages\.dev/);
     const other = await replyFrom(SCOOTER, "approved", await porter.token());
     expect(other.answered).toBe(false);
     expect((await card(id)).state).toBe("BLOCKED");
@@ -710,15 +758,32 @@ describe("\"preview\" on a publish-ready plan takes the same road", () => {
     const row1 = (await readWebPropertyChange(env, porter.id))!;
     expect(row1.preview_only).toBe(1);
     expect(String((await card(porter.id)).description)).toMatch(/asked for a preview first/);
-    await macReports(porter.id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/22", pr_number: 22, check_state: "GREEN", proof: "shots/team-desktop.png" });
+    await macReports(porter.id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/22", pr_number: 22, check_state: "GREEN", proof: "shots/team-desktop.png", materials: "12:abcd1234" });
     expect((await tickFor(porter.id)).outcome).toBe("BLOCKED");
     const c = await card(porter.id);
     expect(String(c.block_needed)).toMatch(/No preview deployment exists for this repo — the PR link and the screenshots stand in for it/);
     expect((await readWebPropertyChange(env, porter.id))!.land_approved_at).toBeNull();
-    // "preview" again after the preview is not a landing approval either.
+    expect((await readWebPropertyChange(env, porter.id))!.materials_fingerprint, "the material set the build used is kept").toBe("12:abcd1234");
+    // "preview" again after the preview is not a landing approval: it asks the Mac for ONE materials
+    // check (her option 4) — and when nothing changed, she is told so and it waits on the same preview.
+    const beforeCheck = sent.length;
     await replyFrom(SCOOTER, "preview", await porter.token());
-    expect((await tickFor(porter.id)).outcome).toBe("BLOCKED");
+    const check = await tickFor(porter.id);
+    expect(check.outcome).toBe("PROGRESSED");
+    expect(check.summary).toMatch(/A materials check after the preview; BUILD queued/);
+    const checkJob = JSON.parse((await liveJobFor(porter.id))!.job_json!) as { phase: string; refresh: boolean; materials_fingerprint: string };
+    expect(checkJob.refresh).toBe(true);
+    expect(checkJob.materials_fingerprint).toBe("12:abcd1234");
     expect((await readWebPropertyChange(env, porter.id))!.land_approved_at).toBeNull();
+    await macReports(porter.id, { phase: "BUILD", status: "unchanged", materials: "12:abcd1234" });
+    const unchangedTick = await tickFor(porter.id);
+    expect(unchangedTick.outcome, unchangedTick.summary).toBe("BLOCKED");
+    const told = sent.slice(beforeCheck).filter((m) => m.to === SCOOTER);
+    expect(told, "one email: nothing new, no second preview").toHaveLength(1);
+    expect(told[0]!.text).toMatch(/^\*\*TL;DR:\*\* I didn't find anything new in the folder or attached\./);
+    expect(told[0]!.text, "the preview link rides on it").toMatch(/Current preview \(built/);
+    expect((await readWebPropertyChange(env, porter.id))!.land_approved_at).toBeNull();
+    expect((await readWebPropertyChange(env, porter.id))!.refresh_intent).toBeNull();
     await replyFrom(SCOOTER, "approved", await porter.token());
     const landing = await tickFor(porter.id);
     expect(landing.summary).toMatch(/LAND queued/);
@@ -796,13 +861,15 @@ describe("the named bypass: \"approved to production\" (21 Sep 2026)", () => {
     await macReports(porter.id, { phase: "LAND", status: "ok", merge_sha: "abcdef0123456789abcdef0123456789abcdef01", live_proof: "https://westpeekproductions.com/news → 200" });
     expect((await tickFor(porter.id)).outcome).toBe("DONE");
     const since = sent.slice(before);
-    const toScooter = since.filter((m) => m.to === SCOOTER && /done/i.test(m.subject));
+    const toScooter = since.filter((m) => m.to === SCOOTER && /: Live$/.test(m.subject));
     const toSequoia = since.filter((m) => m.to === SEQUOIA);
     // 0223: the requester's copy is held for her first; the words on it are unchanged.
     expect(toScooter, "the forced landing does not email Scooter before she has read it").toHaveLength(0);
     const held = await finishedEmailFor(porter.id);
     expect(held.state).toBe("PENDING");
-    expect(held.text).toMatch(/Landed to production with 2 placeholders by Scooter Taylor's instruction: Airtable link; winner records/);
+    expect(held.text).toMatch(/\*\*Published with placeholders\*\*\n• Landed to production with \*{0,2}2\*{0,2} placeholders by Scooter Taylor's instruction: Airtable link; winner records/);
+    expect(held.text).toMatch(/^\*\*TL;DR:\*\* Live: your change is published\./);
+    expect(held.text).toMatch(/\*\*Live now\*\*\n• https:\/\/westpeekproductions\.com\/news\n/);
     // She is told twice now, and the two are different things: the both-partners notice that a
     // forced landing always sends, and (0223) the finished email waiting for her decision.
     expect(toSequoia, "the other partner is told, and holds the finished email").toHaveLength(2);
@@ -1113,7 +1180,9 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     expect(await liveJobFor(porterId), "nothing parked for the Mac on green").toBeNull();
     const preview = sent.slice(before).filter((m) => m.to === SCOOTER);
     expect(preview, "exactly one email since the BUILD began: the preview").toHaveLength(1);
-    expect(preview[0]!.text).toMatch(/pull\/51/);
+    expect(preview[0]!.subject).toMatch(/: Preview ready$/);
+    expect(preview[0]!.text, "no PR link in her inbox; the PR is on the card").not.toMatch(/pull\/51/);
+    expect(String((await card(porterId)).description)).toMatch(/pull\/51/);
     const token = (await env.WP_OS_DB.prepare("SELECT token FROM email_thread WHERE object_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(porterId).first<{ token: string }>())!.token;
     expect((await replyFrom(SCOOTER, "approved", token)).answered).toBe(true);
     expect((await tickFor(porterId)).summary).toMatch(/Landing approved after the preview; LAND queued/);
@@ -1301,9 +1370,11 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
     const reply = await replyToRequester(env, { id: chiefId, title: String(c0.title), requested_by_email: SCOOTER, firm_scope: "west-peek" }, "BLOCKED", "Walker", String(c0.block_needed));
     expect(reply.sent).toBe(true);
     const cardsBefore = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card").first<{ n: number }>())!.n;
-    const raw = SCOOTER_MIME({ subject: "Re: Walker: blocked — Something Walker holds", body: "Yes he can open.\n\nSent from my iPhone" });
+    // The subject we sent is the one he replies to — "a question", never "blocked" (23 Sep 2026).
+    expect(sent.at(-1)!.subject).toBe("Walker: a question — Something Walker holds");
+    const raw = SCOOTER_MIME({ subject: "Re: Walker: a question — Something Walker holds", body: "Yes he can open.\n\nSent from my iPhone" });
     // The wire carries the subject RFC 2047-encoded (an em-dash is not a ByteString).
-    await handleInboundEmail(inbound(raw, { subject: `=?UTF-8?B?${Buffer.from("Re: Walker: blocked — Something Walker holds").toString("base64")}?=` }), env);
+    await handleInboundEmail(inbound(raw, { subject: `=?UTF-8?B?${Buffer.from("Re: Walker: a question — Something Walker holds").toString("base64")}?=` }), env);
     const cardsAfter = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card").first<{ n: number }>())!.n;
     expect(cardsAfter, "no new card for a reply").toBe(cardsBefore);
     const c = await card(chiefId);
@@ -1367,7 +1438,7 @@ describe("STUCK is sent once, only when idle past the ceiling inside the window"
     await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'ABANDONED', claimed_by = 'mac', resolution = 'went quiet' WHERE id = ?1").bind(run.id).run();
     const retry = await tickFor(id);
     expect(retry.outcome, "a failed attempt, re-parked next tick").toBe("FAILED");
-    expect(sent.slice(before).filter((m) => m.to === SCOOTER && /stuck/i.test(m.subject)), "a re-claim inside the ceiling says nothing").toHaveLength(0);
+    expect(sent.slice(before).filter((m) => m.to === SCOOTER && /: Blocked$/.test(m.subject)), "a re-claim inside the ceiling says nothing").toHaveLength(0);
     await tickFor(id); // re-parked
     const queued = (await liveJobFor(id))!;
     expect(queued.status).toBe("QUEUED");
@@ -1375,11 +1446,11 @@ describe("STUCK is sent once, only when idle past the ceiling inside the window"
     await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET created_at = ?2 WHERE id = ?1").bind(queued.id, new Date(Date.now() - 46 * 60_000).toISOString()).run();
     const held = await runWebPropertyChangeCard(env, { id, title: "t", kind: WEB_PROPERTY_CHANGE_KIND, owner_id: "aie_porter", state: "IN_PROGRESS", work_attempts: 0, firm_scope: "west-peek", requested_by_email: SCOOTER });
     expect(held.held).toBe(true);
-    const stuck = sent.slice(before).filter((m) => m.to === SCOOTER && /stuck/i.test(m.subject));
+    const stuck = sent.slice(before).filter((m) => m.to === SCOOTER && /: Blocked$/.test(m.subject));
     expect(stuck).toHaveLength(1);
-    expect(stuck[0]!.text).toMatch(/I'm stuck: the plan has been waiting \*{0,2}46\*{0,2} minutes for the Mac/);
+    expect(stuck[0]!.text).toMatch(/^\*\*TL;DR:\*\* Blocked: the plan has been waiting \*{0,2}46\*{0,2} minutes for the Mac/);
     await runWebPropertyChangeCard(env, { id, title: "t", kind: WEB_PROPERTY_CHANGE_KIND, owner_id: "aie_porter", state: "IN_PROGRESS", work_attempts: 0, firm_scope: "west-peek", requested_by_email: SCOOTER });
-    expect(sent.slice(before).filter((m) => m.to === SCOOTER && /stuck/i.test(m.subject)), "the same cause never emails twice").toHaveLength(1);
+    expect(sent.slice(before).filter((m) => m.to === SCOOTER && /: Blocked$/.test(m.subject)), "the same cause never emails twice").toHaveLength(1);
     const kinds = (await env.WP_OS_DB.prepare("SELECT kind FROM work_card_notice WHERE work_card_id = ?1 ORDER BY sent_at").bind(id).all<{ kind: string }>()).results!.map((n) => n.kind);
     expect(kinds).toEqual(["RECEIVED", "STUCK"]);
     await env.WP_OS_DB.prepare("UPDATE work_kind_rule SET value = '06-22' WHERE kind = ?1 AND rule_key = 'stuck_window_ct'").bind(WEB_PROPERTY_CHANGE_KIND).run();

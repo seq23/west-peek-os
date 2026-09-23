@@ -253,11 +253,14 @@ describe("Porter's web lane: the plan asks for the materials, a reply's file rea
       assets: ["Ep 1/headshot.jpg", "Brand/maax-bold.otf"],
     });
     expect((await tickFor(id)).outcome).toBe("BLOCKED");
-    const plan = (await mailFor(id)).join("\n\n");
-    expect(plan).toMatch(/Missing materials — please send these/);
-    expect(plan).toMatch(/• Ep \*{0,2}6\*{0,2} guest headshot \(JPG\) — for the Ep \*{0,2}6\*{0,2} card on \/podcast/);
-    expect(plan).toMatch(/• Ep \*{0,2}7\*{0,2} guest headshot \(JPG\) — for the Ep \*{0,2}7\*{0,2} card on \/podcast/);
-    expect(plan).toContain(HOW_TO_SEND_MATERIALS);
+    // 23 Sep 2026 (owner: "i should have the option to continue without them and just get
+    // placeholders"): the plan email lists them as OPTIONAL, one line each, and says so; the TL;DR
+    // says the preview is built with placeholders for them. Never "please send these".
+    const plan = (await mailFor(id)).at(-1)!;
+    expect(plan).toMatch(/^\*\*TL;DR:\*\* Plan ready\. Reply \*\*approved\*\* and I'll build the preview now, with placeholders for the \*{0,2}2\*{0,2} missing items\./);
+    expect(plan).toMatch(/\*\*Missing items \(optional\)\*\*\n• Ep \*{0,2}6\*{0,2} guest headshot \(JPG\)\n• Ep \*{0,2}7\*{0,2} guest headshot \(JPG\)\n• You don't need these to continue\. I'll use placeholders; add them to Drive or attach them to any reply and I'll rebuild\./);
+    expect(plan).not.toMatch(/please send these/i);
+    expect(plan).not.toContain(HOW_TO_SEND_MATERIALS);
     expect(JSON.parse((await readWebPropertyChange(env, id))!.assets_json)).toEqual(["Ep 1/headshot.jpg", "Brand/maax-bold.otf"]);
   });
 
@@ -283,10 +286,11 @@ describe("Porter's web lane: the plan asks for the materials, a reply's file rea
     const before = (await mailFor(id)).length;
     expect((await tickFor(id)).outcome).toBe("BLOCKED");
     const preview = (await mailFor(id)).slice(before).join("\n\n");
-    expect(preview).toMatch(/PREVIEW READY/);
-    expect(preview).toMatch(/Still missing/);
-    expect(preview).toMatch(/Ep \*{0,2}7\*{0,2} guest headshot \(JPG\) — for the Ep \*{0,2}7\*{0,2} card on \/podcast/);
-    expect(preview, "the Ep 6 headshot arrived by reply and is not named again").not.toMatch(/Ep \*{0,2}6\*{0,2} guest headshot/);
+    expect(preview).toMatch(/^\*\*TL;DR:\*\* Preview ready, with \*{0,2}1\*{0,2} placeholder\. Reply with one of these:/);
+    // What is still showing as a placeholder, and — separately — what this build filled in.
+    expect(preview).toMatch(/\*\*Still missing \(optional\)\*\*\n• Ep \*{0,2}7\*{0,2} guest headshot \(JPG\)\n/);
+    expect(preview).toMatch(/\*\*Filled in since the plan\*\*\n• Ep \*{0,2}6\*{0,2} guest headshot \(JPG\)\n/);
+    expect(preview.split("**Still missing (optional)**")[1], "the Ep 6 headshot arrived by reply and is not named as missing again").not.toMatch(/Ep \*{0,2}6\*{0,2} guest headshot/);
     expect(JSON.parse((await readWebPropertyChange(env, id))!.placeholders_json)).toEqual(["Ep 7 guest headshot (JPG)"]);
   });
 });

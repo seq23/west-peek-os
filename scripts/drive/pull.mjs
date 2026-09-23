@@ -96,7 +96,7 @@ async function list(token, id, dir, out) {
   do {
     const u = new URL("https://www.googleapis.com/drive/v3/files");
     u.searchParams.set("q", `'${id}' in parents and trashed=false`);
-    u.searchParams.set("fields", "nextPageToken,files(id,name,mimeType,size)");
+    u.searchParams.set("fields", "nextPageToken,files(id,name,mimeType,size,modifiedTime)");
     u.searchParams.set("supportsAllDrives", "true");
     u.searchParams.set("includeItemsFromAllDrives", "true");
     u.searchParams.set("pageSize", "1000");
@@ -255,6 +255,8 @@ export async function mapFolder(folderId, outDir, creds) {
     id: f.id,
     mimeType: f.mimeType,
     size: f.size ? Number(f.size) : null,
+    // 0240: with the id and size, what tells a rebuild "this file changed since the last build".
+    modified: f.modifiedTime ?? null,
     fetched: isDocument(f),
   }));
   writeFileSync(join(outDir, MANIFEST), JSON.stringify({ folder_id: folderId, listed_at: new Date().toISOString(), files: entries }, null, 2));

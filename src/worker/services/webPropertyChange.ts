@@ -3,7 +3,7 @@ import type { Env } from "../env";
 import { json, type RouteContext } from "../router";
 import { appendEvent } from "../events";
 import { actorFromIdentity, type Actor } from "./authorize";
-import { blockCard } from "./blocks";
+import { answerBlock, blockCard } from "./blocks";
 import { runAi } from "../ai/runAi";
 import { deliver } from "./deliverables";
 import { handOver } from "./employeeWork";
@@ -11,7 +11,7 @@ import { parkRun, readRun, type SeatRunRow } from "../ai/subscriptionSeats";
 import { PARTNERS, PREVIEW_PARTNER, partnerByEmail } from "../../shared/registry/partners";
 import { sendOrPreview } from "./previewApproval";
 import type { SweepCard } from "./workSweep";
-import { hostsSentence, readWebPropertyAsk, sitesOf, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
+import { hostsSentence, pagesHostsOf, readWebPropertyAsk, sitesOf, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
 import { approvedAnswers, askLines, decidedFromAsks, readApprovalReply, readAsks, type Ask } from "../../shared/work/approvalReply";
 import { abandonRun } from "../ai/subscriptionSeats";
 import { alreadyTold, recordNotice, routedByFor, threadRootFor, type NoticeKind } from "./requestReply";
@@ -151,13 +151,24 @@ export interface WebPropertyChangeRow {
   property_assumed_from: string | null;
   /** 0237. The DRIVE_MANIFEST paths the approved plan uses; BUILD fetches exactly these. */
   assets_json: string;
+  /** 0240. What a rebuild filled in since the last preview (JSON list), for the next preview email. */
+  filled_json?: string | null;
+  /** 0240. The material set the last BUILD used, and a materials check she asked for. */
+  materials_fingerprint?: string | null;
+  refresh_requested_at?: string | null;
+  refresh_intent?: "PREVIEW" | "PUBLISH" | "CHANGES" | null;
+  /** 0240. Option 3 — "publish" with new materials: lands only a build green AFTER it. */
+  publish_approved_at?: string | null;
+  publish_approved_by?: string | null;
 }
 
 // A card's files and its missing materials live in one shared module (0237) — every employee's
 // runs read them the same way. Re-exported so existing callers and tests are unchanged.
 export { attachmentsFor };
 export type { RequestAttachment };
-import { attachmentsFor, recordMissing, type RequestAttachment } from "./requestMaterials";
+import { attachmentsFor, missingFor, recordMissing, type RequestAttachment } from "./requestMaterials";
+import { cleanPreviewUrls, currentPreviewLine, decidedSoFar, decisionResolutionIn, doneNotice, liveUrlsFrom, MATERIALS_ADDED_PHRASE, planNotice, previewNotice, questionNotice, STAGE, stageSubject, stuckNotice, type NoticeEmail } from "../../shared/work/porterNotices";
+import { porterContext } from "./porterContext";
 import type { MissingMaterial } from "../../shared/work/missingMaterials";
 
 /**
@@ -185,7 +196,7 @@ async function tellRequester(
   env: Env,
   card: Pick<WebPropertyChangeCard, "id" | "title" | "firm_scope" | "requested_by_email" | "preview_first" | "preview_owner_id"> & { assigned_from_card_id?: string | null },
   notice: { kind: NoticeKind; cause: string },
-  email: { what: string; tldr: string; sections: Array<{ label: string; bullets: string[] }>; details?: string | null },
+  email: { what: string; tldr: string; tldrBullets?: string[]; sections: Array<{ label: string; bullets: string[] }>; details?: string | null },
   /** An earlier note's thread token, so this lands in the partner's same conversation. */
   replyOnThread: string | null = null,
 ): Promise<{ sent: boolean; reason: string }> {
@@ -214,12 +225,14 @@ async function tellRequester(
    * inbound path naming the partner's own message.
    */
   const routedBy = await routedByFor(env, card.assigned_from_card_id, PORTER_NAME);
+  const ctx = await porterContext(env, card.id);
   const onThread = replyOnThread ?? (await threadRootFor(env, card.id));
   let out: { sent: boolean; reason: string; threadToken?: string | null };
   try {
     out = await sendOrPreview(env, {
       to,
-      email: { employee: PORTER_NAME, ...email, details: email.details ?? null, routedBy },
+      // THE LATEST PREVIEW ON EVERY EMAIL (owner, 23 Sep 2026), once one exists — read in one place.
+      email: { employee: PORTER_NAME, ...email, sections: [...email.sections, ...(ctx?.previewLine && !email.sections.some((s) => /preview/i.test(s.label)) ? [{ label: "Current preview", bullets: [ctx.previewLine] }] : [])], details: email.details ?? null, routedBy },
       objectType: "work_card",
       objectId: card.id,
       firmScope: card.firm_scope,
@@ -250,7 +263,8 @@ export async function sendReceived(env: Env, cardId: string, input: { tldr?: str
   if (!card || !row) return { sent: false, reason: "no such web property change" };
   const attachments = await attachmentsFor(env, cardId);
   const parts = await readParts(env, cardId);
-  const asked = card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").trim() || card.title;
+  // The plain title (porterContext): the partner's subject, never the brief cut off mid-word.
+  const asked = (await porterContext(env, cardId))?.title ?? (card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").trim() || card.title);
   // WHAT COMES NEXT, READ FROM THE GATE ITSELF (0238): every site change previews first unless the
   // request carried the named force, so "the finished result" is only promised when it is true.
   // (A force phrase acts only beside a pre-approval — `approveAtFiling` is its one reader.)
@@ -263,7 +277,7 @@ export async function sendReceived(env: Env, cardId: string, input: { tldr?: str
   const assumption = row.property_assumed_from ? `I'm reading "the site" as ${row.property_assumed_from} — reply if not.` : null;
   const unresolved = row.target_repo === UNRESOLVED_REPO ? "You said \"the site\" and I have nothing recent to go on — I'll ask you which one." : null;
   return tellRequester(env, card, { kind: "RECEIVED", cause: "" }, {
-    what: `got it — ${asked.slice(0, 60)}`,
+    what: stageSubject(asked, STAGE.RECEIVED),
     tldr: input.tldr?.trim() || `Got it — I'm on it. ${assumption ? `${assumption} ` : ""}${unresolved ? `${unresolved} ` : ""}${next}`,
     sections: [
       {
@@ -286,8 +300,8 @@ export async function sendReceived(env: Env, cardId: string, input: { tldr?: str
 /** STUCK — only when the work cannot proceed without a person, or has sat idle past the ceiling. Once per cause. */
 export async function sendStuck(env: Env, card: WebPropertyChangeCard, cause: string, reason: string, next: string): Promise<{ sent: boolean; reason: string }> {
   return tellRequester(env, card, { kind: "STUCK", cause }, {
-    what: `stuck — ${card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").slice(0, 60)}`,
-    tldr: `I'm stuck: ${reason} — ${next}`,
+    what: stageSubject((await porterContext(env, card.id))?.title ?? card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").slice(0, 60), STAGE.STUCK),
+    tldr: `Blocked: ${reason} — ${next}`,
     sections: [
       { label: "Why", bullets: [reason] },
       { label: "What happens next", bullets: [next, `The card: https://os.joinwestpeek.com/#/work (card ${card.id})`] },
@@ -481,6 +495,7 @@ function partPayload(p: WebPropertyChangePart): LocalJobPart {
     repo: p.repo,
     property_host: p.property_host,
     sites: sitesOf(p.property_host),
+    pages_hosts: pagesHostsOf(p.property_host),
     ask: p.ask,
     pr: p.pr_url ? { url: p.pr_url, number: p.pr_number, branch: p.branch, check_state: p.check_state, check_green_at: p.check_green_at, preview_url: p.preview_url } : null,
     merge_sha: p.merge_sha,
@@ -591,6 +606,10 @@ export async function parkPhase(
     if (!row.check_green_at || row.check_state !== "GREEN") return { parked: false, reason: "the PR has no recorded green check" };
     // A CHANGE THAT PREVIEWS FIRST NEEDS THE SECOND APPROVAL (0220). Land-on-green does not reach here.
     if (needsPreview(row) && !row.land_approved_at && !row.forced_by) return { parked: false, reason: "this change previews first and the partner has not approved the landing after the preview, nor forced it to production" };
+    // THE APPROVAL BINDS TO THE LATEST PREVIEW (0240): an "approved" older than the preview now
+    // showing never lands it, and "publish" with new materials lands only a build green after it.
+    if (needsPreview(row) && !row.forced_by && row.land_approved_at && row.preview_emailed_at && row.land_approved_at < row.preview_emailed_at) return { parked: false, reason: "the landing approval predates the latest preview — a stale approval never lands" };
+    if (row.publish_approved_at && (!row.check_green_at || row.check_green_at <= row.publish_approved_at)) return { parked: false, reason: "\"publish\" was approved, but no build with the new materials has gone green since — nothing lands" };
     // SEVERAL REPOS LAND ALL OR NOTHING (0236): every part's PR recorded green, or nothing is parked.
     const blocking = notGreenParts(await readParts(env, card.id));
     if (blocking.length) return { parked: false, reason: `not every PR is green, so none lands: ${blocking.join("; ")}` };
@@ -611,6 +630,7 @@ export async function parkPhase(
     target_repo: row.target_repo,
     property_host: row.property_host,
     sites: sitesOf(row.property_host),
+    pages_hosts: pagesHostsOf(row.property_host),
     drive: { folder_id: row.drive_folder_id, folder_url: row.drive_folder_url },
     ask: row.ask,
     plan: row.plan_filed_at
@@ -642,7 +662,10 @@ export async function parkPhase(
     pre_approved: row.pre_approved_phrase,
     request: row.request_text ?? row.ask,
     attachments: (await attachmentsFor(env, card.id)).map((a) => ({ id: a.id, filename: a.filename, media_type: a.media_type, bytes: a.bytes, path: `/api/work-cards/${card.id}/attachments/${a.id}` })),
-    pr: row.pr_url ? { url: row.pr_url, number: row.pr_number, branch: row.branch, check_state: row.check_state, check_green_at: row.check_green_at, preview_url: row.preview_url, land_approved_at: row.land_approved_at, forced_by: row.forced_by } : null,
+    pr: row.pr_url ? { url: row.pr_url, number: row.pr_number, branch: row.branch, check_state: row.check_state, check_green_at: row.check_green_at, preview_url: row.preview_url, land_approved_at: row.land_approved_at, forced_by: row.forced_by, preview_emailed_at: row.preview_emailed_at ?? null, publish_approved_at: row.publish_approved_at ?? null } : null,
+    // 0240: a materials check asked for by her reply or the button, and what the last build used.
+    refresh: phase === "BUILD" && (row.refresh_intent === "PREVIEW" || row.refresh_intent === "PUBLISH"),
+    materials_fingerprint: row.materials_fingerprint ?? null,
     rules,
     ...(parts.length ? { parts: parts.map(partPayload) } : {}),
     queue_max_seconds: spec.queueMaxSeconds,
@@ -744,10 +767,12 @@ export function askBlockText(asks: readonly Ask[], readiness?: { publishReady: b
 
 /** The second question: the preview is up, land it? One email for every repo of the job. */
 export function previewBlockText(
-  row: Pick<WebPropertyChangeRow, "pr_url" | "preview_url" | "placeholders_json" | "publish_ready">,
+  row: Pick<WebPropertyChangeRow, "pr_url" | "preview_url" | "placeholders_json" | "publish_ready"> & Partial<Pick<WebPropertyChangeRow, "property_host" | "branch">>,
   parts: readonly Pick<WebPropertyChangePart, "repo" | "property_host" | "pr_url" | "preview_url">[] = [],
 ): string {
   const placeholders = list(row.placeholders_json);
+  // THE ONE CLEAN LINK (23 Sep 2026): the site's branch alias, never six URLs and HTML fragments.
+  row = { ...row, preview_url: cleanPreviewUrls(row.preview_url, pagesHostsOf(row.property_host ?? null), row.branch ?? "") };
   if (parts.length) {
     return [
       `PREVIEW READY in ${parts.length} repos — one landing for all of them:`,
@@ -763,6 +788,44 @@ export function previewBlockText(
     ...(placeholders.length ? [`Ships with ${placeholders.length} placeholder${placeholders.length === 1 ? "" : "s"}: ${placeholders.join("; ")}.`] : []),
     `Reply "approved" to land it, or "changes: …" to hold it. Nothing lands without that word.${placeholders.length ? ` ("approved to production" also lands it and names the placeholders and you in the DONE email.)` : ""}`,
   ].join("\n");
+}
+
+/** "fu_sequoia_taylor" / "sequoia@…" → "Sequoia"; anything else (Porter's own approval) as it is. */
+function approverName(by: string | null | undefined): string | null {
+  if (!by) return null;
+  const p = PARTNERS.find((x) => x.firmUserId === by || x.email === by.toLowerCase());
+  return p ? p.firstName : /built without asking/.test(by) ? "Porter (nothing to ask)" : /pre-approved/.test(by) ? `${PARTNERS.find((x) => by.startsWith(x.firmUserId))?.firstName ?? "the partner"} (pre-approved in the request)` : by;
+}
+
+/**
+ * PORTER'S PLAN AND PREVIEW EMAILS, COMPOSED FROM THE ROW (owner, 23 Sep 2026). The sweep asks for
+ * this before it emails the requester; null for every other notice, which keeps the shared skeleton
+ * (plus the current preview line, from `porterContext`). See `shared/work/porterNotices.ts`.
+ */
+export async function porterNoticeEmail(env: Env, cardId: string, kind: NoticeKind, detail: string = "", opts: { resend?: boolean } = {}): Promise<NoticeEmail | null> {
+  const row = await readWebPropertyChange(env, cardId);
+  const ctx = await porterContext(env, cardId);
+  if (!row || !ctx) return null;
+  const missing = await missingFor(env, cardId);
+  // THE QUESTION ITSELF — the card's `block_needed`, what would clear it — never the long sentence the
+  // sweep wraps around it; the sweep's own detail only when the card carries none.
+  const needed = (await env.WP_OS_DB.prepare("SELECT block_needed FROM work_card WHERE id = ?1").bind(cardId).first<{ block_needed: string | null }>())?.block_needed ?? "";
+  const lines = (needed.trim() || detail).split("\n").map((l) => l.replace(/^[•·\-*]\s+/, "").trim()).filter(Boolean);
+  if (kind === "PLAN") return planNotice({ title: ctx.title, asks: asksOf(row), missing, previewLine: ctx.previewLine, cardId, sites: ctx.sites });
+  if (kind === "PREVIEW") {
+    // A preview's round counts the previews actually sent, re-sends of the same one excluded.
+    const sent = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PREVIEW' AND sent = 1 AND cause NOT LIKE 'resend:%'").bind(cardId).first<{ n: number }>();
+    return previewNotice({ title: ctx.title, previewLine: ctx.previewLine, placeholders: list(row.placeholders_json), filled: list(row.filled_json), round: Math.max(1, (sent?.n ?? 0) + (opts.resend ? 0 : 1)), cardId, sites: ctx.sites, decided: decidedSoFar(asksOf(row), list(row.answers_json), approverName(row.plan_approved_by)) });
+  }
+  if (kind === "QUESTION") return questionNotice({ title: ctx.title, question: lines.slice(0, 12), previewLine: ctx.previewLine, missing: missing.map((m) => m.item), cardId });
+  if (kind === "STUCK") return stuckNotice({ title: ctx.title, blockedBy: lines[0] ?? "something on our side stopped the work", next: lines[1] ?? "Sequoia has been told; you don't need to do anything.", previewLine: ctx.previewLine, cardId });
+  if (kind === "DONE") {
+    // Every site that went live, from the LAND's own curl proof — each repo's, for a job over several.
+    const parts = await readParts(env, cardId);
+    const proof = [row.live_proof ?? "", ...parts.map((p) => p.live_proof ?? "")].join("\n");
+    return doneNotice({ title: ctx.title, liveUrls: liveUrlsFrom(proof), forced: forcedLine(row), missing: missing.map((m) => m.item), previewLine: ctx.previewLine, cardId });
+  }
+  return null;
 }
 
 /** Record the named bypass on the row. The 0220 trigger refuses anyone but the requesting partner. */
@@ -803,6 +866,45 @@ async function blockWithAsks(env: Env, card: WebPropertyChangeCard, row: WebProp
 }
 
 /** BLOCK on the preview: the second question. Records when it was asked so the second approval is read against it. */
+/** What her reply to a preview asks for (0240). Null: not a rebuild ("approved", "no", "stop"). Pure. */
+export function rebuildIntentFor(answer: string): "PREVIEW" | "PUBLISH" | "CHANGES" | null {
+  if (decisionResolutionIn(answer)) return null;
+  if (/^Attached: [^\n]+$/.test(answer.trim())) return "PREVIEW";
+  if (answer.trim().replace(/[.!]+$/, "").toLowerCase() === MATERIALS_ADDED_PHRASE.toLowerCase()) return "PREVIEW";
+  const r = readApprovalReply(answer);
+  if (r.kind === "PUBLISH") return "PUBLISH";
+  if (r.kind === "PREVIEW") return "PREVIEW";
+  if (r.kind === "REFUSED") return r.changes ? "CHANGES" : null;
+  if (r.kind === "ANSWERS") return "CHANGES";
+  return null;
+}
+
+/**
+ * QUEUE THE REBUILD HER REPLY ASKED FOR (0240). CHANGES carries her words into the build whatever the
+ * materials; PREVIEW and PUBLISH ask the Mac for a materials check first and rebuild only if the set
+ * changed. PUBLISH is recorded like the named force — hers alone, with the time — as a landing
+ * approval that binds to a build that goes green AFTER it, never to the preview she is looking at.
+ */
+async function requestRebuild(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, intent: "PREVIEW" | "PUBLISH" | "CHANGES", answer: string | null, rules: Record<string, string>): Promise<RunOutcome> {
+  const now = new Date().toISOString();
+  const requester = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
+  const by = card.block_answered_by ?? requester?.firmUserId ?? null;
+  const patch: Partial<WebPropertyChangeRow> = { refresh_intent: intent, refresh_requested_at: now };
+  if (intent === "CHANGES" && answer) patch.answers_json = JSON.stringify([...list(row.answers_json), answer.slice(0, 2000)]);
+  if (intent === "PUBLISH") Object.assign(patch, { land_approved_at: now, land_approved_by: by, publish_approved_at: now, publish_approved_by: by });
+  await update(env, card.id, patch);
+  await appendFinding(
+    env,
+    card.id,
+    intent === "CHANGES"
+      ? `After the preview, ${card.requested_by_email ?? "the partner"} asked for changes ("${(answer ?? "").slice(0, 200)}"): rebuilding with them; a new preview follows.`
+      : `After the preview, ${card.requested_by_email ?? "the partner"} ${answer ? `replied "${answer.slice(0, 80)}"` : "pressed \"I added missing items\""}: checking the Drive folder and the files on the card for anything new. ${intent === "PUBLISH" ? "If something changed, it is filled in and published without another preview" : "If something changed, a new preview follows"}; if nothing did, she is told so.`,
+  );
+  const parked = await parkPhase(env, card, { ...row, ...patch } as WebPropertyChangeRow, "BUILD", rules);
+  if (!parked.parked) return { finished: false, blocked: false, progressed: true, detail: parked.reason };
+  return { finished: false, blocked: false, progressed: true, detail: `${intent === "CHANGES" ? "Changes after the preview" : "A materials check after the preview"}; BUILD queued for the Mac (${phaseModel(rules, "BUILD")}).` };
+}
+
 async function blockOnPreview(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow): Promise<string> {
   const why = await blockCard(env, card, {
     reason: "a_question_for_you",
@@ -1049,7 +1151,17 @@ export async function applyReport(
     return { finished: false, blocked: false, progressed: false, detail: `${report.phase} failed: ${report.reason}` };
   }
 
+  if (report.status === "unchanged") return applyUnchanged(env, card, row, report);
   if (report.phase === "PLAN") return applyPlan(env, card, row, report);
+  // 0240: the material set this build used, and what it filled in since the last preview.
+  if (report.phase === "BUILD") {
+    const before = (await missingFor(env, card.id)).map((m) => m.item);
+    const after = report.missing_materials ? report.missing_materials.map((m) => m.item) : before;
+    const filled = before.filter((b) => !after.includes(b));
+    await update(env, card.id, { ...(report.materials ? { materials_fingerprint: report.materials } : {}), filled_json: JSON.stringify(filled), refresh_intent: null });
+    row = { ...row, ...(report.materials ? { materials_fingerprint: report.materials } : {}), filled_json: JSON.stringify(filled), refresh_intent: null };
+    if (filled.length) await appendFinding(env, card.id, `Filled in by this build: ${filled.join("; ")}.`);
+  }
   // AFTER A REBUILD (0237): what is STILL missing, re-checked against the re-mapped package, replaces
   // the plan's list — the preview and DONE emails name only what did not arrive. Not reported: stands.
   if (report.phase === "BUILD" && report.missing_materials) {
@@ -1059,6 +1171,32 @@ export async function applyReport(
   }
   if (report.phase === "BUILD") return applyBuild(env, card, row, report, rules);
   return applyLand(env, card, row, report);
+}
+
+/**
+ * NOTHING NEW ARRIVED (0240). She replied "preview" or "publish", or pressed "I added missing items",
+ * and the Mac found the same folder and the same files the last build used — so it built nothing.
+ * She is told once, in words; a "publish" approval is withdrawn (it was for new materials, and there
+ * are none), and the card waits on the SAME preview, whose approval still binds.
+ */
+async function applyUnchanged(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, report: LocalJobReport): Promise<RunOutcome> {
+  const wasPublish = row.refresh_intent === "PUBLISH";
+  const patch: Partial<WebPropertyChangeRow> = { refresh_intent: null, ...(report.materials ? { materials_fingerprint: report.materials } : {}) };
+  if (wasPublish) Object.assign(patch, { land_approved_at: null, land_approved_by: null, publish_approved_at: null, publish_approved_by: null });
+  await update(env, card.id, patch);
+  const said = `I didn't find anything new in the folder or attached${wasPublish ? `; reply "approved" to publish as is` : ""}.`;
+  await appendFinding(env, card.id, `Materials check: nothing new since the last build. ${wasPublish ? "The \"publish\" approval is withdrawn; nothing lands. " : ""}Told ${card.requested_by_email ?? "the partner"}: "${said}"`);
+  await tellRequester(env, card, { kind: "QUESTION", cause: `unchanged:${row.refresh_requested_at ?? new Date().toISOString()}` }, {
+    what: stageSubject((await porterContext(env, card.id))?.title ?? "Your site change", STAGE.UNCHANGED),
+    tldr: said,
+    sections: [
+      { label: "What I checked", bullets: ["The Drive folder, re-mapped just now, and every file attached on this card."] },
+      { label: "Your call", bullets: [`**approved**: publish the current preview as is.`, `Add the missing items to Drive or attach them to a reply, then reply "preview" or "publish".`, `The card: https://os.joinwestpeek.com/#/work (card ${card.id})`] },
+    ],
+  });
+  const fresh = { ...row, ...patch } as WebPropertyChangeRow;
+  const why = await blockOnPreview(env, card, fresh);
+  return { finished: false, blocked: true, progressed: false, detail: `nothing new in the materials; waiting on the same preview. ${why}` };
 }
 
 async function applyPlan(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, report: LocalJobReport): Promise<RunOutcome> {
@@ -1173,7 +1311,11 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
   const since = [row.plan_approved_at, row.preview_emailed_at, row.forced_at].filter((x): x is string => Boolean(x)).sort().pop() ?? null;
   // 1 · An answer to a block, from the requester, that reads REFUSED.
   const answer = answerSince(card, since);
-  if (answer && (!requester || !card.block_answered_by || card.block_answered_by === requester.firmUserId) && readApprovalReply(answer).kind === "REFUSED") {
+  // "changes: …" to a PREVIEW is not a hold (0240, her option 2): it rebuilds with them and sends a
+  // new preview — the preview wait in the runner takes it. Before the plan, it still holds.
+  const atPreview = row.phase === "BUILD" && row.check_state === "GREEN" && needsPreview(row) && !row.land_approved_at && !row.forced_by;
+  const reading = answer ? readApprovalReply(answer) : null;
+  if (answer && (!requester || !card.block_answered_by || card.block_answered_by === requester.firmUserId) && reading?.kind === "REFUSED" && !(atPreview && reading.changes)) {
     return answer;
   }
   // 2 · Notes nobody has read yet. EVERY unread note is acknowledged here (the sweep takes a held
@@ -1280,13 +1422,15 @@ async function applyBuild(env: Env, card: WebPropertyChangeCard, row: WebPropert
    * and the card waits for the second "approved". Land-on-green does not apply to this row.
    */
   if (needsPreview(fresh) && !fresh.land_approved_at && !fresh.forced_by) {
+    // EVERY PREVIEW ON THE CARD'S TIMELINE (0240), with what it reflects.
+    await appendFinding(env, card.id, `Preview ready — ${currentPreviewLine(fresh, [], { pagesHosts: pagesHostsOf(fresh.property_host), branch: fresh.branch }) ?? report.pr_url}.`);
     const why = await blockOnPreview(env, card, fresh);
     return { finished: false, blocked: true, progressed: false, detail: why };
   }
   if (isOn(rules.land_on_green)) {
     const parked = await parkPhase(env, card, fresh, "LAND", rules);
     if (!parked.parked) return { finished: false, blocked: false, progressed: false, detail: `green, but LAND could not be queued: ${parked.reason}` };
-    return { finished: false, blocked: false, progressed: true, detail: `PR ${report.pr_url} is green; landing is queued for the Mac (land on green is on).` };
+    return { finished: false, blocked: false, progressed: true, detail: `PR ${report.pr_url} is green; landing is queued for the Mac (${fresh.publish_approved_at ? "published with the new materials, as she asked — no further preview" : "land on green is on"}).` };
   }
   const why = await blockCard(env, card, {
     reason: "a_question_for_you",
@@ -1833,7 +1977,8 @@ export async function runWebPropertyChangeCard(
       });
       return { finished: false, blocked: true, progressed: false, detail: why };
     }
-    const oneWord = reading.kind === "APPROVED" || reading.kind === "PREVIEW" || reading.kind === "FORCED";
+    // "publish" before any preview exists reads as "approved": build the preview (every change previews first).
+    const oneWord = reading.kind === "APPROVED" || reading.kind === "PREVIEW" || reading.kind === "FORCED" || reading.kind === "PUBLISH";
     const newAnswers = oneWord ? approvedAnswers(asks) : [reading.text];
     const answers = [...list(row.answers_json), ...newAnswers];
     const now = new Date().toISOString();
@@ -1893,6 +2038,26 @@ export async function runWebPropertyChangeCard(
         if (!parked.parked) return { finished: false, blocked: false, progressed: true, detail: parked.reason };
         return { finished: false, blocked: false, progressed: true, detail: `Forced to production after the preview; LAND queued for the Mac (${phaseModel(rules, "LAND")}).` };
       }
+      /*
+       * A PREVIEW AT EVERY STOPPING POINT (0240). Her reply to a preview — or "I added missing items"
+       * since it went out — is the ONLY thing that re-checks the materials; nothing polls. "changes:
+       * …" (and any answer in her own words) rebuilds with them; "preview" and "publish" rebuild only
+       * if the Drive folder or her files actually changed. "approved" and "no"/"stop" are below.
+       */
+      // "decision 6: …" SETTLES ONE DECISION — recorded as its answer, no rebuild, the same preview waits.
+      const resolution = fromRequester && answer ? decisionResolutionIn(answer) : null;
+      if (resolution && resolution.n >= 1 && resolution.n <= asksOf(row).length) {
+        const who = (card.requested_by_email ? partnerByEmail(card.requested_by_email)?.firstName : null) ?? "the partner";
+        const day = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric" }).format(new Date());
+        const entry = `${resolution.n}. ${resolution.chosen} (solved: ${who} confirmed ${resolution.why ?? "it"} (${day}))`;
+        await update(env, card.id, { answers_json: JSON.stringify([...list(row.answers_json), entry]) });
+        await appendFinding(env, card.id, `Decision ${resolution.n} settled by ${who}: ${resolution.chosen}${resolution.why ? ` — ${resolution.why}` : ""}. No rebuild: the preview already reflects it; the same preview waits for "approved".`);
+        const why = await blockOnPreview(env, card, { ...row, answers_json: JSON.stringify([...list(row.answers_json), entry]) });
+        return { finished: false, blocked: true, progressed: false, detail: `Decision ${resolution.n} recorded; waiting on the same preview. ${why}` };
+      }
+      // The "I added missing items" button answers the block with exactly that phrase (handleMaterialsAdded).
+      const intent = landReading?.kind === "APPROVED" || !fromRequester || !answer ? null : rebuildIntentFor(answer);
+      if (intent) return requestRebuild(env, card, row, intent, answer, rules);
       if (landReading?.kind !== "APPROVED") {
         if (answer) {
           await appendFinding(env, card.id, `${fromRequester ? "After the preview" : `An answer from ${card.block_answered_by} (not the partner who asked)`}: "${answer.slice(0, 400)}" — not a landing approval; nothing lands.`);
@@ -1945,6 +2110,66 @@ export async function runWebPropertyChangeCard(
 }
 
 // ── HTTP: the rules, and the row for the page ────────────────────────────────────────────────
+
+// ── "I added missing items", and the preview re-sent in the new template (0240) ──────────────
+
+/** The requesting partner, from the signed-in identity, or the refusal. */
+async function requesterOnly(ctx: RouteContext): Promise<{ card: WebPropertyChangeCard & { kind: string | null; state: string }; partner: NonNullable<ReturnType<typeof partnerByEmail>> } | Response> {
+  const id = ctx.params.id ?? "";
+  const card = await ctx.env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(id).first<WebPropertyChangeCard & { kind: string | null; state: string }>();
+  if (!card) return json({ error: "not_found" }, { status: 404 });
+  const partner = PARTNERS.find((p) => p.firmUserId === ctx.identity?.id) ?? null;
+  if (!partner) return json({ error: "forbidden", detail: "Only a Managing Partner can do this." }, { status: 403 });
+  const requester = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
+  if (requester && requester.firmUserId !== partner.firmUserId) return json({ error: "forbidden", detail: `Only ${requester.fullName} asked for this, so only ${requester.firstName} can.` }, { status: 403 });
+  return { card, partner };
+}
+
+/**
+ * POST /api/work-cards/:id/materials-added — the "I added missing items" button (owner, 23 Sep 2026;
+ * the label is hers, exactly). Pressing it is the same as replying with those words: waiting on a
+ * preview, the card re-checks the Drive folder and its files and rebuilds only if something changed
+ * (and says so if nothing did); anywhere else it is noted for the next run, which re-maps the folder
+ * and reads every file on the card anyway. Never a plan approval. The requesting partner only.
+ */
+export async function handleMaterialsAdded(ctx: RouteContext): Promise<Response> {
+  const who = await requesterOnly(ctx);
+  if (who instanceof Response) return who;
+  const { card, partner } = who;
+  const row = card.kind === WEB_PROPERTY_CHANGE_KIND ? await readWebPropertyChange(ctx.env, card.id) : null;
+  const atPreview = Boolean(row && card.state === "BLOCKED" && row.check_state === "GREEN" && needsPreview(row) && !row.land_approved_at && !row.forced_by);
+  if (atPreview || (card.state === "BLOCKED" && card.kind !== WEB_PROPERTY_CHANGE_KIND)) {
+    const out = await answerBlock(ctx.env, card.id, partner.firmUserId, { action: "ANSWER", text: MATERIALS_ADDED_PHRASE });
+    if (!out.ok) return json({ error: "not_answered", detail: out.said }, { status: 409 });
+    return json({ ok: true, said: `${MATERIALS_ADDED_PHRASE} — noted. I'll check the Drive folder and the files on the card; if anything is new you'll get a new preview, and if not I'll say so.` });
+  }
+  await ctx.env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)")
+    .bind(`wcn_${crypto.randomUUID()}`, card.id, partner.firmUserId, `${MATERIALS_ADDED_PHRASE} — look again at the Drive folder and the files on this card.`, card.firm_scope)
+    .run();
+  if (row) await appendFinding(ctx.env, card.id, `${partner.firstName} pressed "${MATERIALS_ADDED_PHRASE}". The next build re-maps the Drive folder and reads every file on the card, so they are used from then on.`);
+  return json({ ok: true, said: `${MATERIALS_ADDED_PHRASE} — noted. The next run picks them up from the Drive folder and the card.` });
+}
+
+/**
+ * POST /api/work-cards/:id/resend-preview — the preview email again, in the current template, on the
+ * same thread with the same link (23 Sep 2026: a preview that went out in the old format before the
+ * rewrite shipped). Through the normal notice path, so it is recorded in `work_card_notice`; once
+ * per preview (`resend:<preview_emailed_at>`), so a double press sends nothing twice. Requester only.
+ */
+export async function handleResendPreview(ctx: RouteContext): Promise<Response> {
+  const who = await requesterOnly(ctx);
+  if (who instanceof Response) return who;
+  const { card } = who;
+  const row = await readWebPropertyChange(ctx.env, card.id);
+  if (!row || !(row.check_state === "GREEN" && needsPreview(row) && !row.land_approved_at && !row.forced_by)) {
+    return json({ error: "no_preview_waiting", detail: "This card is not waiting on a preview, so there is nothing to re-send." }, { status: 409 });
+  }
+  const email = await porterNoticeEmail(ctx.env, card.id, "PREVIEW", "", { resend: true });
+  if (!email) return json({ error: "no_preview_waiting" }, { status: 409 });
+  const out = await tellRequester(ctx.env, card, { kind: "PREVIEW", cause: `resend:${row.preview_emailed_at ?? row.check_green_at ?? ""}` }, { what: email.what, tldr: email.tldr, tldrBullets: email.tldrBullets, sections: email.sections });
+  const notice = await ctx.env.WP_OS_DB.prepare("SELECT message_id, sent FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PREVIEW' AND cause = ?2").bind(card.id, `resend:${row.preview_emailed_at ?? row.check_green_at ?? ""}`).first<{ message_id: string | null; sent: number }>();
+  return json({ ok: out.sent, detail: out.reason, message_id: notice?.message_id ?? null });
+}
 
 /** GET /api/work-kinds/:kind/rules */
 export async function handleWorkKindRules(ctx: RouteContext): Promise<Response> {

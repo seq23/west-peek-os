@@ -43,6 +43,12 @@ export interface ExecEmailInput {
   what: string;
   /** One or two sentences. The prefix is added here; do not write "TL;DR" yourself. */
   tldr: string;
+  /**
+   * THE REPLY OPTIONS, AS THE TL;DR (owner, 23 Sep 2026: the reply-options sentence "IS the TL;DR").
+   * Short bullets rendered directly under the TL;DR line, before any section — so what she can
+   * answer is the first thing she reads, never buried at the bottom. Omitted, nothing changes.
+   */
+  tldrBullets?: readonly string[];
   sections: readonly ExecEmailSection[];
   /** The full material, below the rule. Markdown-ish plain text; may be long. */
   details?: string | null;
@@ -92,12 +98,13 @@ function oneLine(s: string): string {
  * Bold the numbers — counts, money, percentages, dates — in a bullet the sender did not already
  * bold. A partner scanning for "how many" and "how much" finds them without reading the line.
  */
+// A clock time ("12:40 CT") is not a figure: neither side of the colon is bolded (23 Sep 2026).
 export function boldNumbers(line: string): string {
   // Split on existing bold spans so a number already inside one is left alone.
   return line
     .split(/(\*\*[^*]+\*\*)/)
     .map((part) =>
-      part.startsWith("**") ? part : part.replace(/(?<![\w*/.#-])(?<!(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\s)(\$?\d(?:[\d,]*\d)?(?:\.\d+)?(?:%|[kKmM]\b)?)(?!\d)(?!-\d)(?![\w*/.-]*[A-Za-z/])/g, "**$1**"),
+      part.startsWith("**") ? part : part.replace(/(?<![\w*/.#:-])(?<!(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\s)(\$?\d(?:[\d,]*\d)?(?:\.\d+)?(?:%|[kKmM]\b)?)(?!\d)(?!-\d)(?!:\d)(?![\w*/.-]*[A-Za-z/])/g, "**$1**"),
     )
     .join("");
 }
@@ -170,8 +177,10 @@ export function renderExecEmail(input: ExecEmailInput): RenderedExecEmail {
   const details = input.details ? breakProseRuns(input.details) : "";
   const footer = execFooter(input.employee, input.routedBy);
 
+  const tldrBullets = (input.tldrBullets ?? []).map((b) => oneLine(b)).filter(Boolean);
   const text = [
     `**TL;DR:** ${tldr}`,
+    ...tldrBullets.map((b) => `${BULLET} ${b}`),
     "",
     ...sections.flatMap((s) => [`**${s.label}**`, ...s.bullets.map((b) => `${BULLET} ${b}`), ""]),
     ...(details ? [DETAILS_RULE, "", details, ""] : []),
@@ -183,7 +192,7 @@ export function renderExecEmail(input: ExecEmailInput): RenderedExecEmail {
   return {
     subject: execSubject(input.employee, input.what),
     text,
-    html: renderHtml({ tldr, sections, details, footer }),
+    html: renderHtml({ tldr, tldrBullets, sections, details, footer }),
   };
 }
 
@@ -250,9 +259,10 @@ function detailsHtml(details: string): string {
   return out.join("\n");
 }
 
-function renderHtml(parts: { tldr: string; sections: ExecEmailSection[]; details: string; footer: string }): string {
+function renderHtml(parts: { tldr: string; tldrBullets: readonly string[]; sections: ExecEmailSection[]; details: string; footer: string }): string {
   const body = [
-    `<p style="margin:0 0 16px"><strong>TL;DR:</strong> ${inlineHtml(parts.tldr)}</p>`,
+    `<p style="margin:0 0 ${parts.tldrBullets.length ? 4 : 16}px"><strong>TL;DR:</strong> ${inlineHtml(parts.tldr)}</p>`,
+    ...(parts.tldrBullets.length ? [`<ul style="margin:0 0 16px 18px;padding:0">${parts.tldrBullets.map((b) => `<li style="margin:2px 0">${inlineHtml(b)}</li>`).join("")}</ul>`] : []),
     ...parts.sections.map(
       (s) =>
         `<p style="margin:14px 0 4px"><strong>${escapeHtml(s.label)}</strong></p>` +
