@@ -2,7 +2,6 @@
 /**
  * PULL A GOOGLE DRIVE FOLDER TO DISK, on her Mac, with the firm's service account.
  *
- *   node scripts/drive/pull.mjs <folder-id> <out-dir>          pull recursively, print each file, exit 1 on zero files
  *   node scripts/drive/pull.mjs --map <folder-id> <out-dir>    list every file into DRIVE_MANIFEST.json, fetch the documents
  *   node scripts/drive/pull.mjs --fetch <out-dir> <path>…      fetch named assets from that manifest, on demand
  *   node scripts/drive/pull.mjs --self-test                     no network: the pure parts
@@ -15,6 +14,14 @@
  * WHAT IT DOES. Walks the folder recursively; downloads binary files as they are; EXPORTS Google
  * Docs as text, Sheets as CSV and Slides as PDF; skips other Google-native types and says so.
  *
+ * NO FILE OVER 1 GB IS EVER DOWNLOADED, BY ANY PATH (23 Sep 2026). The refusal used to guard
+ * `--fetch` only, and the legacy whole-folder mode (`pull.mjs <folder> <out>`, no flag) had no cap
+ * at all — a stale claimer ran it on the community package and began copying a 14.6 GB recording.
+ * The legacy mode is gone (nothing in the repo called it: the duty runs `--map` and `--fetch` only,
+ * and its own self-test pins that), and the ceiling now lives in `fetchOne`, the ONE function every
+ * download goes through: refused up front on Drive's reported size, and cut off mid-stream by a byte
+ * counter when the size is missing or wrong. `--self-test` pins both.
+ *
  * ZERO FILES IS A FAILURE, NOT A SUCCESS (Rule 0). A folder the account cannot see, an empty
  * folder, or a share that was never granted all look the same from here — no files — and every
  * one of them means the PLAN phase has nothing to plan from. Exit 1 with the folder id in the
@@ -25,7 +32,7 @@
  * scripts/duties/web-property-change.mjs.
  */
 import { writeFileSync, mkdirSync, readFileSync, createWriteStream } from "node:fs";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { join, relative } from "node:path";
 
@@ -121,9 +128,26 @@ export async function pool(items, n, fn) {
   await Promise.all(workers);
 }
 
-async function fetchOne(token, { f, dir }, tally) {
+/** A pass-through that errors once more than `max` bytes have gone by — the cap for a size Drive did not report. */
+export function byteCap(max, what) {
+  let seen = 0;
+  return new Transform({
+    transform(chunk, _enc, done) {
+      seen += chunk.length;
+      if (seen > max) done(new Error(`${what} passed the ${max / 1e9} GB ceiling mid-download and was stopped`));
+      else done(null, chunk);
+    },
+  });
+}
+
+export async function fetchOne(token, { f, dir }, tally, maxBytes = FETCH_MAX_BYTES) {
   let url;
   let name = safeName(f.name);
+  if (Number(f.size) > maxBytes) {
+    console.log(`FAIL ${dir}/${name} is ${(Number(f.size) / 1e9).toFixed(1)} GB: over the ${maxBytes / 1e9} GB ceiling, not downloaded`);
+    tally.failed += 1;
+    return;
+  }
   if (EXPORT[f.mimeType]) {
     const [mt, ext] = EXPORT[f.mimeType];
     url = `https://www.googleapis.com/drive/v3/files/${f.id}/export?mimeType=${encodeURIComponent(mt)}`;
@@ -151,11 +175,16 @@ async function fetchOne(token, { f, dir }, tally) {
       }
       // Streamed to disk, never held whole in memory (a 14.6 GB episode recording sits in the
       // community package; arrayBuffer() on it would take the Mac's memory with it).
-      await pipeline(Readable.fromWeb(d.body), createWriteStream(join(dir, name)));
+      await pipeline(Readable.fromWeb(d.body), byteCap(maxBytes, `${dir}/${name}`), createWriteStream(join(dir, name)));
       console.log(`${dir}/${name} (${f.size ?? "export"})`);
       tally.files += 1;
       return;
     } catch (err) {
+      if (/GB ceiling/.test(String(err?.message))) {
+        console.log(`FAIL ${err.message}`);
+        tally.failed += 1;
+        return;
+      }
       if (attempt === 2) {
         console.log(`FAIL ${dir}/${name} ${err?.name === "TimeoutError" ? `timed out after ${Math.round(ceiling / 1000)}s twice` : String(err?.message ?? err).slice(0, 120)}`);
         tally.failed += 1;
@@ -169,11 +198,6 @@ async function fetchOne(token, { f, dir }, tally) {
 export function fileCeilingMs(size) {
   const bytes = Number(size) || 0;
   return 120_000 + Math.ceil(bytes / 20_000_000) * 60_000;
-}
-
-async function walk(token, id, dir, tally) {
-  const files = await list(token, id, dir, []);
-  await pool(files, CONCURRENCY, (item) => fetchOne(token, item, tally));
 }
 
 // ── MAP FIRST, FETCH ON DEMAND (owner's decision, 23 Sep 2026) ──────────────────────────────────
@@ -259,19 +283,6 @@ export async function fetchFiles(outDir, wanted, creds) {
   return tally;
 }
 
-/** Pull a folder. Resolves with the tally; REJECTS on zero files, naming the folder. */
-export async function pullFolder(folderId, outDir, creds) {
-  const tally = { files: 0, skipped: 0, failed: 0 };
-  await walk(await accessToken(creds), folderId, outDir, tally);
-  if (tally.files === 0) {
-    throw new Error(
-      `Drive folder ${folderId} yielded ZERO files (${tally.skipped} skipped, ${tally.failed} failed). ` +
-        `Either it is empty, or ${SUBJECT} cannot see it — share it with that account, or send the right folder.`,
-    );
-  }
-  return tally;
-}
-
 async function selfTest() {
   const cases = [
     ["pool runs every item exactly once and never more than n at a time", async () => {
@@ -298,6 +309,43 @@ async function selfTest() {
       return a.found.length === 2 && a.missing.length === 0 && b.found.length === 0 && b.missing.length === 2 && /matches 2 files/.test(b.missing[0]) && /no such file/.test(b.missing[1]);
     }],
     ["a 14.6 GB recording is refused on fetch; a 100 MB MP3 and a font are not", () => tooBigToFetch(14_621_500_000) && !tooBigToFetch(103_597_440) && !tooBigToFetch(60_848) && !tooBigToFetch(null)],
+    ["fetchOne — the one download path — refuses a file over the ceiling before it asks Drive for a byte", async () => {
+      const realFetch = globalThis.fetch;
+      let called = 0;
+      globalThis.fetch = async () => { called += 1; throw new Error("fetched"); };
+      try {
+        const tally = { files: 0, skipped: 0, failed: 0 };
+        await fetchOne("t", { f: { id: "x", name: "Episode 12.mp4", mimeType: "video/mp4", size: "14621500000" }, dir: "/nonexistent" }, tally);
+        return called === 0 && tally.failed === 1 && tally.files === 0;
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+    }],
+    ["a file whose size Drive did not report is cut off mid-stream at the ceiling", async () => {
+      const { mkdtempSync, existsSync: exists, rmSync } = await import("node:fs");
+      const { tmpdir } = await import("node:os");
+      const dir = mkdtempSync(join(tmpdir(), "pull-cap-"));
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = async () => new Response(new ReadableStream({ start(c) { for (let i = 0; i < 4; i++) c.enqueue(new Uint8Array(1000)); c.close(); } }));
+      try {
+        const tally = { files: 0, skipped: 0, failed: 0 };
+        await fetchOne("t", { f: { id: "x", name: "unsized.bin", mimeType: "application/octet-stream" }, dir }, tally, 2500);
+        const underCap = { files: 0, skipped: 0, failed: 0 };
+        await fetchOne("t", { f: { id: "y", name: "small.bin", mimeType: "application/octet-stream" }, dir }, underCap, 10_000);
+        return tally.failed === 1 && tally.files === 0 && underCap.files === 1 && exists(join(dir, "small.bin"));
+      } finally {
+        globalThis.fetch = realFetch;
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }],
+    ["every download goes through fetchOne, and the legacy whole-folder mode is gone", async () => {
+      const whole = readFileSync(new URL(import.meta.url), "utf8");
+      const src = whole.slice(0, whole.indexOf("async function selfTest(")) + whole.slice(whole.lastIndexOf("const isMain"));
+      const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+      const downloads = (code.match(/alt=media|\/export\?mimeType=/g) ?? []).length;
+      const pipelines = (code.match(/await pipeline\(/g) ?? []).length;
+      return downloads === 2 && pipelines === 1 && /byteCap\(maxBytes/.test(code) && !/pullFolder|async function walk\(/.test(code);
+    }],
     ["pool with nothing to do resolves", async () => { await pool([], 8, async () => { throw new Error("ran"); }); return true; }],
     ["a folders/ link yields its id", () => folderIdFrom("https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOp?usp=sharing") === "1AbCdEfGhIjKlMnOp"],
     ["a u/0 link yields its id", () => folderIdFrom("https://drive.google.com/drive/u/0/folders/1AbCdEfGhIjKlMnOp") === "1AbCdEfGhIjKlMnOp"],
@@ -358,22 +406,8 @@ if (isMain) {
         .catch(fail);
       process.exit(0);
     }
-    const [rootArg, out] = process.argv.slice(2);
-    const root = folderIdFrom(rootArg);
-    if (!root || !out) {
-      console.error("usage: node scripts/drive/pull.mjs <folder-id-or-link> <out-dir>");
-      process.exit(2);
-    }
-    const creds = JSON.parse(process.env.GSC_SERVICE_ACCOUNT_JSON ?? "null");
-    if (!creds) {
-      console.error("No service account in the environment. Run under `node scripts/vault/vault.mjs run -- …` so GSC_SERVICE_ACCOUNT_JSON is injected.");
-      process.exit(2);
-    }
-    pullFolder(root, out, creds)
-      .then((t) => console.log(`PULLED ${t.files} file(s) from ${root} into ${out} (${t.skipped} skipped, ${t.failed} failed)`))
-      .catch((err) => {
-        console.error(err instanceof Error ? err.message : String(err));
-        process.exit(1);
-      });
+    // THE LEGACY WHOLE-FOLDER MODE IS GONE (23 Sep 2026): no flag is a usage error, never a copy of everything.
+    console.error("usage: node scripts/drive/pull.mjs --map <folder-id-or-link> <out-dir> | --fetch <out-dir-of-a-map> <path>… | --self-test");
+    process.exit(2);
   }
 }

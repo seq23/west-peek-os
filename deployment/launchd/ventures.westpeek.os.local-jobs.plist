@@ -16,7 +16,10 @@
   NO SECRET IS IN THIS FILE: the two Access token halves and the Drive service account come out of
   the encrypted vault at launch through `vault.mjs run --` and exist only in the child's environment.
 
-  KeepAlive: the claimer's own loop waits; launchd only restarts it if it dies. ThrottleInterval so a
+  KeepAlive (true = restart on ANY exit): the claimer's own loop waits; launchd restarts it if it
+  dies, AND when it exits on purpose because the repo's HEAD moved while it was idle (23 Sep 2026,
+  `restartIfRepoMoved`) — that is how landed code reaches this long-lived process. Keep it `true`:
+  a SuccessfulExit dict would strand the claimer on old code. ThrottleInterval so a
   machine without the vault unlocked, or without `claude`/`gh` on PATH, is one quiet line every five
   minutes, not a spin.
 -->
