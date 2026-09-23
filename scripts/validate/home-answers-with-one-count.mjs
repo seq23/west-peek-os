@@ -48,6 +48,10 @@ const FILES = {
   runState: "src/shared/intelligence/briefRunState.ts",
   preview: "src/client/pages/PreviewApprovals.tsx",
   app: "src/client/App.tsx",
+  // The shell chrome and Approvals: the spec proves phone Home hides the status bar and the
+  // purpose line while desktop Home and a phone on Approvals keep them (23 Sep 2026).
+  purpose: "src/client/pages/PagePurposeBlock.tsx",
+  approvals: "src/client/pages/ApprovalsPage.tsx",
   service: "src/worker/services/deliverables.ts",
   spec: "e2e/home-overhaul.spec.ts",
 };
@@ -112,7 +116,7 @@ export function checkHome(f) {
   const literal = [...spec.matchAll(/getByTestId\("([^"]+)"\)/g)].map((m) => m[1]);
   const prefixes = [...spec.matchAll(/getByTestId\(`([a-z-]+-)\$\{/g)].map((m) => m[1]);
   if (literal.length + prefixes.length === 0) problems.push("spec: zero testids read — nothing checked");
-  const declared = [f.home, f.list, f.panel].join("\n");
+  const declared = [f.home, f.list, f.panel, f.app, f.purpose, f.approvals].join("\n");
   const known = new Set([...declared.matchAll(/data-testid="([^"]+)"/g)].map((m) => m[1]));
   const knownPrefixes = [...declared.matchAll(/data-testid=\{`([a-z-]+-)\$\{/g)].map((m) => m[1]);
   for (const id of new Set(literal)) {
