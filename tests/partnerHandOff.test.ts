@@ -15,12 +15,13 @@ import {
   canForce,
   claimAck,
   decideClaim,
-  ccWithSecondary,
   decideHandOff,
   decideTakeBack,
   handOffAck,
   ownershipIntentIn,
   ownershipView,
+  confirmsHandOff,
+  handOffQuestion,
   roleOf,
   secondaryApprovalRefusal,
   secondaryNoteAck,
@@ -185,15 +186,8 @@ describe("the rules: partners only, the primary hands off, the secondary takes b
   });
 
   it("says it in her words", () => {
-    expect(handOffAck(scooter)).toBe("Handed to Scooter. He'll get the next emails and owns the approvals and missing items. You're secondary: cc'd, and you can take it back any time.");
+    expect(handOffAck(scooter)).toBe("Handed to Scooter. He'll get the next emails and owns the approvals and missing items. You're secondary: it stays on your card list, and you can take it back any time.");
     expect(secondaryApprovalRefusal(scooter)).toBe("Only Scooter can approve this now. Reply 'take this back' to take it over.");
-  });
-
-  it("cc: the secondary joins, partners only, never the recipient", () => {
-    expect(ccWithSecondary([], handed, SCOOTER)).toEqual([SEQUOIA]);
-    expect(ccWithSecondary(["evil@example.com"], handed, SCOOTER)).toEqual([SEQUOIA]);
-    expect(ccWithSecondary([], handed, SEQUOIA)).toEqual([]);
-    expect(ccWithSecondary([], onlySequoia, SEQUOIA)).toEqual([]);
   });
 
   it("the desk: primary first, then secondary", () => {
@@ -249,7 +243,7 @@ describe("a hand-off through the route, on a card with three prior notices", () 
     expect((await card(id)).requested_by_email).toBe(SEQUOIA);
   });
 
-  it("moves primary and secondary, sends Scooter exactly one email and Sequoia one line", async () => {
+  it("moves primary and secondary, and sends exactly one email: To Scooter, Cc Sequoia", async () => {
     sent.length = 0;
     const out = await call(`/api/work-cards/${id}/hand-off`, SEQUOIA, "POST", { to: "scooter@westpeek.ventures" });
     expect(out.status).toBe(200);
@@ -263,7 +257,8 @@ describe("a hand-off through the route, on a card with three prior notices", () 
     // THE NEW PRIMARY'S NOTICE COUNT IS EXACTLY ONE: no re-sends of RECEIVED / PLAN / PREVIEW.
     expect(to(SCOOTER)).toHaveLength(1);
     const mail = to(SCOOTER)[0]!;
-    expect(mail.cc).toBeUndefined();
+    // THE PREVIOUS PRIMARY IS IN CC on the one email — her acknowledgement, and her last email.
+    expect(mail.cc).toEqual([SEQUOIA]);
     // A NEW CONVERSATION, never a forward of hers: its References name only its own token.
     const refs = mail.headers.References ?? "";
     expect(refs).toContain(out.body.message_id);
@@ -284,10 +279,10 @@ describe("a hand-off through the route, on a card with three prior notices", () 
     expect(text).toContain("Sep 23 · Porter → Sequoia: The plan, for approval");
     expect(text).toContain("Sep 23 · Porter → Sequoia: Preview ready");
     expect(text).toContain('Sep 23 · Sequoia → Porter: "approved."');
-    // Her one-line ack.
-    expect(to(SEQUOIA)).toHaveLength(1);
-    expect(to(SEQUOIA)[0]!.text).toContain(handOffAck(scooter));
-    expect(sent).toHaveLength(2);
+    // Her acknowledgement is folded into the one email she is copied on; no second email exists.
+    expect(text).toContain(handOffAck(scooter));
+    expect(to(SEQUOIA)).toHaveLength(0);
+    expect(sent).toHaveLength(1);
     // Nothing was recorded as a re-sent notice.
     const notices = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card_notice WHERE work_card_id = ?1 AND sent_to = ?2").bind(id, SCOOTER).first<{ n: number }>();
     expect(notices!.n).toBe(0);
@@ -308,7 +303,7 @@ describe("a hand-off through the route, on a card with three prior notices", () 
     expect(sent[0]!.headers.References ?? "").not.toContain("a".repeat(32));
   });
 
-  it("the secondary is cc'd on a preview and on the finished email", async () => {
+  it("after the hand-off the secondary gets NO emails: not cc'd on a preview or the finished email", async () => {
     sent.length = 0;
     const c = await card(id);
     await sendOrPreview(env, {
@@ -321,13 +316,29 @@ describe("a hand-off through the route, on a card with three prior notices", () 
       cardAsked: false,
       finished: true,
     });
-    expect(sent.at(-1)).toMatchObject({ to: [SCOOTER], cc: [SEQUOIA] });
+    expect(sent.at(-1)!.to).toEqual([SCOOTER]);
+    expect(sent.at(-1)!.cc).toBeUndefined();
     await replyToRequester(env, { id, title: String(c.title), kind: null, requested_by_email: SCOOTER, firm_scope: "west-peek", preview_first: 0 }, "DONE", "Porter", "It is live.");
     const done = await env.WP_OS_DB.prepare("SELECT cc_emails FROM preview_approval WHERE work_card_id = ?1 ORDER BY created_at DESC").bind(id).first<{ cc_emails: string }>();
     const last = sent.at(-1)!;
-    // The finished email either went (with the cc) or was filed for her first (with the cc frozen on it).
-    if (last.to.includes(SCOOTER) && last.subject !== sent[0]!.subject) expect(last.cc).toEqual([SEQUOIA]);
-    else expect(JSON.parse(done!.cc_emails)).toEqual([SEQUOIA]);
+    // The finished email either went (with no cc) or was filed for review first (with no cc frozen on it).
+    if (last.to.includes(SCOOTER) && last.subject !== sent[0]!.subject) expect(last.cc).toBeUndefined();
+    else expect(JSON.parse(done!.cc_emails)).toEqual([]);
+    expect(sent.every((m) => !m.to.includes(SEQUOIA) && !(m.cc ?? []).includes(SEQUOIA))).toBe(true);
+    // An explicit "cc Sequoia" from the primary still works as before.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET cc_emails = ?2 WHERE id = ?1").bind(id, JSON.stringify([SEQUOIA])).run();
+    await sendOrPreview(env, {
+      to: SCOOTER,
+      email: { employee: "Porter", what: "preview ready", tldr: "Preview ready.", sections: [{ label: "Preview", bullets: ["link"] }, { label: "The card", bullets: ["card"] }], details: null },
+      objectType: "work_card",
+      objectId: id,
+      workCardId: id,
+      firmScope: "west-peek",
+      cardAsked: false,
+      finished: true,
+    });
+    expect(sent.at(-1)!.cc).toEqual([SEQUOIA]);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET cc_emails = '[]' WHERE id = ?1").bind(id).run();
   });
 
   it("the desk serves primary first, then secondary", async () => {
@@ -391,6 +402,7 @@ describe("the secondary cannot approve, force or clear the block", () => {
     expect(c.secondary_partner_email).toBe(SCOOTER);
     expect(sent).toHaveLength(1);
     expect(sent[0]!.to).toEqual([SEQUOIA]);
+    expect(sent[0]!.cc, "the previous primary is copied on the one email").toEqual([SCOOTER]);
     expect(sent[0]!.subject).toMatch(/— yours again$/);
     expect(sent[0]!.text).toContain("You took this card back from Scooter");
     const rows = await env.WP_OS_DB.prepare("SELECT action, via FROM work_card_hand_off WHERE work_card_id = ?1 ORDER BY created_at").bind(id).all<{ action: string; via: string }>();
@@ -454,10 +466,10 @@ describe("Take responsibility on a work card's notification claims the card", ()
     expect(decideClaim({ requested_by_email: null }, SCOOTER)).toMatchObject({ ok: true, action: "CLAIM", primary: { email: SCOOTER }, secondary: { email: SEQUOIA } });
     expect(decideClaim({ requested_by_email: SEQUOIA }, SEQUOIA)).toMatchObject({ ok: true, already: true });
     expect(decideClaim({ requested_by_email: SEQUOIA }, "bob@example.com")).toMatchObject({ ok: false, status: 403 });
-    expect(claimAck(scooter, "Community site redesign")).toBe("Scooter took responsibility for Community site redesign; you're secondary now: cc'd, and you can take it back any time");
+    expect(claimAck(scooter, "Community site redesign")).toBe("Scooter took responsibility for Community site redesign; you're secondary now: it stays on your card list, and you can take it back any time");
   });
 
-  it("Scooter presses it on Sequoia's card: he is primary, she is secondary with one line, he gets the one context email", async () => {
+  it("Scooter presses it on Sequoia's card: he is primary, she is secondary, and one context email goes To him, Cc her", async () => {
     await seedCard(id);
     await notice("ntf_claim_1", id);
     sent.length = 0;
@@ -470,14 +482,15 @@ describe("Take responsibility on a work card's notification claims the card", ()
     const c = await card(id);
     expect(c.requested_by_email).toBe(SCOOTER);
     expect(c.secondary_partner_email).toBe(SEQUOIA);
-    expect(sent).toHaveLength(2);
+    expect(sent).toHaveLength(1);
     expect(to(SCOOTER)).toHaveLength(1);
+    expect(to(SCOOTER)[0]!.cc).toEqual([SEQUOIA]);
     expect(to(SCOOTER)[0]!.text).toContain("You took responsibility for this card");
     expect(to(SCOOTER)[0]!.text).toContain("**How we got here**");
     expect(to(SCOOTER)[0]!.text).toContain("**Decided so far**");
-    expect(to(SEQUOIA)).toHaveLength(1);
-    expect(to(SEQUOIA)[0]!.text).toContain("Scooter took responsibility for Community site redesign");
-    expect(to(SEQUOIA)[0]!.text).toContain("you're secondary now: cc'd, and you can take it back any time");
+    expect(to(SEQUOIA)).toHaveLength(0);
+    expect(to(SCOOTER)[0]!.text).toContain("Scooter took responsibility for Community site redesign");
+    expect(to(SCOOTER)[0]!.text).toContain("you're secondary now: it stays on your card list, and you can take it back any time");
     const row = await env.WP_OS_DB.prepare("SELECT action, via, by_email FROM work_card_hand_off WHERE work_card_id = ?1").bind(id).first();
     expect(row).toEqual({ action: "CLAIM", via: "NOTIFICATION", by_email: SCOOTER });
   });
@@ -507,5 +520,155 @@ describe("Take responsibility on a work card's notification claims the card", ()
     expect(res.status).toBe(200);
     expect(res.body.claim).toBeUndefined();
     expect(sent).toHaveLength(0);
+  });
+});
+
+// ── THE WIDER READER: MORE THAN "HAND THIS TO SCOOTER" (owner, 23 Sep 2026) ─────────────────────
+
+describe("the reader hears a hand-off however she says it — and never guesses", () => {
+  // Sequoia is primary and writing; Scooter is the other partner.
+  const SHOULD_HAND_OFF = [
+    "hand this to Scooter",
+    "give this to Scooter",
+    "pass it to Scooter",
+    "Scooter will take it from here",
+    "Scooter owns the rest",
+    "let Scooter finish this",
+    "Scooter can handle the missing items",
+    "move this to Scooter",
+    "assign to Scooter",
+    "Scooter's got it",
+    "Scooter\u2019s got it.",
+    "over to Scooter",
+    "Over to scooter.",
+    "Hi Porter,\n\nScooter will take it from here. Thanks!",
+    "please pass it over to scooter@westpeek.ventures",
+    "SCOOTER OWNS THE REST",
+    "reassign this to Scooter",
+    "Scooter is taking over",
+    "let Scooter take it",
+    "It's Scooter's now",
+  ];
+  const SHOULD_NOT_HAND_OFF = [
+    "cc Scooter",
+    "cc: scooter@westpeek.ventures",
+    "Please cc Scooter on the finished email",
+    "hand this to Scooter, cc Scooter",
+    "ask Scooter about the logo",
+    "Scooter says the orange is fine",
+    "Scooter liked the preview",
+    "tell Scooter the preview is up",
+    "let Scooter know it's live",
+    "email Scooter the link",
+    "loop in Scooter",
+    "from Scooter: the orange is fine",
+    "approved",
+    "changes: make the logo bigger",
+    "Sequoia will take it from here",
+    "looks good\n\nScooter will take it from here next month maybe",
+    "> hand this to Scooter",
+    "I sent the fonts over to Scooter",
+  ];
+
+  it.each(SHOULD_HAND_OFF)("hands off: %s", (said) => {
+    expect(ownershipIntentIn(said, SEQUOIA)).toMatchObject({ kind: "HAND_OFF", to: { email: SCOOTER } });
+  });
+
+  it.each(SHOULD_NOT_HAND_OFF)("does not hand off: %s", (said) => {
+    expect(ownershipIntentIn(said, SEQUOIA)?.kind).not.toBe("HAND_OFF");
+  });
+
+  it("the talk-about-him and cc cases are not even a question", () => {
+    for (const said of ["cc Scooter", "ask Scooter about the logo", "Scooter says the orange is fine", "tell Scooter the preview is up", "hand this to Scooter, cc Scooter"]) {
+      expect(ownershipIntentIn(said, SEQUOIA)).toBeNull();
+    }
+  });
+
+  it("GUARD: any message with a cc and a partner's name never hands off", () => {
+    for (const said of SHOULD_HAND_OFF) {
+      expect(ownershipIntentIn(`${said}. cc Scooter`, SEQUOIA)).toBeNull();
+      expect(ownershipIntentIn(`cc: scooter@westpeek.ventures\n${said}`, SEQUOIA)).toBeNull();
+    }
+  });
+
+  it("take-back, however it is said", () => {
+    for (const said of ["take this back", "I'll take it back", "give it back to me", "I'm taking this over", "I've got it from here", "I'll take over", "it's mine again", "Take it back, thanks", "I\u2019ll take it back."]) {
+      expect(ownershipIntentIn(said, SEQUOIA), said).toEqual({ kind: "TAKE_BACK" });
+    }
+    for (const said of ["we may take this back to the drawing board", "approved", "I've got a question about the logo"]) {
+      expect(ownershipIntentIn(said, SEQUOIA)?.kind, said).not.toBe("TAKE_BACK");
+    }
+  });
+
+  it("unsure is a question, never a hand-off", () => {
+    for (const said of ["Scooter should probably own this", "maybe Scooter could handle it?", "I think this is more Scooter's area, he can take over", "Scooter will take a look"]) {
+      expect(ownershipIntentIn(said, SEQUOIA), said).toMatchObject({ kind: "UNSURE_HAND_OFF", to: { email: SCOOTER } });
+    }
+    expect(handOffQuestion(scooter)).toBe("Did you mean hand this card to Scooter? Reply 'yes' and I will.");
+    expect(confirmsHandOff("yes")).toBe(true);
+    expect(confirmsHandOff("Yes please.")).toBe(true);
+    expect(confirmsHandOff("yes but change the logo")).toBe(false);
+  });
+});
+
+describe("unsure → Porter asks once; 'yes' performs it", () => {
+  it("by reply: the question goes out once, nothing moves, and 'yes' on its thread hands off", async () => {
+    const id = "wc_handoff_unsure_reply";
+    const { previewThread } = await seedCard(id);
+    sent.length = 0;
+    await replyFrom(SEQUOIA, "Scooter should probably own this", previewThread);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.to).toEqual([SEQUOIA]);
+    expect(sent[0]!.text).toContain("Did you mean hand this card to Scooter? Reply 'yes' and I will.");
+    let c = await card(id);
+    expect(c.requested_by_email).toBe(SEQUOIA);
+    expect(c.state).toBe("BLOCKED");
+    expect(c.block_answer ?? null, "an unsure message is never read as an answer").toBeNull();
+    const asked = await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'work_card.hand_off_confirm_asked'").bind(id).first<{ payload_json: string }>();
+    const token = JSON.parse(asked!.payload_json).token as string;
+    expect(token).toMatch(/^wpt_/);
+    // A "yes" on some OTHER thread is not an answer to the question.
+    sent.length = 0;
+    await replyFrom(SEQUOIA, "yes", `wpt_${"a".repeat(32)}`);
+    expect((await card(id)).requested_by_email).toBe(SEQUOIA);
+    // "yes" on the question's thread performs it.
+    sent.length = 0;
+    await replyFrom(SEQUOIA, "yes", token);
+    c = await card(id);
+    expect(c.requested_by_email).toBe(SCOOTER);
+    expect(c.secondary_partner_email).toBe(SEQUOIA);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ to: [SCOOTER], cc: [SEQUOIA] });
+  });
+
+  it("by note: the ack is the question, and a 'yes' note performs it", async () => {
+    const id = "wc_handoff_unsure_note";
+    await seedCard(id);
+    sent.length = 0;
+    const asked = await call(`/api/work-cards/${id}/notes`, SEQUOIA, "POST", { body: "maybe Scooter could handle it?" });
+    expect(asked.status).toBe(201);
+    expect(asked.body.ack).toBe("Did you mean hand this card to Scooter? Reply 'yes' and I will.");
+    expect(sent).toHaveLength(0);
+    expect((await card(id)).requested_by_email).toBe(SEQUOIA);
+    const yes = await call(`/api/work-cards/${id}/notes`, SEQUOIA, "POST", { body: "yes" });
+    expect(yes.status).toBe(201);
+    expect(yes.body.hand_off).toMatchObject({ ok: true, action: "HAND_OFF", primary: SCOOTER });
+    expect((await card(id)).requested_by_email).toBe(SCOOTER);
+  });
+
+  it("a clear phrasing by reply hands off without asking; 'cc Scooter' only records a cc", async () => {
+    const id = "wc_handoff_wide_reply";
+    const { previewThread } = await seedCard(id);
+    sent.length = 0;
+    await replyFrom(SEQUOIA, "cc Scooter", previewThread);
+    let c = await card(id);
+    expect(c.requested_by_email).toBe(SEQUOIA);
+    expect(JSON.parse(String(c.cc_emails))).toEqual([SCOOTER]);
+    expect(sent.some((m) => /Did you mean/.test(m.text))).toBe(false);
+    sent.length = 0;
+    await replyFrom(SEQUOIA, "Scooter will take it from here", previewThread);
+    c = await card(id);
+    expect(c.requested_by_email).toBe(SCOOTER);
+    expect(sent).toHaveLength(1);
   });
 });

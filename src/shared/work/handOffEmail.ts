@@ -44,6 +44,8 @@ export interface HandOffEmailInput {
   decided: readonly string[];
   trail: readonly TrailEntry[];
   cardLink: string;
+  /** The one sentence for the previous primary, who is in Cc: "Handed to Scooter. He'll get…". */
+  changed?: string | null;
 }
 
 const EMPLOYEE = "Porter";
@@ -92,8 +94,9 @@ export function handOffEmail(input: HandOffEmailInput): ExecEmailInput {
     {
       label: "Where it stands",
       bullets: [
+        ...(input.changed ? [input.changed] : []),
         clip(input.stands, 300),
-        `${input.from.firstName} is secondary: cc'd on previews and the finished email, and can take it back.`,
+        `${input.from.firstName} is secondary: sees the card in the OS and can take it back any time (a "take this back" reply, the card's button, or Take responsibility).`,
       ],
     },
   ];
@@ -104,20 +107,4 @@ export function handOffEmail(input: HandOffEmailInput): ExecEmailInput {
   if (input.trail.length) sections.push(...sectionsOf("How we got here", input.trail.map(trailLine)));
   sections.push({ label: "The card", bullets: [input.cardLink] });
   return { employee: EMPLOYEE, what, tldr, sections, details: null };
-}
-
-/** The one-line ack to the partner who handed it off, in the same format. Pure. */
-export function handOffAckEmail(input: { title: string; ack: string; cardLink: string; claimed?: boolean }): ExecEmailInput {
-  const suffix = input.claimed ? " — you're secondary" : " — handed off";
-  const room = SUBJECT_MAX - `${EMPLOYEE}: `.length - suffix.length;
-  return {
-    employee: EMPLOYEE,
-    what: `${clip(input.title, room)}${suffix}`,
-    tldr: input.ack,
-    sections: [
-      { label: "What changed", bullets: [input.ack] },
-      { label: "The card", bullets: [input.cardLink] },
-    ],
-    details: null,
-  };
 }

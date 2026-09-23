@@ -8,18 +8,21 @@ import { approverName, needsPreview, readWebPropertyChange, type WebPropertyChan
 import { porterContext } from "./porterContext";
 import { missingFor } from "./requestMaterials";
 import { decidedSoFar, planReplyForms, PREVIEW_REPLY_FORMS } from "../../shared/work/porterNotices";
-import { partnerByEmail, type Partner } from "../../shared/registry/partners";
+import { partnerByEmail, partnerFor, type Partner } from "../../shared/registry/partners";
 import {
   claimAck,
   decideClaim,
   decideHandOff,
   decideTakeBack,
+  confirmsHandOff,
+  handOffQuestion,
   ownershipIntentIn,
   ownershipOf,
+  roleOf,
   secondaryApprovalRefusal,
   type OwnershipDecision,
 } from "../../shared/work/partnerOwnership";
-import { handOffAckEmail, handOffEmail, type TrailEntry } from "../../shared/work/handOffEmail";
+import { handOffEmail, type TrailEntry } from "../../shared/work/handOffEmail";
 import { readAsks } from "../../shared/work/approvalReply";
 import { plainTitle } from "../../shared/work/siteChange";
 
@@ -50,6 +53,8 @@ export interface OwnershipChange {
   status: number;
   reason?: string;
   action?: OwnershipAction;
+  /** Porter was not sure it was a hand-off and asked (202); nothing moved. */
+  confirm_asked?: boolean;
   /** CLAIM only: the partner was already primary, so nothing moved and nothing was sent. */
   already_primary?: boolean;
   ack?: string;
@@ -114,7 +119,7 @@ export async function changeOwnership(
   const oldPrimary = ownershipOf(card).primary;
   const ackLine = decision.action === "CLAIM" ? claimAck(by, titleOf(card)) : decision.ack;
   // Compose BEFORE the roles move: "How we got here" is the previous primary's own trail.
-  const email = await composeFor(env, card, decision.action, primary, secondary, oldPrimary);
+  const email = await composeFor(env, card, decision.action, primary, secondary, oldPrimary, ackLine);
   // A block that was waiting on the old primary (or on nobody in particular) now waits on the new one.
   const blockWho =
     card.state === "BLOCKED" && (!oldPrimary || (card.block_who ?? "").toUpperCase() === oldPrimary.firstName.toUpperCase()) ? primary.firstName.toUpperCase() : card.block_who;
@@ -142,9 +147,15 @@ export async function changeOwnership(
     .bind(id, card.id, decision.action, by.email, primary.email, secondary.email, input.via, (input.said ?? "").slice(0, 2000) || null, card.firm_scope)
     .run();
 
-  // THE ONE EMAIL — a new conversation of its own, never a forward of the old one.
+  /*
+   * THE ONE EMAIL — a new conversation of its own, never a forward of the old one — with the PREVIOUS
+   * primary in Cc (owner, 23 Sep 2026): that copy IS their acknowledgement, and it is the last email
+   * the secondary gets. From here the secondary sees the card in the OS and can take it back any time.
+   */
+  const cc = oldPrimary && oldPrimary.firmUserId !== primary.firmUserId ? [oldPrimary.email] : [];
   const out = await sendPartnerEmail(env, {
     to: primary.email,
+    ...(cc.length ? { cc } : {}),
     email,
     objectType: "work_card",
     objectId: card.id,
@@ -154,32 +165,17 @@ export async function changeOwnership(
     events: { sent: "work_card.hand_off_emailed", notSent: "work_card.hand_off_email_not_sent" },
   }).catch((err: unknown) => ({ sent: false, reason: err instanceof Error ? err.message : String(err), subject: "", threadToken: null as string | null }));
 
-  let ackMessageId: string | null = null;
-  // THE ONE LINE to the partner who is now secondary: on a hand-off (they handed it) and a claim
-  // (the other partner took responsibility). A take-back sends nothing more: its one email IS the ack.
-  if (decision.action !== "TAKE_BACK") {
-    const ack = await sendPartnerEmail(env, {
-      to: secondary.email,
-      email: handOffAckEmail({ title: titleOf(card), ack: ackLine, cardLink: cardLink(card.id), claimed: decision.action === "CLAIM" }),
-      objectType: "work_card",
-      objectId: card.id,
-      firmScope: card.firm_scope,
-      actorId: by.firmUserId,
-      cardKind: card.kind,
-      replyOnThread: input.ackOnThread ?? null,
-      events: { sent: "work_card.hand_off_acked", notSent: "work_card.hand_off_ack_not_sent" },
-    }).catch(() => ({ sent: false, threadToken: null as string | null }));
-    ackMessageId = ack.sent ? ack.threadToken ?? null : null;
-  }
+  // No second email: the previous primary's copy of the one email above is their acknowledgement.
+  const ackMessageId: string | null = null;
 
   await env.WP_OS_DB.prepare("UPDATE work_card_hand_off SET message_id = ?2, sent = ?3, detail = ?4, ack_message_id = ?5 WHERE id = ?1")
     .bind(id, out.threadToken ?? null, out.sent ? 1 : 0, String(out.reason ?? "").slice(0, 400) || null, ackMessageId)
     .run();
   const line =
     decision.action === "CLAIM"
-      ? `${by.firstName} took responsibility for this card (from the notification): ${primary.firstName} is primary, ${secondary.firstName} is secondary. ${out.sent ? `${primary.firstName} got one email with where it stands; ${secondary.firstName} got one line.` : `The email to ${primary.firstName} was NOT sent: ${out.reason}`}`
+      ? `${by.firstName} took responsibility for this card (from the notification): ${primary.firstName} is primary, ${secondary.firstName} is secondary. ${out.sent ? `${primary.firstName} got one email with where it stands${cc.length ? `, ${secondary.firstName} in Cc` : ""}.` : `The email to ${primary.firstName} was NOT sent: ${out.reason}`}`
       : decision.action === "HAND_OFF"
-      ? `Handed from ${by.firstName} to ${primary.firstName} (${input.via.toLowerCase()}): ${primary.firstName} is primary, ${secondary.firstName} is secondary. ${out.sent ? `${primary.firstName} got one email with where it stands.` : `The email to ${primary.firstName} was NOT sent: ${out.reason}`}`
+      ? `Handed from ${by.firstName} to ${primary.firstName} (${input.via.toLowerCase()}): ${primary.firstName} is primary, ${secondary.firstName} is secondary. ${out.sent ? `${primary.firstName} got one email with where it stands, ${secondary.firstName} in Cc.` : `The email to ${primary.firstName} was NOT sent: ${out.reason}`}`
       : `${by.firstName} took this back from ${secondary.firstName} (${input.via.toLowerCase()}): ${primary.firstName} is primary, ${secondary.firstName} is secondary. ${out.sent ? `${primary.firstName} got one email with where it stands.` : `The email was NOT sent: ${out.reason}`}`;
   await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || '• ' || ?2, 1, 16000) WHERE id = ?1")
     .bind(card.id, line.slice(0, 600))
@@ -210,19 +206,91 @@ export async function changeOwnership(
 }
 
 /**
- * THE WORDS DOOR, shared by a reply and a note: "hand this to Scooter" / "take this back". Returns
- * null when the text says neither, so the caller carries on exactly as before.
+ * THE WORDS DOOR, shared by a reply and a note — the ONE reader of a partner's words about who owns a
+ * card (`ownershipIntentIn`). Returns null when the text says nothing about it, so the caller carries
+ * on exactly as before.
+ *
+ *   · Clear hand-off ("Scooter will take it from here", "over to Scooter", …) → handed off.
+ *   · Clear take-back from the secondary ("I'll take it back", "I've got it from here") → taken back.
+ *     From anyone else those words mean nothing about ownership and are left to the caller.
+ *   · UNSURE → CONFIRM, NEVER GUESS (owner, 23 Sep 2026): Porter asks once, "Did you mean hand this
+ *     card to Scooter? Reply 'yes' and I will." — and nothing else is done with that message.
+ *   · "yes" to that question (on its own thread, or as the next note) → handed off.
  */
 export async function ownershipFromWords(
   env: Env,
   input: { cardId: string; writer: string; text: string; via: "REPLY" | "NOTE"; ackOnThread?: string | null },
 ): Promise<OwnershipChange | null> {
-  const intent = ownershipIntentIn(input.text);
+  const card = await readCard(env, input.cardId);
+  if (!card) return null;
+  if (confirmsHandOff(input.text)) {
+    const pending = await pendingQuestion(env, input.cardId);
+    const writer = partnerFor(input.writer);
+    const answersIt =
+      pending &&
+      writer &&
+      pending.by === writer.email &&
+      (input.via === "REPLY" ? Boolean(input.ackOnThread) && pending.token === input.ackOnThread : pending.via === "NOTE");
+    if (answersIt) {
+      await resolveQuestion(env, card, writer!.firmUserId, "confirmed");
+      return changeOwnership(env, { cardId: input.cardId, actor: input.writer, action: "HAND_OFF", target: pending!.to, via: input.via, said: input.text, ackOnThread: input.ackOnThread ?? null });
+    }
+    return null;
+  }
+  const intent = ownershipIntentIn(input.text, input.writer);
   if (!intent) return null;
   if (intent.kind === "HAND_OFF") {
     return changeOwnership(env, { cardId: input.cardId, actor: input.writer, action: "HAND_OFF", target: intent.to?.email ?? intent.named, via: input.via, said: input.text, ackOnThread: input.ackOnThread ?? null });
   }
-  return changeOwnership(env, { cardId: input.cardId, actor: input.writer, action: "TAKE_BACK", via: input.via, said: input.text, ackOnThread: input.ackOnThread ?? null });
+  if (intent.kind === "TAKE_BACK") {
+    if (roleOf(card, input.writer) !== "SECONDARY") return null;
+    return changeOwnership(env, { cardId: input.cardId, actor: input.writer, action: "TAKE_BACK", via: input.via, said: input.text, ackOnThread: input.ackOnThread ?? null });
+  }
+  // UNSURE: only the primary can hand off, so only the primary is asked; anyone else's words stand.
+  const writer = partnerFor(input.writer);
+  if (!writer || roleOf(card, input.writer) !== "PRIMARY") return null;
+  const question = handOffQuestion(intent.to);
+  let token: string | null = null;
+  if (input.via === "REPLY") {
+    const sent = await tellPartner(env, { cardId: card.id, to: writer, label: "One question", line: question, subjectTail: `hand to ${intent.to.firstName}?`, onThread: input.ackOnThread ?? null });
+    token = sent.threadToken ?? null;
+  }
+  await appendEvent(env, {
+    eventType: "work_card.hand_off_confirm_asked",
+    actorType: "firm_user",
+    actorId: writer.firmUserId,
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope: card.firm_scope,
+    payload: { by: writer.email, to: intent.to.email, via: input.via, token, said: input.text.slice(0, 400) },
+  });
+  await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || '• ' || ?2, 1, 16000) WHERE id = ?1")
+    .bind(card.id, `${writer.firstName} said "${input.text.replace(/\s+/g, " ").slice(0, 120)}": not clearly a hand-off, so nothing was done with it. Porter asked: ${question}`.slice(0, 600))
+    .run();
+  return { ok: true, status: 202, confirm_asked: true, ack: question, message_id: token };
+}
+
+/** The last unanswered "Did you mean…?" on the card, if the newest of the ask/answer events is an ask. */
+async function pendingQuestion(env: Env, cardId: string): Promise<{ by: string; to: string; via: string; token: string | null } | null> {
+  const row = await env.WP_OS_DB.prepare(
+    `SELECT event_type, payload_json FROM event_record
+      WHERE object_type = 'work_card' AND object_id = ?1
+        AND event_type IN ('work_card.hand_off_confirm_asked', 'work_card.hand_off_confirm_resolved', 'work_card.handed_off', 'work_card.taken_back', 'work_card.claimed')
+      ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+  )
+    .bind(cardId)
+    .first<{ event_type: string; payload_json: string }>();
+  if (!row || row.event_type !== "work_card.hand_off_confirm_asked") return null;
+  try {
+    const p = JSON.parse(row.payload_json) as { by?: string; to?: string; via?: string; token?: string | null };
+    return p.by && p.to ? { by: p.by, to: p.to, via: p.via ?? "REPLY", token: p.token ?? null } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveQuestion(env: Env, card: CardRow, actorId: string, how: string): Promise<void> {
+  await appendEvent(env, { eventType: "work_card.hand_off_confirm_resolved", actorType: "firm_user", actorId, objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { how } });
 }
 
 /**
@@ -245,7 +313,7 @@ export async function tellSecondaryRefused(
 export async function tellPartner(
   env: Env,
   input: { cardId: string; to: Partner; label: string; line: string; subjectTail: string; onThread?: string | null },
-): Promise<{ sent: boolean }> {
+): Promise<{ sent: boolean; threadToken?: string | null }> {
   const card = await readCard(env, input.cardId);
   if (!card) return { sent: false };
   return sendPartnerEmail(env, {
@@ -400,7 +468,7 @@ async function handOffTrail(env: Env, cardId: string): Promise<TrailEntry[]> {
   });
 }
 
-async function composeFor(env: Env, card: CardRow, action: OwnershipAction, to: Partner, from: Partner, previousPrimary: Partner | null) {
+async function composeFor(env: Env, card: CardRow, action: OwnershipAction, to: Partner, from: Partner, previousPrimary: Partner | null, ackLine: string) {
   const row = await readWebPropertyChange(env, card.id);
   // THE PORTER EMAILS' OWN READER (porterContext): the same plain title and the same current-preview
   // line — one link per changed site, the branch alias — every other notice on this card carries.
@@ -422,6 +490,7 @@ async function composeFor(env: Env, card: CardRow, action: OwnershipAction, to: 
     decided: row ? decidedSoFar(readAsks(safeParse(row.asks_json)), list(row.answers_json), approverName(row.plan_approved_by)) : [],
     trail: await trailFor(env, card, previousPrimary, job),
     cardLink: cardLink(card.id),
+    changed: ackLine,
   });
 }
 
