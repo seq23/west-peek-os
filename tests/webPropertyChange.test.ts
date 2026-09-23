@@ -12,7 +12,7 @@ import { workCard } from "../src/worker/services/employeeWork";
 import { sweepIdentity } from "../src/worker/services/workSweep";
 import { preApprovalIn } from "../src/shared/work/approvalReply";
 import { readLocalJobReport, WEB_PROPERTY_CHANGE_KIND } from "../src/shared/work/localJobs";
-import { parkPhase, phaseModel, readWebPropertyChange, rulesFor, runWebPropertyChangeCard, type WebPropertyChangeRow } from "../src/worker/services/webPropertyChange";
+import { needsPreview, parkPhase, phaseModel, readWebPropertyChange, rulesFor, runWebPropertyChangeCard, type WebPropertyChangeRow } from "../src/worker/services/webPropertyChange";
 import { steerFromReply } from "../src/worker/services/emailThread";
 import { threadReference } from "../src/shared/email/thread";
 import { answerBlock } from "../src/worker/services/blocks";
@@ -234,7 +234,15 @@ describe("the door reads a Drive folder and a property", () => {
 });
 
 describe("an opening email that asks for a preview first", () => {
-  it("opens Porter's row with preview_only = 1 — the same gate a \"preview\" reply sets", async () => {
+  it("opens Porter's row with preview_only = 1 — and so does an email that never says it (owner, 23 Sep 2026: preview first for all repo work)", async () => {
+    const plain = await openAssignmentCard(env, { subject: "Community site footer", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: `Porter, the community site footer is in https://drive.google.com/drive/folders/${FOLDER}pl.\n\nsequoia@westpeek.ventures`, limits: EMAILED_TASK_LIMITS, emlKey: null });
+    const plainId = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(plain)).description))![1]!;
+    const plainRow = (await readWebPropertyChange(env, plainId))!;
+    expect(JSON.parse(String((await card(plainId)).request_json)).preview_first ?? null, "the request did not ask").toBeNull();
+    expect(plainRow.preview_only, "preview first without the phrase").toBe(1);
+    expect(needsPreview(plainRow)).toBe(true);
+    expect((await card(plainId)).preview_first, "the card's own \"show me first\" is untouched — it is a different hold").toBeNull();
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(plainId).run();
     const id = await openAssignmentCard(env, { subject: "Community site redesign", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: `Porter, the community site redesign is all in https://drive.google.com/drive/folders/${FOLDER}. Send me a preview first.\n\nsequoia@westpeek.ventures`, limits: EMAILED_TASK_LIMITS, emlKey: null });
     const porterId = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(id)).description))![1]!;
     const row = await readWebPropertyChange(env, porterId);
@@ -467,30 +475,55 @@ describe("Scooter emails a package for the ventures site", () => {
     expect(again.summary).toMatch(/BUILD queued .* to fix/);
   });
 
-  it("BUILD reports GREEN: land on green is ON, so LAND is queued at once on the cheap model — no further reply", async () => {
+  it("BUILD reports GREEN: every site change previews first (23 Sep 2026), so green STOPS at the preview — LAND is refused, nothing is parked, one preview email; Scooter's \"approved\" after it queues LAND on the cheap model", async () => {
     // A DIFFERENT PR than the red attempt above (#14): the fix-up build opened #15. Pinning 15 is what
     // catches a LAND payload built from a stale row — the row still remembered #14.
     await macReports(porterCardId, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/15", pr_number: 15, branch: "work/wpc-abc12345-fix", check_state: "GREEN", check_url: "https://github.com/seq23/join-west-peek-main/actions/runs/2", proof: "npm run validate: green · shots/team-desktop.png shots/team-390.png · curl https://example.org 200" });
+    const green = await tickFor(porterCardId);
+    expect(green.outcome, "green stops at the preview; land on green does not override it").toBe("BLOCKED");
+    const held = (await readWebPropertyChange(env, porterCardId))!;
+    expect(held.preview_only, "opened preview-first without the phrase in the request").toBe(1);
+    expect(held.check_state).toBe("GREEN");
+    expect(held.check_green_at).toBeTruthy();
+    expect(held.phase, "never reached LAND on green alone").toBe("BUILD");
+    expect(held.land_approved_at).toBeNull();
+    expect(held.forced_by).toBeNull();
+    expect(held.preview_emailed_at).toBeTruthy();
+    expect(await liveJobFor(porterCardId), "nothing parked for the Mac").toBeNull();
+    expect(String((await card(porterCardId)).block_needed)).toMatch(/^PREVIEW READY\./);
+    const c0 = await card(porterCardId);
+    const gate = await parkPhase(env, { id: porterCardId, title: String(c0.title), kind: WEB_PROPERTY_CHANGE_KIND, owner_id: "aie_porter", state: "IN_PROGRESS", work_attempts: 0, firm_scope: "west-peek", requested_by_email: SCOOTER }, held, "LAND", await rulesFor(env, WEB_PROPERTY_CHANGE_KIND));
+    expect(gate.parked).toBe(false);
+    expect((gate as { reason: string }).reason).toMatch(/previews first/);
+    await expect(env.WP_OS_DB.prepare("UPDATE web_property_change SET merge_sha = 'deadbeef' WHERE work_card_id = ?1").bind(porterCardId).run()).rejects.toThrow(/second approval after the preview/);
+    // RECEIVED at intake, then three blocked emails (the plan, his "no", the preview) and nothing else.
+    expect(sent.filter((m) => m.to === SCOOTER && /blocked/i.test(m.subject)).length).toBe(3);
+    expect(sent.filter((m) => m.to === SCOOTER && /blocked/i.test(m.subject)).pop()!.text).toMatch(/pull\/15/);
+    expect(sent.filter((m) => m.to === SCOOTER && !/blocked/i.test(m.subject) && !/got it/i.test(m.subject)).length, "no other email between green and the preview").toBe(0);
+
+    // Sequoia's "approved" is not his: it lands nothing.
+    const token = (await env.WP_OS_DB.prepare("SELECT token FROM email_thread WHERE object_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(porterCardId).first<{ token: string }>())!.token;
+    expect((await replyFrom(SEQUOIA, "approved", token)).answered).toBe(false);
+    expect((await readWebPropertyChange(env, porterCardId))!.land_approved_at).toBeNull();
+    // His second "approved", after the preview email: LAND on the cheap model, the PR it previewed.
+    expect((await replyFrom(SCOOTER, "approved", token)).answered).toBe(true);
     const out = await tickFor(porterCardId);
     expect(out.outcome).toBe("PROGRESSED");
-    expect(out.summary).toMatch(/green; landing is queued/);
+    expect(out.summary).toMatch(/Landing approved after the preview; LAND queued/);
     const row = (await readWebPropertyChange(env, porterCardId))!;
-    expect(row.check_state).toBe("GREEN");
-    expect(row.check_green_at).toBeTruthy();
+    expect(row.land_approved_by).toBe("fu_scooter_taylor");
     expect(row.phase).toBe("LAND");
     const job = (await liveJobFor(porterCardId))!;
-    const payload = JSON.parse(job.job_json!) as { phase: string; model: string; pr: { url: string; number: number | null; branch: string | null; check_green_at: string } };
+    const payload = JSON.parse(job.job_json!) as { phase: string; model: string; pr: { url: string; number: number | null; branch: string | null; check_green_at: string; land_approved_at: string } };
     expect(payload.phase).toBe("LAND");
     expect(payload.model).toBe("haiku");
     expect(payload.pr.check_green_at).toBe(row.check_green_at);
+    expect(payload.pr.land_approved_at).toBe(row.land_approved_at);
     // The LAND job must know WHICH PR: the first real newsletter job (21 Sep 2026) was queued with
     // number null and ran `land ""` — the row in memory had the URL but not the number the report
     // carried. Pinned on the job payload the Mac actually reads, not on the row.
     expect(payload.pr.number, "the LAND job carries the PR number the BUILD report gave").toBe(15);
     expect(payload.pr.branch, "and its branch").toBe("work/wpc-abc12345-fix");
-    // RECEIVED at intake, then two blocked emails (the plan, then his "no"), and nothing since: green does not email.
-    expect(sent.filter((m) => m.to === SCOOTER && /blocked/i.test(m.subject)).length).toBe(2);
-    expect(sent.filter((m) => m.to === SCOOTER && !/blocked/i.test(m.subject) && !/got it/i.test(m.subject)).length, "no second email between green and land").toBe(0);
   });
 
   it("LAND reports the merge: the card is DONE, the row carries the proof, and the DONE email to Scooter carries it too", async () => {
@@ -517,15 +550,19 @@ describe("Scooter emails a package for the ventures site", () => {
 });
 
 describe("land on green OFF asks first", () => {
-  it("a green BUILD blocks with the PR and a question when the rule is off; the answer lands it", async () => {
+  it("a FORCED change (the only one that skips the preview since 23 Sep 2026): a green BUILD blocks with the PR and a question when the rule is off; the answer lands it", async () => {
     await env.WP_OS_DB.prepare("UPDATE work_kind_rule SET value = 'off' WHERE kind = ?1 AND rule_key = 'land_on_green'").bind(WEB_PROPERTY_CHANGE_KIND).run();
     try {
-      const id = await openAssignmentCard(env, { subject: "productions site", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: `westpeekproductions.com refresh — package: https://drive.google.com/drive/folders/${FOLDER}zz`, limits: EMAILED_TASK_LIMITS, emlKey: null });
+      const id = await openAssignmentCard(env, { subject: "productions site", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: `westpeekproductions.com refresh — package: https://drive.google.com/drive/folders/${FOLDER}zz\n\nyour call, approved to production.`, limits: EMAILED_TASK_LIMITS, emlKey: null });
       const porterId = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(id)).description))![1]!;
+      expect((await readWebPropertyChange(env, porterId))!.preview_only, "preview-first even when the request forces").toBe(1);
       await tickFor(porterId); // parks PLAN
-      // Nothing to ask and publish-ready: no plan email, BUILD parks at once.
+      // Pre-approved and forced in the request: approved at filing, the force recorded, BUILD parks at once.
       await macReports(porterId, { phase: "PLAN", status: "ok", document: "# Plan: productions refresh\n\nnothing to ask", decided: ["all structure"], asks: [], publish_ready: true });
-      expect((await tickFor(porterId)).summary).toMatch(/nothing to ask; BUILD queued/);
+      expect((await tickFor(porterId)).summary).toMatch(/BUILD queued/);
+      const forced = (await readWebPropertyChange(env, porterId))!;
+      expect(forced.forced_by, "the named force is the only way past the preview").toBe("fu_sequoia_taylor");
+      expect(forced.preview_only, "a force skips the gate; it never clears it").toBe(1);
       await macReports(porterId, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/15", pr_number: 15, check_state: "GREEN" });
       const out = await tickFor(porterId);
       expect(out.outcome).toBe("BLOCKED");
@@ -664,6 +701,7 @@ describe("\"preview\" on a publish-ready plan takes the same road", () => {
     const row0 = (await readWebPropertyChange(env, porter.id))!;
     expect(row0.phase).toBe("BUILD");
     expect(row0.plan_approved_by).toMatch(/built without asking/);
+    expect(row0.preview_only, "already preview-first before he says so (23 Sep 2026)").toBe(1);
     // He replies "preview first" to the RECEIVED email: a note on the card, read before the build.
     const out = await replyFrom(SCOOTER, "preview first", await porter.token());
     expect(out.steered).toBe(true);
@@ -800,7 +838,7 @@ describe("pre-approval in the request: \"your call\" (21 Sep 2026)", () => {
     expect(own?.force).toBe("approved to production");
   });
 
-  it("a ready plan: approved at filing in the requester's name, the FYI email goes out, BUILD parks with no reply, GREEN lands", async () => {
+  it("a ready plan: approved at filing in the requester's name, BUILD parks with no reply, GREEN stops at the preview (23 Sep 2026) and the requester's \"approved\" lands it", async () => {
     const before = sent.length;
     const id = await preApproved(SCOOTER, "Walker", "footer links", "your call", {
       document: "# Plan: footer links\n\nready.",
@@ -825,10 +863,19 @@ describe("pre-approval in the request: \"your call\" (21 Sep 2026)", () => {
     const mail = sent.slice(before).filter((m) => m.to === SCOOTER);
     expect(mail).toHaveLength(1);
     expect(mail[0]!.subject).toMatch(/got it/i);
-    expect(mail[0]!.text).toMatch(/You pre-approved this \("your call"\), so the next thing you'll get is the finished result/);
+    expect(mail[0]!.text).toMatch(/You pre-approved this \("your call"\), so the next thing you'll get is the preview link — reply "approved" and it goes live/);
+    expect(mail[0]!.text, "never promises a finished result it will not send first").not.toMatch(/next thing you'll get is the finished result/);
     await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/41", pr_number: 41, check_state: "GREEN" });
     const green = await tickFor(id);
-    expect(green.summary, "publish-ready + land on green: no reply needed").toMatch(/landing is queued/);
+    expect(green.outcome, "a pre-approval approves the plan, never the landing").toBe("BLOCKED");
+    const held = (await readWebPropertyChange(env, id))!;
+    expect(held.phase).toBe("BUILD");
+    expect(held.land_approved_at).toBeNull();
+    expect(held.forced_by).toBeNull();
+    expect(await liveJobFor(id)).toBeNull();
+    const token = (await env.WP_OS_DB.prepare("SELECT token FROM email_thread WHERE object_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(id).first<{ token: string }>())!.token;
+    expect((await replyFrom(SCOOTER, "approved", token)).answered).toBe(true);
+    expect((await tickFor(id)).summary).toMatch(/Landing approved after the preview; LAND queued/);
     expect((await readWebPropertyChange(env, id))!.phase).toBe("LAND");
   });
 
@@ -1048,7 +1095,7 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     expect(back.summary).toMatch(/PLAN queued/);
   });
 
-  it("nothing to ask + publish-ready → built without asking: no plan email, BUILD parked, the card says why; then DONE only", async () => {
+  it("nothing to ask + publish-ready → built without asking: no plan email, BUILD parked, the card says why; green stops at ONE preview email, his \"approved\" lands it, then DONE", async () => {
     const before = sent.length;
     await macReports(porterId, { phase: "PLAN", status: "ok", document: "# Plan: Sensori photo swap\n\nReplace sites/ventures/assets/img/portfolio/sensori-founders.jpg with the attachment; same dimensions.", decided: ["same file name and dimensions, so no markup change"], asks: [], publish_ready: true, placeholders: [] });
     const out = await tickFor(porterId);
@@ -1057,18 +1104,28 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     const row = (await readWebPropertyChange(env, porterId))!;
     expect(row.plan_approved_by).toMatch(/no partner decisions in this change; built without asking/);
     expect(String((await card(porterId)).description)).toMatch(/No partner decisions in this change; built without asking/);
+    expect(String((await card(porterId)).description), "the finding says where it stops").toMatch(/On green it stops at a preview link; it lands when the partner approves the preview/);
     expect(sent.slice(before).filter((m) => m.to === SCOOTER), "no plan email").toHaveLength(0);
     await macReports(porterId, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/51", pr_number: 51, check_state: "GREEN", proof: "validate green · shots" });
-    expect((await tickFor(porterId)).summary).toMatch(/landing is queued/);
+    // PREVIEW FIRST (owner, 23 Sep 2026): green alone never lands, even with nothing to ask.
+    expect((await tickFor(porterId)).outcome).toBe("BLOCKED");
+    expect((await readWebPropertyChange(env, porterId))!.phase).toBe("BUILD");
+    expect(await liveJobFor(porterId), "nothing parked for the Mac on green").toBeNull();
+    const preview = sent.slice(before).filter((m) => m.to === SCOOTER);
+    expect(preview, "exactly one email since the BUILD began: the preview").toHaveLength(1);
+    expect(preview[0]!.text).toMatch(/pull\/51/);
+    const token = (await env.WP_OS_DB.prepare("SELECT token FROM email_thread WHERE object_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(porterId).first<{ token: string }>())!.token;
+    expect((await replyFrom(SCOOTER, "approved", token)).answered).toBe(true);
+    expect((await tickFor(porterId)).summary).toMatch(/Landing approved after the preview; LAND queued/);
     await macReports(porterId, { phase: "LAND", status: "ok", merge_sha: "1111111111222222222233333333334444444444", live_proof: "https://westpeek.ventures/#portfolio → 200, new photo hash" });
     expect((await tickFor(porterId)).outcome).toBe("DONE");
     // RECEIVED reached him before this window; the DONE reply is held for her (0223), so since the
-    // BUILD began his inbox has had nothing at all — no plan email and no finished email.
+    // BUILD began his inbox has had the preview and nothing else — no plan email, no finished email.
     const done = sent.slice(before).filter((m) => m.to === SCOOTER);
-    expect(done, "no plan email, and the finished email is held for her").toHaveLength(0);
+    expect(done, "only the preview; the finished email is held for her").toHaveLength(1);
     expect((await finishedEmailFor(porterId)).state, "the finished work is waiting on her Home").toBe("PENDING");
     const kinds = (await env.WP_OS_DB.prepare("SELECT kind FROM work_card_notice WHERE work_card_id = ?1 ORDER BY sent_at").bind(porterId).all<{ kind: string }>()).results!.map((n) => n.kind);
-    expect(kinds).toEqual(["RECEIVED", "DONE"]);
+    expect(kinds).toEqual(["RECEIVED", "PREVIEW", "DONE"]);
   });
 
   it("a single ask still sends the plan email — a non-empty asks list never reaches BUILD without an approval", async () => {

@@ -12,6 +12,7 @@ import { BlockPanel } from "./BlockPanel";
 import { LookForm, LookResults } from "./LooksPanel";
 import { NotesPanel, SteerButton } from "./NotesPanel";
 import type { Assignable, InstructionReceipt, RecentRun, WorkCardNote, WorkCardRow } from "./types";
+import { sitePreviewBadge } from "./sitePreviewBadge";
 
 /** How recently a card must have been opened to read as "just started" on the desk. */
 const JUST_STARTED_MS = 15 * 60 * 1000;
@@ -603,6 +604,9 @@ export function WorkDesk({
               // something for work that is still moving.
               const canTogglePreview = c.owner_type === "AI" && ["OPEN", "IN_PROGRESS", "BLOCKED"].includes(c.state);
               const previewOn = c.preview_first === 1;
+              // THE SITE'S OWN PREVIEW GATE (0238) — a separate, read-only badge beside the switch;
+              // never the switch's value. See sitePreviewBadge.ts.
+              const sitePreview = sitePreviewBadge(c);
               const rowClass = [
                 "card",
                 "work-card-row",
@@ -767,7 +771,7 @@ export function WorkDesk({
                     same `POST /api/work-cards/:id/work` Wave A's card-page masthead already calls;
                     "Show me first" flips the same `preview_first` column that page already reads.
                   */}
-                  {(notStarted || canTogglePreview) && (
+                  {(notStarted || canTogglePreview || sitePreview) && (
                     <div className="notification-actions" data-testid={`work-card-desk-actions-${c.id}`}>
                       {notStarted && (
                         <button
@@ -797,6 +801,16 @@ export function WorkDesk({
                             <i aria-hidden="true" />
                           </button>
                           <span className="small">{previewOn ? "Showing you first" : "Show me first"}</span>
+                        </span>
+                      )}
+                      {sitePreview && (
+                        <span
+                          className={sitePreview.on ? "badge badge-gate" : "badge"}
+                          data-testid={`work-card-sitepreview-${c.id}`}
+                          data-on={sitePreview.on ? "1" : "0"}
+                          title={sitePreview.title}
+                        >
+                          {sitePreview.text}
                         </span>
                       )}
                     </div>

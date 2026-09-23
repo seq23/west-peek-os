@@ -1101,6 +1101,10 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
             -- WHICH CHAIN WORKS IT. Served so the page can show an ARTIFACT card's build row
             -- (19 Sep 2026); the board read every column but this one and the row never rendered.
             wc.kind,
+            -- 0238 (23 Sep 2026): a site change's own preview gate, beside — never instead of —
+            -- preview_first. The desk draws it as a read-only badge (client sitePreviewBadge.ts);
+            -- NULL for every card that is not a web property change.
+            wpc.preview_only AS site_preview_only,
             -- 0227, Wave D: silent by design, but not invisible. "Held by Sequoia — '…' — since
             -- Tuesday" reads from these three, wherever the card is referenced.
             wc.held_reason, wc.held_by, wc.held_at, held_user.full_name AS held_by_name,
@@ -1111,6 +1115,7 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
        LEFT JOIN firm_user u  ON u.id = wc.owner_id AND wc.owner_type = 'HUMAN'
        LEFT JOIN firm_user held_user ON held_user.id = wc.held_by
        LEFT JOIN ai_employee creator ON creator.id = wc.created_by
+       LEFT JOIN web_property_change wpc ON wpc.work_card_id = wc.id
       WHERE ${visibility}
         -- LIVE WORK ONLY, AND THAT IS THE FIX RATHER THAN A TRIM.
         --
