@@ -238,11 +238,19 @@ export function checkWorkflow(raw) {
     const afterOn = source.slice(onStart + 3);
     const nextKey = afterOn.search(/\n[a-z][a-z0-9-]*:/);
     const on = nextKey === -1 ? afterOn : afterOn.slice(0, nextKey);
-    if (!/push:\s*\n\s+branches:\s*(\[\s*main\s*\]|\n\s+-\s*main\b)/.test(on)) {
-      bad.push(
-        "playwright.yml does not run on `push` to `main` — the journeys would never run on the merge commit, " +
-          "which is the one commit whose behaviour ships",
-      );
+    // 23 Sep 2026, the owner: once a month and on demand, never per push. Both halves are required,
+    // so the journeys still run on their own (Rule 0) and she can always ask for one.
+    const cron = /schedule:\s*\n\s+-\s*cron:\s*["']?([^"'\n]+)["']?/.exec(on)?.[1]?.trim().split(/\s+/) ?? null;
+    if (!cron) {
+      bad.push("playwright.yml has no `schedule` — the journeys would only run when someone remembers, which is Rule 0");
+    } else if (cron.length !== 5 || !/^\d+$/.test(cron[2]) || cron[3] !== "*" || cron[4] !== "*") {
+      bad.push(`playwright.yml's schedule \`${cron.join(" ")}\` is not monthly (a fixed day of the month, every month) — the owner's decision is once a month`);
+    }
+    if (!/\bworkflow_dispatch\b/.test(on)) {
+      bad.push("playwright.yml has no `workflow_dispatch` — she cannot run the journeys on demand");
+    }
+    if (/\bpush\b/.test(on)) {
+      bad.push("playwright.yml runs on `push` — ~20 minutes after every merge is what the owner removed on 23 Sep 2026; once a month and on demand");
     }
     if (/\bpull_request\b/.test(on)) {
       bad.push(
@@ -414,7 +422,7 @@ function selfTest() {
     cases += 1;
     if (bad.length > 0) failures.push(`FALSE POSITIVE on ${label}: ${bad.join(" / ")}`);
   };
-  const PW_ON = "name: Playwright\non:\n  push:\n    branches: [main]\n  workflow_dispatch:\n\njobs:";
+  const PW_ON = "name: Playwright\non:\n  schedule:\n    - cron: \"30 10 1 * *\"\n  workflow_dispatch:\n\njobs:";
 
   // The real line, as it stood on origin/main before 18 Sep 2026.
   expectCaught(
@@ -476,13 +484,26 @@ function selfTest() {
         "            if grep -qiE 'workers-sdk' log; then\n              npm run e2e\n            else\n              exit 1\n            fi\n          fi\n          npm run e2e\n",
     ),
   );
+  const E2E = "\n  e2e:\n    steps:\n      - run: npm run e2e && npm run e2e\n";
   expectCaught(
     "the journeys triggered by pull_request",
-    checkWorkflow("name: Playwright\non:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\n\njobs:\n  e2e:\n    steps:\n      - run: npm run e2e && npm run e2e\n"),
+    checkWorkflow("name: Playwright\non:\n  schedule:\n    - cron: \"30 10 1 * *\"\n  workflow_dispatch:\n  pull_request:\n    branches: [main]\n\njobs:" + E2E),
   );
   expectCaught(
-    "the journeys not triggered by a push to main",
-    checkWorkflow("name: Playwright\non:\n  workflow_dispatch:\n\njobs:\n  e2e:\n    steps:\n      - run: npm run e2e && npm run e2e\n"),
+    "the journeys back on every push to main (the 20-minute tax she removed)",
+    checkWorkflow("name: Playwright\non:\n  push:\n    branches: [main]\n  schedule:\n    - cron: \"30 10 1 * *\"\n  workflow_dispatch:\n\njobs:" + E2E),
+  );
+  expectCaught(
+    "the journeys with no schedule at all — only when someone remembers",
+    checkWorkflow("name: Playwright\non:\n  workflow_dispatch:\n\njobs:" + E2E),
+  );
+  expectCaught(
+    "the journeys scheduled weekly, not monthly",
+    checkWorkflow("name: Playwright\non:\n  schedule:\n    - cron: \"30 10 * * 1\"\n  workflow_dispatch:\n\njobs:" + E2E),
+  );
+  expectCaught(
+    "the journeys with no way to run them on demand",
+    checkWorkflow("name: Playwright\non:\n  schedule:\n    - cron: \"30 10 1 * *\"\n\njobs:" + E2E),
   );
   expectCaught(
     "the e2e job conditioned on the event name (boss-os's shape, where the journeys share the gate's run)",
