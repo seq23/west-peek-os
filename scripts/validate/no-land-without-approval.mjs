@@ -705,7 +705,7 @@ async function selfTest() {
   say(checkWorker(noSecondGate).violations.some((v) => /previewing change without row\.land_approved_at/.test(v)), "a LAND gate that forgets the second approval is caught");
   const secondFromPlan = worker.replace("answerSince(card, row.preview_emailed_at)", "answerSince(card, row.plan_filed_at)");
   say(checkWorker(secondFromPlan).violations.some((v) => /preview email's time/.test(v)), "a second approval read against the plan's time (the first 'approved' counting twice) is caught");
-  const previewLands = worker.replace('if (landReading?.kind !== "APPROVED") {', "if (false) {");
+  const previewLands = worker.replace('if (landReading?.kind !== "APPROVED" && !landsByIntent) {', "if (false) {");
   say(checkWorker(previewLands).violations.some((v) => /without requiring the reply to read APPROVED/.test(v)), "a runner that lands on any reply after the preview is caught");
   const greenOverridesPreview = worker.replace("if (needsPreview(fresh) && !fresh.land_approved_at && !fresh.forced_by) {", "if (false) {");
   say(checkWorker(greenOverridesPreview).violations.some((v) => /stop a previewing change at the preview/.test(v)), "land-on-green overriding the preview is caught");
