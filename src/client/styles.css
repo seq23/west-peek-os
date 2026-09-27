@@ -4656,6 +4656,44 @@ body {
 .cohort-label { font-size: var(--text-sm); color: var(--wp-ink-2); }
 .cohort-pct { font-size: var(--text-sm); color: var(--wp-muted); font-variant-numeric: tabular-nums; }
 
+/* — The share, drawn on the tile. One hue because it is one measure (share of the community),
+     and that hue is the brand accent: the Community page had no orange above the fold on
+     27 Sep 2026 and read as grey boxes of black numbers. Text keeps its text tokens; the mark
+     carries the value. */
+.cohort-metered { gap: var(--space-2xs); }
+.cohort-meter {
+  display: block;
+  height: 0.35rem;
+  margin: var(--space-3xs) 0;
+  border-radius: var(--radius-pill);
+  background: var(--wp-line);
+  overflow: hidden;
+}
+.cohort-meter-fill { display: block; height: 100%; background: var(--wp-orange); border-radius: var(--radius-pill); }
+
+/* — The boundary band: where the people actually live.
+     Community's first block says that Network OS owns the people. It wore the generic grey
+     `.notice` and was the third thing down, so nobody saw it; this is the `.deal-recommendation`
+     shape — accent rail, soft tint — with a real button, because a link buried mid-sentence is
+     not a door. The only orange button on the page. */
+.boundary-band {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  margin: 0 0 var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--wp-tint-line);
+  border-left: 4px solid var(--wp-orange);
+  border-radius: var(--radius-sm);
+  background: var(--wp-tint);
+}
+.boundary-band-text { flex: 1 1 auto; margin: 0; font-size: var(--text-sm); color: var(--wp-ink-2); }
+.boundary-band-text strong { color: var(--wp-ink); }
+.boundary-band > a.btn-primary { flex: 0 0 auto; }
+@media (max-width: 40rem) {
+  .boundary-band { flex-direction: column; align-items: stretch; }
+}
+
 
 /* A deal that arrived by machine and has not been looked at. Orange because it wants attention, not
    because anything is wrong — an unreviewed arrival is a normal state, briefly. */

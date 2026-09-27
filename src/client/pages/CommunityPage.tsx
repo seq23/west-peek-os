@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, useApi } from "../lib/api";
 import { HowThisWorks } from "./HowThisWorks";
 import { IntroductionsPage } from "./IntroductionsPage";
+import { typeWord } from "@shared/community/typeWords";
 
 /**
  * Community OS — the firm's read on the community as a population (P33, canon §14, §12A.4).
@@ -63,18 +64,6 @@ interface Population {
   firm_has_a_view_on: number;
   source: { last_status: string; last_sync_at: string | null; failure_reason: string | null };
 }
-
-/** Plain words for a machine's vocabulary. `service_provider` is not a category anybody says out loud. */
-const TYPE_WORDS: Record<string, string> = {
-  investor: "Investors",
-  founder: "Founders",
-  operator: "Operators",
-  lawyer: "Lawyers",
-  service_provider: "Service providers",
-  media: "Media",
-  general: "General",
-  unknown: "Not categorised",
-};
 
 const RECENCY_WORDS: Record<string, string> = {
   recent: "heard from us in the last 90 days",
@@ -147,10 +136,15 @@ function PopulationPanel(): JSX.Element {
 
           <div className="cohort-grid" data-testid="community-cohorts">
             {p.by_type.map((s) => (
-              <div key={s.key} className="cohort" data-testid={`cohort-${s.key}`}>
+              <div key={s.key} className="cohort cohort-metered" data-testid={`cohort-${s.key}`}>
                 <span className="cohort-count">{s.count.toLocaleString()}</span>
-                <span className="cohort-label">{TYPE_WORDS[s.key] ?? s.key}</span>
-                <span className="cohort-pct">{s.pct}%</span>
+                <span className="cohort-label">{typeWord(s.key)}</span>
+                {/* The share, drawn as well as stated. A 0.9% slice is a sliver, and it is drawn as a
+                    sliver — the floor keeps it visible, not honest-looking-bigger. */}
+                <span className="cohort-meter" aria-hidden="true">
+                  <span className="cohort-meter-fill" style={{ width: `${Math.max(1.5, s.pct)}%` }} />
+                </span>
+                <span className="cohort-pct">{s.pct}% of the community</span>
               </div>
             ))}
           </div>
@@ -220,16 +214,28 @@ export function CommunityPage(): JSX.Element {
         Network OS OWNS who is a member; everything here is West Peek's read on them. Saying so at
         the top stops this page being mistaken for the record, which is the mistake that would end
         with somebody editing a contact in the wrong system.
+
+        A BAND WITH A BUTTON, not a grey notice. On 27 Sep 2026 this sat as the third block down
+        in the same grey `.notice` every caution on the product wears, with the link buried
+        mid-sentence, and the operator could not find it. The one accent marks it now, and the
+        link is the only orange button on the page.
       */}
-      <p className="notice" data-testid="community-network-os">
-        The people themselves live in <strong>Network OS</strong>, which is where they are added and
-        edited. This page is West Peek's read on them and never the other way round.{" "}
-        <a href="https://network.joinwestpeek.com" target="_blank" rel="noreferrer noopener" data-testid="community-network-os-link">
-          Open Network OS in another tab
-        </a>{" "}
-        for a closer look at anyone here — it is a separate sign-in, so it opens alongside this
-        rather than replacing it.
-      </p>
+      <aside className="boundary-band" data-testid="community-network-os">
+        <p className="boundary-band-text">
+          <strong>The people themselves live in Network OS.</strong> That is where they are added and
+          edited; this page is West Peek's read on them and never the other way round. It is a
+          separate sign-in, so it opens alongside this rather than replacing it.
+        </p>
+        <a
+          className="btn-primary"
+          href="https://network.joinwestpeek.com"
+          target="_blank"
+          rel="noreferrer noopener"
+          data-testid="community-network-os-link"
+        >
+          Open Network OS ↗
+        </a>
+      </aside>
 
       <PopulationPanel />
 
@@ -245,14 +251,14 @@ export function CommunityPage(): JSX.Element {
 
       <div className="home-section-head behind-the-brief">
         <h3>The members themselves</h3>
-        <span className="muted small">who they are, and how the firm reads them</span>
+        {/* Network OS owns who is a member — the band at the top says so once, and prominently.
+            This used to repeat it in a second grey notice; the repetition is what drowned the
+            first one out. What remains here is the one fact the band does not carry. */}
+        <span className="muted small">
+          the firm's read on them — segment, engagement, signal · cohort analytics and programming not built yet
+        </span>
       </div>
 
-      <p className="notice" data-testid="community-scope">
-        Scaffolding, and an <strong>interpretation layer</strong>: Network OS owns who is a member.
-        What lives here is the firm's read on them — segment, engagement, and signal. Cohort
-        analytics, programming and automated signal detection are not built yet.
-      </p>
 
       <form className="card" onSubmit={save} data-testid="community-form">
         <h3>Add or update a member</h3>
