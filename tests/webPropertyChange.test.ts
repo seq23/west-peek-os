@@ -1608,11 +1608,21 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
     expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM request_attachment WHERE work_card_id = ?1 AND source = 'REPLY'").bind(porter.id).first<{ n: number }>())!.n, "the reply's photo is on the card").toBe(1);
   });
 
-  it("the prompt records the Google Sheet default for a form's destination", () => {
+  it("the prompt sends a new form to the master network sheet through /api/lead (Sequoia, 22 Sep 2026) and no longer to a per-form Google Sheet", () => {
     const prompt = readFileSync(new URL("../scripts/duties/web-property-change-prompt.md", import.meta.url), "utf8").replace(/\s+/g, " ");
-    expect(prompt).toContain("the DESTINATION IS A GOOGLE SHEET");
-    expect(prompt).toContain("recorded default (Sequoia, 21 Sep 2026), not an ask");
+    expect(prompt).toContain("the DESTINATION IS THE MASTER NETWORK SHEET");
+    expect(prompt).toContain("recorded default (Sequoia, 22 Sep 2026");
+    expect(prompt).toContain("posts to `/api/lead` with a hidden `lead_type`");
+    expect(prompt).toContain("`/api/intake/site-form`");
+    expect(prompt).toContain("`shared/forms-register.json` with destination `sheet`");
+    expect(prompt).toContain("FORM-10");
     expect(prompt).toContain("validate:forms");
+    expect(prompt).toContain("Productions forms are a SETTLED exclusion");
+    // The 21 Sep wording led Porter to plan a second, parallel sheet or a named stop over gsc-bot scopes.
+    expect(prompt).not.toContain("DESTINATION IS A GOOGLE SHEET");
+    expect(prompt).not.toMatch(/Sheet named "<Property> — <Form>"/);
+    expect(prompt).not.toMatch(/gsc-bot service account/);
+    expect(prompt).toContain("never plan a new sheet");
   });
 });
 
