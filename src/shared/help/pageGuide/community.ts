@@ -1,6 +1,6 @@
 import type { PageGuide } from "./types";
 
-/** Community, as deployed on 287ee44 — the population read, introductions, signals, members, the mix. */
+/** Community — the Network OS band with its one orange button, the population read, introductions, signals, members, the mix. */
 export const communityGuide: PageGuide = {
   navKey: "community",
   title: "Community",
@@ -18,6 +18,14 @@ export const communityGuide: PageGuide = {
     { name: "Who is in the room", testid: "community-mix", shows: "founders, operators, investors, alumni and members as bars — press one to filter." },
   ],
   acts: [
+    {
+      label: "Open Network OS ↗",
+      testid: "community-network-os-link",
+      primary: true,
+      band: "Network OS",
+      does: "opens Network OS in a new tab — where the people themselves are added and edited.",
+      then: "It is a separate sign-in, so this page stays open alongside it; nothing here changes.",
+    },
     { label: "Look for matches", testid: "run-matching", does: "asks for suggested introductions from the signals on file." },
     { label: "Worth doing — ask them both", testid: "approve-match-", primary: true, does: "approves a suggestion.", then: "Nothing is sent; you ask each side yourself and record their yes." },
     { label: "said yes", does: "records one side's consent — one button per person." },
@@ -42,6 +50,7 @@ export const communityGuide: PageGuide = {
         { do: "Press **Worth doing — ask them both**", then: "the suggestion is approved.", not: "nothing is sent — you ask each side yourself." },
         { do: "Press **said yes** for each person as they agree, then **I made the introduction**", then: "consent is recorded per person, and the introduction against both." },
         { do: "Under **Add or update a member**, press **Save member**", then: "the member is added or updated; who is a member is owned by Network OS." },
+        { do: "To add or edit the person themselves, press **Open Network OS ↗** in the **Network OS** band", then: "Network OS opens in a new tab beside this page.", not: "nothing on this page is edited — it is West Peek's read on them, never the record." },
       ],
     },
   ],
