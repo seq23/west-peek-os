@@ -84,6 +84,8 @@ export interface WorkCardRow {
   block?: (Block & { blockedAt: string | null; lane?: string | null; laneName?: string | null; raw?: string | null }) | null;
   /** 0173 — when the card stopped, for the timeline. */
   blocked_at?: string | null;
+  /** 0173/0241 — the first name (in capitals) of the partner the block waits on; the new primary after a hand-off. */
+  block_who?: string | null;
   /**
    * THE WORK-CARD REDESIGN (23 Sep 2026). The run her Mac holds for this card, the name the desk
    * shows, and a website job's own facts — the three things `liveStatus` and `siteStage`

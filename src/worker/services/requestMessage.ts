@@ -220,11 +220,16 @@ export async function handleGetRequestMessageRaw(ctx: RouteContext): Promise<Res
 
 export interface MessageTrailEntry {
   at: string;
-  /** RECEIVED_EMAIL for an inbound message; otherwise the notice kind (RECEIVED, PLAN, PREVIEW,
-   *  QUESTION, STUCK, DONE — see `NOTICE_KINDS` in requestReply.ts). */
+  /** RECEIVED_EMAIL for an inbound message; a notice kind (RECEIVED, PLAN, PREVIEW, QUESTION, STUCK,
+   *  DONE — see `NOTICE_KINDS` in requestReply.ts); a hand-off (HAND_OFF, TAKE_BACK, CLAIM) or the
+   *  one email it sent (HAND_OFF_EMAIL). */
   kind: string;
   who: string;
   what: string;
+  /** HAND_OFF / TAKE_BACK / CLAIM only: the door it came through (REPLY, NOTE, API, NOTIFICATION). */
+  via?: string;
+  /** HAND_OFF_EMAIL only: the address copied on the one email, or null when nobody was. */
+  cc?: string | null;
   /** True when this entry is an inbound message and can be opened whole on the card. */
   hasMessage: boolean;
 }
@@ -232,10 +237,10 @@ export interface MessageTrailEntry {
 /**
  * ONE CHRONOLOGICAL LIST, not the old terse "TOLD THE PARTNER: RECEIVED · PLAN · PREVIEW" one-liner.
  *
- * Her words: "I want to see the flow of information and what was said by whom, on the card." Two
- * tables hold the halves — `inbound_message` (0226, what arrived) and `work_card_notice` (0221,
- * what was sent back) — and until now nothing read them together. Merged here, ordered, each entry
- * showing who said what and when.
+ * Her words: "I want to see the flow of information and what was said by whom, on the card." Three
+ * tables hold it — `inbound_message` (0226, what arrived), `work_card_notice` (0221, what was sent
+ * back) and `work_card_hand_off` (0241, who holds the card and the one email that told them) — and
+ * until now nothing read them together. Merged here, ordered, each entry showing who said what and when.
  */
 export async function handleGetWorkCardMessageTrail(ctx: RouteContext): Promise<Response> {
   const identity = ctx.identity;
@@ -260,7 +265,33 @@ export async function handleGetWorkCardMessageTrail(ctx: RouteContext): Promise<
       .all<{ kind: string; cause: string; sent_to: string; sent: number; detail: string | null; sent_at: string }>()
   ).results ?? [];
 
+  /*
+   * THE HAND-OFFS (0241; owner, 27 Sep 2026): "I don't see the card displaying the handoff and the
+   * new email it sent to Scooter." Both were recorded — `work_card_hand_off` and the event — but this
+   * list read only the two tables above, so a card that changed hands showed her reply and then
+   * nothing. Each row becomes two entries: who handed it to whom, and the one email the new primary got.
+   */
+  const handOffs = (
+    await ctx.env.WP_OS_DB.prepare(
+      `SELECT action, by_email, primary_email, secondary_email, via, sent, created_at FROM work_card_hand_off WHERE work_card_id = ?1 ORDER BY created_at ASC`,
+    )
+      .bind(cardId)
+      .all<{ action: string; by_email: string; primary_email: string; secondary_email: string; via: string; sent: number; created_at: string }>()
+  ).results ?? [];
+
   const trail: MessageTrailEntry[] = [
+    ...handOffs.flatMap((h): MessageTrailEntry[] => [
+      { at: h.created_at, kind: h.action, who: h.by_email, what: h.primary_email, via: h.via, hasMessage: false },
+      {
+        at: h.created_at,
+        kind: "HAND_OFF_EMAIL",
+        who: h.sent ? `told ${h.primary_email}` : `tried to tell ${h.primary_email}`,
+        what: "where it stands",
+        // A hand-off and a claim copy the partner who held it; a take-back sends exactly one email.
+        cc: h.action === "TAKE_BACK" ? null : h.secondary_email,
+        hasMessage: false,
+      },
+    ]),
     ...inbound.map((m) => ({
       at: m.received_at,
       kind: "RECEIVED_EMAIL",
