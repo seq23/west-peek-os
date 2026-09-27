@@ -19,11 +19,24 @@
  * merely between tries says "Waiting" and when the next try is; a run nobody has claimed says
  * "Queued for your Mac". The pulsing dot on screen is drawn from `kind === "WORKING_NOW"` and
  * nothing else.
+ *
+ * "NEEDS YOU" NAMES THE PERSON IT WAITS ON (27 Sep 2026). A block's `who` is a partner's first name
+ * in capitals (`SEQUOIA` / `SCOOTER`, `shared/work/blocks.ts`), and after a hand-off it is moved to
+ * the new primary (migration 0241). Until today every block read "Needs you" whoever it named, so
+ * wc_77f52b33 — block_who SCOOTER, asked for by scooter@ — sat in her "Needs you" section and her
+ * header count while nothing about it was hers to do. Now the reader asks the partner registry who
+ * the card waits on: her, and it reads as before; the OTHER partner, and it reads "Needs Scooter",
+ * sits with the worked cards and is counted apart from what needs her. Pinned from both seats in
+ * `tests/workCardLiveStatus.test.ts`.
  */
+
+import { partnerByEmail, partnerByFirmUserId, partnerByName, type Partner } from "../registry/partners";
 
 export type LiveKind =
   /** Stopped on her: a block, nobody owns it, or it is hers to do. */
   | "NEEDS_YOU"
+  /** Stopped on the OTHER partner: named, and never counted as hers. */
+  | "NEEDS_PARTNER"
   /** She put it down herself; nothing works it until she releases it. */
   | "HELD"
   /** A machine is holding it this minute. The only kind that pulses. */
@@ -64,6 +77,15 @@ export interface LiveStatusInput {
   held_by_name?: string | null;
   held_reason?: string | null;
   block?: { stopped?: string | null; needed?: string | null; who?: string | null } | null;
+  /**
+   * WHO THE CARD WAITS ON (27 Sep 2026). `block_who` is the stored column (a partner's first name in
+   * capitals, or ENGINEER; moved to the new primary by a hand-off, 0241) for a row that carries no
+   * parsed `block`; `requested_by_email` is the PRIMARY partner — the only one who can approve a
+   * plan or a preview (`partnerOwnership.ts`) — and the fallback when a block names nobody.
+   */
+  block_who?: string | null;
+  requested_by_email?: string | null;
+  secondary_partner_email?: string | null;
   current_run?: LiveRun | null;
   /**
    * A WEBSITE JOB'S STAGE, FROM ITS ROW (23 Sep 2026). When the card waits on her at the plan or the
@@ -140,6 +162,11 @@ export interface LiveStatus {
   live: boolean;
   /** A card that has already failed once and is being retried. Never the same thing as "waiting". */
   failing: boolean;
+  /**
+   * The first name of the partner the card waits on when that partner is NOT the viewer
+   * ("Scooter"); null otherwise. `deskSummary` groups the "needs Scooter" count by it.
+   */
+  waitsOn: string | null;
 }
 
 /**
@@ -197,10 +224,39 @@ function failureClause(text: string | null | undefined): string {
   return `the last try failed: ${firstSentence(said, 90)}`;
 }
 
+/**
+ * THE PARTNER A STOPPED CARD WAITS ON, FROM THE REGISTRY. The block's `who` first (the parsed block,
+ * then the stored `block_who` column), because a hand-off moves it to the new primary (0241); a
+ * block that names no partner waits on the primary — the only partner who can clear a plan or a
+ * preview. Null when the card names an engineer or no partner at all; ENGINEER is not a partner and
+ * is said as such by the caller.
+ */
+export function partnerWaitedOn(card: Pick<LiveStatusInput, "block" | "block_who" | "requested_by_email">): Partner | null {
+  const named = (card.block?.who ?? card.block_who ?? "").trim();
+  if (named.toUpperCase() === "ENGINEER") return null;
+  return partnerByName(named) ?? partnerByEmail(card.requested_by_email) ?? null;
+}
+
+/**
+ * "Needs you" or "Needs Scooter" — the pill for a stopped card, decided once. The other partner's
+ * first name comes from the registry, never from the row's capitals.
+ */
+export function needsLabel(card: Pick<LiveStatusInput, "block" | "block_who" | "requested_by_email">, meId: string): { pill: string; waitsOn: string | null } {
+  const partner = partnerWaitedOn(card);
+  if (!partner || partner.firmUserId === partnerByFirmUserId(meId)?.firmUserId) return { pill: "Needs you", waitsOn: null };
+  return { pill: `Needs ${partner.firstName}`, waitsOn: partner.firstName };
+}
+
 export function liveStatus(card: LiveStatusInput, meId: string, now: Date = new Date()): LiveStatus {
   const who = card.owner_name ?? "They";
   const failing = Boolean(card.work_last_failure) && !["BLOCKED", "DONE", "CANCELLED", "HELD"].includes(card.state);
-  const base = { live: false, failing };
+  const base = { live: false, failing, waitsOn: null as string | null };
+  const needs = needsLabel(card, meId);
+  /** A stopped card, in the section and kind its addressee decides. */
+  const stopped = (line: string): LiveStatus =>
+    needs.waitsOn
+      ? { ...base, failing: false, kind: "NEEDS_PARTNER", section: "worked", pill: needs.pill, line, waitsOn: needs.waitsOn }
+      : { ...base, failing: false, kind: "NEEDS_YOU", section: "needs", pill: needs.pill, line };
 
   if (card.state === "DONE") return { ...base, kind: "DONE", section: "finished", pill: "Done", line: "Finished." };
   if (card.state === "CANCELLED") {
@@ -214,12 +270,13 @@ export function liveStatus(card: LiveStatusInput, meId: string, now: Date = new 
   // A website job waiting at its plan or its preview is waiting on HER, in words — even when the
   // runner parked it as a block to hold it there.
   const wait = siteWait(card);
-  if (wait === "PREVIEW") return { ...base, failing: false, kind: "NEEDS_YOU", section: "needs", pill: "Needs you", line: "Preview ready · look and reply" };
-  if (wait === "PLAN") return { ...base, failing: false, kind: "NEEDS_YOU", section: "needs", pill: "Needs you", line: "Plan ready · read it and reply" };
+  if (wait === "PREVIEW") return stopped(needs.waitsOn ? `Preview ready · ${needs.waitsOn} looks and replies` : "Preview ready · look and reply");
+  if (wait === "PLAN") return stopped(needs.waitsOn ? `Plan ready · ${needs.waitsOn} reads it and replies` : "Plan ready · read it and reply");
   if (card.state === "BLOCKED") {
-    const whoFor = card.block?.who === "ENGINEER" ? "Needs an engineer" : "Needs you";
     const what = sentenceCase(firstSentence(card.block?.needed || card.block?.stopped || card.next_action)) || "An answer before it can go on";
-    return { ...base, kind: "NEEDS_YOU", section: "needs", pill: "Needs you", line: `${whoFor}: ${what}` };
+    // An engineer's block is still hers to escalate: it stays in her section, said as the engineer's.
+    if ((card.block?.who ?? card.block_who) === "ENGINEER") return { ...base, kind: "NEEDS_YOU", section: "needs", pill: "Needs you", line: `Needs an engineer: ${what}` };
+    return stopped(`${needs.pill}: ${what}`);
   }
   if (card.owner_type === "UNASSIGNED" || !card.owner_id) {
     return { ...base, kind: "NEEDS_YOU", section: "needs", pill: "Needs you", line: "Nobody has this yet: give it to someone." };
@@ -294,6 +351,8 @@ export function liveStatus(card: LiveStatusInput, meId: string, now: Date = new 
  */
 export interface DeskSummary {
   needsYou: number;
+  /** Stopped on the OTHER partner — named in the line ("1 needs Scooter"), never in `needsYou`. */
+  needsPartner: number;
   beingWorked: number;
   waiting: number;
   queued: number;
@@ -305,6 +364,8 @@ export interface DeskSummary {
 
 export function deskSummary(statuses: readonly LiveStatus[], decisions = 0): DeskSummary {
   let needsYou = decisions;
+  let needsPartner = 0;
+  const byPartner = new Map<string, number>();
   let beingWorked = 0;
   let waiting = 0;
   let queued = 0;
@@ -312,13 +373,18 @@ export function deskSummary(statuses: readonly LiveStatus[], decisions = 0): Des
   for (const s of statuses) {
     if (s.failing) failing += 1;
     if (s.section === "needs") needsYou += 1;
-    else if (s.kind === "WORKING_NOW" || s.kind === "WITH_PARTNER") beingWorked += 1;
+    else if (s.kind === "NEEDS_PARTNER") {
+      needsPartner += 1;
+      const name = s.waitsOn ?? "your partner";
+      byPartner.set(name, (byPartner.get(name) ?? 0) + 1);
+    } else if (s.kind === "WORKING_NOW" || s.kind === "WITH_PARTNER") beingWorked += 1;
     else if (s.kind === "WAITING") waiting += 1;
     else if (s.kind === "QUEUED") queued += 1;
   }
   const parts = [needsYou === 0 ? "Nothing needs you" : `${needsYou} need${needsYou === 1 ? "s" : ""} you`];
+  for (const [name, n] of byPartner) parts.push(`${n} need${n === 1 ? "s" : ""} ${name}`);
   if (beingWorked > 0) parts.push(`${beingWorked} being worked`);
   if (waiting > 0) parts.push(`${waiting} waiting for ${waiting === 1 ? "its" : "their"} next try`);
   if (queued > 0) parts.push(`${queued} queued`);
-  return { needsYou, beingWorked, waiting, queued, failing, line: parts.join(" · "), clear: needsYou === 0 && failing === 0 };
+  return { needsYou, needsPartner, beingWorked, waiting, queued, failing, line: parts.join(" · "), clear: needsYou === 0 && failing === 0 };
 }

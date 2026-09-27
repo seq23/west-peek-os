@@ -71,7 +71,8 @@ export function deskSections(
     else if (status.section === "worked") worked.push({ card, status });
   }
   // What is moving this minute first, then what is waiting, then what is queued.
-  const rank: Record<string, number> = { WORKING_NOW: 0, WITH_PARTNER: 1, WAITING: 2, QUEUED: 3 };
+  // A card stopped on the other partner sits with the cards they carry, not in her "Needs you".
+  const rank: Record<string, number> = { WORKING_NOW: 0, WITH_PARTNER: 1, NEEDS_PARTNER: 1, WAITING: 2, QUEUED: 3 };
   worked.sort((a, b) => (rank[a.status.kind] ?? 9) - (rank[b.status.kind] ?? 9));
   if (seenAt) {
     const seen = Date.parse(seenAt);

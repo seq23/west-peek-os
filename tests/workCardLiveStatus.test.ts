@@ -3,10 +3,11 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import type { FirmUserIdentity } from "../src/worker/auth";
 import { createWorkCardInternal, handleGetWorkCard, handleWorkByOwner } from "../src/worker/services/workCards";
-import { RUN_FRESH_MS, deskSummary, firstSentence, liveStatus, plainFailure, sentenceCase, siteWait, type LiveStatusInput } from "../src/shared/work/liveStatus";
+import { RUN_FRESH_MS, deskSummary, firstSentence, liveStatus, needsLabel, partnerWaitedOn, plainFailure, sentenceCase, siteWait, type LiveStatusInput } from "../src/shared/work/liveStatus";
 import { plainTitle, shortAsk, siteStage, siteTries } from "../src/shared/work/siteChange";
 import { CARD_KINDS, readsPages } from "../src/shared/work/cardKinds";
 import { triesWords } from "../src/client/pages/work/triesWords";
+import { deskSections } from "../src/client/pages/work/WorkDesk";
 import { cardTimeline, trailSentence } from "../src/shared/work/cardTimeline";
 import { blockWaitsOn } from "../src/client/pages/work/CardExpanded";
 import { askedBy } from "../src/shared/work/origin";
@@ -25,6 +26,7 @@ import { readApprovalReply } from "../src/shared/work/approvalReply";
  */
 
 const ME = "fu_sequoia_taylor";
+const HIM = "fu_scooter_taylor";
 const NOW = new Date("2026-09-23T17:00:00.000Z");
 const ago = (ms: number) => new Date(NOW.getTime() - ms).toISOString();
 const ahead = (ms: number) => new Date(NOW.getTime() + ms).toISOString();
@@ -90,8 +92,84 @@ describe("liveStatus — one reader, every state", () => {
 
   it("BLOCKED needs her, with the first sentence of what would clear it", () => {
     const s = liveStatus(porter({ state: "BLOCKED", block: { needed: "Tell Pierce which figure is right. Then he carries on.", stopped: "x", who: "SEQUOIA" } }), ME, NOW);
-    expect(s).toMatchObject({ kind: "NEEDS_YOU", section: "needs", pill: "Needs you", line: "Needs you: Tell Pierce which figure is right", live: false });
-    expect(liveStatus(porter({ state: "BLOCKED", block: { needed: "Fix the lane", who: "ENGINEER" } }), ME, NOW).line).toBe("Needs an engineer: Fix the lane");
+    expect(s).toMatchObject({ kind: "NEEDS_YOU", section: "needs", pill: "Needs you", line: "Needs you: Tell Pierce which figure is right", live: false, waitsOn: null });
+    const eng = liveStatus(porter({ state: "BLOCKED", block: { needed: "Fix the lane", who: "ENGINEER" } }), ME, NOW);
+    expect(eng).toMatchObject({ kind: "NEEDS_YOU", section: "needs", pill: "Needs you", line: "Needs an engineer: Fix the lane" });
+    // An engineer's block is hers to escalate from either seat — never "Needs Sequoia" on his desk.
+    expect(liveStatus(porter({ state: "BLOCKED", block: { needed: "Fix the lane", who: "ENGINEER" }, requested_by_email: "sequoia@westpeek.ventures" }), HIM, NOW)).toMatchObject(
+      { kind: "NEEDS_YOU", section: "needs", line: "Needs an engineer: Fix the lane" },
+    );
+  });
+
+  /**
+   * wc_77f52b33 (27 Sep 2026): block_who SCOOTER, asked for by scooter@westpeek.ventures. Her desk
+   * said "Needs you" and counted it against her. It waits on him; her desk names him and does not
+   * count it; HIS desk says "Needs you". Both seats, every shape of "who".
+   */
+  describe("a card stopped on the OTHER partner names them, and is never hers to count", () => {
+    const hisBlock = porter({
+      state: "BLOCKED",
+      block: { needed: "Tell Porter which repo the site lives in. Then he builds it.", stopped: "x", who: "SCOOTER" },
+      block_who: "SCOOTER",
+      requested_by_email: "scooter@westpeek.ventures",
+    });
+
+    it("from her seat it is 'Needs Scooter', in the worked section, not in needs", () => {
+      const s = liveStatus(hisBlock, ME, NOW);
+      expect(s).toMatchObject({ kind: "NEEDS_PARTNER", section: "worked", pill: "Needs Scooter", line: "Needs Scooter: Tell Porter which repo the site lives in", live: false, waitsOn: "Scooter" });
+      expect(s.section).not.toBe("needs");
+    });
+
+    it("from his seat the same card is 'Needs you', in needs", () => {
+      expect(liveStatus(hisBlock, HIM, NOW)).toMatchObject({ kind: "NEEDS_YOU", section: "needs", pill: "Needs you", line: "Needs you: Tell Porter which repo the site lives in", waitsOn: null });
+    });
+
+    it("and the mirror: a block on her reads 'Needs Sequoia' on his desk", () => {
+      const hers = porter({ state: "BLOCKED", block: { needed: "Say which figure is right.", who: "SEQUOIA" }, requested_by_email: "sequoia@westpeek.ventures" });
+      expect(liveStatus(hers, HIM, NOW)).toMatchObject({ kind: "NEEDS_PARTNER", section: "worked", pill: "Needs Sequoia", line: "Needs Sequoia: Say which figure is right", waitsOn: "Sequoia" });
+      expect(liveStatus(hers, ME, NOW)).toMatchObject({ kind: "NEEDS_YOU", section: "needs", pill: "Needs you" });
+    });
+
+    it("the block's who wins over the requester — a hand-off moves block_who to the new primary (0241)", () => {
+      // Asked for by her, handed to him: block_who is now SCOOTER and the card waits on him.
+      const handed = porter({ state: "BLOCKED", block: { needed: "Approve the plan.", who: "SCOOTER" }, requested_by_email: "scooter@westpeek.ventures", secondary_partner_email: "sequoia@westpeek.ventures" });
+      expect(liveStatus(handed, ME, NOW).pill).toBe("Needs Scooter");
+      expect(liveStatus(handed, HIM, NOW).pill).toBe("Needs you");
+      // The row's raw column alone, with no parsed block, decides the same way.
+      expect(liveStatus(porter({ state: "BLOCKED", block_who: "SCOOTER", next_action: "Approve the plan." }), ME, NOW)).toMatchObject({ pill: "Needs Scooter", line: "Needs Scooter: Approve the plan" });
+    });
+
+    it("a block that names nobody waits on the primary; no primary means her, as before", () => {
+      expect(liveStatus(porter({ state: "BLOCKED", block: { needed: "Answer." }, requested_by_email: "scooter@westpeek.ventures" }), ME, NOW).pill).toBe("Needs Scooter");
+      expect(liveStatus(porter({ state: "BLOCKED", block: { needed: "Answer." }, requested_by_email: "info@westpeek.ventures" }), ME, NOW)).toMatchObject({ kind: "NEEDS_YOU", pill: "Needs you" });
+      expect(liveStatus(porter({ state: "BLOCKED", block: { needed: "Answer." } }), ME, NOW)).toMatchObject({ kind: "NEEDS_YOU", pill: "Needs you" });
+    });
+
+    it("a website job waiting at its preview or plan waits on the PRIMARY — the only partner who can approve", () => {
+      const preview = porter({
+        kind: "WEB_PROPERTY_CHANGE",
+        state: "IN_PROGRESS",
+        site_phase: "BUILD",
+        site_preview_only: 1,
+        site_check_state: "GREEN",
+        site_preview_url: "https://work-wpc-x.west-peek-ventures.pages.dev",
+        requested_by_email: "scooter@westpeek.ventures",
+      });
+      expect(liveStatus(preview, ME, NOW)).toMatchObject({ kind: "NEEDS_PARTNER", section: "worked", pill: "Needs Scooter", line: "Preview ready · Scooter looks and replies" });
+      expect(liveStatus(preview, HIM, NOW)).toMatchObject({ kind: "NEEDS_YOU", section: "needs", pill: "Needs you", line: "Preview ready · look and reply" });
+      const plan = porter({ kind: "WEB_PROPERTY_CHANGE", state: "BLOCKED", site_phase: "PLAN", site_plan_filed_at: ago(60_000), block: { needed: "Read the plan.", who: "SCOOTER" }, requested_by_email: "scooter@westpeek.ventures" });
+      expect(liveStatus(plan, ME, NOW)).toMatchObject({ kind: "NEEDS_PARTNER", pill: "Needs Scooter", line: "Plan ready · Scooter reads it and replies" });
+      expect(liveStatus(plan, HIM, NOW)).toMatchObject({ kind: "NEEDS_YOU", pill: "Needs you", line: "Plan ready · read it and reply" });
+    });
+
+    it("needsLabel and partnerWaitedOn answer from the registry, never from the row's capitals", () => {
+      expect(partnerWaitedOn({ block_who: "SCOOTER" })?.firstName).toBe("Scooter");
+      expect(partnerWaitedOn({ block_who: "scooter" })?.firstName).toBe("Scooter");
+      expect(partnerWaitedOn({ block_who: "ENGINEER", requested_by_email: "scooter@westpeek.ventures" })).toBeNull();
+      expect(partnerWaitedOn({ block_who: "NOBODY" })).toBeNull();
+      expect(needsLabel({ block_who: "SCOOTER" }, ME)).toEqual({ pill: "Needs Scooter", waitsOn: "Scooter" });
+      expect(needsLabel({ block_who: "SCOOTER" }, HIM)).toEqual({ pill: "Needs you", waitsOn: null });
+    });
   });
 
   it("a blocked card is never Working now, even with a fresh run beside it", () => {
@@ -122,12 +200,18 @@ describe("liveStatus — one reader, every state", () => {
       porter({ state: "CANCELLED" }),
       { state: "OPEN", owner_type: "UNASSIGNED", owner_id: null },
       { state: "OPEN", owner_type: "HUMAN", owner_id: "fu_scooter_taylor" },
+      porter({ state: "BLOCKED", block: { needed: "x", who: "SCOOTER" }, requested_by_email: "scooter@westpeek.ventures" }),
     ];
+    const kinds = new Set<string>();
     for (const i of inputs) {
       const s = liveStatus(i, ME, NOW);
+      kinds.add(s.kind);
       expect(s.live, `${s.kind} for ${JSON.stringify(i)}`).toBe(s.kind === "WORKING_NOW");
       expect(s.line.length).toBeGreaterThan(5);
+      // "Needs you" is said ONLY when the card waits on the viewer; a card waiting on the other partner never says it.
+      if (s.kind === "NEEDS_PARTNER") expect(`${s.pill} ${s.line}`).not.toMatch(/needs you/i);
     }
+    expect(kinds).toContain("NEEDS_PARTNER");
   });
 
   it("firstSentence cuts at a word, never mid-word", () => {
@@ -172,6 +256,18 @@ describe("deskSummary — the header counts what the sections draw", () => {
     const unowned = liveStatus({ state: "OPEN", owner_type: "UNASSIGNED", owner_id: null }, ME, NOW);
     expect(unowned.section).toBe("needs");
     expect(deskSummary([unowned]).needsYou).toBe(1);
+  });
+
+  it("a card stopped on Scooter is named in the line and never counted as needing her (wc_77f52b33)", () => {
+    const his = porter({ state: "BLOCKED", block: { needed: "Pick the repo.", who: "SCOOTER" }, requested_by_email: "scooter@westpeek.ventures" });
+    const hers = porter({ state: "BLOCKED", block: { needed: "Pick the figure.", who: "SEQUOIA" }, requested_by_email: "sequoia@westpeek.ventures" });
+    const mine = deskSummary([liveStatus(his, ME, NOW), liveStatus(his, ME, NOW), liveStatus(porter({ lease_until: ahead(1_000) }), ME, NOW)]);
+    expect(mine).toMatchObject({ needsYou: 0, needsPartner: 2, beingWorked: 1, clear: true, line: "Nothing needs you · 2 need Scooter · 1 being worked" });
+    const both = deskSummary([liveStatus(his, ME, NOW), liveStatus(hers, ME, NOW)]);
+    expect(both).toMatchObject({ needsYou: 1, needsPartner: 1, line: "1 needs you · 1 needs Scooter", clear: false });
+    // The same two cards from his seat: the counts swap, the header never lies to either partner.
+    const theirs = deskSummary([liveStatus(his, HIM, NOW), liveStatus(hers, HIM, NOW)]);
+    expect(theirs).toMatchObject({ needsYou: 1, needsPartner: 1, line: "1 needs you · 1 needs Sequoia" });
   });
 });
 
@@ -424,6 +520,29 @@ describe("the board and the card page serve one title and one run", () => {
     const b = liveStatus(page as never, ME);
     expect(a).toEqual(b);
     expect(a.kind).toBe("WORKING_NOW");
+  });
+
+  it("a block on Scooter is 'Needs Scooter' on her board and 'Needs you' on his, from the served row and the page alike (wc_77f52b33)", async () => {
+    const card = await createWorkCardInternal(env, SEQUOIA, { title: "Site for Scooter's agency", owner_type: "AI", owner_id: "aie_porter" } as never);
+    await env.WP_OS_DB.prepare(
+      "UPDATE work_card SET state = 'BLOCKED', requested_by_email = 'scooter@westpeek.ventures', block_reason = 'a_question_for_you', block_trying = 'Build the site.', block_stopped = 'Porter stopped.', block_needed = 'Tell Porter which repo. Then he builds.', block_who = 'SCOOTER', block_actions_json = '[{\"key\":\"ANSWER\",\"label\":\"Answer\",\"hint\":\"Say which repo.\"}]', blocked_at = ?2 WHERE id = ?1",
+    )
+      .bind(card.id, new Date().toISOString())
+      .run();
+    const board = (await (await handleWorkByOwner({ env, identity: SEQUOIA as never, params: {}, request: req() } as never)).json()) as { cards: Array<Record<string, unknown>> };
+    const row = board.cards.find((c) => c.id === card.id)!;
+    expect(row.block_who).toBe("SCOOTER");
+    expect(row.requested_by_email).toBe("scooter@westpeek.ventures");
+    const page = (await (await handleGetWorkCard({ env, identity: SEQUOIA as never, params: { id: card.id }, request: req() } as never)).json()) as Record<string, unknown>;
+    const hers = liveStatus(row as never, ME);
+    expect(hers).toMatchObject({ kind: "NEEDS_PARTNER", section: "worked", pill: "Needs Scooter", line: "Needs Scooter: Tell Porter which repo" });
+    expect(liveStatus(page as never, ME)).toEqual(hers);
+    expect(liveStatus(row as never, HIM)).toMatchObject({ kind: "NEEDS_YOU", section: "needs", pill: "Needs you", line: "Needs you: Tell Porter which repo" });
+    // Her header: nothing needs her; the desk sections agree.
+    expect(deskSummary([hers])).toMatchObject({ needsYou: 0, needsPartner: 1, clear: true, line: "Nothing needs you · 1 needs Scooter" });
+    expect(deskSections([row as never], ME).needs).toHaveLength(0);
+    expect(deskSections([row as never], ME).worked.map((e) => e.status.pill)).toEqual(["Needs Scooter"]);
+    expect(deskSections([row as never], HIM).needs.map((e) => e.status.pill)).toEqual(["Needs you"]);
   });
 
   it("a card with no live run serves current_run null — never Working now", async () => {
