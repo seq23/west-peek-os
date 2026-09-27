@@ -4598,20 +4598,57 @@ body {
 .cohort-label { font-size: var(--text-sm); color: var(--wp-ink-2); }
 .cohort-pct { font-size: var(--text-sm); color: var(--wp-muted); font-variant-numeric: tabular-nums; }
 
-/* — The share, drawn on the tile. One hue because it is one measure (share of the community),
-     and that hue is the brand accent: the Community page had no orange above the fold on
-     27 Sep 2026 and read as grey boxes of black numbers. Text keeps its text tokens; the mark
-     carries the value. */
-.cohort-metered { gap: var(--space-2xs); }
-.cohort-meter {
-  display: block;
-  height: 0.35rem;
-  margin: var(--space-3xs) 0;
-  border-radius: var(--radius-pill);
-  background: var(--wp-line);
-  overflow: hidden;
+/* — The hero row. Four headline numbers on the community, each a `.cohort` tile with an accent
+     rule and the count in the accent-as-text token: the tile is the answer, and the answer is
+     the firm's colour. The one-line meaning under the label says what the number is a count OF,
+     because "4,712 people" and "141 the firm can place" are different questions. */
+.community-hero { grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); }
+.cohort-hero { gap: var(--space-3xs); border-top: 3px solid var(--wp-orange); }
+.cohort-hero .cohort-count { font-size: var(--text-2xl); color: var(--wp-orange-deep); }
+.cohort-meaning { font-size: var(--text-xs); color: var(--wp-muted); }
+
+/* — Two rings side by side, both the one ring (AllocationRing). Each host is a heading, the ring
+     and its legend; on a phone they stack. The legend's flex basis is narrowed so a ring and its
+     legend fit one column of two. */
+.community-rings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-lg);
+  margin: var(--space-md) 0;
 }
-.cohort-meter-fill { display: block; height: 100%; background: var(--wp-orange); border-radius: var(--radius-pill); }
+.ring-host { min-width: 0; }
+.ring-host .allocation-body { gap: var(--space-lg); margin: var(--space-sm) 0; }
+.ring-host .allocation-legend { flex: 1 1 12rem; }
+@media (max-width: 60rem) {
+  .community-rings { grid-template-columns: 1fr; }
+}
+
+/* — The honest line under the placed ring: the thousands the ring leaves out, in the accent
+     tint so it reads as part of the same answer and not a footnote. */
+.tech-adjacent-line {
+  margin: var(--space-xs) 0 0;
+  padding: var(--space-xs) var(--space-sm);
+  border-left: 3px solid var(--wp-orange);
+  border-radius: var(--radius-xs);
+  background: var(--wp-tint);
+  font-size: var(--text-sm);
+  color: var(--wp-ink-2);
+}
+
+/* — The newest names: one row a person, name then its muted line. No link, because Network OS
+     has no per-contact URL; the band's button is the door. */
+.newest-list { list-style: none; margin: var(--space-sm) 0 0; padding: 0; }
+.newest-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2xs) var(--space-sm);
+  padding: var(--space-xs) 0;
+  border-bottom: 1px solid var(--wp-line);
+}
+.newest-row:last-child { border-bottom: none; }
+.newest-name { font-weight: 600; }
+.newest-meta { font-size: var(--text-sm); color: var(--wp-muted); }
 
 /* — The boundary band: where the people actually live.
      Community's first block says that Network OS owns the people. It wore the generic grey
@@ -4629,17 +4666,22 @@ body {
   border-radius: var(--radius-sm);
   background: var(--wp-tint);
 }
-/* The copy is two lines — where the people live, and the one door for someone new — beside the
-   one button. The second line's link is a plain link-button, so the orange button stays the only
-   orange button on the page. */
+/* The copy is one paragraph — where the people live and the door for someone new — beside TWO
+   doors: Capture in ink, Network OS in orange. The orange button stays the only orange button on
+   the page; the doors right-align beside the text and stack under it on a phone. */
 .boundary-band-copy { flex: 1 1 auto; min-width: 0; }
 .boundary-band-text { margin: 0; font-size: var(--text-sm); color: var(--wp-ink-2); }
-.boundary-band-text + .boundary-band-text { margin-top: var(--space-2xs); }
 .boundary-band-text strong { color: var(--wp-ink); }
-.boundary-band-text .link-button { min-height: 0; padding: 0; }
-.boundary-band > a.btn-primary { flex: 0 0 auto; }
+.boundary-band-doors {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-xs);
+}
 @media (max-width: 40rem) {
   .boundary-band { flex-direction: column; align-items: stretch; }
+  .boundary-band-doors { justify-content: flex-start; }
 }
 
 

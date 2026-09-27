@@ -169,7 +169,7 @@ import {
 } from "./services/matching";
 import { handleGetRoomCloseout, handleRunRoomCloseout } from "./services/roomCloseout";
 import { handleHearing } from "./services/howTheRoomHears";
-import { handleCommunityPopulation, handleUpsertMember } from "./services/communityOs";
+import { handleCommunityNewest, handleCommunityPopulation, handleUpsertMember } from "./services/communityOs";
 import {
   handleAddFollowup,
   handleGetDiligence,
@@ -1079,6 +1079,8 @@ const router = new Router()
   // The birds-eye view: what the community IS, read as a shape off Network OS rather than
   // mirrored as a roster. Counted in SQL so it survives five thousand people.
   .get("/api/community/population", handleCommunityPopulation)
+  // The last 25 people added in Network OS, read off the same synced rows — names, never a roster.
+  .get("/api/community/newest", handleCommunityNewest)
   .get("/api/community/members", handleListCommunityMembers)
   .post("/api/community/members", handleUpsertMember)
   // P34 — IC Decision Portal (§28.6).
