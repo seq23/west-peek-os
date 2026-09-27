@@ -7,9 +7,11 @@
  *
  *   APPROVED  "approved", "approve", "yes", "go", "land it" (alone, or with trailing punctuation
  *             and a signature) → every ask is answered with its recommended default.
- *   REFUSED   starts with "no", "not approved", "stop" or "changes:" → the card STAYS BLOCKED and
- *             the text is recorded; nothing is built.
- *   ANSWERS   anything else → recorded as the answers, and BUILD resumes with them.
+ *   REFUSED   an explicit stop — "no", "stop", "hold off", "not approved", "don't build it" → the
+ *             card is HELD and the text is recorded; nothing is built.
+ *   CHANGES   "changes: …" → instructions to apply; the work continues with them.
+ *   ANSWERS   anything else → the whole written half is read for its intent by `replyIntent.ts`
+ *             (CONTINUE, with or without changes; QUESTION; or an explicit STOP said in more words).
  *
  * PURE. The words are read the same on Tuesday as on Monday, and the tests can say exactly which
  * word does what. Authority is not decided here: `steerFromReply` only accepts the reply from the
@@ -29,8 +31,15 @@ export type ApprovalReading =
    * never when nothing new arrived. Before a plan is approved it reads like "approved".
    */
   | { kind: "PUBLISH" }
-  /** `changes` is true for "changes: …" — after a preview that means "make them and send a new preview"; before the plan it holds. */
-  | { kind: "REFUSED"; text: string; changes?: boolean }
+  /**
+   * AN EXPLICIT STOP, AND NOTHING ELSE (owner, 27 Sep 2026: "a partner's reply is permission to
+   * continue"). "no", "stop", "hold off", "not approved", "don't build it" — the card is held and
+   * nothing is built. A reply that merely STARTS with "no" ("No problem, looks great") is not a
+   * refusal; it reads as ANSWERS and the whole written half is read for its intent (replyIntent.ts).
+   */
+  | { kind: "REFUSED"; text: string }
+  /** "changes: …" — instructions to apply. After a preview: make them and send a new preview; at the plan: build with them. Never a hold. */
+  | { kind: "CHANGES"; text: string }
   | { kind: "ANSWERS"; text: string };
 
 export const APPROVAL_WORDS = ["approved", "approve", "yes", "go", "land it", "ok", "okay", "lgtm"] as const;
@@ -38,7 +47,10 @@ export const PREVIEW_WORDS = ["preview", "preview only", "preview first", "previ
 export const FORCE_WORDS = ["approved to production", "approve to production", "force production", "ship it anyway", "land anyway", "land it anyway"] as const;
 export const PUBLISH_WORDS = ["publish", "publish it", "publish now", "publish with them", "fill them in and publish"] as const;
 export const CHANGE_STARTS = ["changes:", "change:"] as const;
-const REFUSAL_STARTS = ["no", "not approved", "stop", "changes:", "change:", "don't", "do not"] as const;
+/** The whole first line is one of these → STOP. */
+export const STOP_WORDS = ["no", "stop", "hold", "hold off", "hold on", "wait", "pause", "not approved", "not yet", "don't", "do not", "cancel", "hold it", "hold this"] as const;
+/** The first line starts with one of these → STOP ("stop the build", "hold off until Monday", "don't land it yet"). */
+export const STOP_STARTS = ["stop ", "stop,", "stop.", "hold off", "hold on", "hold it", "hold this", "not approved", "not yet", "don't build", "do not build", "don't land", "do not land", "don't publish", "do not publish", "don't ship", "do not ship", "don't go", "do not go", "don't proceed", "do not proceed", "don't continue", "do not continue", "pause ", "pause,", "wait,", "wait ", "cancel "] as const;
 
 /** The first line the person wrote, without a signature, quoted text or punctuation noise. */
 function firstWords(text: string): string {
@@ -58,13 +70,31 @@ export function readApprovalReply(text: string | null | undefined): ApprovalRead
   if ((APPROVAL_WORDS as readonly string[]).includes(head)) return { kind: "APPROVED" };
   if ((PREVIEW_WORDS as readonly string[]).includes(head)) return { kind: "PREVIEW" };
   if ((PUBLISH_WORDS as readonly string[]).includes(head)) return { kind: "PUBLISH" };
-  for (const start of REFUSAL_STARTS) {
-    if (head === start || head.startsWith(`${start} `) || head.startsWith(`${start},`) || head.startsWith(start + (start.endsWith(":") ? "" : "."))) {
-      return (CHANGE_STARTS as readonly string[]).includes(start) ? { kind: "REFUSED", text: trimmed, changes: true } : { kind: "REFUSED", text: trimmed };
-    }
-  }
+  for (const start of CHANGE_STARTS) if (head.startsWith(start)) return { kind: "CHANGES", text: trimmed };
+  if ((STOP_WORDS as readonly string[]).includes(head)) return { kind: "REFUSED", text: trimmed };
+  for (const start of STOP_STARTS) if (head.startsWith(start)) return { kind: "REFUSED", text: trimmed };
   if (trimmed.length === 0) return { kind: "REFUSED", text: "" };
   return { kind: "ANSWERS", text: trimmed };
+}
+
+/** "changes: swap the logo" → "swap the logo". The instructions without their prefix. Pure. */
+export function changesTextOf(text: string): string {
+  const t = text.trim();
+  for (const start of CHANGE_STARTS) if (t.toLowerCase().startsWith(start)) return t.slice(start.length).trim();
+  return t;
+}
+
+/**
+ * A REPLY ON AN EARLIER EMAIL THREAD (27 Sep 2026). When a partner answers the PLAN email after the
+ * plan is already approved and the card is waiting on its PREVIEW, the reply is kept as a note
+ * carrying this prefix: its instructions are applied, its "approved" never lands a preview it did
+ * not answer — the approval binds to the latest preview (#194). One string, read by the email door
+ * that writes it and the runner that reads it.
+ */
+export const LATE_THREAD_NOTE_PREFIX = "(Reply on the earlier email thread; read as instructions, never as an approval of the preview.) ";
+
+export function stripLateThreadPrefix(body: string): { late: boolean; text: string } {
+  return body.startsWith(LATE_THREAD_NOTE_PREFIX) ? { late: true, text: body.slice(LATE_THREAD_NOTE_PREFIX.length).trim() } : { late: false, text: body };
 }
 
 export interface Ask {

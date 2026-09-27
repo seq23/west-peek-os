@@ -10,7 +10,7 @@ import type { InstructionPiece } from "../../shared/work/instruction";
 import { answerBlock } from "./blocks";
 import { ownershipFromWords, tellPartner, tellSecondaryRefused } from "./handOff";
 import { ownershipOf, roleOf } from "../../shared/work/partnerOwnership";
-import { readApprovalReply } from "../../shared/work/approvalReply";
+import { LATE_THREAD_NOTE_PREFIX, readApprovalReply } from "../../shared/work/approvalReply";
 import { textBodyOf } from "../effects/mimeAttachments";
 import { storeAttachments } from "./requestMaterials";
 import { answerQuestionForCard, type QuestionAnswerer, type QuestionAnswerResult } from "./questionRouting";
@@ -399,8 +399,33 @@ export async function steerFromReply(
     } else if (cardRow && partner && cardRow.state === "BLOCKED") {
       const asked = (cardRow.requested_by_email ?? "").trim().toLowerCase();
       if (!asked || asked === partner.email) {
-        const out = await answerBlock(env, cardRow.id, partner.firmUserId, { action: "ANSWER", text: written.slice(0, 4000) });
-        answered = out.ok;
+        /*
+         * A REPLY IS READ AGAINST THE STAGE OF THE EMAIL IT ANSWERS, NEVER THE CARD'S CURRENT STAGE
+         * (27 Sep 2026; #194: the approval binds to the latest preview). A website job's plan can be
+         * approved by the request while its PLAN email is still in the partner's inbox; a late
+         * "approved" on THAT thread must never land the PREVIEW the card is now waiting on. The
+         * thread token names the notice it was sent as; when the card waits on its preview and the
+         * notice was not the preview, the reply is kept as a note with a prefix the runner reads:
+         * its instructions are applied, its approval lands nothing, and it is acknowledged.
+         */
+        const stale = await answersAnEarlierStage(env, cardRow.id, cardRow.kind, thread.token);
+        if (stale) {
+          await env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)")
+            .bind(`wcn_${crypto.randomUUID()}`, cardRow.id, partner.firmUserId, `${LATE_THREAD_NOTE_PREFIX}${written.slice(0, 3800)}`, thread.firm_scope)
+            .run();
+          await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || '• ' || ?2, 1, 16000) WHERE id = ?1")
+            .bind(cardRow.id, `${partner.firstName} replied on the ${stale} email thread while the card waits on its PREVIEW: "${written.slice(0, 200)}". Read as instructions for the build, never as approval of a preview it did not answer; the preview still waits for a reply to the preview email.`)
+            .run();
+          // BACK IN THE SWEEP'S HANDS so the note is read on the next tick: the sweep claims only OPEN
+          // and IN_PROGRESS cards. The block's own words stay on the row; the runner re-blocks on the
+          // same preview (or rebuilds with the instructions) once it has read the note.
+          await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'OPEN', work_attempts = 0, lease_until = NULL, block_nag_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1 AND state = 'BLOCKED'")
+            .bind(cardRow.id)
+            .run();
+        } else {
+          const out = await answerBlock(env, cardRow.id, partner.firmUserId, { action: "ANSWER", text: written.slice(0, 4000) });
+          answered = out.ok;
+        }
       } else {
         await env.WP_OS_DB.prepare(
           "INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -467,6 +492,30 @@ export async function steerFromReply(
   });
 
   return { steered: true, thread, written, reason: "", attempted: true, answered, attached };
+}
+
+/**
+ * The notice kind the reply's thread was sent as — when the card is a website job waiting on its
+ * PREVIEW and that notice was NOT the preview (PLAN, RECEIVED, a question). Null otherwise: the
+ * reply is an answer to the question the card is asking now. Read from `work_card_notice.message_id`
+ * (the thread token every notice records) and the card's own row; no state is duplicated here.
+ */
+async function answersAnEarlierStage(env: Env, cardId: string, kind: string | null, token: string): Promise<string | null> {
+  if (kind !== "WEB_PROPERTY_CHANGE") return null;
+  const row = await env.WP_OS_DB.prepare(
+    "SELECT check_state, publish_ready, preview_only, land_approved_at, forced_by, plan_approved_at FROM web_property_change WHERE work_card_id = ?1",
+  )
+    .bind(cardId)
+    .first<{ check_state: string | null; publish_ready: number; preview_only: number; land_approved_at: string | null; forced_by: string | null; plan_approved_at: string | null }>();
+  if (!row) return null;
+  const atPreview = row.check_state === "GREEN" && (row.publish_ready === 0 || row.preview_only === 1) && !row.land_approved_at && !row.forced_by && Boolean(row.plan_approved_at);
+  if (!atPreview) return null;
+  // Only the stages BEFORE the preview are an earlier stage. A question or a "nothing new found"
+  // sent while the preview waits is part of the preview conversation, and a reply to it answers the
+  // preview.
+  const notice = await env.WP_OS_DB.prepare("SELECT kind FROM work_card_notice WHERE message_id = ?1 ORDER BY sent_at DESC LIMIT 1").bind(token).first<{ kind: string }>();
+  if (!notice || !["RECEIVED", "PLAN"].includes(notice.kind)) return null;
+  return notice.kind;
 }
 
 // ── A reply lands on a card that is neither BLOCKED nor OPEN/IN_PROGRESS (22 Sep 2026) ──────────

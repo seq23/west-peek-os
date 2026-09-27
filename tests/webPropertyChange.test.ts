@@ -4,7 +4,9 @@ import type { Env } from "../src/worker/env";
 import { handleRequest } from "../src/worker/index";
 import { openAssignmentCard } from "../src/worker/services/dealIntake";
 import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
-import { sweepOnce } from "../src/worker/services/workSweep";
+import { sweepOnce, type SweepCard } from "../src/worker/services/workSweep";
+import type { ReplyIntentReader } from "../src/worker/services/replyIntent";
+import type { QuestionAnswerer } from "../src/worker/services/questionRouting";
 import { claimRun, parkRun, progressRun, reapSeatRuns, readRun, reportRun, JOB_SILENCE_MS, type SeatRunRow } from "../src/worker/ai/subscriptionSeats";
 import { parseWebPropertyAsk, isWebPropertyChange, driveFolderLinks, addresseeIn, sitesOf } from "../src/shared/intake/webPropertyChange";
 import { parseBlogAsk } from "../src/shared/intake/blogHelp";
@@ -78,15 +80,35 @@ function nextTickTime(): Date {
   clock += 3 * 60_000;
   return new Date(clock);
 }
+/**
+ * THE INTENT READER, INJECTED (27 Sep 2026). Free text a partner writes is read for its intent
+ * through `replyIntent.ts`; the keyword forms never reach it. This fake decides deterministically
+ * from the words and records every call, so a test can prove which replies were read by a model
+ * and which by the keyword fast path — without a live call.
+ */
+const intentCalls: string[] = [];
+const fakeIntentReader: ReplyIntentReader = async (_env, input) => {
+  intentCalls.push(input.text);
+  const t = input.text;
+  const base = { keyword: null, aiRunId: null, source: "MODEL" as const, reason: "fake reader" };
+  if (/let'?s not|think it over|hold on|hold off|\bstop\b|\bwait\b/i.test(t)) return { ...base, kind: "STOP", changes: null, question: null };
+  const question = /\?/.test(t) ? (t.match(/[^.\n]*\?/)?.[0] ?? t).trim() : null;
+  const changes = /\b(but|make|swap|use|instead|please)\b/i.test(t) ? t.replace(/[^.\n]*\?/, "").trim() || null : null;
+  if (question) return { ...base, kind: "QUESTION", changes, question };
+  return { ...base, kind: "CONTINUE", changes, question: null };
+};
+const fakeAnswerer: QuestionAnswerer = async (_env, input) => ({ confident: true, answer: `Yes — ${input.question.slice(0, 60)} The hex is #E0632F and it stays.`, reason: "fake", aiRunId: null });
+const RUNNERS = { webPropertyChange: (e: Env, c: SweepCard) => runWebPropertyChangeCard(e, c, undefined, undefined, fakeAnswerer, fakeIntentReader) };
+
 async function tick(): Promise<Awaited<ReturnType<typeof sweepOnce>>> {
-  return sweepOnce(env, nextTickTime());
+  return sweepOnce(env, nextTickTime(), RUNNERS);
 }
 
 /** Sweep until THIS card is the one worked (older cards the sweep holds are worked first). */
 async function tickFor(id: string): Promise<Awaited<ReturnType<typeof sweepOnce>>> {
   // Held cards are leased for HELD_MINUTES; the clock here is real, so a held sibling is skipped.
   for (let i = 0; i < 8; i++) {
-    const out = await sweepOnce(env, nextTickTime());
+    const out = await sweepOnce(env, nextTickTime(), RUNNERS);
     if (out.card?.id === id) return out;
     // Nothing waiting means every card is held or done; the clock moves on and the hold expires.
   }
@@ -319,7 +341,7 @@ describe("Scooter emails a package for the ventures site", () => {
     const held = await runWebPropertyChangeCard(env, { id: porterCardId, title: "t", kind: WEB_PROPERTY_CHANGE_KIND, owner_id: "aie_porter", state: "IN_PROGRESS", work_attempts: 0, firm_scope: "west-peek", requested_by_email: SCOOTER });
     expect(held.held).toBe(true);
     expect(held.detail).toMatch(/pulling the folder/);
-    expect((await sweepOnce(env, nextTickTime())).card?.id).not.toBe(porterCardId);
+    expect((await sweepOnce(env, nextTickTime(), RUNNERS)).card?.id).not.toBe(porterCardId);
   });
 
   it("an unreadable report is a failed attempt, never a silent success", () => {
@@ -1557,6 +1579,191 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
     expect(prompt).toContain("the DESTINATION IS A GOOGLE SHEET");
     expect(prompt).toContain("recorded default (Sequoia, 21 Sep 2026), not an ask");
     expect(prompt).toContain("validate:forms");
+  });
+});
+
+describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () => {
+  beforeAll(ageEarlierCards);
+  const REAL_QUESTION = { document: "# Plan: colours", decided: ["Ventures first"], asks: [{ question: "Which orange, exactly?" }], publish_ready: true, placeholders: [] };
+  const lastFinding = async (id: string) => String((await card(id)).description);
+
+  it("PLAN: \"No problem, looks great\" approves the plan (it used to read as a refusal) — every recommendation taken, BUILD queued, read by the model once", async () => {
+    const porter = await planned(SCOOTER, "Walker", "colours A", REAL_QUESTION);
+    expect((await card(porter.id)).state).toBe("BLOCKED");
+    intentCalls.length = 0;
+    await replyFrom(SCOOTER, "No problem, looks great", await porter.token());
+    const next = await tickFor(porter.id);
+    expect(next.summary).toMatch(/Plan approved; BUILD queued/);
+    const row = (await readWebPropertyChange(env, porter.id))!;
+    expect(row.phase).toBe("BUILD");
+    expect(row.plan_approved_by).toBe("fu_scooter_taylor");
+    expect(JSON.parse(row.answers_json)).toEqual(["1. (no recommendation given) (approved as recommended)"]);
+    expect(await lastFinding(porter.id)).toMatch(/their reply read as go ahead, every recommendation taken \(fake reader\): "No problem, looks great"/);
+    expect(intentCalls, "free text is read once").toEqual(["No problem, looks great"]);
+  });
+
+  it("PLAN: a long email full of instructions (Scooter's shape) approves WITH the instructions carried to the build; a keyword reply never reaches the reader", async () => {
+    const porter = await planned(SCOOTER, "Walker", "colours B", REAL_QUESTION);
+    const email = "Hey Hey!\n\nI went through both sites. Please lift the orange from #C45A3C to #E0632F on a white background and use the PDF palette's deep tones as section accents. Swap Darian and Shanna's photos back. Keep 'Join our community' going to Instagram.\n\nSent from my iPhone";
+    intentCalls.length = 0;
+    await replyFrom(SCOOTER, email, await porter.token());
+    expect((await tickFor(porter.id)).summary).toMatch(/BUILD queued/);
+    const row = (await readWebPropertyChange(env, porter.id))!;
+    expect(row.plan_approved_at).toBeTruthy();
+    expect(JSON.parse(row.answers_json).at(-1), "his instructions ride to the build").toMatch(/^Hey Hey!/);
+    expect(await lastFinding(porter.id)).toMatch(/read as go ahead with instructions/);
+    const job = JSON.parse((await liveJobFor(porter.id))!.job_json!) as { plan: { answers: string[] } };
+    expect(job.plan.answers.at(-1)).toMatch(/lift the orange/);
+    expect(intentCalls).toHaveLength(1);
+    // The keyword fast path: "approved" on another card never calls the reader.
+    const other = await planned(SCOOTER, "Walker", "colours B2", REAL_QUESTION);
+    intentCalls.length = 0;
+    await replyFrom(SCOOTER, "approved", await other.token());
+    expect((await tickFor(other.id)).summary).toMatch(/BUILD queued/);
+    expect(intentCalls, "a keyword is decided without a model").toEqual([]);
+  });
+
+  it("PLAN: \"hold off\" is the one thing that holds — keyword, no model; a stop said in more words holds too", async () => {
+    const porter = await planned(SCOOTER, "Walker", "colours C", REAL_QUESTION);
+    intentCalls.length = 0;
+    await replyFrom(SCOOTER, "Hold off — I want to check the logos with Sequoia first", await porter.token());
+    expect((await tickFor(porter.id)).outcome).toBe("BLOCKED");
+    expect(intentCalls).toEqual([]);
+    const c = await card(porter.id);
+    expect(String(c.block_needed)).toMatch(/You said: "Hold off/);
+    expect(String(c.block_needed)).toMatch(/Nothing is built/);
+    expect((await readWebPropertyChange(env, porter.id))!.plan_approved_at).toBeNull();
+    expect(await liveJobFor(porter.id)).toBeNull();
+    // A stop in other words, read by the model.
+    const token = (await env.WP_OS_DB.prepare("SELECT token FROM email_thread WHERE object_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(porter.id).first<{ token: string }>())!.token;
+    await replyFrom(SCOOTER, "Let's not do this yet, I want to think it over", token);
+    expect((await tickFor(porter.id)).outcome).toBe("BLOCKED");
+    expect(intentCalls).toEqual(["Let's not do this yet, I want to think it over"]);
+    expect((await readWebPropertyChange(env, porter.id))!.plan_approved_at).toBeNull();
+  });
+
+  it("PLAN: a question approves the plan on the recommendations AND is answered by Porter in his next email — the work never waits on it", async () => {
+    const porter = await planned(SCOOTER, "Walker", "colours D", REAL_QUESTION);
+    await replyFrom(SCOOTER, "Is #E0632F the final hex or a placeholder?", await porter.token());
+    expect((await tickFor(porter.id)).summary).toMatch(/BUILD queued/);
+    const row = (await readWebPropertyChange(env, porter.id))!;
+    expect(row.plan_approved_at).toBeTruthy();
+    expect(JSON.parse(row.answers_json)).toEqual(["1. (no recommendation given) (approved as recommended)"]);
+    const finding = await lastFinding(porter.id);
+    expect(finding).toMatch(/read as a question, every recommendation taken/);
+    expect(finding).toMatch(/asked: "Is #E0632F the final hex or a placeholder\?" — answered by Porter/);
+    const ev = await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE event_type = 'work_card.question_answered_mid_flow' AND object_id = ?1").bind(porter.id).first<{ payload_json: string }>();
+    expect(ev, "the answer is on the spine").not.toBeNull();
+    expect(JSON.parse(ev!.payload_json)).toMatchObject({ confident: true });
+  });
+
+  /** A card at its preview: plan approved by the request (recommended ask), BUILD reported GREEN, the preview email out. */
+  async function atPreview(subject: string): Promise<{ id: string; token: () => Promise<string>; planToken: string }> {
+    const porter = await planned(SCOOTER, "Walker", subject, { document: "# Plan", decided: [], asks: [{ question: "Lift the orange to #E0632F?", recommended: "Yes, as described." }], publish_ready: true, placeholders: [] });
+    const row0 = (await readWebPropertyChange(env, porter.id))!;
+    expect(row0.plan_approved_by, "approved by the request").toMatch(/^request:/);
+    const planToken = (await env.WP_OS_DB.prepare("SELECT message_id FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PLAN'").bind(porter.id).first<{ message_id: string }>())!.message_id;
+    await macReports(porter.id, { phase: "BUILD", status: "ok", pr_url: `https://github.com/seq23/join-west-peek-main/pull/${Math.floor(Math.random() * 9000) + 100}`, pr_number: 9, check_state: "GREEN", preview_url: "https://p9.west-peek-ventures.pages.dev" });
+    expect((await tickFor(porter.id)).outcome).toBe("BLOCKED");
+    expect(String((await card(porter.id)).block_needed)).toMatch(/^PREVIEW READY/);
+    return { ...porter, planToken };
+  }
+
+  it("PREVIEW: a free-form positive reply with no changes LANDS it, the same as \"approved\" (her decision, 27 Sep 2026)", async () => {
+    const p = await atPreview("preview A");
+    await replyFrom(SCOOTER, "Looks great to me, this is exactly it", await p.token());
+    const out = await tickFor(p.id);
+    expect(out.summary).toMatch(/Landing approved after the preview; LAND queued/);
+    const row = (await readWebPropertyChange(env, p.id))!;
+    expect(row.land_approved_at).toBeTruthy();
+    expect(row.land_approved_by).toBe("fu_scooter_taylor");
+    expect(await lastFinding(p.id)).toMatch(/their reply read as go ahead \(fake reader\): "Looks great to me/);
+  });
+
+  it("PREVIEW: a positive reply WITH changes rebuilds with them and sends a fresh preview; the next positive reply of any wording lands", async () => {
+    const p = await atPreview("preview B");
+    await replyFrom(SCOOTER, "Looks good but make the hero photo the group shot", await p.token());
+    const rebuild = await tickFor(p.id);
+    expect(rebuild.summary).toMatch(/Changes after the preview; BUILD queued/);
+    let row = (await readWebPropertyChange(env, p.id))!;
+    expect(row.refresh_intent).toBe("CHANGES");
+    expect(row.land_approved_at).toBeNull();
+    expect(JSON.parse(row.answers_json).at(-1)).toMatch(/make the hero photo the group shot/);
+    await macReports(p.id, { phase: "BUILD", status: "ok", pr_url: row.pr_url, pr_number: 9, check_state: "GREEN", preview_url: "https://p9b.west-peek-ventures.pages.dev" });
+    expect((await tickFor(p.id)).outcome, "a fresh preview waits").toBe("BLOCKED");
+    await replyFrom(SCOOTER, "Perfect, that's the one", await p.token());
+    expect((await tickFor(p.id)).summary).toMatch(/LAND queued/);
+    row = (await readWebPropertyChange(env, p.id))!;
+    expect(row.land_approved_at).toBeTruthy();
+  });
+
+  it("PREVIEW: a stop holds it; a question is answered and the preview stays up with nothing landed; the one switch turns free-form landing off", async () => {
+    const p = await atPreview("preview C");
+    await replyFrom(SCOOTER, "Let's not do this yet, I want to think it over", await p.token());
+    expect((await tickFor(p.id)).outcome).toBe("BLOCKED");
+    expect(String((await card(p.id)).block_needed)).toMatch(/You said: "Let's not do this yet/);
+    expect((await readWebPropertyChange(env, p.id))!.land_approved_at).toBeNull();
+    expect(await liveJobFor(p.id)).toBeNull();
+
+    const q = await atPreview("preview D");
+    await replyFrom(SCOOTER, "Is the orange the final hex?", await q.token());
+    const asked = await tickFor(q.id);
+    expect(asked.outcome).toBe("BLOCKED");
+    expect(await lastFinding(q.id)).toMatch(/asked a question; answered by email\. The same preview waits for a positive reply — nothing lands until then/);
+    expect((await readWebPropertyChange(env, q.id))!.land_approved_at).toBeNull();
+    expect(await liveJobFor(q.id), "nothing lands on a question").toBeNull();
+    expect(await lastFinding(q.id)).toMatch(/asked: "Is the orange the final hex\?" — answered by Porter/);
+
+    // THE SWITCH: off, a free-form go-ahead is noted and the preview waits for a keyword.
+    await env.WP_OS_DB.prepare("INSERT OR REPLACE INTO work_kind_rule (kind, rule_key, label, value, editable, note, set_by) VALUES (?1, 'free_reply_lands_preview', 'Free-form reply lands the preview', 'off', 1, 'test', 'fu_sequoia_taylor')").bind(WEB_PROPERTY_CHANGE_KIND).run();
+    try {
+      const s = await atPreview("preview E");
+      await replyFrom(SCOOTER, "Looks great to me, this is exactly it", await s.token());
+      expect((await tickFor(s.id)).outcome).toBe("BLOCKED");
+      expect((await readWebPropertyChange(env, s.id))!.land_approved_at).toBeNull();
+      expect(await lastFinding(s.id)).toMatch(/read as go-ahead, but free_reply_lands_preview is off/);
+      // The keyword still lands with the switch off.
+      await replyFrom(SCOOTER, "approved", await s.token());
+      expect((await tickFor(s.id)).summary).toMatch(/LAND queued/);
+    } finally {
+      await env.WP_OS_DB.prepare("DELETE FROM work_kind_rule WHERE kind = ?1 AND rule_key = 'free_reply_lands_preview'").bind(WEB_PROPERTY_CHANGE_KIND).run();
+    }
+  });
+
+  it("a late \"approved\" on the PLAN thread, after the plan was approved and while the PREVIEW waits, lands NOTHING — recorded, acknowledged, the preview still waits for its own reply (the approval binds to the latest preview)", async () => {
+    const p = await atPreview("late reply");
+    const before = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card").first<{ n: number }>();
+    const out = await replyFrom(SCOOTER, "approved", p.planToken);
+    expect(out.steered).toBe(true);
+    expect(out.answered, "not an answer to the preview's question").toBe(false);
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card").first<{ n: number }>())!.n).toBe(before!.n);
+    const c = await card(p.id);
+    expect(c.state, "back in the sweep's hands so the note is read; never an answer to the preview").toBe("OPEN");
+    expect(c.block_answer, "never written as the answer to the preview's question").toBeNull();
+    expect(String(c.description)).toMatch(/Scooter replied on the PLAN email thread while the card waits on its PREVIEW: "approved"\. Read as instructions for the build, never as approval of a preview it did not answer/);
+    const note = await env.WP_OS_DB.prepare("SELECT body, acknowledged_at FROM work_card_note WHERE work_card_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(p.id).first<{ body: string; acknowledged_at: string | null }>();
+    expect(note!.body).toMatch(/^\(Reply on the earlier email thread; read as instructions, never as an approval of the preview\.\) approved$/);
+    // The next tick reads the note, acknowledges it in words, and lands nothing.
+    const tickOut = await tickFor(p.id);
+    expect(tickOut.outcome).toBe("BLOCKED");
+    const row = (await readWebPropertyChange(env, p.id))!;
+    expect(row.land_approved_at).toBeNull();
+    expect(row.phase).toBe("BUILD");
+    expect(await liveJobFor(p.id)).toBeNull();
+    const acked = await env.WP_OS_DB.prepare("SELECT response FROM work_card_note WHERE work_card_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(p.id).first<{ response: string | null }>();
+    expect(String(acked!.response)).toMatch(/this answered the plan email\. The preview still waits for your approval of it: reply to the preview email/);
+    expect(String((await card(p.id)).description)).toMatch(/replied "approved" on the PLAN email thread after the plan was approved; the preview it did not answer still waits/);
+    // Instructions in a late reply ARE applied: they rebuild the preview.
+    await replyFrom(SCOOTER, "Also please swap the Darian and Shanna photos", p.planToken);
+    const rebuilt = await tickFor(p.id);
+    expect(rebuilt.summary).toMatch(/Changes after the preview; BUILD queued/);
+    expect((await readWebPropertyChange(env, p.id))!.refresh_intent).toBe("CHANGES");
+    expect((await readWebPropertyChange(env, p.id))!.land_approved_at).toBeNull();
+    // And the reply to the PREVIEW email itself still lands it once the new preview is up.
+    await macReports(p.id, { phase: "BUILD", status: "ok", pr_url: (await readWebPropertyChange(env, p.id))!.pr_url, pr_number: 9, check_state: "GREEN", preview_url: "https://p9c.west-peek-ventures.pages.dev" });
+    expect((await tickFor(p.id)).outcome).toBe("BLOCKED");
+    await replyFrom(SCOOTER, "approved", await p.token());
+    expect((await tickFor(p.id)).summary).toMatch(/Landing approved after the preview; LAND queued/);
   });
 });
 

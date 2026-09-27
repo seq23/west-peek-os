@@ -17,7 +17,8 @@ import {
   type NoticeEmail,
 } from "../src/shared/work/porterNotices";
 import { boldNumbers, lintExecEmail, renderExecEmail } from "../src/shared/email/execEmail";
-import { everyAskRecommended, NO_RECOMMENDATION, readApprovalReply, readAsks } from "../src/shared/work/approvalReply";
+import { changesTextOf, everyAskRecommended, LATE_THREAD_NOTE_PREFIX, NO_RECOMMENDATION, readApprovalReply, readAsks, stripLateThreadPrefix } from "../src/shared/work/approvalReply";
+import { keywordIntent, parseReplyIntent } from "../src/worker/services/replyIntent";
 import { plainTitle } from "../src/shared/work/siteChange";
 import { rebuildIntentFor } from "../src/worker/services/webPropertyChange";
 // The Mac's reader, held to the same answers as the Worker's (one rule, two runtimes).
@@ -194,14 +195,17 @@ describe("the words", () => {
   it("\"publish\" and \"changes:\" are read, and each maps to what she asked of a preview", () => {
     expect(readApprovalReply("publish").kind).toBe("PUBLISH");
     expect(readApprovalReply("Publish!\n\nSent from my iPhone").kind).toBe("PUBLISH");
-    expect(readApprovalReply("changes: swap the logo")).toEqual({ kind: "REFUSED", text: "changes: swap the logo", changes: true });
+    expect(readApprovalReply("changes: swap the logo"), "\"changes: …\" is instructions, never a hold (27 Sep 2026)").toEqual({ kind: "CHANGES", text: "changes: swap the logo" });
     expect(readApprovalReply("no")).toEqual({ kind: "REFUSED", text: "no" });
     expect(rebuildIntentFor("publish")).toBe("PUBLISH");
     expect(rebuildIntentFor("preview")).toBe("PREVIEW");
     expect(rebuildIntentFor("I added missing items")).toBe("PREVIEW");
     expect(rebuildIntentFor("Attached: logo.png")).toBe("PREVIEW");
     expect(rebuildIntentFor("changes: bigger header")).toBe("CHANGES");
-    expect(rebuildIntentFor("make the header bigger")).toBe("CHANGES");
+    // FREE TEXT IS NOT A KEYWORD REBUILD (27 Sep 2026): the runner reads it for its intent — CONTINUE
+    // with changes rebuilds, CONTINUE without lands, STOP holds, a QUESTION is answered.
+    expect(rebuildIntentFor("make the header bigger"), "free text is read for intent by the runner, not here").toBeNull();
+    expect(keywordIntent("make the header bigger")).toBeNull();
     expect(rebuildIntentFor("approved"), "approved lands; it is not a rebuild").toBeNull();
     expect(rebuildIntentFor("stop"), "stop holds").toBeNull();
     expect(rebuildIntentFor("approved to production")).toBeNull();
@@ -290,5 +294,46 @@ describe("the plan as an FYI: every ask carries a recommendation (owner, 27 Sep 
     // one of Porter's own emails is named by what the email was about.
     expect(plainTitle({ title: "From scooter@westpeek.ventures: Porter: Community site redesign — now yours", kind: "WEB_PROPERTY_CHANGE", host: null, subject: "Porter: Community site redesign — now yours", ask: "Hey Hey!\n\nI saw the community-site preview and the placeholders." })).toBe("Community site redesign");
     expect(plainTitle({ title: "From scooter@westpeek.ventures: Re: Porter: Porter: Plan ready", kind: "WEB_PROPERTY_CHANGE", host: null, subject: "Re: Porter: Porter: Plan ready", ask: "Carlos image. All good." })).toBe("Plan ready");
+  });
+});
+
+describe("a partner's reply is permission to continue (owner, 27 Sep 2026): the pure readers", () => {
+  it("only an explicit stop is REFUSED; \"No problem, looks great\" is not", () => {
+    for (const stop of ["no", "No.", "stop", "Stop the build for now", "hold off", "Hold off until Monday", "not approved", "don't build it yet", "Do not land this", "wait, I want to look first", "not yet"]) {
+      expect(readApprovalReply(stop).kind, stop).toBe("REFUSED");
+    }
+    for (const go of ["No problem, looks great", "No worries — approved", "Nope, nothing to change, go", "Not bad! ship it", "Carlos image\n\nI was saying we don't have a hero image but we just need to design it without. All good. Yes will upload 4 and 5 for sure soon"]) {
+      expect(readApprovalReply(go).kind, go).toBe("ANSWERS");
+    }
+    expect(readApprovalReply("approved").kind).toBe("APPROVED");
+    expect(readApprovalReply("changes: swap the logo").kind).toBe("CHANGES");
+    expect(changesTextOf("changes: swap the logo")).toBe("swap the logo");
+    expect(changesTextOf("Change: swap the logo")).toBe("swap the logo");
+  });
+
+  it("keywordIntent decides the keywords without a model and returns null for free text", () => {
+    expect(keywordIntent("approved")).toMatchObject({ kind: "CONTINUE", changes: null, keyword: "APPROVED", source: "KEYWORD" });
+    expect(keywordIntent("Publish!\n\nSent from my iPhone")).toMatchObject({ kind: "CONTINUE", keyword: "PUBLISH" });
+    expect(keywordIntent("changes: swap the logo")).toMatchObject({ kind: "CONTINUE", changes: "swap the logo", keyword: "CHANGES" });
+    expect(keywordIntent("hold off")).toMatchObject({ kind: "STOP", keyword: "REFUSED" });
+    expect(keywordIntent("Attached: logo.png")).toMatchObject({ kind: "CONTINUE", changes: null });
+    expect(keywordIntent("No problem, looks great"), "free text goes to the reader").toBeNull();
+    expect(keywordIntent("Can we make the orange darker on mobile?")).toBeNull();
+  });
+
+  it("parseReplyIntent reads the fixed format strictly and FAILS OPEN to CONTINUE with the words carried", () => {
+    expect(parseReplyIntent("INTENT: CONTINUE\nCHANGES: none\nQUESTION: none\nREASON: agreement in other words", "No problem, looks great")).toMatchObject({ kind: "CONTINUE", changes: null, question: null, source: "MODEL" });
+    expect(parseReplyIntent("INTENT: CONTINUE\nCHANGES: make the hero the group shot\nQUESTION: none\nREASON: go-ahead with one change", "Looks good but make the hero the group shot")).toMatchObject({ kind: "CONTINUE", changes: "make the hero the group shot" });
+    expect(parseReplyIntent("INTENT: STOP\nCHANGES: none\nQUESTION: none\nREASON: says to hold", "Let's not do this yet")).toMatchObject({ kind: "STOP" });
+    expect(parseReplyIntent("INTENT: QUESTION\nCHANGES: none\nQUESTION: Is the orange the final hex?\nREASON: asks", "Is the orange the final hex?")).toMatchObject({ kind: "QUESTION", question: "Is the orange the final hex?" });
+    expect(parseReplyIntent("INTENT: QUESTION\nCHANGES: none\nQUESTION: none\nREASON: asks", "Is it final?"), "a QUESTION with no question text carries the reply as the question").toMatchObject({ kind: "QUESTION", question: "Is it final?" });
+    expect(parseReplyIntent("garbage", "Looks great to me"), "unreadable → CONTINUE, the words carried as instructions, never a block").toMatchObject({ kind: "CONTINUE", changes: "Looks great to me", source: "FALLBACK" });
+    expect(parseReplyIntent("", "Looks great to me")).toMatchObject({ kind: "CONTINUE", source: "FALLBACK" });
+  });
+
+  it("a late-thread note is marked with one prefix, read back by the runner", () => {
+    const note = `${LATE_THREAD_NOTE_PREFIX}approved`;
+    expect(stripLateThreadPrefix(note)).toEqual({ late: true, text: "approved" });
+    expect(stripLateThreadPrefix("approved")).toEqual({ late: false, text: "approved" });
   });
 });

@@ -200,9 +200,14 @@ export function checkWorker(src) {
     if (readAt < 0) violations.push("the runner approves a plan without reading the reply through readApprovalReply — \"no\" would build");
     if (approveAt < 0) violations.push("the runner never records plan_approved_at — nothing could ever build");
     if (readAt >= 0 && approveAt >= 0 && readAt > approveAt) violations.push("the runner records plan_approved_at before it reads the reply");
-    const refused = runner.match(/if\s*\(reading\.kind\s*===\s*"REFUSED"\)\s*\{([\s\S]*?)\n\s{4}\}/)?.[1] ?? "";
-    if (!refused) violations.push("the runner has no REFUSED branch — a reply starting with \"no\" would be treated as answers and build");
-    else if (!/return\s*\{/.test(refused) || !/blockCard\(/.test(refused)) violations.push("the runner's REFUSED branch does not block the card and return — \"no\" would fall through to plan_approved_at");
+    // 27 Sep 2026: the reply is read for its INTENT (keywords first — "no"/"stop"/"hold off" read REFUSED and
+    // map to STOP without a model; free text through the reader) and only STOP holds. The STOP branch must
+    // still block the card and return before plan_approved_at is written.
+    const intentAt = runner.indexOf("const intent: ReplyIntent = await readReplyIntent(env, { cardId: card.id, firmScope: card.firm_scope, text: answer }, readIntent);");
+    if (intentAt < 0 || (approveAt >= 0 && intentAt > approveAt)) violations.push("the runner approves a plan without reading the reply's intent first — a stop said in more words than \"no\" would build");
+    const refused = runner.match(/if\s*\(intent\.kind\s*===\s*"STOP"\)\s*\{([\s\S]*?)\n\s{4}\}/)?.[1] ?? "";
+    if (!refused) violations.push("the runner has no STOP branch — a reply that says stop would be treated as answers and build");
+    else if (!/return\s*\{/.test(refused) || !/blockCard\(/.test(refused)) violations.push("the runner's STOP branch does not block the card and return — \"no\" would fall through to plan_approved_at");
     const requesterAt = runner.indexOf("block_answered_by !== requester.firmUserId");
     if (requesterAt < 0 || requesterAt > readAt) violations.push("the runner does not check the answer came from the requesting partner before reading it as an approval");
     // THE FORCE is recorded only under a reading that read FORCED — never from a plain "approved".
@@ -221,7 +226,11 @@ export function checkWorker(src) {
       // returns before the landing approval is written.
       const readAt = runner.lastIndexOf("const answer = answerSince(card, row.preview_emailed_at);", landAt);
       const between = readAt >= 0 ? runner.slice(readAt + 10, landAt) : "";
-      if (readAt < 0 || /const answer\s*=/.test(between) || !/if \(landReading\?\.kind !== "APPROVED"\) \{/.test(between)) violations.push("land_approved_at is not read against the preview email's time — an earlier 'approved' (the plan's) would count as the second");
+      // 27 Sep 2026: a free-form reply read as CONTINUE lands too (`landsByIntent`) — only from the requesting
+      // partner (checked below) and only through the one switch, `freeReplyLandsPreview(rules)`.
+      if (readAt < 0 || /const answer\s*=/.test(between) || !/if \(landReading\?\.kind !== "APPROVED" && !landsByIntent\) \{/.test(between)) violations.push("land_approved_at is not read against the preview email's time — an earlier 'approved' (the plan's) would count as the second");
+      if (readAt >= 0 && !/landsByIntent = freeReplyLandsPreview\(rules\);/.test(between)) violations.push("a free-form reply lands the preview without the one switch (freeReplyLandsPreview) deciding it");
+      if (readAt >= 0 && (between.match(/(?<!let )landsByIntent = /g) ?? []).length !== 1) violations.push("landsByIntent is set in more than one place — a second writer is a landing nobody approved");
       if (!/landReading\?\.kind\s*!==\s*"APPROVED"/.test(between)) violations.push("land_approved_at is written without requiring the reply to read APPROVED — 'preview' or 'no' after the preview would land");
       if (!/const landReading = answer && fromRequester \? readApprovalReply\(answer\) : null;/.test(between)) violations.push("the second approval is not checked against the requesting partner");
     }
@@ -262,9 +271,19 @@ export function checkWorker(src) {
     if (!/built without asking/.test(proceed)) violations.push("proceedWithoutAsking() does not record 'built without asking' on the card");
     if (/land_approved_at|recordForce\(/.test(proceed)) violations.push("proceedWithoutAsking() touches the landing approval or the force — it may only approve the plan");
   }
-  // Every plan_approved_at write is one of: the partner's reading, the pre-approval at filing, or nothing-to-ask.
+  // Every plan_approved_at write is one of: the partner's reading, the pre-approval at filing, nothing-to-ask,
+  // or (27 Sep 2026) approved by the request — every ask carried a recommendation (`approveByRequest`).
   const approvalWrites = [...src.matchAll(/update\(env, card\.id, \{[^}]*plan_approved_at:\s*now/g)].length;
-  if (approvalWrites !== 3) violations.push(`plan_approved_at is written in ${approvalWrites} place(s); exactly three are allowed (the partner's reply, pre-approval at filing, nothing to ask) — a fourth is an approval nobody gave`);
+  if (approvalWrites !== 4) violations.push(`plan_approved_at is written in ${approvalWrites} place(s); exactly four are allowed (the partner's reply, pre-approval at filing, nothing to ask, every ask recommended) — a fifth is an approval nobody gave`);
+  const byRequest = body(src, "async function approveByRequest(");
+  examined += 1;
+  if (!byRequest) violations.push("approveByRequest() is gone — a plan whose every ask carries a recommendation would wait again");
+  else {
+    if (!/plan_approved_by: approvedBy/.test(byRequest) || !/const approvedBy = requestApprover\(card\.id\);/.test(byRequest)) violations.push("approveByRequest() records the approval in something other than the request's own name — 0241's primary-only trigger would read a partner who did not approve");
+    if (/land_approved_at|recordForce\(/.test(byRequest)) violations.push("approveByRequest() touches the landing approval or the force — it may only approve the plan");
+  }
+  for (const m of src.matchAll(/if \(everyAskRecommended\(asks\)\) return approveByRequest\(/g)) examined += Number(Boolean(m));
+  if ((src.match(/return approveByRequest\(/g) ?? []).length !== 2) violations.push("approveByRequest() is reached from somewhere other than the plan's filing and the runner's PLAN branch");
   const build = body(src, "async function applyBuild(");
   if (!build) violations.push("applyBuild() is gone");
   else {
@@ -472,7 +491,10 @@ export function checkStaleApproval({ worker, script, sql0240 }) {
   if (writes !== 1 || !rebuild || !/if \(intent === "PUBLISH"\) Object\.assign\(patch, \{ land_approved_at: now, land_approved_by: by, publish_approved_at: now/.test(rebuild)) violations.push(`publish_approved_at is written ${writes} time(s); exactly once, in requestRebuild() under intent PUBLISH — anything else is a landing approval nobody gave`);
   const intentFn = body(worker, "export function rebuildIntentFor(");
   if (!intentFn || !/if \(r\.kind === "PUBLISH"\) return "PUBLISH";/.test(intentFn)) violations.push("rebuildIntentFor() reads PUBLISH from something other than the reader's \"publish\"");
-  if (!/const intent = landReading\?\.kind === "APPROVED" \|\| !fromRequester \|\| !answer \? null : rebuildIntentFor\(answer\);/.test(worker)) violations.push("the preview wait takes a rebuild (and a \"publish\") from someone other than the requesting partner");
+  if (!/const keywordRebuild = landReading\?\.kind === "APPROVED" \|\| !fromRequester \|\| !answer \? null : rebuildIntentFor\(answer\);/.test(worker)) violations.push("the preview wait takes a rebuild (and a \"publish\") from someone other than the requesting partner");
+  // 27 Sep 2026: free text to a preview is read for its intent (CONTINUE lands, CONTINUE+changes rebuilds) — from the requesting partner only.
+  examined += 1;
+  if (!/if \(answer && fromRequester && landReading\?\.kind === "ANSWERS"\) \{\s*freeIntent = await readReplyIntent\(/.test(worker)) violations.push("the preview wait reads a free-form reply's intent from someone other than the requesting partner — the other partner's \"looks great\" would land it");
   const unchanged = body(worker, "async function applyUnchanged(");
   if (!unchanged || !/if \(wasPublish\) Object\.assign\(patch, \{ land_approved_at: null, land_approved_by: null, publish_approved_at: null/.test(unchanged)) violations.push("applyUnchanged() keeps a \"publish\" approval when nothing new arrived — the old preview would land as if filled in");
   return { violations, examined };
@@ -525,7 +547,10 @@ export async function checkReader(mod) {
   const violations = [];
   let examined = 0;
   const cases = [
-    ["no", "REFUSED"], ["No.", "REFUSED"], ["not approved", "REFUSED"], ["stop", "REFUSED"], ["changes: use blue", "REFUSED"], ["No, keep the old logo", "REFUSED"],
+    ["no", "REFUSED"], ["No.", "REFUSED"], ["not approved", "REFUSED"], ["stop", "REFUSED"], ["hold off", "REFUSED"], ["Hold off until Monday", "REFUSED"], ["Don't build it yet", "REFUSED"],
+    // 27 Sep 2026: "changes: …" is instructions, never a hold; a reply that merely STARTS with "no" is
+    // free text the runner reads for its intent — "No problem, looks great" was read as a refusal.
+    ["changes: use blue", "CHANGES"], ["No, keep the old logo", "ANSWERS"], ["No problem, looks great", "ANSWERS"],
     ["approved", "APPROVED"], ["Approved!", "APPROVED"], ["approve", "APPROVED"], ["yes", "APPROVED"], ["go", "APPROVED"], ["land it", "APPROVED"],
     ["1. keep black and white. 2. yes remove it.", "ANSWERS"], ["nothing on 1, and drop the second logo", "ANSWERS"],
     ["preview", "PREVIEW"], ["Preview only", "PREVIEW"], ["preview first", "PREVIEW"],
@@ -616,7 +641,16 @@ export function checkOwnership({ sql0241, rules, handOff, blocks, thread, source
   const steerAt = thread.indexOf("export async function steerFromReply(");
   const steer = steerAt >= 0 ? thread.slice(steerAt) : null;
   examined += 1;
-  const blocked = steer?.match(/if \(!asked \|\| asked === partner\.email\) \{\s*const out = await answerBlock\(/);
+  // The ONE answerBlock() in steerFromReply sits inside the "addressed to this partner" branch: the
+  // text from that `if` to its `} else {` holds it, and nothing else in the function calls it.
+  const gateAt = steer ? steer.indexOf("if (!asked || asked === partner.email) {") : -1;
+  const nextBranchAt = gateAt >= 0 ? steer.indexOf("else if (cardRow && partner && (cardRow.state === \"OPEN\"", gateAt) : -1;
+  const gated = gateAt >= 0 && nextBranchAt > gateAt ? steer.slice(gateAt, nextBranchAt) : "";
+  // The not-the-partner `else` of that gate keeps a note and must not answer: the text before it holds the one call.
+  const notAddressedAt = gated.indexOf("} else {\n        await env.WP_OS_DB.prepare(\n          \"INSERT INTO work_card_note");
+  const addressed = notAddressedAt > 0 ? gated.slice(0, notAddressedAt) : "";
+  const answerCalls = steer ? steer.split("await answerBlock(").length - 1 : 0;
+  const blocked = gateAt >= 0 && /const out = await answerBlock\(/.test(addressed) && answerCalls === 1;
   if (!blocked) violations.push("steerFromReply() answers a block for someone other than the partner the card is addressed to — a secondary's \"approved\" by reply would approve");
   return { violations, examined };
 }
@@ -647,7 +681,11 @@ async function selfTest() {
   const unaskedNotReady = worker.replace("if (asks.length === 0 && fresh.publish_ready === 1) return proceedWithoutAsking(", "if (asks.length === 0) return proceedWithoutAsking(");
   say(checkWorker(unaskedNotReady).violations.some((v) => /condition other than asks=\[\]/.test(v)), "a plan that builds unasked while not publish-ready is caught");
   const fourthApproval = worker.replace("await update(env, card.id, { merge_sha: report.merge_sha,", "await update(env, card.id, { plan_approved_at: now, merge_sha: report.merge_sha,");
-  say(checkWorker(fourthApproval).violations.some((v) => /exactly three are allowed/.test(v)), "a fourth plan_approved_at write (an approval nobody gave) is caught");
+  say(checkWorker(fourthApproval).violations.some((v) => /exactly four are allowed/.test(v)), "a fifth plan_approved_at write (an approval nobody gave) is caught");
+  const byRequestForces = worker.replace("const approvedBy = requestApprover(card.id);", "const approvedBy = card.requested_by_email ?? \"\";");
+  say(checkWorker(byRequestForces).violations.some((v) => /something other than the request's own name/.test(v)), "an approve-by-request recorded in a partner's name is caught");
+  const freeLandsWithoutSwitch = worker.replace("landsByIntent = freeReplyLandsPreview(rules);", "landsByIntent = true;");
+  say(checkWorker(freeLandsWithoutSwitch).violations.some((v) => /without the one switch/.test(v)), "a free-form landing that bypasses the switch is caught");
   const twiceReply = reply.replace("if (notice && (await alreadyTold(env, card.id, notice.kind, notice.cause))) {", "if (false) {");
   say(checkNotices(twiceReply, sql0221).violations.some((v) => /email twice/.test(v)), "a reply path that no longer checks alreadyTold is caught");
   const extraKind = sql0221.replace("'STUCK', 'DONE'", "'STUCK', 'NUDGE', 'DONE'");
@@ -689,8 +727,10 @@ async function selfTest() {
   const noReading = worker.replace("const reading = readApprovalReply(answer);", "const reading = { kind: \"APPROVED\" };");
   // With the plan's reading gone, the only `readApprovalReply(answer)` left is the preview stage's — after plan_approved_at.
   say(checkWorker(noReading).violations.some((v) => /without reading the reply|before it reads the reply/.test(v)), "a runner that approves without reading the reply is caught");
-  const noRefusal = worker.replace(/if \(reading\.kind === "REFUSED"\) \{[\s\S]*?\n    \}\n/, "");
-  say(checkWorker(noRefusal).violations.some((v) => /no REFUSED branch/.test(v)), "a runner whose REFUSED branch is gone is caught");
+  const noRefusal = worker.replace(/if \(intent\.kind === "STOP"\) \{[\s\S]*?\n    \}\n/, "");
+  say(checkWorker(noRefusal).violations.some((v) => /no STOP branch/.test(v)), "a runner whose STOP branch is gone is caught");
+  const noIntent = worker.replace("const intent: ReplyIntent = await readReplyIntent(env, { cardId: card.id, firmScope: card.firm_scope, text: answer }, readIntent);", "const intent: ReplyIntent = { kind: \"CONTINUE\", changes: null, question: null, keyword: null, source: \"KEYWORD\", reason: \"\", aiRunId: null };");
+  say(checkWorker(noIntent).violations.some((v) => /without reading the reply's intent/.test(v)), "a runner that approves without reading the reply's intent is caught");
   const noRequester = worker.replace("card.block_answered_by !== requester.firmUserId", "false");
   say(checkWorker(noRequester).violations.some((v) => /requesting partner/.test(v)), "a runner that lets the other partner approve is caught");
   const leakyReader = { ...reader, readApprovalReply: (t) => (String(t).trim().toLowerCase() === "no" ? { kind: "ANSWERS", text: t } : reader.readApprovalReply(t)) };
@@ -750,7 +790,8 @@ async function selfTest() {
   stCaught({ sql0240: st.sql0240.replace("NEW.land_approved_at < NEW.preview_emailed_at", "0") }, /compare the landing approval/, "a trigger blind to stale approvals is caught");
   stCaught({ sql0240: "" }, /no trg_web_property_change_approval_binds_latest_preview/, "a missing 0240 trigger is caught");
   stCaught({ worker: worker.replace("if (r.kind === \"PUBLISH\") return \"PUBLISH\";", "if (r.kind === \"ANSWERS\") return \"PUBLISH\";") }, /rebuildIntentFor/, "a publish read from any answer is caught");
-  stCaught({ worker: worker.replace("const intent = landReading?.kind === \"APPROVED\" || !fromRequester || !answer ? null : rebuildIntentFor(answer);", "const intent = landReading?.kind === \"APPROVED\" || !answer ? null : rebuildIntentFor(answer);") }, /someone other than the requesting partner/, "a publish from the other partner is caught");
+  stCaught({ worker: worker.replace("const keywordRebuild = landReading?.kind === \"APPROVED\" || !fromRequester || !answer ? null : rebuildIntentFor(answer);", "const keywordRebuild = landReading?.kind === \"APPROVED\" || !answer ? null : rebuildIntentFor(answer);") }, /someone other than the requesting partner/, "a publish from the other partner is caught");
+  stCaught({ worker: worker.replace("if (answer && fromRequester && landReading?.kind === \"ANSWERS\") {", "if (answer && landReading?.kind === \"ANSWERS\") {") }, /free-form reply's intent from someone other than the requesting partner/, "a free-form landing from the other partner is caught");
   stCaught({ worker: worker.replace("if (wasPublish) Object.assign(patch, { land_approved_at: null, land_approved_by: null, publish_approved_at: null", "if (false) Object.assign(patch, { land_approved_at: null, land_approved_by: null, publish_approved_at: null") }, /applyUnchanged/, "a publish kept when nothing new arrived is caught");
 
 

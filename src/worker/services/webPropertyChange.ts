@@ -5,6 +5,7 @@ import { json, type RouteContext } from "../router";
 import { appendEvent } from "../events";
 import { actorFromIdentity, type Actor } from "./authorize";
 import { answerBlock, blockCard } from "./blocks";
+import { notifyQuietly } from "./notifications";
 import { runAi } from "../ai/runAi";
 import { deliver } from "./deliverables";
 import { handOver } from "./employeeWork";
@@ -13,7 +14,8 @@ import { PARTNERS, PREVIEW_PARTNER, partnerByEmail } from "../../shared/registry
 import { sendOrPreview } from "./previewApproval";
 import type { SweepCard } from "./workSweep";
 import { hostsSentence, pagesHostsOf, readWebPropertyAsk, sitesOf, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
-import { approvedAnswers, askLines, decidedFromAsks, everyAskRecommended, readApprovalReply, readAsks, type Ask } from "../../shared/work/approvalReply";
+import { approvedAnswers, askLines, decidedFromAsks, everyAskRecommended, readApprovalReply, readAsks, stripLateThreadPrefix, type Ask } from "../../shared/work/approvalReply";
+import { defaultReadReplyIntent, readReplyIntent, type ReplyIntent, type ReplyIntentReader } from "./replyIntent";
 import { abandonRun } from "../ai/subscriptionSeats";
 import { alreadyTold, recordNotice, routedByFor, threadRootFor, type NoticeKind } from "./requestReply";
 import { doneReplyLaneFor, isOn, previewAllPartnerEmailsIsOn, rulesFor, ON_OFF_RULE_KEYS, type KindRule } from "./kindRules";
@@ -868,7 +870,12 @@ async function blockWithAsks(env: Env, card: WebPropertyChangeCard, row: WebProp
 }
 
 /** BLOCK on the preview: the second question. Records when it was asked so the second approval is read against it. */
-/** What her reply to a preview asks for (0240). Null: not a rebuild ("approved", "no", "stop"). Pure. */
+/**
+ * What her KEYWORD reply to a preview asks for (0240). Null: not a keyword rebuild — "approved",
+ * "no"/"stop", and FREE TEXT, which since 27 Sep 2026 is read for its intent by the runner
+ * (`replyIntent.ts`: CONTINUE lands or rebuilds with the changes, STOP holds, QUESTION is answered).
+ * Pure.
+ */
 export function rebuildIntentFor(answer: string): "PREVIEW" | "PUBLISH" | "CHANGES" | null {
   if (decisionResolutionIn(answer)) return null;
   if (/^Attached: [^\n]+$/.test(answer.trim())) return "PREVIEW";
@@ -876,9 +883,19 @@ export function rebuildIntentFor(answer: string): "PREVIEW" | "PUBLISH" | "CHANG
   const r = readApprovalReply(answer);
   if (r.kind === "PUBLISH") return "PUBLISH";
   if (r.kind === "PREVIEW") return "PREVIEW";
-  if (r.kind === "REFUSED") return r.changes ? "CHANGES" : null;
-  if (r.kind === "ANSWERS") return "CHANGES";
+  if (r.kind === "CHANGES") return "CHANGES";
   return null;
+}
+
+/**
+ * THE ONE SWITCH FOR FREE-FORM REPLIES TO A PREVIEW (owner's decision, 27 Sep 2026): a reply read
+ * as CONTINUE with no changes lands the preview, the same as "approved". Off, it is noted and the
+ * preview waits for a keyword. Read from the kind's rules so a partner can flip it without a deploy;
+ * ON when no row says otherwise.
+ */
+export const FREE_REPLY_LANDS_PREVIEW = "free_reply_lands_preview";
+export function freeReplyLandsPreview(rules: Record<string, string>): boolean {
+  return isOn(rules[FREE_REPLY_LANDS_PREVIEW] ?? "on");
 }
 
 /**
@@ -1419,17 +1436,24 @@ async function approveAtFiling(env: Env, card: WebPropertyChangeCard, row: WebPr
  * words that read REFUSED. A queued run is closed so the Mac does not build what she stopped; a run
  * already on the Mac finishes and its report waits on the held card.
  */
-async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow): Promise<string | null> {
+/** What the requester's unread words did this tick: a hold, and/or changes to rebuild the preview with. */
+interface RequesterWords {
+  held: string | null;
+  /** At the preview stage: instructions from a note (or a late reply on an earlier thread) to rebuild with. */
+  rebuildWith: string | null;
+}
+
+async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, deps: { readIntent: ReplyIntentReader; answerQuestion?: QuestionAnswerer }): Promise<RequesterWords> {
   const requester = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
   const since = [row.plan_approved_at, row.preview_emailed_at, row.forced_at].filter((x): x is string => Boolean(x)).sort().pop() ?? null;
-  // 1 · An answer to a block, from the requester, that reads REFUSED.
+  // 1 · An answer to a block, from the requester, that reads as an explicit STOP. Free text at the
+  //     preview is read for its intent by the preview branch itself (once, not twice).
   const answer = answerSince(card, since);
-  // "changes: …" to a PREVIEW is not a hold (0240, her option 2): it rebuilds with them and sends a
-  // new preview — the preview wait in the runner takes it. Before the plan, it still holds.
   const atPreview = row.phase === "BUILD" && row.check_state === "GREEN" && needsPreview(row) && !row.land_approved_at && !row.forced_by;
   const reading = answer ? readApprovalReply(answer) : null;
-  if (answer && (!requester || !card.block_answered_by || card.block_answered_by === requester.firmUserId) && reading?.kind === "REFUSED" && !(atPreview && reading.changes)) {
-    return answer;
+  let rebuildWith: string | null = null;
+  if (answer && (!requester || !card.block_answered_by || card.block_answered_by === requester.firmUserId) && reading?.kind === "REFUSED") {
+    return { held: answer, rebuildWith };
   }
   // 2 · Notes nobody has read yet. EVERY unread note is acknowledged here (the sweep takes a held
   //     card only while one is unread, so an unread note left behind would spin it): the
@@ -1476,9 +1500,17 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
       await ack(ccSaid);
       continue;
     }
-    if (!held && readApprovalReply(n.body).kind === "REFUSED") {
+    /*
+     * A REPLY ON AN EARLIER THREAD (27 Sep 2026): the email door keeps it as a note with a prefix
+     * when the card has moved on (it answered the PLAN email while the PREVIEW waits). Its words are
+     * read below like any note; its "approved" can never land — a note never does — and says so.
+     */
+    const late = stripLateThreadPrefix(n.body);
+    const body = late.text;
+    const keyword = readApprovalReply(body);
+    if (!held && keyword.kind === "REFUSED") {
       await ack("Held: nothing is built or landed until you say otherwise.");
-      held = n.body;
+      held = body;
       continue;
     }
     /*
@@ -1486,23 +1518,105 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
      * carries a recommendation is approved by the request, the requester's named bypass now arrives
      * as a note on an OPEN card rather than as the answer to a block. It is the same word with the
      * same weight: recorded as the force, in their name, so green lands without the preview stop.
+     * A LATE reply on an earlier thread is the one exception: it never forces a preview it did not see.
      */
-    if (readApprovalReply(n.body).kind === "FORCED" && !row.forced_by && requester && row.phase !== "LAND") {
+    if (keyword.kind === "FORCED" && !late.late && !row.forced_by && requester && row.phase !== "LAND") {
       await ack(`Forced to production in your name: it lands on green${row.publish_ready === 0 ? ", placeholders and all" : ""}; no preview stop.`);
       await recordForce(env, card, row, requester.firmUserId);
       continue;
     }
-    if (readApprovalReply(n.body).kind === "PREVIEW" && !row.land_approved_at) {
+    if (keyword.kind === "PREVIEW" && !row.land_approved_at) {
       // "preview" at any point before landing: see it on a preview link first.
       await ack("Noted: it will stop at a preview link and ask you before it lands.");
       await update(env, card.id, { preview_only: 1 });
-      await appendFinding(env, card.id, `${card.requested_by_email ?? "The partner"} asked for a preview first ("${n.body.slice(0, 40)}").`);
+      await appendFinding(env, card.id, `${card.requested_by_email ?? "The partner"} asked for a preview first ("${body.slice(0, 40)}").`);
+      continue;
+    }
+    if (late.late && (keyword.kind === "APPROVED" || keyword.kind === "FORCED" || keyword.kind === "PUBLISH")) {
+      // THE APPROVAL BINDS TO THE LATEST PREVIEW (#194). "approved" on the plan email, after the plan
+      // was approved and while the preview waits, is recorded and acknowledged — and lands nothing.
+      await ack(atPreview ? "Noted — this answered the plan email. The preview still waits for your approval of it: reply to the preview email." : "Noted — this answered the plan email, which is already approved; the build carries on.");
+      await appendFinding(env, card.id, `${requester?.firstName ?? "The partner"} replied "${body.slice(0, 60)}" on the PLAN email thread after the plan was approved${atPreview ? "; the preview it did not answer still waits for its own approval" : ""}. Nothing landed from it.`);
+      continue;
+    }
+    /*
+     * FREE TEXT IS READ FOR ITS INTENT (27 Sep 2026: a partner's reply is permission to continue).
+     * CONTINUE with changes at the preview → rebuild with them; a QUESTION → Porter answers it now;
+     * an explicit STOP said in more words → held; anything else is carried as the answer.
+     */
+    const intent = keyword.kind === "ANSWERS" ? await readReplyIntent(env, { cardId: card.id, firmScope: card.firm_scope, text: body }, deps.readIntent) : null;
+    if (intent?.kind === "STOP" && !held) {
+      await ack("Held: nothing is built or landed until you say otherwise.");
+      held = body;
+      continue;
+    }
+    if (intent?.kind === "QUESTION") {
+      const answered = await answerMidFlowQuestion(env, card, intent.question ?? body, deps.answerQuestion);
+      await ack(`Answered by email: ${answered.slice(0, 200)}${intent.changes ? " Your instructions are carried into the build." : " The work carries on with the recommendations."}`);
+      if (intent.changes) await update(env, card.id, { answers_json: JSON.stringify([...list(row.answers_json), intent.changes.slice(0, 2000)]) });
+      if (atPreview && intent.changes) rebuildWith = rebuildWith ?? intent.changes;
+      continue;
+    }
+    const carried = intent?.changes ?? body;
+    if (atPreview && intent && intent.changes) {
+      await ack(`Rebuilding the preview with your changes.${ccSaid ? ` ${ccSaid}` : ""}`);
+      rebuildWith = rebuildWith ?? carried;
+      continue;
+    }
+    if (atPreview && intent && !intent.changes) {
+      await ack(late.late ? "Noted — this answered the plan email. The preview still waits for your approval of it: reply to the preview email." : "Noted. The preview still waits for your word on it: reply to the preview email to land it.");
       continue;
     }
     await ack(`Carried into the next phase as your answer.${ccSaid ? ` ${ccSaid}` : ""}`);
-    await update(env, card.id, { answers_json: JSON.stringify([...list(row.answers_json), n.body.slice(0, 2000)]) });
+    await update(env, card.id, { answers_json: JSON.stringify([...list(row.answers_json), carried.slice(0, 2000)]) });
   }
-  return held;
+  return { held, rebuildWith };
+}
+
+/**
+ * PORTER ANSWERS A QUESTION IN HIS NEXT EMAIL, AND THE WORK CONTINUES (27 Sep 2026). A partner's
+ * reply that asks something is a QUESTION intent: the owning employee tries to answer it with real
+ * confidence (`answerQuestionForCard`, the same seam Addendum 12 uses) and the answer goes out on
+ * the card's thread now — it never blocks the card. Not confident → Porter says so honestly in the
+ * same email and Sequoia is told quietly; the work still carries on with the recommendations.
+ */
+async function answerMidFlowQuestion(env: Env, card: WebPropertyChangeCard, question: string, answerQuestion: QuestionAnswerer | undefined): Promise<string> {
+  const routed = await answerQuestionForCard(
+    env,
+    { cardId: card.id, firmScope: card.firm_scope, kind: card.kind ?? WEB_PROPERTY_CHANGE_KIND, cardTitle: card.title, question },
+    answerQuestion,
+  );
+  const answer =
+    routed.confident && routed.answer
+      ? routed.answer
+      : "Good question — I don't know that one for certain, so I've passed it to Sequoia rather than guess. The work carries on with my recommendations in the meantime; nothing goes live until you approve the preview.";
+  const sent = await sendQuestionAnswer(env, card, question, { ...routed, employeeName: routed.employeeName ?? PORTER_NAME, answer });
+  if (!routed.confident || !routed.answer) {
+    const sequoia = PARTNERS.find((p) => p.firmUserId === "fu_sequoia_taylor");
+    if (sequoia) {
+      await notifyQuietly(env, {
+        kind: "MEETING",
+        severity: "INFO",
+        title: `A question from ${card.requested_by_email ?? "a partner"} Porter could not answer`,
+        body: `On "${card.title.slice(0, 80)}": "${question.slice(0, 300)}". Porter told them he would pass it to you; the work carries on with the recommendations.`,
+        objectType: "work_card",
+        objectId: card.id,
+        firmUserId: sequoia.firmUserId,
+        dedupeKey: `work_card:${card.id}:question:${question.slice(0, 40)}`,
+      });
+    }
+  }
+  await appendFinding(env, card.id, `${card.requested_by_email ?? "The partner"} asked: "${question.slice(0, 300)}" — ${routed.confident && routed.answer ? `answered by ${routed.employeeName}` : "Porter could not answer with confidence; Sequoia was told"}${sent.sent ? ", by email on the card's thread" : ` (the email did not go: ${sent.reason})`}. The work continues.`);
+  await appendEvent(env, {
+    eventType: "work_card.question_answered_mid_flow",
+    actorType: "ai_employee",
+    actorId: routed.employeeId ?? PORTER_ID,
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope: card.firm_scope,
+    payload: { question: question.slice(0, 400), confident: routed.confident, sent: sent.sent, sent_reason: sent.reason, ai_run_id: routed.aiRunId },
+  });
+  return answer;
 }
 
 async function holdCard(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, said: string): Promise<RunOutcome> {
@@ -1973,6 +2087,7 @@ export async function runWebPropertyChangeCard(
   classify: ActionabilityClassifier = defaultClassifyActionability,
   generateBanterReply: BanterReplyGenerator = defaultGenerateBanterReply,
   answerQuestion?: QuestionAnswerer,
+  readIntent: ReplyIntentReader = defaultReadReplyIntent,
 ): Promise<RunOutcome> {
   const card: WebPropertyChangeCard =
     (await env.WP_OS_DB.prepare(
@@ -2015,10 +2130,14 @@ export async function runWebPropertyChangeCard(
 
   // 0 · "STOP" FROM THE PARTNER WHO ASKED, at any point after the plan was approved and before LAND.
   if (row.plan_approved_at && row.phase !== "LAND") {
-    const said = await heldByRequester(env, card, row);
-    if (said) return holdCard(env, card, row, said);
+    const words = await heldByRequester(env, card, row, { readIntent, answerQuestion });
+    if (words.held) return holdCard(env, card, row, words.held);
     // A note may have changed the row (a force, "preview first", an answer): read it back.
     row = (await readWebPropertyChange(env, card.id)) ?? row;
+    // Changes said in a note (or a late reply on an earlier thread) while the preview waits: rebuild with them.
+    if (words.rebuildWith && row.phase === "BUILD" && row.check_state === "GREEN" && needsPreview(row) && !row.land_approved_at && !row.forced_by && !row.current_run_id) {
+      return requestRebuild(env, card, row, "CHANGES", words.rebuildWith, rules);
+    }
   }
 
   // 1 · The lease. A run the Mac holds is the whole answer for this tick.
@@ -2106,8 +2225,14 @@ export async function runWebPropertyChangeCard(
       return { finished: false, blocked: true, progressed: false, detail: why };
     }
     const reading = readApprovalReply(answer);
-    if (reading.kind === "REFUSED") {
-      // "no" HOLDS THE CARD. The text is on the record; the plan stands; nothing is built.
+    /*
+     * A REPLY OF ANY KIND EXCEPT STOP APPROVES THE PLAN (owner, 27 Sep 2026). The keywords decide
+     * themselves; free text is read for its intent: CONTINUE (with or without instructions) approves,
+     * a QUESTION approves on the recommendations and is answered by email, only STOP holds.
+     */
+    const intent: ReplyIntent = await readReplyIntent(env, { cardId: card.id, firmScope: card.firm_scope, text: answer }, readIntent);
+    if (intent.kind === "STOP") {
+      // "no" / "hold off" HOLDS THE CARD. The text is on the record; the plan stands; nothing is built.
       await appendFinding(env, card.id, `Not approved by ${card.requested_by_email ?? "the partner"}: "${answer.slice(0, 600)}". The plan stands as written until they say what changes, or drop it.`);
       const why = await blockCard(env, card, {
         reason: "a_question_for_you",
@@ -2120,7 +2245,8 @@ export async function runWebPropertyChangeCard(
     }
     // "publish" before any preview exists reads as "approved": build the preview (every change previews first).
     const oneWord = reading.kind === "APPROVED" || reading.kind === "PREVIEW" || reading.kind === "FORCED" || reading.kind === "PUBLISH";
-    const newAnswers = oneWord ? approvedAnswers(asks) : [reading.text];
+    // Free text: a plain go-ahead takes every recommendation; instructions ride along as the answers.
+    const newAnswers = oneWord || (intent.source !== "KEYWORD" && !intent.changes) ? approvedAnswers(asks) : [intent.changes ?? (reading.kind === "CHANGES" || reading.kind === "ANSWERS" ? reading.text : answer)];
     const answers = [...list(row.answers_json), ...newAnswers];
     const now = new Date().toISOString();
     await update(env, card.id, {
@@ -2143,8 +2269,11 @@ export async function runWebPropertyChangeCard(
         ? `Plan approved by ${card.requested_by_email ?? "a partner"} for a PREVIEW first: every recommendation taken; the card will ask again with the preview link before anything lands.`
         : reading.kind === "APPROVED"
           ? `Plan approved by ${card.requested_by_email ?? "a partner"} with one word ("${answer.slice(0, 40)}"): every recommendation taken.`
-          : `Plan approved by ${card.requested_by_email ?? "a partner"} with answers: "${answer.slice(0, 400)}"`,
+          : intent.source !== "KEYWORD"
+            ? `Plan approved by ${card.requested_by_email ?? "a partner"} — their reply read as ${intent.kind === "QUESTION" ? "a question" : "go ahead"}${intent.changes ? " with instructions" : ", every recommendation taken"} (${intent.reason}): "${answer.slice(0, 400)}"`
+            : `Plan approved by ${card.requested_by_email ?? "a partner"} with answers: "${answer.slice(0, 400)}"`,
     );
+    if (intent.kind === "QUESTION") await answerMidFlowQuestion(env, card, intent.question ?? answer, answerQuestion);
     await appendEvent(env, {
       eventType: "web_property_change.plan_approved",
       actorType: "firm_user",
@@ -2152,7 +2281,7 @@ export async function runWebPropertyChangeCard(
       objectType: "work_card",
       objectId: card.id,
       firmScope: card.firm_scope,
-      payload: { reading: reading.kind, answer: answer.slice(0, 400) },
+      payload: { reading: reading.kind, intent: intent.kind, intent_source: intent.source, answer: answer.slice(0, 400) },
     });
     const fresh: WebPropertyChangeRow = { ...forcedRow, answers_json: JSON.stringify(answers), plan_approved_at: now, phase: "BUILD", preview_only: reading.kind === "PREVIEW" ? 1 : row.preview_only };
     const parked = await parkPhase(env, card, fresh, "BUILD", rules);
@@ -2197,10 +2326,33 @@ export async function runWebPropertyChangeCard(
         return { finished: false, blocked: true, progressed: false, detail: `Decision ${resolution.n} recorded; waiting on the same preview. ${why}` };
       }
       // The "I added missing items" button answers the block with exactly that phrase (handleMaterialsAdded).
-      const intent = landReading?.kind === "APPROVED" || !fromRequester || !answer ? null : rebuildIntentFor(answer);
-      if (intent) return requestRebuild(env, card, row, intent, answer, rules);
-      if (landReading?.kind !== "APPROVED") {
-        if (answer) {
+      const keywordRebuild = landReading?.kind === "APPROVED" || !fromRequester || !answer ? null : rebuildIntentFor(answer);
+      if (keywordRebuild) return requestRebuild(env, card, row, keywordRebuild, answer, rules);
+      /*
+       * FREE TEXT TO A PREVIEW, READ FOR ITS INTENT (owner's decision, 27 Sep 2026). CONTINUE with no
+       * changes lands it — the same as "approved" — while `free_reply_lands_preview` is on. CONTINUE
+       * WITH changes → make them and send a fresh preview; the next positive reply of any wording
+       * lands. STOP holds. QUESTION → answered by email now; the preview stays up and nothing lands
+       * until a positive reply. The keyword forms above keep working exactly as before.
+       */
+      let landsByIntent = false;
+      let freeIntent: ReplyIntent | null = null;
+      if (answer && fromRequester && landReading?.kind === "ANSWERS") {
+        freeIntent = await readReplyIntent(env, { cardId: card.id, firmScope: card.firm_scope, text: answer }, readIntent);
+        if (freeIntent.kind === "STOP") return holdCard(env, card, row, answer);
+        if (freeIntent.kind === "QUESTION") {
+          await answerMidFlowQuestion(env, card, freeIntent.question ?? answer, answerQuestion);
+          if (freeIntent.changes) return requestRebuild(env, card, row, "CHANGES", freeIntent.changes, rules);
+          await appendFinding(env, card.id, `After the preview, ${card.requested_by_email ?? "the partner"} asked a question; answered by email. The same preview waits for a positive reply — nothing lands until then.`);
+          const why = await blockOnPreview(env, card, row);
+          return { finished: false, blocked: true, progressed: false, detail: `Question answered; waiting on the same preview. ${why}` };
+        }
+        if (freeIntent.changes) return requestRebuild(env, card, row, "CHANGES", freeIntent.changes, rules);
+        landsByIntent = freeReplyLandsPreview(rules);
+        if (!landsByIntent) await appendFinding(env, card.id, `After the preview, ${card.requested_by_email ?? "the partner"} wrote "${answer.slice(0, 200)}" — read as go-ahead, but ${FREE_REPLY_LANDS_PREVIEW} is off for this kind, so the preview waits for "approved".`);
+      }
+      if (landReading?.kind !== "APPROVED" && !landsByIntent) {
+        if (answer && !freeIntent) {
           await appendFinding(env, card.id, `${fromRequester ? "After the preview" : `An answer from ${card.block_answered_by} (not the partner who asked)`}: "${answer.slice(0, 400)}" — not a landing approval; nothing lands.`);
         }
         const why = await blockOnPreview(env, card, row);
@@ -2208,7 +2360,13 @@ export async function runWebPropertyChangeCard(
       }
       const now = new Date().toISOString();
       await update(env, card.id, { land_approved_at: now, land_approved_by: card.block_answered_by ?? card.requested_by_email ?? null });
-      await appendFinding(env, card.id, `Landing approved after the preview by ${card.requested_by_email ?? "a partner"} ("${answer!.slice(0, 40)}").`);
+      await appendFinding(
+        env,
+        card.id,
+        landsByIntent
+          ? `Landing approved after the preview by ${card.requested_by_email ?? "a partner"} — their reply read as go ahead (${freeIntent?.reason ?? "free text"}): "${answer!.slice(0, 200)}".`
+          : `Landing approved after the preview by ${card.requested_by_email ?? "a partner"} ("${answer!.slice(0, 40)}").`,
+      );
       const fresh: WebPropertyChangeRow = { ...row, land_approved_at: now };
       const parked = await parkPhase(env, card, fresh, "LAND", rules);
       if (!parked.parked) return { finished: false, blocked: false, progressed: true, detail: parked.reason };
@@ -2526,6 +2684,15 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
       .all<{ id: string; kind: string | null; owner_id: string | null; title: string }>()
   ).results ?? [];
   const card = created[0] ?? null;
+  /*
+   * A RE-READ THAT STEERED (27 Sep 2026). Since the oversize branch runs the same reply check as a
+   * small message, a stored reply read again lands on the card it answers and opens nothing — which
+   * this route used to report as a 409 "no card". The stored message's index row names the card the
+   * door steered (`linkStoredMessage`), and that is the answer.
+   */
+  const steered = card
+    ? null
+    : ((await ctx.env.WP_OS_DB.prepare("SELECT work_card_id FROM inbound_message WHERE r2_key = ?1").bind(key).first<{ work_card_id: string | null }>())?.work_card_id ?? null);
   await appendEvent(ctx.env, {
     eventType: "inbound_email.reingested",
     actorType: "firm_user",
@@ -2533,8 +2700,12 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
     objectType: "inbound_email",
     objectId: key,
     firmScope: "west-peek",
-    payload: { message_id: msgId, superseded, created: created.map((c) => c.id), new_card: card?.id ?? null, new_card_kind: card?.kind ?? null },
+    payload: { message_id: msgId, superseded, created: created.map((c) => c.id), new_card: card?.id ?? null, new_card_kind: card?.kind ?? null, steered_card: steered },
   });
+  if (!card && steered) {
+    const target = await ctx.env.WP_OS_DB.prepare("SELECT id, kind, owner_id, title, state FROM work_card WHERE id = ?1").bind(steered).first<{ id: string; kind: string | null; owner_id: string | null; title: string; state: string }>();
+    return json({ ok: true, object_key: key, superseded, steered_card: steered, steered_card_state: target?.state ?? null, new_card: null, new_card_kind: null, owner_id: target?.owner_id ?? null, title: target?.title ?? null, detail: "the message is a reply: it steered the card it answers and opened no card" });
+  }
   if (!card) return json({ ok: false, object_key: key, superseded, detail: "the door produced no card for this partner from this message — see inbound_email events" }, { status: 409 });
   return json({ ok: true, object_key: key, superseded, new_card: card.id, new_card_kind: card.kind, owner_id: card.owner_id, title: card.title });
 }

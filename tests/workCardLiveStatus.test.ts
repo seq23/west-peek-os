@@ -451,7 +451,7 @@ describe("the Preview-ready panel reads structured fields and speaks her four re
 
   it("each button's words mean what its label says, to the one reply reader", () => {
     expect(readApprovalReply(APPROVED_REPLY).kind).toBe("APPROVED");
-    expect(readApprovalReply(`${CHANGES_REPLY_PREFIX} make the hero photo the group shot`)).toMatchObject({ kind: "REFUSED", changes: true });
+    expect(readApprovalReply(`${CHANGES_REPLY_PREFIX} make the hero photo the group shot`), "\"changes: …\" is instructions, never a hold (27 Sep 2026)").toMatchObject({ kind: "CHANGES" });
     expect(readApprovalReply(PUBLISH_REPLY).kind).toBe("PUBLISH");
     expect(MATERIALS_ADDED_PHRASE).toBe("I added missing items");
   });
