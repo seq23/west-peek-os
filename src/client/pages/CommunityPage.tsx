@@ -236,20 +236,46 @@ function PopulationPanel(): JSX.Element {
  * a link here would have nowhere honest to go. The band's button is the door to the people.
  */
 function NewestPanel(): JSX.Element {
-  const res = useApi<{ newest: NewestContact[]; cap: number }>("/api/community/newest?limit=25");
+  const res = useApi<{ newest: NewestContact[]; cap: number; loading: Population["loading"]; source: Population["source"] }>(
+    "/api/community/newest?limit=25",
+  );
   const rows = res.data?.newest;
+  const sync = res.data?.source;
+  const loadingNow = res.data?.loading ?? null;
+  const failed = !!sync && sync.last_status !== "OK" && sync.last_status !== "IN_PROGRESS" && sync.last_status !== "NEVER_SYNCED" && sync.last_status !== "NEVER_RUN";
 
   return (
     <section className="card" data-testid="community-newest">
       <h3>Newest in the community</h3>
-      <p className="muted small">the last 25 added in Network OS</p>
+      {/* A WINDOW ON WHAT HAS LANDED. While a load is running, the synced rows are a prefix of
+          the community, so "the last 25 added" would be the last 25 of a fifth of it. The subtitle
+          says which it is, from the same sync state the population panel reads. */}
+      {loadingNow ? (
+        <p className="muted small" data-testid="community-newest-partial">
+          the newest of the {loadingNow.done.toLocaleString()} read so far — Network OS is still being read, {loadingNow.total.toLocaleString()} in all
+        </p>
+      ) : (
+        <p className="muted small">the last 25 added in Network OS</p>
+      )}
 
       {res.loading && !rows && <p className="state-message">Reading the newest people…</p>}
       {!res.loading && !rows && <p className="state-message">The newest people could not be read just now.</p>}
 
+      {/* THREE EMPTIES, THREE SENTENCES. A read that never ran, a read that landed on nobody, and a
+          read that failed are different facts, and only one of them is anybody's problem. */}
       {rows && rows.length === 0 && (
         <p className="state-empty" data-testid="community-newest-empty">
-          Nothing has been read from Network OS yet. Once the sync lands, the newest people appear here on their own.
+          {failed
+            ? `Network OS could not be read — ${sync?.failure_reason ?? sync?.last_status}. Nothing is shown because the sync did not land, not because nobody is there.`
+            : sync?.last_status === "OK"
+              ? "Network OS answered and had nobody to give. Once people are added there, the newest appear here on their own."
+              : "Nothing has been read from Network OS yet. Once the sync lands, the newest people appear here on their own."}
+        </p>
+      )}
+
+      {rows && rows.length > 0 && failed && (
+        <p className="muted small" data-testid="community-newest-stale">
+          The last read did not land — {sync?.failure_reason ?? sync?.last_status}. These are the newest of what had landed before it.
         </p>
       )}
 

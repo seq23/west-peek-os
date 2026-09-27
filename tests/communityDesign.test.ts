@@ -258,8 +258,18 @@ describe("newest in the community", () => {
     expect(CODE).toContain("the last 25 added in Network OS");
     expect(CODE).toContain('data-testid="community-newest-empty"');
     expect(CODE).toContain('typeWord(c.person_type ?? "unknown")');
-    // No link on a row: Network OS has no per-contact URL. The band's button is the door.
+    // THE SYNC STATE IS SAID (Codex on #207). While a load runs the rows are a prefix of the
+    // community, and the subtitle says so from the endpoint's own `loading`; an empty read is
+    // three different sentences for three different facts, chosen off `source.last_status`.
     const section = CODE.slice(newest, CODE.indexOf("export function CommunityPage"));
+    expect(section).toContain('data-testid="community-newest-partial"');
+    expect(section).toContain("read so far");
+    expect(section).toContain('data-testid="community-newest-stale"');
+    expect(section.match(/last_status/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+    expect(section).toContain("Network OS could not be read");
+    expect(section).toContain("had nobody to give");
+    expect(section).toContain("Nothing has been read from Network OS yet");
+    // No link on a row: Network OS has no per-contact URL. The band's button is the door.
     expect(section).not.toMatch(/<a\b/);
     expect(section).not.toContain("href=");
     expect(CSS).toMatch(/\.newest-row \{/);

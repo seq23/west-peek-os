@@ -3,6 +3,7 @@ import { appendEvent } from "../events";
 import { json } from "../router";
 import type { RouteContext } from "../router";
 import type { Env } from "../env";
+import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
 import { actorFromIdentity, authorize } from "./authorize";
 
 /**
@@ -166,6 +167,65 @@ function slices(rows: Array<{ k: string | null; n: number }>, total: number): Po
     .sort((a, b) => b.count - a.count);
 }
 
+export interface ContactSyncState {
+  /** How far a long-running load has got, or null when no load is running. */
+  loading: { done: number; total: number } | null;
+  /** The contact sync's last outcome; `NEVER_SYNCED` when the cursor row does not exist yet. */
+  source: { last_status: string; last_sync_at: string | null; failure_reason: string | null };
+}
+
+/**
+ * The state of the contact sync — read once, handed to every read off `network_external_mapping`.
+ *
+ * Both the population and the newest names are read off the synced rows, and a synced row is only
+ * as complete as the sync that wrote it. The population panel has always said so; on 27 Sep 2026
+ * the newest endpoint shipped without it, so a load a fifth of the way through would have been
+ * captioned "the last 25 added in Network OS", and an empty successful read, a failed read and a
+ * read that never ran all looked alike. Read here once so the two endpoints cannot disagree.
+ */
+export async function contactSyncState(env: Env, firmScope: string): Promise<ContactSyncState> {
+  const cursor = await env.WP_OS_DB.prepare(
+    "SELECT last_status, last_sync_at, failure_reason FROM network_sync_cursor WHERE resource = 'contact' AND firm_scope = ?1",
+  )
+    .bind(firmScope)
+    .first<{ last_status: string; last_sync_at: string | null; failure_reason: string | null }>();
+
+  /*
+   * How far a long-running load has got.
+   *
+   * Operator, 21 Aug 2026: "it doesnt have to load our entire community the same day it can work at
+   * whatever pace and let us know when its done give us a progress bar." The pull writes its
+   * position into `cursor_value` as it walks the far end's table; this reads it back so the page can
+   * say "1,250 of 5,000 read" instead of showing a number that grows for hours with no explanation.
+   */
+  let loading: { done: number; total: number } | null = null;
+  if (cursor?.last_status === "IN_PROGRESS") {
+    try {
+      const parsed = JSON.parse(
+        (
+          await env.WP_OS_DB.prepare(
+            "SELECT cursor_value FROM network_sync_cursor WHERE resource = 'contact' AND firm_scope = ?1",
+          )
+            .bind(firmScope)
+            .first<{ cursor_value: string | null }>()
+        )?.cursor_value ?? "null",
+      ) as { offset?: number; total?: number } | null;
+      if (parsed && typeof parsed.offset === "number" && typeof parsed.total === "number") {
+        loading = { done: parsed.offset, total: parsed.total };
+      }
+    } catch {
+      // A cursor we cannot read is not a reason to fail the page; it just means no bar.
+    }
+  }
+
+  return {
+    loading,
+    source: cursor
+      ? { last_status: cursor.last_status, last_sync_at: cursor.last_sync_at, failure_reason: cursor.failure_reason }
+      : { last_status: "NEVER_SYNCED", last_sync_at: null, failure_reason: null },
+  };
+}
+
 export async function communityPopulation(env: Env, firmScope: string) {
   const totalRow = await env.WP_OS_DB.prepare(`SELECT COUNT(*) AS n ${CONTACT_MAPPINGS}`)
     .bind(firmScope)
@@ -225,39 +285,7 @@ export async function communityPopulation(env: Env, firmScope: string) {
     .bind(firmScope)
     .first<{ n: number }>();
 
-  const cursor = await env.WP_OS_DB.prepare(
-    "SELECT last_status, last_sync_at, failure_reason FROM network_sync_cursor WHERE resource = 'contact' AND firm_scope = ?1",
-  )
-    .bind(firmScope)
-    .first<{ last_status: string; last_sync_at: string | null; failure_reason: string | null }>();
-
-  /*
-   * How far a long-running load has got.
-   *
-   * Operator, 21 Aug 2026: "it doesnt have to load our entire community the same day it can work at
-   * whatever pace and let us know when its done give us a progress bar." The pull writes its
-   * position into `cursor_value` as it walks the far end's table; this reads it back so the page can
-   * say "1,250 of 5,000 read" instead of showing a number that grows for hours with no explanation.
-   */
-  let loading: { done: number; total: number } | null = null;
-  if (cursor?.last_status === "IN_PROGRESS") {
-    try {
-      const parsed = JSON.parse(
-        (
-          await env.WP_OS_DB.prepare(
-            "SELECT cursor_value FROM network_sync_cursor WHERE resource = 'contact' AND firm_scope = ?1",
-          )
-            .bind(firmScope)
-            .first<{ cursor_value: string | null }>()
-        )?.cursor_value ?? "null",
-      ) as { offset?: number; total?: number } | null;
-      if (parsed && typeof parsed.offset === "number" && typeof parsed.total === "number") {
-        loading = { done: parsed.offset, total: parsed.total };
-      }
-    } catch {
-      // A cursor we cannot read is not a reason to fail the page; it just means no bar.
-    }
-  }
+  const { loading, source } = await contactSyncState(env, firmScope);
 
   return {
     total,
@@ -268,9 +296,7 @@ export async function communityPopulation(env: Env, firmScope: string) {
     firm_has_a_view_on: readRow?.n ?? 0,
     // The page must be able to tell "the community is empty" from "the sync never landed". Those
     // look identical without this and only one of them is anybody's problem.
-    source: cursor
-      ? { last_status: cursor.last_status, last_sync_at: cursor.last_sync_at, failure_reason: cursor.failure_reason }
-      : { last_status: "NEVER_SYNCED", last_sync_at: null, failure_reason: null },
+    source,
   };
 }
 
@@ -326,8 +352,20 @@ export async function communityNewest(env: Env, firmScope: string, limit: number
 }
 
 export async function handleCommunityNewest(ctx: RouteContext): Promise<Response> {
+  /*
+   * NAMES ARE READ BY PEOPLE. The subscription claimer is a service identity with no roles and no
+   * authority scopes; the three routes it exists for check for it by name, and nothing about
+   * claiming parked work needs a window of the community's names, companies and owners. Every
+   * other authenticated firm identity reads this on the same terms as the population count.
+   */
+  if (ctx.identity!.email.toLowerCase() === SUBSCRIPTION_CLAIMER_EMAIL) {
+    return json({ error: "forbidden", reason: "a service identity does not read the community's names" }, { status: 403 });
+  }
   const actor = actorFromIdentity(ctx.identity!);
   const firmScope = actor.firmScopes[0] ?? "west-peek";
   const asked = Number(new URL(ctx.request.url).searchParams.get("limit") ?? NEWEST_CAP);
-  return json({ newest: await communityNewest(ctx.env, firmScope, asked), cap: NEWEST_CAP });
+  const [newest, sync] = await Promise.all([communityNewest(ctx.env, firmScope, asked), contactSyncState(ctx.env, firmScope)]);
+  // The sync state rides with the names so the page can say "of the 1,200 read so far" during a
+  // load, and can tell an empty read from a failed one from one that never ran.
+  return json({ newest, cap: NEWEST_CAP, loading: sync.loading, source: sync.source });
 }
