@@ -30,7 +30,7 @@ import { threadReference } from "../src/shared/email/thread";
 import { steerFor } from "../src/worker/services/instruction";
 import { steersWith } from "./helpers/interpret";
 import { HOW_TO_SEND_MATERIALS, missingMaterialsSection, readMissingMaterials } from "../src/shared/work/missingMaterials";
-import { attachmentsFor, missingFor } from "../src/worker/services/requestMaterials";
+import { attachmentsFor, storeAttachments, missingFor } from "../src/worker/services/requestMaterials";
 import { readWebPropertyChange } from "../src/worker/services/webPropertyChange";
 import type { LocalJobPayload } from "../src/shared/work/localJobs";
 import { buildStepPrompt, parseDecision } from "../src/shared/work/employeeLoop";
@@ -219,6 +219,22 @@ describe("a steered chain (any kind that calls steerFor) is handed the card's fi
     const steer2 = await steerFor(env, actor as never, req(bare), steersWith("x"));
     expect(steer2.text).not.toMatch(/FILES THE PARTNER SENT/);
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id IN (?1, ?2)").bind(withFile, bare).run();
+  });
+});
+
+describe("a file is on a card once per stored message (27 Sep 2026: image0.jpeg listed twice in a BUILD brief)", () => {
+  it("the same .eml stored against the same card a second time (a replay, or the matcher after a merge) adds no row; a different message with the same file name does", async () => {
+    const id = await openAssignmentCard(env, { subject: "Flyer swap", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: "Porter, swap the flyer.", limits: EMAILED_TASK_LIMITS, emlKey: null });
+    const raw = replyMime("the photo", { name: "image0.jpeg", type: "image/jpeg" });
+    const first = await storeAttachments(env, { cardId: id, raw, emlKey: "inbound-email/2026-09-27/same.eml", firmScope: "west-peek", source: "REQUEST" });
+    const again = await storeAttachments(env, { cardId: id, raw, emlKey: "inbound-email/2026-09-27/same.eml", firmScope: "west-peek", source: "REPLY" });
+    expect(first.stored).toEqual(["image0.jpeg"]);
+    expect(again.stored, "the file is on the card, so it is still named").toEqual(["image0.jpeg"]);
+    expect((await attachmentsFor(env, id)).map((f) => [f.filename, f.eml_key, f.source]), "one row, the first one").toEqual([["image0.jpeg", "inbound-email/2026-09-27/same.eml", "REQUEST"]]);
+    // A second message carrying a file of the same name is a second file.
+    await storeAttachments(env, { cardId: id, raw, emlKey: "inbound-email/2026-09-27/other.eml", firmScope: "west-peek", source: "REPLY" });
+    expect((await attachmentsFor(env, id)).map((f) => f.eml_key)).toEqual(["inbound-email/2026-09-27/same.eml", "inbound-email/2026-09-27/other.eml"]);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
   });
 });
 
