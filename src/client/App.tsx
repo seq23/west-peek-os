@@ -2288,7 +2288,7 @@ const NETWORK_OS_CONTRACT = {
   direction: "INBOUND read-only by default; OUTBOUND only behind network_os.writeback",
   identity_keys: { contact: "email_lower", relationship: "contact_external_id", touch: "touch_external_id", gmail_thread: "thread_id" },
   freshness: "full snapshot per pull (Network OS exposes current state, not a paged feed); last_sync_at recorded on every pull; fresh=1 bypasses its 45s cache",
-  conflict_behavior: "divergence opens a conflict plus a resolver work card; never a silent overwrite",
+  conflict_behavior: "a change on a record nobody in West Peek OS has linked is Network OS editing its own record and is applied; a divergence from a LINKED person's own field (name, email, company) opens a network_conflict plus a resolver work card; bookkeeping fields never conflict; never a silent overwrite of a West Peek record",
   idempotency: "delivery_id keyed receipt; duplicates recorded as DUPLICATE_IGNORED",
   retry_behavior: "bounded retries; the approval receipt survives a failed writeback",
   audit_event: "network.* typed events on the one spine",

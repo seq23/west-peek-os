@@ -1,53 +1,29 @@
-import { useState } from "react";
-import { api, useApi } from "../lib/api";
+import { useApi } from "../lib/api";
 import { HowThisWorks } from "./HowThisWorks";
-import { IntroductionsPage } from "./IntroductionsPage";
 import { typeWord } from "@shared/community/typeWords";
 
 /**
  * Community OS — the firm's read on the community as a population (P33, canon §14, §12A.4).
  *
- * NOT a membership roster. Network OS owns who is a member (§12A.2); this page owns segment,
- * engagement and signal — the interpretation. The distinction is stated on screen because the
- * first version of this page got it wrong, and a page that looks like a CRM invites people to
- * treat it as one.
+ * NOT a membership roster. Network OS owns who is a member (§12A.2); this page owns the read on
+ * them — the shape of the population. The distinction is stated on screen because the first
+ * version of this page got it wrong, and a page that looks like a CRM invites people to treat it
+ * as one.
+ *
+ * ONE ROSTER, 27 Sep 2026. Until then this page also carried an "Add or update a member" form, a
+ * "Members" list and a "Who is in the room" mix, all of which read and wrote the LOCAL `com_member`
+ * table — a second roster that Network OS never saw, kept beside a header that said a local roster
+ * was wrong. They are gone. Someone new is CAPTURED (the Capture tab), and West Peek OS proposes
+ * them to Network OS; nothing on this page adds a person anywhere. The `com_member` table and its
+ * routes stay for the gathering and council code that reads them; this page no longer calls them.
+ *
+ * Introductions used to render here as an embedded section. It was retired from this page on
+ * 27 Sep 2026 while the operator decides whether introductions belong in Network OS natively; the
+ * page, matcher and routes are untouched and unlisted.
  *
  * Not Relationship OS either: that reasons about one relationship and its next move. This reasons
  * about the population.
  */
-
-interface MemberRow {
-  id: string;
-  display_name: string;
-  member_type: string;
-  status: string;
-  joined_at: string | null;
-  notes: string | null;
-  segment: string;
-  engagement: string;
-  membership_source: string;
-}
-
-const TYPES = ["MEMBER", "FOUNDER", "OPERATOR", "INVESTOR", "ALUMNI"] as const;
-const STATUSES = ["PROSPECT", "ACTIVE", "LAPSED", "REMOVED"] as const;
-const SEGMENTS = ["UNSEGMENTED", "CORE", "CONTRIBUTOR", "AMBASSADOR", "SCOUT", "LAPSING", "OBSERVER"] as const;
-const ENGAGEMENT = ["UNKNOWN", "HIGH", "STEADY", "FADING", "DORMANT"] as const;
-
-/**
- * The kinds of member, in the order a partner would ask about them.
- *
- * Mirrors the member_type enum the API accepts. Listed here rather than derived from the data so a
- * kind with nobody in it still shows as zero — "we have no operators" is a finding, and a chart
- * that silently omits empty categories cannot report it.
- */
-const MEMBER_KINDS = [
-  { key: "FOUNDER", label: "Founders" },
-  { key: "OPERATOR", label: "Operators" },
-  { key: "INVESTOR", label: "Investors" },
-  { key: "ALUMNI", label: "Alumni" },
-  { key: "MEMBER", label: "Members" },
-] as const;
-
 
 interface PopulationSlice {
   key: string;
@@ -170,36 +146,6 @@ function PopulationPanel(): JSX.Element {
 }
 
 export function CommunityPage(): JSX.Element {
-  const state = useApi<{ members: MemberRow[]; counts: Record<string, number> }>("/api/community/members");
-  const [name, setName] = useState("");
-  const [type, setType] = useState<string>("MEMBER");
-  const [status, setStatus] = useState<string>("ACTIVE");
-  const [segment, setSegment] = useState<string>("UNSEGMENTED");
-  const [engagement, setEngagement] = useState<string>("UNKNOWN");
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-
-  const [typeFilter, setTypeFilter] = useState<string | null>(null);
-  const allMembers = state.data?.members ?? [];
-  const members = allMembers;
-  const listed = typeFilter ? allMembers.filter((m) => m.member_type === typeFilter) : allMembers;
-  const counts = state.data?.counts ?? {};
-
-  async function save(e: React.FormEvent) {
-    e.preventDefault();
-    if (!name.trim() || busy) return;
-    setBusy(true);
-    setMessage(null);
-    const res = await api<{ error?: string; detail?: string }>("/api/community/members", {
-      method: "POST",
-      body: { display_name: name.trim(), member_type: type, status, segment, engagement },
-    });
-    if (res.status !== 201) setMessage(res.data?.detail ?? res.data?.error ?? `Could not save (HTTP ${res.status}).`);
-    else setName("");
-    setBusy(false);
-    state.reload();
-  }
-
   return (
     <div className="page" data-testid="community-page">
       {/* The page heading is already "Community" twice above this — once as the surface title and
@@ -208,7 +154,7 @@ export function CommunityPage(): JSX.Element {
 
       {/*
         WHERE THE COMMUNITY ACTUALLY LIVES, said before anything on this page is read.
-        
+
         Operator, 23 Aug 2026: a reader who wants a closer look has to open Network OS in another
         tab. That is not a limitation to apologise for — it is the boundary this system is built on.
         Network OS OWNS who is a member; everything here is West Peek's read on them. Saying so at
@@ -219,13 +165,26 @@ export function CommunityPage(): JSX.Element {
         in the same grey `.notice` every caution on the product wears, with the link buried
         mid-sentence, and the operator could not find it. The one accent marks it now, and the
         link is the only orange button on the page.
+
+        THE SECOND LINE IS THE ONLY DOOR FOR A NEW PERSON. The member form that used to sit lower
+        on this page wrote to a local table and told nobody; Capture proposes the person to
+        Network OS, which is where they are meant to end up.
       */}
       <aside className="boundary-band" data-testid="community-network-os">
-        <p className="boundary-band-text">
-          <strong>The people themselves live in Network OS.</strong> That is where they are added and
-          edited; this page is West Peek's read on them and never the other way round. It is a
-          separate sign-in, so it opens alongside this rather than replacing it.
-        </p>
+        <div className="boundary-band-copy">
+          <p className="boundary-band-text">
+            <strong>The people themselves live in Network OS.</strong> That is where they are added and
+            edited; this page is West Peek's read on them and never the other way round. It is a
+            separate sign-in, so it opens alongside this rather than replacing it.
+          </p>
+          <p className="boundary-band-text">
+            Met someone new?{" "}
+            <a className="link-button" href="#/capture" data-testid="community-capture-link">
+              Capture them
+            </a>{" "}
+            and West Peek OS proposes them to Network OS.
+          </p>
+        </div>
         <a
           className="btn-primary"
           href="https://network.joinwestpeek.com"
@@ -239,169 +198,23 @@ export function CommunityPage(): JSX.Element {
 
       <PopulationPanel />
 
-      {/* INTRODUCTIONS LIVES HERE NOW, and first, because it is the only thing on this page anybody
-          has to ACT on. It had a tab of its own next to Approvals and Notifications, which put a
-          surface that is empty most months — deliberately, because the matcher is tuned to be rare
-          — alongside the things that always have something waiting. Community is who the members
-          are; introductions is what the firm does about them. One subject, one page. */}
-      {/* EMBEDDED, so it does not bring its own "how this works" panel. Introductions moved onto
-          this page and kept rendering its own, which is why Community had two — one explaining
-          the page and one explaining a section of it, stacked. The prop exists for exactly this. */}
-      <IntroductionsPage embedded />
-
-      <div className="home-section-head behind-the-brief">
-        <h3>The members themselves</h3>
-        {/* Network OS owns who is a member — the band at the top says so once, and prominently.
-            This used to repeat it in a second grey notice; the repetition is what drowned the
-            first one out. What remains here is the one fact the band does not carry. */}
-        <span className="muted small">
-          the firm's read on them — segment, engagement, signal · cohort analytics and programming not built yet
-        </span>
-      </div>
-
-
-      <form className="card" onSubmit={save} data-testid="community-form">
-        <h3>Add or update a member</h3>
-        <div className="form-row">
-          <label>
-            Name{" "}
-            <input data-testid="community-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" />
-          </label>
-          <label>
-            Type{" "}
-            <select data-testid="community-type" value={type} onChange={(e) => setType(e.target.value)}>
-              {TYPES.map((t) => <option key={t} value={t}>{t.toLowerCase()}</option>)}
-            </select>
-          </label>
-          <label>
-            Status{" "}
-            <select data-testid="community-status" value={status} onChange={(e) => setStatus(e.target.value)}>
-              {STATUSES.map((s) => <option key={s} value={s}>{s.toLowerCase()}</option>)}
-            </select>
-          </label>
-        </div>
-        <div className="form-row">
-          <label>
-            Segment{" "}
-            <select data-testid="community-segment" value={segment} onChange={(e) => setSegment(e.target.value)}>
-              {SEGMENTS.map((v) => <option key={v} value={v}>{v.toLowerCase()}</option>)}
-            </select>
-          </label>
-          <label>
-            Engagement{" "}
-            <select data-testid="community-engagement" value={engagement} onChange={(e) => setEngagement(e.target.value)}>
-              {ENGAGEMENT.map((v) => <option key={v} value={v}>{v.toLowerCase()}</option>)}
-            </select>
-          </label>
-        </div>
-        <button type="submit" className="btn-strong" disabled={busy} data-testid="community-save">
-          {busy ? "Saving…" : "Save member"}
-        </button>
-        {message && <p className="notice" data-testid="community-message">{message}</p>}
-      </form>
-
-      <section className="card">
-        <h3>
-          Members{" "}
-          <span className="muted small" data-testid="community-counts">
-            {STATUSES.filter((s) => counts[s]).map((s) => `${counts[s]} ${s.toLowerCase()}`).join(" · ") || "none yet"}
-          </span>
-        </h3>
-        {/* Narrowed by whichever kind is selected in the mix above — the chart is a control, not a
-            picture, because seeing that a third of the room is operators is only useful if you can
-            then look at them. */}
-        {typeFilter && (
-          <p className="muted small">
-            Showing {listed.length} {typeFilter.toLowerCase()}
-            {listed.length === 1 ? "" : "s"}.{" "}
-            <button type="button" className="link-button" onClick={() => setTypeFilter(null)}>
-              show everyone
-            </button>
-          </p>
-        )}
-        {listed.length === 0 ? (
-          <p className="state-empty" data-testid="community-empty">
-            {allMembers.length === 0
-              ? "No members recorded yet."
-              : `Nobody in the room is recorded as ${typeFilter?.toLowerCase()}.`}
-          </p>
-        ) : (
-          <ul className="card-list small" data-testid="community-list">
-            {listed.map((m) => (
-              <li key={m.id} data-testid={`community-member-${m.id}`}>
-                <span className={m.status === "ACTIVE" ? "help-tag help-tag-good" : "help-tag help-tag-muted"}>
-                  {m.status.toLowerCase()}
-                </span>{" "}
-                <strong>{m.display_name}</strong>{" "}
-                <span className="muted small">
-                  {m.member_type.toLowerCase()} · {m.segment.toLowerCase()} · {m.engagement.toLowerCase()}
-                  {m.membership_source === "LOCAL_UNRESOLVED" && " · not yet matched in Network OS"}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {/* WHO THIS COMMUNITY ACTUALLY IS.
-          The page listed members as rows and left the shape of the room to be worked out by
-          counting. A community is a mix, and the mix is the thing you form a view about — whether
-          it is mostly founders, whether the operators who make it useful are actually there.
-
-          A bar per kind rather than a pie: the question is "how many of each, and which is
-          biggest", which lengths answer at a glance and angles do not. Numbers are stated as well
-          as drawn, so nothing depends on reading a bar, and each row is a filter — seeing that a
-          third of the room is operators is only useful if you can then look at them. */}
-      <section data-testid="community-mix">
-        <div className="home-section-head">
-          <h3>Who is in the room</h3>
-          <span className="muted small">
-            {members.length} member{members.length === 1 ? "" : "s"} the firm has recorded
-          </span>
-        </div>
-        {members.length === 0 ? (
-          <p className="state-empty">
-            Nobody recorded yet. Add the people who actually turn up — the mix is what tells you
-            whether a room is worth convening.
-          </p>
-        ) : (
-          <ul className="mix-bars" data-testid="community-mix-bars">
-            {MEMBER_KINDS.map((k) => {
-              const n = members.filter((m) => m.member_type === k.key).length;
-              const pct = members.length === 0 ? 0 : Math.round((n / members.length) * 100);
-              return (
-                <li key={k.key} data-testid={`mix-${k.key}`}>
-                  <button
-                    type="button"
-                    className={typeFilter === k.key ? "mix-row is-on" : "mix-row"}
-                    aria-pressed={typeFilter === k.key}
-                    onClick={() => setTypeFilter(typeFilter === k.key ? null : k.key)}
-                  >
-                    <span className="mix-label">{k.label}</span>
-                    <span className="mix-track">
-                      <span className="mix-fill" style={{ width: `${pct}%` }} />
-                    </span>
-                    <span className="mix-count">
-                      {n} <span className="muted">{pct}%</span>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </section>
-
       <HowThisWorks
         title="Community"
         testId="community"
-        what="The firm’s read on the community as a population — who sits in which segment, how engaged they are, and what that suggests for sourcing, portfolio support or programming."
-        when="When someone joins, lapses, or changes what they are to the firm."
-        operatorDoes={["Add a member.", "Change their type or status as the relationship changes."]}
-        aiDoes={["Nothing yet. No AI employee reads or writes this roster."]}
-        requiresOperator={["Everything on this page. Contacting a member is an external effect and needs an approval card."]}
-        next="Network OS owns who is a member; this layer interprets them. Relationship OS handles one relationship at a time — the warm path, the next move. Community OS reads the population. Cohort analytics and programming come later."
-        blocked={["Saving a member needs the community.manage action in your role.", "Names are unique per firm — saving an existing name updates that member rather than creating a second one."]}
+        what="The firm’s read on the community as a population — how many people it holds, what kinds of people they are, and how many of them have heard from the firm lately."
+        when="Before convening a room, planning programming, or asking whether the community is warm enough to lean on."
+        operatorDoes={[
+          "Read the shape and the warmth.",
+          "Open Network OS to look at, add or edit the people themselves.",
+          "Capture someone new — West Peek OS proposes them to Network OS.",
+        ]}
+        aiDoes={["Nothing on this page. The community is read from Network OS on its own schedule."]}
+        requiresOperator={["Contacting a member is an external effect and needs an approval card."]}
+        next="Network OS owns who is a member; this layer reads them. Relationship OS handles one relationship at a time — the warm path, the next move. Community OS reads the population. Cohort analytics and programming come later."
+        blocked={[
+          "Nothing here adds, edits or removes a person. That happens in Network OS, or through Capture, which proposes them there.",
+          "An empty shape means the sync has not landed, and the panel says so — it does not mean the community is empty.",
+        ]}
       />
     </div>
   );

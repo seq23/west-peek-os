@@ -11,9 +11,11 @@ import {
   writeBack,
   REQUIRED_CONTRACT_CLAUSES,
   FRESH_RECORDS_PER_TICK,
+  NOT_A_CONFLICT_NOTE,
   type NetworkOsClient,
   type NetworkRecord,
 } from "../src/worker/services/networkAdapter";
+import { createWorkCardInternal } from "../src/worker/services/workCards";
 import { checkSources } from "../scripts/validate/no-cross-repo-coupling.mjs";
 
 /**
@@ -21,7 +23,9 @@ import { checkSources } from "../scripts/validate/no-cross-repo-coupling.mjs";
  *
  * Rules under test (plan §8/P9 + §12.2): the adapter contract must DECLARE every
  * required clause; inbound sync is read-only and idempotent by delivery key; a
- * divergence opens a conflict AND a resolver work card instead of overwriting;
+ * change to a record nobody has linked is applied as Network OS's own edit, and a
+ * divergence from a LINKED person's own field opens a conflict AND a resolver work
+ * card instead of overwriting the person;
  * adapter failure degrades to read-only with previously synced data still readable;
  * outbound writeback is the MP-reserved `network_os.writeback` (receipt consumed,
  * never replayed, never fired without one); every crossing leaves an append-only
@@ -72,7 +76,7 @@ const FULL_CONTRACT = {
   direction: "INBOUND read-only by default; OUTBOUND only for west-peek-owned fields behind network_os.writeback",
   identity_keys: { contact: "email_lower", relationship: "contact_external_id", touch: "touch_external_id", gmail_thread: "thread_id" },
   freshness: "cursor per resource; last_sync_at recorded; stale reads are labelled, never silently trusted",
-  conflict_behavior: "divergence opens a network_conflict plus a resolver work card; never a silent overwrite",
+  conflict_behavior: "a change on a record nobody in West Peek OS has linked is Network OS editing its own record and is applied; a divergence from a LINKED person's own field (name, email, company) opens a network_conflict plus a resolver work card; bookkeeping fields never conflict; never a silent overwrite of a West Peek record",
   idempotency: "delivery_id (or external_id) keyed receipt; duplicates recorded as DUPLICATE_IGNORED",
   retry_behavior: "bounded retries by the caller; failures recorded with reason; the approval receipt survives a failed writeback",
   audit_event: "network.* typed events on the one spine (D15) for every crossing",
@@ -222,38 +226,83 @@ describe("2. inbound sync is read-only and idempotent", () => {
     expect(JSON.parse(dup!.request_json)).toMatchObject({ already_applied: 1 });
   });
 
-  it("a divergence opens a conflict AND a resolver work card — never an overwrite", async () => {
+  /*
+   * WHAT A CONFLICT IS, pinned after 27 Sep 2026. The detector used to compare each incoming field
+   * against the PREVIOUS SNAPSHOT — Network OS's own earlier value — so Network OS archiving its own
+   * contact opened two HIGH cards on a record West Peek OS had never linked, and froze it. A conflict
+   * is a disagreement with something West Peek OS actually holds: a LINKED person's own field.
+   */
+  it("(1) a change on an UNLINKED record is Network OS editing itself: applied, snapshot updated, no conflict, no card", async () => {
     const v1: NetworkRecord = {
       external_id: "contact_2",
       identity_key: "lp@example.com",
       delivery_id: "d1",
-      fields: { email: "lp@example.com", relationship_owner: "Scooter" },
+      fields: { email: "lp@example.com", relationship_owner: "Scooter", status: "active" },
     };
     const v2: NetworkRecord = {
       external_id: "contact_2",
       identity_key: "lp@example.com",
       delivery_id: "d2",
-      fields: { email: "lp@example.com", relationship_owner: "Sequoia" },
+      fields: { email: "lp@example.com", relationship_owner: "Sequoia", status: "archived" },
     };
     const client = fixtureClient({ contact: [{ records: [v1], next_cursor: "c1" }, { records: [v2], next_cursor: "c2" }] });
 
     await pullResource(env, MP_IDENTITY, "contact", client);
-    const conflicted = await pullResource(env, MP_IDENTITY, "contact", client);
-    expect(conflicted.conflicts).toBe(1);
-    expect(conflicted.applied).toBe(0);
+    const cardsBefore = await t.db.prepare("SELECT COUNT(*) AS n FROM work_card WHERE title LIKE 'Network OS conflict%'").first<{ n: number }>();
+    const second = await pullResource(env, MP_IDENTITY, "contact", client);
+    expect(second).toMatchObject({ applied: 1, conflicts: 0 });
 
-    const conflicts = await call<{ conflicts: Array<{ id: string; field: string; external_value: string; internal_value: string; status: string; work_card_id: string }> }>(
-      "/api/network/conflicts?status=OPEN",
-      MP,
-    );
-    const conflict = conflicts.body.conflicts.find((c) => c.field === "relationship_owner")!;
-    expect(conflict.external_value).toBe("Sequoia");
-    expect(conflict.internal_value).toBe("Scooter");
+    const mapping = await t.db.prepare("SELECT snapshot_json, internal_id FROM network_external_mapping WHERE external_id = 'contact_2'").first<{ snapshot_json: string; internal_id: string | null }>();
+    expect(mapping!.internal_id).toBeNull();
+    expect(JSON.parse(mapping!.snapshot_json)).toMatchObject({ relationship_owner: "Sequoia", status: "archived" });
+    const conflicts = await t.db.prepare("SELECT COUNT(*) AS n FROM network_conflict WHERE external_id = 'contact_2'").first<{ n: number }>();
+    expect(conflicts!.n).toBe(0);
+    const cardsAfter = await t.db.prepare("SELECT COUNT(*) AS n FROM work_card WHERE title LIKE 'Network OS conflict%'").first<{ n: number }>();
+    expect(cardsAfter!.n).toBe(cardsBefore!.n);
+    const receipts = await t.db
+      .prepare("SELECT status FROM network_sync_receipt WHERE resource = 'contact' AND external_id = 'contact_2' ORDER BY created_at, id")
+      .all<{ status: string }>();
+    expect((receipts.results ?? []).map((r) => r.status)).toEqual(["APPLIED", "APPLIED"]);
+  });
+
+  /** Pull one version of a contact, then link it to a person West Peek OS holds. */
+  async function linkedContact(externalId: string, person: { full_name: string; email: string; organization?: string }, fields: Record<string, string | null>, delivery: string, client?: NetworkOsClient): Promise<string> {
+    const c = client ?? fixtureClient({ contact: [{ records: [{ external_id: externalId, identity_key: person.email, delivery_id: delivery, fields }], next_cursor: null }] });
+    await pullResource(env, MP_IDENTITY, "contact", c);
+    const personId = `per_${externalId}`;
+    await t.db
+      .prepare("INSERT INTO person (id, full_name, email, organization, source, firm_scope) VALUES (?1, ?2, ?3, ?4, 'network_os', 'west-peek')")
+      .bind(personId, person.full_name, person.email, person.organization ?? null)
+      .run();
+    await t.db
+      .prepare("UPDATE network_external_mapping SET internal_type = 'person', internal_id = ?2 WHERE resource = 'contact' AND external_id = ?1")
+      .bind(externalId, personId)
+      .run();
+    return personId;
+  }
+
+  it("(2) a LINKED person's name changing in Network OS is one conflict, one card, snapshot updated, person untouched — until a human says KEEP_EXTERNAL", async () => {
+    const pages = [
+      { records: [{ external_id: "contact_5", identity_key: "ada@example.com", delivery_id: "g1", fields: { full_name: "Ada Lovelace", email: "ada@example.com", company: "Analytical Engines" } }], next_cursor: null },
+      { records: [{ external_id: "contact_5", identity_key: "ada@example.com", delivery_id: "g2", fields: { full_name: "Ada King", email: "ada@example.com", company: "Analytical Engines" } }], next_cursor: null },
+    ];
+    const client = fixtureClient({ contact: pages });
+    const personId = await linkedContact("contact_5", { full_name: "Ada Lovelace", email: "ada@example.com", organization: "Analytical Engines" }, pages[0]!.records[0]!.fields, "g1", client);
+
+    const conflicted = await pullResource(env, MP_IDENTITY, "contact", client);
+    expect(conflicted).toMatchObject({ applied: 0, conflicts: 1 });
+
+    const open = await t.db.prepare("SELECT * FROM network_conflict WHERE external_id = 'contact_5' AND status = 'OPEN'").all<{ id: string; field: string; external_value: string; internal_value: string; work_card_id: string }>();
+    expect(open.results).toHaveLength(1);
+    const conflict = open.results![0]!;
+    expect(conflict).toMatchObject({ field: "full_name", external_value: "Ada King", internal_value: "Ada Lovelace" });
     expect(conflict.work_card_id).toMatch(/^wc_/);
 
-    // The stored snapshot still holds the pre-conflict value: nothing was overwritten.
-    const mapping = await t.db.prepare("SELECT snapshot_json FROM network_external_mapping WHERE external_id = 'contact_2'").first<{ snapshot_json: string }>();
-    expect(JSON.parse(mapping!.snapshot_json).relationship_owner).toBe("Scooter");
+    // The snapshot is an observation and was updated; the person West Peek OS holds was not touched.
+    const mapping = await t.db.prepare("SELECT snapshot_json FROM network_external_mapping WHERE external_id = 'contact_5'").first<{ snapshot_json: string }>();
+    expect(JSON.parse(mapping!.snapshot_json).full_name).toBe("Ada King");
+    const person = await t.db.prepare("SELECT full_name FROM person WHERE id = ?1").bind(personId).first<{ full_name: string }>();
+    expect(person!.full_name).toBe("Ada Lovelace");
 
     // The resolver card is real, governed work.
     const card = await call<{ title: string; state: string; priority: string }>(`/api/work-cards/${conflict.work_card_id}`, MP);
@@ -261,39 +310,135 @@ describe("2. inbound sync is read-only and idempotent", () => {
     expect(card.body.title).toContain("Network OS conflict");
     expect(card.body.state).toBe("OPEN");
 
-    // Only an explicit human resolution moves the observed value.
+    // KEEP_EXTERNAL moves the PERSON's field — the record West Peek OS holds an opinion in.
     const resolved = await call<{ status: string; resolution: string }>(`/api/network/conflicts/${conflict.id}/resolve`, MP, "POST", {
       resolution: "KEEP_EXTERNAL",
-      note: "Network OS owns relationship ownership (D5)",
+      note: "Network OS owns the name (D5)",
     });
     expect(resolved.status).toBe(200);
     expect(resolved.body.resolution).toBe("KEEP_EXTERNAL");
-    const after = await t.db.prepare("SELECT snapshot_json FROM network_external_mapping WHERE external_id = 'contact_2'").first<{ snapshot_json: string }>();
-    expect(JSON.parse(after!.snapshot_json).relationship_owner).toBe("Sequoia");
+    const after = await t.db.prepare("SELECT full_name FROM person WHERE id = ?1").bind(personId).first<{ full_name: string }>();
+    expect(after!.full_name).toBe("Ada King");
     const again = await call(`/api/network/conflicts/${conflict.id}/resolve`, MP, "POST", { resolution: "KEEP_INTERNAL" });
     expect(again.status).toBe(409);
   });
 
-  it("KEEP_INTERNAL resolves the conflict without adopting the external value", async () => {
-    const base: NetworkRecord = { external_id: "contact_3", identity_key: "x@example.com", delivery_id: "e1", fields: { title: "Head of Ops" } };
-    const changed: NetworkRecord = { external_id: "contact_3", identity_key: "x@example.com", delivery_id: "e2", fields: { title: "Ops Lead" } };
-    const client = fixtureClient({ relationship: [{ records: [base], next_cursor: null }, { records: [changed], next_cursor: null }] });
-    await pullResource(env, MP_IDENTITY, "relationship", client);
-    await pullResource(env, MP_IDENTITY, "relationship", client);
+  it("(3) bookkeeping drift on a LINKED record — updated_at — is nothing: applied, no conflict, no card", async () => {
+    const pages = [
+      { records: [{ external_id: "contact_6", identity_key: "bo@example.com", delivery_id: "h1", fields: { full_name: "Bo Peep", email: "bo@example.com", updated_at: "2026-09-01T00:00:00Z", last_seen: "2026-09-01" } }], next_cursor: null },
+      { records: [{ external_id: "contact_6", identity_key: "bo@example.com", delivery_id: "h2", fields: { full_name: "Bo Peep", email: "BO@example.com", updated_at: "2026-09-27T00:00:00Z", last_seen: "2026-09-27" } }], next_cursor: null },
+    ];
+    const client = fixtureClient({ contact: pages });
+    await linkedContact("contact_6", { full_name: "Bo Peep", email: "bo@example.com" }, pages[0]!.records[0]!.fields, "h1", client);
+    const cardsBefore = await t.db.prepare("SELECT COUNT(*) AS n FROM work_card WHERE title LIKE 'Network OS conflict%'").first<{ n: number }>();
+
+    const second = await pullResource(env, MP_IDENTITY, "contact", client);
+    expect(second).toMatchObject({ applied: 1, conflicts: 0 });
+    const conflicts = await t.db.prepare("SELECT COUNT(*) AS n FROM network_conflict WHERE external_id = 'contact_6'").first<{ n: number }>();
+    expect(conflicts!.n).toBe(0);
+    const cardsAfter = await t.db.prepare("SELECT COUNT(*) AS n FROM work_card WHERE title LIKE 'Network OS conflict%'").first<{ n: number }>();
+    expect(cardsAfter!.n).toBe(cardsBefore!.n);
+    const mapping = await t.db.prepare("SELECT snapshot_json FROM network_external_mapping WHERE external_id = 'contact_6'").first<{ snapshot_json: string }>();
+    expect(JSON.parse(mapping!.snapshot_json).updated_at).toBe("2026-09-27T00:00:00Z");
+  });
+
+  it("(4) a conflict the old detector opened on an unlinked record closes itself on the next pull, card and all", async () => {
+    // The live shape on 27 Sep 2026: contact_1787518634166_9479c773, `status` archived←active and
+    // `updated_at`, two HIGH cards, mapping never linked. Seeded here exactly as the old code left it.
+    const client = fixtureClient({
+      contact: [{ records: [{ external_id: "contact_7", identity_key: "old@example.com", delivery_id: "i1", fields: { email: "old@example.com", status: "active", updated_at: "2026-09-01T00:00:00Z" } }], next_cursor: null }],
+    });
+    await pullResource(env, MP_IDENTITY, "contact", client);
+    const seeded: string[] = [];
+    for (const [field, external, internal] of [["status", "archived", "active"], ["updated_at", "2026-09-20T00:00:00Z", "2026-09-01T00:00:00Z"]] as const) {
+      const card = await createWorkCardInternal(env, MP_IDENTITY, {
+        title: `Network OS conflict: contact contact_7 · ${field}`,
+        description: `Network OS says "${external}", West Peek OS last observed "${internal}".`,
+        priority: "HIGH",
+        firm_scope: "west-peek",
+        next_action: "Resolve the divergence (KEEP_EXTERNAL / KEEP_INTERNAL / MANUAL_MERGE)",
+      });
+      const id = `ncf_seed_${field}`;
+      await t.db
+        .prepare("INSERT INTO network_conflict (id, resource, external_id, field, external_value, internal_value, work_card_id, firm_scope) VALUES (?1, 'contact', 'contact_7', ?2, ?3, ?4, ?5, 'west-peek')")
+        .bind(id, field, external, internal, card.id)
+        .run();
+      seeded.push(id);
+    }
+    const eventsBefore = await t.db.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'network.conflict_self_healed'").first<{ n: number }>();
+
+    // The next tick. Nothing new arrives; the healing happens regardless.
+    await pullResource(env, MP_IDENTITY, "contact", client);
+
+    for (const id of seeded) {
+      const c = await t.db.prepare("SELECT * FROM network_conflict WHERE id = ?1").bind(id).first<{ status: string; resolution: string; resolution_note: string; work_card_id: string; resolved_by: string }>();
+      expect(c!.status).toBe("RESOLVED");
+      expect(c!.resolution).toBe("KEEP_EXTERNAL");
+      expect(c!.resolution_note).toContain(NOT_A_CONFLICT_NOTE);
+      expect(c!.resolved_by).toBe(MP_IDENTITY.id);
+      const card = await t.db.prepare("SELECT state, auto_resolution, description FROM work_card WHERE id = ?1").bind(c!.work_card_id).first<{ state: string; auto_resolution: string | null; description: string }>();
+      expect(card).toMatchObject({ state: "DONE", auto_resolution: "NO_ACTION_NEEDED" });
+      expect(card!.description).toContain("West Peek OS last observed");
+      expect(card!.description).toContain(NOT_A_CONFLICT_NOTE);
+    }
+    // The snapshot now says what Network OS says.
+    const mapping = await t.db.prepare("SELECT snapshot_json FROM network_external_mapping WHERE external_id = 'contact_7'").first<{ snapshot_json: string }>();
+    expect(JSON.parse(mapping!.snapshot_json)).toMatchObject({ status: "archived", updated_at: "2026-09-20T00:00:00Z" });
+    const eventsAfter = await t.db.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'network.conflict_self_healed'").first<{ n: number }>();
+    expect(eventsAfter!.n - eventsBefore!.n).toBe(2);
+    // Healing is idempotent: nothing is left to heal, and nothing is re-resolved.
+    await pullResource(env, MP_IDENTITY, "contact", client);
+    const stillOpen = await t.db.prepare("SELECT COUNT(*) AS n FROM network_conflict WHERE external_id = 'contact_7' AND status = 'OPEN'").first<{ n: number }>();
+    expect(stillOpen!.n).toBe(0);
+    const eventsFinal = await t.db.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'network.conflict_self_healed'").first<{ n: number }>();
+    expect(eventsFinal!.n).toBe(eventsAfter!.n);
+  });
+
+  it("a REAL conflict on a linked person is never healed away", async () => {
+    const pages = [
+      { records: [{ external_id: "contact_8", identity_key: "cy@example.com", delivery_id: "j1", fields: { full_name: "Cy Twombly", email: "cy@example.com" } }], next_cursor: null },
+      { records: [{ external_id: "contact_8", identity_key: "cy@example.com", delivery_id: "j2", fields: { full_name: "Cy Twombly", email: "cy@newco.example" } }], next_cursor: null },
+      { records: [], next_cursor: null },
+    ];
+    const client = fixtureClient({ contact: pages });
+    await linkedContact("contact_8", { full_name: "Cy Twombly", email: "cy@example.com" }, pages[0]!.records[0]!.fields, "j1", client);
+    await pullResource(env, MP_IDENTITY, "contact", client);
+    await pullResource(env, MP_IDENTITY, "contact", client); // a further tick: the healer runs again
+    const open = await t.db.prepare("SELECT field FROM network_conflict WHERE external_id = 'contact_8' AND status = 'OPEN'").all<{ field: string }>();
+    expect(open.results!.map((r) => r.field)).toEqual(["email"]);
+  });
+
+  it("KEEP_INTERNAL closes the conflict without adopting the external value onto the person", async () => {
+    const pages = [
+      { records: [{ external_id: "contact_3", identity_key: "x@example.com", delivery_id: "e1", fields: { full_name: "Dee Ops", email: "x@example.com", company: "Ops Co" } }], next_cursor: null },
+      { records: [{ external_id: "contact_3", identity_key: "x@example.com", delivery_id: "e2", fields: { full_name: "Dee Ops", email: "x@example.com", company: "Ops Lead Ltd" } }], next_cursor: null },
+    ];
+    const client = fixtureClient({ contact: pages });
+    const personId = await linkedContact("contact_3", { full_name: "Dee Ops", email: "x@example.com", organization: "Ops Co" }, pages[0]!.records[0]!.fields, "e1", client);
+    await pullResource(env, MP_IDENTITY, "contact", client);
     const conflicts = await call<{ conflicts: Array<{ id: string; external_id: string; field: string }> }>("/api/network/conflicts?status=OPEN", MP);
     const conflict = conflicts.body.conflicts.find((c) => c.external_id === "contact_3")!;
-    await call(`/api/network/conflicts/${conflict.id}/resolve`, MP, "POST", { resolution: "KEEP_INTERNAL", note: "our title is current" });
+    expect(conflict.field).toBe("company");
+    await call(`/api/network/conflicts/${conflict.id}/resolve`, MP, "POST", { resolution: "KEEP_INTERNAL", note: "our record is current" });
+    const person = await t.db.prepare("SELECT organization FROM person WHERE id = ?1").bind(personId).first<{ organization: string }>();
+    expect(person!.organization).toBe("Ops Co");
+    // The observation stands: the snapshot says what Network OS says, the person says what we say.
     const mapping = await t.db.prepare("SELECT snapshot_json FROM network_external_mapping WHERE external_id = 'contact_3'").first<{ snapshot_json: string }>();
-    expect(JSON.parse(mapping!.snapshot_json).title).toBe("Head of Ops");
+    expect(JSON.parse(mapping!.snapshot_json).company).toBe("Ops Lead Ltd");
+    const closed = await t.db.prepare("SELECT status, resolution FROM network_conflict WHERE id = ?1").bind(conflict.id).first<{ status: string; resolution: string }>();
+    expect(closed).toMatchObject({ status: "RESOLVED", resolution: "KEEP_INTERNAL" });
   });
 
   it("an AI actor cannot resolve a Network OS conflict", async () => {
-    const rec: NetworkRecord = { external_id: "contact_4", identity_key: "y@example.com", delivery_id: "f1", fields: { tier: "A" } };
-    const changed: NetworkRecord = { external_id: "contact_4", identity_key: "y@example.com", delivery_id: "f2", fields: { tier: "B" } };
-    const client = fixtureClient({ touch: [{ records: [rec], next_cursor: null }, { records: [changed], next_cursor: null }] });
-    await pullResource(env, MP_IDENTITY, "touch", client);
-    await pullResource(env, MP_IDENTITY, "touch", client);
+    const pages = [
+      { records: [{ external_id: "contact_4", identity_key: "y@example.com", delivery_id: "f1", fields: { full_name: "Yu Ann", email: "y@example.com" } }], next_cursor: null },
+      { records: [{ external_id: "contact_4", identity_key: "y@example.com", delivery_id: "f2", fields: { full_name: "Yu Anne", email: "y@example.com" } }], next_cursor: null },
+    ];
+    const client = fixtureClient({ contact: pages });
+    await linkedContact("contact_4", { full_name: "Yu Ann", email: "y@example.com" }, pages[0]!.records[0]!.fields, "f1", client);
+    await pullResource(env, MP_IDENTITY, "contact", client);
     const conflict = await t.db.prepare("SELECT id FROM network_conflict WHERE external_id = 'contact_4' AND status = 'OPEN'").first<{ id: string }>();
+    expect(conflict).toBeTruthy();
     await expect(resolveConflict(env, AI_ACTOR, conflict!.id, "KEEP_EXTERNAL")).rejects.toMatchObject({ status: 403 });
   });
 });
@@ -454,6 +599,7 @@ describe("4. writeback requires the reserved approval and is never replayed", ()
       "network.sync_failed",
       "network.conflict_opened",
       "network.conflict_resolved",
+      "network.conflict_self_healed",
       "network.writeback_executed",
     ]) {
       expect(types, expected).toContain(expected);

@@ -2820,19 +2820,6 @@ details h3 {
 .suggestion-group { margin-bottom: var(--space-sm); }
 .suggestion-group .chip-row { margin-top: var(--space-2xs); }
 
-/* A quieter divider for reference material below the thing a page is actually for. */
-.behind-the-brief {
-  margin-top: var(--space-2xl);
-  padding-top: var(--space-md);
-  border-top: 1px solid var(--wp-line);
-}
-
-.behind-the-brief h3 {
-  color: var(--wp-muted);
-  font-size: var(--text-md);
-  font-weight: 600;
-}
-
 /* Team headings in the lounge. Quieter than a page heading — they divide a list, they do not
    introduce a new subject — but heavy enough to scan down and stop at the right one. */
 .team-head {
@@ -4365,51 +4352,6 @@ tbody tr.is-selected > td {
 
 .jobs-run-now { margin-bottom: var(--space-sm); }
 
-/* ── The community mix ─────────────────────────────────────────────────────
-   Bars rather than a pie: the question is "how many of each, and which is
-   biggest", which lengths answer at a glance and angles do not. Each row is a
-   control — the chart narrows the list beneath it. */
-.mix-bars { list-style: none; margin: var(--space-sm) 0 var(--space-md); padding: 0; display: flex; flex-direction: column; gap: var(--space-2xs); }
-
-.mix-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-md);
-  width: 100%;
-  padding: var(--space-xs) var(--space-sm);
-  background: none;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-  text-align: left;
-}
-
-.mix-row:hover { background: var(--wp-paper); }
-.mix-row.is-on { border-color: var(--wp-orange); background: var(--wp-tint); }
-
-.mix-label { flex: 0 0 6.5rem; font-size: var(--text-sm); }
-
-.mix-track {
-  flex: 1 1 auto;
-  height: 0.65rem;
-  background: var(--wp-line);
-  border-radius: var(--radius-pill);
-  overflow: hidden;
-  min-width: 0;
-}
-
-.mix-fill { display: block; height: 100%; background: var(--wp-orange); border-radius: var(--radius-pill); }
-
-/* Tabular figures so the counts line up as a column down the right. */
-.mix-count {
-  flex: 0 0 4.5rem;
-  text-align: right;
-  font-size: var(--text-sm);
-  font-variant-numeric: tabular-nums;
-}
-
 /* ── Touch and safe areas ──────────────────────────────────────────────────
    Two things a desktop-built interface always forgets, both only visible on a
    phone. `manipulation` removes the ~300ms wait browsers spend deciding whether
@@ -4687,8 +4629,14 @@ body {
   border-radius: var(--radius-sm);
   background: var(--wp-tint);
 }
-.boundary-band-text { flex: 1 1 auto; margin: 0; font-size: var(--text-sm); color: var(--wp-ink-2); }
+/* The copy is two lines — where the people live, and the one door for someone new — beside the
+   one button. The second line's link is a plain link-button, so the orange button stays the only
+   orange button on the page. */
+.boundary-band-copy { flex: 1 1 auto; min-width: 0; }
+.boundary-band-text { margin: 0; font-size: var(--text-sm); color: var(--wp-ink-2); }
+.boundary-band-text + .boundary-band-text { margin-top: var(--space-2xs); }
 .boundary-band-text strong { color: var(--wp-ink); }
+.boundary-band-text .link-button { min-height: 0; padding: 0; }
 .boundary-band > a.btn-primary { flex: 0 0 auto; }
 @media (max-width: 40rem) {
   .boundary-band { flex-direction: column; align-items: stretch; }
