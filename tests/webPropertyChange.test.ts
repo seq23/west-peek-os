@@ -1574,6 +1574,40 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(body.new_card).run();
   });
 
+  it("a re-read of a REPLY supersedes nothing — and a live card whose description merely mentions the subject is never cancelled (27 Sep 2026, learned in production)", async () => {
+    // The live website card, blocked on a real question; its PLAN email out to Scooter.
+    const porter = await planned(SCOOTER, "Walker", "supersede me not", { document: "# Plan", decided: [], asks: [{ question: "Which orange?" }], publish_ready: true, placeholders: [] });
+    expect((await card(porter.id)).state).toBe("BLOCKED");
+    const planSubject = sent.filter((m) => m.to === SCOOTER).at(-1)!.subject;
+    // A merge bullet mentioning a stray intake's title, as services/mergeCards.ts writes one.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET description = description || char(10) || ?2 WHERE id = ?1")
+      .bind(porter.id, `• Folded in card wc_stray ("From scooter@westpeek.ventures: ${planSubject}", done → cancelled) by Sequoia.`)
+      .run();
+    // His reply to the PLAN email, stored, then read through the door again.
+    const key = `inbound-email/2026-09-27/${crypto.randomUUID()}.eml`;
+    // Its own Message-ID: the fixture's fixed one was already kept by an earlier test, and a re-read is indexed by it.
+    const raw = SCOOTER_MIME({ subject: `Re: ${planSubject}`, body: "All good. Yes will upload 4 and 5 for sure soon\n\nSent from my iPhone", image: true }).replace(/^Message-ID: .*$/m, `Message-ID: <${crypto.randomUUID()}@mail.gmail.com>`);
+    await (env.WP_OS_DOCUMENTS as unknown as { put: (k: string, b: string) => Promise<unknown> }).put(key, raw);
+    const cardsBefore = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card").first<{ n: number }>())!.n;
+    const res = await handleReingestStoredEmail({
+      request: new Request("https://os.joinwestpeek.com/api/inbound-email/reingest", { method: "POST", body: JSON.stringify({ object_key: key }) }),
+      env,
+      identity: { id: "fu_sequoia_taylor", email: SEQUOIA, fullName: "Sequoia Taylor", status: "ACTIVE", roles: ["MANAGING_PARTNER"], authorityScopes: [] },
+      params: {},
+    });
+    const body = (await res.json()) as { superseded: string[]; steered_card: string | null; new_card: string | null; detail?: string };
+    const events = (await env.WP_OS_DB.prepare("SELECT event_type, substr(payload_json, 1, 300) p FROM event_record WHERE event_type LIKE 'inbound_email.%' ORDER BY created_at DESC LIMIT 3").all<{ event_type: string; p: string }>()).results;
+    expect(res.status, JSON.stringify({ body, events })).toBe(200);
+    expect(body.superseded, "a reply supersedes nothing").toEqual([]);
+    expect(body.steered_card).toBe(porter.id);
+    expect(body.new_card).toBeNull();
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card").first<{ n: number }>())!.n).toBe(cardsBefore);
+    const c = await card(porter.id);
+    expect(c.state, "the card the reply is about is answered, never cancelled").toBe("OPEN");
+    expect(String(c.block_answer)).toMatch(/^All good/);
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM request_attachment WHERE work_card_id = ?1 AND source = 'REPLY'").bind(porter.id).first<{ n: number }>())!.n, "the reply's photo is on the card").toBe(1);
+  });
+
   it("the prompt records the Google Sheet default for a form's destination", () => {
     const prompt = readFileSync(new URL("../scripts/duties/web-property-change-prompt.md", import.meta.url), "utf8").replace(/\s+/g, " ");
     expect(prompt).toContain("the DESTINATION IS A GOOGLE SHEET");
