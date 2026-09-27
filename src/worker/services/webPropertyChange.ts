@@ -585,6 +585,32 @@ function whoFor(card: WebPropertyChangeCard): "SEQUOIA" | "SCOOTER" {
   return partner?.firstName.toUpperCase() === "SCOOTER" ? "SCOOTER" : "SEQUOIA";
 }
 
+/**
+ * A QUEUED JOB IS KEPT CURRENT (27 Sep 2026). BUILD used to park only after the partner's reply, so
+ * the files that reply carried were already on the card when the payload was written. Now that a plan
+ * with nothing to decide parks BUILD the moment it is filed, a reply can arrive while the job waits
+ * for the Mac — Scooter's Carlos photo, an hour after the plan. The Mac fetches exactly the
+ * `attachments` the payload lists, so a payload frozen at parking would build without the file.
+ * Until the Mac CLAIMS the job, its `attachments` and the plan's `answers` are re-read from the card
+ * on every tick; a claimed job is never rewritten under the Mac.
+ */
+async function refreshQueuedJob(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, run: SeatRunRow): Promise<void> {
+  if (!run.job_json) return;
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(run.job_json) as Record<string, unknown>;
+  } catch {
+    return;
+  }
+  const attachments = (await attachmentsFor(env, card.id)).map((a) => ({ id: a.id, filename: a.filename, media_type: a.media_type, bytes: a.bytes, path: `/api/work-cards/${card.id}/attachments/${a.id}` }));
+  const plan = payload.plan && typeof payload.plan === "object" ? { ...(payload.plan as Record<string, unknown>), answers: list(row.answers_json), approved_at: row.plan_approved_at } : payload.plan;
+  const next = { ...payload, attachments, plan };
+  const before = JSON.stringify(payload);
+  const after = JSON.stringify(next);
+  if (before === after) return;
+  await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET job_json = ?2 WHERE id = ?1 AND status = 'QUEUED'").bind(run.id, after).run();
+}
+
 // ── Parking a phase ───────────────────────────────────────────────────────────────────────────
 
 /**
@@ -1256,7 +1282,13 @@ async function applyPlan(env: Env, card: WebPropertyChangeCard, row: WebProperty
     card.id,
     `Plan filed on the card. Decided (${decided.length}): ${decided.join("; ") || "nothing"}. Asking (${asks.length}): ${askLines(asks).join("; ") || "nothing"}.`,
   );
-  const fresh: WebPropertyChangeRow = { ...row, plan_text: report.document, plan_filed_at: now, publish_ready: report.publish_ready === false ? 0 : 1, placeholders_json: JSON.stringify(report.placeholders ?? []) };
+  /*
+   * THE ROW AS WRITTEN, NOT A HAND-BUILT COPY (27 Sep 2026). The three filing-time approvers below
+   * park BUILD from this row, and the job's `plan.assets` (0237: BUILD fetches exactly these) come
+   * from `assets_json` — which the copy this used to assemble by hand left out, so a build parked at
+   * filing carried no assets. Read back what was just written; nothing is re-typed.
+   */
+  const fresh: WebPropertyChangeRow = (await readWebPropertyChange(env, card.id)) ?? { ...row, plan_text: report.document, plan_filed_at: now, publish_ready: report.publish_ready === false ? 0 : 1, placeholders_json: JSON.stringify(report.placeholders ?? []), assets_json: JSON.stringify(report.assets ?? []), decided_json: JSON.stringify(report.decided ?? []), asks_json: JSON.stringify(asks) };
   if (row.pre_approved_phrase) return approveAtFiling(env, card, fresh, asks, report.document);
   /*
    * NO PARTNER DECISIONS IN THIS CHANGE → BUILT WITHOUT ASKING (owner, 21 Sep 2026: "why does
@@ -2142,6 +2174,10 @@ export async function runWebPropertyChangeCard(
   if (row.current_run_id) {
     const run = await readRun(env, row.current_run_id);
     if (run && (run.status === "QUEUED" || run.status === "CLAIMED")) {
+      // A QUEUED job stays current with what arrived since it was parked (27 Sep 2026): since a plan
+      // whose every ask carries a recommendation parks BUILD at filing, a file or an answer the
+      // partner sends afterwards must still reach the run the Mac has not claimed yet.
+      if (run.status === "QUEUED") await refreshQueuedJob(env, card, row, run);
       const where = run.status === "CLAIMED" ? `on ${run.claimed_by ?? "the Mac"}${run.progress_note ? ` — ${run.progress_note}` : ""}` : "queued, waiting for the Mac to claim it";
       /*
        * IDLE PAST THE CEILING, INSIDE THE WINDOW → "I'm stuck", once (her decision, 21 Sep 2026).

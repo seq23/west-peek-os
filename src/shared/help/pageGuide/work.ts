@@ -47,6 +47,7 @@ export const workGuide: PageGuide = {
     { label: "Look and decide", testid: "work-deck-decide-", primary: true, does: "goes to the deck version waiting on your decision, to approve it or send it back." },
     { label: "Done", testid: "work-card-done-", primary: true, does: "finishes a card done by hand; it goes to the Record. Not offered on an employee's card in flight, which the employee finishes." },
     { label: "Stop this work", testid: "work-card-drop-", does: "decides not to do it; the card ends Stopped and is kept on the record." },
+    { label: "Merge into…", testid: "work-card-merge-confirm-", does: "folds this card into the card it belongs to: its emails, email threads and files move to the survivor and a note on each points at the other; this card ends Stopped. Nothing is emailed and no PR is touched." },
     { label: "Give it to someone else", testid: "work-card-reassign-", does: "hands the card to another employee, your partner or nobody." },
     { label: "Release it", testid: "work-card-release-", primary: true, does: "lets a card you put on hold be worked again; it re-queues fresh from the top." },
     { label: "Do it now", testid: "work-card-doitnow-", primary: true, does: "starts an employee-owned card that has not been picked up yet, ahead of the sweep's next five-minute pass — the same door the card's own page uses.", then: "it shows Working now on its next reload." },
