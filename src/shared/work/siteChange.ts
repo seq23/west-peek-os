@@ -14,6 +14,8 @@
  *     `web_property_change` row (never a sentence a model wrote about itself).
  */
 
+import { AI_EMPLOYEE_ROSTER } from "../registry/aiEmployees";
+
 export const SITE_STAGES = [
   { key: "PLAN", label: "Plan" },
   { key: "BUILD", label: "Build" },
@@ -54,12 +56,18 @@ const LEADS = [
   /^(?:please|can you|could you|would you|let'?s)\s+(?:get started on|start on|start|begin|do|make|build|work on)?\s*/i,
 ];
 
+/** "Porter: ", "Walker: " … — the subject prefix every employee email carries (`execSubject`), for any name on the roster. */
+const EMPLOYEE_PREFIX_RE = new RegExp(`^(?:${AI_EMPLOYEE_ROSTER.map((e) => e.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")}):\\s+`, "i");
+
 function cleanSubject(subject: string): string {
   let s = subject.trim();
   // "From seq@…: Community site redesign" — the intake card's own title shape.
   s = s.replace(/^From\s+\S+:\s*/i, "");
   for (;;) {
-    const next = s.replace(/^(?:re|fwd?|fw)\s*:\s*/i, "");
+    // "Re:", "Fwd:" — and OUR OWN EMPLOYEE'S PREFIX (27 Sep 2026): a request that arrived as a reply
+    // to "Porter: Community site redesign — now yours" is named "Community site redesign", never
+    // "Porter" (which then read "Porter: Porter: Got it" in the subject line).
+    const next = s.replace(/^(?:re|fwd?|fw)\s*:\s*/i, "").replace(EMPLOYEE_PREFIX_RE, "");
     if (next === s) break;
     s = next;
   }

@@ -505,6 +505,195 @@ async function linkStoredMessage(env: Env, kept: KeptMessage, cardId: string | n
     .run();
 }
 
+/**
+ * A REPLY IS READ THE SAME WAY WHATEVER ITS SIZE (27 Sep 2026).
+ *
+ * THE DEFECT THIS CLOSES, twice in one day. Scooter answered Porter's hand-off email ("Re: Porter:
+ * Community site redesign — now yours") with two attachments — 3 MB — and, hours later, answered the
+ * PLAN email with the new Carlos photo attached — 472 KB. Both were over `MAX_BODY_BYTES`, and the
+ * oversize branch opened a partner's message straight through `openAssignmentCard` without ever
+ * asking whether it was a reply: two new Walker cards, two new hand-ons (one to Porter, one to
+ * Percy), and the card the replies were actually about sat BLOCKED waiting for exactly those words.
+ * The small path had the reply check; the big path had a copy of everything except it — "two
+ * components each keeping their own list".
+ *
+ * So there is ONE check now and both sizes go through it, with the threading headers read the same
+ * way and the attachments kept against the card the reply steers: the packet decision (which
+ * carries its own capability token) first, then the steer matcher — by our `wpt_` token in
+ * `In-Reply-To`/`References`, else by "Re: <a subject we sent this partner>". Decided or steered →
+ * indexed against the card, and done. Attempted but refused → the same routing card the small path
+ * has always opened, with the reason on it. Not a reply at all → false, and the caller's ladder runs.
+ */
+async function handleIfReply(
+  env: Env,
+  input: {
+    message: { from: string; to: string; headers: Headers };
+    subject: string;
+    sender: string;
+    raw: string;
+    kept: KeptMessage;
+    inReplyTo: string | null;
+    references: string | null;
+    firmScope: string;
+    /** Triggers that appeared only in the quoted original — recorded on the event so the split is visible. */
+    quotedOnly: readonly string[];
+  },
+): Promise<boolean> {
+  const { message, subject, sender, raw, kept, inReplyTo, references, firmScope } = input;
+  /*
+   * ── A REPLY THAT DECIDES A PACKET, READ BEFORE ANYTHING ELSE ─────────────────────────────────
+   *
+   * Operator, 17 Sep 2026: "you can have Parker give us a special #hashtag to use and anything
+   * after that is the reason?"
+   *
+   * FIRST, because a decision reply is the one shape here that is ALREADY addressed: the partner is
+   * answering a specific packet, and there is nothing for the ladder below to work out. Running it
+   * after the triggers would let a reply whose quoted original mentions a company open a funnel
+   * entry for it.
+   *
+   * THE OUTER `From:` AND THE OUTER HEADERS, not `trueSender` — the same distinction the assignment
+   * check makes eighty lines below, and for the same reason. `trueSender` is the FORWARDED origin,
+   * which is right for filing a founder and catastrophic for authority: reading it here would mean
+   * anyone whose email a partner forwards inherits the ability to cancel a month's plan.
+   *
+   * IT DOES NOT SWALLOW THE MESSAGE. A reply that decided something returns and nothing else runs,
+   * because there is nothing else to do with it. A reply that carried a tag but could NOT be read —
+   * a wrong code, an expired one, two answers, an unauthenticated sender — falls through to the
+   * routing card with the reason on it, which is the "unsure means Porter, never a guess" rule
+   * landing on the door Porter already owns. An ordinary email is untouched: `attempted` is false
+   * and nothing above has happened.
+   */
+  const replyDecision = await applyReplyDecision(env, {
+    fromHeader: message.headers.get("from"),
+    authenticationResults: message.headers.get("authentication-results"),
+    subject,
+    body: raw,
+  });
+  if (replyDecision.decided) {
+    await appendEvent(env, {
+      eventType: "inbound_email.received",
+      actorType: "system",
+      actorId: "inbound_email",
+      objectType: "inbound_email",
+      objectId: `${message.from}:${subject}`.slice(0, 200),
+      firmScope,
+      payload: {
+        from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX,
+        packet_decision: replyDecision.decision, packet_id: replyDecision.packetId,
+      },
+    });
+    return true;
+  }
+  if (replyDecision.capture) {
+    const unsureCard = await openRoutingCard(env, {
+      headline: "A reply I could not act on",
+      subject,
+      from: sender,
+      raw,
+      triggers: [],
+      why:
+        `This looks like an answer to one of Parker's packets, and I did not act on it: ${replyDecision.capture}. ` +
+        "Nothing was kept and nothing was dismissed. Open the packet on Events & Rooms and decide it there, " +
+        "or ask the sender to reply again using the code in the email exactly as it is written.",
+      emlKey: kept.key,
+      storeNote: notKept(kept),
+    });
+    await linkStoredMessage(env, kept, unsureCard);
+    await appendEvent(env, {
+      eventType: "inbound_email.unrouted",
+      actorType: "system",
+      actorId: "inbound_email",
+      objectType: "inbound_email",
+      objectId: `${message.from}:${subject}`.slice(0, 200),
+      firmScope,
+      payload: {
+        from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX,
+        owner: NO_TRIGGER_ROUTE.owner, routing_card_id: unsureCard,
+        packet_decision: "NOT_READ", packet_decision_detail: replyDecision.capture,
+      },
+    });
+    return true;
+  }
+
+  /*
+   * ── A REPLY THAT STEERS A PIECE OF WORK ──────────────────────────────────────────────────────
+   *
+   * Read after the packet decision (which is destructive and carries its own capability token) and
+   * before the trigger ladder, for the same reason the packet decision is read before it: a reply is
+   * ALREADY addressed. There is nothing for the ladder to work out, and running it first would let a
+   * reply whose quoted original names a company open a funnel entry for it.
+   *
+   * THE OUTER HEADERS, not `trueSender` — the same distinction the assignment check makes, and for
+   * the same reason: `trueSender` is the FORWARDED origin, so reading authority off it would let
+   * anyone whose email a partner forwards steer the firm's work.
+   *
+   * IT DOES NOT SWALLOW THE MESSAGE when it fails. A reply carrying one of our tokens that could not
+   * be acted on — an unknown token, an unauthenticated sender, nothing written above the quote —
+   * falls through to the routing card with the reason on it, which is the "unsure means Porter,
+   * never a guess" rule landing on the door Porter already owns.
+   */
+  const steer = await steerFromReply(env, {
+    fromHeader: message.headers.get("from"),
+    authenticationResults: message.headers.get("authentication-results"),
+    subject,
+    raw,
+    inReplyTo,
+    references,
+    emlKey: kept.key,
+  });
+  if (steer.steered) {
+    /*
+     * THE REPLY IS INDEXED AGAINST THE CARD IT STEERED, which is the whole of Scooter's 21 Sep
+     * failure closed. A steer keeps the written half only — correctly — and until now the quoted
+     * half, and the message itself, went nowhere at all.
+     */
+    await linkStoredMessage(env, kept, steer.thread!.object_type === "work_card" ? steer.thread!.object_id : null);
+    await appendEvent(env, {
+      eventType: "inbound_email.received",
+      actorType: "system",
+      actorId: "inbound_email",
+      objectType: "inbound_email",
+      objectId: `${message.from}:${subject}`.slice(0, 200),
+      firmScope,
+      payload: {
+        from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX,
+        steered: { thread_token: steer.thread!.token, card_kind: steer.thread!.card_kind, employee: steer.thread!.employee },
+        // What did NOT fire because it was only in the quoted original. The whole point of the fix.
+        ...(input.quotedOnly.length ? { quoted_only_triggers: input.quotedOnly } : {}),
+      },
+    });
+    return true;
+  }
+  if (steer.attempted && steer.reason) {
+    const unsureCard = await openRoutingCard(env, {
+      headline: "A reply I could not act on",
+      subject,
+      from: sender,
+      raw,
+      triggers: [],
+      why: `This replies to one of our own notes and I did not act on it: ${steer.reason}. Nothing was changed.`,
+      emlKey: kept.key,
+      storeNote: notKept(kept),
+    });
+    await linkStoredMessage(env, kept, unsureCard);
+    await appendEvent(env, {
+      eventType: "inbound_email.unrouted",
+      actorType: "system",
+      actorId: "inbound_email",
+      objectType: "inbound_email",
+      objectId: `${message.from}:${subject}`.slice(0, 200),
+      firmScope,
+      payload: {
+        from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX,
+        owner: NO_TRIGGER_ROUTE.owner, routing_card_id: unsureCard, steer_refused: steer.reason,
+      },
+    });
+    return true;
+  }
+
+  return false;
+}
+
 async function handleInboundEmailOnce(
   message: { from: string; to: string; headers: Headers; raw: ReadableStream; rawSize: number },
   env: Env,
@@ -555,6 +744,13 @@ async function handleInboundEmailOnce(
    * It also CONSUMES the stream, so everything below reads `kept.text` rather than `message.raw`.
    */
   const kept = await keepTheMessage(env, { message, subject, sender, authority, firmScope });
+
+  /*
+   * THE THREADING HEADERS, READ ONCE FOR BOTH SIZES (27 Sep 2026). They used to be read below the
+   * oversize branch, so an oversize reply never saw them — see `handleIfReply` for what that cost.
+   */
+  const inReplyTo = message.headers.get("in-reply-to");
+  const references = message.headers.get("references");
 
   /*
    * A BIG MESSAGE IS NOT A REJECTED ONE. This dropped a real deck on the floor.
@@ -642,6 +838,9 @@ async function handleInboundEmailOnce(
      */
     if (authority.isAssignment && partnerText !== null) {
       const rawText = partnerText;
+      // THE SAME REPLY CHECK AS A SMALL MESSAGE, before any card is opened (27 Sep 2026): a
+      // partner's oversize reply steers the card it answers and creates nothing new.
+      if (await handleIfReply(env, { message, subject, sender, raw: rawText, kept, inReplyTo, references, firmScope, quotedOnly: [] })) return;
       const cardId = await openAssignmentCard(env, {
         subject,
         partnerAddress: authority.partnerAddress!,
@@ -765,161 +964,13 @@ async function handleInboundEmailOnce(
    * this message is a reply: the trigger scan (so a quoted tag cannot fire), and the steer matcher
    * (so a reply reaches the work it is about).
    */
-  const inReplyTo = message.headers.get("in-reply-to");
-  const references = message.headers.get("references");
-
   const summary = classifyInbound({ to: message.to, from: trueSender, subject: trueSubject, body: raw, inReplyTo, references });
 
   /*
-   * ── A REPLY THAT DECIDES A PACKET, READ BEFORE ANYTHING ELSE ─────────────────────────────────
-   *
-   * Operator, 17 Sep 2026: "you can have Parker give us a special #hashtag to use and anything
-   * after that is the reason?"
-   *
-   * FIRST, because a decision reply is the one shape here that is ALREADY addressed: the partner is
-   * answering a specific packet, and there is nothing for the ladder below to work out. Running it
-   * after the triggers would let a reply whose quoted original mentions a company open a funnel
-   * entry for it.
-   *
-   * THE OUTER `From:` AND THE OUTER HEADERS, not `trueSender` — the same distinction the assignment
-   * check makes eighty lines below, and for the same reason. `trueSender` is the FORWARDED origin,
-   * which is right for filing a founder and catastrophic for authority: reading it here would mean
-   * anyone whose email a partner forwards inherits the ability to cancel a month's plan.
-   *
-   * IT DOES NOT SWALLOW THE MESSAGE. A reply that decided something returns and nothing else runs,
-   * because there is nothing else to do with it. A reply that carried a tag but could NOT be read —
-   * a wrong code, an expired one, two answers, an unauthenticated sender — falls through to the
-   * routing card with the reason on it, which is the "unsure means Porter, never a guess" rule
-   * landing on the door Porter already owns. An ordinary email is untouched: `attempted` is false
-   * and nothing above has happened.
+   * ONE REPLY CHECK, FOR EVERY SIZE. A reply that decided a packet, steered a card, or tried to and
+   * was refused is finished here; an ordinary email falls through to the ladder below.
    */
-  const replyDecision = await applyReplyDecision(env, {
-    fromHeader: message.headers.get("from"),
-    authenticationResults: message.headers.get("authentication-results"),
-    subject,
-    body: raw,
-  });
-  if (replyDecision.decided) {
-    await appendEvent(env, {
-      eventType: "inbound_email.received",
-      actorType: "system",
-      actorId: "inbound_email",
-      objectType: "inbound_email",
-      objectId: `${message.from}:${subject}`.slice(0, 200),
-      firmScope,
-      payload: {
-        from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX,
-        packet_decision: replyDecision.decision, packet_id: replyDecision.packetId,
-      },
-    });
-    return;
-  }
-  if (replyDecision.capture) {
-    const unsureCard = await openRoutingCard(env, {
-      headline: "A reply I could not act on",
-      subject,
-      from: sender,
-      raw,
-      triggers: [],
-      why:
-        `This looks like an answer to one of Parker's packets, and I did not act on it: ${replyDecision.capture}. ` +
-        "Nothing was kept and nothing was dismissed. Open the packet on Events & Rooms and decide it there, " +
-        "or ask the sender to reply again using the code in the email exactly as it is written.",
-      emlKey: kept.key,
-      storeNote: notKept(kept),
-    });
-    await linkStoredMessage(env, kept, unsureCard);
-    await appendEvent(env, {
-      eventType: "inbound_email.unrouted",
-      actorType: "system",
-      actorId: "inbound_email",
-      objectType: "inbound_email",
-      objectId: `${message.from}:${subject}`.slice(0, 200),
-      firmScope,
-      payload: {
-        from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX,
-        owner: NO_TRIGGER_ROUTE.owner, routing_card_id: unsureCard,
-        packet_decision: "NOT_READ", packet_decision_detail: replyDecision.capture,
-      },
-    });
-    return;
-  }
-
-  /*
-   * ── A REPLY THAT STEERS A PIECE OF WORK ──────────────────────────────────────────────────────
-   *
-   * Read after the packet decision (which is destructive and carries its own capability token) and
-   * before the trigger ladder, for the same reason the packet decision is read before it: a reply is
-   * ALREADY addressed. There is nothing for the ladder to work out, and running it first would let a
-   * reply whose quoted original names a company open a funnel entry for it.
-   *
-   * THE OUTER HEADERS, not `trueSender` — the same distinction the assignment check makes, and for
-   * the same reason: `trueSender` is the FORWARDED origin, so reading authority off it would let
-   * anyone whose email a partner forwards steer the firm's work.
-   *
-   * IT DOES NOT SWALLOW THE MESSAGE when it fails. A reply carrying one of our tokens that could not
-   * be acted on — an unknown token, an unauthenticated sender, nothing written above the quote —
-   * falls through to the routing card with the reason on it, which is the "unsure means Porter,
-   * never a guess" rule landing on the door Porter already owns.
-   */
-  const steer = await steerFromReply(env, {
-    fromHeader: message.headers.get("from"),
-    authenticationResults: message.headers.get("authentication-results"),
-    subject,
-    raw,
-    inReplyTo,
-    references,
-    emlKey: kept.key,
-  });
-  if (steer.steered) {
-    /*
-     * THE REPLY IS INDEXED AGAINST THE CARD IT STEERED, which is the whole of Scooter's 21 Sep
-     * failure closed. A steer keeps the written half only — correctly — and until now the quoted
-     * half, and the message itself, went nowhere at all.
-     */
-    await linkStoredMessage(env, kept, steer.thread!.object_type === "work_card" ? steer.thread!.object_id : null);
-    await appendEvent(env, {
-      eventType: "inbound_email.received",
-      actorType: "system",
-      actorId: "inbound_email",
-      objectType: "inbound_email",
-      objectId: `${message.from}:${subject}`.slice(0, 200),
-      firmScope,
-      payload: {
-        from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX,
-        steered: { thread_token: steer.thread!.token, card_kind: steer.thread!.card_kind, employee: steer.thread!.employee },
-        // What did NOT fire because it was only in the quoted original. The whole point of the fix.
-        ...(summary.quotedOnly?.length ? { quoted_only_triggers: summary.quotedOnly } : {}),
-      },
-    });
-    return;
-  }
-  if (steer.attempted && steer.reason) {
-    const unsureCard = await openRoutingCard(env, {
-      headline: "A reply I could not act on",
-      subject,
-      from: sender,
-      raw,
-      triggers: [],
-      why: `This replies to one of our own notes and I did not act on it: ${steer.reason}. Nothing was changed.`,
-      emlKey: kept.key,
-      storeNote: notKept(kept),
-    });
-    await linkStoredMessage(env, kept, unsureCard);
-    await appendEvent(env, {
-      eventType: "inbound_email.unrouted",
-      actorType: "system",
-      actorId: "inbound_email",
-      objectType: "inbound_email",
-      objectId: `${message.from}:${subject}`.slice(0, 200),
-      firmScope,
-      payload: {
-        from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX,
-        owner: NO_TRIGGER_ROUTE.owner, routing_card_id: unsureCard, steer_refused: steer.reason,
-      },
-    });
-    return;
-  }
+  if (await handleIfReply(env, { message, subject, sender, raw, kept, inReplyTo, references, firmScope, quotedOnly: summary.quotedOnly ?? [] })) return;
 
   /*
    * A COMPANY GOES TO THE FUNNEL. A message nobody could place goes to Capture.

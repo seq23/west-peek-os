@@ -112,7 +112,11 @@ export function boldNumbers(line: string): string {
 export function execSubject(employee: string, what: string): string {
   const head = `${employee}: `;
   const room = SUBJECT_MAX - head.length;
-  const tail = oneLine(what);
+  // THE PREFIX ONCE, WHATEVER THE TITLE CARRIES (27 Sep 2026). A card raised from a reply to one of
+  // Porter's own emails had "Porter: …" in its subject, and the RECEIVED went out as "Porter: Porter:
+  // Got it". A `what` that already starts with this employee's prefix is not prefixed again.
+  let tail = oneLine(what);
+  while (tail.startsWith(head)) tail = tail.slice(head.length).trimStart();
   return head + (tail.length <= room ? tail : `${tail.slice(0, Math.max(0, room - 1)).trimEnd()}…`);
 }
 

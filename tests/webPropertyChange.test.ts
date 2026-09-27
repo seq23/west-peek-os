@@ -16,7 +16,8 @@ import { needsPreview, parkPhase, phaseModel, readWebPropertyChange, rulesFor, r
 import { steerFromReply } from "../src/worker/services/emailThread";
 import { threadReference } from "../src/shared/email/thread";
 import { answerBlock } from "../src/worker/services/blocks";
-import { handleInboundEmail } from "../src/worker/effects/inboundEmail";
+import { handleInboundEmail, MAX_BODY_BYTES } from "../src/worker/effects/inboundEmail";
+import { comparableSubject } from "../src/worker/services/emailThread";
 import { requestAttachments, textBodyOf } from "../src/worker/effects/mimeAttachments";
 import { handleGetRequestAttachment, handleReingestStoredEmail, sendReceived, stuckWindowOpen } from "../src/worker/services/webPropertyChange";
 import { readFileSync } from "node:fs";
@@ -339,14 +340,17 @@ describe("Scooter emails a package for the ventures site", () => {
         decided: ["new /team route with a redirect from /people", "logos on cream tiles per the RUNBOOK"],
         asks: [
           { question: "Use the orange accent on the team page headings, or keep black/white?", recommended: "keep black/white — the ventures visual system is frozen" },
-          { question: "The thesis doc drops the 'first cheque' claim — remove it from the site too?", recommended: "remove it; the doc is the source of truth" },
+          // NO RECOMMENDATION — a real question only the partner can answer. Since 27 Sep 2026 a
+          // plan whose every ask carries a recommendation never waits (see "every decision carries a
+          // recommendation" below); ONE ask without one is what still blocks the card.
+          { question: "The thesis doc drops the 'first cheque' claim — remove it from the site too?", recommended: "" },
         ],
         publish_ready: true,
         placeholders: [],
       }),
     });
     const out = await tickFor(porterCardId);
-    expect(out.outcome).toBe("BLOCKED");
+    expect(out.outcome, "an ask WITHOUT a recommendation still blocks").toBe("BLOCKED");
     const c = await card(porterCardId);
     expect(c.state).toBe("BLOCKED");
     expect(c.block_reason).toBe("a_question_for_you");
@@ -438,7 +442,7 @@ describe("Scooter emails a package for the ventures site", () => {
     const answers = JSON.parse(row.answers_json) as string[];
     expect(answers, "one word answered every ask with its recommendation").toHaveLength(2);
     expect(answers[0]).toMatch(/keep black\/white .*approved as recommended/);
-    expect(answers[1]).toMatch(/remove it; the doc is the source of truth/);
+    expect(answers[1], "an ask that had no recommendation records that it had none").toMatch(/no recommendation given/);
     const job = (await liveJobFor(porterCardId))!;
     const payload = JSON.parse(job.job_json!) as { phase: string; model: string; plan: { text: string; answers: string[]; approved_at: string } };
     expect(payload.phase).toBe("BUILD");
@@ -626,7 +630,7 @@ describe("a plan that is not publish-ready previews first (21 Sep 2026)", () => 
   let id = "";
   let porter: Awaited<ReturnType<typeof planned>>;
 
-  it("the plan email says so at the top, names the placeholders, and says landing needs a second approval", async () => {
+  it("a recommended ask on a NOT-ready plan goes ahead too (27 Sep 2026): the FYI names the placeholders as optional missing items; the card is never blocked at the plan", async () => {
     porter = await planned(SEQUOIA, "Wren", "community rebuild", {
       document: "# Plan: community site rebuild\n\nTwelve open items ship as structured placeholders.",
       decided: ["placeholder blocks are marked and listed"],
@@ -639,24 +643,26 @@ describe("a plan that is not publish-ready previews first (21 Sep 2026)", () => 
     expect(row.publish_ready).toBe(0);
     expect(JSON.parse(row.placeholders_json)).toEqual(PLACEHOLDERS);
     const c = await card(id);
-    expect(c.state).toBe("BLOCKED");
-    expect(String(c.block_needed)).toMatch(/^NOT PUBLISH-READY\. This will ship with 4 placeholders: Airtable links; Sengo logo/);
-    expect(String(c.block_needed)).toMatch(/landing needs a second approval/);
-    // The plan email: the placeholders are OPTIONAL missing items, the preview is built with
-    // placeholders for them, and nothing goes live until she approves the preview (23 Sep 2026).
-    const email = sent.filter((m) => m.to === SEQUOIA && /plan ready/i.test(m.subject)).pop()!;
-    expect(email.subject).toBe("Porter: Community rebuild: Plan ready");
-    expect(email.text).toMatch(/^\*\*TL;DR:\*\* Plan ready\. Reply \*\*approved\*\* and I'll build the preview now, with placeholders for the \*{0,2}4\*{0,2} missing items\. Nothing goes live until you approve the preview\./);
+    // STRICTER THAN THE OLD PIN (which asserted a "NOT PUBLISH-READY" block): a plan with nothing to
+    // decide from scratch never blocks, ready or not — the preview stop below is what guards a
+    // not-ready plan, and the finding says so.
+    expect(c.state).not.toBe("BLOCKED");
+    expect(row.phase).toBe("BUILD");
+    expect(row.plan_approved_by).toMatch(/^request:/);
+    expect(String(c.description)).toMatch(/It stops at a preview link before anything lands/);
+    // The FYI: the placeholders are OPTIONAL missing items, the preview is built with placeholders
+    // for them, and nothing goes live until she approves the preview.
+    const email = sent.filter((m) => m.to === SEQUOIA && /going ahead/i.test(m.subject)).pop()!;
+    expect(email.subject).toBe("Porter: Community rebuild: Going ahead");
+    expect(email.text).toMatch(/^\*\*TL;DR:\*\* Going ahead with these — every decision had my recommendation, so I've taken it and started the build, with placeholders for the \*{0,2}4\*{0,2} missing items\. Reply \*\*changes: …\*\* to steer\. Nothing goes live until you approve the preview\./);
     expect(email.text).toMatch(/\*\*Missing items \(optional\)\*\*\n• Airtable links\n• Sengo logo\n• episode records\n• approved orange hex\n• You don't need these to continue\./);
     expect(email.text, "the plan is on the card, not in the mail").not.toMatch(/# Plan: community site rebuild|Twelve open items/);
+    expect(sent.filter((m) => m.to === SEQUOIA && /plan ready/i.test(m.subject) && /Community rebuild/.test(m.subject)), "the asking form never went out").toHaveLength(0);
   });
 
-  it("\"approved\" builds; GREEN does NOT land — the preview email goes out with the four reply options, the link and the placeholders still showing, and the card waits", async () => {
-    const out = await replyFrom(SEQUOIA, "approved", await porter.token());
-    expect(out.answered).toBe(true);
-    const next = await tickFor(id);
-    expect(next.summary).toMatch(/BUILD queued/);
+  it("GREEN does NOT land — the preview email goes out with the four reply options, the link and the placeholders still showing, and the card waits", async () => {
     expect((await readWebPropertyChange(env, id))!.plan_approved_at).toBeTruthy();
+    expect(await liveJobFor(id), "BUILD was parked at filing").not.toBeNull();
     // The card is for westpeek.ventures (planned() names it), so its preview lives under that site's
     // Pages project, and the link she gets is the branch alias — the build she is approving.
     await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/21", pr_number: 21, branch: "work/wpc-comm1234", check_state: "GREEN", preview_url: "https://a1b2c3d4.west-peek-ventures.pages.dev", proof: "npm run validate green · shots/community-desktop.png shots/community-390.png" });
@@ -822,28 +828,32 @@ describe("the named bypass: \"approved to production\" (21 Sep 2026)", () => {
 
   it("the other partner's \"approved to production\" is a note only; the row itself refuses a forcer who did not ask", async () => {
     const porter = await planned(SCOOTER, "Walker", "productions news B", notReady);
+    // Nothing to decide (no asks) → approved by the request at filing, never blocked (27 Sep 2026).
+    expect((await card(porter.id)).state).not.toBe("BLOCKED");
     const other = await replyFrom(SEQUOIA, "approved to production", await porter.token());
     expect(other.steered).toBe(true);
     expect(other.answered).toBe(false);
-    expect((await card(porter.id)).state).toBe("BLOCKED");
     const row = (await readWebPropertyChange(env, porter.id))!;
     expect(row.forced_by).toBeNull();
-    expect(row.plan_approved_at).toBeNull();
+    expect(row.plan_approved_by).toMatch(/^request:/);
     await expect(env.WP_OS_DB.prepare("UPDATE web_property_change SET forced_by = 'fu_sequoia_taylor' WHERE work_card_id = ?1").bind(porter.id).run()).rejects.toThrow(/only the partner who asked for a change can force it/);
-    // And by the card door: an answer typed by the other partner is recorded, not acted on.
-    await answerBlock(env, porter.id, "fu_sequoia_taylor", { action: "ANSWER", text: "approved to production" });
-    expect((await tickFor(porter.id)).outcome).toBe("BLOCKED");
+    // Her note is read on the next tick and kept, never acted on: only the requester forces.
+    await tickFor(porter.id);
     expect((await readWebPropertyChange(env, porter.id))!.forced_by).toBeNull();
-    expect(String((await card(porter.id)).description)).toMatch(/only Scooter Taylor can approve this plan/);
+    const note = await env.WP_OS_DB.prepare("SELECT response FROM work_card_note WHERE work_card_id = ?1 AND author_id = 'fu_sequoia_taylor' ORDER BY created_at DESC LIMIT 1").bind(porter.id).first<{ response: string | null }>();
+    expect(String(note?.response)).toMatch(/Kept, not acted on: only Scooter Taylor steers this card/);
   });
 
   it("the requester's \"approved to production\" on the plan skips the preview, lands on green, records who forced it, and the DONE email names the placeholders and the partner — to BOTH partners", async () => {
     const before = sent.length;
     const porter = await planned(SCOOTER, "Walker", "productions news C", notReady);
+    // The plan was approved by the request (nothing to decide) and BUILD is already queued; his
+    // "approved to production" arrives as a reply to the FYI — a note on an OPEN card — and is
+    // read on the next tick with the same weight it had as a block answer (27 Sep 2026).
     const out = await replyFrom(SCOOTER, "approved to production", await porter.token());
-    expect(out.answered).toBe(true);
+    expect(out.steered).toBe(true);
     const build = await tickFor(porter.id);
-    expect(build.summary).toMatch(/BUILD queued/);
+    expect(build.summary).toMatch(/BUILD is queued/);
     let row = (await readWebPropertyChange(env, porter.id))!;
     expect(row.forced_by).toBe("fu_scooter_taylor");
     expect(row.forced_at).toBeTruthy();
@@ -1197,7 +1207,8 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     expect(kinds).toEqual(["RECEIVED", "PREVIEW", "DONE"]);
   });
 
-  it("a single ask still sends the plan email — a non-empty asks list never reaches BUILD without an approval", async () => {
+  it("a single ask WITH a recommendation never waits (27 Sep 2026): approved by the request, BUILD parked, the plan email is the FYI \"Going ahead\"; the same ask WITHOUT one still asks", async () => {
+    const before = sent.length;
     const id = (await planned(SEQUOIA, "Wren", "hero photo rights", {
       document: "# Plan: hero photo\n\nthe photo is from a news site.",
       decided: [],
@@ -1206,10 +1217,77 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
       placeholders: [],
     })).id;
     const c = await card(id);
-    expect(c.state).toBe("BLOCKED");
-    expect((await readWebPropertyChange(env, id))!.plan_approved_at).toBeNull();
-    const kinds = (await env.WP_OS_DB.prepare("SELECT kind FROM work_card_notice WHERE work_card_id = ?1 ORDER BY sent_at").bind(id).all<{ kind: string }>()).results!.map((n) => n.kind);
-    expect(kinds).toEqual(["RECEIVED", "PLAN"]);
+    expect(c.state, "nothing to decide from scratch → no block").not.toBe("BLOCKED");
+    const row = (await readWebPropertyChange(env, id))!;
+    expect(row.phase).toBe("BUILD");
+    expect(row.plan_approved_at).toBeTruthy();
+    expect(row.plan_approved_by, "approved by the REQUEST, never in a partner's name (0241's trigger)").toMatch(/^request:wc_/);
+    expect(JSON.parse(row.answers_json)).toEqual(["1. ask the photographer; use the founders' own photo meanwhile (approved as recommended)"]);
+    expect(await liveJobFor(id), "BUILD is parked for the Mac").not.toBeNull();
+    expect(String(c.description)).toMatch(/Approved by the request: every decision \(1\) carried Porter's recommendation/);
+    const kinds = (await env.WP_OS_DB.prepare("SELECT kind, cause FROM work_card_notice WHERE work_card_id = ?1 ORDER BY sent_at").bind(id).all<{ kind: string; cause: string }>()).results!;
+    expect(kinds.map((n) => n.kind)).toEqual(["RECEIVED", "PLAN"]);
+    expect(kinds[1]!.cause).toMatch(/^fyi:/);
+    const fyi = sent.slice(before).filter((m) => m.to === SEQUOIA).pop()!;
+    expect(fyi.subject).toBe("Porter: Hero photo rights: Going ahead");
+    expect(fyi.text).toMatch(/^\*\*TL;DR:\*\* Going ahead with these — every decision had my recommendation, so I've taken it and started the build\. Reply \*\*changes: …\*\* to steer\. Nothing goes live until you approve the preview\./);
+    expect(fyi.text).toMatch(/• \*\*changes: …\*\*: I'll make them as I build\n• \*\*stop\*\*: hold it/);
+    expect(fyi.text).toMatch(/\*\*1 decision, taken as I recommended \(in bold\)\*\*\n• Use the photo from https:\/\/news\.example\.com\/x\? Rights unclear → \*\*ask the photographer; use the founders' own photo meanwhile\*\*/);
+    expect(fyi.text, "an FYI never asks for \"approved\"").not.toMatch(/Reply \*\*approved\*\*/);
+
+    // The SAME ask with no recommendation is a real question: the asking form, the card blocked.
+    const asked = (await planned(SEQUOIA, "Wren", "hero photo rights B", {
+      document: "# Plan: hero photo B\n\nthe photo is from a news site.",
+      decided: [],
+      asks: [{ question: "Use the photo from https://news.example.com/x? Rights unclear." }],
+      publish_ready: true,
+      placeholders: [],
+    })).id;
+    expect((await card(asked)).state).toBe("BLOCKED");
+    expect((await readWebPropertyChange(env, asked))!.plan_approved_at).toBeNull();
+    expect(sent.filter((m) => m.to === SEQUOIA).pop()!.subject).toBe("Porter: Hero photo rights B: Plan ready");
+  });
+
+  it("a card BLOCKED at its plan before the rule, every ask recommended, is released by the sweep and goes to BUILD on its own — one FYI, never the question twice", async () => {
+    const before = sent.length;
+    // Blocked the old way: a real question. Then the asks are rewritten as the Mac would have filed
+    // them for wc_77f52b33 on 27 Sep — one ask, one recommendation — with the block still standing.
+    const porter = await planned(SCOOTER, "Walker", "community colours", {
+      document: "# Plan: community colours",
+      decided: ["Ventures first"],
+      asks: [{ question: "Which orange?" }],
+      publish_ready: true,
+      placeholders: [],
+    });
+    expect((await card(porter.id)).state).toBe("BLOCKED");
+    await env.WP_OS_DB.prepare("UPDATE web_property_change SET asks_json = ?2 WHERE work_card_id = ?1")
+      .bind(porter.id, JSON.stringify([{ question: "Community colours: OK to lift the orange from #C45A3C to #E0632F on a white background?", recommended: "Yes, as described." }]))
+      .run();
+    const asking = sent.slice(before).filter((m) => m.to === SCOOTER && /Plan ready/.test(m.subject));
+    expect(asking, "the asking form already went out").toHaveLength(1);
+
+    const released = await (await import("../src/worker/services/webPropertyChange")).releasePlansNobodyNeedsToAnswer(env);
+    expect(released).toContain(porter.id);
+    const reopened = await card(porter.id);
+    expect(reopened.state).toBe("OPEN");
+    expect(reopened.block_who).toBeNull();
+    expect(reopened.block_needed).toBeNull();
+    expect(String(reopened.description)).toMatch(/Released from the plan wait: every decision carried a recommendation/);
+    expect(await releasePlansNobodyNeedsToAnswerAgain(), "a second pass finds nothing to release").not.toContain(porter.id);
+
+    const next = await tickFor(porter.id);
+    expect(next.outcome).toBe("PROGRESSED");
+    expect(next.summary).toMatch(/Plan approved by the request .*BUILD queued/);
+    const row = (await readWebPropertyChange(env, porter.id))!;
+    expect(row.phase).toBe("BUILD");
+    expect(row.plan_approved_by).toBe(`request:${porter.id} (every decision carried a recommendation; taken as the plan was filed)`);
+    const toScooter = sent.slice(before).filter((m) => m.to === SCOOTER && !/Got it$/.test(m.subject));
+    expect(toScooter.map((m) => m.subject.replace(/^Porter: .*: /, "")), "the question once, then the FYI once").toEqual(["Plan ready", "Going ahead"]);
+    // The FYI is once per filing: another tick sends nothing more.
+    await macReports(porter.id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/77", pr_number: 77, check_state: "GREEN", preview_url: "https://p77.west-peek-ventures.pages.dev" });
+    expect((await tickFor(porter.id)).outcome, "green still stops at the preview: the FYI is a plan approval, never a landing approval").toBe("BLOCKED");
+    expect((await readWebPropertyChange(env, porter.id))!.land_approved_at).toBeNull();
+    expect(sent.slice(before).filter((m) => m.to === SCOOTER && /Going ahead/.test(m.subject))).toHaveLength(1);
   });
 
   it("a 4 MB partner email (a real jpg attached) becomes Porter's card with request_text and one attachment row, not a Deck card", async () => {
@@ -1287,6 +1365,10 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     }
   });
 });
+
+async function releasePlansNobodyNeedsToAnswerAgain(): Promise<string[]> {
+  return (await import("../src/worker/services/webPropertyChange")).releasePlansNobodyNeedsToAnswer(env);
+}
 
 /** The firm caps an employee at 20 new cards an hour; this file opens many for Porter. Age the earlier ones. */
 async function ageEarlierCards(): Promise<void> {
@@ -1382,6 +1464,59 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
     expect(String(c.block_answer)).toMatch(/^Yes he can open/);
     expect(c.block_answered_by).toBe("fu_scooter_taylor");
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(chiefId).run();
+  });
+
+  it("an OVERSIZE partner reply steers the card it answers — by our token, and by the Re: subject alone (doubled prefix included) — and opens no card (27 Sep 2026)", async () => {
+    /*
+     * TWICE IN ONE DAY. Scooter's 3 MB reply to the hand-off email and his 472 KB reply to the PLAN
+     * email (the Carlos photo attached) were both over MAX_BODY_BYTES; the oversize branch opened a
+     * new Walker card for each without asking whether it was a reply, while the card they answered
+     * sat BLOCKED waiting for exactly those words. One reply check for every size now.
+     */
+    const smallPhoto = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from("JFIF fake photo bytes for the test")]).toString("base64");
+    const bigPhoto = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(600 * 1024, 7)]).toString("base64").replace(/(.{76})/g, "$1\r\n");
+    const countCards = async () => (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card").first<{ n: number }>())!.n;
+
+    // 1 · BY TOKEN. A card blocked on a real question; the reply carries our token in In-Reply-To.
+    const porter = await planned(SCOOTER, "Walker", "community colours big", { document: "# Plan", decided: [], asks: [{ question: "Which orange?" }], publish_ready: true, placeholders: [] });
+    expect((await card(porter.id)).state).toBe("BLOCKED");
+    const before = await countCards();
+    const byToken = inbound(SCOOTER_MIME({ subject: "Re: Porter: Community colours big: Plan ready", body: "approved\n\nSent from my iPhone", image: true }).replace(smallPhoto, bigPhoto), { "in-reply-to": threadReference(await porter.token()) });
+    expect(byToken.rawSize, "the fixture is genuinely over the cap").toBeGreaterThan(MAX_BODY_BYTES);
+    await handleInboundEmail(byToken, env);
+    expect(await countCards(), "a reply opens no card, whatever its size").toBe(before);
+    const c1 = await card(porter.id);
+    expect(c1.state, "the block is answered").toBe("OPEN");
+    expect(String(c1.block_answer), "what he WROTE, above the quote").toMatch(/^approved\n/);
+    expect(c1.block_answered_by).toBe("fu_scooter_taylor");
+    const att = (await env.WP_OS_DB.prepare("SELECT filename, source, bytes FROM request_attachment WHERE work_card_id = ?1").bind(porter.id).all<{ filename: string; source: string; bytes: number }>()).results!;
+    expect(att.map((a) => [a.filename, a.source]), "the reply's photo is kept against the card it steered").toEqual([["sensori-founders.jpg", "REPLY"]]);
+    expect(att[0]!.bytes).toBeGreaterThan(600 * 1024 * 0.99);
+    const indexed = await env.WP_OS_DB.prepare("SELECT work_card_id FROM inbound_message ORDER BY received_at DESC LIMIT 1").first<{ work_card_id: string | null }>();
+    expect(indexed?.work_card_id, "the stored message is indexed against the steered card").toBe(porter.id);
+
+    // 2 · BY SUBJECT ALONE — no token at all, as both of his replies today arrived — against the
+    //     doubled prefix stored on today's threads ("Porter: Porter: Plan ready").
+    const second = await planned(SCOOTER, "Walker", "community colours bigger", { document: "# Plan", decided: [], asks: [{ question: "Which orange, really?" }], publish_ready: true, placeholders: [] });
+    await env.WP_OS_DB.prepare("UPDATE email_thread SET subject = 'Porter: Porter: Plan ready' WHERE token = ?1").bind(await second.token()).run();
+    const before2 = await countCards();
+    const bySubject = inbound(SCOOTER_MIME({ subject: "Re: Porter: Porter: Plan ready", body: "Yes go ahead\n\nSent from my iPhone", image: true }).replace(smallPhoto, bigPhoto), {
+      // Gmail's chain: only the SES message id, never our token.
+      references: "<010001a0e3b6b039-061d7fcc-774a-45c4-91bc-0f1d78b58b10-000000@email.amazonses.com>",
+      "in-reply-to": "<010001a0e3b6b039-061d7fcc-774a-45c4-91bc-0f1d78b58b10-000000@email.amazonses.com>",
+    });
+    expect(bySubject.rawSize).toBeGreaterThan(MAX_BODY_BYTES);
+    await handleInboundEmail(bySubject, env);
+    expect(await countCards(), "no card for a reply matched by subject either").toBe(before2);
+    const c2 = await card(second.id);
+    expect(c2.state).toBe("OPEN");
+    expect(String(c2.block_answer)).toMatch(/^Yes go ahead/);
+    // The match tolerates what clients do to a subject: the single-prefix form of the same line
+    // matches the doubled one stored, an em-dash rewritten, an ellipsis dropped, case and spacing.
+    expect(comparableSubject("Re: Porter: Plan ready")).toBe(comparableSubject("Porter: Porter: Plan ready"));
+    expect(comparableSubject("RE: Fwd: Porter: Community site redesign - now yours")).toBe(comparableSubject("Porter: Community site redesign — now yours"));
+    expect(comparableSubject("Re: Porter: Community site redesign — everything is in: Preview ready")).toBe(comparableSubject("Porter: Community site redesign — everything is in…: Preview ready"));
+    expect(comparableSubject("Re: Porter: Plan ready"), "different lines stay different").not.toBe(comparableSubject("Porter: Preview ready"));
   });
 
   it("a re-read supersedes the live duplicate and returns the card it created; every partner .eml is stored", async () => {

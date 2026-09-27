@@ -17,7 +17,7 @@ import {
   type NoticeEmail,
 } from "../src/shared/work/porterNotices";
 import { boldNumbers, lintExecEmail, renderExecEmail } from "../src/shared/email/execEmail";
-import { readApprovalReply } from "../src/shared/work/approvalReply";
+import { everyAskRecommended, NO_RECOMMENDATION, readApprovalReply, readAsks } from "../src/shared/work/approvalReply";
 import { plainTitle } from "../src/shared/work/siteChange";
 import { rebuildIntentFor } from "../src/worker/services/webPropertyChange";
 // The Mac's reader, held to the same answers as the Worker's (one rule, two runtimes).
@@ -249,5 +249,46 @@ describe("the preview email, on the live card's real strings", () => {
     expect(clauseLine("Ends with an open (parenthesis that was cut", 90)).toBe("Ends with an open");
     expect(clauseLine("Ep 6 guest headshot (JPG)", 90)).toBe("Ep 6 guest headshot (JPG)");
     expect(clauseLine("Sengo logo (their old one is gone, find a new one)", 90)).toBe("Sengo logo");
+  });
+});
+
+describe("the plan as an FYI: every ask carries a recommendation (owner, 27 Sep 2026)", () => {
+  const SIX = [
+    { question: "Orange: the package approves black and orange but gives no hex. Use the orange already live on westpeek.ventures (#c45a3c)?", recommended: "Yes, #c45a3c, held in one CSS token" },
+    { question: "Workshops copy: ship the brief's wording as written?", recommended: "Yes, ship it as written" },
+  ];
+  const render = (n: NoticeEmail) => renderExecEmail({ employee: "Porter", what: n.what, tldr: n.tldr, tldrBullets: n.tldrBullets, sections: n.sections, details: null });
+
+  it("everyAskRecommended: no asks, or every ask with a recommendation → true; one ask without → false; readAsks marks a missing one", () => {
+    expect(everyAskRecommended([])).toBe(true);
+    expect(everyAskRecommended(SIX)).toBe(true);
+    expect(everyAskRecommended([...SIX, { question: "Which headshot?", recommended: NO_RECOMMENDATION }])).toBe(false);
+    expect(everyAskRecommended([{ question: "Which headshot?", recommended: "   " }])).toBe(false);
+    expect(readAsks([{ question: "Which headshot?" }])).toEqual([{ question: "Which headshot?", recommended: NO_RECOMMENDATION }]);
+    expect(everyAskRecommended(readAsks(["Which headshot? — recommended: the studio one"]))).toBe(true);
+  });
+
+  it("the FYI says \"Going ahead\" in the subject and first line, lists the decisions as taken, never asks for \"approved\", and still promises the preview stop", () => {
+    const r = render(planNotice({ title: "Community site redesign", asks: SIX, missing: [{ item: "Sengo logo", where: "/pitch" }], previewLine: null, cardId: "wc_77f52b33", fyi: true }));
+    expect(r.subject).toBe("Porter: Community site redesign: Going ahead");
+    expect(r.text).toMatch(/^\*\*TL;DR:\*\* Going ahead with these — every decision had my recommendation, so I've taken them and started the build, with placeholders for the \*{0,2}1\*{0,2} missing item\. Reply \*\*changes: …\*\* to steer\. Nothing goes live until you approve the preview\.\n• nothing needed: I've taken my \*{0,2}2\*{0,2} recommendations and started the build\n• \*\*changes: …\*\*: I'll make them as I build\n• \*\*stop\*\*: hold it — nothing is built or landed until you say otherwise\n• anything else you write is read as instructions\n/);
+    expect(r.text).toMatch(/\*\*2 decisions, taken as I recommended \(in bold\)\*\*\n• Orange: .* → \*\*Yes, #c45a3c, held in one CSS token\*\*\n/);
+    expect(r.text).toMatch(/\*\*Preview\*\*\n• The preview link comes when the build is green; nothing goes live until you approve it\./);
+    expect(r.text, "an FYI asks for nothing").not.toMatch(/Reply \*\*approved\*\*|\*\*approved\*\*:/);
+    expect(lintExecEmail(r.subject, r.text, "Porter")).toEqual([]);
+    // The asking form is unchanged for a plan with a real question.
+    const asking = render(planNotice({ title: "Community site redesign", asks: SIX, missing: [], previewLine: null, cardId: "wc_1" }));
+    expect(asking.subject).toBe("Porter: Community site redesign: Plan ready");
+    expect(asking.text).toMatch(/Reply \*\*approved\*\*/);
+  });
+
+  it("the employee prefix is added once, whatever the title carries (\"Porter: Porter: Got it\", 27 Sep 2026)", () => {
+    const r = renderExecEmail({ employee: "Porter", what: stageSubject("Porter: Got it", STAGE.PLAN), tldr: "x", tldrBullets: [], sections: [{ label: "A", bullets: ["b"] }], details: null });
+    expect(r.subject).toBe("Porter: Got it: Plan ready");
+    expect(renderExecEmail({ employee: "Porter", what: "Porter: Porter: Got it", tldr: "x", tldrBullets: [], sections: [{ label: "A", bullets: ["b"] }], details: null }).subject).toBe("Porter: Got it");
+    // And the title never becomes "Porter" in the first place: a request that arrived as a reply to
+    // one of Porter's own emails is named by what the email was about.
+    expect(plainTitle({ title: "From scooter@westpeek.ventures: Porter: Community site redesign — now yours", kind: "WEB_PROPERTY_CHANGE", host: null, subject: "Porter: Community site redesign — now yours", ask: "Hey Hey!\n\nI saw the community-site preview and the placeholders." })).toBe("Community site redesign");
+    expect(plainTitle({ title: "From scooter@westpeek.ventures: Re: Porter: Porter: Plan ready", kind: "WEB_PROPERTY_CHANGE", host: null, subject: "Re: Porter: Porter: Plan ready", ask: "Carlos image. All good." })).toBe("Plan ready");
   });
 });

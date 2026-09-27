@@ -117,6 +117,35 @@ export interface SteerFromReply {
 const NOT_A_REPLY: SteerFromReply = { steered: false, thread: null, written: "", reason: "", attempted: false };
 
 /**
+ * A SUBJECT IN THE FORM TWO MAIL CLIENTS WOULD AGREE ON. Pure. Strips every leading "Re:"/"Fwd:",
+ * collapses a repeated employee prefix ("Porter: Porter: X" → "Porter: X"), unifies dashes and
+ * quotes, drops a trailing ellipsis, folds whitespace and case. Used on BOTH sides of the match, so
+ * what we rendered and what came back only have to agree after the same normalisation.
+ */
+export function comparableSubject(subject: string): string {
+  let s = (subject ?? "").replace(/\s+/g, " ").trim();
+  for (;;) {
+    const next = s.replace(/^(?:(?:re|fwd?|fw|aw|sv)\s*:\s*)+/i, "").trim();
+    if (next === s) break;
+    s = next;
+  }
+  // "Porter: Porter: Plan ready" → "Porter: Plan ready" (the doubled prefix, 27 Sep 2026).
+  for (;;) {
+    const next = s.replace(/^([A-Za-z]+): \1: /, "$1: ");
+    if (next === s) break;
+    s = next;
+  }
+  return s
+    .replace(/[\u2013\u2014\u2012\u2015]/g, "-")
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/\s*(?:\u2026|\.{3})/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/**
  * Read an arriving message as a steer on the work it is replying to.
  *
  * ─── TWO FACTS, BOTH REQUIRED, AND NEITHER IS A SECRET ─────────────────────────────────────────
@@ -193,12 +222,19 @@ export async function steerFromReply(
    */
   if (!thread && tokens.length === 0 && /^\s*(?:re|fwd?|aw|sv)\s*:/i.test(message.subject)) {
     const from = (addressIn(message.fromHeader) ?? "").toLowerCase();
-    const bare = message.subject.replace(/^\s*(?:(?:re|fwd?|aw|sv)\s*:\s*)+/i, "").trim();
+    const bare = comparableSubject(message.subject);
     if (from && bare) {
-      thread =
-        (await env.WP_OS_DB.prepare("SELECT * FROM email_thread WHERE to_address = ?1 AND lower(trim(subject)) = lower(?2) ORDER BY created_at DESC LIMIT 1")
-          .bind(from, bare)
-          .first<EmailThreadRow>()) ?? null;
+      /*
+       * COMPARED IN CODE, NOT IN SQL (27 Sep 2026). Both of Scooter's replies today carried only the
+       * SES message id in References — no `wpt_` token — so this fallback was the only match, and an
+       * exact string compare is brittle against what a mail client does to a subject: Gmail's
+       * encoding, a dash rewritten, an ellipsis dropped, and our own doubled prefix ("Porter: Porter:
+       * Plan ready", stored on the threads sent that morning). The partner's recent threads are read
+       * newest first and compared on a normalised form of each side.
+       */
+      const recent =
+        (await env.WP_OS_DB.prepare("SELECT * FROM email_thread WHERE to_address = ?1 ORDER BY created_at DESC LIMIT 200").bind(from).all<EmailThreadRow>()).results ?? [];
+      thread = recent.find((r) => comparableSubject(r.subject) === bare) ?? null;
     }
   }
   if (!thread && tokens.length === 0) return NOT_A_REPLY;

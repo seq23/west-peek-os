@@ -72,6 +72,21 @@ export interface Ask {
   recommended: string;
 }
 
+/** What `readAsks` writes when the PLAN offered a question with no recommended answer. */
+export const NO_RECOMMENDATION = "(no recommendation given)";
+
+/**
+ * A PLAN NEVER WAITS WHEN EVERY ASK CARRIES A RECOMMENDATION (owner, 27 Sep 2026: a partner's
+ * instructive email IS the plan approval; the card should not need more approvals). True when
+ * there is nothing a partner must decide from scratch — every ask has Porter's recommended answer,
+ * or there are no asks at all. The recommendations are then taken, the plan is approved by the
+ * request itself, and the PLAN email is an FYI. Only an ask WITHOUT a recommendation still blocks.
+ * Pure.
+ */
+export function everyAskRecommended(asks: readonly Ask[]): boolean {
+  return asks.every((a) => a.recommended.trim().length > 0 && a.recommended.trim() !== NO_RECOMMENDATION);
+}
+
 /** Read asks as the PLAN reports them: objects, or "question — recommended: default" strings. */
 export function readAsks(raw: unknown): Ask[] {
   if (!Array.isArray(raw)) return [];
@@ -80,10 +95,10 @@ export function readAsks(raw: unknown): Ask[] {
     if (item && typeof item === "object") {
       const q = String((item as { question?: unknown; q?: unknown }).question ?? (item as { q?: unknown }).q ?? "").trim();
       const r = String((item as { recommended?: unknown; default?: unknown }).recommended ?? (item as { default?: unknown }).default ?? "").trim();
-      if (q) out.push({ question: q, recommended: r || "(no recommendation given)" });
+      if (q) out.push({ question: q, recommended: r || NO_RECOMMENDATION });
     } else if (typeof item === "string" && item.trim()) {
       const m = item.match(/^(.*?)\s*(?:—|-|–)\s*(?:recommended|recommend|default)\s*:\s*(.+)$/i);
-      out.push(m ? { question: m[1]!.trim(), recommended: m[2]!.trim() } : { question: item.trim(), recommended: "(no recommendation given)" });
+      out.push(m ? { question: m[1]!.trim(), recommended: m[2]!.trim() } : { question: item.trim(), recommended: NO_RECOMMENDATION });
     }
   }
   return out;
