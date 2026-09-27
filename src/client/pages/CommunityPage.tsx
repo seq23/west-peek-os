@@ -3,7 +3,7 @@ import { readableDate } from "../lib/dates";
 import { HowThisWorks } from "./HowThisWorks";
 import { AllocationRing } from "./AllocationRing";
 import { typeWord } from "@shared/community/typeWords";
-import { heroCounts, placedSlices, warmthSlices } from "@shared/community/populationShape";
+import { heroCounts, placedSlices, warmCount, warmthSlices } from "@shared/community/populationShape";
 
 /**
  * Community OS — the firm's read on the community as a population (P33, canon §14, §12A.4).
@@ -99,6 +99,7 @@ function PopulationPanel(): JSX.Element {
   const hero = heroCounts(p);
   const placed = placedSlices(p.by_type);
   const warmth = warmthSlices(p.touch_recency);
+  const warm = warmCount(p.touch_recency);
 
   return (
     <section className="card" data-testid="community-population">
@@ -180,19 +181,24 @@ function PopulationPanel(): JSX.Element {
 
             {/* The number that actually changes a decision. A community is not a headcount — it is
                 how many of those people have heard from the firm lately. The ring's total is
-                everyone (its geometry needs the sum of its slices); the warm count is the caption.
+                everyone (its geometry needs the sum of its slices); the warm count is the heading's.
                 Today that is a full grey ring with 0 warm, and that is the truth, not a bug. */}
             <section className="ring-host" data-testid="community-recency">
+              {/* The ring's centre is its total and the one ring offers no second centre number, so
+                  the count that matters — how many are warm — is the heading's, beside the title. */}
               <div className="home-section-head">
                 <h4>How warm it is</h4>
+                <span className="ring-head-count" data-testid="community-warm-count">
+                  {count(warm)} warm of {count(warmth.total)}
+                </span>
               </div>
               <AllocationRing
                 slices={warmth.slices}
                 total={warmth.total}
-                caption={`${count(warmth.warm)} warm`}
+                caption="people"
                 testid="community-warmth"
                 format={count}
-                ariaLabel={`${count(warmth.warm)} of ${count(warmth.total)} people are warm — heard from the firm in the last year`}
+                ariaLabel={`${count(warm)} of ${count(warmth.total)} people are warm — heard from the firm in the last year`}
               />
             </section>
           </div>

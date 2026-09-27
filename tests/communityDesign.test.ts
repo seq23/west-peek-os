@@ -9,6 +9,7 @@ import {
   WARMTH_ORDER,
   heroCounts,
   placedSlices,
+  warmCount,
   warmthSlices,
   type PopulationSlice,
 } from "../src/shared/community/populationShape";
@@ -193,6 +194,8 @@ describe("the chart pass: hero row + two rings", () => {
     expect(slices.map((s) => s.note)).toEqual(WARMTH_ORDER.map((w) => RECENCY_WORDS[w.key]));
     expect(warm).toBe(5);
     expect(total).toBe(10);
+    expect(warmCount([{ key: "recent", count: 2, pct: 20 }, { key: "fading", count: 3, pct: 30 }, { key: "cold", count: 5, pct: 50 }])).toBe(5);
+    expect(warmCount([])).toBe(0);
     // Today's truth: nobody warm, and the ring says so rather than faking it.
     const today = warmthSlices(LIVE_RECENCY);
     expect(today.warm).toBe(0);
@@ -222,6 +225,14 @@ describe("the chart pass: hero row + two rings", () => {
     expect(warmRing).toBeGreaterThan(placedRing);
     expect(CODE).toContain('testid="community-placed"');
     expect(CODE).toContain('testid="community-warmth"');
+    // The one ring shows its total at the centre and offers no second number there, so the warm
+    // count lives in the warmth ring's HEADING, next to the title, and the caption says what the
+    // centre number counts.
+    const warmHead = CODE.slice(warmRing, CODE.indexOf('testid="community-warmth"'));
+    expect(warmHead).toContain('data-testid="community-warm-count"');
+    expect(warmHead).toMatch(/\{count\(warm\)\} warm of \{count\(warmth\.total\)\}/);
+    expect(warmHead).toContain('caption="people"');
+    expect(CSS).toMatch(/\.ring-host \.ring-head-count \{/);
     // Counts, never dollars: both hosts pass a count format.
     expect(CODE.match(/format=\{count\}/g) ?? []).toHaveLength(2);
     // The honest line under the placed ring, and the last-read line.

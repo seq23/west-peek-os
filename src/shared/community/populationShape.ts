@@ -132,6 +132,11 @@ export function warmthSlices(touchRecency: PopulationSlice[]): WarmthShape {
   return { slices, warm, total };
 }
 
+/** recent + fading — the one number the warmth ring exists to say, derived once for tile and heading. */
+export function warmCount(touchRecency: PopulationSlice[]): number {
+  return warmthSlices(touchRecency).warm;
+}
+
 export interface HeroCounts {
   people: number;
   /** Sum of by_type minus the unplaced categories. */
@@ -156,7 +161,7 @@ export function heroCounts(pop: {
   return {
     people: pop.total,
     placeable: placedSlices(pop.by_type).placed,
-    warm: warmthSlices(pop.touch_recency).warm,
+    warm: warmCount(pop.touch_recency),
     prospects: count(pop.deal_flow, "yes"),
     notAsked: count(pop.deal_flow, "unknown"),
   };

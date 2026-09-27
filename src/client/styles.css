@@ -4617,6 +4617,9 @@ body {
   margin: var(--space-md) 0;
 }
 .ring-host { min-width: 0; }
+/* The warmth ring's centre is everyone (the one ring shows its total there), so the count that
+   matters — how many are warm — sits beside the heading, tabular, in the muted register. */
+.ring-host .ring-head-count { font-size: var(--text-sm); color: var(--wp-muted); font-variant-numeric: tabular-nums; }
 .ring-host .allocation-body { gap: var(--space-lg); margin: var(--space-sm) 0; }
 .ring-host .allocation-legend { flex: 1 1 12rem; }
 @media (max-width: 60rem) {
