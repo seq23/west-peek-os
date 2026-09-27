@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { shortDate } from "../../lib/dates";
+import { formedStamp } from "@shared/work/formedStamp";
 import type { MeResponse } from "../../lib/api";
 import { CARD_SOURCES } from "@shared/work/workCards";
 import { originOf, type OriginKind } from "@shared/work/origin";
@@ -288,6 +289,11 @@ export function WorkDesk({
               <StatusPill status={status} testid={`work-card-state-${c.id}`} />
               <span className="wc-line" data-testid={`work-card-status-${c.id}`}>
                 {status.line}
+              </span>
+              {/* WHEN IT WAS FORMED, date and time (27 Sep 2026): four cards from one hour must read apart at a glance. */}
+              <span className="wc-quiet" data-testid={`work-card-formed-row-${c.id}`}>
+                {" · "}
+                {formedStamp(c.created_at)}
               </span>
             </span>
           </div>
