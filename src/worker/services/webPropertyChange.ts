@@ -16,6 +16,7 @@ import type { SweepCard } from "./workSweep";
 import { hostsSentence, pagesHostsOf, readWebPropertyAsk, sitesOf, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
 import { approvedAnswers, askLines, decidedFromAsks, everyAskRecommended, readApprovalReply, readAsks, stripLateThreadPrefix, type Ask } from "../../shared/work/approvalReply";
 import { defaultReadReplyIntent, readReplyIntent, type ReplyIntent, type ReplyIntentReader } from "./replyIntent";
+import { isReplyToOurs } from "./emailThread";
 import { abandonRun } from "../ai/subscriptionSeats";
 import { alreadyTold, recordNotice, routedByFor, threadRootFor, type NoticeKind } from "./requestReply";
 import { doneReplyLaneFor, isOn, previewAllPartnerEmailsIsOn, rulesFor, ON_OFF_RULE_KEYS, type KindRule } from "./kindRules";
@@ -2682,17 +2683,30 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
    * message's subject for this partner — is CANCELLED first, with the superseding key on it.
    */
   const assignmentTitle = `From ${from}: ${strippedSubject(subject) || "(no subject)"}`;
-  const live = (
-    await ctx.env.WP_OS_DB.prepare(
-      `SELECT c.id FROM work_card c
-        WHERE c.state IN ('OPEN', 'IN_PROGRESS', 'BLOCKED')
-          AND lower(c.requested_by_email) = ?1
-          AND (lower(trim(c.title)) = lower(trim(?2))
-               OR (c.kind = 'WEB_PROPERTY_CHANGE' AND c.description LIKE ?3))`,
-    )
-      .bind(from, assignmentTitle, `%${strippedSubject(subject).slice(0, 80)}%`)
-      .all<{ id: string }>()
-  ).results ?? [];
+  /*
+   * A REPLY SUPERSEDES NOTHING (27 Sep 2026, learned in production). The re-read of Scooter's reply to
+   * the PLAN email — through the fixed door, so it steered wc_77f52b33 — first CANCELLED wc_77f52b33
+   * itself: this step used to match any live website card whose DESCRIPTION contained the subject,
+   * and the merge of the stray card had just written that stray's title ("From scooter@…: Porter:
+   * Porter: Plan ready") into the survivor's trail. A description is prose about the card, never its
+   * identity. So: a message that is a reply to one of our threads supersedes nothing (the card it is
+   * about is the card it steers), and the website card a request produced is found through the
+   * intake card it was handed on from — an exact title, never a LIKE.
+   */
+  const isReply = await isReplyToOurs(ctx.env, { from, subject, inReplyTo: headers.get("in-reply-to"), references: headers.get("references") });
+  const live = isReply
+    ? []
+    : ((
+        await ctx.env.WP_OS_DB.prepare(
+          `SELECT c.id FROM work_card c
+            WHERE c.state IN ('OPEN', 'IN_PROGRESS', 'BLOCKED')
+              AND lower(c.requested_by_email) = ?1
+              AND (lower(trim(c.title)) = lower(trim(?2))
+                   OR (c.kind = 'WEB_PROPERTY_CHANGE' AND c.assigned_from_card_id IN (SELECT i.id FROM work_card i WHERE lower(trim(i.title)) = lower(trim(?2)))))`,
+        )
+          .bind(from, assignmentTitle)
+          .all<{ id: string }>()
+      ).results ?? []);
   const superseded: string[] = [];
   for (const c of live) {
     await ctx.env.WP_OS_DB.prepare(
@@ -2726,7 +2740,7 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
    */
   const steered = card
     ? null
-    : ((await ctx.env.WP_OS_DB.prepare("SELECT work_card_id FROM inbound_message WHERE r2_key = ?1").bind(key).first<{ work_card_id: string | null }>())?.work_card_id ?? null);
+    : ((await ctx.env.WP_OS_DB.prepare("SELECT work_card_id FROM inbound_message WHERE r2_key = ?1 OR (?2 <> '' AND message_id = ?2) ORDER BY (r2_key = ?1) DESC, received_at DESC LIMIT 1").bind(key, msgId).first<{ work_card_id: string | null }>())?.work_card_id ?? null);
   await appendEvent(ctx.env, {
     eventType: "inbound_email.reingested",
     actorType: "firm_user",

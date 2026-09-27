@@ -146,6 +146,22 @@ export function comparableSubject(subject: string): string {
 }
 
 /**
+ * IS THIS MESSAGE A REPLY TO ONE OF OURS? (27 Sep 2026.) The same two doors `steerFromReply` uses —
+ * our `wpt_` token in the threading headers, or "Re: <a subject we sent this sender>" — answered
+ * without acting. Read by the reingest door before its "again supersedes" step: a reply supersedes
+ * nothing, because the card it is about is the card it steers.
+ */
+export async function isReplyToOurs(env: Env, message: { from: string | null; subject: string; inReplyTo: string | null; references: string | null }): Promise<boolean> {
+  if (threadTokensIn({ inReplyTo: message.inReplyTo, references: message.references }).length > 0) return true;
+  if (!/^\s*(?:re|fwd?|aw|sv)\s*:/i.test(message.subject)) return false;
+  const from = (message.from ?? "").trim().toLowerCase();
+  const bare = comparableSubject(message.subject);
+  if (!from || !bare) return false;
+  const recent = (await env.WP_OS_DB.prepare("SELECT subject FROM email_thread WHERE to_address = ?1 ORDER BY created_at DESC LIMIT 200").bind(from).all<{ subject: string }>()).results ?? [];
+  return recent.some((r) => comparableSubject(r.subject) === bare);
+}
+
+/**
  * Read an arriving message as a steer on the work it is replying to.
  *
  * ─── TWO FACTS, BOTH REQUIRED, AND NEITHER IS A SECRET ─────────────────────────────────────────
