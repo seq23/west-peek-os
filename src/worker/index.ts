@@ -123,6 +123,7 @@ import {
 } from "./services/aiRuns";
 import { handleGetRequestAttachment, handleGetWebPropertyChange, handleMaterialsAdded, handleResendPreview, handleReingestStoredEmail, handleSetWorkKindRule, handleWorkKindRules } from "./services/webPropertyChange";
 import { handleGetRequestMessage, handleGetRequestMessageRaw, handleGetWorkCardMessageTrail } from "./services/requestMessage";
+import { handleListMergeTargets, handleMergeWorkCardInto } from "./services/mergeCards";
 import { handleGetEmailPreviewPreference, handleSetEmailPreviewPreference } from "./services/kindRules";
 import {
   handleSubscriptionSeatClaim,
@@ -1155,6 +1156,11 @@ const router = new Router()
   .patch("/api/email-preview-preference", handleSetEmailPreviewPreference)
   .post("/api/work-cards/:id/look", handleCardLook)
   .post("/api/work-cards/:id/browser-permission", handleSetCardBrowserPermission)
+  // D/F merge (0242, 27 Sep 2026) — fold a stray card into the one carrying the work: its emails,
+  // thread and attachments move, its history reads in the survivor's trail, it stays CANCELLED.
+  // Partners only. `merge-targets` is the picker's list: open cards, same primary first, newest first.
+  .post("/api/work-cards/:id/merge-into", handleMergeWorkCardInto)
+  .get("/api/work-cards/:id/merge-targets", handleListMergeTargets)
   .post("/api/browser-tasks/:id/approve", handleApproveBrowserTask)
   .post("/api/browser-tasks/:id/run", handleRunBrowserTask)
   // P47 — Approval Centre context (canon §24.2).

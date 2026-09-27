@@ -141,7 +141,13 @@ export function WorkCardPage({
               Hold for me
             </button>
           )}
-          {finished && (
+          {/* A MERGED CARD DOES NOT REOPEN (0242): the work carries on in the survivor; open that. */}
+          {finished && card.merged_into_card_id && (
+            <a className="btn-strong" href={`#/work/${card.merged_into_card_id}`} data-testid="work-card-open-survivor">
+              Open the card it was merged into
+            </a>
+          )}
+          {finished && !card.merged_into_card_id && (
             <button type="button" disabled={busy} data-testid="work-card-reopen" onClick={() => void move(cardId, "OPEN")}>
               Reopen
             </button>

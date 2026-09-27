@@ -4,6 +4,7 @@ import { appendEvent } from "../events";
 import { actorFromIdentity, authorize } from "./authorize";
 import { getVisibleWorkCard } from "./workCards";
 import { readableMessage } from "./dealIntake";
+import { partnerByFirmUserId } from "../../shared/registry/partners";
 
 /**
  * THE EMAIL A WORK CARD CAME FROM, READ BACK (0226, 22 Sep 2026).
@@ -232,6 +233,8 @@ export interface MessageTrailEntry {
   cc?: string | null;
   /** True when this entry is an inbound message and can be opened whole on the card. */
   hasMessage: boolean;
+  /** 0242: set when the entry was recorded on a card since merged into this one. */
+  from_card?: string;
 }
 
 /**
@@ -249,20 +252,36 @@ export async function handleGetWorkCardMessageTrail(ctx: RouteContext): Promise<
   const card = await getVisibleWorkCard(ctx.env, identity, cardId);
   if (!card) return json({ error: "not_found" }, { status: 404 });
 
+  /*
+   * THE MERGED-IN CARDS READ AS THIS ONE (0242, 27 Sep 2026). A stray card folded into this one
+   * keeps its own notices and hand-offs on its own row — nothing is rewritten to say they were sent
+   * for a card they were not — but the survivor's trail reads them as its own, so the conversation
+   * runs from the original request, through the hand-off, to the replies that landed on the stray.
+   * One level: a card merged into a card merged into this one was already folded when it moved.
+   */
+  const merges = (
+    await ctx.env.WP_OS_DB.prepare("SELECT from_card_id, by, reason, created_at FROM work_card_merge WHERE into_card_id = ?1 ORDER BY created_at ASC")
+      .bind(cardId)
+      .all<{ from_card_id: string; by: string; reason: string | null; created_at: string }>()
+  ).results ?? [];
+  const cardIds = [cardId, ...merges.map((m) => m.from_card_id)];
+  const marks = cardIds.map((_, i) => `?${i + 1}`).join(", ");
+  const fromCard = (id: string): { from_card?: string } => (id === cardId ? {} : { from_card: id });
+
   const inbound = (
     await ctx.env.WP_OS_DB.prepare(
-      `SELECT from_address, subject, received_at FROM inbound_message WHERE work_card_id = ?1 ORDER BY received_at ASC`,
+      `SELECT work_card_id, from_address, subject, received_at FROM inbound_message WHERE work_card_id IN (${marks}) ORDER BY received_at ASC`,
     )
-      .bind(cardId)
-      .all<{ from_address: string; subject: string | null; received_at: string }>()
+      .bind(...cardIds)
+      .all<{ work_card_id: string; from_address: string; subject: string | null; received_at: string }>()
   ).results ?? [];
 
   const notices = (
     await ctx.env.WP_OS_DB.prepare(
-      `SELECT kind, cause, sent_to, sent, detail, sent_at FROM work_card_notice WHERE work_card_id = ?1 ORDER BY sent_at ASC`,
+      `SELECT work_card_id, kind, cause, sent_to, sent, detail, sent_at FROM work_card_notice WHERE work_card_id IN (${marks}) ORDER BY sent_at ASC`,
     )
-      .bind(cardId)
-      .all<{ kind: string; cause: string; sent_to: string; sent: number; detail: string | null; sent_at: string }>()
+      .bind(...cardIds)
+      .all<{ work_card_id: string; kind: string; cause: string; sent_to: string; sent: number; detail: string | null; sent_at: string }>()
   ).results ?? [];
 
   /*
@@ -273,15 +292,15 @@ export async function handleGetWorkCardMessageTrail(ctx: RouteContext): Promise<
    */
   const handOffs = (
     await ctx.env.WP_OS_DB.prepare(
-      `SELECT action, by_email, primary_email, secondary_email, via, sent, created_at FROM work_card_hand_off WHERE work_card_id = ?1 ORDER BY created_at ASC`,
+      `SELECT work_card_id, action, by_email, primary_email, secondary_email, via, sent, created_at FROM work_card_hand_off WHERE work_card_id IN (${marks}) ORDER BY created_at ASC`,
     )
-      .bind(cardId)
-      .all<{ action: string; by_email: string; primary_email: string; secondary_email: string; via: string; sent: number; created_at: string }>()
+      .bind(...cardIds)
+      .all<{ work_card_id: string; action: string; by_email: string; primary_email: string; secondary_email: string; via: string; sent: number; created_at: string }>()
   ).results ?? [];
 
   const trail: MessageTrailEntry[] = [
     ...handOffs.flatMap((h): MessageTrailEntry[] => [
-      { at: h.created_at, kind: h.action, who: h.by_email, what: h.primary_email, via: h.via, hasMessage: false },
+      { at: h.created_at, kind: h.action, who: h.by_email, what: h.primary_email, via: h.via, hasMessage: false, ...fromCard(h.work_card_id) },
       {
         at: h.created_at,
         kind: "HAND_OFF_EMAIL",
@@ -290,6 +309,7 @@ export async function handleGetWorkCardMessageTrail(ctx: RouteContext): Promise<
         // A hand-off and a claim copy the partner who held it; a take-back sends exactly one email.
         cc: h.action === "TAKE_BACK" ? null : h.secondary_email,
         hasMessage: false,
+        ...fromCard(h.work_card_id),
       },
     ]),
     ...inbound.map((m) => ({
@@ -298,6 +318,7 @@ export async function handleGetWorkCardMessageTrail(ctx: RouteContext): Promise<
       who: m.from_address,
       what: m.subject ? `emailed: ${m.subject}` : "emailed this in",
       hasMessage: true,
+      ...fromCard(m.work_card_id),
     })),
     ...notices.map((n) => ({
       at: n.sent_at,
@@ -305,6 +326,16 @@ export async function handleGetWorkCardMessageTrail(ctx: RouteContext): Promise<
       who: n.sent ? `told ${n.sent_to}` : `tried to tell ${n.sent_to}`,
       what: n.cause || (n.kind === "RECEIVED" ? "Acknowledged the ask, no changes made yet." : n.kind === "DONE" ? "Finished." : n.kind),
       hasMessage: false,
+      ...fromCard(n.work_card_id),
+    })),
+    // The merge itself is a fact in the conversation: from here the stray's history reads as this card's.
+    ...merges.map((m) => ({
+      at: m.created_at,
+      kind: "MERGED",
+      who: m.by === "system:script" ? "the merge script" : (partnerByFirmUserId(m.by)?.firstName ?? m.by),
+      what: `folded in card ${m.from_card_id}${m.reason ? `: ${m.reason}` : ""}`,
+      hasMessage: false,
+      from_card: m.from_card_id,
     })),
   ].sort((a, b) => a.at.localeCompare(b.at));
 
