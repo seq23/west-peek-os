@@ -1592,19 +1592,17 @@ async function answerMidFlowQuestion(env: Env, card: WebPropertyChangeCard, ques
       : "Good question — I don't know that one for certain, so I've passed it to Sequoia rather than guess. The work carries on with my recommendations in the meantime; nothing goes live until you approve the preview.";
   const sent = await sendQuestionAnswer(env, card, question, { ...routed, employeeName: routed.employeeName ?? PORTER_NAME, answer });
   if (!routed.confident || !routed.answer) {
-    const sequoia = PARTNERS.find((p) => p.firmUserId === "fu_sequoia_taylor");
-    if (sequoia) {
-      await notifyQuietly(env, {
-        kind: "MEETING",
-        severity: "INFO",
-        title: `A question from ${card.requested_by_email ?? "a partner"} Porter could not answer`,
-        body: `On "${card.title.slice(0, 80)}": "${question.slice(0, 300)}". Porter told them he would pass it to you; the work carries on with the recommendations.`,
-        objectType: "work_card",
-        objectId: card.id,
-        firmUserId: sequoia.firmUserId,
-        dedupeKey: `work_card:${card.id}:question:${question.slice(0, 40)}`,
-      });
-    }
+    // The partner who answers what an employee cannot — named by the registry, never typed here.
+    await notifyQuietly(env, {
+      kind: "MEETING",
+      severity: "INFO",
+      title: `A question from ${card.requested_by_email ?? "a partner"} Porter could not answer`,
+      body: `On "${card.title.slice(0, 80)}": "${question.slice(0, 300)}". Porter told them he would pass it to you; the work carries on with the recommendations.`,
+      objectType: "work_card",
+      objectId: card.id,
+      firmUserId: PREVIEW_PARTNER.firmUserId,
+      dedupeKey: `work_card:${card.id}:question:${question.slice(0, 40)}`,
+    });
   }
   await appendFinding(env, card.id, `${card.requested_by_email ?? "The partner"} asked: "${question.slice(0, 300)}" — ${routed.confident && routed.answer ? `answered by ${routed.employeeName}` : "Porter could not answer with confidence; Sequoia was told"}${sent.sent ? ", by email on the card's thread" : ` (the email did not go: ${sent.reason})`}. The work continues.`);
   await appendEvent(env, {
