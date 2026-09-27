@@ -14,6 +14,18 @@ import { RequesterNotes, WebPropertyChangePanel, useSiteChange } from "../WebPro
 import { BlockPanel } from "./BlockPanel";
 import { PreviewReadyPanel } from "./PreviewReadyPanel";
 import { handOffControl } from "./handOffControl";
+
+/**
+ * 0241: after a hand-off the block waits on the NEW primary. `block_who` is a first name in capitals
+ * ("SCOOTER"); when it is not her, the timeline says who is being asked instead of "asked you".
+ */
+export function blockWaitsOn(blockWho: string | null | undefined, myEmail: string): string | null {
+  const who = (blockWho ?? "").trim();
+  if (!who) return null;
+  const me = partnerByEmail(myEmail)?.firstName ?? "";
+  if (me && who.toLowerCase() === me.toLowerCase()) return null;
+  return who.charAt(0).toUpperCase() + who.slice(1).toLowerCase();
+}
 import { triesWords } from "./triesWords";
 import { LookForm, LookResults } from "./LooksPanel";
 import { NoteThread, SteerBox, canSteer } from "./NotesPanel";
@@ -269,6 +281,7 @@ export function CardExpanded({
     blocked_at: c.state === "BLOCKED" ? (c.block?.blockedAt ?? c.blocked_at ?? null) : null,
     block_stopped: c.block?.stopped ?? null,
     my_emails: [me.email],
+    block_who_name: blockWaitsOn(c.block_who, me.email),
   });
   const timeline: ReactNode = (
     <ul className="wc-timeline" data-testid={`work-card-timeline-${c.id}`}>

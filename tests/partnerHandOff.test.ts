@@ -28,6 +28,7 @@ import {
 } from "../src/shared/work/partnerOwnership";
 import { handOffEmail, trailLine } from "../src/shared/work/handOffEmail";
 import { ackMessage } from "../src/client/pages/NotificationsPage";
+import { trailSentence } from "../src/shared/work/cardTimeline";
 
 /**
  * HAND A WORK CARD TO THE OTHER PARTNER, WITH PRIMARY AND SECONDARY OWNERS (owner, 23 Sep 2026;
@@ -670,5 +671,42 @@ describe("unsure → Porter asks once; 'yes' performs it", () => {
     c = await card(id);
     expect(c.requested_by_email).toBe(SCOOTER);
     expect(sent).toHaveLength(1);
+  });
+});
+
+// ── THE CARD SHOWS THE HAND-OFF AND THE EMAIL IT SENT (owner, 27 Sep 2026) ──────────────────────
+
+describe("the card's trail shows the hand-off and the one email the new primary got", () => {
+  it("GET message-trail carries both, after her reply and before nothing else — the desk and the card page speak them", async () => {
+    const id = "wc_handoff_on_trail";
+    const { previewThread } = await seedCard(id);
+    sent.length = 0;
+    await replyFrom(SEQUOIA, "Scooter will take it from here", previewThread);
+    expect(sent).toHaveLength(1);
+    const c = await card(id);
+    expect(c.requested_by_email).toBe(SCOOTER);
+    expect(c.block_who).toBe("SCOOTER");
+
+    const res = await call(`/api/work-cards/${id}/message-trail`, SEQUOIA);
+    expect(res.status).toBe(200);
+    const trail = res.body.trail as Array<{ at: string; kind: string; who: string; what: string; via?: string; cc?: string | null }>;
+    const hand = trail.find((e) => e.kind === "HAND_OFF");
+    const mail = trail.find((e) => e.kind === "HAND_OFF_EMAIL");
+    expect(hand).toMatchObject({ who: SEQUOIA, what: SCOOTER, via: "REPLY" });
+    expect(mail).toMatchObject({ who: `told ${SCOOTER}`, cc: SEQUOIA });
+    // Ordered: the three notices she got, then the change of hands, then its email; nothing after.
+    const kinds = trail.map((e) => e.kind);
+    expect(kinds.slice(0, 3)).toEqual(["RECEIVED", "PLAN", "PREVIEW"]);
+    expect(kinds.indexOf("HAND_OFF")).toBeLessThan(kinds.indexOf("HAND_OFF_EMAIL"));
+    expect(kinds.indexOf("HAND_OFF_EMAIL")).toBe(kinds.length - 1);
+    // In words, as she reads it and as Scooter reads it.
+    expect(trailSentence(hand!, "Porter", [SEQUOIA])).toBe("You handed this to Scooter (by reply).");
+    expect(trailSentence(mail!, "Porter", [SEQUOIA])).toBe("Porter emailed Scooter where it stands, you in Cc.");
+    expect(trailSentence(mail!, "Porter", [SCOOTER])).toBe("Porter emailed you where it stands, Sequoia in Cc.");
+    // A take-back adds its own pair; the take-back email copies nobody.
+    await call(`/api/work-cards/${id}/take-back`, SEQUOIA, "POST");
+    const again = (await call(`/api/work-cards/${id}/message-trail`, SEQUOIA)).body.trail as Array<{ kind: string; cc?: string | null; who: string }>;
+    expect(again.filter((e) => e.kind === "TAKE_BACK")).toHaveLength(1);
+    expect(again.at(-1)).toMatchObject({ kind: "HAND_OFF_EMAIL", who: `told ${SEQUOIA}`, cc: null });
   });
 });

@@ -9,14 +9,36 @@
  */
 
 import { plainFailure } from "./liveStatus";
+import { partnerByEmail } from "../registry/partners";
 
 export interface TrailFact {
   at: string;
-  /** RECEIVED_EMAIL for an inbound message; otherwise a notice kind (RECEIVED, PLAN, PREVIEW, QUESTION, STUCK, DONE). */
+  /**
+   * RECEIVED_EMAIL for an inbound message; a notice kind (RECEIVED, PLAN, PREVIEW, QUESTION, STUCK,
+   * DONE); a change of hands (HAND_OFF, TAKE_BACK, CLAIM — 0241) or the one email it sent
+   * (HAND_OFF_EMAIL).
+   */
   kind: string;
-  /** "someone@…" for an inbound message; "told someone@…" / "tried to tell someone@…" for a notice. */
+  /**
+   * "someone@…" for an inbound message or a change of hands (the partner who acted); "told someone@…"
+   * / "tried to tell someone@…" for a notice or the hand-off email.
+   */
   who: string;
+  /** A change of hands: the new primary's address. The hand-off email: what it carried. */
   what: string;
+  /** A change of hands: the door (REPLY, NOTE, API, NOTIFICATION). */
+  via?: string;
+  /** The hand-off email: who was copied, or null. */
+  cc?: string | null;
+}
+
+const HAND_KINDS = new Set(["HAND_OFF", "TAKE_BACK", "CLAIM"]);
+const VIA_WORDS: Record<string, string> = { REPLY: "by reply", NOTE: "from a note on the card", API: "from the card", NOTIFICATION: "from the notification" };
+
+/** "You" for her own address, the partner's first name for the other, the address for anyone else. */
+function personWord(email: string, mine: ReadonlySet<string>, subject: boolean): string {
+  if (mine.has(email.toLowerCase())) return subject ? "You" : "you";
+  return partnerByEmail(email)?.firstName ?? email;
 }
 
 export interface TimelineInput {
@@ -33,6 +55,11 @@ export interface TimelineInput {
   block_stopped?: string | null;
   /** Lowercased addresses that are "you" — so an email she sent reads "You emailed". */
   my_emails?: readonly string[];
+  /**
+   * 0241: the partner a block waits on (`work_card.block_who`, a first name in capitals), when it is
+   * not her — after a hand-off the card stops and asks the NEW primary, and the line says so.
+   */
+  block_who_name?: string | null;
 }
 
 export interface TimelineEntry {
@@ -65,8 +92,19 @@ export function trailSentence(t: TrailFact, ownerName: string | null, myEmails: 
     const from = mine.has(t.who.toLowerCase()) ? "You" : t.who;
     return `${from} emailed ${ownerName ?? "the firm"}${t.what.startsWith("emailed: ") ? `: ${t.what.slice(9)}` : ""}.`;
   }
+  if (HAND_KINDS.has(t.kind)) {
+    const by = personWord(t.who, mine, true);
+    const via = t.via && VIA_WORDS[t.via] ? ` (${VIA_WORDS[t.via]})` : "";
+    if (t.kind === "TAKE_BACK") return `${by} took this back${via}.`;
+    if (t.kind === "CLAIM") return `${by} took responsibility for this${via}.`;
+    return `${by} handed this to ${personWord(t.what, mine, false)}${via}.`;
+  }
   const failed = t.who.startsWith("tried to tell");
   const to = t.who.replace(/^(tried to tell|told)\s+/, "");
+  if (t.kind === "HAND_OFF_EMAIL") {
+    const cc = t.cc ? `, ${personWord(t.cc, mine, false)} in Cc` : "";
+    return `${ownerName ?? "They"} emailed ${personWord(to, mine, false)} where it stands${cc}.${failed ? " The email did not send." : ""}`;
+  }
   const words = NOTICE_WORDS[t.kind] ?? "sent an update";
   const cause = t.kind === "STUCK" || t.kind === "QUESTION" ? readableCause(t.what) : null;
   const toOther = to && !mine.has(to.toLowerCase()) ? ` (to ${to})` : "";
@@ -86,7 +124,8 @@ export function cardTimeline(input: TimelineInput): TimelineEntry[] {
     out.push({ at: input.last_failure_at, text });
   }
   if (input.blocked_at) {
-    out.push({ at: input.blocked_at, text: `Stopped and asked you${input.block_stopped ? `: ${input.block_stopped}` : "."}`, now: true });
+    const asked = input.block_who_name ? `Stopped and asked ${input.block_who_name}` : "Stopped and asked you";
+    out.push({ at: input.blocked_at, text: `${asked}${input.block_stopped ? `: ${input.block_stopped}` : "."}`, now: true });
   }
   const run = input.run;
   if (run && run.status === "CLAIMED" && run.claimed_at) {

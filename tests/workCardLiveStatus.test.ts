@@ -8,6 +8,7 @@ import { plainTitle, shortAsk, siteStage, siteTries } from "../src/shared/work/s
 import { CARD_KINDS, readsPages } from "../src/shared/work/cardKinds";
 import { triesWords } from "../src/client/pages/work/triesWords";
 import { cardTimeline, trailSentence } from "../src/shared/work/cardTimeline";
+import { blockWaitsOn } from "../src/client/pages/work/CardExpanded";
 import { askedBy } from "../src/shared/work/origin";
 import { handleGetWebPropertyChange } from "../src/worker/services/webPropertyChange";
 import { APPROVED_REPLY, CHANGES_REPLY_PREFIX, MATERIALS_ADDED_PHRASE, PUBLISH_REPLY } from "../src/shared/work/previewReplies";
@@ -325,6 +326,36 @@ describe("the timeline and who asked, in words", () => {
       "Try 2 started on your Mac.",
     ]);
     expect(out[3]!.now).toBe(true);
+  });
+
+  it("a change of hands and the one email it sent are on the trail (27 Sep 2026: 'I don't see the card displaying the handoff and the new email it sent to Scooter')", () => {
+    const ME_EMAILS = ["sequoia@westpeek.ventures"];
+    // The production row on wc_c9e36e8b: Sequoia handed it to Scooter by reply, Scooter got one email, Sequoia in Cc.
+    expect(trailSentence({ at: "t", kind: "HAND_OFF", who: "sequoia@westpeek.ventures", what: "scooter@westpeek.ventures", via: "REPLY" }, "Porter", ME_EMAILS)).toBe("You handed this to Scooter (by reply).");
+    expect(trailSentence({ at: "t", kind: "HAND_OFF_EMAIL", who: "told scooter@westpeek.ventures", what: "where it stands", cc: "sequoia@westpeek.ventures" }, "Porter", ME_EMAILS)).toBe(
+      "Porter emailed Scooter where it stands, you in Cc.",
+    );
+    // Seen from Scooter's seat, the same two facts.
+    expect(trailSentence({ at: "t", kind: "HAND_OFF", who: "sequoia@westpeek.ventures", what: "scooter@westpeek.ventures", via: "REPLY" }, "Porter", ["scooter@westpeek.ventures"])).toBe("Sequoia handed this to you (by reply).");
+    expect(trailSentence({ at: "t", kind: "HAND_OFF_EMAIL", who: "told scooter@westpeek.ventures", what: "where it stands", cc: "sequoia@westpeek.ventures" }, "Porter", ["scooter@westpeek.ventures"])).toBe(
+      "Porter emailed you where it stands, Sequoia in Cc.",
+    );
+    // A take-back sends exactly one email, nobody copied; a claim comes from the notification; a failed send says so.
+    expect(trailSentence({ at: "t", kind: "TAKE_BACK", who: "sequoia@westpeek.ventures", what: "sequoia@westpeek.ventures", via: "API" }, "Porter", ME_EMAILS)).toBe("You took this back (from the card).");
+    expect(trailSentence({ at: "t", kind: "HAND_OFF_EMAIL", who: "told sequoia@westpeek.ventures", what: "where it stands", cc: null }, "Porter", ME_EMAILS)).toBe("Porter emailed you where it stands.");
+    expect(trailSentence({ at: "t", kind: "CLAIM", who: "scooter@westpeek.ventures", what: "scooter@westpeek.ventures", via: "NOTIFICATION" }, "Porter", ME_EMAILS)).toBe("Scooter took responsibility for this (from the notification).");
+    expect(trailSentence({ at: "t", kind: "HAND_OFF_EMAIL", who: "tried to tell scooter@westpeek.ventures", what: "where it stands", cc: "sequoia@westpeek.ventures" }, "Porter", ME_EMAILS)).toBe(
+      "Porter emailed Scooter where it stands, you in Cc. The email did not send.",
+    );
+  });
+
+  it("after a hand-off the block waits on the new primary, and the timeline says who — never 'asked you' for a stop that is Scooter's", () => {
+    const base = { created_at: "2026-09-23T16:55:00Z", owner_name: "Porter", asked_by: "You", trail: [], blocked_at: "2026-09-23T19:48:18Z", block_stopped: "Preview ready.", my_emails: ["sequoia@westpeek.ventures"] };
+    expect(cardTimeline({ ...base, block_who_name: "Scooter" }).map((e) => e.text)).toContain("Stopped and asked Scooter: Preview ready.");
+    expect(cardTimeline({ ...base, block_who_name: null }).map((e) => e.text)).toContain("Stopped and asked you: Preview ready.");
+    expect(blockWaitsOn("SCOOTER", "sequoia@westpeek.ventures")).toBe("Scooter");
+    expect(blockWaitsOn("SEQUOIA", "sequoia@westpeek.ventures")).toBeNull();
+    expect(blockWaitsOn(null, "sequoia@westpeek.ventures")).toBeNull();
   });
 
   it("names who actually asked — never 'a hand-off'", () => {
