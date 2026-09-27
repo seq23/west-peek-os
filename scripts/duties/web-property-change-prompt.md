@@ -102,16 +102,23 @@ tagline to X") is a whole request.
      something the RUNBOOK forbids, BLOCK with `RUNBOOK_FORBIDS: "<the RUNBOOK's own words>"`
      and what would be allowed instead.
    - **A form that collects data** (a newsletter signup, a contact box, an application): when the
-     partner does not say where the data should land, the DESTINATION IS A GOOGLE SHEET — a
-     recorded default (Sequoia, 21 Sep 2026), not an ask. The plan says: rows append to a Google
-     Sheet named "<Property> — <Form>" through the gsc-bot service account (`GSC_SERVICE_ACCOUNT_JSON`
-     as a Pages/Worker secret, the sheet id as an env var); check the account's delegated scopes
-     first — if it cannot create or write the sheet, the sheet's creation is a NAMED STOP with the
-     exact paste-ready step for the owner — AND every submission also goes through the repo's
-     existing form path (read `validate:forms` and `functions/api/lead.js` in join-west-peek-main:
-     forms there email scooter@ via Resend) so no signup is ever lost while the sheet wiring is
-     pending. The repo's form validator must cover the new form (its pass count goes UP). The only
-     thing that may be the partner's call is a destination they name instead.
+     partner does not say where the data should land, the DESTINATION IS THE MASTER NETWORK SHEET —
+     the `contacts` tab of "West Peek Network OS — Production" — a recorded default (Sequoia,
+     22 Sep 2026: "make all forms automatically default to adding names to our master network
+     sheet"), not an ask. It REPLACES the 21 Sep default of a new per-form Google Sheet: never plan
+     a new sheet, never touch gsc-bot or `GSC_SERVICE_ACCOUNT_JSON` for a form, never a NAMED STOP
+     over a sheet — the wiring already exists and is live. The plan says, and the build does:
+       · the form posts to `/api/lead` with a hidden `lead_type` naming the form (the host
+         decides which property it is; `functions/api/lead.js` in join-west-peek-main emails
+         scooter@ via Resend AND posts community and ventures submissions to the Network OS door
+         `/api/intake/site-form`, which writes the `contacts` tab, deduped by email);
+       · the form is added to `shared/forms-register.json` with destination `sheet` and the
+         `via` the register already uses for its siblings;
+       · `validate:forms` passes with rule FORM-10 covering the new form (its pass count goes UP).
+     Productions forms are a SETTLED exclusion (Sequoia, 22 Sep 2026): they email only and are
+     registered `excluded_not_ours`; never wire one to the sheet and never raise it as a gap. The
+     only thing that may be the partner's call is a destination they name instead — and that goes
+     in the register as a dated row, never a note in a reply.
    - A request you cannot act on at all (not a change to a web property; a different property
      than the one named on the card) → BLOCK with one sentence saying so and what would work.
    - Something the request references that did not arrive (it says "attached" and ATTACHMENTS is
