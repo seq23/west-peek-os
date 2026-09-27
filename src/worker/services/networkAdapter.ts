@@ -23,8 +23,16 @@ import { openIntoFunnel, type FunnelEntry } from "./dealIntake";
  *   live call fails closed as UNPROVEN — CREDENTIAL/INTEGRATION GATE.
  * - Inbound is READ-ONLY and idempotent by delivery key: a duplicate delivery is
  *   recorded as DUPLICATE_IGNORED and changes nothing.
- * - A divergence between an external value and the mapped internal value NEVER
- *   overwrites: it opens a network_conflict plus a resolver WORK CARD for a human.
+ * - A change to a record nobody in West Peek OS has linked is Network OS editing its
+ *   OWN record: it is applied to the snapshot, receipted APPLIED, and no card opens.
+ *   A conflict exists ONLY when the mapping is linked to a `person` and the incoming
+ *   value differs from that person's OWN field (LINKED_FIELDS); bookkeeping fields never
+ *   conflict. A real conflict still updates the snapshot (it is an observation), never
+ *   touches the person, and opens a network_conflict plus a resolver WORK CARD for a
+ *   human. Until 27 Sep 2026 the detector compared each field against the PREVIOUS
+ *   SNAPSHOT — Network OS's own earlier value — so every edit Network OS made to itself
+ *   opened a HIGH card and froze the record; two such cards sat open on a contact West
+ *   Peek OS had never touched.
  * - Outbound writeback is the MP-reserved `network_os.writeback`: it requires an
  *   approved receipt (consumed on use) and always leaves an append-only receipt.
  * - Adapter failure degrades to read-only: cursors record DEGRADED_READ_ONLY /
@@ -44,6 +52,43 @@ export class NetworkAdapterError extends Error {
 
 /** Resources Network OS owns. WP OS never becomes their source of truth. */
 export const NETWORK_RESOURCES = ["contact", "relationship", "touch", "gmail_thread"] as const;
+
+/**
+ * The ONLY fields that can conflict: a Network OS contact field ↔ the linked `person` column it
+ * mirrors. Anything else Network OS sends (status, tags, relationship_owner, context_summary…) is
+ * Network OS's own business and is observed, never disputed.
+ */
+export const LINKED_FIELDS: Readonly<Record<string, "full_name" | "email" | "organization">> = {
+  full_name: "full_name",
+  email: "email",
+  company: "organization",
+};
+
+/**
+ * Timestamps and counters the far end moves on its own. Named so the self-heal can say WHY an old
+ * conflict on one of them was never a conflict; the detector never compares them because they are
+ * not in LINKED_FIELDS in the first place.
+ */
+export const BOOKKEEPING_FIELDS: ReadonlySet<string> = new Set([
+  "updated_at", "created_at", "last_seen", "last_seen_at", "last_touch_at", "last_contacted_at", "synced_at", "modified_at", "touch_count",
+]);
+
+/** Whether a conflict on this field could exist under the boundary law above. */
+export function isDisputableField(field: string): boolean {
+  return Object.prototype.hasOwnProperty.call(LINKED_FIELDS, field) && !BOOKKEEPING_FIELDS.has(field);
+}
+
+/**
+ * Two values disagree only when BOTH say something and say different things. An empty external
+ * value is Network OS not knowing, not Network OS contradicting; whitespace and email case are
+ * not opinions.
+ */
+function valuesDiffer(field: string, external: string | null | undefined, internal: string | null | undefined): boolean {
+  const a = (external ?? "").trim();
+  const b = (internal ?? "").trim();
+  if (a === "" || b === "") return false;
+  return field === "email" ? a.toLowerCase() !== b.toLowerCase() : a !== b;
+}
 
 /**
  * How many records one pull applies. Sized for the CPU budget rather than for speed: each record
@@ -301,6 +346,10 @@ export async function pullResource(
   const contract = await activeContract(env, firmScope);
   if (!contract) throw new NetworkAdapterError(409, "no_active_contract", "declare and activate an adapter contract before syncing");
 
+  // Conflicts the old detector opened on Network OS's own edits close themselves here, before
+  // anything is pulled, so a deploy of the honest detector is also the end of the bogus cards.
+  await healConflictsThatNeverWere(env, identity, resource, firmScope);
+
   if (!client) {
     // No configured client: fail closed, stay read-only, and say so on the cursor.
     if (!opts.isFixture) {
@@ -436,25 +485,51 @@ export async function pullResource(
       .bind(resource, record.external_id, firmScope)
       .first<{ id: string; snapshot_json: string; internal_type: string | null; internal_id: string | null }>();
 
+    /*
+     * WHAT A CONFLICT IS. Network OS owns this record; a change to it is Network OS editing its
+     * own data, and the snapshot here is an OBSERVATION of that, so it is always updated. The
+     * only thing West Peek OS can disagree with is a `person` row it has LINKED to the mapping —
+     * and only on the fields the two actually share (LINKED_FIELDS). An unlinked mapping has no
+     * West Peek opinion to defend; a bookkeeping timestamp is not an opinion at all.
+     */
     let conflicted = false;
-    if (existing) {
-      const previous = JSON.parse(existing.snapshot_json) as Record<string, string | null>;
-      for (const [field, value] of Object.entries(record.fields)) {
-        const internalValue = previous[field];
-        // A divergence from what WP OS last observed opens a resolver card. It is
-        // never applied over the internal value.
-        if (internalValue !== undefined && internalValue !== value) {
+    if (existing && existing.internal_type === "person" && existing.internal_id) {
+      const person = await env.WP_OS_DB.prepare("SELECT full_name, email, organization FROM person WHERE id = ?1")
+        .bind(existing.internal_id)
+        .first<{ full_name: string; email: string | null; organization: string | null }>();
+      if (person) {
+        for (const [field, column] of Object.entries(LINKED_FIELDS)) {
+          if (!(field in record.fields) || !isDisputableField(field)) continue;
+          const externalValue = record.fields[field] ?? null;
+          const internalValue = person[column] ?? null;
+          if (!valuesDiffer(field, externalValue, internalValue)) continue;
           conflicted = true;
           await openConflict(env, identity, {
             resource,
             external_id: record.external_id,
             field,
-            external_value: value,
+            external_value: externalValue,
             internal_value: internalValue,
             firm_scope: firmScope,
           });
         }
       }
+    }
+
+    // The observation is recorded either way. The person is never touched here: on a real
+    // conflict the resolver card decides which way the linked field goes.
+    if (existing) {
+      await env.WP_OS_DB.prepare(
+        "UPDATE network_external_mapping SET snapshot_json = ?2, identity_key = ?3, last_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
+      )
+        .bind(existing.id, JSON.stringify(record.fields), record.identity_key)
+        .run();
+    } else {
+      await env.WP_OS_DB.prepare(
+        "INSERT INTO network_external_mapping (id, resource, external_id, identity_key, snapshot_json, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+      )
+        .bind(`nem_${crypto.randomUUID()}`, resource, record.external_id, record.identity_key, JSON.stringify(record.fields), firmScope)
+        .run();
     }
 
     if (conflicted) {
@@ -473,19 +548,6 @@ export async function pullResource(
       continue;
     }
 
-    if (existing) {
-      await env.WP_OS_DB.prepare(
-        "UPDATE network_external_mapping SET snapshot_json = ?2, identity_key = ?3, last_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
-      )
-        .bind(existing.id, JSON.stringify(record.fields), record.identity_key)
-        .run();
-    } else {
-      await env.WP_OS_DB.prepare(
-        "INSERT INTO network_external_mapping (id, resource, external_id, identity_key, snapshot_json, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-      )
-        .bind(`nem_${crypto.randomUUID()}`, resource, record.external_id, record.identity_key, JSON.stringify(record.fields), firmScope)
-        .run();
-    }
     applied += 1;
     await recordReceipt(env, {
       direction: "INBOUND",
@@ -599,6 +661,91 @@ async function openConflict(
   return id;
 }
 
+/**
+ * The external value becomes the one West Peek OS carries: on the snapshot (an observation) and,
+ * when the mapping is linked and the field is one the two share, on the person's own column.
+ */
+async function adoptExternal(env: Env, conflict: { resource: string; external_id: string; field: string; external_value: string | null; firm_scope: string }): Promise<void> {
+  const mapping = await env.WP_OS_DB.prepare("SELECT * FROM network_external_mapping WHERE resource = ?1 AND external_id = ?2 AND firm_scope = ?3")
+    .bind(conflict.resource, conflict.external_id, conflict.firm_scope)
+    .first<{ id: string; snapshot_json: string; internal_type: string | null; internal_id: string | null }>();
+  if (!mapping) return;
+  const snapshot = JSON.parse(mapping.snapshot_json) as Record<string, string | null>;
+  snapshot[conflict.field] = conflict.external_value;
+  await env.WP_OS_DB.prepare("UPDATE network_external_mapping SET snapshot_json = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1")
+    .bind(mapping.id, JSON.stringify(snapshot))
+    .run();
+  const column = LINKED_FIELDS[conflict.field];
+  if (column && mapping.internal_type === "person" && mapping.internal_id) {
+    // The column is one of three fixed names from LINKED_FIELDS, never the caller's string.
+    await env.WP_OS_DB.prepare(`UPDATE person SET ${column} = ?2 WHERE id = ?1`).bind(mapping.internal_id, conflict.external_value).run();
+  }
+}
+
+/**
+ * CONFLICTS THAT NEVER WERE close themselves.
+ *
+ * Live, 27 Sep 2026: two OPEN conflicts on one contact (`status` archived←active, `updated_at`),
+ * each with a HIGH work card, on a mapping nothing in West Peek OS had ever linked — Network OS
+ * archived its own contact and the old detector called that a disagreement. Under the law above
+ * neither can exist: an OPEN conflict whose mapping is unlinked, or whose field is not one the
+ * detector compares (bookkeeping included), is resolved KEEP_EXTERNAL with a note that says so,
+ * its snapshot brought up to date, and its card finished as NO_ACTION_NEEDED — the same mark the
+ * intake classifier leaves on a card that needed nobody. Runs at the start of every pull, so the
+ * next sync tick after deploy is the one that clears them; on a clean firm it is one SELECT.
+ */
+export const NOT_A_CONFLICT_NOTE = "Not a conflict: Network OS changed its own record; nothing in West Peek OS disagreed";
+
+export async function healConflictsThatNeverWere(env: Env, identity: FirmUserIdentity, resource: string, firmScope: string): Promise<number> {
+  const rows = await env.WP_OS_DB.prepare(
+    `SELECT c.id, c.resource, c.external_id, c.field, c.external_value, c.work_card_id, c.firm_scope,
+            m.internal_type AS internal_type, m.internal_id AS internal_id
+       FROM network_conflict c
+       LEFT JOIN network_external_mapping m
+         ON m.resource = c.resource AND m.external_id = c.external_id AND m.firm_scope = c.firm_scope
+      WHERE c.status = 'OPEN' AND c.resource = ?1 AND c.firm_scope = ?2`,
+  )
+    .bind(resource, firmScope)
+    .all<{ id: string; resource: string; external_id: string; field: string; external_value: string | null; work_card_id: string | null; firm_scope: string; internal_type: string | null; internal_id: string | null }>();
+
+  let healed = 0;
+  for (const c of rows.results ?? []) {
+    const unlinked = !(c.internal_type === "person" && c.internal_id);
+    const undisputable = !isDisputableField(c.field);
+    if (!unlinked && !undisputable) continue;
+    const why = unlinked ? "the record is not linked to anyone in West Peek OS" : BOOKKEEPING_FIELDS.has(c.field) ? `"${c.field}" is bookkeeping Network OS keeps for itself` : `"${c.field}" is not a field West Peek OS holds an opinion on`;
+
+    await env.WP_OS_DB.prepare(
+      "UPDATE network_conflict SET status = 'RESOLVED', resolution = 'KEEP_EXTERNAL', resolution_note = ?2, resolved_by = ?3, resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1 AND status = 'OPEN'",
+    )
+      .bind(c.id, `${NOT_A_CONFLICT_NOTE} (${why}).`, identity.id)
+      .run();
+    await adoptExternal(env, c);
+    if (c.work_card_id) {
+      await env.WP_OS_DB.prepare(
+        `UPDATE work_card
+            SET state = 'DONE', auto_resolution = 'NO_ACTION_NEEDED',
+                description = COALESCE(description, '') || ?2,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          WHERE id = ?1 AND state NOT IN ('DONE', 'CANCELLED')`,
+      )
+        .bind(c.work_card_id, `\n\nClosed by the sync on ${new Date().toISOString().slice(0, 10)}: ${NOT_A_CONFLICT_NOTE} — ${why}.`)
+        .run();
+    }
+    await appendEvent(env, {
+      eventType: "network.conflict_self_healed",
+      actorType: "system",
+      actorId: identity.id,
+      objectType: "network_conflict",
+      objectId: c.id,
+      firmScope: c.firm_scope,
+      payload: { resource: c.resource, external_id: c.external_id, field: c.field, work_card_id: c.work_card_id, why: unlinked ? "unlinked_mapping" : "undisputable_field" },
+    });
+    healed += 1;
+  }
+  return healed;
+}
+
 export async function resolveConflict(
   env: Env,
   actor: Actor,
@@ -626,20 +773,12 @@ export async function resolveConflict(
     .bind(conflictId, resolution, note ?? null, actor.firmUserId!)
     .run();
 
-  // KEEP_EXTERNAL is the only path that updates the observed snapshot, and even
-  // then it only records what Network OS (the owner) says.
-  if (resolution === "KEEP_EXTERNAL") {
-    const mapping = await env.WP_OS_DB.prepare("SELECT * FROM network_external_mapping WHERE resource = ?1 AND external_id = ?2 AND firm_scope = ?3")
-      .bind(conflict.resource, conflict.external_id, conflict.firm_scope)
-      .first<{ id: string; snapshot_json: string }>();
-    if (mapping) {
-      const snapshot = JSON.parse(mapping.snapshot_json) as Record<string, string | null>;
-      snapshot[conflict.field] = conflict.external_value;
-      await env.WP_OS_DB.prepare("UPDATE network_external_mapping SET snapshot_json = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1")
-        .bind(mapping.id, JSON.stringify(snapshot))
-        .run();
-    }
-  }
+  // KEEP_EXTERNAL adopts what Network OS (the owner) says onto the LINKED PERSON's field — the
+  // record West Peek OS actually holds an opinion in. The snapshot already carries the external
+  // value (it was observed when the conflict opened); `adoptExternal` re-states it so a conflict
+  // seeded before that rule holds too. KEEP_INTERNAL leaves the person as they are and the
+  // snapshot as observed: the disagreement is closed, not the observation rewritten.
+  if (resolution === "KEEP_EXTERNAL") await adoptExternal(env, conflict);
   await appendEvent(env, {
     eventType: "network.conflict_resolved",
     actorType: "firm_user",

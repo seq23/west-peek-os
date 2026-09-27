@@ -1,21 +1,21 @@
 import type { PageGuide } from "./types";
 
-/** Community — the Network OS band with its one orange button, the population read, introductions, signals, members, the mix. */
+/**
+ * Community — the Network OS band with its one orange button and the door for someone new, and the
+ * population read. One roster (27 Sep 2026): the member form, the members list and the mix that
+ * wrote to a local table are gone, and Introductions is retired from this page while the operator
+ * decides where it belongs.
+ */
 export const communityGuide: PageGuide = {
   navKey: "community",
   title: "Community",
   purpose:
-    "The people around the firm and what the firm does about them — the community as a population, who should meet whom, what each one needs or can help with, and the members. Network OS owns who is a member.",
-  youCan: ["See suggested introductions and approve the ones worth making", "Record that both sides said yes", "Note what someone needs or can help with", "Add or update a member"],
-  sources: ["src/client/pages/CommunityPage.tsx", "src/client/pages/IntroductionsPage.tsx"],
+    "The community as a population — how many people, what kinds, and how warm it is — read from Network OS, which owns who is a member.",
+  youCan: ["See the shape of the community and how warm it is", "Open Network OS, where the people themselves are added and edited", "Capture someone new so West Peek OS proposes them to Network OS"],
+  sources: ["src/client/pages/CommunityPage.tsx"],
   bands: [
-    { name: "Network OS", testid: "community-network-os", shows: "the reminder that the people live in Network OS, with the link." },
-    { name: "What the community looks like", testid: "community-population", shows: "cohorts by segment and engagement, and how warm it is — read from Network OS." },
-    { name: "Introductions", testid: "run-matching", shows: "suggested pairs where one person's need meets another's experience, each waiting on you." },
-    { name: "What we know about people", testid: "signal-body", shows: "what someone is looking for or can help with, and how long each note has left." },
-    { name: "Add or update a member", testid: "community-form", shows: "name, type, status, segment and engagement." },
-    { name: "Members", testid: "community-list", shows: "everyone on the local roster." },
-    { name: "Who is in the room", testid: "community-mix", shows: "founders, operators, investors, alumni and members as bars — press one to filter." },
+    { name: "Network OS", testid: "community-network-os", shows: "the reminder that the people live in Network OS, the link there, and the door for someone new." },
+    { name: "What the community looks like", testid: "community-population", shows: "how many people, each kind as a tile with its share, and how warm it is — read from Network OS." },
   ],
   acts: [
     {
@@ -26,31 +26,29 @@ export const communityGuide: PageGuide = {
       does: "opens Network OS in a new tab — where the people themselves are added and edited.",
       then: "It is a separate sign-in, so this page stays open alongside it; nothing here changes.",
     },
-    { label: "Look for matches", testid: "run-matching", does: "asks for suggested introductions from the signals on file." },
-    { label: "Worth doing — ask them both", testid: "approve-match-", primary: true, does: "approves a suggestion.", then: "Nothing is sent; you ask each side yourself and record their yes." },
-    { label: "said yes", does: "records one side's consent — one button per person." },
-    { label: "I made the introduction", testid: "connected-", primary: true, does: "records that the introduction was made, against both people." },
-    { label: "Note it", testid: "add-signal", does: "records what someone needs or can help with; it expires on its own." },
-    { label: "Save member", testid: "community-save", primary: true, does: "adds a member or updates the one with that name." },
+    {
+      label: "Capture them",
+      testid: "community-capture-link",
+      band: "Network OS",
+      does: "opens Capture, where someone you just met is written down.",
+      then: "West Peek OS proposes them to Network OS; nothing is added on this page.",
+    },
   ],
   auto: [
     { what: "The community is read from Network OS", when: "on its schedule", job: "network_sync" },
-    { what: "A signal expires about four months after it was noted", when: "on its date" },
   ],
   elsewhere: [
+    { page: "capture", why: "writing down someone new — West Peek OS proposes them to Network OS." },
     { page: "network", why: "what is synced from Network OS and where the two disagree." },
     { page: "rooms", why: "the gatherings these people are invited to." },
   ],
   walkthroughs: [
     {
-      scenario: "Who should meet whom",
+      scenario: "Where the people live",
       steps: [
-        { do: "Under **What we know about people**, press **Note it** for what someone needs or can help with", then: "the signal is on file and expires on its own." },
-        { do: "Under **Introductions**, press **Look for matches**", then: "suggested introductions come from the signals on file." },
-        { do: "Press **Worth doing — ask them both**", then: "the suggestion is approved.", not: "nothing is sent — you ask each side yourself." },
-        { do: "Press **said yes** for each person as they agree, then **I made the introduction**", then: "consent is recorded per person, and the introduction against both." },
-        { do: "Under **Add or update a member**, press **Save member**", then: "the member is added or updated; who is a member is owned by Network OS." },
-        { do: "To add or edit the person themselves, press **Open Network OS ↗** in the **Network OS** band", then: "Network OS opens in a new tab beside this page.", not: "nothing on this page is edited — it is West Peek's read on them, never the record." },
+        { do: "Read **What the community looks like** — the count, the kinds, and how warm it is", then: "you know what the room is made of before you convene one." },
+        { do: "To look at, add or edit a person, press **Open Network OS ↗** in the **Network OS** band", then: "Network OS opens in a new tab beside this page.", not: "nothing on this page is edited — it is West Peek's read on them, never the record." },
+        { do: "Met someone new? Press **Capture them** in the **Network OS** band", then: "Capture opens and, once written down, West Peek OS proposes them to Network OS.", not: "no member is added here — there is no roster on this page." },
       ],
     },
   ],
