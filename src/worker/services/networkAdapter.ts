@@ -22,7 +22,14 @@ import { openIntoFunnel, type FunnelEntry } from "./dealIntake";
  *   injected into these functions (`NetworkOsClient`); with none configured every
  *   live call fails closed as UNPROVEN — CREDENTIAL/INTEGRATION GATE.
  * - Inbound is READ-ONLY and idempotent by delivery key: a duplicate delivery is
- *   recorded as DUPLICATE_IGNORED and changes nothing.
+ *   recorded as DUPLICATE_IGNORED and changes nothing. The ONE inbound write is the
+ *   LINK-BACK of a person West Peek OS itself proposed (`linkBackProposedPerson`): when
+ *   a contact arrives whose email — or, with no email, whose exact name plus a
+ *   `network.person_proposed` event — matches exactly one unlinked local person, the
+ *   mapping is linked to that person, the person's BLANK email/organization are filled
+ *   from the snapshot, and the captures resolved to them flip to NETWORK_OS. Never a
+ *   Network OS record, never an overwrite of a value West Peek OS holds, and never a
+ *   guess: two candidates link nothing and write `network.person_link_ambiguous`.
  * - A change to a record nobody in West Peek OS has linked is Network OS editing its
  *   OWN record: it is applied to the snapshot, receipted APPLIED, and no card opens.
  *   A conflict exists ONLY when the mapping is linked to a `person` and the incoming
@@ -532,6 +539,18 @@ export async function pullResource(
         .run();
     }
 
+    // THE ROUND TRIP CLOSES HERE. A contact nobody has linked may be a person this firm proposed
+    // and Network OS has now accepted; one bounded query per fresh record finds them. Outside the
+    // counts on purpose: the record was applied whether or not it linked anybody.
+    if (resource === "contact" && !(existing?.internal_type === "person" && existing?.internal_id)) {
+      await linkBackProposedPerson(env, identity, {
+        external_id: record.external_id,
+        identity_key: record.identity_key,
+        fields: record.fields,
+        firm_scope: firmScope,
+      });
+    }
+
     if (conflicted) {
       conflicts += 1;
       await recordReceipt(env, {
@@ -659,6 +678,98 @@ async function openConflict(
     payload: { resource: input.resource, external_id: input.external_id, field: input.field, work_card_id: card.id },
   });
   return id;
+}
+
+/**
+ * THE LINK-BACK: the one inbound write, and the half of the round trip that was never built.
+ *
+ * Production, 27 Sep 2026: 4,715 synced contacts, 0 of them linked to a local person, and nothing
+ * anywhere that ever set `internal_id`. A person the firm met, resolved, and proposed to Network OS
+ * would be accepted there, arrive here as a contact on the next sync — and sit as a second,
+ * unrelated record for ever, while the capture kept saying LOCAL_UNRESOLVED.
+ *
+ * Runs once per fresh contact whose mapping is not linked. The match is by the email the contact
+ * carries (or its identity key when that is the email), against every unlinked local person in the
+ * firm on that email; with NO email, by the exact name, and only against a person West Peek OS
+ * itself proposed (a `network.person_proposed` event exists) — a name alone never claims a record.
+ *
+ * EXACTLY ONE candidate links: the mapping takes the person, the person's BLANK email and
+ * organization are filled from the snapshot (a value already there is never overwritten — that is
+ * what the conflict detector is for), every capture resolved to them flips to NETWORK_OS, and
+ * `network.person_linked` is written. MORE THAN ONE links nothing and writes
+ * `network.person_link_ambiguous` naming the candidates: a wrong link is a silent merge of two
+ * people, and no sync is allowed to guess.
+ */
+export async function linkBackProposedPerson(
+  env: Env,
+  identity: FirmUserIdentity,
+  input: { external_id: string; identity_key: string; fields: Record<string, string | null>; firm_scope: string },
+): Promise<{ linked: string | null; ambiguous: boolean }> {
+  const email = (input.fields.email ?? "").trim().toLowerCase() || (input.identity_key.includes("@") ? input.identity_key.trim().toLowerCase() : "");
+  const fullName = (input.fields.full_name ?? "").trim();
+  const matchedBy: "email" | "name" | null = email ? "email" : fullName ? "name" : null;
+  if (!matchedBy) return { linked: null, ambiguous: false };
+
+  // LIMIT 3: one is a link, two is an ambiguity, and the third row only proves the second.
+  const candidates = await env.WP_OS_DB.prepare(
+    matchedBy === "email"
+      ? `SELECT p.id, p.full_name, p.email FROM person p
+          WHERE p.firm_scope = ?2 AND lower(trim(p.email)) = ?1
+            AND NOT EXISTS (SELECT 1 FROM network_external_mapping m WHERE m.internal_type = 'person' AND m.internal_id = p.id)
+          ORDER BY p.created_at ASC LIMIT 3`
+      : `SELECT p.id, p.full_name, p.email FROM person p
+          WHERE p.firm_scope = ?2 AND lower(trim(p.full_name)) = lower(?1)
+            AND NOT EXISTS (SELECT 1 FROM network_external_mapping m WHERE m.internal_type = 'person' AND m.internal_id = p.id)
+            AND EXISTS (SELECT 1 FROM event_record e WHERE e.event_type = 'network.person_proposed' AND e.object_id = p.id)
+          ORDER BY p.created_at ASC LIMIT 3`,
+  )
+    .bind(matchedBy === "email" ? email : fullName, input.firm_scope)
+    .all<{ id: string; full_name: string; email: string | null }>();
+  const rows = candidates.results ?? [];
+  if (rows.length === 0) return { linked: null, ambiguous: false };
+
+  if (rows.length > 1) {
+    await appendEvent(env, {
+      eventType: "network.person_link_ambiguous",
+      actorType: "firm_user",
+      actorId: identity.id,
+      objectType: "network_external_mapping",
+      objectId: input.external_id,
+      firmScope: input.firm_scope,
+      payload: {
+        external_id: input.external_id,
+        matched_by: matchedBy,
+        key: matchedBy === "email" ? email : fullName,
+        candidates: rows.map((r) => ({ person_id: r.id, full_name: r.full_name, email: r.email })),
+        why: "more than one unlinked local person matches this contact; nothing was linked, because a guess here merges two people",
+      },
+    });
+    return { linked: null, ambiguous: true };
+  }
+
+  const person = rows[0]!;
+  await env.WP_OS_DB.batch([
+    env.WP_OS_DB.prepare(
+      "UPDATE network_external_mapping SET internal_type = 'person', internal_id = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE resource = 'contact' AND external_id = ?1 AND firm_scope = ?3 AND internal_id IS NULL",
+    ).bind(input.external_id, person.id, input.firm_scope),
+    // COALESCE: only a blank is filled. A value the operator typed is theirs until a conflict card says otherwise.
+    env.WP_OS_DB.prepare("UPDATE person SET email = COALESCE(email, ?2), organization = COALESCE(organization, ?3) WHERE id = ?1").bind(
+      person.id,
+      (input.fields.email ?? "").trim() || null,
+      (input.fields.company ?? "").trim() || null,
+    ),
+    env.WP_OS_DB.prepare("UPDATE capture SET person_source = 'NETWORK_OS' WHERE resolved_person_id = ?1 AND person_source = 'LOCAL_UNRESOLVED'").bind(person.id),
+  ]);
+  await appendEvent(env, {
+    eventType: "network.person_linked",
+    actorType: "firm_user",
+    actorId: identity.id,
+    objectType: "person",
+    objectId: person.id,
+    firmScope: input.firm_scope,
+    payload: { person_id: person.id, external_id: input.external_id, matched_by: matchedBy },
+  });
+  return { linked: person.id, ambiguous: false };
 }
 
 /**

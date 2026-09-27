@@ -499,8 +499,14 @@ function ResolveCapture({ captureId, onResolved }: { captureId: string; onResolv
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [organization, setOrganization] = useState("");
-  const [outcome, setOutcome] = useState<string | null>(null);
-  const [queued, setQueued] = useState(false);
+  const [outcome, setOutcome] = useState<{ matchedVia: string | null; meaning: string } | null>(null);
+  /*
+   * The notice is for a person who needs somebody's attention: the hand-off was refused, or could
+   * not be made. A person proposed and awaiting Network OS's review is the ordinary outcome now
+   * (captures.ts proposes them as part of the resolve), and reads as such — the queue no longer
+   * means "go and do it yourself".
+   */
+  const [needsAttention, setNeedsAttention] = useState(false);
 
   return (
     <div data-testid={`resolve-capture-${captureId}`}>
@@ -514,7 +520,14 @@ function ResolveCapture({ captureId, onResolved }: { captureId: string; onResolv
         data-testid="resolve-form"
         onSubmit={async (e) => {
           e.preventDefault();
-          const res = await api<{ what_this_means?: string; person_source?: string; error?: string; detail?: string }>(
+          const res = await api<{
+            what_this_means?: string;
+            matched_via?: string;
+            person_source?: string;
+            proposal?: { status: string; detail: string; work_card_id: string | null } | null;
+            error?: string;
+            detail?: string;
+          }>(
             `/api/captures/${captureId}/resolve`,
             {
               method: "POST",
@@ -527,11 +540,13 @@ function ResolveCapture({ captureId, onResolved }: { captureId: string; onResolv
             },
           );
           if (res.status !== 200) {
-            setOutcome(`Not resolved: ${res.data?.detail ?? res.data?.error ?? res.status}`);
+            setNeedsAttention(true);
+            setOutcome({ matchedVia: null, meaning: `Not resolved: ${res.data?.detail ?? res.data?.error ?? res.status}` });
             return;
           }
-          setQueued(res.data?.person_source === "LOCAL_UNRESOLVED");
-          setOutcome(res.data?.what_this_means ?? "Resolved.");
+          const proposal = res.data?.proposal ?? null;
+          setNeedsAttention(res.data?.person_source === "LOCAL_UNRESOLVED" && proposal !== null && proposal.status !== "proposed");
+          setOutcome({ matchedVia: res.data?.matched_via ?? null, meaning: res.data?.what_this_means ?? "Resolved." });
           onResolved();
         }}
       >
@@ -565,8 +580,9 @@ function ResolveCapture({ captureId, onResolved }: { captureId: string; onResolv
         </button>
       </form>
       {outcome && (
-        <p className={queued ? "notice" : "muted small"} data-testid="resolve-outcome">
-          {outcome}
+        <p className={needsAttention ? "notice" : "muted small"} data-testid="resolve-outcome">
+          {outcome.matchedVia && <strong>{outcome.matchedVia}. </strong>}
+          {outcome.meaning}
         </p>
       )}
     </div>
