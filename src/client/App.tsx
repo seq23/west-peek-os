@@ -506,7 +506,8 @@ function ResolveCapture({ captureId, onResolved }: { captureId: string; onResolv
     <div data-testid={`resolve-capture-${captureId}`}>
       <p className="muted small">
         What is this about? Companies are matched against the register before a new one is created.
-        People are checked against Network OS, which owns them.
+        People are checked against Network OS, which owns them; someone it does not know is proposed to
+        its review queue for you.
       </p>
       <form
         className="form-row"
@@ -2285,7 +2286,7 @@ const NETWORK_OS_CONTRACT = {
     network_os: ["contact", "relationship", "touch", "gmail_thread"],
     west_peek_os: ["work_card", "approval", "investment_record", "canonical_company_mapping", "audit"],
   },
-  direction: "INBOUND read-only by default; OUTBOUND only behind network_os.writeback",
+  direction: "INBOUND read-only, except the link-back of a person West Peek OS itself proposed; OUTBOUND only behind network_os.writeback",
   identity_keys: { contact: "email_lower", relationship: "contact_external_id", touch: "touch_external_id", gmail_thread: "thread_id" },
   freshness: "full snapshot per pull (Network OS exposes current state, not a paged feed); last_sync_at recorded on every pull; fresh=1 bypasses its 45s cache",
   conflict_behavior: "a change on a record nobody in West Peek OS has linked is Network OS editing its own record and is applied; a divergence from a LINKED person's own field (name, email, company) opens a network_conflict plus a resolver work card; bookkeeping fields never conflict; never a silent overwrite of a West Peek record",
@@ -2308,8 +2309,21 @@ const NETWORK_OS_CONTRACT = {
  */
 function UnresolvedPeople(): JSX.Element | null {
   const queue = useApi<{
-    people: Array<{ capture_id: string; person_id: string; full_name: string; email: string | null; organization: string | null; resolved_at: string }>;
+    people: Array<{
+      capture_id: string;
+      person_id: string;
+      full_name: string;
+      email: string | null;
+      organization: string | null;
+      resolved_at: string;
+      /** A network.person_proposed event exists: sent, awaiting Network OS's review. */
+      proposed: boolean;
+      /** The reason on the latest network.person_proposal_failed event, if any. */
+      last_refusal: string | null;
+    }>;
     count: number;
+    to_send: number;
+    awaiting_review: number;
     why: string;
     next_step: string;
   }>("/api/captures/unresolved-people");
@@ -2320,11 +2334,10 @@ function UnresolvedPeople(): JSX.Element | null {
   if (!d || d.count === 0) return null;
 
   /*
-   * THE BUTTON THIS LIST WAS ASKING FOR.
-   *
-   * Its own next_step read "Add these N to Network OS, or use this list as the case for building a
-   * write path" — so it has been telling the operator to go and do it by hand while the write path
-   * was built and reachable from nothing. The same shape as every other gap this review found.
+   * THE RETRY BUTTON. Resolving a capture proposes the person by itself (captures.ts), so this
+   * button is for a proposal Network OS refused — the reason is shown beside the name — and for
+   * anyone queued before the hand-off was automatic. A person already sent shows "already sent"
+   * instead of a button: the proposal event is the record, and a second press would 409.
    *
    * It PROPOSES. The person lands in Network OS's intake queue for a human there to review, which
    * is why one press is enough: the far end still holds the veto, so there is nothing here for an
@@ -2354,21 +2367,35 @@ function UnresolvedPeople(): JSX.Element | null {
             {p.organization ? ` — ${p.organization}` : ""}
             {p.email ? ` · ${p.email}` : ""}
             <span className="muted small"> · met {readableDate(p.resolved_at)}</span>{" "}
-            <button
-              type="button"
-              className="btn-strong"
-              disabled={busy === p.capture_id}
-              data-testid={`propose-${p.person_id}`}
-              onClick={() => void propose(p.capture_id, p.full_name)}
-            >
-              {busy === p.capture_id ? "Sending…" : "Send to Network OS"}
-            </button>
+            {p.proposed ? (
+              <span className="badge" data-testid={`proposed-${p.person_id}`}>
+                already sent — awaiting Network OS's review
+              </span>
+            ) : (
+              <>
+                {p.last_refusal && (
+                  <span className="muted small" data-testid={`refusal-${p.person_id}`}>
+                    Network OS refused: {p.last_refusal}{" "}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="btn-strong"
+                  disabled={busy === p.capture_id}
+                  data-testid={`propose-${p.person_id}`}
+                  onClick={() => void propose(p.capture_id, p.full_name)}
+                >
+                  {busy === p.capture_id ? "Sending…" : "Send to Network OS"}
+                </button>
+              </>
+            )}
           </li>
         ))}
       </ul>
       <p className="muted small">
         Sending puts someone in Network OS's review queue — it never writes a contact, because
-        Network OS decides who is a member.
+        Network OS decides who is a member. Once they accept, the next sync links the person here and
+        they leave this list.
       </p>
       {message && (
         <p className="notice small" data-testid="unresolved-message" role="status">

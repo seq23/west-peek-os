@@ -22,7 +22,10 @@ import { checkSources } from "../scripts/validate/no-cross-repo-coupling.mjs";
  * P9 — Network OS integration boundary (D5).
  *
  * Rules under test (plan §8/P9 + §12.2): the adapter contract must DECLARE every
- * required clause; inbound sync is read-only and idempotent by delivery key; a
+ * required clause; inbound sync is read-only and idempotent by delivery key — the
+ * one inbound write is the link-back of a person West Peek OS itself proposed
+ * (tests/captureHandoff.test.ts), which links a mapping to that person and fills only
+ * the person's blank fields; a
  * change to a record nobody has linked is applied as Network OS's own edit, and a
  * divergence from a LINKED person's own field opens a conflict AND a resolver work
  * card instead of overwriting the person;
@@ -73,7 +76,7 @@ const FULL_CONTRACT = {
     network_os: ["contact", "relationship", "touch", "gmail_thread"],
     west_peek_os: ["work_card", "approval", "investment_record", "canonical_company_mapping", "audit"],
   },
-  direction: "INBOUND read-only by default; OUTBOUND only for west-peek-owned fields behind network_os.writeback",
+  direction: "INBOUND read-only, EXCEPT the link-back of a person West Peek OS itself proposed (mapping linked, blank person fields filled, capture flipped to NETWORK_OS); OUTBOUND only for west-peek-owned fields behind network_os.writeback",
   identity_keys: { contact: "email_lower", relationship: "contact_external_id", touch: "touch_external_id", gmail_thread: "thread_id" },
   freshness: "cursor per resource; last_sync_at recorded; stale reads are labelled, never silently trusted",
   conflict_behavior: "a change on a record nobody in West Peek OS has linked is Network OS editing its own record and is applied; a divergence from a LINKED person's own field (name, email, company) opens a network_conflict plus a resolver work card; bookkeeping fields never conflict; never a silent overwrite of a West Peek record",

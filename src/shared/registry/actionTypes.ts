@@ -142,9 +142,15 @@ export const ORDINARY_ACTION_TYPES: readonly OrdinaryActionTypeDef[] = [
   // approval receipt. This appends to Network OS's INTAKE QUEUE, where a human over there decides
   // whether the person becomes a contact at all — so the far end still holds the veto, and putting
   // an approval card in front of every captured business card would be ceremony with no content on
-  // the one surface that has to be fast. External effect all the same: it sends a real person's
-  // details to another system, so it is authorized, audited, and refused outright for an AI actor.
-  { key: "network_os.propose_person", name: "Propose a person to Network OS", description: "Send a captured person to Network OS's intake queue for a human there to review. Never writes a contact.", isExternalEffect: true },
+  // the one surface that has to be fast.
+  //
+  // RESTRICTED, NOT AN EXTERNAL EFFECT (27 Sep 2026). It was declared `isExternalEffect: true` with
+  // exactly the sentence above, and the two contradict: `authorize()` answers REQUIRE_APPROVAL for
+  // every external effect until a receipt is presented, and the handler turned that into 403. So the
+  // "Send to Network OS" button could never have worked — production: 0 proposals ever, 4,715 synced
+  // contacts and 0 linked. The intended semantics are the RESTRICTED tier (migration 0243): named
+  // human roles act at once, an AI actor is refused, and every send is on the event spine.
+  { key: "network_os.propose_person", name: "Propose a person to Network OS", description: "Send a captured person to Network OS's intake queue for a human there to review. Never writes a contact.", isExternalEffect: false },
   // P10 — LP / fundraising / claims / data-room control.
   { key: "lp_record.create", name: "Create LP record", description: "Record an LP entity (LP_PRIVATE by default).", isExternalEffect: false },
   { key: "lp_opportunity.create", name: "Create LP opportunity", description: "Track a fundraising conversation with an LP.", isExternalEffect: false },

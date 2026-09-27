@@ -108,16 +108,37 @@ describe("a capture resolves to what it is actually about", () => {
     expect(res.body.matched_via).toBe("existing register entry");
   });
 
-  it("queues a person Network OS has never heard of, and says so plainly", async () => {
+  it("queues a person Network OS has never heard of, proposes them, and when that is refused says so plainly", async () => {
+    // This env has no Network OS settings, so the automatic hand-off is REFUSED — the resolve still
+    // succeeds, the refusal is named on the card, and a HIGH work card carries it to a person.
     const id = await newCapture("introduced to Dana Whitfield, operator, at the mastermind");
-    const res = await call<{ person_source: string; person_id: string; what_this_means: string }>(
-      `/api/captures/${id}/resolve`, MP, "POST",
-      { kind: "PERSON", name: "Dana Whitfield", email: "dana@example.com", organization: "Whitfield & Co" },
-    );
+    const res = await call<{
+      person_source: string;
+      person_id: string;
+      matched_via: string;
+      what_this_means: string;
+      proposal: { status: string; detail: string; work_card_id: string | null };
+    }>(`/api/captures/${id}/resolve`, MP, "POST", { kind: "PERSON", name: "Dana Whitfield", email: "dana@example.com", organization: "Whitfield & Co" });
     expect(res.status).toBe(200);
     expect(res.body.person_source).toBe("LOCAL_UNRESOLVED");
+    expect(res.body.proposal.status).toBe("refused");
+    expect(res.body.proposal.detail).toContain("WP_OS_NETWORK_OS_BASE_URL is not set");
+    expect(res.body.matched_via).toContain("proposal refused");
     // The claim the system must never make is that this person is in the system of record.
     expect(res.body.what_this_means).toContain("not claiming");
+    // And it says what was refused and where the work now sits, rather than sending her elsewhere.
+    expect(res.body.what_this_means).toContain("refused");
+    expect(res.body.what_this_means).toContain("HIGH work card");
+    const card = await t.db
+      .prepare("SELECT title, priority, state FROM work_card WHERE id = ?1")
+      .bind(res.body.proposal.work_card_id)
+      .first<{ title: string; priority: string; state: string }>();
+    expect(card).toEqual({ title: "Network OS refused a captured person: Dana Whitfield", priority: "HIGH", state: "OPEN" });
+    const failed = await t.db
+      .prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'network.person_proposal_failed' AND object_id = ?1")
+      .bind(res.body.person_id)
+      .first<{ n: number }>();
+    expect(failed!.n).toBe(1);
   });
 
   it("matches a person Network OS already holds, and leaves it the system of record", async () => {
@@ -174,12 +195,21 @@ describe("the unresolved-people queue", () => {
     const id = await newCapture("met Quinn Alvarez at a dinner");
     await call(`/api/captures/${id}/resolve`, MP, "POST", { kind: "PERSON", name: "Quinn Alvarez" });
 
-    const res = await call<{ people: Array<{ full_name: string }>; count: number; why: string; next_step: string }>(
-      "/api/captures/unresolved-people",
-      MP,
-    );
+    const res = await call<{
+      people: Array<{ full_name: string; proposed: boolean; last_refusal: string | null }>;
+      count: number;
+      to_send: number;
+      awaiting_review: number;
+      why: string;
+      next_step: string;
+    }>("/api/captures/unresolved-people", MP);
     expect(res.status).toBe(200);
-    expect(res.body.people.some((p) => p.full_name === "Quinn Alvarez")).toBe(true);
+    const quinn = res.body.people.find((p) => p.full_name === "Quinn Alvarez");
+    expect(quinn).toBeDefined();
+    // Not sent (this env cannot reach Network OS), and the reason is on the row for the retry.
+    expect(quinn!.proposed).toBe(false);
+    expect(quinn!.last_refusal).toContain("WP_OS_NETWORK_OS_BASE_URL is not set");
+    expect(res.body.to_send + res.body.awaiting_review).toBe(res.body.count);
     // Rowan came from Network OS and must NOT be waiting in a queue for Network OS.
     expect(res.body.people.some((p) => p.full_name === "Rowan Feld")).toBe(false);
     expect(res.body.why).toContain("system of record");
