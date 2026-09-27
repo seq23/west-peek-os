@@ -252,27 +252,30 @@ describe("Porter's web lane: the plan asks for the materials, a reply's file rea
       ],
       assets: ["Ep 1/headshot.jpg", "Brand/maax-bold.otf"],
     });
-    expect((await tickFor(id)).outcome).toBe("BLOCKED");
+    // Nothing to decide (no asks) → approved by the request and BUILD parked at filing; the plan
+    // email is the FYI (27 Sep 2026). Stricter than the old pin, which asserted a block here.
+    expect((await tickFor(id)).outcome).toBe("PROGRESSED");
+    expect((await readWebPropertyChange(env, id))!.plan_approved_by).toMatch(/^request:/);
     // 23 Sep 2026 (owner: "i should have the option to continue without them and just get
     // placeholders"): the plan email lists them as OPTIONAL, one line each, and says so; the TL;DR
     // says the preview is built with placeholders for them. Never "please send these".
     const plan = (await mailFor(id)).at(-1)!;
-    expect(plan).toMatch(/^\*\*TL;DR:\*\* Plan ready\. Reply \*\*approved\*\* and I'll build the preview now, with placeholders for the \*{0,2}2\*{0,2} missing items\./);
+    expect(plan).toMatch(/^\*\*TL;DR:\*\* Going ahead with these and started the build, with placeholders for the \*{0,2}2\*{0,2} missing items\. Reply \*\*changes: …\*\* to steer\. Nothing goes live until you approve the preview\./);
     expect(plan).toMatch(/\*\*Missing items \(optional\)\*\*\n• Ep \*{0,2}6\*{0,2} guest headshot \(JPG\)\n• Ep \*{0,2}7\*{0,2} guest headshot \(JPG\)\n• You don't need these to continue\. I'll use placeholders; add them to Drive or attach them to any reply and I'll rebuild\./);
     expect(plan).not.toMatch(/please send these/i);
     expect(plan).not.toContain(HOW_TO_SEND_MATERIALS);
     expect(JSON.parse((await readWebPropertyChange(env, id))!.assets_json)).toEqual(["Ep 1/headshot.jpg", "Brand/maax-bold.otf"]);
   });
 
-  it("a files-only reply delivers the file but does not approve the plan; \"approved\" then parks BUILD with the reply's file and the plan's assets", async () => {
+  it("a files-only reply while BUILD is queued reaches that job: the queued payload is refreshed with the reply's file and the plan's assets (27 Sep 2026)", async () => {
+    const parkedBefore = await payload();
+    expect(parkedBefore.attachments.map((a) => a.filename), "parked at filing, before the file arrived").not.toContain("ep6-headshot.jpg");
     const files = await reply(id, "", { name: "ep6-headshot.jpg", type: "image/jpeg" });
     expect(files.attached).toEqual(["ep6-headshot.jpg"]);
-    await tickFor(id);
-    expect((await readWebPropertyChange(env, id))!.plan_approved_at, "files alone are not an approval").toBeNull();
-    expect((await card(id)).state).toBe("BLOCKED");
-    await reply(id, "approved");
     const next = await tickFor(id);
-    expect(next.summary).toMatch(/BUILD queued/);
+    // The plan was approved by the request, never by the files; the job is still the Mac's to claim.
+    expect((await readWebPropertyChange(env, id))!.plan_approved_by).toMatch(/^request:/);
+    expect(next.summary).toMatch(/BUILD is queued/);
     const job = await payload();
     expect(job.phase).toBe("BUILD");
     expect(job.attachments.map((a) => a.filename), "the reply's file reaches the next phase").toContain("ep6-headshot.jpg");

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { shortDate } from "../../lib/dates";
+import { formedStamp } from "@shared/work/formedStamp";
 import type { MeResponse } from "../../lib/api";
 import { CARD_SOURCES } from "@shared/work/workCards";
 import { originOf, type OriginKind } from "@shared/work/origin";
@@ -71,7 +72,8 @@ export function deskSections(
     else if (status.section === "worked") worked.push({ card, status });
   }
   // What is moving this minute first, then what is waiting, then what is queued.
-  const rank: Record<string, number> = { WORKING_NOW: 0, WITH_PARTNER: 1, WAITING: 2, QUEUED: 3 };
+  // A card stopped on the other partner sits with the cards they carry, not in her "Needs you".
+  const rank: Record<string, number> = { WORKING_NOW: 0, WITH_PARTNER: 1, NEEDS_PARTNER: 1, WAITING: 2, QUEUED: 3 };
   worked.sort((a, b) => (rank[a.status.kind] ?? 9) - (rank[b.status.kind] ?? 9));
   if (seenAt) {
     const seen = Date.parse(seenAt);
@@ -287,6 +289,11 @@ export function WorkDesk({
               <StatusPill status={status} testid={`work-card-state-${c.id}`} />
               <span className="wc-line" data-testid={`work-card-status-${c.id}`}>
                 {status.line}
+              </span>
+              {/* WHEN IT WAS FORMED, date and time (27 Sep 2026): four cards from one hour must read apart at a glance. */}
+              <span className="wc-quiet" data-testid={`work-card-formed-row-${c.id}`}>
+                {" · "}
+                {formedStamp(c.created_at)}
               </span>
             </span>
           </div>

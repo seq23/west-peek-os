@@ -14,6 +14,8 @@ import { RequesterNotes, WebPropertyChangePanel, useSiteChange } from "../WebPro
 import { BlockPanel } from "./BlockPanel";
 import { PreviewReadyPanel } from "./PreviewReadyPanel";
 import { handOffControl } from "./handOffControl";
+import { formedStamp } from "@shared/work/formedStamp";
+import type { MergeTargetCard } from "@shared/work/mergeCards";
 
 /**
  * 0241: after a hand-off the block waits on the NEW primary. `block_who` is a first name in capitals
@@ -164,6 +166,46 @@ export function CardExpanded({
     else setMessage(res.data?.said ?? (handOff.kind === "HAND_OFF" ? `Handed to ${handOff.to}.` : "It is yours again."));
     reload();
   }
+  /**
+   * MERGE INTO… (0242, 27 Sep 2026). A stray card — a reply the matcher could not place opened it —
+   * folds into the card carrying the work: its emails, thread and attachments move, its history
+   * reads in the survivor's trail, it stays cancelled. The picker lists the open cards, the same
+   * primary partner's first, newest first (`/merge-targets`); the server decides and refuses with a
+   * detail she reads.
+   */
+  const [merging, setMerging] = useState(false);
+  const [mergeTargets, setMergeTargets] = useState<MergeTargetCard[] | null>(null);
+  const [mergeInto, setMergeInto] = useState("");
+  async function openMerge(): Promise<void> {
+    if (merging) {
+      setMerging(false);
+      return;
+    }
+    setMerging(true);
+    const res = await api<{ targets?: MergeTargetCard[]; detail?: string }>(`/api/work-cards/${c.id}/merge-targets`);
+    if (res.status >= 400 || !res.data?.targets) {
+      setMessage(res.data?.detail ?? `Could not list the cards to merge into (${res.status}).`);
+      setMergeTargets([]);
+      return;
+    }
+    setMergeTargets(res.data.targets);
+    setMergeInto(res.data.targets[0]?.id ?? "");
+  }
+  async function confirmMerge(): Promise<void> {
+    const target = (mergeTargets ?? []).find((t) => t.id === mergeInto);
+    if (!target) return;
+    if (!window.confirm(`Merge this card into "${target.title}"? Its emails, thread and attachments move there and this card is cancelled. This cannot be undone.`)) return;
+    setBusy(true);
+    const res = await api<{ error?: string; detail?: string; moved?: { messages: number; threads: number; files: number } }>(`/api/work-cards/${c.id}/merge-into`, { method: "POST", body: { into: target.id } });
+    setBusy(false);
+    if (res.status >= 400 || res.data?.error) setMessage(res.data?.detail ?? `Could not merge (${res.status}).`);
+    else {
+      const m = res.data?.moved;
+      setMessage(`Merged into "${target.title}"${m ? ` — ${m.messages} email(s), ${m.threads} thread(s), ${m.files} file(s) moved` : ""}.`);
+      setMerging(false);
+    }
+    reload();
+  }
   const cc = ccNames(c.cc_emails);
   const recipientNode: ReactNode = (
     <span className="wc-inline-list">
@@ -307,7 +349,7 @@ export function CardExpanded({
       <dd data-testid={`work-card-asked-by-${c.id}`}>
         {asked.who}
         {asked.how ? `, ${asked.how}` : ""}
-        <span className="wc-quiet"> · {shortDate(c.created_at)}</span>
+        <span className="wc-quiet" data-testid={`work-card-formed-${c.id}`}> · {formedStamp(c.created_at)}</span>
       </dd>
     </>
   );
@@ -340,6 +382,15 @@ export function CardExpanded({
 
   return (
     <div className="wc-expanded" data-testid={`work-card-body-${c.id}`}>
+      {c.merged_into_card_id && (
+        <p className="notice small" data-testid={`work-card-merged-into-${c.id}`}>
+          This card was merged into{" "}
+          <a href={`#/work/${c.merged_into_card_id}`} data-testid={`work-card-merged-into-link-${c.id}`}>
+            another card
+          </a>
+          ; its emails and files read there, and it stays cancelled.
+        </p>
+      )}
       {/* A BLOCK IS A QUESTION ADDRESSED TO HER, so it leads the expanded card — the four sentences
           and the doors, reused verbatim from `BlockPanel`. */}
       {/* A WEBSITE JOB AT ITS PREVIEW IS NOT BLOCKED (owner, 23 Sep 2026): it waits on her look,
@@ -529,6 +580,35 @@ export function CardExpanded({
         </div>
       )}
 
+      {merging && (
+        <div className="wc-assign" data-testid={`work-card-merge-form-${c.id}`}>
+          <label className="wc-label" htmlFor={`work-card-merge-${c.id}`}>
+            Which card carries this work?
+          </label>
+          {mergeTargets === null ? (
+            <p className="small">Reading the open cards…</p>
+          ) : mergeTargets.length === 0 ? (
+            <p className="small" data-testid={`work-card-merge-empty-${c.id}`}>
+              No other card is open to merge into.
+            </p>
+          ) : (
+            <>
+              <select id={`work-card-merge-${c.id}`} data-testid={`work-card-merge-${c.id}`} value={mergeInto} onChange={(e) => setMergeInto(e.target.value)}>
+                {mergeTargets.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.title} · {formedStamp(t.created_at)}
+                    {t.requested_by_email ? ` · ${partnerByEmail(t.requested_by_email)?.firstName ?? t.requested_by_email}` : ""}
+                  </option>
+                ))}
+              </select>
+              <button type="button" className="btn-strong" disabled={busy || !mergeInto} data-testid={`work-card-merge-confirm-${c.id}`} onClick={() => void confirmMerge()}>
+                Merge
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       <div className="wc-foot">
         {/* ONE GREY LINE for everything a partner never needs to read and an engineer sometimes
             does. The labels and the lane stay on the card as the trail she asked for on 17 Sep —
@@ -591,6 +671,12 @@ export function CardExpanded({
           {!finished && (
             <button type="button" aria-expanded={assigning} data-testid={`work-card-reassign-${c.id}`} onClick={() => setAssigning((a) => !a)}>
               Give it to someone else
+            </button>
+          )}
+          {/* MERGE INTO…: this card was a duplicate of one already carrying the work (0242). */}
+          {!finished && (
+            <button type="button" aria-expanded={merging} disabled={busy} data-testid={`work-card-merge-into-${c.id}`} title="Fold this card into the one carrying the work; its emails and files move there and this one is cancelled." onClick={() => void openMerge()}>
+              Merge into…
             </button>
           )}
           {/* STOP, not Drop: a decision not to do it, kept on the record rather than deleted. */}

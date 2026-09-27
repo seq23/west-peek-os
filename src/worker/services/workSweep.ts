@@ -522,6 +522,10 @@ export async function sweepOnce(
    * `resurfaceStalePreviews`.
    */
   await resurfaceStalePreviews(env, now);
+  // A PLAN WITH NOTHING TO DECIDE NEVER WAITS (27 Sep 2026): a website job blocked at its plan while
+  // every ask carried a recommendation is put back in the queue; the tick that claims it approves by
+  // the request and starts the build. See `releasePlansNobodyNeedsToAnswer`.
+  await (await import("./webPropertyChange")).releasePlansNobodyNeedsToAnswer(env);
   const card = await claimNextCard(env, now);
   if (!card) {
     return { status: "SUCCEEDED", summary: "nothing waiting: every card an employee owns is done, blocked, or being worked", card: null, outcome: "NOTHING_WAITING" };

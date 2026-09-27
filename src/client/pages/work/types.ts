@@ -44,6 +44,8 @@ export interface WorkCardRow {
    * since 22 Sep but never read by anything until the card detail page.
    */
   requested_by_email?: string | null;
+  /** 0242: set when this card was merged into another; the work carries on there and this one stays cancelled. */
+  merged_into_card_id?: string | null;
   request_json?: string | null;
   preview_first?: number | null;
   /** 0238: `web_property_change.preview_only` — the site's own preview gate; NULL off web property cards. */

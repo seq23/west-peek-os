@@ -179,6 +179,21 @@ export interface NoticeEmail {
   sections: Array<{ label: string; bullets: string[] }>;
 }
 
+/**
+ * THE PLAN AS AN FYI (owner, 27 Sep 2026): every decision carried Porter's recommendation, so the
+ * recommendations were taken, the plan was approved by the request itself and the build has started.
+ * Nothing is asked; the reply forms say how to steer it.
+ */
+export function goingAheadReplyForms(askCount: number): string[] {
+  const recs = askCount === 0 ? "the plan as written" : `my ${askCount} recommendation${askCount === 1 ? "" : "s"}`;
+  return [
+    `nothing needed: I've taken ${recs} and started the build`,
+    `**changes: …**: I'll make them as I build`,
+    `**stop**: hold it — nothing is built or landed until you say otherwise`,
+    `anything else you write is read as instructions`,
+  ];
+}
+
 /** The four ways to answer a PLAN, first in the email. */
 export function planReplyForms(askCount: number): string[] {
   const recs = askCount === 0 ? "the plan as written" : `my ${askCount} recommendation${askCount === 1 ? "" : "s"}`;
@@ -208,6 +223,8 @@ const MAX_LINES = 6;
 export const STAGE = {
   RECEIVED: "Got it",
   PLAN: "Plan ready",
+  /** The PLAN email when nothing needs deciding: every ask carried a recommendation, so it is an FYI (27 Sep 2026). */
+  GOING_AHEAD: "Going ahead",
   PREVIEW: "Preview ready",
   REBUILD: "New preview ready",
   QUESTION: "A question for you",
@@ -237,16 +254,47 @@ const ON_THE_CARD = (cardId: string) => ({ label: "The card", bullets: [`Everyth
 const STILL_MISSING = "Still missing (optional)";
 
 /** THE PLAN EMAIL. Pure. */
-export function planNotice(input: { title: string; asks: readonly Ask[]; missing: readonly MissingMaterial[]; previewLine: string | null; cardId: string; sites?: readonly string[] }): NoticeEmail {
+export function planNotice(input: {
+  title: string;
+  asks: readonly Ask[];
+  missing: readonly MissingMaterial[];
+  previewLine: string | null;
+  cardId: string;
+  sites?: readonly string[];
+  /**
+   * THE PLAN AS AN FYI, NOT A QUESTION (owner, 27 Sep 2026). Every ask carried a recommendation, so
+   * the recommendations were taken, the plan is approved by the request and BUILD has started. The
+   * email says "going ahead with these"; it asks for nothing. Only an ask WITHOUT a recommendation
+   * still sends the asking form.
+   */
+  fyi?: boolean;
+}): NoticeEmail {
   const n = input.asks.length;
   const m = input.missing.length;
   const sections: NoticeEmail["sections"] = [];
   // A job over several sites says so once: one plan, one preview each, landing together (0236).
   if ((input.sites?.length ?? 0) > 1) sections.push({ label: `${input.sites!.length} sites, one job`, bullets: [`${input.sites!.join(", ")}: one plan, a preview of each, and they go live together.`] });
-  if (n) sections.push(...listSections(`${n} decision${n === 1 ? "" : "s"} (my recommendation in bold)`, input.asks.map((a) => `${clauseLine(a.question, 160)} → **${clauseLine(a.recommended, 70)}**`), [], 240));
+  if (n) {
+    sections.push(
+      ...listSections(
+        input.fyi ? `${n} decision${n === 1 ? "" : "s"}, taken as I recommended (in bold)` : `${n} decision${n === 1 ? "" : "s"} (my recommendation in bold)`,
+        input.asks.map((a) => `${clauseLine(a.question, 160)} → **${clauseLine(a.recommended, 70)}**`),
+        [],
+        240,
+      ),
+    );
+  }
   if (m) sections.push(...listSections("Missing items (optional)", input.missing.map((x) => x.item), ["You don't need these to continue. I'll use placeholders; add them to Drive or attach them to any reply and I'll rebuild."]));
-  sections.push({ label: "Preview", bullets: [input.previewLine ?? FIRST_PREVIEW_NEXT] });
+  sections.push({ label: "Preview", bullets: [input.previewLine ?? (input.fyi ? "The preview link comes when the build is green; nothing goes live until you approve it." : FIRST_PREVIEW_NEXT)] });
   sections.push({ label: "The full plan", bullets: [`The full plan is on the card: ${cardLinkFor(input.cardId)}`] });
+  if (input.fyi) {
+    return {
+      what: stageSubject(input.title, STAGE.GOING_AHEAD),
+      tldr: `Going ahead with these${n ? ` — every decision had my recommendation, so I've taken ${n === 1 ? "it" : "them"}` : ""} and started the build${m ? `, with placeholders for the ${m} missing item${m === 1 ? "" : "s"}` : ""}. Reply **changes: …** to steer. Nothing goes live until you approve the preview.`,
+      tldrBullets: goingAheadReplyForms(n),
+      sections,
+    };
+  }
   return {
     what: stageSubject(input.title, STAGE.PLAN),
     tldr: `Plan ready. Reply **approved** and I'll build the preview now${m ? `, with placeholders for the ${m} missing item${m === 1 ? "" : "s"}` : ""}. Nothing goes live until you approve the preview.`,

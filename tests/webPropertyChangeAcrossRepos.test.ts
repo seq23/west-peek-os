@@ -230,7 +230,9 @@ describe("community site + westpeek live in one email, preview first, then land"
       status: "ok",
       document: "# Plan: two fixes\n\n## join-west-peek-main\n- footer link → /team\n\n## westpeek-live\n- banner: Fall Summit, 14 Oct\n",
       decided: ["footer href only"],
-      asks: [{ question: "Banner date format: 14 Oct or October 14?", recommended: "14 Oct, as you wrote it" }],
+      // One ask WITHOUT a recommendation: since 27 Sep 2026 a plan whose every ask carries one never
+      // waits (approved by the request); a real question is what still sends the plan email and blocks.
+      asks: [{ question: "Banner date format: 14 Oct or October 14?", recommended: "14 Oct, as you wrote it" }, { question: "Which banner photo — the room or the speakers?" }],
       publish_ready: true,
       placeholders: [],
     });
