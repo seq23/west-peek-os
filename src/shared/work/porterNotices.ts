@@ -229,6 +229,8 @@ export const STAGE = {
   REBUILD: "New preview ready",
   QUESTION: "A question for you",
   STUCK: "Blocked",
+  /** The Mac that builds is asleep (28 Sep 2026): the work waits, it is not blocked, and the subject never says so. */
+  ASLEEP: "Waiting for the Mac",
   DONE: "Live",
   UNCHANGED: "Nothing new found",
 } as const;

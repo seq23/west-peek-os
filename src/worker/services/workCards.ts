@@ -1114,12 +1114,14 @@ export interface LiveRunRow {
   progressed_at: string | null;
   progress_note: string | null;
   created_at: string;
+  /** Why a queued row is queued, when the reaper put it back (the Mac slept, 28 Sep 2026). */
+  resolution: string | null;
 }
 
 export async function liveRunsByCard(env: Env, cardId?: string): Promise<Map<string, Omit<LiveRunRow, "work_card_id">>> {
   const rows = (
     await env.WP_OS_DB.prepare(
-      `SELECT work_card_id, status, run_kind, claimed_by, claimed_at, progressed_at, progress_note, created_at
+      `SELECT work_card_id, status, run_kind, claimed_by, claimed_at, progressed_at, progress_note, created_at, resolution
          FROM subscription_seat_run
         WHERE work_card_id IS NOT NULL AND status IN ('QUEUED', 'CLAIMED')
           ${cardId ? "AND work_card_id = ?1" : ""}

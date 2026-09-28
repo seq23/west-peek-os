@@ -8,7 +8,7 @@ import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
 import { sweepOnce, type SweepCard } from "../src/worker/services/workSweep";
 import type { ReplyIntentReader } from "../src/worker/services/replyIntent";
 import type { QuestionAnswerer } from "../src/worker/services/questionRouting";
-import { claimRun, parkRun, progressRun, reapSeatRuns, readRun, reportRun, JOB_SILENCE_MS, type SeatRunRow } from "../src/worker/ai/subscriptionSeats";
+import { claimRun, parkRun, progressRun, reapSeatRuns, readRun, reportRun, JOB_SILENCE_MS, MAX_JOB_NAPS, type SeatRunRow } from "../src/worker/ai/subscriptionSeats";
 import { parseWebPropertyAsk, isWebPropertyChange, driveFolderLinks, addresseeIn, sitesOf } from "../src/shared/intake/webPropertyChange";
 import { parseBlogAsk } from "../src/shared/intake/blogHelp";
 import { workCard } from "../src/worker/services/employeeWork";
@@ -1098,6 +1098,7 @@ function inbound(raw: string, headers: Record<string, string> = {}) {
 }
 
 describe("Porter reads the email (21 Sep 2026): the request is the specification", () => {
+  beforeAll(() => closeOpenSiteCardsOf(SCOOTER));
   const PHOTO_EMAIL = SCOOTER_MIME({ subject: "Sensori photo swap on westpeek.ventures", body: "Swap the Sensori founders photo on westpeek.ventures for the one attached. Same spot, same size.", image: true });
   let porterId = "";
 
@@ -1314,6 +1315,7 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
   });
 
   it("a 4 MB partner email (a real jpg attached) becomes Porter's card with request_text and one attachment row, not a Deck card", async () => {
+    await closeOpenSiteCardsOf(SCOOTER); // his earlier card for this property is open; this is a NEW request (28 Sep 2026)
     // A real-sized photo: ~3 MB of bytes, base64'd inside the MIME, so the message is over MAX_BODY_BYTES for real.
     const photo = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(3 * 1024 * 1024, 7)]);
     const big = SCOOTER_MIME({ subject: "Sensori photo swap, big", body: "Same swap on westpeek.ventures, bigger photo attached.", image: true }).replace(
@@ -1394,6 +1396,21 @@ async function releasePlansNobodyNeedsToAnswerAgain(): Promise<string[]> {
 }
 
 /** The firm caps an employee at 20 new cards an hour; this file opens many for Porter. Age the earlier ones. */
+/**
+ * ONE OPEN WEBSITE CARD PER PARTNER PER PROPERTY (28 Sep 2026). A partner's new email that names a
+ * property they already have an open card for is a FOLLOW-UP on that card, not a new request
+ * (`openSiteCardFor`; tests/followUpJoinsTheOpenSiteCard.test.ts). The intake shapes below each
+ * expect a fresh card, so the partner's earlier cards for the property are closed first — the way
+ * a real morning starts with yesterday's job landed.
+ */
+async function closeOpenSiteCardsOf(partner: string): Promise<void> {
+  await env.WP_OS_DB.prepare(
+    "UPDATE work_card SET state = 'CANCELLED', lease_until = NULL WHERE kind = ?1 AND lower(requested_by_email) = ?2 AND state NOT IN ('DONE', 'CANCELLED')",
+  )
+    .bind(WEB_PROPERTY_CHANGE_KIND, partner.toLowerCase())
+    .run();
+}
+
 async function ageEarlierCards(): Promise<void> {
   await env.WP_OS_DB.prepare("UPDATE work_card SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '-2 hours')").run();
 }
@@ -1422,6 +1439,7 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
   });
 
   it("with a recent web-property card from this partner, 'the site' is inferred from it and the RECEIVED email states the assumption; the card is Porter's, kind WEB_PROPERTY_CHANGE", async () => {
+    await closeOpenSiteCardsOf(SCOOTER); // a new request, not a follow-up on an open card (28 Sep 2026)
     const before = sent.length;
     await handleInboundEmail(inbound(NEWSLETTER()), env);
     const chief = (await env.WP_OS_DB.prepare("SELECT id, state, kind, description FROM work_card WHERE title = 'From scooter@westpeek.ventures: Newsletter signup on the site' ORDER BY created_at DESC LIMIT 1").first<{ id: string; state: string; kind: string | null; description: string }>())!;
@@ -1543,6 +1561,7 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
   });
 
   it("a re-read supersedes the live duplicate and returns the card it created; every partner .eml is stored", async () => {
+    await closeOpenSiteCardsOf(SCOOTER); // a new request, not a follow-up on an open card (28 Sep 2026)
     const key = `inbound-email/2026-09-21/${crypto.randomUUID()}.eml`;
     const raw = SCOOTER_MIME({ subject: "Newsletter signup on the site", body: "Hey Porter!\n\nCan we add a newsletter signup on the site? Just a spot where people can drop their email." });
     await (env.WP_OS_DOCUMENTS as unknown as { put: (k: string, b: string) => Promise<unknown> }).put(key, raw);
@@ -1853,30 +1872,55 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
 
 describe("STUCK is sent once, only when idle past the ceiling inside the window", () => {
   beforeAll(ageEarlierCards);
-  it("a run that dies mid-plan and is not re-claimed within the ceiling → exactly one STUCK; a second tick sends nothing", async () => {
+  it("the Mac sleeps mid-plan → the job goes back to the queue, no attempt is spent, no card is blocked; the partner hears ONCE that the Mac is asleep, never 'Blocked'", async () => {
+    /*
+     * THE NIGHT OF 27–28 SEP 2026, PINNED THE OTHER WAY ROUND. This used to assert that a run
+     * closed as "went quiet" was a FAILED attempt and that the partner's one notice said
+     * "Blocked". Her ruling after that night: a sleeping Mac is a wait, never a failure and never a
+     * block — the job waits and is tried again when the Mac wakes, the card spends nothing, and the
+     * partner is told once, in those words, with the owner of the Mac named as who can wake it.
+     */
     await env.WP_OS_DB.prepare("UPDATE work_kind_rule SET value = '00-24' WHERE kind = ?1 AND rule_key = 'stuck_window_ct'").bind(WEB_PROPERTY_CHANGE_KIND).run();
     const before = sent.length;
     const chiefId = await openAssignmentCard(env, { subject: "stuck test", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Change the footer on westpeek.ventures.", limits: EMAILED_TASK_LIMITS, emlKey: null });
     const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
     await tickFor(id); // PLAN parked
-    // The Mac claimed it and died mid-plan: the reaper closes the run.
+    const attemptsBefore = Number((await card(id)).work_attempts ?? 0);
+    // The Mac claimed it in a five-second Power Nap blip and slept again: the pulse stops.
     const run = (await liveJobFor(id))!;
-    await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'ABANDONED', claimed_by = 'mac', resolution = 'went quiet' WHERE id = ?1").bind(run.id).run();
-    const retry = await tickFor(id);
-    expect(retry.outcome, "a failed attempt, re-parked next tick").toBe("FAILED");
-    expect(sent.slice(before).filter((m) => m.to === SCOOTER && /: Blocked$/.test(m.subject)), "a re-claim inside the ceiling says nothing").toHaveLength(0);
-    await tickFor(id); // re-parked
-    const queued = (await liveJobFor(id))!;
-    expect(queued.status).toBe("QUEUED");
-    // Nobody claims it; 46 minutes pass.
-    await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET created_at = ?2 WHERE id = ?1").bind(queued.id, new Date(Date.now() - 46 * 60_000).toISOString()).run();
+    await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'CLAIMED', claimed_by = 'mac', claimed_at = ?2, attempt_count = 1 WHERE id = ?1")
+      .bind(run.id, new Date(Date.now() - JOB_SILENCE_MS - 60_000).toISOString())
+      .run();
+    const reaped = await reapSeatRuns(env, new Date());
+    expect(reaped.returnedToPool, "silence is a nap: back to the queue, not the grave").toContain(run.id);
+    expect(reaped.abandoned).not.toContain(run.id);
+    const napped = (await readRun(env, run.id))!;
+    expect(napped.status).toBe("QUEUED");
+    expect(napped.claimed_by).toBeNull();
+    expect(napped.resolution).toMatch(/waits for the Mac to wake/);
+    // The sweep sees a card with a live (queued) job and leaves it alone — no tick is spent on it at
+    // all, which is why `tickFor` would never reach it. Run the card's own step directly: it holds.
+    const retry = await runWebPropertyChangeCard(env, { id, title: "t", kind: WEB_PROPERTY_CHANGE_KIND, owner_id: "aie_porter", state: "IN_PROGRESS", work_attempts: 0, firm_scope: "west-peek", requested_by_email: SCOOTER });
+    expect(retry.held, "a nap is not a failed attempt: the card is held for the same job").toBe(true);
+    expect(retry.progressed).toBe(true);
+    expect(retry.blocked).toBe(false);
+    expect((await card(id)).state).not.toBe("BLOCKED");
+    expect(Number((await card(id)).work_attempts ?? 0), "no attempt spent on a sleeping Mac").toBe(attemptsBefore);
+    expect((await liveJobFor(id))!.id, "the same job, not a second one").toBe(run.id);
+    expect(sent.slice(before).filter((m) => m.to === SCOOTER && /: Blocked$/.test(m.subject)), "nothing says Blocked").toHaveLength(0);
+    // The Mac stays asleep; 46 minutes pass. The partner hears once, in the right words.
+    await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET created_at = ?2 WHERE id = ?1").bind(run.id, new Date(Date.now() - 46 * 60_000).toISOString()).run();
     const held = await runWebPropertyChangeCard(env, { id, title: "t", kind: WEB_PROPERTY_CHANGE_KIND, owner_id: "aie_porter", state: "IN_PROGRESS", work_attempts: 0, firm_scope: "west-peek", requested_by_email: SCOOTER });
     expect(held.held).toBe(true);
-    const stuck = sent.slice(before).filter((m) => m.to === SCOOTER && /: Blocked$/.test(m.subject));
-    expect(stuck).toHaveLength(1);
-    expect(stuck[0]!.text).toMatch(/^\*\*TL;DR:\*\* Blocked: the plan has been waiting \*{0,2}46\*{0,2} minutes for the Mac/);
+    const asleep = sent.slice(before).filter((m) => m.to === SCOOTER && /: Waiting for the Mac$/.test(m.subject));
+    expect(asleep).toHaveLength(1);
+    expect(asleep[0]!.text).toMatch(/^\*\*TL;DR:\*\* Not started yet: the lane I build on \(Sequoia's Mac\) is asleep\./);
+    expect(asleep[0]!.text).toMatch(/went to sleep part-way through the plan/);
+    expect(asleep[0]!.text).toMatch(/tell Sequoia to open the Mac/);
+    expect(asleep[0]!.text).not.toMatch(/Blocked/);
     await runWebPropertyChangeCard(env, { id, title: "t", kind: WEB_PROPERTY_CHANGE_KIND, owner_id: "aie_porter", state: "IN_PROGRESS", work_attempts: 0, firm_scope: "west-peek", requested_by_email: SCOOTER });
-    expect(sent.slice(before).filter((m) => m.to === SCOOTER && /: Blocked$/.test(m.subject)), "the same cause never emails twice").toHaveLength(1);
+    expect(sent.slice(before).filter((m) => m.to === SCOOTER && /: Waiting for the Mac$/.test(m.subject)), "the same cause never emails twice").toHaveLength(1);
+    expect(sent.slice(before).filter((m) => m.to === SCOOTER && /: Blocked$/.test(m.subject)), "still nothing says Blocked").toHaveLength(0);
     const kinds = (await env.WP_OS_DB.prepare("SELECT kind FROM work_card_notice WHERE work_card_id = ?1 ORDER BY sent_at").bind(id).all<{ kind: string }>()).results!.map((n) => n.kind);
     expect(kinds).toEqual(["RECEIVED", "STUCK"]);
     await env.WP_OS_DB.prepare("UPDATE work_kind_rule SET value = '06-22' WHERE kind = ?1 AND rule_key = 'stuck_window_ct'").bind(WEB_PROPERTY_CHANGE_KIND).run();
@@ -1890,7 +1934,7 @@ describe("STUCK is sent once, only when idle past the ceiling inside the window"
 });
 
 describe("the reaper judges a job by its pulse and its ceiling", () => {
-  it("a claimed job silent past JOB_SILENCE_MS is closed (not re-offered); a pinging one is left alone; a queued job waits for the Mac", async () => {
+  it("a claimed job silent past JOB_SILENCE_MS goes back to the queue with the sleeping-Mac words and no attempt; a pinging one is left alone; a queued job waits for the Mac; a job that keeps napping is closed", async () => {
     const now = new Date("2026-09-21T09:00:00.000Z");
     const silent = await parkRun(env, { seat: "claude_code", purpose: "silent", prompt: "x", modelAccess: "PUBLIC_MODEL_APPROVED", runKind: "LOCAL_JOB", jobJson: JSON.stringify({ queue_max_seconds: 43200 }), maxSeconds: 3600 });
     const alive = await parkRun(env, { seat: "claude_code", purpose: "alive", prompt: "x", modelAccess: "PUBLIC_MODEL_APPROVED", runKind: "LOCAL_JOB", jobJson: JSON.stringify({ queue_max_seconds: 43200 }), maxSeconds: 3600 });
@@ -1903,14 +1947,42 @@ describe("the reaper judges a job by its pulse and its ceiling", () => {
     await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'CLAIMED', claimed_by = 'mac', claimed_at = ?2, attempt_count = 1 WHERE id = ?1").bind(answer, new Date(now.getTime() - 6 * 60_000).toISOString()).run();
     // A queued job older than 0187's ten minutes but inside its own ceiling.
     await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET created_at = ?2 WHERE id = ?1").bind(waiting, new Date(now.getTime() - 2 * 3600_000).toISOString()).run();
+    const silentCreated = (await readRun(env, silent))!.created_at;
 
     const out = await reapSeatRuns(env, now);
-    expect(out.abandoned).toContain(silent);
-    expect((await readRun(env, silent))!.resolution).toMatch(/went quiet/);
+    // SILENCE IS A NAP (28 Sep 2026): the same row goes back to QUEUED, the claim is cleared, the
+    // words say why, and `created_at` still bounds the whole wait by the queue ceiling.
+    expect(out.returnedToPool).toContain(silent);
+    expect(out.abandoned).not.toContain(silent);
+    const nap = (await readRun(env, silent))!;
+    expect(nap.status).toBe("QUEUED");
+    expect(nap.claimed_by).toBeNull();
+    expect(nap.claimed_at).toBeNull();
+    expect(nap.progressed_at).toBeNull();
+    expect(nap.resolution).toMatch(/went quiet/);
+    expect(nap.resolution).toMatch(/waits for the Mac to wake/);
+    expect(nap.resolution).toMatch(/no attempt was spent/);
+    expect(nap.created_at, "the wait is still bounded from the first parking").toBe(silentCreated);
     expect((await readRun(env, alive))!.status).toBe("CLAIMED");
     expect((await readRun(env, waiting))!.status, "a job waits for the Mac past the answer queue's ten minutes").toBe("QUEUED");
     expect((await readRun(env, answer))!.status, "0187's answer rule is unchanged").toBe("QUEUED");
     expect(out.returnedToPool).toContain(answer);
+
+    // The Mac wakes, claims it again, and sleeps again — five more times. The sixth nap closes it:
+    // something other than sleep is stopping this job, and a queue that retries for ever is inert.
+    await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'CLAIMED', claimed_by = 'mac', claimed_at = ?2, attempt_count = ?3 WHERE id = ?1")
+      .bind(silent, claimedAt, MAX_JOB_NAPS - 1)
+      .run();
+    const fifth = await reapSeatRuns(env, now);
+    expect(fifth.returnedToPool, "under the cap it still naps").toContain(silent);
+    await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'CLAIMED', claimed_by = 'mac', claimed_at = ?2, attempt_count = ?3 WHERE id = ?1")
+      .bind(silent, claimedAt, MAX_JOB_NAPS)
+      .run();
+    const sixth = await reapSeatRuns(env, now);
+    expect(sixth.abandoned, "at the cap it is closed").toContain(silent);
+    expect((await readRun(env, silent))!.status).toBe("ABANDONED");
+    expect((await readRun(env, silent))!.resolution).toMatch(/closed rather than offered again/);
+    expect((await readRun(env, silent))!.resolution).not.toMatch(/waits for the Mac to wake/);
 
     // Past its own ceiling, a queued job is closed with the reason.
     await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET created_at = ?2 WHERE id = ?1").bind(waiting, new Date(now.getTime() - 13 * 3600_000).toISOString()).run();

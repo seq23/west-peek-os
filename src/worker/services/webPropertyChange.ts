@@ -9,7 +9,7 @@ import { notifyQuietly } from "./notifications";
 import { runAi } from "../ai/runAi";
 import { deliver } from "./deliverables";
 import { handOver } from "./employeeWork";
-import { parkRun, readRun, type SeatRunRow } from "../ai/subscriptionSeats";
+import { isWaitingForMac, parkRun, readRun, type SeatRunRow } from "../ai/subscriptionSeats";
 import { PARTNERS, PREVIEW_PARTNER, partnerByEmail } from "../../shared/registry/partners";
 import { sendOrPreview } from "./previewApproval";
 import type { SweepCard } from "./workSweep";
@@ -311,6 +311,32 @@ export async function sendStuck(env: Env, card: WebPropertyChangeCard, cause: st
     sections: [
       { label: "Why", bullets: [reason] },
       { label: "What happens next", bullets: [next, `The card: https://os.joinwestpeek.com/#/work (card ${card.id})`] },
+    ],
+  });
+}
+
+/**
+ * ASLEEP — the lane that builds is her Mac, and it is not awake (28 Sep 2026). Once per run.
+ *
+ * Her ruling, after a night of five "Blocked" emails for a closed lid: the closed-lid case is not a
+ * block and must never say so. The partner hears, once, that the lane is closed because the Mac is
+ * asleep, that Porter starts the moment it wakes, and that the owner of the Mac can be asked to wake
+ * it. The subject says "Waiting for the Mac", never "Blocked"; the card is not blocked either.
+ */
+export async function sendAsleep(env: Env, card: WebPropertyChangeCard, cause: string, reason: string): Promise<{ sent: boolean; reason: string }> {
+  return tellRequester(env, card, { kind: "STUCK", cause }, {
+    what: stageSubject((await porterContext(env, card.id))?.title ?? card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").slice(0, 60), STAGE.ASLEEP),
+    tldr: `Not started yet: the lane I build on (Sequoia's Mac) is asleep. I'll get to work the moment it wakes; nothing you sent is lost.`,
+    sections: [
+      { label: "Why", bullets: [reason] },
+      {
+        label: "What happens next",
+        bullets: [
+          "The job waits in the queue and runs by itself when the Mac wakes; I do not need anything from you.",
+          "If you want it sooner, tell Sequoia to open the Mac.",
+          `The card: https://os.joinwestpeek.com/#/work (card ${card.id})`,
+        ],
+      },
     ],
   });
 }
@@ -1149,16 +1175,22 @@ export async function applyReport(
     await recordHistory(env, row, { run_id: run.id, phase: row.phase, status: run.status, reason: why.slice(0, 300) });
     await appendFinding(env, card.id, `${row.phase} did not finish on the Mac: ${why}`);
     if (run.status === "ABANDONED" && !run.claimed_by) {
-      // Nobody picked it up inside the queue ceiling. A fault to look at, with the lane named.
+      /*
+       * Nobody picked it up inside the queue ceiling (twelve hours for a website job). A fault to
+       * look at, with the lane named — and addressed to the OWNER OF THE MAC, never the requesting
+       * partner (28 Sep 2026): a Mac that has been asleep for twelve hours is hers to wake, and the
+       * partner already heard once that the lane is asleep (`sendAsleep`). They must never be told
+       * "Blocked" for a laptop lid.
+       */
       const why2 = await blockCard(env, card, {
         reason: "a_lane_refused_the_work",
         trying: card.title,
         employee: PORTER_NAME,
-        who: whoFor(card),
+        who: "SEQUOIA",
         lane: "Claude Code (her Mac)",
         laneKey: "claude_code",
         laneKind: "LANE_DOWN",
-        vendorWords: "no machine claimed this job before its queue ceiling — the Mac is asleep or the local-jobs launchd job is not running",
+        vendorWords: "no machine claimed this job before its queue ceiling — the Mac has been asleep for that long, or the local-jobs launchd job is not running",
         raw: why,
       });
       return { finished: false, blocked: true, progressed: false, detail: why2 };
@@ -2222,12 +2254,20 @@ export async function runWebPropertyChangeCard(
       const idleMs = now.getTime() - Date.parse(run.status === "QUEUED" ? run.created_at : (run.progressed_at ?? run.claimed_at ?? run.created_at));
       const ceilingMs = Math.max(5, Number(rules.stuck_after_minutes ?? "45") || 45) * 60_000;
       if (run.status === "QUEUED" && idleMs > ceilingMs && stuckWindowOpen(rules.stuck_window_ct, now)) {
-        await sendStuck(
+        /*
+         * A MAC THAT IS ASLEEP IS NOT A BLOCK (28 Sep 2026). Whether the job was never claimed
+         * (the Mac was away when it was parked) or was claimed and then the Mac slept mid-run (the
+         * reaper put it back with `isWaitingForMac` on the row), the partner hears the same thing
+         * once: the lane is closed because the Mac is asleep, Porter starts when it wakes, and the
+         * owner of the Mac can be asked to open it. Never "Blocked", never an attempt spent.
+         */
+        await sendAsleep(
           env,
           card,
-          `unclaimed:${run.id}`,
-          `the ${row.phase.toLowerCase()} has been waiting ${Math.round(idleMs / 60_000)} minutes for the Mac to pick it up, and it has not`,
-          "it runs the moment the Mac is awake and the local-jobs job is running; nothing is lost. If you want it sooner, wake the Mac.",
+          `asleep:${run.id}`,
+          isWaitingForMac(run.resolution)
+            ? `the Mac went to sleep part-way through the ${row.phase.toLowerCase()}; the job is back in the queue and has been waiting ${Math.round(idleMs / 60_000)} minutes for it to wake`
+            : `the ${row.phase.toLowerCase()} has been waiting ${Math.round(idleMs / 60_000)} minutes for the Mac to pick it up, and it has not — the Mac is asleep or the local-jobs job is not running`,
         );
       }
       return { finished: false, blocked: false, progressed: true, held: true, detail: `${row.phase} is ${where}.` };

@@ -3,7 +3,8 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import type { FirmUserIdentity } from "../src/worker/auth";
 import { createWorkCardInternal, handleGetWorkCard, handleWorkByOwner } from "../src/worker/services/workCards";
-import { RUN_FRESH_MS, deskSummary, firstSentence, liveStatus, needsLabel, partnerWaitedOn, plainFailure, sentenceCase, siteWait, type LiveStatusInput } from "../src/shared/work/liveStatus";
+import { RUN_FRESH_MS, WAITING_FOR_MAC_WORDS, deskSummary, firstSentence, liveStatus, needsLabel, partnerWaitedOn, plainFailure, sentenceCase, siteWait, type LiveStatusInput } from "../src/shared/work/liveStatus";
+import { isWaitingForMac, waitingForMacResolution, WAITING_FOR_MAC } from "../src/worker/ai/subscriptionSeats";
 import { plainTitle, shortAsk, siteStage, siteTries } from "../src/shared/work/siteChange";
 import { CARD_KINDS, readsPages } from "../src/shared/work/cardKinds";
 import { triesWords } from "../src/client/pages/work/triesWords";
@@ -68,6 +69,25 @@ describe("liveStatus — one reader, every state", () => {
     expect(s.kind).toBe("QUEUED");
     expect(s.live).toBe(false);
     expect(s.line).toBe("Queued for your Mac · waiting 7 min");
+  });
+
+  it("a QUEUED run the reaper put back because the Mac slept is a WAIT in those words — never Queued, never a failure (28 Sep 2026)", () => {
+    const s = liveStatus(
+      porter({ current_run: { status: "QUEUED", created_at: ago(7 * 60_000), resolution: waitingForMacResolution("mac-Sequoias-Laptop.local-jobs", 11 * 60_000) } }),
+      ME,
+      NOW,
+    );
+    expect(s.kind).toBe("WAITING");
+    expect(s.live).toBe(false);
+    expect(s.pill).toBe("Waiting");
+    expect(s.line).toBe("Your Mac went to sleep mid-run · it waits and is picked up again when the Mac wakes · 7 min");
+    // The words the status line reads are the words the queue writes: one constant on each side, pinned equal.
+    expect(WAITING_FOR_MAC_WORDS).toBe(WAITING_FOR_MAC);
+    expect(isWaitingForMac(waitingForMacResolution("mac", 1_000))).toBe(true);
+    expect(isWaitingForMac("No machine claimed this job in 13 hours")).toBe(false);
+    // A queued row with any other resolution (an answer row returned to the pool) is still simply Queued.
+    const other = liveStatus(porter({ current_run: { status: "QUEUED", created_at: ago(60_000), resolution: "mac took this run and went quiet for 6 minutes — most likely the lid closed. Returned to the pool for the next machine that wakes up." } }), ME, NOW);
+    expect(other.kind).toBe("QUEUED");
   });
 
   it("the sweep's live lease is WORKING_NOW; an expired lease is not", () => {
