@@ -8,9 +8,11 @@ import { NEWEST_CAP, communityNewest, contactSyncState, type NewestContact } fro
 /**
  * GET /api/community/newest — "so we can see some names" (operator, 27 Sep 2026).
  *
- * The rules under test: newest first by Network OS's own created_at; at most 25 however many are
- * asked for; contacts only (an event mapping is not a person); this firm's scope only; every field
- * extracted in D1 from the snapshot — the Worker never parses a snapshot to find the newest.
+ * The rules under test: newest first in the SHEET'S order — the order the sync first stored each
+ * row, not the snapshot's created_at, which the newest rows on the sheet leave blank (28 Sep 2026);
+ * at most 25 however many are asked for; contacts only (an event mapping is not a person); this
+ * firm's scope only; only the active; only a first and last name; every field extracted in D1
+ * from the snapshot — the Worker never parses a snapshot to find the newest.
  */
 
 let t: TestDb;
@@ -47,15 +49,21 @@ async function get<T>(path: string): Promise<{ status: number; body: T }> {
   return { status: res.status, body: (await res.json()) as T };
 }
 
-/** Thirty contacts, created one day apart, seeded OUT of order so the sort has to do the work. */
+/**
+ * Thirty contacts, seeded in a SHUFFLED order that is recorded: the window must come back in the
+ * reverse of that order — the sheet's, as the sync met it — and not in the order of the
+ * `created_at` each snapshot carries, which is deliberately unrelated to it.
+ */
 const SEEDED = 30;
 const day = (i: number): string => `2026-08-${String(1 + i).padStart(2, "0")}T09:00:00Z`;
+let order: number[] = [];
+const ext = (i: number): string => `ext_c${i}`;
 
 describe("GET /api/community/newest", () => {
   beforeAll(async () => {
     t = await createTestDb();
     env = makeTestEnv(t.db);
-    const order = Array.from({ length: SEEDED }, (_, i) => i).sort(() => 0.5 - Math.random());
+    order = Array.from({ length: SEEDED }, (_, i) => i).sort(() => 0.5 - Math.random());
     for (const i of order) {
       await seedMapping({
         external_id: `ext_c${i}`,
@@ -100,10 +108,11 @@ describe("GET /api/community/newest", () => {
     expect(body.newest.map((c) => c.external_id).filter((id) => id.startsWith("ext_junk"))).toEqual([]);
     // …and the inactive are neither shown nor counted: they are out of the window entirely.
     expect(body.newest.map((c) => c.external_id).filter((id) => id.startsWith("ext_inactive"))).toEqual([]);
+    // THE SHEET'S ORDER: the last 25 the sync stored, most recent first — whatever their created_at.
+    expect(body.newest.map((c) => c.external_id)).toEqual(order.slice(-25).reverse().map(ext));
+    // …and NOT the snapshot's created_at, which would put the highest day first.
     const created = body.newest.map((c) => c.created_at!);
-    expect(created).toEqual([...created].sort().reverse());
-    expect(body.newest[0]!.created_at).toBe(day(SEEDED - 1));
-    expect(body.newest[24]!.created_at).toBe(day(SEEDED - 25));
+    expect(created).not.toEqual([...created].sort().reverse());
   });
 
   it("defaults to 25, honours a smaller limit, and never goes below one", async () => {
@@ -127,14 +136,15 @@ describe("GET /api/community/newest", () => {
 
   it("extracts every field in D1 and hands back exactly the row the page reads", async () => {
     const [first] = (await get<{ newest: NewestContact[] }>("/api/community/newest?limit=1")).body.newest;
+    const last = order[SEEDED - 1]!;
     expect(first).toEqual({
-      external_id: `ext_c${SEEDED - 1}`,
-      full_name: `Person Test${SEEDED - 1}`,
-      company: `Company ${SEEDED - 1}`,
+      external_id: ext(last),
+      full_name: `Person Test${String(last).padStart(2, "0")}`,
+      company: `Company ${last}`,
       city: "Chicago",
-      person_type: (SEEDED - 1) % 2 === 0 ? "founder" : "general_tech_adjacent",
+      person_type: last % 2 === 0 ? "founder" : "general_tech_adjacent",
       relationship_owner: "Scooter",
-      created_at: day(SEEDED - 1),
+      created_at: day(last),
     });
     // A snapshot missing a field yields null, not a crash and not a made-up value.
     await seedMapping({ external_id: "ext_thin", snapshot: { full_name: "Thin Row", created_at: "2030-02-02T00:00:00Z" } });

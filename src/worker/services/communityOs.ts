@@ -340,9 +340,18 @@ export interface NewestWindow {
  * The last few people added in Network OS — "so we can see some names" (operator, 27 Sep 2026).
  *
  * This is NOT the roster coming back. It is a window of at most twenty-five, read off the synced
- * snapshot in the order Network OS created them, shown read-only and stored nowhere new; the
- * mapping rows it reads already exist for the population count. Every field is pulled with
- * `json_extract` in D1 so the Worker never parses five thousand snapshots to find the newest.
+ * snapshot, shown read-only and stored nowhere new; the mapping rows it reads already exist for
+ * the population count. Every field is pulled with `json_extract` in D1 so the Worker never parses
+ * five thousand snapshots to find the newest.
+ *
+ * "NEWEST" IS THE SHEET'S ORDER, NOT A DATE COLUMN (28 Sep 2026). The first cut ordered by the
+ * snapshot's `created_at`, and the operator held the sheet up against the page: the twenty people
+ * most recently added to it (the `contact_qcon_…` rows) have a BLANK created_at, which sorts to
+ * the very bottom, so they could never enter the window while three September rows that carry a
+ * timestamp did. The sync walks the sheet top to bottom and stores each row it has not seen, so
+ * `first_seen_at` (with the row id breaking ties inside one tick) IS the sheet's order as the
+ * sync met it, and the bottom of the sheet is the top of this window. A row's later edits do not
+ * move it: being edited is not being added.
  *
  * A NAME, OR NOT SHOWN (28 Sep 2026). Network OS holds rows named "? ?" and "@handle"; the window
  * reads a bounded run of the newest and keeps the ones with a first and last name, counting the
@@ -371,7 +380,7 @@ export async function communityNewest(env: Env, firmScope: string, limit: number
       WHERE resource = 'contact' AND firm_scope = ?1
         AND (json_extract(snapshot_json, '$.status') IS NULL
              OR lower(trim(json_extract(snapshot_json, '$.status'))) = 'active')
-      ORDER BY json_extract(snapshot_json, '$.created_at') DESC, json_extract(snapshot_json, '$.full_name')
+      ORDER BY first_seen_at DESC, rowid DESC
       LIMIT ?2`,
   )
     .bind(firmScope, NEWEST_SCAN)
