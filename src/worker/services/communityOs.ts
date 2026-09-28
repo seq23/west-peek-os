@@ -279,3 +279,55 @@ export async function handleCommunityPopulation(ctx: RouteContext): Promise<Resp
   const firmScope = actor.firmScopes[0] ?? "west-peek";
   return json(await communityPopulation(ctx.env, firmScope));
 }
+
+// ── Newest in the community ────────────────────────────────────────────────────
+
+/** The most a page may ask for. Approved 27 Sep 2026 as "the last 25 added in Network OS". */
+export const NEWEST_CAP = 25;
+
+export interface NewestContact {
+  external_id: string;
+  full_name: string | null;
+  company: string | null;
+  city: string | null;
+  person_type: string | null;
+  relationship_owner: string | null;
+  created_at: string | null;
+}
+
+/**
+ * The last few people added in Network OS — "so we can see some names" (operator, 27 Sep 2026).
+ *
+ * This is NOT the roster coming back. It is a window of at most twenty-five, read off the synced
+ * snapshot in the order Network OS created them, shown read-only and stored nowhere new; the
+ * mapping rows it reads already exist for the population count. Every field is pulled with
+ * `json_extract` in D1 so the Worker never parses five thousand snapshots to find the newest.
+ *
+ * Network OS has no per-contact URL, so a row here carries no link; the band's button is the door.
+ */
+export async function communityNewest(env: Env, firmScope: string, limit: number = NEWEST_CAP): Promise<NewestContact[]> {
+  const n = Math.max(1, Math.min(NEWEST_CAP, Math.floor(Number.isFinite(limit) ? limit : NEWEST_CAP)));
+  const rows = await env.WP_OS_DB.prepare(
+    `SELECT external_id,
+            json_extract(snapshot_json, '$.full_name') AS full_name,
+            json_extract(snapshot_json, '$.company') AS company,
+            json_extract(snapshot_json, '$.city') AS city,
+            json_extract(snapshot_json, '$.person_type') AS person_type,
+            json_extract(snapshot_json, '$.relationship_owner') AS relationship_owner,
+            json_extract(snapshot_json, '$.created_at') AS created_at
+       FROM network_external_mapping
+      WHERE resource = 'contact' AND firm_scope = ?1
+      ORDER BY json_extract(snapshot_json, '$.created_at') DESC, json_extract(snapshot_json, '$.full_name')
+      LIMIT ?2`,
+  )
+    .bind(firmScope, n)
+    .all<NewestContact>();
+  return rows.results ?? [];
+}
+
+export async function handleCommunityNewest(ctx: RouteContext): Promise<Response> {
+  const actor = actorFromIdentity(ctx.identity!);
+  const firmScope = actor.firmScopes[0] ?? "west-peek";
+  const asked = Number(new URL(ctx.request.url).searchParams.get("limit") ?? NEWEST_CAP);
+  return json({ newest: await communityNewest(ctx.env, firmScope, asked), cap: NEWEST_CAP });
+}
