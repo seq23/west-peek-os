@@ -13,3 +13,5 @@
 -- report against: a CHANGES rebuild whose report does not say the branch head moved is a failed
 -- attempt, never a fresh preview. Cleared by a materials check ("preview"/"publish").
 ALTER TABLE web_property_change ADD COLUMN rebuilt_for TEXT;
+
+INSERT OR IGNORE INTO schema_version (migration) VALUES ('0244_a_rebuild_after_a_preview_must_change_something');
