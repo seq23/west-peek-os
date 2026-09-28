@@ -12,7 +12,7 @@ export const communityGuide: PageGuide = {
   purpose:
     "The community as a population — how many people, how many the firm can place, how warm it is, and who arrived most recently — read from Network OS, which owns who is a member.",
   youCan: [
-    "See the shape of the community as four numbers and two rings, and how warm it is",
+    "See the shape of the community as four numbers, two rings and every kind counted, and how warm it is",
     "See the last 25 people added in Network OS",
     "Capture someone new so they go to Network OS's review queue",
     "Open Network OS, where the people themselves are added and edited",
@@ -23,9 +23,9 @@ export const communityGuide: PageGuide = {
     {
       name: "What the community looks like",
       testid: "community-population",
-      shows: "four headline numbers, a ring of who the firm can place with the tech-adjacent thousands said beneath it, a ring of how warm it is, and when this was last read from Network OS.",
+      shows: "four headline numbers, a ring of who the firm can place with the tech-adjacent thousands said beneath it, a ring of how warm it is, every kind counted, and when this was last read from Network OS.",
     },
-    { name: "Newest in the community", testid: "community-newest", shows: "the last 25 people added in Network OS — name, company, kind, owner and when they were added. Read-only; nothing is stored." },
+    { name: "Newest in the community", testid: "community-newest", shows: "the names of the last 25 people added in Network OS, and nothing else about them. Read-only; nothing is stored." },
   ],
   acts: [
     {
@@ -56,7 +56,7 @@ export const communityGuide: PageGuide = {
     {
       scenario: "Where the people live",
       steps: [
-        { do: "Read **What the community looks like** — the four numbers, who the firm can place, and how warm it is", then: "you know what the room is made of before you convene one." },
+        { do: "Read **What the community looks like** — the four numbers, who the firm can place, how warm it is, and every kind counted", then: "you know what the room is made of before you convene one." },
         { do: "Scan **Newest in the community** for the last 25 names added", then: "you can see who has arrived without opening Network OS.", not: "there is no per-person link — Network OS has no per-contact page; its button is the door." },
         { do: "To look at, add or edit a person, press **Open Network OS ↗** in the **Network OS** band", then: "Network OS opens in a new tab beside this page.", not: "nothing on this page is edited — it is West Peek's read on them, never the record." },
         { do: "Met someone new? Press **Capture someone** in the **Network OS** band", then: "Capture opens and, once written down, they go to Network OS's review queue.", not: "no member is added here — there is no roster on this page." },

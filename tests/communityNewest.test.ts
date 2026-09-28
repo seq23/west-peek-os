@@ -22,6 +22,7 @@ const CLAIMER = { "x-wpos-dev-user": "subscription-claimer@joinwestpeek.com" };
 
 type Newest = {
   newest: NewestContact[];
+  skipped: number;
   cap: number;
   loading: { done: number; total: number } | null;
   source: { last_status: string; last_sync_at: string | null; failure_reason: string | null };
@@ -59,7 +60,8 @@ describe("GET /api/community/newest", () => {
       await seedMapping({
         external_id: `ext_c${i}`,
         snapshot: {
-          full_name: `Person ${String(i).padStart(2, "0")}`,
+          full_name: `Person Test${String(i).padStart(2, "0")}`,
+          status: i % 3 === 0 ? "Active" : "active",
           company: `Company ${i}`,
           city: "Chicago",
           person_type: i % 2 === 0 ? "founder" : "general_tech_adjacent",
@@ -71,6 +73,16 @@ describe("GET /api/community/newest", () => {
     // An event is not a person, and another firm's contact is not this firm's.
     await seedMapping({ external_id: "ext_event", resource: "event", snapshot: { full_name: "Not A Person", created_at: "2030-01-01T00:00:00Z" } });
     await seedMapping({ external_id: "ext_other_firm", firm_scope: "other-firm", snapshot: { full_name: "Other Firm", created_at: "2030-01-01T00:00:00Z" } });
+    // The August import, as Network OS holds it: newer than everyone and not a name. Each is
+    // passed over and counted, never shown, and never pushes a person off the window.
+    for (const [i, junk] of ["? ?", ". Goosby", "@tayllure Taylor", "*alt email: staylor@spry.vc more than a decade", "A K"].entries()) {
+      await seedMapping({ external_id: `ext_junk${i}`, snapshot: { full_name: junk, status: "active", person_type: "general_tech_adjacent", created_at: "2029-01-01T00:00:00Z" } });
+    }
+    // The sheet's status column: anyone not active is not in the window, however new; a row
+    // with no status field at all is (the column absent is not the same as inactive).
+    for (const [i, status] of ["inactive", "Inactive", "lapsed", "", "removed"].entries()) {
+      await seedMapping({ external_id: `ext_inactive${i}`, snapshot: { full_name: `Gone Person${i}`, status, created_at: "2029-06-01T00:00:00Z" } });
+    }
   });
 
   afterAll(async () => {
@@ -78,11 +90,16 @@ describe("GET /api/community/newest", () => {
   });
 
   it("returns the newest first, capped at 25 even when 100 are asked for", async () => {
-    const { status, body } = await get<{ newest: NewestContact[]; cap: number }>("/api/community/newest?limit=100");
+    const { status, body } = await get<Newest>("/api/community/newest?limit=100");
     expect(status).toBe(200);
     expect(body.cap).toBe(25);
     expect(NEWEST_CAP).toBe(25);
     expect(body.newest).toHaveLength(25);
+    // The five rows with no first and last name are newer than everyone, skipped and counted.
+    expect(body.skipped).toBe(5);
+    expect(body.newest.map((c) => c.external_id).filter((id) => id.startsWith("ext_junk"))).toEqual([]);
+    // …and the inactive are neither shown nor counted: they are out of the window entirely.
+    expect(body.newest.map((c) => c.external_id).filter((id) => id.startsWith("ext_inactive"))).toEqual([]);
     const created = body.newest.map((c) => c.created_at!);
     expect(created).toEqual([...created].sort().reverse());
     expect(body.newest[0]!.created_at).toBe(day(SEEDED - 1));
@@ -94,7 +111,7 @@ describe("GET /api/community/newest", () => {
     expect((await get<{ newest: NewestContact[] }>("/api/community/newest?limit=5")).body.newest).toHaveLength(5);
     expect((await get<{ newest: NewestContact[] }>("/api/community/newest?limit=0")).body.newest).toHaveLength(1);
     expect((await get<{ newest: NewestContact[] }>("/api/community/newest?limit=abc")).body.newest).toHaveLength(25);
-    expect(await communityNewest(env, "west-peek", 3)).toHaveLength(3);
+    expect((await communityNewest(env, "west-peek", 3)).newest).toHaveLength(3);
   });
 
   it("shows contacts of this firm only — no events, no other scope", async () => {
@@ -105,14 +122,14 @@ describe("GET /api/community/newest", () => {
     expect(body.newest.map((c) => c.full_name)).not.toContain("Not A Person");
     // The other firm sees its own one and none of ours.
     const theirs = await communityNewest(env, "other-firm");
-    expect(theirs.map((c) => c.external_id)).toEqual(["ext_other_firm"]);
+    expect(theirs.newest.map((c) => c.external_id)).toEqual(["ext_other_firm"]);
   });
 
   it("extracts every field in D1 and hands back exactly the row the page reads", async () => {
     const [first] = (await get<{ newest: NewestContact[] }>("/api/community/newest?limit=1")).body.newest;
     expect(first).toEqual({
       external_id: `ext_c${SEEDED - 1}`,
-      full_name: `Person ${SEEDED - 1}`,
+      full_name: `Person Test${SEEDED - 1}`,
       company: `Company ${SEEDED - 1}`,
       city: "Chicago",
       person_type: (SEEDED - 1) % 2 === 0 ? "founder" : "general_tech_adjacent",
@@ -123,6 +140,10 @@ describe("GET /api/community/newest", () => {
     await seedMapping({ external_id: "ext_thin", snapshot: { full_name: "Thin Row", created_at: "2030-02-02T00:00:00Z" } });
     const [thin] = (await get<{ newest: NewestContact[] }>("/api/community/newest?limit=1")).body.newest;
     expect(thin).toMatchObject({ external_id: "ext_thin", full_name: "Thin Row", company: null, person_type: null, relationship_owner: null });
+    // No status field at all: kept, as above. Marked inactive, it leaves the window.
+    await env.WP_OS_DB.prepare("UPDATE network_external_mapping SET snapshot_json = json_set(snapshot_json, '$.status', 'inactive') WHERE external_id = 'ext_thin'").run();
+    const [afterInactive] = (await get<Newest>("/api/community/newest?limit=1")).body.newest;
+    expect(afterInactive!.external_id).not.toBe("ext_thin");
   });
 
   it("answers no one who is not signed in", async () => {

@@ -5,6 +5,7 @@ import type { RouteContext } from "../router";
 import type { Env } from "../env";
 import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
 import { actorFromIdentity, authorize } from "./authorize";
+import { hasFirstAndLastName } from "../../shared/community/personName";
 
 /**
  * Community OS — an INTERPRETATION LAYER over the community population (P33, canon §14, §12A.4).
@@ -311,6 +312,13 @@ export async function handleCommunityPopulation(ctx: RouteContext): Promise<Resp
 /** The most a page may ask for. Approved 27 Sep 2026 as "the last 25 added in Network OS". */
 export const NEWEST_CAP = 25;
 
+/**
+ * How many newest rows are read to find NEWEST_CAP with a first and last name. The August 2026
+ * import holds thousands of rows whose "name" is "? ?" or a handle; reading a bounded window past
+ * the cap finds the people among them without reading the community.
+ */
+export const NEWEST_SCAN = 200;
+
 export interface NewestContact {
   external_id: string;
   full_name: string | null;
@@ -321,6 +329,13 @@ export interface NewestContact {
   created_at: string | null;
 }
 
+export interface NewestWindow {
+  /** At most NEWEST_CAP people, newest first, each with a first and last name. */
+  newest: NewestContact[];
+  /** Newer rows passed over because Network OS holds no first and last name for them. */
+  skipped: number;
+}
+
 /**
  * The last few people added in Network OS — "so we can see some names" (operator, 27 Sep 2026).
  *
@@ -329,9 +344,20 @@ export interface NewestContact {
  * mapping rows it reads already exist for the population count. Every field is pulled with
  * `json_extract` in D1 so the Worker never parses five thousand snapshots to find the newest.
  *
+ * A NAME, OR NOT SHOWN (28 Sep 2026). Network OS holds rows named "? ?" and "@handle"; the window
+ * reads a bounded run of the newest and keeps the ones with a first and last name, counting the
+ * rest so the page can say how many it passed over. See `shared/community/personName.ts`.
+ *
+ * ACTIVE ONLY (operator, 28 Sep 2026): "it needs to only take those with status active from the
+ * sheet". The sheet's status column arrives on the snapshot as `status`; a row whose status is
+ * anything but active is not in the window. A row with NO status field is kept: the sync stores
+ * Network OS's row as it comes, and if the column were ever absent, excluding everything would
+ * blank the window and read as a fault. Such rows are not counted as skipped — they were never
+ * in the sheet's terms.
+ *
  * Network OS has no per-contact URL, so a row here carries no link; the band's button is the door.
  */
-export async function communityNewest(env: Env, firmScope: string, limit: number = NEWEST_CAP): Promise<NewestContact[]> {
+export async function communityNewest(env: Env, firmScope: string, limit: number = NEWEST_CAP): Promise<NewestWindow> {
   const n = Math.max(1, Math.min(NEWEST_CAP, Math.floor(Number.isFinite(limit) ? limit : NEWEST_CAP)));
   const rows = await env.WP_OS_DB.prepare(
     `SELECT external_id,
@@ -343,12 +369,21 @@ export async function communityNewest(env: Env, firmScope: string, limit: number
             json_extract(snapshot_json, '$.created_at') AS created_at
        FROM network_external_mapping
       WHERE resource = 'contact' AND firm_scope = ?1
+        AND (json_extract(snapshot_json, '$.status') IS NULL
+             OR lower(trim(json_extract(snapshot_json, '$.status'))) = 'active')
       ORDER BY json_extract(snapshot_json, '$.created_at') DESC, json_extract(snapshot_json, '$.full_name')
       LIMIT ?2`,
   )
-    .bind(firmScope, n)
+    .bind(firmScope, NEWEST_SCAN)
     .all<NewestContact>();
-  return rows.results ?? [];
+  const newest: NewestContact[] = [];
+  let skipped = 0;
+  for (const row of rows.results ?? []) {
+    if (newest.length >= n) break;
+    if (hasFirstAndLastName(row.full_name)) newest.push(row);
+    else skipped += 1;
+  }
+  return { newest, skipped };
 }
 
 export async function handleCommunityNewest(ctx: RouteContext): Promise<Response> {
@@ -373,8 +408,8 @@ export async function handleCommunityNewest(ctx: RouteContext): Promise<Response
    * still IN_PROGRESS labels whatever follows as partial, which it is.
    */
   const sync = await contactSyncState(ctx.env, firmScope);
-  const newest = await communityNewest(ctx.env, firmScope, asked);
+  const { newest, skipped } = await communityNewest(ctx.env, firmScope, asked);
   // The sync state rides with the names so the page can say "of the 1,200 read so far" during a
   // load, and can tell an empty read from a failed one from one that never ran.
-  return json({ newest, cap: NEWEST_CAP, loading: sync.loading, source: sync.source });
+  return json({ newest, skipped, cap: NEWEST_CAP, loading: sync.loading, source: sync.source });
 }
