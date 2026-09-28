@@ -1,3 +1,4 @@
+import type { LocalJobPayload } from "../src/shared/work/localJobs";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
@@ -727,7 +728,7 @@ describe("a plan that is not publish-ready previews first (21 Sep 2026)", () => 
     expect(job.refresh, "a change is rebuilt whatever the materials").toBe(false);
     expect(String((await card(id)).description)).toMatch(/asked for changes \("changes: the Sengo logo is wrong/);
     const beforeMail = sent.length;
-    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/21", pr_number: 21, branch: "work/wpc-comm1234", check_state: "GREEN", preview_url: "https://e9f8a7b6.west-peek-ventures.pages.dev", materials: "5:aaaa", proof: "validate green" });
+    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/21", pr_number: 21, branch: "work/wpc-comm1234", changed: true, head_sha: "moved-731", check_state: "GREEN", preview_url: "https://e9f8a7b6.west-peek-ventures.pages.dev", materials: "5:aaaa", proof: "validate green" });
     expect((await tickFor(id)).outcome).toBe("BLOCKED");
     const second = (await readWebPropertyChange(env, id))!;
     expect(second.preview_url).toBe("https://e9f8a7b6.west-peek-ventures.pages.dev");
@@ -1733,12 +1734,51 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     expect(row.refresh_intent).toBe("CHANGES");
     expect(row.land_approved_at).toBeNull();
     expect(JSON.parse(row.answers_json).at(-1)).toMatch(/make the hero photo the group shot/);
-    await macReports(p.id, { phase: "BUILD", status: "ok", pr_url: row.pr_url, pr_number: 9, check_state: "GREEN", preview_url: "https://p9b.west-peek-ventures.pages.dev" });
+    await macReports(p.id, { phase: "BUILD", status: "ok", pr_url: row.pr_url, pr_number: 9, changed: true, head_sha: "moved-1737", check_state: "GREEN", preview_url: "https://p9b.west-peek-ventures.pages.dev" });
     expect((await tickFor(p.id)).outcome, "a fresh preview waits").toBe("BLOCKED");
     await replyFrom(SCOOTER, "Perfect, that's the one", await p.token());
     expect((await tickFor(p.id)).summary).toMatch(/LAND queued/);
     row = (await readWebPropertyChange(env, p.id))!;
     expect(row.land_approved_at).toBeTruthy();
+  });
+
+  it("PREVIEW: a remark about the site is a change to make — the rebuild carries it as THE job; a build that moved nothing is a failed attempt, never the same preview twice (28 Sep 2026)", async () => {
+    const p = await atPreview("preview B2");
+    const previews = async () => (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PREVIEW'").bind(p.id).first<{ n: number }>())!.n;
+    const before = await previews();
+    await replyFrom(SCOOTER, "I don't know if people know they can scroll on the flyers to kinda make that thing", await p.token());
+    expect((await tickFor(p.id)).summary).toMatch(/Changes after the preview; BUILD queued/);
+    let row = (await readWebPropertyChange(env, p.id))!;
+    expect(row.refresh_intent).toBe("CHANGES");
+    expect(row.rebuilt_for, "his words are what the rebuild is for").toMatch(/scroll on the flyers/);
+    // The Mac's job carries them as THIS RUN'S WHOLE JOB, not one answer among many.
+    const job = JSON.parse((await liveJobFor(p.id))!.job_json!) as LocalJobPayload;
+    expect(job.rebuild).toMatchObject({ intent: "CHANGES" });
+    expect(job.rebuild!.changes).toMatch(/scroll on the flyers/);
+    // The Mac verifies the old build, moves nothing, reports ok: a failed attempt, no email.
+    await macReports(p.id, { phase: "BUILD", status: "ok", pr_url: row.pr_url, pr_number: 9, check_state: "GREEN", preview_url: "https://p9b2.west-peek-ventures.pages.dev", changed: false, head_sha: "1a447a3" });
+    const inert = await tickFor(p.id);
+    expect(inert.outcome, inert.summary).not.toBe("BLOCKED");
+    expect(inert.summary).toMatch(/BUILD moved nothing for the partner's request/);
+    expect(await previews(), "no second copy of the same preview").toBe(before);
+    expect((await readWebPropertyChange(env, p.id))!.refresh_intent, "the rebuild is still owed").toBe("CHANGES");
+    expect(await lastFinding(p.id)).toMatch(/came back with no new commit on the branch/);
+    // The next BUILD carries the same words; one that moves the branch is the fresh preview, and it says what changed in his words.
+    expect((await tickFor(p.id)).summary).toMatch(/BUILD queued|BUILD is queued/);
+    const again = JSON.parse((await liveJobFor(p.id))!.job_json!) as LocalJobPayload;
+    expect(again.rebuild!.changes).toMatch(/scroll on the flyers/);
+    await macReports(p.id, { phase: "BUILD", status: "ok", pr_url: row.pr_url, pr_number: 9, check_state: "GREEN", preview_url: "https://p9b2.west-peek-ventures.pages.dev", changed: true, head_sha: "6f943e3" });
+    expect((await tickFor(p.id)).outcome).toBe("BLOCKED");
+    expect(await previews()).toBe(before + 1);
+    const c = await card(p.id);
+    expect(String(c.block_needed)).toMatch(/^PREVIEW READY/);
+    expect(String(c.block_needed)).toMatch(/Changed since the last preview, as you asked: "I don't know if people know they can scroll on the flyers/);
+    row = (await readWebPropertyChange(env, p.id))!;
+    expect(row.refresh_intent).toBeNull();
+    // A materials check afterwards ("preview") no longer claims that change.
+    await replyFrom(SCOOTER, "preview", await p.token());
+    await tickFor(p.id);
+    expect((await readWebPropertyChange(env, p.id))!.rebuilt_for).toBeNull();
   });
 
   it("PREVIEW: a stop holds it; a question is answered and the preview stays up with nothing landed; the one switch turns free-form landing off", async () => {
@@ -1804,7 +1844,7 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     expect((await readWebPropertyChange(env, p.id))!.refresh_intent).toBe("CHANGES");
     expect((await readWebPropertyChange(env, p.id))!.land_approved_at).toBeNull();
     // And the reply to the PREVIEW email itself still lands it once the new preview is up.
-    await macReports(p.id, { phase: "BUILD", status: "ok", pr_url: (await readWebPropertyChange(env, p.id))!.pr_url, pr_number: 9, check_state: "GREEN", preview_url: "https://p9c.west-peek-ventures.pages.dev" });
+    await macReports(p.id, { phase: "BUILD", status: "ok", pr_url: (await readWebPropertyChange(env, p.id))!.pr_url, pr_number: 9, changed: true, head_sha: "moved-1847", check_state: "GREEN", preview_url: "https://p9c.west-peek-ventures.pages.dev" });
     expect((await tickFor(p.id)).outcome).toBe("BLOCKED");
     await replyFrom(SCOOTER, "approved", await p.token());
     expect((await tickFor(p.id)).summary).toMatch(/Landing approved after the preview; LAND queued/);

@@ -132,6 +132,15 @@ export interface LocalJobPayload {
    */
   refresh?: boolean;
   materials_fingerprint?: string | null;
+  /**
+   * 28 Sep 2026: THIS BUILD IS A REBUILD AFTER A PREVIEW. For CHANGES, `changes` is what the partner
+   * asked for, in their words — a remark or a worry about how the site behaves is a design change to
+   * make, not a note to acknowledge (Scooter, 27 Sep: "I don't know if people know they can scroll
+   * on the flyers" — the Mac built nothing and Porter re-sent the same preview). The script compares
+   * the branch head before and after the model's turn and reports `changed`; the Worker treats a
+   * CHANGES rebuild that moved nothing as a failed attempt, never a fresh preview.
+   */
+  rebuild?: { intent: "CHANGES" | "PREVIEW" | "PUBLISH"; changes: string | null; since: string | null } | null;
   rules: Record<string, string>;
   /**
    * 23 Sep 2026: ONE JOB OVER SEVERAL REPOS — one entry per repo (migration 0236), in order. Absent
@@ -200,6 +209,9 @@ export interface LocalJobReport {
   placeholders?: string[];
   /** BUILD: the Cloudflare Pages preview URL(s) for the branch, read by the script from gh. Absent when the repo has no preview deployment. */
   preview_url?: string;
+  /** BUILD (28 Sep 2026): written by the SCRIPT — did the branch head move during this run, and where is it now. A CHANGES rebuild with `changed` anything but true is a failed attempt. */
+  changed?: boolean;
+  head_sha?: string;
   /** BUILD: the PR, and what the script observed on it. */
   pr_url?: string;
   pr_number?: number;
@@ -274,6 +286,8 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
     placeholders: strs(r.placeholders),
     publish_ready: typeof r.publish_ready === "boolean" ? r.publish_ready : strs(r.placeholders).length === 0,
     preview_url: str(r.preview_url),
+    ...(typeof r.changed === "boolean" ? { changed: r.changed } : {}),
+    ...(str(r.head_sha) ? { head_sha: str(r.head_sha)!.slice(0, 64) } : {}),
     ...(str(r.materials) ? { materials: str(r.materials)!.slice(0, 200) } : {}),
     ...(Array.isArray(r.parts) ? { parts: readPartReports(r.parts) } : {}),
     ...(Array.isArray(r.missing_materials) ? { missing_materials: readMissingMaterials(r.missing_materials) } : {}),

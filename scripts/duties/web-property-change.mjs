@@ -303,8 +303,36 @@ export function renderContext(job, paths) {
   if (job.pr) {
     lines.push("", `PR: ${job.pr.url} (#${job.pr.number ?? "?"}) on ${job.pr.branch ?? paths.branch} — checks ${job.pr.check_state ?? "unknown"}${job.pr.check_green_at ? ` (green at ${job.pr.check_green_at})` : ""}`);
   }
+  lines.push(...rebuildBlock(job));
   if (paths.landOutput) lines.push("", "WHAT ~/bin/land PRINTED:", "```", paths.landOutput.slice(-6000), "```", `MERGE SHA: ${paths.mergeSha ?? "(unknown)"}`);
   return lines.join("\n");
+}
+
+/**
+ * A REBUILD AFTER THE PREVIEW IS THE CHANGE, NOT A RE-CHECK (28 Sep 2026). Scooter looked at the
+ * preview and wrote "I don't know if people know they can scroll on the flyers to kinda make that
+ * thing". The Worker read it as a change and queued a BUILD; this script's prompt listed it as one
+ * answer among five, the model found a branch that already had commits, "verified it is real
+ * rather than re-doing it", changed nothing and reported ok — and Porter re-sent the same preview.
+ * The block below puts the partner's words at the front as THIS RUN'S WHOLE JOB, and the script
+ * fails the run if the branch head did not move (`inertRebuild`). Pure, self-tested.
+ */
+export function rebuildBlock(job) {
+  if (job?.phase !== "BUILD" || job?.rebuild?.intent !== "CHANGES") return [];
+  const words = String(job.rebuild.changes ?? "").trim() || "(the partner's words did not come through — read THE PARTNER'S ANSWERS, the last one is the change)";
+  return [
+    "",
+    "REBUILD AFTER THE PREVIEW — THIS RUN'S WHOLE JOB IS THE CHANGE BELOW.",
+    `The partner looked at the preview${job.rebuild.since ? ` sent ${job.rebuild.since}` : ""} and wrote this. A remark, a worry or a question about how the site behaves IS a design change to make (e.g. "I don't know if people know they can scroll on the flyers" = make the scrolling discoverable: a cue, arrows, a peek). It is not a note to acknowledge and not a reason to re-verify the last build. The PR and branch already exist: make the change on top of them, commit, push, prove it. The script compares the branch head before and after your turn — a run that ends with no new commit FAILS.`,
+    "```",
+    words,
+    "```",
+  ];
+}
+
+/** True when a CHANGES rebuild ended with the branch head where it started: nothing was built for the partner's words. Pure. */
+export function inertRebuild(job, headBefore, headAfter) {
+  return job?.phase === "BUILD" && job?.rebuild?.intent === "CHANGES" && typeof headBefore === "string" && headBefore.length > 0 && headBefore === headAfter;
 }
 
 /** The rule for reading a package, the same words in every prompt that reads one. */
@@ -457,6 +485,16 @@ async function ensureWorktree(repoPath, names, phase, progress) {
     } catch {
       /* the model can npm ci if it needs to */
     }
+  }
+}
+
+/** The branch head in the worktree, or null when git cannot say (a failed read never fakes "changed"). */
+async function headOf(worktree) {
+  try {
+    const { stdout } = await sh("git", ["rev-parse", "HEAD"], { cwd: worktree });
+    return stdout.trim() || null;
+  } catch {
+    return null;
   }
 }
 
@@ -714,6 +752,8 @@ export async function run(job, ctx) {
   // The plan's text rides on the job from the Worker (the filed Document is the source of truth),
   // so a BUILD on a machine that never ran the PLAN still has it.
   const planText = job.plan?.text ?? null;
+  // 28 Sep 2026: where the branch stands before the model's turn — a CHANGES rebuild must move it.
+  const headBefore = phase === "BUILD" ? await headOf(names.worktree) : null;
   const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments })}`;
   writeFileSync(path.join(jobDir, `prompt-${phase}.md`), prompt);
   progress(`claude -p (${job.model}) for ${phase}`);
@@ -744,6 +784,11 @@ export async function run(job, ctx) {
   }
 
   if (phase === "BUILD") {
+    // A REBUILD THAT MOVED NOTHING FAILS HERE, before any PR is read or any preview is sent.
+    const headAfter = await headOf(names.worktree);
+    if (inertRebuild(job, headBefore, headAfter)) {
+      return { phase, status: "failed", reason: `the rebuild made no commit for the partner's words: "${String(job.rebuild.changes ?? "").slice(0, 200)}" — the branch head is still ${headBefore.slice(0, 12)}. A remark about the site is a change to make, not a note to acknowledge.` };
+    }
     /*
      * DELIVERY CONFIG, BEFORE THE PR IS READ. The model asked by name; the script is what acts, and
      * what it observed is what goes in the proof. Nothing the model wrote about env vars is carried
@@ -767,6 +812,9 @@ export async function run(job, ctx) {
       pr_number: pr.number,
       branch: names.branch,
       materials,
+      // 28 Sep 2026: the script's own observation — did this run move the branch, and to where.
+      changed: headBefore !== null && headAfter !== null && headBefore !== headAfter,
+      head_sha: headAfter ?? undefined,
       check_state: checks.state,
       check_url: checks.url ?? undefined,
       preview_url: previewUrl ?? undefined,
@@ -1261,6 +1309,26 @@ function selfTest() {
     ["the prompt file exists and names the three phases", () => {
       const p = readFileSync(PROMPT_FILE, "utf8");
       return ["## Phase PLAN", "## Phase BUILD", "## Phase LAND"].every((h) => p.includes(h)) && p.includes("card kind: WEB_PROPERTY_CHANGE");
+    }],
+    // 28 Sep 2026: a rebuild after the preview is the change, not a re-check.
+    ["a CHANGES rebuild puts the partner's words at the front as THIS RUN'S WHOLE JOB", () => {
+      const paths = { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/r", attachments: [] };
+      const job = { phase: "BUILD", card: { id: "wc", title: "t" }, target_repo: "join-west-peek-main", request: "r", drive: {}, rules: {}, plan: { decided: [], asks: [], answers: ["a", "I don't know if people know they can scroll on the flyers"] }, pr: { url: "https://x/pull/24", number: 24 }, rebuild: { intent: "CHANGES", changes: "I don't know if people know they can scroll on the flyers", since: "2026-09-28T00:34:58Z" } };
+      const t = renderContext(job, paths);
+      return t.includes("REBUILD AFTER THE PREVIEW — THIS RUN'S WHOLE JOB IS THE CHANGE BELOW.") && t.includes("scroll on the flyers") && t.includes("a run that ends with no new commit FAILS");
+    }],
+    ["a plain BUILD, a materials check, and a PLAN carry no rebuild block", () =>
+      rebuildBlock({ phase: "BUILD", rebuild: null }).length === 0 && rebuildBlock({ phase: "BUILD", rebuild: { intent: "PREVIEW", changes: null } }).length === 0 && rebuildBlock({ phase: "PLAN", rebuild: { intent: "CHANGES", changes: "x" } }).length === 0],
+    ["inertRebuild: a CHANGES rebuild whose head did not move is inert; a moved head, a plain build, or an unreadable head is not", () =>
+      inertRebuild({ phase: "BUILD", rebuild: { intent: "CHANGES", changes: "x" } }, "abc", "abc") &&
+      !inertRebuild({ phase: "BUILD", rebuild: { intent: "CHANGES", changes: "x" } }, "abc", "def") &&
+      !inertRebuild({ phase: "BUILD", rebuild: null }, "abc", "abc") &&
+      !inertRebuild({ phase: "BUILD", rebuild: { intent: "PREVIEW", changes: null } }, "abc", "abc") &&
+      !inertRebuild({ phase: "BUILD", rebuild: { intent: "CHANGES", changes: "x" } }, null, null) &&
+      !inertRebuild({ phase: "LAND", rebuild: { intent: "CHANGES", changes: "x" } }, "abc", "abc")],
+    ["the prompt tells the model a rebuild after the preview is the change, never a re-check", () => {
+      const p = readFileSync(PROMPT_FILE, "utf8");
+      return p.includes("A rebuild after the preview") && p.includes("REBUILD AFTER THE PREVIEW") && p.includes("no new commit is FAILED");
     }],
   ];
   let failed = 0;

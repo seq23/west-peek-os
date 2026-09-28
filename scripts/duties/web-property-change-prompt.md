@@ -174,6 +174,13 @@ Goal: the change, proven, as a PR — on the branch and worktree in the job cont
    partner added since the plan is used, not placeholdered. If you need a Drive asset that is not
    fetched yet, finish with `"status": "failed"`, `"reason": "needs assets"` and
    `"fetch": ["<manifest path>"]`; the script fetches it and runs you once more.
+   **A rebuild after the preview** — the context carries `REBUILD AFTER THE PREVIEW` with the
+   partner's words: those words are this run's whole job. A remark, a worry or a question about how
+   the site behaves IS a design change to make (28 Sep 2026: "I don't know if people know they can
+   scroll on the flyers" means make the scrolling discoverable — a cue, arrows, a peek — not a note
+   to acknowledge). The PR and branch already exist: commit on top of them. The script compares the
+   branch head before and after your turn; a run that ends with no new commit is FAILED — never
+   re-verify the last build and never leave the preview as it was.
 2. Make the change following the RUNBOOK's "how to make a change" exactly (build outputs,
    `lastmod`, `dist/` if the repo commits it, redirects, canonical/title rules).
 3. Prove it: run the repo's `npm run validate` (or what the RUNBOOK names); take screenshots at

@@ -345,10 +345,12 @@ export function decisionResolutionIn(text: string | null | undefined): { n: numb
 }
 
 /** THE PREVIEW EMAIL — the first one, or a new one after a rebuild. Pure. */
-export function previewNotice(input: { title: string; previewLine: string | null; placeholders: readonly string[]; filled?: readonly string[]; round?: number; cardId: string; sites?: readonly string[]; decided?: readonly string[] }): NoticeEmail {
+export function previewNotice(input: { title: string; previewLine: string | null; placeholders: readonly string[]; filled?: readonly string[]; changed?: string | null; round?: number; cardId: string; sites?: readonly string[]; decided?: readonly string[] }): NoticeEmail {
   const p = input.placeholders.length;
   const again = (input.round ?? 1) > 1;
   const sections: NoticeEmail["sections"] = [{ label: (input.sites?.length ?? 0) > 1 ? `Preview of ${input.sites!.length} sites — they go live together` : "Preview", bullets: [input.previewLine ?? "The preview link did not come back; it is on the card."] }];
+  // 0244: a preview rebuilt for the partner's words says so first, in their words — never the same email twice.
+  if (input.changed?.trim()) sections.push({ label: "Changed since the last preview, as you asked", bullets: [clauseLine(input.changed.trim(), 300)] });
   if (input.filled?.length) sections.push(...listSections(again ? "Filled in since the last preview" : "Filled in since the plan", input.filled));
   if (p) sections.push(...listSections(STILL_MISSING, input.placeholders));
   if (input.decided?.length) sections.push(...listSections("Decided so far", input.decided, [], 140));
