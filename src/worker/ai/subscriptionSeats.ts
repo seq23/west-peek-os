@@ -371,6 +371,31 @@ export function isRunKind(value: string): value is RunKind {
  */
 export const JOB_SILENCE_MS = 10 * 60_000;
 
+/**
+ * How many times one LOCAL_JOB may go quiet and be re-queued before it is closed (28 Sep 2026).
+ *
+ * SIX. A Mac that dozes at the lid a few times in a night is the ordinary case this exists for —
+ * each nap costs nothing but the wait. A job that has stopped six claims is not napping; it is
+ * being killed by something the queue cannot see, and the card must decide.
+ */
+export const MAX_JOB_NAPS = 6;
+
+/** The words a re-queued job's `resolution` carries, so the status line and the notice can read the shape. */
+export const WAITING_FOR_MAC = "waits for the Mac to wake";
+
+/** A LOCAL_JOB that went quiet mid-run and was put back in the queue. Pure. */
+export function waitingForMacResolution(claimedBy: string | null | undefined, silentMs: number): string {
+  return (
+    `${claimedBy ?? "The Mac"} went quiet for ${describeAge(silentMs)} on this job — most likely the Mac slept. ` +
+    `The job ${WAITING_FOR_MAC} and is tried again on its own; nothing is lost and no attempt was spent.`
+  );
+}
+
+/** Is this run's resolution the sleeping-Mac shape? Read by the status line and the runner. Pure. */
+export function isWaitingForMac(resolution: string | null | undefined): boolean {
+  return typeof resolution === "string" && resolution.includes(WAITING_FOR_MAC);
+}
+
 /** Park a run for the lane to claim. Returns the queue row's id. */
 export async function parkRun(
   env: Env,
@@ -612,12 +637,56 @@ export async function reapSeatRuns(env: Env, now: Date = new Date()): Promise<Re
         const silentFor = nowMs - (Number.isFinite(lastMs) ? lastMs : claimedMs);
         const overCeiling = Number.isFinite(claimedMs) && nowMs - claimedMs > row.max_seconds * 1000;
         if (!overCeiling && silentFor <= JOB_SILENCE_MS) continue;
-        const why = overCeiling
-          ? `${row.claimed_by ?? "a machine"} has held this job for ${describeAge(nowMs - claimedMs)}, past its ${describeAge(row.max_seconds * 1000)} ceiling`
-          : `${row.claimed_by ?? "a machine"} took this job and went quiet for ${describeAge(silentFor)}`;
-        // A job is not re-offered: half a build on a second machine is worse than none. One attempt, then the card decides.
-        await abandonRun(env, row.id, `${why}. It is closed; the card records the failed attempt and decides what happens next.`, now);
-        out.abandoned.push(row.id);
+        if (overCeiling) {
+          // Past its own ceiling while still pinging is a hang, not a nap: closed, and the card decides.
+          await abandonRun(
+            env,
+            row.id,
+            `${row.claimed_by ?? "a machine"} has held this job for ${describeAge(nowMs - claimedMs)}, past its ${describeAge(row.max_seconds * 1000)} ceiling. It is closed; the card records the failed attempt and decides what happens next.`,
+            now,
+          );
+          out.abandoned.push(row.id);
+          continue;
+        }
+        /*
+         * ── SILENCE IS THE MAC ASLEEP, AND A SLEEPING MAC IS NOT A FAILED ATTEMPT (28 Sep 2026) ──
+         *
+         * WHAT HAPPENED. Her lid closed at 22:42 the night before. All night the Mac woke for five
+         * seconds at a time (Power Nap), the claimer took a job in each blip and launched the
+         * child, the Mac slept again, and ten minutes later this branch closed the run as "went
+         * quiet". Thirteen runs across five cards died that way; each one counted as a failed
+         * attempt, three attempts blocked every card on the owner with "tried and could not
+         * finish", and the partner got five "Blocked" emails for a laptop lid. Her ruling: the
+         * closed-lid case never blocks a card and never emails "Blocked" — the job WAITS and is
+         * tried again when the Mac wakes.
+         *
+         * So a silent job goes BACK TO THE QUEUE, not to the grave: the same row, the same job,
+         * no attempt spent on the card. The claimer that held it has already been told 409 on its
+         * next pulse and has stopped the child. `created_at` is untouched, so the queue ceiling
+         * (`queue_max_seconds`, twelve hours for a website job) still bounds the whole wait, and
+         * `isWaitingForMac` lets the card's status line and the partner's one notice say what
+         * this is. A job that has now gone quiet MAX_JOB_NAPS times is closed: something other
+         * than sleep keeps killing it, and a queue that retries for ever is "runs but inert".
+         */
+        if (row.attempt_count >= MAX_JOB_NAPS) {
+          await abandonRun(
+            env,
+            row.id,
+            `${row.claimed_by ?? "a machine"} took this job and went quiet for ${describeAge(silentFor)}, and it had already been handed out ${row.attempt_count} times. It is closed rather than offered again: something other than sleep keeps stopping it. The card records the failed attempt and decides what happens next.`,
+            now,
+          );
+          out.abandoned.push(row.id);
+          continue;
+        }
+        const napped = await env.WP_OS_DB.prepare(
+          `UPDATE subscription_seat_run
+              SET status = 'QUEUED', claimed_by = NULL, claimed_at = NULL, progressed_at = NULL, progress_note = NULL,
+                  updated_at = ?2, resolution = ?3
+            WHERE id = ?1 AND status = 'CLAIMED'`,
+        )
+          .bind(row.id, now.toISOString(), waitingForMacResolution(row.claimed_by, silentFor))
+          .run();
+        if ((napped.meta?.changes ?? 0) > 0) out.returnedToPool.push(row.id);
         continue;
       }
       if (!Number.isFinite(claimedMs) || nowMs - claimedMs <= CLAIM_TTL_MS) continue;

@@ -178,6 +178,51 @@ export function jobDirFor(runId) {
   return path.join(homedir(), "GitHub", "wpos-jobs", String(runId).replace(/[^A-Za-z0-9_-]/g, "_"));
 }
 
+/**
+ * ── THE LID (28 Sep 2026) ────────────────────────────────────────────────────────────────────
+ *
+ * WHAT HAPPENED. Her lid closed at 22:42; all night the Mac woke for five seconds at a time (Power
+ * Nap keeps TCP alive), this loop ran a cycle in each blip, CLAIMED a job, launched `claude -p`,
+ * and the Mac slept again. The Worker closed each run as "went quiet" ten minutes later; thirteen
+ * runs across five cards died that way, three "attempts" each, every card blocked on the owner,
+ * five "Blocked" emails to the partner — for a laptop lid.
+ *
+ * A CLOSED LID IS NOT A LANE. With the lid down and no external display, macOS re-sleeps within
+ * seconds of any wake, so a job claimed now cannot finish; the honest thing is to take nothing and
+ * say nothing to the Worker (no heartbeat), so the lane reads as away, the job WAITS in the queue,
+ * and the first cycle after the lid opens claims it. `caffeinate` cannot hold a closed lid awake,
+ * which is why this is a check before the claim rather than an assertion during the job.
+ *
+ * `ioreg` is the source: `AppleClamshellState = Yes` means closed. An external display makes
+ * clamshell mode a real desktop (the Mac stays awake), read from `AppleClamshellCausesSleep = No`.
+ * Pure parse, self-tested; the read itself never throws — an unreadable ioreg reads as OPEN, so a
+ * machine that cannot answer the question behaves exactly as before this guard existed.
+ */
+export function lidStateFrom(ioregText) {
+  const text = String(ioregText ?? "");
+  const closed = /"AppleClamshellState"\s*=\s*Yes/.test(text);
+  const causesSleep = !/"AppleClamshellCausesSleep"\s*=\s*No/.test(text);
+  return { closed, causesSleep, away: closed && causesSleep };
+}
+
+export function readLidState(exec = execFileSync) {
+  try {
+    const out = exec("ioreg", ["-r", "-k", "AppleClamshellState", "-d", "4"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000 });
+    return lidStateFrom(out);
+  } catch {
+    return { closed: false, causesSleep: true, away: false };
+  }
+}
+
+/** One line per CHANGE of lid state, never per cycle: the log must stay readable across a night. */
+let lidWasAway = null;
+export function noteLid(state, log = console.log) {
+  if (lidWasAway === state.away) return false;
+  lidWasAway = state.away;
+  log(state.away ? "lid closed: taking no jobs until it opens (the queue holds them; nothing is lost)" : "lid open: taking jobs again");
+  return true;
+}
+
 /** Refuse anything the registry does not name. Pure, so it is self-tested. */
 export function dutyFor(job) {
   if (!job || typeof job !== "object") return { ok: false, why: "the run carried no job" };
@@ -292,6 +337,10 @@ async function runJob(run) {
 }
 
 async function cycle() {
+  // THE LID FIRST, before any word to the Worker: a closed lid takes nothing and says nothing.
+  const lid = readLidState();
+  noteLid(lid);
+  if (lid.away) return { worked: false };
   await call("/api/subscription-seats/heartbeat", {
     device_id: DEVICE_ID,
     hostname: hostname(),
@@ -414,6 +463,35 @@ function selfTest() {
     ["launchd restarts the claimer on ANY exit (KeepAlive true), so a restart-for-new-code really restarts", () => {
       const plist = readFileSync(path.join(REPO_ROOT, "deployment", "launchd", "ventures.westpeek.os.local-jobs.plist"), "utf8").replace(/<!--[\s\S]*?-->/g, "");
       return /<key>KeepAlive<\/key>\s*<true\/>/.test(plist) && /local-job-claimer\.mjs/.test(plist);
+    }],
+    ["a closed lid with no external display is AWAY; an open lid, or a closed lid on a desk display, is not", () => {
+      const closed = lidStateFrom('  |   "AppleClamshellState" = Yes\n  |   "AppleClamshellCausesSleep" = Yes');
+      const open = lidStateFrom('  |   "AppleClamshellState" = No\n  |   "AppleClamshellCausesSleep" = Yes');
+      const docked = lidStateFrom('  |   "AppleClamshellState" = Yes\n  |   "AppleClamshellCausesSleep" = No');
+      return closed.away === true && open.away === false && docked.away === false && docked.closed === true;
+    }],
+    ["an unreadable ioreg reads as an OPEN lid, so the guard can only ever hold jobs back on evidence", () => {
+      const broken = readLidState(() => { throw new Error("no ioreg here"); });
+      return broken.away === false && lidStateFrom("").away === false && lidStateFrom(null).away === false;
+    }],
+    ["the lid is read BEFORE the heartbeat and the claim, and a closed lid returns before either", () => {
+      const src = readFileSync(fileURLToPath(import.meta.url), "utf8");
+      const body = src.slice(src.indexOf("async function cycle()"), src.indexOf("async function toolPresent"));
+      const lidAt = body.indexOf("readLidState()");
+      const heartbeatAt = body.indexOf("/api/subscription-seats/heartbeat");
+      const claimAt = body.indexOf("/api/subscription-seats/claim");
+      const returnsAt = body.indexOf("if (lid.away) return { worked: false };");
+      return lidAt > 0 && returnsAt > lidAt && heartbeatAt > returnsAt && claimAt > heartbeatAt;
+    }],
+    ["the lid is logged once per change of state, never once per cycle", () => {
+      const lines = [];
+      const log = (l) => lines.push(l);
+      const away = { closed: true, causesSleep: true, away: true };
+      const open = { closed: false, causesSleep: true, away: false };
+      lidWasAway = null;
+      const first = noteLid(away, log), second = noteLid(away, log), third = noteLid(open, log), fourth = noteLid(open, log);
+      lidWasAway = null;
+      return first === true && second === false && third === true && fourth === false && lines.length === 2 && /lid closed/.test(lines[0]) && /lid open/.test(lines[1]);
     }],
     ["a registered kind with its own script is accepted", () => dutyFor(good).ok === true],
     ["a kind this claimer does not run is refused", () => dutyFor({ ...good, card_kind: "ROOM_PACKET" }).ok === false],

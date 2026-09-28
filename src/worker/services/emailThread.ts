@@ -5,6 +5,8 @@ import { mintThreadToken, threadHeaders, threadTokensIn, type EmailThreadRow } f
 import { writtenAndQuoted } from "../../shared/intake/replyBody";
 import { containsGenuineQuestion } from "../../shared/intake/genuineQuestion";
 import { addressIn, mailAuthority } from "../../shared/intake/partnerAuthority";
+import { addresseeIn, parseWebPropertyAsk } from "../../shared/intake/webPropertyChange";
+import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
 import { partnerByEmail, PREVIEW_PARTNER, type Partner } from "../../shared/registry/partners";
 import type { InstructionPiece } from "../../shared/work/instruction";
 import { answerBlock } from "./blocks";
@@ -115,6 +117,60 @@ export interface SteerFromReply {
 }
 
 const NOT_A_REPLY: SteerFromReply = { steered: false, thread: null, written: "", reason: "", attempted: false };
+
+/**
+ * THE OPEN WEBSITE CARD A PARTNER'S NEW EMAIL BELONGS TO, or null (28 Sep 2026).
+ *
+ * Only for an AUTHENTICATED partner (the same `mailAuthority` bar the assignment door applies), and
+ * only when the words read as a website change (`parseWebPropertyAsk`) or are addressed to Porter
+ * by name. The card is theirs (`requested_by_email`), not finished, not merged away, and of the
+ * same repo when the message names one; a message that names no property joins their newest open
+ * website card, which is what "the site" means the morning after. Returns the newest thread this
+ * system sent them about that card, so the reply machinery below has a token, a kind and an
+ * employee to work with — the shape a real reply would have carried back.
+ *
+ * NEVER THROWS: an unreadable table means "not a follow-up", and the message takes the ladder it
+ * always took. Exported so the invariant — one open website card per partner per repo — is tested
+ * against this function and not against prose.
+ */
+export async function openSiteCardFor(
+  env: Env,
+  message: { fromHeader: string | null; authenticationResults: string | null; subject: string; raw: string },
+): Promise<{ thread: EmailThreadRow; cardId: string; targetRepo: string | null } | null> {
+  const authority = mailAuthority({ fromHeader: message.fromHeader, authenticationResults: message.authenticationResults });
+  if (!authority.isAssignment || !authority.partnerAddress) return null;
+  const body = textBodyOf(message.raw);
+  const ask = parseWebPropertyAsk(message.subject, body);
+  const toPorter = addresseeIn(body) === "Porter";
+  if (!ask && !toPorter) return null;
+  try {
+    const open =
+      (
+        await env.WP_OS_DB.prepare(
+          `SELECT c.id, w.target_repo
+             FROM work_card c JOIN web_property_change w ON w.work_card_id = c.id
+            WHERE lower(c.requested_by_email) = ?1 AND c.kind = ?2
+              AND c.state NOT IN ('DONE', 'CANCELLED') AND c.merged_into_card_id IS NULL
+            ORDER BY c.updated_at DESC`,
+        )
+          .bind(authority.partnerAddress.toLowerCase(), WEB_PROPERTY_CHANGE_KIND)
+          .all<{ id: string; target_repo: string | null }>()
+      ).results ?? [];
+    if (open.length === 0) return null;
+    const named = ask?.target_repo ?? null;
+    const card = named ? (open.find((c) => c.target_repo === named) ?? null) : open[0]!;
+    if (!card) return null;
+    const thread = await env.WP_OS_DB.prepare(
+      "SELECT * FROM email_thread WHERE object_type = 'work_card' AND object_id = ?1 AND to_address = ?2 ORDER BY created_at DESC LIMIT 1",
+    )
+      .bind(card.id, authority.partnerAddress.toLowerCase())
+      .first<EmailThreadRow>();
+    if (!thread) return null;
+    return { thread, cardId: card.id, targetRepo: card.target_repo };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * A SUBJECT IN THE FORM TWO MAIL CLIENTS WOULD AGREE ON. Pure. Strips every leading "Re:"/"Fwd:",
@@ -253,6 +309,34 @@ export async function steerFromReply(
       thread = recent.find((r) => comparableSubject(r.subject) === bare) ?? null;
     }
   }
+  /*
+   * ── A PARTNER'S NEW EMAIL ABOUT A SITE JOB ALREADY OPEN IS A FOLLOW-UP ON THAT JOB (28 Sep 2026) ──
+   *
+   * WHAT HAPPENED. Scooter sent five emails in one night about the community site — "Three more
+   * changes", "Names missing on the HBCU flyers", "Update form is broken", "Two more" — each with a
+   * fresh subject and no thread token, while Porter's card for that very site was open. The door
+   * read each as a new assignment: five cards, five Walker hand-offs, five "Got it" emails, five
+   * plans queued to the Mac, and a "Blocked" for each when the Mac slept. Her ruling: "we should
+   * have not made 5 workcards for this one site job... scooter's emails should have registered as
+   * follow ups to one card. and those items should go back to plan mode and fix automatically b/c
+   * the ask itself is approval."
+   *
+   * So: an AUTHENTICATED partner's message that reads as a website change (or is addressed to
+   * Porter), when that partner already has an open WEB_PROPERTY_CHANGE card for the same repo, is a
+   * follow-up on that card — exactly as if it had come back on the card's own thread. The newest
+   * thread this system sent them about that card stands in for the token, and everything below
+   * (attachments kept against the card, a BLOCKED card answered and re-opened with its attempts
+   * reset, an OPEN card given the note the next stage reads) applies unchanged. Nothing new is
+   * created. The invariant this keeps: ONE open website card per partner per repo.
+   */
+  let followUp: { cardId: string; subject: string } | null = null;
+  if (!thread && tokens.length === 0) {
+    const joined = await openSiteCardFor(env, message);
+    if (joined) {
+      thread = joined.thread;
+      followUp = { cardId: joined.thread.object_id, subject: message.subject };
+    }
+  }
   if (!thread && tokens.length === 0) return NOT_A_REPLY;
   if (!thread) {
     return {
@@ -286,6 +370,9 @@ export async function steerFromReply(
     subject: message.subject,
   });
   let written = split.written.trim();
+  // A follow-up arrived under its own subject; the subject is part of what was said ("Names missing
+  // on the HBCU flyers"), so the note the next stage reads carries it.
+  if (followUp && followUp.subject.trim()) written = `${followUp.subject.trim()}\n\n${written}`.trim();
   /*
    * A REPLY'S FILES ARE KEPT, FOR EVERY CARD (23 Sep 2026, 0237). "Here's the logo" with the logo
    * attached used to lose the logo: this door read the text and dropped the MIME. The files are now
@@ -504,6 +591,8 @@ export async function steerFromReply(
       // Where the whole reply is, quoted half included — the half a steer deliberately does not act
       // on and just as deliberately no longer throws away.
       stored: message.emlKey,
+      // A new-subject email joined the partner's open website card instead of opening a new one (28 Sep 2026).
+      ...(followUp ? { follow_up: true, follow_up_subject: followUp.subject.slice(0, 200) } : {}),
     },
   });
 

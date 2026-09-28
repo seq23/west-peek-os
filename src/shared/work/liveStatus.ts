@@ -62,7 +62,12 @@ export interface LiveRun {
   progressed_at?: string | null;
   progress_note?: string | null;
   created_at?: string | null;
+  /** The queue's own sentence about the row — a re-queued job says why it is back in the queue (28 Sep 2026). */
+  resolution?: string | null;
 }
+
+/** The words `subscriptionSeats.ts` writes on a job put back in the queue because the Mac slept. Kept in step by a test. */
+export const WAITING_FOR_MAC_WORDS = "waits for the Mac to wake";
 
 export interface LiveStatusInput {
   /** The DISPLAY state: OPEN | IN_PROGRESS | BLOCKED | HELD | DONE | CANCELLED. */
@@ -322,6 +327,20 @@ export function liveStatus(card: LiveStatusInput, meId: string, now: Date = new 
   }
   if (run && run.status === "QUEUED") {
     const since = sinceWords(run.created_at, now);
+    /*
+     * THE MAC SLEPT MID-RUN (28 Sep 2026): the job is back in the queue by the reaper's hand, not
+     * a failed attempt and not a block. Said as what it is — a wait — so a card that looks like
+     * this is never mistaken for one that needs her.
+     */
+    if (typeof run.resolution === "string" && run.resolution.includes(WAITING_FOR_MAC_WORDS)) {
+      return {
+        ...base,
+        kind: "WAITING",
+        section: "worked",
+        pill: "Waiting",
+        line: `Your Mac went to sleep mid-run · it waits and is picked up again when the Mac wakes${since ? ` · ${since}` : ""}`,
+      };
+    }
     return { ...base, kind: "QUEUED", section: "worked", pill: "Queued", line: `Queued for your Mac${since ? ` · waiting ${since}` : ""}` };
   }
   const lease = ms(card.lease_until);
