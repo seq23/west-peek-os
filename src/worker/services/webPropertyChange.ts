@@ -157,6 +157,8 @@ export interface WebPropertyChangeRow {
   assets_json: string;
   /** 0240. What a rebuild filled in since the last preview (JSON list), for the next preview email. */
   filled_json?: string | null;
+  /** 0244: the partner's words a CHANGES rebuild is for — the run's whole job, and the preview email's "changed since" line. */
+  rebuilt_for?: string | null;
   /** 0240. The material set the last BUILD used, and a materials check she asked for. */
   materials_fingerprint?: string | null;
   refresh_requested_at?: string | null;
@@ -696,6 +698,12 @@ export async function parkPhase(
     // 0240: a materials check asked for by her reply or the button, and what the last build used.
     refresh: phase === "BUILD" && (row.refresh_intent === "PREVIEW" || row.refresh_intent === "PUBLISH"),
     materials_fingerprint: row.materials_fingerprint ?? null,
+    // 0244: a rebuild after the preview says so, and a CHANGES rebuild carries the partner's words
+    // as THE job — not one answer among many the model may decide are already done.
+    rebuild:
+      phase === "BUILD" && row.refresh_intent
+        ? { intent: row.refresh_intent, changes: row.refresh_intent === "CHANGES" ? (row.rebuilt_for ?? list(row.answers_json).at(-1) ?? null) : null, since: row.preview_emailed_at ?? null }
+        : null,
     rules,
     ...(parts.length ? { parts: parts.map(partPayload) } : {}),
     queue_max_seconds: spec.queueMaxSeconds,
@@ -797,15 +805,18 @@ export function askBlockText(asks: readonly Ask[], readiness?: { publishReady: b
 
 /** The second question: the preview is up, land it? One email for every repo of the job. */
 export function previewBlockText(
-  row: Pick<WebPropertyChangeRow, "pr_url" | "preview_url" | "placeholders_json" | "publish_ready"> & Partial<Pick<WebPropertyChangeRow, "property_host" | "branch">>,
+  row: Pick<WebPropertyChangeRow, "pr_url" | "preview_url" | "placeholders_json" | "publish_ready"> & Partial<Pick<WebPropertyChangeRow, "property_host" | "branch" | "rebuilt_for">>,
   parts: readonly Pick<WebPropertyChangePart, "repo" | "property_host" | "pr_url" | "preview_url">[] = [],
 ): string {
   const placeholders = list(row.placeholders_json);
+  // 0244: a preview rebuilt for the partner's words says what it changed, in their words.
+  const changed = row.rebuilt_for?.trim() ? [`Changed since the last preview, as you asked: "${row.rebuilt_for.trim().slice(0, 300)}".`] : [];
   // THE ONE CLEAN LINK (23 Sep 2026): the site's branch alias, never six URLs and HTML fragments.
   row = { ...row, preview_url: cleanPreviewUrls(row.preview_url, pagesHostsOf(row.property_host ?? null), row.branch ?? "") };
   if (parts.length) {
     return [
       `PREVIEW READY in ${parts.length} repos — one landing for all of them:`,
+      ...changed,
       ...parts.map((p) =>
         `• ${p.repo} (${p.property_host}): ${p.preview_url ? `look at it here: ${p.preview_url}` : "no preview deployment for this repo — the PR and its screenshots stand in for it"}. The PR: ${p.pr_url ?? "(none)"}.`,
       ),
@@ -815,6 +826,7 @@ export function previewBlockText(
   }
   return [
     `PREVIEW READY. ${row.preview_url ? `Look at it here: ${row.preview_url}` : "No preview deployment exists for this repo — the PR link and the screenshots stand in for it"}. The PR: ${row.pr_url ?? "(none)"}.`,
+    ...changed,
     ...(placeholders.length ? [`Ships with ${placeholders.length} placeholder${placeholders.length === 1 ? "" : "s"}: ${placeholders.join("; ")}.`] : []),
     `Reply "approved" to land it, or "changes: …" to hold it. Nothing lands without that word.${placeholders.length ? ` ("approved to production" also lands it and names the placeholders and you in the DONE email.)` : ""}`,
   ].join("\n");
@@ -846,7 +858,7 @@ export async function porterNoticeEmail(env: Env, cardId: string, kind: NoticeKi
   if (kind === "PREVIEW") {
     // A preview's round counts the previews actually sent, re-sends of the same one excluded.
     const sent = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PREVIEW' AND sent = 1 AND cause NOT LIKE 'resend:%'").bind(cardId).first<{ n: number }>();
-    return previewNotice({ title: ctx.title, previewLine: ctx.previewLine, placeholders: list(row.placeholders_json), filled: list(row.filled_json), round: Math.max(1, (sent?.n ?? 0) + (opts.resend ? 0 : 1)), cardId, sites: ctx.sites, decided: decidedSoFar(asksOf(row), list(row.answers_json), approverName(row.plan_approved_by)) });
+    return previewNotice({ title: ctx.title, previewLine: ctx.previewLine, placeholders: list(row.placeholders_json), filled: list(row.filled_json), changed: row.rebuilt_for ?? null, round: Math.max(1, (sent?.n ?? 0) + (opts.resend ? 0 : 1)), cardId, sites: ctx.sites, decided: decidedSoFar(asksOf(row), list(row.answers_json), approverName(row.plan_approved_by)) });
   }
   if (kind === "QUESTION") return questionNotice({ title: ctx.title, question: lines.slice(0, 12), previewLine: ctx.previewLine, missing: missing.map((m) => m.item), cardId });
   if (kind === "STUCK") return stuckNotice({ title: ctx.title, blockedBy: lines[0] ?? "something on our side stopped the work", next: lines[1] ?? "Sequoia has been told; you don't need to do anything.", previewLine: ctx.previewLine, cardId });
@@ -936,7 +948,14 @@ async function requestRebuild(env: Env, card: WebPropertyChangeCard, row: WebPro
   const requester = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
   const by = card.block_answered_by ?? requester?.firmUserId ?? null;
   const patch: Partial<WebPropertyChangeRow> = { refresh_intent: intent, refresh_requested_at: now };
-  if (intent === "CHANGES" && answer) patch.answers_json = JSON.stringify([...list(row.answers_json), answer.slice(0, 2000)]);
+  if (intent === "CHANGES" && answer) {
+    patch.answers_json = JSON.stringify([...list(row.answers_json), answer.slice(0, 2000)]);
+    // 0244: THE WORDS THIS REBUILD IS FOR. A remark or a worry is a change to make; the Mac gets
+    // them as the run's whole job, and a build that moves nothing for them is a failed attempt.
+    patch.rebuilt_for = answer.slice(0, 2000);
+  } else {
+    patch.rebuilt_for = null;
+  }
   if (intent === "PUBLISH") Object.assign(patch, { land_approved_at: now, land_approved_by: by, publish_approved_at: now, publish_approved_by: by });
   await update(env, card.id, patch);
   await appendFinding(
@@ -1199,6 +1218,19 @@ export async function applyReport(
 
   if (report.status === "unchanged") return applyUnchanged(env, card, row, report);
   if (report.phase === "PLAN") return applyPlan(env, card, row, report);
+  /*
+   * A REBUILD THAT MOVED NOTHING IS NOT A PREVIEW (0244, 28 Sep 2026). Scooter wrote "I don't know
+   * if people know they can scroll on the flyers"; the Mac's BUILD found the branch already had
+   * commits, verified them, changed nothing, reported ok — and Porter sent him the same preview
+   * email a second time. The script now reports whether the branch head moved; a CHANGES rebuild
+   * whose head did not move is a failed attempt: the next BUILD carries the same words, and after
+   * three the card is STUCK for the owner. No email goes out for a build that built nothing.
+   */
+  if (report.phase === "BUILD" && row.refresh_intent === "CHANGES" && report.changed !== true) {
+    const asked = (row.rebuilt_for ?? list(row.answers_json).at(-1) ?? "").slice(0, 300);
+    await appendFinding(env, card.id, `The rebuild for "${asked}" came back with no new commit on the branch (attempt ${card.work_attempts}) — nothing changed, so no new preview was sent. The next attempt must make the change.`);
+    return { finished: false, blocked: false, progressed: false, detail: `BUILD moved nothing for the partner's request ("${asked.slice(0, 120)}"): no commit on the branch, so no new preview. It runs again.` };
+  }
   // 0240: the material set this build used, and what it filled in since the last preview.
   if (report.phase === "BUILD") {
     const before = (await missingFor(env, card.id)).map((m) => m.item);
