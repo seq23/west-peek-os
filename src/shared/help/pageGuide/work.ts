@@ -43,6 +43,7 @@ export const workGuide: PageGuide = {
     { label: "Yes — open it", testid: "work-card-block-choice-", primary: true, does: "answers a page-permission block; No — carry on without it refuses it." },
     { label: "Show everything", testid: "work-card-toggle-", does: "opens the whole card right under its row: where it is, what has happened, the details, a box to tell the employee something, and your request. Hide closes it." },
     { label: "Publish it", testid: "work-card-preview-publish-", primary: true, does: "on a website preview that is ready, replies \"approved\": the preview goes live as it is." },
+    { label: "Take it back and publish it", testid: "work-card-preview-take-over-", primary: true, does: "shown to the secondary partner in place of Publish it: takes the card back, then replies \"approved\"; both outcomes are said under the buttons." },
     { label: "Send the changes", testid: "work-card-preview-changes-send-", primary: true, does: "after Ask for changes, sends what should change; a new preview follows." },
     { label: "Look and decide", testid: "work-deck-decide-", primary: true, does: "goes to the deck version waiting on your decision, to approve it or send it back." },
     { label: "Done", testid: "work-card-done-", primary: true, does: "finishes a card done by hand; it goes to the Record. Not offered on an employee's card in flight, which the employee finishes." },
