@@ -6720,3 +6720,63 @@ secondary gets no emails.
   An explicit "cc Scooter" from the primary still copies him.
 - **Tests.** `tests/partnerHandOff.test.ts`: 20 should-hand-off and 18 should-not phrasings, the cc
   guard over every positive phrasing, take-back and unsure tables, confirm by reply and by note.
+
+## Capture hands a person to Network OS by itself; the round trip closes; a refusal is visible (27 Sep 2026, migration 0243)
+
+Approved by Sequoia Taylor, 27 Sep 2026. Production that morning: five captures, all archived
+unresolved; zero `person` rows; zero proposal events; 4,715 synced contacts and 0 of them linked to a
+local person. Every piece existed — the unresolved queue, the "Send to Network OS" button, the
+`proposePerson` client, the contact sync — and nothing joined them. Two reasons, both fixed here.
+
+- **The button could never have worked.** `network_os.propose_person` was seeded as an external
+  effect, so `authorize()` answered REQUIRE_APPROVAL and the handler turned that into 403 on every
+  press. It is RESTRICTED now (0243: `is_external_effect` flipped on the applied row, a
+  `restricted_action` row naming MANAGING_PARTNER / INVESTMENT_TEAM / OPERATIONS; the registry and
+  the regenerated 0003 seed say the same for new databases). A human in those roles acts at once, an
+  AI actor is refused, every send is on the event spine.
+- **Automatic hand-off.** `handleResolveCapture` (captures.ts), kind PERSON, not in Network OS: after
+  writing the local person it calls `proposeCapturedPerson(env, actor, captureId)` — the ONE
+  implementation, which the retry route `POST /api/captures/:id/propose-to-network` now calls too.
+  Success: `matched_via` "proposed to Network OS — awaiting their review", `person_source` stays
+  LOCAL_UNRESOLVED (truthful until the link-back), `what_this_means` says they are in Network OS's
+  review queue and link on the next sync. Refusal: the resolve still succeeds,
+  `network.person_proposal_failed` is written, and ONE HIGH work card opens — "Network OS refused a
+  captured person: <name>", reason in the description, next action "Press Propose on the Network page
+  after fixing the cause, or add them in Network OS by hand"; a second refusal joins that card.
+  The response carries `proposal { status, detail, work_card_id }`; the capture card (App.tsx)
+  shows `matched_via` and `what_this_means`, and only a refused or unmade hand-off is a notice.
+- **Link-back on sync.** `linkBackProposedPerson` (networkAdapter.ts), one bounded query per fresh
+  contact whose mapping is unlinked: by the contact's email against every unlinked local person on
+  that email; with no email, by exact name against a person West Peek OS itself proposed. Exactly one
+  → mapping linked (`internal_type` person, `internal_id`), the person's BLANK email/organization
+  filled from the snapshot, every capture resolved to them flipped to NETWORK_OS,
+  `network.person_linked {person_id, external_id, matched_by}`. More than one → nothing linked,
+  `network.person_link_ambiguous` names the candidates. Never a guess; applied/duplicates/conflicts
+  counts unchanged. The adapter's boundary law and the contract's `direction` clause now read
+  "inbound read-only EXCEPT the link-back of a person West Peek OS itself proposed".
+- **No duplicates.** `findInNetworkOs` also matches an unlinked capture-sourced person who already has
+  a `network.person_proposed` event (by email, else exact name): a second capture resolves to the same
+  row with `matched_via` "already proposed to Network OS — awaiting their review" and sends nothing.
+- **Unresolved list.** `/api/captures/unresolved-people` now keeps proposed people (`proposed: true`,
+  shown as "already sent — awaiting Network OS's review") until the sync links them, and carries
+  `last_refusal` beside the retry button; `to_send` / `awaiting_review` split the count.
+- **Tests.** `tests/captureHandoff.test.ts` (Network OS stubbed at `fetch`; never called live): who may
+  propose; exactly one proposal per unknown person; one HIGH card per refused person and a second
+  refusal joins it; link-back by email and by name+proposal, capture flipped, `network.person_linked`;
+  a name alone never links; ambiguity links nothing; a second capture reuses the row. Each guard was
+  proven negatively (broken, watched to fail, restored) before the PR. `tests/captureResolution.test.ts`
+  and `tests/network.test.ts` updated for the new response shape and the contract clause.
+- **From review (Codex, PR #208).** A fail-closed privacy gate before any POST: a capture on a
+  sensitive label (RESTRICTED, LP_PRIVATE, MNPI_SENSITIVE, BANKING_RESTRICTED) is never proposed by
+  itself — `proposal.status` "withheld",
+  `network.person_proposal_withheld` written, the reason shown beside the person, the retry refused
+  with 403 `propose_withheld`. The refusal card carries the capture's own `privacy_label`. The name
+  is consulted only when no email is typed (a different email is a different person). A contact the
+  sync already holds but nobody linked — the whole production population — is linked AT RESOLVE (by
+  email, or by exact name when it is the only match): a local mirror row (source network_os), the
+  mapping linked, `network.person_linked` with `at: capture.resolve`, nothing proposed; two
+  same-name contacts link nothing and the person is proposed instead. The D8 privacy mode is NOT
+  consulted: it governs AI providers and its seeded default is LOCKDOWN, so gating on it would have
+  switched the hand-off off by default.
+- **Still UNPROVEN and not this PR's:** the live round trip — a test person captured through to
+  Network OS's intake and rejected there — needs a signed-in Network OS browser.
