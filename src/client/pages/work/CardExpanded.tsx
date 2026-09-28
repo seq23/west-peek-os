@@ -404,6 +404,7 @@ export function CardExpanded({
           busy={busy}
           setBusy={setBusy}
           setMessage={setMessage}
+          takeOverFrom={handOff?.kind === "TAKE_BACK" ? (c.primary_partner?.first_name ?? "the other partner") : null}
           reload={() => {
             site.reload();
             reload();

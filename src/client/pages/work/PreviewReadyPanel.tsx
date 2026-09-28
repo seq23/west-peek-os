@@ -18,6 +18,17 @@ import type { WorkCardRow } from "./types";
  * with the one reply reader and nothing here parses anything. Never a note: the note loop reads
  * "changes: …" as "hold", which is not what "Ask for changes" means. While the card is not parked
  * (a rebuild is running) the buttons are off and say why.
+ *
+ * WHAT A DOOR SAYS BACK IS SAID HERE, NEXT TO THE DOOR (28 Sep 2026). The secondary partner pressed
+ * "Publish it"; the server refused (0241: only the primary approves) and the refusal went ONLY to
+ * the page-level notice at the top of the Work page, far above the button she had pressed. To her,
+ * nothing happened. So every outcome — sent, refused, failed — is rendered inside this panel under
+ * the buttons (`work-card-preview-message-<id>`) as well as at the top of the page. And the
+ * secondary is never sent through a door that refuses her: when the viewer is the secondary
+ * (`takeOverFrom` carries the primary's first name) the panel says so above the buttons and offers
+ * ONE door, "Take it back and publish it", which takes the card back and then approves — both
+ * outcomes reported here. The plain "Publish it" stays for the primary. Rule 0241 is untouched.
+ * Pinned by tests/previewReadyPanelSecondary.test.ts.
  */
 export function PreviewReadyPanel({
   card: c,
@@ -27,6 +38,7 @@ export function PreviewReadyPanel({
   setBusy,
   setMessage,
   reload,
+  takeOverFrom = null,
 }: {
   card: WorkCardRow;
   /** The one preview link for the card's own site, derived server-side. Null while none is built. */
@@ -37,12 +49,24 @@ export function PreviewReadyPanel({
   setBusy: (next: boolean) => void;
   setMessage: (next: string | null) => void;
   reload: () => void;
+  /**
+   * The PRIMARY partner's first name when the viewer is the card's SECONDARY (0241) — the panel then
+   * offers "Take it back and publish it" in place of "Publish it". Null for the primary and anyone else.
+   */
+  takeOverFrom?: string | null;
 }): JSX.Element {
   const [changing, setChanging] = useState(false);
   const [changes, setChanges] = useState("");
+  /** The last outcome, shown inside the panel next to the buttons — never only at the top of the page. */
+  const [note, setNote] = useState<string | null>(null);
   const owner = c.owner_name ?? "Porter";
   const parked = c.state === "BLOCKED";
   const off = busy || !parked;
+
+  function say(text: string | null): void {
+    setNote(text);
+    setMessage(text);
+  }
 
   /** Her reply, through the door an emailed reply lands on. */
   async function reply(words: string, said: string): Promise<void> {
@@ -50,7 +74,7 @@ export function PreviewReadyPanel({
     const res = await api<{ ok?: boolean; said?: string; detail?: string }>(`/api/work-cards/${c.id}/unblock`, { method: "POST", body: { action: "ANSWER", text: words } });
     setBusy(false);
     const ok = res.status === 200 || res.status === 201;
-    setMessage(ok ? said : `Could not send that: ${res.data?.detail ?? res.data?.said ?? res.status}`);
+    say(ok ? said : `Could not send that: ${res.data?.detail ?? res.data?.said ?? res.status}`);
     if (ok) {
       setChanging(false);
       setChanges("");
@@ -63,7 +87,32 @@ export function PreviewReadyPanel({
     setBusy(true);
     const res = await api<{ ok?: boolean; said?: string; detail?: string }>(`/api/work-cards/${c.id}/materials-added`, { method: "POST", body: {} });
     setBusy(false);
-    setMessage(res.status === 200 ? (res.data?.said ?? "Noted. A new preview follows if anything changed.") : `Could not send that: ${res.data?.detail ?? res.status}`);
+    say(res.status === 200 ? (res.data?.said ?? "Noted. A new preview follows if anything changed.") : `Could not send that: ${res.data?.detail ?? res.status}`);
+    reload();
+  }
+
+  /**
+   * THE SECONDARY'S ONE DOOR: take the card back, then approve — two calls, both outcomes said here.
+   * A refused take-back publishes nothing. A take-back that worked but a publish that did not says
+   * so and points at the plain "Publish it", which is hers once the card reloads as hers.
+   */
+  async function takeBackAndPublish(): Promise<void> {
+    setBusy(true);
+    const back = await api<{ error?: string; detail?: string; said?: string }>(`/api/work-cards/${c.id}/take-back`, { method: "POST", body: {} });
+    if (back.status >= 400 || back.data?.error) {
+      setBusy(false);
+      say(`Could not take it back: ${back.data?.detail ?? back.status}. Nothing was published.`);
+      reload();
+      return;
+    }
+    const res = await api<{ ok?: boolean; said?: string; detail?: string }>(`/api/work-cards/${c.id}/unblock`, { method: "POST", body: { action: "ANSWER", text: APPROVED_REPLY } });
+    setBusy(false);
+    const ok = res.status === 200 || res.status === 201;
+    say(
+      ok
+        ? `Taken back and sent: "${APPROVED_REPLY}". ${owner} publishes this preview as it is.`
+        : `Taken back — it is yours now — but the publish did not send: ${res.data?.detail ?? res.data?.said ?? res.status}. Press "Publish it" to send it.`,
+    );
     reload();
   }
 
@@ -90,10 +139,21 @@ export function PreviewReadyPanel({
         </div>
       )}
       {!parked && <p className="wc-quiet" data-testid={`work-card-preview-busy-${c.id}`}>{owner} is working on it right now; the replies open again when the next preview is ready.</p>}
+      {takeOverFrom && (
+        <p className="wc-quiet" data-testid={`work-card-preview-secondary-${c.id}`}>
+          Only {takeOverFrom} can approve this now.
+        </p>
+      )}
       <div className="wc-foot-actions">
-        <button type="button" className="btn-strong" disabled={off} data-testid={`work-card-preview-publish-${c.id}`} onClick={() => void reply(APPROVED_REPLY, `Sent: "${APPROVED_REPLY}". ${owner} publishes this preview as it is.`)}>
-          Publish it
-        </button>
+        {takeOverFrom ? (
+          <button type="button" className="btn-strong" disabled={off} data-testid={`work-card-preview-take-over-${c.id}`} onClick={() => void takeBackAndPublish()}>
+            Take it back and publish it
+          </button>
+        ) : (
+          <button type="button" className="btn-strong" disabled={off} data-testid={`work-card-preview-publish-${c.id}`} onClick={() => void reply(APPROVED_REPLY, `Sent: "${APPROVED_REPLY}". ${owner} publishes this preview as it is.`)}>
+            Publish it
+          </button>
+        )}
         <button type="button" disabled={off} aria-expanded={changing} data-testid={`work-card-preview-changes-${c.id}`} onClick={() => setChanging((v) => !v)}>
           Ask for changes
         </button>
@@ -104,6 +164,11 @@ export function PreviewReadyPanel({
           I added missing items → new preview
         </button>
       </div>
+      {note && (
+        <p className="notice" role="status" data-testid={`work-card-preview-message-${c.id}`}>
+          {note}
+        </p>
+      )}
       {changing && (
         <form
           className="wc-pair-col"
