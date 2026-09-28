@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import { handleRequest } from "../src/worker/index";
@@ -172,5 +173,22 @@ describe("GET /api/community/newest", () => {
     expect(after.body.source).toMatchObject({ last_status: "FAILED", failure_reason: "Network OS answered 503" });
     // Another firm's cursor is not this firm's.
     expect((await contactSyncState(env, "other-firm")).source.last_status).toBe("NEVER_SYNCED");
+  });
+
+  /*
+   * THE CURSOR IS READ BEFORE THE NAMES (Codex on #209). The sync tick writes mappings and then
+   * flips the cursor to OK; two reads side by side could pair an OK cursor with names from before
+   * the flip, and the page would caption a prefix as complete. A race cannot be staged in D1 from
+   * here, so the order is pinned in the handler's source: the cursor awaited first, the names
+   * after, and never a Promise.all across the two.
+   */
+  it("reads the sync state before the names, so an OK cursor never labels an older prefix", () => {
+    const src = readFileSync(new URL("../src/worker/services/communityOs.ts", import.meta.url), "utf8");
+    const handler = src.slice(src.indexOf("export async function handleCommunityNewest"));
+    const cursorRead = handler.indexOf("await contactSyncState(");
+    const namesRead = handler.indexOf("await communityNewest(");
+    expect(cursorRead).toBeGreaterThan(0);
+    expect(namesRead).toBeGreaterThan(cursorRead);
+    expect(handler).not.toContain("Promise.all");
   });
 });

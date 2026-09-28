@@ -364,7 +364,16 @@ export async function handleCommunityNewest(ctx: RouteContext): Promise<Response
   const actor = actorFromIdentity(ctx.identity!);
   const firmScope = actor.firmScopes[0] ?? "west-peek";
   const asked = Number(new URL(ctx.request.url).searchParams.get("limit") ?? NEWEST_CAP);
-  const [newest, sync] = await Promise.all([communityNewest(ctx.env, firmScope, asked), contactSyncState(ctx.env, firmScope)]);
+  /*
+   * THE CURSOR FIRST, THEN THE NAMES — in that order, never side by side. The sync tick writes the
+   * mappings and only then flips the cursor to OK; two reads in flight at once could pair the
+   * cursor AFTER the flip with names from BEFORE it, and the page would caption a prefix "the
+   * last 25 added". Read the cursor first and the names can only be as new or newer than the
+   * state that labels them: an OK cursor is followed by every row it vouches for, and a cursor
+   * still IN_PROGRESS labels whatever follows as partial, which it is.
+   */
+  const sync = await contactSyncState(ctx.env, firmScope);
+  const newest = await communityNewest(ctx.env, firmScope, asked);
   // The sync state rides with the names so the page can say "of the 1,200 read so far" during a
   // load, and can tell an empty read from a failed one from one that never ran.
   return json({ newest, cap: NEWEST_CAP, loading: sync.loading, source: sync.source });
