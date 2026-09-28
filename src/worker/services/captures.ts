@@ -6,7 +6,7 @@ import { json } from "../router";
 import { appendEvent } from "../events";
 import { isMachinePaused } from "./machines";
 import { privacyLabelSchema, DEFAULT_PRIVACY_LABEL } from "../../shared/privacy";
-import { actorFromIdentity, authorize, canAccessPrivacyLabel, privacyVisibilityClause } from "./authorize";
+import { actorFromIdentity, authorize, canAccessPrivacyLabel, privacyVisibilityClause, SENSITIVE_PRIVACY_LABELS } from "./authorize";
 import { createWorkCardInternal } from "./workCards";
 import { proposePerson } from "../effects/networkOsClient";
 
@@ -265,14 +265,25 @@ export const REFUSAL_CARD_NEXT_ACTION = "Press Propose on the Network page after
 /**
  * Ask whether this person is already known — in Network OS, or already on their way there.
  *
- * Two questions, in order:
+ * Three questions, in order:
  *   1. Is there a local `person` LINKED to a Network OS contact (the mapping carries their id)?
  *      Then they are in the system of record, and the capture resolves to them as NETWORK_OS.
- *   2. Is there an unlinked local person, written by an earlier capture, whom West Peek OS has
+ *   2. Is there a SYNCED CONTACT nobody has linked — one of the 4,715 the sync already holds —
+ *      whose email is the one typed (or, with no email typed, whose exact name matches and is the
+ *      only one that does)? Then Network OS already knows them: the caller writes the local person,
+ *      LINKS the mapping to it there and then, and proposes nothing. Without this, a person who was
+ *      a contact before anyone here met them would be proposed as a duplicate and — because the
+ *      sync only looks at fresh deliveries — could never be linked afterwards.
+ *   3. Is there an unlinked local person, written by an earlier capture, whom West Peek OS has
  *      already PROPOSED (a `network.person_proposed` event exists)? Then a second capture of them
  *      resolves to the same row — one person, one row, one proposal — and sends nothing more.
  *
- * Returns null when neither holds and the caller writes the person and proposes them. Deliberately
+ * THE EMAIL DECIDES WHEN ONE IS TYPED. The name is consulted only when no email was supplied:
+ * "Kai Brandt <kai@one>" and "Kai Brandt <kai@two>" are two people until somebody says otherwise,
+ * and folding the second into the first would suppress their proposal and later flip both
+ * captures onto one contact. Same rule as the link-back on sync.
+ *
+ * Returns null when none holds and the caller writes the person and proposes them. Deliberately
  * fail-soft: an unreachable Network OS must not block the operator from recording who they met,
  * and a person queued when they were really already known is a duplicate to merge later —
  * recoverable, unlike a lost record.
@@ -282,7 +293,12 @@ async function findInNetworkOs(
   name: string,
   email: string | undefined,
   firmScope: string,
-): Promise<{ id: string; via: "network_os" | "proposed" } | null> {
+): Promise<
+  | { via: "network_os"; id: string }
+  | { via: "proposed"; id: string }
+  | { via: "unlinked_contact"; mapping_id: string; external_id: string; matched_by: "email" | "name"; snapshot: { full_name: string | null; email: string | null; company: string | null } }
+  | null
+> {
   const linked = await env.WP_OS_DB.prepare(
     `SELECT p.id AS id
        FROM person p
@@ -294,10 +310,39 @@ async function findInNetworkOs(
   )
     .bind(name, email ?? null)
     .first<{ id: string }>();
-  if (linked) return { id: linked.id, via: "network_os" };
+  if (linked) return { via: "network_os", id: linked.id };
 
-  // Matched by the email if one was typed, else by the exact name — the same two keys the link-back
-  // on sync uses, so a person this finds is one the sync will later link.
+  // LIMIT 2: one is a match, two is an ambiguity, and an ambiguous name links nothing (the person
+  // is proposed instead, and the reviewer in Network OS sees the likely duplicate with a name on it).
+  const contacts = await env.WP_OS_DB.prepare(
+    `SELECT m.id AS mapping_id, m.external_id, m.snapshot_json
+       FROM network_external_mapping m
+      WHERE m.resource = 'contact' AND m.firm_scope = ?3 AND m.internal_id IS NULL
+        AND ((?2 IS NOT NULL AND lower(m.identity_key) = lower(?2))
+             OR (?2 IS NULL AND lower(trim(json_extract(m.snapshot_json, '$.full_name'))) = lower(trim(?1))))
+      ORDER BY m.rowid ASC
+      LIMIT 2`,
+  )
+    .bind(name, email ?? null, firmScope)
+    .all<{ mapping_id: string; external_id: string; snapshot_json: string }>();
+  if (contacts.results?.length === 1) {
+    const m = contacts.results[0]!;
+    let snapshot: { full_name?: unknown; email?: unknown; company?: unknown } = {};
+    try {
+      snapshot = JSON.parse(m.snapshot_json) as typeof snapshot;
+    } catch {
+      snapshot = {};
+    }
+    const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+    return {
+      via: "unlinked_contact",
+      mapping_id: m.mapping_id,
+      external_id: m.external_id,
+      matched_by: email ? "email" : "name",
+      snapshot: { full_name: str(snapshot.full_name), email: str(snapshot.email), company: str(snapshot.company) },
+    };
+  }
+
   const proposed = await env.WP_OS_DB.prepare(
     `SELECT p.id AS id
        FROM person p
@@ -311,13 +356,13 @@ async function findInNetworkOs(
            WHERE e.event_type = 'network.person_proposed' AND e.object_id = p.id
         )
         AND ((?2 IS NOT NULL AND lower(p.email) = lower(?2))
-             OR lower(trim(p.full_name)) = lower(trim(?1)))
+             OR (?2 IS NULL AND lower(trim(p.full_name)) = lower(trim(?1))))
       ORDER BY p.created_at ASC
       LIMIT 1`,
   )
     .bind(name, email ?? null, firmScope)
     .first<{ id: string }>();
-  return proposed ? { id: proposed.id, via: "proposed" } : null;
+  return proposed ? { via: "proposed", id: proposed.id } : null;
 }
 
 export async function handleResolveCapture(ctx: RouteContext): Promise<Response> {
@@ -389,6 +434,38 @@ export async function handleResolveCapture(ctx: RouteContext): Promise<Response>
       personId = known.id;
       personSource = "NETWORK_OS";
       matchedVia = "Network OS";
+    } else if (known?.via === "unlinked_contact") {
+      // Network OS already holds them; nobody here had linked the contact. The local row is written
+      // as a mirror of the contact (source network_os) and the mapping is linked now, so the
+      // conflict detector has a West Peek opinion to defend from the next sync on.
+      personId = `per_${crypto.randomUUID()}`;
+      await env.WP_OS_DB.batch([
+        env.WP_OS_DB.prepare(
+          `INSERT INTO person (id, full_name, email, organization, source, privacy_label, firm_scope)
+           VALUES (?1, ?2, ?3, ?4, 'network_os', ?5, ?6)`,
+        ).bind(
+          personId,
+          known.snapshot.full_name ?? input.name!,
+          known.snapshot.email ?? input.email ?? null,
+          known.snapshot.company ?? input.organization ?? null,
+          capture.privacy_label,
+          capture.firm_scope,
+        ),
+        env.WP_OS_DB.prepare(
+          "UPDATE network_external_mapping SET internal_type = 'person', internal_id = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1 AND internal_id IS NULL",
+        ).bind(known.mapping_id, personId),
+      ]);
+      await appendEvent(env, {
+        eventType: "network.person_linked",
+        actorType: "firm_user",
+        actorId: identity!.id,
+        objectType: "person",
+        objectId: personId,
+        firmScope: capture.firm_scope,
+        payload: { person_id: personId, external_id: known.external_id, matched_by: known.matched_by, at: "capture.resolve" },
+      });
+      personSource = "NETWORK_OS";
+      matchedVia = `Network OS — contact already synced, linked by ${known.matched_by}`;
     } else if (known) {
       // Proposed from an earlier capture and still awaiting Network OS's review: the same row,
       // and nothing is sent twice. The link-back on sync flips every capture of them together.
@@ -436,7 +513,9 @@ export async function handleResolveCapture(ctx: RouteContext): Promise<Response>
         ? PROPOSED_VIA
         : proposal.status === "refused"
           ? `not in Network OS — proposal refused: ${proposal.detail}`
-          : `not in Network OS — queued (${proposal.detail})`;
+          : proposal.status === "withheld"
+            ? `not in Network OS — queued, not proposed: ${proposal.detail}`
+            : `not in Network OS — queued (${proposal.detail})`;
   }
 
   await appendEvent(env, {
@@ -494,6 +573,13 @@ function whatResolvingMeans(r: {
         "accepts them, this record links to the contact on the next sync."
       );
     }
+    if (r.proposal?.status === "withheld") {
+      return (
+        `Network OS does not know this person, and they were deliberately not sent: ${r.proposal.detail} ` +
+        "They are recorded here and added to the unresolved queue — this system is not claiming they are in " +
+        "the system of record. If they should be in Network OS, add them there by hand."
+      );
+    }
     if (r.proposal?.status === "refused") {
       return (
         `Network OS did not know this person, and the hand-off was refused: ${r.proposal.detail} ` +
@@ -533,7 +619,7 @@ export async function handleUnresolvedPeople(ctx: RouteContext): Promise<Respons
                WHERE e.event_type = 'network.person_proposed' AND e.object_id = p.id
             ) AS proposed,
             (SELECT e.payload_json FROM event_record e
-              WHERE e.event_type = 'network.person_proposal_failed' AND e.object_id = p.id
+              WHERE e.event_type IN ('network.person_proposal_failed', 'network.person_proposal_withheld') AND e.object_id = p.id
               ORDER BY e.created_at DESC, e.rowid DESC LIMIT 1) AS last_failure_json
        FROM capture c
        JOIN person p ON p.id = c.resolved_person_id
@@ -597,9 +683,12 @@ export interface ProposalOutcome {
    *           and a HIGH work card opened (`work_card_id`) so a person sees it.
    * already_proposed — a proposal event already exists; nothing sent.
    * not_permitted — the actor may not propose (an AI, or a role outside the restriction).
+   * withheld — the privacy gate said no: the capture carries a sensitive label. Nothing left;
+   *            `network.person_proposal_withheld` written; no card, because it is the operator's
+   *            own label doing its job, not a fault.
    * not_found — no captured person on that capture in this firm.
    */
-  status: "proposed" | "refused" | "already_proposed" | "not_permitted" | "not_found";
+  status: "proposed" | "refused" | "already_proposed" | "not_permitted" | "withheld" | "not_found";
   detail: string;
   work_card_id: string | null;
   person_id: string | null;
@@ -630,6 +719,20 @@ export interface ProposalOutcome {
  * the constraint. The event spine already answers this: `network.person_proposed` is written on
  * success, so "already sent" is derived from the record of it having been sent.
  *
+ * THE PRIVACY GATE, FAIL-CLOSED, BEFORE THE POST. This sends a real person's name, email, company
+ * and up to 500 characters of the capture's own words to another system, and neither `authorize()`
+ * (which answers about the ACTOR) nor Network OS (which answers about the PERSON) asks whether the
+ * CAPTURE may leave. So this does: a capture labelled RESTRICTED, LP_PRIVATE, MNPI_SENSITIVE or
+ * BANKING_RESTRICTED is never proposed by itself. Withheld, not refused: the resolve succeeds, the
+ * person waits in the queue with the reason beside them, and adding them to Network OS is a human's
+ * decision made over there.
+ *
+ * NOT THE PRIVACY MODE. `LOCAL | FRONTIER | LOCKDOWN` (D8, docs/AI_GOVERNANCE.md) says where AI
+ * runs — "no external provider, ever" — and its seeded firm-wide default is LOCKDOWN. Network OS is
+ * the firm's own system of record for people, reached under the same secrets the contact sync
+ * already uses, not a model provider; gating on that lever would have switched this hand-off off by
+ * default, which is precisely the button-that-never-worked this change exists to end.
+ *
  * A REFUSAL IS VISIBLE. The far end saying no — or the integration being unconfigured — is a fact
  * about the integration, not about the person, so the resolve still succeeds. The refusal is written
  * to the spine AND opens ONE HIGH work card naming the person and the reason; a second refusal for
@@ -641,7 +744,7 @@ export async function proposeCapturedPerson(env: Env, actor: FirmUserIdentity, c
   const firmScope = who.firmScopes[0] ?? "west-peek";
 
   const row = await env.WP_OS_DB.prepare(
-    `SELECT c.id AS capture_id, c.raw_text, c.person_source,
+    `SELECT c.id AS capture_id, c.raw_text, c.person_source, c.privacy_label,
             p.id AS person_id, p.full_name, p.email, p.organization
        FROM capture c
        JOIN person p ON p.id = c.resolved_person_id
@@ -652,6 +755,7 @@ export async function proposeCapturedPerson(env: Env, actor: FirmUserIdentity, c
       capture_id: string;
       raw_text: string | null;
       person_source: string;
+      privacy_label: string;
       person_id: string;
       full_name: string;
       email: string | null;
@@ -688,6 +792,20 @@ export async function proposeCapturedPerson(env: Env, actor: FirmUserIdentity, c
     return { status: "not_permitted", detail: authz.reason, work_card_id: null, person_id: row.person_id, name: row.full_name };
   }
 
+  const withheld = proposalWithheldReason(row.privacy_label);
+  if (withheld) {
+    await appendEvent(env, {
+      eventType: "network.person_proposal_withheld",
+      actorType: "firm_user",
+      actorId: who.firmUserId!,
+      objectType: "person",
+      objectId: row.person_id,
+      firmScope,
+      payload: { capture_id: row.capture_id, reason: withheld, privacy_label: row.privacy_label },
+    });
+    return { status: "withheld", detail: withheld, work_card_id: null, person_id: row.person_id, name: row.full_name };
+  }
+
   const result = await proposePerson(env, {
     name: row.full_name,
     email: row.email,
@@ -718,6 +836,8 @@ export async function proposeCapturedPerson(env: Env, actor: FirmUserIdentity, c
         `West Peek OS proposed ${row.full_name}${row.email ? ` (${row.email})` : ""} to Network OS's intake queue and was refused: ${result.detail} ` +
         "They are recorded here as LOCAL_UNRESOLVED; Network OS still does not know them.",
       priority: "HIGH",
+      // The card names the person and their email, so it is exactly as visible as the capture was.
+      privacy_label: row.privacy_label,
       firm_scope: firmScope,
       next_action: REFUSAL_CARD_NEXT_ACTION,
     });
@@ -743,6 +863,18 @@ export async function proposeCapturedPerson(env: Env, actor: FirmUserIdentity, c
   };
 }
 
+/**
+ * Why a proposal must not leave, or null when it may. Sensitive labels are the ones
+ * `canAccessPrivacyLabel` gates: the same set that hides the capture itself from anyone without the
+ * scope, so a person on such a capture is never shown to another system either.
+ */
+function proposalWithheldReason(privacyLabel: string): string | null {
+  if ((SENSITIVE_PRIVACY_LABELS as readonly string[]).includes(privacyLabel)) {
+    return `the capture is labelled ${privacyLabel}, and a person on a ${privacyLabel} capture is never sent to another system by itself.`;
+  }
+  return null;
+}
+
 /** The button on the Network page: the retry. Same implementation as the resolve's hand-off. */
 export async function handleProposePersonToNetwork(ctx: RouteContext): Promise<Response> {
   const outcome = await proposeCapturedPerson(ctx.env, ctx.identity!, ctx.params.id!);
@@ -753,6 +885,8 @@ export async function handleProposePersonToNetwork(ctx: RouteContext): Promise<R
       return json({ error: "already_proposed", detail: outcome.detail }, { status: 409 });
     case "not_permitted":
       return json({ error: "forbidden", detail: outcome.detail }, { status: 403 });
+    case "withheld":
+      return json({ error: "propose_withheld", detail: outcome.detail }, { status: 403 });
     case "not_found":
       return json({ error: "not_found", detail: outcome.detail }, { status: 404 });
     case "refused":

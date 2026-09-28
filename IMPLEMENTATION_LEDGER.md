@@ -6766,5 +6766,17 @@ local person. Every piece existed — the unresolved queue, the "Send to Network
   a name alone never links; ambiguity links nothing; a second capture reuses the row. Each guard was
   proven negatively (broken, watched to fail, restored) before the PR. `tests/captureResolution.test.ts`
   and `tests/network.test.ts` updated for the new response shape and the contract clause.
+- **From review (Codex, PR #208).** A fail-closed privacy gate before any POST: a capture on a
+  sensitive label (RESTRICTED, LP_PRIVATE, MNPI_SENSITIVE, BANKING_RESTRICTED) is never proposed by
+  itself — `proposal.status` "withheld",
+  `network.person_proposal_withheld` written, the reason shown beside the person, the retry refused
+  with 403 `propose_withheld`. The refusal card carries the capture's own `privacy_label`. The name
+  is consulted only when no email is typed (a different email is a different person). A contact the
+  sync already holds but nobody linked — the whole production population — is linked AT RESOLVE (by
+  email, or by exact name when it is the only match): a local mirror row (source network_os), the
+  mapping linked, `network.person_linked` with `at: capture.resolve`, nothing proposed; two
+  same-name contacts link nothing and the person is proposed instead. The D8 privacy mode is NOT
+  consulted: it governs AI providers and its seeded default is LOCKDOWN, so gating on it would have
+  switched the hand-off off by default.
 - **Still UNPROVEN and not this PR's:** the live round trip — a test person captured through to
   Network OS's intake and rejected there — needs a signed-in Network OS browser.

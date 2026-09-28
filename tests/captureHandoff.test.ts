@@ -22,7 +22,11 @@ import { ORDINARY_ACTION_TYPES } from "../src/shared/registry/actionTypes";
  *      proposal event when the contact has no email — flips the capture to NETWORK_OS and writes
  *      network.person_linked; a name alone never links;
  *   4. an ambiguous match links nothing and writes network.person_link_ambiguous;
- *   5. a second capture of a proposed person reuses the row and sends nothing.
+ *   5. a second capture of a proposed person reuses the row and sends nothing — by email when one
+ *      is typed, by name only when none is; a different email is a different person;
+ *   6. the privacy gate: a capture on a sensitive label is never proposed by itself; the refusal
+ *      card carries the capture's own label;
+ *   7. a contact the sync already holds, unlinked, is linked at resolve rather than proposed twice.
  *
  * The far end is a stubbed fetch: Network OS is never called from a test.
  */
@@ -70,8 +74,13 @@ async function call<T = any>(path: string, headers: Record<string, string>, meth
   return { status: res.status, body: (await res.json()) as T };
 }
 
-async function newCapture(text: string): Promise<string> {
-  const res = await call<{ id: string }>("/api/captures", MP, "POST", { capture_type: "NOTE", raw_text: text, source_channel: "test" });
+async function newCapture(text: string, privacyLabel?: string): Promise<string> {
+  const res = await call<{ id: string }>("/api/captures", MP, "POST", {
+    capture_type: "NOTE",
+    raw_text: text,
+    source_channel: "test",
+    ...(privacyLabel ? { privacy_label: privacyLabel } : {}),
+  });
   expect(res.status).toBe(201);
   return res.body.id;
 }
@@ -202,7 +211,8 @@ describe("1. resolving an unknown person proposes exactly once", () => {
 describe("2. a refused proposal is a resolve that succeeded, with one HIGH card", () => {
   it("opens one card naming the refusal, and a second refusal joins it", async () => {
     farEnd = "refuse";
-    const id = await newCapture("met Jonah Reyes, jonah@reyes.example");
+    // CONFIDENTIAL is not a sensitive label, so the hand-off is attempted; the card must carry it.
+    const id = await newCapture("met Jonah Reyes, jonah@reyes.example", "CONFIDENTIAL");
     const r = await resolvePerson(id, { name: "Jonah Reyes", email: "jonah@reyes.example" });
 
     expect(r.person_source).toBe("LOCAL_UNRESOLVED");
@@ -215,10 +225,12 @@ describe("2. a refused proposal is a resolve that succeeded, with one HIGH card"
     expect(r.proposal?.work_card_id).toMatch(/^wc_/);
 
     const card = await t.db
-      .prepare("SELECT title, priority, state, next_action, capture_id, description FROM work_card WHERE id = ?1")
+      .prepare("SELECT title, priority, state, next_action, capture_id, description, privacy_label FROM work_card WHERE id = ?1")
       .bind(r.proposal!.work_card_id)
-      .first<{ title: string; priority: string; state: string; next_action: string; capture_id: string; description: string }>();
+      .first<{ title: string; priority: string; state: string; next_action: string; capture_id: string; description: string; privacy_label: string }>();
     expect(card!.title).toBe(`${REFUSAL_CARD_TITLE}Jonah Reyes`);
+    // The card names the person and their email: exactly as visible as the capture, no wider.
+    expect(card!.privacy_label).toBe("CONFIDENTIAL");
     expect(card!.priority).toBe("HIGH");
     expect(card!.state).toBe("OPEN");
     expect(card!.next_action).toBe(REFUSAL_CARD_NEXT_ACTION);
@@ -408,6 +420,14 @@ describe("5. a second capture of a proposed person reuses the row", () => {
     expect(await count("SELECT COUNT(*) AS n FROM person WHERE lower(email) = 'lena@vogt.example'")).toBe(1);
     expect(await count("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'network.person_proposed' AND object_id = ?1", a.person_id)).toBe(1);
 
+    // THE EMAIL DECIDES WHEN ONE IS TYPED: the same name on a different email is a different person,
+    // with their own row and their own proposal — never folded into the first.
+    const other = await newCapture("another Lena Vogt, lena@other.example");
+    const d = await resolvePerson(other, { name: "Lena Vogt", email: "lena@other.example" });
+    expect(d.person_id).not.toBe(a.person_id);
+    expect(d.proposal?.status).toBe("proposed");
+    expect(intakeCalls.length).toBe(sent + 1);
+
     // When Network OS accepts them, every capture that resolved to the row flips together.
     await pullResource(
       env,
@@ -416,5 +436,80 @@ describe("5. a second capture of a proposed person reuses the row", () => {
       contactClient([{ external_id: "contact_lena", identity_key: "lena@vogt.example", delivery_id: "d_lena_1", fields: { full_name: "Lena Vogt", email: "lena@vogt.example" } }]),
     );
     expect(await count("SELECT COUNT(*) AS n FROM capture WHERE resolved_person_id = ?1 AND person_source = 'NETWORK_OS'", a.person_id)).toBe(3);
+  });
+});
+
+describe("6. the privacy gate: what may not leave, does not", () => {
+  it("a person on an LP_PRIVATE capture is never proposed by itself; the reason sits beside them; the retry is refused too", async () => {
+    const before = intakeCalls.length;
+    const id = await newCapture("LP dinner: met Aurelio Brandt, aurelio@brandt.example", "LP_PRIVATE");
+    const r = await resolvePerson(id, { name: "Aurelio Brandt", email: "aurelio@brandt.example" });
+
+    expect(r.person_source).toBe("LOCAL_UNRESOLVED");
+    expect(r.proposal?.status).toBe("withheld");
+    expect(r.proposal?.detail).toContain("LP_PRIVATE");
+    expect(r.proposal?.work_card_id).toBeNull();
+    expect(r.matched_via).toContain("not proposed");
+    expect(r.what_this_means).toContain("deliberately not sent");
+    expect(r.what_this_means).toContain("not claiming");
+    // Nothing left the firm, and the record says why.
+    expect(intakeCalls.length).toBe(before);
+    expect(await count("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'network.person_proposed' AND object_id = ?1", r.person_id)).toBe(0);
+    expect(await count("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'network.person_proposal_withheld' AND object_id = ?1", r.person_id)).toBe(1);
+    expect(await count("SELECT COUNT(*) AS n FROM work_card WHERE title = ?1", `${REFUSAL_CARD_TITLE}Aurelio Brandt`)).toBe(0);
+
+    const retry = await call<{ error: string; detail: string }>(`/api/captures/${id}/propose-to-network`, MP, "POST", {});
+    expect(retry.status).toBe(403);
+    expect(retry.body.error).toBe("propose_withheld");
+    expect(intakeCalls.length).toBe(before);
+
+    const queue = await call<{ people: Array<{ person_id: string; proposed: boolean; last_refusal: string | null }> }>("/api/captures/unresolved-people", MP);
+    const entry = queue.body.people.find((p) => p.person_id === r.person_id);
+    expect(entry?.proposed).toBe(false);
+    expect(entry?.last_refusal).toContain("LP_PRIVATE");
+  });
+});
+
+describe("7. a contact the sync already holds is linked at resolve, not proposed again", () => {
+  it("by email: the mapping is linked to a new local person, person_source is NETWORK_OS, nothing is sent", async () => {
+    await pullResource(
+      env,
+      MP_IDENTITY,
+      "contact",
+      contactClient([
+        { external_id: "contact_noor", identity_key: "noor@haddad.example", delivery_id: "d_noor_1", fields: { full_name: "Noor Haddad", email: "noor@haddad.example", company: "Haddad & Co" } },
+        { external_id: "contact_idris_a", identity_key: "contact_idris_a", delivery_id: "d_idris_a", fields: { full_name: "Idris Okonkwo", email: null } },
+        { external_id: "contact_idris_b", identity_key: "contact_idris_b", delivery_id: "d_idris_b", fields: { full_name: "Idris Okonkwo", email: null } },
+        { external_id: "contact_saoirse", identity_key: "contact_saoirse", delivery_id: "d_saoirse_1", fields: { full_name: "Saoirse Quill", email: null, company: "Quill Labs" } },
+      ]),
+    );
+    const before = intakeCalls.length;
+
+    const id = await newCapture("ran into Noor Haddad again");
+    const r = await resolvePerson(id, { name: "Noor Haddad", email: "NOOR@haddad.example" });
+    expect(r.person_source).toBe("NETWORK_OS");
+    expect(r.matched_via).toContain("linked by email");
+    expect(r.proposal).toBeNull();
+    expect(intakeCalls.length).toBe(before);
+    const mapping = await t.db
+      .prepare("SELECT internal_type, internal_id FROM network_external_mapping WHERE resource = 'contact' AND external_id = 'contact_noor'")
+      .first<{ internal_type: string | null; internal_id: string | null }>();
+    expect(mapping).toEqual({ internal_type: "person", internal_id: r.person_id });
+    const person = await t.db.prepare("SELECT source, organization FROM person WHERE id = ?1").bind(r.person_id).first<{ source: string; organization: string | null }>();
+    expect(person).toEqual({ source: "network_os", organization: "Haddad & Co" });
+    expect(await count("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'network.person_linked' AND object_id = ?1", r.person_id)).toBe(1);
+
+    // By exact name when no email is typed, and only when exactly one unlinked contact has it.
+    const s = await resolvePerson(await newCapture("Saoirse Quill, no card"), { name: "saoirse quill" });
+    expect(s.person_source).toBe("NETWORK_OS");
+    expect(s.matched_via).toContain("linked by name");
+    expect(intakeCalls.length).toBe(before);
+
+    // Two contacts with the name: no guess. The person is written and proposed, and both contacts stay unlinked.
+    const i = await resolvePerson(await newCapture("Idris Okonkwo, no card"), { name: "Idris Okonkwo" });
+    expect(i.person_source).toBe("LOCAL_UNRESOLVED");
+    expect(i.proposal?.status).toBe("proposed");
+    expect(intakeCalls.length).toBe(before + 1);
+    expect(await count("SELECT COUNT(*) AS n FROM network_external_mapping WHERE external_id IN ('contact_idris_a','contact_idris_b') AND internal_id IS NOT NULL")).toBe(0);
   });
 });
