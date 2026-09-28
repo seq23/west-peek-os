@@ -131,8 +131,13 @@ describe("a partner's new email about an open site job is a follow-up on that jo
     expect(await openSiteCardFor(env, { ...asks, authenticationResults: BAD_AUTH })).toBeNull();
     // Deal flow is not a website change and is not Porter's: the ladder takes it.
     expect(await openSiteCardFor(env, { ...asks, subject: "#wpdealflow Acme Robotics", raw: newMail("#wpdealflow Acme Robotics", "Seed round, deck attached.") })).toBeNull();
-    // A property in ANOTHER repo is another job, not a follow-up on this one.
+    // ANOTHER property is another job, not a follow-up on this one — even one in the same repo
+    // (the ventures site and the community site share join-west-peek-main and are still two jobs).
     expect(await openSiteCardFor(env, { ...asks, subject: "westpeek.live", raw: newMail("westpeek.live", "Change the tagline on westpeek.live please.") })).toBeNull();
+    expect(await openSiteCardFor(env, { ...asks, subject: "Ventures team page", raw: newMail("Ventures team page", "Please add the new partner to the team page on westpeek.ventures.") })).toBeNull();
+    // The same property, named outright, joins.
+    const named = await openSiteCardFor(env, { ...asks, subject: "joinwestpeek.com hero", raw: newMail("joinwestpeek.com hero", "Make the hero on joinwestpeek.com feel live.") });
+    expect(named?.cardId).toBe(porterId);
   });
 
   it("steers the open card as a follow-up: a note in their words with the subject, the event, and no new card", async () => {

@@ -123,15 +123,15 @@ const NOT_A_REPLY: SteerFromReply = { steered: false, thread: null, written: "",
  *
  * Only for an AUTHENTICATED partner (the same `mailAuthority` bar the assignment door applies), and
  * only when the words read as a website change (`parseWebPropertyAsk`) or are addressed to Porter
- * by name. The card is theirs (`requested_by_email`), not finished, not merged away, and of the
- * same repo when the message names one; a message that names no property joins their newest open
- * website card, which is what "the site" means the morning after. Returns the newest thread this
- * system sent them about that card, so the reply machinery below has a token, a kind and an
+ * by name. The card is theirs (`requested_by_email`), not finished, not merged away, and for the
+ * same property when the message names one; a message that names no property joins their newest
+ * open website card, which is what "the site" means the morning after. Returns the newest thread
+ * this system sent them about that card, so the reply machinery below has a token, a kind and an
  * employee to work with — the shape a real reply would have carried back.
  *
  * NEVER THROWS: an unreadable table means "not a follow-up", and the message takes the ladder it
- * always took. Exported so the invariant — one open website card per partner per repo — is tested
- * against this function and not against prose.
+ * always took. Exported so the invariant — one open website card per partner per property — is
+ * tested against this function and not against prose.
  */
 export async function openSiteCardFor(
   env: Env,
@@ -147,18 +147,24 @@ export async function openSiteCardFor(
     const open =
       (
         await env.WP_OS_DB.prepare(
-          `SELECT c.id, w.target_repo
+          `SELECT c.id, w.target_repo, w.property_host
              FROM work_card c JOIN web_property_change w ON w.work_card_id = c.id
             WHERE lower(c.requested_by_email) = ?1 AND c.kind = ?2
               AND c.state NOT IN ('DONE', 'CANCELLED') AND c.merged_into_card_id IS NULL
             ORDER BY c.updated_at DESC`,
         )
           .bind(authority.partnerAddress.toLowerCase(), WEB_PROPERTY_CHANGE_KIND)
-          .all<{ id: string; target_repo: string | null }>()
+          .all<{ id: string; target_repo: string | null; property_host: string | null }>()
       ).results ?? [];
     if (open.length === 0) return null;
-    const named = ask?.target_repo ?? null;
-    const card = named ? (open.find((c) => c.target_repo === named) ?? null) : open[0]!;
+    /*
+     * THE SITE IS THE JOB. A message that names a property joins the open card for THAT property
+     * (the community site and the ventures site share a repo and are still two jobs); a message
+     * that names none — "Hey Porter! … the site" — joins the newest open card, which is what "the
+     * site" means the morning after. A named property with no open card of its own is a new job.
+     */
+    const named = ask?.property_host ?? null;
+    const card = named ? (open.find((c) => c.property_host === named) ?? null) : open[0]!;
     if (!card) return null;
     const thread = await env.WP_OS_DB.prepare(
       "SELECT * FROM email_thread WHERE object_type = 'work_card' AND object_id = ?1 AND to_address = ?2 ORDER BY created_at DESC LIMIT 1",

@@ -1098,6 +1098,7 @@ function inbound(raw: string, headers: Record<string, string> = {}) {
 }
 
 describe("Porter reads the email (21 Sep 2026): the request is the specification", () => {
+  beforeAll(() => closeOpenSiteCardsOf(SCOOTER));
   const PHOTO_EMAIL = SCOOTER_MIME({ subject: "Sensori photo swap on westpeek.ventures", body: "Swap the Sensori founders photo on westpeek.ventures for the one attached. Same spot, same size.", image: true });
   let porterId = "";
 
@@ -1314,6 +1315,7 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
   });
 
   it("a 4 MB partner email (a real jpg attached) becomes Porter's card with request_text and one attachment row, not a Deck card", async () => {
+    await closeOpenSiteCardsOf(SCOOTER); // his earlier card for this property is open; this is a NEW request (28 Sep 2026)
     // A real-sized photo: ~3 MB of bytes, base64'd inside the MIME, so the message is over MAX_BODY_BYTES for real.
     const photo = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(3 * 1024 * 1024, 7)]);
     const big = SCOOTER_MIME({ subject: "Sensori photo swap, big", body: "Same swap on westpeek.ventures, bigger photo attached.", image: true }).replace(
@@ -1394,6 +1396,21 @@ async function releasePlansNobodyNeedsToAnswerAgain(): Promise<string[]> {
 }
 
 /** The firm caps an employee at 20 new cards an hour; this file opens many for Porter. Age the earlier ones. */
+/**
+ * ONE OPEN WEBSITE CARD PER PARTNER PER PROPERTY (28 Sep 2026). A partner's new email that names a
+ * property they already have an open card for is a FOLLOW-UP on that card, not a new request
+ * (`openSiteCardFor`; tests/followUpJoinsTheOpenSiteCard.test.ts). The intake shapes below each
+ * expect a fresh card, so the partner's earlier cards for the property are closed first — the way
+ * a real morning starts with yesterday's job landed.
+ */
+async function closeOpenSiteCardsOf(partner: string): Promise<void> {
+  await env.WP_OS_DB.prepare(
+    "UPDATE work_card SET state = 'CANCELLED', lease_until = NULL WHERE kind = ?1 AND lower(requested_by_email) = ?2 AND state NOT IN ('DONE', 'CANCELLED')",
+  )
+    .bind(WEB_PROPERTY_CHANGE_KIND, partner.toLowerCase())
+    .run();
+}
+
 async function ageEarlierCards(): Promise<void> {
   await env.WP_OS_DB.prepare("UPDATE work_card SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', created_at, '-2 hours')").run();
 }
@@ -1422,6 +1439,7 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
   });
 
   it("with a recent web-property card from this partner, 'the site' is inferred from it and the RECEIVED email states the assumption; the card is Porter's, kind WEB_PROPERTY_CHANGE", async () => {
+    await closeOpenSiteCardsOf(SCOOTER); // a new request, not a follow-up on an open card (28 Sep 2026)
     const before = sent.length;
     await handleInboundEmail(inbound(NEWSLETTER()), env);
     const chief = (await env.WP_OS_DB.prepare("SELECT id, state, kind, description FROM work_card WHERE title = 'From scooter@westpeek.ventures: Newsletter signup on the site' ORDER BY created_at DESC LIMIT 1").first<{ id: string; state: string; kind: string | null; description: string }>())!;
@@ -1543,6 +1561,7 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
   });
 
   it("a re-read supersedes the live duplicate and returns the card it created; every partner .eml is stored", async () => {
+    await closeOpenSiteCardsOf(SCOOTER); // a new request, not a follow-up on an open card (28 Sep 2026)
     const key = `inbound-email/2026-09-21/${crypto.randomUUID()}.eml`;
     const raw = SCOOTER_MIME({ subject: "Newsletter signup on the site", body: "Hey Porter!\n\nCan we add a newsletter signup on the site? Just a spot where people can drop their email." });
     await (env.WP_OS_DOCUMENTS as unknown as { put: (k: string, b: string) => Promise<unknown> }).put(key, raw);
@@ -1879,9 +1898,12 @@ describe("STUCK is sent once, only when idle past the ceiling inside the window"
     expect(napped.status).toBe("QUEUED");
     expect(napped.claimed_by).toBeNull();
     expect(napped.resolution).toMatch(/waits for the Mac to wake/);
-    // The next tick sees a queued job and holds the card — the same run, no attempt, no block.
-    const retry = await tickFor(id);
-    expect(retry.outcome, "a nap is not a failed attempt").toBe("PROGRESSED");
+    // The sweep sees a card with a live (queued) job and leaves it alone — no tick is spent on it at
+    // all, which is why `tickFor` would never reach it. Run the card's own step directly: it holds.
+    const retry = await runWebPropertyChangeCard(env, { id, title: "t", kind: WEB_PROPERTY_CHANGE_KIND, owner_id: "aie_porter", state: "IN_PROGRESS", work_attempts: 0, firm_scope: "west-peek", requested_by_email: SCOOTER });
+    expect(retry.held, "a nap is not a failed attempt: the card is held for the same job").toBe(true);
+    expect(retry.progressed).toBe(true);
+    expect(retry.blocked).toBe(false);
     expect((await card(id)).state).not.toBe("BLOCKED");
     expect(Number((await card(id)).work_attempts ?? 0), "no attempt spent on a sleeping Mac").toBe(attemptsBefore);
     expect((await liveJobFor(id))!.id, "the same job, not a second one").toBe(run.id);
