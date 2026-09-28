@@ -3,7 +3,9 @@ import { appendEvent } from "../events";
 import { json } from "../router";
 import type { RouteContext } from "../router";
 import type { Env } from "../env";
+import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
 import { actorFromIdentity, authorize } from "./authorize";
+import { hasFirstAndLastName } from "../../shared/community/personName";
 
 /**
  * Community OS — an INTERPRETATION LAYER over the community population (P33, canon §14, §12A.4).
@@ -166,6 +168,65 @@ function slices(rows: Array<{ k: string | null; n: number }>, total: number): Po
     .sort((a, b) => b.count - a.count);
 }
 
+export interface ContactSyncState {
+  /** How far a long-running load has got, or null when no load is running. */
+  loading: { done: number; total: number } | null;
+  /** The contact sync's last outcome; `NEVER_SYNCED` when the cursor row does not exist yet. */
+  source: { last_status: string; last_sync_at: string | null; failure_reason: string | null };
+}
+
+/**
+ * The state of the contact sync — read once, handed to every read off `network_external_mapping`.
+ *
+ * Both the population and the newest names are read off the synced rows, and a synced row is only
+ * as complete as the sync that wrote it. The population panel has always said so; on 27 Sep 2026
+ * the newest endpoint shipped without it, so a load a fifth of the way through would have been
+ * captioned "the last 25 added in Network OS", and an empty successful read, a failed read and a
+ * read that never ran all looked alike. Read here once so the two endpoints cannot disagree.
+ */
+export async function contactSyncState(env: Env, firmScope: string): Promise<ContactSyncState> {
+  const cursor = await env.WP_OS_DB.prepare(
+    "SELECT last_status, last_sync_at, failure_reason FROM network_sync_cursor WHERE resource = 'contact' AND firm_scope = ?1",
+  )
+    .bind(firmScope)
+    .first<{ last_status: string; last_sync_at: string | null; failure_reason: string | null }>();
+
+  /*
+   * How far a long-running load has got.
+   *
+   * Operator, 21 Aug 2026: "it doesnt have to load our entire community the same day it can work at
+   * whatever pace and let us know when its done give us a progress bar." The pull writes its
+   * position into `cursor_value` as it walks the far end's table; this reads it back so the page can
+   * say "1,250 of 5,000 read" instead of showing a number that grows for hours with no explanation.
+   */
+  let loading: { done: number; total: number } | null = null;
+  if (cursor?.last_status === "IN_PROGRESS") {
+    try {
+      const parsed = JSON.parse(
+        (
+          await env.WP_OS_DB.prepare(
+            "SELECT cursor_value FROM network_sync_cursor WHERE resource = 'contact' AND firm_scope = ?1",
+          )
+            .bind(firmScope)
+            .first<{ cursor_value: string | null }>()
+        )?.cursor_value ?? "null",
+      ) as { offset?: number; total?: number } | null;
+      if (parsed && typeof parsed.offset === "number" && typeof parsed.total === "number") {
+        loading = { done: parsed.offset, total: parsed.total };
+      }
+    } catch {
+      // A cursor we cannot read is not a reason to fail the page; it just means no bar.
+    }
+  }
+
+  return {
+    loading,
+    source: cursor
+      ? { last_status: cursor.last_status, last_sync_at: cursor.last_sync_at, failure_reason: cursor.failure_reason }
+      : { last_status: "NEVER_SYNCED", last_sync_at: null, failure_reason: null },
+  };
+}
+
 export async function communityPopulation(env: Env, firmScope: string) {
   const totalRow = await env.WP_OS_DB.prepare(`SELECT COUNT(*) AS n ${CONTACT_MAPPINGS}`)
     .bind(firmScope)
@@ -225,39 +286,7 @@ export async function communityPopulation(env: Env, firmScope: string) {
     .bind(firmScope)
     .first<{ n: number }>();
 
-  const cursor = await env.WP_OS_DB.prepare(
-    "SELECT last_status, last_sync_at, failure_reason FROM network_sync_cursor WHERE resource = 'contact' AND firm_scope = ?1",
-  )
-    .bind(firmScope)
-    .first<{ last_status: string; last_sync_at: string | null; failure_reason: string | null }>();
-
-  /*
-   * How far a long-running load has got.
-   *
-   * Operator, 21 Aug 2026: "it doesnt have to load our entire community the same day it can work at
-   * whatever pace and let us know when its done give us a progress bar." The pull writes its
-   * position into `cursor_value` as it walks the far end's table; this reads it back so the page can
-   * say "1,250 of 5,000 read" instead of showing a number that grows for hours with no explanation.
-   */
-  let loading: { done: number; total: number } | null = null;
-  if (cursor?.last_status === "IN_PROGRESS") {
-    try {
-      const parsed = JSON.parse(
-        (
-          await env.WP_OS_DB.prepare(
-            "SELECT cursor_value FROM network_sync_cursor WHERE resource = 'contact' AND firm_scope = ?1",
-          )
-            .bind(firmScope)
-            .first<{ cursor_value: string | null }>()
-        )?.cursor_value ?? "null",
-      ) as { offset?: number; total?: number } | null;
-      if (parsed && typeof parsed.offset === "number" && typeof parsed.total === "number") {
-        loading = { done: parsed.offset, total: parsed.total };
-      }
-    } catch {
-      // A cursor we cannot read is not a reason to fail the page; it just means no bar.
-    }
-  }
+  const { loading, source } = await contactSyncState(env, firmScope);
 
   return {
     total,
@@ -268,9 +297,7 @@ export async function communityPopulation(env: Env, firmScope: string) {
     firm_has_a_view_on: readRow?.n ?? 0,
     // The page must be able to tell "the community is empty" from "the sync never landed". Those
     // look identical without this and only one of them is anybody's problem.
-    source: cursor
-      ? { last_status: cursor.last_status, last_sync_at: cursor.last_sync_at, failure_reason: cursor.failure_reason }
-      : { last_status: "NEVER_SYNCED", last_sync_at: null, failure_reason: null },
+    source,
   };
 }
 
@@ -285,6 +312,13 @@ export async function handleCommunityPopulation(ctx: RouteContext): Promise<Resp
 /** The most a page may ask for. Approved 27 Sep 2026 as "the last 25 added in Network OS". */
 export const NEWEST_CAP = 25;
 
+/**
+ * How many newest rows are read to find NEWEST_CAP with a first and last name. The August 2026
+ * import holds thousands of rows whose "name" is "? ?" or a handle; reading a bounded window past
+ * the cap finds the people among them without reading the community.
+ */
+export const NEWEST_SCAN = 200;
+
 export interface NewestContact {
   external_id: string;
   full_name: string | null;
@@ -295,17 +329,44 @@ export interface NewestContact {
   created_at: string | null;
 }
 
+export interface NewestWindow {
+  /** At most NEWEST_CAP people, newest first, each with a first and last name. */
+  newest: NewestContact[];
+  /** Newer rows passed over because Network OS holds no first and last name for them. */
+  skipped: number;
+}
+
 /**
  * The last few people added in Network OS — "so we can see some names" (operator, 27 Sep 2026).
  *
  * This is NOT the roster coming back. It is a window of at most twenty-five, read off the synced
- * snapshot in the order Network OS created them, shown read-only and stored nowhere new; the
- * mapping rows it reads already exist for the population count. Every field is pulled with
- * `json_extract` in D1 so the Worker never parses five thousand snapshots to find the newest.
+ * snapshot, shown read-only and stored nowhere new; the mapping rows it reads already exist for
+ * the population count. Every field is pulled with `json_extract` in D1 so the Worker never parses
+ * five thousand snapshots to find the newest.
+ *
+ * "NEWEST" IS THE SHEET'S ORDER, NOT A DATE COLUMN (28 Sep 2026). The first cut ordered by the
+ * snapshot's `created_at`, and the operator held the sheet up against the page: the twenty people
+ * most recently added to it (the `contact_qcon_…` rows) have a BLANK created_at, which sorts to
+ * the very bottom, so they could never enter the window while three September rows that carry a
+ * timestamp did. The sync walks the sheet top to bottom and stores each row it has not seen, so
+ * `first_seen_at` (with the row id breaking ties inside one tick) IS the sheet's order as the
+ * sync met it, and the bottom of the sheet is the top of this window. A row's later edits do not
+ * move it: being edited is not being added.
+ *
+ * A NAME, OR NOT SHOWN (28 Sep 2026). Network OS holds rows named "? ?" and "@handle"; the window
+ * reads a bounded run of the newest and keeps the ones with a first and last name, counting the
+ * rest so the page can say how many it passed over. See `shared/community/personName.ts`.
+ *
+ * ACTIVE ONLY (operator, 28 Sep 2026): "it needs to only take those with status active from the
+ * sheet". The sheet's status column arrives on the snapshot as `status`; a row whose status is
+ * anything but active is not in the window. A row with NO status field is kept: the sync stores
+ * Network OS's row as it comes, and if the column were ever absent, excluding everything would
+ * blank the window and read as a fault. Such rows are not counted as skipped — they were never
+ * in the sheet's terms.
  *
  * Network OS has no per-contact URL, so a row here carries no link; the band's button is the door.
  */
-export async function communityNewest(env: Env, firmScope: string, limit: number = NEWEST_CAP): Promise<NewestContact[]> {
+export async function communityNewest(env: Env, firmScope: string, limit: number = NEWEST_CAP): Promise<NewestWindow> {
   const n = Math.max(1, Math.min(NEWEST_CAP, Math.floor(Number.isFinite(limit) ? limit : NEWEST_CAP)));
   const rows = await env.WP_OS_DB.prepare(
     `SELECT external_id,
@@ -317,17 +378,47 @@ export async function communityNewest(env: Env, firmScope: string, limit: number
             json_extract(snapshot_json, '$.created_at') AS created_at
        FROM network_external_mapping
       WHERE resource = 'contact' AND firm_scope = ?1
-      ORDER BY json_extract(snapshot_json, '$.created_at') DESC, json_extract(snapshot_json, '$.full_name')
+        AND (json_extract(snapshot_json, '$.status') IS NULL
+             OR lower(trim(json_extract(snapshot_json, '$.status'))) = 'active')
+      ORDER BY first_seen_at DESC, rowid DESC
       LIMIT ?2`,
   )
-    .bind(firmScope, n)
+    .bind(firmScope, NEWEST_SCAN)
     .all<NewestContact>();
-  return rows.results ?? [];
+  const newest: NewestContact[] = [];
+  let skipped = 0;
+  for (const row of rows.results ?? []) {
+    if (newest.length >= n) break;
+    if (hasFirstAndLastName(row.full_name)) newest.push(row);
+    else skipped += 1;
+  }
+  return { newest, skipped };
 }
 
 export async function handleCommunityNewest(ctx: RouteContext): Promise<Response> {
+  /*
+   * NAMES ARE READ BY PEOPLE. The subscription claimer is a service identity with no roles and no
+   * authority scopes; the three routes it exists for check for it by name, and nothing about
+   * claiming parked work needs a window of the community's names, companies and owners. Every
+   * other authenticated firm identity reads this on the same terms as the population count.
+   */
+  if (ctx.identity!.email.toLowerCase() === SUBSCRIPTION_CLAIMER_EMAIL) {
+    return json({ error: "forbidden", reason: "a service identity does not read the community's names" }, { status: 403 });
+  }
   const actor = actorFromIdentity(ctx.identity!);
   const firmScope = actor.firmScopes[0] ?? "west-peek";
   const asked = Number(new URL(ctx.request.url).searchParams.get("limit") ?? NEWEST_CAP);
-  return json({ newest: await communityNewest(ctx.env, firmScope, asked), cap: NEWEST_CAP });
+  /*
+   * THE CURSOR FIRST, THEN THE NAMES — in that order, never side by side. The sync tick writes the
+   * mappings and only then flips the cursor to OK; two reads in flight at once could pair the
+   * cursor AFTER the flip with names from BEFORE it, and the page would caption a prefix "the
+   * last 25 added". Read the cursor first and the names can only be as new or newer than the
+   * state that labels them: an OK cursor is followed by every row it vouches for, and a cursor
+   * still IN_PROGRESS labels whatever follows as partial, which it is.
+   */
+  const sync = await contactSyncState(ctx.env, firmScope);
+  const { newest, skipped } = await communityNewest(ctx.env, firmScope, asked);
+  // The sync state rides with the names so the page can say "of the 1,200 read so far" during a
+  // load, and can tell an empty read from a failed one from one that never ran.
+  return json({ newest, skipped, cap: NEWEST_CAP, loading: sync.loading, source: sync.source });
 }

@@ -4638,20 +4638,40 @@ body {
   color: var(--wp-ink-2);
 }
 
-/* — The newest names: one row a person, name then its muted line. No link, because Network OS
-     has no per-contact URL; the band's button is the door. */
-.newest-list { list-style: none; margin: var(--space-sm) 0 0; padding: 0; }
-.newest-row {
+/* — Every kind, counted: one row a kind, the word and its number, in columns so nine kinds sit
+     in three lines rather than nine. Text tokens only; the count is tabular so the column aligns. */
+.kind-host { margin: var(--space-md) 0; }
+.kind-list {
+  list-style: none;
+  margin: var(--space-sm) 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: var(--space-2xs) var(--space-lg);
+}
+.kind-row {
   display: flex;
-  flex-wrap: wrap;
+  justify-content: space-between;
   align-items: baseline;
-  gap: var(--space-2xs) var(--space-sm);
-  padding: var(--space-xs) 0;
+  gap: var(--space-sm);
+  padding: var(--space-2xs) 0;
   border-bottom: 1px solid var(--wp-line);
 }
-.newest-row:last-child { border-bottom: none; }
+.kind-label { color: var(--wp-ink-2); }
+.kind-count { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* — The newest names: a name a row and nothing else, flowed into columns. No link, because
+     Network OS has no per-contact URL; the band's button is the door. */
+.newest-list {
+  list-style: none;
+  margin: var(--space-sm) 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: var(--space-2xs) var(--space-lg);
+}
+.newest-row { padding: var(--space-2xs) 0; border-bottom: 1px solid var(--wp-line); }
 .newest-name { font-weight: 600; }
-.newest-meta { font-size: var(--text-sm); color: var(--wp-muted); }
 
 /* — The boundary band: where the people actually live.
      Community's first block says that Network OS owns the people. It wore the generic grey

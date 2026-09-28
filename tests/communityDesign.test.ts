@@ -15,6 +15,7 @@ import {
 } from "../src/shared/community/populationShape";
 
 import { communityGuide } from "../src/shared/help/pageGuide/community";
+import { hasFirstAndLastName } from "../src/shared/community/personName";
 import { stripTsComments } from "../scripts/validate/lib/strip-comments.mjs";
 
 /**
@@ -243,6 +244,20 @@ describe("the chart pass: hero row + two rings", () => {
     // Four hero tiles, each with a meaning line.
     for (const id of ["hero-people", "hero-placeable", "hero-warm", "hero-prospects"]) expect(CODE, id).toContain(`testid="${id}"`);
     expect(CSS).toMatch(/\.community-rings \{[^}]*display: grid/s);
+    // EVERY KIND, COUNTED (operator, 28 Sep 2026: the placeable total "needs to be broken out
+    // somewhere else on the page"). A list of every kind with its number, after the rings, the
+    // tech-adjacent included — no filter on the key, only on a zero count — labelled through the
+    // one dictionary.
+    const kinds = CODE.indexOf('data-testid="community-kinds"');
+    expect(kinds).toBeGreaterThan(warmRing);
+    const kindsBlock = CODE.slice(kinds, CODE.indexOf("</section>", kinds));
+    expect(kindsBlock).toContain("p.by_type");
+    expect(kindsBlock).toContain("typeWord(s.key)");
+    expect(kindsBlock).toContain("count(s.count)");
+    expect(kindsBlock).not.toMatch(/UNPLACED_KEYS|general_tech_adjacent|isUnplaced/);
+    expect(kindsBlock).toContain('data-testid={`kind-${s.key}`}');
+    expect(CSS).toMatch(/\.kind-list \{[^}]*display: grid/s);
+    expect(CSS).toMatch(/\.kind-count \{[^}]*tabular-nums/s);
     expect(CSS).toMatch(/\.cohort-meaning \{/);
     expect(CSS).toMatch(/\.tech-adjacent-line \{[^}]*var\(--wp-tint\)/s);
   });
@@ -257,13 +272,44 @@ describe("newest in the community", () => {
     expect(CODE).toContain("Newest in the community");
     expect(CODE).toContain("the last 25 added in Network OS");
     expect(CODE).toContain('data-testid="community-newest-empty"');
-    expect(CODE).toContain('typeWord(c.person_type ?? "unknown")');
-    // No link on a row: Network OS has no per-contact URL. The band's button is the door.
+    expect(CODE).toContain('data-testid="community-newest-skipped"');
+    // THE SYNC STATE IS SAID (Codex on #207). While a load runs the rows are a prefix of the
+    // community, and the subtitle says so from the endpoint's own `loading`; an empty read is
+    // three different sentences for three different facts, chosen off `source.last_status`.
     const section = CODE.slice(newest, CODE.indexOf("export function CommunityPage"));
+    expect(section).toContain('data-testid="community-newest-partial"');
+    expect(section).toContain("read so far");
+    expect(section).toContain('data-testid="community-newest-stale"');
+    expect(section.match(/last_status/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+    expect(section).toContain("Network OS could not be read");
+    expect(section).toContain("had nobody to give");
+    expect(section).toContain("Nothing has been read from Network OS yet");
+    // A NAME AND NOTHING ELSE (operator, 28 Sep 2026): the row draws `full_name` and no company,
+    // kind, owner or date, and the meta line is gone from the page and the stylesheet.
+    const rows = section.slice(section.indexOf('className="newest-list"'), section.indexOf("</ul>"));
+    expect(rows).toContain("c.full_name");
+    for (const field of ["c.company", "c.person_type", "c.relationship_owner", "c.created_at", "c.city", "typeWord(", "readableDate("]) {
+      expect(rows, field).not.toContain(field);
+    }
+    expect(section).not.toContain("newest-meta");
+    expect(CSS).not.toContain(".newest-meta");
+    // No link on a row: Network OS has no per-contact URL. The band's button is the door.
     expect(section).not.toMatch(/<a\b/);
     expect(section).not.toContain("href=");
     expect(CSS).toMatch(/\.newest-row \{/);
     expect(CSS).toMatch(/\.newest-name \{[^}]*font-weight: 600/s);
+  });
+});
+
+describe("a first and last name", () => {
+  it("keeps what the operator's screen showed as people and declines what it showed as not", () => {
+    // Verbatim from production, 28 Sep 2026 — Network OS's August import.
+    for (const real of ["Alex Junior Rosario Nolasco", "Luna Bian", "Jacob Shulman", "A. Walton", "A.j. Ross", "AJ Streetr", "José Núñez", "Mary-Kate O'Neil"]) {
+      expect(hasFirstAndLastName(real), real).toBe(true);
+    }
+    for (const junk of ["? ?", ". Goosby", ". Kasey", "ACP ?", "@BrandwithDrew Co-Founder", "@ProducedbyRHEA Shannon", "@tayllure Taylor", "*alt email: staylor@spry.vc more than a decade", "A K", "Madonna", "", "   ", null, undefined]) {
+      expect(hasFirstAndLastName(junk), String(junk)).toBe(false);
+    }
   });
 });
 
