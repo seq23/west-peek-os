@@ -31,6 +31,17 @@ describe("the reset time a notice states", () => {
     expect(retryAfterFrom(`limit|${Math.floor(NOW / 1000) + 7200}`, NOW)).toBe(7200);
     expect(retryAfterFrom("You've hit your limit", NOW)).toBeNull();
   });
+  it("reads a weekday-only reset as the next such weekday, never as 'today or tomorrow'", () => {
+    // 29 Sep 2026 is a Tuesday. Monday 8am CDT is 5 days and 17h40m ahead; Tuesday 8am has passed, so next Tuesday.
+    expect(retryAfterFrom("resets Monday at 8am (America/Chicago)", NOW)).toBe((Date.UTC(2026, 9, 5, 13, 0) - NOW) / 1000);
+    expect(retryAfterFrom("resets Tuesday at 8am (America/Chicago)", NOW)).toBe((Date.UTC(2026, 9, 6, 13, 0) - NOW) / 1000);
+    expect(hours(retryAfterFrom("resets Tuesday 3pm (America/Chicago)", NOW))).toBeCloseTo(40 / 60, 2);
+  });
+  it("captures any valid zone name, not only two-part ones", () => {
+    expect(retryAfterFrom("resets 3pm (UTC)", NOW)).toBe((Date.UTC(2026, 8, 29, 15, 0) + 86_400_000 - NOW) / 1000);
+    expect(retryAfterFrom("resets 3pm (Etc/GMT+5)", NOW)).toBe((Date.UTC(2026, 8, 29, 20, 0) - NOW) / 1000);
+    expect(retryAfterFrom("resets 9pm (America/Argentina/Buenos_Aires)", NOW)).toBe((Date.UTC(2026, 8, 30, 0, 0) - NOW) / 1000);
+  });
   it("allows a weekly wait: the longest cooldown is seven days, which the server also accepts", () => {
     expect(MAX_COOLDOWN_SECONDS).toBe(7 * 24 * 60 * 60);
   });
