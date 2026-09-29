@@ -26,9 +26,13 @@ export const SHORT_OUTPUT_CHARS = 600;
 
 /** How long a seat is treated as out when the notice gives no reset time. Then it is tried once more. */
 export const DEFAULT_COOLDOWN_SECONDS = 30 * 60;
-/** The shortest and longest cooldown a notice may set. A parsed time in the past or a year away is not believed. */
+/**
+ * The shortest and longest cooldown a notice may set. A parsed time in the past or a year away is not believed.
+ * The longest is seven days because a WEEKLY limit is real ("You've hit your weekly limit · resets Oct 2 at 8am",
+ * seen 29 Sep 2026); a one-day cap turned it into a daily retry of a seat that could not answer.
+ */
 export const MIN_COOLDOWN_SECONDS = 60;
-export const MAX_COOLDOWN_SECONDS = 24 * 60 * 60;
+export const MAX_COOLDOWN_SECONDS = 7 * 24 * 60 * 60;
 
 const LIMIT_PATTERNS = [
   /usage limit (?:reached|exceeded|has been reached)/i,
@@ -71,7 +75,58 @@ export function retryAfterFrom(text, nowMs = Date.now()) {
     const unit = rel[2].toLowerCase() === "hour" ? 3600 : rel[2].toLowerCase() === "minute" ? 60 : 1;
     return clamp(Number(rel[1]) * unit);
   }
+  // "resets Oct 2 at 8am (America/Chicago)" / "resets on Oct 2, 8:30 pm" / "resets 3pm (America/Chicago)".
+  const abs = /resets?\s+(?:on\s+)?(?:(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s+)?(?:([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+)?(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b(?:\s*\(([A-Za-z_]+\/[A-Za-z_]+)\))?/i.exec(text);
+  if (abs) {
+    const at = resetAt(abs, nowMs);
+    if (at !== null) return clamp(Math.round((at - nowMs) / 1000));
+  }
   return null;
+}
+
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+/** Offset (ms) of `zone` from UTC at instant `utcMs`; zone undefined means this machine's own zone. */
+function zoneOffsetMs(utcMs, zone) {
+  if (!zone) return -new Date(utcMs).getTimezoneOffset() * 60_000;
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", { timeZone: zone, hourCycle: "h23", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric" })
+      .formatToParts(new Date(utcMs)).map((p) => [p.type, p.value]),
+  );
+  return Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second) - Math.floor(utcMs / 1000) * 1000;
+}
+
+/** The instant (ms) a matched reset phrase names, or null when it cannot be read as a real time. */
+function resetAt(m, nowMs) {
+  const [, mon, day, hh, mm, ap, zone] = m;
+  let hour = Number(hh);
+  if (!(hour >= 1 && hour <= 12)) return null;
+  hour = (hour % 12) + (ap.toLowerCase() === "pm" ? 12 : 0);
+  const minute = mm ? Number(mm) : 0;
+  if (minute > 59) return null;
+  let tz = zone || undefined;
+  if (tz) { try { new Intl.DateTimeFormat("en-US", { timeZone: tz }); } catch { tz = undefined; } }
+  const local = (utcMs) => {
+    const d = new Date(utcMs + zoneOffsetMs(utcMs, tz));
+    return { y: d.getUTCFullYear(), mo: d.getUTCMonth(), d: d.getUTCDate() };
+  };
+  const wall = (y, mo, d) => {
+    const guess = Date.UTC(y, mo, d, hour, minute);
+    let t = guess - zoneOffsetMs(guess, tz);
+    t = guess - zoneOffsetMs(t, tz); // once more, so a date across a daylight-saving change is exact
+    return t;
+  };
+  const today = local(nowMs);
+  if (mon && day) {
+    const mo = MONTHS.indexOf(mon.slice(0, 3).toLowerCase());
+    if (mo < 0 || Number(day) < 1 || Number(day) > 31) return null;
+    let t = wall(today.y, mo, Number(day));
+    if (t < nowMs - 60_000) t = wall(today.y + 1, mo, Number(day));
+    return t;
+  }
+  let t = wall(today.y, today.mo, today.d);
+  if (t < nowMs) t = wall(today.y, today.mo, today.d + 1);
+  return t;
 }
 
 function clamp(seconds) {
