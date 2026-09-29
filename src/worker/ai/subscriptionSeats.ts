@@ -152,7 +152,7 @@ export interface DeviceRow {
  */
 export const SEAT_EXHAUSTED_DEFAULT_COOLDOWN_S = 30 * 60;
 export const SEAT_EXHAUSTED_MIN_COOLDOWN_S = 60;
-export const SEAT_EXHAUSTED_MAX_COOLDOWN_S = 24 * 60 * 60;
+export const SEAT_EXHAUSTED_MAX_COOLDOWN_S = 7 * 24 * 60 * 60;
 
 /** The cooldown a report asks for, bounded both ways. Pure. */
 export function exhaustionCooldownSeconds(requested: number | null | undefined): number {

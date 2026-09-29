@@ -532,7 +532,7 @@ describe("a seat whose plan is out of usage is skipped until it resets (0245)", 
     expect(exhaustionCooldownSeconds(undefined)).toBe(30 * 60);
     expect(exhaustionCooldownSeconds(null)).toBe(30 * 60);
     expect(exhaustionCooldownSeconds(5)).toBe(60);
-    expect(exhaustionCooldownSeconds(10 * 24 * 60 * 60)).toBe(24 * 60 * 60);
+    expect(exhaustionCooldownSeconds(10 * 24 * 60 * 60)).toBe(7 * 24 * 60 * 60);
     expect(exhaustionCooldownSeconds(7200)).toBe(7200);
   });
 
