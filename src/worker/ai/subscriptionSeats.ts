@@ -139,6 +139,43 @@ export interface DeviceRow {
   hostname: string | null;
   agent_version: string | null;
   last_seen_at: string;
+  /** 0245. While in the future the seat reads unavailable: the plan's usage window is spent. */
+  exhausted_until?: string | null;
+  exhausted_reason?: string | null;
+}
+
+/**
+ * How long a seat is skipped when the CLI's notice gives no reset time. Then it is offered work once
+ * more: a seat still limited costs that one run a fast failure (the chain moves straight on) and
+ * re-arms this; a seat that has reset simply answers. Must match DEFAULT_COOLDOWN_SECONDS in
+ * scripts/lib/seat-usage-limit.mjs.
+ */
+export const SEAT_EXHAUSTED_DEFAULT_COOLDOWN_S = 30 * 60;
+export const SEAT_EXHAUSTED_MIN_COOLDOWN_S = 60;
+export const SEAT_EXHAUSTED_MAX_COOLDOWN_S = 24 * 60 * 60;
+
+/** The cooldown a report asks for, bounded both ways. Pure. */
+export function exhaustionCooldownSeconds(requested: number | null | undefined): number {
+  if (typeof requested !== "number" || !Number.isFinite(requested) || requested <= 0) return SEAT_EXHAUSTED_DEFAULT_COOLDOWN_S;
+  return Math.min(SEAT_EXHAUSTED_MAX_COOLDOWN_S, Math.max(SEAT_EXHAUSTED_MIN_COOLDOWN_S, Math.round(requested)));
+}
+
+/** Is this device row inside a reported usage-limit cooldown right now? Pure. */
+export function isExhausted(row: Pick<DeviceRow, "exhausted_until"> | null | undefined, now: Date): boolean {
+  const until = row?.exhausted_until;
+  if (!until) return false;
+  const t = Date.parse(until);
+  return Number.isFinite(t) && t > now.getTime();
+}
+
+/** The sentence a skipped-for-usage seat puts on a run. Written for a person. */
+function exhaustedReason(name: string, row: DeviceRow, now: Date): string {
+  const left = Math.max(0, Date.parse(row.exhausted_until ?? "") - now.getTime());
+  const said = row.exhausted_reason ? ` It said: ${row.exhausted_reason.slice(0, 160)}` : "";
+  return (
+    `the ${name} seat on ${row.hostname ?? row.device_id} reported that its plan's usage is spent, so it was skipped with no delay ` +
+    `and will be tried again in about ${describeAge(left)}.${said}`
+  );
 }
 
 export interface LaneAvailability {
@@ -178,7 +215,7 @@ export async function laneAvailability(env: Env, seat: Seat, now: Date = new Dat
   let row: DeviceRow | null = null;
   try {
     row = await env.WP_OS_DB.prepare(
-      "SELECT seat, device_id, hostname, agent_version, last_seen_at FROM subscription_seat_device WHERE seat = ?1 ORDER BY last_seen_at DESC LIMIT 1",
+      "SELECT seat, device_id, hostname, agent_version, last_seen_at, exhausted_until, exhausted_reason FROM subscription_seat_device WHERE seat = ?1 ORDER BY last_seen_at DESC LIMIT 1",
     )
       .bind(seat)
       .first<DeviceRow>();
@@ -215,6 +252,16 @@ export async function laneAvailability(env: Env, seat: Seat, now: Date = new Dat
       ageMs,
     };
   }
+  if (isExhausted(row, now)) {
+    return {
+      seat,
+      available: false,
+      reason: exhaustedReason(name, row, now),
+      deviceId: row.device_id,
+      lastSeenAt: row.last_seen_at,
+      ageMs,
+    };
+  }
   return {
     seat,
     available: true,
@@ -241,7 +288,7 @@ export async function allSeatAvailability(env: Env, now: Date = new Date()): Pro
     rows =
       (
         await env.WP_OS_DB.prepare(
-          "SELECT seat, device_id, hostname, agent_version, last_seen_at FROM subscription_seat_device ORDER BY last_seen_at DESC",
+          "SELECT seat, device_id, hostname, agent_version, last_seen_at, exhausted_until, exhausted_reason FROM subscription_seat_device ORDER BY last_seen_at DESC",
         ).all<DeviceRow>()
       ).results ?? [];
   } catch {
@@ -271,6 +318,16 @@ export async function allSeatAvailability(env: Env, now: Date = new Date()): Pro
         reason:
           `the ${name} seat on ${row.hostname ?? row.device_id} last checked in ${describeAge(ageMs)} ago, which is ` +
           `outside the ${Math.round(HEARTBEAT_FRESH_MS / 1000)}-second freshness window, so it was skipped with no delay`,
+        deviceId: row.device_id,
+        lastSeenAt: row.last_seen_at,
+        ageMs,
+      };
+    }
+    if (isExhausted(row, now)) {
+      return {
+        seat,
+        available: false,
+        reason: exhaustedReason(name, row, now),
         deviceId: row.device_id,
         lastSeenAt: row.last_seen_at,
         ageMs,
@@ -321,6 +378,38 @@ export async function recordHeartbeat(
       JSON.stringify(input.capabilities ?? []),
       input.seat,
     )
+    .run();
+}
+
+/**
+ * THE CLAIMER SAID THIS SEAT'S PLAN IS OUT OF USAGE (0245). Skip it until it resets.
+ *
+ * Written on the device row that IS the availability signal, so every reader — the router, the
+ * status route, the Cockpit — sees the same fact with no second source to drift. Scoped to the seat
+ * and device that reported it. A heartbeat does not clear it (the upsert never names these columns):
+ * a Mac that is awake and out of usage is exactly the state this records.
+ */
+export async function markSeatExhausted(
+  env: Env,
+  input: { seat: Seat; deviceId: string; reason?: string | null; retryAfterSeconds?: number | null },
+  now: Date = new Date(),
+): Promise<{ until: string }> {
+  const until = new Date(now.getTime() + exhaustionCooldownSeconds(input.retryAfterSeconds) * 1000).toISOString();
+  await env.WP_OS_DB.prepare(
+    `UPDATE subscription_seat_device SET exhausted_until = ?3, exhausted_reason = ?4 WHERE seat = ?1 AND device_id = ?2`,
+  )
+    .bind(input.seat, input.deviceId, until, (input.reason ?? "").slice(0, 300) || null)
+    .run();
+  return { until };
+}
+
+/** The seat answered, so its plan has usage again. Called by `reportRun` on a real answer. */
+export async function clearSeatExhaustion(env: Env, seat: string, deviceId: string): Promise<void> {
+  await env.WP_OS_DB.prepare(
+    `UPDATE subscription_seat_device SET exhausted_until = NULL, exhausted_reason = NULL
+      WHERE seat = ?1 AND device_id = ?2 AND exhausted_until IS NOT NULL`,
+  )
+    .bind(seat, deviceId)
     .run();
 }
 
@@ -527,6 +616,13 @@ export async function reportRun(
         "this run is no longer claimed by you — it was most likely returned to the pool after going quiet, " +
         "and the work has already been answered elsewhere. Nothing was recorded.",
     };
+  }
+  if (ok) {
+    // A real answer proves the plan has usage again; do not make it wait out a cooldown it no longer needs.
+    const seatRow = await env.WP_OS_DB.prepare("SELECT seat FROM subscription_seat_run WHERE id = ?1")
+      .bind(input.runId)
+      .first<{ seat: string }>();
+    if (seatRow) await clearSeatExhaustion(env, seatRow.seat, input.deviceId);
   }
   return { accepted: true, detail: ok ? "recorded" : "recorded as a failure" };
 }

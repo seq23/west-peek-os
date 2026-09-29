@@ -6780,3 +6780,53 @@ local person. Every piece existed — the unresolved queue, the "Send to Network
   switched the hand-off off by default.
 - **Still UNPROVEN and not this PR's:** the live round trip — a test person captured through to
   Network OS's intake and rejected there — needs a signed-in Network OS browser.
+
+## The seats lead everything that needs a strong model; FREE ONLY is the $0 posture (29 Sep 2026, migration 0245)
+
+Approved by Sequoia Taylor, 29 Sep 2026 (phases 1–3 as one artifact). Her ladder: **Claude Code seat →
+Codex seat → free lanes (where the content may go there) → paid Sonnet → Anthropic direct → OpenAI**,
+running off the Claude Max and ChatGPT Plus she already pays for, staying at $0 when both are gone, and
+one switch — the existing spend lever, not a new one — for "I need good work now, money is fine".
+Design: `ARCHITECTURAL_DECISIONS.md` (29 Sep 2026); behaviour: `docs/AI_GOVERNANCE.md`.
+
+- **Phase 1 — a seat out of usage is skipped, not retried (0245).** `scripts/lib/seat-usage-limit.mjs`
+  recognises a CLI's usage-limit sentence (and never inspects long output, so a real answer that talks
+  about limits is kept); the claimer reports `seat_exhausted`; the Worker writes `exhausted_until` on
+  `subscription_seat_device`, which `allSeatAvailability` / `laneAvailability` read, so nothing is parked
+  on it and nothing waits 90 seconds. A real answer clears it; otherwise it expires (30 minutes when the
+  notice names no time). Before this, the claimer took ANY non-empty stdout as the answer, so a
+  "usage limit reached" line could be saved as a card's answer and the chain never reached Codex.
+- **Phase 2 — the order.** `budgetContext.seatFirst` lets a named public call lead on the seats:
+  free-to-use card work (and artifacts on such a card), the brief, University, the market map. Seats sit
+  ahead of the free lanes in the chain (`zeroCostLead = [...seatLanes, ...freeLanes]`); a seat is never
+  offered work it cannot take (images, documents, search). Plain public work (blog help, room packets,
+  hiring writes) is unchanged.
+- **Phase 3 — the lever.** `FREE_ONLY`: seats count as $0 candidates; a pinned class or the brief runs on
+  the best $0 lane instead of stopping, and the run records that it is weaker than the pin; private work
+  with both seats away STOPS naming the lever (a free lane may never see it, a paid one is not allowed).
+  `OPEN`: judgement work skips the free lanes (seats, then paid Claude). `MODERATE`: unchanged apart from
+  the seat rung. The brief gains `degradeAllowed`; `briefServing` marks any brief not written by Sonnet or
+  a seat as "written by a weaker model", on the masthead line and in a notice under it.
+- **Tests.** `tests/ladderOrder.test.ts` (21): the claimer is played by a loop that answers or reports a
+  spent plan, the vendors are stubs that record which model was asked for, the lever is a real
+  `budget_policy` row. Three rungs were proven negatively (seat rung, OPEN skip, FREE_ONLY seat
+  candidates each broken, watched to fail, restored). `tests/subscriptionSeats.test.ts` +8: the detector,
+  cooldown bounds, one seat out and the other offered, survival across a heartbeat, self-healing, clearing
+  on an answer, the report route, and a private run handed from an exhausted Claude Code to Codex with no
+  90-second wait and no paid call. `validate:brief-lands` now holds the brief's relaxation to the brief
+  (a gate that ignores `degradeAllowed`, a brief that forgets it, and a second caller declaring it are
+  each caught by its self-test).
+- **PROVEN here (local D1, stubbed vendors, simulated claimer):** every rung and every lever position
+  above; the fall-through from an exhausted seat; that private work never reaches a free lane; that a
+  bare `requireModel` still stops at FREE_ONLY.
+- **UNPROVEN, and not this artifact's to claim:** that the live Claude Code and Codex CLIs print the
+  sentences the detector reads (a wording it does not cover is treated as an answer, exactly the old
+  behaviour — it narrows the hole, it does not close every possible one); that the free lanes are good
+  enough at the brief's job (the verifier refuses a bad one, but the time spent reaching Sonnet is
+  unmeasured); that a 20k-token brief fits inside the seat's 90-second claim wait (if not it hands on
+  and costs the wait); that the production lever, providers and balances are what the seeds say.
+- **Not built (phases 4–5):** a strong OpenAI model as the paid second after Claude — needs a price read
+  from the vendor and a live probe, neither possible offline (`gpt-5-mini` remains a cheap last resort,
+  not "highly intelligent"); and a Codex fallback for repo/site work on cards, which is still Claude Code
+  only. The production default is still MODERATE: moving it to FREE_ONLY is her act on the AI page
+  (`governance.policy_change`), deliberately not a migration.

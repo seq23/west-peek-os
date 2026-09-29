@@ -579,3 +579,32 @@ room can hear DURING; the official transcript (`GOOGLE_MEET`) is complete and at
 When the official one lands it supersedes the live imports (`transcript_import.superseded_by`), and
 the After draft and the room's context read one conversation once. The live notes stay on the
 record as corroboration.
+
+## The seats lead everything that needs a strong model; FREE ONLY is the $0 posture, not a stop (29 Sep 2026)
+
+**Decided by the owner, 29 Sep 2026:** "CC → CX → FREE lanes (as long as they are capable; briefs can be
+degraded with a note) → S5, ANTH, OpenAI API. I rarely want to spend money … if both seats are gone we
+stay at $0 unless otherwise asked … and a switch for 'I really need good work now, money is fine.'"
+
+Three things in the earlier design contradicted that, and this is what changed and what did not.
+
+**Changed.** (1) The seats were offered to *private* work only, so public card work, the brief,
+University and the market map went to a free model and never saw Claude. A caller may now name a call
+`seatFirst`; nothing else about content safety moves, because the seats are private-capable. (2)
+`FREE_ONLY` stopped every pinned or protected call that named a paid model ("routing_no_candidate",
+"required_model_unavailable"). It now runs the call on the best `$0` lane and records that it is weaker
+than the pin. (3) `OPEN` left the free lanes in front of the paid ones, so a free answer could end the
+walk before the strong lanes; at `OPEN`, judgement work now skips them. A seat that has run out of usage
+is skipped until it resets (0245) instead of being parked on for ninety seconds a call.
+
+**Superseded.** The 19 Sep 2026 decision that the brief runs on Sonnet "and nothing else" (`requireModel`
+with no free lane). The brief keeps `requireModel`, and gains `degradeAllowed`: a free lane may stand in
+front of Sonnet, but only if the brief's own verifier accepts its reply, and the report says which model
+wrote it. That decision was made because thirteen free-lane attempts wrote no acceptable brief; the
+verifier is what keeps that from recurring, and the risk that it still costs time before Sonnet is
+reached is recorded rather than denied. `validate:brief-lands` now holds the relaxation to the brief.
+
+**Not changed, on purpose.** Private content never reaches a lane whose terms permit training — the
+owner's line, and the reason private work with both seats gone at `FREE_ONLY` stops rather than
+degrades. The lever stays one control with three positions (`validate:one-lever`); no fourth switch
+was added. The production default is set by the owner on the AI page, not by a migration.

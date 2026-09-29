@@ -50,10 +50,13 @@ export const SPEND_LEVERS: readonly LeverDef[] = [
   {
     key: "FREE_ONLY",
     label: "Free only",
-    what: "Nothing paid, at all. Everything runs on the free lanes — Workers AI and the free frontier tiers.",
+    what:
+      "Nothing paid, at all. Her Claude Code and Codex seats first (already paid for), then the free lanes — " +
+      "Workers AI and the free frontier tiers.",
     tradeoff:
-      "Work marked as judgement or interpretation STOPS rather than quietly taking a weaker model. " +
-      "That can stop the morning brief, and it is meant to: a thin brief that looks like a real one is worse than none.",
+      "Public work that would have been written by Claude runs on the best free lane instead, and says so; the brief is " +
+      "marked as written by a weaker model. Private work (LP names, deal terms, fund figures) can never use a free lane, " +
+      "so with both seats away or out of usage it STOPS and names this switch rather than spend money or send it somewhere that trains.",
   },
   {
     key: "MODERATE",
@@ -66,7 +69,9 @@ export const SPEND_LEVERS: readonly LeverDef[] = [
   {
     key: "OPEN",
     label: "Open",
-    what: "Spend what is needed, up to the $75 ceiling. The gradient stops tightening.",
+    what:
+      "The switch for “I need good work right now.” Her seats still go first, then paid Claude — the free lanes are " +
+      "skipped for judgement work. Spends what is needed, up to the $75 ceiling. The gradient stops tightening.",
     tradeoff: "A heavy week reaches the ceiling faster, and the ceiling is where work stops rather than slows.",
   },
 ];
@@ -243,8 +248,8 @@ export function evaluateSpend(lever: SpendLever, monthToDateUsd: number, now: Da
       approaching,
       why: `You set the lever to Free only, so nothing paid runs whatever the month has cost. ${pace}.`,
       capabilityCost:
-        "Everything routine runs on open models. Work marked judgement or interpretation STOPS rather than " +
-        "taking a weaker model — it will name itself and say the lever is set to Free only.",
+        "Everything runs on her seats and the free lanes. Work Claude would have written runs on the best of those " +
+        "and says so. Private work with both seats away or out of usage STOPS — it names itself and says the lever is set to Free only.",
     };
   }
 

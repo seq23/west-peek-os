@@ -5,6 +5,10 @@ import type { Actor } from "../src/worker/services/authorize";
 import { runAi } from "../src/worker/ai/runAi";
 import { isSearchGrounded } from "../src/shared/ai/models";
 import { isProviderOutage, outageKind, shouldBackOff } from "../src/shared/ai/providerFailure";
+import { handleSubscriptionSeatReport } from "../src/worker/services/subscriptionSeats";
+import { SUBSCRIPTION_CLAIMER_EMAIL } from "../src/worker/auth";
+import type { RouteContext } from "../src/worker/router";
+import { detectUsageLimit } from "../scripts/lib/seat-usage-limit.mjs";
 import {
   CLAIM_TTL_MS,
   HEARTBEAT_FRESH_MS,
@@ -13,8 +17,12 @@ import {
   SEATS,
   allSeatAvailability,
   claimRun,
+  clearSeatExhaustion,
+  exhaustionCooldownSeconds,
+  isExhausted,
   isFresh,
   laneAvailability,
+  markSeatExhausted,
   parkRun,
   reapSeatRuns,
   recordHeartbeat,
@@ -505,4 +513,132 @@ describe("the ladder is actually climbable", () => {
       expect(["PUBLIC", "INTERNAL"], `${r.provider_key} was widened to ${r.privacy_label} without an argument`).toContain(r.privacy_label);
     }
   });
+});
+
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+describe("a seat whose plan is out of usage is skipped until it resets (0245)", () => {
+  it("reads a notice as a limit and a real answer as an answer", () => {
+    expect(detectUsageLimit({ stdout: "Claude AI usage limit reached|1759071600" }).limited).toBe(true);
+    expect(detectUsageLimit({ stdout: "You've hit your limit · resets 3pm" }).limited).toBe(true);
+    expect(detectUsageLimit({ stdout: "", stderr: "You've hit your usage limit. Try again in 3 hours." }).limited).toBe(true);
+    expect(detectUsageLimit({ stdout: "The reserve ratio is 0.35 and the pacing is on plan." }).limited).toBe(false);
+    // A real answer that discusses limits is long; long output is never inspected.
+    expect(detectUsageLimit({ stdout: `usage limit reached is what it prints. ${"x".repeat(700)}` }).limited).toBe(false);
+    expect(detectUsageLimit({ stdout: "" }).limited).toBe(false);
+  });
+
+  it("bounds the cooldown both ways and defaults when the notice names no time", () => {
+    expect(exhaustionCooldownSeconds(undefined)).toBe(30 * 60);
+    expect(exhaustionCooldownSeconds(null)).toBe(30 * 60);
+    expect(exhaustionCooldownSeconds(5)).toBe(60);
+    expect(exhaustionCooldownSeconds(10 * 24 * 60 * 60)).toBe(24 * 60 * 60);
+    expect(exhaustionCooldownSeconds(7200)).toBe(7200);
+  });
+
+  it("makes ONLY the exhausted seat unavailable, and says why in a sentence", async () => {
+    await heartbeat("claude_code", 5_000);
+    await heartbeat("codex", 5_000);
+    await markSeatExhausted(env(), { seat: "claude_code", deviceId: "mac-test", reason: "You've hit your limit", retryAfterSeconds: 3600 });
+
+    const seats = await allSeatAvailability(env());
+    const cc = seats.find((s) => s.seat === "claude_code")!;
+    const cx = seats.find((s) => s.seat === "codex")!;
+    expect(cc.available).toBe(false);
+    expect(cc.reason).toContain("usage is spent");
+    expect(cc.reason).toContain("You've hit your limit");
+    expect(cx.available, "Codex is a different plan and stays offered").toBe(true);
+
+    const single = await laneAvailability(env(), "claude_code");
+    expect(single.available).toBe(false);
+  });
+
+  it("survives a heartbeat: an awake Mac that is out of usage is exactly what this records", async () => {
+    await heartbeat("claude_code", 5_000);
+    await markSeatExhausted(env(), { seat: "claude_code", deviceId: "mac-test", retryAfterSeconds: 3600 });
+    await heartbeat("claude_code", 1_000);
+    expect((await laneAvailability(env(), "claude_code")).available).toBe(false);
+  });
+
+  it("heals itself: after the cooldown the seat is offered work again with nobody flipping anything", async () => {
+    await heartbeat("claude_code", 5_000);
+    const { until } = await markSeatExhausted(env(), { seat: "claude_code", deviceId: "mac-test", retryAfterSeconds: 600 });
+    const before = new Date(Date.parse(until) - 1_000);
+    const after = new Date(Date.parse(until) + 1_000);
+    expect(isExhausted({ exhausted_until: until }, before)).toBe(true);
+    expect(isExhausted({ exhausted_until: until }, after)).toBe(false);
+    // The heartbeat is also older than the freshness window by then, so refresh it at `after`.
+    await recordHeartbeat(env(), { seat: "claude_code", deviceId: "mac-test" }, after);
+    expect((await laneAvailability(env(), "claude_code", after)).available).toBe(true);
+  });
+
+  it("a real answer clears the cooldown at once", async () => {
+    await heartbeat("codex", 5_000);
+    await markSeatExhausted(env(), { seat: "codex", deviceId: "mac-test", retryAfterSeconds: 3600 });
+    const id = await parkRun(env(), { seat: "codex", purpose: "p", prompt: "x", modelAccess: "PRIVATE_MODEL_ONLY" });
+    await claimRun(env(), "mac-test", ["codex"]);
+    await reportRun(env(), { runId: id, deviceId: "mac-test", outputText: "a real answer" });
+    expect((await laneAvailability(env(), "codex")).available).toBe(true);
+    // And clearing something not set is a no-op, not an error.
+    await clearSeatExhaustion(env(), "codex", "mac-test");
+  });
+
+  it("the report route marks the seat exhausted when the claimer says its plan is out", async () => {
+    await heartbeat("claude_code", 5_000);
+    const id = await parkRun(env(), { seat: "claude_code", purpose: "p", prompt: "x", modelAccess: "PRIVATE_MODEL_ONLY" });
+    await claimRun(env(), "mac-test", ["claude_code"]);
+    const ctx = {
+      env: env(),
+      identity: { email: SUBSCRIPTION_CLAIMER_EMAIL, roles: [] },
+      request: new Request("https://example.test/api/subscription-seats/report", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          device_id: "mac-test",
+          run_id: id,
+          error: "Claude Code has run out of usage and said: usage limit reached",
+          seat_exhausted: true,
+          retry_after_seconds: 7200,
+        }),
+      }),
+    } as unknown as RouteContext;
+    const res = await handleSubscriptionSeatReport(ctx);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { accepted: boolean; seat_skipped_until?: string };
+    expect(body.accepted).toBe(true);
+    expect(body.seat_skipped_until).toBeTruthy();
+    expect((await laneAvailability(env(), "claude_code")).available).toBe(false);
+  });
+
+  it("an exhausted Claude Code hands the private run to the Codex seat, with no 90-second wait and no Claude Code row parked", async () => {
+    await heartbeat("claude_code", 5_000);
+    await heartbeat("codex", 5_000);
+    await markSeatExhausted(env(), { seat: "claude_code", deviceId: "mac-test", retryAfterSeconds: 3600 });
+
+    const stub = anyVendor("SHOULD NOT BE REACHED");
+    const running = runAi(env(), PRIVATE_CALL, { fetchImpl: stub.fetchImpl });
+
+    // Play the Codex claimer: wait for the parked row, claim it, answer it.
+    let parkedId: string | null = null;
+    for (let i = 0; i < 200 && !parkedId; i++) {
+      const row = await t.db.prepare("SELECT id, seat FROM subscription_seat_run WHERE status = 'QUEUED'").first<{ id: string; seat: string }>();
+      if (row) {
+        expect(row.seat, "the exhausted seat was never offered the run").toBe("codex");
+        parkedId = row.id;
+      } else {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+    }
+    expect(parkedId, "the run was parked for the Codex seat").toBeTruthy();
+    const claimed = await claimRun(env(), "mac-test", ["codex"]);
+    expect(claimed?.id).toBe(parkedId);
+    await reportRun(env(), { runId: parkedId!, deviceId: "mac-test", outputText: "answered by Codex on the subscription" });
+
+    const { run } = await running;
+    expect(run.status).toBe("COMPLETED");
+    expect(run.output_text).toContain("answered by Codex");
+    expect(stub.seen, "no paid vendor was called").toEqual([]);
+    const parkedSeats = (await t.db.prepare("SELECT DISTINCT seat FROM subscription_seat_run").all<{ seat: string }>()).results ?? [];
+    expect(parkedSeats.map((r) => r.seat)).toEqual(["codex"]);
+  }, 60_000);
 });

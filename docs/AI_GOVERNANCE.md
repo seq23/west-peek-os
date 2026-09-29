@@ -70,9 +70,36 @@ adopted, written fresh, never imported.
 
 | Position | Behaviour |
 |---|---|
-| `FREE_ONLY` | Nothing paid, at all. Only zero-cost candidates. Protected work with no adequate free model **stops and says so**, naming the work and the lever; it never quietly takes a weaker model. |
+| `FREE_ONLY` | **The $0 posture.** Nothing that costs money runs. Her subscription seats (Claude Code, then Codex) count as $0 lanes and lead; the free lanes follow for content allowed to reach them. Work Claude would have written (a pinned class, the brief) runs on the best of those and **says it is weaker than the pin**. Private work with both seats away or out of usage **stops and names the lever** — a free lane may never see it and a paid one is not allowed. |
 | `MODERATE` | **The default, and what production is on.** The gradient below runs inside this position. |
-| `OPEN` | Spend what is needed up to the ceiling. The gradient stops tightening; unpinned work takes the dearest capable model. |
+| `OPEN` | **The switch for "I need good work right now."** Seats still lead, then paid Claude; the free lanes are skipped for judgement work so a mediocre free answer cannot end the walk early. Spends what is needed up to the ceiling; the gradient stops tightening. |
+
+### The ladder for work that needs a strong model (29 Sep 2026)
+
+The owner's order, with the seats first because she already pays for them:
+
+```
+Claude Code seat (Max plan)  →  Codex seat (ChatGPT Plus)  →  FREE lanes  →  paid Sonnet (OpenRouter)  →  Anthropic direct  →  other adequate lanes
+      $0, flat fee                  $0, flat fee            public content only     per token                   per token
+```
+
+- **Which work leads on the seats.** All private judgement work (as before), plus public work a caller
+  names `seatFirst`: card work with a free-to-use card, artifacts on such a card, the brief, University,
+  the market map. Public work she did not name (blog help, room packets, hiring writes) stays free-first
+  and does not spend her interactive capacity.
+- **A seat that is out of usage is skipped until it resets.** The claimer recognises the CLI's usage-limit
+  sentence (`scripts/lib/seat-usage-limit.mjs`) and reports the seat exhausted; the Worker records
+  `exhausted_until` on the device row (migration 0245) and `allSeatAvailability` reads it, so nothing is
+  parked and nothing waits 90 seconds on a seat that will refuse. A seat that answers clears it; the
+  cooldown otherwise expires by itself (30 minutes when the notice names no time).
+- **Free lanes never see private content.** Unchanged and enforced twice (step 4b and the egress gate).
+  So the free rung exists only for public content; private work goes seats → paid Claude.
+- **The brief may degrade, and says so.** With `requireModel` + `degradeAllowed`, a free lane may stand in
+  front of Sonnet, but only a reply that passes the brief's own verifier is kept, and
+  `briefServing` (shared/ai/briefServing.ts) marks a brief written by anything but Sonnet or a seat as
+  "written by a weaker model" on the report and on the page. A bare `requireModel` is still that model or nothing.
+- **Setting the default is a human act.** Moving production to `FREE_ONLY` is `governance.policy_change`
+  (an approval card); no migration does it.
 
 ### The gradient, measured against the month ELAPSED
 

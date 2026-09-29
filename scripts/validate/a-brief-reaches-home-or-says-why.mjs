@@ -241,11 +241,15 @@ export function checkDeclaredOutput(serviceSrc, ceilingSrc, runAiSrc, otherCalle
   const ra = stripComments(runAiSrc);
   const eligible = ra.match(/const freeFirstEligible =([\s\S]*?);/);
   if (!eligible || !/requireModel/.test(eligible[1])) violations.push("runAi's free-first eligibility does not honour requireModel");
+  // 29 Sep 2026: the owner let the brief run on a free lane when nothing stronger is allowed, provided the page says so.
+  // That relaxes ONE half of the pin and only for a caller that also says `degradeAllowed` — never for a bare requireModel.
+  if (eligible && !/requireModel\s*\|\|[\s\S]*?degradeAllowed/.test(eligible[1])) violations.push("runAi's free-first eligibility lets a pinned call onto the free lanes without the caller having declared degradeAllowed — a bare requireModel must still be that model or nothing");
+  if (!/degradeAllowed: true/.test(serviceSrc)) violations.push("the brief does not declare degradeAllowed — at Free only it would stop instead of running on the best free lane with a note on the page (the owner's 29 Sep 2026 decision)");
   if (!/routingCandidates = serving;/.test(ra) || !/required_model_unavailable:/.test(ra)) violations.push("runAi does not narrow the candidates to the pinned model, or does not stop by name when none serves it");
   // ONLY THE BRIEF PINS. Every other caller keeps the free-first ladder untouched.
   for (const [file, src] of Object.entries(otherCallers)) {
     examined += 1;
-    if (/requireModel\s*:/.test(stripComments(src))) violations.push(`${file} pins a model — the owner's decision was Sonnet for BRIEFS only; every other lane keeps the ladder`);
+    if (/requireModel\s*:|degradeAllowed\s*:/.test(stripComments(src))) violations.push(`${file} pins a model — the owner's decision was Sonnet for BRIEFS only; every other lane keeps the ladder`);
   }
   return { violations, examined };
 }
@@ -433,12 +437,21 @@ async function selfTest() {
 
   // F · the real pre-fix declaration: 8000, no pin, a router that does not read it; and a second caller pinning.
   const preService = src.service.replace(/export const BRIEF_EXPECTED_OUTPUT_TOKENS = [\d_]+;/, "export const BRIEF_EXPECTED_OUTPUT_TOKENS = 8_000;").replace(/requireModel: BRIEF_MODEL,/, "");
-  const preRunAi = src.runAi.replace(/\n\s*!input\.budgetContext\?\.requireModel &&/, "");
+  const preRunAi = src.runAi.replace(/\(!input\.budgetContext\?\.requireModel \|\| input\.budgetContext\?\.degradeAllowed === true\) &&/, "");
+  say(preRunAi !== src.runAi, "the F fixture no longer removes the free-first gate — the self-test would plant nothing");
   const f = checkDeclaredOutput(preService, src.ceiling, preRunAi);
   say(f.violations.length >= 3, `the pre-fix 8000/no-pin/no-gate shape passed: ${f.violations.join("; ")}`);
   say(checkDeclaredOutput(src.service, src.ceiling, src.runAi).violations.length === 0, `the shipped declaration fails F: ${checkDeclaredOutput(src.service, src.ceiling, src.runAi).violations.join("; ")}`);
   const tooHigh = checkDeclaredOutput(src.service.replace(/export const BRIEF_EXPECTED_OUTPUT_TOKENS = [\d_]+;/, "export const BRIEF_EXPECTED_OUTPUT_TOKENS = 40_000;"), src.ceiling, src.runAi);
   say(tooHigh.violations.length === 1, "a declaration above the wire ceiling passed");
+  // The 29 Sep 2026 relaxation must not become a way round the pin: a gate that lets ANY pinned call onto the free lanes,
+  // a brief that forgets to declare the relaxation, and a second caller declaring it are each caught.
+  const openGate = src.runAi.replace(/\(!input\.budgetContext\?\.requireModel \|\| input\.budgetContext\?\.degradeAllowed === true\) &&/, "(!input.budgetContext?.requireModel || true) &&");
+  say(openGate !== src.runAi && checkDeclaredOutput(src.service, src.ceiling, openGate).violations.length >= 1, "a free-first gate that ignores degradeAllowed passed");
+  const noDegrade = checkDeclaredOutput(src.service.replace(/degradeAllowed: true,/, ""), src.ceiling, src.runAi);
+  say(noDegrade.violations.length === 1 && /degradeAllowed/.test(noDegrade.violations[0]), "a brief that does not declare degradeAllowed passed");
+  const secondDegrade = checkDeclaredOutput(src.service, src.ceiling, src.runAi, { "employeeWork.ts": "budgetContext: { judgement: true, degradeAllowed: true }" });
+  say(secondDegrade.violations.length === 1, "a second caller declaring degradeAllowed passed");
   const secondPin = checkDeclaredOutput(src.service, src.ceiling, src.runAi, { "employeeWork.ts": "budgetContext: { judgement: true, requireModel: \"anthropic/claude-sonnet-5\" }" });
   say(secondPin.violations.length === 1 && /Sonnet for BRIEFS only/.test(secondPin.violations[0]), "a second caller pinning a model — the whole ladder pointed at Sonnet — passed");
 

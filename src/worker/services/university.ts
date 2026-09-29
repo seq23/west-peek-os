@@ -112,7 +112,8 @@ const defaultTeach: Teach = async (env, actor, system, exchange, purpose) => {
     // A lesson about pro rata is not firm-confidential. PUBLIC keeps it out of the restricted lane;
     // it is never raised, and nothing about a live deal belongs in a teaching prompt.
     sensitivity: "PUBLIC" as never,
-    budgetContext: { judgement: true, expectedOutputTokens: 1200 },
+    // seatFirst: her Claude Code seat, then Codex, before the free lanes (29 Sep 2026).
+    budgetContext: { judgement: true, seatFirst: true, expectedOutputTokens: 1200 },
     // PINNED, and the pin is the whole point of this line. Without a taskClass no routing_policy
     // matches, selection falls to "cheapest priced capable model", and a first-time GP is taught
     // fund mechanics by the smallest open model the firm has. A lesson costs about a penny at

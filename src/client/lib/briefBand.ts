@@ -8,6 +8,7 @@
  * what the button reads. It never re-derives a state from the clock or from silence.
  */
 
+import { briefServing } from "../../shared/ai/briefServing";
 import type { BriefRunStateKind } from "../../shared/intelligence/briefRunState";
 
 /** The state as the status route returns it — the shared state plus the row's own facts. */
@@ -97,7 +98,10 @@ export function examinedLine(input: {
   if (input.rawCount !== null && input.dedupedCount !== null && input.candidateCount !== null && input.rawCount > 0) {
     parts.push(`${input.rawCount} items → ${input.dedupedCount} events → ${input.candidateCount} considered`);
   }
-  if (input.model) parts.push(input.model);
+  // The label says WHO wrote it in words a partner reads ("Claude Code (her Claude Max seat)"), and a
+  // brief written by a weaker model is marked here as well as in the note under the masthead.
+  const serving = briefServing(input.model);
+  if (serving.label) parts.push(serving.degraded ? `${serving.label} (weaker model)` : serving.label);
   if (input.requestedAt) {
     const who = input.requestedBy && input.viewerId && input.requestedBy === input.viewerId ? "you" : input.requestedBy ? "your partner" : "a partner";
     const at = new Date(input.requestedAt);
