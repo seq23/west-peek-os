@@ -11,7 +11,9 @@ import {
   claimRun,
   isRunKind,
   isSeat,
+  markSeatExhausted,
   progressRun,
+  readRun,
   recordHeartbeat,
   reportRun,
   type RunKind,
@@ -196,6 +198,13 @@ const reportSchema = z
     run_id: z.string().trim().min(1).max(200),
     output_text: z.string().max(400_000).optional(),
     error: z.string().trim().max(2_000).optional(),
+    /**
+     * 0245. The seat's plan is out of usage — a fact about the plan, not about this prompt. The
+     * Worker skips the seat until `retry_after_seconds` (bounded; a default when absent) instead of
+     * parking the next call on it too. Only honoured on a failure report.
+     */
+    seat_exhausted: z.boolean().optional(),
+    retry_after_seconds: z.number().int().min(1).max(7 * 24 * 60 * 60).optional(),
   })
   .refine((v) => (v.output_text && v.output_text.length > 0) || (v.error && v.error.length > 0), {
     message: "report either output_text or error — a report that says neither tells the router nothing",
@@ -225,7 +234,22 @@ export async function handleSubscriptionSeatReport(ctx: RouteContext): Promise<R
     error: parsed.data.error ?? null,
   });
   if (!result.accepted) return json({ accepted: false, detail: result.detail }, { status: 409 });
-  return json({ accepted: true, detail: result.detail });
+
+  let exhaustedUntil: string | null = null;
+  if (parsed.data.seat_exhausted && !parsed.data.output_text) {
+    const row = await readRun(ctx.env, parsed.data.run_id);
+    if (row && isSeat(row.seat)) {
+      exhaustedUntil = (
+        await markSeatExhausted(ctx.env, {
+          seat: row.seat,
+          deviceId: parsed.data.device_id,
+          reason: parsed.data.error ?? null,
+          retryAfterSeconds: parsed.data.retry_after_seconds ?? null,
+        })
+      ).until;
+    }
+  }
+  return json({ accepted: true, detail: result.detail, ...(exhaustedUntil ? { seat_skipped_until: exhaustedUntil } : {}) });
 }
 
 const progressSchema = z.object({

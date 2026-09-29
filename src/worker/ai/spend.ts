@@ -598,7 +598,7 @@ export function stoppedRunSentence(status: string, failureReason: string | null)
   if (status === "PROVIDER_DISABLED") return "every lane that could serve it is disabled";
   if (status === "PREFLIGHT_BLOCKED") {
     return failureReason?.startsWith("free_only")
-      ? "the spend lever is set to Free only and this work is not allowed a weaker model, so it stopped rather than being downgraded"
+      ? "the spend lever is set to Free only, and no free lane may see this work (or her Claude Code and Codex seats are away or out of usage), so it stopped rather than spend money or send private work somewhere that trains"
       : "it was stopped before any model was chosen; the run record names which rule";
   }
   return "it stopped without reaching a usable answer; the run record names the lane and the reason";

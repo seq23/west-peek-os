@@ -51,7 +51,8 @@ import {
   recordLaneOutage,
   type LaneHealthRow,
 } from "./laneHealth";
-import { CLAIM_WAIT_MS, allSeatAvailability } from "./subscriptionSeats";
+import { CLAIM_WAIT_MS, allSeatAvailability, isSeat } from "./subscriptionSeats";
+import { orderByVendorFamily } from "../../shared/ai/vendorFamily";
 import { createSubscriptionSeatAdapter } from "./providers/subscriptionSeat";
 
 /**
@@ -179,6 +180,36 @@ export interface RunAiBudgetContext {
    * proves no other lane's routing changed.
    */
   requireModel?: string;
+  /**
+   * THIS CALL MAY LEAD ON THE SUBSCRIPTION SEATS EVEN THOUGH ITS CONTENT IS PUBLIC (29 Sep 2026).
+   *
+   * The owner's ladder for work that needs a strong model: Claude Code on her Max plan, then Codex on
+   * her ChatGPT Plus, then the free lanes, and only then paid Claude, paid OpenAI. The seats were
+   * offered to PRIVATE work only — public work has a free lane and the volume decision kept it off
+   * her Mac — so public card work, the brief, University and the market map went straight to a free
+   * model and never saw Claude at all.
+   *
+   * Naming a call here is a deliberate act, a short list, and a reviewable diff: it spends her
+   * interactive seat capacity on work that could have run free. It changes NOTHING about content
+   * safety — the seats are private-capable, so public content on them is always allowed — and it
+   * changes nothing when both seats are away or out of usage: the free lanes then lead exactly as
+   * before. Ignored for a call that carries an image, a document, or needs the live web.
+   */
+  seatFirst?: boolean;
+  /**
+   * THIS CALL MAY BE SERVED BY A WEAKER LANE WHEN THE LEVER FORBIDS PAID, AND THE RESULT SAYS SO
+   * (29 Sep 2026). Meaningful only with `requireModel`.
+   *
+   * `requireModel` alone means "that model or the run stops" — the owner's 19 Sep decision for the
+   * morning brief, made because free lanes had written no acceptable brief in thirteen tries. Her
+   * 29 Sep decision relaxes exactly one half of it: with the lever at Free only and both seats away,
+   * a brief written by a free reasoning model that PASSES THE BRIEF'S OWN VERIFIER is better than no
+   * brief, provided the page says which model wrote it. The verifier still rejects a short or
+   * uncited reply and the chain still walks on, so a poor free answer is not accepted, it is
+   * refused and retried. Nothing else about the pin changes: at MODERATE and OPEN the head is still
+   * that model, and `briefServing` (shared/ai/briefServing.ts) is what marks a brief degraded.
+   */
+  degradeAllowed?: boolean;
   /**
    * THIS CALL IS READING WHAT THE OWNER ASKED FOR (16 Sep 2026). Stricter than `judgement`, and
    * the difference is worth stating because `judgement` was not enough.
@@ -1760,10 +1791,41 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    */
   let routingCandidates: RoutingCandidate[] = reasoningOnly;
   let freeOnlyNote = "";
+  /*
+   * ── WHO MAY BE OFFERED A SUBSCRIPTION SEAT (moved up 29 Sep 2026, so FREE_ONLY can see it) ───
+   *
+   * A seat costs nothing per call, so at "Free only" it is a $0 candidate like any free lane — and
+   * for PRIVATE work it is the only one there is, because the free lanes train on what they receive
+   * and cannot see it. Asked here, once, and answered from ONE read of the device table; the chain
+   * assembly further down reuses the same answer, so the two cannot disagree about whether a seat
+   * was awake.
+   *
+   *   · judgement work only — a seat is a thinking lane, not machinery;
+   *   · private content, OR a call the owner named `seatFirst` (public card work, the brief,
+   *     University, the market map — see RunAiBudgetContext.seatFirst);
+   *   · no picture or deck: the claimer hands the model text over a local pipe, and an adapter that
+   *     dropped an attachment would answer confidently about a file the model never saw;
+   *   · not a search call: a local session is not search-grounded, and a call that needs the live
+   *     web must not be quietly answered from memory.
+   */
+  const seatsEligible =
+    isJudgement &&
+    (!contentClass.publicModelApproved || input.budgetContext?.seatFirst === true) &&
+    !input.images?.length &&
+    !input.documents?.length &&
+    !requiresSearch;
+  const seatAvailability = seatsEligible ? await allSeatAvailability(env, now) : [];
+  const awakeSeatKeys = new Set(seatAvailability.filter((a) => a.available).map((a) => a.seat as string));
   if (behaviour.freeOnly) {
     const freeAdequate = options
       .filter((o) => estimateFor(o) === 0)
-      .filter((o) => credentialConfigured(env, o.provider.provider_key))
+      // A seat has no credential to configure — the claimer authenticates to US — so "configured"
+      // means "awake, not out of usage, and entitled to this run". Every other lane is asked as before.
+      .filter((o) =>
+        isSeat(o.provider.provider_key)
+          ? Number(o.provider.claimable ?? 0) === 1 && awakeSeatKeys.has(o.provider.provider_key)
+          : credentialConfigured(env, o.provider.provider_key),
+      )
       // The same bar, expressed against `options` because the free lanes are not in `allCandidates`.
       .filter((o) => (requiresSearch ? isSearchGrounded(o.pricing.model) : !(isJudgement && isSearchGrounded(o.pricing.model))))
       .filter((o) => !isInterpretation || o.pricing.supports_reasoning === 1);
@@ -1802,16 +1864,33 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
   if (requiredModel) {
     const serving = routingCandidates.filter((c) => c.model === requiredModel);
     if (serving.length === 0) {
-      const lever = behaviour.freeOnly ? " The lever is set to FREE_ONLY, which admits no paid lane; move it to MODERATE to let this run." : "";
-      return {
-        run: await blocked(
-          "PREFLIGHT_BLOCKED",
-          `required_model_unavailable:this call runs on ${requiredModel} and nothing else, and no enabled, priced lane serves it right now.${lever} Purpose: ${input.purpose}.`,
-        ),
-      };
+      /*
+       * FREE ONLY, AND THE CALLER SAID A WEAKER LANE IS BETTER THAN NONE. `routingCandidates` is the
+       * free set here (the FREE_ONLY block above replaced it), so leaving it as it is IS the
+       * degrade. Anything else — a call that did not say so, or a lever position that admits paid
+       * lanes but has none serving this model — still stops with a named reason.
+       */
+      if (behaviour.freeOnly && input.budgetContext?.degradeAllowed === true && routingCandidates.length > 0) {
+        requiredNote =
+          ` This call is normally written by ${requiredModel}, but the lever is set to Free only and no free lane serves that model, ` +
+          `so it was allowed to run on the best free lane instead. The result is marked as written by a weaker model, and the ` +
+          `caller's own verifier still decides whether the reply is good enough to keep.`;
+      } else {
+        const lever = behaviour.freeOnly ? " The lever is set to FREE_ONLY, which admits no paid lane; move it to MODERATE to let this run." : "";
+        return {
+          run: await blocked(
+            "PREFLIGHT_BLOCKED",
+            `required_model_unavailable:this call runs on ${requiredModel} and nothing else, and no enabled, priced lane serves it right now.${lever} Purpose: ${input.purpose}.`,
+          ),
+        };
+      }
+    } else {
+      routingCandidates = serving;
+      requiredNote =
+        input.budgetContext?.degradeAllowed === true
+          ? ` This call is written by ${requiredModel}; only the subscription seats or a free lane that passes the caller's verifier may stand in front of it, and the result says when one did.`
+          : ` This call runs on ${requiredModel} and nothing else, by the owner's decision; no other lane was a candidate and no free lane was assembled.`;
     }
-    routingCandidates = serving;
-    requiredNote = ` This call runs on ${requiredModel} and nothing else, by the owner's decision; no other lane was a candidate and no free lane was assembled.`;
   }
   const interpretationNote = !isInterpretation
     ? ""
@@ -2069,6 +2148,30 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
       `partner asked for, so it was not honoured: ${fallback.providerKey}/${fallback.model} was used instead.`;
   }
 
+  /*
+   * A PIN THAT NAMES A PAID MODEL, AT "FREE ONLY" (29 Sep 2026). The pinned classes (University, the
+   * market map, a research packet, an instruction) name Sonnet. With the lever at Free only the
+   * candidate set is the $0 lanes, Sonnet is not in it, and the run used to STOP with
+   * `routing_no_candidate` — the reading of "nothing paid" that put the owner's whole pinned work
+   * behind a paid switch. Her rule for the $0 posture is the opposite: run on the best $0 lane, and
+   * say that it did. The candidate set here has already passed every privacy, capability and search
+   * filter, so this cannot hand LP or deal material to a lane that trains: private content leaves
+   * NO free lane in the set, and the run is stopped further up with a sentence naming the lever.
+   * Seats are preferred over free lanes because they do not train, then the free order the chain uses.
+   */
+  if (ordered.length === 0 && behaviour.freeOnly && routingCandidates.length > 0) {
+    const FREE_PREFERENCE = ["claude_code", "codex", "openrouter_free", "google_free"];
+    const rank = (c: RoutingCandidate): number => {
+      const i = FREE_PREFERENCE.indexOf(c.providerKey);
+      return i < 0 ? FREE_PREFERENCE.length : i;
+    };
+    const stand = [...routingCandidates].sort((a, b) => rank(a) - rank(b))[0]!;
+    ordered = [stand];
+    explanation =
+      `${explanation}. The lever is set to Free only, so the pinned model was not available and ${stand.providerKey}/${stand.model} ` +
+      `was used instead. This is a weaker lane than the pin, by the owner's rule for the $0 posture, and it is recorded as such.`;
+  }
+
   if (ordered.length === 0) {
     return { run: await blocked("PREFLIGHT_BLOCKED", `routing_no_candidate:${explanation}`) };
   }
@@ -2298,19 +2401,8 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    */
   const denyDataCollection = !contentClass.publicModelApproved || input.budgetContext?.confidential === true;
 
-  const seatsEligible =
-    isJudgement &&
-    // The volume decision, as an expression. Public work already has a free lane; it does not come
-    // here, and `contentClass` — not the caller's say-so — is what decides which this run is.
-    !contentClass.publicModelApproved &&
-    // The claimer hands the model a text instruction over a local pipe. There is no wire format
-    // here for a picture or a deck, and an adapter that dropped one would answer confidently about
-    // a file the model never saw.
-    !input.images?.length &&
-    !input.documents?.length &&
-    // A local Claude Code session is not a search-grounded model, and a call that needs the live
-    // web must not be quietly answered from memory.
-    !requiresSearch;
+  // `seatsEligible` and `seatAvailability` are decided above, before the lever block, so that
+  // FREE_ONLY and this chain assembly read the same answer.
 
   const seatLanes: FallbackOption[] = [];
   let seatNote = "";
@@ -2320,7 +2412,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
      * the entire difference between a heartbeat and a timeout: absence is answered by a single
      * indexed lookup rather than by ninety seconds of a partner's time, however many seats are away.
      */
-    const availability = await allSeatAvailability(env, now);
+    const availability = seatAvailability;
     const awake: string[] = [];
     const away: string[] = [];
     for (const seatState of availability) {
@@ -2373,9 +2465,11 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
       awake.push(seatState.reason);
     }
     if (awake.length > 0) {
-      seatNote =
-        ` This call may not use a training-permitting lane, and the subscription seats do not train on what they are ` +
-        `sent, so it leads on a seat she already pays for at no cost: ${awake.join("; ")}.`;
+      seatNote = contentClass.publicModelApproved
+        ? ` This call was named to lead on the subscription seats (Claude Code, then Codex) before any free or paid lane, ` +
+          `so it leads on a seat she already pays for at no cost: ${awake.join("; ")}.`
+        : ` This call may not use a training-permitting lane, and the subscription seats do not train on what they are ` +
+          `sent, so it leads on a seat she already pays for at no cost: ${awake.join("; ")}.`;
       // Said even when it changed nothing, so "why did this cost money" is answerable from the run.
       if (away.length > 0) seatNote += ` The other seat took no part: ${away.join("; ")}.`;
     } else {
@@ -2387,8 +2481,16 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
 
   const freeFirstEligible =
     isJudgement &&
-    // A call pinned to one model is that model or nothing; see `requireModel`.
-    !input.budgetContext?.requireModel &&
+    // A call pinned to one model is that model or nothing; see `requireModel`. The one exception is
+    // a caller that also said `degradeAllowed` (the brief): a free lane may then stand in front of it.
+    (!input.budgetContext?.requireModel || input.budgetContext?.degradeAllowed === true) &&
+    /*
+     * "OPEN" IS THE SWITCH FOR "I NEED GOOD WORK RIGHT NOW" (29 Sep 2026). A free reasoning model
+     * that answers would end the chain before the strong lanes are reached, which is the opposite of
+     * what flipping it means. So at OPEN, judgement work skips the free lanes and goes seats → the
+     * paid head. Every other position keeps the free lanes where they were.
+     */
+    !(behaviour.lever === "OPEN" && isProtected) &&
     /*
      * THE NORMAL CASE, and the owner's instruction is that it should be: "MOST WORK IS INTERNAL AND
      * NOT-CONFIDENTIAL SO CAN USE FREE TRAINING MODELS WITH REASONING AND CLOSE TO $0." A card that
@@ -2574,11 +2676,20 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
        * It is also what keeps the change from widening anything in an environment with no keys: no
        * credential, no last resort, and behaviour is exactly what it was.
        */
+      // A seat is served through `seatLanes`; offered here it would get the adapter built to refuse.
+      .filter((c) => !isSeat(c.providerKey))
       .filter((c) => credentialConfigured(env, c.providerKey)),
     await laneHealth(env),
     now,
   );
-  const lastResortFallbacks: FallbackOption[] = lastResortRanked.ordered.map((c) => {
+  /*
+   * CLAUDE, THEN OPENAI, THEN THE REST — for judgement work only (29 Sep 2026). The owner's ladder
+   * ends "paid Sonnet, Anthropic direct, OpenAI"; without this the leftover lanes were ordered by
+   * health and price alone, which put OpenAI wherever `gpt-5-mini`'s low price happened to fall.
+   * Mechanical work keeps the cheapest-first order: a URL check must not fall back to Haiku.
+   */
+  const lastResortOrdered = isJudgement && !requiresSearch ? orderByVendorFamily(lastResortRanked.ordered) : lastResortRanked.ordered;
+  const lastResortFallbacks: FallbackOption[] = lastResortOrdered.map((c) => {
     const option = options.find((o) => o.provider.id === c.providerId && o.pricing.model === c.model);
     return {
       candidate: c,
@@ -2605,7 +2716,11 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * prices, while a free tier that has run out (429) does.
    */
   const paidHeadAsFallback: FallbackOption[] =
-    freeLanes.length > 0 || seatLanes.length > 0 ? [{ candidate: head, adapter, engageOn: "OUTAGE", estimate }] : [];
+    // A head that IS a seat (FREE_ONLY, private work) is already the lead in `seatLanes`; its own
+    // adapter is the refusal built for a wiring mistake, and must never be offered as a fallback.
+    (freeLanes.length > 0 || seatLanes.length > 0) && !isSeat(head.providerKey)
+      ? [{ candidate: head, adapter, engageOn: "OUTAGE", estimate }]
+      : [];
 
   /*
    * THE ORDER OF LAST RESORT, and each step is a smaller concession than the one after it:
@@ -2662,9 +2777,12 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
   explanation += seatNote + requiredNote;
   if (seatLanes.length > 0 && lead === seatLanes[0]) {
     const behind = seatLanes.length > 1 ? `the other seat, then ` : "";
+    const freeStep = freeLanes.length > 0 ? `the free lanes (${freeLanes.map((f) => f.candidate.model).join(", ")}), then ` : "";
+    // A head that is itself a seat (FREE_ONLY, private work) has nothing further to hand on to.
+    const tail = isSeat(head.providerKey) ? "whatever else is allowed at this lever position" : `${head.providerKey}/${head.model}`;
     explanation +=
-      ` If that seat does not answer within ${Math.round(CLAIM_WAIT_MS / 1000)} seconds, or reports a failure, the run ` +
-      `moves on to ${behind}${head.providerKey}/${head.model} inside this same run and the handover is recorded. ` +
+      ` If that seat does not answer within ${Math.round(CLAIM_WAIT_MS / 1000)} seconds, or reports a failure or a spent usage limit, the run ` +
+      `moves on to ${behind}${freeStep}${tail} inside this same run and the handover is recorded. ` +
       `No seat is asked for the same work twice.`;
   } else if (lead) {
     explanation +=

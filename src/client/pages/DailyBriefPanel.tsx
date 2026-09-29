@@ -6,6 +6,7 @@ import {
   type BriefStatusResponse,
 } from "../lib/briefBand";
 import { elapsedWords } from "../../shared/intelligence/briefRunState";
+import { briefServing } from "../../shared/ai/briefServing";
 
 /**
  * The expanded Daily Intelligence report (P41), rendered on the Sweeps page directly under the
@@ -517,6 +518,7 @@ export function DailyBriefPanel({
     requestedAt: run?.requested_at ?? null,
     viewerId,
   });
+  const degradedNote = report?.status === "READY" ? briefServing(report.model).note : null;
   const masthead = (
     <header className="brief-masthead">
       <h3>Executive Intelligence Report</h3>
@@ -531,10 +533,22 @@ export function DailyBriefPanel({
     <section className="card daily-brief" data-testid="daily-brief" id="daily-brief-contents">
       {masthead}
       <p className="muted small">
-        Built when you ask, any day, on claude-sonnet-5, from what the sweeps gathered in the last
+        Built when you ask, any day, by Claude (your Claude Code seat, then Codex, then Sonnet), from what the sweeps gathered in the last
         48 hours and the levels read at that moment. Every figure carries the source it came from;
         where a level could not be read, the report says so rather than estimating.
       </p>
+
+      {/*
+        * A BRIEF WRITTEN BY A WEAKER MODEL SAYS SO (29 Sep 2026). With the lever at Free only and both
+        * seats away, a free reasoning model that passes the brief's own checks may write it; the
+        * sentence comes from `briefServing`, which reads the model on the report row, so it can
+        * never disagree with the record and never appears for a brief Claude wrote.
+        */}
+      {degradedNote && (
+        <div className="notice notice-gate" data-testid="daily-brief-degraded" role="status">
+          <p>{degradedNote}</p>
+        </div>
+      )}
 
       {/*
         * THE STATE OF TODAY'S BRIEF, FIRST — the answer she opens the page for, from the row.

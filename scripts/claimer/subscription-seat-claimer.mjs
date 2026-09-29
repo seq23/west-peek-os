@@ -48,6 +48,8 @@ import { hostname, homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
+import { codexOnSubscription, codexSeatUsable } from "../lib/codex-seat.mjs";
 import { VAULT_INJECTED_VAR, claudeChildEnv } from "../lib/vault-env.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -158,33 +160,10 @@ async function seatInstalled(seat) {
  * system goes on recording the lane at $0. A lane that silently costs money while reporting free is
  * worse than a lane that is down.
  */
-export function codexOnSubscription(authJsonText) {
-  try {
-    const parsed = JSON.parse(authJsonText);
-    return parsed.auth_mode === "chatgpt";
-  } catch {
-    return false;
-  }
-}
+export { codexOnSubscription };
 
-function codexSeatUsable() {
-  const p = path.join(homedir(), ".codex", "auth.json");
-  if (!existsSync(p)) return { ok: false, why: "~/.codex/auth.json does not exist — the Codex CLI is not signed in" };
-  let text = "";
-  try {
-    text = readFileSync(p, "utf8");
-  } catch {
-    return { ok: false, why: "~/.codex/auth.json could not be read" };
-  }
-  if (!codexOnSubscription(text)) {
-    return {
-      ok: false,
-      why:
-        "~/.codex/auth.json no longer records auth_mode=chatgpt, so this seat would bill the API per token " +
-        "while the firm records it at $0. Refusing to claim for it until it is back on the subscription.",
-    };
-  }
-  return { ok: true, why: "auth_mode=chatgpt" };
+function codexSeatUsableHere() {
+  return codexSeatUsable(homedir());
 }
 
 // ── The wire ─────────────────────────────────────────────────────────────────────────────────
@@ -262,6 +241,23 @@ async function runOnSeat(seat, prompt) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      /*
+       * A SEAT THAT HAS RUN OUT OF USAGE SAYS SO IN WORDS, and may exit 0 while doing it — so the
+       * old rule (any non-empty stdout is the answer) would save "usage limit reached" as a card's
+       * answer and the chain would never reach the next lane. Asked BEFORE the answer is taken, and
+       * reported as an exhausted seat so the Worker stops offering it work until it resets
+       * (migration 0245). Long output is never inspected: see scripts/lib/seat-usage-limit.mjs.
+       */
+      const limit = detectUsageLimit({ stdout: out, stderr: err });
+      if (limit.limited) {
+        resolve({
+          ok: false,
+          exhausted: true,
+          retryAfterSeconds: limit.retryAfterSeconds,
+          error: `${cfg.displayName} has run out of usage and said: ${limit.snippet}`,
+        });
+        return;
+      }
       const answer = extractAnswer(out);
       if (answer.length > 0) {
         // EXIT CODE AND ANSWER DECIDE, NOT STDERR. See `looksLikeKnownNoise` above.
@@ -311,6 +307,9 @@ async function cycle(seats) {
     device_id: DEVICE_ID,
     run_id: run.id,
     ...(result.ok ? { output_text: result.output } : { error: result.error }),
+    // An exhausted seat is a fact about the plan, not about this prompt: the Worker skips the seat
+    // until it resets instead of parking the next call on it too.
+    ...(result.exhausted ? { seat_exhausted: true, ...(result.retryAfterSeconds ? { retry_after_seconds: result.retryAfterSeconds } : {}) } : {}),
   });
   return { worked: true };
 }
@@ -320,7 +319,7 @@ async function usableSeats() {
   for (const seat of Object.keys(SEATS)) {
     if (!(await seatInstalled(seat))) continue;
     if (seat === "codex") {
-      const verdict = codexSeatUsable();
+      const verdict = codexSeatUsableHere();
       if (!verdict.ok) {
         console.error(`codex seat unusable: ${verdict.why}`);
         continue;
@@ -386,6 +385,12 @@ function selfTest() {
     ["apikey auth mode is refused — it would bill per token", () => !codexOnSubscription('{"auth_mode":"apikey"}')],
     ["unparseable auth.json is refused, not assumed", () => !codexOnSubscription("{{{")],
     ["the seat never sees a vaulted key (OPENAI_API_KEY included) and keeps the ordinary environment", () => { const e = claudeChildEnv({ PATH: "/bin", HOME: "/h", [VAULT_INJECTED_VAR]: "ANTHROPIC_API_KEY,OPENAI_API_KEY,CLOUDFLARE_API_TOKEN", ANTHROPIC_API_KEY: "sk", OPENAI_API_KEY: "ok", CLAUDE_CODE_OAUTH_TOKEN: "o", CLOUDFLARE_API_TOKEN: "cf" }, undefined, new Set()); return Object.keys(e).sort().join() === "HOME,PATH"; }],
+    ["a usage-limit notice is not an answer, even on exit 0", () => detectUsageLimit({ stdout: "Claude AI usage limit reached|1759071600" }).limited],
+    ["'You've hit your limit' is a usage-limit notice", () => detectUsageLimit({ stdout: "You've hit your limit · resets 3pm" }).limited],
+    ["a Codex usage-limit notice on stderr with no stdout is caught", () => detectUsageLimit({ stdout: "", stderr: "You've hit your usage limit. Try again in 3 hours." }).limited],
+    ["an ordinary short answer is not a limit notice", () => !detectUsageLimit({ stdout: "The fund's reserve ratio is 0.35." }).limited],
+    ["a long answer that discusses usage limits is still an answer", () => !detectUsageLimit({ stdout: `Usage limit reached is what the CLI prints. ${"x".repeat(700)}` }).limited],
+    ["the reset time in a notice is read and clamped", () => { const r = detectUsageLimit({ stdout: "usage limit reached|1759071600" }, 1759071000_000).retryAfterSeconds; return r === 600; }],
     ["the seat spawn goes through the shared claudeChildEnv", () => /env:\s*claudeChildEnv\(process\.env\b/.test(readFileSync(fileURLToPath(import.meta.url), "utf8").split("function runOnSeat")[1]?.split("\n}\n")[0] ?? "")],
   ];
   let failed = 0;

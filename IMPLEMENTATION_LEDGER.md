@@ -6780,3 +6780,94 @@ local person. Every piece existed — the unresolved queue, the "Send to Network
   switched the hand-off off by default.
 - **Still UNPROVEN and not this PR's:** the live round trip — a test person captured through to
   Network OS's intake and rejected there — needs a signed-in Network OS browser.
+
+## The seats lead everything that needs a strong model; FREE ONLY is the $0 posture (29 Sep 2026, migration 0245)
+
+Approved by Sequoia Taylor, 29 Sep 2026 (phases 1–3 as one artifact). Her ladder: **Claude Code seat →
+Codex seat → free lanes (where the content may go there) → paid Sonnet → Anthropic direct → OpenAI**,
+running off the Claude Max and ChatGPT Plus she already pays for, staying at $0 when both are gone, and
+one switch — the existing spend lever, not a new one — for "I need good work now, money is fine".
+Design: `ARCHITECTURAL_DECISIONS.md` (29 Sep 2026); behaviour: `docs/AI_GOVERNANCE.md`.
+
+- **Phase 1 — a seat out of usage is skipped, not retried (0245).** `scripts/lib/seat-usage-limit.mjs`
+  recognises a CLI's usage-limit sentence (and never inspects long output, so a real answer that talks
+  about limits is kept); the claimer reports `seat_exhausted`; the Worker writes `exhausted_until` on
+  `subscription_seat_device`, which `allSeatAvailability` / `laneAvailability` read, so nothing is parked
+  on it and nothing waits 90 seconds. A real answer clears it; otherwise it expires (30 minutes when the
+  notice names no time). Before this, the claimer took ANY non-empty stdout as the answer, so a
+  "usage limit reached" line could be saved as a card's answer and the chain never reached Codex.
+- **Phase 2 — the order.** `budgetContext.seatFirst` lets a named public call lead on the seats:
+  free-to-use card work (and artifacts on such a card), the brief, University, the market map. Seats sit
+  ahead of the free lanes in the chain (`zeroCostLead = [...seatLanes, ...freeLanes]`); a seat is never
+  offered work it cannot take (images, documents, search). Plain public work (blog help, room packets,
+  hiring writes) is unchanged.
+- **Phase 3 — the lever.** `FREE_ONLY`: seats count as $0 candidates; a pinned class or the brief runs on
+  the best $0 lane instead of stopping, and the run records that it is weaker than the pin; private work
+  with both seats away STOPS naming the lever (a free lane may never see it, a paid one is not allowed).
+  `OPEN`: judgement work skips the free lanes (seats, then paid Claude). `MODERATE`: unchanged apart from
+  the seat rung. The brief gains `degradeAllowed`; `briefServing` marks any brief not written by Sonnet or
+  a seat as "written by a weaker model", on the masthead line and in a notice under it.
+- **Tests.** `tests/ladderOrder.test.ts` (21): the claimer is played by a loop that answers or reports a
+  spent plan, the vendors are stubs that record which model was asked for, the lever is a real
+  `budget_policy` row. Three rungs were proven negatively (seat rung, OPEN skip, FREE_ONLY seat
+  candidates each broken, watched to fail, restored). `tests/subscriptionSeats.test.ts` +8: the detector,
+  cooldown bounds, one seat out and the other offered, survival across a heartbeat, self-healing, clearing
+  on an answer, the report route, and a private run handed from an exhausted Claude Code to Codex with no
+  90-second wait and no paid call. `validate:brief-lands` now holds the brief's relaxation to the brief
+  (a gate that ignores `degradeAllowed`, a brief that forgets it, and a second caller declaring it are
+  each caught by its self-test).
+- **PROVEN here (local D1, stubbed vendors, simulated claimer):** every rung and every lever position
+  above; the fall-through from an exhausted seat; that private work never reaches a free lane; that a
+  bare `requireModel` still stops at FREE_ONLY.
+- **UNPROVEN, and not this artifact's to claim:** that the live Claude Code and Codex CLIs print the
+  sentences the detector reads (a wording it does not cover is treated as an answer, exactly the old
+  behaviour — it narrows the hole, it does not close every possible one); that the free lanes are good
+  enough at the brief's job (the verifier refuses a bad one, but the time spent reaching Sonnet is
+  unmeasured); that a 20k-token brief fits inside the seat's 90-second claim wait (if not it hands on
+  and costs the wait); that the production lever, providers and balances are what the seeds say.
+- **Not built (phases 4–5):** a strong OpenAI model as the paid second after Claude — needs a price read
+  from the vendor and a live probe, neither possible offline (`gpt-5-mini` remains a cheap last resort,
+  not "highly intelligent"); and a Codex fallback for repo/site work on cards, which is still Claude Code
+  only. The production default is still MODERATE: moving it to FREE_ONLY is her act on the AI page
+  (`governance.policy_change`), deliberately not a migration.
+
+### Phases 4 and 5 of the same artifact (29 Sep 2026)
+
+- **Phase 4 — after paid Claude, OpenAI (rung ordering, not a new model).** The leftover "any other
+  adequate lane" list is now ordered Claude family → OpenAI → the rest for judgement work
+  (`src/shared/ai/vendorFamily.ts`, a stable sort inside `runAi`; mechanical work keeps
+  cheapest-first). Proven in `tests/ladderOrder.test.ts`: with every Claude lane down the walk goes
+  Sonnet → Anthropic direct → Haiku → `openai/gpt-5-mini` and asks Gemini only after; disabling the sort
+  sends the same walk to Gemini and the test fails. **What is NOT done:** a *stronger* OpenAI model.
+  The only ACTIVE OpenAI lane is `openai/gpt-5-mini` ($0.25/$2.00, read from OpenRouter and generation-
+  probed in 0188). Registering another needs a price read from the vendor and a live generation
+  probe; the sandbox this was built in cannot reach OpenRouter or OpenAI (proxy 403), and the repo's
+  rule is that an unread price may not decide anything. Steps for whoever can: `npm run prices:refresh`,
+  probe the model with a real generation, add a migration in the 0188 shape (register + pricing +
+  data policy + reasoning flag). The rung picks it up with no code change.
+- **Phase 5 — repo work on cards falls to Codex when Claude Code's plan is spent.**
+  `scripts/duties/web-property-change.mjs`: `runClaude` is now a wrapper over the shared
+  `runWithCodexFallback` (`scripts/lib/codex-seat.mjs`). It runs `claude -p`; only when the result is a
+  spent-plan notice (`claudeSpentUsage`: a successful run is never inspected; a failed one is read
+  through the same `detectUsageLimit` as the answer claimer) and Codex is signed in through the ChatGPT
+  subscription (never an API key) and the installed binary supports `--sandbox`/`--add-dir`, the same
+  prompt runs on `codex exec --sandbox workspace-write` in the same worktree, spawned through the same
+  `claudeChildEnv` (no vault names, no API keys). Every phase already reads its result from a file the
+  model writes, so which model wrote it does not change how the phase is judged. Any other Claude
+  failure is unchanged. `validate:duty-executor` now holds the Codex spawn to `claudeChildEnv` too
+  (its self-test found that the old scan looked only at `spawn("claude"…)`).
+  Tests: `tests/repoWorkCodexFallback.test.ts` (11) with both CLIs replaced by fakes.
+  **UNPROVEN:** that the installed Codex CLI accepts this flag set and can do a PLAN/BUILD/LAND phase
+  (it has never been run on the Mac; a missing flag makes the fallback unavailable *with a sentence*,
+  not a silent failure); that Codex follows a prompt written for Claude's tool names; and — a real
+  difference from the Claude run — that the model is not denied the vault the way `--disallowedTools`
+  denies it for Claude. The vault is encrypted and no secret is in its environment, but a Codex phase
+  can attempt what a Claude phase cannot; treat the first Codex-served job as supervised.
+  **From review of PR #213 (fixed):** a linked worktree's index and refs live in the ORIGINAL repo's
+  `.git/worktrees/…`, outside every folder `workspace-write` lets Codex write, so it could edit files
+  but not commit. `gitCommonDirs` now names each repository's git directory as an `--add-dir`
+  (proved against a real `git worktree` in the test). **Still unproven:** that the installed Codex
+  lets a model write into a `.git` directory even when named (some versions protect it), and that
+  `git push`/`gh` can authenticate from inside the sandbox. If either fails the BUILD fails at its
+  commit/PR check with the reason on the card, exactly as any failed phase does.
+- **Verification.** Full suite for phases 1–3 (before this section): 229 files, 3,453 tests, green.

@@ -205,11 +205,13 @@ export function check(files) {
     if (e.promptFile && files.promptFiles[e.promptFile] && !/ATTACHMENTS/.test(files.promptFiles[e.promptFile])) violations.push(`${e.promptFile} never mentions ATTACHMENTS — Porter is not told the files are assets of the request`);
     // HER SEAT, NEVER A KEY (21 Sep 2026): the claude spawn never passes process.env straight through.
     if (script) {
-      const spawns = [...script.stripped.matchAll(/spawn\(\s*"claude"[\s\S]*?\}\s*\)/g)].map((m) => m[0]);
-      if (spawns.length === 0) violations.push(`${e.script} never spawns claude — the phase could not run`);
+      // 29 Sep 2026: the Codex fallback spawns a SECOND model process in the same worktree, so it is held to the same rule.
+      const spawns = [...script.stripped.matchAll(/spawn\(\s*"(?:claude|codex)"[\s\S]*?\}\s*\)/g)].map((m) => m[0]);
+      if (!spawns.some((sp) => /spawn\(\s*"claude"/.test(sp))) violations.push(`${e.script} never spawns claude — the phase could not run`);
       for (const sp of spawns) {
-        if (/env:\s*process\.env\b/.test(sp)) violations.push(`${e.script} spawns claude with env: process.env — the vault's ANTHROPIC_API_KEY would take precedence over her seat and bill the API`);
-        if (!/env:\s*claudeChildEnv\(/.test(sp)) violations.push(`${e.script} spawns claude without claudeChildEnv() — the model would see the vault and her API key`);
+        const who = /spawn\(\s*"codex"/.test(sp) ? "codex" : "claude";
+        if (/env:\s*process\.env\b/.test(sp)) violations.push(`${e.script} spawns ${who} with env: process.env — the vault's API key would take precedence over her seat and bill the API`);
+        if (!/env:\s*claudeChildEnv\(/.test(sp)) violations.push(`${e.script} spawns ${who} without claudeChildEnv() — the model would see the vault and her API key`);
       }
       // 23 Sep 2026: the strip is the vault's own list of names, through ONE shared helper; a local copy is a second list.
       if (!/import\s*\{[^}]*\bclaudeChildEnv\b[^}]*\}\s*from\s*"\.\.\/lib\/vault-env\.mjs"/.test(script.stripped)) violations.push(`${e.script} does not import claudeChildEnv from scripts/lib/vault-env.mjs — the strip must come from the one shared helper`);
@@ -281,7 +283,14 @@ function selfTest() {
   const noPayloadField = check({ ...files, registry: files.registry.replace(/attachments:\s*Array</, "files: Array<") });
   say(noPayloadField.violations.some((v) => /no longer declares/.test(v)), "a payload without `attachments` is caught");
   const rawEnv = check({ ...files, dutyScripts: { ...files.dutyScripts, [scriptRel]: { ...files.dutyScripts[scriptRel], stripped: files.dutyScripts[scriptRel].stripped.replace("env: claudeChildEnv(process.env, (names) => (withheld = names))", "env: process.env") } } });
-  say(rawEnv.violations.some((v) => /env: process\.env/.test(v)), "a claude spawn that passes process.env straight through (the vault's API key) is caught");
+  say(rawEnv.violations.some((v) => /env: process\.env/.test(v)), "a model spawn that passes process.env straight through (the vault's API key) is caught");
+  // Each CLI on its own: the first occurrence in the script is now the Codex spawn, the LAST is Claude's.
+  const envCall = "env: claudeChildEnv(process.env, (names) => (withheld = names))";
+  const stripped0 = files.dutyScripts[scriptRel].stripped;
+  const lastAt = stripped0.lastIndexOf(envCall);
+  const rawClaude = lastAt < 0 ? null : check({ ...files, dutyScripts: { ...files.dutyScripts, [scriptRel]: { ...files.dutyScripts[scriptRel], stripped: `${stripped0.slice(0, lastAt)}env: process.env${stripped0.slice(lastAt + envCall.length)}` } } });
+  say(rawClaude !== null && rawClaude.violations.some((v) => /spawns claude with env: process\.env/.test(v)), "a claude spawn that passes process.env straight through is caught");
+  say(rawEnv.violations.some((v) => /spawns codex with env: process\.env/.test(v)), "a codex spawn that passes process.env straight through is caught");
   const noStrip = check({ ...files, dutyScripts: { ...files.dutyScripts, [scriptRel]: { ...files.dutyScripts[scriptRel], stripped: files.dutyScripts[scriptRel].stripped.replace('import { VAULT_INJECTED_VAR, claudeChildEnv, strippedNote } from "../lib/vault-env.mjs";', "const VAULT_INJECTED_VAR = 'X'; const strippedNote = String; function claudeChildEnv(b) { return { ...b }; }") } } });
   say(noStrip.violations.some((v) => /does not import claudeChildEnv/.test(v)) && noStrip.violations.some((v) => /defines its own claudeChildEnv/.test(v)), "a duty script with its own env copy instead of the shared vault strip is caught");
   const blogFirst = check({ ...files, door: files.door.replace("const web = parseWebPropertyAsk(input.subject, written);", "const web0 = parseBlogAsk(input.subject, written); const web = parseWebPropertyAsk(input.subject, written);") });

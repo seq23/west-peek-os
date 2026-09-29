@@ -599,7 +599,15 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string, opti
       budgetContext: {
         expectedOutputTokens: 400,
         judgement: true,
-        ...(card.model_access === "PRIVATE_MODEL_ONLY" ? { confidential: true } : { publicModelApproved: true }),
+        ...(card.model_access === "PRIVATE_MODEL_ONLY"
+          ? { confidential: true }
+          : {
+              publicModelApproved: true,
+              // Card work is the firm's thinking. A card that may use a free model still leads on
+              // her Claude Code seat, then Codex, and reaches the free lanes only after both
+              // (29 Sep 2026); PRIVATE cards already lead there and are unchanged.
+              seatFirst: true,
+            }),
       },
       // Named, so the run lands on this employee's line in the cost centre and this machine's line
       // on the Machines page. Every run before this was attributed to nobody.

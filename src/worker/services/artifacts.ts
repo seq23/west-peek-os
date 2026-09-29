@@ -276,7 +276,7 @@ const modelCall = (stage: "planning" | "writing"): ArtifactModelCall => async (e
     // FREE-FIRST, never pinned. The one thing that decides the lane is what the content is:
     // LP names, deal terms and fund figures ride only on private-capable lanes, derived from the
     // object and the allowlist rather than typed by anyone.
-    budgetContext: { judgement: true, expectedOutputTokens: stage === "planning" ? 900 : 1600, ...(confidential ? { confidential: true } : { publicModelApproved: true }) },
+    budgetContext: { judgement: true, expectedOutputTokens: stage === "planning" ? 900 : 1600, ...(confidential ? { confidential: true } : { publicModelApproved: true, seatFirst: true }) },
     routing: { category: "INTELLIGENCE", taskClass: `artifact_${stage}`, ...(row.work_card_id ? { workCardId: row.work_card_id } : {}) },
   });
   return { ok: run.status === "COMPLETED" && Boolean(run.output_text), text: run.output_text ?? "", aiRunId: run.id, detail: run.failure_reason ?? run.status };

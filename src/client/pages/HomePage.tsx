@@ -643,7 +643,7 @@ export function HomePage({ me, onNavigate }: { me: MeResponse; onNavigate: (key:
       <section className="band" data-testid="home-brief-delivery" aria-labelledby="home-brief-head">
         <div className="band-head">
           <h3 id="home-brief-head">Today's brief</h3>
-          <span className="band-when"><strong>{chiefOfStaff.name}</strong> · {chiefOfStaff.role} · on demand, on claude-sonnet-5</span>
+          <span className="band-when"><strong>{chiefOfStaff.name}</strong> · {chiefOfStaff.role} · on demand, Claude first</span>
         </div>
         <DailyBriefPanel compact viewerId={me.id} preparedBy={chiefOfStaff.name} />
       </section>

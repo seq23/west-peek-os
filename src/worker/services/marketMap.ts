@@ -139,7 +139,8 @@ async function segmentWithModel(
       actor,
       inputs: [prompt],
       sensitivity: "PUBLIC" as never,
-      budgetContext: { judgement: true, expectedOutputTokens: 900 },
+      // seatFirst: her Claude Code seat, then Codex, before the free lanes (29 Sep 2026).
+      budgetContext: { judgement: true, seatFirst: true, expectedOutputTokens: 900 },
       // Pinned: a market map is read as a firm document, and a segmenter that mislabels a
       // company puts every downstream count wrong while still looking finished.
       routing: { category: "INTELLIGENCE", taskClass: "market-map" },

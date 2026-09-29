@@ -313,8 +313,13 @@ const defaultSynthesise: Synthesise = async (env, actor, prompt, reportDate, fir
     budgetContext: {
       judgement: true,
       expectedOutputTokens: BRIEF_EXPECTED_OUTPUT_TOKENS,
-      // Sonnet, and nothing else — see BRIEF_MODEL. FREE_ONLY stops it with a named reason.
+      // Sonnet at MODERATE and OPEN — see BRIEF_MODEL. Her seats (Claude Code, then Codex) lead it
+      // when they are awake; a free lane may stand in front of Sonnet only if the brief's own
+      // verifier accepts what it writes, and the page says so (29 Sep 2026, superseding "FREE_ONLY
+      // stops it"). `briefServing` marks the result.
       requireModel: BRIEF_MODEL,
+      seatFirst: true,
+      degradeAllowed: true,
     },
     /*
      * THE BRIEF IS BUILT FROM OTHER PEOPLE'S WORDS, so a credential-shaped span in it is somebody

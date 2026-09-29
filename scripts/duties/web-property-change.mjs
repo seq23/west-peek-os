@@ -67,6 +67,8 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { CLOUDFLARE_ACCOUNT_ID, classify, proofLine, readRequests } from "./lib/pages-delivery.mjs";
 import { VAULT_INJECTED_VAR, claudeChildEnv, strippedNote } from "../lib/vault-env.mjs";
+import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
+import { codexExecArgs, codexSeatUsable, gitCommonDirs, helpMentions, runWithCodexFallback } from "../lib/codex-seat.mjs";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -404,8 +406,96 @@ export { claudeChildEnv };
  */
 const MODEL_DENIED_TOOLS = ["Bash(*vault.mjs*)", "Bash(security:*)", "Bash(*west-peek-os/vault*)"];
 
+/**
+ * Run the phase's model in the worktree: Claude Code, and — ONLY when Claude Code reports its plan is
+ * out of usage — Codex on her ChatGPT Plus seat, in the same worktree with the same prompt (29 Sep
+ * 2026). The phase reads its result from a FILE the model writes, so which model wrote it does not
+ * change how the phase is judged. Any other Claude failure is the phase's failure, unchanged.
+ */
+async function runClaude(opts) {
+  return runWithCodexFallback({
+    runClaude: () => spawnClaude(opts),
+    runCodex: () => spawnCodex(opts),
+    limited: claudeSpentUsage,
+    usable: () => codexSeatUsable(homedir()),
+    supports: codexLacks,
+    addDirs: opts.addDirs ?? [],
+    onLine: opts.onLine,
+  });
+}
+
+/**
+ * Did Claude Code stop because its plan's usage is spent? Returns the notice's own words, or null.
+ * A run whose JSON says `is_error: false` is a success whatever it printed; only a failed or
+ * unreadable run is inspected, and `detectUsageLimit` never inspects long output.
+ */
+export function claudeSpentUsage({ out, err }) {
+  try {
+    const j = JSON.parse(out);
+    if (j && j.is_error === false) return null;
+    const hit = detectUsageLimit({ stdout: typeof j?.result === "string" ? j.result : "", stderr: err });
+    return hit.limited ? hit.snippet : null;
+  } catch {
+    const hit = detectUsageLimit({ stdout: out, stderr: err });
+    return hit.limited ? hit.snippet : null;
+  }
+}
+
+/** The first flag the installed `codex exec --help` does not mention, or null when it supports them all. */
+async function codexLacks(flags) {
+  let help = "";
+  try {
+    const r = await execFileAsync("codex", ["exec", "--help"], { maxBuffer: 4 * 1024 * 1024, timeout: 20_000, env: claudeChildEnv(process.env) });
+    help = `${r.stdout}\n${r.stderr}`;
+  } catch (e) {
+    help = `${e?.stdout ?? ""}\n${e?.stderr ?? ""}`;
+  }
+  if (!help.trim()) return "`codex exec` (the codex command could not be run)";
+  return flags.find((f) => !helpMentions(help, f)) ?? null;
+}
+
+/** `git rev-parse --git-common-dir` for a directory, or null when it is not inside a repository. */
+async function gitCommonDirOf(dir) {
+  try {
+    const r = await execFileAsync("git", ["-C", dir, "rev-parse", "--git-common-dir"], { timeout: 15_000 });
+    return String(r.stdout).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Run `codex exec` in the worktree with the same prompt on stdin, killable by the job's signal. */
+async function spawnCodex({ prompt, cwd, addDirs, signal, onLine }) {
+  // The worktree's commits are written into the ORIGINAL repository's .git, outside every folder the
+  // sandbox would otherwise let Codex write — so each repository's git directory is named too.
+  const dirs = [cwd, ...(addDirs ?? [])];
+  const found = await Promise.all(dirs.map((d) => gitCommonDirOf(d)));
+  const gitDirs = gitCommonDirs(dirs, (d) => found[dirs.indexOf(d)]);
+  const writable = [...new Set([...(addDirs ?? []), ...gitDirs])];
+  return new Promise((resolve) => {
+    let withheld = [];
+    const child = spawn("codex", codexExecArgs(writable), { cwd, stdio: ["pipe", "pipe", "pipe"], env: claudeChildEnv(process.env, (names) => (withheld = names)) });
+    onLine?.(strippedNote(withheld));
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (d) => {
+      out += String(d);
+      onLine?.(`codex: ${out.length} bytes`);
+    });
+    child.stderr.on("data", (d) => (err += String(d)));
+    const onAbort = () => child.kill("SIGKILL");
+    signal?.addEventListener("abort", onAbort, { once: true });
+    child.on("error", (e) => resolve({ code: -1, out, err: `${err}\n${e.message}\n${strippedNote(withheld)}` }));
+    child.on("close", (code) => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve({ code, out, err: code === 0 ? err : `${err}\n${strippedNote(withheld)}` });
+    });
+    child.stdin.end(prompt);
+  });
+}
+
 /** Run `claude -p` in the worktree with the prompt, killable by the job's signal. */
-function runClaude({ prompt, model, cwd, addDirs, signal, onLine }) {
+function spawnClaude({ prompt, model, cwd, addDirs, signal, onLine }) {
   return new Promise((resolve) => {
     const args = [
       "-p",
