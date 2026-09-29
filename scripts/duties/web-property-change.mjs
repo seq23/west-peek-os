@@ -68,7 +68,7 @@ import { promisify } from "node:util";
 import { CLOUDFLARE_ACCOUNT_ID, classify, proofLine, readRequests } from "./lib/pages-delivery.mjs";
 import { VAULT_INJECTED_VAR, claudeChildEnv, strippedNote } from "../lib/vault-env.mjs";
 import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
-import { codexExecArgs, codexSeatUsable, helpMentions, runWithCodexFallback } from "../lib/codex-seat.mjs";
+import { codexExecArgs, codexSeatUsable, gitCommonDirs, helpMentions, runWithCodexFallback } from "../lib/codex-seat.mjs";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -454,11 +454,27 @@ async function codexLacks(flags) {
   return flags.find((f) => !helpMentions(help, f)) ?? null;
 }
 
+/** `git rev-parse --git-common-dir` for a directory, or null when it is not inside a repository. */
+async function gitCommonDirOf(dir) {
+  try {
+    const r = await execFileAsync("git", ["-C", dir, "rev-parse", "--git-common-dir"], { timeout: 15_000 });
+    return String(r.stdout).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 /** Run `codex exec` in the worktree with the same prompt on stdin, killable by the job's signal. */
-function spawnCodex({ prompt, cwd, addDirs, signal, onLine }) {
+async function spawnCodex({ prompt, cwd, addDirs, signal, onLine }) {
+  // The worktree's commits are written into the ORIGINAL repository's .git, outside every folder the
+  // sandbox would otherwise let Codex write — so each repository's git directory is named too.
+  const dirs = [cwd, ...(addDirs ?? [])];
+  const found = await Promise.all(dirs.map((d) => gitCommonDirOf(d)));
+  const gitDirs = gitCommonDirs(dirs, (d) => found[dirs.indexOf(d)]);
+  const writable = [...new Set([...(addDirs ?? []), ...gitDirs])];
   return new Promise((resolve) => {
     let withheld = [];
-    const child = spawn("codex", codexExecArgs(addDirs ?? []), { cwd, stdio: ["pipe", "pipe", "pipe"], env: claudeChildEnv(process.env, (names) => (withheld = names)) });
+    const child = spawn("codex", codexExecArgs(writable), { cwd, stdio: ["pipe", "pipe", "pipe"], env: claudeChildEnv(process.env, (names) => (withheld = names)) });
     onLine?.(strippedNote(withheld));
     let out = "";
     let err = "";

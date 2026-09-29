@@ -66,7 +66,8 @@ export function codexSeatUsable(home = homedir()) {
  *   --sandbox workspace-write   may write inside the working directory and the --add-dir folders only
  *   -c ...network_access=true   the model runs the repo's validators and package installs; the sandbox
  *                               default blocks the network, which would fail every BUILD
- *   --add-dir <d>               the job directory and the package, outside the worktree
+ *   --add-dir <d>               the job directory and the package, outside the worktree — AND the git
+ *                               directory of every repository worktree (see gitCommonDirs), or a commit fails
  */
 export function codexExecArgs(addDirs = []) {
   return [
@@ -77,6 +78,36 @@ export function codexExecArgs(addDirs = []) {
     ...addDirs.flatMap((d) => ["--add-dir", d]),
     "-",
   ];
+}
+
+/**
+ * THE GIT DIRECTORIES A WORKTREE'S COMMITS ARE WRITTEN TO (29 Sep 2026, from review of PR #213).
+ *
+ * Repo work runs in a LINKED worktree (`git worktree add`). Its working files sit in the worktree, but
+ * its index, HEAD and the refs a commit moves live in the ORIGINAL repository's `.git/worktrees/<name>`,
+ * and new objects go to that repository's `.git/objects` — all outside the worktree. The Codex
+ * `workspace-write` sandbox lets the model write only under its working directory and the `--add-dir`
+ * folders, so without these the model could edit source but `git add` / `git commit` would fail, and
+ * the fallback would produce a BUILD that changed files and recorded nothing.
+ *
+ * `gitDirOf(dir)` returns `git rev-parse --git-common-dir` for a directory, or null when it is not in a
+ * repository (the job directory and the package are not). Injected so the test can use a real
+ * repository and this stays free of child processes. Returns absolute, de-duplicated paths.
+ */
+export function gitCommonDirs(dirs, gitDirOf) {
+  const out = [];
+  for (const d of dirs) {
+    let raw = null;
+    try {
+      raw = gitDirOf(d);
+    } catch {
+      raw = null;
+    }
+    if (!raw || typeof raw !== "string" || raw.trim() === "") continue;
+    const abs = path.resolve(d, raw.trim());
+    if (!out.includes(abs)) out.push(abs);
+  }
+  return out;
 }
 
 /** Does the installed `codex exec --help` mention this flag? Injected `help` text keeps the test offline. */

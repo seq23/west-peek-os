@@ -2,6 +2,7 @@
 export declare function codexOnSubscription(authJsonText: string): boolean;
 export declare function codexSeatUsable(home?: string): { ok: boolean; why: string };
 export declare function codexExecArgs(addDirs?: string[]): string[];
+export declare function gitCommonDirs(dirs: string[], gitDirOf: (dir: string) => string | null): string[];
 export declare function helpMentions(helpText: string | undefined, flag: string): boolean;
 export interface RunResult {
   code: number | null;

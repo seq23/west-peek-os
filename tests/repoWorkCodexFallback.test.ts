@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { codexExecArgs, codexSeatUsable, runWithCodexFallback, type RunResult } from "../scripts/lib/codex-seat.mjs";
+import { execFileSync } from "node:child_process";
+import { realpathSync } from "node:fs";
+import { codexExecArgs, codexSeatUsable, gitCommonDirs, runWithCodexFallback, type RunResult } from "../scripts/lib/codex-seat.mjs";
 import { claudeSpentUsage } from "../scripts/duties/web-property-change.mjs";
 
 /**
@@ -139,5 +141,51 @@ describe("the Codex run itself", () => {
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe("a linked worktree commits into the ORIGINAL repository's .git — so that must be writable (PR #213 review)", () => {
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" } }).trim();
+  const gitDirOf = (dir: string): string | null => {
+    try {
+      return execFileSync("git", ["-C", dir, "rev-parse", "--git-common-dir"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null;
+    } catch {
+      return null;
+    }
+  };
+
+  it("names the original repo's .git for a linked worktree, and nothing for a folder that is no repository", () => {
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "wt-")));
+    try {
+      const repo = path.join(root, "repo");
+      mkdirSync(repo);
+      git(repo, "init", "-q", "-b", "main");
+      writeFileSync(path.join(repo, "a.txt"), "a");
+      git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A");
+      git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init");
+      const worktree = path.join(root, "wt");
+      git(repo, "worktree", "add", "-q", "-b", "job", worktree);
+      const jobDir = path.join(root, "job");
+      mkdirSync(jobDir);
+
+      const dirs = gitCommonDirs([worktree, jobDir], gitDirOf);
+      expect(dirs, "the worktree's commits go into the original repo's .git").toEqual([path.join(repo, ".git")]);
+      // Proof the premise is real: the linked worktree's own index lives UNDER that directory, outside the worktree.
+      const perWorktree = git(worktree, "rev-parse", "--git-dir");
+      expect(realpathSync(perWorktree).startsWith(path.join(repo, ".git"))).toBe(true);
+      expect(realpathSync(perWorktree).startsWith(worktree)).toBe(false);
+
+      // And the arguments Codex is started with carry it as a writable folder.
+      const args = codexExecArgs([jobDir, ...dirs]);
+      expect(args.join(" ")).toContain(`--add-dir ${path.join(repo, ".git")}`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("de-duplicates, and tolerates a probe that throws", () => {
+    expect(gitCommonDirs(["/a", "/a/b"], () => "/r/.git")).toEqual(["/r/.git"]);
+    expect(gitCommonDirs(["/a"], () => { throw new Error("no git"); })).toEqual([]);
+    expect(gitCommonDirs(["/a"], () => "")).toEqual([]);
   });
 });

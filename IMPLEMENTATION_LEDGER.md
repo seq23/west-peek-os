@@ -6863,4 +6863,11 @@ Design: `ARCHITECTURAL_DECISIONS.md` (29 Sep 2026); behaviour: `docs/AI_GOVERNAN
   difference from the Claude run — that the model is not denied the vault the way `--disallowedTools`
   denies it for Claude. The vault is encrypted and no secret is in its environment, but a Codex phase
   can attempt what a Claude phase cannot; treat the first Codex-served job as supervised.
+  **From review of PR #213 (fixed):** a linked worktree's index and refs live in the ORIGINAL repo's
+  `.git/worktrees/…`, outside every folder `workspace-write` lets Codex write, so it could edit files
+  but not commit. `gitCommonDirs` now names each repository's git directory as an `--add-dir`
+  (proved against a real `git worktree` in the test). **Still unproven:** that the installed Codex
+  lets a model write into a `.git` directory even when named (some versions protect it), and that
+  `git push`/`gh` can authenticate from inside the sandbox. If either fails the BUILD fails at its
+  commit/PR check with the reason on the card, exactly as any failed phase does.
 - **Verification.** Full suite for phases 1–3 (before this section): 229 files, 3,453 tests, green.
