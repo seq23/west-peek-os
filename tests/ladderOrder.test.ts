@@ -14,6 +14,7 @@ import {
 } from "../src/worker/ai/subscriptionSeats";
 import { allSeatAvailability } from "../src/worker/ai/subscriptionSeats";
 import { BRIEF_USUAL_MODEL, briefServing } from "../src/shared/ai/briefServing";
+import { orderByVendorFamily, vendorFamilyOf } from "../src/shared/ai/vendorFamily";
 
 /**
  * THE OWNER'S LADDER, PROVEN AT EVERY RUNG AND AT EVERY POSITION OF THE LEVER (29 Sep 2026).
@@ -68,7 +69,7 @@ interface Vendor {
  * Gemini's free tier answer 429 (the quota-exhausted shape); `freeText`/`paidText` are what each
  * side says, so a test can tell who answered from the text alone.
  */
-function vendors(opts: { free429?: boolean; freeText?: string; paidText?: string } = {}): Vendor {
+function vendors(opts: { free429?: boolean; freeText?: string; paidText?: string; failModels?: RegExp } = {}): Vendor {
   const models: string[] = [];
   const hosts: string[] = [];
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -83,6 +84,7 @@ function vendors(opts: { free429?: boolean; freeText?: string; paidText?: string
     if (!model && url.host.includes("generativelanguage")) model = "gemini-free";
     models.push(model);
     const isFree = model.endsWith(":free") || model === "gemini-free";
+    if (opts.failModels?.test(model)) return new Response(JSON.stringify({ error: { message: "upstream unavailable" } }), { status: 503 });
     if (isFree && opts.free429) return new Response(JSON.stringify({ error: { message: "rate limited" } }), { status: 429 });
     const text = isFree ? (opts.freeText ?? "FREE LANE ANSWER") : (opts.paidText ?? "PAID LANE ANSWER");
     if (url.host.includes("generativelanguage")) {
@@ -297,6 +299,71 @@ describe("MODERATE — the ladder as the owner drew it", () => {
     expect(served.degraded).toBe(true);
     expect(served.note).toContain("not by Claude");
   }, 60_000);
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+describe("after paid Claude comes OpenAI, then everything else (judgement work)", () => {
+  beforeEach(() => setLever("MODERATE"));
+
+  it("walks paid Sonnet → Anthropic direct → the rest of Claude → OpenAI, and asks Gemini only after OpenAI", async () => {
+    // Every Claude lane is down, so the walk has to leave the family; OpenAI must be the next family, not whichever is cheapest.
+    const v = vendors({ failModels: /claude/i, paidText: "answered after Claude was unavailable" });
+    const { run } = await runAi(env(), PRIVATE, { fetchImpl: v.fetchImpl });
+    expect(run.status).toBe("COMPLETED");
+    expect(run.output_text).toContain("answered after Claude was unavailable");
+    const asked = v.models;
+    const firstOpenAi = asked.findIndex((m) => m.startsWith("openai/") || m.startsWith("gpt-"));
+    expect(firstOpenAi, `OpenAI was reached: ${asked.join(" → ")}`).toBeGreaterThan(0);
+    const before = asked.slice(0, firstOpenAi);
+    expect(before.length).toBeGreaterThan(0);
+    expect(before.every((m) => /claude/i.test(m)), `only Claude lanes came before OpenAI: ${before.join(" → ")}`).toBe(true);
+    expect(asked.slice(0, firstOpenAi + 1).some((m) => m.startsWith("google/") || m.startsWith("gemini")), "Gemini was not asked ahead of OpenAI").toBe(false);
+    expect(run.model).toMatch(/^openai\/|^gpt-/);
+  }, 60_000);
+
+  it("never lets a free lane see it on the way: private work skips FREE even when everything paid has failed except OpenAI", async () => {
+    const v = vendors({ failModels: /claude/i });
+    await runAi(env(), PRIVATE, { fetchImpl: v.fetchImpl });
+    expect(v.models.some((m) => m.endsWith(":free") || m === "gemini-free")).toBe(false);
+  }, 60_000);
+});
+
+describe("vendorFamily — the order, as a pure rule", () => {
+  it("names the family from the provider key or the model id", () => {
+    expect(vendorFamilyOf("openrouter", "anthropic/claude-haiku-4.5")).toBe("CLAUDE");
+    expect(vendorFamilyOf("anthropic", "claude-sonnet-5")).toBe("CLAUDE");
+    expect(vendorFamilyOf("openrouter", "openai/gpt-5-mini")).toBe("OPENAI");
+    expect(vendorFamilyOf("openai", "gpt-5")).toBe("OPENAI");
+    expect(vendorFamilyOf("openrouter", "google/gemini-2.5-flash")).toBe("OTHER");
+    expect(vendorFamilyOf(undefined, "nvidia/nemotron-3-ultra-550b-a55b")).toBe("OTHER");
+  });
+
+  it("is stable inside a family: health and price ordering are not overruled", () => {
+    const lanes = [
+      { providerKey: "openrouter", model: "google/gemini-2.5-flash-lite" },
+      { providerKey: "openrouter", model: "openai/gpt-5-mini" },
+      { providerKey: "openrouter", model: "anthropic/claude-haiku-4.5" },
+      { providerKey: "openrouter", model: "nvidia/nemotron-3-ultra-550b-a55b" },
+      { providerKey: "openrouter", model: "anthropic/claude-sonnet-5" },
+      { providerKey: "openai", model: "gpt-5" },
+    ];
+    expect(orderByVendorFamily(lanes).map((l) => l.model)).toEqual([
+      "anthropic/claude-haiku-4.5",
+      "anthropic/claude-sonnet-5",
+      "openai/gpt-5-mini",
+      "gpt-5",
+      "google/gemini-2.5-flash-lite",
+      "nvidia/nemotron-3-ultra-550b-a55b",
+    ]);
+  });
+
+  it("returns a new list and adds nothing", () => {
+    const lanes = [{ providerKey: "openrouter", model: "google/gemini-2.5-flash" }];
+    const out = orderByVendorFamily(lanes);
+    expect(out).not.toBe(lanes);
+    expect(out).toEqual(lanes);
+    expect(orderByVendorFamily([])).toEqual([]);
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════

@@ -6830,3 +6830,37 @@ Design: `ARCHITECTURAL_DECISIONS.md` (29 Sep 2026); behaviour: `docs/AI_GOVERNAN
   not "highly intelligent"); and a Codex fallback for repo/site work on cards, which is still Claude Code
   only. The production default is still MODERATE: moving it to FREE_ONLY is her act on the AI page
   (`governance.policy_change`), deliberately not a migration.
+
+### Phases 4 and 5 of the same artifact (29 Sep 2026)
+
+- **Phase 4 — after paid Claude, OpenAI (rung ordering, not a new model).** The leftover "any other
+  adequate lane" list is now ordered Claude family → OpenAI → the rest for judgement work
+  (`src/shared/ai/vendorFamily.ts`, a stable sort inside `runAi`; mechanical work keeps
+  cheapest-first). Proven in `tests/ladderOrder.test.ts`: with every Claude lane down the walk goes
+  Sonnet → Anthropic direct → Haiku → `openai/gpt-5-mini` and asks Gemini only after; disabling the sort
+  sends the same walk to Gemini and the test fails. **What is NOT done:** a *stronger* OpenAI model.
+  The only ACTIVE OpenAI lane is `openai/gpt-5-mini` ($0.25/$2.00, read from OpenRouter and generation-
+  probed in 0188). Registering another needs a price read from the vendor and a live generation
+  probe; the sandbox this was built in cannot reach OpenRouter or OpenAI (proxy 403), and the repo's
+  rule is that an unread price may not decide anything. Steps for whoever can: `npm run prices:refresh`,
+  probe the model with a real generation, add a migration in the 0188 shape (register + pricing +
+  data policy + reasoning flag). The rung picks it up with no code change.
+- **Phase 5 — repo work on cards falls to Codex when Claude Code's plan is spent.**
+  `scripts/duties/web-property-change.mjs`: `runClaude` is now a wrapper over the shared
+  `runWithCodexFallback` (`scripts/lib/codex-seat.mjs`). It runs `claude -p`; only when the result is a
+  spent-plan notice (`claudeSpentUsage`: a successful run is never inspected; a failed one is read
+  through the same `detectUsageLimit` as the answer claimer) and Codex is signed in through the ChatGPT
+  subscription (never an API key) and the installed binary supports `--sandbox`/`--add-dir`, the same
+  prompt runs on `codex exec --sandbox workspace-write` in the same worktree, spawned through the same
+  `claudeChildEnv` (no vault names, no API keys). Every phase already reads its result from a file the
+  model writes, so which model wrote it does not change how the phase is judged. Any other Claude
+  failure is unchanged. `validate:duty-executor` now holds the Codex spawn to `claudeChildEnv` too
+  (its self-test found that the old scan looked only at `spawn("claude"…)`).
+  Tests: `tests/repoWorkCodexFallback.test.ts` (11) with both CLIs replaced by fakes.
+  **UNPROVEN:** that the installed Codex CLI accepts this flag set and can do a PLAN/BUILD/LAND phase
+  (it has never been run on the Mac; a missing flag makes the fallback unavailable *with a sentence*,
+  not a silent failure); that Codex follows a prompt written for Claude's tool names; and — a real
+  difference from the Claude run — that the model is not denied the vault the way `--disallowedTools`
+  denies it for Claude. The vault is encrypted and no secret is in its environment, but a Codex phase
+  can attempt what a Claude phase cannot; treat the first Codex-served job as supervised.
+- **Verification.** Full suite for phases 1–3 (before this section): 229 files, 3,453 tests, green.

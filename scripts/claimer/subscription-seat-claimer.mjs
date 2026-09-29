@@ -49,6 +49,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
+import { codexOnSubscription, codexSeatUsable } from "../lib/codex-seat.mjs";
 import { VAULT_INJECTED_VAR, claudeChildEnv } from "../lib/vault-env.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -159,33 +160,10 @@ async function seatInstalled(seat) {
  * system goes on recording the lane at $0. A lane that silently costs money while reporting free is
  * worse than a lane that is down.
  */
-export function codexOnSubscription(authJsonText) {
-  try {
-    const parsed = JSON.parse(authJsonText);
-    return parsed.auth_mode === "chatgpt";
-  } catch {
-    return false;
-  }
-}
+export { codexOnSubscription };
 
-function codexSeatUsable() {
-  const p = path.join(homedir(), ".codex", "auth.json");
-  if (!existsSync(p)) return { ok: false, why: "~/.codex/auth.json does not exist — the Codex CLI is not signed in" };
-  let text = "";
-  try {
-    text = readFileSync(p, "utf8");
-  } catch {
-    return { ok: false, why: "~/.codex/auth.json could not be read" };
-  }
-  if (!codexOnSubscription(text)) {
-    return {
-      ok: false,
-      why:
-        "~/.codex/auth.json no longer records auth_mode=chatgpt, so this seat would bill the API per token " +
-        "while the firm records it at $0. Refusing to claim for it until it is back on the subscription.",
-    };
-  }
-  return { ok: true, why: "auth_mode=chatgpt" };
+function codexSeatUsableHere() {
+  return codexSeatUsable(homedir());
 }
 
 // ── The wire ─────────────────────────────────────────────────────────────────────────────────
@@ -341,7 +319,7 @@ async function usableSeats() {
   for (const seat of Object.keys(SEATS)) {
     if (!(await seatInstalled(seat))) continue;
     if (seat === "codex") {
-      const verdict = codexSeatUsable();
+      const verdict = codexSeatUsableHere();
       if (!verdict.ok) {
         console.error(`codex seat unusable: ${verdict.why}`);
         continue;

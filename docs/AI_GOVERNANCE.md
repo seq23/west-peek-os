@@ -98,6 +98,17 @@ Claude Code seat (Max plan)  →  Codex seat (ChatGPT Plus)  →  FREE lanes  �
   front of Sonnet, but only a reply that passes the brief's own verifier is kept, and
   `briefServing` (shared/ai/briefServing.ts) marks a brief written by anything but Sonnet or a seat as
   "written by a weaker model" on the report and on the page. A bare `requireModel` is still that model or nothing.
+- **After paid Claude comes OpenAI.** The lanes left once the head and its direct peer have failed are
+  ordered Claude family, then OpenAI, then everything else (`shared/ai/vendorFamily.ts`), keeping
+  health-then-price order inside each family. Judgement work only: a mechanical call's last resort is
+  still the cheapest lane. Which OpenAI model that is depends on what the catalogue has ACTIVE —
+  today `openai/gpt-5-mini` through OpenRouter (verified in 0188), and direct OpenAI as the peer of
+  an `openai/*` head. A stronger OpenAI model joins the rung the moment it is registered ACTIVE with
+  a vendor-read price (`npm run prices:refresh`) and a live probe; nothing here guesses either.
+- **Repo work on cards has the same second model.** The Mac job (Porter, web property change) runs
+  `claude -p` per phase. When Claude Code reports its plan is out of usage, that phase is run again
+  on Codex (ChatGPT Plus seat) in the same worktree with the same prompt, and the job log says so.
+  Any other Claude failure stays the phase's failure. See `scripts/lib/codex-seat.mjs`.
 - **Setting the default is a human act.** Moving production to `FREE_ONLY` is `governance.policy_change`
   (an approval card); no migration does it.
 

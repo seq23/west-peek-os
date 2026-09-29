@@ -608,3 +608,12 @@ reached is recorded rather than denied. `validate:brief-lands` now holds the rel
 owner's line, and the reason private work with both seats gone at `FREE_ONLY` stops rather than
 degrades. The lever stays one control with three positions (`validate:one-lever`); no fourth switch
 was added. The production default is set by the owner on the AI page, not by a migration.
+
+**Added the same day (phases 4–5).** *After paid Claude, OpenAI:* the leftover lanes are ordered by
+vendor family for judgement work only, so the owner's "S5, ANTH, OpenAI" is a property of the chain and
+not of where a low price happens to fall. *Repo work has a second model:* a Mac job's phase runs on Codex
+only when Claude Code reports a spent plan — never for another failure, which would hide the fault and
+spend a second subscription on it. The one accepted asymmetry, recorded rather than denied: Claude runs
+under `--disallowedTools` that close the vault door; Codex has no equivalent, so its safety rests on the
+stripped environment and the sandbox, and the first Codex-served job should be watched.
+

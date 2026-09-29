@@ -52,6 +52,7 @@ import {
   type LaneHealthRow,
 } from "./laneHealth";
 import { CLAIM_WAIT_MS, allSeatAvailability, isSeat } from "./subscriptionSeats";
+import { orderByVendorFamily } from "../../shared/ai/vendorFamily";
 import { createSubscriptionSeatAdapter } from "./providers/subscriptionSeat";
 
 /**
@@ -2681,7 +2682,14 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     await laneHealth(env),
     now,
   );
-  const lastResortFallbacks: FallbackOption[] = lastResortRanked.ordered.map((c) => {
+  /*
+   * CLAUDE, THEN OPENAI, THEN THE REST — for judgement work only (29 Sep 2026). The owner's ladder
+   * ends "paid Sonnet, Anthropic direct, OpenAI"; without this the leftover lanes were ordered by
+   * health and price alone, which put OpenAI wherever `gpt-5-mini`'s low price happened to fall.
+   * Mechanical work keeps the cheapest-first order: a URL check must not fall back to Haiku.
+   */
+  const lastResortOrdered = isJudgement && !requiresSearch ? orderByVendorFamily(lastResortRanked.ordered) : lastResortRanked.ordered;
+  const lastResortFallbacks: FallbackOption[] = lastResortOrdered.map((c) => {
     const option = options.find((o) => o.provider.id === c.providerId && o.pricing.model === c.model);
     return {
       candidate: c,
