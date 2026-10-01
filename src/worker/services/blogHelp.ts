@@ -587,7 +587,7 @@ export async function researchTopic(
   partnerName: string,
   ask: BlogAsk,
   deps: Required<Pick<BlogHelpDeps, "search" | "judge" | "urlCheck">>,
-): Promise<{ notes: ResearchNote[]; dropped: string[]; rejected: Array<{ url: string; reason: string }>; why: string; searchDown?: string }> {
+): Promise<{ notes: ResearchNote[]; dropped: string[]; rejected: Array<{ url: string; reason: string }>; why: string; searchDown?: string; judgeDown?: string }> {
   let why = "";
   // A search that never ran is not research that found nothing (1 Oct 2026): `searchDown` carries the lane's words.
   let searched = false;
@@ -610,7 +610,7 @@ export async function researchTopic(
       continue;
     }
     const judged = await deps.judge(env, actor, buildJudgePrompt(employee, ask, live));
-    if (!judged.ok) return { notes: [], dropped, rejected, why: `the judgement pass failed: ${judged.detail}` };
+    if (!judged.ok) return { notes: [], dropped, rejected, why: `the judgement pass failed: ${judged.detail}`, judgeDown: judged.detail };
     const verdicts = parseVerdicts(judged.text);
     if (verdicts.size === 0) return { notes: [], dropped, rejected, why: "the judge answered with no verdicts" };
     const notes: ResearchNote[] = [];
@@ -704,6 +704,9 @@ export async function runBlogHelpCard(
   const needsSources = ask.modes.includes("OUTLINE") || ask.modes.includes("DRAFT");
   // The research needed for this ask could not even be attempted: a failed attempt (classified, retried, resumed by
   // itself when the setting or the seat changes) — never "send me a source or two" to a partner for a lane problem.
+  if (research.notes.length === 0 && needsSources && research.judgeDown) {
+    return { finished: false, blocked: false, detail: `the judgement pass failed: ${research.judgeDown}` };
+  }
   if (research.notes.length === 0 && needsSources && research.searchDown) {
     return { finished: false, blocked: false, detail: `the live search failed: ${research.searchDown}` };
   }

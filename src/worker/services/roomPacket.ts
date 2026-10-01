@@ -1004,6 +1004,7 @@ async function runWorkshopStage(
        * one path that stops the work dead.
        */
       const judged = await deps.judge(env, deps.actor, buildWorkshopJudgePrompt({ topic: topic ?? "the subject Parker is about to choose for this month", notes: live }));
+      /* judge-never-ran-exempt: the same documented degrade as the search above — a judge that fell over is empty research, and the stage's own note says so and why */
       if (!judged.ok) { why = `the judgement pass failed: ${judged.detail}`; continue; }
       const verdicts = parseWorkshopVerdicts(judged.text);
       if (verdicts.size === 0) { why = "the judge answered with no verdicts"; continue; }

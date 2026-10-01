@@ -7186,3 +7186,16 @@ seat / routing test unchanged. **Negative proof, run:** seats-at-free-only remov
 never written (4), FULL still warns (2), banner removed (1), packet flag removed (1) — each restored.
 **PROVEN here:** the above, locally. **UNPROVEN:** migration 0251 against production; live free-lane output; the banner in a
 browser (no e2e run, by the owner's instruction). **NOT BUILT:** a lane-quality measurement; a UI to set `quality_tier`.
+
+## 1 Oct 2026 — A judging step that could not answer is not a question either (migration 0252)
+
+**Found by the owner's screenshot.** After the search fix (#219) Walker's monthly Productions card still said "no customer lead
+survived (the **judgement pass** failed…)". The search had run; the model that judges each lead was refused (the spend setting)
+and the runner reported that as "no lead survived" — the same mistake one step later. Three runners had it: the monthly
+Productions card, the weekly hire search and blog help. Each now records `judgeDown` and fails the **attempt** with the lane's
+words (classified, retried, resumed when the setting changes); a judge that ran and rejected every entry is still the old
+question. Migration 0252 re-queues cards already stopped that way, once. `validate:search-never-ran` now also fails a runner that
+writes "the judgement pass failed" into a result without `judgeDown` (the Workshop's documented degrade is exempt, with a reason).
+The one existing test that asserted the old BLOCKED outcome now asserts FAILED and still asserts nothing unjudged is sent.
+**Negative proof, run:** each of the three runners' judge checks removed → its test red; restored. **UNPROVEN:** 0252 against
+production; that the live card re-runs on a seat (needs one awake).

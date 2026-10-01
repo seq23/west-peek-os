@@ -79,6 +79,24 @@ describe("Walker's monthly Productions card", () => {
   });
 });
 
+describe("a judging step that could not answer is a failed attempt too (1 Oct 2026)", () => {
+  const JUDGE_REFUSAL = "free_only_cannot_serve_protected_work:this call is marked 'judgement' and needs a paid model, and the lever is set to FREE_ONLY.";
+  const judgeDown = async () => ({ ok: false, text: "", detail: JUDGE_REFUSAL });
+
+  it("the weekly hire search: a refused judge fails the attempt instead of saying nobody stood up to the checks", async () => {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE kind = 'PRODUCTIONS_HIRE_SEARCH'").run();
+    const when = new Date("2027-02-08T14:00:00.000Z");
+    const opened = await openHireSearchCard(env, when);
+    const hireJson = JSON.stringify({ results: [{ name: "Ada", profile_url: "https://example.org/ada", evidence_url: "https://example.org/ada/work", why: "x" }] });
+    const out = await sweepOnce(env, new Date(when.getTime() + 5 * 60_000), {
+      productionsHire: (e, c) => runHireSearchCard(e, c, { search: async () => ({ ok: true, text: hireJson, detail: "ok" }), judge: judgeDown as never, urlStatus: async () => 200, now: when }),
+    });
+    expect(out.card?.id).toBe(opened.cardId);
+    expect(out.outcome, out.summary).toBe("FAILED");
+    expect((await row(opened.cardId)).state).not.toBe("BLOCKED");
+  });
+});
+
 describe("Walker's weekly hire search", () => {
   it("a search that never ran fails the attempt instead of saying nobody stood up to the checks", async () => {
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE kind = 'PRODUCTIONS_HIRE_SEARCH'").run();
@@ -119,6 +137,17 @@ describe("migration 0250 puts a card stopped the old way back in the queue, once
     expect(String((await row(dead)).block_answer)).toMatch(/^AUTO-RETRY/);
     expect((await row(real)).state, "a search that ran and found nothing keeps its question").toBe("BLOCKED");
     expect((await row(other)).state, "another block reason is untouched").toBe("BLOCKED");
+  });
+
+  it("0252 does the same for a card whose JUDGING step could not answer — and leaves the rest alone", async () => {
+    const sql = readFileSync("migrations/0252_a_judging_step_that_could_not_answer_is_not_a_question.sql", "utf8");
+    const stmt = sql.slice(sql.indexOf("UPDATE work_card"), sql.indexOf("INSERT OR IGNORE INTO schema_version")).trim().replace(/;$/, "");
+    const dead = await stopped("Walker: this month (judge could not answer)", "Tell Walker where to look, or leave it this month — no customer lead survived (the judgement pass failed: free_only_cannot_serve_protected_work), and he will not send half a note.");
+    const real = await stopped("Walker: this month (judge rejected everything)", "Tell Walker where to look, or leave it this month — no customer lead survived (the judge rejected every entry: x), and he will not send half a note.");
+    await env.WP_OS_DB.prepare(stmt).run();
+    expect((await row(dead)).state).toBe("OPEN");
+    expect(String((await row(dead)).block_answer)).toMatch(/^AUTO-RETRY/);
+    expect((await row(real)).state, "a judge that RAN and rejected everything keeps its question").toBe("BLOCKED");
   });
 
   it("does not touch a held card", async () => {
