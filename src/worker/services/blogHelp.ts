@@ -587,15 +587,19 @@ export async function researchTopic(
   partnerName: string,
   ask: BlogAsk,
   deps: Required<Pick<BlogHelpDeps, "search" | "judge" | "urlCheck">>,
-): Promise<{ notes: ResearchNote[]; dropped: string[]; rejected: Array<{ url: string; reason: string }>; why: string }> {
+): Promise<{ notes: ResearchNote[]; dropped: string[]; rejected: Array<{ url: string; reason: string }>; why: string; searchDown?: string }> {
   let why = "";
+  // A search that never ran is not research that found nothing (1 Oct 2026): `searchDown` carries the lane's words.
+  let searched = false;
+  let searchDown = "";
   let dropped: string[] = [];
   let rejected: Array<{ url: string; reason: string }> = [];
   let nudge = "";
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const prompt = buildResearchPrompt(employee, partnerName, ask) + (nudge ? `\n\n${nudge}` : "");
     const found = await deps.search(env, actor, prompt);
-    if (!found.ok) { why = `the live search failed: ${found.detail}`; continue; }
+    if (!found.ok) { why = `the live search failed: ${found.detail}`; searchDown = found.detail; continue; }
+    searched = true;
     const parsed = parseResearch(found.text);
     const checks = await Promise.all(parsed.map(async (n) => ({ n, ok: await deps.urlCheck(n.url) })));
     const live = checks.filter((c) => c.ok).map((c) => c.n);
@@ -620,7 +624,7 @@ export async function researchTopic(
     why = `the judge rejected every note: ${rejected.map((r) => `${r.url} — ${r.reason}`).join("; ")}`;
     nudge = `Your previous answer was discarded. Rejected: ${rejected.map((r) => `${r.url} (${r.reason})`).join("; ")}. Find specific, dated facts on credible pages.`;
   }
-  return { notes: [], dropped, rejected, why };
+  return { notes: [], dropped, rejected, why, ...(searched ? {} : { searchDown: searchDown || "the search call failed" }) };
 }
 
 /**
@@ -698,6 +702,11 @@ export async function runBlogHelpCard(
   // 1 · Research, judged.
   const research = await researchTopic(env, actor, employee, partner.fullName, ask, { search, judge, urlCheck });
   const needsSources = ask.modes.includes("OUTLINE") || ask.modes.includes("DRAFT");
+  // The research needed for this ask could not even be attempted: a failed attempt (classified, retried, resumed by
+  // itself when the setting or the seat changes) — never "send me a source or two" to a partner for a lane problem.
+  if (research.notes.length === 0 && needsSources && research.searchDown) {
+    return { finished: false, blocked: false, detail: `the live search failed: ${research.searchDown}` };
+  }
   if (research.notes.length === 0 && needsSources) {
     const why = await blockCard(env, card, {
       reason: "nothing_good_enough_to_send",

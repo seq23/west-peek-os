@@ -780,11 +780,15 @@ export async function runHireSearchCard(
   let dropped: { name: string; reason: string }[] = [];
   let rejected: { name: string; reason: string }[] = [];
   let why = "";
+  // A search that never ran is a failed attempt, not "nobody stood up to the checks" (1 Oct 2026).
+  let searched = false;
+  let searchDown = "";
   const prompt = buildHireSearchPrompt(week);
   for (let attempt = 0; attempt < 2 && kept.length === 0; attempt += 1) {
     const nudge = attempt === 0 ? "" : `\n\nYour previous answer was discarded: ${why}. Every entry MUST have a profile_url a search result showed, an evidence_url that can be read without a login, and page-backed freelance, seniority and brand-deal claims.`;
     const found = await search(env, actor, `${prompt}${nudge}`);
-    if (!found.ok) { why = `the live search failed: ${found.detail}`; continue; }
+    if (!found.ok) { why = `the live search failed: ${found.detail}`; searchDown = found.detail; continue; }
+    searched = true;
     const parsed = parseHireCandidates(found.text);
     if (parsed.length === 0) { why = "the search answered with no usable entry (no profile_url on any)"; continue; }
     const checked = await checkCandidatePages(parsed, status);
@@ -795,6 +799,10 @@ export async function runHireSearchCard(
     rejected = judged.rejected;
     kept = judged.kept;
     if (kept.length === 0) why = `the judge rejected every candidate: ${rejected.map((r) => `${r.name} — ${r.reason}`).join("; ")}`;
+  }
+
+  if (kept.length === 0 && !searched) {
+    return { finished: false, blocked: false, detail: `the live search failed: ${searchDown || "the search call failed"}` };
   }
 
   if (kept.length === 0) {

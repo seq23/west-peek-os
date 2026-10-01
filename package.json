@@ -52,6 +52,7 @@
     "validate:spent-attempts": "node scripts/validate/spent-attempts-are-terminal.mjs && node scripts/validate/spent-attempts-are-terminal.mjs --self-test",
     "validate:sql": "node scripts/validate/sql-against-schema.mjs && node scripts/validate/sql-against-schema.mjs --self-test",
     "validate:steer-waits": "node scripts/validate/a-steer-waits-for-its-month.mjs && node scripts/validate/a-steer-waits-for-its-month.mjs --self-test",
+    "validate:search-never-ran": "node scripts/validate/a-search-that-never-ran-is-not-a-question.mjs && node scripts/validate/a-search-that-never-ran-is-not-a-question.mjs --self-test",
     "validate:seat-search-proof": "node scripts/validate/a-seat-search-needs-proof.mjs && node scripts/validate/a-seat-search-needs-proof.mjs --self-test",
     "validate:stopped-cards": "node scripts/validate/a-stopped-card-says-why.mjs && node scripts/validate/a-stopped-card-says-why.mjs --self-test",
     "validate:value-shapes": "node scripts/validate/value-shapes.mjs && node scripts/validate/value-shapes.mjs --self-test",
