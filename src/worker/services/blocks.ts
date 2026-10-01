@@ -3,6 +3,8 @@ import { ownershipOf, roleOf, secondaryApprovalRefusal } from "../../shared/work
 import type { RouteContext } from "../router";
 import { appendEvent } from "../events";
 import { notifyPartners, notifyQuietly } from "./notifications";
+import { privacyVisibilityClause } from "./authorize";
+import type { FirmUserIdentity } from "../auth";
 import { allSeatAvailability } from "../ai/subscriptionSeats";
 import { json } from "../router";
 import { partnerByName } from "../../shared/registry/partners";
@@ -171,9 +173,20 @@ export interface SpendState {
   seatSearch: boolean;
 }
 
-/** Does this state let work that needs a paid model, or a live search, run? */
-export function spendStatePermits(state: SpendState): boolean {
-  return state.lever !== "FREE_ONLY" || state.seatSearch;
+/**
+ * Does this state let the card's work run? A paid setting lets any of it run. A search-capable seat lets run
+ * ONLY a SEARCH call — a seat cannot serve a call that carries a document or a picture, or one that is not a
+ * search — so the seat clause is available only to a card whose failed call was a search call (review of #217:
+ * recording "a seat could search" globally made a stop on some other call look already-permitted, and the card
+ * would then never be released when the setting moved).
+ */
+export function spendStatePermits(state: SpendState, searchCall = false): boolean {
+  return state.lever !== "FREE_ONLY" || (searchCall && state.seatSearch);
+}
+
+/** Was the call that the spend setting refused a live-web SEARCH call? The refusal names the call's class. */
+export function isSearchCallRefusal(text: string | null | undefined): boolean {
+  return /marked 'search'/.test(text ?? "");
 }
 
 /** The firm's spend state right now. Never throws: an unreadable policy reads as the safest answer. */
@@ -197,13 +210,14 @@ export async function currentSpendState(env: Env, firmScope: string, now: Date =
   return { lever, seatSearch };
 }
 
-export const spendStateJson = (s: SpendState): string => JSON.stringify({ lever: s.lever, seat_search: s.seatSearch });
+export const spendStateJson = (s: SpendState, searchCall = false): string =>
+  JSON.stringify({ lever: s.lever, seat_search: s.seatSearch, search_call: searchCall });
 
-function readSpendContext(raw: string | null | undefined): SpendState | null {
+function readSpendContext(raw: string | null | undefined): (SpendState & { searchCall: boolean }) | null {
   try {
-    const j = JSON.parse(raw ?? "") as { lever?: unknown; seat_search?: unknown };
+    const j = JSON.parse(raw ?? "") as { lever?: unknown; seat_search?: unknown; search_call?: unknown };
     if (typeof j.lever !== "string") return null;
-    return { lever: j.lever, seatSearch: j.seat_search === true };
+    return { lever: j.lever, seatSearch: j.seat_search === true, searchCall: j.search_call === true };
   } catch {
     return null;
   }
@@ -218,7 +232,10 @@ export async function releaseSpendSettingBlocks(env: Env, now: Date = new Date()
     (
       await env.WP_OS_DB.prepare(
         `SELECT id, title, firm_scope, owner_id, block_context FROM work_card
-          WHERE state = 'BLOCKED' AND block_lane = ?1 LIMIT 50`,
+          WHERE state = 'BLOCKED' AND block_lane = ?1
+            -- A HELD CARD KEEPS ITS UNDERLYING STATE AND THE SWEEP SKIPS IT (0227): releasing it would report a resume
+            -- that cannot happen and lose its blocked state while held (review of #217).
+            AND held_at IS NULL LIMIT 50`,
       )
         .bind(SPEND_SETTING_LANE)
         .all<{ id: string; title: string; firm_scope: string; owner_id: string | null; block_context: string | null }>()
@@ -235,7 +252,7 @@ export async function releaseSpendSettingBlocks(env: Env, now: Date = new Date()
       nowState = await currentSpendState(env, r.firm_scope, now);
       byFirm.set(r.firm_scope, nowState);
     }
-    if (!spendStatePermits(nowState) || spendStatePermits(then)) continue;
+    if (!spendStatePermits(nowState, then.searchCall) || spendStatePermits(then, then.searchCall)) continue;
     const why = nowState.lever !== "FREE_ONLY" ? `the spend setting is now ${nowState.lever === "OPEN" ? "Open" : "Moderate"}` : "a subscription seat can now search the web";
     const res = await env.WP_OS_DB.prepare(
       `UPDATE work_card
@@ -244,7 +261,7 @@ export async function releaseSpendSettingBlocks(env: Env, now: Date = new Date()
               next_action = ?2,
               block_answer = ?3, block_answered_by = 'work_sweep', block_answered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
               block_nag_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-        WHERE id = ?1 AND state = 'BLOCKED' AND block_lane = ?4`,
+        WHERE id = ?1 AND state = 'BLOCKED' AND block_lane = ?4 AND held_at IS NULL`,
     )
       .bind(r.id, `Back in the queue: ${why}, so this is being tried again.`.slice(0, 900), `AUTO-RETRY: ${why}`, SPEND_SETTING_LANE)
       .run();
@@ -268,36 +285,64 @@ export async function releaseSpendSettingBlocks(env: Env, now: Date = new Date()
  * has since been fixed. Every BLOCKED card whose reason is one a retry can help (see RETRYABLE_BLOCK_REASONS),
  * except one she has already sent to an engineer: that stays until they have fixed it. Returns how many.
  */
-export async function retryAllStopped(env: Env, identityId: string): Promise<{ retried: number; ids: string[] }> {
+export async function retryAllStopped(env: Env, identity: FirmUserIdentity): Promise<{ retried: number; ids: string[]; skipped: number }> {
+  const identityId = identity.id;
+  /*
+   * ONLY WHAT SHE COULD HAVE RETRIED ONE AT A TIME (review of #217). A bulk door that skipped the gates the single
+   * door and the board apply would be a way round them: an analyst, a secondary partner or a user scoped to another
+   * firm could reopen cards they cannot see or individually clear. So the candidate set is exactly the board's —
+   * the caller's privacy visibility and firm scope — and each card then goes through the single door's own rule:
+   * a card's SECONDARY partner does not clear its block (0241); it is the primary's.
+   */
+  const scopes = identity.authorityScopes.filter((s) => s.scopeKey === "firm_scope").map((s) => s.scopeValue);
+  const isManagingPartner = identity.roles.includes("MANAGING_PARTNER");
   const marks = RETRYABLE_BLOCK_REASONS.map((_, i) => `?${i + 1}`).join(", ");
+  const visibility = privacyVisibilityClause(identity, "privacy_label");
   const rows =
     (
       await env.WP_OS_DB.prepare(
-        `SELECT id FROM work_card
-          WHERE state = 'BLOCKED' AND COALESCE(block_who, '') <> 'ENGINEER' AND block_reason IN (${marks}) LIMIT 200`,
+        `SELECT id, firm_scope, requested_by_email, secondary_partner_email FROM work_card
+          WHERE state = 'BLOCKED' AND COALESCE(block_who, '') <> 'ENGINEER' AND block_reason IN (${marks}) AND ${visibility}
+          LIMIT 200`,
       )
         .bind(...RETRYABLE_BLOCK_REASONS)
-        .all<{ id: string }>()
+        .all<{ id: string; firm_scope: string; requested_by_email: string | null; secondary_partner_email: string | null }>()
     ).results ?? [];
   const ids: string[] = [];
+  let skipped = 0;
   for (const r of rows) {
+    // Firm scope: a user scoped to another firm retries none of this firm's cards. A managing partner holds every scope.
+    if (!isManagingPartner && !scopes.includes(r.firm_scope)) {
+      skipped += 1;
+      continue;
+    }
+    // The single door's rule: the secondary partner does not clear a block on a card — that is the primary's call.
+    if (roleOf(r, identity.email) === "SECONDARY") {
+      skipped += 1;
+      continue;
+    }
     const card = await env.WP_OS_DB.prepare("SELECT id, title, firm_scope FROM work_card WHERE id = ?1").bind(r.id).first<{ id: string; title: string; firm_scope: string }>();
     if (!card) continue;
     await reopen(env, r.id, identityId, "RETRY", "tried again with every other stopped card");
     await record(env, card, identityId, "RETRY", "retry all stopped");
     ids.push(r.id);
   }
-  return { retried: ids.length, ids };
+  return { retried: ids.length, ids, skipped };
 }
 
 /** POST /api/work-cards/retry-stopped — a person, never an employee. */
 export async function handleRetryStoppedCards(ctx: RouteContext): Promise<Response> {
   if (!ctx.identity) return json({ error: "human_required" }, { status: 403 });
-  const out = await retryAllStopped(ctx.env, ctx.identity.id);
+  const out = await retryAllStopped(ctx.env, ctx.identity);
+  const left = out.skipped > 0 ? ` ${out.skipped} more ${out.skipped === 1 ? "is" : "are"} not yours to clear — that is the primary partner's call.` : "";
   return json({
     ok: true,
     retried: out.retried,
-    said: out.retried === 0 ? "Nothing was stopped in a way a retry could help." : `${out.retried} stopped card${out.retried === 1 ? "" : "s"} back in the queue. They try again within a few minutes.`,
+    skipped: out.skipped,
+    said:
+      out.retried === 0
+        ? `Nothing was stopped in a way a retry could help.${left}`
+        : `${out.retried} stopped card${out.retried === 1 ? "" : "s"} back in the queue. They try again within a few minutes.${left}`,
   });
 }
 

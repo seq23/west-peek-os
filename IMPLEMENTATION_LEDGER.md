@@ -7034,3 +7034,28 @@ the catalogue (1) — each restored.
 read). **NOT DONE, and not mine to do:** the spend lever itself is the owner's act — until it moves off Free only
 (or the Mac claimer is updated so a seat can search), a retried Parker packet stops again at DISCOVER, now with the
 right words and the same button; the moment either changes, it resumes with no click.
+
+### Review of PR #217 — three findings, all confirmed and fixed
+
+1. **P1 — the bulk retry was a way round the single door's gates.** It selected every matching card and checked only
+   that *some* human was signed in. It now takes the caller's identity and applies exactly what the board and the
+   single door apply: the caller's **privacy visibility** (the board's own clause), **firm scope**, and — per card —
+   the **secondary-partner rule** (0241: a card's secondary does not clear its block; it is the primary's). Cards it
+   skips are counted and the route says so ("N more are not yours to clear") rather than quietly doing less. Tests:
+   another firm retries nothing; a same-firm user without the card's privacy label retries nothing, and does once
+   granted it; the secondary retries nothing and the primary retries it.
+2. **P2 — "a seat could search" was recorded globally.** A search-capable seat serves only a *search* call (not one
+   carrying a document or a picture, not a non-search call), so recording `seat_search: true` made a stop on some
+   other call look already-permitted and the card would then never be released when the setting moved. The context
+   now records `search_call` (the refusal names its call class: "marked 'search'"); the seat clause of the permission
+   rule applies only to a search card. The backfill derives it with `json_object` from the same note.
+3. **P2 — a held card was released.** A held card keeps its underlying BLOCKED state and the sweep skips it
+   (0227), so releasing it reported a resume that could not happen. The release now requires `held_at IS NULL` in
+   both the select and the update; released from the hold, it is eligible on the next tick.
+
+**Negative proof, run:** firm-scope check off (1 red), secondary-partner check off (2), privacy clause off (1),
+seat clause applied to every call (2), both held guards off (1) — each restored. (The first pass found two of these
+uncaught — the privacy clause and the held guard had no test that failed without them; both now do.)
+
+Counts: vitest **3550/3550** (235 files), `tsc` clean, every `validate:*` PASSED except `validate:value-shapes`
+(needs a production Cloudflare token; fails identically on `main`).

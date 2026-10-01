@@ -7,6 +7,7 @@ import { sweepIdentity, sweepOnce } from "../src/worker/services/workSweep";
 import { blockOf, handleRetryStoppedCards, releaseSpendSettingBlocks, retryAllStopped, spendStatePermits } from "../src/worker/services/blocks";
 import { BLOCK_REASONS, RETRYABLE_BLOCK_REASONS, describeBlock, withRetryDoor } from "../src/shared/work/blocks";
 import { recordHeartbeat, SEAT_SEARCH_CAPABILITY } from "../src/worker/ai/subscriptionSeats";
+import type { FirmUserIdentity } from "../src/worker/auth";
 
 /**
  * A STOPPED CARD CAN ALWAYS BE RETRIED, AND ONE THE SPEND SETTING STOPPED RESUMES BY ITSELF (1 Oct 2026).
@@ -32,6 +33,12 @@ const OLD_ACTIONS = JSON.stringify([
   { key: "ESCALATE", label: "Send it to an engineer", hint: "x" },
 ]);
 const LEVER_NOTE = "• For an engineer, the last attempt reported: DISCOVER: sponsor discovery search failed: free_only_cannot_serve_protected_work:this call is marked 'search' and needs a paid model.";
+/** The same refusal for a call that is NOT a search (a deck review, say) — a search seat could never have served it. */
+const NON_SEARCH_LEVER_NOTE = "• For an engineer, the last attempt reported: free_only_cannot_serve_protected_work:this call is marked 'employee-work' and needs a paid model.";
+
+const MP: FirmUserIdentity = { id: "fu_sequoia_taylor", email: "sequoia@westpeek.ventures", fullName: "Sequoia Taylor", status: "ACTIVE", roles: ["MANAGING_PARTNER"], authorityScopes: [{ scopeKey: "firm_scope", scopeValue: "west-peek" }] };
+const SCOOTER: FirmUserIdentity = { id: "fu_scooter_taylor", email: "scooter@westpeek.ventures", fullName: "Scooter Taylor", status: "ACTIVE", roles: ["MANAGING_PARTNER"], authorityScopes: [{ scopeKey: "firm_scope", scopeValue: "west-peek" }] };
+const ANALYST_OTHER_FIRM: FirmUserIdentity = { id: "fu_analyst", email: "analyst@example.invalid", fullName: "An Analyst", status: "ACTIVE", roles: ["ANALYST"], authorityScopes: [{ scopeKey: "firm_scope", scopeValue: "some-other-firm" }] };
 
 async function setLever(lever: "FREE_ONLY" | "MODERATE" | "OPEN"): Promise<void> {
   await t.db
@@ -43,14 +50,14 @@ async function setLever(lever: "FREE_ONLY" | "MODERATE" | "OPEN"): Promise<void>
     .run();
 }
 
-async function card(title: string): Promise<string> {
-  const c = await createWorkCardInternal(env, sweepIdentity(), { title, description: "test", owner_type: "AI", owner_id: "aie_parker", firm_scope: "west-peek" });
+async function card(title: string, owner = "aie_parker"): Promise<string> {
+  const c = await createWorkCardInternal(env, sweepIdentity(), { title, description: "test", owner_type: "AI", owner_id: owner, firm_scope: "west-peek" });
   return c.id;
 }
 
 /** A card exactly as it was left on 1 Oct: blocked with the OLD wording and doors, the lever refusal in its note. */
-async function staleLeverCard(title: string): Promise<string> {
-  const id = await card(title);
+async function staleLeverCard(title: string, note = LEVER_NOTE, owner = "aie_parker"): Promise<string> {
+  const id = await card(title, owner);
   await t.db
     .prepare(
       `UPDATE work_card SET state = 'BLOCKED', block_reason = 'tried_and_could_not_finish', block_trying = ?2,
@@ -60,7 +67,7 @@ async function staleLeverCard(title: string): Promise<string> {
               description = COALESCE(description, '') || char(10) || ?5
         WHERE id = ?1`,
     )
-    .bind(id, title, OLD_ACTIONS, NOW.toISOString(), LEVER_NOTE)
+    .bind(id, title, OLD_ACTIONS, NOW.toISOString(), note)
     .run();
   return id;
 }
@@ -138,7 +145,7 @@ describe("the backfill re-reads a card the spend setting stopped, in the catalog
     expect(c.block_needed).toBe(fresh.needed);
     expect(JSON.parse(String(c.block_actions_json))).toEqual(fresh.actions);
     expect(c.block_lane).toBe("spend_lever");
-    expect(JSON.parse(String(c.block_context))).toEqual({ lever: "FREE_ONLY", seat_search: false });
+    expect(JSON.parse(String(c.block_context))).toEqual({ lever: "FREE_ONLY", seat_search: false, search_call: true });
     expect(c.state, "still stopped — resuming is the sweep's job, once the setting changes").toBe("BLOCKED");
     expect(String(c.description)).toMatch(/Re-read 1 Oct 2026/);
 
@@ -224,9 +231,9 @@ describe("a card the spend setting stopped resumes by itself — once per change
     expect(await releaseSpendSettingBlocks(env, NOW)).toEqual([]);
   });
 
-  it("the permission rule is the one the router uses: a paid setting, or a search-capable seat", () => {
-    expect(spendStatePermits({ lever: "FREE_ONLY", seatSearch: false })).toBe(false);
-    expect(spendStatePermits({ lever: "FREE_ONLY", seatSearch: true })).toBe(true);
+  it("the permission rule is the one the router uses: a paid setting, or — for a SEARCH call — a search-capable seat", () => {
+    expect(spendStatePermits({ lever: "FREE_ONLY", seatSearch: false }, true)).toBe(false);
+    expect(spendStatePermits({ lever: "FREE_ONLY", seatSearch: true }, true)).toBe(true);
     expect(spendStatePermits({ lever: "MODERATE", seatSearch: false })).toBe(true);
     expect(spendStatePermits({ lever: "OPEN", seatSearch: false })).toBe(true);
   });
@@ -252,7 +259,7 @@ describe("through the real sweep: stop → fix the setting → it continues, no 
     expect(blocked.block_lane).toBe("spend_lever");
     expect(blocked.block_lane_name).toBe("the spend setting");
     expect(String(blocked.block_stopped)).toMatch(/spend setting is on Free only/);
-    expect(JSON.parse(String(blocked.block_context))).toEqual({ lever: "FREE_ONLY", seat_search: false });
+    expect(JSON.parse(String(blocked.block_context))).toEqual({ lever: "FREE_ONLY", seat_search: false, search_call: true });
     expect(blockOf(blocked as never)!.actions.map((a) => a.key)).toEqual(["RETRY", "HAND_ON", "DROP"]);
     const before = calls;
 
@@ -277,7 +284,7 @@ describe("the bulk door", () => {
     const escalated = await staleLeverCard("bulk: sent to an engineer");
     await t.db.prepare("UPDATE work_card SET block_who = 'ENGINEER' WHERE id = ?1").bind(escalated).run();
 
-    const out = await retryAllStopped(env, "fu_sequoia_taylor");
+    const out = await retryAllStopped(env, MP);
     expect(out.ids).toContain(stale);
     expect(out.ids).not.toContain(question);
     expect(out.ids).not.toContain(escalated);
@@ -289,5 +296,102 @@ describe("the bulk door", () => {
   it("is a person's door: an employee identity is refused", async () => {
     const res = await handleRetryStoppedCards({ env, request: new Request("https://x/api/work-cards/retry-stopped", { method: "POST" }), identity: null, params: {} } as never);
     expect(res.status).toBe(403);
+  });
+});
+
+/**
+ * REVIEW OF #217 — three findings, each pinned.
+ */
+describe("the bulk door is scoped and authorized like the single door", () => {
+  it("a user scoped to another firm, or without the privacy label, retries nothing here", async () => {
+    const id = await staleLeverCard("scope: a card in west-peek", LEVER_NOTE, "aie_wyatt");
+    const out = await retryAllStopped(env, ANALYST_OTHER_FIRM);
+    expect(out.ids).not.toContain(id);
+    expect((await row(id)).state).toBe("BLOCKED");
+  });
+
+  it("a card's SECONDARY partner does not clear its block in bulk any more than one at a time (0241)", async () => {
+    const id = await staleLeverCard("scope: sequoia's card, scooter is secondary", LEVER_NOTE, "aie_wyatt");
+    await t.db.prepare("UPDATE work_card SET requested_by_email = 'sequoia@westpeek.ventures', secondary_partner_email = 'scooter@westpeek.ventures' WHERE id = ?1").bind(id).run();
+    const asSecondary = await retryAllStopped(env, SCOOTER);
+    expect(asSecondary.ids).not.toContain(id);
+    expect(asSecondary.skipped).toBeGreaterThan(0);
+    expect((await row(id)).state).toBe("BLOCKED");
+    const asPrimary = await retryAllStopped(env, MP);
+    expect(asPrimary.ids).toContain(id);
+  });
+
+  it("a user in the right firm WITHOUT access to a card's privacy label cannot retry that card in bulk", async () => {
+    const id = await staleLeverCard("scope: a restricted-label card", LEVER_NOTE, "aie_wyatt");
+    await t.db.prepare("UPDATE work_card SET privacy_label = 'BANKING_RESTRICTED' WHERE id = ?1").bind(id).run();
+    const analystSameFirm: FirmUserIdentity = { ...ANALYST_OTHER_FIRM, authorityScopes: [{ scopeKey: "firm_scope", scopeValue: "west-peek" }] };
+    const out = await retryAllStopped(env, analystSameFirm);
+    expect(out.ids, "the board would not show it to her, so the bulk door must not touch it").not.toContain(id);
+    expect((await row(id)).state).toBe("BLOCKED");
+    // Granted the label, she may.
+    const granted: FirmUserIdentity = { ...analystSameFirm, authorityScopes: [...analystSameFirm.authorityScopes, { scopeKey: "privacy_label", scopeValue: "BANKING_RESTRICTED" }] };
+    expect((await retryAllStopped(env, granted)).ids).toContain(id);
+  });
+
+  it("the route says how many were not hers to clear, instead of silently doing less", async () => {
+    const id = await staleLeverCard("scope: route message", LEVER_NOTE, "aie_wyatt");
+    await t.db.prepare("UPDATE work_card SET requested_by_email = 'sequoia@westpeek.ventures', secondary_partner_email = 'scooter@westpeek.ventures' WHERE id = ?1").bind(id).run();
+    const res = await handleRetryStoppedCards({ env, request: new Request("https://x/api/work-cards/retry-stopped", { method: "POST" }), identity: SCOOTER, params: {} } as never);
+    const body = (await res.json()) as { skipped: number; said: string };
+    expect(body.skipped).toBeGreaterThan(0);
+    expect(body.said).toMatch(/not yours to clear/);
+    await t.db.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
+  });
+});
+
+describe("a search-capable seat only releases a card whose refused call was a search call", () => {
+  it("a stop on some OTHER call is not released by a seat waking — only by the setting — and is not misjudged as already permitted", async () => {
+    await setLever("FREE_ONLY");
+    const other = await staleLeverCard("search-call: a non-search call", NON_SEARCH_LEVER_NOTE, "aie_wyatt");
+    await t.db.prepare(backfillSql()).run();
+    expect(JSON.parse(String((await row(other)).block_context)).search_call).toBe(false);
+
+    await recordHeartbeat(env, { seat: "codex", deviceId: "mac-test", hostname: "her-mac", capabilities: [SEAT_SEARCH_CAPABILITY] });
+    expect(await releaseSpendSettingBlocks(env, new Date()), "a seat that can only search cannot serve this call").not.toContain(other);
+    expect((await row(other)).state).toBe("BLOCKED");
+
+    // And the context that was recorded WITH a seat awake does not make the card look already-permitted, so the
+    // setting moving still releases it (the failure mode the review described).
+    await t.db.prepare("UPDATE work_card SET block_context = ?2 WHERE id = ?1").bind(other, JSON.stringify({ lever: "FREE_ONLY", seat_search: true, search_call: false })).run();
+    await setLever("MODERATE");
+    expect(await releaseSpendSettingBlocks(env, new Date())).toContain(other);
+  });
+
+  it("a SEARCH call is released by the seat, as before", async () => {
+    await setLever("FREE_ONLY");
+    const search = await staleLeverCard("search-call: a search call", LEVER_NOTE, "aie_wyatt");
+    await t.db.prepare(backfillSql()).run();
+    await recordHeartbeat(env, { seat: "codex", deviceId: "mac-test", hostname: "her-mac", capabilities: [SEAT_SEARCH_CAPABILITY] });
+    expect(await releaseSpendSettingBlocks(env, new Date())).toContain(search);
+  });
+
+  it("the permission rule: the seat clause needs a search call", () => {
+    expect(spendStatePermits({ lever: "FREE_ONLY", seatSearch: true }, false)).toBe(false);
+    expect(spendStatePermits({ lever: "FREE_ONLY", seatSearch: true }, true)).toBe(true);
+    expect(spendStatePermits({ lever: "MODERATE", seatSearch: false }, false)).toBe(true);
+  });
+});
+
+describe("a held card is not released", () => {
+  it("keeps its blocked state and emits nothing while it is held", async () => {
+    await setLever("FREE_ONLY");
+    const id = await staleLeverCard("held: a held card", LEVER_NOTE, "aie_wyatt");
+    await t.db.prepare(backfillSql()).run();
+    await t.db.prepare("UPDATE work_card SET held_at = ?2, held_by = 'fu_sequoia_taylor', held_reason = 'waiting for the lever' WHERE id = ?1").bind(id, NOW.toISOString()).run();
+    await setLever("MODERATE");
+    expect(await releaseSpendSettingBlocks(env, new Date())).not.toContain(id);
+    const c = await row(id);
+    expect(c.state, "its underlying state is unchanged while held").toBe("BLOCKED");
+    const ev = await t.db.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'work_card.auto_released' AND object_id = ?1").bind(id).first<{ n: number }>();
+    expect(ev!.n).toBe(0);
+
+    // Released from the hold, it is eligible again on the next tick.
+    await t.db.prepare("UPDATE work_card SET held_at = NULL, held_by = NULL, held_reason = NULL WHERE id = ?1").bind(id).run();
+    expect(await releaseSpendSettingBlocks(env, new Date())).toContain(id);
   });
 });

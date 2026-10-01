@@ -16,8 +16,8 @@
 --   2 · BACKFILL. Every card still BLOCKED whose engineer note records a spend-setting refusal is rewritten to the
 --       block #215 now writes for a new one: the spend-setting wording, the doors "try it again / give it to
 --       somebody else / drop it", and the marker (`block_lane = 'spend_lever'`) the release reads. The recorded
---       state is the one it stopped in — Free only, no search-capable seat — so the first tick after the setting
---       changes releases it. The wording is the catalogue's own (src/shared/work/blocks.ts); a test asserts the
+--       state is the one it stopped in — Free only, no search-capable seat, and whether the refused call was a search
+--       call — so the first tick after the setting changes releases it. The wording is the catalogue's own (src/shared/work/blocks.ts); a test asserts the
 --       two are identical so they cannot drift.
 --
 -- NOT DONE HERE: the lever itself. Moving production off Free only is the owner's act (governance.policy_change).
@@ -38,7 +38,11 @@ UPDATE work_card
        block_actions_json = '[{"key":"RETRY","label":"Try it again now","hint":"Puts the work straight back in the queue. Worth a press when whatever stopped it has since been fixed — a setting changed, an account topped up, the Mac switched back on."},{"key":"HAND_ON","label":"Give it to somebody else","hint":"Pick a different employee. They start it again from the beginning, with a note saying why it moved."},{"key":"DROP","label":"Drop it","hint":"Decide it is not worth doing. Kept on the record with your reason, and they stop asking."}]',
        block_lane         = 'spend_lever',
        block_lane_name    = 'the spend setting',
-       block_context      = '{"lever":"FREE_ONLY","seat_search":false}',
+       -- search_call: was the refused call a live-web SEARCH call? The refusal names the call's class ("this call is marked
+       -- 'search'"). Only a search call can be served by a search-capable seat, so only a search card is released when a
+       -- seat wakes up (review of #217).
+       block_context      = json_object('lever', 'FREE_ONLY', 'seat_search', json('false'),
+                                        'search_call', CASE WHEN description LIKE '%marked ''search''%' THEN json('true') ELSE json('false') END),
        next_action        = 'Held back by the spend setting (Free only). It resumes by itself when the setting changes, or you can try it again.',
        description        = substr(COALESCE(description, '') || char(10) || '• Re-read 1 Oct 2026: this stopped because the spend setting was on Free only, not because the employee could not do it.', 1, 16000),
        updated_at         = strftime('%Y-%m-%dT%H:%M:%fZ','now')
