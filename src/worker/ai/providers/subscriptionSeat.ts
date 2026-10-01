@@ -1,6 +1,6 @@
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import type { Env } from "../../env";
-import { attachmentRefusal, putSeatAttachments, type SeatAttachmentInput, type SeatAttachmentRef } from "../seatAttachments";
+import { attachmentRefusal, deleteKeys, putSeatAttachments, type SeatAttachmentInput, type SeatAttachmentRef } from "../seatAttachments";
 import {
   CLAIM_POLL_MS,
   CLAIM_WAIT_MS,
@@ -129,7 +129,8 @@ export function createSubscriptionSeatAdapter(opts: SubscriptionSeatAdapterOptio
           throw new Error(`provider_cannot_read_documents:${seat}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
-      await parkRun(env, {
+      try {
+        await parkRun(env, {
         id: queueId,
         attachments,
         seat,
@@ -143,7 +144,12 @@ export function createSubscriptionSeatAdapter(opts: SubscriptionSeatAdapterOptio
         firmScope: opts.firmScope ?? "west-peek",
         maxSeconds: Math.round(waitMs / 1000),
         needsSearch,
-      });
+        });
+      } catch (err) {
+        // The files were stored before the row was written; with no row naming them nothing else would ever delete them.
+        if (attachments.length > 0 && env.WP_OS_DOCUMENTS) await deleteKeys(env.WP_OS_DOCUMENTS, attachments.map((a) => a.key));
+        throw err;
+      }
 
       // 3. WAIT, BOUNDED. The deadline is absolute rather than a poll count, so a slow database
       //    read cannot quietly stretch the wait a partner is paying for.

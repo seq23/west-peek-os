@@ -36,17 +36,21 @@ export function readProof(home = homedir()) {
 }
 
 /**
- * Fold one probe run into the proof on disk. PROVEN sets true, FAILED sets false, and UNTESTED changes nothing —
- * a plan that was out of usage when the probe ran says nothing about whether the seat can read a file.
+ * Fold one probe run into the proof on disk. EVERY ENTRY CARRIES ITS OWN TIME: `{ ok, at }` per seat and kind. PROVEN
+ * sets `{ ok: true, at: now }`, FAILED sets `{ ok: false, at: now }`, and UNTESTED leaves the earlier entry exactly as
+ * it was — including its age — because a plan that was out of usage when the probe ran says nothing about whether the
+ * seat can read a file, and re-probing one combination must never make another look freshly verified.
  * `rows` are the probe's `{ seat, kind: "image" | "pdf", status }`.
  */
 export function mergeProof(previous, rows, nowMs = Date.now()) {
-  const seats = { ...(previous?.seats ?? {}) };
+  const at = new Date(nowMs).toISOString();
+  const seats = {};
+  for (const [seat, kinds] of Object.entries(previous?.seats ?? {})) seats[seat] = { ...kinds };
   for (const r of rows) {
     if (r.status === "UNTESTED") continue;
-    seats[r.seat] = { ...(seats[r.seat] ?? {}), [r.kind]: r.status === "PROVEN" };
+    seats[r.seat] = { ...(seats[r.seat] ?? {}), [r.kind]: { ok: r.status === "PROVEN", at } };
   }
-  return { at: new Date(nowMs).toISOString(), seats };
+  return { at, seats };
 }
 
 export function writeProof(proof, home = homedir()) {
@@ -55,20 +59,27 @@ export function writeProof(proof, home = homedir()) {
   writeFileSync(p, `${JSON.stringify(proof, null, 2)}\n`, { mode: 0o600 });
 }
 
+/** Is this one entry a current proof: true, stamped, under the age limit and not from the future? */
+function entryProves(entry, nowMs) {
+  if (!entry || entry.ok !== true) return false;
+  const at = Date.parse(String(entry.at ?? ""));
+  return Number.isFinite(at) && nowMs - at <= PROOF_MAX_AGE_MS && at <= nowMs + 60_000;
+}
+
 /**
- * The capability tokens a proof earns, e.g. ["read_image:codex"]. An absent, stale or unreadable proof earns none:
- * the safe direction is a file that goes to a lane that can see rather than to a seat that cannot.
+ * The capability tokens a proof earns, e.g. ["read_image:codex"]. Each seat-and-kind is judged on ITS OWN age: one
+ * verified long ago expires on its own even if another was verified yesterday. An absent, stale, unstamped or
+ * unreadable entry earns nothing: the safe direction is a file that goes to a lane that can see rather than to a seat
+ * that cannot.
  */
 export function capabilitiesFromProof(proof, nowMs = Date.now()) {
   if (!proof?.seats || typeof proof.seats !== "object") return [];
-  const at = Date.parse(String(proof.at ?? ""));
-  if (!Number.isFinite(at) || nowMs - at > PROOF_MAX_AGE_MS || at > nowMs + 60_000) return [];
   const out = [];
   for (const seat of ["claude_code", "codex"]) {
     const s = proof.seats[seat];
     if (!s) continue;
-    if (s.image === true) out.push(`read_image:${seat}`);
-    if (s.pdf === true) out.push(`read_document:${seat}`);
+    if (entryProves(s.image, nowMs)) out.push(`read_image:${seat}`);
+    if (entryProves(s.pdf, nowMs)) out.push(`read_document:${seat}`);
   }
   return out;
 }

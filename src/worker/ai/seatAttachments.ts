@@ -96,15 +96,31 @@ export async function putSeatAttachments(env: Env, runId: string, files: readonl
   const bucket = env.WP_OS_DOCUMENTS;
   if (!bucket) throw new Error("seat_attachments_unavailable:no document store is bound, so a file cannot be handed to a seat");
   const refs: SeatAttachmentRef[] = [];
-  for (let n = 0; n < files.length; n++) {
-    const f = files[n]!;
-    const bytes = decode(f.dataBase64);
-    const label = safeLabel(f.label, n, f.mediaType);
-    const key = `seat-attachments/${runId}/${label}`;
-    await bucket.put(key, bytes, { httpMetadata: { contentType: f.mediaType } });
-    refs.push({ n, kind: f.kind, media_type: f.mediaType, label, key, bytes: bytes.byteLength });
+  try {
+    for (let n = 0; n < files.length; n++) {
+      const f = files[n]!;
+      const bytes = decode(f.dataBase64);
+      const label = safeLabel(f.label, n, f.mediaType);
+      const key = `seat-attachments/${runId}/${label}`;
+      await bucket.put(key, bytes, { httpMetadata: { contentType: f.mediaType } });
+      refs.push({ n, kind: f.kind, media_type: f.mediaType, label, key, bytes: bytes.byteLength });
+    }
+  } catch (err) {
+    // No queue row will ever name these, so neither the end-of-run delete nor the sweep could find them.
+    await deleteKeys(bucket, refs.map((r) => r.key));
+    throw err;
   }
   return refs;
+}
+
+/** Delete objects, swallowing a failure: this runs while another error is already being raised. */
+export async function deleteKeys(bucket: { delete: (keys: string[]) => Promise<unknown> }, keys: string[]): Promise<void> {
+  if (keys.length === 0) return;
+  try {
+    await bucket.delete(keys);
+  } catch {
+    /* nothing more can be done from here */
+  }
 }
 
 export function readRefs(attachmentsJson: string | null | undefined): SeatAttachmentRef[] {

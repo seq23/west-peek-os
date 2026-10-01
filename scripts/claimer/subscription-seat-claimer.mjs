@@ -359,7 +359,6 @@ async function downloadAttachments(run) {
 
 async function cycle(seats) {
   const capabilities = currentCapabilities();
-  const canReadAttachments = capabilities.some((c) => c.startsWith("read_image:") || c.startsWith("read_document:"));
   await call("/api/subscription-seats/heartbeat", {
     device_id: DEVICE_ID,
     hostname: hostname(),
@@ -372,7 +371,6 @@ async function cycle(seats) {
     device_id: DEVICE_ID,
     seats,
     can_search: capabilities.includes("web_search"),
-    ...(canReadAttachments ? { can_read_attachments: true } : {}),
   });
   const run = claimed.body?.run;
   if (!run) return { worked: false };

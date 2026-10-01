@@ -78,13 +78,13 @@ const DOC_CALL = (documents = [DECK], images?: Array<typeof PICTURE>): RunAiInpu
   routing: { category: "OPERATIONS" as const, taskClass: "employee-work" },
 });
 
-function claimerThatReads(seats: Seat[], opts: { canRead?: boolean; answer?: string } = {}): { stop: () => Promise<void>; handled: SeatRunRow[]; seenBytes: string[] } {
+function claimerThatReads(seats: Seat[], opts: { answer?: string } = {}): { stop: () => Promise<void>; handled: SeatRunRow[]; seenBytes: string[] } {
   const handled: SeatRunRow[] = [];
   const seenBytes: string[] = [];
   let live = true;
   const loop = (async () => {
     while (live) {
-      const run = await claimRun(env(), "mac-test", seats, new Date(), ["ANSWER"], false, opts.canRead ?? true);
+      const run = await claimRun(env(), "mac-test", seats, new Date(), ["ANSWER"], false);
       if (!run) {
         await new Promise((r) => setTimeout(r, 20));
         continue;
@@ -161,23 +161,37 @@ describe("the pure rules", () => {
 describe("the Mac side: a seat declares only what its own probe proved", () => {
   const now = Date.parse("2026-10-02T12:00:00Z");
 
+  const E = (ok: boolean, at = "2026-10-02T11:00:00Z") => ({ ok, at });
+
   it("a fresh proof becomes capabilities, per seat and kind", () => {
-    const proof = { at: "2026-10-02T11:00:00Z", seats: { codex: { image: true, pdf: false }, claude_code: { image: true, pdf: true } } };
+    const proof = { at: "2026-10-02T11:00:00Z", seats: { codex: { image: E(true), pdf: E(false) }, claude_code: { image: E(true), pdf: E(true) } } };
     expect(capabilitiesFromProof(proof, now).sort()).toEqual(["read_document:claude_code", "read_image:claude_code", "read_image:codex"]);
   });
 
-  it("no proof, an unreadable proof, a stale proof and a proof from the future declare nothing", () => {
+  it("no proof, an unreadable proof, a stale entry, an unstamped entry and an entry from the future declare nothing", () => {
     expect(capabilitiesFromProof(null, now)).toEqual([]);
-    expect(capabilitiesFromProof({ seats: { codex: { image: true } } } as never, now)).toEqual([]);
-    expect(capabilitiesFromProof({ at: new Date(now - PROOF_MAX_AGE_MS - 1000).toISOString(), seats: { codex: { image: true } } }, now)).toEqual([]);
-    expect(capabilitiesFromProof({ at: new Date(now + 3_600_000).toISOString(), seats: { codex: { image: true } } }, now)).toEqual([]);
+    expect(capabilitiesFromProof({ seats: { codex: { image: true } } } as never, now), "the old boolean shape earns nothing").toEqual([]);
+    expect(capabilitiesFromProof({ at: "x", seats: { codex: { image: E(true, new Date(now - PROOF_MAX_AGE_MS - 1000).toISOString()) } } }, now)).toEqual([]);
+    expect(capabilitiesFromProof({ at: "x", seats: { codex: { image: { ok: true } } } } as never, now)).toEqual([]);
+    expect(capabilitiesFromProof({ at: "x", seats: { codex: { image: E(true, new Date(now + 3_600_000).toISOString()) } } }, now)).toEqual([]);
+  });
+
+  it("each seat-and-kind ages on its OWN clock: re-probing one never freshens another", () => {
+    const old = new Date(now - PROOF_MAX_AGE_MS + 3_600_000).toISOString(); // 29 days and 23 hours old
+    const first = mergeProof(null, [{ seat: "codex", kind: "pdf", status: "PROVEN" }], now - PROOF_MAX_AGE_MS + 3_600_000);
+    const second = mergeProof(first, [{ seat: "codex", kind: "image", status: "PROVEN" }, { seat: "codex", kind: "pdf", status: "UNTESTED" }], now);
+    expect(second.seats.codex!.pdf!.at, "the untested entry keeps its own age").toBe(old);
+    expect(second.seats.codex!.image!.at).toBe(new Date(now).toISOString());
+    const twoHoursLater = now + 2 * 3_600_000;
+    expect(capabilitiesFromProof(second, twoHoursLater), "the pdf proof has expired by itself; the image proof has not").toEqual(["read_image:codex"]);
   });
 
   it("a probe run is folded in: PROVEN sets, FAILED withdraws, UNTESTED changes nothing", () => {
     const first = mergeProof(null, [{ seat: "codex", kind: "image", status: "PROVEN" }, { seat: "codex", kind: "pdf", status: "PROVEN" }], now);
-    expect(first.seats.codex).toEqual({ image: true, pdf: true });
-    const second = mergeProof(first, [{ seat: "codex", kind: "image", status: "UNTESTED" }, { seat: "codex", kind: "pdf", status: "FAILED" }], now);
-    expect(second.seats.codex, "a plan out of usage says nothing; a failed re-read withdraws").toEqual({ image: true, pdf: false });
+    expect(first.seats.codex).toEqual({ image: E(true, new Date(now).toISOString()), pdf: E(true, new Date(now).toISOString()) });
+    const second = mergeProof(first, [{ seat: "codex", kind: "image", status: "UNTESTED" }, { seat: "codex", kind: "pdf", status: "FAILED" }], now + 1000);
+    expect(second.seats.codex!.image!.ok, "a plan out of usage says nothing").toBe(true);
+    expect(second.seats.codex!.pdf!.ok, "a failed re-read withdraws").toBe(false);
   });
 
   it("the proof file round-trips on disk and is private", () => {
@@ -300,16 +314,78 @@ describe("the queue and the download route", () => {
     return id;
   }
 
-  it("a claimer that never said it can read files is never handed the run", async () => {
+  it("a device that never declared the capability is never handed the run — judged from ITS stored capabilities, not a flag it sends", async () => {
     await parkWithFile();
-    expect(await claimRun(env(), "mac-test", ["codex"], new Date(), ["ANSWER"], false, false)).toBeNull();
-    expect((await claimRun(env(), "mac-test", ["codex"], new Date(), ["ANSWER"], false, true))?.attachments_json).toBeTruthy();
+    await recordHeartbeat(env(), { seat: "codex", deviceId: "plain-mac", capabilities: ["web_search"] });
+    expect(await claimRun(env(), "plain-mac", ["codex"], new Date(), ["ANSWER"], true)).toBeNull();
+    expect((await claimRun(env(), "mac-test", ["codex"], new Date(), ["ANSWER"], false))?.attachments_json).toBeTruthy();
+  });
+
+  it("proof for pictures does not let a device claim a PDF run, and another seat's proof does not count", async () => {
+    await parkWithFile(); // a document run on codex
+    await recordHeartbeat(env(), { seat: "codex", deviceId: "image-mac", capabilities: [attachmentCapability("codex", "image")] });
+    await recordHeartbeat(env(), { seat: "codex", deviceId: "other-seat-mac", capabilities: [attachmentCapability("claude_code", "document")] });
+    expect(await claimRun(env(), "image-mac", ["codex"], new Date(), ["ANSWER"])).toBeNull();
+    expect(await claimRun(env(), "other-seat-mac", ["codex"], new Date(), ["ANSWER"])).toBeNull();
+    expect((await rows())[0]!.status, "the run is still waiting for a capable device").toBe("QUEUED");
+    expect((await claimRun(env(), "mac-test", ["codex"], new Date(), ["ANSWER"]))?.claimed_by).toBe("mac-test");
+  });
+
+  it("a run carrying a picture AND a PDF needs proof for BOTH — proof for one is not enough", async () => {
+    await awake("codex", [attachmentCapability("codex", "document"), attachmentCapability("codex", "image")]);
+    const { putSeatAttachments } = await import("../src/worker/ai/seatAttachments");
+    const { parkRun } = await import("../src/worker/ai/subscriptionSeats");
+    const id = `ccr_${crypto.randomUUID()}`;
+    const attachments = await putSeatAttachments(env(), id, [
+      { kind: "document", mediaType: DECK.mediaType, dataBase64: DECK.dataBase64, label: "d.pdf" },
+      { kind: "image", mediaType: PICTURE.mediaType, dataBase64: PICTURE.dataBase64, label: "p.png" },
+    ]);
+    await parkRun(env(), { id, attachments, seat: "codex", purpose: "p", prompt: "x", modelAccess: "PRIVATE_MODEL_ONLY" });
+    await recordHeartbeat(env(), { seat: "codex", deviceId: "doc-only-mac", capabilities: [attachmentCapability("codex", "document")] });
+    expect(await claimRun(env(), "doc-only-mac", ["codex"], new Date(), ["ANSWER"])).toBeNull();
+    expect((await claimRun(env(), "mac-test", ["codex"], new Date(), ["ANSWER"]))?.id).toBe(id);
+  });
+
+  it("a run the device cannot take does not block the ordinary run behind it", async () => {
+    await parkWithFile();
+    const { parkRun } = await import("../src/worker/ai/subscriptionSeats");
+    const plain = await parkRun(env(), { seat: "codex", purpose: "p", prompt: "plain", modelAccess: "PRIVATE_MODEL_ONLY" });
+    await recordHeartbeat(env(), { seat: "codex", deviceId: "plain-mac", capabilities: [] });
+    expect((await claimRun(env(), "plain-mac", ["codex"], new Date(), ["ANSWER"]))?.id).toBe(plain);
+  });
+
+  it("files already stored are deleted when a later upload fails, and when the row cannot be written", async () => {
+    const { putSeatAttachments } = await import("../src/worker/ai/seatAttachments");
+    let puts = 0;
+    const flaky = { ...fakeBucket(), put: async (k: string, b: Uint8Array) => { puts += 1; if (puts === 2) throw new Error("R2 down"); bucket.store.set(k, b); return { key: k }; } };
+    const e = makeTestEnv(t.db, { WP_OS_DOCUMENTS: Object.assign(flaky, { delete: bucket.delete, get: bucket.get }) as never } as Partial<Env>);
+    await expect(
+      putSeatAttachments(e, "ccr_x", [
+        { kind: "document", mediaType: DECK.mediaType, dataBase64: DECK.dataBase64, label: "a.pdf" },
+        { kind: "document", mediaType: DECK.mediaType, dataBase64: DECK.dataBase64, label: "b.pdf" },
+      ]),
+    ).rejects.toThrow(/R2 down/);
+    expect(bucket.store.size, "the first file did not stay behind").toBe(0);
+
+    // The row cannot be written (the run id collides with an existing row): the stored files go too.
+    await awake("codex", [attachmentCapability("codex", "document")]);
+    const { createSubscriptionSeatAdapter } = await import("../src/worker/ai/providers/subscriptionSeat");
+    const realUuid = crypto.randomUUID;
+    (crypto as { randomUUID: () => string }).randomUUID = () => "fixed-id";
+    try {
+      const { parkRun } = await import("../src/worker/ai/subscriptionSeats");
+      await parkRun(env(), { id: "ccr_fixed-id", seat: "codex", purpose: "p", prompt: "x", modelAccess: "PRIVATE_MODEL_ONLY" });
+      await expect(createSubscriptionSeatAdapter({ env: env(), seat: "codex", modelAccess: "PRIVATE_MODEL_ONLY", waitMs: 50, pollMs: 5 }).complete({ purpose: "p", inputs: ["x"], model: null, documents: [DECK] } as never)).rejects.toThrow();
+    } finally {
+      (crypto as { randomUUID: () => string }).randomUUID = realUuid;
+    }
+    expect(bucket.store.size, "no orphan is left in R2 when parking fails").toBe(0);
   });
 
   it("only the HOLDING device is given the bytes; another device, an unclaimed run and a missing file number get 404", async () => {
     const id = await parkWithFile();
     expect((await download(id, "mac-test", 0)).status, "not claimed yet").toBe(404);
-    await claimRun(env(), "mac-test", ["codex"], new Date(), ["ANSWER"], false, true);
+    await claimRun(env(), "mac-test", ["codex"], new Date(), ["ANSWER"], false);
     expect((await download(id, "other-mac", 0)).status, "not the holder").toBe(404);
     expect((await download(id, "mac-test", 3)).status, "no such file").toBe(404);
     const ok = await download(id, "mac-test", 0);

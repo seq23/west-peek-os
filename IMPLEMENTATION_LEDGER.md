@@ -7099,3 +7099,21 @@ and 0249 against production; the "Waiting for reset" line in a browser (no Playw
 real wording of a Codex usage notice's reset time beyond the fixtures.
 **NOT BUILT:** a UI control for any of it (none is needed — the hold is automatic and the card says so); hold for
 non-Porter seat calls (those fall to the paid lanes, which is what the owner's ladder already says).
+
+### Review of PR #218 — three findings, all confirmed and fixed
+
+1. **P1 — a failed multi-file upload left earlier files in R2.** No queue row names objects stored before the row is
+   written, so neither the end-of-run delete nor the sweep could find them. `putSeatAttachments` now deletes what it
+   already stored before rethrowing, and the adapter deletes the stored files if `parkRun` itself fails.
+2. **P2 — one aggregate "can read files" flag.** `claimRun` accepted a claim-request boolean and dropped the file
+   filter for every seat and kind, so a device that proved only pictures could claim (and fail) a PDF, or a run
+   routed to another device's capability. The flag is gone: each candidate run's files are judged against the
+   **claiming device's own stored capabilities for the run's own seat**, and a run needs proof for EVERY kind it
+   carries. A run the device cannot take is skipped, not blocking the ordinary run behind it.
+3. **P2 — every probe run refreshed one global timestamp.** The proof file now stamps each seat-and-kind
+   `{ ok, at }` separately; UNTESTED leaves an entry (and its age) untouched; each entry expires 30 days after ITS
+   own last verification. The old boolean shape earns nothing.
+
+**Negative proof, run:** every-kind → some-kind (1 red — found uncaught first, test added), no cleanup on a failed
+upload (1), no cleanup when parking fails (1), global freshness (2) — each restored. `validate:seat-search-proof`
+now holds the per-device check (23 fixtures).

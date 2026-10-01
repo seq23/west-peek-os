@@ -141,11 +141,6 @@ const claimSchema = z.object({
    * before search is never handed a search row — it would answer from memory.
    */
   can_search: z.boolean().optional(),
-  /**
-   * 0249. This claimer may be handed a run that carries files. Absent means no. It is true only when the claimer's
-   * own probe PROVED a seat can read a file on this machine; which seat and kind is in the heartbeat's capabilities.
-   */
-  can_read_attachments: z.boolean().optional(),
 });
 
 /**
@@ -167,7 +162,7 @@ export async function handleSubscriptionSeatClaim(ctx: RouteContext): Promise<Re
   const seats = parsed.data.seats as Seat[];
   for (const seat of seats) await recordHeartbeat(ctx.env, { seat, deviceId: parsed.data.device_id });
   const kinds = (parsed.data.kinds ?? ["ANSWER"]) as RunKind[];
-  const run = await claimRun(ctx.env, parsed.data.device_id, seats, new Date(), kinds, parsed.data.can_search === true, parsed.data.can_read_attachments === true);
+  const run = await claimRun(ctx.env, parsed.data.device_id, seats, new Date(), kinds, parsed.data.can_search === true);
   if (!run) return json({ run: null, detail: "nothing parked" });
 
   let job: unknown = null;

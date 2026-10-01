@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { capabilitiesAllow, clearEndedAttachments, clearRunAttachments, type AttachmentKind, type SeatAttachmentRef } from "./seatAttachments";
+import { capabilitiesAllow, clearEndedAttachments, clearRunAttachments, readRefs, type AttachmentKind, type SeatAttachmentRef } from "./seatAttachments";
 
 /**
  * THE TWO SUBSCRIPTION SEATS — availability, the claimable queue, and the reaper that empties it.
@@ -622,11 +622,6 @@ export async function claimRun(
    * answer would read as research. (The proof rule in `reportRun` is the second wall, not the first.)
    */
   canSearch = false,
-  /**
-   * 0249. Whether this claimer can be handed a run that carries files. FALSE unless it said so — and it says so
-   * only for what its own probe proved — so an older claimer is never handed a deck it would answer without.
-   */
-  canReadAttachments = false,
 ): Promise<SeatRunRow | null> {
   /*
    * ONLY THE SEATS THIS MACHINE CAN ACTUALLY SERVE. A laptop with Claude Code installed and Codex
@@ -638,11 +633,27 @@ export async function claimRun(
   const placeholders = seats.map((_, i) => `?${i + 1}`).join(", ");
   const kindPlaceholders = kinds.map((_, i) => `?${seats.length + i + 1}`).join(", ");
   for (let attempt = 0; attempt < 5; attempt++) {
-    const next = await env.WP_OS_DB.prepare(
-      `SELECT id FROM subscription_seat_run WHERE status = 'QUEUED' AND seat IN (${placeholders}) AND run_kind IN (${kindPlaceholders})${canSearch ? "" : " AND needs_search = 0"}${canReadAttachments ? "" : " AND attachments_json IS NULL"} ORDER BY created_at ASC LIMIT 1`,
-    )
-      .bind(...seats, ...kinds)
-      .first<{ id: string }>();
+    /*
+     * A RUN THAT CARRIES FILES (0249) IS CLAIMABLE ONLY BY THE DEVICE THAT PROVED IT CAN READ EVERY KIND IN IT, ON THAT
+     * SEAT. Judged per candidate from the claiming device's own stored capabilities for the run's own seat — never from
+     * a flag in the claim request, and never as one aggregate yes/no: a device whose proof covers pictures must not
+     * claim (and fail) a PDF, nor a run routed to another device's capability.
+     */
+    const candidates =
+      (
+        await env.WP_OS_DB.prepare(
+          `SELECT id, seat, attachments_json FROM subscription_seat_run WHERE status = 'QUEUED' AND seat IN (${placeholders}) AND run_kind IN (${kindPlaceholders})${canSearch ? "" : " AND needs_search = 0"} ORDER BY created_at ASC LIMIT 25`,
+        )
+          .bind(...seats, ...kinds)
+          .all<{ id: string; seat: string; attachments_json: string | null }>()
+      ).results ?? [];
+    let next: { id: string } | null = null;
+    for (const c of candidates) {
+      if (!c.attachments_json || (await deviceMayReadRunFiles(env, deviceId, c.seat, c.attachments_json))) {
+        next = c;
+        break;
+      }
+    }
     if (!next) return null;
     const res = await env.WP_OS_DB.prepare(
       `UPDATE subscription_seat_run
@@ -658,6 +669,16 @@ export async function claimRun(
     // Somebody else took it between the read and the write. Try the next one.
   }
   return null;
+}
+
+/** Did THIS device, for THIS seat, declare it can read every kind of file the run carries? Unreadable means no. */
+async function deviceMayReadRunFiles(env: Env, deviceId: string, seat: string, attachmentsJson: string): Promise<boolean> {
+  const refs = readRefs(attachmentsJson);
+  if (refs.length === 0) return true;
+  const row = await env.WP_OS_DB.prepare("SELECT capabilities_json FROM subscription_seat_device WHERE seat = ?1 AND device_id = ?2")
+    .bind(seat, deviceId)
+    .first<{ capabilities_json: string | null }>();
+  return refs.every((r) => capabilitiesAllow(row?.capabilities_json, seat, r.kind));
 }
 
 /**

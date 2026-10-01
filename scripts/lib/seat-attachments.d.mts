@@ -2,7 +2,7 @@ export declare const PROOF_MAX_AGE_MS: number;
 export declare function proofPath(home?: string): string;
 export interface AttachmentProof {
   at: string;
-  seats: Record<string, { image?: boolean; pdf?: boolean }>;
+  seats: Record<string, { image?: { ok: boolean; at: string }; pdf?: { ok: boolean; at: string } }>;
 }
 export declare function readProof(home?: string): AttachmentProof | null;
 export declare function mergeProof(previous: AttachmentProof | null | undefined, rows: Array<{ seat: string; kind: "image" | "pdf"; status: string }>, nowMs?: number): AttachmentProof;
