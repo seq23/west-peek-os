@@ -2,7 +2,7 @@ import type { Env } from "../env";
 import { appendEvent } from "../events";
 import type { Actor } from "./authorize";
 import { runAi } from "../ai/runAi";
-import { SEARCH_MODEL } from "./liveSearch";
+import { SEARCH_MODEL, servedBySearchLane } from "./liveSearch";
 import { blockCard } from "./blocks";
 import { urlIsLive } from "../effects/urlLiveness";
 import { deliver, recentFeedbackFor } from "./deliverables";
@@ -118,7 +118,7 @@ const defaultSearch: BlogModelCall = async (env, actor, prompt) => {
     routing: { category: "INTELLIGENCE" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) return { ok: false, text: "", detail: run.failure_reason ?? `run ${run.status}` };
-  if (run.model !== SEARCH_MODEL) return { ok: false, text: "", detail: `search was routed to ${run.model ?? "an unknown model"}, which cannot search the web` };
+  if (!servedBySearchLane(run.model)) return { ok: false, text: "", detail: `search was routed to ${run.model ?? "an unknown model"}, which cannot search the web` };
   return { ok: true, text: run.output_text, detail: "ok" };
 };
 

@@ -263,6 +263,15 @@ jobs:
       - name: A stopped card says why, and she can fix it from the card
         run: npm run validate:stopped-cards
 
+      # A SEAT MAY SEARCH THE LIVE WEB, AND A SEARCH IS ONLY BELIEVED WITH PROOF (1 Oct 2026). Parker's
+      # November Room stopped because a search call was never offered to a seat; the fix lets one serve it,
+      # and an answer from a model that did not search looks exactly like research. This fails the build
+      # if the Worker stops requiring counted search events, if a claimer that never declared the
+      # capability can be handed a search row, if a call site goes back to comparing the model's name, or
+      # if the claimer stops counting.
+      - name: A seat's web search is believed only with proof it searched
+        run: npm run validate:seat-search-proof
+
       # BOTH PARTNERS' MORNING BRIEFS, 18 Sep 2026. A 60s provider deadline landed on a call this
       # repo says takes ~3 min, so every frontier attempt aborted; the router failed over to Workers
       # AI, whose adapter sent no max_tokens, so the platform applied its own default of 256; every

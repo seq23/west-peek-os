@@ -10,8 +10,10 @@ export interface RunResult {
   err: string;
 }
 export interface FallbackResult extends RunResult {
-  servedBy: "claude" | "codex";
+  servedBy: "claude" | "codex" | "none";
   handedOver: boolean;
+  /** True when Claude Code and Codex both reported a spent plan: nobody can run the phase until a reset. */
+  bothSpent?: boolean;
 }
 export declare function runWithCodexFallback(deps: {
   runClaude: () => Promise<RunResult>;
@@ -23,4 +25,6 @@ export declare function runWithCodexFallback(deps: {
   supports: (flags: string[]) => Promise<string | null>;
   addDirs?: string[];
   onLine?: (line: string) => void;
+  /** Returns the notice's words when the CODEX run reports a spent plan, or null. Optional. */
+  codexLimited?: (r: RunResult) => string | null;
 }): Promise<FallbackResult>;

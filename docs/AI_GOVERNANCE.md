@@ -109,6 +109,16 @@ Claude Code seat (Max plan)  →  Codex seat (ChatGPT Plus)  →  FREE lanes  �
   `claude -p` per phase. When Claude Code reports its plan is out of usage, that phase is run again
   on Codex (ChatGPT Plus seat) in the same worktree with the same prompt, and the job log says so.
   Any other Claude failure stays the phase's failure. See `scripts/lib/codex-seat.mjs`.
+- **A seat may run a live web search, and a search is believed only with proof (0246, 1 Oct 2026).** A
+  call that has to reach the live web (`requiresSearch`: Parker's sponsor research, blog help, the
+  Productions jobs, venue and market search) used to be offered to no seat, so at `FREE_ONLY` the only lane
+  that could search — Perplexity, paid — was not allowed and the work stopped. It is now offered to a seat
+  that is awake, not out of usage, AND whose claimer declared `web_search`. The seat runs in search mode
+  (`codex exec --json -c web_search=live`, or `claude -p --allowedTools WebSearch,WebFetch`) and reports the
+  searches it COUNTED in the CLI's own event stream. The Worker records the answer only with at least one
+  counted search; an answer with none is a failure and the chain moves to the paid search lane. A seat that
+  answers from memory is never accepted as research. `validate:seat-search-proof` holds that shape.
+  Runbook, and the probes that settle what the cloud cannot: `docs/SEAT_SEARCH_AND_PROBES.md`.
 - **Setting the default is a human act.** Moving production to `FREE_ONLY` is `governance.policy_change`
   (an approval card); no migration does it.
 

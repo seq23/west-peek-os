@@ -51,7 +51,7 @@ import {
   recordLaneOutage,
   type LaneHealthRow,
 } from "./laneHealth";
-import { CLAIM_WAIT_MS, allSeatAvailability, isSeat } from "./subscriptionSeats";
+import { CLAIM_WAIT_MS, SEARCH_CLAIM_WAIT_MS, SEAT_REGISTRY, allSeatAvailability, isSeat } from "./subscriptionSeats";
 import { orderByVendorFamily } from "../../shared/ai/vendorFamily";
 import { createSubscriptionSeatAdapter } from "./providers/subscriptionSeat";
 
@@ -1394,6 +1394,19 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
 
   // ── FRONTIER: external path ──
 
+  /*
+   * A SEARCH CALL AND THE SEATS THAT CAN SERVE IT (0246, 1 Oct 2026) — decided BEFORE the provider list is
+   * built, because search call sites pin `providerKey: "openrouter"`, and a pin makes that one provider
+   * the whole candidate list: a seat could never be considered, whatever its claimer could do.
+   *
+   * A seat counts only when it is awake, not out of usage, AND its claimer declared "web_search". A
+   * claimer that did not would answer from memory, which is the failure this exists to prevent; the proof
+   * rule in `reportRun` (no counted search events, no answer) is the second wall behind that one.
+   */
+  const requiresSearch = input.budgetContext?.requiresSearch === true;
+  const searchSeatAvailability = requiresSearch ? await allSeatAvailability(env, now) : [];
+  const searchSeatKeys = new Set(searchSeatAvailability.filter((a) => a.available && a.canSearch === true).map((a) => a.seat as string));
+
   // 4. Provider availability (kill switch / disabled).
   const pinnedKey = input.budgetContext?.providerKey;
   let candidates: ProviderRow[];
@@ -1401,13 +1414,36 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     const pinned = await env.WP_OS_DB.prepare("SELECT * FROM provider_registry WHERE provider_key = ?1")
       .bind(pinnedKey)
       .first<ProviderRow>();
-    if (!pinned || pinned.enabled !== 1 || laneIsStoodDown(pinned, now)) {
+    /*
+     * A SEARCH CALL'S PIN MAY FAIL WITHOUT STOPPING THE CALL (review of #216). Every search call site pins
+     * OpenRouter, so a disabled, kill-switched or stood-down OpenRouter used to block the call before a
+     * healthy search-capable seat was ever considered — which made the free search lane depend on the paid
+     * one being switched on. When a seat can search, the pin's failure only removes the pin from the
+     * candidates; the call is blocked only when there is neither a pin nor a seat.
+     */
+    const seatCanCarryIt = requiresSearch && searchSeatKeys.size > 0;
+    const pinUnusable = !pinned || pinned.enabled !== 1 || laneIsStoodDown(pinned, now);
+    if (pinUnusable && !seatCanCarryIt) {
       return { run: await blocked("PROVIDER_DISABLED", `provider_disabled:${pinnedKey}`) };
     }
-    if (pinned.kill_switched === 1) {
+    if (!pinUnusable && pinned!.kill_switched === 1 && !seatCanCarryIt) {
       return { run: await blocked("KILL_SWITCHED", `provider_kill_switched:${pinnedKey}`) };
     }
-    candidates = [pinned];
+    candidates = !pinUnusable && pinned!.kill_switched !== 1 ? [pinned!] : [];
+    if (requiresSearch && searchSeatKeys.size > 0) {
+      // The pin names the paid search lane; the seats that can search stand beside it, so they are
+      // candidates for the lead without the pin ever being widened for any other call.
+      const seatRows = await env.WP_OS_DB.prepare(
+        `SELECT * FROM provider_registry WHERE claimable = 1 AND enabled = 1 AND kill_switched = 0 AND ${LANE_NOT_STOOD_DOWN_SQL} AND provider_key IN (${[...searchSeatKeys].map((_, i) => `?${i + 1}`).join(", ")})`,
+      )
+        .bind(...searchSeatKeys)
+        .all<ProviderRow>();
+      candidates = [...candidates, ...(seatRows.results ?? [])];
+    }
+    if (candidates.length === 0) {
+      // The pin was unusable and no seat row survived the stand-down / kill-switch filters.
+      return { run: await blocked("PROVIDER_DISABLED", `provider_disabled:${pinnedKey}`) };
+    }
   } else {
     // A lane the owner stood down from a work card is out for everything, not just that card.
     const enabled = await env.WP_OS_DB.prepare(
@@ -1716,10 +1752,11 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * model answering from memory produces something indistinguishable from research, and it gets
    * believed.
    */
-  const requiresSearch = input.budgetContext?.requiresSearch === true;
   if (requiresSearch) {
     const searchCapable = allCandidates.filter((c) => isSearchGrounded(c.model));
-    if (searchCapable.length === 0) {
+    // Blocked only when NEITHER a search-grounded model NOR a search-capable seat exists (seat-only
+    // search, review of #216). A seat is a lane that can search only because its answer needs proof.
+    if (searchCapable.length === 0 && searchSeatKeys.size === 0) {
       return {
         run: await blocked(
           "PREFLIGHT_BLOCKED",
@@ -1808,13 +1845,31 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    *   · not a search call: a local session is not search-grounded, and a call that needs the live
    *     web must not be quietly answered from memory.
    */
+  /*
+   * A SEARCH CALL MAY LEAD ON A SEAT THAT CAN SEARCH (0246). Before this, a seat was excluded from every
+   * search call outright — "a local session is not search-grounded" — which is why Parker's November Room
+   * stopped under Free only: the one lane that could search was paid. Codex on her ChatGPT seat searches
+   * the live web (`-c web_search=live`) and records every search in its own event stream, so a seat that
+   * said it can search, and proves each run did, is a $0 search lane. The paid search model stays behind
+   * it as the fallback.
+   */
+  const searchOnSeat = requiresSearch && searchSeatKeys.size > 0 && !input.images?.length && !input.documents?.length;
   const seatsEligible =
-    isJudgement &&
-    (!contentClass.publicModelApproved || input.budgetContext?.seatFirst === true) &&
-    !input.images?.length &&
-    !input.documents?.length &&
-    !requiresSearch;
-  const seatAvailability = seatsEligible ? await allSeatAvailability(env, now) : [];
+    searchOnSeat ||
+    (isJudgement &&
+      (!contentClass.publicModelApproved || input.budgetContext?.seatFirst === true) &&
+      !input.images?.length &&
+      !input.documents?.length &&
+      !requiresSearch);
+  const seatAvailability = !seatsEligible
+    ? []
+    : requiresSearch
+      ? searchSeatAvailability.map((a) =>
+          a.available && a.canSearch !== true
+            ? { ...a, available: false, reason: `the ${SEAT_REGISTRY[a.seat].displayName} seat is awake but its claimer has not said it can search the web, so it took no part in this search call` }
+            : a,
+        )
+      : await allSeatAvailability(env, now);
   const awakeSeatKeys = new Set(seatAvailability.filter((a) => a.available).map((a) => a.seat as string));
   if (behaviour.freeOnly) {
     const freeAdequate = options
@@ -1827,7 +1882,12 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
           : credentialConfigured(env, o.provider.provider_key),
       )
       // The same bar, expressed against `options` because the free lanes are not in `allCandidates`.
-      .filter((o) => (requiresSearch ? isSearchGrounded(o.pricing.model) : !(isJudgement && isSearchGrounded(o.pricing.model))))
+      .filter((o) =>
+        requiresSearch
+          ? // An awake search-capable seat is already the only seat in `awakeSeatKeys` for a search call.
+            isSeat(o.provider.provider_key) || isSearchGrounded(o.pricing.model)
+          : !(isJudgement && isSearchGrounded(o.pricing.model)),
+      )
       .filter((o) => !isInterpretation || o.pricing.supports_reasoning === 1);
 
     if (freeAdequate.length === 0) {
@@ -1858,6 +1918,24 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     freeOnlyNote =
       ` The lever is set to Free only, so only models costing nothing were candidates` +
       (isProtected ? `, and this protected call found one — had it not, the run would have stopped rather than been downgraded.` : `.`);
+  }
+  /*
+   * SEAT-ONLY SEARCH (review of #216). When no search-grounded model is a candidate — OpenRouter is down or
+   * stood down, or no search model is registered — but an awake, search-declared seat is, the seat IS the
+   * candidate list. It leads exactly as it does at Free only, and nothing that cannot search is added behind
+   * it: a general model answering a search call from memory is the failure this branch exists to prevent.
+   */
+  if (requiresSearch && routingCandidates.length === 0 && searchSeatKeys.size > 0) {
+    routingCandidates = options
+      .filter((o) => Number(o.provider.claimable ?? 0) === 1 && awakeSeatKeys.has(o.provider.provider_key))
+      .map((o) => ({
+        providerId: o.provider.id,
+        providerKey: o.provider.provider_key,
+        model: o.pricing.model,
+        estimatedCostUsd: 0,
+        baseUrl: o.provider.base_url,
+      }));
+    freeOnlyNote += " No search-grounded paid model was a candidate, so a subscription seat that can search the web is the only lane for this call.";
   }
   const requiredModel = input.budgetContext?.requireModel;
   let requiredNote = "";
@@ -2446,6 +2524,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
           aiEmployeeId: input.aiEmployeeId ?? null,
           taskClass: input.routing?.taskClass ?? null,
           firmScope,
+          needsSearch: requiresSearch,
         }),
         /*
          * ENGAGES ON AN OUTAGE ONLY. The first awake seat leads, and the SECOND one is a genuine
@@ -2781,7 +2860,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     // A head that is itself a seat (FREE_ONLY, private work) has nothing further to hand on to.
     const tail = isSeat(head.providerKey) ? "whatever else is allowed at this lever position" : `${head.providerKey}/${head.model}`;
     explanation +=
-      ` If that seat does not answer within ${Math.round(CLAIM_WAIT_MS / 1000)} seconds, or reports a failure or a spent usage limit, the run ` +
+      ` If that seat does not answer within ${Math.round((requiresSearch ? SEARCH_CLAIM_WAIT_MS : CLAIM_WAIT_MS) / 1000)} seconds, or reports a failure or a spent usage limit, the run ` +
       `moves on to ${behind}${freeStep}${tail} inside this same run and the handover is recorded. ` +
       `No seat is asked for the same work twice.`;
   } else if (lead) {

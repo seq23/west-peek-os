@@ -73,6 +73,23 @@ export const CLAIM_WAIT_MS = 90_000;
 export const CLAIM_POLL_MS = 1_500;
 
 /**
+ * A LIVE WEB SEARCH TAKES LONGER THAN AN ANSWER (0246, 1 Oct 2026).
+ *
+ * UNMEASURED: the probe on the owner's Mac recorded no end time. This is a bounded guess, stated as
+ * one, and it is the first number to read off a real run (`time codex exec …`) and adjust. The claimer's
+ * own kill timer (SEARCH_RUN_TIMEOUT_MS in scripts/claimer) is longer than this, so the router gives up
+ * first and the paid search lane answers; a run the router has abandoned is closed, never left to be
+ * claimed afterwards.
+ */
+export const SEARCH_CLAIM_WAIT_MS = 180_000;
+
+/** The capability a claimer declares in its heartbeat when it can run a seat in live-search mode. */
+export const SEAT_SEARCH_CAPABILITY = "web_search";
+
+/** A search is believed only with at least this many counted search events. See `reportRun`. */
+export const SEARCH_MIN_EVENTS = 1;
+
+/**
  * How long a CLAIMED run may stay silent before the reaper returns it to the pool.
  *
  * Five minutes, which is deliberately longer than `CLAIM_WAIT_MS`: the router gives up first and
@@ -142,6 +159,19 @@ export interface DeviceRow {
   /** 0245. While in the future the seat reads unavailable: the plan's usage window is spent. */
   exhausted_until?: string | null;
   exhausted_reason?: string | null;
+  /** JSON array of what the claimer said it can do (0187). Read by `canSearch`. */
+  capabilities_json?: string | null;
+}
+
+/** Did the claimer on this device say it can run a seat in live-search mode? Unreadable means no. */
+export function deviceCanSearch(row: Pick<DeviceRow, "capabilities_json"> | null | undefined): boolean {
+  if (!row?.capabilities_json) return false;
+  try {
+    const parsed: unknown = JSON.parse(row.capabilities_json);
+    return Array.isArray(parsed) && parsed.includes(SEAT_SEARCH_CAPABILITY);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -186,6 +216,8 @@ export interface LaneAvailability {
   deviceId: string | null;
   lastSeenAt: string | null;
   ageMs: number | null;
+  /** 0246. True only when the awake device declared "web_search". Always false for an unavailable seat. */
+  canSearch?: boolean;
 }
 
 /** Pure, so the freshness rule is testable without a clock or a database. */
@@ -215,7 +247,7 @@ export async function laneAvailability(env: Env, seat: Seat, now: Date = new Dat
   let row: DeviceRow | null = null;
   try {
     row = await env.WP_OS_DB.prepare(
-      "SELECT seat, device_id, hostname, agent_version, last_seen_at, exhausted_until, exhausted_reason FROM subscription_seat_device WHERE seat = ?1 ORDER BY last_seen_at DESC LIMIT 1",
+      "SELECT seat, device_id, hostname, agent_version, last_seen_at, exhausted_until, exhausted_reason, capabilities_json FROM subscription_seat_device WHERE seat = ?1 ORDER BY last_seen_at DESC LIMIT 1",
     )
       .bind(seat)
       .first<DeviceRow>();
@@ -269,6 +301,7 @@ export async function laneAvailability(env: Env, seat: Seat, now: Date = new Dat
     deviceId: row.device_id,
     lastSeenAt: row.last_seen_at,
     ageMs,
+    canSearch: deviceCanSearch(row),
   };
 }
 
@@ -288,7 +321,7 @@ export async function allSeatAvailability(env: Env, now: Date = new Date()): Pro
     rows =
       (
         await env.WP_OS_DB.prepare(
-          "SELECT seat, device_id, hostname, agent_version, last_seen_at, exhausted_until, exhausted_reason FROM subscription_seat_device ORDER BY last_seen_at DESC",
+          "SELECT seat, device_id, hostname, agent_version, last_seen_at, exhausted_until, exhausted_reason, capabilities_json FROM subscription_seat_device ORDER BY last_seen_at DESC",
         ).all<DeviceRow>()
       ).results ?? [];
   } catch {
@@ -340,6 +373,7 @@ export async function allSeatAvailability(env: Env, now: Date = new Date()): Pro
       deviceId: row.device_id,
       lastSeenAt: row.last_seen_at,
       ageMs,
+      canSearch: deviceCanSearch(row),
     };
   });
 }
@@ -368,7 +402,13 @@ export async function recordHeartbeat(
        hostname          = excluded.hostname,
        agent_version     = excluded.agent_version,
        last_seen_at      = excluded.last_seen_at,
-       capabilities_json = excluded.capabilities_json`,
+       /*
+        * A CALLER THAT SAYS NOTHING ABOUT CAPABILITIES LEAVES THEM ALONE (0246). The claim route writes
+        * a heartbeat too, and it does not repeat the list — so the old unconditional overwrite reset a
+        * device's "web_search" to [] on every claim, and the router would have read a search-capable
+        * seat as one that cannot search.
+        */
+       capabilities_json = CASE WHEN ?7 = 1 THEN excluded.capabilities_json ELSE subscription_seat_device.capabilities_json END`,
   )
     .bind(
       input.deviceId,
@@ -377,6 +417,7 @@ export async function recordHeartbeat(
       now.toISOString(),
       JSON.stringify(input.capabilities ?? []),
       input.seat,
+      input.capabilities ? 1 : 0,
     )
     .run();
 }
@@ -443,6 +484,10 @@ export interface SeatRunRow {
   /** A long job says it is alive every minute; the reaper reads this, not the claim time. */
   progressed_at: string | null;
   progress_note: string | null;
+  /** 0246. 1 for a live-web-search call; the row is only REPORTED with counted search events. */
+  needs_search: number;
+  search_events: number | null;
+  search_queries_json: string | null;
 }
 
 export const RUN_KINDS = ["ANSWER", "LOCAL_JOB"] as const;
@@ -502,13 +547,15 @@ export async function parkRun(
     /** 0219. Defaults to ANSWER, which is every caller that existed before local jobs. */
     runKind?: RunKind;
     jobJson?: string | null;
+    /** 0246. A live-web-search call. Only a claimer that declared "web_search" is handed it. */
+    needsSearch?: boolean;
   },
 ): Promise<string> {
   const id = `ccr_${crypto.randomUUID()}`;
   await env.WP_OS_DB.prepare(
     `INSERT INTO subscription_seat_run
-       (id, seat, ai_run_id, purpose, prompt, model_access, work_card_id, ai_employee_id, task_class, firm_scope, status, max_seconds, run_kind, job_json)
-     VALUES (?1, ?11, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'QUEUED', ?10, ?12, ?13)`,
+       (id, seat, ai_run_id, purpose, prompt, model_access, work_card_id, ai_employee_id, task_class, firm_scope, status, max_seconds, run_kind, job_json, needs_search)
+     VALUES (?1, ?11, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'QUEUED', ?10, ?12, ?13, ?14)`,
   )
     .bind(
       id,
@@ -524,6 +571,7 @@ export async function parkRun(
       input.seat,
       input.runKind ?? "ANSWER",
       input.jobJson ?? null,
+      input.needsSearch ? 1 : 0,
     )
     .run();
   return id;
@@ -547,6 +595,12 @@ export async function claimRun(
    * job claimer is never handed a question it would try to answer by editing a repository.
    */
   kinds: readonly RunKind[] = ["ANSWER"],
+  /**
+   * 0246. Whether this claimer can run a seat in live-search mode. FALSE unless it said so: a claimer
+   * that cannot search must never be handed a search row, because it would answer from memory and the
+   * answer would read as research. (The proof rule in `reportRun` is the second wall, not the first.)
+   */
+  canSearch = false,
 ): Promise<SeatRunRow | null> {
   /*
    * ONLY THE SEATS THIS MACHINE CAN ACTUALLY SERVE. A laptop with Claude Code installed and Codex
@@ -559,7 +613,7 @@ export async function claimRun(
   const kindPlaceholders = kinds.map((_, i) => `?${seats.length + i + 1}`).join(", ");
   for (let attempt = 0; attempt < 5; attempt++) {
     const next = await env.WP_OS_DB.prepare(
-      `SELECT id FROM subscription_seat_run WHERE status = 'QUEUED' AND seat IN (${placeholders}) AND run_kind IN (${kindPlaceholders}) ORDER BY created_at ASC LIMIT 1`,
+      `SELECT id FROM subscription_seat_run WHERE status = 'QUEUED' AND seat IN (${placeholders}) AND run_kind IN (${kindPlaceholders})${canSearch ? "" : " AND needs_search = 0"} ORDER BY created_at ASC LIMIT 1`,
     )
       .bind(...seats, ...kinds)
       .first<{ id: string }>();
@@ -589,24 +643,52 @@ export async function claimRun(
  */
 export async function reportRun(
   env: Env,
-  input: { runId: string; deviceId: string; outputText?: string | null; error?: string | null },
+  input: {
+    runId: string;
+    deviceId: string;
+    outputText?: string | null;
+    error?: string | null;
+    /** 0246. What the claimer counted in the CLI's own event stream. Only meaningful on a search row. */
+    searchEvents?: number | null;
+    searchQueries?: string[] | null;
+  },
   now: Date = new Date(),
 ): Promise<{ accepted: boolean; detail: string }> {
-  const ok = typeof input.outputText === "string" && input.outputText.length > 0;
+  const hasOutput = typeof input.outputText === "string" && input.outputText.length > 0;
+  /*
+   * THE PROOF RULE (0246). A search row is believed only with counted search events. An answer with
+   * none is a model talking from memory about something it was asked to look up — fluent, plausible,
+   * and indistinguishable from research once it is on a card. It is recorded as a FAILURE with that
+   * sentence, so the adapter throws and the chain moves on to the paid search lane. The claimer also
+   * checks this before it reports; this is the wall that does not depend on the claimer being right.
+   */
+  const row = hasOutput
+    ? await env.WP_OS_DB.prepare("SELECT needs_search FROM subscription_seat_run WHERE id = ?1").bind(input.runId).first<{ needs_search: number }>()
+    : null;
+  const events = Math.max(0, Math.floor(input.searchEvents ?? 0));
+  const unproven = Boolean(row && row.needs_search === 1 && events < SEARCH_MIN_EVENTS);
+  const ok = hasOutput && !unproven;
+  const failure = unproven
+    ? "the seat answered without running a single web search, so its answer was thrown away: a search call is believed only with search events counted in the CLI's own record"
+    : (input.error ?? "the claimer reported no output and no reason");
+  const queries = (input.searchQueries ?? []).map((q) => String(q).slice(0, 300)).slice(0, 60);
   const res = await env.WP_OS_DB.prepare(
     `UPDATE subscription_seat_run
         SET status = ?2, output_text = ?3, error = ?4, reported_at = ?5, updated_at = ?5,
-            resolution = ?6
+            resolution = ?6, search_events = ?8, search_queries_json = ?9
       WHERE id = ?1 AND status = 'CLAIMED' AND claimed_by = ?7`,
   )
     .bind(
       input.runId,
       ok ? "REPORTED" : "FAILED",
       ok ? input.outputText : null,
-      ok ? null : (input.error ?? "the claimer reported no output and no reason"),
+      ok ? null : failure,
       now.toISOString(),
       ok ? `${input.deviceId} completed this run` : `${input.deviceId} could not complete this run`,
       input.deviceId,
+      // Only a SEARCH row carries a count; an ordinary row keeps NULL so "was this a search" stays a fact.
+      row?.needs_search === 1 ? events : null,
+      row?.needs_search === 1 && queries.length > 0 ? JSON.stringify(queries) : null,
     )
     .run();
   if ((res.meta?.changes ?? 0) === 0) {

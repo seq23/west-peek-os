@@ -5,7 +5,7 @@ import { json } from "../router";
 import type { RouteContext } from "../router";
 import { runAi } from "../ai/runAi";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
-import { findVenues, SEARCH_MODEL } from "./liveSearch";
+import { findVenues, SEARCH_MODEL, servedBySearchLane } from "./liveSearch";
 import { blockCard } from "./blocks";
 import { pageTextOf, urlStatus } from "../effects/urlLiveness";
 import {
@@ -398,7 +398,7 @@ const defaultResearch: ResearchSearch = async (env, actor, prompt) => {
     routing: { category: "INTELLIGENCE" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) return { ok: false, text: "", citations: [], detail: run.failure_reason ?? `run ${run.status}` };
-  if (run.model !== SEARCH_MODEL) return { ok: false, text: "", citations: [], detail: `search was routed to ${run.model ?? "an unknown model"}, which cannot search the web` };
+  if (!servedBySearchLane(run.model)) return { ok: false, text: "", citations: [], detail: `search was routed to ${run.model ?? "an unknown model"}, which cannot search the web` };
   return { ok: true, text: run.output_text, citations: extractUrls(run.output_text), detail: "ok" };
 };
 

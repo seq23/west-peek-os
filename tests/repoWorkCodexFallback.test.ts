@@ -5,7 +5,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { codexExecArgs, codexSeatUsable, gitCommonDirs, runWithCodexFallback, type RunResult } from "../scripts/lib/codex-seat.mjs";
-import { claudeSpentUsage } from "../scripts/duties/web-property-change.mjs";
+import { claudeSpentUsage, codexSpentUsage } from "../scripts/duties/web-property-change.mjs";
 
 /**
  * REPO WORK ON CARDS HAS A SECOND MODEL WHEN CLAUDE CODE'S PLAN IS SPENT (29 Sep 2026).
@@ -187,5 +187,56 @@ describe("a linked worktree commits into the ORIGINAL repository's .git — so t
     expect(gitCommonDirs(["/a", "/a/b"], () => "/r/.git")).toEqual(["/r/.git"]);
     expect(gitCommonDirs(["/a"], () => { throw new Error("no git"); })).toEqual([]);
     expect(gitCommonDirs(["/a"], () => "")).toEqual([]);
+  });
+});
+
+/**
+ * BOTH SEATS SPENT (1 Oct 2026). Claude Code said "You've hit your weekly limit · resets Oct 2 at 8am"
+ * on the owner's Mac. If Codex says the same, the phase must say that nobody can run it until a plan
+ * resets — with both notices — rather than surface Codex's raw failure as though the phase had failed.
+ */
+describe("both seats spent", () => {
+  const CLAUDE_WEEKLY = JSON.stringify({ type: "result", is_error: true, result: "You've hit your weekly limit · resets Oct 2 at 8am (America/Chicago)" });
+
+  it("codexSpentUsage reads a short Codex notice on stdout or stderr, and never a long answer", () => {
+    expect(codexSpentUsage({ out: "", err: "You've hit your usage limit. Try again in 3 hours." })).toContain("usage limit");
+    expect(codexSpentUsage({ out: "usage limit reached", err: "" })).toBeTruthy();
+    expect(codexSpentUsage({ out: `Usage limit reached is what the CLI prints. ${"x".repeat(700)}`, err: "" })).toBeNull();
+    expect(codexSpentUsage({ out: "wrote the file", err: "" })).toBeNull();
+  });
+
+  it("says so — with both notices — when Codex is spent too, and the phase is NOT taken as done", async () => {
+    const calls: string[] = [];
+    const out = await runWithCodexFallback({
+      runClaude: async () => (calls.push("claude"), { code: 1, out: CLAUDE_WEEKLY, err: "" }),
+      // Codex prints its notice and EXITS 0 — the trap: a zero exit must not read as the phase's work.
+      runCodex: async () => (calls.push("codex"), { code: 0, out: "", err: "You've hit your usage limit. Try again in 3 hours." }),
+      limited: claudeSpentUsage,
+      codexLimited: codexSpentUsage,
+      usable: () => ({ ok: true, why: "auth_mode=chatgpt" }),
+      supports: async () => null,
+      addDirs: [],
+    });
+    expect(calls).toEqual(["claude", "codex"]);
+    expect(out.bothSpent).toBe(true);
+    expect(out.servedBy).toBe("none");
+    expect(out.code, "a notice printed with exit 0 is still not a finished phase").not.toBe(0);
+    expect(out.err).toMatch(/Both subscription seats are out of usage/);
+    expect(out.err).toMatch(/resets Oct 2 at 8am/);
+    expect(out.err).toMatch(/usage limit/);
+  });
+
+  it("is unchanged when Codex is fine: it still serves the phase", async () => {
+    const out = await runWithCodexFallback({
+      runClaude: async () => ({ code: 1, out: CLAUDE_WEEKLY, err: "" }),
+      runCodex: async () => ({ code: 0, out: "codex wrote the result file", err: "" }),
+      limited: claudeSpentUsage,
+      codexLimited: codexSpentUsage,
+      usable: () => ({ ok: true, why: "auth_mode=chatgpt" }),
+      supports: async () => null,
+      addDirs: [],
+    });
+    expect(out.servedBy).toBe("codex");
+    expect(out.bothSpent).toBeUndefined();
   });
 });
