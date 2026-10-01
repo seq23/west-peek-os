@@ -9,6 +9,7 @@
  */
 
 import { plainFailure } from "./liveStatus";
+import { readLaneFailure } from "../ai/laneFailure";
 import { partnerByEmail } from "../registry/partners";
 
 export interface TrailFact {
@@ -60,6 +61,18 @@ export interface TimelineInput {
    * not her — after a hand-off the card stops and asks the NEW primary, and the line says so.
    */
   block_who_name?: string | null;
+  /** The card's own step record (`/api/work-cards/:id/steps`). */
+  steps?: TimelineSteps | null;
+}
+/**
+ * WHAT THE CARD DID, TRY BY TRY (1 Oct 2026) — the sweep's own record of each tick, every model call attributed to the card,
+ * and the card being re-queued or waiting for a plan. From `GET /api/work-cards/:id/steps`; absent on a card whose page has not
+ * loaded them yet, in which case the timeline reads exactly as it did.
+ */
+export interface TimelineSteps {
+  ticks: ReadonlyArray<{ at: string; outcome: string; attempt: number | null; detail: string | null }>;
+  runs: ReadonlyArray<{ at: string; purpose: string; model: string | null; provider: string | null; provider_name: string | null; status: string; failure: string | null; degraded: boolean }>;
+  events: ReadonlyArray<{ at: string; kind: string; detail: string | null }>;
 }
 
 export interface TimelineEntry {
@@ -111,6 +124,54 @@ export function trailSentence(t: TrailFact, ownerName: string | null, myEmails: 
   return `${ownerName ?? "They"} ${words}${cause ? `: ${cause}` : ""}${toOther}.${failed ? " The email did not send." : ""}`;
 }
 
+
+/** The lane that answered, in the words a partner uses: her own plan by name, otherwise the provider or model. */
+export function laneWords(model: string | null, provider: string | null, providerName: string | null): string {
+  const m = (model ?? "").toLowerCase();
+  if (m === "codex-local" || provider === "codex") return "Codex on your plan";
+  if (m === "claude-code-local" || provider === "claude_code") return "Claude Code on your plan";
+  return providerName || model || "a model";
+}
+
+/** Why a call or a try ended, in a sentence — the lane's own kind of refusal named, never a code. */
+export function whyItEnded(raw: string | null | undefined): string {
+  const text = (raw ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return "it did not say why";
+  const f = readLaneFailure(text);
+  if (f.kind === "LEVER") return "the spend setting is on Free only and nothing at $0 could take it";
+  if (f.kind === "CREDIT") return "the account behind the model is out of credit";
+  if (f.kind === "CREDENTIAL") return "the firm is not signed in to that model";
+  if (f.kind === "RATE_LIMIT") return "it was turned away for sending too much at once";
+  if (f.kind === "NO_LANE") return "no model was available";
+  if (/subscription_seat_unavailable|seat.*(asleep|out of usage|usage)/i.test(text)) return "the Claude or Codex seat on your plan was asleep or out of usage";
+  if (/timed out|timeout|aborted|did not finish within/i.test(text)) return "the model did not answer in time";
+  const sentence = text.length > 160 ? `${text.slice(0, 160).replace(/\s+\S*$/, "")}…` : text;
+  return sentence.charAt(0).toLowerCase() + sentence.slice(1);
+}
+
+function stepEntries(steps: TimelineSteps): TimelineEntry[] {
+  const out: TimelineEntry[] = [];
+  for (const t of steps.ticks) {
+    if (t.outcome === "PROGRESSED") {
+      const said = (t.detail ?? "").replace(/\s+/g, " ").trim();
+      out.push({ at: t.at, text: `Finished a step${said ? `: ${said.length > 180 ? `${said.slice(0, 180).replace(/\s+\S*$/, "")}…` : said}` : ""}${/[.!?…]$/.test(said) ? "" : "."}` });
+    } else if (t.outcome === "FAILED") {
+      out.push({ at: t.at, text: `Try ${t.attempt ?? 1} did not finish — ${whyItEnded(t.detail)}. It tries again on its own.` });
+    }
+  }
+  for (const r of steps.runs) {
+    const lane = laneWords(r.model, r.provider, r.provider_name);
+    const what = r.purpose.replace(/\s+/g, " ").trim();
+    if (r.status === "COMPLETED") out.push({ at: r.at, text: `${lane} answered: ${what}.${r.degraded ? " A free model that may be weaker than your seats wrote it." : ""}` });
+    else out.push({ at: r.at, text: `${what} was not answered — ${whyItEnded(r.failure ?? r.status)}.` });
+  }
+  for (const e of steps.events) {
+    if (e.kind === "auto_released") out.push({ at: e.at, text: "Put back in the queue automatically, because what stopped it changed." });
+    else if (e.kind === "waiting_for_reset") out.push({ at: e.at, text: "Both AI plans were out of usage, so it is waiting for one to reset and starts again by itself." });
+  }
+  return out;
+}
+
 export function cardTimeline(input: TimelineInput): TimelineEntry[] {
   const out: TimelineEntry[] = [];
   const emailed = input.trail.some((t) => t.kind === "RECEIVED_EMAIL");
@@ -118,7 +179,9 @@ export function cardTimeline(input: TimelineInput): TimelineEntry[] {
     out.push({ at: input.created_at, text: `${input.asked_by === "You" ? "You asked" : `${input.asked_by} asked`}${input.owner_name ? ` ${input.owner_name}` : ""}.` });
   }
   for (const t of input.trail) out.push({ at: t.at, text: trailSentence(t, input.owner_name, input.my_emails) });
-  if (input.last_failure && input.last_failure_at) {
+  // With the card's own step record, every try is listed with its reason, so the single "last failure" line would repeat the newest.
+  if (input.steps) out.push(...stepEntries(input.steps));
+  if (!input.steps && input.last_failure && input.last_failure_at) {
     const said = plainFailure(input.last_failure);
     const text = /retried automatically\.$/.test(said) ? said : `A try failed: ${said.length > 160 ? `${said.slice(0, 160).replace(/\s+\S*$/, "")}…` : said} Retried automatically.`;
     out.push({ at: input.last_failure_at, text });

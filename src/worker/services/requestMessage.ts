@@ -341,3 +341,83 @@ export async function handleGetWorkCardMessageTrail(ctx: RouteContext): Promise<
 
   return json({ trail });
 }
+
+
+/**
+ * GET /api/work-cards/:id/steps — WHAT THE CARD ACTUALLY DID, TRY BY TRY (1 Oct 2026).
+ *
+ * "The timestamps don't show any of the retries or anything" — the owner, reading a card that had finished its angles stage, been
+ * retried by hand, and was waiting between stages. "What has happened" listed emails and notices only, so a card could finish a
+ * stage, fail and retry with no trace. Three facts already exist and are read here, none of them new bookkeeping:
+ *
+ *   · `ticks`  — the sweep's own record of each tick on this card (a stage finished, or a try that did not finish, with the
+ *                runner's sentence), from the event spine;
+ *   · `runs`   — every model call attributed to this card (`ai_run`, immutable): when, for what, which lane answered, and the
+ *                lane's own words when it refused. This is where "codex-local answered" or "the spend setting refused" lives;
+ *   · `events` — the card being put back in the queue automatically, or waiting for a plan to reset.
+ *
+ * Same visibility as the message trail: a card a person cannot see has no steps to read.
+ */
+export async function handleGetWorkCardSteps(ctx: RouteContext): Promise<Response> {
+  const identity = ctx.identity;
+  if (!identity) return json({ error: "unauthenticated" }, { status: 401 });
+  const cardId = ctx.params.id ?? "";
+  const card = await getVisibleWorkCard(ctx.env, identity, cardId);
+  if (!card) return json({ error: "not_found" }, { status: 404 });
+
+  const eventRows =
+    (
+      await ctx.env.WP_OS_DB.prepare(
+        `SELECT event_type, payload_json, created_at FROM event_record
+          WHERE object_type = 'work_card' AND object_id = ?1
+            AND event_type IN ('work_card.swept', 'work_card.auto_released', 'work_card.waiting_for_reset')
+          ORDER BY created_at DESC LIMIT 80`,
+      )
+        .bind(cardId)
+        .all<{ event_type: string; payload_json: string | null; created_at: string }>()
+    ).results ?? [];
+  const ticks: Array<{ at: string; outcome: string; attempt: number | null; detail: string | null }> = [];
+  const events: Array<{ at: string; kind: string; detail: string | null }> = [];
+  for (const e of eventRows) {
+    let p: { outcome?: string; attempt?: number; detail?: string; reason?: string; until?: string; phase?: string } = {};
+    try {
+      p = e.payload_json ? JSON.parse(e.payload_json) : {};
+    } catch {
+      p = {};
+    }
+    if (e.event_type === "work_card.swept") {
+      if (p.outcome === "PROGRESSED" || p.outcome === "FAILED") ticks.push({ at: e.created_at, outcome: p.outcome, attempt: p.attempt ?? null, detail: p.detail ?? null });
+    } else {
+      events.push({ at: e.created_at, kind: e.event_type.replace("work_card.", ""), detail: p.reason ?? p.until ?? null });
+    }
+  }
+
+  const runs =
+    (
+      await ctx.env.WP_OS_DB.prepare(
+        `SELECT r.created_at, r.purpose, r.model, r.status, r.failure_reason, r.quality_degraded, pr.provider_key, pr.display_name
+           FROM ai_run_attribution a
+           JOIN ai_run r ON r.id = a.ai_run_id
+           LEFT JOIN provider_registry pr ON pr.id = r.provider_id
+          WHERE a.work_card_id = ?1
+          ORDER BY r.created_at DESC LIMIT 60`,
+      )
+        .bind(cardId)
+        .all<{ created_at: string; purpose: string; model: string | null; status: string; failure_reason: string | null; quality_degraded: number; provider_key: string | null; display_name: string | null }>()
+    ).results ?? [];
+
+  return json({
+    ticks: ticks.reverse(),
+    events: events.reverse(),
+    runs: runs.reverse().map((r) => ({
+      at: r.created_at,
+      purpose: r.purpose.slice(0, 120),
+      model: r.model,
+      provider: r.provider_key,
+      provider_name: r.display_name,
+      status: r.status,
+      failure: r.failure_reason ? r.failure_reason.slice(0, 300) : null,
+      degraded: r.quality_degraded === 1,
+    })),
+  });
+}

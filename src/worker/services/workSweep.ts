@@ -732,6 +732,17 @@ export async function sweepOnce(
   }
 
   if (progressed) {
+    // THE CARD'S OWN RECORD OF THIS TICK (1 Oct 2026). A stage finished and the card is not done: written to the event spine so
+    // "What has happened" can show every step, not only the ones that ended in an email. `detail` is the runner's own sentence.
+    await appendEvent(env, {
+      eventType: "work_card.swept",
+      actorType: "system",
+      actorId: "work_sweep",
+      objectType: "work_card",
+      objectId: card.id,
+      firmScope: card.firm_scope,
+      payload: { outcome: "PROGRESSED", attempt: card.work_attempts, detail: detail.slice(0, 240) },
+    }).catch(() => undefined);
     // THIS TICK'S WORK IS DONE AND THE CARD IS NOT. Hand it back for the next tick: the claim's
     // attempt is given back, because an invocation that did what it was asked is not a failure.
     await env.WP_OS_DB.prepare("UPDATE work_card SET work_attempts = MAX(COALESCE(work_attempts, 1) - 1, 0) WHERE id = ?1").bind(card.id).run();
@@ -816,6 +827,17 @@ export async function sweepOnce(
     await announceOutcome(env, card, "BLOCKED", why);
     return { status: "SUCCEEDED", summary: `"${card.title.slice(0, 60)}" blocked after ${card.work_attempts} failed attempt(s) and handed to you: ${detail.slice(0, 140)}`, card, outcome: "BLOCKED" };
   }
+  // A TRY THAT DID NOT FINISH, on the card's own record with the lane's words (1 Oct 2026): the card said "try 1 of 3" and nothing
+  // said what the try was or why it ended. Written before the sweep returns, so the timeline shows it however it was classified.
+  await appendEvent(env, {
+    eventType: "work_card.swept",
+    actorType: "system",
+    actorId: "work_sweep",
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope: card.firm_scope,
+    payload: { outcome: "FAILED", attempt: card.work_attempts, detail: detail.slice(0, 240) },
+  }).catch(() => undefined);
   // THE SWEEP RAN; THE CARD IS NOT DONE YET. Reporting this as a failed RUN painted "FAILED" on the
   // Work page for a card that was simply on its first attempt of three (Vantage Robotics, 14 Sep,
   // 13:32). The run succeeded at its job — it worked the card — and the card's own state says the
