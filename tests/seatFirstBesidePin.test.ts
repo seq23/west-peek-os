@@ -108,3 +108,31 @@ describe("a pinned seatFirst call at Moderate", () => {
     expect(run.output_text ?? "").not.toContain("SEAT ANSWER");
   }, 60_000);
 });
+
+describe("a pinned seatFirst call whose pin is unusable", () => {
+  it("is still served by an awake seat when OpenRouter is kill-switched (review of #223)", async () => {
+    await t.db.prepare("UPDATE provider_registry SET kill_switched = 1 WHERE provider_key = 'openrouter'").run();
+    try {
+      await awake("codex");
+      const c = claimer(["codex"]);
+      const v = vendors();
+      const { run } = await runAi(env(), PACKET_CALL(true), { fetchImpl: v.fetchImpl });
+      await c.stop();
+      expect(run.status, run.failure_reason ?? "").toBe("COMPLETED");
+      expect(run.output_text).toContain("SEAT ANSWER (codex)");
+      expect(v.models).toEqual([]);
+    } finally {
+      await t.db.prepare("UPDATE provider_registry SET kill_switched = 0 WHERE provider_key = 'openrouter'").run();
+    }
+  }, 60_000);
+
+  it("is still blocked when the pin is unusable and no seat is awake", async () => {
+    await t.db.prepare("UPDATE provider_registry SET kill_switched = 1 WHERE provider_key = 'openrouter'").run();
+    try {
+      const { run } = await runAi(env(), PACKET_CALL(true), { fetchImpl: vendors().fetchImpl });
+      expect(run.status).not.toBe("COMPLETED");
+    } finally {
+      await t.db.prepare("UPDATE provider_registry SET kill_switched = 0 WHERE provider_key = 'openrouter'").run();
+    }
+  }, 60_000);
+});

@@ -1474,7 +1474,14 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
      * one being switched on. When a seat can search, the pin's failure only removes the pin from the
      * candidates; the call is blocked only when there is neither a pin nor a seat.
      */
-    const seatCanCarryIt = requiresSearch && searchSeatKeys.size > 0;
+    // The seats a `seatFirst` call may use beside its pin (file-capable ones when it carries files).
+    const seatFirstSeatKeys = seatFirstBesidePin
+      ? searchSeatAvailability
+          .filter((a) => a.available && (!hasFiles || fileKinds.every((k) => a.canRead?.[k] === true)))
+          .map((a) => a.seat as string)
+      : [];
+    // A seat that may carry the call also means an unusable pin does not block it (review of #223).
+    const seatCanCarryIt = (requiresSearch && searchSeatKeys.size > 0) || seatFirstSeatKeys.length > 0;
     const pinUnusable = !pinned || pinned.enabled !== 1 || laneIsStoodDown(pinned, now);
     if (pinUnusable && !seatCanCarryIt && !freeOnlyLadder) {
       return { run: await blocked("PROVIDER_DISABLED", `provider_disabled:${pinnedKey}`) };
@@ -1500,9 +1507,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
        * wrote the packet while both seats were paid for and idle. The awake seats stand beside the pin; the pin remains the
        * fallback behind them. Only seats are added — never a free lane — so content safety is unchanged.
        */
-      const seatKeys = searchSeatAvailability
-        .filter((a) => a.available && (!hasFiles || fileKinds.every((k) => a.canRead?.[k] === true)))
-        .map((a) => a.seat as string);
+      const seatKeys = seatFirstSeatKeys;
       if (seatKeys.length > 0) {
         const seatRows = (
           await env.WP_OS_DB.prepare(
@@ -2047,6 +2052,22 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
         baseUrl: o.provider.base_url,
       }));
     freeOnlyNote += " No search-grounded paid model was a candidate, so a subscription seat that can search the web is the only lane for this call.";
+  }
+  /*
+   * SEAT-ONLY, FOR A `seatFirst` CALL WHOSE PIN IS UNUSABLE (review of #223). OpenRouter disabled, stood down or kill-switched
+   * leaves the paid candidate list empty; an awake seat that may carry the call is then the candidate list, exactly as for a
+   * search call above, and nothing else is added behind it. With no awake seat the pin's own block already fired.
+   */
+  if (seatFirstBesidePin && routingCandidates.length === 0 && awakeSeatKeys.size > 0) {
+    routingCandidates = options
+      .filter((o) => Number(o.provider.claimable ?? 0) === 1 && awakeSeatKeys.has(o.provider.provider_key))
+      .map((o) => ({
+        providerId: o.provider.id,
+        providerKey: o.provider.provider_key,
+        model: o.pricing.model,
+        estimatedCostUsd: 0,
+        baseUrl: o.provider.base_url,
+      }));
   }
   const requiredModel = input.budgetContext?.requireModel;
   let requiredNote = "";

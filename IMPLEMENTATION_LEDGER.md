@@ -7232,3 +7232,5 @@ to the pinned lane with no seat awake; a pinned call not named `seatFirst` is un
 blogHelp, productions) green locally.
 **UNPROVEN:** which setting and which seat state the owner's actual run had — the production run record was not read (no access from the
 session); on a live Mac with an awake seat the next Room/Workshop card is the proof.
+
+**Review of #223 (Codex, P2):** an unusable pin (OpenRouter disabled, stood down, kill-switched) returned a block before the awake seats could be added, because only search-capable seats counted as able to carry the call. The pin-usability decision now counts the seats a `seatFirst` call may use, and when the pin leaves no paid candidate the awake seats become the candidate list (the seat-only pattern of #216). A second defect surfaced by the new test: with the pin gone the paid ranking reduced an empty list and threw — fixed by the same branch. Tests: a kill-switched pin with an awake seat is served by the seat; with no seat awake it still blocks.
