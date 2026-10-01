@@ -6969,12 +6969,26 @@ hashes. It does not test an authenticated GitHub push or PR creation.
 - **UNPROVEN:** that the live CLIs behave as the fixtures show beyond the one Codex capture; how long a real
   search takes against the 180 s / 240 s guesses; Claude Code's search stream; that the Codex CLI can commit and
   push from a linked worktree (probe 4); that either seat can read images or PDFs (probe 3); remote deploy.
-- **NOT BUILT:** seat-only search when **no** search-grounded paid model is registered (the router still
-  requires one as the head and fallback — a firm with no OpenRouter credential still blocks search calls
-  even with a search-capable seat); attachment transport; a *hold until reset* for a both-spent repo phase
+- **NOT BUILT:** attachment transport; a *hold until reset* for a both-spent repo phase
   (it fails with the reset times rather than waiting); the claimer update on the Mac (until then nothing is
   search-capable and behaviour is unchanged).
 
 Counts: vitest **3510/3510** (233 files), `tsc --noEmit` green, every `validate:*` PASSED with its self-test
 except `validate:value-shapes`, which needs a production Cloudflare token (fails identically on `main`).
 Runbook: `docs/SEAT_SEARCH_AND_PROBES.md`.
+
+### Review of PR #216 — two P1 findings, both confirmed and fixed
+
+1. **A search seat survives an unavailable paid pin.** Every search call site pins OpenRouter, so a disabled,
+   kill-switched or stood-down OpenRouter blocked the call before a healthy search-capable seat was
+   considered — the free lane depended on the paid one being on. The call is now blocked only when there is
+   neither a usable pin nor a search-capable seat; with no search-grounded model a seat is the whole candidate
+   list (**seat-only search — this supersedes the "not built" line above**), and nothing that cannot search is
+   added behind it. 6 tests (3 ways the pin can fail × MODERATE/FREE_ONLY) plus: with no search-capable seat
+   the original block stands, and a seat that answers without searching is NOT backed by a general model.
+2. **A failed search turn is a failure even with partial text.** `parseCodexSearch`/`parseClaudeSearch` now
+   record how the turn ended (`terminal`: completed / failed / cut off) and `searchOutcome` accepts only a
+   completed turn. A bare Codex `error` event is deliberately not terminal — it is emitted for reconnects
+   before a turn that then completes. 5 tests, including the real Codex capture.
+
+**Negative proof, run:** terminal handling disabled → 2 tests red; pin handling disabled → 6 red; both restored.

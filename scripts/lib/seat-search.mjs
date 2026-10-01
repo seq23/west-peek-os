@@ -52,13 +52,19 @@ const MAX_QUERIES = 60;
 
 /**
  * @param {string} stdout the JSONL stream from `codex exec --json`
- * @returns {{ events: number, queries: string[], answer: string, errorText: string }}
+ * @returns {{ events: number, queries: string[], answer: string, errorText: string, terminal: "completed" | "failed" | null }}
  */
 export function parseCodexSearch(stdout) {
   let events = 0;
   const queries = [];
   let answer = "";
   let errorText = "";
+  /*
+   * HOW THE TURN ENDED (review of #216). `turn.completed` is a finish; `turn.failed` is a failure; neither
+   * means the stream was cut off. A bare `error` event is NOT terminal — Codex emits them for retries and
+   * reconnects before a turn that then completes — so it only records text and decides nothing.
+   */
+  let terminal = null;
   for (const o of lines(stdout)) {
     if (o.type === "item.completed" && o.item?.type === "web_search") {
       events += 1;
@@ -69,16 +75,19 @@ export function parseCodexSearch(stdout) {
       answer = o.item.text;
     } else if (o.type === "error" && typeof o.message === "string") {
       errorText = o.message;
+    } else if (o.type === "turn.completed") {
+      terminal = "completed";
     } else if (o.type === "turn.failed") {
+      terminal = "failed";
       errorText = String(o.error?.message ?? errorText ?? "");
     }
   }
-  return { events, queries, answer: answer.trim(), errorText: errorText.trim() };
+  return { events, queries, answer: answer.trim(), errorText: errorText.trim(), terminal };
 }
 
 /**
  * @param {string} stdout the stream-json output of `claude -p … --verbose`
- * @returns {{ events: number, queries: string[], answer: string, errorText: string }}
+ * @returns {{ events: number, queries: string[], answer: string, errorText: string, terminal: "completed" | "failed" | null }}
  */
 export function parseClaudeSearch(stdout) {
   let toolEvents = 0;
@@ -86,6 +95,7 @@ export function parseClaudeSearch(stdout) {
   const queries = [];
   let answer = "";
   let errorText = "";
+  let terminal = null;
   for (const o of lines(stdout)) {
     if (o.type === "assistant" && Array.isArray(o.message?.content)) {
       for (const block of o.message.content) {
@@ -98,11 +108,16 @@ export function parseClaudeSearch(stdout) {
     } else if (o.type === "result") {
       const st = o.usage?.server_tool_use ?? {};
       serverReported = Math.max(serverReported, Number(st.web_search_requests ?? 0) + Number(st.web_fetch_requests ?? 0));
-      if (o.is_error === true) errorText = String(o.result ?? "");
-      else if (typeof o.result === "string") answer = o.result;
+      if (o.is_error === true) {
+        terminal = "failed";
+        errorText = String(o.result ?? "");
+      } else if (typeof o.result === "string") {
+        terminal = "completed";
+        answer = o.result;
+      }
     }
   }
-  return { events: Math.max(toolEvents, serverReported), queries, answer: answer.trim(), errorText: errorText.trim() };
+  return { events: Math.max(toolEvents, serverReported), queries, answer: answer.trim(), errorText: errorText.trim(), terminal };
 }
 
 /**
@@ -110,11 +125,20 @@ export function parseClaudeSearch(stdout) {
  * reported as an answer — it is reported as the failure it is, in words, so the card and the run can
  * say "it answered from memory" instead of presenting it as research.
  *
- * @param {{ events: number, queries: string[], answer: string, errorText: string }} parsed
+ * @param {{ events: number, queries: string[], answer: string, errorText: string, terminal: "completed" | "failed" | null }} parsed
  * @param {string} displayName
  */
 export function searchOutcome(parsed, displayName) {
-  if (parsed.errorText && !parsed.answer) return { ok: false, error: `${displayName} reported an error: ${parsed.errorText.slice(0, 400)}`, errorText: parsed.errorText };
+  /*
+   * A TURN THAT DID NOT FINISH IS NOT AN ANSWER, WHATEVER TEXT IT LEFT BEHIND (review of #216). A Codex turn
+   * that searched, wrote a narrating sentence and then failed on a quota or network error has events and
+   * text and no result; counting that as a proven answer would record a half-finished message as research
+   * and stop the chain from trying the next lane.
+   */
+  if (parsed.terminal === "failed") return { ok: false, error: `${displayName} reported an error before it finished: ${parsed.errorText.slice(0, 400) || "no reason given"}`, errorText: parsed.errorText };
+  if (parsed.terminal !== "completed") {
+    return { ok: false, error: `${displayName} ended without finishing its turn${parsed.errorText ? `: ${parsed.errorText.slice(0, 300)}` : ""}, so nothing it wrote was used.`, errorText: parsed.errorText };
+  }
   if (!parsed.answer) return { ok: false, error: `${displayName} finished with no answer.` };
   if (parsed.events < 1) {
     return {

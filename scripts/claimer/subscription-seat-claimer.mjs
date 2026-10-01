@@ -273,7 +273,7 @@ async function runOnSeat(seat, prompt, { search = false } = {}) {
        */
       const searchParsed = search ? (seat === "codex" ? parseCodexSearch(out) : parseClaudeSearch(out)) : null;
       const limit = searchParsed
-        ? detectUsageLimit({ stdout: searchParsed.answer ? searchParsed.answer : searchParsed.errorText, stderr: err })
+        ? detectUsageLimit({ stdout: searchParsed.terminal === "completed" && searchParsed.answer ? searchParsed.answer : searchParsed.errorText || searchParsed.answer, stderr: err })
         : detectUsageLimit({ stdout: out, stderr: err });
       if (limit.limited) {
         resolve({
@@ -426,8 +426,10 @@ function selfTest() {
     ["an ordinary short answer is not a limit notice", () => !detectUsageLimit({ stdout: "The fund's reserve ratio is 0.35." }).limited],
     ["a long answer that discusses usage limits is still an answer", () => !detectUsageLimit({ stdout: `Usage limit reached is what the CLI prints. ${"x".repeat(700)}` }).limited],
     ["the reset time in a notice is read and clamped", () => { const r = detectUsageLimit({ stdout: "usage limit reached|1759071600" }, 1759071000_000).retryAfterSeconds; return r === 600; }],
-    ["search: Codex's real probe output counts five searches and returns the last message", () => { const p = parseCodexSearch(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../../tests/fixtures/codex-search-probe.jsonl"), "utf8")); return p.events === 5 && p.answer.startsWith("Two 2026 sponsors"); }],
-    ["search: an answer with no counted searches is a failure in words, not an answer", () => { const o = searchOutcome({ events: 0, queries: [], answer: "Acme sponsors it", errorText: "" }, "Codex CLI"); return o.ok === false && /without running a single web search/.test(o.error); }],
+    ["search: Codex's real probe output counts five searches and returns the last message", () => { const p = parseCodexSearch(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../../tests/fixtures/codex-search-probe.jsonl"), "utf8")); return p.events === 5 && p.answer.startsWith("Two 2026 sponsors") && p.terminal === "completed"; }],
+    ["search: searches and partial text followed by a failed turn is a failure, not an answer", () => { const o = searchOutcome({ events: 3, queries: [], answer: "I will look at the sponsor pages", errorText: "quota exceeded", terminal: "failed" }, "Codex CLI"); return o.ok === false && /before it finished/.test(o.error); }],
+    ["search: a stream cut off before the turn ended is a failure even with text", () => searchOutcome({ events: 2, queries: [], answer: "partial", errorText: "", terminal: null }, "Codex CLI").ok === false],
+    ["search: an answer with no counted searches is a failure in words, not an answer", () => { const o = searchOutcome({ events: 0, queries: [], answer: "Acme sponsors it", errorText: "", terminal: "completed" }, "Codex CLI"); return o.ok === false && /without running a single web search/.test(o.error); }],
     ["search: a Claude weekly-limit stream has no answer and its notice is found", () => { const p = parseClaudeSearch(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../../tests/fixtures/claude-weekly-limit-stream.jsonl"), "utf8")); return p.answer === "" && detectUsageLimit({ stdout: p.errorText }).limited; }],
     ["the seat spawn goes through the shared claudeChildEnv", () => /env:\s*claudeChildEnv\(process\.env\b/.test(readFileSync(fileURLToPath(import.meta.url), "utf8").split("function runOnSeat")[1]?.split("\n}\n")[0] ?? "")],
   ];

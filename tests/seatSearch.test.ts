@@ -13,6 +13,8 @@ import {
   type SeatRunRow,
 } from "../src/worker/ai/subscriptionSeats";
 import { SEARCH_MODEL, searchQuestion, servedBySearchLane } from "../src/worker/services/liveSearch";
+import { parseClaudeSearch, parseCodexSearch, searchOutcome } from "../scripts/lib/seat-search.mjs";
+import { readFileSync } from "node:fs";
 
 /**
  * A SUBSCRIPTION SEAT MAY RUN A LIVE WEB SEARCH, AND A SEARCH IS ONLY BELIEVED WITH PROOF (1 Oct 2026).
@@ -216,6 +218,67 @@ describe("MODERATE — the ladder for a search call: Claude Code, then Codex, th
   }, 60_000);
 });
 
+/**
+ * SEAT-ONLY SEARCH (review of #216). Every search call site pins OpenRouter; a disabled, stood-down or
+ * kill-switched OpenRouter used to block the call before a healthy search-capable seat was considered,
+ * which made the free search lane depend on the paid one being switched on.
+ */
+describe("a search seat survives an unavailable paid pin", () => {
+  const breakPin = (how: "disabled" | "standdown" | "kill") =>
+    t.db
+      .prepare(
+        how === "disabled"
+          ? "UPDATE provider_registry SET enabled = 0 WHERE provider_key = 'openrouter'"
+          : how === "kill"
+            ? "UPDATE provider_registry SET kill_switched = 1 WHERE provider_key = 'openrouter'"
+            : `UPDATE provider_registry SET paused_until = '${new Date(Date.now() + 3_600_000).toISOString()}', paused_reason = 't', paused_by = 'fu_sequoia_taylor' WHERE provider_key = 'openrouter'`,
+      )
+      .run();
+  const mend = () => t.db.prepare("UPDATE provider_registry SET enabled = 1, kill_switched = 0, paused_until = NULL, paused_reason = NULL, paused_by = NULL WHERE provider_key = 'openrouter'").run();
+
+  for (const how of ["disabled", "standdown", "kill"] as const) {
+    for (const lever of ["MODERATE", "FREE_ONLY"] as const) {
+      it(`${lever}: OpenRouter ${how}, a search-capable seat awake — the seat serves the call`, async () => {
+        await setLever(lever);
+        await awake("codex", true);
+        await breakPin(how);
+        const c = claimer(["codex"]);
+        const v = vendors();
+        const { run } = await runAi(env(), SEARCH_CALL(), { fetchImpl: v.fetchImpl });
+        await c.stop();
+        await mend();
+        expect(run.status).toBe("COMPLETED");
+        expect(run.output_text).toContain("SEAT SEARCH ANSWER (codex)");
+        expect(v.models, "no vendor was asked").toEqual([]);
+      }, 60_000);
+    }
+  }
+
+  it("with the pin down and NO search-capable seat, the original block stands", async () => {
+    await setLever("MODERATE");
+    await awake("codex", false);
+    await breakPin("disabled");
+    const { run } = await runAi(env(), SEARCH_CALL(), { fetchImpl: vendors().fetchImpl });
+    await mend();
+    expect(run.status).not.toBe("COMPLETED");
+    expect(run.failure_reason).toContain("provider_disabled:openrouter");
+  }, 60_000);
+
+  it("seat-only means seat-only: a seat that answers without searching is NOT backed by a general model", async () => {
+    await setLever("MODERATE");
+    await awake("codex", true);
+    await breakPin("disabled");
+    const c = claimer(["codex"], { events: 0, answer: "From memory." });
+    const v = vendors();
+    const { run } = await runAi(env(), SEARCH_CALL(), { fetchImpl: v.fetchImpl });
+    await c.stop();
+    await mend();
+    expect(run.status).not.toBe("COMPLETED");
+    expect(run.output_text ?? "").not.toContain("From memory");
+    expect(v.models, "nothing that cannot search was asked").toEqual([]);
+  }, 60_000);
+});
+
 describe("the owner's stand-down still applies", () => {
   it("a seat she stood down with 'Stop using this one' is not offered a search call", async () => {
     await setLever("MODERATE");
@@ -284,6 +347,53 @@ describe("the queue itself", () => {
     expect(r.accepted).toBe(true);
     const [row] = await rows();
     expect(row).toMatchObject({ status: "REPORTED", needs_search: 0, search_events: null });
+  });
+});
+
+/**
+ * A TURN THAT DID NOT FINISH IS NOT AN ANSWER (review of #216). The stream must END well: `turn.completed`.
+ * Searches plus narrating text followed by a failed or cut-off turn is not a proven answer.
+ */
+describe("the claimer's reading of a seat's search stream", () => {
+  const real = readFileSync("tests/fixtures/codex-search-probe.jsonl", "utf8");
+  const without = (type: string) => real.split("\n").filter((l) => !l.includes(`"type":"${type}"`)).join("\n");
+
+  it("the real Codex capture finished: five counted searches and the last message as the answer", () => {
+    const p = parseCodexSearch(real);
+    expect(p).toMatchObject({ events: 5, terminal: "completed" });
+    expect(searchOutcome(p, "Codex CLI")).toMatchObject({ ok: true, searchEvents: 5 });
+  });
+
+  it("searches + partial text + a FAILED turn is a failure, not a proven answer", () => {
+    const failed = `${without("turn.completed")}\n{"type":"turn.failed","error":{"message":"quota exceeded"}}`;
+    const p = parseCodexSearch(failed);
+    expect(p.events).toBe(5);
+    expect(p.answer).not.toBe("");
+    const o = searchOutcome(p, "Codex CLI");
+    expect(o.ok).toBe(false);
+    expect((o as { error: string }).error).toMatch(/quota exceeded/);
+  });
+
+  it("a stream cut off before the turn ended is a failure even though it has text and searches", () => {
+    const o = searchOutcome(parseCodexSearch(without("turn.completed")), "Codex CLI");
+    expect(o.ok).toBe(false);
+    expect((o as { error: string }).error).toMatch(/ended without finishing/);
+  });
+
+  it("a non-fatal `error` event (a reconnect) before a completed turn does NOT fail the answer", () => {
+    const withRetry = `{"type":"error","message":"Reconnecting... 1/5"}\n${real}`;
+    expect(searchOutcome(parseCodexSearch(withRetry), "Codex CLI").ok).toBe(true);
+  });
+
+  it("Claude: a result that is_error is a failure whatever was streamed before it", () => {
+    const stream = [
+      '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"WebSearch","input":{"query":"x"}}]}}',
+      '{"type":"assistant","message":{"content":[{"type":"text","text":"partial"}]}}',
+      '{"type":"result","is_error":true,"result":"overloaded","usage":{"server_tool_use":{"web_search_requests":1}}}',
+    ].join("\n");
+    const p = parseClaudeSearch(stream);
+    expect(p.events).toBeGreaterThan(0);
+    expect(searchOutcome(p, "Claude Code").ok).toBe(false);
   });
 });
 
