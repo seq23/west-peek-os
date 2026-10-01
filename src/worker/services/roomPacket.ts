@@ -414,7 +414,7 @@ const defaultJudge: Judge = async (env, actor, prompt) => {
     sensitivity: "PUBLIC" as never,
     // JUDGEMENT, so the router keeps the search model out — this pass exists to hold what the
     // searcher wrote to the brief, and the searcher grading itself was Parker's block.
-    budgetContext: { expectedOutputTokens: 1200, providerKey: "openrouter", judgement: true },
+    budgetContext: { expectedOutputTokens: 1200, providerKey: "openrouter", judgement: true, seatFirst: true },
     routing: { category: "INTELLIGENCE" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) return { ok: false, text: "", detail: run.failure_reason ?? `run ${run.status}` };
@@ -442,7 +442,7 @@ async function defaultSynthesise(env: Env, actor: Actor, purpose: string, prompt
     // no member identities beyond names already in its own records.
     sensitivity: "PUBLIC" as never,
     // The packet Sequoia forwards to Scooter. Not the place a cost posture economises.
-    budgetContext: { expectedOutputTokens, providerKey: "openrouter", judgement: true },
+    budgetContext: { expectedOutputTokens, providerKey: "openrouter", judgement: true, seatFirst: true },
     routing: { category: "INTELLIGENCE" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) {

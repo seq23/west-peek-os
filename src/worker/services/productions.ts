@@ -802,7 +802,7 @@ const defaultJudge: ProductionsJudge = async (env, actor, prompt) => {
     // Judging public research; nothing of the firm's leaves.
     sensitivity: "PUBLIC" as never,
     // No preferred model: the router's default (a Claude model) reads and reasons; it must not search.
-    budgetContext: { expectedOutputTokens: 1200, providerKey: "openrouter", judgement: true },
+    budgetContext: { expectedOutputTokens: 1200, providerKey: "openrouter", judgement: true, seatFirst: true },
     routing: { category: "INTELLIGENCE" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) return { ok: false, text: "", detail: run.failure_reason ?? `run ${run.status}` };

@@ -256,6 +256,23 @@ against absent tables twice in one day, and the fix is a script, not discipline.
 
 ---
 
+## Open loops — the owner will pick these up once Claude is back (Oct 2 2026, 8am Chicago)
+
+Added 1 Oct 2026 at the owner's instruction. Neither is started.
+
+### Free-model quality bench — Not built
+Run real prompts (a Room packet, a Workshop angle set, a judge pass, a blog draft) through each free lane and through a seat, then
+score them: how often the output parses, and a blind rating against the seat's answer. Today no measurement exists, so every free
+model's `provider_model.quality_tier` is `UNMEASURED` and a free lane's work carries the quality note. The bench is what would let
+the owner mark a model FULL (note disappears) or DEGRADED (note says it is known to be weaker) on evidence rather than a guess.
+
+### A screen for each model's quality tier — Not built
+`provider_model.quality_tier` (`FULL | DEGRADED | UNMEASURED`, migration 0251) is the owner's per-model decision and today can
+only be changed in the database. It needs a control on the model/lane page, authorised like every other owner setting and
+written to the event spine.
+
+---
+
 ## Not planned
 
 Listed so nobody assumes they are coming.

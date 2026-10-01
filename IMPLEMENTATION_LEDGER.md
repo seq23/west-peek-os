@@ -7217,3 +7217,18 @@ when the step record is present; the page shows the newest 14 and "Show N earlie
 real sweep, 404/401. **Negative proof, run:** sweep events removed (1 red), timeline ignoring steps (1 red) — each restored. 17 related files,
 369 tests green locally; the full suite runs in CI.
 **UNPROVEN:** the page in a browser (no e2e, by the owner's instruction); event volume in production (one row per worked tick).
+
+## 1 Oct 2026 — A pinned `seatFirst` call reaches the seats (why a free model wrote the November Room)
+
+**Found by the owner's pasted packet cover:** "Quality note: Written by Nemotron 3 Super 120B (free)…" — a free model wrote the packet while
+both seats were paid for. **Cause, read from the code:** the Room packet's judge and writer (and the matching calls in blog help,
+Productions and the weekly hire search) are `judgement: true`, public, and pin `providerKey: "openrouter"`; none was named `seatFirst`, so
+outside Free only a free lane led (`freeFirstEligible`); and even a `seatFirst` flag could not help, because a pin left OpenRouter as the
+only candidate and the seats were never in the candidate set (only the Free-only ladder and search calls widened it).
+**Fix:** the six judgement/writing calls are named `seatFirst: true`; a pinned `seatFirst` non-search call now gets the awake seats
+(file-capable ones when it carries files) added beside the pin — seats only, never a free lane, so content safety is unchanged; the pin
+stays the fallback behind them. **Tests:** `tests/seatFirstBesidePin.test.ts` (3) — served by an awake seat with no vendor call; falls back
+to the pinned lane with no seat awake; a pinned call not named `seatFirst` is unchanged. Related suites (freeOnlyLadder, roomPacket,
+blogHelp, productions) green locally.
+**UNPROVEN:** which setting and which seat state the owner's actual run had — the production run record was not read (no access from the
+session); on a live Mac with an awake seat the next Room/Workshop card is the proof.

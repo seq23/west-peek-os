@@ -1452,7 +1452,9 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * the deliverable instead (see `degradedLaneNote`), and which free model that is decides whether it is weaker at all.
    */
   const freeOnlyLadder = behaviour.freeOnly && !requiresSearch;
-  const searchSeatAvailability = requiresSearch || hasFiles || freeOnlyLadder ? await allSeatAvailability(env, now) : [];
+  // A call the owner named `seatFirst` that is not a live search: its pin (if any) must not hide the seats from it.
+  const seatFirstBesidePin = input.budgetContext?.seatFirst === true && !requiresSearch && !freeOnlyLadder;
+  const searchSeatAvailability = requiresSearch || hasFiles || freeOnlyLadder || seatFirstBesidePin ? await allSeatAvailability(env, now) : [];
   const fileSeatKeys = new Set(
     hasFiles ? searchSeatAvailability.filter((a) => a.available && fileKinds.every((k) => a.canRead?.[k] === true)).map((a) => a.seat as string) : [],
   );
@@ -1490,6 +1492,28 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
         .bind(...searchSeatKeys)
         .all<ProviderRow>();
       candidates = [...candidates, ...(seatRows.results ?? [])];
+    }
+    if (seatFirstBesidePin) {
+      /*
+       * A PIN DOES NOT HIDE A SEAT FROM A `seatFirst` CALL (1 Oct 2026). Parker's Room packet pins OpenRouter for its judge and
+       * its writer and is named seatFirst, yet outside Free only the pin left OpenRouter as the one candidate, so a free model
+       * wrote the packet while both seats were paid for and idle. The awake seats stand beside the pin; the pin remains the
+       * fallback behind them. Only seats are added — never a free lane — so content safety is unchanged.
+       */
+      const seatKeys = searchSeatAvailability
+        .filter((a) => a.available && (!hasFiles || fileKinds.every((k) => a.canRead?.[k] === true)))
+        .map((a) => a.seat as string);
+      if (seatKeys.length > 0) {
+        const seatRows = (
+          await env.WP_OS_DB.prepare(
+            `SELECT * FROM provider_registry WHERE claimable = 1 AND enabled = 1 AND kill_switched = 0 AND ${LANE_NOT_STOOD_DOWN_SQL} AND provider_key IN (${seatKeys.map((_, i) => `?${i + 1}`).join(", ")})`,
+          )
+            .bind(...seatKeys)
+            .all<ProviderRow>()
+        ).results ?? [];
+        const have = new Set(candidates.map((c) => c.id));
+        candidates = [...candidates, ...seatRows.filter((r) => !have.has(r.id))];
+      }
     }
     if (freeOnlyLadder) {
       /*
