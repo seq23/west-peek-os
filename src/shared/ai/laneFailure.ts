@@ -26,7 +26,7 @@
  * up watching a card say "queued" for a quarter of an hour.
  */
 
-export const LANE_FAILURE_KINDS = ["CREDIT", "CREDENTIAL", "RATE_LIMIT", "LANE_DOWN", "NO_LANE", "NONE"] as const;
+export const LANE_FAILURE_KINDS = ["CREDIT", "CREDENTIAL", "RATE_LIMIT", "LANE_DOWN", "NO_LANE", "LEVER", "NONE"] as const;
 export type LaneFailureKind = (typeof LANE_FAILURE_KINDS)[number];
 
 export interface LaneFailure {
@@ -56,6 +56,17 @@ const NOT_SIGNED_IN = /invalid[_ -]?api[_ -]?key|authentication|unauthorized|una
 export function readLaneFailure(detail: string | null | undefined): LaneFailure {
   const text = (detail ?? "").trim();
   if (!text) return NOT_A_LANE_FAILURE;
+
+  /*
+   * THE SPEND LEVER STOPPED IT (1 Oct 2026). Parker's November Room failed three times on
+   * `free_only_cannot_serve_protected_work:… the lever is set to FREE_ONLY. Move the lever to
+   * MODERATE to let it run.` Nothing read that as a stop a person could clear, so the card said
+   * "tried three times" and offered her an answer to type. No lane refused anything: the firm's own
+   * setting declined to pay. Not transient — repeating it verbatim cannot change the setting.
+   */
+  if (/free_only_cannot_serve_protected_work|free_only_no_free_model_available/i.test(text)) {
+    return { kind: "LEVER", lane: null, vendorWords: "", transient: false };
+  }
 
   const missing = /credential_missing:([a-z0-9_]+)/i.exec(text);
   if (missing) return { kind: "CREDENTIAL", lane: missing[1]!.toLowerCase(), vendorWords: "", transient: false };

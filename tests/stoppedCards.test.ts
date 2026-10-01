@@ -294,3 +294,47 @@ describe("nothing left to try is its own block", () => {
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
   });
 });
+
+/**
+ * THE SPEND LEVER IS NOT A LANE (1 Oct 2026). Parker's November Room failed three times on
+ * `free_only_cannot_serve_protected_work` — the firm's own setting declining to pay — and the card
+ * said "Parker tried three times and could not get this done", offering an answer to type. No
+ * answer could have helped; moving the lever to Moderate was the fix, and the card never said so.
+ */
+describe("the spend setting stopped it", () => {
+  const FREE_ONLY =
+    "DISCOVER: sponsor discovery search failed: free_only_cannot_serve_protected_work:this call is marked 'search' and needs a paid model, " +
+    "and the lever is set to FREE_ONLY. Purpose: Parker: Room sponsor research. It has been stopped rather than quietly given a weaker model. " +
+    "Move the lever to MODERATE to let it run.";
+
+  it("is read as its own kind, not repeated three times, and not blamed on a lane", () => {
+    const f = readLaneFailure(FREE_ONLY);
+    expect(f.kind).toBe("LEVER");
+    expect(f.transient).toBe(false);
+    expect(attemptsAllowedFor(f, MAX_WORK_ATTEMPTS)).toBe(2);
+    expect(readLaneFailure("free_only_no_free_model_available:the lever is set to FREE_ONLY").kind).toBe("LEVER");
+  });
+
+  it("the block names the setting, offers the doors that touch it, and passes the plain-language standard", () => {
+    const b = describeBlock("a_lane_refused_the_work", { trying: "Parker: build the November 2026 Room packet", employee: "Parker", laneKind: "LEVER", vendorWords: "free_only_cannot_serve_protected_work" });
+    expect(b.stopped).toMatch(/spend setting is on Free only/);
+    expect(b.stopped).not.toMatch(/lane|free_only/i);
+    expect(b.needed).toMatch(/Moderate/);
+    expect(b.actions.map((a) => a.key)).toEqual(["RETRY", "HAND_ON", "DROP"]);
+    expect(blockProblems(b)).toEqual([]);
+  });
+
+  it("through the sweep: the card stops on attempt two with the setting named, never 'tried three times'", async () => {
+    const id = await card("Parker: build the November 2026 Room packet");
+    const runner = refusedRunner(id, FREE_ONLY);
+    await sweepOnce(env, new Date(NOW.getTime() + 60_000), { general: runner });
+    expect(String((await row(id)).work_last_failure)).toMatch(/Attempt 1 of 2 was held back by the spend setting/);
+    await sweepOnce(env, new Date(NOW.getTime() + 120_000), { general: runner });
+    const c = await row(id);
+    expect(c.state).toBe("BLOCKED");
+    expect(c.block_reason).toBe("a_lane_refused_the_work");
+    expect(String(c.block_stopped)).toMatch(/spend setting is on Free only/);
+    expect(String(c.block_stopped)).not.toMatch(/tried three times/);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
+  });
+});

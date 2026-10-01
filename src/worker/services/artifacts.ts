@@ -446,6 +446,7 @@ export function plainFailure(detail: string): string {
     case "CREDENTIAL": return `the lane refused it${lane} — the firm is not signed in to it`;
     case "RATE_LIMIT": return `the lane turned it away${lane} for sending too much at once`;
     case "LANE_DOWN": return `the lane did not answer${lane}`;
+    case "LEVER": return "the spend setting is on Free only and this work needs a paid model";
     default: return detail.replace(/[_]+/g, " ").slice(0, 200);
   }
 }
