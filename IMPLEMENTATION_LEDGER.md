@@ -6871,3 +6871,42 @@ Design: `ARCHITECTURAL_DECISIONS.md` (29 Sep 2026); behaviour: `docs/AI_GOVERNAN
   `git push`/`gh` can authenticate from inside the sandbox. If either fails the BUILD fails at its
   commit/PR check with the reason on the card, exactly as any failed phase does.
 - **Verification.** Full suite for phases 1–3 (before this section): 229 files, 3,453 tests, green.
+
+## 1 Oct 2026 — A stop from the spend setting says so, instead of "tried three times"
+
+Parker's November 2026 Room packet (`rpk_f23d140c-…`, card `wc_26f988c2-…`) blocked with *"Parker tried
+three times and could not get this done"*. The card's own engineer note held the real cause: DISCOVER's
+sponsor search was refused with `free_only_cannot_serve_protected_work` — the spend lever was on
+`FREE_ONLY` and the call needs a paid model.
+
+**The defect.** `readLaneFailure` knew credit, sign-in, rate-limit and no-lane stops and nothing about the
+lever's own. The stop read as `NONE`, so the card got all three attempts and the generic block, whose only
+doors (type an answer, rewrite the ask) cannot change a setting.
+
+| | |
+|---|---|
+| `src/shared/ai/laneFailure.ts` | New kind `LEVER` for `free_only_cannot_serve_protected_work` and `free_only_no_free_model_available`. Not transient, so two attempts at most. |
+| `src/shared/work/blocks.ts` | The `a_lane_refused_the_work` block, for `LEVER`: names the spend setting, says to set it to Moderate and try again. Doors: try again, give it to somebody else, drop it. No stand-a-lane-down doors — they cannot change a setting. |
+| `src/worker/services/workSweep.ts`, `artifacts.ts`, `ai/spend.ts` | The per-attempt line, the plain failure sentence and the "she can fix it" flag read the new kind. |
+| `tests/stoppedCards.test.ts` | +3: the exact failure text read as `LEVER`; the block's wording and doors against the plain-language standard; through `sweepOnce`, the card stops on attempt two naming the setting. |
+
+**Negative proof, run.** With `laneFailure.ts` restored to its prior state, 2 of the 3 new tests go red.
+
+**Not changed.** The lever itself. Clearing this card needs the lever on `MODERATE` and a retry — an operator action.
+
+**Validation.** `tsc --noEmit` clean; vitest 3479/3482. Three failures are pre-existing and unrelated:
+`tests/aSteerWaitsForItsMonth.test.ts` reads the real clock and asserts a September date, so it fails from
+30 Sep onward (same 3 red on the base commit). All `validate:*` PASS except `validate:value-shapes`, which
+queries remote production D1 and needs `CLOUDFLARE_API_TOKEN` (also fails on the base commit). Remote
+firing and the production card are UNPROVEN until the lever is moved and the card retried.
+
+**Same day — the clock-dependent steer tests.** `tests/aSteerWaitsForItsMonth.test.ts` asserted "an ask
+for November, given in September" against the real clock, so three tests were true until 30 Sep and red
+from 1 Oct. The door is correct; the fixture was not. `Date` is now pinned to the scenario's September
+(`vi.useFakeTimers({ toFake: ["Date"] })`, restored in `afterAll`), so the file no longer ages. 14/14 pass.
+
+**Same day — review finding on #215 (artifact cards).** `runArtifactCard` parsed the lane kind off the
+artifact's error code but only passed its key to `blockCard`, so an artifact stopped by the spend setting
+(`planning_failed/LEVER`) fell back to the generic lane block. `LEVER` is now passed as `laneKind`;
+`tests/artifacts.test.ts` +1 (red without the line, green with it). Other kinds on artifact cards are
+unchanged — widening them is a separate decision.

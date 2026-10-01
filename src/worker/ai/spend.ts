@@ -568,7 +568,7 @@ export async function stoppedRuns(env: Env, firmScope: string, window: SpendWind
      * re-enable from that page. A vendor having a bad minute is not, and saying so is the honest
      * answer rather than sending her to a page with nothing on it for her.
      */
-    she_can_fix: failure.kind === "CREDIT" || failure.kind === "CREDENTIAL" || failure.kind === "NO_LANE",
+    she_can_fix: failure.kind === "CREDIT" || failure.kind === "CREDENTIAL" || failure.kind === "NO_LANE" || failure.kind === "LEVER",
   };
 }
 
@@ -587,6 +587,8 @@ export function stoppedRunSentence(status: string, failureReason: string | null)
       return "a lane was rate-limited; this clears itself and the run will be retried";
     case "LANE_DOWN":
       return "a lane failed to answer; the run fell through the chain and nothing left could serve it";
+    case "LEVER":
+      return "the spend lever is set to Free only and this work needs a paid model — move it to Moderate to let it run";
     case "NO_LANE":
       return "no enabled lane was allowed to serve this work — check which providers are enabled on the Cockpit";
     default:

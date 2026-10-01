@@ -446,6 +446,7 @@ export function plainFailure(detail: string): string {
     case "CREDENTIAL": return `the lane refused it${lane} — the firm is not signed in to it`;
     case "RATE_LIMIT": return `the lane turned it away${lane} for sending too much at once`;
     case "LANE_DOWN": return `the lane did not answer${lane}`;
+    case "LEVER": return "the spend setting is on Free only and this work needs a paid model";
     default: return detail.replace(/[_]+/g, " ").slice(0, 200);
   }
 }
@@ -700,6 +701,9 @@ export async function runArtifactCard(env: Env, sweepCard: { id: string }, deps:
     employee: name,
     detail: `${name} could not build the ${KIND_WORDS[fresh.kind].label.toLowerCase()}: ${fresh.error_message ?? outcome.detail}. Say what to change, or press Try again on the artifact.`,
     ...(laneKind?.[2] ? { laneKey: laneKind[2] } : {}),
+    // The spend setting is not a lane: without this the block fell back to the generic lane
+    // refusal and its stand-a-lane-down doors, which cannot change a setting.
+    ...(laneKind?.[1] === "LEVER" ? { laneKind: "LEVER" as const } : {}),
   });
   return { finished: false, blocked: true, detail: why, artifact_id: fresh.id };
 }

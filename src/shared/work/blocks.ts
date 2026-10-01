@@ -190,6 +190,7 @@ export function usableVendorWords(words: string | null | undefined): string {
 
 /** What a lane did, in one plain sentence, with the vendor quoted when the quote is readable. */
 function laneRefusal(f: BlockFacts): string {
+  if (f.laneKind === "LEVER") return "The spend setting is on Free only, and this work needs a paid model, so it was held back.";
   const lane = (f.lane ?? "").trim() || "The lane it tried";
   const named = lane === "The lane it tried" ? lane : `The ${lane} lane`;
   const quote = usableVendorWords(f.vendorWords);
@@ -331,7 +332,9 @@ const CATALOGUE: Record<BlockReason, (f: BlockFacts) => Omit<Block, "reason" | "
   a_lane_refused_the_work: (f) => ({
     stopped: laneRefusal(f),
     needed:
-      f.laneKind === "CREDIT"
+      f.laneKind === "LEVER"
+        ? "Set the spend setting to Moderate on the AI page, then try it again — or drop it for this month."
+        : f.laneKind === "CREDIT"
         ? `Send it to a different model, or put more credit on the ${f.lane ?? "account it uses"} account.`
         : f.laneKind === "CREDENTIAL"
           ? `Send it to a different model, or get the firm signed in to ${f.lane ?? "that one"} again.`
@@ -339,7 +342,9 @@ const CATALOGUE: Record<BlockReason, (f: BlockFacts) => Omit<Block, "reason" | "
             ? "Send it to a different model, or try it again in a little while."
             : "Send it to a different model, stand that one down, or try it again.",
     who: f.who ?? "SEQUOIA",
-    actions: [
+    // A setting, not a lane: standing a lane down or sending it elsewhere cannot change it, and
+    // offering those would be the same wrong doors this block exists to remove.
+    actions: f.laneKind === "LEVER" ? [RETRY, HAND_ON, DROP] : [
       ANOTHER_LANE(f.lane ?? "that one"),
       PAUSE_LANE(f.lane ?? "that one"),
       RETRY,

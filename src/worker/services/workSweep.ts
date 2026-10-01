@@ -481,6 +481,7 @@ function attemptLine(card: SweepCard, failure: LaneFailure, laneName: string | n
   const which = `Attempt ${card.work_attempts} of ${allowed}`;
   if (!isLaneFailure(failure)) return `${which} did not get anywhere.`;
   if (failure.kind === "NO_LANE") return `${which} had nowhere to send the work — every model is switched off or unavailable.`;
+  if (failure.kind === "LEVER") return `${which} was held back by the spend setting — it is on Free only and this work needs a paid model.`;
   const lane = laneName ? `the ${laneName} lane` : "the lane it tried";
   if (failure.kind === "CREDIT") return `${which} was refused by ${lane} — the account behind it has run out of credit.`;
   if (failure.kind === "CREDENTIAL") return `${which} was refused by ${lane} — the firm is not signed in to it.`;
