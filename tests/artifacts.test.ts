@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { blockOf } from "../src/worker/services/blocks";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import { saidNothing, cannotDo } from "./helpers/interpret";
 import { handleRequest } from "../src/worker/index";
@@ -87,6 +88,7 @@ const writes: ArtifactModelCall = async (_env, _actor, { prompt }) => {
   const rows = Number(/\((?:investment_opportunity), (\d+) rows/.exec(prompt)?.[1] ?? 0);
   return { ok: true, text: JSON.stringify({ summary: `The pipeline holds ${rows} statuses worth reading and 999 imaginary ones.`, sections: [{ panel: "p1", heading: "Where the deals sit", prose: `There are ${rows} statuses in play; the invented figure 4242 is not in the record.` }, { panel: "p2", heading: "The companies", prose: "The record names the companies below." }] }), aiRunId: null, detail: "COMPLETED" };
 };
+const freeOnly: ArtifactModelCall = async () => ({ ok: false, text: "", aiRunId: null, detail: "free_only_cannot_serve_protected_work:this call is marked 'search' and needs a paid model, and the lever is set to FREE_ONLY." });
 const noLane: ArtifactModelCall = async () => ({ ok: false, text: "", aiRunId: null, detail: "no_enabled_providers" });
 
 beforeAll(async () => {
@@ -403,6 +405,23 @@ describe("3. door B — a work card: her words become an ARTIFACT card, the same
     const row = (await loadArtifact(env, out.artifact_id!))!;
     expect(row.state).toBe("FAILED");
     expect(row.error_code).toBe("planning_failed/NO_LANE");
+  });
+
+  it("a stop from the spend setting blocks the card as the setting, not as a lane (1 Oct 2026)", async () => {
+    const card = await createWorkCardInternal(env, MP_IDENTITY, {
+      title: "A memo on Sensori Labs, free only",
+      owner_type: "AI",
+      owner_id: "Wyatt",
+      prompt: "write me a memo on Sensori Labs",
+    });
+    const out = await runArtifactCard(env, { id: card.id }, { interpret: saidNothing, plan: freeOnly });
+    expect(out.blocked).toBe(true);
+    expect((await loadArtifact(env, out.artifact_id!))!.error_code).toBe("planning_failed/LEVER");
+    const c = (await t.db.prepare("SELECT * FROM work_card WHERE id = ?1").bind(card.id).first<Record<string, unknown>>())!;
+    expect(c.block_reason).toBe("a_lane_refused_the_work");
+    const block = blockOf(c as never)!;
+    expect(block.stopped).toMatch(/spend setting is on Free only/);
+    expect(block.actions.map((a) => a.key)).toEqual(["RETRY", "HAND_ON", "DROP"]);
   });
 });
 

@@ -6904,3 +6904,9 @@ firing and the production card are UNPROVEN until the lever is moved and the car
 for November, given in September" against the real clock, so three tests were true until 30 Sep and red
 from 1 Oct. The door is correct; the fixture was not. `Date` is now pinned to the scenario's September
 (`vi.useFakeTimers({ toFake: ["Date"] })`, restored in `afterAll`), so the file no longer ages. 14/14 pass.
+
+**Same day — review finding on #215 (artifact cards).** `runArtifactCard` parsed the lane kind off the
+artifact's error code but only passed its key to `blockCard`, so an artifact stopped by the spend setting
+(`planning_failed/LEVER`) fell back to the generic lane block. `LEVER` is now passed as `laneKind`;
+`tests/artifacts.test.ts` +1 (red without the line, green with it). Other kinds on artifact cards are
+unchanged — widening them is a separate decision.
