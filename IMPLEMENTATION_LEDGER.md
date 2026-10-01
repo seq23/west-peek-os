@@ -6899,3 +6899,8 @@ doors (type an answer, rewrite the ask) cannot change a setting.
 30 Sep onward (same 3 red on the base commit). All `validate:*` PASS except `validate:value-shapes`, which
 queries remote production D1 and needs `CLOUDFLARE_API_TOKEN` (also fails on the base commit). Remote
 firing and the production card are UNPROVEN until the lever is moved and the card retried.
+
+**Same day — the clock-dependent steer tests.** `tests/aSteerWaitsForItsMonth.test.ts` asserted "an ask
+for November, given in September" against the real clock, so three tests were true until 30 Sep and red
+from 1 Oct. The door is correct; the fixture was not. `Date` is now pinned to the scenario's September
+(`vi.useFakeTimers({ toFake: ["Date"] })`, restored in `afterAll`), so the file no longer ages. 14/14 pass.

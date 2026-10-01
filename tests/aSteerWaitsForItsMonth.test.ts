@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import type { RouteContext } from "../src/worker/router";
@@ -69,10 +69,21 @@ const packetsFor = async (month: string): Promise<PacketRow[]> =>
   (await env.WP_OS_DB.prepare("SELECT * FROM evt_room_packet WHERE proposed_for_month = ?1").bind(month).all<PacketRow>()).results ?? [];
 
 beforeAll(async () => {
+  /*
+   * THE CLOCK IS PART OF THE FIXTURE. The request door classifies an ask by the calendar (`now` is
+   * read inside `handleGeneratePacket`), and these scenarios are "what happens if she says this on
+   * 18 September". Left on the real clock the first three tests were true until 30 Sep and false
+   * from 1 Oct, when November is no longer a later month — a defect in the test, not the door
+   * (found 1 Oct 2026, the first day it could fail). Only `Date` is faked: timers stay real, so the
+   * local D1 and the request path keep running normally.
+   */
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(SEPT));
   t = await createTestDb();
   env = makeTestEnv(t.db, { WP_OS_DOCUMENTS: t.docs } as Partial<Env>);
 });
 afterAll(async () => {
+  vi.useRealTimers();
   await disposeTestDb(t);
 });
 
