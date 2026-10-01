@@ -1,5 +1,6 @@
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import type { Env } from "../../env";
+import { attachmentRefusal, deleteKeys, putSeatAttachments, type SeatAttachmentInput, type SeatAttachmentRef } from "../seatAttachments";
 import {
   CLAIM_POLL_MS,
   CLAIM_WAIT_MS,
@@ -88,13 +89,28 @@ export function createSubscriptionSeatAdapter(opts: SubscriptionSeatAdapterOptio
        * exact failure `types.ts` forbids in as many words. Refused as a CAPABILITY failure, which
        * `isProviderOutage` deliberately does NOT chain: the run already chose a lane that can see.
        */
-      if (req.images?.length) throw new Error(`provider_cannot_see_images:${seat}`);
-      if (req.documents?.length) throw new Error(`provider_cannot_read_documents:${seat}`);
+      const wantsImages = (req.images?.length ?? 0) > 0;
+      const wantsDocuments = (req.documents?.length ?? 0) > 0;
 
       // 1. IS THE MACHINE THERE? One read. A stale answer costs the run nothing at all.
       const availability = await laneAvailability(env, seat, now());
       if (!availability.available) {
         throw new Error(`${SEAT_UNAVAILABLE}:${availability.reason}`);
+      }
+      /*
+       * A FILE IS PARKED ONLY FOR A CLAIMER THAT PROVED IT CAN READ ONE (0249). The router already chose this seat
+       * on that basis; this is the second wall, read again here so an adapter handed a file by any other caller
+       * still refuses rather than drop it.
+       */
+      if (wantsImages && availability.canRead?.image !== true) throw new Error(`provider_cannot_see_images:${seat}`);
+      if (wantsDocuments && availability.canRead?.document !== true) throw new Error(`provider_cannot_read_documents:${seat}`);
+      const files: SeatAttachmentInput[] = [
+        ...(req.images ?? []).map((i): SeatAttachmentInput => ({ kind: "image", mediaType: i.mediaType, dataBase64: i.dataBase64, label: i.label })),
+        ...(req.documents ?? []).map((d): SeatAttachmentInput => ({ kind: "document", mediaType: d.mediaType, dataBase64: d.dataBase64, label: d.label })),
+      ];
+      if (files.length > 0) {
+        const refusal = attachmentRefusal(files);
+        if (refusal) throw new Error(`provider_cannot_read_documents:${seat}: ${refusal}`);
       }
       // A seat whose claimer cannot search must not be parked a search row: it would never be claimed
       // and the wait would be spent for nothing. Absent-by-capability is answered like absent-by-lid.
@@ -104,7 +120,19 @@ export function createSubscriptionSeatAdapter(opts: SubscriptionSeatAdapterOptio
 
       // 2. PARK IT. Everything upstream — budget, egress, content class, the two labels — has
       //    already run; this row is a leg of a governed `ai_run`, never work of its own.
-      const queueId = await parkRun(env, {
+      const queueId = `ccr_${crypto.randomUUID()}`;
+      let attachments: SeatAttachmentRef[] = [];
+      if (files.length > 0) {
+        try {
+          attachments = await putSeatAttachments(env, queueId, files);
+        } catch (err) {
+          throw new Error(`provider_cannot_read_documents:${seat}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      try {
+        await parkRun(env, {
+        id: queueId,
+        attachments,
         seat,
         purpose: req.purpose,
         prompt: req.inputs.join("\n\n"),
@@ -116,7 +144,12 @@ export function createSubscriptionSeatAdapter(opts: SubscriptionSeatAdapterOptio
         firmScope: opts.firmScope ?? "west-peek",
         maxSeconds: Math.round(waitMs / 1000),
         needsSearch,
-      });
+        });
+      } catch (err) {
+        // The files were stored before the row was written; with no row naming them nothing else would ever delete them.
+        if (attachments.length > 0 && env.WP_OS_DOCUMENTS) await deleteKeys(env.WP_OS_DOCUMENTS, attachments.map((a) => a.key));
+        throw err;
+      }
 
       // 3. WAIT, BOUNDED. The deadline is absolute rather than a poll count, so a slow database
       //    read cannot quietly stretch the wait a partner is paying for.

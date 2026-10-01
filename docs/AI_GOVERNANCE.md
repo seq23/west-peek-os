@@ -119,6 +119,15 @@ Claude Code seat (Max plan)  →  Codex seat (ChatGPT Plus)  →  FREE lanes  �
   counted search; an answer with none is a failure and the chain moves to the paid search lane. A seat that
   answers from memory is never accepted as research. `validate:seat-search-proof` holds that shape.
   Runbook, and the probes that settle what the cloud cannot: `docs/SEAT_SEARCH_AND_PROBES.md`.
+- **A seat may be handed a picture or a document — only by a claimer that PROVED it can read one (0249, 1 Oct
+  2026).** A call carrying a file used to be kept off the seats entirely. It may now go to a seat whose awake
+  claimer declared `read_image:<seat>` / `read_document:<seat>` for every kind the call carries, and the claimer
+  declares those only from the proof file its own probe wrote on that Mac. The bytes travel through R2 to the
+  device that holds the run, are written to a private temp directory, and are deleted when the run ends. Bounds:
+  5 files, 8 MB each, 16 MB in all, PNG/JPEG/GIF/WebP and PDF. `validate:seat-search-proof` holds the shape.
+- **Both seats spent is a wait for the earlier reset (1 Oct 2026).** A repo phase that finds Claude Code and Codex
+  both out of usage is held until the earlier plan resets — no attempt charged, no block, no email — and starts
+  again by itself. See `docs/SEAT_SEARCH_AND_PROBES.md` §5.
 - **Setting the default is a human act.** Moving production to `FREE_ONLY` is `governance.policy_change`
   (an approval card); no migration does it.
 

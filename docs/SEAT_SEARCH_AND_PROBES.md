@@ -43,16 +43,34 @@ Look for `"name":"WebSearch"` tool calls in the stream and `web_search_requests`
 Until this is read, Codex is the only proven search seat; the claimer already declares both, and the Worker's
 proof rule protects against a seat that does not actually search.
 
-## 3 · Can a seat read a picture or a PDF? (phase 4 — probe only)
+## 3 · Can a seat read a picture or a PDF? (phase 4 — probe, and now the transport it switches on)
 
 ```bash
 node scripts/probes/seat-attachments-probe.mjs
 ```
 
-Prints `PROVEN / FAILED / UNTESTED` for each seat and file type. **Routing is not changed by this.** Seats are
-still never offered an image or a document, and attachments still have no way to reach the Mac (the queue
-carries text). Both would be built only after this reports PROVEN for a seat and type you want, and after
-the privacy and size consequences of moving files through the queue are decided.
+Prints `PROVEN / FAILED / UNTESTED` for each seat and file type, **and writes what it proved to
+`~/.west-peek-os/seat-attachments-proof.json`** (mode 0600). That file is the only thing that ever makes a seat
+eligible for a file:
+
+- the claimer re-reads it every cycle and declares `read_image:<seat>` / `read_document:<seat>` for exactly what is
+  PROVEN, fresh (under 30 days) and true — nothing else, and no restart;
+- the Worker (0249) offers a call that carries a picture or a PDF to a seat only when the awake device declared the
+  capability for **every** kind the call carries; a seat without it is never parked the file and the call goes to
+  the lanes that can see, as before;
+- UNTESTED (a plan out of usage) changes nothing; FAILED withdraws an earlier proof; re-run after a CLI update.
+
+How the bytes move: the Worker stores each file in R2 under `seat-attachments/<run id>/…` (max 5 files, 8 MB each,
+16 MB in all; PNG/JPEG/GIF/WebP and PDF only), the queue row names them, the claimer that **holds** the run fetches
+each from `GET /api/subscription-seats/attachment` into a private temp directory, runs the seat there, and deletes
+the directory. The Worker deletes the R2 objects the moment the run ends, and the every-minute sweep deletes any
+that were missed. A device that is not the holder, an unclaimed run and an ended run all get 404.
+
+Codex gets pictures with `-i` and documents by path; Claude Code reads both by path with the Read tool — the same
+invocation the probe proves, from one module (`scripts/lib/seat-attachments.mjs`).
+
+**Not proven by any test:** that the live CLIs read a file this way on your Mac (this probe is the proof), and how a
+large deck behaves against the queue's timings.
 
 ## 4 · The first supervised Codex repo job (phase 6)
 
@@ -69,7 +87,13 @@ job should still be watched.
 
 ## 5 · What "both seats spent" now looks like
 
-When Claude Code reports a spent plan and the phase falls to Codex, and Codex reports the same, the phase
-fails with a sentence naming **both** notices and their reset times (for example "resets Oct 2 at 8am"),
-and a Codex run that printed a notice and exited 0 is not taken as finished work. It is a failure to be
-retried after a reset, not a defect in the job.
+When Claude Code reports a spent plan and the phase falls to Codex, and Codex reports the same, the phase is **a
+wait, not a failure**. The claimer reports `waits_seconds` — the time until the *earlier* of the two resets, read
+from the notices' own words (an hour when neither says, never more than a week). The Worker then holds the card to
+that moment: no attempt is charged, the card is not blocked, nobody is emailed, and the Work page shows
+**"Waiting for reset"** with the time. The sweep leaves it alone until then and parks the same phase again by itself;
+a plan still spent at that moment simply holds it again. A person pressing "Try it again now" starts it immediately.
+A phase that failed any other way is still an attempt.
+
+Applies to Porter's repo jobs (the web-property change phases). A Codex run that printed a notice and exited 0 is
+still not taken as finished work.

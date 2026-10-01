@@ -194,6 +194,11 @@ export interface LocalJobReport {
   materials?: string;
   /** Why it stopped, for a partner. Required for blocked and failed. */
   reason?: string;
+  /**
+   * BOTH SEATS SPENT (1 Oct 2026): on a `failed` report, how many seconds until the earlier of the two subscription
+   * plans resets. It is a wait, not a fault — the Worker holds the card until then and charges no attempt.
+   */
+  waits_seconds?: number;
   /** PLAN: the plan document, markdown. */
   document?: string;
   decided?: string[];
@@ -286,6 +291,9 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
     placeholders: strs(r.placeholders),
     publish_ready: typeof r.publish_ready === "boolean" ? r.publish_ready : strs(r.placeholders).length === 0,
     preview_url: str(r.preview_url),
+    ...(typeof r.waits_seconds === "number" && Number.isFinite(r.waits_seconds) && r.waits_seconds >= 60
+      ? { waits_seconds: Math.min(Math.round(r.waits_seconds), 7 * 24 * 60 * 60) }
+      : {}),
     ...(typeof r.changed === "boolean" ? { changed: r.changed } : {}),
     ...(str(r.head_sha) ? { head_sha: str(r.head_sha)!.slice(0, 64) } : {}),
     ...(str(r.materials) ? { materials: str(r.materials)!.slice(0, 200) } : {}),

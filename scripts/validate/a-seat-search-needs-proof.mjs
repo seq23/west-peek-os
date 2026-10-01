@@ -106,10 +106,57 @@ export function auditAdapter(adapterSrc) {
 
 export function auditClaimer(src) {
   const bad = [];
-  if (!/const CAPABILITIES = \["web_search"\]/.test(src)) bad.push("the claimer no longer declares web_search in its capabilities");
+  if (!/const BASE_CAPABILITIES = \["web_search"\]/.test(src)) bad.push("the claimer no longer declares web_search in its capabilities");
   if (!/parseCodexSearch|parseClaudeSearch/.test(src) || !/searchOutcome\(/.test(src)) bad.push("the claimer no longer counts searches from the CLI's event stream");
   if (!/search_events:/.test(src)) bad.push("the claimer no longer reports search_events with a search answer");
   if (!/can_search:/.test(src)) bad.push("the claimer no longer tells the claim route it can search");
+  return bad;
+}
+
+/*
+ * ── THE SAME RULE FOR FILES (0249) ───────────────────────────────────────────────────────────
+ * A seat may be handed a picture or a deck only when the claimer on that Mac DECLARED it can read one, and it
+ * declares that only from the proof its own probe wrote. Each guard below is one place that rule could be worn away.
+ */
+export function auditAttachmentMigration(sql) {
+  const bad = [];
+  for (const col of ["attachments_json", "attachments_cleared_at"]) {
+    if (!new RegExp(`ADD COLUMN ${col}\\b`).test(sql ?? "")) bad.push(`migration 0249 no longer adds subscription_seat_run.${col}`);
+  }
+  return bad;
+}
+
+export function auditAttachmentClaim(seatsSrc) {
+  const bad = [];
+  const fn = body(seatsSrc, "export async function claimRun(");
+  if (!fn) return ["claimRun was not found"];
+  if (!/deviceMayReadRunFiles\(env, deviceId, c\.seat, c\.attachments_json\)/.test(fn)) bad.push("claimRun no longer judges a run's files against the claiming device's own stored capabilities for the run's seat");
+  if (/can_read_attachments|canReadAttachments/.test(fn)) bad.push("claimRun trusts a flag in the claim request for files instead of the device's stored capabilities");
+  const check = body(seatsSrc, "async function deviceMayReadRunFiles(");
+  if (!check || !/refs\.every\(\(r\) => capabilitiesAllow\(row\?\.capabilities_json, seat, r\.kind\)\)/.test(check)) bad.push("the file check no longer requires EVERY kind of file in the run, for this seat, on this device");
+  return bad;
+}
+
+export function auditAttachmentRouter(runAiSrc) {
+  const bad = [];
+  if (!/fileKinds\.every\(\(k\) => a\.canRead\?\.\[k\] === true\)/.test(runAiSrc)) bad.push("the router no longer requires a seat to have PROVEN every kind of file the call carries");
+  if (!/\(!hasFiles \|\| fileSeatKeys\.size > 0\)/.test(runAiSrc)) bad.push("a call carrying files is no longer kept off the seats unless one of them proved it can read them");
+  return bad;
+}
+
+export function auditAttachmentAdapter(adapterSrc) {
+  const bad = [];
+  if (!/wantsImages && availability\.canRead\?\.image !== true/.test(adapterSrc)) bad.push("the seat adapter no longer refuses a picture for a seat that did not prove it can see one");
+  if (!/wantsDocuments && availability\.canRead\?\.document !== true/.test(adapterSrc)) bad.push("the seat adapter no longer refuses a document for a seat that did not prove it can read one");
+  if (!/attachmentRefusal\(files\)/.test(adapterSrc)) bad.push("the seat adapter no longer applies the size and type bounds before parking a file");
+  return bad;
+}
+
+export function auditAttachmentClaimer(src) {
+  const bad = [];
+  if (!/capabilitiesFromProof\(readProof\(\)\)/.test(src)) bad.push("the claimer no longer takes its file capabilities from the probe's proof file");
+  if (!/missingCapability\(seat, carried, capabilities\)/.test(src)) bad.push("the claimer no longer refuses a run whose files it has not proved it can read");
+  if (/read_(image|document):/.test(src.replace(/c\.startsWith\("read_(image|document):"\)/g, ""))) bad.push("the claimer names a file capability itself instead of taking it from the proof file");
   return bad;
 }
 
@@ -134,6 +181,11 @@ function audit() {
     ...auditRouter(read("src", "worker", "ai", "runAi.ts")),
     ...auditAdapter(read("src", "worker", "ai", "providers", "subscriptionSeat.ts")),
     ...auditClaimer(read("scripts", "claimer", "subscription-seat-claimer.mjs")),
+    ...auditAttachmentMigration(read("migrations", "0249_a_seat_can_be_handed_a_file.sql")),
+    ...auditAttachmentClaim(seats),
+    ...auditAttachmentRouter(read("src", "worker", "ai", "runAi.ts")),
+    ...auditAttachmentAdapter(read("src", "worker", "ai", "providers", "subscriptionSeat.ts")),
+    ...auditAttachmentClaimer(read("scripts", "claimer", "subscription-seat-claimer.mjs")),
   ];
 }
 
@@ -155,8 +207,18 @@ function selfTest() {
     ["a router that offers a seat a search call without the declared capability is caught", () => auditRouter(runAi.replace("a.available && a.canSearch === true", "a.available")).length > 0],
     ["a router that forgets to tell the adapter it is a search call is caught", () => auditRouter(runAi.replace("needsSearch: requiresSearch", "")).length > 0],
     ["an adapter that parks a search row on a seat that cannot search is caught", () => auditAdapter(adapter.replace("needsSearch && !availability.canSearch", "false")).length > 0],
-    ["a claimer that stops declaring the capability is caught", () => auditClaimer(claimer.replace('const CAPABILITIES = ["web_search"]', "const CAPABILITIES = []")).length > 0],
+    ["a claimer that stops declaring the capability is caught", () => auditClaimer(claimer.replace('const BASE_CAPABILITIES = ["web_search"]', "const BASE_CAPABILITIES = []")).length > 0],
     ["a claimer that stops counting searches is caught", () => auditClaimer(claimer.replace(/searchOutcome\(/g, "x(")).length > 0],
+    ["a migration without attachments_json is caught", () => auditAttachmentMigration(read("migrations", "0249_a_seat_can_be_handed_a_file.sql").replace("attachments_json", "x")).length > 0],
+    ["a claimRun that stops checking the device's capabilities for files is caught", () => auditAttachmentClaim(seats.replace("deviceMayReadRunFiles(env, deviceId, c.seat, c.attachments_json)", "true")).length > 0],
+    ["a file check that needs only SOME kind, not every kind, is caught", () => auditAttachmentClaim(seats.replace("refs.every((r) => capabilitiesAllow(", "refs.some((r) => capabilitiesAllow(")).length > 0],
+    ["a router that offers files to a seat without proof is caught", () => auditAttachmentRouter(runAi.replaceAll("fileKinds.every((k) => a.canRead?.[k] === true)", "true")).length > 0],
+    ["a router that lets files reach the seats whatever was proved is caught", () => auditAttachmentRouter(runAi.replace("(!hasFiles || fileSeatKeys.size > 0)", "true")).length > 0],
+    ["an adapter that parks a picture for a seat that cannot see is caught", () => auditAttachmentAdapter(adapter.replace("wantsImages && availability.canRead?.image !== true", "false")).length > 0],
+    ["an adapter that skips the size bounds is caught", () => auditAttachmentAdapter(adapter.replace("attachmentRefusal(files)", "null")).length > 0],
+    ["a claimer that stops reading its capabilities from the proof file is caught", () => auditAttachmentClaimer(claimer.replace("capabilitiesFromProof(readProof())", "[]")).length > 0],
+    ["a claimer that runs files it has not proved it can read is caught", () => auditAttachmentClaimer(claimer.replace("missingCapability(seat, carried, capabilities)", "null")).length > 0],
+    ["a claimer that hard-codes a file capability is caught", () => auditAttachmentClaimer(`${claimer}\nconst X = ["read_image:codex"];`).length > 0],
   ];
   let failed = 0;
   for (const [name, fn] of cases) {

@@ -79,6 +79,9 @@ export interface LiveStatusInput {
   work_attempts?: number | null;
   work_last_failure?: string | null;
   lease_until?: string | null;
+  /** 0248: both subscription seats are spent — the card starts again by itself at this time. */
+  waiting_until?: string | null;
+  waiting_for?: string | null;
   held_by_name?: string | null;
   held_reason?: string | null;
   block?: { stopped?: string | null; needed?: string | null; who?: string | null } | null;
@@ -344,6 +347,21 @@ export function liveStatus(card: LiveStatusInput, meId: string, now: Date = new 
     return { ...base, kind: "QUEUED", section: "worked", pill: "Queued", line: `Queued for your Mac${since ? ` · waiting ${since}` : ""}` };
   }
   const lease = ms(card.lease_until);
+  /*
+   * WAITING FOR A PLAN TO RESET (1 Oct 2026). Claude Code and Codex are both out of usage: the card is leased
+   * until the earlier one resets, but it is NOT being worked — saying "working now" would be false. The lease
+   * must still be in the future: a person pressing Try again clears it, and the card is then really queued.
+   */
+  const waitingUntil = ms(card.waiting_until);
+  if (waitingUntil !== null && waitingUntil > now.getTime() && lease !== null && lease > now.getTime()) {
+    return {
+      ...base,
+      kind: "WAITING",
+      section: "worked",
+      pill: "Waiting for reset",
+      line: card.waiting_for?.trim() ? card.waiting_for.trim() : "Both AI plans are out of usage · it starts again by itself when one resets",
+    };
+  }
   if (lease !== null && lease > now.getTime()) {
     return { ...base, live: true, kind: "WORKING_NOW", section: "worked", pill: "Working now", line: `${who} is working on it now` };
   }

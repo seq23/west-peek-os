@@ -129,6 +129,7 @@ import {
   handleSubscriptionSeatClaim,
   handleSubscriptionSeatHeartbeat,
   handleSubscriptionSeatProgress,
+  handleSubscriptionSeatAttachment,
   handleSubscriptionSeatReport,
   handleSubscriptionSeatStatus,
 } from "./services/subscriptionSeats";
@@ -1447,6 +1448,7 @@ const router = new Router()
   .post("/api/subscription-seats/claim", handleSubscriptionSeatClaim)
   .post("/api/subscription-seats/report", handleSubscriptionSeatReport)
   .post("/api/subscription-seats/progress", handleSubscriptionSeatProgress)
+  .get("/api/subscription-seats/attachment", handleSubscriptionSeatAttachment)
   .get("/api/subscription-seats/status", handleSubscriptionSeatStatus)
   .get("/api/jobs/runs/:id", handleGetJobRun)
   .post("/api/jobs/runs/:id/cancel", handleCancelJobRun)

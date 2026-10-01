@@ -19,6 +19,7 @@ import {
   type RunKind,
   type Seat,
 } from "../ai/subscriptionSeats";
+import { readRefs } from "../ai/seatAttachments";
 
 /**
  * THE THREE ROUTES THE CLAIMER ON HER MAC SPEAKS, AND NOTHING ELSE.
@@ -179,6 +180,9 @@ export async function handleSubscriptionSeatClaim(ctx: RouteContext): Promise<Re
       seat: run.seat,
       run_kind: run.run_kind,
       needs_search: run.needs_search === 1,
+      // The files this run carries, by name and kind — never the storage key. The holder fetches each one from
+      // `/api/subscription-seats/attachment` while it holds the run.
+      attachments: readRefs(run.attachments_json).map((r) => ({ n: r.n, kind: r.kind, media_type: r.media_type, label: r.label, bytes: r.bytes })),
       job,
       purpose: run.purpose,
       prompt: run.prompt,
@@ -273,6 +277,34 @@ export async function handleSubscriptionSeatReport(ctx: RouteContext): Promise<R
     }
   }
   return json({ accepted: true, detail: result.detail, ...(exhaustedUntil ? { seat_skipped_until: exhaustedUntil } : {}) });
+}
+
+/**
+ * "GIVE ME THE FILE." The claimer that HOLDS a run fetches that run's own files, one at a time (0249).
+ *
+ * Answered only for a run that is CLAIMED by the asking device, for a file number the run actually lists. A run that
+ * was returned to the pool, answered elsewhere or ended gets a 404, and so does a device that is not the holder — a
+ * file parked for one lane must not be readable by whoever can name its run id.
+ */
+export async function handleSubscriptionSeatAttachment(ctx: RouteContext): Promise<Response> {
+  if (!mayClaim(ctx)) return forbidden();
+  const url = new URL(ctx.request.url);
+  const runId = url.searchParams.get("run_id") ?? "";
+  const deviceId = url.searchParams.get("device_id") ?? "";
+  const n = Number(url.searchParams.get("n"));
+  if (!runId || !deviceId || !Number.isInteger(n) || n < 0) return json({ error: "invalid_input", detail: "run_id, device_id and n are required" }, { status: 400 });
+  const row = await readRun(ctx.env, runId);
+  if (!row || row.status !== "CLAIMED" || row.claimed_by !== deviceId || row.attachments_cleared_at) {
+    return json({ error: "not_found", detail: "this device does not hold that run, or the run has ended" }, { status: 404 });
+  }
+  const ref = readRefs(row.attachments_json).find((r) => r.n === n);
+  if (!ref || !ctx.env.WP_OS_DOCUMENTS) return json({ error: "not_found", detail: "that run carries no such file" }, { status: 404 });
+  const object = await ctx.env.WP_OS_DOCUMENTS.get(ref.key);
+  if (!object) return json({ error: "not_found", detail: "the file is no longer stored" }, { status: 404 });
+  return new Response(await object.arrayBuffer(), {
+    status: 200,
+    headers: { "content-type": ref.media_type, "content-disposition": `attachment; filename="${ref.label}"`, "cache-control": "no-store" },
+  });
 }
 
 const progressSchema = z.object({

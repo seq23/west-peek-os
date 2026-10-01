@@ -510,7 +510,7 @@ export async function sweepOnce(
     blogHelp?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     artifact?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     partnerMessage?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
-    webPropertyChange?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; held?: boolean; autoResolved?: boolean; questionAnswered?: boolean; detail: string }>;
+    webPropertyChange?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; held?: boolean; waitUntil?: string; autoResolved?: boolean; questionAnswered?: boolean; detail: string }>;
   } = {},
 ): Promise<SweepResult> {
   await settleAbandonedCards(env, now);
@@ -563,6 +563,8 @@ export async function sweepOnce(
   let handedOn = false;
   // A card the Mac holds is left alone for HELD_MINUTES so the next card gets the tick.
   let held = false;
+  // Both subscription plans spent: leave the card alone until the earlier one resets (webPropertyChange.holdUntilAPlanResets).
+  let waitUntil: string | null = null;
   // Caught as banter and auto-resolved before it ever reached the Mac (Addendum 10, 22 Sep 2026).
   let autoResolved = false;
   // A question was answered confidently by whoever owns the card's kind, before it ever reached
@@ -609,6 +611,7 @@ export async function sweepOnce(
       blocked = out.blocked;
       progressed = out.progressed;
       held = out.held === true;
+      waitUntil = out.waitUntil ?? null;
       autoResolved = out.autoResolved === true;
       questionAnswered = out.questionAnswered === true;
       detail = out.detail;
@@ -735,7 +738,7 @@ export async function sweepOnce(
     if (held) {
       // HELD BY THE MAC (reached only from the button, never the sweep — `claimNextCard` skips a
       // card with a live job). Leased so a stray claim cannot spin on it.
-      const until = new Date(now.getTime() + HELD_MINUTES * 60_000).toISOString();
+      const until = waitUntil ?? new Date(now.getTime() + HELD_MINUTES * 60_000).toISOString();
       await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = ?2 WHERE id = ?1").bind(card.id, until).run();
     }
     return {

@@ -1404,7 +1404,18 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * rule in `reportRun` (no counted search events, no answer) is the second wall behind that one.
    */
   const requiresSearch = input.budgetContext?.requiresSearch === true;
-  const searchSeatAvailability = requiresSearch ? await allSeatAvailability(env, now) : [];
+  /*
+   * A FILE MAY GO TO A SEAT THAT PROVED IT CAN READ ONE (0249). Both reads below share ONE availability query.
+   * `fileKinds` is what this call carries; a seat is a candidate only when it is awake AND its claimer declared,
+   * from its own probe on that Mac, that it can read EVERY kind present. No proof, no file — the call keeps going
+   * to the lanes that can see, exactly as before.
+   */
+  const fileKinds: Array<"image" | "document"> = [...(input.images?.length ? (["image"] as const) : []), ...(input.documents?.length ? (["document"] as const) : [])];
+  const hasFiles = fileKinds.length > 0;
+  const searchSeatAvailability = requiresSearch || hasFiles ? await allSeatAvailability(env, now) : [];
+  const fileSeatKeys = new Set(
+    hasFiles ? searchSeatAvailability.filter((a) => a.available && fileKinds.every((k) => a.canRead?.[k] === true)).map((a) => a.seat as string) : [],
+  );
   const searchSeatKeys = new Set(searchSeatAvailability.filter((a) => a.available && a.canSearch === true).map((a) => a.seat as string));
 
   // 4. Provider availability (kill switch / disabled).
@@ -1840,7 +1851,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    *   · judgement work only — a seat is a thinking lane, not machinery;
    *   · private content, OR a call the owner named `seatFirst` (public card work, the brief,
    *     University, the market map — see RunAiBudgetContext.seatFirst);
-   *   · no picture or deck: the claimer hands the model text over a local pipe, and an adapter that
+   *   · a picture or deck only to a seat whose claimer PROVED it can read one (0249): an adapter that
    *     dropped an attachment would answer confidently about a file the model never saw;
    *   · not a search call: a local session is not search-grounded, and a call that needs the live
    *     web must not be quietly answered from memory.
@@ -1858,9 +1869,8 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     searchOnSeat ||
     (isJudgement &&
       (!contentClass.publicModelApproved || input.budgetContext?.seatFirst === true) &&
-      !input.images?.length &&
-      !input.documents?.length &&
-      !requiresSearch);
+      !requiresSearch &&
+      (!hasFiles || fileSeatKeys.size > 0));
   const seatAvailability = !seatsEligible
     ? []
     : requiresSearch
@@ -1869,7 +1879,13 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
             ? { ...a, available: false, reason: `the ${SEAT_REGISTRY[a.seat].displayName} seat is awake but its claimer has not said it can search the web, so it took no part in this search call` }
             : a,
         )
-      : await allSeatAvailability(env, now);
+      : hasFiles
+        ? searchSeatAvailability.map((a) =>
+            a.available && !fileKinds.every((k) => a.canRead?.[k] === true)
+              ? { ...a, available: false, reason: `the ${SEAT_REGISTRY[a.seat].displayName} seat is awake but its claimer has not proved it can read ${fileKinds.map((k) => (k === "image" ? "a picture" : "a document")).join(" and ")} on this machine, so it took no part in this call` }
+              : a,
+          )
+        : await allSeatAvailability(env, now);
   const awakeSeatKeys = new Set(seatAvailability.filter((a) => a.available).map((a) => a.seat as string));
   if (behaviour.freeOnly) {
     const freeAdequate = options

@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { capabilitiesAllow, clearEndedAttachments, clearRunAttachments, readRefs, type AttachmentKind, type SeatAttachmentRef } from "./seatAttachments";
 
 /**
  * THE TWO SUBSCRIPTION SEATS — availability, the claimable queue, and the reaper that empties it.
@@ -218,6 +219,16 @@ export interface LaneAvailability {
   ageMs: number | null;
   /** 0246. True only when the awake device declared "web_search". Always false for an unavailable seat. */
   canSearch?: boolean;
+  /** 0249. Which kinds of file the awake device PROVED it can read on this seat. Always false for an unavailable seat. */
+  canRead?: Record<AttachmentKind, boolean>;
+}
+
+/** What the device's declared capabilities say it can read on this seat (0249). */
+export function deviceCanRead(row: Pick<DeviceRow, "capabilities_json" | "seat"> | null | undefined, seat: string): Record<AttachmentKind, boolean> {
+  return {
+    image: capabilitiesAllow(row?.capabilities_json, seat, "image"),
+    document: capabilitiesAllow(row?.capabilities_json, seat, "document"),
+  };
 }
 
 /** Pure, so the freshness rule is testable without a clock or a database. */
@@ -302,6 +313,7 @@ export async function laneAvailability(env: Env, seat: Seat, now: Date = new Dat
     lastSeenAt: row.last_seen_at,
     ageMs,
     canSearch: deviceCanSearch(row),
+    canRead: deviceCanRead(row, seat),
   };
 }
 
@@ -374,6 +386,7 @@ export async function allSeatAvailability(env: Env, now: Date = new Date()): Pro
       lastSeenAt: row.last_seen_at,
       ageMs,
       canSearch: deviceCanSearch(row),
+      canRead: deviceCanRead(row, seat),
     };
   });
 }
@@ -488,6 +501,9 @@ export interface SeatRunRow {
   needs_search: number;
   search_events: number | null;
   search_queries_json: string | null;
+  /** 0249. The files parked with this run (bytes are in R2); null for every ordinary run. */
+  attachments_json?: string | null;
+  attachments_cleared_at?: string | null;
 }
 
 export const RUN_KINDS = ["ANSWER", "LOCAL_JOB"] as const;
@@ -549,13 +565,17 @@ export async function parkRun(
     jobJson?: string | null;
     /** 0246. A live-web-search call. Only a claimer that declared "web_search" is handed it. */
     needsSearch?: boolean;
+    /** 0249. Files already put in R2 for this run (`putSeatAttachments`). Only a claimer that proved it can read them is handed the row. */
+    attachments?: SeatAttachmentRef[];
+    /** Supply the run id when the files were stored under it before the row was written. */
+    id?: string;
   },
 ): Promise<string> {
-  const id = `ccr_${crypto.randomUUID()}`;
+  const id = input.id ?? `ccr_${crypto.randomUUID()}`;
   await env.WP_OS_DB.prepare(
     `INSERT INTO subscription_seat_run
-       (id, seat, ai_run_id, purpose, prompt, model_access, work_card_id, ai_employee_id, task_class, firm_scope, status, max_seconds, run_kind, job_json, needs_search)
-     VALUES (?1, ?11, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'QUEUED', ?10, ?12, ?13, ?14)`,
+       (id, seat, ai_run_id, purpose, prompt, model_access, work_card_id, ai_employee_id, task_class, firm_scope, status, max_seconds, run_kind, job_json, needs_search, attachments_json)
+     VALUES (?1, ?11, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'QUEUED', ?10, ?12, ?13, ?14, ?15)`,
   )
     .bind(
       id,
@@ -572,6 +592,7 @@ export async function parkRun(
       input.runKind ?? "ANSWER",
       input.jobJson ?? null,
       input.needsSearch ? 1 : 0,
+      input.attachments?.length ? JSON.stringify(input.attachments) : null,
     )
     .run();
   return id;
@@ -612,11 +633,27 @@ export async function claimRun(
   const placeholders = seats.map((_, i) => `?${i + 1}`).join(", ");
   const kindPlaceholders = kinds.map((_, i) => `?${seats.length + i + 1}`).join(", ");
   for (let attempt = 0; attempt < 5; attempt++) {
-    const next = await env.WP_OS_DB.prepare(
-      `SELECT id FROM subscription_seat_run WHERE status = 'QUEUED' AND seat IN (${placeholders}) AND run_kind IN (${kindPlaceholders})${canSearch ? "" : " AND needs_search = 0"} ORDER BY created_at ASC LIMIT 1`,
-    )
-      .bind(...seats, ...kinds)
-      .first<{ id: string }>();
+    /*
+     * A RUN THAT CARRIES FILES (0249) IS CLAIMABLE ONLY BY THE DEVICE THAT PROVED IT CAN READ EVERY KIND IN IT, ON THAT
+     * SEAT. Judged per candidate from the claiming device's own stored capabilities for the run's own seat — never from
+     * a flag in the claim request, and never as one aggregate yes/no: a device whose proof covers pictures must not
+     * claim (and fail) a PDF, nor a run routed to another device's capability.
+     */
+    const candidates =
+      (
+        await env.WP_OS_DB.prepare(
+          `SELECT id, seat, attachments_json FROM subscription_seat_run WHERE status = 'QUEUED' AND seat IN (${placeholders}) AND run_kind IN (${kindPlaceholders})${canSearch ? "" : " AND needs_search = 0"} ORDER BY created_at ASC LIMIT 25`,
+        )
+          .bind(...seats, ...kinds)
+          .all<{ id: string; seat: string; attachments_json: string | null }>()
+      ).results ?? [];
+    let next: { id: string } | null = null;
+    for (const c of candidates) {
+      if (!c.attachments_json || (await deviceMayReadRunFiles(env, deviceId, c.seat, c.attachments_json))) {
+        next = c;
+        break;
+      }
+    }
     if (!next) return null;
     const res = await env.WP_OS_DB.prepare(
       `UPDATE subscription_seat_run
@@ -632,6 +669,16 @@ export async function claimRun(
     // Somebody else took it between the read and the write. Try the next one.
   }
   return null;
+}
+
+/** Did THIS device, for THIS seat, declare it can read every kind of file the run carries? Unreadable means no. */
+async function deviceMayReadRunFiles(env: Env, deviceId: string, seat: string, attachmentsJson: string): Promise<boolean> {
+  const refs = readRefs(attachmentsJson);
+  if (refs.length === 0) return true;
+  const row = await env.WP_OS_DB.prepare("SELECT capabilities_json FROM subscription_seat_device WHERE seat = ?1 AND device_id = ?2")
+    .bind(seat, deviceId)
+    .first<{ capabilities_json: string | null }>();
+  return refs.every((r) => capabilitiesAllow(row?.capabilities_json, seat, r.kind));
 }
 
 /**
@@ -699,6 +746,8 @@ export async function reportRun(
         "and the work has already been answered elsewhere. Nothing was recorded.",
     };
   }
+  // The files this run carried were for this run alone; they go now, and the sweep catches any that did not.
+  await clearRunAttachments(env, input.runId, now);
   if (ok) {
     // A real answer proves the plan has usage again; do not make it wait out a cooldown it no longer needs.
     const seatRow = await env.WP_OS_DB.prepare("SELECT seat FROM subscription_seat_run WHERE id = ?1")
@@ -750,7 +799,9 @@ export async function abandonRun(env: Env, runId: string, resolution: string, no
   )
     .bind(runId, resolution, now.toISOString())
     .run();
-  return (res.meta?.changes ?? 0) > 0;
+  const changed = (res.meta?.changes ?? 0) > 0;
+  if (changed) await clearRunAttachments(env, runId, now);
+  return changed;
 }
 
 /** Read one queue row. Used by the router's wait and by the report route's checks. */
@@ -924,6 +975,8 @@ export async function reapSeatRuns(env: Env, now: Date = new Date()): Promise<Re
     );
     out.abandoned.push(row.id);
   }
+  // Files parked for runs that have ended (0249) are deleted whatever ended them.
+  await clearEndedAttachments(env, now);
   return out;
 }
 
