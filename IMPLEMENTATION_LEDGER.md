@@ -7199,3 +7199,21 @@ writes "the judgement pass failed" into a result without `judgeDown` (the Worksh
 The one existing test that asserted the old BLOCKED outcome now asserts FAILED and still asserts nothing unjudged is sent.
 **Negative proof, run:** each of the three runners' judge checks removed → its test red; restored. **UNPROVEN:** 0252 against
 production; that the live card re-runs on a seat (needs one awake).
+
+## 1 Oct 2026 — A card's "What has happened" shows every stage, try and call
+
+**Asked (owner, from a screenshot of a Workshop packet card):** "the timestamps don't show any of the retries or anything." The card had
+finished its angles stage, been retried by hand and was waiting between stages; its timeline listed emails and notices only, so a card
+could finish a stage, fail and retry with no trace, and a stage gap read as "try 1 of 3".
+
+**Built (no migration; every fact already existed).** The sweep now writes `work_card.swept` events for the two outcomes it did not record
+— a stage that finished (`PROGRESSED`) and a try that did not (`FAILED`, with the runner's sentence). `GET /api/work-cards/:id/steps`
+returns those ticks, every model call attributed to the card (`ai_run`: when, for what, which lane answered, the lane's own words when it
+refused, whether a free lane wrote it) and the automatic re-queue / waiting-for-reset events, under the same visibility as the message
+trail. `cardTimeline` turns them into sentences in time order ("Codex on your plan answered: …", "Try 2 did not finish — the spend setting
+is on Free only and nothing at $0 could take it. It tries again on its own."); the single "last failure" line is replaced by the full list
+when the step record is present; the page shows the newest 14 and "Show N earlier steps".
+**Tests:** `tests/cardSteps.test.ts` (5) — the sentences, the unchanged no-steps behaviour, lane and reason wording, the endpoint through the
+real sweep, 404/401. **Negative proof, run:** sweep events removed (1 red), timeline ignoring steps (1 red) — each restored. 17 related files,
+369 tests green locally; the full suite runs in CI.
+**UNPROVEN:** the page in a browser (no e2e, by the owner's instruction); event volume in production (one row per worked tick).

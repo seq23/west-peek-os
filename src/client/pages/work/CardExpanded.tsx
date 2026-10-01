@@ -4,7 +4,7 @@ import { readableDate, shortDate } from "../../lib/dates";
 import { LinkedText } from "../../lib/linkedText";
 import { heldBySentence } from "@shared/work/workCards";
 import { askedBy } from "@shared/work/origin";
-import { cardTimeline, timelineWhen, type TrailFact } from "@shared/work/cardTimeline";
+import { cardTimeline, timelineWhen, type TimelineSteps, type TrailFact } from "@shared/work/cardTimeline";
 import { siteWait, type LiveStatus } from "@shared/work/liveStatus";
 import { readsPages } from "@shared/work/cardKinds";
 import { partnerByEmail } from "@shared/registry/partners";
@@ -123,6 +123,8 @@ export function CardExpanded({
   const isSite = c.kind === "WEB_PROPERTY_CHANGE";
   const site = useSiteChange(isSite ? c.id : null);
   const trail = useApi<{ trail: Array<TrailFact & { hasMessage: boolean }> }>(`/api/work-cards/${c.id}/message-trail`, [c.id]);
+  const [showEarlier, setShowEarlier] = useState(false);
+  const stepsApi = useApi<TimelineSteps>(`/api/work-cards/${c.id}/steps`, [c.id, c.work_attempts, c.state]);
   const notesApi = useApi<{ notes: WorkCardNote[] }>(`/api/work-cards/${c.id}/notes`, [c.id]);
   const receiptsApi = useApi<{ receipts: InstructionReceipt[] }>(`/api/work-cards/${c.id}/instructions`, [c.id]);
   const requestApi = useApi<{ text: string }>(isSite ? null : `/api/work-cards/${c.id}/request-message`, [c.id]);
@@ -318,6 +320,7 @@ export function CardExpanded({
     trail: trail.data?.trail ?? [],
     run: c.current_run ?? null,
     work_attempts: c.work_attempts ?? null,
+    steps: stepsApi.data ?? null,
     last_failure: c.work_last_failure ?? null,
     last_failure_at: c.work_last_failure_at ?? null,
     blocked_at: c.state === "BLOCKED" ? (c.block?.blockedAt ?? c.blocked_at ?? null) : null,
@@ -325,15 +328,25 @@ export function CardExpanded({
     my_emails: [me.email],
     block_who_name: blockWaitsOn(c.block_who, me.email),
   });
+  // A card that has been tried many times has a long history; the newest are shown and the rest are one press away.
+  const TIMELINE_SHOWN = 14;
+  const hidden = showEarlier ? 0 : Math.max(0, entries.length - TIMELINE_SHOWN);
   const timeline: ReactNode = (
-    <ul className="wc-timeline" data-testid={`work-card-timeline-${c.id}`}>
-      {entries.map((e, i) => (
-        <li key={`${e.at}-${i}`} className={e.now ? "is-now" : undefined}>
-          <time dateTime={e.at}>{timelineWhen(e.at)}</time>
-          <span>{e.text}</span>
-        </li>
-      ))}
-    </ul>
+    <>
+      {hidden > 0 && (
+        <button type="button" className="link-button small" data-testid={`work-card-timeline-earlier-${c.id}`} onClick={() => setShowEarlier(true)}>
+          Show {hidden} earlier step{hidden === 1 ? "" : "s"}
+        </button>
+      )}
+      <ul className="wc-timeline" data-testid={`work-card-timeline-${c.id}`}>
+        {(hidden > 0 ? entries.slice(hidden) : entries).map((e, i) => (
+          <li key={`${e.at}-${i}`} className={e.now ? "is-now" : undefined}>
+            <time dateTime={e.at}>{timelineWhen(e.at)}</time>
+            <span>{e.text}</span>
+          </li>
+        ))}
+      </ul>
+    </>
   );
 
   // ── The details every card shares ─────────────────────────────────────────────────────────

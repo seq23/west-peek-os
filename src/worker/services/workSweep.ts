@@ -732,6 +732,17 @@ export async function sweepOnce(
   }
 
   if (progressed) {
+    // THE CARD'S OWN RECORD OF THIS TICK (1 Oct 2026). A stage finished and the card is not done: written to the event spine so
+    // "What has happened" can show every step, not only the ones that ended in an email. `detail` is the runner's own sentence.
+    await appendEvent(env, {
+      eventType: "work_card.swept",
+      actorType: "system",
+      actorId: "work_sweep",
+      objectType: "work_card",
+      objectId: card.id,
+      firmScope: card.firm_scope,
+      payload: { outcome: "PROGRESSED", attempt: card.work_attempts, detail: detail.slice(0, 240) },
+    }).catch(() => undefined);
     // THIS TICK'S WORK IS DONE AND THE CARD IS NOT. Hand it back for the next tick: the claim's
     // attempt is given back, because an invocation that did what it was asked is not a failure.
     await env.WP_OS_DB.prepare("UPDATE work_card SET work_attempts = MAX(COALESCE(work_attempts, 1) - 1, 0) WHERE id = ?1").bind(card.id).run();
@@ -770,6 +781,17 @@ export async function sweepOnce(
   const lane = await laneBehindTheFailure(env, card.id, detail);
   const allowed = attemptsAllowedFor(lane.failure, MAX_WORK_ATTEMPTS);
   await noteFailedAttempt(env, card, attemptLine(card, lane.failure, lane.name, allowed), now);
+  // EVERY TRY THAT DID NOT FINISH IS ON THE CARD'S RECORD (1 Oct 2026), including the last one — written before the exhaustion branch,
+  // which blocks the card and returns, so the final try is not the one missing from "What has happened". `detail` is the runner's sentence.
+  await appendEvent(env, {
+    eventType: "work_card.swept",
+    actorType: "system",
+    actorId: "work_sweep",
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope: card.firm_scope,
+    payload: { outcome: "FAILED", attempt: card.work_attempts, detail: detail.slice(0, 240) },
+  }).catch(() => undefined);
 
   if (card.work_attempts >= allowed) {
     /*

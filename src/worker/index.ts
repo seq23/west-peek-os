@@ -122,7 +122,7 @@ import {
   handleRunAi,
 } from "./services/aiRuns";
 import { handleGetRequestAttachment, handleGetWebPropertyChange, handleMaterialsAdded, handleResendPreview, handleReingestStoredEmail, handleSetWorkKindRule, handleWorkKindRules } from "./services/webPropertyChange";
-import { handleGetRequestMessage, handleGetRequestMessageRaw, handleGetWorkCardMessageTrail } from "./services/requestMessage";
+import { handleGetRequestMessage, handleGetRequestMessageRaw, handleGetWorkCardMessageTrail, handleGetWorkCardSteps } from "./services/requestMessage";
 import { handleListMergeTargets, handleMergeWorkCardInto } from "./services/mergeCards";
 import { handleGetEmailPreviewPreference, handleSetEmailPreviewPreference } from "./services/kindRules";
 import {
@@ -1151,6 +1151,7 @@ const router = new Router()
   // Wave A, Addendum 2 — the message trail: every inbound_message and work_card_notice row for
   // this card, merged and ordered, one chronological list rather than a terse summary line.
   .get("/api/work-cards/:id/message-trail", handleGetWorkCardMessageTrail)
+  .get("/api/work-cards/:id/steps", handleGetWorkCardSteps)
   .post("/api/inbound-email/reingest", handleReingestStoredEmail)
   .get("/api/work-kinds/:kind/rules", handleWorkKindRules)
   .patch("/api/work-kinds/:kind/rules/:key", handleSetWorkKindRule)
