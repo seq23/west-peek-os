@@ -128,7 +128,7 @@ const defaultJudge: BlogModelCall = async (env, actor, prompt) => {
     actor,
     inputs: [prompt],
     sensitivity: "PUBLIC" as never,
-    budgetContext: { expectedOutputTokens: 1200, providerKey: "openrouter", judgement: true },
+    budgetContext: { expectedOutputTokens: 1200, providerKey: "openrouter", judgement: true, seatFirst: true },
     routing: { category: "INTELLIGENCE" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) return { ok: false, text: "", detail: run.failure_reason ?? `run ${run.status}` };
@@ -144,7 +144,7 @@ const defaultWrite: BlogModelCall = async (env, actor, prompt) => {
     // The partner's ask and the firm's positioning; nothing about a company, a deal or an LP.
     sensitivity: "INTERNAL" as never,
     // Written in a partner's voice and sent under her name.
-    budgetContext: { expectedOutputTokens: 3500, providerKey: "openrouter", judgement: true },
+    budgetContext: { expectedOutputTokens: 3500, providerKey: "openrouter", judgement: true, seatFirst: true },
     routing: { category: "INTELLIGENCE" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) return { ok: false, text: "", detail: run.failure_reason ?? `run ${run.status}` };
