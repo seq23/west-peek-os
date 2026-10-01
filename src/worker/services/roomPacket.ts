@@ -43,6 +43,7 @@ import {
   type SponsorCandidate,
   type SponsorResearch,
 } from "../../shared/events/roomPacket";
+import { degradedNoteForRun } from "./qualityNotes";
 import { packetFilename, parkerIntroduction, renderPacketHtml, renderWorkshopHtml, type PacketView, type SponsorView, type VenueView } from "../../shared/events/roomPacketPdf";
 import {
   WORKSHOP_LENGTH_RANGE,
@@ -288,6 +289,8 @@ export interface BuildState {
   flags: PacketFlag[];
   pdfError: string | null;
   discoveryDetail: string | null;
+  /** 0251: the degraded-quality sentences of the runs that wrote this packet's concepts and proposal (a free model not marked FULL). */
+  qualityNotes?: string[];
   /** Candidates discovery dropped, with the status their page answered — so the packet can say who was looked at. */
   dropped: Array<{ orgName: string; url: string; status: number | null }>;
   /** A Workshop's research: what the audience is asking, live-checked and judged. */
@@ -310,7 +313,7 @@ export interface BuildState {
 }
 
 export function emptyState(): BuildState {
-  return { candidates: [], research: [], researched: [], inviteCheck: null, concepts: [], choiceRationale: null, pushback: null, venueHits: [], venueCitations: [], venueDetail: null, flags: [], pdfError: null, discoveryDetail: null, dropped: [], workshopNotes: [], workshopDropped: [], workshopRejected: [], workshopFlags: [], workshopTopic: null, workshopTopicSetBy: null, roomTopic: null, roomTopicSetBy: null };
+  return { candidates: [], research: [], researched: [], inviteCheck: null, concepts: [], choiceRationale: null, pushback: null, venueHits: [], venueCitations: [], venueDetail: null, flags: [], pdfError: null, discoveryDetail: null, qualityNotes: [], dropped: [], workshopNotes: [], workshopDropped: [], workshopRejected: [], workshopFlags: [], workshopTopic: null, workshopTopicSetBy: null, roomTopic: null, roomTopicSetBy: null };
 }
 
 export function parseState(raw: string | null): BuildState {
@@ -418,6 +421,12 @@ const defaultJudge: Judge = async (env, actor, prompt) => {
   if (run.model === SEARCH_MODEL) return { ok: false, text: "", detail: "the judgement was routed to the search model" };
   return { ok: true, text: run.output_text, detail: "ok" };
 };
+
+/** Remember (once) the degraded-quality sentence of the run that wrote a stage's text, so the packet can carry it. */
+async function rememberQuality(env: Env, state: { qualityNotes?: string[] }, runId: string | null | undefined): Promise<void> {
+  const note = await degradedNoteForRun(env, runId);
+  if (note && !(state.qualityNotes ?? []).includes(note)) state.qualityNotes = [...(state.qualityNotes ?? []), note];
+}
 
 async function defaultSynthesise(env: Env, actor: Actor, purpose: string, prompt: string, expectedOutputTokens: number): Promise<{ text: string; aiRunId: string | null }> {
   const { run } = await runAi(env, {
@@ -767,7 +776,8 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
       // Marked at the moment the words are IN the prompt, which is the moment it is true. A steer
       // marked delivered by a build that then failed would be a steer silently dropped.
       if (roomSteer) await markDelivered(env, roomSteerRows.rows, draft.id);
-      const { text } = await synth("Room packet: one topic, three angles", prompt, 3000);
+      const { text, aiRunId: conceptsRun } = await synth("Room packet: one topic, three angles", prompt, 3000);
+      await rememberQuality(env, state, conceptsRun);
       // A three-subject answer is REJECTED, not flagged: the stage fails, the sweep retries it, and
       // nothing with three subjects in it is ever stored.
       const parsed = parseConcepts(text, roomSetBy === "PARTNERS" ? roomTopic : null);
@@ -817,6 +827,8 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
       const verified = verifyPacket(parsed, allowed, state.research);
       const packet = mergeBriefSponsors(verified.packet, brief, state.research);
       state.flags = verified.flags;
+      await rememberQuality(env, state, aiRunId);
+      for (const n of state.qualityNotes ?? []) state.flags.push({ code: "written_by_a_weaker_free_model", detail: n });
       const economics = computeEconomics({
         venues: packet.venues,
         targetAttendees: Math.round((packet.targetMin + packet.targetMax) / 2),
@@ -1027,7 +1039,8 @@ async function runWorkshopStage(
     const steer = steerRows.text;
     const prompt = buildWorkshopConceptsPrompt({ month: draft.proposed_for_month, topic, set, setBy, steer, brief, notes: state.workshopNotes, ran, guidance: await guidanceFor(env, firmScope) });
     if (steer) await markDelivered(env, steerRows.rows, draft.id);
-    const { text } = await deps.synth("Workshop packet: one topic, three angles", prompt, 3000);
+    const { text, aiRunId: conceptsRun } = await deps.synth("Workshop packet: one topic, three angles", prompt, 3000);
+    await rememberQuality(env, state, conceptsRun);
     /*
      * A THREE-SUBJECT ANSWER IS REJECTED HERE, NOT ACCEPTED AND FLAGGED.
      *
@@ -1062,6 +1075,8 @@ async function runWorkshopStage(
     const verified = verifyWorkshopPacket(parsed, state.workshopNotes.map((n) => n.url), text);
     const economics = computeWorkshopEconomics(verified.packet);
     state.workshopFlags = verified.flags;
+    await rememberQuality(env, state, aiRunId);
+    for (const n of state.qualityNotes ?? []) state.workshopFlags.push({ code: "written_by_a_weaker_free_model", detail: n });
     await storeWorkshopPacket(env, draft, verified.packet, economics, aiRunId, state, setBy);
     return { stage, next: "KIT", note: `"${verified.packet.title}": ${verified.packet.runOfShow.length} run-of-show lines (${verified.packet.runOfShow.filter((l) => l.segment === "BREAKOUT").length} breakouts), ${verified.packet.leaveWith.length} artifact(s), ${verified.packet.invitations.length} invitation(s), free to attend${verified.packet.sponsorship.suggested ? `, suggested sponsor ${verified.packet.sponsorship.suggested.categoryFit} at $${(verified.packet.sponsorship.suggested.askUsd ?? 0).toLocaleString("en-US")}` : ", no sponsor suggested"}${verified.flags.length ? `; flags: ${verified.flags.map((f) => f.code).join(", ")}` : ""}` };
   }

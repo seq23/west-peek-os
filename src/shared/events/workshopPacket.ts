@@ -285,7 +285,9 @@ export interface WorkshopFlag {
     /** Parker did not suggest a sponsor. Suggesting one is expected on every packet — it is free. */
     | "no_sponsor_suggested"
     /** Parker did not name a co-host. A co-host is the norm, so its absence is reported, not silent. */
-    | "no_co_host";
+    | "no_co_host"
+    /** 0251: written by a free model whose quality tier is not FULL, because the seats were not available. */
+    | "written_by_a_weaker_free_model";
   detail: string;
 }
 

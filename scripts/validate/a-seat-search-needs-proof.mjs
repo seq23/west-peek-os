@@ -213,7 +213,7 @@ function selfTest() {
     ["a claimRun that stops checking the device's capabilities for files is caught", () => auditAttachmentClaim(seats.replace("deviceMayReadRunFiles(env, deviceId, c.seat, c.attachments_json)", "true")).length > 0],
     ["a file check that needs only SOME kind, not every kind, is caught", () => auditAttachmentClaim(seats.replace("refs.every((r) => capabilitiesAllow(", "refs.some((r) => capabilitiesAllow(")).length > 0],
     ["a router that offers files to a seat without proof is caught", () => auditAttachmentRouter(runAi.replaceAll("fileKinds.every((k) => a.canRead?.[k] === true)", "true")).length > 0],
-    ["a router that lets files reach the seats whatever was proved is caught", () => auditAttachmentRouter(runAi.replace("(!hasFiles || fileSeatKeys.size > 0)", "true")).length > 0],
+    ["a router that lets files reach the seats whatever was proved is caught", () => auditAttachmentRouter(runAi.replaceAll("(!hasFiles || fileSeatKeys.size > 0)", "true")).length > 0],
     ["an adapter that parks a picture for a seat that cannot see is caught", () => auditAttachmentAdapter(adapter.replace("wantsImages && availability.canRead?.image !== true", "false")).length > 0],
     ["an adapter that skips the size bounds is caught", () => auditAttachmentAdapter(adapter.replace("attachmentRefusal(files)", "null")).length > 0],
     ["a claimer that stops reading its capabilities from the proof file is caught", () => auditAttachmentClaimer(claimer.replace("capabilitiesFromProof(readProof())", "[]")).length > 0],

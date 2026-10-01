@@ -604,3 +604,39 @@ describe("the chain, for a month whose topic was typed rather than set", () => {
     expect(ev.live_url).toBe("https://westpeek.live");
   });
 });
+
+describe("a packet written by a free lane carries the quality warning (0251)", () => {
+  async function degradedRun(note: string): Promise<string> {
+    const id = `air_${crypto.randomUUID()}`;
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO ai_run (id, purpose, actor_type, actor_id, sensitivity, privacy_mode, cost_mode, status, input_hash, trace_id, quality_degraded, quality_note)
+       VALUES (?1, 'Workshop packet', 'SYSTEM', 'test', 'PUBLIC', 'FRONTIER', 'NORMAL', 'COMPLETED', 'h', ?2, 1, ?3)`,
+    ).bind(id, `trc_${id}`, note).run();
+    return id;
+  }
+
+  it("a Workshop whose concepts and proposal were written by a free model not marked FULL says so in its flags — once", async () => {
+    const note = "Written by Nemotron 3 Ultra 550B (free), a free model whose quality has not been measured against the Claude and OpenAI seats, because the seats were not available and the spend setting allows only free lanes. Read it with that in mind.";
+    const runId = await degradedRun(note);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE kind = 'ROOM_PACKET' AND state IN ('OPEN','IN_PROGRESS','BLOCKED')").run();
+    const res = await handleGeneratePacket(ctx("POST", { kind: "WORKSHOP", audience: "AI for tiny businesses", month: "2026-09" }));
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { packet: PacketRow; queued: boolean; cardId: string | null };
+    const packet = body.packet;
+    const d = deps(false, {
+      synthesise: async (prompt) => ({ text: prompt.includes(EVENT_KIT_PROMPT_MARKER) ? kitJson : prompt.includes("WRITE THE PACKET") ? packetJson() : conceptsJson(true), aiRunId: runId }),
+    });
+    const built = await buildToDone(await row(packet.id), d);
+    expect(built.outcomes[built.outcomes.length - 1], String((await row(packet.id)).build_error)).toBe("DONE");
+    const done = await row(packet.id);
+    const flags = (JSON.parse(done.workshop_json as string) as { flags: Array<{ code: string; detail: string }> }).flags.filter((f) => f.code === "written_by_a_weaker_free_model");
+    expect(flags).toHaveLength(1);
+    expect(flags[0]!.detail).toBe(note);
+  });
+
+  it("a Workshop written by a seat or a paid model (no degraded run) carries no such flag", async () => {
+    const built = (await env.WP_OS_DB.prepare("SELECT workshop_json FROM evt_room_packet WHERE proposed_for_month = '2026-09' AND kind = 'WORKSHOP' AND workshop_json IS NOT NULL ORDER BY created_at ASC LIMIT 1").first<{ workshop_json: string }>())!;
+    const flags = (JSON.parse(built.workshop_json) as { flags: Array<{ code: string }> }).flags;
+    expect(flags.some((f) => f.code === "written_by_a_weaker_free_model")).toBe(false);
+  });
+});

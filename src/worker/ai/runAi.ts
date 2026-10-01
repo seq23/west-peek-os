@@ -820,6 +820,30 @@ interface ChainClock {
   attemptDeadlineMsForTests?: number;
 }
 
+/**
+ * A FREE LANE THAT MAY BE WEAKER THAN THE WORK WANTS SAYS SO (0251, 1 Oct 2026).
+ *
+ * Returns the sentence for the deliverable when this attempt was served by a $0, non-seat lane for a PROTECTED call
+ * (judgement, interpretation) and that model's `quality_tier` is not FULL — and null for everything else: a seat is full
+ * quality and free, a paid lane is the model the call wanted, and an unprotected call never needed better. The tier is the
+ * owner's decision per model; the default is UNMEASURED, and the sentence says "not measured" rather than "worse", because
+ * nothing in this repo has measured it.
+ */
+async function degradedLaneNote(env: Env, rec: RunRecordInput, costUsd: number): Promise<string | null> {
+  if (costUsd > 0) return null;
+  if (!protectedFromSpendPressure(rec.input.budgetContext ?? {})) return null;
+  if (rec.providerKey && isSeat(rec.providerKey)) return null;
+  const row = await env.WP_OS_DB.prepare("SELECT quality_tier, display_name FROM provider_model WHERE provider_id = ?1 AND model = ?2")
+    .bind(rec.providerId, rec.model)
+    .first<{ quality_tier: string; display_name: string | null }>();
+  const tier = row?.quality_tier ?? "UNMEASURED";
+  if (tier === "FULL") return null;
+  const name = row?.display_name ?? rec.model ?? "a free model";
+  return tier === "DEGRADED"
+    ? `Written by ${name}, a free model that is known to be weaker than the Claude and OpenAI seats, because the seats were not available and the spend setting allows only free lanes. Read it with that in mind.`
+    : `Written by ${name}, a free model whose quality has not been measured against the Claude and OpenAI seats, because the seats were not available and the spend setting allows only free lanes. Read it with that in mind.`;
+}
+
 /** One provider attempt against an ai_run row that already exists. */
 async function executeAttempt(
   env: Env,
@@ -920,6 +944,11 @@ async function executeAttempt(
     )
       .bind(running.id, JSON.stringify(actualUsage), response.text, quarantine ? 1 : 0, new Date().toISOString())
       .run();
+    // A free lane weaker than the call wants (0251): recorded on the run so the deliverable can carry the warning.
+    const qualityNote = await degradedLaneNote(env, rec, costUsd).catch(() => null);
+    if (qualityNote) {
+      await env.WP_OS_DB.prepare("UPDATE ai_run SET quality_degraded = 1, quality_note = ?2 WHERE id = ?1").bind(running.id, qualityNote).run();
+    }
     attempts.push({ provider_key: rec.providerKey ?? "local", model: response.model, outcome: "COMPLETED" });
     /*
      * THIS LANE WORKS. Recorded at the boundary itself, on the model the run was PLANNED on rather
@@ -1412,7 +1441,16 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    */
   const fileKinds: Array<"image" | "document"> = [...(input.images?.length ? (["image"] as const) : []), ...(input.documents?.length ? (["document"] as const) : [])];
   const hasFiles = fileKinds.length > 0;
-  const searchSeatAvailability = requiresSearch || hasFiles ? await allSeatAvailability(env, now) : [];
+  /*
+   * THE FREE-ONLY LADDER (1 Oct 2026). At Free only the owner's rule is "get the work done at the price I set":
+   * the subscription seats (Claude Code, Codex) are already paid for, cost nothing per call and are FULL quality, so they
+   * lead for any call that is not a live search; a free lane stands behind them, and a call is stopped only when nothing
+   * at $0 can carry it. The quality label on a call ("judgement") decides how good a MODEL must be at a paid setting; it
+   * never turns "free" into "stop". A free lane that is weaker than the call wants writes a degraded-quality warning onto
+   * the deliverable instead (see `degradedLaneNote`), and which free model that is decides whether it is weaker at all.
+   */
+  const freeOnlyLadder = behaviour.freeOnly && !requiresSearch;
+  const searchSeatAvailability = requiresSearch || hasFiles || freeOnlyLadder ? await allSeatAvailability(env, now) : [];
   const fileSeatKeys = new Set(
     hasFiles ? searchSeatAvailability.filter((a) => a.available && fileKinds.every((k) => a.canRead?.[k] === true)).map((a) => a.seat as string) : [],
   );
@@ -1434,10 +1472,10 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
      */
     const seatCanCarryIt = requiresSearch && searchSeatKeys.size > 0;
     const pinUnusable = !pinned || pinned.enabled !== 1 || laneIsStoodDown(pinned, now);
-    if (pinUnusable && !seatCanCarryIt) {
+    if (pinUnusable && !seatCanCarryIt && !freeOnlyLadder) {
       return { run: await blocked("PROVIDER_DISABLED", `provider_disabled:${pinnedKey}`) };
     }
-    if (!pinUnusable && pinned!.kill_switched === 1 && !seatCanCarryIt) {
+    if (!pinUnusable && pinned!.kill_switched === 1 && !seatCanCarryIt && !freeOnlyLadder) {
       return { run: await blocked("KILL_SWITCHED", `provider_kill_switched:${pinnedKey}`) };
     }
     candidates = !pinUnusable && pinned!.kill_switched !== 1 ? [pinned!] : [];
@@ -1450,6 +1488,35 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
         .bind(...searchSeatKeys)
         .all<ProviderRow>();
       candidates = [...candidates, ...(seatRows.results ?? [])];
+    }
+    if (freeOnlyLadder) {
+      /*
+       * A PIN DOES NOT HIDE A $0 LANE AT FREE ONLY. Call sites pin a paid lane ("openrouter") for quality; at Free only that
+       * pin cannot be paid, so the awake seats and the free lanes stand beside it as candidates. Content safety is not
+       * relaxed by this: 4b removes every lane that may train from a confidential call and the egress gate below checks
+       * each lane's data policy against the run's label, exactly as for any other candidate.
+       */
+      const seatKeys = searchSeatAvailability
+        .filter((a) => a.available && (!hasFiles || fileKinds.every((k) => a.canRead?.[k] === true)))
+        .map((a) => a.seat as string);
+      const seatRows = seatKeys.length
+        ? ((
+            await env.WP_OS_DB.prepare(
+              `SELECT * FROM provider_registry WHERE claimable = 1 AND enabled = 1 AND kill_switched = 0 AND ${LANE_NOT_STOOD_DOWN_SQL} AND provider_key IN (${seatKeys.map((_, i) => `?${i + 1}`).join(", ")})`,
+            )
+              .bind(...seatKeys)
+              .all<ProviderRow>()
+          ).results ?? [])
+        : [];
+      const freeRows = hasFiles
+        ? []
+        : ((
+            await env.WP_OS_DB.prepare(
+              `SELECT * FROM provider_registry WHERE claimable = 0 AND enabled = 1 AND kill_switched = 0 AND training_permitted = 1 AND ${LANE_NOT_STOOD_DOWN_SQL}`,
+            ).all<ProviderRow>()
+          ).results ?? []);
+      const have = new Set(candidates.map((c) => c.id));
+      candidates = [...candidates, ...[...seatRows, ...freeRows].filter((r) => !have.has(r.id))];
     }
     if (candidates.length === 0) {
       // The pin was unusable and no seat row survived the stand-down / kill-switch filters.
@@ -1870,7 +1937,9 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     (isJudgement &&
       (!contentClass.publicModelApproved || input.budgetContext?.seatFirst === true) &&
       !requiresSearch &&
-      (!hasFiles || fileSeatKeys.size > 0));
+      (!hasFiles || fileSeatKeys.size > 0)) ||
+    // At Free only a seat is a $0, full-quality lane for any call that is not a search: it leads, whatever the call's label.
+    (freeOnlyLadder && (!hasFiles || fileSeatKeys.size > 0));
   const seatAvailability = !seatsEligible
     ? []
     : requiresSearch
@@ -1912,8 +1981,8 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
           run: await blocked(
             "PREFLIGHT_BLOCKED",
             `free_only_cannot_serve_protected_work:this call is marked '${taskKind}' and needs a paid model, ` +
-              `and the lever is set to FREE_ONLY. Purpose: ${input.purpose}. It has been stopped rather than ` +
-              `quietly given a weaker model. Move the lever to MODERATE to let it run.`,
+              `and the lever is set to FREE_ONLY. Purpose: ${input.purpose}. No subscription seat is available and no free ` +
+              `lane may carry this content, so nothing at $0 could take it. Move the lever to MODERATE to let a paid model run it.`,
           ),
         };
       }
@@ -1933,7 +2002,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     }));
     freeOnlyNote =
       ` The lever is set to Free only, so only models costing nothing were candidates` +
-      (isProtected ? `, and this protected call found one — had it not, the run would have stopped rather than been downgraded.` : `.`);
+      (isProtected ? `, and this protected call found one — the subscription seats lead at full quality, and a free lane that is weaker than the call wants writes a degraded-quality warning on the deliverable.` : `.`);
   }
   /*
    * SEAT-ONLY SEARCH (review of #216). When no search-grounded model is a candidate — OpenRouter is down or

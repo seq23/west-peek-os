@@ -133,6 +133,18 @@ Claude Code seat (Max plan)  →  Codex seat (ChatGPT Plus)  →  FREE lanes  �
   the card asking a partner where to look. The sweep classifies it, retries it, and resumes it by itself when the setting
   or a search seat changes. Any new research job written by copying an existing loop is held to this by
   `validate:search-never-ran`; a loop that degrades on purpose carries `search-never-ran-exempt: <reason>`.
+- **The Free-only ladder: the seats lead at full quality, a free lane degrades with a warning, and only nothing-at-$0
+  stops a call (0251, 1 Oct 2026).** At `FREE_ONLY` the rule is "get the work done at the price I set". The subscription
+  seats are already paid for, cost nothing per call and are full quality, so they lead for any call that is not a live
+  search — whatever its quality label, public or private, pinned or not (a pin names the paid lane; at Free only it no
+  longer hides the $0 lanes). When both seats are away, a free lane carries the work (public content only — the privacy
+  gates are unchanged) and the deliverable carries a **quality note** unless that model's `quality_tier` is `FULL`. The tier
+  is the owner's per-model decision (`provider_model.quality_tier`: `FULL` / `DEGRADED` / `UNMEASURED`, default
+  `UNMEASURED` — no measurement of any free model's writing exists in this repo, so none is marked FULL by default; the note
+  says "not measured" rather than "worse"). A call is stopped at Free only only when nothing at $0 can carry it: private
+  content with the seats away. A quality label ("judgement") decides how good a MODEL must be at a paid setting; it never
+  turns "free" into "stop". The note rides on the deliverable (`deliver()` for any work-card deliverable; a flag on a Room
+  or Workshop packet), recorded per run in `ai_run.quality_degraded` / `quality_note`.
 - **Setting the default is a human act.** Moving production to `FREE_ONLY` is `governance.policy_change`
   (an approval card); no migration does it.
 

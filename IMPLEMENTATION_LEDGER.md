@@ -7151,3 +7151,38 @@ scan finds the real loops (it asserts it is not vacuous), and 7 fixtures prove e
 releasing everything (1), a loop reverted to swallowing (the scan fails) — each restored.
 **PROVEN here:** the above, locally. **UNPROVEN:** migration 0250 against production; that Walker's live card was stopped for
 this reason (its stored sentence is truncated in what the owner pasted — if it was a different failure, the retry shows it).
+
+## 1 Oct 2026 — The Free-only ladder: seats lead at full quality, a free lane degrades with a warning (migration 0251)
+
+**Asked (owner, mid-session):** Parker's Room packet stopped with "this call is marked 'judgement' and needs a paid model, and the
+lever is set to FREE_ONLY". "I care about getting the work done at the price I want"; "Claude and OpenAI usage credits should not
+result in degraded quality at all"; when both are out, "try one of the free lanes, just degraded" with "a degraded quality warning
+with the deliverable"; and "depending on which model used in OpenRouter it may or may not be degraded".
+
+**Why it stopped.** The Room packet's synthesis is a PUBLIC call marked `judgement`, pinned to OpenRouter. At Free only: seats
+were offered only to private or seat-first calls (this was neither), the pin hid the free lanes, and the "protected" rule stops a
+protected call rather than give it a weaker model. Nothing at $0 was a candidate, so it stopped — with two paid seats and free
+lanes available.
+
+**Changed (`runAi.ts`).** At Free only, for any call that is not a live search: the awake seats lead whatever the call's label
+or content class (seats do not train, are $0 and full quality, never flagged); a pin no longer hides the $0 lanes (seats, and
+free lanes for the call's own content class — 4b and the egress gate still remove any lane that may train from a confidential or
+non-public call); a call stops only when nothing at $0 can carry it (private content, seats away), and the sentence says so.
+MODERATE/OPEN are unchanged.
+
+**Degraded-quality warning.** `provider_model.quality_tier` (FULL / DEGRADED / UNMEASURED, default UNMEASURED) is the owner's
+per-model decision. A run served by a $0 non-seat lane for a protected call whose model is not FULL records
+`ai_run.quality_degraded` + the sentence; `deliver()` puts it at the top of any work-card deliverable and Room/Workshop packets
+carry it as a flag. A seat, a paid lane and a FULL model never produce one.
+
+**What is and is not known about the free lanes (honest).** Registered ACTIVE free lanes: OpenRouter `:free` reasoning models
+(nemotron-3-ultra-550b, deepseek-v4-flash, qwen3.8-27b, nemotron-3-super-120b) and Gemini 2.5 Flash (unpaid quota). Each completed
+a real generation (0178/0188) — that proves the lane is alive, not that its writing matches Claude's. `supports_reasoning` says a
+model can reason, not how well it writes a sponsor packet. **No quality measurement exists in the repo**, so none is marked FULL.
+Deciding which are good needs a measured comparison on the firm's own prompts — not built.
+
+**Tests.** `tests/freeOnlyLadder.test.ts` (10, reproduces the owner's card), a Workshop packet flag test, and every existing spend /
+seat / routing test unchanged. **Negative proof, run:** seats-at-free-only removed (2 red), pin-hides-free-lanes (5), warning
+never written (4), FULL still warns (2), banner removed (1), packet flag removed (1) — each restored.
+**PROVEN here:** the above, locally. **UNPROVEN:** migration 0251 against production; live free-lane output; the banner in a
+browser (no e2e run, by the owner's instruction). **NOT BUILT:** a lane-quality measurement; a UI to set `quality_tier`.
