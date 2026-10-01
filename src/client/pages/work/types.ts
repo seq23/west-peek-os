@@ -68,6 +68,9 @@ export interface WorkCardRow {
    */
   work_steps?: number;
   lease_until?: string | null;
+  /** 0248: both subscription seats are spent; the card starts again by itself at this time. */
+  waiting_until?: string | null;
+  waiting_for?: string | null;
   created_by?: string | null;
   /**
    * WAVE C (22 Sep 2026): the AI employee who OPENED the row directly, when it was one — resolved

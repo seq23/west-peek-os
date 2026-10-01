@@ -755,7 +755,7 @@ export async function parkPhase(
     return { parked: false, reason: `a run is already live for this card (${err instanceof Error ? err.message.slice(0, 120) : String(err)})` };
   }
   await update(env, card.id, { current_run_id: runId, phase });
-  await env.WP_OS_DB.prepare("UPDATE work_card SET next_action = ?2 WHERE id = ?1")
+  await env.WP_OS_DB.prepare("UPDATE work_card SET next_action = ?2, waiting_until = NULL, waiting_for = NULL WHERE id = ?1")
     .bind(card.id, `${phase} is queued for the Mac (${payload.model}). ${spec.phases[phase].purpose}`.slice(0, 900))
     .run();
   await appendEvent(env, {
@@ -783,6 +783,11 @@ export interface RunOutcome {
    * held card asks the sweep to leave it alone for a while (`lease_until`) and take the next one.
    */
   held?: boolean;
+  /**
+   * WAITING FOR A PLAN TO RESET (1 Oct 2026). With `held`: the ISO time the sweep leaves this card alone until,
+   * instead of the usual few minutes. Set only when both subscription seats reported a spent plan.
+   */
+  waitUntil?: string;
   /**
    * BANTER RESOLVED WITHOUT EVER REACHING THE MAC (Addendum 10, 22 Sep 2026). The card is already
    * terminal — `state = 'CANCELLED'`, `auto_resolution = 'NO_ACTION_NEEDED'` — by the time this
@@ -1159,6 +1164,32 @@ async function finishCard(env: Env, card: WebPropertyChangeCard, row: WebPropert
 }
 
 /**
+ * BOTH SEATS SPENT: WAIT FOR THE RESET (1 Oct 2026). Claude Code and Codex both said their plan is out of usage, so
+ * nobody can run this phase until one resets. That is not the phase's failure and not a question for anybody:
+ * no attempt is charged (the sweep hands the claim's attempt back for a `progressed` outcome), nobody is emailed
+ * and the card is not blocked. It is leased until the earlier reset, says so on its face, and the next tick
+ * after that parks the same phase again — by itself. A plan still spent at that moment simply holds it again.
+ */
+export async function holdUntilAPlanResets(env: Env, card: { id: string; firm_scope: string }, phase: string, waitSeconds: number, said: string, now = new Date()): Promise<RunOutcome> {
+  const seconds = Math.min(Math.max(Math.round(waitSeconds), 60), 7 * 24 * 60 * 60);
+  const until = new Date(now.getTime() + seconds * 1000).toISOString();
+  const when = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(until));
+  const line = `Both AI plans (Claude Code and Codex) are out of usage · ${phase.toLowerCase()} starts again by itself at about ${when} Central`;
+  await env.WP_OS_DB.prepare("UPDATE work_card SET waiting_until = ?2, waiting_for = ?3, next_action = ?3 WHERE id = ?1").bind(card.id, until, line).run();
+  await appendFinding(env, card.id, `${line}. ${said.slice(0, 600)}`);
+  await appendEvent(env, {
+    eventType: "work_card.waiting_for_reset",
+    actorType: "system",
+    actorId: "web_property_change",
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope: card.firm_scope,
+    payload: { phase, until, seconds },
+  });
+  return { finished: false, blocked: false, progressed: true, held: true, waitUntil: until, detail: line };
+}
+
+/**
  * Apply what the Mac reported for the run the row holds. Clears the lease either way.
  */
 export async function applyReport(
@@ -1204,6 +1235,10 @@ export async function applyReport(
     return { finished: false, blocked: false, progressed: false, detail: `${row.phase} reported something the OS could not read: ${problem}` };
   }
   await recordHistory(env, row, { run_id: run.id, phase: report.phase, status: report.status, reason: (report.reason ?? "").slice(0, 300) });
+
+  if (report.status === "failed" && typeof report.waits_seconds === "number") {
+    return holdUntilAPlanResets(env, card, report.phase, report.waits_seconds, report.reason ?? "");
+  }
 
   if (report.status === "blocked") {
     /*

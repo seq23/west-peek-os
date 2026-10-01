@@ -1207,7 +1207,7 @@ export async function handleWorkByOwner(ctx: RouteContext): Promise<Response> {
             -- THE WORK-CARD REDESIGN (23 Sep 2026): what liveStatus (shared/work/liveStatus.ts)
             -- reads to say "Working now" only while something actually holds the card — the
             -- sweep's lease — plus the step counter for the Technical line.
-            wc.lease_until, COALESCE(wc.work_steps, 0) AS work_steps,
+            wc.lease_until, wc.waiting_until, wc.waiting_for, COALESCE(wc.work_steps, 0) AS work_steps,
             -- 0239: the partners cc'd on the finished email, for the expanded card's
             -- "Finished email goes to" row (the single-card route serves it through SELECT *).
             wc.cc_emails,

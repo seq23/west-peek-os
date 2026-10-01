@@ -426,6 +426,17 @@ async function runClaude(opts) {
 }
 
 /**
+ * BOTH SEATS SPENT IS A WAIT, NOT A FAILURE (1 Oct 2026). When Claude Code and Codex both report a spent plan the
+ * phase did nothing wrong and no attempt should be charged to it: the report says how long until the earlier plan
+ * resets (`waits_seconds`) and the Worker holds the card until then. Null when the run was anything else.
+ */
+export function spentReport(phase, claude) {
+  if (!claude?.bothSpent) return null;
+  const waits = Number.isFinite(claude.resetsInSeconds) && claude.resetsInSeconds > 0 ? Math.round(claude.resetsInSeconds) : 3600;
+  return { phase, status: "failed", reason: String(claude.err ?? "Both subscription seats are out of usage.").split("\n").filter((l) => /Both subscription seats/.test(l)).join(" ").slice(0, 900) || "Both subscription seats are out of usage.", waits_seconds: waits };
+}
+
+/**
  * Did Codex stop because its plan's usage is spent? The words, or null. `codex exec` prints its final
  * message on stdout and may exit 0 while telling you the plan is out, so a short stdout is read as well
  * as stderr; long output is an answer and is never inspected (see detectUsageLimit).
@@ -874,6 +885,8 @@ export async function run(job, ctx) {
     cost = (cost ?? 0) + (costFrom(claude.out) ?? 0);
     ({ result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", phase));
   }
+  const spent = !result ? spentReport(phase, claude) : null;
+  if (spent) return spent;
   if (!result) {
     return { phase, status: "failed", reason: `${phase} ended (claude exit ${claude.code}) but ${problem}${cost !== null ? ` — cost $${cost.toFixed(2)}` : ""}` };
   }
@@ -1087,6 +1100,7 @@ async function runSeveral(job, ctx) {
     writeFileSync(path.join(jobDir, "claude-PLAN.out"), `${claude.out}\n--- stderr ---\n${claude.err}`);
     const cost = costFrom(claude.out);
     const { result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "PLAN");
+    if (!result && spentReport(phase, claude)) return spentReport(phase, claude);
     if (!result) return { phase, status: "failed", reason: `PLAN ended (claude exit ${claude.code}) but ${problem}` };
     if (result.status !== "ok") return { phase, status: result.status, reason: String(result.reason).slice(0, 1500) };
     writeFileSync(path.join(jobDir, "plan.md"), result.document);
@@ -1119,6 +1133,7 @@ async function runSeveral(job, ctx) {
           ({ result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "BUILD"));
         }
         if (Array.isArray(result?.missing_materials)) stillMissing.push(...result.missing_materials);
+        if (!result && spentReport(phase, claude)) return { ...spentReport(phase, claude), parts: reports };
         if (!result) return { phase, status: "failed", reason: `BUILD of ${p.repo} ended (claude exit ${claude.code}) but ${problem}`, parts: reports };
         if (result.status !== "ok") return { phase, status: result.status, reason: `${p.repo}: ${String(result.reason).slice(0, 1400)}`, parts: reports };
         const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress);

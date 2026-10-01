@@ -14,7 +14,10 @@ export interface FallbackResult extends RunResult {
   handedOver: boolean;
   /** True when Claude Code and Codex both reported a spent plan: nobody can run the phase until a reset. */
   bothSpent?: boolean;
+  /** With bothSpent: seconds until the earlier plan resets (one hour when no notice says). */
+  resetsInSeconds?: number;
 }
+export declare function soonestReset(notices: Array<string | null | undefined>, nowMs?: number): number;
 export declare function runWithCodexFallback(deps: {
   runClaude: () => Promise<RunResult>;
   runCodex: () => Promise<RunResult>;

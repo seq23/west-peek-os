@@ -23,6 +23,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import { retryAfterFrom } from "./seat-usage-limit.mjs";
 
 /** True only when the CLI is signed in through the ChatGPT subscription, never an API key (which bills per token). */
 export function codexOnSubscription(authJsonText) {
@@ -115,6 +116,23 @@ export function helpMentions(helpText, flag) {
   return typeof helpText === "string" && helpText.includes(flag);
 }
 
+/** Nothing can be read from a notice (or the wait is silly): look again in an hour. */
+const DEFAULT_RESET_WAIT_SECONDS = 60 * 60;
+const MAX_RESET_WAIT_SECONDS = 7 * 24 * 60 * 60;
+
+/**
+ * How long until the EARLIER of the spent plans resets, read from the notices' own words — whichever seat
+ * comes back first can take the phase. A notice with no readable time is not a reason to wait forever:
+ * when none of them says, the answer is an hour, and a hold that wakes to a still-spent plan simply holds again.
+ */
+export function soonestReset(notices, nowMs = Date.now()) {
+  const waits = notices
+    .map((n) => (typeof n === "string" ? retryAfterFrom(n, nowMs) : null))
+    .filter((n) => typeof n === "number" && Number.isFinite(n) && n > 0);
+  const wait = waits.length ? Math.min(...waits) : DEFAULT_RESET_WAIT_SECONDS;
+  return Math.min(Math.max(Math.round(wait), 60), MAX_RESET_WAIT_SECONDS);
+}
+
 /**
  * The orchestration, with every side effect injected so it is tested without a CLI.
  *
@@ -170,6 +188,7 @@ export async function runWithCodexFallback({ runClaude, runCodex, limited, usabl
       servedBy: "none",
       handedOver: true,
       bothSpent: true,
+      resetsInSeconds: soonestReset([limit, secondLimit]),
     };
   }
   return {
