@@ -343,6 +343,18 @@ describe("the runner: research judged, the piece written, filed, one email", () 
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(out.card!.id).run();
   });
 
+  it("a judge that ANSWERED but returned no usable verdicts also fails the attempt, never 'send me a source' (review of #221)", async () => {
+    await deliverMail("sequoia@westpeek.ventures", "Blog fourth", "outline a blog post on how the mastermind handles disagreements please");
+    const before = sent.length;
+    const emptyJudge: BlogModelCall = async () => ({ ok: true, text: "{}", detail: "ok" });
+    const out = await sweepOnce(env, new Date(NOW.getTime() + 720_000), {
+      blogHelp: (e, card) => runBlogHelpCard(e, card, { search, judge: emptyJudge, write: async () => ({ ok: true, text: outlineJson, detail: "ok" }), urlCheck, interpret: saidNothing }),
+    });
+    expect(out.outcome, out.summary).toBe("FAILED");
+    expect(sent, "nothing emailed").toHaveLength(before);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(out.card!.id).run();
+  });
+
   it("a BLOG_HELP card opened by hand with no email still knows whose it is, from the chief of staff's own role", async () => {
     await env.WP_OS_DB.prepare("INSERT INTO work_card (id, title, description, owner_type, owner_id, state, priority, privacy_label, firm_scope, created_by, kind, request_json) VALUES ('wc_blog_hand', 'Blog phrases for Sequoia', 'x', 'AI', 'aie_wren', 'OPEN', 'NORMAL', 'INTERNAL', 'west-peek', 'test', 'BLOG_HELP', ?1)")
       .bind(JSON.stringify({ modes: ["PHRASE"], topic: "the blog", ask: "a phrase I can repeat" })).run();

@@ -612,7 +612,7 @@ export async function researchTopic(
     const judged = await deps.judge(env, actor, buildJudgePrompt(employee, ask, live));
     if (!judged.ok) return { notes: [], dropped, rejected, why: `the judgement pass failed: ${judged.detail}`, judgeDown: judged.detail };
     const verdicts = parseVerdicts(judged.text);
-    if (verdicts.size === 0) return { notes: [], dropped, rejected, why: "the judge answered with no verdicts" };
+    if (verdicts.size === 0) return { notes: [], dropped, rejected, why: "the judge answered with no verdicts", judgeDown: "the judge answered with no verdicts" };
     const notes: ResearchNote[] = [];
     rejected = [];
     for (const n of live) {
