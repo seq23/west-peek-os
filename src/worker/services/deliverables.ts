@@ -1,3 +1,4 @@
+import { degradedNotesForCard, withQualityBanner } from "./qualityNotes";
 import { z } from "zod";
 import type { Env } from "../env";
 import type { RouteContext } from "../router";
@@ -85,7 +86,14 @@ export interface DeliverInput {
  * `document_id` stays null and the interface says the filed copy is missing rather than pretending
  * it exists.
  */
-export async function deliver(env: Env, actor: Actor, input: DeliverInput): Promise<DeliverableRow> {
+export async function deliver(env: Env, actor: Actor, rawInput: DeliverInput): Promise<DeliverableRow> {
+  /*
+   * A DELIVERABLE WRITTEN BY A FREE LANE THAT MAY BE WEAKER SAYS SO (0251, 1 Oct 2026). If any run attributed to the work card
+   * this comes from was served by a free model whose quality tier is not FULL, its sentence leads the body. A seat, a paid
+   * model or a FULL free model leaves no note and the body is untouched.
+   */
+  const notes = rawInput.sourceType === "work_card" && rawInput.sourceId ? await degradedNotesForCard(env, rawInput.sourceId) : [];
+  const input: DeliverInput = notes.length > 0 ? { ...rawInput, body: withQualityBanner(rawInput.body, notes) } : rawInput;
   const firmScope = actor.firmScopes[0] ?? "west-peek";
   const id = `dlv_${crypto.randomUUID()}`;
   const privacy = input.privacyLabel ?? "INTERNAL";

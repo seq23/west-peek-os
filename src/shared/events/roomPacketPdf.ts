@@ -84,6 +84,8 @@ export interface PacketView {
   inviteCheck: InviteCheck | null;
   /** Organisations discovery looked at whose cited page did not answer — said, so the list reads as searched, not short. */
   alsoLookedAt: string[];
+  /** 0251: the degraded-quality sentence when a free model not marked FULL wrote the packet; null otherwise. */
+  qualityNote?: string | null;
   /** ISO timestamp of the build. */
   generatedAt: string;
 }
@@ -195,6 +197,7 @@ export function renderPacketHtml(v: PacketView): string {
   <p class="kicker">The ${esc(monthWord(v.month))} Room</p>
   <h1>${esc(v.title)}</h1>
   ${v.centralQuestion ? `<p class="question">“${esc(v.centralQuestion)}”</p>` : ""}
+  ${v.qualityNote ? `<p class="muted"><strong>Quality note:</strong> ${esc(v.qualityNote)}</p>` : ""}
   <p class="meta">${esc(v.format.replace(/_/g, " ").toLowerCase())} · ${v.targetMin}–${v.targetMax} people · ${esc(v.brief?.city ?? v.venues[0]?.city ?? "")}</p>
   <div class="intro">
     ${parkerIntroduction().map((l) => `<p>${esc(l)}</p>`).join("")}

@@ -89,6 +89,8 @@ interface PacketRow {
   /** The downloadable PDF, once rendered. */
   document_id?: string | null;
   pushback_md?: string | null;
+  /** 0251: a free model not marked FULL wrote this packet — the sentence to show with it. */
+  quality_note?: string | null;
   /** ROOM or WORKSHOP (16 Sep 2026). Absent on rows older than the column: a Room. */
   kind?: "ROOM" | "WORKSHOP" | null;
 }
@@ -837,6 +839,12 @@ function RoomProposal(props: {
           <span className="muted small">No PDF for this one — it was built before packets were rendered, or the browser was not available. The whole packet is below and in the email.</span>
         )}
       </p>
+
+      {p.quality_note && (
+        <div className="notice notice-gate small" data-testid={`quality-note-${p.id}`}>
+          <strong>Quality note:</strong> {p.quality_note}
+        </div>
+      )}
 
       {p.pushback_md && (
         <div className="notice notice-gate small" data-testid={`pushback-${p.id}`}>

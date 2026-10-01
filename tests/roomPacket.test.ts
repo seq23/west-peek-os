@@ -527,6 +527,15 @@ describe("the PDF", () => {
     expect(html).toContain("#F05A1A");
   });
 
+  it("shows the quality note on the cover when a free model not marked FULL wrote the packet, and nothing when none did (0251)", () => {
+    const note = "Written by Nemotron (free), a free model whose quality has not been measured against the Claude and OpenAI seats. Read it with that in mind.";
+    const withNote = renderPacketHtml({ ...view, qualityNote: note });
+    expect(withNote).toContain("Quality note:");
+    expect(withNote).toContain("has not been measured");
+    expect(renderPacketHtml(view)).not.toContain("Quality note:");
+    expect(renderPacketHtml({ ...view, qualityNote: null })).not.toContain("Quality note:");
+  });
+
   it("escapes what the model wrote", () => {
     const html = renderPacketHtml({ ...view, title: "<script>alert(1)</script>" });
     expect(html).not.toContain("<script>alert");

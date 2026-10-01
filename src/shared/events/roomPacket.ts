@@ -371,7 +371,9 @@ export interface PacketFlag {
     | "no_sponsor_prospects"
     | "sponsor_without_evidence"
     | "no_run_of_show"
-    | "structure_short_of_keep";
+    | "structure_short_of_keep"
+    /** 0251: written by a free model whose quality tier is not FULL, because the seats were not available. */
+    | "written_by_a_weaker_free_model";
   detail: string;
 }
 
