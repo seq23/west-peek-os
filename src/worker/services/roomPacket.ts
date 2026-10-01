@@ -963,6 +963,7 @@ async function runWorkshopStage(
     let nudge = "";
     for (let attempt = 0; attempt < 2 && notes.length === 0; attempt += 1) {
       const found = await deps.research(env, deps.actor, buildWorkshopDiscoveryPrompt({ month: draft.proposed_for_month, topic, set, brief }) + (nudge ? `\n\n${nudge}` : ""));
+      /* search-never-ran-exempt: a Workshop CAN be designed from the brief, and the stage's own note says the research came back empty and why (see `discoveryDetail` below) */
       if (!found.ok) { why = `the live search failed: ${found.detail}`; continue; }
       const parsed = parseWorkshopNotes(found.text);
       const checked = await Promise.all(parsed.map(async (n) => ({ n, verdict: evidenceVerdict(await deps.check(n.url)) })));

@@ -272,6 +272,13 @@ jobs:
       - name: A seat's web search is believed only with proof it searched
         run: npm run validate:seat-search-proof
 
+      # A SEARCH THAT NEVER RAN IS NOT A SEARCH THAT FOUND NOTHING (1 Oct 2026). Four jobs copied one retry loop that
+      # threw away a failed search's own words and then blocked the card asking a partner "where to look". Every new
+      # research job is written by copying one of them, so the shape is held here: a loop that swallows a failed search
+      # must record that it never ran, and the file must fail the attempt (not ask anybody) when it did not.
+      - name: A search that never ran is not reported as a search that found nothing
+        run: npm run validate:search-never-ran
+
       # BOTH PARTNERS' MORNING BRIEFS, 18 Sep 2026. A 60s provider deadline landed on a call this
       # repo says takes ~3 min, so every frontier attempt aborted; the router failed over to Workers
       # AI, whose adapter sent no max_tokens, so the platform applied its own default of 256; every

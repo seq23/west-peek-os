@@ -901,23 +901,32 @@ export async function runProductionsCard(
     prompt: string,
     parse: (text: string) => Promise<Judged<T>>,
     nudge: string,
-  ): Promise<Judged<T> & { why: string }> {
+  ): Promise<Judged<T> & { why: string; searchDown: string | null }> {
     let why = "";
     let last: Judged<T> = { kept: [], dropped: [], rejected: [], failed: null };
+    /*
+     * A SEARCH THAT NEVER RAN IS NOT A SEARCH THAT FOUND NOTHING (1 Oct 2026). When every attempt's search call
+     * failed — the spend setting refused it, no seat could search, a vendor was down — nothing was looked at, and
+     * "no customer lead survived" asked Scooter where to look for a problem that was never about where. `searchDown`
+     * carries the lane's own words so the caller can fail the attempt (and be classified and retried) instead.
+     */
+    let searched = false;
+    let downDetail = "";
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const found = await search(env, actor, attempt === 0 ? prompt : `${prompt}\n\n${nudge}`);
-      if (!found.ok) { why = `the live search failed: ${found.detail}`; continue; }
+      if (!found.ok) { why = `the live search failed: ${found.detail}`; downDetail = found.detail; continue; }
+      searched = true;
       const parsed = await parse(found.text);
       last = parsed;
-      if (parsed.failed) return { ...parsed, why: `the judgement pass failed: ${parsed.failed}` };
-      if (parsed.kept.length) return { ...parsed, why: "" };
+      if (parsed.failed) return { ...parsed, why: `the judgement pass failed: ${parsed.failed}`, searchDown: null };
+      if (parsed.kept.length) return { ...parsed, why: "", searchDown: null };
       why = parsed.rejected.length
         ? `the judge rejected every entry: ${parsed.rejected.map((r) => `${r.name} — ${r.reason}`).join("; ")}`
         : parsed.dropped.length ? `every cited page was dead: ${parsed.dropped.join(", ")}` : "the search answered with no usable entry (no url on any)";
       // The second attempt is told what was wrong with the first, so it is not the same answer twice.
       nudge = `${nudge} Rejected last time: ${parsed.rejected.map((r) => `${r.name} (${r.reason})`).join("; ") || "nothing usable was returned"}.`;
     }
-    return { ...last, kept: [], why };
+    return { ...last, kept: [], why, searchDown: searched ? null : downDetail || "the search call failed" };
   }
 
   let subject: string;
@@ -954,6 +963,11 @@ export async function runProductionsCard(
       },
       "Your previous answer was discarded. Every entry MUST have a live proof_url, a named writer whose beat is shown, and a hook specific to that writer.",
     );
+    // A SEARCH THAT NEVER RAN IS A FAILED ATTEMPT, NOT A QUESTION FOR SCOOTER (1 Oct 2026). Nothing is emailed and nobody
+    // is asked where to look: the sweep classifies the lane's own words, retries, and — when the spend setting or a
+    // missing search seat was the reason — resumes the card by itself once that changes.
+    const down = ideas.searchDown ?? pitchesLive.searchDown;
+    if (down) return { finished: false, blocked: false, detail: `the live search failed: ${down}` };
     const rejected = [...ideas.rejected, ...pitchesLive.rejected];
     const missing = [
       ideas.kept.length === 0 ? `no customer lead survived (${ideas.why})` : null,

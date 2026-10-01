@@ -7117,3 +7117,37 @@ non-Porter seat calls (those fall to the paid lanes, which is what the owner's l
 **Negative proof, run:** every-kind → some-kind (1 red — found uncaught first, test added), no cleanup on a failed
 upload (1), no cleanup when parking fails (1), global freshness (2) — each restored. `validate:seat-search-proof`
 now holds the per-device check (23 fixtures).
+
+## 1 Oct 2026 — A search that never ran is not a search that found nothing (migration 0250)
+
+**Asked:** "fix everything" after Walker's monthly Productions card stopped the way Parker's had, and "is there a root fix so
+this doesn't happen again for any new job that needs this kind of research?"
+
+**What was wrong.** Four jobs copied one retry loop. On a failed search call (`!found.ok`) it wrote
+`why = "the live search failed: …"` and continued; after two tries the caller, seeing no results, blocked the card as
+"nothing good enough to send — tell Walker where to look" (Productions monthly), "nobody stood up to the checks" (weekly
+hire search) or "send a source or two" (blog help). The search had never run. The lane's own refusal was discarded, a person
+was asked a question with no answer, and the sweep could never classify, retry or resume the card.
+
+**Fixed (three jobs).** Each loop now records that the search never ran (`searchDown`), and the runner returns a **failed
+attempt** (`blocked: false, detail: "the live search failed: …"`) — nothing emailed, nobody asked. The sweep classifies the
+lane's words (the spend setting → the spend-setting block with a Try again button and automatic resume; a vendor outage → its
+own block) exactly as it does for Parker. A search that RAN and found nothing is still the old question.
+**Left as designed:** the Workshop's DISCOVER (`roomPacket.ts`) deliberately designs from the brief when research comes back
+empty and its own stage note says so and why; it carries an explicit exemption with that reason. The research packet's live
+leg and the employee-work search step already degrade or report a failed step.
+
+**Migration 0250.** Cards already stopped the old way — BLOCKED, not held, `nothing_good_enough_to_send`, with a sentence
+saying the live search failed — go back in the queue once (the same write the sweep's own release makes). A card whose search
+RAN and found nothing, one with another block reason, and a held card are untouched. The weekly hire and blog help stops did
+not record the failure in their sentence, so those two need the Try again button (they have it).
+
+**The root fix: `validate:search-never-ran` (CI).** The shape is held, not just the four copies: a retry loop that swallows a
+failed search into `why` must also record that it never ran, and a file that can block as "nothing good enough" must return the
+failed-attempt outcome. A loop that degrades on purpose may carry `search-never-ran-exempt: <reason>` (reason required). The
+scan finds the real loops (it asserts it is not vacuous), and 7 fixtures prove each failure it exists to catch.
+
+**Negative proof, run:** monthly down-check removed (2 red), hire check removed (1), blog check removed (1), migration
+releasing everything (1), a loop reverted to swallowing (the scan fails) — each restored.
+**PROVEN here:** the above, locally. **UNPROVEN:** migration 0250 against production; that Walker's live card was stopped for
+this reason (its stored sentence is truncated in what the owner pasted — if it was a different failure, the retry shows it).

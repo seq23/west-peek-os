@@ -128,6 +128,11 @@ Claude Code seat (Max plan)  →  Codex seat (ChatGPT Plus)  →  FREE lanes  �
 - **Both seats spent is a wait for the earlier reset (1 Oct 2026).** A repo phase that finds Claude Code and Codex
   both out of usage is held until the earlier plan resets — no attempt charged, no block, no email — and starts
   again by itself. See `docs/SEAT_SEARCH_AND_PROBES.md` §5.
+- **A search that never ran is not a search that found nothing (1 Oct 2026).** When a job's live search call fails (the
+  spend setting, no search seat, a vendor outage), the job fails the ATTEMPT with the lane's own words — it never blocks
+  the card asking a partner where to look. The sweep classifies it, retries it, and resumes it by itself when the setting
+  or a search seat changes. Any new research job written by copying an existing loop is held to this by
+  `validate:search-never-ran`; a loop that degrades on purpose carries `search-never-ran-exempt: <reason>`.
 - **Setting the default is a human act.** Moving production to `FREE_ONLY` is `governance.policy_change`
   (an approval card); no migration does it.
 
