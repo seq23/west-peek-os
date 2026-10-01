@@ -126,7 +126,7 @@ export function helpMentions(helpText, flag) {
  * The returned object is the runner's usual `{ code, out, err }` plus `servedBy` ("claude" | "codex")
  * and `handedOver`, so the job log and the phase's failure reason can say which model did the work.
  */
-export async function runWithCodexFallback({ runClaude, runCodex, limited, usable, supports, addDirs = [], onLine }) {
+export async function runWithCodexFallback({ runClaude, runCodex, limited, usable, supports, addDirs = [], onLine, codexLimited }) {
   const first = await runClaude();
   const limit = limited(first);
   if (!limit) return { ...first, servedBy: "claude", handedOver: false };
@@ -151,6 +151,27 @@ export async function runWithCodexFallback({ runClaude, runCodex, limited, usabl
   }
   onLine?.(`Claude Code is out of usage (${limit}); handing this phase to Codex on the ChatGPT Plus seat, same worktree, same prompt`);
   const second = await runCodex();
+  /*
+   * BOTH SEATS SPENT (1 Oct 2026). Claude Code was out of usage, the phase went to Codex, and Codex said
+   * the same thing. Surfacing Codex's raw failure would read as "the phase failed", when the truth is that
+   * there is nobody to run it until a plan resets. Say so, with BOTH notices verbatim — each carries its
+   * own reset time ("resets Oct 2 at 8am (America/Chicago)") — so the person reading the card knows when
+   * it can be tried again and does not retype an answer that cannot help. The code is forced non-zero:
+   * a Codex run that printed a notice and exited 0 must not be taken as the phase's work.
+   */
+  const secondLimit = codexLimited ? codexLimited(second) : null;
+  if (secondLimit) {
+    return {
+      ...second,
+      code: second.code === 0 ? 1 : second.code,
+      err:
+        `${second.err}\n[Both subscription seats are out of usage. Claude Code said: ${limit}. ` +
+        `Codex said: ${secondLimit}. This phase cannot run until one of those plans resets — try it again then.]`,
+      servedBy: "none",
+      handedOver: true,
+      bothSpent: true,
+    };
+  }
   return {
     ...second,
     out: `[served by Codex after Claude Code reported: ${limit}]\n${second.out}`,

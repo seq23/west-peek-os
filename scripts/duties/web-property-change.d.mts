@@ -6,3 +6,4 @@ export function previewUrlsFrom(deploymentStatuses: ReadonlyArray<{ environment_
 export function branchAlias(branch: string | null | undefined): string;
 /** Did Claude Code stop because its plan's usage is spent? The notice's own words, or null. Only a failed or unreadable run is inspected. */
 export function claudeSpentUsage(run: { out: string; err: string }): string | null;
+export function codexSpentUsage(run: { out: string; err: string }): string | null;

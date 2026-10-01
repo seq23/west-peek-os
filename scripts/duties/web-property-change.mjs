@@ -417,11 +417,22 @@ async function runClaude(opts) {
     runClaude: () => spawnClaude(opts),
     runCodex: () => spawnCodex(opts),
     limited: claudeSpentUsage,
+    codexLimited: codexSpentUsage,
     usable: () => codexSeatUsable(homedir()),
     supports: codexLacks,
     addDirs: opts.addDirs ?? [],
     onLine: opts.onLine,
   });
+}
+
+/**
+ * Did Codex stop because its plan's usage is spent? The words, or null. `codex exec` prints its final
+ * message on stdout and may exit 0 while telling you the plan is out, so a short stdout is read as well
+ * as stderr; long output is an answer and is never inspected (see detectUsageLimit).
+ */
+export function codexSpentUsage({ out, err }) {
+  const hit = detectUsageLimit({ stdout: out, stderr: err });
+  return hit.limited ? hit.snippet : null;
 }
 
 /**

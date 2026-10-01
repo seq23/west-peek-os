@@ -1,3 +1,4 @@
+import { SEAT_REGISTRY, SEATS } from "../ai/subscriptionSeats";
 import type { Env } from "../env";
 import { runAi } from "../ai/runAi";
 import type { Actor } from "./authorize";
@@ -21,6 +22,23 @@ import type { Actor } from "./authorize";
  */
 
 export const SEARCH_MODEL = "perplexity/sonar";
+
+/**
+ * DID A LANE THAT CAN SEARCH THE LIVE WEB ANSWER THIS CALL? (0246, 1 Oct 2026)
+ *
+ * Before, the only such lane was the search model, so every caller asked `run.model !== SEARCH_MODEL`.
+ * A subscription seat can now serve a search call, and its model id is `codex-local` or
+ * `claude-code-local` — so that question would have thrown away a good answer. What makes a seat's
+ * answer a SEARCH answer is not its name but its proof: the Worker records a search run on a seat as
+ * REPORTED only when the claimer counted search events in the CLI's own record (`reportRun`), and an
+ * answer without them is a failure the chain moves past. So a COMPLETED search call whose model is a
+ * seat has, by construction, searched. A general model answering from memory still fails this check,
+ * which is the 14 Sep failure the check exists for.
+ */
+export function servedBySearchLane(model: string | null | undefined): boolean {
+  if (!model) return false;
+  return model === SEARCH_MODEL || SEATS.some((seat) => SEAT_REGISTRY[seat].model === model);
+}
 
 export interface SearchHit {
   name: string;
@@ -156,7 +174,7 @@ export async function searchQuestion(
     // "I have no web access" was handed to the employee as a finding, who then reported companies
     // as not existing. The run records which model answered; anything but the search model is
     // refused here so the employee sees the tool fail rather than a confident nothing.
-    if (run.model !== SEARCH_MODEL) {
+    if (!servedBySearchLane(run.model)) {
       return {
         ok: false, text: "", citations: [], aiRunId: run.id,
         detail: `search was routed to ${run.model ?? "an unknown model"}, which cannot search the web; ${SEARCH_MODEL} was unavailable to routing. The result is not a finding about the question.`,

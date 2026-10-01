@@ -6910,3 +6910,71 @@ artifact's error code but only passed its key to `blockCard`, so an artifact sto
 (`planning_failed/LEVER`) fell back to the generic lane block. `LEVER` is now passed as `laneKind`;
 `tests/artifacts.test.ts` +1 (red without the line, green with it). Other kinds on artifact cards are
 unchanged — widening them is a separate decision.
+
+## 1 Oct 2026 — A seat may run a live web search; Codex takes over any work Claude Code was doing (phases 3–6)
+
+Owner: *"if claude code is out of usage credits codex / openAI should be able to take over — for any task
+claude was doing, it's the same capabilities."* The ladder (#213/#214) already carried text and judgement
+calls and repo work. The gap that stopped Parker's November Room was a **search call**, never offered to a
+seat. A probe on her Mac showed `codex exec --json -c web_search=live` searches the live web on her ChatGPT
+seat and records every search as a `web_search` event; the event stream is the proof.
+
+### Phase 3 — seat web search (built; proven locally with stand-ins)
+
+| | |
+|---|---|
+| `migrations/0246_a_seat_can_search_the_web.sql` | `subscription_seat_run.needs_search`, `search_events`, `search_queries_json`. Additive. |
+| `src/worker/ai/subscriptionSeats.ts` | A device's `capabilities_json` carries `web_search` (`deviceCanSearch`). `claimRun` hands a search row only to a claimer that said it can search. **`reportRun` believes a search answer only with ≥1 counted search event** — otherwise it records FAILED "answered without running a single web search". The heartbeat upsert no longer wipes capabilities when a caller (the claim route) says nothing about them — a latent overwrite that would have reset `web_search` to `[]` on every claim. |
+| `src/worker/ai/runAi.ts` | A search call may lead on an awake, not-out-of-usage, **search-declared** seat (`searchSeatKeys`), including at `FREE_ONLY` — which resolves Parker's collision. Decided before the provider list is built, because search call sites pin `providerKey: "openrouter"` and a pin made a seat unconsidered. Honours the owner's stand-down (`validate:stopped-cards` caught the first draft missing it). The paid search model stays behind the seat. |
+| `src/worker/ai/providers/subscriptionSeat.ts` | `needsSearch`: parks a search row, waits `SEARCH_CLAIM_WAIT_MS` (180 s, **unmeasured**), refuses to park on a seat that did not declare the capability. |
+| `src/worker/services/liveSearch.ts` + 4 callers | `servedBySearchLane(model)` — the search model, or a seat (whose search answer has, by construction, passed the proof rule). A general model answering from memory is still refused (the 14 Sep failure). |
+| `scripts/lib/seat-search.mjs`, claimer v2 | Runs the seat in search mode (Codex `--json -c web_search=live`; Claude `--allowedTools WebSearch,WebFetch --output-format stream-json --verbose`), counts events from the CLI's own stream, declares `web_search`, reports `search_events`. Parsers are tested against the **real Codex output captured on her Mac** (5 counted events). |
+| `scripts/validate/a-seat-search-needs-proof.mjs` | `validate:seat-search-proof`, 13 self-test fixtures, wired into CI. |
+
+**Negative proof, run:** six broken states restored one at a time — proof rule off, claim gate off, heartbeat
+overwrite back, callers accept only the paid model, router never offers a seat, adapter parks on a seat that
+cannot search — each turned the named test red and each was restored. The sixth had no test until this
+entry; one was added.
+
+### Phase 4 — images and documents on a seat: PROBE ONLY, routing unchanged
+
+`scripts/probes/seat-attachments-probe.mjs` writes a solid-red PNG and a one-page PDF with a code word and
+asks each installed seat to read them; the verdict needs what only a real reading could say. **Not wired:**
+attachments have no transport to the Mac (the queue carries text; D1 rows are not a place for files), and
+whether either CLI reads a file headlessly is unknown. Both are decisions for after the probe, not before.
+
+### Phase 5 — Claude Code's search leg, and both seats spent
+
+- Claude Code's search mode is implemented in the claimer. **UNPROVEN:** no successful Claude stream has
+  been captured — its plan was out of usage until 2 Oct 8am CT (the weekly-limit stream is a fixture).
+- Repo work: when Claude Code is spent and Codex reports the same, `runWithCodexFallback` now returns a
+  sentence naming **both** notices and their reset times, `servedBy: "none"`, `bothSpent: true`, and forces a
+  non-zero code (a Codex run that printed a notice and exited 0 is not finished work). Previously Codex's raw
+  failure surfaced as if the phase had failed.
+
+### Phase 6 — the first supervised Codex repo job: PROBE for the Mac
+
+`scripts/probes/codex-repo-job-probe.mjs`: throwaway repo + linked worktree, the exact flag set the
+fallback uses, and git (not the model) decides whether the file was written, the commit landed in
+`.git/worktrees`, and the push reached a local remote. Driven in `tests/seatProbes.test.ts` against **real
+git** with fake `codex` programs: it reports PROVEN only when git shows it, FAILED for a Codex that edits but
+cannot commit, UNTESTED for a spent plan. `--remote` reads a real remote from inside the sandbox and compares
+hashes. It does not test an authenticated GitHub push or PR creation.
+
+### PROVEN here / UNPROVEN
+
+- **PROVEN (local D1, stubbed vendors, simulated claimer, real git for the probe):** every rule above; the
+  Free-only collision from Parker's card resolves to a seat; the paid search lane still serves when no seat
+  is awake or a seat answers without searching; a stood-down seat is not offered the call; both-spent messaging.
+- **UNPROVEN:** that the live CLIs behave as the fixtures show beyond the one Codex capture; how long a real
+  search takes against the 180 s / 240 s guesses; Claude Code's search stream; that the Codex CLI can commit and
+  push from a linked worktree (probe 4); that either seat can read images or PDFs (probe 3); remote deploy.
+- **NOT BUILT:** seat-only search when **no** search-grounded paid model is registered (the router still
+  requires one as the head and fallback — a firm with no OpenRouter credential still blocks search calls
+  even with a search-capable seat); attachment transport; a *hold until reset* for a both-spent repo phase
+  (it fails with the reset times rather than waiting); the claimer update on the Mac (until then nothing is
+  search-capable and behaviour is unchanged).
+
+Counts: vitest **3510/3510** (233 files), `tsc --noEmit` green, every `validate:*` PASSED with its self-test
+except `validate:value-shapes`, which needs a production Cloudflare token (fails identically on `main`).
+Runbook: `docs/SEAT_SEARCH_AND_PROBES.md`.

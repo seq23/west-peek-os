@@ -1,0 +1,7 @@
+{"type":"system","subtype":"init","tools":["WebFetch","WebSearch"],"model":"claude-fable-5-1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"WebSearch","input":{"query":"2026 Black bar association sponsors"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"results"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"WebFetch","input":{"url":"https://example.org/sponsors","prompt":"who sponsors"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":"page"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Acme Bank sponsors it."}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"Acme Bank sponsors it.","usage":{"server_tool_use":{"web_search_requests":1,"web_fetch_requests":1}}}

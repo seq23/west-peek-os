@@ -135,6 +135,11 @@ const claimSchema = z.object({
    * LOCAL_JOB and nothing else.
    */
   kinds: z.array(runKindSchema).min(1).max(RUN_KINDS.length).optional(),
+  /**
+   * 0246. This claimer can run a seat in live-search mode. Absent means no, so the claimer that shipped
+   * before search is never handed a search row — it would answer from memory.
+   */
+  can_search: z.boolean().optional(),
 });
 
 /**
@@ -156,7 +161,7 @@ export async function handleSubscriptionSeatClaim(ctx: RouteContext): Promise<Re
   const seats = parsed.data.seats as Seat[];
   for (const seat of seats) await recordHeartbeat(ctx.env, { seat, deviceId: parsed.data.device_id });
   const kinds = (parsed.data.kinds ?? ["ANSWER"]) as RunKind[];
-  const run = await claimRun(ctx.env, parsed.data.device_id, seats, new Date(), kinds);
+  const run = await claimRun(ctx.env, parsed.data.device_id, seats, new Date(), kinds, parsed.data.can_search === true);
   if (!run) return json({ run: null, detail: "nothing parked" });
 
   let job: unknown = null;
@@ -173,6 +178,7 @@ export async function handleSubscriptionSeatClaim(ctx: RouteContext): Promise<Re
       id: run.id,
       seat: run.seat,
       run_kind: run.run_kind,
+      needs_search: run.needs_search === 1,
       job,
       purpose: run.purpose,
       prompt: run.prompt,
@@ -186,8 +192,17 @@ export async function handleSubscriptionSeatClaim(ctx: RouteContext): Promise<Re
        * location, or handed to another tool.
        */
       handling:
-        "Private model only. Answer this on this machine with the seat named above and report the answer back. " +
-        "Do not send it anywhere else, do not write it to disk outside the run, and do not paste it into another tool.",
+        run.needs_search === 1
+          ? /*
+             * A SEARCH ROW IS PUBLIC RESEARCH, NOT PRIVATE MATERIAL (0246). It carries no LP names or deal
+             * terms — the router would not have parked it as a search call otherwise — and its job is to
+             * leave the machine for the open web. The honesty line is the one that matters here: the
+             * answer is only accepted if the CLI's own record shows searches ran.
+             */
+            "Public web research. Use live web search for this and open the pages you cite; do not answer from memory. " +
+            "Cite only a page you actually opened. Report only the answer in the format the instruction asks for."
+          : "Private model only. Answer this on this machine with the seat named above and report the answer back. " +
+            "Do not send it anywhere else, do not write it to disk outside the run, and do not paste it into another tool.",
     },
   });
 }
@@ -205,6 +220,12 @@ const reportSchema = z
      */
     seat_exhausted: z.boolean().optional(),
     retry_after_seconds: z.number().int().min(1).max(7 * 24 * 60 * 60).optional(),
+    /**
+     * 0246. What the claimer COUNTED in the CLI's own event stream on a search run, and the queries and
+     * pages it saw. The Worker believes a search answer only when `search_events` is at least one.
+     */
+    search_events: z.number().int().min(0).max(10_000).optional(),
+    search_queries: z.array(z.string().max(400)).max(100).optional(),
   })
   .refine((v) => (v.output_text && v.output_text.length > 0) || (v.error && v.error.length > 0), {
     message: "report either output_text or error — a report that says neither tells the router nothing",
@@ -232,6 +253,8 @@ export async function handleSubscriptionSeatReport(ctx: RouteContext): Promise<R
     deviceId: parsed.data.device_id,
     outputText: parsed.data.output_text ?? null,
     error: parsed.data.error ?? null,
+    searchEvents: parsed.data.search_events ?? null,
+    searchQueries: parsed.data.search_queries ?? null,
   });
   if (!result.accepted) return json({ accepted: false, detail: result.detail }, { status: 409 });
 

@@ -3,6 +3,7 @@ import type { Env } from "../../env";
 import {
   CLAIM_POLL_MS,
   CLAIM_WAIT_MS,
+  SEARCH_CLAIM_WAIT_MS,
   SEAT_REGISTRY,
   SEAT_UNAVAILABLE,
   abandonRun,
@@ -53,6 +54,12 @@ export interface SubscriptionSeatAdapterOptions {
   aiEmployeeId?: string | null;
   taskClass?: string | null;
   firmScope?: string;
+  /**
+   * 0246. This is a live-web-search call. The row is parked as one, only a claimer that declared
+   * "web_search" can take it, the wait is the longer search wait, and an answer without counted search
+   * events is refused by `reportRun` and surfaces here as a failure the chain moves on from.
+   */
+  needsSearch?: boolean;
   /** Injected by tests so the wait is not a real ninety seconds. */
   waitMs?: number;
   pollMs?: number;
@@ -66,7 +73,8 @@ const realSleep = (ms: number): Promise<void> => new Promise((resolve) => setTim
 export function createSubscriptionSeatAdapter(opts: SubscriptionSeatAdapterOptions): ProviderAdapter {
   const env = opts.env;
   const seat = opts.seat;
-  const waitMs = opts.waitMs ?? CLAIM_WAIT_MS;
+  const needsSearch = opts.needsSearch === true;
+  const waitMs = opts.waitMs ?? (needsSearch ? SEARCH_CLAIM_WAIT_MS : CLAIM_WAIT_MS);
   const pollMs = Math.max(1, opts.pollMs ?? CLAIM_POLL_MS);
   const sleep = opts.sleep ?? realSleep;
   const now = opts.now ?? ((): Date => new Date());
@@ -88,6 +96,11 @@ export function createSubscriptionSeatAdapter(opts: SubscriptionSeatAdapterOptio
       if (!availability.available) {
         throw new Error(`${SEAT_UNAVAILABLE}:${availability.reason}`);
       }
+      // A seat whose claimer cannot search must not be parked a search row: it would never be claimed
+      // and the wait would be spent for nothing. Absent-by-capability is answered like absent-by-lid.
+      if (needsSearch && !availability.canSearch) {
+        throw new Error(`${SEAT_UNAVAILABLE}:the ${SEAT_REGISTRY[seat].displayName} seat is awake but its claimer has not said it can search the web, so a search call was not parked on it`);
+      }
 
       // 2. PARK IT. Everything upstream — budget, egress, content class, the two labels — has
       //    already run; this row is a leg of a governed `ai_run`, never work of its own.
@@ -102,6 +115,7 @@ export function createSubscriptionSeatAdapter(opts: SubscriptionSeatAdapterOptio
         taskClass: opts.taskClass ?? null,
         firmScope: opts.firmScope ?? "west-peek",
         maxSeconds: Math.round(waitMs / 1000),
+        needsSearch,
       });
 
       // 3. WAIT, BOUNDED. The deadline is absolute rather than a poll count, so a slow database

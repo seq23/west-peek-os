@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","tools":["WebFetch","WebSearch"],"model":"claude-fable-5-1"}
+{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1790946000,"rateLimitType":"seven_day"}}
+{"type":"assistant","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"You've hit your weekly limit · resets Oct 2 at 8am (America/Chicago)"}]},"error":"rate_limit"}
+{"type":"result","is_error":true,"api_error_status":429,"result":"You've hit your weekly limit · resets Oct 2 at 8am (America/Chicago)","usage":{"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0}}}

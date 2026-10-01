@@ -50,6 +50,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
 import { codexOnSubscription, codexSeatUsable } from "../lib/codex-seat.mjs";
+import { claudeSearchArgs, codexSearchArgs, parseClaudeSearch, parseCodexSearch, searchOutcome } from "../lib/seat-search.mjs";
 import { VAULT_INJECTED_VAR, claudeChildEnv } from "../lib/vault-env.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -58,6 +59,21 @@ const ARGS = new Set(process.argv.slice(2));
 const ONCE = ARGS.has("--once");
 const DOCTOR = ARGS.has("--doctor");
 const SELF_TEST = ARGS.has("--self-test");
+
+/**
+ * What this claimer says it can do on every heartbeat (0246). "web_search" means it can run a seat in
+ * live-search mode AND counts the searches in the CLI's own event stream; the Worker hands it a search
+ * row only because it said so, and believes the answer only with the count.
+ */
+const CAPABILITIES = ["web_search"];
+const AGENT_VERSION = "2";
+
+/**
+ * A live web search takes longer than an answer. UNMEASURED — the first number to read off a real run.
+ * Longer than the router's own search wait (SEARCH_CLAIM_WAIT_MS, 180s) so the router gives up first and
+ * the paid search lane answers; a run it abandoned is closed on the Worker side, not left to be claimed.
+ */
+const SEARCH_RUN_TIMEOUT_MS = 240_000;
 
 /** Must match HEARTBEAT_INTERVAL_S in src/worker/ai/subscriptionSeats.ts. Asserted at startup. */
 const HEARTBEAT_INTERVAL_S = 30;
@@ -203,10 +219,12 @@ async function call(pathname, body, method = "POST") {
 }
 
 /** Run one claimed job on its seat. Never throws: a failure is a RESULT the router needs. */
-async function runOnSeat(seat, prompt) {
+async function runOnSeat(seat, prompt, { search = false } = {}) {
   const cfg = SEATS[seat];
+  const timeoutMs = search ? SEARCH_RUN_TIMEOUT_MS : RUN_TIMEOUT_MS;
+  const args = search ? (seat === "codex" ? codexSearchArgs(prompt) : claudeSearchArgs(prompt)) : cfg.args(prompt);
   return new Promise((resolve) => {
-    const child = spawn(cfg.bin, cfg.args(prompt), {
+    const child = spawn(cfg.bin, args, {
       // stdin closed. Both CLIs block for ever on an open stdin with no terminal, which under
       // launchd looks exactly like a hang and is the second of the two traps.
       stdio: ["ignore", "pipe", "pipe"],
@@ -225,9 +243,9 @@ async function runOnSeat(seat, prompt) {
       child.kill("SIGKILL");
       resolve({
         ok: false,
-        error: `${cfg.displayName} did not finish within ${Math.round(RUN_TIMEOUT_MS / 1000)}s and was stopped.`,
+        error: `${cfg.displayName} did not finish within ${Math.round(timeoutMs / 1000)}s and was stopped.`,
       });
-    }, RUN_TIMEOUT_MS);
+    }, timeoutMs);
 
     child.stdout.on("data", (d) => (out += String(d)));
     child.stderr.on("data", (d) => (err += String(d)));
@@ -248,7 +266,15 @@ async function runOnSeat(seat, prompt) {
        * reported as an exhausted seat so the Worker stops offering it work until it resets
        * (migration 0245). Long output is never inspected: see scripts/lib/seat-usage-limit.mjs.
        */
-      const limit = detectUsageLimit({ stdout: out, stderr: err });
+      /*
+       * A SEARCH RUN'S STDOUT IS A LONG EVENT STREAM, and `detectUsageLimit` never inspects long output
+       * (so a real answer that mentions limits is not discarded). So for a search run the notice is looked
+       * for where it actually appears: the stream's error text when there is no answer, else the answer.
+       */
+      const searchParsed = search ? (seat === "codex" ? parseCodexSearch(out) : parseClaudeSearch(out)) : null;
+      const limit = searchParsed
+        ? detectUsageLimit({ stdout: searchParsed.answer ? searchParsed.answer : searchParsed.errorText, stderr: err })
+        : detectUsageLimit({ stdout: out, stderr: err });
       if (limit.limited) {
         resolve({
           ok: false,
@@ -256,6 +282,11 @@ async function runOnSeat(seat, prompt) {
           retryAfterSeconds: limit.retryAfterSeconds,
           error: `${cfg.displayName} has run out of usage and said: ${limit.snippet}`,
         });
+        return;
+      }
+      if (searchParsed) {
+        // SEARCHED, OR IT IS NOT AN ANSWER. See searchOutcome: zero counted events is a failure in words.
+        resolve(searchOutcome(searchParsed, cfg.displayName));
         return;
       }
       const answer = extractAnswer(out);
@@ -277,11 +308,12 @@ async function cycle(seats) {
   await call("/api/subscription-seats/heartbeat", {
     device_id: DEVICE_ID,
     hostname: hostname(),
-    agent_version: "1",
+    agent_version: AGENT_VERSION,
     seats,
+    capabilities: CAPABILITIES,
   });
 
-  const claimed = await call("/api/subscription-seats/claim", { device_id: DEVICE_ID, seats });
+  const claimed = await call("/api/subscription-seats/claim", { device_id: DEVICE_ID, seats, can_search: CAPABILITIES.includes("web_search") });
   const run = claimed.body?.run;
   if (!run) return { worked: false };
 
@@ -301,12 +333,14 @@ async function cycle(seats) {
    * thing that can act on it.
    */
   const prompt = `${run.handling}\n\n---\n\n${run.prompt}`;
-  const result = await runOnSeat(seat, prompt);
+  const result = await runOnSeat(seat, prompt, { search: run.needs_search === true });
 
   await call("/api/subscription-seats/report", {
     device_id: DEVICE_ID,
     run_id: run.id,
     ...(result.ok ? { output_text: result.output } : { error: result.error }),
+    // A search run reports what it COUNTED; the Worker believes the answer only with at least one.
+    ...(run.needs_search === true ? { search_events: result.ok ? result.searchEvents : 0, ...(result.ok && result.searchQueries?.length ? { search_queries: result.searchQueries } : {}) } : {}),
     // An exhausted seat is a fact about the plan, not about this prompt: the Worker skips the seat
     // until it resets instead of parking the next call on it too.
     ...(result.exhausted ? { seat_exhausted: true, ...(result.retryAfterSeconds ? { retry_after_seconds: result.retryAfterSeconds } : {}) } : {}),
@@ -339,6 +373,7 @@ async function main() {
     console.log(`base url: ${BASE_URL}`);
     console.log(`access token in environment: ${accessHeaders() ? "yes" : "NO — the claimer cannot authenticate"}`);
     console.log(`usable seats: ${seats.length > 0 ? seats.join(", ") : "NONE"}`);
+    console.log(`declares: ${CAPABILITIES.join(", ")} (agent version ${AGENT_VERSION})`);
     process.exit(seats.length > 0 && accessHeaders() ? 0 : 1);
   }
 
@@ -391,6 +426,9 @@ function selfTest() {
     ["an ordinary short answer is not a limit notice", () => !detectUsageLimit({ stdout: "The fund's reserve ratio is 0.35." }).limited],
     ["a long answer that discusses usage limits is still an answer", () => !detectUsageLimit({ stdout: `Usage limit reached is what the CLI prints. ${"x".repeat(700)}` }).limited],
     ["the reset time in a notice is read and clamped", () => { const r = detectUsageLimit({ stdout: "usage limit reached|1759071600" }, 1759071000_000).retryAfterSeconds; return r === 600; }],
+    ["search: Codex's real probe output counts five searches and returns the last message", () => { const p = parseCodexSearch(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../../tests/fixtures/codex-search-probe.jsonl"), "utf8")); return p.events === 5 && p.answer.startsWith("Two 2026 sponsors"); }],
+    ["search: an answer with no counted searches is a failure in words, not an answer", () => { const o = searchOutcome({ events: 0, queries: [], answer: "Acme sponsors it", errorText: "" }, "Codex CLI"); return o.ok === false && /without running a single web search/.test(o.error); }],
+    ["search: a Claude weekly-limit stream has no answer and its notice is found", () => { const p = parseClaudeSearch(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../../tests/fixtures/claude-weekly-limit-stream.jsonl"), "utf8")); return p.answer === "" && detectUsageLimit({ stdout: p.errorText }).limited; }],
     ["the seat spawn goes through the shared claudeChildEnv", () => /env:\s*claudeChildEnv\(process\.env\b/.test(readFileSync(fileURLToPath(import.meta.url), "utf8").split("function runOnSeat")[1]?.split("\n}\n")[0] ?? "")],
   ];
   let failed = 0;
