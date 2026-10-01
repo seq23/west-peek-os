@@ -19,5 +19,8 @@ ALTER TABLE provider_model ADD COLUMN quality_tier TEXT NOT NULL DEFAULT 'UNMEAS
   CHECK (quality_tier IN ('FULL', 'DEGRADED', 'UNMEASURED'));
 ALTER TABLE ai_run ADD COLUMN quality_degraded INTEGER NOT NULL DEFAULT 0 CHECK (quality_degraded IN (0, 1));
 ALTER TABLE ai_run ADD COLUMN quality_note TEXT;
+-- The same note on the Room / Workshop packet itself, so the page, the PDF and the email can show it (the packet's own build state
+-- is not sent to the page).
+ALTER TABLE evt_room_packet ADD COLUMN quality_note TEXT;
 
 INSERT OR IGNORE INTO schema_version (migration) VALUES ('0251_a_free_lane_that_is_weaker_says_so');

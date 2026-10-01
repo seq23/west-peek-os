@@ -422,6 +422,11 @@ const defaultJudge: Judge = async (env, actor, prompt) => {
   return { ok: true, text: run.output_text, detail: "ok" };
 };
 
+/** The packet's own copy of the note, so the page, the PDF and the email can show it. NULL when no run that wrote it was degraded. */
+async function saveQualityNote(env: Env, packetId: string, notes: readonly string[] | undefined): Promise<void> {
+  await env.WP_OS_DB.prepare("UPDATE evt_room_packet SET quality_note = ?2 WHERE id = ?1").bind(packetId, notes && notes.length > 0 ? notes.join(" ") : null).run();
+}
+
 /** Remember (once) the degraded-quality sentence of the run that wrote a stage's text, so the packet can carry it. */
 async function rememberQuality(env: Env, state: { qualityNotes?: string[] }, runId: string | null | undefined): Promise<void> {
   const note = await degradedNoteForRun(env, runId);
@@ -837,6 +842,7 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
       });
       if (!economics.reachesKeep) state.flags.push({ code: "structure_short_of_keep", detail: `All slots sold bring $${economics.sponsorTargetHighUsd.toLocaleString("en-US")} against $${economics.requiredUsd.toLocaleString("en-US")} needed for cost plus the firm's keep.` });
       await storePacket(env, draft, packet, economics, aiRunId, state, actor);
+      await saveQualityNote(env, draft.id, state.qualityNotes);
       return { stage, next: "KIT", note: `"${packet.title}": ${packet.venues.length} venue(s), ${packet.sponsorProspects.length} sponsor(s) ranked, ${packet.runOfShow.length} run-of-show lines, ${economics.scenarios.length} slot(s) — the firm keeps $${economics.netHighUsd.toLocaleString("en-US")} if all land` };
     }
 
@@ -1078,6 +1084,7 @@ async function runWorkshopStage(
     await rememberQuality(env, state, aiRunId);
     for (const n of state.qualityNotes ?? []) state.workshopFlags.push({ code: "written_by_a_weaker_free_model", detail: n });
     await storeWorkshopPacket(env, draft, verified.packet, economics, aiRunId, state, setBy);
+    await saveQualityNote(env, draft.id, state.qualityNotes);
     return { stage, next: "KIT", note: `"${verified.packet.title}": ${verified.packet.runOfShow.length} run-of-show lines (${verified.packet.runOfShow.filter((l) => l.segment === "BREAKOUT").length} breakouts), ${verified.packet.leaveWith.length} artifact(s), ${verified.packet.invitations.length} invitation(s), free to attend${verified.packet.sponsorship.suggested ? `, suggested sponsor ${verified.packet.sponsorship.suggested.categoryFit} at $${(verified.packet.sponsorship.suggested.askUsd ?? 0).toLocaleString("en-US")}` : ", no sponsor suggested"}${verified.flags.length ? `; flags: ${verified.flags.map((f) => f.code).join(", ")}` : ""}` };
   }
 
@@ -1496,6 +1503,7 @@ export function viewFromRows(packet: PacketRow, venues: VenueLine[], sponsors: S
     pitchEmail: obj<{ to: string; subject: string; body: string }>(packet.pitch_email_json),
     inviteCheck: obj<InviteCheck>(packet.invite_check_json),
     alsoLookedAt: parseState(packet.build_state_json).dropped.map((d) => d.orgName),
+    qualityNote: (packet as unknown as { quality_note?: string | null }).quality_note ?? null,
     generatedAt: new Date().toISOString(),
   };
 }
@@ -1684,6 +1692,7 @@ export function renderPacketText(packet: PacketRow, venues: VenueLine[], sponsor
     packet.document_id ? `Download the packet (PDF): https://os.joinwestpeek.com/api/documents/${packet.document_id}/download` : "",
     "",
     v.brief ? `WHAT WAS ASKED FOR\n${v.brief.audience}${v.brief.city ? ` · ${v.brief.city}` : ""}${v.brief.sponsorProspects.length ? `\nSponsor prospects named: ${v.brief.sponsorProspects.join(", ")}` : ""}${v.brief.notes ? `\nNotes: ${v.brief.notes}` : ""}\n` : "",
+    v.qualityNote ? `QUALITY NOTE\n${v.qualityNote}\n` : "",
     v.pushback ? `WHERE I PUSH BACK\n${v.pushback}\n` : "",
     `THEME\n${v.theme}`,
     v.centralQuestion ? `\nCENTRAL QUESTION\n${v.centralQuestion}` : "",
@@ -2294,7 +2303,7 @@ export async function handleListPackets(ctx: RouteContext): Promise<Response> {
             target_max, audience, sponsor_thesis, economics_json, event_id, decided_by, decided_at,
             decision_note, created_at, origin, brief_json, requested_by, sponsor_count,
             sponsor_total_usd, build_error, build_attempts, parent_packet_id, emailed_at,
-            build_stage, work_card_id, document_id, pushback_md, kind
+            build_stage, work_card_id, document_id, pushback_md, kind, quality_note
      FROM evt_room_packet ORDER BY proposed_for_month DESC, created_at DESC LIMIT 60`,
   ).all();
   /*

@@ -823,14 +823,16 @@ interface ChainClock {
 /**
  * A FREE LANE THAT MAY BE WEAKER THAN THE WORK WANTS SAYS SO (0251, 1 Oct 2026).
  *
- * Returns the sentence for the deliverable when this attempt was served by a $0, non-seat lane for a PROTECTED call
+ * Returns the sentence for the deliverable when this attempt was served by a $0 (by estimate), non-seat lane for a PROTECTED call
  * (judgement, interpretation) and that model's `quality_tier` is not FULL — and null for everything else: a seat is full
  * quality and free, a paid lane is the model the call wanted, and an unprotected call never needed better. The tier is the
  * owner's decision per model; the default is UNMEASURED, and the sentence says "not measured" rather than "worse", because
  * nothing in this repo has measured it.
  */
-async function degradedLaneNote(env: Env, rec: RunRecordInput, costUsd: number): Promise<string | null> {
-  if (costUsd > 0) return null;
+async function degradedLaneNote(env: Env, rec: RunRecordInput): Promise<string | null> {
+  // Judged from the lane SELECTED (a $0 estimate on a non-seat lane), never from the recorded cost: a paid response whose
+  // provider omitted usage would otherwise read as free.
+  if ((rec.estimate.estimated_cost_usd ?? 0) > 0) return null;
   if (!protectedFromSpendPressure(rec.input.budgetContext ?? {})) return null;
   if (rec.providerKey && isSeat(rec.providerKey)) return null;
   const row = await env.WP_OS_DB.prepare("SELECT quality_tier, display_name FROM provider_model WHERE provider_id = ?1 AND model = ?2")
@@ -840,8 +842,8 @@ async function degradedLaneNote(env: Env, rec: RunRecordInput, costUsd: number):
   if (tier === "FULL") return null;
   const name = row?.display_name ?? rec.model ?? "a free model";
   return tier === "DEGRADED"
-    ? `Written by ${name}, a free model that is known to be weaker than the Claude and OpenAI seats, because the seats were not available and the spend setting allows only free lanes. Read it with that in mind.`
-    : `Written by ${name}, a free model whose quality has not been measured against the Claude and OpenAI seats, because the seats were not available and the spend setting allows only free lanes. Read it with that in mind.`;
+    ? `Written by ${name}, a free model that is known to be weaker than the Claude and OpenAI seats. Read it with that in mind.`
+    : `Written by ${name}, a free model whose quality has not been measured against the Claude and OpenAI seats. Read it with that in mind.`;
 }
 
 /** One provider attempt against an ai_run row that already exists. */
@@ -945,7 +947,7 @@ async function executeAttempt(
       .bind(running.id, JSON.stringify(actualUsage), response.text, quarantine ? 1 : 0, new Date().toISOString())
       .run();
     // A free lane weaker than the call wants (0251): recorded on the run so the deliverable can carry the warning.
-    const qualityNote = await degradedLaneNote(env, rec, costUsd).catch(() => null);
+    const qualityNote = await degradedLaneNote(env, rec).catch(() => null);
     if (qualityNote) {
       await env.WP_OS_DB.prepare("UPDATE ai_run SET quality_degraded = 1, quality_note = ?2 WHERE id = ?1").bind(running.id, qualityNote).run();
     }

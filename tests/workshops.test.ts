@@ -632,6 +632,10 @@ describe("a packet written by a free lane carries the quality warning (0251)", (
     const flags = (JSON.parse(done.workshop_json as string) as { flags: Array<{ code: string; detail: string }> }).flags.filter((f) => f.code === "written_by_a_weaker_free_model");
     expect(flags).toHaveLength(1);
     expect(flags[0]!.detail).toBe(note);
+    // The packet row carries the same sentence for the page, the PDF and the email, and the list the page reads exposes it.
+    expect((done as unknown as { quality_note: string | null }).quality_note).toBe(note);
+    const list = (await (await handleListPackets(ctx("GET"))).json()) as { packets: Array<{ id: string; quality_note?: string | null }> };
+    expect(list.packets.find((x) => x.id === done.id)?.quality_note).toBe(note);
   });
 
   it("a Workshop written by a seat or a paid model (no degraded run) carries no such flag", async () => {

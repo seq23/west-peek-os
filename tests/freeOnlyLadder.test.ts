@@ -136,7 +136,7 @@ describe("Free only, seats away: a free lane carries the work and the warning sa
     const f = await flag(run.id);
     expect(f.quality_degraded).toBe(1);
     expect(f.quality_note).toMatch(/free model whose quality has not been measured/);
-    expect(f.quality_note).toMatch(/seats were not available/);
+    expect(f.quality_note, "valid at any setting: it claims nothing about why a seat was not used").not.toMatch(/seats were not available|spend setting/);
     expect(await degradedNoteForRun(env(), run.id)).toBe(f.quality_note);
   }, 60_000);
 
