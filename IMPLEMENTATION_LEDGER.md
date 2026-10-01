@@ -7059,3 +7059,43 @@ uncaught — the privacy clause and the held guard had no test that failed witho
 
 Counts: vitest **3550/3550** (235 files), `tsc` clean, every `validate:*` PASSED except `validate:value-shapes`
 (needs a production Cloudflare token; fails identically on `main`).
+
+## 1 Oct 2026 — Both seats spent is a wait; a seat may be handed a file (migrations 0248, 0249)
+
+**Asked:** "yes build these" — the two things #217 listed as not built: holding a repo job until reset when
+Claude Code and Codex are both spent, and attachment transport; plus an explanation of why a Room packet could not
+run with Codex wired in.
+
+### 1 · Hold until reset (0248)
+When both subscription plans report a spent plan, the phase is a **wait, not a failure**. `soonestReset` (Mac)
+reads the earlier reset from the two notices' own words (an hour when neither says; never over a week); the duty
+script reports `waits_seconds`; `applyReport` calls `holdUntilAPlanResets`: `work_card.waiting_until/waiting_for`
+(0248), the sweep's lease set to the same moment, no attempt charged, no block, no email, an event
+(`work_card.waiting_for_reset`). The card reads **"Waiting for reset"** — never "working now" (a person pressing
+Try again clears the lease and the status with it). After the reset the sweep parks the same phase again; a plan
+still spent holds it again. A phase that failed any other way is still an attempt.
+`tests/porterWaitsForAReset.test.ts` (8): the reset arithmetic, the report both ways, the hold, the skip-before and
+resume-after through the real sweep, the status line, and "any other failure is still an attempt".
+**Negative proof, run:** the hold branch removed → 2 red (hold, resume); restored.
+
+### 2 · Attachment transport (0249)
+A seat may be handed a picture or a PDF **only by a claimer that proved it can read one**. The probe now writes
+`~/.west-peek-os/seat-attachments-proof.json`; the claimer declares `read_image:<seat>` / `read_document:<seat>`
+from it (fresh under 30 days, true only); the router offers a file call to a seat only when the awake device
+declared **every** kind the call carries; the adapter refuses again (second wall) and applies the bounds (5 files,
+8 MB each, 16 MB total, PNG/JPEG/GIF/WebP and PDF); bytes go to R2 under `seat-attachments/<run id>/`, the queue
+row names them, the **holding** device fetches each from `GET /api/subscription-seats/attachment` into a private
+temp directory, runs the seat there with the invocation the probe proves (one shared module), and deletes it. The
+Worker deletes the objects when the run ends; the every-minute sweep deletes any missed.
+`tests/seatAttachments.test.ts` (20) + `validate:seat-search-proof` extended (23 fixtures).
+**Negative proof, run:** claim filter removed (1 red), holder check removed (1), cleanup sweep removed (1) — each
+restored. The router wall and the adapter wall are redundant by design, so neither fails a behaviour test alone;
+the validator holds the shape of both.
+
+**PROVEN here:** all of the above, locally (local D1, a fake R2 bucket, a simulated claimer).
+**UNPROVEN:** that `codex exec -i` and `claude -p` read a file this way on the owner's Mac (the probe is that
+proof — until it passes, no file is ever offered to a seat); real-deck sizes against queue timings; migrations 0248
+and 0249 against production; the "Waiting for reset" line in a browser (no Playwright journey was run here); the
+real wording of a Codex usage notice's reset time beyond the fixtures.
+**NOT BUILT:** a UI control for any of it (none is needed — the hold is automatic and the card says so); hold for
+non-Porter seat calls (those fall to the paid lanes, which is what the owner's ladder already says).

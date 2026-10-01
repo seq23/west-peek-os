@@ -43,13 +43,15 @@
  */
 
 import { execFile, spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { hostname, homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
 import { codexOnSubscription, codexSeatUsable } from "../lib/codex-seat.mjs";
+import { attachmentNote, capabilitiesFromProof, claudeAttachArgs, codexAttachArgs, missingCapability, readProof, safeFileName } from "../lib/seat-attachments.mjs";
 import { claudeSearchArgs, codexSearchArgs, parseClaudeSearch, parseCodexSearch, searchOutcome } from "../lib/seat-search.mjs";
 import { VAULT_INJECTED_VAR, claudeChildEnv } from "../lib/vault-env.mjs";
 
@@ -65,8 +67,19 @@ const SELF_TEST = ARGS.has("--self-test");
  * live-search mode AND counts the searches in the CLI's own event stream; the Worker hands it a search
  * row only because it said so, and believes the answer only with the count.
  */
-const CAPABILITIES = ["web_search"];
-const AGENT_VERSION = "2";
+const BASE_CAPABILITIES = ["web_search"];
+const AGENT_VERSION = "3";
+
+/**
+ * EVERYTHING THIS CLAIMER DECLARES, read fresh each cycle (0249). Beyond "web_search", the only other tokens are
+ * `read_image:<seat>` / `read_document:<seat>` — and they come from exactly one place: the proof file the attachments
+ * probe writes after a seat really read a file on THIS machine. No proof, a stale proof or a failed one declares
+ * nothing, and the Worker then never parks a file for this claimer. Re-read every cycle so running the probe takes
+ * effect without a restart, and a failed re-probe withdraws the claim.
+ */
+function currentCapabilities() {
+  return [...BASE_CAPABILITIES, ...capabilitiesFromProof(readProof())];
+}
 
 /**
  * A live web search takes longer than an answer. UNMEASURED — the first number to read off a real run.
@@ -219,12 +232,22 @@ async function call(pathname, body, method = "POST") {
 }
 
 /** Run one claimed job on its seat. Never throws: a failure is a RESULT the router needs. */
-async function runOnSeat(seat, prompt, { search = false } = {}) {
+async function runOnSeat(seat, prompt, { search = false, files = null, cwd = undefined } = {}) {
   const cfg = SEATS[seat];
   const timeoutMs = search ? SEARCH_RUN_TIMEOUT_MS : RUN_TIMEOUT_MS;
-  const args = search ? (seat === "codex" ? codexSearchArgs(prompt) : claudeSearchArgs(prompt)) : cfg.args(prompt);
+  // A run that carries files uses the invocation the attachments probe proved (scripts/lib/seat-attachments.mjs).
+  const args = files?.length
+    ? seat === "codex"
+      ? codexAttachArgs(files, prompt)
+      : claudeAttachArgs(prompt)
+    : search
+      ? seat === "codex"
+        ? codexSearchArgs(prompt)
+        : claudeSearchArgs(prompt)
+      : cfg.args(prompt);
   return new Promise((resolve) => {
     const child = spawn(cfg.bin, args, {
+      ...(cwd ? { cwd } : {}),
       // stdin closed. Both CLIs block for ever on an open stdin with no terminal, which under
       // launchd looks exactly like a hang and is the second of the two traps.
       stdio: ["ignore", "pipe", "pipe"],
@@ -304,16 +327,53 @@ async function runOnSeat(seat, prompt, { search = false } = {}) {
   });
 }
 
+/** Fetch one of a held run's files from the Worker as bytes. Throws with a sentence on any failure. */
+async function fetchAttachment(runId, n) {
+  const headers = accessHeaders();
+  if (!headers) throw new Error("no Access token in the environment");
+  const url = `${BASE_URL}/api/subscription-seats/attachment?run_id=${encodeURIComponent(runId)}&device_id=${encodeURIComponent(DEVICE_ID)}&n=${n}`;
+  const res = await fetch(url, { headers: { "CF-Access-Client-Id": headers["CF-Access-Client-Id"], "CF-Access-Client-Secret": headers["CF-Access-Client-Secret"] }, signal: AbortSignal.timeout(60_000) });
+  if (!res.ok) throw new Error(`the Worker answered ${res.status} for file ${n + 1}`);
+  return Buffer.from(await res.arrayBuffer());
+}
+
+/** Write a run's files into a fresh private directory; the caller removes it. Every size must match the Worker's own. */
+async function downloadAttachments(run) {
+  const dir = mkdtempSync(path.join(tmpdir(), "wp-seat-files-"));
+  const files = [];
+  try {
+    for (const a of run.attachments ?? []) {
+      const bytes = await fetchAttachment(run.id, a.n);
+      if (bytes.length !== a.bytes) throw new Error(`file ${a.n + 1} arrived as ${bytes.length} bytes, expected ${a.bytes}`);
+      const name = safeFileName(a.label, a.n);
+      const dest = path.join(dir, name);
+      writeFileSync(dest, bytes, { mode: 0o600 });
+      files.push({ kind: a.kind === "image" ? "image" : "document", path: dest, name });
+    }
+  } catch (err) {
+    rmSync(dir, { recursive: true, force: true });
+    throw err;
+  }
+  return { dir, files };
+}
+
 async function cycle(seats) {
+  const capabilities = currentCapabilities();
+  const canReadAttachments = capabilities.some((c) => c.startsWith("read_image:") || c.startsWith("read_document:"));
   await call("/api/subscription-seats/heartbeat", {
     device_id: DEVICE_ID,
     hostname: hostname(),
     agent_version: AGENT_VERSION,
     seats,
-    capabilities: CAPABILITIES,
+    capabilities,
   });
 
-  const claimed = await call("/api/subscription-seats/claim", { device_id: DEVICE_ID, seats, can_search: CAPABILITIES.includes("web_search") });
+  const claimed = await call("/api/subscription-seats/claim", {
+    device_id: DEVICE_ID,
+    seats,
+    can_search: capabilities.includes("web_search"),
+    ...(canReadAttachments ? { can_read_attachments: true } : {}),
+  });
   const run = claimed.body?.run;
   if (!run) return { worked: false };
 
@@ -332,8 +392,35 @@ async function cycle(seats) {
    * because this is PRIVATE_MODEL_ONLY material, and the model about to read the prompt is the only
    * thing that can act on it.
    */
-  const prompt = `${run.handling}\n\n---\n\n${run.prompt}`;
-  const result = await runOnSeat(seat, prompt, { search: run.needs_search === true });
+  let prompt = `${run.handling}\n\n---\n\n${run.prompt}`;
+  let result;
+  let fileDir = null;
+  try {
+    const carried = Array.isArray(run.attachments) ? run.attachments : [];
+    if (carried.length > 0) {
+      /*
+       * THE SECOND WALL (0249). The Worker only parks a file for a claimer that declared the capability, but a stale
+       * heartbeat or a second machine must not turn that into a model answering about a file it never opened.
+       * A run whose files this machine has not proven it can read is reported as a failure in words, unrun.
+       */
+      const lacking = missingCapability(seat, carried, capabilities);
+      if (lacking) {
+        result = { ok: false, error: `this claimer has not proved it can read this kind of file on the ${SEATS[seat].displayName} seat (missing ${lacking}), so it did not run the work` };
+      } else {
+        const got = await downloadAttachments(run);
+        fileDir = got.dir;
+        prompt = `${prompt}\n\n${attachmentNote(seat, got.files)}`;
+        result = await runOnSeat(seat, prompt, { files: got.files, cwd: got.dir });
+      }
+    } else {
+      result = await runOnSeat(seat, prompt, { search: run.needs_search === true });
+    }
+  } catch (err) {
+    result = { ok: false, error: `the files for this run could not be fetched: ${err instanceof Error ? err.message : String(err)}` };
+  } finally {
+    // The files were for this run alone.
+    if (fileDir) rmSync(fileDir, { recursive: true, force: true });
+  }
 
   await call("/api/subscription-seats/report", {
     device_id: DEVICE_ID,
@@ -373,7 +460,7 @@ async function main() {
     console.log(`base url: ${BASE_URL}`);
     console.log(`access token in environment: ${accessHeaders() ? "yes" : "NO — the claimer cannot authenticate"}`);
     console.log(`usable seats: ${seats.length > 0 ? seats.join(", ") : "NONE"}`);
-    console.log(`declares: ${CAPABILITIES.join(", ")} (agent version ${AGENT_VERSION})`);
+    console.log(`declares: ${currentCapabilities().join(", ")} (agent version ${AGENT_VERSION})`);
     process.exit(seats.length > 0 && accessHeaders() ? 0 : 1);
   }
 

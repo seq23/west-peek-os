@@ -140,7 +140,7 @@ describe("the Worker side: the card waits, then starts again by itself", () => {
     expect(String(c.waiting_for)).toMatch(/out of usage/);
     expect(String(c.waiting_for)).toMatch(/starts again by itself/);
 
-    const status = liveStatus({ ...(c as never), state: "OPEN", owner_type: "AI", owner_id: "aie_porter" } as never, "someone", now);
+    const status = liveStatus({ ...(c as Record<string, unknown>), state: "OPEN", owner_type: "AI", owner_id: "aie_porter" } as never, "someone", now);
     expect(status.pill).toBe("Waiting for reset");
     expect(status.live, "it is not being worked").toBeFalsy();
     const ev = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'work_card.waiting_for_reset' AND object_id = ?1").bind(cardId).first<{ n: number }>();
@@ -164,7 +164,7 @@ describe("the Worker side: the card waits, then starts again by itself", () => {
 
   it("a person pressing Try again clears the lease, and the card is no longer shown as waiting", async () => {
     const c = await row(cardId);
-    const status = liveStatus({ ...(c as never), state: "OPEN", owner_type: "AI", owner_id: "aie_porter", waiting_until: new Date(heldUntil + 3600_000).toISOString(), waiting_for: "Both AI plans are out of usage", lease_until: null } as never, "someone", new Date(heldUntil));
+    const status = liveStatus({ ...(c as Record<string, unknown>), state: "OPEN", owner_type: "AI", owner_id: "aie_porter", waiting_until: new Date(heldUntil + 3600_000).toISOString(), waiting_for: "Both AI plans are out of usage", lease_until: null } as never, "someone", new Date(heldUntil));
     expect(status.pill).not.toBe("Waiting for reset");
   });
 

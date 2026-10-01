@@ -6,13 +6,12 @@
  *   node scripts/probes/seat-attachments-probe.mjs --seat codex
  *   node scripts/probes/seat-attachments-probe.mjs --self-test no CLIs, no network
  *
- * WHY A PROBE AND NOT A FEATURE. Today a seat is never offered a call with an image or a document: the
- * claimer hands the model a text instruction over a pipe, there is no wire format for attachments, and an
- * adapter that dropped one would answer confidently about a file the model never saw. Making seats take
- * attachments needs (a) a way to move bytes from the Worker's database to the Mac and (b) the CLI actually
- * able to read the file headlessly. (b) cannot be established from the cloud sandbox this repo is built in,
- * and (a) is a real design decision with privacy and size consequences. So (a) is NOT built, and routing
- * is NOT changed, until THIS reports PROVEN for the seat and file type. Nothing here touches the repo.
+ * WHY A PROBE FIRST. A seat may be handed a picture or a document only if the CLI can actually read the file
+ * headlessly on THIS machine — which cannot be established from the cloud sandbox this repo is built in. The
+ * transport exists (0249); what this probe PROVES is what switches it on: it writes
+ * ~/.west-peek-os/seat-attachments-proof.json, the claimer declares `read_image:<seat>` / `read_document:<seat>`
+ * from exactly that file, and the Worker offers a seat a file only for what it declared. No proof, no file.
+ * Nothing here touches the repo.
  *
  * WHAT IT DOES. Writes a solid-RED PNG and a one-page PDF whose only text is a code word into a temporary
  * directory, asks each installed seat to read the file by path and report what it saw, and checks the
@@ -33,6 +32,7 @@ import { deflateSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
 import { claudeChildEnv } from "../lib/vault-env.mjs";
+import { claudeAttachArgs, codexAttachArgs, mergeProof, proofPath, readProof, writeProof } from "../lib/seat-attachments.mjs";
 
 export const PDF_CODE_WORD = "ZEBRA-7421";
 const RUN_TIMEOUT_MS = 180_000;
@@ -114,13 +114,16 @@ export function verdictFor(kind, answer) {
   return false;
 }
 
+/*
+ * THE SAME INVOCATION THE CLAIMER USES, from one module (`scripts/lib/seat-attachments.mjs`): what this probe proves
+ * is exactly what a real run later does, not a look-alike.
+ */
 export function codexArgs(kind, filePath, prompt) {
-  const base = ["exec", "--skip-git-repo-check", "--sandbox", "read-only"];
-  return kind === "image" ? [...base, "-i", filePath, prompt] : [...base, prompt];
+  return codexAttachArgs([{ kind: kind === "image" ? "image" : "document", path: filePath, name: path.basename(filePath) }], prompt);
 }
 
 export function claudeArgs(prompt) {
-  return ["-p", prompt, "--allowedTools", "Read"];
+  return claudeAttachArgs(prompt);
 }
 
 export function promptFor(kind, fileName, seat = "codex") {
@@ -202,7 +205,16 @@ async function main() {
       }
     }
     const proven = rows.filter((r) => r.status === "PROVEN").length;
-    console.log(`\n${proven} of ${rows.length} combinations PROVEN. Routing stays unchanged until a seat and file type you want is PROVEN here.`);
+    /*
+     * THE PROOF FILE (0249). What this run PROVED is written where the claimer reads it, and the claimer declares
+     * exactly those capabilities to the Worker — nothing else ever makes a seat eligible for a file. UNTESTED rows
+     * change nothing (a plan out of usage says nothing about capability); a FAILED row withdraws an earlier proof.
+     */
+    if (rows.length > 0) {
+      writeProof(mergeProof(readProof(), rows));
+      console.log(`\nProof written to ${proofPath()}. Restart nothing: the claimer re-reads it every cycle.`);
+    }
+    console.log(`\n${proven} of ${rows.length} combinations PROVEN. A seat is offered a file only for the combinations PROVEN here.`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
