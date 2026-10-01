@@ -5,7 +5,7 @@ import type { FirmUserIdentity } from "../auth";
 import { appendEvent } from "../events";
 import { notifyPartners, notifyQuietly } from "./notifications";
 import { deckStillBeingRead, workCard } from "./employeeWork";
-import { blockCard, resurfaceStaleBlocks } from "./blocks";
+import { SPEND_SETTING_LANE, SPEND_SETTING_NAME, blockCard, currentSpendState, releaseSpendSettingBlocks, resurfaceStaleBlocks, spendStateJson } from "./blocks";
 import { resurfaceStalePreviews } from "./previewApproval";
 import { STEPS_PER_TICK } from "../../shared/work/employeeLoop";
 import { attemptsAllowedFor, isLaneFailure, readLaneFailure, type LaneFailure } from "../../shared/ai/laneFailure";
@@ -527,6 +527,9 @@ export async function sweepOnce(
   // every ask carried a recommendation is put back in the queue; the tick that claims it approves by
   // the request and starts the build. See `releasePlansNobodyNeedsToAnswer`.
   await (await import("./webPropertyChange")).releasePlansNobodyNeedsToAnswer(env);
+  // A CARD THE SPEND SETTING STOPPED RESUMES BY ITSELF when the setting (or a search-capable seat) changes —
+  // nobody has to notice and press a button. Once per change, never in a loop: see `releaseSpendSettingBlocks`.
+  await releaseSpendSettingBlocks(env, now);
   const card = await claimNextCard(env, now);
   if (!card) {
     return { status: "SUCCEEDED", summary: "nothing waiting: every card an employee owns is done, blocked, or being worked", card: null, outcome: "NOTHING_WAITING" };
@@ -795,8 +798,11 @@ export async function sweepOnce(
             trying: card.title,
             employee,
             who,
-            ...(lane.name ? { lane: lane.name } : {}),
-            ...(lane.key ? { laneKey: lane.key } : {}),
+            ...(lane.failure.kind === "LEVER"
+              ? // A STOP THE SPEND SETTING CAUSED names the setting, not a vendor, and records the state it stopped
+                // in so the sweep can resume the card by itself when that state changes (0247).
+                { lane: SPEND_SETTING_NAME, laneKey: SPEND_SETTING_LANE, context: spendStateJson(await currentSpendState(env, card.firm_scope, now)) }
+              : { ...(lane.name ? { lane: lane.name } : {}), ...(lane.key ? { laneKey: lane.key } : {}) }),
             laneKind: lane.failure.kind,
             vendorWords: lane.failure.vendorWords,
             raw: lane.raw,

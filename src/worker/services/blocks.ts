@@ -3,6 +3,7 @@ import { ownershipOf, roleOf, secondaryApprovalRefusal } from "../../shared/work
 import type { RouteContext } from "../router";
 import { appendEvent } from "../events";
 import { notifyPartners, notifyQuietly } from "./notifications";
+import { allSeatAvailability } from "../ai/subscriptionSeats";
 import { json } from "../router";
 import { partnerByName } from "../../shared/registry/partners";
 import { filePreview } from "./previewApproval";
@@ -14,6 +15,8 @@ import {
   isTechnicalBlock,
   blockSentence,
   describeBlock,
+  RETRYABLE_BLOCK_REASONS,
+  withRetryDoor,
   type Block,
   type BlockActionKey,
   type BlockFacts,
@@ -75,6 +78,11 @@ export interface BlockCardInput extends BlockFacts {
   laneKey?: string;
   /** The provider's verbatim text, status code and all. Kept, never the headline. */
   raw?: string;
+  /**
+   * 0247. What was true of the world when the card stopped, as JSON, for a stop the world can undo by itself.
+   * The only user today is the spend setting (`SPEND_SETTING_LANE`): see `releaseSpendSettingBlocks`.
+   */
+  context?: string;
 }
 
 export interface BlockedCard {
@@ -113,6 +121,7 @@ export async function blockCard(env: Env, card: BlockedCard, input: BlockCardInp
             -- Which lane refused, and its verbatim words. 0185: the doors need the first to act on
             -- it, and the second is the appendix she can open when she wants the real text.
             block_lane = ?11, block_lane_name = ?12, block_raw = ?13,
+            block_context = ?14,
             lease_until = NULL,
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE id = ?1`,
@@ -123,6 +132,7 @@ export async function blockCard(env: Env, card: BlockedCard, input: BlockCardInp
       block.who, JSON.stringify(block.actions),
       now.toISOString(), nagAt(now, block.reason),
       input.laneKey ?? null, input.lane ?? null, (input.raw ?? "").slice(0, 900) || null,
+      input.context?.slice(0, 400) ?? null,
     )
     .run();
 
@@ -136,6 +146,159 @@ export async function blockCard(env: Env, card: BlockedCard, input: BlockCardInp
     payload: { reason: block.reason, who: block.who, actions: block.actions.map((a) => a.key) },
   });
   return sentence;
+}
+
+/**
+ * ── A STOP THE FIRM'S OWN SETTING CAUSED, AND THE WORLD CAN UNDO (1 Oct 2026) ───────────────────────
+ *
+ * Parker's November Room stopped on `free_only_cannot_serve_protected_work`. The owner moved the setting; the
+ * card stayed stopped until somebody pressed something. A stop that the world has since fixed should not wait
+ * for a person to notice. So a card stopped by the spend setting records the state it stopped in
+ * (`block_context`), and every sweep tick compares: when the setting now permits the work and it did not
+ * before, the card goes back in the queue by itself.
+ *
+ * ONCE PER CHANGE, NEVER IN A LOOP. A card is released only when the state has moved from "did not permit"
+ * to "permits". If it fails again in the new state it re-blocks with THAT state recorded, so the next tick
+ * sees no change and leaves it — the owner's Retry button is the door from there.
+ */
+export const SPEND_SETTING_LANE = "spend_lever";
+export const SPEND_SETTING_NAME = "the spend setting";
+
+export interface SpendState {
+  /** FREE_ONLY | MODERATE | OPEN. */
+  lever: string;
+  /** An awake, not-out-of-usage seat whose claimer declared it can search the web. */
+  seatSearch: boolean;
+}
+
+/** Does this state let work that needs a paid model, or a live search, run? */
+export function spendStatePermits(state: SpendState): boolean {
+  return state.lever !== "FREE_ONLY" || state.seatSearch;
+}
+
+/** The firm's spend state right now. Never throws: an unreadable policy reads as the safest answer. */
+export async function currentSpendState(env: Env, firmScope: string, now: Date = new Date()): Promise<SpendState> {
+  let lever = "FREE_ONLY";
+  try {
+    const row = await env.WP_OS_DB.prepare("SELECT spend_lever FROM budget_policy WHERE firm_scope = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 1")
+      .bind(firmScope)
+      .first<{ spend_lever: string | null }>();
+    lever = row?.spend_lever ?? "MODERATE";
+  } catch {
+    // An unreadable policy reads as the strictest setting, so nothing is released on a guess.
+    lever = "FREE_ONLY";
+  }
+  let seatSearch = false;
+  try {
+    seatSearch = (await allSeatAvailability(env, now)).some((a) => a.available && a.canSearch === true);
+  } catch {
+    seatSearch = false;
+  }
+  return { lever, seatSearch };
+}
+
+export const spendStateJson = (s: SpendState): string => JSON.stringify({ lever: s.lever, seat_search: s.seatSearch });
+
+function readSpendContext(raw: string | null | undefined): SpendState | null {
+  try {
+    const j = JSON.parse(raw ?? "") as { lever?: unknown; seat_search?: unknown };
+    if (typeof j.lever !== "string") return null;
+    return { lever: j.lever, seatSearch: j.seat_search === true };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Put back in the queue every card the spend setting stopped, whose world has since changed for the better.
+ * Returns the ids released. Cheap: one indexed-ish query, and nothing at all when no card is so blocked.
+ */
+export async function releaseSpendSettingBlocks(env: Env, now: Date = new Date()): Promise<string[]> {
+  const rows =
+    (
+      await env.WP_OS_DB.prepare(
+        `SELECT id, title, firm_scope, owner_id, block_context FROM work_card
+          WHERE state = 'BLOCKED' AND block_lane = ?1 LIMIT 50`,
+      )
+        .bind(SPEND_SETTING_LANE)
+        .all<{ id: string; title: string; firm_scope: string; owner_id: string | null; block_context: string | null }>()
+    ).results ?? [];
+  if (rows.length === 0) return [];
+  const released: string[] = [];
+  const byFirm = new Map<string, SpendState>();
+  for (const r of rows) {
+    // A card with no readable record of what stopped it is not released on a guess; its Retry button is the door.
+    const then = readSpendContext(r.block_context);
+    if (!then) continue;
+    let nowState = byFirm.get(r.firm_scope);
+    if (!nowState) {
+      nowState = await currentSpendState(env, r.firm_scope, now);
+      byFirm.set(r.firm_scope, nowState);
+    }
+    if (!spendStatePermits(nowState) || spendStatePermits(then)) continue;
+    const why = nowState.lever !== "FREE_ONLY" ? `the spend setting is now ${nowState.lever === "OPEN" ? "Open" : "Moderate"}` : "a subscription seat can now search the web";
+    const res = await env.WP_OS_DB.prepare(
+      `UPDATE work_card
+          SET state = 'OPEN', work_attempts = 0, work_steps = 0, lease_until = NULL,
+              work_last_failure = NULL, work_last_failure_at = NULL,
+              next_action = ?2,
+              block_answer = ?3, block_answered_by = 'work_sweep', block_answered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+              block_nag_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ?1 AND state = 'BLOCKED' AND block_lane = ?4`,
+    )
+      .bind(r.id, `Back in the queue: ${why}, so this is being tried again.`.slice(0, 900), `AUTO-RETRY: ${why}`, SPEND_SETTING_LANE)
+      .run();
+    if ((res.meta?.changes ?? 0) === 0) continue;
+    await appendEvent(env, {
+      eventType: "work_card.auto_released",
+      actorType: "system",
+      actorId: "work_sweep",
+      objectType: "work_card",
+      objectId: r.id,
+      firmScope: r.firm_scope,
+      payload: { reason: "spend_setting_changed", was: then, now: nowState },
+    });
+    released.push(r.id);
+  }
+  return released;
+}
+
+/**
+ * "TRY EVERY STOPPED CARD AGAIN" — the one button for a morning when several cards stopped for a reason that
+ * has since been fixed. Every BLOCKED card whose reason is one a retry can help (see RETRYABLE_BLOCK_REASONS),
+ * except one she has already sent to an engineer: that stays until they have fixed it. Returns how many.
+ */
+export async function retryAllStopped(env: Env, identityId: string): Promise<{ retried: number; ids: string[] }> {
+  const marks = RETRYABLE_BLOCK_REASONS.map((_, i) => `?${i + 1}`).join(", ");
+  const rows =
+    (
+      await env.WP_OS_DB.prepare(
+        `SELECT id FROM work_card
+          WHERE state = 'BLOCKED' AND COALESCE(block_who, '') <> 'ENGINEER' AND block_reason IN (${marks}) LIMIT 200`,
+      )
+        .bind(...RETRYABLE_BLOCK_REASONS)
+        .all<{ id: string }>()
+    ).results ?? [];
+  const ids: string[] = [];
+  for (const r of rows) {
+    const card = await env.WP_OS_DB.prepare("SELECT id, title, firm_scope FROM work_card WHERE id = ?1").bind(r.id).first<{ id: string; title: string; firm_scope: string }>();
+    if (!card) continue;
+    await reopen(env, r.id, identityId, "RETRY", "tried again with every other stopped card");
+    await record(env, card, identityId, "RETRY", "retry all stopped");
+    ids.push(r.id);
+  }
+  return { retried: ids.length, ids };
+}
+
+/** POST /api/work-cards/retry-stopped — a person, never an employee. */
+export async function handleRetryStoppedCards(ctx: RouteContext): Promise<Response> {
+  if (!ctx.identity) return json({ error: "human_required" }, { status: 403 });
+  const out = await retryAllStopped(ctx.env, ctx.identity.id);
+  return json({
+    ok: true,
+    retried: out.retried,
+    said: out.retried === 0 ? "Nothing was stopped in a way a retry could help." : `${out.retried} stopped card${out.retried === 1 ? "" : "s"} back in the queue. They try again within a few minutes.`,
+  });
 }
 
 /** When this block rings again if nobody has acted. A fault gets a gentler interval than a question. */
@@ -676,7 +839,9 @@ export function blockOf(
     stopped: row.block_stopped,
     needed: row.block_needed ?? "",
     who: (row.block_who ?? "SEQUOIA") as Block["who"],
-    actions,
+    // THE DOORS ARE STORED WHEN THE CARD STOPS, so a card that stopped before "try it again" existed would
+    // keep its old list for ever. Added on the way out, so every stopped card is retryable.
+    actions: withRetryDoor(actions, row.block_reason),
     blockedAt: row.blocked_at ?? null,
     // 0185 — what the doors act on, and the appendix behind "show me what it said". `raw` is the
     // provider's verbatim text and is NEVER the headline: the page keeps it shut until she opens it.

@@ -85,7 +85,7 @@ import {
   handleReopenApproval,
 } from "./services/approvals";
 import { handleDraftCard, handleWorkCard, handleWriteBrief } from "./services/employeeWork";
-import { handleUnblockWorkCard } from "./services/blocks";
+import { handleRetryStoppedCards, handleUnblockWorkCard } from "./services/blocks";
 import { handleHandOffWorkCard, handleTakeBackWorkCard } from "./services/handOff";
 import { handleWorkCardInstructions } from "./services/instruction";
 import {
@@ -1131,6 +1131,7 @@ const router = new Router()
   .post("/api/intent/draft", handleDraftCard)
   // 0173 — the four doors on a blocked card: answer it, change it, drop it, send it to an engineer.
   // An answer reopens the card and reaches the employee's next run; it is not a comment box.
+  .post("/api/work-cards/retry-stopped", handleRetryStoppedCards)
   .post("/api/work-cards/:id/unblock", handleUnblockWorkCard)
   // 0227, Wave D — HELD: pull a card and save it for later, with a required reason; release puts
   // it back to OPEN with its attempts reset, never resuming mid-step.

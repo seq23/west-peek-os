@@ -134,8 +134,41 @@ const ESCALATE: BlockAction = { key: "ESCALATE", label: "Send it to an engineer"
 const RETRY: BlockAction = {
   key: "RETRY",
   label: "Try it again now",
-  hint: "Puts the work straight back in the queue, on the same lane. Worth a press when whatever broke has since been fixed.",
+  hint: "Puts the work straight back in the queue. Worth a press when whatever stopped it has since been fixed — a setting changed, an account topped up, the Mac switched back on.",
 };
+
+/**
+ * THE REASONS A "TRY AGAIN" BUTTON BELONGS ON (1 Oct 2026).
+ *
+ * Parker's November Room stopped, the owner opened the card, and the only doors were "type an answer",
+ * "rewrite the job", "drop it" and "send it to an engineer" — nothing that said *try it again*, though the
+ * cause was a setting she had since fixed. A stopped card must always be retryable by the person who owns it.
+ *
+ * Every reason EXCEPT the ones that exist to ask her something. A question wants an answer, not a retry; a
+ * missing brief, a request that is gone, or a job these steps cannot do will fail the same way however often
+ * it is sent back, so offering a retry there would be a button that wastes an attempt and teaches her to
+ * stop pressing buttons.
+ */
+export const RETRYABLE_BLOCK_REASONS: ReadonlyArray<BlockReason> = BLOCK_REASONS.filter(
+  (r) =>
+    r !== "a_question_for_you" &&
+    r !== "permission_to_open_a_page" &&
+    r !== "the_brief_is_missing" &&
+    r !== "the_request_is_gone" &&
+    r !== "asked_for_something_this_work_cannot_do",
+);
+
+/**
+ * The doors a block offers, with "try it again" added where it belongs and is missing. Applied when a block
+ * is DESCRIBED and again when a stored block is READ BACK — the second matters most: a block stores its
+ * doors as JSON at the moment the card stops, so a card that stopped before this existed (the one the owner
+ * is looking at) would otherwise keep its old list for ever.
+ */
+export function withRetryDoor(actions: BlockAction[], reason: string | null | undefined): BlockAction[] {
+  if (!RETRYABLE_BLOCK_REASONS.includes((reason ?? "") as BlockReason)) return actions;
+  if (actions.some((a) => a.key === "RETRY")) return actions;
+  return [RETRY, ...actions];
+}
 const ANOTHER_LANE = (lane: string): BlockAction => ({
   key: "ANOTHER_LANE",
   label: "Send it to a different model",
@@ -377,7 +410,7 @@ const CATALOGUE: Record<BlockReason, (f: BlockFacts) => Omit<Block, "reason" | "
 /** Write a block from its reason and the facts of the card. */
 export function describeBlock(reason: BlockReason, facts: BlockFacts): Block {
   const rest = CATALOGUE[reason](facts);
-  return { reason, trying: facts.trying.trim(), ...rest };
+  return { reason, trying: facts.trying.trim(), ...rest, actions: withRetryDoor(rest.actions, reason) };
 }
 
 /**
