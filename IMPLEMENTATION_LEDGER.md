@@ -6992,3 +6992,70 @@ Runbook: `docs/SEAT_SEARCH_AND_PROBES.md`.
    before a turn that then completes. 5 tests, including the real Codex capture.
 
 **Negative proof, run:** terminal handling disabled → 2 tests red; pin handling disabled → 6 red; both restored.
+
+## 1 Oct 2026 — A stopped card can always be retried, and one the spend setting stopped resumes by itself
+
+Owner: *"you need to fix the work cards — they should be fixed now and they should continue, and the UI should have
+whatever buttons that allow me to retry them."*
+
+**What was wrong, reproduced.** Parker's November Room card (`wc_26f988c2-…`) stopped on
+`free_only_cannot_serve_protected_work`. It read "tried three times and could not get this done" and offered four
+doors — answer, change, drop, send to an engineer — and **no "try it again"**. #215 made *new* stops of that kind
+read correctly, but a block stores its wording and doors as text at the moment the card stops, so a card stopped
+before #215 kept the old ones. And nothing resumed a card when the setting was fixed.
+
+| | |
+|---|---|
+| `src/shared/work/blocks.ts` | `RETRYABLE_BLOCK_REASONS` — every reason except the five that exist to ask her something (a question, a page permission, a missing brief, a request that is gone, a job these steps cannot do). `withRetryDoor` adds "Try it again now" where it belongs and is missing; `describeBlock` applies it to every new block. |
+| `src/worker/services/blocks.ts` | `blockOf` applies it **when a stored block is read back**, so every card stopped before today gets the door with no data change. `block_context` + `releaseSpendSettingBlocks`: a card the spend setting stopped records the state it stopped in; each sweep tick compares, and when the setting now permits the work (not Free only, or a search-capable seat is awake) and it did not before, the card goes back in the queue with attempts reset and a `work_card.auto_released` event. **Once per change, never in a loop** — a card that stops again in the new state is left alone. `retryAllStopped` + `POST /api/work-cards/retry-stopped`: every retry-eligible stopped card, except one already sent to an engineer. |
+| `src/worker/services/workSweep.ts`, `artifacts.ts` | A spend-setting stop names the setting (`block_lane = 'spend_lever'`, "the spend setting") and records its context; the sweep calls the release at the top of every tick. |
+| `migrations/0247_…` | `work_card.block_context`, and a **backfill**: every card still BLOCKED whose engineer note records a spend-setting refusal is rewritten to the block #215 writes for a new one — wording, doors (try again / give it to somebody else / drop it) and marker — with the state it stopped in (Free only, no search seat). The trigger (0173) refuses any update that leaves a blocked card without "trying" and "who"; the statement fills both with COALESCE so an old card cannot abort a release. |
+| `src/client/pages/WorkCardsPage.tsx` | One button on the Work page: **"Try all N stopped cards again"** (or "the stopped card"), shown only when at least one is retryable. The per-card button comes from the card's own doors. |
+
+**Proof.** `tests/stoppedCardsCanRetry.test.ts` (16): every reason's door; the stale card gets it on read while the
+stored column is untouched; pressing it requeues with attempts reset; the backfill output is **identical** to what
+a new stop writes (read out of the migration file, compared with the catalogue) and leaves a stop for any other
+reason untouched; idempotent; an old card with blank fields is still rewritten under the real trigger; release on
+Moderate / on a search seat waking / not on Free only / not in a loop / not on a guess; **the whole flow through
+the real sweep** — two failures → the card names the spend setting and records its state → the setting moves →
+the next tick claims and runs it with nobody pressing anything; the bulk door skips questions and escalated cards.
+`tests/stoppedCardRetryButton.test.ts` (3, jsdom, the real `BlockPanel`): the Retry button shows on a card stopped
+before it existed, one press and no text box, a question still has none, the heading names the setting.
+
+**Negative proof, run:** read-time door removed (2 red), release never fires (3), release ignores what the card
+stopped in (1), sweep stops calling it (1), bulk retry includes escalated cards (1), backfill wording drifts from
+the catalogue (1) — each restored.
+
+**PROVEN here:** all of the above, locally. Counts: vitest **3542/3542** (235 files), `tsc` clean, every
+`validate:*` PASSED except `validate:value-shapes` (needs a production Cloudflare token; fails identically on main).
+
+**UNPROVEN:** the migration against the production database — the backfill matches on the engineer note
+(`description`), so a stopped card whose note was never written is not re-labelled (it still gets the retry door on
+read). **NOT DONE, and not mine to do:** the spend lever itself is the owner's act — until it moves off Free only
+(or the Mac claimer is updated so a seat can search), a retried Parker packet stops again at DISCOVER, now with the
+right words and the same button; the moment either changes, it resumes with no click.
+
+### Review of PR #217 — three findings, all confirmed and fixed
+
+1. **P1 — the bulk retry was a way round the single door's gates.** It selected every matching card and checked only
+   that *some* human was signed in. It now takes the caller's identity and applies exactly what the board and the
+   single door apply: the caller's **privacy visibility** (the board's own clause), **firm scope**, and — per card —
+   the **secondary-partner rule** (0241: a card's secondary does not clear its block; it is the primary's). Cards it
+   skips are counted and the route says so ("N more are not yours to clear") rather than quietly doing less. Tests:
+   another firm retries nothing; a same-firm user without the card's privacy label retries nothing, and does once
+   granted it; the secondary retries nothing and the primary retries it.
+2. **P2 — "a seat could search" was recorded globally.** A search-capable seat serves only a *search* call (not one
+   carrying a document or a picture, not a non-search call), so recording `seat_search: true` made a stop on some
+   other call look already-permitted and the card would then never be released when the setting moved. The context
+   now records `search_call` (the refusal names its call class: "marked 'search'"); the seat clause of the permission
+   rule applies only to a search card. The backfill derives it with `json_object` from the same note.
+3. **P2 — a held card was released.** A held card keeps its underlying BLOCKED state and the sweep skips it
+   (0227), so releasing it reported a resume that could not happen. The release now requires `held_at IS NULL` in
+   both the select and the update; released from the hold, it is eligible on the next tick.
+
+**Negative proof, run:** firm-scope check off (1 red), secondary-partner check off (2), privacy clause off (1),
+seat clause applied to every call (2), both held guards off (1) — each restored. (The first pass found two of these
+uncaught — the privacy clause and the held guard had no test that failed without them; both now do.)
+
+Counts: vitest **3550/3550** (235 files), `tsc` clean, every `validate:*` PASSED except `validate:value-shapes`
+(needs a production Cloudflare token; fails identically on `main`).

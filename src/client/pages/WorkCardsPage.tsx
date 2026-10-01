@@ -171,6 +171,22 @@ export function WorkCardsPage({
    */
   const summary = deskSummary([...sections.needs, ...sections.worked].map((e) => e.status), decksWaiting.length);
 
+  /*
+   * "TRY EVERY STOPPED CARD AGAIN" (1 Oct 2026). Several cards can stop for one reason that has since been
+   * fixed — a setting moved, an account topped up — and the owner should not have to open each. Counted from
+   * what is drawn: a card that is blocked, offers a retry, and has not been sent to an engineer.
+   */
+  const retryable = all.filter((c) => c.state === "BLOCKED" && c.block && c.block.who !== "ENGINEER" && c.block.actions.some((a) => a.key === "RETRY")).length;
+  async function retryAllStopped(): Promise<void> {
+    setBusy(true);
+    const res = await api<{ ok?: boolean; said?: string; detail?: string; error?: string }>("/api/work-cards/retry-stopped", { method: "POST", body: {} });
+    setBusy(false);
+    setMessage(res.data?.said ?? `Could not do that: ${res.data?.detail ?? res.data?.error ?? res.status}`);
+    board.reload();
+    setRecordNonce((n) => n + 1);
+    onChanged();
+  }
+
   return (
     <section data-testid="work-cards-page" className="work-surface">
       {/*
@@ -188,6 +204,11 @@ export function WorkCardsPage({
           <h2 data-testid="work-answer" className={board.data && summary.clear ? "is-clear" : undefined}>
             {board.data ? summary.line : "Reading the desk…"}
           </h2>
+          {retryable > 0 && (
+            <button type="button" disabled={busy} data-testid="work-retry-all-stopped" onClick={() => void retryAllStopped()}>
+              {`Try ${retryable === 1 ? "the stopped card" : `all ${retryable} stopped cards`} again`}
+            </button>
+          )}
         </div>
         <button type="button" className="btn-strong" data-testid="work-card-add-toggle" onClick={() => setAdding((a) => !a)}>
           {adding ? "Cancel" : "Add a card"}

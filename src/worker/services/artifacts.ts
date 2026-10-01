@@ -30,7 +30,7 @@ import {
 import { checkCitations, docxBytes, documentFor, panelNumbers, pptxBytes, slidesFor, stripUncited, textOfDocument, UncitedFigure } from "../../shared/artifacts/render";
 import { readLaneFailure } from "../../shared/ai/laneFailure";
 import { steerFor, cannotDetail } from "./instruction";
-import { blockCard } from "./blocks";
+import { SPEND_SETTING_LANE, SPEND_SETTING_NAME, blockCard, currentSpendState, spendStateJson } from "./blocks";
 import { deliver } from "./deliverables";
 import { handOver, recipientFirmUserId } from "./employeeWork";
 
@@ -703,7 +703,9 @@ export async function runArtifactCard(env: Env, sweepCard: { id: string }, deps:
     ...(laneKind?.[2] ? { laneKey: laneKind[2] } : {}),
     // The spend setting is not a lane: without this the block fell back to the generic lane
     // refusal and its stand-a-lane-down doors, which cannot change a setting.
-    ...(laneKind?.[1] === "LEVER" ? { laneKind: "LEVER" as const } : {}),
+    ...(laneKind?.[1] === "LEVER"
+      ? { laneKind: "LEVER" as const, lane: SPEND_SETTING_NAME, laneKey: SPEND_SETTING_LANE, context: spendStateJson(await currentSpendState(env, card.firm_scope)) }
+      : {}),
   });
   return { finished: false, blocked: true, detail: why, artifact_id: fresh.id };
 }
