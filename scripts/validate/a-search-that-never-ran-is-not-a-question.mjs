@@ -38,6 +38,10 @@ const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 /** One statement body: anything but a closing brace, except a template literal's own `${…}`. */
 const BODY = "(?:[^}\\n]|\\$\\{[^}\\n]*\\})*";
 const SWALLOW = new RegExp(`if \\(!(found)\\.ok\\) \\{${BODY}\\bwhy\\s*=${BODY}\\bcontinue\\b${BODY}\\}`, "g");
+/** The same swallow for the judging step: a pass that could not answer written into `why` / a result, never raised as a failed attempt. */
+const JUDGE_SWALLOW = /[^\n]*the judgement pass failed:[^\n]*/g;
+const RECORDS_JUDGE_DOWN = /\bjudgeDown\b/;
+const JUDGE_EXEMPT = /judge-never-ran-exempt:\s*[^*\s][^*]{9,}/;
 const RECORDS_DOWN = /\b(?:searchDown|downDetail)\s*=/;
 /** A reason is required: at least ten characters before the comment closes. */
 const EXEMPT = /search-never-ran-exempt:\s*[^*\s][^*]{9,}/;
@@ -59,6 +63,15 @@ export function auditFile(rel, raw, stripped) {
     // Only where some loop is not exempt: an exempt degrade does not need to fail the attempt.
     const allExempt = [...stripped.matchAll(SWALLOW)].every((m) => EXEMPT.test([rawLines[stripped.slice(0, m.index).split("\n").length - 2] ?? "", rawLines[stripped.slice(0, m.index).split("\n").length - 3] ?? ""].join("\n")));
     if (!allExempt) bad.push(`${rel} can block as "nothing_good_enough_to_send" but never returns the failed-attempt outcome (blocked: false, detail: \`the live search failed…\`) for a search that never ran`);
+  }
+  for (const m of stripped.matchAll(JUDGE_SWALLOW)) {
+    const line = stripped.slice(0, m.index).split("\n").length;
+    if (RECORDS_JUDGE_DOWN.test(m[0])) continue;
+    // A bare `detail:` that RETURNS the failure as an unblocked outcome is the fix itself.
+    if (/blocked:\s*false/.test(m[0])) continue;
+    const above = [rawLines[line - 2] ?? "", rawLines[line - 3] ?? ""].join("\n");
+    if (JUDGE_EXEMPT.test(above)) continue;
+    bad.push(`${rel}:${line} writes "the judgement pass failed" into a result without recording judgeDown — a judging step that could not answer becomes "found nothing"`);
   }
   if (/search-never-ran-exempt:(?!\s*[^*\s][^*]{9,})/.test(raw)) bad.push(`${rel} has a search-never-ran-exempt marker with no reason`);
   return bad;

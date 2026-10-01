@@ -783,6 +783,8 @@ export async function runHireSearchCard(
   // A search that never ran is a failed attempt, not "nobody stood up to the checks" (1 Oct 2026).
   let searched = false;
   let searchDown = "";
+  // A judging step that could not answer is a failed attempt, not "nobody stood up to the checks" (1 Oct 2026).
+  let judgeDown = "";
   const prompt = buildHireSearchPrompt(week);
   for (let attempt = 0; attempt < 2 && kept.length === 0; attempt += 1) {
     const nudge = attempt === 0 ? "" : `\n\nYour previous answer was discarded: ${why}. Every entry MUST have a profile_url a search result showed, an evidence_url that can be read without a login, and page-backed freelance, seniority and brand-deal claims.`;
@@ -795,10 +797,14 @@ export async function runHireSearchCard(
     dropped = checked.dropped;
     if (checked.kept.length === 0) { why = `every page was dead or unreadable: ${checked.dropped.map((d) => d.name).join(", ")}`; continue; }
     const judged = await judgeCandidates(env, actor, week, checked.kept, judge);
-    if (judged.failed) { why = `the judgement pass failed: ${judged.failed}`; break; }
+    if (judged.failed) { why = `the judgement pass failed: ${judged.failed}`; judgeDown = judged.failed; break; }
     rejected = judged.rejected;
     kept = judged.kept;
     if (kept.length === 0) why = `the judge rejected every candidate: ${rejected.map((r) => `${r.name} — ${r.reason}`).join("; ")}`;
+  }
+
+  if (kept.length === 0 && judgeDown) {
+    return { finished: false, blocked: false, detail: `the judgement pass failed: ${judgeDown}` };
   }
 
   if (kept.length === 0 && !searched) {

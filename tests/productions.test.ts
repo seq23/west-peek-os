@@ -428,7 +428,7 @@ describe("the monthly card on Walker's desk", () => {
     expect(delivered).toMatch(/Left out on judgement .*VK — Russian company.*U\.S\. Space Force — a military.*B\. Guesser — hook is the positioning restated/);
   });
 
-  it("a judge that cannot answer BLOCKS the card: unjudged research is never sent", async () => {
+  it("a judge that cannot answer FAILS THE ATTEMPT (it no longer asks Scooter where to look): unjudged research is never sent", async () => {
     const { openProductionsCard } = await import("../src/worker/services/productions");
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN','IN_PROGRESS','BLOCKED')").run();
     const opened = await openProductionsCard(env, "productions_monthly", new Date("2027-02-01T14:00:00.000Z"));
@@ -441,11 +441,15 @@ describe("the monthly card on Walker's desk", () => {
         now: new Date("2027-02-01T14:05:00.000Z"),
       }),
     });
-    expect(out.outcome).toBe("BLOCKED");
+    // 1 Oct 2026: a judging step that could not answer is the lane failing, not "no lead survived" — so it fails the ATTEMPT
+    // (classified, retried, resumed when the setting changes) and asks Scooter nothing. What never changes: nothing unjudged is sent.
+    expect(out.outcome).toBe("FAILED");
     const mails = (await env.WP_OS_DB.prepare("SELECT 1 FROM event_record WHERE object_id = ?1 AND event_type = 'deliverable.emailed_to_partner'").bind(opened.cardId).all()).results ?? [];
     expect(mails.length).toBe(0);
-    const row = (await env.WP_OS_DB.prepare("SELECT next_action FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ next_action: string }>())!;
-    expect(row.next_action).toMatch(/the judgement pass failed: provider 503/);
+    const row = (await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ state: string }>())!;
+    expect(row.state).not.toBe("BLOCKED");
+    // the lane's own words are what the sweep carries into its attempt record
+    expect(out.summary).toMatch(/the judgement pass failed: provider 503/);
   });
 });
 

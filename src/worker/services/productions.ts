@@ -901,7 +901,7 @@ export async function runProductionsCard(
     prompt: string,
     parse: (text: string) => Promise<Judged<T>>,
     nudge: string,
-  ): Promise<Judged<T> & { why: string; searchDown: string | null }> {
+  ): Promise<Judged<T> & { why: string; searchDown: string | null; judgeDown?: string }> {
     let why = "";
     let last: Judged<T> = { kept: [], dropped: [], rejected: [], failed: null };
     /*
@@ -918,7 +918,8 @@ export async function runProductionsCard(
       searched = true;
       const parsed = await parse(found.text);
       last = parsed;
-      if (parsed.failed) return { ...parsed, why: `the judgement pass failed: ${parsed.failed}`, searchDown: null };
+      // A judging step that could not answer is not "no lead survived" (1 Oct 2026): `judgeDown` fails the attempt, like searchDown.
+      if (parsed.failed) return { ...parsed, why: `the judgement pass failed: ${parsed.failed}`, searchDown: null, judgeDown: parsed.failed };
       if (parsed.kept.length) return { ...parsed, why: "", searchDown: null };
       why = parsed.rejected.length
         ? `the judge rejected every entry: ${parsed.rejected.map((r) => `${r.name} — ${r.reason}`).join("; ")}`
@@ -968,6 +969,8 @@ export async function runProductionsCard(
     // missing search seat was the reason — resumes the card by itself once that changes.
     const down = ideas.searchDown ?? pitchesLive.searchDown;
     if (down) return { finished: false, blocked: false, detail: `the live search failed: ${down}` };
+    const judgeDown = ideas.judgeDown ?? pitchesLive.judgeDown;
+    if (judgeDown) return { finished: false, blocked: false, detail: `the judgement pass failed: ${judgeDown}` };
     const rejected = [...ideas.rejected, ...pitchesLive.rejected];
     const missing = [
       ideas.kept.length === 0 ? `no customer lead survived (${ideas.why})` : null,
