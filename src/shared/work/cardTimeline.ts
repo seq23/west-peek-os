@@ -163,6 +163,8 @@ function stepEntries(steps: TimelineSteps): TimelineEntry[] {
     const lane = laneWords(r.model, r.provider, r.provider_name);
     const what = r.purpose.replace(/\s+/g, " ").trim();
     if (r.status === "COMPLETED") out.push({ at: r.at, text: `${lane} answered: ${what}.${r.degraded ? " A free model that may be weaker than your seats wrote it." : ""}` });
+    // A call still in flight is work in progress, never a failure.
+    else if (r.status === "QUEUED" || r.status === "RUNNING") out.push({ at: r.at, text: `Waiting for an answer: ${what}.`, now: true });
     else out.push({ at: r.at, text: `${what} was not answered — ${whyItEnded(r.failure ?? r.status)}.` });
   }
   for (const e of steps.events) {
@@ -179,9 +181,11 @@ export function cardTimeline(input: TimelineInput): TimelineEntry[] {
     out.push({ at: input.created_at, text: `${input.asked_by === "You" ? "You asked" : `${input.asked_by} asked`}${input.owner_name ? ` ${input.owner_name}` : ""}.` });
   }
   for (const t of input.trail) out.push({ at: t.at, text: trailSentence(t, input.owner_name, input.my_emails) });
-  // With the card's own step record, every try is listed with its reason, so the single "last failure" line would repeat the newest.
   if (input.steps) out.push(...stepEntries(input.steps));
-  if (!input.steps && input.last_failure && input.last_failure_at) {
+  // The single last-failure line is dropped ONLY when the card's own record already holds that failure: a card whose last failure
+  // predates the step record keeps its one entry, so loading the steps never erases history.
+  const failedTickAfter = (at: string): boolean => (input.steps?.ticks ?? []).some((t) => t.outcome === "FAILED" && Date.parse(t.at) >= Date.parse(at) - 120_000);
+  if (input.last_failure && input.last_failure_at && !(input.steps && failedTickAfter(input.last_failure_at))) {
     const said = plainFailure(input.last_failure);
     const text = /retried automatically\.$/.test(said) ? said : `A try failed: ${said.length > 160 ? `${said.slice(0, 160).replace(/\s+\S*$/, "")}…` : said} Retried automatically.`;
     out.push({ at: input.last_failure_at, text });

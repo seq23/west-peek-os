@@ -781,6 +781,17 @@ export async function sweepOnce(
   const lane = await laneBehindTheFailure(env, card.id, detail);
   const allowed = attemptsAllowedFor(lane.failure, MAX_WORK_ATTEMPTS);
   await noteFailedAttempt(env, card, attemptLine(card, lane.failure, lane.name, allowed), now);
+  // EVERY TRY THAT DID NOT FINISH IS ON THE CARD'S RECORD (1 Oct 2026), including the last one — written before the exhaustion branch,
+  // which blocks the card and returns, so the final try is not the one missing from "What has happened". `detail` is the runner's sentence.
+  await appendEvent(env, {
+    eventType: "work_card.swept",
+    actorType: "system",
+    actorId: "work_sweep",
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope: card.firm_scope,
+    payload: { outcome: "FAILED", attempt: card.work_attempts, detail: detail.slice(0, 240) },
+  }).catch(() => undefined);
 
   if (card.work_attempts >= allowed) {
     /*
@@ -827,17 +838,6 @@ export async function sweepOnce(
     await announceOutcome(env, card, "BLOCKED", why);
     return { status: "SUCCEEDED", summary: `"${card.title.slice(0, 60)}" blocked after ${card.work_attempts} failed attempt(s) and handed to you: ${detail.slice(0, 140)}`, card, outcome: "BLOCKED" };
   }
-  // A TRY THAT DID NOT FINISH, on the card's own record with the lane's words (1 Oct 2026): the card said "try 1 of 3" and nothing
-  // said what the try was or why it ended. Written before the sweep returns, so the timeline shows it however it was classified.
-  await appendEvent(env, {
-    eventType: "work_card.swept",
-    actorType: "system",
-    actorId: "work_sweep",
-    objectType: "work_card",
-    objectId: card.id,
-    firmScope: card.firm_scope,
-    payload: { outcome: "FAILED", attempt: card.work_attempts, detail: detail.slice(0, 240) },
-  }).catch(() => undefined);
   // THE SWEEP RAN; THE CARD IS NOT DONE YET. Reporting this as a failed RUN painted "FAILED" on the
   // Work page for a card that was simply on its first attempt of three (Vantage Robotics, 14 Sep,
   // 13:32). The run succeeded at its job — it worked the card — and the card's own state says the

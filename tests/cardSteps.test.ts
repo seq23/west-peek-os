@@ -53,11 +53,23 @@ describe("the timeline, as sentences", () => {
     expect(times).toEqual([...times].sort());
   });
 
-  it("with no step record the timeline reads exactly as before, last failure line included", () => {
-    const withLast = cardTimeline({ ...base, last_failure: "Attempt 1 of 3 did not get anywhere.", last_failure_at: "2026-10-01T16:30:00Z" });
+  it("with no step record the timeline reads exactly as before, last failure line included — and loading EMPTY steps never erases it (review of #222)", () => {
+    const last = { last_failure: "Attempt 1 of 3 did not get anywhere.", last_failure_at: "2026-10-01T16:30:00Z" };
+    const withLast = cardTimeline({ ...base, ...last });
     expect(withLast.some((x) => /First try stalled on our side/.test(x.text))).toBe(true);
-    const withSteps = cardTimeline({ ...base, last_failure: "Attempt 1 of 3 did not get anywhere.", last_failure_at: "2026-10-01T16:30:00Z", steps: { ticks: [], runs: [], events: [] } });
-    expect(withSteps.some((x) => /stalled on our side/.test(x.text)), "the single last-failure line is replaced by the full list, never repeated").toBe(false);
+    const emptySteps = cardTimeline({ ...base, ...last, steps: { ticks: [], runs: [], events: [] } });
+    expect(emptySteps.some((x) => /First try stalled on our side/.test(x.text)), "a card whose failure predates the step record keeps it").toBe(true);
+    const olderTickOnly = cardTimeline({ ...base, ...last, steps: { ticks: [{ at: "2026-10-01T15:00:00Z", outcome: "FAILED", attempt: 1, detail: "x" }], runs: [], events: [] } });
+    expect(olderTickOnly.some((x) => /First try stalled on our side/.test(x.text)), "an OLDER tick is not that failure").toBe(true);
+    const recorded = cardTimeline({ ...base, ...last, steps: { ticks: [{ at: "2026-10-01T16:30:05Z", outcome: "FAILED", attempt: 1, detail: "provider_timeout" }], runs: [], events: [] } });
+    expect(recorded.some((x) => /stalled on our side/.test(x.text)), "once the card's own record holds that failure the single line is not repeated").toBe(false);
+    expect(recorded.some((x) => /Try 1 did not finish — the model did not answer in time/.test(x.text))).toBe(true);
+  });
+
+  it("a call still in flight reads as waiting, never as 'not answered' (review of #222)", () => {
+    const e = cardTimeline({ ...base, steps: { ticks: [], runs: [{ at: "2026-10-01T16:50:00Z", purpose: "Workshop packet proposal", model: null, provider: null, provider_name: null, status: "RUNNING", failure: null, degraded: false }], events: [] } });
+    expect(e.some((x) => /Waiting for an answer: Workshop packet proposal\./.test(x.text) && x.now === true)).toBe(true);
+    expect(e.some((x) => /not answered/.test(x.text))).toBe(false);
   });
 
   it("names the lane in a partner's words and the reason without a code", () => {
@@ -96,6 +108,34 @@ describe("the steps endpoint and the sweep's own record", () => {
     // chronological, oldest first, so the page can print it top to bottom
     expect(body.ticks.map((x) => x.at)).toEqual([...body.ticks.map((x) => x.at)].sort());
   }, 60_000);
+
+  it("the FINAL failed try is on the record too, even though that try blocks the card (review of #222)", async () => {
+    const card = await createWorkCardInternal(env, sweepIdentity(), { title: "Parker: a card that runs out of tries", description: "x", owner_type: "AI", owner_id: "aie_parker", firm_scope: "west-peek" });
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id != ?1 AND state IN ('OPEN','IN_PROGRESS')").bind(card.id).run();
+    const when = new Date("2026-10-01T18:00:00.000Z");
+    const runners = { general: (async () => ({ finished: false, blocked: false, steps: [{ step: 1, action: "failed", detail: "the model answered nonsense" }], detail: "x" })) as never };
+    for (let i = 0; i < 5; i++) {
+      await sweepOnce(env, new Date(when.getTime() + i * 10 * 60_000), runners);
+      if ((await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(card.id).first<{ state: string }>())!.state === "BLOCKED") break;
+    }
+    const state = (await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(card.id).first<{ state: string }>())!.state;
+    expect(state).toBe("BLOCKED");
+    const res = await handleGetWorkCardSteps({ env, request: new Request("https://os.test/x"), params: { id: card.id }, identity: { ...sweepIdentity(), id: "fu_sequoia_taylor", roles: ["MANAGING_PARTNER"] } } as never);
+    const body = (await res.json()) as TimelineSteps;
+    const failed = body.ticks.filter((x) => x.outcome === "FAILED");
+    expect(failed.map((x) => x.attempt), "every try that did not finish, the last one included").toEqual([1, 2, 3]);
+  }, 60_000);
+
+  it("a card folded into this one contributes its tries and calls to the survivor's history (review of #222)", async () => {
+    const survivor = await createWorkCardInternal(env, sweepIdentity(), { title: "Survivor", description: "x", owner_type: "AI", owner_id: "aie_parker", firm_scope: "west-peek" });
+    const stray = await createWorkCardInternal(env, sweepIdentity(), { title: "Stray", description: "x", owner_type: "AI", owner_id: "aie_parker", firm_scope: "west-peek" });
+    await env.WP_OS_DB.prepare("INSERT INTO event_record (id, event_type, actor_type, actor_id, object_type, object_id, firm_scope, payload_json) VALUES (?1, 'work_card.swept', 'system', 'work_sweep', 'work_card', ?2, 'west-peek', ?3)")
+      .bind(`evt_${crypto.randomUUID()}`, stray.id, JSON.stringify({ outcome: "PROGRESSED", attempt: 1, detail: "did a stage on the stray" })).run();
+    await env.WP_OS_DB.prepare("INSERT INTO work_card_merge (id, from_card_id, into_card_id, by, reason) VALUES (?1, ?2, ?3, 'fu_sequoia_taylor', 'test')").bind(`wcm_${crypto.randomUUID()}`, stray.id, survivor.id).run();
+    const res = await handleGetWorkCardSteps({ env, request: new Request("https://os.test/x"), params: { id: survivor.id }, identity: { ...sweepIdentity(), id: "fu_sequoia_taylor", roles: ["MANAGING_PARTNER"] } } as never);
+    const body = (await res.json()) as TimelineSteps;
+    expect(body.ticks.some((x) => x.detail === "did a stage on the stray")).toBe(true);
+  });
 
   it("a card the caller cannot see has no steps to read (404), and an unauthenticated caller gets 401", async () => {
     const missing = await handleGetWorkCardSteps({ env, request: new Request("https://os.test/x"), params: { id: "wc_does_not_exist" }, identity: { ...sweepIdentity(), id: "fu_sequoia_taylor", roles: ["MANAGING_PARTNER"] } } as never);

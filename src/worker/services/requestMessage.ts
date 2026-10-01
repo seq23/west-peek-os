@@ -365,15 +365,26 @@ export async function handleGetWorkCardSteps(ctx: RouteContext): Promise<Respons
   const card = await getVisibleWorkCard(ctx.env, identity, cardId);
   if (!card) return json({ error: "not_found" }, { status: 404 });
 
+  // THE MERGED-IN CARDS READ AS THIS ONE, exactly as in the message trail (0242): a card folded into this one keeps its own tries
+  // and model calls on its own row, and the survivor's history reads them as its own.
+  const merged =
+    (
+      await ctx.env.WP_OS_DB.prepare("SELECT from_card_id FROM work_card_merge WHERE into_card_id = ?1")
+        .bind(cardId)
+        .all<{ from_card_id: string }>()
+    ).results ?? [];
+  const ids = [cardId, ...merged.map((m) => m.from_card_id)];
+  const marks = ids.map((_, i) => `?${i + 1}`).join(", ");
+
   const eventRows =
     (
       await ctx.env.WP_OS_DB.prepare(
         `SELECT event_type, payload_json, created_at FROM event_record
-          WHERE object_type = 'work_card' AND object_id = ?1
+          WHERE object_type = 'work_card' AND object_id IN (${marks})
             AND event_type IN ('work_card.swept', 'work_card.auto_released', 'work_card.waiting_for_reset')
           ORDER BY created_at DESC LIMIT 80`,
       )
-        .bind(cardId)
+        .bind(...ids)
         .all<{ event_type: string; payload_json: string | null; created_at: string }>()
     ).results ?? [];
   const ticks: Array<{ at: string; outcome: string; attempt: number | null; detail: string | null }> = [];
@@ -399,10 +410,10 @@ export async function handleGetWorkCardSteps(ctx: RouteContext): Promise<Respons
            FROM ai_run_attribution a
            JOIN ai_run r ON r.id = a.ai_run_id
            LEFT JOIN provider_registry pr ON pr.id = r.provider_id
-          WHERE a.work_card_id = ?1
+          WHERE a.work_card_id IN (${marks})
           ORDER BY r.created_at DESC LIMIT 60`,
       )
-        .bind(cardId)
+        .bind(...ids)
         .all<{ created_at: string; purpose: string; model: string | null; status: string; failure_reason: string | null; quality_degraded: number; provider_key: string | null; display_name: string | null }>()
     ).results ?? [];
 
