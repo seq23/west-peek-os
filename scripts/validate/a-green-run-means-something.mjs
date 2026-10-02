@@ -260,7 +260,7 @@ export function checkWorkflow(raw) {
       const named = crons.length ? ` (${crons.map((c) => `\`${c}\``).join(", ")})` : " with no cron under it";
       bad.push(
         `playwright.yml has a \`schedule\` trigger${named} — the journeys run ON DEMAND ONLY (owner, 2 Oct 2026): ` +
-          "a person, `land --promote west-peek-os --run-e2e`, or `land` after a large change dispatches them. " +
+          "only a person dispatches them (`gh workflow run playwright.yml --ref main`); `land` has no browser-suite route for this repo. " +
           "No cron at any cadence; the monthly `30 10 1 * *` of 23 Sep is retired",
       );
     }
