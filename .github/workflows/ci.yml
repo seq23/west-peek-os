@@ -22,8 +22,8 @@
 #   · `validators`  — npm ci + every registered boundary scan + the client build. About 2–3 minutes.
 #   · `gate`        — a no-op that `needs` all three, so one check name means "the gate is green".
 #
-# The Playwright journeys are NOT here any more. They run once a month and on demand, in
-# `playwright.yml` (owner, 23 Sep 2026; they ran after every merge from 21 Sep). `deploy.yml` fires on THIS workflow's success, so a commit the
+# The Playwright journeys are NOT here any more. They run on demand only (`workflow_dispatch`), in
+# `playwright.yml` (owner, 2 Oct 2026; monthly + on demand from 23 Sep, after every merge from 21 Sep). `deploy.yml` fires on THIS workflow's success, so a commit the
 # gate has proved ships without waiting the journeys out; a red journey on `main` is a named red
 # for the CI sweep or the next session, and never a reason a gate-proven commit sits undeployed.
 # That split is the owner's call, made 21 Sep 2026 after every PR paid ~9 minutes of Playwright
