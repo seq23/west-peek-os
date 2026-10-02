@@ -61,11 +61,12 @@ const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const E2E_DIR = path.join(ROOT, "e2e");
 const CONFIG = path.join(ROOT, "playwright.config.ts");
 // THE JOURNEYS MOVED (21 Sep 2026). `ci.yml` is the merge gate — typecheck, the vitest suite in
-// shards, the validators, the build — and the Playwright journeys run after the merge in
-// `playwright.yml`. `deploy.yml` fires on the gate alone. All three are read here, because the
-// shape is a set of promises that can each drift on its own: the journeys could stop running on
-// main, the gate could quietly grow them back, a shard could be dropped, the deploy could start
-// waiting on the journeys again (or on nothing).
+// shards, the validators, the build — and the Playwright journeys run out of the gate's path in
+// `playwright.yml`: post-merge from 21 Sep, monthly + on demand from 23 Sep, and ON DEMAND ONLY
+// (`workflow_dispatch`, no schedule) from 2 Oct 2026. `deploy.yml` fires on the gate alone. All
+// three are read here, because the shape is a set of promises that can each drift on its own: a
+// cron could creep back into the journeys, the gate could quietly grow them back, a shard could
+// be dropped, the deploy could start waiting on the journeys again (or on nothing).
 const WORKFLOW = path.join(ROOT, ".github", "workflows", "playwright.yml");
 const GATE = path.join(ROOT, ".github", "workflows", "ci.yml");
 const DEPLOY = path.join(ROOT, ".github", "workflows", "deploy.yml");
@@ -250,21 +251,30 @@ export function checkWorkflow(raw) {
     const afterOn = source.slice(onStart + 3);
     const nextKey = afterOn.search(/\n[a-z][a-z0-9-]*:/);
     const on = nextKey === -1 ? afterOn : afterOn.slice(0, nextKey);
-    // 23 Sep 2026, the owner: once a month and on demand, never per push. Both halves are required,
-    // so the journeys still run on their own (Rule 0) and she can always ask for one.
-    const cron = /schedule:\s*\n\s+-\s*cron:\s*["']?([^"'\n]+)["']?/.exec(on)?.[1]?.trim().split(/\s+/) ?? null;
-    if (!cron) {
-      bad.push("playwright.yml has no `schedule` — the journeys would only run when someone remembers, which is Rule 0");
-    } else if (cron.length !== 5 || !/^\d+$/.test(cron[2]) || cron[3] !== "*" || cron[4] !== "*") {
-      bad.push(`playwright.yml's schedule \`${cron.join(" ")}\` is not monthly (a fixed day of the month, every month) — the owner's decision is once a month`);
+    // 2 Oct 2026, the owner: ON DEMAND ONLY. `workflow_dispatch` is the one trigger. This supersedes
+    // 23 Sep's "once a month and on demand": any `schedule` — monthly, weekly, nightly, hourly, or
+    // a bare `schedule:` with no cron — fails, and so does anything else beside the dispatch.
+    const schedule = /^\s*schedule\s*:/m.exec(on);
+    if (schedule) {
+      const crons = [...on.matchAll(/^\s*-\s*cron\s*:\s*["']?([^"'\n]+?)["']?\s*$/gm)].map((m) => m[1].trim());
+      const named = crons.length ? ` (${crons.map((c) => `\`${c}\``).join(", ")})` : " with no cron under it";
+      bad.push(
+        `playwright.yml has a \`schedule\` trigger${named} — the journeys run ON DEMAND ONLY (owner, 2 Oct 2026): ` +
+          "a person, `land --promote west-peek-os --run-e2e`, or `land` after a large change dispatches them. " +
+          "No cron at any cadence; the monthly `30 10 1 * *` of 23 Sep is retired",
+      );
     }
-    if (!/\bworkflow_dispatch\b/.test(on)) {
-      bad.push("playwright.yml has no `workflow_dispatch` — she cannot run the journeys on demand");
+    if (!/^\s*workflow_dispatch\s*:/m.test(on)) {
+      bad.push("playwright.yml has no `workflow_dispatch` — she cannot run the journeys on demand, and nothing else may run them, which is Rule 0");
     }
-    if (/\bpush\b/.test(on)) {
-      bad.push("playwright.yml runs on `push` — ~20 minutes after every merge is what the owner removed on 23 Sep 2026; once a month and on demand");
+    if (/^\s*push\s*:/m.test(on)) {
+      bad.push("playwright.yml runs on `push` — ~20 minutes after every merge is what the owner removed on 23 Sep 2026; on demand only since 2 Oct 2026");
     }
-    if (/\bpull_request\b/.test(on)) {
+    const others = [...on.matchAll(/^  ([a-z_]+)\s*:/gm)].map((m) => m[1]).filter((t) => !["workflow_dispatch", "schedule", "push", "pull_request", "pull_request_target"].includes(t));
+    if (others.length) {
+      bad.push(`playwright.yml also triggers on ${others.map((t) => `\`${t}\``).join(", ")} — the trigger list is exactly [workflow_dispatch]; the journeys run only when asked for`);
+    }
+    if (/^\s*pull_request(_target)?\s*:/m.test(on)) {
       bad.push(
         "playwright.yml is triggered by `pull_request` — the journeys are post-merge by the owner's decision of " +
           "21 Sep 2026 (a ~5-minute gate, long suites on main); running them on every PR is the ~9 minutes " +
@@ -434,7 +444,8 @@ function selfTest() {
     cases += 1;
     if (bad.length > 0) failures.push(`FALSE POSITIVE on ${label}: ${bad.join(" / ")}`);
   };
-  const PW_ON = "name: Playwright\non:\n  schedule:\n    - cron: \"30 10 1 * *\"\n  workflow_dispatch:\n\njobs:";
+  // The shipped trigger block since 2 Oct 2026: dispatch only, no schedule.
+  const PW_ON = "name: Playwright\non:\n  workflow_dispatch:\n\njobs:";
 
   // The real line, as it stood on origin/main before 18 Sep 2026.
   expectCaught(
@@ -499,23 +510,47 @@ function selfTest() {
   const E2E = "\n  e2e:\n    steps:\n      - run: npm run e2e && npm run e2e\n";
   expectCaught(
     "the journeys triggered by pull_request",
-    checkWorkflow("name: Playwright\non:\n  schedule:\n    - cron: \"30 10 1 * *\"\n  workflow_dispatch:\n  pull_request:\n    branches: [main]\n\njobs:" + E2E),
+    checkWorkflow("name: Playwright\non:\n  workflow_dispatch:\n  pull_request:\n    branches: [main]\n\njobs:" + E2E),
+  );
+  expectCaught(
+    "the journeys triggered by pull_request_target",
+    checkWorkflow("name: Playwright\non:\n  workflow_dispatch:\n  pull_request_target:\n\njobs:" + E2E),
   );
   expectCaught(
     "the journeys back on every push to main (the 20-minute tax she removed)",
-    checkWorkflow("name: Playwright\non:\n  push:\n    branches: [main]\n  schedule:\n    - cron: \"30 10 1 * *\"\n  workflow_dispatch:\n\njobs:" + E2E),
+    checkWorkflow("name: Playwright\non:\n  push:\n    branches: [main]\n  workflow_dispatch:\n\njobs:" + E2E),
   );
-  expectCaught(
-    "the journeys with no schedule at all — only when someone remembers",
+  expectClean(
+    "no schedule, dispatch only — the shipped shape since 2 Oct 2026",
     checkWorkflow("name: Playwright\non:\n  workflow_dispatch:\n\njobs:" + E2E),
   );
   expectCaught(
-    "the journeys scheduled weekly, not monthly",
+    "the journeys scheduled monthly (the 23 Sep shape this supersedes)",
+    checkWorkflow("name: Playwright\non:\n  schedule:\n    - cron: \"30 10 1 * *\"\n  workflow_dispatch:\n\njobs:" + E2E),
+  );
+  expectCaught(
+    "the journeys scheduled weekly",
     checkWorkflow("name: Playwright\non:\n  schedule:\n    - cron: \"30 10 * * 1\"\n  workflow_dispatch:\n\njobs:" + E2E),
   );
   expectCaught(
-    "the journeys with no way to run them on demand",
+    "the journeys scheduled nightly",
+    checkWorkflow("name: Playwright\non:\n  schedule:\n    - cron: \"0 7 * * *\"\n  workflow_dispatch:\n\njobs:" + E2E),
+  );
+  expectCaught(
+    "a bare `schedule:` with no cron under it",
+    checkWorkflow("name: Playwright\non:\n  schedule:\n  workflow_dispatch:\n\njobs:" + E2E),
+  );
+  expectCaught(
+    "the journeys with no way to run them on demand (a schedule alone)",
     checkWorkflow("name: Playwright\non:\n  schedule:\n    - cron: \"30 10 1 * *\"\n\njobs:" + E2E),
+  );
+  expectCaught(
+    "the journeys with no triggers at all",
+    checkWorkflow("name: Playwright\non:\n\njobs:" + E2E),
+  );
+  expectCaught(
+    "the journeys also on workflow_run (started by another workflow, not by a person)",
+    checkWorkflow("name: Playwright\non:\n  workflow_dispatch:\n  workflow_run:\n    workflows: [CI]\n    types: [completed]\n\njobs:" + E2E),
   );
   expectCaught(
     "the e2e job conditioned on the event name (boss-os's shape, where the journeys share the gate's run)",
@@ -681,8 +716,8 @@ function main() {
       `support file(s) under e2e/, ${expectations} assertion(s), 0 excused; retries 0 and workers 1; ` +
       `${sleeps} inventoried sleep(s) and no new ones; ${loadingRowsExamined} list(s) that draw an empty ` +
       "row after loading, every one with a loading row in the same slot; the config loads the one-connection-" +
-      "per-request transport guard; playwright.yml runs the whole suite twice, monthly and on demand, and " +
-      "needs both; ci.yml is the gate, sharded to its matrix, every shard proving " +
+      "per-request transport guard; playwright.yml runs the whole suite twice, on demand only (workflow_dispatch, " +
+      "no schedule), and needs both passes; ci.yml is the gate, sharded to its matrix, every shard proving " +
       "it ran files and every job under a ceiling; deploy.yml fires on the gate alone.",
   );
 }

@@ -6,7 +6,8 @@
 # is a merge gate of about five minutes with the long suites post-merge, and her decision the
 # same day was that a commit the gate has proved ships WITHOUT waiting the journeys out. So:
 #
-#   · This runs on `push` to `main` (the merge commit) and on demand. Never on a pull request.
+#   · This runs ON DEMAND ONLY (`workflow_dispatch`). Never on a pull request, never on a push,
+#     never on a schedule.
 #   · `deploy.yml` fires on `CI` (the gate), not on this. A red run here is a NAMED RED on main
 #     for the CI sweep or the next session to root-cause — it never un-ships, and it never blocks
 #     the next gate-proven commit.
@@ -15,17 +16,20 @@
 #     the real claim about what shipped. `validate:green-means-something` reads this file and
 #     hard-fails if the second pass is ever guarded, retried on `||`, or excused.
 #
-# `concurrency` cancels a run that a later merge has superseded — the later run proves the later
-# commit, and the earlier commit is contained in it.
+# `concurrency` cancels a run that a later dispatch has superseded — the later run proves the
+# later commit, and the earlier commit is contained in it.
 name: Playwright
 
-# ONCE A MONTH AND ON DEMAND (owner's decision, 23 Sep 2026: "annoying and cumbersome ... 1x per
-# month and on demand"). It ran on every push to main: ~20 minutes, 10+ times a day. The 1st of
-# each month at 10:30 UTC (05:30 CT), ahead of the 06:00 CT CI sweep, so a red run is found and
-# fixed that morning. Run it any time from the Actions tab or `gh workflow run playwright.yml`.
+# ON DEMAND ONLY (owner, 2 Oct 2026). BUILD FIRST, TEST IN BATCHES. This suite runs only when
+# dispatched by a person (the Actions tab or `gh workflow run playwright.yml`), by
+# `land --promote west-peek-os --run-e2e`, or by `land` after a large change (`land` dispatches it
+# when the PR it just merged is large; the `land` PR in seq23/seq-bin defines "large"). The merge
+# gate is ci.yml, and `land <pr>` deploys on every green merge. This supersedes the 23 Sep 2026
+# decision of once a month (the 1st at 10:30 UTC) and on demand, which itself replaced ~20
+# minutes after every push to main, 10+ times a day. No cron remains: a scheduled run on a head
+# nobody changed proves nothing new. `validate:green-means-something` fails the build if a
+# `schedule`, `push` or `pull_request` trigger comes back, or if `workflow_dispatch` goes.
 on:
-  schedule:
-    - cron: "30 10 1 * *"
   workflow_dispatch:
 
 concurrency:
@@ -117,11 +121,11 @@ jobs:
       # something` counts the invocations in this job and hard-fails if the suite is run only once.
       #
       # TWICE, EVERY RUN. This job used to skip the second pass on a pull request (owner, 19 Sep
-      # 2026: "what is taking so long"). Since 21 Sep 2026 it does not run on pull requests at all —
-      # it runs on the merge commit and on demand — so every run is the claim about what shipped
+      # 2026: "what is taking so long"). Since 21 Sep 2026 it does not run on pull requests at all,
+      # and since 2 Oct 2026 only on dispatch — so every run is the claim about what shipped
       # and every run makes both passes. `validate:green-means-something` pins this shape: two
       # `npm run e2e` invocations that both have to pass, no guard on the second, and this
-      # workflow never triggered by `pull_request`.
+      # workflow triggered by `workflow_dispatch` alone.
       - name: Playwright journeys — twice from a clean database
         run: |
           set -uo pipefail
