@@ -21,10 +21,12 @@
 name: Playwright
 
 # ON DEMAND ONLY (owner, 2 Oct 2026). BUILD FIRST, TEST IN BATCHES. This suite runs only when
-# dispatched by a person (the Actions tab or `gh workflow run playwright.yml`), by
-# `land --promote west-peek-os --run-e2e`, or by `land` after a large change (`land` dispatches it
-# when the PR it just merged is large; the `land` PR in seq23/seq-bin defines "large"). The merge
-# gate is ci.yml, and `land <pr>` deploys on every green merge. This supersedes the 23 Sep 2026
+# a person dispatches it (the Actions tab or `gh workflow run playwright.yml --ref main`).
+# Nothing else starts it: `land` has no browser-suite route for this repo (its west-peek-os
+# route sets no E2E_WF), so `land` does NOT run it after a large change and
+# `land --promote west-peek-os --run-e2e` refuses. The owner chose to leave it that way on
+# 2 Oct 2026. The merge gate is ci.yml, and `land <pr>` deploys on every green merge, any size.
+# This supersedes the 23 Sep 2026
 # decision of once a month (the 1st at 10:30 UTC) and on demand, which itself replaced ~20
 # minutes after every push to main, 10+ times a day. No cron remains: a scheduled run on a head
 # nobody changed proves nothing new. `validate:green-means-something` fails the build if a
