@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { approvalStateWords } from "@shared/help/actionNames";
 import { stateMeaning } from "@shared/work/workCards";
+import { liveStatus } from "@shared/work/liveStatus";
 import { gotoSurface } from "./support/nav";
 import { provisionLocalD1 } from "./support/provision";
 
@@ -54,14 +55,29 @@ test("governed work journey: capture → work card → approval → activity spi
   await expect(page.getByTestId("route-result")).toContainText("machine #21");
   await expect(page.getByTestId("route-result")).toContainText("work card was opened");
 
-  // Work Cards: the new card is listed OPEN; request an approval-requiring action.
+  // Work Cards: the new card is OPEN and nobody owns it; request an approval-requiring action.
   // The rail says "Work" now — Work cards and the scheduled machinery are one surface.
   await gotoSurface(page, "Work");
-  const workCard = page.locator('li[data-testid^="work-card-"]').filter({ hasText: marker }).first();
+  const workCard = page.getByTestId("work-owner-needs").locator('li[data-testid^="work-card-"]').filter({ hasText: marker }).first();
   await expect(workCard).toBeVisible();
-  // Same reasoning as the approval badge below: the state is read from the one module that decides
-  // how a work-card state is spoken, so the assertion cannot be broken by a rewording.
-  await expect(workCard).toContainText(stateMeaning("OPEN")!.label);
+  const openedId = (await workCard.getAttribute("data-testid"))!.replace("work-card-", "");
+  /*
+   * THE DESK SPEAKS A CARD THROUGH `liveStatus`, NOT THROUGH THE STATE WORD (#193, 23 Sep 2026).
+   *
+   * This read `toContainText(stateMeaning("OPEN").label)` — "Open" — and #193 replaced the state
+   * word on the collapsed row with the live status, so the journey went red unnoticed (run
+   * 36850533285). The claim is kept in both halves: the RECORD says OPEN (the state is read from
+   * `stateMeaning`, the module that names states), and the DESK says what an open card nobody owns
+   * means to her — in "Needs you", asking her to give it to someone — read from `liveStatus`, the
+   * one module that decides how a card is spoken, so a rewording moves this assertion with it.
+   */
+  const stored = (await (await request.get(`/api/work-cards/${openedId}`, { headers: MP })).json()) as { state?: string; card?: { state?: string } };
+  expect(stored.state ?? stored.card?.state).toBe(stateMeaning("OPEN")!.key);
+  const spoken = liveStatus({ state: "OPEN", owner_type: "UNASSIGNED", owner_id: null }, "fu_scooter_taylor");
+  expect(spoken.section).toBe("needs");
+  await expect(workCard).toHaveAttribute("data-live-kind", spoken.kind);
+  await expect(page.getByTestId(`work-card-state-${openedId}`)).toHaveText(spoken.pill);
+  await expect(page.getByTestId(`work-card-status-${openedId}`)).toHaveText(spoken.line);
 
   /*
    * THE APPROVAL IS RAISED AGAINST THIS CARD, THROUGH THE ROUTE THE PRODUCT STILL HAS.

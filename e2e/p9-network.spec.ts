@@ -4,8 +4,15 @@ import { expect, test } from "@playwright/test";
  * P9 browser journey against local `wrangler dev` (plan §12.3 "Network OS conflict
  * resolver"): declare the adapter contract → a LIVE pull fails closed because no
  * client is configured (the integration is UNPROVEN) → a LOCAL FIXTURE pull seeds an
- * observation → a second fixture pull with a different value opens a conflict and a
- * resolver work card → a human resolves it explicitly.
+ * observation → Capture links a local person to that contact → a second fixture pull with a
+ * different company opens a conflict and a resolver work card → a human resolves it explicitly.
+ *
+ * WHY CAPTURE IS IN THE MIDDLE (5 Oct 2026). Since #206 a conflict is a disagreement with a person
+ * West Peek OS has LINKED, on a field the two share (networkAdapter.ts LINKED_FIELDS). This journey
+ * used to diverge `relationship_owner` on an unlinked contact — Network OS editing its own record,
+ * which is now observed and never disputed — so it could not reach a conflict at all (run
+ * 36850533285). The link is made the way the product makes one: a capture resolved to a person whose
+ * email matches the synced contact.
  *
  * The fixture path is local-only and is labelled LOCAL_FIXTURE everywhere, so
  * nothing here can be mistaken for live Network OS proof.
@@ -34,7 +41,7 @@ test("P9 Network OS journey: contract → live pull fails closed → fixture con
   await expect(page.getByTestId("network-message")).toContainText("Live pull refused: adapter_unconfigured");
 
   // Fixture pull #1 establishes the observed value.
-  await page.getByTestId("fixture-owner").fill("Scooter");
+  await page.getByTestId("fixture-company").fill("Northwind");
   await page.getByTestId("fixture-pull").click();
   await expect(page.getByTestId("network-message")).toContainText("Fixture pull ok (LOCAL_FIXTURE)");
   /*
@@ -50,13 +57,31 @@ test("P9 Network OS journey: contract → live pull fails closed → fixture con
   await expect(page.getByTestId("cursor-contact")).toContainText("adapter_unconfigured");
   await expect(page.getByTestId("no-conflicts")).toBeVisible();
 
-  // Fixture pull #2 diverges → conflict + resolver card, never an overwrite.
-  await page.getByTestId("fixture-owner").fill("Sequoia");
+  // A capture resolved to the person behind that contact links them: West Peek OS now holds an
+  // opinion (the person's own organization, mirrored from the contact) that a later pull can dispute.
+  const captured = await request.post("/api/captures", {
+    headers: MP,
+    data: { capture_type: "note", raw_text: `met the founder at founder@example.com ${Date.now()}`, source_channel: "web" },
+  });
+  expect(captured.status(), await captured.text()).toBe(201);
+  const captureId = ((await captured.json()) as { id: string }).id;
+  const resolved = await request.post(`/api/captures/${captureId}/resolve`, {
+    headers: MP,
+    data: { kind: "PERSON", name: "Fixture Founder", email: "founder@example.com" },
+  });
+  expect(resolved.status(), await resolved.text()).toBe(200);
+  const linked = (await resolved.json()) as { person_id: string | null; person_source: string | null; matched_via: string };
+  expect(linked.person_source, linked.matched_via).toBe("NETWORK_OS");
+  expect(linked.matched_via).toContain("linked by email");
+  expect(linked.person_id).toBeTruthy();
+
+  // Fixture pull #2 diverges on the linked field → conflict + resolver card, never an overwrite.
+  await page.getByTestId("fixture-company").fill("Southwind");
   await page.getByTestId("fixture-pull").click();
   const conflict = page.locator('li[data-testid^="conflict-"]').first();
-  await expect(conflict).toContainText("relationship_owner");
-  await expect(conflict).toContainText("Sequoia");
-  await expect(conflict).toContainText("Scooter");
+  await expect(conflict).toContainText("company");
+  await expect(conflict).toContainText("Southwind");
+  await expect(conflict).toContainText("Northwind");
   await expect(conflict).toContainText("resolver card wc_");
 
   // The resolver card is real governed work.
@@ -72,8 +97,11 @@ test("P9 Network OS journey: contract → live pull fails closed → fixture con
   await expect(page.getByTestId("no-conflicts")).toBeVisible();
 
   const mappings = (await (await request.get("/api/network/mappings?resource=contact", { headers: MP })).json()) as {
-    mappings: Array<{ external_id: string; snapshot_json: string }>;
+    mappings: Array<{ external_id: string; snapshot_json: string; internal_type: string | null; internal_id: string | null }>;
   };
   const mapping = mappings.mappings.find((m) => m.external_id === "fixture_contact_1")!;
-  expect(JSON.parse(mapping.snapshot_json).relationship_owner).toBe("Sequoia");
+  expect(JSON.parse(mapping.snapshot_json).company).toBe("Southwind");
+  // Still linked to the person Capture tied it to: the resolution moved the field, not the link.
+  expect(mapping.internal_type).toBe("person");
+  expect(mapping.internal_id).toBe(linked.person_id);
 });

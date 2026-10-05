@@ -7,12 +7,13 @@ import { privacyVisibilityClause } from "./authorize";
 import type { FirmUserIdentity } from "../auth";
 import { allSeatAvailability } from "../ai/subscriptionSeats";
 import { json } from "../router";
-import { partnerByName } from "../../shared/registry/partners";
+import { partnerByEmail, partnerByFirmUserId, partnerByName } from "../../shared/registry/partners";
 import { filePreview } from "./previewApproval";
 import { previewOwnerFor } from "../../shared/work/previewLane";
 import { renderExecEmail, bulletsFrom, type ExecEmailInput } from "../../shared/email/execEmail";
 import {
   BLOCK_ACTIONS,
+  BLOCK_PROVIDERS,
   blockProblems,
   isTechnicalBlock,
   blockSentence,
@@ -22,6 +23,7 @@ import {
   type Block,
   type BlockActionKey,
   type BlockFacts,
+  type BlockProvider,
   type BlockReason,
 } from "../../shared/work/blocks";
 
@@ -96,13 +98,34 @@ export interface BlockedCard {
 }
 
 /**
+ * WHO A STOP IS ADDRESSED TO WHEN THE CALLER DID NOT SAY: THE PARTNER WHO ASKED (5 Oct 2026).
+ *
+ * The catalogue's default is SEQUOIA, and since #201 the desk reads `block_who` FIRST to decide whose
+ * "Needs you" a stopped card is. Almost no caller passes `who`, so a card Scooter asked for — by
+ * email (`requested_by_email`) or on the page (`created_by`) — stopped as "Needs Sequoia" in his
+ * view and sat out of his "Needs you" entirely: the Playwright artifact journey caught it
+ * (run 36850533285). The requester is who can answer "what did you want"; the catalogue default
+ * stays only for a card no partner asked for (the sweep, a machine). An explicit `who` always wins.
+ * Pinned in tests/blockAddressedToRequester.test.ts.
+ */
+export async function requesterProvider(env: Env, cardId: string): Promise<BlockProvider | undefined> {
+  const row = await env.WP_OS_DB.prepare("SELECT requested_by_email, created_by FROM work_card WHERE id = ?1")
+    .bind(cardId)
+    .first<{ requested_by_email: string | null; created_by: string | null }>();
+  const partner = partnerByEmail(row?.requested_by_email) ?? partnerByFirmUserId(row?.created_by);
+  if (!partner) return undefined;
+  const provider = partner.firstName.toUpperCase();
+  return (BLOCK_PROVIDERS as readonly string[]).includes(provider) ? (provider as BlockProvider) : undefined;
+}
+
+/**
  * Put a card down with a reason a partner can read and act on.
  *
  * Returns the sentence written onto the card, which is what every caller already returned as its
  * `detail` — so a service swapping its UPDATE for this call keeps its own contract.
  */
 export async function blockCard(env: Env, card: BlockedCard, input: BlockCardInput, now: Date = new Date()): Promise<string> {
-  const block = describeBlock(input.reason, input);
+  const block = describeBlock(input.reason, { ...input, who: input.who ?? (await requesterProvider(env, card.id)) });
   // A block that fails its own standard is a bug in the catalogue, not a thing to ship quietly.
   // Thrown rather than logged: the trigger in 0173 would refuse the row anyway, and a service
   // discovering that at the database is a worse place to find out.

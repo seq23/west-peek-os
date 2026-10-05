@@ -143,11 +143,28 @@ test("asking Parker for a Room records the brief and opens his card before anyth
  * the nav button does not exist, which is why every spec that clicked it timed out rather than
  * failing on an assertion.
  */
-const INTRODUCTIONS_LIVES_ON = "Community";
+const INTRODUCTIONS_WAS_ON = "Community";
+
+/*
+ * AND THEN IT LEFT COMMUNITY TOO (#206, 27 Sep 2026): "Introductions is retired from the page while
+ * the operator decides whether it belongs in Network OS natively; its page, matcher, routes and
+ * tests are untouched." The page keeps its address (`introductions` in App.tsx's routable keys), so
+ * these specs reach it there — and, as `openWorkMachinery` does for the machinery, they state the
+ * move in both directions: it is NOT on Community, and it IS at its own address. Clicking Community
+ * and finding nothing is how all three specs went red unnoticed (run 36850533285).
+ */
+async function openIntroductions(page: import("@playwright/test").Page): Promise<void> {
+  await gotoSurface(page, INTRODUCTIONS_WAS_ON);
+  await expect(page.getByTestId("community-population")).toBeVisible();
+  await expect(page.getByTestId("run-matching")).toHaveCount(0);
+  await expect(page.getByTestId("signal-person")).toHaveCount(0);
+  await page.evaluate(() => { window.location.hash = "#/introductions"; });
+  await expect(page.getByTestId("run-matching")).toBeVisible();
+}
 
 test("an empty Introductions page distinguishes 'nothing set up' from 'a quiet month'", async ({ page }) => {
   await signIn(page);
-  await gotoSurface(page, INTRODUCTIONS_LIVES_ON);
+  await openIntroductions(page);
 
   /*
    * This asserted "normal state" on any empty page. The page now tells three emptinesses apart, and
@@ -170,7 +187,7 @@ test("an empty Introductions page distinguishes 'nothing set up' from 'a quiet m
 
 test("you can note what someone is looking for", async ({ page }) => {
   await signIn(page);
-  await gotoSurface(page, INTRODUCTIONS_LIVES_ON);
+  await openIntroductions(page);
   const person = page.getByTestId("signal-person");
   await expect(person).toBeVisible();
   // A note carries a visible expiry; "looking for a job" is true for a season, not forever.

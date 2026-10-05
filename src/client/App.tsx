@@ -2427,7 +2427,7 @@ function NetworkPage({ me }: { me: MeResponse }) {
   const [nonce, setNonce] = useState(0);
   const conflicts = useApi<{ conflicts: NetworkConflictRow[] }>("/api/network/conflicts?status=OPEN", [nonce]);
   const syncState = useApi<{ cursors: Array<{ resource: string; last_status: string; failure_reason: string | null }> }>("/api/network/sync-state", [nonce]);
-  const [owner, setOwner] = useState("Scooter");
+  const [company, setCompany] = useState("Northwind");
   const [message, setMessage] = useState<string | null>(null);
   void me;
 
@@ -2475,7 +2475,10 @@ function NetworkPage({ me }: { me: MeResponse }) {
                   external_id: "fixture_contact_1",
                   identity_key: "founder@example.com",
                   delivery_id: `d_${Date.now()}`,
-                  fields: { email: "founder@example.com", relationship_owner: owner },
+                  // `company` because it is a LINKED field (networkAdapter.ts LINKED_FIELDS): since #206 only a
+                  // field West Peek OS holds on a linked person can conflict, so a practice run on
+                  // relationship_owner could never show the conflict path. tests/networkPracticeRun.test.ts pins it.
+                  fields: { email: "founder@example.com", company },
                 },
               ],
             },
@@ -2485,8 +2488,8 @@ function NetworkPage({ me }: { me: MeResponse }) {
         }}
       >
         <label>
-          Network OS says relationship_owner ={" "}
-          <input data-testid="fixture-owner" value={owner} onChange={(e) => setOwner(e.target.value)} />
+          Network OS says company ={" "}
+          <input data-testid="fixture-company" value={company} onChange={(e) => setCompany(e.target.value)} />
         </label>
         <button type="submit" className="btn-strong" data-testid="fixture-pull">
           Pull from fixture
