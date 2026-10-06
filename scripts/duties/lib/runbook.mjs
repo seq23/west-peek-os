@@ -13,10 +13,96 @@
  * Pure: every function takes text in and gives text out, so the self-test needs no repo.
  */
 
-/** Scripts a job may run on the model's request — by name, from the RUNBOOK's own list. */
-const RUNNABLE = /^(load|import|export|promote|migrate|seed|sync|smoke|check|test|validate|build|lint|typecheck|booth-log|make-|generate|report)/;
-/** Scripts that deploy or run forever: never on the "may run" list; the deploy is `~/bin/land`'s. */
-const NEVER_RUN = /^(deploy|dev|start|serve|preview|watch|publish|release)/;
+/*
+ * THE ONE ADMISSION RULE (owner, 6 Oct 2026: "shouldnt these agents be able to create scripts and do
+ * what is needed and be flexible?"). A package.json script is a DATA-OP Porter may run when its name
+ * starts with one of `DATA_OP_PREFIXES` followed by the end of the name or a separator (`-`, `:`, `_`,
+ * `.`) — `load-tracks`, `sync-drive`, `export`, `booth-log`, `publish-results`, `test:unit` — and is
+ * not a deploy or a long-running server (`NEVER_RUN`). The generator's `## Porter may run` section
+ * AND the fallback for a hand-written RUNBOOK with no such section both come from `porterMayRunFrom`;
+ * `validate:open-repo-door` pins that they share it.
+ */
+export const DATA_OP_PREFIXES = Object.freeze([
+  "load", "import", "export", "promote", "migrate", "seed", "sync", "pull", "publish", "backfill", "booth", "moderate",
+  "smoke", "check", "test", "validate", "build", "lint", "typecheck", "make", "generate", "report",
+]);
+const RUNNABLE = new RegExp(`^(?:${DATA_OP_PREFIXES.join("|")})(?:$|[-:_.])`);
+/** Scripts that deploy or run forever: never on the "may run" list; the deploy is `~/bin/land`'s. A bare `publish` (npm publish / a deploy) too; `publish-<thing>` is a data-op. */
+const NEVER_RUN = /deploy|^(?:dev|start|serve|preview|watch|release)(?:$|[-:_.])|^publish(?:$|:)/;
+
+/** True when `name` is a data-op script under the one rule. */
+export function isDataOp(name) {
+  const n = String(name ?? "");
+  return RUNNABLE.test(n) && !NEVER_RUN.test(n);
+}
+
+/** The data-op names in a package.json, sorted. */
+export function dataOpsIn(pkg) {
+  return Object.keys(pkg?.scripts ?? {}).sort().filter(isDataOp);
+}
+
+/**
+ * THE `## Porter may run` SECTION, composed from package.json — used by `generateRunbook` (a repo
+ * with no RUNBOOK) and by `admittedScripts` (a RUNBOOK without the section), so the two can never
+ * keep different lists. `derived` says it was written into an existing hand-made RUNBOOK.
+ */
+export function porterMayRunFrom(pkg, { derived = false } = {}) {
+  const scripts = pkg?.scripts ?? {};
+  const names = dataOpsIn(pkg);
+  const lines = [
+    "## Porter may run",
+    "",
+    derived
+      ? "Derived by Porter from this repo's `package.json` because the RUNBOOK had no such section. Edit it freely — a human's list here wins over the derivation, and a job that needs a data-op the repo lacks writes the script and names it here in the same PR."
+      : "Scripts a job may run on the model's request, as `npm run <name> -- <args>` in the worktree, each recorded on the card (script, env, exit, one line). Preview runs are free; a production run happens only when the partner's own email asked for it or they replied yes on the thread. A job that needs a data-op this repo lacks writes the script and names it here in the same PR.",
+    "",
+    ...(names.length ? names.map((k) => `- \`${k}\` — \`${scripts[k]}\``) : [`- (none declared — package.json has no ${DATA_OP_PREFIXES.map((p) => `${p}-`).join("/")} scripts)`]),
+  ];
+  return { names, text: lines.join("\n") };
+}
+
+/**
+ * WHAT A JOB MAY RUN IN THIS REPO. The RUNBOOK's own `## Porter may run` list when it has one (a
+ * human's words win); otherwise DERIVED from package.json by the one rule — never [] for a repo
+ * that declares data-ops. `section` is the text to write back into the RUNBOOK when derived.
+ */
+export function admittedScripts(runbookText, pkg) {
+  if (sectionOf(runbookText, /^##\s+porter may run\b/im) !== null) return { names: porterMayRun(runbookText), derived: false, section: null };
+  const built = porterMayRunFrom(pkg, { derived: true });
+  return { names: built.names, derived: true, section: built.text };
+}
+
+/** The RUNBOOK with the derived section written in — before `## Secrets` when there is one, else at the end. */
+export function withPorterMayRun(runbookText, section) {
+  const t = String(runbookText ?? "");
+  const at = /^##\s+secrets?\b/im.exec(t);
+  if (at) return `${t.slice(0, at.index)}${section}\n\n${t.slice(at.index)}`;
+  return `${t.replace(/\s*$/, "")}\n\n${section}\n`;
+}
+
+/**
+ * IS THIS RUN A PRODUCTION RUN? The run's own `env`, or args that name production (`--env
+ * production`, `--env=prod`, `production`). Preview and local runs are free.
+ */
+export function isProductionRun(run) {
+  if (run?.env === "production") return true;
+  return (Array.isArray(run?.args) ? run.args : []).some((a) => /(?:^|[=\s])prod(?:uction)?$/i.test(String(a)));
+}
+
+/** The words that ask for production, in a partner's own email or reply. */
+const PRODUCTION_WORDS = /\b(?:production|prod|go(?:es|ing)?[- ]live|live site|on the live|for real|real data)\b/i;
+
+/**
+ * THE PRODUCTION GATE IS WORDS, NOT THE LIST. A production data-op runs only when the partner's own
+ * email asked for it (the request, a "changes:" line, an answer) or they replied yes on the thread
+ * (the landing approval after the preview, a pre-approval, a forced landing). Returns { ok, why }.
+ */
+export function productionAsked(job) {
+  if (job?.pr?.land_approved_at || job?.pr?.forced_by || job?.pre_approved) return { ok: true, why: "the partner said yes on the thread" };
+  const words = [job?.request, job?.ask, job?.rebuild?.changes, ...(Array.isArray(job?.plan?.answers) ? job.plan.answers : [])].map((w) => (typeof w === "string" ? w : JSON.stringify(w ?? ""))).join("\n");
+  if (PRODUCTION_WORDS.test(words)) return { ok: true, why: "the partner's own email asked for it" };
+  return { ok: false, why: "production runs only when the partner's email asks for it or they reply yes on the thread; this run went to preview instead" };
+}
 
 /** A light TOML read: top-level `key = "value"` lines and `[section]` / `[[table]]` headers. */
 export function readWranglerToml(text) {
@@ -137,7 +223,8 @@ export function likelySecrets(names) {
 export function generateRunbook({ repo, githubRepo, pkg, wrangler, sourceNames = [], hostHint = null, today = new Date().toISOString().slice(0, 10) }) {
   const scripts = pkg?.scripts ?? {};
   const names = Object.keys(scripts).sort();
-  const mayRun = names.filter((k) => RUNNABLE.test(k) && !NEVER_RUN.test(k));
+  const porterSection = porterMayRunFrom(pkg);
+  const mayRun = porterSection.names;
   const route = deployRouteFrom({ pkg, wrangler });
   const host = hostHint ?? hostFromRoutes(wrangler?.routes ?? []);
   const secrets = likelySecrets(secretNamesInSource(sourceNames)).filter((n) => !(wrangler?.vars ?? []).includes(n));
@@ -173,11 +260,7 @@ export function generateRunbook({ repo, githubRepo, pkg, wrangler, sourceNames =
     "",
     `- ${route.line}`,
     "",
-    "## Porter may run",
-    "",
-    "Scripts a job may run on the model's request, as `npm run <name> -- <args>` in the worktree, against preview or production, each recorded on the card (script, env, exit, one line). Nothing else is run for the model.",
-    "",
-    ...(mayRun.length ? mayRun.map((k) => `- \`${k}\` — \`${scripts[k]}\``) : ["- (none declared — package.json has no load-/export-/promote-/migrate-/smoke- scripts)"]),
+    porterSection.text,
     "",
     "## Secrets",
     "",
@@ -193,7 +276,7 @@ export function generateRunbook({ repo, githubRepo, pkg, wrangler, sourceNames =
   return { text: lines.join("\n"), route, host, mayRun, secrets };
 }
 
-/** The script names under `## Porter may run` (backticked, first token of each bullet). [] when the section is absent. */
+/** The script names under `## Porter may run` (backticked, first token of each bullet). [] when the section is absent — callers that decide what runs use `admittedScripts`, which derives instead. */
 export function porterMayRun(runbookText) {
   const section = sectionOf(runbookText, /^##\s+porter may run\b/im);
   if (!section) return [];

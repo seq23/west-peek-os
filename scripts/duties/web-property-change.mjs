@@ -67,7 +67,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { CLOUDFLARE_ACCOUNT_ID, classify, proofLine, readRequests } from "./lib/pages-delivery.mjs";
 import { VAULT_INJECTED_VAR, claudeChildEnv, envForRepoRun, strippedNote, vaultLookup } from "../lib/vault-env.mjs";
-import { constraintsIn, generateRunbook, hostFromRoutes, likelySecrets, porterMayRun, readWranglerJson, readWranglerToml, runbookSecretNames, secretNamesInSource, vendorPageFor } from "./lib/runbook.mjs";
+import { admittedScripts, constraintsIn, generateRunbook, hostFromRoutes, isProductionRun, productionAsked, withPorterMayRun, likelySecrets, porterMayRun, readWranglerJson, readWranglerToml, runbookSecretNames, secretNamesInSource, vendorPageFor } from "./lib/runbook.mjs";
 import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
 import { codexExecArgs, codexSeatUsable, gitCommonDirs, helpMentions, runWithCodexFallback } from "../lib/codex-seat.mjs";
 
@@ -416,11 +416,11 @@ async function sh(cmd, args, opts = {}) {
  * outside renderContext on purpose: the prompt is built from the job and from what the SCRIPT read,
  * never from the environment.
  */
-function repoLines(book, secrets, outDir, runsDone) {
+function repoLines(book, secrets, outDir, runsDone, job = {}) {
   const held = [...secrets.lookup.found, ...Object.entries(secrets.lookup.by_vendor).map(([want, have]) => `${want} → ${have.join("/")}`)];
   return [
     `RUNBOOK: ${book.file}${book.generated ? " (GENERATED this run from package.json/wrangler and committed on the branch — read it, improve it if the repo tells you more)" : ""}`,
-    `PORTER_MAY_RUN (ask the script with status "needs_runs" and runs: [{ script, env, args }]; it runs \`npm run <script> -- <args>\` and records each): ${book.mayRun.length ? book.mayRun.join(", ") : "nothing is listed under ## Porter may run"}`,
+    `PORTER_MAY_RUN (ask the script with status "needs_runs" and runs: [{ script, env, args }]; it runs \`npm run <script> -- <args>\` and records each): ${book.mayRun.length ? book.mayRun.join(", ") : "no data-op in package.json yet"}${book.derived ? " (DERIVED this run from package.json and written into the RUNBOOK's ## Porter may run on the branch)" : ""}. A data-op the job needs and the repo lacks: WRITE it in this PR (package.json + its file), name it under ## Porter may run, run it on preview — never a wait. Production only when the partner's own words asked for it (${productionAsked(job).ok ? "they did" : "they have not yet — preview runs only"})`,
     `SECRETS_HELD (by name; the firm holds a value and injects it where the RUNBOOK says — never ask a partner for these): ${held.length ? held.join(", ") : "none of the names the repo reads"}`,
     `SECRETS_MISSING (the firm holds NO value; do NOT block — build everything else, keep the feature behind it ready, and list each name in missing_secrets; the partner is told how to email it): ${secrets.missing.length ? secrets.missing.map((m) => m.name).join(", ") : "none"}`,
     `SEARCHED: ${secrets.lookup.searched.join(", ") || "nothing (the RUNBOOK lists no secrets and the source reads none)"}`,
@@ -911,7 +911,7 @@ export async function run(job, ctx) {
   const outDir = path.join(jobDir, "out");
   mkdirSync(outDir, { recursive: true });
   const runsDone = [];
-  const extraLines = repoLines(book, secrets, outDir, runsDone);
+  const extraLines = repoLines(book, secrets, outDir, runsDone, job);
   const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments, extraLines })}`;
   writeFileSync(path.join(jobDir, `prompt-${phase}.md`), prompt);
   progress(`claude -p (${job.model}) for ${phase}`);
@@ -922,10 +922,10 @@ export async function run(job, ctx) {
   let { result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", phase);
   // 0253: THE SCRIPT RUNS THE REPO'S OWN SCRIPTS FOR THE MODEL — RUNBOOK-named only, recorded, bounded.
   for (let round = 0; round < 3 && result?.status === "needs_runs"; round += 1) {
-    const done = await applyRuns(result.runs, book.mayRun, names.worktree, ctx.env, secrets.allowed, progress);
+    const done = await applyRuns(result.runs, { base: book.mayRun, job, phase }, names.worktree, ctx.env, secrets.allowed, progress);
     runsDone.push(...done);
     rmSync(resultPath, { force: true });
-    const again = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments, extraLines: repoLines(book, secrets, outDir, runsDone) })}\n\nRUNS DONE FOR YOU SINCE YOUR LAST TRY: ${done.map((d) => `${d.script} (${d.env}) → exit ${d.exit}: ${d.line}`).join("; ")}`;
+    const again = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments, extraLines: repoLines(book, secrets, outDir, runsDone, job) })}\n\nRUNS DONE FOR YOU SINCE YOUR LAST TRY: ${done.map((d) => `${d.script} (${d.env}) → exit ${d.exit}: ${d.line}`).join("; ")}`;
     claude = await runClaude({ prompt: again, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
     writeFileSync(path.join(jobDir, `claude-${phase}-runs${round + 1}.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
     cost = (cost ?? 0) + (costFrom(claude.out) ?? 0);
@@ -1119,8 +1119,26 @@ async function ensureRunbook(worktree, repo, githubRepo, progress) {
       progress(`RUNBOOK.md generated for ${repo} but not committed: ${String(err?.message ?? err).slice(0, 160)}`);
     }
   }
-  const text = readFileSync(file, "utf8");
-  return { file, text, generated, mayRun: porterMayRun(text), secretNames: runbookSecretNames(text), facts, repo, githubRepo, constraints: facts.constraints ?? [] };
+  let text = readFileSync(file, "utf8");
+  // 6 Oct 2026 ("shouldnt these agents be able to create scripts and do what is needed and be
+  // flexible?"): a hand-written RUNBOOK with no `## Porter may run` is DERIVED from package.json by the
+  // one rule (`admittedScripts`) — never refused — and the section is WRITTEN BACK on the job's branch,
+  // so the PR carries it and the next job reads it as the repo's own words.
+  const admitted = admittedScripts(text, facts.pkg);
+  let derived = false;
+  if (admitted.derived) {
+    text = withPorterMayRun(text, admitted.section);
+    writeFileSync(file, text);
+    derived = true;
+    try {
+      await git(worktree, "add", "RUNBOOK.md");
+      await git(worktree, "commit", "-q", "-m", `RUNBOOK.md: ## Porter may run derived by Porter from package.json (${admitted.names.length} data-op script${admitted.names.length === 1 ? "" : "s"})`);
+      progress(`RUNBOOK.md for ${repo} had no ## Porter may run — derived ${admitted.names.length} from package.json and committed on the branch`);
+    } catch (err) {
+      progress(`RUNBOOK.md ## Porter may run derived for ${repo} but not committed: ${String(err?.message ?? err).slice(0, 160)}`);
+    }
+  }
+  return { file, text, generated, derived, mayRun: admitted.names, secretNames: runbookSecretNames(text), facts, repo, githubRepo, constraints: facts.constraints ?? [] };
 }
 
 /**
@@ -1151,20 +1169,59 @@ function runLines(runsDone) {
 }
 
 /**
- * RUN THE REPO'S OWN SCRIPTS FOR THE MODEL. Only a name under the RUNBOOK's ## Porter may run; only
+ * WHAT MAY RUN, DECIDED FOR ONE REQUEST (6 Oct 2026). Pure, so the self-test and the unit tests hold it:
+ *   · the script must be ADMITTED NOW — re-read from the worktree's RUNBOOK and package.json, so a
+ *     data-op the model wrote in this job (package.json + named under `## Porter may run`) runs at once;
+ *     a name not admitted is refused with what to do (write it, name it), never a wait;
+ *   · a PRODUCTION run needs the partner's words (`productionAsked`) — the list never grants it;
+ *   · a script WRITTEN IN THIS JOB (not on the base's list) runs on preview now and on production
+ *     once it has landed (the LAND phase).
+ * Returns null when it may run, else the refusal line.
+ */
+export function runRefusal(r, { admittedNow, base, job, phase }) {
+  const script = String(r?.script ?? "").trim();
+  if (!admittedNow.includes(script)) return `refused: \`${script}\` is not a data-op in package.json nor under ## Porter may run — write the script in this PR (package.json + its file), name it under ## Porter may run, run it on preview, and ask again`;
+  if (isProductionRun(r)) {
+    const asked = productionAsked(job);
+    if (!asked.ok) return `refused on production: ${asked.why}`;
+    if (!base.includes(script) && phase !== "LAND") return `refused on production: \`${script}\` was written in this job — it runs on preview now and on production once it has landed`;
+  }
+  return null;
+}
+
+/** The scripts admitted in the worktree as it stands now (the model may have written one this job). */
+function admittedNowIn(worktree, fallback) {
+  try {
+    const text = readFileSync(path.join(worktree, "RUNBOOK.md"), "utf8");
+    let pkg = null;
+    try {
+      pkg = JSON.parse(readFileSync(path.join(worktree, "package.json"), "utf8"));
+    } catch {
+      pkg = null;
+    }
+    return admittedScripts(text, pkg).names;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * RUN THE REPO'S OWN SCRIPTS FOR THE MODEL. Only an admitted data-op (`runRefusal`); only
  * `npm run <name> -- <plain args>`; never a shell; the environment is the model's plus the registry's
  * allowed names (and the platform token for preview/production). Each run is recorded whatever
- * happened; a refusal is recorded too, so the model can see it and say so.
+ * happened; a refusal is recorded too, so the model can see it and act on it.
  */
-async function applyRuns(requests, mayRun, worktree, env, allowedNames, progress) {
+async function applyRuns(requests, gate, worktree, env, allowedNames, progress) {
   const done = [];
+  const admittedNow = admittedNowIn(worktree, gate.base);
   for (const r of Array.isArray(requests) ? requests : []) {
     const script = String(r?.script ?? "").trim();
     const runEnv = ["local", "preview", "production"].includes(r?.env) ? r.env : "local";
     const args = Array.isArray(r?.args) ? r.args.map(String) : [];
-    if (!mayRun.includes(script)) {
-      done.push({ script, env: runEnv, exit: -1, line: "refused: not listed under ## Porter may run in RUNBOOK.md" });
-      progress(`run refused: ${script} (not under ## Porter may run)`);
+    const refusal = runRefusal({ ...r, script, args }, { admittedNow, base: gate.base, job: gate.job, phase: gate.phase });
+    if (refusal) {
+      done.push({ script, env: runEnv, exit: -1, line: refusal });
+      progress(`run ${refusal.replace(/^refused/, `refused ${script}`).slice(0, 160)}`);
       continue;
     }
     if (args.some((a) => /[;&|`$<>\n]/.test(a))) {
@@ -1480,7 +1537,7 @@ async function runSeveral(job, ctx) {
   if (phase === "PLAN") {
     const resultPath = path.join(jobDir, "result-PLAN.json");
     if (existsSync(resultPath)) rmSync(resultPath);
-    const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext({ ...job, target_repo: parts.map((p) => p.repo).join(" + ") }, { ...parts[0].names, packageDir, jobDir, resultPath, planText: null, attachments: assets.attachments, extraLines: parts.flatMap((p) => [`--- ${p.repo} ---`, ...repoLines(p.book, p.secrets, path.join(jobDir, "out"), [])]) })}`;
+    const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext({ ...job, target_repo: parts.map((p) => p.repo).join(" + ") }, { ...parts[0].names, packageDir, jobDir, resultPath, planText: null, attachments: assets.attachments, extraLines: parts.flatMap((p) => [`--- ${p.repo} ---`, ...repoLines(p.book, p.secrets, path.join(jobDir, "out"), [], job)]) })}`;
     writeFileSync(path.join(jobDir, "prompt-PLAN.md"), prompt);
     progress(`claude -p (${job.model}) for PLAN over ${parts.length} repos`);
     const claude = await runClaude({ prompt, model: job.model, cwd: worktrees[0], addDirs: [...worktrees.slice(1), jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
@@ -1505,7 +1562,7 @@ async function runSeveral(job, ctx) {
         const resultPath = path.join(jobDir, `result-BUILD-${p.repo}.json`);
         if (existsSync(resultPath)) rmSync(resultPath);
         const partJob = { ...job, target_repo: p.repo, property_host: p.property_host, sites: p.sites, request: `${job.request ?? job.ask ?? ""}\n\n(${p.repo}'s part: ${p.ask})` };
-        const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(partJob, { ...p.names, packageDir, jobDir, resultPath, planText: job.plan?.text ?? null, attachments: assets.attachments, thisPart: p.repo, extraLines: repoLines(p.book, p.secrets, path.join(jobDir, "out"), []) })}`;
+        const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(partJob, { ...p.names, packageDir, jobDir, resultPath, planText: job.plan?.text ?? null, attachments: assets.attachments, thisPart: p.repo, extraLines: repoLines(p.book, p.secrets, path.join(jobDir, "out"), [], partJob) })}`;
         writeFileSync(path.join(jobDir, `prompt-BUILD-${p.repo}.md`), prompt);
         progress(`claude -p (${job.model}) for BUILD of ${p.repo}`);
         let claude = await runClaude({ prompt, model: job.model, cwd: p.names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
@@ -1853,6 +1910,24 @@ function selfTest() {
     ["the RUNBOOK generator writes the deploy route it was given and lists runnable scripts and secret names", () => {
       const g = generateRunbook({ repo: "topbarz-voting", githubRepo: "seq23/topbarz-voting", pkg: { scripts: { "deploy:production": "wrangler pages deploy public", "load-beats": "node x", dev: "wrangler pages dev" } }, wrangler: { name: "topbarz-voting", pages_build_output_dir: "public", routes: [], envs: [], vars: ["PUBLIC_FLAG"] }, sourceNames: ["env.GIPHY_API_KEY", "env.PUBLIC_FLAG"], today: "2026-10-06" });
       return g.route.kind === "npm" && g.text.includes("`npm run deploy:production`") && porterMayRun(g.text).join() === "load-beats" && runbookSecretNames(g.text).join() === "GIPHY_API_KEY" && !porterMayRun(g.text).includes("dev");
+    }],
+    ["a RUNBOOK without ## Porter may run is derived from package.json, never refused (6 Oct 2026)", () => {
+      const a = admittedScripts("# RUNBOOK\n\n## Load tracks\nRun it.\n", { scripts: { "load-tracks": "x", "sync-drive": "y", "deploy:production": "z", dev: "w" } });
+      return a.derived === true && a.names.join() === "load-tracks,sync-drive" && /## Porter may run[\s\S]*`load-tracks`[\s\S]*`sync-drive`/.test(a.section);
+    }],
+    ["a run: unadmitted is refused with 'write the script', production needs the partner's words, a script written this job is preview-only until landed", () => {
+      const base = ["load-tracks"];
+      const now = ["load-tracks", "load-photos"];
+      const quiet = { request: "add the new photos" };
+      const asked = { request: "load the photos to production" };
+      const missing = runRefusal({ script: "import-x", env: "preview" }, { admittedNow: now, base, job: quiet, phase: "BUILD" });
+      const prodQuiet = runRefusal({ script: "load-tracks", env: "production" }, { admittedNow: now, base, job: quiet, phase: "BUILD" });
+      const prodArgs = runRefusal({ script: "load-tracks", env: "preview", args: ["--env", "production"] }, { admittedNow: now, base, job: quiet, phase: "BUILD" });
+      const prodAsked = runRefusal({ script: "load-tracks", env: "production" }, { admittedNow: now, base, job: asked, phase: "BUILD" });
+      const newProd = runRefusal({ script: "load-photos", env: "production" }, { admittedNow: now, base, job: asked, phase: "BUILD" });
+      const newPreview = runRefusal({ script: "load-photos", env: "preview" }, { admittedNow: now, base, job: quiet, phase: "BUILD" });
+      const newLanded = runRefusal({ script: "load-photos", env: "production" }, { admittedNow: now, base, job: { ...quiet, pr: { land_approved_at: "t" } }, phase: "LAND" });
+      return /write the script/.test(missing ?? "") && /partner/.test(prodQuiet ?? "") && /partner/.test(prodArgs ?? "") && prodAsked === null && /written in this job/.test(newProd ?? "") && newPreview === null && newLanded === null;
     }],
     ["a repo with no deploy route gets 'not declared', never a guess", () => { const g = generateRunbook({ repo: "r", githubRepo: null, pkg: { scripts: {} }, wrangler: null, sourceNames: [], today: "2026-10-06" }); return g.route.kind === "none" && /not declared/.test(g.text) && !/(?<!nothing is |never )\bguess/i.test(g.text); }],
     ["the constraints extractor reads a partner's standing rules out of a README and skips commands", () => { const c = constraintsIn(["- Scooter's own track is never in the vote.\n- Run `npm run dev`.\n- Voter emails are private.\n"]); return c.length === 2 && c.every((x) => !/npm/.test(x)); }],

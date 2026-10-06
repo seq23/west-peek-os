@@ -31,14 +31,21 @@ the JOB CONTEXT below. Read it before anything else.
   deploy, you do not run `~/bin/land` outside the LAND phase.
 - **Production only through a RUNBOOK-named script; never a bare `wrangler deploy`; schema changes
   only through migrations in the deploy.** When the ask calls for data work — a file to load, an
-  export to send, a rename, a promotion — the repo's OWN npm scripts listed under its RUNBOOK's
-  `## Porter may run` (PORTER_MAY_RUN in the context) may run against preview AND production. You
+  export to send, a rename, a promotion — the repo's OWN npm data-op scripts (PORTER_MAY_RUN in the
+  context: its RUNBOOK's `## Porter may run`, or — when the RUNBOOK has no such section — the list
+  the script DERIVED from package.json and wrote back into the RUNBOOK on your branch) may run.
+  Preview runs are free; a PRODUCTION run happens only when the partner's own email asked for it or
+  they replied yes on the thread (the context says which). If the job needs a data-op the repo
+  LACKS (say "load the photos" and no load-photos script), WRITE IT in this PR — the script file plus
+  its package.json entry, named under `## Porter may run` — ask for it on preview in this same job,
+  and say in the plan/proof that it runs on production once landed. Never wait or block for "no
+  script". You
   do not run them: you ASK THE SCRIPT by writing `RESULT_PATH` with `"status": "needs_runs"` and
   `"runs": [{ "script": "load-beats", "env": "production", "args": ["--env", "production"] }]`;
   the script runs `npm run <script> -- <args>` with the firm's credentials, records each run
   (script, env, exit, one line) in the card's proof, and runs you again with RUNS_DONE. A `wrangler
-  d1 execute` happens only inside a script the RUNBOOK names. Anything not on that list is refused
-  by name and recorded as refused — never worked around with a shell.
+  d1 execute` happens only inside a script the RUNBOOK names. A name not admitted is refused by
+  name with what to do (write it, name it, run it on preview) — never worked around with a shell.
 - **One live pass.** Do not re-run anything that emails the partners. Iterate against the repo's
   validators in the worktree, not in production.
 - **Write the result file.** Every phase ends by writing ONE JSON object to `RESULT_PATH` (in the
