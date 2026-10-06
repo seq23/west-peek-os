@@ -60,13 +60,14 @@
  */
 
 import { execFile, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { CLOUDFLARE_ACCOUNT_ID, classify, proofLine, readRequests } from "./lib/pages-delivery.mjs";
-import { VAULT_INJECTED_VAR, claudeChildEnv, strippedNote } from "../lib/vault-env.mjs";
+import { VAULT_INJECTED_VAR, claudeChildEnv, envForRepoRun, strippedNote, vaultLookup } from "../lib/vault-env.mjs";
+import { constraintsIn, generateRunbook, hostFromRoutes, likelySecrets, porterMayRun, readWranglerJson, readWranglerToml, runbookSecretNames, secretNamesInSource, vendorPageFor } from "./lib/runbook.mjs";
 import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
 import { codexExecArgs, codexSeatUsable, gitCommonDirs, helpMentions, runWithCodexFallback } from "../lib/codex-seat.mjs";
 
@@ -74,6 +75,11 @@ const execFileAsync = promisify(execFile);
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const PROMPT_FILE = path.join(REPO_ROOT, "scripts", "duties", "web-property-change-prompt.md");
 const PULL_SCRIPT = path.join(REPO_ROOT, "scripts", "drive", "pull.mjs");
+const PUSH_SCRIPT = path.join(REPO_ROOT, "scripts", "drive", "push.mjs");
+/** The script's own platform credentials, passed to a RUNBOOK-named script that targets preview or production (never to the model). */
+const PLATFORM_RUN_NAMES = Object.freeze(["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"]);
+/** A file for the partner bigger than this is shared from Drive, not attached (the Worker's cap, mirrored). */
+const ATTACH_MAX_BYTES = 10 * 1024 * 1024;
 
 /** How long the BUILD phase watches the PR's checks before reporting PENDING. */
 const CHECK_WATCH_MS = 25 * 60_000;
@@ -147,8 +153,20 @@ export function readResult(text, phase) {
   }
   if (!parsed || typeof parsed !== "object") return { result: null, problem: "the result file is not an object" };
   if (parsed.phase !== phase) return { result: null, problem: `the result names phase "${parsed.phase}", expected ${phase}` };
-  if (!["ok", "blocked", "failed"].includes(parsed.status)) return { result: null, problem: `the result has no status (got "${parsed.status}")` };
-  if (parsed.status !== "ok" && !(typeof parsed.reason === "string" && parsed.reason.trim())) return { result: null, problem: `a ${parsed.status} result must say why` };
+  if (!["ok", "blocked", "failed", "needs_runs"].includes(parsed.status)) return { result: null, problem: `the result has no status (got "${parsed.status}")` };
+  if (parsed.status !== "ok" && parsed.status !== "needs_runs" && !(typeof parsed.reason === "string" && parsed.reason.trim())) return { result: null, problem: `a ${parsed.status} result must say why` };
+  // 0253: the model asks the SCRIPT to run the repo's own scripts — name, env and plain args; never a shell line.
+  if (parsed.status === "needs_runs" || parsed.runs !== undefined) {
+    if (!Array.isArray(parsed.runs) || parsed.runs.length === 0) return { result: null, problem: "needs_runs must carry runs: [{ script, env, args }]" };
+    for (const r of parsed.runs) {
+      if (!r || typeof r !== "object" || !String(r.script ?? "").trim()) return { result: null, problem: "every run names a script from the RUNBOOK's ## Porter may run" };
+      if (!["local", "preview", "production"].includes(r.env)) return { result: null, problem: "every run says env: local, preview or production" };
+      if (r.args !== undefined && !(Array.isArray(r.args) && r.args.every((a) => typeof a === "string"))) return { result: null, problem: "a run's args is a list of strings" };
+      if (/[;&|`$<>\n]/.test(`${r.script}${(r.args ?? []).join("")}`)) return { result: null, problem: "a run carries no shell characters" };
+    }
+  }
+  if (parsed.deliverables !== undefined && !(Array.isArray(parsed.deliverables) && parsed.deliverables.every((d) => (typeof d === "string" && d.trim()) || (d && typeof d === "object" && String(d.path ?? "").trim())))) return { result: null, problem: "deliverables is a list of file paths (or { path, filename })" };
+  if (parsed.missing_secrets !== undefined && !(Array.isArray(parsed.missing_secrets) && parsed.missing_secrets.every((n) => typeof n === "string" && /^[A-Z][A-Z0-9_]{2,}$/.test(n)))) return { result: null, problem: "missing_secrets is a list of SCREAMING_SNAKE names — never a value" };
   if (parsed.status === "ok" && phase === "PLAN" && !(typeof parsed.document === "string" && parsed.document.trim().length > 40)) return { result: null, problem: "an ok PLAN must carry a plan document" };
   // Every ask carries a recommended default — "approved" takes them all, so a bare question is not an ask.
   if (parsed.status === "ok" && phase === "PLAN" && typeof parsed.publish_ready !== "boolean") return { result: null, problem: "an ok PLAN must say publish_ready: true or false" };
@@ -266,6 +284,8 @@ export function renderContext(job, paths) {
     "## JOB CONTEXT (from West Peek OS — do not edit these facts)",
     "",
     `PHASE: ${job.phase}`,
+    ...(job.due?.due_at ? [`DUE: ${job.due.due_at} (the partner's words: "${job.due.due_words ?? ""}") — plan the fastest safe path; if the whole ask cannot land by then, build what can, ship it, and say per item what is realistic`] : []),
+    ...(Array.isArray(job.constraints) && job.constraints.length ? [`REGISTERED_CONSTRAINTS (from earlier jobs on this repo; standing): ${job.constraints.map((c) => `· ${c}`).join(" ")}`] : []),
     `CARD: ${job.card?.id} — ${job.card?.title}`,
     `ASKED BY: ${job.card?.requested_by ?? "a Managing Partner"}`,
     `PROPERTY: ${job.property_host ?? "(see ask)"}`,
@@ -293,6 +313,9 @@ export function renderContext(job, paths) {
     "",
     "STANDING RULES OF THIS KIND:",
     ...Object.entries(job.rules ?? {}).map(([k, v]) => `- ${k}: ${v}`),
+    // 0253: what the script read from the repo and the registry — the scripts the model may ask for,
+    // the keys by NAME and whether each is held, where to put files for the partner, what already ran.
+    ...(Array.isArray(paths.extraLines) ? ["", ...paths.extraLines] : []),
   ];
   if (job.plan) {
     lines.push("", "THE PLAN (already filed as a Document on the card):", "");
@@ -383,6 +406,26 @@ function reposBlock(job, paths) {
 async function sh(cmd, args, opts = {}) {
   const { stdout, stderr } = await execFileAsync(cmd, args, { maxBuffer: 32 * 1024 * 1024, ...opts });
   return { stdout: String(stdout ?? ""), stderr: String(stderr ?? "") };
+}
+
+/**
+ * THE LINES THE MODEL READS ABOUT THE REPO (0253): the scripts it may ask the script to run, every key
+ * by NAME and whether the firm holds it, where to put files for the partner, what already ran. Held
+ * outside renderContext on purpose: the prompt is built from the job and from what the SCRIPT read,
+ * never from the environment.
+ */
+function repoLines(book, secrets, outDir, runsDone) {
+  const held = [...secrets.lookup.found, ...Object.entries(secrets.lookup.by_vendor).map(([want, have]) => `${want} → ${have.join("/")}`)];
+  return [
+    `RUNBOOK: ${book.file}${book.generated ? " (GENERATED this run from package.json/wrangler and committed on the branch — read it, improve it if the repo tells you more)" : ""}`,
+    `PORTER_MAY_RUN (ask the script with status "needs_runs" and runs: [{ script, env, args }]; it runs \`npm run <script> -- <args>\` and records each): ${book.mayRun.length ? book.mayRun.join(", ") : "nothing is listed under ## Porter may run"}`,
+    `SECRETS_HELD (by name; the firm holds a value and injects it where the RUNBOOK says — never ask a partner for these): ${held.length ? held.join(", ") : "none of the names the repo reads"}`,
+    `SECRETS_MISSING (the firm holds NO value; do NOT block — build everything else, keep the feature behind it ready, and list each name in missing_secrets; the partner is told how to email it): ${secrets.missing.length ? secrets.missing.map((m) => m.name).join(", ") : "none"}`,
+    `SEARCHED: ${secrets.lookup.searched.join(", ") || "nothing (the RUNBOOK lists no secrets and the source reads none)"}`,
+    `DELIVERABLES_DIR: ${outDir} — write any file the partner should receive (an export, a QR code) here and list it in "deliverables"; the script puts it on the card and the email attaches it (≤ 10 MB) or links it; mark one { "path", "private": true } when it carries personal data (voter emails, an export) and it goes to the partner's Drive only`,
+    `PARTNER_CONSTRAINTS (standing, from this repo's README/PRD and the registry — obey every one without restating it or asking about it): ${(book.constraints ?? []).length ? (book.constraints ?? []).map((c) => `· ${c}`).join(" ") : "none recorded yet"}`,
+    ...(runsDone.length ? [`RUNS_DONE: ${runsDone.map((r) => `${r.script} (${r.env}) → exit ${r.exit}: ${r.line}`).join("; ")}`] : []),
+  ];
 }
 
 async function git(cwd, ...args) {
@@ -734,8 +777,8 @@ function setPagesSecret(entry, env) {
  * and nothing that could carry a value. Refusals are recorded, never dropped: a model that asked
  * for something off the list must be able to see that it was refused and why.
  */
-export async function applyPagesEnv(pagesEnv, env, progress) {
-  const { allowed, refused } = readRequests(pagesEnv);
+export async function applyPagesEnv(pagesEnv, env, progress, registry = null) {
+  const { allowed, refused } = readRequests(pagesEnv, registry);
   const lines = [];
   for (const r of refused) {
     lines.push(proofLine(r.project || "(no project)", r.name || "(no name)", "refused", r.why));
@@ -790,9 +833,10 @@ export async function run(job, ctx) {
   }
   if (isSeveral(job)) return runSeveral(job, ctx);
   const repoPath = path.join(homedir(), "GitHub", String(job.target_repo ?? ""));
-  if (!job.target_repo || !existsSync(path.join(repoPath, ".git"))) {
-    return { phase, status: "failed", reason: `the target repo is not checked out at ${repoPath} on this Mac` };
-  }
+  if (!job.target_repo) return { phase, status: "failed", reason: "the job names no target repo" };
+  // 0253: a repo the registry knows but this Mac does not have yet is cloned, never refused.
+  const checkout = await ensureCheckout(repoPath, job.github_repo ?? null, progress);
+  if (!checkout.ok) return { phase, status: "failed", reason: checkout.why };
   const names = namesFor(job.card?.id ?? "card");
   const jobDir = ctx.jobDir;
   mkdirSync(jobDir, { recursive: true });
@@ -802,15 +846,11 @@ export async function run(job, ctx) {
 
   await ensureWorktree(repoPath, names, phase, progress);
 
-  // THE RUNBOOK IS THE AUTHORITY FOR THE TARGET REPO. Absent → BLOCK, the prompt says so and so does this line.
-  const runbook = path.join(names.worktree, "RUNBOOK.md");
-  if (!existsSync(runbook)) {
-    return {
-      phase,
-      status: "blocked",
-      reason: `${job.target_repo} has no RUNBOOK.md. Write one (join-west-peek-main/RUNBOOK.md is the model: what the repo is, its standing rules, how to make a change, what each guard pins), land it, then reply "go".`,
-    };
-  }
+  // THE RUNBOOK IS THE AUTHORITY FOR THE TARGET REPO. Absent → GENERATED from the repo's own
+  // package.json and wrangler config and committed on the job's branch (0253) — never a block.
+  const book = await ensureRunbook(names.worktree, job.target_repo, job.github_repo ?? null, progress);
+  // THE VAULT IS CHECKED FIRST (0253): every name the RUNBOOK lists or the source reads, by name then by vendor.
+  const secrets = secretsFor(book, job);
 
   // THE ASSETS — one gatherer for both roads (see gatherAssets): the attachments every phase, the
   // Drive folder MAPPED on every phase that needs materials, and the plan's assets fetched for BUILD.
@@ -866,7 +906,11 @@ export async function run(job, ctx) {
   const planText = job.plan?.text ?? null;
   // 28 Sep 2026: where the branch stands before the model's turn — a CHANGES rebuild must move it.
   const headBefore = phase === "BUILD" ? await headOf(names.worktree) : null;
-  const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments })}`;
+  const outDir = path.join(jobDir, "out");
+  mkdirSync(outDir, { recursive: true });
+  const runsDone = [];
+  const extraLines = repoLines(book, secrets, outDir, runsDone);
+  const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments, extraLines })}`;
   writeFileSync(path.join(jobDir, `prompt-${phase}.md`), prompt);
   progress(`claude -p (${job.model}) for ${phase}`);
   let claude = await runClaude({ prompt, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
@@ -874,6 +918,18 @@ export async function run(job, ctx) {
   let cost = costFrom(claude.out);
 
   let { result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", phase);
+  // 0253: THE SCRIPT RUNS THE REPO'S OWN SCRIPTS FOR THE MODEL — RUNBOOK-named only, recorded, bounded.
+  for (let round = 0; round < 3 && result?.status === "needs_runs"; round += 1) {
+    const done = await applyRuns(result.runs, book.mayRun, names.worktree, ctx.env, secrets.allowed, progress);
+    runsDone.push(...done);
+    rmSync(resultPath, { force: true });
+    const again = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments, extraLines: repoLines(book, secrets, outDir, runsDone) })}\n\nRUNS DONE FOR YOU SINCE YOUR LAST TRY: ${done.map((d) => `${d.script} (${d.env}) → exit ${d.exit}: ${d.line}`).join("; ")}`;
+    claude = await runClaude({ prompt: again, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
+    writeFileSync(path.join(jobDir, `claude-${phase}-runs${round + 1}.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
+    cost = (cost ?? 0) + (costFrom(claude.out) ?? 0);
+    ({ result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", phase));
+  }
+  if (result?.status === "needs_runs") result = { ...result, status: "failed", reason: "asked for runs three times without finishing" };
   // A BUILD that needs another Drive asset names it; the script fetches it and runs the model ONCE more.
   const wanted = phase === "BUILD" && job.drive?.folder_id ? assetsRequested(result) : [];
   if (wanted.length) {
@@ -890,11 +946,14 @@ export async function run(job, ctx) {
   if (!result) {
     return { phase, status: "failed", reason: `${phase} ended (claude exit ${claude.code}) but ${problem}${cost !== null ? ` — cost $${cost.toFixed(2)}` : ""}` };
   }
-  if (result.status !== "ok") return { phase, status: result.status, reason: String(result.reason).slice(0, 1500) };
+  // 0253: what every report carries — the repo's facts, the vault lookup (names), the keys still
+  // missing, the runs, the files put on the card. Composed by the SCRIPT from what it observed.
+  const carried = await carriedFacts({ book, secrets, result, runsDone, job, outDir, worktree: names.worktree, env: ctx.env, progress, phase });
+  if (result.status !== "ok") return { phase, status: result.status, reason: String(result.reason).slice(0, 1500), ...carried };
 
   if (phase === "PLAN") {
     writeFileSync(path.join(jobDir, "plan.md"), result.document);
-    return { phase, status: "ok", document: result.document, decided: result.decided ?? [], asks: result.asks ?? [], publish_ready: result.publish_ready, placeholders: result.placeholders ?? [], missing_materials: result.missing_materials ?? [], assets: result.assets ?? [], notes: `${result.notes ?? ""}${cost !== null ? ` (cost $${cost.toFixed(2)})` : ""}`.trim() };
+    return { phase, status: "ok", document: result.document, decided: result.decided ?? [], asks: result.asks ?? [], publish_ready: result.publish_ready, placeholders: result.placeholders ?? [], missing_materials: result.missing_materials ?? [], assets: result.assets ?? [], ...carried, notes: `${result.notes ?? ""}${cost !== null ? ` (cost $${cost.toFixed(2)})` : ""}`.trim() };
   }
 
   if (phase === "BUILD") {
@@ -908,7 +967,7 @@ export async function run(job, ctx) {
      * what it observed is what goes in the proof. Nothing the model wrote about env vars is carried
      * forward — `configLines` is built entirely from `applyPagesEnv`'s return.
      */
-    const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress);
+    const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress, registryAllowance(book, secrets));
     // THE SCRIPT OBSERVES THE PR AND ITS CHECKS. The model's pr_url is a claim; gh is the fact.
     let pr;
     try {
@@ -934,10 +993,11 @@ export async function run(job, ctx) {
       preview_url: previewUrl ?? undefined,
       // The model's own proof, then what the SCRIPT did about delivery config — in that order, so
       // a reader sees the claim and the observation side by side and can tell which is which.
-      proof: [String(result.proof ?? "").slice(0, 8000), ...configLines].filter(Boolean).join("\n"),
+      proof: [String(result.proof ?? "").slice(0, 8000), ...configLines, ...runLines(runsDone), ...(carried.dns_proof ?? [])].filter(Boolean).join("\n"),
       pages_env_proof: configLines,
       // What is still missing after this rebuild, re-checked against the re-mapped package (0237).
       ...(Array.isArray(result.missing_materials) ? { missing_materials: result.missing_materials } : {}),
+      ...carried,
       reason: checks.state === "GREEN" ? undefined : `checks are ${checks.state} on ${pr.url}`,
       notes: `${result.notes ?? ""}${cost !== null ? ` (cost $${cost.toFixed(2)})` : ""}`.trim(),
     };
@@ -950,7 +1010,327 @@ export async function run(job, ctx) {
   } catch {
     /* a leftover worktree is untidy, not a failure */
   }
-  return { phase, status: "ok", merge_sha: mergeSha, live_proof: String(result.live_proof).slice(0, 8000), notes: `${result.notes ?? ""}${cost !== null ? ` (cost $${cost.toFixed(2)})` : ""}`.trim() };
+  return { phase, status: "ok", merge_sha: mergeSha, live_proof: [String(result.live_proof).slice(0, 8000), ...runLines(runsDone), ...(carried.dns_proof ?? [])].filter(Boolean).join("\n"), ...carried, notes: `${result.notes ?? ""}${cost !== null ? ` (cost $${cost.toFixed(2)})` : ""}`.trim() };
+}
+
+// ── Any repo she names (0253) ────────────────────────────────────────────────────────────────
+
+/** A checkout under ~/GitHub, cloned from GitHub when this Mac does not have it. */
+async function ensureCheckout(repoPath, githubRepo, progress) {
+  if (existsSync(path.join(repoPath, ".git"))) return { ok: true, cloned: false };
+  if (!githubRepo) return { ok: false, why: `${repoPath} is not checked out and the registry names no GitHub repo to clone it from` };
+  progress(`cloning ${githubRepo} → ${repoPath}`);
+  try {
+    mkdirSync(path.dirname(repoPath), { recursive: true });
+    await sh("gh", ["repo", "clone", githubRepo, repoPath, "--", "-q"], { timeout: 15 * 60_000 });
+  } catch (err) {
+    return { ok: false, why: `gh repo clone ${githubRepo} failed: ${String(err?.stderr ?? err?.message ?? err).trim().split("\n").slice(-2).join(" | ").slice(0, 300)}` };
+  }
+  if (!existsSync(path.join(repoPath, ".git"))) return { ok: false, why: `gh repo clone ${githubRepo} left no checkout at ${repoPath}` };
+  return { ok: true, cloned: true };
+}
+
+/** Source files whose `env.X` reads name the repo's secrets — bounded walk, text files only. */
+function sourceTexts(root, max = 400) {
+  const out = [];
+  const skip = new Set(["node_modules", ".git", "dist", "build", ".wrangler", "coverage", "public", "assets", "vendor"]);
+  const walk = (dir, depth) => {
+    if (out.length >= max || depth > 5) return;
+    let entries = [];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (out.length >= max) return;
+      if (e.isDirectory()) {
+        if (!skip.has(e.name) && !e.name.startsWith(".")) walk(path.join(dir, e.name), depth + 1);
+      } else if (/\.(m?js|ts|tsx|jsx|toml|json)$/.test(e.name) && !/lock/.test(e.name)) {
+        try {
+          const st = statSync(path.join(dir, e.name));
+          if (st.size <= 512 * 1024) out.push(readFileSync(path.join(dir, e.name), "utf8"));
+        } catch {
+          /* unreadable: skipped */
+        }
+      }
+    }
+  };
+  walk(root, 0);
+  return out;
+}
+
+/** What the repo declares about itself: package.json, wrangler config, the names its source reads. */
+function repoFactsOf(worktree) {
+  let pkg = null;
+  try {
+    pkg = JSON.parse(readFileSync(path.join(worktree, "package.json"), "utf8"));
+  } catch {
+    pkg = null;
+  }
+  let wrangler = null;
+  if (existsSync(path.join(worktree, "wrangler.toml"))) wrangler = readWranglerToml(readFileSync(path.join(worktree, "wrangler.toml"), "utf8"));
+  else if (existsSync(path.join(worktree, "wrangler.jsonc"))) wrangler = readWranglerJson(readFileSync(path.join(worktree, "wrangler.jsonc"), "utf8"));
+  else if (existsSync(path.join(worktree, "wrangler.json"))) wrangler = readWranglerJson(readFileSync(path.join(worktree, "wrangler.json"), "utf8"));
+  const sourceNames = secretNamesInSource(sourceTexts(worktree));
+  // Addendum 2: the partner's standing constraints, from the package's README / PRD / RUNBOOK prose.
+  const docs = [];
+  for (const name of readdirSafe(worktree).filter((n) => /^(readme|prd|runbook|brief|spec)[^/]*\.(md|txt)$/i.test(n))) {
+    try {
+      docs.push(readFileSync(path.join(worktree, name), "utf8"));
+    } catch {
+      /* unreadable: skipped */
+    }
+  }
+  const constraints = constraintsIn(docs);
+  const host = hostFromRoutes(wrangler?.routes ?? []);
+  const pagesProject = wrangler?.pages_build_output_dir ? wrangler.name ?? null : null;
+  return { pkg, wrangler, sourceNames, host, pagesProject, pagesHost: pagesProject ? `${pagesProject}.pages.dev` : null, constraints };
+}
+
+function readdirSafe(dir) {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * THE RUNBOOK, read — or generated from the repo's own config and committed on the job's branch when
+ * there is none (0253). Returns what the duty needs from it: the scripts a job may run, the secret
+ * NAMES it lists, and the repo's facts for the registry.
+ */
+async function ensureRunbook(worktree, repo, githubRepo, progress) {
+  const file = path.join(worktree, "RUNBOOK.md");
+  const facts = repoFactsOf(worktree);
+  let generated = false;
+  if (!existsSync(file)) {
+    const gen = generateRunbook({ repo, githubRepo, pkg: facts.pkg, wrangler: facts.wrangler, sourceNames: sourceTexts(worktree), hostHint: facts.host });
+    writeFileSync(file, gen.text);
+    try {
+      await git(worktree, "add", "RUNBOOK.md");
+      await git(worktree, "commit", "-q", "-m", `RUNBOOK.md: generated by Porter from package.json and wrangler config (deploy: ${gen.route.kind})`);
+      generated = true;
+      progress(`RUNBOOK.md generated for ${repo} (deploy route: ${gen.route.kind}) and committed on the branch`);
+    } catch (err) {
+      progress(`RUNBOOK.md generated for ${repo} but not committed: ${String(err?.message ?? err).slice(0, 160)}`);
+    }
+  }
+  const text = readFileSync(file, "utf8");
+  return { file, text, generated, mayRun: porterMayRun(text), secretNames: runbookSecretNames(text), facts, repo, githubRepo, constraints: facts.constraints ?? [] };
+}
+
+/**
+ * THE VAULT, FIRST (0253). Every name the RUNBOOK lists under ## Secrets, every secret-shaped name the
+ * source reads, and anything the model named as missing — looked up by exact name, then by vendor
+ * prefix. `allowed` is what a run or a Pages secret may inject; `missing` is what the next partner
+ * email names with the SECRET line that sends it. Names only, never a value.
+ */
+function secretsFor(book, job, extraNames = []) {
+  const wanted = [...new Set([...(book?.secretNames ?? []), ...likelySecrets(book?.facts?.sourceNames ?? []), ...(Array.isArray(job?.secret_names) ? job.secret_names : []), ...extraNames])];
+  const lookup = vaultLookup(wanted);
+  return {
+    lookup,
+    allowed: lookup.allowed,
+    missing: lookup.missing.map((name) => ({ name, vendor_url: vendorPageFor(name), searched: lookup.searched })),
+  };
+}
+
+/** The registry's allowance for `applyPagesEnv`: the repo's own Pages project and the names it may set. */
+function registryAllowance(book, secrets) {
+  const project = book?.facts?.pagesProject ?? null;
+  return project ? { project, names: secrets?.allowed ?? [] } : null;
+}
+
+/** One proof line per run — script, env, exit, one line of output. Never an environment value. */
+function runLines(runsDone) {
+  return (runsDone ?? []).map((r) => `run: ${r.script} · ${r.env} · exit ${r.exit}${r.line ? ` · ${r.line.slice(0, 200)}` : ""}`);
+}
+
+/**
+ * RUN THE REPO'S OWN SCRIPTS FOR THE MODEL. Only a name under the RUNBOOK's ## Porter may run; only
+ * `npm run <name> -- <plain args>`; never a shell; the environment is the model's plus the registry's
+ * allowed names (and the platform token for preview/production). Each run is recorded whatever
+ * happened; a refusal is recorded too, so the model can see it and say so.
+ */
+async function applyRuns(requests, mayRun, worktree, env, allowedNames, progress) {
+  const done = [];
+  for (const r of Array.isArray(requests) ? requests : []) {
+    const script = String(r?.script ?? "").trim();
+    const runEnv = ["local", "preview", "production"].includes(r?.env) ? r.env : "local";
+    const args = Array.isArray(r?.args) ? r.args.map(String) : [];
+    if (!mayRun.includes(script)) {
+      done.push({ script, env: runEnv, exit: -1, line: "refused: not listed under ## Porter may run in RUNBOOK.md" });
+      progress(`run refused: ${script} (not under ## Porter may run)`);
+      continue;
+    }
+    if (args.some((a) => /[;&|`$<>\n]/.test(a))) {
+      done.push({ script, env: runEnv, exit: -1, line: "refused: shell characters in args" });
+      continue;
+    }
+    progress(`npm run ${script} -- ${args.join(" ")} (${runEnv})`);
+    const names = runEnv === "local" ? allowedNames : [...new Set([...allowedNames, ...PLATFORM_RUN_NAMES])];
+    try {
+      const { stdout, stderr } = await execFileAsync("npm", ["run", script, "--", ...args], { cwd: worktree, env: { ...envForRepoRun(env, names), CI: "1" }, timeout: 20 * 60_000, maxBuffer: 16 * 1024 * 1024 });
+      done.push({ script, env: runEnv, exit: 0, line: lastLine(`${stdout}\n${stderr}`) });
+    } catch (err) {
+      done.push({ script, env: runEnv, exit: typeof err?.code === "number" ? err.code : 1, line: lastLine(`${err?.stdout ?? ""}\n${err?.stderr ?? ""}\n${err?.message ?? ""}`) });
+    }
+  }
+  return done;
+}
+
+function lastLine(text) {
+  const lines = String(text ?? "").split("\n").map((l) => l.trim()).filter((l) => l && !/^npm (warn|notice)/i.test(l) && !/^> /.test(l));
+  return (lines.at(-1) ?? "").slice(0, 300);
+}
+
+const MEDIA_TYPES = { csv: "text/csv", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", pdf: "application/pdf", json: "application/json", txt: "text/plain", md: "text/markdown", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", zip: "application/zip", svg: "image/svg+xml", html: "text/html" };
+
+/**
+ * FILES FOR THE PARTNER, put on the card (0253). Each named deliverable under JOB_DIR/out or the
+ * worktree is PUT to the Worker (raw bytes) when it fits the attachment cap, or pushed to Drive and
+ * shared with the partner as reader and recorded as a link when it does not. Never a path outside
+ * those two directories.
+ */
+async function putDeliverables(result, job, outDir, worktree, env, progress) {
+  const out = [];
+  const base = env?.WP_OS_BASE_URL ?? "https://os.joinwestpeek.com";
+  const id = env?.WP_OS_MAC_ACCESS_CLIENT_ID;
+  const secret = env?.WP_OS_MAC_ACCESS_CLIENT_SECRET;
+  for (const d of Array.isArray(result?.deliverables) ? result.deliverables : []) {
+    const given = typeof d === "string" ? d : String(d?.path ?? "");
+    const file = path.isAbsolute(given) ? given : existsSync(path.join(outDir, given)) ? path.join(outDir, given) : path.join(worktree, given);
+    const inside = [outDir, worktree].some((root) => path.resolve(file).startsWith(path.resolve(root) + path.sep));
+    if (!inside || !existsSync(file)) {
+      out.push({ filename: path.basename(given), bytes: 0, via: "refused", drive_url: null, why: inside ? "no such file" : "outside the job's directories" });
+      continue;
+    }
+    const filename = String((typeof d === "object" && d?.filename) || path.basename(file)).slice(0, 200);
+    const bytes = statSync(file).size;
+    // Addendum 8: a file with personal data (voter emails, an export) is shared from Drive to the requesting partner only — never the store, never an attachment.
+    const privateOnly = typeof d === "object" && d?.private === true;
+    const mediaType = MEDIA_TYPES[path.extname(filename).slice(1).toLowerCase()] ?? "application/octet-stream";
+    if (!id || !secret) {
+      out.push({ filename, bytes, via: "refused", drive_url: null, why: "the Mac's Access token is not in the environment" });
+      continue;
+    }
+    const headers = { "CF-Access-Client-Id": id, "CF-Access-Client-Secret": secret, "x-wp-filename": encodeURIComponent(filename) };
+    try {
+      if (bytes <= ATTACH_MAX_BYTES && !privateOnly) {
+        const res = await fetch(`${base}/api/work-cards/${job.card?.id}/files`, { method: "POST", headers: { ...headers, "content-type": mediaType }, body: readFileSync(file), signal: AbortSignal.timeout(180_000) });
+        if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 160)}`);
+        out.push({ filename, bytes, via: "r2", drive_url: null });
+        progress(`file on the card: ${filename} (${bytes} bytes)`);
+      } else {
+        const { stdout } = await execFileAsync("node", [PUSH_SCRIPT, "--file", file, "--name", filename, "--share", String(job.card?.requested_by ?? "")], { env, timeout: 15 * 60_000, maxBuffer: 4 * 1024 * 1024 });
+        const link = JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}").url;
+        if (!link) throw new Error("push.mjs returned no link");
+        const res = await fetch(`${base}/api/work-cards/${job.card?.id}/files`, { method: "POST", headers: { ...headers, "content-type": "application/json", "x-wp-drive": "1" }, body: JSON.stringify({ drive_url: link, bytes }), signal: AbortSignal.timeout(60_000) });
+        if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 160)}`);
+        out.push({ filename, bytes, via: "drive", drive_url: link });
+        progress(`file shared from Drive: ${filename} (${bytes} bytes)`);
+      }
+    } catch (err) {
+      out.push({ filename, bytes, via: "refused", drive_url: null, why: String(err?.message ?? err).slice(0, 200) });
+      progress(`file NOT delivered: ${filename} — ${String(err?.message ?? err).slice(0, 120)}`);
+    }
+  }
+  return out;
+}
+
+/**
+ * A HOST OUTSIDE HER ZONES (0253). For a repo whose config names a Pages project and whose host the
+ * registry or the config names: is the apex a zone in the firm's account? If so Cloudflare adds the
+ * record itself when the domain is attached. If not: the project is created when missing, the custom
+ * domain is attached through the API, and the record Cloudflare requires is READ BACK — the project's
+ * own `subdomain` is the CNAME target, `validation_data` carries any TXT — never composed from a
+ * template. Returns [] when there is nothing to do; a failed API call is one proof line, never a stop.
+ */
+async function ensurePagesDomain(book, job, env, progress) {
+  const project = book?.facts?.pagesProject;
+  const hosts = [...new Set([String(job.property_host ?? "").split(",").map((h) => h.trim().toLowerCase()).filter((h) => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(h)), book?.facts?.host].flat().filter(Boolean))];
+  const token = env?.CLOUDFLARE_API_TOKEN;
+  if (!project || !hosts.length || !token) return { dns: [], lines: [] };
+  const api = async (pathname, init = {}) => {
+    const res = await fetch(`${CF_API}${pathname}`, { ...init, headers: { Authorization: `Bearer ${token}`, "content-type": "application/json", ...(init.headers ?? {}) }, signal: AbortSignal.timeout(60_000) });
+    const body = await res.json().catch(() => null);
+    return { ok: res.ok && body?.success !== false, status: res.status, result: body?.result ?? null, errors: body?.errors ?? [] };
+  };
+  const dns = [];
+  const lines = [];
+  for (const host of hosts) {
+    try {
+      const apex = host.split(".").slice(-2).join(".");
+      const zone = await api(`/zones?name=${encodeURIComponent(apex)}&per_page=1`);
+      const onZone = Boolean(zone.ok && Array.isArray(zone.result) && zone.result.length);
+      let proj = await api(`/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${encodeURIComponent(project)}`);
+      if (!proj.ok && proj.status === 404) {
+        proj = await api(`/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects`, { method: "POST", body: JSON.stringify({ name: project, production_branch: "main" }) });
+        lines.push(`pages-project: ${project} · ${proj.ok ? "created" : "could not be created"}`);
+      }
+      if (!proj.ok) {
+        lines.push(`pages-domain: ${host} · failed (project ${project}: ${proj.errors?.[0]?.message ?? proj.status})`);
+        continue;
+      }
+      const subdomain = String(proj.result?.subdomain ?? "");
+      const existing = (await api(`/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${encodeURIComponent(project)}/domains`)).result ?? [];
+      let dom = Array.isArray(existing) ? existing.find((d) => String(d?.name ?? "").toLowerCase() === host) ?? null : null;
+      if (!dom) {
+        const added = await api(`/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${encodeURIComponent(project)}/domains`, { method: "POST", body: JSON.stringify({ name: host }) });
+        if (!added.ok) {
+          lines.push(`pages-domain: ${host} · failed (${added.errors?.[0]?.message ?? added.status})`);
+          continue;
+        }
+        dom = added.result;
+      }
+      // THE RECORD, FROM THE ANSWER: a CNAME at the host's label to the project's own subdomain, and the TXT if Cloudflare asked for one.
+      const label = host.endsWith(`.${apex}`) ? host.slice(0, -(apex.length + 1)) : "@";
+      const validation = dom?.validation_data ?? {};
+      const record = {
+        host,
+        project,
+        record_type: "CNAME",
+        record_name: label,
+        record_target: subdomain,
+        txt_name: validation?.method === "txt" ? validation?.txt_name ?? null : null,
+        txt_value: validation?.method === "txt" ? validation?.txt_value ?? null : null,
+        status: String(dom?.status ?? "pending"),
+        on_zone: onZone,
+      };
+      if (!record.record_target) {
+        lines.push(`pages-domain: ${host} · failed (Cloudflare returned no subdomain for ${project}; nothing emailed)`);
+        continue;
+      }
+      dns.push(record);
+      lines.push(`pages-domain: ${host} · ${onZone ? "on a firm zone — Cloudflare holds the record" : `outside the firm's zones — CNAME ${label} → ${subdomain}${record.txt_name ? ` + TXT ${record.txt_name}` : ""}`} · ${record.status}`);
+      progress?.(lines.at(-1));
+    } catch (err) {
+      lines.push(`pages-domain: ${host} · failed (${String(err?.message ?? err).slice(0, 160)})`);
+    }
+  }
+  return { dns, lines };
+}
+
+/** The 0253 fields every report carries, composed from what the script read and did — never from the model's claims. */
+async function carriedFacts({ book, secrets, result, runsDone, job, outDir, worktree, env, progress, phase }) {
+  const more = Array.isArray(result?.missing_secrets) ? result.missing_secrets : [];
+  const all = more.length ? secretsFor(book, job, more) : secrets;
+  const deliverables = phase === "PLAN" ? [] : await putDeliverables(result, job, outDir, worktree, env, progress);
+  const domain = phase === "PLAN" || result?.status !== "ok" ? { dns: [], lines: [] } : await ensurePagesDomain(book, job, env, progress);
+  return {
+    vault_lookup: { searched: all.lookup.searched, found: all.lookup.found, missing: all.lookup.missing },
+    missing_secrets: all.missing,
+    ...(domain.dns.length ? { dns: domain.dns } : {}),
+    ...(domain.lines.length ? { dns_proof: domain.lines } : {}),
+    ...(runsDone.length ? { runs: runsDone } : {}),
+    ...(deliverables.length ? { deliverables: deliverables.map((d) => ({ filename: d.filename, bytes: d.bytes, via: d.via, drive_url: d.drive_url ?? null })) } : {}),
+    repo_facts: { repo: book.repo, host: book.facts.host, pages_host: book.facts.pagesHost, secret_names: all.allowed, github_repo: book.githubRepo ?? null, runbook_generated: book.generated, constraints: book.facts.constraints ?? [] },
+    // Addenda 5 + 6: dated deferred work and per-item done-lines, as the model wrote them (validated shapes).
+    ...(Array.isArray(result?.deferred) ? { deferred: result.deferred.filter((d) => d && typeof d === "object" && String(d.ask ?? "").trim() && /^\d{4}-\d{2}-\d{2}/.test(String(d.due_at ?? ""))).map((d) => ({ ask: String(d.ask).slice(0, 1200), due_at: String(d.due_at), words: d.words ? String(d.words).slice(0, 200) : undefined })) } : {}),
+    ...(Array.isArray(result?.items) ? { items: result.items.filter((i) => i && typeof i === "object" && String(i.item ?? "").trim() && ["done", "partial", "not_done"].includes(i.state)).map((i) => ({ item: String(i.item).slice(0, 200), state: i.state, note: i.note ? String(i.note).slice(0, 300) : undefined })) } : {}),
+  };
 }
 
 // ── Several repos (0236) ─────────────────────────────────────────────────────────────────────
@@ -1066,17 +1446,20 @@ async function runSeveral(job, ctx) {
   const phase = job.phase;
   const cardId = job.card?.id ?? "card";
   const parts = job.parts.map((p) => ({ ...p, repoPath: path.join(homedir(), "GitHub", String(p.repo ?? "")), names: namesFor(cardId, p.repo) }));
-  const missing = parts.filter((p) => !p.repo || !existsSync(path.join(p.repoPath, ".git"))).map((p) => p.repoPath);
-  if (missing.length) return { phase, status: "failed", reason: `not checked out on this Mac: ${missing.join(", ")}` };
+  for (const p of parts) {
+    if (!p.repo) return { phase, status: "failed", reason: "a part names no repo" };
+    const checkout = await ensureCheckout(p.repoPath, p.github_repo ?? null, progress);
+    if (!checkout.ok) return { phase, status: "failed", reason: checkout.why };
+  }
   const jobDir = ctx.jobDir;
   mkdirSync(jobDir, { recursive: true });
   const packageDir = path.join(path.dirname(parts[0].names.worktree), `pkg-${namesFor(cardId).worktree.split("wt-").pop()}`);
   for (const p of parts) await ensureWorktree(p.repoPath, p.names, phase, progress);
 
-  // EVERY REPO NEEDS ITS RUNBOOK. One missing is a block that names it; nothing is planned half.
-  const noRunbook = parts.filter((p) => !existsSync(path.join(p.names.worktree, "RUNBOOK.md"))).map((p) => p.repo);
-  if (noRunbook.length) {
-    return { phase, status: "blocked", reason: `${noRunbook.join(" and ")} ${noRunbook.length === 1 ? "has" : "have"} no RUNBOOK.md. Write one (join-west-peek-main/RUNBOOK.md is the model), land it, then reply "go".` };
+  // EVERY REPO READS ITS RUNBOOK; one without is generated from its own config (0253), never a block.
+  for (const p of parts) {
+    p.book = await ensureRunbook(p.names.worktree, p.repo, p.github_repo ?? null, progress);
+    p.secrets = secretsFor(p.book, job);
   }
   const assets = await gatherAssets(job, ctx, packageDir, jobDir, phase, progress, { mapOnly: job.refresh === true });
   if (assets.report) return assets.report;
@@ -1093,7 +1476,7 @@ async function runSeveral(job, ctx) {
   if (phase === "PLAN") {
     const resultPath = path.join(jobDir, "result-PLAN.json");
     if (existsSync(resultPath)) rmSync(resultPath);
-    const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext({ ...job, target_repo: parts.map((p) => p.repo).join(" + ") }, { ...parts[0].names, packageDir, jobDir, resultPath, planText: null, attachments: assets.attachments })}`;
+    const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext({ ...job, target_repo: parts.map((p) => p.repo).join(" + ") }, { ...parts[0].names, packageDir, jobDir, resultPath, planText: null, attachments: assets.attachments, extraLines: parts.flatMap((p) => [`--- ${p.repo} ---`, ...repoLines(p.book, p.secrets, path.join(jobDir, "out"), [])]) })}`;
     writeFileSync(path.join(jobDir, "prompt-PLAN.md"), prompt);
     progress(`claude -p (${job.model}) for PLAN over ${parts.length} repos`);
     const claude = await runClaude({ prompt, model: job.model, cwd: worktrees[0], addDirs: [...worktrees.slice(1), jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
@@ -1118,7 +1501,7 @@ async function runSeveral(job, ctx) {
         const resultPath = path.join(jobDir, `result-BUILD-${p.repo}.json`);
         if (existsSync(resultPath)) rmSync(resultPath);
         const partJob = { ...job, target_repo: p.repo, property_host: p.property_host, sites: p.sites, request: `${job.request ?? job.ask ?? ""}\n\n(${p.repo}'s part: ${p.ask})` };
-        const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(partJob, { ...p.names, packageDir, jobDir, resultPath, planText: job.plan?.text ?? null, attachments: assets.attachments, thisPart: p.repo })}`;
+        const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(partJob, { ...p.names, packageDir, jobDir, resultPath, planText: job.plan?.text ?? null, attachments: assets.attachments, thisPart: p.repo, extraLines: repoLines(p.book, p.secrets, path.join(jobDir, "out"), []) })}`;
         writeFileSync(path.join(jobDir, `prompt-BUILD-${p.repo}.md`), prompt);
         progress(`claude -p (${job.model}) for BUILD of ${p.repo}`);
         let claude = await runClaude({ prompt, model: job.model, cwd: p.names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
@@ -1136,7 +1519,7 @@ async function runSeveral(job, ctx) {
         if (!result && spentReport(phase, claude)) return { ...spentReport(phase, claude), parts: reports };
         if (!result) return { phase, status: "failed", reason: `BUILD of ${p.repo} ended (claude exit ${claude.code}) but ${problem}`, parts: reports };
         if (result.status !== "ok") return { phase, status: result.status, reason: `${p.repo}: ${String(result.reason).slice(0, 1400)}`, parts: reports };
-        const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress);
+        const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress, registryAllowance(p.book, p.secrets));
         proof = [String(result.proof ?? "").slice(0, 6000), ...configLines].filter(Boolean).join("\n");
         anyRebuilt = true;
       }
@@ -1445,6 +1828,39 @@ function selfTest() {
     ["the prompt tells the model a rebuild after the preview is the change, never a re-check", () => {
       const p = readFileSync(PROMPT_FILE, "utf8");
       return p.includes("A rebuild after the preview") && p.includes("REBUILD AFTER THE PREVIEW") && p.includes("no new commit is FAILED");
+    }],
+    // ── 0253: any repo she names, the vault first, runs for the model, no secret shown ──
+    ["readResult accepts needs_runs only with well-formed runs, and refuses a shell line", () => {
+      const ok = readResult(JSON.stringify({ phase: "BUILD", status: "needs_runs", runs: [{ script: "load-beats", env: "production", args: ["--env", "production"] }] }), "BUILD");
+      const noRuns = readResult(JSON.stringify({ phase: "BUILD", status: "needs_runs" }), "BUILD");
+      const shell = readResult(JSON.stringify({ phase: "BUILD", status: "needs_runs", runs: [{ script: "load-beats; rm -rf /", env: "local" }] }), "BUILD");
+      const badEnv = readResult(JSON.stringify({ phase: "BUILD", status: "needs_runs", runs: [{ script: "x", env: "prod" }] }), "BUILD");
+      return ok.result?.status === "needs_runs" && noRuns.result === null && shell.result === null && badEnv.result === null;
+    }],
+    ["readResult refuses a missing_secrets entry that is not a NAME", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "x".repeat(50), publish_ready: true, missing_secrets: ["GIPHY_API_KEY=abc"] }), "PLAN").result === null && readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "x".repeat(50), publish_ready: true, missing_secrets: ["GIPHY_API_KEY"] }), "PLAN").result !== null],
+    ["the vault is looked up by name then by vendor, and the search is recorded", () => {
+      const l = vaultLookup(["RESEND_API_KEY", "GIPHY_KEY", "STRIPE_SECRET"], new Set(["RESEND_API_KEY", "GIPHY_API_KEY"]));
+      return l.found.join() === "RESEND_API_KEY" && l.by_vendor.GIPHY_KEY?.join() === "GIPHY_API_KEY" && l.missing.join() === "STRIPE_SECRET" && l.searched.includes("GIPHY_*") && l.searched.includes("STRIPE_*") && l.allowed.join() === "GIPHY_API_KEY,RESEND_API_KEY";
+    }],
+    ["a repo's run gets only its allowed names, never the model's auth or an unlisted vault name", () => {
+      const e = envForRepoRun({ PATH: "/bin", GIPHY_API_KEY: "g", RESEND_API_KEY: "r", ANTHROPIC_API_KEY: "sk", [VAULT_INJECTED_VAR]: "GIPHY_API_KEY,RESEND_API_KEY,ANTHROPIC_API_KEY" }, ["GIPHY_API_KEY"], new Set());
+      return e.PATH === "/bin" && e.GIPHY_API_KEY === "g" && !("RESEND_API_KEY" in e) && !("ANTHROPIC_API_KEY" in e);
+    }],
+    ["the RUNBOOK generator writes the deploy route it was given and lists runnable scripts and secret names", () => {
+      const g = generateRunbook({ repo: "topbarz-voting", githubRepo: "seq23/topbarz-voting", pkg: { scripts: { "deploy:production": "wrangler pages deploy public", "load-beats": "node x", dev: "wrangler pages dev" } }, wrangler: { name: "topbarz-voting", pages_build_output_dir: "public", routes: [], envs: [], vars: ["PUBLIC_FLAG"] }, sourceNames: ["env.GIPHY_API_KEY", "env.PUBLIC_FLAG"], today: "2026-10-06" });
+      return g.route.kind === "npm" && g.text.includes("`npm run deploy:production`") && porterMayRun(g.text).join() === "load-beats" && runbookSecretNames(g.text).join() === "GIPHY_API_KEY" && !porterMayRun(g.text).includes("dev");
+    }],
+    ["a repo with no deploy route gets 'not declared', never a guess", () => { const g = generateRunbook({ repo: "r", githubRepo: null, pkg: { scripts: {} }, wrangler: null, sourceNames: [], today: "2026-10-06" }); return g.route.kind === "none" && /not declared/.test(g.text) && !/(?<!nothing is |never )\bguess/i.test(g.text); }],
+    ["the constraints extractor reads a partner's standing rules out of a README and skips commands", () => { const c = constraintsIn(["- Scooter's own track is never in the vote.\n- Run `npm run dev`.\n- Voter emails are private.\n"]); return c.length === 2 && c.every((x) => !/npm/.test(x)); }],
+    ["a TOML wrangler config yields the name, the Pages output dir and the routes", () => { const w = readWranglerToml('name = "topbarz-voting"\npages_build_output_dir = "public"\n[env.production]\nroutes = ["voting.topbarz.xyz/*"]\n'); return w.name === "topbarz-voting" && w.pages_build_output_dir === "public" && w.routes.join() === "voting.topbarz.xyz/*" && hostFromRoutes(w.routes) === "voting.topbarz.xyz"; }],
+    ["the context carries the repo lines and the DUE line from the job, never from the environment", () => {
+      const lines = repoLines({ file: "/w/RUNBOOK.md", generated: true, mayRun: ["load-beats"], constraints: ["Scooter's track never in the vote"] }, { lookup: { found: ["RESEND_API_KEY"], by_vendor: { GIPHY_KEY: ["GIPHY_API_KEY"] }, searched: ["RESEND_API_KEY", "GIPHY_KEY", "GIPHY_*"], missing: [] }, allowed: [], missing: [{ name: "STRIPE_KEY" }] }, "/j/out", []);
+      const t = renderContext({ phase: "BUILD", card: { id: "wc_1", title: "T" }, request: "r", rules: {}, due: { due_at: "2026-10-12T14:00:00.000Z", due_words: "by Monday morning" }, constraints: ["Test data is preview-only"] }, { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/r", attachments: [], extraLines: lines });
+      return t.includes("DUE: 2026-10-12T14:00:00.000Z") && t.includes("REGISTERED_CONSTRAINTS") && t.includes("PORTER_MAY_RUN") && t.includes("GIPHY_KEY → GIPHY_API_KEY") && t.includes("SECRETS_MISSING") && t.includes("STRIPE_KEY") && t.includes("PARTNER_CONSTRAINTS") && t.includes("GENERATED this run");
+    }],
+    ["the prompt no longer blocks for a login, a RUNBOOK or an odd ask, and tells the model how to ask for runs, files and keys", () => {
+      const p = readFileSync(PROMPT_FILE, "utf8");
+      return /do NOT block for it/.test(p) && /needs_runs/.test(p) && /DELIVERABLES_DIR/.test(p) && /missing_secrets/.test(p) && /Never ask for a login/.test(p) && !/BLOCK with a plain question/.test(p) && /Standing partner practices/.test(p);
     }],
   ];
   let failed = 0;

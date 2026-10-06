@@ -109,6 +109,16 @@ export interface LocalJobPayload {
   card: { id: string; title: string; requested_by: string | null };
   target_repo: string;
   property_host: string | null;
+  /** 0253: owner/name on GitHub, so the Mac can clone a checkout it does not have. */
+  github_repo?: string | null;
+  /** 0253: the secret NAMES the registry allows for this repo (its RUNBOOK's `## Secrets` + vault vendor matches). Never a value. */
+  secret_names?: string[];
+  /** 0253: keys an earlier phase found missing from the vault; the build goes ahead without them. */
+  missing_secrets?: MissingSecret[];
+  /** 0253 (addendum 2): the partner's standing constraints for this repo — obeyed in every job, never restated as asks. */
+  constraints?: string[];
+  /** 0253 (addendum 3): the deadline the partner named, ISO UTC, and their words. */
+  due?: { due_at: string; due_words: string } | null;
   /** 23 Sep 2026: the site folders of target_repo this job may change (sitesOf(property_host)); [] when unresolved. */
   sites: string[];
   /** 23 Sep 2026: the Pages subdomains those sites preview under — the Mac keeps only preview URLs under these. */
@@ -182,8 +192,61 @@ export interface LocalJobPartReport {
  * result file the model fills in, and CHECKS it before reporting: a phase that produced no result
  * file reports `status: "failed"`, never a guessed success (Rule 0).
  */
+/** 0253: a key the vault does not hold. The name, where a partner can create one, and where the duty looked. */
+export interface MissingSecret {
+  name: string;
+  vendor_url?: string | null;
+  /** The names the duty searched the vault for (RUNBOOK names, then vendor prefixes). Required beside a missing secret. */
+  searched: string[];
+}
+
+/** 0253: what the duty looked up in the vault, names only. Carried on every report that names a missing secret. */
+export interface VaultLookup {
+  searched: string[];
+  found: string[];
+  missing: string[];
+}
+
+/** 0253: the record Cloudflare requires for a custom domain, read from the Pages API — never guessed. */
+export interface DnsRecordAsked {
+  host: string;
+  project: string;
+  record_type: "CNAME" | "A" | "AAAA";
+  record_name: string;
+  record_target: string;
+  txt_name?: string | null;
+  txt_value?: string | null;
+  /** Cloudflare's own status word for the domain (pending, active, …). */
+  status: string;
+  /** True when the host IS on one of the firm's zones: Cloudflare added the record itself; nothing to email. */
+  on_zone: boolean;
+}
+
+/** 0253: one RUNBOOK-named script the duty ran for the model. */
+export interface DataOpsRun {
+  script: string;
+  env: "local" | "preview" | "production";
+  exit: number;
+  line: string;
+}
+
 export interface LocalJobReport {
   phase: WebPropertyChangePhase;
+  /** 0253: keys the vault does not hold. Carried with `vault_lookup`, or the Worker refuses the report. */
+  missing_secrets?: MissingSecret[];
+  vault_lookup?: VaultLookup;
+  /** 0253: the RUNBOOK-named scripts the SCRIPT ran on the model's request, each with its exit and one line. */
+  runs?: DataOpsRun[];
+  /** 0253: files the job produced for the partner, already put on the card by the script. Names only. */
+  deliverables?: Array<{ filename: string; bytes: number; via: "r2" | "drive"; drive_url?: string | null }>;
+  /** 0253: a host outside the firm's Cloudflare zones — the record Cloudflare asked for, read from its API. */
+  dns?: DnsRecordAsked[];
+  /** 0253: what the repo's own config says — the host it serves, its Pages project, its RUNBOOK's secret names, the package's standing constraints. Never from the email. */
+  repo_facts?: { repo: string; host?: string | null; pages_host?: string | null; secret_names?: string[]; github_repo?: string | null; runbook_generated?: boolean; constraints?: string[] } | null;
+  /** 0253 (addendum 5): work the partner dated for later ("for next week …") — its own card, leased until its week. */
+  deferred?: Array<{ ask: string; due_at: string; words?: string }>;
+  /** 0253 (addendum 6): several asks in one email → one done-line per item, partial completion stated per item. */
+  items?: Array<{ item: string; state: "done" | "partial" | "not_done"; note?: string }>;
   /**
    * "unchanged" (0240, BUILD only): the job asked for a materials check (`refresh`), the Mac re-mapped
    * the folder and read the card's files, and the set is the same one the last build used — so it

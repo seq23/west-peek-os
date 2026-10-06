@@ -1,6 +1,8 @@
 import { describeModes, parseBlogAsk } from "../../shared/intake/blogHelp";
 import { parsePartnerMessageAsk } from "../../shared/intake/partnerMessage";
-import { WEB_PROPERTIES, isWebPropertyChange, parseWebPropertyAsk, partsFromHosts } from "../../shared/intake/webPropertyChange";
+import { isWebPropertyChange, parseWebPropertyAsk, partsFromHosts, registrationsIn } from "../../shared/intake/webPropertyChange";
+import { loadRegistry, registerFromEmail } from "./webPropertyRegistry";
+import { dueTimeIn } from "../../shared/intake/dueTime";
 import { textBodyOf } from "../effects/mimeAttachments";
 import { storeAttachments } from "./requestMaterials";
 import { splitQuoted } from "../../shared/intake/replyBody";
@@ -385,7 +387,7 @@ export async function matchFunnelCompany(env: Env, name: string, companyId?: str
  * authorized per actor and a card that cannot be created is an arrival silently dropped — the card
  * itself asserts nothing and decides nothing.
  */
-function systemIdentity(): FirmUserIdentity {
+export function systemIdentity(): FirmUserIdentity {
   return {
     id: "system:inbound_email",
     email: INTAKE_MAILBOX,
@@ -1050,7 +1052,26 @@ export async function openAssignmentCard(
    * seven days, the assumption is stated in the RECEIVED email, and Porter asks only when there
    * is nothing recent to infer from.
    */
-  const web = parseWebPropertyAsk(input.subject, written);
+  /*
+   * THE OPEN REGISTRY (0253, owner 6 Oct 2026). A GitHub repo the partner names that is not registered
+   * is registered HERE, as a step of the job — never a block, never "not a West Peek property" — and
+   * the parse below reads the registry with that row in it. A seeded host is never re-pointed.
+   */
+  let registry = await loadRegistry(env);
+  const registrations = registrationsIn(written, registry);
+  let registeredNow: string[] = [];
+  if (registrations.length) {
+    const out = await registerFromEmail(env, { registrations, requestedBy: input.partnerAddress, firmScope: FIRM_SCOPE });
+    registeredNow = out.registered;
+    if (out.registered.length) registry = await loadRegistry(env);
+  }
+  const web = parseWebPropertyAsk(input.subject, written, registry);
+  if (web && registeredNow.length) web.registered = registeredNow;
+  // ALL KINDS (owner, 6 Oct 2026): a deadline in their words sets the assignment's priority whatever
+  // it is for; a site job also carries it on the request so every wait states it.
+  const due = dueTimeIn(`${input.subject}\n${written}`);
+  if (due) await env.WP_OS_DB.prepare("UPDATE work_card SET priority = ?2 WHERE id = ?1").bind(card.id, due.priority).run();
+  if (web && due) web.due = due;
   if (web) {
     let assumedFrom: string | null = null;
     if (web.property_unresolved && !web.target_repo) {
@@ -1064,12 +1085,12 @@ export async function openAssignmentCard(
         .bind(input.partnerAddress.toLowerCase(), new Date(Date.now() - 7 * 24 * 3600_000).toISOString())
         .first<{ property_host: string; target_repo: string; id: string; created_at: string }>();
       if (recent) {
-        const prop = WEB_PROPERTIES.find((p) => p.host === recent.property_host);
+        const prop = registry.find((p) => p.host === recent.property_host);
         web.property_host = recent.property_host;
         web.target_repo = recent.target_repo;
         web.site = prop?.site ?? null;
         // "The site" after a job over several repos is that same job's repos again (0236).
-        const parts = partsFromHosts(recent.property_host, web.ask);
+        const parts = partsFromHosts(recent.property_host, web.ask, registry);
         if (parts.length) {
           web.parts = parts;
           web.site = parts.map((p) => p.site).join(", ");
@@ -1108,11 +1129,13 @@ export async function openAssignmentCard(
       );
       if (handed.ok) {
         await openWebPropertyChange(env, { cardId: handed.cardId, ask: web, firmScope: FIRM_SCOPE, assumedFrom });
+        // Addendum 3: the deadline's priority travels to the card that does the work.
+        if (due) await env.WP_OS_DB.prepare("UPDATE work_card SET priority = ?2 WHERE id = ?1").bind(handed.cardId, due.priority).run();
         // The attachments follow the request to Porter's card, and the partner hears RECEIVED —
         // "got it, I'm on it", what was understood, what comes next — once (her decision, 21 Sep).
         await env.WP_OS_DB.prepare("UPDATE request_attachment SET work_card_id = ?2 WHERE work_card_id = ?1").bind(card.id, handed.cardId).run();
         const { sendReceived } = await import("./webPropertyChange");
-        await sendReceived(env, handed.cardId, { tldr: input.receivedTldr ?? null, replyOnThread: input.replyOnThread ?? null });
+        await sendReceived(env, handed.cardId, { tldr: [input.receivedTldr, registeredNow.length ? `Registered ${registeredNow.join(", ")} as a repo I may work on; it is cloned on the Mac if it is not there yet.` : null].filter(Boolean).join(" ") || null, replyOnThread: input.replyOnThread ?? null });
         await env.WP_OS_DB.prepare(
           "UPDATE work_card SET state = 'DONE', next_action = NULL, description = substr(COALESCE(description, '') || char(10) || '• Handed to Porter as work card ' || ?2 || ': a web property change, worked on the Mac.', 1, 16000) WHERE id = ?1",
         )

@@ -277,9 +277,18 @@ export async function replyToRequester(
         details: detail,
         routedBy,
       };
+  // 0253: a site job's files ride on DONE and PREVIEW (attached under the cap, listed always), and the
+  // keys it still lacks ride on every email with the exact SECRET line that sends one.
+  // ALL KINDS (owner, 6 Oct 2026): a file any employee put on the card rides on its DONE email; a Porter card adds its missing keys.
+  const extras = await (await import("./webPropertyChange")).porterEmailExtras(env, card.id, outcome === "DONE" || notice?.kind === "PREVIEW");
+  if (extras?.sections.length) {
+    const at = email.sections.findIndex((s) => s.label === "Your call" || /^On the card/i.test(s.label));
+    email.sections = at < 0 ? [...email.sections, ...extras.sections] : [...email.sections.slice(0, at), ...extras.sections, ...email.sections.slice(at)];
+  }
   const out = await sendOrPreview(env, {
     to,
     email,
+    ...(extras?.attachments.length ? { attachments: extras.attachments } : {}),
     objectType: "work_card",
     objectId: card.id,
     workCardId: card.id,

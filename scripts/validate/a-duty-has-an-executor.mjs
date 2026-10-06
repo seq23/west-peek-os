@@ -98,7 +98,8 @@ export function checkDoor(files) {
   if (!open.length) violations.push("openAssignmentCard() is gone");
   else {
     examined += 1;
-    const web = open.indexOf("parseWebPropertyAsk(input.subject, written)");
+    // 0253: the door hands the parse the registry it just read; the order against the blog parse is what is pinned.
+    const web = Math.max(open.indexOf("parseWebPropertyAsk(input.subject, written)"), open.indexOf("parseWebPropertyAsk(input.subject, written, registry)"));
     const blog = open.indexOf("parseBlogAsk(input.subject, written)");
     if (web < 0 || blog < 0) violations.push("openAssignmentCard() no longer parses both the web-property ask and the blog ask from the written text");
     else if (web > blog) violations.push("openAssignmentCard() parses blog help BEFORE the web-property ask — 'newsletter signup on the site' would become a blog outline");
@@ -291,9 +292,9 @@ function selfTest() {
   const rawClaude = lastAt < 0 ? null : check({ ...files, dutyScripts: { ...files.dutyScripts, [scriptRel]: { ...files.dutyScripts[scriptRel], stripped: `${stripped0.slice(0, lastAt)}env: process.env${stripped0.slice(lastAt + envCall.length)}` } } });
   say(rawClaude !== null && rawClaude.violations.some((v) => /spawns claude with env: process\.env/.test(v)), "a claude spawn that passes process.env straight through is caught");
   say(rawEnv.violations.some((v) => /spawns codex with env: process\.env/.test(v)), "a codex spawn that passes process.env straight through is caught");
-  const noStrip = check({ ...files, dutyScripts: { ...files.dutyScripts, [scriptRel]: { ...files.dutyScripts[scriptRel], stripped: files.dutyScripts[scriptRel].stripped.replace('import { VAULT_INJECTED_VAR, claudeChildEnv, strippedNote } from "../lib/vault-env.mjs";', "const VAULT_INJECTED_VAR = 'X'; const strippedNote = String; function claudeChildEnv(b) { return { ...b }; }") } } });
+  const noStrip = check({ ...files, dutyScripts: { ...files.dutyScripts, [scriptRel]: { ...files.dutyScripts[scriptRel], stripped: files.dutyScripts[scriptRel].stripped.replace(/import \{[^}]*claudeChildEnv[^}]*\} from "\.\.\/lib\/vault-env\.mjs";/, "const VAULT_INJECTED_VAR = 'X'; const strippedNote = String; const envForRepoRun = (b) => b; const vaultLookup = () => ({}); function claudeChildEnv(b) { return { ...b }; }") } } });
   say(noStrip.violations.some((v) => /does not import claudeChildEnv/.test(v)) && noStrip.violations.some((v) => /defines its own claudeChildEnv/.test(v)), "a duty script with its own env copy instead of the shared vault strip is caught");
-  const blogFirst = check({ ...files, door: files.door.replace("const web = parseWebPropertyAsk(input.subject, written);", "const web0 = parseBlogAsk(input.subject, written); const web = parseWebPropertyAsk(input.subject, written);") });
+  const blogFirst = check({ ...files, door: files.door.replace("const web = parseWebPropertyAsk(input.subject, written, registry);", "const web0 = parseBlogAsk(input.subject, written); const web = parseWebPropertyAsk(input.subject, written, registry);") });
   say(blogFirst.violations.some((v) => /parses blog help BEFORE/.test(v)), "a door that reads blog help before the web-property ask is caught");
   const emlMinted = check({ ...files, door: files.door.replace("const emlKey = input.emlKey;", "let emlKey = input.emlKey;\n  if (!emlKey && env.WP_OS_DOCUMENTS) { emlKey = `inbound-email/${crypto.randomUUID()}.eml`; env.WP_OS_DOCUMENTS.put(emlKey, input.raw); }") });
   say(emlMinted.violations.some((v) => /stores its own \.eml/.test(v)), "a door that mints and stores its own copy of the message again is caught");

@@ -76,6 +76,13 @@ export interface Env {
    * broken one: the chain answers every run on the lanes it always used.
    */
   WP_OS_CLAIMER_CLIENT_ID?: string;
+  /**
+   * 0253: base64 of 32 random bytes; AES-256-GCM key for `secret_handoff` (a value a partner
+   * emailed as `SECRET NAME=value`, held until the Mac vaults it). Set once from the vault
+   * (`npm run vault:set WP_OS_SECRET_HANDOFF_KEY` then `vault:sync:cloudflare`). Unset = the door
+   * fails closed: nothing is stored, the partner is told, the value is still scrubbed.
+   */
+  WP_OS_SECRET_HANDOFF_KEY?: string;
   RESEND_API_KEY?: string;
   /** Runware image generation. Absent means the capability is simply off, not broken. */
   RUNWARE_API_KEY?: string;

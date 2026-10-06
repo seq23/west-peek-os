@@ -91,6 +91,8 @@
     "validate:cc-partners-only": "node scripts/validate/cc-partners-only.mjs && node scripts/validate/cc-partners-only.mjs --self-test",
     "validate:delivery-config": "node scripts/validate/only-the-script-sets-delivery-config.mjs && node scripts/validate/only-the-script-sets-delivery-config.mjs --self-test",
     "validate:kind-rule-switches": "node scripts/validate/a-switch-is-a-switch-on-both-sides.mjs && node scripts/validate/a-switch-is-a-switch-on-both-sides.mjs --self-test",
+    "validate:open-repo-door": "node scripts/validate/any-repo-she-names-and-no-secret-shown.mjs && node scripts/validate/any-repo-she-names-and-no-secret-shown.mjs --self-test && node scripts/drive/push.mjs --self-test",
+    "validate:partner-service-rules": "node scripts/validate/partner-service-rules.mjs && node scripts/validate/partner-service-rules.mjs --self-test",
     "validate:effect-refetch": "node scripts/validate/an-effect-cannot-refetch-itself.mjs && node scripts/validate/an-effect-cannot-refetch-itself.mjs --self-test",
     "validate:one-employee-one-address": "node scripts/validate/one-employee-one-address.mjs && node scripts/validate/one-employee-one-address.mjs --self-test",
     "validate:card-kinds": "node scripts/validate/a-kind-has-one-registry.mjs && node scripts/validate/a-kind-has-one-registry.mjs --self-test",

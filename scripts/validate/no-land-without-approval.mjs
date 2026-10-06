@@ -404,8 +404,11 @@ export function checkDoor(door, parser) {
      * three doors, and one shared reader is the fix. Checked in two parts so a `readableMessage`
      * that quietly stopped decoding, or a door that stopped calling it, is caught either way.
      */
-    const doorChain = /const written = readableMessage\(input\.raw[\s\S]*?parseWebPropertyAsk\(input\.subject,\s*written\)/.test(door);
+    // 0253: the parse may take the registry as its third argument — and when it does, that registry must
+    // be the Worker's own table read (`loadRegistry(env)`), never something the email supplied.
+    const doorChain = /const written = readableMessage\(input\.raw[\s\S]*?parseWebPropertyAsk\(input\.subject,\s*written(?:,\s*registry)?\)/.test(door);
     if (!doorChain) violations.push("the door does not parse the web ask from the partner's own raw request (readableMessage(input.raw) → parseWebPropertyAsk) — pre-approval could come from elsewhere");
+    if (/parseWebPropertyAsk\(input\.subject,\s*written,\s*registry\)/.test(door) && !/registry = await loadRegistry\(env\)/.test(door)) violations.push("the door hands parseWebPropertyAsk a registry that did not come from loadRegistry(env) — the list of repos must be the table, never the email");
     const readerChain = /function readableMessage\([^)]*\)[\s\S]{0,200}?textBodyOf\(raw[\s\S]*?splitQuoted\(text\)\.written/.test(door);
     if (!readerChain) violations.push("readableMessage() no longer decodes via textBodyOf() → splitQuoted().written — the door's request text would be undecoded or would include the quoted original");
   }
@@ -696,7 +699,7 @@ async function selfTest() {
   say(checkWorker(filingLands).violations.some((v) => /touches land_approved_at/.test(v)), "a pre-approval that also approves the landing is caught");
   const noPhrase = worker.replace('("${row.pre_approved_phrase}"): every decision', "(pre-approved): every decision");
   say(checkWorker(noPhrase).violations.some((v) => /does not name the pre-approval phrase/.test(v)), "a finding that hides the phrase is caught");
-  const doorFromElsewhere = door.replace("parseWebPropertyAsk(input.subject, written)", "parseWebPropertyAsk(input.subject, laterReply)");
+  const doorFromElsewhere = door.replace("parseWebPropertyAsk(input.subject, written, registry)", "parseWebPropertyAsk(input.subject, laterReply, registry)");
   say(checkDoor(doorFromElsewhere, parser).violations.some((v) => /partner's own raw request/.test(v)), "a door that parses something other than the verified request is caught");
   const quotedPreApproval = parser.replace("preApprovalIn(written)", "preApprovalIn(text)");
   say(checkDoor(door, quotedPreApproval).violations.some((v) => /above a quote/.test(v)), "a parser that reads a quoted 'your call' is caught");

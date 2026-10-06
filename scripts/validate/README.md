@@ -167,3 +167,19 @@ violations) on breach and proves its own detection with a self-test fixture run.
   said so, and only on finished work: one writer of `work_card.cc_emails`, the requester check
   before the write, resolution through the partner registry, and the send and the preview lane
   holding a cc to everything a To already is. Nine planted defects in its self-test.
+- `any-repo-she-names-and-no-secret-shown.mjs` (`npm run validate:open-repo-door`, 6 Oct 2026) — the
+  three doors the owner opened that day. The property list is `web_property_registry`, seeded by
+  migration 0253 from `WEB_PROPERTIES` (same hosts, same repos, ≥ 6 rows) with a trigger that refuses
+  to re-point a seeded host; a partner's `SECRET NAME=value` is bound only as ciphertext, scrubbed
+  from the stored .eml and from the text every door reads, and `tests/openRepoDoor.test.ts` greps
+  every sink; the RUNBOOK generator writes the deploy route its inputs declare (fixtures: a Pages
+  project, a Worker with routes, nothing → "not declared"); outbound attachments are capped at 10 MB
+  at the transport; a report naming a missing secret must carry its vault lookup; every `blockCard(`
+  in the Porter runner composes its detail from `waitDetail()` and every kind in `porterWaits.ts`
+  clears by email; a host outside her zones gets a record read from Cloudflare's `subdomain`, never a
+  template; a registered repo's README fills its constraints register. `--self-test` plants each
+  defect and asserts it is caught. The npm script also runs `scripts/drive/push.mjs --self-test`.
+- `partner-service-rules.mjs` (`npm run validate:partner-service-rules`, 6 Oct 2026) — parses
+  `docs/PARTNER_SERVICE_RULES.md`: every rule is numbered, tagged ALL-KINDS or REPO-ONLY, and names a
+  code anchor `path#export` that must exist; no service writes `state = 'BLOCKED'` outside the shared
+  block door (`services/blocks.ts`), so no kind can opt out of the one template. Pass count = rules.

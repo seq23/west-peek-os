@@ -146,6 +146,35 @@ export function requestAttachments(raw: string): { attachments: Attachment[]; un
   return attachmentsOf(raw, (type, sentAsFile) => sentAsFile || type.startsWith("image/") || type.includes("application/pdf"), 10);
 }
 
+/** One MIME part's body, decoded from base64 or quoted-printable; the raw body for anything else. */
+function decodePartBody(part: string): string {
+  const split = part.search(/\r?\n\r?\n/);
+  const body = split === -1 ? "" : part.slice(split).replace(/^\r?\n\r?\n/, "");
+  const encoding = (headerIn(part, "content-transfer-encoding") ?? "").toLowerCase();
+  if (encoding.includes("base64")) {
+    try {
+      const bin = atob(body.replace(/[\r\n\s]/g, ""));
+      const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+      return new TextDecoder("utf-8").decode(bytes);
+    } catch {
+      return body;
+    }
+  }
+  if (encoding.includes("quoted-printable")) {
+    return body
+      .replace(/=\r?\n/g, "")
+      .replace(/=([0-9A-Fa-f]{2})/g, (_m, h) => String.fromCharCode(parseInt(h, 16)))
+      .replace(/[\x80-\xff]+/g, (m) => {
+        try {
+          return new TextDecoder("utf-8").decode(Uint8Array.from(m, (c) => c.charCodeAt(0)));
+        } catch {
+          return m;
+        }
+      });
+  }
+  return body;
+}
+
 /**
  * THE TEXT A PERSON WROTE, out of a MIME message: the `text/plain` leaf (decoded), else the
  * `text/html` leaf with its tags stripped, else the body after the headers. A message that is not
@@ -160,33 +189,7 @@ export function textBodyOf(raw: string): string {
   if (!looksMime) return text;
   const boundary = boundaryOf(text);
   const parts = boundary ? leafParts(text, boundary) : [text];
-  const decoded = (part: string): string => {
-    const split = part.search(/\r?\n\r?\n/);
-    const body = split === -1 ? "" : part.slice(split).replace(/^\r?\n\r?\n/, "");
-    const encoding = (headerIn(part, "content-transfer-encoding") ?? "").toLowerCase();
-    if (encoding.includes("base64")) {
-      try {
-        const bin = atob(body.replace(/[\r\n\s]/g, ""));
-        const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
-        return new TextDecoder("utf-8").decode(bytes);
-      } catch {
-        return body;
-      }
-    }
-    if (encoding.includes("quoted-printable")) {
-      return body
-        .replace(/=\r?\n/g, "")
-        .replace(/=([0-9A-Fa-f]{2})/g, (_m, h) => String.fromCharCode(parseInt(h, 16)))
-        .replace(/[\x80-\xff]+/g, (m) => {
-          try {
-            return new TextDecoder("utf-8").decode(Uint8Array.from(m, (c) => c.charCodeAt(0)));
-          } catch {
-            return m;
-          }
-        });
-    }
-    return body;
-  };
+  const decoded = decodePartBody;
   const plain = parts.find((p) => (headerIn(p, "content-type") ?? "").toLowerCase().startsWith("text/plain") && !/attachment/i.test(headerIn(p, "content-disposition") ?? ""));
   if (plain) return decoded(plain).replace(/\r\n/g, "\n").trim();
   const html = parts.find((p) => (headerIn(p, "content-type") ?? "").toLowerCase().startsWith("text/html"));
@@ -397,4 +400,47 @@ export function deckLinks(text: string): string[] {
     if (seen.size >= 5) break;
   }
   return [...seen];
+}
+
+/**
+ * A SECRET'S VALUE, SCRUBBED OUT OF A STORED MESSAGE (0253, 6 Oct 2026). A partner may email
+ * `SECRET NAME=value`; once the Worker has the value encrypted, the `.eml` in R2 must not keep it.
+ * The value is replaced with `marker` wherever it appears plainly (headers, a 7bit body), and every
+ * TEXT part whose DECODED body carries it (base64 or quoted-printable — Gmail sends both) is
+ * re-emitted as an 8bit part with the value replaced, so a reader that decodes the message never
+ * finds it either. Attachments and every other part are left byte-for-byte as they were: the
+ * `request_attachment` rows read their bytes out of this same key on demand.
+ */
+export function scrubSecretValues(raw: string, values: readonly string[], marker = "[secret redacted]"): string {
+  const wanted = values.filter((v) => typeof v === "string" && v.length >= 4);
+  if (!wanted.length || !raw) return raw;
+  const replaceAll = (text: string): string => wanted.reduce((acc, v) => acc.split(v).join(marker), text);
+  let out = replaceAll(raw);
+  const boundary = boundaryOf(out);
+  const parts = boundary ? leafParts(out, boundary) : [out];
+  for (const part of parts) {
+    const type = (headerIn(part, "content-type") ?? "").toLowerCase();
+    const isText = boundary ? type.startsWith("text/") : true;
+    if (!isText) continue;
+    const decoded = decodePartBody(part);
+    if (!wanted.some((v) => decoded.includes(v))) continue;
+    const split = part.search(/\r?\n\r?\n/);
+    const headers = (split === -1 ? part : part.slice(0, split)).replace(/^content-transfer-encoding:.*(?:\r?\n[ \t]+.*)*\r?\n?/gim, "").replace(/\r?\n$/, "");
+    const rebuilt = `${headers}\r\nContent-Transfer-Encoding: 8bit\r\nX-WP-OS-Scrubbed: secret redacted; part re-encoded\r\n\r\n${replaceAll(decoded)}\r\n`;
+    out = out.replace(part, rebuilt);
+  }
+  return out;
+}
+
+/** True when any value is still readable in the message — plainly, or in any decoded text part. Used by the guard. */
+export function carriesSecretValue(raw: string, values: readonly string[]): boolean {
+  const wanted = values.filter((v) => typeof v === "string" && v.length >= 4);
+  if (!wanted.length || !raw) return false;
+  if (wanted.some((v) => raw.includes(v))) return true;
+  const boundary = boundaryOf(raw);
+  const parts = boundary ? leafParts(raw, boundary) : [raw];
+  return parts.some((part) => {
+    const decoded = decodePartBody(part);
+    return wanted.some((v) => decoded.includes(v));
+  });
 }

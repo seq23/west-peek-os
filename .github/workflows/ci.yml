@@ -580,6 +580,21 @@ jobs:
       # lived only as string literals across eight files — so nothing could answer "what can I start
       # myself?" without a grep, and a job-opened kind offered by hand is silently joined to the
       # job's card by duplicateOf() and never worked.
+      # ANY REPO SHE NAMES, AND NO SECRET SHOWN (6 Oct 2026). The property list is an open table seeded
+      # from the array and immutable for the seeded hosts; a partner's `SECRET NAME=value` is stored
+      # encrypted and scrubbed from every sink; the RUNBOOK generator writes the route it was given;
+      # attachments are capped; a missing key carries its vault lookup; every partner-facing wait is
+      # three plain parts that clear by email; a host outside her zones gets a record read from
+      # Cloudflare. Fails on any of those narrowing.
+      - name: Any repo she names, and no secret is ever shown
+        run: npm run validate:open-repo-door
+
+      # THE PARTNER SERVICE RULES (6 Oct 2026): docs/PARTNER_SERVICE_RULES.md is the full numbered list,
+      # each rule tagged ALL-KINDS or REPO-ONLY with the code anchor that enforces it. This fails when
+      # an anchor is gone or a kind writes its own block outside the shared template.
+      - name: Every partner service rule has its code anchor
+        run: npm run validate:partner-service-rules
+
       - name: A kind has one registry
         run: npm run validate:card-kinds
 

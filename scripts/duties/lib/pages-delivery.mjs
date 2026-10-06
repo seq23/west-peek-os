@@ -64,9 +64,25 @@ export const OUTCOMES = Object.freeze(["set", "already set", "failed", "refused"
  * `kind` is "plain" or "secret"; `value` is present ONLY for a plain variable (a secret's value
  * never leaves the vault-injected environment), `vaultKey` names where a secret's value comes from.
  */
-export function classify(project, name) {
+export function classify(project, name, registry = null) {
   const p = String(project ?? "").trim();
   const n = String(name ?? "").trim();
+  /*
+   * THE REGISTRY'S ALLOWANCE (0253): a repo registered from a partner's email carries the secret
+   * NAMES its RUNBOOK lists plus the vendor matches the vault held — the Worker's `web_property_registry`
+   * row, handed to the job as `secret_names` with the repo's own Pages project name. Such a name is
+   * set the same way RESEND_API_KEY is: from the vault-injected environment, to wrangler's stdin.
+   * A reserved name is refused even if a registry lists it; a name off the registry is refused.
+   */
+  if (registry && typeof registry === "object" && registry.project && p === String(registry.project).trim()) {
+    if (/^(ANTHROPIC_|CLAUDE_|DYLD_|LD_|NODE_)/.test(n) || ["PATH", "HOME", "SHELL", "WP_OS_SECRET_HANDOFF_KEY", "WP_OS_MAC_ACCESS_CLIENT_SECRET"].includes(n)) {
+      return { ok: false, kind: null, why: `${n} is reserved — never set from a job` };
+    }
+    if (Array.isArray(registry.names) && registry.names.includes(n)) {
+      return { ok: true, kind: "secret", project: p, name: n, vaultKey: n, why: "a secret the repo's registry row allows" };
+    }
+    return { ok: false, kind: null, why: `${n || "(no name)"} is not on ${p}'s registry allow-list (its RUNBOOK's ## Secrets plus vault vendor matches)` };
+  }
   if (!PAGES_PROJECTS.includes(p)) {
     return { ok: false, kind: null, why: `${p || "(no project)"} is not one of the projects this duty may configure` };
   }
@@ -83,7 +99,7 @@ export function classify(project, name) {
  * Read the model's `pages_env` request into what the script will do and what it refuses. A request
  * that is not a list of `{ project, name }` yields nothing allowed — never a guess.
  */
-export function readRequests(pagesEnv) {
+export function readRequests(pagesEnv, registry = null) {
   const allowed = [];
   const refused = [];
   const seen = new Set();
@@ -93,7 +109,7 @@ export function readRequests(pagesEnv) {
     const key = `${project}\u0000${name}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const verdict = classify(project, name);
+    const verdict = classify(project, name, registry);
     if (verdict.ok) allowed.push({ project: verdict.project, name: verdict.name, kind: verdict.kind, value: verdict.value, vaultKey: verdict.vaultKey });
     else refused.push({ project, name, why: verdict.why });
   }

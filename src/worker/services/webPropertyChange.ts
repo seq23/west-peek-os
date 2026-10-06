@@ -14,6 +14,12 @@ import { PARTNERS, PREVIEW_PARTNER, partnerByEmail } from "../../shared/registry
 import { sendOrPreview } from "./previewApproval";
 import type { SweepCard } from "./workSweep";
 import { hostsSentence, pagesHostsOf, readWebPropertyAsk, sitesOf, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
+import { loadRegistry, recordRepoFacts, registryEntryFor } from "./webPropertyRegistry";
+import { outboundFilesFor } from "./workCardFiles";
+import { recordDnsWaits } from "./dnsWaits";
+import { missingSecretLine, waitDetail } from "../../shared/work/porterWaits";
+import { dueLine } from "../../shared/intake/dueTime";
+import type { MissingSecret } from "../../shared/work/localJobs";
 import { approvedAnswers, askLines, decidedFromAsks, everyAskRecommended, readApprovalReply, readAsks, stripLateThreadPrefix, type Ask } from "../../shared/work/approvalReply";
 import { defaultReadReplyIntent, readReplyIntent, type ReplyIntent, type ReplyIntentReader } from "./replyIntent";
 import { isReplyToOurs } from "./emailThread";
@@ -166,6 +172,24 @@ export interface WebPropertyChangeRow {
   /** 0240. Option 3 — "publish" with new materials: lands only a build green AFTER it. */
   publish_approved_at?: string | null;
   publish_approved_by?: string | null;
+  /** 0253: keys the vault does not hold (JSON list of MissingSecret). Never a value. */
+  missing_secrets_json?: string | null;
+}
+
+/** 0253: the keys a card still lacks, read back. */
+export function missingSecretsOf(row: Pick<WebPropertyChangeRow, "missing_secrets_json">): MissingSecret[] {
+  try {
+    const v = JSON.parse(row.missing_secrets_json ?? "[]");
+    return Array.isArray(v) ? v.filter((m) => m && typeof m === "object" && typeof m.name === "string").map((m) => ({ name: String(m.name), vendor_url: m.vendor_url ?? null, searched: Array.isArray(m.searched) ? m.searched.map(String) : [] })) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 0253: the "Still missing" section every email about a card carries while a key is absent. */
+export function missingSecretsSection(missing: readonly MissingSecret[]): { label: string; bullets: string[] } | null {
+  if (!missing.length) return null;
+  return { label: "Still missing (keys)", bullets: missing.map((m) => missingSecretLine(m.name, m.vendor_url ?? null, m.searched.join(", ") || null)) };
 }
 
 // A card's files and its missing materials live in one shared module (0237) — every employee's
@@ -233,12 +257,22 @@ async function tellRequester(
   const routedBy = await routedByFor(env, card.assigned_from_card_id, PORTER_NAME);
   const ctx = await porterContext(env, card.id);
   const onThread = replyOnThread ?? (await threadRootFor(env, card.id));
+  /*
+   * 0253: THE FILES THE JOB MADE ride on DONE and PREVIEW — attached when the set fits the 10 MB cap,
+   * listed by name either way — and THE KEYS STILL MISSING ride on EVERY notice until they arrive,
+   * each with where to get one and the exact email that sends it. Both read from the card, never
+   * from the model's words.
+   */
+  const files = notice.kind === "DONE" || notice.kind === "PREVIEW" ? await outboundFilesFor(env, card.id) : { attachments: [], section: null };
+  const keysRow = await readWebPropertyChange(env, card.id);
+  const keys = missingSecretsSection(keysRow ? missingSecretsOf(keysRow) : []);
   let out: { sent: boolean; reason: string; threadToken?: string | null };
   try {
     out = await sendOrPreview(env, {
       to,
       // THE LATEST PREVIEW ON EVERY EMAIL (owner, 23 Sep 2026), once one exists — read in one place.
-      email: { employee: PORTER_NAME, ...email, sections: [...email.sections, ...(ctx?.previewLine && !email.sections.some((s) => /preview/i.test(s.label)) ? [{ label: "Current preview", bullets: [ctx.previewLine] }] : [])], details: email.details ?? null, routedBy },
+      email: { employee: PORTER_NAME, ...email, sections: [...email.sections, ...(files.section ? [files.section] : []), ...(keys ? [keys] : []), ...(ctx?.previewLine && !email.sections.some((s) => /preview/i.test(s.label)) ? [{ label: "Current preview", bullets: [ctx.previewLine] }] : [])], details: email.details ?? null, routedBy },
+      ...(files.attachments.length ? { attachments: files.attachments } : {}),
       objectType: "work_card",
       objectId: card.id,
       firmScope: card.firm_scope,
@@ -677,6 +711,9 @@ export async function parkPhase(
   const parts = await readParts(env, card.id);
   // One run covers every repo; BUILD and LAND work them one after another, so the ceiling scales.
   const maxSeconds = spec.phases[phase].maxSeconds * (phase === "PLAN" ? 1 : Math.max(1, parts.length));
+  // 0253: the registry names the repo's GitHub home and the secret NAMES the duty may inject.
+  const registry = await loadRegistry(env);
+  const entry = await registryEntryFor(env, row.target_repo);
   const payload: LocalJobPayload & { queue_max_seconds: number } = {
     card_kind: WEB_PROPERTY_CHANGE_KIND,
     phase,
@@ -687,8 +724,13 @@ export async function parkPhase(
     card: { id: card.id, title: card.title, requested_by: card.requested_by_email ?? null },
     target_repo: row.target_repo,
     property_host: row.property_host,
-    sites: sitesOf(row.property_host),
-    pages_hosts: pagesHostsOf(row.property_host),
+    github_repo: entry?.githubRepo ?? null,
+    secret_names: [...(entry?.secretNames ?? [])],
+    missing_secrets: missingSecretsOf(row),
+    constraints: [...(entry?.constraints ?? [])],
+    due: readWebPropertyAsk(card.request_json)?.due ?? null,
+    sites: sitesOf(row.property_host, registry),
+    pages_hosts: pagesHostsOf(row.property_host, registry),
     drive: { folder_id: row.drive_folder_id, folder_url: row.drive_folder_url },
     ask: row.ask,
     plan: row.plan_filed_at
@@ -935,7 +977,7 @@ async function blockWithAsks(env: Env, card: WebPropertyChangeCard, row: WebProp
     trying: card.title,
     employee: PORTER_NAME,
     who: whoFor(card),
-    detail: askBlockText(asks, { publishReady: row.publish_ready !== 0, placeholders: list(row.placeholders_json) }).slice(0, 900),
+    detail: [waitDetail("PLAN_APPROVAL"), askBlockText(asks, { publishReady: row.publish_ready !== 0, placeholders: list(row.placeholders_json) })].join("\n").slice(0, 900),
   });
 }
 
@@ -1007,7 +1049,7 @@ async function blockOnPreview(env: Env, card: WebPropertyChangeCard, row: WebPro
     trying: card.title,
     employee: PORTER_NAME,
     who: whoFor(card),
-    detail: previewBlockText(row, await readParts(env, card.id)).slice(0, 900),
+    detail: [waitDetail("PREVIEW_APPROVAL", { what: cleanPreviewUrls(row.preview_url, pagesHostsOf(row.property_host ?? null, await loadRegistry(env)), row.branch ?? "") }), previewBlockText(row, await readParts(env, card.id))].join("\n").slice(0, 900),
   });
   await update(env, card.id, { preview_emailed_at: new Date().toISOString() });
   return why;
@@ -1213,16 +1255,13 @@ export async function applyReport(
        * partner already heard once that the lane is asleep (`sendAsleep`). They must never be told
        * "Blocked" for a laptop lid.
        */
+      // 0253: an infrastructure wait, in the three-part shape; it clears itself and the email says so.
       const why2 = await blockCard(env, card, {
-        reason: "a_lane_refused_the_work",
+        reason: "a_question_for_you",
         trying: card.title,
         employee: PORTER_NAME,
-        who: "SEQUOIA",
-        lane: "Claude Code (her Mac)",
-        laneKey: "claude_code",
-        laneKind: "LANE_DOWN",
-        vendorWords: "no machine claimed this job before its queue ceiling — the Mac has been asleep for that long, or the local-jobs launchd job is not running",
-        raw: why,
+        who: whoFor(card),
+        detail: waitDetail("MAC_ASLEEP", { why: dueLine(readWebPropertyAsk(card.request_json)?.due) }).slice(0, 900),
       });
       return { finished: false, blocked: true, progressed: false, detail: why2 };
     }
@@ -1235,6 +1274,10 @@ export async function applyReport(
     return { finished: false, blocked: false, progressed: false, detail: `${row.phase} reported something the OS could not read: ${problem}` };
   }
   await recordHistory(env, row, { run_id: run.id, phase: report.phase, status: report.status, reason: (report.reason ?? "").slice(0, 300) });
+
+  // 0253: what the repo itself said, the keys the vault lacks (only with the lookup that proves it), the runs.
+  const absorbed = await absorbRepoReport(env, card, row, report);
+  if (absorbed) return absorbed;
 
   if (report.status === "failed" && typeof report.waits_seconds === "number") {
     return holdUntilAPlanResets(env, card, report.phase, report.waits_seconds, report.reason ?? "");
@@ -1257,16 +1300,13 @@ export async function applyReport(
     if (card.work_attempts < 3) {
       return { finished: false, blocked: false, progressed: false, detail: `${report.phase} could not proceed on the Mac (attempt ${card.work_attempts}): ${why}` };
     }
+    // 0253: after the bound, ONE email to the partner who asked — what was tried, and the reply that clears it.
     const blocked = await blockCard(env, card, {
-      reason: "a_lane_refused_the_work",
+      reason: "a_question_for_you",
       trying: card.title,
       employee: PORTER_NAME,
-      who: "SEQUOIA",
-      lane: "Claude Code (her Mac)",
-      laneKey: "claude_code",
-      laneKind: "LANE_DOWN",
-      vendorWords: `the ${report.phase} script stopped itself three times: ${why}`,
-      raw: why,
+      who: whoFor(card),
+      detail: waitDetail("TRIED_AND_STOPPED", { what: `${report.phase} three times`, why }).slice(0, 900),
     });
     return { finished: false, blocked: true, progressed: false, detail: blocked };
   }
@@ -1324,6 +1364,145 @@ export async function applyReport(
  * She is told once, in words; a "publish" approval is withdrawn (it was for new materials, and there
  * are none), and the card waits on the SAME preview, whose approval still binds.
  */
+/**
+ * WHAT EVERY REPORT MAY CARRY SINCE 0253, read in one place:
+ *   · `repo_facts` — the host, Pages project and secret NAMES the duty read from the repo's own
+ *     config and RUNBOOK → the registry row (never from the email);
+ *   · `missing_secrets` — keys the vault does not hold. REFUSED unless the report also carries the
+ *     vault lookup that proves it searched (names only): "we have many api keys in the vault and any
+ *     job should always check the vault first" (owner, 6 Oct 2026). A refused report is a failed
+ *     attempt, retried, never a question for the partner;
+ *   · `runs` — the RUNBOOK-named scripts the script ran for the model, each recorded as a finding.
+ * Returns an outcome only when the report is refused.
+ */
+async function absorbRepoReport(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, report: LocalJobReport): Promise<RunOutcome | null> {
+  if (report.repo_facts && report.repo_facts.repo) {
+    await recordRepoFacts(env, report.repo_facts.repo, { host: report.repo_facts.host ?? null, pagesHost: report.repo_facts.pages_host ?? null, secretNames: report.repo_facts.secret_names ?? null, githubRepo: report.repo_facts.github_repo ?? null, constraints: report.repo_facts.constraints ?? null });
+    if (report.repo_facts.runbook_generated) await appendFinding(env, card.id, `${report.repo_facts.repo} had no RUNBOOK.md; one was generated from its package.json and wrangler config and committed on the job's branch.`);
+  }
+  if (Array.isArray(report.missing_secrets)) {
+    const searched = [...new Set([...(report.vault_lookup?.searched ?? []), ...report.missing_secrets.flatMap((m) => m.searched ?? [])])];
+    if (report.missing_secrets.length && searched.length === 0) {
+      await appendFinding(env, card.id, `${report.phase} named a missing key (${report.missing_secrets.map((m) => m.name).join(", ")}) without a vault lookup — the vault is always checked first; this attempt does not count.`);
+      return { finished: false, blocked: false, progressed: false, detail: `${report.phase} reported a missing secret without a vault lookup (names searched) — refused; the vault is checked first` };
+    }
+    const missing: MissingSecret[] = report.missing_secrets.map((m) => ({ name: String(m.name), vendor_url: m.vendor_url ?? null, searched: (m.searched?.length ? m.searched : searched).map(String) }));
+    const before = missingSecretsOf(row).map((m) => m.name).sort().join(",");
+    await update(env, card.id, { missing_secrets_json: JSON.stringify(missing) });
+    if (missing.length && before !== missing.map((m) => m.name).sort().join(",")) {
+      await appendFinding(env, card.id, `Keys the vault does not hold: ${missing.map((m) => m.name).join(", ")} (searched ${searched.join(", ")}). Everything that does not need them goes ahead; each email names them and how to send one.`);
+    }
+  }
+  if (Array.isArray(report.dns) && report.dns.length) {
+    const told = await recordDnsWaits(env, { cardId: card.id, repo: row.target_repo, requestedBy: card.requested_by_email ?? null, firmScope: card.firm_scope, records: report.dns });
+    if (told.length) await appendFinding(env, card.id, `A host outside the firm's Cloudflare zones: ${told.join(", ")}. The partner has the exact record to add at their registrar; the site is live on pages.dev meanwhile and I re-check every 15 minutes for 7 days.`);
+  }
+  // Addendum 5: work the partner dated for later becomes its own card, leased until its week — never lost on close.
+  if (Array.isArray(report.deferred) && report.deferred.length) {
+    for (const d of report.deferred.slice(0, 5)) await deferWork(env, card, row, d);
+  }
+  if (Array.isArray(report.items) && report.items.length) {
+    await appendFinding(env, card.id, `Per item: ${report.items.map((i) => `${i.item} — ${i.state.replace("_", " ")}${i.note ? ` (${i.note})` : ""}`).join("; ")}`);
+  }
+  if (Array.isArray(report.runs) && report.runs.length) {
+    await appendFinding(env, card.id, `Ran for the partner's ask: ${report.runs.map((r) => `${r.script} (${r.env}) → exit ${r.exit}${r.line ? `: ${r.line.slice(0, 160)}` : ""}`).join("; ")}`);
+  }
+  if (Array.isArray(report.deliverables) && report.deliverables.length) {
+    await appendFinding(env, card.id, `Files for the partner: ${report.deliverables.map((d) => `${d.filename} (${d.bytes} bytes, ${d.via})`).join(", ")}.`);
+  }
+  return null;
+}
+
+/**
+ * DEFERRED WORK WITH A DATE (0253, addendum 5): "for next week, …" is its own card on the same repo,
+ * for the same partner, leased until the date so the sweep leaves it alone until then and then
+ * runs it as any other job; the partner hears about it when it runs. Idempotent on (card, ask).
+ */
+export async function deferWork(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, d: { ask: string; due_at: string; words?: string }): Promise<void> {
+  const due = Date.parse(d.due_at);
+  if (!Number.isFinite(due) || !String(d.ask ?? "").trim()) return;
+  const key = `deferred:${card.id}:${d.ask.slice(0, 60)}`;
+  const already = await env.WP_OS_DB.prepare("SELECT id FROM work_card WHERE description LIKE ?1 LIMIT 1").bind(`%${key}%`).first<{ id: string }>();
+  if (already) return;
+  const ask = readWebPropertyAsk(card.request_json);
+  const { createWorkCardInternal } = await import("./workCards");
+  const { systemIdentity } = await import("./dealIntake");
+  const made = await createWorkCardInternal(env, systemIdentity(), {
+    title: `From ${card.requested_by_email ?? "a partner"}: ${d.ask.slice(0, 80)} (deferred to ${d.due_at.slice(0, 10)})`,
+    description: [`Deferred from card ${card.id} on ${row.target_repo}: "${d.ask.slice(0, 1200)}"`, d.words ? `Their words: "${d.words.slice(0, 200)}"` : "", `Runs on or after ${d.due_at}.`, key].filter(Boolean).join("\n"),
+    owner_type: "AI",
+    owner_id: PORTER_ID,
+    priority: "NORMAL",
+    firm_scope: card.firm_scope,
+    next_action: `Waiting for its week (${d.due_at.slice(0, 10)}); then planned, built and previewed like any site job.`,
+  });
+  await env.WP_OS_DB.prepare("UPDATE work_card SET kind = ?2, requested_by_email = ?3, lease_until = ?4, waiting_until = ?4, waiting_for = ?5, assigned_from_card_id = ?6 WHERE id = ?1")
+    .bind(made.id, WEB_PROPERTY_CHANGE_KIND, card.requested_by_email ?? null, new Date(due).toISOString(), `its week (${d.due_at.slice(0, 10)})`, card.id)
+    .run();
+  await openWebPropertyChange(env, { cardId: made.id, ask: { drive_folder_id: row.drive_folder_id, drive_folder_url: row.drive_folder_url, drive_file_url: null, property_host: row.property_host, target_repo: row.target_repo, site: ask?.site ?? null, ask: d.ask, pre_approval: null, force: null, addressee: "Porter", property_unresolved: false }, firmScope: card.firm_scope });
+  await appendFinding(env, card.id, `Deferred, as asked: "${d.ask.slice(0, 160)}" — its own card (${made.id}) runs on ${d.due_at.slice(0, 10)}.`);
+}
+
+/**
+ * A KEY ARRIVED BY EMAIL (0253): every open card for that repo — or any card naming that key as
+ * missing — drops it from its list and rebuilds, so the feature that needed it ships without a
+ * second ask and without a new card. A BLOCKED card is answered the way a follow-up answers it:
+ * `block_answer` reads "changes: …", which the runner reads as a CHANGES rebuild at either stage
+ * (plan or preview); an open card just carries the intent to its next BUILD. Returns the card ids.
+ */
+export async function resumeForSecret(env: Env, input: { name: string; repo: string | null; byFirmUserId: string | null }): Promise<string[]> {
+  const rows = await env.WP_OS_DB.prepare(
+    `SELECT w.work_card_id, w.target_repo, w.missing_secrets_json, w.current_run_id, c.state
+       FROM web_property_change w JOIN work_card c ON c.id = w.work_card_id
+      WHERE w.phase != 'DONE' AND c.state NOT IN ('DONE', 'CANCELLED')
+        AND (w.missing_secrets_json LIKE ?1 OR (?2 IS NOT NULL AND w.target_repo = ?2 AND w.missing_secrets_json != '[]'))`,
+  )
+    .bind(`%"name":"${input.name}"%`, input.repo)
+    .all<{ work_card_id: string; target_repo: string; missing_secrets_json: string; current_run_id: string | null; state: string }>();
+  const resumed: string[] = [];
+  const now = new Date().toISOString();
+  for (const r of rows.results ?? []) {
+    const left = missingSecretsOf(r).filter((m) => m.name !== input.name);
+    if (left.length === missingSecretsOf(r).length && r.target_repo !== input.repo) continue;
+    const words = `changes: the key ${input.name} has arrived in the vault — build and ship the feature that needed it`;
+    await update(env, r.work_card_id, { missing_secrets_json: JSON.stringify(left), refresh_intent: "CHANGES", refresh_requested_at: now, rebuilt_for: words });
+    await appendFinding(env, r.work_card_id, `${input.name} arrived by email and is in the vault. Rebuilding so what needed it ships; the next email carries the result.`);
+    if (r.state === "BLOCKED") {
+      await env.WP_OS_DB.prepare(
+        `UPDATE work_card SET state = 'OPEN', work_attempts = 0, work_steps = 0, lease_until = NULL, waiting_until = NULL, waiting_for = NULL, block_answer = ?2, block_answered_by = ?3, block_answered_at = ?4, block_nag_at = NULL, updated_at = ?4 WHERE id = ?1`,
+      )
+        .bind(r.work_card_id, words, input.byFirmUserId ?? "secret_handoff", now)
+        .run();
+    }
+    resumed.push(r.work_card_id);
+  }
+  // ALL KINDS (owner, 6 Oct 2026): any other employee's card blocked on this key by name is answered the same way.
+  const others = await env.WP_OS_DB.prepare(
+    `SELECT id FROM work_card WHERE state = 'BLOCKED' AND (kind IS NULL OR kind != ?2) AND block_needed LIKE ?1`,
+  )
+    .bind(`%${input.name}%`, WEB_PROPERTY_CHANGE_KIND)
+    .all<{ id: string }>();
+  for (const o of others.results ?? []) {
+    const words = `the key ${input.name} has arrived in the vault — carry on with what needed it`;
+    await env.WP_OS_DB.prepare(
+      `UPDATE work_card SET state = 'OPEN', work_attempts = 0, work_steps = 0, lease_until = NULL, waiting_until = NULL, waiting_for = NULL, block_answer = ?2, block_answered_by = ?3, block_answered_at = ?4, block_nag_at = NULL, updated_at = ?4 WHERE id = ?1`,
+    )
+      .bind(o.id, words, input.byFirmUserId ?? "secret_handoff", now)
+      .run();
+    await appendFinding(env, o.id, `${input.name} arrived by email and is in the vault; the card is back in the queue.`);
+    resumed.push(o.id);
+  }
+  return resumed;
+}
+
+/** 0253: what a Porter card's finished or waiting email carries besides its words — the files, and the keys still missing. */
+export async function porterEmailExtras(env: Env, cardId: string, withFiles: boolean): Promise<{ attachments: Awaited<ReturnType<typeof outboundFilesFor>>["attachments"]; sections: Array<{ label: string; bullets: string[] }> }> {
+  const files = withFiles ? await outboundFilesFor(env, cardId) : { attachments: [], section: null };
+  const row = await readWebPropertyChange(env, cardId);
+  const keys = missingSecretsSection(row ? missingSecretsOf(row) : []);
+  return { attachments: files.attachments, sections: [...(files.section ? [{ label: files.section.label, bullets: [...files.section.bullets] }] : []), ...(keys ? [keys] : [])] };
+}
+
 async function applyUnchanged(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, report: LocalJobReport): Promise<RunOutcome> {
   const wasPublish = row.refresh_intent === "PUBLISH";
   const patch: Partial<WebPropertyChangeRow> = { refresh_intent: null, ...(report.materials ? { materials_fingerprint: report.materials } : {}) };
@@ -1763,7 +1942,7 @@ async function holdCard(env: Env, card: WebPropertyChangeCard, row: WebPropertyC
     trying: card.title,
     employee: PORTER_NAME,
     who: whoFor(card),
-    detail: `You said: "${said.slice(0, 300)}". Nothing is built or landed. Reply "approved" to carry on, "changes: …" to re-plan, or "drop it" on the card.`.slice(0, 900),
+    detail: waitDetail("HELD_BY_YOU", { what: said }).slice(0, 900),
   });
   return { finished: false, blocked: true, progressed: false, detail: why };
 }
@@ -1818,7 +1997,7 @@ async function applyBuild(env: Env, card: WebPropertyChangeCard, row: WebPropert
     trying: card.title,
     employee: PORTER_NAME,
     who: whoFor(card),
-    detail: `The PR is green: ${report.pr_url}. Land on green is OFF for this kind, so say "land it" to merge and deploy, or say what to change.`,
+    detail: waitDetail("LAND_WORD", { what: report.pr_url ?? "the PR" }).slice(0, 900),
   });
   return { finished: false, blocked: true, progressed: false, detail: why };
 }
@@ -1856,7 +2035,7 @@ async function applyBuildOfParts(env: Env, card: WebPropertyChangeCard, row: Web
     trying: card.title,
     employee: PORTER_NAME,
     who: whoFor(card),
-    detail: `All ${parts.length} PRs are green: ${agg.pr_url}. Land on green is OFF for this kind, so say "land it" to merge and deploy them together, or say what to change.`.slice(0, 900),
+    detail: waitDetail("LAND_WORD", { what: `all ${parts.length} PRs (${agg.pr_url})` }).slice(0, 900),
   });
   return { finished: false, blocked: true, progressed: false, detail: why };
 }
@@ -2043,7 +2222,7 @@ async function blockAsQuestion(env: Env, card: WebPropertyChangeCard, classifica
     trying: card.title,
     employee: PORTER_NAME,
     who: whoFor(card),
-    detail: `This reads like a question rather than something to build (${classification.reason}).${triedNote} Reply here with what you'd like done, or just answer — nothing has been started.`.slice(0, 900),
+    detail: waitDetail("QUESTION_NOT_A_JOB", { why: `${classification.reason}${triedNote}` }).slice(0, 900),
   });
   await appendEvent(env, {
     eventType: "work_card.classified_as_question",
@@ -2236,11 +2415,11 @@ export async function runWebPropertyChangeCard(
   }
   if (!row) {
     const why = await blockCard(env, card, {
-      reason: "the_brief_is_missing",
+      reason: "a_question_for_you",
       trying: card.title,
       employee: PORTER_NAME,
       who: whoFor(card),
-      detail: `Send the Google Drive FOLDER link with the package and name the site (${hostsSentence()}).`,
+      detail: waitDetail("WHICH_SITE", { hosts: hostsSentence(await loadRegistry(env)) }).slice(0, 900),
     });
     return { finished: false, blocked: true, progressed: false, detail: why };
   }
@@ -2252,7 +2431,7 @@ export async function runWebPropertyChangeCard(
       trying: card.title,
       employee: PORTER_NAME,
       who: whoFor(card),
-      detail: `Which site? ${hostsSentence()} — reply with the one, and I'm on it.`,
+      detail: waitDetail("WHICH_SITE", { hosts: hostsSentence(await loadRegistry(env)) }).slice(0, 900),
     });
     return { finished: false, blocked: true, progressed: false, detail: why };
   }
@@ -2381,7 +2560,7 @@ export async function runWebPropertyChangeCard(
         trying: card.title,
         employee: PORTER_NAME,
         who: whoFor(card),
-        detail: `You said: "${answer.slice(0, 300)}". Nothing is built. Reply "changes: …" with what to change and Porter re-plans, or "drop it" on the card.`.slice(0, 900),
+        detail: waitDetail("HELD_BY_YOU", { what: answer }).slice(0, 900),
       });
       return { finished: false, blocked: true, progressed: false, detail: why };
     }
@@ -2523,7 +2702,7 @@ export async function runWebPropertyChangeCard(
           trying: card.title,
           employee: PORTER_NAME,
           who: whoFor(card),
-          detail: `The PR is green: ${row.pr_url}. Land on green is OFF for this kind, so say "land it" to merge and deploy, or say what to change.`,
+          detail: waitDetail("LAND_WORD", { what: row.pr_url ?? "the PR" }).slice(0, 900),
         });
         return { finished: false, blocked: true, progressed: false, detail: why };
       }
@@ -2543,7 +2722,7 @@ export async function runWebPropertyChangeCard(
       trying: card.title,
       employee: PORTER_NAME,
       who: whoFor(card),
-      detail: `Cannot land: ${parked.reason}. Say how to proceed.`,
+      detail: waitDetail("TRIED_AND_STOPPED", { what: "to land it", why: parked.reason }).slice(0, 900),
     });
     return { finished: false, blocked: true, progressed: false, detail: why };
   }

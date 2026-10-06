@@ -53,6 +53,27 @@ export interface EmailPayload {
    * overrides any Message-ID a caller supplies. Anything a transport refuses must not be put here.
    */
   headers?: Readonly<Record<string, string>>;
+  /**
+   * 0253: files the message carries — an export, a QR code — base64, with a name and a type. Composed
+   * only by `services/execEmail.ts` from `work_card_file` rows the job marked as deliverables, and
+   * held to `OUTBOUND_ATTACHMENTS_MAX_BYTES` in total; a larger set is linked, never attached.
+   */
+  attachments?: readonly EmailAttachment[];
+}
+
+export interface EmailAttachment {
+  filename: string;
+  /** Base64 of the bytes. */
+  content: string;
+  contentType?: string;
+}
+
+/** 10 MB, total, per message: Resend's own ceiling is 40 MB and a partner's inbox is smaller than that. */
+export const OUTBOUND_ATTACHMENTS_MAX_BYTES = 10 * 1024 * 1024;
+
+/** The decoded size of a set of attachments, for the cap. */
+export function attachmentsBytes(attachments: readonly EmailAttachment[] | undefined): number {
+  return (attachments ?? []).reduce((n, a) => n + Math.floor((a.content.length * 3) / 4) - (a.content.endsWith("==") ? 2 : a.content.endsWith("=") ? 1 : 0), 0);
 }
 
 export interface EmailSendResult {

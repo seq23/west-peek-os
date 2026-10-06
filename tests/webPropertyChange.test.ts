@@ -437,7 +437,8 @@ describe("Scooter emails a package for the ventures site", () => {
     const c = await card(porterCardId);
     expect(c.state).toBe("BLOCKED");
     expect(String(c.description)).toMatch(/Not approved by scooter@westpeek.ventures: "No — hold on/);
-    expect(String(c.block_needed)).toMatch(/Nothing is built/);
+    // 0253: every wait is three parts — what, why, and the exact reply that clears it — from one template.
+    expect(String(c.block_needed)).toMatch(/^Waiting on: your word to carry on\. Why: you said "[^"]+", so nothing is built or landed until you say otherwise\. To clear it by email: reply "approved" to carry on, "changes: <what to change>" to re-plan, or "drop it" to close it\./);
     const row = (await readWebPropertyChange(env, porterCardId))!;
     expect(row.plan_approved_at, "\"no\" never sets plan_approved_at").toBeNull();
     expect(row.phase).toBe("PLAN");
@@ -523,7 +524,7 @@ describe("Scooter emails a package for the ventures site", () => {
     expect(held.forced_by).toBeNull();
     expect(held.preview_emailed_at).toBeTruthy();
     expect(await liveJobFor(porterCardId), "nothing parked for the Mac").toBeNull();
-    expect(String((await card(porterCardId)).block_needed)).toMatch(/^PREVIEW READY\./);
+    expect(String((await card(porterCardId)).block_needed)).toMatch(/^Waiting on: your word on the preview[\s\S]*Why: every site change previews before it goes live[\s\S]*To clear it by email: reply "approved"[\s\S]*PREVIEW READY\./);
     const c0 = await card(porterCardId);
     const gate = await parkPhase(env, { id: porterCardId, title: String(c0.title), kind: WEB_PROPERTY_CHANGE_KIND, owner_id: "aie_porter", state: "IN_PROGRESS", work_attempts: 0, firm_scope: "west-peek", requested_by_email: SCOOTER }, held, "LAND", await rulesFor(env, WEB_PROPERTY_CHANGE_KIND));
     expect(gate.parked).toBe(false);
@@ -611,11 +612,11 @@ describe("land on green OFF asks first", () => {
       expect(out.outcome).toBe("BLOCKED");
       const c = await card(porterId);
       expect(c.block_who).toBe("SEQUOIA");
-      expect(String(c.block_needed)).toMatch(/Land on green is OFF/);
+      expect(String(c.block_needed)).toMatch(/^Waiting on: your word to land https:\/\/github\.com\/[^.]+\. Why: land-on-green is switched off for this kind[\s\S]*To clear it by email: reply "land it" to merge and deploy, or "changes: <what to change>"\./);
       expect(await liveJobFor(porterId), "nothing queued for the Mac while she decides").toBeNull();
       const question = sent.filter((m) => m.to === SEQUOIA && /: A question for you$/.test(m.subject)).pop()!;
       expect(question.subject, "never \"blocked\" to a partner").not.toMatch(/blocked/i);
-      expect(question.text, "the question email carries the question, not the plan").toMatch(/Land on green is OFF/);
+      expect(question.text, "the question email carries the three-part wait, not the plan").toMatch(/Waiting on: your word to land[\s\S]*land-on-green is switched off[\s\S]*To clear it by email: reply "land it"/);
       expect(question.text).not.toMatch(/THE PLAN, in full/);
       await answerBlock(env, porterId, "fu_sequoia_taylor", { action: "ANSWER", text: "land it" });
       const landing = await tickFor(porterId);
@@ -699,7 +700,7 @@ describe("a plan that is not publish-ready previews first (21 Sep 2026)", () => 
     expect(row.phase, "never reached LAND").toBe("BUILD");
     expect(await liveJobFor(id), "nothing parked for the Mac").toBeNull();
     const c = await card(id);
-    expect(String(c.block_needed)).toMatch(/^PREVIEW READY\. Look at it here: https:\/\/work-wpc-comm1234\.west-peek-ventures\.pages\.dev\./);
+    expect(String(c.block_needed)).toMatch(/^Waiting on: your word on the preview at https:\/\/work-wpc-comm1234\.west-peek-ventures\.pages\.dev\. Why: every site change previews before it goes live[\s\S]*To clear it by email: reply "approved" to publish it[\s\S]*PREVIEW READY\. Look at it here: https:\/\/work-wpc-comm1234\.west-peek-ventures\.pages\.dev\./);
     expect(String(c.block_needed)).toMatch(/reply "approved" to land it/i);
     // THE PREVIEW EMAIL (owner's spec, 23 Sep 2026): the four reply options ARE the TL;DR; then
     // the link, the placeholders still showing, and the card. No proof dump, never "blocked".
@@ -841,7 +842,7 @@ describe("the named bypass: \"approved to production\" (21 Sep 2026)", () => {
     const row = (await readWebPropertyChange(env, porter.id))!;
     expect(row.forced_by).toBeNull();
     expect(row.phase).toBe("BUILD");
-    expect(String((await card(porter.id)).block_needed)).toMatch(/^PREVIEW READY/);
+    expect(String((await card(porter.id)).block_needed)).toMatch(/^Waiting on: your word on the preview[\s\S]*Why: every site change previews before it goes live[\s\S]*To clear it by email: reply "approved"[\s\S]*PREVIEW READY\./);
     // "approved to production" on the PREVIEW email forces it too — from the requester.
     await replyFrom(SCOOTER, "approved to production", await porter.token());
     const landing = await tickFor(porter.id);
@@ -1162,10 +1163,12 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     expect(new TextDecoder().decode(bytes)).toMatch(/fake photo bytes/);
   });
 
-  it("a Mac 'blocked' is never a question for Scooter: two retries with no email, then a lane fault addressed to Sequoia", async () => {
+  it("a Mac 'blocked' is never a question for Scooter until the bound: two retries with no email, then ONE three-part email to the partner who asked (owner, 6 Oct 2026)", async () => {
     // 21 Sep 2026: a stale claimer answered "no Drive FOLDER is on the card" and the OS emailed
     // Scooter to send a folder link for a photo he had attached, then parked the card for a
-    // 24-hour nag. The partner's decisions travel only as the plan's asks.
+    // 24-hour nag. The partner's decisions travel only as the plan's asks. 6 Oct 2026: after the
+    // bound the partner who asked gets ONE email — what was tried, why, and the reply that restarts
+    // it — never a "stuck" addressed to Sequoia and never a link into the OS.
     const before = sent.length;
     const stale = { phase: "PLAN", status: "blocked", reason: "no Drive FOLDER is on the card — send the folder link (a file link is not enough)" };
     await macReports(porterId, stale);
@@ -1183,15 +1186,19 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     expect(third.summary).toMatch(/PLAN queued/);
     await macReports(porterId, stale);
     const fault = await tickFor(porterId);
-    expect(fault.outcome, "attempt 3: a lane fault").toBe("BLOCKED");
+    expect(fault.outcome, "attempt 3: the bound").toBe("BLOCKED");
     const c = await card(porterId);
-    expect(c.block_who, "addressed to the owner of the lane, never the requesting partner").toBe("SEQUOIA");
-    expect(c.block_reason).toBe("a_lane_refused_the_work");
-    expect(sent.slice(before).filter((m) => m.to === SCOOTER).length, "Scooter got nothing").toBe(0);
-    expect(sent.slice(before).filter((m) => m.to === SEQUOIA_PARTNER_EMAIL && /stuck|blocked/i.test(m.subject)).length, "the owner got the lane fault, once").toBe(1);
+    expect(c.block_who, "addressed to the partner who asked — never a lane owner").toBe("SCOOTER");
+    expect(c.block_reason, "a question in plain words, not a technical fault").toBe("a_question_for_you");
+    expect(String(c.block_needed)).toMatch(/^Waiting on: a word from you\. Why: I tried this PLAN three times and could not finish: no Drive FOLDER is on the card[\s\S]*To clear it by email: reply "try again" to run it once more, "changes: <what to change>" to change the ask, or "drop it" to close it\./);
+    expect(String(c.block_needed).split("To clear it by email:")[1], "the clearing line is email-only: never a link into the OS, never a card, never \"ask Sequoia\"").not.toMatch(/on the card|ask Sequoia|https?:\/\//i);
+    const toScooter = sent.slice(before).filter((m) => m.to === SCOOTER);
+    expect(toScooter.length, "Scooter got exactly one email").toBe(1);
+    expect(toScooter[0]!.text).toMatch(/Waiting on: a word from you[\s\S]*To clear it by email: reply "try again"/);
+    expect(sent.slice(before).filter((m) => m.to === SEQUOIA_PARTNER_EMAIL).length, "Sequoia got nothing — it is not hers").toBe(0);
     // Put the card back the way the next test expects it: open, PLAN queued.
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'OPEN', work_attempts = 0, block_reason = NULL, block_who = NULL, blocked_at = NULL, block_nag_at = NULL WHERE id = ?1").bind(porterId).run();
-    await env.WP_OS_DB.prepare("DELETE FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'STUCK'").bind(porterId).run();
+    await env.WP_OS_DB.prepare("DELETE FROM work_card_notice WHERE work_card_id = ?1 AND kind IN ('STUCK', 'QUESTION') AND cause LIKE '%a word from you%'").bind(porterId).run();
     const back = await tickFor(porterId);
     expect(back.summary).toMatch(/PLAN queued/);
   });
@@ -1380,10 +1387,13 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
       "a portfolio company's logo or founder photo from that company's website",
       "a picture from a news site — is an **ASK** naming the source URL",
       'A pre-approval phrase ("your call") does NOT waive a rights ask',
-      "Anything needing a login, a payment, an account, a CAPTCHA, or a private page: do NOT attempt it. BLOCK",
+      "Anything needing a login, a payment, an account, a CAPTCHA, or a private page: do NOT attempt it, and do NOT block for it",
+      "Never ask for a login",
+      "A partner's ask is itself the approval to do the work",
+      "The vault is checked first, and a missing key is never a block",
+      "Production only through a RUNBOOK-named script; never a bare `wrangler deploy`; schema changes only through migrations in the deploy",
       "RUNBOOK_FORBIDS",
-      "A request you cannot act on at all",
-      "you said the photo is attached; nothing arrived",
+      "the photo you said was attached — nothing arrived",
       "A change with no partner decision returns `asks: []`",
     ]) {
       expect(prompt, `the prompt must say: ${line.slice(0, 50)}`).toContain(line);
@@ -1467,7 +1477,7 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
     await env.WP_OS_DB.prepare("UPDATE web_property_change SET target_repo = 'unresolved', property_host = NULL, property_assumed_from = NULL WHERE work_card_id = ?1").bind(porterId).run();
     const out = await tickFor(porterId);
     expect(out.outcome).toBe("BLOCKED");
-    expect(String((await card(porterId)).block_needed)).toMatch(/^Which site\?/);
+    expect(String((await card(porterId)).block_needed)).toMatch(/^Waiting on: the name of the site or repo this is for\. Why: the email named no site I know[\s\S]*To clear it by email: reply with the site \([^)]*westpeek\.ventures[^)]*\) or the GitHub repo as owner\/name/);
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(porterId).run();
   });
 
@@ -1694,8 +1704,8 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     expect((await tickFor(porter.id)).outcome).toBe("BLOCKED");
     expect(intentCalls).toEqual([]);
     const c = await card(porter.id);
-    expect(String(c.block_needed)).toMatch(/You said: "Hold off/);
-    expect(String(c.block_needed)).toMatch(/Nothing is built/);
+    expect(String(c.block_needed)).toMatch(/^Waiting on: your word to carry on\. Why: you said "Hold off/);
+    expect(String(c.block_needed)).toMatch(/nothing is built or landed until you say otherwise\. To clear it by email: reply "approved"/);
     expect((await readWebPropertyChange(env, porter.id))!.plan_approved_at).toBeNull();
     expect(await liveJobFor(porter.id)).toBeNull();
     // A stop in other words, read by the model.
@@ -1729,7 +1739,7 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     const planToken = (await env.WP_OS_DB.prepare("SELECT message_id FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PLAN'").bind(porter.id).first<{ message_id: string }>())!.message_id;
     await macReports(porter.id, { phase: "BUILD", status: "ok", pr_url: `https://github.com/seq23/join-west-peek-main/pull/${Math.floor(Math.random() * 9000) + 100}`, pr_number: 9, check_state: "GREEN", preview_url: "https://p9.west-peek-ventures.pages.dev" });
     expect((await tickFor(porter.id)).outcome).toBe("BLOCKED");
-    expect(String((await card(porter.id)).block_needed)).toMatch(/^PREVIEW READY/);
+    expect(String((await card(porter.id)).block_needed)).toMatch(/^Waiting on: your word on the preview[\s\S]*Why: every site change previews before it goes live[\s\S]*To clear it by email: reply "approved"[\s\S]*PREVIEW READY\./);
     return { ...porter, planToken };
   }
 
@@ -1790,7 +1800,7 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     expect((await tickFor(p.id)).outcome).toBe("BLOCKED");
     expect(await previews()).toBe(before + 1);
     const c = await card(p.id);
-    expect(String(c.block_needed)).toMatch(/^PREVIEW READY/);
+    expect(String(c.block_needed)).toMatch(/^Waiting on: your word on the preview[\s\S]*Why: every site change previews before it goes live[\s\S]*To clear it by email: reply "approved"[\s\S]*PREVIEW READY\./);
     expect(String(c.block_needed)).toMatch(/Changed since the last preview, as you asked: "I don't know if people know they can scroll on the flyers/);
     row = (await readWebPropertyChange(env, p.id))!;
     expect(row.refresh_intent).toBeNull();
@@ -1804,7 +1814,7 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     const p = await atPreview("preview C");
     await replyFrom(SCOOTER, "Let's not do this yet, I want to think it over", await p.token());
     expect((await tickFor(p.id)).outcome).toBe("BLOCKED");
-    expect(String((await card(p.id)).block_needed)).toMatch(/You said: "Let's not do this yet/);
+    expect(String((await card(p.id)).block_needed)).toMatch(/^Waiting on: your word to carry on\. Why: you said "Let's not do this yet/);
     expect((await readWebPropertyChange(env, p.id))!.land_approved_at).toBeNull();
     expect(await liveJobFor(p.id)).toBeNull();
 

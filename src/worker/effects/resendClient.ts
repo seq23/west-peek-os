@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { applyPreviewBoundary, defuseTriggers } from "./emailTransport";
+import { applyPreviewBoundary, attachmentsBytes, defuseTriggers, OUTBOUND_ATTACHMENTS_MAX_BYTES } from "./emailTransport";
 import type { EmailPayload, EmailSendResult } from "./emailTransport";
 
 /**
@@ -86,6 +86,10 @@ export async function sendViaResend(
 
   const from = payload.from ?? env.WP_OS_EMAIL_FROM;
   if (!from) throw new Error("no sender address configured (WP_OS_EMAIL_FROM)");
+  // THE CAP AT THE TRANSPORT (0253), so no composer can send a library. The composer links instead.
+  if (attachmentsBytes(payload.attachments) > OUTBOUND_ATTACHMENTS_MAX_BYTES) {
+    throw new Error(`refusing to send: attachments total ${attachmentsBytes(payload.attachments)} bytes, over the ${OUTBOUND_ATTACHMENTS_MAX_BYTES}-byte cap`);
+  }
 
   // Applied at the transport, not the composer, so no future caller can forget it. See
   // defuseTriggers: Network OS's Gmail sync matches trigger words in ANY mail including Sent, so a
@@ -114,6 +118,10 @@ export async function sendViaResend(
         // Custom headers, documented by Resend with `In-Reply-To` and `References` named. Never a
         // `Message-ID`: SES overrides it, so one set here would be a thread key that never arrives.
         ...(payload.headers && Object.keys(payload.headers).length > 0 ? { headers: payload.headers } : {}),
+        // 0253: Resend takes `attachments: [{ filename, content (base64), content_type }]`.
+        ...(payload.attachments && payload.attachments.length > 0
+          ? { attachments: payload.attachments.map((a) => ({ filename: a.filename, content: a.content, ...(a.contentType ? { content_type: a.contentType } : {}) })) }
+          : {}),
       }),
       signal: controller.signal,
     });

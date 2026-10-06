@@ -134,6 +134,11 @@
       "required": false,
       "purpose": "Signs the wpn_session cookie Network OS accepts (P35)."
     },
+    "WP_OS_SECRET_HANDOFF_KEY": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "AES-256-GCM key (base64, 32 bytes) for secret_handoff: a value a partner emailed as SECRET NAME=value, held encrypted until the Mac vaults it (0253). Unset = the door fails closed."
+    },
     "WP_OS_EMAIL_SEND": {
       "kind": "var",
       "required": false,

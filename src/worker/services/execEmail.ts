@@ -2,7 +2,7 @@ import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { sendViaResend } from "../effects/resendClient";
 import { isCloudflareEmailEnabled, sendViaCloudflare } from "../effects/cloudflareEmailClient";
-import type { EmailSendResult } from "../effects/emailTransport";
+import type { EmailAttachment, EmailSendResult } from "../effects/emailTransport";
 import { aiOutboundSwitches } from "../../shared/policy/aiOutbound";
 import { ASSIGNING_PARTNERS } from "../../shared/intake/partnerAuthority";
 import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
@@ -41,6 +41,8 @@ import { EmployeeSenderError, employeeSenderHeader } from "../../shared/registry
 
 export interface PartnerEmailInput {
   to: string;
+  /** 0253: files the job produced for the partner, already read and base64'd; ≤ 10 MB in total or the composer links them. */
+  attachments?: readonly EmailAttachment[];
   /** 0239: partners copied on a finished email. Refused whole if any address is not a partner. */
   cc?: readonly string[];
   email: ExecEmailInput;
@@ -111,7 +113,7 @@ function senderFor(employee: string): { from: string } | { refusal: string } {
 
 async function transport(
   env: Env,
-  message: { to: string | readonly string[]; cc?: readonly string[]; subject: string; text: string; html: string; from: string; headers?: Record<string, string> },
+  message: { to: string | readonly string[]; cc?: readonly string[]; subject: string; text: string; html: string; from: string; headers?: Record<string, string>; attachments?: readonly EmailAttachment[] },
 ): Promise<EmailSendResult> {
   const payload = { ...message, replyTo: INTAKE_MAILBOX };
   return isCloudflareEmailEnabled(env) ? await sendViaCloudflare(env, payload) : await sendViaResend(env, payload);
@@ -195,7 +197,7 @@ export async function sendPartnerEmail(env: Env, input: PartnerEmailInput): Prom
     const headers = input.replyOnThread
       ? { References: `${threadReference(input.replyOnThread)} ${thread.headers.References}`, "In-Reply-To": threadReference(input.replyOnThread) }
       : thread.headers;
-    result = await transport(env, { to, cc, subject: rendered.subject, text: rendered.text, html: rendered.html, from: sender.from, headers });
+    result = await transport(env, { to, cc, subject: rendered.subject, text: rendered.text, html: rendered.html, from: sender.from, headers, ...(input.attachments?.length ? { attachments: input.attachments } : {}) });
   } catch (err) {
     result = { sent: false, provider: "resend", detail: err instanceof Error ? err.message : String(err), provider_message_id: null };
   }

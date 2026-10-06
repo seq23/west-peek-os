@@ -94,6 +94,9 @@ export async function sendViaCloudflare(
 
   if (!email) throw new Error("no email binding is available in this environment");
   if (!from) throw new Error("no sending address is configured");
+  // 0253: the binding's `send` takes no files. A message with attachments is refused here rather than
+  // delivered without them and recorded as sent whole — the composer falls back to links.
+  if (payload.attachments && payload.attachments.length > 0) throw new Error("the Cloudflare email binding cannot carry attachments; send through Resend or link the files");
 
   // A list when the message is addressed to more than one person; the binding takes either, and
   // the array form is spread because the payload's is readonly and the platform's type is not.

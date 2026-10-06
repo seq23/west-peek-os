@@ -753,6 +753,35 @@ async function handleInboundEmailOnce(
   const references = message.headers.get("references");
 
   /*
+   * SECRETS BY EMAIL (0253, 6 Oct 2026) — BEFORE ANY DOOR. An authenticated partner's
+   * `SECRET NAME=value` lines are read here, ahead of the oversize branch, the follow-up join and
+   * the assignment: the value is encrypted into `secret_handoff`, scrubbed from the stored .eml and
+   * from the text every door below reads (`kept.text` is replaced), and the partner hears "Stored".
+   * An email that was nothing but secrets opens no card and joins no card.
+   */
+  if (authority.isAssignment && kept.text) {
+    const { secretDoor } = await import("../services/secretHandoff");
+    const { loadRegistry } = await import("../services/webPropertyRegistry");
+    const door = await secretDoor(env, { raw: kept.text, subject, kept, partnerAddress: authority.partnerAddress!, firmScope, registry: await loadRegistry(env), employee: ROUTING_EMPLOYEE, replyOnThread: options.replyOnThread ?? null });
+    if (door.stored.length || door.refused.length) {
+      (kept as { text: string | null }).text = door.raw;
+      if (door.onlySecrets) {
+        await appendEvent(env, {
+          eventType: "inbound_email.received",
+          actorType: "system",
+          actorId: "inbound_email",
+          objectType: "inbound_email",
+          objectId: `${message.from}:${subject}`.slice(0, 200),
+          firmScope,
+          payload: { from: sender, to: message.to, subject, bytes: message.rawSize, mailbox: INTAKE_MAILBOX, secrets_stored: door.stored.map((x) => x.name), secrets_refused: door.refused.map((r) => r.name), stored: kept.key },
+        });
+        return;
+      }
+      if (door.line && !options.receivedTldr) options = { ...options, receivedTldr: door.line };
+    }
+  }
+
+  /*
    * A BIG MESSAGE IS NOT A REJECTED ONE. This dropped a real deck on the floor.
    *
    * Operator, 22 Aug 2026: "we got an updated deck for sensori overnight to os@joinwestpeek.com."

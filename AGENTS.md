@@ -62,6 +62,20 @@ Parent authorities (IMMUTABLE — never modify, move, or rewrite):
   `docs/WEST_PEEK_DESIGN_SYSTEM.md` before changing any UI, and
   `docs/WEST_PEEK_DESIGN_REFERENCE_AUDIT.md` for why each rule exists.
 
+## The three doors a partner uses (6 Oct 2026) — see `RUNBOOK.md`
+
+- **Any repo she names.** The property list is the `web_property_registry` table (seeded from
+  `src/shared/intake/webPropertyChange.ts`, immutable for the seeded hosts). A partner's email naming
+  a GitHub repo registers it at the door; the Mac clones it and generates a `RUNBOOK.md` from its own
+  config when it has none. Never "not a West Peek property", never "write a RUNBOOK first".
+- **A key by email.** `SECRET NAME=value` on its own line in an authenticated partner's email →
+  encrypted in `secret_handoff`, scrubbed from every sink, vaulted by the Mac's claimer, injected by
+  name. The vault is checked first; a missing key is named in the next email, never a block.
+- **Every wait in three parts, cleared by email.** `src/shared/work/porterWaits.ts` is the only way
+  a partner-facing wait is written; `validate:open-repo-door` holds the runner to it.
+- The full numbered list of partner service rules, each tagged ALL-KINDS or REPO-ONLY with its code
+  anchor, is `docs/PARTNER_SERVICE_RULES.md` (`validate:partner-service-rules`).
+
 ## Commands
 
 - `npm run typecheck` — strict TS, must be green.

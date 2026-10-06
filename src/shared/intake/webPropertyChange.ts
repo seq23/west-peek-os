@@ -27,7 +27,7 @@ import { forcePhraseIn, preApprovalIn } from "../work/approvalReply";
  */
 
 export interface WebProperty {
-  /** The host a partner would name. */
+  /** The host a partner would name. For a repo registered without a host, the repo's name until its config says otherwise. */
   host: string;
   /** The checkout under ~/GitHub on her Mac. */
   repo: string;
@@ -43,17 +43,32 @@ export interface WebProperty {
    * comment also carried the ventures and productions previews, and all six went into her email.
    */
   pagesHost?: string;
+  /** 0253: owner/name on GitHub, for a clone when the checkout is missing. Seeded rows carry it too. */
+  githubRepo?: string;
+  /** 0253: 1 for a row the migration seeded — its host → repo binding is immutable from email. */
+  seeded?: boolean;
+  /** 0253: secret NAMES (never values) the duty may inject for this repo. */
+  secretNames?: readonly string[];
+  /** 0253: the partner's standing constraints for this repo, from its README/PRD; obeyed in every job without restating. */
+  constraints?: readonly string[];
 }
 
 /** The folder a site occupies when it IS its repo (no sites/ folder): the whole repo is the scope. */
 export const REPO_ROOT_SITE = ".";
 
 /**
- * The firm's public web properties and where each is built. The first three share one repo and
+ * THE SEED of the firm's web properties and where each is built. The first three share one repo and
  * three Pages projects (read from that repo's RUNBOOK.md on 20 Sep 2026); every other property IS
- * its repo, so its scope is the repo root (`REPO_ROOT_SITE`). Adding a property is one row here and
- * a RUNBOOK.md in its repo; the PLAN phase blocks without the RUNBOOK. Hosts are read from each
- * repo's own deploy config, never guessed (23 Sep 2026).
+ * its repo, so its scope is the repo root (`REPO_ROOT_SITE`). Hosts are read from each repo's own
+ * deploy config, never guessed (23 Sep 2026).
+ *
+ * SINCE 0253 (owner, 6 Oct 2026: "'registered west peek repos only' is a problem … any new repo we
+ * request is allowed") THE LIST IS OPEN: the Worker reads `web_property_registry` — seeded by
+ * migration 0253 from exactly these rows, so nothing changes for them — and a partner's email that
+ * names a GitHub repo adds a row (`services/webPropertyRegistry.ts`). Every function below takes the
+ * registry it should read; this array is the default so pure callers and the client's dropdown
+ * keep working, and `validate:open-repo-door` holds the migration's seed to it. The eight hosts here
+ * stay immutable from email (a trigger on the table refuses a re-point); only NEW names are open.
  *
  * SEVERAL HOSTS SHARE A PARENT DOMAIN (dilution.joinwestpeek.com, venturedeals.joinwestpeek.com
  * and the community site joinwestpeek.com). `propertiesIn` matches the most specific host first
@@ -72,9 +87,12 @@ export const WEB_PROPERTIES: readonly WebProperty[] = [
   { host: "dilution.joinwestpeek.com", repo: "founder-dilution-dashboard", site: REPO_ROOT_SITE, words: ["dilution dashboard", "dilution calculator", "the dilution site", "dilution site", "founder dilution"] },
 ];
 
+/** The seeded rows by name, for readers that mean "what the migration wrote" rather than "what is registered today". */
+export const SEEDED_WEB_PROPERTIES = WEB_PROPERTIES;
+
 /** Every registered host, for a sentence that lists them ("Which site? …"). One list, never retyped. */
-export function hostsSentence(): string {
-  const hosts = WEB_PROPERTIES.map((p) => p.host);
+export function hostsSentence(registry: readonly WebProperty[] = WEB_PROPERTIES): string {
+  const hosts = registry.map((p) => p.host);
   return hosts.length > 1 ? `${hosts.slice(0, -1).join(", ")} or ${hosts[hosts.length - 1]}` : hosts.join("");
 }
 
@@ -114,6 +132,10 @@ export interface WebPropertyAsk {
   preview_first?: string | null;
   /** 23 Sep 2026: sites in SEVERAL repos — one part per repo, one PR each, landed together. Absent for one repo. */
   parts?: WebPropertyPart[];
+  /** 0253: repos this email registered at the door (owner/name), so the RECEIVED email can say so. */
+  registered?: string[];
+  /** 0253 (addendum 3): the deadline in the partner's own words, read at the door. */
+  due?: { due_at: string; due_words: string; priority: "URGENT" | "HIGH" } | null;
 }
 
 const FOLDER_LINK = /https?:\/\/drive\.google\.com\/(?:drive\/(?:u\/\d+\/)?(?:mobile\/)?folders\/|open\?id=)([A-Za-z0-9_-]{10,})[^\s>)"']*/i;
@@ -134,8 +156,8 @@ export function driveFolderLinks(text: string): Array<{ id: string; url: string 
 }
 
 /** Which property the text names, or null. Host first (exact), then the plain words. */
-export function propertyIn(text: string): WebProperty | null {
-  const named = propertiesIn(text);
+export function propertyIn(text: string, registry: readonly WebProperty[] = WEB_PROPERTIES): WebProperty | null {
+  const named = propertiesIn(text, registry);
   if (!named.length) return null;
   // ONE JOB FOR SEVERAL SITES IN ONE REPO (23 Sep 2026, her words: "why can't it open one large
   // job working on both sites?"). The three sites share join-west-peek-main, so "the community
@@ -154,16 +176,16 @@ export function propertyIn(text: string): WebProperty | null {
 
 /** The site folders a job may change, from the row's `property_host` (one host or several, comma-joined). */
 /** The Pages subdomains the named host(s) preview under ("a, b" for several), [] when none is registered. */
-export function pagesHostsOf(propertyHost: string | null | undefined): string[] {
+export function pagesHostsOf(propertyHost: string | null | undefined, registry: readonly WebProperty[] = WEB_PROPERTIES): string[] {
   const hosts = String(propertyHost ?? "").split(/,\s*/).map((h) => h.trim().toLowerCase()).filter(Boolean);
-  return [...new Set(WEB_PROPERTIES.filter((p) => hosts.includes(p.host) || (p.aliases ?? []).some((a) => hosts.includes(a))).map((p) => p.pagesHost).filter((x): x is string => Boolean(x)))];
+  return [...new Set(registry.filter((p) => hosts.includes(p.host) || (p.aliases ?? []).some((a) => hosts.includes(a))).map((p) => p.pagesHost).filter((x): x is string => Boolean(x)))];
 }
 
-export function sitesOf(propertyHost: string | null | undefined): string[] {
+export function sitesOf(propertyHost: string | null | undefined, registry: readonly WebProperty[] = WEB_PROPERTIES): string[] {
   if (!propertyHost) return [];
   return propertyHost
     .split(",")
-    .map((h) => WEB_PROPERTIES.find((p) => p.host === h.trim())?.site)
+    .map((h) => registry.find((p) => p.host === h.trim())?.site)
     .filter((s): s is string => Boolean(s));
 }
 
@@ -181,11 +203,11 @@ export function sitesOf(propertyHost: string | null | undefined): string[] {
  *   3. otherwise nothing: the door infers from her last site card or asks.
  * Returns every property at the winning level; several in one repo are one job (propertyIn).
  */
-export function propertiesIn(text: string): WebProperty[] {
+export function propertiesIn(text: string, registry: readonly WebProperty[] = WEB_PROPERTIES): WebProperty[] {
   const lower = text.toLowerCase().replace(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/g, " ");
-  const asked = matchMostSpecificFirst(lower, (p) => p.words);
+  const asked = matchMostSpecificFirst(lower, (p) => p.words, false, registry);
   if (asked.length) return asked;
-  return matchMostSpecificFirst(lower, (p) => [p.host, ...(p.aliases ?? [])], true);
+  return matchMostSpecificFirst(lower, (p) => [p.host, ...(p.aliases ?? [])], true, registry);
 }
 
 /**
@@ -196,8 +218,8 @@ export function propertiesIn(text: string): WebProperty[] {
  * longer host she wrote). Returned in registry order, so a job over several sites reads the same
  * whichever order the email named them in.
  */
-function matchMostSpecificFirst(lower: string, phrasesOf: (p: WebProperty) => readonly string[], asHost = false): WebProperty[] {
-  const phrases = WEB_PROPERTIES.flatMap((p) => phrasesOf(p).map((phrase) => ({ p, phrase: phrase.toLowerCase() }))).sort((a, b) => b.phrase.length - a.phrase.length);
+function matchMostSpecificFirst(lower: string, phrasesOf: (p: WebProperty) => readonly string[], asHost = false, registry: readonly WebProperty[] = WEB_PROPERTIES): WebProperty[] {
+  const phrases = registry.flatMap((p) => phrasesOf(p).map((phrase) => ({ p, phrase: phrase.toLowerCase() }))).sort((a, b) => b.phrase.length - a.phrase.length);
   let rest = lower;
   const hit = new Set<WebProperty>();
   for (const { p, phrase } of phrases) {
@@ -208,7 +230,7 @@ function matchMostSpecificFirst(lower: string, phrasesOf: (p: WebProperty) => re
       rest = rest.replace(re, (m) => " ".repeat(m.length));
     }
   }
-  return WEB_PROPERTIES.filter((p) => hit.has(p));
+  return registry.filter((p) => hit.has(p));
 }
 
 /** One repo's share of a job over several repos: its sites, and its slice of the request. */
@@ -228,10 +250,10 @@ export interface WebPropertyPart {
  * grouped by repo, in registry order; each repo is one PART — one worktree, one PR, one preview —
  * and the job lands all of them or none. Fewer than two repos is not several: [].
  */
-export function partsFor(named: readonly WebProperty[], request: string): WebPropertyPart[] {
+export function partsFor(named: readonly WebProperty[], request: string, registry: readonly WebProperty[] = WEB_PROPERTIES): WebPropertyPart[] {
   const repos = [...new Set(named.map((p) => p.repo))];
   if (repos.length < 2) return [];
-  const slices = slicesByRepo(request, repos);
+  const slices = slicesByRepo(request, repos, registry);
   return repos.map((repo) => {
     const mine = named.filter((p) => p.repo === repo);
     return { repo, property_host: mine.map((p) => p.host).join(", "), site: mine.map((p) => p.site).join(", "), ask: slices.get(repo) ?? request };
@@ -239,9 +261,9 @@ export function partsFor(named: readonly WebProperty[], request: string): WebPro
 }
 
 /** The parts of a job from its stored hosts (a re-read, or "the site" inferred from a multi-repo card). */
-export function partsFromHosts(propertyHost: string | null | undefined, request: string): WebPropertyPart[] {
+export function partsFromHosts(propertyHost: string | null | undefined, request: string, registry: readonly WebProperty[] = WEB_PROPERTIES): WebPropertyPart[] {
   const hosts = (propertyHost ?? "").split(",").map((h) => h.trim());
-  return partsFor(WEB_PROPERTIES.filter((p) => hosts.includes(p.host)), request);
+  return partsFor(registry.filter((p) => hosts.includes(p.host)), request, registry);
 }
 
 /**
@@ -252,10 +274,10 @@ export function partsFromHosts(propertyHost: string | null | undefined, request:
  * order written. Otherwise every repo gets the whole request (its SITES line still scopes it).
  * Pure and deterministic, like everything else read at the door.
  */
-export function slicesByRepo(request: string, repos: readonly string[]): Map<string, string> {
+export function slicesByRepo(request: string, repos: readonly string[], registry: readonly WebProperty[] = WEB_PROPERTIES): Map<string, string> {
   const sentences = request.replace(/\r/g, "").split(/(?<=[.!?])\s+|\n+/).map((x) => x.trim()).filter((x) => x.length > 0);
   const owner = sentences.map((sentence) => {
-    const inIt = [...new Set(propertiesIn(sentence).map((p) => p.repo))];
+    const inIt = [...new Set(propertiesIn(sentence, registry).map((p) => p.repo))];
     return inIt.length === 1 && repos.includes(inIt[0]!) ? inIt[0]! : null;
   });
   const out = new Map<string, string>();
@@ -283,7 +305,7 @@ export function previewFirstIn(text: string): string | null {
  * a Drive folder in a quoted earlier thread or a signature is not this request's package (21 Sep
  * 2026: the Community package folder rode in on a quote and Porter pulled 200 files for a photo).
  */
-export function parseWebPropertyAsk(subject: string, body: string): WebPropertyAsk | null {
+export function parseWebPropertyAsk(subject: string, body: string, registry: readonly WebProperty[] = WEB_PROPERTIES): WebPropertyAsk | null {
   const text = `${subject}\n${body}`.replace(/\r/g, "");
   const written = writtenPart(text);
   const folder = FOLDER_LINK.exec(written);
@@ -294,11 +316,11 @@ export function parseWebPropertyAsk(subject: string, body: string): WebPropertyA
    * were unresolved — one job was one repo. Now the card carries every host and every repo, and
    * `parts` says which sites and which slice of the request each repo's PR is for.
    */
-  const named = propertiesIn(written);
-  const parts = partsFor(named, ask);
+  const named = propertiesIn(written, registry);
+  const parts = partsFor(named, ask, registry);
   const property: WebProperty | null = parts.length
     ? { host: parts.map((p) => p.property_host).join(", "), repo: parts.map((p) => p.repo).join(" + "), site: parts.map((p) => p.site).join(", "), words: [] }
-    : propertyIn(written);
+    : propertyIn(written, registry);
   // The greeting is the BODY's first line; the subject sits above it in `text`.
   const addressee = addresseeIn(writtenPart(body.replace(/\r/g, "")));
   // "Hey Porter — a spot on the site": addressed to Porter, a property named without its host.
@@ -356,8 +378,98 @@ export function readWebPropertyAsk(json: string | null | undefined): WebProperty
       addressee: p.addressee ?? null,
       property_unresolved: p.property_unresolved === true,
       ...(Array.isArray(p.parts) && p.parts.length > 1 ? { parts: p.parts } : {}),
+      ...(Array.isArray(p.registered) && p.registered.length ? { registered: p.registered.map(String) } : {}),
+      ...(p.due && typeof p.due === "object" && typeof p.due.due_at === "string" ? { due: { due_at: p.due.due_at, due_words: String(p.due.due_words ?? ""), priority: p.due.priority === "URGENT" ? "URGENT" : "HIGH" } } : {}),
     };
   } catch {
     return null;
   }
+}
+
+// ── An open registry (0253, 6 Oct 2026) ─────────────────────────────────────────────────────────
+
+/**
+ * GitHub owners whose bare `owner/name` is read as a repo without a github.com link. Any
+ * `https://github.com/<owner>/<name>` link is read whatever the owner. One list, read by the door;
+ * a registered row's own owner joins it, so a repo registered once can be named by `owner/name` after.
+ */
+export const KNOWN_GITHUB_OWNERS: readonly string[] = ["seq23"];
+
+export interface GitHubRepoMention {
+  owner: string;
+  name: string;
+  /** owner/name, lower-case. */
+  github_repo: string;
+}
+
+const GITHUB_URL = /https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)\/([A-Za-z0-9._-]+?)(?:\.git)?(?=[\/\s>)"'?#,;:]|$)/gi;
+const BARE_REPO = /(?<![\w\/.@-])([A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)\/([A-Za-z0-9][A-Za-z0-9._-]*)(?![\w\/-])/g;
+
+/** Every GitHub repo the text names: a github.com link (any owner), or `owner/name` for a known owner. */
+export function githubReposIn(text: string, knownOwners: readonly string[] = KNOWN_GITHUB_OWNERS): GitHubRepoMention[] {
+  const out = new Map<string, GitHubRepoMention>();
+  const add = (owner: string, name: string) => {
+    const cleaned = name.replace(/\.git$/i, "").replace(/[.,;:]+$/, "");
+    if (!cleaned || /^\.+$/.test(cleaned)) return;
+    const key = `${owner}/${cleaned}`.toLowerCase();
+    if (!out.has(key)) out.set(key, { owner: owner.toLowerCase(), name: cleaned, github_repo: key });
+  };
+  for (const m of text.matchAll(GITHUB_URL)) add(m[1]!, m[2]!);
+  const owners = new Set(knownOwners.map((o) => o.toLowerCase()));
+  for (const m of text.matchAll(BARE_REPO)) if (owners.has(m[1]!.toLowerCase())) add(m[1]!, m[2]!);
+  return [...out.values()];
+}
+
+/**
+ * A HOST THE EMAIL NAMES FOR A NEW REPO: a plain `https://host/…` link that is not GitHub, Google or
+ * one of the registered hosts. Only read beside a new repo — a link alone never registers anything,
+ * because a site with no repo is nothing Porter can build.
+ */
+export function unregisteredHostsIn(text: string, registry: readonly WebProperty[]): string[] {
+  const known = new Set(registry.flatMap((p) => [p.host, ...(p.aliases ?? [])]).map((h) => h.toLowerCase()));
+  const out: string[] = [];
+  for (const m of text.matchAll(/https?:\/\/([a-z0-9.-]+\.[a-z]{2,})(?=[\/\s>)"'?#,;:]|$)/gi)) {
+    const host = m[1]!.toLowerCase().replace(/^www\./, "");
+    if (/(^|\.)(github\.com|google\.com|googleapis\.com|pages\.dev|workers\.dev|cloudflare\.com|resend\.com)$/.test(host)) continue;
+    if (known.has(host) || out.includes(host)) continue;
+    out.push(host);
+  }
+  return out;
+}
+
+export interface WebPropertyRegistration {
+  repo: string;
+  github_repo: string;
+  /** The host the email gave beside the repo, or null — the duty fills it from the repo's own config. */
+  host: string | null;
+}
+
+/**
+ * WHAT A PARTNER'S EMAIL REGISTERS (0253): every GitHub repo it names that is not registered yet, each
+ * with the first unregistered host the email names (one new repo, one new host → paired; several of
+ * either → hosts are left for the repo's config to declare, never guessed). Pure; the Worker writes
+ * the rows (`services/webPropertyRegistry.ts`). Only the WRITTEN part of the email counts — a repo
+ * link in a quoted thread registers nothing.
+ */
+export function registrationsIn(written: string, registry: readonly WebProperty[]): WebPropertyRegistration[] {
+  const text = writtenPart(written.replace(/\r/g, ""));
+  const owners = [...new Set([...KNOWN_GITHUB_OWNERS, ...registry.map((p) => p.githubRepo?.split("/")[0]).filter((o): o is string => Boolean(o))])];
+  const known = new Set(registry.flatMap((p) => [p.repo.toLowerCase(), (p.githubRepo ?? "").toLowerCase()]).filter(Boolean));
+  const fresh = githubReposIn(text, owners).filter((r) => !known.has(r.github_repo) && !known.has(r.name.toLowerCase()));
+  if (!fresh.length) return [];
+  const hosts = unregisteredHostsIn(text, registry);
+  return fresh.map((r) => ({ repo: r.name, github_repo: r.github_repo, host: fresh.length === 1 && hosts.length === 1 ? hosts[0]! : null }));
+}
+
+/** The registry row a registration becomes: the repo is its own property until its config names a host. */
+export function propertyFromRegistration(r: WebPropertyRegistration): WebProperty {
+  const name = r.repo.toLowerCase();
+  return {
+    host: r.host ?? name,
+    repo: r.repo,
+    site: REPO_ROOT_SITE,
+    githubRepo: r.github_repo,
+    seeded: false,
+    words: [...new Set([name, r.github_repo, `the ${name} repo`, `${name} repo`, ...(r.host ? [`the ${r.host} site`] : [])])],
+  };
 }
