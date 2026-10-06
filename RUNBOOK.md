@@ -20,8 +20,15 @@ does for them, and the three doors opened on 6 Oct 2026. Deploys: a green `main`
   `~/GitHub/<repo>` with `gh repo clone`; a repo with no `RUNBOOK.md` gets one generated from its own
   `package.json` and wrangler config (`scripts/duties/lib/runbook.mjs` — deploy route READ from the
   config, never guessed) and committed on the job's branch, so the PR carries it.
-- **Data-ops.** The scripts a repo's RUNBOOK lists under `## Porter may run` may run against preview
-  and production on the model's request: the model writes `status: "needs_runs"` and the SCRIPT runs
+- **Data-ops.** The scripts a repo's RUNBOOK lists under `## Porter may run` — or, when a hand-written
+  RUNBOOK has no such section, the list DERIVED from package.json by the one rule
+  (`scripts/duties/lib/runbook.mjs#admittedScripts`: load-/import-/export-/promote-/migrate-/seed-/
+  sync-/pull-/publish-/backfill-/booth-/moderate-/smoke- and the check scripts; never a deploy or a
+  dev server) and WRITTEN BACK into that RUNBOOK on the job's branch — may run on the model's request.
+  A data-op the job needs and the repo lacks is written in the job's PR, named under the section, run
+  on preview in the same job and on production once landed; never a wait for "no script". Preview
+  runs are free; a production run needs the partner's own words (their email asked, or they replied
+  yes on the thread — `productionAsked`). The model writes `status: "needs_runs"` and the SCRIPT runs
   `npm run <script> -- <args>` with the firm's credentials and records each run (script, env, exit, one
   line) in the card's proof. A `wrangler d1 execute` happens only inside such a script. Never a bare
   `wrangler deploy`; schema changes only through migrations in the deploy.

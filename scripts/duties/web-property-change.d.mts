@@ -9,3 +9,7 @@ export function claudeSpentUsage(run: { out: string; err: string }): string | nu
 export function codexSpentUsage(run: { out: string; err: string }): string | null;
 /** Both seats spent: a report that asks the Worker to hold the card until the earlier plan resets, or null for any other run. */
 export function spentReport(phase: string, claude: { bothSpent?: boolean; resetsInSeconds?: number; err?: string } | null | undefined): { phase: string; status: "failed"; reason: string; waits_seconds: number } | null;
+export function runRefusal(
+  run: { script?: string; env?: string; args?: readonly string[] },
+  gate: { admittedNow: readonly string[]; base: readonly string[]; job: unknown; phase: string },
+): string | null;

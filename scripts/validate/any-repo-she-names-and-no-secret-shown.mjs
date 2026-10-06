@@ -29,6 +29,12 @@
  *       answer (`subdomain`), never a template; `recordProblem` refuses a hole or a placeholder.
  *   8 · A REGISTERED REPO WITH A README GETS A NON-EMPTY CONSTRAINTS REGISTER: the extractor finds
  *       the partner's standing rules in prose, and the registry writer stores them.
+ *   9 · AN ABSENT `## Porter may run` IS DERIVED, NEVER A REFUSAL (owner, 6 Oct 2026: "shouldnt these
+ *       agents be able to create scripts and do what is needed and be flexible?"). A planted RUNBOOK
+ *       with no section plus a package.json with `load-x` and `sync-y` admits both and produces the
+ *       section text; the generator and the fallback share `porterMayRunFrom`; the duty writes the
+ *       section back, gates every run through `runRefusal` (production on the partner's words only),
+ *       and no wait kind fires on "no script".
  *
  * `--self-test` plants each defect in a copy of the real sources and asserts it is caught.
  */
@@ -40,7 +46,7 @@ import { stripCommentsFor } from "./lib/strip-comments.mjs";
 /** The shared stripper, under the name the scans-read-code guard looks for: product source is read without its comments. */
 const stripComments = stripCommentsFor;
 import { loadTs } from "./lib/load-ts.mjs";
-import { constraintsIn, deployRouteFrom, generateRunbook } from "../duties/lib/runbook.mjs";
+import { admittedScripts, constraintsIn, deployRouteFrom, generateRunbook, porterMayRunFrom, productionAsked, withPorterMayRun } from "../duties/lib/runbook.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const FILES = {
@@ -58,6 +64,7 @@ const FILES = {
   dns: "src/worker/services/dnsWaits.ts",
   test: "tests/openRepoDoor.test.ts",
   waitsTest: "tests/openRepoDoor.test.ts",
+  runbookLib: "scripts/duties/lib/runbook.mjs",
 };
 
 function read(rel) {
@@ -223,6 +230,37 @@ export function checkConstraints(service, extract = constraintsIn) {
   return { violations: v, examined: found.length + 2 };
 }
 
+// ── 9 · an absent ## Porter may run is derived, and a missing script is written ─────────────────
+export function checkAdmission(lib, duty, waits, fns = { admit: admittedScripts, from: porterMayRunFrom, gen: generateRunbook, write: withPorterMayRun, asked: productionAsked }) {
+  const v = [];
+  const pkg = { scripts: { "load-x": "node scripts/load-x.mjs", "sync-y": "node scripts/sync-y.mjs", "deploy:production": "wrangler pages deploy public", dev: "wrangler pages dev" } };
+  const planted = "# RUNBOOK — planted\n\n## Load tracks\n\nRun the loader.\n\n## Secrets\n\n- `GIPHY_API_KEY`\n";
+  const a = fns.admit(planted, pkg);
+  if (!a?.names?.includes("load-x") || !a?.names?.includes("sync-y")) v.push(`a RUNBOOK with no ## Porter may run admits ${JSON.stringify(a?.names ?? [])}, not load-x and sync-y — the job would refuse every run`);
+  if (a?.names?.some((n) => /deploy|^dev$/.test(n))) v.push("the derivation admits a deploy or a dev server");
+  if (!a?.derived || !/## Porter may run[\s\S]*`load-x`[\s\S]*`sync-y`/.test(a?.section ?? "")) v.push("the derivation produces no ## Porter may run section text to write back");
+  const written = a?.section ? fns.write(planted, a.section) : planted;
+  if (fns.admit(written, { scripts: {} }).derived !== false || !/## Load tracks[\s\S]*## Porter may run[\s\S]*## Secrets/.test(written)) v.push("the written-back RUNBOOK does not read as the repo's own list (or lost a hand-written section)");
+  const human = fns.admit("# R\n\n## Porter may run\n\n- `load-x`\n", pkg);
+  if (human.derived || human.names.join() !== "load-x") v.push("a human's ## Porter may run list does not win over the derivation");
+  const g = fns.gen({ repo: "r", githubRepo: null, pkg, wrangler: null, sourceNames: [], today: "2026-10-06" });
+  if (!g.text.includes(fns.from(pkg).text)) v.push("the generator does not compose its ## Porter may run from porterMayRunFrom — two lists");
+  if (!/export function generateRunbook[\s\S]*?porterMayRunFrom\(pkg\)/.test(lib) || !/export function admittedScripts[\s\S]*?porterMayRunFrom\(pkg, \{ derived: true \}\)/.test(lib)) v.push("the generator and the fallback do not both call porterMayRunFrom");
+  if (/Nothing else is run for the model/.test(lib)) v.push("the RUNBOOK text still says nothing else is run for the model");
+  if (!/const admitted = admittedScripts\(text, facts\.pkg\)/.test(duty) || !/withPorterMayRun\(text, admitted\.section\)/.test(duty)) v.push("the duty does not derive ## Porter may run and write it back into the RUNBOOK");
+  if (!/mayRun: admitted\.names/.test(duty) || /mayRun: porterMayRun\(text\)/.test(duty)) v.push("the duty's run list is not the admitted list");
+  if (!/const refusal = runRefusal\(/.test(duty) || !/productionAsked\(job\)/.test(duty) || !/admittedNowIn\(worktree/.test(duty)) v.push("applyRuns does not gate through runRefusal (admitted now, production on the partner's words)");
+  if (fns.asked({ request: "add the new photos" }).ok) v.push("a production run is allowed without the partner's words");
+  if (!fns.asked({ request: "load the photos to production" }).ok || !fns.asked({ request: "x", pr: { land_approved_at: "t" } }).ok) v.push("the partner's words (or their yes on the thread) do not open production");
+  const kinds = Object.keys(waits?.PORTER_WAITS ?? {});
+  for (const k of kinds) {
+    const w = waits.PORTER_WAITS[k]({});
+    if (/\bno script\b|not admitted|Porter may run|write a script/i.test(`${w.waiting} ${w.why} ${w.clear}`)) v.push(`wait kind ${k} fires on a missing script — a missing script is written, never waited on`);
+  }
+  if (kinds.some((k) => /SCRIPT|RUNBOOK|ADMIT/.test(k))) v.push("a wait kind is named for a script or the RUNBOOK");
+  return { violations: v, examined: 12 + kinds.length };
+}
+
 function runAll(src, waits) {
   const parts = [
     checkSeed(src.registryTs.stripped, src.migration.raw, src.registryService.stripped),
@@ -233,6 +271,7 @@ function runAll(src, waits) {
     checkWaits(src.runner.stripped, src.duty.stripped, src.prompt.raw, waits),
     checkDns(src.duty.stripped, src.dns.stripped),
     checkConstraints(src.registryService.stripped),
+    checkAdmission(src.runbookLib.raw, src.duty.stripped, waits),
   ];
   return { violations: parts.flatMap((p) => p.violations), examined: parts.reduce((n, p) => n + p.examined, 0) };
 }
@@ -266,6 +305,13 @@ async function selfTest(src, waits) {
   say(checkDns(src.duty.stripped, src.dns.stripped.replace("const problem = recordProblem(r);\n    if (problem)", "const problem = null;\n    if (problem)")).violations.some((x) => /emails without checking/.test(x)), "a record emailed unchecked is caught");
   say(checkConstraints(src.registryService.stripped, () => []).violations.some((x) => /found 0 rules/.test(x)), "an extractor that finds nothing is caught");
   say(checkConstraints(src.registryService.stripped.replace("constraints_json = ?2", "x = ?2")).violations.some((x) => /does not store constraints/.test(x)), "a registry that drops the constraints is caught");
+  const fns = { admit: admittedScripts, from: porterMayRunFrom, gen: generateRunbook, write: withPorterMayRun, asked: productionAsked };
+  say(checkAdmission(src.runbookLib.raw, src.duty.stripped, waits, { ...fns, admit: (t) => ({ names: [], derived: false, section: null }) }).violations.some((x) => /admits \[\]/.test(x)), "an absent section that refuses every run (the old [] ) is caught");
+  say(checkAdmission(src.runbookLib.raw.replace("porterMayRunFrom(pkg, { derived: true })", "ownList(pkg)"), src.duty.stripped, waits).violations.some((x) => /both call porterMayRunFrom/.test(x)), "a fallback keeping its own list is caught");
+  say(checkAdmission(src.runbookLib.raw, src.duty.stripped.replace("withPorterMayRun(text, admitted.section)", "text"), waits).violations.some((x) => /write it back/.test(x)), "a duty that derives but never writes the section back is caught");
+  say(checkAdmission(src.runbookLib.raw, src.duty.stripped.replace("const refusal = runRefusal(", "const refusal = null && runRefusal("), waits).violations.some((x) => /runRefusal/.test(x)), "a run that skips the gate is caught");
+  say(checkAdmission(src.runbookLib.raw, src.duty.stripped, waits, { ...fns, asked: () => ({ ok: true }) }).violations.some((x) => /without the partner's words/.test(x)), "production opened by the list instead of the partner's words is caught");
+  say(checkAdmission(src.runbookLib.raw, src.duty.stripped, { ...waits, PORTER_WAITS: { ...waits.PORTER_WAITS, NO_SCRIPT: () => ({ waiting: "a script", why: "no script is admitted under Porter may run", clear: "reply go" }) } }).violations.some((x) => /NO_SCRIPT fires on a missing script/.test(x)), "a wait kind for 'no script' is caught");
   if (failed) {
     console.error(`OPEN-REPO-DOOR SELF-TEST FAILED: ${failed} fixture(s) were not caught`);
     process.exit(1);
@@ -287,7 +333,7 @@ async function main() {
     for (const x of violations) console.error(`  ✗ ${x}`);
     process.exit(1);
   }
-  console.log(`OPEN-REPO-DOOR SCAN PASSED: ${examined} items examined — the registry is seeded from the array and its seed cannot move by email; a secret's value is bound only as ciphertext, scrubbed from the .eml and the text every door reads, and the test greps every sink; the RUNBOOK generator writes the deploy route it was given; attachments are capped at 10 MB and the rest linked; a missing secret carries its vault lookup; every partner-facing wait is a template kind in three parts that clears by email; a host outside her zones gets a record read from Cloudflare's answer; a registered repo's README fills its constraints register.`);
+  console.log(`OPEN-REPO-DOOR SCAN PASSED: ${examined} items examined — the registry is seeded from the array and its seed cannot move by email; a secret's value is bound only as ciphertext, scrubbed from the .eml and the text every door reads, and the test greps every sink; the RUNBOOK generator writes the deploy route it was given; attachments are capped at 10 MB and the rest linked; a missing secret carries its vault lookup; every partner-facing wait is a template kind in three parts that clears by email; a host outside her zones gets a record read from Cloudflare's answer; a registered repo's README fills its constraints register; a RUNBOOK without ## Porter may run is derived from package.json by the one rule and written back, a missing script is written, and production runs on the partner's words only.`);
 }
 
 main().catch((err) => {

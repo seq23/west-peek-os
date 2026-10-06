@@ -67,7 +67,10 @@ Parent authorities (IMMUTABLE — never modify, move, or rewrite):
 - **Any repo she names.** The property list is the `web_property_registry` table (seeded from
   `src/shared/intake/webPropertyChange.ts`, immutable for the seeded hosts). A partner's email naming
   a GitHub repo registers it at the door; the Mac clones it and generates a `RUNBOOK.md` from its own
-  config when it has none. Never "not a West Peek property", never "write a RUNBOOK first".
+  config when it has none. Never "not a West Peek property", never "write a RUNBOOK first". A
+  hand-written RUNBOOK with no `## Porter may run` gets that section derived from package.json and
+  written back on the branch (`admittedScripts`); a data-op the repo lacks is written in the PR and
+  run on preview; production runs only on the partner's words (`productionAsked`). Never "no script".
 - **A key by email.** `SECRET NAME=value` on its own line in an authenticated partner's email →
   encrypted in `secret_handoff`, scrubbed from every sink, vaulted by the Mac's claimer, injected by
   name. The vault is checked first; a missing key is named in the next email, never a block.
