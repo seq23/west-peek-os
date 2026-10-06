@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { practicesForCard } from "./partnerConstraints";
 import { materialsForPrompt } from "./requestMaterials";
 import { json } from "../router";
 import type { RouteContext } from "../router";
@@ -354,7 +355,15 @@ export async function steerFor(
    */
   const files = await materialsForPrompt(env, req.cardId);
   const steer = await interpretSteer(env, actor, req, interpret);
-  return files ? { ...steer, text: [steer.text, files].filter(Boolean).join("\n\n") } : steer;
+  /*
+   * THE STANDING PARTNER PRACTICES RIDE ON EVERY STEER TOO (0254, owner 6 Oct 2026: "make sure all ai
+   * agents who do work on work cards couldn't benefit from some of them"). Same reason as the files:
+   * every chain prepends `steer.text`, so the one fragment (shared/work/partnerPractices.ts) and the
+   * requesting partner's constraints register reach Parker, Walker, Percy, Wyatt, the deck and the rest
+   * whatever the kind. Last, below the partner's own words, which still outrank it.
+   */
+  const practices = await practicesForCard(env, req.cardId, req.firmScope);
+  return { ...steer, text: [steer.text, files, practices].filter(Boolean).join("\n\n") };
 }
 
 async function interpretSteer(

@@ -182,4 +182,8 @@ violations) on breach and proves its own detection with a self-test fixture run.
 - `partner-service-rules.mjs` (`npm run validate:partner-service-rules`, 6 Oct 2026) — parses
   `docs/PARTNER_SERVICE_RULES.md`: every rule is numbered, tagged ALL-KINDS or REPO-ONLY, and names a
   code anchor `path#export` that must exist; no service writes `state = 'BLOCKED'` outside the shared
-  block door (`services/blocks.ts`), so no kind can opt out of the one template. Pass count = rules.
+  block door (`services/blocks.ts`), so no kind can opt out of the one template. Since 0254 it also
+  FAILS on any ALL-KINDS rule still Porter-only (prints "Porter-only: 0"), checks the shared prompt
+  fragment `src/shared/work/partnerPractices.ts` is included by `steerFor` (every runner the sweep
+  dispatches must call it), the general loop and Porter's duty, and renders every block reason to
+  prove three parts with an email-only way to clear it. Pass count = rules + inclusions + reasons.

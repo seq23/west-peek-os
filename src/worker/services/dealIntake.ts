@@ -1001,6 +1001,10 @@ export async function openAssignmentCard(
   // A hand-off below (`assignCard`) carries the list to the card that does the work.
   const { recordCcFrom } = await import("./ccPartners");
   await recordCcFrom(env, card.id, written, input.partnerAddress);
+  // R21 (0254, addendum item 10): every Drive folder the ask names is watched until its files arrive —
+  // loaded on arrival with no new email, "still empty" said once. Any kind; see services/driveWatches.ts.
+  const { recordDriveWatches } = await import("./driveWatches");
+  await recordDriveWatches(env, { cardId: card.id, text: written, requestedBy: input.partnerAddress, firmScope: FIRM_SCOPE });
 
   /*
    * BLOG HELP IS READ AT THE DOOR (16 Sep 2026). "Help me make an outline for a blog post on X",

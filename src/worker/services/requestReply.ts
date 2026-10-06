@@ -271,7 +271,8 @@ export async function replyToRequester(
             bullets:
               outcome === "DONE"
                 ? ["Nothing, unless you want it taken further — reply and say how.", `Everything done on it is on the card: ${cardLink}`]
-                : ["Reply to this email with your answer, or answer on the card.", `The card: ${cardLink}`],
+                : // R8 FOR EVERY KIND (0254): the way to clear it is a reply — never "on the card", never a link into the OS.
+                  ["Reply to this email with your answer and I carry on — nothing else is needed."],
           },
         ],
         details: detail,

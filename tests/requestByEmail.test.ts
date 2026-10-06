@@ -200,7 +200,9 @@ describe("Sequoia emails a request", () => {
     // first line says what answers it.
     expect(last.subject).toBe("Wesley: a question — Find the LP letter");
     expect(last.text).toMatch(/^\*\*TL;DR:\*\* One question before I go on with Find the LP letter: reply to this email with your answer and I carry on\./);
-    expect(last.text).toMatch(/\*\*What I need from you\*\*\n• Wesley needs something from you/);
+    // 0254 (R7 / R8 for every kind): the three parts, in order, and the only way to clear it is a reply.
+    expect(last.text).toMatch(/\*\*What I need from you\*\*\n• Waiting on: Which quarter do you mean\?\n• Why: Wesley needs something from you[^\n]*\n• To clear it by email: reply to this email with your answer/);
+    expect(last.text).not.toMatch(/on the card|#\/work/);
     expect(`${last.subject}\n${last.text}`.replaceAll("wc_t_blocked", "wc_t"), "the word she could not act on is gone").not.toMatch(/blocked|unblock|stuck/i);
     expect(last.text).toMatch(/Which quarter do you mean\?/);
   });

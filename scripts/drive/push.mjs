@@ -16,6 +16,13 @@
  * Same credential and the same delegated subject as pull.mjs (GSC_SERVICE_ACCOUNT_JSON from the
  * vault, DRIVE_SUBJECT); a WIDER scope (`drive.file`: files this app created, nothing else). If the
  * delegation does not grant it yet, the token call says so and the duty falls back.
+ *
+ * PROVED 6 Oct 2026 by a read-only token request per scope: the delegation grants `drive.readonly`
+ * and REFUSES `drive.file` and `drive` (`unauthorized_client`). So that refusal is a NAMED STOP, not
+ * a bare 401: the script exits 3 with one line that names the scope, the service account's client
+ * id and the exact place to add it (Workspace admin console → Security → Access and data control →
+ * API controls → Domain-wide delegation). Only the Workspace super-admin can grant it; until then the
+ * duty lists the file "on the card" and goes on.
  */
 import { createReadStream, readFileSync, statSync } from "node:fs";
 import { basename } from "node:path";
@@ -64,8 +71,25 @@ async function accessToken(creds) {
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: `${header}.${claims}.${sig}` }),
   });
-  if (!res.ok) throw new Error(`token ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  if (!res.ok) {
+    const text = await res.text();
+    const stop = scopeStop(res.status, text, creds.client_id);
+    if (stop) throw Object.assign(new Error(stop), { named: true });
+    throw new Error(`token ${res.status}: ${text.slice(0, 300)}`);
+  }
   return (await res.json()).access_token;
+}
+
+/** Exit code for the named stop: the delegation does not grant the scope. Distinct from 1 (any other failure). */
+export const SCOPE_STOP_EXIT = 3;
+
+/**
+ * THE NAMED STOP when Google refuses the scope (`unauthorized_client` on the token call), or null.
+ * Names the scope, the client id and where a super-admin adds it — the only thing that clears it.
+ */
+export function scopeStop(status, text, clientId) {
+  if (!(status === 401 || status === 400) || !/unauthorized_client|not authorized for any of the scopes/i.test(String(text ?? ""))) return null;
+  return `NAMED STOP — the Drive delegation does not grant ${SCOPE}. A Workspace super-admin adds it at admin.google.com → Security → Access and data control → API controls → Domain-wide delegation → client ${clientId ?? "(the gsc-bot service account)"} → Edit → add ${SCOPE} (keep drive.readonly). Until then the file is listed on the card instead of shared.`;
 }
 
 async function api(token, url, init = {}) {
@@ -123,6 +147,8 @@ function selfTest() {
     ["only a partner address is shareable", () => shareableAddress("Scooter@westpeek.ventures") === "scooter@westpeek.ventures" && shareableAddress("someone@gmail.com") === null && shareableAddress("") === null],
     ["a media type comes from the extension", () => mediaTypeFor("a.CSV") === "text/csv" && mediaTypeFor("x.png") === "image/png" && mediaTypeFor("blob") === "application/octet-stream"],
     ["the scope is drive.file, nothing wider", () => SCOPE === "https://www.googleapis.com/auth/drive.file"],
+    ["an unauthorized_client token refusal is the NAMED STOP naming the scope, the client and the console", () => { const t = scopeStop(401, '{"error":"unauthorized_client","error_description":"Client is unauthorized to retrieve access tokens using this method, or client not authorized for any of the scopes requested."}', "123"); return /^NAMED STOP/.test(t) && t.includes(SCOPE) && t.includes("client 123") && t.includes("Domain-wide delegation"); }],
+    ["any other token failure is not dressed up as the named stop", () => scopeStop(500, "boom", "1") === null && scopeStop(401, '{"error":"invalid_grant"}', "1") === null],
     ["the source never prints the credential", () => !/console\.log\([^)]*(creds|private_key|GSC_)/.test(readFileSync(new URL(import.meta.url), "utf8"))],
   ];
   let failed = 0;
@@ -138,5 +164,5 @@ function selfTest() {
 
 main().catch((err) => {
   console.error(`push.mjs: ${err instanceof Error ? err.message : String(err)}`);
-  process.exit(1);
+  process.exit(err?.named ? SCOPE_STOP_EXIT : 1);
 });

@@ -209,7 +209,9 @@ describe("nothing stays stuck silently", () => {
       "SELECT title, body FROM notification WHERE object_id = ?1 ORDER BY created_at DESC",
     ).bind(c.id).all<{ title: string; body: string }>();
     expect(notices.results![0]!.title).toMatch(/Still waiting on you/);
-    expect(notices.results![0]!.body).toMatch(/What would clear it/);
+    // 0254 (R7/R8 for every kind): the reminder is the block's three parts, cleared by email — never "on the Work page".
+    expect(notices.results![0]!.body).toMatch(/^Waiting on: .+[.?!] Why: .+[.?!] To clear it by email: .+[.?!]/s);
+    expect(notices.results![0]!.body).not.toMatch(/Work page/);
 
     // Answered, it stops ringing.
     await answerBlock(env, c.id, PARTNER, { action: "ANSWER", text: "October." });

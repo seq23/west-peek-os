@@ -300,9 +300,13 @@ describe("the runner: research judged, the piece written, filed, one email", () 
     });
     expect(out.outcome, out.summary).toBe("BLOCKED");
     // 0173: the block is a sentence she can read, and the specifics are in "what would clear it".
-    expect(out.summary).toMatch(/looked and found nothing solid enough to put in front of you/);
+    // 0254 (R7 for every kind): the block is three parts — the summary leads with what is waiting, and the
+    // plain sentence of what stopped it is the "Why", whole, on the card.
+    expect(out.summary).toMatch(/is blocked: Waiting on: /);
     const blocked = await env.WP_OS_DB.prepare("SELECT next_action, block_who FROM work_card WHERE id = ?1").bind(out.card!.id).first<{ next_action: string; block_who: string }>();
     expect(blocked!.next_action).toMatch(/Send a source or two to start from/);
+    expect(blocked!.next_action).toMatch(/ Why: [^.]*looked and found nothing solid enough to put in front of you/);
+    expect(blocked!.next_action).toMatch(/ To clear it by email: reply to this email with your answer/);
     expect(blocked!.block_who).toBe("SEQUOIA");
     // The only email is the sweep's BLOCKED reply — a question back to her — never a piece.
     expect(sent).toHaveLength(before + 1);

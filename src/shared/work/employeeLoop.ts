@@ -114,6 +114,8 @@ export interface LoopContext {
   colleagues?: Array<{ name: string; role: string }>;
   /** 0237: the files the partner sent with the request or a reply, named — the card's materials. */
   materials?: string;
+  /** 0254: the standing partner-practices block and the partner's constraints (shared/work/partnerPractices.ts) — every duty prompt carries it. */
+  practices?: string;
 }
 
 export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
@@ -131,6 +133,8 @@ export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
     ctx.next_action ? `  Next action as stated: ${ctx.next_action}` : "  No next action was stated.",
     ctx.description ? `  Context: ${ctx.description}` : "",
     ctx.materials ? ctx.materials : "",
+    // 0254: the same standing partner practices every other duty carries — how to report back, never a change to the work.
+    ctx.practices ? `\n${ctx.practices}` : "",
     "",
     // THE PARTNER'S OWN INSTRUCTION OUTRANKS THE DEFAULTS. It is placed after the work and before
     // the rules so it is read as part of the brief, and said to be authoritative so a model does
