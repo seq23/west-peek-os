@@ -22,6 +22,7 @@ PRESENT / MISSING / UNPROVEN (UNPROVEN = cannot be confirmed without credentials
 | `WP_OS_MEET_PUBSUB_TOPIC` | no (`wrangler.toml`) | Phase Meet: where Workspace Events publish Meet events | `services/meetIngest.ts` | SET (production vars) |
 | `WP_OS_MEET_PUBSUB_SUBSCRIPTION` | no (`wrangler.toml`) | Phase Meet: the pull subscription the hourly ingest drains | `services/meetIngest.ts` | SET (production vars) |
 | `RESEND_API_KEY` | yes (vault) | P33 outbound email | `effects/resendClient.ts` | SET |
+| `WP_OS_SECRET_HANDOFF_KEY` | yes (vault; `vault:sync:cloudflare`) | 0253 secrets by email — AES-256-GCM key for `secret_handoff` (base64, 32 bytes) | `services/secretHandoff.ts` | SET 6 Oct 2026 (generated on the Mac, never displayed) |
 | `WP_OS_EMAIL_FROM` | no — config, not a secret | P33; the address the firm sends as | `effects/*`, `services/sendAs.ts` | SET (`os@westpeek.ventures`) |
 | `WP_OS_EMAIL_SEND` | no — config, not a secret | P33; must be the literal `enabled` | `effects/resendClient.ts` | SET (`enabled`) |
 | `TELEGRAM_BOT_TOKEN` | yes (vault) | deferred (capture channel) | capture adapter | MISSING — CREDENTIAL GATE |

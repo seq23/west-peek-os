@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, type MeResponse } from "../../lib/api";
+import { api, useApi, type MeResponse } from "../../lib/api";
 import { previewStartsTicked } from "@shared/work/previewLane";
 import { PARTNERS, partnerFor } from "@shared/registry/partners";
 import { handStartableKinds } from "@shared/work/cardKinds";
@@ -122,6 +122,10 @@ export function NewWorkCard({
    * enforces the same rule server-side; this is the door that keeps a typo from ever reaching it.
    */
   const [propertyHost, setPropertyHost] = useState("");
+  // 0253: the open registry — the seeded eight plus every repo a partner registered by email. The
+  // static list is the fallback until the Worker answers, so the dropdown is never empty.
+  const registry = useApi<{ properties: Array<{ host: string; repo: string }> }>("/api/web-properties");
+  const properties = registry.data?.properties?.length ? registry.data.properties : WEB_PROPERTIES.map((p) => ({ host: p.host, repo: p.repo }));
 
   /*
    * START NOW VS. HOLD FOR ME, ASKED ONCE (Wave B, plan §2 item 7). Reuses Wave D's own hold door
@@ -387,7 +391,7 @@ export function NewWorkCard({
             Which site{" "}
             <select data-testid="work-card-property-host" value={propertyHost} onChange={(e) => setPropertyHost(e.target.value)}>
               <option value="">Choose the site</option>
-              {WEB_PROPERTIES.map((p) => (
+              {properties.map((p) => (
                 <option key={p.host} value={p.host}>{p.host}</option>
               ))}
             </select>

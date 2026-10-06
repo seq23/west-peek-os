@@ -75,3 +75,59 @@ export function claudeChildEnv(base, onStripped, known = vaultNames()) {
 export function strippedNote(names) {
   return names.length ? `withheld from the model's environment (vault / API auth, by design): ${names.join(", ")}` : "nothing was withheld from the model's environment";
 }
+
+// ── The vault is checked first (0253; owner, 6 Oct 2026: "we have many api keys in the vault and any
+// job should always check the vault first") ────────────────────────────────────────────────────────
+
+/** The vendor a secret name belongs to: its first token ("RESEND_API_KEY" → "RESEND"). Empty for a bare word. */
+export function vendorPrefixOf(name) {
+  const m = /^([A-Z][A-Z0-9]*)_/.exec(String(name ?? "").trim());
+  return m ? m[1] : "";
+}
+
+/**
+ * LOOK THE VAULT UP BY NAME, THEN BY VENDOR — names only, never a value. `wanted` is what the repo's
+ * RUNBOOK lists under `## Secrets` (or what its source reads as `env.X`); every exact name present is
+ * `found`; for each wanted name that is absent, any vault entry sharing its vendor prefix is offered
+ * under `by_vendor` (a repo wanting GIPHY_KEY gets the vault's GIPHY_API_KEY); what is left is
+ * `missing`. `searched` records every name and prefix looked for, so a report that names a missing
+ * secret can prove the vault was checked.
+ */
+export function vaultLookup(wanted, names = vaultNames()) {
+  const have = new Set([...names]);
+  const want = [...new Set((Array.isArray(wanted) ? wanted : []).map((n) => String(n).trim()).filter((n) => /^[A-Z][A-Z0-9_]{2,}$/.test(n)))];
+  const found = want.filter((n) => have.has(n));
+  const by_vendor = {};
+  const missing = [];
+  const searched = [...want];
+  for (const n of want) {
+    if (have.has(n)) continue;
+    const vendor = vendorPrefixOf(n);
+    if (vendor) {
+      searched.push(`${vendor}_*`);
+      const matches = [...have].filter((h) => h.startsWith(`${vendor}_`)).sort();
+      if (matches.length) {
+        by_vendor[n] = matches;
+        continue;
+      }
+    }
+    missing.push(n);
+  }
+  // Everything the job may inject: the exact names, plus every vendor match.
+  const allowed = [...new Set([...found, ...Object.values(by_vendor).flat()])].sort();
+  return { searched: [...new Set(searched)], found, by_vendor, missing, allowed };
+}
+
+/**
+ * THE ENVIRONMENT A REPO'S OWN SCRIPT RUNS IN (0253): the model's environment (no vault names, no
+ * API auth) plus exactly the vault names the registry allows for that repo, copied from the
+ * script's own vault-injected environment. A name not in `allowed` is never passed, whatever the
+ * script asks for; a name allowed but absent from the vault is simply absent.
+ */
+export function envForRepoRun(base, allowed, known = vaultNames()) {
+  const out = claudeChildEnv(base, undefined, known);
+  for (const name of allowed ?? []) {
+    if (typeof base?.[name] === "string" && !/^ANTHROPIC_/i.test(name)) out[name] = base[name];
+  }
+  return out;
+}

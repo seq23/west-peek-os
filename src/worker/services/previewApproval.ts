@@ -2,6 +2,7 @@ import { ccList } from "../../shared/work/ccPartners";
 import { ccOfCard } from "./ccPartners";
 import { z } from "zod";
 import type { Env } from "../env";
+import type { EmailAttachment } from "../effects/emailTransport";
 import type { RouteContext } from "../router";
 import { json } from "../router";
 import { appendEvent } from "../events";
@@ -376,6 +377,8 @@ export interface SendOrPreviewInput {
    * and nowhere else. Every other notice (RECEIVED, PLAN, QUESTION, STUCK) leaves it unset.
    */
   finished?: boolean;
+  /** 0253: files the job produced for the partner; attached on a direct send, listed on a preview. */
+  attachments?: readonly EmailAttachment[];
 }
 
 export interface SendOrPreviewOutcome {
@@ -430,6 +433,7 @@ export async function sendOrPreview(env: Env, input: SendOrPreviewInput): Promis
       cardKind: input.cardKind ?? null,
       events: input.events,
       replyOnThread: input.replyOnThread ?? null,
+      ...(input.attachments?.length ? { attachments: input.attachments } : {}),
     });
     return { sent: out.sent, previewed: false, to, reason: out.reason, subject: out.subject, threadToken: out.threadToken ?? null };
   }

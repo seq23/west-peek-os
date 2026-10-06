@@ -43,6 +43,7 @@ import { hostname, homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { CLOUDFLARE_ACCOUNT_ID } from "../duties/lib/pages-delivery.mjs";
 
 /**
  * THE DUTY MODULE IS RELOADED WHEN THE REPO MOVES. This claimer is a launchd daemon that lives for
@@ -336,6 +337,91 @@ async function runJob(run) {
   }
 }
 
+/**
+ * SECRET HAND-OFFS → THE VAULT (0253). The Worker holds a partner's emailed value encrypted until this
+ * Mac collects it. Each is written with `vault.mjs set <NAME>` reading the value from STDIN (never an
+ * argument, never echoed), then the Worker is told and forgets it. A write that fails leaves the row
+ * for the next heartbeat. Returns the NAMES vaulted.
+ */
+export async function pullSecretHandoffs(deps = {}) {
+  const callFn = deps.call ?? call;
+  const setSecret = deps.setSecret ?? vaultSet;
+  const log = deps.log ?? console.log;
+  let pending;
+  try {
+    pending = await callFn("/api/secret-handoffs/pending", { device_id: DEVICE_ID });
+  } catch (err) {
+    log(`secret hand-offs: could not ask (${err instanceof Error ? err.message : String(err)})`);
+    return [];
+  }
+  const rows = Array.isArray(pending?.body?.handoffs) ? pending.body.handoffs : [];
+  const vaulted = [];
+  for (const row of rows) {
+    const name = String(row?.name ?? "");
+    if (!/^[A-Z][A-Z0-9_]{2,63}$/.test(name) || typeof row?.value !== "string" || !row.value) continue;
+    const ok = await setSecret(name, row.value);
+    if (!ok) {
+      log(`secret hand-off ${name}: vault write failed; left for the next heartbeat`);
+      continue;
+    }
+    const told = await callFn("/api/secret-handoffs/stored", { id: row.id });
+    log(`secret hand-off ${name}${row.repo ? ` for ${row.repo}` : ""}: in the vault (${told.status})`);
+    vaulted.push(name);
+  }
+  return vaulted;
+}
+
+/**
+ * DNS WAITS (0253): a custom domain outside her zones is re-checked here, with the vault's Cloudflare
+ * token, every ~15 minutes for 7 days (the Worker hands out only the rows that are due). Cloudflare's
+ * own status word is reported back; the Worker emails "live" and closes, or reminds once.
+ */
+export async function checkDnsWaits(deps = {}) {
+  const callFn = deps.call ?? call;
+  const statusOf = deps.statusOf ?? pagesDomainStatus;
+  const log = deps.log ?? console.log;
+  let pending;
+  try {
+    pending = await callFn("/api/dns-waits/pending", { device_id: DEVICE_ID });
+  } catch (err) {
+    log(`dns waits: could not ask (${err instanceof Error ? err.message : String(err)})`);
+    return [];
+  }
+  const rows = Array.isArray(pending?.body?.waits) ? pending.body.waits : [];
+  const checked = [];
+  for (const row of rows) {
+    const status = await statusOf(row.project, row.host);
+    const told = await callFn("/api/dns-waits/status", { id: row.id, status });
+    log(`dns wait ${row.host}: ${status} (${told.body?.did ?? told.status})`);
+    checked.push({ host: row.host, status });
+  }
+  return checked;
+}
+
+/** Cloudflare's status word for a Pages custom domain, or "unknown". Read-only. */
+async function pagesDomainStatus(project, host) {
+  const token = process.env.CLOUDFLARE_API_TOKEN;
+  const account = process.env.CLOUDFLARE_ACCOUNT_ID ?? CLOUDFLARE_ACCOUNT_ID;
+  if (!token) return "unknown";
+  try {
+    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/pages/projects/${encodeURIComponent(project)}/domains/${encodeURIComponent(host)}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) });
+    const body = await res.json().catch(() => null);
+    return String(body?.result?.status ?? (res.ok ? "unknown" : `http_${res.status}`)).toLowerCase();
+  } catch {
+    return "unknown";
+  }
+}
+
+/** `vault.mjs set NAME` with the value on stdin. Only the exit code comes back. */
+function vaultSet(name, value) {
+  return new Promise((resolve) => {
+    const child = spawn("node", [path.join(REPO_ROOT, "scripts", "vault", "vault.mjs"), "set", name], { stdio: ["pipe", "ignore", "ignore"], env: process.env });
+    child.on("error", () => resolve(false));
+    child.on("close", (code) => resolve(code === 0));
+    child.stdin.end(value);
+  });
+}
+
 async function cycle() {
   // THE LID FIRST, before any word to the Worker: a closed lid takes nothing and says nothing.
   const lid = readLidState();
@@ -348,6 +434,10 @@ async function cycle() {
     seats: [SEAT],
     capabilities: ["local_job", ...Object.keys(DUTIES).map((k) => k.toLowerCase())],
   });
+  // 0253: SECRETS A PARTNER EMAILED go into the local vault here, on every heartbeat, before any job —
+  // so a job queued behind a key finds it. Names are logged; values go process → vault.mjs stdin only.
+  await pullSecretHandoffs();
+  await checkDnsWaits();
   const claimed = await call("/api/subscription-seats/claim", { device_id: DEVICE_ID, seats: [SEAT], kinds: [RUN_KIND] });
   const run = claimed.body?.run;
   if (!run) return { worked: false };

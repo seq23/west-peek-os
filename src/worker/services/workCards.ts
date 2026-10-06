@@ -27,7 +27,8 @@ import {
 import { PARTNERS, partnerByEmail, partnerByFirmUserId } from "../../shared/registry/partners";
 import { cardKind, startableByHand } from "../../shared/work/cardKinds";
 import { originBadgeText, originOf } from "../../shared/work/origin";
-import { WEB_PROPERTIES, hostsSentence, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
+import { hostsSentence, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
+import { loadRegistry } from "./webPropertyRegistry";
 import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
 import { plainTitle, siteTries } from "../../shared/work/siteChange";
 import { CARD_STATES } from "../../shared/work/workCards";
@@ -639,10 +640,11 @@ export async function handleCreateWorkCard(ctx: RouteContext): Promise<Response>
    */
   let requestJson: string | undefined;
   if (input.kind === WEB_PROPERTY_CHANGE_KIND) {
-    const property = WEB_PROPERTIES.find((p) => p.host === property_host);
+    const registry = await loadRegistry(ctx.env);
+    const property = registry.find((p) => p.host === property_host);
     if (!property) {
       return json(
-        { error: "invalid_input", detail: `Pick the site from the list — ${hostsSentence()}. Never typed.` },
+        { error: "invalid_input", detail: `Pick the site from the list — ${hostsSentence(registry)}. Never typed.` },
         { status: 400 },
       );
     }

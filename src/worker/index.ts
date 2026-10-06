@@ -122,6 +122,10 @@ import {
   handleRunAi,
 } from "./services/aiRuns";
 import { handleGetRequestAttachment, handleGetWebPropertyChange, handleMaterialsAdded, handleResendPreview, handleReingestStoredEmail, handleSetWorkKindRule, handleWorkKindRules } from "./services/webPropertyChange";
+import { handleListWebProperties } from "./services/webPropertyRegistry";
+import { handlePendingSecretHandoffs, handleSecretHandoffStored } from "./services/secretHandoff";
+import { handleDnsWaitStatus, handlePendingDnsWaits } from "./services/dnsWaits";
+import { handleGetWorkCardFile, handleListWorkCardFiles, handlePutWorkCardFile } from "./services/workCardFiles";
 import { handleGetRequestMessage, handleGetRequestMessageRaw, handleGetWorkCardMessageTrail, handleGetWorkCardSteps } from "./services/requestMessage";
 import { handleListMergeTargets, handleMergeWorkCardInto } from "./services/mergeCards";
 import { handleGetEmailPreviewPreference, handleSetEmailPreviewPreference } from "./services/kindRules";
@@ -1144,6 +1148,13 @@ const router = new Router()
   .post("/api/work-cards/:id/materials-added", handleMaterialsAdded)
   .post("/api/work-cards/:id/resend-preview", handleResendPreview)
   .get("/api/work-cards/:id/attachments/:attId", handleGetRequestAttachment)
+  // 0253: files a job produced for the partner (an export, a QR code) — put by the Mac's claimer,
+  // listed and fetched by a partner; attached to the DONE / preview email when the set fits.
+  .get("/api/work-cards/:id/files", handleListWorkCardFiles)
+  .post("/api/work-cards/:id/files", handlePutWorkCardFile)
+  .get("/api/work-cards/:id/files/:fileId", handleGetWorkCardFile)
+  // 0253: the open repo registry, for the New Work Card dropdown.
+  .get("/api/web-properties", handleListWebProperties)
   // 0226 — the email this card came from. The decoded body for anyone who may see the card; the
   // raw `.eml` for a Managing Partner only (`inbound_message.read_raw`, restricted).
   .get("/api/work-cards/:id/request-message", handleGetRequestMessage)
@@ -1451,6 +1462,12 @@ const router = new Router()
   .post("/api/subscription-seats/progress", handleSubscriptionSeatProgress)
   .get("/api/subscription-seats/attachment", handleSubscriptionSeatAttachment)
   .get("/api/subscription-seats/status", handleSubscriptionSeatStatus)
+  // 0253: secrets a partner emailed, collected by the Mac's claimer into the vault; the claimer only.
+  .post("/api/secret-handoffs/pending", handlePendingSecretHandoffs)
+  .post("/api/secret-handoffs/stored", handleSecretHandoffStored)
+  // 0253: custom domains outside her zones — the Mac re-checks Cloudflare's status; the Worker emails.
+  .post("/api/dns-waits/pending", handlePendingDnsWaits)
+  .post("/api/dns-waits/status", handleDnsWaitStatus)
   .get("/api/jobs/runs/:id", handleGetJobRun)
   .post("/api/jobs/runs/:id/cancel", handleCancelJobRun)
   .post("/api/jobs/:key/run", handleRunJob)
