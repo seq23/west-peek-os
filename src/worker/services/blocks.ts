@@ -26,6 +26,7 @@ import {
   type BlockProvider,
   type BlockReason,
 } from "../../shared/work/blocks";
+import { blockWaitDetail } from "../../shared/work/blocks";
 
 /**
  * The one way a card becomes blocked, and the four ways it stops being one (16 Sep 2026).
@@ -427,13 +428,19 @@ export async function resurfaceStaleBlocks(env: Env, now: Date): Promise<StoredB
     const nags = (row.block_nags ?? 0) + 1;
     const days = row.blocked_at ? Math.max(1, Math.round((now.getTime() - Date.parse(row.blocked_at)) / 86_400_000)) : 1;
     const who = await employeeName(env, row.owner_id);
+    // R7 / R8 FOR EVERY KIND (6 Oct 2026): the reminder is the same three parts as the block itself,
+    // and every way to clear it is a reply — never "on the Work page".
+    const actions = (() => {
+      try {
+        return JSON.parse(row.block_actions_json ?? "[]") as Array<{ key: string }>;
+      } catch {
+        return [];
+      }
+    })();
     const body = [
-      row.block_stopped ?? "",
-      `What would clear it: ${row.block_needed ?? "—"}`,
-      nags >= BLOCK_NAGS_BEFORE_ESCALATING
-        ? `This is the ${nags}th time of asking. If it is not yours to answer, send it to an engineer from the Work page.`
-        : "Answer it, change it or drop it on the Work page.",
-    ].join(" ");
+      blockWaitDetail({ trying: row.block_trying ?? row.title, stopped: row.block_stopped ?? "", needed: row.block_needed ?? "", who: row.block_who ?? "SEQUOIA", actions }),
+      nags >= BLOCK_NAGS_BEFORE_ESCALATING ? `This is the ${nags}th time of asking. If it is not yours to answer, reply "send it to an engineer".` : "",
+    ].filter(Boolean).join(" ");
     await notifyQuietlyOrPartners(env, row, {
       title: `Still waiting on you: ${who} on "${row.title.slice(0, 60)}" (${days} day${days === 1 ? "" : "s"})`,
       body,

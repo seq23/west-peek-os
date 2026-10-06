@@ -513,8 +513,10 @@ describe("the weekly card on Walker's desk", () => {
     });
     expect(again.card?.id).toBe(third.cardId);
     expect(again.outcome).toBe("BLOCKED");
-    expect(again.summary).toMatch(/Everything Walker found this time you have already seen/);
+    // 0254 (R7 for every kind): three parts — the summary leads with what is waiting; the stopped sentence is the "Why" on the card.
+    expect(again.summary).toMatch(/is blocked: Waiting on: /);
     const row = await env.WP_OS_DB.prepare("SELECT next_action, block_who FROM work_card WHERE id = ?1").bind(third.cardId).first<{ next_action: string; block_who: string }>();
+    expect(row!.next_action).toMatch(/ Why: Everything Walker found this time you have already seen/);
     expect(row!.next_action).toMatch(/every name this week was already in an earlier note \(2 of them\)/i);
     expect(row!.next_action, "even the block asks for nothing but a reply").toMatch(/[Rr]eply to last week's note in plain words/);
     expect(row!.block_who, "Walker's Productions work is Scooter's desk").toBe("SCOOTER");
@@ -538,7 +540,9 @@ describe("the weekly card on Walker's desk", () => {
     expect(out.outcome).toBe("BLOCKED");
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toMatch(/Your previous answer was discarded: every page was dead or unreadable: Nobody/);
-    expect(out.summary).toMatch(/Walker looked and found nothing solid enough to put in front of you/);
+    expect(out.summary).toMatch(/is blocked: Waiting on: /);
+    const stoppedRow = await env.WP_OS_DB.prepare("SELECT next_action FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ next_action: string }>();
+    expect(stoppedRow!.next_action, "the plain sentence is the Why, whole").toMatch(/ Why: Walker looked and found nothing solid enough to put in front of you/);
     const mails = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE object_id = ?1 AND event_type LIKE 'deliverable.%'").bind(opened.cardId).first<{ n: number }>();
     expect(mails!.n).toBe(0);
   });

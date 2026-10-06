@@ -38,8 +38,8 @@
  */
 
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { hostname, homedir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { hostname, homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -398,6 +398,63 @@ export async function checkDnsWaits(deps = {}) {
   return checked;
 }
 
+/**
+ * DRIVE WATCHES (0254, R21): a Drive folder an ask named is mapped here on every heartbeat that the
+ * Worker says is due (every ~15 minutes), with `scripts/drive/pull.mjs --map` under the vault's service
+ * account. What it saw — the file count, the names, and the text of up to eight small documents — goes
+ * back to `/api/drive-watches/status`, where the card loads them on arrival (no new email) or the
+ * partner is told "still empty" once. A folder that lists zero files is reported as zero, never an error.
+ */
+export async function checkDriveWatches(deps = {}) {
+  const callFn = deps.call ?? call;
+  const mapFn = deps.map ?? mapDriveFolder;
+  const log = deps.log ?? console.log;
+  let pending;
+  try {
+    pending = await callFn("/api/drive-watches/pending", { device_id: DEVICE_ID });
+  } catch (err) {
+    log(`drive watches: could not ask (${err instanceof Error ? err.message : String(err)})`);
+    return [];
+  }
+  const rows = Array.isArray(pending?.body?.watches) ? pending.body.watches : [];
+  const seen = [];
+  for (const row of rows) {
+    const saw = await mapFn(row.folder_id, row.id);
+    const told = await callFn("/api/drive-watches/status", { id: row.id, files: saw.files, names: saw.names, documents: saw.documents });
+    log(`drive watch ${row.folder_id}: ${saw.files} file(s)${saw.why ? ` (${saw.why})` : ""} → ${told.body?.did ?? told.status}`);
+    seen.push({ folder: row.folder_id, files: saw.files });
+  }
+  return seen;
+}
+
+/** Map one folder with pull.mjs into a scratch dir and read back what it listed. Zero files is { files: 0 }. */
+async function mapDriveFolder(folderId, watchId) {
+  const dir = path.join(homedir(), ".west-peek-os", "drive-watch", String(watchId).replace(/[^A-Za-z0-9_-]/g, ""));
+  mkdirSync(dir, { recursive: true });
+  try {
+    await promisify(execFile)("node", [path.join(REPO_ROOT, "scripts", "drive", "pull.mjs"), "--map", folderId, dir], { env: process.env, timeout: 10 * 60_000, maxBuffer: 4 * 1024 * 1024 });
+  } catch (err) {
+    const why = String(err?.stderr ?? err?.message ?? err).trim().split("\n").pop()?.slice(0, 200) ?? "";
+    return { files: 0, names: [], documents: [], why: /ZERO files/.test(why) ? "empty or not shared" : why };
+  }
+  return driveWatchSaw(dir);
+}
+
+/** What a --map left on disk: names from the manifest, the text of up to eight small fetched documents. */
+export function driveWatchSaw(dir) {
+  const manifest = JSON.parse(readFileSync(path.join(dir, "DRIVE_MANIFEST.json"), "utf8"));
+  const files = Array.isArray(manifest.files) ? manifest.files : [];
+  const documents = [];
+  for (const f of files.filter((x) => x.fetched && /\.(txt|md|csv|json)$/i.test(String(x.path))).slice(0, 8)) {
+    try {
+      documents.push({ name: f.path, text: readFileSync(path.join(dir, f.path), "utf8").slice(0, 4000) });
+    } catch {
+      // A document that did not fetch is still named below; its text is simply not carried.
+    }
+  }
+  return { files: files.length, names: files.map((f) => f.path), documents };
+}
+
 /** Cloudflare's status word for a Pages custom domain, or "unknown". Read-only. */
 async function pagesDomainStatus(project, host) {
   const token = process.env.CLOUDFLARE_API_TOKEN;
@@ -438,6 +495,7 @@ async function cycle() {
   // so a job queued behind a key finds it. Names are logged; values go process → vault.mjs stdin only.
   await pullSecretHandoffs();
   await checkDnsWaits();
+  await checkDriveWatches();
   const claimed = await call("/api/subscription-seats/claim", { device_id: DEVICE_ID, seats: [SEAT], kinds: [RUN_KIND] });
   const run = claimed.body?.run;
   if (!run) return { worked: false };
@@ -508,6 +566,19 @@ async function main() {
 function selfTest() {
   const good = { card_kind: "WEB_PROPERTY_CHANGE", script: DUTIES.WEB_PROPERTY_CHANGE, phase: "PLAN", model: "opus", max_seconds: 600 };
   const cases = [
+    ["a Drive watch reads names and small documents' text from what --map left (0254, R21)", () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "dw-"));
+      writeFileSync(path.join(dir, "DRIVE_MANIFEST.json"), JSON.stringify({ files: [{ path: "brief.txt", fetched: true }, { path: "hero.png", fetched: false }] }));
+      writeFileSync(path.join(dir, "brief.txt"), "Put the vote on the home page.");
+      const saw = driveWatchSaw(dir);
+      rmSync(dir, { recursive: true, force: true });
+      return saw.files === 2 && saw.names.join(",") === "brief.txt,hero.png" && saw.documents.length === 1 && saw.documents[0].text.includes("vote");
+    }],
+    ["every heartbeat checks the Drive watches, after the DNS waits and before a claim (0254, R21)", () => {
+      const body = readFileSync(fileURLToPath(import.meta.url), "utf8");
+      const c = body.slice(body.indexOf("async function cycle()"));
+      return c.indexOf("await checkDriveWatches()") > c.indexOf("await checkDnsWaits()") && c.indexOf("await checkDriveWatches()") < c.indexOf("/api/subscription-seats/claim");
+    }],
     ["the duty module URL carries the repo's HEAD, so a landed change is a fresh load", () => {
       const u = dutyModuleUrl("scripts/duties/web-property-change.mjs");
       return /\?head=[0-9a-f]{40}$/.test(u) && u.includes("scripts/duties/web-property-change.mjs");

@@ -1,5 +1,7 @@
 import { PARTNERS } from "../../shared/registry/partners";
 import type { Env } from "../env";
+import { deferredItemsIn } from "../../shared/work/partnerPractices";
+import { deferCard } from "./deferredWork";
 import type { RouteContext } from "../router";
 import type { FirmUserIdentity } from "../auth";
 import { appendEvent } from "../events";
@@ -707,6 +709,9 @@ export async function sweepOnce(
     return { status: "SUCCEEDED", summary: `"${card.title.slice(0, 60)}" ${detail.slice(0, 160)}`, card, outcome: "HANDED_ON" };
   }
   if (state === "DONE" || finished) {
+    // R14 / R23 FOR EVERY KIND (0254): a `Deferred to YYYY-MM-DD: <ask>` line in what the employee
+    // finished with becomes its own dated card — never lost on close. Porter's runner does its own.
+    if (card.kind !== WEB_PROPERTY_CHANGE_KIND) await deferDatedItems(env, card, detail).catch((err) => console.error("deferring dated items failed", err));
     const { emailed } = await announceOutcome(env, card, "DONE", detail || "Finished. The findings are on the card.");
     await appendEvent(env, {
       eventType: "work_card.swept",
@@ -849,4 +854,20 @@ export async function sweepOnce(
     card,
     outcome: "FAILED",
   };
+}
+
+/**
+ * DATED DEFERRED WORK OUT OF ANY EMPLOYEE'S RESULT (R14 / R23, 0254). Reads the finished detail and the
+ * card's own record for `Deferred to YYYY-MM-DD: <ask>` lines (the shared practices tell every employee
+ * to write exactly that) and opens one dated card per item through the shared door. Returns the ids.
+ */
+export async function deferDatedItems(env: Env, card: Pick<SweepCard, "id" | "title" | "owner_id" | "requested_by_email" | "firm_scope">, detail: string): Promise<string[]> {
+  const row = await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(card.id).first<{ description: string | null }>();
+  const items = deferredItemsIn(`${detail ?? ""}\n${row?.description ?? ""}`);
+  const made: string[] = [];
+  for (const d of items) {
+    const id = await deferCard(env, { id: card.id, title: card.title, owner_id: card.owner_id ?? null, requested_by_email: card.requested_by_email ?? null, firm_scope: card.firm_scope }, d);
+    if (id) made.push(id);
+  }
+  return made;
 }

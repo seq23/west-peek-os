@@ -20,6 +20,8 @@ import { recordDnsWaits } from "./dnsWaits";
 import { missingSecretLine, waitDetail } from "../../shared/work/porterWaits";
 import { dueLine } from "../../shared/intake/dueTime";
 import type { MissingSecret } from "../../shared/work/localJobs";
+import { doneLines } from "../../shared/work/partnerPractices";
+import { practicesForCard, recordPartnerConstraints } from "./partnerConstraints";
 import { approvedAnswers, askLines, decidedFromAsks, everyAskRecommended, readApprovalReply, readAsks, stripLateThreadPrefix, type Ask } from "../../shared/work/approvalReply";
 import { defaultReadReplyIntent, readReplyIntent, type ReplyIntent, type ReplyIntentReader } from "./replyIntent";
 import { isReplyToOurs } from "./emailThread";
@@ -728,6 +730,9 @@ export async function parkPhase(
     secret_names: [...(entry?.secretNames ?? [])],
     missing_secrets: missingSecretsOf(row),
     constraints: [...(entry?.constraints ?? [])],
+    // R7–R23 FOR EVERY KIND (0254): the SAME standing-practices block every other duty's prompt carries,
+    // with the requesting partner's constraints register — carried on the job because the duty imports nothing from src/.
+    practices: await practicesForCard(env, card.id, card.firm_scope),
     due: readWebPropertyAsk(card.request_json)?.due ?? null,
     sites: sitesOf(row.property_host, registry),
     pages_hosts: pagesHostsOf(row.property_host, registry),
@@ -1378,6 +1383,8 @@ export async function applyReport(
 async function absorbRepoReport(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, report: LocalJobReport): Promise<RunOutcome | null> {
   if (report.repo_facts && report.repo_facts.repo) {
     await recordRepoFacts(env, report.repo_facts.repo, { host: report.repo_facts.host ?? null, pagesHost: report.repo_facts.pages_host ?? null, secretNames: report.repo_facts.secret_names ?? null, githubRepo: report.repo_facts.github_repo ?? null, constraints: report.repo_facts.constraints ?? null });
+    // R19 (0254): the partner's constraints are THEIRS, not the repo's — every other employee working for them reads them too.
+    if (report.repo_facts.constraints?.length) await recordPartnerConstraints(env, card.requested_by_email ?? null, report.repo_facts.constraints, `repo ${report.repo_facts.repo}`, card.firm_scope);
     if (report.repo_facts.runbook_generated) await appendFinding(env, card.id, `${report.repo_facts.repo} had no RUNBOOK.md; one was generated from its package.json and wrangler config and committed on the job's branch.`);
   }
   if (Array.isArray(report.missing_secrets)) {
@@ -1402,7 +1409,7 @@ async function absorbRepoReport(env: Env, card: WebPropertyChangeCard, row: WebP
     for (const d of report.deferred.slice(0, 5)) await deferWork(env, card, row, d);
   }
   if (Array.isArray(report.items) && report.items.length) {
-    await appendFinding(env, card.id, `Per item: ${report.items.map((i) => `${i.item} — ${i.state.replace("_", " ")}${i.note ? ` (${i.note})` : ""}`).join("; ")}`);
+    await appendFinding(env, card.id, `Per item: ${doneLines(report.items).join("; ")}`);
   }
   if (Array.isArray(report.runs) && report.runs.length) {
     await appendFinding(env, card.id, `Ran for the partner's ask: ${report.runs.map((r) => `${r.script} (${r.env}) → exit ${r.exit}${r.line ? `: ${r.line.slice(0, 160)}` : ""}`).join("; ")}`);
@@ -1419,28 +1426,19 @@ async function absorbRepoReport(env: Env, card: WebPropertyChangeCard, row: WebP
  * runs it as any other job; the partner hears about it when it runs. Idempotent on (card, ask).
  */
 export async function deferWork(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, d: { ask: string; due_at: string; words?: string }): Promise<void> {
-  const due = Date.parse(d.due_at);
-  if (!Number.isFinite(due) || !String(d.ask ?? "").trim()) return;
-  const key = `deferred:${card.id}:${d.ask.slice(0, 60)}`;
-  const already = await env.WP_OS_DB.prepare("SELECT id FROM work_card WHERE description LIKE ?1 LIMIT 1").bind(`%${key}%`).first<{ id: string }>();
-  if (already) return;
+  // R14 / R23 FOR EVERY KIND (0254): the dated card itself is made by the shared door; Porter's part is making it a site job.
+  const { deferCard } = await import("./deferredWork");
+  const madeId = await deferCard(
+    env,
+    { id: card.id, title: card.title, owner_id: PORTER_ID, requested_by_email: card.requested_by_email ?? null, firm_scope: card.firm_scope },
+    { ask: d.ask, due_at: d.due_at, words: d.words ?? null },
+    { where: row.target_repo, nextAction: `Waiting for its week (${String(d.due_at).slice(0, 10)}); then planned, built and previewed like any site job.` },
+  );
+  if (!madeId) return;
   const ask = readWebPropertyAsk(card.request_json);
-  const { createWorkCardInternal } = await import("./workCards");
-  const { systemIdentity } = await import("./dealIntake");
-  const made = await createWorkCardInternal(env, systemIdentity(), {
-    title: `From ${card.requested_by_email ?? "a partner"}: ${d.ask.slice(0, 80)} (deferred to ${d.due_at.slice(0, 10)})`,
-    description: [`Deferred from card ${card.id} on ${row.target_repo}: "${d.ask.slice(0, 1200)}"`, d.words ? `Their words: "${d.words.slice(0, 200)}"` : "", `Runs on or after ${d.due_at}.`, key].filter(Boolean).join("\n"),
-    owner_type: "AI",
-    owner_id: PORTER_ID,
-    priority: "NORMAL",
-    firm_scope: card.firm_scope,
-    next_action: `Waiting for its week (${d.due_at.slice(0, 10)}); then planned, built and previewed like any site job.`,
-  });
-  await env.WP_OS_DB.prepare("UPDATE work_card SET kind = ?2, requested_by_email = ?3, lease_until = ?4, waiting_until = ?4, waiting_for = ?5, assigned_from_card_id = ?6 WHERE id = ?1")
-    .bind(made.id, WEB_PROPERTY_CHANGE_KIND, card.requested_by_email ?? null, new Date(due).toISOString(), `its week (${d.due_at.slice(0, 10)})`, card.id)
-    .run();
-  await openWebPropertyChange(env, { cardId: made.id, ask: { drive_folder_id: row.drive_folder_id, drive_folder_url: row.drive_folder_url, drive_file_url: null, property_host: row.property_host, target_repo: row.target_repo, site: ask?.site ?? null, ask: d.ask, pre_approval: null, force: null, addressee: "Porter", property_unresolved: false }, firmScope: card.firm_scope });
-  await appendFinding(env, card.id, `Deferred, as asked: "${d.ask.slice(0, 160)}" — its own card (${made.id}) runs on ${d.due_at.slice(0, 10)}.`);
+  await env.WP_OS_DB.prepare("UPDATE work_card SET kind = ?2 WHERE id = ?1").bind(madeId, WEB_PROPERTY_CHANGE_KIND).run();
+  await openWebPropertyChange(env, { cardId: madeId, ask: { drive_folder_id: row.drive_folder_id, drive_folder_url: row.drive_folder_url, drive_file_url: null, property_host: row.property_host, target_repo: row.target_repo, site: ask?.site ?? null, ask: d.ask, pre_approval: null, force: null, addressee: "Porter", property_unresolved: false }, firmScope: card.firm_scope });
+  await appendFinding(env, card.id, `Deferred, as asked: "${d.ask.slice(0, 160)}" — its own card (${madeId}) runs on ${d.due_at.slice(0, 10)}.`);
 }
 
 /**
@@ -2756,18 +2754,37 @@ export async function handleMaterialsAdded(ctx: RouteContext): Promise<Response>
   const who = await requesterOnly(ctx);
   if (who instanceof Response) return who;
   const { card, partner } = who;
-  const row = card.kind === WEB_PROPERTY_CHANGE_KIND ? await readWebPropertyChange(ctx.env, card.id) : null;
+  const out = await materialsAdded(ctx.env, card, partner.firmUserId, `${partner.firstName} pressed "${MATERIALS_ADDED_PHRASE}".`);
+  if (!out.ok) return json({ error: "not_answered", detail: out.said }, { status: 409 });
+  return json({ ok: true, said: out.said });
+}
+
+/**
+ * THE MATERIALS ARRIVED — the button, or the Drive watch seeing files land in a folder the ask named
+ * (R21, 0254). One behaviour for both: waiting on a preview, the card re-checks the Drive folder and
+ * its files and rebuilds only if something changed; any other kind's blocked card is answered with the
+ * same words; anywhere else a note is left for the next run, which re-maps the folder. Never a plan approval.
+ */
+export async function materialsAdded(
+  env: Env,
+  card: { id: string; kind: string | null; state: string; firm_scope: string },
+  byFirmUserId: string,
+  why: string,
+  arrived?: string,
+): Promise<{ ok: boolean; said: string }> {
+  const noteFor = arrived ?? `${MATERIALS_ADDED_PHRASE} — look again at the Drive folder and the files on this card.`;
+  const row = card.kind === WEB_PROPERTY_CHANGE_KIND ? await readWebPropertyChange(env, card.id) : null;
   const atPreview = Boolean(row && card.state === "BLOCKED" && row.check_state === "GREEN" && needsPreview(row) && !row.land_approved_at && !row.forced_by);
   if (atPreview || (card.state === "BLOCKED" && card.kind !== WEB_PROPERTY_CHANGE_KIND)) {
-    const out = await answerBlock(ctx.env, card.id, partner.firmUserId, { action: "ANSWER", text: MATERIALS_ADDED_PHRASE });
-    if (!out.ok) return json({ error: "not_answered", detail: out.said }, { status: 409 });
-    return json({ ok: true, said: `${MATERIALS_ADDED_PHRASE} — noted. I'll check the Drive folder and the files on the card; if anything is new you'll get a new preview, and if not I'll say so.` });
+    const out = await answerBlock(env, card.id, byFirmUserId, { action: "ANSWER", text: card.kind === WEB_PROPERTY_CHANGE_KIND || !arrived ? MATERIALS_ADDED_PHRASE : arrived });
+    if (!out.ok) return { ok: false, said: out.said };
+    return { ok: true, said: `${MATERIALS_ADDED_PHRASE} — noted. I'll check the Drive folder and the files on the card; if anything is new you'll get a new preview, and if not I'll say so.` };
   }
-  await ctx.env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)")
-    .bind(`wcn_${crypto.randomUUID()}`, card.id, partner.firmUserId, `${MATERIALS_ADDED_PHRASE} — look again at the Drive folder and the files on this card.`, card.firm_scope)
+  await env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)")
+    .bind(`wcn_${crypto.randomUUID()}`, card.id, byFirmUserId, noteFor.slice(0, 3900), card.firm_scope)
     .run();
-  if (row) await appendFinding(ctx.env, card.id, `${partner.firstName} pressed "${MATERIALS_ADDED_PHRASE}". The next build re-maps the Drive folder and reads every file on the card, so they are used from then on.`);
-  return json({ ok: true, said: `${MATERIALS_ADDED_PHRASE} — noted. The next run picks them up from the Drive folder and the card.` });
+  if (row) await appendFinding(env, card.id, `${why} The next build re-maps the Drive folder and reads every file on the card, so they are used from then on.`);
+  return { ok: true, said: `${MATERIALS_ADDED_PHRASE} — noted. The next run picks them up from the Drive folder and the card.` };
 }
 
 /**

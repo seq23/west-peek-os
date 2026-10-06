@@ -32,7 +32,8 @@ export type PorterWaitKind =
   | "MAC_ASLEEP"
   | "SEAT_RESET"
   | "TRIED_AND_STOPPED"
-  | "DNS_RECORD";
+  | "DNS_RECORD"
+  | "DRIVE_EMPTY";
 
 export interface PorterWait {
   waiting: string;
@@ -119,6 +120,12 @@ export const PORTER_WAITS: Record<PorterWaitKind, (f: PorterWaitFill) => PorterW
       selfClearing: true,
     };
   },
+  DRIVE_EMPTY: (f) => ({
+    waiting: `the files in the Drive folder you named${f.what ? ` (${f.what})` : ""}`,
+    why: "the folder is still empty, or not yet shared with the firm's Drive account; everything that does not need those files is going ahead",
+    clear: `nothing to email — put the files in the folder (shared with sequoia@westpeek.ventures) and they are loaded within 15 minutes, no new email needed; if it is the wrong folder, reply with the right link`,
+    selfClearing: true,
+  }),
   TRIED_AND_STOPPED: (f) => ({
     waiting: "a word from you",
     why: `I tried this ${f.what ?? "three times"} and could not finish: ${(f.why ?? "the run stopped on our side").slice(0, 300)}`,
@@ -158,4 +165,4 @@ export function missingSecretLine(name: string, vendorUrl?: string | null, searc
  * What a wait text must NOT contain — the words that send a partner somewhere other than their
  * inbox. Read by the test and by the validator against every rendered kind.
  */
-export const WAIT_TEXT_FORBIDDEN: readonly RegExp[] = [/\bon the card\b/i, /\bopen (the|your) card\b/i, /\bask sequoia\b/i, /\bask scooter\b/i, /https?:\/\/[^\s]*joinwestpeek\.com\/(work|home)/i, /\bon Home\b/];
+export const WAIT_TEXT_FORBIDDEN: readonly RegExp[] = [/\bon the card\b/i, /\bopen (the|your) card\b/i, /\bask sequoia\b/i, /\bask scooter\b/i, /https?:\/\/[^\s]*joinwestpeek\.com\/(work|home)/i, /\bon Home\b/, /\b(on|from) the Work page\b/i];

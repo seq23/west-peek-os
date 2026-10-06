@@ -311,6 +311,8 @@ export function renderContext(job, paths) {
     `DRIVE_FOLDERS: ${job.drive?.folder_id ? `${job.drive.folder_url ?? job.drive.folder_id} → mapped into ${paths.packageDir}/drive` : "none in the request"}`,
     ...(job.drive?.folder_id ? driveLines(job, paths) : []),
     "",
+    // 0254: the shared partner-practices block — the same one every employee's prompt carries (src/shared/work/partnerPractices.ts).
+    ...(job.practices ? [String(job.practices), ""] : []),
     "STANDING RULES OF THIS KIND:",
     ...Object.entries(job.rules ?? {}).map(([k, v]) => `- ${k}: ${v}`),
     // 0253: what the script read from the repo and the registry — the scripts the model may ask for,
@@ -1233,7 +1235,9 @@ async function putDeliverables(result, job, outDir, worktree, env, progress) {
         progress(`file shared from Drive: ${filename} (${bytes} bytes)`);
       }
     } catch (err) {
-      out.push({ filename, bytes, via: "refused", drive_url: null, why: String(err?.message ?? err).slice(0, 200) });
+      // push.mjs exit 3 is its NAMED STOP (the Drive delegation lacks drive.file): carry that line, whole, not "Command failed: node …".
+      const named = err?.code === 3 ? String(err?.stderr ?? "").split("\n").find((l) => l.includes("NAMED STOP")) : null;
+      out.push({ filename, bytes, via: "refused", drive_url: null, why: (named ? named.replace(/^push\.mjs: /, "") : String(err?.message ?? err)).slice(0, named ? 600 : 200) });
       progress(`file NOT delivered: ${filename} — ${String(err?.message ?? err).slice(0, 120)}`);
     }
   }

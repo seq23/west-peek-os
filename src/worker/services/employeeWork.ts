@@ -5,6 +5,7 @@ import type { RouteContext } from "../router";
 import { appendEvent } from "../events";
 import { actorFromIdentity, authorize } from "./authorize";
 import { runAi } from "../ai/runAi";
+import { practicesForCard } from "./partnerConstraints";
 import { requestTask, runTask } from "./browserTask";
 import { searchQuestion } from "./liveSearch";
 import { machineForEmployee } from "./attribution";
@@ -575,6 +576,8 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string, opti
       colleagues: await colleaguesOf(env, employee.id),
       // 0237: the files the partner sent — with the request or with any reply on this card's thread.
       materials: await materialsForPrompt(env, card.id),
+      // 0254: the standing partner practices and the requesting partner's constraints — the block every duty carries.
+      practices: await practicesForCard(env, card.id, actor.firmScopes[0] ?? "west-peek"),
     };
 
     const { run } = await runAi(env, {

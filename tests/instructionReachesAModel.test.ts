@@ -1,3 +1,4 @@
+import { partnerPracticesBlock } from "../src/shared/work/partnerPractices";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import { cannotDo, handsOffTo, steersWith, unreachable, unreadable } from "./helpers/interpret";
@@ -189,7 +190,9 @@ describe("everywhere a human's words can sit on a card", () => {
     const counting: Interpreter = async (...args) => { called += 1; return unreadable(...args); };
     const steer = await steerFor(env, actor(), req("wc_silent"), counting);
     expect(called, "a card with no human words must not reach a model at all").toBe(0);
-    expect(steer).toEqual({ text: "", interpretation: null, cannot: [], failure: null, aiRunId: null, handoffs: [] });
+    // 0254: nothing a human said, so nothing interpreted — but the standing partner practices ride on every
+    // steer, exactly the shared block and nothing else.
+    expect(steer).toEqual({ text: partnerPracticesBlock([]), interpretation: null, cannot: [], failure: null, aiRunId: null, handoffs: [] });
   });
 });
 

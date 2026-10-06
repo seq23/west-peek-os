@@ -51,6 +51,7 @@
  * that fix, in her hands, on the card.
  */
 import type { LaneFailureKind } from "../ai/laneFailure";
+import type { PorterWait } from "./porterWaits";
 
 export const BLOCK_ACTIONS = ["ANSWER", "CHANGE", "DROP", "ESCALATE", "RETRY", "ANOTHER_LANE", "PAUSE_LANE", "HAND_ON"] as const;
 export type BlockActionKey = (typeof BLOCK_ACTIONS)[number];
@@ -244,14 +245,14 @@ function laneRefusal(f: BlockFacts): string {
 const CATALOGUE: Record<BlockReason, (f: BlockFacts) => Omit<Block, "reason" | "trying">> = {
   a_question_for_you: (f) => ({
     stopped: `${f.employee} needs something from you before this can go any further.`,
-    needed: f.detail?.trim() || "An answer to the question on the card.",
+    needed: f.detail?.trim() || "An answer to the question above.",
     who: f.who ?? "SEQUOIA",
     actions: [ANSWER("Answer it", `Type your answer. ${f.employee} reads it on the next run and carries on from where they stopped.`), CHANGE, DROP],
   }),
 
   permission_to_open_a_page: (f) => ({
     stopped: `${f.employee} wants to open a web page and needs your say-so first.`,
-    needed: `Say whether ${f.employee} may open ${f.url ?? "the page named on the card"}.`,
+    needed: `Say whether ${f.employee} may open ${f.url ?? "the page it named"}.`,
     who: f.who ?? "SEQUOIA",
     actions: [
       ANSWER("Answer it", "Yes lets them read the page now. No sends them back to finish without it.", [
@@ -298,7 +299,7 @@ const CATALOGUE: Record<BlockReason, (f: BlockFacts) => Omit<Block, "reason" | "
 
   the_request_is_gone: (f) => ({
     stopped: `What ${f.employee} was asked to build is no longer on the list, so there is nothing to work on.`,
-    needed: "Drop this card, or ask for the thing again from its own page.",
+    needed: "Your word to drop it, or a new email to os@joinwestpeek.com asking for the thing again.",
     who: f.who ?? "SEQUOIA",
     actions: [DROP, ESCALATE],
   }),
@@ -425,7 +426,9 @@ export function blockSentence(b: Block): string {
       : b.who === "SCOOTER"
         ? "Scooter can settle this."
         : "You can settle this.";
-  return `${b.stopped} What was asked for: ${b.trying}. What would clear it: ${b.needed} ${who}`;
+  // R7 FOR EVERY KIND (6 Oct 2026): the same three parts Porter's waits carry — what is waiting, why,
+  // and the reply that clears it — composed in ONE place (shared/work/porterWaits.ts#blockWait).
+  return `${blockWaitDetail(b)} ${who}`;
 }
 
 // ── The standard, enforced ────────────────────────────────────────────────────────────────────
@@ -495,4 +498,74 @@ export function auditCatalogue(): Array<{ reason: BlockReason; problems: string[
     url: "https://example.com/a-page",
   };
   return BLOCK_REASONS.map((reason) => ({ reason, problems: blockProblems(describeBlock(reason, facts)) }));
+}
+
+/*
+ * ── EVERY KIND'S BLOCK, IN THE SAME THREE PARTS (R7 / R8 for every employee, 6 Oct 2026) ─────────
+ *
+ * Porter's waits are composed from a kind (porterWaits.ts). Every other employee's stop comes through the one
+ * block door (`services/blocks.ts#blockCard`) as a catalogue `Block` — trying, stopped, needed, who,
+ * doors. `blockWait` turns THAT into the same three parts, so the email a partner gets about Walker's
+ * search or Parker's packet reads exactly like Porter's: what is waiting, why, and the reply that
+ * clears it — and every clearing action is a reply, because `blockReplyDoor` below makes the words
+ * the email offers ("drop it", "try again", "send it to an engineer") do what they say on any kind.
+ */
+
+/** The doors a block can offer, as far as an email reply can reach them. */
+export type BlockReplyDoor = "ANSWER" | "DROP" | "RETRY" | "ESCALATE";
+
+export interface BlockLike {
+  trying: string;
+  stopped: string;
+  needed: string;
+  who: string;
+  actions: ReadonlyArray<{ key: string }>;
+}
+
+const cleanPart = (s: string) => s.replace(/\s+/g, " ").trim().replace(/[.\s]+$/, "");
+/** A part with its own end: a question keeps its "?", anything else gets a full stop. */
+const ended = (s: string) => (/[.?!]$/.test(s.trim()) ? s.trim() : `${s.trim()}.`);
+
+/** The three parts of ANY kind's block. A `needed` already composed by `waitDetail` is kept whole. */
+export function blockWait(b: BlockLike): PorterWait {
+  const q = (s: string) => `"${s}"`;
+  const keys = new Set(b.actions.map((a) => a.key));
+  const doors = [
+    keys.has("RETRY") ? `${q("try again")} to run it once more` : null,
+    keys.has("DROP") ? `${q("drop it")} to close it` : null,
+    keys.has("ESCALATE") ? `${q("send it to an engineer")} if it is not yours to answer` : null,
+  ].filter(Boolean);
+  const engineer = b.who === "ENGINEER";
+  return {
+    waiting: engineer ? "an engineer to fix something on our side" : cleanPart(b.needed) || "your answer",
+    why: `${cleanPart(b.stopped)} (what was asked for: ${cleanPart(b.trying)})`,
+    clear: engineer
+      ? `nothing from you — an engineer has it${doors.length ? `; or reply ${doors.join(", or ")}` : ""}`
+      : `reply to this email with your answer and the work picks up from there${doors.length ? `; or reply ${doors.join(", or ")}` : ""}`,
+    selfClearing: engineer,
+  };
+}
+
+/** The three-part shape every kind's block reads in — the validator and the tests hold every reason to it. */
+export const BLOCK_WAIT_SHAPE = /^Waiting on: .+[.?!] Why: .+[.?!] To clear it by email: .+[.?!]/s;
+
+/** The one paragraph for any kind's block: three labelled parts, the same shape as `waitDetail`. */
+export function blockWaitDetail(b: BlockLike): string {
+  if (BLOCK_WAIT_SHAPE.test(b.needed.trim())) return b.needed.trim();
+  const w = blockWait(b);
+  return `Waiting on: ${ended(w.waiting)} Why: ${ended(w.why)} To clear it by email: ${ended(w.clear)}`;
+}
+
+/**
+ * WHAT AN EMAIL REPLY TO A BLOCKED CARD DOES, read from its first words. The block email offers
+ * "drop it", "try again" and "send it to an engineer"; a reply that leads with one of those (and the
+ * block offers that door) takes it. Anything else is the ANSWER — the reply is the answer.
+ */
+export function blockReplyDoor(text: string, offered: ReadonlyArray<{ key: string }>): BlockReplyDoor {
+  const t = text.trim().toLowerCase().replace(/^["'“]+/, "");
+  const has = (k: string) => offered.some((a) => a.key === k);
+  if (/^drop (it|this)\b/.test(t) && has("DROP")) return "DROP";
+  if (/^(try (it )?again|retry)\b/.test(t) && has("RETRY")) return "RETRY";
+  if (/^send (it |this )?to an engineer\b/.test(t) && has("ESCALATE")) return "ESCALATE";
+  return "ANSWER";
 }

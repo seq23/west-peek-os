@@ -10,6 +10,7 @@ import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
 import { partnerByEmail, PREVIEW_PARTNER, type Partner } from "../../shared/registry/partners";
 import type { InstructionPiece } from "../../shared/work/instruction";
 import { answerBlock } from "./blocks";
+import { blockReplyDoor } from "../../shared/work/blocks";
 import { ownershipFromWords, tellPartner, tellSecondaryRefused } from "./handOff";
 import { ownershipOf, roleOf } from "../../shared/work/partnerOwnership";
 import { LATE_THREAD_NOTE_PREFIX, readApprovalReply } from "../../shared/work/approvalReply";
@@ -532,7 +533,24 @@ export async function steerFromReply(
             .bind(cardRow.id)
             .run();
         } else {
-          const out = await answerBlock(env, cardRow.id, partner.firmUserId, { action: "ANSWER", text: written.slice(0, 4000) });
+          /*
+           * R8 FOR EVERY KIND (6 Oct 2026): the block email offers "drop it", "try again" and "send it
+           * to an engineer" as replies (shared/work/porterWaits.ts#blockWait), so on any kind but
+           * Porter's — whose runner reads its own reply words — a reply leading with one of them takes
+           * that door. Everything else is the answer, as before.
+           */
+          let door: "ANSWER" | "DROP" | "RETRY" | "ESCALATE" = "ANSWER";
+          if (cardRow.kind !== WEB_PROPERTY_CHANGE_KIND) {
+            const offered = await env.WP_OS_DB.prepare("SELECT block_actions_json FROM work_card WHERE id = ?1").bind(cardRow.id).first<{ block_actions_json: string | null }>();
+            let actions: Array<{ key: string }> = [];
+            try {
+              actions = JSON.parse(offered?.block_actions_json ?? "[]");
+            } catch {
+              actions = [];
+            }
+            door = blockReplyDoor(written, actions);
+          }
+          const out = await answerBlock(env, cardRow.id, partner.firmUserId, { action: door, text: written.slice(0, 4000) });
           answered = out.ok;
         }
       } else {

@@ -117,6 +117,8 @@ export interface LocalJobPayload {
   missing_secrets?: MissingSecret[];
   /** 0253 (addendum 2): the partner's standing constraints for this repo — obeyed in every job, never restated as asks. */
   constraints?: string[];
+  /** 0254 (R7–R23 for every kind): the standing partner-practices block every duty prompt carries, with the partner's constraints register. */
+  practices?: string;
   /** 0253 (addendum 3): the deadline the partner named, ISO UTC, and their words. */
   due?: { due_at: string; due_words: string } | null;
   /** 23 Sep 2026: the site folders of target_repo this job may change (sitesOf(property_host)); [] when unresolved. */
