@@ -68,6 +68,9 @@ Every invocation — including blocked ones — lands in `ai_run` with a unique
 One control the owner touches, three positions, named identically to Boss OS —
 adopted, written fresh, never imported.
 
+**Where it lives:** Cockpit → **"How much to spend"** (nav key `cockpit`, rendered by
+`src/client/pages/AiOpsPage.tsx`, `data-testid="spend-lever"`; shown to managing partners only).
+
 | Position | Behaviour |
 |---|---|
 | `FREE_ONLY` | **The $0 posture.** Nothing that costs money runs. Her subscription seats (Claude Code, then Codex) count as $0 lanes and lead; the free lanes follow for content allowed to reach them. Work Claude would have written (a pinned class, the brief) runs on the best of those and **says it is weaker than the pin**. Private work with both seats away or out of usage **stops and names the lever** — a free lane may never see it and a paid one is not allowed. |
