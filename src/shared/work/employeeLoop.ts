@@ -39,7 +39,8 @@ import { readMissingMaterials, type MissingMaterial } from "./missingMaterials";
  * design. Text and pixels are different evidence, and collapsing them would let an employee review
  * a layout it never saw.
  */
-export const EMPLOYEE_ACTIONS = ["search", "visit", "look_at", "note", "assign", "blocked", "done"] as const;
+// 7 Oct 2026: `open_in_funnel` is the deal-flow executor (shared/work/ownerAsk.ts WORK_EXECUTORS) — offered only on a card carrying deal flow.
+export const EMPLOYEE_ACTIONS = ["search", "visit", "look_at", "note", "assign", "open_in_funnel", "blocked", "done"] as const;
 export type EmployeeAction = (typeof EMPLOYEE_ACTIONS)[number];
 
 export interface EmployeeDecision {
@@ -58,6 +59,12 @@ export interface EmployeeDecision {
   to?: string;
   /** For `assign`: the brief, in the assigner's own words — what to do and what "done" looks like. */
   brief?: string;
+  /** For `open_in_funnel`: the company's own name, as the message gives it. */
+  company?: string;
+  /** For `open_in_funnel`: what they do, in one line, when the message says. */
+  one_liner?: string;
+  /** For `open_in_funnel`: their website, when the message gives one. */
+  website?: string;
 }
 
 /** How many steps one run may take before it stops and reports. */
@@ -116,6 +123,8 @@ export interface LoopContext {
   materials?: string;
   /** 0254: the standing partner-practices block and the partner's constraints (shared/work/partnerPractices.ts) — every duty prompt carries it. */
   practices?: string;
+  /** 7 Oct 2026: the executors this card's work calls for (ownerAsk.ts), each offered as an action. */
+  executors?: Array<{ action: string; offer: string }>;
 }
 
 export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
@@ -208,12 +217,18 @@ export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
           "",
         ]
       : []),
+    ...(ctx.executors ?? []).flatMap((e) => [`  ${e.action} — ${e.offer}`, ""]),
     '  blocked — you cannot go further without a person. Say exactly what you need, phrased as a',
     "           question somebody can answer. Use this for a judgement that is not yours to make,",
     "           a credential you do not have, or a fact only the partners know. When what you need",
     "           is a FILE or material from them (a logo, a deck, a spreadsheet), also list each in",
     "           missing with where it goes — they are asked to add it to the Drive folder or attach",
     "           it to a reply, and it reaches your next run.",
+    "           NEVER block to ask a partner for something the card already holds (the stored",
+    "           message is the original), to say your tools cannot do the work, to chase a",
+    "           colleague, or to do a manual step (forward, paste, click, add a record). Those are",
+    "           ours: use the action offered for it, or assign it to the seat that can. Such a block",
+    "           is refused and comes back to you.",
     "",
     '  done   — the work is finished. Say what the answer is. If you had to finish without a file',
     "           or material they never sent, list it in missing so the finished email names it.",
@@ -233,6 +248,7 @@ export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
     '  {"action":"look_at","start_url":"https://…","objective":"what to judge about how it looks"}',
     '  {"action":"note","finding":"…"}',
     ...(ctx.colleagues && ctx.colleagues.length > 0 ? ['  {"action":"assign","to":"Wyatt","brief":"what to do and what finished looks like"}'] : []),
+    ...((ctx.executors ?? []).some((e) => e.action === "open_in_funnel") ? ['  {"action":"open_in_funnel","company":"the company\'s name","one_liner":"what they do","website":"https://…"}'] : []),
     '  {"action":"blocked","needs":"…","missing":[{"item":"the thing","where":"where it goes"}]}',
     '  {"action":"done","finding":"…","missing":[]}',
   ]
@@ -280,6 +296,12 @@ export function parseDecision(raw: string): EmployeeDecision | null {
   if (objective) d.objective = objective;
   if (to) d.to = to;
   if (brief) d.brief = brief;
+  const company = str(parsed.company, 120);
+  const oneLiner = str(parsed.one_liner, 300);
+  const website = str(parsed.website, 300);
+  if (company) d.company = company;
+  if (oneLiner) d.one_liner = oneLiner;
+  if (website && /^https?:\/\/\S+$/i.test(website)) d.website = website;
   // Only https, and only when it is really a URL. A model writing "search google" into this field
   // would otherwise become a start page.
   if (startUrl && /^https:\/\/\S+$/i.test(startUrl)) d.start_url = startUrl;
@@ -303,5 +325,7 @@ export function parseDecision(raw: string): EmployeeDecision | null {
   if (d.action === "blocked" && !d.needs) return null;
   // A hand-off with no name goes nowhere; one with no brief hands over a title and nothing else.
   if (d.action === "assign" && (!d.to || !d.brief)) return null;
+  // A funnel entry with no company would open nothing.
+  if (d.action === "open_in_funnel" && !d.company) return null;
   return d;
 }

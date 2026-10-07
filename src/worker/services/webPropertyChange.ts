@@ -3010,6 +3010,25 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
           .bind(from, assignmentTitle)
           .all<{ id: string }>()
       ).results ?? []);
+  /*
+   * AND EVERY LIVE CARD THE EARLIER READ OF THIS SAME MESSAGE OPENED, hand-offs included (7 Oct
+   * 2026). The match above is the partner-request title only, so a deal forward that went to Porter
+   * and was handed to Wyatt left Wyatt's BLOCKED card — the one that emailed her — standing after
+   * the fixed door read the message again and put the company in the funnel.
+   */
+  const earlier = isReply
+    ? []
+    : ((
+        await ctx.env.WP_OS_DB.prepare(
+          `SELECT c.id FROM work_card c
+            WHERE c.state IN ('OPEN', 'IN_PROGRESS', 'BLOCKED')
+              AND (c.id IN (SELECT work_card_id FROM inbound_message WHERE r2_key = ?1)
+                   OR c.assigned_from_card_id IN (SELECT work_card_id FROM inbound_message WHERE r2_key = ?1))`,
+        )
+          .bind(key)
+          .all<{ id: string }>()
+      ).results ?? []);
+  for (const c of earlier) if (!live.some((l) => l.id === c.id)) live.push(c);
   const superseded: string[] = [];
   for (const c of live) {
     await ctx.env.WP_OS_DB.prepare(

@@ -3,9 +3,9 @@ import { parsePartnerMessageAsk } from "../../shared/intake/partnerMessage";
 import { isWebPropertyChange, parseWebPropertyAsk, partsFromHosts, registrationsIn } from "../../shared/intake/webPropertyChange";
 import { loadRegistry, registerFromEmail } from "./webPropertyRegistry";
 import { dueTimeIn } from "../../shared/intake/dueTime";
-import { textBodyOf } from "../effects/mimeAttachments";
+import { textBodyOf, topHeadersOf } from "../effects/mimeAttachments";
 import { storeAttachments } from "./requestMaterials";
-import { splitQuoted } from "../../shared/intake/replyBody";
+import { isReplyMessage, splitQuoted } from "../../shared/intake/replyBody";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import type { FirmUserIdentity } from "../auth";
@@ -253,6 +253,12 @@ export interface EmailDeal {
   raw: string;
   /** The company came from a subject that carried no tag — accept only if the register knows it. */
   subjectUntagged?: boolean;
+  /**
+   * 7 Oct 2026: the name a FORWARDED subject leads with, when the forwarded original itself confirms
+   * it (an address at that company's domain, or "founder of <name>"). Evidence, not a guess — the
+   * handler opens it in the funnel even when the register has never heard of it.
+   */
+  corroborated?: { name: string; by: string } | null;
   /** The stored `.eml` the message lives in, kept once at the door. Null when it was not kept. */
   emlKey?: string | null;
   /** What to say when it was not kept. */
@@ -303,6 +309,7 @@ export function dealFromMessage(subject: string, body: string, from: string, isD
   // still offered — flagged, so the handler accepts it only when the register already knows the
   // name and hands anything else to Porter.
   const subjectUntagged = !named && !tagInSubject;
+  const corroborated = subjectUntagged ? forwardedCompany(subject, textBodyOf(body)) : null;
 
   return {
     company,
@@ -313,7 +320,39 @@ export function dealFromMessage(subject: string, body: string, from: string, isD
     isDeck,
     raw: body,
     subjectUntagged,
+    corroborated,
   };
+}
+
+/** The firm's own domains: an address there never confirms a founder's company. */
+const FIRM_DOMAINS = /(?:^|\.)(?:westpeek\.ventures|joinwestpeek\.com|spry\.vc)$/i;
+const compact = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/**
+ * THE COMPANY A FORWARD IS ABOUT, PROVED BY THE FORWARD ITSELF (7 Oct 2026).
+ *
+ * "Fwd: Oyster Genomics | $3M seed round" with `#wpdealflow` in the body was refused because the
+ * register had never heard of the company — which is true of every new deal, i.e. the case the tag
+ * exists for. The subject's LEAD (the words before the first " | ", " - ", " — " or ": ") is taken as
+ * the company only when the forwarded original confirms it: an email address whose domain IS that
+ * name (jeff@oystergenomics.com), or the founder saying "founder of Oyster Genomics". Either is
+ * evidence a person would act on; a subject that is just "check this out" has neither, so the
+ * placement-matrix rule (16 Sep 2026) still holds and Porter still gets the genuinely unclear ones.
+ */
+export function forwardedCompany(subject: string, text: string): { name: string; by: string } | null {
+  const lead = strippedSubject(subject).split(/\s+[|·•–—-]\s+|:\s+/)[0]!.trim().replace(/[.,;]+$/, "");
+  const key = compact(lead);
+  if (key.length < 3 || lead.length > 80 || lead.split(/\s+/).length > 6) return null;
+  for (const m of (text ?? "").matchAll(/[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)/g)) {
+    const host = m[1]!.toLowerCase();
+    if (FIRM_DOMAINS.test(host)) continue;
+    if (host.split(".").slice(0, -1).some((label) => compact(label) === key)) return { name: lead, by: `an address at ${host} in the forwarded message` };
+  }
+  const escaped = lead.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (new RegExp(`\\b(?:co-?founder|founder|ceo|cto)\\s+(?:of|at)\\s+${escaped}\\b`, "i").test(text ?? "")) {
+    return { name: lead, by: `the founder naming ${lead} in the forwarded message` };
+  }
+  return null;
 }
 
 /**
@@ -832,7 +871,18 @@ export async function handleScoutedIntake(ctx: RouteContext): Promise<Response> 
  */
 export function readableMessage(raw: string, cap = 4000): string {
   const text = textBodyOf(raw ?? "");
-  const written = splitQuoted(text).written.trim() || text.trim();
+  /*
+   * A FORWARD IS THE PAYLOAD, NEVER A QUOTE (7 Oct 2026). This stripped everything below the first
+   * quote marker on EVERY message — and "Begin forwarded message:" is one. Sequoia forwarded a
+   * founder's pitch with `#wpdealflow` above it; the card Porter and then Wyatt worked from carried
+   * her signature and nothing else, Wyatt concluded "the forwarded content did not come through",
+   * and he emailed her asking her to forward it again. The split exists for REPLIES (her words above
+   * our own earlier email); a MIME message whose headers say it is not a reply keeps its whole body.
+   * Text with no headers at all (a typed note) is split as before.
+   */
+  const headers = topHeadersOf(raw ?? "");
+  const notAReply = headers !== null && !isReplyMessage(headers);
+  const written = notAReply ? text.trim() : splitQuoted(text).written.trim() || text.trim();
   return written.slice(0, cap);
 }
 

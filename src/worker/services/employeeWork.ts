@@ -19,6 +19,7 @@ import { writtenGuidance } from "./firmSkills";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
 import { createWorkCardInternal } from "./workCards";
 import { blockCard } from "./blocks";
+import { executorsFor, ownerAskRefusal } from "../../shared/work/ownerAsk";
 import { seatId } from "../../shared/intake/emailTriggers";
 import { buildDesignReviewPrompt } from "../../shared/design/reviewRubric";
 import { z } from "zod";
@@ -315,6 +316,35 @@ export async function assignCard(
   return { ok: true, cardId: created.id, toName: target.name };
 }
 
+/**
+ * THE STORED MESSAGE A CARD IS ABOUT, on this card or the one it was handed from (7 Oct 2026).
+ *
+ * Wyatt told Sequoia he could not "open the stored message inbound-email/…eml" and asked her to
+ * forward it again. The message was in R2 the whole time, indexed against Porter's card he was
+ * handed from. This reads it, so the original reaches the employee's prompt and the funnel executor.
+ */
+export async function storedMessageFor(env: Env, cardId: string): Promise<{ key: string; from: string; text: string } | null> {
+  const row = await env.WP_OS_DB.prepare(
+    `SELECT m.r2_key AS key, m.from_address AS from_address FROM inbound_message m
+      WHERE m.work_card_id = ?1 OR m.work_card_id = (SELECT assigned_from_card_id FROM work_card WHERE id = ?1)
+      ORDER BY m.received_at DESC LIMIT 1`,
+  )
+    .bind(cardId)
+    .first<{ key: string; from_address: string }>();
+  if (!row) return null;
+  let text = "";
+  try {
+    const obj = env.WP_OS_DOCUMENTS ? await env.WP_OS_DOCUMENTS.get(row.key) : null;
+    if (obj) {
+      const { readableMessage } = await import("./dealIntake");
+      text = readableMessage(await obj.text(), 6000);
+    }
+  } catch {
+    text = "";
+  }
+  return { key: row.key, from: row.from_address, text };
+}
+
 async function historyFor(env: Env, cardId: string): Promise<string[]> {
   // FAILURES CAUSED BY A DEFECT THAT NO LONGER EXISTS ARE NOT HISTORY, THEY ARE NOISE. Early runs
   // drove the browser at DuckDuckGo, which returns a bot challenge; those attempts are still on the
@@ -543,6 +573,13 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string, opti
   // so a run that hands the card back unfinished is continued, not restarted, and the employee is
   // made to conclude when the card's allowance is spent — never "five more searches".
   const runSteps = Math.max(1, options.maxSteps ?? MAX_STEPS);
+  /*
+   * THE EXECUTORS THIS WORK CALLS FOR, AND THE ORIGINAL IT IS ABOUT (7 Oct 2026). Capability follows
+   * the work: a card carrying deal flow is offered `open_in_funnel` whoever holds it, and the stored
+   * message is read into the prompt — so "my tools cannot open the stored message" cannot be true.
+   */
+  const executors = executorsFor(`${card.title}\n${card.description ?? ""}`).map((e) => ({ action: e.action, offer: e.offer }));
+  const stored = await storedMessageFor(env, card.id);
   for (let step = 1; step <= runSteps; step++) {
     const taken = (await env.WP_OS_DB.prepare("SELECT COALESCE(work_steps, 0) AS n FROM work_card WHERE id = ?1").bind(card.id).first<{ n: number }>())?.n ?? 0;
     const leftOnCard = Math.max(1, MAX_STEPS_PER_CARD - taken);
@@ -578,7 +615,13 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string, opti
       materials: await materialsForPrompt(env, card.id),
       // 0254: the standing partner practices and the requesting partner's constraints — the block every duty carries.
       practices: await practicesForCard(env, card.id, actor.firmScopes[0] ?? "west-peek"),
+      executors,
     };
+    if (stored?.text) {
+      loopCtx.materials = [loopCtx.materials ?? "", `THE STORED MESSAGE THIS CARD IS ABOUT (${stored.key}), as it arrived — the original, forwarded content included:`, stored.text]
+        .filter((l) => l.length > 0)
+        .join("\n");
+    }
 
     const { run } = await runAi(env, {
       purpose: `${employee.name} working "${card.title.slice(0, 60)}" (step ${step})`,
@@ -643,14 +686,14 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string, opti
     }
 
     await env.WP_OS_DB.prepare("UPDATE work_card SET work_steps = COALESCE(work_steps, 0) + 1 WHERE id = ?1").bind(card.id).run();
-    if (mustConclude && decision.action !== "done" && decision.action !== "blocked") {
+    if (mustConclude && decision.action !== "done" && decision.action !== "blocked" && decision.action !== "open_in_funnel") {
       // THE LAST STEP IS A CONCLUSION OR NOTHING. An employee told it has one step left and asking
       // for a sixteenth search has not chosen an action the card can take; the sweep hands the
       // card to a person rather than granting the search.
       steps.push({ step, action: "unclear", detail: `the card's ${MAX_STEPS_PER_CARD}-step allowance is spent and the employee asked to ${decision.action} instead of concluding` });
       break;
     }
-    const outcome = await applyDecision(env, ctx, card, decision, step, employee.name, employee.id, machineId);
+    const outcome = await applyDecision(env, ctx, card, decision, step, employee.name, employee.id, machineId, { lastStep: mustConclude || stepsLeft === 1, stored, offered: executors.map((e) => e.action) });
     steps.push(outcome);
     if (outcome.action === "done" || outcome.action === "assigned" || outcome.action === "blocked" || outcome.action === "waiting") break;
   }
@@ -693,8 +736,36 @@ async function applyDecision(
   /** And whose cost line it lands on — see services/attribution.ts for why this was all NULL. */
   employeeId: string,
   machineId: number | null,
+  extra: { lastStep: boolean; stored: { key: string; from: string; text: string } | null; offered: string[] } = { lastStep: false, stored: null, offered: [] },
 ): Promise<StepOutcome> {
   const actor = actorFromIdentity(ctx.identity!);
+
+  /*
+   * OPEN IN THE FUNNEL: the deal-flow executor (7 Oct 2026). The one move Wyatt lacked when he
+   * emailed Sequoia. Same door every email route uses (`intakeDealFromEmail` → `openIntoFunnel`):
+   * match first, never a duplicate, provenance recorded, the stored message attached.
+   */
+  if (d.action === "open_in_funnel") {
+    if (!extra.offered.includes("open_in_funnel")) {
+      return { step, action: "noted", detail: "open_in_funnel is offered only on a card that carries deal flow" };
+    }
+    const { intakeDealFromEmail } = await import("./dealIntake");
+    const entry = await intakeDealFromEmail(env, {
+      company: d.company!,
+      one_liner: d.one_liner ?? null,
+      website: d.website ?? null,
+      from: extra.stored?.from ?? card.requested_by_email ?? `${employeeName} (card ${card.id})`,
+      isDeck: false,
+      raw: extra.stored?.text || (card.description ?? ""),
+      emlKey: extra.stored?.key ?? null,
+      storeNote: extra.stored ? null : "No stored message was found for this card.",
+      notes: [`Opened in the funnel by ${employeeName} from work card ${card.id}.`],
+    });
+    const line = `Opened ${d.company} in the funnel (${entry.outcome === "ALREADY_OPEN" ? "already on the board — the live opportunity was kept" : "new at the top of the funnel"}): opportunity ${entry.opportunity_id}${entry.work_card_id ? `, decision card ${entry.work_card_id}` : ""}.`;
+    await appendFinding(env, card, line);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE', next_action = NULL WHERE id = ?1").bind(card.id).run();
+    return { step, action: "done", detail: line };
+  }
 
   // SEARCH: no page known, so ask live sources rather than driving a browser at a search engine.
   if (d.action === "search") {
@@ -845,6 +916,40 @@ async function applyDecision(
   }
 
   if (d.action === "blocked") {
+    /*
+     * THE GATE BEFORE ANY ASK REACHES A PARTNER (7 Oct 2026, shared/work/ownerAsk.ts). An ask for
+     * something the card holds, "my tools cannot", chasing a colleague or a manual step is refused:
+     * it comes back as a step so the employee does it or hands it on. At the last step it stops as
+     * an ENGINEER stop — a gap on our side — and never becomes her email.
+     */
+    const staff = ((await env.WP_OS_DB.prepare("SELECT name FROM ai_employee").all<{ name: string }>()).results ?? []).map((r) => r.name.split(/\s+/)[0]!);
+    // Held either in R2 or written onto the card itself (the door copies the message's words there).
+    const holdsMessage = Boolean(extra.stored) || /--- the (?:message|original request) ---|forwarded message/i.test(card.description ?? "");
+    const refused = ownerAskRefusal({ needs: d.needs!, missing: d.missing, holdsStoredMessage: holdsMessage, staffNames: staff });
+    if (refused) {
+      await appendEvent(env, {
+        eventType: "work_card.owner_ask_refused",
+        actorType: "ai_employee",
+        actorId: employeeId,
+        objectType: "work_card",
+        objectId: card.id,
+        firmScope: card.firm_scope,
+        payload: { rule: refused.rule, last_step: extra.lastStep },
+      });
+      if (!extra.lastStep) {
+        const line = `Not asked of a partner (${refused.rule}): ${refused.why}`;
+        await appendFinding(env, card, line);
+        return { step, action: "ask_refused", detail: line };
+      }
+      await blockCard(env, card, {
+        reason: "asked_for_something_this_work_cannot_do",
+        trying: card.title,
+        employee: employeeName,
+        who: "ENGINEER",
+        detail: `${employeeName} reached the end of this card still needing something the system should do (${refused.rule}): ${d.needs!.slice(0, 400)} — ${refused.why}`,
+      });
+      return { step, action: "blocked", detail: `engineer stop (${refused.rule}), not a partner question` };
+    }
     // THE EMPLOYEE'S OWN WORDS GO IN `needed`, NOT IN THE EXPLANATION. A question phrased for a
     // person is exactly what belongs under "what would clear it"; the sentence that says the work
     // has stopped is written by the catalogue so it can be held to a standard a model cannot be.
