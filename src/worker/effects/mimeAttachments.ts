@@ -212,6 +212,24 @@ export function textBodyOf(raw: string): string {
   return boundary ? "" : decoded(text).replace(/\r\n/g, "\n").trim();
 }
 
+/**
+ * THE TOP HEADERS THAT SAY WHETHER A MESSAGE IS A REPLY OR A FORWARD (7 Oct 2026), or null when the
+ * text is not a MIME message at all (a note somebody typed, a test fixture). `readableMessage` uses
+ * them so a FORWARD keeps the forwarded original — the payload — instead of quote-stripping it away.
+ */
+export function topHeadersOf(raw: string): { subject: string; inReplyTo: string; references: string } | null {
+  const text = raw ?? "";
+  const headerEnd = text.search(/\r?\n\r?\n/);
+  if (headerEnd <= 0 || !/^[A-Za-z-]+:\s/.test(text)) return null;
+  const block = text.slice(0, headerEnd);
+  if (!/^(?:received|from|to|subject|content-type|mime-version|date|message-id):/im.test(block)) return null;
+  return {
+    subject: headerIn(block, "subject") ?? "",
+    inReplyTo: headerIn(block, "in-reply-to") ?? "",
+    references: headerIn(block, "references") ?? "",
+  };
+}
+
 /** The bytes of one named attachment, decoded. Null when the message carries no such file. */
 export function attachmentBytes(raw: string, filename: string): { bytes: Uint8Array; mediaType: string } | null {
   const { attachments } = attachmentsOf(raw, () => true, 50);

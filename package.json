@@ -69,6 +69,7 @@
     "validate:chain-budget": "node scripts/validate/a-run-may-not-spend-the-morning-looking.mjs && node scripts/validate/a-run-may-not-spend-the-morning-looking.mjs --self-test",
     "validate:shards": "node scripts/ci/shard-tests.mjs --check 4 && node scripts/ci/shard-tests.mjs --self-test",
     "validate:green-means-something": "node scripts/validate/a-green-run-means-something.mjs && node scripts/validate/a-green-run-means-something.mjs --self-test",
+    "validate:owner-ask-gate": "node scripts/validate/owner-ask-gate.mjs && node scripts/validate/owner-ask-gate.mjs --self-test",
     "validate:companies-in-pipeline": "node scripts/validate/every-company-is-in-the-pipeline.mjs && node scripts/validate/every-company-is-in-the-pipeline.mjs --self-test",
     "validate:weekly-review-archived": "node scripts/validate/an-archived-lane-stays-archived.mjs && node scripts/validate/an-archived-lane-stays-archived.mjs --self-test",
     "validate:portfolio": "node scripts/validate/the-portfolio-shows-what-the-firm-owns.mjs && node scripts/validate/the-portfolio-shows-what-the-firm-owns.mjs --self-test",

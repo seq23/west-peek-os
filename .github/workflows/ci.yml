@@ -448,6 +448,13 @@ jobs:
       - name: Every company is in the pipeline
         run: npm run validate:companies-in-pipeline
 
+      # AN ASK OF THE OWNER IS NEVER A TASK THE SYSTEM COULD DO, 7 Oct 2026. Wyatt emailed Sequoia
+      # to forward again a founder's email the firm already held. Fails if the employee loop's
+      # blocked branch skips ownerAskRefusal, if an executor on the map has no loop action or
+      # handler, if a forward is quote-stripped, or if an ENGINEER stop can reach her inbox.
+      - name: An ask of the owner is never a task the system could do
+        run: npm run validate:owner-ask-gate
+
       # THE WEEKLY REVIEW IS ARCHIVED, 18 Sep 2026. Owner: "we don't need it anymore." The job is
       # RETIRED, the nav item is gone, the route still answers a bookmark, every row is kept. This
       # fails if any migration or seed after 0198 puts `weekly_mp_review` back to ACTIVE or PAUSED,

@@ -300,6 +300,11 @@ export async function announceOutcome(
     ? await env.WP_OS_DB.prepare("SELECT block_who, block_reason FROM work_card WHERE id = ?1").bind(card.id).first<{ block_who: string | null; block_reason: string | null }>()
     : null;
   const addressee = blockRow?.block_who && blockRow.block_who !== "ENGINEER" ? PARTNERS.find((p) => p.firstName.toUpperCase() === blockRow.block_who) : null;
+  // 7 Oct 2026: an ENGINEER stop (an employee's ask the owner-ask gate refused at its last step) is a
+  // gap on our side. It shows on the Work page and in the health board; it is never a partner's email.
+  if (outcome === "BLOCKED" && blockRow?.block_who === "ENGINEER" && blockRow.block_reason === "asked_for_something_this_work_cannot_do") {
+    return { emailed: null };
+  }
   if (outcome === "BLOCKED" && addressee) {
     const requester = (card.requested_by_email ?? "").trim().toLowerCase();
     const noRequesterToTell = !requester;

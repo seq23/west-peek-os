@@ -1124,9 +1124,15 @@ async function handleInboundEmailOnce(
     // funnel is what the owner's placement matrix caught (16 Sep 2026). A real forward — "Fwd:
     // Northwind Robotics" — matches and goes through; the rest is Porter's ambiguity.
     if (deal?.subjectUntagged) {
-      const known = await matchFunnelCompany(env, deal.company);
+      const known =
+        (await matchFunnelCompany(env, deal.company)) ?? (deal.corroborated ? await matchFunnelCompany(env, deal.corroborated.name) : null);
       if (known) deal.company = known.canonical_name;
-      else deal = null;
+      // 7 Oct 2026: a forward whose own original confirms the company is a new deal, not an unclear
+      // email. Refusing it sent Oyster Genomics to Porter, then Wyatt, then her inbox as a question.
+      else if (deal.corroborated) {
+        deal.company = deal.corroborated.name;
+        deal.notes = [...(deal.notes ?? []), `Company read from the forwarded subject, confirmed by ${deal.corroborated.by}.`];
+      } else deal = null;
     }
     if (deal) {
       /*
