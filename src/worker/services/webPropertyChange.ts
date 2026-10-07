@@ -3048,9 +3048,13 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
   // THE NEW CARD, not "the newest card of the kind": created by this read, for this partner.
   const created = (
     await ctx.env.WP_OS_DB.prepare(
-      `SELECT id, kind, owner_id, title FROM work_card WHERE lower(requested_by_email) = ?1 AND created_at >= ?2 ORDER BY (kind = 'WEB_PROPERTY_CHANGE') DESC, created_at DESC`,
+      // 7 Oct 2026: a non-reply the door read as DEAL FLOW opens the analyst's card with no requester,
+      // and this route then reported it as "a reply that steered" — so the door's own cards count too.
+      `SELECT id, kind, owner_id, title FROM work_card
+        WHERE created_at >= ?2 AND (lower(requested_by_email) = ?1 OR (?3 = 0 AND created_by LIKE 'system:%'))
+        ORDER BY (kind = 'WEB_PROPERTY_CHANGE') DESC, (lower(COALESCE(requested_by_email, '')) = ?1) DESC, created_at DESC`,
     )
-      .bind(from, startedAt)
+      .bind(from, startedAt, isReply ? 1 : 0)
       .all<{ id: string; kind: string | null; owner_id: string | null; title: string }>()
   ).results ?? [];
   const card = created[0] ?? null;
@@ -3072,7 +3076,7 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
     firmScope: "west-peek",
     payload: { message_id: msgId, superseded, created: created.map((c) => c.id), new_card: card?.id ?? null, new_card_kind: card?.kind ?? null, steered_card: steered },
   });
-  if (!card && steered) {
+  if (!card && steered && isReply) {
     const target = await ctx.env.WP_OS_DB.prepare("SELECT id, kind, owner_id, title, state FROM work_card WHERE id = ?1").bind(steered).first<{ id: string; kind: string | null; owner_id: string | null; title: string; state: string }>();
     return json({ ok: true, object_key: key, superseded, steered_card: steered, steered_card_state: target?.state ?? null, new_card: null, new_card_kind: null, owner_id: target?.owner_id ?? null, title: target?.title ?? null, detail: "the message is a reply: it steered the card it answers and opened no card" });
   }
