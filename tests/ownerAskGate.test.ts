@@ -232,8 +232,10 @@ describe("a re-read of the stored message supersedes the hand-off the earlier re
       identity: { id: "fu_sequoia_taylor", email: "sequoia@westpeek.ventures", fullName: "Sequoia Taylor", status: "ACTIVE", roles: ["MANAGING_PARTNER"], authorityScopes: [] },
       params: {},
     } as never);
-    const body = (await res.json()) as { superseded: string[] };
+    const body = (await res.json()) as { superseded: string[]; new_card: string | null; detail?: string };
     expect(body.superseded).toContain(handOff);
+    expect(body.new_card, "the re-read names the card the door opened, not 'a reply that steered'").toBeTruthy();
+    expect(body.detail ?? "").not.toMatch(/is a reply/);
     expect((await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(handOff).first<{ state: string }>())!.state).toBe("CANCELLED");
   });
 });
