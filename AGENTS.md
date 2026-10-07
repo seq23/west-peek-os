@@ -33,7 +33,7 @@ Parent authorities (IMMUTABLE — never modify, move, or rewrite):
 - 45 machines, seeded from ONE versioned registry source (`src/shared/registry/machines.ts`), tested from that source (D14).
 - A Managing Partner name may never be an AI employee (D10). MPs: Scooter Taylor, Sequoia Taylor.
 - Silence is never approval. Approval target ≤15 human cards/day steady-state (D7).
-- Privacy modes: `LOCAL | FRONTIER | LOCKDOWN` (D8). Spend lever: `FREE_ONLY | MODERATE | OPEN`, default `MODERATE`,
+- Privacy modes: `LOCAL | FRONTIER | LOCKDOWN` (D8). Spend lever (UI: Cockpit → "How much to spend"): `FREE_ONLY | MODERATE | OPEN`, default `MODERATE`,
   with an automatic gradient inside `MODERATE` pro-rated against the elapsed month. The old
   `cost_mode` enum is retired and derived — see `docs/AI_GOVERNANCE.md` and `validate:one-lever`.
 - Fail closed for authority, privacy, egress, external effects. Degrade gracefully for AI convenience features.
