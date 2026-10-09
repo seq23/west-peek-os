@@ -1,7 +1,8 @@
 import type { Env } from "../env";
 import { appendEvent } from "../events";
-import { partnerByEmail } from "../../shared/registry/partners";
-import { profileLineProblem } from "../../shared/partners/profileFilter";
+import { PARTNERS, partnerByEmail } from "../../shared/registry/partners";
+import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
+import { profileLineProblem, stripPersonalDetails, type StripOptions } from "../../shared/partners/profileFilter";
 import { json, type RouteContext } from "../router";
 import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
 
@@ -21,7 +22,10 @@ import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
  * WHAT IT MAY HOLD. The partner's own projects and requests only. Every line passes
  * `profileLineProblem` (no LP names, deal terms or fund details) on the way IN and again on the way
  * OUT, with the LP names on record as extra forbidden words. A refused line is dropped whole and the
- * refusal is an event — never trimmed into something that looks clean.
+ * refusal is an event — never trimmed into something that looks clean. A THIRD PARTY'S personal details
+ * (a name with an email or phone, an email address that is not the partner's) are the one thing cut
+ * OUT rather than refused (`stripPersonalDetails`; owner, 9 Oct 2026): on the way in, on the way out,
+ * and by every refresh, which rewrites a stored line clean.
  *
  * WHO READS IT. The router (`services/emailRouting.ts`: what he calls each site, which open card a
  * new email is about), the one clarifying email (the candidates in his own terms), and every job
@@ -48,6 +52,15 @@ export interface PartnerProfile {
 
 const clean = (s: unknown) => String(s ?? "").replace(/\s+/g, " ").trim();
 
+/** Whose name and address may stay in a line: the partners and the AI employees, never anyone else. */
+const KEEP: StripOptions = {
+  keepEmails: PARTNERS.map((p) => p.email),
+  keepNames: [...PARTNERS.flatMap((p) => [p.firstName, p.fullName]), ...AI_EMPLOYEE_ROSTER.map((e) => e.name)],
+};
+
+/** The line as a profile may hold it: whitespace-clean, a third party's personal details cut out. */
+export const profileText = (s: unknown): string => clean(stripPersonalDetails(clean(s), KEEP));
+
 /** The LP names on record — extra forbidden words. Never throws: an unreadable table forbids nothing extra, the rules still hold. */
 async function lpNames(env: Env): Promise<string[]> {
   try {
@@ -59,7 +72,7 @@ async function lpNames(env: Env): Promise<string[]> {
 
 /** The line, or null when it may not be kept. A refusal is recorded (without the words). */
 async function safe(env: Env, email: string, text: string, names: readonly string[], source: string): Promise<string | null> {
-  const t = clean(text);
+  const t = profileText(text);
   if (t.length < 3) return null;
   const why = profileLineProblem(t, names);
   if (!why) return t;
@@ -115,15 +128,18 @@ export async function loadProfile(env: Env, email: string | null | undefined, no
         .bind(e, since)
         .all<{ kind: string; body: string; card_id: string | null; last_active_at: string; created_at: string }>()
     ).results ?? [];
-    const ok = (s: string | null | undefined) => (s && profileLineProblem(s, names) === null ? clean(s) : "");
+    const ok = (s: string | null | undefined) => {
+      const t = profileText(s);
+      return t && profileLineProblem(t, names) === null ? t : "";
+    };
     return {
       email: e,
       who: ok(row?.who),
       writesLike: ok(row?.writes_like),
       usuallyAsks: ok(row?.usually_asks),
       aliases: aliasesOf(row?.aliases_json).filter((a) => profileLineProblem(a.words.join(" "), names) === null),
-      workingOn: lines.filter((l) => l.kind === "WORKING_ON" && ok(l.body)).slice(0, 12).map((l) => ({ body: clean(l.body), cardId: l.card_id, lastActiveAt: l.last_active_at })),
-      notes: lines.filter((l) => l.kind === "NOTE" && ok(l.body)).slice(0, 12).map((l) => ({ body: clean(l.body), at: l.created_at })),
+      workingOn: lines.filter((l) => l.kind === "WORKING_ON" && ok(l.body)).slice(0, 12).map((l) => ({ body: ok(l.body), cardId: l.card_id, lastActiveAt: l.last_active_at })),
+      notes: lines.filter((l) => l.kind === "NOTE" && ok(l.body)).slice(0, 12).map((l) => ({ body: ok(l.body), at: l.created_at })),
     };
   } catch {
     return { email: e, who: "", writesLike: "", usuallyAsks: "", aliases: [], workingOn: [], notes: [] };
@@ -198,7 +214,26 @@ export async function refreshWorkingOn(env: Env, email: string | null | undefine
     kept++;
   }
   await env.WP_OS_DB.prepare("DELETE FROM partner_profile_line WHERE firm_scope = 'west-peek' AND partner_email = ?1 AND kind = 'WORKING_ON' AND last_active_at < ?2").bind(e, since).run();
+  await scrubStored(env, e, names);
   return kept;
+}
+
+/**
+ * Every refresh (the door's and the hourly sweep's) also rewrites what is already stored: a line
+ * carrying a third party's personal details is rewritten without them, and a line the fund rules now
+ * refuse is removed. So a seeded or older line cannot keep what a newer rule takes out.
+ */
+async function scrubStored(env: Env, e: string, names: readonly string[]): Promise<void> {
+  const rows = (await env.WP_OS_DB.prepare("SELECT id, body FROM partner_profile_line WHERE firm_scope = 'west-peek' AND partner_email = ?1").bind(e).all<{ id: string; body: string }>()).results ?? [];
+  for (const r of rows) {
+    const t = profileText(r.body);
+    const why = t.length < 3 ? "nothing left" : profileLineProblem(t, names);
+    if (why) {
+      await env.WP_OS_DB.prepare("DELETE FROM partner_profile_line WHERE id = ?1").bind(r.id).run();
+      continue;
+    }
+    if (t !== r.body) await env.WP_OS_DB.prepare("UPDATE partner_profile_line SET body = ?2 WHERE id = ?1").bind(r.id, t).run();
+  }
 }
 
 /** Every partner's profile, refreshed (the sweep's tick). Never throws. */
