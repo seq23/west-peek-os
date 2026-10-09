@@ -437,6 +437,29 @@ export function unregisteredHostsIn(text: string, registry: readonly WebProperty
   return out;
 }
 
+/**
+ * EVERY SITE HOST THE WRITTEN PART NAMES THAT IS NOT REGISTERED — linked OR bare (9 Oct 2026). Read by
+ * the follow-up matcher (`openSiteCardFor`): "New site build: voting.topbarz.xyz/entry" names a site,
+ * just not one of ours, and an email that names a site is never "the site" of an open card for a
+ * different one. Unlike `unregisteredHostsIn` (links only, read beside a new repo), a bare host
+ * counts here, because Scooter writes hosts bare. Email addresses, file names (logo.png) and the
+ * GitHub/Google/Cloudflare hosts every request carries are not sites. Pure.
+ */
+const NOT_A_SITE_TLD = /\.(?:png|jpe?g|gif|svg|webp|heic|pdf|docx?|xlsx?|pptx?|csv|txt|md|json|zip|mp[34]|mov|wav|html?|css|js|ts|eml)$/i;
+export function namedSiteHostsIn(subject: string, body: string, registry: readonly WebProperty[] = WEB_PROPERTIES): string[] {
+  const known = new Set(registry.flatMap((p) => [p.host, ...(p.aliases ?? [])]).map((h) => h.toLowerCase().replace(/^www\./, "")));
+  const text = writtenPart(`${subject}\n${body}`.replace(/\r/g, ""));
+  const out: string[] = [];
+  for (const m of text.matchAll(/(?<![\w@.-])((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,})(?![\w-])/gi)) {
+    const host = m[1]!.toLowerCase().replace(/^www\./, "");
+    if (NOT_A_SITE_TLD.test(host)) continue;
+    if (/(^|\.)(github\.com|google\.com|googleapis\.com|pages\.dev|workers\.dev|cloudflare\.com|resend\.com|gmail\.com)$/.test(host)) continue;
+    if (known.has(host) || [...known].some((k) => host.endsWith(`.${k}`)) || out.includes(host)) continue;
+    out.push(host);
+  }
+  return out;
+}
+
 export interface WebPropertyRegistration {
   repo: string;
   github_repo: string;
