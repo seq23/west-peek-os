@@ -569,3 +569,10 @@ export function blockReplyDoor(text: string, offered: ReadonlyArray<{ key: strin
   if (/^send (it |this )?to an engineer\b/.test(t) && has("ESCALATE")) return "ESCALATE";
   return "ANSWER";
 }
+
+/**
+ * HOW MUCH OF A PARTNER'S ANSWER IS KEPT. Her reply is the job: a 1,317-character change list
+ * (9 Oct 2026, Top Barz /entry) was cut at 1,000 and the rebuild lost its FAQ and "keep it in
+ * preview". Every place that stores, reads or hands on her answer uses this one cap.
+ */
+export const PARTNER_ANSWER_MAX = 8000;

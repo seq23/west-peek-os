@@ -4,6 +4,7 @@ import { runAi } from "../ai/runAi";
 import { INTAKE_JUDGMENT_STANDARD } from "../../shared/registry/aiEmployeePersonas";
 import { changesTextOf, readApprovalReply, type ApprovalReading } from "../../shared/work/approvalReply";
 import { MATERIALS_ADDED_PHRASE } from "../../shared/work/porterNotices";
+import { PARTNER_ANSWER_MAX } from "../../shared/work/blocks";
 
 /**
  * A PARTNER'S REPLY IS PERMISSION TO CONTINUE (owner, 27 Sep 2026).
@@ -82,16 +83,16 @@ export function parseReplyIntent(outputText: string | null | undefined, text: st
   const field = (name: string): string | null => {
     const m = new RegExp(`${name}:\\s*([^\\n]*(?:\\n(?!(?:INTENT|CHANGES|QUESTION|REASON):)[^\\n]*)*)`, "i").exec(out);
     const v = (m?.[1] ?? "").trim();
-    return !v || /^(none|n\/a|-|null|no)\.?$/i.test(v) ? null : v.slice(0, 2000);
+    return !v || /^(none|n\/a|-|null|no)\.?$/i.test(v) ? null : v.slice(0, PARTNER_ANSWER_MAX);
   };
   if (!intent) {
-    return { kind: "CONTINUE", changes: text.trim().slice(0, 2000) || null, question: null, source: "FALLBACK", reason: out ? `could not read the intent — carried on with the words as instructions. Raw: "${out.slice(0, 120)}"` : "the reader returned nothing — carried on with the words as instructions" };
+    return { kind: "CONTINUE", changes: text.trim().slice(0, PARTNER_ANSWER_MAX) || null, question: null, source: "FALLBACK", reason: out ? `could not read the intent — carried on with the words as instructions. Raw: "${out.slice(0, 120)}"` : "the reader returned nothing — carried on with the words as instructions" };
   }
   const kind = intent[1]!.toUpperCase() as ReplyIntentKind;
   const changes = field("CHANGES");
   const question = field("QUESTION");
   const reason = field("REASON") ?? "(no reason given)";
-  if (kind === "QUESTION" && !question) return { kind, changes, question: text.trim().slice(0, 2000), source: "MODEL", reason };
+  if (kind === "QUESTION" && !question) return { kind, changes, question: text.trim().slice(0, PARTNER_ANSWER_MAX), source: "MODEL", reason };
   return { kind, changes, question, source: "MODEL", reason: reason.slice(0, 400) };
 }
 
@@ -116,7 +117,7 @@ export const defaultReadReplyIntent: ReplyIntentReader = async (env, input) => {
             "BIAS HARD TOWARD CONTINUE. A reply is permission unless it plainly says to stop. Only answer STOP when the words " +
             "clearly say to hold or not proceed. Only answer QUESTION when there is a real question addressed to Porter that " +
             "needs an answer — a rhetorical or answered-in-the-same-breath question is not one.\n\n" +
-            `THE REPLY, what the partner wrote above the quote:\n"""\n${input.text.slice(0, 6000)}\n"""\n\n` +
+            `THE REPLY, what the partner wrote above the quote:\n"""\n${input.text.slice(0, PARTNER_ANSWER_MAX)}\n"""\n\n` +
             "Answer in exactly this format and nothing else:\n" +
             "INTENT: CONTINUE|STOP|QUESTION\n" +
             "CHANGES: <the instructions, corrections or answers to apply, in the partner's own words, or none>\n" +
@@ -130,10 +131,10 @@ export const defaultReadReplyIntent: ReplyIntentReader = async (env, input) => {
       })
     ).run;
   } catch (err) {
-    return { kind: "CONTINUE", changes: input.text.trim().slice(0, 2000) || null, question: null, keyword: null, source: "FALLBACK", reason: `the reader could not run (${err instanceof Error ? err.message : String(err)}) — carried on with the words as instructions`, aiRunId: null };
+    return { kind: "CONTINUE", changes: input.text.trim().slice(0, PARTNER_ANSWER_MAX) || null, question: null, keyword: null, source: "FALLBACK", reason: `the reader could not run (${err instanceof Error ? err.message : String(err)}) — carried on with the words as instructions`, aiRunId: null };
   }
   if (run.status !== "COMPLETED" || !run.output_text) {
-    return { kind: "CONTINUE", changes: input.text.trim().slice(0, 2000) || null, question: null, keyword: null, source: "FALLBACK", reason: `the reader was unavailable (${run.failure_reason ?? run.status}) — carried on with the words as instructions`, aiRunId: run.id };
+    return { kind: "CONTINUE", changes: input.text.trim().slice(0, PARTNER_ANSWER_MAX) || null, question: null, keyword: null, source: "FALLBACK", reason: `the reader was unavailable (${run.failure_reason ?? run.status}) — carried on with the words as instructions`, aiRunId: run.id };
   }
   return { ...parseReplyIntent(run.output_text, input.text), keyword: null, aiRunId: run.id };
 };

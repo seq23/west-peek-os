@@ -4,7 +4,7 @@ import type { Env } from "../env";
 import { json, type RouteContext } from "../router";
 import { appendEvent } from "../events";
 import { actorFromIdentity, type Actor } from "./authorize";
-import { answerBlock, blockCard, restoreBlock } from "./blocks";
+import { answerBlock, blockCard, PARTNER_ANSWER_MAX, restoreBlock } from "./blocks";
 import { notifyQuietly } from "./notifications";
 import { runAi } from "../ai/runAi";
 import { deliver } from "./deliverables";
@@ -1062,10 +1062,10 @@ async function requestRebuild(env: Env, card: WebPropertyChangeCard, row: WebPro
   const by = card.block_answered_by ?? requester?.firmUserId ?? null;
   const patch: Partial<WebPropertyChangeRow> = { refresh_intent: intent, refresh_requested_at: now };
   if (intent === "CHANGES" && answer) {
-    patch.answers_json = JSON.stringify([...list(row.answers_json), answer.slice(0, 2000)]);
+    patch.answers_json = JSON.stringify([...list(row.answers_json), answer.slice(0, PARTNER_ANSWER_MAX)]);
     // 0244: THE WORDS THIS REBUILD IS FOR. A remark or a worry is a change to make; the Mac gets
     // them as the run's whole job, and a build that moves nothing for them is a failed attempt.
-    patch.rebuilt_for = answer.slice(0, 2000);
+    patch.rebuilt_for = answer.slice(0, PARTNER_ANSWER_MAX);
   } else {
     patch.rebuilt_for = null;
   }
@@ -1897,7 +1897,7 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
     if (intent?.kind === "QUESTION") {
       const answered = await answerMidFlowQuestion(env, card, intent.question ?? body, deps.answerQuestion);
       await ack(`Answered by email: ${answered.slice(0, 200)}${intent.changes ? " Your instructions are carried into the build." : " The work carries on with the recommendations."}`);
-      if (intent.changes) await update(env, card.id, { answers_json: JSON.stringify([...list(row.answers_json), intent.changes.slice(0, 2000)]) });
+      if (intent.changes) await update(env, card.id, { answers_json: JSON.stringify([...list(row.answers_json), intent.changes.slice(0, PARTNER_ANSWER_MAX)]) });
       if (atPreview && intent.changes) rebuildWith = rebuildWith ?? intent.changes;
       continue;
     }
@@ -1912,7 +1912,7 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
       continue;
     }
     await ack(`Carried into the next phase as your answer.${ccSaid ? ` ${ccSaid}` : ""}`);
-    await update(env, card.id, { answers_json: JSON.stringify([...list(row.answers_json), carried.slice(0, 2000)]) });
+    await update(env, card.id, { answers_json: JSON.stringify([...list(row.answers_json), carried.slice(0, PARTNER_ANSWER_MAX)]) });
   }
   return { held, rebuildWith };
 }
