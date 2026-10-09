@@ -3020,10 +3020,20 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
     ? []
     : ((
         await ctx.env.WP_OS_DB.prepare(
+          /*
+           * ONLY CARDS THE MESSAGE OPENED (9 Oct 2026). `inbound_message.work_card_id` is also the card a
+           * message STEERED — and a mis-steer is exactly what a re-read is for. The re-read of Scooter's
+           * "New site build: voting.topbarz.xyz/entry", which the door had wrongly joined to the
+           * westpeek.ventures spam fix, CANCELLED that spam fix while it waited on his preview. A card
+           * the message opened is created after the message was stored (the index row is written
+           * first, in server time); a card it steered already existed. The minute of slack is clock
+           * skew between isolates, never a real card.
+           */
           `SELECT c.id FROM work_card c
             WHERE c.state IN ('OPEN', 'IN_PROGRESS', 'BLOCKED')
               AND (c.id IN (SELECT work_card_id FROM inbound_message WHERE r2_key = ?1)
-                   OR c.assigned_from_card_id IN (SELECT work_card_id FROM inbound_message WHERE r2_key = ?1))`,
+                   OR c.assigned_from_card_id IN (SELECT work_card_id FROM inbound_message WHERE r2_key = ?1))
+              AND c.created_at >= (SELECT strftime('%Y-%m-%dT%H:%M:%fZ', julianday(MIN(received_at)) - 60.0 / 86400) FROM inbound_message WHERE r2_key = ?1)`,
         )
           .bind(key)
           .all<{ id: string }>()
