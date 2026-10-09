@@ -26,7 +26,9 @@ import {
   type BlockProvider,
   type BlockReason,
 } from "../../shared/work/blocks";
-import { blockWaitDetail } from "../../shared/work/blocks";
+import { blockWaitDetail, PARTNER_ANSWER_MAX } from "../../shared/work/blocks";
+export { PARTNER_ANSWER_MAX };
+
 
 /**
  * The one way a card becomes blocked, and the four ways it stops being one (16 Sep 2026).
@@ -557,7 +559,7 @@ export async function answerBlock(
               block_nag_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
         WHERE id = ?1`,
     )
-      .bind(card.id, typed.slice(0, 1000), identityId)
+      .bind(card.id, typed.slice(0, PARTNER_ANSWER_MAX), identityId)
       .run();
     await record(env, card, identityId, "DROP", typed);
     // Fire-and-forget, like every other notification path in this file: the drop itself is already
@@ -581,7 +583,7 @@ export async function answerBlock(
       .bind(
         card.id,
         "An engineer has to look at this one — it is not something you can answer.",
-        typed.slice(0, 1000) || "Sent to an engineer.",
+        typed.slice(0, PARTNER_ANSWER_MAX) || "Sent to an engineer.",
         identityId,
         nagAt(new Date()),
       )
@@ -651,7 +653,7 @@ export async function answerBlock(
               block_nag_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
         WHERE id = ?1`,
     )
-      .bind(card.id, to.id, `Handed to ${to.name} by you.`.slice(0, 900), `Handed to ${to.name}. ${typed}`.trim().slice(0, 1000), identityId)
+      .bind(card.id, to.id, `Handed to ${to.name} by you.`.slice(0, 900), `Handed to ${to.name}. ${typed}`.trim().slice(0, PARTNER_ANSWER_MAX), identityId)
       .run();
     await leaveNote(env, card.id, identityId, `This has moved to you from ${who}. ${typed || "It stopped on the way through and you are starting it again."}`);
     await record(env, card, identityId, "HAND_ON", `${to.name}: ${typed}`);
@@ -668,7 +670,7 @@ export async function answerBlock(
               block_nag_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
         WHERE id = ?5`,
     )
-      .bind(card.title, typed.slice(0, 900), typed.slice(0, 1000), identityId, card.id)
+      .bind(card.title, typed.slice(0, 900), typed.slice(0, PARTNER_ANSWER_MAX), identityId, card.id)
       .run();
     await leaveNote(env, card.id, identityId, `What you asked for has changed. This is the job now: ${typed}`);
     await record(env, card, identityId, "CHANGE", typed);
@@ -690,7 +692,7 @@ export async function answerBlock(
             block_nag_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE id = ?1`,
   )
-    .bind(card.id, grantsPage ? 1 : 0, `You answered: ${answer}`.slice(0, 900), answer.slice(0, 1000), identityId)
+    .bind(card.id, grantsPage ? 1 : 0, `You answered: ${answer}`.slice(0, 900), answer.slice(0, PARTNER_ANSWER_MAX), identityId)
     .run();
 
   // The steering note is what the general loop reads. Written as her answer to a question, not as a
@@ -775,7 +777,7 @@ async function reopen(env: Env, cardId: string, identityId: string, action: stri
             block_nag_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       WHERE id = ?1`,
   )
-    .bind(cardId, "Being tried again — you sent it back.", `${action}${typed ? `: ${typed}` : ""}`.slice(0, 1000), identityId)
+    .bind(cardId, "Being tried again — you sent it back.", `${action}${typed ? `: ${typed}` : ""}`.slice(0, PARTNER_ANSWER_MAX), identityId)
     .run();
 }
 

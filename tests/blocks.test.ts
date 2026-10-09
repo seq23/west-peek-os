@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { createWorkCardInternal } from "../src/worker/services/workCards";
-import { answerBlock, blockCard, blockOf, resurfaceStaleBlocks } from "../src/worker/services/blocks";
+import { answerBlock, blockCard, blockOf, PARTNER_ANSWER_MAX, resurfaceStaleBlocks } from "../src/worker/services/blocks";
 import { claimNextCard, sweepIdentity, sweepOnce } from "../src/worker/services/workSweep";
 import { auditCatalogue, BLOCK_REASONS, describeBlock, plainLanguageProblems } from "../src/shared/work/blocks";
 
@@ -145,6 +145,23 @@ describe("the owner clears it herself", () => {
     });
     expect(swept.card?.id, "the sweep picks the answered card up again").toBe(c.id);
     expect(promptSeen, "her answer is in front of the employee on its next step").toMatch(/up to \$3M/);
+  });
+
+  it("a long answer is kept whole — the last item of her change list is still on the card", async () => {
+    // 9 Oct 2026: Scooter's 1,317-character change list was cut at 1,000; the rebuild lost the FAQ
+    // and "keep it in preview". Every item she wrote, the last one included, must survive.
+    const c = await card("Change voting.topbarz.xyz: the entry page");
+    await blockCard(env, c, { reason: "a_question_for_you", trying: c.title, employee: "Porter", detail: "Your word on the preview." }, NOW);
+    const items = Array.from({ length: 14 }, (_, i) => `- Change number ${i + 1}: move the rules link, add the Instagram field, show the prize.`);
+    const answer = `Hey Porter,\n\n${items.join("\n")}\n\nPlease keep the site in preview. Nothing should go live until I approve.`;
+    expect(answer.length).toBeGreaterThan(1000);
+    expect(answer.length).toBeLessThan(PARTNER_ANSWER_MAX);
+
+    const out = await answerBlock(env, c.id, PARTNER, { action: "ANSWER", text: answer });
+    expect(out.ok).toBe(true);
+    const reopened = await row(c.id);
+    expect(reopened.block_answer, "the answer the next run reads is the whole answer").toBe(answer);
+    expect(reopened.block_answer).toMatch(/keep the site in preview/);
   });
 
   it("saying yes to a page grants the permission, not just the sentiment", async () => {
