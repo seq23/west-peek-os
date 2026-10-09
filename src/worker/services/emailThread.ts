@@ -5,7 +5,7 @@ import { mintThreadToken, threadHeaders, threadTokensIn, type EmailThreadRow } f
 import { writtenAndQuoted } from "../../shared/intake/replyBody";
 import { containsGenuineQuestion } from "../../shared/intake/genuineQuestion";
 import { addressIn, mailAuthority } from "../../shared/intake/partnerAuthority";
-import { addresseeIn, parseWebPropertyAsk } from "../../shared/intake/webPropertyChange";
+import { addresseeIn, namedSiteHostsIn, parseWebPropertyAsk } from "../../shared/intake/webPropertyChange";
 import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
 import { partnerByEmail, PREVIEW_PARTNER, type Partner } from "../../shared/registry/partners";
 import type { InstructionPiece } from "../../shared/work/instruction";
@@ -165,6 +165,13 @@ export async function openSiteCardFor(
      * site" means the morning after. A named property with no open card of its own is a new job.
      */
     const named = ask?.property_host ?? null;
+    /*
+     * A SITE WE DO NOT KNOW IS STILL A SITE (9 Oct 2026). "New site build: voting.topbarz.xyz/entry"
+     * named no registered property, so `named` was null and the email joined the newest open card —
+     * the westpeek.ventures spam fix — as the "answer" to its preview gate. The new build got no card
+     * at all. An email naming a host none of the open cards are for is a new job, never "the site".
+     */
+    if (!named && namedSiteHostsIn(message.subject, body).length > 0) return null;
     const card = named ? (open.find((c) => c.property_host === named) ?? null) : open[0]!;
     if (!card) return null;
     const thread = await env.WP_OS_DB.prepare(

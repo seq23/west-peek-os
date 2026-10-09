@@ -136,6 +136,14 @@ describe("a partner's new email about an open site job is a follow-up on that jo
     expect(await openSiteCardFor(env, { ...asks, subject: "westpeek.live", raw: newMail("westpeek.live", "Change the tagline on westpeek.live please.") })).toBeNull();
     expect(await openSiteCardFor(env, { ...asks, subject: "Ventures team page", raw: newMail("Ventures team page", "Please add the new partner to the team page on westpeek.ventures.") })).toBeNull();
     // The same property, named outright, joins.
+    // A site we do not know is still a site (9 Oct 2026): Scooter's "New site build:
+    // voting.topbarz.xyz/entry" — with a Google Doc link, no Porter greeting — joined the newest open
+    // card as the answer to its preview gate. It is a new job.
+    const topbarz = "Hey!\n\nWe need a page at voting.topbarz.xyz/entry for the Top Barz CultureCon contest. Keep it simple.\n- Link to the official rules: https://docs.google.com/document/d/1VqrGTQdvbFbqno4Wx_J5xC6PlFBHFdTdTeMalDTueks/edit\n- Track upload\n\nBest,\nScooter";
+    expect(await openSiteCardFor(env, { ...asks, subject: "New site build: voting.topbarz.xyz/entry", raw: newMail("New site build: voting.topbarz.xyz/entry", topbarz) })).toBeNull();
+    expect(await openSiteCardFor(env, { ...asks, subject: "Rules", raw: newMail("Rules", "Hey Porter!\n\nThe rules for https://voting.topbarz.xyz are attached.") })).toBeNull();
+    // Hosts that are not sites never split a follow-up off: an address, a file name, a Doc link.
+    expect(await openSiteCardFor(env, { ...asks, subject: "Logo", raw: newMail("Logo", "Hey Porter!\n\nUse logo.png from the doc https://docs.google.com/document/d/abc/edit and email scooter@westpeek.ventures if stuck.") })).not.toBeNull();
     const named = await openSiteCardFor(env, { ...asks, subject: "joinwestpeek.com hero", raw: newMail("joinwestpeek.com hero", "Make the hero on joinwestpeek.com feel live.") });
     expect(named?.cardId).toBe(porterId);
   });
