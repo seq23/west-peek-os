@@ -180,12 +180,15 @@ describe("a burst of six mixed emails inside a few minutes: each lands on the ri
     const clar = await one<{ id: string; candidates_json: string; sent: number }>("SELECT id, candidates_json, sent FROM inbound_clarification WHERE message_id = ?1", ambiguous);
     expect(clar, "Porter asked which job the ambiguous email is for").not.toBeNull();
     expect(clar!.sent).toBe(1);
-    const asked = sent.slice(sentBefore).filter((m) => m.to === SCOOTER && /^Porter: Which job is/.test(m.subject));
+    const asked = sent.slice(sentBefore).filter((m) => m.to === SCOOTER && /^Porter: I got an email I can't place — Buttons$/.test(m.subject));
     expect(asked.length, "exactly ONE clarifying email").toBe(1);
-    expect(asked[0]!.text, "the candidates are listed in plain words, with the way out").toMatch(/1\*{0,2} — [\s\S]*new — a new job/);
-    expect(asked[0]!.text, "each candidate is named by what he asked for and its site, never by his greeting").toMatch(/Instinct took a look at the spam/);
-    const whichJob = asked[0]!.text.slice(asked[0]!.text.indexOf("Which job is it?"), asked[0]!.text.indexOf("If you do not reply"));
-    expect(whichJob).not.toMatch(/— Hey\b/);
+    // The plain shape (9 Oct 2026 hostile review): the fact first, at most three replies, the original below.
+    expect(asked[0]!.text).toMatch(/^\*\*TL;DR:\*\* I got the following at \d{1,2}:\d{2} [AP]M CT from you: "Buttons"\. I don't know which of your jobs it is for\./);
+    const replies = asked[0]!.text.split("\n").filter((l) => /^• Reply '/.test(l));
+    expect(replies.length, "at most three replies, the way out among them").toBeLessThanOrEqual(3);
+    expect(replies.join("\n")).toMatch(/Reply '(?:\*\*)?1(?:\*\*)?' to add it to your .+ job[\s\S]*Reply 'new' to start it as a new job/);
+    expect(replies.join("\n"), "each candidate is named by what he asked for and its site, never by his greeting").not.toMatch(/your Hey\b/);
+    expect(asked[0]!.text, "the original is quoted below").toMatch(/> Hey Porter!/);
     expect(created.every((c) => !/buttons/i.test(c.title)), "the ambiguous email opened no card").toBe(true);
     // Six emails, two new jobs (each a Walker intake handed to a Porter card) and nothing else.
     expect(await cardCount()).toBe(before + created.length);
@@ -198,16 +201,17 @@ describe("a burst of six mixed emails inside a few minutes: each lands on the ri
     // THE SAME AMBIGUOUS EMAIL AGAIN (a re-delivery): never a second question.
     await env.WP_OS_DB.prepare("DELETE FROM inbound_email_seen WHERE message_id = ?1").bind(ambiguous).run();
     await deliver("Buttons", "Hey Porter!\r\n\r\nCan you make the buttons bigger and bolder?", { messageId: ambiguous });
-    expect(sent.filter((m) => m.to === SCOOTER && /^Porter: Which job is/.test(m.subject)).length, "never asked twice about the same email").toBe(1);
+    expect(sent.filter((m) => m.to === SCOOTER && /^Porter: I got an email I can't place — Buttons$/.test(m.subject)).length, "never asked twice about the same email").toBe(1);
 
     // HIS ANSWER ROUTES IT: the number of the community card, on the clarifying email's own thread.
     const candidates = JSON.parse(clar!.candidates_json) as Array<{ cardId: string }>;
-    const n = candidates.findIndex((c) => c.cardId === community) + 1;
-    expect(n, "the community card is a candidate").toBeGreaterThan(0);
+    expect(candidates.length, "the two jobs shown are the two he can answer with").toBe(2);
+    const target = candidates.some((c) => c.cardId === community) ? community : candidates[0]!.cardId;
+    const n = candidates.findIndex((c) => c.cardId === target) + 1;
     const clarThread = await one<{ token: string }>("SELECT token FROM email_thread WHERE object_type = 'inbound_clarification' AND object_id = ?1", clar!.id);
     const cardsBeforeAnswer = await cardCount();
     await deliver("Re: Porter: Which job is \"Buttons\" for?", `${n}\r\n\r\nSent from my iPhone`, { inReplyTo: threadReference(clarThread!.token) });
-    expect(await lastNote(community), "the ambiguous email landed on the card he named").toMatch(/buttons bigger and bolder/);
+    expect(await lastNote(target), "the ambiguous email landed on the card he named").toMatch(/buttons bigger and bolder/);
     expect(await cardCount(), "and opened nothing").toBe(cardsBeforeAnswer);
     expect((await one<{ resolution: string }>("SELECT resolution FROM inbound_clarification WHERE id = ?1", clar!.id))?.resolution).toBe("CARD");
   });

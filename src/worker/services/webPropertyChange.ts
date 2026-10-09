@@ -733,6 +733,8 @@ export async function parkPhase(
     // R7–R23 FOR EVERY KIND (0254): the SAME standing-practices block every other duty's prompt carries,
     // with the requesting partner's constraints register — carried on the job because the duty imports nothing from src/.
     practices: await practicesForCard(env, card.id, card.firm_scope),
+    // 0256: Drive files a partner shared onto this card, with their text as read through the firm's delegation.
+    drive_files: await (await import("./driveShares")).driveFilesFor(env, card.id),
     due: readWebPropertyAsk(card.request_json)?.due ?? null,
     sites: sitesOf(row.property_host, registry),
     pages_hosts: pagesHostsOf(row.property_host, registry),
@@ -3094,6 +3096,8 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
     // The message is no longer that card's: the re-read links it to wherever it now lands.
     if (restored.length) await ctx.env.WP_OS_DB.prepare("UPDATE inbound_message SET work_card_id = NULL WHERE r2_key = ?1").bind(key).run();
   }
+  // A superseded card no longer holds the message: the re-read links it to wherever it lands now.
+  for (const id of superseded) await ctx.env.WP_OS_DB.prepare("UPDATE inbound_message SET work_card_id = NULL WHERE r2_key = ?1 AND work_card_id = ?2").bind(key, id).run();
   if (msgId) await ctx.env.WP_OS_DB.prepare("DELETE FROM inbound_email_seen WHERE message_id = ?1").bind(msgId).run();
   const startedAt = new Date().toISOString();
   const { handleInboundEmail } = await import("../effects/inboundEmail");
@@ -3130,6 +3134,13 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
   const steered = card
     ? null
     : ((await ctx.env.WP_OS_DB.prepare("SELECT work_card_id FROM inbound_message WHERE r2_key = ?1 OR (?2 <> '' AND message_id = ?2) ORDER BY (r2_key = ?1) DESC, received_at DESC LIMIT 1").bind(key, msgId).first<{ work_card_id: string | null }>())?.work_card_id ?? null);
+  // …and when the re-read opened nothing but landed on an existing card (a follow-up, a shared file
+  // attached to its job), the superseded card points at THAT card (rule 1a).
+  if (!card && steered) {
+    for (const old of superseded) {
+      if (old !== steered) await ctx.env.WP_OS_DB.prepare("UPDATE work_card SET merged_into_card_id = ?2 WHERE id = ?1 AND state = 'CANCELLED' AND merged_into_card_id IS NULL").bind(old, steered).run();
+    }
+  }
   await appendEvent(ctx.env, {
     eventType: "inbound_email.reingested",
     actorType: "firm_user",

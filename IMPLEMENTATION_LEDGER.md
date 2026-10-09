@@ -7269,3 +7269,16 @@ Owner rulings, verbatim: "porter needs to work on anything sequoia or scooter se
 - **Proof**: tests/partnerEmailRouting.test.ts (burst of six, the three incidents, concurrency, profiles);
   every guard broken and watched fail, then restored. PROVEN locally; production routing UNPROVEN until the
   next partner burst.
+
+## 9 Oct 2026 — A shared Drive file is the sharing partner's material; one plain "can't place it" question (migration 0256)
+
+- **Why.** Scooter's 13:29Z share of the Top Barz rules doc came from Google's share sender, opened an
+  "Unclear email" card that could not read the doc, and sent Sequoia a mid-word-cut, essay-shaped question
+  claiming nothing was on record about Top Barz.
+- **Now.** `shared/intake/driveShare.ts` reads the sharer from Google's DKIM-signed Reply-To;
+  `services/driveShares.ts` reads the file as that partner through the firm's delegation (`drive.readonly`),
+  attaches it (row in `card_drive_file`, text in the card and on Porter's job as SHARED_FILES) to his matching
+  open job, or opens a card for him BLOCKED on his word with one plain question; `driveShareAnswers.ts` routes
+  his reply. Every can't-place question (routing cards, rule 1d, shares) is built by `cantPlaceEmail`.
+- **Proof.** tests/driveShareRouting.test.ts; each guard broken and watched fail. Drive read PROVEN live
+  (9 Oct, impersonating the sharer: 200, 19,699 chars); production door UNPROVEN until the next share.

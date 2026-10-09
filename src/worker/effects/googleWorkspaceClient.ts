@@ -44,6 +44,8 @@ export const SCOPE = {
   meetCreated: "https://www.googleapis.com/auth/meetings.space.created",
   meetSettings: "https://www.googleapis.com/auth/meetings.space.settings",
   pubsub: "https://www.googleapis.com/auth/pubsub",
+  /** 9 Oct 2026: a file a partner shared with os@, read as the partner who shared it (0256). */
+  driveRead: "https://www.googleapis.com/auth/drive.readonly",
   /**
    * The Meet Media API (tier 4). Restricted; not in the delegation grant as of 19 Sep 2026 —
    * `serviceAccountToken` names it `scope_missing`, and the live listener records that as the
@@ -169,6 +171,46 @@ async function readJson<T>(res: Response, url: string): Promise<T> {
   // Never echoes the body: it can carry a resource the firm has not decided to keep.
   if (!res.ok) throw new GoogleWorkspaceError("http", res.status, `google responded ${res.status} for ${new URL(url).pathname}`);
   return (await res.json()) as T;
+}
+
+// ── Drive (read): a file a partner shared with the OS (0256) ─────────────────
+
+export interface DriveFileRaw {
+  id?: string;
+  name?: string;
+  mimeType?: string;
+  webViewLink?: string;
+  owners?: Array<{ emailAddress?: string }>;
+  sharingUser?: { emailAddress?: string };
+  lastModifyingUser?: { emailAddress?: string };
+}
+
+export async function getDriveFile(token: string, fileId: string, fetchImpl: typeof fetch = fetch): Promise<DriveFileRaw> {
+  return getJson<DriveFileRaw>(
+    fetchImpl,
+    token,
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,webViewLink,owners(emailAddress),sharingUser(emailAddress),lastModifyingUser(emailAddress)&supportsAllDrives=true`,
+  );
+}
+
+/**
+ * THE FILE'S TEXT, capped: a Doc as plain text, a Sheet as CSV, Slides as text, a folder as its file
+ * list, anything else as nothing (its link stands). Never throws for a type it cannot read.
+ */
+export async function driveFileText(token: string, file: DriveFileRaw, maxChars: number, fetchImpl: typeof fetch = fetch): Promise<string | null> {
+  const id = encodeURIComponent(file.id ?? "");
+  const mime = file.mimeType ?? "";
+  let url: string | null = null;
+  if (mime === "application/vnd.google-apps.document" || mime === "application/vnd.google-apps.presentation") url = `https://www.googleapis.com/drive/v3/files/${id}/export?mimeType=text/plain`;
+  else if (mime === "application/vnd.google-apps.spreadsheet") url = `https://www.googleapis.com/drive/v3/files/${id}/export?mimeType=text/csv`;
+  else if (mime === "application/vnd.google-apps.folder") {
+    const list = await getJson<{ files?: Array<{ name?: string; mimeType?: string }> }>(fetchImpl, token, `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(`'${file.id}' in parents and trashed = false`)}&fields=files(name,mimeType)&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true`);
+    return (list.files ?? []).map((f) => `- ${f.name ?? "(unnamed)"}`).join("\n").slice(0, maxChars) || null;
+  } else if (mime.startsWith("text/")) url = `https://www.googleapis.com/drive/v3/files/${id}?alt=media&supportsAllDrives=true`;
+  if (!url) return null;
+  const res = await fetchWithTimeout(fetchImpl, url, { headers: { authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new GoogleWorkspaceError(res.status === 404 ? "not_found" : res.status === 403 ? "forbidden" : "http", res.status, `google responded ${res.status} exporting the file`);
+  return (await res.text()).slice(0, maxChars);
 }
 
 // ── Calendar (read) ──────────────────────────────────────────────────────────

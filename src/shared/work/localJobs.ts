@@ -119,6 +119,8 @@ export interface LocalJobPayload {
   constraints?: string[];
   /** 0254 (R7–R23 for every kind): the standing partner-practices block every duty prompt carries, with the partner's constraints register. */
   practices?: string;
+  /** 0256: Google Drive files a partner shared onto the card — title, link, who shared it, and the text read through the firm's delegation. */
+  drive_files?: Array<{ title: string; url: string; shared_by: string | null; text: string | null }>;
   /** 0253 (addendum 3): the deadline the partner named, ISO UTC, and their words. */
   due?: { due_at: string; due_words: string } | null;
   /** 23 Sep 2026: the site folders of target_repo this job may change (sitesOf(property_host)); [] when unresolved. */

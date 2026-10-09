@@ -178,7 +178,7 @@ export async function replyToRequester(
    * "blocked". Everything else about the send (the lane, the cc, the thread, once per cause) is this
    * function's, unchanged.
    */
-  composed?: { what: string; tldr: string; tldrBullets: readonly string[]; sections: ReadonlyArray<{ label: string; bullets: string[] }> } | null,
+  composed?: { what: string; tldr: string; tldrBullets: readonly string[]; sections: ReadonlyArray<{ label: string; bullets: string[] }>; details?: string | null } | null,
 ): Promise<{ sent: boolean; to: string | null; reason: string }> {
   const to = (card.requested_by_email ?? "").trim().toLowerCase();
   if (!to) return { sent: false, to: null, reason: "the card was not asked for by email" };
@@ -247,7 +247,7 @@ export async function replyToRequester(
   const stuck = outcome === "BLOCKED" && (isTechnicalBlock(blockReason) || ["tried_and_could_not_finish", "stopped_part_way"].includes(blockReason ?? ""));
   const previewSection = porter?.previewLine ? [{ label: "Current preview", bullets: [porter.previewLine] }] : [];
   const email = composed
-    ? { employee: who, what: composed.what, tldr: composed.tldr, tldrBullets: [...composed.tldrBullets], sections: composed.sections.map((s) => ({ label: s.label, bullets: [...s.bullets] })), details: null, routedBy }
+    ? { employee: who, what: composed.what, tldr: composed.tldr, tldrBullets: [...composed.tldrBullets], sections: composed.sections.map((s) => ({ label: s.label, bullets: [...s.bullets] })), details: composed.details ?? null, routedBy }
     : {
         employee: who,
         // A LANE FAULT IS "STUCK", NOT A QUESTION: the reader cannot answer it, and it says so.

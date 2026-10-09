@@ -310,6 +310,9 @@ export function renderContext(job, paths) {
     `ATTACHMENTS: ${paths.attachments?.length ? paths.attachments.map((a) => `${a.filename} (${a.media_type}, ${a.bytes} bytes) → ${a.path}`).join("; ") : "none arrived"}`,
     `DRIVE_FOLDERS: ${job.drive?.folder_id ? `${job.drive.folder_url ?? job.drive.folder_id} → mapped into ${paths.packageDir}/drive` : "none in the request"}`,
     ...(job.drive?.folder_id ? driveLines(job, paths) : []),
+    // 0256: files the partner SHARED with os@ (a Google Doc, Sheet, folder), already read as text by the Worker.
+    `SHARED_FILES: ${Array.isArray(job.drive_files) && job.drive_files.length ? job.drive_files.map((f) => `"${f.title}" (${f.url}, shared by ${f.shared_by ?? "the partner"})`).join("; ") : "none"}`,
+    ...(Array.isArray(job.drive_files) ? job.drive_files.filter((f) => f.text).flatMap((f) => [`--- SHARED FILE "${f.title}" (its text; read it like the request) ---`, String(f.text).slice(0, 20000), `--- end of "${f.title}" ---`]) : []),
     "",
     // 0254: the shared partner-practices block — the same one every employee's prompt carries (src/shared/work/partnerPractices.ts).
     ...(job.practices ? [String(job.practices), ""] : []),

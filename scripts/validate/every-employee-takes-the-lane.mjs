@@ -94,6 +94,14 @@ export const DIRECT_SEND_REGISTER = {
       "would leave his email unrouted for as long as it waited. One message per stored email " +
       "(inbound_clarification.message_id is UNIQUE), to the sender only, a partner address only.",
   },
+  "src/worker/services/driveShares.ts": {
+    why:
+      "0256 (9 Oct 2026, Sequoia): a Google Drive file a partner shared that matches none of his open " +
+      "jobs gets ONE question to that partner at once — \"I got <title> from you at <time>. What would you " +
+      "like me to do with it?\" It is the door asking where his material goes, not finished work; held in " +
+      "a preview lane his file would sit unplaced. One per share notice (inbound_clarification.message_id " +
+      "is UNIQUE), to the sharing partner only.",
+  },
   "src/worker/services/banterReply.ts": {
     why:
       "Addendum 11 (22 Sep 2026, her decision): a card the intake classifier catches as pure " +
