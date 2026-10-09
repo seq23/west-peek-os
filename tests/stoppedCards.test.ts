@@ -53,7 +53,12 @@ async function row(id: string): Promise<Record<string, unknown>> {
  * ever read.
  */
 let runSeq = 0;
-async function recordRefusedRun(cardId: string, failureReason: string, providerId = "prov_anthropic"): Promise<void> {
+/**
+ * `at` defaults to the wall clock, which is when `runAi` stamps a real run: DURING the tick that
+ * claimed the card, so after the sweep's `now` (every sweep below runs at a 2026-09-17 time). The
+ * sweep reads only runs from the attempt that failed — see "a run from an earlier tick" below.
+ */
+async function recordRefusedRun(cardId: string, failureReason: string, providerId = "prov_anthropic", at?: Date): Promise<void> {
   const id = `air_test_${(runSeq += 1)}`;
   await env.WP_OS_DB.prepare(
     `INSERT INTO ai_run (id, purpose, actor_type, actor_id, sensitivity, privacy_mode, cost_mode, provider_id, model,
@@ -61,7 +66,7 @@ async function recordRefusedRun(cardId: string, failureReason: string, providerI
      VALUES (?1, 'Parker working the event kit', 'SYSTEM', 'work_sweep', 'INTERNAL', 'STANDARD', 'NORMAL', ?2,
              'claude-sonnet-4', 'BLOCKED_DEFERRED', 'h', ?3, ?4, 'west-peek', ?5)`,
   )
-    .bind(id, providerId, `trc_test_${runSeq}`, failureReason, new Date(NOW.getTime() + runSeq * 1000).toISOString())
+    .bind(id, providerId, `trc_test_${runSeq}`, failureReason, (at ?? new Date(Date.now() + runSeq)).toISOString())
     .run();
   await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO ai_run_attribution (ai_run_id, machine_id, work_card_id, category) VALUES (?1, NULL, ?2, 'OPERATIONS')")
     .bind(id, cardId)
@@ -301,6 +306,38 @@ describe("nothing left to try is its own block", () => {
  * said "Parker tried three times and could not get this done", offering an answer to type. No
  * answer could have helped; moving the lever to Moderate was the fix, and the card never said so.
  */
+/**
+ * A RUN FROM AN EARLIER TICK IS NOT THE LANE BEHIND THIS FAILURE (9 Oct 2026, topbarz card).
+ *
+ * At 19:38 the reply-intent reader was PREFLIGHT_BLOCKED under Free only, failed open to CONTINUE,
+ * and the Mac rebuild was queued — that tick PROGRESSED. At 21:42 the Mac job was abandoned (it went
+ * quiet), and the sweep wrote "held back by the spend setting — this work needs a paid model" with
+ * "of 2", because it read the 19:38 run. The failure was the Mac, not the lever.
+ */
+describe("a run from an earlier tick", () => {
+  it("does not name the spend setting for a Mac job that went quiet, and keeps every go", async () => {
+    const id = await card("Change voting.topbarz.xyz", "aie_porter");
+    const tick = new Date(NOW.getTime() + 2 * 3_600_000);
+    // The fail-open reader's run, two hours before the tick that failed.
+    await recordRefusedRun(
+      id,
+      "free_only_no_free_model_available:the lever is set to FREE_ONLY and no free model is available and adequate for this call",
+      "prov_anthropic",
+      new Date(tick.getTime() - 2 * 3_600_000),
+    );
+    const quiet = "the Mac took this job and went quiet for 11 minutes; it is closed rather than offered again";
+    const out = await sweepOnce(env, tick, {
+      general: async () => ({ finished: false, blocked: false, detail: quiet, steps: [{ action: "failed", detail: quiet }] }),
+    });
+    expect(out.outcome).toBe("FAILED");
+    const c = await row(id);
+    expect(c.state).toBe("IN_PROGRESS");
+    expect(String(c.work_last_failure)).not.toMatch(/spend setting|Free only|paid model/);
+    expect(String(c.work_last_failure)).toMatch(new RegExp(`^Attempt 1 of ${MAX_WORK_ATTEMPTS}\\b`));
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
+  });
+});
+
 describe("the spend setting stopped it", () => {
   const FREE_ONLY =
     "DISCOVER: sponsor discovery search failed: free_only_cannot_serve_protected_work:this call is marked 'search' and needs a paid model, " +
