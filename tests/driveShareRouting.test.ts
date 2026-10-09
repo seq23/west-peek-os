@@ -6,6 +6,7 @@ import { openAssignmentCard } from "../src/worker/services/dealIntake";
 import { blockCard } from "../src/worker/services/blocks";
 import { handleInboundEmail } from "../src/worker/effects/inboundEmail";
 import { announceOutcome } from "../src/worker/services/workSweep";
+import { handleReingestStoredEmail } from "../src/worker/services/webPropertyChange";
 import { writeProfile } from "../src/worker/services/partnerProfile";
 import { driveFilesFor } from "../src/worker/services/driveShares";
 import { cantPlaceEmail, shortSubject } from "../src/worker/services/emailRouting";
@@ -163,6 +164,33 @@ describe("a share from a partner lands on his matching job", () => {
     expect(desc).toMatch(/SHARED DOCUMENT from Scooter/);
     expect(desc).toMatch(/One entry per artist/);
     expect(sent.slice(before.sent).filter((m) => m.to === SEQUOIA).length, "Sequoia is not asked about Scooter's file").toBe(0);
+  });
+});
+
+describe("the 9 Oct production repair: re-reading the share the old door filed as \"Unclear email\"", () => {
+  it("attaches the doc to his voting job, merges the Unclear card into it, and reports success", async () => {
+    await closeAll();
+    const voting = await siteJob("Top Barz entry page", "Hey!\n\nWe need an entry page on westpeekproductions.com for the Top Barz contest.", "voting.topbarz.xyz");
+    driveText.set("1RulesDraftFourAAAAAAAAAAAAAAAAAAAAAAAAAA", "RULES draft four");
+    driveName.set("1RulesDraftFourAAAAAAAAAAAAAAAAAAAAAAAAAA", "Official Rules - Top Barz CultureCon Song Contest - Draft IV");
+    await share("Official Rules - Top Barz CultureCon Song Contest - Draft IV", "1RulesDraftFourAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    const msg = (await one<{ id: string; r2_key: string; received_at: string }>("SELECT id, r2_key, received_at FROM inbound_message WHERE subject LIKE '%Draft IV%'"))!;
+    // What the OLD door did with it: an Unclear routing card, opened after the message, holding its link, BLOCKED on Sequoia.
+    await env.WP_OS_DB.prepare("DELETE FROM card_drive_file WHERE file_id = '1RulesDraftFourAAAAAAAAAAAAAAAAAAAAAAAAAA'").run();
+    const unclear = (await (await import("../src/worker/services/dealIntake")).openRoutingCard(env, { subject: "Document shared with you: Draft IV", from: "drive-shares-dm-noreply@google.com", raw: "x", triggers: [], why: "old door", emlKey: msg.r2_key }));
+    await env.WP_OS_DB.prepare("UPDATE inbound_message SET work_card_id = ?2 WHERE id = ?1").bind(msg.id, unclear).run();
+    const res = await handleReingestStoredEmail({
+      request: new Request("https://os.joinwestpeek.com/api/inbound-email/reingest", { method: "POST", body: JSON.stringify({ object_key: msg.r2_key }) }),
+      env,
+      identity: { id: "fu_sequoia_taylor", email: SEQUOIA, fullName: "Sequoia Taylor", status: "ACTIVE", roles: ["MANAGING_PARTNER"], authorityScopes: [] },
+      params: {},
+    });
+    expect(res.status, "a re-read that placed the file is a success, not 'no card'").toBe(200);
+    const body = (await res.json()) as { superseded: string[]; steered_card: string };
+    expect(body.superseded).toEqual([unclear]);
+    expect(body.steered_card).toBe(voting);
+    expect((await driveFilesFor(env, voting)).map((f) => f.title)).toContain("Official Rules - Top Barz CultureCon Song Contest - Draft IV");
+    expect(await one("SELECT state, merged_into_card_id FROM work_card WHERE id = ?1", unclear)).toEqual({ state: "CANCELLED", merged_into_card_id: voting });
   });
 });
 
