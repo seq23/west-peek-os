@@ -1638,6 +1638,32 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
     expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM request_attachment WHERE work_card_id = ?1 AND source = 'REPLY'").bind(porter.id).first<{ n: number }>())!.n, "the reply's photo is on the card").toBe(1);
   });
 
+  it("a re-read of a NEW message the door had mis-steered onto an older card never cancels that card (9 Oct 2026, learned in production)", async () => {
+    // The westpeek.ventures spam fix, BLOCKED on Scooter's preview, opened the day before.
+    const older = await planned(SCOOTER, "Walker", "spam fix waits on its preview", { document: "# Plan", decided: [], asks: [{ question: "Approve the preview?" }], publish_ready: true, placeholders: [] });
+    await env.WP_OS_DB.prepare("UPDATE work_card SET created_at = '2026-10-08T19:32:38.429Z' WHERE id = ?1").bind(older.id).run();
+    expect((await card(older.id)).state).toBe("BLOCKED");
+    // Scooter's brand-new request, stored and indexed against the card it was wrongly steered onto.
+    const key = `inbound-email/2026-10-09/${crypto.randomUUID()}.eml`;
+    const raw = SCOOTER_MIME({ subject: "New site build: voting.topbarz.xyz/entry", body: "Hey!\n\nWe need a page at voting.topbarz.xyz/entry for the Top Barz contest. Keep it simple.", image: false }).replace(/^Message-ID: .*$/m, `Message-ID: <${crypto.randomUUID()}@mail.gmail.com>`);
+    await (env.WP_OS_DOCUMENTS as unknown as { put: (k: string, b: string) => Promise<unknown> }).put(key, raw);
+    await env.WP_OS_DB.prepare(
+      "INSERT INTO inbound_message (id, message_id, r2_key, from_address, to_address, subject, received_at, bytes, mail_authority_json, work_card_id, firm_scope) VALUES (?1, ?2, ?3, ?4, 'os@joinwestpeek.com', 'New site build: voting.topbarz.xyz/entry', '2026-10-09T13:31:18.557Z', 1, '{}', ?5, 'west-peek')",
+    )
+      .bind(`inm_${crypto.randomUUID()}`, `${crypto.randomUUID()}@mail.gmail.com`, key, SCOOTER, older.id)
+      .run();
+    const res = await handleReingestStoredEmail({
+      request: new Request("https://os.joinwestpeek.com/api/inbound-email/reingest", { method: "POST", body: JSON.stringify({ object_key: key }) }),
+      env,
+      identity: { id: "fu_sequoia_taylor", email: SEQUOIA, fullName: "Sequoia Taylor", status: "ACTIVE", roles: ["MANAGING_PARTNER"], authorityScopes: [] },
+      params: {},
+    });
+    const body = (await res.json()) as { superseded: string[]; new_card: string | null };
+    expect(body.superseded, "the card the message was steered onto is not one it opened").not.toContain(older.id);
+    expect((await card(older.id)).state, "the spam fix still waits on its preview").toBe("BLOCKED");
+    if (body.new_card) await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(body.new_card).run();
+  });
+
   it("the prompt sends a new form to the master network sheet through /api/lead (Sequoia, 22 Sep 2026) and no longer to a per-form Google Sheet", () => {
     const prompt = readFileSync(new URL("../scripts/duties/web-property-change-prompt.md", import.meta.url), "utf8").replace(/\s+/g, " ");
     expect(prompt).toContain("the DESTINATION IS THE MASTER NETWORK SHEET");
