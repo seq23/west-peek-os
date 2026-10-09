@@ -7243,3 +7243,29 @@ Owner rulings, verbatim: "porter needs to work on anything sequoia or scooter se
 - Worker: `services/webPropertyRegistry.ts`, `services/secretHandoff.ts` (runs before every other door; scrubs the .eml; resumes every card that waited for the key), `services/workCardFiles.ts` (attachments ≤ 10 MB, Drive links beyond), `services/dnsWaits.ts` (record read from Cloudflare, re-checked by the Mac), `shared/work/porterWaits.ts` (the one wait template), `shared/intake/dueTime.ts` (deadlines → priority).
 - Mac: the duty clones a missing checkout, generates a RUNBOOK from the repo's own config, checks the vault first (name, then vendor), runs RUNBOOK-named scripts for the model (`needs_runs`), puts files on the card, attaches a custom domain through the API; the claimer vaults emailed secrets and re-checks DNS on its heartbeat; `scripts/drive/push.mjs` shares a file with a partner.
 - Guards: `validate:open-repo-door`, `validate:partner-service-rules`, `tests/openRepoDoor.test.ts`; `docs/PARTNER_SERVICE_RULES.md` is the numbered list with code anchors. PROVEN locally against miniflare; the Cloudflare Pages domain API path and Drive push are UNPROVEN until a live job exercises them.
+
+## 9 Oct 2026 — Every partner email lands in one right place; partner profiles (migration 0255)
+
+- **Why.** Scooter's NEW email "New site build: voting.topbarz.xyz/entry" was recorded as the answer to his
+  BLOCKED westpeek.ventures spam card (block cleared, build queued on the wrong site, `block_nag_at` wiped);
+  a re-read then cancelled the spam card; two re-reads 2 s apart made two cards and two "Got it" emails.
+  #233/#234 closed the narrow cases; this is the whole rule set (docs/PARTNER_SERVICE_RULES.md R34–R36).
+- **Routing** (`services/emailRouting.ts`): a reply steers its card or the card it was merged into
+  (`survivorOf`); a new email is never a block's answer (`NEW_EMAIL_NOTE_PREFIX` — instructions only); it joins
+  an open job only for the same site (registered, unregistered, or the profile's name for it) or, with no
+  site named, his one open job unless it says it is new, or the job its words clearly match; otherwise ONE
+  clarifying email (`inbound_clarification`, unique per message), his answer routes it, 24 h → new card;
+  "Sent from my iPhone"-only mail steers and opens nothing.
+- **Re-reads**: one per stored message per five minutes (`inbound_reingest_claim`); a card the message was
+  wrongly attached to gets its block back with its reminder (`restoreBlock`); superseded cards point at their
+  replacement. Door deliveries claim the Message-ID before running (concurrent duplicates read once).
+- **Reminder guard**: triggers `work_card_blocked_keeps_its_nag_*` — a BLOCKED card always has
+  `block_nag_at`; `validate:blocks` checks both exist and repair.
+- **Partner profiles** (`partner_profile`, `partner_profile_line`; D1 only, never the repo): who, working on
+  now (30-day drop-off, refreshed per email and per sweep), how he writes, usual asks, site aliases, "Porter,
+  note: …" verbatim. Every line passes `shared/partners/profileFilter.ts` (no LP names/deal terms/fund detail)
+  in and out. Read by the router, the clarifying email and every job prompt (`practicesForCard`). Seeded via
+  `scripts/ops/seed-partner-profile.mjs` from a JSON file kept outside the repo.
+- **Proof**: tests/partnerEmailRouting.test.ts (burst of six, the three incidents, concurrency, profiles);
+  every guard broken and watched fail, then restored. PROVEN locally; production routing UNPROVEN until the
+  next partner burst.

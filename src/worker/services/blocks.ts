@@ -925,3 +925,32 @@ export function blockOf(
     raw: row.block_raw ?? null,
   };
 }
+
+/**
+ * PUT A WRONGLY CLEARED BLOCK BACK, REMINDER AND ALL (9 Oct 2026, rule 3).
+ *
+ * Scooter's NEW email "New site build: voting.topbarz.xyz/entry" was recorded as the answer to his
+ * spam card's preview gate: `block_answer` set, the card OPEN, and `block_nag_at` wiped — so even once
+ * somebody put the card back to BLOCKED by hand, no reminder would ever have rung. Restoring a block is
+ * this function and nothing else: the block's own words stay (they were never wrong), the recorded
+ * "answer" goes, and the reminder clock is set again from now. Only a card that was answered — OPEN or
+ * IN_PROGRESS with an answer on it and its block still described — can be restored; anything else is
+ * left exactly as it is. Returns whether the card was restored.
+ */
+export async function restoreBlock(env: Env, cardId: string, why: string, now: Date = new Date()): Promise<boolean> {
+  const row = await env.WP_OS_DB.prepare("SELECT block_reason FROM work_card WHERE id = ?1").bind(cardId).first<{ block_reason: string | null }>();
+  const res = await env.WP_OS_DB.prepare(
+    `UPDATE work_card
+        SET state = 'BLOCKED',
+            block_answer = NULL, block_answered_by = NULL, block_answered_at = NULL,
+            block_nag_at = ?2, lease_until = NULL,
+            description = substr(COALESCE(description, '') || char(10) || '• Block restored: ' || ?3, 1, 16000),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE id = ?1 AND state IN ('OPEN', 'IN_PROGRESS') AND block_answered_at IS NOT NULL
+        AND IFNULL(length(trim(block_trying)), 0) > 0 AND IFNULL(length(trim(block_stopped)), 0) > 0
+        AND IFNULL(length(trim(block_needed)), 0) > 0 AND block_who IS NOT NULL`,
+  )
+    .bind(cardId, nagAt(now, row?.block_reason ?? null), why.slice(0, 400))
+    .run();
+  return (res.meta?.changes ?? 0) > 0;
+}

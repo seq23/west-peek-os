@@ -5,15 +5,15 @@ import { mintThreadToken, threadHeaders, threadTokensIn, type EmailThreadRow } f
 import { writtenAndQuoted } from "../../shared/intake/replyBody";
 import { containsGenuineQuestion } from "../../shared/intake/genuineQuestion";
 import { addressIn, mailAuthority } from "../../shared/intake/partnerAuthority";
-import { addresseeIn, namedSiteHostsIn, parseWebPropertyAsk } from "../../shared/intake/webPropertyChange";
 import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
+import { answerClarification, siteCardDecision, survivorOf, type Candidate, type RouteAs } from "./emailRouting";
 import { partnerByEmail, PREVIEW_PARTNER, type Partner } from "../../shared/registry/partners";
 import type { InstructionPiece } from "../../shared/work/instruction";
 import { answerBlock } from "./blocks";
 import { blockReplyDoor } from "../../shared/work/blocks";
 import { ownershipFromWords, tellPartner, tellSecondaryRefused } from "./handOff";
 import { ownershipOf, roleOf } from "../../shared/work/partnerOwnership";
-import { LATE_THREAD_NOTE_PREFIX, readApprovalReply } from "../../shared/work/approvalReply";
+import { LATE_THREAD_NOTE_PREFIX, NEW_EMAIL_NOTE_PREFIX, readApprovalReply } from "../../shared/work/approvalReply";
 import { textBodyOf } from "../effects/mimeAttachments";
 import { storeAttachments } from "./requestMaterials";
 import { answerQuestionForCard, type QuestionAnswerer, type QuestionAnswerResult } from "./questionRouting";
@@ -115,6 +115,11 @@ export interface SteerFromReply {
   reason: string;
   /** True when the message carried one of our tokens at all — an ordinary email carries none. */
   attempted: boolean;
+  /**
+   * 9 Oct 2026 (rule 1d): a NEW email the router could not place — several open jobs, no site named,
+   * no clear match. The door asks the partner once which job it is and opens nothing meanwhile.
+   */
+  clarify?: Candidate[];
 }
 
 const NOT_A_REPLY: SteerFromReply = { steered: false, thread: null, written: "", reason: "", attempted: false };
@@ -138,52 +143,14 @@ export async function openSiteCardFor(
   env: Env,
   message: { fromHeader: string | null; authenticationResults: string | null; subject: string; raw: string },
 ): Promise<{ thread: EmailThreadRow; cardId: string; targetRepo: string | null } | null> {
-  const authority = mailAuthority({ fromHeader: message.fromHeader, authenticationResults: message.authenticationResults });
-  if (!authority.isAssignment || !authority.partnerAddress) return null;
-  const body = textBodyOf(message.raw);
-  const ask = parseWebPropertyAsk(message.subject, body);
-  const toPorter = addresseeIn(body) === "Porter";
-  if (!ask && !toPorter) return null;
-  try {
-    const open =
-      (
-        await env.WP_OS_DB.prepare(
-          `SELECT c.id, w.target_repo, w.property_host
-             FROM work_card c JOIN web_property_change w ON w.work_card_id = c.id
-            WHERE lower(c.requested_by_email) = ?1 AND c.kind = ?2
-              AND c.state NOT IN ('DONE', 'CANCELLED') AND c.merged_into_card_id IS NULL
-            ORDER BY c.updated_at DESC`,
-        )
-          .bind(authority.partnerAddress.toLowerCase(), WEB_PROPERTY_CHANGE_KIND)
-          .all<{ id: string; target_repo: string | null; property_host: string | null }>()
-      ).results ?? [];
-    if (open.length === 0) return null;
-    /*
-     * THE SITE IS THE JOB. A message that names a property joins the open card for THAT property
-     * (the community site and the ventures site share a repo and are still two jobs); a message
-     * that names none — "Hey Porter! … the site" — joins the newest open card, which is what "the
-     * site" means the morning after. A named property with no open card of its own is a new job.
-     */
-    const named = ask?.property_host ?? null;
-    /*
-     * A SITE WE DO NOT KNOW IS STILL A SITE (9 Oct 2026). "New site build: voting.topbarz.xyz/entry"
-     * named no registered property, so `named` was null and the email joined the newest open card —
-     * the westpeek.ventures spam fix — as the "answer" to its preview gate. The new build got no card
-     * at all. An email naming a host none of the open cards are for is a new job, never "the site".
-     */
-    if (!named && namedSiteHostsIn(message.subject, body).length > 0) return null;
-    const card = named ? (open.find((c) => c.property_host === named) ?? null) : open[0]!;
-    if (!card) return null;
-    const thread = await env.WP_OS_DB.prepare(
-      "SELECT * FROM email_thread WHERE object_type = 'work_card' AND object_id = ?1 AND to_address = ?2 ORDER BY created_at DESC LIMIT 1",
-    )
-      .bind(card.id, authority.partnerAddress.toLowerCase())
-      .first<EmailThreadRow>();
-    if (!thread) return null;
-    return { thread, cardId: card.id, targetRepo: card.target_repo };
-  } catch {
-    return null;
-  }
+  /*
+   * THE WHOLE RULE NOW LIVES IN services/emailRouting.ts (9 Oct 2026, rules 1c/1d): a named site —
+   * registered, unregistered, or called by the name the partner's profile says he uses — joins only
+   * the open card for THAT site; no site named joins his one open job unless the email says it is
+   * new; several open jobs need the words to match one clearly, else he is asked once.
+   */
+  const d = await siteCardDecision(env, message);
+  return d.kind === "JOIN" ? { thread: d.thread, cardId: d.cardId, targetRepo: d.targetRepo } : null;
 }
 
 /**
@@ -272,6 +239,8 @@ export async function steerFromReply(
      * original is one join away on `inbound_message.work_card_id`.
      */
     emlKey: string | null;
+    /** 9 Oct 2026 (rule 1d): where the partner said this email goes, when he answered Porter's question. */
+    routeAs?: RouteAs | null;
   },
   /**
    * INJECTABLE, LIKE `ActionabilityClassifier`/`QuestionAnswerer` ELSEWHERE, so a test can prove the
@@ -343,12 +312,23 @@ export async function steerFromReply(
    * reset, an OPEN card given the note the next stage reads) applies unchanged. Nothing new is
    * created. The invariant this keeps: ONE open website card per partner per repo.
    */
+  /*
+   * RULE 1a (9 Oct 2026): A REPLY STEERS ITS CARD — OR THE CARD THAT CARD WAS MERGED INTO. A reply to a
+   * card merged away (two cards from two re-reads, a follow-up folded into the open job) used to land
+   * on the dead card: a closed-card answer, or nothing. It steers the survivor, on the same token.
+   */
+  if (thread && thread.object_type === "work_card") {
+    const survivor = await survivorOf(env, thread.object_id);
+    if (survivor !== thread.object_id) thread = { ...thread, object_id: survivor };
+  }
   let followUp: { cardId: string; subject: string } | null = null;
   if (!thread && tokens.length === 0) {
-    const joined = await openSiteCardFor(env, message);
-    if (joined) {
-      thread = joined.thread;
-      followUp = { cardId: joined.thread.object_id, subject: message.subject };
+    const decision = await siteCardDecision(env, message, message.routeAs ?? null);
+    if (decision.kind === "JOIN") {
+      thread = decision.thread;
+      followUp = { cardId: decision.thread.object_id, subject: message.subject };
+    } else if (decision.kind === "UNCLEAR") {
+      return { ...NOT_A_REPLY, clarify: decision.candidates };
     }
   }
   if (!thread && tokens.length === 0) return NOT_A_REPLY;
@@ -420,6 +400,24 @@ export async function steerFromReply(
       reason: "it replies to one of our notes but has nothing written above the quoted original",
       attempted: true,
     };
+  }
+
+  /*
+   * RULE 1d (9 Oct 2026): THE ANSWER TO PORTER'S "WHICH JOB IS THIS FOR?" — a number, a site, or "new".
+   * The stored email it was about is routed by it, once; nothing else here reads it.
+   */
+  if (thread.object_type === "inbound_clarification") {
+    const out = await answerClarification(env, thread.object_id, written, authority.partnerAddress ?? "partner");
+    await appendEvent(env, {
+      eventType: "work.steered_by_reply",
+      actorType: "firm_user",
+      actorId: partnerByEmail(authority.partnerAddress)?.firmUserId ?? "unknown",
+      objectType: thread.object_type,
+      objectId: thread.object_id,
+      firmScope: thread.firm_scope,
+      payload: { thread_token: thread.token, clarification: true, routed: out.routed, route_as: out.routeAs === "NEW" ? "NEW" : (out.routeAs?.cardId ?? null), said: written.slice(0, 200) },
+    });
+    return { steered: true, thread, written, reason: "", attempted: true, answered: false, attached };
   }
 
   /*
@@ -525,8 +523,25 @@ export async function steerFromReply(
          * notice was not the preview, the reply is kept as a note with a prefix the runner reads:
          * its instructions are applied, its approval lands nothing, and it is acknowledged.
          */
-        const stale = await answersAnEarlierStage(env, cardRow.id, cardRow.kind, thread.token);
-        if (stale) {
+        /*
+         * RULE 1b (9 Oct 2026): A NEW EMAIL IS NEVER THE ANSWER TO A BLOCK. Scooter's "New site build:
+         * voting.topbarz.xyz/entry" was recorded as the answer to his spam card's preview gate. A new
+         * email that joined this card (same site) is kept as INSTRUCTIONS with a prefix the runner reads
+         * (never an approval, never `block_answer`), and the card goes back to the sweep so the work
+         * carries them — the 28 Sep ruling "the ask itself" re-opens the job, it does not answer it.
+         */
+        const stale = followUp ? "new-email" : await answersAnEarlierStage(env, cardRow.id, cardRow.kind, thread.token);
+        if (stale === "new-email") {
+          await env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)")
+            .bind(`wcn_${crypto.randomUUID()}`, cardRow.id, partner.firmUserId, `${NEW_EMAIL_NOTE_PREFIX}${written.slice(0, 3800)}`, thread.firm_scope)
+            .run();
+          await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || '• ' || ?2, 1, 16000) WHERE id = ?1")
+            .bind(cardRow.id, `${partner.firstName} sent a new email about this job while it waited ("${(followUp?.subject ?? "").slice(0, 80)}"): read as instructions for the work, never as the answer to the block or an approval.`)
+            .run();
+          await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'OPEN', work_attempts = 0, lease_until = NULL, block_nag_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1 AND state = 'BLOCKED'")
+            .bind(cardRow.id)
+            .run();
+        } else if (stale) {
           await env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)")
             .bind(`wcn_${crypto.randomUUID()}`, cardRow.id, partner.firmUserId, `${LATE_THREAD_NOTE_PREFIX}${written.slice(0, 3800)}`, thread.firm_scope)
             .run();

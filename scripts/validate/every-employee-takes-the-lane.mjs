@@ -86,6 +86,14 @@ export const DIRECT_SEND_REGISTER = {
       "be a hand-off nobody hears about. Both addresses are partners only (sendPartnerEmail refuses " +
       "anything else); every notice about the WORK itself still takes the lane in webPropertyChange.ts.",
   },
+  "src/worker/services/emailRouting.ts": {
+    why:
+      "Rule 1d (9 Oct 2026, approved build): when the door cannot tell which open job a partner's new " +
+      "email is about, Porter asks that partner ONCE, at once, which job it is. It is not finished work " +
+      "and it has no card yet — it is the door asking where the work goes; held in a preview lane it " +
+      "would leave his email unrouted for as long as it waited. One message per stored email " +
+      "(inbound_clarification.message_id is UNIQUE), to the sender only, a partner address only.",
+  },
   "src/worker/services/banterReply.ts": {
     why:
       "Addendum 11 (22 Sep 2026, her decision): a card the intake classifier catches as pure " +

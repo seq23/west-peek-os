@@ -4,7 +4,7 @@ import type { Env } from "../env";
 import { json, type RouteContext } from "../router";
 import { appendEvent } from "../events";
 import { actorFromIdentity, type Actor } from "./authorize";
-import { answerBlock, blockCard } from "./blocks";
+import { answerBlock, blockCard, restoreBlock } from "./blocks";
 import { notifyQuietly } from "./notifications";
 import { runAi } from "../ai/runAi";
 import { deliver } from "./deliverables";
@@ -2977,6 +2977,24 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
   const msgId = (headers.get("message-id") ?? "").replace(/^<|>$/g, "").trim();
   const from = ((headers.get("from") ?? "").match(/<([^>]+)>/)?.[1] ?? headers.get("from") ?? "").trim().toLowerCase();
   const subject = decodeMimeHeader(headers.get("subject") ?? "");
+  /*
+   * ONE RE-READ AT A TIME PER MESSAGE (9 Oct 2026). Two re-reads of Scooter's "New site build" two
+   * seconds apart (a person and the partner tail) both cleared the dedupe row and both ran the door:
+   * two cards, two "Got it" emails. A re-read now claims the message for five minutes in one atomic
+   * statement; the second is refused with the first one's time, and changes nothing.
+   */
+  const claimKey = key;
+  const claimNow = new Date();
+  const claim = await ctx.env.WP_OS_DB.prepare(
+    `INSERT INTO inbound_reingest_claim (object_key, claimed_at) VALUES (?1, ?2)
+     ON CONFLICT (object_key) DO UPDATE SET claimed_at = excluded.claimed_at WHERE inbound_reingest_claim.claimed_at < ?3`,
+  )
+    .bind(claimKey, claimNow.toISOString(), new Date(claimNow.getTime() - 5 * 60_000).toISOString())
+    .run();
+  if ((claim.meta?.changes ?? 0) === 0) {
+    const held = await ctx.env.WP_OS_DB.prepare("SELECT claimed_at FROM inbound_reingest_claim WHERE object_key = ?1").bind(claimKey).first<{ claimed_at: string }>();
+    return json({ ok: false, error: "already_rereading", object_key: key, detail: `this message was re-read at ${held?.claimed_at ?? "a moment ago"}; one re-read per message per five minutes, so nothing was done twice` }, { status: 409 });
+  }
 
   /*
    * "AGAIN" SUPERSEDES (21 Sep 2026). The first re-read of Scooter's newsletter email created
@@ -3050,6 +3068,32 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
       .run();
     superseded.push(c.id);
   }
+  /*
+   * A CARD THE MESSAGE WAS WRONGLY ATTACHED TO GETS ITS BLOCK BACK (9 Oct 2026, rules 2 and 3). A NEW
+   * email (not a reply) is never the answer to a block (rule 1b). If the door once recorded this message
+   * as the answer to a card that existed before it arrived, that card is not cancelled (#234) — it is put
+   * back exactly as it was: BLOCKED on its own question, the recorded "answer" gone, and its reminder
+   * clock set again (`restoreBlock`), so the re-read can place the message where it belongs.
+   */
+  const restored: string[] = [];
+  if (!isReply) {
+    const attached =
+      (
+        await ctx.env.WP_OS_DB.prepare(
+          `SELECT c.id FROM work_card c
+            WHERE c.id IN (SELECT work_card_id FROM inbound_message WHERE r2_key = ?1)
+              AND c.created_at < (SELECT MIN(received_at) FROM inbound_message WHERE r2_key = ?1)
+              AND c.block_answered_at >= (SELECT strftime('%Y-%m-%dT%H:%M:%fZ', julianday(MIN(received_at)) - 60.0 / 86400) FROM inbound_message WHERE r2_key = ?1)`,
+        )
+          .bind(key)
+          .all<{ id: string }>()
+      ).results ?? [];
+    for (const c of attached) {
+      if (await restoreBlock(ctx.env, c.id, `a new email (${subject.slice(0, 80)}) had been recorded as its answer; a new email never answers a block, and the re-read of ${key} put the block back.`)) restored.push(c.id);
+    }
+    // The message is no longer that card's: the re-read links it to wherever it now lands.
+    if (restored.length) await ctx.env.WP_OS_DB.prepare("UPDATE inbound_message SET work_card_id = NULL WHERE r2_key = ?1").bind(key).run();
+  }
   if (msgId) await ctx.env.WP_OS_DB.prepare("DELETE FROM inbound_email_seen WHERE message_id = ?1").bind(msgId).run();
   const startedAt = new Date().toISOString();
   const { handleInboundEmail } = await import("../effects/inboundEmail");
@@ -3069,6 +3113,15 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
   ).results ?? [];
   const card = created[0] ?? null;
   /*
+   * RULE 1a (9 Oct 2026): A SUPERSEDED CARD POINTS AT ITS REPLACEMENT, so a reply to the old card's
+   * thread steers the card that carries the request now — never a CANCELLED row.
+   */
+  for (const old of superseded) {
+    const oldKind = (await ctx.env.WP_OS_DB.prepare("SELECT kind FROM work_card WHERE id = ?1").bind(old).first<{ kind: string | null }>())?.kind ?? null;
+    const twin = created.filter((c) => (c.kind ?? null) === oldKind);
+    if (twin.length === 1) await ctx.env.WP_OS_DB.prepare("UPDATE work_card SET merged_into_card_id = ?2 WHERE id = ?1 AND state = 'CANCELLED' AND merged_into_card_id IS NULL").bind(old, twin[0]!.id).run();
+  }
+  /*
    * A RE-READ THAT STEERED (27 Sep 2026). Since the oversize branch runs the same reply check as a
    * small message, a stored reply read again lands on the card it answers and opens nothing — which
    * this route used to report as a 409 "no card". The stored message's index row names the card the
@@ -3084,7 +3137,7 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
     objectType: "inbound_email",
     objectId: key,
     firmScope: "west-peek",
-    payload: { message_id: msgId, superseded, created: created.map((c) => c.id), new_card: card?.id ?? null, new_card_kind: card?.kind ?? null, steered_card: steered },
+    payload: { message_id: msgId, superseded, restored_blocks: restored, created: created.map((c) => c.id), new_card: card?.id ?? null, new_card_kind: card?.kind ?? null, steered_card: steered },
   });
   if (!card && steered && isReply) {
     const target = await ctx.env.WP_OS_DB.prepare("SELECT id, kind, owner_id, title, state FROM work_card WHERE id = ?1").bind(steered).first<{ id: string; kind: string | null; owner_id: string | null; title: string; state: string }>();

@@ -93,8 +93,18 @@ export function changesTextOf(text: string): string {
  */
 export const LATE_THREAD_NOTE_PREFIX = "(Reply on the earlier email thread; read as instructions, never as an approval of the preview.) ";
 
+/**
+ * A NEW EMAIL (NOT A REPLY) THAT JOINED A BLOCKED CARD (9 Oct 2026, rule 1b). Its words are the
+ * partner's instructions for the work and are read exactly like a late reply: never an approval of a
+ * preview, never a force, never the answer to the block.
+ */
+export const NEW_EMAIL_NOTE_PREFIX = "(A new email from the partner, not a reply; read as instructions, never as an answer to the block or an approval.) ";
+
 export function stripLateThreadPrefix(body: string): { late: boolean; text: string } {
-  return body.startsWith(LATE_THREAD_NOTE_PREFIX) ? { late: true, text: body.slice(LATE_THREAD_NOTE_PREFIX.length).trim() } : { late: false, text: body };
+  for (const prefix of [LATE_THREAD_NOTE_PREFIX, NEW_EMAIL_NOTE_PREFIX]) {
+    if (body.startsWith(prefix)) return { late: true, text: body.slice(prefix.length).trim() };
+  }
+  return { late: false, text: body };
 }
 
 export interface Ask {

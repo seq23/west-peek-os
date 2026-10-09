@@ -1,4 +1,6 @@
 import { PARTNERS } from "../../shared/registry/partners";
+import { resolveStaleClarifications } from "./emailRouting";
+import { refreshAllWorkingOn } from "./partnerProfile";
 import type { Env } from "../env";
 import { deferredItemsIn } from "../../shared/work/partnerPractices";
 import { deferCard } from "./deferredWork";
@@ -523,6 +525,10 @@ export async function sweepOnce(
   await settleAbandonedCards(env, now);
   // NOTHING STAYS STUCK SILENTLY: a block nobody has acted on rings again rather than ageing out.
   await resurfaceStaleBlocks(env, now);
+  // 9 Oct 2026 (rule 1d): a "which job is this for?" with no answer in 24 hours becomes a new card.
+  await resolveStaleClarifications(env, now);
+  // 0255 (rule 4): finished and moved cards refresh each partner's "working on now"; 30 days idle drops off.
+  await refreshAllWorkingOn(env, now);
   /*
    * AND NEITHER DOES A PREVIEW (18 Sep 2026). A preview holds finished work and an unspent
    * credential, and until now it nagged nobody: at 72 hours it simply vanished off its owner's

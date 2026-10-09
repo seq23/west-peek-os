@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import { partnerByEmail, partnerByFirmUserId } from "../../shared/registry/partners";
 import { partnerPracticesBlock } from "../../shared/work/partnerPractices";
+import { profileBlockFor } from "./partnerProfile";
 
 /**
  * THE PER-PARTNER CONSTRAINTS REGISTER (R19, 0254; owner, 6 Oct 2026).
@@ -53,7 +54,10 @@ export async function partnerEmailForCard(env: Env, cardId: string): Promise<str
  */
 export async function practicesForCard(env: Env, cardId: string, firmScope = "west-peek"): Promise<string> {
   try {
-    return partnerPracticesBlock(await constraintsForPartner(env, await partnerEmailForCard(env, cardId), firmScope));
+    const email = await partnerEmailForCard(env, cardId);
+    // 0255 (rule 4): the requesting partner's living profile rides in the same block, for every kind.
+    const profile = await profileBlockFor(env, email).catch(() => "");
+    return [partnerPracticesBlock(await constraintsForPartner(env, email, firmScope)), profile].filter(Boolean).join("\n");
   } catch {
     return partnerPracticesBlock([]);
   }

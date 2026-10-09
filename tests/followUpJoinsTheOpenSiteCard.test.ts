@@ -7,6 +7,7 @@ import { blockCard } from "../src/worker/services/blocks";
 import { handleInboundEmail } from "../src/worker/effects/inboundEmail";
 import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
 import { WEB_PROPERTY_CHANGE_KIND } from "../src/shared/work/localJobs";
+import { NEW_EMAIL_NOTE_PREFIX, stripLateThreadPrefix } from "../src/shared/work/approvalReply";
 
 /**
  * ONE OPEN WEBSITE CARD PER PARTNER PER REPO (28 Sep 2026).
@@ -23,9 +24,10 @@ import { WEB_PROPERTY_CHANGE_KIND } from "../src/shared/work/localJobs";
  *   · A partner's NEW-SUBJECT email that reads as a website change joins their open card for that
  *     repo as a follow-up: a note in their words (subject included), the card's own event, and NO
  *     new card anywhere.
- *   · THE ASK IS THE APPROVAL: a card blocked after three failed attempts is re-opened by the
- *     follow-up with its attempts reset — the same door a typed answer uses — so the next sweep
- *     plans and builds it without anyone clicking anything.
+ *   · THE ASK RE-OPENS THE JOB: a card blocked after three failed attempts is re-opened by the
+ *     follow-up with its attempts reset, so the next sweep plans and builds it without anyone
+ *     clicking anything — and since 9 Oct 2026 the follow-up is kept as INSTRUCTIONS, never recorded
+ *     as the block's answer (a new email is not a reply to the question the block asked).
  *   · The matcher is narrow: an unauthenticated sender, a message that is not a website change,
  *     and a partner with no open website card all fall through to the ladder the door always ran.
  *   · At the door itself (both sizes go through the same reply check), the second email creates
@@ -163,7 +165,7 @@ describe("a partner's new email about an open site job is a follow-up on that jo
     expect(JSON.parse(event!.payload_json)).toMatchObject({ follow_up: true, follow_up_subject: "Names missing on the HBCU flyers" });
   });
 
-  it("THE ASK IS THE APPROVAL: a card blocked after three failed attempts is re-opened by the follow-up with its attempts reset", async () => {
+  it("THE ASK RE-OPENS THE JOB, NEVER ANSWERS ITS BLOCK: a card blocked after three failed attempts is re-opened by the follow-up with its attempts reset, the follow-up kept as instructions (rule 1b, 9 Oct 2026)", async () => {
     // Blocked the way the sweep blocks it after the third failed attempt: the real door, not SQL.
     const row = (await env.WP_OS_DB.prepare("SELECT id, title, firm_scope, owner_id FROM work_card WHERE id = ?1").bind(porterId).first<{ id: string; title: string; firm_scope: string; owner_id: string | null }>())!;
     await blockCard(env, row, { reason: "tried_and_could_not_finish", trying: row.title, employee: "Porter", who: "SEQUOIA" });
@@ -174,11 +176,18 @@ describe("a partner's new email about an open site job is a follow-up on that jo
     const raw = newMail("Two more - remove my email, fix the Past Winners heading", "Hey Porter!\n\nTwo more fixes: remove my email from the Update form, and make the Past Winners heading one heading.");
     const out = await steerFromReply(env, { fromHeader: `Scooter Taylor <${SCOOTER}>`, authenticationResults: GOOD_AUTH, subject: "Two more - remove my email, fix the Past Winners heading", raw, inReplyTo: null, references: null, emlKey: null });
     expect(out.steered).toBe(true);
-    expect(out.answered, "the block is answered by the ask itself").toBe(true);
-    const card = await env.WP_OS_DB.prepare("SELECT state, work_attempts, block_answer FROM work_card WHERE id = ?1").bind(porterId).first<{ state: string; work_attempts: number; block_answer: string | null }>();
+    // 9 Oct 2026: Scooter's NEW email was recorded as the answer to his spam card's preview gate. A new
+    // email is never the answer to a block — it is instructions for the work.
+    expect(out.answered, "a NEW email never answers a block").toBe(false);
+    const card = await env.WP_OS_DB.prepare("SELECT state, work_attempts, block_answer, block_answered_at FROM work_card WHERE id = ?1").bind(porterId).first<{ state: string; work_attempts: number; block_answer: string | null; block_answered_at: string | null }>();
     expect(card?.state, "open again for the next sweep — no button, no owner").toBe("OPEN");
     expect(card?.work_attempts, "the three failed attempts are forgiven; the new ask gets its own three").toBe(0);
-    expect(card?.block_answer).toMatch(/remove my email/);
+    expect(card?.block_answer, "nothing is recorded as the block's answer").toBeNull();
+    expect(card?.block_answered_at).toBeNull();
+    const note = await env.WP_OS_DB.prepare("SELECT body FROM work_card_note WHERE work_card_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 1").bind(porterId).first<{ body: string }>();
+    expect(note?.body.startsWith(NEW_EMAIL_NOTE_PREFIX), "kept with the prefix the runner reads as instructions, never as approval").toBe(true);
+    expect(note?.body).toMatch(/remove my email/);
+    expect(stripLateThreadPrefix(note!.body).late, "the runner treats it like a late reply: it can approve or force nothing").toBe(true);
     expect(await cardCount()).toBe(before);
   });
 

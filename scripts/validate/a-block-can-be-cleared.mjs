@@ -129,6 +129,23 @@ export function checkTriggers(migrations) {
   for (const column of ["block_stopped", "block_needed", "block_who", "block_actions_json"]) {
     if (!new RegExp(`NEW\\.${column}`).test(all)) violations.push(`no trigger checks ${column} — a block could land without it`);
   }
+  /*
+   * 5 · A BLOCKED CARD ALWAYS HAS A REMINDER (0255, 9 Oct 2026). Scooter's spam card was re-opened by a
+   * wrongly recorded answer with block_nag_at wiped; put back to BLOCKED by hand, it would never have
+   * rung. Both triggers must exist AND must be the repairing kind: on a BLOCKED row with a NULL reminder,
+   * set one. A trigger by the right name that does not set block_nag_at guards nothing.
+   */
+  for (const trigger of ["work_card_blocked_keeps_its_nag_update", "work_card_blocked_keeps_its_nag_insert"]) {
+    const at = all.indexOf(`CREATE TRIGGER IF NOT EXISTS ${trigger}`);
+    if (at === -1) {
+      violations.push(`migration trigger ${trigger} is missing — a BLOCKED card could be left with no reminder (block_nag_at NULL)`);
+      continue;
+    }
+    const body = all.slice(at, all.indexOf("END;", at));
+    if (!/NEW\.state\s*=\s*'BLOCKED'/.test(body) || !/NEW\.block_nag_at\s+IS\s+NULL/i.test(body) || !/SET\s+block_nag_at\s*=/i.test(body)) {
+      violations.push(`migration trigger ${trigger} does not set block_nag_at on a BLOCKED card that has none — it guards nothing`);
+    }
+  }
   return { violations };
 }
 
@@ -200,6 +217,18 @@ const SELF_TEST = {
   "migrations with no trigger": {
     migrations: { "0001.sql": "ALTER TABLE work_card ADD COLUMN block_stopped TEXT;" },
     expect: /work_card_block_must_be_readable_insert is missing/,
+  },
+  "no reminder guard (the 9 Oct 2026 shape)": {
+    migrations: { "0001.sql": "ALTER TABLE work_card ADD COLUMN block_stopped TEXT;" },
+    expect: /work_card_blocked_keeps_its_nag_update is missing/,
+  },
+  "a reminder guard that repairs nothing": {
+    migrations: {
+      "0255.sql":
+        "CREATE TRIGGER IF NOT EXISTS work_card_blocked_keeps_its_nag_update AFTER UPDATE ON work_card WHEN NEW.state = 'BLOCKED' AND NEW.block_nag_at IS NULL BEGIN SELECT 1; END;\n" +
+        "CREATE TRIGGER IF NOT EXISTS work_card_blocked_keeps_its_nag_insert AFTER INSERT ON work_card WHEN NEW.state = 'BLOCKED' AND NEW.block_nag_at IS NULL BEGIN UPDATE work_card SET block_nag_at = 'x' WHERE id = NEW.id; END;",
+    },
+    expect: /work_card_blocked_keeps_its_nag_update does not set block_nag_at/,
   },
 };
 
@@ -279,7 +308,7 @@ if (process.argv.includes("--self-test")) {
   console.log(
     `BLOCK SCAN PASSED: ${funnel.sites} block-writing site(s) across ${Object.keys(sources).length} worker ` +
       `sources, all inside services/blocks.ts; ${catalogue.audited} catalogue reason(s) each carrying a plain ` +
-      `sentence, a named provider and a way to act; both database triggers present across ` +
+      `sentence, a named provider and a way to act; both database triggers and both reminder guards present across ` +
       `${Object.keys(migrations).length} migrations; an answer reopens the card and reaches the employee.`,
   );
 }

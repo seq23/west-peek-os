@@ -121,6 +121,7 @@ import {
   handleListQuarantinedOutputs,
   handleRunAi,
 } from "./services/aiRuns";
+import { handleGetPartnerProfile, handlePutPartnerProfile } from "./services/partnerProfile";
 import { handleGetRequestAttachment, handleGetWebPropertyChange, handleMaterialsAdded, handleResendPreview, handleReingestStoredEmail, handleSetWorkKindRule, handleWorkKindRules } from "./services/webPropertyChange";
 import { handleListWebProperties } from "./services/webPropertyRegistry";
 import { handlePendingSecretHandoffs, handleSecretHandoffStored } from "./services/secretHandoff";
@@ -1165,6 +1166,8 @@ const router = new Router()
   .get("/api/work-cards/:id/message-trail", handleGetWorkCardMessageTrail)
   .get("/api/work-cards/:id/steps", handleGetWorkCardSteps)
   .post("/api/inbound-email/reingest", handleReingestStoredEmail)
+  .get("/api/partner-profiles/:email", handleGetPartnerProfile)
+  .post("/api/partner-profiles/:email", handlePutPartnerProfile)
   .get("/api/work-kinds/:kind/rules", handleWorkKindRules)
   .patch("/api/work-kinds/:kind/rules/:key", handleSetWorkKindRule)
   // 0228, Addendum 8 — the firm-wide "preview every partner-facing email" dial, the default every

@@ -4,7 +4,10 @@ import { proposePerson } from "./networkOsClient";
 import { dealFromMessage, intakeDealFromEmail, matchFunnelCompany, openAssignmentCard, openRoutingCard } from "../services/dealIntake";
 import { notifyQuietly } from "../services/notifications";
 import { ASSIGNING_PARTNERS, EMAILED_TASK_LIMITS, addressIn, mailAuthority } from "../../shared/intake/partnerAuthority";
-import { pdfAttachments } from "./mimeAttachments";
+import { pdfAttachments, requestAttachments, textBodyOf } from "./mimeAttachments";
+import { askWhichCard, withoutSignatures, type RouteAs } from "../services/emailRouting";
+import { profileNotesIn, recordProfileNotes, refreshWorkingOn } from "../services/partnerProfile";
+import { threadTokensIn } from "../../shared/email/thread";
 import { openPortfolioUpdateCard } from "../services/portfolioReporting";
 import { EMAIL_TRIGGERS, INTAKE_MAILBOX, NO_TRIGGER_ROUTE, ROUTING_EMPLOYEE, strippedSubject, triggersIn, type EmailTrigger } from "../../shared/intake/emailTriggers";
 import { applyReplyDecision } from "../services/packetReplyDecision";
@@ -248,6 +251,8 @@ export interface InboundOptions {
   receivedTldr?: string | null;
   /** An earlier note's thread token, so the RECEIVED threads under it in the partner's inbox. */
   replyOnThread?: string | null;
+  /** 9 Oct 2026 (rule 1d): where the partner said this stored email goes — re-read once his answer arrives. */
+  routeAs?: RouteAs | null;
 }
 
 export async function handleInboundEmail(
@@ -257,21 +262,68 @@ export async function handleInboundEmail(
 ): Promise<void> {
   const key = inboundMessageKey(message.headers);
   const firmScope = "west-peek";
+  /*
+   * CLAIMED BEFORE IT IS HANDLED, NOT RECORDED AFTER (9 Oct 2026). Checking "seen?" and writing "seen"
+   * only after the whole door ran left a window the length of the door: two deliveries (or two
+   * re-reads) of one message seconds apart both passed the check, and Scooter got two cards and two
+   * "Got it" emails. The claim is one atomic INSERT; the loser stops here. A door that throws gives the
+   * claim back, so a genuine re-delivery after a failure is still read.
+   */
   if (key) {
-    const seen = await env.WP_OS_DB.prepare("SELECT seen_at FROM inbound_email_seen WHERE message_id = ?1")
-      .bind(key)
-      .first<{ seen_at: string }>();
-    if (seen) {
-      console.warn(`inbound email already handled at ${seen.seen_at}; re-delivery ignored`, { message_id: key });
+    const claim = await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO inbound_email_seen (message_id, firm_scope) VALUES (?1, ?2)")
+      .bind(key, firmScope)
+      .run();
+    if ((claim.meta?.changes ?? 0) === 0) {
+      const seen = await env.WP_OS_DB.prepare("SELECT seen_at FROM inbound_email_seen WHERE message_id = ?1").bind(key).first<{ seen_at: string }>();
+      console.warn(`inbound email already handled at ${seen?.seen_at ?? "?"}; re-delivery ignored`, { message_id: key });
       return;
     }
   }
-  await handleInboundEmailOnce(message, env, options);
-  if (key) {
-    await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO inbound_email_seen (message_id, firm_scope) VALUES (?1, ?2)")
-      .bind(key, firmScope)
-      .run();
+  try {
+    await handleInboundEmailOnce(message, env, options);
+  } catch (err) {
+    if (key) await env.WP_OS_DB.prepare("DELETE FROM inbound_email_seen WHERE message_id = ?1").bind(key).run().catch(() => undefined);
+    throw err;
   }
+  // RULE 4 (0255): every email from a partner refreshes the "working on now" lines of his profile.
+  const partner = addressIn(message.headers.get("from"));
+  if (partner && ASSIGNING_PARTNERS.includes(partner.toLowerCase())) await refreshWorkingOn(env, partner).catch(() => 0);
+}
+
+/**
+ * RE-READ A STORED MESSAGE WITH ITS ROUTE DECIDED (9 Oct 2026, rule 1d). The partner answered "which
+ * job is this for?" (or 24 hours passed): the same bytes go through the same door once more, with the
+ * answer in hand, so the follow-up lands on the card he named or opens the new card — exactly as if
+ * the door had known at the time. The message's dedupe claim is not consulted: this is that message's
+ * one decided read, and the clarification row (resolved atomically) is what makes it once.
+ */
+export async function rerouteStoredMessage(env: Env, input: { emlKey: string | null; rawText: string | null; routeAs: RouteAs }): Promise<boolean> {
+  let raw = input.rawText;
+  if (!raw && input.emlKey && env.WP_OS_DOCUMENTS) raw = (await (await env.WP_OS_DOCUMENTS.get(input.emlKey))?.text()) ?? null;
+  if (!raw) return false;
+  const headers = headersOfRaw(raw);
+  const from = (addressIn(headers.get("from")) ?? headers.get("from") ?? "").trim().toLowerCase();
+  const bytes = new TextEncoder().encode(raw);
+  await handleInboundEmailOnce({ from, to: headers.get("to") ?? INTAKE_MAILBOX, headers, raw: new Blob([bytes as BlobPart]).stream(), rawSize: bytes.byteLength }, env, { routeAs: input.routeAs });
+  return true;
+}
+
+/** The top-level headers of a stored message, folded lines joined. Pure. */
+export function headersOfRaw(raw: string): Headers {
+  const headerEnd = raw.search(/\r?\n\r?\n/);
+  const headText = (headerEnd === -1 ? raw : raw.slice(0, headerEnd)).replace(/\r?\n[ \t]+/g, " ");
+  const headers = new Headers();
+  for (const line of headText.split(/\r?\n/)) {
+    const m = /^([A-Za-z-]+):\s*(.*)$/.exec(line);
+    if (m) {
+      try {
+        headers.append(m[1]!, m[2]!);
+      } catch {
+        /* an unrepresentable header is skipped */
+      }
+    }
+  }
+  return headers;
 }
 
 /**
@@ -537,9 +589,54 @@ async function handleIfReply(
     firmScope: string;
     /** Triggers that appeared only in the quoted original — recorded on the event so the split is visible. */
     quotedOnly: readonly string[];
+    /** 9 Oct 2026 (rule 1d): the partner's answer to "which job is this for?", when there is one. */
+    routeAs?: RouteAs | null;
   },
 ): Promise<boolean> {
   const { message, subject, sender, raw, kept, inReplyTo, references, firmScope } = input;
+  /*
+   * RULE 1e (9 Oct 2026): AN EMPTY EMAIL STEERS NOTHING AND OPENS NOTHING. "Sent from my iPhone" and
+   * nothing else — no words above the quote, no file — on a reply (or with no subject at all) is a
+   * pocket send. It used to reach the steer matcher, which opened "a reply I could not act on" card.
+   * A forward is never empty here: its content is the forwarded message.
+   */
+  const written = withoutSignatures(writtenAndQuoted(`\r\n\r\n${textBodyOf(raw)}`, { inReplyTo, references, subject }).written);
+  const isReply = threadTokensIn({ inReplyTo, references }).length > 0 || /^\s*(?:re|aw|sv)\s*:/i.test(subject);
+  const isForward = /^\s*(?:fwd?|fw)\s*:/i.test(subject);
+  const files = requestAttachments(raw);
+  if (!written && !isForward && files.attachments.length === 0 && files.unread.length === 0 && (isReply || !strippedSubject(subject).trim())) {
+    await appendEvent(env, {
+      eventType: "inbound_email.empty",
+      actorType: "system",
+      actorId: "inbound_email",
+      objectType: "inbound_email",
+      objectId: `${message.from}:${subject}`.slice(0, 200),
+      firmScope,
+      payload: { from: sender, to: message.to, subject, mailbox: INTAKE_MAILBOX, stored: kept.key, reply: isReply },
+    });
+    return true;
+  }
+  /*
+   * RULE 4 (0255): "PORTER, NOTE: …" from an authenticated partner is kept verbatim in his profile.
+   * An email that says nothing else opens nothing; anything else in it is routed as usual.
+   */
+  const authority = mailAuthority({ fromHeader: message.headers.get("from"), authenticationResults: message.headers.get("authentication-results") });
+  if (authority.isAssignment && authority.partnerAddress) {
+    const { notes, rest } = profileNotesIn(written);
+    if (notes.length) {
+      const keptNotes = await recordProfileNotes(env, authority.partnerAddress, notes);
+      await appendEvent(env, {
+        eventType: "partner_profile.noted",
+        actorType: "system",
+        actorId: "inbound_email",
+        objectType: "partner_profile",
+        objectId: authority.partnerAddress.toLowerCase(),
+        firmScope,
+        payload: { notes: notes.length, kept: keptNotes, stored: kept.key },
+      });
+      if (!withoutSignatures(rest) && files.attachments.length === 0) return true;
+    }
+  }
   /*
    * ── A REPLY THAT DECIDES A PACKET, READ BEFORE ANYTHING ELSE ─────────────────────────────────
    *
@@ -640,7 +737,26 @@ async function handleIfReply(
     inReplyTo,
     references,
     emlKey: kept.key,
+    routeAs: input.routeAs ?? null,
   });
+  /*
+   * RULE 1d (9 Oct 2026): THE ROUTER COULD NOT TELL WHICH OPEN JOB THIS IS. Porter asks the partner
+   * once, in plain words, and opens nothing; his answer (or 24 hours) routes the stored message.
+   */
+  if (steer.clarify && authority.partnerAddress) {
+    const messageId = inboundMessageKey(message.headers) ?? `no-message-id:${kept.rowId ?? crypto.randomUUID()}`;
+    const asked = await askWhichCard(env, { messageId, partner: authority.partnerAddress.toLowerCase(), subject, written, emlKey: kept.key, raw, candidates: steer.clarify });
+    await appendEvent(env, {
+      eventType: "inbound_email.received",
+      actorType: "system",
+      actorId: "inbound_email",
+      objectType: "inbound_email",
+      objectId: `${message.from}:${subject}`.slice(0, 200),
+      firmScope,
+      payload: { from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX, clarification: asked.id, asked_before: asked.already, candidates: steer.clarify.map((c) => c.cardId) },
+    });
+    return true;
+  }
   if (steer.steered) {
     /*
      * THE REPLY IS INDEXED AGAINST THE CARD IT STEERED, which is the whole of Scooter's 21 Sep
@@ -869,7 +985,7 @@ async function handleInboundEmailOnce(
       const rawText = partnerText;
       // THE SAME REPLY CHECK AS A SMALL MESSAGE, before any card is opened (27 Sep 2026): a
       // partner's oversize reply steers the card it answers and creates nothing new.
-      if (await handleIfReply(env, { message, subject, sender, raw: rawText, kept, inReplyTo, references, firmScope, quotedOnly: [] })) return;
+      if (await handleIfReply(env, { message, subject, sender, raw: rawText, kept, inReplyTo, references, firmScope, quotedOnly: [], routeAs: options.routeAs ?? null })) return;
       const cardId = await openAssignmentCard(env, {
         subject,
         partnerAddress: authority.partnerAddress!,
@@ -999,7 +1115,7 @@ async function handleInboundEmailOnce(
    * ONE REPLY CHECK, FOR EVERY SIZE. A reply that decided a packet, steered a card, or tried to and
    * was refused is finished here; an ordinary email falls through to the ladder below.
    */
-  if (await handleIfReply(env, { message, subject, sender, raw, kept, inReplyTo, references, firmScope, quotedOnly: summary.quotedOnly ?? [] })) return;
+  if (await handleIfReply(env, { message, subject, sender, raw, kept, inReplyTo, references, firmScope, quotedOnly: summary.quotedOnly ?? [], routeAs: options.routeAs ?? null })) return;
 
   /*
    * A COMPANY GOES TO THE FUNNEL. A message nobody could place goes to Capture.
