@@ -391,11 +391,13 @@ export interface StoredBlock {
   blocked_at: string | null;
   block_nag_at: string | null;
   block_nags: number;
+  /** Who asked for the card by email, if anyone — the reminder goes back to them by email too. */
+  requested_by_email: string | null;
 }
 
 export const BLOCK_COLUMNS =
   "id, title, firm_scope, owner_id, block_reason, block_trying, block_stopped, block_needed, " +
-  "block_who, block_actions_json, blocked_at, block_nag_at, COALESCE(block_nags, 0) AS block_nags";
+  "block_who, block_actions_json, blocked_at, block_nag_at, COALESCE(block_nags, 0) AS block_nags, requested_by_email";
 
 /**
  * NOTHING STAYS STUCK SILENTLY.

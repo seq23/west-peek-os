@@ -296,6 +296,39 @@ async function tellRequester(
 }
 
 /**
+ * A BLOCK REMINDER REACHES AN EMAILED REQUESTER BY EMAIL (9 Oct 2026). `resurfaceStaleBlocks` rings
+ * the in-app notice centre only; a partner who asked by email (Scooter works by email alone) never
+ * saw "Still waiting on you". The sweep hands each rung row here, and the same Porter notice the
+ * block first sent (PREVIEW, PLAN, QUESTION, STUCK) goes again on the card's thread, headed by how
+ * long it has waited. Cause `nag:<n>` makes it once per ring. Null composer (not a web property
+ * change card) → nothing sent here; the in-app notice stands either way.
+ */
+export async function remindRequesterByEmail(
+  env: Env,
+  row: { id: string; block_needed: string | null; block_nags: number; blocked_at: string | null },
+  now: Date,
+): Promise<{ sent: boolean; reason: string }> {
+  const card = await env.WP_OS_DB.prepare("SELECT id, title, firm_scope, requested_by_email, preview_first, preview_owner_id, assigned_from_card_id FROM work_card WHERE id = ?1")
+    .bind(row.id)
+    .first<WebPropertyChangeCard>();
+  if (!card) return { sent: false, reason: "no such card" };
+  const { kind } = await noticeFor(env, row.id, "BLOCKED");
+  const email = await porterNoticeEmail(env, row.id, kind, row.block_needed ?? "", { resend: true });
+  if (!email) return { sent: false, reason: "not a web property change card" };
+  const nag = (row.block_nags ?? 0) + 1;
+  const days = row.blocked_at ? Math.max(1, Math.round((now.getTime() - Date.parse(row.blocked_at)) / 86_400_000)) : 1;
+  // WHAT CLEARS IT, IN THE CARD'S OWN WORDS — when the composed notice does not already carry them.
+  const needed = (row.block_needed ?? "").split("\n").map((l) => l.replace(/^[•·\-*]\s+/, "").trim()).filter(Boolean);
+  const carried = JSON.stringify(email);
+  const neededSection = needed.length && !needed.every((l) => carried.includes(l)) ? [{ label: "What I'm waiting on", bullets: needed.slice(0, 12) }] : [];
+  return tellRequester(env, card, { kind, cause: `nag:${nag}` }, {
+    ...email,
+    tldr: `Still waiting on you (${days} day${days === 1 ? "" : "s"}). ${email.tldr}`,
+    sections: [...neededSection, ...email.sections],
+  });
+}
+
+/**
  * RECEIVED — "Got it — I'm on it." Once per card, at intake (or when a card is re-opened by hand,
  * with an apology folded in). Says what was understood and what comes next.
  */
