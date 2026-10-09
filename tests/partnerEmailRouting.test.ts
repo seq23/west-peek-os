@@ -6,9 +6,9 @@ import { blockCard, answerBlock, restoreBlock } from "../src/worker/services/blo
 import { handleInboundEmail } from "../src/worker/effects/inboundEmail";
 import { handleReingestStoredEmail } from "../src/worker/services/webPropertyChange";
 import { resolveStaleClarifications, readClarificationAnswer, siteCardDecision, withoutSignatures } from "../src/worker/services/emailRouting";
-import { loadProfile, profileBlockFor, refreshWorkingOn, writeProfile } from "../src/worker/services/partnerProfile";
+import { loadProfile, profileBlockFor, refreshAllWorkingOn, refreshWorkingOn, writeProfile } from "../src/worker/services/partnerProfile";
 import { practicesForCard } from "../src/worker/services/partnerConstraints";
-import { profileLineProblem } from "../src/shared/partners/profileFilter";
+import { profileLineProblem, stripPersonalDetails } from "../src/shared/partners/profileFilter";
 import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
 import { threadReference } from "../src/shared/email/thread";
 import { WEB_PROPERTY_CHANGE_KIND } from "../src/shared/work/localJobs";
@@ -422,6 +422,50 @@ describe("partner profiles (0255): living, in D1, never LP or deal detail", () =
     expect(p.notes.map((n) => n.body)).toContain("voting closes Sunday night, keep the vote page fast");
     expect(await refreshWorkingOn(env, SCOOTER)).toBeGreaterThan(0);
     expect((await loadProfile(env, SCOOTER))!.workingOn.some((w) => /^(open|finished): /.test(w.body)), "his cards are dated working-on lines").toBe(true);
+  });
+
+  // 9 Oct 2026: the title production held (the candidate's real name replaced; the repo is public).
+  const HIRE_TITLE = "Walker: follow up on Scooter's W39 hire-search reply — Jane Example's email, music-affinity criterion";
+  const HIRE_KEPT = "finished: Walker: follow up on Scooter's W39 hire-search reply — music-affinity criterion";
+  // The refresh names the job by its shortened title ("…"), so the cut leaves no dangling separator.
+  const HIRE_REFRESHED = "finished: Walker: follow up on Scooter's W39 hire-search reply";
+  const KEEP = { keepEmails: [SCOOTER], keepNames: ["Scooter", "Walker"] };
+
+  it("a third party's personal details are cut out, the line kept: the production hire-search line keeps its context without the candidate", () => {
+    expect(stripPersonalDetails(`finished: ${HIRE_TITLE}`, KEEP)).toBe(HIRE_KEPT);
+    expect(profileLineProblem(HIRE_KEPT), "the hire search itself is legitimate working-on context").toBeNull();
+    expect(stripPersonalDetails("finished: Walker: follow up on Scooter's W39 hire-search reply — Jane Example's email", KEEP)).toBe("finished: Walker: follow up on Scooter's W39 hire-search reply");
+    expect(stripPersonalDetails("open: write to Jane Doe <jane.doe@gmail.com> about the shoot", KEEP)).toBe("open: write to about the shoot");
+    expect(stripPersonalDetails("open: email Jane Doe jane@x.com, then the deck", KEEP)).toBe("open: email, then the deck");
+    expect(stripPersonalDetails("finished: Walker: follow up on Scooter's W39 hire-search reply — Jane Example's email…", KEEP), "the shortened title production held").toBe(HIRE_REFRESHED);
+    expect(stripPersonalDetails("open: call Jane at +1 (917) 555-0134 tomorrow", KEEP)).toBe("open: call Jane at tomorrow");
+    for (const untouched of ["open: Top Barz entry page · voting.topbarz.xyz", "open: Top Barz W41 voting closes 2026-10-12", `send it from ${SCOOTER}`, "Scooter's email signature on westpeek.ventures"]) {
+      expect(stripPersonalDetails(untouched, KEEP), untouched).toBe(untouched);
+    }
+    expect(profileLineProblem(stripPersonalDetails("Talk to the LPs about Q4 — Jane Example's email", KEEP)), "an LP line is still refused whole").not.toBeNull();
+  });
+
+  it("the hourly refresh writes the hire-search line without the candidate, rewrites a stored line clean, keeps Top Barz untouched and still refuses an LP card", async () => {
+    const card = (id: string, title: string) =>
+      env.WP_OS_DB.prepare(
+        "INSERT INTO work_card (id, title, description, owner_type, owner_id, state, priority, privacy_label, firm_scope, requested_by_email, created_by, kind) VALUES (?1, ?2, 'x', 'AI', 'aie_walker', 'DONE', 'NORMAL', 'INTERNAL', 'west-peek', ?3, 'test', NULL)",
+      ).bind(id, title, SCOOTER).run();
+    await card("wc_t_hire_followup", HIRE_TITLE);
+    await card("wc_t_topbarz", "Top Barz voting page faster before Sunday");
+    await card("wc_t_lp", "Send the LP letter to Northwind");
+    // A line stored before the rule existed, carrying a third party's address.
+    await env.WP_OS_DB.prepare("INSERT INTO partner_profile_line (id, partner_email, firm_scope, kind, body, last_active_at) VALUES ('ppl_t_old', ?1, 'west-peek', 'WORKING_ON', 'shoot with Jane Doe <jane.doe@gmail.com> for Productions', ?2)")
+      .bind(SCOOTER, new Date().toISOString()).run();
+
+    await refreshAllWorkingOn(env);
+    const body = async (where: string) => (await env.WP_OS_DB.prepare(`SELECT body FROM partner_profile_line WHERE partner_email = ?1 AND ${where}`).bind(SCOOTER).first<{ body: string }>())?.body ?? null;
+    expect(await body("card_id = 'wc_t_hire_followup'")).toBe(HIRE_REFRESHED);
+    expect(await body("card_id = 'wc_t_topbarz'")).toBe("finished: Top Barz voting page faster before Sunday");
+    expect(await body("card_id = 'wc_t_lp'"), "an LP card is still refused").toBeNull();
+    expect(await body("id = 'ppl_t_old'"), "a stored line is rewritten clean").toBe("shoot with for Productions");
+    const all = JSON.stringify((await env.WP_OS_DB.prepare("SELECT body FROM partner_profile_line WHERE partner_email = ?1").bind(SCOOTER).all()).results);
+    expect(all).not.toMatch(/Jane|jane\.doe|gmail/);
+    expect((await loadProfile(env, SCOOTER))!.workingOn.map((w) => w.body)).toContain(HIRE_REFRESHED);
   });
 
   it("every job prompt for him carries the profile; Porter's build brief included", async () => {
