@@ -2,7 +2,6 @@ import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { partnerByEmail } from "../../shared/registry/partners";
 import { profileLineProblem } from "../../shared/partners/profileFilter";
-import { plainTitle } from "../../shared/work/siteChange";
 import { json, type RouteContext } from "../router";
 import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
 
@@ -177,17 +176,16 @@ export async function refreshWorkingOn(env: Env, email: string | null | undefine
         .all<{ id: string; title: string; kind: string | null; state: string; request_json: string | null; updated_at: string }>()
     ).results ?? [];
   let kept = 0;
+  // The job's name in his own terms (what he asked for and the site), never his greeting.
+  const { candidateLabel } = await import("./emailRouting");
   for (const c of cards) {
     let host: string | null = null;
-    let ask: string | null = null;
     try {
-      const r = c.request_json ? (JSON.parse(c.request_json) as { property_host?: string | null; ask?: string | null }) : {};
-      host = r.property_host ?? null;
-      ask = r.ask ?? null;
+      host = c.request_json ? ((JSON.parse(c.request_json) as { property_host?: string | null }).property_host ?? null) : null;
     } catch {
-      /* the title stands */
+      host = null;
     }
-    const name = plainTitle({ title: c.title.replace(/^From [^:]+:\s*/, ""), kind: c.kind, host, subject: null, ask });
+    const name = candidateLabel({ title: c.title.replace(/^From [^:]+:\s*/, ""), property_host: host, request_json: c.request_json });
     const body = await safe(env, e, `${c.state === "DONE" ? "finished" : "open"}: ${name}`.slice(0, 200), names, `card ${c.id}`);
     if (!body) continue;
     await env.WP_OS_DB.prepare(

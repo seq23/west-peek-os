@@ -228,6 +228,90 @@ export function withoutSignatures(written: string): string {
   return out.join("\n").trim();
 }
 
+// ── THE ONE PLAIN SHAPE OF "I CAN'T PLACE THIS" (9 Oct 2026, hostile review of the 13:44Z email) ──
+//
+// The email Sequoia got about Scooter's shared rules doc: a subject cut mid-word ("…Offici…"), an opening
+// that said nothing ("Porter needs something from you before this can go any further"), a false "I have
+// nothing in the record about Top Barz", a two-reading essay, and the wrong person asked. Every
+// can't-place question is now built here and nowhere else: the subject names what came in, cut only at a
+// word; the first line is the fact (when, from whom, what); at most three replies in plain words; the
+// original quoted below. It states nothing it did not check — it makes no claim about the record at all.
+
+export const CANT_PLACE_PREFIX = "I got an email I can't place — ";
+const SUBJECT_ROOM = 70 - "Porter: ".length;
+
+/** A short subject cut only at a word boundary so `Porter: <lead><short>` fits the 70-character subject. Pure. */
+export function shortSubject(subject: string, lead: string): string {
+  const s = String(subject ?? "").replace(/^\s*(?:re|fwd?|fw)\s*:\s*/i, "").replace(/^(?:document|spreadsheet|presentation|folder|file|item) shared with you:\s*/i, "").replace(/\s+/g, " ").trim() || "(no subject)";
+  const room = SUBJECT_ROOM - lead.length;
+  if (s.length <= room) return s;
+  const cut = s.slice(0, room - 1);
+  const atWord = cut.replace(/\s+\S*$/, "").replace(/[\s,;:—–-]+$/, "");
+  return `${(atWord || cut).trim()}…`;
+}
+
+/** "8:29 AM CT". Pure. */
+export function ctTime(iso: string | Date): string {
+  const d = typeof iso === "string" ? new Date(iso) : iso;
+  return `${new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" }).format(d)} CT`;
+}
+
+export interface ReplyOption {
+  reply: string;
+  does: string;
+}
+
+export interface PlainQuestion {
+  employee: "Porter";
+  what: string;
+  tldr: string;
+  sections: Array<{ label: string; bullets: string[] }>;
+  details: string | null;
+}
+
+function quoted(original: string): string | null {
+  const t = String(original ?? "").replace(/\r/g, "").trim();
+  if (!t) return null;
+  return ["The message, as it arrived:", ...t.slice(0, 2500).split("\n").map((l) => `> ${l}`)].join("\n");
+}
+
+/** The can't-place question. At most three replies; the original quoted below. Pure. */
+export function cantPlaceEmail(input: { subject: string; receivedAt: string; fromLabel: string; whatItIs: string; options: readonly ReplyOption[]; original: string; doNotKnow?: string }): PlainQuestion {
+  const options = input.options.slice(0, 3);
+  return {
+    employee: "Porter",
+    what: `${CANT_PLACE_PREFIX}${shortSubject(input.subject, CANT_PLACE_PREFIX)}`,
+    tldr: `I got the following at ${ctTime(input.receivedAt)} from ${input.fromLabel}: ${input.whatItIs}. ${input.doNotKnow ?? "I don't know what to do with it."}`,
+    sections: [
+      { label: "Reply with one of these", bullets: options.map((o) => `Reply '${o.reply}' ${o.does}`) },
+      { label: "What came in", bullets: [`From ${input.fromLabel}, ${ctTime(input.receivedAt)}: "${String(input.subject ?? "").replace(/\s+/g, " ").trim().slice(0, 160)}"`] },
+    ],
+    details: quoted(input.original),
+  };
+}
+
+/** The question about a shared file that matches none of his open jobs (Sequoia's amendment, 9 Oct 2026). Pure. */
+export function shareQuestionEmail(input: { title: string; receivedAt: string; url: string; candidates: readonly Candidate[] }): PlainQuestion {
+  const lead = "What should I do with ";
+  return {
+    employee: "Porter",
+    what: `${lead}"${shortSubject(input.title, `${lead}""?`)}"?`,
+    tldr: `I got "${input.title}" from you at ${ctTime(input.receivedAt)}. What would you like me to do with it?`,
+    sections: [
+      {
+        label: "Reply with one of these",
+        bullets: [
+          ...input.candidates.slice(0, 1).map((c, i) => `Reply '${i + 1}' to add it to your ${c.label} job`),
+          "Reply 'new' to start something new with it",
+          "Reply 'file' to just file it",
+        ],
+      },
+      { label: "What came in", bullets: [`"${input.title}" — ${input.url}`] },
+    ],
+    details: null,
+  };
+}
+
 // ── 1d · THE ONE CLARIFYING QUESTION ─────────────────────────────────────────────────────────────
 
 export interface ClarificationRow {
@@ -240,6 +324,8 @@ export interface ClarificationRow {
   candidates_json: string;
   asked_at: string;
   resolved_at: string | null;
+  kind?: string | null;
+  card_id?: string | null;
 }
 
 /**
@@ -257,7 +343,7 @@ export async function askWhichCard(
     `INSERT OR IGNORE INTO inbound_clarification (id, message_id, partner_email, subject, eml_key, raw_text, candidates_json)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
   )
-    .bind(id, input.messageId, input.partner, input.subject.slice(0, 300), input.emlKey, input.emlKey ? null : input.raw.slice(0, 200_000), JSON.stringify(input.candidates))
+    .bind(id, input.messageId, input.partner, input.subject.slice(0, 300), input.emlKey, input.emlKey ? null : input.raw.slice(0, 200_000), JSON.stringify(input.candidates.slice(0, 2)))
     .run();
   if ((ins.meta?.changes ?? 0) === 0) {
     const row = await env.WP_OS_DB.prepare("SELECT id FROM inbound_clarification WHERE message_id = ?1").bind(input.messageId).first<{ id: string }>();
@@ -265,20 +351,18 @@ export async function askWhichCard(
   }
   const partner = partnerByEmail(input.partner);
   const said = input.written.replace(/\s+/g, " ").trim();
-  const what = input.subject.trim() || said.slice(0, 40) || "your email";
+  const shown = input.candidates.slice(0, 2);
   const out = await sendPartnerEmail(env, {
     to: input.partner,
-    email: {
-      employee: "Porter",
-      what: `Which job is "${what.slice(0, 30)}" for?`.slice(0, 60),
-      tldr: `Is "${what.slice(0, 60)}" for one of your open jobs, or a new one? Reply with the number, or "new".`,
-      sections: [
-        { label: "You sent", bullets: [`"${what.slice(0, 80)}"${said ? ` — ${said.slice(0, 120)}` : ""}`] },
-        { label: "Which job is it?", bullets: [...input.candidates.slice(0, 4).map((c, i) => `${i + 1} — ${c.label}`), `new — a new job`] },
-        { label: "If you do not reply", bullets: ["By this time tomorrow I start it as a new job. I will not ask again."] },
-      ],
-      details: null,
-    },
+    email: cantPlaceEmail({
+      subject: input.subject,
+      receivedAt: new Date().toISOString(),
+      fromLabel: "you",
+      whatItIs: `"${input.subject.trim() || said.slice(0, 60) || "an email"}"`,
+      doNotKnow: "I don't know which of your jobs it is for.",
+      options: [...shown.map((c, i) => ({ reply: String(i + 1), does: `to add it to your ${c.label} job` })), { reply: "new", does: "to start it as a new job" }],
+      original: input.written,
+    }),
     objectType: "inbound_clarification",
     objectId: id,
     firmScope: "west-peek",
@@ -342,6 +426,10 @@ export async function answerClarification(env: Env, clarificationId: string, wri
   } catch {
     candidates = [];
   }
+  if (row.kind === "SHARE" && row.card_id) {
+    const { settleShare } = await import("./driveShareAnswers");
+    return settleShare(env, row, written, candidates, by);
+  }
   const read = readClarificationAnswer(written, candidates) ?? "NEW";
   const routed = await settle(env, row, read, read === "NEW" ? "NEW" : "CARD", by);
   return { routed, routeAs: read };
@@ -351,7 +439,7 @@ export async function answerClarification(env: Env, clarificationId: string, wri
 export async function resolveStaleClarifications(env: Env, now: Date = new Date()): Promise<number> {
   try {
     const cutoff = new Date(now.getTime() - 24 * 3_600_000).toISOString();
-    const rows = (await env.WP_OS_DB.prepare("SELECT * FROM inbound_clarification WHERE resolved_at IS NULL AND asked_at < ?1 ORDER BY asked_at LIMIT 5").bind(cutoff).all<ClarificationRow>()).results ?? [];
+    const rows = (await env.WP_OS_DB.prepare("SELECT * FROM inbound_clarification WHERE resolved_at IS NULL AND asked_at < ?1 AND kind = 'EMAIL' ORDER BY asked_at LIMIT 5").bind(cutoff).all<ClarificationRow>()).results ?? [];
     let n = 0;
     for (const r of rows) if (await settle(env, r, "NEW", "TIMED_OUT", "work_sweep")) n++;
     return n;
@@ -359,4 +447,55 @@ export async function resolveStaleClarifications(env: Env, now: Date = new Date(
     console.error("clarification timeout sweep failed", err);
     return 0;
   }
+}
+
+/**
+ * THE QUESTION A ROUTING CARD ("Unclear email: …") ASKS, built from the stored message — never from the
+ * model's reasoning. Options name a partner's open job only when his profile's words for a site appear in
+ * the message and he has an open job for that site; otherwise "new" and "drop". Null when the message
+ * cannot be found (the generic question stands).
+ */
+export async function unclearEmailQuestion(env: Env, cardId: string): Promise<PlainQuestion | null> {
+  const msg = await env.WP_OS_DB.prepare("SELECT subject, from_address, received_at, r2_key FROM inbound_message WHERE work_card_id = ?1 ORDER BY received_at LIMIT 1")
+    .bind(cardId)
+    .first<{ subject: string | null; from_address: string; received_at: string; r2_key: string }>();
+  if (!msg) return null;
+  let raw = "";
+  try {
+    raw = env.WP_OS_DOCUMENTS ? ((await (await env.WP_OS_DOCUMENTS.get(msg.r2_key))?.text()) ?? "") : "";
+  } catch {
+    raw = "";
+  }
+  const body = raw ? textBodyOf(raw) : "";
+  const subject = msg.subject ?? "";
+  const { driveShareNotice } = await import("../../shared/intake/driveShare");
+  const { headersOfRaw } = await import("../effects/inboundEmail");
+  const h = raw ? headersOfRaw(raw) : new Headers();
+  const share = driveShareNotice({ from: h.get("from") ?? msg.from_address, replyTo: h.get("reply-to"), authenticationResults: h.get("authentication-results"), subject, body });
+  const options: ReplyOption[] = [];
+  for (const p of (await import("../../shared/registry/partners")).PARTNERS) {
+    const profile = await loadProfile(env, p.email);
+    const hosts = aliasHostsIn(`${subject}\n${share?.title ?? ""}\n${body.slice(0, 4000)}`, profile);
+    if (!hosts.length) continue;
+    const job = await env.WP_OS_DB.prepare(
+      `SELECT c.id, c.title, c.request_json, w.property_host FROM work_card c JOIN web_property_change w ON w.work_card_id = c.id
+        WHERE lower(c.requested_by_email) = ?1 AND c.state NOT IN ('DONE','CANCELLED') AND c.merged_into_card_id IS NULL ORDER BY c.updated_at DESC`,
+    )
+      .bind(p.email)
+      .all<OpenCard>();
+    const hit = (job.results ?? []).find((c) => hostsOf(c.property_host).some((x) => hosts.includes(x)));
+    if (!hit) continue;
+    const word = profile?.aliases.find((a) => hosts.includes(a.host))?.words[0] ?? hosts[0]!;
+    options.push({ reply: word, does: `to add it to ${p.firstName}'s ${candidateLabel(hit)} job` });
+    break;
+  }
+  options.push({ reply: "new", does: "to start it as a new job" }, { reply: "drop", does: "to file it and do nothing" });
+  return cantPlaceEmail({
+    subject,
+    receivedAt: msg.received_at,
+    fromLabel: share ? (share.sharer ? `${share.sharer} (a Google share notice)` : "Google share notice, sharer unknown") : msg.from_address,
+    whatItIs: share ? `a shared Google ${share.kind}, "${share.title}"` : `"${subject.trim() || "(no subject)"}"`,
+    options,
+    original: body || subject,
+  });
 }

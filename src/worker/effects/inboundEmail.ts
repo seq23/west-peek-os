@@ -8,6 +8,8 @@ import { pdfAttachments, requestAttachments, textBodyOf } from "./mimeAttachment
 import { askWhichCard, withoutSignatures, type RouteAs } from "../services/emailRouting";
 import { profileNotesIn, recordProfileNotes, refreshWorkingOn } from "../services/partnerProfile";
 import { threadTokensIn } from "../../shared/email/thread";
+import { driveShareNotice } from "../../shared/intake/driveShare";
+import { handleDriveShare } from "../services/driveShares";
 import { openPortfolioUpdateCard } from "../services/portfolioReporting";
 import { EMAIL_TRIGGERS, INTAKE_MAILBOX, NO_TRIGGER_ROUTE, ROUTING_EMPLOYEE, strippedSubject, triggersIn, type EmailTrigger } from "../../shared/intake/emailTriggers";
 import { applyReplyDecision } from "../services/packetReplyDecision";
@@ -1109,6 +1111,29 @@ async function handleInboundEmailOnce(
    * this message is a reply: the trigger scan (so a quoted tag cannot fire), and the steer matcher
    * (so a reply reaches the work it is about).
    */
+  /*
+   * A DRIVE SHARE IS NEVER "UNCLEAR" (9 Oct 2026, 0256). Google's signed notice names the partner who
+   * shared it; the file goes on his open job it is about, or a new card for him with one plain question.
+   * Only a share no partner can be identified behind falls through to the ladder's can't-place question.
+   */
+  const share = driveShareNotice({ from: message.headers.get("from"), replyTo: message.headers.get("reply-to"), authenticationResults: message.headers.get("authentication-results"), subject, body: textBodyOf(raw) });
+  if (share) {
+    const receivedAt = kept.rowId ? ((await env.WP_OS_DB.prepare("SELECT received_at FROM inbound_message WHERE id = ?1").bind(kept.rowId).first<{ received_at: string }>())?.received_at ?? new Date().toISOString()) : new Date().toISOString();
+    const out = await handleDriveShare(env, { notice: share, receivedAt, messageId: inboundMessageKey(message.headers) ?? `no-message-id:${kept.rowId ?? crypto.randomUUID()}`, emlKey: kept.key });
+    if (out.handled) {
+      await linkStoredMessage(env, kept, out.cardId);
+      await appendEvent(env, {
+        eventType: "inbound_email.received",
+        actorType: "system",
+        actorId: "inbound_email",
+        objectType: "inbound_email",
+        objectId: `${message.from}:${subject}`.slice(0, 200),
+        firmScope,
+        payload: { from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX, drive_share: { file_id: share.fileId, sharer: share.sharer, attached_to: out.attachedTo ?? null, new_card: out.attachedTo ? null : out.cardId, asked: out.asked ?? false } },
+      });
+      return;
+    }
+  }
   const summary = classifyInbound({ to: message.to, from: trueSender, subject: trueSubject, body: raw, inReplyTo, references });
 
   /*

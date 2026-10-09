@@ -268,6 +268,16 @@ export async function announceOutcome(
     composed = await porterNoticeEmail(env, card.id, notice.kind, detail);
   }
   /*
+   * "I GOT AN EMAIL I CAN'T PLACE" (9 Oct 2026). A routing card's question is never the model's essay:
+   * the plain shape from services/emailRouting.ts — the fact first, at most three replies, the original
+   * quoted — whatever the loop wrote (the loop's reasoning stays on the card).
+   */
+  if (outcome === "BLOCKED" && /^Unclear email: /.test(card.title)) {
+    const { unclearEmailQuestion } = await import("./emailRouting");
+    const plain = await unclearEmailQuestion(env, card.id);
+    if (plain) composed = { what: plain.what, tldr: plain.tldr, tldrBullets: [], sections: plain.sections, details: plain.details } as typeof composed;
+  }
+  /*
    * A BLOCK ADDRESSED TO A PARTNER REACHES THAT PARTNER BY EMAIL EVEN WHEN THEY NEVER ASKED FOR THE
    * CARD (generalised 22 Sep 2026 from a WEB_PROPERTY_CHANGE-only fix written 21 Sep 2026).
    *
