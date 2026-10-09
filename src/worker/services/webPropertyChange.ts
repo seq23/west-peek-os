@@ -3099,6 +3099,9 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
   // A superseded card no longer holds the message: the re-read links it to wherever it lands now.
   for (const id of superseded) await ctx.env.WP_OS_DB.prepare("UPDATE inbound_message SET work_card_id = NULL WHERE r2_key = ?1 AND work_card_id = ?2").bind(key, id).run();
   if (msgId) await ctx.env.WP_OS_DB.prepare("DELETE FROM inbound_email_seen WHERE message_id = ?1").bind(msgId).run();
+  // Where the message lived before this read (after the links above were cleared): a link written by THIS
+  // read is where it landed; an unchanged old link says nothing about this read.
+  const linkBefore = (await ctx.env.WP_OS_DB.prepare("SELECT work_card_id FROM inbound_message WHERE r2_key = ?1").bind(key).first<{ work_card_id: string | null }>())?.work_card_id ?? null;
   const startedAt = new Date().toISOString();
   const { handleInboundEmail } = await import("../effects/inboundEmail");
   const bytes = new TextEncoder().encode(raw);
@@ -3150,9 +3153,14 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
     firmScope: "west-peek",
     payload: { message_id: msgId, superseded, restored_blocks: restored, created: created.map((c) => c.id), new_card: card?.id ?? null, new_card_kind: card?.kind ?? null, steered_card: steered },
   });
-  if (!card && steered && isReply) {
+  /*
+   * A RE-READ THAT LANDED ON AN EXISTING CARD (9 Oct 2026): a reply steering its card, or a new email /
+   * shared file the fixed door placed on the open job it belongs to (the Top Barz rules doc). The latter
+   * counts only when THIS read wrote the link — never a stale link from the mis-read being corrected.
+   */
+  if (!card && steered && (isReply || (linkBefore === null && !superseded.includes(steered)))) {
     const target = await ctx.env.WP_OS_DB.prepare("SELECT id, kind, owner_id, title, state FROM work_card WHERE id = ?1").bind(steered).first<{ id: string; kind: string | null; owner_id: string | null; title: string; state: string }>();
-    return json({ ok: true, object_key: key, superseded, steered_card: steered, steered_card_state: target?.state ?? null, new_card: null, new_card_kind: null, owner_id: target?.owner_id ?? null, title: target?.title ?? null, detail: "the message is a reply: it steered the card it answers and opened no card" });
+    return json({ ok: true, object_key: key, superseded, steered_card: steered, steered_card_state: target?.state ?? null, new_card: null, new_card_kind: null, owner_id: target?.owner_id ?? null, title: target?.title ?? null, detail: isReply ? "the message is a reply: it steered the card it answers and opened no card" : "the message landed on the open card it belongs to and opened no card" });
   }
   if (!card) return json({ ok: false, object_key: key, superseded, detail: "the door produced no card for this partner from this message — see inbound_email events" }, { status: 409 });
   return json({ ok: true, object_key: key, superseded, new_card: card.id, new_card_kind: card.kind, owner_id: card.owner_id, title: card.title });
