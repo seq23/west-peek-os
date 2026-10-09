@@ -1,4 +1,4 @@
-import { PARTNERS } from "../../shared/registry/partners";
+import { PARTNERS, partnerByEmail } from "../../shared/registry/partners";
 import { resolveStaleClarifications } from "./emailRouting";
 import { refreshAllWorkingOn } from "./partnerProfile";
 import type { Env } from "../env";
@@ -9,7 +9,7 @@ import type { FirmUserIdentity } from "../auth";
 import { appendEvent } from "../events";
 import { notifyPartners, notifyQuietly } from "./notifications";
 import { deckStillBeingRead, workCard } from "./employeeWork";
-import { SPEND_SETTING_LANE, SPEND_SETTING_NAME, blockCard, currentSpendState, isSearchCallRefusal, releaseSpendSettingBlocks, resurfaceStaleBlocks, spendStateJson } from "./blocks";
+import { SPEND_SETTING_LANE, SPEND_SETTING_NAME, blockCard, currentSpendState, isSearchCallRefusal, releaseSpendSettingBlocks, resurfaceStaleBlocks, spendStateJson, type StoredBlock } from "./blocks";
 import { resurfaceStalePreviews } from "./previewApproval";
 import { STEPS_PER_TICK } from "../../shared/work/employeeLoop";
 import { attemptsAllowedFor, isLaneFailure, readLaneFailure, type LaneFailure } from "../../shared/ai/laneFailure";
@@ -543,7 +543,7 @@ export async function sweepOnce(
 ): Promise<SweepResult> {
   await settleAbandonedCards(env, now);
   // NOTHING STAYS STUCK SILENTLY: a block nobody has acted on rings again rather than ageing out.
-  await resurfaceStaleBlocks(env, now);
+  await remindRequestersByEmail(env, await resurfaceStaleBlocks(env, now), now);
   // 9 Oct 2026 (rule 1d): a "which job is this for?" with no answer in 24 hours becomes a new card.
   await resolveStaleClarifications(env, now);
   // 0255 (rule 4): finished and moved cards refresh each partner's "working on now"; 30 days idle drops off.
@@ -900,4 +900,26 @@ export async function deferDatedItems(env: Env, card: Pick<SweepCard, "id" | "ti
     if (id) made.push(id);
   }
   return made;
+}
+
+/**
+ * THE REMINDER REACHES AN EMAILED REQUESTER BY EMAIL (9 Oct 2026). Every rung block whose card a
+ * partner asked for by email, and whose block names that partner, gets the reminder in their inbox
+ * as well as the in-app notice — every way to clear it is a reply, so it must arrive where the reply
+ * is written. Imported lazily: webPropertyChange already imports blocks and this module.
+ */
+export async function remindRequestersByEmail(env: Env, rows: StoredBlock[], now: Date): Promise<Array<{ id: string; sent: boolean; reason: string }>> {
+  const out: Array<{ id: string; sent: boolean; reason: string }> = [];
+  for (const row of rows) {
+    const partner = row.requested_by_email ? partnerByEmail(row.requested_by_email.trim().toLowerCase()) : null;
+    if (!partner || (row.block_who ?? "").toUpperCase() !== partner.firstName.toUpperCase()) continue;
+    try {
+      const { remindRequesterByEmail } = await import("./webPropertyChange");
+      out.push({ id: row.id, ...(await remindRequesterByEmail(env, row, now)) });
+    } catch (err) {
+      // The in-app notice already rang; a failed email never stops the sweep.
+      out.push({ id: row.id, sent: false, reason: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return out;
 }
