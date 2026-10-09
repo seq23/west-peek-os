@@ -444,22 +444,31 @@ export async function settleAbandonedCards(env: Env, now: Date): Promise<SweepCa
  * THIS IS THE LOOKUP THAT DID NOT EXIST ON 17 SEP. `ai_run.failure_reason` held
  * `provider_failure:provider_http_400` and nothing on the card path ever read it, which is why a
  * card that had been refused by a lane three times still said "queued".
+ *
+ * ONLY A RUN FROM THIS ATTEMPT (9 Oct 2026). The lookup used to take the newest failed run the card
+ * had EVER owned. On the topbarz card a partner's go-ahead was read at 19:38 by the reply-intent
+ * reader; under Free only that read was PREFLIGHT_BLOCKED, failed open to CONTINUE as designed, and
+ * the Mac rebuild was queued. Two hours later the Mac job went quiet and was abandoned — and this
+ * lookup found the 19:38 run and wrote "held back by the spend setting — this work needs a paid
+ * model" on the card, with one go fewer, about a build that runs on the Mac at $0. A run from an
+ * earlier tick did not cause this tick's failure: only runs created since `attemptStartedAt` count.
  */
 async function laneBehindTheFailure(
   env: Env,
   cardId: string,
   stepDetail: string,
+  attemptStartedAt: Date,
 ): Promise<{ failure: LaneFailure; key: string | null; name: string | null; raw: string }> {
   const run = await env.WP_OS_DB.prepare(
     `SELECT r.failure_reason, pr.provider_key, pr.display_name
        FROM ai_run r
        JOIN ai_run_attribution a ON a.ai_run_id = r.id
        LEFT JOIN provider_registry pr ON pr.id = r.provider_id
-      WHERE a.work_card_id = ?1 AND r.status <> 'COMPLETED'
+      WHERE a.work_card_id = ?1 AND r.status <> 'COMPLETED' AND r.created_at >= ?2
       ORDER BY r.created_at DESC
       LIMIT 1`,
   )
-    .bind(cardId)
+    .bind(cardId, attemptStartedAt.toISOString())
     .first<{ failure_reason: string | null; provider_key: string | null; display_name: string | null }>();
 
   const fromRun = readLaneFailure(run?.failure_reason ?? null);
@@ -804,7 +813,7 @@ export async function sweepOnce(
    *      itself, so those keep all three. An empty account does not, and repeating it twice more
    *      buys nothing but fourteen minutes of a card looking healthy.
    */
-  const lane = await laneBehindTheFailure(env, card.id, detail);
+  const lane = await laneBehindTheFailure(env, card.id, detail, now);
   const allowed = attemptsAllowedFor(lane.failure, MAX_WORK_ATTEMPTS);
   await noteFailedAttempt(env, card, attemptLine(card, lane.failure, lane.name, allowed), now);
   // EVERY TRY THAT DID NOT FINISH IS ON THE CARD'S RECORD (1 Oct 2026), including the last one — written before the exhaustion branch,
