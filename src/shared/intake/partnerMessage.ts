@@ -71,3 +71,49 @@ function matchOne(text: string): PartnerMessageAsk | null {
 export function parsePartnerMessageAsk(subject: string, body: string): PartnerMessageAsk | null {
   return matchOne(body) ?? matchOne(subject);
 }
+
+/**
+ * THE CARD TITLE — AND SO THE EMAIL SUBJECT — FOR A PARTNER MESSAGE (9 Oct 2026, card wc_222a10a1).
+ *
+ * The title used to be the first LINE of "Tell Scooter: <instruction>", cut at 90 characters. A
+ * plain-text email body is hard-wrapped at ~70 columns, so the first line ended wherever the mail
+ * client wrapped it, and the subject went out as "Porter: Tell Scooter: Sequoia asked me to pass
+ * along a note — nothing" — cut mid-sentence, with no sign it had been cut.
+ *
+ * CHOSEN: the first clause of her own message, not a fixed "a note from Sequoia for Scooter". The
+ * fixed form reads politely but tells the reader nothing, and every message would share one
+ * subject; her first clause says what the note is about. The wrap is undone first (all whitespace
+ * collapsed), then the first sentence is kept; when that is too long it is cut at the last clause
+ * boundary (" — ", "; ", ", ", ": ") that fits, else the last whole word, and "…" marks the cut.
+ * Never mid-word, never a silent cut.
+ *
+ * `max` defaults to 60 so "<Employee>: " plus the title stays inside the 70-character subject
+ * (`SUBJECT_MAX`) for any employee name up to eight letters, and `execSubject` never cuts again.
+ */
+export const PARTNER_MESSAGE_TITLE_MAX = 60;
+
+export function partnerMessageTitle(partnerFirstName: string, instruction: string, max = PARTNER_MESSAGE_TITLE_MAX): string {
+  const head = `Tell ${partnerFirstName}: `;
+  const text = (instruction ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return head.trim().replace(/:$/, "");
+  const firstSentence = (/^.+?[.!?](?=\s|$)/.exec(text)?.[0] ?? text).replace(/[.]$/, "");
+  const room = max - head.length;
+  if (firstSentence.length <= room) return head + firstSentence;
+  return head + cutReadably(firstSentence, room);
+}
+
+/** Cut `s` to at most `room` characters INCLUDING a trailing "…": at a clause boundary, else a word. */
+function cutReadably(s: string, room: number): string {
+  const limit = Math.max(1, room - 1);
+  const window = s.slice(0, limit + 1);
+  let best = -1;
+  for (const sep of [" — ", " – ", " - ", "; ", ", ", ": "]) {
+    const at = window.lastIndexOf(sep);
+    if (at > best && at <= limit) best = at;
+  }
+  // A clause boundary that keeps at least a third of the room is a better cut than a word boundary.
+  if (best >= Math.floor(room / 3)) return `${s.slice(0, best).replace(/[\s,;:—–-]+$/, "")}…`;
+  const space = window.lastIndexOf(" ");
+  const cut = space > 0 && space <= limit ? s.slice(0, space) : s.slice(0, limit);
+  return `${cut.replace(/[\s,;:—–-]+$/, "")}…`;
+}

@@ -140,12 +140,55 @@ export function cleanPreviewUrls(raw: string | null | undefined, pagesHosts: rea
 
 const NO_PREVIEW = "no preview deployment for this site — the change and its screenshots are on the card";
 
+/**
+ * THE PUBLIC PAGES A PR CHANGED (9 Oct 2026). Scooter's "New preview ready" email linked only the
+ * root of https://work-wpc-739461bd.topbarz-voting.pages.dev when the pages that changed were /entry
+ * and /rules. From the PR's changed files: an HTML page under the site's publish folder (public/,
+ * dist/, site/, static/, www/, _site/, out/, build/ or the repo root) or a framework page
+ * (src/pages/*, pages/*, app/<route>/page.*) becomes its path — public/entry.html → /entry,
+ * public/rules/index.html → /rules, public/index.html → /. Anything else (functions/*, CSS, scripts,
+ * images, config) is not a page and links nothing. Sorted, unique, at most `max`. Pure.
+ */
+export function pagePathsFrom(files: readonly string[] | null | undefined, max = 8): string[] {
+  const out = new Set<string>();
+  for (const raw of files ?? []) {
+    const f = String(raw).trim().replace(/^\.?\//, "");
+    if (!f || /(^|\/)(node_modules|functions|api|tests?|e2e|scripts|\.github)\//.test(f)) continue;
+    let route: string | null = null;
+    const html = /^(?:(?:public|dist|site|static|www|_site|out|build)\/)?(.+)\.html?$/i.exec(f);
+    const framework = /^(?:src\/)?pages\/(.+)\.(?:astro|mdx?|tsx|jsx|vue|svelte)$/i.exec(f);
+    const appRouter = /^(?:src\/)?app\/(?:(.+)\/)?page\.(?:tsx|jsx|mdx?)$/i.exec(f);
+    if (html && !/(^|\/)(404|500)$/.test(html[1]!) && !/^(src|components|templates|partials|layouts|includes)\//.test(html[1]!)) route = html[1]!;
+    else if (framework && !/(^|\/)_|\[/.test(framework[1]!)) route = framework[1]!;
+    else if (appRouter && !/\[/.test(appRouter[1] ?? "")) route = (appRouter[1] ?? "").replace(/(^|\/)\([^)]*\)/g, "");
+    if (route === null) continue;
+    const path = `/${route.replace(/(^|\/)index$/, "").replace(/^\/+|\/+$/g, "")}`;
+    out.add(path === "/" ? "/" : path.replace(/\/+$/, ""));
+  }
+  return [...out].sort((a, b) => (a === "/" ? -1 : b === "/" ? 1 : a.localeCompare(b))).slice(0, max);
+}
+
+/**
+ * One clean preview link plus one link per changed page: "<root> — changed pages: <root>/entry ·
+ * <root>/rules". The root page ("/") is the root link itself and is not repeated. Only a SINGLE
+ * clean link takes pages; several sites in one link ("a · b") stay as they are. Pure.
+ */
+export function withChangedPages(link: string | null, pagesJson: string | null | undefined): string | null {
+  if (!link || link.includes(" · ") || !/^https?:\/\/\S+$/.test(link)) return link;
+  const pages = listOf(pagesJson).filter((p) => p.startsWith("/") && p !== "/");
+  if (!pages.length) return link;
+  const root = link.replace(/\/+$/, "");
+  return `${root} — changed pages: ${pages.map((p) => `${root}${p}`).join(" · ")}`;
+}
+
 export interface PreviewState {
   preview_url: string | null;
   pr_url: string | null;
   check_state: string | null;
   check_green_at: string | null;
   placeholders_json: string | null;
+  /** 0257: the public pages the PR changed, JSON; the preview line links each one. */
+  changed_pages_json?: string | null;
 }
 
 /**
@@ -153,17 +196,17 @@ export interface PreviewState {
  * placeholders): <link>". Null before the first green build — then the plan email says the preview
  * comes next instead. A repo with no preview deployment names the PR, which stands in for it. Pure.
  */
-export function currentPreviewLine(row: PreviewState | null | undefined, parts: ReadonlyArray<{ repo: string; preview_url: string | null; pr_url: string | null; pagesHosts?: readonly string[]; branch?: string | null }> = [], clean: { pagesHosts?: readonly string[]; branch?: string | null } = {}): string | null {
+export function currentPreviewLine(row: PreviewState | null | undefined, parts: ReadonlyArray<{ repo: string; preview_url: string | null; pr_url: string | null; pagesHosts?: readonly string[]; branch?: string | null; changed_pages_json?: string | null }> = [], clean: { pagesHosts?: readonly string[]; branch?: string | null } = {}): string | null {
   if (!row || row.check_state !== "GREEN" || !row.check_green_at) return null;
   const n = listOf(row.placeholders_json).length;
   const label = `Current preview (built ${builtAt(row.check_green_at) ?? "earlier"}, ${n} placeholder${n === 1 ? "" : "s"})`;
   if (parts.length) {
-    const links = parts.map((p) => `${p.repo}: ${cleanPreviewUrls(p.preview_url, p.pagesHosts ?? [], p.branch ?? "") ?? NO_PREVIEW}`).join(" · ");
+    const links = parts.map((p) => `${p.repo}: ${withChangedPages(cleanPreviewUrls(p.preview_url, p.pagesHosts ?? [], p.branch ?? ""), p.changed_pages_json) ?? NO_PREVIEW}`).join(" · ");
     return `${label}: ${links}`;
   }
   // NO PR LINK IN HER INBOX (owner, 23 Sep 2026): a repo with no preview deployment says so; the
   // PR and its screenshots are on the card.
-  const link = cleanPreviewUrls(row.preview_url, clean.pagesHosts ?? [], clean.branch ?? "") ?? (row.pr_url ? NO_PREVIEW : null);
+  const link = withChangedPages(cleanPreviewUrls(row.preview_url, clean.pagesHosts ?? [], clean.branch ?? ""), row.changed_pages_json) ?? (row.pr_url ? NO_PREVIEW : null);
   return link ? `${label}: ${link}` : null;
 }
 

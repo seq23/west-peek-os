@@ -7,7 +7,7 @@ import { containsGenuineQuestion } from "../../shared/intake/genuineQuestion";
 import { addressIn, mailAuthority } from "../../shared/intake/partnerAuthority";
 import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
 import { answerClarification, siteCardDecision, survivorOf, type Candidate, type RouteAs } from "./emailRouting";
-import { partnerByEmail, PREVIEW_PARTNER, type Partner } from "../../shared/registry/partners";
+import { partnerByEmail, PARTNERS, PREVIEW_PARTNER, type Partner } from "../../shared/registry/partners";
 import type { InstructionPiece } from "../../shared/work/instruction";
 import { answerBlock } from "./blocks";
 import { blockReplyDoor } from "../../shared/work/blocks";
@@ -602,6 +602,15 @@ export async function steerFromReply(
       )
         .bind(`wcn_${crypto.randomUUID()}`, cardRow.id, partner.firmUserId, written.slice(0, 4000), thread.firm_scope)
         .run();
+    } else if (cardRow && partner && cardRow.kind === "PARTNER_MESSAGE") {
+      /*
+       * A REPLY TO A PARTNER MESSAGE IS FOR THE PARTNER WHO ASKED FOR IT (9 Oct 2026). Scooter
+       * answering Porter's "Sequoia asked me to pass along a note" used to reach the closed-card door
+       * below: a reply with no question in it was dropped with only a `work_steer` row nothing reads
+       * for this kind, and a question became a firm-wide notification — never an email to Sequoia,
+       * whose note it was. It now lands on the same card and is relayed to her, by email, once.
+       */
+      await relayPartnerMessageReply(env, cardRow, partner, written, thread);
     } else if (cardRow && partner) {
       /*
        * ── A REPLY ON A CARD NEITHER BLOCKED NOR OPEN — THE COMMON CASE, AND UNTIL NOW A SILENT
@@ -788,6 +797,95 @@ async function handleReplyOnClosedCard(
     firmScope: card.firm_scope,
     payload: { tried_employee: routed.employeeName, reason: routed.reason, ai_run_id: routed.aiRunId, thread_token: thread.token },
   });
+}
+
+/** The marker a relayed partner-message reply carries on its card; the dedupe reads it. */
+export const PARTNER_MESSAGE_REPLY_NOTE_PREFIX = "[REPLY TO THE MESSAGE] ";
+
+/**
+ * A REPLY TO A PARTNER MESSAGE, RELAYED TO THE PARTNER WHO ASKED FOR IT (owner, 9 Oct 2026).
+ *
+ * WHAT MUST BE TRUE: the reply lands on the SAME card (a note and a line on its trail — never a new
+ * card), and the partner who asked for the message (`requested_by_email`; the other partner when the
+ * card names nobody) gets it by email, ONCE — the same reply processed twice is one email. The card
+ * stays as it was: re-opening a PARTNER_MESSAGE would put it back in the sweep and send the original
+ * message again. A reply from the very partner who asked is kept on the card and not emailed back to
+ * her. The relay goes through `sendOrPreview` with `cardAsked: false` — her words are relayed as
+ * written, nothing is composed, so there is nothing for a preview to check — and it starts its own
+ * thread on this card, so an answer to the relay lands here too.
+ */
+async function relayPartnerMessageReply(
+  env: Env,
+  card: ClosedCardRow & { state: string },
+  replier: Partner,
+  written: string,
+  thread: EmailThreadRow,
+): Promise<{ relayed: boolean; to: string | null; reason: string }> {
+  // The partner who asked for the note; a card naming nobody relays to the other Managing Partner.
+  const asked = partnerByEmail(card.requested_by_email ?? null);
+  const relayTo = asked ? (asked.email !== replier.email ? asked : null) : (PARTNERS.find((p) => p.email !== replier.email) ?? null);
+  const body = `${PARTNER_MESSAGE_REPLY_NOTE_PREFIX}${replier.firstName} replied: ${written}`.slice(0, 4000);
+  const seen = await env.WP_OS_DB.prepare("SELECT 1 AS one FROM work_card_note WHERE work_card_id = ?1 AND body = ?2 LIMIT 1")
+    .bind(card.id, body)
+    .first<{ one: number }>();
+  if (seen) return { relayed: false, to: relayTo?.email ?? null, reason: "this reply was already relayed" };
+  await env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)")
+    .bind(`wcn_${crypto.randomUUID()}`, card.id, replier.firmUserId, body, card.firm_scope)
+    .run();
+
+  let outcome: { sent: boolean; reason: string } = { sent: false, reason: relayTo ? "" : "the reply came from the partner who asked for the message; kept on the card" };
+  if (relayTo) {
+    const owner = await env.WP_OS_DB.prepare("SELECT e.id, e.name FROM work_card c JOIN ai_employee e ON e.id = c.owner_id WHERE c.id = ?1")
+      .bind(card.id)
+      .first<{ id: string; name: string }>();
+    const employee = owner?.name ?? thread.employee ?? "Porter";
+    const what = `${replier.firstName} replied to your note`;
+    const lines = written.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const out = await sendOrPreview(env, {
+      to: relayTo.email,
+      email: {
+        employee,
+        what,
+        tldr: `${replier.firstName} replied to the note I sent for you, in these words:`,
+        sections: [
+          { label: `What ${replier.firstName} wrote`, bullets: lines.length ? lines.slice(0, 6).map((l) => l.slice(0, 300)) : [written.slice(0, 300)] },
+          { label: "The note it answers", bullets: [card.title.slice(0, 200)] },
+        ],
+        details: lines.length > 6 ? written : null,
+      },
+      objectType: "work_card",
+      objectId: card.id,
+      firmScope: card.firm_scope,
+      actorId: owner?.id ?? undefined,
+      cardKind: card.kind ?? undefined,
+      workCardId: card.id,
+      cardAsked: false,
+      tickedByFirmUserId: card.preview_owner_id ?? null,
+      requestedByEmail: relayTo.email,
+      what,
+    });
+    outcome = { sent: out.sent, reason: out.reason };
+  }
+  await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || '• ' || ?2, 1, 16000), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1")
+    .bind(
+      card.id,
+      relayTo
+        ? outcome.sent
+          ? `${replier.firstName} replied to this message; relayed to ${relayTo.firstName} by email.`
+          : `${replier.firstName} replied to this message; NOT emailed to ${relayTo.firstName}: ${outcome.reason}.`
+        : `${replier.firstName} replied to this message; kept here (it came from the partner who asked for it).`,
+    )
+    .run();
+  await appendEvent(env, {
+    eventType: "work_card.partner_message_reply_relayed",
+    actorType: "firm_user",
+    actorId: replier.firmUserId,
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope: card.firm_scope,
+    payload: { thread_token: thread.token, relayed_to: relayTo?.email ?? null, sent: outcome.sent, reason: outcome.reason, state: card.state },
+  });
+  return { relayed: outcome.sent, to: relayTo?.email ?? null, reason: outcome.reason };
 }
 
 /**

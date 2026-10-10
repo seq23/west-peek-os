@@ -8,6 +8,7 @@ import { json } from "../router";
 import { appendEvent } from "../events";
 import { deliver } from "./deliverables";
 import { sendPartnerEmail } from "./execEmail";
+import { recordThreadDelivery, startThread } from "./emailThread";
 import { sendViaResend } from "../effects/resendClient";
 import { isCloudflareEmailEnabled, sendViaCloudflare } from "../effects/cloudflareEmailClient";
 import {
@@ -695,6 +696,24 @@ async function sendApproved(env: Env, row: PreviewApprovalRow): Promise<EmailSen
   const approvedEnv = { ...env, [APPROVED_SEND_ENV_KEY]: marker } as Env;
   // 0239: the cc frozen on the row when it was filed; partners only (ccList), never the recipient.
   const cc = ccList(row.cc_emails).filter((a) => a !== row.recipient.trim().toLowerCase());
+  /*
+   * AN APPROVED SEND CARRIES ITS CARD'S THREAD TOKEN (9 Oct 2026). A preview-first email went out with
+   * no `wpt_` token, so a partner's reply to it — Scooter answering a partner message Sequoia had
+   * looked at first — matched no thread and opened a NEW card. Minted the same way `sendPartnerEmail`
+   * mints one, for any send that belongs to a card.
+   */
+  const thread = row.work_card_id
+    ? await startThread(env, {
+        objectType: "work_card",
+        objectId: row.work_card_id,
+        cardKind: row.card_kind ?? null,
+        employee: row.employee,
+        to: row.recipient,
+        subject: row.subject,
+        firmScope:
+          (await env.WP_OS_DB.prepare("SELECT firm_scope FROM work_card WHERE id = ?1").bind(row.work_card_id).first<{ firm_scope: string }>())?.firm_scope ?? "west-peek",
+      }).catch(() => null)
+    : null;
   const payload = {
     to: row.recipient,
     ...(cc.length ? { cc } : {}),
@@ -704,11 +723,14 @@ async function sendApproved(env: Env, row: PreviewApprovalRow): Promise<EmailSen
     // HIS ADDRESS, NOT HERS AND NOT THE FIRM'S. The recipient replies to the employee who wrote it.
     from: employeeSenderHeader(row.employee),
     replyTo: INTAKE_MAILBOX,
+    ...(thread ? { headers: thread.headers } : {}),
   };
   try {
-    return isCloudflareEmailEnabled(env)
+    const result = isCloudflareEmailEnabled(env)
       ? await sendViaCloudflare(approvedEnv, payload)
       : await sendViaResend(approvedEnv, payload);
+    if (result.sent && thread) await recordThreadDelivery(env, thread.token, result);
+    return result;
   } catch (err) {
     if (err instanceof SendBlocked) {
       return { sent: false, provider: "resend", provider_message_id: null, detail: err.message };

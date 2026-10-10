@@ -146,6 +146,8 @@ export interface WebPropertyChangeRow {
   /** 0220. The partner replied "preview" to a ready plan. */
   preview_only: number;
   preview_url: string | null;
+  /** 0257. The public pages the PR changed (JSON list of paths); the preview email links each one. */
+  changed_pages_json?: string | null;
   preview_emailed_at: string | null;
   /** 0220. The SECOND approval, after the preview email. Only the requesting partner's "approved". */
   land_approved_at: string | null;
@@ -199,7 +201,7 @@ export function missingSecretsSection(missing: readonly MissingSecret[]): { labe
 export { attachmentsFor };
 export type { RequestAttachment };
 import { attachmentsFor, missingFor, recordMissing, type RequestAttachment } from "./requestMaterials";
-import { cleanPreviewUrls, currentPreviewLine, decidedSoFar, decisionResolutionIn, doneNotice, liveUrlsFrom, MATERIALS_ADDED_PHRASE, planNotice, previewNotice, questionNotice, STAGE, stageSubject, stuckNotice, type NoticeEmail } from "../../shared/work/porterNotices";
+import { cleanPreviewUrls, currentPreviewLine, pagePathsFrom, withChangedPages, decidedSoFar, decisionResolutionIn, doneNotice, liveUrlsFrom, MATERIALS_ADDED_PHRASE, planNotice, previewNotice, questionNotice, STAGE, stageSubject, stuckNotice, type NoticeEmail } from "../../shared/work/porterNotices";
 import { porterContext } from "./porterContext";
 import type { MissingMaterial } from "../../shared/work/missingMaterials";
 
@@ -537,6 +539,8 @@ export interface WebPropertyChangePart {
   check_url: string | null;
   check_green_at: string | null;
   preview_url: string | null;
+  /** 0257. The public pages this repo's PR changed (JSON list of paths). */
+  changed_pages_json?: string | null;
   build_proof: string | null;
   merge_sha: string | null;
   landed_at: string | null;
@@ -620,6 +624,7 @@ async function recordPartReports(env: Env, cardId: string, reports: readonly Loc
         check_url: r.check_url ?? null,
         check_green_at: state === "GREEN" ? (part.check_state === "GREEN" && part.check_green_at ? part.check_green_at : now) : null,
         preview_url: r.preview_url ?? null,
+        changed_pages_json: r.changed_files ? JSON.stringify(pagePathsFrom(r.changed_files)) : (part.changed_pages_json ?? null),
         build_proof: (r.proof ?? "").slice(0, 8000) || null,
       });
     }
@@ -918,20 +923,21 @@ export function askBlockText(asks: readonly Ask[], readiness?: { publishReady: b
 
 /** The second question: the preview is up, land it? One email for every repo of the job. */
 export function previewBlockText(
-  row: Pick<WebPropertyChangeRow, "pr_url" | "preview_url" | "placeholders_json" | "publish_ready"> & Partial<Pick<WebPropertyChangeRow, "property_host" | "branch" | "rebuilt_for">>,
-  parts: readonly Pick<WebPropertyChangePart, "repo" | "property_host" | "pr_url" | "preview_url">[] = [],
+  row: Pick<WebPropertyChangeRow, "pr_url" | "preview_url" | "placeholders_json" | "publish_ready"> & Partial<Pick<WebPropertyChangeRow, "property_host" | "branch" | "rebuilt_for" | "changed_pages_json">>,
+  parts: readonly (Pick<WebPropertyChangePart, "repo" | "property_host" | "pr_url" | "preview_url"> & Partial<Pick<WebPropertyChangePart, "branch" | "changed_pages_json">>)[] = [],
 ): string {
   const placeholders = list(row.placeholders_json);
   // 0244: a preview rebuilt for the partner's words says what it changed, in their words.
   const changed = row.rebuilt_for?.trim() ? [`Changed since the last preview, as you asked: "${row.rebuilt_for.trim().slice(0, 300)}".`] : [];
   // THE ONE CLEAN LINK (23 Sep 2026): the site's branch alias, never six URLs and HTML fragments.
-  row = { ...row, preview_url: cleanPreviewUrls(row.preview_url, pagesHostsOf(row.property_host ?? null), row.branch ?? "") };
+  // 0257: plus one link per page the PR changed — /entry and /rules, never only the root.
+  row = { ...row, preview_url: withChangedPages(cleanPreviewUrls(row.preview_url, pagesHostsOf(row.property_host ?? null), row.branch ?? ""), row.changed_pages_json) };
   if (parts.length) {
     return [
       `PREVIEW READY in ${parts.length} repos — one landing for all of them:`,
       ...changed,
       ...parts.map((p) =>
-        `• ${p.repo} (${p.property_host}): ${p.preview_url ? `look at it here: ${p.preview_url}` : "no preview deployment for this repo — the PR and its screenshots stand in for it"}. The PR: ${p.pr_url ?? "(none)"}.`,
+        `• ${p.repo} (${p.property_host}): ${p.preview_url ? `look at it here: ${withChangedPages(cleanPreviewUrls(p.preview_url, pagesHostsOf(p.property_host ?? null), p.branch ?? ""), p.changed_pages_json) ?? p.preview_url}` : "no preview deployment for this repo — the PR and its screenshots stand in for it"}. The PR: ${p.pr_url ?? "(none)"}.`,
       ),
       ...(placeholders.length ? [`Ships with ${placeholders.length} placeholder${placeholders.length === 1 ? "" : "s"}: ${placeholders.join("; ")}.`] : []),
       `Reply "approved" to land every PR together, or "changes: …" to hold them all. Nothing lands without that word, and nothing lands unless every PR is green.${placeholders.length ? ` ("approved to production" also lands them and names the placeholders and you in the DONE email.)` : ""}`,
@@ -1985,6 +1991,8 @@ async function applyBuild(env: Env, card: WebPropertyChangeCard, row: WebPropert
   if (!report.pr_url) return { finished: false, blocked: false, progressed: false, detail: "BUILD came back without a PR link" };
   const state = report.check_state ?? "PENDING";
   const now = new Date().toISOString();
+  // 0257: the pages the PR changed, so the preview links /entry and /rules, not only the root.
+  const changedPages = report.changed_files ? JSON.stringify(pagePathsFrom(report.changed_files)) : (row.changed_pages_json ?? null);
   await update(env, card.id, {
     pr_url: report.pr_url,
     pr_number: report.pr_number ?? null,
@@ -1994,6 +2002,7 @@ async function applyBuild(env: Env, card: WebPropertyChangeCard, row: WebPropert
     check_green_at: state === "GREEN" ? now : null,
     build_proof: (report.proof ?? "").slice(0, 8000) || null,
     preview_url: report.preview_url ?? null,
+    changed_pages_json: changedPages,
   });
   await appendFinding(env, card.id, `PR opened: ${report.pr_url} — checks ${state}${report.check_url ? ` (${report.check_url})` : ""}.${report.proof ? `\n${report.proof.slice(0, 1500)}` : ""}`);
   if (state !== "GREEN") {
@@ -2008,7 +2017,7 @@ async function applyBuild(env: Env, card: WebPropertyChangeCard, row: WebPropert
    * `land ""` and `gh pr view null`. What the update wrote to the row and what the next phase read
    * from memory were two different rows. One object, every field the report carries.
    */
-  const fresh: WebPropertyChangeRow = { ...row, pr_url: report.pr_url, pr_number: report.pr_number ?? row.pr_number ?? null, branch: report.branch ?? row.branch ?? null, check_state: "GREEN", check_green_at: now, check_url: report.check_url ?? row.check_url ?? null, preview_url: report.preview_url ?? null, build_proof: (report.proof ?? "").slice(0, 8000) || null };
+  const fresh: WebPropertyChangeRow = { ...row, pr_url: report.pr_url, pr_number: report.pr_number ?? row.pr_number ?? null, branch: report.branch ?? row.branch ?? null, check_state: "GREEN", check_green_at: now, check_url: report.check_url ?? row.check_url ?? null, preview_url: report.preview_url ?? null, changed_pages_json: changedPages, build_proof: (report.proof ?? "").slice(0, 8000) || null };
   /*
    * A CHANGE THAT PREVIEWS FIRST STOPS HERE (21 Sep 2026). Not publish-ready, or the partner said
    * "preview": the second email carries the preview link, the PR, the placeholders and the proof,

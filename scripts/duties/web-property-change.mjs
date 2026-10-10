@@ -663,6 +663,20 @@ async function prFor(worktree, branch) {
   return JSON.parse(stdout);
 }
 
+/**
+ * THE PR'S CHANGED FILES (9 Oct 2026), as gh lists them — so the preview email can link /entry and
+ * /rules directly instead of only the site root. A failed read is an empty list, never a guess.
+ */
+async function changedFilesFor(worktree, number) {
+  try {
+    const { stdout } = await sh("gh", ["pr", "view", String(number), "--json", "files"], { cwd: worktree });
+    const files = JSON.parse(stdout).files;
+    return Array.isArray(files) ? files.map((f) => String(f?.path ?? "")).filter(Boolean).slice(0, 500) : [];
+  } catch {
+    return [];
+  }
+}
+
 async function previewUrlFor(worktree, number, progress, pagesHosts = [], branch = "") {
   const statuses = [];
   const comments = [];
@@ -983,6 +997,7 @@ export async function run(job, ctx) {
     const checks = await watchChecks(names.worktree, pr.number, ctx.signal, progress);
     // The preview link is read AFTER the checks settle: Pages posts its deployment beside them.
     const previewUrl = checks.state === "GREEN" ? await previewUrlFor(names.worktree, pr.number, progress, job.pages_hosts ?? [], names.branch) : null;
+    const changedFiles = await changedFilesFor(names.worktree, pr.number);
     return {
       phase,
       status: "ok",
@@ -996,6 +1011,7 @@ export async function run(job, ctx) {
       check_state: checks.state,
       check_url: checks.url ?? undefined,
       preview_url: previewUrl ?? undefined,
+      changed_files: changedFiles,
       // The model's own proof, then what the SCRIPT did about delivery config — in that order, so
       // a reader sees the claim and the observation side by side and can tell which is which.
       proof: [String(result.proof ?? "").slice(0, 8000), ...configLines, ...runLines(runsDone), ...(carried.dns_proof ?? [])].filter(Boolean).join("\n"),
@@ -1595,7 +1611,8 @@ async function runSeveral(job, ctx) {
       }
       const checks = await watchChecks(p.names.worktree, pr.number, ctx.signal, progress);
       const previewUrl = checks.state === "GREEN" ? await previewUrlFor(p.names.worktree, pr.number, progress, p.pages_hosts ?? [], p.names.branch) : null;
-      reports.push({ repo: p.repo, pr_url: pr.url, pr_number: pr.number, branch: p.names.branch, check_state: checks.state, check_url: checks.url ?? undefined, preview_url: previewUrl ?? undefined, proof: proof || undefined });
+      const changedFiles = await changedFilesFor(p.names.worktree, pr.number);
+      reports.push({ repo: p.repo, pr_url: pr.url, pr_number: pr.number, branch: p.names.branch, check_state: checks.state, check_url: checks.url ?? undefined, preview_url: previewUrl ?? undefined, changed_files: changedFiles, proof: proof || undefined });
     }
     const red = reports.filter((r) => r.check_state !== "GREEN");
     return {
