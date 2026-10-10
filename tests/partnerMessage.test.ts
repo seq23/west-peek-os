@@ -390,6 +390,65 @@ describe("the email door — \"Walker, tell Scooter: …\"", () => {
     expect(String(row.next_action)).toMatch(/could not be handed to them/i);
   });
 
+  /*
+   * PRODUCTION, 9 Oct 2026 23:52Z (card wc_824ebb0a). A partner-message ask whose CONTENT named a
+   * preview host and said "the live site" was read as a web property change on "westpeek.live,
+   * voting.topbarz.xyz", because the property parse ran first. "<Employee>, tell <Partner>: …" is
+   * unambiguous: what it mentions inside is content to relay, never a job.
+   */
+  const RELAY_BODY =
+    `Sequoia asked me to send you this note. First, sorry: the "New preview ready" email you got links to the site root instead of the two pages that changed. Here they are directly: the entry page https://work-wpc-739461bd.topbarz-voting.pages.dev/entry and the rules page https://work-wpc-739461bd.topbarz-voting.pages.dev/rules (preview data, not the live site). That "New preview ready" email is still the one to answer: reply "approved" on it to put the entry page live, or "changes: ..." with what to adjust. Second, your sister is tailing this project and she noticed that both /entry and /rules link out to www.topbarz.xyz (the brand header), so the path exists in one direction only: contest pages -> homepage, never homepage -> contest pages; and the voting page does not link to /entry or /rules either. Do you want a link to these pages on the homepage, and also on the voting page? Reply yes or no on this email.`;
+
+  async function webPropertyCards(): Promise<number> {
+    const r = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM web_property_change").first<{ n: number }>();
+    return Number(r?.n ?? 0);
+  }
+
+  it("reads 'Porter, tell Scooter: …' as a message to relay even when its content names a site and 'the live site' (wc_824ebb0a)", async () => {
+    await env.WP_OS_DB.prepare("UPDATE ai_employee SET status = 'ACTIVE' WHERE id = 'aie_porter'").run();
+    captureFetch([]);
+    const before = await webPropertyCards();
+    const chiefCardId = await openAssignmentCard(env, {
+      subject: "Porter, tell Scooter: preview links for /entry and /rules, and the homepage question",
+      partnerAddress: SEQUOIA_EMAIL,
+      chiefOfStaff: "Wren",
+      raw: `Porter, tell Scooter: ${RELAY_BODY}`,
+      limits: EMAILED_TASK_LIMITS,
+      emlKey: null,
+    });
+    const chief = await cardRow(chiefCardId);
+    expect(String(chief.description)).toMatch(/Handed to Porter/);
+    expect(String(chief.description)).not.toMatch(/web property change/i);
+    const handed = await firstDescendant(chiefCardId);
+    expect(handed).not.toBeNull();
+    expect(handed!.kind).toBe("PARTNER_MESSAGE");
+    expect(handed!.owner_id).toBe("aie_porter");
+    expect(handed!.result_recipient).toBe(SCOOTER_EMAIL);
+    expect(String(handed!.prompt)).toContain("https://work-wpc-739461bd.topbarz-voting.pages.dev/entry");
+    expect(String(handed!.prompt)).toContain("https://work-wpc-739461bd.topbarz-voting.pages.dev/rules");
+    expect(String(handed!.prompt)).toContain("on the homepage");
+    expect(await webPropertyCards(), "no web property change may open").toBe(before);
+  });
+
+  it("still reads the same text WITHOUT 'Porter, tell Scooter:' as a web property change (nothing else moved)", async () => {
+    await env.WP_OS_DB.prepare("UPDATE ai_employee SET status = 'ACTIVE' WHERE id = 'aie_porter'").run();
+    captureFetch([]);
+    const before = await webPropertyCards();
+    const chiefCardId = await openAssignmentCard(env, {
+      subject: "preview links for /entry and /rules, and the homepage question",
+      partnerAddress: SEQUOIA_EMAIL,
+      chiefOfStaff: "Wren",
+      raw: RELAY_BODY,
+      limits: EMAILED_TASK_LIMITS,
+      emlKey: null,
+    });
+    const chief = await cardRow(chiefCardId);
+    expect(String(chief.description)).toMatch(/web property change/i);
+    expect(await webPropertyCards()).toBe(before + 1);
+    const handed = await firstDescendant(chiefCardId);
+    expect(handed!.kind ?? null).not.toBe("PARTNER_MESSAGE");
+  });
+
   it("does not match, and falls through to an ordinary assignment, when the named partner is not real", async () => {
     const cardId = await openAssignmentCard(env, {
       subject: "quick one D",
