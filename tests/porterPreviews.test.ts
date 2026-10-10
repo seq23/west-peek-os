@@ -62,7 +62,7 @@ async function post(path: string, who: string) {
 }
 
 /** A community-site card of Sequoia's, planned with two placeholders, approved, built green: waiting on preview 1. */
-async function atFirstPreview(subject: string): Promise<string> {
+async function atFirstPreview(subject: string, build: Record<string, unknown> = {}): Promise<string> {
   const chief = await openAssignmentCard(env, { subject, partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: `Porter, ${subject} on the community site — https://drive.google.com/drive/folders/${FOLDER}${subject.replace(/\W/g, "").slice(0, 5)}`, limits: EMAILED_TASK_LIMITS, emlKey: null });
   const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chief)).description))![1]!;
   await tickFor(id);
@@ -72,7 +72,7 @@ async function atFirstPreview(subject: string): Promise<string> {
   expect((await tickFor(id)).outcome).toBe("BLOCKED");
   expect((await reply(SEQUOIA, id, "approved")).answered).toBe(true);
   expect((await tickFor(id)).summary).toMatch(/BUILD queued/);
-  await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/501", pr_number: 501, branch: `work/wpc-${id.slice(3, 11)}`, check_state: "GREEN", preview_url: "https://1a2b3c4d.west-peek-community.pages.dev", materials: "30:aaaa0001" });
+  await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/501", pr_number: 501, branch: `work/wpc-${id.slice(3, 11)}`, check_state: "GREEN", preview_url: "https://1a2b3c4d.west-peek-community.pages.dev", materials: "30:aaaa0001", ...build });
   expect((await tickFor(id)).outcome, "preview 1: built with placeholders straight after the plan").toBe("BLOCKED");
   return id;
 }
@@ -115,6 +115,31 @@ describe("preview 1 comes straight after the plan, with placeholders, and nothin
     }
     expect(await liveJob(id), "only her reply or the button starts a materials check").toBeNull();
     expect((await card(id)).state).toBe("BLOCKED");
+  });
+});
+
+/**
+ * THE PREVIEW LINKS THE PAGES THAT CHANGED (9 Oct 2026). Scooter's "New preview ready" email for
+ * voting.topbarz.xyz linked only https://work-wpc-739461bd.topbarz-voting.pages.dev — the root — when
+ * the pages that changed were /entry and /rules. The Mac now reports the PR's changed files; the email
+ * and the card's preview line carry the root plus one link per changed public page.
+ */
+describe("the preview email links each changed page, not only the root", () => {
+  it("public/entry.html and public/rules/index.html become /entry and /rules links; functions/* links nothing", async () => {
+    const before = sent.length;
+    const id = await atFirstPreview("contest pages", {
+      changed_files: ["public/entry.html", "public/rules/index.html", "functions/api/entry.ts", "public/styles.css"],
+    });
+    const root = `https://work-wpc-${id.slice(3, 11)}.west-peek-community.pages.dev`;
+    const mail = sent.slice(before).filter((m) => m.to === SEQUOIA && /: Preview ready$/.test(m.subject));
+    expect(mail).toHaveLength(1);
+    const text = mail[0]!.text;
+    expect(text, "the root-only link is gone").not.toMatch(new RegExp(`${root.replace(/\./g, "\\.")}\\n`));
+    expect(text).toContain(`${root} — changed pages: ${root}/entry · ${root}/rules`);
+    expect(text).not.toContain(`${root}/api`);
+    expect(text).not.toContain(`${root}/styles`);
+    expect(String((await card(id)).description)).toContain(`${root}/entry`);
+    expect(JSON.parse(String((await row(id)).changed_pages_json))).toEqual(["/entry", "/rules"]);
   });
 });
 

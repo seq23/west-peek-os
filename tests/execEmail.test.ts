@@ -156,8 +156,9 @@ describe("every email kind renders to the busy-executive format", () => {
 
   it("truncates a long subject to 70 with an ellipsis, and bolds numbers in bullets but not inside URLs", () => {
     const r = renderExecEmail({ employee: "Parker", what: "your October 2026 Room — a very long title that keeps going well past the seventy character line", tldr: "t", sections: [{ label: "A", bullets: ["x"] }, { label: "B", bullets: ["y"] }] });
-    expect(r.subject.length).toBe(SUBJECT_MAX);
-    expect(r.subject.endsWith("…")).toBe(true);
+    // NEVER MID-WORD (9 Oct 2026): cut at the last whole word that fits, then "…" — within the limit.
+    expect(r.subject.length).toBeLessThanOrEqual(SUBJECT_MAX);
+    expect(r.subject).toBe("Parker: your October 2026 Room — a very long title that keeps going…");
     expect(boldNumbers("3 sponsors at $22,000 and 15% — see https://example.org/2026/09/post-1 on 2026-09-15")).toBe("**3** sponsors at **$22,000** and **15%** — see https://example.org/2026/09/post-1 on 2026-09-15");
     expect(boldNumbers("already **3** bold, 63rd floor, re_1")).toBe("already **3** bold, 63rd floor, re_1");
   });

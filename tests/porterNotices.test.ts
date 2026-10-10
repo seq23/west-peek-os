@@ -15,6 +15,8 @@ import {
   stageSubject,
   stuckNotice,
   type NoticeEmail,
+  pagePathsFrom,
+  withChangedPages,
 } from "../src/shared/work/porterNotices";
 import { boldNumbers, lintExecEmail, renderExecEmail } from "../src/shared/email/execEmail";
 import { changesTextOf, everyAskRecommended, LATE_THREAD_NOTE_PREFIX, NO_RECOMMENDATION, readApprovalReply, readAsks, stripLateThreadPrefix } from "../src/shared/work/approvalReply";
@@ -335,5 +337,22 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026): the 
     const note = `${LATE_THREAD_NOTE_PREFIX}approved`;
     expect(stripLateThreadPrefix(note)).toEqual({ late: true, text: "approved" });
     expect(stripLateThreadPrefix("approved")).toEqual({ late: false, text: "approved" });
+  });
+});
+
+describe("pagePathsFrom / withChangedPages — the preview links each changed page (9 Oct 2026)", () => {
+  it("reads public pages from a PR's changed files and skips everything that is not a page", () => {
+    expect(
+      pagePathsFrom(["public/entry.html", "public/rules/index.html", "public/index.html", "functions/api/vote.ts", "public/app.js", "public/styles.css", "README.md", "src/pages/about.astro", "src/pages/[slug].astro", "app/(site)/press/page.tsx", "public/404.html"]),
+    ).toEqual(["/", "/about", "/entry", "/press", "/rules"]);
+    expect(pagePathsFrom(["functions/_middleware.ts", "wrangler.toml"])).toEqual([]);
+    expect(pagePathsFrom(null)).toEqual([]);
+  });
+  it("adds one link per changed page to a single clean link; the root page is the root link itself", () => {
+    const root = "https://work-wpc-739461bd.topbarz-voting.pages.dev";
+    expect(withChangedPages(root, JSON.stringify(["/", "/entry", "/rules"]))).toBe(`${root} — changed pages: ${root}/entry · ${root}/rules`);
+    expect(withChangedPages(root, null)).toBe(root);
+    expect(withChangedPages(`${root} · https://x.other.pages.dev`, JSON.stringify(["/entry"]))).toBe(`${root} · https://x.other.pages.dev`);
+    expect(withChangedPages(null, JSON.stringify(["/entry"]))).toBeNull();
   });
 });

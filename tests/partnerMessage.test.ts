@@ -6,8 +6,11 @@ import { sweepIdentity, sweepOnce, type SweepCard } from "../src/worker/services
 import { runPartnerMessageCard } from "../src/worker/services/partnerMessage";
 import { decidePreview, filePreview } from "../src/worker/services/previewApproval";
 import { openAssignmentCard } from "../src/worker/services/dealIntake";
+import { PARTNER_MESSAGE_REPLY_NOTE_PREFIX, steerFromReply } from "../src/worker/services/emailThread";
+import { threadReference } from "../src/shared/email/thread";
 import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
-import { parsePartnerMessageAsk } from "../src/shared/intake/partnerMessage";
+import { parsePartnerMessageAsk, partnerMessageTitle } from "../src/shared/intake/partnerMessage";
+import { execSubject } from "../src/shared/email/execEmail";
 import { saidNothing, cannotDo } from "./helpers/interpret";
 
 /**
@@ -461,5 +464,156 @@ describe("the email door — \"Walker, tell Scooter: …\"", () => {
     const row = await cardRow(cardId);
     expect(row.kind ?? null).toBeNull();
     expect(row.owner_id).toBe("aie_wren");
+  });
+});
+
+/**
+ * THE SUBJECT READS LIKE A PERSON WROTE IT (9 Oct 2026, card wc_222a10a1). The title used to be the
+ * first hard-wrapped LINE of the email body, so the subject went out as "Porter: Tell Scooter: Sequoia
+ * asked me to pass along a note — nothing" — cut mid-sentence with no mark. It is now her first
+ * clause, unwrapped, cut at a clause or word boundary, with "…" whenever it was shortened.
+ */
+describe("the partner-message title and subject (wc_222a10a1)", () => {
+  // Exactly how a mail client hard-wraps the plain-text body at ~70 columns.
+  const WRAPPED =
+    "Porter, tell Scooter: Sequoia asked me to pass along a note — nothing\n" +
+    "to do, just something to keep in mind. The contest pages are live on preview\n" +
+    "and she will look at them tomorrow.";
+
+  async function firstDescendant(cardId: string): Promise<Record<string, unknown> | null> {
+    return env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE assigned_from_card_id = ?1 ORDER BY created_at DESC LIMIT 1")
+      .bind(cardId)
+      .first<Record<string, unknown>>();
+  }
+
+  it("opens the card with her first clause, cut readably, never the first wrapped line", async () => {
+    await env.WP_OS_DB.prepare("UPDATE ai_employee SET status = 'ACTIVE' WHERE id = 'aie_porter'").run();
+    captureFetch([]);
+    const chiefCardId = await openAssignmentCard(env, {
+      subject: "a note for Scooter",
+      partnerAddress: SEQUOIA_EMAIL,
+      chiefOfStaff: "Wren",
+      raw: WRAPPED,
+      limits: EMAILED_TASK_LIMITS,
+      emlKey: null,
+    });
+    const handed = await firstDescendant(chiefCardId);
+    expect(handed!.kind).toBe("PARTNER_MESSAGE");
+    const title = String(handed!.title);
+    expect(title).not.toBe("Tell Scooter: Sequoia asked me to pass along a note — nothing");
+    expect(title).toBe("Tell Scooter: Sequoia asked me to pass along a note…");
+    const subject = execSubject("Porter", title);
+    expect(subject).toBe("Porter: Tell Scooter: Sequoia asked me to pass along a note…");
+    expect(subject.length).toBeLessThanOrEqual(70);
+  });
+
+  it("keeps a short first sentence whole and adds no ellipsis", () => {
+    expect(partnerMessageTitle("Scooter", "The deck is in the drive. Nothing else.")).toBe("Tell Scooter: The deck is in the drive");
+  });
+
+  it("never cuts mid-word, and marks every cut with an ellipsis", () => {
+    const long = "Antidisestablishmentarianism notwithstanding everything considered thoroughly beforehand anyway";
+    const title = partnerMessageTitle("Sequoia", long);
+    expect(title.length).toBeLessThanOrEqual(60);
+    expect(title.endsWith("…")).toBe(true);
+    const kept = title.slice("Tell Sequoia: ".length, -1);
+    expect(long.startsWith(kept)).toBe(true);
+    expect(long.charAt(kept.length)).toBe(" ");
+  });
+
+  it("execSubject cuts an over-long title at a word boundary, never mid-word", () => {
+    const subject = execSubject("Porter", "A considerably longer title than any subject line should carry, really quite long");
+    expect(subject.length).toBeLessThanOrEqual(70);
+    expect(subject.endsWith("…")).toBe(true);
+    expect(subject).toBe("Porter: A considerably longer title than any subject line should…");
+  });
+});
+
+/**
+ * A REPLY TO A PARTNER MESSAGE GOES TO THE PARTNER WHO ASKED FOR IT (owner, 9 Oct 2026).
+ *
+ * Old behaviour, traced: the token matched the DONE card (emailThread.ts `steerFromReply`), the card
+ * was neither BLOCKED nor OPEN, so `handleReplyOnClosedCard` took it — and returned at once for a
+ * reply with no question in it (silently dropped: only a `work_steer` row nothing reads for this
+ * kind), or raised an in-app notification for a question. Sequoia, whose note it was, never got it.
+ */
+describe("a reply to a partner message (DONE card) is relayed to the partner who asked", () => {
+  const GOOD_AUTH = (who: string) => `mx.cloudflare.net; spf=pass smtp.mailfrom=${who}; dkim=pass header.d=westpeek.ventures; dmarc=pass`;
+  interface Mail { to: string[]; subject: string; text: string; headers?: Record<string, string> }
+
+  function capture(mails: Mail[]): void {
+    vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
+      if (!String(url).includes("api.resend.com")) throw new Error(`unexpected request to ${String(url)}`);
+      mails.push(JSON.parse(String(init?.body)) as Mail);
+      return new Response(JSON.stringify({ id: `re_${mails.length}` }), { status: 200 });
+    });
+  }
+  async function cardCount(): Promise<number> {
+    return Number((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card").first<{ n: number }>())?.n ?? 0);
+  }
+  function scooterReplies(token: string, written: string) {
+    const raw = [`From: ${SCOOTER_EMAIL}`, "To: os@joinwestpeek.com", "Subject: Re: Porter: Tell Scooter: a note", "", written, "", "On Thu, Porter wrote:", "> Sequoia asked me to pass along a note"].join("\n");
+    return steerFromReply(env, {
+      fromHeader: `<${SCOOTER_EMAIL}>`,
+      authenticationResults: GOOD_AUTH(SCOOTER_EMAIL),
+      subject: "Re: Porter: Tell Scooter: a note",
+      raw,
+      inReplyTo: threadReference(token),
+      references: threadReference(token),
+      emlKey: null,
+    });
+  }
+
+  it("lands on the same DONE card, emails Sequoia once, and opens no new card", async () => {
+    await env.WP_OS_DB.prepare("UPDATE ai_employee SET status = 'ACTIVE' WHERE id = 'aie_porter'").run();
+    const mails: Mail[] = [];
+    capture(mails);
+    const card = await makeCard({ ownerId: "aie_porter", resultRecipient: "Scooter", prompt: "Sequoia asked me to pass along a note — nothing to do.", requestedByEmail: SEQUOIA_EMAIL });
+    expect((await runPartnerMessageCard(env, card, { interpret: saidNothing, compose: compose("Sequoia asked me to pass along a note: the contest pages are on preview.") })).finished).toBe(true);
+    expect((await cardRow(card.id)).state).toBe("DONE");
+    expect(mails).toHaveLength(1);
+    const token = (await env.WP_OS_DB.prepare("SELECT token FROM email_thread WHERE object_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(card.id).first<{ token: string }>())!.token;
+
+    const before = await cardCount();
+    const out = await scooterReplies(token, "Thanks — tell her I will look at them tonight.");
+    expect(out.steered).toBe(true);
+    expect(out.thread?.object_id).toBe(card.id);
+    expect(await cardCount(), "no new card").toBe(before);
+
+    const relayed = mails.slice(1);
+    expect(relayed, "Sequoia gets the reply by email").toHaveLength(1);
+    expect(relayed[0]!.to).toEqual([SEQUOIA_EMAIL]);
+    expect(relayed[0]!.subject).toBe("Porter: Scooter replied to your note");
+    expect(relayed[0]!.text).toContain("tell her I will look at them tonight");
+    const note = await env.WP_OS_DB.prepare("SELECT body FROM work_card_note WHERE work_card_id = ?1 AND body LIKE ?2").bind(card.id, `${PARTNER_MESSAGE_REPLY_NOTE_PREFIX}%`).first<{ body: string }>();
+    expect(note?.body).toContain("tonight");
+    expect(String((await cardRow(card.id)).description)).toMatch(/Scooter replied to this message; relayed to Sequoia by email/);
+    expect((await cardRow(card.id)).state, "never re-opened: the sweep would send the message again").toBe("DONE");
+
+    // The same reply processed twice is ONE email.
+    await scooterReplies(token, "Thanks — tell her I will look at them tonight.");
+    expect(mails.slice(1)).toHaveLength(1);
+    expect(await cardCount()).toBe(before);
+  });
+
+  it("a preview-first message that was approved carries a thread token, so its reply lands on the card too", async () => {
+    await env.WP_OS_DB.prepare("UPDATE ai_employee SET status = 'ACTIVE' WHERE id = 'aie_porter'").run();
+    const mails: Mail[] = [];
+    capture(mails);
+    const card = await makeCard({ ownerId: "aie_porter", resultRecipient: "Scooter", prompt: "Tell him the rules page is up.", previewFirst: true, previewOwnerId: SEQUOIA_ID, requestedByEmail: SEQUOIA_EMAIL });
+    await runPartnerMessageCard(env, card, { interpret: saidNothing, compose: compose("The rules page is up on the preview.") });
+    const approval = await env.WP_OS_DB.prepare("SELECT id FROM preview_approval WHERE work_card_id = ?1").bind(card.id).first<{ id: string }>();
+    expect((await decidePreview(env, approval!.id, { action: "SEND", byFirmUserId: SEQUOIA_ID, via: "HOME" })).sent).toBe(true);
+    const toScooter = mails.filter((m) => m.to[0] === SCOOTER_EMAIL);
+    expect(toScooter).toHaveLength(1);
+    const ref = toScooter[0]!.headers?.References ?? "";
+    const token = /<(wpt_[^@>]+)@/.exec(ref)?.[1];
+    expect(token, "the approved send carries a wpt_ thread token").toBeTruthy();
+    const thread = await env.WP_OS_DB.prepare("SELECT object_id FROM email_thread WHERE token = ?1").bind(token!).first<{ object_id: string }>();
+    expect(thread?.object_id).toBe(card.id);
+    const before = await cardCount();
+    await scooterReplies(token!, "Got it, looks good.");
+    expect(await cardCount()).toBe(before);
+    expect(mails.filter((m) => m.to[0] === SEQUOIA_EMAIL && /Scooter replied to your note/.test(m.subject))).toHaveLength(1);
   });
 });

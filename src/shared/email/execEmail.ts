@@ -117,7 +117,12 @@ export function execSubject(employee: string, what: string): string {
   // Got it". A `what` that already starts with this employee's prefix is not prefixed again.
   let tail = oneLine(what);
   while (tail.startsWith(head)) tail = tail.slice(head.length).trimStart();
-  return head + (tail.length <= room ? tail : `${tail.slice(0, Math.max(0, room - 1)).trimEnd()}…`);
+  if (tail.length <= room) return head + tail;
+  // NEVER MID-WORD (9 Oct 2026): a long title is cut at the last whole word that fits, then "…".
+  const limit = Math.max(0, room - 1);
+  const space = tail.slice(0, limit + 1).lastIndexOf(" ");
+  const cut = space >= Math.floor(limit / 2) ? tail.slice(0, space) : tail.slice(0, limit);
+  return `${head}${cut.replace(/[\s,;:—–-]+$/, "")}…`;
 }
 
 /**

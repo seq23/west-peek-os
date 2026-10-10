@@ -186,6 +186,8 @@ export interface LocalJobPartReport {
   check_state?: "PENDING" | "GREEN" | "RED";
   check_url?: string;
   preview_url?: string;
+  /** 9 Oct 2026: the PR's changed files, as gh lists them — the preview email links the changed pages. */
+  changed_files?: string[];
   proof?: string;
   merge_sha?: string;
   live_proof?: string;
@@ -290,6 +292,11 @@ export interface LocalJobReport {
   branch?: string;
   check_state?: "PENDING" | "GREEN" | "RED";
   check_url?: string;
+  /**
+   * BUILD (9 Oct 2026): the PR's changed files, read by the SCRIPT from `gh pr view --json files`.
+   * The preview email links each changed public page (`pagePathsFrom`), not only the site root.
+   */
+  changed_files?: string[];
   /** BUILD: validator output, screenshot names, link checks — the proof, as text. */
   proof?: string;
   /** LAND: the merge and what curl saw. */
@@ -358,6 +365,7 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
     placeholders: strs(r.placeholders),
     publish_ready: typeof r.publish_ready === "boolean" ? r.publish_ready : strs(r.placeholders).length === 0,
     preview_url: str(r.preview_url),
+    ...(Array.isArray(r.changed_files) ? { changed_files: strs(r.changed_files).slice(0, 500) } : {}),
     ...(typeof r.waits_seconds === "number" && Number.isFinite(r.waits_seconds) && r.waits_seconds >= 60
       ? { waits_seconds: Math.min(Math.round(r.waits_seconds), 7 * 24 * 60 * 60) }
       : {}),
@@ -393,6 +401,7 @@ function readPartReports(v: unknown[]): LocalJobPartReport[] {
       check_state: ["PENDING", "GREEN", "RED"].includes(String(p.check_state)) ? (String(p.check_state) as LocalJobPartReport["check_state"]) : undefined,
       check_url: str(p.check_url),
       preview_url: str(p.preview_url),
+      ...(Array.isArray(p.changed_files) ? { changed_files: p.changed_files.map((x) => String(x).trim()).filter(Boolean).slice(0, 500) } : {}),
       proof: str(p.proof),
       merge_sha: str(p.merge_sha),
       live_proof: str(p.live_proof),

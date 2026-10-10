@@ -1,5 +1,5 @@
 import { describeModes, parseBlogAsk } from "../../shared/intake/blogHelp";
-import { parsePartnerMessageAsk } from "../../shared/intake/partnerMessage";
+import { parsePartnerMessageAsk, partnerMessageTitle } from "../../shared/intake/partnerMessage";
 import { isWebPropertyChange, parseWebPropertyAsk, partsFromHosts, registrationsIn } from "../../shared/intake/webPropertyChange";
 import { loadRegistry, registerFromEmail } from "./webPropertyRegistry";
 import { dueTimeIn } from "../../shared/intake/dueTime";
@@ -1127,13 +1127,14 @@ export async function openAssignmentCard(
 
     if (alreadyOnThisDesk) {
       await env.WP_OS_DB.prepare(
-        "UPDATE work_card SET kind = 'PARTNER_MESSAGE', result_recipient = ?2, prompt = ?3, next_action = ?4 WHERE id = ?1",
+        "UPDATE work_card SET kind = 'PARTNER_MESSAGE', result_recipient = ?2, prompt = ?3, next_action = ?4, title = ?5 WHERE id = ?1",
       )
         .bind(
           card.id,
           partnerMessage.partner.email,
           partnerMessage.instruction,
           `Tell ${partnerMessage.partner.firstName}: ${partnerMessage.instruction}`.slice(0, 300),
+          partnerMessageTitle(partnerMessage.partner.firstName, partnerMessage.instruction),
         )
         .run();
       return card.id;
@@ -1164,8 +1165,15 @@ export async function openAssignmentCard(
       `Tell ${partnerMessage.partner.firstName}: ${partnerMessage.instruction}`,
     );
     if (handed.ok) {
-      await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'PARTNER_MESSAGE', result_recipient = ?2, prompt = ?3 WHERE id = ?1")
-        .bind(handed.cardId, partnerMessage.partner.email, partnerMessage.instruction)
+      // The title is the email subject: her first clause, cut readably — never the first hard-wrapped
+      // line of the email body (`partnerMessageTitle`, card wc_222a10a1).
+      await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'PARTNER_MESSAGE', result_recipient = ?2, prompt = ?3, title = ?4 WHERE id = ?1")
+        .bind(
+          handed.cardId,
+          partnerMessage.partner.email,
+          partnerMessage.instruction,
+          partnerMessageTitle(partnerMessage.partner.firstName, partnerMessage.instruction),
+        )
         .run();
       await env.WP_OS_DB.prepare(
         "UPDATE work_card SET state = 'DONE', next_action = NULL, description = substr(COALESCE(description, '') || char(10) || '• Handed to ' || ?2 || ' as work card ' || ?3 || ': a message for ' || ?4 || '.', 1, 16000) WHERE id = ?1",
