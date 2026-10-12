@@ -195,6 +195,7 @@ The path most changes follow:
 | [docs/ENVIRONMENTS.md](docs/ENVIRONMENTS.md) | local / preview / production |
 | [docs/ENVIRONMENT_CONTRACT.md](docs/ENVIRONMENT_CONTRACT.md) | Every binding and secret, and what it is for |
 | [docs/RECOVERY.md](docs/RECOVERY.md) | Backup and restore, including the proven production drill |
+| [docs/OUTBOUND_EMAIL_MAP.md](docs/OUTBOUND_EMAIL_MAP.md) | Every West Peek sending path (here and in other repos), how to pause each; read by `tests/outboundEmailMap.test.ts` |
 | [WEST_PEEK_BRAND_SYSTEM.md](WEST_PEEK_BRAND_SYSTEM.md) | Tokens and the brand validator |
 | [IMPLEMENTATION_LEDGER.md](IMPLEMENTATION_LEDGER.md) | What was built, phase by phase |
 
