@@ -11,6 +11,10 @@ import { describe, expect, it } from "vitest";
  *   - every row parses, every id is unique, and there is at least one row (zero rows is a broken
  *     parse, never a pass);
  *   - every west-peek-os file a row cites exists;
+ *   - the Summary table's counts add up to the number of rows;
+ *   - a row citing The Industry Guides (local-guides-citation-velocity, theindustryguides.com) must
+ *     send from a West Peek address: since 12 Oct 2026 those paths send as The Industry Guides and
+ *     live on Boss OS's map, so they cannot drift back here;
  *   - every file in this repo that reaches a mail transport (Resend, Gmail send, the Cloudflare
  *     send_email binding, or a caller of one of those helpers) is cited by some row, so a new
  *     sender cannot land without a row.
@@ -23,6 +27,7 @@ const MAP = "docs/OUTBOUND_EMAIL_MAP.md";
 
 interface MapRow {
   id: string;
+  from: string;
   code: string;
   status: string;
 }
@@ -34,15 +39,34 @@ function parseMapRows(markdown: string): MapRow[] {
   const cols = lines[header]!.split("|").slice(1, -1).map((c) => c.trim());
   const codeAt = cols.findIndex((c) => /^Code location$/i.test(c));
   const statusAt = cols.findIndex((c) => /^Status$/i.test(c));
+  const fromAt = cols.findIndex((c) => /^From$/i.test(c));
   const rows: MapRow[] = [];
   for (const line of lines.slice(header + 2)) {
     if (!line.startsWith("|")) break;
     const cells = line.split("|").slice(1, -1).map((c) => c.trim());
     const id = /^`([a-z0-9-]+)`$/.exec(cells[0] ?? "")?.[1] ?? "";
-    rows.push({ id, code: cells[codeAt] ?? "", status: cells[statusAt] ?? "" });
+    rows.push({ id, from: cells[fromAt] ?? "", code: cells[codeAt] ?? "", status: cells[statusAt] ?? "" });
   }
   return rows;
 }
+
+/** Sum of the "Paths" column in the Summary table. */
+function summaryTotal(markdown: string): number {
+  const lines = markdown.split("\n");
+  const header = lines.findIndex((l) => /^\|\s*Runs where\s*\|\s*Paths\s*\|/.test(l));
+  if (header < 0) return -1;
+  let total = 0;
+  for (const line of lines.slice(header + 2)) {
+    if (!line.startsWith("|")) break;
+    total += Number(line.split("|").slice(1, -1).map((c) => c.trim())[1]);
+  }
+  return total;
+}
+
+/** An Industry Guides path, by its Id or Code cell. */
+const INDUSTRY_GUIDES = /local-guides-citation-velocity|theindustryguides\.com|industryguides|\blgcv\b/i;
+/** A West Peek sending address. */
+const WEST_PEEK_FROM = /@(?:[a-z0-9-]+\.)*(?:westpeek\.ventures|joinwestpeek\.com|westpeek\.live)\b/i;
 
 /** Backticked paths in a west-peek-os Code cell. */
 function citedFiles(code: string): string[] {
@@ -98,6 +122,19 @@ describe("docs/OUTBOUND_EMAIL_MAP.md matches the code", () => {
       expect(r.code, `${r.id}: empty Code location`).not.toBe("");
       expect(r.status, `${r.id}: status`).toMatch(/^(CONFIRMED|SUSPECTED)$/);
     }
+  });
+
+  it("has Summary counts that add up to the rows", () => {
+    expect(summaryTotal(doc), "Summary table missing or its counts do not match the Inventory").toBe(rows.length);
+  });
+
+  it("keeps Industry Guides paths off unless they send from a West Peek address", () => {
+    const strays = rows
+      .filter((r) => INDUSTRY_GUIDES.test(r.id) || INDUSTRY_GUIDES.test(r.code))
+      .filter((r) => !WEST_PEEK_FROM.test(r.from))
+      .map((r) => `${r.id}: From "${r.from}"`);
+    expect(strays, "Industry Guides rows belong on Boss OS's map").toEqual([]);
+    expect(rows.every((r) => r.from !== ""), "a row with no From: the From column moved").toBe(true);
   });
 
   it("has unique ids", () => {

@@ -4,12 +4,16 @@ West Peek only; Boss OS keeps its own map. The two businesses never share a repo
 sending path that used to sit in Boss OS's map lives here now, wherever its code runs.
 
 Last verified 12 Oct 2026 (rows moved from Boss OS's map that day, plus a fresh read of this repo's
-own transports).
+own transports). Same day, `lgcv-search-outcomes-weekly` and `industryguides-lead-notification` left
+this map: both now send as `The Industry Guides <hello@theindustryguides.com>` through The Industry
+Guides' own Resend account (local-guides-citation-velocity PRs #190 and #191), so nothing West Peek
+is left in either path; Boss OS's map carries them, and the test refuses an Industry Guides row here
+unless it sends from a West Peek address.
 
 **Read by code.** `tests/outboundEmailMap.test.ts` parses the table below: ids must be unique, every
 west-peek-os file a row cites must exist, zero rows is a failure, and any file in this repo that
 reaches a mail transport (Resend, Gmail send, the Cloudflare `send_email` binding, or a caller of one
-of those helpers) must be cited by a row. Adding a sender means adding a row in the same PR.
+of those helpers) must be cited by a row, and the Summary counts must add up to the rows. Adding a sender means adding a row in the same PR.
 
 **Confidentiality.** This repo may be public. No LP, investor or partner identity goes in this file:
 addresses are given by role ("a managing partner's westpeek.ventures address", "the owner's personal
@@ -28,9 +32,8 @@ inbox"), and LP rows keep counts and dates only.
 | Runs where | Paths |
 |---|---|
 | Cloudflare cron (west-peek-os Worker) | 1 |
-| Cloudflare on event (approved effect, form, sign-in, vote) | 5 |
+| Cloudflare on event (approved effect, form, sign-in, vote) | 4 |
 | Mac launchd | 8 |
-| GitHub Actions | 1 |
 | External SaaS | 1 |
 | Inert | 1 |
 
@@ -50,8 +53,6 @@ Not senders: HeyReach (via 8raise) is LinkedIn, not email.
 | `people-worth-a-call` | Weekly people worth a call, to the owner's personal inbox, then her westpeek.ventures address as fallback | Monique (Boss OS employee address) | Resend | launchd com.seq.boss-people Mon 07:15; Mac launchd | None (internal) | None | launchctl bootout gui/501/com.seq.boss-people | other repo (boss-os scripts/ops/people-worth-a-call.mjs; chassis copy) | CONFIRMED | Monique |  |
 | `lp-positive` | LPs who replied positively, before the Wednesday sync, to the owner's westpeek.ventures address (LP_POSITIVE_TO) | Monique (Boss OS employee address) | Resend | launchd com.seq.boss-lp-positive Tue 08:15; Mac launchd | None (internal) | None | launchctl bootout gui/501/com.seq.boss-lp-positive | other repo (boss-os scripts/ops/lp-positive.mjs --email; chassis copy) | CONFIRMED | Monique | Body carries LP identities; goes only to the owner's own inboxes. None are recorded here. |
 | `lp-outcomes` | What happened to every Twin LP email (opt-outs first), to the owner's personal inbox, fallback her westpeek.ventures address | Monique (Boss OS employee address) | Resend | launchd com.seq.boss-scooter-sheet Tue 07:15 (lp:outcomes --commit); Mac launchd | None (internal) | None | launchctl bootout gui/501/com.seq.boss-scooter-sheet | other repo (boss-os scripts/ops/lp-outcomes.mjs; chassis copy) | SUSPECTED | Monique | Send code read; not confirmed that --commit sends on every run (an --email-only flag exists). |
-| `lgcv-search-outcomes-weekly` | Weekly search-outcome report for The Industry Guides and all 23 sites, to the owner's westpeek.ventures address | os@westpeek.ventures | Resend (Actions secret RESEND_API_KEY); plus RED-site GitHub issues | GitHub Actions search-outcomes-weekly.yml, Mon 13:00 and 14:00 UTC (08:00 Chicago) | None (internal) | None | gh workflow disable search-outcomes-weekly.yml -R seq23/local-guides-citation-velocity | other repo (local-guides-citation-velocity scripts/search_console/search_outcomes_weekly.py) | CONFIRMED | Camille | Listed here because it sends from a West Peek address. |
-| `industryguides-lead-notification` | Lead notification for theindustryguides.com's request-assistance form, to a Spry VC inbox | Lead Notification <hello@joinwestpeek.com> | Resend | Pages Function on form submit; Cloudflare on event | None (internal) | None | Unset EMAIL_FROM in wrangler.toml and redeploy | other repo (local-guides-citation-velocity functions/api/request-assistance.js; wrangler.toml LEAD_TO / EMAIL_FROM) | CONFIRMED | Porter (West Peek OS) | An Industry Guides lead is sent from a West Peek domain. |
 | `topbarz-verification` | Top Barz vote verification code, to the voter | Top Barz Voting <topbarz@joinwestpeek.com> | Resend | Pages Function on vote; Cloudflare on event | None | None (transactional) | Remove RESEND_API_KEY from the topbarz-voting project | other repo (topbarz-voting functions/_lib/config.js, verify.js) | CONFIRMED | Porter (West Peek OS) |  |
 | `westpeek-live-mail` | West Peek Live sign-in and event-request emails, to the user | notifications@events.westpeek.live (forced to the verified domain) | Resend | Server actions on sign-in / event request; Cloudflare on event | Brand reply-to | None (transactional) | Remove its RESEND_API_KEY | other repo (westpeek-live services/email/emailService.ts, lib/auth/actions.ts, lib/actions/requestEventActions.ts) | CONFIRMED | Porter (West Peek OS) |  |
 | `community-lead` | joinwestpeek.com site-form lead, to a managing partner's westpeek.ventures address (LEAD_TO / COMMUNITY_ASSESSMENT_TO) and the Network OS sheet | EMAIL_FROM (project variable) | Resend | Pages Function /api/lead on submit; Cloudflare on event | None (internal) | None | Unset EMAIL_FROM on the join-west-peek-main Pages project | other repo (join-west-peek-main functions/api/lead.js) | CONFIRMED | Porter (West Peek OS) |  |
