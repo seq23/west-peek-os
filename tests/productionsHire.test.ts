@@ -129,12 +129,19 @@ describe("WEEKLY is a real schedule kind", () => {
   });
 
   it("0172 seeded productions_hire_search WEEKLY on Monday at 14:00, ACTIVE, due on a Monday", async () => {
-    const row = await t.db.prepare("SELECT schedule_kind, day_of_week, daily_at_utc, next_run_at, status, target_id FROM scheduled_job WHERE job_key = 'productions_hire_search'")
-      .first<{ schedule_kind: string; day_of_week: number; daily_at_utc: string; next_run_at: string; status: string; target_id: string }>();
+    const row = await t.db.prepare("SELECT schedule_kind, day_of_week, daily_at_utc, next_run_at, status, target_id, created_at FROM scheduled_job WHERE job_key = 'productions_hire_search'")
+      .first<{ schedule_kind: string; day_of_week: number; daily_at_utc: string; next_run_at: string; status: string; target_id: string; created_at: string }>();
     expect(row).toMatchObject({ schedule_kind: "WEEKLY", day_of_week: 1, daily_at_utc: "14:00", status: "ACTIVE", target_id: "aie_walker" });
     expect(row!.next_run_at).toMatch(/T14:00:00\.000Z$/);
     expect(new Date(row!.next_run_at).getUTCDay(), "a Monday").toBe(1);
-    expect(row!.next_run_at > new Date().toISOString(), "due on the NEXT Monday, not in the past").toBe(true);
+    // Measured from when the migration ran (created_at), not from the wall clock: the test DB is a
+    // copy of a migrated template cached by migration hash, so a template built last week seeded
+    // last week's "next Monday" correctly, and a wall-clock comparison failed every Monday after
+    // 14:00 UTC (12 Oct 2026). Strictly after the seed, and no more than one week after it.
+    const seeded = Date.parse(row!.created_at);
+    const due = Date.parse(row!.next_run_at);
+    expect(due > seeded, `due on the NEXT Monday after the seed, not in the past: ${row!.next_run_at} vs ${row!.created_at}`).toBe(true);
+    expect(due - seeded, "the first Monday 14:00 after the seed, never a later one").toBeLessThanOrEqual(7 * 24 * 3600 * 1000);
   });
 
   it("refuses a WEEKLY job without its day at the schema, and a day outside 0–6", async () => {

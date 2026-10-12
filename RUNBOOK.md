@@ -99,6 +99,9 @@ export goes to the partner's Drive only. The full numbered list with code anchor
   runs PLAN / BUILD / LAND; `scripts/drive/pull.mjs` maps a Drive package, `scripts/drive/push.mjs`
   shares a file with a partner.
 - **Vault**: `~/.west-peek-os/vault/` (`npm run vault:*`); names only in this repo.
+- **Outbound email**: every West Peek sending path, where it runs and how to pause it, is in
+  [docs/OUTBOUND_EMAIL_MAP.md](docs/OUTBOUND_EMAIL_MAP.md). A new sender in this repo fails
+  `tests/outboundEmailMap.test.ts` until it has a row.
 
 ## Guards
 
