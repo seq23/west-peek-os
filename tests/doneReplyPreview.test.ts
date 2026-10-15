@@ -207,6 +207,17 @@ describe("the DONE reply", () => {
     expect(rows[0]!.owner_firm_user_id).toBe(PREVIEW_PARTNER.firmUserId);
     expect(rows[0]!.lane_reason, "in the lane because she asked for it, not because the address is outside the firm").toBe("ASKED_FOR");
     expect(rows[0]!.body_text).toContain("The forms send again");
+    // 15 Oct 2026: the record said "the card was marked preview-first" on a card nobody marked.
+    expect(out.reason, "the why names her rule, not a tick nobody set").toContain("rule shows finished work");
+    expect(out.reason).not.toContain("the card was marked preview-first");
+  });
+
+  it("a card she ticked herself still says the card asked for it", async () => {
+    await setRule("off");
+    const out = await replyToRequester(env, sweepCard({ preview_first: 1 }), "DONE", "Porter", "Done.", { kind: "DONE", cause: "" });
+    expect(out.sent).toBe(false);
+    expect(out.reason).toContain("the card was marked preview-first");
+    expect(out.reason).not.toContain("rule shows finished work");
   });
 
   it("rule off: the same call sends, exactly as it did before", async () => {

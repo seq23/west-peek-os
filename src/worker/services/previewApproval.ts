@@ -358,6 +358,8 @@ export interface SendOrPreviewInput {
   workCardId?: string | null;
   /** `work_card.preview_first`. NULL is "nobody said" and the default rule decides. */
   cardAsked?: boolean | null;
+  /** `DoneReplyLane.becauseOfRule`: her rule, not the card, put it in the lane. Names the why. */
+  becauseOfRule?: boolean;
   /**
    * WHO TICKED THE BOX — `work_card.preview_owner_id`. The preview becomes theirs to answer.
    */
@@ -420,7 +422,7 @@ export async function recipientsFor(env: Env, input: { to: string; workCardId?: 
 
 export async function sendOrPreview(env: Env, input: SendOrPreviewInput): Promise<SendOrPreviewOutcome> {
   const { to, cc } = await recipientsFor(env, input);
-  const lane = previewFirstFor({ recipient: to, cardAsked: input.cardAsked ?? null });
+  const lane = previewFirstFor({ recipient: to, cardAsked: input.cardAsked ?? null, byRule: input.becauseOfRule === true });
 
   if (!lane.previewFirst) {
     const out = await sendPartnerEmail(env, {

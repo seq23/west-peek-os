@@ -283,6 +283,7 @@ async function tellRequester(
       cardKind: WEB_PROPERTY_CHANGE_KIND,
       workCardId: card.id,
       cardAsked: lane.cardAsked,
+      becauseOfRule: lane.becauseOfRule,
       tickedByFirmUserId: lane.tickedByFirmUserId,
       requestedByEmail: to,
       what: card.title,
