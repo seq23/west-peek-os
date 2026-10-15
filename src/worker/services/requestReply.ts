@@ -298,6 +298,7 @@ export async function replyToRequester(
     // 0239: a finished email — or a site change's preview — copies the partners the requester asked to cc.
     finished: outcome === "DONE" || notice?.kind === "PREVIEW",
     cardAsked: lane.cardAsked,
+    becauseOfRule: lane.becauseOfRule,
     tickedByFirmUserId: lane.tickedByFirmUserId,
     requestedByEmail: card.requested_by_email ?? null,
     firmScope: card.firm_scope,

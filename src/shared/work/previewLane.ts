@@ -69,6 +69,12 @@ export interface PreviewLaneInput {
    * and she does that by addressing it to a partner.
    */
   cardAsked?: boolean | null;
+  /**
+   * The preview was added by her standing rule (`done_reply_preview_first` / the firm-wide dial),
+   * not by a tick on the card. Changes only the WHY line: 15 Oct 2026 Scooter's "it's live" email
+   * was held with "the card was marked preview-first" on a card nobody had marked.
+   */
+  byRule?: boolean;
 }
 
 /**
@@ -94,7 +100,9 @@ export function previewFirstFor(input: PreviewLaneInput): PreviewLaneDecision {
     return {
       previewFirst: true,
       reason: "ASKED_FOR",
-      why: `${partner?.fullName ?? to} is inside the firm, so this would normally send straight out — but the card was marked preview-first.`,
+      why: input.byRule
+        ? `${partner?.fullName ?? to} is inside the firm, so this would normally send straight out — but ${PREVIEW_PARTNER.firstName}'s rule shows finished work of this kind to her before it goes.`
+        : `${partner?.fullName ?? to} is inside the firm, so this would normally send straight out — but the card was marked preview-first.`,
     };
   }
   const partner = partnerByEmail(to);
