@@ -3,7 +3,7 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import { announceOutcome, type SweepCard } from "../src/worker/services/workSweep";
 import { replyToRequester, requesterNotesSection, routedByFor } from "../src/worker/services/requestReply";
-import { doneReplyLaneFor, DONE_REPLY_PREVIEW_FIRST, rulesFor, isOn } from "../src/worker/services/kindRules";
+import { doneReplyLaneFor, DONE_REPLY_PREVIEW_FIRST, rulesFor, isOn, previewAllPartnerEmailsIsOn } from "../src/worker/services/kindRules";
 import { WEB_PROPERTY_CHANGE_KIND, ON_OFF_RULE_KEYS } from "../src/shared/work/localJobs";
 import { handleUpdateWorkCard } from "../src/worker/services/workCards";
 import { execFooter, renderExecEmail } from "../src/shared/email/execEmail";
@@ -49,6 +49,10 @@ function sweepCard(over: Partial<SweepCard> = {}): SweepCard {
     ...over,
   } as SweepCard;
 }
+
+let shippedRule: { value: string; editable: number; set_by: string; note: string };
+let shippedDialOn: boolean;
+let shippedDialSetBy: string | null;
 
 async function setRule(value: "on" | "off"): Promise<void> {
   await env.WP_OS_DB.prepare("UPDATE work_kind_rule SET value = ?3 WHERE kind = ?1 AND rule_key = ?2")
@@ -98,6 +102,12 @@ beforeAll(async () => {
     throw new Error(`unexpected fetch in test: ${String(url)}`);
   });
   await env.WP_OS_DB.prepare("UPDATE ai_employee SET status = 'ACTIVE' WHERE id IN ('aie_porter', 'aie_wren')").run();
+  // What the migrations SHIP, read before any test moves either switch (beforeEach sets the rule ON).
+  shippedRule = (await env.WP_OS_DB.prepare("SELECT value, editable, set_by, note FROM work_kind_rule WHERE kind = ?1 AND rule_key = ?2")
+    .bind(WEB_PROPERTY_CHANGE_KIND, DONE_REPLY_PREVIEW_FIRST)
+    .first<{ value: string; editable: number; set_by: string; note: string }>())!;
+  shippedDialOn = await previewAllPartnerEmailsIsOn(env);
+  shippedDialSetBy = (await env.WP_OS_DB.prepare("SELECT set_by FROM email_preview_preference WHERE firm_scope = 'west-peek' ORDER BY version_no DESC LIMIT 1").first<{ set_by: string }>())?.set_by ?? null;
 });
 
 afterAll(async () => {
@@ -127,9 +137,20 @@ beforeEach(async () => {
 });
 
 describe("the rule is read in one place, and only ever adds a preview", () => {
-  it("is seeded on, editable, and is a switch on both sides", async () => {
+  /*
+   * STRENGTHENED (0258, 15 Oct 2026). This pinned "0223 seeds her rule ON". She turned show-me-first
+   * off — for Porter's DONE emails AND firm-wide — so it now pins what the migrations SHIP: the
+   * per-kind override OFF, set by her, with the dated reason on the row; and the firm-wide dial OFF,
+   * set by her. Together: no kind resolves to the preview lane for DONE unless a card asks.
+   */
+  it("ships OFF for WEB_PROPERTY_CHANGE and firm-wide (0258), set by her, and stays an editable switch", async () => {
+    expect(shippedRule.value, "0258 turns the per-kind override off").toBe("off");
+    expect(shippedRule.set_by).toBe("fu_sequoia_taylor");
+    expect(shippedRule.note).toContain("15 Oct 2026: owner turned off show-me-first for Porter DONE emails");
+    expect(shippedDialOn, "0258 writes a version that turns the firm-wide dial off").toBe(false);
+    expect(shippedDialSetBy).toBe("fu_sequoia_taylor");
     const rules = await rulesFor(env, WEB_PROPERTY_CHANGE_KIND);
-    expect(isOn(rules[DONE_REPLY_PREVIEW_FIRST]), "0223 seeds her rule ON").toBe(true);
+    expect(isOn(rules[DONE_REPLY_PREVIEW_FIRST]), "the switch still moves: this file turns it on").toBe(true);
     const row = await env.WP_OS_DB.prepare("SELECT editable, note FROM work_kind_rule WHERE kind = ?1 AND rule_key = ?2")
       .bind(WEB_PROPERTY_CHANGE_KIND, DONE_REPLY_PREVIEW_FIRST)
       .first<{ editable: number; note: string }>();
@@ -175,20 +196,25 @@ describe("the rule is read in one place, and only ever adds a preview", () => {
    * this test now makes rather than the weaker one it used to.
    */
   it("a kind with no rule of its own inherits the firm-wide dial, and a kind with one still overrides it", async () => {
-    // Zero rows in email_preview_preference — her 22 Sep default, nobody has touched the dial.
-    const untouched = await doneReplyLaneFor(env, { kind: "BLOG_HELP", preview_first: null }, { kind: "DONE" });
-    expect(untouched.cardAsked, "no rule for BLOG_HELP and the dial has never been set — the default is ON").toBe(true);
-    expect(untouched.becauseOfRule, "the dial put it there, not the card's own tick").toBe(true);
+    // As shipped (0258, 15 Oct 2026) the dial is OFF: a ruleless kind's DONE goes straight out.
+    const shipped = await doneReplyLaneFor(env, { kind: "BLOG_HELP", preview_first: null }, { kind: "DONE" });
+    expect(shipped.cardAsked, "no rule for BLOG_HELP and the dial ships OFF — nothing is held").toBeNull();
+    expect(shipped.becauseOfRule).toBe(false);
+
+    await setFirmDial(true);
+    const dialOn = await doneReplyLaneFor(env, { kind: "BLOG_HELP", preview_first: null }, { kind: "DONE" });
+    expect(dialOn.cardAsked, "dial moved ON, and BLOG_HELP has no rule of its own — it inherits ON").toBe(true);
+    expect(dialOn.becauseOfRule, "the dial put it there, not the card's own tick").toBe(true);
 
     await setFirmDial(false);
     const dialOff = await doneReplyLaneFor(env, { kind: "BLOG_HELP", preview_first: null }, { kind: "DONE" });
     expect(dialOff.cardAsked, "the dial moved off, and BLOG_HELP has nothing of its own to override it").toBeNull();
 
-    // WEB_PROPERTY_CHANGE's own row (seeded ON by 0223) keeps deciding for itself either way.
+    // WEB_PROPERTY_CHANGE's own row (set ON for this file in beforeAll) keeps deciding for itself either way.
     const ownRule = await doneReplyLaneFor(env, { kind: WEB_PROPERTY_CHANGE_KIND, preview_first: null }, { kind: "DONE" });
     expect(ownRule.cardAsked, "an explicit per-kind rule wins over the firm-wide dial, whichever way the dial points").toBe(true);
 
-    await setFirmDial(true);
+    await setFirmDial(false);
   });
 });
 

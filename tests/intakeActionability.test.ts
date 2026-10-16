@@ -300,7 +300,7 @@ describe("QUESTION_NEEDS_REPLY tries the kind's owner first, and escalates only 
     expect(payload.reason).toBe("test-fixed: not confident");
   });
 
-  it("a CONFIDENT answer resolves the card and never blocks or dispatches PLAN — and by default (the dial's own zero-row default is ON, 0228) it is filed for her to see first rather than sent straight out", async () => {
+  it("a CONFIDENT answer resolves the card and never blocks or dispatches PLAN — and by default (0258 ships the firm-wide dial OFF, 15 Oct 2026) it is sent straight to the partner who asked", async () => {
     const cardId = await openPropertyCard("huh?", SCOOTER, "Walker", "does the westpeek.ventures preview link expire?");
     sent.length = 0;
     const out = await runWebPropertyChangeCard(
@@ -324,30 +324,29 @@ describe("QUESTION_NEEDS_REPLY tries the kind's owner first, and escalates only 
     expect(row.question_auto_answered_at).not.toBeNull();
 
     // THE ASSERTION THAT MATTERS, PART THREE: the answer went through the normal send/preview
-    // door, and the dial's default (ON, nobody has touched it yet) filed it for HER rather than
-    // sending it to the partner — exactly the "tail every partner-facing email" default Addendum 8
-    // decided. `filePreview` itself emails the owner (her) that something is waiting; that is the
-    // one send this tick produces, and it must never go to the partner who asked the question.
-    expect(sent.filter((s) => s.to === SCOOTER)).toEqual([]);
+    // door, and the dial as shipped (OFF since 0258 — she turned show-me-first off firm-wide on
+    // 15 Oct 2026) sent it to the partner who asked. Nothing is filed for her and she is not pinged.
+    expect(sent.filter((s) => s.to === SEQUOIA)).toEqual([]);
     expect(sent.length).toBe(1);
-    expect(sent[0]!.to).toBe(SEQUOIA);
+    expect(sent[0]!.to).toBe(SCOOTER);
+    expect(sent[0]!.text).toContain("Cloudflare Pages preview link stays live");
     const previews = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM preview_approval WHERE work_card_id = ?1").bind(cardId).first<{ n: number }>();
-    expect(previews?.n ?? 0).toBe(1);
+    expect(previews?.n ?? 0).toBe(0);
 
     const answered = await eventsFor(cardId, "work_card.question_auto_answered");
     expect(answered.length).toBe(1);
     const payload = JSON.parse(answered[0]!.payload_json) as { employee: string; sent: boolean };
     expect(payload.employee).toBe("Porter");
-    expect(payload.sent).toBe(false); // filed, not sent — that IS the correct outcome with the dial on
+    expect(payload.sent).toBe(true); // sent, not filed — the correct outcome with the dial off
   });
 
   it("with the firm-wide dial explicitly OFF and the card's own tick unset, a CONFIDENT answer sends straight to the partner", async () => {
     // `email_preview_preference` is append-only/versioned (0228: UPDATE and DELETE are both
     // rejected by trigger) — the same shape `mp_home_preference` uses. A new version is how the
-    // dial is ever moved, in tests exactly as in production; version 1 is free because nothing
-    // earlier in this file has written to this table yet.
+    // dial is ever moved, in tests exactly as in production. 0258 already wrote a version (OFF), so
+    // this writes the NEXT one — an explicit OFF on top of the shipped OFF must still send.
     await env.WP_OS_DB.prepare(
-      "INSERT INTO email_preview_preference (id, version_no, preview_all_partner_emails, set_by, firm_scope) VALUES ('epp_test_off', 1, 0, 'fu_sequoia_taylor', 'west-peek')",
+      "INSERT INTO email_preview_preference (id, version_no, preview_all_partner_emails, set_by, firm_scope) SELECT 'epp_test_off', COALESCE(MAX(version_no), 0) + 1, 0, 'fu_sequoia_taylor', 'west-peek' FROM email_preview_preference WHERE firm_scope = 'west-peek'",
     ).run();
     const cardId = await openPropertyCard("huh?", SCOOTER, "Walker", "does the westpeek.ventures preview link expire?");
     sent.length = 0;
@@ -398,11 +397,11 @@ describe("QUESTION_NEEDS_REPLY tries the kind's owner first, and escalates only 
   });
 
   it("respects the firm-wide preview dial (0228) when explicitly moved back to ON, not just its zero-row default: even a confident answer is filed for approval rather than sent straight out", async () => {
-    // Version 2 — the previous test in this file already wrote version 1 (OFF), and the table
+    // The next version — 0258 and the previous test already wrote OFF versions, and the table
     // rejects UPDATE/DELETE, so moving the dial back to ON is a new version, exactly as production
     // does it.
     await env.WP_OS_DB.prepare(
-      "INSERT INTO email_preview_preference (id, version_no, preview_all_partner_emails, set_by, firm_scope) VALUES ('epp_test_on', 2, 1, 'fu_sequoia_taylor', 'west-peek')",
+      "INSERT INTO email_preview_preference (id, version_no, preview_all_partner_emails, set_by, firm_scope) SELECT 'epp_test_on', COALESCE(MAX(version_no), 0) + 1, 1, 'fu_sequoia_taylor', 'west-peek' FROM email_preview_preference WHERE firm_scope = 'west-peek'",
     ).run();
     const cardId = await openPropertyCard("huh?", SCOOTER, "Walker", "is the tagline change already live?");
     sent.length = 0;

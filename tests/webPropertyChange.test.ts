@@ -153,18 +153,20 @@ async function replyFrom(who: string, written: string, token: string) {
 
 
 /**
- * THE FINISHED EMAIL, WHEREVER IT WENT (0223, 22 Sep 2026). `done_reply_preview_first` is seeded ON,
- * so Porter's DONE reply to the partner who asked is FILED for Sequoia with Send it / Send it back /
- * Dismiss rather than sent. These pins used to read `sent.filter(to === SCOOTER)`; they now read the
- * body that is waiting for her, which is the same text, and additionally require that nothing
- * reached the requester before she has seen it. Strictly more than they asserted before.
+ * THE FINISHED EMAIL GOES STRAIGHT TO THE PARTNER WHO ASKED (0258, 15 Oct 2026). From 0223 (22 Sep)
+ * these pins read the body FILED for Sequoia, because `done_reply_preview_first` was seeded ON. She
+ * turned it off — and the firm-wide dial with it — so the DONE reply is SENT. Every pin now reads the
+ * mail that actually left, and additionally requires that nothing for this card is still waiting on
+ * her Home and that the requester got exactly one finished email. Strictly more than before.
  */
-async function finishedEmailFor(cardId: string): Promise<{ text: string; state: string; owner: string }> {
-  const row = await env.WP_OS_DB.prepare("SELECT body_text, state, owner_firm_user_id FROM preview_approval WHERE work_card_id = ?1 ORDER BY created_at DESC")
+async function finishedEmailFor(cardId: string, to: string, since = 0): Promise<{ text: string; subject: string }> {
+  const held = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM preview_approval WHERE work_card_id = ?1 AND state = 'PENDING'")
     .bind(cardId)
-    .first<{ body_text: string; state: string; owner_firm_user_id: string }>();
-  expect(row, "Porter's finished email is waiting on her Home").not.toBeNull();
-  return { text: row!.body_text, state: row!.state, owner: row!.owner_firm_user_id };
+    .first<{ n: number }>();
+  expect(held?.n, "nothing for this card is held on her Home").toBe(0);
+  const mails = sent.slice(since).filter((m) => m.to === to && /: Live$/.test(m.subject));
+  expect(mails, "the finished email reached the partner who asked, exactly once").toHaveLength(1);
+  return { text: mails[0]!.text, subject: mails[0]!.subject };
 }
 
 beforeAll(async () => {
@@ -576,12 +578,10 @@ describe("Scooter emails a package for the ventures site", () => {
     const row = (await readWebPropertyChange(env, porterCardId))!;
     expect(row.phase).toBe("DONE");
     expect(row.merge_sha).toMatch(/^9f8e7d6c/);
-    // 0223: the finished email is HELD for her, carrying the same proof, and Scooter gets nothing
-    // until she says so. Both halves are asserted; the proof pins are unchanged.
-    expect(sent.filter((m) => m.to === SCOOTER && /done/i.test(m.subject)), "nothing finished reached Scooter on its own").toHaveLength(0);
-    const done = await finishedEmailFor(porterCardId);
-    expect(done.state).toBe("PENDING");
-    expect(done.owner).toBe("fu_sequoia_taylor");
+    // 0258: the finished email goes straight to Scooter, carrying the same proof, and nothing is
+    // held for her. Both halves are asserted; the proof pins are unchanged.
+    const done = await finishedEmailFor(porterCardId, SCOOTER);
+    expect(sent.filter((m) => m.to === SEQUOIA && /: Live$/.test(m.subject)), "she is not sent a copy to approve").toHaveLength(0);
     // "Live" names where it went live (from the LAND's own curl); the PR and the proof are on the card.
     expect(done.text).toMatch(/^\*\*TL;DR:\*\* Live: your change is published\./);
     expect(done.text).toMatch(/\*\*Live now\*\*\n• https:\/\/westpeek\.ventures\/team\n• https:\/\/westpeek\.ventures\/assets\/img\/portfolio\/x\.png\n/);
@@ -897,19 +897,18 @@ describe("the named bypass: \"approved to production\" (21 Sep 2026)", () => {
     const since = sent.slice(before);
     const toScooter = since.filter((m) => m.to === SCOOTER && /: Live$/.test(m.subject));
     const toSequoia = since.filter((m) => m.to === SEQUOIA);
-    // 0223: the requester's copy is held for her first; the words on it are unchanged.
-    expect(toScooter, "the forced landing does not email Scooter before she has read it").toHaveLength(0);
-    const held = await finishedEmailFor(porter.id);
-    expect(held.state).toBe("PENDING");
+    // 0258: the requester's copy goes straight to him; the words on it are unchanged.
+    expect(toScooter, "the finished email reaches Scooter once, on its own").toHaveLength(1);
+    const held = await finishedEmailFor(porter.id, SCOOTER, before);
     expect(held.text).toMatch(/\*\*Published with placeholders\*\*\n• Landed to production with \*{0,2}2\*{0,2} placeholders by Scooter Taylor's instruction: Airtable link; winner records/);
     expect(held.text).toMatch(/^\*\*TL;DR:\*\* Live: your change is published\./);
     expect(held.text).toMatch(/\*\*Live now\*\*\n• https:\/\/westpeekproductions\.com\/news\n/);
-    // She is told twice now, and the two are different things: the both-partners notice that a
-    // forced landing always sends, and (0223) the finished email waiting for her decision.
-    expect(toSequoia, "the other partner is told, and holds the finished email").toHaveLength(2);
+    // She is told once: the both-partners notice that a forced landing always sends. Since 0258
+    // there is no second, held copy of the finished email waiting for her decision.
+    expect(toSequoia, "the other partner is told, and nothing is held for her").toHaveLength(1);
     expect(toSequoia[0]!.text).toMatch(/Landed to production with 2 placeholders by Scooter Taylor's instruction/);
     expect(toSequoia[0]!.text).toMatch(/pull\/33/);
-    expect(toSequoia.some((m) => /Send it|approve/i.test(m.text)), "the second is the preview, with the doors on it").toBe(true);
+    expect(toSequoia.some((m) => /Send it|approve/i.test(m.text)), "no preview doors — nothing waits on her").toBe(false);
   });
 });
 
@@ -1229,11 +1228,11 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     expect((await tickFor(porterId)).summary).toMatch(/Landing approved after the preview; LAND queued/);
     await macReports(porterId, { phase: "LAND", status: "ok", merge_sha: "1111111111222222222233333333334444444444", live_proof: "https://westpeek.ventures/#portfolio → 200, new photo hash" });
     expect((await tickFor(porterId)).outcome).toBe("DONE");
-    // RECEIVED reached him before this window; the DONE reply is held for her (0223), so since the
-    // BUILD began his inbox has had the preview and nothing else — no plan email, no finished email.
+    // RECEIVED reached him before this window; since 0258 the DONE reply goes straight to him, so
+    // since the BUILD began his inbox has had the preview and the finished email — no plan email.
     const done = sent.slice(before).filter((m) => m.to === SCOOTER);
-    expect(done, "only the preview; the finished email is held for her").toHaveLength(1);
-    expect((await finishedEmailFor(porterId)).state, "the finished work is waiting on her Home").toBe("PENDING");
+    expect(done, "the preview, then the finished email; nothing else").toHaveLength(2);
+    expect((await finishedEmailFor(porterId, SCOOTER, before)).subject, "the finished work reached him, nothing waits on her Home").toMatch(/: Live$/);
     const kinds = (await env.WP_OS_DB.prepare("SELECT kind FROM work_card_notice WHERE work_card_id = ?1 ORDER BY sent_at").bind(porterId).all<{ kind: string }>()).results!.map((n) => n.kind);
     expect(kinds).toEqual(["RECEIVED", "PREVIEW", "DONE"]);
   });
