@@ -358,12 +358,15 @@ describe("community site + westpeek live in one email, preview first, then land"
     expect((await card(id)).state).toBe("DONE");
     const parts = await readParts(env, id);
     expect(parts.every((p) => p.merge_sha && p.landed_at)).toBe(true);
-    const done = await env.WP_OS_DB.prepare("SELECT body_text FROM preview_approval WHERE work_card_id = ?1 ORDER BY created_at DESC").bind(id).first<{ body_text: string }>();
-    expect(done, "the finished email is waiting for her").not.toBeNull();
+    // 0258 (15 Oct 2026): the finished email is SENT to the partner who asked, and nothing for this
+    // card is held on her Home.
+    const heldNow = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM preview_approval WHERE work_card_id = ?1 AND state = 'PENDING'").bind(id).first<{ n: number }>();
+    expect(heldNow?.n, "nothing is waiting for her").toBe(0);
     // "Live" (23 Sep 2026): the stage in the subject, every site that went live, from each repo's own
     // curl proof — the PRs, merges and proof text stay on the card.
-    const doneRow = await env.WP_OS_DB.prepare("SELECT subject, body_text FROM preview_approval WHERE work_card_id = ?1 ORDER BY created_at DESC").bind(id).first<{ subject: string; body_text: string }>();
-    expect(doneRow!.subject).toMatch(/: Live$/);
+    const lives = sent.filter((m) => m.to === SEQUOIA && /: Live$/.test(m.subject));
+    expect(lives, "exactly one finished email reached her as the requester").toHaveLength(1);
+    const done = { body_text: lives[0]!.text };
     expect(done!.body_text).toMatch(/^\*\*TL;DR:\*\* Live: your change is published\./);
     expect(done!.body_text).toMatch(/\*\*Live now\*\*\n• https:\/\/joinwestpeek\.com\/team\n• https:\/\/westpeek\.live\n/);
     expect(done!.body_text, "the proof and the PRs stay on the card").not.toMatch(/github\.com|→ 200|as aaaaaaaaaa/);

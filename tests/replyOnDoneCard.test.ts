@@ -333,13 +333,13 @@ describe("a confident answer, when the card's kind has a registered, ACTIVE owne
     const row = await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(CARD_ID).first<{ state: string }>();
     expect(row!.state, "still DONE — answering a later question never reopens a finished card").toBe("DONE");
 
-    // THE NORMAL SEND/PREVIEW DOOR WAS ACTUALLY USED, not merely claimed. The firm-wide preview
-    // dial defaults ON (zero-row default), so the answer is filed for her rather than sent to
-    // Scooter directly, and `filePreview` emails her that something is waiting — exactly the
-    // Addendum 8 gate every other employee send already respects.
-    expect(sent.length, "the preview-dial's own 'waiting on you' ping went out").toBe(1);
-    expect(sent[0]!.to).toBe("sequoia@westpeek.ventures");
+    // THE NORMAL SEND/PREVIEW DOOR WAS ACTUALLY USED, not merely claimed. Since 0258 (15 Oct 2026)
+    // the firm-wide preview dial ships OFF — she turned show-me-first off firm-wide — so the answer
+    // goes straight to Scooter, the partner who asked, and nothing is filed for her.
+    expect(sent.length, "exactly one send: the answer itself").toBe(1);
+    expect(sent[0]!.to).toBe("scooter@westpeek.ventures");
+    expect(sent[0]!.text).toContain("Cloudflare Pages preview link stays live");
     const previews = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM preview_approval WHERE work_card_id = ?1").bind(CARD_ID).first<{ n: number }>();
-    expect(previews?.n ?? 0, "the real answer itself is filed, waiting for her Send it").toBe(1);
+    expect(previews?.n ?? 0, "nothing is filed waiting for her Send it").toBe(0);
   });
 });
