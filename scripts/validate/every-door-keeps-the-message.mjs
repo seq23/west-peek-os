@@ -23,6 +23,11 @@
  *       stored key in hand (`emlKey` named in the call or set on the argument just above it).
  *   2 · NO door writes `raw.slice(` into anything, and each one that carries a message on a card
  *       reads it through `readableMessage` — decoded, quote-stripped, capped for readability.
+ *   2b· NO partner's words are cut SILENTLY (22 Oct 2026). `readableMessage` cuts through
+ *       `statedCut`, which says where it stopped; `openAssignmentCard` puts `written` on the card
+ *       through `statedCut`, never `written.slice(`; and `assignCard` hands the original request on
+ *       through `statedCut`, never `description.slice(`. A 5,725-character TLC playbook reached
+ *       the card cut at "Sequoia and Scooter: decid", HARD RULES gone, with nothing saying so.
  *   3 · NO `catch` in the inbound path swallows an R2 `put`: a try block containing a put must have
  *       a catch that calls `appendEvent`, so a failed store is on the spine rather than silent.
  *   4 · The store is HOISTED: `handleInboundEmailOnce` calls `keepTheMessage` before it calls any
@@ -56,6 +61,7 @@ const DEAL_INTAKE = path.join("src", "worker", "services", "dealIntake.ts");
 const PORTFOLIO = path.join("src", "worker", "services", "portfolioReporting.ts");
 const THREAD = path.join("src", "worker", "services", "emailThread.ts");
 const ROUTE = path.join("src", "worker", "services", "requestMessage.ts");
+const EMPLOYEE_WORK = path.join("src", "worker", "services", "employeeWork.ts");
 
 /** The files a message passes through between the mailbox and a work card. */
 const INBOUND_PATH = [INBOUND, DEAL_INTAKE, PORTFOLIO, THREAD, ROUTE];
@@ -217,6 +223,29 @@ export function checkSources(sources) {
     }
   }
 
+  // ── 2b · a partner's words are never cut silently ───────────────────────────────────────────
+  const silentCuts = [
+    [DEAL_INTAKE, "readableMessage", null, "readableMessage"],
+    [DEAL_INTAKE, "openAssignmentCard", /\bwritten\s*\.slice\s*\(/, "the partner's words on the card"],
+    [EMPLOYEE_WORK, "assignCard", /\bdescription(\s*\?\?\s*(""|''|``)\s*\))?\s*\.slice\s*\(/, "the original request handed on"],
+  ];
+  for (const [file, fn, banned, what] of silentCuts) {
+    const body = sources[file] ? bodyOf(stripComments(sources[file]), fn) : null;
+    if (!body) {
+      violations.push(`${file}: ${fn} is gone, so nothing can be checked for a silent cut of a partner's words.`);
+      continue;
+    }
+    if (banned && banned.test(body)) {
+      violations.push(
+        `${file}: ${fn} cuts ${what} with .slice(), which stops mid-word and says nothing. On 22 Oct 2026 a TLC ` +
+          `playbook reached the card cut at "Sequoia and Scooter: decid" with its HARD RULES gone. Use statedCut().`,
+      );
+    }
+    if (!/statedCut\s*\(/.test(body)) {
+      violations.push(`${file}: ${fn} no longer cuts ${what} through statedCut(), so a cut can be silent again.`);
+    }
+  }
+
   // ── 3 · a failed store is never silent ──────────────────────────────────────────────────────
   for (const file of INBOUND_PATH) {
     const raw = sources[file];
@@ -356,7 +385,7 @@ const CLEAN_INBOUND = [
 ].join("\n");
 
 const CLEAN_DEAL_INTAKE = [
-  "export function readableMessage(raw, cap = 4000) { return splitQuoted(textBodyOf(raw)).written.slice(0, cap); }",
+  "export function readableMessage(raw, cap = 4000) { return statedCut(splitQuoted(textBodyOf(raw)).written, cap, 'the stored message'); }",
   "",
   "export async function openRoutingCard(env, input) {",
   "  const card = await createWorkCardInternal(env, id, { description: readableMessage(input.raw) });",
@@ -365,6 +394,7 @@ const CLEAN_DEAL_INTAKE = [
   "",
   "export async function openAssignmentCard(env, input) {",
   "  const written = readableMessage(input.raw, 100000);",
+  "  const card = await createWorkCardInternal(env, id, { description: statedCut(written, PARTNER_WORDS_ON_CARD, 'below') });",
   "  const emlKey = input.emlKey;",
   "  return card.id;",
   "}",
@@ -378,6 +408,13 @@ const CLEAN_PORTFOLIO = [
   "export async function openPortfolioUpdateCard(env, input) {",
   "  const card = await createWorkCardInternal(env, id, { description: readableMessage(input.raw), emlKey: input.emlKey });",
   "  return card.id;",
+  "}",
+].join("\n");
+
+const CLEAN_EMPLOYEE_WORK = [
+  "export async function assignCard(env, card, by, to, brief) {",
+  "  const created = await createWorkCardInternal(env, id, { description: statedCut(card.description ?? '', PARTNER_WORDS_ON_CARD, card.id) });",
+  "  return { ok: true };",
   "}",
 ].join("\n");
 
@@ -402,6 +439,7 @@ function cleanTree() {
     [PORTFOLIO]: CLEAN_PORTFOLIO,
     [THREAD]: CLEAN_THREAD,
     [ROUTE]: CLEAN_ROUTE,
+    [EMPLOYEE_WORK]: CLEAN_EMPLOYEE_WORK,
   };
 }
 
@@ -428,6 +466,15 @@ function selfTest() {
     },
     "raw.slice back in a portfolio update card": (t) => {
       t[PORTFOLIO] = t[PORTFOLIO].replace("readableMessage(input.raw)", "input.raw.slice(0, 4000)");
+    },
+    "a partner's words cut silently on the assignment card (22 Oct 2026)": (t) => {
+      t[DEAL_INTAKE] = t[DEAL_INTAKE].replace("statedCut(written, PARTNER_WORDS_ON_CARD, 'below')", "written.slice(0, 4000)");
+    },
+    "the original request cut silently on a hand-off": (t) => {
+      t[EMPLOYEE_WORK] = t[EMPLOYEE_WORK].replace("statedCut(card.description ?? '', PARTNER_WORDS_ON_CARD, card.id)", "(card.description ?? '').slice(0, 4000)");
+    },
+    "readableMessage cutting without saying so": (t) => {
+      t[DEAL_INTAKE] = t[DEAL_INTAKE].replace("statedCut(splitQuoted(textBodyOf(raw)).written, cap, 'the stored message')", "splitQuoted(textBodyOf(raw)).written.slice(0, cap)");
     },
     "the swallowed catch around the R2 put": (t) => {
       t[INBOUND] = t[INBOUND].replace(
