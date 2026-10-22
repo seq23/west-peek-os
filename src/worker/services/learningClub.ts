@@ -63,6 +63,8 @@ import {
   sponsorshipAgreement,
   stageMoveProblem,
   isIdeaOrigin,
+  sameTopic,
+  topicName,
   topicKey,
   topicsEmail,
   type TlcIdeaOrigin,
@@ -701,7 +703,10 @@ async function partnerWords(env: Env, firmScope: string, now: Date): Promise<Arr
   ).bind(firmScope, since).all<{ id: string; requested_by_email: string; created_at: string; description: string | null }>()).results ?? [];
   for (const c of cards) {
     const who = byEmail.get(c.requested_by_email.toLowerCase());
-    if (who && c.description) out.push({ who, at: c.created_at, ref: c.id, text: c.description.slice(0, 2500) });
+    if (who && c.description) {
+      const own = theirOwnWords(c.description);
+      if (own) out.push({ who, at: c.created_at, ref: c.id, text: own.slice(0, 2500) });
+    }
   }
   const notes = (await env.WP_OS_DB.prepare(
     "SELECT n.id, n.author_id, n.body, n.created_at FROM work_card_note n JOIN work_card w ON w.id = n.work_card_id WHERE w.firm_scope = ?1 AND w.kind LIKE 'TLC_%' AND n.created_at >= ?2 ORDER BY n.created_at",
@@ -711,6 +716,18 @@ async function partnerWords(env: Env, firmScope: string, now: Date): Promise<Arr
     if (who) out.push({ who, at: n.created_at, ref: n.id, text: n.body.slice(0, 1500) });
   }
   return out;
+}
+
+/**
+ * ONLY WHAT THE PARTNER WROTE (22 Oct 2026). A card's description also carries the brief Wren wrote and every
+ * employee's notes ("• …"), and Parker captured "The Record Room" from his own November packet as her idea.
+ * Here: the quoted request after "in their own words:" up to the grant boilerplate, or else the text before the
+ * first employee note.
+ */
+export function theirOwnWords(description: string): string {
+  const m = /in their own words:\s*\n([\s\S]*?)(?:\n\s*WHAT THIS DOES NOT GRANT|\n\s*Stored message:|\n• |$)/i.exec(description);
+  if (m) return m[1]!.trim();
+  return description.split(/\n• /)[0]!.trim();
 }
 
 /** The ideas Parker found in the partners' own words. Kept only when the quote really appears in what they wrote. */
@@ -786,7 +803,7 @@ export function buildTopicsPrompt(
     "",
     "THE IDEAS LIST — read this FIRST. Weigh every idea on its merits next to what you find; you decide.",
     ...(ideas.length ? ideas.map((i) => `- ${i.topic} [${TLC_IDEA_ORIGIN_LABEL[i.origin]}; ${i.suggested_by}, ${i.suggested_at.slice(0, 10)}]${i.preferred_month ? ` (preferred: ${monthWords(i.preferred_month)})` : ""}${i.note ? ` — ${i.note}` : ""}`) : ["- (no ideas on the list yet)"]),
-    ...(altsPart && opts.partnerWords?.length ? ["", "WHAT THE PARTNERS WROTE (name every topic idea in it under found_ideas, with a short quote copied exactly):", ...opts.partnerWords.map((w) => `--- ${w.who}, ${w.at.slice(0, 10)}:\n${w.text}`)] : []),
+    ...(altsPart && opts.partnerWords?.length ? ["", "WHAT THE PARTNERS WROTE (under found_ideas, name each concrete club topic they suggested — one topic per entry, not a format or a list of examples — with a short quote copied exactly):", ...opts.partnerWords.map((w) => `--- ${w.who}, ${w.at.slice(0, 10)}:\n${w.text}`)] : []),
     "",
     "WHERE IDEAS COME FROM — draw on all three, and label each pick and alternative with its origin:",
     "- OWNER_IDEA: an idea on the list above that a partner sent.",
@@ -809,6 +826,7 @@ export function buildTopicsPrompt(
     "",
     "For a topic with a legal or health angle (for example peptides and biohacking, supplements, money), add a short regulatory_note: which sponsor types can legally sponsor it in New York and what they may not claim. It stays on the card; it never goes in the email.",
     picksPart ? "For each pick give the usual Rooms packet: the angle, why now (with sources), what happens in the hands-on hour, what people take home, the kind of expert who teaches it, and 5–10 sponsor categories that fit (non-competing within the club, each with why and two or three example brands)." : "",
+    "Write each topic as its name only — no day, time, month or format in brackets.",
     altsPart ? `Give exactly ${TLC_ALTERNATIVES} ALTERNATIVE topics (partner ideas, brands spending now and trends alike; each with its origin) the partners could swap in: each different from the picks and from each other, with a one-line reason it would work and two or three real brands that would pay to sponsor it.` : "",
     "This goes to the partners as it is: write only what each topic IS. Never mention a topic you turned down, rejected or ruled out, or why.",
     "Use ONLY real, live web pages as sources. Do not invent statistics, quotes or events.",
@@ -1011,9 +1029,9 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
   const ideas = await ideasFor(env, card.firm_scope);
   const playbook = await storedPlaybook(env);
   const library = await researchLibrary(env, card.firm_scope);
-  const partnerKeys = new Set(ideas.filter((i) => i.origin === "OWNER_IDEA").map((i) => i.topic_key));
-  /** A topic a partner sent is labelled theirs, whatever the model called it. */
-  const originOf = (topic: string, said: unknown): TlcIdeaOrigin | null => (partnerKeys.has(topicKey(topic)) ? "OWNER_IDEA" : isIdeaOrigin(said) && said !== "OWNER_IDEA" ? said : null);
+  const partnerTopics = ideas.filter((i) => i.origin === "OWNER_IDEA").map((i) => i.topic);
+  /** A topic a partner sent is labelled theirs, whatever the model called it, and under whatever subtitle. */
+  const originOf = (topic: string, said: unknown): TlcIdeaOrigin | null => (partnerTopics.some((t) => sameTopic(t, topic)) ? "OWNER_IDEA" : isIdeaOrigin(said) && said !== "OWNER_IDEA" ? said : null);
   type Kept = { month: string; topic: string; origin: TlcIdeaOrigin; pick: Record<string, unknown>; sources: Array<{ title: string; url: string }>; categories: Array<{ category: string; why: string; example_brands: string[] }> };
   const draftKey = `topics_draft:${card.id}`;
   const stored = await env.WP_OS_DB.prepare("SELECT value FROM tlc_setting WHERE key = ?1").bind(draftKey).first<{ value: string }>();
@@ -1035,7 +1053,7 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
       const found = await search(env, actorFor(PARKER, card.firm_scope), buildTopicsPrompt([pending.month], [...used, ...draftedTopics()], chosen, { ideas, playbook, library, part: "picks" }));
       if (!found.ok) return searchFailed(env, card, "Parker", found, now);
       const pick = (((jsonIn(found.text) ?? {}).picks as Array<Record<string, unknown>> | undefined) ?? []).find((p) => str(p.month) === pending.month);
-      const topic = chosen[pending.month] ?? str(pick?.topic);
+      const topic = chosen[pending.month] ?? partnerTopics.find((t) => sameTopic(t, str(pick?.topic))) ?? topicName(str(pick?.topic));
       if (!pick || !topic || taken.has(topic.toLowerCase())) return failNote(`${monthWords(pending.month)} had no usable pick`);
       const origin = originOf(topic, pick.origin);
       if (!origin) return failNote(`${monthWords(pending.month)} (${topic}) had no origin label`);
@@ -1055,11 +1073,13 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
       if (!found.ok) return searchFailed(env, card, "Parker", found, now);
       const answer = jsonIn(found.text) ?? {};
       // EVERY IDEA A PARTNER WROTE DOWN IS CAPTURED, picked or not, the moment Parker reads it (owner, 22 Oct 2026).
-      for (const f of ideasFoundIn(answer.found_ideas, words)) {
+      for (const f of ideasFoundIn(answer.found_ideas, words).filter((x) => !ideas.some((i) => sameTopic(i.topic, x.topic)))) {
         await upsertIdea(env, { topic: f.topic, origin: "OWNER_IDEA", suggestedBy: f.who, suggestedAt: f.at, note: `"${f.quote.slice(0, 200)}"`, sourceRef: f.ref, firmScope: card.firm_scope });
-        partnerKeys.add(topicKey(f.topic));
+        partnerTopics.push(f.topic);
       }
       const alts = (answer.alternatives as Array<Record<string, unknown>> | undefined) ?? [];
+      // A partner's idea goes under the partner's own name, so the list shows it where it stands.
+      for (const a of alts) a.topic = partnerTopics.find((t) => sameTopic(t, str(a.topic))) ?? topicName(str(a.topic));
       const usable = alts.filter((a) => str(a.topic) && str(a.reason) && Array.isArray(a.brands) && a.brands.length > 0 && originOf(str(a.topic), a.origin) && !new Set([...used, ...draftedTopics()].map((u) => u.toLowerCase())).has(str(a.topic).toLowerCase()));
       if (new Set(usable.map((a) => str(a.topic).toLowerCase())).size < TLC_ALTERNATIVES) return failNote(`${usable.length} of ${TLC_ALTERNATIVES} alternatives were usable`);
       draft.alternatives = usable;

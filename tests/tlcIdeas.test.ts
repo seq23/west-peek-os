@@ -71,8 +71,11 @@ describe("the ideas list", () => {
         regulatory_note: i === 0 ? "Card-only note: brokerages need FINRA-reviewed copy." : "",
         sponsor_categories: ["A", "B", "C", "D", "E"].map((c) => ({ category: c, why: "", example_brands: [] })), sources: [{ title: "s", url: `https://news.example/${i}` }],
       })),
-      // Peptides is weighed and left out entirely: allowed.
-      alternatives: Array.from({ length: TLC_ALTERNATIVES }, (_, i) => ({ topic: `Alt ${"ABCDEFGHI"[i]}`, origin: i % 2 ? "TREND" : "BRANDS_SPENDING", reason: "r", brands: ["b"] })),
+      alternatives: [
+        // As it came back on 22 Oct: the partner's idea under a subtitle and a schedule.
+        { topic: "Peptides & Biohacking: New Year Reset (Thursday evening, 6–10 pm)", origin: "OWNER_IDEA", reason: "r", brands: ["b"] },
+        ...Array.from({ length: TLC_ALTERNATIVES - 1 }, (_, i) => ({ topic: `Alt ${"BCDEFGHI"[i]}`, origin: i % 2 ? "BRANDS_SPENDING" : "TREND", reason: "r", brands: ["b"] })),
+      ],
       found_ideas: [],
     });
     const prompts: string[] = [];
@@ -89,7 +92,9 @@ describe("the ideas list", () => {
     expect(by("Trading & Investing")).toMatchObject({ origin: "OWNER_IDEA", status: "PICKED", status_month: "2027-01" });
     expect(by("Matcha Lab")).toMatchObject({ origin: "BRANDS_SPENDING", status: "PICKED", status_month: "2027-02" });
     expect(by("Alt B")).toMatchObject({ origin: "TREND", status: "ALTERNATIVE" });
-    expect(by("Peptides and biohacking")).toMatchObject({ origin: "OWNER_IDEA", status: "LATER" });
+    // Weighed on merit and listed as an alternative, under the partner's own name.
+    expect(by("Peptides and biohacking")).toMatchObject({ origin: "OWNER_IDEA", status: "ALTERNATIVE" });
+    expect(ideas.filter((i) => /peptides/i.test(i.topic))).toHaveLength(1);
     const card = await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ description: string }>();
     expect(card!.description).toContain("2027-01 Trading & Investing [Partner idea]");
     expect(card!.description).toContain("Alt B [Trend]");
@@ -122,5 +127,24 @@ describe("the playbook", () => {
     const trend = await openTrendStoryCard(env, NOW);
     await runTlcCard(env, (await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(trend.cardId).first())! as never, { search: async (_e, _a, prompt) => { seen = prompt; return { ok: false, text: "", detail: "model refused" }; }, now: NOW });
     expect(seen).toContain("STORED-PLAYBOOK-MARKER");
+  });
+});
+
+describe("one idea under another name (22 Oct 2026: 5 of 9 alternatives were thrown away)", () => {
+  it("matches a partner idea under a subtitle or a schedule, and strips the schedule from the name", async () => {
+    const { sameTopic, topicName } = await import("../src/shared/tlc/learningClub");
+    expect(topicName("Sewing & Visible Mending (Saturday afternoon, 1–5 pm)")).toBe("Sewing & Visible Mending");
+    expect(topicName('Trading & Investing ("Money Reset")')).toBe('Trading & Investing ("Money Reset")');
+    expect(sameTopic('Trading & Investing ("Money Reset")', "Trading & Investing: Money Reset (Thursday evening, 6–10 pm)")).toBe(true);
+    expect(sameTopic("Peptides and biohacking", "Peptides & Biohacking: New Year Reset (Thursday evening, 6–10 pm)")).toBe(true);
+    expect(sameTopic("Matcha & Tea", "Matcha & Tea: Tasting and Whisking")).toBe(true);
+    expect(sameTopic("Film Photography", "Film & Instant Photography: City Walk and Prints")).toBe(false);
+    expect(sameTopic("Home Espresso & Coffee", "Home Cooking")).toBe(false);
+  });
+  it("reads only the partner's own words off a card, never an employee's notes", async () => {
+    const { theirOwnWords } = await import("../src/worker/services/learningClub");
+    const desc = "Wren handed this to you.\nWHAT WAS ASKED, in their own words:\nWe should do a learning club about trading\nSequoia\nWHAT THIS DOES NOT GRANT:\n· May NOT approve\n• The Record Room — proposed for November 2026.";
+    expect(theirOwnWords(desc)).toBe("We should do a learning club about trading\nSequoia");
+    expect(theirOwnWords("Pick a topic please\n• Parker: The Record Room — proposed")).toBe("Pick a topic please");
   });
 });
