@@ -724,3 +724,91 @@ export const TLC_PRE_LAUNCH_PROOF: readonly string[] = [
   "West Peek Workshops: free, hands-on virtual sessions on West Peek Live (most recently AI in business, September 2026).",
   "The West Peek community: more than 5,000 founders, operators, investors, creatives and builders.",
 ];
+
+// ── Parker's topics email to both partners (owner, 22 Oct 2026) ─────────────────────────────────
+
+/**
+ * WHAT THE PARTNERS GET: the 3 picks (one per month, each with the glossy one-sheet a brand would see)
+ * and 9 alternatives as a plain list, each with a one-line reason and the brands that would pay.
+ * Her words: "the deliverable should be the glossy 1 sheet to sell a brand the idea for us to see and
+ * approve + 9 more alt ideas in a list in the email", and "I don't need to see that he rejected
+ * trading for Jan". Parker's working notes — what he turned down and why — stay on the card.
+ */
+export const TLC_ALTERNATIVES = 9;
+
+export interface TopicsEmailPick {
+  month: string;
+  topic: string;
+  angle: string;
+  categories: readonly string[];
+  /** The glossy one-sheet, as a brand would see it. */
+  onePagerUrl: string;
+}
+export interface TopicsEmailAlternative {
+  topic: string;
+  reason: string;
+  brands: readonly string[];
+}
+
+/** Words that only ever describe Parker's internal reasoning. None may reach a partner's email. */
+const WORKING_NOTES = /\b(reject(?:ed|s|ing)?|not picked|why not|ruled out|turned down|passed over)\b/i;
+
+/**
+ * Why this email must not go, or [] when it may. Every month present exactly once, exactly nine
+ * alternatives (none repeating a pick), each with a reason and at least one brand, a one-sheet link
+ * per pick, and no working notes anywhere in what the partners read.
+ */
+export function topicsEmailProblems(months: readonly string[], picks: readonly TopicsEmailPick[], alts: readonly TopicsEmailAlternative[]): string[] {
+  const out: string[] = [];
+  for (const m of months) {
+    const n = picks.filter((p) => p.month === m).length;
+    if (n !== 1) out.push(`${monthWords(m)} has ${n} picks; it needs exactly one`);
+  }
+  for (const p of picks) if (!months.includes(p.month)) out.push(`a pick for ${p.month}, which this email is not for`);
+  for (const p of picks) if (!/^https:\/\//.test(p.onePagerUrl)) out.push(`${monthWords(p.month)} has no one-sheet link`);
+  if (alts.length !== TLC_ALTERNATIVES) out.push(`${alts.length} alternatives; it needs ${TLC_ALTERNATIVES}`);
+  const pickNames = new Set(picks.map((p) => p.topic.toLowerCase()));
+  const seen = new Set<string>();
+  for (const a of alts) {
+    const k = a.topic.toLowerCase();
+    if (!a.topic || !a.reason) out.push(`an alternative without a topic or a reason`);
+    if (a.brands.length === 0) out.push(`the alternative "${a.topic}" names no brand that would pay`);
+    if (pickNames.has(k)) out.push(`the alternative "${a.topic}" repeats a pick`);
+    if (seen.has(k)) out.push(`the alternative "${a.topic}" is listed twice`);
+    seen.add(k);
+  }
+  const text = [...picks.flatMap((p) => [p.topic, p.angle, ...p.categories]), ...alts.flatMap((a) => [a.topic, a.reason, ...a.brands])].join("\n");
+  const note = WORKING_NOTES.exec(text);
+  if (note) out.push(`it carries Parker's working notes ("${note[0]}"); those stay on the card`);
+  return out;
+}
+
+/** The email itself, from data. Throws when `topicsEmailProblems` says it must not go. */
+export function topicsEmail(input: { months: readonly string[]; picks: readonly TopicsEmailPick[]; alternatives: readonly TopicsEmailAlternative[]; goAheadOn: string }): {
+  what: string;
+  tldr: string;
+  tldrBullets: string[];
+  sections: Array<{ label: string; bullets: string[] }>;
+  details: string;
+} {
+  const problems = topicsEmailProblems(input.months, input.picks, input.alternatives);
+  if (problems.length) throw new Error(`the TLC topics email must not go: ${problems.join("; ")}`);
+  const picks = [...input.picks].sort((a, b) => a.month.localeCompare(b.month));
+  const year = picks[0]!.month.slice(0, 4);
+  const alts = input.alternatives.map((a) => `${a.topic}: ${a.reason} Brands that would pay: ${a.brands.join(", ")}.`);
+  const chunks: string[][] = [];
+  for (let i = 0; i < alts.length; i += 3) chunks.push(alts.slice(i, i + 3));
+  return {
+    what: `TLC topics for ${picks.map((p) => monthWords(p.month).slice(0, 3)).join(", ")} ${year}`,
+    tldr: `My ${picks.length} picks for ${picks.map((p) => monthWords(p.month)).join(", ")}, each with the one-sheet a brand would see, plus ${input.alternatives.length} alternatives. They go ahead on ${input.goAheadOn} unless either of you says no.`,
+    tldrBullets: ['Reply "no" to stop all of them', 'Reply "no to <month>" or "swap <month> for <alternative>" to change one', "Silence means go"],
+    sections: [
+      ...picks.map((p) => ({
+        label: `${monthWords(p.month)}: ${p.topic}`,
+        bullets: [p.angle, `Sponsor categories: ${p.categories.join(", ")}`, `The one-sheet a brand would see: ${p.onePagerUrl} (also attached)`],
+      })),
+      ...chunks.map((c, i) => ({ label: `${input.alternatives.length} alternatives (${i * 3 + 1}–${i * 3 + c.length})`, bullets: c })),
+    ],
+    details: `Brand sending stays off. Nothing goes to any brand until you approve the one-sheet.`,
+  };
+}
