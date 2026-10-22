@@ -82,7 +82,15 @@ export const CLAIM_POLL_MS = 1_500;
  * first and the paid search lane answers; a run the router has abandoned is closed, never left to be
  * claimed afterwards.
  */
-export const SEARCH_CLAIM_WAIT_MS = 180_000;
+export const SEARCH_CLAIM_WAIT_MS = 230_000;
+/*
+ * MEASURED 22 OCT 2026, and raised from 180 s. Claude Code searches for The Learning Club, read off
+ * subscription_seat_run (claimed_at → reported_at): 132 s, 116 s, 114 s, 133 s, 159 s, and one that
+ * passed 180 s and was abandoned at the router's limit while the claimer was still working. Under the $0
+ * posture there is no paid search lane for the router to give up TO, so giving up early only throws the
+ * answer away. The wait now runs to just inside the claimer's own kill timer (240 s), and
+ * tests/seatSearchWait.test.ts holds that ordering.
+ */
 
 /** The capability a claimer declares in its heartbeat when it can run a seat in live-search mode. */
 export const SEAT_SEARCH_CAPABILITY = "web_search";
