@@ -448,7 +448,7 @@ const BANNED: ReadonlyArray<{ pattern: RegExp; why: string }> = [
   { pattern: /\b(null|undefined|NaN)\b/, why: "a programming value" },
   { pattern: /\b(HTTP|status)\s*[1-5][0-9]{2}\b|\[code:|\bSQLITE_|\bECONN|\bETIMEDOUT\b/i, why: "an error code" },
   { pattern: /\b\w+Error\b|\bstack trace\b|\bat [\w./]+:\d+/i, why: "a stack trace" },
-  { pattern: /\b(DISCOVER|CONCEPTS|PACKET|RESEARCH|VENUES|QUEUED|IN_PROGRESS|BLOCKED_DEFERRED|EGRESS_BLOCKED|PREFLIGHT_BLOCKED|BUDGET_BLOCKED|ROOM_PACKET|BLOG_HELP|PRODUCTIONS_\w+|DECK_REWORK)\b/, why: "an internal stage or job name" },
+  { pattern: /\b(DISCOVER|CONCEPTS|PACKET|RESEARCH|VENUES|QUEUED|IN_PROGRESS|BLOCKED_DEFERRED|EGRESS_BLOCKED|PREFLIGHT_BLOCKED|BUDGET_BLOCKED|ROOM_PACKET|BLOG_HELP|PRODUCTIONS_\w+|DECK_REWORK|TLC_\w+)\b/, why: "an internal stage or job name" },
   { pattern: /\b[a-z]+[A-Z][A-Za-z0-9]*\b/, why: "an internal identifier" },
   { pattern: /\b(the model|the router|a token|the prompt|the endpoint|the binding|the payload|the schema|the parser|the migration)\b/i, why: "a piece of the machinery" },
 ];

@@ -7282,3 +7282,22 @@ Owner rulings, verbatim: "porter needs to work on anything sequoia or scooter se
   his reply. Every can't-place question (routing cards, rule 1d, shares) is built by `cantPlaceEmail`.
 - **Proof.** tests/driveShareRouting.test.ts; each guard broken and watched fail. Drive read PROVEN live
   (9 Oct, impersonating the sharer: 200, 19,699 chars); production door UNPROVEN until the next share.
+
+## 22 Oct 2026 — West Peek Rooms: The Learning Club (TLC) Edition; Wynn returns as TLC Sales (migration 0259)
+
+Owner-approved: in-person learning clubs, NYC only, 25–40 people, one topic, 3–4 hours, one a month
+from January 2027; $10 paid ticket; $10,000 net target from sponsors ($7,500 floor, $5,000 cost cap).
+
+- **Rules as code:** `src/shared/tlc/learningClub.ts` (money, go-ahead at 21/14 days with ≥25 paid
+  tickets, drip 0/4/10/18 with warm-up, deal stages, booking-pack shape and totals, decision email,
+  agreement template marked not legal advice, one-pager, the playbook every prompt carries).
+- **Seats:** Parker picks three topics ahead from the owner's seed list; picks proceed after a 3-day
+  veto window (a partner's reply lands on the card as a note). Wynn (RETIRED Sponsorship Scout) is
+  re-pointed to TLC Sales & Partnerships through RETIRED → INACTIVE → ACTIVE history rows.
+- **Send switch:** `tlc_setting.brand_send`, seeded `off`. Brand email needs the one-pager-mock and
+  playbook approvals (`POST /api/tlc/approve`), the switch on, `WP_OS_AI_EMAIL_EXTERNAL=enabled`, and
+  an approved `effect.email.send` card per message. Until then every due email is stored HELD.
+- **Never spends:** booking packs are options emailed to the partners; tickets and sponsor invoices
+  are money in only, recorded via `POST /api/tlc/events/:id/tickets` from West Peek's own payment link.
+- **Proof:** `tests/learningClub.test.ts` (pure rules + the whole loop through D1), `validate:tlc`
+  (14 planted violations). Live search, live sending and the payment link are UNPROVEN until exercised.

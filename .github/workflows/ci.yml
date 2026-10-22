@@ -522,6 +522,9 @@ jobs:
       - name: A position is opened only by approval
         run: npm run validate:booking
 
+      - name: The Learning Club holds its rules (send off by default, no spend, no sponsor data)
+        run: npm run validate:tlc
+
       # 19 Sep 2026: the owner asked Walter on Meetings how the page works and was told about the
       # page as it was a week earlier, in one paragraph. The description was prose in
       # `pagePurpose.ts` that nothing read against the page. Every page now carries a guide in

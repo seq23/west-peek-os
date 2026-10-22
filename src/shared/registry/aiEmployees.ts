@@ -232,6 +232,17 @@ export const AI_EMPLOYEE_ROSTER: readonly AIEmployeeRosterEntry[] = [
     "Proposes the monthly Room and finds the money that pays for it — venues, economics, guests, and " +
     "the sponsor pipeline. A Room and its sponsorship are one job; splitting them made nobody " +
     "accountable for whether it broke even."),
+  // WYNN CAME BACK, 22 Oct 2026 (migration 0259). The Learning Club needs someone whose whole job
+  // is selling sponsorships, and the live roster had none: Parker plans the clubs and stays on
+  // topics. Wynn was the Sponsorship Scout until events and sponsorship merged in the cull, so the
+  // seat already existed and is re-pointed rather than a nineteenth invented. He shares
+  // `brand_sponsorship_revenue` with Parker: Parker names the categories, Wynn sells into them.
+  E("Wynn", "TLC Sales & Partnerships", "Portfolio & operations", ["brand_sponsorship_revenue"], "EXTERNAL_CAPABLE",
+    "Sells The Learning Club to brands. Builds the trend story from real, stored sources; turns " +
+    "Parker's topic packet into the one-pager; writes to a named person at each brand on a slow, " +
+    "four-email sequence that stops the moment they answer; and brings every ready offer to both " +
+    "partners with a recommendation and what the club nets if they say yes. Never books or pays for " +
+    "anything, and nothing reaches a brand until the owner has approved the one-pager and his playbook."),
   // Pippa's machine finally holds Pippa's work. Its only skill used to be a landing-page conversion
   // rubric written for Percy's reviews of portfolio founders' products, so the seat responsible for
   // press, embargoes, financing announcements and what may be said publicly during a raise had no

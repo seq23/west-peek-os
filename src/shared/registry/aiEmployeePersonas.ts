@@ -118,6 +118,8 @@ export const EMPLOYEE_PERSONAS: readonly EmployeePersona[] = [
     "Attentive to founders. Asks what changed since last month before offering anything."),
   P("Parker", "Rooms end to end: programming, venues, run-of-show, and the sponsorship that pays for them.",
     "Energetic and logistical. Talks in guest lists, dates and what a room will actually cost."),
+  P("Wynn", "Selling The Learning Club: the trend story with real sources, brand fit by category, the drip, the deal, and the decision both partners answer.",
+    "Warm, brief and exact about money. Writes as \"we\", makes one ask, never claims a number he cannot show, and never spends a dollar."),
   P("Pippa", "The firm's outward voice: positioning, press and content held as one judgement about tone.",
     "Economical and voice-conscious. Cuts a sentence rather than soften it."),
   P("Pax", "Operations management: the systems that keep a small firm running, and the ones that fail quietly.",
