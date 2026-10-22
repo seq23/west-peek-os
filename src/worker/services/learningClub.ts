@@ -14,6 +14,8 @@ import { sendOrPreview } from "./previewApproval";
 import { isoWeekOf } from "./jobs";
 import { PARTNERS } from "../../shared/registry/partners";
 import { personaPrompt } from "../../shared/registry/aiEmployeePersonas";
+import { isProviderOutage } from "../../shared/ai/providerFailure";
+import type { EmailAttachment } from "../effects/emailTransport";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
 import {
   BOOKING_PACK_SHAPE,
@@ -32,6 +34,7 @@ import {
   TLC_SEATS,
   TLC_SPONSOR_CATEGORIES,
   TLC_TICKET_PRICE_USD,
+  TLC_ALTERNATIVES,
   TLC_TOPIC_CRITERIA,
   TLC_TOPIC_SEEDS,
   TLC_VETO_DAYS,
@@ -57,6 +60,8 @@ import {
   runOfShowLines,
   sponsorshipAgreement,
   stageMoveProblem,
+  topicsEmail,
+  type TopicsEmailAlternative,
   ticketPriceProblem,
   ticketVerdict,
   vetoUntil,
@@ -176,7 +181,7 @@ export async function economicsFor(env: Env, ev: TlcEventRow): Promise<EventEcon
 
 async function emailBoth(
   env: Env,
-  input: { employee: "Parker" | "Wynn"; email: Omit<ExecEmailInput, "employee">; objectType: string; objectId: string; cardId: string | null; cardKind: string | null; firmScope: string },
+  input: { employee: "Parker" | "Wynn"; email: Omit<ExecEmailInput, "employee">; objectType: string; objectId: string; cardId: string | null; cardKind: string | null; firmScope: string; attachments?: readonly EmailAttachment[] },
 ): Promise<string[]> {
   const sent: string[] = [];
   for (const p of PARTNERS) {
@@ -191,6 +196,7 @@ async function emailBoth(
       actorId: input.employee === "Parker" ? PARKER : WYNN,
       // A scheduled duty: nobody ticked "show me first" on it, and saying so is the honest answer.
       cardAsked: null,
+      ...(input.attachments?.length ? { attachments: input.attachments } : {}),
     });
     if (out.sent || out.previewed) sent.push(p.email);
   }
@@ -240,15 +246,30 @@ export async function ensureRollingEvents(env: Env, now: Date, firmScope = "west
   return months;
 }
 
-/** Months that need a pick: no topic yet, or flagged for swap. */
+/**
+ * Months that need Parker: no topic yet, flagged for swap, or a topic already CHOSEN (status PLANNING
+ * with a topic but no packet yet — e.g. picks a partner or Parker made outside this card) that still
+ * needs its packet, one-sheet and the partners' email. A chosen topic is kept exactly; it is never re-picked.
+ */
 async function monthsNeedingTopics(env: Env, firmScope: string): Promise<TlcEventRow[]> {
-  return eventsFrom(env, "SELECT * FROM tlc_event WHERE firm_scope = ?1 AND (status = 'SWAP_FLAGGED' OR (status = 'PLANNING' AND topic IS NULL)) ORDER BY month", firmScope);
+  return eventsFrom(env, "SELECT * FROM tlc_event WHERE firm_scope = ?1 AND (status = 'SWAP_FLAGGED' OR (status = 'PLANNING' AND (topic IS NULL OR packet_json IS NULL))) ORDER BY month", firmScope);
 }
+
+/** A topic already chosen for this month, which Parker keeps. Null when the month is his to pick. */
+const chosenTopic = (e: TlcEventRow): string | null => (e.status === "PLANNING" && e.topic ? e.topic : null);
 
 export async function openTopicsCard(env: Env, now: Date, firmScope = "west-peek"): Promise<{ opened: boolean; cardId: string | null; title: string; detail: string }> {
   await ensureRollingEvents(env, now, firmScope);
   const need = await monthsNeedingTopics(env, firmScope);
   if (need.length === 0) return { opened: false, cardId: null, title: "", detail: "every club in the next three months already has a topic proposed or agreed" };
+  /*
+   * ONE TOPICS CARD AT A TIME (22 Oct 2026). Titles name the months, so the title check in `openCard` let a
+   * second card open for months a live one already holds. A card that is still open, held, or blocked owns them.
+   */
+  const live = await env.WP_OS_DB.prepare("SELECT id FROM work_card WHERE kind = 'TLC_TOPICS' AND firm_scope = ?1 AND state NOT IN ('DONE','CANCELLED') LIMIT 1")
+    .bind(firmScope)
+    .first<{ id: string }>();
+  if (live) return { opened: false, cardId: live.id, title: "", detail: `topics card ${live.id} already holds these months` };
   const months = need.map((e) => e.month);
   const out = await openCard(env, {
     title: `Parker: TLC topics for ${months.map(monthWords).join(", ")}`,
@@ -588,13 +609,15 @@ function playbookBlock(): string {
   return ["THE PLAYBOOK (the owner approves this text; follow it exactly):", ...TLC_PLAYBOOK.map((l) => `- ${l}`)].join("\n");
 }
 
-export function buildTopicsPrompt(months: readonly string[], exclude: readonly string[]): string {
+export function buildTopicsPrompt(months: readonly string[], exclude: readonly string[], chosen: Readonly<Record<string, string>> = {}): string {
+  const kept = months.filter((m) => chosen[m]);
   return [
     personaPrompt("Parker", "Event Marketing Coordinator"),
     "",
     `You are choosing topics for The Learning Club: in-person, ${TLC_CITY} only, ${TLC_SEATS.min}–${TLC_SEATS.max} people, one topic, a 3–4 hour deep dive on one afternoon (Sat 1–5 pm) or one evening (Thu 6–10 pm). Every attendee pays a $${TLC_TICKET_PRICE_USD} ticket. Everyone leaves with something they made or learned.`,
     `Run of show: ${runOfShowLines().join("; ")}.`,
-    `Pick ONE topic for each of these months: ${months.map(monthWords).join(", ")}. No two months the same topic.`,
+    `Pick ONE topic for each of these months: ${months.map(monthWords).join(", ")}. No two months the same topic. Every month must have a pick.`,
+    kept.length ? `These months' topics are ALREADY CHOSEN — keep exactly that topic and write its packet: ${kept.map((m) => `${monthWords(m)} = "${chosen[m]}"`).join("; ")}.` : "",
     "",
     "Seed list (you may pick from it or propose a better topic):",
     ...TLC_TOPIC_SEEDS.map((s) => `- ${s}`),
@@ -604,9 +627,11 @@ export function buildTopicsPrompt(months: readonly string[], exclude: readonly s
     ...TLC_TOPIC_CRITERIA.map((c) => `- ${c}`),
     "",
     "For each pick give the usual Rooms packet: the angle, why now (with sources), what happens in the hands-on hour, what people take home, the kind of expert who teaches it, and 5–10 sponsor categories that fit (non-competing within the club, each with why and two or three example brands).",
+    `Then give exactly ${TLC_ALTERNATIVES} ALTERNATIVE topics the partners could swap in: each different from the picks and from each other, with a one-line reason it would work and two or three real brands that would pay to sponsor it.`,
+    "This goes to the partners as it is: write only what each topic IS. Never mention a topic you turned down, rejected or ruled out, or why.",
     "Use ONLY real, live web pages as sources. Do not invent statistics, quotes or events.",
     "",
-    'Return ONLY JSON: {"picks":[{"month":"YYYY-MM","topic":"","angle":"","why_now":"","criteria":{"product_used":"","irl_spend":"","sponsors_fit":"","pays_10":""},"hands_on":"","take_home":"","teacher_profile":"","sponsor_categories":[{"category":"","why":"","example_brands":[""]}],"sources":[{"title":"","url":""}]}]}',
+    'Return ONLY JSON: {"picks":[{"month":"YYYY-MM","topic":"","angle":"","why_now":"","criteria":{"product_used":"","irl_spend":"","sponsors_fit":"","pays_10":""},"hands_on":"","take_home":"","teacher_profile":"","sponsor_categories":[{"category":"","why":"","example_brands":[""]}],"sources":[{"title":"","url":""}]}],"alternatives":[{"topic":"","reason":"","brands":[""]}]}',
   ].filter(Boolean).join("\n");
 }
 
@@ -777,18 +802,23 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
     await finish(env, card.id, "• Every club in the next three months already has a topic.");
     return { finished: true, blocked: false, progressed: false, detail: "nothing to pick" };
   }
-  const used = ((await env.WP_OS_DB.prepare("SELECT topic, vetoed_topics_json FROM tlc_event WHERE firm_scope = ?1").bind(card.firm_scope).all<{ topic: string | null; vetoed_topics_json: string | null }>()).results ?? [])
-    .flatMap((r) => [r.topic, ...list<string>(r.vetoed_topics_json)])
+  const chosen: Record<string, string> = {};
+  for (const e of need) { const c = chosenTopic(e); if (c) chosen[e.month] = c; }
+  const needIds = new Set(need.map((e) => e.id));
+  const used = ((await env.WP_OS_DB.prepare("SELECT id, topic, vetoed_topics_json FROM tlc_event WHERE firm_scope = ?1").bind(card.firm_scope).all<{ id: string; topic: string | null; vetoed_topics_json: string | null }>()).results ?? [])
+    // A month's own chosen topic is kept, not excluded.
+    .flatMap((r) => [needIds.has(r.id) && chosen[need.find((e) => e.id === r.id)!.month] ? null : r.topic, ...list<string>(r.vetoed_topics_json)])
     .filter((t): t is string => Boolean(t));
-  const found = await search(env, actorFor(PARKER, card.firm_scope), buildTopicsPrompt(need.map((e) => e.month), used));
-  if (!found.ok) return { finished: false, blocked: false, progressed: false, detail: `the live search failed: ${found.detail}` };
-  const picks = (jsonIn(found.text)?.picks as Array<Record<string, unknown>> | undefined) ?? [];
-  const kept: Array<{ ev: TlcEventRow; pick: Record<string, unknown>; sources: Array<{ title: string; url: string }>; categories: Array<{ category: string; why: string; example_brands: string[] }> }> = [];
+  const found = await search(env, actorFor(PARKER, card.firm_scope), buildTopicsPrompt(need.map((e) => e.month), used, chosen));
+  if (!found.ok) return searchFailed(env, card, "Parker", found, now);
+  const answer = jsonIn(found.text) ?? {};
+  const picks = (answer.picks as Array<Record<string, unknown>> | undefined) ?? [];
+  const kept: Array<{ ev: TlcEventRow; topic: string; pick: Record<string, unknown>; sources: Array<{ title: string; url: string }>; categories: Array<{ category: string; why: string; example_brands: string[] }> }> = [];
   const dropped: string[] = [];
   const taken = new Set(used.map((u) => u.toLowerCase()));
   for (const ev of need) {
     const pick = picks.find((p) => str(p.month) === ev.month);
-    const topic = str(pick?.topic);
+    const topic = chosen[ev.month] ?? str(pick?.topic);
     if (!pick || !topic || taken.has(topic.toLowerCase())) { dropped.push(`${ev.month}: no usable pick`); continue; }
     const sources = ((pick.sources as Array<{ title?: string; url?: string }>) ?? []).map((s) => ({ title: str(s.title), url: str(s.url) })).filter((s) => isUrl(s.url));
     const live: typeof sources = [];
@@ -799,14 +829,32 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
     if (live.length === 0) { dropped.push(`${ev.month} (${topic}): no source page answered`); continue; }
     if (categories.length < TLC_SPONSOR_CATEGORIES.min) { dropped.push(`${ev.month} (${topic}): ${categories.length} sponsor categories, ${TLC_SPONSOR_CATEGORIES.min} needed`); continue; }
     taken.add(topic.toLowerCase());
-    kept.push({ ev, pick, sources: live, categories: categories.slice(0, TLC_SPONSOR_CATEGORIES.max) });
+    kept.push({ ev, topic, pick, sources: live, categories: categories.slice(0, TLC_SPONSOR_CATEGORIES.max) });
   }
-  if (kept.length === 0) return nothingGood(env, card, "Parker", `No pick survived: ${dropped.join("; ")}. Name a topic or say "pick from the seed list" and Parker runs it again.`);
+  const alternatives: TopicsEmailAlternative[] = [];
+  for (const a of (answer.alternatives as Array<Record<string, unknown>> | undefined) ?? []) {
+    const topic = str(a.topic);
+    const reason = str(a.reason);
+    const brands = (Array.isArray(a.brands) ? a.brands : []).map(str).filter(Boolean).slice(0, 3);
+    if (!topic || !reason || brands.length === 0 || taken.has(topic.toLowerCase()) || alternatives.some((x) => x.topic.toLowerCase() === topic.toLowerCase())) continue;
+    alternatives.push({ topic, reason: /[.!?]$/.test(reason) ? reason : `${reason}.`, brands });
+  }
+  /*
+   * EVERY MONTH, OR NO EMAIL (owner, 22 Oct 2026: "only gave 2 picks Jan and Feb — what happened to 3 picks").
+   * A partial set is never written or sent: the attempt fails, the card's record says which month fell out,
+   * and the next attempt picks again. The same for fewer than nine alternatives.
+   */
+  if (kept.length < need.length || alternatives.length < TLC_ALTERNATIVES) {
+    const short = [kept.length < need.length ? `${kept.length} of ${need.length} months had a usable pick (${dropped.join("; ")})` : "", alternatives.length < TLC_ALTERNATIVES ? `${alternatives.length} of ${TLC_ALTERNATIVES} alternatives were usable` : ""].filter(Boolean).join("; ");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || ?2, 1, 16000) WHERE id = ?1")
+      .bind(card.id, `• ${now.toISOString().slice(0, 16)}Z nothing sent: ${short}. Parker picks again.`).run();
+    return { finished: false, blocked: false, progressed: false, detail: `nothing sent: ${short}` };
+  }
 
   const until = vetoUntil(now);
   for (const k of kept) {
     const packet = {
-      topic: str(k.pick.topic), angle: str(k.pick.angle), why_now: str(k.pick.why_now), criteria: k.pick.criteria ?? null,
+      topic: k.topic, angle: str(k.pick.angle), why_now: str(k.pick.why_now), criteria: k.pick.criteria ?? null,
       hands_on: str(k.pick.hands_on), take_home: str(k.pick.take_home), teacher_profile: str(k.pick.teacher_profile),
       run_of_show: runOfShowLines(), sources: k.sources,
     };
@@ -814,38 +862,60 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
       "UPDATE tlc_event SET topic = ?2, angle = ?3, packet_json = ?4, sponsor_categories_json = ?5, status = 'TOPIC_PROPOSED', veto_until = ?6, topic_card_id = ?7, swap_flagged_at = NULL, updated_at = ?8 WHERE id = ?1",
     ).bind(k.ev.id, packet.topic, packet.angle, JSON.stringify(packet), JSON.stringify(k.categories), until, card.id, now.toISOString()).run();
   }
-  await emailBoth(env, {
-    employee: "Parker",
-    email: {
-      what: `TLC topics for ${kept.map((k) => monthWords(k.ev.month).slice(0, 3)).join(", ")} ${k0(kept).ev.month.slice(0, 4)}`,
-      tldr: `My picks for ${kept.map((k) => monthWords(k.ev.month)).join(", ")}. They go ahead on ${until.slice(0, 10)} unless either of you says no.`,
-      tldrBullets: ['Reply "no" to stop all of them', 'Reply "no to <month>" or "not <topic>" to swap one', "Silence means go"],
-      sections: [{ label: "Your call", bullets: [`Silence means go on ${until.slice(0, 10)}`, 'Reply "no", "no to <month>" or "not <topic>" to swap'] }, ...kept.map((k) => ({
-        label: `${monthWords(k.ev.month)}: ${str(k.pick.topic)}`,
-        bullets: [
-          `Angle: ${str(k.pick.angle)}`,
-          `Why now: ${str(k.pick.why_now)}`,
-          `Hands-on hour: ${str(k.pick.hands_on)}; everyone takes home: ${str(k.pick.take_home)}`,
-          `Teacher: ${str(k.pick.teacher_profile)}`,
-          `Sponsor categories: ${k.categories.map((c) => c.category).join(", ")}`,
-          `Sources: ${k.sources.map((s) => s.url).join(" ")}`,
-        ],
-      }))],
-      details: [
-        `Run of show (3–4 hours, ${k0(kept).ev.slot === "AFTERNOON" ? "Saturday 1–5 pm" : "Thursday 6–10 pm"} by default): ${runOfShowLines().join("; ")}.`,
-        dropped.length ? `Not picked this time: ${dropped.join("; ")}.` : "",
-      ].filter(Boolean).join("\n"),
-    },
-    objectType: "work_card",
-    objectId: card.id,
-    cardId: card.id,
-    cardKind: card.kind,
-    firmScope: card.firm_scope,
+  // THE GLOSSY ONE-SHEET PER PICK, as a brand would see it: linked, and attached so it opens from the inbox.
+  const attachments: EmailAttachment[] = [];
+  for (const k of kept) {
+    const ev = (await eventsFrom(env, "SELECT * FROM tlc_event WHERE id = ?1", k.ev.id))[0]!;
+    const html = await onePagerFor(env, ev);
+    attachments.push({ filename: `TLC ${monthWords(ev.month)} - ${k.topic.replace(/[^\w &-]+/g, "").trim()}.html`, content: base64Utf8(html), contentType: "text/html" });
+  }
+  const email = topicsEmail({
+    months: need.map((e) => e.month),
+    picks: kept.map((k) => ({ month: k.ev.month, topic: k.topic, angle: str(k.pick.angle), categories: k.categories.map((c) => c.category), onePagerUrl: onePagerUrl(k.ev.id) })),
+    alternatives: alternatives.slice(0, TLC_ALTERNATIVES),
+    goAheadOn: until.slice(0, 10),
   });
+  await emailBoth(env, { employee: "Parker", email, objectType: "work_card", objectId: card.id, cardId: card.id, cardKind: card.kind, firmScope: card.firm_scope, attachments });
+  // The record keeps everything, including the alternatives; the partners' email carries only the picks and the list.
   await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || ?2, 1, 16000) WHERE id = ?1")
-    .bind(card.id, `• Proposed ${kept.map((k) => `${k.ev.month} ${str(k.pick.topic)}`).join("; ")}. Proceeds ${until} unless a partner says no.`).run();
+    .bind(card.id, [
+      `• Proposed ${kept.map((k) => `${k.ev.month} ${k.topic}`).join("; ")}. Proceeds ${until} unless a partner says no.`,
+      `• Alternatives: ${alternatives.slice(0, TLC_ALTERNATIVES).map((a) => a.topic).join("; ")}.`,
+      dropped.length ? `• Parker's notes (not emailed): ${dropped.join("; ")}.` : "",
+    ].filter(Boolean).join("\n")).run();
   // HELD UNTIL THE WINDOW CLOSES. A partner's reply lands on this card as a note and is read then.
-  return { finished: false, blocked: false, progressed: true, held: true, waitUntil: until, detail: `proposed ${kept.length} topic(s); ${TLC_VETO_DAYS}-day veto window until ${until}` };
+  return { finished: false, blocked: false, progressed: true, held: true, waitUntil: until, detail: `proposed ${kept.length} topic(s) and ${TLC_ALTERNATIVES} alternatives; ${TLC_VETO_DAYS}-day veto window until ${until}` };
+}
+
+const onePagerUrl = (eventId: string): string => `https://os.joinwestpeek.com/api/tlc/events/${eventId}/onepager`;
+
+function base64Utf8(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+/**
+ * A SEARCH THE MACHINE COULD NOT SERVE IS NOT AN ATTEMPT (22 Oct 2026). When every search lane was down —
+ * a seat asleep, a CLI erroring, a vendor out — the employee did nothing wrong and the owner can do nothing
+ * about it, so the card is HELD and tried again in half an hour, with no attempt spent and no STUCK email.
+ * Only after a full day of a dead lane does it fall through to the ordinary failure, so a lane that never
+ * comes back is still seen. Anything else (a refusal, a model that cannot search) is an ordinary attempt.
+ */
+export const TLC_SEARCH_RETRY_MINUTES = 30;
+export const TLC_SEARCH_RETRY_MAX = 48;
+async function searchFailed(env: Env, card: SweepCard, employee: "Parker" | "Wynn", found: { detail: string }, now: Date): Promise<TlcRunResult> {
+  const reason = found.detail.replace(/^provider_failure:/, "");
+  if (isProviderOutage(reason)) {
+    const n = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE object_id = ?1 AND event_type = 'tlc.search_retry'").bind(card.id).first<{ n: number }>())?.n ?? 0;
+    if (n < TLC_SEARCH_RETRY_MAX) {
+      const until = new Date(now.getTime() + TLC_SEARCH_RETRY_MINUTES * 60_000).toISOString();
+      await appendEvent(env, { eventType: "tlc.search_retry", actorType: "system", actorId: "work_sweep", objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { retry: n + 1, reason: reason.slice(0, 240) } });
+      return { finished: false, blocked: false, progressed: true, held: true, waitUntil: until, detail: `no search lane could serve this right now (${reason.slice(0, 120)}); ${employee} tries again at ${until.slice(11, 16)}Z — no attempt spent` };
+    }
+  }
+  return { finished: false, blocked: false, progressed: false, detail: `the live search failed: ${found.detail}` };
 }
 const k0 = <T>(a: readonly T[]): T => a[0]!;
 
@@ -860,7 +930,7 @@ async function runBookingPack(env: Env, card: SweepCard, now: Date, search: TlcS
   const ev = (await eventsFrom(env, "SELECT * FROM tlc_event WHERE firm_scope = ?1", card.firm_scope)).find((e) => monthWords(e.month) === month);
   if (!ev?.topic) return nothingGood(env, card, "Parker", "The club this pack is for has no agreed topic any more. Drop this card; a new one opens when the topic is set.");
   const found = await search(env, actorFor(PARKER, card.firm_scope), buildBookingPackPrompt(ev));
-  if (!found.ok) return { finished: false, blocked: false, progressed: false, detail: `the live search failed: ${found.detail}` };
+  if (!found.ok) return searchFailed(env, card, "Parker", found, now);
   const raw = jsonIn(found.text) ?? {};
   const keepLive = async (xs: BookingPack["hosts"]): Promise<BookingPack["hosts"]> => {
     const out: BookingPack["hosts"] = [];
@@ -927,7 +997,7 @@ async function runBrandBatch(env: Env, card: SweepCard, now: Date, search: TlcSe
   }
   const existing = ((await env.WP_OS_DB.prepare(`SELECT brand, event_id FROM tlc_deal WHERE event_id IN (${events.map(() => "?").join(",")})`).bind(...events.map((e) => e.id)).all<{ brand: string; event_id: string }>()).results ?? []);
   const found = await search(env, actorFor(WYNN, card.firm_scope), buildBrandBatchPrompt(events, existing.map((d) => d.brand)));
-  if (!found.ok) return { finished: false, blocked: false, progressed: false, detail: `the live search failed: ${found.detail}` };
+  if (!found.ok) return searchFailed(env, card, "Wynn", found, now);
   const brands = (jsonIn(found.text)?.brands as Array<Record<string, unknown>> | undefined) ?? [];
   const added: string[] = [];
   const dropped: string[] = [];
@@ -959,7 +1029,7 @@ async function runBrandBatch(env: Env, card: SweepCard, now: Date, search: TlcSe
 
 async function runTrendStory(env: Env, card: SweepCard, now: Date, search: TlcSearch, check: (u: string) => Promise<boolean>): Promise<TlcRunResult> {
   const found = await search(env, actorFor(WYNN, card.firm_scope), buildTrendPrompt());
-  if (!found.ok) return { finished: false, blocked: false, progressed: false, detail: `the live search failed: ${found.detail}` };
+  if (!found.ok) return searchFailed(env, card, "Wynn", found, now);
   const raw = jsonIn(found.text) ?? {};
   const story = str(raw.story);
   const sources = ((raw.sources as Array<Record<string, unknown>>) ?? []).map((s) => ({ title: str(s.title), publisher: str(s.publisher) || null, url: str(s.url), published_on: str(s.published_on) || null, claim: str(s.claim) })).filter((s) => s.title && s.claim && isUrl(s.url));

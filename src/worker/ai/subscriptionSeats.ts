@@ -255,13 +255,16 @@ export function isFresh(lastSeenAt: string | null | undefined, now: Date): boole
  */
 export async function laneAvailability(env: Env, seat: Seat, now: Date = new Date()): Promise<LaneAvailability> {
   const name = SEAT_REGISTRY[seat].displayName;
-  let row: DeviceRow | null = null;
+  let rows: DeviceRow[] = [];
   try {
-    row = await env.WP_OS_DB.prepare(
-      "SELECT seat, device_id, hostname, agent_version, last_seen_at, exhausted_until, exhausted_reason, capabilities_json FROM subscription_seat_device WHERE seat = ?1 ORDER BY last_seen_at DESC LIMIT 1",
-    )
-      .bind(seat)
-      .first<DeviceRow>();
+    rows =
+      (
+        await env.WP_OS_DB.prepare(
+          "SELECT seat, device_id, hostname, agent_version, last_seen_at, exhausted_until, exhausted_reason, capabilities_json FROM subscription_seat_device WHERE seat = ?1 ORDER BY last_seen_at DESC",
+        )
+          .bind(seat)
+          .all<DeviceRow>()
+      ).results ?? [];
   } catch {
     return {
       seat,
@@ -272,7 +275,28 @@ export async function laneAvailability(env: Env, seat: Seat, now: Date = new Dat
       ageMs: null,
     };
   }
-  if (!row) {
+  return seatVerdict(seat, rows, now);
+}
+
+/**
+ * ONE SEAT, EVERY MACHINE THAT CHECKS IN ON IT (22 Oct 2026). Pure, so the rule is testable.
+ *
+ * A seat can have more than one claimer on the same Mac: the seat claimer (which declares
+ * "web_search") and the local-jobs claimer (which declares "local_job"). Both heartbeat on the
+ * claude_code seat. This used to read ONLY the newest row, so whenever the jobs claimer had checked
+ * in a second later than the seat claimer, the Claude Code seat read as "cannot search" and every
+ * live-search call skipped it — on 22 Oct 2026 that sent Parker's and Wynn's TLC searches to Codex
+ * alone, which was failing, and both cards burned three attempts and emailed the owner STUCK.
+ *
+ * Now: the seat is awake when ANY machine on it is fresh; it is out of usage when any fresh machine
+ * says so (one plan, one limit); and what it can do is the union of what its fresh machines
+ * declared. The claim route still hands a search row only to a claimer that declared "web_search".
+ */
+export function seatVerdict(seat: Seat, rows: readonly DeviceRow[], now: Date): LaneAvailability {
+  const name = SEAT_REGISTRY[seat].displayName;
+  const mine = rows.filter((r) => r.seat === seat).sort((x, y) => (x.last_seen_at < y.last_seen_at ? 1 : -1));
+  const newest = mine[0];
+  if (!newest) {
     return {
       seat,
       available: false,
@@ -282,38 +306,44 @@ export async function laneAvailability(env: Env, seat: Seat, now: Date = new Dat
       ageMs: null,
     };
   }
-  const ageMs = now.getTime() - Date.parse(row.last_seen_at);
-  if (!isFresh(row.last_seen_at, now)) {
+  const fresh = mine.filter((r) => isFresh(r.last_seen_at, now));
+  if (fresh.length === 0) {
+    const ageMs = now.getTime() - Date.parse(newest.last_seen_at);
     return {
       seat,
       available: false,
       reason:
-        `the ${name} seat on ${row.hostname ?? row.device_id} last checked in ${describeAge(ageMs)} ago, which is ` +
+        `the ${name} seat on ${newest.hostname ?? newest.device_id} last checked in ${describeAge(ageMs)} ago, which is ` +
         `outside the ${Math.round(HEARTBEAT_FRESH_MS / 1000)}-second freshness window, so it was skipped with no delay`,
-      deviceId: row.device_id,
-      lastSeenAt: row.last_seen_at,
+      deviceId: newest.device_id,
+      lastSeenAt: newest.last_seen_at,
       ageMs,
     };
   }
-  if (isExhausted(row, now)) {
+  const spent = fresh.find((r) => isExhausted(r, now));
+  if (spent) {
     return {
       seat,
       available: false,
-      reason: exhaustedReason(name, row, now),
-      deviceId: row.device_id,
-      lastSeenAt: row.last_seen_at,
-      ageMs,
+      reason: exhaustedReason(name, spent, now),
+      deviceId: spent.device_id,
+      lastSeenAt: spent.last_seen_at,
+      ageMs: now.getTime() - Date.parse(spent.last_seen_at),
     };
   }
+  // The machine that answers for this seat's search work is the one that said it can search, when there is one.
+  const lead = fresh.find((r) => deviceCanSearch(r)) ?? fresh[0]!;
+  const ageMs = now.getTime() - Date.parse(lead.last_seen_at);
+  const reads = fresh.map((r) => deviceCanRead(r, seat));
   return {
     seat,
     available: true,
-    reason: `the ${name} seat on ${row.hostname ?? row.device_id} checked in ${describeAge(ageMs)} ago, so it is awake and was offered this run`,
-    deviceId: row.device_id,
-    lastSeenAt: row.last_seen_at,
+    reason: `the ${name} seat on ${lead.hostname ?? lead.device_id} checked in ${describeAge(ageMs)} ago, so it is awake and was offered this run`,
+    deviceId: lead.device_id,
+    lastSeenAt: lead.last_seen_at,
     ageMs,
-    canSearch: deviceCanSearch(row),
-    canRead: deviceCanRead(row, seat),
+    canSearch: fresh.some((r) => deviceCanSearch(r)),
+    canRead: { image: reads.some((r) => r.image), document: reads.some((r) => r.document) },
   };
 }
 
@@ -339,56 +369,7 @@ export async function allSeatAvailability(env: Env, now: Date = new Date()): Pro
   } catch {
     rows = [];
   }
-  const newest = new Map<string, DeviceRow>();
-  for (const r of rows) if (!newest.has(r.seat)) newest.set(r.seat, r);
-
-  return SEATS.map((seat) => {
-    const name = SEAT_REGISTRY[seat].displayName;
-    const row = newest.get(seat);
-    if (!row) {
-      return {
-        seat,
-        available: false,
-        reason: `no machine has ever checked in on the ${name} seat, so it took no part in the run`,
-        deviceId: null,
-        lastSeenAt: null,
-        ageMs: null,
-      };
-    }
-    const ageMs = now.getTime() - Date.parse(row.last_seen_at);
-    if (!isFresh(row.last_seen_at, now)) {
-      return {
-        seat,
-        available: false,
-        reason:
-          `the ${name} seat on ${row.hostname ?? row.device_id} last checked in ${describeAge(ageMs)} ago, which is ` +
-          `outside the ${Math.round(HEARTBEAT_FRESH_MS / 1000)}-second freshness window, so it was skipped with no delay`,
-        deviceId: row.device_id,
-        lastSeenAt: row.last_seen_at,
-        ageMs,
-      };
-    }
-    if (isExhausted(row, now)) {
-      return {
-        seat,
-        available: false,
-        reason: exhaustedReason(name, row, now),
-        deviceId: row.device_id,
-        lastSeenAt: row.last_seen_at,
-        ageMs,
-      };
-    }
-    return {
-      seat,
-      available: true,
-      reason: `the ${name} seat on ${row.hostname ?? row.device_id} checked in ${describeAge(ageMs)} ago, so it is awake and was offered this run`,
-      deviceId: row.device_id,
-      lastSeenAt: row.last_seen_at,
-      ageMs,
-      canSearch: deviceCanSearch(row),
-      canRead: deviceCanRead(row, seat),
-    };
-  });
+  return SEATS.map((seat) => seatVerdict(seat, rows, now));
 }
 
 /** Human-readable age, because "14400000ms" on a partner's run explanation helps nobody. */

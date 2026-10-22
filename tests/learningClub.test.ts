@@ -205,6 +205,8 @@ const picksJson = (months: string[], topics: string[]) => JSON.stringify({
     sponsor_categories: ["A", "B", "C", "D", "E", "F"].map((c) => ({ category: `${c} category`, why: "fits", example_brands: [] })),
     sources: [{ title: "Real page", url: `https://news.example/${i}` }, { title: "Dead", url: "https://dead.example/x" }],
   })),
+  // Parker's email carries nine alternatives with every set of picks (owner, 22 Oct 2026).
+  alternatives: ["Knit", "Bake", "Brew", "Paint", "Pot", "Climb", "Run", "Sing", "Code"].map((t) => ({ topic: `${t} club`, reason: "people pay for it", brands: ["Brand One"] })),
 });
 
 beforeAll(async () => {
