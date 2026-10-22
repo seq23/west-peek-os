@@ -16,8 +16,8 @@ import { sweepOnce } from "../src/worker/services/workSweep";
  */
 
 const MONTHS = ["2027-01", "2027-02", "2027-03"];
-const pick = (month: string, topic: string): TopicsEmailPick => ({ month, topic, angle: `${topic}, hands on`, categories: ["A", "B", "C", "D", "E"], onePagerUrl: `https://os.joinwestpeek.com/api/tlc/events/tlc_${month}/onepager` });
-const alts = (n: number): TopicsEmailAlternative[] => Array.from({ length: n }, (_, i) => ({ topic: `Alt topic ${i + 1}`, reason: "People already pay for it.", brands: ["Brand A", "Brand B"] }));
+const pick = (month: string, topic: string): TopicsEmailPick => ({ month, topic, origin: "OWNER_IDEA", angle: `${topic}, hands on`, categories: ["A", "B", "C", "D", "E"], onePagerUrl: `https://os.joinwestpeek.com/api/tlc/events/tlc_${month}/onepager` });
+const alts = (n: number): TopicsEmailAlternative[] => Array.from({ length: n }, (_, i) => ({ topic: `Alt topic ${i + 1}`, origin: (i % 2 ? "TREND" : "BRANDS_SPENDING") as "TREND" | "BRANDS_SPENDING", reason: "People already pay for it.", brands: ["Brand A", "Brand B"] }));
 const three = [pick("2027-01", "Zero-Proof Home Bar"), pick("2027-02", "Fragrance Lab"), pick("2027-03", "AI Tools for Your Work")];
 
 describe("the topics email, pure", () => {
@@ -27,7 +27,7 @@ describe("the topics email, pure", () => {
     const text = JSON.stringify(e);
     for (const p of three) expect(text).toContain(p.topic);
     for (const p of three) expect(text).toContain(p.onePagerUrl);
-    for (let i = 1; i <= 9; i++) expect(text).toContain(`Alt topic ${i}: People already pay for it. Brands that would pay: Brand A, Brand B.`);
+    for (let i = 1; i <= 9; i++) expect(text).toContain(`Alt topic ${i} (${i % 2 ? "Brands spending now" : "Trend"}): People already pay for it. Brands that would pay: Brand A, Brand B.`);
     // Every section fits the exec-email cap of six lines, so nothing is folded away below the rule.
     for (const s of e.sections) expect(s.bullets.length).toBeLessThanOrEqual(6);
   });
@@ -37,13 +37,13 @@ describe("the topics email, pure", () => {
   });
   it("refuses anything but nine alternatives, each with a reason and a brand", () => {
     expect(topicsEmailProblems(MONTHS, three, alts(8)).join()).toMatch(/8 alternatives; it needs 9/);
-    expect(topicsEmailProblems(MONTHS, three, [...alts(8), { topic: "X", reason: "y", brands: [] }]).join()).toMatch(/names no brand/);
-    expect(topicsEmailProblems(MONTHS, three, [...alts(8), { topic: "Fragrance Lab", reason: "y", brands: ["b"] }]).join()).toMatch(/repeats a pick/);
+    expect(topicsEmailProblems(MONTHS, three, [...alts(8), { topic: "X", origin: "TREND" as const, reason: "y", brands: [] }]).join()).toMatch(/names no brand/);
+    expect(topicsEmailProblems(MONTHS, three, [...alts(8), { topic: "Fragrance Lab", origin: "TREND" as const, reason: "y", brands: ["b"] }]).join()).toMatch(/repeats a pick/);
   });
   it("refuses Parker's working notes: what he rejected stays on the card", () => {
     const noted = [{ ...three[0]!, angle: "Rejected for January: Trading & Investing 'Money Reset'." }, three[1]!, three[2]!];
     expect(topicsEmailProblems(MONTHS, noted, alts(9)).join()).toMatch(/working notes/);
-    const altNoted = [...alts(8), { topic: "Money Reset", reason: "Ruled out for now.", brands: ["b"] }];
+    const altNoted = [...alts(8), { topic: "Money Reset", origin: "OWNER_IDEA" as const, reason: "Ruled out for now.", brands: ["b"] }];
     expect(topicsEmailProblems(MONTHS, three, altNoted).join()).toMatch(/working notes/);
   });
 });
@@ -54,11 +54,11 @@ const NOW = new Date("2026-10-22T20:00:00.000Z");
 const live = async (): Promise<boolean> => true;
 const answer = (months: string[], topics: string[], altCount = TLC_ALTERNATIVES) => JSON.stringify({
   picks: months.map((m, i) => ({
-    month: m, topic: topics[i], angle: "an angle", why_now: "why", criteria: {}, hands_on: "make it", take_home: "a thing", teacher_profile: "an expert",
+    month: m, topic: topics[i], origin: "TREND", angle: "an angle", why_now: "why", criteria: {}, hands_on: "make it", take_home: "a thing", teacher_profile: "an expert",
     sponsor_categories: ["A", "B", "C", "D", "E", "F"].map((c) => ({ category: `${c} category`, why: "fits", example_brands: [] })),
     sources: [{ title: "Real page", url: `https://news.example/${i}` }],
   })),
-  alternatives: Array.from({ length: altCount }, (_, i) => ({ topic: `Alternative ${"ABCDEFGHI"[i]}`, reason: "a one-line reason", brands: ["Brand One", "Brand Two"] })),
+  alternatives: Array.from({ length: altCount }, (_, i) => ({ topic: `Alternative ${"ABCDEFGHI"[i]}`, origin: "BRANDS_SPENDING", reason: "a one-line reason", brands: ["Brand One", "Brand Two"] })),
 });
 const sends: string[] = [];
 
@@ -136,7 +136,7 @@ describe("the topics card in the database", () => {
     for (const raw of sends) {
       const body = JSON.parse(raw) as { text: string; attachments?: Array<{ filename: string }> };
       for (const m of ["January 2027: Zero-Proof Home Bar", "February 2027: Fragrance Lab", "March 2027: AI Tools for Your Work"]) expect(body.text).toContain(m);
-      for (const l of "ABCDEFGHI") expect(body.text).toContain(`Alternative ${l}: a one-line reason. Brands that would pay: Brand One, Brand Two.`);
+      for (const l of "ABCDEFGHI") expect(body.text).toContain(`Alternative ${l} (Brands spending now): a one-line reason. Brands that would pay: Brand One, Brand Two.`);
       expect(body.text).toContain("/api/tlc/events/tlc_2027-01/onepager");
       expect(body.text).not.toMatch(/reject|not picked|ruled out/i);
       expect(body.attachments?.map((a) => a.filename)).toEqual(["TLC January 2027 - Zero-Proof Home Bar.html", "TLC February 2027 - Fragrance Lab.html", "TLC March 2027 - AI Tools for Your Work.html"]);
