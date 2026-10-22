@@ -34,7 +34,9 @@ import {
   TLC_SEATS,
   TLC_SPONSOR_CATEGORIES,
   TLC_TICKET_PRICE_USD,
+  PLAYBOOK_DOCUMENT_SETTING,
   TLC_ALTERNATIVES,
+  TLC_IDEA_ORIGIN_LABEL,
   TLC_TOPIC_CRITERIA,
   TLC_TOPIC_SEEDS,
   TLC_VETO_DAYS,
@@ -60,7 +62,11 @@ import {
   runOfShowLines,
   sponsorshipAgreement,
   stageMoveProblem,
+  isIdeaOrigin,
+  topicKey,
   topicsEmail,
+  type TlcIdeaOrigin,
+  type TlcIdeaStatus,
   type TopicsEmailAlternative,
   ticketPriceProblem,
   ticketVerdict,
@@ -605,14 +611,144 @@ const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
 const num = (v: unknown): number => (typeof v === "number" ? v : Number(String(v ?? "").replace(/[$,]/g, "")));
 const isUrl = (u: string): boolean => /^https?:\/\/[^\s]+$/.test(u);
 
-function playbookBlock(): string {
-  return ["THE PLAYBOOK (the owner approves this text; follow it exactly):", ...TLC_PLAYBOOK.map((l) => `- ${l}`)].join("\n");
+/**
+ * THE PLAYBOOK EVERY TLC PROMPT CARRIES IS THE STORED ONE (owner, 22 Oct 2026). Her approved playbook lives in
+ * Documents (R2, never this public repository); `tlc_setting.playbook_document_id` names it, and the current
+ * version's text is read on every run, so a new version she files is what Parker and Wynn follow next.
+ * Only when it cannot be read does the built-in summary stand in, and the prompt says so.
+ */
+export async function storedPlaybook(env: Env): Promise<string | null> {
+  try {
+    const row = await env.WP_OS_DB.prepare(
+      "SELECT v.r2_key FROM tlc_setting s JOIN document d ON d.id = s.value JOIN document_version v ON v.id = d.current_version_id WHERE s.key = ?1",
+    ).bind(PLAYBOOK_DOCUMENT_SETTING).first<{ r2_key: string }>();
+    if (!row || !env.WP_OS_DOCUMENTS) return null;
+    const obj = await env.WP_OS_DOCUMENTS.get(row.r2_key);
+    const text = obj ? (await obj.text()).trim() : "";
+    return text || null;
+  } catch {
+    return null;
+  }
 }
 
-export function buildTopicsPrompt(months: readonly string[], exclude: readonly string[], chosen: Readonly<Record<string, string>> = {}): string {
+export function playbookBlock(stored: string | null = null): string {
+  if (stored) return ["THE PLAYBOOK (the owner's approved copy, read from Documents; follow it):", stored].join("\n");
+  return ["THE PLAYBOOK (the stored copy could not be read; this is the built-in summary of it — follow it exactly):", ...TLC_PLAYBOOK.map((l) => `- ${l}`)].join("\n");
+}
+
+// ── The ideas list (owner, 22 Oct 2026) ───────────────────────────────────────────────────────
+
+export interface TlcIdeaRow {
+  id: string;
+  topic: string;
+  topic_key: string;
+  note: string | null;
+  origin: TlcIdeaOrigin;
+  suggested_by: string;
+  suggested_at: string;
+  source_ref: string | null;
+  preferred_month: string | null;
+  status: TlcIdeaStatus;
+  status_month: string | null;
+  status_card_id: string | null;
+  dropped_by: string | null;
+  dropped_at: string | null;
+}
+
+export async function ideasFor(env: Env, firmScope = "west-peek"): Promise<TlcIdeaRow[]> {
+  return (await env.WP_OS_DB.prepare("SELECT * FROM tlc_idea WHERE firm_scope = ?1 ORDER BY CASE origin WHEN 'OWNER_IDEA' THEN 0 ELSE 1 END, suggested_at").bind(firmScope).all<TlcIdeaRow>()).results ?? [];
+}
+
+/**
+ * Add an idea, or move an existing one's status. Who suggested it, when and where it came from are kept
+ * from the FIRST time it was recorded — a partner's idea stays the partner's when research finds it too.
+ * A DROPPED idea stays dropped until a partner restores it. Nothing here deletes.
+ */
+export async function upsertIdea(
+  env: Env,
+  input: { topic: string; origin: TlcIdeaOrigin; suggestedBy: string; suggestedAt: string; note?: string | null; sourceRef?: string | null; preferredMonth?: string | null; status?: TlcIdeaStatus; month?: string | null; cardId?: string | null; firmScope?: string },
+): Promise<void> {
+  const key = topicKey(input.topic);
+  if (!key || !isIdeaOrigin(input.origin)) return;
+  await env.WP_OS_DB.prepare(
+    `INSERT INTO tlc_idea (id, topic, topic_key, note, origin, suggested_by, suggested_at, source_ref, preferred_month, status, status_month, status_card_id, firm_scope)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+     ON CONFLICT (firm_scope, topic_key) DO UPDATE SET
+       status = CASE WHEN tlc_idea.status = 'DROPPED' OR ?14 = 0 THEN tlc_idea.status ELSE excluded.status END,
+       status_month = CASE WHEN tlc_idea.status = 'DROPPED' OR ?14 = 0 THEN tlc_idea.status_month ELSE excluded.status_month END,
+       status_card_id = CASE WHEN tlc_idea.status = 'DROPPED' OR ?14 = 0 THEN tlc_idea.status_card_id ELSE excluded.status_card_id END,
+       note = COALESCE(tlc_idea.note, excluded.note),
+       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
+  ).bind(
+    `tli_${crypto.randomUUID()}`, input.topic.trim().slice(0, 160), key, input.note ?? null, input.origin, input.suggestedBy, input.suggestedAt,
+    input.sourceRef ?? null, input.preferredMonth ?? null, input.status ?? "LATER", input.month ?? null, input.cardId ?? null, input.firmScope ?? "west-peek",
+    input.status ? 1 : 0,
+  ).run();
+}
+
+/**
+ * What the partners have said about topics, word for word, since the last pick: their notes on any TLC card, and
+ * the text of every card they asked for that mentions the Learning Club or Rooms. Parker reads it and names any
+ * topic idea in it; an idea is kept only when the quote he gives is really in this text.
+ */
+async function partnerWords(env: Env, firmScope: string, now: Date): Promise<Array<{ who: string; at: string; ref: string; text: string }>> {
+  const since = new Date(now.getTime() - 90 * 86_400_000).toISOString();
+  const byEmail = new Map(PARTNERS.map((p) => [p.email, p.firstName]));
+  const byId = new Map(PARTNERS.map((p) => [p.firmUserId, p.firstName]));
+  const out: Array<{ who: string; at: string; ref: string; text: string }> = [];
+  const cards = (await env.WP_OS_DB.prepare(
+    "SELECT id, requested_by_email, created_at, description FROM work_card WHERE firm_scope = ?1 AND created_at >= ?2 AND requested_by_email IS NOT NULL AND (title LIKE '%Learning Club%' OR title LIKE '%TLC%' OR title LIKE '%Room%' OR description LIKE '%Learning Club%' OR description LIKE '%learning club%') ORDER BY created_at",
+  ).bind(firmScope, since).all<{ id: string; requested_by_email: string; created_at: string; description: string | null }>()).results ?? [];
+  for (const c of cards) {
+    const who = byEmail.get(c.requested_by_email.toLowerCase());
+    if (who && c.description) out.push({ who, at: c.created_at, ref: c.id, text: c.description.slice(0, 2500) });
+  }
+  const notes = (await env.WP_OS_DB.prepare(
+    "SELECT n.id, n.author_id, n.body, n.created_at FROM work_card_note n JOIN work_card w ON w.id = n.work_card_id WHERE w.firm_scope = ?1 AND w.kind LIKE 'TLC_%' AND n.created_at >= ?2 ORDER BY n.created_at",
+  ).bind(firmScope, since).all<{ id: string; author_id: string; body: string; created_at: string }>()).results ?? [];
+  for (const n of notes) {
+    const who = byId.get(n.author_id);
+    if (who) out.push({ who, at: n.created_at, ref: n.id, text: n.body.slice(0, 1500) });
+  }
+  return out;
+}
+
+/** The ideas Parker found in the partners' own words. Kept only when the quote really appears in what they wrote. */
+export function ideasFoundIn(raw: unknown, words: ReadonlyArray<{ who: string; at: string; ref: string; text: string }>): Array<{ topic: string; who: string; at: string; ref: string; quote: string }> {
+  const out: Array<{ topic: string; who: string; at: string; ref: string; quote: string }> = [];
+  const norm = (x: string) => x.toLowerCase().replace(/\s+/g, " ").trim();
+  for (const f of Array.isArray(raw) ? (raw as Array<Record<string, unknown>>) : []) {
+    const topic = str(f.topic);
+    const quote = str(f.quote);
+    if (!topic || quote.length < 4) continue;
+    const src = words.find((w) => norm(w.text).includes(norm(quote)));
+    if (src) out.push({ topic, who: src.who, at: src.at, ref: src.ref, quote });
+  }
+  return out;
+}
+
+export function buildTopicsPrompt(
+  months: readonly string[],
+  exclude: readonly string[],
+  chosen: Readonly<Record<string, string>> = {},
+  opts: { ideas?: ReadonlyArray<Pick<TlcIdeaRow, "topic" | "origin" | "suggested_by" | "suggested_at" | "note" | "preferred_month" | "status">>; partnerWords?: ReadonlyArray<{ who: string; at: string; text: string }>; playbook?: string | null } = {},
+): string {
   const kept = months.filter((m) => chosen[m]);
+  const ideas = (opts.ideas ?? []).filter((i) => i.status !== "DROPPED");
   return [
     personaPrompt("Parker", "Event Marketing Coordinator"),
+    "",
+    playbookBlock(opts.playbook ?? null),
+    "",
+    "THE IDEAS LIST — read this FIRST. Weigh every idea on its merits next to what you find; you decide.",
+    ...(ideas.length ? ideas.map((i) => `- ${i.topic} [${TLC_IDEA_ORIGIN_LABEL[i.origin]}; ${i.suggested_by}, ${i.suggested_at.slice(0, 10)}]${i.preferred_month ? ` (preferred: ${monthWords(i.preferred_month)})` : ""}${i.note ? ` — ${i.note}` : ""}`) : ["- (no ideas on the list yet)"]),
+    ...(opts.partnerWords?.length ? ["", "WHAT THE PARTNERS WROTE (name every topic idea in it under found_ideas, with a short quote copied exactly):", ...opts.partnerWords.map((w) => `--- ${w.who}, ${w.at.slice(0, 10)}:\n${w.text}`)] : []),
+    "",
+    "WHERE IDEAS COME FROM — draw on all three, and label each pick and alternative with its origin:",
+    "- OWNER_IDEA: an idea on the list above that a partner sent.",
+    "- BRANDS_SPENDING: research which brands are spending right now (recent sponsorships, campaigns, launches, funding rounds, NYC event sponsorships), and sometimes reverse-engineer a club from a brand that is clearly buying.",
+    "- TREND: what people are searching for and curious about right now.",
+    "Favour topics where meeting in person is the point — the connection in the room is part of what people pay for.",
     "",
     `You are choosing topics for The Learning Club: in-person, ${TLC_CITY} only, ${TLC_SEATS.min}–${TLC_SEATS.max} people, one topic, a 3–4 hour deep dive on one afternoon (Sat 1–5 pm) or one evening (Thu 6–10 pm). Every attendee pays a $${TLC_TICKET_PRICE_USD} ticket. Everyone leaves with something they made or learned.`,
     `Run of show: ${runOfShowLines().join("; ")}.`,
@@ -623,21 +759,24 @@ export function buildTopicsPrompt(months: readonly string[], exclude: readonly s
     ...TLC_TOPIC_SEEDS.map((s) => `- ${s}`),
     exclude.length ? `Never pick these (already used or turned down): ${exclude.join("; ")}.` : "",
     "",
-    "Pick criteria — argue every pick against all four:",
+    "Pick criteria — argue every pick against all four (and IRL connection):",
     ...TLC_TOPIC_CRITERIA.map((c) => `- ${c}`),
     "",
+    "For a topic with a legal or health angle (for example peptides and biohacking, supplements, money), add a short regulatory_note: which sponsor types can legally sponsor it in New York and what they may not claim. It stays on the card; it never goes in the email.",
     "For each pick give the usual Rooms packet: the angle, why now (with sources), what happens in the hands-on hour, what people take home, the kind of expert who teaches it, and 5–10 sponsor categories that fit (non-competing within the club, each with why and two or three example brands).",
-    `Then give exactly ${TLC_ALTERNATIVES} ALTERNATIVE topics the partners could swap in: each different from the picks and from each other, with a one-line reason it would work and two or three real brands that would pay to sponsor it.`,
+    `Then give exactly ${TLC_ALTERNATIVES} ALTERNATIVE topics (partner ideas, brands spending now and trends alike; each with its origin) the partners could swap in: each different from the picks and from each other, with a one-line reason it would work and two or three real brands that would pay to sponsor it.`,
     "This goes to the partners as it is: write only what each topic IS. Never mention a topic you turned down, rejected or ruled out, or why.",
     "Use ONLY real, live web pages as sources. Do not invent statistics, quotes or events.",
     "",
-    'Return ONLY JSON: {"picks":[{"month":"YYYY-MM","topic":"","angle":"","why_now":"","criteria":{"product_used":"","irl_spend":"","sponsors_fit":"","pays_10":""},"hands_on":"","take_home":"","teacher_profile":"","sponsor_categories":[{"category":"","why":"","example_brands":[""]}],"sources":[{"title":"","url":""}]}],"alternatives":[{"topic":"","reason":"","brands":[""]}]}',
+    'Return ONLY JSON: {"picks":[{"month":"YYYY-MM","topic":"","angle":"","why_now":"","criteria":{"product_used":"","irl_spend":"","sponsors_fit":"","pays_10":""},"hands_on":"","take_home":"","teacher_profile":"","origin":"OWNER_IDEA|BRANDS_SPENDING|TREND","regulatory_note":"","sponsor_categories":[{"category":"","why":"","example_brands":[""]}],"sources":[{"title":"","url":""}]}],"alternatives":[{"topic":"","origin":"OWNER_IDEA|BRANDS_SPENDING|TREND","reason":"","brands":[""],"regulatory_note":""}],"found_ideas":[{"topic":"","quote":""}]}',
   ].filter(Boolean).join("\n");
 }
 
-export function buildBookingPackPrompt(ev: Pick<TlcEventRow, "topic" | "event_date" | "slot">): string {
+export function buildBookingPackPrompt(ev: Pick<TlcEventRow, "topic" | "event_date" | "slot">, playbook: string | null = null): string {
   return [
     personaPrompt("Parker", "Event Marketing Coordinator"),
+    "",
+    playbookBlock(playbook),
     "",
     `Build the booking pack for The Learning Club: "${ev.topic}", ${TLC_CITY}, on ${ev.event_date} (${ev.slot === "AFTERNOON" ? "Saturday 1–5 pm" : "Thursday 6–10 pm"}), ${TLC_SEATS.min}–${TLC_SEATS.max} people, ${TLC_BOOKING_HOURS} hours.`,
     `Run of show: ${runOfShowLines().join("; ")}.`,
@@ -652,11 +791,11 @@ export function buildBookingPackPrompt(ev: Pick<TlcEventRow, "topic" | "event_da
   ].join("\n");
 }
 
-export function buildBrandBatchPrompt(events: ReadonlyArray<Pick<TlcEventRow, "month" | "topic" | "sponsor_categories_json">>, exclude: readonly string[]): string {
+export function buildBrandBatchPrompt(events: ReadonlyArray<Pick<TlcEventRow, "month" | "topic" | "sponsor_categories_json">>, exclude: readonly string[], playbook: string | null = null): string {
   return [
     personaPrompt("Wynn", "TLC Sales & Partnerships"),
     "",
-    playbookBlock(),
+    playbookBlock(playbook),
     "",
     "Find brands to sponsor these clubs:",
     ...events.map((e) => `- ${monthWords(e.month)}: "${e.topic}". Categories: ${list<{ category: string }>(e.sponsor_categories_json).map((c) => c.category).join(", ")}`),
@@ -667,14 +806,17 @@ export function buildBrandBatchPrompt(events: ReadonlyArray<Pick<TlcEventRow, "m
   ].filter(Boolean).join("\n");
 }
 
-export function buildTrendPrompt(): string {
+export function buildTrendPrompt(playbook: string | null = null): string {
   return [
     personaPrompt("Wynn", "TLC Sales & Partnerships"),
+    "",
+    playbookBlock(playbook),
     "",
     "Research the trend of in-person learning clubs in coastal US cities: people gathering in person to go deep on one topic (sewing, matcha, day trading, and the like). What is happening, who is doing it, why now.",
     "Use ONLY real, live web pages (news, research, company announcements). Every sentence in the story must rest on a source you list, and each source carries the one claim it supports. No invented numbers, quotes or names.",
     "Story: 120–220 words, plain and warm, written as \"we\" would tell a brand partner. Cite as [1], [2] matching the sources list.",
-    'Return ONLY JSON: {"story":"","sources":[{"title":"","publisher":"","url":"","published_on":"YYYY-MM-DD or empty","claim":""}]}',
+    "Also name up to 5 TOPIC IDEAS for future clubs from this research: brands clearly spending right now (recent sponsorships, campaigns, launches, funding rounds, NYC event sponsorships) — origin BRANDS_SPENDING — or what people are searching for and curious about — origin TREND. Favour topics where meeting in person is the point.",
+    'Return ONLY JSON: {"story":"","sources":[{"title":"","publisher":"","url":"","published_on":"YYYY-MM-DD or empty","claim":""}],"topic_ideas":[{"topic":"","origin":"BRANDS_SPENDING|TREND","reason":""}]}',
   ].join("\n");
 }
 
@@ -809,17 +951,28 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
     // A month's own chosen topic is kept, not excluded.
     .flatMap((r) => [needIds.has(r.id) && chosen[need.find((e) => e.id === r.id)!.month] ? null : r.topic, ...list<string>(r.vetoed_topics_json)])
     .filter((t): t is string => Boolean(t));
-  const found = await search(env, actorFor(PARKER, card.firm_scope), buildTopicsPrompt(need.map((e) => e.month), used, chosen));
+  const ideas = await ideasFor(env, card.firm_scope);
+  const words = await partnerWords(env, card.firm_scope, now);
+  const found = await search(env, actorFor(PARKER, card.firm_scope), buildTopicsPrompt(need.map((e) => e.month), used, chosen, { ideas, partnerWords: words, playbook: await storedPlaybook(env) }));
   if (!found.ok) return searchFailed(env, card, "Parker", found, now);
   const answer = jsonIn(found.text) ?? {};
+  // EVERY IDEA A PARTNER WROTE DOWN IS CAPTURED, picked or not, the moment Parker reads it (owner, 22 Oct 2026).
+  for (const f of ideasFoundIn(answer.found_ideas, words)) {
+    await upsertIdea(env, { topic: f.topic, origin: "OWNER_IDEA", suggestedBy: f.who, suggestedAt: f.at, note: `"${f.quote.slice(0, 200)}"`, sourceRef: f.ref, firmScope: card.firm_scope });
+  }
+  const partnerKeys = new Set((await ideasFor(env, card.firm_scope)).filter((i) => i.origin === "OWNER_IDEA").map((i) => i.topic_key));
+  /** A topic a partner sent is labelled theirs, whatever the model called it. */
+  const originOf = (topic: string, said: unknown): TlcIdeaOrigin | null => (partnerKeys.has(topicKey(topic)) ? "OWNER_IDEA" : isIdeaOrigin(said) && said !== "OWNER_IDEA" ? said : null);
   const picks = (answer.picks as Array<Record<string, unknown>> | undefined) ?? [];
-  const kept: Array<{ ev: TlcEventRow; topic: string; pick: Record<string, unknown>; sources: Array<{ title: string; url: string }>; categories: Array<{ category: string; why: string; example_brands: string[] }> }> = [];
+  const kept: Array<{ ev: TlcEventRow; topic: string; origin: TlcIdeaOrigin; pick: Record<string, unknown>; sources: Array<{ title: string; url: string }>; categories: Array<{ category: string; why: string; example_brands: string[] }> }> = [];
   const dropped: string[] = [];
   const taken = new Set(used.map((u) => u.toLowerCase()));
   for (const ev of need) {
     const pick = picks.find((p) => str(p.month) === ev.month);
     const topic = chosen[ev.month] ?? str(pick?.topic);
     if (!pick || !topic || taken.has(topic.toLowerCase())) { dropped.push(`${ev.month}: no usable pick`); continue; }
+    const origin = originOf(topic, pick.origin);
+    if (!origin) { dropped.push(`${ev.month} (${topic}): no origin label`); continue; }
     const sources = ((pick.sources as Array<{ title?: string; url?: string }>) ?? []).map((s) => ({ title: str(s.title), url: str(s.url) })).filter((s) => isUrl(s.url));
     const live: typeof sources = [];
     for (const s of sources) if (await check(s.url)) live.push(s);
@@ -829,15 +982,18 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
     if (live.length === 0) { dropped.push(`${ev.month} (${topic}): no source page answered`); continue; }
     if (categories.length < TLC_SPONSOR_CATEGORIES.min) { dropped.push(`${ev.month} (${topic}): ${categories.length} sponsor categories, ${TLC_SPONSOR_CATEGORIES.min} needed`); continue; }
     taken.add(topic.toLowerCase());
-    kept.push({ ev, topic, pick, sources: live, categories: categories.slice(0, TLC_SPONSOR_CATEGORIES.max) });
+    kept.push({ ev, topic, origin, pick, sources: live, categories: categories.slice(0, TLC_SPONSOR_CATEGORIES.max) });
   }
   const alternatives: TopicsEmailAlternative[] = [];
+  const regulatory: string[] = kept.filter((k) => str(k.pick.regulatory_note)).map((k) => `${k.topic}: ${str(k.pick.regulatory_note)}`);
   for (const a of (answer.alternatives as Array<Record<string, unknown>> | undefined) ?? []) {
     const topic = str(a.topic);
     const reason = str(a.reason);
     const brands = (Array.isArray(a.brands) ? a.brands : []).map(str).filter(Boolean).slice(0, 3);
-    if (!topic || !reason || brands.length === 0 || taken.has(topic.toLowerCase()) || alternatives.some((x) => x.topic.toLowerCase() === topic.toLowerCase())) continue;
-    alternatives.push({ topic, reason: /[.!?]$/.test(reason) ? reason : `${reason}.`, brands });
+    const origin = originOf(topic, a.origin);
+    if (!origin || !topic || !reason || brands.length === 0 || taken.has(topic.toLowerCase()) || alternatives.some((x) => x.topic.toLowerCase() === topic.toLowerCase())) continue;
+    alternatives.push({ topic, origin, reason: /[.!?]$/.test(reason) ? reason : `${reason}.`, brands });
+    if (str(a.regulatory_note)) regulatory.push(`${topic}: ${str(a.regulatory_note)}`);
   }
   /*
    * EVERY MONTH, OR NO EMAIL (owner, 22 Oct 2026: "only gave 2 picks Jan and Feb — what happened to 3 picks").
@@ -871,7 +1027,7 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
   }
   const email = topicsEmail({
     months: need.map((e) => e.month),
-    picks: kept.map((k) => ({ month: k.ev.month, topic: k.topic, angle: str(k.pick.angle), categories: k.categories.map((c) => c.category), onePagerUrl: onePagerUrl(k.ev.id) })),
+    picks: kept.map((k) => ({ month: k.ev.month, topic: k.topic, origin: k.origin, angle: str(k.pick.angle), categories: k.categories.map((c) => c.category), onePagerUrl: onePagerUrl(k.ev.id) })),
     alternatives: alternatives.slice(0, TLC_ALTERNATIVES),
     goAheadOn: until.slice(0, 10),
   });
@@ -879,10 +1035,14 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
   // The record keeps everything, including the alternatives; the partners' email carries only the picks and the list.
   await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || ?2, 1, 16000) WHERE id = ?1")
     .bind(card.id, [
-      `• Proposed ${kept.map((k) => `${k.ev.month} ${k.topic}`).join("; ")}. Proceeds ${until} unless a partner says no.`,
-      `• Alternatives: ${alternatives.slice(0, TLC_ALTERNATIVES).map((a) => a.topic).join("; ")}.`,
+      `• Proposed ${kept.map((k) => `${k.ev.month} ${k.topic} [${TLC_IDEA_ORIGIN_LABEL[k.origin]}]`).join("; ")}. Proceeds ${until} unless a partner says no.`,
+      `• Alternatives: ${alternatives.slice(0, TLC_ALTERNATIVES).map((a) => `${a.topic} [${TLC_IDEA_ORIGIN_LABEL[a.origin]}]`).join("; ")}.`,
+      regulatory.length ? `• Regulatory check (card only, never emailed): ${regulatory.join(" | ")}` : "",
       dropped.length ? `• Parker's notes (not emailed): ${dropped.join("; ")}.` : "",
     ].filter(Boolean).join("\n")).run();
+  // THE IDEAS LIST SAYS WHERE EACH ONE STANDS: picked for a month, in the alternatives, or later.
+  for (const k of kept) await upsertIdea(env, { topic: k.topic, origin: k.origin, suggestedBy: "Parker", suggestedAt: now.toISOString(), sourceRef: card.id, status: "PICKED", month: k.ev.month, cardId: card.id, firmScope: card.firm_scope });
+  for (const a of alternatives.slice(0, TLC_ALTERNATIVES)) await upsertIdea(env, { topic: a.topic, origin: a.origin, suggestedBy: "Parker", suggestedAt: now.toISOString(), note: a.reason, sourceRef: card.id, status: "ALTERNATIVE", cardId: card.id, firmScope: card.firm_scope });
   // HELD UNTIL THE WINDOW CLOSES. A partner's reply lands on this card as a note and is read then.
   return { finished: false, blocked: false, progressed: true, held: true, waitUntil: until, detail: `proposed ${kept.length} topic(s) and ${TLC_ALTERNATIVES} alternatives; ${TLC_VETO_DAYS}-day veto window until ${until}` };
 }
@@ -929,7 +1089,7 @@ async function runBookingPack(env: Env, card: SweepCard, now: Date, search: TlcS
   const month = /(\w+ \d{4})$/.exec(card.title)?.[1];
   const ev = (await eventsFrom(env, "SELECT * FROM tlc_event WHERE firm_scope = ?1", card.firm_scope)).find((e) => monthWords(e.month) === month);
   if (!ev?.topic) return nothingGood(env, card, "Parker", "The club this pack is for has no agreed topic any more. Drop this card; a new one opens when the topic is set.");
-  const found = await search(env, actorFor(PARKER, card.firm_scope), buildBookingPackPrompt(ev));
+  const found = await search(env, actorFor(PARKER, card.firm_scope), buildBookingPackPrompt(ev, await storedPlaybook(env)));
   if (!found.ok) return searchFailed(env, card, "Parker", found, now);
   const raw = jsonIn(found.text) ?? {};
   const keepLive = async (xs: BookingPack["hosts"]): Promise<BookingPack["hosts"]> => {
@@ -996,7 +1156,7 @@ async function runBrandBatch(env: Env, card: SweepCard, now: Date, search: TlcSe
     return { finished: true, blocked: false, progressed: false, detail: "no open club" };
   }
   const existing = ((await env.WP_OS_DB.prepare(`SELECT brand, event_id FROM tlc_deal WHERE event_id IN (${events.map(() => "?").join(",")})`).bind(...events.map((e) => e.id)).all<{ brand: string; event_id: string }>()).results ?? []);
-  const found = await search(env, actorFor(WYNN, card.firm_scope), buildBrandBatchPrompt(events, existing.map((d) => d.brand)));
+  const found = await search(env, actorFor(WYNN, card.firm_scope), buildBrandBatchPrompt(events, existing.map((d) => d.brand), await storedPlaybook(env)));
   if (!found.ok) return searchFailed(env, card, "Wynn", found, now);
   const brands = (jsonIn(found.text)?.brands as Array<Record<string, unknown>> | undefined) ?? [];
   const added: string[] = [];
@@ -1028,7 +1188,7 @@ async function runBrandBatch(env: Env, card: SweepCard, now: Date, search: TlcSe
 // ── Wynn: the trend story ───────────────────────────────────────────────────────────────────────
 
 async function runTrendStory(env: Env, card: SweepCard, now: Date, search: TlcSearch, check: (u: string) => Promise<boolean>): Promise<TlcRunResult> {
-  const found = await search(env, actorFor(WYNN, card.firm_scope), buildTrendPrompt());
+  const found = await search(env, actorFor(WYNN, card.firm_scope), buildTrendPrompt(await storedPlaybook(env)));
   if (!found.ok) return searchFailed(env, card, "Wynn", found, now);
   const raw = jsonIn(found.text) ?? {};
   const story = str(raw.story);
@@ -1056,7 +1216,15 @@ async function runTrendStory(env: Env, card: SweepCard, now: Date, search: TlcSe
     cardKind: card.kind,
     firmScope: card.firm_scope,
   });
-  await finish(env, card.id, `• Trend story ${quarter} stored with ${live.length} live sources.`);
+  // Wynn's research feeds the ideas list, each labelled with where it came from.
+  const ideaNames: string[] = [];
+  for (const i of ((raw.topic_ideas as Array<Record<string, unknown>>) ?? []).slice(0, 5)) {
+    const topic = str(i.topic);
+    if (!topic || !isIdeaOrigin(i.origin) || i.origin === "OWNER_IDEA") continue;
+    await upsertIdea(env, { topic, origin: i.origin, suggestedBy: "Wynn", suggestedAt: now.toISOString(), note: str(i.reason) || null, sourceRef: card.id, firmScope: card.firm_scope });
+    ideaNames.push(`${topic} (${TLC_IDEA_ORIGIN_LABEL[i.origin]})`);
+  }
+  await finish(env, card.id, `• Trend story ${quarter} stored with ${live.length} live sources.${ideaNames.length ? ` Ideas added to the list: ${ideaNames.join("; ")}.` : ""}`);
   return { finished: true, blocked: false, progressed: false, detail: `trend story ${quarter} written` };
 }
 
@@ -1143,7 +1311,47 @@ export async function handleTlcOverview(ctx: RouteContext): Promise<Response> {
   }
   const settings = await tlcSettings(ctx.env);
   const held = (await ctx.env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_drip_message WHERE state = 'HELD'").first<{ n: number }>())?.n ?? 0;
-  return json({ events: out, send_gate: brandSendGate(settings, ctx.env), settings, held_emails: held });
+  return json({
+    events: out.map((e) => ({ ...e, one_pager_url: e.topic ? onePagerUrl(e.id) : null })),
+    send_gate: brandSendGate(settings, ctx.env),
+    settings,
+    held_emails: held,
+    ideas: (await ideasFor(ctx.env)).map((i) => ({ ...i, origin_label: TLC_IDEA_ORIGIN_LABEL[i.origin] })),
+    playbook_document_id: settings[PLAYBOOK_DOCUMENT_SETTING] ?? null,
+  });
+}
+
+const ideaSchema = z.object({ topic: z.string().trim().min(2).max(160), note: z.string().trim().max(600).optional(), preferred_month: z.string().regex(/^\d{4}-\d{2}$/).optional() });
+
+/** POST /api/tlc/ideas — a partner adds a topic idea to the list. It is labelled theirs and Parker reads it first. */
+export async function handleTlcIdeaAdd(ctx: RouteContext): Promise<Response> {
+  const actor = actorFromIdentity(ctx.identity!);
+  if (actor.type !== "HUMAN") return json({ error: "forbidden", detail: "only a partner adds an idea here" }, { status: 403 });
+  const a = await requireManage(ctx);
+  if (a instanceof Response) return a;
+  const parsed = ideaSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", detail: "an idea needs a topic (2–160 characters)" }, { status: 400 });
+  const who = PARTNERS.find((p) => p.firmUserId === actor.firmUserId)?.firstName ?? ctx.identity!.id;
+  await upsertIdea(ctx.env, { topic: parsed.data.topic, origin: "OWNER_IDEA", suggestedBy: who, suggestedAt: new Date().toISOString(), note: parsed.data.note ?? null, preferredMonth: parsed.data.preferred_month ?? null, sourceRef: "rooms_tab" });
+  return json({ ok: true, ideas: await ideasFor(ctx.env) });
+}
+
+/**
+ * POST /api/tlc/ideas/:id/drop and /restore — a partner sets an idea aside or brings it back. A dropped idea
+ * stays on the list, marked, with who dropped it and when. Nothing is ever deleted.
+ */
+export async function handleTlcIdeaStatus(ctx: RouteContext): Promise<Response> {
+  const actor = actorFromIdentity(ctx.identity!);
+  if (actor.type !== "HUMAN") return json({ error: "forbidden", detail: "only a partner drops or restores an idea" }, { status: 403 });
+  const a = await requireManage(ctx);
+  if (a instanceof Response) return a;
+  const drop = new URL(ctx.request.url).pathname.endsWith("/drop");
+  const now = new Date().toISOString();
+  const res = drop
+    ? await ctx.env.WP_OS_DB.prepare("UPDATE tlc_idea SET status = 'DROPPED', dropped_by = ?2, dropped_at = ?3, updated_at = ?3 WHERE id = ?1").bind(ctx.params.id, ctx.identity!.id, now).run()
+    : await ctx.env.WP_OS_DB.prepare("UPDATE tlc_idea SET status = 'LATER', status_month = NULL, dropped_by = NULL, dropped_at = NULL, updated_at = ?2 WHERE id = ?1 AND status = 'DROPPED'").bind(ctx.params.id, now).run();
+  if (!res.meta.changes) return json({ error: "not_found", detail: "no idea by that id to change" }, { status: 404 });
+  return json({ ok: true, ideas: await ideasFor(ctx.env) });
 }
 
 const settingSchema = z.object({ what: z.enum(["onepager_mock", "playbook", "brand_send_on", "brand_send_off"]) });

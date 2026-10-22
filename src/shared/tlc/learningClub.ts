@@ -736,9 +736,39 @@ export const TLC_PRE_LAUNCH_PROOF: readonly string[] = [
  */
 export const TLC_ALTERNATIVES = 9;
 
+// ── Where an idea came from (owner, 22 Oct 2026) ────────────────────────────────────────────────
+
+/**
+ * Every topic idea carries its origin, on the card, in the Rooms tab's ideas list and in the email:
+ * a partner's own idea; one reverse-engineered from a brand that is clearly spending right now; or
+ * what people are searching for and curious about. Parker weighs them all on merit — a partner's
+ * idea is considered, never automatically picked (owner's correction, 22 Oct 2026).
+ */
+export const TLC_IDEA_ORIGINS = ["OWNER_IDEA", "BRANDS_SPENDING", "TREND"] as const;
+export type TlcIdeaOrigin = (typeof TLC_IDEA_ORIGINS)[number];
+export const TLC_IDEA_ORIGIN_LABEL: Record<TlcIdeaOrigin, string> = {
+  OWNER_IDEA: "Partner idea",
+  BRANDS_SPENDING: "Brands spending now",
+  TREND: "Trend",
+};
+export function isIdeaOrigin(v: unknown): v is TlcIdeaOrigin {
+  return typeof v === "string" && (TLC_IDEA_ORIGINS as readonly string[]).includes(v);
+}
+/** An idea's status on the ideas list. DROPPED stays listed: an idea is never deleted or hidden. */
+export const TLC_IDEA_STATUSES = ["LATER", "PICKED", "ALTERNATIVE", "DROPPED"] as const;
+export type TlcIdeaStatus = (typeof TLC_IDEA_STATUSES)[number];
+/** One key per topic, so "Trading & Investing" and "trading and investing" are one idea. */
+export function topicKey(topic: string): string {
+  return topic.toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/** Where the owner-approved playbook lives: a Documents entry whose id is kept in `tlc_setting` under this key. */
+export const PLAYBOOK_DOCUMENT_SETTING = "playbook_document_id";
+
 export interface TopicsEmailPick {
   month: string;
   topic: string;
+  origin: TlcIdeaOrigin;
   angle: string;
   categories: readonly string[];
   /** The glossy one-sheet, as a brand would see it. */
@@ -746,6 +776,7 @@ export interface TopicsEmailPick {
 }
 export interface TopicsEmailAlternative {
   topic: string;
+  origin: TlcIdeaOrigin;
   reason: string;
   brands: readonly string[];
 }
@@ -766,6 +797,7 @@ export function topicsEmailProblems(months: readonly string[], picks: readonly T
   }
   for (const p of picks) if (!months.includes(p.month)) out.push(`a pick for ${p.month}, which this email is not for`);
   for (const p of picks) if (!/^https:\/\//.test(p.onePagerUrl)) out.push(`${monthWords(p.month)} has no one-sheet link`);
+  for (const x of [...picks, ...alts]) if (!isIdeaOrigin(x.origin)) out.push(`"${x.topic}" has no origin label`);
   if (alts.length !== TLC_ALTERNATIVES) out.push(`${alts.length} alternatives; it needs ${TLC_ALTERNATIVES}`);
   const pickNames = new Set(picks.map((p) => p.topic.toLowerCase()));
   const seen = new Set<string>();
@@ -795,7 +827,7 @@ export function topicsEmail(input: { months: readonly string[]; picks: readonly 
   if (problems.length) throw new Error(`the TLC topics email must not go: ${problems.join("; ")}`);
   const picks = [...input.picks].sort((a, b) => a.month.localeCompare(b.month));
   const year = picks[0]!.month.slice(0, 4);
-  const alts = input.alternatives.map((a) => `${a.topic}: ${a.reason} Brands that would pay: ${a.brands.join(", ")}.`);
+  const alts = input.alternatives.map((a) => `${a.topic} (${TLC_IDEA_ORIGIN_LABEL[a.origin]}): ${a.reason} Brands that would pay: ${a.brands.join(", ")}.`);
   const chunks: string[][] = [];
   for (let i = 0; i < alts.length; i += 3) chunks.push(alts.slice(i, i + 3));
   return {
@@ -805,7 +837,7 @@ export function topicsEmail(input: { months: readonly string[]; picks: readonly 
     sections: [
       ...picks.map((p) => ({
         label: `${monthWords(p.month)}: ${p.topic}`,
-        bullets: [p.angle, `Sponsor categories: ${p.categories.join(", ")}`, `The one-sheet a brand would see: ${p.onePagerUrl} (also attached)`],
+        bullets: [p.angle, `Where the idea came from: ${TLC_IDEA_ORIGIN_LABEL[p.origin]}`, `Sponsor categories: ${p.categories.join(", ")}`, `The one-sheet a brand would see: ${p.onePagerUrl} (also attached)`],
       })),
       ...chunks.map((c, i) => ({ label: `${input.alternatives.length} alternatives (${i * 3 + 1}–${i * 3 + c.length})`, bullets: c })),
     ],

@@ -201,12 +201,12 @@ const live = async (url: string): Promise<boolean> => !url.includes("dead.exampl
 
 const picksJson = (months: string[], topics: string[]) => JSON.stringify({
   picks: months.map((m, i) => ({
-    month: m, topic: topics[i], angle: "an angle", why_now: "why", criteria: {}, hands_on: "make it", take_home: "a thing", teacher_profile: "an expert",
+    month: m, topic: topics[i], origin: "TREND", angle: "an angle", why_now: "why", criteria: {}, hands_on: "make it", take_home: "a thing", teacher_profile: "an expert",
     sponsor_categories: ["A", "B", "C", "D", "E", "F"].map((c) => ({ category: `${c} category`, why: "fits", example_brands: [] })),
     sources: [{ title: "Real page", url: `https://news.example/${i}` }, { title: "Dead", url: "https://dead.example/x" }],
   })),
   // Parker's email carries nine alternatives with every set of picks (owner, 22 Oct 2026).
-  alternatives: ["Knit", "Bake", "Brew", "Paint", "Pot", "Climb", "Run", "Sing", "Code"].map((t) => ({ topic: `${t} club`, reason: "people pay for it", brands: ["Brand One"] })),
+  alternatives: ["Knit", "Bake", "Brew", "Paint", "Pot", "Climb", "Run", "Sing", "Code"].map((t) => ({ topic: `${t} club`, origin: "TREND", reason: "people pay for it", brands: ["Brand One"] })),
 });
 
 beforeAll(async () => {

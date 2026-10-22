@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, getDevUser, useApi } from "../lib/api";
 import { EventsPage } from "./EventsPage";
+import { LearningClubPanel, RoomsMap } from "./LearningClubPanel";
 import { EVENT_ETHOS, OPERATING_RHYTHM, WHY_THE_RHYTHM } from "@shared/events/programme";
 import { sameOrg } from "@shared/events/roomPacket";
 import { WORKSHOP_LENGTH_RANGE, WORKSHOP_SERIES, WORKSHOP_WHERE, normaliseSponsorship, type WorkshopView } from "@shared/events/workshopPacket";
@@ -467,6 +468,9 @@ export function RoomsPage(): JSX.Element {
 
   return (
     <section data-testid="rooms-page">
+      <RoomsMap />
+      <LearningClubPanel />
+
       <h3>Rooms waiting on you</h3>
 
       {/* The stance, in one line, where it constrains the decision being made. In full at the end. */}

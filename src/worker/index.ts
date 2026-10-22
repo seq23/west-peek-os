@@ -161,7 +161,7 @@ import {
   handleListPackets as handleListRoomPackets,
   handleScheduleRoom, handleVerifyVenue, handleWithdrawSteer,
 } from "./services/roomPacket";
-import { handleTlcApprove, handleTlcDeal, handleTlcOnePager, handleTlcOverview, handleTlcTicket } from "./services/learningClub";
+import { handleTlcApprove, handleTlcDeal, handleTlcIdeaAdd, handleTlcIdeaStatus, handleTlcOnePager, handleTlcOverview, handleTlcTicket } from "./services/learningClub";
 import {
   handleAdvanceSponsor, handleCreateSponsor, handleListSponsors, handleSponsorAttendeeExport,
   handleSponsorRecap,
@@ -1067,6 +1067,9 @@ const router = new Router()
   .post("/api/tlc/deals/:id", handleTlcDeal)
   .post("/api/tlc/events/:id/tickets", handleTlcTicket)
   .get("/api/tlc/events/:id/onepager", handleTlcOnePager)
+  .post("/api/tlc/ideas", handleTlcIdeaAdd)
+  .post("/api/tlc/ideas/:id/drop", handleTlcIdeaStatus)
+  .post("/api/tlc/ideas/:id/restore", handleTlcIdeaStatus)
   .get("/api/sponsors", handleListSponsors)
   .post("/api/sponsors", handleCreateSponsor)
   .post("/api/sponsors/:id/stage", handleAdvanceSponsor)
