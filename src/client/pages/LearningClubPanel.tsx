@@ -28,9 +28,23 @@ interface TlcIdea {
   status_month: string | null;
   dropped_at: string | null;
 }
+interface TlcResearch {
+  id: string;
+  kind: string;
+  kind_label: string;
+  title: string;
+  body: string | null;
+  topic: string | null;
+  source_title: string | null;
+  source_url: string | null;
+  published_on: string | null;
+  found_at: string;
+  found_by: string;
+}
 interface TlcOverview {
   events: TlcEvent[];
   ideas: TlcIdea[];
+  research: TlcResearch[];
   playbook_document_id: string | null;
 }
 
@@ -88,6 +102,10 @@ export function RoomsMap(): JSX.Element {
         <li>
           <strong>On this page:</strong> The Learning Club first (its months, each one-sheet, the playbook and the
           ideas list), then the Rooms and Workshops waiting on you, then what has happened.
+        </li>
+        <li>
+          <strong>Research library:</strong> the background Parker and Wynn draw on — the trend story with its
+          sources, brands spending now, trends, and regulatory checks. It updates quietly; nobody is emailed about it.
         </li>
       </ul>
     </section>
@@ -217,6 +235,35 @@ export function LearningClubPanel(): JSX.Element {
             </label>
             <button type="button" onClick={() => void add()}>Add to the list</button>
           </div>
+
+          <h4>Research library</h4>
+          <p className="muted small">
+            Background for building and selling each club, newest first. Every entry is dated and says what kind it is;
+            facts carry their source. Parker and Wynn read this whenever they build a room, a booking pack or a brand list.
+          </p>
+          {data.research.length === 0 ? (
+            <p className="state-empty">Nothing in the library yet. Wynn's quarterly research fills it.</p>
+          ) : (
+            <ul className="card-list" data-testid="tlc-research">
+              {data.research.map((r) => (
+                <li key={r.id}>
+                  <span className="muted small">
+                    {r.kind_label} · {(r.published_on || r.found_at).slice(0, 10)} · {r.found_by}
+                  </span>
+                  <div>
+                    {r.topic && <strong>{r.topic}: </strong>}
+                    {r.title}
+                  </div>
+                  {r.body && <div className="muted small">{r.body}</div>}
+                  {r.source_url && (
+                    <div className="small">
+                      <a href={r.source_url} target="_blank" rel="noreferrer">{r.source_title || r.source_url}</a>
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
         </>
       )}
     </section>

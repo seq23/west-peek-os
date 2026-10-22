@@ -714,6 +714,45 @@ async function partnerWords(env: Env, firmScope: string, now: Date): Promise<Arr
 }
 
 /** The ideas Parker found in the partners' own words. Kept only when the quote really appears in what they wrote. */
+// ── The research library (owner, 22 Oct 2026) ─────────────────────────────────────────────────
+
+export const TLC_RESEARCH_KINDS = ["TREND_STORY", "BRAND_SPEND", "TREND", "REGULATORY"] as const;
+export type TlcResearchKind = (typeof TLC_RESEARCH_KINDS)[number];
+export const TLC_RESEARCH_LABEL: Record<TlcResearchKind, string> = { TREND_STORY: "Trend story", BRAND_SPEND: "Brands spending now", TREND: "Trend and curiosity", REGULATORY: "Regulatory check" };
+export interface TlcResearchRow {
+  id: string;
+  kind: TlcResearchKind;
+  title: string;
+  body: string | null;
+  topic: string | null;
+  source_title: string | null;
+  source_url: string | null;
+  published_on: string | null;
+  found_at: string;
+  found_by: string;
+  card_id: string | null;
+}
+
+export async function researchLibrary(env: Env, firmScope = "west-peek", limit = 200): Promise<TlcResearchRow[]> {
+  return (await env.WP_OS_DB.prepare("SELECT * FROM tlc_research WHERE firm_scope = ?1 ORDER BY found_at DESC LIMIT ?2").bind(firmScope, limit).all<TlcResearchRow>()).results ?? [];
+}
+
+export async function addResearch(env: Env, r: { kind: TlcResearchKind; title: string; body?: string | null; topic?: string | null; sourceTitle?: string | null; sourceUrl?: string | null; publishedOn?: string | null; foundAt: string; foundBy: string; cardId?: string | null; firmScope?: string }): Promise<void> {
+  if (!r.title.trim()) return;
+  await env.WP_OS_DB.prepare(
+    "INSERT INTO tlc_research (id, kind, title, body, topic, source_title, source_url, published_on, found_at, found_by, card_id, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+  ).bind(`tlr_${crypto.randomUUID()}`, r.kind, r.title.slice(0, 400), r.body ?? null, r.topic ?? null, r.sourceTitle ?? null, r.sourceUrl ?? null, r.publishedOn ?? null, r.foundAt, r.foundBy, r.cardId ?? null, r.firmScope ?? "west-peek").run();
+}
+
+/** The library as a prompt block: newest first, every entry dated, labelled and sourced. Read by every TLC prompt that builds a room or sells one. */
+export function libraryBlock(rows: ReadonlyArray<Pick<TlcResearchRow, "kind" | "title" | "body" | "topic" | "source_url" | "published_on" | "found_at">>, max = 40): string {
+  if (rows.length === 0) return "THE RESEARCH LIBRARY (Rooms page): empty so far.";
+  return [
+    "THE RESEARCH LIBRARY (Rooms page) — draw on it; cite only what has a source:",
+    ...rows.slice(0, max).map((r) => `- [${TLC_RESEARCH_LABEL[r.kind]}, ${(r.published_on || r.found_at).slice(0, 10)}]${r.topic ? ` ${r.topic}:` : ""} ${r.title}${r.body && r.kind !== "TREND_STORY" ? ` — ${r.body.slice(0, 300)}` : r.body ? ` — ${r.body.slice(0, 1500)}` : ""}${r.source_url ? ` (${r.source_url})` : ""}`),
+  ].join("\n");
+}
+
 export function ideasFoundIn(raw: unknown, words: ReadonlyArray<{ who: string; at: string; ref: string; text: string }>): Array<{ topic: string; who: string; at: string; ref: string; quote: string }> {
   const out: Array<{ topic: string; who: string; at: string; ref: string; quote: string }> = [];
   const norm = (x: string) => x.toLowerCase().replace(/\s+/g, " ").trim();
@@ -731,7 +770,7 @@ export function buildTopicsPrompt(
   months: readonly string[],
   exclude: readonly string[],
   chosen: Readonly<Record<string, string>> = {},
-  opts: { ideas?: ReadonlyArray<Pick<TlcIdeaRow, "topic" | "origin" | "suggested_by" | "suggested_at" | "note" | "preferred_month" | "status">>; partnerWords?: ReadonlyArray<{ who: string; at: string; text: string }>; playbook?: string | null } = {},
+  opts: { ideas?: ReadonlyArray<Pick<TlcIdeaRow, "topic" | "origin" | "suggested_by" | "suggested_at" | "note" | "preferred_month" | "status">>; partnerWords?: ReadonlyArray<{ who: string; at: string; text: string }>; playbook?: string | null; library?: Parameters<typeof libraryBlock>[0] } = {},
 ): string {
   const kept = months.filter((m) => chosen[m]);
   const ideas = (opts.ideas ?? []).filter((i) => i.status !== "DROPPED");
@@ -739,6 +778,8 @@ export function buildTopicsPrompt(
     personaPrompt("Parker", "Event Marketing Coordinator"),
     "",
     playbookBlock(opts.playbook ?? null),
+    "",
+    libraryBlock(opts.library ?? []),
     "",
     "THE IDEAS LIST — read this FIRST. Weigh every idea on its merits next to what you find; you decide.",
     ...(ideas.length ? ideas.map((i) => `- ${i.topic} [${TLC_IDEA_ORIGIN_LABEL[i.origin]}; ${i.suggested_by}, ${i.suggested_at.slice(0, 10)}]${i.preferred_month ? ` (preferred: ${monthWords(i.preferred_month)})` : ""}${i.note ? ` — ${i.note}` : ""}`) : ["- (no ideas on the list yet)"]),
@@ -772,11 +813,13 @@ export function buildTopicsPrompt(
   ].filter(Boolean).join("\n");
 }
 
-export function buildBookingPackPrompt(ev: Pick<TlcEventRow, "topic" | "event_date" | "slot">, playbook: string | null = null): string {
+export function buildBookingPackPrompt(ev: Pick<TlcEventRow, "topic" | "event_date" | "slot">, playbook: string | null = null, library: Parameters<typeof libraryBlock>[0] = []): string {
   return [
     personaPrompt("Parker", "Event Marketing Coordinator"),
     "",
     playbookBlock(playbook),
+    "",
+    libraryBlock(library),
     "",
     `Build the booking pack for The Learning Club: "${ev.topic}", ${TLC_CITY}, on ${ev.event_date} (${ev.slot === "AFTERNOON" ? "Saturday 1–5 pm" : "Thursday 6–10 pm"}), ${TLC_SEATS.min}–${TLC_SEATS.max} people, ${TLC_BOOKING_HOURS} hours.`,
     `Run of show: ${runOfShowLines().join("; ")}.`,
@@ -791,11 +834,13 @@ export function buildBookingPackPrompt(ev: Pick<TlcEventRow, "topic" | "event_da
   ].join("\n");
 }
 
-export function buildBrandBatchPrompt(events: ReadonlyArray<Pick<TlcEventRow, "month" | "topic" | "sponsor_categories_json">>, exclude: readonly string[], playbook: string | null = null): string {
+export function buildBrandBatchPrompt(events: ReadonlyArray<Pick<TlcEventRow, "month" | "topic" | "sponsor_categories_json">>, exclude: readonly string[], playbook: string | null = null, library: Parameters<typeof libraryBlock>[0] = []): string {
   return [
     personaPrompt("Wynn", "TLC Sales & Partnerships"),
     "",
     playbookBlock(playbook),
+    "",
+    libraryBlock(library),
     "",
     "Find brands to sponsor these clubs:",
     ...events.map((e) => `- ${monthWords(e.month)}: "${e.topic}". Categories: ${list<{ category: string }>(e.sponsor_categories_json).map((c) => c.category).join(", ")}`),
@@ -806,17 +851,20 @@ export function buildBrandBatchPrompt(events: ReadonlyArray<Pick<TlcEventRow, "m
   ].filter(Boolean).join("\n");
 }
 
-export function buildTrendPrompt(playbook: string | null = null): string {
+export function buildTrendPrompt(playbook: string | null = null, library: Parameters<typeof libraryBlock>[0] = []): string {
   return [
     personaPrompt("Wynn", "TLC Sales & Partnerships"),
     "",
     playbookBlock(playbook),
     "",
+    libraryBlock(library),
+    "Refresh the library: add what is new since these entries; do not repeat them.",
+    "",
     "Research the trend of in-person learning clubs in coastal US cities: people gathering in person to go deep on one topic (sewing, matcha, day trading, and the like). What is happening, who is doing it, why now.",
     "Use ONLY real, live web pages (news, research, company announcements). Every sentence in the story must rest on a source you list, and each source carries the one claim it supports. No invented numbers, quotes or names.",
     "Story: 120–220 words, plain and warm, written as \"we\" would tell a brand partner. Cite as [1], [2] matching the sources list.",
     "Also name up to 5 TOPIC IDEAS for future clubs from this research: brands clearly spending right now (recent sponsorships, campaigns, launches, funding rounds, NYC event sponsorships) — origin BRANDS_SPENDING — or what people are searching for and curious about — origin TREND. Favour topics where meeting in person is the point.",
-    'Return ONLY JSON: {"story":"","sources":[{"title":"","publisher":"","url":"","published_on":"YYYY-MM-DD or empty","claim":""}],"topic_ideas":[{"topic":"","origin":"BRANDS_SPENDING|TREND","reason":""}]}',
+    'Return ONLY JSON: {"story":"","sources":[{"title":"","publisher":"","url":"","published_on":"YYYY-MM-DD or empty","claim":""}],"topic_ideas":[{"topic":"","origin":"BRANDS_SPENDING|TREND","reason":"","source_url":"","source_title":""}]}',
   ].join("\n");
 }
 
@@ -953,7 +1001,7 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
     .filter((t): t is string => Boolean(t));
   const ideas = await ideasFor(env, card.firm_scope);
   const words = await partnerWords(env, card.firm_scope, now);
-  const found = await search(env, actorFor(PARKER, card.firm_scope), buildTopicsPrompt(need.map((e) => e.month), used, chosen, { ideas, partnerWords: words, playbook: await storedPlaybook(env) }));
+  const found = await search(env, actorFor(PARKER, card.firm_scope), buildTopicsPrompt(need.map((e) => e.month), used, chosen, { ideas, partnerWords: words, playbook: await storedPlaybook(env), library: await researchLibrary(env, card.firm_scope) }));
   if (!found.ok) return searchFailed(env, card, "Parker", found, now);
   const answer = jsonIn(found.text) ?? {};
   // EVERY IDEA A PARTNER WROTE DOWN IS CAPTURED, picked or not, the moment Parker reads it (owner, 22 Oct 2026).
@@ -1040,6 +1088,8 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
       regulatory.length ? `• Regulatory check (card only, never emailed): ${regulatory.join(" | ")}` : "",
       dropped.length ? `• Parker's notes (not emailed): ${dropped.join("; ")}.` : "",
     ].filter(Boolean).join("\n")).run();
+  // REGULATORY CHECKS GO TO THE LIBRARY (and the card), never the email.
+  for (const r of regulatory) await addResearch(env, { kind: "REGULATORY", title: r.slice(r.indexOf(":") + 1).trim(), topic: r.slice(0, r.indexOf(":")), foundAt: now.toISOString(), foundBy: "Parker", cardId: card.id, firmScope: card.firm_scope });
   // THE IDEAS LIST SAYS WHERE EACH ONE STANDS: picked for a month, in the alternatives, or later.
   for (const k of kept) await upsertIdea(env, { topic: k.topic, origin: k.origin, suggestedBy: "Parker", suggestedAt: now.toISOString(), sourceRef: card.id, status: "PICKED", month: k.ev.month, cardId: card.id, firmScope: card.firm_scope });
   for (const a of alternatives.slice(0, TLC_ALTERNATIVES)) await upsertIdea(env, { topic: a.topic, origin: a.origin, suggestedBy: "Parker", suggestedAt: now.toISOString(), note: a.reason, sourceRef: card.id, status: "ALTERNATIVE", cardId: card.id, firmScope: card.firm_scope });
@@ -1089,7 +1139,7 @@ async function runBookingPack(env: Env, card: SweepCard, now: Date, search: TlcS
   const month = /(\w+ \d{4})$/.exec(card.title)?.[1];
   const ev = (await eventsFrom(env, "SELECT * FROM tlc_event WHERE firm_scope = ?1", card.firm_scope)).find((e) => monthWords(e.month) === month);
   if (!ev?.topic) return nothingGood(env, card, "Parker", "The club this pack is for has no agreed topic any more. Drop this card; a new one opens when the topic is set.");
-  const found = await search(env, actorFor(PARKER, card.firm_scope), buildBookingPackPrompt(ev, await storedPlaybook(env)));
+  const found = await search(env, actorFor(PARKER, card.firm_scope), buildBookingPackPrompt(ev, await storedPlaybook(env), await researchLibrary(env, card.firm_scope)));
   if (!found.ok) return searchFailed(env, card, "Parker", found, now);
   const raw = jsonIn(found.text) ?? {};
   const keepLive = async (xs: BookingPack["hosts"]): Promise<BookingPack["hosts"]> => {
@@ -1156,7 +1206,7 @@ async function runBrandBatch(env: Env, card: SweepCard, now: Date, search: TlcSe
     return { finished: true, blocked: false, progressed: false, detail: "no open club" };
   }
   const existing = ((await env.WP_OS_DB.prepare(`SELECT brand, event_id FROM tlc_deal WHERE event_id IN (${events.map(() => "?").join(",")})`).bind(...events.map((e) => e.id)).all<{ brand: string; event_id: string }>()).results ?? []);
-  const found = await search(env, actorFor(WYNN, card.firm_scope), buildBrandBatchPrompt(events, existing.map((d) => d.brand), await storedPlaybook(env)));
+  const found = await search(env, actorFor(WYNN, card.firm_scope), buildBrandBatchPrompt(events, existing.map((d) => d.brand), await storedPlaybook(env), await researchLibrary(env, card.firm_scope)));
   if (!found.ok) return searchFailed(env, card, "Wynn", found, now);
   const brands = (jsonIn(found.text)?.brands as Array<Record<string, unknown>> | undefined) ?? [];
   const added: string[] = [];
@@ -1188,7 +1238,7 @@ async function runBrandBatch(env: Env, card: SweepCard, now: Date, search: TlcSe
 // ── Wynn: the trend story ───────────────────────────────────────────────────────────────────────
 
 async function runTrendStory(env: Env, card: SweepCard, now: Date, search: TlcSearch, check: (u: string) => Promise<boolean>): Promise<TlcRunResult> {
-  const found = await search(env, actorFor(WYNN, card.firm_scope), buildTrendPrompt(await storedPlaybook(env)));
+  const found = await search(env, actorFor(WYNN, card.firm_scope), buildTrendPrompt(await storedPlaybook(env), await researchLibrary(env, card.firm_scope)));
   if (!found.ok) return searchFailed(env, card, "Wynn", found, now);
   const raw = jsonIn(found.text) ?? {};
   const story = str(raw.story);
@@ -1207,21 +1257,21 @@ async function runTrendStory(env: Env, card: SweepCard, now: Date, search: TlcSe
     await env.WP_OS_DB.prepare("INSERT INTO tlc_source (id, story_id, title, publisher, url, published_on, claim, checked_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")
       .bind(`tsrc_${crypto.randomUUID()}`, storyId, s.title, s.publisher, s.url, s.published_on, s.claim, now.toISOString()).run();
   }
-  await emailBoth(env, {
-    employee: "Wynn",
-    email: { what: `TLC trend story, ${quarter}`, tldr: `This quarter's story for the one-pagers, on ${live.length} live sources. Reply with any change.`, sections: [{ label: "The story", bullets: [story] }, { label: "Sources", bullets: live.map((s, i) => `[${i + 1}] ${s.title}${s.publisher ? `, ${s.publisher}` : ""} — ${s.url} — supports: ${s.claim}`) }] },
-    objectType: "tlc_story",
-    objectId: storyId,
-    cardId: card.id,
-    cardKind: card.kind,
-    firmScope: card.firm_scope,
-  });
+  /*
+   * BACKGROUND, NOT A DECISION (owner, 22 Oct 2026: "what is this TLC trend story? does it need to be emailed?").
+   * The story and every fact under it go into the research library on the Rooms page, dated and sourced,
+   * and nobody is emailed. Parker and Wynn read the library whenever they build or sell a club.
+   */
+  await addResearch(env, { kind: "TREND_STORY", title: `Trend story ${quarter}`, body: story, foundAt: now.toISOString(), foundBy: "Wynn", cardId: card.id, firmScope: card.firm_scope });
+  for (const s of live) await addResearch(env, { kind: "TREND_STORY", title: s.claim, sourceTitle: `${s.title}${s.publisher ? `, ${s.publisher}` : ""}`, sourceUrl: s.url, publishedOn: s.published_on, foundAt: now.toISOString(), foundBy: "Wynn", cardId: card.id, firmScope: card.firm_scope });
   // Wynn's research feeds the ideas list, each labelled with where it came from.
   const ideaNames: string[] = [];
   for (const i of ((raw.topic_ideas as Array<Record<string, unknown>>) ?? []).slice(0, 5)) {
     const topic = str(i.topic);
     if (!topic || !isIdeaOrigin(i.origin) || i.origin === "OWNER_IDEA") continue;
     await upsertIdea(env, { topic, origin: i.origin, suggestedBy: "Wynn", suggestedAt: now.toISOString(), note: str(i.reason) || null, sourceRef: card.id, firmScope: card.firm_scope });
+    const url = str(i.source_url);
+    await addResearch(env, { kind: i.origin === "BRANDS_SPENDING" ? "BRAND_SPEND" : "TREND", title: str(i.reason) || topic, topic, sourceTitle: str(i.source_title) || null, sourceUrl: isUrl(url) && (await check(url)) ? url : null, foundAt: now.toISOString(), foundBy: "Wynn", cardId: card.id, firmScope: card.firm_scope });
     ideaNames.push(`${topic} (${TLC_IDEA_ORIGIN_LABEL[i.origin]})`);
   }
   await finish(env, card.id, `• Trend story ${quarter} stored with ${live.length} live sources.${ideaNames.length ? ` Ideas added to the list: ${ideaNames.join("; ")}.` : ""}`);
@@ -1318,6 +1368,7 @@ export async function handleTlcOverview(ctx: RouteContext): Promise<Response> {
     held_emails: held,
     ideas: (await ideasFor(ctx.env)).map((i) => ({ ...i, origin_label: TLC_IDEA_ORIGIN_LABEL[i.origin] })),
     playbook_document_id: settings[PLAYBOOK_DOCUMENT_SETTING] ?? null,
+    research: (await researchLibrary(ctx.env)).map((r) => ({ ...r, kind_label: TLC_RESEARCH_LABEL[r.kind] })),
   });
 }
 
