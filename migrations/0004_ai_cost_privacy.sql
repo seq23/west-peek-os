@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS ai_employee (
 
 -- BEGIN GENERATED SEEDS (scripts/seed/generate-ai-employee-seed.mjs) — do not hand-edit
 -- Registry provenance: AI employee roster v4.1 (Revised v3.0 roster + Whitney, ADR-002).
--- All 18 rows seed INACTIVE; activation is human-reserved (ai_employee.activate), never seed-time.
+-- All 19 rows seed INACTIVE; activation is human-reserved (ai_employee.activate), never seed-time.
 INSERT OR IGNORE INTO ai_employee (id, name, role, layer, primary_machines_json, status, purpose) VALUES
   ('aie_walker', 'Walker', 'Scooter''s Chief of Staff', 'MP Support', '["command_center","mp_personal_office"]', 'INACTIVE', 'Scooter''s Chief of Staff'),
   ('aie_wren', 'Wren', 'Sequoia''s Chief of Staff', 'MP Support', '["command_center","mp_personal_office"]', 'INACTIVE', 'Sequoia''s Chief of Staff'),
@@ -60,6 +60,7 @@ INSERT OR IGNORE INTO ai_employee (id, name, role, layer, primary_machines_json,
   ('aie_wesley', 'Wesley', 'LP Relations', 'LP & fundraising', '["lp_fundraising","lp_diligence_request","lp_proof_engine"]', 'INACTIVE', 'LP Relations'),
   ('aie_winter', 'Winter', 'Portfolio Support', 'Portfolio & operations', '["portfolio_support","portfolio_performance_followon"]', 'INACTIVE', 'Portfolio Support'),
   ('aie_parker', 'Parker', 'Event Marketing Coordinator', 'Portfolio & operations', '["west_peek_live_events","brand_sponsorship_revenue"]', 'INACTIVE', 'Event Marketing Coordinator'),
+  ('aie_wynn', 'Wynn', 'TLC Sales & Partnerships', 'Portfolio & operations', '["brand_sponsorship_revenue"]', 'INACTIVE', 'TLC Sales & Partnerships'),
   ('aie_pippa', 'Pippa', 'Communications', 'Portfolio & operations', '["marketing_pr_content"]', 'INACTIVE', 'Communications'),
   ('aie_pax', 'Pax', 'Operations Manager', 'Portfolio & operations', '["continuity_maintenance","ai_employee_performance_lifecycle","governance_center_broadcast","approval_center"]', 'INACTIVE', 'Operations Manager'),
   ('aie_preston', 'Preston', 'Finance & Fund Admin', 'Portfolio & operations', '["finance_fund_admin","fund_construction_allocation","external_helper_coordination"]', 'INACTIVE', 'Finance & Fund Admin'),

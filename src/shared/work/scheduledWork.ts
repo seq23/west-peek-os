@@ -100,6 +100,33 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
   // two are personal-office work for Scooter and the result reaches him alone, by email. The
   // facts say so, because a partner reading this page must be able to tell fund work from a
   // colleague's private business at a glance.
+  // THE LEARNING CLUB (0259, owner-approved 22 Oct 2026). West Peek Rooms' monthly NYC edition.
+  tlc_topics: {
+    what:
+      "On the 1st, Parker picks The Learning Club's topics for the next three months (from the owner's seed list or better), " +
+      "writes each packet with 5–10 sponsor categories, and emails both partners. His picks go ahead after 3 days unless either partner says no.",
+    why: "So the clubs always have topics three months out without anyone having to decide on time.",
+    deliveredBy: ["Parker"],
+  },
+  tlc_brand_batch: {
+    what:
+      "Every Monday, Wynn finds new brands for the open clubs — a named person and an address read off a live page — and queues each for four emails. " +
+      "Nothing goes to a brand until the owner has approved the one-pager and the playbook and sending is switched on; each email is then approved on Approvals.",
+    why: "So the pipeline grows every week and nothing reaches a brand without the owner's say-so.",
+    deliveredBy: ["Wynn"],
+  },
+  tlc_trend_story: {
+    what: "Once a quarter, Wynn writes the story of in-person learning clubs from real, live, stored sources — the opening of every one-pager.",
+    why: "So the sales story is current and every claim in it can be shown.",
+    deliveredBy: ["Wynn"],
+  },
+  tlc_daily: {
+    what:
+      "Every day: the booking pack six weeks out (options only; the partners book and pay), a swap flag for a topic no brand wants, " +
+      "the go-ahead check at 21 and 14 days (sponsor net ≥ $7,500 and 25 paid tickets, else both partners get the three ways out), and the brand emails due.",
+    why: "So money and dates are checked on a clock rather than remembered.",
+    deliveredBy: ["Parker", "Wynn"],
+  },
   productions_monthly: {
     what:
       "For West Peek Productions — Scooter's own agency, not the fund. Once a month Walker sends " +

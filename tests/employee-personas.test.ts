@@ -107,7 +107,10 @@ describe("bios and outward-facing capability", () => {
     //
     // The number is asserted because every move is a decision, and a roster silently growing back
     // towards thirty-one is exactly the failure this guards.
-    expect(AI_EMPLOYEE_ROSTER).toHaveLength(18);
+    // NINETEEN since 22 Oct 2026: Wynn re-pointed from Sponsorship Scout to TLC Sales &
+    // Partnerships (migration 0259) — a retired seat brought back, not a seat invented.
+    expect(AI_EMPLOYEE_ROSTER).toHaveLength(19);
+    expect(AI_EMPLOYEE_ROSTER.find((e) => e.name === "Wynn")?.role).toBe("TLC Sales & Partnerships");
     // The merged seat is gone from the REGISTRY and only from there. Her database row is RETIRED
     // by migration 0126 rather than deleted, because ai_run attribution and meeting seating point
     // at it — see tests/workforce.test.ts, which asserts both halves.

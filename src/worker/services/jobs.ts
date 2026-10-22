@@ -647,6 +647,34 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
     };
   }
 
+  /*
+   * THE LEARNING CLUB (0259, owner-approved 22 Oct 2026). Three openers and one daily pass; the
+   * employee sweep works each card (services/learningClub.ts). A month with nothing to open is a
+   * SUCCEEDED run that says why — the named stop, never an inert green.
+   */
+  if (job.job_key === "tlc_topics" || job.job_key === "tlc_brand_batch" || job.job_key === "tlc_trend_story") {
+    const tlc = await import("./learningClub");
+    const open = job.job_key === "tlc_topics" ? tlc.openTopicsCard : job.job_key === "tlc_brand_batch" ? tlc.openBrandBatchCard : tlc.openTrendStoryCard;
+    const out = await open(env, now, job.firm_scope);
+    if (out.cardId) artifacts.push({ kind: "WORK_CARD", ref_type: "work_card", ref_id: out.cardId });
+    return { status: "SUCCEEDED", summary: `The Learning Club: ${out.detail}.`, artifacts };
+  }
+  if (job.job_key === "tlc_daily") {
+    const { runTlcDaily } = await import("./learningClub");
+    const out = await runTlcDaily(env, now, job.firm_scope);
+    const d = out.drip;
+    return {
+      status: out.failures.length ? "FAILED" : "SUCCEEDED",
+      summary:
+        `The Learning Club: ${out.bookingPacksOpened.length} booking pack card(s) opened, ${out.swapFlagged.length} topic(s) flagged for swap, ` +
+        `${out.goChecks.length} go-ahead check(s) (${out.goChecks.map((g) => `${g.month} ${g.checkpoint}d ${g.verdict}`).join(", ") || "none due"}); ` +
+        `drip: ${d.due} due, ${d.sent} sent, ${d.awaitingApproval} awaiting approval, ${d.held} HELD` +
+        `${d.gate.open ? "" : ` (sending is off: ${d.gate.reasons.join("; ")})`}` +
+        `${out.failures.length ? `. FAILED: ${out.failures.join("; ")}` : "."}`,
+      artifacts,
+    };
+  }
+
   if (job.kind === "INTELLIGENCE") {
     /*
      * THIS JOB READS SOURCES AND NOTHING ELSE (19 Sep 2026). The morning brief used to ride inside

@@ -1,3 +1,4 @@
+import { isTlcKind } from "../../shared/tlc/learningClub";
 import { PARTNERS, partnerByEmail } from "../../shared/registry/partners";
 import { resolveStaleClarifications } from "./emailRouting";
 import { refreshAllWorkingOn } from "./partnerProfile";
@@ -220,6 +221,9 @@ export async function announceOutcome(
   // as its own notice (services/roomPacket.ts emailPacket), so a second "finished the card" notice
   // would ring twice for one thing. A BLOCKED packet card still tells both partners below.
   if (card.kind === "ROOM_PACKET" && outcome === "DONE") return { emailed: null };
+  // THE LEARNING CLUB EMAILS ITSELF: every finished TLC card already emailed both partners, and a
+  // sponsor decision's block IS the email both partners answer. A second notice would ring twice.
+  if (isTlcKind(card.kind) && (outcome === "DONE" || card.kind === "TLC_SPONSOR_DECISION")) return { emailed: null };
   // BLOG HELP EMAILS ITSELF: the runner files the deliverable, emails the partner who asked in the
   // busy-executive format, and posts its own notice to them (services/blogHelp.ts). A second
   // "finished the card" email would be the same thing twice. A BLOCKED one still tells both below.
@@ -534,6 +538,7 @@ export async function sweepOnce(
     deckRework?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     productions?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     productionsHire?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
+    tlc?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; held?: boolean; waitUntil?: string; detail: string }>;
     roomPacket?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; detail: string }>;
     blogHelp?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     artifact?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
@@ -569,7 +574,7 @@ export async function sweepOnce(
 
   // THE DECK COMES FIRST. If the company's deck is queued and not yet read, this attempt does not
   // count and the card is parked until the reader has had a turn; another card gets this tick.
-  const unread = card.kind === "DECK_REWORK" || isProductionsKind(card.kind) || card.kind === "ROOM_PACKET" || card.kind === "BLOG_HELP" || card.kind === "ARTIFACT" || card.kind === "PARTNER_MESSAGE" || card.kind === WEB_PROPERTY_CHANGE_KIND ? null : await deckStillBeingRead(env, card.title, card.id);
+  const unread = isTlcKind(card.kind) || card.kind === "DECK_REWORK" || isProductionsKind(card.kind) || card.kind === "ROOM_PACKET" || card.kind === "BLOG_HELP" || card.kind === "ARTIFACT" || card.kind === "PARTNER_MESSAGE" || card.kind === WEB_PROPERTY_CHANGE_KIND ? null : await deckStillBeingRead(env, card.title, card.id);
   if (unread) {
     const until = new Date(now.getTime() + DECK_WAIT_MINUTES * 60_000).toISOString();
     await env.WP_OS_DB.prepare(
@@ -654,6 +659,17 @@ export async function sweepOnce(
       const out = await run(env, card);
       finished = out.finished;
       blocked = out.blocked;
+      detail = out.detail;
+    } else if (isTlcKind(card.kind)) {
+      // The Learning Club (0259): Parker's topics and booking packs, Wynn's stories, brands and
+      // decisions. A topics card waiting out its 3-day veto window is HELD, leased until it closes.
+      const run = runners.tlc ?? (await import("./learningClub")).runTlcCard;
+      const out = await run(env, card);
+      finished = out.finished;
+      blocked = out.blocked;
+      progressed = out.progressed;
+      held = out.held === true;
+      waitUntil = out.waitUntil ?? null;
       detail = out.detail;
     } else if (card.kind === "PRODUCTIONS_HIRE_SEARCH") {
       // Walker's weekly hire search for West Peek Productions: search, every page checked, judged,

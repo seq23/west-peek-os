@@ -281,6 +281,18 @@ export async function handleInboundEmail(
       return;
     }
   }
+  /*
+   * THE LEARNING CLUB (0259): a reply, bounce or "unsubscribe" from a brand we wrote to stops that
+   * brand's sequence before anything else reads the message, and lands on the sales card. Headers
+   * only — the message still goes through the ordinary door below and is kept like any other.
+   */
+  const sender = message.headers.get("from") ?? message.from;
+  if (!ASSIGNING_PARTNERS.includes((addressIn(sender) ?? "").toLowerCase())) {
+    const { recordBrandMail } = await import("../services/learningClub");
+    await recordBrandMail(env, { from: sender, subject: decodeMimeHeader(message.headers.get("subject") ?? "") }).catch((err) => {
+      console.warn("tlc brand mail not recorded", err instanceof Error ? err.message : String(err));
+    });
+  }
   try {
     await handleInboundEmailOnce(message, env, options);
   } catch (err) {

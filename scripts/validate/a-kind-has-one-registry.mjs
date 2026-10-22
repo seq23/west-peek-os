@@ -81,6 +81,7 @@ export const WRITE_SITES = [
   { file: "src/worker/services/workCards.ts", symbol: "kind", why: "the one INSERT that creates a card; the default kind is decided from her words" },
   { file: "src/worker/services/productions.ts", symbol: "ProductionsKind", why: "the three monthly Productions duties stamp their card" },
   { file: "src/worker/services/productionsHire.ts", symbol: "HIRE_CARD_KIND", why: "Walker's weekly hire search stamps its card" },
+  { file: "src/worker/services/learningClub.ts", symbol: "TLC_CARD_KINDS", why: "The Learning Club's openers stamp their card: Parker's topics and booking packs, Wynn's stories, brands and decisions" },
   { file: "src/worker/services/webPropertyChange.ts", symbol: "WEB_PROPERTY_CHANGE_KIND", why: "Porter's web property change stamps its card" },
   { file: "src/worker/services/roomPacket.ts", why: "SQL literal — the Room packet stamps its own card" },
   { file: "src/worker/services/deck.ts", why: "SQL literal — a sent-back deck version opens Preston's rework" },

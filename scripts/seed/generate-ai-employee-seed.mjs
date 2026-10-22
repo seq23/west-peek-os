@@ -121,7 +121,7 @@ const { MANAGING_PARTNER_NAMES } = mps;
  * block — which a bare "whatever length the array is" would wave through. Changing this number is a
  * deliberate act and should arrive with the roster change that justifies it.
  */
-const EXPECTED_ROSTER_SIZE = 18;
+const EXPECTED_ROSTER_SIZE = 19;
 
 if (AI_EMPLOYEE_ROSTER.length !== EXPECTED_ROSTER_SIZE) {
   console.error(

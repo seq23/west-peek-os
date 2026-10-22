@@ -161,6 +161,7 @@ import {
   handleListPackets as handleListRoomPackets,
   handleScheduleRoom, handleVerifyVenue, handleWithdrawSteer,
 } from "./services/roomPacket";
+import { handleTlcApprove, handleTlcDeal, handleTlcOnePager, handleTlcOverview, handleTlcTicket } from "./services/learningClub";
 import {
   handleAdvanceSponsor, handleCreateSponsor, handleListSponsors, handleSponsorAttendeeExport,
   handleSponsorRecap,
@@ -1061,6 +1062,11 @@ const router = new Router()
   .post("/api/rooms/venues/:id/verify", handleVerifyVenue)
   // A steer she gave for a month Parker has not built yet, taken back before he does.
   .post("/api/rooms/steers/:id/withdraw", handleWithdrawSteer)
+  .get("/api/tlc", handleTlcOverview)
+  .post("/api/tlc/approve", handleTlcApprove)
+  .post("/api/tlc/deals/:id", handleTlcDeal)
+  .post("/api/tlc/events/:id/tickets", handleTlcTicket)
+  .get("/api/tlc/events/:id/onepager", handleTlcOnePager)
   .get("/api/sponsors", handleListSponsors)
   .post("/api/sponsors", handleCreateSponsor)
   .post("/api/sponsors/:id/stage", handleAdvanceSponsor)
