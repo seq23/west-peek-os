@@ -770,9 +770,12 @@ export function buildTopicsPrompt(
   months: readonly string[],
   exclude: readonly string[],
   chosen: Readonly<Record<string, string>> = {},
-  opts: { ideas?: ReadonlyArray<Pick<TlcIdeaRow, "topic" | "origin" | "suggested_by" | "suggested_at" | "note" | "preferred_month" | "status">>; partnerWords?: ReadonlyArray<{ who: string; at: string; text: string }>; playbook?: string | null; library?: Parameters<typeof libraryBlock>[0] } = {},
+  opts: { ideas?: ReadonlyArray<Pick<TlcIdeaRow, "topic" | "origin" | "suggested_by" | "suggested_at" | "note" | "preferred_month" | "status">>; partnerWords?: ReadonlyArray<{ who: string; at: string; text: string }>; playbook?: string | null; library?: Parameters<typeof libraryBlock>[0]; part?: "all" | "picks" | "alternatives"; picked?: readonly string[] } = {},
 ): string {
   const kept = months.filter((m) => chosen[m]);
+  const part = opts.part ?? "all";
+  const picksPart = part !== "alternatives";
+  const altsPart = part !== "picks";
   const ideas = (opts.ideas ?? []).filter((i) => i.status !== "DROPPED");
   return [
     personaPrompt("Parker", "Event Marketing Coordinator"),
@@ -783,7 +786,7 @@ export function buildTopicsPrompt(
     "",
     "THE IDEAS LIST — read this FIRST. Weigh every idea on its merits next to what you find; you decide.",
     ...(ideas.length ? ideas.map((i) => `- ${i.topic} [${TLC_IDEA_ORIGIN_LABEL[i.origin]}; ${i.suggested_by}, ${i.suggested_at.slice(0, 10)}]${i.preferred_month ? ` (preferred: ${monthWords(i.preferred_month)})` : ""}${i.note ? ` — ${i.note}` : ""}`) : ["- (no ideas on the list yet)"]),
-    ...(opts.partnerWords?.length ? ["", "WHAT THE PARTNERS WROTE (name every topic idea in it under found_ideas, with a short quote copied exactly):", ...opts.partnerWords.map((w) => `--- ${w.who}, ${w.at.slice(0, 10)}:\n${w.text}`)] : []),
+    ...(altsPart && opts.partnerWords?.length ? ["", "WHAT THE PARTNERS WROTE (name every topic idea in it under found_ideas, with a short quote copied exactly):", ...opts.partnerWords.map((w) => `--- ${w.who}, ${w.at.slice(0, 10)}:\n${w.text}`)] : []),
     "",
     "WHERE IDEAS COME FROM — draw on all three, and label each pick and alternative with its origin:",
     "- OWNER_IDEA: an idea on the list above that a partner sent.",
@@ -793,8 +796,9 @@ export function buildTopicsPrompt(
     "",
     `You are choosing topics for The Learning Club: in-person, ${TLC_CITY} only, ${TLC_SEATS.min}–${TLC_SEATS.max} people, one topic, a 3–4 hour deep dive on one afternoon (Sat 1–5 pm) or one evening (Thu 6–10 pm). Every attendee pays a $${TLC_TICKET_PRICE_USD} ticket. Everyone leaves with something they made or learned.`,
     `Run of show: ${runOfShowLines().join("; ")}.`,
-    `Pick ONE topic for each of these months: ${months.map(monthWords).join(", ")}. No two months the same topic. Every month must have a pick.`,
-    kept.length ? `These months' topics are ALREADY CHOSEN — keep exactly that topic and write its packet: ${kept.map((m) => `${monthWords(m)} = "${chosen[m]}"`).join("; ")}.` : "",
+    picksPart ? `Pick ONE topic for each of these months: ${months.map(monthWords).join(", ")}. No two months the same topic. Every month must have a pick.` : "",
+    !picksPart && opts.picked?.length ? `The picks are already made: ${opts.picked.join("; ")}. Do not repeat them.` : "",
+    picksPart && kept.length ? `These months' topics are ALREADY CHOSEN — keep exactly that topic and write its packet: ${kept.map((m) => `${monthWords(m)} = "${chosen[m]}"`).join("; ")}.` : "",
     "",
     "Seed list (you may pick from it or propose a better topic):",
     ...TLC_TOPIC_SEEDS.map((s) => `- ${s}`),
@@ -804,12 +808,15 @@ export function buildTopicsPrompt(
     ...TLC_TOPIC_CRITERIA.map((c) => `- ${c}`),
     "",
     "For a topic with a legal or health angle (for example peptides and biohacking, supplements, money), add a short regulatory_note: which sponsor types can legally sponsor it in New York and what they may not claim. It stays on the card; it never goes in the email.",
-    "For each pick give the usual Rooms packet: the angle, why now (with sources), what happens in the hands-on hour, what people take home, the kind of expert who teaches it, and 5–10 sponsor categories that fit (non-competing within the club, each with why and two or three example brands).",
-    `Then give exactly ${TLC_ALTERNATIVES} ALTERNATIVE topics (partner ideas, brands spending now and trends alike; each with its origin) the partners could swap in: each different from the picks and from each other, with a one-line reason it would work and two or three real brands that would pay to sponsor it.`,
+    picksPart ? "For each pick give the usual Rooms packet: the angle, why now (with sources), what happens in the hands-on hour, what people take home, the kind of expert who teaches it, and 5–10 sponsor categories that fit (non-competing within the club, each with why and two or three example brands)." : "",
+    altsPart ? `Give exactly ${TLC_ALTERNATIVES} ALTERNATIVE topics (partner ideas, brands spending now and trends alike; each with its origin) the partners could swap in: each different from the picks and from each other, with a one-line reason it would work and two or three real brands that would pay to sponsor it.` : "",
     "This goes to the partners as it is: write only what each topic IS. Never mention a topic you turned down, rejected or ruled out, or why.",
     "Use ONLY real, live web pages as sources. Do not invent statistics, quotes or events.",
     "",
-    'Return ONLY JSON: {"picks":[{"month":"YYYY-MM","topic":"","angle":"","why_now":"","criteria":{"product_used":"","irl_spend":"","sponsors_fit":"","pays_10":""},"hands_on":"","take_home":"","teacher_profile":"","origin":"OWNER_IDEA|BRANDS_SPENDING|TREND","regulatory_note":"","sponsor_categories":[{"category":"","why":"","example_brands":[""]}],"sources":[{"title":"","url":""}]}],"alternatives":[{"topic":"","origin":"OWNER_IDEA|BRANDS_SPENDING|TREND","reason":"","brands":[""],"regulatory_note":""}],"found_ideas":[{"topic":"","quote":""}]}',
+    `Return ONLY JSON: {${[
+      picksPart ? '"picks":[{"month":"YYYY-MM","topic":"","angle":"","why_now":"","criteria":{"product_used":"","irl_spend":"","sponsors_fit":"","pays_10":""},"hands_on":"","take_home":"","teacher_profile":"","origin":"OWNER_IDEA|BRANDS_SPENDING|TREND","regulatory_note":"","sponsor_categories":[{"category":"","why":"","example_brands":[""]}],"sources":[{"title":"","url":""}]}]' : "",
+      altsPart ? '"alternatives":[{"topic":"","origin":"OWNER_IDEA|BRANDS_SPENDING|TREND","reason":"","brands":[""],"regulatory_note":""}],"found_ideas":[{"topic":"","quote":""}]' : "",
+    ].filter(Boolean).join(",")}}`,
   ].filter(Boolean).join("\n");
 }
 
@@ -986,7 +993,9 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
     }
   }
 
-  // STAGE 1 — pick.
+  // STAGE 1 — pick, ONE SEARCH AT A TIME (22 Oct 2026). One search for all three packets and nine alternatives
+  // ran past the seat's four-minute limit, so each month's pick, then the alternatives, is its own search; what
+  // came back is kept on a draft between ticks, and the email is assembled only when every piece is in.
   const need = await monthsNeedingTopics(env, card.firm_scope);
   if (need.length === 0) {
     await finish(env, card.id, "• Every club in the next three months already has a topic.");
@@ -1000,41 +1009,71 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
     .flatMap((r) => [needIds.has(r.id) && chosen[need.find((e) => e.id === r.id)!.month] ? null : r.topic, ...list<string>(r.vetoed_topics_json)])
     .filter((t): t is string => Boolean(t));
   const ideas = await ideasFor(env, card.firm_scope);
-  const words = await partnerWords(env, card.firm_scope, now);
-  const found = await search(env, actorFor(PARKER, card.firm_scope), buildTopicsPrompt(need.map((e) => e.month), used, chosen, { ideas, partnerWords: words, playbook: await storedPlaybook(env), library: await researchLibrary(env, card.firm_scope) }));
-  if (!found.ok) return searchFailed(env, card, "Parker", found, now);
-  const answer = jsonIn(found.text) ?? {};
-  // EVERY IDEA A PARTNER WROTE DOWN IS CAPTURED, picked or not, the moment Parker reads it (owner, 22 Oct 2026).
-  for (const f of ideasFoundIn(answer.found_ideas, words)) {
-    await upsertIdea(env, { topic: f.topic, origin: "OWNER_IDEA", suggestedBy: f.who, suggestedAt: f.at, note: `"${f.quote.slice(0, 200)}"`, sourceRef: f.ref, firmScope: card.firm_scope });
-  }
-  const partnerKeys = new Set((await ideasFor(env, card.firm_scope)).filter((i) => i.origin === "OWNER_IDEA").map((i) => i.topic_key));
+  const playbook = await storedPlaybook(env);
+  const library = await researchLibrary(env, card.firm_scope);
+  const partnerKeys = new Set(ideas.filter((i) => i.origin === "OWNER_IDEA").map((i) => i.topic_key));
   /** A topic a partner sent is labelled theirs, whatever the model called it. */
   const originOf = (topic: string, said: unknown): TlcIdeaOrigin | null => (partnerKeys.has(topicKey(topic)) ? "OWNER_IDEA" : isIdeaOrigin(said) && said !== "OWNER_IDEA" ? said : null);
-  const picks = (answer.picks as Array<Record<string, unknown>> | undefined) ?? [];
-  const kept: Array<{ ev: TlcEventRow; topic: string; origin: TlcIdeaOrigin; pick: Record<string, unknown>; sources: Array<{ title: string; url: string }>; categories: Array<{ category: string; why: string; example_brands: string[] }> }> = [];
+  type Kept = { month: string; topic: string; origin: TlcIdeaOrigin; pick: Record<string, unknown>; sources: Array<{ title: string; url: string }>; categories: Array<{ category: string; why: string; example_brands: string[] }> };
+  const draftKey = `topics_draft:${card.id}`;
+  const stored = await env.WP_OS_DB.prepare("SELECT value FROM tlc_setting WHERE key = ?1").bind(draftKey).first<{ value: string }>();
+  const draft: { picks: Record<string, Kept>; alternatives?: Array<Record<string, unknown>> } = { picks: {}, ...(stored ? (JSON.parse(stored.value) as object) : {}) };
+  const saveDraft = () => env.WP_OS_DB.prepare("INSERT INTO tlc_setting (key, value, set_by) VALUES (?1, ?2, 'parker') ON CONFLICT(key) DO UPDATE SET value = excluded.value, set_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')").bind(draftKey, JSON.stringify(draft)).run();
+  const draftedTopics = () => Object.values(draft.picks).filter((k) => needIds.has(need.find((e) => e.month === k.month)?.id ?? "")).map((k) => k.topic);
+  const started = Date.now();
+  const failNote = async (why: string): Promise<TlcRunResult> => {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || ?2, 1, 16000) WHERE id = ?1")
+      .bind(card.id, `• ${now.toISOString().slice(0, 16)}Z nothing sent yet: ${why}. Parker tries again.`).run();
+    return { finished: false, blocked: false, progressed: false, detail: `nothing sent: ${why}` };
+  };
   const dropped: string[] = [];
-  const taken = new Set(used.map((u) => u.toLowerCase()));
-  for (const ev of need) {
-    const pick = picks.find((p) => str(p.month) === ev.month);
-    const topic = chosen[ev.month] ?? str(pick?.topic);
-    if (!pick || !topic || taken.has(topic.toLowerCase())) { dropped.push(`${ev.month}: no usable pick`); continue; }
-    const origin = originOf(topic, pick.origin);
-    if (!origin) { dropped.push(`${ev.month} (${topic}): no origin label`); continue; }
-    const sources = ((pick.sources as Array<{ title?: string; url?: string }>) ?? []).map((s) => ({ title: str(s.title), url: str(s.url) })).filter((s) => isUrl(s.url));
-    const live: typeof sources = [];
-    for (const s of sources) if (await check(s.url)) live.push(s);
-    const categories = ((pick.sponsor_categories as Array<{ category?: string; why?: string; example_brands?: string[] }>) ?? [])
-      .map((c) => ({ category: str(c.category), why: str(c.why), example_brands: (c.example_brands ?? []).map(str).filter(Boolean) }))
-      .filter((c) => c.category);
-    if (live.length === 0) { dropped.push(`${ev.month} (${topic}): no source page answered`); continue; }
-    if (categories.length < TLC_SPONSOR_CATEGORIES.min) { dropped.push(`${ev.month} (${topic}): ${categories.length} sponsor categories, ${TLC_SPONSOR_CATEGORIES.min} needed`); continue; }
-    taken.add(topic.toLowerCase());
-    kept.push({ ev, topic, origin, pick, sources: live, categories: categories.slice(0, TLC_SPONSOR_CATEGORIES.max) });
+  // Keep going while the searches come back quickly; a slow one hands the rest to the next tick.
+  for (;;) {
+    const pending = need.find((e) => !draft.picks[e.month]);
+    if (pending) {
+      const taken = new Set([...used, ...draftedTopics()].map((u) => u.toLowerCase()));
+      const found = await search(env, actorFor(PARKER, card.firm_scope), buildTopicsPrompt([pending.month], [...used, ...draftedTopics()], chosen, { ideas, playbook, library, part: "picks" }));
+      if (!found.ok) return searchFailed(env, card, "Parker", found, now);
+      const pick = (((jsonIn(found.text) ?? {}).picks as Array<Record<string, unknown>> | undefined) ?? []).find((p) => str(p.month) === pending.month);
+      const topic = chosen[pending.month] ?? str(pick?.topic);
+      if (!pick || !topic || taken.has(topic.toLowerCase())) return failNote(`${monthWords(pending.month)} had no usable pick`);
+      const origin = originOf(topic, pick.origin);
+      if (!origin) return failNote(`${monthWords(pending.month)} (${topic}) had no origin label`);
+      const sources = ((pick.sources as Array<{ title?: string; url?: string }>) ?? []).map((x) => ({ title: str(x.title), url: str(x.url) })).filter((x) => isUrl(x.url));
+      const live: typeof sources = [];
+      for (const x of sources) if (await check(x.url)) live.push(x);
+      const categories = ((pick.sponsor_categories as Array<{ category?: string; why?: string; example_brands?: string[] }>) ?? [])
+        .map((c) => ({ category: str(c.category), why: str(c.why), example_brands: (c.example_brands ?? []).map(str).filter(Boolean) }))
+        .filter((c) => c.category);
+      if (live.length === 0) return failNote(`${monthWords(pending.month)} (${topic}): no source page answered`);
+      if (categories.length < TLC_SPONSOR_CATEGORIES.min) return failNote(`${monthWords(pending.month)} (${topic}): ${categories.length} sponsor categories, ${TLC_SPONSOR_CATEGORIES.min} needed`);
+      draft.picks[pending.month] = { month: pending.month, topic, origin, pick, sources: live, categories: categories.slice(0, TLC_SPONSOR_CATEGORIES.max) };
+      await saveDraft();
+    } else if (!draft.alternatives) {
+      const words = await partnerWords(env, card.firm_scope, now);
+      const found = await search(env, actorFor(PARKER, card.firm_scope), buildTopicsPrompt(need.map((e) => e.month), used, chosen, { ideas, partnerWords: words, playbook, library, part: "alternatives", picked: draftedTopics() }));
+      if (!found.ok) return searchFailed(env, card, "Parker", found, now);
+      const answer = jsonIn(found.text) ?? {};
+      // EVERY IDEA A PARTNER WROTE DOWN IS CAPTURED, picked or not, the moment Parker reads it (owner, 22 Oct 2026).
+      for (const f of ideasFoundIn(answer.found_ideas, words)) {
+        await upsertIdea(env, { topic: f.topic, origin: "OWNER_IDEA", suggestedBy: f.who, suggestedAt: f.at, note: `"${f.quote.slice(0, 200)}"`, sourceRef: f.ref, firmScope: card.firm_scope });
+        partnerKeys.add(topicKey(f.topic));
+      }
+      const alts = (answer.alternatives as Array<Record<string, unknown>> | undefined) ?? [];
+      const usable = alts.filter((a) => str(a.topic) && str(a.reason) && Array.isArray(a.brands) && a.brands.length > 0 && originOf(str(a.topic), a.origin) && !new Set([...used, ...draftedTopics()].map((u) => u.toLowerCase())).has(str(a.topic).toLowerCase()));
+      if (new Set(usable.map((a) => str(a.topic).toLowerCase())).size < TLC_ALTERNATIVES) return failNote(`${usable.length} of ${TLC_ALTERNATIVES} alternatives were usable`);
+      draft.alternatives = usable;
+      await saveDraft();
+    } else break;
+    if (Date.now() - started > 45_000) {
+      return { finished: false, blocked: false, progressed: true, detail: `drafting: ${Object.keys(draft.picks).length} of ${need.length} picks${draft.alternatives ? " and the alternatives" : ""} in; the next tick continues` };
+    }
   }
+  const kept = need.map((ev) => ({ ...draft.picks[ev.month]!, ev, origin: originOf(draft.picks[ev.month]!.topic, draft.picks[ev.month]!.origin) ?? draft.picks[ev.month]!.origin }));
+  const taken = new Set(kept.map((k) => k.topic.toLowerCase()));
   const alternatives: TopicsEmailAlternative[] = [];
   const regulatory: string[] = kept.filter((k) => str(k.pick.regulatory_note)).map((k) => `${k.topic}: ${str(k.pick.regulatory_note)}`);
-  for (const a of (answer.alternatives as Array<Record<string, unknown>> | undefined) ?? []) {
+  for (const a of draft.alternatives ?? []) {
     const topic = str(a.topic);
     const reason = str(a.reason);
     const brands = (Array.isArray(a.brands) ? a.brands : []).map(str).filter(Boolean).slice(0, 3);
@@ -1045,14 +1084,11 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
   }
   /*
    * EVERY MONTH, OR NO EMAIL (owner, 22 Oct 2026: "only gave 2 picks Jan and Feb — what happened to 3 picks").
-   * A partial set is never written or sent: the attempt fails, the card's record says which month fell out,
-   * and the next attempt picks again. The same for fewer than nine alternatives.
+   * A partial set is never written or sent; the draft is cleared so the next attempt starts clean.
    */
   if (kept.length < need.length || alternatives.length < TLC_ALTERNATIVES) {
-    const short = [kept.length < need.length ? `${kept.length} of ${need.length} months had a usable pick (${dropped.join("; ")})` : "", alternatives.length < TLC_ALTERNATIVES ? `${alternatives.length} of ${TLC_ALTERNATIVES} alternatives were usable` : ""].filter(Boolean).join("; ");
-    await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || ?2, 1, 16000) WHERE id = ?1")
-      .bind(card.id, `• ${now.toISOString().slice(0, 16)}Z nothing sent: ${short}. Parker picks again.`).run();
-    return { finished: false, blocked: false, progressed: false, detail: `nothing sent: ${short}` };
+    await env.WP_OS_DB.prepare("DELETE FROM tlc_setting WHERE key = ?1").bind(draftKey).run();
+    return failNote(`${kept.length} of ${need.length} picks and ${alternatives.length} of ${TLC_ALTERNATIVES} alternatives were usable`);
   }
 
   const until = vetoUntil(now);
@@ -1080,6 +1116,7 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
     goAheadOn: until.slice(0, 10),
   });
   await emailBoth(env, { employee: "Parker", email, objectType: "work_card", objectId: card.id, cardId: card.id, cardKind: card.kind, firmScope: card.firm_scope, attachments });
+  await env.WP_OS_DB.prepare("DELETE FROM tlc_setting WHERE key = ?1").bind(draftKey).run();
   // The record keeps everything, including the alternatives; the partners' email carries only the picks and the list.
   await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || ?2, 1, 16000) WHERE id = ?1")
     .bind(card.id, [
