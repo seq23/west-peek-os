@@ -3,8 +3,8 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import { handleInboundEmail } from "../src/worker/effects/inboundEmail";
 import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
 import { INTAKE_MAILBOX } from "../src/shared/intake/emailTriggers";
-import { appendFinding, assignCard, workCard } from "../src/worker/services/employeeWork";
-import { sweepOnce } from "../src/worker/services/workSweep";
+import { appendFinding, applyDecision, assignCard, workCard } from "../src/worker/services/employeeWork";
+import { sweepIdentity, sweepOnce } from "../src/worker/services/workSweep";
 import { blockCard } from "../src/worker/services/blocks";
 import { replyToRequester } from "../src/worker/services/requestReply";
 import { employeeSenderHeader } from "../src/shared/registry/employeeMail";
@@ -332,6 +332,34 @@ describe("a finding is appended to the card as it is NOW, never to the step's co
     expect(row!.description, "the step's stale copy erased the restored brief").toContain("HARD RULES\n- Agents never spend money.");
     expect(row!.description, "the newest finding was cut off a long description").toMatch(/• Handed to Parker as work card wc_p: pick three topics\.$/);
     expect(card.description).toBe(row!.description);
+  });
+});
+
+describe("the newest finding is never the part dropped, and a failed search is on the card (22 Oct 2026)", () => {
+  async function seed(id: string, description: string) {
+    await env.WP_OS_DB.prepare("INSERT INTO work_card (id, title, description, owner_type, owner_id, state, priority, firm_scope, privacy_label, created_by, created_at, updated_at) VALUES (?1, 'TLC', ?2, 'AI', 'aie_parker', 'IN_PROGRESS', 'NORMAL', 'west-peek', 'INTERNAL', 'test', '2026-10-22T16:30:00Z', '2026-10-22T16:30:00Z')")
+      .bind(id, description)
+      .run();
+    return { id, title: "TLC", description, firm_scope: "west-peek", owner_id: "aie_parker", next_action: null, state: "IN_PROGRESS", owner_type: "AI", allows_browser: 0, prompt: null, requested_by_email: null };
+  }
+
+  it("at the 16,000 ceiling keeps the brief at the head AND the newest finding, and says what was cut", async () => {
+    const card = await seed("wc_t_ceiling", `HARD RULES first.\n${"y".repeat(15_980)}`);
+    await appendFinding(env, card as never, "Searched NYC sponsors — found three brand-run tasting events.");
+    const row = await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(card.id).first<{ description: string }>();
+    expect(row!.description.length).toBeLessThanOrEqual(16_000);
+    expect(row!.description.startsWith("HARD RULES first.")).toBe(true);
+    expect(row!.description, "the newest finding was dropped at the ceiling").toMatch(/• Searched NYC sponsors — found three brand-run tasting events\.$/);
+    expect(row!.description).toContain("older findings cut here");
+  });
+
+  it("a search that fails leaves a line on the card, so the next step knows it was tried", async () => {
+    const card = await seed("wc_t_search_failed", "Pick three topics.");
+    const ctx = { request: new Request("https://os.joinwestpeek.com/internal/test"), env, identity: sweepIdentity(), params: {} };
+    const out = await applyDecision(env, ctx as never, card as never, { action: "search", objective: "Which NYC brands sponsor tasting classes?" } as never, 1, "Parker", "aie_parker", null);
+    expect(out.action).toBe("search_failed");
+    const row = await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(card.id).first<{ description: string }>();
+    expect(row!.description, "a failed search left nothing on the card").toMatch(/• Searched "Which NYC brands sponsor tasting classes\?" — the search failed: /);
   });
 });
 

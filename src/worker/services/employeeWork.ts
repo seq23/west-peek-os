@@ -480,11 +480,24 @@ export async function handOver(
  * part dropped, silently. One ceiling (16,000, as every other append to a description) and the row,
  * not the copy, is what gets appended to.
  */
+/** The one ceiling on a card's description, the same every other append to it uses. */
+const DESCRIPTION_MAX = 16_000;
+/** A single finding's share of it, so one long answer can never push the brief off the card. */
+const FINDING_MAX = 6_000;
+const FINDINGS_CUT_LINE = "[… older findings cut here to keep the newest one under the 16,000-character ceiling]";
+
 export async function appendFinding(env: Env, card: CardRow, text: string): Promise<void> {
+  // THE NEWEST FINDING IS NEVER THE PART DROPPED. Past the ceiling, the older text is cut — with a
+  // line saying so — and the brief at the head and this finding at the tail are both kept.
+  const line = `• ${statedCut(text, FINDING_MAX, "the step's own record")}`;
   const row = await env.WP_OS_DB.prepare(
-    "UPDATE work_card SET description = substr(COALESCE(description || char(10), '') || '• ' || ?2, 1, 16000) WHERE id = ?1 RETURNING description",
+    `UPDATE work_card SET description = CASE
+        WHEN length(COALESCE(description, '')) + 1 + length(?2) <= ?3 THEN COALESCE(description || char(10), '') || ?2
+        ELSE substr(description, 1, ?3 - length(?2) - length(?4) - 2) || char(10) || ?4 || char(10) || ?2
+      END
+      WHERE id = ?1 RETURNING description`,
   )
-    .bind(card.id, text)
+    .bind(card.id, line, DESCRIPTION_MAX, FINDINGS_CUT_LINE)
     .first<{ description: string | null }>();
   card.description = row?.description ?? card.description;
 }
@@ -739,7 +752,7 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string, opti
   };
 }
 
-async function applyDecision(
+export async function applyDecision(
   env: Env,
   ctx: RouteContext,
   card: CardRow,
@@ -784,7 +797,12 @@ async function applyDecision(
   // SEARCH: no page known, so ask live sources rather than driving a browser at a search engine.
   if (d.action === "search") {
     const found = await searchQuestion(env, actor, d.objective!);
-    if (!found.ok) return { step, action: "search_failed", detail: found.detail };
+    if (!found.ok) {
+      // ON THE CARD, because the next step learns only from the card (22 Oct 2026): a failed search
+      // that left nothing let the employee conclude as if it had never been tried.
+      await appendFinding(env, card, `Searched "${d.objective!.slice(0, 300)}" — the search failed: ${found.detail}`.slice(0, 2000));
+      return { step, action: "search_failed", detail: found.detail };
+    }
     const summary = `Searched "${d.objective}" — ${found.text || "(no answer)"}`.slice(0, 2000);
     await appendFinding(env, card, summary);
     return { step, action: "searched", detail: summary.slice(0, 160) };
