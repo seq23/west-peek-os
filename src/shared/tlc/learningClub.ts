@@ -762,6 +762,27 @@ export function topicKey(topic: string): string {
   return topic.toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+/**
+ * The topic's name alone: a trailing "(Saturday afternoon, 1–5 pm)" or "(November 2026 Room)" is scheduling, not the name.
+ * 22 Oct 2026: alternatives came back as "Sewing & Visible Mending (Saturday afternoon, 1–5 pm)".
+ */
+export function topicName(topic: string): string {
+  return topic.replace(/\s*\((?=[^)]*\b(?:am|pm|saturday|thursday|friday|sunday|evening|afternoon|morning|room|20\d\d)\b)[^)]*\)\s*$/i, "").trim();
+}
+
+/**
+ * The same idea under another name? "Peptides & Biohacking: New Year Reset" is the partners' "Peptides and biohacking";
+ * "Trading & Investing: Money Reset" is 'Trading & Investing ("Money Reset")'. Parenthesised words and a subtitle after
+ * a colon do not make a new idea.
+ */
+export function sameTopic(a: string, b: string): boolean {
+  const k = (t: string) => topicKey(topicName(t).replace(/\(([^)]*)\)/g, " $1 "));
+  const head = (t: string) => topicKey(topicName(t).split(":")[0]!.replace(/\(.*?\)/g, " "));
+  const ka = k(a), kb = k(b);
+  if (!ka || !kb) return false;
+  return ka === kb || ka.startsWith(`${kb} `) || kb.startsWith(`${ka} `) || head(a) === head(b);
+}
+
 /** Where the owner-approved playbook lives: a Documents entry whose id is kept in `tlc_setting` under this key. */
 export const PLAYBOOK_DOCUMENT_SETTING = "playbook_document_id";
 
