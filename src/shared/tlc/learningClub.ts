@@ -722,5 +722,5 @@ export function quarterOf(at: Date): string {
 export const TLC_PRE_LAUNCH_PROOF: readonly string[] = [
   "West Peek Rooms: the firm's in-person gatherings. The Learning Club is their monthly New York edition.",
   "West Peek Workshops: free, hands-on virtual sessions on West Peek Live (most recently AI in business, September 2026).",
-  "The West Peek community: it began with QuarantineCon in March 2020, when 5,000 people gathered online on the first weekend of the pandemic.",
+  "The West Peek community: more than 5,000 founders, operators, investors, creatives and builders.",
 ];
