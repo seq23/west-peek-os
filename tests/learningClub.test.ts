@@ -336,3 +336,15 @@ describe("the Learning Club in the database", () => {
     expect(ev!.status).toBe("ESCALATED");
   });
 });
+
+// 22 Oct 2026: the one-pager claimed "a community of more than 5,000 founders…". The only sourced 5,000
+// is QuarantineCon's attendance (March 2020, join-west-peek-main about page). Sponsor copy may state
+// only that, never a standing membership count.
+describe("TLC pre-launch proof stays sourced", () => {
+  it("never claims a membership size; the 5,000 is QuarantineCon attendance", async () => {
+    const { TLC_PRE_LAUNCH_PROOF } = await import("../src/shared/tlc/learningClub");
+    const all = TLC_PRE_LAUNCH_PROOF.join(" ");
+    expect(all).not.toMatch(/more than [\d,]+ (founders|members|people)/i);
+    for (const line of TLC_PRE_LAUNCH_PROOF.filter((l) => /\d{1,3},\d{3}/.test(l))) expect(line).toMatch(/QuarantineCon/);
+  });
+});
