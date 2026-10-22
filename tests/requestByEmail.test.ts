@@ -3,7 +3,7 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import { handleInboundEmail } from "../src/worker/effects/inboundEmail";
 import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
 import { INTAKE_MAILBOX } from "../src/shared/intake/emailTriggers";
-import { assignCard, workCard } from "../src/worker/services/employeeWork";
+import { appendFinding, assignCard, workCard } from "../src/worker/services/employeeWork";
 import { sweepOnce } from "../src/worker/services/workSweep";
 import { blockCard } from "../src/worker/services/blocks";
 import { replyToRequester } from "../src/worker/services/requestReply";
@@ -299,6 +299,39 @@ describe("the reply cannot be steered", () => {
   it("the trigger words are defused on the way out, so a finding cannot re-enter the mailbox as an instruction", async () => {
     await replyToRequester(env, { id: "wc_x", title: "x", requested_by_email: "sequoia@westpeek.ventures", firm_scope: "west-peek" }, "DONE", "Wyatt", "They wrote #wpdealflow in their deck.");
     expect(sent[sent.length - 1]!.text).not.toContain("#wpdealflow");
+  });
+});
+
+describe("assignCard hands the WHOLE original request on (22 Oct 2026)", () => {
+  it("a long brief past 4,000 characters reaches the new card's description intact", async () => {
+    const description = `WHAT WAS ASKED, in their own words:\n${"The drip runs per brand per event. ".repeat(150)}\nHARD RULES\n- Agents never spend money.\n\nStored message: inbound-email/x.eml`;
+    expect(description.length).toBeGreaterThan(5000);
+    const card = { id: "wc_t_long_brief", title: "TLC", description, next_action: null, state: "OPEN", owner_type: "AI", owner_id: "aie_wren", allows_browser: 0, prompt: null, firm_scope: "west-peek", requested_by_email: "sequoia@westpeek.ventures" };
+    const handed = await assignCard(env, card as never, { id: "aie_wren", name: "Wren" }, "Percy", "Run the TLC stream.");
+    expect(handed.ok).toBe(true);
+    const row = await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind((handed as { cardId: string }).cardId).first<{ description: string }>();
+    expect(row!.description, "the hand-off cut the HARD RULES off the original request").toContain("- Agents never spend money.");
+    expect(row!.description).toContain("Stored message: inbound-email/x.eml");
+    expect(row!.description).not.toMatch(/cut here at/);
+  });
+});
+
+describe("a finding is appended to the card as it is NOW, never to the step's copy (22 Oct 2026)", () => {
+  it("keeps a brief restored mid-step, and keeps the newest finding on a long description", async () => {
+    const id = "wc_t_stale_copy";
+    const stale = `WHAT WAS ASKED:\n${"x".repeat(4000)}\n- Sequoia and Scooter: decid`;
+    await env.WP_OS_DB.prepare("INSERT INTO work_card (id, title, description, owner_type, owner_id, state, priority, firm_scope, privacy_label, created_by, created_at, updated_at) VALUES (?1, 'TLC', ?2, 'AI', 'aie_wren', 'IN_PROGRESS', 'NORMAL', 'west-peek', 'INTERNAL', 'test', '2026-10-22T16:30:00Z', '2026-10-22T16:30:00Z')")
+      .bind(id, stale)
+      .run();
+    const card = { id, title: "TLC", description: stale, firm_scope: "west-peek" };
+    // While the step thinks, the brief is restored in full on the row (8,000+ characters).
+    const restored = `WHAT WAS ASKED:\n${"x".repeat(8000)}\n- Sequoia and Scooter: decide every deal.\nHARD RULES\n- Agents never spend money.`;
+    await env.WP_OS_DB.prepare("UPDATE work_card SET description = ?2 WHERE id = ?1").bind(id, restored).run();
+    await appendFinding(env, card as never, "Handed to Parker as work card wc_p: pick three topics.");
+    const row = await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(id).first<{ description: string }>();
+    expect(row!.description, "the step's stale copy erased the restored brief").toContain("HARD RULES\n- Agents never spend money.");
+    expect(row!.description, "the newest finding was cut off a long description").toMatch(/• Handed to Parker as work card wc_p: pick three topics\.$/);
+    expect(card.description).toBe(row!.description);
   });
 });
 

@@ -1,3 +1,4 @@
+import { PARTNER_WORDS_ON_CARD, statedCut } from "./partnerWords";
 import { describeModes, parseBlogAsk } from "../../shared/intake/blogHelp";
 import { parsePartnerMessageAsk, partnerMessageTitle } from "../../shared/intake/partnerMessage";
 import { isWebPropertyChange, parseWebPropertyAsk, partsFromHosts, registrationsIn } from "../../shared/intake/webPropertyChange";
@@ -883,8 +884,9 @@ export function readableMessage(raw: string, cap = 4000): string {
   const headers = topHeadersOf(raw ?? "");
   const notAReply = headers !== null && !isReplyMessage(headers);
   const written = notAReply ? text.trim() : splitQuoted(text).written.trim() || text.trim();
-  return written.slice(0, cap);
+  return statedCut(written, cap, "the stored message");
 }
+
 
 /**
  * The one line that says where the whole message is. Written identically by every door, because
@@ -1024,7 +1026,7 @@ export async function openAssignmentCard(
       `That makes it an assignment rather than a capture, and it is yours because you are their chief of staff.`,
       "",
       "WHAT WAS ASKED, in their own words:",
-      written.slice(0, 4000),
+      statedCut(written, PARTNER_WORDS_ON_CARD, "the stored message below"),
       "",
       "WHAT THIS DOES NOT GRANT:",
       ...input.limits.map((l) => `· ${l}`),

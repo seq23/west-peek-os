@@ -165,3 +165,24 @@ describe("an authenticated partner's email is an assignment; anything else is a 
     ).toBe(before);
   });
 });
+
+describe("a long partner email reaches the card whole", () => {
+  it("keeps the WHOLE of a long playbook on the card — never cut mid-word at 4,000 (22 Oct 2026)", async () => {
+    // The real shape: a 5,725-character TLC playbook whose HARD RULES sat past character 4,000.
+    const filler = "Parker chooses the topics, a rolling three ahead, with sponsor categories that fit. ".repeat(60);
+    const body = `Porter,\n\nNew standing job.\n\n${filler}\n- Sequoia and Scooter: decide every deal.\n\nHARD RULES\n- Nothing goes to any brand until I approve the one-pager mock-up.\n\nThanks,\nSequoia`;
+    expect(body.length).toBeGreaterThan(5000);
+    await deliver(
+      { from: '"Sequoia Taylor" <sequoia@westpeek.ventures>', subject: "New job: TLC", "authentication-results": GENUINE },
+      body,
+    );
+    const card = (await cardsOwnedBy("aie_wren")).find((c) => c.title.includes("New job: TLC"))!;
+    expect(card, "the playbook did not become work").toBeTruthy();
+    expect(card.description, "the playbook was cut before its decisions").toContain("Sequoia and Scooter: decide every deal.");
+    expect(card.description, "the HARD RULES were cut off the card").toContain("Nothing goes to any brand until I approve the one-pager mock-up.");
+    expect(card.description).toContain("Thanks,\nSequoia");
+    expect(card.description, "a whole message must not claim to have been cut").not.toMatch(/cut here at/);
+    // The boundary still follows the words.
+    expect(card.description).toMatch(/May NOT approve/i);
+  });
+});

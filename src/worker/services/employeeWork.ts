@@ -1,3 +1,4 @@
+import { PARTNER_WORDS_ON_CARD, STORED_MESSAGE_IN_PROMPT, statedCut } from "./partnerWords";
 import type { Env } from "../env";
 import { materialsForPrompt, recordMissing } from "./requestMaterials";
 import { json } from "../router";
@@ -274,7 +275,7 @@ export async function assignCard(
         brief,
         "",
         "--- the original request ---",
-        (card.description ?? "").slice(0, 4000),
+        statedCut(card.description ?? "", PARTNER_WORDS_ON_CARD, `card ${card.id}`),
       ].join("\n"),
       owner_type: "AI",
       owner_id: target.id,
@@ -337,7 +338,9 @@ export async function storedMessageFor(env: Env, cardId: string): Promise<{ key:
     const obj = env.WP_OS_DOCUMENTS ? await env.WP_OS_DOCUMENTS.get(row.key) : null;
     if (obj) {
       const { readableMessage } = await import("./dealIntake");
-      text = readableMessage(await obj.text(), 6000);
+      // The whole of what the partner wrote, not a readable preview: this is the text the employee
+      // works from, so it is sized for the longest playbook rather than a card's glance.
+      text = readableMessage(await obj.text(), STORED_MESSAGE_IN_PROMPT);
     }
   } catch {
     text = "";
@@ -469,10 +472,21 @@ export async function handOver(
   }
 }
 
-async function appendFinding(env: Env, card: CardRow, text: string): Promise<void> {
-  const next = `${card.description ? `${card.description}\n` : ""}• ${text}`.slice(0, 8000);
-  await env.WP_OS_DB.prepare("UPDATE work_card SET description = ?2 WHERE id = ?1").bind(card.id, next).run();
-  card.description = next;
+/*
+ * APPENDED IN THE DATABASE, NEVER WRITTEN BACK FROM THE STEP'S COPY (22 Oct 2026). This wrote
+ * `card.description + finding` from the row the run read at its start, so anything written to the
+ * card while the step was thinking — a restored brief, a partner's note — was erased by the hand-off
+ * line. And it cut the result at 8,000 keeping the HEAD, so on a long brief the newest finding was the
+ * part dropped, silently. One ceiling (16,000, as every other append to a description) and the row,
+ * not the copy, is what gets appended to.
+ */
+export async function appendFinding(env: Env, card: CardRow, text: string): Promise<void> {
+  const row = await env.WP_OS_DB.prepare(
+    "UPDATE work_card SET description = substr(COALESCE(description || char(10), '') || '• ' || ?2, 1, 16000) WHERE id = ?1 RETURNING description",
+  )
+    .bind(card.id, text)
+    .first<{ description: string | null }>();
+  card.description = row?.description ?? card.description;
 }
 
 /**
