@@ -41,11 +41,23 @@ export async function storeAttachments(
   const stored: string[] = [];
   if (input.emlKey) {
     for (const a of attachments) {
-      await env.WP_OS_DB.prepare(
-        "INSERT INTO request_attachment (id, work_card_id, filename, media_type, bytes, eml_key, firm_scope, source) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-      )
-        .bind(`ratt_${crypto.randomUUID()}`, input.cardId, a.filename, a.mediaType, a.bytes, input.emlKey, input.firmScope, input.source)
-        .run();
+      /*
+       * ONE ROW PER FILE PER STORED MESSAGE (27 Sep 2026). The same .eml can reach a card twice: a
+       * stored message replayed from R2 after a door fix, or a reply read by the matcher onto the
+       * card its stray twin was later merged into. Each pass used to add a row, and the BUILD brief
+       * for wc_77f52b33 listed image0.jpeg twice. A file already on the card from this very message
+       * is found and kept; its name is still reported, because it is on the card, which is the claim.
+       */
+      const twin = await env.WP_OS_DB.prepare("SELECT id FROM request_attachment WHERE work_card_id = ?1 AND eml_key = ?2 AND filename = ?3 LIMIT 1")
+        .bind(input.cardId, input.emlKey, a.filename)
+        .first<{ id: string }>();
+      if (!twin) {
+        await env.WP_OS_DB.prepare(
+          "INSERT INTO request_attachment (id, work_card_id, filename, media_type, bytes, eml_key, firm_scope, source) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )
+          .bind(`ratt_${crypto.randomUUID()}`, input.cardId, a.filename, a.mediaType, a.bytes, input.emlKey, input.firmScope, input.source)
+          .run();
+      }
       stored.push(a.filename);
     }
   }

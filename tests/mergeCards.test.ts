@@ -156,6 +156,10 @@ describe("POST /api/work-cards/:id/merge-into", () => {
       .run();
     await env.WP_OS_DB.prepare("INSERT INTO email_thread (token, object_type, object_id, to_address, subject) VALUES ('wpt_m1', 'work_card', ?1, ?2, 'Preview ready')").bind(from, SEQUOIA).run();
     await env.WP_OS_DB.prepare("INSERT INTO request_attachment (id, work_card_id, filename, media_type, bytes, eml_key) VALUES ('att_m1', ?1, 'logo.png', 'image/png', 10, 'inbound/m0.eml')").bind(from).run();
+    // The same photo from the same stored message on BOTH cards (the matcher read the reply onto the
+    // survivor before the stray was merged): the survivor's copy is the one, the stray's twin stays put.
+    await env.WP_OS_DB.prepare("INSERT INTO request_attachment (id, work_card_id, filename, media_type, bytes, eml_key, source) VALUES ('att_m_twin_from', ?1, 'image0.jpeg', 'image/jpeg', 336435, 'inbound/m1.eml', 'REQUEST')").bind(from).run();
+    await env.WP_OS_DB.prepare("INSERT INTO request_attachment (id, work_card_id, filename, media_type, bytes, eml_key, source) VALUES ('att_m_twin_into', ?1, 'image0.jpeg', 'image/jpeg', 336435, 'inbound/m1.eml', 'REPLY')").bind(into).run();
     await env.WP_OS_DB.prepare("INSERT INTO work_card_notice (id, work_card_id, kind, cause, sent_to, sent_at) VALUES ('wcn_m1', ?1, 'RECEIVED', '', ?2, '2026-09-23T16:55:29.000Z')").bind(from, SEQUOIA).run();
     await env.WP_OS_DB.prepare(
       "INSERT INTO work_card_hand_off (id, work_card_id, action, by_email, primary_email, secondary_email, via, sent, created_at) VALUES ('wcho_m1', ?1, 'HAND_OFF', ?2, ?3, ?2, 'REPLY', 1, '2026-09-26T09:00:00.000Z')",
@@ -185,6 +189,8 @@ describe("POST /api/work-cards/:id/merge-into", () => {
     expect((await env.WP_OS_DB.prepare("SELECT work_card_id FROM inbound_message WHERE id = 'inm_m1'").first<{ work_card_id: string }>())!.work_card_id).toBe(into);
     expect((await env.WP_OS_DB.prepare("SELECT object_id FROM email_thread WHERE token = 'wpt_m1'").first<{ object_id: string }>())!.object_id).toBe(into);
     expect((await env.WP_OS_DB.prepare("SELECT work_card_id FROM request_attachment WHERE id = 'att_m1'").first<{ work_card_id: string }>())!.work_card_id).toBe(into);
+    expect((await env.WP_OS_DB.prepare("SELECT work_card_id FROM request_attachment WHERE id = 'att_m_twin_from'").first<{ work_card_id: string }>())!.work_card_id, "a twin of a file the survivor already holds is not moved").toBe(from);
+    expect(await count("SELECT COUNT(*) AS n FROM request_attachment WHERE work_card_id = ?1 AND eml_key = 'inbound/m1.eml' AND filename = 'image0.jpeg'", into), "the survivor lists the photo once").toBe(1);
     // The notices and hand-offs STAY on the row they were sent for; the trail reads them across.
     expect(await count("SELECT COUNT(*) AS n FROM work_card_notice WHERE work_card_id = ?1", from)).toBe(1);
     expect(await count("SELECT COUNT(*) AS n FROM work_card_hand_off WHERE work_card_id = ?1", from)).toBe(1);

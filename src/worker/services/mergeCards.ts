@@ -120,7 +120,16 @@ export async function mergeCard(env: Env, input: MergeInput): Promise<MergeOutco
 
   const messages = await env.WP_OS_DB.prepare("UPDATE inbound_message SET work_card_id = ?2 WHERE work_card_id = ?1").bind(f.id, i.id).run();
   const threads = await env.WP_OS_DB.prepare("UPDATE email_thread SET object_id = ?2 WHERE object_type = 'work_card' AND object_id = ?1").bind(f.id, i.id).run();
-  const files = await env.WP_OS_DB.prepare("UPDATE request_attachment SET work_card_id = ?2 WHERE work_card_id = ?1").bind(f.id, i.id).run();
+  // A file the survivor already holds from the same stored message stays behind (27 Sep 2026): the
+  // reply matcher can read a message onto the survivor before its stray card is merged in, and moving
+  // the twin listed image0.jpeg twice in a BUILD brief. Nothing is deleted; the merged card keeps it.
+  const files = await env.WP_OS_DB.prepare(
+    `UPDATE request_attachment SET work_card_id = ?2
+      WHERE work_card_id = ?1
+        AND NOT EXISTS (SELECT 1 FROM request_attachment t WHERE t.work_card_id = ?2 AND t.eml_key = request_attachment.eml_key AND t.filename = request_attachment.filename)`,
+  )
+    .bind(f.id, i.id)
+    .run();
   const moved = {
     messages: messages.meta?.changes ?? 0,
     threads: threads.meta?.changes ?? 0,
