@@ -75,8 +75,14 @@ describe("the ideas list", () => {
       alternatives: Array.from({ length: TLC_ALTERNATIVES }, (_, i) => ({ topic: `Alt ${"ABCDEFGHI"[i]}`, origin: i % 2 ? "TREND" : "BRANDS_SPENDING", reason: "r", brands: ["b"] })),
       found_ideas: [],
     });
-    const out = await sweepOnce(env, NOW, { tlc: (e, c) => runTlcCard(e, c, { search: async () => ({ ok: true, text, detail: "ok" }), urlCheck: async () => true, now: NOW }) });
+    const prompts: string[] = [];
+    const out = await sweepOnce(env, NOW, { tlc: (e, c) => runTlcCard(e, c, { search: async (_e, _a, p) => { prompts.push(p); return { ok: true, text, detail: "ok" }; }, urlCheck: async () => true, now: NOW }) });
     expect(out.outcome).toBe("PROGRESSED");
+    // ONE SEARCH PER MONTH, THEN ONE FOR THE ALTERNATIVES: each small enough to finish inside the seat's limit.
+    expect(prompts.map((p) => (/Give exactly 9 ALTERNATIVE/.test(p) ? "alternatives" : /Pick ONE topic for each of these months: (\w+ \d{4})\./.exec(p)?.[1]))).toEqual(["January 2027", "February 2027", "March 2027", "alternatives"]);
+    expect(prompts[0]).not.toMatch(/ALTERNATIVE topics/);
+    expect(prompts[3]).not.toMatch(/Pick ONE topic/);
+    expect(prompts[3]).toContain("The picks are already made: Trading & Investing; Matcha Lab; Film Walks.");
     const ideas = await ideasFor(env);
     const by = (t: string) => ideas.find((i) => i.topic === t)!;
     // A partner's idea stays labelled theirs even though the model called it brands-spending.
