@@ -53,8 +53,13 @@ describe("the three brand pitches read clean", () => {
       expect(at("Who is in the room")).toBeLessThan(at("What you get"));
       expect(at("What you get")).toBeLessThan(at("Price and the ask"));
       expect(at("Price and the ask")).toBeLessThan(at(TLC_OWNER.email));
-      expect(html).toMatch(/Partner: \$5,000/);
-      expect(html).toMatch(/Presenting partner: \$15,000/);
+      // The tiers, Title first, and what each gets; never our goal, costs or a season offer.
+      const at2 = (h: string) => html.indexOf(h);
+      expect(at2("Title partner: $25,000")).toBeGreaterThan(0);
+      expect(at2("Title partner: $25,000")).toBeLessThan(at2("Partner: $5,000"));
+      for (const t of ["Partner: $5,000", "Lead partner: $10,000", "Presenting partner: $15,000", "Product partner (in kind)", "The Learning Club, presented by"]) expect(html).toContain(t);
+      expect(html).not.toMatch(/\bgoal\b|cost budget|\bnet\b|\bseason\b/i);
+      expect(html).toContain("An intimate room, sized to your goals: planned for 25–40 people");
       expect(html).toMatch(/Photo and content rights/);
       expect(html).toMatch(/Opt-in lead capture/);
       expect(html).toMatch(/A recap within a week, with the numbers/);
@@ -66,6 +71,7 @@ describe("the three brand pitches read clean", () => {
     const html = renderBrandPitch(JAN);
     expect(html).toContain("21+ only, with ID checked at the door. Every drink served is non-alcoholic (0.5% ABV or less).");
     expect(html.replace(/<ol class="src">[\s\S]*?<\/ol>/g, "")).not.toMatch(/dry january/i);
+    expect(html).toContain("Zero-Proof January, done properly.");
     expect(html).not.toMatch(/\(lead|\(donated/);
   });
   it("February: Thursday 11 February 2027, evening; the stale proposed date is gone", () => {
@@ -84,7 +90,7 @@ describe("the three brand pitches read clean", () => {
   });
   it("the internal one-pager has the economics, the categories with brands, the origin, the risks and the decisions", () => {
     const html = renderInternalOnePager({ ...MAR, origin: "BRANDS_SPENDING", status: "TOPIC_PROPOSED", vetoUntil: "2026-10-25T23:28:12.271Z", committedUsd: 5_000, committedPartners: 1, pitchUrl: "https://os.joinwestpeek.com/api/tlc-pitch/abc" });
-    for (const s of ["The economics", "Sponsor categories", "Risks", "What you decide", "Brands spending now", "Brand C", "$5,000 of $15,000 (33%) · 1 of ~3 partners", "about 3 partners at $5,000, or 1 presenting partner at $15,000", "$100M"]) expect(html).toContain(s);
+    for (const s of ["The economics", "Sponsor categories", "Risks", "What you decide", "Brands spending now", "Brand C", "$5,000 of $25,000 (20%) · 1 partner", "Two routes: one Title partner at $25,000; or a mix", "costs up to $15,000", "Season (recommendation", "$100M"]) expect(html).toContain(s);
     expect(html).not.toMatch(/exclusive/i);
     expect(html).toContain("not for brands");
   });
@@ -147,6 +153,40 @@ describe("every TLC email to a partner reaches Sequoia only", () => {
     }
     expect(sends.length).toBeGreaterThanOrEqual(6);
   });
+  it("on its deadline the backup takes over, Sequoia alone is told what switched and why; a Title yes keeps the primary", async () => {
+    await env.WP_OS_DB.prepare("UPDATE ai_employee SET status = 'ACTIVE' WHERE id IN ('aie_parker','aie_wynn')").run();
+    const { applyBackupSwitch } = await import("../src/worker/services/learningClub");
+    const backup = JSON.stringify({ topic: "Find Your Voice", angle: "Make a short piece with AI voice and video.", packet: { why_now: "w" }, categories: [{ category: "AI video", why: "x", example_brands: [] }], seats_min: 40, seats_max: 60 });
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_event (id, month, event_date, slot, topic, status, backup_json, switch_deadline, seats_min, seats_max) VALUES ('tlc_2031-02', '2031-02', '2031-02-13', 'EVENING', 'Fragrance Lab', 'TOPIC_READY', ?1, '2030-12-15', 30, 40), ('tlc_2031-03', '2031-03', '2031-03-13', 'EVENING', 'Build Your Own AI Agent', 'TOPIC_READY', ?1, '2030-12-15', 80, 120)").bind(backup).run();
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_deal (id, event_id, brand, contact_email, contact_source_url, stage, tier, yes_at) VALUES ('d_cash', 'tlc_2031-02', 'One', 'a@one.example', 'https://one.example', 'CALL', 'PARTNER', '2030-12-01'), ('d_prod', 'tlc_2031-02', 'Two', 'a@two.example', 'https://two.example', 'CALL', 'PRODUCT', '2030-12-01'), ('d_title', 'tlc_2031-03', 'Three', 'a@three.example', 'https://three.example', 'CALL', 'TITLE', '2030-12-01')").run();
+    const row = async (id: string) => (await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(id).first<TlcEventRow>())!;
+    expect(await applyBackupSwitch(env, await row("tlc_2031-02"), new Date("2030-12-14T12:00:00Z"))).toBeNull();
+    sends.length = 0;
+    // One cash yes (the product partner does not count), no Title partner: the backup takes over.
+    expect(await applyBackupSwitch(env, await row("tlc_2031-02"), new Date("2030-12-15T12:00:00Z"))).toBe("SWITCHED");
+    const after = await row("tlc_2031-02");
+    expect([after.topic, after.seats_min, after.seats_max, after.status]).toEqual(["Find Your Voice", 40, 60, "TOPIC_READY"]);
+    expect(JSON.parse(after.backup_json!).switched_from).toBe("Fragrance Lab");
+    expect(sends).toHaveLength(1);
+    expect([sends[0]!.to].flat()).toEqual(["sequoia@westpeek.ventures"]);
+    const body = JSON.stringify(sends[0]);
+    expect(body).toContain("switched from Fragrance Lab to Find Your Voice");
+    expect(body).toMatch(/1(\\\*\\\*|<\/strong>)? cash sponsor had said yes and no Title partner/);
+    // Once done, never again.
+    expect(await applyBackupSwitch(env, after, new Date("2030-12-16T12:00:00Z"))).toBeNull();
+    // A Title partner's yes keeps the primary.
+    expect(await applyBackupSwitch(env, await row("tlc_2031-03"), new Date("2030-12-15T12:00:00Z"))).toBe("KEPT");
+    expect((await row("tlc_2031-03")).topic).toBe("Build Your Own AI Agent");
+  });
+
+  it("counts a club as funded only when its agreed cash (never product) reaches its goal", async () => {
+    const { fundedEventCount } = await import("../src/worker/services/learningClub");
+    const before = await fundedEventCount(env);
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_event (id, month, event_date, topic) VALUES ('tlc_2032-01', '2032-01', '2032-01-15', 'A'), ('tlc_2032-02', '2032-02', '2032-02-12', 'B')").run();
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_deal (id, event_id, brand, contact_email, contact_source_url, stage, tier, cash_offer_usd) VALUES ('f1', 'tlc_2032-01', 'T', 't@x.example', 'https://x.example', 'PAID', 'TITLE', 25000), ('f2', 'tlc_2032-02', 'P', 'p@x.example', 'https://x.example', 'AGREED', 'PARTNER', 20000), ('f3', 'tlc_2032-02', 'K', 'k@x.example', 'https://x.example', 'AGREED', 'PRODUCT', 9000)").run();
+    expect(await fundedEventCount(env)).toBe(before + 1);
+  });
+
   it("leaves every other email alone", async () => {
     const out = await sendPartnerEmail(env, { to: "scooter@westpeek.ventures", email: { ...email, what: "Other test" }, objectType: "work_card", objectId: "wc_other", firmScope: "west-peek", cardKind: "RESEARCH" });
     expect(out.to).toBe("scooter@westpeek.ventures");
@@ -184,23 +224,23 @@ describe("the Partners panel, across TLC deals and general Room sponsors", () =>
         { id: "s2", event_id: "ev_a", org_name: "Lawco", tier: "SUPPORTING", stage: "SENT", committed_usd: null, ask_high_usd: 5_000, ask_low_usd: 2_500, contact_url: null, source_url: null, updated_at: "2026-11-19T00:00:00Z" },
         { id: "s3", event_id: "ev_b", org_name: "Bankco", tier: "SUPPORTING", stage: "COMMITTED", committed_usd: 3_000, ask_high_usd: null, ask_low_usd: null, contact_url: null, source_url: null, updated_at: "2026-11-15T00:00:00Z" },
       ],
-      tlcTargetUsd: 15_000, tlcPartnerPriceUsd: 5_000, tlcPresentingPriceUsd: 15_000, cardUrl: (id) => `#/work/${id}`,
+      tlcTargetUsd: 25_000, cardUrl: (id) => `#/work/${id}`,
     },
     now,
   );
   it("counts only agreed or paid money toward the target, lists every yes with its stage, and badges the new ones", () => {
     const tlc = panel.find((e) => e.eventId === "tlc_2027-01")!;
-    expect(tlc.progressWords).toBe("$5,000 of $15,000 · 1 of ~3 partners");
-    expect(tlc.progressPct).toBe(33);
+    expect(tlc.progressWords).toBe("$5,000 of $25,000 · 1 partner");
+    expect(tlc.progressPct).toBe(20);
     expect(tlc.partners.map((p) => [p.brand, p.role, p.amountUsd, p.stageWords, p.isNew, p.threadUrl])).toEqual([
       ["Ever", "Partner", 5000, "said yes", true, null],
       ["Acme", "Partner", 5000, "agreed", true, "#/work/wc_d1"],
-      ["Bolt", "Presenting", 15000, "call", false, null],
+      ["Bolt", "Presenting partner", 15000, "call", false, null],
     ]);
     const a = panel.find((e) => e.eventId === "ev_a")!;
     expect(a.progressWords).toBe("$12,000 of $20,000");
     expect(a.progressPct).toBe(60);
-    expect(a.partners.map((p) => [p.brand, p.role, p.amountUsd, p.stageWords])).toEqual([["Cloudco", "Presenting", 12000, "agreed"]]);
+    expect(a.partners.map((p) => [p.brand, p.role, p.amountUsd, p.stageWords])).toEqual([["Cloudco", "Presenting partner", 12000, "agreed"]]);
     const b = panel.find((e) => e.eventId === "ev_b")!;
     expect(b.progressWords).toBe("$3,000 committed · no target set");
     expect(b.progressPct).toBeNull();
@@ -252,5 +292,142 @@ describe("approvals are of exact content, partners only; the public pitch needs 
     }
     const row = await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = 'tlc_2027-03'").first<TlcEventRow>();
     expect(clubViewOf(row!).whyNow).toBe("Most people use AI at work.");
+  });
+});
+
+describe("the owner's rulings on rooms, money, sponsors and ideas (22 Oct 2026)", () => {
+  it("the room size is the club's own: pitch, drip and internal page read it, and never a size we have not set", async () => {
+    const { dripEmail, seatsOf } = await import("../src/shared/tlc/learningClub");
+    expect(seatsOf(null)).toEqual({ min: 25, max: 40 });
+    expect(seatsOf({ seats_min: 80, seats_max: 120 })).toEqual({ min: 80, max: 120 });
+    const big = { ...MAR, seats: { min: 80, max: 120 } };
+    expect(renderBrandPitch(big)).toContain("An intimate room, sized to your goals: planned for 80–120 people");
+    expect(renderBrandPitch(big)).toContain("80–120 New Yorkers who chose this topic");
+    expect(renderBrandPitch(big)).not.toContain("25–40");
+    expect(renderInternalOnePager({ ...big, origin: null, status: "TOPIC_READY", vetoUntil: null, committedUsd: 0, committedPartners: 0, pitchUrl: null })).toContain("Room: planned for 80–120 people");
+    const d = dripEmail({ step: 0, brand: "Acme", contactName: null, topic: "T", month: "2027-03", eventDate: "2027-03-18", why: null, seats: { min: 80, max: 120 } });
+    expect(d.text).toContain("80 to 120 people");
+    expect(d.text).not.toContain("25 to 40");
+  });
+
+  it("sponsors are complementary: competing categories are flagged inside, and peptide sellers or betting in Q1 never stand", async () => {
+    const m = await import("../src/shared/tlc/learningClub");
+    expect(m.competingCategories([{ category: "Non-alcoholic spirits" }, { category: "Non-alcoholic beer" }, { category: "Glassware" }])).toHaveLength(1);
+    expect(m.competingCategories([{ category: "Zero-proof spirit" }, { category: "Premium mixers and sodas" }, { category: "Glassware and barware" }, { category: "Wellness, sleep or fitness" }, { category: "Food and garnish" }])).toEqual([]);
+    // A bench slot is only offered with the lead's OK, so it is not a clash.
+    expect(m.competingCategories([{ category: "AI fragrance house" }, { category: "Indie fragrance house", bench: true }])).toEqual([]);
+    const inside = renderInternalOnePager({ ...JAN, categories: [{ category: "Non-alcoholic spirits", why: "x", example_brands: [] }, { category: "Non-alcoholic beer", why: "x", example_brands: [] }], origin: null, status: "TOPIC_READY", vetoUntil: null, committedUsd: 0, committedPartners: 0, pitchUrl: null });
+    expect(inside).toMatch(/Sponsors must not compete: &quot;Non-alcoholic spirits&quot; and &quot;Non-alcoholic beer&quot;/);
+    expect(m.sponsorMixProblems("2027-02", [{ category: "Sportsbook" }])).toEqual(['betting brands stay out of Q1 2027 ("Sportsbook")']);
+    expect(m.sponsorMixProblems("2027-05", [{ category: "Prediction market" }, { category: "Trading app" }])).toEqual(['betting and trading brands never share an event ("Prediction market" and "Trading app")']);
+    expect(m.sponsorMixProblems("2027-04", [{ category: "Peptide clinic" }])[0]).toMatch(/no peptide sellers/);
+    expect(m.sponsorMixProblems("2027-04", [{ category: "Trading app" }])).toEqual([]);
+    expect(m.doNotRun("Peptides and biohacking")).toMatch(/FDA warning letters/);
+    expect(m.doNotRun("The Longevity Reset")).toBeNull();
+    expect(brandPitchProblems(renderBrandPitch({ ...MAR, angle: "Leave the cult behind. A second line." }))).toContain('"cult" language');
+  });
+
+  it("a list inside a partner's email is the partner's idea only when the email says so; otherwise a suggested list", async () => {
+    const { creditForQuote, TLC_IDEA_ORIGIN_LABEL } = await import("../src/shared/tlc/learningClub");
+    const listMail = "Here is the starting list:\n- Fragrance Lab\n- Matcha & Tea\n- Zero-Proof Home Bar";
+    expect(creditForQuote(listMail, "Fragrance Lab")).toBe("SUGGESTED_LIST");
+    expect(creditForQuote("My list for the club:\n- Fragrance Lab\n- Matcha", "Fragrance Lab")).toBe("OWNER_IDEA");
+    expect(creditForQuote("We should do a learning club about trading.", "a learning club about trading")).toBe("OWNER_IDEA");
+    expect(TLC_IDEA_ORIGIN_LABEL.SUGGESTED_LIST).toBe("Suggested list (written by the assistant, 22 Oct)");
+  });
+
+  it("a hands-on idea with a designed AI angle is eligible from April 2027; one without stays gated until 2 clubs have each raised $25,000", async () => {
+    const { ideaEligibility } = await import("../src/shared/tlc/learningClub");
+    const matcha = { topic: "Matcha & Tea", earliest_month: "2027-04", packet: { ai_angle: "An AI-designed tasting flight and a personal flavour profile." } };
+    expect(ideaEligibility(matcha, "2027-03", 0)).toEqual({ eligible: false, why: "not before 2027-04" });
+    expect(ideaEligibility(matcha, "2027-04", 0)).toEqual({ eligible: true, why: null });
+    const plain = { topic: "Matcha & Tea", earliest_month: null, packet: null };
+    expect(ideaEligibility(plain, "2027-06", 0).eligible).toBe(false);
+    expect(ideaEligibility(plain, "2027-06", 1).why).toMatch(/waits until 2 clubs have each raised \$25,000 \(1 so far\)/);
+    expect(ideaEligibility(plain, "2027-06", 2)).toEqual({ eligible: true, why: null });
+    expect(ideaEligibility({ topic: "Build Your Own AI Agent" }, "2027-03", 0).eligible).toBe(true);
+  });
+
+  it("every month's backup takes over only on its deadline, only with fewer than 2 cash yeses and no Title partner", async () => {
+    const { switchVerdict } = await import("../src/shared/tlc/learningClub");
+    const b = { topic: "Find Your Voice", angle: "a", packet: {}, categories: [] };
+    const at = (d: string) => new Date(`${d}T13:00:00Z`);
+    expect(switchVerdict(null, "2026-12-15", at("2026-12-20"), { cashYes: 0, titleYes: false })).toBe("NO_BACKUP");
+    expect(switchVerdict(b, null, at("2026-12-20"), { cashYes: 0, titleYes: false })).toBe("NO_BACKUP");
+    expect(switchVerdict(b, "2026-12-15", at("2026-12-14"), { cashYes: 0, titleYes: false })).toBe("NOT_DUE");
+    expect(switchVerdict(b, "2026-12-15", at("2026-12-15"), { cashYes: 1, titleYes: false })).toBe("SWITCH");
+    expect(switchVerdict(b, "2026-12-15", at("2026-12-15"), { cashYes: 2, titleYes: false })).toBe("KEEP");
+    expect(switchVerdict(b, "2026-12-15", at("2026-12-15"), { cashYes: 1, titleYes: true })).toBe("KEEP");
+    expect(switchVerdict({ ...b, applied_at: "2026-12-15" }, "2026-12-15", at("2026-12-16"), { cashYes: 0, titleYes: false })).toBe("DONE");
+  });
+
+  it("every non-AI club carries an AI segment and an AI partner slot; AI topics need neither; one frontier model is seated", async () => {
+    const m = await import("../src/shared/tlc/learningClub");
+    expect(m.isAiTopic("Build Your Own AI Agent")).toBe(true);
+    expect(m.isAiTopic("AI Tools for Your Work")).toBe(true);
+    expect(m.isAiTopic("The Longevity Reset")).toBe(false);
+    expect(m.aiRuleProblems("The Longevity Reset", {}, [])).toHaveLength(2);
+    expect(m.aiRuleProblems("The Longevity Reset", { ai_segment: "Your health data, explained by AI" }, [{ category: "AI partner", ai_partner: true }])).toEqual([]);
+    expect(m.aiRuleProblems("Build Your Own AI Agent", {}, [])).toEqual([]);
+    expect(m.runOfShowLines("Your health data, explained by AI")).toContain("Go deeper, with AI: Your health data, explained by AI: 45 min");
+    expect(m.frontierConflict([{ id: "a", frontier: true }], { id: "b", frontier: true })).toMatch(/one frontier-model company/);
+    expect(m.frontierConflict([{ id: "a", frontier: true }], { id: "c", frontier: false })).toBeNull();
+    expect(m.frontierConflict([{ id: "a", frontier: true }], { id: "a", frontier: true })).toBeNull();
+    const view = { ...JAN, topic: "The Longevity Reset", angle: "One evening on sleep and strength.", aiSegment: "Your health data, explained by AI: guests use an assistant on their own sleep or lab numbers.", categories: [{ category: "Wearable", why: "w", example_brands: ["Brand W"] }, { category: "AI partner (frontier model)", why: "Runs the AI segment.", example_brands: ["Model A", "Model B"], ai_partner: true, frontier_model: true }] };
+    const pitch = renderBrandPitch(view);
+    expect(pitch).toContain("The AI segment: Your health data, explained by AI");
+    expect(pitch).toContain("AI is not medical advice");
+    expect(brandPitchProblems(pitch)).toEqual([]);
+    const inside = renderInternalOnePager({ ...view, origin: "OWNER_IDEA", status: "TOPIC_READY", vetoUntil: null, committedUsd: 0, committedPartners: 0, pitchUrl: null, backup: { topic: "AI Tools for Your Work", angle: "Keep Thinking.", deadline: "2026-11-15" } });
+    expect(inside).toContain("<strong>AI partner:</strong> AI partner (frontier model) (targets: Model A, then Model B)");
+    expect(inside).toContain("Backup topic, switch on 2026-11-15");
+    expect(inside).toContain("<strong>AI Tools for Your Work.</strong>");
+    // The brand pitch shows only the primary.
+    expect(pitch).not.toContain("AI Tools for Your Work");
+    expect(pitch).not.toMatch(/backup/i);
+    const bare = renderInternalOnePager({ ...view, aiSegment: null, categories: [], origin: null, status: "TOPIC_READY", vetoUntil: null, committedUsd: 0, committedPartners: 0, pitchUrl: null });
+    expect(bare).toMatch(/AI rule: &quot;The Longevity Reset&quot; is not an AI topic/);
+  });
+
+  it("the Partners panel counts a Title deal as the whole goal, shows product partners apart, and never counts them", () => {
+    const now = new Date("2026-11-20T12:00:00Z");
+    const deal = (id: string, tier: string | null, stage: string, cash: number | null, inKind: string | null = null) => ({ id, event_id: "e", brand: id, tier, stage, cash_offer_usd: cash, counter_usd: null, in_kind_offer: inKind, yes_at: "2026-11-18T10:00:00Z", replied_at: null, updated_at: "2026-11-18T10:00:00Z", decision_card_id: null });
+    const run = (deals: ReturnType<typeof deal>[]) => partnersPanel({ tlcEvents: [{ id: "e", month: "2027-01", topic: "T", event_date: "2027-01-23" }], tlcDeals: deals, roomEvents: [], roomSponsors: [], tlcTargetUsd: 25_000, cardUrl: (i) => i }, now)[0]!;
+    const title = run([deal("Claude", "TITLE", "AGREED", null), deal("Sensori", "PRODUCT", "AGREED", null, "spirit for the night")]);
+    expect(title.progressWords).toBe("$25,000 of $25,000 · 1 partner");
+    expect(title.progressPct).toBe(100);
+    expect(title.inKindWords).toBe("In kind: Sensori (spirit for the night)");
+    expect(title.partners.map((p) => p.role)).toEqual(["Title partner"]);
+    expect(title.warnings).toEqual([]);
+    const mix = run([deal("A", "PARTNER", "AGREED", null), deal("B", "LEAD", "PAID", null), deal("C", "PARTNER", "AGREED", 7_500), deal("D", "PRESENTING", "CALL", null)]);
+    expect(mix.progressWords).toBe("$22,500 of $25,000 · 3 partners");
+    const clash = run([deal("T", "TITLE", "AGREED", null), deal("X", "PARTNER", "AGREED", null)]);
+    expect(clash.warnings[0]).toMatch(/only cash partner/);
+    // A club the partners gave its own goal is measured against it.
+    const own = partnersPanel({ tlcEvents: [{ id: "e", month: "2027-03", topic: "T", event_date: "2027-03-18", sponsor_goal_usd: 40_000 }], tlcDeals: [deal("A", "LEAD", "AGREED", null)], roomEvents: [], roomSponsors: [], tlcTargetUsd: 25_000, cardUrl: (i) => i }, now)[0]!;
+    expect(own.progressWords).toBe("$10,000 of $40,000 · 1 partner");
+  });
+
+  it("the 0264 relabel moves exactly the eleven assistant-list ideas, keeps the owner's own, and allows MERGED", async () => {
+    const t2 = await createTestDb();
+    try {
+      const sql = readFileSync(new URL("../migrations/0264_tlc_economics_tiers_room_size_and_idea_origins.sql", import.meta.url), "utf8");
+      const update = /UPDATE tlc_idea\s+SET origin = 'SUGGESTED_LIST'[\s\S]*?;/.exec(sql)![0];
+      const SRC = "wc_b6177490-bd4f-4d71-9783-edb42e918253";
+      const NOTE = "On the partners' starting list (os@ email, 22 Oct).";
+      const listed = ["Fragrance Lab", "Matcha & Tea", "Zero-Proof Home Bar", "Home Espresso & Coffee", "Skincare Science", "Knife Skills & Home Cooking", "Sleep & Recovery", "Film Photography", "Sewing & Visible Mending", "AI Tools for Your Work", "Buying Your First NYC Home"];
+      let n = 0;
+      for (const topic of listed) await t2.db.prepare("INSERT INTO tlc_idea (id, topic, topic_key, note, origin, suggested_by, suggested_at, source_ref) VALUES (?1, ?2, ?3, ?4, 'OWNER_IDEA', 'Sequoia and Scooter', '2026-10-22', ?5)").bind(`i${n++}`, topic, topic.toLowerCase(), NOTE, SRC).run();
+      await t2.db.prepare("INSERT INTO tlc_idea (id, topic, topic_key, note, origin, suggested_by, suggested_at, source_ref) VALUES ('own', 'Sewing, matcha, day trading', 'sewing matcha day trading', '\"deep-dive one topic (sewing, matcha, day trading)\"', 'OWNER_IDEA', 'Sequoia', '2026-10-22', ?1)").bind(SRC).run();
+      await t2.db.prepare(update).run();
+      const rows = (await t2.db.prepare("SELECT topic, origin, suggested_by FROM tlc_idea ORDER BY id").all<{ topic: string; origin: string; suggested_by: string }>()).results;
+      expect(rows.filter((r) => r.origin === "SUGGESTED_LIST").map((r) => r.topic).sort()).toEqual([...listed].sort());
+      expect(rows.filter((r) => r.origin === "SUGGESTED_LIST").every((r) => r.suggested_by === "Assistant (planning doc)")).toBe(true);
+      expect(rows.find((r) => r.topic === "Sewing, matcha, day trading")).toEqual({ topic: "Sewing, matcha, day trading", origin: "OWNER_IDEA", suggested_by: "Sequoia" });
+      await t2.db.prepare("UPDATE tlc_idea SET status = 'MERGED', merged_into = 'The Longevity Reset' WHERE id = 'i0'").run();
+      await expect(t2.db.prepare("DELETE FROM tlc_idea WHERE id = 'i0'").run()).rejects.toThrow(/never deleted/);
+    } finally {
+      await disposeTestDb(t2);
+    }
   });
 });

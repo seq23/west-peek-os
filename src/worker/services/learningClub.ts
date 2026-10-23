@@ -33,6 +33,26 @@ import {
   TLC_SPONSOR_CASH_TARGET_USD,
   TLC_TIERS,
   approvalState,
+  competingCategories,
+  creditForQuote,
+  goalOf,
+  isTlcTier,
+  paceCheck,
+  seatsOf,
+  seatsWords,
+  titleConflict,
+  ideaEligibility,
+  TLC_SPONSOR_GOAL_USD,
+  aiRuleProblems,
+  frontierConflict,
+  isAiTopic,
+  doNotRun,
+  switchVerdict,
+  TLC_SWITCH_MIN_CASH_YES,
+  isBettingCategory,
+  sponsorMixProblems,
+  TLC_NO_BETTING_THROUGH,
+  type TlcBackup,
   replyLooksLikeNo,
   TLC_BOOKING_HOURS,
   TLC_BOOKING_PACK_DAYS,
@@ -146,6 +166,11 @@ export interface TlcEventRow {
   go_checks_json: string | null;
   recap: string | null;
   pitch_token?: string | null;
+  seats_min?: number | null;
+  seats_max?: number | null;
+  sponsor_goal_usd?: number | null;
+  backup_json?: string | null;
+  switch_deadline?: string | null;
   firm_scope: string;
 }
 
@@ -201,10 +226,63 @@ async function dealsFor(env: Env, eventId: string): Promise<TlcDealRow[]> {
 /** The club's money, from the books: sponsor cash agreed or better, booked costs, paid tickets. */
 export async function economicsFor(env: Env, ev: TlcEventRow): Promise<EventEconomics> {
   const deals = await dealsFor(env, ev.id);
-  const cash = deals.filter((d) => ["AGREED", "PAID", "DELIVERED"].includes(d.stage)).reduce((s, d) => s + (d.cash_offer_usd ?? 0), 0);
+  // A product partner's value is cost relief, never cash toward the goal (owner, 22 Oct 2026).
+  const cash = deals.filter((d) => ["AGREED", "PAID", "DELIVERED"].includes(d.stage) && d.tier !== "PRODUCT").reduce((s, d) => s + (d.cash_offer_usd ?? 0), 0);
   const inKind = deals.filter((d) => ["AGREED", "PAID", "DELIVERED"].includes(d.stage)).reduce((s, d) => s + (d.in_kind_value_usd ?? 0), 0);
   const tickets = (await env.WP_OS_DB.prepare("SELECT amount_usd, fee_usd FROM tlc_ticket WHERE event_id = ?1 AND refunded_at IS NULL").bind(ev.id).all<{ amount_usd: number; fee_usd: number | null }>()).results ?? [];
-  return eventEconomics({ sponsorCashUsd: cash, committedCostsUsd: ev.committed_costs_usd ?? 0, tickets, inKindValueUsd: inKind });
+  return eventEconomics({ sponsorCashUsd: cash, committedCostsUsd: ev.committed_costs_usd ?? 0, tickets, inKindValueUsd: inKind, costBudgetUsd: goalOf(ev).costBudgetUsd });
+}
+
+/** The month as it would be if its backup took over (for the backup's own documents). */
+export function backupRow(ev: TlcEventRow, b: TlcBackup): TlcEventRow {
+  return { ...ev, topic: b.topic, angle: b.angle, packet_json: JSON.stringify(b.packet), sponsor_categories_json: JSON.stringify(b.categories), seats_min: b.seats_min ?? ev.seats_min, seats_max: b.seats_max ?? ev.seats_max, backup_json: null };
+}
+
+/** The backup club stored on a month, or null. */
+export function backupOf(ev: Pick<TlcEventRow, "backup_json">): TlcBackup | null {
+  if (!ev.backup_json) return null;
+  try { return JSON.parse(ev.backup_json) as TlcBackup; } catch { return null; }
+}
+
+/**
+ * THE ONE SWITCH (owner, 22 Oct 2026), for every month. Returns what it did, or null when nothing
+ * was due. Counts cash yeses (any tier but Product) and whether a Title partner said yes.
+ */
+export async function applyBackupSwitch(env: Env, ev: TlcEventRow, now: Date, firmScope = "west-peek"): Promise<"SWITCHED" | "KEPT" | null> {
+  const backup = backupOf(ev);
+  const yes = (await dealsFor(env, ev.id)).filter((d) => !["DECLINED", "STOPPED"].includes(d.stage) && (d.yes_at || ["CALL", "WAITING_ON_OWNERS", "AGREED", "PAID", "DELIVERED"].includes(d.stage)));
+  const said = { cashYes: yes.filter((d) => d.tier !== "PRODUCT").length, titleYes: yes.some((d) => d.tier === "TITLE") };
+  const verdict = switchVerdict(backup, ev.switch_deadline ?? null, now, said);
+  if (!backup || verdict === "NO_BACKUP" || verdict === "NOT_DUE" || verdict === "DONE") return null;
+  if (verdict === "KEEP") {
+    await env.WP_OS_DB.prepare("UPDATE tlc_event SET backup_json = ?2, updated_at = ?3 WHERE id = ?1").bind(ev.id, JSON.stringify({ ...backup, kept_at: now.toISOString(), said }), now.toISOString()).run();
+    return "KEPT";
+  }
+  const was = ev.topic ?? "";
+  await env.WP_OS_DB.prepare(
+    "UPDATE tlc_event SET topic = ?2, angle = ?3, packet_json = ?4, sponsor_categories_json = ?5, seats_min = COALESCE(?6, seats_min), seats_max = COALESCE(?7, seats_max), backup_json = ?8, updated_at = ?9 WHERE id = ?1",
+  ).bind(ev.id, backup.topic, backup.angle, JSON.stringify(backup.packet), JSON.stringify(backup.categories), backup.seats_min ?? null, backup.seats_max ?? null, JSON.stringify({ ...backup, applied_at: now.toISOString(), switched_from: was, said }), now.toISOString()).run();
+  await env.WP_OS_DB.prepare("UPDATE tlc_idea SET status = 'ALTERNATIVE', status_month = NULL, updated_at = ?2 WHERE topic_key = ?1 AND status = 'PICKED'").bind(topicKey(was), now.toISOString()).run();
+  await upsertIdea(env, { topic: backup.topic, origin: "BRANDS_SPENDING", suggestedBy: "Backup topic", suggestedAt: now.toISOString(), status: "PICKED", month: ev.month, firmScope });
+  const deadline = (ev.switch_deadline ?? "").slice(0, 10);
+  await emailOwner(env, {
+    employee: "Wynn",
+    email: {
+      what: `TLC ${monthWords(ev.month)}: switched to the backup`,
+      tldr: `${monthWords(ev.month)} switched from ${was} to ${backup.topic}: by ${deadline}, ${said.cashYes} cash sponsor${said.cashYes === 1 ? "" : "s"} had said yes and no Title partner; it needed ${TLC_SWITCH_MIN_CASH_YES} or a Title partner.`,
+      sections: [
+        { label: "What switched", bullets: [`From: ${was}`, `To: ${backup.topic}`, `Same date: ${ev.event_date}`] },
+        { label: "Why", bullets: [`Your rule: fewer than ${TLC_SWITCH_MIN_CASH_YES} cash sponsors and no Title partner by the deadline (${deadline}) switches the month to its backup.`, `Cash yeses by then: ${said.cashYes}. Title partner: none.`] },
+        { label: "What happens next", bullets: ["Wynn starts on the backup slate this week. Its brand pitch needs your approval before any brand sees it."] },
+      ],
+    },
+    objectType: "tlc_event",
+    objectId: ev.id,
+    cardId: null,
+    cardKind: null,
+    firmScope,
+  });
+  return "SWITCHED";
 }
 
 // ── Email to the owner (Sequoia only: TLC_RECIPIENTS) ──────────────────────────────────────────
@@ -310,7 +388,7 @@ export async function openTopicsCard(env: Env, now: Date, firmScope = "west-peek
     kind: "TLC_TOPICS",
     owner: PARKER,
     description: [
-      "THE LEARNING CLUB (TLC). Parker CHOOSES the topic for each month below, writes the Rooms packet for it, names 5–10 sponsor categories, and emails both partners.",
+      "THE LEARNING CLUB (TLC). Parker CHOOSES the topic for each month below, writes the Rooms packet for it, names 5–10 sponsor categories, and emails Sequoia.",
       "His picks PROCEED unless either partner replies no within 3 days. Nothing waits on the owners.",
       `Months: ${months.join(", ")}.`,
     ].join("\n"),
@@ -395,9 +473,43 @@ export async function runTlcDaily(env: Env, now: Date, firmScope = "west-peek"):
         ).bind(ev.id, now.toISOString(), JSON.stringify(vetoed)).run();
         out.swapFlagged.push(ev.month);
       }
+      // PRIMARY OR BACKUP: on the month's switch deadline, too few yeses hand the month to its backup, and Sequoia is told.
+      if (hasTopic) {
+        const r = await applyBackupSwitch(env, ev, now, firmScope);
+        if (r) out.goChecks.push({ month: ev.month, checkpoint: 0, verdict: r });
+      }
       // 21 AND 14 DAYS OUT: go, or escalate to Sequoia.
       if (hasTopic) {
-        const check = goAheadCheck({ daysOut: days, economics: await economicsFor(env, ev) });
+        // PACE (60 and 42 days out): behind pace, Sequoia is told; nothing else moves.
+        const econNow = await economicsFor(env, ev);
+        const pace = paceCheck(days, econNow.sponsorNetUsd + (ev.committed_costs_usd ?? 0), goalOf(ev).goalUsd);
+        const paceDone = list<{ checkpoint: number }>(ev.go_checks_json);
+        if (pace && !paceDone.some((d) => d.checkpoint === pace.checkpoint)) {
+          await env.WP_OS_DB.prepare("UPDATE tlc_event SET go_checks_json = ?2, updated_at = ?3 WHERE id = ?1")
+            .bind(ev.id, JSON.stringify([...paceDone, { checkpoint: pace.checkpoint, verdict: pace.behind ? "BEHIND_PACE" : "ON_PACE", at: now.toISOString() }]), now.toISOString()).run();
+          ev.go_checks_json = JSON.stringify([...paceDone, { checkpoint: pace.checkpoint }]);
+          if (pace.behind) {
+            const committed = econNow.sponsorNetUsd + (ev.committed_costs_usd ?? 0);
+            await emailOwner(env, {
+              employee: "Wynn",
+              email: {
+                what: `TLC ${monthWords(ev.month)}: behind pace, ${pace.checkpoint} days out`,
+                tldr: `The ${ev.topic} club has $${committed.toLocaleString("en-US")} agreed ${pace.checkpoint} days out; the pace is $${pace.neededUsd.toLocaleString("en-US")} of the $${goalOf(ev).goalUsd.toLocaleString("en-US")} goal.`,
+                sections: [
+                  { label: "Where it stands", bullets: [`Agreed sponsor cash: $${committed.toLocaleString("en-US")}`, `Pace for today: $${pace.neededUsd.toLocaleString("en-US")}`, `Goal: $${goalOf(ev).goalUsd.toLocaleString("en-US")}; the go-checks come at 21 and 14 days out`] },
+                  { label: "What I am doing", bullets: ["Taking the next brands in the queue to a call this week.", "Nothing is needed from you unless you want to add a sponsor yourself."] },
+                ],
+              },
+              objectType: "tlc_event",
+              objectId: ev.id,
+              cardId: null,
+              cardKind: null,
+              firmScope,
+            });
+          }
+          out.goChecks.push({ month: ev.month, checkpoint: pace.checkpoint, verdict: pace.behind ? "BEHIND_PACE" : "ON_PACE" });
+        }
+        const check = goAheadCheck({ daysOut: days, economics: econNow, seats: seatsOf(ev), costBudgetUsd: goalOf(ev).costBudgetUsd });
         const done = list<{ checkpoint: number }>(ev.go_checks_json);
         if (check.checkpoint !== null && !done.some((d) => d.checkpoint === check.checkpoint)) {
           const econ = await economicsFor(env, ev);
@@ -414,7 +526,7 @@ export async function runTlcDaily(env: Env, now: Date, firmScope = "west-peek"):
                   : `The ${ev.topic} club is short ${check.checkpoint} days out. ${check.reasons.join(" ")}`,
               tldrBullets: check.verdict === "GO" ? undefined : ['Reply "add sponsor", "cut cost" or "move date"'],
               sections: [
-                { label: "Where it stands", bullets: [`Paid tickets: ${econ.paidTickets} of ${TLC_SEATS.max} (${TLC_SEATS.min} needed two weeks out)`, `Sponsor net: $${econ.sponsorNetUsd.toLocaleString("en-US")} (floor $${TLC_NET_FLOOR_USD.toLocaleString("en-US")}, target $${TLC_NET_TARGET_USD.toLocaleString("en-US")})`, `Net with tickets after fees: $${econ.netUsd.toLocaleString("en-US")}`, `Booked costs: $${(ev.committed_costs_usd ?? 0).toLocaleString("en-US")} (cap $${TLC_COST_CAP_USD.toLocaleString("en-US")})`] },
+                { label: "Where it stands", bullets: [`Paid tickets: ${econ.paidTickets} of ${seatsOf(ev).max} (${seatsOf(ev).min} needed two weeks out)`, `Sponsor net: $${econ.sponsorNetUsd.toLocaleString("en-US")} (floor $${TLC_NET_FLOOR_USD.toLocaleString("en-US")}, target $${TLC_NET_TARGET_USD.toLocaleString("en-US")})`, `Net with tickets after fees: $${econ.netUsd.toLocaleString("en-US")}`, `Booked costs: $${(ev.committed_costs_usd ?? 0).toLocaleString("en-US")} (cap $${TLC_COST_CAP_USD.toLocaleString("en-US")})`] },
                 check.options.length ? { label: "The three ways out", bullets: check.options } : { label: "What happens next", bullets: ["Nothing needed from you. Wynn keeps selling and the tickets stay open until the seats are gone."] },
               ],
             },
@@ -517,7 +629,7 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Pro
   for (const deal of due) {
     const ev = await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>();
     if (!ev?.topic) continue;
-    const mail = dripEmail({ step: deal.drip_step, brand: deal.brand, contactName: deal.contact_name, topic: ev.topic, month: ev.month, eventDate: ev.event_date, why: deal.why_fit });
+    const mail = dripEmail({ step: deal.drip_step, brand: deal.brand, contactName: deal.contact_name, topic: ev.topic, month: ev.month, eventDate: ev.event_date, why: deal.why_fit, seats: seatsOf(ev) });
     if (!gate.open || room <= 0) {
       const why = gate.open ? "today's warm-up allowance is used" : gate.reasons.join("; ");
       await env.WP_OS_DB.prepare(
@@ -775,6 +887,21 @@ export interface TlcIdeaRow {
   status_card_id: string | null;
   dropped_by: string | null;
   dropped_at: string | null;
+  merged_into?: string | null;
+  earliest_month?: string | null;
+  packet_json?: string | null;
+}
+
+function ideaPacket(i: { packet_json?: string | null }): { ai_angle?: unknown; ai_segment?: unknown } | null {
+  try { return i.packet_json ? (JSON.parse(i.packet_json) as { ai_angle?: unknown }) : null; } catch { return null; }
+}
+
+/** How many clubs have each raised the full $25,000 (or their own goal) in agreed cash, from tlc_deal. */
+export async function fundedEventCount(env: Env): Promise<number> {
+  const rows = (await env.WP_OS_DB.prepare(
+    "SELECT e.id, COALESCE(e.sponsor_goal_usd, ?1) AS goal, COALESCE(SUM(CASE WHEN d.stage IN ('AGREED','PAID','DELIVERED') AND COALESCE(d.tier,'') != 'PRODUCT' THEN d.cash_offer_usd ELSE 0 END), 0) AS cash FROM tlc_event e LEFT JOIN tlc_deal d ON d.event_id = e.id GROUP BY e.id",
+  ).bind(TLC_SPONSOR_GOAL_USD).all<{ id: string; goal: number; cash: number }>()).results ?? [];
+  return rows.filter((r) => r.cash >= r.goal).length;
 }
 
 export async function ideasFor(env: Env, firmScope = "west-peek"): Promise<TlcIdeaRow[]> {
@@ -796,9 +923,9 @@ export async function upsertIdea(
     `INSERT INTO tlc_idea (id, topic, topic_key, note, origin, suggested_by, suggested_at, source_ref, preferred_month, status, status_month, status_card_id, firm_scope)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
      ON CONFLICT (firm_scope, topic_key) DO UPDATE SET
-       status = CASE WHEN tlc_idea.status = 'DROPPED' OR ?14 = 0 THEN tlc_idea.status ELSE excluded.status END,
-       status_month = CASE WHEN tlc_idea.status = 'DROPPED' OR ?14 = 0 THEN tlc_idea.status_month ELSE excluded.status_month END,
-       status_card_id = CASE WHEN tlc_idea.status = 'DROPPED' OR ?14 = 0 THEN tlc_idea.status_card_id ELSE excluded.status_card_id END,
+       status = CASE WHEN tlc_idea.status IN ('DROPPED','MERGED') OR ?14 = 0 THEN tlc_idea.status ELSE excluded.status END,
+       status_month = CASE WHEN tlc_idea.status IN ('DROPPED','MERGED') OR ?14 = 0 THEN tlc_idea.status_month ELSE excluded.status_month END,
+       status_card_id = CASE WHEN tlc_idea.status IN ('DROPPED','MERGED') OR ?14 = 0 THEN tlc_idea.status_card_id ELSE excluded.status_card_id END,
        note = COALESCE(tlc_idea.note, excluded.note),
        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
   ).bind(
@@ -907,13 +1034,13 @@ export function buildTopicsPrompt(
   months: readonly string[],
   exclude: readonly string[],
   chosen: Readonly<Record<string, string>> = {},
-  opts: { ideas?: ReadonlyArray<Pick<TlcIdeaRow, "topic" | "origin" | "suggested_by" | "suggested_at" | "note" | "preferred_month" | "status">>; partnerWords?: ReadonlyArray<{ who: string; at: string; text: string }>; playbook?: string | null; library?: Parameters<typeof libraryBlock>[0]; part?: "all" | "picks" | "alternatives"; picked?: readonly string[] } = {},
+  opts: { ideas?: ReadonlyArray<Pick<TlcIdeaRow, "topic" | "origin" | "suggested_by" | "suggested_at" | "note" | "preferred_month" | "status"> & { earliest_month?: string | null; packet_json?: string | null }>; fundedEvents?: number; partnerWords?: ReadonlyArray<{ who: string; at: string; text: string }>; playbook?: string | null; library?: Parameters<typeof libraryBlock>[0]; part?: "all" | "picks" | "alternatives"; picked?: readonly string[] } = {},
 ): string {
   const kept = months.filter((m) => chosen[m]);
   const part = opts.part ?? "all";
   const picksPart = part !== "alternatives";
   const altsPart = part !== "picks";
-  const ideas = (opts.ideas ?? []).filter((i) => i.status !== "DROPPED");
+  const ideas = (opts.ideas ?? []).filter((i) => i.status !== "DROPPED" && i.status !== "MERGED");
   return [
     personaPrompt("Parker", "Event Marketing Coordinator"),
     "",
@@ -922,16 +1049,21 @@ export function buildTopicsPrompt(
     libraryBlock(opts.library ?? []),
     "",
     "THE IDEAS LIST — read this FIRST. Weigh every idea on its merits next to what you find; you decide.",
-    ...(ideas.length ? ideas.map((i) => `- ${i.topic} [${TLC_IDEA_ORIGIN_LABEL[i.origin]}; ${i.suggested_by}, ${i.suggested_at.slice(0, 10)}]${i.preferred_month ? ` (preferred: ${monthWords(i.preferred_month)})` : ""}${i.note ? ` — ${i.note}` : ""}`) : ["- (no ideas on the list yet)"]),
+    ...(ideas.length ? ideas.map((i) => {
+      const e = ideaEligibility({ topic: i.topic, earliest_month: i.earliest_month ?? null, packet: ideaPacket(i) }, months[0] ?? "", opts.fundedEvents ?? 0);
+      const angle = ideaPacket(i)?.ai_angle;
+      return `- ${i.topic} [${TLC_IDEA_ORIGIN_LABEL[i.origin]}; ${i.suggested_by}, ${i.suggested_at.slice(0, 10)}]${i.preferred_month ? ` (preferred: ${monthWords(i.preferred_month)})` : ""}${typeof angle === "string" ? ` AI angle: ${angle}` : ""}${e.eligible ? "" : ` [NOT a primary yet: ${e.why}]`}${i.note ? ` — ${i.note}` : ""}`;
+    }) : ["- (no ideas on the list yet)"]),
     ...(altsPart && opts.partnerWords?.length ? ["", "WHAT THE PARTNERS WROTE (under found_ideas, name each concrete club topic they suggested — one topic per entry, not a format or a list of examples — with a short quote copied exactly):", ...opts.partnerWords.map((w) => `--- ${w.who}, ${w.at.slice(0, 10)}:\n${w.text}`)] : []),
     "",
     "WHERE IDEAS COME FROM — draw on all three, and label each pick and alternative with its origin:",
-    "- OWNER_IDEA: an idea on the list above that a partner sent.",
+    "- OWNER_IDEA: an idea on the list above that a partner sent in their own words.",
+    "- SUGGESTED_LIST: an idea on the list above from a suggested list (not a partner's own idea).",
     "- BRANDS_SPENDING: research which brands are spending right now (recent sponsorships, campaigns, launches, funding rounds, NYC event sponsorships), and sometimes reverse-engineer a club from a brand that is clearly buying.",
     "- TREND: what people are searching for and curious about right now.",
     "Favour topics where meeting in person is the point — the connection in the room is part of what people pay for.",
     "",
-    `You are choosing topics for The Learning Club: in-person, ${TLC_CITY} only, ${TLC_SEATS.min}–${TLC_SEATS.max} people, one topic, a 3–4 hour deep dive on one afternoon (Sat 1–5 pm) or one evening (Thu 6–10 pm). Every attendee pays a $${TLC_TICKET_PRICE_USD} ticket. Everyone leaves with something they made or learned.`,
+    `You are choosing topics for The Learning Club: in-person, ${TLC_CITY} only, ${TLC_SEATS.min}–${TLC_SEATS.max} people by default (the partners size each room to its sponsors), one topic, a 3–4 hour deep dive on one afternoon (Sat 1–5 pm) or one evening (Thu 6–10 pm). Every attendee pays a $${TLC_TICKET_PRICE_USD} ticket. Everyone leaves with something they made or learned.`,
     `Run of show: ${runOfShowLines().join("; ")}.`,
     picksPart ? `Pick ONE topic for each of these months: ${months.map(monthWords).join(", ")}. No two months the same topic. Every month must have a pick.` : "",
     !picksPart && opts.picked?.length ? `The picks are already made: ${opts.picked.join("; ")}. Do not repeat them.` : "",
@@ -945,21 +1077,23 @@ export function buildTopicsPrompt(
     ...TLC_TOPIC_CRITERIA.map((c) => `- ${c}`),
     "",
     "For a topic with a legal or health angle (for example peptides and biohacking, supplements, money), add a short regulatory_note: which sponsor types can legally sponsor it in New York and what they may not claim. It stays on the card; it never goes in the email.",
-    picksPart ? "For each pick give the usual Rooms packet: the angle, why now (with sources), what happens in the hands-on hour, what people take home, the kind of expert who teaches it, and 5–10 sponsor categories that fit (each with why and two or three example brands)." : "",
+    picksPart ? "For each pick give the usual Rooms packet: the angle, why now (with sources), what happens in the hands-on hour, what people take home, the kind of expert who teaches it, and 5–10 sponsor categories that fit (each with why and two or three example brands). The categories are COMPLEMENTARY, never competitors: one drink base, then mixers, glassware, wellness, food; never two kinds of the same product." : "",
     "Write each topic as its name only — no day, time, month or format in brackets.",
+    "Never pick a standalone peptides topic (FDA warning letters to research-use sellers). No betting sponsors before April 2027; never betting beside trading.",
+    "EVERY CLUB HAS AN AI ANGLE: a topic not explicitly about AI gives ai_segment (one AI segment inside the Go deeper block, e.g. guests use an AI assistant on their own material) and includes one category marked ai_partner true (\"AI partner\": cash at any tier, or credits for every guest or an expert who runs the segment). Mark any frontier-model company's category frontier_model true; only one is seated per club.",
     "Brand-safe words (a brand reads these): never a trademarked campaign name such as Dry January, never a promised result (\"they leave with three automations running\"), never a date (the club's date is set elsewhere), and never a label like (lead), (supporting) or category-exclusive. Several brands partner on a club; nobody gets a category to itself.",
     altsPart ? `Give exactly ${TLC_ALTERNATIVES} ALTERNATIVE topics (partner ideas, brands spending now and trends alike; each with its origin) the partners could swap in: each different from the picks and from each other, with a one-line reason it would work and two or three real brands that would pay to sponsor it.` : "",
     "This goes to the partners as it is: write only what each topic IS. Never mention a topic you turned down, rejected or ruled out, or why.",
     "Use ONLY real, live web pages as sources. Do not invent statistics, quotes or events.",
     "",
     `Return ONLY JSON: {${[
-      picksPart ? '"picks":[{"month":"YYYY-MM","topic":"","angle":"","why_now":"","criteria":{"product_used":"","irl_spend":"","sponsors_fit":"","pays_10":""},"hands_on":"","take_home":"","teacher_profile":"","origin":"OWNER_IDEA|BRANDS_SPENDING|TREND","regulatory_note":"","sponsor_categories":[{"category":"","why":"","example_brands":[""]}],"sources":[{"title":"","url":""}]}]' : "",
+      picksPart ? '"picks":[{"month":"YYYY-MM","topic":"","angle":"","why_now":"","criteria":{"product_used":"","irl_spend":"","sponsors_fit":"","pays_10":""},"hands_on":"","take_home":"","teacher_profile":"","ai_segment":"","origin":"OWNER_IDEA|BRANDS_SPENDING|TREND","regulatory_note":"","sponsor_categories":[{"category":"","why":"","example_brands":[""],"tier":"","ai_partner":false,"frontier_model":false}],"sources":[{"title":"","url":""}]}]' : "",
       altsPart ? '"alternatives":[{"topic":"","origin":"OWNER_IDEA|BRANDS_SPENDING|TREND","reason":"","brands":[""],"regulatory_note":""}],"found_ideas":[{"topic":"","quote":""}]' : "",
     ].filter(Boolean).join(",")}}`,
   ].filter(Boolean).join("\n");
 }
 
-export function buildBookingPackPrompt(ev: Pick<TlcEventRow, "topic" | "event_date" | "slot">, playbook: string | null = null, library: Parameters<typeof libraryBlock>[0] = []): string {
+export function buildBookingPackPrompt(ev: Pick<TlcEventRow, "topic" | "event_date" | "slot" | "seats_min" | "seats_max" | "sponsor_goal_usd">, playbook: string | null = null, library: Parameters<typeof libraryBlock>[0] = []): string {
   return [
     personaPrompt("Parker", "Event Marketing Coordinator"),
     "",
@@ -967,12 +1101,12 @@ export function buildBookingPackPrompt(ev: Pick<TlcEventRow, "topic" | "event_da
     "",
     libraryBlock(library),
     "",
-    `Build the booking pack for The Learning Club: "${ev.topic}", ${TLC_CITY}, on ${ev.event_date} (${ev.slot === "AFTERNOON" ? "Saturday 1–5 pm" : "Thursday 6–10 pm"}), ${TLC_SEATS.min}–${TLC_SEATS.max} people, ${TLC_BOOKING_HOURS} hours.`,
+    `Build the booking pack for The Learning Club: "${ev.topic}", ${TLC_CITY}, on ${ev.event_date} (${ev.slot === "AFTERNOON" ? "Saturday 1–5 pm" : "Thursday 6–10 pm"}), ${seatsWords(seatsOf(ev))} people, ${TLC_BOOKING_HOURS} hours.`,
     `Run of show: ${runOfShowLines().join("; ")}.`,
     "These are OPTIONS for the partners, who book and pay. You never book, reserve or pay for anything.",
-    `Everything together must fit inside $${TLC_COST_CAP_USD.toLocaleString("en-US")}.`,
+    `Everything together must fit inside $${goalOf(ev).costBudgetUsd.toLocaleString("en-US")}. An in-kind venue or product is preferred: it lowers cost.`,
     "",
-    `Give: ${Object.values(BOOKING_PACK_SHAPE).map((s) => `${s.min === s.max ? s.min : `${s.min}–${s.max}`} ${s.label}`).join("; ")}; a materials list with links, quantities and unit prices for ${TLC_SEATS.max} people.`,
+    `Give: ${Object.values(BOOKING_PACK_SHAPE).map((s) => `${s.min === s.max ? s.min : `${s.min}–${s.max}`} ${s.label}`).join("; ")}; a materials list with links, quantities and unit prices for ${seatsOf(ev).max} people.`,
     "Donated-venue leads first (law firms, coworking spaces like WeWork, brand showrooms that host community events), then paid venues. A real meal, not snacks. Host and venue priced for 4 hours; the expert paid for the whole session.",
     "Every option needs: a real live URL for it, a price in USD (an estimate is fine if marked in the note), and a book_by date (YYYY-MM-DD).",
     "",
@@ -989,7 +1123,14 @@ export function buildBrandBatchPrompt(events: ReadonlyArray<Pick<TlcEventRow, "m
     libraryBlock(library),
     "",
     "Find brands to sponsor these clubs:",
-    ...events.map((e) => `- ${monthWords(e.month)}: "${e.topic}". Categories: ${list<{ category: string }>(e.sponsor_categories_json).map((c) => c.category).join(", ")}`),
+    ...events.map((e) => {
+      const cats = list<{ category: string; bench?: boolean; excluded_brands?: string[]; featured?: string | null; tier?: string }>(e.sponsor_categories_json);
+      const live = cats.filter((c) => !c.bench).map((c) => `${c.category}${c.featured ? ` (filled: ${c.featured})` : ""}${c.tier && isTlcTier(c.tier) ? ` [${TLC_TIERS[c.tier].label}]` : ""}`);
+      const never = cats.flatMap((c) => c.excluded_brands ?? []);
+      return `- ${monthWords(e.month)}: "${e.topic}". Categories: ${live.join(", ")}${never.length ? `. NEVER approach (they compete with a featured partner): ${never.join(", ")}` : ""}`;
+    }),
+    "Sponsors in a club are complementary, never competitors: never offer a brand that competes with a featured or agreed partner, and skip any category already filled.",
+    "Never a peptide seller. No betting brands (sportsbooks, prediction markets) before April 2027, and never a betting brand beside a trading or investing brand.",
     exclude.length ? `Already contacted for that club (do not repeat): ${exclude.join("; ")}.` : "",
     "",
     "Up to 5 brands per club. For each: a NAMED person whose job is partnerships, events, community or brand marketing, their email address exactly as it appears on a live public page, and that page's URL. No guessed addresses. If you cannot find an address on a page, leave the brand out.",
@@ -1154,7 +1295,9 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
   const library = await researchLibrary(env, card.firm_scope);
   const partnerTopics = ideas.filter((i) => i.origin === "OWNER_IDEA").map((i) => i.topic);
   /** A topic a partner sent is labelled theirs, whatever the model called it, and under whatever subtitle. */
-  const originOf = (topic: string, said: unknown): TlcIdeaOrigin | null => (partnerTopics.some((t) => sameTopic(t, topic)) ? "OWNER_IDEA" : isIdeaOrigin(said) && said !== "OWNER_IDEA" ? said : null);
+  const listedTopics = ideas.filter((i) => i.origin === "SUGGESTED_LIST").map((i) => i.topic);
+  const originOf = (topic: string, said: unknown): TlcIdeaOrigin | null =>
+    partnerTopics.some((t) => sameTopic(t, topic)) ? "OWNER_IDEA" : listedTopics.some((t) => sameTopic(t, topic)) ? "SUGGESTED_LIST" : isIdeaOrigin(said) && said !== "OWNER_IDEA" && said !== "SUGGESTED_LIST" ? said : null;
   type Kept = { month: string; topic: string; origin: TlcIdeaOrigin; pick: Record<string, unknown>; sources: Array<{ title: string; url: string }>; categories: Array<{ category: string; why: string; example_brands: string[] }> };
   const draftKey = `topics_draft:${card.id}`;
   const stored = await env.WP_OS_DB.prepare("SELECT value FROM tlc_setting WHERE key = ?1").bind(draftKey).first<{ value: string }>();
@@ -1173,22 +1316,31 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
     const pending = need.find((e) => !draft.picks[e.month]);
     if (pending) {
       const taken = new Set([...used, ...draftedTopics()].map((u) => u.toLowerCase()));
-      const found = await search(env, actorFor(PARKER, card.firm_scope), buildTopicsPrompt([pending.month], [...used, ...draftedTopics()], chosen, { ideas, playbook, library, part: "picks" }));
+      const funded = await fundedEventCount(env);
+      const found = await search(env, actorFor(PARKER, card.firm_scope), buildTopicsPrompt([pending.month], [...used, ...draftedTopics()], chosen, { ideas, fundedEvents: funded, playbook, library, part: "picks" }));
       if (!found.ok) return searchFailed(env, card, "Parker", found, now);
       const pick = (((jsonIn(found.text) ?? {}).picks as Array<Record<string, unknown>> | undefined) ?? []).find((p) => str(p.month) === pending.month);
       const topic = chosen[pending.month] ?? partnerTopics.find((t) => sameTopic(t, str(pick?.topic))) ?? topicName(str(pick?.topic));
       if (!pick || !topic || taken.has(topic.toLowerCase())) return failNote(`${monthWords(pending.month)} had no usable pick`);
+      if (doNotRun(topic)) return failNote(`${monthWords(pending.month)} (${topic}): ${doNotRun(topic)}`);
+      if (!isAiTopic(topic) && !str(pick.ai_segment)) return failNote(`${monthWords(pending.month)} (${topic}): not an AI topic and no AI segment`);
+      const listed = ideas.find((i) => sameTopic(i.topic, topic));
+      const gate = ideaEligibility({ topic, earliest_month: listed?.earliest_month ?? null, packet: listed ? ideaPacket(listed) ?? { ai_segment: str(pick.ai_segment) } : { ai_segment: str(pick.ai_segment) } }, pending.month, funded);
+      if (!chosen[pending.month] && !gate.eligible) return failNote(`${monthWords(pending.month)} (${topic}) is not a primary yet: ${gate.why}`);
       const origin = originOf(topic, pick.origin);
       if (!origin) return failNote(`${monthWords(pending.month)} (${topic}) had no origin label`);
       const sources = ((pick.sources as Array<{ title?: string; url?: string }>) ?? []).map((x) => ({ title: str(x.title), url: str(x.url) })).filter((x) => isUrl(x.url));
       const live: typeof sources = [];
       for (const x of sources) if (await check(x.url)) live.push(x);
-      const categories = ((pick.sponsor_categories as Array<{ category?: string; why?: string; example_brands?: string[] }>) ?? [])
-        .map((c) => ({ category: str(c.category), why: str(c.why), example_brands: (c.example_brands ?? []).map(str).filter(Boolean) }))
+      const categories = ((pick.sponsor_categories as Array<{ category?: string; why?: string; example_brands?: string[]; tier?: unknown; bench?: unknown }>) ?? [])
+        .map((c) => ({ category: str(c.category), why: str(c.why), example_brands: (c.example_brands ?? []).map(str).filter(Boolean), ...(isTlcTier(c.tier) ? { tier: c.tier } : {}), ...(c.bench === true ? { bench: true } : {}), ...((c as { ai_partner?: unknown }).ai_partner === true ? { ai_partner: true } : {}), ...((c as { frontier_model?: unknown }).frontier_model === true ? { frontier_model: true } : {}) }))
         .filter((c) => c.category);
       if (live.length === 0) return failNote(`${monthWords(pending.month)} (${topic}): no source page answered`);
       if (categories.length < TLC_SPONSOR_CATEGORIES.min) return failNote(`${monthWords(pending.month)} (${topic}): ${categories.length} sponsor categories, ${TLC_SPONSOR_CATEGORIES.min} needed`);
-      draft.picks[pending.month] = { month: pending.month, topic, origin, pick, sources: live, categories: categories.slice(0, TLC_SPONSOR_CATEGORIES.max) };
+      const kept = categories.slice(0, TLC_SPONSOR_CATEGORIES.max);
+      // The AI partner slot every non-AI club carries; added when the pick left it out.
+      if (!isAiTopic(topic) && !kept.some((c) => (c as { ai_partner?: boolean }).ai_partner)) kept.push({ category: "AI partner", why: "Every club has an AI angle: cash at any tier, or credits for every guest or an expert who runs the AI segment.", example_brands: [], ai_partner: true } as (typeof kept)[number]);
+      draft.picks[pending.month] = { month: pending.month, topic, origin, pick, sources: live, categories: kept };
       await saveDraft();
     } else if (!draft.alternatives) {
       const words = await partnerWords(env, card.firm_scope, now);
@@ -1197,8 +1349,10 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
       const answer = jsonIn(found.text) ?? {};
       // EVERY IDEA A PARTNER WROTE DOWN IS CAPTURED, picked or not, the moment Parker reads it (owner, 22 Oct 2026).
       for (const f of ideasFoundIn(answer.found_ideas, words).filter((x) => !ideas.some((i) => sameTopic(i.topic, x.topic)))) {
-        await upsertIdea(env, { topic: f.topic, origin: "OWNER_IDEA", suggestedBy: f.who, suggestedAt: f.at, note: `"${f.quote.slice(0, 200)}"`, sourceRef: f.ref, firmScope: card.firm_scope });
-        partnerTopics.push(f.topic);
+        // CREDITED BY WHAT THE EMAIL ITSELF SAYS (22 Oct 2026): a list item with no claim of authorship is a suggested list.
+        const origin = creditForQuote(words.find((w) => w.ref === f.ref)?.text ?? "", f.quote);
+        await upsertIdea(env, { topic: f.topic, origin, suggestedBy: origin === "OWNER_IDEA" ? f.who : `Suggested list (in ${f.who}'s email)`, suggestedAt: f.at, note: `"${f.quote.slice(0, 200)}"`, sourceRef: f.ref, firmScope: card.firm_scope });
+        if (origin === "OWNER_IDEA") partnerTopics.push(f.topic);
       }
       const alts = (answer.alternatives as Array<Record<string, unknown>> | undefined) ?? [];
       // A partner's idea goes under the partner's own name, so the list shows it where it stands.
@@ -1221,7 +1375,7 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
     const reason = str(a.reason);
     const brands = (Array.isArray(a.brands) ? a.brands : []).map(str).filter(Boolean).slice(0, 3);
     const origin = originOf(topic, a.origin);
-    if (!origin || !topic || !reason || brands.length === 0 || taken.has(topic.toLowerCase()) || alternatives.some((x) => x.topic.toLowerCase() === topic.toLowerCase())) continue;
+    if (!origin || !topic || !reason || brands.length === 0 || doNotRun(topic) || taken.has(topic.toLowerCase()) || alternatives.some((x) => x.topic.toLowerCase() === topic.toLowerCase())) continue;
     alternatives.push({ topic, origin, reason: /[.!?]$/.test(reason) ? reason : `${reason}.`, brands });
     if (str(a.regulatory_note)) regulatory.push(`${topic}: ${str(a.regulatory_note)}`);
   }
@@ -1239,7 +1393,8 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
     const packet = {
       topic: k.topic, angle: str(k.pick.angle), why_now: str(k.pick.why_now), criteria: k.pick.criteria ?? null,
       hands_on: str(k.pick.hands_on), take_home: str(k.pick.take_home), teacher_profile: str(k.pick.teacher_profile),
-      run_of_show: runOfShowLines(), sources: k.sources,
+      ...(str(k.pick.ai_segment) ? { ai_segment: str(k.pick.ai_segment) } : {}),
+      run_of_show: runOfShowLines(str(k.pick.ai_segment) || null), sources: k.sources,
     };
     await env.WP_OS_DB.prepare(
       "UPDATE tlc_event SET topic = ?2, angle = ?3, packet_json = ?4, sponsor_categories_json = ?5, status = 'TOPIC_PROPOSED', veto_until = ?6, topic_card_id = ?7, swap_flagged_at = NULL, updated_at = ?8 WHERE id = ?1",
@@ -1377,9 +1532,9 @@ async function runBookingPack(env: Env, card: SweepCard, now: Date, search: TlcS
     employee: "Parker",
     email: {
       what: `TLC booking pack, ${monthWords(ev.month)}`,
-      tldr: `Options for you to book and pay; I have booked nothing. The cheapest full plan costs $${totals.costUsd.toLocaleString("en-US")} (cap $${TLC_COST_CAP_USD.toLocaleString("en-US")}) and nets $${totals.netUsd.toLocaleString("en-US")} against agreed sponsor cash of $${totals.sponsorCashUsd.toLocaleString("en-US")}.`,
+      tldr: `Options for you to book and pay; I have booked nothing. The cheapest full plan costs $${totals.costUsd.toLocaleString("en-US")} (budget $${goalOf(ev).costBudgetUsd.toLocaleString("en-US")}) and nets $${totals.netUsd.toLocaleString("en-US")} against agreed sponsor cash of $${totals.sponsorCashUsd.toLocaleString("en-US")}.`,
       sections: [
-        { label: "Totals", bullets: [...totals.lines.map((l) => `${l.what}: ${l.name}, $${l.priceUsd.toLocaleString("en-US")}`), `Cost $${totals.costUsd.toLocaleString("en-US")} (best case with a donated venue $${totals.bestCaseCostUsd.toLocaleString("en-US")}) — ${totals.underCap ? "inside" : "OVER"} the $${TLC_COST_CAP_USD.toLocaleString("en-US")} cap`, `Net vs $10,000 target: ${totals.vsTarget >= 0 ? "met" : `$${(-totals.vsTarget).toLocaleString("en-US")} short`}; vs $7,500 floor: ${totals.vsFloor >= 0 ? "met" : `$${(-totals.vsFloor).toLocaleString("en-US")} short`}`] },
+        { label: "Totals", bullets: [...totals.lines.map((l) => `${l.what}: ${l.name}, $${l.priceUsd.toLocaleString("en-US")}`), `Cost $${totals.costUsd.toLocaleString("en-US")} (best case with a donated venue $${totals.bestCaseCostUsd.toLocaleString("en-US")}) — ${totals.costUsd <= goalOf(ev).costBudgetUsd ? "inside" : "OVER"} the $${goalOf(ev).costBudgetUsd.toLocaleString("en-US")} budget`, `Net vs $10,000 target: ${totals.vsTarget >= 0 ? "met" : `$${(-totals.vsTarget).toLocaleString("en-US")} short`}; vs $7,500 floor: ${totals.vsFloor >= 0 ? "met" : `$${(-totals.vsFloor).toLocaleString("en-US")} short`}`] },
         line("Donated-venue leads (ask first)", pack.donatedVenueLeads),
         line("Paid venues (4 hours)", pack.paidVenues),
         line("Hosts (4 hours)", pack.hosts),
@@ -1420,6 +1575,11 @@ async function runBrandBatch(env: Env, card: SweepCard, now: Date, search: TlcSe
     const email = str(b.contact_email).toLowerCase();
     const source = str(b.contact_source_url);
     if (!ev || !brand) continue;
+    const never = list<{ excluded_brands?: string[] }>(ev.sponsor_categories_json).flatMap((c) => c.excluded_brands ?? []);
+    if (never.some((n) => brand.toLowerCase().includes(n.toLowerCase()) || n.toLowerCase().includes(brand.toLowerCase()))) { dropped.push(`${brand}: competes with a featured partner`); continue; }
+    const cat = str(b.category);
+    if (isBettingCategory(`${cat} ${brand}`) && ev.month <= TLC_NO_BETTING_THROUGH) { dropped.push(`${brand}: betting brands stay out of Q1 2027`); continue; }
+    if (sponsorMixProblems(ev.month, [...list<{ category: string; bench?: boolean }>(ev.sponsor_categories_json), { category: cat }]).length) { dropped.push(`${brand}: ${sponsorMixProblems(ev.month, [...list<{ category: string; bench?: boolean }>(ev.sponsor_categories_json), { category: cat }]).join("; ")}`); continue; }
     if (!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/.test(email) || !isUrl(source)) { dropped.push(`${brand}: no address on a page`); continue; }
     if (existing.some((d) => d.event_id === ev.id && d.brand.toLowerCase() === brand.toLowerCase())) continue;
     // THE ADDRESS IS READ OFF THE PAGE, not taken on the model's word.
@@ -1471,7 +1631,7 @@ async function runTrendStory(env: Env, card: SweepCard, now: Date, search: TlcSe
   const ideaNames: string[] = [];
   for (const i of ((raw.topic_ideas as Array<Record<string, unknown>>) ?? []).slice(0, 5)) {
     const topic = str(i.topic);
-    if (!topic || !isIdeaOrigin(i.origin) || i.origin === "OWNER_IDEA") continue;
+    if (!topic || !isIdeaOrigin(i.origin) || i.origin === "OWNER_IDEA" || i.origin === "SUGGESTED_LIST") continue;
     await upsertIdea(env, { topic, origin: i.origin, suggestedBy: "Wynn", suggestedAt: now.toISOString(), note: str(i.reason) || null, sourceRef: card.id, firmScope: card.firm_scope });
     const url = str(i.source_url);
     await addResearch(env, { kind: i.origin === "BRANDS_SPENDING" ? "BRAND_SPEND" : "TREND", title: str(i.reason) || topic, topic, sourceTitle: str(i.source_title) || null, sourceUrl: isUrl(url) && (await check(url)) ? url : null, foundAt: now.toISOString(), foundBy: "Wynn", cardId: card.id, firmScope: card.firm_scope });
@@ -1560,7 +1720,7 @@ export async function handleTlcOverview(ctx: RouteContext): Promise<Response> {
   const out = [];
   for (const ev of events) {
     const econ = await economicsFor(ctx.env, ev);
-    out.push({ ...ev, days_out: daysUntil(ev.event_date, now), economics: econ, tickets: ticketVerdict(econ.paidTickets), deals: await dealsFor(ctx.env, ev.id) });
+    out.push({ ...ev, days_out: daysUntil(ev.event_date, now), economics: econ, tickets: ticketVerdict(econ.paidTickets, seatsOf(ev)), seats: seatsOf(ev), goal: goalOf(ev), deals: await dealsFor(ctx.env, ev.id) });
   }
   const settings = await tlcSettings(ctx.env);
   const held = (await ctx.env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_drip_message WHERE state = 'HELD'").first<{ n: number }>())?.n ?? 0;
@@ -1668,11 +1828,12 @@ export async function handleTlcApprove(ctx: RouteContext): Promise<Response> {
 
 const dealPatch = z.object({
   stage: z.enum(["PROSPECT", "PITCHED", "CALL", "WAITING_ON_OWNERS", "AGREED", "PAID", "DELIVERED", "DECLINED", "STOPPED"]).optional(),
-  cash_offer_usd: z.number().min(0).max(1_000_000).optional(),
+  // Never capped (owner, 22 Oct 2026): any custom amount.
+  cash_offer_usd: z.number().min(0).finite().optional(),
   in_kind_offer: z.string().max(500).nullish(),
   in_kind_value_usd: z.number().min(0).max(1_000_000).optional(),
   wants: z.string().max(1000).nullish(),
-  tier: z.enum(["PARTNER", "PRESENTING"]).optional(),
+  tier: z.enum(["TITLE", "PARTNER", "LEAD", "PRESENTING", "PRODUCT"]).optional(),
 });
 
 /** POST /api/tlc/deals/:id — record the offer after a call; WAITING_ON_OWNERS opens the decision. */
@@ -1687,6 +1848,24 @@ export async function handleTlcDeal(ctx: RouteContext): Promise<Response> {
   if (p.stage) {
     const problem = stageMoveProblem(deal.stage, p.stage);
     if (problem) return json({ error: "bad_stage", detail: problem }, { status: 409 });
+    // ONE FRONTIER-MODEL COMPANY PER CLUB: the first to say yes is seated; the others stop.
+    if (["CALL", "WAITING_ON_OWNERS", "AGREED", "PAID", "DELIVERED"].includes(p.stage)) {
+      const ev = await ctx.env.WP_OS_DB.prepare("SELECT sponsor_categories_json FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<{ sponsor_categories_json: string | null }>();
+      const frontierCats = list<{ category: string; frontier_model?: boolean }>(ev?.sponsor_categories_json).filter((c) => c.frontier_model).map((c) => c.category.toLowerCase());
+      const isFrontier = (cat: string | null) => !!cat && frontierCats.includes(cat.toLowerCase());
+      const yes = ((await ctx.env.WP_OS_DB.prepare("SELECT id, category FROM tlc_deal WHERE event_id = ?1 AND (yes_at IS NOT NULL OR stage IN ('CALL','WAITING_ON_OWNERS','AGREED','PAID','DELIVERED')) AND stage NOT IN ('DECLINED','STOPPED')").bind(deal.event_id).all<{ id: string; category: string | null }>()).results ?? []);
+      const conflict = frontierConflict(yes.map((d) => ({ id: d.id, frontier: isFrontier(d.category) })), { id: deal.id, frontier: isFrontier(deal.category) });
+      if (conflict) return json({ error: "frontier_model", detail: conflict }, { status: 409 });
+      if (isFrontier(deal.category)) {
+        await ctx.env.WP_OS_DB.prepare("UPDATE tlc_deal SET stage = 'STOPPED', next_send_at = NULL, updated_at = ?3 WHERE event_id = ?1 AND id != ?2 AND lower(category) IN (SELECT value FROM json_each(?4)) AND yes_at IS NULL AND stage IN ('PROSPECT','PITCHED')")
+          .bind(deal.event_id, deal.id, new Date().toISOString(), JSON.stringify(frontierCats)).run();
+      }
+    }
+    if (["AGREED", "PAID", "DELIVERED"].includes(p.stage)) {
+      const agreed = ((await ctx.env.WP_OS_DB.prepare("SELECT id, tier FROM tlc_deal WHERE event_id = ?1 AND stage IN ('AGREED','PAID','DELIVERED')").bind(deal.event_id).all<{ id: string; tier: string | null }>()).results ?? []);
+      const conflict = titleConflict(agreed, { id: deal.id, tier: p.tier ?? deal.tier ?? null });
+      if (conflict) return json({ error: "title_partner", detail: conflict }, { status: 409 });
+    }
     if (p.stage === "WAITING_ON_OWNERS" && !(p.cash_offer_usd ?? deal.cash_offer_usd) && !(p.in_kind_offer ?? deal.in_kind_offer)) {
       return json({ error: "no_offer", detail: "record what they offer before asking the partners" }, { status: 409 });
     }
@@ -1727,11 +1906,11 @@ export async function handleTlcTicket(ctx: RouteContext): Promise<Response> {
   const ev = await ctx.env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(ctx.params.id).first<TlcEventRow>();
   if (!ev) return json({ error: "not_found" }, { status: 404 });
   const paid = (await ctx.env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_ticket WHERE event_id = ?1 AND refunded_at IS NULL").bind(ev.id).first<{ n: number }>())?.n ?? 0;
-  if (ticketVerdict(paid).verdict === "FULL") return json({ error: "full", detail: `all ${TLC_SEATS.max} seats are sold` }, { status: 409 });
+  if (ticketVerdict(paid, seatsOf(ev)).verdict === "FULL") return json({ error: "full", detail: `all ${seatsOf(ev).max} seats are sold` }, { status: 409 });
   await ctx.env.WP_OS_DB.prepare(
     "INSERT OR IGNORE INTO tlc_ticket (id, event_id, buyer_name, buyer_email, amount_usd, fee_usd, payment_ref, source, paid_at, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
   ).bind(`tlt_${crypto.randomUUID()}`, ev.id, t.buyer_name ?? null, t.buyer_email.toLowerCase(), t.amount_usd, t.fee_usd ?? null, t.payment_ref, t.source, t.paid_at ?? new Date().toISOString(), ev.firm_scope).run();
-  return json({ ok: true, ...ticketVerdict(paid + 1) });
+  return json({ ok: true, ...ticketVerdict(paid + 1, seatsOf(ev)) });
 }
 
 /** The month as a brand would see it: the packet's own why-now and sources, never the quarterly trend story. */
@@ -1749,7 +1928,14 @@ export function clubViewOf(ev: TlcEventRow): TlcClubView {
     slot: ev.slot,
     whyNow: s("why_now"),
     sources,
-    categories: list<{ category?: string; why?: string; example_brands?: string[] }>(ev.sponsor_categories_json).map((c) => ({ category: String(c.category ?? ""), why: String(c.why ?? ""), example_brands: (c.example_brands ?? []).map(String) })),
+    categories: list<{ category?: string; why?: string; example_brands?: string[]; tier?: unknown; bench?: unknown; excluded_brands?: string[]; featured?: string | null }>(ev.sponsor_categories_json).map((c) => ({
+      category: String(c.category ?? ""), why: String(c.why ?? ""), example_brands: (c.example_brands ?? []).map(String),
+      ...(isTlcTier(c.tier) ? { tier: c.tier } : {}), ...(c.bench === true ? { bench: true } : {}),
+      ...(c.excluded_brands?.length ? { excluded_brands: c.excluded_brands.map(String) } : {}), ...(c.featured ? { featured: String(c.featured) } : {}),
+      ...((c as { ai_partner?: unknown }).ai_partner === true ? { ai_partner: true } : {}), ...((c as { frontier_model?: unknown }).frontier_model === true ? { frontier_model: true } : {}),
+    })),
+    aiSegment: s("ai_segment"),
+    seats: seatsOf(ev),
     handsOn: s("hands_on"),
     takeHome: s("take_home"),
     recap: ev.recap,
@@ -1758,7 +1944,8 @@ export function clubViewOf(ev: TlcEventRow): TlcClubView {
 
 export async function internalViewOf(env: Env, ev: TlcEventRow): Promise<TlcInternalView> {
   const deals = await dealsFor(env, ev.id);
-  const agreed = deals.filter((d) => ["AGREED", "PAID", "DELIVERED"].includes(d.stage));
+  const agreed = deals.filter((d) => ["AGREED", "PAID", "DELIVERED"].includes(d.stage) && d.tier !== "PRODUCT");
+  const inKind = deals.filter((d) => d.tier === "PRODUCT" && !["DECLINED", "STOPPED"].includes(d.stage) && (d.yes_at || ["CALL", "WAITING_ON_OWNERS", "AGREED", "PAID", "DELIVERED"].includes(d.stage)));
   const idea = await env.WP_OS_DB.prepare("SELECT origin FROM tlc_idea WHERE status = 'PICKED' AND status_month = ?1 ORDER BY updated_at DESC LIMIT 1").bind(ev.month).first<{ origin: string }>().catch(() => null);
   return {
     ...clubViewOf(ev),
@@ -1768,6 +1955,11 @@ export async function internalViewOf(env: Env, ev: TlcEventRow): Promise<TlcInte
     committedUsd: agreed.reduce((n, d) => n + (d.cash_offer_usd ?? 0), 0),
     committedPartners: agreed.length,
     pitchUrl: ev.pitch_token ? pitchPublicUrl(ev.pitch_token) : null,
+    goalUsd: goalOf(ev).goalUsd,
+    costBudgetUsd: goalOf(ev).costBudgetUsd,
+    inKind: inKind.map((d) => ({ brand: d.brand, what: d.in_kind_offer })),
+    backup: (() => { const b = backupOf(ev); return b && ev.switch_deadline && !b.applied_at ? { topic: b.topic, angle: b.angle, deadline: ev.switch_deadline } : null; })(),
+    decidedBy: (() => { try { const d = (JSON.parse(ev.packet_json ?? "{}") as { decided_by?: string; decided_on?: string }); return d.decided_by ? `chosen by ${d.decided_by}${d.decided_on ? `, ${d.decided_on}` : ""}` : null; } catch { return null; } })(),
   };
 }
 
@@ -1805,14 +1997,46 @@ export async function approvalsView(env: Env, settings: Record<string, string | 
   };
 }
 
+const planSchema = z.object({
+  seats_min: z.number().int().min(2).max(2000).optional(),
+  seats_max: z.number().int().min(2).max(2000).optional(),
+  sponsor_goal_usd: z.number().min(TLC_NET_TARGET_USD + 1).finite().optional(),
+});
+
+/**
+ * POST /api/tlc/events/:id/plan — the partners size a club's room to its sponsors (60, 100, 150…)
+ * and may change its sponsor goal (its cost budget is the goal less the $10,000 net). Partners only.
+ */
+export async function handleTlcPlan(ctx: RouteContext): Promise<Response> {
+  const partner = partnerOf(ctx);
+  if (!partner) return json({ error: "forbidden", detail: "only a partner sizes a club" }, { status: 403 });
+  const parsed = planSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", detail: "a room size is a whole number of people; a goal is above $10,000" }, { status: 400 });
+  const ev = await ctx.env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(ctx.params.id).first<TlcEventRow>();
+  if (!ev) return json({ error: "not_found" }, { status: 404 });
+  const min = parsed.data.seats_min ?? seatsOf(ev).min;
+  const max = parsed.data.seats_max ?? Math.max(min, seatsOf(ev).max);
+  if (max < min) return json({ error: "invalid_input", detail: "the most people cannot be fewer than the fewest" }, { status: 400 });
+  const now = new Date().toISOString();
+  await ctx.env.WP_OS_DB.prepare("UPDATE tlc_event SET seats_min = ?2, seats_max = ?3, sponsor_goal_usd = COALESCE(?4, sponsor_goal_usd), updated_at = ?5 WHERE id = ?1")
+    .bind(ev.id, min, max, parsed.data.sponsor_goal_usd ?? null, now).run();
+  await appendEvent(ctx.env, { eventType: "tlc.plan", actorType: "firm_user", actorId: ctx.identity!.id, objectType: "tlc_event", objectId: ev.id, payload: { seats_min: min, seats_max: max, sponsor_goal_usd: parsed.data.sponsor_goal_usd ?? null } });
+  return json({ ok: true, seats: { min, max }, goal: goalOf({ sponsor_goal_usd: parsed.data.sponsor_goal_usd ?? ev.sponsor_goal_usd }) });
+}
+
 /** GET /api/tlc/events/:id/onepager — the internal one-pager; `?doc=pitch` shows the brand pitch. */
 export async function handleTlcOnePager(ctx: RouteContext): Promise<Response> {
   const a = await requireManage(ctx);
   if (a instanceof Response) return a;
   const ev = await ctx.env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(ctx.params.id).first<TlcEventRow>();
   if (!ev?.topic) return json({ error: "not_found", detail: "no club with a topic by that id" }, { status: 404 });
-  const pitch = new URL(ctx.request.url).searchParams.get("doc") === "pitch";
-  return new Response(pitch ? renderBrandPitch(clubViewOf(ev)) : renderInternalOnePager(await internalViewOf(ctx.env, ev)), { headers: { "content-type": "text/html; charset=utf-8" } });
+  const doc = new URL(ctx.request.url).searchParams.get("doc") ?? "internal";
+  // The backup's documents are in the OS (never in the email): ?doc=backup-pitch or ?doc=backup-internal.
+  const b = backupOf(ev);
+  const target = doc.startsWith("backup") ? (b ? backupRow(ev, b) : null) : ev;
+  if (!target) return json({ error: "not_found", detail: "this month has no backup topic" }, { status: 404 });
+  const html = doc.endsWith("pitch") ? renderBrandPitch(clubViewOf(target)) : renderInternalOnePager({ ...(await internalViewOf(ctx.env, target)), ...(doc.startsWith("backup") ? { backup: null, decidedBy: `the backup for ${ev.topic}` } : {}) });
+  return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
 }
 
 /**

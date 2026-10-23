@@ -30,6 +30,18 @@ import { PARTNERS } from "../registry/partners";
 
 export const TLC_CITY = "New York City";
 export const TLC_SEATS = { min: 25, max: 40 } as const;
+/**
+ * THE ROOM IS SIZED TO THE SPONSORS (owner, 22 Oct 2026). 25–40 is the DEFAULT; the partners set
+ * each club's own size on the event (60, 100, 150…), and everything that speaks of the room reads
+ * the event's value: the drip, both one-pagers, the booking pack, the ticket cap and the go-check.
+ */
+export type Seats = { min: number; max: number };
+export function seatsOf(ev: { seats_min?: number | null; seats_max?: number | null } | null | undefined): Seats {
+  const min = ev?.seats_min && ev.seats_min > 0 ? ev.seats_min : TLC_SEATS.min;
+  const max = ev?.seats_max && ev.seats_max >= min ? ev.seats_max : Math.max(min, TLC_SEATS.max);
+  return { min, max };
+}
+export const seatsWords = (s: Seats): string => (s.min === s.max ? `${s.min}` : `${s.min}–${s.max}`);
 /** Every attendee pays to be there. $10, never more (owner, 22 Oct 2026). */
 export const TLC_TICKET_PRICE_USD = 10;
 export const TLC_TICKET_PRICE_MAX_USD = 10;
@@ -39,10 +51,19 @@ export const TLC_TICKET_PRICE_MAX_USD = 10;
  * one, and that number wins.
  */
 export const TLC_TICKET_FEE = { percent: 0.029, fixedUsd: 0.3 } as const;
+/**
+ * THE MONEY PER CLUB (owner's ruling, 22 Oct 2026, replacing the $5,000 cost cap): raise $25,000
+ * from sponsors, spend up to $15,000 (venue, food, decor, materials), net $10,000. An in-kind venue
+ * or product lowers cost; it is never part of the $25,000. Sponsor amounts and counts are never
+ * capped. The $7,500 floor stays as the ESCALATION line: under it at a go-check, Sequoia hears.
+ */
 export const TLC_NET_TARGET_USD = 10_000;
-/** The floor: $7,500 net (a 25% margin under the target). */
+/** The escalation line: sponsor net under $7,500 at a go-check escalates. */
 export const TLC_NET_FLOOR_USD = 7_500;
-export const TLC_COST_CAP_USD = 5_000;
+export const TLC_SPONSOR_GOAL_USD = 25_000;
+export const TLC_COST_BUDGET_USD = 15_000;
+/** @deprecated name kept for readers; it is the $15,000 cost budget now. */
+export const TLC_COST_CAP_USD = TLC_COST_BUDGET_USD;
 export const TLC_FIRST_MONTH = "2027-01";
 export const TLC_TOPICS_AHEAD = 3;
 /** Days before the event the go-ahead is checked. */
@@ -56,26 +77,228 @@ export const TLC_DRIP_DAYS = [0, 4, 10, 18] as const;
 export const TLC_SPONSOR_CATEGORIES = { min: 5, max: 10 } as const;
 
 /**
- * WHAT A BRAND PAYS (owner's ruling, 22 Oct 2026). "Partner" at $5,000 is the standard for most
- * brands. "Presenting partner" at $15,000 is for a big brand only, with "Presented by" billing and
- * top placement. Several partners per club are allowed, and there is NO category exclusivity: the
- * owner ruled there is no such policy, so no copy, prompt or agreement may promise one.
+ * WHAT A BRAND PAYS (owner's rulings, 22 Oct 2026). Partner $5,000; Lead partner $10,000; Presenting
+ * partner $15,000 ("Presented by" billing and top placement); Product partner, in kind: product for
+ * the night instead of cash (its value is cost relief, NEVER counted toward the $25,000). A deal may
+ * also carry any custom amount; neither the size nor the number of partners is capped. There is NO
+ * category exclusivity: no copy, prompt or agreement may promise one.
  */
 export const TLC_TIERS = {
-  PARTNER: { label: "Partner", priceUsd: 5_000, gets: "the standard partnership, for most brands" },
-  PRESENTING: { label: "Presenting partner", priceUsd: 15_000, gets: '"Presented by" billing and top placement on the invitation and on the day' },
+  TITLE: { label: "Title partner", priceUsd: 25_000 as number | null, gets: 'One brand funds the whole room, and the club carries its name: "The Learning Club, presented by" your brand, on the pitch, the invitation, the signage and the recap. The only cash partner that night.' },
+  PARTNER: { label: "Partner", priceUsd: 5_000 as number | null, gets: "The standard partnership, for most brands." },
+  LEAD: { label: "Lead partner", priceUsd: 10_000 as number | null, gets: "A larger role on the day and first placement among the partners." },
+  PRESENTING: { label: "Presenting partner", priceUsd: 15_000 as number | null, gets: '"Presented by" billing and top placement on the invitation and on the day.' },
+  PRODUCT: { label: "Product partner (in kind)", priceUsd: null as number | null, gets: "For product brands: you supply product for the night instead of cash." },
 } as const;
 export type TlcTier = keyof typeof TLC_TIERS;
-export function isTlcTier(v: unknown): v is TlcTier {
-  return v === "PARTNER" || v === "PRESENTING";
-}
+/** Listed in this order everywhere: the Title partner first. */
+export const TLC_TIER_KEYS: readonly TlcTier[] = ["TITLE", "PARTNER", "LEAD", "PRESENTING", "PRODUCT"];
+/** Tiers that bring cash toward the goal. */
+export const TLC_CASH_TIERS: readonly TlcTier[] = ["TITLE", "PARTNER", "LEAD", "PRESENTING"];
 /**
- * The sponsor CASH a club needs: the $10,000 net target plus the costs it carries (held under the
- * $5,000 cap). $15,000, which is about 3 partners at $5,000, or 1 presenting partner.
+ * THE TITLE PARTNER IS THE ONLY CASH SPONSOR THAT NIGHT (owner, 22 Oct 2026). Not a general
+ * exclusivity policy: it follows only from one brand buying the whole room. In-kind product partners
+ * only with the title partner's OK. Returns why a deal may not be agreed, or null.
  */
-export const TLC_SPONSOR_CASH_TARGET_USD = TLC_NET_TARGET_USD + TLC_COST_CAP_USD;
-export const TLC_PARTNERS_TO_TARGET = Math.ceil(TLC_SPONSOR_CASH_TARGET_USD / TLC_TIERS.PARTNER.priceUsd);
-export const TLC_TARGET_PATH = `$${TLC_NET_TARGET_USD.toLocaleString("en-US")} net means about ${TLC_PARTNERS_TO_TARGET} partners at $${TLC_TIERS.PARTNER.priceUsd.toLocaleString("en-US")}, or 1 presenting partner at $${TLC_TIERS.PRESENTING.priceUsd.toLocaleString("en-US")}, against costs held under $${TLC_COST_CAP_USD.toLocaleString("en-US")}.`;
+export function titleConflict(agreed: ReadonlyArray<{ id: string; tier: string | null }>, candidate: { id: string; tier: string | null }): string | null {
+  const others = agreed.filter((d) => d.id !== candidate.id);
+  const otherCash = others.filter((d) => d.tier !== "PRODUCT");
+  if (candidate.tier === "TITLE" && otherCash.length) return "a Title partner is the only cash partner that night, and another cash partner is already agreed";
+  if (candidate.tier !== "PRODUCT" && others.some((d) => d.tier === "TITLE")) return "this club has a Title partner, the only cash partner that night";
+  return null;
+}
+export function isTlcTier(v: unknown): v is TlcTier {
+  return typeof v === "string" && (TLC_TIER_KEYS as readonly string[]).includes(v);
+}
+/** Cash a tier brings toward the $25,000 goal; a product partner brings none (cost relief only). */
+export function tierCashUsd(tier: TlcTier | null | undefined): number {
+  return tier ? TLC_TIERS[tier].priceUsd ?? 0 : TLC_TIERS.PARTNER.priceUsd!;
+}
+/** The cash a club needs from sponsors: $25,000 (= $15,000 cost budget + $10,000 net). */
+export const TLC_SPONSOR_CASH_TARGET_USD = TLC_SPONSOR_GOAL_USD;
+export const TLC_PARTNERS_TO_TARGET = Math.ceil(TLC_SPONSOR_GOAL_USD / TLC_TIERS.PARTNER.priceUsd!);
+const k = (n: number): string => `$${n.toLocaleString("en-US")}`;
+export const TLC_TARGET_PATH = `Raise ${k(TLC_SPONSOR_GOAL_USD)} from sponsors, spend up to ${k(TLC_COST_BUDGET_USD)}, net ${k(TLC_NET_TARGET_USD)}. Two routes: one Title partner at ${k(TLC_TIERS.TITLE.priceUsd!)}; or a mix: at least ${TLC_PARTNERS_TO_TARGET} partners at ${k(TLC_TIERS.PARTNER.priceUsd!)}, or larger sponsors at ${k(TLC_TIERS.LEAD.priceUsd!)}–${k(TLC_TIERS.PRESENTING.priceUsd!)}, or any mix that reaches ${k(TLC_SPONSOR_GOAL_USD)}. In-kind venue or product lowers cost and never counts toward it.`;
+/** The season option (internal recommendation only): the same brand on all three months of a quarter. */
+export function seasonOption(): string {
+  const t = (x: TlcTier) => `${TLC_TIERS[x].label} ${k(3 * TLC_TIERS[x].priceUsd!)}`;
+  return `Season (recommendation, never in the brand pitch): offer a brand that says yes to one month all three months of the quarter: ${t("PARTNER")}, ${t("LEAD")}, ${t("PRESENTING")}, or ${t("TITLE")} for the season.`;
+}
+
+/**
+ * PACE (owner, 22 Oct 2026: escalate if committed dollars are behind pace). Before the 21- and
+ * 14-day go-checks, two pace checks: by 60 days out at least 40% of the $25,000 goal is agreed
+ * ($10,000), by 42 days out at least 60% ($15,000). Behind pace, Sequoia is told; nothing else moves.
+ */
+export const TLC_PACE_CHECKS: ReadonlyArray<{ daysOut: number; share: number }> = [
+  { daysOut: 60, share: 0.4 },
+  { daysOut: 42, share: 0.6 },
+];
+export function paceCheck(daysOut: number, committedCashUsd: number, goalUsd: number = TLC_SPONSOR_GOAL_USD): { checkpoint: number; neededUsd: number; behind: boolean } | null {
+  const c = TLC_PACE_CHECKS.find((p) => p.daysOut === daysOut);
+  if (!c) return null;
+  const neededUsd = Math.round(goalUsd * c.share);
+  return { checkpoint: c.daysOut, neededUsd, behind: committedCashUsd < neededUsd };
+}
+
+/** A club's own sponsor goal (the partners may change it on the event); its cost budget is that goal less the $10,000 net. */
+export function goalOf(ev: { sponsor_goal_usd?: number | null } | null | undefined): { goalUsd: number; costBudgetUsd: number } {
+  const goalUsd = ev?.sponsor_goal_usd && ev.sponsor_goal_usd > TLC_NET_TARGET_USD ? ev.sponsor_goal_usd : TLC_SPONSOR_GOAL_USD;
+  return { goalUsd, costBudgetUsd: goalUsd - TLC_NET_TARGET_USD };
+}
+
+/**
+ * SPONSORS IN A CLUB ARE COMPLEMENTARY, NEVER COMPETITORS (owner, 22 Oct 2026). A month's categories
+ * are one of each kind of product that would compete; two categories in the same family (two drink
+ * bases, two AI assistants, two fragrance houses…) are flagged on the internal one-pager. A category
+ * may also name brands we must never approach for that month (`excluded_brands`: they compete with a
+ * featured partner) and may be on the bench (offered only if the lead agrees).
+ */
+export interface TlcSponsorCategory {
+  category: string;
+  why: string;
+  example_brands: readonly string[];
+  /** Suggested tier for this slot (e.g. PRESENTING for a big wellness brand, PRODUCT for food). */
+  tier?: TlcTier | null;
+  /** On the bench: approached only if the lead partner agrees. */
+  bench?: boolean;
+  /** The AI partner slot every non-AI club carries; cash at any tier or in kind. */
+  ai_partner?: boolean;
+  /** A frontier-model company: one per club, first yes is seated. */
+  frontier_model?: boolean;
+  /** Brands never to approach this month (they compete with a featured partner). */
+  excluded_brands?: readonly string[];
+  /** A featured partner already in place for this slot (e.g. a startup giving product in kind). */
+  featured?: string | null;
+}
+const FAMILIES: ReadonlyArray<[string, RegExp]> = [
+  ["a drink base (spirit, beer or wine, with or without alcohol)", /zero[- ]proof spirit|non[- ]alcoholic (spirit|beer|wine)|\bNA (spirit|beer|wine)|dealcohol|alcohol[- ]free (spirit|beer|wine)|\bspirits?\b|aperitif|\bbeer\b|\bwine\b/i],
+  ["an AI assistant", /\bAI assistant|chatbot|\bLLM\b/i],
+  ["a fragrance house", /fragrance house|perfum/i],
+  ["a coffee brand", /\bcoffee (brand|roaster)|espresso machine/i],
+];
+export function familyOf(category: string): string | null {
+  return FAMILIES.find(([, re]) => re.test(category))?.[0] ?? null;
+}
+/** Pairs of non-bench categories in one month that would compete. [] when the month is complementary. */
+export function competingCategories(cats: ReadonlyArray<Pick<TlcSponsorCategory, "category" | "bench">>): string[] {
+  const out: string[] = [];
+  const live = cats.filter((c) => !c.bench);
+  for (let i = 0; i < live.length; i++) {
+    for (let j = i + 1; j < live.length; j++) {
+      const a = familyOf(live[i]!.category);
+      if (a && a === familyOf(live[j]!.category)) out.push(`"${live[i]!.category}" and "${live[j]!.category}" are both ${a}: they compete`);
+    }
+  }
+  return out;
+}
+
+/**
+ * TOPICS WE DO NOT RUN, AND SPONSORS THAT NEVER MIX (owner, 22 Oct 2026).
+ *  - Peptides: do not run (FDA warning letters to research-use sellers; contested status in 2026).
+ *  - Betting brands (sportsbooks, prediction markets) stay out of Q1 2027.
+ *  - Betting and trading brands never share an event.
+ */
+export const TLC_DO_NOT_RUN: ReadonlyArray<{ match: RegExp; why: string }> = [
+  { match: /peptide/i, why: "Do not run: FDA warning letters to research-use peptide sellers, and a contested status in 2026." },
+];
+export function doNotRun(topic: string): string | null {
+  return TLC_DO_NOT_RUN.find((d) => d.match.test(topic))?.why ?? null;
+}
+const PEPTIDE_SELLER = /peptide/i;
+const BETTING = /sportsbook|sports betting|\bbetting\b|prediction market|event contract|casino|gambling/i;
+const TRADING = /\btrading\b|brokerage|\bbroker\b|investing app|stock app|\bcrypto exchange/i;
+/** The last month of Q1 2027: two months after the first club. */
+export const TLC_NO_BETTING_THROUGH = addMonths(TLC_FIRST_MONTH, 2);
+/** Why a month's sponsor mix may not stand, or [] (betting in Q1 2027; betting beside trading). */
+export function sponsorMixProblems(month: string, categories: ReadonlyArray<{ category: string; bench?: boolean }>): string[] {
+  const live = categories.filter((c) => !c.bench);
+  const betting = live.filter((c) => BETTING.test(c.category));
+  const trading = live.filter((c) => TRADING.test(c.category));
+  const out: string[] = [];
+  const peptide = live.find((c) => PEPTIDE_SELLER.test(c.category));
+  if (peptide) out.push(`no peptide sellers as sponsors ("${peptide.category}")`);
+  if (betting.length && month <= TLC_NO_BETTING_THROUGH) out.push(`betting brands stay out of Q1 2027 ("${betting[0]!.category}")`);
+  if (betting.length && trading.length) out.push(`betting and trading brands never share an event ("${betting[0]!.category}" and "${trading[0]!.category}")`);
+  return out;
+}
+export function isBettingCategory(category: string): boolean {
+  return BETTING.test(category);
+}
+
+/**
+ * EVERY CLUB HAS AN AI ANGLE (owner, 22 Oct 2026). A topic that is not explicitly about AI must
+ * carry (a) one AI segment in its run of show (`packet.ai_segment`) and (b) an "AI partner" sponsor
+ * category (`ai_partner: true`). The AI partner may pay cash at any tier, or give in kind (credits
+ * or subscriptions for every attendee, an expert who runs the segment, or both): in-kind value is
+ * cost relief, never toward the cash goal. ONE frontier-model company per club: pitch more than one,
+ * seat whoever says yes first (`frontier_model: true` on the category; see `frontierConflict`).
+ */
+export function isAiTopic(topic: string): boolean {
+  return /\bAI\b|\bagents?\b|automation/i.test(topic);
+}
+export function aiRuleProblems(topic: string, packet: { ai_segment?: unknown } | null | undefined, categories: ReadonlyArray<{ category: string; ai_partner?: boolean }>): string[] {
+  if (isAiTopic(topic)) return [];
+  const out: string[] = [];
+  if (!(typeof packet?.ai_segment === "string" && packet.ai_segment.trim())) out.push(`"${topic}" is not an AI topic, so its run of show needs one AI segment`);
+  if (!categories.some((c) => c.ai_partner)) out.push(`"${topic}" is not an AI topic, so it needs an "AI partner" sponsor category`);
+  return out;
+}
+/** A second frontier-model company may not say yes to a club that already has one. */
+export function frontierConflict(yesDeals: ReadonlyArray<{ id: string; frontier: boolean }>, candidate: { id: string; frontier: boolean }): string | null {
+  if (!candidate.frontier) return null;
+  return yesDeals.some((d) => d.frontier && d.id !== candidate.id) ? "one frontier-model company per club: another already said yes" : null;
+}
+
+/**
+ * WHEN AN IDEA MAY BE A PRIMARY (owner, 22 Oct 2026). Every club must raise $25,000, so:
+ *  - an idea with an `earliest_month` waits for that month (hands-on ideas with a designed AI
+ *    angle: from April 2027, chosen on their merits like any alternative);
+ *  - a topic that is NOT about AI and carries NO designed AI angle may be a primary only after at
+ *    least 2 TLC clubs have each raised $25,000 in cash. Even then its slate must reach $25,000.
+ */
+export const TLC_FUNDED_EVENTS_BEFORE_NON_AI = 2;
+export function hasAiAngle(packet: { ai_angle?: unknown; ai_segment?: unknown } | null | undefined): boolean {
+  return [packet?.ai_angle, packet?.ai_segment].some((x) => typeof x === "string" && x.trim().length > 0);
+}
+export function ideaEligibility(
+  idea: { topic: string; earliest_month?: string | null; packet?: { ai_angle?: unknown; ai_segment?: unknown } | null },
+  month: string,
+  fundedEvents: number,
+): { eligible: boolean; why: string | null } {
+  if (idea.earliest_month && month < idea.earliest_month) return { eligible: false, why: `not before ${idea.earliest_month}` };
+  if (!isAiTopic(idea.topic) && !hasAiAngle(idea.packet) && fundedEvents < TLC_FUNDED_EVENTS_BEFORE_NON_AI) {
+    return { eligible: false, why: `no AI angle: waits until ${TLC_FUNDED_EVENTS_BEFORE_NON_AI} clubs have each raised $${TLC_SPONSOR_GOAL_USD.toLocaleString("en-US")} (${fundedEvents} so far)` };
+  }
+  return { eligible: true, why: null };
+}
+
+/**
+ * EVERY MONTH HAS A PRIMARY AND A BACKUP TOPIC, WITH A DATED SWITCH (owner, 22 Oct 2026). One
+ * mechanism for every month: `tlc_event.backup_json` holds the backup club (topic, angle, packet,
+ * categories, room size) and `tlc_event.switch_deadline` the date. On that date, if fewer than 2
+ * cash sponsors and no Title partner have said yes, the backup takes over automatically and the
+ * owner (only) is told what switched and why. A go-check, never a question. Wynn sells the primary
+ * first; the brand pitch shows only the primary. The backup names sponsors, so it lives only in the
+ * database.
+ */
+export const TLC_SWITCH_MIN_CASH_YES = 2;
+export interface TlcBackup {
+  topic: string;
+  angle: string;
+  packet: Record<string, unknown>;
+  categories: readonly TlcSponsorCategory[];
+  seats_min?: number;
+  seats_max?: number;
+  applied_at?: string | null;
+  kept_at?: string | null;
+}
+export function switchVerdict(backup: TlcBackup | null, deadline: string | null, now: Date, said: { cashYes: number; titleYes: boolean }): "NO_BACKUP" | "NOT_DUE" | "SWITCH" | "KEEP" | "DONE" {
+  if (!backup || !deadline) return "NO_BACKUP";
+  if (backup.applied_at || backup.kept_at) return "DONE";
+  if (now.toISOString().slice(0, 10) < deadline.slice(0, 10)) return "NOT_DUE";
+  return said.titleYes || said.cashYes >= TLC_SWITCH_MIN_CASH_YES ? "KEEP" : "SWITCH";
+}
 
 /**
  * WHO HEARS ABOUT TLC (owner, 22 Oct 2026): Sequoia, and nobody else. "this is my project"; she
@@ -119,8 +342,8 @@ export const TLC_RUN_OF_SHOW: ReadonlyArray<{ part: string; minutes: readonly [n
 export function runOfShowMinutes(): { min: number; max: number } {
   return TLC_RUN_OF_SHOW.reduce((a, r) => ({ min: a.min + r.minutes[0], max: a.max + r.minutes[1] }), { min: 0, max: 0 });
 }
-export function runOfShowLines(): string[] {
-  return TLC_RUN_OF_SHOW.map((r) => `${r.part}: ${r.minutes[0] === r.minutes[1] ? r.minutes[0] : `${r.minutes[0]}–${r.minutes[1]}`} min`);
+export function runOfShowLines(aiSegment?: string | null): string[] {
+  return TLC_RUN_OF_SHOW.map((r) => `${r.part === "Go deeper" && aiSegment ? `Go deeper, with AI: ${aiSegment}` : r.part}: ${r.minutes[0] === r.minutes[1] ? r.minutes[0] : `${r.minutes[0]}–${r.minutes[1]}`} min`);
 }
 
 // ── Months ──────────────────────────────────────────────────────────────────────────────────────
@@ -180,6 +403,8 @@ export interface EventMoney {
   /** Costs the partners have committed (booked). Options not yet booked are not costs. */
   committedCostsUsd: number;
   tickets: readonly TicketLine[];
+  /** This club's cost budget: its sponsor goal less the $10,000 net. Default $15,000. */
+  costBudgetUsd?: number;
   /** What donated space and product would have cost. Lowers cost; never counted as net. */
   inKindValueUsd?: number;
 }
@@ -208,7 +433,7 @@ export function eventEconomics(m: EventMoney): EventEconomics {
     netUsd: Math.round((sponsorNetUsd + ticketNetUsd) * 100) / 100,
     hitsTarget: sponsorNetUsd >= TLC_NET_TARGET_USD,
     hitsFloor: sponsorNetUsd >= TLC_NET_FLOOR_USD,
-    overCostCap: m.committedCostsUsd > TLC_COST_CAP_USD,
+    overCostCap: m.committedCostsUsd > (m.costBudgetUsd ?? TLC_COST_BUDGET_USD),
     inKindValueUsd: m.inKindValueUsd ?? 0,
   };
 }
@@ -237,7 +462,8 @@ export const ESCALATION_OPTIONS = [
  * tickets are PAID. Checked at 21 and 14 days out; anything short escalates to both partners with
  * the three ways out. Between checkpoints the verdict is NOT_YET.
  */
-export function goAheadCheck(input: { daysOut: number; economics: EventEconomics }): GoCheck {
+export function goAheadCheck(input: { daysOut: number; economics: EventEconomics; seats?: Seats; costBudgetUsd?: number }): GoCheck {
+  const seats = input.seats ?? TLC_SEATS;
   const checkpoint = (TLC_GO_CHECK_DAYS as readonly number[]).includes(input.daysOut) ? input.daysOut : null;
   if (checkpoint === null) return { verdict: "NOT_YET", checkpoint, reasons: [], options: [] };
   const e = input.economics;
@@ -245,10 +471,10 @@ export function goAheadCheck(input: { daysOut: number; economics: EventEconomics
   if (!e.hitsFloor) {
     reasons.push(`Sponsor cash minus committed costs is $${e.sponsorNetUsd.toLocaleString("en-US")}, under the $${TLC_NET_FLOOR_USD.toLocaleString("en-US")} floor.`);
   }
-  if (checkpoint <= TLC_TICKET_GATE_DAYS && e.paidTickets < TLC_SEATS.min) {
-    reasons.push(`${e.paidTickets} paid ticket(s), under the ${TLC_SEATS.min} needed two weeks out.`);
+  if (checkpoint <= TLC_TICKET_GATE_DAYS && e.paidTickets < seats.min) {
+    reasons.push(`${e.paidTickets} paid ticket(s), under the ${seats.min} needed two weeks out.`);
   }
-  if (e.overCostCap) reasons.push(`Committed costs are over the $${TLC_COST_CAP_USD.toLocaleString("en-US")} cap.`);
+  if (e.overCostCap) reasons.push(`Committed costs are over the $${(input.costBudgetUsd ?? TLC_COST_BUDGET_USD).toLocaleString("en-US")} budget.`);
   return reasons.length
     ? { verdict: "ESCALATE", checkpoint, reasons, options: [...ESCALATION_OPTIONS] }
     : { verdict: "GO", checkpoint, reasons: [], options: [] };
@@ -259,8 +485,8 @@ export function goAheadCheck(input: { daysOut: number; economics: EventEconomics
 export type TicketVerdict = "OPEN" | "FULL";
 
 /** 40 seats. A ticket past 40 is refused before payment is taken; 25 paid is the go-ahead floor. */
-export function ticketVerdict(paid: number): { verdict: TicketVerdict; seatsLeft: number; meetsFloor: boolean } {
-  return { verdict: paid >= TLC_SEATS.max ? "FULL" : "OPEN", seatsLeft: Math.max(0, TLC_SEATS.max - paid), meetsFloor: paid >= TLC_SEATS.min };
+export function ticketVerdict(paid: number, seats: Seats = TLC_SEATS): { verdict: TicketVerdict; seatsLeft: number; meetsFloor: boolean } {
+  return { verdict: paid >= seats.max ? "FULL" : "OPEN", seatsLeft: Math.max(0, seats.max - paid), meetsFloor: paid >= seats.min };
 }
 
 export function ticketPriceProblem(amountUsd: number): string | null {
@@ -342,6 +568,8 @@ export interface DripEmailInput {
   month: string;
   eventDate: string;
   why: string | null;
+  /** The club's own room size; the default when not set. */
+  seats?: Seats;
 }
 
 /**
@@ -358,6 +586,7 @@ export function dripEmail(input: DripEmailInput): { subject: string; text: strin
   const hi = input.contactName ? `Hi ${input.contactName.split(" ")[0]},` : "Hi,";
   const when = monthWords(input.month);
   const subject = `${input.brand} + a small room in New York`;
+  const seats = input.seats ?? TLC_SEATS;
   const reason = input.why ? input.why.trim().replace(/\.?$/, ".") : null;
   const lead = reason ? `I am writing because ${reason.charAt(0).toLowerCase()}${reason.slice(1)}` : `I am writing because ${input.brand} feels like a natural fit for a room we are building.`;
   const bodies = [
@@ -365,7 +594,7 @@ export function dripEmail(input: DripEmailInput): { subject: string; text: strin
       hi,
       "",
       lead,
-      `In ${when} we are hosting The Learning Club in New York: ${TLC_SEATS.min} to ${TLC_SEATS.max} people spending an afternoon or evening going deep on ${input.topic}, hands-on. We are looking for a few founding partners for the first clubs.`,
+      `In ${when} we are hosting The Learning Club in New York: ${seats.min === seats.max ? seats.min : `${seats.min} to ${seats.max}`} people spending an afternoon or evening going deep on ${input.topic}, hands-on. We are looking for a few founding partners for the first clubs.`,
       TLC_DRIP_PROOF_LINE,
       "",
       TLC_DRIP_ASK,
@@ -373,7 +602,7 @@ export function dripEmail(input: DripEmailInput): { subject: string; text: strin
     [
       hi,
       "",
-      `A quick picture of the room, in case it helps. ${TLC_SEATS.min} to ${TLC_SEATS.max} New Yorkers, each with a paid seat, at tables of four. A teacher who does this for a living walks them through ${input.topic}, then they spend an hour making something with their own hands, share a real meal, and leave with what they made.`,
+      `A quick picture of the room, in case it helps. ${seats.min === seats.max ? seats.min : `${seats.min} to ${seats.max}`} New Yorkers, each with a paid seat, at tables of four. A teacher who does this for a living walks them through ${input.topic}, then they spend an hour making something with their own hands, share a real meal, and leave with what they made.`,
       "",
       TLC_DRIP_ASK,
     ],
@@ -598,7 +827,7 @@ export function bookingPackTotals(pack: BookingPack, sponsorCashUsd: number): {
   const venue = cheapest(pack.paidVenues)?.priceUsd ?? 0;
   const bestCaseCostUsd = pack.donatedVenueLeads.length ? Math.round((costUsd - venue) * 100) / 100 : costUsd;
   const netUsd = sponsorCashUsd - costUsd;
-  return { lines, costUsd, bestCaseCostUsd, sponsorCashUsd, netUsd, vsTarget: netUsd - TLC_NET_TARGET_USD, vsFloor: netUsd - TLC_NET_FLOOR_USD, underCap: costUsd <= TLC_COST_CAP_USD };
+  return { lines, costUsd, bestCaseCostUsd, sponsorCashUsd, netUsd, vsTarget: netUsd - TLC_NET_TARGET_USD, vsFloor: netUsd - TLC_NET_FLOOR_USD, underCap: costUsd <= TLC_COST_BUDGET_USD };
 }
 
 // ── The sponsorship agreement (a template; NOT legal advice) ───────────────────────────────────
@@ -658,8 +887,9 @@ const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;"
 export const TLC_PLAYBOOK: readonly string[] = [
   "Who we sell to: brands whose customers are the people a club on this topic draws, in categories Parker named for it. Several partners per club, each in its own role.",
   "What we sell: real hands-on time with the product, in a room of 25 to 40 people who each paid to be there, for a 3 to 4 hour deep dive on one topic in New York (one afternoon or one evening). Product in hands during the 60-minute hands-on session where it fits, five minutes during the food break, photo and content rights, opt-in lead capture, a mention in the invitation and on the day, and a recap with numbers.",
-  "Price: Partner $5,000, the standard for most brands. Presenting partner $15,000, for a big brand only, with \"Presented by\" billing and top placement.",
-  "Target per club: $10,000 net from sponsors, $7,500 at the least, costs held under $5,000. That is about 3 partners at $5,000, or 1 presenting partner. Tickets add to the net but the target never depends on them.",
+  "Price: Partner $5,000, the standard for most brands. Lead partner $10,000. Presenting partner $15,000, for a big brand only, with \"Presented by\" billing and top placement. Product partner, in kind, for a product brand that supplies product instead of cash. Custom amounts are fine; neither size nor count is capped.",
+  "Goal per club: $25,000 raised from sponsors, costs up to $15,000, $10,000 net; under $7,500 net at a go-check escalates. At least 5 partners at $5,000, or larger sponsors at $10,000 to $15,000, or any mix. In-kind venue or product lowers cost and never counts toward the $25,000. Tickets add to the net but the goal never depends on them.",
+  "Sponsors in a club are complementary, never competitors: one brand per kind of product that would compete (one drink base, then mixers, glassware, wellness, food). Never approach a brand that competes with an agreed or featured partner.",
   "Who we write to: a named person at the brand whose job is partnerships, events, community or brand marketing, at an address read off a live page. Never a guessed address. Never a contact without an email.",
   "How we write: signed by Sequoia Taylor, West Peek Ventures; replies go to her. Short, plain, warm, professional. Lead with the brand's own reason. One ask: \"Would you be open to exploring a partnership?\" No pitch, price or attachment until they reply. No inflated claims, no numbers we cannot show, no invented case studies. Before the first club runs we describe the format and West Peek Rooms' real history; after it, the real recap.",
   "Cadence: four emails at day 0, 4, 10 and 18. Stop the moment they reply, bounce or ask us to stop. Warm up slowly: 5 a day the first week, then 10, 20, 30.",
@@ -763,18 +993,39 @@ export const TLC_ALTERNATIVES = 9;
  * what people are searching for and curious about. Parker weighs them all on merit — a partner's
  * idea is considered, never automatically picked (owner's correction, 22 Oct 2026).
  */
-export const TLC_IDEA_ORIGINS = ["OWNER_IDEA", "BRANDS_SPENDING", "TREND"] as const;
+/**
+ * WHERE AN IDEA CAME FROM. SUGGESTED_LIST (22 Oct 2026): a list that arrived in a partner's email
+ * but was not written by a partner, such as the assistant's planning-doc list mailed from the owner's
+ * address. It is never a partner idea. An idea is OWNER_IDEA only in a partner's own words.
+ */
+export const TLC_IDEA_ORIGINS = ["OWNER_IDEA", "BRANDS_SPENDING", "TREND", "SUGGESTED_LIST"] as const;
 export type TlcIdeaOrigin = (typeof TLC_IDEA_ORIGINS)[number];
 export const TLC_IDEA_ORIGIN_LABEL: Record<TlcIdeaOrigin, string> = {
   OWNER_IDEA: "Partner idea",
   BRANDS_SPENDING: "Brands spending now",
   TREND: "Trend",
+  SUGGESTED_LIST: "Suggested list (written by the assistant, 22 Oct)",
 };
+
+/**
+ * WHO WROTE A LISTED IDEA. A topic found in a partner's email is the partner's idea only when it is
+ * in their own sentence, or the email itself says the list is theirs ("my list", "my ideas", "I
+ * want…"). A bullet or numbered list with no such claim is a SUGGESTED_LIST, never a partner idea.
+ */
+export function creditForQuote(text: string, quote: string): "OWNER_IDEA" | "SUGGESTED_LIST" {
+  const norm = (x: string) => x.toLowerCase().replace(/\s+/g, " ").trim();
+  const line = text.split(/\r?\n/).find((l) => norm(l).includes(norm(quote).slice(0, 40))) ?? "";
+  const listItem = /^\s*(?:[-*•·]|\d+[.)])\s+/.test(line);
+  if (!listItem) return "OWNER_IDEA";
+  const claimsIt = /\b(my|our) (own )?(ideas?|list|picks|topics)\b|\bI (want|would like|'d like|suggest|propose|think we should)\b|\bideas? (I|we) (had|have)\b/i.test(text);
+  return claimsIt ? "OWNER_IDEA" : "SUGGESTED_LIST";
+}
 export function isIdeaOrigin(v: unknown): v is TlcIdeaOrigin {
   return typeof v === "string" && (TLC_IDEA_ORIGINS as readonly string[]).includes(v);
 }
 /** An idea's status on the ideas list. DROPPED stays listed: an idea is never deleted or hidden. */
-export const TLC_IDEA_STATUSES = ["LATER", "PICKED", "ALTERNATIVE", "DROPPED"] as const;
+/** MERGED (22 Oct 2026): folded into a bigger idea (`merged_into`), not dropped. */
+export const TLC_IDEA_STATUSES = ["LATER", "PICKED", "ALTERNATIVE", "DROPPED", "MERGED"] as const;
 export type TlcIdeaStatus = (typeof TLC_IDEA_STATUSES)[number];
 /** One key per topic, so "Trading & Investing" and "trading and investing" are one idea. */
 export function topicKey(topic: string): string {

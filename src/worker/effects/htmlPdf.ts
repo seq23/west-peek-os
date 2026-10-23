@@ -27,12 +27,27 @@ export async function renderHtmlPdf(env: Env, html: string, opts: { onePage?: bo
     await page.setContent(html, { waitUntil: "networkidle0" });
     await page.evaluate(() => (document as unknown as { fonts: { ready: Promise<unknown> } }).fonts.ready);
     const tall: number = opts.onePage ? await page.evaluate(() => document.documentElement.scrollHeight) : LETTER_PRINTABLE_PX.height;
-    let scale = Math.min(1, LETTER_PRINTABLE_PX.height / Math.max(1, tall));
-    let bytes = new Uint8Array();
-    for (let attempt = 0; attempt < 6; attempt++) {
-      bytes = new Uint8Array(await page.pdf({ format: "letter", printBackground: true, preferCSSPageSize: true, scale: Math.max(0.35, scale) }));
-      if (!opts.onePage || pdfPageCount(bytes) <= 1 || scale <= 0.35) break;
-      scale *= 0.92;
+    const print = async (scale: number) => new Uint8Array(await page.pdf({ format: "letter", printBackground: true, preferCSSPageSize: true, scale }));
+    let scale = Math.max(0.35, Math.min(1, LETTER_PRINTABLE_PX.height / Math.max(1, tall)));
+    let bytes = await print(scale);
+    if (opts.onePage) {
+      // Shrink until it fits on one page, then grow back as far as one page allows: the largest type that fits.
+      for (let i = 0; i < 6 && pdfPageCount(bytes) > 1 && scale > 0.35; i++) bytes = await print((scale = Math.max(0.35, scale * 0.9)));
+      let lo = scale;
+      let hi = 1;
+      let best = bytes;
+      if (pdfPageCount(bytes) <= 1 && lo < 1) {
+        const atOne = await print(1);
+        if (pdfPageCount(atOne) <= 1) best = atOne;
+        else {
+          for (let i = 0; i < 5; i++) {
+            const mid = (lo + hi) / 2;
+            const b = await print(mid);
+            if (pdfPageCount(b) <= 1) { lo = mid; best = b; } else hi = mid;
+          }
+        }
+      }
+      bytes = best;
     }
     let binary = "";
     for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
