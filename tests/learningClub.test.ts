@@ -17,7 +17,6 @@ import {
   needsSwap,
   nextDripAt,
   parseDecisionReply,
-  renderOnePager,
   rollingTopicMonths,
   runOfShowMinutes,
   sponsorshipAgreement,
@@ -36,9 +35,11 @@ import {
   runDrip,
   runTlcCard,
   runTlcDaily,
+  contentHashes,
   type TlcDealRow,
 } from "../src/worker/services/learningClub";
 import { sweepOnce } from "../src/worker/services/workSweep";
+import { brandPitchProblems, clubWhen, renderBrandPitch, renderInternalOnePager, type TlcClubView, type TlcInternalView } from "../src/shared/tlc/pitch";
 
 /**
  * THE LEARNING CLUB (owner-approved 22 Oct 2026), proven offline. What has to be true: the owner's
@@ -49,6 +50,16 @@ import { sweepOnce } from "../src/worker/services/workSweep";
 
 const econ = (sponsorCashUsd: number, costs: number, tickets: number) =>
   eventEconomics({ sponsorCashUsd, committedCostsUsd: costs, tickets: Array.from({ length: tickets }, () => ({ amount_usd: 10, fee_usd: null })) });
+
+const VIEW = (topic: string, month: string, over: Partial<TlcClubView> = {}): TlcClubView => ({
+  topic, angle: `${topic}, taught properly. A second line.`, month, eventDate: `${month}-11`, slot: "EVENING", whyNow: "Brands in this category are paying for rooms like this now.",
+  sources: [{ title: "A real source", url: "https://news.example/a" }], categories: [{ category: "Tea brands (lead)", why: "fits", example_brands: ["Leaf Co"] }],
+  handsOn: null, takeHome: null, recap: null, ...over,
+});
+
+const IVIEW = (topic: string, month: string, over: Partial<TlcInternalView> = {}): TlcInternalView => ({
+  ...VIEW(topic, month), origin: "TREND", status: "TOPIC_PROPOSED", vetoUntil: "2026-10-25T23:28:12.271Z", committedUsd: 0, committedPartners: 0, pitchUrl: null, ...over,
+});
 
 describe("the rules, pure", () => {
   it("holds three months ahead, never before January 2027", () => {
@@ -110,14 +121,30 @@ describe("the rules, pure", () => {
     expect(classifyBrandMail({ from: "a@brand.com", subject: "Re: sounds good" })).toBe("REPLIED");
   });
 
-  it("writes the brand email as we, with one ask and a way to stop", () => {
-    const m = dripEmail({ step: 0, brand: "Acme", contactName: "Jo Doe", topic: "Matcha & Tea", month: "2027-02", eventDate: "2027-02-18", why: null });
-    expect(m.text).toMatch(/^Hi Jo,/);
-    expect(m.text).toMatch(/\bWe run West Peek Rooms/);
-    expect(m.text).toMatch(/Every attendee buys a ticket/);
-    expect(m.text).toMatch(/unsubscribe/);
-    expect(m.text).not.toMatch(/\bI'm\b|\bmy brother\b/);
-    expect(dripEmail({ step: 2, brand: "Acme", contactName: null, topic: "T", month: "2027-02", eventDate: "", why: null }).subject).toBe(m.subject.replace("Matcha & Tea", "T"));
+  it("writes the brand emails signed by Sequoia: the brand's reason first, one proof line, one ask, no pitch or price, a quiet subject", () => {
+    const why = "your team ran three tastings in Brooklyn this autumn";
+    const steps = [0, 1, 2, 3].map((step) => dripEmail({ step, brand: "Acme", contactName: "Jo Doe", topic: "Matcha & Tea", month: "2027-02", eventDate: "2027-02-11", why }));
+    const [first, second] = steps;
+    // Signed by her, with her address; never by an employee, never by Scooter.
+    for (const m of steps) {
+      expect(m.text).toMatch(/\nSequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures\n/);
+      expect(m.text).not.toMatch(/Scooter|Wynn|Parker|West Peek Rooms\n\nIf you/);
+      expect(m.text).toMatch(/unsubscribe/);
+      // No pitch, no price, no attachment, no exclusivity until they reply.
+      expect(m.text).not.toMatch(/\$\d|one-pager|one-sheet|pitch|attach|exclusiv|per category|to itself/i);
+      // One quiet subject for all four, so they thread.
+      expect(m.subject).toBe("Acme + a small room in New York");
+    }
+    // Email 1 leads with the brand's own reason, then one proof line, then the one ask.
+    expect(first!.text).toMatch(/^Hi Jo,\n\nI am writing because your team ran three tastings in Brooklyn this autumn\./);
+    expect(first!.text).toContain("Our community of more than 5,000 founders, operators and creatives");
+    expect(first!.text).toContain("founding partners");
+    expect(first!.text.indexOf("I am writing because")).toBeLessThan(first!.text.indexOf("Our community"));
+    expect(first!.text).toMatch(/Would you be open to exploring a partnership\?/);
+    expect((first!.text.match(/\?/g) ?? []).length).toBe(1);
+    // Email 2 is a short picture of the room.
+    expect(second!.text).toMatch(/A quick picture of the room/);
+    expect(second!.text).toMatch(/paid seat/);
   });
 
   it("reads the partners' reply as yes, no or counter", () => {
@@ -169,20 +196,47 @@ describe("the rules, pure", () => {
     expect(bookingPackProblems({ ...pack, hosts: [o("h1", 400)] }).join(" ")).toMatch(/1 NYC paid host/);
   });
 
-  it("keeps the send gate shut until both approvals, the switch and the firm's external switch", () => {
-    expect(brandSendGate({}, {}).open).toBe(false);
-    expect(brandSendGate({ brand_send: "on", onepager_mock_approved_at: "x", playbook_approved_at: "x" }, {}).reasons).toEqual(["employees may not email outside the firm (WP_OS_AI_EMAIL_EXTERNAL)"]);
-    expect(brandSendGate({ brand_send: "ON", onepager_mock_approved_at: "x", playbook_approved_at: "x" }, { WP_OS_AI_EMAIL_EXTERNAL: "enabled" }).open).toBe(false);
-    expect(brandSendGate({ brand_send: "on", onepager_mock_approved_at: "x", playbook_approved_at: "x" }, { WP_OS_AI_EMAIL_EXTERNAL: "enabled" }).open).toBe(true);
+  it("keeps the send gate shut until both approvals OF THE CURRENT CONTENT, the switch and the firm's external switch", () => {
+    const h = { pitch: "a".repeat(64), playbook: "b".repeat(64) };
+    const approved = { pitch_approved_hash: h.pitch, playbook_approved_hash: h.playbook };
+    expect(brandSendGate({}, {}, h).open).toBe(false);
+    expect(brandSendGate({ brand_send: "on", ...approved }, {}, h).reasons).toEqual(["employees may not email outside the firm (WP_OS_AI_EMAIL_EXTERNAL)"]);
+    expect(brandSendGate({ brand_send: "ON", ...approved }, { WP_OS_AI_EMAIL_EXTERNAL: "enabled" }, h).open).toBe(false);
+    expect(brandSendGate({ brand_send: "on", ...approved }, { WP_OS_AI_EMAIL_EXTERNAL: "enabled" }, h).open).toBe(true);
+    // The old time-stamped approvals predate the content: they are not approvals.
+    expect(brandSendGate({ brand_send: "on", onepager_mock_approved_at: "2026-10-22T19:34:00Z", playbook_approved_at: "x" }, { WP_OS_AI_EMAIL_EXTERNAL: "enabled" }, h).reasons).toEqual([
+      "the owner has not approved the brand pitch",
+      "the owner has not approved the sales playbook",
+    ]);
+    // Any change to the content clears its approval, and the gate says so.
+    const changed = brandSendGate({ brand_send: "on", ...approved }, { WP_OS_AI_EMAIL_EXTERNAL: "enabled" }, { pitch: "c".repeat(64), playbook: h.playbook });
+    expect(changed.open).toBe(false);
+    expect(changed.reasons).toEqual(["the brand pitch changed after it was approved; approve it again"]);
   });
 
-  it("sells real hands-on time and paid seats on the one-pager, with no invented case study", () => {
-    const html = renderOnePager({ topic: "Matcha & Tea", angle: null, month: "2027-02", eventDate: "2027-02-18", whyNow: "why", categories: ["Tea brands"], story: null, citations: [], proof: ["real history"], recap: null });
-    expect(html).toMatch(/Every seat paid/);
-    expect(html).toMatch(/hands-on time/);
-    expect(html).toMatch(/real history/);
+  it("prices a club at $5,000 per partner or $15,000 presenting, needs $15,000 cash for $10,000 net, and promises no exclusivity", async () => {
+    const m = await import("../src/shared/tlc/learningClub");
+    expect(m.TLC_TIERS.PARTNER.priceUsd).toBe(5_000);
+    expect(m.TLC_TIERS.PRESENTING.priceUsd).toBe(15_000);
+    expect(m.TLC_SPONSOR_CASH_TARGET_USD).toBe(15_000);
+    expect(m.TLC_PARTNERS_TO_TARGET).toBe(3);
+    // Three partners, or one presenting partner, at the cost cap is exactly the $10,000 net target.
+    expect(eventEconomics({ sponsorCashUsd: 3 * 5_000, committedCostsUsd: 5_000, tickets: [] }).hitsTarget).toBe(true);
+    expect(eventEconomics({ sponsorCashUsd: 15_000, committedCostsUsd: 5_000, tickets: [] }).sponsorNetUsd).toBe(10_000);
+    expect(eventEconomics({ sponsorCashUsd: 2 * 5_000, committedCostsUsd: 5_000, tickets: [] }).hitsFloor).toBe(false);
+    for (const text of [m.TLC_PLAYBOOK.join(" "), sponsorshipAgreement({ brand: "Acme", topic: "T", eventDate: "2027-02-11", cashUsd: 5000, inKind: null, deliverables: null, dueDate: "2027-02-01" })]) {
+      expect(text).not.toMatch(/exclusiv|one (sponsor )?per category|to itself/i);
+    }
+    expect(m.TLC_PLAYBOOK.join(" ")).toMatch(/Partner \$5,000.*Presenting partner \$15,000/);
+  });
+
+  it("the brand pitch sells real hands-on time and paid seats, and carries no script", () => {
+    const html = renderBrandPitch(VIEW("Matcha & Tea", "2027-02"));
+    expect(html).toMatch(/Every seat is a paid ticket \(\$10\), so everyone in the room chose to come\./);
+    expect(html).toMatch(/hands-on hour/);
     expect(html).not.toMatch(/<script/);
     expect(html).toMatch(/prefers-color-scheme:dark/);
+    expect(brandPitchProblems(html)).toEqual([]);
   });
 
   it("marks the agreement as not legal advice and the decision email carries the net if we say yes", () => {
@@ -247,9 +301,11 @@ describe("the Learning Club in the database", () => {
     expect((await openBrandBatchCard(env, NOV1)).opened).toBe(false);
   });
 
-  it("a partner's no swaps that month; silence lets the rest proceed", async () => {
+  it("Sequoia's no swaps that month (only her reply counts); silence lets the rest proceed", async () => {
     const card = await env.WP_OS_DB.prepare("SELECT id FROM work_card WHERE kind = 'TLC_TOPICS'").first<{ id: string }>();
-    await env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES ('wcn_t1', ?1, 'fu_scooter_taylor', 'no to February', 'west-peek')").bind(card!.id).run();
+    // Owner, 22 Oct 2026: only her reply is a veto. Scooter's note is read and acknowledged, never obeyed.
+    await env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES ('wcn_t0', ?1, 'fu_scooter_taylor', 'no to January', 'west-peek')").bind(card!.id).run();
+    await env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES ('wcn_t1', ?1, 'fu_sequoia_taylor', 'no to February', 'west-peek')").bind(card!.id).run();
     const later = new Date("2026-11-05T14:00:00.000Z");
     // First tick reads the no and re-picks February, holding it for its own window.
     await sweepOnce(env, later, {
@@ -265,6 +321,7 @@ describe("the Learning Club in the database", () => {
       ["2027-03", "Film Photography", "TOPIC_READY"],
     ]);
     expect(evs[1]!.vetoed_topics_json).toContain("Fragrance Lab");
+    expect(evs[0]!.vetoed_topics_json ?? "").not.toContain("Matcha");
     const done = await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(card!.id).first<{ state: string }>();
     expect(done!.state).toBe("DONE");
   });
@@ -293,11 +350,17 @@ describe("the Learning Club in the database", () => {
     expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM external_effect_request").first<{ n: number }>())!.n).toBe(0);
     const m = await env.WP_OS_DB.prepare("SELECT state, held_reason FROM tlc_drip_message").first<{ state: string; held_reason: string }>();
     expect(m!.state).toBe("HELD");
-    expect(m!.held_reason).toMatch(/one-pager mock.*playbook.*switch is off/);
+    expect(m!.held_reason).toMatch(/brand pitch.*playbook.*switch is off/);
   });
 
   it("with everything approved and on, each email waits for a partner's approval card", async () => {
+    // The old time-stamped approvals alone open nothing.
     await env.WP_OS_DB.prepare("INSERT INTO tlc_setting (key, value) VALUES ('onepager_mock_approved_at','x'),('playbook_approved_at','x') ON CONFLICT(key) DO UPDATE SET value = excluded.value").run();
+    await env.WP_OS_DB.prepare("UPDATE tlc_setting SET value = 'on' WHERE key = 'brand_send'").run();
+    const onEnv = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled", WP_OS_AI_EMAIL_EXTERNAL: "enabled" } as Partial<Env>);
+    expect((await runDrip(onEnv, new Date("2026-11-09T15:04:00.000Z"))).gate.reasons).toEqual(["the owner has not approved the brand pitch", "the owner has not approved the sales playbook"]);
+    const h = await contentHashes(env);
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_setting (key, value) VALUES ('pitch_approved_hash', ?1), ('playbook_approved_hash', ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(h.pitch, h.playbook).run();
     await env.WP_OS_DB.prepare("UPDATE tlc_setting SET value = 'on' WHERE key = 'brand_send'").run();
     const on = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled", WP_OS_AI_EMAIL_EXTERNAL: "enabled" } as Partial<Env>);
     const out = await runDrip(on, new Date("2026-11-09T15:05:00.000Z"));
@@ -316,9 +379,15 @@ describe("the Learning Club in the database", () => {
     expect(d!.next_send_at).toBeNull();
     const card = await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE kind = 'TLC_BRAND_BATCH'").first<{ description: string }>();
     expect(card!.description).toMatch(/Leaf Co .*replied/);
+    // A reply that is not a no puts the pitch email (PDF + call link) behind the gate, signed by Sequoia.
+    const f = await env.WP_OS_DB.prepare("SELECT state, subject, body FROM tlc_pitch_followup").first<{ state: string; subject: string; body: string }>();
+    expect(f!.state).toBe("HELD");
+    expect(f!.subject).toBe("Leaf Co + a small room in New York");
+    expect(f!.body).toMatch(/The PDF is attached, and it is also here: https:\/\/os\.joinwestpeek\.com\/api\/tlc-pitch\/[0-9a-f]{32}/);
+    expect(f!.body).toMatch(/Sequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures$/);
   });
 
-  it("both partners decide; a counter sends the deal back to a call", async () => {
+  it("Sequoia decides; a counter sends the deal back to a call", async () => {
     await env.WP_OS_DB.prepare("UPDATE tlc_deal SET stage = 'WAITING_ON_OWNERS', cash_offer_usd = 5000, in_kind_offer = 'tea for 40', in_kind_value_usd = 600").run();
     const deal = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal").first<TlcDealRow>())!;
     const cardId = await openDecisionCard(env, deal, new Date("2026-11-11T10:00:00Z"));
@@ -330,7 +399,7 @@ describe("the Learning Club in the database", () => {
     expect(after).toMatchObject({ stage: "CALL", decision: "COUNTER", counter_usd: 6500 });
   });
 
-  it("the daily pass escalates a club short of the floor two weeks out, to both partners, once", async () => {
+  it("the daily pass escalates a club short of the floor two weeks out, to Sequoia, once", async () => {
     const twoWeeks = new Date("2027-01-07T13:30:00.000Z"); // Jan club is the third Thursday, 21 Jan.
     const out = await runTlcDaily(env, twoWeeks);
     expect(out.failures).toEqual([]);
@@ -359,34 +428,42 @@ describe("TLC pre-launch proof states the confirmed community size", () => {
 // the Rooms line and the confirmed community line, in that order; nothing else may creep back in.
 describe("TLC pre-launch proof carries no Workshops line", () => {
   it("is exactly the Rooms line and the confirmed community line, and the rendered page never says Workshops", async () => {
-    const { TLC_PRE_LAUNCH_PROOF, renderOnePager } = await import("../src/shared/tlc/learningClub");
+    const { TLC_PRE_LAUNCH_PROOF } = await import("../src/shared/tlc/learningClub");
     expect(TLC_PRE_LAUNCH_PROOF).toEqual([
       "West Peek Rooms: the firm's in-person gatherings. The Learning Club is their monthly New York edition.",
       TLC_CONFIRMED_COMMUNITY_LINE,
     ]);
     expect(TLC_PRE_LAUNCH_PROOF.some((l) => /workshop/i.test(l))).toBe(false);
-    const html = renderOnePager({ topic: "Fragrance Lab", angle: null, month: "2027-02", eventDate: null, whyNow: "why", categories: ["Scent"], story: null, citations: [], proof: TLC_PRE_LAUNCH_PROOF, recap: null });
-    expect(html).not.toMatch(/West Peek Workshops/i);
-    expect(html).not.toMatch(/West Peek Live/i);
+    for (const html of [renderBrandPitch(VIEW("Fragrance Lab", "2027-02")), renderInternalOnePager(IVIEW("Fragrance Lab", "2027-02"))]) {
+      expect(html).not.toMatch(/West Peek Workshops/i);
+      expect(html).not.toMatch(/West Peek Live/i);
+    }
   });
 });
 
 // The owner's About block, word for word, on every one-pager (22 Oct 2026).
 const TLC_ABOUT_EXACT =
   "West Peek Ventures is a venture firm and community. We have facilitated more than $100M in secondary transactions, with late-stage positions including Higgsfield, Databricks and Stripe, among others. Our community of more than 5,000 founders, operators, investors, creatives and builders meets in person through West Peek Rooms, our event series. The Learning Club is a series within Rooms: small, hands-on deep dives in New York.";
-describe("TLC one-pager About West Peek Ventures block", () => {
-  it("is the owner's exact text, keeps the copy rules, and is on the page whether or not a recap exists", async () => {
-    const { TLC_ABOUT_WEST_PEEK, TLC_PRE_LAUNCH_PROOF, renderOnePager } = await import("../src/shared/tlc/learningClub");
+describe("TLC About blocks: the full one only inside, the community-first one for brands", () => {
+  it("the internal one-pager carries the owner's exact text; the brand pitch carries the community-first text and no internal-only fact", async () => {
+    const { TLC_ABOUT_WEST_PEEK, TLC_ABOUT_COMMUNITY } = await import("../src/shared/tlc/learningClub");
     expect(TLC_ABOUT_WEST_PEEK).toBe(TLC_ABOUT_EXACT);
-    expect(TLC_ABOUT_WEST_PEEK).not.toMatch(/—|–|\$500M|Fund I\b|fund size|carry|management fee|Parker|Wynn|\bcard\b/i);
-    expect(TLC_ABOUT_WEST_PEEK).toMatch(/\bWe\b/);
-    // The only head-count it states is the confirmed 5,000.
-    expect(TLC_ABOUT_WEST_PEEK.match(/\d{1,3},\d{3}/g)).toEqual(["5,000"]);
+    for (const about of [TLC_ABOUT_WEST_PEEK, TLC_ABOUT_COMMUNITY]) {
+      expect(about).not.toMatch(/—|–|\$500M|Fund I\b|fund size|carry|management fee|Parker|Wynn|\bcard\b/i);
+      expect(about).toMatch(/\b(We|we)\b/);
+      // The only head-count either states is the confirmed 5,000.
+      expect(about.match(/\d{1,3},\d{3}/g)).toEqual(["5,000"]);
+    }
+    expect(TLC_ABOUT_COMMUNITY).not.toMatch(/\$100M|secondary|Higgsfield|Databricks|Stripe/);
     for (const recap of [null, "Twenty-eight people made a bar."]) {
-      const html = renderOnePager({ topic: "AI Tools", angle: null, month: "2027-03", eventDate: null, whyNow: "why", categories: ["Software"], story: null, citations: [], proof: TLC_PRE_LAUNCH_PROOF, recap });
-      expect(html).toContain("<h2>About West Peek Ventures</h2>");
-      expect(html).toContain(`<p>${TLC_ABOUT_EXACT}</p>`);
-      expect(html).toContain("<title>The Learning Club: AI Tools</title>");
+      const inside = renderInternalOnePager(IVIEW("AI Tools", "2027-03", { recap }));
+      expect(inside).toContain("<h2>About West Peek Ventures</h2>");
+      expect(inside).toContain(`<p>${TLC_ABOUT_EXACT}</p>`);
+      expect(inside).toContain("<title>Internal: AI Tools</title>");
+      const pitch = renderBrandPitch(VIEW("AI Tools", "2027-03", { recap }));
+      expect(pitch).toContain(`<p>${TLC_ABOUT_COMMUNITY}</p>`);
+      expect(pitch).not.toMatch(/\$100M|Higgsfield|Databricks|Stripe/);
+      expect(pitch).toContain("<title>The Learning Club: AI Tools</title>");
     }
   });
 });
@@ -400,10 +477,9 @@ describe("TLC one-sheet attachments are rendered PDFs, never HTML source", () =>
 
   it("the check passes a browser-rendered one-sheet and refuses HTML written into a PDF, raw or compressed", async () => {
     const { renderedPdfProblem } = await import("../src/shared/pdf/renderedPdf");
-    const { renderOnePager, TLC_PRE_LAUNCH_PROOF } = await import("../src/shared/tlc/learningClub");
     expect(await renderedPdfProblem(fixture(), "Zero-Proof Home Bar")).toBeNull();
     expect(await renderedPdfProblem(fixture(), "Fragrance Lab")).toMatch(/does not name "Fragrance Lab"/);
-    const html = renderOnePager({ topic: "Zero-Proof Home Bar", angle: null, month: "2027-01", eventDate: null, whyNow: "why", categories: ["Glass"], story: null, citations: [], proof: TLC_PRE_LAUNCH_PROOF, recap: null });
+    const html = renderBrandPitch(VIEW("Zero-Proof Home Bar", "2027-01"));
     expect(await renderedPdfProblem(new TextEncoder().encode(html), "Zero-Proof Home Bar")).toBe("the file is not a PDF");
     expect(await renderedPdfProblem(htmlAsPdf(html), "Zero-Proof Home Bar")).toMatch(/HTML source code \(<!doctype\)/);
     for (const tag of ['<div class="fact">', "<html lang=\"en\">", 'style="color:red"']) {
@@ -421,20 +497,22 @@ describe("TLC one-sheet attachments are rendered PDFs, never HTML source", () =>
     const seen: string[] = [];
     const good = await onePagerAttachments(env, ["tlce_pdf_guard"], async (html) => { seen.push(html); return { pdfBase64: b64(fixture()), pageCount: 1 }; });
     expect(seen[0]).toContain("<title>The Learning Club: Zero-Proof Home Bar</title>");
+    expect(seen[1]).toContain("<title>Internal: Zero-Proof Home Bar</title>");
     expect(good.problems).toEqual([]);
-    expect(good.attachments).toHaveLength(1);
-    expect(good.attachments[0]!.contentType).toBe("application/pdf");
-    expect(good.attachments[0]!.filename).toBe("TLC July 2031 - Zero-Proof Home Bar.pdf");
-    expect(Buffer.from(good.attachments[0]!.content, "base64").subarray(0, 5).toString("latin1")).toBe("%PDF-");
+    expect(good.attachments.map((a) => [a.filename, a.contentType])).toEqual([
+      ["TLC July 2031 - Zero-Proof Home Bar - brand pitch.pdf", "application/pdf"],
+      ["TLC July 2031 - Zero-Proof Home Bar - internal one-pager.pdf", "application/pdf"],
+    ]);
+    for (const a of good.attachments) expect(Buffer.from(a.content, "base64").subarray(0, 5).toString("latin1")).toBe("%PDF-");
 
     const bad = await onePagerAttachments(env, ["tlce_pdf_guard"], async (html) => ({ pdfBase64: b64(htmlAsPdf(html)), pageCount: 1 }));
     expect(bad.attachments).toEqual([]);
-    expect(bad.problems[0]).toMatch(/^Zero-Proof Home Bar: the PDF carries HTML source code/);
+    expect(bad.problems[0]).toMatch(/^TLC July 2031 - Zero-Proof Home Bar - brand pitch\.pdf: the PDF carries HTML source code/);
     const long = await onePagerAttachments(env, ["tlce_pdf_guard"], async () => ({ pdfBase64: b64(fixture()), pageCount: 2 }));
     expect(long.attachments).toEqual([]);
-    expect(long.problems).toEqual(["Zero-Proof Home Bar: the one-sheet ran to 2 pages"]);
+    expect(long.problems).toEqual(["TLC July 2031 - Zero-Proof Home Bar - brand pitch.pdf: it ran to 2 pages", "TLC July 2031 - Zero-Proof Home Bar - internal one-pager.pdf: it ran to 2 pages"]);
     const none = await onePagerAttachments(env, ["tlce_pdf_guard"], async () => ({ pdfBase64: null, reason: "no browser" }));
-    expect(none).toEqual({ attachments: [], problems: ["Zero-Proof Home Bar: no browser"] });
+    expect(none).toEqual({ attachments: [], problems: ["TLC July 2031 - Zero-Proof Home Bar - brand pitch.pdf: no browser", "TLC July 2031 - Zero-Proof Home Bar - internal one-pager.pdf: no browser"] });
     await env.WP_OS_DB.prepare("DELETE FROM tlc_event WHERE id = 'tlce_pdf_guard'").run();
   });
 });

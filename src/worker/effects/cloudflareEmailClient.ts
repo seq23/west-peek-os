@@ -110,7 +110,8 @@ export async function sendViaCloudflare(
     subject: defuseTriggers(payload.subject),
     text: defuseTriggers(payload.text),
     ...(payload.html ? { html: defuseTriggers(payload.html) } : {}),
-    ...(payload.replyTo ? { replyTo: payload.replyTo } : {}),
+    // The binding takes one Reply-To address; a list goes as one RFC 5322 header value.
+    ...(payload.replyTo ? { replyTo: typeof payload.replyTo === "string" ? payload.replyTo : payload.replyTo.join(", ") } : {}),
     /*
      * `In-Reply-To` and `References` only. Cloudflare publishes an allow-list: those two are
      * settable, and `Message-ID` is platform-controlled — setting one is refused outright with

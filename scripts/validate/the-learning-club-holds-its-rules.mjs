@@ -53,7 +53,12 @@ export function check(src) {
   // 1 · The send gate.
   if (!/INSERT INTO tlc_setting \(key, value, set_by\) VALUES \('brand_send', 'off'/.test(migration)) f.push("the brand-send switch is not seeded 'off' in 0259");
   if (!/settings\[BRAND_SEND_SETTING\] !== "on"/.test(shared)) f.push("brandSendGate does not require the exact string 'on'");
-  if (!/settings\[ONEPAGER_APPROVAL_SETTING\]/.test(shared) || !/settings\[PLAYBOOK_APPROVAL_SETTING\]/.test(shared)) f.push("brandSendGate does not require both owner approvals");
+  // 22 Oct 2026: an approval is of exact content: the gate compares stored hashes to the current ones.
+  if (!/approvalState\(settings, PITCH_APPROVAL_HASH_SETTING, hashes\.pitch\)/.test(shared) || !/approvalState\(settings, PLAYBOOK_APPROVAL_HASH_SETTING, hashes\.playbook\)/.test(shared)) f.push("brandSendGate does not require both owner approvals of the current content");
+  if (!/return stored === current \? "APPROVED" : "CHANGED"/.test(shared)) f.push("an approval is not tied to the exact content it approved");
+  // One TLC recipient list, enforced at the partner-mail door (22 Oct 2026: Sequoia only).
+  if (!/TLC_RECIPIENTS: readonly string\[\] = \[TLC_OWNER\.email\]/.test(shared)) f.push("TLC mail is not addressed from the one recipient list");
+  if (/scooter@/i.test(shared) || /scooter@/i.test(service)) f.push("a TLC file names Scooter's address");
   if (!/WP_OS_AI_EMAIL_EXTERNAL !== "enabled"/.test(shared)) f.push("brandSendGate does not require the firm's external-email switch");
   if (/WP_OS_AI_EMAIL_EXTERNAL\s*=\s*"enabled"/.test(wrangler)) f.push("wrangler.toml turns employee email to the outside world on");
   const gateAt = service.indexOf("brandSendGate(");
@@ -86,6 +91,8 @@ export function check(src) {
     [/TLC_COST_CAP_USD = 5_000;/, "$5,000 cap"],
     [/TLC_VETO_DAYS = 3;/, "3-day veto window"],
     [/TLC_GO_CHECK_DAYS = \[21, 14\]/, "21/14-day checks"],
+    [/PARTNER: \{ label: "Partner", priceUsd: 5_000/, "Partner $5,000"],
+    [/PRESENTING: \{ label: "Presenting partner", priceUsd: 15_000/, "Presenting partner $15,000"],
   ];
   for (const [re, what] of pins) if (!re.test(shared)) f.push(`the owner's number moved: ${what}`);
   return f;
@@ -119,6 +126,11 @@ function selfTest() {
     ["drip moved", { shared: good.shared.replace("TLC_DRIP_DAYS = [0, 4, 10, 18]", "TLC_DRIP_DAYS = [0, 2, 4, 6]") }],
     ["ticket price raised", { shared: good.shared.replace("TLC_TICKET_PRICE_MAX_USD = 10;", "TLC_TICKET_PRICE_MAX_USD = 25;") }],
     ["veto window shortened", { shared: good.shared.replace("TLC_VETO_DAYS = 3;", "TLC_VETO_DAYS = 1;") }],
+    ["approval not tied to content", { shared: good.shared.replace('return stored === current ? "APPROVED" : "CHANGED"', 'return "APPROVED"') }],
+    ["pitch approval dropped", { shared: good.shared.replace("approvalState(settings, PITCH_APPROVAL_HASH_SETTING, hashes.pitch)", '"APPROVED"') }],
+    ["TLC mail to both partners", { shared: good.shared.replace("TLC_RECIPIENTS: readonly string[] = [TLC_OWNER.email]", "TLC_RECIPIENTS: readonly string[] = PARTNER_EMAILS") }],
+    ["Scooter addressed", { service: `${good.service}\nconst to = "scooter@westpeek.ventures";\n` }],
+    ["price moved", { shared: good.shared.replace('PARTNER: { label: "Partner", priceUsd: 5_000', 'PARTNER: { label: "Partner", priceUsd: 2_500') }],
     ["file missing", { service: null }],
   ];
   let caught = 0;

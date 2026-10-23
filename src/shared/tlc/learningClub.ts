@@ -1,4 +1,4 @@
-import { TLC_ABOUT_WEST_PEEK } from "./aboutWestPeek";
+import { PARTNERS } from "../registry/partners";
 /**
  * WEST PEEK ROOMS — THE LEARNING CLUB (TLC) EDITION. Owner-approved 22 Oct 2026.
  *
@@ -54,6 +54,44 @@ export const TLC_BOOKING_PACK_DAYS = 42;
 /** Brand emails: day 0, 4, 10 and 18 after the first. */
 export const TLC_DRIP_DAYS = [0, 4, 10, 18] as const;
 export const TLC_SPONSOR_CATEGORIES = { min: 5, max: 10 } as const;
+
+/**
+ * WHAT A BRAND PAYS (owner's ruling, 22 Oct 2026). "Partner" at $5,000 is the standard for most
+ * brands. "Presenting partner" at $15,000 is for a big brand only, with "Presented by" billing and
+ * top placement. Several partners per club are allowed, and there is NO category exclusivity: the
+ * owner ruled there is no such policy, so no copy, prompt or agreement may promise one.
+ */
+export const TLC_TIERS = {
+  PARTNER: { label: "Partner", priceUsd: 5_000, gets: "the standard partnership, for most brands" },
+  PRESENTING: { label: "Presenting partner", priceUsd: 15_000, gets: '"Presented by" billing and top placement on the invitation and on the day' },
+} as const;
+export type TlcTier = keyof typeof TLC_TIERS;
+export function isTlcTier(v: unknown): v is TlcTier {
+  return v === "PARTNER" || v === "PRESENTING";
+}
+/**
+ * The sponsor CASH a club needs: the $10,000 net target plus the costs it carries (held under the
+ * $5,000 cap). $15,000, which is about 3 partners at $5,000, or 1 presenting partner.
+ */
+export const TLC_SPONSOR_CASH_TARGET_USD = TLC_NET_TARGET_USD + TLC_COST_CAP_USD;
+export const TLC_PARTNERS_TO_TARGET = Math.ceil(TLC_SPONSOR_CASH_TARGET_USD / TLC_TIERS.PARTNER.priceUsd);
+export const TLC_TARGET_PATH = `$${TLC_NET_TARGET_USD.toLocaleString("en-US")} net means about ${TLC_PARTNERS_TO_TARGET} partners at $${TLC_TIERS.PARTNER.priceUsd.toLocaleString("en-US")}, or 1 presenting partner at $${TLC_TIERS.PRESENTING.priceUsd.toLocaleString("en-US")}, against costs held under $${TLC_COST_CAP_USD.toLocaleString("en-US")}.`;
+
+/**
+ * WHO HEARS ABOUT TLC (owner, 22 Oct 2026): Sequoia, and nobody else. "this is my project"; she
+ * tells Scooter herself. THE ONE LIST: every TLC email to a partner is addressed from it, and the
+ * partner-mail door (`services/execEmail.ts`) re-addresses any TLC message to it, so a path that
+ * forgets cannot reach anyone else. Only her reply counts as a veto. Scooter keeps his OS screens.
+ * Brand emails are signed by her and replies come to her.
+ */
+const OWNER_PARTNER = PARTNERS.find((p) => p.firstName === "Sequoia")!;
+export const TLC_OWNER = { firmUserId: OWNER_PARTNER.firmUserId, email: OWNER_PARTNER.email, name: OWNER_PARTNER.fullName, firm: "West Peek Ventures" } as const;
+export const TLC_RECIPIENTS: readonly string[] = [TLC_OWNER.email];
+export const TLC_DECIDER_IDS: readonly string[] = [TLC_OWNER.firmUserId];
+/** Whether a partner email is about the Learning Club: a TLC card kind, or a TLC object. */
+export function isTlcMail(input: { cardKind?: string | null; objectType?: string | null }): boolean {
+  return isTlcKind(input.cardKind) || /^tlc_/.test(input.objectType ?? "");
+}
 
 /**
  * THE SHAPE OF ONE CLUB (owner, 22 Oct 2026): a 3–4 hour deep dive on one topic, one afternoon
@@ -307,29 +345,48 @@ export interface DripEmailInput {
 }
 
 /**
- * The four emails. Short, plain, "we", one ask, no inflated claim, no number we cannot prove.
- * Every one says how to stop hearing from us.
+ * THE FOUR BRAND EMAILS (owner, 22 Oct 2026). Signed by Sequoia Taylor, West Peek Ventures; replies
+ * come to her. Email 1 leads with the brand's own reason, gives one proof line, and asks one
+ * question: "Would you be open to exploring a partnership?". No pitch, no price and no attachment
+ * until they reply; the pitch PDF goes only in answer to a yes. Email 2 adds a short picture of the
+ * room. No exclusivity line anywhere. A quiet subject, the same on all four so they thread.
  */
+export const TLC_DRIP_PROOF_LINE = "Our community of more than 5,000 founders, operators and creatives meets in person through West Peek Rooms, our event series in New York.";
+export const TLC_DRIP_ASK = "Would you be open to exploring a partnership?";
+export const TLC_SIGNATURE: readonly string[] = [TLC_OWNER.name, TLC_OWNER.firm, TLC_OWNER.email];
 export function dripEmail(input: DripEmailInput): { subject: string; text: string } {
   const hi = input.contactName ? `Hi ${input.contactName.split(" ")[0]},` : "Hi,";
   const when = monthWords(input.month);
-  // One subject for all four, so the sequence threads in the brand's inbox.
-  const subject = `${input.brand} x a ${input.topic} learning club in New York, ${when}`;
+  const subject = `${input.brand} + a small room in New York`;
+  const reason = input.why ? input.why.trim().replace(/\.?$/, ".") : null;
+  const lead = reason ? `I am writing because ${reason.charAt(0).toLowerCase()}${reason.slice(1)}` : `I am writing because ${input.brand} feels like a natural fit for a room we are building.`;
   const bodies = [
     [
       hi,
       "",
-      `We run West Peek Rooms, small in-person gatherings in New York. In ${when} we are hosting The Learning Club: ${TLC_SEATS.min} to ${TLC_SEATS.max} people spending four hours going deep on one topic, ${input.topic}, with an hour of hands-on work. Every attendee buys a ticket to be there.`,
-      input.why ? `We thought of ${input.brand} because ${input.why}` : `We thought ${input.brand} would be a natural fit for the room.`,
+      lead,
+      `In ${when} we are hosting The Learning Club in New York: ${TLC_SEATS.min} to ${TLC_SEATS.max} people spending an afternoon or evening going deep on ${input.topic}, hands-on. We are looking for a few founding partners for the first clubs.`,
+      TLC_DRIP_PROOF_LINE,
       "",
-      "Would you be open to a short call about sponsoring it? I can send the one-pager first if that is easier.",
+      TLC_DRIP_ASK,
     ],
-    [hi, "", `Following up on The Learning Club, ${input.topic}, in New York in ${when}. Happy to send the one-pager or find 15 minutes, whichever suits you.`],
-    [hi, "", `One more note on the ${input.topic} club in ${when}. We keep sponsors to one per category so each brand has the room to itself. If ${input.brand} is interested, a reply is all it takes.`],
-    [hi, "", `Last note from us on the ${input.topic} club. If the timing is wrong this round, we run one every month in New York and would be glad to keep you in mind.`],
+    [
+      hi,
+      "",
+      `A quick picture of the room, in case it helps. ${TLC_SEATS.min} to ${TLC_SEATS.max} New Yorkers, each with a paid seat, at tables of four. A teacher who does this for a living walks them through ${input.topic}, then they spend an hour making something with their own hands, share a real meal, and leave with what they made.`,
+      "",
+      TLC_DRIP_ASK,
+    ],
+    [hi, "", `Following up once more on The Learning Club in ${when}. If a partnership around ${input.topic} is on your radar, I would be glad to share more.`],
+    [hi, "", `Last note from me on the ${input.topic} club. If the timing is wrong this round, we run one most months in New York and I would be glad to keep ${input.brand} in mind.`],
   ];
-  const text = [...bodies[Math.min(input.step, 3)]!, "", "West Peek Rooms", "", "If you would rather not hear from us, reply \"unsubscribe\" and we will not write again."].join("\n");
+  const text = [...bodies[Math.min(input.step, 3)]!, "", ...TLC_SIGNATURE, "", "If you would rather not hear from us, reply \"unsubscribe\" and we will not write again."].join("\n");
   return { subject, text };
+}
+
+/** Replies that say no, read from the subject alone; anything else that is a reply may be a yes. */
+export function replyLooksLikeNo(subject: string): boolean {
+  return /\b(no thanks|not interested|not a fit|pass|decline|declined|unsubscribe|remove me)\b/i.test(subject);
 }
 
 export function monthWords(yyyyMm: string): string {
@@ -341,13 +398,36 @@ export function monthWords(yyyyMm: string): string {
 
 /** THE SWITCH. `tlc_setting.brand_send`; anything but exactly 'on' is off, and no row is off. */
 export const BRAND_SEND_SETTING = "brand_send";
+/** Retired 22 Oct 2026: a time, not tied to any content. Never read as an approval again. */
 export const ONEPAGER_APPROVAL_SETTING = "onepager_mock_approved_at";
 export const PLAYBOOK_APPROVAL_SETTING = "playbook_approved_at";
+/**
+ * AN APPROVAL IS OF EXACT CONTENT (owner, 22 Oct 2026). Approving stores the SHA-256 of what she
+ * saw; the gate compares it to the hash of what would be sent now. Any change to the brand pitch or
+ * the playbook clears that approval, and the gate says so. The old time-stamped approvals above
+ * predate the content and read as not approved.
+ */
+export const PITCH_APPROVAL_HASH_SETTING = "pitch_approved_hash";
+export const PLAYBOOK_APPROVAL_HASH_SETTING = "playbook_approved_hash";
+export interface ContentHashes {
+  pitch: string;
+  playbook: string;
+}
 
-export function brandSendGate(settings: Record<string, string | null | undefined>, env: { WP_OS_AI_EMAIL_EXTERNAL?: string }): { open: boolean; reasons: string[] } {
+export function approvalState(settings: Record<string, string | null | undefined>, key: string, current: string): "APPROVED" | "CHANGED" | "NOT_APPROVED" {
+  const stored = settings[key];
+  if (!stored) return "NOT_APPROVED";
+  return stored === current ? "APPROVED" : "CHANGED";
+}
+
+export function brandSendGate(settings: Record<string, string | null | undefined>, env: { WP_OS_AI_EMAIL_EXTERNAL?: string }, hashes: ContentHashes): { open: boolean; reasons: string[] } {
   const reasons: string[] = [];
-  if (!settings[ONEPAGER_APPROVAL_SETTING]) reasons.push("the owner has not approved the one-pager mock");
-  if (!settings[PLAYBOOK_APPROVAL_SETTING]) reasons.push("the owner has not approved the sales playbook");
+  const pitch = approvalState(settings, PITCH_APPROVAL_HASH_SETTING, hashes.pitch);
+  const playbook = approvalState(settings, PLAYBOOK_APPROVAL_HASH_SETTING, hashes.playbook);
+  if (pitch === "NOT_APPROVED") reasons.push("the owner has not approved the brand pitch");
+  if (pitch === "CHANGED") reasons.push("the brand pitch changed after it was approved; approve it again");
+  if (playbook === "NOT_APPROVED") reasons.push("the owner has not approved the sales playbook");
+  if (playbook === "CHANGED") reasons.push("the sales playbook changed after it was approved; approve it again");
   if (settings[BRAND_SEND_SETTING] !== "on") reasons.push("the TLC brand-send switch is off");
   if (env.WP_OS_AI_EMAIL_EXTERNAL !== "enabled") reasons.push("employees may not email outside the firm (WP_OS_AI_EMAIL_EXTERNAL)");
   return { open: reasons.length === 0, reasons };
@@ -535,7 +615,7 @@ export function sponsorshipAgreement(input: { brand: string; topic: string; even
     `2. Event. The Learning Club: ${input.topic}, New York City, on ${input.eventDate} (or a date West Peek gives at least 14 days' notice of).`,
     `3. Sponsorship. Sponsor pays ${usd(input.cashUsd)} in cash${input.inKind ? ` and provides in kind: ${input.inKind}` : ""}.`,
     `4. Payment. Due by ${input.dueDate} against West Peek's invoice. The sponsorship is confirmed when payment is received.`,
-    `5. What Sponsor receives. ${input.deliverables ?? "Category exclusivity at the event, its product in attendees' hands during the hands-on session where it fits the topic, five minutes during the food break, a mention in the invitation and on the day, and a short recap afterwards."}`,
+    `5. What Sponsor receives. ${input.deliverables ?? "Its product in attendees' hands during the hands-on session where it fits the topic, five minutes during the food break, photographs from the day for its own channels, opt-in lead capture (only attendees who choose to share their details), a mention in the invitation and on the day, and a recap with attendance numbers afterwards."}`,
     "6. Attendee privacy. West Peek does not share attendee names, emails or any list of attendees with Sponsor.",
     "7. Cancellation. If West Peek cancels and does not offer a new date, West Peek refunds the cash paid. If Sponsor withdraws within 14 days of the event, the payment is not refundable.",
     "8. Brand use. Each party may use the other's name and logo only to describe this sponsorship, and only as the other approves.",
@@ -565,80 +645,9 @@ export interface Citation {
   claim: string;
 }
 
-export interface OnePagerInput {
-  topic: string;
-  angle: string | null;
-  month: string;
-  eventDate: string | null;
-  whyNow: string | null;
-  categories: readonly string[];
-  /** The trend story, every claim backed by a citation. */
-  story: string | null;
-  citations: readonly Citation[];
-  /** Real history only. Before event #1 this is West Peek Rooms/Workshops history, never an invented case. */
-  proof: readonly string[];
-  /** Filled after event #1 from the real recap; null until then. */
-  recap: string | null;
-}
+// The one-pagers (the brand pitch and the internal one-pager) are rendered in ./pitch.ts.
 
 const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-
-/** The glossy one-pager, self-contained HTML. Light and dark, phone width, no external assets. */
-export function renderOnePager(p: OnePagerInput): string {
-  const cats = p.categories.map((c) => `<li>${esc(c)}</li>`).join("");
-  const cites = p.citations.map((c, i) => `<li id="s${i + 1}"><a href="${esc(c.url)}">${esc(c.title)}</a>${c.publisher ? `, ${esc(c.publisher)}` : ""}</li>`).join("");
-  const proof = p.proof.map((x) => `<li>${esc(x)}</li>`).join("");
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>The Learning Club: ${esc(p.topic)}</title>
-<style>
-:root{--bg:#FFFFFF;--ink:#050505;--muted:#5F5B55;--line:#D9D2C6;--accent:#F05A1A;--card:#F7F2EA}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#050505;--ink:#FFFFFF;--muted:#A8A29A;--line:#2A2A2A;--card:#171717}}
-:root[data-theme="dark"]{--bg:#050505;--ink:#FFFFFF;--muted:#A8A29A;--line:#2A2A2A;--card:#171717}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 -apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif}
-main{max-width:860px;margin:0 auto;padding:40px 16px 64px}
-.eyebrow{letter-spacing:.14em;text-transform:uppercase;font-size:12px;color:var(--accent);font-weight:700}
-h1{font-size:clamp(34px,6vw,56px);line-height:1.05;margin:10px 0 8px;letter-spacing:-.02em}
-h2{font-size:14px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:36px 0 10px;font-weight:700}
-.lede{font-size:19px;color:var(--muted);max-width:640px}
-.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:28px 0}
-.fact{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
-.fact b{display:block;font-size:24px;letter-spacing:-.01em}.fact span{color:var(--muted);font-size:13px}
-ul{padding-left:20px}li{margin:4px 0}.cats{columns:2;column-gap:28px}@media (max-width:560px){.cats{columns:1}}
-.note{border-left:3px solid var(--accent);padding:2px 0 2px 14px;color:var(--muted)}
-a{color:inherit}small{color:var(--muted)}footer{margin-top:44px;border-top:1px solid var(--line);padding-top:16px;color:var(--muted);font-size:13px}
-.about{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-top:28px}.about h2{margin:0 0 6px}.about p{margin:0}
-@page{size:letter;margin:.45in}
-@media print{:root,:root:not([data-theme="light"]),:root[data-theme="dark"]{--bg:#FFFFFF;--ink:#050505;--muted:#5F5B55;--line:#D9D2C6;--card:#F7F2EA}
-body{font-size:13px;line-height:1.45;-webkit-print-color-adjust:exact;print-color-adjust:exact}main{max-width:none;padding:0}
-h1{font-size:40px}h2{margin:18px 0 6px;font-size:12px}.lede{font-size:15px}.facts{grid-template-columns:repeat(4,1fr);margin:16px 0}.fact{padding:10px 12px}.fact b{font-size:18px}
-.ros{columns:2;column-gap:28px}.src{font-size:11px;columns:2;column-gap:28px}li{margin:2px 0}.fact,.about,.note,li{break-inside:avoid}.about{margin-top:18px}footer{margin-top:18px}}
-</style></head><body><main>
-<div class="eyebrow">West Peek Rooms · The Learning Club</div>
-<h1>${esc(p.topic)}</h1>
-<p class="lede">${esc(p.angle ?? "One afternoon, one topic, taught properly.")} ${p.eventDate ? `New York City, ${esc(p.eventDate)}.` : `New York City, ${esc(monthWords(p.month))}.`}</p>
-<div class="facts">
-<div class="fact"><b>${TLC_SEATS.min}–${TLC_SEATS.max}</b><span>people in the room</span></div>
-<div class="fact"><b>Every seat paid</b><span>each attendee bought a ticket to be there</span></div>
-<div class="fact"><b>3–4 hours</b><span>a working session, not a panel</span></div>
-<div class="fact"><b>One per category</b><span>each sponsor has the room to itself</span></div>
-</div>
-<h2>Why now</h2>
-<p>${esc(p.story ?? p.whyNow ?? "")}</p>
-<h2>The format</h2>
-<p>A teacher who does this for a living leads the group through ${esc(p.topic)} for one afternoon or evening. A real meal, materials and a photographer are part of it, and everyone leaves with something they made or learned. Attendees pay for their seat, so the people in the room chose to be there.</p>
-<ol class="ros">${runOfShowLines().map((l) => `<li>${esc(l)}</li>`).join("")}</ol>
-<h2>Sponsor categories</h2>
-<ul class="cats">${cats}</ul>
-<h2>What sponsors receive</h2>
-<ul><li>Real hands-on time: your product in attendees' hands during the 60-minute hands-on session, where it fits the topic</li><li>Five minutes to the room during the food break</li><li>Category exclusivity for the day</li><li>Named in the invitation and on the day</li><li>A short recap with photographs afterwards</li></ul>
-<p class="note">We never share attendee names, emails or lists with sponsors.</p>
-<h2>${p.recap ? "The last club" : "Who is behind it"}</h2>
-${p.recap ? `<p>${esc(p.recap)}</p>` : `<ul>${proof}</ul>`}
-${cites ? `<h2>Sources</h2><ol class="src">${cites}</ol>` : ""}
-<section class="about"><h2>About West Peek Ventures</h2><p>${esc(TLC_ABOUT_WEST_PEEK)}</p></section>
-<footer>West Peek Rooms · New York City · a reply to the email this came with is the quickest way to reach us.</footer>
-</main></body></html>`;
-}
 
 // ── The sales playbook (Wynn's), as the prompts read it ────────────────────────────────────────
 
@@ -647,13 +656,14 @@ ${cites ? `<h2>Sources</h2><ol class="src">${cites}</ol>` : ""}
  * instruction the model is given — never a document beside it.
  */
 export const TLC_PLAYBOOK: readonly string[] = [
-  "Who we sell to: brands whose customers are the people a club on this topic draws, in categories Parker named for it. One sponsor per category per club.",
-  "What we sell: real hands-on time with the product, in a room of 25 to 40 people who each paid to be there, for a 3 to 4 hour deep dive on one topic in New York (one afternoon or one evening). Product in hands during the 60-minute hands-on session where it fits, five minutes during the food break, category exclusivity, a mention in the invitation and on the day, a recap with photographs.",
-  "Target per club: $10,000 net from sponsors, $7,500 at the least, costs held under $5,000. Tickets add to the net but the target never depends on them.",
+  "Who we sell to: brands whose customers are the people a club on this topic draws, in categories Parker named for it. Several partners per club, each in its own role.",
+  "What we sell: real hands-on time with the product, in a room of 25 to 40 people who each paid to be there, for a 3 to 4 hour deep dive on one topic in New York (one afternoon or one evening). Product in hands during the 60-minute hands-on session where it fits, five minutes during the food break, photo and content rights, opt-in lead capture, a mention in the invitation and on the day, and a recap with numbers.",
+  "Price: Partner $5,000, the standard for most brands. Presenting partner $15,000, for a big brand only, with \"Presented by\" billing and top placement.",
+  "Target per club: $10,000 net from sponsors, $7,500 at the least, costs held under $5,000. That is about 3 partners at $5,000, or 1 presenting partner. Tickets add to the net but the target never depends on them.",
   "Who we write to: a named person at the brand whose job is partnerships, events, community or brand marketing, at an address read off a live page. Never a guessed address. Never a contact without an email.",
-  "How we write: we, not I. Short, plain, warm. One ask: a short call. No inflated claims, no numbers we cannot show, no invented case studies. Before the first club runs we describe the format and West Peek Rooms' real history; after it, the real recap.",
+  "How we write: signed by Sequoia Taylor, West Peek Ventures; replies go to her. Short, plain, warm, professional. Lead with the brand's own reason. One ask: \"Would you be open to exploring a partnership?\" No pitch, price or attachment until they reply. No inflated claims, no numbers we cannot show, no invented case studies. Before the first club runs we describe the format and West Peek Rooms' real history; after it, the real recap.",
   "Cadence: four emails at day 0, 4, 10 and 18. Stop the moment they reply, bounce or ask us to stop. Warm up slowly: 5 a day the first week, then 10, 20, 30.",
-  "When a brand says yes in principle: write up their cash, their in-kind and what they want, and send both partners one email with a recommendation and the club's net if we say yes. Their reply decides: yes, no, or counter with an amount.",
+  "When a brand replies yes: send them the brand pitch PDF and a call link, and tell Sequoia. After the call, write up their cash, their in-kind and what they want, and send Sequoia one email with a recommendation and the club's net if we say yes. Her reply decides: yes, no, or counter with an amount.",
   "Money: we invoice and send West Peek's own payment link. We never book, buy or pay for anything; hosts, venues, food, materials and photographers go to the partners as options with prices and book-by dates.",
   "Privacy: no attendee name, email or list ever goes to a sponsor.",
 ];
@@ -662,7 +672,7 @@ export function renderPlaybook(): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TLC Sales Playbook</title>
 <style>:root{--bg:#FFFFFF;--ink:#050505;--muted:#5F5B55;--accent:#F05A1A}@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#050505;--ink:#FFFFFF;--muted:#A8A29A}}:root[data-theme="dark"]{--bg:#050505;--ink:#FFFFFF;--muted:#A8A29A}
 body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif}main{max-width:760px;margin:0 auto;padding:40px 16px}h1{margin:0 0 6px}p.s{color:var(--muted)}li{margin:10px 0}.e{color:var(--accent);font-weight:700;letter-spacing:.12em;text-transform:uppercase;font-size:12px}</style></head>
-<body><main><div class="e">The Learning Club · for the owner's approval</div><h1>Wynn's sales playbook</h1><p class="s">This exact text is what every TLC prompt carries. Nothing is sent to any brand until you approve this and the one-pager.</p><ol>${TLC_PLAYBOOK.map((l) => `<li>${esc(l)}</li>`).join("")}</ol></main></body></html>`;
+<body><main><div class="e">The Learning Club · for the owner's approval</div><h1>Wynn's sales playbook</h1><p class="s">This exact text is what every TLC prompt carries. Nothing is sent to any brand until you approve this and the brand pitch.</p><ol>${TLC_PLAYBOOK.map((l) => `<li>${esc(l)}</li>`).join("")}</ol></main></body></html>`;
 }
 
 // ── Parker's topics: he chooses; the partners may veto within 3 days ───────────────────────────
@@ -726,7 +736,7 @@ export function quarterOf(at: Date): string {
   return `${at.getUTCFullYear()}-Q${Math.floor(at.getUTCMonth() / 3) + 1}`;
 }
 
-export { TLC_ABOUT_WEST_PEEK } from "./aboutWestPeek";
+export { TLC_ABOUT_WEST_PEEK, TLC_ABOUT_COMMUNITY } from "./aboutWestPeek";
 
 /** The real history the one-pager leans on before the first club has run. No invented case study. */
 export const TLC_PRE_LAUNCH_PROOF: readonly string[] = [
@@ -862,15 +872,15 @@ export function topicsEmail(input: { months: readonly string[]; picks: readonly 
   for (let i = 0; i < alts.length; i += 3) chunks.push(alts.slice(i, i + 3));
   return {
     what: `TLC topics for ${picks.map((p) => monthWords(p.month).slice(0, 3)).join(", ")} ${year}`,
-    tldr: `My ${picks.length} picks for ${picks.map((p) => monthWords(p.month)).join(", ")}, each with the one-sheet a brand would see, plus ${input.alternatives.length} alternatives. They go ahead on ${input.goAheadOn} unless either of you says no.`,
+    tldr: `My ${picks.length} picks for ${picks.map((p) => monthWords(p.month)).join(", ")}, each with the one-sheet a brand would see, plus ${input.alternatives.length} alternatives. They go ahead on ${input.goAheadOn} unless you say no.`,
     tldrBullets: ['Reply "no" to stop all of them', 'Reply "no to <month>" or "swap <month> for <alternative>" to change one', "Silence means go"],
     sections: [
       ...picks.map((p) => ({
         label: `${monthWords(p.month)}: ${p.topic}`,
-        bullets: [p.angle, `Where the idea came from: ${TLC_IDEA_ORIGIN_LABEL[p.origin]}`, `Sponsor categories: ${p.categories.join(", ")}`, `The one-sheet a brand would see: ${p.onePagerUrl} (also attached)`],
+        bullets: [p.angle, `Where the idea came from: ${TLC_IDEA_ORIGIN_LABEL[p.origin]}`, `Sponsor categories: ${p.categories.join(", ")}`, `The brand pitch and your internal one-pager: ${p.onePagerUrl} (both attached as PDFs)`],
       })),
       ...chunks.map((c, i) => ({ label: `${input.alternatives.length} alternatives (${i * 3 + 1}–${i * 3 + c.length})`, bullets: c })),
     ],
-    details: `Brand sending stays off. Nothing goes to any brand until you approve the one-sheet.`,
+    details: `Brand sending stays off. Nothing goes to any brand until you approve the brand pitch and the playbook on the Rooms page and turn sending on.`,
   };
 }

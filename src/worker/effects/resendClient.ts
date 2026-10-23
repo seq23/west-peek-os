@@ -114,7 +114,7 @@ export async function sendViaResend(
         subject,
         text,
         ...(html ? { html } : {}),
-        ...(payload.replyTo ? { reply_to: payload.replyTo } : {}),
+        ...(payload.replyTo ? { reply_to: typeof payload.replyTo === "string" ? payload.replyTo : [...payload.replyTo] } : {}),
         // Custom headers, documented by Resend with `In-Reply-To` and `References` named. Never a
         // `Message-ID`: SES overrides it, so one set here would be a thread key that never arrives.
         ...(payload.headers && Object.keys(payload.headers).length > 0 ? { headers: payload.headers } : {}),

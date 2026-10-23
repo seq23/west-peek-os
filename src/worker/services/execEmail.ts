@@ -10,6 +10,24 @@ import { lintExecEmail, renderExecEmail, type ExecEmailInput } from "../../share
 import { recordThreadDelivery, startThread } from "./emailThread";
 import { threadReference } from "../../shared/email/thread";
 import { EmployeeSenderError, employeeSenderHeader } from "../../shared/registry/employeeMail";
+import { TLC_RECIPIENTS, isTlcKind, isTlcMail } from "../../shared/tlc/learningClub";
+
+/**
+ * TLC MAIL GOES TO SEQUOIA ONLY (owner, 22 Oct 2026: "this is my project"; she tells Scooter
+ * herself). Applied HERE, at the one door every employee-to-partner email passes, so no TLC path,
+ * present or future, can address anyone else: a TLC message (a TLC card kind, a `tlc_*` object, or
+ * a work card whose kind is TLC) is re-addressed to `TLC_RECIPIENTS`, and its cc is cut to it.
+ */
+export async function isTlcPartnerMail(env: Env, input: { cardKind?: string | null; objectType: string; objectId: string }): Promise<boolean> {
+  if (isTlcMail(input)) return true;
+  if (input.objectType !== "work_card") return false;
+  const row = await env.WP_OS_DB.prepare("SELECT kind FROM work_card WHERE id = ?1").bind(input.objectId).first<{ kind: string | null }>().catch(() => null);
+  return isTlcKind(row?.kind ?? null);
+}
+export function tlcAddressed(to: readonly string[]): string[] {
+  const kept = to.filter((a) => TLC_RECIPIENTS.includes(a));
+  return kept.length ? [...new Set(kept)] : [...TLC_RECIPIENTS];
+}
 
 /**
  * THE ONE DOOR an email to a partner leaves through (16 Sep 2026).
@@ -140,7 +158,9 @@ async function record(
  * An employee emails a partner. The only way one does.
  */
 export async function sendPartnerEmail(env: Env, input: PartnerEmailInput): Promise<PartnerEmailOutcome> {
-  const to = input.to.trim().toLowerCase();
+  const tlc = await isTlcPartnerMail(env, input);
+  const to = tlc ? tlcAddressed([input.to.trim().toLowerCase()])[0]! : input.to.trim().toLowerCase();
+  if (tlc) input = { ...input, cc: (input.cc ?? []).filter((a) => TLC_RECIPIENTS.includes(a.trim().toLowerCase())) };
   const rendered = renderExecEmail(input.email);
   const events = input.events ?? { sent: "deliverable.emailed_to_partner", notSent: "deliverable.email_not_sent" };
   const actor = { objectType: input.objectType, objectId: input.objectId, firmScope: input.firmScope, actorId: input.actorId ?? "work_sweep", actorType: "system" as const };
@@ -229,7 +249,8 @@ export async function sendPartnersEmail(
   env: Env,
   input: Omit<PartnerEmailInput, "to"> & { to: readonly string[] },
 ): Promise<PartnerEmailOutcome & { recipients: string[] }> {
-  const to = input.to.map((a) => a.trim().toLowerCase());
+  const asked = input.to.map((a) => a.trim().toLowerCase());
+  const to = (await isTlcPartnerMail(env, input)) ? tlcAddressed(asked) : asked;
   const rendered = renderExecEmail(input.email);
   const events = input.events ?? { sent: "deliverable.emailed_to_partner", notSent: "deliverable.email_not_sent" };
   const actor = { objectType: input.objectType, objectId: input.objectId, firmScope: input.firmScope, actorId: input.actorId ?? "work_sweep", actorType: "system" as const };

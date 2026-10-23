@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, useApi } from "../lib/api";
+import { PartnersPanel } from "./PartnersPanel";
 
 /**
  * THE TOP OF EVENTS & ROOMS (owner, 22 Oct 2026): "rooms are our event series and TLC is a series within the
@@ -41,7 +42,17 @@ interface TlcResearch {
   found_at: string;
   found_by: string;
 }
+type ApprovalState = "APPROVED" | "CHANGED" | "NOT_APPROVED";
+interface TlcApprovals {
+  pitch: { state: ApprovalState; hash: string; approved_at: string | null };
+  playbook: { state: ApprovalState; hash: string; approved_at: string | null };
+  sending: boolean;
+  pitches: Array<{ month: string; topic: string; url: string | null; pdf_url: string | null }>;
+}
 interface TlcOverview {
+  approvals?: TlcApprovals;
+  send_gate?: { open: boolean; reasons: string[] };
+  settings?: Record<string, string | null>;
   events: TlcEvent[];
   ideas: TlcIdea[];
   research: TlcResearch[];
@@ -97,7 +108,8 @@ export function RoomsMap(): JSX.Element {
         </li>
         <li>
           <strong>Who does what:</strong> Parker picks the topics and builds the packets; Wynn sells TLC
-          sponsorships; you and Scooter decide every deal and book and pay for everything.
+          partnerships, in emails signed by Sequoia; Sequoia decides every TLC deal, and every TLC email goes to
+          her only. The partners book and pay for everything.
         </li>
         <li>
           <strong>On this page:</strong> The Learning Club first (its months, each one-sheet, the playbook and the
@@ -159,13 +171,19 @@ export function LearningClubPanel(): JSX.Element {
                   {e.one_pager_url && (
                     <>
                       {" "}
-                      · <a href={e.one_pager_url} target="_blank" rel="noreferrer">the one-sheet a brand would see</a>
+                      · <a href={e.one_pager_url} target="_blank" rel="noreferrer">Open the internal one-pager</a> ·{" "}
+                      <a href={`${e.one_pager_url}?doc=pitch`} target="_blank" rel="noreferrer">Open the brand pitch</a>
                     </>
                   )}
                 </li>
               ))}
             </ul>
           )}
+
+          <h4>Partners (brands that said yes)</h4>
+          <PartnersPanel source="TLC" />
+
+          {data.approvals && <BrandSending approvals={data.approvals} gate={data.send_gate ?? { open: false, reasons: [] }} callLink={data.settings?.call_link ?? null} playbookId={data.playbook_document_id} onChange={tlc.reload} />}
 
           <p>
             {data.playbook_document_id ? (
@@ -266,6 +284,117 @@ export function LearningClubPanel(): JSX.Element {
           )}
         </>
       )}
+    </section>
+  );
+}
+
+const STATE_WORDS: Record<ApprovalState, { words: string; badge: string }> = {
+  APPROVED: { words: "Approved", badge: "badge badge-ok" },
+  CHANGED: { words: "Changed since you approved it: look again", badge: "badge badge-gate" },
+  NOT_APPROVED: { words: "Not approved yet", badge: "badge badge-gate" },
+};
+
+/**
+ * BRAND SENDING, IN THREE PLAIN STEPS (owner, 22 Oct 2026; make-it-calm). Approve the brand pitch,
+ * approve the playbook, then start sending. Each asks "are you sure?" first. An approval is of the
+ * exact words on screen: the button sends the hash of what was shown, and any later change clears
+ * it and says so here. "Stop sending" is always one tap, at the top, never hidden.
+ */
+function BrandSending(props: { approvals: TlcApprovals; gate: { open: boolean; reasons: string[] }; callLink: string | null; playbookId: string | null; onChange: () => void }): JSX.Element {
+  const { approvals, gate } = props;
+  const [confirming, setConfirming] = useState<null | "pitch" | "playbook" | "brand_send_on">(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [link, setLink] = useState(props.callLink ?? "");
+  const both = approvals.pitch.state === "APPROVED" && approvals.playbook.state === "APPROVED";
+
+  const send = async (what: "pitch" | "playbook" | "brand_send_on" | "brand_send_off" | "call_link"): Promise<void> => {
+    const body: Record<string, string> = { what };
+    if (what === "pitch") body.hash = approvals.pitch.hash;
+    if (what === "playbook") body.hash = approvals.playbook.hash;
+    if (what === "call_link") body.call_link = link.trim();
+    const res = await api<{ detail?: string }>("/api/tlc/approve", { method: "POST", body });
+    setConfirming(null);
+    setMessage(
+      res.status === 200
+        ? { pitch: "The brand pitch is approved, exactly as it reads now.", playbook: "The playbook is approved, exactly as it reads now.", brand_send_on: "Sending to brands is on. Each email still waits for your approval.", brand_send_off: "Sending to brands is off. Nothing more goes to any brand.", call_link: "Your call link is saved." }[what]
+        : res.data?.detail ?? "That did not save. Try again.",
+    );
+    props.onChange();
+  };
+
+  const Confirm = (p: { what: "pitch" | "playbook" | "brand_send_on"; sentence: string; yes: string }): JSX.Element =>
+    confirming === p.what ? (
+      <div className="notice" role="alert">
+        <p>{p.sentence}</p>
+        <button type="button" onClick={() => void send(p.what)}>{p.yes}</button>{" "}
+        <button type="button" className="link-button" onClick={() => setConfirming(null)}>Cancel, change nothing</button>
+      </div>
+    ) : (
+      <></>
+    );
+
+  return (
+    <section data-testid="tlc-brand-sending">
+      <h4>Brand sending</h4>
+      {approvals.sending ? (
+        <p>
+          <span className="badge badge-ok">Sending to brands is ON</span>{" "}
+          <button type="button" data-testid="tlc-stop-sending" onClick={() => void send("brand_send_off")}>Stop sending to brands</button>
+        </p>
+      ) : (
+        <p><span className="badge badge-quiet">Sending to brands is OFF</span> Nothing goes to any brand.</p>
+      )}
+      {!gate.open && gate.reasons.length > 0 && (
+        <p className="muted small" data-testid="tlc-gate-reasons">Why nothing is going yet: {gate.reasons.join("; ")}.</p>
+      )}
+      {message && <p className="notice" role="status">{message}</p>}
+      <ol className="card-list">
+        <li data-testid="tlc-step-pitch">
+          <strong>Step 1. Approve the brand pitch.</strong> <span className={STATE_WORDS[approvals.pitch.state].badge}>{STATE_WORDS[approvals.pitch.state].words}</span>
+          {approvals.pitch.state === "APPROVED" && approvals.pitch.approved_at && <span className="muted small"> on {approvals.pitch.approved_at.slice(0, 10)}</span>}
+          <div className="small">
+            Read what a brand will see:{" "}
+            {approvals.pitches.map((p, i) => (
+              <span key={p.month}>
+                {i > 0 && " · "}
+                {p.url ? <a href={p.url} target="_blank" rel="noreferrer">{monthWords(p.month)}: {p.topic} (tap to open)</a> : `${monthWords(p.month)}: ${p.topic}`}
+              </span>
+            ))}
+          </div>
+          {approvals.pitch.state !== "APPROVED" && confirming !== "pitch" && <button type="button" onClick={() => setConfirming("pitch")}>Approve the brand pitch</button>}
+          <Confirm what="pitch" sentence="You are approving these pitches exactly as they read now. If any word changes later, this approval clears and this page will say so." yes="Yes, approve the brand pitch" />
+        </li>
+        <li data-testid="tlc-step-playbook">
+          <strong>Step 2. Approve the playbook.</strong> <span className={STATE_WORDS[approvals.playbook.state].badge}>{STATE_WORDS[approvals.playbook.state].words}</span>
+          <div className="small">
+            {props.playbookId ? (
+              <a href="#/documents" onClick={(ev) => { ev.preventDefault(); openDocument(props.playbookId!); }}>Read the playbook (tap to open)</a>
+            ) : (
+              <span className="muted">The playbook is not in Documents yet.</span>
+            )}
+          </div>
+          {approvals.playbook.state !== "APPROVED" && confirming !== "playbook" && <button type="button" onClick={() => setConfirming("playbook")}>Approve the playbook</button>}
+          <Confirm what="playbook" sentence="You are approving the playbook exactly as it reads now. If it changes later, this approval clears." yes="Yes, approve the playbook" />
+        </li>
+        <li data-testid="tlc-step-start">
+          <strong>Step 3. Start sending to brands.</strong>{" "}
+          {approvals.sending ? (
+            <span className="badge badge-ok">On</span>
+          ) : both ? (
+            confirming !== "brand_send_on" && <button type="button" onClick={() => setConfirming("brand_send_on")}>Start sending to brands</button>
+          ) : (
+            <span className="muted small">Approve steps 1 and 2 first.</span>
+          )}
+          <Confirm what="brand_send_on" sentence="Brands will start getting short emails signed by you, a few a day, and each one waits for your approval before it goes. You can stop at any time." yes="Yes, start sending" />
+        </li>
+      </ol>
+      <div className="form-row">
+        <label>
+          Your call link (brands who say yes get it with the pitch)
+          <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://…" maxLength={400} />
+        </label>
+        <button type="button" onClick={() => void send("call_link")}>Save the call link</button>
+      </div>
     </section>
   );
 }

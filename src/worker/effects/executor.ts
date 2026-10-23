@@ -9,7 +9,9 @@ import { emailSendBlockedReason, isEmailSendEnabled, sendViaResend } from "./res
 import { aiOutboundSwitches, mayAiEmail } from "../../shared/policy/aiOutbound";
 import { PARTNERS, PARTNER_EMAILS } from "../../shared/registry/partners";
 import { employeeSenderAddress } from "../../shared/registry/employeeMail";
-import { isPreviewEnv, type EmailSendResult } from "./emailTransport";
+import { OUTBOUND_ATTACHMENTS_MAX_BYTES, attachmentsBytes, isPreviewEnv, type EmailAttachment, type EmailSendResult } from "./emailTransport";
+import { ASSIGNING_PARTNERS } from "../../shared/intake/partnerAuthority";
+import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
 import {
   cloudflareEmailBlockedReason,
   isCloudflareEmailEnabled,
@@ -133,7 +135,7 @@ export interface EffectExecutionResult {
 async function performEffect(env: Env, request: ExternalEffectRequestRow): Promise<SimulatedDelivery> {
   const cloudflareReady = isCloudflareEmailEnabled(env);
   if (request.effect_type === "email.send" && (cloudflareReady || isEmailSendEnabled(env))) {
-    const payload = JSON.parse(request.payload_json || "{}") as { subject?: string; text?: string; body?: string };
+    const payload = JSON.parse(request.payload_json || "{}") as { subject?: string; text?: string; body?: string; reply_to?: unknown; attachments?: unknown };
     // WHOSE NAME IS ON IT. A partner who has turned on "send as me" has their approved messages go
     // out under their own address instead of the firm's; everyone else, and every unattributed
     // request, stays as the firm. Resolved from the person who REQUESTED the effect rather than
@@ -166,11 +168,24 @@ async function performEffect(env: Env, request: ExternalEffectRequestRow): Promi
       from = (await fromAddressFor(env, requestedBy)) ?? undefined;
     }
 
+    /*
+     * REPLY-TO AND A PDF (22 Oct 2026, the Learning Club). An approved email may say where replies
+     * go, but only to a partner or the firm's intake mailbox: never a stranger. It may carry PDFs
+     * (the brand pitch after a yes), within the attachment cap. Anything else in either field is
+     * dropped rather than sent.
+     */
+    const replyTo = (Array.isArray(payload.reply_to) ? payload.reply_to : [])
+      .map((a) => String(a).trim().toLowerCase())
+      .filter((a) => ASSIGNING_PARTNERS.includes(a) || a === INTAKE_MAILBOX);
+    const attachments = (Array.isArray(payload.attachments) ? payload.attachments : [])
+      .filter((a): a is EmailAttachment => !!a && typeof a === "object" && (a as EmailAttachment).contentType === "application/pdf" && typeof (a as EmailAttachment).content === "string" && typeof (a as EmailAttachment).filename === "string");
     const message = {
       to: request.destination,
       subject: payload.subject ?? "(no subject)",
       text: payload.text ?? payload.body ?? "",
       from,
+      ...(replyTo.length ? { replyTo } : {}),
+      ...(attachments.length && attachmentsBytes(attachments) <= OUTBOUND_ATTACHMENTS_MAX_BYTES ? { attachments } : {}),
     };
     // THROUGH THE PARTNER'S OWN GMAIL WHEN THEY HAVE GRANTED IT. Mail sent under a partner's address
     // via the firm transport is legitimate and arrives, but Gmail has never heard of it — so it is
