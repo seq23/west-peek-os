@@ -208,20 +208,29 @@ describe("the rules, pure", () => {
     expect(bookingPackProblems({ ...pack, hosts: [o("h1", 400)] }).join(" ")).toMatch(/1 NYC paid host/);
   });
 
-  it("keeps the send gate shut until both approvals OF THE CURRENT CONTENT, the switch and the firm's external switch", () => {
+  it("keeps the send gate shut until both approvals OF THE CURRENT CONTENT, the switch and her Outside email list", () => {
     const h = { pitch: "a".repeat(64), playbook: "b".repeat(64) };
     const approved = { pitch_approved_hash: h.pitch, playbook_approved_hash: h.playbook };
-    expect(brandSendGate({}, {}, h).open).toBe(false);
-    expect(brandSendGate({ brand_send: "on", ...approved }, {}, h).reasons).toEqual(["employees may not email outside the firm (WP_OS_AI_EMAIL_EXTERNAL)"]);
-    expect(brandSendGate({ brand_send: "ON", ...approved }, { WP_OS_AI_EMAIL_EXTERNAL: "enabled" }, h).open).toBe(false);
-    expect(brandSendGate({ brand_send: "on", ...approved }, { WP_OS_AI_EMAIL_EXTERNAL: "enabled" }, h).open).toBe(true);
+    const notOnList = { allowed: false, code: "NOT_ON_LIST", reason: "TLC brand sales is not on your Outside email list." };
+    const onList = { allowed: true, code: "ALLOWED", reason: "TLC brand sales is on your Outside email list." };
+    expect(brandSendGate({}, notOnList, h).open).toBe(false);
+    // The one line the panel turns into "tap to allow", word for word.
+    expect(brandSendGate({ brand_send: "on", ...approved }, notOnList, h).reasons).toEqual(["TLC brand sales is not on your Outside email list — tap to allow."]);
+    expect(brandSendGate({ brand_send: "on", ...approved }, notOnList, h).outside_email_allowed).toBe(false);
+    // Off and break-glass say so in their own words, and still shut the gate.
+    expect(brandSendGate({ brand_send: "on", ...approved }, { allowed: false, code: "BREAK_GLASS", reason: "Stopped by the break-glass switch." }, h).reasons).toEqual(["Stopped by the break-glass switch. — tap to open your Outside email list."]);
+    expect(brandSendGate({ brand_send: "on", ...approved }, { allowed: false, code: "MODE_OFF", reason: "Outside email is off." }, h).open).toBe(false);
+    // Allowing the job opens nothing by itself: the TLC switch and both approvals still stand.
+    expect(brandSendGate({ brand_send: "ON", ...approved }, onList, h).open).toBe(false);
+    expect(brandSendGate({ ...approved }, onList, h).reasons).toEqual(["the TLC brand-send switch is off"]);
+    expect(brandSendGate({ brand_send: "on", ...approved }, onList, h)).toEqual({ open: true, reasons: [], outside_email_allowed: true });
     // The old time-stamped approvals predate the content: they are not approvals.
-    expect(brandSendGate({ brand_send: "on", onepager_mock_approved_at: "2026-10-22T19:34:00Z", playbook_approved_at: "x" }, { WP_OS_AI_EMAIL_EXTERNAL: "enabled" }, h).reasons).toEqual([
+    expect(brandSendGate({ brand_send: "on", onepager_mock_approved_at: "2026-10-22T19:34:00Z", playbook_approved_at: "x" }, onList, h).reasons).toEqual([
       "the owner has not approved the brand pitch",
       "the owner has not approved the sales playbook",
     ]);
     // Any change to the content clears its approval, and the gate says so.
-    const changed = brandSendGate({ brand_send: "on", ...approved }, { WP_OS_AI_EMAIL_EXTERNAL: "enabled" }, { pitch: "c".repeat(64), playbook: h.playbook });
+    const changed = brandSendGate({ brand_send: "on", ...approved }, onList, { pitch: "c".repeat(64), playbook: h.playbook });
     expect(changed.open).toBe(false);
     expect(changed.reasons).toEqual(["the brand pitch changed after it was approved; approve it again"]);
   });
@@ -246,10 +255,21 @@ describe("the rules, pure", () => {
     expect(m.paceCheck(60, 9_999)).toEqual({ checkpoint: 60, neededUsd: 10_000, behind: true });
     expect(m.paceCheck(42, 15_000)).toEqual({ checkpoint: 42, neededUsd: 15_000, behind: false });
     expect(m.paceCheck(50, 0)).toBeNull();
-    for (const text of [m.TLC_PLAYBOOK.join(" "), sponsorshipAgreement({ brand: "Acme", topic: "T", eventDate: "2027-02-11", cashUsd: 5000, inKind: null, deliverables: null, dueDate: "2027-02-01" })]) {
+    // The ONE place "exclusivity" may appear is the sentence that refuses it, exactly once.
+    const NO_EXCLUSIVITY = "we never offer or claim category exclusivity.";
+    expect(m.TLC_PLAYBOOK.join(" ").split(NO_EXCLUSIVITY).length - 1).toBe(1);
+    expect(m.TLC_PLAYBOOK.find((l) => l.includes(NO_EXCLUSIVITY))).toMatch(/^Sponsors in a club are complementary, never competitors/);
+    for (const text of [m.TLC_PLAYBOOK.join(" ").replace(NO_EXCLUSIVITY, ""), sponsorshipAgreement({ brand: "Acme", topic: "T", eventDate: "2027-02-11", cashUsd: 5000, inKind: null, deliverables: null, dueDate: "2027-02-01" })]) {
       expect(text).not.toMatch(/exclusiv|one (sponsor )?per category|to itself/i);
     }
     expect(m.TLC_PLAYBOOK.join(" ")).toMatch(/Partner \$5,000.*Lead partner \$10,000.*Presenting partner \$15,000/);
+    // The Title tier, first on the Price line, matching the brand pitch.
+    const price = m.TLC_PLAYBOOK.find((l) => l.startsWith("Price:"))!;
+    expect(price).toMatch(/^Price: Title partner \$25,000: one brand funds the whole room, the club is "presented by" that brand, it is the only cash partner that night, and in-kind partners need its OK\. In January the Title partner is the primary route to \$25K\. Partner \$5,000/);
+    // The room is sized per club, never a fixed 25 to 40.
+    const what = m.TLC_PLAYBOOK.find((l) => l.startsWith("What we sell:"))!;
+    expect(what).toContain("a room sized to the partners' goals (set per club; 25 to 40 by default, 60 to 150 when the club calls for it), each guest paid to be there");
+    expect(m.TLC_PLAYBOOK.join(" ")).not.toContain("a room of 25 to 40 people");
     expect(m.TLC_PLAYBOOK.join(" ")).toMatch(/\$25,000 raised from sponsors, costs up to \$15,000, \$10,000 net/);
   });
 
@@ -373,22 +393,27 @@ describe("the Learning Club in the database", () => {
     expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM external_effect_request").first<{ n: number }>())!.n).toBe(0);
     const m = await env.WP_OS_DB.prepare("SELECT state, held_reason FROM tlc_drip_message").first<{ state: string; held_reason: string }>();
     expect(m!.state).toBe("HELD");
-    expect(m!.held_reason).toMatch(/brand pitch.*playbook.*switch is off/);
+    expect(m!.held_reason).toMatch(/brand pitch.*playbook.*switch is off.*TLC brand sales is not on your Outside email list/);
   });
 
   it("with everything approved and on, each email waits for a partner's approval card", async () => {
     // The old time-stamped approvals alone open nothing.
     await env.WP_OS_DB.prepare("INSERT INTO tlc_setting (key, value) VALUES ('onepager_mock_approved_at','x'),('playbook_approved_at','x') ON CONFLICT(key) DO UPDATE SET value = excluded.value").run();
     await env.WP_OS_DB.prepare("UPDATE tlc_setting SET value = 'on' WHERE key = 'brand_send'").run();
-    const onEnv = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled", WP_OS_AI_EMAIL_EXTERNAL: "enabled" } as Partial<Env>);
+    const onEnv = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>);
+    // Default deny: nothing is on her Outside email list until she allows it.
+    expect((await runDrip(onEnv, new Date("2026-11-09T15:03:00.000Z"))).gate.reasons).toContain("TLC brand sales is not on your Outside email list — tap to allow.");
+    await env.WP_OS_DB.prepare("INSERT INTO outside_email_allow (item_type, item_id, allowed, changed_by) VALUES ('JOB','tlc_brand_sales',1,'test')").run();
     expect((await runDrip(onEnv, new Date("2026-11-09T15:04:00.000Z"))).gate.reasons).toEqual(["the owner has not approved the brand pitch", "the owner has not approved the sales playbook"]);
     const h = await contentHashes(env);
     await env.WP_OS_DB.prepare("INSERT INTO tlc_setting (key, value) VALUES ('pitch_approved_hash', ?1), ('playbook_approved_hash', ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(h.pitch, h.playbook).run();
     await env.WP_OS_DB.prepare("UPDATE tlc_setting SET value = 'on' WHERE key = 'brand_send'").run();
-    const on = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled", WP_OS_AI_EMAIL_EXTERNAL: "enabled" } as Partial<Env>);
+    const on = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>);
     const out = await runDrip(on, new Date("2026-11-09T15:05:00.000Z"));
     expect(out.awaitingApproval).toBe(1);
     expect(out.sent).toBe(0);
+    // The request names its job, so the executor asks her list about exactly this job.
+    expect((await env.WP_OS_DB.prepare("SELECT outside_job FROM external_effect_request").all<{ outside_job: string }>()).results!.map((r) => r.outside_job)).toEqual(["tlc_brand_sales"]);
     const m = await env.WP_OS_DB.prepare("SELECT m.state, a.action_key FROM tlc_drip_message m JOIN approval_card a ON a.id = m.approval_card_id").first<{ state: string; action_key: string }>();
     expect(m).toEqual({ state: "AWAITING_APPROVAL", action_key: "effect.email.send" });
     await env.WP_OS_DB.prepare("UPDATE tlc_setting SET value = 'off' WHERE key = 'brand_send'").run();

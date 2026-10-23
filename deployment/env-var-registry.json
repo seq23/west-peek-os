@@ -154,10 +154,10 @@
       "required": false,
       "purpose": "Whether an AI employee may email the Managing Partners. Off unless exactly \"enabled\"."
     },
-    "WP_OS_AI_EMAIL_EXTERNAL": {
+    "WP_OS_OUTSIDE_EMAIL_BREAK_GLASS": {
       "kind": "var",
       "required": false,
-      "purpose": "Whether an AI employee may email outside the firm. The one with no undo."
+      "purpose": "Break-glass kill switch for employee email outside the firm: exactly \"off-hard\" stops every one. Otherwise her Outside email list (D1) decides. Replaces WP_OS_AI_EMAIL_EXTERNAL."
     },
     "WP_OS_PARTNER_EMAIL_DOMAIN": {
       "kind": "var",

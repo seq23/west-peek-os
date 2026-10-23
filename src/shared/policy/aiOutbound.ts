@@ -28,21 +28,19 @@ export type AiEmailAudience = "PARTNERS" | "EXTERNAL";
 
 export interface AiOutboundSwitches {
   toPartners: boolean;
-  toExternal: boolean;
 }
 
 /**
- * Read the switches. Anything other than the exact string "enabled" is off — a typo, an empty
- * string and an unset variable all mean the same thing, and that thing is no.
+ * Read the partners switch. Anything other than the exact string "enabled" is off — a typo, an
+ * empty string and an unset variable all mean the same thing, and that thing is no.
+ *
+ * THE OUTSIDE-THE-FIRM SWITCH IS NOT HERE ANY MORE (owner, 23 Oct 2026). It was the deployment
+ * variable WP_OS_AI_EMAIL_EXTERNAL, all or nothing; it is now her Outside email list in D1, answered
+ * by ONE function, `outsideEmailAllowed` (src/worker/services/outsideEmail.ts). Its decision is
+ * passed in to `mayAiEmail` below, so this file cannot keep a second answer of its own.
  */
-export function aiOutboundSwitches(env: {
-  WP_OS_AI_EMAIL_PARTNERS?: string;
-  WP_OS_AI_EMAIL_EXTERNAL?: string;
-}): AiOutboundSwitches {
-  return {
-    toPartners: env.WP_OS_AI_EMAIL_PARTNERS === "enabled",
-    toExternal: env.WP_OS_AI_EMAIL_EXTERNAL === "enabled",
-  };
+export function aiOutboundSwitches(env: { WP_OS_AI_EMAIL_PARTNERS?: string }): AiOutboundSwitches {
+  return { toPartners: env.WP_OS_AI_EMAIL_PARTNERS === "enabled" };
 }
 
 /**
@@ -68,6 +66,8 @@ export function mayAiEmail(
   switches: AiOutboundSwitches,
   address: string,
   partnerAddresses: readonly string[],
+  /** `outsideEmailAllowed`'s answer for this send. Required: there is no default that lets mail out. */
+  outside: { allowed: boolean; reason: string },
 ): AiOutboundDecision {
   const audience = audienceOf(address, partnerAddresses);
   if (audience === "PARTNERS") {
@@ -75,11 +75,5 @@ export function mayAiEmail(
       ? { allowed: true, audience, reason: "Employees may email the partners." }
       : { allowed: false, audience, reason: "Employees cannot email the partners yet. That switch is off." };
   }
-  return switches.toExternal
-    ? { allowed: true, audience, reason: "Employees may email outside the firm." }
-    : {
-        allowed: false,
-        audience,
-        reason: "Employees cannot email anybody outside the firm. That switch is off, and it is the one with no undo.",
-      };
+  return { allowed: outside.allowed, audience, reason: outside.reason };
 }

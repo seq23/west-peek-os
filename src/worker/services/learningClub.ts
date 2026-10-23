@@ -20,6 +20,8 @@ import { renderHtmlPdf, type PdfRenderer } from "../effects/htmlPdf";
 import { renderedPdfProblem } from "../../shared/pdf/renderedPdf";
 import { renderBrandPitch, renderInternalOnePager, type TlcClubView, type TlcInternalView } from "../../shared/tlc/pitch";
 import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
+import { TLC_BRAND_SALES_JOB } from "../../shared/policy/outsideEmail";
+import { outsideEmailAllowed } from "./outsideEmail";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
 import {
   BOOKING_PACK_SHAPE,
@@ -577,7 +579,7 @@ const emptyDrip = (): DripResult => ({ due: 0, held: 0, awaitingApproval: 0, sen
  */
 export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Promise<DripResult> {
   const settings = await tlcSettings(env);
-  const gate = brandSendGate(settings, env, await contentHashes(env));
+  const gate = brandSendGate(settings, await tlcOutside(env), await contentHashes(env));
   const result: DripResult = { ...emptyDrip(), gate };
   const wynn = actorFor(WYNN, firmScope);
 
@@ -642,8 +644,8 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Pro
     }
     const requestId = `eer_${crypto.randomUUID()}`;
     await env.WP_OS_DB.prepare(
-      "INSERT INTO external_effect_request (id, effect_type, destination, payload_json, requested_by_type, requested_by_id) VALUES (?1, 'email.send', ?2, ?3, 'AI', ?4)",
-    ).bind(requestId, deal.contact_email, JSON.stringify({ subject: mail.subject, text: mail.text, reply_to: BRAND_REPLY_TO }), WYNN).run();
+      "INSERT INTO external_effect_request (id, effect_type, destination, payload_json, requested_by_type, requested_by_id, outside_job) VALUES (?1, 'email.send', ?2, ?3, 'AI', ?4, ?5)",
+    ).bind(requestId, deal.contact_email, JSON.stringify({ subject: mail.subject, text: mail.text, reply_to: BRAND_REPLY_TO }), WYNN, TLC_BRAND_SALES_JOB).run();
     const { requestApproval } = await import("./approvals");
     const card = await requestApproval(env, wynn, {
       action_key: "effect.email.send",
@@ -686,8 +688,8 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Pro
       const attachments = pdf.pdfBase64 ? [{ filename: `The Learning Club - ${ev.topic.replace(/[^\w &-]+/g, "").trim()}.pdf`, content: pdf.pdfBase64, contentType: "application/pdf" }] : [];
       const requestId = `eer_${crypto.randomUUID()}`;
       await env.WP_OS_DB.prepare(
-        "INSERT INTO external_effect_request (id, effect_type, destination, payload_json, requested_by_type, requested_by_id) VALUES (?1, 'email.send', ?2, ?3, 'AI', ?4)",
-      ).bind(requestId, f.contact_email, JSON.stringify({ subject: f.subject, text: f.body, reply_to: BRAND_REPLY_TO, attachments }), WYNN).run();
+        "INSERT INTO external_effect_request (id, effect_type, destination, payload_json, requested_by_type, requested_by_id, outside_job) VALUES (?1, 'email.send', ?2, ?3, 'AI', ?4, ?5)",
+      ).bind(requestId, f.contact_email, JSON.stringify({ subject: f.subject, text: f.body, reply_to: BRAND_REPLY_TO, attachments }), WYNN, TLC_BRAND_SALES_JOB).run();
       const { requestApproval } = await import("./approvals");
       const card = await requestApproval(env, wynn, {
         action_key: "effect.email.send",
@@ -1593,7 +1595,7 @@ async function runBrandBatch(env: Env, card: SweepCard, now: Date, search: TlcSe
     if ((res.meta?.changes ?? 0) > 0) added.push(`${brand} (${monthWords(ev.month)})`);
   }
   if (added.length === 0) return nothingGood(env, card, "Wynn", `No brand came with an address that is really on its page (${dropped.slice(0, 6).join("; ") || "nothing returned"}). Name brands or a category to try and Wynn runs it again.`);
-  const gate = brandSendGate(await tlcSettings(env), env, await contentHashes(env));
+  const gate = brandSendGate(await tlcSettings(env), await tlcOutside(env), await contentHashes(env));
   await finish(env, card.id, [`• ${added.length} brand(s) queued for the four-email sequence: ${added.join("; ")}.`, gate.open ? "• Sending is on: each email waits for a partner's approval on Approvals." : `• NOTHING SENT: ${gate.reasons.join("; ")}. The emails are composed and held.`, dropped.length ? `• Left out: ${dropped.join("; ")}.` : ""].filter(Boolean).join("\n"));
   return { finished: true, blocked: false, progressed: false, detail: `${added.length} brand(s) queued` };
 }
@@ -1702,6 +1704,11 @@ async function runDecision(env: Env, card: SweepCard, now: Date): Promise<TlcRun
   return { finished: false, blocked: true, progressed: false, detail: why };
 }
 
+/** TLC brand sales, asked of the one function that decides outside email. */
+async function tlcOutside(env: Env): Promise<{ allowed: boolean; code: string; reason: string }> {
+  return outsideEmailAllowed(env, { job: TLC_BRAND_SALES_JOB });
+}
+
 // ── Routes (partners) ───────────────────────────────────────────────────────────────────────────
 
 async function requireManage(ctx: RouteContext): Promise<Actor | Response> {
@@ -1726,7 +1733,7 @@ export async function handleTlcOverview(ctx: RouteContext): Promise<Response> {
   const held = (await ctx.env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_drip_message WHERE state = 'HELD'").first<{ n: number }>())?.n ?? 0;
   return json({
     events: out.map((e) => ({ ...e, one_pager_url: e.topic ? onePagerUrl(e.id) : null })),
-    send_gate: brandSendGate(settings, ctx.env, await contentHashes(ctx.env)),
+    send_gate: brandSendGate(settings, await tlcOutside(ctx.env), await contentHashes(ctx.env)),
     approvals: await approvalsView(ctx.env, settings),
     settings,
     held_emails: held,
@@ -1823,7 +1830,7 @@ export async function handleTlcApprove(ctx: RouteContext): Promise<Response> {
   }
   await appendEvent(ctx.env, { eventType: "tlc.setting", actorType: "firm_user", actorId: ctx.identity!.id, objectType: "tlc_setting", objectId: w, payload: { what: w, hash: parsed.data.hash ?? null } });
   const settings = await tlcSettings(ctx.env);
-  return json({ ok: true, send_gate: brandSendGate(settings, ctx.env, hashes), approvals: await approvalsView(ctx.env, settings) });
+  return json({ ok: true, send_gate: brandSendGate(settings, await tlcOutside(ctx.env), hashes), approvals: await approvalsView(ctx.env, settings) });
 }
 
 const dealPatch = z.object({
