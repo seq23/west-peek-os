@@ -22,7 +22,7 @@ import { renderBrandPitch, renderInternalOnePager, type TlcClubView, type TlcInt
 import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
 import { TLC_BRAND_SALES_JOB } from "../../shared/policy/outsideEmail";
 import { outsideEmailAllowed } from "./outsideEmail";
-import { addressReadOffPage, handleMustPitch, liveMustPitch, mustPitchToSearch, queueDeal, type MustPitchFinding } from "./tlcMustPitch";
+import { addressReadOffPage, approvedDayZeroFor, handleMustPitch, liveMustPitch, ownerContactedBrands, mustPitchToSearch, queueDeal, type MustPitchFinding } from "./tlcMustPitch";
 import { brandKey } from "../../shared/tlc/mustPitch";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
 import {
@@ -84,6 +84,7 @@ import {
   decisionEmail,
   defaultEventDate,
   dripEmail,
+  approvedDayZeroEmail,
   eventEconomics,
   goAheadCheck,
   invoiceNote,
@@ -596,6 +597,10 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Pro
     const { executeExternalEffect } = await import("../effects/executor");
     for (const m of approved) {
       const deal = await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(m.deal_id).first<TlcDealRow>();
+      if (deal && !deal.stop_reason && (await ownerContactedBrands(env, firmScope)).has(brandKey(deal.brand))) {
+        await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'HELD', held_reason = 'Sequoia contacted this brand directly; replies go to her, no drip' WHERE id = ?1").bind(m.id).run();
+        continue;
+      }
       if (!deal || deal.stop_reason) {
         await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'HELD', held_reason = 'the brand answered or was stopped before it went' WHERE id = ?1").bind(m.id).run();
         continue;
@@ -634,7 +639,16 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Pro
   for (const deal of due) {
     const ev = await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>();
     if (!ev?.topic) continue;
-    const mail = dripEmail({ step: deal.drip_step, brand: deal.brand, contactName: deal.contact_name, topic: ev.topic, month: ev.month, eventDate: ev.event_date, why: deal.why_fit, seats: seatsOf(ev) });
+    // SHE CONTACTED THIS BRAND HERSELF: never a drip email from Wynn, at any step, gate open or not.
+    if ((await ownerContactedBrands(env, firmScope)).has(brandKey(deal.brand))) {
+      await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = NULL, updated_at = ?2 WHERE id = ?1").bind(deal.id, now.toISOString()).run();
+      continue;
+    }
+    // Email 1 uses her approved text word for word when she approved one for this brand and club (0266).
+    const approvedFirst = deal.drip_step === 0 ? await approvedDayZeroFor(env, deal.brand, ev.month, ev.topic, firmScope) : null;
+    const mail = approvedFirst
+      ? approvedDayZeroEmail(approvedFirst, deal.contact_name)
+      : dripEmail({ step: deal.drip_step, brand: deal.brand, contactName: deal.contact_name, topic: ev.topic, month: ev.month, eventDate: ev.event_date, why: deal.why_fit, seats: seatsOf(ev) });
     if (!gate.open || room <= 0) {
       const why = gate.open ? "today's warm-up allowance is used" : gate.reasons.join("; ");
       await env.WP_OS_DB.prepare(
@@ -1588,7 +1602,8 @@ async function runBrandBatch(env: Env, card: SweepCard, now: Date, search: TlcSe
   const existing = ((await env.WP_OS_DB.prepare(`SELECT brand, event_id FROM tlc_deal WHERE event_id IN (${events.map(() => "?").join(",")})`).bind(...events.map((e) => e.id)).all<{ brand: string; event_id: string }>()).results ?? []);
   // BRANDS WE MUST PITCH FIRST (owner, 23 Oct 2026), searched in the same call, outside the five-per-club cap.
   const must = await mustPitchToSearch(env, events, existing, card.firm_scope);
-  const mustNames = must.map((m) => m.brand);
+  const ownerContacted = await ownerContactedBrands(env, card.firm_scope);
+  const mustNames = [...must.map((m) => m.brand), ...(await liveMustPitch(env, card.firm_scope)).filter((r) => ownerContacted.has(brandKey(r.brand))).map((r) => r.brand)];
   const found = await search(env, actorFor(WYNN, card.firm_scope), buildBrandBatchPrompt(events, [...existing.map((d) => d.brand), ...mustNames], await storedPlaybook(env), await researchLibrary(env, card.firm_scope), must));
   if (!found.ok) return searchFailed(env, card, "Wynn", found, now);
   const parsed = jsonIn(found.text);
@@ -1613,6 +1628,8 @@ async function runBrandBatch(env: Env, card: SweepCard, now: Date, search: TlcSe
     if (!ev || !brand) continue;
     // A must-pitch brand was handled above, first; it is never a second, capped pick.
     if (mustKeys.has(`${ev.month}|${brandKey(brand)}`)) continue;
+    // She wrote to this brand herself: Wynn never does, in any month.
+    if (ownerContacted.has(brandKey(brand))) { dropped.push(`${brand}: Sequoia contacted them directly`); continue; }
     if ((perClub.get(ev.id) ?? 0) >= TLC_BRANDS_PER_CLUB) { dropped.push(`${brand}: over the ${TLC_BRANDS_PER_CLUB}-a-club limit`); continue; }
     const never = list<{ excluded_brands?: string[] }>(ev.sponsor_categories_json).flatMap((c) => c.excluded_brands ?? []);
     if (never.some((n) => brand.toLowerCase().includes(n.toLowerCase()) || n.toLowerCase().includes(brand.toLowerCase()))) { dropped.push(`${brand}: competes with a featured partner`); continue; }

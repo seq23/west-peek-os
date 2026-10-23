@@ -28,6 +28,19 @@ CREATE TABLE IF NOT EXISTS tlc_must_pitch (
   added_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   removed_by  TEXT,
   removed_at  TEXT,
+  -- An owner-approved first email for this brand, used word for word as drip email 1 (day 0) in place of
+  -- the generated one, with [Name] filled from the contact's first name. Only while the club's topic still
+  -- contains day0_topic (a backup switch falls back to the generated email). Gate and per-email approval
+  -- are unchanged; emails 2 to 4 stay generated.
+  day0_subject     TEXT,
+  day0_body        TEXT,
+  day0_topic       TEXT,
+  day0_approved_by TEXT,
+  day0_approved_at TEXT,
+  -- She contacted this brand herself: Wynn never searches it, never queues it, never drips it (any month),
+  -- and replies go to her. The note says so in her words.
+  owner_contacted_at   TEXT,
+  owner_contacted_note TEXT,
   firm_scope  TEXT NOT NULL DEFAULT 'west-peek'
 );
 -- One live row per brand per month; a removed row stays and does not block adding it back.
@@ -80,11 +93,37 @@ END;
 INSERT OR IGNORE INTO tlc_must_pitch (id, month, brand, reason, added_by, added_at) VALUES
   ('tmp_seed_202701_anthropic', '2027-01', 'Anthropic', 'AI partner for The Longevity Reset; Title partner if the backup club, AI Tools for Your Work, runs.', 'Sequoia', '2026-10-23T00:00:00.000Z'),
   ('tmp_seed_202702_forvr_mood', '2027-02', 'FORVR Mood', 'Owner''s pick: a scrappy challenger fragrance brand competing with the big houses. Title or Presenting.', 'Sequoia', '2026-10-23T00:00:00.000Z'),
+  ('tmp_seed_202702_dedcool', '2027-02', 'Dedcool', 'Challenger fragrance brand; ran a $1M NYC pop-up in Sep 2026. Title or Presenting.', 'Sequoia', '2026-10-23T00:00:00.000Z'),
+  ('tmp_seed_202702_phlur', '2027-02', 'Phlur', 'Challenger fragrance brand; NYC pop-up Jun 2026. Presenting or Lead.', 'Sequoia', '2026-10-23T00:00:00.000Z'),
+  ('tmp_seed_202702_brown_girl_jane', '2027-02', 'Brown Girl Jane', 'Black-owned fragrance brand; Sephora collab Sep 2026. Lead or Partner.', 'Sequoia', '2026-10-23T00:00:00.000Z'),
+  ('tmp_seed_202702_harlem_perfume_co', '2027-02', 'Harlem Perfume Co.', 'Black-owned fragrance house in Harlem. Partner.', 'Sequoia', '2026-10-23T00:00:00.000Z'),
   ('tmp_seed_202703_anthropic', '2027-03', 'Anthropic', 'The AI model for Build Your Own AI Agent.', 'Sequoia', '2026-10-23T00:00:00.000Z'),
   ('tmp_seed_202703_google', '2027-03', 'Google', 'Google for Startups / Google Cloud: startup cloud credits and the host venue for Build Your Own AI Agent.', 'Sequoia', '2026-10-23T00:00:00.000Z');
 
 INSERT OR IGNORE INTO tlc_must_pitch_log (id, brand, month, action, by_who, at, detail) VALUES
   ('tmpl_seed_202701_anthropic', 'Anthropic', '2027-01', 'ADDED', 'Sequoia', '2026-10-23T00:00:00.000Z', 'AI partner; Title partner if the backup runs'),
   ('tmpl_seed_202702_forvr_mood', 'FORVR Mood', '2027-02', 'ADDED', 'Sequoia', '2026-10-23T00:00:00.000Z', 'Title or Presenting'),
+  ('tmpl_seed_202702_dedcool', 'Dedcool', '2027-02', 'ADDED', 'Sequoia', '2026-10-23T00:00:00.000Z', NULL),
+  ('tmpl_seed_202702_phlur', 'Phlur', '2027-02', 'ADDED', 'Sequoia', '2026-10-23T00:00:00.000Z', NULL),
+  ('tmpl_seed_202702_brown_girl_jane', 'Brown Girl Jane', '2027-02', 'ADDED', 'Sequoia', '2026-10-23T00:00:00.000Z', NULL),
+  ('tmpl_seed_202702_harlem_perfume_co', 'Harlem Perfume Co.', '2027-02', 'ADDED', 'Sequoia', '2026-10-23T00:00:00.000Z', NULL),
+  ('tmpl_seed_202702_elevenlabs', 'ElevenLabs', '2027-02', 'ADDED', 'Sequoia', '2026-10-23T00:00:00.000Z', 'AI partner; contacted by Sequoia directly on 23 Oct 2026, no drip'),
   ('tmpl_seed_202703_anthropic', 'Anthropic', '2027-03', 'ADDED', 'Sequoia', '2026-10-23T00:00:00.000Z', 'AI model'),
   ('tmpl_seed_202703_google', 'Google', '2027-03', 'ADDED', 'Sequoia', '2026-10-23T00:00:00.000Z', 'Google for Startups / Google Cloud');
+
+-- ElevenLabs (Feb 2027): the first email the owner approved on 23 Oct 2026 is kept on the entry as the
+-- record of what went. She sent it herself that evening to people she knows, so the entry is marked
+-- contacted by the owner and Wynn never writes to ElevenLabs. No contact name or address is stored here.
+INSERT OR IGNORE INTO tlc_must_pitch (id, month, brand, reason, added_by, added_at, day0_subject, day0_body, day0_topic, day0_approved_by, day0_approved_at, owner_contacted_at, owner_contacted_note) VALUES
+  ('tmp_seed_202702_elevenlabs', '2027-02', 'ElevenLabs', 'AI partner: a "name and narrate your scent" segment. Title if the backup club, Find Your Voice, runs.', 'Sequoia', '2026-10-23T00:00:00.000Z',
+   'A Valentine''s-week room in New York',
+   'Hi [Name],
+
+I run The Learning Club: small, hands-on evenings in New York where 30–40 founders and creatives learn an AI tool by making something with it. On 11 February we''re hosting a fragrance night, and every guest will name their own scent and give it a voice. With Eleven v4 just out and your team growing on Crosby Street, it felt like a natural fit.
+
+Would you be open to exploring a partnership?
+
+Warmly,
+Sequoia',
+   'Fragrance Lab', 'Sequoia', '2026-10-23T00:00:00.000Z',
+   '2026-10-23T22:00:00.000Z', 'Contacted by Sequoia directly on 23 Oct 2026 — replies go to her; no drip');

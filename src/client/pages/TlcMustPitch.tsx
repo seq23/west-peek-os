@@ -18,6 +18,12 @@ interface MustPitch {
   added_at: string;
   removed_by: string | null;
   removed_at: string | null;
+  day0_subject?: string | null;
+  day0_body?: string | null;
+  day0_approved_by?: string | null;
+  day0_approved_at?: string | null;
+  owner_contacted_at?: string | null;
+  owner_contacted_note?: string | null;
 }
 interface WayIn {
   brand_key: string;
@@ -134,9 +140,18 @@ export function MustPitchSection(props: { months: readonly string[] }): JSX.Elem
                               <strong>{r.brand}</strong>: {r.reason}
                               <div className="muted small">
                                 Added by {r.added_by} on {day(r.added_at)}
+                                {r.owner_contacted_note && <> · <span className="badge badge-ok">{r.owner_contacted_note}</span></>}
                                 {way?.state === "OPEN" && <> · <span className="badge badge-gate">Needs a way in</span></>}
                                 {way?.state === "CONTACT_ADDED" && <> · Your contact: {way.contact_name}</>}
                               </div>
+                              {r.day0_subject && r.day0_body && (
+                                <details className="small">
+                                  <summary>The first email you approved{r.day0_approved_by ? ` (${r.day0_approved_by}, ${day(r.day0_approved_at ?? "")})` : ""}: tap to read</summary>
+                                  <p><strong>{r.day0_subject}</strong></p>
+                                  <p style={{ whiteSpace: "pre-wrap" }}>{r.day0_body}</p>
+                                  <p className="muted">{r.owner_contacted_at ? "You sent this yourself. Wynn does not write to this brand." : "Sent word for word as email 1, with [Name] filled in. It still waits for your approval before it goes."}</p>
+                                </details>
+                              )}
                               {confirming === r.id ? (
                                 <div className="notice" role="alert">
                                   <p>Take {r.brand} off the list for {monthWords(r.month)}? Wynn stops pitching it for this month. Emails already queued are not changed.</p>

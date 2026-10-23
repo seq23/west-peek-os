@@ -388,8 +388,12 @@ describe("the Learning Club in the database", () => {
     const ways = (await env.WP_OS_DB.prepare("SELECT brand, state, months_json FROM tlc_way_in ORDER BY brand").all<{ brand: string; state: string; months_json: string }>()).results!;
     expect(ways).toEqual([
       { brand: "Anthropic", state: "OPEN", months_json: '["2027-01","2027-03"]' },
+      { brand: "Brown Girl Jane", state: "OPEN", months_json: '["2027-02"]' },
+      { brand: "Dedcool", state: "OPEN", months_json: '["2027-02"]' },
       { brand: "FORVR Mood", state: "OPEN", months_json: '["2027-02"]' },
       { brand: "Google", state: "OPEN", months_json: '["2027-03"]' },
+      { brand: "Harlem Perfume Co.", state: "OPEN", months_json: '["2027-02"]' },
+      { brand: "Phlur", state: "OPEN", months_json: '["2027-02"]' },
     ]);
   });
 

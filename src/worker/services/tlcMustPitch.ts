@@ -30,6 +30,13 @@ export interface MustPitchRow {
   added_at: string;
   removed_by: string | null;
   removed_at: string | null;
+  day0_subject: string | null;
+  day0_body: string | null;
+  day0_topic: string | null;
+  day0_approved_by: string | null;
+  day0_approved_at: string | null;
+  owner_contacted_at: string | null;
+  owner_contacted_note: string | null;
   firm_scope: string;
 }
 
@@ -132,12 +139,23 @@ export async function mustPitchToSearch(env: Env, events: ReadonlyArray<{ id: st
   return groups.filter((g) => ways.get(g.key)?.state !== "CONTACT_ADDED").map((g) => ({ brand: g.brand, months: g.events.map((e) => e.month), reasons: g.reasons }));
 }
 
+/**
+ * Brands she contacted herself (owner_contacted_at on any live entry). Wynn never searches, queues or
+ * drips them, in any month: her own email went, and replies go to her.
+ */
+export async function ownerContactedBrands(env: Env, firmScope: string): Promise<Set<string>> {
+  const rows = (await env.WP_OS_DB.prepare("SELECT brand FROM tlc_must_pitch WHERE firm_scope = ?1 AND removed_at IS NULL AND owner_contacted_at IS NOT NULL").bind(firmScope).all<{ brand: string }>()).results ?? [];
+  return new Set(rows.map((r) => brandKey(r.brand)));
+}
+
 interface Group { key: string; brand: string; events: Array<{ id: string; month: string }>; reasons: string[] }
 
 async function openGroups(env: Env, events: ReadonlyArray<{ id: string; month: string }>, existing: ReadonlyArray<{ brand: string; event_id: string }>, firmScope: string): Promise<Group[]> {
   const rows = await liveMustPitch(env, firmScope, events.map((e) => e.month));
   const groups = new Map<string, Group>();
+  const mine = await ownerContactedBrands(env, firmScope);
   for (const r of rows) {
+    if (mine.has(brandKey(r.brand))) continue;
     const ev = events.find((e) => e.month === r.month);
     if (!ev) continue;
     if (existing.some((d) => d.event_id === ev.id && brandKey(d.brand) === brandKey(r.brand))) continue;
@@ -214,6 +232,17 @@ export async function handleMustPitch(
     wayIn.push(wayInWords({ brand: g.brand, months, pages }));
   }
   return { queued, wayIn, changed };
+}
+
+/**
+ * Her approved first email for this brand and club, or null. Only while the club still runs the topic it
+ * was written for: after a backup switch the generated email 1 is used, and it still waits for her approval.
+ */
+export async function approvedDayZeroFor(env: Env, brand: string, month: string, topic: string, firmScope: string): Promise<{ subject: string; body: string } | null> {
+  const row = (await liveMustPitch(env, firmScope, [month])).find((r) => brandKey(r.brand) === brandKey(brand) && r.day0_subject && r.day0_body);
+  if (!row) return null;
+  if (row.day0_topic && !topic.toLowerCase().includes(row.day0_topic.toLowerCase())) return null;
+  return { subject: row.day0_subject!, body: row.day0_body! };
 }
 
 /** The months-and-pages view of one item, in the panel's words. */

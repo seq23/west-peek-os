@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { handleRequest } from "../src/worker/index";
-import { brandSendGate } from "../src/shared/tlc/learningClub";
+import { approvedDayZeroEmail, brandSendGate, TLC_OPT_OUT_LINE } from "../src/shared/tlc/learningClub";
 import { wayInWords } from "../src/shared/tlc/mustPitch";
 import { buildBrandBatchPrompt, contentHashes, openBrandBatchCard, runDrip, runTlcCard } from "../src/worker/services/learningClub";
 import { sweepOnce } from "../src/worker/services/workSweep";
@@ -15,6 +15,7 @@ import { sweepOnce } from "../src/worker/services/workSweep";
  */
 
 let t: TestDb;
+let lastPrompt = "";
 let env: Env;
 const SEQUOIA = "sequoia@westpeek.ventures";
 const live = async (url: string): Promise<boolean> => !url.includes("dead.example");
@@ -57,7 +58,7 @@ async function batch(now: Date, answer: unknown, pages: Record<string, string> =
 beforeAll(async () => {
   t = await createTestDb();
   env = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>);
-  for (const [m, d, topic] of [["2027-01", "2027-01-21", "The Longevity Reset"], ["2027-02", "2027-02-18", "Matcha & Tea"], ["2027-03", "2027-03-18", "Build Your Own AI Agent"]] as const) {
+  for (const [m, d, topic] of [["2027-01", "2027-01-21", "The Longevity Reset"], ["2027-02", "2027-02-11", "Fragrance Lab: AI meets the nose"], ["2027-03", "2027-03-18", "Build Your Own AI Agent"]] as const) {
     await env.WP_OS_DB.prepare("INSERT INTO tlc_event (id, month, event_date, slot, topic, angle, status, sponsor_categories_json, pitch_token) VALUES (?1, ?2, ?3, 'EVENING', ?4, 'A hands-on evening.', 'TOPIC_READY', '[]', ?5)")
       .bind(`tlc_${m}`, m, d, topic, `${m.replace("-", "")}`.padEnd(32, "a")).run();
   }
@@ -67,17 +68,30 @@ afterAll(async () => {
 });
 
 describe("the owner's seeds", () => {
-  it("Anthropic for January and March, FORVR Mood for February, Google for March, each with her reason and her name", async () => {
+  it("Anthropic for January and March, six fragrance-night brands for February, Google for March, each with her reason and her name", async () => {
     const o = await overview();
     expect(o.must_pitch.map((r) => [r.month, r.brand, r.added_by])).toEqual([
       ["2027-01", "Anthropic", "Sequoia"],
+      ["2027-02", "Brown Girl Jane", "Sequoia"],
+      ["2027-02", "Dedcool", "Sequoia"],
+      ["2027-02", "ElevenLabs", "Sequoia"],
       ["2027-02", "FORVR Mood", "Sequoia"],
+      ["2027-02", "Harlem Perfume Co.", "Sequoia"],
+      ["2027-02", "Phlur", "Sequoia"],
       ["2027-03", "Anthropic", "Sequoia"],
       ["2027-03", "Google", "Sequoia"],
     ]);
     expect(o.must_pitch[0]!.reason).toMatch(/AI partner.*Title partner if the backup club, AI Tools for Your Work, runs/);
-    expect(o.must_pitch[1]!.reason).toBe("Owner's pick: a scrappy challenger fragrance brand competing with the big houses. Title or Presenting.");
-    expect(o.must_pitch[3]!.reason).toMatch(/Google for Startups \/ Google Cloud.*host venue/);
+    const reason = (b: string): string => o.must_pitch.find((r) => r.brand === b)!.reason;
+    expect(reason("FORVR Mood")).toBe("Owner's pick: a scrappy challenger fragrance brand competing with the big houses. Title or Presenting.");
+    expect(reason("Dedcool")).toBe("Challenger fragrance brand; ran a $1M NYC pop-up in Sep 2026. Title or Presenting.");
+    expect(reason("Phlur")).toBe("Challenger fragrance brand; NYC pop-up Jun 2026. Presenting or Lead.");
+    expect(reason("Brown Girl Jane")).toBe("Black-owned fragrance brand; Sephora collab Sep 2026. Lead or Partner.");
+    expect(reason("Harlem Perfume Co.")).toBe("Black-owned fragrance house in Harlem. Partner.");
+    expect(reason("ElevenLabs")).toBe('AI partner: a "name and narrate your scent" segment. Title if the backup club, Find Your Voice, runs.');
+    // Names and reasons only: no seed carries an address.
+    expect(JSON.stringify(o.must_pitch)).not.toMatch(/@/);
+    expect(reason("Google")).toMatch(/Google for Startups \/ Google Cloud.*host venue/);
   });
 });
 
@@ -98,6 +112,7 @@ describe("must-pitch brands come first", () => {
       },
       pages,
     );
+    lastPrompt = prompt;
     const first = prompt.indexOf("FIRST, before choosing any brand of your own");
     expect(first).toBeGreaterThan(-1);
     expect(first).toBeLessThan(prompt.indexOf("Find brands to sponsor these clubs"));
@@ -229,6 +244,61 @@ describe("the list: add, remove with who and when", () => {
   });
 });
 
+describe("ElevenLabs: her approved first email is kept, she sent it herself, and Wynn never writes to them", () => {
+  const APPROVED_BODY = [
+    "I run The Learning Club: small, hands-on evenings in New York where 30–40 founders and creatives learn an AI tool by making something with it. On 11 February we're hosting a fragrance night, and every guest will name their own scent and give it a voice. With Eleven v4 just out and your team growing on Crosby Street, it felt like a natural fit.",
+    "",
+    "Would you be open to exploring a partnership?",
+    "",
+    "Warmly,",
+    "Sequoia",
+    "",
+    TLC_OPT_OUT_LINE,
+  ].join("\n");
+  const msg = async (step: number) => env.WP_OS_DB.prepare("SELECT m.subject, m.body, m.state FROM tlc_drip_message m JOIN tlc_deal d ON d.id = m.deal_id WHERE d.brand = 'ElevenLabs' AND m.step = ?1").bind(step).first<{ subject: string; body: string; state: string }>();
+
+  it("is stored on her must-pitch entry, and fills [Name] or falls back to 'Hi,'", async () => {
+    const row = await env.WP_OS_DB.prepare("SELECT day0_subject, day0_body, day0_topic, day0_approved_by FROM tlc_must_pitch WHERE brand = 'ElevenLabs'").first<{ day0_subject: string; day0_body: string; day0_topic: string; day0_approved_by: string }>();
+    expect(row).toMatchObject({ day0_subject: "A Valentine's-week room in New York", day0_topic: "Fragrance Lab", day0_approved_by: "Sequoia" });
+    expect(row!.day0_body).toBe(`Hi [Name],\n\n${APPROVED_BODY.slice(0, APPROVED_BODY.indexOf("\n\nIf you would rather"))}`);
+    expect(approvedDayZeroEmail({ subject: row!.day0_subject, body: row!.day0_body }, "Ana Lee")).toEqual({ subject: "A Valentine's-week room in New York", text: `Hi Ana,\n\n${APPROVED_BODY}` });
+    expect(approvedDayZeroEmail({ subject: row!.day0_subject, body: row!.day0_body }, null).text).toBe(`Hi,\n\n${APPROVED_BODY}`);
+  });
+
+  it("ElevenLabs is marked contacted by Sequoia: never searched, never a way-in item, never dripped", async () => {
+    const o = await overview();
+    const row = o.must_pitch.find((r) => r.brand === "ElevenLabs") as unknown as { owner_contacted_note: string };
+    expect(row.owner_contacted_note).toBe("Contacted by Sequoia directly on 23 Oct 2026 — replies go to her; no drip");
+    expect(o.way_in.some((w) => w.brand === "ElevenLabs")).toBe(false);
+    expect(lastPrompt).not.toContain("- ElevenLabs, for");
+    // Even a deal that reached the table some other way is never dripped, at any step.
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_deal (id, event_id, brand, contact_name, contact_email, contact_source_url, next_send_at) VALUES ('tld_eleven', 'tlc_2027-02', 'ElevenLabs', 'A Person', 'person@elevenlabs.example', 'https://elevenlabs.example/team', '2026-11-01T00:00:00.000Z')").run();
+    await runDrip(env, new Date("2026-11-09T15:00:00.000Z"));
+    expect(await msg(0)).toBeNull();
+    expect((await env.WP_OS_DB.prepare("SELECT next_send_at FROM tlc_deal WHERE id = 'tld_eleven'").first<{ next_send_at: string | null }>())!.next_send_at).toBeNull();
+  });
+
+  it("a must-pitch brand with an approved first email gets it verbatim as email 1, held by the gate like any other; email 2 is generated; a backup topic falls back", async () => {
+    const row = await env.WP_OS_DB.prepare("SELECT day0_subject, day0_body FROM tlc_must_pitch WHERE brand = 'ElevenLabs'").first<{ day0_subject: string; day0_body: string }>();
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_must_pitch (id, month, brand, reason, added_by, day0_subject, day0_body, day0_topic, day0_approved_by, day0_approved_at) VALUES ('tmp_test_scent', '2027-02', 'Scent Test Co', 'test', 'Sequoia', ?1, ?2, 'Fragrance Lab', 'Sequoia', '2026-10-23T00:00:00.000Z')").bind(row!.day0_subject, row!.day0_body).run();
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_deal (id, event_id, brand, contact_name, contact_email, contact_source_url, next_send_at) VALUES ('tld_scent', 'tlc_2027-02', 'Scent Test Co', 'Ana Lee', 'ana@scent.example', 'https://scent.example/team', '2026-11-01T00:00:00.000Z')").run();
+    const scent = async (step: number) => env.WP_OS_DB.prepare("SELECT subject, body, state FROM tlc_drip_message WHERE deal_id = 'tld_scent' AND step = ?1").bind(step).first<{ subject: string; body: string; state: string }>();
+    await runDrip(env, new Date("2026-11-09T15:01:00.000Z"));
+    expect(await scent(0)).toEqual({ subject: "A Valentine's-week room in New York", body: `Hi Ana,\n\n${APPROVED_BODY}`, state: "HELD" });
+    await env.WP_OS_DB.prepare("UPDATE tlc_event SET topic = 'Find Your Voice' WHERE month = '2027-02'").run();
+    await runDrip(env, new Date("2026-11-09T15:02:00.000Z"));
+    expect((await scent(0))!.subject).toBe("Scent Test Co + a small room in New York");
+    await env.WP_OS_DB.prepare("UPDATE tlc_event SET topic = 'Fragrance Lab: AI meets the nose' WHERE month = '2027-02'").run();
+    await runDrip(env, new Date("2026-11-09T15:03:00.000Z"));
+    expect((await scent(0))!.body).toBe(`Hi Ana,\n\n${APPROVED_BODY}`);
+    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET drip_step = 1 WHERE id = 'tld_scent'").run();
+    await runDrip(env, new Date("2026-11-09T15:04:00.000Z"));
+    expect((await scent(1))!.subject).toBe("Scent Test Co + a small room in New York");
+    expect((await scent(1))!.body).not.toContain("Eleven v4");
+    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET drip_step = 0 WHERE id = 'tld_scent'").run();
+  });
+});
+
 describe("the gate is unchanged", () => {
   it("a must-pitch deal, found or hers, is held while the gate is shut and waits for a per-email approval when it is open", async () => {
     const held = await runDrip(env, new Date("2026-11-09T15:00:00.000Z"));
@@ -247,6 +317,8 @@ describe("the gate is unchanged", () => {
     expect(out.gate.open).toBe(true);
     expect(out.sent).toBe(0);
     expect(out.awaitingApproval).toBeGreaterThan(0);
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_drip_message m JOIN tlc_deal d ON d.id = m.deal_id WHERE d.brand = 'ElevenLabs'").first<{ n: number }>())!.n).toBe(0);
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM external_effect_request WHERE destination LIKE '%elevenlabs%'").first<{ n: number }>())!.n).toBe(0);
     const unapproved = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_drip_message WHERE effect_request_id IS NOT NULL AND approval_card_id IS NULL").first<{ n: number }>();
     expect(unapproved!.n).toBe(0);
     await env.WP_OS_DB.prepare("UPDATE tlc_setting SET value = 'off' WHERE key = 'brand_send'").run();
