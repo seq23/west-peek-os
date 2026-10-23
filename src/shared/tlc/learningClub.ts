@@ -255,9 +255,10 @@ export function frontierConflict(yesDeals: ReadonlyArray<{ id: string; frontier:
  *  - an idea with an `earliest_month` waits for that month (hands-on ideas with a designed AI
  *    angle: from April 2027, chosen on their merits like any alternative);
  *  - a topic that is NOT about AI and carries NO designed AI angle may be a primary only after at
- *    least 2 TLC clubs have each raised $25,000 in cash. Even then its slate must reach $25,000.
+ *    least 6 TLC clubs have each raised $25,000 in cash. Even then its slate must reach $25,000.
  */
-export const TLC_FUNDED_EVENTS_BEFORE_NON_AI = 2;
+/** Owner correction, 22 Oct 2026: six clubs, each with $25,000 raised in cash, before a no-AI-angle topic may be a primary. */
+export const TLC_FUNDED_EVENTS_BEFORE_NON_AI = 6;
 export function hasAiAngle(packet: { ai_angle?: unknown; ai_segment?: unknown } | null | undefined): boolean {
   return [packet?.ai_angle, packet?.ai_segment].some((x) => typeof x === "string" && x.trim().length > 0);
 }

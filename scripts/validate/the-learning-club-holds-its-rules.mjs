@@ -91,6 +91,7 @@ export function check(src) {
     // 22 Oct 2026 (owner): raise $25,000, spend up to $15,000, net $10,000; $7,500 stays the escalation line.
     [/TLC_COST_BUDGET_USD = 15_000;/, "$15,000 cost budget"],
     [/TLC_SPONSOR_GOAL_USD = 25_000;/, "$25,000 sponsor goal"],
+    [/TLC_FUNDED_EVENTS_BEFORE_NON_AI = 6;/, "six funded clubs before a no-AI-angle primary"],
     [/TITLE: \{ label: "Title partner", priceUsd: 25_000/, "Title partner $25,000"],
     [/LEAD: \{ label: "Lead partner", priceUsd: 10_000/, "Lead partner $10,000"],
     [/TLC_VETO_DAYS = 3;/, "3-day veto window"],
@@ -129,6 +130,7 @@ function selfTest() {
     ["sponsor row in a migration", { migrations: [...good.migrations, ["9999_x.sql", "INSERT INTO tlc_deal (id) VALUES ('x');"]] }],
     ["drip moved", { shared: good.shared.replace("TLC_DRIP_DAYS = [0, 4, 10, 18]", "TLC_DRIP_DAYS = [0, 2, 4, 6]") }],
     ["ticket price raised", { shared: good.shared.replace("TLC_TICKET_PRICE_MAX_USD = 10;", "TLC_TICKET_PRICE_MAX_USD = 25;") }],
+    ["non-AI gate loosened", { shared: good.shared.replace("TLC_FUNDED_EVENTS_BEFORE_NON_AI = 6;", "TLC_FUNDED_EVENTS_BEFORE_NON_AI = 2;") }],
     ["goal lowered", { shared: good.shared.replace("TLC_SPONSOR_GOAL_USD = 25_000;", "TLC_SPONSOR_GOAL_USD = 15_000;") }],
     ["cost budget raised", { shared: good.shared.replace("TLC_COST_BUDGET_USD = 15_000;", "TLC_COST_BUDGET_USD = 20_000;") }],
     ["veto window shortened", { shared: good.shared.replace("TLC_VETO_DAYS = 3;", "TLC_VETO_DAYS = 1;") }],
