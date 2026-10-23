@@ -59,8 +59,11 @@ export function check(src) {
   // One TLC recipient list, enforced at the partner-mail door (22 Oct 2026: Sequoia only).
   if (!/TLC_RECIPIENTS: readonly string\[\] = \[TLC_OWNER\.email\]/.test(shared)) f.push("TLC mail is not addressed from the one recipient list");
   if (/scooter@/i.test(shared) || /scooter@/i.test(service)) f.push("a TLC file names Scooter's address");
-  if (!/WP_OS_AI_EMAIL_EXTERNAL !== "enabled"/.test(shared)) f.push("brandSendGate does not require the firm's external-email switch");
-  if (/WP_OS_AI_EMAIL_EXTERNAL\s*=\s*"enabled"/.test(wrangler)) f.push("wrangler.toml turns employee email to the outside world on");
+  // 23 Oct 2026: outside email is her Outside email list, asked through ONE function.
+  if (!/if \(!outside\.allowed\) reasons\.push\(/.test(shared)) f.push("brandSendGate does not require the Outside email list's answer");
+  if (/WP_OS_AI_EMAIL_EXTERNAL/.test(shared) || /\benv\./.test(shared.slice(shared.indexOf("export function brandSendGate"), shared.indexOf("export function brandSendGate") + 1600))) f.push("brandSendGate reads an env var instead of outsideEmailAllowed's answer");
+  if (!/outsideEmailAllowed\(env, \{ job: TLC_BRAND_SALES_JOB \}\)/.test(service)) f.push("the TLC service does not ask outsideEmailAllowed for TLC brand sales");
+  if (/WP_OS_AI_EMAIL_EXTERNAL\s*=/.test(wrangler)) f.push("wrangler.toml still sets the retired all-or-nothing WP_OS_AI_EMAIL_EXTERNAL");
   const gateAt = service.indexOf("brandSendGate(");
   const fileAt = service.indexOf("INSERT INTO external_effect_request");
   const heldAt = service.indexOf("if (!gate.open || room <= 0)");
@@ -120,8 +123,10 @@ function selfTest() {
   const plants = [
     ["switch seeded on", { migration: good.migration.replace("VALUES ('brand_send', 'off'", "VALUES ('brand_send', 'on'") }],
     ["gate reads truthy", { shared: good.shared.replace('settings[BRAND_SEND_SETTING] !== "on"', "!settings[BRAND_SEND_SETTING]") }],
-    ["external switch dropped", { shared: good.shared.replace('WP_OS_AI_EMAIL_EXTERNAL !== "enabled"', 'WP_OS_AI_EMAIL_EXTERNAL === "x"') }],
-    ["wrangler enables outside email", { wrangler: `${good.wrangler}\nWP_OS_AI_EMAIL_EXTERNAL = "enabled"\n` }],
+    ["outside list dropped", { shared: good.shared.replace("if (!outside.allowed) reasons.push(", "if (false) reasons.push(") }],
+    ["gate reads env", { shared: good.shared.replace("if (!outside.allowed) reasons.push(", 'if (env.WP_OS_AI_EMAIL_EXTERNAL !== "enabled") reasons.push(') }],
+    ["service skips the one function", { service: good.service.replace("outsideEmailAllowed(env, { job: TLC_BRAND_SALES_JOB })", "({ allowed: true, code: \"ALLOWED\", reason: \"\" })") }],
+    ["wrangler sets the retired var", { wrangler: `${good.wrangler}\nWP_OS_AI_EMAIL_EXTERNAL = "enabled"\n` }],
     ["filed before the gate", { service: good.service.replace("if (!gate.open || room <= 0)", "if (room <= 0)") }],
     ["direct transport", { service: `${good.service}\nawait sendViaResend(env, {});\n` }],
     ["payment client", { service: `${good.service}\nconst stripe = 1;\n` }],

@@ -317,7 +317,7 @@ const STATE_WORDS: Record<ApprovalState, { words: string; badge: string }> = {
  * exact words on screen: the button sends the hash of what was shown, and any later change clears
  * it and says so here. "Stop sending" is always one tap, at the top, never hidden.
  */
-function BrandSending(props: { approvals: TlcApprovals; gate: { open: boolean; reasons: string[] }; callLink: string | null; playbookId: string | null; onChange: () => void }): JSX.Element {
+function BrandSending(props: { approvals: TlcApprovals; gate: { open: boolean; reasons: string[]; outside_email_allowed?: boolean }; callLink: string | null; playbookId: string | null; onChange: () => void }): JSX.Element {
   const { approvals, gate } = props;
   const [confirming, setConfirming] = useState<null | "pitch" | "playbook" | "brand_send_on">(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -362,7 +362,18 @@ function BrandSending(props: { approvals: TlcApprovals; gate: { open: boolean; r
         <p><span className="badge badge-quiet">Sending to brands is OFF</span> Nothing goes to any brand.</p>
       )}
       {!gate.open && gate.reasons.length > 0 && (
-        <p className="muted small" data-testid="tlc-gate-reasons">Why nothing is going yet: {gate.reasons.join("; ")}.</p>
+        <p className="muted small" data-testid="tlc-gate-reasons">
+          Why nothing is going yet:{" "}
+          {gate.reasons.map((r, i) => (
+            <span key={r}>
+              {i > 0 && "; "}
+              {/tap to (allow|open your Outside email list)/.test(r) ? <a href="#/outside-email" data-testid="tlc-outside-email-link">{r}</a> : r}
+            </span>
+          ))}
+        </p>
+      )}
+      {gate.outside_email_allowed && (
+        <p className="muted small" data-testid="tlc-outside-email-allowed">TLC brand sales is on your <a href="#/outside-email">Outside email list (tap to open)</a>.</p>
       )}
       {message && <p className="notice" role="status">{message}</p>}
       <ol className="card-list">

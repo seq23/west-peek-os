@@ -228,6 +228,11 @@ export function SetupPage({ me }: { me: MeResponse }): JSX.Element {
 
   return (
     <section data-testid="setup-page">
+      {me.roles.includes("MANAGING_PARTNER") && (
+        <p className="wc-quiet" data-testid="setup-outside-email-link">
+          Settings: <a href="#/outside-email">Outside email: what may send (tap to open)</a>
+        </p>
+      )}
       <HowThisWorks
         testId="setup"
         title="Set Up West Peek OS"

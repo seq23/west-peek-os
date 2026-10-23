@@ -101,8 +101,13 @@ export interface Env {
   /** Domain the partners' addresses live on. Derived list, not a hard-coded one. */
   WP_OS_PARTNER_EMAIL_DOMAIN?: string;
   WP_OS_AI_EMAIL_PARTNERS?: string;
-  /** Whether an AI employee may email anybody outside the firm. The one with no undo. */
-  WP_OS_AI_EMAIL_EXTERNAL?: string;
+  /**
+   * BREAK GLASS for outside email (23 Oct 2026). Exactly "off-hard" stops every employee email to
+   * anybody outside the firm, whatever her Outside email list says. Any other value leaves the list
+   * in charge. Read only by `outsideEmailAllowed` (services/outsideEmail.ts). Replaces
+   * WP_OS_AI_EMAIL_EXTERNAL, which was all-or-nothing and is retired.
+   */
+  WP_OS_OUTSIDE_EMAIL_BREAK_GLASS?: string;
   GOOGLE_OAUTH_CLIENT_ID?: string;
   GOOGLE_OAUTH_CLIENT_SECRET?: string;
 

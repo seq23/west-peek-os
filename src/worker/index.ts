@@ -161,6 +161,7 @@ import {
   handleListPackets as handleListRoomPackets,
   handleScheduleRoom, handleVerifyVenue, handleWithdrawSteer,
 } from "./services/roomPacket";
+import { handleOutsideEmailAllow, handleOutsideEmailCard, handleOutsideEmailMode, handleOutsideEmailScreen } from "./services/outsideEmail";
 import { handleTlcApprove, handleTlcDeal, handleTlcIdeaAdd, handleTlcIdeaStatus, handleTlcOnePager, handleTlcOverview, handleTlcPitchPublic, handleTlcPlan, handleTlcTicket } from "./services/learningClub";
 import { handleRoomsPartners } from "./services/partnersPanel";
 import {
@@ -877,6 +878,11 @@ const router = new Router()
   .post("/api/ai/employees/:id/tools", handleGrantToolScope)
   // P4 — provider registry governance (reserved governance.policy_change + receipt).
   .get("/api/ai/outbound-policy", handleAiOutboundPolicy)
+  // Outside email: what may send (owner, 23 Oct 2026). Her list; owner-only; every change audited.
+  .get("/api/outside-email", handleOutsideEmailScreen)
+  .post("/api/outside-email/allow", handleOutsideEmailAllow)
+  .post("/api/outside-email/mode", handleOutsideEmailMode)
+  .get("/api/outside-email/cards/:id", handleOutsideEmailCard)
   .get("/api/ai/providers", handleListAiProviders)
   .post("/api/ai/providers/:key/kill-switch", handleProviderKillSwitch)
   .post("/api/ai/providers/:key/enable", handleProviderEnable)

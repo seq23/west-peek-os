@@ -1,3 +1,4 @@
+import { CardOutsideEmail } from "./OutsideEmailPage";
 import { useEffect, useState } from "react";
 import { api, getDevUser, useApi, type MeResponse } from "../lib/api";
 import { readableDate } from "../lib/dates";
@@ -222,6 +223,9 @@ export function WorkCardPage({
         <RequestOrigin cardId={cardId} />
         <CardPreviews cardId={cardId} />
       </section>
+
+      {/* 23 Oct 2026: owner-only. Allowing this card puts it on her Outside email list. */}
+      <CardOutsideEmail cardId={cardId} me={me} />
 
       {/* STANDING RULES POINTER — never inline (Addendum 1), named in words rather than by its code. */}
       {card.kind && (

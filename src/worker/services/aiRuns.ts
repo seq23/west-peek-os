@@ -9,6 +9,7 @@ import { committedCostOf } from "../ai/spend";
 import { recordModelJobOutcome } from "../ai/modelLearning";
 import { privacyLabelSchema } from "../../shared/privacy";
 import { aiOutboundSwitches } from "../../shared/policy/aiOutbound";
+import { outsideEmailState } from "./outsideEmail";
 
 /**
  * AI run routes (P4). POST /api/ai/run is available to any authenticated firm
@@ -461,15 +462,17 @@ export async function handleDiscardAiOutput(ctx: RouteContext): Promise<Response
 // ── Whether an employee may email anybody ──
 
 /**
- * The two outbound switches, read back for the partner who has to decide about them.
+ * The two outbound answers, read back for the partner who has to decide about them.
  *
- * They are ENVIRONMENT settings and not database rows on purpose. A switch that lets an AI email
- * the outside world should require a deploy to flip — something with a diff, a review and a
- * timestamp — rather than a click that any session with an MP cookie can make. The page shows their
- * state and says how to change them; it deliberately cannot change them itself.
+ * TO PARTNERS is still a deployment setting (WP_OS_AI_EMAIL_PARTNERS). OUTSIDE THE FIRM is her
+ * Outside email list now (owner, 23 Oct 2026), changed on its own screen; this reads its state
+ * through the same function every send asks, so the page cannot disagree with what sends.
  */
 export async function handleAiOutboundPolicy(ctx: RouteContext): Promise<Response> {
   const s = aiOutboundSwitches(ctx.env);
+  const state = await outsideEmailState(ctx.env);
+  const allowedCount = state.allowedJobs.size + state.allowedCards.size;
+  const outsideOn = !state.breakGlass && state.mode === "ONLY_ALLOWED" && allowedCount > 0;
   return json({
     to_partners: {
       on: s.toPartners,
@@ -478,20 +481,22 @@ export async function handleAiOutboundPolicy(ctx: RouteContext): Promise<Respons
       variable: "WP_OS_AI_EMAIL_PARTNERS",
     },
     to_external: {
-      on: s.toExternal,
-      what: "An AI employee may email founders, LPs, co-investors — anybody outside the firm.",
-      risk: "This is the firm speaking, and there is no undo.",
-      variable: "WP_OS_AI_EMAIL_EXTERNAL",
+      on: outsideOn,
+      what: state.breakGlass
+        ? "Stopped by the break-glass switch: nothing goes outside the firm."
+        : state.mode === "OFF"
+          ? "Off: nothing goes outside the firm."
+          : `Only what you allow: ${allowedCount === 0 ? "nothing is on your list yet" : `${allowedCount} item${allowedCount === 1 ? "" : "s"} on your list`}.`,
+      risk: "This is the firm speaking, and there is no undo. Each email still waits for your approval.",
+      variable: "Outside email list",
+      screen: "#/outside-email",
     },
-    // Said plainly, because "both off" is the fact a partner most needs and the shape of the
-    // response should not be the only thing conveying it.
-    summary:
-      !s.toPartners && !s.toExternal
-        ? "No AI employee can email anyone. Both switches are off."
-        : s.toExternal
-          ? "AI employees can email outside the firm. This is the setting with no undo."
-          : "AI employees can email the partners, and nobody else.",
+    summary: !s.toPartners && !outsideOn
+      ? "No AI employee can email anyone."
+      : outsideOn
+        ? "AI employees can email outside the firm, only for what is on your Outside email list."
+        : "AI employees can email the partners, and nobody else.",
     how_to_change:
-      "These are deployment settings rather than buttons: set the variable to exactly \"enabled\" in wrangler.toml and deploy. A switch this consequential should leave a diff.",
+      "The partners switch is a deployment setting. Outside the firm is your Outside email list: open it to allow or stop a job or a card.",
   });
 }

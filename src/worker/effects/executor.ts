@@ -6,7 +6,8 @@ import { consumeApprovalCard } from "../services/approvals";
 import { fromAddressFor } from "../services/sendAs";
 import { trySendAsPartner } from "../services/googleConnect";
 import { emailSendBlockedReason, isEmailSendEnabled, sendViaResend } from "./resendClient";
-import { aiOutboundSwitches, mayAiEmail } from "../../shared/policy/aiOutbound";
+import { aiOutboundSwitches, audienceOf, mayAiEmail } from "../../shared/policy/aiOutbound";
+import { outsideEmailAllowed } from "../services/outsideEmail";
 import { PARTNERS, PARTNER_EMAILS } from "../../shared/registry/partners";
 import { employeeSenderAddress } from "../../shared/registry/employeeMail";
 import { OUTBOUND_ATTACHMENTS_MAX_BYTES, attachmentsBytes, isPreviewEnv, type EmailAttachment, type EmailSendResult } from "./emailTransport";
@@ -48,6 +49,10 @@ export interface ExternalEffectRequestRow {
   executed_at: string | null;
   /** The address the message went out AS, written at execution. Null on rows written before 0156. */
   sender_address?: string | null;
+  /** 0265: the named job this email belongs to (OUTSIDE_EMAIL_JOBS), for her Outside email list. */
+  outside_job?: string | null;
+  /** 0265: the work card this email belongs to, for her Outside email list. */
+  work_card_id?: string | null;
 }
 
 export class EffectError extends Error {
@@ -319,7 +324,18 @@ export async function executeExternalEffect(
    * permissions bug.
    */
   if (request.effect_type === "email.send" && actor.type !== "HUMAN") {
-    const decision = mayAiEmail(aiOutboundSwitches(env), request.destination, managingPartnerEmails(env));
+    /*
+     * OUTSIDE THE FIRM, HER LIST DECIDES (owner, 23 Oct 2026): "a universal narrow switch and i can
+     * easily go in the ui and tell it which jobs or work cards to allow". The one function,
+     * `outsideEmailAllowed`, is asked with the job and card the request belongs to; a request tied
+     * to neither is refused. A partner address still answers to WP_OS_AI_EMAIL_PARTNERS.
+     */
+    const partners = managingPartnerEmails(env);
+    const outside =
+      audienceOf(request.destination, partners) === "EXTERNAL"
+        ? await outsideEmailAllowed(env, { job: request.outside_job ?? null, cardId: request.work_card_id ?? null })
+        : { allowed: false, reason: "not asked: a partner address" };
+    const decision = mayAiEmail(aiOutboundSwitches(env), request.destination, partners, outside);
     if (!decision.allowed) {
       await appendEvent(env, {
         eventType: "email.refused_ai_sender",

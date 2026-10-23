@@ -650,7 +650,21 @@ export function approvalState(settings: Record<string, string | null | undefined
   return stored === current ? "APPROVED" : "CHANGED";
 }
 
-export function brandSendGate(settings: Record<string, string | null | undefined>, env: { WP_OS_AI_EMAIL_EXTERNAL?: string }, hashes: ContentHashes): { open: boolean; reasons: string[] } {
+/**
+ * The words the Brand sending panel shows when TLC brand sales is not on her Outside email list
+ * (owner, 23 Oct 2026). The panel turns this line into the link to that screen.
+ */
+export const TLC_NOT_ON_OUTSIDE_LIST = "TLC brand sales is not on your Outside email list — tap to allow.";
+
+/**
+ * THE GATE. `outside` is `outsideEmailAllowed(env, { job: TLC_BRAND_SALES_JOB })`'s answer — the one
+ * function that decides outside email. This gate never reads an env var or the list itself.
+ */
+export function brandSendGate(
+  settings: Record<string, string | null | undefined>,
+  outside: { allowed: boolean; code: string; reason: string },
+  hashes: ContentHashes,
+): { open: boolean; reasons: string[]; outside_email_allowed: boolean } {
   const reasons: string[] = [];
   const pitch = approvalState(settings, PITCH_APPROVAL_HASH_SETTING, hashes.pitch);
   const playbook = approvalState(settings, PLAYBOOK_APPROVAL_HASH_SETTING, hashes.playbook);
@@ -659,8 +673,8 @@ export function brandSendGate(settings: Record<string, string | null | undefined
   if (playbook === "NOT_APPROVED") reasons.push("the owner has not approved the sales playbook");
   if (playbook === "CHANGED") reasons.push("the sales playbook changed after it was approved; approve it again");
   if (settings[BRAND_SEND_SETTING] !== "on") reasons.push("the TLC brand-send switch is off");
-  if (env.WP_OS_AI_EMAIL_EXTERNAL !== "enabled") reasons.push("employees may not email outside the firm (WP_OS_AI_EMAIL_EXTERNAL)");
-  return { open: reasons.length === 0, reasons };
+  if (!outside.allowed) reasons.push(outside.code === "NOT_ON_LIST" ? TLC_NOT_ON_OUTSIDE_LIST : `${outside.reason} — tap to open your Outside email list.`);
+  return { open: reasons.length === 0, reasons, outside_email_allowed: outside.allowed };
 }
 
 // ── The partners' decision ──────────────────────────────────────────────────────────────────────
@@ -887,10 +901,10 @@ const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;"
  */
 export const TLC_PLAYBOOK: readonly string[] = [
   "Who we sell to: brands whose customers are the people a club on this topic draws, in categories Parker named for it. Several partners per club, each in its own role.",
-  "What we sell: real hands-on time with the product, in a room of 25 to 40 people who each paid to be there, for a 3 to 4 hour deep dive on one topic in New York (one afternoon or one evening). Product in hands during the 60-minute hands-on session where it fits, five minutes during the food break, photo and content rights, opt-in lead capture, a mention in the invitation and on the day, and a recap with numbers.",
-  "Price: Partner $5,000, the standard for most brands. Lead partner $10,000. Presenting partner $15,000, for a big brand only, with \"Presented by\" billing and top placement. Product partner, in kind, for a product brand that supplies product instead of cash. Custom amounts are fine; neither size nor count is capped.",
+  "What we sell: real hands-on time with the product, in a room sized to the partners' goals (set per club; 25 to 40 by default, 60 to 150 when the club calls for it), each guest paid to be there, for a 3 to 4 hour deep dive on one topic in New York (one afternoon or one evening). Product in hands during the 60-minute hands-on session where it fits, five minutes during the food break, photo and content rights, opt-in lead capture, a mention in the invitation and on the day, and a recap with numbers.",
+  "Price: Title partner $25,000: one brand funds the whole room, the club is \"presented by\" that brand, it is the only cash partner that night, and in-kind partners need its OK. In January the Title partner is the primary route to $25K. Partner $5,000, the standard for most brands. Lead partner $10,000. Presenting partner $15,000, for a big brand only, with \"Presented by\" billing and top placement. Product partner, in kind, for a product brand that supplies product instead of cash. Custom amounts are fine; neither size nor count is capped.",
   "Goal per club: $25,000 raised from sponsors, costs up to $15,000, $10,000 net; under $7,500 net at a go-check escalates. At least 5 partners at $5,000, or larger sponsors at $10,000 to $15,000, or any mix. In-kind venue or product lowers cost and never counts toward the $25,000. Tickets add to the net but the goal never depends on them.",
-  "Sponsors in a club are complementary, never competitors: one brand per kind of product that would compete (one drink base, then mixers, glassware, wellness, food). Never approach a brand that competes with an agreed or featured partner.",
+  "Sponsors in a club are complementary, never competitors: one brand per kind of product that would compete (one drink base, then mixers, glassware, wellness, food). Never approach a brand that competes with an agreed or featured partner. This is how we put a room together, not a promise to a brand: we never offer or claim category exclusivity.",
   "Who we write to: a named person at the brand whose job is partnerships, events, community or brand marketing, at an address read off a live page. Never a guessed address. Never a contact without an email.",
   "How we write: signed by Sequoia Taylor, West Peek Ventures; replies go to her. Short, plain, warm, professional. Lead with the brand's own reason. One ask: \"Would you be open to exploring a partnership?\" No pitch, price or attachment until they reply. No inflated claims, no numbers we cannot show, no invented case studies. Before the first club runs we describe the format and West Peek Rooms' real history; after it, the real recap.",
   "Cadence: four emails at day 0, 4, 10 and 18. Stop the moment they reply, bounce or ask us to stop. Warm up slowly: 5 a day the first week, then 10, 20, 30.",

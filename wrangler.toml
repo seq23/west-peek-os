@@ -179,7 +179,12 @@ binding = "BROWSER"
 # thing this switch lets out is a reply to one of the two partner addresses, and the only sender of
 # such a reply is services/requestReply.ts, which refuses any other destination.
 WP_OS_AI_EMAIL_PARTNERS = "enabled"
-WP_OS_AI_EMAIL_EXTERNAL = "off"
+# OUTSIDE THE FIRM (owner, 23 Oct 2026): "a universal narrow switch and i can easily go in the ui
+# and tell it which jobs or work cards to allow". Her Outside email list in D1 decides now (screen:
+# #/outside-email; one function: outsideEmailAllowed). This variable is only the break-glass kill
+# switch: exactly "off-hard" stops every employee email to anybody outside the firm, whatever the
+# list says. "list" leaves the list in charge. It replaces WP_OS_AI_EMAIL_EXTERNAL (retired).
+WP_OS_OUTSIDE_EMAIL_BREAK_GLASS = "list"
 # Not "local": the dev identity header `x-wpos-dev-user` is refused outside local,
 # and identity comes from `Cf-Access-Authenticated-User-Email` (src/worker/auth.ts).
 WP_OS_ENV = "production"

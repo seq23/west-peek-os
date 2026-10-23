@@ -60,6 +60,7 @@ import { BrowserTasksPage } from "./pages/BrowserTasksPage";
 import { WorkCardsPage as WorkSurface } from "./pages/WorkCardsPage";
 import { WorkCardPage } from "./pages/WorkCardPage";
 import { WorkKindRulesPage } from "./pages/WorkKindRulesPage";
+import { OutsideEmailPage } from "./pages/OutsideEmailPage";
 import { GOVERNANCE_UPDATE_TYPES, RECOMMENDED_GOVERNANCE, governanceType } from "@shared/governance/updateTypes";
 import { useSelectedFund } from "./lib/selectedFund";
 import { HelpCenterPage, type HelpGroup } from "./pages/HelpCenterPage";
@@ -431,6 +432,8 @@ const ALL_NAV_KEYS: ReadonlySet<string> = new Set([
   // by URL, never a nav item of its own — it is reached FROM a card, the same way `private` is
   // reached from Home's foot.
   "work-kind-rules",
+  // 23 Oct 2026: Outside email, what may send. Reached from Set up, AI controls, a card and the TLC panel.
+  "outside-email",
   "follow-on",
   "market-map",
   "jobs",
@@ -1216,9 +1219,8 @@ interface OutboundSwitch {
  * let a machine speak on the firm's behalf, and they should not look like anything else in the
  * product. `--wp-danger` is already declared in the token block, so the palette rule holds.
  *
- * READ-ONLY ON PURPOSE. They are deployment settings, so flipping one leaves a diff, a review and a
- * timestamp instead of being a click any session with an MP cookie can make. The page says what
- * they are and how to change them, and cannot change them itself.
+ * READ-ONLY HERE. The partners switch is a deployment setting. Outside the firm is her Outside email
+ * list (owner, 23 Oct 2026), changed on its own screen, which the link at the foot opens.
  */
 function OutboundSwitches() {
   const policy = useApi<{ to_partners: OutboundSwitch; to_external: OutboundSwitch; summary: string; how_to_change: string }>(
@@ -1249,6 +1251,7 @@ function OutboundSwitches() {
         {row(p.to_external, "Outside the firm")}
       </ul>
       <p className="muted small">{p.how_to_change}</p>
+      <p><a href="#/outside-email" data-testid="ai-outbound-outside-link">Outside email: what may send (tap to open)</a></p>
     </section>
   );
 }
@@ -3314,6 +3317,7 @@ function Shell() {
           {authed && active === "work-kind-rules" && workKindRulesKind && (
             <WorkKindRulesPage kind={workKindRulesKind} me={me.data!} onBack={() => navigate("work")} />
           )}
+          {authed && active === "outside-email" && <OutsideEmailPage me={me.data!} onBack={() => (window.history.length > 1 ? window.history.back() : navigate("setup"))} />}
           {authed && active === "approvals" && <ApprovalsPage me={me.data!} refreshNonce={refreshNonce} />}
           {authed && active === "companies" && (
             <>
