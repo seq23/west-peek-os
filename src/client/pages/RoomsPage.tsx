@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, getDevUser, useApi } from "../lib/api";
 import { EventsPage } from "./EventsPage";
 import { LearningClubPanel, RoomsMap } from "./LearningClubPanel";
+import { PartnersPanel } from "./PartnersPanel";
 import { EVENT_ETHOS, OPERATING_RHYTHM, WHY_THE_RHYTHM } from "@shared/events/programme";
 import { sameOrg } from "@shared/events/roomPacket";
 import { WORKSHOP_LENGTH_RANGE, WORKSHOP_SERIES, WORKSHOP_WHERE, normaliseSponsorship, type WorkshopView } from "@shared/events/workshopPacket";
@@ -1852,6 +1853,8 @@ function SponsorPipeline(props: {
   return (
     <>
       <h3>Who is paying for it</h3>
+      <h4>Partners on each Room (brands that said yes)</h4>
+      <PartnersPanel source="ROOMS" />
       <p className="muted">
         One presenting partner, one supporting, one in-kind. Sponsors underwrite the experience —
         they never receive the guest list, and there is no export that would give it to them.{" "}

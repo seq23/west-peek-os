@@ -18,12 +18,22 @@ import { isProviderOutage } from "../../shared/ai/providerFailure";
 import type { EmailAttachment } from "../effects/emailTransport";
 import { renderHtmlPdf, type PdfRenderer } from "../effects/htmlPdf";
 import { renderedPdfProblem } from "../../shared/pdf/renderedPdf";
+import { renderBrandPitch, renderInternalOnePager, type TlcClubView, type TlcInternalView } from "../../shared/tlc/pitch";
+import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
 import {
   BOOKING_PACK_SHAPE,
   BRAND_SEND_SETTING,
-  ONEPAGER_APPROVAL_SETTING,
-  PLAYBOOK_APPROVAL_SETTING,
+  PITCH_APPROVAL_HASH_SETTING,
+  PLAYBOOK_APPROVAL_HASH_SETTING,
+  TLC_DECIDER_IDS,
+  TLC_OWNER,
+  TLC_RECIPIENTS,
+  TLC_SIGNATURE,
+  TLC_SPONSOR_CASH_TARGET_USD,
+  TLC_TIERS,
+  approvalState,
+  replyLooksLikeNo,
   TLC_BOOKING_HOURS,
   TLC_BOOKING_PACK_DAYS,
   TLC_CITY,
@@ -59,7 +69,6 @@ import {
   nextDripAt,
   parseDecisionReply,
   quarterOf,
-  renderOnePager,
   rollingTopicMonths,
   runOfShowLines,
   sponsorshipAgreement,
@@ -101,6 +110,14 @@ import {
  * anywhere but these tables.
  */
 
+/**
+ * WHERE A BRAND'S REPLY GOES: to Sequoia, who signs every brand email, and to the intake mailbox so
+ * the OS still sees it and stops the sequence (a reply that only reached her inbox would let the
+ * next email go). The send path cannot send AS her for an employee-filed email (employee mail never
+ * uses westpeek.ventures; see shared/registry/employeeMail.ts), so Reply-To carries her instead.
+ */
+export const BRAND_REPLY_TO: readonly string[] = [TLC_OWNER.email, INTAKE_MAILBOX];
+
 const PARKER = "aie_parker";
 const WYNN = "aie_wynn";
 const actorFor = (id: string, firmScope: string): Actor => ({ type: "AI", aiEmployeeId: id, roles: [], firmScopes: [firmScope] });
@@ -128,6 +145,7 @@ export interface TlcEventRow {
   swap_flagged_at: string | null;
   go_checks_json: string | null;
   recap: string | null;
+  pitch_token?: string | null;
   firm_scope: string;
 }
 
@@ -153,6 +171,8 @@ export interface TlcDealRow {
   replied_at: string | null;
   stop_reason: string | null;
   decision_card_id: string | null;
+  tier?: string | null;
+  yes_at?: string | null;
   firm_scope: string;
 }
 
@@ -187,16 +207,20 @@ export async function economicsFor(env: Env, ev: TlcEventRow): Promise<EventEcon
   return eventEconomics({ sponsorCashUsd: cash, committedCostsUsd: ev.committed_costs_usd ?? 0, tickets, inKindValueUsd: inKind });
 }
 
-// ── Email to both partners ──────────────────────────────────────────────────────────────────────
+// ── Email to the owner (Sequoia only: TLC_RECIPIENTS) ──────────────────────────────────────────
 
-async function emailBoth(
+/**
+ * Every TLC email to a partner leaves through here, to `TLC_RECIPIENTS` (Sequoia, owner's ruling
+ * 22 Oct 2026) and nobody else; the partner-mail door enforces the same list again.
+ */
+async function emailOwner(
   env: Env,
   input: { employee: "Parker" | "Wynn"; email: Omit<ExecEmailInput, "employee">; objectType: string; objectId: string; cardId: string | null; cardKind: string | null; firmScope: string; attachments?: readonly EmailAttachment[] },
 ): Promise<string[]> {
   const sent: string[] = [];
-  for (const p of PARTNERS) {
+  for (const address of TLC_RECIPIENTS) {
     const out = await sendOrPreview(env, {
-      to: p.email,
+      to: address,
       email: { employee: input.employee, ...input.email },
       objectType: input.objectType,
       objectId: input.objectId,
@@ -208,7 +232,7 @@ async function emailBoth(
       cardAsked: null,
       ...(input.attachments?.length ? { attachments: input.attachments } : {}),
     });
-    if (out.sent || out.previewed) sent.push(p.email);
+    if (out.sent || out.previewed) sent.push(address);
   }
   return sent;
 }
@@ -249,7 +273,7 @@ async function openCard(
 export async function ensureRollingEvents(env: Env, now: Date, firmScope = "west-peek"): Promise<string[]> {
   const months = rollingTopicMonths(now);
   for (const m of months) {
-    await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO tlc_event (id, month, event_date, firm_scope) VALUES (?1, ?2, ?3, ?4)")
+    await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO tlc_event (id, month, event_date, firm_scope, pitch_token) VALUES (?1, ?2, ?3, ?4, lower(hex(randomblob(16))))")
       .bind(`tlc_${m}`, m, defaultEventDate(m), firmScope)
       .run();
   }
@@ -371,7 +395,7 @@ export async function runTlcDaily(env: Env, now: Date, firmScope = "west-peek"):
         ).bind(ev.id, now.toISOString(), JSON.stringify(vetoed)).run();
         out.swapFlagged.push(ev.month);
       }
-      // 21 AND 14 DAYS OUT: go, or escalate to both partners.
+      // 21 AND 14 DAYS OUT: go, or escalate to Sequoia.
       if (hasTopic) {
         const check = goAheadCheck({ daysOut: days, economics: await economicsFor(env, ev) });
         const done = list<{ checkpoint: number }>(ev.go_checks_json);
@@ -380,7 +404,7 @@ export async function runTlcDaily(env: Env, now: Date, firmScope = "west-peek"):
           await env.WP_OS_DB.prepare("UPDATE tlc_event SET status = ?2, go_checks_json = ?3, updated_at = ?4 WHERE id = ?1")
             .bind(ev.id, check.verdict === "GO" ? "GO" : "ESCALATED", JSON.stringify([...done, { checkpoint: check.checkpoint, verdict: check.verdict, at: now.toISOString(), reasons: check.reasons }]), now.toISOString())
             .run();
-          await emailBoth(env, {
+          await emailOwner(env, {
             employee: "Wynn",
             email: {
               what: `TLC ${monthWords(ev.month)}: ${check.verdict === "GO" ? "go-ahead" : "short of the go-ahead"}, ${check.checkpoint} days out`,
@@ -441,7 +465,7 @@ const emptyDrip = (): DripResult => ({ due: 0, held: 0, awaitingApproval: 0, sen
  */
 export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Promise<DripResult> {
   const settings = await tlcSettings(env);
-  const gate = brandSendGate(settings, env);
+  const gate = brandSendGate(settings, env, await contentHashes(env));
   const result: DripResult = { ...emptyDrip(), gate };
   const wynn = actorFor(WYNN, firmScope);
 
@@ -507,7 +531,7 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Pro
     const requestId = `eer_${crypto.randomUUID()}`;
     await env.WP_OS_DB.prepare(
       "INSERT INTO external_effect_request (id, effect_type, destination, payload_json, requested_by_type, requested_by_id) VALUES (?1, 'email.send', ?2, ?3, 'AI', ?4)",
-    ).bind(requestId, deal.contact_email, JSON.stringify({ subject: mail.subject, text: mail.text }), WYNN).run();
+    ).bind(requestId, deal.contact_email, JSON.stringify({ subject: mail.subject, text: mail.text, reply_to: BRAND_REPLY_TO }), WYNN).run();
     const { requestApproval } = await import("./approvals");
     const card = await requestApproval(env, wynn, {
       action_key: "effect.email.send",
@@ -524,6 +548,47 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Pro
     ).bind(`tdm_${crypto.randomUUID()}`, deal.id, deal.drip_step, mail.subject, mail.text, requestId, card.id).run();
     result.awaitingApproval += 1;
     room -= 1;
+  }
+
+  // 3 · The pitch emails to brands that said yes: execute the approved ones, file the held ones.
+  if (gate.open) {
+    const { executeExternalEffect } = await import("../effects/executor");
+    const approvedPitch = (await env.WP_OS_DB.prepare(
+      "SELECT f.deal_id, f.effect_request_id, f.approval_card_id FROM tlc_pitch_followup f JOIN approval_card a ON a.id = f.approval_card_id WHERE f.state = 'AWAITING_APPROVAL' AND a.state = 'approved'",
+    ).all<{ deal_id: string; effect_request_id: string; approval_card_id: string }>()).results ?? [];
+    for (const f of approvedPitch) {
+      try {
+        await executeExternalEffect(env, wynn, f.effect_request_id, f.approval_card_id);
+        await env.WP_OS_DB.prepare("UPDATE tlc_pitch_followup SET state = 'SENT', sent_at = ?2 WHERE deal_id = ?1").bind(f.deal_id, now.toISOString()).run();
+        await env.WP_OS_DB.prepare("UPDATE tlc_deal SET yes_at = COALESCE(yes_at, ?2), updated_at = ?2 WHERE id = ?1").bind(f.deal_id, now.toISOString()).run();
+        result.sent += 1;
+      } catch (err) {
+        await env.WP_OS_DB.prepare("UPDATE tlc_pitch_followup SET state = 'FAILED', held_reason = ?2 WHERE deal_id = ?1").bind(f.deal_id, err instanceof Error ? err.message.slice(0, 300) : "failed").run();
+      }
+    }
+    const heldPitch = (await env.WP_OS_DB.prepare("SELECT f.*, d.contact_email, d.brand, d.event_id FROM tlc_pitch_followup f JOIN tlc_deal d ON d.id = f.deal_id WHERE f.state = 'HELD' AND d.stop_reason = 'REPLIED'").all<{ deal_id: string; subject: string; body: string; contact_email: string; brand: string; event_id: string }>()).results ?? [];
+    for (const f of heldPitch) {
+      const ev = await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(f.event_id).first<TlcEventRow>();
+      if (!ev?.topic) continue;
+      const pdf = await renderHtmlPdf(env, renderBrandPitch(clubViewOf(ev)), { onePage: true });
+      const attachments = pdf.pdfBase64 ? [{ filename: `The Learning Club - ${ev.topic.replace(/[^\w &-]+/g, "").trim()}.pdf`, content: pdf.pdfBase64, contentType: "application/pdf" }] : [];
+      const requestId = `eer_${crypto.randomUUID()}`;
+      await env.WP_OS_DB.prepare(
+        "INSERT INTO external_effect_request (id, effect_type, destination, payload_json, requested_by_type, requested_by_id) VALUES (?1, 'email.send', ?2, ?3, 'AI', ?4)",
+      ).bind(requestId, f.contact_email, JSON.stringify({ subject: f.subject, text: f.body, reply_to: BRAND_REPLY_TO, attachments }), WYNN).run();
+      const { requestApproval } = await import("./approvals");
+      const card = await requestApproval(env, wynn, {
+        action_key: "effect.email.send",
+        object_type: "external_effect_request",
+        object_id: requestId,
+        title: `Wynn: TLC pitch to ${f.brand}, who said yes`,
+        summary: `${f.subject}\n\n${f.body}${attachments.length ? "\n\n(The brand pitch PDF is attached.)" : "\n\n(The PDF could not be rendered; the link carries the pitch.)"}`.slice(0, 1800),
+        payload: { deal_id: f.deal_id, pitch: true },
+        submit: true,
+      });
+      await env.WP_OS_DB.prepare("UPDATE tlc_pitch_followup SET state = 'AWAITING_APPROVAL', held_reason = NULL, effect_request_id = ?2, approval_card_id = ?3 WHERE deal_id = ?1").bind(f.deal_id, requestId, card.id).run();
+      result.awaitingApproval += 1;
+    }
   }
   return result;
 }
@@ -561,8 +626,59 @@ export async function recordBrandMail(env: Env, input: { from: string; subject: 
         .run();
     }
   }
+  // A REPLY THAT IS NOT A NO: tell Sequoia, and put the pitch email (PDF + call link) behind the gate.
+  if (kind === "REPLIED" && !replyLooksLikeNo(input.subject)) {
+    for (const d of deals) await brandSaidYes(env, d, input.subject, new Date(now));
+  }
   await appendEvent(env, { eventType: "tlc.brand_mail", actorType: "system", actorId: "inbound_email", objectType: "tlc_deal", objectId: deals[0]!.id, payload: { kind, deals: deals.length } });
   return { matched: deals.length, stop: kind };
+}
+
+/** The email back to a brand that said yes: the pitch (attached and linked) and a call link. Signed by Sequoia. */
+export function pitchFollowUp(input: { brand: string; contactName: string | null; topic: string; month: string; pitchUrl: string; callLink: string | null }): { subject: string; text: string } {
+  const hi = input.contactName ? `Hi ${input.contactName.split(" ")[0]},` : "Hi,";
+  return {
+    subject: `${input.brand} + a small room in New York`,
+    text: [
+      hi,
+      "",
+      `Thank you for coming back to me. Here is the one-page pitch for The Learning Club: ${input.topic}, in ${monthWords(input.month)}. The PDF is attached, and it is also here: ${input.pitchUrl}`,
+      "",
+      input.callLink ? `If it is easier to talk it through, pick a time that suits you: ${input.callLink}` : "If it is easier to talk it through, reply with two times that suit you and I will send an invitation.",
+      "",
+      ...TLC_SIGNATURE,
+    ].join("\n"),
+  };
+}
+
+/**
+ * A BRAND SAID YES (a reply that is not a no). Sequoia hears at once; the pitch email is composed and
+ * held behind the same gate and approval as every brand email (`runDrip` files it when the gate is open).
+ */
+async function brandSaidYes(env: Env, deal: TlcDealRow, subject: string, now: Date): Promise<void> {
+  const ev = await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>();
+  if (!ev?.topic || !ev.pitch_token) return;
+  const settings = await tlcSettings(env);
+  const mail = pitchFollowUp({ brand: deal.brand, contactName: deal.contact_name, topic: ev.topic, month: ev.month, pitchUrl: pitchPublicUrl(ev.pitch_token), callLink: settings[CALL_LINK_SETTING] ?? null });
+  await env.WP_OS_DB.prepare(
+    "INSERT INTO tlc_pitch_followup (deal_id, subject, body, state, held_reason) VALUES (?1, ?2, ?3, 'HELD', 'waiting for the send gate and an approval') ON CONFLICT (deal_id) DO NOTHING",
+  ).bind(deal.id, mail.subject, mail.text).run();
+  await emailOwner(env, {
+    employee: "Wynn",
+    email: {
+      what: `TLC: ${deal.brand.slice(0, 30)} replied`,
+      tldr: `${deal.brand} replied about the ${ev.topic} club (${monthWords(ev.month)}): "${subject.slice(0, 120)}". The pitch email with the PDF and a call link is ready for your approval.`,
+      sections: [
+        { label: "What they said", bullets: [`Subject: "${subject.slice(0, 160)}"`, `Brand: ${deal.brand}${deal.contact_name ? `, ${deal.contact_name}` : ""} <${deal.contact_email}>`] },
+        { label: "What happens next", bullets: ["Read their reply in your inbox; it came to you.", "Approve the pitch email on the approvals screen and it goes. Brand sending must be on.", "After the call, record their offer on the Rooms page and I will ask you yes, no or counter."] },
+      ],
+    },
+    objectType: "tlc_deal",
+    objectId: deal.id,
+    cardId: null,
+    cardKind: null,
+    firmScope: deal.firm_scope,
+  });
 }
 
 // ── The runner: one card, one bounded unit of work ─────────────────────────────────────────────
@@ -829,8 +945,9 @@ export function buildTopicsPrompt(
     ...TLC_TOPIC_CRITERIA.map((c) => `- ${c}`),
     "",
     "For a topic with a legal or health angle (for example peptides and biohacking, supplements, money), add a short regulatory_note: which sponsor types can legally sponsor it in New York and what they may not claim. It stays on the card; it never goes in the email.",
-    picksPart ? "For each pick give the usual Rooms packet: the angle, why now (with sources), what happens in the hands-on hour, what people take home, the kind of expert who teaches it, and 5–10 sponsor categories that fit (non-competing within the club, each with why and two or three example brands)." : "",
+    picksPart ? "For each pick give the usual Rooms packet: the angle, why now (with sources), what happens in the hands-on hour, what people take home, the kind of expert who teaches it, and 5–10 sponsor categories that fit (each with why and two or three example brands)." : "",
     "Write each topic as its name only — no day, time, month or format in brackets.",
+    "Brand-safe words (a brand reads these): never a trademarked campaign name such as Dry January, never a promised result (\"they leave with three automations running\"), never a date (the club's date is set elsewhere), and never a label like (lead), (supporting) or category-exclusive. Several brands partner on a club; nobody gets a category to itself.",
     altsPart ? `Give exactly ${TLC_ALTERNATIVES} ALTERNATIVE topics (partner ideas, brands spending now and trends alike; each with its origin) the partners could swap in: each different from the picks and from each other, with a one-line reason it would work and two or three real brands that would pay to sponsor it.` : "",
     "This goes to the partners as it is: write only what each topic IS. Never mention a topic you turned down, rejected or ruled out, or why.",
     "Use ONLY real, live web pages as sources. Do not invent statistics, quotes or events.",
@@ -992,11 +1109,13 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
   // STAGE 2 — the veto window has run out (or the card was woken by a reply): read the partners' notes.
   const proposed = await eventsFrom(env, "SELECT * FROM tlc_event WHERE topic_card_id = ?1 AND status = 'TOPIC_PROPOSED' ORDER BY month", card.id);
   if (proposed.length) {
-    const notes = (await env.WP_OS_DB.prepare("SELECT id, body FROM work_card_note WHERE work_card_id = ?1 AND acknowledged_at IS NULL").bind(card.id).all<{ id: string; body: string }>()).results ?? [];
+    const unread = (await env.WP_OS_DB.prepare("SELECT id, body, author_id FROM work_card_note WHERE work_card_id = ?1 AND acknowledged_at IS NULL").bind(card.id).all<{ id: string; body: string; author_id: string | null }>()).results ?? [];
+    // ONLY HER REPLY IS A VETO (owner, 22 Oct 2026). Anyone else's note is acknowledged, not obeyed.
+    const notes = unread.filter((n) => TLC_DECIDER_IDS.includes(n.author_id ?? ""));
     const vetoed = new Set<string>();
     for (const n of notes) for (const m of vetoedMonths(n.body, proposed.map((e) => ({ month: e.month, topic: e.topic ?? "" })))) vetoed.add(m);
     const heard = vetoed.size ? `Parker read this as a no to ${[...vetoed].map(monthWords).join(", ")} and picks again.` : "Parker read this as no veto; the picks proceed when the window closes.";
-    if (notes.length) await env.WP_OS_DB.prepare("UPDATE work_card_note SET acknowledged_at = ?2, response = ?3 WHERE work_card_id = ?1 AND acknowledged_at IS NULL").bind(card.id, now.toISOString(), heard).run();
+    if (unread.length) await env.WP_OS_DB.prepare("UPDATE work_card_note SET acknowledged_at = ?2, response = ?3 WHERE work_card_id = ?1 AND acknowledged_at IS NULL").bind(card.id, now.toISOString(), heard).run();
     const windowOver = proposed.every((e) => (e.veto_until ?? "") <= now.toISOString());
     for (const e of proposed.filter((x) => vetoed.has(x.month))) {
       await env.WP_OS_DB.prepare("UPDATE tlc_event SET status = 'PLANNING', topic = NULL, angle = NULL, veto_until = NULL, vetoed_topics_json = ?2, updated_at = ?3 WHERE id = ?1")
@@ -1134,7 +1253,7 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
     alternatives: alternatives.slice(0, TLC_ALTERNATIVES),
     goAheadOn: until.slice(0, 10),
   });
-  await emailBoth(env, { employee: "Parker", email, objectType: "work_card", objectId: card.id, cardId: card.id, cardKind: card.kind, firmScope: card.firm_scope, attachments });
+  await emailOwner(env, { employee: "Parker", email, objectType: "work_card", objectId: card.id, cardId: card.id, cardKind: card.kind, firmScope: card.firm_scope, attachments });
   await env.WP_OS_DB.prepare("DELETE FROM tlc_setting WHERE key = ?1").bind(draftKey).run();
   // The record keeps everything, including the alternatives; the partners' email carries only the picks and the list.
   await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || ?2, 1, 16000) WHERE id = ?1")
@@ -1155,11 +1274,12 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
 }
 
 /**
- * THE ONE-SHEETS AS RENDERED PDFs (22 Oct 2026). Until today each was attached as its raw HTML
- * source (`text/html`), and the owner opened three files of code. Each is now printed by the browser
- * onto one letter page and checked by `renderedPdfProblem` before it may leave: a file that is not a
- * rendered PDF naming its topic is never attached. The email still links every one-sheet, and the
- * reason a PDF is missing goes on the card.
+ * THE TWO DOCUMENTS PER MONTH AS RENDERED PDFs (22 Oct 2026). Until today each one-sheet was
+ * attached as its raw HTML source (`text/html`), and the owner opened files of code. Each month now
+ * gets the brand pitch and the internal one-pager, each printed by the browser onto one letter page
+ * and checked by `renderedPdfProblem` before it may leave: a file that is not a rendered PDF naming
+ * its topic is never attached. The email still links every month, and a missing PDF's reason goes
+ * on the card.
  */
 export async function onePagerAttachments(env: Env, eventIds: readonly string[], renderPdf: PdfRenderer): Promise<{ attachments: EmailAttachment[]; problems: string[] }> {
   const attachments: EmailAttachment[] = [];
@@ -1167,17 +1287,27 @@ export async function onePagerAttachments(env: Env, eventIds: readonly string[],
   for (const id of eventIds) {
     const ev = (await eventsFrom(env, "SELECT * FROM tlc_event WHERE id = ?1", id))[0];
     if (!ev?.topic) continue;
-    const out = await renderPdf(await onePagerFor(env, ev));
-    if (out.pdfBase64 === null) { problems.push(`${ev.topic}: ${out.reason}`); continue; }
-    const bytes = Uint8Array.from(atob(out.pdfBase64), (c) => c.charCodeAt(0));
-    const problem = (await renderedPdfProblem(bytes, ev.topic)) ?? (out.pageCount !== 1 ? `the one-sheet ran to ${out.pageCount} pages` : null);
-    if (problem) { problems.push(`${ev.topic}: ${problem}`); continue; }
-    attachments.push({ filename: `TLC ${monthWords(ev.month)} - ${ev.topic.replace(/[^\w &-]+/g, "").trim()}.pdf`, content: out.pdfBase64, contentType: "application/pdf" });
+    const base = `TLC ${monthWords(ev.month)} - ${ev.topic.replace(/[^\w &-]+/g, "").trim()}`;
+    for (const doc of [
+      { name: `${base} - brand pitch.pdf`, html: renderBrandPitch(clubViewOf(ev)) },
+      { name: `${base} - internal one-pager.pdf`, html: renderInternalOnePager(await internalViewOf(env, ev)) },
+    ]) {
+      const out = await renderPdf(doc.html);
+      if (out.pdfBase64 === null) { problems.push(`${doc.name}: ${out.reason}`); continue; }
+      const bytes = Uint8Array.from(atob(out.pdfBase64), (c) => c.charCodeAt(0));
+      const problem = (await renderedPdfProblem(bytes, ev.topic)) ?? (out.pageCount !== 1 ? `it ran to ${out.pageCount} pages` : null);
+      if (problem) { problems.push(`${doc.name}: ${problem}`); continue; }
+      attachments.push({ filename: doc.name, content: out.pdfBase64, contentType: "application/pdf" });
+    }
   }
   return { attachments, problems };
 }
 
 const onePagerUrl = (eventId: string): string => `https://os.joinwestpeek.com/api/tlc/events/${eventId}/onepager`;
+/** The call link a brand gets with the pitch after a yes (set by a partner on the Rooms page). */
+export const CALL_LINK_SETTING = "call_link";
+/** The brand pitch's public, read-only address: no login, the unguessable token is the credential. */
+export const pitchPublicUrl = (token: string): string => `https://os.joinwestpeek.com/api/tlc-pitch/${token}`;
 
 /**
  * A SEARCH THE MACHINE COULD NOT SERVE IS NOT AN ATTEMPT (22 Oct 2026). When every search lane was down —
@@ -1243,7 +1373,7 @@ async function runBookingPack(env: Env, card: SweepCard, now: Date, search: TlcS
     label: label,
     bullets: xs.length ? xs.map((o) => `${o.name}: $${o.priceUsd.toLocaleString("en-US")}, book by ${o.bookBy || "?"} — ${o.url}${o.note ? ` (${o.note})` : ""}`) : ["none found"],
   });
-  await emailBoth(env, {
+  await emailOwner(env, {
     employee: "Parker",
     email: {
       what: `TLC booking pack, ${monthWords(ev.month)}`,
@@ -1303,7 +1433,7 @@ async function runBrandBatch(env: Env, card: SweepCard, now: Date, search: TlcSe
     if ((res.meta?.changes ?? 0) > 0) added.push(`${brand} (${monthWords(ev.month)})`);
   }
   if (added.length === 0) return nothingGood(env, card, "Wynn", `No brand came with an address that is really on its page (${dropped.slice(0, 6).join("; ") || "nothing returned"}). Name brands or a category to try and Wynn runs it again.`);
-  const gate = brandSendGate(await tlcSettings(env), env);
+  const gate = brandSendGate(await tlcSettings(env), env, await contentHashes(env));
   await finish(env, card.id, [`• ${added.length} brand(s) queued for the four-email sequence: ${added.join("; ")}.`, gate.open ? "• Sending is on: each email waits for a partner's approval on Approvals." : `• NOTHING SENT: ${gate.reasons.join("; ")}. The emails are composed and held.`, dropped.length ? `• Left out: ${dropped.join("; ")}.` : ""].filter(Boolean).join("\n"));
   return { finished: true, blocked: false, progressed: false, detail: `${added.length} brand(s) queued` };
 }
@@ -1407,7 +1537,7 @@ async function runDecision(env: Env, card: SweepCard, now: Date): Promise<TlcRun
   // First pass: one email to each partner, then wait for the reply (which answers this card's block).
   const econ = await economicsFor(env, ev);
   const mail = decisionEmail(offer, econ);
-  await emailBoth(env, { employee: "Wynn", email: mail, objectType: "work_card", objectId: card.id, cardId: card.id, cardKind: card.kind, firmScope: card.firm_scope });
+  await emailOwner(env, { employee: "Wynn", email: mail, objectType: "work_card", objectId: card.id, cardId: card.id, cardKind: card.kind, firmScope: card.firm_scope });
   const why = await blockCard(env, card, { reason: "a_question_for_you", trying: card.title, employee: "Wynn", detail: `${mail.tldr} Reply "yes", "no" or "counter $X".` });
   return { finished: false, blocked: true, progressed: false, detail: why };
 }
@@ -1436,7 +1566,8 @@ export async function handleTlcOverview(ctx: RouteContext): Promise<Response> {
   const held = (await ctx.env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_drip_message WHERE state = 'HELD'").first<{ n: number }>())?.n ?? 0;
   return json({
     events: out.map((e) => ({ ...e, one_pager_url: e.topic ? onePagerUrl(e.id) : null })),
-    send_gate: brandSendGate(settings, ctx.env),
+    send_gate: brandSendGate(settings, ctx.env, await contentHashes(ctx.env)),
+    approvals: await approvalsView(ctx.env, settings),
     settings,
     held_emails: held,
     ideas: (await ideasFor(ctx.env)).map((i) => ({ ...i, origin_label: TLC_IDEA_ORIGIN_LABEL[i.origin] })),
@@ -1478,15 +1609,29 @@ export async function handleTlcIdeaStatus(ctx: RouteContext): Promise<Response> 
   return json({ ok: true, ideas: await ideasFor(ctx.env) });
 }
 
-const settingSchema = z.object({ what: z.enum(["onepager_mock", "playbook", "brand_send_on", "brand_send_off"]) });
+const settingSchema = z.object({
+  what: z.enum(["pitch", "playbook", "brand_send_on", "brand_send_off", "call_link"]),
+  /** The hash of the content the partner was shown. An approval of anything else is refused. */
+  hash: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  call_link: z.string().url().max(400).optional(),
+});
+
+/** Partners only: the two people in the partner registry, signed in as themselves. */
+function partnerOf(ctx: RouteContext): (typeof PARTNERS)[number] | null {
+  const actor = actorFromIdentity(ctx.identity!);
+  if (actor.type !== "HUMAN") return null;
+  return PARTNERS.find((p) => p.firmUserId === actor.firmUserId) ?? null;
+}
 
 /**
- * POST /api/tlc/approve — the owner's approvals and the switch. HUMAN only. Turning sending on is
- * refused until both approvals are on record.
+ * POST /api/tlc/approve — the brand-send screen's buttons. PARTNERS ONLY. An approval is of exact
+ * content: the request carries the hash of what the partner was shown, it must equal the hash of
+ * what would be sent now, and that hash is what is stored. "Start sending" is refused until both
+ * approvals hold for the current content; "Stop sending" always works.
  */
 export async function handleTlcApprove(ctx: RouteContext): Promise<Response> {
-  const actor = actorFromIdentity(ctx.identity!);
-  if (actor.type !== "HUMAN") return json({ error: "forbidden", detail: "only a partner approves" }, { status: 403 });
+  const partner = partnerOf(ctx);
+  if (!partner) return json({ error: "forbidden", detail: "only a partner approves" }, { status: 403 });
   const a = await requireManage(ctx);
   if (a instanceof Response) return a;
   const parsed = settingSchema.safeParse(await ctx.request.json().catch(() => null));
@@ -1496,18 +1641,29 @@ export async function handleTlcApprove(ctx: RouteContext): Promise<Response> {
     ctx.env.WP_OS_DB.prepare("INSERT INTO tlc_setting (key, value, set_by, set_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(key) DO UPDATE SET value = excluded.value, set_by = excluded.set_by, set_at = excluded.set_at")
       .bind(key, value, ctx.identity!.id, now).run();
   const w = parsed.data.what;
-  if (w === "onepager_mock") await set(ONEPAGER_APPROVAL_SETTING, now);
-  if (w === "playbook") await set(PLAYBOOK_APPROVAL_SETTING, now);
+  const hashes = await contentHashes(ctx.env);
+  if (w === "pitch" || w === "playbook") {
+    const current = w === "pitch" ? hashes.pitch : hashes.playbook;
+    if (parsed.data.hash !== current) {
+      return json({ error: "changed", detail: `the ${w === "pitch" ? "brand pitch" : "playbook"} changed since this page loaded; look at it again, then approve` }, { status: 409 });
+    }
+    await set(w === "pitch" ? PITCH_APPROVAL_HASH_SETTING : PLAYBOOK_APPROVAL_HASH_SETTING, current);
+  }
+  if (w === "call_link") {
+    if (!parsed.data.call_link || !/^https:\/\//.test(parsed.data.call_link)) return json({ error: "invalid_input", detail: "a call link starts with https://" }, { status: 400 });
+    await set(CALL_LINK_SETTING, parsed.data.call_link);
+  }
   if (w === "brand_send_off") await set(BRAND_SEND_SETTING, "off");
   if (w === "brand_send_on") {
     const s = await tlcSettings(ctx.env);
-    if (!s[ONEPAGER_APPROVAL_SETTING] || !s[PLAYBOOK_APPROVAL_SETTING]) {
-      return json({ error: "not_approved", detail: "approve the one-pager mock and the playbook first" }, { status: 409 });
+    if (approvalState(s, PITCH_APPROVAL_HASH_SETTING, hashes.pitch) !== "APPROVED" || approvalState(s, PLAYBOOK_APPROVAL_HASH_SETTING, hashes.playbook) !== "APPROVED") {
+      return json({ error: "not_approved", detail: "approve the current brand pitch and playbook first" }, { status: 409 });
     }
     await set(BRAND_SEND_SETTING, "on");
   }
-  await appendEvent(ctx.env, { eventType: "tlc.setting", actorType: "firm_user", actorId: ctx.identity!.id, objectType: "tlc_setting", objectId: w, payload: { what: w } });
-  return json({ ok: true, send_gate: brandSendGate(await tlcSettings(ctx.env), ctx.env) });
+  await appendEvent(ctx.env, { eventType: "tlc.setting", actorType: "firm_user", actorId: ctx.identity!.id, objectType: "tlc_setting", objectId: w, payload: { what: w, hash: parsed.data.hash ?? null } });
+  const settings = await tlcSettings(ctx.env);
+  return json({ ok: true, send_gate: brandSendGate(settings, ctx.env, hashes), approvals: await approvalsView(ctx.env, settings) });
 }
 
 const dealPatch = z.object({
@@ -1516,6 +1672,7 @@ const dealPatch = z.object({
   in_kind_offer: z.string().max(500).nullish(),
   in_kind_value_usd: z.number().min(0).max(1_000_000).optional(),
   wants: z.string().max(1000).nullish(),
+  tier: z.enum(["PARTNER", "PRESENTING"]).optional(),
 });
 
 /** POST /api/tlc/deals/:id — record the offer after a call; WAITING_ON_OWNERS opens the decision. */
@@ -1537,8 +1694,9 @@ export async function handleTlcDeal(ctx: RouteContext): Promise<Response> {
   const now = new Date();
   await ctx.env.WP_OS_DB.prepare(
     `UPDATE tlc_deal SET stage = COALESCE(?2, stage), cash_offer_usd = COALESCE(?3, cash_offer_usd), in_kind_offer = COALESCE(?4, in_kind_offer),
-       in_kind_value_usd = COALESCE(?5, in_kind_value_usd), wants = COALESCE(?6, wants), next_send_at = CASE WHEN ?2 IS NOT NULL AND ?2 NOT IN ('PROSPECT','PITCHED') THEN NULL ELSE next_send_at END, updated_at = ?7 WHERE id = ?1`,
-  ).bind(deal.id, p.stage ?? null, p.cash_offer_usd ?? null, p.in_kind_offer ?? null, p.in_kind_value_usd ?? null, p.wants ?? null, now.toISOString()).run();
+       in_kind_value_usd = COALESCE(?5, in_kind_value_usd), wants = COALESCE(?6, wants), next_send_at = CASE WHEN ?2 IS NOT NULL AND ?2 NOT IN ('PROSPECT','PITCHED') THEN NULL ELSE next_send_at END,
+       tier = COALESCE(?8, tier), yes_at = CASE WHEN yes_at IS NULL AND ?2 IN ('CALL','WAITING_ON_OWNERS','AGREED','PAID','DELIVERED') THEN ?7 ELSE yes_at END, updated_at = ?7 WHERE id = ?1`,
+  ).bind(deal.id, p.stage ?? null, p.cash_offer_usd ?? null, p.in_kind_offer ?? null, p.in_kind_value_usd ?? null, p.wants ?? null, now.toISOString(), p.tier ?? null).run();
   let decisionCard: string | null = null;
   if (p.stage === "WAITING_ON_OWNERS") decisionCard = await openDecisionCard(ctx.env, (await ctx.env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(deal.id).first<TlcDealRow>())!, now);
   return json({ ok: true, decision_card_id: decisionCard });
@@ -1576,31 +1734,104 @@ export async function handleTlcTicket(ctx: RouteContext): Promise<Response> {
   return json({ ok: true, ...ticketVerdict(paid + 1) });
 }
 
-/** GET /api/tlc/events/:id/onepager — the glossy one-pager, built from the packet and the stored story. */
+/** The month as a brand would see it: the packet's own why-now and sources, never the quarterly trend story. */
+export function clubViewOf(ev: TlcEventRow): TlcClubView {
+  const packet = (() => { try { return JSON.parse(ev.packet_json ?? "{}") as Record<string, unknown>; } catch { return {}; } })();
+  const s = (k: string): string | null => (typeof packet[k] === "string" && (packet[k] as string).trim() ? (packet[k] as string) : null);
+  const sources = (Array.isArray(packet.sources) ? (packet.sources as Array<{ title?: unknown; url?: unknown }>) : [])
+    .filter((x) => typeof x.url === "string" && /^https:\/\//.test(x.url as string))
+    .map((x) => ({ title: String(x.title ?? x.url), url: String(x.url) }));
+  return {
+    topic: ev.topic ?? "",
+    angle: ev.angle,
+    month: ev.month,
+    eventDate: ev.event_date,
+    slot: ev.slot,
+    whyNow: s("why_now"),
+    sources,
+    categories: list<{ category?: string; why?: string; example_brands?: string[] }>(ev.sponsor_categories_json).map((c) => ({ category: String(c.category ?? ""), why: String(c.why ?? ""), example_brands: (c.example_brands ?? []).map(String) })),
+    handsOn: s("hands_on"),
+    takeHome: s("take_home"),
+    recap: ev.recap,
+  };
+}
+
+export async function internalViewOf(env: Env, ev: TlcEventRow): Promise<TlcInternalView> {
+  const deals = await dealsFor(env, ev.id);
+  const agreed = deals.filter((d) => ["AGREED", "PAID", "DELIVERED"].includes(d.stage));
+  const idea = await env.WP_OS_DB.prepare("SELECT origin FROM tlc_idea WHERE status = 'PICKED' AND status_month = ?1 ORDER BY updated_at DESC LIMIT 1").bind(ev.month).first<{ origin: string }>().catch(() => null);
+  return {
+    ...clubViewOf(ev),
+    origin: idea?.origin ?? null,
+    status: ev.status,
+    vetoUntil: ev.veto_until,
+    committedUsd: agreed.reduce((n, d) => n + (d.cash_offer_usd ?? 0), 0),
+    committedPartners: agreed.length,
+    pitchUrl: ev.pitch_token ? pitchPublicUrl(ev.pitch_token) : null,
+  };
+}
+
+const sha256 = async (text: string): Promise<string> =>
+  [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)))].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+/**
+ * What an approval is OF: the exact brand pitches that would be sent now (every upcoming month with
+ * a topic), and the exact playbook text. Any change to either changes its hash and clears the approval.
+ */
+export async function contentHashes(env: Env): Promise<{ pitch: string; playbook: string }> {
+  const evs = await eventsFrom(env, "SELECT * FROM tlc_event WHERE topic IS NOT NULL AND status NOT IN ('DONE','CANCELLED') ORDER BY month");
+  return {
+    pitch: await sha256(evs.map((e) => `${e.month}\n${renderBrandPitch(clubViewOf(e))}`).join("\n\n")),
+    playbook: await sha256(TLC_PLAYBOOK.join("\n")),
+  };
+}
+
+const settingMeta = async (env: Env, key: string): Promise<{ set_by: string | null; set_at: string | null } | null> =>
+  env.WP_OS_DB.prepare("SELECT set_by, set_at FROM tlc_setting WHERE key = ?1").bind(key).first<{ set_by: string | null; set_at: string | null }>();
+
+/** The switch screen's whole state, in plain words. */
+export async function approvalsView(env: Env, settings: Record<string, string | null>) {
+  const hashes = await contentHashes(env);
+  const pitch = approvalState(settings, PITCH_APPROVAL_HASH_SETTING, hashes.pitch);
+  const playbook = approvalState(settings, PLAYBOOK_APPROVAL_HASH_SETTING, hashes.playbook);
+  const pm = await settingMeta(env, PITCH_APPROVAL_HASH_SETTING);
+  const bm = await settingMeta(env, PLAYBOOK_APPROVAL_HASH_SETTING);
+  const evs = await eventsFrom(env, "SELECT * FROM tlc_event WHERE topic IS NOT NULL AND status NOT IN ('DONE','CANCELLED') ORDER BY month");
+  return {
+    pitch: { state: pitch, hash: hashes.pitch, approved_at: pitch === "NOT_APPROVED" ? null : pm?.set_at ?? null },
+    playbook: { state: playbook, hash: hashes.playbook, approved_at: playbook === "NOT_APPROVED" ? null : bm?.set_at ?? null },
+    sending: settings[BRAND_SEND_SETTING] === "on",
+    pitches: evs.map((e) => ({ month: e.month, topic: e.topic, url: e.pitch_token ? pitchPublicUrl(e.pitch_token) : null, pdf_url: e.pitch_token ? `${pitchPublicUrl(e.pitch_token)}/pdf` : null })),
+  };
+}
+
+/** GET /api/tlc/events/:id/onepager — the internal one-pager; `?doc=pitch` shows the brand pitch. */
 export async function handleTlcOnePager(ctx: RouteContext): Promise<Response> {
   const a = await requireManage(ctx);
   if (a instanceof Response) return a;
   const ev = await ctx.env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(ctx.params.id).first<TlcEventRow>();
   if (!ev?.topic) return json({ error: "not_found", detail: "no club with a topic by that id" }, { status: 404 });
-  return new Response(await onePagerFor(ctx.env, ev), { headers: { "content-type": "text/html; charset=utf-8" } });
+  const pitch = new URL(ctx.request.url).searchParams.get("doc") === "pitch";
+  return new Response(pitch ? renderBrandPitch(clubViewOf(ev)) : renderInternalOnePager(await internalViewOf(ctx.env, ev)), { headers: { "content-type": "text/html; charset=utf-8" } });
 }
 
-export async function onePagerFor(env: Env, ev: TlcEventRow): Promise<string> {
-  const story = await env.WP_OS_DB.prepare("SELECT id, story FROM tlc_story ORDER BY created_at DESC LIMIT 1").first<{ id: string; story: string }>();
-  const citations: Citation[] = story
-    ? ((await env.WP_OS_DB.prepare("SELECT title, publisher, url, claim FROM tlc_source WHERE story_id = ?1").bind(story.id).all<Citation>()).results ?? [])
-    : [];
-  const packet = (() => { try { return JSON.parse(ev.packet_json ?? "{}") as { why_now?: string }; } catch { return {}; } })();
-  return renderOnePager({
-    topic: ev.topic ?? "",
-    angle: ev.angle,
-    month: ev.month,
-    eventDate: ev.event_date,
-    whyNow: packet.why_now ?? null,
-    categories: list<{ category: string }>(ev.sponsor_categories_json).map((c) => c.category),
-    story: story?.story ?? null,
-    citations,
-    proof: TLC_PRE_LAUNCH_PROOF,
-    recap: ev.recap,
-  });
+/**
+ * GET /api/tlc-pitch/:token and /api/tlc-pitch/:token/pdf — THE PUBLIC BRAND PITCH (review B2: a
+ * brand could not open the staff-only link). No login: the 128-bit token is the credential, it names
+ * one month, and the page is read-only and carries nothing internal. Unknown token: 404, nothing else.
+ */
+export async function handleTlcPitchPublic(ctx: RouteContext): Promise<Response> {
+  const token = String(ctx.params.token ?? "");
+  if (!/^[0-9a-f]{32}$/.test(token)) return new Response("Not found", { status: 404 });
+  const ev = await ctx.env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE pitch_token = ?1 AND topic IS NOT NULL AND status NOT IN ('CANCELLED')").bind(token).first<TlcEventRow>();
+  if (!ev) return new Response("Not found", { status: 404 });
+  const html = renderBrandPitch(clubViewOf(ev));
+  const headers = { "cache-control": "no-store", "x-robots-tag": "noindex, nofollow", "referrer-policy": "no-referrer" };
+  if (new URL(ctx.request.url).pathname.endsWith("/pdf")) {
+    const out = await renderHtmlPdf(ctx.env, html, { onePage: true });
+    if (out.pdfBase64 === null) return new Response(html, { headers: { ...headers, "content-type": "text/html; charset=utf-8" } });
+    const bytes = Uint8Array.from(atob(out.pdfBase64), (c) => c.charCodeAt(0));
+    return new Response(bytes, { headers: { ...headers, "content-type": "application/pdf", "content-disposition": `inline; filename="The Learning Club - ${ev.topic!.replace(/[^\w &-]+/g, "")}.pdf"` } });
+  }
+  return new Response(html, { headers: { ...headers, "content-type": "text/html; charset=utf-8" } });
 }

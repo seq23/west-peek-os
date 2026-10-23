@@ -121,7 +121,7 @@ describe("the topics card in the database", () => {
     expect(evs.map((e) => e.status)).toEqual(["PLANNING", "PLANNING", "PLANNING"]);
   });
 
-  it("sends both partners the three chosen picks with their one-sheets attached, and nine alternatives", async () => {
+  it("sends Sequoia ONLY the three chosen picks with both documents per month attached as PDFs, and nine alternatives", async () => {
     // The model offers a different January; the chosen one is kept.
     const text = answer(MONTHS, ["Trading & Investing", "Fragrance Lab", "AI Tools for Your Work"]);
     // A stand-in for Browser Rendering: a real PDF shell whose title is the page's <title>, as Chrome writes it.
@@ -137,15 +137,23 @@ describe("the topics card in the database", () => {
       ["2027-02", "Fragrance Lab", "TOPIC_PROPOSED"],
       ["2027-03", "AI Tools for Your Work", "TOPIC_PROPOSED"],
     ]);
-    expect(sends).toHaveLength(2);
+    // TLC mail goes to Sequoia and nobody else (owner, 22 Oct 2026).
+    expect(sends).toHaveLength(1);
     for (const raw of sends) {
-      const body = JSON.parse(raw) as { text: string; attachments?: Array<{ filename: string; content: string; content_type?: string; contentType?: string }> };
+      const body = JSON.parse(raw) as { to: string | string[]; cc?: string[]; text: string; attachments?: Array<{ filename: string; content: string; content_type?: string; contentType?: string }> };
+      expect([body.to].flat()).toEqual(["sequoia@westpeek.ventures"]);
+      expect(body.cc ?? []).toEqual([]);
+      expect(raw).not.toMatch(/scooter@/i);
       for (const m of ["January 2027: Zero-Proof Home Bar", "February 2027: Fragrance Lab", "March 2027: AI Tools for Your Work"]) expect(body.text).toContain(m);
       for (const l of "ABCDEFGHI") expect(body.text).toContain(`Alternative ${l} (Brands spending now): a one-line reason. Brands that would pay: Brand One, Brand Two.`);
       expect(body.text).toContain("/api/tlc/events/tlc_2027-01/onepager");
       expect(body.text).not.toMatch(/reject|not picked|ruled out/i);
       // Rendered PDFs, never the page's HTML source (22 Oct 2026: the partners opened files of code).
-      expect(body.attachments?.map((a) => a.filename)).toEqual(["TLC January 2027 - Zero-Proof Home Bar.pdf", "TLC February 2027 - Fragrance Lab.pdf", "TLC March 2027 - AI Tools for Your Work.pdf"]);
+      expect(body.attachments?.map((a) => a.filename)).toEqual([
+        "TLC January 2027 - Zero-Proof Home Bar - brand pitch.pdf", "TLC January 2027 - Zero-Proof Home Bar - internal one-pager.pdf",
+        "TLC February 2027 - Fragrance Lab - brand pitch.pdf", "TLC February 2027 - Fragrance Lab - internal one-pager.pdf",
+        "TLC March 2027 - AI Tools for Your Work - brand pitch.pdf", "TLC March 2027 - AI Tools for Your Work - internal one-pager.pdf",
+      ]);
       for (const a of body.attachments!) {
         expect(a.content_type ?? a.contentType).toBe("application/pdf");
         const bytes = Buffer.from(a.content, "base64").toString("latin1");

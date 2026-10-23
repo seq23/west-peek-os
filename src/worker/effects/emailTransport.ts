@@ -42,7 +42,7 @@ export interface EmailPayload {
   html?: string;
   from?: string;
   /** Where a reply should go when it is not the sender — the intake mailbox, for an employee's mail. */
-  replyTo?: string;
+  replyTo?: string | readonly string[];
   /**
    * Extra RFC headers. Today this carries exactly one thing: the `References` / `In-Reply-To` pair
    * that lets a reply be matched to the conversation it answers — see `shared/email/thread.ts` for

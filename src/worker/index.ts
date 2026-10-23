@@ -161,7 +161,8 @@ import {
   handleListPackets as handleListRoomPackets,
   handleScheduleRoom, handleVerifyVenue, handleWithdrawSteer,
 } from "./services/roomPacket";
-import { handleTlcApprove, handleTlcDeal, handleTlcIdeaAdd, handleTlcIdeaStatus, handleTlcOnePager, handleTlcOverview, handleTlcTicket } from "./services/learningClub";
+import { handleTlcApprove, handleTlcDeal, handleTlcIdeaAdd, handleTlcIdeaStatus, handleTlcOnePager, handleTlcOverview, handleTlcPitchPublic, handleTlcTicket } from "./services/learningClub";
+import { handleRoomsPartners } from "./services/partnersPanel";
 import {
   handleAdvanceSponsor, handleCreateSponsor, handleListSponsors, handleSponsorAttendeeExport,
   handleSponsorRecap,
@@ -1067,6 +1068,14 @@ const router = new Router()
   .post("/api/tlc/deals/:id", handleTlcDeal)
   .post("/api/tlc/events/:id/tickets", handleTlcTicket)
   .get("/api/tlc/events/:id/onepager", handleTlcOnePager)
+  /*
+   * THE PUBLIC BRAND PITCH (22 Oct 2026; review B2: a brand could not open the staff-only link).
+   * `auth: false` DELIBERATELY: the 128-bit per-month token is the credential, the page is read-only
+   * and carries nothing internal, and an unknown token is a bare 404.
+   */
+  .get("/api/tlc-pitch/:token", handleTlcPitchPublic, { auth: false })
+  .get("/api/tlc-pitch/:token/pdf", handleTlcPitchPublic, { auth: false })
+  .get("/api/rooms/partners", handleRoomsPartners)
   .post("/api/tlc/ideas", handleTlcIdeaAdd)
   .post("/api/tlc/ideas/:id/drop", handleTlcIdeaStatus)
   .post("/api/tlc/ideas/:id/restore", handleTlcIdeaStatus)
