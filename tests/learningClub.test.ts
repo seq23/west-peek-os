@@ -383,6 +383,13 @@ describe("the Learning Club in the database", () => {
     });
     const deals = (await env.WP_OS_DB.prepare("SELECT brand, stage FROM tlc_deal").all<{ brand: string; stage: string }>()).results!;
     expect(deals).toEqual([{ brand: "Leaf Co", stage: "PROSPECT" }]);
+    // 23 Oct 2026: the owner's must-pitch brands (migration 0266) came back with no address, so each is a
+    // "Needs a way in" item naming its months, never a silent drop.
+    const ways = (await env.WP_OS_DB.prepare("SELECT brand, state, months_json FROM tlc_way_in ORDER BY brand").all<{ brand: string; state: string; months_json: string }>()).results!;
+    expect(ways).toEqual([
+      { brand: "Anthropic", state: "OPEN", months_json: '["2027-01","2027-03"]' },
+      { brand: "Google", state: "OPEN", months_json: '["2027-03"]' },
+    ]);
   });
 
   it("HOLDS every brand email while the switch is off: composed, stored, nothing filed or sent", async () => {

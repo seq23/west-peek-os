@@ -534,6 +534,9 @@ export type DripStop = "REPLIED" | "BOUNCED" | "UNSUBSCRIBED" | "DECLINED";
  * over (all four sent) or stopped. Day N counts from the first send, so a held day-0 does not
  * squeeze the rest together.
  */
+/** The model's own picks per club, per batch. Brands we must pitch (tlc_must_pitch) are outside it. */
+export const TLC_BRANDS_PER_CLUB = 5;
+
 export function nextDripAt(step: number, firstSentAt: string | null, now: Date, stopped: DripStop | null): string | null {
   if (stopped) return null;
   if (step >= TLC_DRIP_DAYS.length) return null;

@@ -42,6 +42,7 @@ import { MarketMapPage } from "./pages/MarketMapPage";
 // cards became collapsible and grew a block, a release and a change-your-mind path: three hundred
 // lines of one surface inside the shell is where a file stops being readable.
 import { ApprovalsPage } from "./pages/ApprovalsPage";
+import { OFF_NAV_TITLES } from "./lib/pageTitles";
 import { AiOpsPage } from "./pages/AiOpsPage";
 import { MachinesPage } from "./pages/MachinesPage";
 import { IntentPage } from "./pages/IntentPage";
@@ -448,6 +449,21 @@ const SECONDARY_KEYS: ReadonlySet<string> = new Set(
 
 /** Home is the shell's fallback surface; NAV_GROUPS is authored so it always exists. */
 const NAV_FALLBACK = NAV_ITEMS[0]!;
+
+/**
+ * The header for a key: its nav entry, or its own off-nav title (lib/pageTitles.ts). Never another
+ * page's name: `#/outside-email` used to read "Home" because only the nav was consulted.
+ */
+function navItemFor(key: string): (typeof NAV_ITEMS)[number] {
+  const inNav = NAV_ITEMS.find((n) => n.key === key);
+  if (inNav) return inNav;
+  const off = OFF_NAV_TITLES[key];
+  if (off) {
+    const home = NAV_ITEMS.find((n) => n.key === off.under) ?? NAV_FALLBACK;
+    return { key, label: off.label, group: home.group, secondary: home.secondary };
+  }
+  return NAV_FALLBACK;
+}
 
 // ── Identity ──
 
@@ -2982,7 +2998,7 @@ function Shell() {
     setSignedOut(true);
     me.reload();
   }
-  const activeItem = NAV_ITEMS.find((n) => n.key === active) ?? NAV_FALLBACK;
+  const activeItem = navItemFor(active);
 
   const refresh = useCallback(() => setRefreshNonce((n) => n + 1), []);
   /*

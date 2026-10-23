@@ -22,6 +22,8 @@ import { renderBrandPitch, renderInternalOnePager, type TlcClubView, type TlcInt
 import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
 import { TLC_BRAND_SALES_JOB } from "../../shared/policy/outsideEmail";
 import { outsideEmailAllowed } from "./outsideEmail";
+import { addressReadOffPage, handleMustPitch, liveMustPitch, mustPitchToSearch, queueDeal, type MustPitchFinding } from "./tlcMustPitch";
+import { brandKey } from "../../shared/tlc/mustPitch";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
 import {
   BOOKING_PACK_SHAPE,
@@ -89,6 +91,7 @@ import {
   monthWords,
   needsSwap,
   nextDripAt,
+  TLC_BRANDS_PER_CLUB,
   parseDecisionReply,
   quarterOf,
   rollingTopicMonths,
@@ -1116,7 +1119,13 @@ export function buildBookingPackPrompt(ev: Pick<TlcEventRow, "topic" | "event_da
   ].join("\n");
 }
 
-export function buildBrandBatchPrompt(events: ReadonlyArray<Pick<TlcEventRow, "month" | "topic" | "sponsor_categories_json">>, exclude: readonly string[], playbook: string | null = null, library: Parameters<typeof libraryBlock>[0] = []): string {
+export function buildBrandBatchPrompt(
+  events: ReadonlyArray<Pick<TlcEventRow, "month" | "topic" | "sponsor_categories_json">>,
+  exclude: readonly string[],
+  playbook: string | null = null,
+  library: Parameters<typeof libraryBlock>[0] = [],
+  mustPitch: ReadonlyArray<{ brand: string; months: readonly string[]; reasons: readonly string[] }> = [],
+): string {
   return [
     personaPrompt("Wynn", "TLC Sales & Partnerships"),
     "",
@@ -1124,6 +1133,15 @@ export function buildBrandBatchPrompt(events: ReadonlyArray<Pick<TlcEventRow, "m
     "",
     libraryBlock(library),
     "",
+    // BRANDS WE MUST PITCH (owner, 23 Oct 2026) come first, outside the five-per-club limit.
+    ...(mustPitch.length
+      ? [
+          "FIRST, before choosing any brand of your own: the owner says these brands MUST be pitched. They do not count toward the 5 per club.",
+          ...mustPitch.map((m) => `- ${m.brand}, for ${m.months.map(monthWords).join(" and ")}. Why: ${m.reasons.join(" ")}`),
+          "For each, find a NAMED person whose job is partnerships, events, community, a startup program or developer relations, and their email address exactly as it appears on a live public page, with that page's URL. No guessed addresses. If no address is printed on any page, still return the brand with an empty contact_email, and list every page you checked in pages_checked.",
+          "",
+        ]
+      : []),
     "Find brands to sponsor these clubs:",
     ...events.map((e) => {
       const cats = list<{ category: string; bench?: boolean; excluded_brands?: string[]; featured?: string | null; tier?: string }>(e.sponsor_categories_json);
@@ -1135,8 +1153,10 @@ export function buildBrandBatchPrompt(events: ReadonlyArray<Pick<TlcEventRow, "m
     "Never a peptide seller. No betting brands (sportsbooks, prediction markets) before April 2027, and never a betting brand beside a trading or investing brand.",
     exclude.length ? `Already contacted for that club (do not repeat): ${exclude.join("; ")}.` : "",
     "",
-    "Up to 5 brands per club. For each: a NAMED person whose job is partnerships, events, community or brand marketing, their email address exactly as it appears on a live public page, and that page's URL. No guessed addresses. If you cannot find an address on a page, leave the brand out.",
-    'Return ONLY JSON: {"brands":[{"month":"YYYY-MM","brand":"","category":"","contact_name":"","contact_email":"","contact_source_url":"","why_fit":""}]}',
+    `Up to ${TLC_BRANDS_PER_CLUB} brands per club (the must-pitch brands above are extra). For each: a NAMED person whose job is partnerships, events, community or brand marketing, their email address exactly as it appears on a live public page, and that page's URL. No guessed addresses. If you cannot find an address on a page, leave the brand out.`,
+    mustPitch.length
+      ? 'Return ONLY JSON: {"must_pitch":[{"brand":"","contact_name":"","contact_email":"","contact_source_url":"","pages_checked":[""]}],"brands":[{"month":"YYYY-MM","brand":"","category":"","contact_name":"","contact_email":"","contact_source_url":"","why_fit":""}]}'
+      : 'Return ONLY JSON: {"brands":[{"month":"YYYY-MM","brand":"","category":"","contact_name":"","contact_email":"","contact_source_url":"","why_fit":""}]}',
   ].filter(Boolean).join("\n");
 }
 
@@ -1160,7 +1180,7 @@ export function buildTrendPrompt(playbook: string | null = null, library: Parame
 const TLC_STEPS: Record<string, string[]> = {
   TLC_TOPICS: ["read the owner's seed list and the four criteria", "search live pages for each month's topic", "check every source page", "write the packet and the sponsor categories", "email both partners", "wait 3 days for a no"],
   TLC_BOOKING_PACK: ["search NYC hosts, venues, teachers, food, materials and photographers", "check every page", "price each with a book-by date", "total it against the cap and the sponsor cash", "email both partners"],
-  TLC_BRAND_BATCH: ["search brands in the club's categories", "check each contact page carries the address", "queue each for the four emails"],
+  TLC_BRAND_BATCH: ["pitch the brands we must pitch first", "search brands in the club's categories", "check each contact page carries the address", "queue each for the four emails"],
   TLC_TREND_STORY: ["search live sources on in-person learning clubs", "keep only claims whose page answers", "store the sources", "write the story", "email both partners"],
 };
 
@@ -1566,38 +1586,60 @@ async function runBrandBatch(env: Env, card: SweepCard, now: Date, search: TlcSe
     return { finished: true, blocked: false, progressed: false, detail: "no open club" };
   }
   const existing = ((await env.WP_OS_DB.prepare(`SELECT brand, event_id FROM tlc_deal WHERE event_id IN (${events.map(() => "?").join(",")})`).bind(...events.map((e) => e.id)).all<{ brand: string; event_id: string }>()).results ?? []);
-  const found = await search(env, actorFor(WYNN, card.firm_scope), buildBrandBatchPrompt(events, existing.map((d) => d.brand), await storedPlaybook(env), await researchLibrary(env, card.firm_scope)));
+  // BRANDS WE MUST PITCH FIRST (owner, 23 Oct 2026), searched in the same call, outside the five-per-club cap.
+  const must = await mustPitchToSearch(env, events, existing, card.firm_scope);
+  const mustNames = must.map((m) => m.brand);
+  const found = await search(env, actorFor(WYNN, card.firm_scope), buildBrandBatchPrompt(events, [...existing.map((d) => d.brand), ...mustNames], await storedPlaybook(env), await researchLibrary(env, card.firm_scope), must));
   if (!found.ok) return searchFailed(env, card, "Wynn", found, now);
-  const brands = (jsonIn(found.text)?.brands as Array<Record<string, unknown>> | undefined) ?? [];
+  const parsed = jsonIn(found.text);
+  const findings: MustPitchFinding[] = ((parsed?.must_pitch as Array<Record<string, unknown>> | undefined) ?? []).map((m) => ({
+    brand: str(m.brand),
+    contact_name: str(m.contact_name),
+    contact_email: str(m.contact_email),
+    contact_source_url: str(m.contact_source_url),
+    pages_checked: Array.isArray(m.pages_checked) ? m.pages_checked.map(str).filter(Boolean) : [],
+  }));
+  const mp = await handleMustPitch(env, { events, existing, findings, firmScope: card.firm_scope, now }, check, pageText);
+  const brands = (parsed?.brands as Array<Record<string, unknown>> | undefined) ?? [];
   const added: string[] = [];
   const dropped: string[] = [];
+  const perClub = new Map<string, number>();
+  const mustKeys = new Set((await liveMustPitch(env, card.firm_scope)).map((r) => `${r.month}|${brandKey(r.brand)}`));
   for (const b of brands) {
     const ev = events.find((e) => e.month === str(b.month));
     const brand = str(b.brand);
     const email = str(b.contact_email).toLowerCase();
     const source = str(b.contact_source_url);
     if (!ev || !brand) continue;
+    // A must-pitch brand was handled above, first; it is never a second, capped pick.
+    if (mustKeys.has(`${ev.month}|${brandKey(brand)}`)) continue;
+    if ((perClub.get(ev.id) ?? 0) >= TLC_BRANDS_PER_CLUB) { dropped.push(`${brand}: over the ${TLC_BRANDS_PER_CLUB}-a-club limit`); continue; }
     const never = list<{ excluded_brands?: string[] }>(ev.sponsor_categories_json).flatMap((c) => c.excluded_brands ?? []);
     if (never.some((n) => brand.toLowerCase().includes(n.toLowerCase()) || n.toLowerCase().includes(brand.toLowerCase()))) { dropped.push(`${brand}: competes with a featured partner`); continue; }
     const cat = str(b.category);
     if (isBettingCategory(`${cat} ${brand}`) && ev.month <= TLC_NO_BETTING_THROUGH) { dropped.push(`${brand}: betting brands stay out of Q1 2027`); continue; }
     if (sponsorMixProblems(ev.month, [...list<{ category: string; bench?: boolean }>(ev.sponsor_categories_json), { category: cat }]).length) { dropped.push(`${brand}: ${sponsorMixProblems(ev.month, [...list<{ category: string; bench?: boolean }>(ev.sponsor_categories_json), { category: cat }]).join("; ")}`); continue; }
-    if (!/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/.test(email) || !isUrl(source)) { dropped.push(`${brand}: no address on a page`); continue; }
     if (existing.some((d) => d.event_id === ev.id && d.brand.toLowerCase() === brand.toLowerCase())) continue;
-    // THE ADDRESS IS READ OFF THE PAGE, not taken on the model's word.
-    if (!(await check(source))) { dropped.push(`${brand}: the source page did not answer`); continue; }
-    const text = (await pageText(source)) ?? "";
-    if (!text.toLowerCase().includes(email)) { dropped.push(`${brand}: ${email} is not on ${source}`); continue; }
-    const id = `tld_${crypto.randomUUID()}`;
-    const res = await env.WP_OS_DB.prepare(
-      "INSERT OR IGNORE INTO tlc_deal (id, event_id, brand, category, contact_name, contact_email, contact_source_url, why_fit, next_send_at, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-    ).bind(id, ev.id, brand, str(b.category) || null, str(b.contact_name) || null, email, source, str(b.why_fit) || null, nextDripAt(0, null, now, null), card.firm_scope).run();
-    if ((res.meta?.changes ?? 0) > 0) added.push(`${brand} (${monthWords(ev.month)})`);
+    // THE ADDRESS IS READ OFF THE PAGE, not taken on the model's word — the one check, shared with must-pitch.
+    const notOnPage = await addressReadOffPage(email, source, check, pageText);
+    if (notOnPage) { dropped.push(`${brand}: ${notOnPage}`); continue; }
+    if (await queueDeal(env, { eventId: ev.id, brand, category: cat || null, contactName: str(b.contact_name) || null, contactEmail: email, contactSourceUrl: source, whyFit: str(b.why_fit) || null, firmScope: card.firm_scope }, now)) {
+      added.push(`${brand} (${monthWords(ev.month)})`);
+      perClub.set(ev.id, (perClub.get(ev.id) ?? 0) + 1);
+    }
   }
-  if (added.length === 0) return nothingGood(env, card, "Wynn", `No brand came with an address that is really on its page (${dropped.slice(0, 6).join("; ") || "nothing returned"}). Name brands or a category to try and Wynn runs it again.`);
+  const mustLines = [
+    mp.queued.length ? `• Brands we must pitch, queued first: ${mp.queued.join("; ")}.` : "",
+    ...mp.wayIn.map((w) => `• Needs a way in: ${w}`),
+  ].filter(Boolean);
+  // NEVER A NAG: a week whose only news is a new or changed "Needs a way in" item finishes, and the item
+  // itself is the stop she sees (TLC panel and Approvals). An unchanged week with nothing queued blocks as before.
+  if (added.length === 0 && mp.queued.length === 0 && mp.changed === 0) {
+    return nothingGood(env, card, "Wynn", [`No brand came with an address that is really on its page (${dropped.slice(0, 6).join("; ") || "nothing returned"}). Name brands or a category to try and Wynn runs it again.`, ...mustLines].join("\n"));
+  }
   const gate = brandSendGate(await tlcSettings(env), await tlcOutside(env), await contentHashes(env));
-  await finish(env, card.id, [`• ${added.length} brand(s) queued for the four-email sequence: ${added.join("; ")}.`, gate.open ? "• Sending is on: each email waits for a partner's approval on Approvals." : `• NOTHING SENT: ${gate.reasons.join("; ")}. The emails are composed and held.`, dropped.length ? `• Left out: ${dropped.join("; ")}.` : ""].filter(Boolean).join("\n"));
-  return { finished: true, blocked: false, progressed: false, detail: `${added.length} brand(s) queued` };
+  await finish(env, card.id, [...mustLines, added.length ? `• ${added.length} brand(s) queued for the four-email sequence: ${added.join("; ")}.` : "", gate.open ? "• Sending is on: each email waits for a partner's approval on Approvals." : `• NOTHING SENT: ${gate.reasons.join("; ")}. The emails are composed and held.`, dropped.length ? `• Left out: ${dropped.join("; ")}.` : ""].filter(Boolean).join("\n"));
+  return { finished: true, blocked: false, progressed: false, detail: `${added.length + mp.queued.length} brand(s) queued${mp.wayIn.length ? `, ${mp.wayIn.length} need a way in` : ""}` };
 }
 
 // ── Wynn: the trend story ───────────────────────────────────────────────────────────────────────

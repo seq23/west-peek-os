@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, useApi } from "../lib/api";
 import { PartnersPanel } from "./PartnersPanel";
+import { MustPitchSection } from "./TlcMustPitch";
 
 /**
  * THE TOP OF EVENTS & ROOMS (owner, 22 Oct 2026): "rooms are our event series and TLC is a series within the
@@ -195,6 +196,8 @@ export function LearningClubPanel(): JSX.Element {
               ))}
             </ul>
           )}
+
+          <MustPitchSection months={data.events.filter((e) => e.status !== "DONE" && e.status !== "CANCELLED").map((e) => e.month)} />
 
           <h4>Partners (brands that said yes)</h4>
           <PartnersPanel source="TLC" />
