@@ -124,7 +124,12 @@ describe("the topics card in the database", () => {
   it("sends both partners the three chosen picks with their one-sheets attached, and nine alternatives", async () => {
     // The model offers a different January; the chosen one is kept.
     const text = answer(MONTHS, ["Trading & Investing", "Fragrance Lab", "AI Tools for Your Work"]);
-    const out = await sweepOnce(env, NOW, { tlc: (e, c) => runTlcCard(e, c, { search: async () => ({ ok: true, text, detail: "ok" }), urlCheck: live, now: NOW }) });
+    // A stand-in for Browser Rendering: a real PDF shell whose title is the page's <title>, as Chrome writes it.
+    const renderPdf = async (html: string) => {
+      const title = /<title>([^<]*)<\/title>/.exec(html)![1]!.replace(/&amp;/g, "&");
+      return { pdfBase64: Buffer.from(`%PDF-1.4\n1 0 obj << /Title (${title}) /Producer (Skia/PDF) >> endobj\n%%EOF`, "latin1").toString("base64"), pageCount: 1 };
+    };
+    const out = await sweepOnce(env, NOW, { tlc: (e, c) => runTlcCard(e, c, { search: async () => ({ ok: true, text, detail: "ok" }), urlCheck: live, now: NOW, renderPdf }) });
     expect(out.outcome).toBe("PROGRESSED");
     const evs = (await env.WP_OS_DB.prepare("SELECT month, topic, status FROM tlc_event ORDER BY month").all<{ month: string; topic: string; status: string }>()).results!;
     expect(evs.map((e) => [e.month, e.topic, e.status])).toEqual([
@@ -134,12 +139,19 @@ describe("the topics card in the database", () => {
     ]);
     expect(sends).toHaveLength(2);
     for (const raw of sends) {
-      const body = JSON.parse(raw) as { text: string; attachments?: Array<{ filename: string }> };
+      const body = JSON.parse(raw) as { text: string; attachments?: Array<{ filename: string; content: string; content_type?: string; contentType?: string }> };
       for (const m of ["January 2027: Zero-Proof Home Bar", "February 2027: Fragrance Lab", "March 2027: AI Tools for Your Work"]) expect(body.text).toContain(m);
       for (const l of "ABCDEFGHI") expect(body.text).toContain(`Alternative ${l} (Brands spending now): a one-line reason. Brands that would pay: Brand One, Brand Two.`);
       expect(body.text).toContain("/api/tlc/events/tlc_2027-01/onepager");
       expect(body.text).not.toMatch(/reject|not picked|ruled out/i);
-      expect(body.attachments?.map((a) => a.filename)).toEqual(["TLC January 2027 - Zero-Proof Home Bar.html", "TLC February 2027 - Fragrance Lab.html", "TLC March 2027 - AI Tools for Your Work.html"]);
+      // Rendered PDFs, never the page's HTML source (22 Oct 2026: the partners opened files of code).
+      expect(body.attachments?.map((a) => a.filename)).toEqual(["TLC January 2027 - Zero-Proof Home Bar.pdf", "TLC February 2027 - Fragrance Lab.pdf", "TLC March 2027 - AI Tools for Your Work.pdf"]);
+      for (const a of body.attachments!) {
+        expect(a.content_type ?? a.contentType).toBe("application/pdf");
+        const bytes = Buffer.from(a.content, "base64").toString("latin1");
+        expect(bytes.startsWith("%PDF-")).toBe(true);
+        expect(bytes).not.toMatch(/<html|<div|<!doctype|style=/i);
+      }
     }
   });
 });
