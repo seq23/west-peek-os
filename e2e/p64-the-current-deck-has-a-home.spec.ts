@@ -34,6 +34,13 @@ test("a deck uploaded on Documents becomes a numbered version, is previewed and 
 
   // 1 · Upload the deck on Documents as "The LP deck". The title fills from the file; the type is a list.
   await gotoSurface(page, "Documents");
+  // Upload sits one tap away under "Put a document on the shelf ▾" (owner, 23 Oct 2026: reading first).
+  const openUpload = async () => {
+    const upload = page.getByTestId("document-upload");
+    if (!(await upload.evaluate((el) => (el as HTMLDetailsElement).open))) await upload.locator("summary").click();
+    await expect(page.getByTestId("doc-type")).toBeVisible();
+  };
+  await openUpload();
   await page.getByTestId("doc-type").selectOption("DECK");
   await expect(page.getByTestId("doc-type-means")).toContainText("waits on your approval on Fund strategy");
   await page.getByTestId("doc-file").setInputFiles({ name: "Fund I — as it is in Canva.pdf", mimeType: "application/pdf", buffer: Buffer.from(tinyPdfBase64(), "base64") });
@@ -48,7 +55,7 @@ test("a deck uploaded on Documents becomes a numbered version, is previewed and 
   await expect(deckShelf).toContainText("v1");
   await expect(deckShelf).toContainText("Fund I — as it is in Canva");
   await expect(deckShelf.getByTestId(/^document-deck-state-/)).toContainText("waiting on your decision");
-  await expect(deckShelf.getByRole("button", { name: /^View here$/ }).first()).toBeVisible();
+  await expect(deckShelf.getByRole("button", { name: /^Open here$/ }).first()).toBeVisible();
 
   // 2 · On Fund strategy it waits, previews in place, and approving makes it the current deck.
   await deckShelf.getByRole("button", { name: "Decide on Fund strategy" }).click();
@@ -90,13 +97,19 @@ test("a deck uploaded on Documents becomes a numbered version, is previewed and 
   expect(refused.status(), "v14 was archived by accident; a version waiting on a decision cannot be").toBe(409);
 
   // 4 · Everything else can go in one act; the deck stays; an archived note comes back.
+  await openUpload();
   await page.getByTestId("doc-type").selectOption("DILIGENCE_NOTE");
   await page.getByTestId("doc-file").setInputFiles({ name: "Sensori call notes.txt", mimeType: "text/plain", buffer: Buffer.from("notes") });
   await page.getByTestId("doc-submit").click();
   await expect(page.getByTestId("doc-message")).toContainText("Uploaded doc_");
-  await expect(page.getByTestId("document-list")).toContainText("Diligence note");
-  page.once("dialog", (d) => d.accept("clearing the shelf"));
+  // Filed under its plain-word group (owner, 23 Oct 2026), never the type code.
+  await expect(page.getByTestId("docs-group-deals")).toContainText("Deals & companies");
+  await expect(page.getByTestId("docs-group-deals")).toContainText("Sensori call notes");
+  // Archive sits apart and asks first: a reason, then "Yes, archive all N" — nothing happens on the first tap.
   await page.getByTestId("doc-archive-all").click();
+  await expect(page.getByTestId("doc-archive-all-yes")).toBeDisabled();
+  await page.getByTestId("doc-archive-all-reason").fill("clearing the shelf");
+  await page.getByTestId("doc-archive-all-yes").click();
   await expect(page.getByTestId("doc-message")).toContainText("Kept: v1 (the deck the firm sends), v2 (waiting on your decision)");
   await expect(page.getByTestId("document-list")).toContainText("v1");
   await page.getByTestId("documents-archived").locator("summary").click();

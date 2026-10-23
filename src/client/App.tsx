@@ -14,7 +14,7 @@ import {
   wireFocusRevalidation,
   type MeResponse,
 } from "./lib/api";
-import { DocumentPreview } from "./components/DocumentPreview";
+import { DocumentsPage } from "./pages/DocumentsPage";
 import { LpPage } from "./pages/LpPage";
 import { PortfolioPage } from "./pages/PortfolioPage";
 import { PageHostCard } from "./pages/PageHostCard";
@@ -68,7 +68,6 @@ import { LiveHelpPanel } from "./pages/LiveHelpPanel";
 import { CloseoutPanel } from "./pages/CloseoutPanel";
 import { SetupPage } from "./pages/SetupPage";
 import { ArtifactPage } from "./pages/ArtifactPage";
-import { BuiltOnDemand } from "./pages/ArtifactShelf";
 import { enqueueCapture, flushCaptures, isOnline, queuedCaptures } from "./lib/offlineQueue";
 
 /**
@@ -1606,19 +1605,6 @@ interface ContradictionCandidate {
   rationale: string;
 }
 
-interface DocumentRow {
-  id: string;
-  title: string;
-  doc_type: string;
-  type_label?: string;
-  privacy_label: string;
-  created_at: string;
-  archived_at?: string | null;
-  archive_reason?: string | null;
-  deck?: { version_no: number; state: string; id: string; title?: string | null } | null;
-}
-type DocumentTypeChoice = { key: string; label: string; means: string };
-
 function ResolveContradictionForm({ contradiction, onDone }: { contradiction: ContradictionRow; onDone: () => void }) {
   const [disposition, setDisposition] = useState("RESOLVED");
   const [note, setNote] = useState("");
@@ -1895,293 +1881,6 @@ function CompaniesPage({ me }: { me: MeResponse }) {
         )}
       </ul>
       {selected && <CompanyDetail company={selected} me={me} />}
-    </section>
-  );
-}
-
-function DocumentsPage({ onNavigate }: { onNavigate: (page: string) => void }) {
-  const documents = useApi<{ documents: DocumentRow[]; types: DocumentTypeChoice[] }>("/api/documents");
-  const archived = useApi<{ documents: DocumentRow[] }>("/api/documents?archived=1");
-  /*
-   * ARRIVING FROM "VIEW THE DECK". Fund strategy names a document and hands over; this page opens
-   * it in a viewer at the top and scrolls the list to it. The handoff is a session key rather than
-   * a URL parameter so a bookmarked #/documents stays a plain list. Cleared once read, so a later
-   * visit to Documents is not still pinned to last week's deck.
-   */
-  const [focus, setFocus] = useState<string | null>(() => {
-    try {
-      const id = window.sessionStorage.getItem("wpos.documents.focus");
-      window.sessionStorage.removeItem("wpos.documents.focus");
-      return id;
-    } catch {
-      return null;
-    }
-  });
-  useEffect(() => {
-    if (!focus || !documents.data) return;
-    // The viewer, not the row: what she asked to see is the document, and it opens at the top.
-    document.querySelector('[data-testid="document-viewer"]')?.scrollIntoView({ block: "start" });
-  }, [focus, documents.data]);
-  const all = documents.data?.documents ?? [];
-  const focused = focus ? all.find((d) => d.id === focus) ?? (archived.data?.documents ?? []).find((d) => d.id === focus) ?? null : null;
-  const [title, setTitle] = useState("");
-  const [docType, setDocType] = useState("");
-  const [file, setFile] = useState<File | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const types = documents.data?.types ?? [];
-  const chosenType = types.find((t) => t.key === docType) ?? null;
-
-  /*
-   * THE DECK SITS ON THE SHELF WITH EVERYTHING ELSE. Operator, 15 Sep 2026: no special section —
-   * the versions are documents, grouped under "The LP deck" like every other type. What makes them
-   * findable is the ROW, not a section: each says which version it is (the same v{N} badge Fund
-   * strategy shows), carries the deck version's own title (so Documents and Fund strategy call v15
-   * by one name), and wears its state as a badge. The current one leads, the one waiting on her is
-   * next, and earlier versions sit below in version order. The parking spot for the CURRENT deck
-   * stays on Fund strategy (`DeckPanel.tsx`); this page is the shelf.
-   */
-  const deckRank = (d: DocumentRow): number => (d.deck!.state === "CURRENT" ? 0 : d.deck!.state === "PROPOSED" ? 1 : 2);
-  const byType = new Map<string, DocumentRow[]>();
-  for (const d of all) {
-    const k = d.type_label ?? d.doc_type;
-    byType.set(k, [...(byType.get(k) ?? []), d]);
-  }
-  for (const [k, docs] of byType) {
-    if (docs.some((d) => d.deck)) {
-      byType.set(
-        k,
-        [...docs].sort((a, b) => {
-          if (a.deck && b.deck) return deckRank(a) - deckRank(b) || b.deck.version_no - a.deck.version_no;
-          return a.deck ? -1 : b.deck ? 1 : 0;
-        }),
-      );
-    }
-  }
-  const liveDecks = all.filter((d) => d.deck && (d.deck.state === "CURRENT" || d.deck.state === "PROPOSED"));
-  const others = all.filter((d) => !liveDecks.includes(d));
-
-  // THE TITLE IS THE FILE'S NAME UNTIL SHE SAYS OTHERWISE. "why the title of the document doesnt
-  // auto match the title of the file i upload?" — it did on submit, invisibly; now it fills the box
-  // the moment a file is chosen, and she can change it before uploading.
-  const chooseFile = (chosen: File | null) => {
-    setFile(chosen);
-    if (chosen && !title.trim()) setTitle(chosen.name.replace(/\.[a-z0-9]{2,5}$/i, ""));
-  };
-
-  const download = async (id: string, docTitle: string) => {
-    const headers: Record<string, string> = {};
-    const devUser = getDevUser();
-    if (devUser) headers["x-wpos-dev-user"] = devUser;
-    const res = await fetch(`/api/documents/${id}/download`, { headers });
-    if (res.status !== 200) {
-      setMessage(`Download failed: HTTP ${res.status}`);
-      return;
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = docTitle;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const deckState = (d: DocumentRow): string =>
-    d.deck!.state === "CURRENT"
-      ? "current"
-      : d.deck!.state === "PROPOSED"
-        ? "waiting on your decision"
-        : d.deck!.state === "REJECTED"
-          ? "sent back"
-          : "superseded";
-  const deckStateClass = (d: DocumentRow): string =>
-    d.deck!.state === "CURRENT" ? "badge badge-ok" : d.deck!.state === "PROPOSED" ? "badge badge-gate" : "badge badge-quiet";
-
-  const row = (d: DocumentRow, opts: { archived?: boolean } = {}) => (
-    <li key={d.id} className={d.id === focus ? "card deal-row-selected" : "card"} data-testid={`document-${d.id}`}>
-      <div>
-        {d.deck && (
-          <span className={d.deck.state === "CURRENT" ? "badge badge-ok" : d.deck.state === "PROPOSED" ? "badge badge-gate" : "badge"} data-testid={`document-deck-${d.id}`}>
-            v{d.deck.version_no}
-          </span>
-        )}{" "}
-        {/* A deck row is named the way Fund strategy names it: the version's own title. */}
-        <strong>{d.deck?.title ?? d.title}</strong>
-        {d.deck && (
-          <>
-            {" "}
-            <span className={deckStateClass(d)} data-testid={`document-deck-state-${d.id}`}>{deckState(d)}</span>
-          </>
-        )}
-        <span className="muted small">
-          {" "}· {d.type_label ?? d.doc_type} · {new Date(d.created_at).toLocaleDateString()}
-          {opts.archived && d.archive_reason ? ` · archived: ${d.archive_reason}` : ""}
-        </span>
-      </div>
-      <div className="notification-actions">
-        <button type="button" className="link-button" data-testid={`view-${d.id}`} onClick={() => setFocus(d.id)}>
-          View here
-        </button>
-        <button type="button" className="link-button" data-testid={`download-${d.id}`} onClick={() => download(d.id, d.title)}>
-          Download
-        </button>
-        {d.deck && d.deck.state === "PROPOSED" && (
-          <button type="button" className="btn-strong" onClick={() => onNavigate("fund-strategy")}>
-            Decide on Fund strategy
-          </button>
-        )}
-        {opts.archived ? (
-          <button
-            type="button"
-            className="link-button"
-            data-testid={`doc-restore-${d.id}`}
-            onClick={async () => {
-              const failed = mutationError(await api(`/api/documents/${d.id}/restore`, { method: "POST" }), 200);
-              setMessage(failed ?? "Back on the shelf.");
-              documents.reload();
-              archived.reload();
-            }}
-          >
-            Restore
-          </button>
-        ) : d.deck && (d.deck.state === "CURRENT" || d.deck.state === "PROPOSED") ? null : (
-          /* OFF THE SHELF, NOT DESTROYED. A reason is required because six months from now the
-             reason is the only part that still helps. The current deck and a version waiting on a
-             decision offer no Archive at all — they are retired on Fund strategy, not here. */
-          <button
-            type="button"
-            className="link-button"
-            data-testid={`doc-archive-${d.id}`}
-            onClick={async () => {
-              const reason = window.prompt(`Why are you taking "${d.title}" off the shelf?`);
-              if (!reason || reason.trim().length < 3) return;
-              const failed = mutationError(
-                await api(`/api/documents/${d.id}/archive`, { method: "POST", body: { reason: reason.trim() } }),
-                200,
-              );
-              setMessage(failed ?? `Archived. It is kept, with your reason attached — find it under "Archived" below.`);
-              documents.reload();
-              archived.reload();
-            }}
-          >
-            Archive
-          </button>
-        )}
-      </div>
-    </li>
-  );
-
-  return (
-    <section data-testid="documents-page">
-      {message && <p className="notice" data-testid="doc-message">{message}</p>}
-      {focused && (
-        <div className="card" data-testid="document-viewer">
-          <div className="home-section-head">
-            <h3>
-              {focused.deck ? `v${focused.deck.version_no} — ` : ""}
-              {focused.deck?.title ?? focused.title}
-            </h3>
-            <button type="button" className="link-button" onClick={() => setFocus(null)}>close</button>
-          </div>
-          <DocumentPreview documentId={focused.id} title={focused.title} height="70vh" />
-        </div>
-      )}
-
-      <form
-        className="card"
-        data-testid="document-upload-form"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          setMessage(null);
-          if (!file) {
-            setMessage("Choose a file first.");
-            return;
-          }
-          if (!docType) {
-            setMessage("Say what kind of document this is.");
-            return;
-          }
-          const buffer = await file.arrayBuffer();
-          let binary = "";
-          new Uint8Array(buffer).forEach((b) => (binary += String.fromCharCode(b)));
-          const { status, data } = await api<{ id: string; version?: { sha256: string }; deck_version?: { version_no: number }; note?: string; error?: string; detail?: string }>("/api/documents", {
-            method: "POST",
-            body: { title: title || file.name, doc_type: docType, content_base64: window.btoa(binary), content_type: file.type || "application/octet-stream" },
-          });
-          setMessage(
-            status === 201
-              ? data?.deck_version
-                ? `Recorded as v${data.deck_version.version_no} of the deck. It is not the deck the firm sends until you approve it on Fund strategy.`
-                : `Uploaded ${data!.id}${data!.version ? ` (sha256 ${data!.version.sha256.slice(0, 12)}…)` : ""}.`
-              : `Upload failed: ${data?.detail ?? data?.error ?? status}`,
-          );
-          if (status === 201) {
-            setTitle("");
-            setFile(null);
-            documents.reload();
-          }
-        }}
-      >
-        <h4>Put a document on the shelf</h4>
-        <div className="form-row">
-          <label>
-            Title <input data-testid="doc-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="what a partner would call it" />
-          </label>
-          <label>
-            What is it?{" "}
-            <select data-testid="doc-type" value={docType} onChange={(e) => setDocType(e.target.value)}>
-              <option value="">— pick one —</option>
-              {types.map((t) => (
-                <option key={t.key} value={t.key}>{t.label}</option>
-              ))}
-            </select>
-          </label>
-          <input data-testid="doc-file" aria-label="Choose a file to upload" type="file" onChange={(e) => chooseFile(e.target.files?.[0] ?? null)} />
-        </div>
-        {chosenType && <p className="muted small" data-testid="doc-type-means">{chosenType.means}</p>}
-        <button type="submit" className="btn-strong" data-testid="doc-submit">
-          Upload
-        </button>
-      </form>
-
-      <BuiltOnDemand />
-
-      <div className="home-section-head">
-        <h3>The shelf</h3>
-        {others.length > 0 && (
-          <button
-            type="button"
-            className="link-button"
-            data-testid="doc-archive-all"
-            onClick={async () => {
-              const reason = window.prompt(`Take all ${others.length} of these off the shelf? The current deck and any version waiting on your decision stay. Say why:`);
-              if (!reason || reason.trim().length < 3) return;
-              const res = await api<{ note?: string }>("/api/documents/archive-all", { method: "POST", body: { reason: reason.trim() } });
-              setMessage(mutationError(res, 200) ?? res.data?.note ?? "Archived.");
-              documents.reload();
-              archived.reload();
-            }}
-          >
-            Archive everything here
-          </button>
-        )}
-      </div>
-      <ul data-testid="document-list" className="card-list">
-        {[...byType.entries()].map(([label, docs]) => (
-          <li key={label} className="card">
-            <h4>{label} <span className="count-pill">{docs.length}</span></h4>
-            <ul className="card-list">{docs.map((d) => row(d))}</ul>
-          </li>
-        ))}
-        {all.length === 0 && <li className="state-empty">Nothing on the shelf. Morning briefs are not filed here on purpose — they live on Home and are superseded each day.</li>}
-      </ul>
-
-      {(archived.data?.documents ?? []).length > 0 && (
-        <details data-testid="documents-archived">
-          <summary className="muted small">Archived — {(archived.data?.documents ?? []).length} taken off the shelf, none destroyed</summary>
-          <ul className="card-list">{(archived.data?.documents ?? []).map((d) => row(d, { archived: true }))}</ul>
-        </details>
-      )}
     </section>
   );
 }
@@ -3231,7 +2930,15 @@ function Shell() {
               the status bar's second "N waiting on you" they cost ~130px of an 844px screen, and
               the first waiting row fell under the fold (e2e/home-overhaul.spec.ts, 861 > 844 on
               main). Help Center still carries the purpose; the menu still reaches Notifications. */}
-          {authed && (
+          {/* DOCUMENTS FOLDS ITS INTRO INTO ONE LINE (owner, 23 Oct 2026): the purpose sentences and
+              the host's card pushed the shelf below the fold on a phone. Both are kept, one tap away. */}
+          {authed && active === "documents" ? (
+            <details className="about-page" data-testid="about-this-page">
+              <summary>About this page ▾</summary>
+              <PagePurposeBlock navKey={active} label={activeItem.label} onNavigate={navigate} />
+              <PageHostCard navKey={active} />
+            </details>
+          ) : authed && (
             <div className={active === "home" ? "phone-home-hidden" : "phone-home-kept"}>
               <PagePurposeBlock navKey={active} label={activeItem.label} onNavigate={navigate} />
             </div>
@@ -3240,7 +2947,7 @@ function Shell() {
               host's picture, name and title to be among the first things you see. Renders nothing on
               Admin and on the personal surfaces: `pageHost` returns null there, because Admin is
               machinery rather than a room somebody runs and Home is already signed by its deliverer. */}
-          {authed && <PageHostCard navKey={active} />}
+          {authed && active !== "documents" && <PageHostCard navKey={active} />}
           {!authed && !me.loading && active !== "help" && (
             signedOut ? (
               <SignedOutPage onSignIn={() => setSignedOut(false)} />

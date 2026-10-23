@@ -76,6 +76,13 @@ export interface DeliverInput {
   sourceType?: string | null;
   sourceId?: string | null;
   privacyLabel?: string;
+  /**
+   * FILE ONCE, HAND OVER TO EACH. When the same body goes to several people (the discrepancy
+   * register reaches both partners), every deliverable after the first points at the document the
+   * first one filed instead of filing an identical copy. Without this the Documents shelf carried
+   * every weekly register twice, same title, same day (owner, 23 Oct 2026).
+   */
+  fileWith?: string | null;
 }
 
 /**
@@ -169,7 +176,10 @@ export async function deliver(env: Env, actor: Actor, rawInput: DeliverInput): P
    * place nobody looks, which is what the operator found there. The brief is not lost: it lives in
    * full on Home and in `intelligence_report`. Only the second copy stops being made.
    */
-  if (!row.document_id && kindDef(row.kind)?.file !== false) {
+  if (!row.document_id && input.fileWith) {
+    await env.WP_OS_DB.prepare("UPDATE deliverable SET document_id = ?2 WHERE id = ?1").bind(row.id, input.fileWith).run();
+    row.document_id = input.fileWith;
+  } else if (!row.document_id && kindDef(row.kind)?.file !== false) {
     try {
       const markdown = renderMarkdown(toExport(row, input.preparedFor));
       const { document } = await uploadDocument(env, actor, {
