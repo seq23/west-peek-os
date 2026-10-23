@@ -16,6 +16,8 @@ import { PARTNERS } from "../../shared/registry/partners";
 import { personaPrompt } from "../../shared/registry/aiEmployeePersonas";
 import { isProviderOutage } from "../../shared/ai/providerFailure";
 import type { EmailAttachment } from "../effects/emailTransport";
+import { renderHtmlPdf, type PdfRenderer } from "../effects/htmlPdf";
+import { renderedPdfProblem } from "../../shared/pdf/renderedPdf";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
 import {
   BOOKING_PACK_SHAPE,
@@ -572,6 +574,8 @@ export interface TlcDeps {
   pageText?: (url: string) => Promise<string | null>;
   now?: Date;
   interpret?: Interpreter;
+  /** HTML → PDF for the one-sheets; Browser Rendering by default. */
+  renderPdf?: PdfRenderer;
 }
 export interface TlcRunResult {
   finished: boolean;
@@ -941,7 +945,7 @@ export async function runTlcCard(env: Env, card: SweepCard, deps: TlcDeps = {}):
   const pageText = deps.pageText ?? ((u: string) => pageTextOf(u));
   if (!isTlcKind(card.kind)) return { finished: false, blocked: false, progressed: false, detail: `not a Learning Club card (${card.kind})` };
   try {
-    return await runKind(env, card, now, search, check, pageText);
+    return await runKind(env, card, now, search, check, pageText, deps.renderPdf ?? ((html) => renderHtmlPdf(env, html, { onePage: true })));
   } catch (err) {
     if (err instanceof SteerBlocked) return err.result;
     throw err;
@@ -954,10 +958,10 @@ class SteerBlocked extends Error {
   }
 }
 
-async function runKind(env: Env, card: SweepCard, now: Date, search: TlcSearch, check: (u: string) => Promise<boolean>, pageText: (u: string) => Promise<string | null>): Promise<TlcRunResult> {
+async function runKind(env: Env, card: SweepCard, now: Date, search: TlcSearch, check: (u: string) => Promise<boolean>, pageText: (u: string) => Promise<string | null>, renderPdf: PdfRenderer): Promise<TlcRunResult> {
   switch (card.kind) {
     case "TLC_TOPICS":
-      return runTopics(env, card, now, search, check);
+      return runTopics(env, card, now, search, check, renderPdf);
     case "TLC_BOOKING_PACK":
       return runBookingPack(env, card, now, search, check);
     case "TLC_BRAND_BATCH":
@@ -984,7 +988,7 @@ async function nothingGood(env: Env, card: SweepCard, employee: "Parker" | "Wynn
 
 // ── Parker: topics, with the 3-day veto window ─────────────────────────────────────────────────
 
-async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch, check: (u: string) => Promise<boolean>): Promise<TlcRunResult> {
+async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch, check: (u: string) => Promise<boolean>, renderPdf: PdfRenderer): Promise<TlcRunResult> {
   // STAGE 2 — the veto window has run out (or the card was woken by a reply): read the partners' notes.
   const proposed = await eventsFrom(env, "SELECT * FROM tlc_event WHERE topic_card_id = ?1 AND status = 'TOPIC_PROPOSED' ORDER BY month", card.id);
   if (proposed.length) {
@@ -1123,12 +1127,7 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
     ).bind(k.ev.id, packet.topic, packet.angle, JSON.stringify(packet), JSON.stringify(k.categories), until, card.id, now.toISOString()).run();
   }
   // THE GLOSSY ONE-SHEET PER PICK, as a brand would see it: linked, and attached so it opens from the inbox.
-  const attachments: EmailAttachment[] = [];
-  for (const k of kept) {
-    const ev = (await eventsFrom(env, "SELECT * FROM tlc_event WHERE id = ?1", k.ev.id))[0]!;
-    const html = await onePagerFor(env, ev);
-    attachments.push({ filename: `TLC ${monthWords(ev.month)} - ${k.topic.replace(/[^\w &-]+/g, "").trim()}.html`, content: base64Utf8(html), contentType: "text/html" });
-  }
+  const { attachments, problems: pdfProblems } = await onePagerAttachments(env, kept.map((k) => k.ev.id), renderPdf);
   const email = topicsEmail({
     months: need.map((e) => e.month),
     picks: kept.map((k) => ({ month: k.ev.month, topic: k.topic, origin: k.origin, angle: str(k.pick.angle), categories: k.categories.map((c) => c.category), onePagerUrl: onePagerUrl(k.ev.id) })),
@@ -1144,6 +1143,7 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
       `• Alternatives: ${alternatives.slice(0, TLC_ALTERNATIVES).map((a) => `${a.topic} [${TLC_IDEA_ORIGIN_LABEL[a.origin]}]`).join("; ")}.`,
       regulatory.length ? `• Regulatory check (card only, never emailed): ${regulatory.join(" | ")}` : "",
       dropped.length ? `• Parker's notes (not emailed): ${dropped.join("; ")}.` : "",
+      pdfProblems.length ? `• One-sheet PDFs not attached (linked instead): ${pdfProblems.join("; ")}` : "",
     ].filter(Boolean).join("\n")).run();
   // REGULATORY CHECKS GO TO THE LIBRARY (and the card), never the email.
   for (const r of regulatory) await addResearch(env, { kind: "REGULATORY", title: r.slice(r.indexOf(":") + 1).trim(), topic: r.slice(0, r.indexOf(":")), foundAt: now.toISOString(), foundBy: "Parker", cardId: card.id, firmScope: card.firm_scope });
@@ -1154,14 +1154,30 @@ async function runTopics(env: Env, card: SweepCard, now: Date, search: TlcSearch
   return { finished: false, blocked: false, progressed: true, held: true, waitUntil: until, detail: `proposed ${kept.length} topic(s) and ${TLC_ALTERNATIVES} alternatives; ${TLC_VETO_DAYS}-day veto window until ${until}` };
 }
 
-const onePagerUrl = (eventId: string): string => `https://os.joinwestpeek.com/api/tlc/events/${eventId}/onepager`;
-
-function base64Utf8(text: string): string {
-  const bytes = new TextEncoder().encode(text);
-  let bin = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(bin);
+/**
+ * THE ONE-SHEETS AS RENDERED PDFs (22 Oct 2026). Until today each was attached as its raw HTML
+ * source (`text/html`), and the owner opened three files of code. Each is now printed by the browser
+ * onto one letter page and checked by `renderedPdfProblem` before it may leave: a file that is not a
+ * rendered PDF naming its topic is never attached. The email still links every one-sheet, and the
+ * reason a PDF is missing goes on the card.
+ */
+export async function onePagerAttachments(env: Env, eventIds: readonly string[], renderPdf: PdfRenderer): Promise<{ attachments: EmailAttachment[]; problems: string[] }> {
+  const attachments: EmailAttachment[] = [];
+  const problems: string[] = [];
+  for (const id of eventIds) {
+    const ev = (await eventsFrom(env, "SELECT * FROM tlc_event WHERE id = ?1", id))[0];
+    if (!ev?.topic) continue;
+    const out = await renderPdf(await onePagerFor(env, ev));
+    if (out.pdfBase64 === null) { problems.push(`${ev.topic}: ${out.reason}`); continue; }
+    const bytes = Uint8Array.from(atob(out.pdfBase64), (c) => c.charCodeAt(0));
+    const problem = (await renderedPdfProblem(bytes, ev.topic)) ?? (out.pageCount !== 1 ? `the one-sheet ran to ${out.pageCount} pages` : null);
+    if (problem) { problems.push(`${ev.topic}: ${problem}`); continue; }
+    attachments.push({ filename: `TLC ${monthWords(ev.month)} - ${ev.topic.replace(/[^\w &-]+/g, "").trim()}.pdf`, content: out.pdfBase64, contentType: "application/pdf" });
+  }
+  return { attachments, problems };
 }
+
+const onePagerUrl = (eventId: string): string => `https://os.joinwestpeek.com/api/tlc/events/${eventId}/onepager`;
 
 /**
  * A SEARCH THE MACHINE COULD NOT SERVE IS NOT AN ATTEMPT (22 Oct 2026). When every search lane was down —

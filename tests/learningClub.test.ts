@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { deflateSync } from "node:zlib";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import {
@@ -350,5 +352,89 @@ describe("TLC pre-launch proof states the confirmed community size", () => {
     expect(TLC_PRE_LAUNCH_PROOF).toContain(TLC_CONFIRMED_COMMUNITY_LINE);
     const counted = TLC_PRE_LAUNCH_PROOF.filter((l) => /\d{1,3},\d{3}/.test(l));
     expect(counted).toEqual([TLC_CONFIRMED_COMMUNITY_LINE]);
+  });
+});
+
+// 22 Oct 2026: the owner had the Workshops line taken off every one-pager. The proof is now exactly
+// the Rooms line and the confirmed community line, in that order; nothing else may creep back in.
+describe("TLC pre-launch proof carries no Workshops line", () => {
+  it("is exactly the Rooms line and the confirmed community line, and the rendered page never says Workshops", async () => {
+    const { TLC_PRE_LAUNCH_PROOF, renderOnePager } = await import("../src/shared/tlc/learningClub");
+    expect(TLC_PRE_LAUNCH_PROOF).toEqual([
+      "West Peek Rooms: the firm's in-person gatherings. The Learning Club is their monthly New York edition.",
+      TLC_CONFIRMED_COMMUNITY_LINE,
+    ]);
+    expect(TLC_PRE_LAUNCH_PROOF.some((l) => /workshop/i.test(l))).toBe(false);
+    const html = renderOnePager({ topic: "Fragrance Lab", angle: null, month: "2027-02", eventDate: null, whyNow: "why", categories: ["Scent"], story: null, citations: [], proof: TLC_PRE_LAUNCH_PROOF, recap: null });
+    expect(html).not.toMatch(/West Peek Workshops/i);
+    expect(html).not.toMatch(/West Peek Live/i);
+  });
+});
+
+// The owner's About block, word for word, on every one-pager (22 Oct 2026).
+const TLC_ABOUT_EXACT =
+  "West Peek Ventures is a venture firm and community. We have facilitated more than $100M in secondary transactions, with late-stage positions including Higgsfield, Databricks and Stripe, among others. Our community of more than 5,000 founders, operators, investors, creatives and builders meets in person through West Peek Rooms, our event series. The Learning Club is a series within Rooms: small, hands-on deep dives in New York.";
+describe("TLC one-pager About West Peek Ventures block", () => {
+  it("is the owner's exact text, keeps the copy rules, and is on the page whether or not a recap exists", async () => {
+    const { TLC_ABOUT_WEST_PEEK, TLC_PRE_LAUNCH_PROOF, renderOnePager } = await import("../src/shared/tlc/learningClub");
+    expect(TLC_ABOUT_WEST_PEEK).toBe(TLC_ABOUT_EXACT);
+    expect(TLC_ABOUT_WEST_PEEK).not.toMatch(/—|–|\$500M|Fund I\b|fund size|carry|management fee|Parker|Wynn|\bcard\b/i);
+    expect(TLC_ABOUT_WEST_PEEK).toMatch(/\bWe\b/);
+    // The only head-count it states is the confirmed 5,000.
+    expect(TLC_ABOUT_WEST_PEEK.match(/\d{1,3},\d{3}/g)).toEqual(["5,000"]);
+    for (const recap of [null, "Twenty-eight people made a bar."]) {
+      const html = renderOnePager({ topic: "AI Tools", angle: null, month: "2027-03", eventDate: null, whyNow: "why", categories: ["Software"], story: null, citations: [], proof: TLC_PRE_LAUNCH_PROOF, recap });
+      expect(html).toContain("<h2>About West Peek Ventures</h2>");
+      expect(html).toContain(`<p>${TLC_ABOUT_EXACT}</p>`);
+      expect(html).toContain("<title>The Learning Club: AI Tools</title>");
+    }
+  });
+});
+
+// 22 Oct 2026: the topics email attached each one-sheet as its raw HTML source, and the owner opened
+// files full of code. A one-sheet leaves only as a rendered PDF that names its topic.
+describe("TLC one-sheet attachments are rendered PDFs, never HTML source", () => {
+  const fixture = () => new Uint8Array(readFileSync(new URL("./fixtures/tlc-onepager-rendered.pdf", import.meta.url)));
+  const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64");
+  const htmlAsPdf = (html: string) => new TextEncoder().encode(`%PDF-1.4\n1 0 obj << /Title (Zero-Proof Home Bar) >> endobj\n2 0 obj << /Length ${html.length} >>\nstream\nBT (${html}) Tj ET\nendstream\nendobj\n%%EOF`);
+
+  it("the check passes a browser-rendered one-sheet and refuses HTML written into a PDF, raw or compressed", async () => {
+    const { renderedPdfProblem } = await import("../src/shared/pdf/renderedPdf");
+    const { renderOnePager, TLC_PRE_LAUNCH_PROOF } = await import("../src/shared/tlc/learningClub");
+    expect(await renderedPdfProblem(fixture(), "Zero-Proof Home Bar")).toBeNull();
+    expect(await renderedPdfProblem(fixture(), "Fragrance Lab")).toMatch(/does not name "Fragrance Lab"/);
+    const html = renderOnePager({ topic: "Zero-Proof Home Bar", angle: null, month: "2027-01", eventDate: null, whyNow: "why", categories: ["Glass"], story: null, citations: [], proof: TLC_PRE_LAUNCH_PROOF, recap: null });
+    expect(await renderedPdfProblem(new TextEncoder().encode(html), "Zero-Proof Home Bar")).toBe("the file is not a PDF");
+    expect(await renderedPdfProblem(htmlAsPdf(html), "Zero-Proof Home Bar")).toMatch(/HTML source code \(<!doctype\)/);
+    for (const tag of ['<div class="fact">', "<html lang=\"en\">", 'style="color:red"']) {
+      expect(await renderedPdfProblem(htmlAsPdf(`Zero-Proof Home Bar ${tag}`), "Zero-Proof Home Bar")).toMatch(/HTML source code/);
+    }
+    const deflated = new Uint8Array(deflateSync(Buffer.from(`BT (${html}) Tj ET`)));
+    const head = new TextEncoder().encode(`%PDF-1.4\n1 0 obj << /Title (Zero-Proof Home Bar) >> endobj\n2 0 obj << /Length ${deflated.length} /Filter /FlateDecode >>\nstream\n`);
+    const tail = new TextEncoder().encode("\nendstream\nendobj\n%%EOF");
+    expect(await renderedPdfProblem(new Uint8Array([...head, ...deflated, ...tail]), "Zero-Proof Home Bar")).toMatch(/HTML source code/);
+  });
+
+  it("the topics email attaches each one-sheet as application/pdf, and a render that is HTML source is never attached", async () => {
+    const { onePagerAttachments } = await import("../src/worker/services/learningClub");
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_event (id, month, event_date, topic) VALUES ('tlce_pdf_guard', '2031-07', '2031-07-15', 'Zero-Proof Home Bar')").run();
+    const seen: string[] = [];
+    const good = await onePagerAttachments(env, ["tlce_pdf_guard"], async (html) => { seen.push(html); return { pdfBase64: b64(fixture()), pageCount: 1 }; });
+    expect(seen[0]).toContain("<title>The Learning Club: Zero-Proof Home Bar</title>");
+    expect(good.problems).toEqual([]);
+    expect(good.attachments).toHaveLength(1);
+    expect(good.attachments[0]!.contentType).toBe("application/pdf");
+    expect(good.attachments[0]!.filename).toBe("TLC July 2031 - Zero-Proof Home Bar.pdf");
+    expect(Buffer.from(good.attachments[0]!.content, "base64").subarray(0, 5).toString("latin1")).toBe("%PDF-");
+
+    const bad = await onePagerAttachments(env, ["tlce_pdf_guard"], async (html) => ({ pdfBase64: b64(htmlAsPdf(html)), pageCount: 1 }));
+    expect(bad.attachments).toEqual([]);
+    expect(bad.problems[0]).toMatch(/^Zero-Proof Home Bar: the PDF carries HTML source code/);
+    const long = await onePagerAttachments(env, ["tlce_pdf_guard"], async () => ({ pdfBase64: b64(fixture()), pageCount: 2 }));
+    expect(long.attachments).toEqual([]);
+    expect(long.problems).toEqual(["Zero-Proof Home Bar: the one-sheet ran to 2 pages"]);
+    const none = await onePagerAttachments(env, ["tlce_pdf_guard"], async () => ({ pdfBase64: null, reason: "no browser" }));
+    expect(none).toEqual({ attachments: [], problems: ["Zero-Proof Home Bar: no browser"] });
+    await env.WP_OS_DB.prepare("DELETE FROM tlc_event WHERE id = 'tlce_pdf_guard'").run();
   });
 });

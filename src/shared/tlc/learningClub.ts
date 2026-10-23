@@ -1,3 +1,4 @@
+import { TLC_ABOUT_WEST_PEEK } from "./aboutWestPeek";
 /**
  * WEST PEEK ROOMS — THE LEARNING CLUB (TLC) EDITION. Owner-approved 22 Oct 2026.
  *
@@ -588,7 +589,7 @@ export function renderOnePager(p: OnePagerInput): string {
   const cites = p.citations.map((c, i) => `<li id="s${i + 1}"><a href="${esc(c.url)}">${esc(c.title)}</a>${c.publisher ? `, ${esc(c.publisher)}` : ""}</li>`).join("");
   const proof = p.proof.map((x) => `<li>${esc(x)}</li>`).join("");
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>The Learning Club</title>
+<title>The Learning Club: ${esc(p.topic)}</title>
 <style>
 :root{--bg:#FFFFFF;--ink:#050505;--muted:#5F5B55;--line:#D9D2C6;--accent:#F05A1A;--card:#F7F2EA}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#050505;--ink:#FFFFFF;--muted:#A8A29A;--line:#2A2A2A;--card:#171717}}
@@ -605,6 +606,12 @@ h2{font-size:14px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
 ul{padding-left:20px}li{margin:4px 0}.cats{columns:2;column-gap:28px}@media (max-width:560px){.cats{columns:1}}
 .note{border-left:3px solid var(--accent);padding:2px 0 2px 14px;color:var(--muted)}
 a{color:inherit}small{color:var(--muted)}footer{margin-top:44px;border-top:1px solid var(--line);padding-top:16px;color:var(--muted);font-size:13px}
+.about{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-top:28px}.about h2{margin:0 0 6px}.about p{margin:0}
+@page{size:letter;margin:.45in}
+@media print{:root,:root:not([data-theme="light"]),:root[data-theme="dark"]{--bg:#FFFFFF;--ink:#050505;--muted:#5F5B55;--line:#D9D2C6;--card:#F7F2EA}
+body{font-size:13px;line-height:1.45;-webkit-print-color-adjust:exact;print-color-adjust:exact}main{max-width:none;padding:0}
+h1{font-size:40px}h2{margin:18px 0 6px;font-size:12px}.lede{font-size:15px}.facts{grid-template-columns:repeat(4,1fr);margin:16px 0}.fact{padding:10px 12px}.fact b{font-size:18px}
+.ros{columns:2;column-gap:28px}.src{font-size:11px;columns:2;column-gap:28px}li{margin:2px 0}.fact,.about,.note,li{break-inside:avoid}.about{margin-top:18px}footer{margin-top:18px}}
 </style></head><body><main>
 <div class="eyebrow">West Peek Rooms · The Learning Club</div>
 <h1>${esc(p.topic)}</h1>
@@ -619,7 +626,7 @@ a{color:inherit}small{color:var(--muted)}footer{margin-top:44px;border-top:1px s
 <p>${esc(p.story ?? p.whyNow ?? "")}</p>
 <h2>The format</h2>
 <p>A teacher who does this for a living leads the group through ${esc(p.topic)} for one afternoon or evening. A real meal, materials and a photographer are part of it, and everyone leaves with something they made or learned. Attendees pay for their seat, so the people in the room chose to be there.</p>
-<ol>${runOfShowLines().map((l) => `<li>${esc(l)}</li>`).join("")}</ol>
+<ol class="ros">${runOfShowLines().map((l) => `<li>${esc(l)}</li>`).join("")}</ol>
 <h2>Sponsor categories</h2>
 <ul class="cats">${cats}</ul>
 <h2>What sponsors receive</h2>
@@ -627,7 +634,8 @@ a{color:inherit}small{color:var(--muted)}footer{margin-top:44px;border-top:1px s
 <p class="note">We never share attendee names, emails or lists with sponsors.</p>
 <h2>${p.recap ? "The last club" : "Who is behind it"}</h2>
 ${p.recap ? `<p>${esc(p.recap)}</p>` : `<ul>${proof}</ul>`}
-${cites ? `<h2>Sources</h2><ol>${cites}</ol>` : ""}
+${cites ? `<h2>Sources</h2><ol class="src">${cites}</ol>` : ""}
+<section class="about"><h2>About West Peek Ventures</h2><p>${esc(TLC_ABOUT_WEST_PEEK)}</p></section>
 <footer>West Peek Rooms · New York City · a reply to the email this came with is the quickest way to reach us.</footer>
 </main></body></html>`;
 }
@@ -718,10 +726,11 @@ export function quarterOf(at: Date): string {
   return `${at.getUTCFullYear()}-Q${Math.floor(at.getUTCMonth() / 3) + 1}`;
 }
 
+export { TLC_ABOUT_WEST_PEEK } from "./aboutWestPeek";
+
 /** The real history the one-pager leans on before the first club has run. No invented case study. */
 export const TLC_PRE_LAUNCH_PROOF: readonly string[] = [
   "West Peek Rooms: the firm's in-person gatherings. The Learning Club is their monthly New York edition.",
-  "West Peek Workshops: free, hands-on virtual sessions on West Peek Live (most recently AI in business, September 2026).",
   "The West Peek community: more than 5,000 founders, operators, investors, creatives and builders.",
 ];
 
