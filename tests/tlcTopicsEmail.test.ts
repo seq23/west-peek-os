@@ -54,7 +54,7 @@ const NOW = new Date("2026-10-22T20:00:00.000Z");
 const live = async (): Promise<boolean> => true;
 const answer = (months: string[], topics: string[], altCount = TLC_ALTERNATIVES) => JSON.stringify({
   picks: months.map((m, i) => ({
-    month: m, topic: topics[i], origin: "TREND", angle: "an angle", why_now: "why", criteria: {}, hands_on: "make it", take_home: "a thing", teacher_profile: "an expert",
+    month: m, topic: topics[i], origin: "TREND", angle: "an angle", why_now: "why", criteria: {}, hands_on: "make it", take_home: "a thing", teacher_profile: "an expert", ai_segment: "Guests use an AI assistant on their own notes.",
     sponsor_categories: ["A", "B", "C", "D", "E", "F"].map((c) => ({ category: `${c} category`, why: "fits", example_brands: [] })),
     sources: [{ title: "Real page", url: `https://news.example/${i}` }],
   })),

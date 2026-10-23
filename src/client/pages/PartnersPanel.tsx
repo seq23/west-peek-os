@@ -10,7 +10,7 @@ import { useApi } from "../lib/api";
 interface PanelPartner {
   id: string;
   brand: string;
-  role: "Partner" | "Presenting" | "In kind";
+  role: string;
   amountUsd: number;
   stage: "SAID_YES" | "CALL" | "AGREED" | "PAID";
   stageWords: string;
@@ -27,6 +27,8 @@ interface PanelEvent {
   committedUsd: number;
   progressWords: string;
   progressPct: number | null;
+  inKindWords: string | null;
+  warnings: string[];
 }
 
 const usd = (n: number): string => `$${Math.round(n).toLocaleString("en-US")}`;
@@ -37,7 +39,7 @@ export function PartnersPanel(props: { source: "TLC" | "ROOMS" }): JSX.Element {
   if (res.loading) return <p className="state-empty">Reading the partners…</p>;
   if (res.status === 403) return <></>;
   if (!res.data) return <p className="state-empty">The partners could not be read just now. Reload the page to try again.</p>;
-  const events = res.data.events.filter((e) => e.source === props.source && (props.source === "TLC" || e.partners.length > 0));
+  const events = res.data.events.filter((e) => e.source === props.source && (props.source === "TLC" || e.partners.length > 0 || !!e.inKindWords));
   if (events.length === 0) {
     return <p className="state-empty" data-testid={`partners-empty-${props.source}`}>No brand has said yes yet.</p>;
   }
@@ -55,6 +57,8 @@ export function PartnersPanel(props: { source: "TLC" | "ROOMS" }): JSX.Element {
               )}{" "}
               <span data-testid={`partners-progress-${e.eventId}`}>{e.progressWords}</span>
             </div>
+            {e.inKindWords && <div className="small" data-testid={`partners-inkind-${e.eventId}`}>{e.inKindWords} <span className="muted">(not counted toward the target)</span></div>}
+            {e.warnings.map((w) => <div key={w} className="notice">{w}</div>)}
             {e.partners.length === 0 ? (
               <div className="muted small">No brand has said yes for this one yet.</div>
             ) : (

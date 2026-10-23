@@ -67,14 +67,15 @@ describe("the ideas list", () => {
     const months = ["2027-01", "2027-02", "2027-03"];
     const text = JSON.stringify({
       picks: months.map((m, i) => ({
-        month: m, topic: ["Trading & Investing", "Matcha Lab", "Film Walks"][i], origin: ["BRANDS_SPENDING", "BRANDS_SPENDING", "TREND"][i], angle: "an angle", why_now: "w", hands_on: "h", take_home: "t", teacher_profile: "p",
+        month: m, topic: ["Trading & Investing", "Matcha Lab", "Film Walks"][i], origin: ["BRANDS_SPENDING", "BRANDS_SPENDING", "TREND"][i], angle: "an angle", why_now: "w", hands_on: "h", take_home: "t", teacher_profile: "p", ai_segment: "Guests use an AI assistant on their own work.",
         regulatory_note: i === 0 ? "Card-only note: brokerages need FINRA-reviewed copy." : "",
         sponsor_categories: ["A", "B", "C", "D", "E"].map((c) => ({ category: c, why: "", example_brands: [] })), sources: [{ title: "s", url: `https://news.example/${i}` }],
       })),
       alternatives: [
         // As it came back on 22 Oct: the partner's idea under a subtitle and a schedule.
+        // 22 Oct 2026 (owner): a standalone peptides topic is never run, so it is refused even as an alternative.
         { topic: "Peptides & Biohacking: New Year Reset (Thursday evening, 6–10 pm)", origin: "OWNER_IDEA", reason: "r", brands: ["b"] },
-        ...Array.from({ length: TLC_ALTERNATIVES - 1 }, (_, i) => ({ topic: `Alt ${"BCDEFGHI"[i]}`, origin: i % 2 ? "BRANDS_SPENDING" : "TREND", reason: "r", brands: ["b"] })),
+        ...Array.from({ length: TLC_ALTERNATIVES }, (_, i) => ({ topic: `Alt ${"BCDEFGHIJ"[i]}`, origin: i % 2 ? "BRANDS_SPENDING" : "TREND", reason: "r", brands: ["b"] })),
       ],
       found_ideas: [],
     });
@@ -92,9 +93,11 @@ describe("the ideas list", () => {
     expect(by("Trading & Investing")).toMatchObject({ origin: "OWNER_IDEA", status: "PICKED", status_month: "2027-01" });
     expect(by("Matcha Lab")).toMatchObject({ origin: "BRANDS_SPENDING", status: "PICKED", status_month: "2027-02" });
     expect(by("Alt B")).toMatchObject({ origin: "TREND", status: "ALTERNATIVE" });
-    // Weighed on merit and listed as an alternative, under the partner's own name.
-    expect(by("Peptides and biohacking")).toMatchObject({ origin: "OWNER_IDEA", status: "ALTERNATIVE" });
+    // Still the partner's idea on the list, but never offered as a topic: do not run (FDA warning letters).
+    expect(by("Peptides and biohacking")).toMatchObject({ origin: "OWNER_IDEA" });
+    expect(by("Peptides and biohacking").status).not.toBe("ALTERNATIVE");
     expect(ideas.filter((i) => /peptides/i.test(i.topic))).toHaveLength(1);
+    expect(by("Alt J")).toMatchObject({ status: "ALTERNATIVE" });
     const card = await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ description: string }>();
     expect(card!.description).toContain("2027-01 Trading & Investing [Partner idea]");
     expect(card!.description).toContain("Alt B [Trend]");

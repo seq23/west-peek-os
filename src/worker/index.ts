@@ -161,7 +161,7 @@ import {
   handleListPackets as handleListRoomPackets,
   handleScheduleRoom, handleVerifyVenue, handleWithdrawSteer,
 } from "./services/roomPacket";
-import { handleTlcApprove, handleTlcDeal, handleTlcIdeaAdd, handleTlcIdeaStatus, handleTlcOnePager, handleTlcOverview, handleTlcPitchPublic, handleTlcTicket } from "./services/learningClub";
+import { handleTlcApprove, handleTlcDeal, handleTlcIdeaAdd, handleTlcIdeaStatus, handleTlcOnePager, handleTlcOverview, handleTlcPitchPublic, handleTlcPlan, handleTlcTicket } from "./services/learningClub";
 import { handleRoomsPartners } from "./services/partnersPanel";
 import {
   handleAdvanceSponsor, handleCreateSponsor, handleListSponsors, handleSponsorAttendeeExport,
@@ -1076,6 +1076,7 @@ const router = new Router()
   .get("/api/tlc-pitch/:token", handleTlcPitchPublic, { auth: false })
   .get("/api/tlc-pitch/:token/pdf", handleTlcPitchPublic, { auth: false })
   .get("/api/rooms/partners", handleRoomsPartners)
+  .post("/api/tlc/events/:id/plan", handleTlcPlan)
   .post("/api/tlc/ideas", handleTlcIdeaAdd)
   .post("/api/tlc/ideas/:id/drop", handleTlcIdeaStatus)
   .post("/api/tlc/ideas/:id/restore", handleTlcIdeaStatus)

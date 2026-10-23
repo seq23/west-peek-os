@@ -83,7 +83,14 @@ describe("the rules, pure", () => {
     expect(e.netUsd).toBeGreaterThan(e.sponsorNetUsd);
     // 40 paid tickets can never carry a club to the target.
     expect(econ(9_000, 0, 40).hitsTarget).toBe(false);
-    expect(econ(9_000, 5_001, 0).overCostCap).toBe(true);
+    // The cost budget is $15,000 now (owner, 22 Oct 2026), and a club with its own goal carries its own budget.
+    expect(econ(30_000, 15_000, 0).overCostCap).toBe(false);
+    expect(econ(30_000, 15_001, 0).overCostCap).toBe(true);
+    expect(eventEconomics({ sponsorCashUsd: 40_000, committedCostsUsd: 25_000, tickets: [], costBudgetUsd: 30_000 }).overCostCap).toBe(false);
+    expect(eventEconomics({ sponsorCashUsd: 40_000, committedCostsUsd: 30_001, tickets: [], costBudgetUsd: 30_000 }).overCostCap).toBe(true);
+    // $25,000 raised less $15,000 spent is exactly the $10,000 net target; $7,500 stays the escalation line.
+    expect(econ(25_000, 15_000, 0).hitsTarget).toBe(true);
+    expect(econ(22_499, 15_000, 0).hitsFloor).toBe(false);
   });
 
   it("goes only at 21 and 14 days, and needs 25 PAID tickets two weeks out", () => {
@@ -94,6 +101,11 @@ describe("the rules, pure", () => {
     expect(short.reasons.join(" ")).toMatch(/24 paid ticket/);
     expect(short.options).toHaveLength(3);
     expect(goAheadCheck({ daysOut: 14, economics: econ(10_000, 2_000, 25) }).verdict).toBe("GO");
+    // A room the partners sized for 60–75 needs 60 paid two weeks out, and caps tickets at 75.
+    expect(goAheadCheck({ daysOut: 14, economics: econ(10_000, 2_000, 59), seats: { min: 60, max: 75 } }).reasons.join(" ")).toMatch(/59 paid ticket\(s\), under the 60 needed/);
+    expect(goAheadCheck({ daysOut: 14, economics: econ(10_000, 2_000, 60), seats: { min: 60, max: 75 } }).verdict).toBe("GO");
+    expect(ticketVerdict(74, { min: 60, max: 75 }).verdict).toBe("OPEN");
+    expect(ticketVerdict(75, { min: 60, max: 75 }).verdict).toBe("FULL");
     expect(goAheadCheck({ daysOut: 21, economics: econ(7_000, 0, 40) }).verdict).toBe("ESCALATE");
   });
 
@@ -214,20 +226,31 @@ describe("the rules, pure", () => {
     expect(changed.reasons).toEqual(["the brand pitch changed after it was approved; approve it again"]);
   });
 
-  it("prices a club at $5,000 per partner or $15,000 presenting, needs $15,000 cash for $10,000 net, and promises no exclusivity", async () => {
+  it("prices Title $25,000, Partner $5,000, Lead $10,000, Presenting $15,000 and a Product partner in kind; the goal is $25,000 raised and no exclusivity is promised", async () => {
     const m = await import("../src/shared/tlc/learningClub");
-    expect(m.TLC_TIERS.PARTNER.priceUsd).toBe(5_000);
-    expect(m.TLC_TIERS.PRESENTING.priceUsd).toBe(15_000);
-    expect(m.TLC_SPONSOR_CASH_TARGET_USD).toBe(15_000);
-    expect(m.TLC_PARTNERS_TO_TARGET).toBe(3);
-    // Three partners, or one presenting partner, at the cost cap is exactly the $10,000 net target.
-    expect(eventEconomics({ sponsorCashUsd: 3 * 5_000, committedCostsUsd: 5_000, tickets: [] }).hitsTarget).toBe(true);
-    expect(eventEconomics({ sponsorCashUsd: 15_000, committedCostsUsd: 5_000, tickets: [] }).sponsorNetUsd).toBe(10_000);
-    expect(eventEconomics({ sponsorCashUsd: 2 * 5_000, committedCostsUsd: 5_000, tickets: [] }).hitsFloor).toBe(false);
+    expect(m.TLC_TIER_KEYS).toEqual(["TITLE", "PARTNER", "LEAD", "PRESENTING", "PRODUCT"]);
+    expect([m.TLC_TIERS.TITLE.priceUsd, m.TLC_TIERS.PARTNER.priceUsd, m.TLC_TIERS.LEAD.priceUsd, m.TLC_TIERS.PRESENTING.priceUsd, m.TLC_TIERS.PRODUCT.priceUsd]).toEqual([25_000, 5_000, 10_000, 15_000, null]);
+    expect(m.tierCashUsd("PRODUCT")).toBe(0);
+    expect(m.TLC_SPONSOR_GOAL_USD).toBe(25_000);
+    expect(m.TLC_COST_BUDGET_USD).toBe(15_000);
+    expect(m.TLC_SPONSOR_GOAL_USD - m.TLC_COST_BUDGET_USD).toBe(m.TLC_NET_TARGET_USD);
+    expect(m.TLC_PARTNERS_TO_TARGET).toBe(5);
+    expect(m.TLC_TARGET_PATH).toMatch(/one Title partner at \$25,000; or a mix: at least 5 partners at \$5,000, or larger sponsors at \$10,000–\$15,000/);
+    expect(m.seasonOption()).toMatch(/Partner \$15,000, Lead partner \$30,000, Presenting partner \$45,000, or Title partner \$75,000/);
+    // A Title partner is the only cash partner that night; product partners are another matter.
+    expect(m.titleConflict([{ id: "a", tier: "PARTNER" }], { id: "t", tier: "TITLE" })).toMatch(/only cash partner/);
+    expect(m.titleConflict([{ id: "t", tier: "TITLE" }], { id: "b", tier: "LEAD" })).toMatch(/Title partner/);
+    expect(m.titleConflict([{ id: "t", tier: "TITLE" }], { id: "p", tier: "PRODUCT" })).toBeNull();
+    expect(m.titleConflict([{ id: "p", tier: "PRODUCT" }], { id: "t", tier: "TITLE" })).toBeNull();
+    // Pace: 40% of the goal by 60 days out, 60% by 42.
+    expect(m.paceCheck(60, 9_999)).toEqual({ checkpoint: 60, neededUsd: 10_000, behind: true });
+    expect(m.paceCheck(42, 15_000)).toEqual({ checkpoint: 42, neededUsd: 15_000, behind: false });
+    expect(m.paceCheck(50, 0)).toBeNull();
     for (const text of [m.TLC_PLAYBOOK.join(" "), sponsorshipAgreement({ brand: "Acme", topic: "T", eventDate: "2027-02-11", cashUsd: 5000, inKind: null, deliverables: null, dueDate: "2027-02-01" })]) {
       expect(text).not.toMatch(/exclusiv|one (sponsor )?per category|to itself/i);
     }
-    expect(m.TLC_PLAYBOOK.join(" ")).toMatch(/Partner \$5,000.*Presenting partner \$15,000/);
+    expect(m.TLC_PLAYBOOK.join(" ")).toMatch(/Partner \$5,000.*Lead partner \$10,000.*Presenting partner \$15,000/);
+    expect(m.TLC_PLAYBOOK.join(" ")).toMatch(/\$25,000 raised from sponsors, costs up to \$15,000, \$10,000 net/);
   });
 
   it("the brand pitch sells real hands-on time and paid seats, and carries no script", () => {
@@ -257,7 +280,7 @@ const live = async (url: string): Promise<boolean> => !url.includes("dead.exampl
 
 const picksJson = (months: string[], topics: string[]) => JSON.stringify({
   picks: months.map((m, i) => ({
-    month: m, topic: topics[i], origin: "TREND", angle: "an angle", why_now: "why", criteria: {}, hands_on: "make it", take_home: "a thing", teacher_profile: "an expert",
+    month: m, topic: topics[i], origin: "TREND", angle: "an angle", why_now: "why", criteria: {}, hands_on: "make it", take_home: "a thing", teacher_profile: "an expert", ai_segment: "Guests use an AI assistant on their own notes.",
     sponsor_categories: ["A", "B", "C", "D", "E", "F"].map((c) => ({ category: `${c} category`, why: "fits", example_brands: [] })),
     sources: [{ title: "Real page", url: `https://news.example/${i}` }, { title: "Dead", url: "https://dead.example/x" }],
   })),
@@ -403,7 +426,8 @@ describe("the Learning Club in the database", () => {
     const twoWeeks = new Date("2027-01-07T13:30:00.000Z"); // Jan club is the third Thursday, 21 Jan.
     const out = await runTlcDaily(env, twoWeeks);
     expect(out.failures).toEqual([]);
-    expect(out.goChecks).toEqual([{ month: "2027-01", checkpoint: 14, verdict: "ESCALATE" }]);
+    // February (the 18th) is 42 days out the same day: its pace check runs too, and nothing is agreed.
+    expect(out.goChecks).toEqual([{ month: "2027-01", checkpoint: 14, verdict: "ESCALATE" }, { month: "2027-02", checkpoint: 42, verdict: "BEHIND_PACE" }]);
     expect((await runTlcDaily(env, twoWeeks)).goChecks).toEqual([]);
     const ev = await env.WP_OS_DB.prepare("SELECT status FROM tlc_event WHERE month = '2027-01'").first<{ status: string }>();
     expect(ev!.status).toBe("ESCALATED");

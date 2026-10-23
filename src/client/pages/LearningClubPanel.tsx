@@ -15,6 +15,10 @@ interface TlcEvent {
   topic: string | null;
   status: string;
   one_pager_url: string | null;
+  seats?: { min: number; max: number };
+  goal?: { goalUsd: number; costBudgetUsd: number };
+  backup_json?: string | null;
+  switch_deadline?: string | null;
 }
 interface TlcIdea {
   id: string;
@@ -25,7 +29,9 @@ interface TlcIdea {
   suggested_by: string;
   suggested_at: string;
   preferred_month: string | null;
-  status: "LATER" | "PICKED" | "ALTERNATIVE" | "DROPPED";
+  status: "LATER" | "PICKED" | "ALTERNATIVE" | "DROPPED" | "MERGED";
+  merged_into?: string | null;
+  earliest_month?: string | null;
   status_month: string | null;
   dropped_at: string | null;
 }
@@ -76,6 +82,7 @@ const STATUS_WORDS: Record<TlcEvent["status"], string> = {
 function ideaStatus(i: TlcIdea): string {
   if (i.status === "PICKED") return i.status_month ? `Picked for ${monthWords(i.status_month)}` : "Picked";
   if (i.status === "ALTERNATIVE") return "In the alternatives";
+  if (i.status === "MERGED") return `Merged into ${i.merged_into ?? "a bigger idea"}`;
   if (i.status === "DROPPED") return `Set aside${i.dropped_at ? ` on ${i.dropped_at.slice(0, 10)}` : ""}`;
   return "Later";
 }
@@ -168,11 +175,20 @@ export function LearningClubPanel(): JSX.Element {
                 <li key={e.id}>
                   <strong>{monthWords(e.month)}:</strong> {e.topic ?? "not picked yet"}{" "}
                   <span className="muted">({STATUS_WORDS[e.status] ?? e.status.toLowerCase()})</span>
+                  <RoomSize ev={e} onSaved={tlc.reload} />
                   {e.one_pager_url && (
                     <>
                       {" "}
                       · <a href={e.one_pager_url} target="_blank" rel="noreferrer">Open the internal one-pager</a> ·{" "}
                       <a href={`${e.one_pager_url}?doc=pitch`} target="_blank" rel="noreferrer">Open the brand pitch</a>
+                      {e.backup_json && (
+                        <>
+                          {" "}· Backup:{" "}
+                          <a href={`${e.one_pager_url}?doc=backup-internal`} target="_blank" rel="noreferrer">its internal one-pager</a> ·{" "}
+                          <a href={`${e.one_pager_url}?doc=backup-pitch`} target="_blank" rel="noreferrer">its brand pitch</a>
+                          {e.switch_deadline && <span className="muted"> (switches in automatically on {e.switch_deadline.slice(0, 10)} if too few brands say yes)</span>}
+                        </>
+                      )}
                     </>
                   )}
                 </li>
@@ -223,6 +239,7 @@ export function LearningClubPanel(): JSX.Element {
                       <strong>{i.topic}</strong>
                       {i.note && <div className="muted small">{i.note}</div>}
                       {i.preferred_month && <div className="muted small">Preferred: {monthWords(i.preferred_month)}</div>}
+                      {i.earliest_month && <div className="muted small">Not before {monthWords(i.earliest_month)}</div>}
                     </td>
                     <td>{i.origin_label}</td>
                     <td>
@@ -230,7 +247,7 @@ export function LearningClubPanel(): JSX.Element {
                     </td>
                     <td>{ideaStatus(i)}</td>
                     <td>
-                      {i.status === "DROPPED" ? (
+                      {i.status === "MERGED" ? null : i.status === "DROPPED" ? (
                         <button type="button" className="link-button" onClick={() => void change(i.id, "restore")}>Bring back</button>
                       ) : (
                         <button type="button" className="link-button" onClick={() => void change(i.id, "drop")}>Set aside</button>
@@ -396,5 +413,41 @@ function BrandSending(props: { approvals: TlcApprovals; gate: { open: boolean; r
         <button type="button" onClick={() => void send("call_link")}>Save the call link</button>
       </div>
     </section>
+  );
+}
+
+/**
+ * THE ROOM, SIZED TO ITS SPONSORS (owner, 22 Oct 2026). Shows the planned size and goal in words;
+ * "Change the room size" opens two numbers and a goal, then a plain Save. Everything that speaks
+ * of the room (the pitch, the drip, the booking pack, the ticket cap) reads what is saved here.
+ */
+function RoomSize(props: { ev: TlcEvent; onSaved: () => void }): JSX.Element {
+  const seats = props.ev.seats ?? { min: 25, max: 40 };
+  const goal = props.ev.goal ?? { goalUsd: 25_000, costBudgetUsd: 15_000 };
+  const [open, setOpen] = useState(false);
+  const [min, setMin] = useState(String(seats.min));
+  const [max, setMax] = useState(String(seats.max));
+  const [g, setG] = useState(String(goal.goalUsd));
+  const [msg, setMsg] = useState<string | null>(null);
+  const save = async (): Promise<void> => {
+    const res = await api<{ detail?: string }>(`/api/tlc/events/${props.ev.id}/plan`, { method: "POST", body: { seats_min: Number(min), seats_max: Number(max), sponsor_goal_usd: Number(g) } });
+    setMsg(res.status === 200 ? "Saved." : res.data?.detail ?? "That did not save. Try again.");
+    if (res.status === 200) { setOpen(false); props.onSaved(); }
+  };
+  return (
+    <div className="small" data-testid={`tlc-room-${props.ev.id}`}>
+      Room: {seats.min === seats.max ? seats.min : `${seats.min}–${seats.max}`} people · Goal ${goal.goalUsd.toLocaleString("en-US")} from sponsors (costs up to ${goal.costBudgetUsd.toLocaleString("en-US")}){" "}
+      {!open && <button type="button" className="link-button" onClick={() => setOpen(true)}>Change the room size</button>}
+      {msg && <span className="muted"> {msg}</span>}
+      {open && (
+        <div className="form-row">
+          <label>Fewest people<input inputMode="numeric" value={min} onChange={(e) => setMin(e.target.value)} /></label>
+          <label>Most people<input inputMode="numeric" value={max} onChange={(e) => setMax(e.target.value)} /></label>
+          <label>Sponsor goal ($)<input inputMode="numeric" value={g} onChange={(e) => setG(e.target.value)} /></label>
+          <button type="button" onClick={() => void save()}>Save the room size</button>{" "}
+          <button type="button" className="link-button" onClick={() => setOpen(false)}>Cancel, change nothing</button>
+        </div>
+      )}
+    </div>
   );
 }
