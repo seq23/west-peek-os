@@ -67,15 +67,17 @@ afterAll(async () => {
 });
 
 describe("the owner's seeds", () => {
-  it("Anthropic for January and March, Google for March, each with her reason and her name", async () => {
+  it("Anthropic for January and March, FORVR Mood for February, Google for March, each with her reason and her name", async () => {
     const o = await overview();
     expect(o.must_pitch.map((r) => [r.month, r.brand, r.added_by])).toEqual([
       ["2027-01", "Anthropic", "Sequoia"],
+      ["2027-02", "FORVR Mood", "Sequoia"],
       ["2027-03", "Anthropic", "Sequoia"],
       ["2027-03", "Google", "Sequoia"],
     ]);
     expect(o.must_pitch[0]!.reason).toMatch(/AI partner.*Title partner if the backup club, AI Tools for Your Work, runs/);
-    expect(o.must_pitch[2]!.reason).toMatch(/Google for Startups \/ Google Cloud.*host venue/);
+    expect(o.must_pitch[1]!.reason).toBe("Owner's pick: a scrappy challenger fragrance brand competing with the big houses. Title or Presenting.");
+    expect(o.must_pitch[3]!.reason).toMatch(/Google for Startups \/ Google Cloud.*host venue/);
   });
 });
 

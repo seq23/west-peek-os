@@ -196,7 +196,10 @@ export function competingCategories(cats: ReadonlyArray<Pick<TlcSponsorCategory,
 /**
  * TOPICS WE DO NOT RUN, AND SPONSORS THAT NEVER MIX (owner, 22 Oct 2026).
  *  - Peptides: do not run (FDA warning letters to research-use sellers; contested status in 2026).
- *  - Betting brands (sportsbooks, prediction markets) stay out of Q1 2027.
+ *  - Betting brands (sportsbooks, casinos) stay out of Q1 2027.
+ *  - Prediction markets are NOT betting here (owner, 23 Oct 2026: "the rule about no prediction in q1 is
+ *    stupid to me"): Kalshi, Polymarket and Robinhood may be pitched in any month, Q1 included, for
+ *    investing or money topics (Money Reset).
  *  - Betting and trading brands never share an event.
  */
 export const TLC_DO_NOT_RUN: ReadonlyArray<{ match: RegExp; why: string }> = [
@@ -206,7 +209,7 @@ export function doNotRun(topic: string): string | null {
   return TLC_DO_NOT_RUN.find((d) => d.match.test(topic))?.why ?? null;
 }
 const PEPTIDE_SELLER = /peptide/i;
-const BETTING = /sportsbook|sports betting|\bbetting\b|prediction market|event contract|casino|gambling/i;
+const BETTING = /sportsbook|sports betting|\bbetting\b|casino|gambling|draftkings|fanduel|betmgm/i;
 const TRADING = /\btrading\b|brokerage|\bbroker\b|investing app|stock app|\bcrypto exchange/i;
 /** The last month of Q1 2027: two months after the first club. */
 export const TLC_NO_BETTING_THROUGH = addMonths(TLC_FIRST_MONTH, 2);

@@ -75,13 +75,16 @@ BEGIN
   SELECT RAISE(ABORT, 'the must-pitch log is append only');
 END;
 
--- The owner's own targets (23 Oct 2026).
+-- The owner's own targets (23 Oct 2026). Fragrance Lab (Feb) keeps its AI segment and AI partner category;
+-- FORVR Mood is a sponsor target beside them, not a change to the club.
 INSERT OR IGNORE INTO tlc_must_pitch (id, month, brand, reason, added_by, added_at) VALUES
   ('tmp_seed_202701_anthropic', '2027-01', 'Anthropic', 'AI partner for The Longevity Reset; Title partner if the backup club, AI Tools for Your Work, runs.', 'Sequoia', '2026-10-23T00:00:00.000Z'),
+  ('tmp_seed_202702_forvr_mood', '2027-02', 'FORVR Mood', 'Owner''s pick: a scrappy challenger fragrance brand competing with the big houses. Title or Presenting.', 'Sequoia', '2026-10-23T00:00:00.000Z'),
   ('tmp_seed_202703_anthropic', '2027-03', 'Anthropic', 'The AI model for Build Your Own AI Agent.', 'Sequoia', '2026-10-23T00:00:00.000Z'),
   ('tmp_seed_202703_google', '2027-03', 'Google', 'Google for Startups / Google Cloud: startup cloud credits and the host venue for Build Your Own AI Agent.', 'Sequoia', '2026-10-23T00:00:00.000Z');
 
 INSERT OR IGNORE INTO tlc_must_pitch_log (id, brand, month, action, by_who, at, detail) VALUES
   ('tmpl_seed_202701_anthropic', 'Anthropic', '2027-01', 'ADDED', 'Sequoia', '2026-10-23T00:00:00.000Z', 'AI partner; Title partner if the backup runs'),
+  ('tmpl_seed_202702_forvr_mood', 'FORVR Mood', '2027-02', 'ADDED', 'Sequoia', '2026-10-23T00:00:00.000Z', 'Title or Presenting'),
   ('tmpl_seed_202703_anthropic', 'Anthropic', '2027-03', 'ADDED', 'Sequoia', '2026-10-23T00:00:00.000Z', 'AI model'),
   ('tmpl_seed_202703_google', 'Google', '2027-03', 'ADDED', 'Sequoia', '2026-10-23T00:00:00.000Z', 'Google for Startups / Google Cloud');

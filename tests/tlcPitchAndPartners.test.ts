@@ -310,7 +310,7 @@ describe("the owner's rulings on rooms, money, sponsors and ideas (22 Oct 2026)"
     expect(d.text).not.toContain("25 to 40");
   });
 
-  it("sponsors are complementary: competing categories are flagged inside, and peptide sellers or betting in Q1 never stand", async () => {
+  it("sponsors are complementary: competing categories are flagged inside, and peptide sellers or sportsbooks in Q1 never stand; prediction markets may", async () => {
     const m = await import("../src/shared/tlc/learningClub");
     expect(m.competingCategories([{ category: "Non-alcoholic spirits" }, { category: "Non-alcoholic beer" }, { category: "Glassware" }])).toHaveLength(1);
     expect(m.competingCategories([{ category: "Zero-proof spirit" }, { category: "Premium mixers and sodas" }, { category: "Glassware and barware" }, { category: "Wellness, sleep or fitness" }, { category: "Food and garnish" }])).toEqual([]);
@@ -319,7 +319,20 @@ describe("the owner's rulings on rooms, money, sponsors and ideas (22 Oct 2026)"
     const inside = renderInternalOnePager({ ...JAN, categories: [{ category: "Non-alcoholic spirits", why: "x", example_brands: [] }, { category: "Non-alcoholic beer", why: "x", example_brands: [] }], origin: null, status: "TOPIC_READY", vetoUntil: null, committedUsd: 0, committedPartners: 0, pitchUrl: null });
     expect(inside).toMatch(/Sponsors must not compete: &quot;Non-alcoholic spirits&quot; and &quot;Non-alcoholic beer&quot;/);
     expect(m.sponsorMixProblems("2027-02", [{ category: "Sportsbook" }])).toEqual(['betting brands stay out of Q1 2027 ("Sportsbook")']);
-    expect(m.sponsorMixProblems("2027-05", [{ category: "Prediction market" }, { category: "Trading app" }])).toEqual(['betting and trading brands never share an event ("Prediction market" and "Trading app")']);
+    // Owner, 23 Oct 2026: prediction markets are not betting. Kalshi, Polymarket and Robinhood may sponsor any month, Q1 included.
+    for (const month of ["2027-01", "2027-02", "2027-03", "2027-05"]) {
+      expect(m.sponsorMixProblems(month, [{ category: "Prediction market" }]), month).toEqual([]);
+      expect(m.sponsorMixProblems(month, [{ category: "Prediction market (Kalshi)" }, { category: "Event contracts (Polymarket)" }, { category: "Investing app (Robinhood)" }]), month).toEqual([]);
+    }
+    for (const c of ["Prediction market", "Event contracts", "Kalshi", "Polymarket", "Robinhood"]) expect(m.isBettingCategory(c), c).toBe(false);
+    // Sportsbooks stay out exactly as before: Q1 refused, never beside trading, by category or by name.
+    for (const c of ["Sportsbook", "Sports betting", "Online casino", "DraftKings", "FanDuel"]) {
+      expect(m.isBettingCategory(c), c).toBe(true);
+      expect(m.sponsorMixProblems("2027-01", [{ category: c }]), c).toEqual([`betting brands stay out of Q1 2027 ("${c}")`]);
+      expect(m.sponsorMixProblems("2027-03", [{ category: c }]), c).toHaveLength(1);
+    }
+    expect(m.sponsorMixProblems("2027-04", [{ category: "Sportsbook" }])).toEqual([]);
+    expect(m.sponsorMixProblems("2027-05", [{ category: "Sportsbook" }, { category: "Trading app" }])).toEqual(['betting and trading brands never share an event ("Sportsbook" and "Trading app")']);
     expect(m.sponsorMixProblems("2027-04", [{ category: "Peptide clinic" }])[0]).toMatch(/no peptide sellers/);
     expect(m.sponsorMixProblems("2027-04", [{ category: "Trading app" }])).toEqual([]);
     expect(m.doNotRun("Peptides and biohacking")).toMatch(/FDA warning letters/);
