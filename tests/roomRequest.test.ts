@@ -260,8 +260,11 @@ describe("her brief becomes a card on Parker's desk, then a packet", () => {
     expect(p.sponsor_total_usd).toBe(40_000);
 
     // The sponsors: ranked, with evidence that answered and a contact read off a fetched page.
-    const sponsors = (await env.WP_OS_DB.prepare("SELECT org_name, rank, tier, evidence_url, contact_name, contact_title, contact_source_url, fit_argument, note, category FROM evt_sponsor_prospect WHERE packet_id = ?1 ORDER BY rank").bind(p.id).all<{ org_name: string; rank: number; tier: string; evidence_url: string | null; contact_name: string | null; contact_title: string | null; contact_source_url: string | null; fit_argument: string | null; note: string | null; category: string }>()).results!;
+    const sponsors = (await env.WP_OS_DB.prepare("SELECT org_name, rank, tier, evidence_url, contact_name, contact_title, contact_source_url, fit_argument, note, category, stage, event_id FROM evt_sponsor_prospect WHERE packet_id = ?1 ORDER BY rank").bind(p.id).all<{ org_name: string; rank: number; tier: string; evidence_url: string | null; contact_name: string | null; contact_title: string | null; contact_source_url: string | null; fit_argument: string | null; note: string | null; category: string; stage: string; event_id: string | null }>()).results!;
     expect(sponsors.map((s) => s.org_name)).toEqual(["Harvey", "J.P. Morgan Private Bank", "Clio"]);
+    // BUILT IS NOT BOOKED (owner, 23 Oct 2026): every suggested sponsor waits PARKED, on no event,
+    // until the Room is kept and scheduled. tests/roomSponsorsWaitForSchedule.test.ts pins the rest.
+    expect(sponsors.map((s) => [s.stage, s.event_id])).toEqual([["PARKED", null], ["PARKED", null], ["PARKED", null]]);
     expect(sponsors[0]).toMatchObject({ rank: 1, tier: "PRESENTING", evidence_url: HARVEY_EVIDENCE, contact_name: "Mali Robertson", contact_title: "Director of Brand Partnerships", contact_source_url: HARVEY_TEAM });
     expect(sponsors[0]!.fit_argument).toContain("elite law firms");
     // The bank's made-up evidence was swapped for the research's verified page; its invented contact went.

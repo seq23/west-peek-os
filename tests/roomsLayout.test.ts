@@ -22,6 +22,10 @@ import { readFileSync } from "node:fs";
 const ROOMS = readFileSync(new URL("../src/client/pages/RoomsPage.tsx", import.meta.url), "utf8");
 const EVENTS = readFileSync(new URL("../src/client/pages/EventsPage.tsx", import.meta.url), "utf8");
 const CLOSEOUT = readFileSync(new URL("../src/client/pages/CloseoutPanel.tsx", import.meta.url), "utf8");
+const TLC = readFileSync(new URL("../src/client/pages/LearningClubPanel.tsx", import.meta.url), "utf8");
+const SPONSORS = readFileSync(new URL("../src/client/pages/RoomSponsorsPage.tsx", import.meta.url), "utf8");
+const LINKS = readFileSync(new URL("../src/client/pages/RoomsLinks.tsx", import.meta.url), "utf8");
+const SCHEDULE = readFileSync(new URL("../src/client/pages/ScheduleRoom.tsx", import.meta.url), "utf8");
 
 /** Heading ranks in the order the file writes them. */
 function ranks(src: string): number[] {
@@ -37,7 +41,7 @@ describe("Events & Rooms keeps the ranks the shell expects", () => {
   it("uses only h3 for a section and h4 for a thing inside one", () => {
     // The shell renders the page title as an h2. A section is therefore an h3 and a thing inside a
     // section is an h4; nothing goes deeper, because there is nothing deeper to navigate to.
-    for (const [name, src] of [["RoomsPage", ROOMS], ["EventsPage", EVENTS], ["CloseoutPanel", CLOSEOUT]] as const) {
+    for (const [name, src] of [["RoomsPage", ROOMS], ["EventsPage", EVENTS], ["CloseoutPanel", CLOSEOUT], ["LearningClubPanel", TLC], ["RoomSponsorsPage", SPONSORS], ["RoomsLinks", LINKS], ["ScheduleRoom", SCHEDULE]] as const) {
       expect(ranks(src).filter((r) => r < 3 || r > 4), `${name} uses a rank outside h3/h4`).toEqual([]);
     }
   });
@@ -49,12 +53,14 @@ describe("Events & Rooms keeps the ranks the shell expects", () => {
     expect(sections(EVENTS)).not.toContain("Events");
   });
 
-  it("mounts the events half at section rank, not inside a subsection of Rooms", () => {
-    // <EventsPage/> used to sit inside an <h4> subsection, which put an h3 two levels below another
-    // h3 and an h3 inside an h4. It renders its own h3 sections now and is mounted bare.
-    expect(ROOMS).toContain("<EventsPage />");
-    expect(ROOMS).not.toMatch(/<h4>[^<]*<\/h4>[\s\S]{0,400}<EventsPage/);
-    expect(sections(EVENTS).length).toBeGreaterThan(0);
+  it("mounts the record of gatherings as one of the folded rows, and its form as a card of its own", () => {
+    // v8 (owner, 23 Oct 2026): "Put a gathering on the record" is a card near the top; "Every
+    // gathering on the record" is a folded row lower down. Both read ONE list the page holds, so a
+    // gathering put on the record shows in the record at once.
+    expect(ROOMS).toContain("<PutOnRecordForm onCreated={() => events.reload()} />");
+    expect(ROOMS).toMatch(/<RoomsFold title="Every gathering on the record"[^>]*testId="events-fold">\s*<GatheringRecord state=\{events\} \/>/);
+    expect(ROOMS).not.toContain("<EventsPage");
+    expect(EVENTS).toContain("<h3>Put a gathering on the record</h3>");
   });
 
   it("draws no rule of its own between sections", () => {
@@ -64,39 +70,96 @@ describe("Events & Rooms keeps the ranks the shell expects", () => {
   });
 });
 
-describe("Events & Rooms reads the order a partner asks in", () => {
-  it("leads with what waits on her, then what was kept, then history above the rhythm, then who pays", () => {
-    // Operator, 15 Sep 2026: building/waiting first; the kept collection next, collapsed; the
-    // turned-down pile as one closed lid directly ABOVE "How often West Peek gathers"; sponsors last.
-    expect(sections(ROOMS)).toEqual([
-      "Rooms waiting on you",
-      "Approved Rooms",
-      "Rooms we turned down",
-      "How often West Peek gathers",
-      "Who is paying for it",
-    ]);
-    expect(sections(EVENTS)).toEqual([
-      "Every gathering on the record",
-      "Put a gathering on the record",
-    ]);
+describe("Events & Rooms reads the order the owner approved (v8 mock-up, 23 Oct 2026)", () => {
+  it("links row, Ideas, Put a gathering on the record, Ask Parker, the five folded rows, How this works — in that order", () => {
+    const body = ROOMS.slice(ROOMS.indexOf('<section data-testid="rooms-page">'));
+    const order = [
+      '<RoomsLinks current="rooms" />',
+      "<IdeasCard meName={meName} />",
+      "<PutOnRecordForm",
+      '<section className="card" data-testid="ask-parker">',
+      '<RoomsFold title="Scheduled Rooms"',
+      '<RoomsFold title="Kept for later"',
+      'title="Workshops"',
+      '<RoomsFold title="Every gathering on the record"',
+      'data-testid="declined-proposals"',
+      '<HowThisWorksFold page="Events & Rooms" testId="rooms-how">',
+    ];
+    const at = order.map((o) => body.indexOf(o));
+    expect(at.filter((i) => i < 0), `missing: ${order.filter((_, k) => at[k]! < 0).join(" | ")}`).toEqual([]);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    // The bottom lid holds Parker's card, how events work, how often West Peek gathers, and the guide.
+    const how = body.slice(body.indexOf('<HowThisWorksFold page="Events & Rooms"'));
+    for (const piece of ['<PageHostCard navKey="rooms" />', "<RoomsMap />", "<Programme />", "<HowThisWorks"]) expect(how).toContain(piece);
   });
 
-  it("puts every form after the answer it feeds", () => {
-    // Both were inverted: "Add an event" sat above "All events", and the add-sponsor row above the
-    // sponsor table. LP's order is the answer first, then the control that adds to it.
-    expect(EVENTS.indexOf("Every gathering on the record")).toBeLessThan(
-      EVENTS.indexOf("Put a gathering on the record"),
-    );
-    expect(ROOMS.indexOf('data-testid="sponsor-table"')).toBeLessThan(ROOMS.indexOf('data-testid="add-sponsor"'));
-    expect(ROOMS.indexOf('data-testid="rooms-empty"')).toBeLessThan(ROOMS.indexOf('data-testid="propose-room"'));
+  it("puts what waits on her inside Ask Parker, above the request, and the request one tap away", () => {
+    const ask = ROOMS.slice(ROOMS.indexOf('data-testid="ask-parker"'), ROOMS.indexOf('<RoomsFold title="Scheduled Rooms"'));
+    expect(ask.indexOf('data-testid="rooms-empty"')).toBeLessThan(ask.indexOf("<RequestRoom"));
+    expect(ask.indexOf('data-testid="rooms-waiting"')).toBeLessThan(ask.indexOf("<RequestRoom"));
+    expect(ask).toMatch(/<details className="rooms-ask" data-testid="ask-parker-fold" ref=\{askRef\}>\s*<summary>Ask Parker ▾<\/summary>/);
+    expect(ROOMS).toContain('data-testid="propose-room"');
   });
 
-  it("carries one orientation block, and it is at the bottom", () => {
-    // The shell already renders PagePurposeBlock above every page. This page stacked a HowThisWorks
-    // on top of that and Events stacked a second one — three explanations before any content.
-    expect((ROOMS.match(/<HowThisWorks/g) ?? []).length).toBe(1);
+  it("carries one detailed guide, and it is in the bottom lid", () => {
+    expect((ROOMS.match(/<HowThisWorks\b/g) ?? []).length).toBe(1);
     expect(EVENTS).not.toContain("HowThisWorks");
-    expect(ROOMS.indexOf("<HowThisWorks")).toBeGreaterThan(ROOMS.indexOf("<Programme />"));
+    expect(ROOMS.indexOf("<HowThisWorks\n")).toBeGreaterThan(ROOMS.indexOf("<Programme />"));
+    // Parker's card moved into it: the shell does not also print it at the top of Events & Rooms.
+    const app = readFileSync(new URL("../src/client/App.tsx", import.meta.url), "utf8");
+    expect(app).toContain('active !== "documents" && active !== "rooms" && <PageHostCard navKey={active} />');
+  });
+});
+
+describe("four pages, each with the links row and a way back", () => {
+  it("routes the three new pages, titles each, and files them under Events & Rooms", async () => {
+    const app = readFileSync(new URL("../src/client/App.tsx", import.meta.url), "utf8");
+    for (const [key, comp] of [["learning-club", "<LearningClubPage />"], ["room-sponsors", "<RoomSponsorsPage />"], ["research-library", "<ResearchLibraryPage />"]] as const) {
+      expect(app, key).toContain(`active === "${key}" && ${comp}`);
+      expect(app.slice(app.indexOf("const ALL_NAV_KEYS"), app.indexOf("]);", app.indexOf("const ALL_NAV_KEYS"))), key).toContain(`"${key}"`);
+    }
+    const { OFF_NAV_TITLES } = await import("../src/client/lib/pageTitles");
+    expect(OFF_NAV_TITLES["learning-club"]).toEqual({ label: "The Learning Club", under: "rooms" });
+    expect(OFF_NAV_TITLES["room-sponsors"]).toEqual({ label: "Room sponsors", under: "rooms" });
+    expect(OFF_NAV_TITLES["research-library"]).toEqual({ label: "Research library", under: "rooms" });
+  });
+
+  it("puts the links row first on every page, and every page has ← Back", () => {
+    expect(ROOMS).toContain('<RoomsLinks current="rooms" />');
+    expect(TLC).toContain('<RoomsLinks current="learning-club" />');
+    expect(TLC).toContain('<RoomsLinks current="research-library" />');
+    expect(SPONSORS).toContain('<RoomsLinks current="room-sponsors" />');
+    expect(LINKS).toContain("← Back to Events &amp; Rooms");
+    expect(LINKS).toContain("← Back");
+    for (const label of ["The Learning Club", "Room sponsors", "Research library"]) expect(LINKS).toContain(`label: "${label}"`);
+  });
+
+  it("keeps \"Who is paying for it\" — on Room sponsors, as its heading, with the committed total", () => {
+    // Owner, 23 Oct 2026, angry that it was lost once. It is a heading on the Room sponsors page.
+    expect(SPONSORS).toContain("<h3>Who is paying for it</h3>");
+    expect(SPONSORS).toContain('data-testid="sponsors-committed"');
+    expect(SPONSORS.indexOf('data-testid="sponsor-table"')).toBeLessThan(SPONSORS.indexOf('data-testid="add-sponsor"'));
+    expect(SPONSORS).toContain("<h3>Add a sponsor to a Room</h3>");
+    expect(SPONSORS).toContain("<ScheduleRoomButton");
+    // The decline reason still sits beside a sponsor who said no.
+    expect(SPONSORS).toContain("Said no: {s.decline_reason}");
+  });
+
+  it("has ONE list of partners who said yes, on The Learning Club", () => {
+    expect(TLC).toContain("<h3>Partners who said yes</h3>");
+    expect((TLC.match(/<PartnersPanel\b/g) ?? []).length).toBe(1);
+    expect(TLC).toContain("<PartnersPanel />");
+    expect(ROOMS).not.toContain("PartnersPanel");
+    expect(SPONSORS).not.toContain("<PartnersPanel");
+  });
+
+  it("moves #270's Brands we must pitch and Needs a way in onto The Learning Club page", () => {
+    const page = TLC.slice(TLC.indexOf("export function LearningClubPage"), TLC.indexOf("function ClubRow"));
+    expect(page).toContain("<MustPitchSection");
+    expect(ROOMS).not.toContain("MustPitchSection");
+    for (const card of ["tlc-brand-sending", "tlc-next-clubs", "tlc-title-sponsors", "tlc-not-pitching", "tlc-partners", "tlc-steps-fold", "tlc-how"]) {
+      expect(TLC, card).toContain(card);
+    }
   });
 });
 
@@ -108,29 +171,34 @@ describe("a declined Room goes on a shelf, not into nothing", () => {
    */
   it("keeps the shelf, its test hook, and the dimming that makes it history", () => {
     expect(ROOMS).toContain('data-testid="declined-proposals"');
-    expect(ROOMS).toContain('className="declined-shelf"');
+    expect(ROOMS).toContain('className="rooms-fold declined-shelf"');
     const css = readFileSync(new URL("../src/client/styles.css", import.meta.url), "utf8");
     expect(css).toMatch(/\.declined-shelf\s*\{[^}]*opacity/);
   });
 
-  it("puts the shelf below the live list and the kept collection, as one closed lid above the rhythm", () => {
-    expect(ROOMS.indexOf("<h3>Rooms waiting on you</h3>")).toBeLessThan(ROOMS.indexOf("<h3>Approved Rooms</h3>"));
-    expect(ROOMS.indexOf("<h3>Approved Rooms</h3>")).toBeLessThan(ROOMS.indexOf("<h3>Rooms we turned down</h3>"));
-    expect(ROOMS.indexOf("<h3>Rooms we turned down</h3>")).toBeLessThan(ROOMS.indexOf("<Programme />"));
-    expect(ROOMS.indexOf("<Programme />")).toBeLessThan(ROOMS.indexOf("<SponsorPipeline"));
+  it("puts the shelf after the record of gatherings, as one closed lid, above How this works", () => {
+    expect(ROOMS.indexOf('testId="rooms-kept"')).toBeLessThan(ROOMS.indexOf('data-testid="declined-proposals"'));
+    expect(ROOMS.indexOf('testId="events-fold"')).toBeLessThan(ROOMS.indexOf('data-testid="declined-proposals"'));
+    expect(ROOMS.indexOf('data-testid="declined-proposals"')).toBeLessThan(ROOMS.indexOf('<HowThisWorksFold page="Events & Rooms"'));
     // One <details>, closed by default (no `open` attribute), with the heading in its summary.
-    expect(ROOMS).toMatch(/<details className="declined-shelf" data-testid="declined-proposals">\s*<summary>\s*<h3>Rooms we turned down<\/h3>/);
-    expect(ROOMS).not.toMatch(/<details className="declined-shelf"[^>]*\bopen\b/);
+    expect(ROOMS).toMatch(/<details className="rooms-fold declined-shelf" data-testid="declined-proposals">\s*<summary>\s*<h3>Rooms we turned down<\/h3>/);
+    expect(ROOMS).not.toMatch(/<details className="rooms-fold declined-shelf"[^>]*\bopen\b/);
   });
 
-  it("splits the live list into what waits on her and what she kept", () => {
+  it("follows a Room's life: waiting on her, kept for later, scheduled — each its own list", () => {
     expect(ROOMS).toContain('p.status === "PROPOSED" || p.status === "DRAFT"');
-    expect(ROOMS).toContain('p.status === "APPROVED" || p.status === "SCHEDULED"');
+    expect(ROOMS).toContain('const kept = rooms.filter((p) => p.status === "APPROVED");');
+    expect(ROOMS).toContain('const scheduled = rooms.filter((p) => p.status === "SCHEDULED");');
     expect(ROOMS).toContain('data-testid="rooms-waiting"');
     expect(ROOMS).toContain('data-testid="rooms-approved"');
-    // The kept collection starts collapsed to one line; what waits on her starts open.
-    expect(ROOMS).toMatch(/waiting\.map\([\s\S]*?startCollapsed=\{false\}/);
-    expect(ROOMS).toMatch(/kept\.map\([\s\S]*?startCollapsed=\{true\}/);
+    // What waits on her starts open; kept and scheduled start collapsed to one line.
+    expect(ROOMS).toMatch(/waiting\.map\(\(p\) => card\(p, false\)\)/);
+    expect(ROOMS).toMatch(/kept\.map\(\(p\) => card\(p, true\)\)/);
+    expect(ROOMS).toMatch(/scheduled\.map\(\(p\) => card\(p, true\)\)/);
+    // A kept Room carries "Schedule this Room"; that is the step that makes its sponsors live.
+    expect(ROOMS).toMatch(/p\.status === "APPROVED" && \([\s\S]{0,600}<ScheduleRoomButton packetId=\{p\.id\}/);
+    expect(SCHEDULE).toContain("Schedule this Room");
+    expect(SCHEDULE).toContain("/schedule`");
   });
 
   it("gives every packet card a collapse-to-title toggle, remembered per browser", () => {
@@ -154,7 +222,7 @@ describe("a declined Room goes on a shelf, not into nothing", () => {
   it("shows the substance of a turned-down Room, not just its title", () => {
     // Operator, 15 Sep 2026: "rooms we turned down need more info so i can see how much was proposed
     // and what the event was about and types of people to be invited."
-    const shelf = ROOMS.slice(ROOMS.indexOf('data-testid="declined-proposals"'), ROOMS.indexOf("<SponsorPipeline"));
+    const shelf = ROOMS.slice(ROOMS.indexOf('data-testid="declined-proposals"'), ROOMS.indexOf('<HowThisWorksFold page="Events & Rooms"'));
     expect(shelf).toContain("Who was to be invited");
     expect(shelf).toContain("Sponsorship proposed");
     expect(shelf).toContain("Why we said no");
@@ -199,7 +267,7 @@ describe("a declined Room goes on a shelf, not into nothing", () => {
 
   it("says what the shelf is for when it is empty, rather than rendering nothing", () => {
     // A section that disappears when empty is a section nobody learns exists.
-    const shelf = ROOMS.slice(ROOMS.indexOf('data-testid="declined-proposals"'), ROOMS.indexOf("<SponsorPipeline"));
+    const shelf = ROOMS.slice(ROOMS.indexOf('data-testid="declined-proposals"'), ROOMS.indexOf('<HowThisWorksFold page="Events & Rooms"'));
     expect(shelf).toContain("declined.length === 0");
     expect(shelf).toContain("state-empty");
   });
@@ -231,8 +299,10 @@ describe("nothing on this page is reachable only by guessing", () => {
   });
 
   it("gives every section an empty state instead of vanishing", () => {
-    for (const hook of ["rooms-empty", "sponsors-empty"]) expect(ROOMS).toContain(hook);
+    for (const hook of ["rooms-empty", "rooms-scheduled-empty", "rooms-approved-empty", "workshops-empty", "workshops-approved-empty"]) expect(ROOMS).toContain(hook);
+    expect(SPONSORS).toContain("sponsors-empty");
     expect(EVENTS).toContain("events-empty");
+    for (const hook of ["tlc-ideas-none", "Nothing set aside.", "No research page yet."]) expect(TLC).toContain(hook);
   });
 });
 
@@ -243,8 +313,9 @@ describe("the screen speaks English, the code speaks enum", () => {
       // `{p.status}` in the body renders it. `status={ev.status}` passes it to a child, which is
       // how the raw value is SUPPOSED to travel — the lookbehind is the difference between the two.
       const rendered = new RegExp(`(?<!=)\\{${expr.replace(".", "\\.")}\\}`);
-      expect(rendered.test(ROOMS), `RoomsPage renders ${expr} raw`).toBe(false);
-      expect(rendered.test(EVENTS), `EventsPage renders ${expr} raw`).toBe(false);
+      for (const [name, src] of [["RoomsPage", ROOMS], ["EventsPage", EVENTS], ["RoomSponsorsPage", SPONSORS], ["LearningClubPanel", TLC]] as const) {
+        expect(rendered.test(src), `${name} renders ${expr} raw`).toBe(false);
+      }
     }
     // Nor a lowercased enum, which is the same word with the shouting removed.
     expect(ROOMS).not.toContain("{p.status.toLowerCase()}");
@@ -260,9 +331,10 @@ describe("the screen speaks English, the code speaks enum", () => {
   it("gives every state a label a partner would say out loud", () => {
     // "Keep it or dismiss it" replaced "Waiting on you" on 15 Sep 2026 — operator: "its just a packet
     // with a suggestion… that we can dismiss or keep".
-    for (const said of ["Keep it or dismiss it", "Turned down", "Nobody has called yet", "In conversation"]) {
+    for (const said of ["Keep it or dismiss it", "Turned down", "Nobody has called yet", "Kept for later · parked", "Scheduled"]) {
       expect(ROOMS, `missing plain-English label: ${said}`).toContain(said);
     }
+    for (const said of ["In conversation", "Parked until the Room has a date", "On the list"]) expect(SCHEDULE, said).toContain(said);
     for (const said of ["Not on the calendar yet", "On the calendar", "Happening now"]) {
       expect(EVENTS, `missing plain-English label: ${said}`).toContain(said);
     }
@@ -278,7 +350,7 @@ describe("the screen speaks English, the code speaks enum", () => {
      */
     const css = readFileSync(new URL("../src/client/styles.css", import.meta.url), "utf8");
     const undefinedClasses: string[] = [];
-    for (const [file, src] of [["RoomsPage", ROOMS], ["EventsPage", EVENTS]] as const) {
+    for (const [file, src] of [["RoomsPage", ROOMS], ["EventsPage", EVENTS], ["LearningClubPanel", TLC], ["RoomSponsorsPage", SPONSORS], ["RoomsLinks", LINKS], ["ScheduleRoom", SCHEDULE]] as const) {
       for (const m of src.matchAll(/className="([^"{}]+)"/g)) {
         for (const cls of m[1]!.split(/\s+/).filter(Boolean)) {
           if (!new RegExp(`\\.${cls.replace(/[-]/g, "\\-")}(?![\\w-])`).test(css)) {

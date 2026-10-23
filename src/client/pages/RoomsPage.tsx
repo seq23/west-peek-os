@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { api, getDevUser, useApi } from "../lib/api";
-import { EventsPage } from "./EventsPage";
-import { LearningClubPanel, RoomsMap } from "./LearningClubPanel";
-import { PartnersPanel } from "./PartnersPanel";
+import { api, getDevUser, useApi, type MeResponse } from "../lib/api";
+import { GatheringRecord, PutOnRecordForm, useEvents } from "./EventsPage";
+import { IdeasCard, RoomsMap } from "./LearningClubPanel";
+import { PageHostCard } from "./PageHostCard";
+import { HowThisWorksFold, RoomsFold, RoomsLinks, dayWords } from "./RoomsLinks";
+import { ScheduleRoomButton, SPONSOR_STAGES, categoryLabel, tierLabel, usd, whoWord } from "./ScheduleRoom";
 import { EVENT_ETHOS, OPERATING_RHYTHM, WHY_THE_RHYTHM } from "@shared/events/programme";
 import { sameOrg } from "@shared/events/roomPacket";
 import { WORKSHOP_LENGTH_RANGE, WORKSHOP_SERIES, WORKSHOP_WHERE, normaliseSponsorship, type WorkshopView } from "@shared/events/workshopPacket";
+import { PARTNERS } from "@shared/registry/partners";
 import { HowThisWorks } from "./HowThisWorks";
 import { classifyAsk, deliveryMonth, dueOn, type AskIntent } from "@shared/events/monthlyPlan";
 
@@ -50,6 +53,15 @@ import { classifyAsk, deliveryMonth, dueOn, type AskIntent } from "@shared/event
  * this page stacked a HowThisWorks above the content as well, and Events stacked a second one. The
  * detailed version belongs at the bottom for someone already working — which is what
  * PagePurposeBlock's own docstring says — so there is now exactly one, at the end, covering both.
+ *
+ * THE V8 REDESIGN (owner approved the mock-up, 23 Oct 2026). Rooms is four pages now; this is the
+ * first. In order: the links row; the Ideas card; Put a gathering on the record; Ask Parker for a
+ * Room (with whatever is waiting on you); then folded rows — Scheduled Rooms, Kept for later,
+ * Workshops, Every gathering on the record, Rooms we turned down — and "How this works" at the
+ * bottom, holding Parker's card, how events work, and how often West Peek gathers. Who is paying for
+ * each Room is on Room sponsors (RoomSponsorsPage.tsx); The Learning Club and the Research library
+ * have pages of their own (LearningClubPanel.tsx). A Room's life: Idea → Proposed → Kept for later
+ * (its sponsors parked) → Scheduled (its sponsors live).
  *
  * THE ONE THING THIS UI MUST GET RIGHT. A packet exists so a partner can execute without
  * re-checking, and the single most dangerous element on the page is a venue phone number. Every
@@ -241,9 +253,6 @@ interface Economics {
   exclusiveScenario?: Scenario | null;
 }
 
-const usd = (n: number | null | undefined): string =>
-  n === null || n === undefined ? "—" : `${n < 0 ? "−" : ""}$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
-
 /**
  * THE PDF, FETCHED WITH THE SAME IDENTITY EVERY OTHER CALL USES, then handed to the browser to save.
  * A plain link to the download route works behind Cloudflare Access (cookies) and nowhere the
@@ -287,8 +296,8 @@ const range = (low: number | null, high: number | null): string => {
 const PACKET_STATE: Record<string, { label: string; tone: string }> = {
   DRAFT: { label: "Parker is building it", tone: "help-tag help-tag-muted" },
   PROPOSED: { label: "Keep it or dismiss it", tone: "help-tag help-tag-warn" },
-  APPROVED: { label: "Approved", tone: "help-tag help-tag-good" },
-  SCHEDULED: { label: "On the calendar", tone: "help-tag help-tag-good" },
+  APPROVED: { label: "Kept for later · parked", tone: "help-tag help-tag-muted" },
+  SCHEDULED: { label: "Scheduled", tone: "help-tag help-tag-good" },
   DECLINED: { label: "Turned down", tone: "help-tag help-tag-muted" },
 };
 
@@ -299,42 +308,6 @@ const VENUE_STATE: Record<string, { label: string; tone: string }> = {
   UNREACHABLE: { label: "Could not reach them", tone: "help-tag help-tag-muted" },
 };
 
-/** Where a sponsor conversation has got to, said the way a partner would say it. */
-const SPONSOR_STAGES = [
-  { key: "IDENTIFIED", label: "On the list" },
-  { key: "RESEARCHING", label: "Being researched" },
-  { key: "DRAFTED", label: "Approach drafted" },
-  { key: "SENT", label: "Approach sent" },
-  { key: "IN_CONVERSATION", label: "In conversation" },
-  { key: "COMMITTED", label: "Committed" },
-  { key: "DECLINED", label: "Said no" },
-  { key: "PARKED", label: "Parked for now" },
-] as const;
-
-const CATEGORIES = [
-  { key: "CLOUD", label: "Cloud" },
-  { key: "FINTECH_SPEND", label: "Spend and fintech" },
-  { key: "EQUITY_CAPTABLE", label: "Cap table and equity" },
-  { key: "LEGAL", label: "Legal" },
-  { key: "PAYROLL_HR", label: "Payroll and HR" },
-  { key: "BANKING", label: "Banking" },
-  { key: "HOSPITALITY", label: "Hospitality" },
-  { key: "RECRUITING", label: "Recruiting" },
-  { key: "OTHER", label: "Something else" },
-] as const;
-
-const TIERS = [
-  { key: "PRESENTING", label: "Presenting" },
-  { key: "SUPPORTING", label: "Supporting" },
-  { key: "IN_KIND", label: "In kind" },
-] as const;
-
-const stageLabel = (key: string): string =>
-  SPONSOR_STAGES.find((s) => s.key === key)?.label ?? key.replace(/_/g, " ").toLowerCase();
-const categoryLabel = (key: string): string =>
-  CATEGORIES.find((c) => c.key === key)?.label ?? key.replace(/_/g, " ").toLowerCase();
-const tierLabel = (key: string): string =>
-  TIERS.find((t) => t.key === key)?.label ?? key.replace(/_/g, " ").toLowerCase();
 /** DEEP_WORK is a format, not a shout. */
 const formatLabel = (key: string): string => key.replace(/_/g, " ").toLowerCase();
 
@@ -351,10 +324,14 @@ interface SteerRow {
   delivered_at: string | null;
 }
 
-export function RoomsPage(): JSX.Element {
+export function RoomsPage(props: { me?: MeResponse | null } = {}): JSX.Element {
   const packets = useApi<{ packets: PacketRow[]; steers?: SteerRow[] }>("/api/rooms/packets");
-  const sponsors = useApi<{ sponsors: SponsorRow[]; committedUsd: number }>("/api/sponsors");
+  const events = useEvents();
+  const meId = props.me?.id ?? null;
+  const meName = PARTNERS.find((x) => x.firmUserId === meId)?.firstName ?? null;
   const [busy, setBusy] = useState(false);
+  // The request form is folded under "Ask Parker ▾"; "Propose again with changes" opens it.
+  const askRef = useRef<HTMLDetailsElement | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   /*
@@ -440,6 +417,13 @@ export function RoomsPage(): JSX.Element {
   }
 
   const [again, setAgain] = useState<PacketRow | null>(null);
+  const proposeAgain = (p: PacketRow): void => {
+    setAgain(p);
+    if (askRef.current) {
+      askRef.current.open = true;
+      askRef.current.scrollIntoView({ block: "start" });
+    }
+  };
 
   const all = packets.data?.packets ?? [];
   /*
@@ -450,139 +434,143 @@ export function RoomsPage(): JSX.Element {
    * useful things it owns. Parker proposes a Room a month and most are declined by design, so a
    * list that silently drops them loses the record of what was considered — and the same idea
    * arriving again in March has nothing to be checked against.
-   *
-   * Below and greyed rather than in a separate view: it is history, so it should not compete with
-   * what is live, and it should not be somewhere you have to remember to go and look.
    */
   const live = all.filter((p) => p.status !== "DECLINED");
   const declined = all.filter((p) => p.status === "DECLINED");
-  // ROOMS AND WORKSHOPS ARE ONE QUEUE, TWO COLLECTIONS (16 Sep 2026): the same card, the same
-  // keep/dismiss, shown under their own heading so a month's Room and its Workshop do not read as
-  // two proposals for the same evening.
+  // ROOMS AND WORKSHOPS ARE ONE QUEUE, TWO COLLECTIONS (16 Sep 2026).
   const rooms = live.filter((p) => kindOf(p) === "ROOM");
   const workshops = live.filter((p) => kindOf(p) === "WORKSHOP");
   const waiting = rooms.filter((p) => p.status === "PROPOSED" || p.status === "DRAFT");
-  // THE KEPT COLLECTION. Approved, and approved-then-dated: both are Rooms the firm said yes to.
-  const kept = rooms.filter((p) => p.status === "APPROVED" || p.status === "SCHEDULED");
+  // THE ROOM'S LIFE (23 Oct 2026): kept for later (APPROVED, sponsors parked) and scheduled (dated, sponsors live).
+  const kept = rooms.filter((p) => p.status === "APPROVED");
+  const scheduled = rooms.filter((p) => p.status === "SCHEDULED");
   const workshopsWaiting = workshops.filter((p) => p.status === "PROPOSED" || p.status === "DRAFT");
   const workshopsKept = workshops.filter((p) => p.status === "APPROVED" || p.status === "SCHEDULED");
+  const card = (p: PacketRow, startCollapsed: boolean): JSX.Element => (
+    <RoomProposal key={p.id} packet={p} meId={meId} onDecide={decide} dismissing={dismissing === p.id} onDismissOpen={() => setDismissing(p.id)} onDismissCancel={() => setDismissing(null)} onChanged={() => { packets.reload(); events.reload(); }} startCollapsed={startCollapsed} />
+  );
 
   return (
     <section data-testid="rooms-page">
-      <RoomsMap />
-      <LearningClubPanel />
-
-      <h3>Rooms waiting on you</h3>
-
-      {/* The stance, in one line, where it constrains the decision being made. In full at the end. */}
-      <p className="muted">
-        {EVENT_ETHOS.stance} {EVENT_ETHOS.notThis.join(" ")} A Room is one evening built around one
-        real question, for 25–35 people. Parker proposes at least one a month and you will run far
-        fewer than are proposed — that is the point.
-      </p>
+      <RoomsLinks current="rooms" />
 
       {message && <p className="notice" data-testid="rooms-message" role="status">{message}</p>}
 
-      {packets.loading && <p className="state-empty">Reading what Parker has proposed…</p>}
+      {/* 1 · IDEAS. Every topic idea, first, because every Room and club starts as one. */}
+      <IdeasCard meName={meName} />
 
-      {!packets.loading && waiting.length === 0 && (
-        <p className="state-empty" data-testid="rooms-empty">
-          Nothing is being built or waiting on you. Ask Parker for one below, or switch on <strong>Monthly Room
-          proposal</strong> in Scheduled work and he will put one here each month.
-        </p>
-      )}
+      {/* 2 · PUT A GATHERING ON THE RECORD. The form; the record itself is a folded row below. */}
+      <PutOnRecordForm onCreated={() => events.reload()} />
 
-      <div data-testid="rooms-waiting">
-        {waiting.map((p) => (
-          <RoomProposal key={p.id} packet={p} onDecide={decide} dismissing={dismissing === p.id} onDismissOpen={() => setDismissing(p.id)} onDismissCancel={() => setDismissing(null)} onChanged={() => packets.reload()} startCollapsed={false} />
-        ))}
-      </div>
-
-      {waiting.length > 0 && (
+      {/* 3 · ASK PARKER FOR A ROOM — the main action for Rooms, in its own card, with whatever is waiting on you. */}
+      <section className="card" data-testid="ask-parker">
+        <div className="rooms-card-head">
+          <h3>Ask Parker for a Room</h3>
+          <span className="muted small">or a Workshop</span>
+        </div>
+        {/* The stance, in one line, where it constrains the decision being made. In full under How this works. */}
         <p className="muted small">
-          {waiting.length} waiting on a decision.
+          {EVENT_ETHOS.stance} A Room is one evening built around one real question, for 25–35 people. Parker
+          proposes at least one a month and you will run far fewer than are proposed — that is the point.
         </p>
-      )}
-
-      <RequestRoom
-        busy={busy}
-        again={again}
-        onClearAgain={() => setAgain(null)}
-        onSubmit={async (body) => {
-          const ok = await propose(body);
-          if (ok) setAgain(null);
-          return ok;
-        }}
-      />
-
-      <SteerBoard
-        steers={packets.data?.steers ?? []}
-        onWithdraw={async (id) => {
-          const res = await api(`/api/rooms/steers/${id}/withdraw`, { method: "POST" });
-          if (res.status !== 200) setMessage(`Could not take that back (${res.status}).`);
-          packets.reload();
-        }}
-      />
-
-      <h3>Approved Rooms</h3>
-      <p className="muted small">
-        The Rooms the firm kept. Each is one line until you open it; the full packet is still there.
-      </p>
-      <div data-testid="rooms-approved">
-        {!packets.loading && kept.length === 0 && (
-          <p className="state-empty" data-testid="rooms-approved-empty">No Room has been kept yet. Keeping one above puts it here.</p>
-        )}
-        {kept.map((p) => (
-          <RoomProposal key={p.id} packet={p} onDecide={decide} dismissing={dismissing === p.id} onDismissOpen={() => setDismissing(p.id)} onDismissCancel={() => setDismissing(null)} onChanged={() => packets.reload()} startCollapsed={true} />
-        ))}
-      </div>
-
-      {/* THE WORKSHOPS COLLECTION (16 Sep 2026). Operator: "we are introducing monthly workshops in
-          addition to Rooms … the same workflow as Rooms". Same cards, same decision, own heading —
-          and September's and November's carry the titles the partners set. Virtual only. */}
-      <h3 data-testid="workshops-heading">Workshops</h3>
-      <p className="muted small">
-        One a month beside the Room: a {WORKSHOP_LENGTH_RANGE} working session on {WORKSHOP_WHERE} for small-business
-        owners, solopreneurs and community builders — a promise they can act on, breakout exercises, an
-        artifact they leave with. {Object.keys(WORKSHOP_SERIES).sort().map((m) => `${monthWord(m)}: “${WORKSHOP_SERIES[m]}”`).join("; ")} are set by the partners; every other month Parker proposes three and chooses.
-      </p>
-      <div data-testid="workshops-waiting">
-        {!packets.loading && workshopsWaiting.length === 0 && (
-          <p className="state-empty" data-testid="workshops-empty">
-            No Workshop is being built or waiting on you. Ask Parker for one above (switch the request to Workshop), or the monthly job proposes next month's by itself.
+        {packets.loading && <p className="state-empty">Reading what Parker has proposed…</p>}
+        {!packets.loading && waiting.length === 0 && (
+          <p className="state-empty" data-testid="rooms-empty">
+            Nothing is waiting on you. Tell him the audience, month and city, or let him think of one.
           </p>
         )}
-        {workshopsWaiting.map((p) => (
-          <RoomProposal key={p.id} packet={p} onDecide={decide} dismissing={dismissing === p.id} onDismissOpen={() => setDismissing(p.id)} onDismissCancel={() => setDismissing(null)} onChanged={() => packets.reload()} startCollapsed={false} />
-        ))}
-      </div>
-      <h4>Approved Workshops</h4>
-      <div data-testid="workshops-approved">
-        {!packets.loading && workshopsKept.length === 0 && (
-          <p className="state-empty" data-testid="workshops-approved-empty">No Workshop has been kept yet. Keeping one above puts it here.</p>
+        <div data-testid="rooms-waiting">
+          {waiting.length > 0 && <h4>{waiting.length} Room{waiting.length === 1 ? "" : "s"} waiting on you</h4>}
+          {waiting.map((p) => card(p, false))}
+        </div>
+        <SteerBoard
+          steers={packets.data?.steers ?? []}
+          onWithdraw={async (id) => {
+            const res = await api(`/api/rooms/steers/${id}/withdraw`, { method: "POST" });
+            if (res.status !== 200) setMessage(`Could not take that back (${res.status}).`);
+            packets.reload();
+          }}
+        />
+        <details className="rooms-ask" data-testid="ask-parker-fold" ref={askRef}>
+          <summary>Ask Parker ▾</summary>
+          <RequestRoom
+            busy={busy}
+            again={again}
+            onClearAgain={() => setAgain(null)}
+            onSubmit={async (body) => {
+              const ok = await propose(body);
+              if (ok) setAgain(null);
+              return ok;
+            }}
+          />
+        </details>
+      </section>
+
+      {/* 4 · THE FOLDED ROWS, each with its count, each one tap to open. */}
+      <RoomsFold title="Scheduled Rooms" count={scheduled.length} testId="rooms-scheduled">
+        {!packets.loading && scheduled.length === 0 && (
+          <p className="state-empty" data-testid="rooms-scheduled-empty">No Room has a date yet. &ldquo;Schedule this Room&rdquo; on a kept Room puts it here and makes its sponsors live.</p>
         )}
-        {workshopsKept.map((p) => (
-          <RoomProposal key={p.id} packet={p} onDecide={decide} dismissing={dismissing === p.id} onDismissOpen={() => setDismissing(p.id)} onDismissCancel={() => setDismissing(null)} onChanged={() => packets.reload()} startCollapsed={true} />
-        ))}
-      </div>
+        {scheduled.map((p) => card(p, true))}
+      </RoomsFold>
 
-      {/* Events fold in here rather than living on their own tab. A Room IS an event, and two tabs
-          for one idea made the operator choose between them every time. The distinction that
-          matters is not Rooms-versus-Events but proposed-versus-happened: above is the Room being
-          planned and kept, here is the firm's record of what actually took place. It renders its
-          own h3 sections at this level — it used to be mounted inside a subsection, two ranks down. */}
-      <EventsPage />
+      <RoomsFold title="Kept for later" count={kept.length} testId="rooms-kept">
+        <p className="muted small">
+          Rooms the firm kept: banked, not booked. Their sponsors stay parked, and nobody works them, until the Room
+          gets a date. Each is one line until you open it; the full packet is still there.
+        </p>
+        <div data-testid="rooms-approved">
+          {!packets.loading && kept.length === 0 && (
+            <p className="state-empty" data-testid="rooms-approved-empty">No Room is kept for later. Keeping a proposal puts it here.</p>
+          )}
+          {kept.map((p) => card(p, true))}
+        </div>
+      </RoomsFold>
 
-      {/* ONE CLOSED LID, DIRECTLY ABOVE THE RHYTHM. Operator, 15 Sep 2026: the turned-down pile is
-          history and must not take up the page; but the substance stays inside — how much was
-          proposed, what it was about, who would have been invited — because that is what the same
-          idea in March gets checked against. The section renders even when empty: a shelf that
-          appears only once something is on it is a shelf nobody learns exists. */}
-      <details className="declined-shelf" data-testid="declined-proposals">
+      {/* THE WORKSHOPS COLLECTION (16 Sep 2026). Opens by itself when one is waiting on you. */}
+      <RoomsFold
+        title="Workshops"
+        count={workshopsWaiting.length > 0 ? `${workshopsWaiting.length} waiting on you` : `${workshopsKept.length} approved`}
+        testId="workshops-fold"
+        openWhen={workshopsWaiting.length > 0}
+      >
+        <p className="muted small" data-testid="workshops-about">
+          One a month beside the Room: a {WORKSHOP_LENGTH_RANGE} working session on {WORKSHOP_WHERE} for small-business
+          owners, solopreneurs and community builders — a promise they can act on, breakout exercises, an
+          artifact they leave with. {Object.keys(WORKSHOP_SERIES).sort().map((m) => `${monthWord(m)}: “${WORKSHOP_SERIES[m]}”`).join("; ")} are set by the partners; every other month Parker proposes three and chooses.
+        </p>
+        <div data-testid="workshops-waiting">
+          {!packets.loading && workshopsWaiting.length === 0 && (
+            <p className="state-empty" data-testid="workshops-empty">
+              No Workshop is being built or waiting on you. Ask Parker for one above (switch the request to Workshop), or the monthly job proposes next month&apos;s by itself.
+            </p>
+          )}
+          {workshopsWaiting.map((p) => card(p, false))}
+        </div>
+        <h4>Approved Workshops</h4>
+        <div data-testid="workshops-approved">
+          {!packets.loading && workshopsKept.length === 0 && (
+            <p className="state-empty" data-testid="workshops-approved-empty">No Workshop has been kept yet. Keeping one puts it here.</p>
+          )}
+          {workshopsKept.map((p) => card(p, true))}
+        </div>
+      </RoomsFold>
+
+      <RoomsFold title="Every gathering on the record" count={events.data?.events.length ?? 0} testId="events-fold">
+        <GatheringRecord state={events} />
+      </RoomsFold>
+
+      {/* ONE CLOSED LID. Operator, 15 Sep 2026: the turned-down pile is history and must not take up
+          the page; but the substance stays inside — how much was proposed, what it was about, who
+          would have been invited — because that is what the same idea in March gets checked against.
+          The section renders even when empty: a shelf that appears only once something is on it is a
+          shelf nobody learns exists. */}
+      <details className="rooms-fold declined-shelf" data-testid="declined-proposals">
         <summary>
           <h3>Rooms we turned down</h3>
-          <span className="muted small" data-testid="declined-count">
-            {declined.length === 0 ? "nothing yet" : `${declined.length} kept for the record`}
+          <span className="rooms-fold-count" data-testid="declined-count">
+            {declined.length === 0 ? "nothing yet" : `${declined.length} kept for the record`} · <span className="fold-closed">Open ▾</span>
+            <span className="fold-open">Close ▴</span>
           </span>
         </summary>
         <p className="muted small">
@@ -591,8 +579,7 @@ export function RoomsPage(): JSX.Element {
         </p>
         {declined.length === 0 ? (
           <p className="state-empty">
-            Nothing has been turned down yet. Dismissing a Room above moves it here rather than
-            deleting it.
+            Nothing has been turned down yet. Dismissing a Room moves it here rather than deleting it.
           </p>
         ) : (
           <ul className="card-list small">
@@ -605,7 +592,7 @@ export function RoomsPage(): JSX.Element {
                     {" "}
                     — {kindWord(p)} proposed for {monthWord(p.proposed_for_month)}
                     {p.origin === "PARTNER_BRIEF" ? ", asked for by a partner" : ", Parker's idea"}
-                    {p.decided_by ? `, turned down by ${p.decided_by}` : ""}
+                    {p.decided_by ? `, turned down by ${whoWord(p.decided_by, meId)}` : ""}
                   </span>
                   {/* THE SUBSTANCE. Operator: "rooms we turned down need more info so i can see how
                       much was proposed and what the event was about and types of people to be
@@ -630,7 +617,7 @@ export function RoomsPage(): JSX.Element {
                     {p.decision_note ?? <span className="muted">no reason was written down</span>}
                   </div>
                   <div className="form-row">
-                    <button type="button" onClick={() => setAgain(p)} data-testid={`again-${p.id}`}>
+                    <button type="button" onClick={() => proposeAgain(p)} data-testid={`again-${p.id}`}>
                       Propose again with changes
                     </button>
                   </div>
@@ -641,54 +628,52 @@ export function RoomsPage(): JSX.Element {
         )}
       </details>
 
-      <Programme />
-
-      <SponsorPipeline
-        sponsors={sponsors.data?.sponsors ?? []}
-        committedUsd={sponsors.data?.committedUsd ?? 0}
-        loading={sponsors.loading}
-        onChanged={() => sponsors.reload()}
-      />
-
-      {/* The detailed version, at the bottom, for someone already working. Covers both halves of the
-          page because they are one page now. */}
-      <HowThisWorks
-        title="Events & Rooms"
-        what="Rooms are West Peek's curated gatherings — a dinner, salon or workshop for 25–35 people built around one real question. They are how members build deeper relationships, and they are the part of the community that earns money through sponsors. Everything the firm has gathered, Room or not, is recorded here too."
-        when="Once a month, when you are choosing what to run next, when you are working a sponsor, or just after a gathering has happened."
-        operatorDoes={[
-          "Ask Parker for a Room — your audience, month, city and named sponsors — or let him think of one",
-          "Read the packet and keep it, or dismiss it with a line saying why",
-          "Call a venue and mark it confirmed, wrong or unreachable",
-          "Put a gathering on the record, and move it through its life",
-          "Close out a gathering that has happened — who came, and what we said we would do",
-          "Move a sponsor along, and record what they committed",
-        ]}
-        aiDoes={[
-          "Parker builds the Room you asked for, or proposes one for next month, as a chain: who pays to be in front of this audience (with evidence and the named person who runs their partnerships), three concepts compared and one chosen, venues with a reason, the run of show to the minute, the budget with its basis, a sponsorship structure priced to cost plus the firm's keep, the pitch email — and a PDF emailed to both partners",
-          "Parker reads the firm's own list and says whether it can fill the room before you commit",
-          "Parker finds candidate venues by live search and reads prices off the page it cites",
-          "Parker reads close-out notes and turns what West Peek committed to into assigned work",
-          // Parker, not Wynn: that seat was retired in the cull and `brand_sponsorship_revenue` sits
-          // on Parker now. Naming a colleague who no longer exists tells a partner to go and find
-          // somebody who is not there.
-          "Parker keeps the sponsor pipeline and drafts the approach",
-        ]}
-        requiresOperator={[
-          "Approving a Room — it commits the firm to spend and to approaching sponsors in its name",
-          "Confirming a venue, which means having actually called it",
-          "Recording a sponsor commitment, because it puts real money into a budget",
-          "Inviting anyone. Sending outside the firm needs an approval card; recording an attendee here does not contact them.",
-        ]}
-        next="An approved Room becomes an event you can add attendees to. After it runs, its close-out records who came and what came out of it."
-        blocked={[
-          "No venues found: live search may be off, or nothing in that city was sourceable. The Room is still proposable — a person finds the space.",
-          "A sponsor is refused when another sponsor already holds its category for that Room.",
-          "Attendee lists are never shared with a sponsor. Sponsors get aggregate counts.",
-          "Recording a gathering needs the event.manage action in your role.",
-        ]}
-        testId="rooms"
-      />
+      {/* 5 · HOW THIS WORKS, AT THE BOTTOM: Parker's card, how events work, how often West Peek
+          gathers, and the detailed guide — for someone already working. */}
+      <HowThisWorksFold page="Events & Rooms" testId="rooms-how">
+        <PageHostCard navKey="rooms" />
+        <RoomsMap />
+        <Programme />
+        <HowThisWorks
+          title="Events & Rooms, in detail"
+          what="Rooms are West Peek's curated gatherings — a dinner, salon or workshop for 25–35 people built around one real question. They are how members build deeper relationships, and they are the part of the community that earns money through sponsors. Everything the firm has gathered, Room or not, is recorded here too."
+          when="Once a month, when you are choosing what to run next, when you are working a sponsor, or just after a gathering has happened."
+          operatorDoes={[
+            "Ask Parker for a Room — your audience, month, city and named sponsors — or let him think of one",
+            "Read the packet and keep it for later, or dismiss it with a line saying why",
+            "Schedule a kept Room — a date and a place — which makes its sponsors live",
+            "Call a venue and mark it confirmed, wrong or unreachable",
+            "Put a gathering on the record, and move it through its life",
+            "Close out a gathering that has happened — who came, and what we said we would do",
+            "Move a sponsor along on Room sponsors, and record what they committed",
+          ]}
+          aiDoes={[
+            "Parker builds the Room you asked for, or proposes one for next month, as a chain: who pays to be in front of this audience (with evidence and the named person who runs their partnerships), three concepts compared and one chosen, venues with a reason, the run of show to the minute, the budget with its basis, a sponsorship structure priced to cost plus the firm's keep, the pitch email — and a PDF emailed to both partners",
+            "Parker reads the firm's own list and says whether it can fill the room before you commit",
+            "Parker finds candidate venues by live search and reads prices off the page it cites",
+            "Parker reads close-out notes and turns what West Peek committed to into assigned work",
+            // Parker, not Wynn: that seat was retired in the cull and `brand_sponsorship_revenue` sits
+            // on Parker now.
+            "Parker keeps the sponsor pipeline and drafts the approach, once the Room is scheduled",
+          ]}
+          requiresOperator={[
+            "Keeping a Room — it commits the firm to spend",
+            "Scheduling a Room — it makes its sponsors live, to be approached in the firm's name",
+            "Confirming a venue, which means having actually called it",
+            "Recording a sponsor commitment, because it puts real money into a budget",
+            "Inviting anyone. Sending outside the firm needs an approval card; recording an attendee here does not contact them.",
+          ]}
+          next="A kept Room waits, with its sponsors parked. Scheduling it puts it on the calendar as a gathering people can be added to, and makes its sponsors live. After it runs, its close-out records who came and what came out of it."
+          blocked={[
+            "No venues found: live search may be off, or nothing in that city was sourceable. The Room is still proposable — a person finds the space.",
+            "A sponsor is refused when another sponsor already holds its category for that Room.",
+            "A sponsor on a Room with no date stays parked: it cannot be drafted, sent or committed until the Room is scheduled.",
+            "Attendee lists are never shared with a sponsor. Sponsors get aggregate counts.",
+            "Recording a gathering needs the event.manage action in your role.",
+          ]}
+          testId="rooms"
+        />
+      </HowThisWorksFold>
     </section>
   );
 }
@@ -707,6 +692,8 @@ export function RoomsPage(): JSX.Element {
  */
 function RoomProposal(props: {
   packet: PacketRow;
+  /** Who is reading: "approved by you" rather than an id. */
+  meId: string | null;
   onDecide: (id: string, decision: "APPROVED" | "DECLINED", note?: string) => Promise<void>;
   /** True while this card's dismiss form is open. Held by the page so only one is ever open. */
   dismissing: boolean;
@@ -812,7 +799,7 @@ function RoomProposal(props: {
     <article className="card" data-testid={`packet-${p.id}`}>
       {head}
       <p className="muted small">
-        For {p.proposed_for_month} · {formatLabel(p.format)} · {p.target_min}–{p.target_max} people ·{" "}
+        For {monthWord(p.proposed_for_month)} · {formatLabel(p.format)} · {p.target_min}–{p.target_max} people ·{" "}
         {p.theme}
       </p>
 
@@ -1064,14 +1051,16 @@ function RoomProposal(props: {
         <DismissForm packet={p} open={props.dismissing} onCancel={props.onDismissCancel} onDismiss={(note) => props.onDecide(p.id, "DECLINED", note)} />
       )}
       {p.status === "APPROVED" && (
-        <p className="muted small">
-          Approved{p.decided_by ? ` by ${p.decided_by}` : ""}. It is not on the calendar until it has
-          a date — put it on the record below, with the date, and it becomes a gathering people can
-          be added to.
-        </p>
+        <>
+          <p className="muted small">
+            Kept for later{p.decided_by ? ` by ${whoWord(p.decided_by, props.meId)}` : ""}: banked, not booked. Its
+            sponsors stay parked until it has a date. Scheduling it puts it on the calendar and makes them live.
+          </p>
+          <ScheduleRoomButton packetId={p.id} title={p.title} parkedSponsors={p.sponsor_count} onDone={props.onChanged} />
+        </>
       )}
       {p.status === "SCHEDULED" && (
-        <p className="muted small">On the calendar. It appears in the record of gatherings below.</p>
+        <p className="muted small">Scheduled. It is on the calendar under Every gathering on the record, and its sponsors are live on Room sponsors.</p>
       )}
     </article>
   );
@@ -1306,15 +1295,15 @@ function SteerBoard(props: { steers: SteerRow[]; onWithdraw: (id: string) => Pro
               </strong>{" "}
               <span className="muted small">
                 {s.delivered_packet_id
-                  ? `— Parker has this; it went into ${s.delivered_packet_id}`
+                  ? `— Parker has this; it went into ${monthWord(s.for_month)}'s packet${s.delivered_at ? ` on ${dayWords(s.delivered_at)}` : ""}`
                   : `— waiting; he builds it ${dueOn(s.for_month)}`}
               </span>
             </p>
             {/* Her words, exactly as typed. Never summarised on the way to the page. */}
             <p className="small">&ldquo;{s.words}&rdquo;</p>
             <p className="muted small">
-              said {s.given_at.slice(0, 10)}
-              {s.given_by ? ` by ${s.given_by}` : ""}
+              said {dayWords(s.given_at)}
+              {s.given_by ? ` by ${whoWord(s.given_by, null)}` : ""}
               {"  "}
               <button type="button" onClick={() => void props.onWithdraw(s.id)} data-testid={`steer-withdraw-${s.id}`}>
                 Take it back
@@ -1798,145 +1787,6 @@ function Programme(): JSX.Element {
       </div>
 
       <p className="muted small" data-testid="programme-why">{WHY_THE_RHYTHM}</p>
-    </>
-  );
-}
-
-/**
- * Who is paying for it.
- *
- * The decline reason sits next to a sponsor who said no: why AWS said no is the most useful thing
- * anyone has when preparing the next Room, and it is exactly the detail that gets lost when a row
- * is just moved to a column.
- *
- * The add-a-prospect row moved BELOW the table. It used to sit above it, so the page asked you to
- * type before it told you what was already there.
- */
-function SponsorPipeline(props: {
-  sponsors: SponsorRow[];
-  committedUsd: number;
-  loading: boolean;
-  onChanged: () => void;
-}): JSX.Element {
-  const [org, setOrg] = useState("");
-  const [tier, setTier] = useState<string>("PRESENTING");
-  const [category, setCategory] = useState<string>("CLOUD");
-  const [error, setError] = useState<string | null>(null);
-
-  async function add(): Promise<void> {
-    setError(null);
-    const res = await api<{ detail?: string }>("/api/sponsors", {
-      method: "POST", body: { org_name: org, tier, category },
-    });
-    if (res.status === 201) { setOrg(""); props.onChanged(); }
-    else setError(res.data?.detail ?? `Could not add that prospect (${res.status}).`);
-  }
-
-  async function move(id: string, stage: string): Promise<void> {
-    setError(null);
-    const body: Record<string, unknown> = { stage };
-    if (stage === "COMMITTED") {
-      const amount = window.prompt("How much did they commit, in dollars?");
-      if (!amount) return;
-      body.committed_usd = Number(amount);
-    }
-    if (stage === "DECLINED") {
-      const reason = window.prompt("Why did they say no? This is the most useful note for the next Room.");
-      if (!reason) return;
-      body.decline_reason = reason;
-    }
-    const res = await api<{ detail?: string }>(`/api/sponsors/${id}/stage`, { method: "POST", body });
-    if (res.status !== 200) setError(res.data?.detail ?? `Could not move that prospect (${res.status}).`);
-    props.onChanged();
-  }
-
-  return (
-    <>
-      <h3>Who is paying for it</h3>
-      <h4>Partners on each Room (brands that said yes)</h4>
-      <PartnersPanel source="ROOMS" />
-      <p className="muted">
-        One presenting partner, one supporting, one in-kind. Sponsors underwrite the experience —
-        they never receive the guest list, and there is no export that would give it to them.{" "}
-        <strong>{usd(props.committedUsd)} committed so far.</strong>
-      </p>
-
-      {props.loading && <p className="state-empty">Reading the sponsor pipeline…</p>}
-
-      {!props.loading && props.sponsors.length === 0 ? (
-        <p className="state-empty" data-testid="sponsors-empty">
-          Nobody is being approached. Add the first prospect below — a Room without a sponsor is
-          spend the fund carries on its own.
-        </p>
-      ) : (
-        <table data-testid="sponsor-table">
-          <thead>
-            <tr>
-              <th>Who</th>
-              <th>Tier</th>
-              <th>What they sell</th>
-              <th>Money</th>
-              <th>Where it stands</th>
-              <th>Move it to</th>
-            </tr>
-          </thead>
-          <tbody>
-            {props.sponsors.map((s) => (
-              <tr key={s.id} data-testid={`sponsor-${s.id}`}>
-                <td>
-                  {s.org_name}
-                  {s.decline_reason && <div className="muted small">Said no: {s.decline_reason}</div>}
-                </td>
-                <td>{tierLabel(s.tier)}</td>
-                <td>{categoryLabel(s.category)}</td>
-                <td>{s.committed_usd ? <strong>{usd(s.committed_usd)}</strong> : range(s.ask_low_usd, s.ask_high_usd)}</td>
-                <td>{stageLabel(s.stage)}</td>
-                <td>
-                  <select
-                    value=""
-                    aria-label={`Move ${s.org_name}`}
-                    onChange={(e) => { if (e.target.value) void move(s.id, e.target.value); }}
-                  >
-                    <option value="">— pick one —</option>
-                    {SPONSOR_STAGES.filter((st) => st.key !== s.stage).map((st) => (
-                      <option key={st.key} value={st.key}>{st.label}</option>
-                    ))}
-                  </select>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      <div className="card">
-        <h4>Add a prospect</h4>
-        <div className="form-row">
-          <label>
-            Who{" "}
-            <input value={org} onChange={(e) => setOrg(e.target.value)} placeholder="AWS Startups" data-testid="sponsor-org" />
-          </label>
-          <label>
-            Tier{" "}
-            <select value={tier} onChange={(e) => setTier(e.target.value)}>
-              {TIERS.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
-            </select>
-          </label>
-          <label>
-            What they sell{" "}
-            <select value={category} onChange={(e) => setCategory(e.target.value)}>
-              {CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
-            </select>
-          </label>
-          <button type="button" onClick={add} disabled={org.trim().length < 2} data-testid="add-sponsor">
-            Add prospect
-          </button>
-        </div>
-        <p className="muted small">
-          Adding a prospect records intent. Nobody is contacted until a partner approves the approach.
-        </p>
-        {error && <p className="notice notice-gate small" data-testid="sponsor-error" role="status">{error}</p>}
-      </div>
     </>
   );
 }

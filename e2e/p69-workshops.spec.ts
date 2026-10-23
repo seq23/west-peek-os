@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { gotoSurface } from "./support/nav";
+import { gotoSurface, openDisclosure } from "./support/nav";
 import { queryLocalD1 } from "./support/provision";
 import { WORKSHOP_SERIES, WORKSHOP_WHERE } from "../src/shared/events/workshopPacket";
 
@@ -26,11 +26,15 @@ test("the Workshops collection, the request switch, and a set month's locked tit
   await signIn(page);
   await gotoSurface(page, "Events & Rooms");
 
-  await expect(page.getByTestId("workshops-heading")).toHaveText("Workshops");
+  // A folded row since the v8 redesign (23 Oct 2026); shut while nothing waits on her.
+  await expect(page.getByTestId("workshops-fold").locator("summary h3")).toHaveText("Workshops");
+  expect(await page.getByTestId("workshops-fold").evaluate((el) => (el as HTMLDetailsElement).open)).toBe(false);
+  await openDisclosure(page, "workshops-fold");
   await expect(page.getByTestId("workshops-empty")).toBeVisible();
   await expect(page.getByTestId("workshops-approved-empty")).toBeVisible();
 
-  // The switch. A Room shows a city; a Workshop is virtual and does not.
+  // The switch, behind "Ask Parker ▾". A Room shows a city; a Workshop is virtual and does not.
+  await openDisclosure(page, "ask-parker-fold");
   await expect(page.getByTestId("room-city")).toBeVisible();
   await page.getByTestId("request-kind-workshop").check();
   await expect(page.getByTestId("room-city")).toHaveCount(0);

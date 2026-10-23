@@ -1165,7 +1165,8 @@ async function storeWorkshopPacket(env: Env, draft: PacketRow, packet: WorkshopP
     ),
     // A rebuild replaces what an earlier attempt wrote, and a Workshop never has a venue.
     env.WP_OS_DB.prepare("DELETE FROM evt_packet_venue WHERE packet_id = ?1").bind(draft.id),
-    env.WP_OS_DB.prepare("DELETE FROM evt_sponsor_prospect WHERE packet_id = ?1 AND stage = 'IDENTIFIED'").bind(draft.id),
+    // Parker's own suggestions from an earlier attempt: PARKED since 0268 (IDENTIFIED before it).
+    env.WP_OS_DB.prepare("DELETE FROM evt_sponsor_prospect WHERE packet_id = ?1 AND stage IN ('IDENTIFIED','PARKED')").bind(draft.id),
   ]);
   await appendEvent(env, {
     eventType: "room_packet.proposed",
@@ -1226,7 +1227,8 @@ async function storePacket(env: Env, draft: PacketRow, packet: RoomPacket, econo
     ),
     // A rebuild replaces what an earlier attempt wrote; a packet is one packet.
     env.WP_OS_DB.prepare("DELETE FROM evt_packet_venue WHERE packet_id = ?1").bind(draft.id),
-    env.WP_OS_DB.prepare("DELETE FROM evt_sponsor_prospect WHERE packet_id = ?1 AND stage = 'IDENTIFIED'").bind(draft.id),
+    // Parker's own suggestions from an earlier attempt: PARKED since 0268 (IDENTIFIED before it).
+    env.WP_OS_DB.prepare("DELETE FROM evt_sponsor_prospect WHERE packet_id = ?1 AND stage IN ('IDENTIFIED','PARKED')").bind(draft.id),
     ...packet.venues.map((venue) =>
       env.WP_OS_DB.prepare(
         `INSERT INTO evt_packet_venue
@@ -1242,14 +1244,20 @@ async function storePacket(env: Env, draft: PacketRow, packet: RoomPacket, econo
         venue.whyHere, venue.roomMinimumUsd, venue.isFallback ? 1 : 0,
       ),
     ),
-    // Every ranked prospect becomes a pipeline row on this packet, Parker's to work.
+    /*
+     * EVERY RANKED PROSPECT IS KEPT ON THE PACKET, PARKED (owner, 23 Oct 2026). Before this they were
+     * written IDENTIFIED — straight into the live pipeline — the moment the packet was BUILT, before
+     * anyone had kept the Room, let alone given it a date. A Room's sponsors now wait, attached and
+     * visible, until "Schedule this Room" (`scheduleRoom` below) is the step that makes them live.
+     * Guarded by tests/roomSponsorsWaitForSchedule.test.ts.
+     */
     ...packet.sponsorProspects.slice(0, 10).map((sp) =>
       env.WP_OS_DB.prepare(
         `INSERT INTO evt_sponsor_prospect
            (id, org_name, tier, category, ask_low_usd, ask_high_usd, pitch, ask_detail, stage,
             packet_id, source_url, note, owner_employee, firm_scope, created_by,
             evidence_url, evidence_note, contact_name, contact_title, contact_source_url, contact_url, fit_argument, rank, sponsorship_summary)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'IDENTIFIED',?9,?10,?11,'Parker',?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)`,
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'PARKED',?9,?10,?11,'Parker',?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)`,
       ).bind(
         `spp_${crypto.randomUUID()}`, sp.orgName, sp.tier, sp.category,
         sp.askUsd, sp.askUsd, sp.pitch, sp.fitArgument, draft.id, sp.evidenceUrl,
@@ -1994,16 +2002,29 @@ export async function scheduleRoom(
     )
     .run();
 
-  await env.WP_OS_DB.prepare(
-    "UPDATE evt_room_packet SET status = 'SCHEDULED', event_id = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
-  ).bind(id, eventId).run();
+  /*
+   * SCHEDULING IS WHAT MAKES A ROOM'S SPONSORS LIVE (owner, 23 Oct 2026). Until now they sat PARKED on
+   * the packet: kept for later is banked, not booked, and nobody works a sponsor for a Room with no
+   * date. Here they move onto the list (IDENTIFIED) and onto the Room's event, which is also where the
+   * one-category-per-Room rule (`checkCategoryConflict`) reads them from. Nobody is contacted by this:
+   * every approach still waits for a partner's approval.
+   */
+  const unparked = await env.WP_OS_DB.batch([
+    env.WP_OS_DB.prepare(
+      "UPDATE evt_room_packet SET status = 'SCHEDULED', event_id = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
+    ).bind(id, eventId),
+    env.WP_OS_DB.prepare(
+      `UPDATE evt_sponsor_prospect SET stage = 'IDENTIFIED', event_id = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE packet_id = ?1 AND stage = 'PARKED'`,
+    ).bind(id, eventId),
+  ]);
 
   await appendEvent(env, {
     eventType: "room_packet.scheduled",
     actorType: actor.type === "HUMAN" ? "firm_user" : "ai_employee",
     actorId: actor.firmUserId ?? actor.aiEmployeeId ?? "system",
     objectType: "event", objectId: eventId, firmScope: packet.firm_scope,
-    payload: { packet_id: id },
+    payload: { packet_id: id, sponsors_made_live: unparked[1]?.meta?.changes ?? 0 },
   });
 
   return { packet: await requirePacket(env, id), eventId };

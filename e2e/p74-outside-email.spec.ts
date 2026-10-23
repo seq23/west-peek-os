@@ -20,8 +20,8 @@ async function noSideways(page: Page): Promise<void> {
 test("from the TLC panel to the list: Allow asks first and shows who and when, Stop is one tap", async ({ page }) => {
   await signIn(page);
 
-  // The TLC panel names the list and links to it.
-  await page.goto("/#/rooms");
+  // The Learning Club page (its own address since 23 Oct 2026) names the list and links to it.
+  await page.goto("/#/learning-club");
   const link = page.getByTestId("tlc-outside-email-link");
   await expect(link).toHaveText("TLC brand sales is not on your Outside email list — tap to allow.");
   await link.click();
@@ -66,6 +66,6 @@ test("from the TLC panel to the list: Allow asks first and shows who and when, S
 
   // ← Back returns her to the panel she came from.
   await page.getByTestId("outside-email-back").click();
-  await expect(page).toHaveURL(/#\/rooms$/);
+  await expect(page).toHaveURL(/#\/learning-club$/);
   await expect(page.getByTestId("tlc-outside-email-link")).toBeVisible();
 });
