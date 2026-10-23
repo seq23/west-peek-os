@@ -110,8 +110,23 @@ export async function createSponsor(env: Env, actor: Actor, input: z.infer<typeo
   const authz = await authorize(env, actor, "sponsor.manage", { objectType: "sponsor_prospect", firmScope });
   if (authz.decision !== "ALLOW") throw new SponsorError(403, "forbidden", authz.reason);
 
-  if (input.event_id) {
-    const conflict = await checkCategoryConflict(env, input.event_id, input.category, input.tier);
+  /*
+   * ADDED TO A ROOM, IT WAITS WITH THE ROOM (owner, 23 Oct 2026). A sponsor added to a Room that has
+   * no date yet is PARKED beside the ones Parker suggested; on a scheduled Room it joins that Room's
+   * event and goes on the list. `scheduleRoom` makes the parked ones live.
+   */
+  let eventId = input.event_id ?? null;
+  let stage: "IDENTIFIED" | "PARKED" = "IDENTIFIED";
+  if (input.packet_id) {
+    const packet = await env.WP_OS_DB.prepare("SELECT status, event_id FROM evt_room_packet WHERE id = ?1")
+      .bind(input.packet_id).first<{ status: string; event_id: string | null }>();
+    if (!packet) throw new SponsorError(404, "not_found", "no such Room");
+    if (packet.status === "SCHEDULED" && packet.event_id) eventId = packet.event_id;
+    else stage = "PARKED";
+  }
+
+  if (eventId) {
+    const conflict = await checkCategoryConflict(env, eventId, input.category, input.tier);
     if (conflict) throw new SponsorError(409, "category_conflict", conflict);
   }
 
@@ -119,17 +134,17 @@ export async function createSponsor(env: Env, actor: Actor, input: z.infer<typeo
   await env.WP_OS_DB.prepare(
     `INSERT INTO evt_sponsor_prospect
        (id, org_name, tier, category, ask_low_usd, ask_high_usd, pitch, ask_detail, packet_id,
-        event_id, contact_name, contact_email, contact_url, source_url, note, firm_scope, created_by)
-     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)`,
+        event_id, contact_name, contact_email, contact_url, source_url, note, firm_scope, created_by, stage)
+     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)`,
   )
     .bind(
       id, input.org_name, input.tier, input.category, input.ask_low_usd ?? null,
       input.ask_high_usd ?? null, input.pitch ?? null, input.ask_detail ?? null,
-      input.packet_id ?? null, input.event_id ?? null, input.contact_name ?? null,
+      input.packet_id ?? null, eventId, input.contact_name ?? null,
       input.contact_email ?? null, input.contact_url ?? null, input.source_url ?? null,
       // "Wynn" was the fallback here, and that seat is RETIRED — so an unattributed write invented an
       // AI employee who does not exist, under `actorType: "ai_employee"`. A system act says system.
-      input.note ?? null, firmScope, actor.firmUserId ?? actor.aiEmployeeId ?? "system",
+      input.note ?? null, firmScope, actor.firmUserId ?? actor.aiEmployeeId ?? "system", stage,
     )
     .run();
 
@@ -144,6 +159,8 @@ export async function createSponsor(env: Env, actor: Actor, input: z.infer<typeo
 }
 
 const STAGES = ["IDENTIFIED", "RESEARCHING", "DRAFTED", "SENT", "IN_CONVERSATION", "COMMITTED", "DECLINED", "PARKED"] as const;
+/** The stages that mean somebody is working the sponsor. Refused while its Room has no date. */
+const WORKING_STAGES: ReadonlySet<string> = new Set(["IDENTIFIED", "RESEARCHING", "DRAFTED", "SENT", "IN_CONVERSATION", "COMMITTED"]);
 
 /**
  * Move a prospect along.
@@ -163,6 +180,19 @@ export async function advanceSponsor(
     objectType: "sponsor_prospect", objectId: id, firmScope: sponsor.firm_scope,
   });
   if (authz.decision !== "ALLOW") throw new SponsorError(403, "forbidden", authz.reason);
+
+  /*
+   * NOBODY WORKS A SPONSOR FOR A ROOM WITH NO DATE (owner, 23 Oct 2026). While its Room is not
+   * scheduled, a sponsor may only stay parked or be marked as having said no — never drafted, sent,
+   * in conversation or committed. Schedule the Room first; that is what makes its sponsors live.
+   */
+  if (sponsor.packet_id && WORKING_STAGES.has(input.stage)) {
+    const room = await env.WP_OS_DB.prepare("SELECT status, title FROM evt_room_packet WHERE id = ?1")
+      .bind(sponsor.packet_id).first<{ status: string; title: string }>();
+    if (room && room.status !== "SCHEDULED") {
+      throw new SponsorError(409, "room_not_scheduled", `${room.title} has no date yet, so its sponsors stay parked. Schedule the Room first; that makes them live.`);
+    }
+  }
 
   if (input.stage === "COMMITTED" && actor.type !== "HUMAN") {
     throw new SponsorError(403, "human_required", "A commitment is recorded by a person — it puts real money into a Room's budget.");
@@ -247,14 +277,17 @@ export async function handleListSponsors(ctx: RouteContext): Promise<Response> {
   // A DECLINED packet's research stays on the record but leaves the table. On 15 Sep 2026 the
   // pipeline showed Harvey three times at three prices — one row per pass of a Room that was
   // rebuilt twice — beside sponsors nobody would now approach. A prospect that was only ever
-  // IDENTIFIED or RESEARCHING for a packet the partners turned down is not being pursued; one
-  // that somebody actually moved (DRAFTED onward, or PARKED on purpose) is, whatever its packet.
+  // IDENTIFIED, RESEARCHING or PARKED (Parker's default since 0268) for a packet the partners turned
+  // down is not being pursued; one that somebody actually moved (DRAFTED onward) is, whatever its
+  // packet. Each row carries its Room's title, status and month, so the Room sponsors page can group
+  // them under their Room.
   const rows = await ctx.env.WP_OS_DB.prepare(
     `SELECT s.id, s.org_name, s.tier, s.category, s.stage, s.ask_low_usd, s.ask_high_usd, s.committed_usd, s.pitch,
-            s.packet_id, s.event_id, s.contact_name, s.owner_employee, s.decline_reason, s.note, s.created_at
+            s.packet_id, s.event_id, s.contact_name, s.owner_employee, s.decline_reason, s.note, s.created_at, s.rank,
+            p.title AS packet_title, p.status AS packet_status, p.proposed_for_month AS packet_month
      FROM evt_sponsor_prospect s
      LEFT JOIN evt_room_packet p ON p.id = s.packet_id
-     WHERE NOT (COALESCE(p.status, '') = 'DECLINED' AND s.stage IN ('IDENTIFIED', 'RESEARCHING'))
+     WHERE NOT (COALESCE(p.status, '') = 'DECLINED' AND s.stage IN ('IDENTIFIED', 'RESEARCHING', 'PARKED'))
      ORDER BY
        CASE s.stage WHEN 'COMMITTED' THEN 0 WHEN 'IN_CONVERSATION' THEN 1 WHEN 'SENT' THEN 2
                   WHEN 'DRAFTED' THEN 3 WHEN 'RESEARCHING' THEN 4 WHEN 'IDENTIFIED' THEN 5

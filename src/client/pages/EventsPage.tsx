@@ -1,16 +1,15 @@
 import { useState } from "react";
 import { api, useApi } from "../lib/api";
+import { MarkdownDocument } from "../components/MarkdownDocument";
+import { dayWords } from "./RoomsLinks";
 
 /**
  * The firm's record of what it has gathered — the second half of Events & Rooms.
  *
- * This is not a page of its own. It renders two h3 sections into Events & Rooms, at the same rank
- * as the Room sections above it. It used to be mounted inside an h4 subsection of RoomsPage, which
- * put an h3 two levels below another h3 and an h3 inside an h4 — the single worst thing about the
- * layout the operator called jumbled.
- *
- * ORDER: the record first, the form that adds to it second. It was the other way round, so the page
- * asked you to type a new gathering before it showed you the ones you already had.
+ * This is not a page of its own. Since the v8 redesign (owner, 23 Oct 2026) it is two pieces Events &
+ * Rooms places separately: the "Put a gathering on the record" card near the top, and "Every gathering
+ * on the record" as one of the folded rows below. Both read the same list, which the page holds, so a
+ * gathering put on the record appears in the record at once.
  *
  * West Peek Live already exists at westpeek.live and runs the actual room. This owns the gathering
  * as a firm record and links out — it does not embed, stream, or duplicate the conference.
@@ -55,40 +54,28 @@ const LIFE: Record<string, { label: string; tone: string; next: string | null; a
   CANCELLED: { label: "Cancelled", tone: "help-tag help-tag-muted", next: null, advance: "" },
 };
 
-export function EventsPage(): JSX.Element {
-  const state = useApi<{ events: EventRow[] }>("/api/events");
-  const [title, setTitle] = useState("");
-  const [type, setType] = useState<string>("DINNER");
-  const [startsAt, setStartsAt] = useState("");
-  const [liveUrl, setLiveUrl] = useState("");
-  const [message, setMessage] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+export interface EventsState {
+  data: { events: EventRow[] } | null;
+  loading: boolean;
+  reload: () => void;
+}
 
+/** The list the two pieces share. Events & Rooms calls it once and hands it to both. */
+export function useEvents(): EventsState {
+  return useApi<{ events: EventRow[] }>("/api/events");
+}
+
+/** When a gathering is, in words: "Thu 15 Oct 2026". Never the stored ISO string. */
+export function whenWords(startsAt: string | null): string {
+  return startsAt ? dayWords(startsAt, { weekday: true }) : "no date yet";
+}
+
+/** Every gathering on the record: who came, when, and what came out of it. */
+export function GatheringRecord(props: { state: EventsState }): JSX.Element {
+  const state = props.state;
   const events = state.data?.events ?? [];
-
-  async function create(e: React.FormEvent) {
-    e.preventDefault();
-    if (!title.trim() || busy) return;
-    setBusy(true);
-    setMessage(null);
-    const res = await api<{ error?: string; detail?: string }>("/api/events", {
-      method: "POST",
-      body: {
-        title: title.trim(),
-        event_type: type,
-        starts_at: startsAt || null,
-        live_url: liveUrl.trim() || null,
-      },
-    });
-    if (res.status !== 201) setMessage(res.data?.detail ?? res.data?.error ?? `Could not record it (HTTP ${res.status}).`);
-    else { setTitle(""); setStartsAt(""); setLiveUrl(""); }
-    setBusy(false);
-    state.reload();
-  }
-
   return (
     <>
-      <h3>Every gathering on the record</h3>
       <p className="muted">
         Rooms, dinners, workshops, masterminds and the summit, as firm records: who came, when, and
         what came out of it. West Peek Live runs the room itself; this is the record of it.
@@ -102,23 +89,22 @@ export function EventsPage(): JSX.Element {
 
       {!state.loading && events.length === 0 && (
         <p className="state-empty" data-testid="events-empty">
-          Nothing is on the record. Add the first gathering below — an approved Room becomes one once
-          it has a date.
+          Nothing is on the record. Put the first gathering on the record above — a scheduled Room
+          becomes one by itself.
         </p>
       )}
 
       <div data-testid="events-list">
         {events.map((ev) => {
-          const life = LIFE[ev.status] ?? { label: ev.status.toLowerCase(), tone: "help-tag help-tag-muted", next: null, advance: "" };
+          const life = LIFE[ev.status] ?? { label: "Not recorded", tone: "help-tag help-tag-muted", next: null, advance: "" };
           return (
             <article className="card" key={ev.id} data-testid={`event-${ev.id}`}>
               <div className="card-head-static">
                 <h4>{ev.title}</h4>
                 <span className={life.tone} data-testid={`event-state-${ev.id}`}>{life.label}</span>
               </div>
-              <p className="muted small">
-                {typeLabel(ev.event_type)}
-                {ev.starts_at ? ` · ${ev.starts_at}` : " · no date yet"}
+              <p className="muted small" data-testid={`event-when-${ev.id}`}>
+                {typeLabel(ev.event_type)} · {whenWords(ev.starts_at)}
                 {ev.location ? ` · ${ev.location}` : ""}
               </p>
 
@@ -148,41 +134,73 @@ export function EventsPage(): JSX.Element {
           );
         })}
       </div>
-
-      <h3>Put a gathering on the record</h3>
-      <form className="card" onSubmit={create} data-testid="event-create-form">
-        <div className="form-row">
-          <label>
-            What was it called{" "}
-            <input data-testid="event-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Founder dinner, SF" />
-          </label>
-          <label>
-            What kind{" "}
-            <select data-testid="event-type" value={type} onChange={(e) => setType(e.target.value)}>
-              {TYPES.map((t) => (
-                <option key={t.key} value={t.key}>{t.label}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            When{" "}
-            <input data-testid="event-starts" type="date" value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
-          </label>
-          <label>
-            West Peek Live link{" "}
-            <input data-testid="event-live-url" value={liveUrl} onChange={(e) => setLiveUrl(e.target.value)} placeholder="https://westpeek.live/…" />
-          </label>
-          <button type="submit" className="btn-strong" disabled={busy} data-testid="event-create">
-            {busy ? "Recording…" : "Put it on the record"}
-          </button>
-        </div>
-        <p className="muted small">
-          Recording it contacts nobody. Inviting anyone is an external effect and needs an approval
-          card of its own.
-        </p>
-        {message && <p className="notice" data-testid="event-message" role="status">{message}</p>}
-      </form>
     </>
+  );
+}
+
+/** The form that puts a gathering on the record. Recording it contacts nobody. */
+export function PutOnRecordForm(props: { onCreated: () => void }): JSX.Element {
+  const [title, setTitle] = useState("");
+  const [type, setType] = useState<string>("DINNER");
+  const [startsAt, setStartsAt] = useState("");
+  const [liveUrl, setLiveUrl] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function create(e: React.FormEvent) {
+    e.preventDefault();
+    if (!title.trim() || busy) return;
+    setBusy(true);
+    setMessage(null);
+    const res = await api<{ error?: string; detail?: string }>("/api/events", {
+      method: "POST",
+      body: {
+        title: title.trim(),
+        event_type: type,
+        starts_at: startsAt || null,
+        live_url: liveUrl.trim() || null,
+      },
+    });
+    if (res.status !== 201) setMessage(res.data?.detail ?? res.data?.error ?? `Could not record it (HTTP ${res.status}).`);
+    else { setTitle(""); setStartsAt(""); setLiveUrl(""); setMessage("On the record. It is under Every gathering on the record, below."); }
+    setBusy(false);
+    props.onCreated();
+  }
+
+  return (
+    <form className="card" onSubmit={create} data-testid="event-create-form">
+      <h3>Put a gathering on the record</h3>
+      <div className="form-row">
+        <label>
+          What was it called{" "}
+          <input data-testid="event-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Founder dinner, SF" />
+        </label>
+        <label>
+          What kind{" "}
+          <select data-testid="event-type" value={type} onChange={(e) => setType(e.target.value)}>
+            {TYPES.map((t) => (
+              <option key={t.key} value={t.key}>{t.label}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          When{" "}
+          <input data-testid="event-starts" type="date" value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
+        </label>
+        <label>
+          West Peek Live link{" "}
+          <input data-testid="event-live-url" value={liveUrl} onChange={(e) => setLiveUrl(e.target.value)} placeholder="https://westpeek.live/…" />
+        </label>
+        <button type="submit" className="btn-strong" disabled={busy} data-testid="event-create">
+          {busy ? "Recording…" : "Put it on the record"}
+        </button>
+      </div>
+      <p className="muted small">
+        Recording it contacts nobody. Inviting anyone is an external effect and needs an approval
+        card of its own.
+      </p>
+      {message && <p className="notice" data-testid="event-message" role="status">{message}</p>}
+    </form>
   );
 }
 
@@ -246,7 +264,8 @@ function EventCloseout({ eventId, status }: { eventId: string; status: string })
           Closed out — {done.acts_recorded} attendance record{done.acts_recorded === 1 ? "" : "s"}
           {done.state !== "COMPLETE" && <span className="muted"> (finished with problems)</span>}
         </summary>
-        <p className="small" style={{ whiteSpace: "pre-wrap" }}>{done.digest_md}</p>
+        {/* Rendered, never shown raw: the record carried "#" and "_" on screen (owner, 23 Oct 2026). */}
+        <MarkdownDocument source={done.digest_md} testId={`closeout-digest-${eventId}`} />
       </details>
     );
   }

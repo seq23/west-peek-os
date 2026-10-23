@@ -163,7 +163,7 @@ import {
 } from "./services/roomPacket";
 import { handleOutsideEmailAllow, handleOutsideEmailCard, handleOutsideEmailMode, handleOutsideEmailScreen } from "./services/outsideEmail";
 import { handleMustPitchAdd, handleMustPitchOverview, handleMustPitchRemove, handleWayInContact, handleWayInHide } from "./services/tlcMustPitch";
-import { handleTlcApprove, handleTlcDeal, handleTlcIdeaAdd, handleTlcIdeaStatus, handleTlcOnePager, handleTlcOverview, handleTlcPitchPublic, handleTlcPlan, handleTlcTicket } from "./services/learningClub";
+import { handleTlcApprove, handleTlcDeal, handleTlcIdeaAdd, handleTlcIdeaNote, handleTlcIdeaStatus, handleTlcResearchLinkAdd, handleTlcOnePager, handleTlcOverview, handleTlcPitchPublic, handleTlcPlan, handleTlcTicket } from "./services/learningClub";
 import { handleRoomsPartners } from "./services/partnersPanel";
 import {
   handleAdvanceSponsor, handleCreateSponsor, handleListSponsors, handleSponsorAttendeeExport,
@@ -1092,6 +1092,8 @@ const router = new Router()
   .post("/api/tlc/way-in/:key/hide", handleWayInHide)
   .post("/api/tlc/ideas/:id/drop", handleTlcIdeaStatus)
   .post("/api/tlc/ideas/:id/restore", handleTlcIdeaStatus)
+  .post("/api/tlc/ideas/:id/notes", handleTlcIdeaNote)
+  .post("/api/tlc/research-links", handleTlcResearchLinkAdd)
   .get("/api/sponsors", handleListSponsors)
   .post("/api/sponsors", handleCreateSponsor)
   .post("/api/sponsors/:id/stage", handleAdvanceSponsor)

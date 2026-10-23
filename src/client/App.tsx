@@ -21,8 +21,9 @@ import { PageHostCard } from "./pages/PageHostCard";
 import { HomePage } from "./pages/HomePage";
 import { IntelligencePage } from "./pages/IntelligencePage";
 import { EmployeesPage } from "./pages/EmployeesPage";
-import { EventsPage } from "./pages/EventsPage";
 import { RoomsPage } from "./pages/RoomsPage";
+import { RoomSponsorsPage } from "./pages/RoomSponsorsPage";
+import { LearningClubPage, ResearchLibraryPage } from "./pages/LearningClubPanel";
 import { IntroductionsPage } from "./pages/IntroductionsPage";
 import { CommunityPage } from "./pages/CommunityPage";
 import { LedgersPage } from "./pages/LedgersPage";
@@ -434,6 +435,11 @@ const ALL_NAV_KEYS: ReadonlySet<string> = new Set([
   "work-kind-rules",
   // 23 Oct 2026: Outside email, what may send. Reached from Set up, AI controls, a card and the TLC panel.
   "outside-email",
+  // 23 Oct 2026: Events & Rooms is four pages (the approved v8 mock-up). The three below it are
+  // reached from its links row, never the nav; each is titled in lib/pageTitles.ts.
+  "learning-club",
+  "room-sponsors",
+  "research-library",
   "follow-on",
   "market-map",
   "jobs",
@@ -2963,7 +2969,8 @@ function Shell() {
               host's picture, name and title to be among the first things you see. Renders nothing on
               Admin and on the personal surfaces: `pageHost` returns null there, because Admin is
               machinery rather than a room somebody runs and Home is already signed by its deliverer. */}
-          {authed && active !== "documents" && <PageHostCard navKey={active} />}
+          {/* Events & Rooms carries Parker's card inside its "How this works" lid at the bottom (owner, 23 Oct 2026). */}
+          {authed && active !== "documents" && active !== "rooms" && <PageHostCard navKey={active} />}
           {!authed && !me.loading && active !== "help" && (
             signedOut ? (
               <SignedOutPage onSignIn={() => setSignedOut(false)} />
@@ -2978,7 +2985,10 @@ function Shell() {
           {authed && active === "setup" && <SetupPage me={me.data!} />}
           {authed && active === "sources-and-sweeps" && <IntelligencePage me={me.data!} />}
           {authed && active === "employees" && <EmployeesPage me={me.data!} />}
-          {authed && active === "rooms" && <RoomsPage />}
+          {authed && active === "rooms" && <RoomsPage me={me.data} />}
+          {authed && active === "learning-club" && <LearningClubPage />}
+          {authed && active === "room-sponsors" && <RoomSponsorsPage />}
+          {authed && active === "research-library" && <ResearchLibraryPage />}
           {authed && active === "introductions" && <IntroductionsPage />}
           {authed && active === "community" && <CommunityPage />}
           {authed && active === "record" && <LedgersPage />}

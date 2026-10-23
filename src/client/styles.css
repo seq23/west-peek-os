@@ -7342,3 +7342,85 @@ body {
   .doc-viewer { padding: var(--space-sm) var(--space-lg) var(--space-2xl); }
   .doc-row-actions { width: 100%; }
 }
+
+/* ── Events & Rooms: four pages (owner approved the v8 mock-up, 23 Oct 2026) ──────────────────────
+   One slim links row at the top of every page, cards for what you act on, labelled folded rows for
+   everything long, and "How this works" as the last lid. Phone first; nothing scrolls sideways. */
+.rooms-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-sm) var(--space-lg);
+  padding-bottom: var(--space-sm);
+  margin-bottom: var(--space-lg);
+  border-bottom: 1px solid var(--wp-line);
+  font-size: var(--text-base);
+}
+.rooms-back { font-weight: 600; }
+.rooms-links-row { display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-lg); }
+.rooms-links-row a { font-weight: 600; }
+[data-testid="rooms-page"] > .card,
+[data-testid="learning-club-page"] > .card,
+[data-testid="room-sponsors-page"] > .card,
+[data-testid="research-library-page"] > .card { margin-bottom: var(--space-lg); }
+.rooms-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-2xs) var(--space-sm);
+  min-width: 0;
+}
+.rooms-card-head h3 { margin: 0; }
+.rooms-summary-line { display: block; }
+.rooms-fold,
+.rooms-how {
+  border-top: 1px solid var(--wp-line);
+  padding: var(--space-sm) 0;
+}
+.rooms-fold > summary,
+.rooms-how > summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-2xs) var(--space-sm);
+  list-style: none;
+}
+.rooms-fold > summary::-webkit-details-marker,
+.rooms-how > summary::-webkit-details-marker { display: none; }
+.rooms-fold > summary h3 { display: inline; margin: 0; font-size: var(--text-md); }
+.rooms-how > summary { font-weight: 600; justify-content: center; }
+.rooms-fold-count { font-size: var(--text-sm); font-weight: 600; color: var(--wp-orange-deep); white-space: nowrap; }
+.rooms-fold .fold-open,
+.rooms-fold[open] .fold-closed { display: none; }
+.rooms-fold[open] .fold-open { display: inline; }
+.rooms-fold-body { display: flex; flex-direction: column; gap: var(--space-md); padding-top: var(--space-sm); }
+.rooms-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-2xs) var(--space-sm);
+  min-height: 44px;
+  border-top: 1px solid var(--wp-line);
+  padding: var(--space-sm) 0;
+}
+.rooms-ask > summary { cursor: pointer; font-weight: 600; color: var(--wp-orange-deep); min-height: 44px; display: flex; align-items: center; }
+.idea-list { list-style: none; margin: 0; padding: 0; }
+.idea-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  border-top: 1px solid var(--wp-line);
+  padding: var(--space-sm) 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.idea-note { border-left: 2px solid var(--wp-line-strong); padding-left: var(--space-sm); }
+.idea-set-aside > summary { cursor: pointer; font-weight: 600; color: var(--wp-orange-deep); min-height: 44px; display: flex; align-items: center; }
+.schedule-room { display: flex; flex-direction: column; gap: var(--space-sm); }
+.sponsor-rows > li { overflow-wrap: anywhere; }
+.doc-row-plan > summary { cursor: pointer; font-size: var(--text-sm); font-weight: 600; color: var(--wp-orange-deep); }

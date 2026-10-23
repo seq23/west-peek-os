@@ -15,4 +15,7 @@ export const OFF_NAV_TITLES: Readonly<Record<string, { label: string; under: str
   introductions: { label: "Introductions", under: "community" },
   allocation: { label: "Fund strategy", under: "fund-strategy" },
   "follow-on": { label: "Fund strategy", under: "fund-strategy" },
+  "learning-club": { label: "The Learning Club", under: "rooms" },
+  "room-sponsors": { label: "Room sponsors", under: "rooms" },
+  "research-library": { label: "Research library", under: "rooms" },
 };

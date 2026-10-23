@@ -1796,7 +1796,8 @@ export async function handleTlcOverview(ctx: RouteContext): Promise<Response> {
     approvals: await approvalsView(ctx.env, settings),
     settings,
     held_emails: held,
-    ideas: (await ideasFor(ctx.env)).map((i) => ({ ...i, origin_label: TLC_IDEA_ORIGIN_LABEL[i.origin] })),
+    ideas: await ideasWithNotes(ctx.env),
+    research_links: await researchLinks(ctx.env),
     playbook_document_id: settings[PLAYBOOK_DOCUMENT_SETTING] ?? null,
     research: (await researchLibrary(ctx.env)).map((r) => ({ ...r, kind_label: TLC_RESEARCH_LABEL[r.kind] })),
   });
@@ -1833,6 +1834,55 @@ export async function handleTlcIdeaStatus(ctx: RouteContext): Promise<Response> 
     : await ctx.env.WP_OS_DB.prepare("UPDATE tlc_idea SET status = 'LATER', status_month = NULL, dropped_by = NULL, dropped_at = NULL, updated_at = ?2 WHERE id = ?1 AND status = 'DROPPED'").bind(ctx.params.id, now).run();
   if (!res.meta.changes) return json({ error: "not_found", detail: "no idea by that id to change" }, { status: 404 });
   return json({ ok: true, ideas: await ideasFor(ctx.env) });
+}
+
+// ── Notes on an idea, and the research pages (owner, 23 Oct 2026) ─────────────────────────────
+
+export interface TlcIdeaNoteRow { id: string; idea_id: string; body: string; author: string; created_at: string }
+export interface TlcResearchLinkRow { id: string; title: string; url: string; added_by: string; added_at: string }
+
+/** Every idea with its origin label and its notes, oldest note first. */
+export async function ideasWithNotes(env: Env, firmScope = "west-peek"): Promise<Array<TlcIdeaRow & { origin_label: string; notes: TlcIdeaNoteRow[] }>> {
+  const notes = (await env.WP_OS_DB.prepare("SELECT id, idea_id, body, author, created_at FROM tlc_idea_note WHERE firm_scope = ?1 ORDER BY created_at, id").bind(firmScope).all<TlcIdeaNoteRow>()).results ?? [];
+  return (await ideasFor(env, firmScope)).map((i) => ({ ...i, origin_label: TLC_IDEA_ORIGIN_LABEL[i.origin], notes: notes.filter((n) => n.idea_id === i.id) }));
+}
+
+export async function researchLinks(env: Env, firmScope = "west-peek"): Promise<TlcResearchLinkRow[]> {
+  return (await env.WP_OS_DB.prepare("SELECT id, title, url, added_by, added_at FROM tlc_research_link WHERE firm_scope = ?1 ORDER BY added_at DESC, id").bind(firmScope).all<TlcResearchLinkRow>()).results ?? [];
+}
+
+const ideaNoteSchema = z.object({ body: z.string().trim().min(2).max(600) });
+
+/** POST /api/tlc/ideas/:id/notes — a partner adds a note under an idea. Who and when are kept; nothing is edited or deleted. */
+export async function handleTlcIdeaNote(ctx: RouteContext): Promise<Response> {
+  const actor = actorFromIdentity(ctx.identity!);
+  if (actor.type !== "HUMAN") return json({ error: "forbidden", detail: "only a partner adds a note to an idea" }, { status: 403 });
+  const a = await requireManage(ctx);
+  if (a instanceof Response) return a;
+  const parsed = ideaNoteSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", detail: "a note needs a few words (2–600 characters)" }, { status: 400 });
+  const idea = await ctx.env.WP_OS_DB.prepare("SELECT id, firm_scope FROM tlc_idea WHERE id = ?1").bind(ctx.params.id).first<{ id: string; firm_scope: string }>();
+  if (!idea) return json({ error: "not_found", detail: "no idea by that id" }, { status: 404 });
+  const who = PARTNERS.find((p) => p.firmUserId === actor.firmUserId)?.firstName ?? ctx.identity!.id;
+  await ctx.env.WP_OS_DB.prepare("INSERT INTO tlc_idea_note (id, idea_id, body, author, created_at, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")
+    .bind(`tln_${crypto.randomUUID()}`, idea.id, parsed.data.body, who, new Date().toISOString(), idea.firm_scope).run();
+  return json({ ok: true, ideas: await ideasWithNotes(ctx.env) });
+}
+
+const researchLinkSchema = z.object({ title: z.string().trim().min(2).max(160), url: z.string().trim().url().max(500).refine((u) => /^https:\/\//i.test(u), "https only") });
+
+/** POST /api/tlc/research-links — a partner adds a research page (title + link) to the Research library. */
+export async function handleTlcResearchLinkAdd(ctx: RouteContext): Promise<Response> {
+  const actor = actorFromIdentity(ctx.identity!);
+  if (actor.type !== "HUMAN") return json({ error: "forbidden", detail: "only a partner adds a research link" }, { status: 403 });
+  const a = await requireManage(ctx);
+  if (a instanceof Response) return a;
+  const parsed = researchLinkSchema.safeParse(await ctx.request.json().catch(() => null));
+  if (!parsed.success) return json({ error: "invalid_input", detail: "a research link needs a title and an https:// address" }, { status: 400 });
+  const who = PARTNERS.find((p) => p.firmUserId === actor.firmUserId)?.firstName ?? ctx.identity!.id;
+  await ctx.env.WP_OS_DB.prepare("INSERT INTO tlc_research_link (id, title, url, added_by, added_at, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, 'west-peek')")
+    .bind(`trl_${crypto.randomUUID()}`, parsed.data.title, parsed.data.url, who, new Date().toISOString()).run();
+  return json({ ok: true, research_links: await researchLinks(ctx.env) });
 }
 
 const settingSchema = z.object({

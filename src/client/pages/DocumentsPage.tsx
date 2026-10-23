@@ -72,7 +72,11 @@ export function DocumentsPage({ onNavigate }: { onNavigate: (page: string) => vo
   const focusedEntry: ShelfEntry<DocumentRow> | null = useMemo(() => {
     if (!focused) return null;
     for (const g of fullShelf.groups)
-      for (const l of g.lines) for (const e of [l.latest, ...l.earlier]) if (e.doc.id === focused.id || e.copies.some((c) => c.id === focused.id)) return e;
+      for (const l of g.lines)
+        for (const e of [l.latest, ...l.earlier]) {
+          if (e.doc.id === focused.id || e.copies.some((c) => c.id === focused.id)) return e;
+          if (e.plan && (e.plan.doc.id === focused.id || e.plan.copies.some((c) => c.id === focused.id))) return e.plan;
+        }
     const p = plainTitle(focused);
     return { doc: focused, plain: p.title, original: p.changed ? focused.deck?.title ?? focused.title : null, group: groupOf(focused), copies: [] };
   }, [focused, fullShelf]);
@@ -130,6 +134,13 @@ export function DocumentsPage({ onNavigate }: { onNavigate: (page: string) => vo
             {e.copies.length > 0 && ` · filed ${e.copies.length + 1} times that day, all kept`}
             {opts.archived && d.archive_reason ? ` · archived: ${d.archive_reason}` : ""}
           </span>
+          {/* A REQUEST AND ITS PLAN ARE ONE ROW (owner, 23 Oct 2026): the plan folds under the request. */}
+          {e.plan && (
+            <details className="doc-row-plan" data-testid={`document-plan-${d.id}`}>
+              <summary>Plan ▾</summary>
+              <ul className="docs-rows">{row(e.plan)}</ul>
+            </details>
+          )}
         </div>
         <div className="doc-row-actions">
           <button type="button" className="btn-quiet" data-testid={`view-${d.id}`} onClick={() => setFocus(d.id)}>

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { gotoSurface } from "./support/nav";
+import { gotoSurface, openDisclosure } from "./support/nav";
 
 async function signIn(page: import("@playwright/test").Page): Promise<void> {
   await page.goto("/");
@@ -24,31 +24,44 @@ test("Events & Rooms explains itself and offers a proposal", async ({ page }) =>
   // The nav label became "Events & Rooms" when the two tabs merged, and gotoSurface matches the
   // visible label exactly — so this spec had been navigating to a button that no longer existed.
   await gotoSurface(page, "Events & Rooms");
+  /*
+   * THE V8 ORDER (owner approved the mock-up, 23 Oct 2026): the links row, Ideas, Put a gathering on
+   * the record, Ask Parker, five folded rows, then "How this works" at the bottom — which holds the
+   * detailed guide and Parker's card.
+   */
+  await expect(page.getByTestId("rooms-links")).toBeVisible();
+  const top = async (id: string): Promise<number> => (await page.getByTestId(id).boundingBox())!.y;
+  const order = ["rooms-links", "tlc-ideas-card", "event-create-form", "ask-parker", "rooms-scheduled", "rooms-kept", "workshops-fold", "events-fold", "declined-proposals", "rooms-how"];
+  const ys = [];
+  for (const id of order) ys.push(await top(id));
+  expect(ys, order.join(" < ")).toEqual([...ys].sort((a, b) => a - b));
+  await expect(page.getByTestId("how-this-works-rooms")).toBeHidden();
+  await openDisclosure(page, "rooms-how");
   await expect(page.getByTestId("how-this-works-rooms")).toBeVisible();
+  await expect(page.getByTestId("page-host-rooms")).toBeVisible();
+  await expect(page.getByTestId("programme-stance")).toBeVisible();
+  await openDisclosure(page, "ask-parker-fold");
   await expect(page.getByTestId("propose-room")).toBeVisible();
-  // Sponsors live on the same page: a Room and its funding are one decision.
-  await expect(page.getByTestId("add-sponsor")).toBeVisible();
-  // The record of what happened is the same page too, not a tab away — as a band of its own with
-  // its heading, not merely a phrase somewhere on the page (the purpose line now says the words
-  // too, which is what turned this from a text match into a heading match).
-  await expect(page.getByRole("heading", { name: "Every gathering on the record" })).toBeVisible();
+  // The record of what happened is the same page, as a folded row with its heading in the summary.
+  await expect(page.getByTestId("events-fold").locator("summary h3")).toHaveText("Every gathering on the record");
   /*
    * Operator: "declined proposals should go somewhere after they are declined. somewhere below
    * greyed out." The shelf is a section that renders even when it is empty — a shelf that appears
-   * only once something is on it is a shelf nobody learns exists. Since 15 Sep 2026 it is ONE
-   * closed lid, directly above "How often West Peek gathers", and the kept collection has its own
-   * section above the record.
+   * only once something is on it is a shelf nobody learns exists. It is ONE closed lid.
    */
   const shelf = page.getByTestId("declined-proposals");
   await expect(shelf).toBeVisible();
   expect(await shelf.evaluate((el) => (el as HTMLDetailsElement).open)).toBe(false);
   await expect(shelf.locator("summary")).toContainText("Rooms we turned down");
+  await openDisclosure(page, "rooms-kept");
   await expect(page.getByTestId("rooms-approved-empty")).toBeVisible();
-  const shelfTop = (await shelf.boundingBox())!.y;
-  const rhythmTop = (await page.getByTestId("programme-stance").boundingBox())!.y;
-  const sponsorsTop = (await page.getByTestId("add-sponsor").boundingBox())!.y;
-  expect(shelfTop, "the turned-down lid sits directly above the rhythm").toBeLessThan(rhythmTop);
-  expect(rhythmTop, "who is paying comes after the rhythm").toBeLessThan(sponsorsTop);
+  // Sponsors: Room sponsors, one tap away, with "Who is paying for it" as its heading.
+  await page.getByTestId("rooms-link-room-sponsors").click();
+  await expect(page).toHaveURL(/#\/room-sponsors$/);
+  await expect(page.getByRole("heading", { name: "Who is paying for it" })).toBeVisible();
+  await expect(page.getByTestId("add-sponsor")).toBeVisible();
+  await page.getByTestId("rooms-back").click();
+  await expect(page).toHaveURL(/#\/rooms$/);
 });
 
 /**
@@ -63,6 +76,7 @@ test("Events & Rooms explains itself and offers a proposal", async ({ page }) =>
 test("asking Parker for a Room records the brief and opens his card before anything else, and the shelf keeps the substance", async ({ page }) => {
   await signIn(page);
   await gotoSurface(page, "Events & Rooms");
+  await openDisclosure(page, "ask-parker-fold");
   await page.getByTestId("room-audience").fill("top Black lawyers on the rise");
   await page.getByTestId("room-month").fill("2026-10");
   await page.getByTestId("room-sponsors").fill("Harvey AI (harvey.ai)");

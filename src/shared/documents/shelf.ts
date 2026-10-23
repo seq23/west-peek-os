@@ -94,6 +94,20 @@ function snippet(raw: string, max = 48): string {
 }
 
 /**
+ * THE FIRST WORDS OF AN EMAIL, CUT AT A WORD (owner, 23 Oct 2026). A website-change title is stored as
+ * `Change <site>: "<the first ninety characters of her email>` — so it usually ends mid-word, and the
+ * shelf showed "Can you swap the Sensori photo on the s". A quote that never closes was cut: the
+ * partial last word goes and "…" says something was cut.
+ */
+export function emailSnippet(raw: string, max = 48): string {
+  const closed = /["”]\s*$/.test(raw.trim());
+  if (closed) return snippet(raw, max);
+  const whole = raw.replace(/\s+\S*$/, "");
+  const text = snippet(whole, max);
+  return text && !text.endsWith("…") ? `${text.replace(/[\s,;:—–-]+$/, "")}…` : text;
+}
+
+/**
  * A short title she can read, and whether it differs from the stored one. The stored title is the
  * record and is shown in full on open; this is only how the row is labelled.
  */
@@ -105,7 +119,7 @@ export function plainTitle(doc: Pick<ShelfDoc, "title" | "deck">): { title: stri
   if (m) {
     const sites = m[1]!.split(/\s*,\s*/).join(" and ");
     const plan = /^Plan:/i.test(stored) ? "Plan for a website change" : "Website change";
-    const what = snippet(m[2]!);
+    const what = emailSnippet(m[2]!);
     return make(what ? `${plan} on ${sites}: “${what}”` : `${plan} on ${sites}`);
   }
   m = PREP.exec(stored);
@@ -165,6 +179,8 @@ function copyKey(doc: ShelfDoc): string {
 
 export interface ShelfEntry<D extends ShelfDoc = ShelfDoc> {
   doc: D;
+  /** A website-change request's plan, paired onto the request's row ("Plan ▾") rather than a row of its own. */
+  plan?: ShelfEntry<D> | null;
   plain: string;
   /** The stored title, when the plain one differs — shown in full when the document is opened. */
   original: string | null;
@@ -201,7 +217,7 @@ const deckRank = (d: ShelfDoc): number => (d.deck?.state === "CURRENT" ? 0 : d.d
 
 function entryMatches(e: ShelfEntry, q: string): boolean {
   if (!q) return true;
-  const hay = [e.plain, e.doc.title, e.doc.deck?.title ?? "", groupLabel(e.group), ...e.copies.map((c) => c.title)].join(" ").toLowerCase();
+  const hay = [e.plain, e.doc.title, e.doc.deck?.title ?? "", groupLabel(e.group), ...e.copies.map((c) => c.title), e.plan?.plain ?? ""].join(" ").toLowerCase();
   return q
     .toLowerCase()
     .split(/\s+/)
@@ -236,6 +252,26 @@ export function buildShelf<D extends ShelfDoc>(docs: readonly D[], opts: { now?:
     byCopy.set(key, e);
     entries.push(e);
   }
+
+  // 1b · A website-change request and its plan are one row (owner, 23 Oct 2026). The plan's stored
+  // title is the request's with "Plan: " in front; the newest request of that title takes the newest
+  // plan. A plan with no request keeps its own row.
+  const requestsByKey = new Map<string, ShelfEntry<D>>();
+  for (const e of entries) {
+    const stored = (e.doc.deck?.title ?? e.doc.title).replace(/\s+/g, " ").trim();
+    if (e.group === "website" && !/^Plan:/i.test(stored) && !requestsByKey.has(stored.toLowerCase())) requestsByKey.set(stored.toLowerCase(), e);
+  }
+  const paired = new Set<ShelfEntry<D>>();
+  for (const e of entries) {
+    const stored = (e.doc.deck?.title ?? e.doc.title).replace(/\s+/g, " ").trim();
+    if (e.group !== "website" || !/^Plan:/i.test(stored)) continue;
+    const request = requestsByKey.get(stored.replace(/^Plan:\s*/i, "").toLowerCase());
+    if (request && !request.plan) {
+      request.plan = e;
+      paired.add(e);
+    }
+  }
+  if (paired.size > 0) entries.splice(0, entries.length, ...entries.filter((e) => !paired.has(e)));
 
   // 2 · The summary reads the whole shelf.
   const weekAgo = now.getTime() - 7 * 24 * 3600 * 1000;
@@ -284,7 +320,7 @@ export function buildShelf<D extends ShelfDoc>(docs: readonly D[], opts: { now?:
 /** Every document the shelf accounts for — entries, earlier items and same-day copies. */
 export function shelfCount(shelf: Shelf): number {
   let n = 0;
-  for (const g of shelf.groups) for (const l of g.lines) for (const e of [l.latest, ...l.earlier]) n += 1 + e.copies.length;
+  for (const g of shelf.groups) for (const l of g.lines) for (const e of [l.latest, ...l.earlier]) n += 1 + e.copies.length + (e.plan ? 1 + e.plan.copies.length : 0);
   return n;
 }
 
