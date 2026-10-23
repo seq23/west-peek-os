@@ -815,8 +815,16 @@ export async function runWednesdayPrep(env: Env, actor: Actor, now: Date): Promi
   let register: PrepRunResult["register"] = null;
   try {
     const reg = await buildDiscrepancyRegister(env);
+    /*
+     * ONE REGISTER, FILED ONCE. It is the same document for both partners, so it reaches each
+     * partner's Home as their own deliverable but is filed on Documents ONCE: the second hand-over
+     * points at the copy the first one filed. Before 23 Oct 2026 each partner's hand-over filed its
+     * own identical copy, and every weekly register sat on the shelf twice with the same date.
+     */
+    let filed: string | null = null;
     for (const p of partners) {
-      await deliver(env, actor, {
+      const handed = await deliver(env, actor, {
+        fileWith: filed,
         kind: "discrepancy_list",
         title: `${reg.fundName} — where our records and the deck disagree`,
         body: reg.body,
@@ -825,6 +833,7 @@ export async function runWednesdayPrep(env: Env, actor: Actor, now: Date): Promi
         sourceType: "discrepancy_list",
         sourceId: `${window.meetingDate}:${p.id}`,
       });
+      filed = filed ?? handed.document_id ?? null;
       await notify(env, {
         kind: "MEETING",
         severity: "INFO",

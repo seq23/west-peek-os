@@ -386,9 +386,11 @@ export async function handleListDocuments(ctx: RouteContext): Promise<Response> 
   const wantArchived = new URL(ctx.request.url).searchParams.get("archived") === "1";
   const shelf = wantArchived ? "archived_at IS NOT NULL" : "archived_at IS NULL";
   const rows = await ctx.env.WP_OS_DB.prepare(
-    `SELECT d.*, dv.version_no AS deck_version_no, dv.state AS deck_state, dv.id AS deck_version_id, dv.title AS deck_title
+    `SELECT d.*, dv.version_no AS deck_version_no, dv.state AS deck_state, dv.id AS deck_version_id, dv.title AS deck_title,
+            cv.content_type AS content_type
        FROM document d
        LEFT JOIN deck_version dv ON dv.document_id = d.id
+       LEFT JOIN document_version cv ON cv.id = d.current_version_id
       WHERE ${visibility} AND ${shelf}
       ORDER BY d.created_at DESC, d.id LIMIT 200`,
   ).all<DocumentRow & { deck_version_no: number | null; deck_state: string | null; deck_version_id: string | null; deck_title: string | null }>();
@@ -526,7 +528,7 @@ export async function handleDownloadDocument(ctx: RouteContext): Promise<Respons
     const bytes = await object.arrayBuffer();
     return new Response(bytes, {
       headers: {
-        "content-type": version.content_type,
+        "content-type": withCharset(version.content_type),
         "x-content-sha256": version.sha256,
         "x-document-version": String(version.version_no),
       },
@@ -536,6 +538,19 @@ export async function handleDownloadDocument(ctx: RouteContext): Promise<Respons
   }
 }
 
+
+/**
+ * TEXT IS SERVED AS UTF-8, SAID OUT LOUD. Every filed brief and review is UTF-8 Markdown, served
+ * as a bare `text/markdown`; a browser that is not told the charset guesses Windows-1252, and the
+ * owner saw "·" as "Â·" and "–" as "â€“" (23 Oct 2026). Text types without a charset get one;
+ * binary types and a charset already stated are left exactly as stored.
+ */
+export function withCharset(contentType: string): string {
+  const ct = (contentType || "application/octet-stream").trim();
+  if (/;\s*charset=/i.test(ct)) return ct;
+  if (/^text\//i.test(ct) || /^application\/(json|xml|javascript)\b/i.test(ct) || /\+(json|xml)\b/i.test(ct)) return `${ct}; charset=utf-8`;
+  return ct;
+}
 
 // ── What a document is about ──
 

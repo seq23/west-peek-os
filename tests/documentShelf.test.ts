@@ -243,3 +243,71 @@ describe("the deck on the shelf", () => {
     expect(left.body.documents.every((d) => d.deck && ["CURRENT", "PROPOSED"].includes(d.deck.state))).toBe(true);
   });
 });
+
+/*
+ * DOWNLOAD SAYS ITS CHARSET (owner, 23 Oct 2026). A filed review downloaded as bare `text/markdown`
+ * and her browser read the UTF-8 as Windows-1252: "·" became "Â·", "–" became "â€“".
+ */
+describe("a download says how its text is encoded", () => {
+  // The bucket bound, so bytes really round-trip.
+  const withDocs = () => makeTestEnv(t.db, { WP_OS_DOCUMENTS: t.docs });
+  const utf8 = (s: string) => {
+    let bin = "";
+    for (const b of new TextEncoder().encode(s)) bin += String.fromCharCode(b);
+    return btoa(bin);
+  };
+  async function upload(title: string, content_type: string, body: string): Promise<string> {
+    const res = await handleRequest(req("/api/documents", "POST", { title, doc_type: "REVIEW", content_type, content_base64: utf8(body) }), withDocs());
+    expect(res.status).toBe(201);
+    return ((await res.json()) as { id: string }).id;
+  }
+
+  it("serves Markdown and plain text as UTF-8, byte for byte", async () => {
+    const text = "# Review · week of 17 Sep – Fund I";
+    for (const type of ["text/markdown", "text/plain", "text/html", "text/csv"]) {
+      const id = await upload(`charset ${type}`, type, text);
+      const res = await handleRequest(req(`/api/documents/${id}/download`), withDocs());
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe(`${type}; charset=utf-8`);
+      const back = new TextDecoder("utf-8").decode(await res.arrayBuffer());
+      expect(back).toBe(text);
+      expect(back).not.toContain("Â");
+    }
+  });
+
+  it("leaves a binary type, and a charset already stated, exactly as stored", async () => {
+    const pdf = await upload("charset pdf", "application/pdf", "%PDF-1.4");
+    expect((await handleRequest(req(`/api/documents/${pdf}/download`), withDocs())).headers.get("content-type")).toBe("application/pdf");
+    const latin = await upload("charset stated", "text/plain; charset=iso-8859-1", "plain");
+    expect((await handleRequest(req(`/api/documents/${latin}/download`), withDocs())).headers.get("content-type")).toBe("text/plain; charset=iso-8859-1");
+  });
+
+  it("lists each document with the type of its current version, so the page knows how to show it", async () => {
+    const id = await upload("charset listed", "text/markdown", "# x");
+    const list = await call<{ documents: Array<{ id: string; content_type: string | null }> }>("/api/documents");
+    expect(list.body.documents.find((d) => d.id === id)!.content_type).toBe("text/markdown");
+  });
+});
+
+/*
+ * THE PLAYBOOK IS NOT APPROVED (owner, 23 Oct 2026). Its title said "(owner-approved, 22 Oct 2026)";
+ * version 2 was uploaded on 23 Oct. Migration 0267 corrects that one row and nothing else.
+ */
+describe("migration 0267 corrects the playbook's title and touches nothing else", () => {
+  it("renames doc_tlc_playbook only while it still carries the wrong wording", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { splitSqlStatements } = await import("./helpers/db");
+    const sql = readFileSync(new URL("../migrations/0267_tlc_playbook_title_is_version_2.sql", import.meta.url), "utf8");
+    const db = env.WP_OS_DB;
+    await db.prepare("INSERT INTO document (id, title, doc_type, uploaded_by) VALUES ('doc_tlc_playbook', 'The Learning Club Playbook (owner-approved, 22 Oct 2026)', 'OTHER', 'test')").run();
+    await db.prepare("INSERT INTO document (id, title, doc_type, uploaded_by) VALUES ('doc_other_approved', 'Something (owner-approved, 22 Oct 2026)', 'OTHER', 'test')").run();
+    for (const s of splitSqlStatements(sql)) await db.prepare(s).run();
+    const title = async (id: string) => (await db.prepare("SELECT title FROM document WHERE id = ?1").bind(id).first<{ title: string }>())!.title;
+    expect(await title("doc_tlc_playbook")).toBe("The Learning Club Playbook (version 2, 23 Oct 2026)");
+    expect(await title("doc_other_approved")).toBe("Something (owner-approved, 22 Oct 2026)");
+    // A later rename is never overwritten by re-running it.
+    await db.prepare("UPDATE document SET title = 'The Learning Club Playbook (version 3)' WHERE id = 'doc_tlc_playbook'").run();
+    for (const s of splitSqlStatements(sql)) await db.prepare(s).run();
+    expect(await title("doc_tlc_playbook")).toBe("The Learning Club Playbook (version 3)");
+  });
+});

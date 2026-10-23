@@ -352,4 +352,40 @@ describe("the run hands everything over and every employee reports", () => {
     ).first<{ n: number }>();
     expect(n!.n).toBe(2);
   });
+
+  /*
+   * THE DUPLICATE ON DOCUMENTS (owner, 23 Oct 2026). Every weekly "where our records and the deck
+   * disagree" sat on the shelf twice with the same date. Root cause: ONE job, writing one identical
+   * register per partner, and every hand-over filed its own document. The register still reaches
+   * both partners' Home; it is FILED once, and both hand-overs point at that one document.
+   */
+  it("files the register ONCE for both partners, and a re-run files nothing new", async () => {
+    // With the document bucket bound, so filing really happens; a new week, so nothing earlier counts.
+    const filing = makeTestEnv(t.db, { WP_OS_DOCUMENTS: t.docs });
+    const since = new Date().toISOString();
+    const out = await runWednesdayPrep(filing, SYSTEM, new Date("2026-09-18T18:00:00.000Z"));
+    expect(out.failures).toEqual([]);
+    const filed = async () =>
+      (
+        await t.db.prepare(
+          "SELECT id FROM document WHERE title LIKE '%where our records and the deck disagree' AND created_at >= ?1",
+        ).bind(since).all<{ id: string }>()
+      ).results ?? [];
+    expect((await filed()).length, "the register was filed more than once (or not at all)").toBe(1);
+
+    const handed = (
+      await t.db.prepare("SELECT prepared_for, document_id FROM deliverable WHERE kind = 'discrepancy_list' AND source_id LIKE '2026-09-23:%'")
+        .all<{ prepared_for: string; document_id: string | null }>()
+    ).results ?? [];
+    expect(handed.length, "the register no longer reaches both partners").toBe(2);
+    expect(new Set(handed.map((h) => h.prepared_for)).size).toBe(2);
+    expect(handed.map((h) => h.document_id), "the hand-overs point at different documents").toEqual([(await filed())[0]!.id, (await filed())[0]!.id]);
+
+    // The per-partner prep packets are different documents and stay one each.
+    const packets = await t.db.prepare("SELECT COUNT(*) AS n FROM document WHERE title LIKE '%prep for the Wednesday sync, 2026-09-23' AND created_at >= ?1").bind(since).first<{ n: number }>();
+    expect(packets!.n).toBe(2);
+
+    await runWednesdayPrep(filing, SYSTEM, new Date("2026-09-18T19:00:00.000Z"));
+    expect((await filed()).length, "a re-run of the same week filed another copy").toBe(1);
+  });
 });
