@@ -3,6 +3,7 @@ import { api, mutationError, useApi, type MeResponse } from "../lib/api";
 import { actionDescription, actionName, actorName, approvalStateWords, roleWords } from "@shared/help/actionNames";
 import { readableDate, shortDate } from "../lib/dates";
 import { ApprovalContextPanel } from "./ApprovalContextPanel";
+import { WayInApprovals } from "./TlcMustPitch";
 
 /**
  * Approvals — everything waiting on a person, and every way of answering it.
@@ -786,6 +787,7 @@ export function ApprovalsPage({ me, refreshNonce }: { me: MeResponse; refreshNon
   return (
     <section data-testid="approvals-page">
       <StandingAuthority nonce={refreshNonce + reloadCount} />
+      <WayInApprovals refreshNonce={refreshNonce} />
 
       <div className="home-section-head">
         <h4>

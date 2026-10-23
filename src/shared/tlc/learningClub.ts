@@ -196,7 +196,10 @@ export function competingCategories(cats: ReadonlyArray<Pick<TlcSponsorCategory,
 /**
  * TOPICS WE DO NOT RUN, AND SPONSORS THAT NEVER MIX (owner, 22 Oct 2026).
  *  - Peptides: do not run (FDA warning letters to research-use sellers; contested status in 2026).
- *  - Betting brands (sportsbooks, prediction markets) stay out of Q1 2027.
+ *  - Betting brands (sportsbooks, casinos) stay out of Q1 2027.
+ *  - Prediction markets are NOT betting here (owner, 23 Oct 2026: "the rule about no prediction in q1 is
+ *    stupid to me"): Kalshi, Polymarket and Robinhood may be pitched in any month, Q1 included, for
+ *    investing or money topics (Money Reset).
  *  - Betting and trading brands never share an event.
  */
 export const TLC_DO_NOT_RUN: ReadonlyArray<{ match: RegExp; why: string }> = [
@@ -206,7 +209,7 @@ export function doNotRun(topic: string): string | null {
   return TLC_DO_NOT_RUN.find((d) => d.match.test(topic))?.why ?? null;
 }
 const PEPTIDE_SELLER = /peptide/i;
-const BETTING = /sportsbook|sports betting|\bbetting\b|prediction market|event contract|casino|gambling/i;
+const BETTING = /sportsbook|sports betting|\bbetting\b|casino|gambling|draftkings|fanduel|betmgm/i;
 const TRADING = /\btrading\b|brokerage|\bbroker\b|investing app|stock app|\bcrypto exchange/i;
 /** The last month of Q1 2027: two months after the first club. */
 export const TLC_NO_BETTING_THROUGH = addMonths(TLC_FIRST_MONTH, 2);
@@ -534,6 +537,9 @@ export type DripStop = "REPLIED" | "BOUNCED" | "UNSUBSCRIBED" | "DECLINED";
  * over (all four sent) or stopped. Day N counts from the first send, so a held day-0 does not
  * squeeze the rest together.
  */
+/** The model's own picks per club, per batch. Brands we must pitch (tlc_must_pitch) are outside it. */
+export const TLC_BRANDS_PER_CLUB = 5;
+
 export function nextDripAt(step: number, firstSentAt: string | null, now: Date, stopped: DripStop | null): string | null {
   if (stopped) return null;
   if (step >= TLC_DRIP_DAYS.length) return null;
@@ -582,6 +588,7 @@ export interface DripEmailInput {
  */
 export const TLC_DRIP_PROOF_LINE = "Our community of more than 5,000 founders, operators and creatives meets in person through West Peek Rooms, our event series in New York.";
 export const TLC_DRIP_ASK = "Would you be open to exploring a partnership?";
+export const TLC_OPT_OUT_LINE = "If you would rather not hear from us, reply \"unsubscribe\" and we will not write again.";
 export const TLC_SIGNATURE: readonly string[] = [TLC_OWNER.name, TLC_OWNER.firm, TLC_OWNER.email];
 export function dripEmail(input: DripEmailInput): { subject: string; text: string } {
   const hi = input.contactName ? `Hi ${input.contactName.split(" ")[0]},` : "Hi,";
@@ -610,8 +617,19 @@ export function dripEmail(input: DripEmailInput): { subject: string; text: strin
     [hi, "", `Following up once more on The Learning Club in ${when}. If a partnership around ${input.topic} is on your radar, I would be glad to share more.`],
     [hi, "", `Last note from me on the ${input.topic} club. If the timing is wrong this round, we run one most months in New York and I would be glad to keep ${input.brand} in mind.`],
   ];
-  const text = [...bodies[Math.min(input.step, 3)]!, "", ...TLC_SIGNATURE, "", "If you would rather not hear from us, reply \"unsubscribe\" and we will not write again."].join("\n");
+  const text = [...bodies[Math.min(input.step, 3)]!, "", ...TLC_SIGNATURE, "", TLC_OPT_OUT_LINE].join("\n");
   return { subject, text };
+}
+
+/**
+ * AN OWNER-APPROVED FIRST EMAIL, WORD FOR WORD (owner, 23 Oct 2026, ElevenLabs). Her text is used as it
+ * was approved: "[Name]" becomes the contact's first name, and "Hi [Name]," becomes "Hi," when there is
+ * none. Only the opt-out line every brand email carries is added after it. Emails 2 to 4 stay generated.
+ */
+export function approvedDayZeroEmail(approved: { subject: string; body: string }, contactName: string | null): { subject: string; text: string } {
+  const first = contactName?.trim().split(/\s+/)[0] ?? "";
+  const body = (first ? approved.body.replace(/\[Name\]/g, first) : approved.body.replace(/Hi \[Name\],/g, "Hi,").replace(/\s?\[Name\]/g, "")).trimEnd();
+  return { subject: approved.subject, text: [body, "", TLC_OPT_OUT_LINE].join("\n") };
 }
 
 /** Replies that say no, read from the subject alone; anything else that is a reply may be a yes. */

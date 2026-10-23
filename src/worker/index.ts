@@ -162,6 +162,7 @@ import {
   handleScheduleRoom, handleVerifyVenue, handleWithdrawSteer,
 } from "./services/roomPacket";
 import { handleOutsideEmailAllow, handleOutsideEmailCard, handleOutsideEmailMode, handleOutsideEmailScreen } from "./services/outsideEmail";
+import { handleMustPitchAdd, handleMustPitchOverview, handleMustPitchRemove, handleWayInContact, handleWayInHide } from "./services/tlcMustPitch";
 import { handleTlcApprove, handleTlcDeal, handleTlcIdeaAdd, handleTlcIdeaStatus, handleTlcOnePager, handleTlcOverview, handleTlcPitchPublic, handleTlcPlan, handleTlcTicket } from "./services/learningClub";
 import { handleRoomsPartners } from "./services/partnersPanel";
 import {
@@ -1084,6 +1085,11 @@ const router = new Router()
   .get("/api/rooms/partners", handleRoomsPartners)
   .post("/api/tlc/events/:id/plan", handleTlcPlan)
   .post("/api/tlc/ideas", handleTlcIdeaAdd)
+  .get("/api/tlc/must-pitch", handleMustPitchOverview)
+  .post("/api/tlc/must-pitch", handleMustPitchAdd)
+  .post("/api/tlc/must-pitch/:id/remove", handleMustPitchRemove)
+  .post("/api/tlc/way-in/:key/contact", handleWayInContact)
+  .post("/api/tlc/way-in/:key/hide", handleWayInHide)
   .post("/api/tlc/ideas/:id/drop", handleTlcIdeaStatus)
   .post("/api/tlc/ideas/:id/restore", handleTlcIdeaStatus)
   .get("/api/sponsors", handleListSponsors)

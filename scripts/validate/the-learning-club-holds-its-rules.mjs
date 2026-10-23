@@ -15,6 +15,10 @@
  *       story row.
  *   4 · THE NUMBERS ARE THE OWNER'S: drip 0/4/10/18, 25–40 seats, $10 ticket max, $10,000 target,
  *       $7,500 floor, $5,000 cap, 3-day veto window, 21/14-day checks.
+ *   5 · BRANDS WE MUST PITCH COME FIRST AND ARE NEVER DROPPED (owner, 23 Oct 2026). The batch calls
+ *       `handleMustPitch(` before it reads the model's own picks; both paths pass the ONE address check
+ *       `addressReadOffPage(` (the address must be in the page's text); a brand that fails it is written
+ *       to tlc_way_in; and tlc_deal has ONE insert, `queueDeal`. No migration writes a way-in contact.
  *
  * Hard-fails on zero: every file it reads must exist and be non-empty. `--self-test` plants each
  * violation and requires it to be caught.
@@ -29,6 +33,7 @@ const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const FILES = {
   shared: "src/shared/tlc/learningClub.ts",
   service: "src/worker/services/learningClub.ts",
+  mustPitch: "src/worker/services/tlcMustPitch.ts",
   migration: "migrations/0259_the_learning_club_and_wynn_returns.sql",
   wrangler: "wrangler.toml",
 };
@@ -48,7 +53,7 @@ export function check(src) {
     if (!v || !v.trim()) f.push(`${k}: file missing or empty — a scan that read nothing is not a pass`);
   }
   if (f.length) return f;
-  const { shared, service, migration, wrangler, migrations } = src;
+  const { shared, service, migration, wrangler, migrations, mustPitch } = src;
 
   // 1 · The send gate.
   if (!/INSERT INTO tlc_setting \(key, value, set_by\) VALUES \('brand_send', 'off'/.test(migration)) f.push("the brand-send switch is not seeded 'off' in 0259");
@@ -103,6 +108,22 @@ export function check(src) {
     [/PRESENTING: \{ label: "Presenting partner", priceUsd: 15_000/, "Presenting partner $15,000"],
   ];
   for (const [re, what] of pins) if (!re.test(shared)) f.push(`the owner's number moved: ${what}`);
+
+  // 5 · Brands we must pitch: first, the same address check, never dropped, one insert.
+  const batchAt = service.indexOf("async function runBrandBatch(");
+  const batchBody = batchAt < 0 ? "" : service.slice(batchAt, service.indexOf("\nasync function ", batchAt + 10));
+  const mustAt = batchBody.indexOf("handleMustPitch(");
+  const picksAt = batchBody.indexOf("for (const b of brands)");
+  if (mustAt < 0 || picksAt < 0 || !(mustAt < picksAt)) f.push("the brand batch does not handle the must-pitch brands before the model's own picks");
+  if (!/addressReadOffPage\(email, source, check, pageText\)/.test(batchBody)) f.push("the model's own picks do not pass the one address check");
+  if (!/addressReadOffPage\(email, source, check, pageText\)/.test(mustPitch)) f.push("must-pitch brands do not pass the one address check");
+  if (!/if \(!text\.toLowerCase\(\)\.includes\(email\)\) return/.test(mustPitch)) f.push("the address check no longer requires the address in the page's text");
+  if (!/INSERT INTO tlc_way_in/.test(mustPitch)) f.push("a must-pitch brand with no address is not written as a Needs a way in item");
+  const dealInserts = [service, mustPitch].reduce((n, t) => n + (t.match(/INSERT (OR \w+ )?INTO tlc_deal\b/g) ?? []).length, 0);
+  if (dealInserts !== 1) f.push(`tlc_deal has ${dealInserts} inserts; there must be one (queueDeal)`);
+  for (const [file, text] of migrations) {
+    if (/INSERT\s+(OR\s+\w+\s+)?INTO\s+tlc_way_in\b/i.test(text)) f.push(`${file}: writes a way-in contact into the public repo`);
+  }
   return f;
 }
 
@@ -144,6 +165,14 @@ function selfTest() {
     ["TLC mail to both partners", { shared: good.shared.replace("TLC_RECIPIENTS: readonly string[] = [TLC_OWNER.email]", "TLC_RECIPIENTS: readonly string[] = PARTNER_EMAILS") }],
     ["Scooter addressed", { service: `${good.service}\nconst to = "scooter@westpeek.ventures";\n` }],
     ["price moved", { shared: good.shared.replace('PARTNER: { label: "Partner", priceUsd: 5_000', 'PARTNER: { label: "Partner", priceUsd: 2_500') }],
+    ["must-pitch after the picks", { service: good.service.replace("handleMustPitch(", "handleMustPitchLater(").replace("for (const b of brands) {", "for (const b of brands) {\n    const late = await handleMustPitch(env);") }],
+    ["must-pitch handling removed", { service: good.service.replace("handleMustPitch(", "skipMustPitch(") }],
+    ["picks skip the address check", { service: good.service.replace("addressReadOffPage(email, source, check, pageText)", "null") }],
+    ["must-pitch skips the address check", { mustPitch: good.mustPitch.replace("addressReadOffPage(email, source, check, pageText)", "null") }],
+    ["address check loosened", { mustPitch: good.mustPitch.replace("if (!text.toLowerCase().includes(email)) return", "if (false) return") }],
+    ["no-address brand dropped", { mustPitch: good.mustPitch.replace("INSERT INTO tlc_way_in", "SELECT 1 FROM tlc_way_in") }],
+    ["second deal insert", { service: `${good.service}\nconst q = "INSERT INTO tlc_deal (id) VALUES (1)";\n` }],
+    ["way-in contact in a migration", { migrations: [...good.migrations, ["9999_y.sql", "INSERT INTO tlc_way_in (brand_key) VALUES ('x');"]] }],
     ["file missing", { service: null }],
   ];
   let caught = 0;
@@ -166,5 +195,5 @@ if (process.argv.includes("--self-test")) {
     console.error(`The Learning Club's rules are not wired:\n  ${failures.join("\n  ")}`);
     process.exit(1);
   }
-  console.log("Learning Club rules hold: brand send off by default and gated, no spend path, no sponsor data in the repo, the owner's numbers pinned.");
+  console.log("Learning Club rules hold: brand send off by default and gated, no spend path, no sponsor data in the repo, the owner's numbers pinned, must-pitch brands first and never dropped.");
 }
