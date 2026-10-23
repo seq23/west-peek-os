@@ -336,15 +336,19 @@ describe("the owner's rulings on rooms, money, sponsors and ideas (22 Oct 2026)"
     expect(TLC_IDEA_ORIGIN_LABEL.SUGGESTED_LIST).toBe("Suggested list (written by the assistant, 22 Oct)");
   });
 
-  it("a hands-on idea with a designed AI angle is eligible from April 2027; one without stays gated until 2 clubs have each raised $25,000", async () => {
+  it("a hands-on idea with a designed AI angle is eligible from April 2027; one without stays gated until 6 clubs have each raised $25,000", async () => {
     const { ideaEligibility } = await import("../src/shared/tlc/learningClub");
     const matcha = { topic: "Matcha & Tea", earliest_month: "2027-04", packet: { ai_angle: "An AI-designed tasting flight and a personal flavour profile." } };
     expect(ideaEligibility(matcha, "2027-03", 0)).toEqual({ eligible: false, why: "not before 2027-04" });
     expect(ideaEligibility(matcha, "2027-04", 0)).toEqual({ eligible: true, why: null });
     const plain = { topic: "Matcha & Tea", earliest_month: null, packet: null };
     expect(ideaEligibility(plain, "2027-06", 0).eligible).toBe(false);
-    expect(ideaEligibility(plain, "2027-06", 1).why).toMatch(/waits until 2 clubs have each raised \$25,000 \(1 so far\)/);
-    expect(ideaEligibility(plain, "2027-06", 2)).toEqual({ eligible: true, why: null });
+    // Six funded clubs, not two (owner correction, 22 Oct 2026).
+    expect(ideaEligibility(plain, "2027-06", 2).eligible).toBe(false);
+    expect(ideaEligibility(plain, "2027-06", 5).why).toMatch(/waits until 6 clubs have each raised \$25,000 \(5 so far\)/);
+    expect(ideaEligibility(plain, "2027-06", 6)).toEqual({ eligible: true, why: null });
+    // The AI-angled version is unaffected by the count.
+    expect(ideaEligibility(matcha, "2027-04", 0)).toEqual({ eligible: true, why: null });
     expect(ideaEligibility({ topic: "Build Your Own AI Agent" }, "2027-03", 0).eligible).toBe(true);
   });
 
