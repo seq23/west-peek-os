@@ -82,7 +82,7 @@ export const CLAIM_POLL_MS = 1_500;
  * first and the paid search lane answers; a run the router has abandoned is closed, never left to be
  * claimed afterwards.
  */
-export const SEARCH_CLAIM_WAIT_MS = 230_000;
+export const SEARCH_CLAIM_WAIT_MS = 540_000;
 /*
  * MEASURED 22 OCT 2026, and raised from 180 s. Claude Code searches for The Learning Club, read off
  * subscription_seat_run (claimed_at → reported_at): 132 s, 116 s, 114 s, 133 s, 159 s, and one that
@@ -90,6 +90,13 @@ export const SEARCH_CLAIM_WAIT_MS = 230_000;
  * posture there is no paid search lane for the router to give up TO, so giving up early only throws the
  * answer away. The wait now runs to just inside the claimer's own kill timer (240 s), and
  * tests/seatSearchWait.test.ts holds that ordering.
+ *
+ * MEASURED 24 OCT 2026, and raised from 230 s to 540 s. The TLC brand batch's live searches on her Mac's Claude
+ * Code seat: one club with five brands took 126 s in a terminal and 272 s from the claimer's directory; with
+ * three brands the 18:53Z run still passed 230 s and was ABANDONED (five ABANDONED runs that day, every one
+ * claimed within seconds and still working when the router gave up). The answer was thrown away each time and
+ * the card retried every 30 minutes. 540 s sits inside the Worker's 15-minute scheduled limit and just inside
+ * the claimer's kill timer (570 s).
  */
 
 /** The capability a claimer declares in its heartbeat when it can run a seat in live-search mode. */

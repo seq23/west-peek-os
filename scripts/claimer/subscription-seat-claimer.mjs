@@ -86,7 +86,8 @@ function currentCapabilities() {
  * Longer than the router's own search wait (SEARCH_CLAIM_WAIT_MS, 180s) so the router gives up first and
  * the paid search lane answers; a run it abandoned is closed on the Worker side, not left to be claimed.
  */
-const SEARCH_RUN_TIMEOUT_MS = 240_000;
+// 24 Oct 2026: 570 s, just past the router's 540 s search wait (measured TLC searches ran 126–272 s and longer).
+const SEARCH_RUN_TIMEOUT_MS = 570_000;
 
 /** Must match HEARTBEAT_INTERVAL_S in src/worker/ai/subscriptionSeats.ts. Asserted at startup. */
 const HEARTBEAT_INTERVAL_S = 30;

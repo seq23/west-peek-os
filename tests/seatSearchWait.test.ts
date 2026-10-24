@@ -14,7 +14,9 @@ describe("the seat search wait", () => {
     const m = /const SEARCH_RUN_TIMEOUT_MS = ([\d_]+);/.exec(claimer);
     expect(m).toBeTruthy();
     const kill = Number(m![1]!.replace(/_/g, ""));
-    expect(SEARCH_CLAIM_WAIT_MS).toBeGreaterThanOrEqual(220_000);
+    // 24 Oct 2026: measured TLC searches ran past 230 s; the wait is at least 500 s and inside the 15-minute scheduled limit.
+    expect(SEARCH_CLAIM_WAIT_MS).toBeGreaterThanOrEqual(500_000);
+    expect(kill).toBeLessThan(900_000);
     expect(SEARCH_CLAIM_WAIT_MS).toBeLessThan(kill);
   });
 });
