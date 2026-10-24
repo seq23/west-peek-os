@@ -464,9 +464,10 @@ export async function runDripPass(env: Env, now: Date, firmScope = "west-peek"):
     if ((deals?.n ?? 0) === 0 && !batchOpen) batch = (await openBrandBatchCard(env, now, firmScope)).detail;
   }
   const drip = await runDrip(env, now, firmScope);
-  const { sendDraftNotice } = await import("./tlcDraftNotice");
+  const { repairLeakedDrafts, sendDraftNotice } = await import("./tlcDraftNotice");
+  const repaired = await repairLeakedDrafts(env, now, firmScope);
   const notice = await sendDraftNotice(env, now, firmScope);
-  return { batch, drip, notice };
+  return { batch, drip, notice: repaired.startsWith("no draft") ? notice : `${notice}; ${repaired}` };
 }
 
 // ── The daily pass ──────────────────────────────────────────────────────────────────────────────

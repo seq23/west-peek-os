@@ -614,7 +614,7 @@ export const TLC_SIGNATURE: readonly string[] = [TLC_OWNER.name, TLC_OWNER.firm,
  * works at Hyperice's PR agency…") and lowercased the brand ("garmin makes…"). The email takes the first sentence
  * alone, and none at all when that sentence is itself internal; Approvals still shows her the whole note.
  */
-export const TLC_INTERNAL_NOTE = /\b(?:limits?|caveats?|note|check that|never-approach|must not approach|compet\w*|tier|(?:title|lead|product|presenting|founding) partner|partner seat|inbox|press contact|media contact|PR agency|not (?:a )?partnerships?|job title|newsroom|on the page|the page)\b/i;
+export const TLC_INTERNAL_NOTE = /\b(?:limits?|caveats?|note|check that|never-approach|must not approach|compet\w*|tier|(?:title|lead|product|presenting) partner|partner seat|inbox|press contact|media contact|PR agency|not (?:a )?partnerships?|job title|newsroom|on the page|the page)\b/i;
 const SENTENCE_STARTERS = new Set(["The", "A", "An", "It", "Its", "This", "These", "That", "Their", "They", "Your", "On", "In", "With", "As", "After", "Since", "Last", "Every", "Each"]);
 export function brandFacingReason(why: string | null | undefined): string | null {
   const text = (why ?? "").replace(/\s+/g, " ").trim();
