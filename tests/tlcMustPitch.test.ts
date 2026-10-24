@@ -273,7 +273,7 @@ describe("ElevenLabs: her approved first email is kept, she sent it herself, and
   it("is stored on her must-pitch entry, and fills [Name] or falls back to 'Hi,'", async () => {
     const row = await env.WP_OS_DB.prepare("SELECT day0_subject, day0_body, day0_topic, day0_approved_by FROM tlc_must_pitch WHERE brand = 'ElevenLabs'").first<{ day0_subject: string; day0_body: string; day0_topic: string; day0_approved_by: string }>();
     expect(row).toMatchObject({ day0_subject: "A Valentine's-week room in New York", day0_topic: "Fragrance Lab", day0_approved_by: "Sequoia" });
-    expect(row!.day0_body).toBe(`Hi [Name],\n\n${APPROVED_BODY.slice(0, APPROVED_BODY.indexOf("\n\nIf you would rather"))}`);
+    expect(row!.day0_body).toBe(`Hi [Name],\n\n${APPROVED_BODY.slice(0, APPROVED_BODY.indexOf(`\n\n${TLC_OPT_OUT_LINE}`))}`);
     expect(approvedDayZeroEmail({ subject: row!.day0_subject, body: row!.day0_body }, "Ana Lee")).toEqual({ subject: "A Valentine's-week room in New York", text: `Hi Ana,\n\n${APPROVED_BODY}` });
     expect(approvedDayZeroEmail({ subject: row!.day0_subject, body: row!.day0_body }, null).text).toBe(`Hi,\n\n${APPROVED_BODY}`);
   });

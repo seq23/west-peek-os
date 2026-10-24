@@ -7,19 +7,20 @@ import { parseDraftReply } from "../src/shared/tlc/draftReply";
 import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
 
 /**
- * ONE NOTICE FOR A BATCH OF DRAFTS, APPROVED BY REPLY (owner, 24 Oct 2026). Fake brands and addresses only.
+ * ONE TLC EMAIL A WEEK, APPROVED BY REPLY (owner, 24 Oct 2026). Fake brands and addresses only.
  */
 let t: TestDb;
 let env: Env;
-const sends: Array<{ to: string; subject: string; text: string }> = [];
+const sends: Array<{ to: string; subject: string; text: string; headers: Record<string, string> }> = [];
 
 const SEQUOIA = "sequoia@westpeek.ventures";
+const SCOOTER = "scooter@westpeek.ventures";
 const genuineFrom = (address: string): string =>
   `${TRUSTED_AUTHSERV_ID}; dkim=pass header.d=westpeek-ventures.20251104.gappssmtp.com header.s=20251104; ` +
   `dmarc=none header.from=${address.split("@")[1]} policy.dmarc=none; ` +
   `spf=pass (${TRUSTED_AUTHSERV_ID}: domain of ${address} designates 2607:f8b0:4864:20::f2e as permitted sender) smtp.mailfrom=${address}; arc=none`;
-const SCOOTER = "scooter@westpeek.ventures";
 const MORNING = new Date("2026-11-09T14:00:00.000Z");
+let cardId = "";
 
 const reply = (subject: string, body: string, from = SEQUOIA, auth = genuineFrom(from)) =>
   applyTlcDraftReply(env, { fromHeader: `Partner <${from}>`, authenticationResults: auth, subject, body }, { now: MORNING, redraft: async (_e, _a, i) => ({ ok: true, subject: `${i.subject} (v2)`, body: `Shorter, per "${i.note}".`, detail: "ok" }) });
@@ -31,24 +32,26 @@ async function deal(brand: string, month: string): Promise<void> {
   await env.WP_OS_DB.prepare("INSERT INTO tlc_deal (id, event_id, brand, contact_name, contact_email, contact_source_url, why_fit, next_send_at, firm_scope) VALUES (?1, ?2, ?3, 'Pat Example', ?4, 'https://example.test/team', 'they host tastings', ?5, 'west-peek')")
     .bind(`tld_${brand.replace(/\W/g, "")}`, `tlc_${month}`, brand, `pat@${brand.toLowerCase().replace(/\W/g, "")}.example`, MORNING.toISOString()).run();
 }
+const record = (month: string, added: string[], dropped: string[] = []) =>
+  env.WP_OS_DB.prepare("INSERT INTO event_record (id, event_type, actor_type, actor_id, object_type, object_id, firm_scope, payload_json) VALUES (?1, 'tlc.batch_club_done', 'ai_employee', 'aie_wynn', 'work_card', ?2, 'west-peek', ?3)")
+    .bind(`evr_${crypto.randomUUID()}`, cardId, JSON.stringify({ event_id: `tlc_${month}`, month, part: "picks", added, dropped, queued: [], wayIn: [], changed: 0 })).run();
 
 beforeAll(async () => {
   t = await createTestDb();
   env = { ...makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>), RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures" } as Env;
   vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
     if (String(url).includes("api.resend.com")) {
-      const b = JSON.parse(String(init?.body)) as { to: string | string[]; subject: string; text: string };
-      sends.push({ to: Array.isArray(b.to) ? b.to.join(",") : b.to, subject: b.subject, text: b.text });
+      const b = JSON.parse(String(init?.body)) as { to: string | string[]; subject: string; text: string; headers?: Record<string, string> };
+      sends.push({ to: Array.isArray(b.to) ? b.to.join(",") : b.to, subject: b.subject, text: b.text, headers: b.headers ?? {} });
       return new Response(JSON.stringify({ id: `re_${sends.length}` }), { status: 200 });
     }
     throw new Error(`unexpected fetch ${String(url)}`);
   });
   await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO firm_user (id, email, full_name, status) VALUES ('fu_sequoia_taylor', ?1, 'Sequoia Taylor', 'ACTIVE')").bind(SEQUOIA).run();
-  for (const [m, d, topic] of [["2027-01", "2027-01-21", "The Longevity Reset"], ["2027-02", "2027-02-11", "Fragrance Lab"]] as const) {
+  for (const [m, d, topic] of [["2027-01", "2027-01-21", "The Longevity Reset"], ["2027-02", "2027-02-11", "Fragrance Lab"], ["2027-03", "2027-03-18", "Build Your Own AI Agent"]] as const) {
     await env.WP_OS_DB.prepare("INSERT INTO tlc_event (id, month, event_date, slot, topic, angle, status, sponsor_categories_json, pitch_token) VALUES (?1, ?2, ?3, 'EVENING', ?4, 'A hands-on evening.', 'TOPIC_READY', '[]', ?5)")
       .bind(`tlc_${m}`, m, d, topic, m.replace("-", "").padEnd(32, "b")).run();
   }
-  // The gate open, exactly as it is live: approved pitch and playbook by hash, the switch on, the job allowed.
   const h = await contentHashes(env);
   await env.WP_OS_DB.prepare("INSERT INTO tlc_setting (key, value) VALUES ('pitch_approved_hash', ?1), ('playbook_approved_hash', ?2), ('brand_send', 'on') ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(h.pitch, h.playbook).run();
   await env.WP_OS_DB.prepare("INSERT INTO outside_email_allow (item_type, item_id, allowed, changed_by) VALUES ('JOB','tlc_brand_sales',1,'test')").run();
@@ -68,78 +71,88 @@ describe("her reply is read the way she writes it", () => {
   });
 });
 
-describe("one notice for the batch, full copy, approved by reply", () => {
+describe("one TLC email a week, every club at once, approved by reply", () => {
   let ref = "";
-  it("drafts every due email together (the warm-up cap is on sends) and sends ONE notice with the full text of each", async () => {
+  let subject = "";
+  it("sends nothing while the week's batch is still running — not a partial email, not a per-draft ping", async () => {
+    const opened = await openBrandBatchCard(env, MORNING);
+    cardId = opened.cardId!;
     const drip = await runDrip(env, MORNING);
     expect(drip.awaitingApproval).toBe(3);
-    // No per-draft email from the drip itself.
+    expect(await sendDraftNotice(env, MORNING)).toBe("waiting for the week's batch to finish");
+    // Not even after her morning, and not after a day: the batch decides.
+    expect(await sendDraftNotice(env, new Date("2026-11-10T20:00:00.000Z"))).toBe("waiting for the week's batch to finish");
     expect(sends).toHaveLength(0);
-    const said = await sendDraftNotice(env, MORNING);
-    expect(said).toMatch(/^notice TLC-[A-Z0-9]{6} listing 3 draft\(s\) sent to sequoia@westpeek\.ventures$/);
+  });
+
+  it("once the batch is done: ONE email, all clubs, numbered, full copy, and the short club named in it", async () => {
+    await record("2027-01", ["Leaf Co (January 2027)", "Root Co (January 2027)"]);
+    await record("2027-02", ["Scent Co (February 2027)"]);
+    await record("2027-03", [], ["Pine Co: pine@pine.example is not on https://pine.example/news"]);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE' WHERE id = ?1").bind(cardId).run();
+    expect(await sendDraftNotice(env, MORNING)).toMatch(/^this week's email TLC-[A-Z0-9]{6} listing 3 draft\(s\), 1 club\(s\) short sent to sequoia@westpeek\.ventures$/);
     expect(sends).toHaveLength(1);
     const n = sends[0]!;
     expect(n.to).toBe(SEQUOIA);
+    subject = n.subject;
     ref = /TLC-[A-Z0-9]{6}/.exec(n.subject)![0];
-    // Numbered, grouped by club in month order, each with the contact, why, subject and the whole body.
+    expect(n.text).toContain(`Ref ${ref}`);
     expect(n.text).toMatch(/\*\*1\*\* · Leaf Co — Pat Example <pat@leafco\.example>/);
     expect(n.text).toMatch(/\*\*2\*\* · Root Co/);
     expect(n.text).toMatch(/\*\*3\*\* · Scent Co/);
     expect(n.text.indexOf("January 2027")).toBeLessThan(n.text.indexOf("February 2027"));
+    expect(n.text).toMatch(/Short this week[\s\S]*March 2027: no new brand this week — Pine Co: pine@pine\.example is not on/);
     expect(n.text).toContain("Why this brand: they host tastings");
     expect(n.text).toContain("Subject: Leaf Co + a small room in New York");
-    expect(n.text).toContain("Sequoia Taylor\nWest Peek Ventures\nsequoia@westpeek.ventures");
-    expect(n.text).toMatch(/approve all/);
-    // Never a second notice the same day for the same drafts.
-    expect(await sendDraftNotice(env, new Date("2026-11-09T15:00:00.000Z"))).toMatch(/no new drafts/);
+    expect(n.text).toContain("P.S. If this isn't a fit, just let me know and I won't follow up.");
+    // Once a week: the same batch never sends a second one.
+    expect(await sendDraftNotice(env, new Date("2026-11-09T15:00:00.000Z"))).toBe("this week's email already went");
   });
 
   it("refuses a reply that is not from her authenticated address, and decides nothing", async () => {
-    expect((await reply(`Re: Wynn: TLC: 3 brand emails to approve · ${ref}`, "approve all", SCOOTER)).handled).toBe(false);
-    expect((await reply(`Re: ${ref}`, "approve all", SEQUOIA, `${TRUSTED_AUTHSERV_ID}; spf=fail; dkim=fail; dmarc=fail`)).handled).toBe(false);
+    expect((await reply(`Re: ${subject}`, "approve all", SCOOTER)).handled).toBe(false);
+    expect((await reply(`Re: ${subject}`, "approve all", SEQUOIA, `${TRUSTED_AUTHSERV_ID}; spf=fail; dkim=fail; dmarc=fail`)).handled).toBe(false);
     expect(await cardState("Leaf Co")).toBe("pending_review");
+    expect(sends).toHaveLength(0);
   });
 
-  it("approve 1, skip 2, change 3: approves, sends inside the allowance, holds the skip, redrafts for a fresh approval, and confirms to her", async () => {
-    const out = await reply(`Re: Wynn: TLC: 3 brand emails to approve · ${ref}`, "approve 1\nskip 2\nchange 3: shorter\n\nOn Mon, 9 Nov 2026 Wynn wrote:\n> approve all");
+  let nextRef = "";
+  it("approve 1, skip 2, change 3: ONE answer on the same thread — what was sent, and the redraft in full to approve", async () => {
+    const out = await reply(`Re: ${subject}`, `approve 1\nskip 2\nchange 3: shorter\n\nOn Mon, 9 Nov 2026 Wynn wrote:\n> Ref ${ref}`);
     expect(out).toMatchObject({ handled: true, ref });
-    // Approved by her, then spent by the send.
+    // Approved by her, then spent by the send: to the brand, inside the warm-up allowance.
     expect(await cardState("Leaf Co")).toBe("executed");
-    // Sent now, to the brand, as the approved draft.
     expect(sends.some((s) => s.to === "pat@leafco.example" && s.subject === "Leaf Co + a small room in New York")).toBe(true);
-    expect((await env.WP_OS_DB.prepare("SELECT state FROM tlc_drip_message WHERE deal_id = 'tld_LeafCo'").first<{ state: string }>())!.state).toBe("SENT");
-    // Skipped: never sent, the sequence stops.
     expect(sends.some((s) => s.to === "pat@rootco.example")).toBe(false);
-    expect((await env.WP_OS_DB.prepare("SELECT state, held_reason FROM tlc_drip_message WHERE deal_id = 'tld_RootCo'").first<{ state: string; held_reason: string }>())).toMatchObject({ state: "HELD", held_reason: `skipped by Sequoia (${ref})` });
-    // Changed: the old card is rejected, a redraft waits for her, and a new notice carries it at once.
+    expect((await env.WP_OS_DB.prepare("SELECT state, held_reason FROM tlc_drip_message WHERE deal_id = 'tld_RootCo'").first())).toMatchObject({ state: "HELD", held_reason: `skipped by Sequoia (${ref})` });
     expect((await env.WP_OS_DB.prepare("SELECT m.subject, m.redraft_note, a.state FROM tlc_drip_message m JOIN approval_card a ON a.id = m.approval_card_id WHERE m.deal_id = 'tld_ScentCo'").first())).toMatchObject({ subject: "Scent Co + a small room in New York (v2)", redraft_note: "shorter", state: "pending_review" });
-    const confirm = sends.find((s) => s.to === SEQUOIA && /your reply to/.test(s.subject))!;
-    expect(confirm.text).toMatch(/\*\*1\*\* · Leaf Co \(January 2027\)/);
-    expect(confirm.text).toMatch(/Skipped/);
-    const renotice = sends.find((s) => s.to === SEQUOIA && /1 brand email to approve · TLC-/.test(s.subject))!;
-    expect(renotice.text).toContain("Redrafted for your note: shorter");
+    // Exactly one email to her: the answer, under the week's subject, threaded, with the redraft's full text and a new ref.
+    const toHer = sends.filter((s) => s.to === SEQUOIA);
+    expect(toHer).toHaveLength(1);
+    const a = toHer[0]!;
+    expect(a.subject).toBe(subject);
+    expect(a.headers["In-Reply-To"]).toBeTruthy();
+    expect(a.text).toMatch(/Done: \*\*1\*\* approved \(\*\*1\*\* sent now\), \*\*1\*\* skipped, \*\*1\*\* redrafted/);
+    expect(a.text).toContain("Shorter, per \"shorter\".");
+    expect(a.text).toContain("Redrafted for your note: shorter");
+    nextRef = /Ref (TLC-[A-Z0-9]{6})/.exec(a.text)![1]!;
+    expect(nextRef).not.toBe(ref);
     expect(sends.every((s) => s.to !== SCOOTER)).toBe(true);
   });
 
-  it("a reply decides only the drafts listed in ITS notice", async () => {
-    await deal("Late Co", "2027-01");
-    await runDrip(env, MORNING);
-    // The old notice's "approve all" reaches nothing new: Late Co is not in it.
-    await reply(`Re: ${ref}`, "approve all");
-    expect(await cardState("Late Co")).toBe("pending_review");
+  it("her reply to that answer decides the redraft, bound to the answer's own list", async () => {
+    sends.length = 0;
+    const out = await reply(`Re: ${subject}`, `approve 1\n\nOn Mon, 9 Nov 2026 Wynn wrote:\n> Ref ${nextRef}\n> Ref ${ref}`);
+    expect(out).toMatchObject({ handled: true, ref: nextRef });
+    expect(await cardState("Scent Co")).toBe("executed");
+    expect(sends.some((s) => s.to === "pat@scentco.example" && s.subject === "Scent Co + a small room in New York (v2)")).toBe(true);
+    expect(sends.filter((s) => s.to === SEQUOIA)).toHaveLength(1);
   });
 
-  it("waits for the week's batch to finish, so the batch arrives in one email — unless a draft has waited a day", async () => {
-    const tue = new Date("2026-11-10T09:00:00.000Z");
-    expect((await openBrandBatchCard(env, tue)).opened).toBe(true);
-    await deal("Batch Co", "2027-02");
-    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = ?2 WHERE brand = ?1").bind("Batch Co", tue.toISOString()).run();
-    await runDrip(env, tue);
-    // The database stamps drafts with its own clock; put the unlisted ones on this test's Tuesday.
-    await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET created_at = ?1 WHERE notice_ref IS NULL").bind(tue.toISOString()).run();
-    expect(await sendDraftNotice(env, new Date("2026-11-10T20:00:00.000Z"))).toMatch(/wait for the week's batch to finish/);
-    expect(sends).toHaveLength(0);
-    // A day on, the batch still open: the notice goes anyway, never a draft left waiting.
-    expect(await sendDraftNotice(env, new Date("2026-11-11T19:30:00.000Z"))).toMatch(/^notice TLC-/);
+  it("a reply decides only the drafts listed in ITS email", async () => {
+    await deal("Late Co", "2027-01");
+    await runDrip(env, MORNING);
+    await reply(`Re: ${subject}`, `approve all\n\n> Ref ${ref}`);
+    expect(await cardState("Late Co")).toBe("pending_review");
   });
 });

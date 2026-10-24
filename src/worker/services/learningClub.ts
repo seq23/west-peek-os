@@ -301,7 +301,7 @@ export async function applyBackupSwitch(env: Env, ev: TlcEventRow, now: Date, fi
  */
 export async function emailOwner(
   env: Env,
-  input: { employee: "Parker" | "Wynn"; email: Omit<ExecEmailInput, "employee">; objectType: string; objectId: string; cardId: string | null; cardKind: string | null; firmScope: string; attachments?: readonly EmailAttachment[] },
+  input: { employee: "Parker" | "Wynn"; email: Omit<ExecEmailInput, "employee">; objectType: string; objectId: string; cardId: string | null; cardKind: string | null; firmScope: string; attachments?: readonly EmailAttachment[]; replyOnThread?: string | null },
 ): Promise<string[]> {
   const sent: string[] = [];
   for (const address of TLC_RECIPIENTS) {
@@ -317,6 +317,7 @@ export async function emailOwner(
       // A scheduled duty: nobody ticked "show me first" on it, and saying so is the honest answer.
       cardAsked: null,
       ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+      ...(input.replyOnThread ? { replyOnThread: input.replyOnThread } : {}),
     });
     if (out.sent || out.previewed) sent.push(address);
   }
@@ -713,6 +714,12 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Pro
     }
   }
 
+  // 1b · A reply whose body the door never read (an oversize message, an early door): after 15 minutes it is a yes.
+  const unread = (await env.WP_OS_DB.prepare(
+    "SELECT d.* FROM tlc_deal d WHERE d.firm_scope = ?1 AND d.stop_reason = 'REPLIED' AND d.replied_at <= ?2 AND NOT EXISTS (SELECT 1 FROM tlc_pitch_followup f WHERE f.deal_id = d.id)",
+  ).bind(firmScope, new Date(now.getTime() - 15 * 60_000).toISOString()).all<TlcDealRow>()).results ?? [];
+  for (const d of unread) await brandSaidYes(env, d, "(their reply)", now);
+
   // 2 · Compose what is due.
   const due = (await env.WP_OS_DB.prepare(
     `SELECT d.* FROM tlc_deal d JOIN tlc_event e ON e.id = d.event_id
@@ -802,9 +809,11 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Pro
  * club's sales card so it is read. Matched on the sender's address, or — for a bounce, which comes
  * from a mail server — on the subject we sent.
  */
-export async function recordBrandMail(env: Env, input: { from: string; subject: string; now?: Date }): Promise<{ matched: number; stop: string | null }> {
+export async function recordBrandMail(env: Env, input: { from: string; subject: string; text?: string; now?: Date }): Promise<{ matched: number; stop: string | null }> {
   const now = (input.now ?? new Date()).toISOString();
-  const kind = classifyBrandMail(input);
+  // A "not a fit" answer to the P.S. is a stop for good, read off the subject or, when the door has it, the new text.
+  const first = classifyBrandMail(input);
+  const kind = first === "REPLIED" && (replyLooksLikeNo(input.subject) || (input.text !== undefined && replyLooksLikeNo(input.text))) ? "UNSUBSCRIBED" : first;
   const address = (/<([^>]+)>/.exec(input.from)?.[1] ?? input.from).trim().toLowerCase();
   let deals = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE lower(contact_email) = ?1 AND stop_reason IS NULL").bind(address).all<TlcDealRow>()).results ?? [];
   if (deals.length === 0 && kind === "BOUNCED") {
@@ -829,12 +838,37 @@ export async function recordBrandMail(env: Env, input: { from: string; subject: 
         .run();
     }
   }
-  // A REPLY THAT IS NOT A NO: tell Sequoia, and put the pitch email (PDF + call link) behind the gate.
-  if (kind === "REPLIED" && !replyLooksLikeNo(input.subject)) {
+  // A REPLY THAT IS NOT A NO: the pitch email (PDF + call link) goes behind the gate for her approval. From the
+  // header-only call (no text yet) this waits for the body: recordBrandReplyText decides, or the drip after 15 minutes.
+  if (kind === "REPLIED" && input.text !== undefined) {
     for (const d of deals) await brandSaidYes(env, d, input.subject, new Date(now));
   }
   await appendEvent(env, { eventType: "tlc.brand_mail", actorType: "system", actorId: "inbound_email", objectType: "tlc_deal", objectId: deals[0]!.id, payload: { kind, deals: deals.length } });
   return { matched: deals.length, stop: kind };
+}
+
+/**
+ * THE REPLY'S OWN WORDS (24 Oct 2026). The header-only call stopped the sequence as REPLIED; once the door has read
+ * the body, a "not a fit / no thanks / stop" answer turns that into a stop for good, and anything else is a yes
+ * whose pitch email is drafted for her approval.
+ */
+export async function recordBrandReplyText(env: Env, input: { from: string; subject: string; text: string; now?: Date }): Promise<{ matched: number; stop: string | null }> {
+  const now = input.now ?? new Date();
+  const address = (/<([^>]+)>/.exec(input.from)?.[1] ?? input.from).trim().toLowerCase();
+  const since = new Date(now.getTime() - 3_600_000).toISOString();
+  const deals = (await env.WP_OS_DB.prepare(
+    "SELECT d.* FROM tlc_deal d WHERE lower(d.contact_email) = ?1 AND d.stop_reason = 'REPLIED' AND d.replied_at >= ?2 AND NOT EXISTS (SELECT 1 FROM tlc_pitch_followup f WHERE f.deal_id = d.id)",
+  ).bind(address, since).all<TlcDealRow>()).results ?? [];
+  if (deals.length === 0) return { matched: 0, stop: null };
+  const no = replyLooksLikeNo(input.text) || replyLooksLikeNo(input.subject);
+  for (const d of deals) {
+    if (no) {
+      await env.WP_OS_DB.prepare("UPDATE tlc_deal SET stop_reason = 'UNSUBSCRIBED', stage = 'STOPPED', updated_at = ?2 WHERE id = ?1").bind(d.id, now.toISOString()).run();
+    } else {
+      await brandSaidYes(env, d, input.subject, now);
+    }
+  }
+  return { matched: deals.length, stop: no ? "UNSUBSCRIBED" : "REPLIED" };
 }
 
 /** The email back to a brand that said yes: the pitch (attached and linked) and a call link. Signed by Sequoia. */
@@ -866,22 +900,8 @@ async function brandSaidYes(env: Env, deal: TlcDealRow, subject: string, now: Da
   await env.WP_OS_DB.prepare(
     "INSERT INTO tlc_pitch_followup (deal_id, subject, body, state, held_reason) VALUES (?1, ?2, ?3, 'HELD', 'waiting for the send gate and an approval') ON CONFLICT (deal_id) DO NOTHING",
   ).bind(deal.id, mail.subject, mail.text).run();
-  await emailOwner(env, {
-    employee: "Wynn",
-    email: {
-      what: `TLC: ${deal.brand.slice(0, 30)} replied`,
-      tldr: `${deal.brand} replied about the ${ev.topic} club (${monthWords(ev.month)}): "${subject.slice(0, 120)}". The pitch email with the PDF and a call link is ready for your approval.`,
-      sections: [
-        { label: "What they said", bullets: [`Subject: "${subject.slice(0, 160)}"`, `Brand: ${deal.brand}${deal.contact_name ? `, ${deal.contact_name}` : ""} <${deal.contact_email}>`] },
-        { label: "What happens next", bullets: ["Read their reply in your inbox; it came to you.", "Approve the pitch email on the approvals screen and it goes. Brand sending must be on.", "After the call, record their offer on the Rooms page and I will ask you yes, no or counter."] },
-      ],
-    },
-    objectType: "tlc_deal",
-    objectId: deal.id,
-    cardId: null,
-    cardKind: null,
-    firmScope: deal.firm_scope,
-  });
+  // NO SEPARATE EMAIL (owner, 24 Oct 2026: one TLC email a week). The reply and this pitch draft are in the weekly email.
+  void subject;
 }
 
 // ── The runner: one card, one bounded unit of work ─────────────────────────────────────────────
