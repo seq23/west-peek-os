@@ -34,25 +34,34 @@ const WEEK3 = new Date("2026-11-23T14:00:00.000Z");
 
 /** One brand batch, with the model's answer and the pages it can read. Returns the prompt it was given. */
 async function batch(now: Date, answer: unknown, pages: Record<string, string> = {}): Promise<{ prompt: string; read: string[] }> {
-  expect((await openBrandBatchCard(env, now)).opened).toBe(true);
-  let prompt = "";
+  const opened = await openBrandBatchCard(env, now);
+  expect(opened.opened).toBe(true);
+  const prompts: string[] = [];
   const read: string[] = [];
-  await sweepOnce(env, now, {
-    tlc: (e, c) =>
-      runTlcCard(e, c, {
-        search: async (_e, _a, p) => {
-          prompt = p;
-          return { ok: true, text: JSON.stringify(answer), detail: "ok" };
-        },
-        urlCheck: live,
-        pageText: async (u) => {
-          read.push(u);
-          return pages[u] ?? null;
-        },
-        now,
-      }),
-  });
-  return { prompt, read };
+  // ONE CLUB PER TICK (24 Oct 2026): the card is worked until it is done or blocked — one search per open club,
+  // never more — and the prompt returned is every tick's prompt, in order.
+  for (let i = 0; i < 5; i += 1) {
+    const state = (await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ state: string }>())!.state;
+    if (state === "DONE" || state === "BLOCKED") break;
+    await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(opened.cardId).run();
+    await sweepOnce(env, new Date(now.getTime() + i * 60_000), {
+      tlc: (e, c) =>
+        runTlcCard(e, c, {
+          search: async (_e, _a, p) => {
+            prompts.push(p);
+            return { ok: true, text: JSON.stringify(answer), detail: "ok" };
+          },
+          urlCheck: live,
+          pageText: async (u) => {
+            read.push(u);
+            return pages[u] ?? null;
+          },
+          now,
+        }),
+    });
+  }
+  expect(prompts.length).toBeLessThanOrEqual(3);
+  return { prompt: prompts.join("\n\n"), read };
 }
 
 beforeAll(async () => {

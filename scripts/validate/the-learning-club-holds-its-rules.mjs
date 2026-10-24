@@ -110,7 +110,12 @@ export function check(src) {
   for (const [re, what] of pins) if (!re.test(shared)) f.push(`the owner's number moved: ${what}`);
 
   // 5 · Brands we must pitch: first, the same address check, never dropped, one insert.
-  const batchAt = service.indexOf("async function runBrandBatch(");
+  // The batch works one club per tick (24 Oct 2026): runBrandBatch must hand each club to brandBatchForClub,
+  // and the rules below are read off that one club's body.
+  const runAt = service.indexOf("async function runBrandBatch(");
+  const runBody = runAt < 0 ? "" : service.slice(runAt, service.indexOf("\nasync function ", runAt + 10));
+  if (!/brandBatchForClub\(/.test(runBody)) f.push("the brand batch does not work its clubs through brandBatchForClub");
+  const batchAt = service.indexOf("async function brandBatchForClub(");
   const batchBody = batchAt < 0 ? "" : service.slice(batchAt, service.indexOf("\nasync function ", batchAt + 10));
   const mustAt = batchBody.indexOf("handleMustPitch(");
   const picksAt = batchBody.indexOf("for (const b of brands)");

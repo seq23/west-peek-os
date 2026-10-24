@@ -175,7 +175,7 @@ async function openGroups(env: Env, events: ReadonlyArray<{ id: string; month: s
  */
 export async function handleMustPitch(
   env: Env,
-  input: { events: ReadonlyArray<{ id: string; month: string }>; existing: ReadonlyArray<{ brand: string; event_id: string }>; findings: readonly MustPitchFinding[]; firmScope: string; now: Date },
+  input: { events: ReadonlyArray<{ id: string; month: string }>; existing: ReadonlyArray<{ brand: string; event_id: string }>; findings: readonly MustPitchFinding[]; firmScope: string; now: Date; onlyBrands?: ReadonlySet<string> },
   check: (u: string) => Promise<boolean>,
   pageText: (u: string) => Promise<string | null>,
 ): Promise<{ queued: string[]; wayIn: string[]; changed: number }> {
@@ -186,6 +186,8 @@ export async function handleMustPitch(
   let changed = 0;
   const ways = new Map((await wayInRows(env, firmScope)).map((w) => [w.brand_key, w]));
   for (const g of await openGroups(env, input.events, input.existing, firmScope)) {
+    // The brand batch works one club per tick and hands each must-pitch brand to exactly one of them.
+    if (input.onlyBrands && !input.onlyBrands.has(g.key)) continue;
     const way = ways.get(g.key);
     const months = g.events.map((e) => e.month).sort();
     // Her own address: no page check, because she supplied it. Only months added after she gave it reach here.

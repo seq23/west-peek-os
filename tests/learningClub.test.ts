@@ -390,9 +390,23 @@ describe("the Learning Club in the database", () => {
       { month: "2027-01", brand: "Guess Co", contact_email: "guess@guess.example", contact_source_url: "https://guess.example/about" },
       { month: "2027-01", brand: "Dead Co", contact_email: "a@dead.example", contact_source_url: "https://dead.example/x" },
     ] });
-    await sweepOnce(env, monday, {
-      tlc: (e, c) => runTlcCard(e, c, { search: async () => ({ ok: true, text: brands, detail: "ok" }), urlCheck: live, pageText: async (u) => (u.includes("leaf") ? "Partnerships: ana@leaf.example" : "no address here"), now: monday }),
-    });
+    // ONE CLUB PER TICK (24 Oct 2026): three open clubs take three ticks, nearest month first, and each
+    // search names only its own club. The card is done only after the last club.
+    const prompts: string[] = [];
+    const tick = async (at: Date) => {
+      await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(opened.cardId).run();
+      return sweepOnce(env, at, {
+        tlc: (e, c) => runTlcCard(e, c, { search: async (_e, _a, prompt) => { prompts.push(prompt); return { ok: true, text: brands, detail: "ok" }; }, urlCheck: live, pageText: async (u) => (u.includes("leaf") ? "Partnerships: ana@leaf.example" : "no address here"), now: at }),
+      });
+    };
+    expect((await tick(monday)).outcome).toBe("PROGRESSED");
+    expect((await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ state: string }>())!.state).not.toBe("DONE");
+    await tick(new Date("2026-11-09T14:05:00.000Z"));
+    await tick(new Date("2026-11-09T14:10:00.000Z"));
+    expect(prompts).toHaveLength(3);
+    expect(prompts[0]).toContain("January 2027");
+    expect(prompts[0]).not.toContain("February 2027");
+    expect((await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ state: string }>())!.state).toBe("DONE");
     const deals = (await env.WP_OS_DB.prepare("SELECT brand, stage FROM tlc_deal").all<{ brand: string; stage: string }>()).results!;
     expect(deals).toEqual([{ brand: "Leaf Co", stage: "PROSPECT" }]);
     // 23 Oct 2026: the owner's must-pitch brands (migration 0266) came back with no address, so each is a
