@@ -1670,7 +1670,7 @@ async function runBookingPack(env: Env, card: SweepCard, now: Date, search: TlcS
  * records what it did on the event spine (`tlc.batch_club_done`), and hands the card back. The last club's
  * tick writes the card's summary from those records.
  */
-interface BatchClubRecord { event_id: string; month: string; part?: "must" | "picks"; added: string[]; dropped: string[]; queued: string[]; wayIn: string[]; changed: number }
+interface BatchClubRecord { event_id: string; month: string; part?: "must" | "picks" | "picks2"; added: string[]; dropped: string[]; queued: string[]; wayIn: string[]; changed: number }
 
 async function batchRecords(env: Env, cardId: string): Promise<BatchClubRecord[]> {
   const rows = (await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'tlc.batch_club_done' ORDER BY created_at").bind(cardId).all<{ payload_json: string }>()).results ?? [];
@@ -1691,7 +1691,7 @@ async function runBrandBatch(env: Env, card: SweepCard, now: Date, search: TlcSe
     await appendEvent(env, { eventType: "tlc.batch_club_done", actorType: "ai_employee", actorId: WYNN, objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: rec as unknown as Record<string, unknown> });
     done.push(rec);
     if (await nextBatchStep(env, card, events, done)) {
-      return { finished: false, blocked: false, progressed: true, detail: `${monthWords(next.ev.month)} (${next.part === "must" ? "brands we must pitch" : "Wynn's own picks"}): ${rec.added.length + rec.queued.length} brand(s) queued; the next search follows on the next tick` };
+      return { finished: false, blocked: false, progressed: true, detail: `${monthWords(next.ev.month)} (${next.part === "must" ? "brands we must pitch" : next.part === "picks" ? "Wynn's own picks" : "Wynn's own picks, second search"}): ${rec.added.length + rec.queued.length} brand(s) queued; the next search follows on the next tick` };
     }
   }
   const added = done.flatMap((d) => d.added);
@@ -1725,29 +1725,34 @@ async function batchDeals(env: Env, events: readonly TlcEventRow[]): Promise<Arr
   return (await env.WP_OS_DB.prepare(`SELECT brand, event_id FROM tlc_deal WHERE event_id IN (${events.map(() => "?").join(",")})`).bind(...events.map((e) => e.id)).all<{ brand: string; event_id: string }>()).results ?? [];
 }
 
-async function nextBatchStep(env: Env, card: SweepCard, events: readonly TlcEventRow[], done: readonly BatchClubRecord[]): Promise<{ ev: TlcEventRow; part: "must" | "picks" } | null> {
+/** Wynn's own brands one search asks for: none in the must-pitch search, then 3, then the rest of the club's 5. */
+const picksIn = (part: "must" | "picks" | "picks2"): number => (part === "must" ? 0 : part === "picks" ? TLC_BRANDS_PER_SEARCH : TLC_BRANDS_PER_CLUB - TLC_BRANDS_PER_SEARCH);
+
+async function nextBatchStep(env: Env, card: SweepCard, events: readonly TlcEventRow[], done: readonly BatchClubRecord[]): Promise<{ ev: TlcEventRow; part: "must" | "picks" | "picks2" } | null> {
   // A record written before the two-search split (no `part`, 24 Oct 2026 18:10Z) that queued and dropped
   // none of Wynn's own picks was a must-pitch search in effect: the club still gets its picks search.
-  const partOf = (d: BatchClubRecord): "must" | "picks" => d.part ?? (d.added.length + d.dropped.length > 0 ? "picks" : "must");
-  const has = (ev: TlcEventRow, part: "must" | "picks") => done.some((d) => d.event_id === ev.id && partOf(d) === part);
+  const partOf = (d: BatchClubRecord): "must" | "picks" | "picks2" => d.part ?? (d.added.length + d.dropped.length > 0 ? "picks" : "must");
+  const has = (ev: TlcEventRow, part: "must" | "picks" | "picks2") => done.some((d) => d.event_id === ev.id && partOf(d) === part);
   const existing = await batchDeals(env, events);
   for (const ev of events) {
     if (!has(ev, "must") && !has(ev, "picks") && (await mustFor(env, card, ev, events, existing)).length > 0) return { ev, part: "must" };
     if (!has(ev, "picks")) return { ev, part: "picks" };
+    // OWNER, 24 Oct 2026: about five new brands per club per week, in two searches small enough for the seat.
+    if (!has(ev, "picks2")) return { ev, part: "picks2" };
   }
   return null;
 }
 
 /** One search for one club: either its must-pitch brands alone, or up to TLC_BRANDS_PER_SEARCH of Wynn's own picks. */
 async function brandBatchForClub(
-  env: Env, card: SweepCard, ev: TlcEventRow, events: readonly TlcEventRow[], part: "must" | "picks", now: Date, search: TlcSearch, check: (u: string) => Promise<boolean>, pageText: (u: string) => Promise<string | null>,
+  env: Env, card: SweepCard, ev: TlcEventRow, events: readonly TlcEventRow[], part: "must" | "picks" | "picks2", now: Date, search: TlcSearch, check: (u: string) => Promise<boolean>, pageText: (u: string) => Promise<string | null>,
 ): Promise<BatchClubRecord | { failed: TlcRunResult }> {
   const existing = await batchDeals(env, events);
   // BRANDS WE MUST PITCH FIRST (owner, 23 Oct 2026), outside the five-per-club cap, in their own search.
   const must = part === "must" ? await mustFor(env, card, ev, events, existing) : [];
   const ownerContacted = await ownerContactedBrands(env, card.firm_scope);
   const mustNames = [...(await liveMustPitch(env, card.firm_scope)).map((r) => r.brand)];
-  const found = await search(env, actorFor(WYNN, card.firm_scope), buildBrandBatchPrompt([ev], [...existing.map((d) => d.brand), ...mustNames], await storedPlaybook(env), part === "must" ? [] : await researchLibrary(env, card.firm_scope), must, part === "must" ? 0 : TLC_BRANDS_PER_SEARCH));
+  const found = await search(env, actorFor(WYNN, card.firm_scope), buildBrandBatchPrompt([ev], [...existing.map((d) => d.brand), ...mustNames], await storedPlaybook(env), part === "must" ? [] : await researchLibrary(env, card.firm_scope), must, picksIn(part)));
   if (!found.ok) return { failed: await searchFailed(env, card, "Wynn", found, now) };
   const parsed = jsonIn(found.text);
   const findings: MustPitchFinding[] = ((parsed?.must_pitch as Array<Record<string, unknown>> | undefined) ?? []).map((m) => ({
@@ -1773,7 +1778,7 @@ async function brandBatchForClub(
     if (mustKeys.has(`${ev.month}|${brandKey(brand)}`)) continue;
     // She wrote to this brand herself: Wynn never does, in any month.
     if (ownerContacted.has(brandKey(brand))) { dropped.push(`${brand}: Sequoia contacted them directly`); continue; }
-    if (count >= TLC_BRANDS_PER_SEARCH) { dropped.push(`${brand}: over the ${TLC_BRANDS_PER_SEARCH}-a-search limit`); continue; }
+    if (count >= picksIn(part)) { dropped.push(`${brand}: over the ${picksIn(part)}-a-search limit`); continue; }
     const never = list<{ excluded_brands?: string[] }>(ev.sponsor_categories_json).flatMap((c) => c.excluded_brands ?? []);
     if (never.some((n) => brand.toLowerCase().includes(n.toLowerCase()) || n.toLowerCase().includes(brand.toLowerCase()))) { dropped.push(`${brand}: competes with a featured partner`); continue; }
     const cat = str(b.category);

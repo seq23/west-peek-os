@@ -542,7 +542,8 @@ export const TLC_BRANDS_PER_CLUB = 5;
 
 /**
  * Wynn's own picks asked for in ONE search (24 Oct 2026). Five plus the must-pitch brands ran past the seat's
- * 230 s search window (272 s measured in the claimer's directory), so each search asks for three; the weekly batch adds more.
+ * 230 s search window (272 s measured in the claimer's directory), so each search asks for three, and a second search
+ * the next tick asks for the rest of TLC_BRANDS_PER_CLUB (owner, 24 Oct 2026: about five new brands per club per week).
  */
 export const TLC_BRANDS_PER_SEARCH = 3;
 
