@@ -130,6 +130,7 @@ import {
  *   tlc_brand_batch  (Mondays)           → Wynn finds brands for the open clubs; each is a deal.
  *   tlc_daily        (every day)         → booking packs at 6 weeks, swap flags, the go-ahead at
  *                                          21 and 14 days, and the drip (held while the switch is off).
+ *   tlc_drip         (every 30 minutes)  → the drip alone, plus the first batch for a club with no brand.
  *
  * WHAT NEVER HAPPENS HERE: a booking, a purchase, a payment out. A brand email that has not passed
  * `brandSendGate` AND an approved `effect.email.send` receipt. A sponsor name or amount written
@@ -441,6 +442,28 @@ export async function openEvents(env: Env, now: Date, firmScope: string): Promis
   return rows.filter((e) => daysUntil(e.event_date, now) > 0).slice(0, 3);
 }
 
+// ── The drip pass, every half hour ──────────────────────────────────────────────────────────────
+
+/**
+ * THE DRIP DOES NOT WAIT FOR TOMORROW (owner, 24 Oct 2026: "get them going now today"). Before this the
+ * brand emails moved only on the 13:30 UTC daily pass, so a brand queued on Monday got its draft the next
+ * day and an email she approved waited up to a day more; and a club ready to sell waited for the next
+ * Monday before Wynn looked for a single brand. Every 30 minutes now:
+ *   1 · a club that is open for selling and has NO brand at all gets this week's batch card at once
+ *       (the first batch never waits for Monday; the Monday batch still adds new brands weekly);
+ *   2 · the drip runs: approved emails go, due ones are drafted for her approval, and she is emailed the list.
+ */
+export async function runDripPass(env: Env, now: Date, firmScope = "west-peek"): Promise<{ batch: string | null; drip: DripResult }> {
+  const open = await openEvents(env, now, firmScope);
+  let batch: string | null = null;
+  if (open.length > 0) {
+    const deals = await env.WP_OS_DB.prepare(`SELECT COUNT(*) AS n FROM tlc_deal WHERE event_id IN (${open.map(() => "?").join(",")})`).bind(...open.map((e) => e.id)).first<{ n: number }>();
+    const batchOpen = await env.WP_OS_DB.prepare("SELECT 1 FROM work_card WHERE kind = 'TLC_BRAND_BATCH' AND firm_scope = ?1 AND state NOT IN ('DONE','CANCELLED') LIMIT 1").bind(firmScope).first();
+    if ((deals?.n ?? 0) === 0 && !batchOpen) batch = (await openBrandBatchCard(env, now, firmScope)).detail;
+  }
+  return { batch, drip: await runDrip(env, now, firmScope) };
+}
+
 // ── The daily pass ──────────────────────────────────────────────────────────────────────────────
 
 export interface DailyResult {
@@ -567,8 +590,13 @@ export interface DripResult {
   awaitingApproval: number;
   sent: number;
   gate: { open: boolean; reasons: string[] };
+  /** The approval cards this pass opened (brand, club, card id) — the list she is emailed. */
+  newDrafts: Array<{ brand: string; month: string; step: number; cardId: string }>;
 }
-const emptyDrip = (): DripResult => ({ due: 0, held: 0, awaitingApproval: 0, sent: 0, gate: { open: false, reasons: [] } });
+const emptyDrip = (): DripResult => ({ due: 0, held: 0, awaitingApproval: 0, sent: 0, gate: { open: false, reasons: [] }, newDrafts: [] });
+
+/** Where she approves each brand email. */
+export const TLC_APPROVALS_URL = "https://os.joinwestpeek.com/#/approvals";
 
 /**
  * One pass of the brand sequence.
@@ -627,7 +655,7 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Pro
         AND d.drip_step < ?2 AND d.next_send_at IS NOT NULL AND d.next_send_at <= ?3
         AND e.status IN ('TOPIC_READY','GO','ESCALATED')
         AND NOT EXISTS (SELECT 1 FROM tlc_drip_message m WHERE m.deal_id = d.id AND m.step = d.drip_step AND m.state = 'AWAITING_APPROVAL')
-      ORDER BY d.next_send_at`,
+      ORDER BY e.month, d.next_send_at`,
   ).bind(firmScope, TLC_DRIP_DAYS.length, now.toISOString()).all<TlcDealRow>()).results ?? [];
   result.due = due.length;
 
@@ -678,7 +706,32 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Pro
        ON CONFLICT (deal_id, step) DO UPDATE SET state = 'AWAITING_APPROVAL', held_reason = NULL, effect_request_id = excluded.effect_request_id, approval_card_id = excluded.approval_card_id, subject = excluded.subject, body = excluded.body`,
     ).bind(`tdm_${crypto.randomUUID()}`, deal.id, deal.drip_step, mail.subject, mail.text, requestId, card.id).run();
     result.awaitingApproval += 1;
+    result.newDrafts.push({ brand: deal.brand, month: ev.month, step: deal.drip_step, cardId: card.id });
     room -= 1;
+  }
+
+  /*
+   * SHE HEARS ABOUT EVERY NEW DRAFT (owner, 24 Oct 2026: "get them going now"). An approval card nobody
+   * is told about is a draft that waits forever, so each pass that opens cards emails Sequoia — and only
+   * her, `TLC_RECIPIENTS` — one list of them with the link to Approvals. Nothing goes to a brand from here.
+   */
+  if (result.newDrafts.length > 0) {
+    await emailOwner(env, {
+      employee: "Wynn",
+      email: {
+        what: `TLC: ${result.newDrafts.length} brand email${result.newDrafts.length === 1 ? "" : "s"} waiting for your approval`,
+        tldr: `${result.newDrafts.length} brand email${result.newDrafts.length === 1 ? " is" : "s are"} drafted and waiting on Approvals. Nothing goes to a brand until you approve it; an approved email goes out within half an hour.`,
+        sections: [
+          { label: "Waiting for you", bullets: result.newDrafts.map((d) => `${d.brand} — ${monthWords(d.month)}, email ${d.step + 1} of 4`) },
+          { label: "Where", bullets: [`Approve or reject each one on Approvals: ${TLC_APPROVALS_URL}`] },
+        ],
+      },
+      objectType: "tlc_drip",
+      objectId: `drafts_${now.toISOString().slice(0, 16)}`,
+      cardId: null,
+      cardKind: null,
+      firmScope,
+    }).catch(() => []);
   }
 
   // 3 · The pitch emails to brands that said yes: execute the approved ones, file the held ones.

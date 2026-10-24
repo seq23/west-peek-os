@@ -127,6 +127,13 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
     why: "So money and dates are checked on a clock rather than remembered.",
     deliveredBy: ["Parker", "Wynn"],
   },
+  tlc_drip: {
+    what:
+      "Every half hour: Wynn sends the brand emails the owner has approved, drafts the ones now due for her approval and emails her the list, " +
+      "and gives a club that is open for selling but has no brand yet its first batch at once instead of waiting for Monday.",
+    why: "So an approved email goes out within the half hour and a club ready to sell starts the same day.",
+    deliveredBy: ["Wynn"],
+  },
   productions_monthly: {
     what:
       "For West Peek Productions — Scooter's own agency, not the fund. Once a month Walker sends " +
