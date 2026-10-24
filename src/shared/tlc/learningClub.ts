@@ -540,6 +540,12 @@ export type DripStop = "REPLIED" | "BOUNCED" | "UNSUBSCRIBED" | "DECLINED";
 /** The model's own picks per club, per batch. Brands we must pitch (tlc_must_pitch) are outside it. */
 export const TLC_BRANDS_PER_CLUB = 5;
 
+/**
+ * Wynn's own picks asked for in ONE search (24 Oct 2026). Five plus the must-pitch brands ran past the seat's
+ * 230 s search window (272 s measured in the claimer's directory), so each search asks for three; the weekly batch adds more.
+ */
+export const TLC_BRANDS_PER_SEARCH = 3;
+
 export function nextDripAt(step: number, firstSentAt: string | null, now: Date, stopped: DripStop | null): string | null {
   if (stopped) return null;
   if (step >= TLC_DRIP_DAYS.length) return null;
