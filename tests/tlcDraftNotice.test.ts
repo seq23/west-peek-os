@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { contentHashes, openBrandBatchCard, runDrip } from "../src/worker/services/learningClub";
-import { applyTlcDraftReply, sendDraftNotice } from "../src/worker/services/tlcDraftNotice";
+import { applyTlcDraftReply, repairLeakedDrafts, sendDraftNotice } from "../src/worker/services/tlcDraftNotice";
 import { parseDraftReply } from "../src/shared/tlc/draftReply";
 import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
 
@@ -179,5 +179,47 @@ describe("one TLC email a week, every club at once, approved by reply", () => {
     await runDrip(env, MORNING);
     await reply(`Re: ${subject}`, `approve all\n\n> Ref ${ref}`);
     expect(await cardState("Late Co")).toBe("pending_review");
+  });
+
+  it("a waiting draft that pasted the research note is re-composed in place, she gets ONE clean list, nothing is approved for her (TLC-ZF84KK)", async () => {
+    const note = "Leak Co makes sleep trackers for longevity rooms. Caveat: the address is a shared PR inbox, and it fits the Lead partner tier.";
+    await deal("Leak Co", "2027-01");
+    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET why_fit = ?1 WHERE id = 'tld_LeakCo'").bind(note).run();
+    await runDrip(env, MORNING);
+    // As the old template wrote it: the whole note, first letter lowered, in the brand email.
+    const m = (await env.WP_OS_DB.prepare("SELECT id, body, effect_request_id, approval_card_id FROM tlc_drip_message WHERE deal_id = 'tld_LeakCo'").first<{ id: string; body: string; effect_request_id: string; approval_card_id: string }>())!;
+    const leakedBody = m.body.replace(/I am writing because [^\n]*/, `I am writing because l${note.slice(1)}`);
+    const req = (await env.WP_OS_DB.prepare("SELECT payload_json FROM external_effect_request WHERE id = ?1").bind(m.effect_request_id).first<{ payload_json: string }>())!;
+    await env.WP_OS_DB.prepare("UPDATE external_effect_request SET payload_json = ?2 WHERE id = ?1").bind(m.effect_request_id, JSON.stringify({ ...JSON.parse(req.payload_json), text: leakedBody })).run();
+    await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET body = ?2, notice_ref = ?3 WHERE id = ?1").bind(m.id, leakedBody, ref).run();
+    sends.length = 0;
+
+    expect(await repairLeakedDrafts(env, MORNING)).toMatch(/^1 draft\(s\) re-composed without the research note; the clean list re-sent on TLC-/);
+    const after = (await env.WP_OS_DB.prepare("SELECT m.body, m.approval_card_id, m.notice_ref, r.payload_json, a.state, a.summary FROM tlc_drip_message m JOIN external_effect_request r ON r.id = m.effect_request_id JOIN approval_card a ON a.id = m.approval_card_id WHERE m.id = ?1").bind(m.id).first<{ body: string; approval_card_id: string; notice_ref: string; payload_json: string; state: string; summary: string }>())!;
+    for (const words of [after.body, (JSON.parse(after.payload_json) as { text: string }).text, after.summary]) {
+      expect(words).toContain("I am writing because Leak Co makes sleep trackers for longevity rooms.");
+      expect(words).not.toMatch(/Caveat|inbox|Lead partner tier/);
+    }
+    // Same card, still hers to decide; nothing to a brand; exactly one email to her, on the week's thread, a new ref.
+    expect(after.approval_card_id).toBe(m.approval_card_id);
+    expect(after.state).toBe("pending_review");
+    expect(sends.filter((s) => s.to !== SEQUOIA)).toHaveLength(0);
+    const toHer = sends.filter((s) => s.to === SEQUOIA);
+    expect(toHer).toHaveLength(1);
+    expect(toHer[0]!.headers["In-Reply-To"]).toBeTruthy();
+    expect(toHer[0]!.text).toMatch(/Nothing has gone to a brand/);
+    // Her copy keeps the note as "Why this brand" (it is hers); the brand email inside it does not.
+    expect(toHer[0]!.text).toContain("Why this brand: Leak Co makes sleep trackers");
+    expect(toHer[0]!.text).toContain("I am writing because Leak Co makes sleep trackers for longevity rooms.\n");
+    expect(toHer[0]!.text).not.toMatch(/I am writing because[^\n]*Caveat/);
+    expect(after.notice_ref).not.toBe(ref);
+    // Once: a repaired draft no longer carries the note.
+    expect(await repairLeakedDrafts(env, MORNING)).toBe("no draft carries a research note");
+    expect(sends.filter((s) => s.to === SEQUOIA)).toHaveLength(1);
+    // Her approve-all on the clean list sends the clean words.
+    await reply(`Re: ${subject}`, asRawMime(`Approve all\n\n> Ref ${after.notice_ref}`));
+    const out = sends.find((s) => s.to === "pat@leakco.example");
+    expect(out?.text).toContain("I am writing because Leak Co makes sleep trackers");
+    expect(out?.text).not.toMatch(/Caveat/);
   });
 });

@@ -5,7 +5,7 @@ import { runAi } from "../ai/runAi";
 import { mailAuthority } from "../../shared/intake/partnerAuthority";
 import { newTextOf } from "../../shared/events/packetDecisionToken";
 import { NOTICE_REF_RE, isEmptyReply, parseDraftReply } from "../../shared/tlc/draftReply";
-import { TLC_OWNER, TLC_PS_BY_STEP, TLC_SIGNATURE, monthWords } from "../../shared/tlc/learningClub";
+import { TLC_INTERNAL_NOTE, TLC_OWNER, TLC_PS_BY_STEP, TLC_SIGNATURE, dripEmail, monthWords, seatsOf } from "../../shared/tlc/learningClub";
 import { actorForFirmUser, type Actor } from "./authorize";
 
 /**
@@ -329,4 +329,82 @@ export async function applyTlcDraftReply(
     payload: { approved: lines.approved, skipped: lines.skipped, changed: lines.changed, problems: lines.problems, sent: drip?.sentBrands ?? [], next_ref: nextRef },
   });
   return { handled: true, ref, detail: `${lines.approved.length} approved, ${lines.skipped.length} skipped, ${lines.changed.length} redrafted` };
+}
+
+/*
+ * A DRAFT THAT CARRIES THE RESEARCH NOTE IS RE-COMPOSED, AND HER LIST RE-SENT ONCE (partner tail, 24 Oct 2026).
+ * The first batch (TLC-ZF84KK) was composed by a dripEmail that pasted Parker's whole why_fit note — "Limits:",
+ * "Caveat:", tiers, shared inboxes — into seven brand emails, and her "approve all" was then lost to a MIME bug.
+ * Her approval must be of the words that go, so nothing is approved on her behalf: each UNDECIDED draft whose
+ * lead is the old pasted note gets the current template's text in place (same card, same request, same number),
+ * and she gets ONE email on the week's thread with the clean copy under a new reference. A repaired draft no
+ * longer carries the note, so this runs once. Her own redrafts and approved day-zero text are never touched.
+ */
+const oldLead = (why: string): string => {
+  const reason = why.trim().replace(/\.?$/, ".");
+  return `I am writing because ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`;
+};
+export async function repairLeakedDrafts(env: Env, now: Date, firmScope = "west-peek"): Promise<string> {
+  const rows = (await env.WP_OS_DB.prepare(
+    `SELECT m.id, m.body, m.step, m.effect_request_id, m.approval_card_id, m.notice_ref, d.brand, d.contact_name, d.why_fit,
+            e.topic, e.month, e.event_date, e.seats_min, e.seats_max
+       FROM tlc_drip_message m JOIN tlc_deal d ON d.id = m.deal_id JOIN tlc_event e ON e.id = d.event_id
+       JOIN approval_card a ON a.id = m.approval_card_id
+      WHERE d.firm_scope = ?1 AND m.state = 'AWAITING_APPROVAL' AND a.state = 'pending_review' AND m.redraft_note IS NULL AND d.why_fit IS NOT NULL`,
+  ).bind(firmScope).all<{ id: string; body: string; step: number; effect_request_id: string; approval_card_id: string; notice_ref: string | null; brand: string; contact_name: string | null; why_fit: string; topic: string; month: string; event_date: string; seats_min: number | null; seats_max: number | null }>()).results ?? [];
+  const leaked = rows.filter((r) => TLC_INTERNAL_NOTE.test(r.why_fit) && r.body.includes(oldLead(r.why_fit)));
+  if (leaked.length === 0) return "no draft carries a research note";
+  const roots = new Set<string>();
+  const repaired: string[] = [];
+  for (const r of leaked) {
+    const mail = dripEmail({ step: r.step, brand: r.brand, contactName: r.contact_name, topic: r.topic, month: r.month, eventDate: r.event_date, why: r.why_fit, seats: seatsOf(r) });
+    if (TLC_INTERNAL_NOTE.test(mail.text)) continue;
+    const req = await env.WP_OS_DB.prepare("SELECT payload_json FROM external_effect_request WHERE id = ?1 AND executed_at IS NULL").bind(r.effect_request_id).first<{ payload_json: string }>();
+    if (!req) continue;
+    const payload = { ...(JSON.parse(req.payload_json) as Record<string, unknown>), subject: mail.subject, text: mail.text };
+    await env.WP_OS_DB.batch([
+      env.WP_OS_DB.prepare("UPDATE external_effect_request SET payload_json = ?2 WHERE id = ?1 AND executed_at IS NULL").bind(r.effect_request_id, JSON.stringify(payload)),
+      env.WP_OS_DB.prepare("UPDATE approval_card SET summary = ?2 WHERE id = ?1 AND state = 'pending_review'").bind(r.approval_card_id, `${mail.subject}\n\n${mail.text}`.slice(0, 1800)),
+      env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET subject = ?2, body = ?3 WHERE id = ?1").bind(r.id, mail.subject, mail.text),
+    ]);
+    repaired.push(r.brand);
+    if (r.notice_ref) {
+      const n = await env.WP_OS_DB.prepare("SELECT root_ref, ref FROM tlc_draft_notice WHERE ref = ?1").bind(r.notice_ref).first<{ root_ref: string | null; ref: string }>();
+      if (n) roots.add(n.root_ref ?? n.ref);
+    }
+  }
+  if (repaired.length === 0) return `${leaked.length} draft(s) carry a research note the template could not clean; left for her on Approvals`;
+  const { emailOwner } = await import("./learningClub");
+  const waiting = await pendingDrafts(env, firmScope);
+  for (const rootRef of roots) {
+    const nextRef = mintRef();
+    const listed = listOf(waiting);
+    const thread = await env.WP_OS_DB.prepare("SELECT token FROM email_thread WHERE object_type = 'tlc_drip' AND object_id = ?1 ORDER BY created_at LIMIT 1").bind(rootRef).first<{ token: string }>().catch(() => null);
+    await emailOwner(env, {
+      employee: "Wynn",
+      email: {
+        what: `TLC: this week's brands, ${waiting.length} to approve · ${rootRef}`,
+        tldr: `Nothing has gone to a brand. Your reply was not read (our bug, now fixed), and ${repaired.length} draft${repaired.length === 1 ? "" : "s"} had my research notes pasted into the email itself. Everything waiting for you (${waiting.length}) is below in full, clean.`,
+        tldrBullets: ['Reply "approve all"', 'Or "approve 1, 3" · "skip 2" · "change 2: what to change"'],
+        sections: [
+          { label: "What happened", bullets: [`Re-written without the notes: ${repaired.join(", ")}`.slice(0, 300), "The notes stay on Approvals for you; a brand only ever sees one plain sentence of why", "Nothing was approved for you; your next reply decides them"] },
+          ...listed.sections,
+        ],
+        details: [`Ref ${nextRef}`, "", listed.copy].join("\n"),
+      },
+      objectType: "tlc_drip",
+      objectId: `${rootRef}:repaired:${nextRef}`,
+      cardId: null,
+      cardKind: null,
+      firmScope,
+      replyOnThread: thread?.token ?? null,
+    });
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_draft_notice (ref, items_json, firm_scope, batch_card_id, root_ref) VALUES (?1, ?2, ?3, NULL, ?4)").bind(nextRef, JSON.stringify(listed.items), firmScope, rootRef).run();
+    for (const it of listed.items) if (it.kind !== "pitch") await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET notice_ref = ?2 WHERE id = ?1").bind(it.message_id, nextRef).run();
+  }
+  await appendEvent(env, {
+    eventType: "tlc.drafts_repaired", actorType: "system", actorId: "tlc_drip", objectType: "tlc_draft_notice", objectId: [...roots].join(",") || "none", firmScope,
+    payload: { repaired, at: now.toISOString() },
+  });
+  return `${repaired.length} draft(s) re-composed without the research note; the clean list re-sent on ${[...roots].join(", ") || "no thread"}`;
 }
