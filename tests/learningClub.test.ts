@@ -10,6 +10,8 @@ import {
   bookingPackTotals,
   brandSendGate,
   classifyBrandMail,
+  TLC_PS_BY_STEP,
+  replyLooksLikeNo,
   decisionEmail,
   dripEmail,
   eventEconomics,
@@ -34,6 +36,7 @@ import {
   recordBrandMail,
   runDrip,
   runDripPass,
+  recordBrandReplyText,
   runTlcCard,
   runTlcDaily,
   contentHashes,
@@ -131,6 +134,9 @@ describe("the rules, pure", () => {
     expect(warmupDailyCap("2026-12-20T00:00:00Z", now)).toBe(20);
     expect(classifyBrandMail({ from: "MAILER-DAEMON@x.com", subject: "Undeliverable: hi" })).toBe("BOUNCED");
     expect(classifyBrandMail({ from: "a@brand.com", subject: "Re: unsubscribe" })).toBe("UNSUBSCRIBED");
+    // Answers to the soft P.S. are a no (owner, 24 Oct 2026); an ordinary reply is not.
+    for (const no of ["Thanks, but this isn't a fit", "Not a fit for us right now", "No thanks", "We'll pass", "Please don't follow up", "not interested", "This isn’t a good fit"]) expect(replyLooksLikeNo(no)).toBe(true);
+    for (const yes of ["Sounds lovely, tell me more", "I'll pass this to our events lead", "Happy to chat next week"]) expect(replyLooksLikeNo(yes)).toBe(false);
     expect(classifyBrandMail({ from: "a@brand.com", subject: "Re: sounds good" })).toBe("REPLIED");
   });
 
@@ -142,7 +148,10 @@ describe("the rules, pure", () => {
     for (const m of steps) {
       expect(m.text).toMatch(/\nSequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures\n/);
       expect(m.text).not.toMatch(/Scooter|Wynn|Parker|West Peek Rooms\n\nIf you/);
-      expect(m.text).toMatch(/unsubscribe/);
+      // The opt-out is a soft, human P.S. (owner, 24 Oct 2026), its own words on each step, and it is the last line.
+      expect(m.text.trimEnd().endsWith(TLC_PS_BY_STEP[steps.indexOf(m)]!)).toBe(true);
+      expect(m.text).toMatch(/P\.S\. If (?:this|it) isn't a fit/);
+      expect(m.text).not.toMatch(/unsubscribe/i);
       // No pitch, no price, no attachment, no exclusivity until they reply.
       expect(m.text).not.toMatch(/\$\d|one-pager|one-sheet|pitch|attach|exclusiv|per category|to itself/i);
       // One quiet subject for all four, so they thread.
@@ -474,7 +483,7 @@ describe("the Learning Club in the database", () => {
   });
 
   it("a reply from the brand stops its sequence and lands on the sales card", async () => {
-    const r = await recordBrandMail(env, { from: "Ana Lee <ana@leaf.example>", subject: "Re: Leaf Co x a Matcha & Tea learning club", now: new Date("2026-11-10T10:00:00Z") });
+    const r = await recordBrandMail(env, { from: "Ana Lee <ana@leaf.example>", subject: "Re: Leaf Co x a Matcha & Tea learning club", text: "Sounds lovely, tell me more.", now: new Date("2026-11-10T10:00:00Z") });
     expect(r).toEqual({ matched: 1, stop: "REPLIED" });
     const d = await env.WP_OS_DB.prepare("SELECT stop_reason, next_send_at, replied_at FROM tlc_deal").first<TlcDealRow>();
     expect(d!.stop_reason).toBe("REPLIED");
@@ -487,6 +496,20 @@ describe("the Learning Club in the database", () => {
     expect(f!.subject).toBe("Leaf Co + a small room in New York");
     expect(f!.body).toMatch(/The PDF is attached, and it is also here: https:\/\/os\.joinwestpeek\.com\/api\/tlc-pitch\/[0-9a-f]{32}/);
     expect(f!.body).toMatch(/Sequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures$/);
+  });
+
+  it("a 'not a fit' answer to the P.S. stops the brand for good, with no pitch email and no email to her", async () => {
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_deal (id, event_id, brand, contact_email, contact_source_url, next_send_at, firm_scope) VALUES ('tld_noco', 'tlc_2027-01', 'No Co', 'kim@noco.example', 'https://noco.example/team', '2026-11-10T09:00:00Z', 'west-peek')").run();
+    const at = new Date("2026-11-10T11:00:00Z");
+    // The door's header-only call stops the sequence and waits for the words before calling it a yes.
+    expect(await recordBrandMail(env, { from: "Kim <kim@noco.example>", subject: "Re: No Co + a small room in New York", now: at })).toEqual({ matched: 1, stop: "REPLIED" });
+    expect(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_pitch_followup WHERE deal_id = 'tld_noco'").first()).toBeNull();
+    expect(await recordBrandReplyText(env, { from: "Kim <kim@noco.example>", subject: "Re: No Co + a small room in New York", text: "Thanks Sequoia, but this isn't a fit for us.", now: at })).toEqual({ matched: 1, stop: "UNSUBSCRIBED" });
+    expect(await env.WP_OS_DB.prepare("SELECT stop_reason, stage, next_send_at FROM tlc_deal WHERE id = 'tld_noco'").first()).toEqual({ stop_reason: "UNSUBSCRIBED", stage: "STOPPED", next_send_at: null });
+    expect(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_pitch_followup WHERE deal_id = 'tld_noco'").first()).toBeNull();
+    // Nor does the drip's 15-minute fallback ever turn it into a yes.
+    await runDrip(env, new Date("2026-11-10T12:00:00Z"));
+    expect(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_pitch_followup WHERE deal_id = 'tld_noco'").first()).toBeNull();
   });
 
   it("Sequoia decides; a counter sends the deal back to a call", async () => {

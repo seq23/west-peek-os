@@ -595,7 +595,17 @@ export interface DripEmailInput {
  */
 export const TLC_DRIP_PROOF_LINE = "Our community of more than 5,000 founders, operators and creatives meets in person through West Peek Rooms, our event series in New York.";
 export const TLC_DRIP_ASK = "Would you be open to exploring a partnership?";
-export const TLC_OPT_OUT_LINE = "If you would rather not hear from us, reply \"unsubscribe\" and we will not write again.";
+/*
+ * THE OPT-OUT IS A SOFT, HUMAN P.S. (owner, 24 Oct 2026), one per drip step, and it still works: a reply that
+ * says it is not a fit (replyLooksLikeNo) stops the sequence for good. The template carries no postal address.
+ */
+export const TLC_PS_BY_STEP: readonly string[] = [
+  "P.S. If this isn't a fit, just let me know and I won't follow up.",
+  "P.S. If it isn't a fit, just say so and I won't follow up.",
+  "P.S. If this isn't a fit, a quick note back is all it takes and I won't follow up.",
+  "P.S. If it isn't a fit, no need to reply at all; this is my last note.",
+];
+export const TLC_OPT_OUT_LINE = TLC_PS_BY_STEP[0]!;
 export const TLC_SIGNATURE: readonly string[] = [TLC_OWNER.name, TLC_OWNER.firm, TLC_OWNER.email];
 export function dripEmail(input: DripEmailInput): { subject: string; text: string } {
   const hi = input.contactName ? `Hi ${input.contactName.split(" ")[0]},` : "Hi,";
@@ -624,7 +634,7 @@ export function dripEmail(input: DripEmailInput): { subject: string; text: strin
     [hi, "", `Following up once more on The Learning Club in ${when}. If a partnership around ${input.topic} is on your radar, I would be glad to share more.`],
     [hi, "", `Last note from me on the ${input.topic} club. If the timing is wrong this round, we run one most months in New York and I would be glad to keep ${input.brand} in mind.`],
   ];
-  const text = [...bodies[Math.min(input.step, 3)]!, "", ...TLC_SIGNATURE, "", TLC_OPT_OUT_LINE].join("\n");
+  const text = [...bodies[Math.min(input.step, 3)]!, "", ...TLC_SIGNATURE, "", TLC_PS_BY_STEP[Math.min(input.step, 3)]!].join("\n");
   return { subject, text };
 }
 
@@ -641,7 +651,8 @@ export function approvedDayZeroEmail(approved: { subject: string; body: string }
 
 /** Replies that say no, read from the subject alone; anything else that is a reply may be a yes. */
 export function replyLooksLikeNo(subject: string): boolean {
-  return /\b(no thanks|not interested|not a fit|pass|decline|declined|unsubscribe|remove me)\b/i.test(subject);
+  // The words a brand uses to say no, answering the P.S. — any of them stops the sequence for good.
+  return /\b(no,? thanks?|no thank you|not interested|not a (?:good )?fit|isn'?t a (?:good )?fit|not the right fit|not for us|we(?:'ll| will) pass|pass on this|decline|declined|unsubscribe|remove me|stop emailing|please stop|don'?t follow up|do not follow up)\b/i.test(subject.replace(/[’]/g, "'"));
 }
 
 export function monthWords(yyyyMm: string): string {

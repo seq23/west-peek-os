@@ -679,6 +679,12 @@ async function handleIfReply(
    * "change 2: …". Bound to the drafts of the notice its reference names, and only from her authenticated
    * address (services/tlcDraftNotice.ts). A reply it cannot act on falls through to the ordinary door.
    */
+  // A BRAND'S REPLY, NOW WITH ITS WORDS: "not a fit / no thanks" stops it for good; anything else drafts the pitch.
+  if (!ASSIGNING_PARTNERS.includes((addressIn(sender) ?? "").toLowerCase())) {
+    const { recordBrandReplyText } = await import("../services/learningClub");
+    const { newTextOf } = await import("../../shared/events/packetDecisionToken");
+    await recordBrandReplyText(env, { from: sender, subject, text: newTextOf(raw) }).catch(() => undefined);
+  }
   {
     const { applyTlcDraftReply } = await import("../services/tlcDraftNotice");
     const tlc = await applyTlcDraftReply(env, { fromHeader: message.headers.get("from"), authenticationResults: message.headers.get("authentication-results"), subject, body: raw })
