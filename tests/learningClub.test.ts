@@ -399,13 +399,21 @@ describe("the Learning Club in the database", () => {
         tlc: (e, c) => runTlcCard(e, c, { search: async (_e, _a, prompt) => { prompts.push(prompt); return { ok: true, text: brands, detail: "ok" }; }, urlCheck: live, pageText: async (u) => (u.includes("leaf") ? "Partnerships: ana@leaf.example" : "no address here"), now: at }),
       });
     };
+    // TWO SMALLER SEARCHES PER CLUB (24 Oct 2026): a club's must-pitch brands alone, then three of Wynn's own.
     expect((await tick(monday)).outcome).toBe("PROGRESSED");
     expect((await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ state: string }>())!.state).not.toBe("DONE");
-    await tick(new Date("2026-11-09T14:05:00.000Z"));
-    await tick(new Date("2026-11-09T14:10:00.000Z"));
-    expect(prompts).toHaveLength(3);
-    expect(prompts[0]).toContain("January 2027");
-    expect(prompts[0]).not.toContain("February 2027");
+    for (let i = 1; i < 8; i += 1) {
+      if ((await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ state: string }>())!.state === "DONE") break;
+      await tick(new Date(monday.getTime() + i * 5 * 60_000));
+    }
+    // Jan: must + picks; Feb: must + picks; Mar: Google must + picks (Anthropic's March is handled with its January).
+    expect(prompts).toHaveLength(6);
+    expect(prompts[0]).toContain("MUST be pitched");
+    expect(prompts[0]).toContain("Anthropic, for January 2027 and March 2027");
+    expect(prompts[0]).not.toContain("Find brands to sponsor");
+    expect(prompts[1]).toContain('- January 2027: "');
+    expect(prompts[1]).toContain("Up to 3 brands per club");
+    expect(prompts[1]).not.toContain("February 2027");
     expect((await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ state: string }>())!.state).toBe("DONE");
     const deals = (await env.WP_OS_DB.prepare("SELECT brand, stage FROM tlc_deal").all<{ brand: string; stage: string }>()).results!;
     expect(deals).toEqual([{ brand: "Leaf Co", stage: "PROSPECT" }]);
