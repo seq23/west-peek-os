@@ -15,7 +15,7 @@ import { isoWeekOf } from "./jobs";
 import { PARTNERS } from "../../shared/registry/partners";
 import { personaPrompt } from "../../shared/registry/aiEmployeePersonas";
 import { isProviderOutage } from "../../shared/ai/providerFailure";
-import type { EmailAttachment } from "../effects/emailTransport";
+import { APPROVED_SEND_ENV_KEY, type ApprovedSendMarker, type EmailAttachment } from "../effects/emailTransport";
 import { renderHtmlPdf, type PdfRenderer } from "../effects/htmlPdf";
 import { renderedPdfProblem } from "../../shared/pdf/renderedPdf";
 import { renderBrandPitch, renderInternalOnePager, type TlcClubView, type TlcInternalView } from "../../shared/tlc/pitch";
@@ -299,7 +299,7 @@ export async function applyBackupSwitch(env: Env, ev: TlcEventRow, now: Date, fi
  * Every TLC email to a partner leaves through here, to `TLC_RECIPIENTS` (Sequoia, owner's ruling
  * 22 Oct 2026) and nobody else; the partner-mail door enforces the same list again.
  */
-async function emailOwner(
+export async function emailOwner(
   env: Env,
   input: { employee: "Parker" | "Wynn"; email: Omit<ExecEmailInput, "employee">; objectType: string; objectId: string; cardId: string | null; cardKind: string | null; firmScope: string; attachments?: readonly EmailAttachment[] },
 ): Promise<string[]> {
@@ -454,7 +454,7 @@ export async function openEvents(env: Env, now: Date, firmScope: string): Promis
  *       (the first batch never waits for Monday; the Monday batch still adds new brands weekly);
  *   2 · the drip runs: approved emails go, due ones are drafted for her approval, and she is emailed the list.
  */
-export async function runDripPass(env: Env, now: Date, firmScope = "west-peek"): Promise<{ batch: string | null; drip: DripResult }> {
+export async function runDripPass(env: Env, now: Date, firmScope = "west-peek"): Promise<{ batch: string | null; drip: DripResult; notice: string }> {
   const open = await openEvents(env, now, firmScope);
   let batch: string | null = null;
   if (open.length > 0) {
@@ -462,7 +462,10 @@ export async function runDripPass(env: Env, now: Date, firmScope = "west-peek"):
     const batchOpen = await env.WP_OS_DB.prepare("SELECT 1 FROM work_card WHERE kind = 'TLC_BRAND_BATCH' AND firm_scope = ?1 AND state NOT IN ('DONE','CANCELLED') LIMIT 1").bind(firmScope).first();
     if ((deals?.n ?? 0) === 0 && !batchOpen) batch = (await openBrandBatchCard(env, now, firmScope)).detail;
   }
-  return { batch, drip: await runDrip(env, now, firmScope) };
+  const drip = await runDrip(env, now, firmScope);
+  const { sendDraftNotice } = await import("./tlcDraftNotice");
+  const notice = await sendDraftNotice(env, now, firmScope);
+  return { batch, drip, notice };
 }
 
 // ── The daily pass ──────────────────────────────────────────────────────────────────────────────
@@ -593,8 +596,12 @@ export interface DripResult {
   gate: { open: boolean; reasons: string[] };
   /** The approval cards this pass opened (brand, club, card id) — the list she is emailed. */
   newDrafts: Array<{ brand: string; month: string; step: number; cardId: string }>;
+  /** Brands whose approved email went on this pass. */
+  sentBrands: string[];
+  /** Approved emails over today's warm-up allowance: they go on the next pass with room. */
+  waitingForAllowance: number;
 }
-const emptyDrip = (): DripResult => ({ due: 0, held: 0, awaitingApproval: 0, sent: 0, gate: { open: false, reasons: [] }, newDrafts: [] });
+const emptyDrip = (): DripResult => ({ due: 0, held: 0, awaitingApproval: 0, sent: 0, gate: { open: false, reasons: [] }, newDrafts: [], sentBrands: [], waitingForAllowance: 0 });
 
 /** Where she approves each brand email. */
 export const TLC_APPROVALS_URL = "https://os.joinwestpeek.com/#/approvals";
@@ -610,6 +617,51 @@ export const TLC_APPROVALS_URL = "https://os.joinwestpeek.com/#/approvals";
  * from Wynn plus an approval card. A partner's approval is the receipt; the next pass executes it
  * through the executor, which applies the firm's external-email switch once more.
  */
+/**
+ * FILE ONE DRAFT FOR HER APPROVAL: an `email.send` request from Wynn and its approval card, with the draft
+ * stored against the deal's current step. Used by the drip and by a "change N: …" redraft. Returns the card id.
+ * The draft joins the next batched notice email (notice_ref is cleared).
+ */
+/** The brand-send gate's answer, for a path outside the drip that files a draft (a "change N: …" redraft). */
+export async function brandGateFor(env: Env): Promise<{ open: boolean; reasons: string[] }> {
+  return brandSendGate(await tlcSettings(env), await tlcOutside(env), await contentHashes(env));
+}
+
+export async function fileDraft(env: Env, deal: Pick<TlcDealRow, "id" | "brand" | "contact_email" | "drip_step">, mail: { subject: string; text: string }, firmScope = "west-peek", redraftNote: string | null = null): Promise<string> {
+  const wynn = actorFor(WYNN, firmScope);
+  const requestId = `eer_${crypto.randomUUID()}`;
+  await env.WP_OS_DB.prepare(
+    "INSERT INTO external_effect_request (id, effect_type, destination, payload_json, requested_by_type, requested_by_id, outside_job) VALUES (?1, 'email.send', ?2, ?3, 'AI', ?4, ?5)",
+  ).bind(requestId, deal.contact_email, JSON.stringify({ subject: mail.subject, text: mail.text, reply_to: BRAND_REPLY_TO }), WYNN, TLC_BRAND_SALES_JOB).run();
+  const { requestApproval } = await import("./approvals");
+  const card = await requestApproval(env, wynn, {
+    action_key: "effect.email.send",
+    object_type: "external_effect_request",
+    object_id: requestId,
+    title: `Wynn: TLC email ${deal.drip_step + 1} of 4 to ${deal.brand}`,
+    summary: `${mail.subject}\n\n${mail.text}`.slice(0, 1800),
+    payload: { deal_id: deal.id, step: deal.drip_step },
+    submit: true,
+  });
+  await env.WP_OS_DB.prepare(
+    `INSERT INTO tlc_drip_message (id, deal_id, step, subject, body, state, effect_request_id, approval_card_id, redraft_note) VALUES (?1, ?2, ?3, ?4, ?5, 'AWAITING_APPROVAL', ?6, ?7, ?8)
+     ON CONFLICT (deal_id, step) DO UPDATE SET state = 'AWAITING_APPROVAL', held_reason = NULL, effect_request_id = excluded.effect_request_id, approval_card_id = excluded.approval_card_id, subject = excluded.subject, body = excluded.body, notice_ref = NULL, redraft_note = excluded.redraft_note`,
+  ).bind(`tdm_${crypto.randomUUID()}`, deal.id, deal.drip_step, mail.subject, mail.text, requestId, card.id, redraftNote).run();
+  return card.id;
+}
+
+/*
+ * HER APPROVAL IS WHAT LETS A BRAND EMAIL THROUGH THE OUTSIDE-EMAIL BOUNDARY (24 Oct 2026). The transport refuses
+ * any non-partner recipient unless the send carries a marker naming that exact address (`assertPreviewLane`).
+ * The drip executed her approved cards WITHOUT one, so every approved brand email would have been refused at the
+ * wire, marked FAILED, and silently re-drafted for approval again — found on the first reply-approval test.
+ * The marker is her approval card for this one email and this one recipient; nothing else carries it.
+ */
+function approvedFor(env: Env, approvalCardId: string, recipient: string): Env {
+  const marker: ApprovedSendMarker = { approvalId: approvalCardId, recipient: recipient.trim().toLowerCase() };
+  return { ...env, [APPROVED_SEND_ENV_KEY]: marker } as Env;
+}
+
 export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Promise<DripResult> {
   const settings = await tlcSettings(env);
   const gate = brandSendGate(settings, await tlcOutside(env), await contentHashes(env));
@@ -624,7 +676,17 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Pro
         WHERE m.state = 'AWAITING_APPROVAL' AND a.state = 'approved'`,
     ).all<{ id: string; deal_id: string; step: number; effect_request_id: string; approval_card_id: string }>()).results ?? [];
     const { executeExternalEffect } = await import("../effects/executor");
+    /*
+     * THE WARM-UP CAP IS ON WHAT GOES OUT (24 Oct 2026). She approves a whole batch from one email, so the
+     * drafts are composed together and the slow warm-up (5 a day in week one, then 10, 20, 30) is applied
+     * here, to the sends. An approved email over today's allowance stays approved and goes on the next pass
+     * that has room.
+     */
+    const firstSent = (await env.WP_OS_DB.prepare("SELECT MIN(sent_at) AS at FROM tlc_drip_message WHERE state = 'SENT'").first<{ at: string | null }>())?.at ?? null;
+    const sentToday = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_drip_message WHERE state = 'SENT' AND substr(sent_at, 1, 10) = ?1").bind(now.toISOString().slice(0, 10)).first<{ n: number }>())?.n ?? 0;
+    let sendRoom = Math.max(0, warmupDailyCap(firstSent, now) - sentToday);
     for (const m of approved) {
+      if (sendRoom <= 0) { result.waitingForAllowance += 1; continue; }
       const deal = await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(m.deal_id).first<TlcDealRow>();
       if (deal && !deal.stop_reason && (await ownerContactedBrands(env, firmScope)).has(brandKey(deal.brand))) {
         await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'HELD', held_reason = 'Sequoia contacted this brand directly; replies go to her, no drip' WHERE id = ?1").bind(m.id).run();
@@ -635,10 +697,12 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Pro
         continue;
       }
       try {
-        await executeExternalEffect(env, wynn, m.effect_request_id, m.approval_card_id);
+        await executeExternalEffect(approvedFor(env, m.approval_card_id, deal.contact_email), wynn, m.effect_request_id, m.approval_card_id);
         const first = deal.first_sent_at ?? now.toISOString();
         const step = m.step + 1;
         await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'SENT', sent_at = ?2 WHERE id = ?1").bind(m.id, now.toISOString()).run();
+        sendRoom -= 1;
+        result.sentBrands.push(deal.brand);
         await env.WP_OS_DB.prepare(
           "UPDATE tlc_deal SET stage = CASE WHEN stage = 'PROSPECT' THEN 'PITCHED' ELSE stage END, drip_step = ?2, first_sent_at = ?3, last_sent_at = ?4, next_send_at = ?5, updated_at = ?4 WHERE id = ?1",
         ).bind(deal.id, step, first, now.toISOString(), nextDripAt(step, first, now, null)).run();
@@ -660,10 +724,6 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Pro
   ).bind(firmScope, TLC_DRIP_DAYS.length, now.toISOString()).all<TlcDealRow>()).results ?? [];
   result.due = due.length;
 
-  const firstEver = (await env.WP_OS_DB.prepare("SELECT MIN(sent_at) AS at FROM tlc_drip_message WHERE state = 'SENT'").first<{ at: string | null }>())?.at ?? null;
-  const today = now.toISOString().slice(0, 10);
-  const usedToday = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_drip_message WHERE state IN ('SENT','AWAITING_APPROVAL') AND substr(created_at, 1, 10) = ?1").bind(today).first<{ n: number }>())?.n ?? 0;
-  let room = Math.max(0, warmupDailyCap(firstEver, now) - usedToday);
 
   for (const deal of due) {
     const ev = await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>();
@@ -678,8 +738,8 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Pro
     const mail = approvedFirst
       ? approvedDayZeroEmail(approvedFirst, deal.contact_name)
       : dripEmail({ step: deal.drip_step, brand: deal.brand, contactName: deal.contact_name, topic: ev.topic, month: ev.month, eventDate: ev.event_date, why: deal.why_fit, seats: seatsOf(ev) });
-    if (!gate.open || room <= 0) {
-      const why = gate.open ? "today's warm-up allowance is used" : gate.reasons.join("; ");
+    if (!gate.open) {
+      const why = gate.reasons.join("; ");
       await env.WP_OS_DB.prepare(
         `INSERT INTO tlc_drip_message (id, deal_id, step, subject, body, state, held_reason) VALUES (?1, ?2, ?3, ?4, ?5, 'HELD', ?6)
          ON CONFLICT (deal_id, step) DO UPDATE SET subject = excluded.subject, body = excluded.body, held_reason = excluded.held_reason
@@ -688,62 +748,20 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Pro
       result.held += 1;
       continue;
     }
-    const requestId = `eer_${crypto.randomUUID()}`;
-    await env.WP_OS_DB.prepare(
-      "INSERT INTO external_effect_request (id, effect_type, destination, payload_json, requested_by_type, requested_by_id, outside_job) VALUES (?1, 'email.send', ?2, ?3, 'AI', ?4, ?5)",
-    ).bind(requestId, deal.contact_email, JSON.stringify({ subject: mail.subject, text: mail.text, reply_to: BRAND_REPLY_TO }), WYNN, TLC_BRAND_SALES_JOB).run();
-    const { requestApproval } = await import("./approvals");
-    const card = await requestApproval(env, wynn, {
-      action_key: "effect.email.send",
-      object_type: "external_effect_request",
-      object_id: requestId,
-      title: `Wynn: TLC email ${deal.drip_step + 1} of 4 to ${deal.brand}`,
-      summary: `${mail.subject}\n\n${mail.text}`.slice(0, 1800),
-      payload: { deal_id: deal.id, step: deal.drip_step },
-      submit: true,
-    });
-    await env.WP_OS_DB.prepare(
-      `INSERT INTO tlc_drip_message (id, deal_id, step, subject, body, state, effect_request_id, approval_card_id) VALUES (?1, ?2, ?3, ?4, ?5, 'AWAITING_APPROVAL', ?6, ?7)
-       ON CONFLICT (deal_id, step) DO UPDATE SET state = 'AWAITING_APPROVAL', held_reason = NULL, effect_request_id = excluded.effect_request_id, approval_card_id = excluded.approval_card_id, subject = excluded.subject, body = excluded.body`,
-    ).bind(`tdm_${crypto.randomUUID()}`, deal.id, deal.drip_step, mail.subject, mail.text, requestId, card.id).run();
+    const cardId = await fileDraft(env, deal, mail, firmScope);
     result.awaitingApproval += 1;
-    result.newDrafts.push({ brand: deal.brand, month: ev.month, step: deal.drip_step, cardId: card.id });
-    room -= 1;
-  }
-
-  /*
-   * SHE HEARS ABOUT EVERY NEW DRAFT (owner, 24 Oct 2026: "get them going now"). An approval card nobody
-   * is told about is a draft that waits forever, so each pass that opens cards emails Sequoia — and only
-   * her, `TLC_RECIPIENTS` — one list of them with the link to Approvals. Nothing goes to a brand from here.
-   */
-  if (result.newDrafts.length > 0) {
-    await emailOwner(env, {
-      employee: "Wynn",
-      email: {
-        what: `TLC: ${result.newDrafts.length} brand email${result.newDrafts.length === 1 ? "" : "s"} waiting for your approval`,
-        tldr: `${result.newDrafts.length} brand email${result.newDrafts.length === 1 ? " is" : "s are"} drafted and waiting on Approvals. Nothing goes to a brand until you approve it; an approved email goes out within half an hour.`,
-        sections: [
-          { label: "Waiting for you", bullets: result.newDrafts.map((d) => `${d.brand} — ${monthWords(d.month)}, email ${d.step + 1} of 4`) },
-          { label: "Where", bullets: [`Approve or reject each one on Approvals: ${TLC_APPROVALS_URL}`] },
-        ],
-      },
-      objectType: "tlc_drip",
-      objectId: `drafts_${now.toISOString().slice(0, 16)}`,
-      cardId: null,
-      cardKind: null,
-      firmScope,
-    }).catch(() => []);
+    result.newDrafts.push({ brand: deal.brand, month: ev.month, step: deal.drip_step, cardId });
   }
 
   // 3 · The pitch emails to brands that said yes: execute the approved ones, file the held ones.
   if (gate.open) {
     const { executeExternalEffect } = await import("../effects/executor");
     const approvedPitch = (await env.WP_OS_DB.prepare(
-      "SELECT f.deal_id, f.effect_request_id, f.approval_card_id FROM tlc_pitch_followup f JOIN approval_card a ON a.id = f.approval_card_id WHERE f.state = 'AWAITING_APPROVAL' AND a.state = 'approved'",
-    ).all<{ deal_id: string; effect_request_id: string; approval_card_id: string }>()).results ?? [];
+      "SELECT f.deal_id, f.effect_request_id, f.approval_card_id, d.contact_email FROM tlc_pitch_followup f JOIN approval_card a ON a.id = f.approval_card_id JOIN tlc_deal d ON d.id = f.deal_id WHERE f.state = 'AWAITING_APPROVAL' AND a.state = 'approved'",
+    ).all<{ deal_id: string; effect_request_id: string; approval_card_id: string; contact_email: string }>()).results ?? [];
     for (const f of approvedPitch) {
       try {
-        await executeExternalEffect(env, wynn, f.effect_request_id, f.approval_card_id);
+        await executeExternalEffect(approvedFor(env, f.approval_card_id, f.contact_email), wynn, f.effect_request_id, f.approval_card_id);
         await env.WP_OS_DB.prepare("UPDATE tlc_pitch_followup SET state = 'SENT', sent_at = ?2 WHERE deal_id = ?1").bind(f.deal_id, now.toISOString()).run();
         await env.WP_OS_DB.prepare("UPDATE tlc_deal SET yes_at = COALESCE(yes_at, ?2), updated_at = ?2 WHERE id = ?1").bind(f.deal_id, now.toISOString()).run();
         result.sent += 1;
