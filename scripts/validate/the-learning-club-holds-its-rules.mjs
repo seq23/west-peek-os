@@ -78,7 +78,7 @@ export function check(src) {
   const fileAt = dripBody.indexOf("await fileDraft(");
   if (gateAt < 0 || fileAt < 0 || heldAt < 0 || !(gateAt < heldAt && heldAt < fileAt)) f.push("a brand email can be filed without passing the gate first");
   if ((service.match(/INSERT INTO external_effect_request/g) ?? []).length !== 2) f.push("a brand email is filed somewhere other than fileDraft and the pitch follow-up");
-  const notice = (() => { try { return readFileSync(new URL("../../src/worker/services/tlcDraftNotice.ts", import.meta.url), "utf8"); } catch { return ""; } })();
+  const notice = read("src/worker/services/tlcDraftNotice.ts") ?? "";
   if (/fileDraft\(/.test(notice) && !(notice.indexOf("brandGateFor(env)") > -1 && notice.indexOf("brandGateFor(env)") < notice.lastIndexOf("fileDraft("))) f.push("a redraft is filed without asking the brand-send gate first");
   if (!/executeExternalEffect\(/.test(service)) f.push("brand email is not executed through executeExternalEffect");
   if (!/requestApproval\(/.test(service)) f.push("brand email is filed without an approval card");
