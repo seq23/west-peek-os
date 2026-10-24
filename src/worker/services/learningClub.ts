@@ -1726,7 +1726,10 @@ async function batchDeals(env: Env, events: readonly TlcEventRow[]): Promise<Arr
 }
 
 async function nextBatchStep(env: Env, card: SweepCard, events: readonly TlcEventRow[], done: readonly BatchClubRecord[]): Promise<{ ev: TlcEventRow; part: "must" | "picks" } | null> {
-  const has = (ev: TlcEventRow, part: "must" | "picks") => done.some((d) => d.event_id === ev.id && (d.part ?? "picks") === part);
+  // A record written before the two-search split (no `part`, 24 Oct 2026 18:10Z) that queued and dropped
+  // none of Wynn's own picks was a must-pitch search in effect: the club still gets its picks search.
+  const partOf = (d: BatchClubRecord): "must" | "picks" => d.part ?? (d.added.length + d.dropped.length > 0 ? "picks" : "must");
+  const has = (ev: TlcEventRow, part: "must" | "picks") => done.some((d) => d.event_id === ev.id && partOf(d) === part);
   const existing = await batchDeals(env, events);
   for (const ev of events) {
     if (!has(ev, "must") && !has(ev, "picks") && (await mustFor(env, card, ev, events, existing)).length > 0) return { ev, part: "must" };

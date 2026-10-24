@@ -565,6 +565,23 @@ describe("TLC About blocks: the full one only inside, the community-first one fo
       expect(pitch).toContain("<title>The Learning Club: AI Tools</title>");
     }
   });
+  it("a one-search record from before the split that found none of Wynn's own picks still gets its picks search", async () => {
+    const now = new Date("2026-11-30T14:00:00.000Z");
+    const opened = await openBrandBatchCard(env, now);
+    expect(opened.opened).toBe(true);
+    const card = { id: opened.cardId! };
+    await env.WP_OS_DB.prepare("INSERT INTO event_record (id, event_type, actor_type, actor_id, object_type, object_id, firm_scope, payload_json) VALUES ('evr_legacy_jan', 'tlc.batch_club_done', 'ai_employee', 'aie_wynn', 'work_card', ?1, 'west-peek', ?2)")
+      .bind(card.id, JSON.stringify({ event_id: "tlc_2027-01", month: "2027-01", added: [], dropped: [], queued: [], wayIn: ["Anthropic (Jan, Mar): none"], changed: 1 })).run();
+    const prompts: string[] = [];
+    // Worked directly: other clubs' cards are open in this database and the sweep would take one of them first.
+    const row = (await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(card.id).first())! as never;
+    await runTlcCard(env, row, { search: async (_e, _a, p) => { prompts.push(p); return { ok: true, text: '{"brands":[]}', detail: "ok" }; }, urlCheck: live, now });
+    // The next search is January's own picks, not February: the legacy record counted as its must-pitch search.
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("Up to 3 brands per club");
+    expect(prompts[0]).toContain('- January 2027: "');
+  });
+
 });
 
 // 22 Oct 2026: the topics email attached each one-sheet as its raw HTML source, and the owner opened
