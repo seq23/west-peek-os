@@ -40,7 +40,7 @@ async function batch(now: Date, answer: unknown, pages: Record<string, string> =
   const read: string[] = [];
   // ONE CLUB PER TICK (24 Oct 2026): the card is worked until it is done or blocked — one search per open club,
   // never more — and the prompt returned is every tick's prompt, in order.
-  for (let i = 0; i < 8; i += 1) {
+  for (let i = 0; i < 12; i += 1) {
     const state = (await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ state: string }>())!.state;
     if (state === "DONE" || state === "BLOCKED") break;
     await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(opened.cardId).run();
@@ -60,8 +60,8 @@ async function batch(now: Date, answer: unknown, pages: Record<string, string> =
         }),
     });
   }
-  // At most two searches per open club: its must-pitch brands, then Wynn's own picks.
-  expect(prompts.length).toBeLessThanOrEqual(6);
+  // At most three searches per open club: its must-pitch brands, then Wynn's own picks in two (3, then 2).
+  expect(prompts.length).toBeLessThanOrEqual(9);
   return { prompt: prompts.join("\n\n"), read };
 }
 
@@ -133,18 +133,21 @@ describe("must-pitch brands come first", () => {
     expect(prompt).toMatch(/partnerships, events, community, a startup program or developer relations/);
     expect(prompt).toMatch(/Up to 3 brands per club/);
     const deals = (await env.WP_OS_DB.prepare("SELECT brand, event_id, contact_email, contact_source_url FROM tlc_deal ORDER BY rowid").all<{ brand: string; event_id: string; contact_email: string; contact_source_url: string }>()).results!;
-    // Her brands first; then the model's own, three per search for January. Four Co is over that search's cap.
+    // Her brands first; then the model's own for January: three, then two more (five a club). Six Co is over the second search's cap.
     expect(deals.map((d) => [d.brand, d.event_id])).toEqual([
       ["Anthropic", "tlc_2027-01"],
       ["Anthropic", "tlc_2027-03"],
       ["One Co", "tlc_2027-01"],
       ["Two Co", "tlc_2027-01"],
       ["Three Co", "tlc_2027-01"],
+      ["Four Co", "tlc_2027-01"],
+      ["Five Co", "tlc_2027-01"],
     ]);
     expect(deals[0]!.contact_source_url).toBe("https://anthropic.example/events");
     const card = await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE kind = 'TLC_BRAND_BATCH' ORDER BY created_at DESC LIMIT 1").first<{ description: string }>();
     expect(card!.description).toContain("Brands we must pitch, queued first: Anthropic (2027-01, 2027-03).");
     expect(card!.description).toContain("Four Co: over the 3-a-search limit");
+    expect(card!.description).toContain("Six Co: over the 2-a-search limit");
   });
 
   it("the prompt carries no must-pitch section when her list has nothing open", () => {

@@ -402,12 +402,16 @@ describe("the Learning Club in the database", () => {
     // TWO SMALLER SEARCHES PER CLUB (24 Oct 2026): a club's must-pitch brands alone, then three of Wynn's own.
     expect((await tick(monday)).outcome).toBe("PROGRESSED");
     expect((await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ state: string }>())!.state).not.toBe("DONE");
-    for (let i = 1; i < 8; i += 1) {
+    for (let i = 1; i < 12; i += 1) {
       if ((await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ state: string }>())!.state === "DONE") break;
       await tick(new Date(monday.getTime() + i * 5 * 60_000));
     }
-    // Jan: must + picks; Feb: must + picks; Mar: Google must + picks (Anthropic's March is handled with its January).
-    expect(prompts).toHaveLength(6);
+    // Owner, 24 Oct 2026: about five new brands per club per week, in two small searches (3, then 2).
+    // Jan: must + picks + picks2; Feb: the same; Mar: Google must + both picks (Anthropic's March goes with its January).
+    expect(prompts).toHaveLength(9);
+    expect(prompts[2]).toContain("Up to 2 brands per club");
+    expect(prompts[2]).toContain('- January 2027: "');
+    expect(prompts[3]).toContain("February 2027");
     expect(prompts[0]).toContain("MUST be pitched");
     expect(prompts[0]).toContain("Anthropic, for January 2027 and March 2027");
     expect(prompts[0]).not.toContain("Find brands to sponsor");
