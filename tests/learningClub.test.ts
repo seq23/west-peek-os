@@ -14,6 +14,8 @@ import {
   replyLooksLikeNo,
   decisionEmail,
   dripEmail,
+  brandFacingReason,
+  TLC_INTERNAL_NOTE,
   eventEconomics,
   goAheadCheck,
   needsSwap,
@@ -138,6 +140,31 @@ describe("the rules, pure", () => {
     for (const no of ["Thanks, but this isn't a fit", "Not a fit for us right now", "No thanks", "We'll pass", "Please don't follow up", "not interested", "This isn’t a good fit"]) expect(replyLooksLikeNo(no)).toBe(true);
     for (const yes of ["Sounds lovely, tell me more", "I'll pass this to our events lead", "Happy to chat next week"]) expect(replyLooksLikeNo(yes)).toBe(false);
     expect(classifyBrandMail({ from: "a@brand.com", subject: "Re: sounds good" })).toBe("REPLIED");
+  });
+
+  it("never puts the research note in the brand email: one brand-facing sentence, the brand's own capital, else the plain lead (TLC-ZF84KK)", () => {
+    const leaked = [
+      "Garmin makes health wearables and launched a band in July 2026, which suits a Title partner for a room about sleep. Limits: the address is the shared PR team inbox. Whoop is on the never-approach list, so check that Garmin does not compete before this goes out.",
+      "Hyperice makes recovery devices that guests can try in the hands-on hour. Fits the in-kind recovery Product partner seat. Caveat: McClaran works at Hyperice's PR agency, not in-house partnerships.",
+      "Pinecone is a vector database, the memory layer agents need. It fits the Partner tier and doesn't compete with a hosting brand. He is the press contact listed on the newsroom.",
+      "InsideTracker sells blood-biomarker analysis. Fits the Lead partner tier. Caveat: the address is a shared PR inbox.",
+    ];
+    const brands = ["Garmin", "Hyperice", "Pinecone", "InsideTracker"];
+    leaked.forEach((why, i) => {
+      const { text } = dripEmail({ step: 0, brand: brands[i]!, contactName: "Jo Doe", topic: "Sleep", month: "2027-01", eventDate: "2027-01-14", why });
+      expect(text).not.toMatch(TLC_INTERNAL_NOTE);
+      expect(text).not.toMatch(/Limits|Caveat|never-approach|compete|tier|inbox|press contact|PR agency|before this goes out/i);
+      expect(text).toContain(`I am writing because ${brands[i]}`);
+    });
+    expect(brandFacingReason(leaked[1])).toBe("Hyperice makes recovery devices that guests can try in the hands-on hour.");
+    expect(brandFacingReason(leaked[3])).toBe("InsideTracker sells blood-biomarker analysis.");
+    // The first sentence is itself internal ("suits a Title partner"): the plain lead, never a half-note.
+    expect(brandFacingReason(leaked[0])).toBeNull();
+    expect(dripEmail({ step: 0, brand: "Garmin", contactName: null, topic: "Sleep", month: "2027-01", eventDate: "2027-01-14", why: leaked[0]! }).text)
+      .toContain("I am writing because Garmin feels like a natural fit for a room we are building.");
+    // An ordinary opening word is lowercased after "because"; a name never is.
+    expect(brandFacingReason("Their stores host tastings every week")).toBe("their stores host tastings every week.");
+    expect(brandFacingReason(null)).toBeNull();
   });
 
   it("writes the brand emails signed by Sequoia: the brand's reason first, one proof line, one ask, no pitch or price, a quiet subject", () => {

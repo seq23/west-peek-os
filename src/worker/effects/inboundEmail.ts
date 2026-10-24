@@ -678,16 +678,18 @@ async function handleIfReply(
    * HER REPLY TO A TLC DRAFTS NOTICE (owner, 24 Oct 2026): "approve all", "approve 1, 3", "skip 2",
    * "change 2: …". Bound to the drafts of the notice its reference names, and only from her authenticated
    * address (services/tlcDraftNotice.ts). A reply it cannot act on falls through to the ordinary door.
+   * Both readers below get the DECODED text body, never the raw MIME: `newTextOf` cuts at the first "From:" line,
+   * which in raw MIME is the header block, so her first real "Approve all" (TLC-ZF84KK, 24 Oct 2026) read as empty.
    */
   // A BRAND'S REPLY, NOW WITH ITS WORDS: "not a fit / no thanks" stops it for good; anything else drafts the pitch.
   if (!ASSIGNING_PARTNERS.includes((addressIn(sender) ?? "").toLowerCase())) {
     const { recordBrandReplyText } = await import("../services/learningClub");
     const { newTextOf } = await import("../../shared/events/packetDecisionToken");
-    await recordBrandReplyText(env, { from: sender, subject, text: newTextOf(raw) }).catch(() => undefined);
+    await recordBrandReplyText(env, { from: sender, subject, text: newTextOf(textBodyOf(raw)) }).catch(() => undefined);
   }
   {
     const { applyTlcDraftReply } = await import("../services/tlcDraftNotice");
-    const tlc = await applyTlcDraftReply(env, { fromHeader: message.headers.get("from"), authenticationResults: message.headers.get("authentication-results"), subject, body: raw })
+    const tlc = await applyTlcDraftReply(env, { fromHeader: message.headers.get("from"), authenticationResults: message.headers.get("authentication-results"), subject, body: textBodyOf(raw) })
       .catch((err) => ({ handled: false, ref: null, detail: err instanceof Error ? err.message : String(err) }));
     if (tlc.handled) {
       await appendEvent(env, {

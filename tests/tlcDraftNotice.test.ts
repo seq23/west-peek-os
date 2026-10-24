@@ -25,6 +25,31 @@ let cardId = "";
 const reply = (subject: string, body: string, from = SEQUOIA, auth = genuineFrom(from)) =>
   applyTlcDraftReply(env, { fromHeader: `Partner <${from}>`, authenticationResults: auth, subject, body }, { now: MORNING, redraft: async (_e, _a, i) => ({ ok: true, subject: `${i.subject} (v2)`, body: `Shorter, per "${i.note}".`, detail: "ok" }) });
 
+/*
+ * HER REPLY AS IT REALLY ARRIVES (TLC-ZF84KK, 24 Oct 2026): the raw message, header block first ("From: …"),
+ * multipart, quoted-printable. Read as plain text, the header's "From:" line looked like a quote marker and her
+ * "Approve all" came out empty. The stateful tests below send her reply this way.
+ */
+const asRawMime = (body: string, from = SEQUOIA): string => [
+  `From: Sequoia Taylor <${from}>`,
+  "To: os@joinwestpeek.com",
+  "Subject: Re: TLC",
+  "Mime-Version: 1.0 (1.0)",
+  'Content-Type: multipart/alternative; boundary="Apple-Mail-ABC"',
+  "",
+  "--Apple-Mail-ABC",
+  "Content-Type: text/plain; charset=utf-8",
+  "Content-Transfer-Encoding: quoted-printable",
+  "",
+  body.replace(/=/g, "=3D").replace(/\n/g, "\r\n"),
+  "--Apple-Mail-ABC",
+  "Content-Type: text/html; charset=utf-8",
+  "",
+  `<html><body>${body}</body></html>`,
+  "--Apple-Mail-ABC--",
+  "",
+].join("\r\n");
+
 const cardState = async (brand: string) =>
   (await env.WP_OS_DB.prepare("SELECT a.state FROM tlc_drip_message m JOIN tlc_deal d ON d.id = m.deal_id JOIN approval_card a ON a.id = m.approval_card_id WHERE d.brand = ?1 ORDER BY m.created_at DESC LIMIT 1").bind(brand).first<{ state: string }>())?.state;
 
@@ -118,7 +143,7 @@ describe("one TLC email a week, every club at once, approved by reply", () => {
 
   let nextRef = "";
   it("approve 1, skip 2, change 3: ONE answer on the same thread — what was sent, and the redraft in full to approve", async () => {
-    const out = await reply(`Re: ${subject}`, `approve 1\nskip 2\nchange 3: shorter\n\nOn Mon, 9 Nov 2026 Wynn wrote:\n> Ref ${ref}`);
+    const out = await reply(`Re: ${subject}`, asRawMime(`Approve 1\nskip 2\nchange 3: shorter\n\n\n\nSequoia Taylor\nGeneral Partner\n\n> On Nov 9, 2026, at 9:00 AM, Wynn · West Peek <wynn@joinwestpeek.com> wrote:\n> \n> Reply "approve all"\n> Ref ${ref}`));
     expect(out).toMatchObject({ handled: true, ref });
     // Approved by her, then spent by the send: to the brand, inside the warm-up allowance.
     expect(await cardState("Leaf Co")).toBe("executed");
@@ -142,7 +167,7 @@ describe("one TLC email a week, every club at once, approved by reply", () => {
 
   it("her reply to that answer decides the redraft, bound to the answer's own list", async () => {
     sends.length = 0;
-    const out = await reply(`Re: ${subject}`, `approve 1\n\nOn Mon, 9 Nov 2026 Wynn wrote:\n> Ref ${nextRef}\n> Ref ${ref}`);
+    const out = await reply(`Re: ${subject}`, asRawMime(`Approve all\n\nOn Mon, 9 Nov 2026 Wynn wrote:\n> Ref ${nextRef}\n> Ref ${ref}`));
     expect(out).toMatchObject({ handled: true, ref: nextRef });
     expect(await cardState("Scent Co")).toBe("executed");
     expect(sends.some((s) => s.to === "pat@scentco.example" && s.subject === "Scent Co + a small room in New York (v2)")).toBe(true);
