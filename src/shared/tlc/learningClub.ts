@@ -607,13 +607,33 @@ export const TLC_PS_BY_STEP: readonly string[] = [
 ];
 export const TLC_OPT_OUT_LINE = TLC_PS_BY_STEP[0]!;
 export const TLC_SIGNATURE: readonly string[] = [TLC_OWNER.name, TLC_OWNER.firm, TLC_OWNER.email];
+/*
+ * THE BRAND SEES ONE SENTENCE OF WHY, NEVER THE RESEARCH NOTE (partner tail, 24 Oct 2026). `why_fit` is Parker's
+ * note to Sequoia: the reason, then "Limits:", "Caveat:", which tier it fits, who it must not compete with, whether
+ * the inbox is shared. The first batch (TLC-ZF84KK) pasted all of it into seven brand emails ("Caveat: McClaran
+ * works at Hyperice's PR agency…") and lowercased the brand ("garmin makes…"). The email takes the first sentence
+ * alone, and none at all when that sentence is itself internal; Approvals still shows her the whole note.
+ */
+export const TLC_INTERNAL_NOTE = /\b(?:limits?|caveats?|note|check that|never-approach|must not approach|compet\w*|tier|(?:title|lead|product|presenting|founding) partner|partner seat|inbox|press contact|media contact|PR agency|not (?:a )?partnerships?|job title|newsroom|on the page|the page)\b/i;
+const SENTENCE_STARTERS = new Set(["The", "A", "An", "It", "Its", "This", "These", "That", "Their", "They", "Your", "On", "In", "With", "As", "After", "Since", "Last", "Every", "Each"]);
+export function brandFacingReason(why: string | null | undefined): string | null {
+  const text = (why ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  const first = (/^.+?[.!?](?=\s+[A-Z(]|$)/.exec(text)?.[0] ?? text).trim();
+  if (!first || TLC_INTERNAL_NOTE.test(first)) return null;
+  const sentence = first.replace(/[.!?]?$/, ".");
+  const word = /^\S+/.exec(sentence)?.[0] ?? "";
+  // Lowercase only an ordinary opening word ("The", "Its"); a name ("Garmin", "InsideTracker") keeps its capital.
+  return SENTENCE_STARTERS.has(word) ? `${sentence.charAt(0).toLowerCase()}${sentence.slice(1)}` : sentence;
+}
+
 export function dripEmail(input: DripEmailInput): { subject: string; text: string } {
   const hi = input.contactName ? `Hi ${input.contactName.split(" ")[0]},` : "Hi,";
   const when = monthWords(input.month);
   const subject = `${input.brand} + a small room in New York`;
   const seats = input.seats ?? TLC_SEATS;
-  const reason = input.why ? input.why.trim().replace(/\.?$/, ".") : null;
-  const lead = reason ? `I am writing because ${reason.charAt(0).toLowerCase()}${reason.slice(1)}` : `I am writing because ${input.brand} feels like a natural fit for a room we are building.`;
+  const reason = brandFacingReason(input.why);
+  const lead = reason ? `I am writing because ${reason}` : `I am writing because ${input.brand} feels like a natural fit for a room we are building.`;
   const bodies = [
     [
       hi,
