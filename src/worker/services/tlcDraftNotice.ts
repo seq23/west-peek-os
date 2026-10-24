@@ -12,7 +12,7 @@ import { actorForFirmUser, type Actor } from "./authorize";
  *
  * "All drafts awaiting approval come together in ONE email … numbered 1..N with full copy each, approvable by
  * one reply." Never one email per draft. The notice goes on a drip pass when there are drafts no notice has
- * listed yet AND either the week's brand batch is finished or it is past her morning time (13:00 UTC), and at
+ * listed yet AND the week's brand batch is finished (or a draft has waited a day), and at
  * most once a day — except that a redraft she asked for ("change 2: …") comes straight back. Drafts that
  * arrive after a notice roll into the next one.
  *
@@ -21,18 +21,19 @@ import { actorForFirmUser, type Actor } from "./authorize";
  * is her approval, given the same way as on the Approvals screen, which keeps working.
  */
 
-export const NOTICE_HOUR_UTC = 13;
+/** The longest a draft waits for the batch to finish before the notice goes anyway. */
+export const DRAFT_MAX_WAIT_MS = 24 * 3_600_000;
 
 interface NoticeItem { n: number; message_id: string; card_id: string; brand: string; month: string; step: number }
 
 interface PendingDraft {
-  message_id: string; card_id: string; subject: string; body: string; step: number; redraft_note: string | null;
+  message_id: string; card_id: string; subject: string; body: string; step: number; redraft_note: string | null; created_at: string;
   brand: string; contact_name: string | null; contact_email: string; why_fit: string | null; month: string; topic: string | null;
 }
 
 async function pendingDrafts(env: Env, firmScope: string, onlyUnnoticed: boolean): Promise<PendingDraft[]> {
   return (await env.WP_OS_DB.prepare(
-    `SELECT m.id AS message_id, m.approval_card_id AS card_id, m.subject, m.body, m.step, m.redraft_note,
+    `SELECT m.id AS message_id, m.approval_card_id AS card_id, m.subject, m.body, m.step, m.redraft_note, m.created_at,
             d.brand, d.contact_name, d.contact_email, d.why_fit, e.month, e.topic
        FROM tlc_drip_message m JOIN tlc_deal d ON d.id = m.deal_id JOIN tlc_event e ON e.id = d.event_id
        JOIN approval_card a ON a.id = m.approval_card_id
@@ -57,7 +58,10 @@ export async function sendDraftNotice(env: Env, now: Date, firmScope = "west-pee
     const sentToday = await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_draft_notice WHERE firm_scope = ?1 AND substr(created_at, 1, 10) = ?2 LIMIT 1").bind(firmScope, today).first();
     if (sentToday) return `${drafts.length} new draft(s) roll into tomorrow's notice (one notice a day)`;
     const batchOpen = await env.WP_OS_DB.prepare("SELECT 1 FROM work_card WHERE kind = 'TLC_BRAND_BATCH' AND firm_scope = ?1 AND state NOT IN ('DONE','CANCELLED','BLOCKED') LIMIT 1").bind(firmScope).first();
-    if (batchOpen && now.getUTCHours() < NOTICE_HOUR_UTC) return `${drafts.length} draft(s) wait for the batch to finish or ${NOTICE_HOUR_UTC}:00 UTC`;
+    // THE BATCH FIRST (owner, 24 Oct 2026: "all drafts … in ONE email"): while the week's batch is still finding
+    // brands the notice waits for it, so the whole batch arrives together — unless a draft has already waited a day.
+    const oldest = Math.min(...drafts.map((d) => Date.parse(d.created_at)));
+    if (batchOpen && now.getTime() - oldest < DRAFT_MAX_WAIT_MS) return `${drafts.length} draft(s) wait for the week's batch to finish`;
   }
   // Every undecided draft is listed — the new ones and any an earlier notice listed that she has not decided —
   // so one email always carries the whole queue, numbered once.

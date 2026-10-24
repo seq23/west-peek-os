@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
-import { contentHashes, runDrip } from "../src/worker/services/learningClub";
+import { contentHashes, openBrandBatchCard, runDrip } from "../src/worker/services/learningClub";
 import { applyTlcDraftReply, sendDraftNotice } from "../src/worker/services/tlcDraftNotice";
 import { parseDraftReply } from "../src/shared/tlc/draftReply";
 import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
@@ -127,5 +127,19 @@ describe("one notice for the batch, full copy, approved by reply", () => {
     // The old notice's "approve all" reaches nothing new: Late Co is not in it.
     await reply(`Re: ${ref}`, "approve all");
     expect(await cardState("Late Co")).toBe("pending_review");
+  });
+
+  it("waits for the week's batch to finish, so the batch arrives in one email — unless a draft has waited a day", async () => {
+    const tue = new Date("2026-11-10T09:00:00.000Z");
+    expect((await openBrandBatchCard(env, tue)).opened).toBe(true);
+    await deal("Batch Co", "2027-02");
+    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = ?2 WHERE brand = ?1").bind("Batch Co", tue.toISOString()).run();
+    await runDrip(env, tue);
+    // The database stamps drafts with its own clock; put the unlisted ones on this test's Tuesday.
+    await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET created_at = ?1 WHERE notice_ref IS NULL").bind(tue.toISOString()).run();
+    expect(await sendDraftNotice(env, new Date("2026-11-10T20:00:00.000Z"))).toMatch(/wait for the week's batch to finish/);
+    expect(sends).toHaveLength(0);
+    // A day on, the batch still open: the notice goes anyway, never a draft left waiting.
+    expect(await sendDraftNotice(env, new Date("2026-11-11T19:30:00.000Z"))).toMatch(/^notice TLC-/);
   });
 });
