@@ -659,6 +659,18 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
     if (out.cardId) artifacts.push({ kind: "WORK_CARD", ref_type: "work_card", ref_id: out.cardId });
     return { status: "SUCCEEDED", summary: `The Learning Club: ${out.detail}.`, artifacts };
   }
+  if (job.job_key === "tlc_drip") {
+    const { runDripPass } = await import("./learningClub");
+    const out = await runDripPass(env, now, job.firm_scope);
+    const d = out.drip;
+    return {
+      status: "SUCCEEDED",
+      summary:
+        `The Learning Club drip: ${out.batch ? `first batch — ${out.batch}; ` : ""}${d.due} due, ${d.sent} sent, ${d.awaitingApproval} awaiting approval, ${d.held} HELD` +
+        `${d.gate.open ? "" : ` (sending is off: ${d.gate.reasons.join("; ")})`}.`,
+      artifacts,
+    };
+  }
   if (job.job_key === "tlc_daily") {
     const { runTlcDaily } = await import("./learningClub");
     const out = await runTlcDaily(env, now, job.firm_scope);

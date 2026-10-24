@@ -33,6 +33,7 @@ import {
   openTopicsCard,
   recordBrandMail,
   runDrip,
+  runDripPass,
   runTlcCard,
   runTlcDaily,
   contentHashes,
@@ -323,7 +324,7 @@ describe("the Learning Club in the database", () => {
     expect(history).toEqual([{ from_status: "INACTIVE", to_status: "ACTIVE" }, { from_status: "RETIRED", to_status: "INACTIVE" }]);
     const sw = await env.WP_OS_DB.prepare("SELECT value FROM tlc_setting WHERE key = 'brand_send'").first<{ value: string }>();
     expect(sw!.value).toBe("off");
-    for (const key of ["tlc_topics", "tlc_daily", "tlc_brand_batch", "tlc_trend_story"]) {
+    for (const key of ["tlc_topics", "tlc_daily", "tlc_drip", "tlc_brand_batch", "tlc_trend_story"]) {
       expect(await env.WP_OS_DB.prepare("SELECT 1 FROM scheduled_job WHERE job_key = ?1").bind(key).first()).toBeTruthy();
     }
   });
@@ -369,10 +370,21 @@ describe("the Learning Club in the database", () => {
     expect(done!.state).toBe("DONE");
   });
 
+  it("a club open for selling with no brand gets its first batch from the half-hour pass, not next Monday", async () => {
+    // Owner, 24 Oct 2026: "get them going now today". The batch opens on the pass, once.
+    const now = new Date("2026-11-09T13:00:00.000Z");
+    const first = await runDripPass(env, now);
+    expect(first.batch).toMatch(/^opened "Wynn: TLC brand batch /);
+    expect((await runDripPass(env, new Date("2026-11-09T13:30:00.000Z"))).batch).toBeNull();
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card WHERE kind = 'TLC_BRAND_BATCH'").first<{ n: number }>())!.n).toBe(1);
+  });
+
   it("Wynn queues only brands whose address is really on the page", async () => {
     const monday = new Date("2026-11-09T14:00:00.000Z");
+    // The half-hour pass already opened this week's card; the Monday opener finds it, never a second.
     const opened = await openBrandBatchCard(env, monday);
-    expect(opened.opened).toBe(true);
+    expect(opened.opened).toBe(false);
+    expect(opened.cardId).toBe((await env.WP_OS_DB.prepare("SELECT id FROM work_card WHERE kind = 'TLC_BRAND_BATCH'").first<{ id: string }>())!.id);
     const brands = JSON.stringify({ brands: [
       { month: "2027-01", brand: "Leaf Co", category: "Tea brands", contact_name: "Ana Lee", contact_email: "ana@leaf.example", contact_source_url: "https://leaf.example/team", why_fit: "they run tastings" },
       { month: "2027-01", brand: "Guess Co", contact_email: "guess@guess.example", contact_source_url: "https://guess.example/about" },
@@ -424,6 +436,10 @@ describe("the Learning Club in the database", () => {
     const out = await runDrip(on, new Date("2026-11-09T15:05:00.000Z"));
     expect(out.awaitingApproval).toBe(1);
     expect(out.sent).toBe(0);
+    // She is told, by name and club, what waits on Approvals.
+    expect(out.newDrafts).toEqual([expect.objectContaining({ brand: "Leaf Co", month: "2027-01", step: 0 })]);
+    // A club with brands already queued never gets a surprise extra batch from the half-hour pass.
+    expect((await runDripPass(on, new Date("2026-11-09T15:06:00.000Z"))).batch).toBeNull();
     // The request names its job, so the executor asks her list about exactly this job.
     expect((await env.WP_OS_DB.prepare("SELECT outside_job FROM external_effect_request").all<{ outside_job: string }>()).results!.map((r) => r.outside_job)).toEqual(["tlc_brand_sales"]);
     const m = await env.WP_OS_DB.prepare("SELECT m.state, a.action_key FROM tlc_drip_message m JOIN approval_card a ON a.id = m.approval_card_id").first<{ state: string; action_key: string }>();
