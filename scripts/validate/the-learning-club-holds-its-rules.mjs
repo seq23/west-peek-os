@@ -69,10 +69,17 @@ export function check(src) {
   if (/WP_OS_AI_EMAIL_EXTERNAL/.test(shared) || /\benv\./.test(shared.slice(shared.indexOf("export function brandSendGate"), shared.indexOf("export function brandSendGate") + 1600))) f.push("brandSendGate reads an env var instead of outsideEmailAllowed's answer");
   if (!/outsideEmailAllowed\(env, \{ job: TLC_BRAND_SALES_JOB \}\)/.test(service)) f.push("the TLC service does not ask outsideEmailAllowed for TLC brand sales");
   if (/WP_OS_AI_EMAIL_EXTERNAL\s*=/.test(wrangler)) f.push("wrangler.toml still sets the retired all-or-nothing WP_OS_AI_EMAIL_EXTERNAL");
-  const gateAt = service.indexOf("brandSendGate(");
-  const fileAt = service.indexOf("INSERT INTO external_effect_request");
-  const heldAt = service.indexOf("if (!gate.open || room <= 0)");
+  // 24 Oct 2026: drafts are filed through ONE helper, fileDraft (the drip and a "change N" redraft). Inside the
+  // drip the gate is read and a closed gate HOLDS before fileDraft is called; the redraft asks the same gate first.
+  const dripAt = service.indexOf("export async function runDrip(");
+  const dripBody = dripAt < 0 ? "" : service.slice(dripAt, service.indexOf("\nexport async function ", dripAt + 10));
+  const gateAt = dripBody.indexOf("brandSendGate(");
+  const heldAt = dripBody.indexOf("if (!gate.open) {");
+  const fileAt = dripBody.indexOf("await fileDraft(");
   if (gateAt < 0 || fileAt < 0 || heldAt < 0 || !(gateAt < heldAt && heldAt < fileAt)) f.push("a brand email can be filed without passing the gate first");
+  if ((service.match(/INSERT INTO external_effect_request/g) ?? []).length !== 2) f.push("a brand email is filed somewhere other than fileDraft and the pitch follow-up");
+  const notice = read("src/worker/services/tlcDraftNotice.ts") ?? "";
+  if (/fileDraft\(/.test(notice) && !(notice.indexOf("brandGateFor(env)") > -1 && notice.indexOf("brandGateFor(env)") < notice.lastIndexOf("fileDraft("))) f.push("a redraft is filed without asking the brand-send gate first");
   if (!/executeExternalEffect\(/.test(service)) f.push("brand email is not executed through executeExternalEffect");
   if (!/requestApproval\(/.test(service)) f.push("brand email is filed without an approval card");
 
@@ -153,7 +160,8 @@ function selfTest() {
     ["gate reads env", { shared: good.shared.replace("if (!outside.allowed) reasons.push(", 'if (env.WP_OS_AI_EMAIL_EXTERNAL !== "enabled") reasons.push(') }],
     ["service skips the one function", { service: good.service.replace("outsideEmailAllowed(env, { job: TLC_BRAND_SALES_JOB })", "({ allowed: true, code: \"ALLOWED\", reason: \"\" })") }],
     ["wrangler sets the retired var", { wrangler: `${good.wrangler}\nWP_OS_AI_EMAIL_EXTERNAL = "enabled"\n` }],
-    ["filed before the gate", { service: good.service.replace("if (!gate.open || room <= 0)", "if (room <= 0)") }],
+    ["filed before the gate", { service: good.service.replace("if (!gate.open) {", "if (false) {") }],
+    ["a second filing path", { service: `${good.service}\nconst y = "INSERT INTO external_effect_request (id) VALUES (1)";\n` }],
     ["direct transport", { service: `${good.service}\nawait sendViaResend(env, {});\n` }],
     ["payment client", { service: `${good.service}\nconst stripe = 1;\n` }],
     ["a spend effect", { service: `${good.service}\nconst x = "effect_type = 'payment.send'";\n` }],

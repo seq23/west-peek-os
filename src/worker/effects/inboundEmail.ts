@@ -674,6 +674,28 @@ async function handleIfReply(
    * landing on the door Porter already owns. An ordinary email is untouched: `attempted` is false
    * and nothing above has happened.
    */
+  /*
+   * HER REPLY TO A TLC DRAFTS NOTICE (owner, 24 Oct 2026): "approve all", "approve 1, 3", "skip 2",
+   * "change 2: …". Bound to the drafts of the notice its reference names, and only from her authenticated
+   * address (services/tlcDraftNotice.ts). A reply it cannot act on falls through to the ordinary door.
+   */
+  {
+    const { applyTlcDraftReply } = await import("../services/tlcDraftNotice");
+    const tlc = await applyTlcDraftReply(env, { fromHeader: message.headers.get("from"), authenticationResults: message.headers.get("authentication-results"), subject, body: raw })
+      .catch((err) => ({ handled: false, ref: null, detail: err instanceof Error ? err.message : String(err) }));
+    if (tlc.handled) {
+      await appendEvent(env, {
+        eventType: "inbound_email.received",
+        actorType: "system",
+        actorId: "inbound_email",
+        objectType: "inbound_email",
+        objectId: `${message.from}:${subject}`.slice(0, 200),
+        firmScope,
+        payload: { from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX, tlc_draft_reply: tlc.ref, detail: tlc.detail },
+      });
+      return true;
+    }
+  }
   const replyDecision = await applyReplyDecision(env, {
     fromHeader: message.headers.get("from"),
     authenticationResults: message.headers.get("authentication-results"),
