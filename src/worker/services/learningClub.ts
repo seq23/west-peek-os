@@ -1646,19 +1646,67 @@ async function runBookingPack(env: Env, card: SweepCard, now: Date, search: TlcS
 
 // ── Wynn: the Monday brand batch ────────────────────────────────────────────────────────────────
 
+/*
+ * ONE CLUB PER TICK (24 Oct 2026). The first live batch searched all three clubs and all nine must-pitch
+ * brands in one prompt; on her Mac's Claude Code seat that ran past the router's 230 s search wait twice
+ * (subscription_seat_run ccr_ef003b2e…, 16:25Z and 17:01Z, both ABANDONED) while every single-club search
+ * on 22 Oct answered in 114–159 s. So the card now works the open clubs one at a time, nearest month first:
+ * each tick searches ONE club's brands plus the must-pitch brands whose earliest open month is that club,
+ * records what it did on the event spine (`tlc.batch_club_done`), and hands the card back. The last club's
+ * tick writes the card's summary from those records.
+ */
+interface BatchClubRecord { event_id: string; month: string; added: string[]; dropped: string[]; queued: string[]; wayIn: string[]; changed: number }
+
+async function batchRecords(env: Env, cardId: string): Promise<BatchClubRecord[]> {
+  const rows = (await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'tlc.batch_club_done' ORDER BY created_at").bind(cardId).all<{ payload_json: string }>()).results ?? [];
+  return rows.map((r) => JSON.parse(r.payload_json) as BatchClubRecord);
+}
+
 async function runBrandBatch(env: Env, card: SweepCard, now: Date, search: TlcSearch, check: (u: string) => Promise<boolean>, pageText: (u: string) => Promise<string | null>): Promise<TlcRunResult> {
   const events = await openEvents(env, now, card.firm_scope);
   if (events.length === 0) {
     await finish(env, card.id, "• No club is open for selling this week.");
     return { finished: true, blocked: false, progressed: false, detail: "no open club" };
   }
+  const done = await batchRecords(env, card.id);
+  const ev = events.find((e) => !done.some((d) => d.event_id === e.id));
+  if (ev) {
+    const rec = await brandBatchForClub(env, card, ev, events, now, search, check, pageText);
+    if ("failed" in rec) return rec.failed;
+    await appendEvent(env, { eventType: "tlc.batch_club_done", actorType: "ai_employee", actorId: WYNN, objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: rec as unknown as Record<string, unknown> });
+    done.push(rec);
+    if (events.some((e) => !done.some((d) => d.event_id === e.id))) {
+      return { finished: false, blocked: false, progressed: true, detail: `${monthWords(ev.month)}: ${rec.added.length + rec.queued.length} brand(s) queued; the next club follows on the next tick` };
+    }
+  }
+  const added = done.flatMap((d) => d.added);
+  const dropped = done.flatMap((d) => d.dropped);
+  const queued = done.flatMap((d) => d.queued);
+  const wayIn = done.flatMap((d) => d.wayIn);
+  const changed = done.reduce((n, d) => n + d.changed, 0);
+  const mustLines = [queued.length ? `• Brands we must pitch, queued first: ${queued.join("; ")}.` : "", ...wayIn.map((w) => `• Needs a way in: ${w}`)].filter(Boolean);
+  // NEVER A NAG: a week whose only news is a new or changed "Needs a way in" item finishes, and the item
+  // itself is the stop she sees (TLC panel and Approvals). An unchanged week with nothing queued blocks as before.
+  if (added.length === 0 && queued.length === 0 && changed === 0) {
+    return nothingGood(env, card, "Wynn", [`No brand came with an address that is really on its page (${dropped.slice(0, 6).join("; ") || "nothing returned"}). Name brands or a category to try and Wynn runs it again.`, ...mustLines].join("\n"));
+  }
+  const gate = brandSendGate(await tlcSettings(env), await tlcOutside(env), await contentHashes(env));
+  await finish(env, card.id, [...mustLines, added.length ? `• ${added.length} brand(s) queued for the four-email sequence: ${added.join("; ")}.` : "", gate.open ? "• Sending is on: each email waits for a partner's approval on Approvals." : `• NOTHING SENT: ${gate.reasons.join("; ")}. The emails are composed and held.`, dropped.length ? `• Left out: ${dropped.join("; ")}.` : ""].filter(Boolean).join("\n"));
+  return { finished: true, blocked: false, progressed: false, detail: `${added.length + queued.length} brand(s) queued${wayIn.length ? `, ${wayIn.length} need a way in` : ""}` };
+}
+
+/** One club's search: its must-pitch brands (those whose earliest open month it is) first, then up to five of Wynn's own. */
+async function brandBatchForClub(
+  env: Env, card: SweepCard, ev: TlcEventRow, events: readonly TlcEventRow[], now: Date, search: TlcSearch, check: (u: string) => Promise<boolean>, pageText: (u: string) => Promise<string | null>,
+): Promise<BatchClubRecord | { failed: TlcRunResult }> {
   const existing = ((await env.WP_OS_DB.prepare(`SELECT brand, event_id FROM tlc_deal WHERE event_id IN (${events.map(() => "?").join(",")})`).bind(...events.map((e) => e.id)).all<{ brand: string; event_id: string }>()).results ?? []);
-  // BRANDS WE MUST PITCH FIRST (owner, 23 Oct 2026), searched in the same call, outside the five-per-club cap.
-  const must = await mustPitchToSearch(env, events, existing, card.firm_scope);
+  // BRANDS WE MUST PITCH FIRST (owner, 23 Oct 2026), outside the five-per-club cap. A brand on her list for
+  // several months is handled once, on its earliest open month's tick, for all its months together.
+  const must = (await mustPitchToSearch(env, events, existing, card.firm_scope)).filter((m) => [...m.months].sort()[0] === ev.month);
   const ownerContacted = await ownerContactedBrands(env, card.firm_scope);
-  const mustNames = [...must.map((m) => m.brand), ...(await liveMustPitch(env, card.firm_scope)).filter((r) => ownerContacted.has(brandKey(r.brand))).map((r) => r.brand)];
-  const found = await search(env, actorFor(WYNN, card.firm_scope), buildBrandBatchPrompt(events, [...existing.map((d) => d.brand), ...mustNames], await storedPlaybook(env), await researchLibrary(env, card.firm_scope), must));
-  if (!found.ok) return searchFailed(env, card, "Wynn", found, now);
+  const mustNames = [...(await liveMustPitch(env, card.firm_scope)).map((r) => r.brand)];
+  const found = await search(env, actorFor(WYNN, card.firm_scope), buildBrandBatchPrompt([ev], [...existing.map((d) => d.brand), ...mustNames], await storedPlaybook(env), await researchLibrary(env, card.firm_scope), must));
+  if (!found.ok) return { failed: await searchFailed(env, card, "Wynn", found, now) };
   const parsed = jsonIn(found.text);
   const findings: MustPitchFinding[] = ((parsed?.must_pitch as Array<Record<string, unknown>> | undefined) ?? []).map((m) => ({
     brand: str(m.brand),
@@ -1667,49 +1715,39 @@ async function runBrandBatch(env: Env, card: SweepCard, now: Date, search: TlcSe
     contact_source_url: str(m.contact_source_url),
     pages_checked: Array.isArray(m.pages_checked) ? m.pages_checked.map(str).filter(Boolean) : [],
   }));
-  const mp = await handleMustPitch(env, { events, existing, findings, firmScope: card.firm_scope, now }, check, pageText);
+  const mp = await handleMustPitch(env, { events, existing, findings, firmScope: card.firm_scope, now, onlyBrands: new Set(must.map((m) => brandKey(m.brand))) }, check, pageText);
   const brands = (parsed?.brands as Array<Record<string, unknown>> | undefined) ?? [];
   const added: string[] = [];
   const dropped: string[] = [];
-  const perClub = new Map<string, number>();
+  let count = 0;
   const mustKeys = new Set((await liveMustPitch(env, card.firm_scope)).map((r) => `${r.month}|${brandKey(r.brand)}`));
   for (const b of brands) {
-    const ev = events.find((e) => e.month === str(b.month));
+    if (str(b.month) && str(b.month) !== ev.month) continue;
     const brand = str(b.brand);
     const email = str(b.contact_email).toLowerCase();
     const source = str(b.contact_source_url);
-    if (!ev || !brand) continue;
+    if (!brand) continue;
     // A must-pitch brand was handled above, first; it is never a second, capped pick.
     if (mustKeys.has(`${ev.month}|${brandKey(brand)}`)) continue;
     // She wrote to this brand herself: Wynn never does, in any month.
     if (ownerContacted.has(brandKey(brand))) { dropped.push(`${brand}: Sequoia contacted them directly`); continue; }
-    if ((perClub.get(ev.id) ?? 0) >= TLC_BRANDS_PER_CLUB) { dropped.push(`${brand}: over the ${TLC_BRANDS_PER_CLUB}-a-club limit`); continue; }
+    if (count >= TLC_BRANDS_PER_CLUB) { dropped.push(`${brand}: over the ${TLC_BRANDS_PER_CLUB}-a-club limit`); continue; }
     const never = list<{ excluded_brands?: string[] }>(ev.sponsor_categories_json).flatMap((c) => c.excluded_brands ?? []);
     if (never.some((n) => brand.toLowerCase().includes(n.toLowerCase()) || n.toLowerCase().includes(brand.toLowerCase()))) { dropped.push(`${brand}: competes with a featured partner`); continue; }
     const cat = str(b.category);
     if (isBettingCategory(`${cat} ${brand}`) && ev.month <= TLC_NO_BETTING_THROUGH) { dropped.push(`${brand}: betting brands stay out of Q1 2027`); continue; }
-    if (sponsorMixProblems(ev.month, [...list<{ category: string; bench?: boolean }>(ev.sponsor_categories_json), { category: cat }]).length) { dropped.push(`${brand}: ${sponsorMixProblems(ev.month, [...list<{ category: string; bench?: boolean }>(ev.sponsor_categories_json), { category: cat }]).join("; ")}`); continue; }
+    const mix = sponsorMixProblems(ev.month, [...list<{ category: string; bench?: boolean }>(ev.sponsor_categories_json), { category: cat }]);
+    if (mix.length) { dropped.push(`${brand}: ${mix.join("; ")}`); continue; }
     if (existing.some((d) => d.event_id === ev.id && d.brand.toLowerCase() === brand.toLowerCase())) continue;
     // THE ADDRESS IS READ OFF THE PAGE, not taken on the model's word — the one check, shared with must-pitch.
     const notOnPage = await addressReadOffPage(email, source, check, pageText);
     if (notOnPage) { dropped.push(`${brand}: ${notOnPage}`); continue; }
     if (await queueDeal(env, { eventId: ev.id, brand, category: cat || null, contactName: str(b.contact_name) || null, contactEmail: email, contactSourceUrl: source, whyFit: str(b.why_fit) || null, firmScope: card.firm_scope }, now)) {
       added.push(`${brand} (${monthWords(ev.month)})`);
-      perClub.set(ev.id, (perClub.get(ev.id) ?? 0) + 1);
+      count += 1;
     }
   }
-  const mustLines = [
-    mp.queued.length ? `• Brands we must pitch, queued first: ${mp.queued.join("; ")}.` : "",
-    ...mp.wayIn.map((w) => `• Needs a way in: ${w}`),
-  ].filter(Boolean);
-  // NEVER A NAG: a week whose only news is a new or changed "Needs a way in" item finishes, and the item
-  // itself is the stop she sees (TLC panel and Approvals). An unchanged week with nothing queued blocks as before.
-  if (added.length === 0 && mp.queued.length === 0 && mp.changed === 0) {
-    return nothingGood(env, card, "Wynn", [`No brand came with an address that is really on its page (${dropped.slice(0, 6).join("; ") || "nothing returned"}). Name brands or a category to try and Wynn runs it again.`, ...mustLines].join("\n"));
-  }
-  const gate = brandSendGate(await tlcSettings(env), await tlcOutside(env), await contentHashes(env));
-  await finish(env, card.id, [...mustLines, added.length ? `• ${added.length} brand(s) queued for the four-email sequence: ${added.join("; ")}.` : "", gate.open ? "• Sending is on: each email waits for a partner's approval on Approvals." : `• NOTHING SENT: ${gate.reasons.join("; ")}. The emails are composed and held.`, dropped.length ? `• Left out: ${dropped.join("; ")}.` : ""].filter(Boolean).join("\n"));
-  return { finished: true, blocked: false, progressed: false, detail: `${added.length + mp.queued.length} brand(s) queued${mp.wayIn.length ? `, ${mp.wayIn.length} need a way in` : ""}` };
+  return { event_id: ev.id, month: ev.month, added, dropped, queued: mp.queued, wayIn: mp.wayIn, changed: mp.changed };
 }
 
 // ── Wynn: the trend story ───────────────────────────────────────────────────────────────────────
