@@ -37,6 +37,7 @@ import {
   TLC_SPONSOR_CASH_TARGET_USD,
   TLC_TIERS,
   approvalState,
+  brandDisplayName,
   competingCategories,
   creditForQuote,
   goalOf,
@@ -463,8 +464,10 @@ export async function runDripPass(env: Env, now: Date, firmScope = "west-peek"):
     const batchOpen = await env.WP_OS_DB.prepare("SELECT 1 FROM work_card WHERE kind = 'TLC_BRAND_BATCH' AND firm_scope = ?1 AND state NOT IN ('DONE','CANCELLED') LIMIT 1").bind(firmScope).first();
     if ((deals?.n ?? 0) === 0 && !batchOpen) batch = (await openBrandBatchCard(env, now, firmScope)).detail;
   }
+  const { recomposeBrandNames, repairLeakedDrafts, sendDraftNotice } = await import("./tlcDraftNotice");
+  // Before the drip, so an approved draft waiting for its allowance goes with the brand's clean name.
+  await recomposeBrandNames(env, firmScope);
   const drip = await runDrip(env, now, firmScope);
-  const { repairLeakedDrafts, sendDraftNotice } = await import("./tlcDraftNotice");
   const repaired = await repairLeakedDrafts(env, now, firmScope);
   const notice = await sendDraftNotice(env, now, firmScope);
   return { batch, drip, notice: repaired.startsWith("no draft") ? notice : `${notice}; ${repaired}` };
@@ -849,6 +852,19 @@ export async function recordBrandMail(env: Env, input: { from: string; subject: 
 }
 
 /**
+ * THE BLIND COPY OF HER OWN BRAND EMAIL (24 Oct 2026): from her address, addressed to a brand we have a deal with.
+ * Returns that deal's id, or null for anything else (her ordinary mail to the OS is never caught by this).
+ */
+export async function isOwnBrandMailCopy(env: Env, input: { from: string; to: string }): Promise<string | null> {
+  const from = (/<([^>]+)>/.exec(input.from)?.[1] ?? input.from).trim().toLowerCase();
+  if (from !== TLC_OWNER.email.toLowerCase()) return null;
+  const to = [...input.to.matchAll(/[^\s<>,;"]+@[^\s<>,;"]+/g)].map((m) => m[0].toLowerCase()).filter((a) => a !== INTAKE_MAILBOX);
+  if (to.length === 0) return null;
+  const deal = await env.WP_OS_DB.prepare(`SELECT id FROM tlc_deal WHERE lower(contact_email) IN (${to.map((_, i) => `?${i + 1}`).join(",")}) LIMIT 1`).bind(...to).first<{ id: string }>();
+  return deal?.id ?? null;
+}
+
+/**
  * THE REPLY'S OWN WORDS (24 Oct 2026). The header-only call stopped the sequence as REPLIED; once the door has read
  * the body, a "not a fit / no thanks / stop" answer turns that into a stop for good, and anything else is a yes
  * whose pitch email is drafted for her approval.
@@ -876,7 +892,7 @@ export async function recordBrandReplyText(env: Env, input: { from: string; subj
 export function pitchFollowUp(input: { brand: string; contactName: string | null; topic: string; month: string; pitchUrl: string; callLink: string | null }): { subject: string; text: string } {
   const hi = input.contactName ? `Hi ${input.contactName.split(" ")[0]},` : "Hi,";
   return {
-    subject: `${input.brand} + a small room in New York`,
+    subject: `${brandDisplayName(input.brand)} + a small room in New York`,
     text: [
       hi,
       "",

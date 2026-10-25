@@ -10,9 +10,13 @@ import { aiOutboundSwitches, audienceOf, mayAiEmail } from "../../shared/policy/
 import { outsideEmailAllowed } from "../services/outsideEmail";
 import { PARTNERS, PARTNER_EMAILS } from "../../shared/registry/partners";
 import { employeeSenderAddress } from "../../shared/registry/employeeMail";
-import { OUTBOUND_ATTACHMENTS_MAX_BYTES, attachmentsBytes, isPreviewEnv, type EmailAttachment, type EmailSendResult } from "./emailTransport";
+import { OUTBOUND_ATTACHMENTS_MAX_BYTES, assertPreviewLane, attachmentsBytes, isPreviewEnv, type EmailAttachment, type EmailSendResult } from "./emailTransport";
 import { ASSIGNING_PARTNERS } from "../../shared/intake/partnerAuthority";
 import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
+import { TLC_BRAND_SALES_JOB } from "../../shared/policy/outsideEmail";
+import { TLC_OWNER } from "../../shared/tlc/learningClub";
+import { GMAIL_COMPOSE_SCOPE, sendViaGmail } from "./googleClient";
+import { serviceAccountToken } from "./googleWorkspaceClient";
 import {
   cloudflareEmailBlockedReason,
   isCloudflareEmailEnabled,
@@ -125,6 +129,40 @@ export interface EffectExecutionResult {
 }
 
 /**
+ * A LEARNING CLUB BRAND EMAIL GOES FROM HER OWN GMAIL (owner, 24 Oct 2026: she signs these, so they come from her
+ * and sit in her Sent folder). They used to leave through the firm transport as the employee who drafted them,
+ * with her name only in the signature: nothing in her Sent folder, and a reply threaded against nothing.
+ *
+ * THE ROUTE: the firm's service account, delegated on her domain, impersonates her mailbox under `gmail.compose`
+ * (which covers `messages.send`; `gmail.send` was never delegated) and sends through Gmail itself. Replies go to
+ * her and to the intake mailbox (Reply-To, unchanged), so the inbound door still sees a brand's answer by its
+ * address; the intake mailbox also gets a blind copy of what went out, which the door files without a card.
+ *
+ * REFUSES RATHER THAN FALLING BACK. A brand email signed by her must not leave under anybody else's address, so a
+ * refused token or send fails the effect (the drip marks it FAILED with the reason). The approval and the warm-up
+ * cap are untouched: this runs only inside `executeExternalEffect`, after `authorize()` passed, and the outside
+ * lane is asserted here exactly as the firm transports assert it.
+ */
+async function brandMailAsOwner(
+  env: Env,
+  message: { to: string; subject: string; text: string; replyTo?: readonly string[]; attachments?: readonly EmailAttachment[] },
+): Promise<EmailSendResult> {
+  assertPreviewLane(env, { to: message.to, subject: message.subject, text: message.text });
+  const token = await serviceAccountToken(env, [GMAIL_COMPOSE_SCOPE], TLC_OWNER.email);
+  const id = await sendViaGmail(token, {
+    to: message.to,
+    from: TLC_OWNER.email,
+    fromName: TLC_OWNER.name,
+    subject: message.subject,
+    text: message.text,
+    ...(message.replyTo?.length ? { replyTo: message.replyTo } : {}),
+    bcc: [INTAKE_MAILBOX],
+    ...(message.attachments?.length ? { attachments: message.attachments } : {}),
+  });
+  return { sent: true, provider: "gmail", provider_message_id: id, detail: `Delivered to ${message.to} as ${TLC_OWNER.email} through her own Gmail (copy to ${INTAKE_MAILBOX})` };
+}
+
+/**
  * Perform the effect itself, AFTER authorization has already passed.
  *
  * Only `email.send` has a real transport, and now there are two of them. CLOUDFLARE IS TRIED FIRST
@@ -164,7 +202,11 @@ async function performEffect(env: Env, request: ExternalEffectRequestRow): Promi
      * `preston@westpeek.ventures` reads to an outsider as a person at the fund.
      */
     let from: string | undefined;
-    if (request.requested_by_type === "AI") {
+    // A brand email for the Learning Club is HERS: she signs it, so it comes from her (see brandMailAsOwner).
+    const ownerSigned = request.outside_job === TLC_BRAND_SALES_JOB;
+    if (ownerSigned) {
+      from = TLC_OWNER.email;
+    } else if (request.requested_by_type === "AI") {
       const employee = await env.WP_OS_DB.prepare("SELECT name FROM ai_employee WHERE id = ?1 OR name = ?1")
         .bind(request.requested_by_id)
         .first<{ name: string }>();
@@ -200,7 +242,9 @@ async function performEffect(env: Env, request: ExternalEffectRequestRow): Promi
     // Only when they are sending as themselves AND granted gmail.send; anything else, including a
     // Gmail attempt that comes back refused, falls to the firm transport rather than not sending.
     let result: EmailSendResult | null = null;
-    if (requestedBy && from && from !== env.WP_OS_EMAIL_FROM) {
+    if (ownerSigned) {
+      result = await brandMailAsOwner(env, message);
+    } else if (requestedBy && from && from !== env.WP_OS_EMAIL_FROM) {
       try {
         const gmailId = await trySendAsPartner(env, requestedBy, { ...message, from });
         if (gmailId) {
