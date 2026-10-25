@@ -3148,7 +3148,9 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
   const startedAt = new Date().toISOString();
   const { handleInboundEmail } = await import("../effects/inboundEmail");
   const bytes = new TextEncoder().encode(raw);
-  await handleInboundEmail({ from, to: headers.get("to") ?? "os@joinwestpeek.com", headers, raw: new Blob([bytes as BlobPart]).stream(), rawSize: bytes.byteLength }, ctx.env, { receivedTldr, replyOnThread });
+  // What a non-card handler did with the message (a TLC drafts reply that approved and sent, a packet decision).
+  const handledBy: import("../effects/inboundEmail").DoorHandled[] = [];
+  await handleInboundEmail({ from, to: headers.get("to") ?? "os@joinwestpeek.com", headers, raw: new Blob([bytes as BlobPart]).stream(), rawSize: bytes.byteLength }, ctx.env, { receivedTldr, replyOnThread, onHandled: (h) => handledBy.push(h) });
   // THE NEW CARD, not "the newest card of the kind": created by this read, for this partner.
   const created = (
     await ctx.env.WP_OS_DB.prepare(
@@ -3194,7 +3196,7 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
     objectType: "inbound_email",
     objectId: key,
     firmScope: "west-peek",
-    payload: { message_id: msgId, superseded, restored_blocks: restored, created: created.map((c) => c.id), new_card: card?.id ?? null, new_card_kind: card?.kind ?? null, steered_card: steered },
+    payload: { message_id: msgId, superseded, restored_blocks: restored, created: created.map((c) => c.id), new_card: card?.id ?? null, new_card_kind: card?.kind ?? null, steered_card: steered, handled_by: handledBy },
   });
   /*
    * A RE-READ THAT LANDED ON AN EXISTING CARD (9 Oct 2026): a reply steering its card, or a new email /
@@ -3204,6 +3206,16 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
   if (!card && steered && (isReply || (linkBefore === null && !superseded.includes(steered)))) {
     const target = await ctx.env.WP_OS_DB.prepare("SELECT id, kind, owner_id, title, state FROM work_card WHERE id = ?1").bind(steered).first<{ id: string; kind: string | null; owner_id: string | null; title: string; state: string }>();
     return json({ ok: true, object_key: key, superseded, steered_card: steered, steered_card_state: target?.state ?? null, new_card: null, new_card_kind: null, owner_id: target?.owner_id ?? null, title: target?.title ?? null, detail: isReply ? "the message is a reply: it steered the card it answers and opened no card" : "the message landed on the open card it belongs to and opened no card" });
+  }
+  /*
+   * A RE-READ THAT WAS HANDLED WITHOUT A CARD (24 Oct 2026, learned in production). A replay of her reply to the
+   * TLC drafts email approved and sent the drafts, and this route answered 409 "no card" — so the replay script
+   * reported a failure for work that was done. A handler that reports success is the answer; 409 is kept for a
+   * read that did nothing at all.
+   */
+  if (!card && handledBy.length) {
+    const h = handledBy[handledBy.length - 1]!;
+    return json({ ok: true, object_key: key, superseded, new_card: null, new_card_kind: null, handled_by: h.by, handled_ref: h.ref, detail: h.detail });
   }
   if (!card) return json({ ok: false, object_key: key, superseded, detail: "the door produced no card for this partner from this message — see inbound_email events" }, { status: 409 });
   return json({ ok: true, object_key: key, superseded, new_card: card.id, new_card_kind: card.kind, owner_id: card.owner_id, title: card.title });

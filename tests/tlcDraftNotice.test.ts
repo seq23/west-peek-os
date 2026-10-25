@@ -223,3 +223,52 @@ describe("one TLC email a week, every club at once, approved by reply", () => {
     expect(out?.text).not.toMatch(/Caveat/);
   });
 });
+
+describe("a re-read of her stored reply is reported as done (24 Oct 2026, learned in production)", () => {
+  it("POST /api/inbound-email/reingest answers 200 with the TLC handler's detail when the reply was handled, never 409 'no card'", async () => {
+    const { handleReingestStoredEmail } = await import("../src/worker/services/webPropertyChange");
+    const ref = "TLC-RPLY24";
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_draft_notice (ref, items_json, firm_scope) VALUES (?1, '[]', 'west-peek')").bind(ref).run();
+    const key = `inbound-email/2026-10-24/${crypto.randomUUID()}.eml`;
+    const raw = asRawMime(`Approve all\n\n> Ref ${ref}`)
+      .replace("Subject: Re: TLC", `Subject: Re: TLC: this week's brands · ${ref}\r\nMessage-ID: <${crypto.randomUUID()}@mail.gmail.com>\r\nAuthentication-Results: ${genuineFrom(SEQUOIA)}`);
+    const docEnv = { ...env, WP_OS_DOCUMENTS: t.docs } as Env;
+    await t.docs.put(key, raw);
+    const res = await handleReingestStoredEmail({
+      request: new Request("https://os.joinwestpeek.com/api/inbound-email/reingest", { method: "POST", body: JSON.stringify({ object_key: key }) }),
+      env: docEnv,
+      identity: { id: "fu_sequoia_taylor", email: SEQUOIA, fullName: "Sequoia Taylor", status: "ACTIVE", roles: ["MANAGING_PARTNER"], authorityScopes: [] },
+      params: {},
+    });
+    const body = (await res.json()) as { ok: boolean; handled_by?: string; handled_ref?: string; detail?: string; new_card: string | null };
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.handled_by).toBe("tlc_draft_reply");
+    expect(body.handled_ref).toBe(ref);
+    expect(body.detail).toBe("0 approved, 0 skipped, 0 redrafted");
+    expect(body.new_card).toBeNull();
+    const ev = await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE event_type = 'tlc.draft_reply' AND object_id = ?1").bind(ref).first<{ payload_json: string }>();
+    expect(ev, "the handler really ran").not.toBeNull();
+  });
+
+  it("a reply the TLC handler declined is never reported as handled by it: the door's own card is the answer", async () => {
+    const { handleReingestStoredEmail } = await import("../src/worker/services/webPropertyChange");
+    const key = `inbound-email/2026-10-24/${crypto.randomUUID()}.eml`;
+    // An unknown notice reference: the TLC handler declines it, and the door opens Porter's "unclear email" card.
+    const raw = asRawMime("Approve all\n\n> Ref TLC-NOSUCH")
+      .replace("Subject: Re: TLC", `Subject: Re: TLC-NOSUCH\r\nMessage-ID: <${crypto.randomUUID()}@mail.gmail.com>`);
+    const docEnv = { ...env, WP_OS_DOCUMENTS: t.docs } as Env;
+    await t.docs.put(key, raw);
+    const res = await handleReingestStoredEmail({
+      request: new Request("https://os.joinwestpeek.com/api/inbound-email/reingest", { method: "POST", body: JSON.stringify({ object_key: key }) }),
+      env: docEnv,
+      identity: { id: "fu_sequoia_taylor", email: SEQUOIA, fullName: "Sequoia Taylor", status: "ACTIVE", roles: ["MANAGING_PARTNER"], authorityScopes: [] },
+      params: {},
+    });
+    const body = (await res.json()) as { ok: boolean; handled_by?: string; new_card: string | null };
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    expect(body.handled_by, "a declined reply is not reported as a TLC decision").toBeUndefined();
+    expect(body.new_card).toMatch(/^wc_/);
+    expect(await env.WP_OS_DB.prepare("SELECT 1 FROM event_record WHERE event_type = 'tlc.draft_reply' AND object_id = 'TLC-NOSUCH'").first(), "nothing was decided").toBeNull();
+  });
+});

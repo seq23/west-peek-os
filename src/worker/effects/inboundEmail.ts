@@ -255,6 +255,19 @@ export interface InboundOptions {
   replyOnThread?: string | null;
   /** 9 Oct 2026 (rule 1d): where the partner said this stored email goes — re-read once his answer arrives. */
   routeAs?: RouteAs | null;
+  /**
+   * 24 Oct 2026: told when the door handled the message WITHOUT opening or steering a card (a TLC drafts-notice
+   * reply, a packet decision, a "which job?" question). The re-read route reads this, so a replay that approved
+   * and sent emails is reported as done, never as "no card".
+   */
+  onHandled?: (handled: DoorHandled) => void;
+}
+
+/** What a non-card handler in the door did with a message. */
+export interface DoorHandled {
+  by: "tlc_draft_reply" | "packet_decision" | "clarification";
+  ref: string | null;
+  detail: string;
 }
 
 export async function handleInboundEmail(
@@ -605,6 +618,7 @@ async function handleIfReply(
     quotedOnly: readonly string[];
     /** 9 Oct 2026 (rule 1d): the partner's answer to "which job is this for?", when there is one. */
     routeAs?: RouteAs | null;
+    onHandled?: (handled: DoorHandled) => void;
   },
 ): Promise<boolean> {
   const { message, subject, sender, raw, kept, inReplyTo, references, firmScope } = input;
@@ -701,6 +715,7 @@ async function handleIfReply(
         firmScope,
         payload: { from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX, tlc_draft_reply: tlc.ref, detail: tlc.detail },
       });
+      input.onHandled?.({ by: "tlc_draft_reply", ref: tlc.ref, detail: tlc.detail });
       return true;
     }
   }
@@ -723,6 +738,7 @@ async function handleIfReply(
         packet_decision: replyDecision.decision, packet_id: replyDecision.packetId,
       },
     });
+    input.onHandled?.({ by: "packet_decision", ref: replyDecision.packetId ?? null, detail: `packet ${replyDecision.packetId ?? "?"}: ${String(replyDecision.decision)}` });
     return true;
   }
   if (replyDecision.capture) {
@@ -799,6 +815,7 @@ async function handleIfReply(
       firmScope,
       payload: { from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX, clarification: asked.id, asked_before: asked.already, candidates: steer.clarify.map((c) => c.cardId) },
     });
+    input.onHandled?.({ by: "clarification", ref: asked.id, detail: `asked which open job this is for (${steer.clarify.length} candidates)` });
     return true;
   }
   if (steer.steered) {
@@ -1029,7 +1046,7 @@ async function handleInboundEmailOnce(
       const rawText = partnerText;
       // THE SAME REPLY CHECK AS A SMALL MESSAGE, before any card is opened (27 Sep 2026): a
       // partner's oversize reply steers the card it answers and creates nothing new.
-      if (await handleIfReply(env, { message, subject, sender, raw: rawText, kept, inReplyTo, references, firmScope, quotedOnly: [], routeAs: options.routeAs ?? null })) return;
+      if (await handleIfReply(env, { message, subject, sender, raw: rawText, kept, inReplyTo, references, firmScope, quotedOnly: [], routeAs: options.routeAs ?? null, onHandled: options.onHandled })) return;
       const cardId = await openAssignmentCard(env, {
         subject,
         partnerAddress: authority.partnerAddress!,
@@ -1182,7 +1199,7 @@ async function handleInboundEmailOnce(
    * ONE REPLY CHECK, FOR EVERY SIZE. A reply that decided a packet, steered a card, or tried to and
    * was refused is finished here; an ordinary email falls through to the ladder below.
    */
-  if (await handleIfReply(env, { message, subject, sender, raw, kept, inReplyTo, references, firmScope, quotedOnly: summary.quotedOnly ?? [], routeAs: options.routeAs ?? null })) return;
+  if (await handleIfReply(env, { message, subject, sender, raw, kept, inReplyTo, references, firmScope, quotedOnly: summary.quotedOnly ?? [], routeAs: options.routeAs ?? null, onHandled: options.onHandled })) return;
 
   /*
    * A COMPANY GOES TO THE FUNNEL. A message nobody could place goes to Capture.
