@@ -49,6 +49,14 @@ export const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
 
 export const GOOGLE_SCOPES_WITH_SEND = [...GOOGLE_SCOPES, GMAIL_SEND_SCOPE] as const;
 
+/**
+ * The scope the firm's service account holds on her mailbox through domain-wide delegation
+ * (westpeek.ventures, since 5 Oct 2026). `gmail.send` was never delegated; `gmail.compose` covers
+ * `users.messages.send`, so this is the one a delegated send asks for. Probed 24 Oct 2026: a token
+ * minted for her mailbox under it reads her profile (200).
+ */
+export const GMAIL_COMPOSE_SCOPE = "https://www.googleapis.com/auth/gmail.compose";
+
 export interface GoogleTokens {
   access_token: string;
   /** Google returns this only on the FIRST consent unless prompt=consent is forced. */
@@ -282,23 +290,76 @@ export async function fetchEvents(
  * before they go in: a newline inside a subject or an address is header injection, and the subject
  * here comes from a payload that a person or a model wrote.
  */
-export async function sendViaGmail(
-  accessToken: string,
-  message: { to: string; from: string; fromName?: string; subject: string; text: string },
-  fetchImpl: typeof fetch = fetch,
-): Promise<string | null> {
-  const clean = (v: string) => v.replace(/[\r\n]+/g, " ").trim();
-  const from = message.fromName ? `${clean(message.fromName)} <${clean(message.from)}>` : clean(message.from);
+export interface GmailMessage {
+  to: string;
+  from: string;
+  fromName?: string;
+  subject: string;
+  text: string;
+  /** Where a reply goes; Gmail keeps the message in the sender's Sent folder either way. */
+  replyTo?: readonly string[];
+  /** Copied blind. Gmail delivers to these and strips the header from what the recipient sees. */
+  bcc?: readonly string[];
+  /** PDFs and the like, base64. */
+  attachments?: ReadonlyArray<{ filename: string; content: string; contentType?: string }>;
+}
 
-  const raw = [
+/** RFC 2047 for a header that is not plain ASCII (a brand name with an accent, a curly quote). */
+function encodedWord(v: string): string {
+  if (/^[\x20-\x7e]*$/.test(v)) return v;
+  const bytes = new TextEncoder().encode(v);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return `=?UTF-8?B?${btoa(bin)}?=`;
+}
+
+/** The RFC 822 bytes, before base64url. Exported so a test can read exactly what Gmail is handed. */
+export function gmailRaw(message: GmailMessage): string {
+  const clean = (v: string) => v.replace(/[\r\n]+/g, " ").trim();
+  const list = (xs: readonly string[] | undefined) => (xs ?? []).map(clean).filter((x) => x.length > 0);
+  const from = message.fromName ? `${encodedWord(clean(message.fromName))} <${clean(message.from)}>` : clean(message.from);
+  const replyTo = list(message.replyTo);
+  const bcc = list(message.bcc);
+  const head = [
     `From: ${from}`,
     `To: ${clean(message.to)}`,
-    `Subject: ${clean(message.subject)}`,
+    ...(replyTo.length ? [`Reply-To: ${replyTo.join(", ")}`] : []),
+    ...(bcc.length ? [`Bcc: ${bcc.join(", ")}`] : []),
+    `Subject: ${encodedWord(clean(message.subject))}`,
     "MIME-Version: 1.0",
+  ];
+  const attachments = message.attachments ?? [];
+  if (attachments.length === 0) {
+    return [...head, 'Content-Type: text/plain; charset="UTF-8"', "", message.text].join("\r\n");
+  }
+  const boundary = `wpos_${crypto.randomUUID().replace(/-/g, "")}`;
+  const parts = [
+    `--${boundary}`,
     'Content-Type: text/plain; charset="UTF-8"',
     "",
     message.text,
-  ].join("\r\n");
+    ...attachments.flatMap((a) => {
+      const name = clean(a.filename).replace(/"/g, "");
+      return [
+        `--${boundary}`,
+        `Content-Type: ${clean(a.contentType ?? "application/octet-stream")}; name="${name}"`,
+        `Content-Disposition: attachment; filename="${name}"`,
+        "Content-Transfer-Encoding: base64",
+        "",
+        (a.content.replace(/\s+/g, "").match(/.{1,76}/g) ?? []).join("\r\n"),
+      ];
+    }),
+    `--${boundary}--`,
+  ];
+  return [...head, `Content-Type: multipart/mixed; boundary="${boundary}"`, "", ...parts].join("\r\n");
+}
+
+export async function sendViaGmail(
+  accessToken: string,
+  message: GmailMessage,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string | null> {
+  const raw = gmailRaw(message);
 
   // base64url, which is what Gmail wants — not standard base64.
   const bytes = new TextEncoder().encode(raw);

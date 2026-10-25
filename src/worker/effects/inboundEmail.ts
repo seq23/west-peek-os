@@ -306,6 +306,23 @@ export async function handleInboundEmail(
       console.warn("tlc brand mail not recorded", err instanceof Error ? err.message : String(err));
     });
   }
+  /*
+   * HER OWN BRAND EMAIL, COPIED BACK (24 Oct 2026). A Learning Club brand email now leaves from her Gmail with a
+   * blind copy to this mailbox. That copy is from a partner, so the ordinary door would open a card for it; it is
+   * filed here instead, as a record, and nothing else reads it. The brand's REPLY still arrives from the brand's
+   * address (Reply-To names this mailbox) and is read above and below exactly as before.
+   */
+  {
+    const { isOwnBrandMailCopy } = await import("../services/learningClub");
+    const copy = await isOwnBrandMailCopy(env, { from: sender, to: message.headers.get("to") ?? "" }).catch(() => null);
+    if (copy) {
+      await appendEvent(env, {
+        eventType: "tlc.brand_mail_copy", actorType: "system", actorId: "inbound_email", objectType: "tlc_deal", objectId: copy,
+        firmScope, payload: { subject: decodeMimeHeader(message.headers.get("subject") ?? "").slice(0, 200) },
+      });
+      return;
+    }
+  }
   try {
     await handleInboundEmailOnce(message, env, options);
   } catch (err) {

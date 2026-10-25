@@ -5,7 +5,7 @@ import { runAi } from "../ai/runAi";
 import { mailAuthority } from "../../shared/intake/partnerAuthority";
 import { newTextOf } from "../../shared/events/packetDecisionToken";
 import { NOTICE_REF_RE, isEmptyReply, parseDraftReply } from "../../shared/tlc/draftReply";
-import { TLC_INTERNAL_NOTE, TLC_OWNER, TLC_PS_BY_STEP, TLC_SIGNATURE, dripEmail, monthWords, seatsOf } from "../../shared/tlc/learningClub";
+import { TLC_INTERNAL_NOTE, TLC_OWNER, TLC_PS_BY_STEP, TLC_SIGNATURE, brandDisplayName, dripEmail, monthWords, seatsOf } from "../../shared/tlc/learningClub";
 import { actorForFirmUser, type Actor } from "./authorize";
 
 /**
@@ -407,4 +407,66 @@ export async function repairLeakedDrafts(env: Env, now: Date, firmScope = "west-
     payload: { repaired, at: now.toISOString() },
   });
   return `${repaired.length} draft(s) re-composed without the research note; the clean list re-sent on ${[...roots].join(", ") || "no thread"}`;
+}
+
+/**
+ * A BRAND'S NAME WITHOUT ITS QUALIFIER, IN DRAFTS ALREADY WRITTEN (owner, 24 Oct 2026: "Osmo (Generation)" →
+ * "Osmo"). The composer now writes the clean name; this re-composes, in place, the drafts that still carry the
+ * old one and have not gone: undecided OR approved-but-unsent (waiting for the warm-up allowance). Nothing is
+ * approved, unapproved or re-sent for approval; the card keeps its state. Only a draft that is EXACTLY the old
+ * template output is touched, so her own redrafts and approved day-zero text are never rewritten. Runs before
+ * the drip each pass and is a no-op once nothing matches.
+ */
+export async function recomposeBrandNames(env: Env, firmScope = "west-peek"): Promise<string[]> {
+  const rows = (await env.WP_OS_DB.prepare(
+    `SELECT m.id, m.subject, m.body, m.step, m.effect_request_id, m.approval_card_id, d.brand, d.contact_name, d.why_fit,
+            e.topic, e.month, e.event_date, e.seats_min, e.seats_max
+       FROM tlc_drip_message m JOIN tlc_deal d ON d.id = m.deal_id JOIN tlc_event e ON e.id = d.event_id
+       JOIN approval_card a ON a.id = m.approval_card_id
+      WHERE d.firm_scope = ?1 AND m.state = 'AWAITING_APPROVAL' AND a.state IN ('pending_review','approved')
+        AND m.redraft_note IS NULL AND d.brand LIKE '%(%'`,
+  ).bind(firmScope).all<{ id: string; subject: string; body: string; step: number; effect_request_id: string; approval_card_id: string; brand: string; contact_name: string | null; why_fit: string | null; topic: string; month: string; event_date: string; seats_min: number | null; seats_max: number | null }>()).results ?? [];
+  const done: string[] = [];
+  for (const r of rows) {
+    if (brandDisplayName(r.brand) === r.brand) continue;
+    const input = { step: r.step, contactName: r.contact_name, topic: r.topic, month: r.month, eventDate: r.event_date, why: r.why_fit, seats: seatsOf(r) };
+    const old = oldTemplate({ ...input, brand: r.brand });
+    if (r.subject !== old.subject || r.body !== old.text) continue;
+    const mail = dripEmail({ ...input, brand: r.brand });
+    const req = await env.WP_OS_DB.prepare("SELECT payload_json FROM external_effect_request WHERE id = ?1 AND executed_at IS NULL").bind(r.effect_request_id).first<{ payload_json: string }>();
+    if (!req) continue;
+    const payload = { ...(JSON.parse(req.payload_json) as Record<string, unknown>), subject: mail.subject, text: mail.text };
+    await env.WP_OS_DB.batch([
+      env.WP_OS_DB.prepare("UPDATE external_effect_request SET payload_json = ?2 WHERE id = ?1 AND executed_at IS NULL").bind(r.effect_request_id, JSON.stringify(payload)),
+      env.WP_OS_DB.prepare("UPDATE approval_card SET summary = ?2 WHERE id = ?1 AND state IN ('pending_review','approved')").bind(r.approval_card_id, `${mail.subject}\n\n${mail.text}`.slice(0, 1800)),
+      env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET subject = ?2, body = ?3 WHERE id = ?1 AND state = 'AWAITING_APPROVAL'").bind(r.id, mail.subject, mail.text),
+    ]);
+    done.push(brandDisplayName(r.brand));
+  }
+  // The pitch email after a yes: only its subject carried the name.
+  const pitches = (await env.WP_OS_DB.prepare(
+    `SELECT f.deal_id, f.subject, f.effect_request_id, d.brand FROM tlc_pitch_followup f JOIN tlc_deal d ON d.id = f.deal_id
+      WHERE d.firm_scope = ?1 AND f.state IN ('HELD','AWAITING_APPROVAL') AND d.brand LIKE '%(%'`,
+  ).bind(firmScope).all<{ deal_id: string; subject: string; effect_request_id: string | null; brand: string }>()).results ?? [];
+  for (const p of pitches) {
+    const subject = `${brandDisplayName(p.brand)} + a small room in New York`;
+    if (p.subject !== `${p.brand} + a small room in New York` || subject === p.subject) continue;
+    await env.WP_OS_DB.prepare("UPDATE tlc_pitch_followup SET subject = ?2 WHERE deal_id = ?1").bind(p.deal_id, subject).run();
+    if (p.effect_request_id) {
+      const req = await env.WP_OS_DB.prepare("SELECT payload_json FROM external_effect_request WHERE id = ?1 AND executed_at IS NULL").bind(p.effect_request_id).first<{ payload_json: string }>();
+      if (req) await env.WP_OS_DB.prepare("UPDATE external_effect_request SET payload_json = ?2 WHERE id = ?1 AND executed_at IS NULL").bind(p.effect_request_id, JSON.stringify({ ...(JSON.parse(req.payload_json) as Record<string, unknown>), subject })).run();
+    }
+    done.push(brandDisplayName(p.brand));
+  }
+  if (done.length) {
+    await appendEvent(env, { eventType: "tlc.drafts_brand_named", actorType: "system", actorId: "tlc_drip", objectType: "tlc_drip_message", objectId: done.join(",").slice(0, 200), firmScope, payload: { recomposed: done } });
+  }
+  return done;
+}
+
+/** What the composer wrote before the display name: the stored brand, parenthetical and all. */
+function oldTemplate(input: Parameters<typeof dripEmail>[0]): { subject: string; text: string } {
+  const placeholder = "\u0000BRAND\u0000";
+  const mail = dripEmail({ ...input, brand: placeholder });
+  return { subject: mail.subject.split(placeholder).join(input.brand), text: mail.text.split(placeholder).join(input.brand) };
 }

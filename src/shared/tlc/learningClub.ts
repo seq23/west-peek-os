@@ -627,7 +627,19 @@ export function brandFacingReason(why: string | null | undefined): string | null
   return SENTENCE_STARTERS.has(word) ? `${sentence.charAt(0).toLowerCase()}${sentence.slice(1)}` : sentence;
 }
 
-export function dripEmail(input: DripEmailInput): { subject: string; text: string } {
+/**
+ * THE BRAND'S NAME AS A PERSON WOULD WRITE IT (owner, 24 Oct 2026). The stored brand keeps Parker's qualifier,
+ * "Osmo (Generation)" or "Quest Diagnostics (questhealth.com)", because it tells deals apart; an email to the
+ * brand says "Osmo" and "Quest Diagnostics". Parentheticals are dropped, the stored row is never changed, and a
+ * name that would come out empty stays as it was.
+ */
+export function brandDisplayName(brand: string): string {
+  const shown = brand.replace(/\s*\([^()]*\)/g, "").replace(/\s+/g, " ").trim();
+  return shown || brand.trim();
+}
+
+export function dripEmail(raw: DripEmailInput): { subject: string; text: string } {
+  const input = { ...raw, brand: brandDisplayName(raw.brand) };
   const hi = input.contactName ? `Hi ${input.contactName.split(" ")[0]},` : "Hi,";
   const when = monthWords(input.month);
   const subject = `${input.brand} + a small room in New York`;
