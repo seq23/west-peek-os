@@ -464,11 +464,16 @@ export async function runDripPass(env: Env, now: Date, firmScope = "west-peek"):
     const batchOpen = await env.WP_OS_DB.prepare("SELECT 1 FROM work_card WHERE kind = 'TLC_BRAND_BATCH' AND firm_scope = ?1 AND state NOT IN ('DONE','CANCELLED') LIMIT 1").bind(firmScope).first();
     if ((deals?.n ?? 0) === 0 && !batchOpen) batch = (await openBrandBatchCard(env, now, firmScope)).detail;
   }
-  const { recomposeBrandNames, recomposeSecondEmails, repairLeakedDrafts, sendDraftNotice } = await import("./tlcDraftNotice");
+  const { recomposeBrandNames, recomposeGuestCounts, recomposeSecondEmails, repairLeakedDrafts, sendDraftNotice } = await import("./tlcDraftNotice");
   // Before the drip, so an approved draft waiting for its allowance goes with the brand's clean name.
   await recomposeBrandNames(env, firmScope);
   // And a queued email 2 offers the three samples, never a call (owner, 26 Oct 2026).
   await recomposeSecondEmails(env, firmScope);
+  // And every queued draft tells the brand 25–40 guests per event, flexible (owner, 26 Oct 2026).
+  await recomposeGuestCounts(env, firmScope);
+  // Samples planned ahead of time are rendered, so the PDF is ready the moment the brand says yes (sends nothing).
+  const { renderPlannedSamples } = await import("./tlcSamples");
+  await renderPlannedSamples(env, firmScope).catch(() => []);
   const drip = await runDrip(env, now, firmScope);
   const repaired = await repairLeakedDrafts(env, now, firmScope);
   const notice = await sendDraftNotice(env, now, firmScope);

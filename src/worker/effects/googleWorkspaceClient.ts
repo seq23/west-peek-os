@@ -47,6 +47,12 @@ export const SCOPE = {
   /** 9 Oct 2026: a file a partner shared with os@, read as the partner who shared it (0256). */
   driveRead: "https://www.googleapis.com/auth/drive.readonly",
   /**
+   * 26 Oct 2026: Wynn puts a call a brand confirmed on Sequoia's calendar, the brand invited. Needs this scope in
+   * the delegation grant; without it the token endpoint answers `unauthorized_client` (scope_missing) and the
+   * event is named as not made, never silently skipped.
+   */
+  calendarEvents: "https://www.googleapis.com/auth/calendar.events",
+  /**
    * The Meet Media API (tier 4). Restricted; not in the delegation grant as of 19 Sep 2026 —
    * `serviceAccountToken` names it `scope_missing`, and the live listener records that as the
    * meeting state `meet_live_unavailable_scope` until the owner adds it.
@@ -242,6 +248,30 @@ export async function listCalendarEvents(
     pageToken = body.nextPageToken;
   } while (pageToken && items.length < 2000);
   return items;
+}
+
+/** One event on the impersonated user's primary calendar, the guests invited by Google (sendUpdates=all). */
+export async function createCalendarEvent(
+  token: string,
+  event: { summary: string; description: string; start: string; end: string; attendees: readonly string[] },
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ id: string; htmlLink: string | null }> {
+  const url = `${CALENDAR_BASE}/calendars/primary/events?sendUpdates=all&conferenceDataVersion=1`;
+  const res = await fetchWithTimeout(fetchImpl, url, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      summary: event.summary,
+      description: event.description,
+      start: { dateTime: event.start },
+      end: { dateTime: event.end },
+      attendees: event.attendees.map((email) => ({ email })),
+      conferenceData: { createRequest: { requestId: crypto.randomUUID(), conferenceSolutionKey: { type: "hangoutsMeet" } } },
+    }),
+  });
+  const body = await readJson<{ id?: string; htmlLink?: string }>(res, url);
+  if (!body.id) throw new GoogleWorkspaceError("http", res.status, "google made no event id");
+  return { id: body.id, htmlLink: body.htmlLink ?? null };
 }
 
 /** The private iCal feed, as text. https only; the URL is a secret and is never logged. */

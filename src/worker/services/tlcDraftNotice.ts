@@ -6,7 +6,7 @@ import { mailAuthority } from "../../shared/intake/partnerAuthority";
 import { newTextOf } from "../../shared/events/packetDecisionToken";
 import { NOTICE_REF_RE, isEmptyReply, parseDraftReply } from "../../shared/tlc/draftReply";
 import { herNoteOf } from "../../shared/tlc/brandReply";
-import { TLC_INTERNAL_NOTE, TLC_OWNER, TLC_PS_BY_STEP, TLC_SAMPLES_OFFER, TLC_SIGNATURE, brandDisplayName, dripEmail, monthWords, seatsOf } from "../../shared/tlc/learningClub";
+import { BRAND_GUESTS, TLC_INTERNAL_NOTE, TLC_OWNER, TLC_PS_BY_STEP, TLC_SAMPLES_OFFER, TLC_SEATS, TLC_SIGNATURE, brandDisplayName, dripEmail, monthWords, seatsOf } from "../../shared/tlc/learningClub";
 import { actorForFirmUser, type Actor } from "./authorize";
 
 /**
@@ -433,8 +433,8 @@ export async function recomposeSecondEmails(env: Env, firmScope = "west-peek"): 
        FROM tlc_drip_message m JOIN tlc_deal d ON d.id = m.deal_id JOIN tlc_event e ON e.id = d.event_id
        JOIN approval_card a ON a.id = m.approval_card_id
       WHERE d.firm_scope = ?1 AND m.step = 1 AND m.state = 'AWAITING_APPROVAL' AND a.state IN ('pending_review','approved')
-        AND m.redraft_note IS NULL AND instr(m.body, ?2) > 0 AND instr(m.body, ?3) = 0`,
-  ).bind(firmScope, OLD_SECOND_EMAIL_MARK, TLC_SAMPLES_OFFER).all<{ id: string; subject: string; body: string; step: number; effect_request_id: string; approval_card_id: string; brand: string; contact_name: string | null; why_fit: string | null; topic: string; month: string; event_date: string; seats_min: number | null; seats_max: number | null }>()).results ?? [];
+        AND m.redraft_note IS NULL AND instr(m.body, ?2) > 0`,
+  ).bind(firmScope, OLD_SECOND_EMAIL_MARK).all<{ id: string; subject: string; body: string; step: number; effect_request_id: string; approval_card_id: string; brand: string; contact_name: string | null; why_fit: string | null; topic: string; month: string; event_date: string; seats_min: number | null; seats_max: number | null }>()).results ?? [];
   const done: string[] = [];
   for (const r of rows) {
     const mail = dripEmail({ step: 1, brand: r.brand, contactName: r.contact_name, topic: r.topic, month: r.month, eventDate: r.event_date, why: r.why_fit, seats: seatsOf(r) });
@@ -451,6 +451,41 @@ export async function recomposeSecondEmails(env: Env, firmScope = "west-peek"): 
   if (done.length) {
     await appendEvent(env, { eventType: "tlc.second_emails_offer_samples", actorType: "system", actorId: "tlc_drip", objectType: "tlc_drip_message", objectId: done.join(",").slice(0, 200), firmScope, payload: { recomposed: done } });
   }
+  return done;
+}
+
+/**
+ * A BRAND IS TOLD 25–40 GUESTS PER EVENT, FLEXIBLE (owner, 26 Oct 2026), in queued drafts too. An unsent drip draft
+ * (undecided, or approved and waiting for its allowance) whose room size is the club's planned size ("60 to 75
+ * people spending…", "80 to 120 New Yorkers, each…") gets the standard words in place; nothing else in it changes.
+ * Sent mail is never touched; nor is her own redraft.
+ */
+export function standardGuestWords(body: string): string {
+  return body
+    .replace(/\b\d+(?: to \d+)? people spending\b/g, `${BRAND_GUESTS} spending`)
+    .replace(/\b\d+(?: to \d+)? New Yorkers, each\b/g, `${TLC_SEATS.min} to ${TLC_SEATS.max} New Yorkers (flexible to your goals), each`);
+}
+export async function recomposeGuestCounts(env: Env, firmScope = "west-peek"): Promise<string[]> {
+  const rows = (await env.WP_OS_DB.prepare(
+    `SELECT m.id, m.subject, m.body, m.effect_request_id, m.approval_card_id, d.brand
+       FROM tlc_drip_message m JOIN tlc_deal d ON d.id = m.deal_id JOIN approval_card a ON a.id = m.approval_card_id
+      WHERE d.firm_scope = ?1 AND m.state = 'AWAITING_APPROVAL' AND a.state IN ('pending_review','approved') AND m.redraft_note IS NULL`,
+  ).bind(firmScope).all<{ id: string; subject: string; body: string; effect_request_id: string; approval_card_id: string; brand: string }>()).results ?? [];
+  const done: string[] = [];
+  for (const r of rows) {
+    const text = standardGuestWords(r.body);
+    if (text === r.body) continue;
+    const req = await env.WP_OS_DB.prepare("SELECT payload_json FROM external_effect_request WHERE id = ?1 AND executed_at IS NULL").bind(r.effect_request_id).first<{ payload_json: string }>();
+    if (!req) continue;
+    const payload = { ...(JSON.parse(req.payload_json) as Record<string, unknown>), text };
+    await env.WP_OS_DB.batch([
+      env.WP_OS_DB.prepare("UPDATE external_effect_request SET payload_json = ?2 WHERE id = ?1 AND executed_at IS NULL").bind(r.effect_request_id, JSON.stringify(payload)),
+      env.WP_OS_DB.prepare("UPDATE approval_card SET summary = ?2 WHERE id = ?1 AND state IN ('pending_review','approved')").bind(r.approval_card_id, `${r.subject}\n\n${text}`.slice(0, 1800)),
+      env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET body = ?2 WHERE id = ?1 AND state = 'AWAITING_APPROVAL'").bind(r.id, text),
+    ]);
+    done.push(brandDisplayName(r.brand));
+  }
+  if (done.length) await appendEvent(env, { eventType: "tlc.drafts_guest_count", actorType: "system", actorId: "tlc_drip", objectType: "tlc_drip_message", objectId: done.join(",").slice(0, 200), firmScope, payload: { recomposed: done } });
   return done;
 }
 

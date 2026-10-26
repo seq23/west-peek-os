@@ -124,13 +124,13 @@ describe("the rules, pure", () => {
     expect(ticketVerdict(25).meetsFloor).toBe(true);
   });
 
-  it("drips at day 0, 4, 10, 18 from the first send, and stops on any stop", () => {
+  it("sends the first pitch and ONE follow-up at day 4, then no more (her flow, 26 Oct 2026), and stops on any stop", () => {
     const first = "2027-01-04T14:00:00.000Z";
     const now = new Date(first);
-    expect(TLC_DRIP_DAYS).toEqual([0, 4, 10, 18]);
+    expect(TLC_DRIP_DAYS).toEqual([0, 4]);
     expect(nextDripAt(1, first, now, null)).toBe("2027-01-08T14:00:00.000Z");
-    expect(nextDripAt(3, first, now, null)).toBe("2027-01-22T14:00:00.000Z");
-    expect(nextDripAt(4, first, now, null)).toBeNull();
+    expect(nextDripAt(2, first, now, null), "after the one follow-up, no more").toBeNull();
+    expect(nextDripAt(3, first, now, null)).toBeNull();
     expect(nextDripAt(1, first, now, "REPLIED")).toBeNull();
     expect(warmupDailyCap(null, now)).toBe(5);
     expect(warmupDailyCap("2026-12-20T00:00:00Z", now)).toBe(20);
@@ -169,15 +169,19 @@ describe("the rules, pure", () => {
 
   it("writes the brand emails signed by Sequoia: the brand's reason first, one proof line, one ask, no pitch or price, a quiet subject", () => {
     const why = "your team ran three tastings in Brooklyn this autumn";
-    const steps = [0, 1, 2, 3].map((step) => dripEmail({ step, brand: "Acme", contactName: "Jo Doe", topic: "Matcha & Tea", month: "2027-02", eventDate: "2027-02-11", why }));
+    // Her flow (26 Oct 2026): the first pitch and ONE follow-up; there is no third or fourth email.
+    const steps = [0, 1].map((step) => dripEmail({ step, brand: "Acme", contactName: "Jo Doe", topic: "Matcha & Tea", month: "2027-02", eventDate: "2027-02-11", why }));
     const [first, second] = steps;
     // Signed by her, with her address; never by an employee, never by Scooter.
     for (const m of steps) {
-      expect(m.text).toMatch(/\nSequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures\n/);
+      expect(m.text).toMatch(/\nSequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures(?:\n|$)/);
       expect(m.text).not.toMatch(/Scooter|Wynn|Parker|West Peek Rooms\n\nIf you/);
-      // The opt-out is a soft, human P.S. (owner, 24 Oct 2026), its own words on each step, and it is the last line.
-      expect(m.text.trimEnd().endsWith(TLC_PS_BY_STEP[steps.indexOf(m)]!)).toBe(true);
-      expect(m.text).toMatch(/P\.S\. If (?:this|it) isn't a fit/);
+      // The opt-out is a soft, human P.S. on the first pitch (owner, 24 Oct 2026), its last line; her follow-up
+      // template carries none (26 Oct 2026).
+      if (steps.indexOf(m) === 0) {
+        expect(m.text.trimEnd().endsWith(TLC_PS_BY_STEP[0]!)).toBe(true);
+        expect(m.text).toMatch(/P\.S\. If (?:this|it) isn't a fit/);
+      } else expect(m.text).not.toMatch(/P\.S\./);
       expect(m.text).not.toMatch(/unsubscribe/i);
       // No pitch, no price, no attachment, no exclusivity until they reply.
       expect(m.text).not.toMatch(/\$\d|one-pager|one-sheet|pitch|attach|exclusiv|per category|to itself/i);
@@ -191,11 +195,9 @@ describe("the rules, pure", () => {
     expect(first!.text.indexOf("I am writing because")).toBeLessThan(first!.text.indexOf("Our community"));
     expect(first!.text).toMatch(/Would you be open to exploring a partnership\?/);
     expect((first!.text.match(/\?/g) ?? []).length).toBe(1);
-    // Email 2 is a short picture of the room, and its next step is the offer of three samples (owner, 26 Oct 2026):
-    // never a call, never a price.
-    expect(second!.text).toMatch(/A quick picture of the room/);
-    expect(second!.text).toMatch(/paid seat/);
-    expect(second!.text).toContain("a sample run of show for the evening, a sketch of what a series of six could look like, and a breakdown of the kind of people in the room");
+    // Email 2 is her ONE follow-up, word for word (shared/tlc/brandFlow.ts): it offers the three samples, built around
+    // the brand; never a call, never a price, no P.S.
+    expect(second!.text).toMatch(/^Hi Jo,\n\nOne quick follow-up on The Learning Club\. Rather than describe it, I'd be happy to show you: a sample run of show for the evening, a sketch of what a series of six could look like, and a breakdown of the kind of people we'd have in the room, all built around Acme\. Just say the word and I'll send them over\.\n\nSequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures$/);
     expect(second!.text).not.toMatch(/\bcall\b|\$|\bprice|\btier/i);
     expect(second!.text).not.toContain("Would you be open to exploring a partnership?");
   });
