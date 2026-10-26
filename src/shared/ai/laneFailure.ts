@@ -64,7 +64,8 @@ export function readLaneFailure(detail: string | null | undefined): LaneFailure 
    * "tried three times" and offered her an answer to type. No lane refused anything: the firm's own
    * setting declined to pay. Not transient — repeating it verbatim cannot change the setting.
    */
-  if (/free_only_cannot_serve_protected_work|free_only_no_free_model_available/i.test(text)) {
+  // seat_wait_important_work (26 Oct 2026, shared/ai/seatOrder.ts): important work waiting for a seat; the sweep waits.
+  if (/free_only_cannot_serve_protected_work|free_only_no_free_model_available|seat_wait_important_work/i.test(text)) {
     return { kind: "LEVER", lane: null, vendorWords: "", transient: false };
   }
 

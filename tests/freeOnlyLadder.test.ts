@@ -174,13 +174,14 @@ describe("Free only, seats away: a free lane carries the work and the warning sa
 });
 
 describe("Free only still stops when NOTHING at $0 can carry the work", () => {
-  it("private content, seats away: free lanes may not see it, so the call stops and the sentence names the lever", async () => {
+  it("private content, seats away: free lanes may not see it, so the call WAITS for a seat — never her spend question (26 Oct 2026)", async () => {
     const v = vendors();
     const { run } = await runAi(env(), PRIVATE_CALL(), { fetchImpl: v.fetchImpl });
     expect(run.status).toBe("PREFLIGHT_BLOCKED");
-    expect(run.failure_reason).toContain("free_only_cannot_serve_protected_work");
-    expect(run.failure_reason).toContain("FREE_ONLY");
-    expect(run.failure_reason).toMatch(/No subscription seat is available/);
+    // Important work waits for the Claude Code or Codex seat (shared/ai/seatOrder.ts); the sweep reads this code as a wait.
+    expect(run.failure_reason).toMatch(/^seat_wait_important_work:/);
+    expect(run.failure_reason).toMatch(/never a free lane/);
+    expect(run.failure_reason).not.toMatch(/lever|MODERATE|free_only_cannot_serve_protected_work/);
     expect(v.models).toEqual([]);
   }, 60_000);
 });

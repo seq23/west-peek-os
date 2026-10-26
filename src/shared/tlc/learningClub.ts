@@ -595,6 +595,13 @@ export interface DripEmailInput {
  */
 export const TLC_DRIP_PROOF_LINE = "Our community of more than 5,000 founders, operators and creatives meets in person through West Peek Rooms, our event series in New York.";
 export const TLC_DRIP_ASK = "Would you be open to exploring a partnership?";
+/**
+ * THE NEXT STEP IS THREE SAMPLES, NEVER A CALL (owner, 26 Oct 2026). Wynn never suggests or asks for a call; deals
+ * close over email. Email 2 (the one follow-up to a brand that has not replied) and every answer Wynn drafts offer
+ * these three things instead, with no price.
+ */
+export const TLC_SAMPLES_OFFER =
+  "If it would help, I can send you three things: a sample run of show for the evening, a sketch of what a series of six could look like, and a breakdown of the kind of people in the room.";
 /*
  * THE OPT-OUT IS A SOFT, HUMAN P.S. (owner, 24 Oct 2026), one per drip step, and it still works: a reply that
  * says it is not a fit (replyLooksLikeNo) stops the sequence for good. The template carries no postal address.
@@ -661,7 +668,7 @@ export function dripEmail(raw: DripEmailInput): { subject: string; text: string 
       "",
       `A quick picture of the room, in case it helps. ${seats.min === seats.max ? seats.min : `${seats.min} to ${seats.max}`} New Yorkers, each with a paid seat, at tables of four. A teacher who does this for a living walks them through ${input.topic}, then they spend an hour making something with their own hands, share a real meal, and leave with what they made.`,
       "",
-      TLC_DRIP_ASK,
+      TLC_SAMPLES_OFFER,
     ],
     [hi, "", `Following up once more on The Learning Club in ${when}. If a partnership around ${input.topic} is on your radar, I would be glad to share more.`],
     [hi, "", `Last note from me on the ${input.topic} club. If the timing is wrong this round, we run one most months in New York and I would be glad to keep ${input.brand} in mind.`],

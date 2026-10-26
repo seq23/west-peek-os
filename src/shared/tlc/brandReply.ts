@@ -6,7 +6,7 @@
  *                                       a day, with their message and the draft word for word.
  * Pure: the worker stores, drafts and sends.
  */
-import { TLC_TIERS, TLC_TIER_KEYS, replyLooksLikeNo } from "./learningClub";
+import { TLC_SAMPLES_OFFER, TLC_TIERS, TLC_TIER_KEYS, replyLooksLikeNo } from "./learningClub";
 
 export const BRAND_REPLY_REF_RE = /\bTLR-[A-Z0-9]{6}\b/;
 export const BRAND_REPLY_ASK = "Reply approved to send, or reply with changes";
@@ -75,9 +75,12 @@ export function classifyBrandReply(input: { subject: string; text: string }, now
   return { kind: "REPLY", intent: "QUESTION" };
 }
 
-/** Where the deal moves when her answer goes: a call is a call; a yes is on its way to one; a question stays pitched. */
+/**
+ * Where the deal moves when her answer goes. A call the BRAND asked for is a call. Nothing else moves it to CALL
+ * (owner, 26 Oct 2026): Wynn never asks for one, so a yes or a question stays where it is until they propose one.
+ */
 export function stageAfterReply(intent: BrandReplyIntent, from: string): string | null {
-  if ((intent === "CALL" || intent === "YES") && (from === "PROSPECT" || from === "PITCHED")) return "CALL";
+  if (intent === "CALL" && (from === "PROSPECT" || from === "PITCHED")) return "CALL";
   return null;
 }
 
@@ -101,13 +104,123 @@ export interface ReplyDraftInput {
   callLink: string | null;
 }
 
+/**
+ * WYNN'S STANDING RULES, AS THE DRAFT READS THEM (owner, 26 Oct 2026). Rows of `tlc_wynn_rule`; `code` marks the
+ * ones the code enforces as well as the prompt.
+ */
+export interface WynnRule { code: string | null; rule: string }
+export const NO_MONEY_EARLY = "NO_MONEY_EARLY";
+/** The rule whose text IS the facts of who we are; the prompt and the fallback both read that one row. */
+export const WHO_WE_ARE = "WHO_WE_ARE";
+/** Wynn never suggests or asks for a call; the brand may propose one. Deals close over email. */
+export const NO_CALL_ASK = "NO_CALL_ASK";
+/** The default next step when Wynn may not ask for a call (her NO_CALL_ASK rule); one text with the drip's email 2. */
+export const THREE_THINGS_OFFER = TLC_SAMPLES_OFFER;
+/** We host every segment or bring in a host; a brand never has to send a rep or speaker unless it wants to. */
+export const WE_HOST = "WE_HOST";
+/** A draft that puts a brand's people on the hook for a segment ("your team leads X", "send a speaker"). */
+export const BRAND_MUST_STAFF = /\byour (?:team|people|staff|experts?|reps?|founder)\s+(?:will\s+)?(?:leads?|runs?|hosts?|presents?|teach(?:es)?|demos?|walks?)\b|\b(?:send|bring|provide)\s+(?:a|an|your|one of your)\s+(?:rep|representative|speaker|presenter|host|expert)s?\b/i;
+/** A draft asking for a call (or a time, or a calendar slot) the brand did not propose. */
+export const CALL_ASK = /\b(?:(?:a |the )?(?:quick |short |brief )?(?:call|zoom|phone call|video call)\b(?! you (?:asked|proposed|suggested))|hop on|jump on|book a time|pick a time|times? that suits?|calendar link|calendly)\b/i;
+/** Before a call has happened: the stages in which the no-money rule holds. */
+export const BEFORE_A_CALL: readonly string[] = ["PROSPECT", "PITCHED", "CALL"];
+
+export function noMoneyNow(rules: readonly WynnRule[], stage: string): boolean {
+  return rules.some((r) => r.code === NO_MONEY_EARLY) && BEFORE_A_CALL.includes(stage);
+}
+
+/** Money words in a draft: a price, a dollar amount, a budget or a partnership tier. */
+export const MONEY_WORDS = /\$\s?\d|\b\d[\d,.]*\s?(?:k|usd|dollars)\b|\b(?:price|prices|pricing|priced|cost|costs|budget|budgets|fee|fees|rate card|tier|tiers|title partner|presenting partner|lead partner|sponsorship levels?|partnership levels?)\b/i;
+
+/**
+ * HER WHOLE NOTE, AND ONLY HERS (owner, 26 Oct 2026). Her note on TLR-EL84CT was cut at 600 characters, which
+ * dropped her last instructions (research, a report, a new draft). The quoted email is already gone (newTextOf);
+ * this takes off her signature and phone footer, and nothing else. NOTE_MAX is a guard against a pasted thread,
+ * not a limit on her: past it the note says where it was cut, never silently.
+ */
+export const NOTE_MAX = 8000;
+export function herNoteOf(said: string, ownerName: string): string {
+  const first = ownerName.split(/\s+/)[0] ?? ownerName;
+  const lines = said.replace(/\r\n/g, "\n").split("\n");
+  const sig = lines.findIndex((l) => /^\s*(?:--|—|__)\s*$/.test(l) || /^\s*Sent from my\b/i.test(l) || new RegExp(`^\\s*(?:${first}|${ownerName}|ST)\\s*$`, "i").test(l));
+  const kept = (sig >= 0 ? lines.slice(0, sig) : lines).join("\n").trim()
+    // A sign-off on its own last line ("Thanks," / "Best,") is not an instruction.
+    .replace(/\n\s*(?:thanks|thank you|best|cheers|xx?o?|regards|warmly)[,!.]?\s*$/i, "")
+    .trim();
+  return kept.length <= NOTE_MAX ? kept : `${kept.slice(0, NOTE_MAX)}\n[… her note was cut here at ${NOTE_MAX.toLocaleString("en-US")} of ${kept.length.toLocaleString("en-US")} characters; the whole note is on the reply row]`;
+}
+
+/** She asked Wynn to find something out before he writes again. */
+export function wantsResearch(note: string): boolean {
+  return /\b(?:research|report|look into|look up|find out|dig into|figure out|investigate)\b/i.test(note);
+}
+
+/**
+ * THE STANDING PARTS OF A NOTE. A sentence that tells Wynn how to behave in general (don't…, never…, always…,
+ * no…, lead with…, from now on…) is kept as one of his rules for every later draft; a sentence about this brand
+ * alone is followed in this draft and not kept.
+ */
+const STANDING_CUE = /\b(?:don'?t|do not|never|always|no more|stop|avoid|from now on|going forward|in future|every time|lead with|make sure|i prefer)\b/i;
+export function standingRulesIn(note: string): string[] {
+  const sentences = note.replace(/\s+/g, " ").split(/(?<=[.!?;])\s+|\s+-\s+/).map((x) => x.trim()).filter(Boolean);
+  return [...new Set(sentences.filter((x) => STANDING_CUE.test(x) && x.length >= 12 && x.length <= 400).map((x) => x.replace(/[;]$/, "")))];
+}
+
+export interface ResearchReport { care: string[]; value: string[]; sources: Array<{ title: string; url: string }> }
+
+/** Wynn's research answer, read strictly: at least one point in each part and one real source, or nothing. */
+export function readResearch(raw: Record<string, unknown> | null): ResearchReport | null {
+  if (!raw) return null;
+  const list = (v: unknown): string[] => (Array.isArray(v) ? v.map((x) => String(x ?? "").trim()).filter(Boolean).slice(0, 6) : []);
+  const sources = (Array.isArray(raw.sources) ? raw.sources : [])
+    .map((x) => (x && typeof x === "object" ? { title: String((x as Record<string, unknown>).title ?? "").trim(), url: String((x as Record<string, unknown>).url ?? "").trim() } : { title: "", url: "" }))
+    .filter((x) => /^https?:\/\/\S+$/.test(x.url))
+    .slice(0, 8);
+  const r = { care: list(raw.care), value: list(raw.value), sources };
+  return r.care.length && r.value.length && r.sources.length ? r : null;
+}
+
+/** The short plain report that goes ABOVE the new draft in her approval email. */
+export function reportText(brand: string, r: ResearchReport): string {
+  return [
+    `WYNN'S REPORT ON ${brand.toUpperCase()} (you asked for research)`,
+    "",
+    "What they care about now",
+    ...r.care.map((x) => `- ${x}`),
+    "",
+    "The value we bring them",
+    ...r.value.map((x) => `- ${x}`),
+    "",
+    "Sources",
+    ...r.sources.map((x) => `- ${x.title || x.url}: ${x.url}`),
+  ].join("\n");
+}
+
 /** The answer when the model is unavailable: plain, short, true, and in her voice. Signature added after. */
-export function fallbackReplyBody(i: ReplyDraftInput, monthWords: (m: string) => string): string {
+export function fallbackReplyBody(i: ReplyDraftInput, monthWords: (m: string) => string, opts: { noMoney?: boolean; whoWeAre?: string | null; noCallAsk?: boolean } = {}): string {
   const hi = i.contactName ? `Hi ${i.contactName.split(" ")[0]},` : "Hi,";
-  const call = i.callLink ? `If it is easier to talk it through, pick a time that suits you: ${i.callLink}` : "Would a short call next week be easiest? Send me two times that suit you and I will send an invitation.";
-  if (i.intent === "CALL") return [hi, "", "Thank you for coming back to me. I would love to talk it through.", "", call].join("\n");
+  // Her NO_CALL_ASK rule: the next step is the offer of three things, never a call Wynn asks for.
+  const call = opts.noCallAsk
+    ? THREE_THINGS_OFFER
+    : i.callLink ? `If it is easier to talk it through, pick a time that suits you: ${i.callLink}` : "Would a short call next week be easiest? Send me two times that suit you and I will send an invitation.";
+  // They proposed the call: she says yes to it (their proposal, not Wynn's ask).
+  const theirCall = i.callLink ? `Happy to talk. Here is my calendar, pick whatever suits you: ${i.callLink}` : "Happy to talk. Send me the times that suit you and I will send an invitation.";
+  if (i.intent === "CALL") return [hi, "", "Thank you for coming back to me.", "", opts.noCallAsk ? theirCall : call].join("\n");
   if (i.intent === "YES") {
     return [hi, "", `Thank you for coming back to me. Here is the one-page pitch for The Learning Club: ${i.topic}, in ${monthWords(i.month)}. The PDF is attached${i.pitchUrl ? `, and it is also here: ${i.pitchUrl}` : "."}`, "", call].join("\n");
+  }
+  if (opts.noMoney) {
+    return [
+      hi,
+      "",
+      "Thank you for coming back to me.",
+      ...(opts.whoWeAre ? [`A little about us: ${opts.whoWeAre}`] : []),
+      `In ${monthWords(i.month)} (the month may move, and the club may repeat) the club is ${i.topic}: a small, hands-on room where guests spend the evening making something with their own hands. We would love to partner with you to build something special around it.`,
+      "",
+      "Who are the people you most want to reach? I would love to explore together how we reach them.",
+      "",
+      call,
+    ].join("\n");
   }
   return [
     hi,

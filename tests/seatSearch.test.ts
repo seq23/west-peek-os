@@ -181,15 +181,29 @@ describe("Parker's collision, resolved: Free only, a search call, a seat that ca
   }, 60_000);
 });
 
-describe("MODERATE — the ladder for a search call: Claude Code, then Codex, then the paid search model", () => {
+describe("MODERATE — the ladder for a search call: Codex for routine work, Claude Code then Codex for important work, then the paid search model", () => {
   beforeEach(() => setLever("MODERATE"));
 
-  it("Codex takes a search call when Claude Code is out of usage, in the same run", async () => {
+  it("a routine search call leads on Codex; Claude Code is kept for important work (26 Oct 2026)", async () => {
+    await awake("claude_code", true);
+    await awake("codex", true);
+    const c = claimer(["claude_code", "codex"]);
+    const v = vendors();
+    const { run } = await runAi(env(), SEARCH_CALL(), { fetchImpl: v.fetchImpl });
+    await c.stop();
+    expect(run.status).toBe("COMPLETED");
+    expect(run.output_text).toContain("SEAT SEARCH ANSWER (codex)");
+    expect(c.handled.map((r) => r.seat)).toEqual(["codex"]);
+    expect(v.models, "no money was spent").toEqual([]);
+  }, 60_000);
+
+  it("an important search call: Codex takes it when Claude Code is out of usage, in the same run", async () => {
     await awake("claude_code", true);
     await awake("codex", true);
     const c = claimer(["claude_code", "codex"], { outOfUsage: ["claude_code"] });
     const v = vendors();
-    const { run } = await runAi(env(), SEARCH_CALL(), { fetchImpl: v.fetchImpl });
+    const base = SEARCH_CALL();
+    const { run } = await runAi(env(), { ...base, budgetContext: { ...base.budgetContext, important: true } }, { fetchImpl: v.fetchImpl });
     await c.stop();
     expect(run.status).toBe("COMPLETED");
     expect(run.output_text).toContain("SEAT SEARCH ANSWER (codex)");

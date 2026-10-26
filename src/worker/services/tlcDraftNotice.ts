@@ -5,7 +5,8 @@ import { runAi } from "../ai/runAi";
 import { mailAuthority } from "../../shared/intake/partnerAuthority";
 import { newTextOf } from "../../shared/events/packetDecisionToken";
 import { NOTICE_REF_RE, isEmptyReply, parseDraftReply } from "../../shared/tlc/draftReply";
-import { TLC_INTERNAL_NOTE, TLC_OWNER, TLC_PS_BY_STEP, TLC_SIGNATURE, brandDisplayName, dripEmail, monthWords, seatsOf } from "../../shared/tlc/learningClub";
+import { herNoteOf } from "../../shared/tlc/brandReply";
+import { TLC_INTERNAL_NOTE, TLC_OWNER, TLC_PS_BY_STEP, TLC_SAMPLES_OFFER, TLC_SIGNATURE, brandDisplayName, dripEmail, monthWords, seatsOf } from "../../shared/tlc/learningClub";
 import { actorForFirmUser, type Actor } from "./authorize";
 
 /**
@@ -214,7 +215,8 @@ export async function applyTlcDraftReply(
   if (!authority.isAssignment || (authority.partnerAddress ?? "").toLowerCase() !== TLC_OWNER.email.toLowerCase()) {
     return refuse(`a reply to ${ref} was not accepted as coming from ${TLC_OWNER.email}: ${authority.reason ?? "another sender"}`);
   }
-  const reply = parseDraftReply(newTextOf(body));
+  // Her words without her signature (owner, 26 Oct 2026): a change note runs onto later lines, so the sign-off must go.
+  const reply = parseDraftReply(herNoteOf(newTextOf(body), TLC_OWNER.name));
   if (isEmptyReply(reply)) return refuse(`a reply to ${ref} carried no approve / skip / change instruction`);
   const actor = await actorForFirmUser(env, TLC_OWNER.firmUserId);
   if (!actor) return refuse(`${TLC_OWNER.email} is not an active person in the OS`);
@@ -417,6 +419,41 @@ export async function repairLeakedDrafts(env: Env, now: Date, firmScope = "west-
  * template output is touched, so her own redrafts and approved day-zero text are never rewritten. Runs before
  * the drip each pass and is a no-op once nothing matches.
  */
+/**
+ * EMAIL 2 OFFERS THE THREE SAMPLES (owner, 26 Oct 2026), in follow-ups already queued too. An unsent email 2 —
+ * undecided, or approved and waiting for the warm-up allowance — that is the old template's (it asked "Would you be
+ * open to exploring a partnership?" after the picture of the room, and carries no offer) gets the current template's
+ * text in place, at her instruction. Her own redrafts are never touched, and sent mail never is.
+ */
+const OLD_SECOND_EMAIL_MARK = "A quick picture of the room, in case it helps.";
+export async function recomposeSecondEmails(env: Env, firmScope = "west-peek"): Promise<string[]> {
+  const rows = (await env.WP_OS_DB.prepare(
+    `SELECT m.id, m.subject, m.body, m.step, m.effect_request_id, m.approval_card_id, d.brand, d.contact_name, d.why_fit,
+            e.topic, e.month, e.event_date, e.seats_min, e.seats_max
+       FROM tlc_drip_message m JOIN tlc_deal d ON d.id = m.deal_id JOIN tlc_event e ON e.id = d.event_id
+       JOIN approval_card a ON a.id = m.approval_card_id
+      WHERE d.firm_scope = ?1 AND m.step = 1 AND m.state = 'AWAITING_APPROVAL' AND a.state IN ('pending_review','approved')
+        AND m.redraft_note IS NULL AND instr(m.body, ?2) > 0 AND instr(m.body, ?3) = 0`,
+  ).bind(firmScope, OLD_SECOND_EMAIL_MARK, TLC_SAMPLES_OFFER).all<{ id: string; subject: string; body: string; step: number; effect_request_id: string; approval_card_id: string; brand: string; contact_name: string | null; why_fit: string | null; topic: string; month: string; event_date: string; seats_min: number | null; seats_max: number | null }>()).results ?? [];
+  const done: string[] = [];
+  for (const r of rows) {
+    const mail = dripEmail({ step: 1, brand: r.brand, contactName: r.contact_name, topic: r.topic, month: r.month, eventDate: r.event_date, why: r.why_fit, seats: seatsOf(r) });
+    const req = await env.WP_OS_DB.prepare("SELECT payload_json FROM external_effect_request WHERE id = ?1 AND executed_at IS NULL").bind(r.effect_request_id).first<{ payload_json: string }>();
+    if (!req) continue;
+    const payload = { ...(JSON.parse(req.payload_json) as Record<string, unknown>), subject: mail.subject, text: mail.text };
+    await env.WP_OS_DB.batch([
+      env.WP_OS_DB.prepare("UPDATE external_effect_request SET payload_json = ?2 WHERE id = ?1 AND executed_at IS NULL").bind(r.effect_request_id, JSON.stringify(payload)),
+      env.WP_OS_DB.prepare("UPDATE approval_card SET summary = ?2 WHERE id = ?1 AND state IN ('pending_review','approved')").bind(r.approval_card_id, `${mail.subject}\n\n${mail.text}`.slice(0, 1800)),
+      env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET subject = ?2, body = ?3 WHERE id = ?1 AND state = 'AWAITING_APPROVAL'").bind(r.id, mail.subject, mail.text),
+    ]);
+    done.push(brandDisplayName(r.brand));
+  }
+  if (done.length) {
+    await appendEvent(env, { eventType: "tlc.second_emails_offer_samples", actorType: "system", actorId: "tlc_drip", objectType: "tlc_drip_message", objectId: done.join(",").slice(0, 200), firmScope, payload: { recomposed: done } });
+  }
+  return done;
+}
+
 export async function recomposeBrandNames(env: Env, firmScope = "west-peek"): Promise<string[]> {
   const rows = (await env.WP_OS_DB.prepare(
     `SELECT m.id, m.subject, m.body, m.step, m.effect_request_id, m.approval_card_id, d.brand, d.contact_name, d.why_fit,

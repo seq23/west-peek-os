@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { SEAT_WAIT_CODE, isImportantWork, orderSeats } from "../../shared/ai/seatOrder";
 import { appendEvent } from "../events";
 import type { Actor } from "../services/authorize";
 import type { PrivacyLabel } from "../../shared/privacy";
@@ -284,6 +285,12 @@ export interface RunAiBudgetContext {
    * including CHEAPO. See `trainingPermitted` in shared/ai/freeLanes.ts.
    */
   confidential?: boolean;
+  /**
+   * IMPORTANT WORK (owner, 26 Oct 2026): brand- or partner-facing in her name (TLC brand drafts). Like private
+   * content it leads on the Claude Code seat, then Codex, and WAITS for a seat rather than take a free lane.
+   * See shared/ai/seatOrder.ts.
+   */
+  important?: boolean;
   /**
    * THE OTHER HALF OF THE SAME QUESTION, and it exists because one column was answering two.
    *
@@ -1963,15 +1970,31 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * it as the fallback.
    */
   const searchOnSeat = requiresSearch && searchSeatKeys.size > 0 && !input.images?.length && !input.documents?.length;
+  /*
+   * HER SEAT ORDER (owner, 26 Oct 2026; shared/ai/seatOrder.ts). Important work — private content, a confidential
+   * call, or a call named `important` — leads on Claude Code, then Codex, and never takes a free lane. Every other
+   * judgement call leads on Codex (her ChatGPT plan, "unused basically"), then the free lanes; the Claude seat is
+   * kept for important work. So every judgement call is now offered a seat, not only private and `seatFirst` ones.
+   */
+  const important = isImportantWork({
+    publicModelApproved: contentClass.publicModelApproved,
+    confidential: input.budgetContext?.confidential,
+    important: input.budgetContext?.important,
+  });
+  /*
+   * Claude Code leads for important work AND for the calls she named `seatFirst` earlier (the brief, University, the
+   * market map, the Room packet: "work that needs a strong model"). Only important work is barred from free lanes;
+   * a named call keeps its old ladder behind the seats.
+   */
+  const claudeFirst = important || input.budgetContext?.seatFirst === true;
   const seatsEligible =
     searchOnSeat ||
     (isJudgement &&
-      (!contentClass.publicModelApproved || input.budgetContext?.seatFirst === true) &&
       !requiresSearch &&
       (!hasFiles || fileSeatKeys.size > 0)) ||
     // At Free only a seat is a $0, full-quality lane for any call that is not a search: it leads, whatever the call's label.
     (freeOnlyLadder && (!hasFiles || fileSeatKeys.size > 0));
-  const seatAvailability = !seatsEligible
+  const seatAvailability = orderSeats(!seatsEligible
     ? []
     : requiresSearch
       ? searchSeatAvailability.map((a) =>
@@ -1985,7 +2008,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
               ? { ...a, available: false, reason: `the ${SEAT_REGISTRY[a.seat].displayName} seat is awake but its claimer has not proved it can read ${fileKinds.map((k) => (k === "image" ? "a picture" : "a document")).join(" and ")} on this machine, so it took no part in this call` }
               : a,
           )
-        : await allSeatAvailability(env, now);
+        : await allSeatAvailability(env, now), claudeFirst);
   const awakeSeatKeys = new Set(seatAvailability.filter((a) => a.available).map((a) => a.seat as string));
   if (behaviour.freeOnly) {
     const freeAdequate = options
@@ -2004,9 +2027,20 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
             isSeat(o.provider.provider_key) || isSearchGrounded(o.pricing.model)
           : !(isJudgement && isSearchGrounded(o.pricing.model)),
       )
-      .filter((o) => !isInterpretation || o.pricing.supports_reasoning === 1);
+      .filter((o) => !isInterpretation || o.pricing.supports_reasoning === 1)
+      // Important work never takes a free lane: at Free only its candidates are the seats, or nothing.
+      .filter((o) => !important || isSeat(o.provider.provider_key));
 
     if (freeAdequate.length === 0) {
+      if (important) {
+        return {
+          run: await blocked(
+            "PREFLIGHT_BLOCKED",
+            `${SEAT_WAIT_CODE}:this is important work (Claude Code seat, then Codex; never a free lane) and neither seat is free ` +
+              `right now. Purpose: ${input.purpose}. It waits for a seat and tries again by itself; nothing is asked of anyone.`,
+          ),
+        };
+      }
       if (isProtected) {
         return {
           run: await blocked(
@@ -2677,7 +2711,11 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     }
     if (awake.length > 0) {
       seatNote = contentClass.publicModelApproved
-        ? ` This call was named to lead on the subscription seats (Claude Code, then Codex) before any free or paid lane, ` +
+        ? (important
+            ? ` This is important work, so it leads on the subscription seats (Claude Code, then Codex) and never on a free lane, `
+            : claudeFirst
+              ? ` This call was named to lead on the subscription seats (Claude Code, then Codex) before any free or paid lane, `
+              : ` This is routine work, so it leads on the Codex seat (her ChatGPT plan) before the free lanes, `) +
           `so it leads on a seat she already pays for at no cost: ${awake.join("; ")}.`
         : ` This call may not use a training-permitting lane, and the subscription seats do not train on what they are ` +
           `sent, so it leads on a seat she already pays for at no cost: ${awake.join("; ")}.`;
@@ -2702,6 +2740,8 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
      * paid head. Every other position keeps the free lanes where they were.
      */
     !(behaviour.lever === "OPEN" && isProtected) &&
+    // Important work never leads on (or falls to) a free lane (owner, 26 Oct 2026; shared/ai/seatOrder.ts).
+    !important &&
     /*
      * THE NORMAL CASE, and the owner's instruction is that it should be: "MOST WORK IS INTERNAL AND
      * NOT-CONFIDENTIAL SO CAN USE FREE TRAINING MODELS WITH REASONING AND CLOSE TO $0." A card that

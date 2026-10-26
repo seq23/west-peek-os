@@ -296,3 +296,34 @@ describe("a re-read of her stored reply is reported as done (24 Oct 2026, learne
     expect(await env.WP_OS_DB.prepare("SELECT 1 FROM event_record WHERE event_type = 'tlc.draft_reply' AND object_id = 'TLC-NOSUCH'").first(), "nothing was decided").toBeNull();
   });
 });
+
+describe("a queued email 2 offers the three samples (owner, 26 Oct 2026)", () => {
+  it("re-composes unsent email 2 drafts in place; sent mail and her own redrafts are never touched", async () => {
+    const { fileDraft } = await import("../src/worker/services/learningClub");
+    const { recomposeSecondEmails } = await import("../src/worker/services/tlcDraftNotice");
+    const OLD = "Hi Pat,\n\nA quick picture of the room, in case it helps. 30 New Yorkers, each with a paid seat.\n\nWould you be open to exploring a partnership?";
+    const mk = async (brand: string) => {
+      await deal(brand, "2027-01");
+      const id = `tld_${brand.replace(/\W/g, "")}`;
+      await env.WP_OS_DB.prepare("UPDATE tlc_deal SET drip_step = 1 WHERE id = ?1").bind(id).run();
+      await fileDraft(env, { id, brand, contact_email: `pat@${brand.toLowerCase().replace(/\W/g, "")}.example`, drip_step: 1 }, { subject: `${brand} + a small room in New York`, text: OLD });
+      return id;
+    };
+    const queued = await mk("Second Co");
+    const sent = await mk("Sent Co");
+    const mine = await mk("Mine Co");
+    await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'SENT' WHERE deal_id = ?1").bind(sent).run();
+    await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET redraft_note = 'her words' WHERE deal_id = ?1").bind(mine).run();
+    expect(await recomposeSecondEmails(env)).toEqual(["Second Co"]);
+    const row = (id: string) => env.WP_OS_DB.prepare("SELECT m.body, r.payload_json FROM tlc_drip_message m JOIN external_effect_request r ON r.id = m.effect_request_id WHERE m.deal_id = ?1").bind(id).first<{ body: string; payload_json: string }>();
+    const q = (await row(queued))!;
+    for (const text of [q.body, (JSON.parse(q.payload_json) as { text: string }).text]) {
+      expect(text).toContain("a sample run of show for the evening, a sketch of what a series of six could look like, and a breakdown of the kind of people in the room");
+      expect(text).not.toMatch(/\bcall\b|\$|exploring a partnership/i);
+    }
+    expect((await row(sent))!.body).toBe(OLD);
+    expect((await row(mine))!.body).toBe(OLD);
+    // Once re-composed it is the current template: a second pass changes nothing.
+    expect(await recomposeSecondEmails(env)).toEqual([]);
+  });
+});
