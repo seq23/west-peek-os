@@ -97,6 +97,18 @@ describe("the policy in one breath, and the six figures", () => {
     expect(policySentences({}, {}, {}), "no mandate → no sentences, never a default").toBeNull();
   });
 
+  it("a stepped fee is said in the mandate's own words, never re-averaged into one flat rate", () => {
+    // Neutral fixture: the real schedule is data in production, never in this public repo.
+    const schedule = "A% in years 1-5, then B% in years 6-10";
+    const m = { target_size_usd: 10_000_000, management_fee_schedule: schedule, check_size_usd: { min: 100_000, max: 200_000 }, target_positions: 3 };
+    expect(figuresText(m, 40, 9).split("\n")[2]).toBe(`Management fee: ${schedule}`);
+    const s = policySentences(m, { estimated_fees_usd: 1_000_000, estimated_expenses_usd: 0, estimated_investable_usd: 9_000_000 }, { reserve_pct: 40 });
+    expect(s!.fund.startsWith(`A $10M fund, charging ${schedule}, with`), s!.fund).toBe(true);
+    expect(s!.fund).not.toMatch(/% a year over/);
+    // Without a schedule the flat-rate sentence is unchanged.
+    expect(figuresText({ ...m, management_fee_schedule: undefined, management_fee_pct: 3, fund_life_years: 7 }, 40, 9).split("\n")[2]).toBe("Management fee: 3% a year over 7 years");
+  });
+
   it("the door copies exactly the six figures it shows, in order", () => {
     const text = figuresText({ target_size_usd: 30_000_000, management_fee_pct: 2, fund_life_years: 10, check_size_usd: { min: 500_000, max: 750_000 }, target_ownership_pct: 8, minimum_ownership_pct: 5, target_positions: 20 }, 40, 1);
     expect(text.split("\n")).toEqual([
