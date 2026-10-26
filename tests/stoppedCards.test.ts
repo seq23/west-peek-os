@@ -375,3 +375,83 @@ describe("the spend setting stopped it", () => {
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
   });
 });
+
+/*
+ * A SEAT THAT DID NOT ANSWER IS NOT HER SPEND DECISION (26 Oct 2026). Wynn's TLC brand batch wc_dd3481d8… stopped
+ * on `free_only_cannot_serve_protected_work` and Sequoia was emailed STUCK and asked to move the spend setting —
+ * while the firm's Mac seat, declared "web_search", had only gone quiet for a few minutes (two seat runs ABANDONED
+ * unclaimed; checking in again by 14:16). A seat that is the firm's, can do the work and was seen recently makes
+ * the card WAIT and retry on it; only a firm with no such seat is asked about the setting.
+ */
+describe("a quiet seat at Free only is a wait, not a spend question", () => {
+  const FREE_ONLY_SEARCH =
+    "free_only_cannot_serve_protected_work:this call is marked 'search' and needs a paid model, and the lever is set to FREE_ONLY. " +
+    "Purpose: Wynn: TLC brand batch. No subscription seat is available and no free lane may carry this content, so nothing at $0 could take it. " +
+    "Move the lever to MODERATE to let a paid model run it.";
+  const T0 = new Date("2026-10-26T14:07:00.000Z");
+
+  async function seatSeen(at: Date, capabilities: string[]): Promise<void> {
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO subscription_seat_device (seat, device_id, hostname, agent_version, last_seen_at, capabilities_json, first_seen_at)
+       VALUES ('codex', 'dev_mac', 'Sequoias-Mac', 'test', ?1, ?2, ?1)`,
+    )
+      .bind(at.toISOString(), JSON.stringify(capabilities))
+      .run();
+  }
+  async function clearSeats(): Promise<void> {
+    await env.WP_OS_DB.prepare("DELETE FROM subscription_seat_device").run();
+  }
+
+  it("a search-capable seat seen four minutes ago (outside freshness): the card waits, nobody is asked, no attempt is spent", async () => {
+    await clearSeats();
+    await seatSeen(new Date(T0.getTime() - 4 * 60_000), ["web_search"]);
+    const id = await card("Wynn: TLC brand batch W44", "aie_wynn");
+    const runner = refusedRunner(id, FREE_ONLY_SEARCH, "prov_openrouter");
+    const first = await sweepOnce(env, T0, { general: runner });
+    expect(first.outcome).toBe("WAITING_ON_SEAT");
+    // The second go that used to block the card and email Sequoia now waits too.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
+    const second = await sweepOnce(env, new Date(T0.getTime() + 60_000), { general: runner });
+    expect(second.outcome).toBe("WAITING_ON_SEAT");
+    const c = await row(id);
+    expect(c.state).not.toBe("BLOCKED");
+    expect(c.block_who ?? null).toBeNull();
+    expect(c.block_lane ?? null).toBeNull();
+    expect(Number(c.work_attempts)).toBe(0);
+    expect(String(c.waiting_for)).toMatch(/Waiting for the subscription seat/);
+    expect(Date.parse(String(c.waiting_until))).toBeGreaterThan(T0.getTime() + 60_000);
+    expect(String(c.lease_until)).toBe(String(c.waiting_until));
+    // Not picked up again until the wait is over.
+    const during = await sweepOnce(env, new Date(T0.getTime() + 120_000), { general: runner });
+    expect(during.card?.id ?? null).not.toBe(id);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
+  });
+
+  it("a seat that cannot search is not a reason to wait on a search call: the spend setting is the question", async () => {
+    await clearSeats();
+    await seatSeen(new Date(T0.getTime() - 4 * 60_000), []);
+    const id = await card("Wynn: TLC brand batch W45", "aie_wynn");
+    const runner = refusedRunner(id, FREE_ONLY_SEARCH, "prov_openrouter");
+    await sweepOnce(env, T0, { general: runner });
+    await sweepOnce(env, new Date(T0.getTime() + 60_000), { general: runner });
+    const c = await row(id);
+    expect(c.state).toBe("BLOCKED");
+    expect(c.block_lane).toBe("spend_lever");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
+  });
+
+  it("a seat silent for more than a day is genuinely absent: the spend setting is the question", async () => {
+    await clearSeats();
+    await seatSeen(new Date(T0.getTime() - 25 * 60 * 60_000), ["web_search"]);
+    const id = await card("Wynn: TLC brand batch W46", "aie_wynn");
+    const runner = refusedRunner(id, FREE_ONLY_SEARCH, "prov_openrouter");
+    await sweepOnce(env, T0, { general: runner });
+    await sweepOnce(env, new Date(T0.getTime() + 60_000), { general: runner });
+    const c = await row(id);
+    expect(c.state).toBe("BLOCKED");
+    expect(c.block_lane).toBe("spend_lever");
+    expect(c.block_who).toBe("SEQUOIA");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
+    await clearSeats();
+  });
+});

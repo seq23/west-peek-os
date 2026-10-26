@@ -10,7 +10,7 @@ import type { FirmUserIdentity } from "../auth";
 import { appendEvent } from "../events";
 import { notifyPartners, notifyQuietly } from "./notifications";
 import { deckStillBeingRead, workCard } from "./employeeWork";
-import { SPEND_SETTING_LANE, SPEND_SETTING_NAME, blockCard, currentSpendState, isSearchCallRefusal, releaseSpendSettingBlocks, resurfaceStaleBlocks, spendStateJson, type StoredBlock } from "./blocks";
+import { SEAT_WAIT_MINUTES, SPEND_SETTING_LANE, SPEND_SETTING_NAME, blockCard, currentSpendState, isSearchCallRefusal, releaseSpendSettingBlocks, resurfaceStaleBlocks, seatToWaitFor, spendStateJson, type StoredBlock } from "./blocks";
 import { resurfaceStalePreviews } from "./previewApproval";
 import { STEPS_PER_TICK } from "../../shared/work/employeeLoop";
 import { attemptsAllowedFor, isLaneFailure, readLaneFailure, type LaneFailure } from "../../shared/ai/laneFailure";
@@ -346,7 +346,7 @@ export interface SweepResult {
   status: "SUCCEEDED" | "FAILED";
   summary: string;
   card: SweepCard | null;
-  outcome: "DONE" | "BLOCKED" | "HANDED_ON" | "PROGRESSED" | "FAILED" | "NOTHING_WAITING" | "WAITING_ON_DECK" | "NO_ACTION_NEEDED" | "QUESTION_ANSWERED";
+  outcome: "DONE" | "BLOCKED" | "HANDED_ON" | "PROGRESSED" | "FAILED" | "NOTHING_WAITING" | "WAITING_ON_DECK" | "WAITING_ON_SEAT" | "NO_ACTION_NEEDED" | "QUESTION_ANSWERED";
 }
 
 /** How long a card waits for its deck to be read before the sweep looks at it again. */
@@ -830,6 +830,42 @@ export async function sweepOnce(
    *      buys nothing but fourteen minutes of a card looking healthy.
    */
   const lane = await laneBehindTheFailure(env, card.id, detail, now);
+  /*
+   * A SEAT THAT DID NOT ANSWER IS AN INFRASTRUCTURE WAIT, NOT HER SPEND DECISION (26 Oct 2026, wc_dd3481d8…).
+   * At Free only the router refuses when no seat is awake at that moment — but a seat that is the firm's own,
+   * can do this work, checked in recently and is not out of usage will answer again. The card waits and tries
+   * on the seat by itself: the claim's attempt is handed back, nobody is emailed, nothing is blocked. Only a
+   * firm with no such seat reaches the spend-setting block below. See `seatThatCouldServe` in blocks.ts.
+   */
+  if (isLaneFailure(lane.failure) && lane.failure.kind === "LEVER") {
+    const seat = await seatToWaitFor(env, isSearchCallRefusal(`${lane.raw} ${detail}`), now);
+    if (seat) {
+      const until = new Date(now.getTime() + SEAT_WAIT_MINUTES * 60_000).toISOString();
+      const line = `Waiting for the subscription seat: ${seat.said}, so this tries again on it by itself in about ${SEAT_WAIT_MINUTES} minutes.`;
+      await env.WP_OS_DB.prepare(
+        `UPDATE work_card SET lease_until = ?2, waiting_until = ?2, waiting_for = ?3, next_action = ?3,
+                work_attempts = MAX(COALESCE(work_attempts, 1) - 1, 0), work_last_failure = ?3, work_last_failure_at = ?4
+          WHERE id = ?1 AND state IN ('OPEN', 'IN_PROGRESS')`,
+      )
+        .bind(card.id, until, line.slice(0, 400), now.toISOString())
+        .run();
+      await appendEvent(env, {
+        eventType: "work_card.waiting_for_seat",
+        actorType: "system",
+        actorId: "work_sweep",
+        objectType: "work_card",
+        objectId: card.id,
+        firmScope: card.firm_scope,
+        payload: { seat: seat.seat, until, detail: detail.slice(0, 240) },
+      }).catch(() => undefined);
+      return {
+        status: "SUCCEEDED",
+        summary: `"${card.title.slice(0, 60)}" is waiting for the subscription seat (${seat.seat}) and tries again by itself at ${until}.`,
+        card: { ...card, work_attempts: Math.max(card.work_attempts - 1, 0), state: "OPEN" },
+        outcome: "WAITING_ON_SEAT",
+      };
+    }
+  }
   const allowed = attemptsAllowedFor(lane.failure, MAX_WORK_ATTEMPTS);
   await noteFailedAttempt(env, card, attemptLine(card, lane.failure, lane.name, allowed), now);
   // EVERY TRY THAT DID NOT FINISH IS ON THE CARD'S RECORD (1 Oct 2026), including the last one — written before the exhaustion branch,

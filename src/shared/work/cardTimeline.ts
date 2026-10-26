@@ -169,6 +169,7 @@ function stepEntries(steps: TimelineSteps): TimelineEntry[] {
   }
   for (const e of steps.events) {
     if (e.kind === "auto_released") out.push({ at: e.at, text: "Put back in the queue automatically, because what stopped it changed." });
+    else if (e.kind === "waiting_for_seat") out.push({ at: e.at, text: "The subscription seat did not answer in time, so it is waiting for the seat and tries again on it by itself." });
     else if (e.kind === "waiting_for_reset") out.push({ at: e.at, text: "Both AI plans were out of usage, so it is waiting for one to reset and starts again by itself." });
   }
   return out;
