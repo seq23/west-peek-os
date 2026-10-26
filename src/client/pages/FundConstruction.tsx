@@ -33,6 +33,10 @@ interface ReserveRow { version_no: number; reserve_json: string }
 
 export interface MandateDoc {
   target_size_usd?: number;
+  /** The fee in words when it steps down; the sentence then says it instead of an averaged rate. */
+  management_fee_schedule?: string;
+  /** The document that holds the fund's final math, shown on Fund strategy. An id, never the terms. */
+  fund_math_document_id?: string;
   sectors?: string[];
   target_positions?: number;
   check_size_usd?: { min?: number; max?: number };
@@ -68,7 +72,7 @@ export function policySentences(m: MandateDoc, s: SleeveDoc, r: ReserveDoc): { f
   const sectors = (m.sectors ?? []).map(sectorLabel);
   const sectorWords = sectors.length === 0 ? "" : sectors.length === 1 ? `, in ${sectors[0]}` : `, in ${sectors.slice(0, -1).join(", ")} and ${sectors[sectors.length - 1]}`;
   return {
-    fund: `A ${usd(m.target_size_usd)} fund, charging ${Number.isFinite(feePct) && feePct > 0 ? `${Number(feePct.toFixed(2))}%` : "—"} a year over ${life} years, with ${usd(s.estimated_expenses_usd ?? 0)} of expenses — ${usd(investableBase(s))} investable.`,
+    fund: `A ${usd(m.target_size_usd)} fund, charging ${m.management_fee_schedule ? m.management_fee_schedule : `${Number.isFinite(feePct) && feePct > 0 ? `${Number(feePct.toFixed(2))}%` : "—"} a year over ${life} years`}, with ${usd(s.estimated_expenses_usd ?? 0)} of expenses — ${usd(investableBase(s))} investable.`,
     split: early && secondary
       ? `Split ${early.target_pct ?? "—"}% early stage (${usd(sleeveTargetUsd(s, early))}) / ${secondary.target_pct ?? "—"}% secondaries (${usd(sleeveTargetUsd(s, secondary))}), with ${r.reserve_pct ?? "—"}% of the early-stage sleeve held in reserve (${usd(reserveUsd(s, r))}).`
       : "The sleeve split is not on the record yet.",

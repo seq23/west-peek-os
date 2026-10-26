@@ -7,6 +7,7 @@ import { DeckPanel } from "./DeckPanel";
 import { ReservesBand } from "./ReservesBand";
 import { ScenariosBand } from "./ScenariosBand";
 import { ArtifactShelf } from "./ArtifactShelf";
+import { DocumentPreview } from "../components/DocumentPreview";
 import { usd, type SleeveDoc } from "@shared/fund/sleeveMath";
 
 /**
@@ -23,6 +24,7 @@ import { usd, type SleeveDoc } from "@shared/fund/sleeveMath";
  * `validate:fund-strategy-split` fails the build if `Composition` or the cockpit ever mounts here.
  *
  * SIX BANDS, IN THE ORDER THE DECISION RUNS: Model it (the door — the page's one orange control) ·
+ * (then the fund's final math, when the mandate names its document) ·
  * Where the fund is against its plan · How the fund is built · The deck · What the reserves are for ·
  * Scenarios. One masthead answer, derived from counts the page already loads.
  */
@@ -82,6 +84,22 @@ export function FundStrategyPage({ onNavigate }: { onNavigate?: (key: string) =>
       </header>
 
       <DashboardDoor fundId={fundId} />
+      {/*
+        THE FUND'S MATH, ONE SOURCE (owner, 26 Oct 2026). The finalized Fund I math is a document in
+        R2 behind the app's auth; the current mandate names it by id (`fund_math_document_id`). The
+        terms themselves never live in this public repo — only the pointer is read here. A new version
+        is a new document version or a new mandate version; the old ones stay on the record.
+      */}
+      {typeof mandateDoc.fund_math_document_id === "string" && mandateDoc.fund_math_document_id !== "" && (
+        <section className="band" data-testid="fund-math">
+          <div className="band-head">
+            <h3>Fund I math — the final numbers</h3>
+            <span className="band-when">where the money goes, check sizes, the rules, what it returns</span>
+          </div>
+          <DocumentPreview documentId={mandateDoc.fund_math_document_id} title="Fund I math" height="80vh" />
+          <p className="muted small">Kept on Documents too. The figures elsewhere on this page are drawn from the same record.</p>
+        </section>
+      )}
       <PlanVsReality fundId={fundId} targetPositions={targetPositions} investmentPeriodYears={period} onAmend={() => setAmendOpen(true)} reloadKey={savedNonce} />
       <FundConstruction
         fundId={fundId}

@@ -35,6 +35,8 @@ const usd = (n: number | undefined): string =>
 export interface Mandate {
   target_size_usd?: number;
   management_fee_pct?: number;
+  /** The fee in words when it is not one flat rate (a step-down). Read from the mandate; never written here. */
+  management_fee_schedule?: string;
   fund_life_years?: number;
   check_size_usd?: { min?: number; max?: number };
   target_ownership_pct?: number;
@@ -47,7 +49,9 @@ export function figuresText(m: Mandate, reservePct: number | undefined, version:
   const lines = [
     `West Peek Ventures — mandate v${version ?? "?"}`,
     `Fund size: ${usd(m.target_size_usd)}`,
-    `Management fee: ${m.management_fee_pct ?? "—"}% a year${m.fund_life_years ? ` over ${m.fund_life_years} years` : ""}`,
+    m.management_fee_schedule
+      ? `Management fee: ${m.management_fee_schedule}`
+      : `Management fee: ${m.management_fee_pct ?? "—"}% a year${m.fund_life_years ? ` over ${m.fund_life_years} years` : ""}`,
     `Initial cheque: ${usd(m.check_size_usd?.min)}–${usd(m.check_size_usd?.max)}`,
     `Target ownership: ${m.target_ownership_pct ?? "—"}%${m.minimum_ownership_pct !== undefined ? ` (walk below ${m.minimum_ownership_pct}%)` : ""}`,
     `Positions: ${m.target_positions ?? "—"}`,
@@ -158,7 +162,7 @@ export function DashboardDoor({ fundId }: { fundId: string | null }): JSX.Elemen
           {(loading || latest) && !mandateFailed && (
             <dl className="figures" data-testid="modeling-mandate">
               <div className="kv"><b>Fund size</b>{loading ? "—" : usd(mandate.target_size_usd)}</div>
-              <div className="kv"><b>Management fee</b>{loading ? "—" : `${mandate.management_fee_pct ?? "—"}%`}<span className="muted small"> a year{mandate.fund_life_years ? `, ${mandate.fund_life_years} years` : ""}</span></div>
+              <div className="kv"><b>Management fee</b>{loading ? "—" : mandate.management_fee_schedule ? <span className="small">{mandate.management_fee_schedule}</span> : <>{`${mandate.management_fee_pct ?? "—"}%`}<span className="muted small"> a year{mandate.fund_life_years ? `, ${mandate.fund_life_years} years` : ""}</span></>}</div>
               <div className="kv"><b>Initial cheque</b>{loading ? "—" : `${usd(mandate.check_size_usd?.min)}–${usd(mandate.check_size_usd?.max)}`}</div>
               <div className="kv"><b>Target ownership</b>{loading ? "—" : `${mandate.target_ownership_pct ?? "—"}%`}{mandate.minimum_ownership_pct !== undefined && <span className="muted small"> (walk below {mandate.minimum_ownership_pct}%)</span>}</div>
               <div className="kv"><b>Positions</b>{loading ? "—" : mandate.target_positions ?? "—"}</div>
