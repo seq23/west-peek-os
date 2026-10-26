@@ -237,6 +237,7 @@ import {
 import { handleRoomAsk, handleRoomRoll, handleRoomState } from "./services/meetingRoom";
 import { handleRequestArtifactBuild, handleExportArtifact, handleGetBuiltArtifact, handleListBuiltArtifacts, handleRebuildArtifact } from "./services/artifacts";
 import { handleDecideDeck, handleGetDeck, handleUploadDeck } from "./services/deck";
+import { handleGetDeckPreview, handleReleaseDeckPreview } from "./services/deckPreview";
 import { handleAddReviewItem, handleDeleteReviewItem,
   handleRefileReviewItem, handleReviewNotes, handleGenerateWeeklyReview, handleGetWeeklyReview, handleSetItemExit } from "./services/weeklyReview";
 import { handleIngestTranscript } from "./services/captureAdapter";
@@ -1229,6 +1230,9 @@ const router = new Router()
   .get("/api/deck", handleGetDeck)
   .post("/api/deck/versions", handleUploadDeck)
   .post("/api/deck/versions/:id/decide", handleDecideDeck)
+  // The deck preview the partners review before any PDF is made (26 Oct 2026).
+  .get("/api/deck/preview", handleGetDeckPreview)
+  .post("/api/deck/preview/release", handleReleaseDeckPreview)
   // The capture box: put something on the agenda that no record knows about.
   .post("/api/weekly-review/notes", handleReviewNotes)
   .post("/api/weekly-review/items", handleAddReviewItem)

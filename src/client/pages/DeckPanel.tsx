@@ -217,6 +217,13 @@ export function DeckPanel({ onNavigate }: { onNavigate?: (key: string) => void }
         )}
       </div>
 
+      {/* The deck is finished as a PREVIEW first (26 Oct 2026); the PDF comes from "approved". */}
+      <p className="muted small">
+        <a href="/api/deck/preview" target="_blank" rel="noreferrer" data-testid="deck-preview-link">
+          Open the deck preview: every slide, what changed, and how to approve it ↗
+        </a>
+      </p>
+
       {message && <p className="notice" data-testid="deck-message">{message}</p>}
 
       {!data.current && (

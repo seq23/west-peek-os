@@ -394,15 +394,15 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
    * moves it to CURRENT, because this is the document the firm shows limited partners.
    */
   if (job.job_key === "deck_rebuild") {
-    const { runDeckRebuild } = await import("./deck");
-    const out = await runDeckRebuild(env, actor);
-    artifacts.push({ kind: "DECK_VERSION", ref_type: "deck_version", ref_id: out.version.id });
+    // A REBUILD IS A PREVIEW ROUND (26 Oct 2026), never a PDF: the open preview is refreshed, or a
+    // new round starts, and the round's one email goes on the next diagnostics sweep.
+    const { startOrUpdatePreview } = await import("./deckPreview");
+    const out = await startOrUpdatePreview(env, { reason: "Rebuilt on request", changes: ["Rebuilt from the latest fund records on request"] });
     return {
       status: "SUCCEEDED",
-      summary:
-        `Deck v${out.version.version_no} recorded as PROPOSED and both partners told` +
-        `${out.changed > 0 ? `; ${out.changed} fund figure(s) changed since the last version` : "; no fund figure changed since the last version"}` +
-        `${out.version.document_id ? "" : ". No PDF attached — run scripts/deck/build.mjs or upload it on Fund strategy"}.`,
+      summary: out.created
+        ? `Deck preview round ${out.preview.round_no} built; it is emailed to both partners on the next sweep${out.preview.hold ? " once released" : ""}`
+        : `Deck preview round ${out.preview.round_no} was already open; refreshed from the latest records`,
       artifacts,
     };
   }
@@ -426,13 +426,12 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
   if (job.job_key === "diagnostics_sweep") {
     const { runHealthEscalation } = await import("./healthEscalation");
     const out = await runHealthEscalation(env, now);
-    // The deck follows the records: one PROPOSED version when they move, never a send. A failure
-    // here is said in the summary and never stops the health sweep it rides on.
-    const { rebuildIfRecordsMoved } = await import("./deck");
-    const deck = await rebuildIfRecordsMoved(env).catch((err: unknown) => ({
-      rebuilt: false, reason: `deck check failed: ${err instanceof Error ? err.message : String(err)}`, versionNo: undefined,
-    }));
-    const deckNote = deck.rebuilt ? ` · deck v${deck.versionNo} proposed: ${deck.reason}` : deck.reason.startsWith("deck check failed") ? ` · ${deck.reason}` : "";
+    // THE DECK FOLLOWS THE RECORDS AS A PREVIEW (26 Oct 2026): a records move updates the deck
+    // preview — never a PDF — partners' replies are applied to it, and each round's one email is
+    // sent. A failure here is said in the summary and never stops the health sweep it rides on.
+    const { deckPreviewTick } = await import("./deckPreview");
+    const deck = await deckPreviewTick(env).catch((err: unknown) => `deck preview failed: ${err instanceof Error ? err.message : String(err)}`);
+    const deckNote = deck ? ` · ${deck}` : "";
     return {
       status: "SUCCEEDED",
       // A clean sweep is a success worth recording quietly, not an alert. The interesting line is

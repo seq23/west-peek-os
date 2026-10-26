@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { isAdminOrWebsiteSubject } from "../../shared/intake/dealOrigin";
 import { appendEvent } from "../events";
 import { proposePerson } from "./networkOsClient";
 import { dealFromMessage, intakeDealFromEmail, matchFunnelCompany, openAssignmentCard, openRoutingCard } from "../services/dealIntake";
@@ -1115,7 +1116,9 @@ async function handleInboundEmailOnce(
       return;
     }
 
-    const oversizeName = oversizeMatch?.canonical_name ?? dealFromMessage(subject, "", sender, true)?.company ?? null;
+    // An admin or website email is never a deal, even when its subject names a company we know
+    // ("Sensori photo swap on westpeek.ventures", 21 Sep 2026): it goes to the routing seat.
+    const oversizeName = isAdminOrWebsiteSubject(subject) ? null : (oversizeMatch?.canonical_name ?? dealFromMessage(subject, "", sender, true)?.company ?? null);
     let oversizeCard: string;
     if (oversizeName) {
       const entry = await intakeDealFromEmail(env, {

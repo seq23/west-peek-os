@@ -63,6 +63,10 @@ const HUMAN_DECISION_FUNCTIONS = new Map([
     "handleDecideDeck",
     "POST /api/deck/versions/:id/decide — refuses a non-HUMAN actor outright, then records approved_by and approved_at",
   ],
+  [
+    "makeApprovedDeckCurrent",
+    "services/deckPreview.ts — a Managing Partner's authenticated \"approved\" reply on the deck preview thread (26 Oct 2026); refuses a non-HUMAN actor, records that partner as approved_by",
+  ],
 ]);
 
 /** A refusal keyed on the actor being human. Both spellings of the quote, and either comparison. */

@@ -406,6 +406,27 @@ export async function steerFromReply(
    * RULE 1d (9 Oct 2026): THE ANSWER TO PORTER'S "WHICH JOB IS THIS FOR?" — a number, a site, or "new".
    * The stored email it was about is routed by it, once; nothing else here reads it.
    */
+  /*
+   * A REPLY ON THE LP DECK PREVIEW THREAD (26 Oct 2026). Recorded here — a change request, or
+   * "approved" — and applied by the diagnostics sweep, which updates the SAME preview and answers on
+   * this thread. Nothing else reads it: no card is opened, no funnel is touched.
+   */
+  if (thread.object_type === "deck_preview") {
+    const { recordReply } = await import("./deckPreview");
+    const out = await recordReply(env, thread.object_id, written, authority.partnerAddress ?? "");
+    await appendEvent(env, {
+      eventType: "work.steered_by_reply",
+      actorType: "firm_user",
+      actorId: partnerByEmail(authority.partnerAddress)?.firmUserId ?? "unknown",
+      objectType: thread.object_type,
+      objectId: thread.object_id,
+      firmScope: thread.firm_scope,
+      payload: { thread_token: thread.token, deck_preview: out?.kind ?? "UNKNOWN_PREVIEW", said: written.slice(0, 200) },
+    });
+    if (!out) return { steered: false, thread, written, reason: "it replies to a deck preview that no longer exists", attempted: true };
+    return { steered: true, thread, written, reason: "", attempted: true, answered: false, attached };
+  }
+
   if (thread.object_type === "inbound_clarification") {
     const out = await answerClarification(env, thread.object_id, written, authority.partnerAddress ?? "partner");
     await appendEvent(env, {

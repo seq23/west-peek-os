@@ -117,29 +117,31 @@ describe("when the records move under the deck, one proposal follows", () => {
   });
   afterAll(async () => { await disposeTestDb(t); });
 
-  it("does nothing with no deck to compare, nothing when current, rebuilds once when a record is newer", async () => {
-    const { rebuildIfRecordsMoved, recordDeckVersion } = await import("../src/worker/services/deck");
+  it("does nothing with no deck to compare, nothing when current, and opens ONE preview round — never a PDF — when a record is newer", async () => {
+    const { recordDeckVersion } = await import("../src/worker/services/deck");
+    const { previewIfRecordsMoved } = await import("../src/worker/services/deckPreview");
     await setPolicy("investment_mandate_version", "mandate_json", 1, { target_size_usd: 30_000_000 });
     await setPolicy("sleeve_policy_version", "sleeve_json", 1, { committed_usd: 30_000_000, estimated_fees_usd: 6_000_000, estimated_expenses_usd: 1_000_000 });
-    expect((await rebuildIfRecordsMoved(env)).rebuilt).toBe(false);
+    expect((await previewIfRecordsMoved(env)).moved).toBe(false);
 
     await recordDeckVersion(env, ACTOR, { fundId: FUND, title: "v1", origin: "UPLOADED", createdBy: "Sequoia", createdByType: "HUMAN", pdfBase64: null, pageCount: null, changeSummary: null });
-    const steady = await rebuildIfRecordsMoved(env);
-    expect(steady.rebuilt, steady.reason).toBe(false);
+    const steady = await previewIfRecordsMoved(env);
+    expect(steady.moved, steady.reason).toBe(false);
 
     await setPolicy("investment_mandate_version", "mandate_json", 2, { target_size_usd: 30_000_000, target_ownership_pct: 2.7 });
     await setPolicy("sleeve_policy_version", "sleeve_json", 2, { committed_usd: 30_000_000, estimated_fees_usd: 4_500_000, estimated_expenses_usd: 500_000 });
-    const moved = await rebuildIfRecordsMoved(env);
-    expect(moved.rebuilt).toBe(true);
+    const moved = await previewIfRecordsMoved(env);
+    expect(moved.moved).toBe(true);
     expect(moved.reason).toMatch(/mandate v1 → v2/);
-    const row = await env.WP_OS_DB.prepare("SELECT state, created_by, change_summary FROM deck_version WHERE fund_id = ?1 AND version_no = ?2")
-      .bind(FUND, moved.versionNo).first<{ state: string; created_by: string; change_summary: string }>();
-    // A proposal for her to approve on Fund strategy — never the deck that goes out.
-    expect(row!.state).toBe("PROPOSED");
-    expect(row!.created_by).toBe("Preston");
-    expect(row!.change_summary).toMatch(/Built from the deck definition/);
+    const versions = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM deck_version WHERE fund_id = ?1").bind(FUND).first<{ n: number }>();
+    expect(versions!.n, "a records move made a PDF version").toBe(1);
+    const round = await env.WP_OS_DB.prepare("SELECT round_no, state, what_changed_json FROM deck_preview").first<{ round_no: number; state: string; what_changed_json: string }>();
+    expect(round).toMatchObject({ round_no: 1, state: "OPEN" });
+    expect(round!.what_changed_json).toMatch(/mandate v1 → v2/);
 
-    const again = await rebuildIfRecordsMoved(env);
-    expect(again.rebuilt, "the same records rebuilt the deck twice").toBe(false);
+    const again = await previewIfRecordsMoved(env);
+    expect(again.moved, "the same records moved the preview twice").toBe(false);
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM deck_preview").first<{ n: number }>())!.n).toBe(1);
   });
+
 });

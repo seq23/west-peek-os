@@ -31,6 +31,7 @@
     "validate:css-classes": "node scripts/validate/css-classes.mjs",
     "validate:heading-scale": "node scripts/validate/heading-scale-applies.mjs && node scripts/validate/heading-scale-applies.mjs --self-test",
     "validate:css-variables": "node scripts/validate/css-variables.mjs",
+    "validate:deck-fit": "node scripts/validate/deck-fits-the-page.mjs && node scripts/validate/deck-fits-the-page.mjs --self-test",
     "validate:deck-cadence": "node scripts/validate/a-rare-lane-is-checked-daily.mjs && node scripts/validate/a-rare-lane-is-checked-daily.mjs --self-test",
     "validate:deck-decision": "node scripts/validate/deck-current-requires-a-decision.mjs && node scripts/validate/deck-current-requires-a-decision.mjs --self-test",
     "validate:quiet-is-not-a-fault": "node scripts/validate/quiet-is-not-a-fault.mjs && node scripts/validate/quiet-is-not-a-fault.mjs --self-test",
