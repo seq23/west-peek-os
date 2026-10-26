@@ -394,12 +394,12 @@ export const DECK_CSS = `
   .slide:last-child{page-break-after:auto;break-after:auto}
   .frame{flex:1;min-width:0;display:flex;flex-direction:column;padding:${PAGE.padTop}px ${PAGE.padX}px ${PAGE.padBottom}px}
   .has-aside .frame{padding-left:40px}
-  header{display:flex;justify-content:space-between;align-items:baseline;height:${PAGE.header - 18}px;
+  .slide header{display:flex;justify-content:space-between;align-items:baseline;height:${PAGE.header - 18}px;
          border-bottom:1px solid var(--rule);margin-bottom:18px}
   .wordmark{font-weight:800;letter-spacing:.16em;font-size:12px}
   .folio{font-size:11px;color:var(--muted);letter-spacing:.04em}
   .body{flex:1;min-height:0;display:flex;flex-direction:column}
-  h1{font-weight:800;font-size:32px;line-height:1.18;letter-spacing:.005em;margin:0 0 12px;text-transform:uppercase;max-width:1020px;text-wrap:balance}
+  .slide h1{font-weight:800;font-size:32px;line-height:1.18;letter-spacing:.005em;margin:0 0 12px;text-transform:uppercase;max-width:1020px;text-wrap:balance}
   .standfirst{font-size:19px;line-height:1.45;margin:0 0 18px;max-width:940px}
   ul.slots{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:${GAP}px;min-width:0;flex:1}
   .cols{display:grid;grid-template-columns:1fr 1fr;gap:${SPLIT_GUTTER}px;flex:1;min-height:0}
@@ -457,7 +457,7 @@ export const DECK_CSS = `
   .layout-cover li.figure .label{font-size:12px;letter-spacing:.1em;text-transform:uppercase;margin-right:10px}
   .layout-cover li.figure .value{font-size:16px;font-weight:400}
   .gap-img{display:inline-flex;align-items:center;justify-content:center;border:2px dashed #A8422A;color:#A8422A;font-size:12px;padding:6px;min-width:90px;min-height:40px}
-  footer{margin-top:auto;height:${PAGE.footer - 12}px;padding-top:8px;border-top:1px solid var(--rule);font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.02em;text-align:right}
+  .slide footer{margin-top:auto;height:${PAGE.footer - 12}px;padding-top:8px;border-top:1px solid var(--rule);font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.02em;text-align:right}
 `;
 
 const FONTS =

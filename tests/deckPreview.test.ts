@@ -82,6 +82,14 @@ describe("what counts as an approval", () => {
   });
 });
 
+describe("the preview page", () => {
+  it("scopes the deck's own styles to the slides, so the page's heading and header keep their own look", async () => {
+    // Found on the first phone screenshot: the slide rules for header/h1 restyled the page's title.
+    const { DECK_CSS } = await import("../src/shared/deck/render");
+    expect(DECK_CSS).not.toMatch(/^\s*(?:header|h1|h2|footer|body|html|ul|li|p)\s*[{,]/m);
+  });
+});
+
 describe("the slide guard", () => {
   it("refuses an unknown picture, a binding that is not a record, and an empty deck", () => {
     const known = new Set(["logo.png"]);
