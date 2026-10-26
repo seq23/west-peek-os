@@ -90,6 +90,31 @@ describe("a scenario is modelled against the fund that exists", () => {
     expect(basis.body.investable_source).toBe("MISSING");
   });
 
+  /*
+   * THE "investable capital: missing" BUG. The route hard-coded `investable: null` from before the
+   * firm had a fee model, so it reported MISSING with a fee/capital-split record sitting in
+   * sleeve_policy_version. Both shapes of that record are read now; reverting the fix fails both.
+   */
+  it("reads investable capital from the fee/capital-split record when it states one (RECORDED)", async () => {
+    const fund = await call<{ id: string }>("/api/funds", MP, "POST", { name: "Recorded Split Fund", vintage_year: 2026 });
+    await env.WP_OS_DB.prepare(
+      "INSERT INTO sleeve_policy_version (id, fund_id, version_no, effective_from, sleeve_json, created_by) VALUES (?1, ?2, 1, '2026-01-01', ?3, 'test')",
+    ).bind(`spv_${fund.body.id}`, fund.body.id, JSON.stringify({ committed_usd: 9_000_000, estimated_fees_usd: 1_000_000, estimated_expenses_usd: 250_000, estimated_investable_usd: 7_750_000 })).run();
+    const basis = await call<Basis>(`/api/funds/${fund.body.id}/basis`, MP);
+    expect(basis.body.investable).toBe(7_750_000);
+    expect(basis.body.investable_source).toBe("RECORDED");
+  });
+
+  it("derives investable capital from committed less fees and expenses when only the inputs are recorded (DERIVED)", async () => {
+    const fund = await call<{ id: string }>("/api/funds", MP, "POST", { name: "Inputs Only Fund", vintage_year: 2026 });
+    await env.WP_OS_DB.prepare(
+      "INSERT INTO sleeve_policy_version (id, fund_id, version_no, effective_from, sleeve_json, created_by) VALUES (?1, ?2, 1, '2026-01-01', ?3, 'test')",
+    ).bind(`spv_${fund.body.id}`, fund.body.id, JSON.stringify({ committed_usd: 9_000_000, estimated_fees_usd: 1_000_000, estimated_expenses_usd: 250_000 })).run();
+    const basis = await call<Basis>(`/api/funds/${fund.body.id}/basis`, MP);
+    expect(basis.body.investable).toBe(7_750_000);
+    expect(basis.body.investable_source).toBe("DERIVED");
+  });
+
   it("reads a recorded fund size back in whole currency, and only then reports itself ready", async () => {
     const fund = await call<{ id: string }>("/api/funds", MP, "POST", { name: "Sized Fund", vintage_year: 2026 });
     // Minor units in the column — a REAL would put rounding into the one table where the number IS

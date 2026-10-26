@@ -83,56 +83,26 @@ execFileSync("npx", ["esbuild",
 const shared = await import(pathToFileURL(bundlePath).href);
 const { renderDeckHtml } = shared;
 
-const mathBundle = join(tmpdir(), `wp-math-${process.pid}.mjs`);
+const mathBundle = join(tmpdir(), `wp-figures-${process.pid}.mjs`);
 execFileSync("npx", ["esbuild",
-  "src/shared/fund/sleeveMath.ts",
+  "src/shared/deck/figures.ts",
   "--bundle", "--format=esm", "--platform=node", `--outfile=${mathBundle}`,
 ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-const { initialCapitalUsd, investableBase, reserveUsd, sleeveTargetUsd } =
-  await import(pathToFileURL(mathBundle).href);
-
-const early = (sleeve.doc.sleeves ?? []).find((s) => s.key === "EARLY_STAGE_PRIMARY") ?? null;
-const secondary = (sleeve.doc.sleeves ?? []).find((s) => s.key === "SECONDARY_PURCHASE") ?? null;
+const { figuresFromDocs } = await import(pathToFileURL(mathBundle).href);
 
 // The community claim, measured. WITH its denominator — a share of four is a signal, not a statistic.
 const origins = query("SELECT relationship_origin AS o, COUNT(*) AS n FROM investment_opportunity GROUP BY relationship_origin");
-const totalOpps = origins.reduce((sum, r) => sum + Number(r.n), 0);
-const community = origins.filter((r) => r.o === "COMMUNITY_INTRO").reduce((sum, r) => sum + Number(r.n), 0);
 const positions = Number(query("SELECT COUNT(*) AS n FROM position")[0]?.n ?? 0);
 
-const figures = {
-  fund_size: mandate.doc.target_size_usd ?? null,
-  fees: sleeve.doc.estimated_fees_usd ?? null,
-  expenses: sleeve.doc.estimated_expenses_usd ?? null,
-  investable_base: investableBase(sleeve.doc) || null,
-  early_sleeve_usd: early ? sleeveTargetUsd(sleeve.doc, early) : null,
-  early_sleeve_pct: early?.target_pct ?? null,
-  secondary_sleeve_usd: secondary ? sleeveTargetUsd(sleeve.doc, secondary) : null,
-  secondary_sleeve_pct: secondary?.target_pct ?? null,
-  reserve_pct: reserve.doc.reserve_pct ?? null,
-  /*
-   * READ FROM THE MANDATE, NOT BACK-DERIVED FROM THE FEE TOTAL — and the first draft got this
-   * wrong in a way worth recording. It computed the rate as fees ÷ fund size ÷ 10 years, which
-   * printed "1.67%" on the Terms slide against a mandate that plainly stores 2. Reading the
-   * rendered PDF is what caught it.
-   *
-   * The 1.67% was not a rendering bug: it is the honest consequence of the sleeve policy storing
-   * $5M of fees when 2% of $30M over a ten-year life is $6M. That is a SEVENTH inconsistency, of
-   * exactly the family this exercise exists to remove, and it is now reported to the register
-   * rather than hidden by a derived percentage that quietly agreed with the wrong total.
-   */
-  mgmt_fee_pct: mandate.doc.management_fee_pct ?? null,
-  carry_pct: mandate.doc.carried_interest_pct ?? null,
-  reserve_usd: reserveUsd(sleeve.doc, reserve.doc) || null,
-  initial_capital_usd: initialCapitalUsd(sleeve.doc, reserve.doc) || null,
-  target_positions: mandate.doc.target_positions ?? null,
-  check_min: mandate.doc.check_size_usd?.min ?? null,
-  check_max: mandate.doc.check_size_usd?.max ?? null,
-  sectors: mandate.doc.sectors ?? [],
-  community_sourced: totalOpps > 0 ? { through_community: community, total: totalOpps } : null,
-  positions_held: positions,
-  as_of_date: new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" }),
-};
+/*
+ * THE SAME BUILDER THE WORKER USES (src/shared/deck/figures.ts). This script used to assemble the
+ * figures object itself, field by field — a second list of the same keys, which is how one copy
+ * falls behind the records. tests/deckFigures.test.ts fails if either caller builds its own again.
+ */
+const figures = figuresFromDocs({
+  mandate: mandate.doc, sleeve: sleeve.doc, reserve: reserve.doc,
+  origins, positionsHeld: positions, asOf: new Date(),
+});
 
 say(`     mandate v${mandate.version} · sleeve v${sleeve.version} · reserve v${reserve.version}`);
 for (const [k, v] of Object.entries(figures)) {
@@ -147,7 +117,7 @@ for (const [k, v] of Object.entries(figures)) {
  * so an allocator checking the arithmetic finds the gap before she does. Reported here rather than
  * silently reconciled, because reconciling it would be choosing a figure nobody has decided.
  */
-if (figures.mgmt_fee_pct && figures.fund_size && figures.fees) {
+if (!figures.mgmt_fee_schedule && figures.mgmt_fee_pct && figures.fund_size && figures.fees) {
   const impliedTenYear = figures.fund_size * (figures.mgmt_fee_pct / 100) * 10;
   if (Math.abs(impliedTenYear - figures.fees) >= 1) {
     say("");

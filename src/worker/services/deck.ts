@@ -8,7 +8,8 @@ import { actorFromIdentity, authorize, type Actor } from "./authorize";
 import { notifyPartners } from "./notifications";
 import { uploadDocument } from "./documents";
 import { renderDeckHtml, type DeckFigures } from "../../shared/deck/render";
-import type { Binding, Slide } from "../../shared/deck/definition";
+import { ALL_BINDINGS, type Binding, type Slide } from "../../shared/deck/definition";
+import { figuresFromDocs, type MandateDoc } from "../../shared/deck/figures";
 import { runAi } from "../ai/runAi";
 import { getDocument, getDocumentVersion } from "./documents";
 import { createWorkCardInternal } from "./workCards";
@@ -393,44 +394,31 @@ export function summariseDrift(drift: FigureDrift[]): string {
  * on the Mac, so a deck built here and one built there cannot disagree.
  */
 export async function figuresFromRecords(env: Env, fundId: string): Promise<DeckFigures> {
-  const snap = await takeRecordsSnapshot(env, fundId);
-  const mandate = readDoc<{ management_fee_pct?: number; carried_interest_pct?: number }>(
-    await latestPolicy(env, "investment_mandate_version", "mandate_json", fundId),
-  );
-  const early = snap.sleeves.find((x) => x.key === "EARLY_STAGE_PRIMARY") ?? null;
-  const secondary = snap.sleeves.find((x) => x.key === "SECONDARY_PURCHASE") ?? null;
+  const mandateRow = await latestPolicy(env, "investment_mandate_version", "mandate_json", fundId);
+  const sleeveRow = await latestPolicy(env, "sleeve_policy_version", "sleeve_json", fundId);
+  const reserveRow = await latestPolicy(env, "reserve_policy_version", "reserve_json", fundId);
+  const mandate = readDoc<MandateDoc>(mandateRow);
+  const sleeve = readDoc<SleeveDoc>(sleeveRow);
+  if (mandate.version === null && sleeve.version === null) {
+    throw new DeckError(409, "no_records", "this fund carries no readable mandate or sleeve policy, so a deck built from it would have nothing behind its figures");
+  }
   const origins = (
     await env.WP_OS_DB.prepare(
       "SELECT relationship_origin AS o, COUNT(*) AS n FROM investment_opportunity GROUP BY relationship_origin",
     ).all<{ o: string | null; n: number }>()
   ).results ?? [];
-  const totalOpps = origins.reduce((sum, r) => sum + Number(r.n), 0);
-  const community = origins.filter((r) => r.o === "COMMUNITY_INTRO").reduce((sum, r) => sum + Number(r.n), 0);
   const positions = Number(
     (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM position").first<{ n: number }>())?.n ?? 0,
   );
-  return {
-    fund_size: snap.fund_size_usd,
-    fees: snap.estimated_fees_usd || null,
-    expenses: snap.estimated_expenses_usd || null,
-    investable_base: snap.investable_base_usd || null,
-    early_sleeve_usd: early?.derived_usd ?? null,
-    early_sleeve_pct: early?.target_pct ?? null,
-    secondary_sleeve_usd: secondary?.derived_usd ?? null,
-    secondary_sleeve_pct: secondary?.target_pct ?? null,
-    reserve_pct: snap.reserve_pct,
-    mgmt_fee_pct: mandate.doc.management_fee_pct ?? null,
-    carry_pct: mandate.doc.carried_interest_pct ?? null,
-    reserve_usd: snap.reserve_usd || null,
-    initial_capital_usd: snap.initial_capital_usd || null,
-    target_positions: snap.target_positions,
-    check_min: snap.check_size_usd.min,
-    check_max: snap.check_size_usd.max,
-    sectors: snap.sectors,
-    community_sourced: totalOpps > 0 ? { through_community: community, total: totalOpps } : null,
-    positions_held: positions,
-    as_of_date: new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" }),
-  };
+  // Every figure from the records, through the one builder the Mac render uses too.
+  return figuresFromDocs({
+    mandate: mandate.doc,
+    sleeve: sleeve.doc,
+    reserve: readDoc<ReserveDoc>(reserveRow).doc,
+    origins,
+    positionsHeld: positions,
+    asOf: new Date(),
+  });
 }
 
 /**
@@ -443,12 +431,7 @@ export async function figuresFromRecords(env: Env, fundId: string): Promise<Deck
  * is then recorded without a document and the summary says so in words, which is what the daily
  * job had been doing silently for five days.
  */
-const BINDINGS: readonly Binding[] = [
-  "fund_size", "fees", "expenses", "investable_base", "early_sleeve_usd", "early_sleeve_pct",
-  "secondary_sleeve_usd", "secondary_sleeve_pct", "reserve_pct", "mgmt_fee_pct", "carry_pct",
-  "reserve_usd", "initial_capital_usd", "target_positions", "check_min", "check_max", "sectors",
-  "community_sourced_share", "positions_held",
-];
+const BINDINGS: readonly Binding[] = ALL_BINDINGS.filter((b) => b !== "as_of_date");
 
 export interface CarriedDeck {
   slides: Slide[];
@@ -652,7 +635,11 @@ export async function copyDeckWithTweaks(
 export async function runDeckRebuild(
   env: Env,
   actor: Actor,
-  input: { title?: string; pdfBase64?: string | null; brief?: string | null; launch?: Parameters<typeof buildDeckPdf>[2]; carry?: boolean; steer?: string } = {},
+  input: {
+    title?: string; pdfBase64?: string | null; brief?: string | null; launch?: Parameters<typeof buildDeckPdf>[2]; carry?: boolean; steer?: string;
+    /** Build from the deck definition, and why. Set when the records moved in a way a copy of the current deck cannot carry. */
+    fromDefinition?: string;
+  } = {},
 ): Promise<{ version: DeckVersionRow; changed: number; rendered: boolean; renderNote: string | null; carried: CarriedDeck | null }> {
   const fund = await theFund(env);
   // The PDF is built HERE unless the caller brought one (the Mac script does). A rebuild that
@@ -664,12 +651,30 @@ export async function runDeckRebuild(
   let placed: DeckTweak[] = [];
   let missing: DeckTweak[] = [];
   if (!pdfBase64) {
-    // Pull from the current deck first; fall back to the template only when there is none.
-    if (input.carry !== false) {
+    if (input.fromDefinition) {
+      /*
+       * THE RECORDS CHANGED SHAPE, NOT JUST VALUE. A copy of the current deck can only repaint the
+       * figures it already prints; Fund I's final math adds lines the current deck has no place
+       * for (follow-ons, secondary positions, the per-company cap, the GP commitment, the net
+       * target) and removes one (the 5% minimum ownership). So this version is rendered from the
+       * definition, every figure bound, and it is a PROPOSAL like every other: she approves it on
+       * Fund strategy or sends it back.
+       */
+      const built = await buildDeckPdf(env, fund.id, input.launch, null);
+      if (built.pdfBase64) {
+        pdfBase64 = built.pdfBase64;
+        pageCount = built.pageCount;
+      } else {
+        renderNote = "reason" in built ? built.reason : null;
+      }
+    } else if (input.carry !== false) {
+      // Pull from the current deck first; fall back to the template only when there is none.
       const figures = await figuresFromRecords(env, fund.id);
       carried = await carryCurrentDeck(env, actor, fund.id, figures, input.steer ?? "").catch(() => null);
     }
-    if (carried) {
+    if (input.fromDefinition) {
+      // Built above.
+    } else if (carried) {
       // COPY, NEVER RE-TYPESET. The transcript is used only to know which figures to change and
       // what they say now; the pages themselves come from the current PDF.
       const copied = await copyDeckWithTweaks(env, fund.id, input.launch, carried);
@@ -714,7 +719,10 @@ export async function runDeckRebuild(
           (missing.length > 0
             ? `. Left as printed (could not be found on the page): ${missing.slice(0, 6).map((c) => `p${c.page} ${c.field} ${c.was}`).join("; ")}`
             : "")
-        : "Built from the template: there was no current deck to pull from",
+        : input.fromDefinition
+          ? `Built from the deck definition, every figure read from the records: ${input.fromDefinition}` +
+            (renderNote ? `. No PDF: ${renderNote}` : "")
+          : "Built from the template: there was no current deck to pull from",
       input.brief ? `On request: ${input.brief.slice(0, 300)}` : null,
     ].filter(Boolean).join(". "),
   });
@@ -761,6 +769,47 @@ export async function runDeckRebuild(
   });
 
   return { version, changed: changed.length, rendered: pdfBase64 !== null, renderNote, carried };
+}
+
+/**
+ * THE RECORDS MOVED UNDER THE DECK, SO PRESTON REBUILDS IT — once.
+ *
+ * "A deck is rebuilt when the records move or when a partner asks" (jobs.ts), but nothing watched
+ * for the first half: Fund I's final math landed (mandate v5, sleeve v7) and the deck kept
+ * printing the old figures. This runs on the 15-minute diagnostics sweep. It compares the policy
+ * versions the NEWEST deck version was built from — whatever its state — with the latest records;
+ * when any record is newer it records one PROPOSED version from the definition. The new version's
+ * own snapshot then matches, so it never fires twice for the same records, and a version she sends
+ * back is not rebuilt behind her. Nothing is sent: the version waits on Fund strategy.
+ */
+export async function rebuildIfRecordsMoved(
+  env: Env,
+  launch?: Parameters<typeof buildDeckPdf>[2],
+): Promise<{ rebuilt: boolean; reason: string; versionNo?: number }> {
+  const fund = await env.WP_OS_DB.prepare("SELECT id FROM fund LIMIT 1").first<{ id: string }>();
+  if (!fund) return { rebuilt: false, reason: "no fund" };
+  const newest = await env.WP_OS_DB.prepare(
+    "SELECT version_no, records_snapshot_json FROM deck_version WHERE fund_id = ?1 ORDER BY version_no DESC LIMIT 1",
+  ).bind(fund.id).first<{ version_no: number; records_snapshot_json: string }>();
+  if (!newest) return { rebuilt: false, reason: "no deck version to compare against" };
+  let built: RecordsSnapshot["policy_versions"] | null = null;
+  try {
+    built = (JSON.parse(newest.records_snapshot_json) as RecordsSnapshot).policy_versions ?? null;
+  } catch { built = null; }
+  const now = {
+    mandate: (await latestPolicy(env, "investment_mandate_version", "mandate_json", fund.id))?.version_no ?? null,
+    sleeve: (await latestPolicy(env, "sleeve_policy_version", "sleeve_json", fund.id))?.version_no ?? null,
+    reserve: (await latestPolicy(env, "reserve_policy_version", "reserve_json", fund.id))?.version_no ?? null,
+  };
+  const moved = (Object.keys(now) as Array<keyof typeof now>).filter(
+    (k) => now[k] !== null && (built?.[k] ?? null) !== null && (now[k] as number) > (built![k] as number),
+  );
+  if (moved.length === 0) return { rebuilt: false, reason: `deck v${newest.version_no} is built from the latest records` };
+  const why = `the fund records moved since v${newest.version_no} (` +
+    moved.map((k) => `${k} v${built![k]} → v${now[k]}`).join(", ") + ")";
+  const actor = actorFromIdentity(deckSystemIdentity("west-peek"));
+  const out = await runDeckRebuild(env, actor, { fromDefinition: why, launch, carry: false });
+  return { rebuilt: true, reason: why, versionNo: out.version.version_no };
 }
 
 // ── A rejection becomes Preston's card, and the card becomes the next version ────────────────

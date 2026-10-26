@@ -171,6 +171,57 @@ describe("the claims the operator approved, quoted rather than paraphrased", () 
   });
 });
 
+describe("no figure hides in a headline, a standfirst or a spelled-out number", () => {
+  /*
+   * STRENGTHENED 26 Oct 2026. The literal scan above read text SLOTS only, so "TWENTY-FIVE
+   * COMPANIES" sat in the portfolio headline and "A $30M fund does not deploy $30M" in the
+   * construction standfirst, both outliving the records that said 25 and $30M. Every string that
+   * renders is scanned now, and a count spelled as a word counts as a literal.
+   */
+  const NUMBER_WORDS = /\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty)(?:-\w+)?\s+(?:companies|positions|checks|cheques|investments)\b/i;
+  const prose = (s: (typeof DECK_SLIDES)[number]) =>
+    [s.headline, s.standfirst ?? "", ...s.slots.map((x) => (x.kind === "text" ? x.text : x.label))];
+
+  it("carries no money, percentage or spelled-out count anywhere that renders", () => {
+    const offenders: string[] = [];
+    for (const slide of DECK_SLIDES) {
+      for (const line of prose(slide)) {
+        const hits = [
+          ...(line.match(/\$\s?\d[\d,.]*\s?(?:M|K|million|billion)?/gi) ?? []),
+          ...(line.match(/\b\d+(?:\.\d+)?\s?%/g) ?? []),
+          ...(line.match(NUMBER_WORDS) ?? []),
+        ].filter((h) => !/\$\s?100M/i.test(h));
+        for (const hit of hits) offenders.push(`${slide.key}: "${hit}" in "${line.slice(0, 60)}"`);
+      }
+    }
+    expect(offenders, "these figures are typed onto a slide instead of read from a record").toEqual([]);
+  });
+
+  it("binds Fund I's final math: fee schedule, follow-ons, secondaries, cap, GP commitment, net target, ownership", () => {
+    const used = new Set(bindingsUsed());
+    for (const b of [
+      "mgmt_fee_schedule", "check_typical", "follow_on_companies", "follow_on_min", "follow_on_max",
+      "secondary_positions", "secondary_check_min", "secondary_check_max", "concentration_cap",
+      "gp_commit_pct", "gp_commit_usd", "target_net_multiple", "target_ownership_pct",
+    ] as Binding[]) {
+      expect(used.has(b), `${b} is in the final math and must be bound on a slide`).toBe(true);
+    }
+  });
+
+  it("says nothing of a minimum ownership — the 5% walk-away was removed from the mandate", () => {
+    for (const slide of DECK_SLIDES) {
+      expect(prose(slide).join(" "), `${slide.key} mentions a minimum ownership`).not.toMatch(/minimum ownership/i);
+    }
+  });
+
+  it("speaks as 'we', uses the approved $100M wording, and names no individual as the transactor", () => {
+    const all = DECK_SLIDES.map((s) => prose(s).join(" ")).join(" ");
+    expect(all).toContain("more than $100M in secondary transactions");
+    expect(all).not.toMatch(/Sequoia Taylor has/);
+    expect(all).not.toMatch(/Anthropic/i);
+  });
+});
+
 describe("the deck answers the question a first-time fund is actually asked", () => {
   it("has a track-record slide that binds the position count instead of asserting one", () => {
     /*
