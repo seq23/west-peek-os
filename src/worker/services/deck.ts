@@ -505,7 +505,9 @@ export async function requestDeckRework(
 export const DECK_REWORK_STEPS: readonly string[] = [
   "Fold the partner's reason into the open deck preview as a change request (a new round if none is open).",
   "The preview's sweep applies it to the same preview and answers on the preview thread.",
-  "No PDF is made until a partner replies \"approved\"; nothing is sent to a limited partner.",
+  "No PDF is made until a partner replies \"approved\".",
+  "Nothing is sent to a limited partner — a person approves the version first.",
+  "A Managing Partner's own instruction extends what you do here — apply it using judgement and whatever you already have access to, rather than treating it as out of scope. Only decline something that genuinely needs a tool, data source or integration that does not exist anywhere in this system, or that would need to pass through approval regardless of who asked.",
 ];
 
 export async function runDeckRework(
