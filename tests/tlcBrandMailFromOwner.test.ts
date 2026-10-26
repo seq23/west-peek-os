@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
+import { addressesPassed } from "./helpers/addressCheck";
 import type { Env } from "../src/worker/env";
 import { contentHashes, isOwnBrandMailCopy, pitchFollowUp, runDrip } from "../src/worker/services/learningClub";
 import { recomposeBrandNames } from "../src/worker/services/tlcDraftNotice";
@@ -92,6 +93,8 @@ describe("in the database", () => {
   ).bind(deal).first<{ state: string; subject: string; body: string; card: string; summary: string; payload_json: string }>();
 
   it("drafts filed before the fix are re-composed in place, approved or not; nothing is approved, her own text is untouched", async () => {
+    // Each queued address passed NeverBounce, as the first email requires (26 Oct 2026).
+    await addressesPassed(env);
     // As the composer wrote them before the display name: the stored brand, parenthetical and all.
     await runDrip(env, MORNING);
     for (const [deal, brand] of [["tld_osmo", "Osmo (Generation)"], ["tld_quest", "Quest Diagnostics (questhealth.com)"]] as const) {

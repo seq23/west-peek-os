@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
+import { addressesPassed } from "./helpers/addressCheck";
 import type { Env } from "../src/worker/env";
 import { handleRequest } from "../src/worker/index";
 import { approvedDayZeroEmail, brandSendGate, TLC_OPT_OUT_LINE } from "../src/shared/tlc/learningClub";
@@ -326,6 +327,8 @@ describe("the gate is unchanged", () => {
     // Open it fully: every email, Google's (her contact) included, waits for an approval card. None is sent.
     await env.WP_OS_DB.prepare("INSERT INTO outside_email_allow (item_type, item_id, allowed, changed_by) VALUES ('JOB','tlc_brand_sales',1,'test')").run();
     await env.WP_OS_DB.prepare("INSERT INTO tlc_setting (key, value) VALUES ('pitch_approved_hash', ?1), ('playbook_approved_hash', ?2), ('brand_send', 'on') ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(h.pitch, h.playbook).run();
+    // Each queued address passed NeverBounce, as the first email requires (26 Oct 2026).
+    await addressesPassed(env);
     const out = await runDrip(env, new Date("2026-11-09T15:05:00.000Z"));
     expect(out.gate.open).toBe(true);
     expect(out.sent).toBe(0);

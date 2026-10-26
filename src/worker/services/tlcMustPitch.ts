@@ -106,15 +106,15 @@ export async function addressReadOffPage(email: string, source: string, check: (
   return null;
 }
 
-/** The one insert into tlc_deal. Every brand starts at PROSPECT on drip step 0; the drip decides the rest. */
+/** The one insert into tlc_deal. Every brand starts at PROSPECT on drip step 0; the drip decides the rest. Its created_at is the pass's own clock, so a week's new brands are counted on it (tlcVolume). */
 export async function queueDeal(
   env: Env,
   d: { eventId: string; brand: string; category: string | null; contactName: string | null; contactEmail: string; contactSourceUrl: string; whyFit: string | null; firmScope: string },
   now: Date,
 ): Promise<boolean> {
   const res = await env.WP_OS_DB.prepare(
-    "INSERT OR IGNORE INTO tlc_deal (id, event_id, brand, category, contact_name, contact_email, contact_source_url, why_fit, next_send_at, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-  ).bind(`tld_${crypto.randomUUID()}`, d.eventId, d.brand, d.category, d.contactName, d.contactEmail.toLowerCase(), d.contactSourceUrl, d.whyFit, nextDripAt(0, null, now, null), d.firmScope).run();
+    "INSERT OR IGNORE INTO tlc_deal (id, event_id, brand, category, contact_name, contact_email, contact_source_url, why_fit, next_send_at, firm_scope, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+  ).bind(`tld_${crypto.randomUUID()}`, d.eventId, d.brand, d.category, d.contactName, d.contactEmail.toLowerCase(), d.contactSourceUrl, d.whyFit, nextDripAt(0, null, now, null), d.firmScope, now.toISOString()).run();
   return (res.meta?.changes ?? 0) > 0;
 }
 
