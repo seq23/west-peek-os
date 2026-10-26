@@ -605,6 +605,8 @@ export interface DripResult {
   sentBrands: string[];
   /** Approved emails over today's warm-up allowance: they go on the next pass with room. */
   waitingForAllowance: number;
+  /** What Wynn did with brand replies this pass (tlcBrandReply), in words. */
+  replies?: string;
 }
 const emptyDrip = (): DripResult => ({ due: 0, held: 0, awaitingApproval: 0, sent: 0, gate: { open: false, reasons: [] }, newDrafts: [], sentBrands: [], waitingForAllowance: 0 });
 
@@ -662,12 +664,12 @@ export async function fileDraft(env: Env, deal: Pick<TlcDealRow, "id" | "brand" 
  * wire, marked FAILED, and silently re-drafted for approval again — found on the first reply-approval test.
  * The marker is her approval card for this one email and this one recipient; nothing else carries it.
  */
-function approvedFor(env: Env, approvalCardId: string, recipient: string): Env {
+export function approvedFor(env: Env, approvalCardId: string, recipient: string): Env {
   const marker: ApprovedSendMarker = { approvalId: approvalCardId, recipient: recipient.trim().toLowerCase() };
   return { ...env, [APPROVED_SEND_ENV_KEY]: marker } as Env;
 }
 
-export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Promise<DripResult> {
+export async function runDrip(env: Env, now: Date, firmScope = "west-peek", replyDeps: import("./tlcBrandReply").BrandReplyDeps = {}): Promise<DripResult> {
   const settings = await tlcSettings(env);
   const gate = brandSendGate(settings, await tlcOutside(env), await contentHashes(env));
   const result: DripResult = { ...emptyDrip(), gate };
@@ -719,10 +721,11 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Pro
   }
 
   // 1b · A reply whose body the door never read (an oversize message, an early door): after 15 minutes it is a yes.
-  const unread = (await env.WP_OS_DB.prepare(
-    "SELECT d.* FROM tlc_deal d WHERE d.firm_scope = ?1 AND d.stop_reason = 'REPLIED' AND d.replied_at <= ?2 AND NOT EXISTS (SELECT 1 FROM tlc_pitch_followup f WHERE f.deal_id = d.id)",
-  ).bind(firmScope, new Date(now.getTime() - 15 * 60_000).toISOString()).all<TlcDealRow>()).results ?? [];
-  for (const d of unread) await brandSaidYes(env, d, "(their reply)", now);
+  // (26 Oct 2026: never "a yes" by default any more. Wynn reads the stored words, or her inbox, and drafts her answer.)
+  {
+    const { processBrandReplies } = await import("./tlcBrandReply");
+    result.replies = await processBrandReplies(env, now, firmScope, replyDeps).catch((err) => `brand replies not read: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // 2 · Compose what is due.
   const due = (await env.WP_OS_DB.prepare(
@@ -813,7 +816,7 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek"): Pro
  * club's sales card so it is read. Matched on the sender's address, or — for a bounce, which comes
  * from a mail server — on the subject we sent.
  */
-export async function recordBrandMail(env: Env, input: { from: string; subject: string; text?: string; now?: Date }): Promise<{ matched: number; stop: string | null }> {
+export async function recordBrandMail(env: Env, input: { from: string; subject: string; text?: string; messageId?: string | null; now?: Date }): Promise<{ matched: number; stop: string | null }> {
   const now = (input.now ?? new Date()).toISOString();
   // A "not a fit" answer to the P.S. is a stop for good, read off the subject or, when the door has it, the new text.
   const first = classifyBrandMail(input);
@@ -845,7 +848,11 @@ export async function recordBrandMail(env: Env, input: { from: string; subject: 
   // A REPLY THAT IS NOT A NO: the pitch email (PDF + call link) goes behind the gate for her approval. From the
   // header-only call (no text yet) this waits for the body: recordBrandReplyText decides, or the drip after 15 minutes.
   if (kind === "REPLIED" && input.text !== undefined) {
-    for (const d of deals) await brandSaidYes(env, d, input.subject, new Date(now));
+    const { takeBrandReply } = await import("./tlcBrandReply");
+    for (const d of deals) {
+      const fresh = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(d.id).first<TlcDealRow>())!;
+      await takeBrandReply(env, fresh, { messageId: input.messageId ?? "", subject: input.subject, text: input.text, receivedAt: now }, { now: new Date(now) });
+    }
   }
   await appendEvent(env, { eventType: "tlc.brand_mail", actorType: "system", actorId: "inbound_email", objectType: "tlc_deal", objectId: deals[0]!.id, payload: { kind, deals: deals.length } });
   return { matched: deals.length, stop: kind };
@@ -869,23 +876,19 @@ export async function isOwnBrandMailCopy(env: Env, input: { from: string; to: st
  * the body, a "not a fit / no thanks / stop" answer turns that into a stop for good, and anything else is a yes
  * whose pitch email is drafted for her approval.
  */
-export async function recordBrandReplyText(env: Env, input: { from: string; subject: string; text: string; now?: Date }): Promise<{ matched: number; stop: string | null }> {
+export async function recordBrandReplyText(env: Env, input: { from: string; subject: string; text: string; messageId?: string | null; now?: Date }): Promise<{ matched: number; stop: string | null }> {
+  // (26 Oct 2026) The words decide: an auto-reply resumes the drip, a no is DECLINED, anything else is a reply Wynn
+  // drafts her answer to (tlcBrandReply). Nothing is "a yes" by default and no pitch PDF goes before one.
   const now = input.now ?? new Date();
-  const address = (/<([^>]+)>/.exec(input.from)?.[1] ?? input.from).trim().toLowerCase();
-  const since = new Date(now.getTime() - 3_600_000).toISOString();
-  const deals = (await env.WP_OS_DB.prepare(
-    "SELECT d.* FROM tlc_deal d WHERE lower(d.contact_email) = ?1 AND d.stop_reason = 'REPLIED' AND d.replied_at >= ?2 AND NOT EXISTS (SELECT 1 FROM tlc_pitch_followup f WHERE f.deal_id = d.id)",
-  ).bind(address, since).all<TlcDealRow>()).results ?? [];
+  const { dealsForSender, takeBrandReply } = await import("./tlcBrandReply");
+  const deals = await dealsForSender(env, input.from);
   if (deals.length === 0) return { matched: 0, stop: null };
-  const no = replyLooksLikeNo(input.text) || replyLooksLikeNo(input.subject);
+  let stop: string | null = null;
   for (const d of deals) {
-    if (no) {
-      await env.WP_OS_DB.prepare("UPDATE tlc_deal SET stop_reason = 'UNSUBSCRIBED', stage = 'STOPPED', updated_at = ?2 WHERE id = ?1").bind(d.id, now.toISOString()).run();
-    } else {
-      await brandSaidYes(env, d, input.subject, now);
-    }
+    const out = await takeBrandReply(env, d, { messageId: input.messageId ?? "", subject: input.subject, text: input.text, receivedAt: now.toISOString() }, { now });
+    stop = out === "NO" ? "DECLINED" : out === "AUTO_REPLY" ? "AUTO_REPLY" : "REPLIED";
   }
-  return { matched: deals.length, stop: no ? "UNSUBSCRIBED" : "REPLIED" };
+  return { matched: deals.length, stop };
 }
 
 /** The email back to a brand that said yes: the pitch (attached and linked) and a call link. Signed by Sequoia. */
@@ -903,22 +906,6 @@ export function pitchFollowUp(input: { brand: string; contactName: string | null
       ...TLC_SIGNATURE,
     ].join("\n"),
   };
-}
-
-/**
- * A BRAND SAID YES (a reply that is not a no). Sequoia hears at once; the pitch email is composed and
- * held behind the same gate and approval as every brand email (`runDrip` files it when the gate is open).
- */
-async function brandSaidYes(env: Env, deal: TlcDealRow, subject: string, now: Date): Promise<void> {
-  const ev = await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>();
-  if (!ev?.topic || !ev.pitch_token) return;
-  const settings = await tlcSettings(env);
-  const mail = pitchFollowUp({ brand: deal.brand, contactName: deal.contact_name, topic: ev.topic, month: ev.month, pitchUrl: pitchPublicUrl(ev.pitch_token), callLink: settings[CALL_LINK_SETTING] ?? null });
-  await env.WP_OS_DB.prepare(
-    "INSERT INTO tlc_pitch_followup (deal_id, subject, body, state, held_reason) VALUES (?1, ?2, ?3, 'HELD', 'waiting for the send gate and an approval') ON CONFLICT (deal_id) DO NOTHING",
-  ).bind(deal.id, mail.subject, mail.text).run();
-  // NO SEPARATE EMAIL (owner, 24 Oct 2026: one TLC email a week). The reply and this pitch draft are in the weekly email.
-  void subject;
 }
 
 // ── The runner: one card, one bounded unit of work ─────────────────────────────────────────────
@@ -1622,6 +1609,11 @@ const onePagerUrl = (eventId: string): string => `https://os.joinwestpeek.com/ap
 export const CALL_LINK_SETTING = "call_link";
 /** The brand pitch's public, read-only address: no login, the unguessable token is the credential. */
 export const pitchPublicUrl = (token: string): string => `https://os.joinwestpeek.com/api/tlc-pitch/${token}`;
+/** The club's one-page brand pitch as a PDF attachment, or none when it cannot be rendered (the link still carries it). */
+export async function renderPdfFor(env: Env, view: TlcClubView, topic: string): Promise<EmailAttachment[]> {
+  const pdf = await renderHtmlPdf(env, renderBrandPitch(view), { onePage: true });
+  return pdf.pdfBase64 ? [{ filename: `The Learning Club - ${topic.replace(/[^\w &-]+/g, "").trim()}.pdf`, content: pdf.pdfBase64, contentType: "application/pdf" }] : [];
+}
 
 /**
  * A SEARCH THE MACHINE COULD NOT SERVE IS NOT AN ATTEMPT (22 Oct 2026). When every search lane was down —

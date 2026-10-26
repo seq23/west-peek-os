@@ -145,7 +145,7 @@ export interface EffectExecutionResult {
  */
 async function brandMailAsOwner(
   env: Env,
-  message: { to: string; subject: string; text: string; replyTo?: readonly string[]; attachments?: readonly EmailAttachment[] },
+  message: { to: string; subject: string; text: string; replyTo?: readonly string[]; attachments?: readonly EmailAttachment[]; inReplyTo?: string },
 ): Promise<EmailSendResult> {
   assertPreviewLane(env, { to: message.to, subject: message.subject, text: message.text });
   const token = await serviceAccountToken(env, [GMAIL_COMPOSE_SCOPE], TLC_OWNER.email);
@@ -158,6 +158,7 @@ async function brandMailAsOwner(
     ...(message.replyTo?.length ? { replyTo: message.replyTo } : {}),
     bcc: [INTAKE_MAILBOX],
     ...(message.attachments?.length ? { attachments: message.attachments } : {}),
+    ...(message.inReplyTo ? { inReplyTo: message.inReplyTo } : {}),
   });
   return { sent: true, provider: "gmail", provider_message_id: id, detail: `Delivered to ${message.to} as ${TLC_OWNER.email} through her own Gmail (copy to ${INTAKE_MAILBOX})` };
 }
@@ -178,7 +179,7 @@ async function brandMailAsOwner(
 async function performEffect(env: Env, request: ExternalEffectRequestRow): Promise<SimulatedDelivery> {
   const cloudflareReady = isCloudflareEmailEnabled(env);
   if (request.effect_type === "email.send" && (cloudflareReady || isEmailSendEnabled(env))) {
-    const payload = JSON.parse(request.payload_json || "{}") as { subject?: string; text?: string; body?: string; reply_to?: unknown; attachments?: unknown };
+    const payload = JSON.parse(request.payload_json || "{}") as { subject?: string; text?: string; body?: string; reply_to?: unknown; attachments?: unknown; in_reply_to?: unknown };
     // WHOSE NAME IS ON IT. A partner who has turned on "send as me" has their approved messages go
     // out under their own address instead of the firm's; everyone else, and every unattributed
     // request, stays as the firm. Resolved from the person who REQUESTED the effect rather than
@@ -243,7 +244,9 @@ async function performEffect(env: Env, request: ExternalEffectRequestRow): Promi
     // Gmail attempt that comes back refused, falls to the firm transport rather than not sending.
     let result: EmailSendResult | null = null;
     if (ownerSigned) {
-      result = await brandMailAsOwner(env, message);
+      // An answer to a brand's reply threads on their message (tlcBrandReply); a Message-ID is all it may carry.
+      const inReplyTo = typeof payload.in_reply_to === "string" && /^[^\s<>]{3,300}$/.test(payload.in_reply_to) ? payload.in_reply_to : undefined;
+      result = await brandMailAsOwner(env, { ...message, ...(inReplyTo ? { inReplyTo } : {}) });
     } else if (requestedBy && from && from !== env.WP_OS_EMAIL_FROM) {
       try {
         const gmailId = await trySendAsPartner(env, requestedBy, { ...message, from });

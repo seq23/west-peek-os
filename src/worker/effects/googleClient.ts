@@ -302,6 +302,8 @@ export interface GmailMessage {
   bcc?: readonly string[];
   /** PDFs and the like, base64. */
   attachments?: ReadonlyArray<{ filename: string; content: string; contentType?: string }>;
+  /** The Message-ID this answers: In-Reply-To and References, so it threads on the recipient's message. */
+  inReplyTo?: string;
 }
 
 /** RFC 2047 for a header that is not plain ASCII (a brand name with an accent, a curly quote). */
@@ -326,6 +328,7 @@ export function gmailRaw(message: GmailMessage): string {
     ...(replyTo.length ? [`Reply-To: ${replyTo.join(", ")}`] : []),
     ...(bcc.length ? [`Bcc: ${bcc.join(", ")}`] : []),
     `Subject: ${encodedWord(clean(message.subject))}`,
+    ...(message.inReplyTo ? [`In-Reply-To: <${clean(message.inReplyTo).replace(/^<|>$/g, "")}>`, `References: <${clean(message.inReplyTo).replace(/^<|>$/g, "")}>`] : []),
     "MIME-Version: 1.0",
   ];
   const attachments = message.attachments ?? [];
@@ -388,4 +391,27 @@ export async function sendViaGmail(
 
   const body = (await res.json().catch(() => ({}))) as { id?: string };
   return body.id ?? null;
+}
+
+/**
+ * A MAILBOX'S MESSAGES, RAW (26 Oct 2026, the Learning Club): the brand replies in her own inbox, read under
+ * `gmail.readonly` as her (the caller's token names the mailbox). Read-only; nothing is changed or marked.
+ */
+export async function listGmailRaw(accessToken: string, query: string, max = 25, fetchImpl: typeof fetch = fetch): Promise<Array<{ raw: string; internalDate: string | null }>> {
+  const api = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
+  const headers = { authorization: `Bearer ${accessToken}` };
+  const listed = await fetchImpl(`${api}?q=${encodeURIComponent(query)}&maxResults=${max}`, { headers });
+  if (listed.status === 401 || listed.status === 403) throw new Error("google_unauthorised");
+  if (!listed.ok) throw new Error(`gmail refused the search (HTTP ${listed.status})`);
+  const ids = ((await listed.json()) as { messages?: Array<{ id: string }> }).messages ?? [];
+  const out: Array<{ raw: string; internalDate: string | null }> = [];
+  for (const m of ids) {
+    const res = await fetchImpl(`${api}/${m.id}?format=raw`, { headers });
+    if (!res.ok) continue;
+    const j = (await res.json()) as { raw?: string; internalDate?: string };
+    if (!j.raw) continue;
+    const bin = atob(j.raw.replace(/-/g, "+").replace(/_/g, "/"));
+    out.push({ raw: new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0))), internalDate: j.internalDate ?? null });
+  }
+  return out;
 }
