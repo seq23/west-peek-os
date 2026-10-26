@@ -517,12 +517,13 @@ describe("the Learning Club in the database", () => {
     expect(d!.next_send_at).toBeNull();
     const card = await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE kind = 'TLC_BRAND_BATCH'").first<{ description: string }>();
     expect(card!.description).toMatch(/Leaf Co .*replied/);
-    // A reply that is not a no puts the pitch email (PDF + call link) behind the gate, signed by Sequoia.
-    const f = await env.WP_OS_DB.prepare("SELECT state, subject, body FROM tlc_pitch_followup").first<{ state: string; subject: string; body: string }>();
-    expect(f!.state).toBe("HELD");
-    expect(f!.subject).toBe("Leaf Co + a small room in New York");
-    expect(f!.body).toMatch(/The PDF is attached, and it is also here: https:\/\/os\.joinwestpeek\.com\/api\/tlc-pitch\/[0-9a-f]{32}/);
-    expect(f!.body).toMatch(/Sequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures$/);
+    // A reply that is not a no is NOT a yes (26 Oct 2026): no pitch email, no PDF. Wynn drafts her answer, signed by her,
+    // and it waits for her approval email.
+    expect(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_pitch_followup").first()).toBeNull();
+    const br = await env.WP_OS_DB.prepare("SELECT state, intent, their_text, draft_subject, draft_body FROM tlc_brand_reply").first<{ state: string; intent: string; their_text: string; draft_subject: string; draft_body: string }>();
+    expect(br).toMatchObject({ state: "DRAFTED", intent: "QUESTION", their_text: "Sounds lovely, tell me more.", draft_subject: "Re: Leaf Co x a Matcha & Tea learning club" });
+    expect(br!.draft_body).toMatch(/Sequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures$/);
+    expect(br!.draft_body).not.toMatch(/\bP\.S\.|attached|PDF/);
   });
 
   it("a 'not a fit' answer to the P.S. stops the brand for good, with no pitch email and no email to her", async () => {
@@ -531,8 +532,9 @@ describe("the Learning Club in the database", () => {
     // The door's header-only call stops the sequence and waits for the words before calling it a yes.
     expect(await recordBrandMail(env, { from: "Kim <kim@noco.example>", subject: "Re: No Co + a small room in New York", now: at })).toEqual({ matched: 1, stop: "REPLIED" });
     expect(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_pitch_followup WHERE deal_id = 'tld_noco'").first()).toBeNull();
-    expect(await recordBrandReplyText(env, { from: "Kim <kim@noco.example>", subject: "Re: No Co + a small room in New York", text: "Thanks Sequoia, but this isn't a fit for us.", now: at })).toEqual({ matched: 1, stop: "UNSUBSCRIBED" });
-    expect(await env.WP_OS_DB.prepare("SELECT stop_reason, stage, next_send_at FROM tlc_deal WHERE id = 'tld_noco'").first()).toEqual({ stop_reason: "UNSUBSCRIBED", stage: "STOPPED", next_send_at: null });
+    expect(await recordBrandReplyText(env, { from: "Kim <kim@noco.example>", subject: "Re: No Co + a small room in New York", text: "Thanks Sequoia, but this isn't a fit for us.", now: at })).toEqual({ matched: 1, stop: "DECLINED" });
+    expect(await env.WP_OS_DB.prepare("SELECT stop_reason, stage, decision, next_send_at FROM tlc_deal WHERE id = 'tld_noco'").first()).toEqual({ stop_reason: "DECLINED", stage: "DECLINED", decision: "NO", next_send_at: null });
+    expect(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_brand_reply WHERE deal_id = 'tld_noco' AND state != 'CLOSED'").first()).toBeNull();
     expect(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_pitch_followup WHERE deal_id = 'tld_noco'").first()).toBeNull();
     // Nor does the drip's 15-minute fallback ever turn it into a yes.
     await runDrip(env, new Date("2026-11-10T12:00:00Z"));

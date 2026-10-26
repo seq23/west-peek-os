@@ -265,7 +265,7 @@ export interface InboundOptions {
 
 /** What a non-card handler in the door did with a message. */
 export interface DoorHandled {
-  by: "tlc_draft_reply" | "packet_decision" | "clarification";
+  by: "tlc_draft_reply" | "tlc_brand_reply" | "tlc_brand_reply_approval" | "packet_decision" | "clarification";
   ref: string | null;
   detail: string;
 }
@@ -716,7 +716,34 @@ async function handleIfReply(
   if (!ASSIGNING_PARTNERS.includes((addressIn(sender) ?? "").toLowerCase())) {
     const { recordBrandReplyText } = await import("../services/learningClub");
     const { newTextOf } = await import("../../shared/events/packetDecisionToken");
-    await recordBrandReplyText(env, { from: sender, subject, text: newTextOf(textBodyOf(raw)) }).catch(() => undefined);
+    // The whole decoded body: Wynn cuts the quoted original himself, and keeps their words word for word.
+    const brand = await recordBrandReplyText(env, { from: sender, subject, text: textBodyOf(raw), messageId: message.headers.get("message-id") }).catch(() => ({ matched: 0, stop: null }));
+    void newTextOf;
+    if (brand.matched > 0) {
+      // A brand's answer is Wynn's (tlcBrandReply), never an "Unclear email" card for Porter.
+      await appendEvent(env, {
+        eventType: "inbound_email.received", actorType: "system", actorId: "inbound_email", objectType: "inbound_email",
+        objectId: `${message.from}:${subject}`.slice(0, 200), firmScope,
+        payload: { from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX, tlc_brand_reply: brand.stop },
+      });
+      input.onHandled?.({ by: "tlc_brand_reply", ref: null, detail: `brand reply: ${brand.stop}` });
+      return true;
+    }
+  }
+  {
+    // HER ANSWER TO WYNN'S BRAND-REPLY APPROVAL EMAIL ("approved" / "change: …" / "skip"), from her approval address.
+    const { applyBrandReplyApproval } = await import("../services/tlcBrandReply");
+    const out = await applyBrandReplyApproval(env, { fromHeader: message.headers.get("from"), authenticationResults: message.headers.get("authentication-results"), subject, body: raw })
+      .catch((err) => ({ handled: false, ref: null, detail: err instanceof Error ? err.message : String(err) }));
+    if (out.handled) {
+      await appendEvent(env, {
+        eventType: "inbound_email.received", actorType: "system", actorId: "inbound_email", objectType: "inbound_email",
+        objectId: `${message.from}:${subject}`.slice(0, 200), firmScope,
+        payload: { from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX, tlc_brand_reply_approval: out.ref, detail: out.detail },
+      });
+      input.onHandled?.({ by: "tlc_brand_reply_approval", ref: out.ref, detail: out.detail });
+      return true;
+    }
   }
   {
     const { applyTlcDraftReply } = await import("../services/tlcDraftNotice");
