@@ -12,6 +12,7 @@ import { notifyPartners, notifyQuietly } from "./notifications";
 import { deckStillBeingRead, workCard } from "./employeeWork";
 import { SEAT_WAIT_MINUTES, SPEND_SETTING_LANE, SPEND_SETTING_NAME, blockCard, currentSpendState, isSearchCallRefusal, releaseSpendSettingBlocks, resurfaceStaleBlocks, seatToWaitFor, spendStateJson, type StoredBlock } from "./blocks";
 import { resurfaceStalePreviews } from "./previewApproval";
+import { isSeatWait } from "../../shared/ai/seatOrder";
 import { STEPS_PER_TICK } from "../../shared/work/employeeLoop";
 import { attemptsAllowedFor, isLaneFailure, readLaneFailure, type LaneFailure } from "../../shared/ai/laneFailure";
 
@@ -838,7 +839,15 @@ export async function sweepOnce(
    * firm with no such seat reaches the spend-setting block below. See `seatThatCouldServe` in blocks.ts.
    */
   if (isLaneFailure(lane.failure) && lane.failure.kind === "LEVER") {
-    const seat = await seatToWaitFor(env, isSearchCallRefusal(`${lane.raw} ${detail}`), now);
+    /*
+     * IMPORTANT WORK WAITING FOR A SEAT IS ALWAYS A WAIT (owner, 26 Oct 2026; shared/ai/seatOrder.ts): it may never
+     * take a free lane, so a missing seat is a technical wait, never her spend question and never a STUCK email.
+     */
+    const seat =
+      (await seatToWaitFor(env, isSearchCallRefusal(`${lane.raw} ${detail}`), now)) ??
+      (isSeatWait(`${lane.raw} ${detail}`)
+        ? { seat: "claude_code", said: "important work waits for the Claude Code or Codex seat (never a free lane), and no seat has checked in for a day" }
+        : null);
     if (seat) {
       const until = new Date(now.getTime() + SEAT_WAIT_MINUTES * 60_000).toISOString();
       const line = `Waiting for the subscription seat: ${seat.said}, so this tries again on it by itself in about ${SEAT_WAIT_MINUTES} minutes.`;

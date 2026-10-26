@@ -454,4 +454,43 @@ describe("a quiet seat at Free only is a wait, not a spend question", () => {
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
     await clearSeats();
   });
+
+  it("IMPORTANT work waiting for a seat is ALWAYS a wait — even with no seat seen for a day: never BLOCKED on her, never a STUCK email (26 Oct 2026)", async () => {
+    await clearSeats();
+    await seatSeen(new Date(T0.getTime() - 25 * 60 * 60_000), ["web_search"]);
+    const SEAT_WAIT =
+      "seat_wait_important_work:this is important work (Claude Code seat, then Codex; never a free lane) and neither seat is free right now. " +
+      "Purpose: Wynn: TLC brand batch. It waits for a seat and tries again by itself; nothing is asked of anyone.";
+    const id = await card("Wynn: TLC brand batch W47", "aie_wynn");
+    const runner = refusedRunner(id, SEAT_WAIT, "prov_claude_code");
+    for (const [k, at] of [T0, new Date(T0.getTime() + 60_000), new Date(T0.getTime() + 120_000)].entries()) {
+      if (k > 0) await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
+      expect((await sweepOnce(env, at, { general: runner })).outcome).toBe("WAITING_ON_SEAT");
+    }
+    const c = await row(id);
+    expect(c.state).not.toBe("BLOCKED");
+    expect(c.block_who ?? null).toBeNull();
+    expect(c.block_lane ?? null).toBeNull();
+    expect(Number(c.work_attempts)).toBe(0);
+    expect(String(c.waiting_for)).toMatch(/never a free lane/);
+    const stuck = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE object_id = ?1 AND event_type LIKE '%block%'").bind(id).first<{ n: number }>();
+    expect(stuck!.n, "no block, so no STUCK email").toBe(0);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
+    await clearSeats();
+  });
+});
+
+describe("her seat order (shared/ai/seatOrder.ts, 26 Oct 2026)", () => {
+  it("important: Claude Code then Codex; routine: Codex only, Claude Code named as kept for important work", async () => {
+    const { orderSeats, isImportantWork, KEPT_FOR_IMPORTANT } = await import("../src/shared/ai/seatOrder");
+    const both = [{ seat: "codex", available: true, reason: "codex awake" }, { seat: "claude_code", available: true, reason: "claude awake" }];
+    expect(orderSeats(both, true).map((v) => [v.seat, v.available])).toEqual([["claude_code", true], ["codex", true]]);
+    const routine = orderSeats(both, false);
+    expect(routine.map((v) => [v.seat, v.available])).toEqual([["codex", true], ["claude_code", false]]);
+    expect(routine[1]!.reason).toBe(KEPT_FOR_IMPORTANT);
+    expect(isImportantWork({ publicModelApproved: false })).toBe(true);
+    expect(isImportantWork({ publicModelApproved: true, important: true })).toBe(true);
+    expect(isImportantWork({ publicModelApproved: true, confidential: true })).toBe(true);
+    expect(isImportantWork({ publicModelApproved: true })).toBe(false);
+  });
 });

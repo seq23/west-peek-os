@@ -464,9 +464,11 @@ export async function runDripPass(env: Env, now: Date, firmScope = "west-peek"):
     const batchOpen = await env.WP_OS_DB.prepare("SELECT 1 FROM work_card WHERE kind = 'TLC_BRAND_BATCH' AND firm_scope = ?1 AND state NOT IN ('DONE','CANCELLED') LIMIT 1").bind(firmScope).first();
     if ((deals?.n ?? 0) === 0 && !batchOpen) batch = (await openBrandBatchCard(env, now, firmScope)).detail;
   }
-  const { recomposeBrandNames, repairLeakedDrafts, sendDraftNotice } = await import("./tlcDraftNotice");
+  const { recomposeBrandNames, recomposeSecondEmails, repairLeakedDrafts, sendDraftNotice } = await import("./tlcDraftNotice");
   // Before the drip, so an approved draft waiting for its allowance goes with the brand's clean name.
   await recomposeBrandNames(env, firmScope);
+  // And a queued email 2 offers the three samples, never a call (owner, 26 Oct 2026).
+  await recomposeSecondEmails(env, firmScope);
   const drip = await runDrip(env, now, firmScope);
   const repaired = await repairLeakedDrafts(env, now, firmScope);
   const notice = await sendDraftNotice(env, now, firmScope);
@@ -880,14 +882,18 @@ export async function recordBrandReplyText(env: Env, input: { from: string; subj
   // (26 Oct 2026) The words decide: an auto-reply resumes the drip, a no is DECLINED, anything else is a reply Wynn
   // drafts her answer to (tlcBrandReply). Nothing is "a yes" by default and no pitch PDF goes before one.
   const now = input.now ?? new Date();
-  const { dealsForSender, takeBrandReply } = await import("./tlcBrandReply");
+  const { dealsForSender, sendReplyApprovals, takeBrandReply } = await import("./tlcBrandReply");
   const deals = await dealsForSender(env, input.from);
   if (deals.length === 0) return { matched: 0, stop: null };
   let stop: string | null = null;
+  const drafted = new Set<string>();
   for (const d of deals) {
     const out = await takeBrandReply(env, d, { messageId: input.messageId ?? "", subject: input.subject, text: input.text, receivedAt: now.toISOString() }, { now });
     stop = out === "NO" ? "DECLINED" : out === "AUTO_REPLY" ? "AUTO_REPLY" : "REPLIED";
+    if (out === "DRAFTED") drafted.add(d.firm_scope);
   }
+  // Her approval email goes AT ONCE (owner, 26 Oct 2026: "Why 4pm?"); a failure here is retried by the next drip pass.
+  for (const scope of drafted) await sendReplyApprovals(env, now, scope).catch(() => undefined);
   return { matched: deals.length, stop };
 }
 
@@ -929,14 +935,15 @@ export interface TlcRunResult {
   detail: string;
 }
 
-const defaultSearch: TlcSearch = async (env, actor, prompt) => {
+export const defaultSearch: TlcSearch = async (env, actor, prompt) => {
   const { run } = await runAi(env, {
     purpose: "The Learning Club: live research",
     actor,
     inputs: [prompt],
     // Public web research about public topics, brands and venues. No sponsor deal term goes in.
     sensitivity: "PUBLIC" as never,
-    budgetContext: { requiresSearch: true, expectedOutputTokens: 3500, preferredModel: SEARCH_MODEL, providerKey: "openrouter" },
+    // TLC work is brand-facing in her name: important (owner, 26 Oct 2026) — Claude seat, then Codex, never a free lane.
+    budgetContext: { requiresSearch: true, expectedOutputTokens: 3500, preferredModel: SEARCH_MODEL, providerKey: "openrouter", important: true },
     routing: { category: "INTELLIGENCE" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) return { ok: false, text: "", detail: run.failure_reason ?? `run ${run.status}` };

@@ -251,15 +251,29 @@ describe("MODERATE — the ladder as the owner drew it", () => {
     expect(v.models.findIndex((m) => m === "anthropic/claude-sonnet-5"), "Sonnet came after the free lanes, not before").toBeGreaterThan(0);
   }, 60_000);
 
-  it("does NOT spend her seat on public work she did not name: a plain public call stays free-first", async () => {
+  it("routine public work leads on CODEX (her $20 ChatGPT plan), never on Claude Code, and spends nothing (26 Oct 2026)", async () => {
     await awake("claude_code");
     await awake("codex");
+    const c = claimer(["claude_code", "codex"]);
     const v = vendors();
     const { run } = await runAi(env(), PLAIN_PUBLIC, { fetchImpl: v.fetchImpl });
+    await c.stop();
+    expect(run.status).toBe("COMPLETED");
+    expect(run.output_text).toContain("SEAT ANSWER (codex)");
+    expect(c.handled.map((r) => r.seat), "the Claude seat is kept for important work").toEqual(["codex"]);
+    expect(v.models).toEqual([]);
+  }, 60_000);
+
+  it("routine public work with Codex away goes to the FREE lanes, still never to Claude Code", async () => {
+    await awake("claude_code");
+    const c = claimer(["claude_code"]);
+    const v = vendors();
+    const { run } = await runAi(env(), PLAIN_PUBLIC, { fetchImpl: v.fetchImpl });
+    await c.stop();
     expect(run.status).toBe("COMPLETED");
     expect(run.output_text).toContain("FREE LANE ANSWER");
-    const parked = await t.db.prepare("SELECT COUNT(*) AS n FROM subscription_seat_run").first<{ n: number }>();
-    expect(parked?.n).toBe(0);
+    expect(c.handled).toEqual([]);
+    expect(v.models.every((m) => m.endsWith(":free") || m === "gemini-free")).toBe(true);
   }, 60_000);
 
   it("private work still leads on the seats and still never touches a free lane", async () => {
@@ -270,6 +284,13 @@ describe("MODERATE — the ladder as the owner drew it", () => {
     await c.stop();
     expect(run.output_text).toContain("SEAT ANSWER (claude_code)");
     expect(v.models.some((m) => m.endsWith(":free"))).toBe(false);
+  }, 60_000);
+
+  it("IMPORTANT public work (a TLC brand draft) with both seats gone never takes a free lane, even at MODERATE", async () => {
+    const v = vendors();
+    const { run } = await runAi(env(), call({ budgetContext: { judgement: true, important: true, expectedOutputTokens: 200 } }), { fetchImpl: v.fetchImpl });
+    expect(v.models.some((m) => m.endsWith(":free") || m === "gemini-free"), `asked: ${v.models.join(", ")}`).toBe(false);
+    expect(run.output_text ?? "").not.toContain("FREE LANE ANSWER");
   }, 60_000);
 
   it("private work with both seats gone goes to PAID Claude, never to a free lane", async () => {
@@ -412,14 +433,33 @@ describe("FREE ONLY — the $0 posture: her seats, then free lanes, and nothing 
     expect(v.models).toEqual([]);
   }, 60_000);
 
-  it("private work with both seats gone STOPS with a sentence naming the lever, and calls nothing", async () => {
+  it("private work with both seats gone WAITS for a seat (a technical wait, never her spend question), and calls nothing", async () => {
     const v = vendors();
     const { run } = await runAi(env(), PRIVATE, { fetchImpl: v.fetchImpl });
-    expect(run.status).not.toBe("COMPLETED");
-    expect(run.failure_reason ?? "").toContain("FREE_ONLY");
-    expect(run.failure_reason ?? "").toMatch(/Free only|FREE_ONLY/);
+    expect(run.status).toBe("PREFLIGHT_BLOCKED");
+    expect(run.failure_reason ?? "").toMatch(/^seat_wait_important_work:/);
+    expect(run.failure_reason ?? "").not.toMatch(/lever|MODERATE/);
     expect(v.models, "not a paid model, and not a free one that trains").toEqual([]);
   }, 60_000);
+
+  it("IMPORTANT public work (a TLC brand draft) leads on Claude Code, then Codex, and with both seats gone WAITS — never a free lane", async () => {
+    const IMPORTANT = call({ budgetContext: { judgement: true, important: true, expectedOutputTokens: 200 } });
+    await awake("claude_code");
+    await awake("codex");
+    const c = claimer(["claude_code", "codex"], { outOfUsage: ["claude_code"] });
+    const v = vendors();
+    const { run } = await runAi(env(), IMPORTANT, { fetchImpl: v.fetchImpl });
+    await c.stop();
+    expect(run.output_text).toContain("SEAT ANSWER (codex)");
+    expect(c.handled.map((r) => r.seat)).toEqual(["claude_code", "codex"]);
+    expect(v.models).toEqual([]);
+    await markSeatExhausted(env(), { seat: "codex", deviceId: "mac-test", retryAfterSeconds: 3600 });
+    const v2 = vendors();
+    const { run: waiting } = await runAi(env(), IMPORTANT, { fetchImpl: v2.fetchImpl });
+    expect(waiting.status).toBe("PREFLIGHT_BLOCKED");
+    expect(waiting.failure_reason ?? "").toMatch(/^seat_wait_important_work:/);
+    expect(v2.models, "no free lane, no paid lane").toEqual([]);
+  }, 90_000);
 
   it("a pinned class (University) runs on the best $0 lane instead of stopping, and says it is weaker than the pin", async () => {
     const v = vendors();

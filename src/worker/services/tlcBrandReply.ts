@@ -9,8 +9,9 @@ import { addressIn, authenticationVerdict } from "../../shared/intake/partnerAut
 import { newTextOf } from "../../shared/events/packetDecisionToken";
 import { isEmptyReply, parseDraftReply } from "../../shared/tlc/draftReply";
 import {
-  BRAND_REPLY_ASK, BRAND_REPLY_REF_RE, classifyBrandReply, fallbackReplyBody, stageAfterReply, theirNewText, tierLines,
-  type BrandReplyIntent, type ReplyDraftInput,
+  BRAND_MUST_STAFF, BRAND_REPLY_ASK, BRAND_REPLY_REF_RE, CALL_ASK, WE_HOST, MONEY_WORDS, NO_CALL_ASK, THREE_THINGS_OFFER, WHO_WE_ARE, classifyBrandReply, fallbackReplyBody, herNoteOf, noMoneyNow, readResearch, reportText,
+  stageAfterReply, standingRulesIn, theirNewText, tierLines, wantsResearch,
+  type BrandReplyIntent, type ReplyDraftInput, type WynnRule,
 } from "../../shared/tlc/brandReply";
 import { TLC_DRIP_DAYS, TLC_OWNER, TLC_SIGNATURE, brandDisplayName, monthWords, nextDripAt } from "../../shared/tlc/learningClub";
 import { TLC_BRAND_SALES_JOB } from "../../shared/policy/outsideEmail";
@@ -25,11 +26,18 @@ import type { TlcDealRow, TlcEventRow } from "./learningClub";
  * included. Now every brand message is read by `classifyBrandReply` and:
  *   - an auto-reply resumes the drip the day after they are back (no email to anybody);
  *   - a "no" makes the deal DECLINED;
- *   - a real reply gets Sequoia's answer drafted by Wynn, and ONE approval email a day goes to her approval address
- *     (tlc_setting `brand_reply_approver_email`, else her own) with their message and the draft word for word.
+ *   - a real reply gets Sequoia's answer drafted by Wynn, and the approval email goes to her AT ONCE (owner, 26 Oct
+ *     2026: "Why 4pm?" — replies are rare and time-sensitive; the once-a-week rule is for outbound drafts only), to
+ *     her approval address (tlc_setting `brand_reply_approver_email`, else her own) with their message and the
+ *     draft word for word.
  * Her "approved" sends it once (a state claim makes a second "approved" a no-op), from the mailbox the brand email
  * went from (her own Gmail, through the executor's brand-sales lane), threaded on their message, and moves the
  * stage (a call or a yes → CALL). "change: …" redrafts and asks again; "skip" sends nothing.
+ *
+ * WYNN LISTENS (owner, 26 Oct 2026, TLR-EL84CT). Her whole note is read (her signature off, never a character cut);
+ * every instruction in it is in the redraft prompt; a request to research makes Wynn research the brand on a search
+ * lane first and put a short report ABOVE the new draft; and the standing parts of a note ("don't discuss money this
+ * early") become Wynn's rules (`tlc_wynn_rule`), which every later draft reads and the code enforces where it can.
  *
  * Replies arrive two ways and are de-duplicated on their Message-ID: the intake door (Reply-To names it) and her
  * own inbox, polled each drip pass for messages from deal contacts (a brand she wrote to by hand replies to her
@@ -37,25 +45,58 @@ import type { TlcDealRow, TlcEventRow } from "./learningClub";
  */
 
 export const APPROVER_SETTING = "brand_reply_approver_email";
-/** An operator lever: send the waiting approvals on the next pass instead of at the day's hour. Cleared on send. */
-export const NOTICE_DUE_SETTING = "brand_reply_notice_due_at";
-/** The day's approval email goes on the first pass at or after this hour, Chicago time. */
-export const NOTICE_HOUR_CT = 16;
+/** How long a reply waits before Wynn tries its research again, and how many tries before the draft goes without it. */
+export const RESEARCH_RETRY_MINUTES = 30;
+export const RESEARCH_TRIES = 3;
 const GMAIL_READ_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
 const WYNN = "aie_wynn";
 const wynnActor = (firmScope: string): Actor => ({ type: "AI", aiEmployeeId: WYNN, roles: [], firmScopes: [firmScope] } as unknown as Actor);
 
 export interface BrandMessage { messageId: string; subject: string; text: string; receivedAt: string }
-export type ReplyDrafter = (env: Env, actor: Actor, input: ReplyDraftInput & { note: string | null; previous: string | null }) => Promise<{ ok: boolean; body: string; detail: string }>;
+export interface DraftExtras {
+  note: string | null;
+  previous: string | null;
+  /** Wynn's standing rules from her, every active row of `tlc_wynn_rule`. */
+  rules: WynnRule[];
+  /** True before a call has happened while her no-money rule stands: no price, tier or budget in the draft. */
+  noMoney: boolean;
+  /** What Wynn found when she asked for research, for the draft to use. */
+  research: string | null;
+}
+export type ReplyDrafter = (env: Env, actor: Actor, input: ReplyDraftInput & DraftExtras) => Promise<{ ok: boolean; body: string; detail: string }>;
+export type BrandResearcher = (env: Env, actor: Actor, prompt: string) => Promise<{ ok: boolean; text: string; detail: string }>;
 export type MailboxReader = (env: Env, query: string) => Promise<Array<BrandMessage & { from: string }>>;
-export interface BrandReplyDeps { now?: Date; drafter?: ReplyDrafter; mailbox?: MailboxReader | null }
+export interface BrandReplyDeps { now?: Date; drafter?: ReplyDrafter; mailbox?: MailboxReader | null; researcher?: BrandResearcher }
 
 interface ReplyRow {
   id: string; deal_id: string; brand_message_id: string; their_subject: string; their_text: string; received_at: string; intent: string;
   draft_subject: string; draft_body: string; state: string; notice_ref: string | null; firm_scope: string;
+  change_note?: string | null; report_text?: string | null; research_due?: string | null; research_tries?: number;
 }
 
 export const normalizeMid = (id: string | null | undefined): string => (id ?? "").trim().replace(/^<|>$/g, "");
+
+/** Wynn's standing rules from her, oldest first. Never throws: an unreadable table reads as no rules. */
+export async function wynnRules(env: Env, firmScope = "west-peek"): Promise<WynnRule[]> {
+  try {
+    return (await env.WP_OS_DB.prepare("SELECT code, rule FROM tlc_wynn_rule WHERE active = 1 AND firm_scope = ?1 ORDER BY added_at, id").bind(firmScope).all<WynnRule>()).results ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** The standing parts of her note, kept as rules for every later draft (each sentence once). */
+export async function learnRules(env: Env, note: string, source: string, firmScope = "west-peek"): Promise<number> {
+  const have = new Set((await wynnRules(env, firmScope)).map((r) => r.rule.trim().toLowerCase()));
+  let added = 0;
+  for (const rule of standingRulesIn(note)) {
+    if (have.has(rule.toLowerCase())) continue;
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_wynn_rule (id, code, rule, source, firm_scope) VALUES (?1, NULL, ?2, ?3, ?4)").bind(`wr_${crypto.randomUUID()}`, rule, `her note on ${source}`, firmScope).run();
+    have.add(rule.toLowerCase());
+    added += 1;
+  }
+  return added;
+}
 
 const chicago = (at: Date): { day: string; hour: number } => {
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23" }).formatToParts(at).map((p) => [p.type, p.value]));
@@ -70,28 +111,45 @@ async function setting(env: Env, key: string): Promise<string | null> {
 
 const PROMPT_RULES = [
   "You are Wynn, who runs sales for The Learning Club at West Peek Ventures. Draft Sequoia Taylor's answer to a brand that replied to her partnership email.",
-  "Write as Sequoia, first person, warm, plain and short (under 160 words). Answer exactly what they asked.",
-  "Use ONLY the facts given here: the club, its topic and month, the partnership levels and prices listed. Invent nothing: no numbers, dates, names or claims that are not below.",
-  "No postal address. No P.S. No signature (it is added after). Never mention anyone at West Peek other than Sequoia.",
+  "Write as Sequoia, first person, warm, plain and short (under 220 words). Answer exactly what they asked.",
+  "Use ONLY the facts given here: who we are, the club, its topic and month, and anything listed below. Invent nothing: no numbers, dates, names or claims that are not below.",
+  "No postal address. No P.S. No signature (it is added after). Never name anyone at West Peek other than Sequoia, except Scooter Taylor as our founding GP where the rules below say so.",
   "Do not attach or mention a PDF or deck unless they asked for one or said yes.",
-  "End with one clear next step (a short call, or two times that suit them).",
+  "End with one clear next step, as Wynn's standing rules below say.",
 ];
+
+/** Wynn's rules as the prompt states them; the WHO_WE_ARE row is the facts a first answer must explain. */
+export function rulesBlock(rules: readonly WynnRule[]): string[] {
+  if (rules.length === 0) return [];
+  return [
+    "WYNN'S STANDING RULES FROM SEQUOIA — follow every one, in every draft:",
+    ...rules.map((r) => (r.code === WHO_WE_ARE ? `- Every first reply or introduction to a brand explains who we are, in these facts: ${r.rule}` : `- ${r.rule}`)),
+  ];
+}
 
 const defaultDrafter: ReplyDrafter = async (env, actor, i) => {
   const prompt = [
     ...PROMPT_RULES,
     "",
+    ...rulesBlock(i.rules),
+    "",
     `Brand: ${brandDisplayName(i.brand)}. Their first name: ${i.contactName?.split(" ")[0] ?? "(unknown: open with \"Hi,\")"}.`,
     `The club: The Learning Club, ${i.topic}, in ${monthWords(i.month)}, New York.`,
     `Why this brand fits (one sentence may be used): ${i.why ?? "a natural fit for the room"}`,
-    "Partnership levels (no category exclusivity; never promise any):",
-    ...tierLines().map((l) => `- ${l}`),
+    ...(i.noMoney
+      ? ["No money yet: do NOT mention any price, fee, budget, amount or partnership level; that waits for the call."]
+      : ["Partnership levels (no category exclusivity; never promise any):", ...tierLines().map((l) => `- ${l}`)]),
+    ...(i.research ? ["", "What Wynn found researching them (use it; invent nothing beyond it):", i.research] : []),
     i.intent === "YES" && i.pitchUrl ? `They said yes: say the one-page pitch PDF is attached and also at ${i.pitchUrl}.` : "",
-    i.callLink ? `Her booking link for a call: ${i.callLink}` : "No booking link: ask for two times that suit them.",
+    ...(i.rules.some((r) => r.code === NO_CALL_ASK)
+      ? i.intent === "CALL"
+        ? [`They proposed a call: say yes to it.${i.callLink ? ` Her booking link: ${i.callLink}` : " Ask which times suit them."}`]
+        : [`Never suggest or ask for a call. Next step: ${THREE_THINGS_OFFER}`]
+      : [i.callLink ? `Her booking link for a call: ${i.callLink}` : "No booking link: ask for two times that suit them."]),
     "",
     "Their message, word for word:",
     i.theirText,
-    ...(i.note && i.previous ? ["", "Her previous draft:", i.previous, "", `Her note — redraft following it exactly: ${i.note}`] : []),
+    ...(i.note && i.previous ? ["", "Her previous draft:", i.previous, "", "Her note, word for word. Follow EVERY instruction in it, each one, in this redraft:", i.note] : []),
     "",
     'Return ONLY JSON: {"body":""}',
   ].filter((l) => l !== "").join("\n");
@@ -100,7 +158,8 @@ const defaultDrafter: ReplyDrafter = async (env, actor, i) => {
     actor,
     inputs: [prompt],
     sensitivity: "PUBLIC" as never,
-    budgetContext: { requiresSearch: false, expectedOutputTokens: 700 },
+    // Brand-facing, in her name: important work (owner, 26 Oct 2026) — the Claude seat, then Codex, never a free lane.
+    budgetContext: { requiresSearch: false, expectedOutputTokens: 900, judgement: true, important: true },
     routing: { category: "INTELLIGENCE" },
   } as never);
   if (run.status !== "COMPLETED" || !run.output_text) return { ok: false, body: "", detail: run.failure_reason ?? `run ${run.status}` };
@@ -113,25 +172,100 @@ const defaultDrafter: ReplyDrafter = async (env, actor, i) => {
 };
 
 /** A draft that breaks her voice rules is not used; the plain template stands in. */
-export function draftProblems(body: string, intent: BrandReplyIntent): string[] {
+export function draftProblems(body: string, intent: BrandReplyIntent, opts: { noMoney?: boolean; noCallAsk?: boolean; weHost?: boolean } = {}): string[] {
   const out: string[] = [];
   if (/\bP\.?\s?S\.?\b/.test(body)) out.push("a P.S.");
   if (/\b\d{2,5}\s+\w+(?:\s\w+)?\s(?:street|st\.?|avenue|ave\.?|road|rd\.?|blvd|suite)\b/i.test(body)) out.push("a postal address");
-  if (/\bscooter\b/i.test(body)) out.push("a name other than hers");
+  // Scooter is named only as who he is to the brand (her WHO_WE_ARE rule): "Scooter Taylor", our founding GP.
+  if (/\bscooter\b(?!\s+taylor)/i.test(body)) out.push("a name other than hers");
+  if (opts.noMoney && MONEY_WORDS.test(body)) out.push("money before a call (her rule)");
+  if (opts.weHost && BRAND_MUST_STAFF.test(body)) out.push("puts the brand's people on a segment (her rule: led by the brand or by our host)");
+  if (opts.noCallAsk && intent !== "CALL" && CALL_ASK.test(body)) out.push("asks for a call (her rule: the brand may propose one, Wynn never does)");
   if (intent !== "YES" && /\b(attached|attachment|pdf)\b/i.test(body)) out.push("an attachment before a yes");
   if (/\bexclusiv/i.test(body)) out.push("exclusivity");
   return out;
 }
 
-async function draftFor(env: Env, deal: TlcDealRow, ev: TlcEventRow, intent: BrandReplyIntent, theirText: string, deps: BrandReplyDeps, redo: { note: string; previous: string } | null = null): Promise<string> {
+async function draftFor(env: Env, deal: TlcDealRow, ev: TlcEventRow, intent: BrandReplyIntent, theirText: string, deps: BrandReplyDeps, redo: { note: string; previous: string; research?: string | null } | null = null): Promise<string> {
   const { CALL_LINK_SETTING, pitchPublicUrl } = await import("./learningClub");
   const input: ReplyDraftInput = {
     intent, brand: deal.brand, contactName: deal.contact_name, topic: ev.topic ?? "", month: ev.month, why: deal.why_fit, theirText,
     pitchUrl: ev.pitch_token ? pitchPublicUrl(ev.pitch_token) : null, callLink: await setting(env, CALL_LINK_SETTING),
   };
-  const out = await (deps.drafter ?? defaultDrafter)(env, wynnActor(deal.firm_scope), { ...input, note: redo?.note ?? null, previous: redo?.previous ?? null }).catch((err) => ({ ok: false, body: "", detail: String(err) }));
-  const words = out.ok && draftProblems(out.body, intent).length === 0 ? out.body : fallbackReplyBody(input, monthWords);
+  const rules = await wynnRules(env, deal.firm_scope);
+  const noMoney = noMoneyNow(rules, deal.stage);
+  const noCallAsk = rules.some((r) => r.code === NO_CALL_ASK);
+  const weHost = rules.some((r) => r.code === WE_HOST);
+  const out = await (deps.drafter ?? defaultDrafter)(env, wynnActor(deal.firm_scope), { ...input, note: redo?.note ?? null, previous: redo?.previous ?? null, rules, noMoney, research: redo?.research ?? null })
+    .catch((err) => ({ ok: false, body: "", detail: String(err) }));
+  const words = out.ok && draftProblems(out.body, intent, { noMoney, noCallAsk, weHost }).length === 0
+    ? out.body
+    : fallbackReplyBody(input, monthWords, { noMoney, noCallAsk, whoWeAre: rules.find((r) => r.code === WHO_WE_ARE)?.rule ?? null });
   return [words.trim(), "", ...TLC_SIGNATURE].join("\n");
+}
+
+// ── Research she asked for ─────────────────────────────────────────────────────────────────────
+
+/** Wynn researches the brand on a live-search lane (the seats first; never a lane that cannot search). */
+export async function researchBrand(
+  env: Env, deal: TlcDealRow, ev: TlcEventRow, theirText: string, note: string, deps: BrandReplyDeps,
+): Promise<{ ok: true; report: string } | { ok: false; detail: string }> {
+  const rules = await wynnRules(env, deal.firm_scope);
+  const who = rules.find((r) => r.code === WHO_WE_ARE)?.rule ?? "West Peek Ventures runs West Peek Rooms, an in-person event series in New York; The Learning Club is its hands-on part.";
+  const prompt = [
+    `You are Wynn, who runs sales for The Learning Club at West Peek Ventures. Sequoia asked you to research ${brandDisplayName(deal.brand)} before she answers them.`,
+    "Search the live web now. Read the brand's own recent pages and news from the last 12 months.",
+    `Who we are: ${who}`,
+    `The club: The Learning Club, ${ev.topic ?? ""}, in ${monthWords(ev.month)} (tentative), New York: a small, hands-on room.`,
+    "",
+    "Their message, word for word:",
+    theirText,
+    "",
+    "Her note, word for word:",
+    note,
+    "",
+    "Return ONLY JSON:",
+    '{"care":["3 to 5 short points: what they care about now (launches, campaigns, the people they want to reach, priorities)"],',
+    ' "value":["3 to 5 short points: the value we can bring them, each tied to one of those points"],',
+    ' "sources":[{"title":"","url":"a page you actually read"}]}',
+    "No prices, fees or partnership levels. Invent nothing; every point must come from a source you list.",
+  ].join("\n");
+  const { defaultSearch } = await import("./learningClub");
+  const found = await (deps.researcher ?? defaultSearch)(env, wynnActor(deal.firm_scope), prompt).catch((err) => ({ ok: false, text: "", detail: String(err) }));
+  if (!found.ok) return { ok: false, detail: found.detail };
+  const { jsonIn } = await import("./learningClub");
+  const r = readResearch(jsonIn(found.text));
+  return r ? { ok: true, report: reportText(brandDisplayName(deal.brand), r) } : { ok: false, detail: "the research came back without points in each part and a source" };
+}
+
+/**
+ * ONE REDRAFT FOR HER NOTE. Research first when she asked for it; a search that could not run leaves the reply
+ * waiting (research_due) and the next pass tries again; after RESEARCH_TRIES the draft goes to her with the report
+ * saying plainly that the research could not run, never silently without it.
+ */
+async function redraftFor(env: Env, r: ReplyRow, note: string, now: Date, deps: BrandReplyDeps): Promise<"DRAFTED" | "RESEARCH_WAITING"> {
+  const deal = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(r.deal_id).first<TlcDealRow>())!;
+  const ev = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>())!;
+  const previous = wordsOf(r.draft_body);
+  let report: string | null = null;
+  if (wantsResearch(note)) {
+    const found = await researchBrand(env, deal, ev, r.their_text, note, deps);
+    if (found.ok) report = found.report;
+    else {
+      const tries = (r.research_tries ?? 0) + 1;
+      if (tries < RESEARCH_TRIES) {
+        const due = new Date(now.getTime() + RESEARCH_RETRY_MINUTES * 60_000).toISOString();
+        await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'DRAFTED', notice_ref = NULL, change_note = ?2, research_due = ?3, research_tries = ?4, held_reason = ?5 WHERE id = ?1")
+          .bind(r.id, note, due, tries, `research try ${tries} of ${RESEARCH_TRIES} did not run (${found.detail.slice(0, 160)}); tries again at ${due}`).run();
+        return "RESEARCH_WAITING";
+      }
+      report = `WYNN'S REPORT ON ${brandDisplayName(deal.brand).toUpperCase()}: the research you asked for could not run after ${RESEARCH_TRIES} tries (${found.detail.slice(0, 200)}). This draft uses only what we already knew.`;
+    }
+  }
+  const draft = await draftFor(env, deal, ev, r.intent as BrandReplyIntent, r.their_text, deps, { note, previous, research: report });
+  await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'DRAFTED', notice_ref = NULL, draft_body = ?2, change_note = ?3, report_text = ?4, research_due = NULL, held_reason = NULL WHERE id = ?1")
+    .bind(r.id, draft, note, report).run();
+  return "DRAFTED";
 }
 
 const wordsOf = (body: string): string => {
@@ -241,6 +375,10 @@ export async function processBrandReplies(env: Env, now: Date, firmScope = "west
       }
     }
   }
+  // Research she asked for that could not run yet: tried again once due.
+  const due = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_brand_reply WHERE firm_scope = ?1 AND state = 'DRAFTED' AND research_due IS NOT NULL AND research_due <= ?2")
+    .bind(firmScope, now.toISOString()).all<ReplyRow>()).results ?? [];
+  for (const r of due) await redraftFor(env, r, r.change_note ?? "", now, d);
   const notice = await sendReplyApprovals(env, now, firmScope);
   return `brand replies: ${counts.DRAFTED} drafted, ${counts.AUTO_REPLY} auto-reply (drip resumed), ${counts.NO} declined; ${polled}; ${notice}`;
 }
@@ -269,18 +407,20 @@ export async function approverAddress(env: Env): Promise<string> {
   return ((await setting(env, APPROVER_SETTING)) ?? TLC_OWNER.email).trim().toLowerCase();
 }
 
-/** Sends the day's approval email when due. `force` sends what is waiting now (her change request, the operator lever). */
-export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-peek", force = false): Promise<string> {
+/**
+ * Sends her the approval email for every drafted reply, AT ONCE (owner, 26 Oct 2026: "Why 4pm?"). A reply is rare
+ * and time-sensitive, so it never waits for an hour of the day; the once-a-week batching is for outbound drafts only.
+ * Send-once: a row moves DRAFTED → NOTIFIED with the email, so the next pass finds nothing to send again. A reply
+ * still waiting for the research she asked for (research_due) is not sent until the research ran.
+ */
+export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-peek"): Promise<string> {
   const waiting = (await env.WP_OS_DB.prepare(
     `SELECT r.*, d.brand, d.contact_name, d.contact_email, e.month, e.topic FROM tlc_brand_reply r JOIN tlc_deal d ON d.id = r.deal_id JOIN tlc_event e ON e.id = d.event_id
-      WHERE r.firm_scope = ?1 AND r.state = 'DRAFTED' ORDER BY r.received_at`,
+      WHERE r.firm_scope = ?1 AND r.state = 'DRAFTED' AND r.research_due IS NULL ORDER BY r.received_at`,
   ).bind(firmScope).all<ReplyRow & { brand: string; contact_name: string | null; contact_email: string; month: string; topic: string | null }>()).results ?? [];
-  if (waiting.length === 0) return "no brand reply waiting for her";
+  const researching = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_brand_reply WHERE firm_scope = ?1 AND state = 'DRAFTED' AND research_due IS NOT NULL").bind(firmScope).first<{ n: number }>())?.n ?? 0;
+  if (waiting.length === 0) return researching ? `${researching} brand repl${researching === 1 ? "y" : "ies"} waiting for Wynn's research` : "no brand reply waiting for her";
   const ct = chicago(now);
-  const dueAt = await setting(env, NOTICE_DUE_SETTING);
-  const sentToday = await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_brand_reply_notice WHERE firm_scope = ?1 AND day = ?2 AND forced = 0").bind(firmScope, ct.day).first();
-  const due = force || (dueAt !== null && Date.parse(dueAt) <= now.getTime()) || (ct.hour >= NOTICE_HOUR_CT && !sentToday);
-  if (!due) return `${waiting.length} brand repl${waiting.length === 1 ? "y" : "ies"} waiting for the ${NOTICE_HOUR_CT}:00 CT email`;
   const ref = mintRef();
   const to = TLC_OWNER.email;
   const blocks = waiting.map((r, i) => [
@@ -292,6 +432,8 @@ export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-
     "",
     r.their_text,
     "",
+    ...(r.change_note ? ["YOUR NOTE, WORD FOR WORD", r.change_note, ""] : []),
+    ...(r.report_text ? [r.report_text, ""] : []),
     "WYNN'S DRAFT OF YOUR ANSWER, WORD FOR WORD",
     `Subject: ${r.draft_subject}`,
     "",
@@ -314,9 +456,8 @@ export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-
   }
   const messageId: string | null = null;
   await env.WP_OS_DB.prepare("INSERT INTO tlc_brand_reply_notice (ref, reply_ids_json, day, firm_scope, sent_at, sent_to, forced, gmail_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")
-    .bind(ref, JSON.stringify(waiting.map((r) => r.id)), ct.day, firmScope, now.toISOString(), to, force || (dueAt !== null && ct.hour < NOTICE_HOUR_CT) ? 1 : 0, messageId).run();
+    .bind(ref, JSON.stringify(waiting.map((r) => r.id)), ct.day, firmScope, now.toISOString(), to, 0, messageId).run();
   for (const r of waiting) await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'NOTIFIED', notice_ref = ?2 WHERE id = ?1 AND state = 'DRAFTED'").bind(r.id, ref).run();
-  if (dueAt !== null) await env.WP_OS_DB.prepare("DELETE FROM tlc_setting WHERE key = ?1").bind(NOTICE_DUE_SETTING).run();
   await appendEvent(env, { eventType: "tlc.brand_reply_notice", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_brand_reply_notice", objectId: ref, firmScope, payload: { replies: waiting.length } });
   return `approval email ${ref} with ${waiting.length} brand repl${many ? "ies" : "y"} sent`;
 }
@@ -346,11 +487,12 @@ export async function applyBrandReplyApproval(
   const now = deps.now ?? new Date();
   const ids = JSON.parse(notice.reply_ids_json) as string[];
   // Her words alone: the quoted email and any "Ref TLR-…" line are not part of her instruction.
-  const said = newTextOf(body).split(/\r?\n/).filter((l) => !/^\s*Ref\s+TLR-[A-Z0-9]{6}\s*$/.test(l)).join("\n").trim();
+  // Her WHOLE note: her signature off, never a character cut (herNoteOf; NOTE_MAX is stated if ever reached).
+  const said = herNoteOf(newTextOf(body).split(/\r?\n/).filter((l) => !/^\s*Ref\s+TLR-[A-Z0-9]{6}\s*$/.test(l)).join("\n"), TLC_OWNER.name);
   const parsed = parseDraftReply(said);
   // One reply in the email: free text that is not an approve/skip is her change to it.
   if (isEmptyReply(parsed)) {
-    if (ids.length === 1 && said && !/^(no|cancel)\b/i.test(said)) parsed.change.push({ n: 1, note: said.slice(0, 600) });
+    if (ids.length === 1 && said && !/^(no|cancel)\b/i.test(said)) parsed.change.push({ n: 1, note: said });
     else return { handled: false, ref, detail: `a reply to ${ref} carried no approve / skip / change instruction` };
   }
   const owner = await actorForFirmUser(env, TLC_OWNER.firmUserId);
@@ -384,16 +526,16 @@ export async function applyBrandReplyApproval(
     lines.push(`${n} · ${brandDisplayName(r.brand)}: skipped, nothing sent`);
   }
   let redrafted = 0;
+  let learned = 0;
   for (const c of parsed.change) {
     const r = await rowOf(c.n);
     if (!r || r.state !== "NOTIFIED") continue;
-    const deal = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(r.deal_id).first<TlcDealRow>())!;
-    const ev = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>())!;
-    const draft = await draftFor(env, deal, ev, r.intent as BrandReplyIntent, r.their_text, deps, { note: c.note, previous: wordsOf(r.draft_body) });
-    await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'DRAFTED', notice_ref = NULL, draft_body = ?2, change_note = ?3 WHERE id = ?1 AND state = 'NOTIFIED'").bind(r.id, draft, c.note).run();
+    // The standing parts of her note are Wynn's rules from now on, for every later draft — this one included.
+    learned += await learnRules(env, c.note, ref, firmScope);
+    await redraftFor(env, { ...r, research_tries: 0 }, c.note, now, deps);
     redrafted += 1;
   }
-  const again = redrafted ? await sendReplyApprovals(env, now, firmScope, true) : null;
+  const again = redrafted ? await sendReplyApprovals(env, now, firmScope) : null;
   if (lines.length) {
     await emailHer(env, firmScope, `${ref}:done`, {
       what: `brand replies, done · ${ref}`,
@@ -401,7 +543,7 @@ export async function applyBrandReplyApproval(
       sections: [{ label: "Done", bullets: lines.slice(0, 6) }, { label: "Next", bullets: [again ? `Redrafted for your note: ${again}` : "Wynn watches for their answer"] }],
     }).catch(() => false);
   }
-  await appendEvent(env, { eventType: "tlc.brand_reply_decided", actorType: "firm_user", actorId: TLC_OWNER.firmUserId, objectType: "tlc_brand_reply_notice", objectId: ref, firmScope, payload: { lines, redrafted } });
+  await appendEvent(env, { eventType: "tlc.brand_reply_decided", actorType: "firm_user", actorId: TLC_OWNER.firmUserId, objectType: "tlc_brand_reply_notice", objectId: ref, firmScope, payload: { lines, redrafted, learned } });
   return { handled: true, ref, detail: [...lines, ...(redrafted ? [`${redrafted} redrafted`] : [])].join("; ") || "nothing to do" };
 }
 

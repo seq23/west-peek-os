@@ -297,11 +297,14 @@ describe("at FREE_ONLY, protected work that needs a paid model STOPS and says so
     );
 
     expect(run.status).toBe("PREFLIGHT_BLOCKED");
-    expect(run.failure_reason).toContain("free_only_cannot_serve_protected_work");
+    // Private (INTERNAL) content is important work (owner, 26 Oct 2026; shared/ai/seatOrder.ts): with no seat free it
+    // WAITS for one — a technical wait the sweep retries by itself — rather than ask her to move the lever.
+    expect(run.failure_reason).toMatch(/^seat_wait_important_work:/);
     // It NAMES THE WORK...
     expect(run.failure_reason).toContain("the morning brief");
-    // ...and NAMES THE LEVER, which is what makes the stop actionable rather than mysterious.
-    expect(run.failure_reason).toContain("FREE_ONLY");
+    // ...and says it waits for a seat and never takes a free lane.
+    expect(run.failure_reason).toMatch(/never a free lane/);
+    expect(run.failure_reason).not.toContain("Move the lever");
     // And it did not quietly succeed on something weaker.
     expect(run.model).toBeNull();
   });

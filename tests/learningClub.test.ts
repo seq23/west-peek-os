@@ -191,9 +191,13 @@ describe("the rules, pure", () => {
     expect(first!.text.indexOf("I am writing because")).toBeLessThan(first!.text.indexOf("Our community"));
     expect(first!.text).toMatch(/Would you be open to exploring a partnership\?/);
     expect((first!.text.match(/\?/g) ?? []).length).toBe(1);
-    // Email 2 is a short picture of the room.
+    // Email 2 is a short picture of the room, and its next step is the offer of three samples (owner, 26 Oct 2026):
+    // never a call, never a price.
     expect(second!.text).toMatch(/A quick picture of the room/);
     expect(second!.text).toMatch(/paid seat/);
+    expect(second!.text).toContain("a sample run of show for the evening, a sketch of what a series of six could look like, and a breakdown of the kind of people in the room");
+    expect(second!.text).not.toMatch(/\bcall\b|\$|\bprice|\btier/i);
+    expect(second!.text).not.toContain("Would you be open to exploring a partnership?");
   });
 
   it("reads the partners' reply as yes, no or counter", () => {
