@@ -16,6 +16,8 @@ const sends: Array<{ to: string; subject: string; text: string; headers: Record<
 /** The firm's service account, as the Worker holds it: a brand email is sent from her own Gmail through it. */
 const SERVICE_ACCOUNT = JSON.stringify({ client_email: "sa@firm.iam.example", private_key: generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs8", format: "pem" }) });
 let tokenSubject = "";
+/** Every address NeverBounce was asked about (26 Oct 2026: checked before any first email). */
+const checked: string[] = [];
 
 const SEQUOIA = "sequoia@westpeek.ventures";
 const SCOOTER = "scooter@westpeek.ventures";
@@ -67,8 +69,12 @@ const record = (month: string, added: string[], dropped: string[] = []) =>
 
 beforeAll(async () => {
   t = await createTestDb();
-  env = { ...makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>), RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures", WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON: SERVICE_ACCOUNT } as Env;
+  env = { ...makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>), RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures", WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON: SERVICE_ACCOUNT, WP_OS_NEVERBOUNCE_API_KEY: "nb_test" } as Env;
   vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).startsWith("https://api.neverbounce.com/v4.2/single/check?")) {
+      checked.push(new URL(String(url)).searchParams.get("email")!);
+      return new Response(JSON.stringify({ status: "success", result: "valid" }), { status: 200 });
+    }
     if (String(url).includes("api.resend.com")) {
       const b = JSON.parse(String(init?.body)) as { to: string | string[]; subject: string; text: string; headers?: Record<string, string> };
       sends.push({ to: Array.isArray(b.to) ? b.to.join(",") : b.to, subject: b.subject, text: b.text, headers: b.headers ?? {}, via: "resend" });
@@ -121,6 +127,8 @@ describe("one TLC email a week, every club at once, approved by reply", () => {
     cardId = opened.cardId!;
     const drip = await runDrip(env, MORNING);
     expect(drip.awaitingApproval).toBe(3);
+    // Each address was checked with NeverBounce before its first email was drafted, once each.
+    expect([...checked].sort()).toEqual(["pat@leafco.example", "pat@rootco.example", "pat@scentco.example"]);
     expect(await sendDraftNotice(env, MORNING)).toBe("waiting for the week's batch to finish");
     // Not even after her morning, and not after a day: the batch decides.
     expect(await sendDraftNotice(env, new Date("2026-11-10T20:00:00.000Z"))).toBe("waiting for the week's batch to finish");

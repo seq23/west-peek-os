@@ -88,7 +88,7 @@ function listOf(all: readonly PendingDraft[]): { items: NoticeItem[]; sections: 
 }
 
 /** Clubs this week's batch came back short for, with why — said in the weekly email, never a separate one. */
-async function shortClubs(env: Env, cardId: string, firmScope: string): Promise<string[]> {
+async function shortClubs(env: Env, cardId: string, firmScope: string, now: Date): Promise<string[]> {
   const rows = (await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'tlc.batch_club_done' ORDER BY created_at").bind(cardId).all<{ payload_json: string }>()).results ?? [];
   const byMonth = new Map<string, { n: number; why: string[] }>();
   for (const r of rows) {
@@ -98,8 +98,12 @@ async function shortClubs(env: Env, cardId: string, firmScope: string): Promise<
     m.why.push(...(p.dropped ?? []).slice(0, 2), ...(p.wayIn ?? []).map((w) => w.split(". Pages checked")[0]!).slice(0, 2));
     byMonth.set(p.month, m);
   }
-  const events = (await env.WP_OS_DB.prepare("SELECT month FROM tlc_event WHERE firm_scope = ?1 AND status IN ('TOPIC_READY','GO','ESCALATED') ORDER BY month").bind(firmScope).all<{ month: string }>()).results ?? [];
-  return events.filter((e) => (byMonth.get(e.month)?.n ?? 0) === 0).map((e) => {
+  const events = (await env.WP_OS_DB.prepare("SELECT id, month FROM tlc_event WHERE firm_scope = ?1 AND status IN ('TOPIC_READY','GO','ESCALATED') ORDER BY month").bind(firmScope).all<{ id: string; month: string }>()).results ?? [];
+  // A club that started new brands this week from Parker's list is not short, whatever Wynn's own search found.
+  const { startedThisWeek } = await import("./tlcVolume");
+  const fromList = new Set<string>();
+  for (const e of events) if ((await startedThisWeek(env, e.id, now)) > 0) fromList.add(e.month);
+  return events.filter((e) => (byMonth.get(e.month)?.n ?? 0) === 0 && !fromList.has(e.month)).map((e) => {
     const why = byMonth.get(e.month)?.why ?? [];
     return `${monthWords(e.month)}: no new brand this week${why.length ? ` — ${why.slice(0, 2).join("; ")}` : byMonth.has(e.month) ? "" : " — its searches did not finish"}`.slice(0, 300);
   });
@@ -107,13 +111,15 @@ async function shortClubs(env: Env, cardId: string, firmScope: string): Promise<
 
 /** This week's email, once the week's batch card has finished. Returns what it did, in words, for the job summary. */
 export async function sendDraftNotice(env: Env, now: Date, firmScope = "west-peek"): Promise<string> {
-  void now;
   const card = await env.WP_OS_DB.prepare("SELECT id, state FROM work_card WHERE kind = 'TLC_BRAND_BATCH' AND firm_scope = ?1 AND state != 'CANCELLED' ORDER BY created_at DESC LIMIT 1").bind(firmScope).first<{ id: string; state: string }>();
   if (!card) return "no brand batch yet";
   if (!["DONE", "BLOCKED"].includes(card.state)) return "waiting for the week's batch to finish";
   if (await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_draft_notice WHERE batch_card_id = ?1").bind(card.id).first()) return "this week's email already went";
   const all = await pendingDrafts(env, firmScope);
-  const short = await shortClubs(env, card.id, firmScope);
+  const short = await shortClubs(env, card.id, firmScope, now);
+  // WHERE EACH CLUB STANDS (owner, 26 Oct 2026): agreed cash against the $25,000 goal, and pitched / replied / yes.
+  const { clubProgress } = await import("./tlcVolume");
+  const progress = await clubProgress(env, firmScope, now);
   const ref = mintRef();
   const { items, sections, copy } = listOf(all);
   const { emailOwner } = await import("./learningClub");
@@ -126,6 +132,7 @@ export async function sendDraftNotice(env: Env, now: Date, firmScope = "west-pee
         : "No brand email is waiting for you this week; why is below.",
       ...(all.length ? { tldrBullets: ['Reply "approve all"', 'Or "approve 1, 3" · "skip 2" · "change 2: what to change"'] } : {}),
       sections: [
+        ...(progress.length ? [{ label: "Where each club stands", bullets: progress }] : []),
         ...sections,
         ...(short.length ? [{ label: "Short this week", bullets: short.slice(0, 6) }] : []),
         { label: "Also on Approvals", bullets: ["Each draft is on the Approvals screen too, if you would rather decide there."] },

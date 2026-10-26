@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
+import { addressesPassed } from "./helpers/addressCheck";
 import type { Env } from "../src/worker/env";
 import {
   TLC_DRIP_DAYS,
@@ -501,6 +502,8 @@ describe("the Learning Club in the database", () => {
     await env.WP_OS_DB.prepare("INSERT INTO tlc_setting (key, value) VALUES ('pitch_approved_hash', ?1), ('playbook_approved_hash', ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(h.pitch, h.playbook).run();
     await env.WP_OS_DB.prepare("UPDATE tlc_setting SET value = 'on' WHERE key = 'brand_send'").run();
     const on = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>);
+    // Each queued address passed NeverBounce, as the first email requires (26 Oct 2026).
+    await addressesPassed(env);
     const out = await runDrip(on, new Date("2026-11-09T15:05:00.000Z"));
     expect(out.awaitingApproval).toBe(1);
     expect(out.sent).toBe(0);

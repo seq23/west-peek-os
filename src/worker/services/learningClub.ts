@@ -24,6 +24,7 @@ import { TLC_BRAND_SALES_JOB } from "../../shared/policy/outsideEmail";
 import { outsideEmailAllowed } from "./outsideEmail";
 import { addressReadOffPage, approvedDayZeroFor, handleMustPitch, liveMustPitch, ownerContactedBrands, mustPitchToSearch, queueDeal, type MustPitchFinding } from "./tlcMustPitch";
 import { brandKey } from "../../shared/tlc/mustPitch";
+import { TLC_BENCH_LOW, TLC_NEW_BRANDS_PER_EVENT_WEEK } from "../../shared/tlc/volume";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
 import {
   BOOKING_PACK_SHAPE,
@@ -456,7 +457,7 @@ export async function openEvents(env: Env, now: Date, firmScope: string): Promis
  *       (the first batch never waits for Monday; the Monday batch still adds new brands weekly);
  *   2 · the drip runs: approved emails go, due ones are drafted for her approval, and she is emailed the list.
  */
-export async function runDripPass(env: Env, now: Date, firmScope = "west-peek"): Promise<{ batch: string | null; drip: DripResult; notice: string }> {
+export async function runDripPass(env: Env, now: Date, firmScope = "west-peek"): Promise<{ batch: string | null; drip: DripResult; notice: string; prospects: import("./tlcVolume").PromoteResult }> {
   const open = await openEvents(env, now, firmScope);
   let batch: string | null = null;
   if (open.length > 0) {
@@ -474,10 +475,14 @@ export async function runDripPass(env: Env, now: Date, firmScope = "west-peek"):
   // Samples planned ahead of time are rendered, so the PDF is ready the moment the brand says yes (sends nothing).
   const { renderPlannedSamples } = await import("./tlcSamples");
   await renderPlannedSamples(env, firmScope).catch(() => []);
+  // WYNN'S TEN A WEEK (owner, 26 Oct 2026): up to 10 new brands per open club from Parker's list, nearest club
+  // first, none for a club that reached its goal. They join the drip here and are drafted on this same pass.
+  const { promoteProspects } = await import("./tlcVolume");
+  const prospects = await promoteProspects(env, now, firmScope);
   const drip = await runDrip(env, now, firmScope);
   const repaired = await repairLeakedDrafts(env, now, firmScope);
   const notice = await sendDraftNotice(env, now, firmScope);
-  return { batch, drip, notice: repaired.startsWith("no draft") ? notice : `${notice}; ${repaired}` };
+  return { batch, drip, prospects, notice: repaired.startsWith("no draft") ? notice : `${notice}; ${repaired}` };
 }
 
 // ── The daily pass ──────────────────────────────────────────────────────────────────────────────
@@ -616,6 +621,12 @@ export interface DripResult {
   heldForCategory?: string[];
   /** What Wynn did with brand replies this pass (tlcBrandReply), in words. */
   replies?: string;
+  /** Clubs whose agreed sponsor cash reached the goal: no first pitch and no follow-up went for them (26 Oct 2026). */
+  goalStopped?: string[];
+  /** Brands whose address failed NeverBounce (or bounced before): never written to. */
+  addressRefused?: string[];
+  /** First emails waiting because NeverBounce could not be asked yet; the next pass asks again. */
+  addressWaiting?: number;
 }
 const emptyDrip = (): DripResult => ({ due: 0, held: 0, awaitingApproval: 0, sent: 0, gate: { open: false, reasons: [] }, newDrafts: [], sentBrands: [], waitingForAllowance: 0 });
 
@@ -716,7 +727,9 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
     const approved = (await env.WP_OS_DB.prepare(
       `SELECT m.id, m.deal_id, m.step, m.effect_request_id, m.approval_card_id FROM tlc_drip_message m
          JOIN approval_card a ON a.id = m.approval_card_id
-        WHERE m.state = 'AWAITING_APPROVAL' AND a.state = 'approved'`,
+         LEFT JOIN tlc_deal d ON d.id = m.deal_id LEFT JOIN tlc_event e ON e.id = d.event_id
+        WHERE m.state = 'AWAITING_APPROVAL' AND a.state = 'approved'
+        ORDER BY e.month, m.created_at`,
     ).all<{ id: string; deal_id: string; step: number; effect_request_id: string; approval_card_id: string }>()).results ?? [];
     const { executeExternalEffect } = await import("../effects/executor");
     /*
@@ -728,6 +741,8 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
     const firstSent = (await env.WP_OS_DB.prepare("SELECT MIN(sent_at) AS at FROM tlc_drip_message WHERE state = 'SENT'").first<{ at: string | null }>())?.at ?? null;
     const sentToday = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_drip_message WHERE state = 'SENT' AND substr(sent_at, 1, 10) = ?1").bind(now.toISOString().slice(0, 10)).first<{ n: number }>())?.n ?? 0;
     let sendRoom = Math.max(0, warmupDailyCap(firstSent, now) - sentToday);
+    const { dripAddressCheck, outreachStopped, refuseAddress } = await import("./tlcVolume");
+    // The nearest club's approved emails go first, so the day's allowance is spent where the date is closest.
     for (const m of approved) {
       if (sendRoom <= 0) { result.waitingForAllowance += 1; continue; }
       const deal = await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(m.deal_id).first<TlcDealRow>();
@@ -741,6 +756,21 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
       }
       // Approved together with a rival in its category: the first pitch waits (still approved) until that one is done.
       if (m.step === 0 && (await categoryRival(env, deal, now, true))) continue;
+      // THE CLUB REACHED ITS GOAL (26 Oct 2026): its outreach stops; the approved email is held, never sent.
+      const club = await env.WP_OS_DB.prepare("SELECT id, month, sponsor_goal_usd FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<{ id: string; month: string; sponsor_goal_usd: number | null }>();
+      if (club && (await outreachStopped(env, club))) {
+        await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'HELD', held_reason = 'the club reached its sponsor goal, so its outreach stopped' WHERE id = ?1").bind(m.id).run();
+        result.goalStopped = [...new Set([...(result.goalStopped ?? []), monthWords(club.month)])];
+        continue;
+      }
+      // NEVERBOUNCE BEFORE THE FIRST EMAIL, AND NEVER A FOLLOW-UP TO AN ADDRESS THAT BOUNCED.
+      const addr = await dripAddressCheck(env, deal.contact_email, m.step, now);
+      if (!addr.ok && "refused" in addr) {
+        await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'HELD', held_reason = ?2 WHERE id = ?1").bind(m.id, await refuseAddress(env, deal, addr.refused, now)).run();
+        result.addressRefused = [...(result.addressRefused ?? []), brandDisplayName(deal.brand)];
+        continue;
+      }
+      if (!addr.ok && m.step === 0) { result.addressWaiting = (result.addressWaiting ?? 0) + 1; continue; }
       try {
         await executeExternalEffect(approvedFor(env, m.approval_card_id, deal.contact_email), wynn, m.effect_request_id, m.approval_card_id);
         const first = deal.first_sent_at ?? now.toISOString();
@@ -777,9 +807,15 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
   result.due = due.length;
 
 
+  const volume = await import("./tlcVolume");
   for (const deal of due) {
     const ev = await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>();
     if (!ev?.topic) continue;
+    // THE CLUB REACHED ITS GOAL (26 Oct 2026): no new pitch and no follow-up for it; a brand already talking to us goes on by reply.
+    if (await volume.outreachStopped(env, ev)) {
+      result.goalStopped = [...new Set([...(result.goalStopped ?? []), monthWords(ev.month)])];
+      continue;
+    }
     // SHE CONTACTED THIS BRAND HERSELF: never a drip email from Wynn, at any step, gate open or not.
     if ((await ownerContactedBrands(env, firmScope)).has(brandKey(deal.brand))) {
       await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = NULL, updated_at = ?2 WHERE id = ?1").bind(deal.id, now.toISOString()).run();
@@ -808,6 +844,15 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
          WHERE tlc_drip_message.state IN ('HELD','FAILED')`,
       ).bind(`tdm_${crypto.randomUUID()}`, deal.id, deal.drip_step, mail.subject, mail.text, why).run();
       result.held += 1;
+      continue;
+    }
+    // NEVERBOUNCE BEFORE THE FIRST EMAIL: an address that fails is never drafted to; one not yet checkable waits.
+    const addr = await volume.dripAddressCheck(env, deal.contact_email, deal.drip_step, now);
+    if (!addr.ok) {
+      if ("refused" in addr) {
+        await volume.refuseAddress(env, deal, addr.refused, now);
+        result.addressRefused = [...(result.addressRefused ?? []), brandDisplayName(deal.brand)];
+      } else result.addressWaiting = (result.addressWaiting ?? 0) + 1;
       continue;
     }
     const cardId = await fileDraft(env, deal, mail, firmScope);
@@ -881,6 +926,11 @@ export async function recordBrandMail(env: Env, input: { from: string; subject: 
   }
   if (deals.length === 0) return { matched: 0, stop: null };
   deals = [...new Map(deals.map((d) => [d.id, d])).values()];
+  if (kind === "BOUNCED") {
+    // NEVER A FOLLOW-UP TO A BOUNCE, for any club: the address is marked bounced for good.
+    const { recordBounce } = await import("./tlcVolume");
+    for (const d of deals) await recordBounce(env, d.contact_email, new Date(now));
+  }
   for (const d of deals) {
     await env.WP_OS_DB.prepare(
       "UPDATE tlc_deal SET stop_reason = ?2, replied_at = CASE WHEN ?2 = 'REPLIED' THEN ?3 ELSE replied_at END, next_send_at = NULL, stage = CASE WHEN ?2 = 'UNSUBSCRIBED' THEN 'STOPPED' ELSE stage END, updated_at = ?3 WHERE id = ?1",
@@ -1802,11 +1852,21 @@ async function runBrandBatch(env: Env, card: SweepCard, now: Date, search: TlcSe
   const mustLines = [queued.length ? `• Brands we must pitch, queued first: ${queued.join("; ")}.` : "", ...wayIn.map((w) => `• Needs a way in: ${w}`)].filter(Boolean);
   // NEVER A NAG: a week whose only news is a new or changed "Needs a way in" item finishes, and the item
   // itself is the stop she sees (TLC panel and Approvals). An unchanged week with nothing queued blocks as before.
+  // A week where every club was covered by Parker's list (or its goal) is a finished week, never a nag.
+  const coveredLines: string[] = [];
+  for (const ev of events) {
+    const c = await clubCovered(env, ev);
+    if (c) coveredLines.push(c === "goal" ? `• ${monthWords(ev.month)}: its sponsor goal is reached, so its outreach has stopped.` : `• ${monthWords(ev.month)}: Parker's list still has brands ready, so Wynn pitches from it this week (about ${TLC_NEW_BRANDS_PER_EVENT_WEEK} new brands).`);
+  }
+  if (added.length === 0 && queued.length === 0 && changed === 0 && coveredLines.length === events.length) {
+    await finish(env, card.id, [...coveredLines, ...mustLines].join("\n"));
+    return { finished: true, blocked: false, progressed: false, detail: `${coveredLines.length} club(s) covered by Parker's list or their goal` };
+  }
   if (added.length === 0 && queued.length === 0 && changed === 0) {
     return nothingGood(env, card, "Wynn", [`No brand came with an address that is really on its page (${dropped.slice(0, 6).join("; ") || "nothing returned"}). Name brands or a category to try and Wynn runs it again.`, ...mustLines].join("\n"));
   }
   const gate = brandSendGate(await tlcSettings(env), await tlcOutside(env), await contentHashes(env));
-  await finish(env, card.id, [...mustLines, added.length ? `• ${added.length} brand(s) queued for the four-email sequence: ${added.join("; ")}.` : "", gate.open ? "• Sending is on: each email waits for a partner's approval on Approvals." : `• NOTHING SENT: ${gate.reasons.join("; ")}. The emails are composed and held.`, dropped.length ? `• Left out: ${dropped.join("; ")}.` : ""].filter(Boolean).join("\n"));
+  await finish(env, card.id, [...coveredLines, ...mustLines, added.length ? `• ${added.length} brand(s) queued for the four-email sequence: ${added.join("; ")}.` : "", gate.open ? "• Sending is on: each email waits for a partner's approval on Approvals." : `• NOTHING SENT: ${gate.reasons.join("; ")}. The emails are composed and held.`, dropped.length ? `• Left out: ${dropped.join("; ")}.` : ""].filter(Boolean).join("\n"));
   return { finished: true, blocked: false, progressed: false, detail: `${added.length + queued.length} brand(s) queued${wayIn.length ? `, ${wayIn.length} need a way in` : ""}` };
 }
 
@@ -1835,12 +1895,24 @@ async function nextBatchStep(env: Env, card: SweepCard, events: readonly TlcEven
   const has = (ev: TlcEventRow, part: "must" | "picks" | "picks2") => done.some((d) => d.event_id === ev.id && partOf(d) === part);
   const existing = await batchDeals(env, events);
   for (const ev of events) {
+    // MORE VOLUME (owner, 26 Oct 2026): a club that reached its goal gets no search; a club whose list from Parker still
+    // holds a week's worth of brands needs no search of Wynn's own picks this week.
+    const covered = await clubCovered(env, ev);
+    if (covered === "goal") continue;
     if (!has(ev, "must") && !has(ev, "picks") && (await mustFor(env, card, ev, events, existing)).length > 0) return { ev, part: "must" };
+    if (covered === "list") continue;
     if (!has(ev, "picks")) return { ev, part: "picks" };
     // OWNER, 24 Oct 2026: about five new brands per club per week, in two searches small enough for the seat.
     if (!has(ev, "picks2")) return { ev, part: "picks2" };
   }
   return null;
+}
+
+/** Why a club needs no search of Wynn's own this week: its goal is reached, or Parker's list still holds a week's worth. */
+async function clubCovered(env: Env, ev: TlcEventRow): Promise<"goal" | "list" | null> {
+  const { outreachStopped, readyCount } = await import("./tlcVolume");
+  if (await outreachStopped(env, ev)) return "goal";
+  return (await readyCount(env, ev.id)) >= TLC_BENCH_LOW ? "list" : null;
 }
 
 /** One search for one club: either its must-pitch brands alone, or up to TLC_BRANDS_PER_SEARCH of Wynn's own picks. */

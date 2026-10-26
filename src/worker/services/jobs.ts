@@ -674,6 +674,11 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
       summary:
         `The Learning Club drip: ${out.batch ? `first batch — ${out.batch}; ` : ""}${d.due} due, ${d.sent} sent, ${d.awaitingApproval} awaiting approval, ${d.held} HELD` +
         `${d.heldForCategory?.length ? `, ${d.heldForCategory.length} waiting for their category: ${d.heldForCategory.join(", ")}` : ""}` +
+        `${out.prospects.promoted.length ? `; ${out.prospects.promoted.length} new from Parker's list: ${out.prospects.promoted.join(", ")}` : ""}` +
+        `${out.prospects.dropped.length ? `; ${out.prospects.dropped.length} listed brand(s) left out` : ""}` +
+        `${d.goalStopped?.length ? `; goal reached, outreach stopped: ${d.goalStopped.join(", ")}` : ""}` +
+        `${d.addressRefused?.length ? `; address failed NeverBounce: ${d.addressRefused.join(", ")}` : ""}` +
+        `${d.addressWaiting ? `; ${d.addressWaiting} first email(s) waiting for NeverBounce` : ""}` +
         `${d.gate.open ? "" : ` (sending is off: ${d.gate.reasons.join("; ")})`}; notice: ${out.notice}${d.replies ? `; ${d.replies}` : ""}.`,
       artifacts,
     };

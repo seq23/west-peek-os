@@ -20,6 +20,12 @@
  *       `addressReadOffPage(` (the address must be in the page's text); a brand that fails it is written
  *       to tlc_way_in; and tlc_deal has ONE insert, `queueDeal`. No migration writes a way-in contact.
  *
+ *   6 · MORE VOLUME, SAME RULES (owner, 26 Oct 2026). About 10 new brands per club per week
+ *       (`TLC_NEW_BRANDS_PER_EVENT_WEEK = 10`); only NeverBounce's `valid` lets a first email go; the drip asks
+ *       `dripAddressCheck(` before `fileDraft(` and again before it executes an approved email; a club whose goal is
+ *       reached is skipped (`outreachStopped(`); a bounce marks the address for good (`recordBounce(`); Wynn's list
+ *       goes into the drip only through `queueDeal(` (tlcVolume has no tlc_deal insert of its own).
+ *
  * Hard-fails on zero: every file it reads must exist and be non-empty. `--self-test` plants each
  * violation and requires it to be caught.
  */
@@ -34,6 +40,8 @@ const FILES = {
   shared: "src/shared/tlc/learningClub.ts",
   service: "src/worker/services/learningClub.ts",
   mustPitch: "src/worker/services/tlcMustPitch.ts",
+  volume: "src/shared/tlc/volume.ts",
+  volumeService: "src/worker/services/tlcVolume.ts",
   migration: "migrations/0259_the_learning_club_and_wynn_returns.sql",
   wrangler: "wrangler.toml",
 };
@@ -53,7 +61,7 @@ export function check(src) {
     if (!v || !v.trim()) f.push(`${k}: file missing or empty — a scan that read nothing is not a pass`);
   }
   if (f.length) return f;
-  const { shared, service, migration, wrangler, migrations, mustPitch } = src;
+  const { shared, service, migration, wrangler, migrations, mustPitch, volume, volumeService } = src;
 
   // 1 · The send gate.
   if (!/INSERT INTO tlc_setting \(key, value, set_by\) VALUES \('brand_send', 'off'/.test(migration)) f.push("the brand-send switch is not seeded 'off' in 0259");
@@ -132,11 +140,22 @@ export function check(src) {
   if (!/addressReadOffPage\(email, source, check, pageText\)/.test(mustPitch)) f.push("must-pitch brands do not pass the one address check");
   if (!/if \(!text\.toLowerCase\(\)\.includes\(email\)\) return/.test(mustPitch)) f.push("the address check no longer requires the address in the page's text");
   if (!/INSERT INTO tlc_way_in/.test(mustPitch)) f.push("a must-pitch brand with no address is not written as a Needs a way in item");
-  const dealInserts = [service, mustPitch].reduce((n, t) => n + (t.match(/INSERT (OR \w+ )?INTO tlc_deal\b/g) ?? []).length, 0);
+  const dealInserts = [service, mustPitch, volumeService].reduce((n, t) => n + (t.match(/INSERT (OR \w+ )?INTO tlc_deal\b/g) ?? []).length, 0);
   if (dealInserts !== 1) f.push(`tlc_deal has ${dealInserts} inserts; there must be one (queueDeal)`);
   for (const [file, text] of migrations) {
     if (/INSERT\s+(OR\s+\w+\s+)?INTO\s+tlc_way_in\b/i.test(text)) f.push(`${file}: writes a way-in contact into the public repo`);
   }
+
+  // 6 · More volume, the same rules.
+  if (!/TLC_NEW_BRANDS_PER_EVENT_WEEK = 10;/.test(volume)) f.push("the owner's number moved: about 10 new brands per club per week");
+  if (!/addressSendable = \(r: AddressResult \| null \| undefined\): boolean => r === "valid";/.test(volume)) f.push("an address other than NeverBounce's valid can receive a first email");
+  const addrAt = dripBody.indexOf("dripAddressCheck(");
+  const addrFileAt = dripBody.lastIndexOf("dripAddressCheck(");
+  if (addrAt < 0 || !(addrFileAt < fileAt) || addrAt === addrFileAt) f.push("the drip does not check the address both before it sends an approved email and before it files a draft");
+  if ((dripBody.match(/outreachStopped\(/g) ?? []).length < 2) f.push("the drip does not stop a club's outreach once its goal is reached (send and draft)");
+  if (!/recordBounce\(env, d\.contact_email/.test(service)) f.push("a bounce does not mark the address for good");
+  if (!/queueDeal\(env, \{ eventId: ev\.id/.test(volumeService)) f.push("Wynn's list does not go into the drip through queueDeal");
+  if (!/neverBounceCheck\(/.test(volumeService)) f.push("the address check does not ask NeverBounce");
   return f;
 }
 
@@ -187,6 +206,14 @@ function selfTest() {
     ["no-address brand dropped", { mustPitch: good.mustPitch.replace("INSERT INTO tlc_way_in", "SELECT 1 FROM tlc_way_in") }],
     ["second deal insert", { service: `${good.service}\nconst q = "INSERT INTO tlc_deal (id) VALUES (1)";\n` }],
     ["way-in contact in a migration", { migrations: [...good.migrations, ["9999_y.sql", "INSERT INTO tlc_way_in (brand_key) VALUES ('x');"]] }],
+    ["ten a week raised", { volume: good.volume.replace("TLC_NEW_BRANDS_PER_EVENT_WEEK = 10;", "TLC_NEW_BRANDS_PER_EVENT_WEEK = 50;") }],
+    ["catch-all let through", { volume: good.volume.replace('r === "valid";', 'r === "valid" || r === "catchall";') }],
+    ["draft without the address check", { service: good.service.replace("const addr = await volume.dripAddressCheck(", "const addr = await volume.skipCheck(") }],
+    ["goal stop dropped", { service: good.service.replace("if (await volume.outreachStopped(env, ev)) {", "if (false) {") }],
+    ["bounce forgotten", { service: good.service.replace("recordBounce(env, d.contact_email", "noop(env, d.contact_email") }],
+    ["list bypasses queueDeal", { volumeService: good.volumeService.replace("queueDeal(env, { eventId: ev.id", "insertDeal(env, { eventId: ev.id") }],
+    ["second deal insert in tlcVolume", { volumeService: `${good.volumeService}\nconst q = "INSERT INTO tlc_deal (id) VALUES (1)";\n` }],
+    ["no NeverBounce", { volumeService: good.volumeService.replace("neverBounceCheck(", "pretendCheck(") }],
     ["file missing", { service: null }],
   ];
   let caught = 0;
@@ -209,5 +236,5 @@ if (process.argv.includes("--self-test")) {
     console.error(`The Learning Club's rules are not wired:\n  ${failures.join("\n  ")}`);
     process.exit(1);
   }
-  console.log("Learning Club rules hold: brand send off by default and gated, no spend path, no sponsor data in the repo, the owner's numbers pinned, must-pitch brands first and never dropped.");
+  console.log("Learning Club rules hold: brand send off by default and gated, no spend path, no sponsor data in the repo, the owner's numbers pinned, must-pitch brands first and never dropped, ten a week per club with NeverBounce before every first email.");
 }

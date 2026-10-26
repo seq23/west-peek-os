@@ -80,7 +80,9 @@ to answer before a lead is kept), and the macro client (FRED CSV and the Coinbas
 figure kept with the date it is as of and the page it came from), and the Google Workspace client
 (the firm's service account reading the ONE partner calendar and ended Meet calls under domain-wide
 delegation — every call a GET except its own event subscription and Pub/Sub acknowledgement; no
-calendar, space or Drive write exists in it). External
+calendar, space or Drive write exists in it), and the NeverBounce client (one read-only check of a
+brand's public address before Wynn's first email to it, on prepaid credits; the address is all that
+leaves). External
 *effects* (anything leaving the firm) execute only in `src/worker/effects/executor.ts`, only against
 an approved receipt.
 
