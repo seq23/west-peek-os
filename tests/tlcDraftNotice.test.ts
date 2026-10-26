@@ -355,3 +355,31 @@ describe("a queued draft tells the brand 25–40 guests per event, flexible (own
     expect(await recomposeGuestCounts(env)).not.toContain("Room Co");
   });
 });
+
+describe("one brand per category per club at a time (owner, 26 Oct 2026)", () => {
+  it("the second brand in a category is not pitched while the first is live; it goes once the first declines or goes quiet after its follow-up", async () => {
+    const { categoryRival } = await import("../src/worker/services/learningClub");
+    const mk = (id: string, brand: string, extra: string) =>
+      env.WP_OS_DB.prepare(`INSERT INTO tlc_deal (id, event_id, brand, category, contact_name, contact_email, contact_source_url, why_fit, next_send_at, firm_scope${extra ? ", stage, drip_step, first_sent_at, last_sent_at, stop_reason" : ""}) VALUES (?1, 'tlc_2027-03', ?2, 'Vector memory', 'Pat Example', ?3, 'https://example.test/team', 'they make memory', ?4, 'west-peek'${extra})`)
+        .bind(id, brand, `pat@${id}.example`, MORNING.toISOString()).run();
+    await mk("tld_mem1", "Memory One", ", 'PITCHED', 1, '2026-11-01T14:00:00.000Z', '2026-11-01T14:00:00.000Z', 'REPLIED'");
+    await mk("tld_mem2", "Memory Two", "");
+    const two = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = 'tld_mem2'").first())! as never;
+    // The first replied: the second waits, and no first pitch is drafted for it.
+    expect(await categoryRival(env, two, MORNING)).toBe("Memory One");
+    const out = await runDrip(env, MORNING);
+    expect(out.heldForCategory).toEqual(["Memory Two (after Memory One)"]);
+    expect(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_drip_message WHERE deal_id = 'tld_mem2'").first()).toBeNull();
+    // The first goes quiet: its one follow-up went eight days ago and it never answered. The category opens.
+    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET stop_reason = NULL, drip_step = 2, last_sent_at = '2026-11-01T14:00:00.000Z' WHERE id = 'tld_mem1'").run();
+    expect(await categoryRival(env, two, MORNING)).toBeNull();
+    // A follow-up only two days old is still live.
+    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET last_sent_at = '2026-11-07T14:00:00.000Z' WHERE id = 'tld_mem1'").run();
+    expect(await categoryRival(env, two, MORNING)).toBe("Memory One");
+    // It declines: the second is pitched on the next pass.
+    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET stage = 'DECLINED', stop_reason = 'DECLINED' WHERE id = 'tld_mem1'").run();
+    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = ?1 WHERE id = 'tld_mem2'").bind(MORNING.toISOString()).run();
+    await runDrip(env, MORNING);
+    expect(await env.WP_OS_DB.prepare("SELECT state FROM tlc_drip_message WHERE deal_id = 'tld_mem2' AND step = 0").first()).toEqual({ state: "AWAITING_APPROVAL" });
+  });
+});

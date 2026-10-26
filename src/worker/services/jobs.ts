@@ -674,6 +674,7 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
       status: "SUCCEEDED",
       summary:
         `The Learning Club drip: ${out.batch ? `first batch — ${out.batch}; ` : ""}${d.due} due, ${d.sent} sent, ${d.awaitingApproval} awaiting approval, ${d.held} HELD` +
+        `${d.heldForCategory?.length ? `, ${d.heldForCategory.length} waiting for their category: ${d.heldForCategory.join(", ")}` : ""}` +
         `${d.gate.open ? "" : ` (sending is off: ${d.gate.reasons.join("; ")})`}; notice: ${out.notice}${d.replies ? `; ${d.replies}` : ""}.`,
       artifacts,
     };
