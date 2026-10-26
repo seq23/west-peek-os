@@ -13,7 +13,7 @@
  *       type other than `email.send`; the booking-pack prompt says the partners book and pay.
  *   3 · NO SPONSOR NAME OR AMOUNT IN THE PUBLIC REPO. No migration inserts a deal, a ticket or a
  *       story row.
- *   4 · THE NUMBERS ARE THE OWNER'S: drip 0/4/10/18, 25–40 seats, $10 ticket max, $10,000 target,
+ *   4 · THE NUMBERS ARE THE OWNER'S: drip 0/4 (pitch + one follow-up), 25–40 seats, $10 ticket max, $10,000 target,
  *       $7,500 floor, $5,000 cap, 3-day veto window, 21/14-day checks.
  *   5 · BRANDS WE MUST PITCH COME FIRST AND ARE NEVER DROPPED (owner, 23 Oct 2026). The batch calls
  *       `handleMustPitch(` before it reads the model's own picks; both paths pass the ONE address check
@@ -98,7 +98,8 @@ export function check(src) {
 
   // 4 · The owner's numbers.
   const pins = [
-    [/TLC_DRIP_DAYS = \[0, 4, 10, 18\]/, "drip days 0/4/10/18"],
+    // Her flow (26 Oct 2026, shared/tlc/brandFlow.ts): the first pitch and ONE follow-up at day 4, no more.
+    [/TLC_DRIP_DAYS = \[0, 4\] as const/, "drip days 0/4 (the pitch and one follow-up)"],
     [/TLC_SEATS = \{ min: 25, max: 40 \}/, "25–40 seats"],
     [/TLC_TICKET_PRICE_MAX_USD = 10;/, "$10 ticket max"],
     [/TLC_NET_TARGET_USD = 10_000;/, "$10,000 target"],
@@ -167,7 +168,7 @@ function selfTest() {
     ["a spend effect", { service: `${good.service}\nconst x = "effect_type = 'payment.send'";\n` }],
     ["booking rule dropped", { service: good.service.replace("partners, who book and pay. You never book, reserve or pay for anything", "partners.") }],
     ["sponsor row in a migration", { migrations: [...good.migrations, ["9999_x.sql", "INSERT INTO tlc_deal (id) VALUES ('x');"]] }],
-    ["drip moved", { shared: good.shared.replace("TLC_DRIP_DAYS = [0, 4, 10, 18]", "TLC_DRIP_DAYS = [0, 2, 4, 6]") }],
+    ["drip moved", { shared: good.shared.replace("TLC_DRIP_DAYS = [0, 4] as const", "TLC_DRIP_DAYS = [0, 4, 10, 18] as const") }],
     ["ticket price raised", { shared: good.shared.replace("TLC_TICKET_PRICE_MAX_USD = 10;", "TLC_TICKET_PRICE_MAX_USD = 25;") }],
     ["non-AI gate loosened", { shared: good.shared.replace("TLC_FUNDED_EVENTS_BEFORE_NON_AI = 6;", "TLC_FUNDED_EVENTS_BEFORE_NON_AI = 2;") }],
     ["goal lowered", { shared: good.shared.replace("TLC_SPONSOR_GOAL_USD = 25_000;", "TLC_SPONSOR_GOAL_USD = 15_000;") }],

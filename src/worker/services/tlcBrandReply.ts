@@ -2,6 +2,7 @@ import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { runAi } from "../ai/runAi";
 import { textBodyOf } from "../effects/mimeAttachments";
+import type { EmailAttachment } from "../effects/emailTransport";
 import { listGmailRaw } from "../effects/googleClient";
 import { serviceAccountToken } from "../effects/googleWorkspaceClient";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
@@ -13,10 +14,15 @@ import {
   stageAfterReply, standingRulesIn, theirNewText, tierLines, wantsResearch,
   type BrandReplyIntent, type ReplyDraftInput, type WynnRule,
 } from "../../shared/tlc/brandReply";
-import { TLC_DRIP_DAYS, TLC_OWNER, TLC_SIGNATURE, brandDisplayName, monthWords, nextDripAt } from "../../shared/tlc/learningClub";
+import { TLC_DRIP_DAYS, TLC_OWNER, TLC_SEATS, TLC_SIGNATURE, brandDisplayName, monthWords, nextDripAt } from "../../shared/tlc/learningClub";
 import { TLC_BRAND_SALES_JOB } from "../../shared/policy/outsideEmail";
 import { actorForFirmUser, type Actor } from "./authorize";
 import type { TlcDealRow, TlcEventRow } from "./learningClub";
+import { freeSlots, isFree, pickedSlot, proposedTime, slotWords } from "../../shared/tlc/callSlots";
+import { isYesToSamples, samplesCoverEmail } from "../../shared/tlc/samples";
+import { fillTemplate, hiLine, levelPicked } from "../../shared/tlc/brandFlow";
+import { herBusy, makeEvent as defaultMakeEvent, callEvent, type BusyReader, type EventMaker } from "./tlcCalls";
+import { buildSamples, samplesAttachment, storePdf, storedAttachment, textPage, type SamplesDeps, type StoredFile } from "./tlcSamples";
 
 /**
  * WYNN ANSWERS A BRAND'S REPLY, SEQUOIA APPROVES IT (owner, 26 Oct 2026).
@@ -62,16 +68,26 @@ export interface DraftExtras {
   noMoney: boolean;
   /** What Wynn found when she asked for research, for the draft to use. */
   research: string | null;
+  /** A call they asked for (her SCHEDULE_THEIR_CALL rule): the times to offer from her calendar, or the time agreed. */
+  callPlan?: CallPlan | null;
 }
+export type CallPlan = { offer: string[] } | { agreed: string };
 export type ReplyDrafter = (env: Env, actor: Actor, input: ReplyDraftInput & DraftExtras) => Promise<{ ok: boolean; body: string; detail: string }>;
 export type BrandResearcher = (env: Env, actor: Actor, prompt: string) => Promise<{ ok: boolean; text: string; detail: string }>;
 export type MailboxReader = (env: Env, query: string) => Promise<Array<BrandMessage & { from: string }>>;
-export interface BrandReplyDeps { now?: Date; drafter?: ReplyDrafter; mailbox?: MailboxReader | null; researcher?: BrandResearcher }
+export interface BrandReplyDeps {
+  now?: Date; drafter?: ReplyDrafter; mailbox?: MailboxReader | null; researcher?: BrandResearcher;
+  /** Her calendar's busy times, and the event maker (tests pass fakes; production reads and writes her Google calendar). */
+  busy?: BusyReader; makeEvent?: EventMaker;
+  samples?: SamplesDeps;
+}
 
 interface ReplyRow {
   id: string; deal_id: string; brand_message_id: string; their_subject: string; their_text: string; received_at: string; intent: string;
   draft_subject: string; draft_body: string; state: string; notice_ref: string | null; firm_scope: string;
   change_note?: string | null; report_text?: string | null; research_due?: string | null; research_tries?: number;
+  samples_id?: string | null; offered_slots_json?: string | null; agreed_slot?: string | null; calendar_event_id?: string | null; held_reason?: string | null;
+  kind?: string | null; tier?: string | null; attachments_json?: string | null;
 }
 
 export const normalizeMid = (id: string | null | undefined): string => (id ?? "").trim().replace(/^<|>$/g, "");
@@ -107,6 +123,8 @@ async function setting(env: Env, key: string): Promise<string | null> {
   return (await env.WP_OS_DB.prepare("SELECT value FROM tlc_setting WHERE key = ?1").bind(key).first<{ value: string | null }>())?.value ?? null;
 }
 
+const TLC_TIER_LABEL = (k: string): string => ({ TITLE: "Title partner", PARTNER: "Partner", LEAD: "Lead partner", PRESENTING: "Presenting partner", PRODUCT: "Product partner" } as Record<string, string>)[k] ?? k;
+
 // ── Drafting ───────────────────────────────────────────────────────────────────────────────────
 
 const PROMPT_RULES = [
@@ -140,8 +158,12 @@ const defaultDrafter: ReplyDrafter = async (env, actor, i) => {
       ? ["No money yet: do NOT mention any price, fee, budget, amount or partnership level; that waits for the call."]
       : ["Partnership levels (no category exclusivity; never promise any):", ...tierLines().map((l) => `- ${l}`)]),
     ...(i.research ? ["", "What Wynn found researching them (use it; invent nothing beyond it):", i.research] : []),
-    i.intent === "YES" && i.pitchUrl ? `They said yes: say the one-page pitch PDF is attached and also at ${i.pitchUrl}.` : "",
-    ...(i.rules.some((r) => r.code === NO_CALL_ASK)
+    i.intent === "YES" && i.pitchUrl && !i.noMoney ? `They said yes: say the one-page pitch PDF is attached and also at ${i.pitchUrl}.` : "",
+    ...(i.callPlan
+      ? "offer" in i.callPlan
+        ? ["They asked for a call. Offer exactly these times, word for word, and ask which suits them (or another time that works for them):", ...i.callPlan.offer.map((x) => `- ${slotWords(x)}`)]
+        : [`They asked for a call and she is free then: say yes to ${slotWords(i.callPlan.agreed)}, and that a calendar invitation is on its way.`]
+      : i.rules.some((r) => r.code === NO_CALL_ASK)
       ? i.intent === "CALL"
         ? [`They proposed a call: say yes to it.${i.callLink ? ` Her booking link: ${i.callLink}` : " Ask which times suit them."}`]
         : [`Never suggest or ask for a call. Next step: ${THREE_THINGS_OFFER}`]
@@ -172,35 +194,52 @@ const defaultDrafter: ReplyDrafter = async (env, actor, i) => {
 };
 
 /** A draft that breaks her voice rules is not used; the plain template stands in. */
-export function draftProblems(body: string, intent: BrandReplyIntent, opts: { noMoney?: boolean; noCallAsk?: boolean; weHost?: boolean } = {}): string[] {
+export function draftProblems(body: string, intent: BrandReplyIntent, opts: { noMoney?: boolean; noCallAsk?: boolean; weHost?: boolean; callPlan?: CallPlan | null } = {}): string[] {
   const out: string[] = [];
   if (/\bP\.?\s?S\.?\b/.test(body)) out.push("a P.S.");
   if (/\b\d{2,5}\s+\w+(?:\s\w+)?\s(?:street|st\.?|avenue|ave\.?|road|rd\.?|blvd|suite)\b/i.test(body)) out.push("a postal address");
   // Scooter is named only as who he is to the brand (her WHO_WE_ARE rule): "Scooter Taylor", our founding GP.
   if (/\bscooter\b(?!\s+taylor)/i.test(body)) out.push("a name other than hers");
   if (opts.noMoney && MONEY_WORDS.test(body)) out.push("money before a call (her rule)");
+  // Every brand email says 25–40 guests per event, flexible (her GUESTS_25_40 rule): never another room size.
+  for (const m of body.matchAll(/\b(\d+)\s*(?:to|–|-)\s*(\d+)\s+(?:people|guests|New Yorkers)\b/gi)) {
+    if (m[1] !== String(TLC_SEATS.min) || m[2] !== String(TLC_SEATS.max)) { out.push(`a room of ${m[1]} to ${m[2]} (her rule: 25–40 guests per event, flexible)`); break; }
+  }
   if (opts.weHost && BRAND_MUST_STAFF.test(body)) out.push("puts the brand's people on a segment (her rule: led by the brand or by our host)");
-  if (opts.noCallAsk && intent !== "CALL" && CALL_ASK.test(body)) out.push("asks for a call (her rule: the brand may propose one, Wynn never does)");
+  if (opts.callPlan) {
+    const want = "offer" in opts.callPlan ? opts.callPlan.offer : [opts.callPlan.agreed];
+    for (const x of want) if (!body.includes(slotWords(x))) out.push(`the time ${slotWords(x)} is not in it word for word`);
+  }
+  if (opts.noCallAsk && intent !== "CALL" && !opts.callPlan && CALL_ASK.test(body)) out.push("asks for a call (her rule: the brand may propose one, Wynn never does)");
   if (intent !== "YES" && /\b(attached|attachment|pdf)\b/i.test(body)) out.push("an attachment before a yes");
   if (/\bexclusiv/i.test(body)) out.push("exclusivity");
   return out;
 }
 
-async function draftFor(env: Env, deal: TlcDealRow, ev: TlcEventRow, intent: BrandReplyIntent, theirText: string, deps: BrandReplyDeps, redo: { note: string; previous: string; research?: string | null } | null = null): Promise<string> {
+/** The answer for a call they asked for, when the model is away: the times, or the yes, in her voice. */
+export function callFallback(contactName: string | null, plan: CallPlan): string {
+  if ("agreed" in plan) return fillTemplate("callYes", { hi: hiLine(contactName), time: slotWords(plan.agreed) });
+  return fillTemplate("callTimes", { hi: hiLine(contactName), times: plan.offer.map((x) => `• ${slotWords(x)}`).join("\n") });
+}
+
+async function draftFor(env: Env, deal: TlcDealRow, ev: TlcEventRow, intent: BrandReplyIntent, theirText: string, deps: BrandReplyDeps, redo: { note: string; previous: string; research?: string | null } | null = null, callPlan: CallPlan | null = null): Promise<string> {
   const { CALL_LINK_SETTING, pitchPublicUrl } = await import("./learningClub");
   const input: ReplyDraftInput = {
     intent, brand: deal.brand, contactName: deal.contact_name, topic: ev.topic ?? "", month: ev.month, why: deal.why_fit, theirText,
     pitchUrl: ev.pitch_token ? pitchPublicUrl(ev.pitch_token) : null, callLink: await setting(env, CALL_LINK_SETTING),
   };
   const rules = await wynnRules(env, deal.firm_scope);
-  const noMoney = noMoneyNow(rules, deal.stage);
+  // Money first appears at step 4 of her flow: once the samples went, prices may be discussed.
+  const noMoney = noMoneyNow(rules, deal.stage) && !(await flowStep(env, deal.id)).samplesSent;
   const noCallAsk = rules.some((r) => r.code === NO_CALL_ASK);
   const weHost = rules.some((r) => r.code === WE_HOST);
-  const out = await (deps.drafter ?? defaultDrafter)(env, wynnActor(deal.firm_scope), { ...input, note: redo?.note ?? null, previous: redo?.previous ?? null, rules, noMoney, research: redo?.research ?? null })
+  const out = await (deps.drafter ?? defaultDrafter)(env, wynnActor(deal.firm_scope), { ...input, note: redo?.note ?? null, previous: redo?.previous ?? null, rules, noMoney, research: redo?.research ?? null, callPlan })
     .catch((err) => ({ ok: false, body: "", detail: String(err) }));
-  const words = out.ok && draftProblems(out.body, intent, { noMoney, noCallAsk, weHost }).length === 0
+  const words = out.ok && draftProblems(out.body, intent, { noMoney, noCallAsk, weHost, callPlan }).length === 0
     ? out.body
-    : fallbackReplyBody(input, monthWords, { noMoney, noCallAsk, whoWeAre: rules.find((r) => r.code === WHO_WE_ARE)?.rule ?? null });
+    : callPlan
+      ? callFallback(deal.contact_name, callPlan)
+      : fallbackReplyBody(input, monthWords, { noMoney, noCallAsk, whoWeAre: rules.find((r) => r.code === WHO_WE_ARE)?.rule ?? null });
   return [words.trim(), "", ...TLC_SIGNATURE].join("\n");
 }
 
@@ -268,6 +307,21 @@ async function redraftFor(env: Env, r: ReplyRow, note: string, now: Date, deps: 
   return "DRAFTED";
 }
 
+/** A yes to the samples whose PDF was not ready: built again; the reply goes to her once it is. */
+async function retrySamples(env: Env, r: ReplyRow, now: Date, deps: BrandReplyDeps): Promise<void> {
+  const deal = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(r.deal_id).first<TlcDealRow>())!;
+  const ev = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>())!;
+  const built = await buildSamples(env, deal, ev, { theirText: r.their_text }, deps.samples ?? {});
+  if (built.ok) {
+    const segment = (JSON.parse(built.row.input_json) as { segmentTitle: string }).segmentTitle;
+    const body = [samplesCoverEmail({ brand: brandDisplayName(deal.brand), contactName: deal.contact_name, topic: ev.topic ?? "", segmentTitle: segment }), "", ...TLC_SIGNATURE].join("\n");
+    await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET draft_body = ?2, samples_id = ?3, research_due = NULL, held_reason = NULL WHERE id = ?1 AND state = 'DRAFTED'").bind(r.id, body, built.row.id).run();
+    return;
+  }
+  const due = new Date(now.getTime() + RESEARCH_RETRY_MINUTES * 60_000).toISOString();
+  await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET research_due = ?2, held_reason = ?3 WHERE id = ?1").bind(r.id, due, `the samples PDF is not ready yet (${built.detail.slice(0, 200)}); tried again each pass`).run();
+}
+
 const wordsOf = (body: string): string => {
   const cut = body.lastIndexOf(`\n${TLC_SIGNATURE[0]}`);
   return (cut > 0 ? body.slice(0, cut) : body).trim();
@@ -307,13 +361,115 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
   const ev = await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>();
   if (!ev) return "SEEN";
   await env.WP_OS_DB.prepare("UPDATE tlc_deal SET stop_reason = 'REPLIED', replied_at = COALESCE(replied_at, ?2), next_send_at = NULL, updated_at = ?2 WHERE id = ?1 AND (stop_reason IS NULL OR stop_reason = 'REPLIED')").bind(deal.id, now.toISOString()).run();
-  const body = await draftFor(env, deal, ev, cls.intent, words, deps);
   const subject = `Re: ${msg.subject.replace(/^(?:\s*(?:re|fwd?|aw)\s*:\s*)+/i, "").trim() || `${brandDisplayName(deal.brand)} + a small room in New York`}`;
+  const rules = await wynnRules(env, deal.firm_scope);
+  let intent: BrandReplyIntent = cls.intent;
+  let body: string;
+  let samplesId: string | null = null;
+  let hold: { due: string; why: string } | null = null;
+  let offered: string[] | null = null;
+  let agreed: string | null = null;
+  let kind: string | null = null;
+  let tier: string | null = null;
+  let attachments: StoredFile[] = [];
+  let step: Awaited<ReturnType<typeof flowStep>> | null = null;
+
+  /*
+   * A YES TO THE THREE SAMPLES (owner, 26 Oct 2026). On a deal whose email from us offered them, "sure, send it" gets
+   * the 3-page PDF Parker builds for the brand, and the cover email, in her approval email. A PDF that cannot be
+   * built yet holds the reply (retried each pass) rather than go without it.
+   */
+  const pendingSlots = await env.WP_OS_DB.prepare(
+    "SELECT offered_slots_json FROM tlc_brand_reply WHERE deal_id = ?1 AND state = 'SENT' AND offered_slots_json IS NOT NULL AND agreed_slot IS NULL ORDER BY sent_at DESC LIMIT 1",
+  ).bind(deal.id).first<{ offered_slots_json: string }>();
+  const picked = pendingSlots ? pickedSlot(words, JSON.parse(pendingSlots.offered_slots_json) as string[], now) : null;
+  if (!picked && (await offeredSamples(env, deal.id)) && isYesToSamples(words)) {
+    intent = "YES";
+    const built = await buildSamples(env, deal, ev, { theirText: words }, deps.samples ?? {});
+    samplesId = built.ok ? built.row.id : built.id;
+    if (!built.ok) hold = { due: new Date(now.getTime() + RESEARCH_RETRY_MINUTES * 60_000).toISOString(), why: `the samples PDF is not ready yet (${built.detail.slice(0, 200)}); tried again each pass` };
+    const segment = built.ok ? (JSON.parse(built.row.input_json) as { segmentTitle: string }).segmentTitle : "";
+    body = [samplesCoverEmail({ brand: brandDisplayName(deal.brand), contactName: deal.contact_name, topic: ev.topic ?? "", segmentTitle: segment }), "", ...TLC_SIGNATURE].join("\n");
+  } else if (picked || (cls.intent === "CALL" && rules.some((r) => r.code === "SCHEDULE_THEIR_CALL"))) {
+    /*
+     * A CALL THEY ASKED FOR IS SCHEDULED (owner, 26 Oct 2026). The time they picked from the ones offered, or the time
+     * they proposed when she is free, is agreed; otherwise two or three open times from her calendar are offered.
+     */
+    intent = "CALL";
+    const { busy } = await (deps.busy ?? herBusy)(env, now, new Date(now.getTime() + 21 * 86_400_000)).catch(() => ({ busy: [], note: null }));
+    const proposed = picked ? null : proposedTime(words, now);
+    agreed = picked ?? (proposed && isFree(proposed, busy, now) ? proposed : null);
+    if (!agreed) offered = freeSlots(busy, now, 3);
+    const plan: CallPlan | null = agreed ? { agreed } : offered && offered.length ? { offer: offered } : null;
+    body = await draftFor(env, deal, ev, intent, words, deps, null, plan);
+  } else if ((step = await flowStep(env, deal.id)) && (step.proposalSent ? levelPicked(words) !== null : step.samplesSent)) {
+    /*
+     * STEPS 4 AND 5 OF HER FLOW (shared/tlc/brandFlow.ts). After the samples, their interest or questions get the
+     * proposal: the partner options in words, the prices on the attached one-pager (the first time money appears).
+     * After the proposal, the level they pick gets the confirmation, with a one-page agreement and the invoice
+     * (West Peek's own payment link; the OS never takes or processes a payment). Both are drafts for her approval.
+     */
+    const files: StoredFile[] = [];
+    const brandName = brandDisplayName(deal.brand);
+    const safe = (x: string) => x.replace(/[^\w &-]+/g, "").trim();
+    const fail: string[] = [];
+    const keep = (out: StoredFile | string) => (typeof out === "string" ? fail.push(out) : files.push(out));
+    if (!step.proposalSent) {
+      kind = "PROPOSAL";
+      const { clubViewOf } = await import("./learningClub");
+      const { renderBrandPitch } = await import("../../shared/tlc/pitch");
+      keep(await storePdf(env, `tlc-flow/${deal.id}/proposal-${crypto.randomUUID()}.pdf`, `The Learning Club - ${safe(ev.topic ?? "")} - partner levels.pdf`, renderBrandPitch(clubViewOf(ev)), deps.samples ?? {}));
+      body = fillTemplate("proposal", { hi: hiLine(deal.contact_name), brand: brandName, topic: ev.topic ?? "", segment: step.segment ?? `Where ${brandName} comes in` });
+    } else {
+      kind = "CONFIRM";
+      tier = levelPicked(words);
+      const { TLC_TIERS, sponsorshipAgreement, invoiceNote } = await import("../../shared/tlc/learningClub");
+      const t = TLC_TIERS[tier as keyof typeof TLC_TIERS];
+      const cash = t.priceUsd ?? 0;
+      const due = new Date(now.getTime() + 14 * 86_400_000).toISOString().slice(0, 10);
+      keep(await storePdf(env, `tlc-flow/${deal.id}/agreement-${crypto.randomUUID()}.pdf`, `The Learning Club - ${safe(brandName)} - agreement.pdf`,
+        textPage("Partnership agreement", sponsorshipAgreement({ brand: brandName, topic: ev.topic ?? "", eventDate: `${ev.event_date} (tentative)`, cashUsd: cash, inKind: tier === "PRODUCT" ? "product for the night, as agreed" : null, deliverables: `${t.label}: ${t.gets}`, dueDate: due })), deps.samples ?? {}));
+      if (cash > 0) {
+        keep(await storePdf(env, `tlc-flow/${deal.id}/invoice-${crypto.randomUUID()}.pdf`, `The Learning Club - ${safe(brandName)} - invoice.pdf`,
+          textPage("Invoice", invoiceNote({ brand: brandName, topic: ev.topic ?? "", month: ev.month, cashUsd: cash, dueDate: due, paymentUrl: (ev as { sponsor_payment_url?: string | null }).sponsor_payment_url ?? null })), deps.samples ?? {}));
+      }
+      body = fillTemplate("confirm", { hi: hiLine(deal.contact_name), brand: brandName, level: t.label.replace(/ \(in kind\)$/, "") });
+    }
+    body = [body, "", ...TLC_SIGNATURE].join("\n");
+    attachments = files;
+    if (fail.length) hold = { due: new Date(now.getTime() + RESEARCH_RETRY_MINUTES * 60_000).toISOString(), why: `${fail.join("; ").slice(0, 240)}; she is not asked until the attachments are ready` };
+  } else {
+    body = await draftFor(env, deal, ev, cls.intent, words, deps);
+  }
   await env.WP_OS_DB.prepare(
-    "INSERT OR IGNORE INTO tlc_brand_reply (id, deal_id, brand_message_id, their_subject, their_text, received_at, intent, draft_subject, draft_body, state, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'DRAFTED', ?10)",
-  ).bind(`tbr_${crypto.randomUUID()}`, deal.id, mid, msg.subject.slice(0, 300), words.slice(0, 8000), msg.receivedAt, cls.intent, subject.slice(0, 300), body, deal.firm_scope).run();
-  await appendEvent(env, { eventType: "tlc.brand_reply_drafted", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: { intent: cls.intent } });
+    `INSERT OR IGNORE INTO tlc_brand_reply (id, deal_id, brand_message_id, their_subject, their_text, received_at, intent, draft_subject, draft_body, state, firm_scope,
+       samples_id, offered_slots_json, agreed_slot, research_due, held_reason, kind, tier, attachments_json)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'DRAFTED', ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)`,
+  ).bind(`tbr_${crypto.randomUUID()}`, deal.id, mid, msg.subject.slice(0, 300), words.slice(0, 8000), msg.receivedAt, intent, subject.slice(0, 300), body, deal.firm_scope,
+    samplesId, offered && offered.length ? JSON.stringify(offered) : null, agreed, hold?.due ?? null, hold?.why ?? null,
+    kind ?? (samplesId ? "SAMPLES" : agreed || offered ? "CALL" : "ANSWER"), tier, attachments.length ? JSON.stringify(attachments) : null).run();
+  await appendEvent(env, { eventType: "tlc.brand_reply_drafted", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: { intent, samples: samplesId !== null, offered: offered?.length ?? 0, agreed } });
   return "DRAFTED";
+}
+
+/** Where a deal is in her flow: the samples sent (step 3 done), the proposal sent (step 4 done), the segment name. */
+export async function flowStep(env: Env, dealId: string): Promise<{ samplesSent: boolean; proposalSent: boolean; segment: string | null }> {
+  const s = await env.WP_OS_DB.prepare("SELECT input_json FROM tlc_samples WHERE deal_id = ?1 AND state = 'SENT'").bind(dealId).first<{ input_json: string }>();
+  const p = await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_brand_reply WHERE deal_id = ?1 AND kind = 'PROPOSAL' AND state = 'SENT'").bind(dealId).first();
+  let segment: string | null = null;
+  try { segment = s ? (JSON.parse(s.input_json) as { segmentTitle?: string }).segmentTitle ?? null : null; } catch { segment = null; }
+  return { samplesSent: s !== null, proposalSent: p !== null, segment };
+}
+
+/** Did an email we sent this deal offer the three samples (the drip's email 2, or an answer of hers)? */
+export async function offeredSamples(env: Env, dealId: string): Promise<boolean> {
+  const offer = "%run of show%";
+  const six = "%series of six%";
+  const hit = await env.WP_OS_DB.prepare(
+    `SELECT 1 FROM tlc_drip_message WHERE deal_id = ?1 AND state = 'SENT' AND body LIKE ?2 AND body LIKE ?3
+     UNION SELECT 1 FROM tlc_brand_reply WHERE deal_id = ?1 AND state = 'SENT' AND draft_body LIKE ?2 AND draft_body LIKE ?3 LIMIT 1`,
+  ).bind(dealId, offer, six).first();
+  return hit !== null;
 }
 
 /** The deals a reply could belong to, by the sender's address. */
@@ -378,7 +534,10 @@ export async function processBrandReplies(env: Env, now: Date, firmScope = "west
   // Research she asked for that could not run yet: tried again once due.
   const due = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_brand_reply WHERE firm_scope = ?1 AND state = 'DRAFTED' AND research_due IS NOT NULL AND research_due <= ?2")
     .bind(firmScope, now.toISOString()).all<ReplyRow>()).results ?? [];
-  for (const r of due) await redraftFor(env, r, r.change_note ?? "", now, d);
+  for (const r of due) {
+    if (r.samples_id) await retrySamples(env, r, now, d);
+    else await redraftFor(env, r, r.change_note ?? "", now, d);
+  }
   const notice = await sendReplyApprovals(env, now, firmScope);
   return `brand replies: ${counts.DRAFTED} drafted, ${counts.AUTO_REPLY} auto-reply (drip resumed), ${counts.NO} declined; ${polled}; ${notice}`;
 }
@@ -396,9 +555,9 @@ function mintRef(): string {
  * partner inbox; `brand_reply_approver_email` (a D1 setting, never this public repository) names another inbox of
  * hers whose authenticated reply is also accepted. Her reply comes back to Wynn and the intake door reads it.
  */
-async function emailHer(env: Env, firmScope: string, objectId: string, email: Omit<ExecEmailInput, "employee">): Promise<boolean> {
+async function emailHer(env: Env, firmScope: string, objectId: string, email: Omit<ExecEmailInput, "employee">, attachments: readonly EmailAttachment[] = []): Promise<boolean> {
   const { emailOwner } = await import("./learningClub");
-  const sent = await emailOwner(env, { employee: "Wynn", email, objectType: "tlc_brand_reply_notice", objectId, cardId: null, cardKind: null, firmScope });
+  const sent = await emailOwner(env, { employee: "Wynn", email, objectType: "tlc_brand_reply_notice", objectId, cardId: null, cardKind: null, firmScope, ...(attachments.length ? { attachments } : {}) });
   if (sent.length === 0) throw new Error("the owner email was not sent");
   return true;
 }
@@ -423,6 +582,15 @@ export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-
   const ct = chicago(now);
   const ref = mintRef();
   const to = TLC_OWNER.email;
+  // The samples PDF each yes carries, attached to HER email too, so she approves the very file the brand will get.
+  const attachments: EmailAttachment[] = [];
+  const attachedTo = new Map<string, string>();
+  for (const r of waiting) {
+    const mine: EmailAttachment[] = [];
+    if (r.samples_id) { const a = await samplesAttachment(env, r.samples_id); if (a) mine.push(a); }
+    for (const f of JSON.parse(r.attachments_json ?? "[]") as StoredFile[]) { const a = await storedAttachment(env, f); if (a) mine.push(a); }
+    if (mine.length) { attachments.push(...mine); attachedTo.set(r.id, mine.map((a) => a.filename).join(" · ")); }
+  }
   const blocks = waiting.map((r, i) => [
     `── ${i + 1} · ${brandDisplayName(r.brand)} · The Learning Club, ${monthWords(r.month)}${r.topic ? ` (${r.topic})` : ""} ──`,
     `From: ${r.contact_name ? `${r.contact_name} ` : ""}<${r.contact_email}>, ${r.received_at.slice(0, 16).replace("T", " ")} UTC`,
@@ -438,6 +606,8 @@ export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-
     `Subject: ${r.draft_subject}`,
     "",
     r.draft_body,
+    ...(attachedTo.has(r.id) ? ["", `ATTACHED (goes with it): ${attachedTo.get(r.id)}${r.samples_id ? ", 3 pages" : ""}`] : []),
+    ...(r.agreed_slot ? ["", `ON YOUR WORD: ${slotWords(r.agreed_slot)} goes on your calendar, ${r.contact_email} invited`] : []),
   ].join("\n"));
   const many = waiting.length > 1;
   try {
@@ -446,11 +616,11 @@ export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-
       tldr: `${waiting.length} brand${many ? "s" : ""} replied to your Learning Club email${many ? "s" : ""}. ${BRAND_REPLY_ASK}.`,
       tldrBullets: many ? ['Reply "approved" to send all', 'Or "approve 1" · "skip 2" · "change 2: what to change"'] : ['Reply "approved" to send it', "Or reply with your changes"],
       sections: [
-        { label: "Who replied", bullets: waiting.map((r, i) => `${i + 1} · ${brandDisplayName(r.brand)} (${monthWords(r.month)}): ${r.intent === "CALL" ? "wants a call" : r.intent === "YES" ? "said yes (the pitch PDF goes with your answer)" : "asked a question"}`).slice(0, 6) },
+        { label: "Who replied", bullets: waiting.map((r, i) => `${i + 1} · ${brandDisplayName(r.brand)} (${monthWords(r.month)}): ${r.kind === "PROPOSAL" ? "step 4: the proposal (prices on the attached one-pager)" : r.kind === "CONFIRM" ? `step 5: ${r.tier ? TLC_TIER_LABEL(r.tier) : "a level"} agreed (agreement and invoice attached)` : r.agreed_slot ? `a call, ${slotWords(r.agreed_slot)}` : r.intent === "CALL" ? "wants a call (times from your calendar offered)" : r.samples_id ? "said yes to the samples (the 3-page PDF goes with your answer)" : r.intent === "YES" ? "said yes" : "asked a question"}`).slice(0, 6) },
         { label: "What happens on your word", bullets: ["Your answer goes from your own mailbox, on their thread", "A call they asked for moves the deal to Call", "Nothing goes to a brand until you say so"] },
       ],
       details: [...blocks.flatMap((b) => [b, ""]), `Ref ${ref}`].join("\n"),
-    });
+    }, attachments);
   } catch (err) {
     return `the approval email could not be sent (${err instanceof Error ? err.message : String(err)}); the next pass tries again`;
   }
@@ -511,8 +681,8 @@ export async function applyBrandReplyApproval(
     const claim = await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'SENDING' WHERE id = ?1 AND state = 'NOTIFIED' AND notice_ref = ?2").bind(r.id, ref).run();
     if ((claim.meta?.changes ?? 0) === 0) { lines.push(`${n} · ${brandDisplayName(r.brand)}: already ${r.state === "SENT" ? "sent" : r.state.toLowerCase()}, nothing sent again`); continue; }
     try {
-      await sendApproved(env, owner, r, now);
-      lines.push(`${n} · ${brandDisplayName(r.brand)}: sent from ${TLC_OWNER.email}, on their thread`);
+      const calendar = await sendApproved(env, owner, r, now, deps);
+      lines.push(`${n} · ${brandDisplayName(r.brand)}: sent from ${TLC_OWNER.email}, on their thread${calendar ? `; ${calendar}` : ""}`);
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err);
       await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'FAILED', held_reason = ?2 WHERE id = ?1").bind(r.id, why.slice(0, 300)).run();
@@ -548,12 +718,21 @@ export async function applyBrandReplyApproval(
 }
 
 /** Her approved answer, through the brand-sales lane: approval card, executor, her own Gmail, threaded. */
-async function sendApproved(env: Env, owner: Actor, r: ReplyRow & { brand: string; contact_email: string; stage: string }, now: Date): Promise<void> {
+async function sendApproved(env: Env, owner: Actor, r: ReplyRow & { brand: string; contact_email: string; stage: string }, now: Date, deps: BrandReplyDeps = {}): Promise<string | null> {
   const { BRAND_REPLY_TO, approvedFor, clubViewOf, renderPdfFor } = await import("./learningClub");
   const deal = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(r.deal_id).first<TlcDealRow>())!;
   const ev = await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>();
-  // The pitch PDF goes only in answer to a yes.
-  const attachments = r.intent === "YES" && ev?.topic ? await renderPdfFor(env, clubViewOf(ev), ev.topic).catch(() => []) : [];
+  // The samples PDF goes with a yes to the samples; the priced pitch only in answer to a yes after a call (her rule).
+  const samples = r.samples_id ? await samplesAttachment(env, r.samples_id) : null;
+  if (r.samples_id && !samples) throw new Error("the samples PDF is missing from the store, so nothing was sent");
+  const pitchAllowed = r.intent === "YES" && !r.samples_id && ev?.topic && !noMoneyNow(await wynnRules(env, r.firm_scope), deal.stage);
+  const stored: EmailAttachment[] = [];
+  for (const f of JSON.parse(r.attachments_json ?? "[]") as StoredFile[]) {
+    const a = await storedAttachment(env, f);
+    if (!a) throw new Error(`the attachment "${f.name}" is missing from the store, so nothing was sent`);
+    stored.push(a);
+  }
+  const attachments = samples ? [samples] : stored.length ? stored : pitchAllowed && ev?.topic ? await renderPdfFor(env, clubViewOf(ev), ev.topic).catch(() => []) : [];
   const requestId = `eer_${crypto.randomUUID()}`;
   const inReplyTo = r.brand_message_id.startsWith("nomid:") ? null : r.brand_message_id;
   await env.WP_OS_DB.prepare(
@@ -570,6 +749,30 @@ async function sendApproved(env: Env, owner: Actor, r: ReplyRow & { brand: strin
   const { executeExternalEffect } = await import("../effects/executor");
   await executeExternalEffect(approvedFor(env, card.id, r.contact_email), wynnActor(r.firm_scope), requestId, card.id);
   await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'SENT', sent_at = ?2 WHERE id = ?1").bind(r.id, now.toISOString()).run();
+  if (r.samples_id) await env.WP_OS_DB.prepare("UPDATE tlc_samples SET state = 'SENT', sent_at = ?2 WHERE id = ?1").bind(r.samples_id, now.toISOString()).run();
+  // Step 5 approved: the deal is agreed at the level they picked (payment arrives against the invoice, never taken here).
+  if (r.kind === "CONFIRM" && r.tier) {
+    const { TLC_TIERS } = await import("../../shared/tlc/learningClub");
+    const t = TLC_TIERS[r.tier as keyof typeof TLC_TIERS];
+    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET stage = 'AGREED', tier = ?2, cash_offer_usd = ?3, decision = 'YES', updated_at = ?4 WHERE id = ?1").bind(deal.id, r.tier, t?.priceUsd ?? 0, now.toISOString()).run();
+  }
   const stage = stageAfterReply(r.intent as BrandReplyIntent, deal.stage);
   await env.WP_OS_DB.prepare("UPDATE tlc_deal SET stage = COALESCE(?2, stage), yes_at = CASE WHEN ?3 = 'YES' THEN COALESCE(yes_at, ?4) ELSE yes_at END, updated_at = ?4 WHERE id = ?1").bind(deal.id, stage, r.intent, now.toISOString()).run();
+  if (!r.agreed_slot) return null;
+  /*
+   * THE CALL GOES ON HER CALENDAR, THE BRAND INVITED (owner, 26 Oct 2026), once she approved the confirmation. The
+   * meeting sync picks the event up, so the prep email covers it the evening before. A calendar that would not take
+   * it is named in her "done" email, never skipped quietly.
+   */
+  if (r.calendar_event_id) return `already on your calendar`;
+  try {
+    const made = await (deps.makeEvent ?? defaultMakeEvent)(env, callEvent(r.brand, r.contact_email, r.agreed_slot, ev?.topic ?? null));
+    await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET calendar_event_id = ?2 WHERE id = ?1").bind(r.id, made.id).run();
+    await appendEvent(env, { eventType: "tlc.brand_call_scheduled", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: r.firm_scope, payload: { at: r.agreed_slot, event: made.id } });
+    return `${slotWords(r.agreed_slot)} is on your calendar, ${r.contact_email} invited`;
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET held_reason = ?2 WHERE id = ?1").bind(r.id, `calendar event not made: ${why}`.slice(0, 300)).run();
+    return `the call (${slotWords(r.agreed_slot)}) could NOT be put on your calendar (${why.slice(0, 120)}); add it by hand`;
+  }
 }

@@ -13,7 +13,7 @@ import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
  */
 let t: TestDb;
 let env: Env;
-const sends: Array<{ to: string; from: string; subject: string; text: string; inReplyTo: string; replyTo: string }> = [];
+const sends: Array<{ to: string; from: string; subject: string; text: string; inReplyTo: string; replyTo: string; files?: string[] }> = [];
 const SERVICE_ACCOUNT = JSON.stringify({ client_email: "sa@firm.iam.example", private_key: generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs8", format: "pem" }) });
 const APPROVER = "owner.personal@example.test";
 const auth = (address: string) => `${TRUSTED_AUTHSERV_ID}; dkim=pass header.d=${address.split("@")[1]} header.s=s1; spf=pass smtp.mailfrom=${address}; dmarc=pass header.from=${address.split("@")[1]}`;
@@ -46,8 +46,8 @@ beforeAll(async () => {
   env = { ...makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>), RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures", WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON: SERVICE_ACCOUNT } as Env;
   vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
     if (String(url).includes("api.resend.com")) {
-      const b = JSON.parse(String(init?.body)) as { to: string | string[]; from: string; subject: string; text: string; reply_to?: string | string[] };
-      sends.push({ to: Array.isArray(b.to) ? b.to.join(",") : b.to, from: b.from, subject: b.subject, text: b.text, inReplyTo: "", replyTo: String(b.reply_to ?? "") });
+      const b = JSON.parse(String(init?.body)) as { to: string | string[]; from: string; subject: string; text: string; reply_to?: string | string[]; attachments?: Array<{ filename: string }> };
+      sends.push({ to: Array.isArray(b.to) ? b.to.join(",") : b.to, from: b.from, subject: b.subject, text: b.text, inReplyTo: "", replyTo: String(b.reply_to ?? ""), files: (b.attachments ?? []).map((a) => a.filename) });
       return new Response(JSON.stringify({ id: `re_${sends.length}` }), { status: 200 });
     }
     if (String(url) === "https://oauth2.googleapis.com/token") return new Response(JSON.stringify({ access_token: "ya29.test" }), { status: 200 });
@@ -254,6 +254,9 @@ describe("Wynn listens to her whole note, researches when asked, and keeps her s
     expect((await env.WP_OS_DB.prepare("SELECT draft_body FROM tlc_brand_reply WHERE deal_id = 'tld_host'").first<{ draft_body: string }>())!.draft_body).not.toMatch(/your team leads/i);
     const { draftProblems } = await import("../src/worker/services/tlcBrandReply");
     expect(draftProblems("A segment led by Host Co or by our host.", "QUESTION", { weHost: true })).toEqual([]);
+    // 25–40 guests per event, flexible: never the club's planned size.
+    expect(draftProblems("A room of 80 to 120 people.", "QUESTION")).toEqual(["a room of 80 to 120 (her rule: 25–40 guests per event, flexible)"]);
+    expect(draftProblems("A room of 25–40 guests, flexible to your goals.", "QUESTION")).toEqual([]);
     expect(block).toContain("led by the brand or by our host");
     // Money alone (no call ask) is refused too: the no-money rule stands on its own.
     await deal("tld_cash2", "Cash Two", "pat@cash2.example");
@@ -283,5 +286,154 @@ describe("Wynn listens to her whole note, researches when asked, and keeps her s
     expect(herNoteOf("Shorter please.\nThanks,\nSequoia", "Sequoia Taylor")).toBe("Shorter please.");
     expect(parseDraftReply(`change 2: shorter\nand mention the series of six\n${"y".repeat(650)}\napprove 1`)).toMatchObject({ approve: [1], change: [{ n: 2, note: `shorter\nand mention the series of six\n${"y".repeat(650)}` }] });
     expect(standingRulesIn("Don't discuss money this early. Explain who we are. Never ask for a call.")).toEqual(["Don't discuss money this early.", "Never ask for a call."]);
+  });
+});
+
+/**
+ * A YES TO THE THREE SAMPLES, AND A CALL THE BRAND ASKED FOR (owner, 26 Oct 2026). Fake brands only.
+ */
+describe("a yes to the samples gets the 3-page PDF; a call they asked for is scheduled from her calendar", () => {
+  const THREE_PAGES = { pdfBase64: Buffer.from("%PDF-1.4 /Type /Page a /Type /Page b /Type /Page c").toString("base64"), pageCount: 3 };
+  const MON = new Date("2026-11-09T14:00:00.000Z"); // Monday 09:00 in New York
+  const docEnv = () => ({ ...env, WP_OS_DOCUMENTS: t.docs } as Env);
+  const sentDrip = async (dealId: string, body: string) =>
+    env.WP_OS_DB.prepare("INSERT INTO tlc_drip_message (id, deal_id, step, subject, body, state, sent_at) VALUES (?1, ?2, 1, 'x', ?3, 'SENT', '2026-11-05T15:00:00.000Z')").bind(`tdm_${crypto.randomUUID()}`, dealId, body).run();
+  const take = async (e: Env, dealId: string, text: string, mid: string, extra: Record<string, unknown> = {}) => {
+    const { takeBrandReply } = await import("../src/worker/services/tlcBrandReply");
+    const d = (await e.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(dealId).first())! as never;
+    return takeBrandReply(e, d, { messageId: `<${mid}>`, subject: "Re: x + a small room in New York", text, receivedAt: MON.toISOString() }, { now: MON, drafter, ...extra });
+  };
+  const approve = (e: Env, ref: string, deps: Record<string, unknown> = {}) =>
+    applyBrandReplyApproval(e, { fromHeader: `Her <${APPROVER}>`, authenticationResults: auth(APPROVER), subject: `Re: Wynn · ${ref}`, body: `approved\n\nRef ${ref}` }, { now: MON, drafter, ...deps });
+  const refOf = async (dealId: string) => (await env.WP_OS_DB.prepare("SELECT notice_ref FROM tlc_brand_reply WHERE deal_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(dealId).first<{ notice_ref: string }>())!.notice_ref;
+
+  it("\"Sure, send it\": Parker builds the PDF, ONE approval email carries it and the cover email, her approved sends both ONCE", async () => {
+    const e = docEnv();
+    await deal("tld_samp", "Sample Co", "pat@sample.example");
+    await sentDrip("tld_samp", `Hi,\n\n${THREE_THINGS_OFFER}`);
+    sends.length = 0;
+    expect(await take(e, "tld_samp", "Sure, send it over!", "s-1@sample.example", { samples: { renderPdf: async () => THREE_PAGES, writer: async () => ({ ok: true, text: JSON.stringify({ segment_title: "Making it remember", series_title: "Give it a memory", reach: "founders building agents" }) }) } })).toBe("DRAFTED");
+    const { sendReplyApprovals } = await import("../src/worker/services/tlcBrandReply");
+    await sendReplyApprovals(e, MON);
+    expect(sends).toHaveLength(1);
+    const toHer = sends[0]!;
+    expect(toHer.to).toBe("sequoia@westpeek.ventures");
+    expect(toHer.files).toEqual(["The Learning Club - Build Your Own AI Agent - Sample Co.pdf"]);
+    expect(toHer.text).toContain("Here's a short 3-page PDF, built around Sample Co:");
+    expect(toHer.text).toContain("led by Sample Co or by our host");
+    expect(toHer.text).toContain("ATTACHED (goes with it): The Learning Club - Build Your Own AI Agent - Sample Co.pdf, 3 pages");
+    sends.length = 0;
+    const ref = await refOf("tld_samp");
+    expect((await approve(e, ref)).handled).toBe(true);
+    const toBrand = sends.filter((x) => x.to.includes("sample.example"));
+    expect(toBrand).toHaveLength(1);
+    expect(toBrand[0]!.text).toContain("Sample Co.pdf");
+    expect((await e.WP_OS_DB.prepare("SELECT state FROM tlc_samples WHERE deal_id = 'tld_samp'").first<{ state: string }>())!.state).toBe("SENT");
+    // A second "approved" sends nothing again.
+    sends.length = 0;
+    await approve(e, ref);
+    expect(sends.filter((x) => x.to.includes("sample.example"))).toHaveLength(0);
+  });
+
+  it("a yes with no samples offered is not read as a yes to samples, and a 'not now' never is", async () => {
+    const e = docEnv();
+    await deal("tld_nooffer", "Plain Co", "pat@plain.example");
+    await take(e, "tld_nooffer", "Sure, sounds interesting", "n-1@plain.example");
+    expect((await e.WP_OS_DB.prepare("SELECT samples_id FROM tlc_brand_reply WHERE deal_id = 'tld_nooffer'").first<{ samples_id: string | null }>())!.samples_id).toBeNull();
+    await deal("tld_later", "Later Co", "pat@later.example");
+    await sentDrip("tld_later", `Hi,\n\n${THREE_THINGS_OFFER}`);
+    await take(e, "tld_later", "Not right now, maybe later in the year", "l-1@later.example");
+    expect((await e.WP_OS_DB.prepare("SELECT samples_id FROM tlc_brand_reply WHERE deal_id = 'tld_later'").first<{ samples_id: string | null }>())!.samples_id).toBeNull();
+  });
+
+  it("they ask for a call: three open times from her calendar (never one she is busy for); they pick one; on her word it goes on her calendar, them invited", async () => {
+    const { nyToUtc, slotWords } = await import("../src/shared/tlc/callSlots");
+    const tue11 = nyToUtc(2026, 11, 10, 11).getTime();
+    const busy = async () => ({ busy: [{ start: tue11, end: tue11 + 3_600_000 }], note: null });
+    const made: Array<{ start: string; attendees: readonly string[] }> = [];
+    const makeEvent = async (_e: Env, ev: { start: string; attendees: readonly string[] }) => { made.push(ev); return { id: "gcal_1" }; };
+    await deal("tld_call", "Call Co", "kim@call.example");
+    sends.length = 0;
+    await take(env, "tld_call", "This looks great. Can we set up a call next week?", "c-1@call.example", { busy });
+    const row = (await env.WP_OS_DB.prepare("SELECT offered_slots_json, draft_body, intent FROM tlc_brand_reply WHERE deal_id = 'tld_call'").first<{ offered_slots_json: string; draft_body: string; intent: string }>())!;
+    const offered = JSON.parse(row.offered_slots_json) as string[];
+    expect(offered.map(slotWords)).toEqual(["Tuesday 10 Nov, 2:00pm", "Wednesday 11 Nov, 11:00am", "Thursday 12 Nov, 11:00am"]);
+    for (const x of offered) expect(row.draft_body).toContain(slotWords(x));
+    expect(row.draft_body).not.toContain(THREE_THINGS_OFFER);
+    const { sendReplyApprovals } = await import("../src/worker/services/tlcBrandReply");
+    await sendReplyApprovals(env, MON);
+    await approve(env, await refOf("tld_call"));
+    expect(sends.some((x) => x.to.includes("call.example"))).toBe(true);
+    expect(made).toHaveLength(0);
+    // They pick Wednesday: agreed, drafted, and only on HER word does it go on the calendar.
+    sends.length = 0;
+    await take(env, "tld_call", "Wednesday works for us, thanks!", "c-2@call.example", { busy });
+    const agreed = (await env.WP_OS_DB.prepare("SELECT agreed_slot, draft_body FROM tlc_brand_reply WHERE deal_id = 'tld_call' AND agreed_slot IS NOT NULL").first<{ agreed_slot: string; draft_body: string }>())!;
+    expect(agreed.agreed_slot).toBe(offered[1]);
+    expect(agreed.draft_body).toContain("Wednesday 11 Nov, 11:00am");
+    await sendReplyApprovals(env, MON);
+    expect(sends[0]!.text).toContain("ON YOUR WORD: Wednesday 11 Nov, 11:00am goes on your calendar, kim@call.example invited");
+    expect(made).toHaveLength(0);
+    sends.length = 0;
+    const out = await approve(env, await refOf("tld_call"), { makeEvent });
+    expect(made).toEqual([expect.objectContaining({ start: offered[1], attendees: ["kim@call.example"] })]);
+    expect(out.detail).toContain("is on your calendar, kim@call.example invited");
+    expect((await env.WP_OS_DB.prepare("SELECT stage FROM tlc_deal WHERE id = 'tld_call'").first<{ stage: string }>())!.stage).toBe("CALL");
+  });
+
+  it("steps 4 and 5: after the samples, the proposal with the one-pager; the level they pick gets the agreement and invoice; her approved agrees the deal ONCE", async () => {
+    const e = docEnv();
+    const render = { renderPdf: async () => ({ pdfBase64: Buffer.from("%PDF-1.4 /Type /Page a").toString("base64"), pageCount: 1 }) };
+    await deal("tld_flow", "Flow Co", "ash@flow.example");
+    await e.WP_OS_DB.prepare("INSERT INTO tlc_samples (id, deal_id, input_json, state, sent_at) VALUES ('tls_flow', 'tld_flow', ?1, 'SENT', '2026-11-06T15:00:00.000Z')")
+      .bind(JSON.stringify({ segmentTitle: "Making it remember", seriesTitle: "Memory night", reach: "founders building agents" })).run();
+    sends.length = 0;
+    await take(e, "tld_flow", "Love the samples, a couple of notes: we'd want developers in the room.", "f-1@flow.example", { samples: render });
+    const p = (await e.WP_OS_DB.prepare("SELECT kind, draft_body, attachments_json FROM tlc_brand_reply WHERE deal_id = 'tld_flow'").first<{ kind: string; draft_body: string; attachments_json: string }>())!;
+    expect(p.kind).toBe("PROPOSAL");
+    expect(p.draft_body).toContain("Here's how Flow Co could take part:");
+    expect(p.draft_body).toContain('• Partner: "Making it remember", led by Flow Co or by our host');
+    expect(p.draft_body).toContain("Prices for each are on the attached one-pager.");
+    expect(JSON.parse(p.attachments_json)).toEqual([expect.objectContaining({ name: "The Learning Club - Build Your Own AI Agent - partner levels.pdf" })]);
+    const { sendReplyApprovals } = await import("../src/worker/services/tlcBrandReply");
+    await sendReplyApprovals(e, MON);
+    expect(sends[0]!.files).toEqual(["The Learning Club - Build Your Own AI Agent - partner levels.pdf"]);
+    // The exec format bolds numbers ("step **4**"), so the line is read without the bold.
+    expect(sends[0]!.text.replace(/\*\*/g, "")).toContain("step 4: the proposal (prices on the attached one-pager)");
+    await approve(e, await refOf("tld_flow"));
+    expect(sends.filter((x) => x.to.includes("flow.example"))).toHaveLength(1);
+    // They pick a level: the confirmation, with a one-page agreement and the invoice, for her approval.
+    sends.length = 0;
+    await take(e, "tld_flow", "Let's go with Presenting partner.", "f-2@flow.example", { samples: render });
+    const c = (await e.WP_OS_DB.prepare("SELECT kind, tier, draft_body, attachments_json FROM tlc_brand_reply WHERE deal_id = 'tld_flow' AND kind = 'CONFIRM'").first<{ kind: string; tier: string; draft_body: string; attachments_json: string }>())!;
+    expect(c.tier).toBe("PRESENTING");
+    expect(c.draft_body).toContain("we're thrilled to have Flow Co as Presenting partner. Attached are a one-page agreement and the invoice.");
+    expect((JSON.parse(c.attachments_json) as Array<{ name: string }>).map((f) => f.name)).toEqual(["The Learning Club - Flow Co - agreement.pdf", "The Learning Club - Flow Co - invoice.pdf"]);
+    await sendReplyApprovals(e, MON);
+    expect(sends[0]!.files).toEqual(["The Learning Club - Flow Co - agreement.pdf", "The Learning Club - Flow Co - invoice.pdf"]);
+    expect((await e.WP_OS_DB.prepare("SELECT stage FROM tlc_deal WHERE id = 'tld_flow'").first<{ stage: string }>())!.stage).toBe("PITCHED");
+    sends.length = 0;
+    const ref = await refOf("tld_flow");
+    await approve(e, ref);
+    const toBrand = sends.filter((x) => x.to.includes("flow.example"));
+    expect(toBrand).toHaveLength(1);
+    expect(toBrand[0]!.text).toContain("Flow Co - agreement.pdf");
+    expect(await e.WP_OS_DB.prepare("SELECT stage, tier, cash_offer_usd FROM tlc_deal WHERE id = 'tld_flow'").first()).toEqual({ stage: "AGREED", tier: "PRESENTING", cash_offer_usd: 15000 });
+    sends.length = 0;
+    await approve(e, ref);
+    expect(sends.filter((x) => x.to.includes("flow.example"))).toHaveLength(0);
+  });
+
+  it("a time they proposed is accepted when she is free, and never when she is busy", async () => {
+    const { nyToUtc } = await import("../src/shared/tlc/callSlots");
+    const thu = nyToUtc(2026, 11, 12, 14, 30).getTime();
+    await deal("tld_prop", "Prop Co", "lee@prop.example");
+    await take(env, "tld_prop", "Could we do a quick call Thursday at 2:30pm?", "p-1@prop.example", { busy: async () => ({ busy: [], note: null }) });
+    expect((await env.WP_OS_DB.prepare("SELECT agreed_slot FROM tlc_brand_reply WHERE deal_id = 'tld_prop'").first<{ agreed_slot: string }>())!.agreed_slot).toBe(new Date(thu).toISOString());
+    await deal("tld_busy", "Busy Co", "lee@busy.example");
+    await take(env, "tld_busy", "Could we do a quick call Thursday at 2:30pm?", "b-1@busy.example", { busy: async () => ({ busy: [{ start: thu - 600_000, end: thu + 3_600_000 }], note: null }) });
+    const r = (await env.WP_OS_DB.prepare("SELECT agreed_slot, offered_slots_json FROM tlc_brand_reply WHERE deal_id = 'tld_busy'").first<{ agreed_slot: string | null; offered_slots_json: string }>())!;
+    expect(r.agreed_slot).toBeNull();
+    expect((JSON.parse(r.offered_slots_json) as string[]).includes(new Date(thu).toISOString())).toBe(false);
   });
 });

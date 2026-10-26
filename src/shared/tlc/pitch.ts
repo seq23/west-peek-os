@@ -72,6 +72,13 @@ export interface TlcInternalView extends TlcClubView {
   decidedBy?: string | null;
 }
 
+/**
+ * WHAT A BRAND IS TOLD ABOUT THE ROOM (owner, 26 Oct 2026): every brand email and pitch says 25–40 guests per
+ * event, flexible to the brand's needs, whatever size the club is planned for. The planned size stays internal
+ * (the one-pager and the economics read it).
+ */
+export const BRAND_GUESTS_WORDS = `${TLC_SEATS.min}–${TLC_SEATS.max} guests per event, flexible to your goals`;
+
 const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const usd = (n: number): string => `$${Math.round(n).toLocaleString("en-US")}`;
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -182,18 +189,17 @@ export function renderBrandPitch(v: TlcClubView): string {
   const safety = safetyLines(v.topic, `${v.angle ?? ""} ${v.handsOn ?? ""} ${v.aiSegment ?? ""}`);
   // Open slots only: not the bench, not a slot a featured partner already fills.
   const cats = [...new Set(v.categories.filter((c) => !c.bench && !c.featured).map((c) => categoryName(c.category)))];
-  const seats = v.seats ?? TLC_SEATS;
   return page(
     `The Learning Club: ${v.topic}`,
     `<div class="eyebrow">West Peek Rooms · The Learning Club</div>
 <h1>${esc(v.topic)}</h1>
 <p class="lede">${esc(hook)}</p>
-<p class="when">${esc(clubWhen(v.eventDate, v.slot))} · New York City · An intimate room, sized to your goals: planned for ${seatsWords(seats)} people</p>
+<p class="when">${esc(clubWhen(v.eventDate, v.slot))} · New York City · An intimate room: ${BRAND_GUESTS_WORDS}</p>
 <h2>Why now for your category</h2>
 <p>${esc(why)}</p>
 ${sourcesList(v.sources)}
 <h2>Who is in the room</h2>
-<ul><li>${seatsWords(seats)} New Yorkers who chose this topic. Every seat is a paid ticket ($${TLC_TICKET_PRICE_USD}), so everyone in the room chose to come.</li>
+<ul><li>${TLC_SEATS.min}–${TLC_SEATS.max} New Yorkers per event, a number we flex to your goals, who chose this topic. Every seat is a paid ticket ($${TLC_TICKET_PRICE_USD}), so everyone in the room chose to come.</li>
 <li>Founders, operators, creatives and builders from a community of more than 5,000.</li>
 <li>Taught by someone who does this for a living. The session: arrive, learn, an hour hands-on, a real meal, go deeper, share, close.</li>
 ${v.aiSegment ? `<li>The AI segment: ${esc(brandSafe(v.aiSegment))}</li>` : ""}

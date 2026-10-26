@@ -1,4 +1,5 @@
 import { PARTNERS } from "../registry/partners";
+import { fillTemplate } from "./brandFlow";
 /**
  * WEST PEEK ROOMS — THE LEARNING CLUB (TLC) EDITION. Owner-approved 22 Oct 2026.
  *
@@ -72,8 +73,8 @@ export const TLC_GO_CHECK_DAYS = [21, 14] as const;
 export const TLC_TICKET_GATE_DAYS = 14;
 /** The booking pack goes to the partners ~6 weeks out; a topic with no interested brand is flagged then. */
 export const TLC_BOOKING_PACK_DAYS = 42;
-/** Brand emails: day 0, 4, 10 and 18 after the first. */
-export const TLC_DRIP_DAYS = [0, 4, 10, 18] as const;
+/** Brand emails: the first pitch, and ONE follow-up four days later (her flow, 26 Oct 2026: "After this, no more follow-ups"). */
+export const TLC_DRIP_DAYS = [0, 4] as const;
 export const TLC_SPONSOR_CATEGORIES = { min: 5, max: 10 } as const;
 
 /**
@@ -595,6 +596,8 @@ export interface DripEmailInput {
  */
 export const TLC_DRIP_PROOF_LINE = "Our community of more than 5,000 founders, operators and creatives meets in person through West Peek Rooms, our event series in New York.";
 export const TLC_DRIP_ASK = "Would you be open to exploring a partnership?";
+/** Every brand email says 25–40 guests per event, flexible to the brand's needs (owner, 26 Oct 2026), whatever the club's planned size. */
+export const BRAND_GUESTS = `${TLC_SEATS.min} to ${TLC_SEATS.max} people per event (flexible to your goals)`;
 /**
  * THE NEXT STEP IS THREE SAMPLES, NEVER A CALL (owner, 26 Oct 2026). Wynn never suggests or asks for a call; deals
  * close over email. Email 2 (the one follow-up to a brand that has not replied) and every answer Wynn drafts offer
@@ -650,7 +653,6 @@ export function dripEmail(raw: DripEmailInput): { subject: string; text: string 
   const hi = input.contactName ? `Hi ${input.contactName.split(" ")[0]},` : "Hi,";
   const when = monthWords(input.month);
   const subject = `${input.brand} + a small room in New York`;
-  const seats = input.seats ?? TLC_SEATS;
   const reason = brandFacingReason(input.why);
   const lead = reason ? `I am writing because ${reason}` : `I am writing because ${input.brand} feels like a natural fit for a room we are building.`;
   const bodies = [
@@ -658,22 +660,17 @@ export function dripEmail(raw: DripEmailInput): { subject: string; text: string 
       hi,
       "",
       lead,
-      `In ${when} we are hosting The Learning Club in New York: ${seats.min === seats.max ? seats.min : `${seats.min} to ${seats.max}`} people spending an afternoon or evening going deep on ${input.topic}, hands-on. We are looking for a few founding partners for the first clubs.`,
+      `In ${when} we are hosting The Learning Club in New York: ${BRAND_GUESTS} spending an afternoon or evening going deep on ${input.topic}, hands-on. We are looking for a few founding partners for the first clubs.`,
       TLC_DRIP_PROOF_LINE,
       "",
       TLC_DRIP_ASK,
     ],
-    [
-      hi,
-      "",
-      `A quick picture of the room, in case it helps. ${seats.min === seats.max ? seats.min : `${seats.min} to ${seats.max}`} New Yorkers, each with a paid seat, at tables of four. A teacher who does this for a living walks them through ${input.topic}, then they spend an hour making something with their own hands, share a real meal, and leave with what they made.`,
-      "",
-      TLC_SAMPLES_OFFER,
-    ],
-    [hi, "", `Following up once more on The Learning Club in ${when}. If a partnership around ${input.topic} is on your radar, I would be glad to share more.`],
-    [hi, "", `Last note from me on the ${input.topic} club. If the timing is wrong this round, we run one most months in New York and I would be glad to keep ${input.brand} in mind.`],
+    // Step 2 of her flow (shared/tlc/brandFlow.ts): the ONE follow-up, which offers the three samples. After it,
+    // no more follow-ups, and it carries no P.S. (her template).
+    [fillTemplate("followUp", { hi, brand: input.brand })],
   ];
-  const text = [...bodies[Math.min(input.step, 3)]!, "", ...TLC_SIGNATURE, "", TLC_PS_BY_STEP[Math.min(input.step, 3)]!].join("\n");
+  const step = Math.min(input.step, bodies.length - 1);
+  const text = [...bodies[step]!, "", ...TLC_SIGNATURE, ...(step === 0 ? ["", TLC_PS_BY_STEP[0]!] : [])].join("\n");
   return { subject, text };
 }
 
