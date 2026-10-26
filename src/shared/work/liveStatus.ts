@@ -358,7 +358,8 @@ export function liveStatus(card: LiveStatusInput, meId: string, now: Date = new 
       ...base,
       kind: "WAITING",
       section: "worked",
-      pill: "Waiting for reset",
+      // A card waiting for a seat that did not answer (26 Oct 2026) says so; the plan-reset wait keeps its words.
+      pill: card.waiting_for?.startsWith("Waiting for the subscription seat") ? "Waiting for the seat" : "Waiting for reset",
       line: card.waiting_for?.trim() ? card.waiting_for.trim() : "Both AI plans are out of usage · it starts again by itself when one resets",
     };
   }

@@ -5,7 +5,7 @@ import { appendEvent } from "../events";
 import { notifyPartners, notifyQuietly } from "./notifications";
 import { privacyVisibilityClause } from "./authorize";
 import type { FirmUserIdentity } from "../auth";
-import { allSeatAvailability } from "../ai/subscriptionSeats";
+import { SEAT_REGISTRY, allSeatAvailability, deviceCanSearch, describeAge, isExhausted, isSeat, type DeviceRow } from "../ai/subscriptionSeats";
 import { json } from "../router";
 import { partnerByEmail, partnerByFirmUserId, partnerByName } from "../../shared/registry/partners";
 import { filePreview } from "./previewApproval";
@@ -234,6 +234,69 @@ export async function currentSpendState(env: Env, firmScope: string, now: Date =
     seatSearch = false;
   }
   return { lever, seatSearch };
+}
+
+/*
+ * ── A SEAT THAT DID NOT ANSWER IS NOT A SPEND DECISION (26 Oct 2026) ───────────────────────────────
+ *
+ * Wynn's TLC brand batch (wc_dd3481d8…) stopped on `free_only_cannot_serve_protected_work` and Sequoia was
+ * emailed STUCK, asked to move the spend setting. The setting was right. The firm's Mac seat — Claude Code and
+ * Codex, declared "web_search", the lane that ran the W43 batch two days earlier — had simply not answered: two
+ * seat runs sat unclaimed for the router's two minutes and were ABANDONED, and by the search call the seat's
+ * heartbeat was outside its freshness window, so the router saw "no seat available" and the free lanes refused.
+ * Twelve minutes later the seat was checking in again.
+ *
+ * That is an infrastructure wait dressed as her decision. So, at Free only, a refusal is a spend question ONLY
+ * when the firm has no seat that could do the work at all. When a seat with the needed capability (search, for a
+ * search call) checked in within `SEAT_STILL_OURS_MS` and is not out of usage, the card waits and tries again on
+ * the seat by itself: no block, no email, no attempt spent. A seat silent for longer than that is genuinely absent,
+ * and then — only then — the spend setting is the question.
+ */
+export const SEAT_STILL_OURS_MS = 24 * 60 * 60_000;
+export const SEAT_WAIT_MINUTES = 10;
+
+export interface SeatWait {
+  seat: string;
+  /** Plain words: which seat, on which machine, last seen how long ago. */
+  said: string;
+}
+
+/**
+ * Is there a seat that could take this refused call once it answers? Pure over the device rows, so it is
+ * testable. A search call needs a machine that declared "web_search"; any other call takes any machine.
+ */
+export function seatThatCouldServe(rows: readonly DeviceRow[], searchCall: boolean, now: Date): SeatWait | null {
+  const usable = rows
+    .filter((r) => isSeat(r.seat))
+    .filter((r) => !searchCall || deviceCanSearch(r))
+    .filter((r) => !isExhausted(r, now))
+    .filter((r) => {
+      const age = now.getTime() - Date.parse(r.last_seen_at);
+      return Number.isFinite(age) && age <= SEAT_STILL_OURS_MS;
+    })
+    .sort((x, y) => (x.last_seen_at < y.last_seen_at ? 1 : -1));
+  const lead = usable[0];
+  if (!lead || !isSeat(lead.seat)) return null;
+  const age = Math.max(0, now.getTime() - Date.parse(lead.last_seen_at));
+  return {
+    seat: lead.seat,
+    said: `the ${SEAT_REGISTRY[lead.seat].displayName} seat on ${lead.hostname ?? lead.device_id} (last checked in ${describeAge(age)} ago) did not answer in time`,
+  };
+}
+
+/** The firm's seats, read once. Never throws: an unreadable table reads as "no seat", the old behaviour. */
+export async function seatToWaitFor(env: Env, searchCall: boolean, now: Date = new Date()): Promise<SeatWait | null> {
+  try {
+    const rows =
+      (
+        await env.WP_OS_DB.prepare(
+          "SELECT seat, device_id, hostname, agent_version, last_seen_at, exhausted_until, exhausted_reason, capabilities_json FROM subscription_seat_device",
+        ).all<DeviceRow>()
+      ).results ?? [];
+    return seatThatCouldServe(rows, searchCall, now);
+  } catch {
+    return null;
+  }
 }
 
 export const spendStateJson = (s: SpendState, searchCall = false): string =>

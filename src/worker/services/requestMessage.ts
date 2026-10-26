@@ -381,7 +381,7 @@ export async function handleGetWorkCardSteps(ctx: RouteContext): Promise<Respons
       await ctx.env.WP_OS_DB.prepare(
         `SELECT event_type, payload_json, created_at FROM event_record
           WHERE object_type = 'work_card' AND object_id IN (${marks})
-            AND event_type IN ('work_card.swept', 'work_card.auto_released', 'work_card.waiting_for_reset')
+            AND event_type IN ('work_card.swept', 'work_card.auto_released', 'work_card.waiting_for_reset', 'work_card.waiting_for_seat')
           ORDER BY created_at DESC LIMIT 80`,
       )
         .bind(...ids)
