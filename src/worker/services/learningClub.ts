@@ -612,6 +612,8 @@ export interface DripResult {
   sentBrands: string[];
   /** Approved emails over today's warm-up allowance: they go on the next pass with room. */
   waitingForAllowance: number;
+  /** First pitches held because another brand in the same category for the same club is live (owner, 26 Oct 2026). */
+  heldForCategory?: string[];
   /** What Wynn did with brand replies this pass (tlcBrandReply), in words. */
   replies?: string;
 }
@@ -676,6 +678,33 @@ export function approvedFor(env: Env, approvalCardId: string, recipient: string)
   return { ...env, [APPROVED_SEND_ENV_KEY]: marker } as Env;
 }
 
+/** How long a pitched brand that never answered its one follow-up counts as live before its category opens again. */
+export const CATEGORY_QUIET_DAYS = 7;
+
+/**
+ * THE BRAND THAT HOLDS THIS ONE'S CATEGORY, if any (owner, 26 Oct 2026: two brands in the same category for the same
+ * club are never pitched at the same time). Another deal for the same club and category is live while it has not
+ * declined or been stopped and has not gone quiet: a reply keeps it live; a brand that got its one follow-up and
+ * said nothing for CATEGORY_QUIET_DAYS has gone quiet. A first pitch already queued for approval also holds the
+ * category (`sentOnly` counts only brands already written to, for the send step).
+ */
+export async function categoryRival(env: Env, deal: TlcDealRow, now: Date, sentOnly = false): Promise<string | null> {
+  if (!deal.category?.trim()) return null;
+  const quietBefore = new Date(now.getTime() - CATEGORY_QUIET_DAYS * 86_400_000).toISOString();
+  const row = await env.WP_OS_DB.prepare(
+    `SELECT d.brand FROM tlc_deal d
+      WHERE d.event_id = ?1 AND d.id != ?2 AND lower(trim(d.category)) = lower(trim(?3)) AND d.firm_scope = ?4
+        AND d.stage NOT IN ('DECLINED','STOPPED') AND (d.stop_reason IS NULL OR d.stop_reason = 'REPLIED')
+        AND (
+          d.stop_reason = 'REPLIED' OR d.stage IN ('CALL','WAITING_ON_OWNERS','AGREED','PAID','DELIVERED')
+          OR (d.first_sent_at IS NOT NULL AND NOT (d.drip_step >= ?5 AND d.last_sent_at < ?6))
+          OR (?7 = 0 AND EXISTS (SELECT 1 FROM tlc_drip_message m WHERE m.deal_id = d.id AND m.step = 0 AND m.state = 'AWAITING_APPROVAL' AND d.created_at <= ?8))
+        )
+      ORDER BY d.first_sent_at IS NULL, d.first_sent_at, d.created_at LIMIT 1`,
+  ).bind(deal.event_id, deal.id, deal.category, deal.firm_scope, TLC_DRIP_DAYS.length, quietBefore, sentOnly ? 1 : 0, (deal as TlcDealRow & { created_at?: string }).created_at ?? now.toISOString()).first<{ brand: string }>();
+  return row?.brand ?? null;
+}
+
 export async function runDrip(env: Env, now: Date, firmScope = "west-peek", replyDeps: import("./tlcBrandReply").BrandReplyDeps = {}): Promise<DripResult> {
   const settings = await tlcSettings(env);
   const gate = brandSendGate(settings, await tlcOutside(env), await contentHashes(env));
@@ -710,6 +739,8 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
         await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'HELD', held_reason = 'the brand answered or was stopped before it went' WHERE id = ?1").bind(m.id).run();
         continue;
       }
+      // Approved together with a rival in its category: the first pitch waits (still approved) until that one is done.
+      if (m.step === 0 && (await categoryRival(env, deal, now, true))) continue;
       try {
         await executeExternalEffect(approvedFor(env, m.approval_card_id, deal.contact_email), wynn, m.effect_request_id, m.approval_card_id);
         const first = deal.first_sent_at ?? now.toISOString();
@@ -753,6 +784,16 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
     if ((await ownerContactedBrands(env, firmScope)).has(brandKey(deal.brand))) {
       await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = NULL, updated_at = ?2 WHERE id = ?1").bind(deal.id, now.toISOString()).run();
       continue;
+    }
+    // ONE BRAND PER CATEGORY AT A TIME (owner, 26 Oct 2026): a second brand in the same category for the same club
+    // is not pitched while the first is live; it waits until the first declines or goes quiet after its follow-up.
+    if (deal.drip_step === 0) {
+      const first = await categoryRival(env, deal, now);
+      if (first) {
+        await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = ?2, updated_at = ?3 WHERE id = ?1").bind(deal.id, new Date(now.getTime() + 86_400_000).toISOString(), now.toISOString()).run();
+        result.heldForCategory = [...(result.heldForCategory ?? []), `${brandDisplayName(deal.brand)} (after ${brandDisplayName(first)})`];
+        continue;
+      }
     }
     // Email 1 uses her approved text word for word when she approved one for this brand and club (0266).
     const approvedFirst = deal.drip_step === 0 ? await approvedDayZeroFor(env, deal.brand, ev.month, ev.topic, firmScope) : null;
