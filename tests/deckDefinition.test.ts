@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
-  DECK_SLIDES, MONEY_BINDINGS, PERCENT_BINDINGS, bindingsUsed, type Binding,
+  DECK_SLIDES, LOCATION_LINE, MONEY_BINDINGS, PERCENT_BINDINGS, bindingsUsed, type Binding, type Slot,
 } from "../src/shared/deck/definition";
 
 /**
@@ -26,6 +26,18 @@ import {
  * at length, and a scan that cannot tell prose from code fails on the explanation of the thing it
  * exists to catch — the trap the design-token validator already hit once in this repo.
  */
+/** The words a block prints, whatever its kind. */
+function slotWords(x: Slot): string {
+  switch (x.kind) {
+    case "text": case "heading": case "quote": return x.text;
+    case "figure": case "derivation": return x.label;
+    case "image": return x.caption ?? "";
+    case "images": return x.items.map((i) => i.caption ?? "").join(" ");
+    case "table": return x.rows.flat().map((c) => (typeof c === "string" ? c : "")).join(" ");
+    case "person": return [x.name, ...x.points].join(" ");
+  }
+}
+
 const RAW = readFileSync(fileURLToPath(new URL("../src/shared/deck/definition.ts", import.meta.url)), "utf8");
 const SRC = RAW.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
@@ -119,7 +131,7 @@ describe("the claims the operator approved, quoted rather than paraphrased", () 
   const text = (key: string) => {
     const slide = DECK_SLIDES.find((s) => s.key === key);
     expect(slide, `the ${key} slide is missing`).toBeTruthy();
-    return `${slide!.headline} ${slide!.standfirst ?? ""} ${slide!.slots.map((x) => (x.kind === "text" ? x.text : x.label)).join(" ")}`;
+    return `${slide!.headline} ${slide!.standfirst ?? ""} ${slide!.slots.map(slotWords).join(" ")}`;
   };
 
   it("carries the FINRA line on the SECONDARIES slide, at the source's wording", () => {
@@ -156,8 +168,18 @@ describe("the claims the operator approved, quoted rather than paraphrased", () 
     expect(bullets.length).toBe(3);
   });
 
-  it("puts the three cities where the deck says who West Peek is", () => {
-    expect(`${text("cover")} ${text("team")}`).toContain("New York • San Francisco • Atlanta");
+  it("puts the cover's location line exactly as the partners wrote it, and the team page says the same", () => {
+    // Owner, 26 Oct 2026: exactly this line. One constant, so the two pages cannot drift apart.
+    expect(LOCATION_LINE).toBe("New York · San Francisco · Atlanta (and everywhere in between)");
+    expect(DECK_SLIDES.find((s) => s.key === "cover")!.standfirst).toBe(LOCATION_LINE);
+    expect(text("team")).toContain(LOCATION_LINE);
+    expect(SRC).not.toMatch(/New York • San Francisco • Atlanta/);
+  });
+
+  it("spells it the US way: checks, never cheques, anywhere that renders", () => {
+    for (const slide of DECK_SLIDES) {
+      expect([slide.headline, slide.standfirst ?? "", ...slide.slots.map(slotWords)].join(" "), `${slide.key} says cheque`).not.toMatch(/cheque/i);
+    }
   });
 
   it("never carries the $500M figure anywhere", () => {
@@ -180,7 +202,7 @@ describe("no figure hides in a headline, a standfirst or a spelled-out number", 
    */
   const NUMBER_WORDS = /\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty)(?:-\w+)?\s+(?:companies|positions|checks|cheques|investments)\b/i;
   const prose = (s: (typeof DECK_SLIDES)[number]) =>
-    [s.headline, s.standfirst ?? "", ...s.slots.map((x) => (x.kind === "text" ? x.text : x.label))];
+    [s.headline, s.standfirst ?? "", ...s.slots.map(slotWords)];
 
   it("carries no money, percentage or spelled-out count anywhere that renders", () => {
     const offenders: string[] = [];
@@ -237,10 +259,25 @@ describe("the deck answers the question a first-time fund is actually asked", ()
     expect(slide!.standfirst).toMatch(/not going to present transaction volume/i);
   });
 
-  it("measures the community claim with its denominator rather than asserting a headcount", () => {
+  it("says how deals reach us with strong true points, and prints no small count or ratio (26 Oct 2026)", () => {
+    /*
+     * REWRITTEN TO THE NEW TRUTH, AT LEAST AS STRICT. This used to require "2 of 8" WITH its
+     * denominator. The owner's ruling: page 4 drops community_sourced_share and ANY small count or
+     * ratio, and proves how deals reach us with the strong true points instead. So the binding is
+     * forbidden on every slide, any "N of M" or "N out of M" is forbidden in every rendered string,
+     * and each of the four approved points must be present.
+     */
     const slide = DECK_SLIDES.find((s) => s.key === "sourcing")!;
-    expect(slide.slots.some((s) => s.kind === "figure" && s.bind === "community_sourced_share")).toBe(true);
-    // A proportion of four is a signal, not a statistic, and the slide says so.
-    expect(slide.standfirst).toMatch(/small\s+sample/i);
+    expect(bindingsUsed()).not.toContain("community_sourced_share");
+    const all = DECK_SLIDES.map((s) => [s.headline, s.standfirst ?? "", ...s.slots.map(slotWords)].join(" ")).join(" ");
+    expect(all).not.toMatch(/\b\d+\s+(?:of|out of)\s+\d+\b/i);
+    expect(all).not.toMatch(/small\s+sample/i);
+    const page = [slide.headline, slide.standfirst ?? "", ...slide.slots.map(slotWords)].join(" ");
+    expect(page).toContain("5,000+");
+    expect(slide.standfirst).toBe("Every company we've looked at reached us through someone in our community: no cold outreach, no paid deal flow.");
+    expect(page).toMatch(/Rooms evenings/);
+    expect(page).toMatch(/Member intros/);
+    expect(page).toMatch(/come to us before they raise/);
+    expect(page).toContain("more than $100M in secondary transactions");
   });
 });

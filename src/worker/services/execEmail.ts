@@ -288,6 +288,100 @@ export async function sendPartnersEmail(
 }
 
 /**
+ * A PLAIN LETTER TO BOTH PARTNERS, ON ONE THREAD (26 Oct 2026) — for a conversation the partners
+ * have with an employee in their own words, where the exec layout (TL;DR, labelled sections) would
+ * get in the way. First user: the LP deck preview, whose first email the owner wrote word for word
+ * ("Hi Scooter and Sequoia, …") and whose replies are "page 4 should say…".
+ *
+ * EVERY GATE BUT THE LAYOUT IS THE SAME: partner addresses only (To and nothing else), the employee
+ * switch, a resolvable employee sender, Reply-To the intake mailbox, one event per attempt. The
+ * layout lint is replaced by the plain one below, not dropped: a subject a partner can read, a body
+ * that says something, signed by the employee.
+ *
+ * ONE MESSAGE, ONE THREAD TOKEN in its headers — and a thread row for EACH partner, so a reply from
+ * either one, even from a phone that drops the References header, matches this conversation by its
+ * subject (emailThread.steerFromReply's fallback reads rows by the replying partner's address).
+ */
+export function lintPlainLetter(subject: string, text: string, employee: string): string[] {
+  const v: string[] = [];
+  if (!subject.trim()) v.push("the subject is empty");
+  if (subject.length > SUBJECT_MAX_PLAIN) v.push(`subject is ${subject.length} characters; the limit is ${SUBJECT_MAX_PLAIN}`);
+  if (text.trim().length < 40) v.push("the letter says almost nothing");
+  const last = text.trim().split("\n").slice(-2).join(" ");
+  if (!last.includes(employee)) v.push(`the letter is not signed by ${employee}`);
+  return v;
+}
+const SUBJECT_MAX_PLAIN = 90;
+
+function plainHtml(text: string): string {
+  const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+  const linked = (s: string) => esc(s).replace(/https:\/\/[^\s<]+/g, (u) => `<a href="${u}">${u}</a>`);
+  return `<div style="font:16px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#141311;max-width:620px">${text
+    .trim()
+    .split(/\n{2,}/)
+    .map((para) => `<p style="margin:0 0 14px">${para.split("\n").map(linked).join("<br>")}</p>`)
+    .join("")}</div>`;
+}
+
+export async function sendPartnersLetter(
+  env: Env,
+  input: {
+    to: readonly string[];
+    employee: string;
+    subject: string;
+    text: string;
+    objectType: string;
+    objectId: string;
+    firmScope: string;
+    actorId?: string;
+    replyOnThread?: string | null;
+    events?: { sent: string; notSent: string };
+  },
+): Promise<PartnerEmailOutcome & { recipients: string[] }> {
+  const to = [...new Set(input.to.map((a) => a.trim().toLowerCase()))];
+  const events = input.events ?? { sent: "deliverable.emailed_to_partner", notSent: "deliverable.email_not_sent" };
+  const actor = { objectType: input.objectType, objectId: input.objectId, firmScope: input.firmScope, actorId: input.actorId ?? "work_sweep", actorType: "system" as const };
+  const joined = to.join(", ");
+  const stranger = to.find((a) => !ASSIGNING_PARTNERS.includes(a));
+  if (to.length === 0 || stranger) {
+    return { sent: false, to: joined, recipients: to, reason: `${stranger ?? "nobody"} is not one of the two partner addresses; an employee's email goes nowhere else`, subject: input.subject };
+  }
+  if (!aiOutboundSwitches(env).toPartners) {
+    return { sent: false, to: joined, recipients: to, reason: "employees cannot email the partners: WP_OS_AI_EMAIL_PARTNERS is off", subject: input.subject };
+  }
+  const violations = lintPlainLetter(input.subject, input.text, input.employee);
+  if (violations.length > 0) {
+    const reason = `not sent — the letter does not meet the format: ${violations.join("; ")}`;
+    await record(env, actor, events.notSent, { to, subject: input.subject, detail: reason, provider_message_id: null, violations });
+    return { sent: false, to: joined, recipients: to, reason, subject: input.subject };
+  }
+  const sender = senderFor(input.employee);
+  if ("refusal" in sender) {
+    await record(env, actor, events.notSent, { to, subject: input.subject, detail: sender.refusal, provider_message_id: null });
+    return { sent: false, to: joined, recipients: to, reason: sender.refusal, subject: input.subject };
+  }
+  const threads = [];
+  for (const address of to) {
+    threads.push(await startThread(env, { objectType: input.objectType, objectId: input.objectId, cardKind: null, employee: input.employee, to: address, subject: input.subject, firmScope: input.firmScope }));
+  }
+  const thread = threads[0]!;
+  let result: EmailSendResult;
+  try {
+    const headers = input.replyOnThread
+      ? { References: `${threadReference(input.replyOnThread)} ${thread.headers.References}`, "In-Reply-To": threadReference(input.replyOnThread) }
+      : thread.headers;
+    result = await transport(env, { to, subject: input.subject, text: input.text.trim(), html: plainHtml(input.text), from: sender.from, headers });
+  } catch (err) {
+    result = { sent: false, provider: "resend", detail: err instanceof Error ? err.message : String(err), provider_message_id: null };
+  }
+  if (result.sent) for (const t of threads) await recordThreadDelivery(env, t.token, result);
+  await record(env, actor, result.sent ? events.sent : events.notSent, {
+    to, subject: input.subject, detail: result.detail, provider_message_id: result.provider_message_id, thread_token: thread.token,
+  });
+  return { sent: result.sent, to: joined, recipients: to, reason: result.detail, subject: input.subject, threadToken: thread.token };
+}
+
+/**
  * A partner asks Home to email them a copy of something already prepared for them. Same layout,
  * same transport, no employee switch — a person pressed the button for their own inbox. The
  * recipient is a `firm_user` row the caller resolved; a typed address cannot reach this.

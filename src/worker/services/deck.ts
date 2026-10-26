@@ -2,13 +2,12 @@ import { z } from "zod";
 import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { json } from "../router";
-import { tweakDeckInBrowser, type DeckTweak } from "./deckTweak";
 import { appendEvent } from "../events";
 import { actorFromIdentity, authorize, type Actor } from "./authorize";
 import { notifyPartners } from "./notifications";
 import { uploadDocument } from "./documents";
 import { renderDeckHtml, type DeckFigures } from "../../shared/deck/render";
-import { ALL_BINDINGS, type Binding, type Slide } from "../../shared/deck/definition";
+import { PARTNERS } from "../../shared/registry/partners";
 import { figuresFromDocs, type MandateDoc } from "../../shared/deck/figures";
 import { runAi } from "../ai/runAi";
 import { getDocument, getDocumentVersion } from "./documents";
@@ -421,397 +420,15 @@ export async function figuresFromRecords(env: Env, fundId: string): Promise<Deck
   });
 }
 
-/**
- * RENDER THE PDF HERE, IN THE WORKER. scripts/deck/build.mjs's own header says the Worker has a
- * Browser Rendering binding and could do this; it chose the Mac because a human was pressing the
- * button. Once the rebuild is Preston's card rather than a chore on her laptop, the render has to
- * happen where Preston works. Same HTML, same page size, same "fonts ready" wait as the script.
- *
- * Returns null, with the reason, where no browser is available (local dev, a test) — the version
- * is then recorded without a document and the summary says so in words, which is what the daily
- * job had been doing silently for five days.
+/*
+ * THE PDF-PER-CHANGE CHAIN IS GONE (26 Oct 2026). Until today a records move or a partner's
+ * request rendered a whole PDF version (copy the current deck and repaint its figures, or render
+ * the definition) and asked for a decision on it; v3–v18 were built that way and almost all were
+ * sent back. The owner's design replaces it: a DECK PREVIEW the partners review and change by
+ * replying, and ONE PDF on "approved". See services/deckPreview.ts. The functions that copied,
+ * transcribed and re-rendered PDFs (carryCurrentDeck, copyDeckWithTweaks, buildDeckPdf,
+ * runDeckRebuild, rebuildIfRecordsMoved) were removed rather than left uncalled.
  */
-const BINDINGS: readonly Binding[] = ALL_BINDINGS.filter((b) => b !== "as_of_date");
-
-export interface CarriedDeck {
-  slides: Slide[];
-  corrections: Array<{ page: number; field: string; was: string; now: string; context?: string }>;
-  sourceVersionNo: number;
-  sourcePages: number;
-}
-
-/** The current deck's PDF, as base64, or null when there is no current deck with a document. */
-async function currentDeckPdf(env: Env, fundId: string): Promise<{ base64: string; versionNo: number } | null> {
-  const current = await env.WP_OS_DB.prepare(
-    "SELECT version_no, document_id FROM deck_version WHERE fund_id = ?1 AND state = 'CURRENT' AND document_id IS NOT NULL ORDER BY version_no DESC LIMIT 1",
-  ).bind(fundId).first<{ version_no: number; document_id: string }>();
-  if (!current) return null;
-  const doc = await getDocument(env, current.document_id);
-  const version = doc?.current_version_id ? await getDocumentVersion(env, doc.current_version_id) : null;
-  const bucket = (env as unknown as { WP_OS_DOCUMENTS?: R2Bucket }).WP_OS_DOCUMENTS;
-  if (!version || !bucket) return null;
-  const object = await bucket.get(version.r2_key);
-  if (!object) return null;
-  const bytes = new Uint8Array(await object.arrayBuffer());
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return { base64: btoa(binary), versionNo: current.version_no };
-}
-
-/**
- * PULL FROM THE CURRENT DECK. Operator, 14 Sep 2026, on v12: "i dont understand why the new deck
- * doesnt have any pages replicated from the old deck that are not to be updated. its sparse none of
- * the old info carried over." She was right: the rebuild rendered a ten-slide template from the
- * records and never opened the sixteen-page deck the firm actually sends.
- *
- * So the rebuild now reads the current deck through the AI boundary — the same document path
- * deckReader.ts uses for a founder's deck — and transcribes it page by page: headline, standfirst,
- * every bullet, in order, nothing dropped. Where a page states a figure the records hold, the
- * model marks it as that field and the page renders the RECORD'S value (a `figure` slot bound to
- * it), so the records win and the deck cannot disagree with them; each such substitution is
- * listed as a correction. Everything else is carried verbatim.
- *
- * Returns null when there is no current deck to pull from, or the reading fails — the caller then
- * builds from the template and says so, rather than shipping nothing.
- */
-export async function carryCurrentDeck(env: Env, actor: Actor, fundId: string, figures: DeckFigures, steer = ""): Promise<CarriedDeck | null> {
-  const pdf = await currentDeckPdf(env, fundId);
-  if (!pdf) return null;
-  const prompt = [
-    // WHAT SHE SAID WHEN SHE SENT THE LAST ONE BACK, at the top, where it outranks the rest.
-    steer,
-    "You are transcribing the firm's CURRENT limited-partner deck so it can be re-rendered in full with corrected figures.",
-    "Go page by page, in order. For EVERY page output one object: {\"page\": n, \"headline\": \"...\", \"standfirst\": \"...\" or null, \"lines\": [...]}.",
-    "Each line is either {\"text\": \"the sentence or bullet, verbatim\"} or, when the line states a figure the records hold,",
-    `{\"label\": \"what the line calls it\", \"bind\": one of ${JSON.stringify(BINDINGS)}, \"was\": \"the figure as printed, exactly — '$3M', '30%', '$30 Million'\", \"line\": \"the whole printed line the figure sits in, exactly\"}.`,
-    "Carry every sentence, bullet, name, and claim on the page; do not summarise, merge pages, or drop anything. Keep the deck's voice.",
-    "Charts and images: describe them in one text line beginning 'Chart:' or 'Image:'.",
-    "The records currently hold these figures (the bind keys): " + JSON.stringify(figures) + ".",
-    "Return ONLY JSON: {\"pages\": [ ... ]}.",
-  ].filter((line) => line.length > 0).join("\n");
-  const { run } = await runAi(env, {
-    purpose: `Carry the current deck (v${pdf.versionNo}) into the rebuild`,
-    actor,
-    inputs: [prompt],
-    documents: [{ mediaType: "application/pdf", dataBase64: pdf.base64, label: `deck v${pdf.versionNo}` }],
-    sensitivity: "INTERNAL" as never,
-    budgetContext: { judgement: true, expectedOutputTokens: 6_000 },
-    routing: { category: "RESEARCH", taskClass: "deck_reading" },
-  });
-  if (run.status !== "COMPLETED" || !run.output_text) return null;
-  const match = /\{[\s\S]*\}/.exec(run.output_text);
-  if (!match) return null;
-  let pages: TranscribedPage[];
-  try {
-    pages = (JSON.parse(match[0]) as { pages?: typeof pages }).pages ?? [];
-  } catch {
-    return null;
-  }
-  if (pages.length === 0) return null;
-  return { ...slidesFromTranscript(pages, figures), sourceVersionNo: pdf.versionNo, sourcePages: pages.length };
-}
-
-export type TranscribedPage = { page?: number; headline?: string; standfirst?: string | null; lines?: Array<{ text?: string; label?: string; bind?: string; was?: string; line?: string }> };
-
-/** Pure: the model's transcription becomes slides, with every record-held figure bound to the record. */
-export function slidesFromTranscript(pages: TranscribedPage[], figures: DeckFigures): { slides: Slide[]; corrections: CarriedDeck["corrections"] } {
-  const corrections: CarriedDeck["corrections"] = [];
-  const slides: Slide[] = pages.map((p, i) => {
-    const slots: Slide["slots"] = [];
-    for (const line of p.lines ?? []) {
-      const bind = line.bind && (BINDINGS as readonly string[]).includes(line.bind) ? (line.bind as Binding) : null;
-      if (bind) {
-        slots.push({ kind: "figure", label: (line.label ?? bind).slice(0, 120), bind });
-        const now = renderBindingText(bind, figures);
-        if (line.was && now && line.was.trim() !== now.trim()) {
-          corrections.push({ page: p.page ?? i + 1, field: bind, was: line.was, now, ...(line.line ? { context: line.line } : {}) });
-        }
-      } else if (line.text) {
-        slots.push({ kind: "text", text: line.text.slice(0, 400) });
-      }
-    }
-    return {
-      key: `carried-${p.page ?? i + 1}`,
-      headline: (p.headline ?? `Page ${p.page ?? i + 1}`).slice(0, 160),
-      standfirst: p.standfirst ? p.standfirst.slice(0, 300) : undefined,
-      slots,
-    };
-  });
-  return { slides, corrections };
-}
-
-function renderBindingText(bind: Binding, figures: DeckFigures): string {
-  // Kept beside the renderer's own binding rules: the same value the slide will print.
-  const html = renderDeckHtml(figures, [{ key: "probe", headline: "x", slots: [{ kind: "figure", label: "x", bind }] }]);
-  const m = /<span class="value">([^<]*)<\/span>/.exec(html);
-  return m ? m[1]!.replace(/&amp;/g, "&").replace(/&thinsp;/g, "") : "";
-}
-
-export async function buildDeckPdf(
-  env: Env,
-  fundId: string,
-  launch?: (binding: unknown) => Promise<{ newPage(): Promise<any>; close(): Promise<void> }>,
-  carried?: CarriedDeck | null,
-): Promise<{ pdfBase64: string; pageCount: number } | { pdfBase64: null; reason: string }> {
-  const binding = (env as unknown as { BROWSER?: unknown }).BROWSER;
-  if (!launch && !binding) {
-    return { pdfBase64: null, reason: "no browser is available here — the BROWSER binding is not configured" };
-  }
-  const figures = await figuresFromRecords(env, fundId);
-  const html = carried ? renderDeckHtml(figures, carried.slides) : renderDeckHtml(figures);
-  let browser: { newPage(): Promise<any>; close(): Promise<void> } | null = null;
-  try {
-    const doLaunch =
-      launch ??
-      (async (b: unknown) => {
-        const puppeteer = await import("@cloudflare/puppeteer");
-        return (await puppeteer.launch(b as never)) as unknown as { newPage(): Promise<any>; close(): Promise<void> };
-      });
-    browser = await doLaunch(binding);
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: "networkidle0" });
-    await page.evaluate(() => (document as unknown as { fonts: { ready: Promise<unknown> } }).fonts.ready);
-    const bytes: Uint8Array = new Uint8Array(
-      await page.pdf({
-        width: "13.333in",
-        height: "7.5in",
-        printBackground: true,
-        margin: { top: "0", right: "0", bottom: "0", left: "0" },
-      }),
-    );
-    let binary = "";
-    for (let i = 0; i < bytes.length; i += 0x8000) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-    }
-    const pageCount = (new TextDecoder("latin1").decode(bytes).match(/\/Type\s*\/Page[^s]/g) ?? []).length;
-    return { pdfBase64: btoa(binary), pageCount };
-  } catch (err) {
-    return { pdfBase64: null, reason: `the browser could not render the deck: ${err instanceof Error ? err.message : String(err)}` };
-  } finally {
-    if (browser) await browser.close().catch(() => undefined);
-  }
-}
-
-/**
- * THE NEW VERSION IS THE CURRENT DECK, COPIED, WITH ITS FIGURES CHANGED IN PLACE.
- *
- * Operator, 15 Sep 2026: "every deck should copy the original deck and make tweaks." v12–v14 were
- * transcribed and re-typeset — the design became bullet points — and all three were sent back.
- * Every page is copied byte-for-byte in the browser; only the figures that disagree with the
- * records are painted over, at their own size and place. A figure that cannot be found is left as
- * printed and named. If the copy cannot be made, the rebuild fails visibly — it never falls back
- * to re-typesetting.
- */
-export async function copyDeckWithTweaks(
-  env: Env,
-  fundId: string,
-  launch: Parameters<typeof buildDeckPdf>[2] | undefined,
-  carried: CarriedDeck,
-): Promise<{ pdfBase64: string; pageCount: number; placed: DeckTweak[]; missing: DeckTweak[] } | { pdfBase64: null; reason: string }> {
-  const binding = (env as unknown as { BROWSER?: unknown }).BROWSER;
-  if (!launch && !binding) return { pdfBase64: null, reason: "no browser is available here — the BROWSER binding is not configured" };
-  const source = await currentDeckPdf(env, fundId);
-  if (!source) return { pdfBase64: null, reason: "there is no current deck with a PDF to copy" };
-  const tweaks: DeckTweak[] = carried.corrections.map((c) => ({ page: c.page, was: c.was, now: c.now, field: c.field, ...(c.context ? { context: c.context } : {}) }));
-  let browser: { newPage(): Promise<any>; close(): Promise<void> } | null = null;
-  try {
-    const doLaunch =
-      launch ??
-      (async (b: unknown) => {
-        const puppeteer = await import("@cloudflare/puppeteer");
-        return (await puppeteer.launch(b as never)) as unknown as { newPage(): Promise<any>; close(): Promise<void> };
-      });
-    browser = await doLaunch(binding);
-    const page = await browser.newPage();
-    const out = await tweakDeckInBrowser(page, source.base64, tweaks);
-    return out;
-  } catch (err) {
-    return { pdfBase64: null, reason: `the browser could not copy the deck: ${err instanceof Error ? err.message : String(err)}` };
-  } finally {
-    if (browser) await browser.close().catch(() => undefined);
-  }
-}
-
-export async function runDeckRebuild(
-  env: Env,
-  actor: Actor,
-  input: {
-    title?: string; pdfBase64?: string | null; brief?: string | null; launch?: Parameters<typeof buildDeckPdf>[2]; carry?: boolean; steer?: string;
-    /** Build from the deck definition, and why. Set when the records moved in a way a copy of the current deck cannot carry. */
-    fromDefinition?: string;
-  } = {},
-): Promise<{ version: DeckVersionRow; changed: number; rendered: boolean; renderNote: string | null; carried: CarriedDeck | null }> {
-  const fund = await theFund(env);
-  // The PDF is built HERE unless the caller brought one (the Mac script does). A rebuild that
-  // records a version with nothing behind it is the empty daily this replaces.
-  let pdfBase64 = input.pdfBase64 ?? null;
-  let pageCount: number | null = null;
-  let renderNote: string | null = null;
-  let carried: CarriedDeck | null = null;
-  let placed: DeckTweak[] = [];
-  let missing: DeckTweak[] = [];
-  if (!pdfBase64) {
-    if (input.fromDefinition) {
-      /*
-       * THE RECORDS CHANGED SHAPE, NOT JUST VALUE. A copy of the current deck can only repaint the
-       * figures it already prints; Fund I's final math adds lines the current deck has no place
-       * for (follow-ons, secondary positions, the per-company cap, the GP commitment, the net
-       * target) and removes one (the 5% minimum ownership). So this version is rendered from the
-       * definition, every figure bound, and it is a PROPOSAL like every other: she approves it on
-       * Fund strategy or sends it back.
-       */
-      const built = await buildDeckPdf(env, fund.id, input.launch, null);
-      if (built.pdfBase64) {
-        pdfBase64 = built.pdfBase64;
-        pageCount = built.pageCount;
-      } else {
-        renderNote = "reason" in built ? built.reason : null;
-      }
-    } else if (input.carry !== false) {
-      // Pull from the current deck first; fall back to the template only when there is none.
-      const figures = await figuresFromRecords(env, fund.id);
-      carried = await carryCurrentDeck(env, actor, fund.id, figures, input.steer ?? "").catch(() => null);
-    }
-    if (input.fromDefinition) {
-      // Built above.
-    } else if (carried) {
-      // COPY, NEVER RE-TYPESET. The transcript is used only to know which figures to change and
-      // what they say now; the pages themselves come from the current PDF.
-      const copied = await copyDeckWithTweaks(env, fund.id, input.launch, carried);
-      if (copied.pdfBase64) {
-        pdfBase64 = copied.pdfBase64;
-        pageCount = copied.pageCount;
-        placed = copied.placed;
-        missing = copied.missing;
-      } else {
-        renderNote = "reason" in copied ? copied.reason : null;
-      }
-    } else if (await currentDeckPdf(env, fund.id)) {
-      // THERE IS A DECK AND IT COULD NOT BE READ. Building the template instead would be the
-      // re-typeset the operator rejected three times; nothing is built and the reason is said.
-      renderNote = "the current deck could not be read to find its figures, so nothing was built — the template is never used while a current deck exists";
-    } else {
-      const built = await buildDeckPdf(env, fund.id, input.launch, null);
-      if (built.pdfBase64) {
-        pdfBase64 = built.pdfBase64;
-        pageCount = built.pageCount;
-      } else {
-        renderNote = "reason" in built ? built.reason : null;
-      }
-    }
-  }
-  const version = await recordDeckVersion(env, actor, {
-    fundId: fund.id,
-    title: input.title ?? `${fund.name} — rebuilt from the records`,
-    origin: "BUILT",
-    createdBy: DECK_OWNER,
-    createdByType: "AI",
-    pdfBase64,
-    pageCount,
-    changeSummary: [
-      carried
-        ? `Copied every page of v${carried.sourceVersionNo} as designed; ` +
-          (placed.length > 0
-            ? `${placed.length} figure(s) changed in place: ` + placed.slice(0, 8).map((c) => `p${c.page} ${c.field} ${c.was} → ${c.now}`).join("; ")
-            : carried.corrections.length === 0
-              ? "every figure already matched the records, so nothing was changed"
-              : "no figure could be changed in place") +
-          (missing.length > 0
-            ? `. Left as printed (could not be found on the page): ${missing.slice(0, 6).map((c) => `p${c.page} ${c.field} ${c.was}`).join("; ")}`
-            : "")
-        : input.fromDefinition
-          ? `Built from the deck definition, every figure read from the records: ${input.fromDefinition}` +
-            (renderNote ? `. No PDF: ${renderNote}` : "")
-          : "Built from the template: there was no current deck to pull from",
-      input.brief ? `On request: ${input.brief.slice(0, 300)}` : null,
-    ].filter(Boolean).join(". "),
-  });
-  // ONE PROPOSAL AT A TIME. Every older version still waiting on a decision is superseded by this
-  // one, the way the operator did by hand for v6–v9 on 14 Sep — five identical proposals waiting
-  // on five decisions about nothing is what a queue looks like when nobody closes it.
-  await env.WP_OS_DB.prepare(
-    "UPDATE deck_version SET state = 'REJECTED', rejected_reason = 'SUPERSEDED', approved_at = ?3 WHERE fund_id = ?1 AND id <> ?2 AND state = 'PROPOSED'",
-  )
-    .bind(fund.id, version.id, new Date().toISOString())
-    .run();
-
-  let changed: FigureDrift[] = [];
-  try {
-    changed = JSON.parse(version.changed_fields_json) as FigureDrift[];
-  } catch {
-    changed = [];
-  }
-
-  /*
-   * EVERY EMPLOYEE REPORTS COMPLETION, and to BOTH partners — the deck is the firm's document and
-   * Scooter's name is on it. `notifyPartners` addresses one notice per person from the role join, so
-   * each gets their own row and quiet hours apply to both; a firm-wide notice would skip the
-   * preference block entirely, which is the defect found in every all-clear this system had sent.
-   *
-   * INSIDE THE OS, NEVER EMAILED. See the rule at the top of this file: a document with a current
-   * version is linked, not attached, or a forwarded copy drifts from the version the OS calls
-   * current.
-   */
-  await notifyPartners(env, {
-    kind: "MEETING",
-    severity: "INFO",
-    title: `${DECK_OWNER} has rebuilt the deck — v${version.version_no} is waiting on a decision`,
-    body:
-      changed.length === 0
-        ? "No fund figure changed since the last version. Open it on Fund strategy to approve or send it back."
-        : `${changed.length} figure${changed.length === 1 ? "" : "s"} changed: ` +
-          `${changed.slice(0, 4).map((c) => `${c.field} ${c.was} → ${c.now}`).join("; ")}. ` +
-          "Open it on Fund strategy to approve or send it back.",
-    objectType: "deck_version",
-    objectId: version.id,
-    dedupeKey: `deck_rebuilt:${version.id}`,
-    firmScope: actor.firmScopes[0] ?? "west-peek",
-  });
-
-  return { version, changed: changed.length, rendered: pdfBase64 !== null, renderNote, carried };
-}
-
-/**
- * THE RECORDS MOVED UNDER THE DECK, SO PRESTON REBUILDS IT — once.
- *
- * "A deck is rebuilt when the records move or when a partner asks" (jobs.ts), but nothing watched
- * for the first half: Fund I's final math landed (mandate v5, sleeve v7) and the deck kept
- * printing the old figures. This runs on the 15-minute diagnostics sweep. It compares the policy
- * versions the NEWEST deck version was built from — whatever its state — with the latest records;
- * when any record is newer it records one PROPOSED version from the definition. The new version's
- * own snapshot then matches, so it never fires twice for the same records, and a version she sends
- * back is not rebuilt behind her. Nothing is sent: the version waits on Fund strategy.
- */
-export async function rebuildIfRecordsMoved(
-  env: Env,
-  launch?: Parameters<typeof buildDeckPdf>[2],
-): Promise<{ rebuilt: boolean; reason: string; versionNo?: number }> {
-  const fund = await env.WP_OS_DB.prepare("SELECT id FROM fund LIMIT 1").first<{ id: string }>();
-  if (!fund) return { rebuilt: false, reason: "no fund" };
-  const newest = await env.WP_OS_DB.prepare(
-    "SELECT version_no, records_snapshot_json FROM deck_version WHERE fund_id = ?1 ORDER BY version_no DESC LIMIT 1",
-  ).bind(fund.id).first<{ version_no: number; records_snapshot_json: string }>();
-  if (!newest) return { rebuilt: false, reason: "no deck version to compare against" };
-  let built: RecordsSnapshot["policy_versions"] | null = null;
-  try {
-    built = (JSON.parse(newest.records_snapshot_json) as RecordsSnapshot).policy_versions ?? null;
-  } catch { built = null; }
-  const now = {
-    mandate: (await latestPolicy(env, "investment_mandate_version", "mandate_json", fund.id))?.version_no ?? null,
-    sleeve: (await latestPolicy(env, "sleeve_policy_version", "sleeve_json", fund.id))?.version_no ?? null,
-    reserve: (await latestPolicy(env, "reserve_policy_version", "reserve_json", fund.id))?.version_no ?? null,
-  };
-  const moved = (Object.keys(now) as Array<keyof typeof now>).filter(
-    (k) => now[k] !== null && (built?.[k] ?? null) !== null && (now[k] as number) > (built![k] as number),
-  );
-  if (moved.length === 0) return { rebuilt: false, reason: `deck v${newest.version_no} is built from the latest records` };
-  const why = `the fund records moved since v${newest.version_no} (` +
-    moved.map((k) => `${k} v${built![k]} → v${now[k]}`).join(", ") + ")";
-  const actor = actorFromIdentity(deckSystemIdentity("west-peek"));
-  const out = await runDeckRebuild(env, actor, { fromDefinition: why, launch, carry: false });
-  return { rebuilt: true, reason: why, versionNo: out.version.version_no };
-}
-
 // ── A rejection becomes Preston's card, and the card becomes the next version ────────────────
 
 const DECK_OWNER_ID = "aie_preston";
@@ -846,30 +463,26 @@ export async function requestDeckRework(
 ): Promise<{ id: string } | null> {
   if (rejected.origin !== "BUILT") return null;
   const firmScope = (rejected as unknown as { firm_scope?: string }).firm_scope ?? "west-peek";
-  // THE NEXT NUMBER IS THE NEXT NUMBER, not the rejected one plus one. v14 was sent back after v15
-  // existed and the card read "Rebuild the LP deck as v15" for a build that would be v16.
-  const top = await env.WP_OS_DB.prepare("SELECT COALESCE(MAX(version_no), 0) AS n FROM deck_version WHERE fund_id = ?1")
-    .bind(rejected.fund_id)
-    .first<{ n: number }>();
-  const nextNo = (top?.n ?? rejected.version_no) + 1;
+  // THE PREVIEW TAKES IT (26 Oct 2026). A version sent back is a change request on the deck
+  // preview, not an order for another PDF; the PDF comes only from "approved".
   const card = await createWorkCardInternal(env, deckSystemIdentity(firmScope), {
-    title: `Rebuild the LP deck as v${nextNo}`,
+    title: "Take this change to the LP deck preview",
     description: [
       `v${rejected.version_no} was sent back by ${rejectedBy} with this reason:`,
       "",
       reason,
       "",
-      "Pull from the current deck and the fund records, fix every discrepancy between them, and make it",
-      "full and ready for limited partners. Every figure comes from the records; where the current deck",
-      "disagrees with the records, the records win and the change is listed.",
+      "Apply it to the deck preview and answer on the preview email. No PDF until a partner replies \"approved\".",
     ].join("\n"),
-    next_action: `Build v${nextNo} from the records and propose it on Fund strategy.`,
+    next_action: "Apply it to the deck preview and reply on the preview email.",
     owner_type: "AI",
     owner_id: DECK_OWNER_ID,
     priority: "HIGH",
     firm_scope: firmScope,
     prompt: reason,
   });
+  const asker = PARTNERS.find((p) => p.fullName === rejectedBy) ?? null;
+  if (asker) await env.WP_OS_DB.prepare("UPDATE work_card SET requested_by_email = ?2 WHERE id = ?1").bind(card.id, asker.email).run();
   await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'DECK_REWORK' WHERE id = ?1").bind(card.id).run();
   await appendEvent(env, {
     eventType: "deck_version.rework_requested",
@@ -878,68 +491,45 @@ export async function requestDeckRework(
     objectType: "work_card",
     objectId: card.id,
     firmScope,
-    payload: { rejected_version_id: rejected.id, version_no: rejected.version_no, next_version_no: nextNo },
+    payload: { rejected_version_id: rejected.id, version_no: rejected.version_no },
   });
   return { id: card.id };
 }
 
 /**
- * The sweep's runner for a DECK_REWORK card: build the next version from the records, with the
- * card's brief as the change summary, close the card with a note that says where to look. If the
- * browser cannot render, the version is still recorded and the card says so — a partner then knows
- * exactly what is missing rather than finding an empty proposal.
- */
-/**
- * What a rework can actually do, for the interpretation pass.
- *
- * DELIBERATELY NARROW, because the chain is. The operator rejected a re-typeset deck three times;
- * a rebuild therefore COPIES the current deck page for page and changes only the figures the
- * records disagree with. So "the numbers are stale" is a steer this can honour, and "rewrite the
- * team page" is not — and the correct answer to the second is to say so, not to produce a version
- * identical to the last one with her complaint printed on the label.
+ * The sweep's runner for a DECK_REWORK card (a version sent back on Fund strategy): the reason she
+ * typed becomes a change request on the DECK PREVIEW, exactly as if she had replied to the preview
+ * email, and the card closes saying where to look. The preview's sweep applies it and answers on the
+ * preview thread. No PDF is made here; only "approved" makes one.
  */
 export const DECK_REWORK_STEPS: readonly string[] = [
-  "Read the current deck page by page, keeping every page, line and claim exactly as designed.",
-  "Change the figures the firm's records disagree with, in place, and list each change.",
-  "Record the result as a PROPOSED version on Fund strategy and tell both partners.",
-  "The deck is COPIED, never re-typeset: no page is rewritten, added, removed or reordered, no wording is changed, no image or chart is made, and no design is altered.",
-  "Nothing is sent to a limited partner — a person approves the version first.",
-  "A Managing Partner's own instruction extends what you do here — apply it using judgement and whatever you already have access to, rather than treating it as out of scope. Only decline something that genuinely needs a tool, data source or integration that does not exist anywhere in this system, or that would need to pass through approval regardless of who asked.",
+  "Fold the partner's reason into the open deck preview as a change request (a new round if none is open).",
+  "The preview's sweep applies it to the same preview and answers on the preview thread.",
+  "No PDF is made until a partner replies \"approved\"; nothing is sent to a limited partner.",
 ];
 
 export async function runDeckRework(
   env: Env,
   card: { id: string; title: string; firm_scope: string },
-  launch?: Parameters<typeof buildDeckPdf>[2],
   interpret?: Interpreter,
 ): Promise<{ finished: boolean; blocked: boolean; detail: string }> {
-  const row = await env.WP_OS_DB.prepare("SELECT description, prompt FROM work_card WHERE id = ?1")
+  const row = await env.WP_OS_DB.prepare("SELECT description, prompt, requested_by_email FROM work_card WHERE id = ?1")
     .bind(card.id)
-    .first<{ description: string | null; prompt: string | null }>();
-  const brief = row?.prompt ?? row?.description ?? null;
+    .first<{ description: string | null; prompt: string | null; requested_by_email: string | null }>();
+  const brief = (row?.prompt ?? row?.description ?? "").trim();
   const actor: Actor = { type: "SYSTEM", roles: [], firmScopes: [card.firm_scope] };
-
   /*
-   * THE REASON SHE TYPED WHEN SHE SENT THE DECK BACK, READ BY A MODEL (16 Sep 2026).
-   *
-   * This runner DID read `work_card.prompt` — it is the rejection reason, put there by
-   * `decideDeckVersion` — and then used it as a STRING ON A LABEL: `changeSummary` gained the
-   * words "On request: <her reason>" and nothing else in the rebuild ever saw them. The rebuild is
-   * a deterministic copy of the current deck with corrected figures, so "send it back with what is
-   * still wrong" produced a new version whose content was identical to the one she rejected, with
-   * her complaint printed underneath it. Reading a column is not the same as reaching a model, and
-   * this is the clearest case of the difference in the repo.
-   *
-   * Now her reason is interpreted first. What the copy can honour becomes a steer on the
-   * transcription; what it cannot — a page rewritten, a chart made, a section added — blocks the
-   * card and says which part, rather than proposing the same deck again.
+   * HER WORDS REACH A MODEL TWICE, ON PURPOSE. Here, to decide whether this chain can honour them
+   * at all (a request for something no deck can do blocks the card and says which part); and on the
+   * preview, where the editor applies them to the slides. The interpreted steer travels with her
+   * words so the editor reads what the interpretation understood.
    */
   const steer = await steerFor(env, actor, {
     cardId: card.id,
     cardKind: "DECK_REWORK",
     title: card.title,
     employee: DECK_OWNER,
-    chain: "rebuilding the limited-partner deck after it was sent back",
+    chain: "applying a partner's change to the limited-partner deck preview",
     steps: [...DECK_REWORK_STEPS],
     firmScope: card.firm_scope,
     extra: brief ? [{ source: "BLOCK_ANSWER", text: brief, who: null }] : [],
@@ -953,42 +543,17 @@ export async function runDeckRework(
     });
     return { finished: false, blocked: true, detail: why };
   }
-
-  const out = await runDeckRebuild(env, actor, { brief, launch, ...(steer.text ? { steer: steer.text } : {}) });
-  const drift = (() => {
-    try {
-      return JSON.parse(out.version.changed_fields_json) as FigureDrift[];
-    } catch {
-      return [] as FigureDrift[];
-    }
-  })();
-  const detail = out.rendered
-    ? `v${out.version.version_no} is proposed on Fund strategy, ${out.version.page_count ?? "?"} pages. ` +
-      (out.carried
-        ? `Every page of v${out.carried.sourceVersionNo} was carried over` +
-          (out.carried.corrections.length > 0
-            ? `; ${out.carried.corrections.length} figure(s) corrected to the records: ${out.carried.corrections.slice(0, 5).map((c) => `p${c.page} ${c.field} ${c.was} → ${c.now}`).join("; ")}.`
-            : "; every figure already matched the records.")
-        : "Built from the template because there was no current deck to pull from. ") +
-      (drift.length > 0
-        ? ` ${drift.length} fund figure(s) moved since the last version: ${drift.slice(0, 5).map((d) => `${d.field} ${d.was} → ${d.now}`).join("; ")}.`
-        : "") +
-      " Approve it there, or send it back with what is still wrong and this card reopens as the next version."
-    : `v${out.version.version_no} was recorded but NO PDF could be rendered: ${out.renderNote}. The version is on Fund strategy without a document.`;
-  // Written onto the card the way every employee finding is (employeeWork.appendFinding): a note
-  // row is a partner's steer and its author must be a firm user, which Preston is not.
+  const { startOrUpdatePreview, recordReply } = await import("./deckPreview");
+  const { preview } = await startOrUpdatePreview(env, { reason: "A partner sent a deck version back", changes: [] });
+  const partner = (row?.requested_by_email ?? "").trim() || PARTNERS[0]!.email;
+  const said = [brief, steer.text ? `(Read as: ${steer.text.slice(0, 600)})` : ""].filter(Boolean).join("\n\n");
+  if (said) await recordReply(env, preview.id, said, partner);
+  const detail = `Folded into deck preview round ${preview.round_no} as a change request; Preston applies it there and replies on the preview email. Preview: https://os.joinwestpeek.com/api/deck/preview`;
   const existing = await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(card.id).first<{ description: string | null }>();
-  await env.WP_OS_DB.prepare("UPDATE work_card SET description = ?2 WHERE id = ?1")
+  await env.WP_OS_DB.prepare("UPDATE work_card SET description = ?2, state = 'DONE', next_action = NULL WHERE id = ?1")
     .bind(card.id, `${existing?.description ? `${existing.description}\n` : ""}• ${DECK_OWNER}: ${detail}`.slice(0, 8000))
     .run();
-  if (out.rendered) {
-    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE', next_action = NULL WHERE id = ?1").bind(card.id).run();
-    return { finished: true, blocked: false, detail };
-  }
-  // THE RENDER FAULT IS AN ENGINEER'S, and the block says so rather than handing her a reason she
-  // cannot act on. The technical note stays on the card's own record, written above.
-  await blockCard(env, card, { reason: "the_file_would_not_build", trying: card.title, employee: DECK_OWNER });
-  return { finished: false, blocked: true, detail };
+  return { finished: true, blocked: false, detail };
 }
 
 // ── HTTP ──────────────────────────────────────────────────────────────────────────────────────

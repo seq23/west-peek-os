@@ -218,6 +218,15 @@ jobs:
       - name: A rare lane is checked once a day, on her clock
         run: npm run validate:deck-cadence
 
+      # NOTHING ON A DECK PAGE RUNS UNDER THE FOOTER (26 Oct 2026). v18 printed rows under the footer
+      # on pages 5, 7 and 10 and nothing measured the rendered page. This renders the deck in a real
+      # browser and reads every block's box against its footer. The headless shell is ~20s to fetch.
+      - name: Install the browser the deck layout is measured in
+        run: npx playwright install --with-deps --only-shell chromium
+
+      - name: Every deck page fits its page
+        run: npm run validate:deck-fit
+
       # "decks arriving is not broken. we just dont get decks every day." No check may ask for her
       # attention because nothing happened; a board that fires on normal gets skimmed, and the check
       # beside it that morning was genuinely failing.

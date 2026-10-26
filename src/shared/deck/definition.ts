@@ -90,11 +90,32 @@ export const ALL_BINDINGS: readonly Binding[] = [
   "gp_commit_pct", "gp_commit_usd", "target_net_multiple", "mgmt_fee_schedule",
 ];
 
-/** One line on a slide. Either prose, or a figure that comes from a record. */
+/**
+ * A table cell: prose, a figure bound to a record, or a picture (a company's logo in a table row).
+ * A number a record holds is ALWAYS a `bind` cell, never typed into a string cell.
+ */
+export type TableCell = string | { bind: Binding } | { asset: string; alt: string };
+
+/**
+ * One block on a slide. Prose, a figure that comes from a record, and — since the preview-first flow
+ * (26 Oct 2026) — the pieces the original Canva deck was made of and the definition could not say:
+ * pictures (team photos, logos, the member collage, the flywheel), a row of them with captions, a
+ * quote with its speaker, a table, a person with their photo and points, and a sub-heading.
+ *
+ * PICTURES ARE NAMED, NEVER EMBEDDED. `asset` is a file name in the deck's private asset store
+ * (R2 `deck-assets/`); the renderer is handed the bytes at render time. Nothing about a person or a
+ * company lives in this public repository — the preview's own slides live in D1.
+ */
 export type Slot =
-  | { kind: "text"; text: string }
+  | { kind: "text"; text: string; /** No bullet: a paragraph (the disclaimer, the contact lines). */ plain?: boolean }
   | { kind: "figure"; label: string; bind: Binding }
-  | { kind: "derivation"; label: string; bind: Binding; operator?: "minus" | "equals" };
+  | { kind: "derivation"; label: string; bind: Binding; operator?: "minus" | "equals" }
+  | { kind: "heading"; text: string }
+  | { kind: "image"; asset: string; alt: string; height?: number; round?: boolean; caption?: string }
+  | { kind: "images"; items: Array<{ asset: string; alt: string; caption?: string }>; height?: number }
+  | { kind: "quote"; text: string; by?: string }
+  | { kind: "table"; columns?: string[]; rows: TableCell[][] }
+  | { kind: "person"; name: string; photo?: string; points: string[]; logos?: string[] };
 
 export interface Slide {
   key: string;
@@ -105,7 +126,20 @@ export interface Slide {
   slots: Slot[];
   /** Where a non-numeric claim came from, so the next audit does not re-derive provenance. */
   sources?: string[];
+  /**
+   * How the page is laid out. `standard` (the default) is one column; `split` puts `right` beside
+   * `slots`; `panel` sets `aside.text` on a dark panel at the left (the original team page);
+   * `photo` sets `aside.asset` full-height at the left (the original member collage).
+   */
+  layout?: "standard" | "cover" | "split" | "panel" | "photo";
+  /** The second column of a `split` page. */
+  right?: Slot[];
+  /** The left panel of a `panel` or `photo` page. */
+  aside?: { text?: string; asset?: string; alt?: string };
 }
+
+/** The cover's location line, exactly as the partners wrote it (26 Oct 2026). One copy. */
+export const LOCATION_LINE = "New York · San Francisco · Atlanta (and everywhere in between)";
 
 /**
  * The approved lines, quoted rather than paraphrased.
@@ -124,7 +158,7 @@ export const DECK_SLIDES: readonly Slide[] = [
   {
     key: "cover",
     headline: "COMMUNITY IS THE NEW MOAT.",
-    standfirst: "New York • San Francisco • Atlanta",
+    standfirst: LOCATION_LINE,
     slots: [
       { kind: "text", text: "Fund I — Early stage fund" },
       { kind: "figure", label: "As of", bind: "as_of_date" },
@@ -177,22 +211,25 @@ export const DECK_SLIDES: readonly Slide[] = [
   },
   {
     key: "sourcing",
-    headline: "OUR DEALFLOW ARRIVES BEFORE IT IS A DEAL.",
+    headline: "HOW DEALS REACH US: THROUGH PEOPLE WE KNOW.",
     /*
-     * THE CLAIM, MEASURED RATHER THAN ASSERTED — and measured honestly. "5,000 person community" is
-     * a number about the community, not about dealflow. What the records can actually show is the
-     * share of recorded opportunities that arrived through it, WITH the denominator, because a
-     * proportion of four is a signal and not a statistic. Printing it without the sample size would
-     * be the same species of overstatement this deck exists to have removed.
+     * HOW DEALS REACH US, PROVEN WITH STRONG TRUE POINTS (owner, 26 Oct 2026). The earlier version
+     * printed "2 of 8 opportunities sourced through the community" — a small ratio that undersold
+     * the one claim the whole thesis rests on, and the records behind it were mislabelled (a website
+     * email counted as a deal, warm intros filed as cold inbound). No small count or ratio goes on
+     * this page; the guard is tests/deckDefinition.test.ts.
      */
     standfirst:
-      "Members bring us founders before they raise. This is what the record shows so far — a small " +
-      "sample, stated as one.",
+      "Every company we've looked at reached us through someone in our community: no cold " +
+      "outreach, no paid deal flow.",
     slots: [
-      { kind: "figure", label: "Opportunities sourced through the community", bind: "community_sourced_share" },
-      { kind: "text", text: "Relationships on file across the network" },
+      { kind: "text", text: "A community of 5,000+ founders, operators and investors, built during the pandemic" },
+      { kind: "text", text: "Rooms evenings, where members meet the founders worth knowing, in person" },
+      { kind: "text", text: "Member intros: the people who know a founder best bring them to us" },
+      { kind: "text", text: "Founders who come to us before they raise, not after the round is set" },
+      { kind: "text", text: "The same relationships behind more than $100M in secondary transactions" },
     ],
-    sources: [SOURCE_RECORDS],
+    sources: [SOURCE_2PAGER, "Partners' account of every deal the firm has looked at, 26 Oct 2026"],
   },
   {
     key: "secondaries",
@@ -225,7 +262,7 @@ export const DECK_SLIDES: readonly Slide[] = [
   },
   {
     key: "construction",
-    headline: "THE FUND, FROM COMMITTED CAPITAL TO CHEQUES.",
+    headline: "THE FUND, FROM COMMITTED CAPITAL TO CHECKS.",
     /*
      * SHOWN AS A DERIVATION, NOT A TABLE OF RESULTS. An allocator checks this arithmetic because it
      * tells them whether the GP has modelled their own fund — and the August table did not add up,
@@ -309,7 +346,7 @@ export const DECK_SLIDES: readonly Slide[] = [
       "ecosystems, building trusted relationships across founders, investors, and intermediaries.",
     slots: [
       { kind: "text", text: "A brother-and-sister partnership: company building, and investment banking" },
-      { kind: "text", text: "New York • San Francisco • Atlanta" },
+      { kind: "text", text: LOCATION_LINE },
     ],
     sources: [SOURCE_2PAGER],
   },
@@ -356,8 +393,11 @@ export const PERCENT_BINDINGS: ReadonlySet<Binding> = new Set<Binding>([
 export function bindingsUsed(slides: readonly Slide[] = DECK_SLIDES): Binding[] {
   const out: Binding[] = [];
   for (const slide of slides) {
-    for (const slot of slide.slots) {
+    for (const slot of [...slide.slots, ...(slide.right ?? [])]) {
       if (slot.kind === "figure" || slot.kind === "derivation") out.push(slot.bind);
+      if (slot.kind === "table") {
+        for (const row of slot.rows) for (const cell of row) if (typeof cell === "object" && "bind" in cell) out.push(cell.bind);
+      }
     }
   }
   return out;

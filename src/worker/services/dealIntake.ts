@@ -85,6 +85,7 @@ import { createOpportunity, getOpportunity, type CreateOpportunityInput, type Op
 // Both seats now live in `shared/intake/emailTriggers.ts` — the Dealflow page has to name them and
 // a client cannot import from `src/worker`. Re-exported so existing importers here are unaffected.
 import { DEAL_INTAKE_EMPLOYEE, INTAKE_MAILBOX, ROUTING_EMPLOYEE, seatId, strippedSubject } from "../../shared/intake/emailTriggers";
+import { emailDealOrigin, isAdminOrWebsiteSubject } from "../../shared/intake/dealOrigin";
 export { DEAL_INTAKE_EMPLOYEE, ROUTING_EMPLOYEE };
 
 /** "Accepts unstructured input… and routes to the right machine." */
@@ -212,6 +213,12 @@ export interface FunnelArrival {
    * an email handler has 10ms of CPU and reading a deck is a model call.
    */
   attachments?: Array<{ filename: string; mediaType: string; dataBase64: string; bytes: number }>;
+  /**
+   * Where the relationship started, when the route can tell (26 Oct 2026): an emailed deal a partner
+   * forwarded, or one whose message introduces the founder, is a COMMUNITY_INTRO. Absent, the
+   * route's own default applies.
+   */
+  origin?: "COMMUNITY_INTRO" | "INBOUND" | "NETWORK" | "OUTBOUND" | null;
   /** MANUAL only: the partner who drove it. */
   actor?: Actor;
   /** MANUAL only: the record she is opening. */
@@ -289,6 +296,10 @@ export function dealFromMessage(subject: string, body: string, from: string, isD
     const m = new RegExp(`^\\s*${key}\\s*:\\s*(.+?)\\s*$`, "im").exec(body);
     return m ? m[1]!.trim() : null;
   };
+
+  // AN ADMIN OR WEBSITE EMAIL IS NEVER A DEAL (26 Oct 2026, shared/intake/dealOrigin.ts): null here
+  // hands it to the routing seat, which is where "swap the photo on the site" belongs.
+  if (isAdminOrWebsiteSubject(subject)) return null;
 
   const named = field("company");
   // Every forwarding prefix, not one — and the SAME rule the header-only path uses. See
@@ -569,7 +580,7 @@ export async function openIntoFunnel(env: Env, arrival: FunnelArrival): Promise<
       // `email:` is the prefix the dealflow board badges "by email · not yet looked at" on. The
       // prefix is the route's channel, the rest is who — a contract, not a label.
       source_channel: `${policy.channel}:${arrival.source}`,
-      relationship_origin: policy.origin ?? "UNRECORDED",
+      relationship_origin: arrival.origin ?? policy.origin ?? "UNRECORDED",
       ...(arrival.received_at ? { relationship_started_at: arrival.received_at } : {}),
     });
   }
@@ -747,6 +758,7 @@ export async function intakeDealFromEmail(env: Env, deal: EmailDeal): Promise<Fu
    */
   return openIntoFunnel(env, {
     route: "EMAIL",
+    origin: emailDealOrigin({ from: deal.from, text: readableMessage(deal.raw) }),
     company: deal.company,
     sector: deal.sector ?? null,
     one_liner: deal.one_liner ?? null,
