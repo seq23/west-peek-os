@@ -7,6 +7,7 @@ import { actorFromIdentity } from "./authorize";
 import { runAi } from "../ai/runAi";
 import { THESIS_PROMPT_VERSION, buildStatementPrompt, parseStatement } from "../../shared/thesis/statement";
 import { sectorOptions } from "../../shared/investment/sectors";
+import { investableBase, type SleeveDoc } from "../../shared/fund/sleeveMath";
 
 /**
  * Fund + policy substrate (P2).
@@ -401,6 +402,29 @@ export async function handleFundBasis(ctx: RouteContext): Promise<Response> {
     fromMandate = typeof m.target_size_usd === "number" && m.target_size_usd > 0 ? m.target_size_usd : null;
   } catch { fromMandate = null; }
   const size = recorded ?? fromMandate;
+
+  /*
+   * INVESTABLE IS RECORDED — it was always reported MISSING. This route was written before the
+   * firm had a fee model and hard-coded `investable: null`; the fee/capital-split record
+   * (sleeve_policy_version) has carried fees, expenses and the investable base since 9 Sep 2026,
+   * and nothing here ever read it, so the summary said "investable capital: missing" against a
+   * Fund strategy tab printing $25M. Read through the same `investableBase` every other surface
+   * uses: the stated figure when the record has one (RECORDED), committed less fees and expenses
+   * when it records only the inputs (DERIVED), MISSING only when there is no record.
+   */
+  const sleeveRow = await ctx.env.WP_OS_DB.prepare(
+    "SELECT sleeve_json FROM sleeve_policy_version WHERE fund_id = ?1 ORDER BY version_no DESC LIMIT 1",
+  ).bind(fund.id).first<{ sleeve_json: string }>();
+  let investable: number | null = null;
+  let investableSource: "RECORDED" | "DERIVED" | "MISSING" = "MISSING";
+  try {
+    const doc = JSON.parse(sleeveRow?.sleeve_json ?? "{}") as SleeveDoc;
+    const base = investableBase(doc);
+    if (base > 0) {
+      investable = base;
+      investableSource = typeof doc.estimated_investable_usd === "number" ? "RECORDED" : "DERIVED";
+    }
+  } catch { /* unreadable record: MISSING, said as such */ }
   const sizeSource = recorded !== null ? "RECORDED" : fromMandate !== null ? "DERIVED" : "MISSING";
   const deployed = held?.deployed ?? 0;
 
@@ -416,11 +440,10 @@ export async function handleFundBasis(ctx: RouteContext): Promise<Response> {
     // number that does not exist to be found.
     fund_deployed_source: "DERIVED",
     positions_held: held?.n ?? 0,
-    // Investable is fund size less what the fund will never invest — fees and expenses over its
-    // life. West Peek has not recorded a fee model, and inventing the standard one would be the
-    // same mistake at a smaller scale, so this is MISSING until somebody records it.
-    investable: null,
-    investable_source: "MISSING",
+    // Fund size less what the fund will never invest — fees and expenses over its life — read from
+    // the fee/capital-split record above. Never a standard fee model invented here.
+    investable,
+    investable_source: investableSource,
     ready: size !== null,
     // Said in the partner's language, because the caller has to show this when it refuses.
     blocked_because:

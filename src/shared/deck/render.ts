@@ -44,6 +44,20 @@ export interface DeckFigures {
   community_sourced: { through_community: number; total: number } | null;
   positions_held: number | null;
   as_of_date: string;
+  check_typical: number | null;
+  target_ownership_pct: number | null;
+  follow_on_min: number | null;
+  follow_on_max: number | null;
+  follow_on_companies: number | null;
+  secondary_check_min: number | null;
+  secondary_check_max: number | null;
+  secondary_positions: number | null;
+  concentration_cap: number | null;
+  gp_commit_pct: number | null;
+  gp_commit_usd: number | null;
+  target_net_multiple: number | null;
+  /** The mandate's own words for a stepped fee; null when the fee is one flat rate. */
+  mgmt_fee_schedule: string | null;
 }
 
 const SECTOR_LABELS: Record<string, string> = {
@@ -80,8 +94,15 @@ export function renderBinding(bind: Binding, figures: DeckFigures): string {
     return figures.positions_held === 0 ? "None yet — this is a first fund" : String(figures.positions_held);
   }
 
+  if (bind === "mgmt_fee_schedule") {
+    // A stepped fee is said in the mandate's words; a flat one falls back to its rate.
+    if (figures.mgmt_fee_schedule) return figures.mgmt_fee_schedule;
+    return typeof figures.mgmt_fee_pct === "number" ? `${figures.mgmt_fee_pct}%` : MISSING;
+  }
+
   const value = (figures as unknown as Record<string, number | null>)[bind];
   if (typeof value !== "number") return MISSING;
+  if (bind === "target_net_multiple") return `${value.toFixed(1)}x`;
   if (MONEY_BINDINGS.has(bind)) return usd(value);
   if (PERCENT_BINDINGS.has(bind)) return `${value}%`;
   return String(value);

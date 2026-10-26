@@ -59,7 +59,36 @@ export type Binding =
   | "sectors"
   | "community_sourced_share"
   | "positions_held"
-  | "as_of_date";
+  | "as_of_date"
+  // Fund I final math (mandate v5, 26 Oct 2026). Every one is a field of the mandate record.
+  | "check_typical"
+  | "target_ownership_pct"
+  | "follow_on_min"
+  | "follow_on_max"
+  | "follow_on_companies"
+  | "secondary_check_min"
+  | "secondary_check_max"
+  | "secondary_positions"
+  | "concentration_cap"
+  | "gp_commit_pct"
+  | "gp_commit_usd"
+  | "target_net_multiple"
+  | "mgmt_fee_schedule";
+
+/**
+ * Every binding there is, in one list. The Worker's transcription prompt and the figure builder
+ * read this rather than keeping their own copy — two lists of the same keys is how one of them
+ * falls behind.
+ */
+export const ALL_BINDINGS: readonly Binding[] = [
+  "fund_size", "fees", "expenses", "investable_base", "early_sleeve_usd", "early_sleeve_pct",
+  "secondary_sleeve_usd", "secondary_sleeve_pct", "reserve_pct", "mgmt_fee_pct", "carry_pct",
+  "reserve_usd", "initial_capital_usd", "target_positions", "check_min", "check_max", "sectors",
+  "community_sourced_share", "positions_held", "as_of_date",
+  "check_typical", "target_ownership_pct", "follow_on_min", "follow_on_max", "follow_on_companies",
+  "secondary_check_min", "secondary_check_max", "secondary_positions", "concentration_cap",
+  "gp_commit_pct", "gp_commit_usd", "target_net_multiple", "mgmt_fee_schedule",
+];
 
 /** One line on a slide. Either prose, or a figure that comes from a record. */
 export type Slot =
@@ -180,13 +209,17 @@ export const DECK_SLIDES: readonly Slide[] = [
      * a worse outcome than a plainer sentence.
      */
     standfirst:
-      "Sequoia Taylor has spent over a decade working directly with buyers and sellers in the " +
-      "secondary market and has facilitated over $100M in transactions. Through these relationships " +
-      "and partnerships with a FINRA-registered broker-dealer, we are able to access curated " +
-      "secondary opportunities alongside primary investments.",
+      "We have spent over a decade working directly with buyers and sellers in the secondary " +
+      "market and have facilitated more than $100M in secondary transactions. Through these " +
+      "relationships and partnerships with a FINRA-registered broker-dealer, we are able to access " +
+      "curated secondary opportunities alongside primary investments.",
     slots: [
       { kind: "figure", label: "Early stage", bind: "early_sleeve_pct" },
       { kind: "figure", label: "Secondaries", bind: "secondary_sleeve_pct" },
+      { kind: "figure", label: "Secondary positions", bind: "secondary_positions" },
+      { kind: "figure", label: "Secondary check from", bind: "secondary_check_min" },
+      { kind: "figure", label: "up to", bind: "secondary_check_max" },
+      { kind: "text", text: "Larger blocks go to our LP relationships as co-investment" },
     ],
     sources: [SOURCE_2PAGER],
   },
@@ -200,8 +233,8 @@ export const DECK_SLIDES: readonly Slide[] = [
      * fail to sum and cannot drift from the OS.
      */
     standfirst:
-      "A $30M fund does not deploy $30M. Fees and expenses come off the top; what is left is what " +
-      "buys ownership.",
+      "A fund does not deploy its whole commitment. Fees and expenses come off the top; what is " +
+      "left is what buys ownership.",
     slots: [
       { kind: "derivation", label: "Committed", bind: "fund_size" },
       { kind: "derivation", label: "Management fees", bind: "fees", operator: "minus" },
@@ -209,22 +242,30 @@ export const DECK_SLIDES: readonly Slide[] = [
       { kind: "derivation", label: "Investable capital", bind: "investable_base", operator: "equals" },
       { kind: "figure", label: "Early stage", bind: "early_sleeve_usd" },
       { kind: "figure", label: "Secondaries", bind: "secondary_sleeve_usd" },
-      { kind: "figure", label: "Held in reserve", bind: "reserve_usd" },
-      { kind: "derivation", label: "For initial cheques", bind: "initial_capital_usd", operator: "equals" },
+      { kind: "figure", label: "Held in reserve for follow-ons", bind: "reserve_usd" },
+      { kind: "derivation", label: "For first checks", bind: "initial_capital_usd", operator: "equals" },
     ],
     sources: [SOURCE_RECORDS],
   },
   {
     key: "portfolio",
-    headline: "TWENTY-FIVE COMPANIES, SIZED TO THE CAPITAL THAT EXISTS.",
+    // NO COUNT IN THE HEADLINE. "TWENTY-FIVE COMPANIES" was typed here and outlived the record
+    // that said 25; the count is a figure, so it is bound below and the headline makes the claim.
+    headline: "A PORTFOLIO SIZED TO THE CAPITAL THAT EXISTS.",
     standfirst:
-      "Reserves are how ownership survives the Series A. The count and the cheque are set against " +
+      "Reserves are how ownership survives the Series A. The count and the check are set against " +
       "what is left after them, not against the fund size.",
     slots: [
-      { kind: "figure", label: "Target companies", bind: "target_positions" },
-      { kind: "figure", label: "Initial cheque", bind: "check_min" },
+      { kind: "figure", label: "Companies, first checks", bind: "target_positions" },
+      { kind: "figure", label: "Typical first check", bind: "check_typical" },
+      { kind: "figure", label: "First check from", bind: "check_min" },
       { kind: "figure", label: "up to", bind: "check_max" },
+      { kind: "figure", label: "Follow-on companies", bind: "follow_on_companies" },
+      { kind: "figure", label: "Follow-on check from", bind: "follow_on_min" },
+      { kind: "figure", label: "up to", bind: "follow_on_max" },
       { kind: "figure", label: "Reserved from the early-stage sleeve", bind: "reserve_pct" },
+      { kind: "figure", label: "Most in any one company", bind: "concentration_cap" },
+      { kind: "figure", label: "Target ownership", bind: "target_ownership_pct" },
     ],
     sources: [SOURCE_RECORDS],
   },
@@ -248,7 +289,7 @@ export const DECK_SLIDES: readonly Slide[] = [
       "portfolio performance.",
     slots: [
       { kind: "figure", label: "Positions held to date", bind: "positions_held" },
-      { kind: "text", text: "Over $100M in secondary transactions facilitated, as a principal — deal experience, not fund returns" },
+      { kind: "text", text: "More than $100M in secondary transactions facilitated — deal experience, not fund returns" },
       { kind: "text", text: "What to judge us on today: what we see, how early we see it, and who lets us in" },
     ],
     sources: [SOURCE_RECORDS, SOURCE_2PAGER],
@@ -281,8 +322,11 @@ export const DECK_SLIDES: readonly Slide[] = [
       { kind: "text", text: "10-year fund life, plus two one-year extensions" },
       { kind: "text", text: "4-year investment period" },
       { kind: "text", text: "United States" },
-      { kind: "figure", label: "Management fee", bind: "mgmt_fee_pct" },
+      { kind: "figure", label: "Management fee", bind: "mgmt_fee_schedule" },
       { kind: "figure", label: "Carried interest", bind: "carry_pct" },
+      { kind: "figure", label: "GP commitment", bind: "gp_commit_pct" },
+      { kind: "figure", label: "GP commitment, in dollars", bind: "gp_commit_usd" },
+      { kind: "figure", label: "Target net multiple to LPs", bind: "target_net_multiple" },
       { kind: "figure", label: "Sector focus", bind: "sectors" },
       { kind: "text", text: "SPVs offered pro rata to LPs at a 1/10 fee; direct co-investment shared with LPs" },
     ],
@@ -299,10 +343,13 @@ export const DECK_SLIDES: readonly Slide[] = [
 export const MONEY_BINDINGS: ReadonlySet<Binding> = new Set<Binding>([
   "fund_size", "fees", "expenses", "investable_base", "early_sleeve_usd",
   "secondary_sleeve_usd", "reserve_usd", "initial_capital_usd", "check_min", "check_max",
+  "check_typical", "follow_on_min", "follow_on_max", "secondary_check_min", "secondary_check_max",
+  "concentration_cap", "gp_commit_usd",
 ]);
 
 export const PERCENT_BINDINGS: ReadonlySet<Binding> = new Set<Binding>([
   "early_sleeve_pct", "secondary_sleeve_pct", "reserve_pct", "mgmt_fee_pct", "carry_pct",
+  "target_ownership_pct", "gp_commit_pct",
 ]);
 
 /** Every binding the definition actually uses. The validator counts these; zero means it saw nothing. */

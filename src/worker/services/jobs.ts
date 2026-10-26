@@ -426,14 +426,21 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
   if (job.job_key === "diagnostics_sweep") {
     const { runHealthEscalation } = await import("./healthEscalation");
     const out = await runHealthEscalation(env, now);
+    // The deck follows the records: one PROPOSED version when they move, never a send. A failure
+    // here is said in the summary and never stops the health sweep it rides on.
+    const { rebuildIfRecordsMoved } = await import("./deck");
+    const deck = await rebuildIfRecordsMoved(env).catch((err: unknown) => ({
+      rebuilt: false, reason: `deck check failed: ${err instanceof Error ? err.message : String(err)}`, versionNo: undefined,
+    }));
+    const deckNote = deck.rebuilt ? ` · deck v${deck.versionNo} proposed: ${deck.reason}` : deck.reason.startsWith("deck check failed") ? ` · ${deck.reason}` : "";
     return {
       status: "SUCCEEDED",
       // A clean sweep is a success worth recording quietly, not an alert. The interesting line is
       // the one that names what was escalated.
       summary:
         out.escalated.length > 0 || out.recovered.length > 0
-          ? `${out.checked} checked · ${out.down} down · escalated ${out.escalated.join(", ") || "none"}${out.recovered.length ? ` · recovered ${out.recovered.join(", ")}` : ""}`
-          : `${out.checked} checked · ${out.down} down · nothing new`,
+          ? `${out.checked} checked · ${out.down} down · escalated ${out.escalated.join(", ") || "none"}${out.recovered.length ? ` · recovered ${out.recovered.join(", ")}` : ""}${deckNote}`
+          : `${out.checked} checked · ${out.down} down · nothing new${deckNote}`,
       artifacts,
     };
   }
