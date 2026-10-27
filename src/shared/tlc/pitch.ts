@@ -207,7 +207,8 @@ ${takeHome ? `<li>They leave with: ${esc(takeHome)}</li>` : ""}</ul>
 ${v.recap ? `<p>${esc(v.recap)}</p>` : ""}
 <h2>What you get</h2>
 <ul><li>Your product in attendees' hands during the hands-on hour, where it fits the topic</li>
-<li>Five minutes to the room during the meal</li>
+<li>Five minutes to the room during the meal, if you would like them</li>
+<li>Nothing to staff: we host every segment or bring in a host, and you send someone only if you want to</li>
 <li>Photo and content rights: photographs from the day for your own channels</li>
 <li>Opt-in lead capture: attendees who choose to can share their details with you. We never share attendee names, emails or lists otherwise.</li>
 <li>Named in the invitation and on the day</li>

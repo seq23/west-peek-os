@@ -619,6 +619,8 @@ describe("TLC About blocks: the full one only inside, the community-first one fo
       expect(about.match(/\d{1,3},\d{3}/g)).toEqual(["5,000"]);
     }
     expect(TLC_ABOUT_COMMUNITY).not.toMatch(/\$100M|secondary|Higgsfield|Databricks|Stripe/);
+    // Owner, 26 Oct 2026: the brand-facing About names the founding GP and Quarantine Con.
+    expect(TLC_ABOUT_COMMUNITY).toContain("founding GP Scooter Taylor, who went viral in 2020 with Quarantine Con");
     for (const recap of [null, "Twenty-eight people made a bar."]) {
       const inside = renderInternalOnePager(IVIEW("AI Tools", "2027-03", { recap }));
       expect(inside).toContain("<h2>About West Peek Ventures</h2>");
@@ -626,6 +628,8 @@ describe("TLC About blocks: the full one only inside, the community-first one fo
       expect(inside).toContain("<title>Internal: AI Tools</title>");
       const pitch = renderBrandPitch(VIEW("AI Tools", "2027-03", { recap }));
       expect(pitch).toContain(`<p>${TLC_ABOUT_COMMUNITY}</p>`);
+      // Owner, 26 Oct 2026: we host or bring a host; a brand rep is optional.
+      expect(pitch).toContain("<li>Nothing to staff: we host every segment or bring in a host, and you send someone only if you want to</li>");
       expect(pitch).not.toMatch(/\$100M|Higgsfield|Databricks|Stripe/);
       expect(pitch).toContain("<title>The Learning Club: AI Tools</title>");
     }
