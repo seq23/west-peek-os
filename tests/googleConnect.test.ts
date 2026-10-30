@@ -216,7 +216,7 @@ describe("gmail.send", () => {
     let sentBody: any = null;
     const fetchImpl = (async (_u: unknown, init: any) => {
       sentBody = JSON.parse(init.body as string);
-      return new Response(JSON.stringify({ id: "gmail-msg-1" }), { status: 200 });
+      return new Response(JSON.stringify({ id: "gmail-msg-1", threadId: "gmail-thread-1" }), { status: 200 });
     }) as unknown as typeof fetch;
 
     const id = await sendViaGmail(
@@ -224,11 +224,12 @@ describe("gmail.send", () => {
       { to: "lp@example.test", from: "scooter@westpeek.ventures", fromName: "Scooter Taylor", subject: "Hello", text: "Body." },
       fetchImpl,
     );
-    expect(id).toBe("gmail-msg-1");
+    expect(id).toEqual({ id: "gmail-msg-1", threadId: "gmail-thread-1", messageId: expect.stringMatching(/^<[^<>\s]+@westpeek\.ventures>$/) });
     // base64url uses - and _ and drops padding; standard base64 would break the API.
     expect(sentBody.raw).not.toMatch(/[+/=]/);
 
     const decoded = atob(sentBody.raw.replace(/-/g, "+").replace(/_/g, "/"));
+    expect(decoded).toContain(`Message-ID: ${id.messageId}\r\n`);
     expect(decoded).toContain("From: Scooter Taylor <scooter@westpeek.ventures>");
     expect(decoded).toContain("To: lp@example.test");
     expect(decoded).toContain("Subject: Hello");

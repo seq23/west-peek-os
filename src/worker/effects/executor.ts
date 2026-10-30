@@ -53,6 +53,9 @@ export interface ExternalEffectRequestRow {
   executed_at: string | null;
   /** The address the message went out AS, written at execution. Null on rows written before 0156. */
   sender_address?: string | null;
+  gmail_message_id?: string | null;
+  gmail_thread_id?: string | null;
+  rfc_message_id?: string | null;
   /** 0265: the named job this email belongs to (OUTSIDE_EMAIL_JOBS), for her Outside email list. */
   outside_job?: string | null;
   /** 0265: the work card this email belongs to, for her Outside email list. */
@@ -79,6 +82,9 @@ export interface SimulatedDelivery {
   delivered_at: string;
   /** Provider message id when a real send happened. Null for a simulation. */
   provider_message_id?: string | null;
+  gmail_message_id?: string | null;
+  gmail_thread_id?: string | null;
+  rfc_message_id?: string | null;
   /**
    * The address the message actually went out AS.
    *
@@ -145,11 +151,11 @@ export interface EffectExecutionResult {
  */
 async function brandMailAsOwner(
   env: Env,
-  message: { to: string; subject: string; text: string; replyTo?: readonly string[]; attachments?: readonly EmailAttachment[]; inReplyTo?: string },
+  message: { to: string; subject: string; text: string; replyTo?: readonly string[]; attachments?: readonly EmailAttachment[]; inReplyTo?: string; threadId?: string },
 ): Promise<EmailSendResult> {
   assertPreviewLane(env, { to: message.to, subject: message.subject, text: message.text });
   const token = await serviceAccountToken(env, [GMAIL_COMPOSE_SCOPE], TLC_OWNER.email);
-  const id = await sendViaGmail(token, {
+  const sent = await sendViaGmail(token, {
     to: message.to,
     from: TLC_OWNER.email,
     fromName: TLC_OWNER.name,
@@ -159,8 +165,9 @@ async function brandMailAsOwner(
     bcc: [INTAKE_MAILBOX],
     ...(message.attachments?.length ? { attachments: message.attachments } : {}),
     ...(message.inReplyTo ? { inReplyTo: message.inReplyTo } : {}),
+    ...(message.threadId ? { threadId: message.threadId } : {}),
   });
-  return { sent: true, provider: "gmail", provider_message_id: id, detail: `Delivered to ${message.to} as ${TLC_OWNER.email} through her own Gmail (copy to ${INTAKE_MAILBOX})` };
+  return { sent: true, provider: "gmail", provider_message_id: sent.id, gmail_thread_id: sent.threadId, rfc_message_id: sent.messageId, detail: `Delivered to ${message.to} as ${TLC_OWNER.email} through her own Gmail (copy to ${INTAKE_MAILBOX})` };
 }
 
 /**
@@ -179,7 +186,7 @@ async function brandMailAsOwner(
 async function performEffect(env: Env, request: ExternalEffectRequestRow): Promise<SimulatedDelivery> {
   const cloudflareReady = isCloudflareEmailEnabled(env);
   if (request.effect_type === "email.send" && (cloudflareReady || isEmailSendEnabled(env))) {
-    const payload = JSON.parse(request.payload_json || "{}") as { subject?: string; text?: string; body?: string; reply_to?: unknown; attachments?: unknown; in_reply_to?: unknown };
+    const payload = JSON.parse(request.payload_json || "{}") as { subject?: string; text?: string; body?: string; reply_to?: unknown; attachments?: unknown; in_reply_to?: unknown; gmail_thread_id?: unknown };
     // WHOSE NAME IS ON IT. A partner who has turned on "send as me" has their approved messages go
     // out under their own address instead of the firm's; everyone else, and every unattributed
     // request, stays as the firm. Resolved from the person who REQUESTED the effect rather than
@@ -234,6 +241,8 @@ async function performEffect(env: Env, request: ExternalEffectRequestRow): Promi
       from,
       ...(replyTo.length ? { replyTo } : {}),
       ...(attachments.length && attachmentsBytes(attachments) <= OUTBOUND_ATTACHMENTS_MAX_BYTES ? { attachments } : {}),
+      ...(typeof payload.gmail_thread_id === "string" && /^[a-zA-Z0-9_-]{1,200}$/.test(payload.gmail_thread_id) ? { threadId: payload.gmail_thread_id } : {}),
+      ...(typeof payload.in_reply_to === "string" && /^[^\s<>]{3,300}$/.test(payload.in_reply_to) ? { inReplyTo: payload.in_reply_to } : {}),
     };
     // THROUGH THE PARTNER'S OWN GMAIL WHEN THEY HAVE GRANTED IT. Mail sent under a partner's address
     // via the firm transport is legitimate and arrives, but Gmail has never heard of it — so it is
@@ -244,17 +253,17 @@ async function performEffect(env: Env, request: ExternalEffectRequestRow): Promi
     // Gmail attempt that comes back refused, falls to the firm transport rather than not sending.
     let result: EmailSendResult | null = null;
     if (ownerSigned) {
-      // An answer to a brand's reply threads on their message (tlcBrandReply); a Message-ID is all it may carry.
-      const inReplyTo = typeof payload.in_reply_to === "string" && /^[^\s<>]{3,300}$/.test(payload.in_reply_to) ? payload.in_reply_to : undefined;
-      result = await brandMailAsOwner(env, { ...message, ...(inReplyTo ? { inReplyTo } : {}) });
+      result = await brandMailAsOwner(env, message);
     } else if (requestedBy && from && from !== env.WP_OS_EMAIL_FROM) {
       try {
-        const gmailId = await trySendAsPartner(env, requestedBy, { ...message, from });
-        if (gmailId) {
+        const gmail = await trySendAsPartner(env, requestedBy, { ...message, from });
+        if (gmail) {
           result = {
             sent: true,
             provider: "gmail",
-            provider_message_id: gmailId,
+            provider_message_id: gmail.id,
+            gmail_thread_id: gmail.threadId,
+            rfc_message_id: gmail.messageId,
             detail: `Delivered to ${message.to} as ${from} through their own Gmail`,
           };
         }
@@ -274,6 +283,9 @@ async function performEffect(env: Env, request: ExternalEffectRequestRow): Promi
       summary: result.detail,
       delivered_at: new Date().toISOString(),
       provider_message_id: result.provider_message_id,
+      gmail_message_id: result.provider === "gmail" ? result.provider_message_id : null,
+      gmail_thread_id: result.gmail_thread_id ?? null,
+      rfc_message_id: result.rfc_message_id ?? null,
       sender_address: from ?? env.WP_OS_EMAIL_FROM ?? null,
     };
   }
@@ -432,10 +444,10 @@ export async function executeExternalEffect(
   await env.WP_OS_DB.prepare(
     `UPDATE external_effect_request
         SET state = 'EXECUTED', authorization_receipt_id = ?2, approval_card_id = ?2, executed_at = ?3,
-            sender_address = ?4
+            sender_address = ?4, gmail_message_id = ?5, gmail_thread_id = ?6, rfc_message_id = ?7
       WHERE id = ?1`,
   )
-    .bind(request.id, receiptId!, executedAt, delivery.sender_address ?? null)
+    .bind(request.id, receiptId!, executedAt, delivery.sender_address ?? null, delivery.gmail_message_id ?? null, delivery.gmail_thread_id ?? null, delivery.rfc_message_id ?? null)
     .run();
 
   // Consume the receipt: approved → executed. Replay is then impossible.

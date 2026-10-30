@@ -82,6 +82,9 @@ export interface EmailSendResult {
   provider: "resend" | "cloudflare" | "gmail";
   /** Null when the transport does not issue one. Better a gap than a fabricated identifier. */
   provider_message_id: string | null;
+  /** Gmail threading metadata; absent on other transports. */
+  gmail_thread_id?: string | null;
+  rfc_message_id?: string | null;
   detail: string;
 }
 

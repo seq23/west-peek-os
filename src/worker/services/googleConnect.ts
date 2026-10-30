@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import type { GmailMessage, GmailSendResult } from "../effects/googleClient";
 import { json } from "../router";
 import type { RouteContext } from "../router";
 import { appendEvent } from "../events";
@@ -368,8 +369,8 @@ export async function hasGmailSend(env: Env, firmUserId: string): Promise<boolea
 export async function trySendAsPartner(
   env: Env,
   firmUserId: string,
-  message: { to: string; from: string; fromName?: string; subject: string; text: string },
-): Promise<string | null> {
+  message: GmailMessage,
+): Promise<GmailSendResult | null> {
   if (!(await hasGmailSend(env, firmUserId))) return null;
   const token = await accessTokenFor(env, firmUserId);
   if (!token) return null;
