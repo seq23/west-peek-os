@@ -13,6 +13,6 @@ it("the shared email/PDF reviser uses the important route and excludes training 
   expect(runAi).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
     sensitivity: "INTERNAL", budgetContext: expect.objectContaining({ important: true, confidential: true, judgement: true }), routing: { category: "INTELLIGENCE" },
   }));
-  vi.mocked(runAi).mockResolvedValue({ run: { status: "BLOCKED", output_text: null } } as Awaited<ReturnType<typeof runAi>>);
+  vi.mocked(runAi).mockResolvedValue({ run: { status: "BLOCKED_DEFERRED", output_text: null } } as Awaited<ReturnType<typeof runAi>>);
   expect((await tlcRevisionWriter({} as Env, {} as Actor, "Edit the PDF")).ok).toBe(false);
 });

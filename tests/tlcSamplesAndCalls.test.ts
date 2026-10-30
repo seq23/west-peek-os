@@ -61,7 +61,7 @@ describe("the 3-page samples PDF", () => {
     expect(approvedSamplePrices("Put the price of $4,250.50 in the PDF.")).toEqual(["$4,250.50"]);
     expect(samplesProblems(html, AGENT.mix, approvedSamplePrices("Put the price of $4,250.50 in the PDF."))).toEqual([]);
     expect(samplesProblems(html.replace("$4,250.50", "$9,000"), AGENT.mix, ["$4,250.50"])).toContain("a price, fee or tier");
-    for (const note of ["The budget is $4,250.50", "Do not put $4,250.50 in the PDF", "If they ask, add $4,250.50 to the PDF", "Include a price in the email: $4,250.50", "Remove the $4,250.50 price from the PDF", "Add $4,250.50 to the email and keep the PDF as it is"]) expect(approvedSamplePrices(note), note).toEqual([]);
+    for (const note of ["The budget is $4,250.50", "Do not put $4,250.50 in the PDF", "If they ask, add $4,250.50 to the PDF", "Include a price in the email: $4,250.50", "Remove the $4,250.50 price from the PDF", "Add $4,250.50 to the email and keep the PDF as it is", "Don’t put $4,250.50 in the PDF", "You shouldn't put $4,250.50 in the PDF"]) expect(approvedSamplePrices(note), note).toEqual([]);
     expect(samplesProblems(renderSamplesPdf(AGENT), AGENT.mix)).toEqual([]);
   });
 

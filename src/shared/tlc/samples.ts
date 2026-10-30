@@ -65,10 +65,11 @@ export type SamplesOverrides = z.infer<typeof samplesOverridesSchema>;
 /** Exact amounts only. The model cannot grant this permission; only an explicit owner instruction can. */
 const PRICE_AMOUNT = /(?:[$£€]\s*\d[\d,]*(?:\.\d{1,2})?\s*[kKmM]?|\b\d[\d,]*(?:\.\d{1,2})?\s*(?:USD|dollars|GBP|EUR)\b)/g;
 export function approvedSamplePrices(note: string): string[] {
-  return [...new Set(note.split(/[!?;\n]+|\.(?:\s|$)/)
-    .filter((sentence) => !/\b(?:not|never|without|unless|don't|do not|no|if|remove|exclude|omit)\b/i.test(sentence))
+  const cleanNote = note.replace(/’/g, "'");
+  const refuses = /\b(?:not|never|without|unless|no|if|remove|exclude|omit|cannot)\b|\b\w+n't\b/i;
+  return [...new Set(cleanNote.split(/[!?;\n]+|\.(?:\s|$)/)
+    .filter((sentence) => !refuses.test(sentence))
     .flatMap((sentence) => sentence.split(/,(?!\d)|\b(?:and|but)\b/i)).flatMap((sentence) => {
-    if (/\b(?:not|never|without|unless|don't|do not|no|if|remove|exclude|omit)\b/i.test(sentence)) return [];
     if (/\b(?:email|draft|invoice|agreement)\b/i.test(sentence)) return [];
     if (!/\b(?:put|include|add|show|insert|set|use)\b/i.test(sentence) || !/\b(?:pdf|samples|attachment)\b/i.test(sentence)) return [];
     return (sentence.match(PRICE_AMOUNT) ?? []).map((p) => p.trim());
