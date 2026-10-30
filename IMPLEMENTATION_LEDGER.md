@@ -7315,3 +7315,26 @@ from January 2027; $10 paid ticket; $10,000 net target from sponsors ($7,500 flo
   are money in only, recorded via `POST /api/tlc/events/:id/tickets` from West Peek's own payment link.
 - **Proof:** `tests/learningClub.test.ts` (pure rules + the whole loop through D1), `validate:tlc`
   (14 planted violations). Live search, live sending and the payment link are UNPROVEN until exercised.
+
+## 30 Oct 2026 — Owner edits reach the samples PDF (migration 0279)
+
+- **Change:** nullable per-deal copy overrides on `tlc_samples`; missing fields retain the baseline.
+  Owner change notes on replies carrying samples revise that copy, rebuild and file a fresh PDF,
+  and present its authenticated download link and attachment beside the revised email. Subsequent
+  edits retain earlier changes. A failed revision holds the reply and retries the note without
+  substituting the old PDF or cover email.
+- **Rules:** the email and PDF revisers share the governed important-work route (Claude first,
+  existing fallback chain), explicitly confidential so training-permitted routes cannot receive
+  owner notes. Only exact amounts explicitly placed in this deal's PDF by an owner note are allowed;
+  model output cannot grant price permission. Direct requests for materials get the PDF and cover
+  email, including when no previous sample offer is recorded. Brand sending retains its approval gate.
+- **Proof:** local D1 and mocked transports in `tlcBrandReply.test.ts`, renderer and price checks in
+  `tlcSamplesAndCalls.test.ts`, and route declarations in `tlcSamplesRouting.test.ts`. Deliberately
+  disabling rendering overrides, rebuilding, the price guard and confidential routing produced five
+  failing checks; disabling direct-request attachment produced another failure; restored tests pass
+  (29 checks). The retry regression also fails when restored to the old cover-email path; a contextual
+  price instruction aimed at the email is refused for the PDF. Baseline HTML is byte-identical to the prior renderer (SHA-256 regression). Baseline
+  and substantially edited PDFs rendered locally as three pages each; all six pages visually checked.
+  Edited content can expand rather than be silently clipped; the three-page build gate still applies.
+  Behavior PROVEN offline; live AI revision, browser binding and email delivery UNPROVEN. No live email,
+  spending, manual approval, or production database command was used.

@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_COMMUNITY_MIX, isYesToSamples, readMix, renderSamplesPdf, samplesCoverEmail, samplesProblems } from "../src/shared/tlc/samples";
+import { approvedSamplePrices, requestsSamples, samplesOverridesSchema, DEFAULT_COMMUNITY_MIX, isYesToSamples, readMix, renderSamplesPdf, samplesCoverEmail, samplesProblems } from "../src/shared/tlc/samples";
 import { freeSlots, isFree, nyToUtc, pickedSlot, proposedTime, slotWords } from "../src/shared/tlc/callSlots";
 
 /** Fake brands only. The approved template (artifact v7, 26 Oct 2026); only the brand's words change. */
@@ -9,6 +10,7 @@ const text = (html: string) => html.replace(/<style[\s\S]*?<\/style>/g, " ").rep
 describe("the 3-page samples PDF", () => {
   it("is her approved template word for word, with only the brand's words changed, and nothing it must never carry", () => {
     const html = renderSamplesPdf(AGENT);
+    expect(createHash("sha256").update(html).digest("hex")).toBe("b5bf653ac0c8bbd153381982e1e5ae8b8a1063269d4a5e6fcebf936a22806c10");
     const t = text(html);
     for (const line of [
       "WEST PEEK ROOMS · THE LEARNING CLUB", "An evening in New York · March 2027 (tentative) · in partnership with Vector Co",
@@ -34,6 +36,38 @@ describe("the 3-page samples PDF", () => {
     expect((html.match(/class="sheet"/g) ?? []).length).toBe(3);
     // The wheel is drawn from the mix: four ring segments that close the circle.
     expect((html.match(/<circle /g) ?? []).length).toBe(4);
+  });
+
+  it("renders major per-deal edits as escaped copy, replacing each selected section", () => {
+    const overrides = {
+      page1Rows: [{ label: "6:30", title: "Practice lab", line: "Build <something> & learn", highlight: true }],
+      series: [{ label: "A", title: "Start with a lab", line: "Bring a problem", highlight: true }],
+      seriesHeading: "A new sequence", seriesSub: "Three workshops, shaped together",
+      whyItWorks: ["Practice with the same group"], partnerGets: ["A useful guide"], footer2: "Next dates agreed together",
+      bring: "A question", leaveWith: "A prototype", reach: "working designers",
+    };
+    const html = renderSamplesPdf({ ...AGENT, overrides });
+    for (const value of ["Practice lab", "A new sequence", "Three workshops, shaped together", "Practice with the same group", "A useful guide", "Next dates agreed together", "A question", "A prototype"]) expect(text(html)).toContain(value);
+    expect(html).toContain("Build &lt;something&gt; &amp; learn");
+    for (const old of ["Opening talk", "Demo night", "Six evenings, one community", "Your product in their hands"]) expect(text(html)).not.toContain(old);
+    expect(samplesProblems(html, AGENT.mix)).toEqual([]);
+    expect(samplesOverridesSchema.safeParse({ series: "bad" }).success).toBe(false);
+    expect(samplesOverridesSchema.safeParse({ approvedPrices: ["$4,000"] }).success).toBe(false);
+  });
+
+  it("permits only the exact price the owner explicitly puts in this PDF", () => {
+    const html = renderSamplesPdf({ ...AGENT, overrides: { footer2: "Price: $4,250.50" } });
+    expect(samplesProblems(html, AGENT.mix)).toContain("a price, fee or tier");
+    expect(approvedSamplePrices("Put the price of $4,250.50 in the PDF.")).toEqual(["$4,250.50"]);
+    expect(samplesProblems(html, AGENT.mix, approvedSamplePrices("Put the price of $4,250.50 in the PDF."))).toEqual([]);
+    expect(samplesProblems(html.replace("$4,250.50", "$9,000"), AGENT.mix, ["$4,250.50"])).toContain("a price, fee or tier");
+    for (const note of ["The budget is $4,250.50", "Do not put $4,250.50 in the PDF", "If they ask, add $4,250.50 to the PDF", "Include a price in the email: $4,250.50", "Remove the $4,250.50 price from the PDF", "Add $4,250.50 to the email and keep the PDF as it is", "Don’t put $4,250.50 in the PDF", "You shouldn't put $4,250.50 in the PDF"]) expect(approvedSamplePrices(note), note).toEqual([]);
+    expect(samplesProblems(renderSamplesPdf(AGENT), AGENT.mix)).toEqual([]);
+  });
+
+  it("recognizes a direct request for materials without a prior offer", () => {
+    for (const yes of ["Please send the materials", "Could you share the PDF?", "We would love to see samples"]) expect(requestsSamples(yes)).toBe(true);
+    for (const no of ["Do not send the materials", "Not right now", "Sure, sounds interesting"]) expect(requestsSamples(no)).toBe(false);
   });
 
   it("the mix is editable data: a valid stored mix is used, a broken one falls back to hers", () => {

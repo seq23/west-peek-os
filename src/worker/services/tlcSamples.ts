@@ -5,24 +5,80 @@ import type { EmailAttachment } from "../effects/emailTransport";
 import { pdfPageCount, renderHtmlPdf, type PdfRenderer } from "../effects/htmlPdf";
 import { MONEY_WORDS } from "../../shared/tlc/brandReply";
 import { brandDisplayName } from "../../shared/tlc/learningClub";
-import { COMMUNITY_MIX_SETTING, isAgentTopic, readMix, renderSamplesPdf, samplesProblems, type SamplesInput } from "../../shared/tlc/samples";
+import { approvedSamplePrices, samplesOverridesSchema, COMMUNITY_MIX_SETTING, isAgentTopic, readMix, renderSamplesPdf, samplesProblems, type SamplesInput } from "../../shared/tlc/samples";
+import { uploadDocument } from "./documents";
 import type { Actor } from "./authorize";
 import type { TlcDealRow, TlcEventRow } from "./learningClub";
 
 /**
  * PARKER BUILDS THE THREE SAMPLES (owner, 26 Oct 2026): one 3-page PDF per deal from the approved template
- * (shared/tlc/samples.ts). Only the brand's words change: its name, the month, its 15-minute segment, its evening in
+ * (shared/tlc/samples.ts), with per-deal overrides for owner edits. The initial brand words are: its name, the month, its 15-minute segment, its evening in
  * the series of six and who the room is weighted toward. Those words are either stored ahead of time (a PLANNED
  * row, pre-built for a brand we expect to say yes) or written by Parker when the yes arrives, from what we know of
  * the brand; they carry no number and no price. The PDF lives in R2 and is attached to her approval email and, on
  * her "approved", to the email that goes to the brand. Nothing here sends anything.
  */
 export interface SamplesRow {
+  overrides_json: string | null; approved_prices_json: string | null; document_id: string | null;
   id: string; deal_id: string; input_json: string; state: string; pdf_r2_key: string | null; pdf_name: string | null; problem: string | null; firm_scope: string;
 }
 export type SamplesWords = Pick<SamplesInput, "segmentTitle" | "seriesTitle" | "reach">;
 export type SamplesWriter = (env: Env, actor: Actor, prompt: string) => Promise<{ ok: boolean; text: string }>;
 export interface SamplesDeps { renderPdf?: PdfRenderer; writer?: SamplesWriter }
+
+/** Shared with the email reviser: the governed Claude-first important-work route, always private. */
+export const tlcRevisionWriter: SamplesWriter = async (env, actor, prompt) => {
+  const { run } = await runAi(env, {
+    purpose: "The Learning Club: revise the brand email or samples",
+    actor, inputs: [prompt], sensitivity: "INTERNAL",
+    budgetContext: { requiresSearch: false, expectedOutputTokens: 4000, judgement: true, important: true, confidential: true },
+    routing: { category: "INTELLIGENCE" },
+  });
+  return { ok: run.status === "COMPLETED" && Boolean(run.output_text), text: run.output_text ?? "" };
+};
+
+/** A failed revision invalidates the old file; a retry must never present the baseline as her edit. */
+export async function reviseSamples(env: Env, deal: TlcDealRow, ev: TlcEventRow, note: string, deps: SamplesDeps = {}): Promise<{ ok: boolean; detail: string }> {
+  const row = await samplesForDeal(env, deal.id);
+  if (!row) return { ok: false, detail: "the samples record is missing" };
+  await env.WP_OS_DB.prepare("UPDATE tlc_samples SET state = 'PLANNED', pdf_r2_key = NULL, document_id = NULL WHERE id = ?1").bind(row.id).run();
+  try {
+    const out = await (deps.writer ?? tlcRevisionWriter)(env, parkerActor(deal.firm_scope), [
+      "Revise this deal's Learning Club samples PDF using every instruction in the owner's note. The template is a baseline, and major edits are allowed.",
+      "Return ONLY a JSON object of copy overrides. Omitted keys retain the current copy. Arrays replace a whole section; return the complete revised array.",
+      "Keys: page1Rows and series: [{label,title,line,highlight?:boolean}]; seriesHeading, seriesSub, footer2, bring, leaveWith, reach: strings; whyItWorks, partnerGets: string arrays.",
+      "All values are plain text, no HTML. Do not invent facts, people or numbers. Keep the community mix approximate and the brand's staffing optional.",
+      "No prices or money unless the owner explicitly instructs putting a specific price in the PDF. A price mentioned for context is not permission.",
+      "Current PDF (HTML, for context only):", await samplesHtml(env, deal, ev, row),
+      "Current overrides:", row.overrides_json ?? "{}",
+      "Owner's change note, word for word:", note,
+    ].join("\n"));
+    if (!out.ok) throw new Error("the samples revision model did not complete");
+    const patch = samplesOverridesSchema.parse(JSON.parse(out.text.replace(/^```(?:json)?\s*|\s*```$/g, "").trim()));
+    const overrides = samplesOverridesSchema.parse({ ...JSON.parse(row.overrides_json ?? "{}"), ...patch });
+    // Permission is derived here from authenticated owner words, never from the model response.
+    const approved = approvedSamplePrices(note);
+    const previousPrices = JSON.parse(row.approved_prices_json ?? "[]") as string[];
+    const prices = /\b(?:no|remove|omit|exclude|without|don't|do not)\b[^.!?\n]*\b(?:price|prices|pricing|money|fee|fees)\b/i.test(note) ? [] : [...new Set([...previousPrices, ...approved])];
+    await env.WP_OS_DB.prepare("UPDATE tlc_samples SET overrides_json = ?2, approved_prices_json = ?3 WHERE id = ?1").bind(row.id, JSON.stringify(overrides), JSON.stringify(prices)).run();
+    const built = await buildSamples(env, deal, ev, {}, deps);
+    return built.ok ? { ok: true, detail: "samples PDF rebuilt" } : built;
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    await env.WP_OS_DB.prepare("UPDATE tlc_samples SET state = 'FAILED', problem = ?2 WHERE id = ?1").bind(row.id, detail.slice(0, 300)).run();
+    return { ok: false, detail };
+  }
+}
+
+async function samplesHtml(env: Env, deal: TlcDealRow, ev: TlcEventRow, row: SamplesRow): Promise<string> {
+  const mixRaw = (await env.WP_OS_DB.prepare("SELECT value FROM tlc_setting WHERE key = ?1").bind(COMMUNITY_MIX_SETTING).first<{ value: string | null }>())?.value;
+  return renderSamplesPdf({
+    brand: brandDisplayName(deal.brand), topic: ev.topic ?? "", month: ev.month,
+    tentative: !["GO", "DONE"].includes(String((ev as { status?: string }).status ?? "")),
+    ...JSON.parse(row.input_json) as SamplesWords, mix: readMix(mixRaw),
+    ...(row.overrides_json ? { overrides: samplesOverridesSchema.parse(JSON.parse(row.overrides_json)) } : {}),
+  });
+}
 
 const PARKER = "aie_parker";
 const parkerActor = (firmScope: string): Actor => ({ type: "AI", aiEmployeeId: PARKER, roles: [], firmScopes: [firmScope] } as unknown as Actor);
@@ -121,13 +177,14 @@ export async function buildSamples(
     // A club not yet at its go-check is tentative ("could move, or repeat"), and the PDF says so.
     tentative: !["GO", "DONE"].includes(String((ev as { status?: string }).status ?? "")),
     ...words, mix: readMix(mixRaw),
+    ...(row?.overrides_json ? { overrides: samplesOverridesSchema.parse(JSON.parse(row.overrides_json)) } : {}),
   };
   const html = renderSamplesPdf(input);
   const fail = async (detail: string) => {
     await env.WP_OS_DB.prepare("UPDATE tlc_samples SET state = 'FAILED', problem = ?2 WHERE id = ?1 AND state != 'SENT'").bind(id, detail.slice(0, 300)).run();
     return { ok: false as const, id, detail };
   };
-  const problems = samplesProblems(html, input.mix);
+  const problems = samplesProblems(html, input.mix, JSON.parse(row?.approved_prices_json ?? "[]") as string[]);
   if (problems.length) return fail(`the samples broke a rule: ${problems.join("; ")}`);
   const pdf = await (deps.renderPdf ?? ((h: string) => renderHtmlPdf(env, h)))(html);
   if (pdf.pdfBase64 === null) return fail(`the PDF could not be rendered: ${pdf.reason}`);
@@ -135,10 +192,10 @@ export async function buildSamples(
   const pages = pdf.pageCount || pdfPageCount(bytes);
   if (pages !== 3) return fail(`the PDF ran to ${pages} pages, not 3`);
   if (!env.WP_OS_DOCUMENTS) return fail("no document store to keep the PDF in");
-  const key = `tlc-samples/${deal.id}/${id}.pdf`;
-  await env.WP_OS_DOCUMENTS.put(key, bytes, { httpMetadata: { contentType: "application/pdf" } });
+
   const name = `The Learning Club - ${input.topic.replace(/[^\w &-]+/g, "").trim()} - ${input.brand.replace(/[^\w &-]+/g, "").trim()}.pdf`;
-  await env.WP_OS_DB.prepare("UPDATE tlc_samples SET state = 'READY', pdf_r2_key = ?2, pdf_name = ?3, problem = NULL, built_at = ?4 WHERE id = ?1").bind(id, key, name, new Date().toISOString()).run();
+  const filed = await uploadDocument(env, parkerActor(deal.firm_scope), { title: name, doc_type: "OTHER", privacy_label: "INTERNAL", content_base64: pdf.pdfBase64, content_type: "application/pdf" });
+  await env.WP_OS_DB.prepare("UPDATE tlc_samples SET state = 'READY', pdf_r2_key = ?2, pdf_name = ?3, problem = NULL, built_at = ?4, document_id = ?5 WHERE id = ?1").bind(id, filed.version.r2_key, name, new Date().toISOString(), filed.document.id).run();
   await appendEvent(env, { eventType: "tlc.samples_built", actorType: "ai_employee", actorId: PARKER, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: { samples_id: id, pages } });
   row = (await samplesForDeal(env, deal.id))!;
   return { ok: true, row };
@@ -147,7 +204,7 @@ export async function buildSamples(
 /** The PDF as an email attachment, or null when it is not in the store. */
 export async function samplesAttachment(env: Env, samplesId: string): Promise<EmailAttachment | null> {
   const row = await env.WP_OS_DB.prepare("SELECT * FROM tlc_samples WHERE id = ?1").bind(samplesId).first<SamplesRow>();
-  if (!row?.pdf_r2_key || !env.WP_OS_DOCUMENTS) return null;
+  if (!row?.pdf_r2_key || !["READY", "SENT"].includes(row.state) || !env.WP_OS_DOCUMENTS) return null;
   const obj = await env.WP_OS_DOCUMENTS.get(row.pdf_r2_key);
   if (!obj) return null;
   const bytes = new Uint8Array(await obj.arrayBuffer());
