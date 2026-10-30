@@ -7283,6 +7283,20 @@ Owner rulings, verbatim: "porter needs to work on anything sequoia or scooter se
 - **Proof.** tests/driveShareRouting.test.ts; each guard broken and watched fail. Drive read PROVEN live
   (9 Oct, impersonating the sharer: 200, 19,699 chars); production door UNPROVEN until the next share.
 
+## 30 Oct 2026 — Gmail sequence follow-ups stay in the original conversation (migration 0278)
+
+- **Change:** Gmail sends supply an RFC Message-ID and retain it with the returned Gmail message id and
+  thread id on `external_effect_request`, through both Gmail send routes. Follow-up drafts select the
+  previous sent message for the same deal, firm scope and recipient, carry its thread id and Message-ID
+  into Gmail's request and reply headers, and show `Re: <original subject>` before approval.
+- **Older sends:** missing thread metadata preserves the existing send behavior and records a
+  `tlc.drip_thread_fallback` event. Migration 0278 only adds nullable columns; existing sends are not backfilled.
+- **Proof:** mocked Gmail plus local D1 in `tests/gmailSequence.test.ts`, with the existing Gmail transport
+  and brand-reply tests. Removing the implementation while keeping the migration caused five regression
+  checks to fail (ids, follow-up threading, legacy fallback and either missing metadata field); restored
+  afterward. Transport and persistence behavior PROVEN offline; live Gmail conversation grouping UNPROVEN.
+  No live email, production data repair, or production database command was used.
+
 ## 22 Oct 2026 — West Peek Rooms: The Learning Club (TLC) Edition; Wynn returns as TLC Sales (migration 0259)
 
 Owner-approved: in-person learning clubs, NYC only, 25–40 people, one topic, 3–4 hours, one a month

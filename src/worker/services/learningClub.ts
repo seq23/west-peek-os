@@ -656,10 +656,35 @@ export async function brandGateFor(env: Env): Promise<{ open: boolean; reasons: 
 
 export async function fileDraft(env: Env, deal: Pick<TlcDealRow, "id" | "brand" | "contact_email" | "drip_step">, mail: { subject: string; text: string }, firmScope = "west-peek", redraftNote: string | null = null): Promise<string> {
   const wynn = actorFor(WYNN, firmScope);
+  let threading: { gmail_thread_id: string; in_reply_to: string } | undefined;
+  if (deal.drip_step > 0) {
+    // A deal is the sequence boundary. Match the actual destination too: a changed contact must
+    // never inherit another person's conversation. Old sends have no metadata and still go out.
+    const previous = await env.WP_OS_DB.prepare(
+      `SELECT r.gmail_thread_id, r.rfc_message_id,
+              (SELECT subject FROM tlc_drip_message WHERE deal_id = m.deal_id AND step = 0 AND state = 'SENT') AS original_subject
+         FROM tlc_drip_message m
+         JOIN tlc_deal d ON d.id = m.deal_id
+         LEFT JOIN external_effect_request r ON r.id = m.effect_request_id
+        WHERE m.deal_id = ?1 AND m.step < ?2 AND m.state = 'SENT' AND d.firm_scope = ?3
+          AND (r.id IS NULL OR lower(trim(r.destination)) = lower(trim(?4)))
+        ORDER BY m.step DESC LIMIT 1`,
+    ).bind(deal.id, deal.drip_step, firmScope, deal.contact_email).first<{ gmail_thread_id: string | null; rfc_message_id: string | null; original_subject: string | null }>();
+    if (previous?.gmail_thread_id && previous.rfc_message_id && previous.original_subject) {
+      threading = { gmail_thread_id: previous.gmail_thread_id, in_reply_to: previous.rfc_message_id.replace(/^<|>$/g, "") };
+      mail = { ...mail, subject: `Re: ${previous.original_subject.replace(/^(?:Re:\s*)+/i, "")}` };
+    } else {
+      await appendEvent(env, {
+        eventType: "tlc.drip_thread_fallback", actorType: "ai_employee", actorId: WYNN,
+        objectType: "tlc_deal", objectId: deal.id, firmScope,
+        payload: { step: deal.drip_step, reason: "previous_send_missing_thread_metadata" },
+      });
+    }
+  }
   const requestId = `eer_${crypto.randomUUID()}`;
   await env.WP_OS_DB.prepare(
     "INSERT INTO external_effect_request (id, effect_type, destination, payload_json, requested_by_type, requested_by_id, outside_job) VALUES (?1, 'email.send', ?2, ?3, 'AI', ?4, ?5)",
-  ).bind(requestId, deal.contact_email, JSON.stringify({ subject: mail.subject, text: mail.text, reply_to: BRAND_REPLY_TO }), WYNN, TLC_BRAND_SALES_JOB).run();
+  ).bind(requestId, deal.contact_email, JSON.stringify({ subject: mail.subject, text: mail.text, reply_to: BRAND_REPLY_TO, ...threading }), WYNN, TLC_BRAND_SALES_JOB).run();
   const { requestApproval } = await import("./approvals");
   const card = await requestApproval(env, wynn, {
     action_key: "effect.email.send",
