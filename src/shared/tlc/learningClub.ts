@@ -3,7 +3,7 @@ import { fillTemplate } from "./brandFlow";
 /**
  * WEST PEEK ROOMS — THE LEARNING CLUB (TLC) EDITION. Owner-approved 22 Oct 2026.
  *
- * In-person learning clubs: 25–40 people deep-diving ONE topic, in New York City only, one event a
+ * In-person learning clubs: 25 to 100+ people deep-diving ONE topic, in New York City only, one event a
  * month, the first in January 2027, selling from early November 2026. Paid for by brand sponsors;
  * every attendee buys a $10 ticket (owner, 22 Oct 2026: "proof to sponsors of real intent and
  * spending"). This file is the whole rulebook as code — the money rule, the go-ahead rule, the
@@ -31,6 +31,13 @@ import { fillTemplate } from "./brandFlow";
 
 export const TLC_CITY = "New York City";
 export const TLC_SEATS = { min: 25, max: 40 } as const;
+/**
+ * WHAT A BRAND IS TOLD ABOUT THE ROOM (owner, 30 Oct 2026, the approved samples template): 25 to 100+ guests, sized to
+ * the brand's goals. Every brand email, pitch, prompt and the samples PDF says this; TLC_SEATS above stays the
+ * internal planning default (tickets, food, the go-check), never a number a brand is told.
+ */
+export const BRAND_ROOM = { min: 25, top: "100+" } as const;
+export const BRAND_ROOM_WORDS = `${BRAND_ROOM.min} to ${BRAND_ROOM.top}`;
 /**
  * THE ROOM IS SIZED TO THE SPONSORS (owner, 22 Oct 2026). 25–40 is the DEFAULT; the partners set
  * each club's own size on the event (60, 100, 150…), and everything that speaks of the room reads
@@ -596,8 +603,8 @@ export interface DripEmailInput {
  */
 export const TLC_DRIP_PROOF_LINE = "Our community of more than 5,000 founders, operators and creatives meets in person through West Peek Rooms, our event series in New York.";
 export const TLC_DRIP_ASK = "Would you be open to exploring a partnership?";
-/** Every brand email says 25–40 guests per event, flexible to the brand's needs (owner, 26 Oct 2026), whatever the club's planned size. */
-export const BRAND_GUESTS = `${TLC_SEATS.min} to ${TLC_SEATS.max} people per event (flexible to your goals)`;
+/** Every brand email says 25 to 100+ guests per event, sized to the brand's goals (owner, 30 Oct 2026), whatever the club's planned size. */
+export const BRAND_GUESTS = `${BRAND_ROOM_WORDS} people per event (flexible to your goals)`;
 /**
  * THE NEXT STEP IS THREE SAMPLES, NEVER A CALL (owner, 26 Oct 2026). Wynn never suggests or asks for a call; deals
  * close over email. Email 2 (the one follow-up to a brand that has not replied) and every answer Wynn drafts offer
@@ -973,7 +980,7 @@ const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;"
  */
 export const TLC_PLAYBOOK: readonly string[] = [
   "Who we sell to: brands whose customers are the people a club on this topic draws, in categories Parker named for it. Several partners per club, each in its own role.",
-  "What we sell: real hands-on time with the product, in a room sized to the partners' goals (set per club; 25 to 40 by default, 60 to 150 when the club calls for it), each guest paid to be there, for a 3 to 4 hour deep dive on one topic in New York (one afternoon or one evening). Product in hands during the 60-minute hands-on session where it fits, five minutes during the food break, photo and content rights, opt-in lead capture, a mention in the invitation and on the day, and a recap with numbers.",
+  "What we sell: real hands-on time with the product, in a room sized to the partners' goals (25 to 100+ guests, set per club), each guest paid to be there, for a 3 to 4 hour deep dive on one topic in New York (one afternoon or one evening). Product in hands during the 60-minute hands-on session where it fits, five minutes during the food break, photo and content rights, opt-in lead capture, a mention in the invitation and on the day, and a recap with numbers.",
   "Price: Title partner $25,000: one brand funds the whole room, the club is \"presented by\" that brand, it is the only cash partner that night, and in-kind partners need its OK. In January the Title partner is the primary route to $25K. Partner $5,000, the standard for most brands. Lead partner $10,000. Presenting partner $15,000, for a big brand only, with \"Presented by\" billing and top placement. Product partner, in kind, for a product brand that supplies product instead of cash. Custom amounts are fine; neither size nor count is capped.",
   "Goal per club: $25,000 raised from sponsors, costs up to $15,000, $10,000 net; under $7,500 net at a go-check escalates. At least 5 partners at $5,000, or larger sponsors at $10,000 to $15,000, or any mix. In-kind venue or product lowers cost and never counts toward the $25,000. Tickets add to the net but the goal never depends on them.",
   "Sponsors in a club are complementary, never competitors: one brand per kind of product that would compete (one drink base, then mixers, glassware, wellness, food). Never approach a brand that competes with an agreed or featured partner. This is how we put a room together, not a promise to a brand: we never offer or claim category exclusivity.",

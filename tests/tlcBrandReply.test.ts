@@ -254,9 +254,11 @@ describe("Wynn listens to her whole note, researches when asked, and keeps her s
     expect((await env.WP_OS_DB.prepare("SELECT draft_body FROM tlc_brand_reply WHERE deal_id = 'tld_host'").first<{ draft_body: string }>())!.draft_body).not.toMatch(/your team leads/i);
     const { draftProblems } = await import("../src/worker/services/tlcBrandReply");
     expect(draftProblems("A segment led by Host Co or by our host.", "QUESTION", { weHost: true })).toEqual([]);
-    // 25–40 guests per event, flexible: never the club's planned size.
-    expect(draftProblems("A room of 80 to 120 people.", "QUESTION")).toEqual(["a room of 80 to 120 (her rule: 25–40 guests per event, flexible)"]);
-    expect(draftProblems("A room of 25–40 guests, flexible to your goals.", "QUESTION")).toEqual([]);
+    // 25 to 100+ guests per event, flexible (owner, 30 Oct 2026): never the club's planned size, never the old 25–40.
+    expect(draftProblems("A room of 80 to 120 people.", "QUESTION")).toEqual(["a room of 80 to 120 (her rule: 25 to 100+ guests per event, flexible)"]);
+    expect(draftProblems("A room of 25–40 guests, flexible to your goals.", "QUESTION")).toEqual(["a room of 25 to 40 (her rule: 25 to 100+ guests per event, flexible)"]);
+    expect(draftProblems("A room of 25 to 100 guests.", "QUESTION")).toEqual(["a room of 25 to 100 (her rule: 25 to 100+ guests per event, flexible)"]);
+    expect(draftProblems("A room of 25 to 100+ guests, flexible to your goals.", "QUESTION")).toEqual([]);
     expect(block).toContain("led by the brand or by our host");
     // Money alone (no call ask) is refused too: the no-money rule stands on its own.
     await deal("tld_cash2", "Cash Two", "pat@cash2.example");
@@ -293,6 +295,14 @@ describe("Wynn listens to her whole note, researches when asked, and keeps her s
  * A YES TO THE THREE SAMPLES, AND A CALL THE BRAND ASKED FOR (owner, 26 Oct 2026). Fake brands only.
  */
 describe("a yes to the samples gets the 3-page PDF; a call they asked for is scheduled from her calendar", () => {
+  const SAMPLE_WORDS = {
+    title: "Build Your First AI Agent", leaveFact: "everyone leaves with a working agent", openingTheme: "What agents can do now",
+    panelAngle: "what changed when they put agents to work", dinnerPick: "pick the agent they'll build", segmentTitle: "Making it remember",
+    segmentDoes: "every table wires Sample Co into its agent", leaveWith: "A working AI agent of their own", seriesTitle: "the agent syllabus",
+    seriesTail: "with Sample Co as the memory from month 2 on.",
+    months: ["Your First Agent", "Give It a Memory", "Tools", "A Human in the Loop", "A Team of Agents", "Launch Night"].map((title, k) => ({ title, line: `Month ${k + 1}, hands-on.`, brand: k === 1 })),
+    whyLead: "Real code proofs:", whyLine: "starter templates the community keeps using.", perks: [{ lead: "Built in from day one:", line: "Sample Co is in every starter template." }],
+  };
   const THREE_PAGES = { pdfBase64: Buffer.from("%PDF-1.4 /Type /Page a /Type /Page b /Type /Page c").toString("base64"), pageCount: 3 };
   const MON = new Date("2026-11-09T14:00:00.000Z"); // Monday 09:00 in New York
   const docEnv = () => ({ ...env, WP_OS_DOCUMENTS: t.docs } as Env);
@@ -322,8 +332,13 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     await sentDrip("tld_samp", `Hi,\n\n${THREE_THINGS_OFFER}`);
     sends.length = 0;
     const rendered: string[] = [];
+    const prompts: string[] = [];
     const renderPdf = async (html: string) => { rendered.push(html); return THREE_PAGES; };
-    expect(await take(e, "tld_samp", "Sure, send it over!", "s-1@sample.example", { samples: { renderPdf, writer: async () => ({ ok: true, text: JSON.stringify({ segment_title: "Making it remember", series_title: "Give it a memory", reach: "founders building agents" }) }) } })).toBe("DRAFTED");
+    expect(await take(e, "tld_samp", "Sure, send it over!", "s-1@sample.example", { samples: { renderPdf, writer: async (_e: Env, _a: unknown, prompt: string) => { prompts.push(prompt); return { ok: true, text: JSON.stringify(SAMPLE_WORDS) }; } } })).toBe("DRAFTED");
+    // Wynn is asked for the per-brand words only; the standard text is never his to write.
+    expect(prompts).toHaveLength(1);
+    for (const field of ["title:", "openingTheme:", "panelAngle:", "segmentTitle:", "segmentDoes:", "leaveWith:", "months:", "whyLead and whyLine:", "perks:"]) expect(prompts[0]).toContain(field);
+    for (const fixed of ["Who's in the room", "The team behind the room", "Confidential", "25 to 100+", "~5,000", "Scooter"]) expect(prompts[0]).not.toContain(fixed);
     const { sendReplyApprovals } = await import("../src/worker/services/tlcBrandReply");
     await sendReplyApprovals(e, MON);
     expect(sends).toHaveLength(1);
@@ -349,11 +364,11 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     expect(sheets(rendered[0]!)).toBe(sheets(pageHtml));
     const toBrand = sends.filter((x) => x.to.includes("sample.example"));
     expect(toBrand).toHaveLength(1);
-    expect(toBrand[0]!.text).toContain("The Learning Club - Build Your Own AI Agent - Sample Co.pdf");
+    expect(toBrand[0]!.text).toContain("The Learning Club - Build Your First AI Agent - Sample Co.pdf");
     const row = (await e.WP_OS_DB.prepare("SELECT state, pdf_r2_key, pdf_name FROM tlc_samples WHERE deal_id = 'tld_samp'").first<{ state: string; pdf_r2_key: string | null; pdf_name: string }>())!;
     expect(row.state).toBe("SENT");
     expect(row.pdf_r2_key).toBeTruthy();
-    expect(row.pdf_name).toBe("The Learning Club - Build Your Own AI Agent - Sample Co.pdf");
+    expect(row.pdf_name).toBe("The Learning Club - Build Your First AI Agent - Sample Co.pdf");
     // A second "approved" sends nothing again and makes no second PDF.
     sends.length = 0;
     await approve(e, ref, { samples: { renderPdf } });
@@ -510,9 +525,11 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     expect(held).toMatchObject({ state: "FAILED", send_tries: 1 });
     expect(held.send_retry_due).toBeTruthy();
     const rendered: string[] = [];
+    const draftPage = await (await openPreview(e, url)).text();
     await processBrandReplies(e, new Date(MON.getTime() + 31 * 60_000), "west-peek", { mailbox: null, drafter, samples: { renderPdf: async (html: string) => { rendered.push(html); return THREE_PAGES; } } });
     expect(rendered).toHaveLength(1);
-    expect(sheets(rendered[0]!)).toBe(sheets(await (await openPreview(e, url)).text()));
+    expect(sheets(rendered[0]!)).toBe(sheets(draftPage));
+    expect(sheets(draftPage)).not.toBe("");
     const toBrand = sends.filter((x) => x.to.includes("harbor.example"));
     expect(toBrand).toHaveLength(1);
     // Named from the CURRENT title, never the old one.
@@ -522,8 +539,11 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     expect(done.state).toBe("SENT");
     expect(done.pdf_name).toBe("The Learning Club - Agents at Work - Harbor Tools.pdf");
     expect((await e.WP_OS_DB.prepare("SELECT state FROM tlc_brand_reply WHERE deal_id = 'tld_final' ORDER BY created_at DESC LIMIT 1").first<{ state: string }>())!.state).toBe("SENT");
-    // The sent page says so, and nothing can change it now.
-    expect(await (await openPreview(e, url)).text()).toContain("Nothing here can change it now.");
+    // The sent link shows exactly what the brand received: the stored PDF, byte for byte, never the template re-rendered.
+    const sentPage = await openPreview(e, url);
+    expect(sentPage.headers.get("content-type")).toBe("application/pdf");
+    expect(sentPage.headers.get("x-robots-tag")).toMatch(/noindex/);
+    expect(Buffer.from(await sentPage.arrayBuffer()).toString("base64")).toBe(THREE_PAGES.pdfBase64);
     const { reviseSamples } = await import("../src/worker/services/tlcSamples");
     const ev = (await e.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = 'tlc_2027-03'").first())! as never;
     // A sent row is not even shown to the model: no spend, no change.

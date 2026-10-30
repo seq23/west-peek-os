@@ -70,6 +70,7 @@ import {
   TLC_PLAYBOOK,
   TLC_PRE_LAUNCH_PROOF,
   TLC_SEATS,
+  BRAND_ROOM_WORDS,
   TLC_SPONSOR_CATEGORIES,
   TLC_TICKET_PRICE_USD,
   PLAYBOOK_DOCUMENT_SETTING,
@@ -470,7 +471,7 @@ export async function runDripPass(env: Env, now: Date, firmScope = "west-peek"):
   await recomposeBrandNames(env, firmScope);
   // And a queued email 2 offers the three samples, never a call (owner, 26 Oct 2026).
   await recomposeSecondEmails(env, firmScope);
-  // And every queued draft tells the brand 25–40 guests per event, flexible (owner, 26 Oct 2026).
+  // And every queued draft tells the brand 25 to 100+ guests per event, flexible (owner, 30 Oct 2026).
   await recomposeGuestCounts(env, firmScope);
   // Samples planned ahead of time are rendered, so the PDF is ready the moment the brand says yes (sends nothing).
   const { renderPlannedSamples } = await import("./tlcSamples");
@@ -1306,7 +1307,7 @@ export function buildTopicsPrompt(
     "- TREND: what people are searching for and curious about right now.",
     "Favour topics where meeting in person is the point — the connection in the room is part of what people pay for.",
     "",
-    `You are choosing topics for The Learning Club: in-person, ${TLC_CITY} only, ${TLC_SEATS.min}–${TLC_SEATS.max} people by default (the partners size each room to its sponsors), one topic, a 3–4 hour deep dive on one afternoon (Sat 1–5 pm) or one evening (Thu 6–10 pm). Every attendee pays a $${TLC_TICKET_PRICE_USD} ticket. Everyone leaves with something they made or learned.`,
+    `You are choosing topics for The Learning Club: in-person, ${TLC_CITY} only, ${BRAND_ROOM_WORDS} people (the partners size each room to its sponsors), one topic, a 3–4 hour deep dive on one afternoon (Sat 1–5 pm) or one evening (Thu 6–10 pm). Every attendee pays a $${TLC_TICKET_PRICE_USD} ticket. Everyone leaves with something they made or learned.`,
     `Run of show: ${runOfShowLines().join("; ")}.`,
     picksPart ? `Pick ONE topic for each of these months: ${months.map(monthWords).join(", ")}. No two months the same topic. Every month must have a pick.` : "",
     !picksPart && opts.picked?.length ? `The picks are already made: ${opts.picked.join("; ")}. Do not repeat them.` : "",

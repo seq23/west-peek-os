@@ -13,7 +13,7 @@ import {
   stageAfterReply, standingRulesIn, theirNewText, tierLines, wantsResearch,
   type BrandReplyIntent, type ReplyDraftInput, type WynnRule,
 } from "../../shared/tlc/brandReply";
-import { TLC_DRIP_DAYS, TLC_OWNER, TLC_SEATS, TLC_SIGNATURE, brandDisplayName, monthWords, nextDripAt } from "../../shared/tlc/learningClub";
+import { BRAND_ROOM_WORDS, TLC_DRIP_DAYS, TLC_OWNER, TLC_SEATS, TLC_SIGNATURE, brandDisplayName, monthWords, nextDripAt } from "../../shared/tlc/learningClub";
 import { TLC_BRAND_SALES_JOB } from "../../shared/policy/outsideEmail";
 import { actorForFirmUser, type Actor } from "./authorize";
 import type { TlcDealRow, TlcEventRow } from "./learningClub";
@@ -194,9 +194,9 @@ export function draftProblems(body: string, intent: BrandReplyIntent, opts: { no
   // Scooter is named only as who he is to the brand (her WHO_WE_ARE rule): "Scooter Taylor", our founding GP.
   if (/\bscooter\b(?!\s+taylor)/i.test(body)) out.push("a name other than hers");
   if (opts.noMoney && MONEY_WORDS.test(body)) out.push("money before a call (her rule)");
-  // Every brand email says 25–40 guests per event, flexible (her GUESTS_25_40 rule): never another room size.
-  for (const m of body.matchAll(/\b(\d+)\s*(?:to|–|-)\s*(\d+)\s+(?:people|guests|New Yorkers)\b/gi)) {
-    if (m[1] !== String(TLC_SEATS.min) || m[2] !== String(TLC_SEATS.max)) { out.push(`a room of ${m[1]} to ${m[2]} (her rule: 25–40 guests per event, flexible)`); break; }
+  // Every brand email says 25 to 100+ guests per event, flexible (her GUESTS_25_40 rule, revised 30 Oct 2026): never another room size.
+  for (const m of body.matchAll(/\b(\d+)\s*(?:to|–|-)\s*(\d+)(\+?)\s+(?:people|guests|New Yorkers)\b/gi)) {
+    if (`${m[1]} to ${m[2]}${m[3]}` !== BRAND_ROOM_WORDS) { out.push(`a room of ${m[1]} to ${m[2]}${m[3]} (her rule: ${BRAND_ROOM_WORDS} guests per event, flexible)`); break; }
   }
   if (opts.weHost && BRAND_MUST_STAFF.test(body)) out.push("puts the brand's people on a segment (her rule: led by the brand or by our host)");
   if (opts.callPlan) {

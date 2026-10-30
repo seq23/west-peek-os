@@ -312,7 +312,8 @@ describe("the rules, pure", () => {
     expect(price).toMatch(/^Price: Title partner \$25,000: one brand funds the whole room, the club is "presented by" that brand, it is the only cash partner that night, and in-kind partners need its OK\. In January the Title partner is the primary route to \$25K\. Partner \$5,000/);
     // The room is sized per club, never a fixed 25 to 40.
     const what = m.TLC_PLAYBOOK.find((l) => l.startsWith("What we sell:"))!;
-    expect(what).toContain("a room sized to the partners' goals (set per club; 25 to 40 by default, 60 to 150 when the club calls for it), each guest paid to be there");
+    expect(what).toContain("a room sized to the partners' goals (25 to 100+ guests, set per club), each guest paid to be there");
+    expect(m.TLC_PLAYBOOK.join(" ")).not.toMatch(/25 to 40|25–40/);
     expect(m.TLC_PLAYBOOK.join(" ")).not.toContain("a room of 25 to 40 people");
     expect(m.TLC_PLAYBOOK.join(" ")).toMatch(/\$25,000 raised from sponsors, costs up to \$15,000, \$10,000 net/);
   });

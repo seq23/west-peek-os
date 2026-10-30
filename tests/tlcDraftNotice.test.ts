@@ -336,11 +336,14 @@ describe("a queued email 2 offers the three samples (owner, 26 Oct 2026)", () =>
   });
 });
 
-describe("a queued draft tells the brand 25–40 guests per event, flexible (owner, 26 Oct 2026)", () => {
+describe("a queued draft tells the brand 25 to 100+ guests per event, flexible (owner, 30 Oct 2026)", () => {
   it("re-words the room size in unsent drafts only; everything else in the draft stays as it was", async () => {
     const { fileDraft } = await import("../src/worker/services/learningClub");
     const { recomposeGuestCounts, standardGuestWords } = await import("../src/worker/services/tlcDraftNotice");
-    expect(standardGuestWords("In March we are hosting it: 60 to 75 people spending an evening.")).toBe("In March we are hosting it: 25 to 40 people per event (flexible to your goals) spending an evening.");
+    expect(standardGuestWords("In March we are hosting it: 60 to 75 people spending an evening.")).toBe("In March we are hosting it: 25 to 100+ people per event (flexible to your goals) spending an evening.");
+    // Idempotent: the standard words are never re-worded again.
+    expect(standardGuestWords("In March we are hosting it: 25 to 100+ people per event (flexible to your goals) spending an evening.")).toBe("In March we are hosting it: 25 to 100+ people per event (flexible to your goals) spending an evening.");
+    expect(standardGuestWords("80 to 120 New Yorkers, each paying")).toBe("25 to 100+ New Yorkers (flexible to your goals), each paying");
     const OLD = "Hi Pat,\n\nI am writing because they host tastings.\nIn March 2027 we are hosting The Learning Club in New York: 80 to 120 people spending an afternoon or evening going deep on T, hands-on.";
     const mk = async (brand: string) => {
       await deal(brand, "2027-03");
@@ -355,7 +358,8 @@ describe("a queued draft tells the brand 25–40 guests per event, flexible (own
     const body = async (id: string) => (await env.WP_OS_DB.prepare("SELECT m.body, r.payload_json FROM tlc_drip_message m JOIN external_effect_request r ON r.id = m.effect_request_id WHERE m.deal_id = ?1").bind(id).first<{ body: string; payload_json: string }>())!;
     const q = await body(queued);
     for (const text of [q.body, (JSON.parse(q.payload_json) as { text: string }).text]) {
-      expect(text).toContain("25 to 40 people per event (flexible to your goals) spending");
+      expect(text).toContain("25 to 100+ people per event (flexible to your goals) spending");
+      expect(text).not.toContain("25 to 40");
       expect(text).not.toContain("80 to 120");
       expect(text).toContain("I am writing because they host tastings.");
     }

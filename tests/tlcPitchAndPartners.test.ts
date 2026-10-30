@@ -59,7 +59,8 @@ describe("the three brand pitches read clean", () => {
       expect(at2("Title partner: $25,000")).toBeLessThan(at2("Partner: $5,000"));
       for (const t of ["Partner: $5,000", "Lead partner: $10,000", "Presenting partner: $15,000", "Product partner (in kind)", "The Learning Club, presented by"]) expect(html).toContain(t);
       expect(html).not.toMatch(/\bgoal\b|cost budget|\bnet\b|\bseason\b/i);
-      expect(html).toContain("An intimate room: 25–40 guests per event, flexible to your goals");
+      expect(html).toContain("An intimate room: 25 to 100+ guests per event, flexible to your goals");
+      expect(html).not.toContain("An intimate room: 25–40");
       expect(html).toMatch(/Photo and content rights/);
       expect(html).toMatch(/Opt-in lead capture/);
       expect(html).toMatch(/A recap within a week, with the numbers/);
@@ -301,14 +302,14 @@ describe("the owner's rulings on rooms, money, sponsors and ideas (22 Oct 2026)"
     expect(seatsOf(null)).toEqual({ min: 25, max: 40 });
     expect(seatsOf({ seats_min: 80, seats_max: 120 })).toEqual({ min: 80, max: 120 });
     const big = { ...MAR, seats: { min: 80, max: 120 } };
-    // A brand is always told 25–40 guests per event, flexible to its goals (owner, 26 Oct 2026); the planned size
+    // A brand is always told 25 to 100+ guests per event, flexible to its goals (owner, 30 Oct 2026); the planned size
     // stays on the internal one-pager.
-    expect(renderBrandPitch(big)).toContain("An intimate room: 25–40 guests per event, flexible to your goals");
-    expect(renderBrandPitch(big)).toContain("25–40 New Yorkers per event, a number we flex to your goals, who chose this topic");
+    expect(renderBrandPitch(big)).toContain("An intimate room: 25 to 100+ guests per event, flexible to your goals");
+    expect(renderBrandPitch(big)).toContain("25 to 100+ New Yorkers per event, a number we flex to your goals, who chose this topic");
     expect(renderBrandPitch(big)).not.toMatch(/80–120|80 to 120/);
     expect(renderInternalOnePager({ ...big, origin: null, status: "TOPIC_READY", vetoUntil: null, committedUsd: 0, committedPartners: 0, pitchUrl: null })).toContain("Room: planned for 80–120 people");
     const d = dripEmail({ step: 0, brand: "Acme", contactName: null, topic: "T", month: "2027-03", eventDate: "2027-03-18", why: null, seats: { min: 80, max: 120 } });
-    expect(d.text).toContain("25 to 40 people per event (flexible to your goals)");
+    expect(d.text).toContain("25 to 100+ people per event (flexible to your goals)");
     for (const step of [0, 1]) expect(dripEmail({ step, brand: "Acme", contactName: null, topic: "T", month: "2027-03", eventDate: "2027-03-18", why: null, seats: { min: 80, max: 120 } }).text).not.toMatch(/80 to 120|80–120/);
   });
 
