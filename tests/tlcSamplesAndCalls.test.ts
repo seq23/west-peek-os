@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { approvedSamplePrices, requestsSamples, samplesOverridesSchema, DEFAULT_COMMUNITY_MIX, isYesToSamples, readMix, renderSamplesPdf, samplesCoverEmail, samplesProblems } from "../src/shared/tlc/samples";
+import { approvedSamplePrices, renderSamplesPreview, requestsSamples, samplesOverridesSchema, samplesPdfName, whatChangedLine, DEFAULT_COMMUNITY_MIX, isYesToSamples, readMix, renderSamplesPdf, samplesCoverEmail, samplesProblems } from "../src/shared/tlc/samples";
 import { freeSlots, isFree, nyToUtc, pickedSlot, proposedTime, slotWords } from "../src/shared/tlc/callSlots";
 
 /** Fake brands only. The approved template (artifact v7, 26 Oct 2026); only the brand's words change. */
@@ -63,6 +63,43 @@ describe("the 3-page samples PDF", () => {
     expect(samplesProblems(html.replace("$4,250.50", "$9,000"), AGENT.mix, ["$4,250.50"])).toContain("a price, fee or tier");
     for (const note of ["The budget is $4,250.50", "Do not put $4,250.50 in the PDF", "If they ask, add $4,250.50 to the PDF", "Include a price in the email: $4,250.50", "Remove the $4,250.50 price from the PDF", "Add $4,250.50 to the email and keep the PDF as it is", "Don’t put $4,250.50 in the PDF", "You shouldn't put $4,250.50 in the PDF"]) expect(approvedSamplePrices(note), note).toEqual([]);
     expect(samplesProblems(renderSamplesPdf(AGENT), AGENT.mix)).toEqual([]);
+  });
+
+  it("her title edit renames page 1, the document and the PDF file; without one, the topic names them", () => {
+    const html = renderSamplesPdf({ ...AGENT, overrides: { title: "Agents <at> Work" } });
+    expect(html).toContain("<title>The Learning Club: Agents &lt;at&gt; Work · Vector Co</title>");
+    expect(html).toContain('<div class="ttl">Agents &lt;at&gt; Work</div>');
+    expect(samplesPdfName({ ...AGENT, overrides: { title: "Agents: at Work!" } })).toBe("The Learning Club - Agents at Work - Vector Co.pdf");
+    expect(samplesPdfName(AGENT)).toBe(`The Learning Club - ${AGENT.topic.replace(/[^\w &-]+/g, "").trim()} - Vector Co.pdf`);
+    expect(samplesOverridesSchema.safeParse({ title: "" }).success).toBe(false);
+  });
+
+  it("each change is one plain line built from what changed, never from a model's claim", () => {
+    expect(whatChangedLine({ seriesHeading: "x", footer2: "y" }, "Make it   shorter")).toBe('Changed the page 2 heading and the page 2 footer (your note: "Make it shorter")');
+    expect(whatChangedLine({ title: "x" }, "")).toBe("Changed the title");
+    expect(whatChangedLine({}, "Looks fine")).toBe('Looked at your note; nothing needed to change (your note: "Looks fine")');
+    expect(whatChangedLine({ reach: "x" }, "a".repeat(200)).length).toBeLessThan(160);
+  });
+
+  it("the preview page IS the PDF's HTML, byte for byte, with her notes above it that never print", () => {
+    const pdf = renderSamplesPdf({ ...AGENT, overrides: { footer2: "Dates agreed together" } });
+    const history = [{ at: "2026-10-30T18:00:00.000Z", line: "Changed the page 2 footer <b>x</b>" }, { at: "2026-10-30T17:00:00.000Z", line: "First draft, from the approved template" }];
+    const page = renderSamplesPreview(pdf, { brand: "Vector Co", status: "DRAFT", history });
+    const body = (h: string) => h.slice(h.indexOf("<section"), h.lastIndexOf("</section>"));
+    expect(body(page)).toBe(body(pdf));
+    expect(page).toContain('<meta name="robots" content="noindex, nofollow">');
+    expect(page).toMatch(/@media print\{\.wp-preview\{display:none!important\}\}/);
+    expect(page).toContain("Draft · not sent yet");
+    expect(page).toContain("reply <b>approved</b>");
+    expect(page).toContain("What changed (2): tap to show ▾");
+    expect(page).toContain("<b>Latest:</b> Changed the page 2 footer &lt;b&gt;x&lt;/b&gt;");
+    expect(page).not.toContain("<b>x</b>");
+    expect(page).toContain('id="wp-long" hidden');
+    const sent = renderSamplesPreview(pdf, { brand: "Vector Co", status: "SENT", sentAt: "2026-10-31T15:00:00.000Z", history });
+    expect(sent).toContain("Nothing here can change it now.");
+    expect(sent).not.toContain("reply <b>approved</b>");
+    expect(sent).not.toContain("wp-long");
+    expect(renderSamplesPreview(pdf, { brand: "Vector Co", status: "WORKING", history })).toContain("Your latest change is still being made.");
   });
 
   it("recognizes a direct request for materials without a prior offer", () => {

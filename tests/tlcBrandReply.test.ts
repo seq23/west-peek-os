@@ -307,35 +307,61 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     applyBrandReplyApproval(e, { fromHeader: `Her <${APPROVER}>`, authenticationResults: auth(APPROVER), subject: `Re: Wynn · ${ref}`, body: `approved\n\nRef ${ref}` }, { now: MON, drafter, ...deps });
   const refOf = async (dealId: string) => (await env.WP_OS_DB.prepare("SELECT notice_ref FROM tlc_brand_reply WHERE deal_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(dealId).first<{ notice_ref: string }>())!.notice_ref;
 
-  it("\"Sure, send it\": Parker builds the PDF, ONE approval email carries it and the cover email, her approved sends both ONCE", async () => {
+  const PREVIEW_URL = /https:\/\/os\.joinwestpeek\.com\/api\/tlc-pitch\/samples\/([0-9a-f]{32})/;
+  /** Her private preview page, opened with no login at all (the token is the credential). */
+  const openPreview = async (e: Env, url: string) => {
+    const { handleRequest } = await import("../src/worker/index");
+    return handleRequest(new Request(url.replace("https://os.joinwestpeek.com", "https://test.local")), e);
+  };
+  /** The document part of a page: from the first sheet to the last, byte for byte. */
+  const sheets = (html: string) => html.slice(html.indexOf('<section class="sheet">'), html.lastIndexOf("</section>") + "</section>".length);
+
+  it("\"Sure, send it\": Parker readies the samples PAGE, her approval email links it (no PDF), her approved makes the PDF ONCE and sends both ONCE", async () => {
     const e = docEnv();
     await deal("tld_samp", "Sample Co", "pat@sample.example");
     await sentDrip("tld_samp", `Hi,\n\n${THREE_THINGS_OFFER}`);
     sends.length = 0;
-    expect(await take(e, "tld_samp", "Sure, send it over!", "s-1@sample.example", { samples: { renderPdf: async () => THREE_PAGES, writer: async () => ({ ok: true, text: JSON.stringify({ segment_title: "Making it remember", series_title: "Give it a memory", reach: "founders building agents" }) }) } })).toBe("DRAFTED");
+    const rendered: string[] = [];
+    const renderPdf = async (html: string) => { rendered.push(html); return THREE_PAGES; };
+    expect(await take(e, "tld_samp", "Sure, send it over!", "s-1@sample.example", { samples: { renderPdf, writer: async () => ({ ok: true, text: JSON.stringify({ segment_title: "Making it remember", series_title: "Give it a memory", reach: "founders building agents" }) }) } })).toBe("DRAFTED");
     const { sendReplyApprovals } = await import("../src/worker/services/tlcBrandReply");
     await sendReplyApprovals(e, MON);
     expect(sends).toHaveLength(1);
     const toHer = sends[0]!;
     expect(toHer.to).toBe("sequoia@westpeek.ventures");
-    expect(toHer.files).toEqual(["The Learning Club - Build Your Own AI Agent - Sample Co.pdf"]);
+    // The samples are a link while she decides: no PDF made, none attached.
+    expect(rendered).toHaveLength(0);
+    expect(toHer.files).toEqual([]);
     expect(toHer.text).toContain("Here's a short 3-page PDF, built around Sample Co:");
     expect(toHer.text).toContain("led by Sample Co or by our host");
-    expect(toHer.text).toContain("ATTACHED (goes with it): The Learning Club - Build Your Own AI Agent - Sample Co.pdf, 3 pages");
+    expect(toHer.text).toMatch(new RegExp(`THE SAMPLES \\(3 pages\\), OPEN ON YOUR PHONE OR LAPTOP: ${PREVIEW_URL.source}`));
+    expect(toHer.text).toContain("The PDF is made from that page when you reply approved");
+    const page = await openPreview(e, PREVIEW_URL.exec(toHer.text)![0]);
+    expect(page.status).toBe(200);
+    const pageHtml = await page.text();
+    expect(pageHtml).toContain("Draft · not sent yet");
+    expect(pageHtml).toContain("Making it remember");
     sends.length = 0;
     const ref = await refOf("tld_samp");
-    expect((await approve(e, ref)).handled).toBe(true);
+    expect((await approve(e, ref, { samples: { renderPdf } })).handled).toBe(true);
+    // ONE PDF, made from exactly what the page showed.
+    expect(rendered).toHaveLength(1);
+    expect(sheets(rendered[0]!)).toBe(sheets(pageHtml));
     const toBrand = sends.filter((x) => x.to.includes("sample.example"));
     expect(toBrand).toHaveLength(1);
-    expect(toBrand[0]!.text).toContain("Sample Co.pdf");
-    expect((await e.WP_OS_DB.prepare("SELECT state FROM tlc_samples WHERE deal_id = 'tld_samp'").first<{ state: string }>())!.state).toBe("SENT");
-    // A second "approved" sends nothing again.
+    expect(toBrand[0]!.text).toContain("The Learning Club - Build Your Own AI Agent - Sample Co.pdf");
+    const row = (await e.WP_OS_DB.prepare("SELECT state, pdf_r2_key, pdf_name FROM tlc_samples WHERE deal_id = 'tld_samp'").first<{ state: string; pdf_r2_key: string | null; pdf_name: string }>())!;
+    expect(row.state).toBe("SENT");
+    expect(row.pdf_r2_key).toBeTruthy();
+    expect(row.pdf_name).toBe("The Learning Club - Build Your Own AI Agent - Sample Co.pdf");
+    // A second "approved" sends nothing again and makes no second PDF.
     sends.length = 0;
-    await approve(e, ref);
+    await approve(e, ref, { samples: { renderPdf } });
     expect(sends.filter((x) => x.to.includes("sample.example"))).toHaveLength(0);
+    expect(rendered).toHaveLength(1);
   });
 
-  it("a direct request attaches the PDF; owner edits rebuild it, keep earlier edits, and link the exact new file beside the email", async () => {
+  it("a direct request links the page; her edits change the PAGE (no PDF), keep earlier edits, and list what changed at the top", async () => {
     const e = docEnv();
     await deal("tld_edit", "Meadow Tools", "hello@meadow.example");
     const { planSamples, samplesForDeal, samplesAttachment } = await import("../src/worker/services/tlcSamples");
@@ -343,15 +369,12 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     const d = (await e.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = 'tld_edit'").first())! as never;
     await planSamples(e, d, { segmentTitle: "A practical lab", seriesTitle: "Start together", reach: "builders" });
     const rendered: string[] = [];
-    const renderPdf = async (html: string) => {
-      rendered.push(html);
-      return { ...THREE_PAGES, pdfBase64: Buffer.from(`%PDF-1.4 /Type /Page a /Type /Page b /Type /Page c revision-${rendered.length}`).toString("base64") };
-    };
+    const renderPdf = async (html: string) => { rendered.push(html); return THREE_PAGES; };
     await take(e, "tld_edit", "Please send the materials", "edit@meadow.example", { samples: { renderPdf } });
     await sendReplyApprovals(e, MON);
-    const original = (await samplesForDeal(e, "tld_edit"))!;
-    expect(sends.at(-1)!.files).toHaveLength(1);
+    expect(sends.at(-1)!.files).toEqual([]);
     expect(sends.at(-1)!.text).toContain("Here's a short 3-page PDF");
+    const url = PREVIEW_URL.exec(sends.at(-1)!.text)![0];
     const note = "Replace the series with a practice lab and make the footer say Dates agreed together";
     let patch = { seriesHeading: "A practice lab", footer2: "Dates agreed together" };
     const writer = async (_e: Env, _actor: unknown, prompt: string) => {
@@ -368,46 +391,64 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     await revise(await refOf("tld_edit"), note);
     const edited = (await samplesForDeal(e, "tld_edit"))!;
     expect(JSON.parse(edited.overrides_json!)).toEqual(patch);
-    expect(edited.pdf_r2_key).not.toBe(original.pdf_r2_key);
-    expect(rendered.at(-1)).toContain("A practice lab");
-    expect(rendered.at(-1)).toContain("Dates agreed together");
+    // The change reached the page; no PDF was made for it, none is stored, none attached.
+    expect(rendered).toHaveLength(0);
+    expect(edited.pdf_r2_key).toBeNull();
+    expect(await samplesAttachment(e, edited.id)).toBeNull();
     expect(sends).toHaveLength(1);
+    expect(sends[0]!.files).toEqual([]);
     expect(sends[0]!.text).toContain("Here's the attached PDF with a practice lab.");
-    expect(sends[0]!.text).toContain(`/api/documents/${edited.document_id}/download`);
-    expect(sends[0]!.files).toHaveLength(1);
-    const attached = await samplesAttachment(e, edited.id);
-    expect(Buffer.from(attached!.content, "base64").toString()).toContain("revision-2");
+    expect(sends[0]!.text).not.toContain("/api/documents/");
+    // The same link as before (one page per deal), with the latest change named in the email.
+    expect(PREVIEW_URL.exec(sends[0]!.text)![0]).toBe(url);
+    expect(sends[0]!.text).toContain('Latest change: Changed the page 2 heading and the page 2 footer (your note: "Replace the series');
+    let page = await (await openPreview(e, url)).text();
+    expect(page).toContain("A practice lab");
+    expect(page).toContain("Dates agreed together");
+    expect(page).toContain("What changed (2): tap to show ▾");
+    expect(page).toContain("First draft, from the approved template");
     patch = { seriesHeading: "Learn by doing" } as typeof patch;
     await revise(await refOf("tld_edit"), "Use Learn by doing as the series heading");
     expect(JSON.parse((await samplesForDeal(e, "tld_edit"))!.overrides_json!)).toEqual({ seriesHeading: "Learn by doing", footer2: "Dates agreed together" });
-    // Invalid money cannot be presented as a completed edit, nor fall back to the old PDF on retry.
+    page = await (await openPreview(e, url)).text();
+    expect(page).toContain("What changed (3)");
+    // Newest first: the latest change is the first line of the list and shows without opening it.
+    expect(page.indexOf("Changed the page 2 heading (your note")).toBeLessThan(page.indexOf("Changed the page 2 heading and the page 2 footer"));
+    expect(page).toContain("<b>Latest:</b> Changed the page 2 heading (your note");
+    // Invalid money is never kept as an edit: the page keeps the last good version and says her change is still being made.
     const priceWriter = async () => ({ ok: true, text: JSON.stringify({ footer2: "Price: $4,000" }) });
     sends.length = 0;
     await revise(await refOf("tld_edit"), "Make the footer clearer", { renderPdf, writer: priceWriter });
     expect(sends).toHaveLength(0);
     expect((await samplesForDeal(e, "tld_edit"))!.state).toBe("FAILED");
-    expect(await samplesAttachment(e, edited.id)).toBeNull();
+    expect(JSON.parse((await samplesForDeal(e, "tld_edit"))!.overrides_json!).footer2).toBe("Dates agreed together");
+    page = await (await openPreview(e, url)).text();
+    expect(page).toContain("Your latest change is still being made.");
+    expect(page).not.toContain("$4,000");
+    expect(page).toContain("What changed (3)");
     await processBrandReplies(e, new Date(MON.getTime() + 31 * 60_000), "west-peek", { mailbox: null, drafter, samples: { renderPdf, writer: priceWriter } });
     expect(sends).toHaveLength(0);
+    expect(rendered).toHaveLength(0);
     // The same amount is usable only after an explicit owner instruction, on this deal alone.
     const { reviseSamples } = await import("../src/worker/services/tlcSamples");
     const ev = (await e.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = 'tlc_2027-03'").first())! as never;
     expect((await reviseSamples(e, d, ev, "Include the price $4,000 in the PDF", { renderPdf, writer: priceWriter })).ok).toBe(true);
     expect(JSON.parse((await samplesForDeal(e, "tld_edit"))!.approved_prices_json!)).toEqual(["$4,000"]);
+    expect(rendered).toHaveLength(0);
     await deal("tld_price_other", "Pebble Tools", "hello@pebble.example");
     const other = (await e.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = 'tld_price_other'").first())! as never;
     await planSamples(e, other, { segmentTitle: "A practical lab", seriesTitle: "Learn together", reach: "builders" });
     expect((await samplesForDeal(e, "tld_price_other"))!.approved_prices_json).toBeNull();
   });
 
-  it("a failed rebuild retries the owner's note and revised email before another notice", async () => {
+  it("a revision that could not run yet retries the owner's note and revised email before another notice", async () => {
     const e = docEnv();
     const { planSamples } = await import("../src/worker/services/tlcSamples");
     const { sendReplyApprovals } = await import("../src/worker/services/tlcBrandReply");
     await deal("tld_retry_edit", "Sandstone Tools", "hello@sandstone.example");
     const d = (await e.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = 'tld_retry_edit'").first())! as never;
     await planSamples(e, d, { segmentTitle: "A useful prototype", seriesTitle: "First practice", reach: "builders" });
-    const renderPdf = async () => THREE_PAGES;
+    const renderPdf = async () => { throw new Error("no PDF is made for a change"); };
     await take(e, "tld_retry_edit", "Please send the samples", "retry@sandstone.example", { samples: { renderPdf } });
     await sendReplyApprovals(e, MON);
     const note = "Call the series Field practice and explain the change in the email";
@@ -417,7 +458,7 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     };
     sends.length = 0;
     await applyBrandReplyApproval(e, { fromHeader: APPROVER, authenticationResults: auth(APPROVER), subject: await refOf("tld_retry_edit"), body: note }, {
-      now: MON, drafter, samples: { writer, renderPdf: async () => ({ pdfBase64: null, reason: "fixture browser busy" }) },
+      now: MON, drafter, samples: { renderPdf, writer: async () => ({ ok: false, text: "" }) },
     });
     expect(sends).toHaveLength(0);
     let drafted = false;
@@ -432,8 +473,82 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     expect(drafted).toBe(true);
     expect(sends).toHaveLength(1);
     expect(sends[0]!.text).toContain("The edited Field practice PDF is attached.");
-    expect(sends[0]!.files).toHaveLength(1);
-    expect(sends[0]!.text).toMatch(/SAMPLES PDF: https:\/\/os\.joinwestpeek\.com\/api\/documents\/doc_.*\/download/);
+    expect(sends[0]!.files).toEqual([]);
+    expect(sends[0]!.text).toMatch(PREVIEW_URL);
+    expect(await (await openPreview(e, PREVIEW_URL.exec(sends[0]!.text)![0])).text()).toContain("Field practice");
+  });
+
+  it("her approved: the PDF is named from the CURRENT title; a busy renderer retries on its own; a 4-page PDF comes back to her; a sent row is never touched", async () => {
+    const e = docEnv();
+    const { planSamples, samplesForDeal } = await import("../src/worker/services/tlcSamples");
+    const { sendReplyApprovals } = await import("../src/worker/services/tlcBrandReply");
+    await deal("tld_final", "Harbor Tools", "hello@harbor.example");
+    const d = (await e.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = 'tld_final'").first())! as never;
+    await planSamples(e, d, { segmentTitle: "A working session", seriesTitle: "Build it together", reach: "builders" });
+    await take(e, "tld_final", "Please send the materials", "final@harbor.example");
+    await sendReplyApprovals(e, MON);
+    const titleWriter = async () => ({ ok: true, text: JSON.stringify({ title: "Agents at Work" }) });
+    await applyBrandReplyApproval(e, { fromHeader: APPROVER, authenticationResults: auth(APPROVER), subject: await refOf("tld_final"), body: "Call it Agents at Work" }, { now: MON, drafter, samples: { writer: titleWriter } });
+    const url = PREVIEW_URL.exec(sends.at(-1)!.text)![0];
+    const page = await (await openPreview(e, url)).text();
+    expect(page).toContain("<title>The Learning Club: Agents at Work · Harbor Tools</title>");
+    expect(page).toContain("Changed the title");
+    // A 4-page PDF is not sent: the reply comes back to her as a draft, saying what to do.
+    sends.length = 0;
+    const FOUR = { pdfBase64: Buffer.from("%PDF-1.4").toString("base64"), pageCount: 4 };
+    await approve(e, await refOf("tld_final"), { samples: { renderPdf: async () => FOUR } });
+    expect(sends.filter((x) => x.to.includes("harbor.example"))).toHaveLength(0);
+    const again = sends.find((x) => /brand reply to approve/.test(x.subject))!;
+    expect(again.text).toContain("Not sent yet: the PDF came to 4 pages, not 3. Open the samples page and reply with what to shorten or change.");
+    expect(again.text).toContain(url);
+    expect((await samplesForDeal(e, "tld_final"))!.pdf_r2_key).toBeNull();
+    // A busy renderer: approved, retried on its own (no second "approved" needed), sent once the PDF is made.
+    sends.length = 0;
+    await approve(e, await refOf("tld_final"), { samples: { renderPdf: async () => ({ pdfBase64: null, reason: "fixture browser busy" }) } });
+    expect(sends.filter((x) => x.to.includes("harbor.example"))).toHaveLength(0);
+    const held = (await e.WP_OS_DB.prepare("SELECT state, send_retry_due, send_tries FROM tlc_brand_reply WHERE deal_id = 'tld_final' ORDER BY created_at DESC LIMIT 1").first<{ state: string; send_retry_due: string | null; send_tries: number }>())!;
+    expect(held).toMatchObject({ state: "FAILED", send_tries: 1 });
+    expect(held.send_retry_due).toBeTruthy();
+    const rendered: string[] = [];
+    await processBrandReplies(e, new Date(MON.getTime() + 31 * 60_000), "west-peek", { mailbox: null, drafter, samples: { renderPdf: async (html: string) => { rendered.push(html); return THREE_PAGES; } } });
+    expect(rendered).toHaveLength(1);
+    expect(sheets(rendered[0]!)).toBe(sheets(await (await openPreview(e, url)).text()));
+    const toBrand = sends.filter((x) => x.to.includes("harbor.example"));
+    expect(toBrand).toHaveLength(1);
+    // Named from the CURRENT title, never the old one.
+    expect(toBrand[0]!.text).toContain("The Learning Club - Agents at Work - Harbor Tools.pdf");
+    expect(toBrand[0]!.text).not.toContain("Build Your Own AI Agent - Harbor Tools.pdf");
+    const done = (await samplesForDeal(e, "tld_final"))!;
+    expect(done.state).toBe("SENT");
+    expect(done.pdf_name).toBe("The Learning Club - Agents at Work - Harbor Tools.pdf");
+    expect((await e.WP_OS_DB.prepare("SELECT state FROM tlc_brand_reply WHERE deal_id = 'tld_final' ORDER BY created_at DESC LIMIT 1").first<{ state: string }>())!.state).toBe("SENT");
+    // The sent page says so, and nothing can change it now.
+    expect(await (await openPreview(e, url)).text()).toContain("Nothing here can change it now.");
+    const { reviseSamples } = await import("../src/worker/services/tlcSamples");
+    const ev = (await e.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = 'tlc_2027-03'").first())! as never;
+    // A sent row is not even shown to the model: no spend, no change.
+    let modelCalls = 0;
+    const counting = async () => { modelCalls += 1; return titleWriter(); };
+    expect((await reviseSamples(e, d, ev, "Change the title again", { writer: counting })).ok).toBe(false);
+    expect(modelCalls).toBe(0);
+    expect(await samplesForDeal(e, "tld_final")).toEqual(done);
+    // A row sent by hand (no token, a hand-built PDF) is left exactly as it is.
+    await deal("tld_hand", "Hand Co", "hello@hand.example");
+    await e.WP_OS_DB.prepare("INSERT INTO tlc_samples (id, deal_id, input_json, state, pdf_r2_key, pdf_name, sent_at) VALUES ('tls_hand', 'tld_hand', ?1, 'SENT', 'hand/built.pdf', 'Hand built.pdf', '2026-10-30T15:00:00.000Z')")
+      .bind(JSON.stringify({ segmentTitle: "A session", seriesTitle: "An evening", reach: "builders" })).run();
+    const handBefore = await samplesForDeal(e, "tld_hand");
+    const hd = (await e.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = 'tld_hand'").first())! as never;
+    const { buildSamples, samplesPreviewLink } = await import("../src/worker/services/tlcSamples");
+    expect((await buildSamples(e, hd, ev)).ok).toBe(true);
+    expect((await reviseSamples(e, hd, ev, "Call it Something else", { writer: counting })).ok).toBe(false);
+    expect(modelCalls).toBe(0);
+    expect(await samplesPreviewLink(e, "tls_hand")).toBeNull();
+    expect(await samplesForDeal(e, "tld_hand")).toEqual(handBefore);
+    // An unknown or malformed token is a bare 404.
+    for (const bad of ["0123456789abcdef0123456789abcdee", "x"]) expect((await openPreview(e, `https://os.joinwestpeek.com/api/tlc-pitch/samples/${bad}`)).status).toBe(404);
+    const ok = await openPreview(e, url);
+    expect(ok.headers.get("x-robots-tag")).toMatch(/noindex/);
+    expect(ok.headers.get("cache-control")).toBe("no-store");
   });
 
   it("a yes with no samples offered is not read as a yes to samples, and a 'not now' never is", async () => {

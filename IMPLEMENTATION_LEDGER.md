@@ -7338,3 +7338,26 @@ from January 2027; $10 paid ticket; $10,000 net target from sponsors ($7,500 flo
   Edited content can expand rather than be silently clipped; the three-page build gate still applies.
   Behavior PROVEN offline; live AI revision, browser binding and email delivery UNPROVEN. No live email,
   spending, manual approval, or production database command was used.
+
+## 30 Oct 2026 — The samples are a live page; the PDF is made once, at "approved" (migration 0280)
+
+- **Owner decision:** "consistently creating a new pdf each time seems wasteful" — one private preview page per
+  deal's samples, the PDF made only once, at her approval.
+- **Change:** each unsent `tlc_samples` row gets a 128-bit `preview_token`; `GET /api/tlc-pitch/samples/:token`
+  (no login: it sits under the existing `/api/tlc-pitch` Access bypass; noindex, no-store, unknown token 404)
+  shows the exact HTML the PDF is made from, with her notes above it that never print: draft/sent status, how to
+  change it, a collapsible "what changed" list (`tlc_samples_revision`, one line per change, built from the
+  fields that changed and her note, never from a model's claim), and a yellow warning when a page would print
+  past one sheet. Change notes (her reply to Wynn's approval email and the #300 paths) update the overrides and
+  the page; no PDF is rendered on a change, and a change that breaks a rule is not kept. Wynn's approval email
+  links the page (no attachment). Her "approved" renders the PDF once (`finalizeSamplesPdf`), files it at
+  `pdf_r2_key`, names it from the CURRENT title (new `title` override), attaches it and sends. A busy renderer is
+  retried on its own (`send_retry_due`, 3 tries, she is not asked again); a PDF that is not 3 pages comes back to
+  her as a draft saying what to do. SENT rows are never touched (no token, no revision, no model call).
+- **Proof:** `tlcBrandReply.test.ts` (page linked not attached; edits change the page with zero PDF renders;
+  history newest first; one render at approval whose sheets equal the page byte for byte; title-derived name;
+  retry; 4-page bounce; sent and hand-sent rows unchanged; 404s and headers), `tlcSamplesAndCalls.test.ts`
+  (title, change line, preview wrapper; baseline SHA-256 unchanged). Each new guard was broken on purpose (PDF on
+  change, old-title name, preview not the PDF HTML, sent row touched, no retry, PDF attached to her email): each
+  turned tests red; restored green. Phone (390 px) and laptop views screenshotted, no horizontal scroll. Live
+  rendering and email delivery UNPROVEN until exercised.

@@ -163,6 +163,7 @@ import {
 } from "./services/roomPacket";
 import { handleOutsideEmailAllow, handleOutsideEmailCard, handleOutsideEmailMode, handleOutsideEmailScreen } from "./services/outsideEmail";
 import { handleMustPitchAdd, handleMustPitchOverview, handleMustPitchRemove, handleWayInContact, handleWayInHide } from "./services/tlcMustPitch";
+import { handleTlcSamplesPreview } from "./services/tlcSamples";
 import { handleTlcApprove, handleTlcDeal, handleTlcIdeaAdd, handleTlcIdeaNote, handleTlcIdeaStatus, handleTlcResearchLinkAdd, handleTlcOnePager, handleTlcOverview, handleTlcPitchPublic, handleTlcPlan, handleTlcTicket } from "./services/learningClub";
 import { handleRoomsPartners } from "./services/partnersPanel";
 import {
@@ -1081,6 +1082,7 @@ const router = new Router()
    * `auth: false` DELIBERATELY: the 128-bit per-month token is the credential, the page is read-only
    * and carries nothing internal, and an unknown token is a bare 404.
    */
+  .get("/api/tlc-pitch/samples/:token", handleTlcSamplesPreview, { auth: false })
   .get("/api/tlc-pitch/:token", handleTlcPitchPublic, { auth: false })
   .get("/api/tlc-pitch/:token/pdf", handleTlcPitchPublic, { auth: false })
   .get("/api/rooms/partners", handleRoomsPartners)

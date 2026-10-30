@@ -53,6 +53,8 @@ export function readMix(raw: string | null | undefined): MixSlice[] {
 /** Per-deal copy, never HTML. Missing fields keep the baseline; arrays replace whole sections. */
 const copy = z.string().trim().min(1).max(2000);
 export const samplesOverridesSchema = z.object({
+  /** The big heading on page 1, the document's title and the PDF's file name (default: the club's topic). */
+  title: z.string().trim().min(1).max(120).optional(),
   page1Rows: z.array(z.object({ label: copy, title: copy, line: copy, highlight: z.boolean().optional() }).strict()).min(1).max(20).optional(),
   series: z.array(z.object({ label: copy, title: copy, line: copy, highlight: z.boolean().optional() }).strict()).min(1).max(12).optional(),
   seriesHeading: copy.optional(), seriesSub: copy.optional(),
@@ -226,7 +228,7 @@ export function renderSamplesPdf(i: SamplesInput): string {
       : `<div><i>0${k + 1}</i><b>${esc(s.title)}</b><span>${esc(s.line)}</span></div>`).join("");
   const kick = '<div class="kick">WEST PEEK ROOMS · THE LEARNING CLUB</div>';
   const row = (t: string, what: string, hl = false) => `<div${hl ? ' class="hl"' : ""}><b>${t}</b><span>${what}</span></div>`;
-  const page1 = `<section class="sheet"><div class="band">${kick}<div class="ttl">${esc(i.topic)}</div>
+  const page1 = `<section class="sheet"><div class="band">${kick}<div class="ttl">${esc(o.title ?? i.topic)}</div>
 <div class="sub">An evening in New York · ${esc(whenWords(i.month, i.tentative))} · in partnership with ${b}</div>
 <div class="facts"><span><b>${g.min}–${g.max}</b> guests, flexible to your goals</span><span><b>3½ hours</b> · 6:00–9:30pm</span><span><b>Hands-on</b> · ${esc(c.leaveFact)}</span></div></div>
 <div class="body"><h5>The evening</h5><div class="ros">
@@ -257,8 +259,87 @@ ${o.partnerGets ? o.partnerGets.map((l) => `<li>${esc(l)}</li>`).join("\n") : `<
 <li><b>Warm introductions</b> to guests ${esc(c.keepGoing)}.</li>
 <li><b>Content from the evening</b> for your own channels.</li>`}</ul>
 <div class="foot"><span>West Peek Ventures · founding GP Scooter Taylor, creator of Quarantine Con (2020) · ${esc(TLC_OWNER.email)}</span><span>3 / 3</span></div></div></section>`;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The Learning Club: ${esc(i.topic)} · ${b}</title>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The Learning Club: ${esc(o.title ?? i.topic)} · ${b}</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,600&family=IBM+Plex+Sans:wght@400;600&display=swap">${STYLE}${i.overrides ? "<style>.sheet{height:auto;min-height:11in;overflow:visible}</style>" : ""}</head><body>${page1}${page2}${page3}</body></html>`;
+}
+
+/** The PDF's file name, from the CURRENT title (her edited one, else the topic) and the brand. */
+export function samplesPdfName(i: Pick<SamplesInput, "topic" | "brand" | "overrides">): string {
+  const safe = (x: string) => x.replace(/[^\w &-]+/g, "").replace(/\s+/g, " ").trim();
+  return `The Learning Club - ${safe(i.overrides?.title ?? i.topic)} - ${safe(i.brand)}.pdf`;
+}
+
+/** Her edits in plain words, for the "what changed" line: the parts of the document a change touched. */
+const PART_WORDS: Record<keyof SamplesOverrides, string> = {
+  title: "the title", page1Rows: "the evening's running order (page 1)", bring: "what guests bring (page 1)", leaveWith: "what guests leave with (page 1)",
+  series: "the six evenings (page 2)", seriesHeading: "the page 2 heading", seriesSub: "the line under the page 2 heading",
+  whyItWorks: "why a series works (page 2)", footer2: "the page 2 footer", partnerGets: "what partnering gets them (page 3)", reach: "who the room is weighted toward (page 3)",
+};
+/** One line: what changed, in her words. Built from the fields that changed, never from a model's claim about them. */
+export function whatChangedLine(patch: SamplesOverrides, note: string): string {
+  const parts = (Object.keys(patch) as Array<keyof SamplesOverrides>).map((k) => PART_WORDS[k]).filter(Boolean);
+  const said = note.replace(/\s+/g, " ").trim();
+  const quote = said ? ` (your note: "${said.length > 90 ? `${said.slice(0, 89).trimEnd()}…` : said}")` : "";
+  if (parts.length === 0) return `Looked at your note; nothing needed to change${quote}`;
+  const list = parts.length === 1 ? parts[0]! : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)!}`;
+  return `Changed ${list}${quote}`;
+}
+
+export interface SamplesPreviewView {
+  brand: string;
+  /** DRAFT: being shaped with her; WORKING: her latest note is still being applied; SENT: gone to the brand. */
+  status: "DRAFT" | "WORKING" | "SENT";
+  sentAt?: string | null;
+  /** Newest first. */
+  history: ReadonlyArray<{ at: string; line: string }>;
+}
+
+const PREVIEW_STYLE = `<style id="wp-preview-style">
+@media screen{html,body{background:#eceae4}body{padding:0 0 32px}.sheet{margin:16px auto;box-shadow:0 1px 6px rgba(0,0,0,.18);background:#fff}}
+@media print{.wp-preview{display:none!important}}
+.wp-preview{max-width:8.5in;margin:0 auto;padding:16px 16px 4px;font:16px/1.5 -apple-system,"Helvetica Neue",Arial,sans-serif;color:#1d2230}
+.wp-preview h1{font:600 22px/1.25 Georgia,serif;margin:0 0 6px}.wp-preview p{margin:6px 0}
+.wp-preview .tag{display:inline-block;border-radius:99px;padding:2px 10px;font-size:14px;font-weight:600;margin-bottom:8px}
+.wp-preview .draft{background:#f6ecd0;color:#5b4300}.wp-preview .sent{background:#dcefe3;color:#1e5a36}
+.wp-preview .note{background:#fff;border:1px solid #d9d5ca;border-radius:10px;padding:12px 14px;margin:10px 0}
+.wp-preview .warn{background:#fdf3d6;border-color:#e3c46d}
+.wp-preview details{background:#fff;border:1px solid #d9d5ca;border-radius:10px;padding:10px 14px;margin:10px 0}
+.wp-preview summary{cursor:pointer;font-weight:600;min-height:32px;display:flex;align-items:center}
+.wp-preview ol{margin:8px 0 4px;padding-left:20px}.wp-preview li{margin:6px 0}.wp-preview time{color:#5d6475;font-size:14px;display:block}
+</style>`;
+
+const dayWords = (iso: string): string => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(d);
+};
+
+/**
+ * THE PRIVATE PREVIEW PAGE (owner, 30 Oct 2026). The document part is `pdfHtml` byte for byte (the same string the
+ * PDF is made from at her "approved"), so what she sees is what the brand gets. Above it, for her alone and never
+ * printed: where it stands, how to change it, and what changed so far (collapsed; the latest change shows without
+ * opening). A page that would print longer than one sheet is named, in yellow, with what to do.
+ */
+export function renderSamplesPreview(pdfHtml: string, v: SamplesPreviewView): string {
+  const latest = v.history[0];
+  const head = v.status === "SENT"
+    ? `<span class="tag sent">Sent${v.sentAt ? ` · ${esc(dayWords(v.sentAt))}` : ""}</span><h1>The samples ${esc(v.brand)} received</h1><p>This went with your answer. Nothing here can change it now.</p>`
+    : `<span class="tag draft">Draft · not sent yet</span><h1>Samples for ${esc(v.brand)}</h1>
+<p>This is exactly what the PDF will look like. On a phone, pinch to zoom in on the pages.</p>
+<div class="note"><p><b>To change something:</b> reply to Wynn's email and say what to change. This page updates; no new PDF is made.</p>
+<p><b>When it looks right:</b> reply <b>approved</b>. The PDF is made from this page then, and goes with your answer.</p></div>`;
+  const working = v.status === "WORKING" ? `<div class="note warn"><p><b>Your latest change is still being made.</b> This page shows the version before it. Nothing for you to do; it updates on its own.</p></div>` : "";
+  const history = v.history.length
+    ? `<details><summary>What changed (${v.history.length}): tap to show ▾</summary><ol>${v.history.map((h) => `<li>${esc(h.line)}<time>${esc(dayWords(h.at))}</time></li>`).join("")}</ol></details>
+${latest ? `<p><b>Latest:</b> ${esc(latest.line)}</p>` : ""}`
+    : "";
+  const longCheck = v.status === "SENT" ? "" : `<div class="note warn" id="wp-long" hidden><p><b>A page runs longer than one printed sheet.</b> Reply to Wynn with what to shorten, so the PDF stays 3 pages.</p></div>
+<script>(function(){var s=document.querySelectorAll(".sheet"),w=document.documentElement.clientWidth,z=Math.min(1,(w-16)/816),long=false;for(var i=0;i<s.length;i++){if(s[i].scrollHeight>1060)long=true;if(z<1)s[i].style.zoom=String(z);}if(long)document.getElementById("wp-long").hidden=false;})();</script>`;
+  const chrome = `<div class="wp-preview" role="region" aria-label="About this draft">${head}${working}${history}</div>`;
+  return pdfHtml
+    .replace("<head>", '<head><meta name="robots" content="noindex, nofollow">')
+    .replace("</head>", `${PREVIEW_STYLE}</head>`)
+    .replace("<body>", `<body>${chrome}`)
+    .replace("</body>", `${longCheck}</body>`);
 }
 
 /** What the template must never carry: a price, a brand put on the hook for a segment, a mix that is not 100. */

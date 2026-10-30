@@ -21,7 +21,7 @@ import { freeSlots, isFree, pickedSlot, proposedTime, slotWords } from "../../sh
 import { isYesToSamples, requestsSamples, samplesCoverEmail } from "../../shared/tlc/samples";
 import { fillTemplate, hiLine, levelPicked } from "../../shared/tlc/brandFlow";
 import { herBusy, makeEvent as defaultMakeEvent, callEvent, type BusyReader, type EventMaker } from "./tlcCalls";
-import { buildSamples, reviseSamples, samplesForDeal, tlcRevisionWriter, samplesAttachment, storePdf, storedAttachment, textPage, type SamplesDeps, type StoredFile } from "./tlcSamples";
+import { SamplesPdfError, buildSamples, finalizeSamplesPdf, reviseSamples, samplesForDeal, samplesPreviewLink, samplesRevisions, tlcRevisionWriter, storePdf, storedAttachment, textPage, type SamplesDeps, type StoredFile } from "./tlcSamples";
 
 /**
  * WYNN ANSWERS A BRAND'S REPLY, SEQUOIA APPROVES IT (owner, 26 Oct 2026).
@@ -87,7 +87,7 @@ interface ReplyRow {
   draft_subject: string; draft_body: string; state: string; notice_ref: string | null; firm_scope: string;
   change_note?: string | null; report_text?: string | null; research_due?: string | null; research_tries?: number;
   samples_id?: string | null; offered_slots_json?: string | null; agreed_slot?: string | null; calendar_event_id?: string | null; held_reason?: string | null;
-  kind?: string | null; tier?: string | null; attachments_json?: string | null;
+  kind?: string | null; tier?: string | null; attachments_json?: string | null; send_retry_due?: string | null; send_tries?: number;
 }
 
 export const normalizeMid = (id: string | null | undefined): string => (id ?? "").trim().replace(/^<|>$/g, "");
@@ -540,8 +540,9 @@ export async function processBrandReplies(env: Env, now: Date, firmScope = "west
     if (r.samples_id && !r.change_note) await retrySamples(env, r, now, d);
     else await redraftFor(env, r, r.change_note ?? "", now, d);
   }
+  const retried = await retryApprovedSends(env, now, firmScope, d);
   const notice = await sendReplyApprovals(env, now, firmScope);
-  return `brand replies: ${counts.DRAFTED} drafted, ${counts.AUTO_REPLY} auto-reply (drip resumed), ${counts.NO} declined; ${polled}; ${notice}`;
+  return `brand replies: ${counts.DRAFTED} drafted, ${counts.AUTO_REPLY} auto-reply (drip resumed), ${counts.NO} declined; ${polled};${retried.length ? ` approved and sent on their own: ${retried.length};` : ""} ${notice}`;
 }
 
 // ── The one approval email a day ───────────────────────────────────────────────────────────────
@@ -584,18 +585,22 @@ export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-
   const ct = chicago(now);
   const ref = mintRef();
   const to = TLC_OWNER.email;
-  // The samples PDF each yes carries, attached to HER email too, so she approves the very file the brand will get.
+  /*
+   * THE SAMPLES ARE A LINK, NOT A FRESH PDF (owner, 30 Oct 2026). While a draft is with her, the samples each yes
+   * carries are her private preview page: exactly what the PDF will be, updated by each change note, with what
+   * changed at the top. The PDF is made once, from that page, on her "approved".
+   */
   const attachments: EmailAttachment[] = [];
   const attachedTo = new Map<string, string>();
-  const pdfLinks = new Map<string, string>();
+  const previews = new Map<string, { url: string; latest: string | null }>();
   for (const r of waiting) {
     const mine: EmailAttachment[] = [];
     if (r.samples_id) {
-      const a = await samplesAttachment(env, r.samples_id);
-      if (!a) return "the samples PDF is not ready; the next pass tries again";
-      mine.push(a);
       const sample = await samplesForDeal(env, r.deal_id);
-      if (sample?.document_id) pdfLinks.set(r.id, `https://os.joinwestpeek.com/api/documents/${sample.document_id}/download`);
+      const url = sample?.state === "READY" ? await samplesPreviewLink(env, sample.id) : null;
+      if (!sample || !url) return "the samples page is not ready; the next pass tries again";
+      const history = await samplesRevisions(env, sample.id);
+      previews.set(r.id, { url, latest: history.length > 1 ? history[0]!.line : null });
     }
     for (const f of JSON.parse(r.attachments_json ?? "[]") as StoredFile[]) { const a = await storedAttachment(env, f); if (a) mine.push(a); }
     if (mine.length) { attachments.push(...mine); attachedTo.set(r.id, mine.map((a) => a.filename).join(" · ")); }
@@ -611,12 +616,17 @@ export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-
     "",
     ...(r.change_note ? ["YOUR NOTE, WORD FOR WORD", r.change_note, ""] : []),
     ...(r.report_text ? [r.report_text, ""] : []),
+    ...(r.samples_id && r.held_reason ? [`⚠ ${r.held_reason}`, ""] : []),
     "WYNN'S DRAFT OF YOUR ANSWER, WORD FOR WORD",
     `Subject: ${r.draft_subject}`,
     "",
     r.draft_body,
-    ...(attachedTo.has(r.id) ? ["", `ATTACHED (goes with it): ${attachedTo.get(r.id)}${r.samples_id ? ", 3 pages" : ""}`] : []),
-    ...(pdfLinks.has(r.id) ? ["", `SAMPLES PDF: ${pdfLinks.get(r.id)}`] : []),
+    ...(attachedTo.has(r.id) ? ["", `ATTACHED (goes with it): ${attachedTo.get(r.id)}`] : []),
+    ...(previews.has(r.id) ? [
+      "", `THE SAMPLES (3 pages), OPEN ON YOUR PHONE OR LAPTOP: ${previews.get(r.id)!.url}`,
+      ...(previews.get(r.id)!.latest ? [`Latest change: ${previews.get(r.id)!.latest}`] : []),
+      "To change them, reply with what to change. The PDF is made from that page when you reply approved, and goes with your answer.",
+    ] : []),
     ...(r.agreed_slot ? ["", `ON YOUR WORD: ${slotWords(r.agreed_slot)} goes on your calendar, ${r.contact_email} invited`] : []),
   ].join("\n"));
   const many = waiting.length > 1;
@@ -626,7 +636,7 @@ export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-
       tldr: `${waiting.length} brand${many ? "s" : ""} replied to your Learning Club email${many ? "s" : ""}. ${BRAND_REPLY_ASK}.`,
       tldrBullets: many ? ['Reply "approved" to send all', 'Or "approve 1" · "skip 2" · "change 2: what to change"'] : ['Reply "approved" to send it', "Or reply with your changes"],
       sections: [
-        { label: "Who replied", bullets: waiting.map((r, i) => `${i + 1} · ${brandDisplayName(r.brand)} (${monthWords(r.month)}): ${r.kind === "PROPOSAL" ? "step 4: the proposal (prices on the attached one-pager)" : r.kind === "CONFIRM" ? `step 5: ${r.tier ? TLC_TIER_LABEL(r.tier) : "a level"} agreed (agreement and invoice attached)` : r.agreed_slot ? `a call, ${slotWords(r.agreed_slot)}` : r.intent === "CALL" ? "wants a call (times from your calendar offered)" : r.samples_id ? "said yes to the samples (the 3-page PDF goes with your answer)" : r.intent === "YES" ? "said yes" : "asked a question"}`).slice(0, 6) },
+        { label: "Who replied", bullets: waiting.map((r, i) => `${i + 1} · ${brandDisplayName(r.brand)} (${monthWords(r.month)}): ${r.kind === "PROPOSAL" ? "step 4: the proposal (prices on the attached one-pager)" : r.kind === "CONFIRM" ? `step 5: ${r.tier ? TLC_TIER_LABEL(r.tier) : "a level"} agreed (agreement and invoice attached)` : r.agreed_slot ? `a call, ${slotWords(r.agreed_slot)}` : r.intent === "CALL" ? "wants a call (times from your calendar offered)" : r.samples_id ? "said yes to the samples (open the samples page in the email; the PDF is made when you approve)" : r.intent === "YES" ? "said yes" : "asked a question"}`).slice(0, 6) },
         { label: "What happens on your word", bullets: ["Your answer goes from your own mailbox, on their thread", "A call they asked for moves the deal to Call", "Nothing goes to a brand until you say so"] },
       ],
       details: [...blocks.flatMap((b) => [b, ""]), `Ref ${ref}`].join("\n"),
@@ -682,6 +692,7 @@ export async function applyBrandReplyApproval(
   const approve = new Set(parsed.approveAll ? ids.map((_, i) => i + 1) : parsed.approve);
   for (const n of [...changed, ...skipped]) approve.delete(n);
   const lines: string[] = [];
+  let backToHer = false;
   const rowOf = (n: number) => (ids[n - 1] ? env.WP_OS_DB.prepare("SELECT r.*, d.brand, d.contact_email, d.stage FROM tlc_brand_reply r JOIN tlc_deal d ON d.id = r.deal_id WHERE r.id = ?1").bind(ids[n - 1]).first<ReplyRow & { brand: string; contact_email: string; stage: string }>() : Promise.resolve(null));
 
   for (const n of [...approve].sort((a, b) => a - b)) {
@@ -694,9 +705,8 @@ export async function applyBrandReplyApproval(
       const calendar = await sendApproved(env, owner, r, now, deps);
       lines.push(`${n} · ${brandDisplayName(r.brand)}: sent from ${TLC_OWNER.email}, on their thread${calendar ? `; ${calendar}` : ""}`);
     } catch (err) {
-      const why = err instanceof Error ? err.message : String(err);
-      await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'FAILED', held_reason = ?2 WHERE id = ?1").bind(r.id, why.slice(0, 300)).run();
-      lines.push(`${n} · ${brandDisplayName(r.brand)}: NOT sent (${why.slice(0, 160)})`);
+      lines.push(`${n} · ${brandDisplayName(r.brand)}: ${await sendFailed(env, r, err, now)}`);
+      if (err instanceof SamplesPdfError && !err.retry) backToHer = true;
     }
   }
   for (const n of [...skipped]) {
@@ -715,7 +725,7 @@ export async function applyBrandReplyApproval(
     await redraftFor(env, { ...r, research_tries: 0 }, c.note, now, deps);
     redrafted += 1;
   }
-  const again = redrafted ? await sendReplyApprovals(env, now, firmScope) : null;
+  const again = redrafted || backToHer ? await sendReplyApprovals(env, now, firmScope) : null;
   if (lines.length) {
     await emailHer(env, firmScope, `${ref}:done`, {
       what: `brand replies, done · ${ref}`,
@@ -727,14 +737,73 @@ export async function applyBrandReplyApproval(
   return { handled: true, ref, detail: [...lines, ...(redrafted ? [`${redrafted} redrafted`] : [])].join("; ") || "nothing to do" };
 }
 
+/** How often, and how many times, an approved send whose PDF could not be made yet is tried again on its own. */
+export const SEND_RETRY_MINUTES = 30;
+export const SEND_TRIES = 3;
+
+/**
+ * An approved send that did not go. Nothing left (the PDF is made before the send), so:
+ *   - the renderer was busy: tried again on its own every SEND_RETRY_MINUTES, up to SEND_TRIES; she is not asked again;
+ *   - the PDF itself is wrong (not 3 pages): back to her as a draft, saying what to shorten;
+ *   - anything else: FAILED, named in her "done" email.
+ */
+async function sendFailed(env: Env, r: ReplyRow, err: unknown, now: Date): Promise<string> {
+  const why = err instanceof Error ? err.message : String(err);
+  const tries = (r.send_tries ?? 0) + 1;
+  if (err instanceof SamplesPdfError && err.retry && tries < SEND_TRIES) {
+    const due = new Date(now.getTime() + SEND_RETRY_MINUTES * 60_000).toISOString();
+    await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'FAILED', send_retry_due = ?2, send_tries = ?3, held_reason = ?4 WHERE id = ?1")
+      .bind(r.id, due, tries, `approved; ${why}`.slice(0, 300)).run();
+    return `approved, not sent yet (${why.slice(0, 120)}); it goes on its own once the PDF is made, nothing for you to do`;
+  }
+  if (err instanceof SamplesPdfError && !err.retry && r.samples_id) {
+    await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'DRAFTED', notice_ref = NULL, send_retry_due = NULL, send_tries = 0, held_reason = ?2 WHERE id = ?1")
+      .bind(r.id, `Not sent yet: ${why}. Open the samples page and reply with what to shorten or change.`.slice(0, 300)).run();
+    return `NOT sent (${why.slice(0, 160)}); a new email asks what to change`;
+  }
+  await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'FAILED', send_retry_due = NULL, send_tries = ?3, held_reason = ?2 WHERE id = ?1").bind(r.id, why.slice(0, 300), tries).run();
+  return `NOT sent (${why.slice(0, 160)})`;
+}
+
+/** Each pass: answers she approved whose PDF could not be made yet are sent now, once (a claim), on her approval. */
+export async function retryApprovedSends(env: Env, now: Date, firmScope = "west-peek", deps: BrandReplyDeps = {}): Promise<string[]> {
+  const due = (await env.WP_OS_DB.prepare(
+    `SELECT r.*, d.brand, d.contact_email, d.stage FROM tlc_brand_reply r JOIN tlc_deal d ON d.id = r.deal_id
+      WHERE r.firm_scope = ?1 AND r.state = 'FAILED' AND r.send_retry_due IS NOT NULL AND r.send_retry_due <= ?2`,
+  ).bind(firmScope, now.toISOString()).all<ReplyRow & { brand: string; contact_email: string; stage: string }>()).results ?? [];
+  if (due.length === 0) return [];
+  const owner = await actorForFirmUser(env, TLC_OWNER.firmUserId);
+  if (!owner) return [];
+  const lines: string[] = [];
+  for (const r of due) {
+    const claim = await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'SENDING', send_retry_due = NULL WHERE id = ?1 AND state = 'FAILED' AND send_retry_due IS NOT NULL").bind(r.id).run();
+    if ((claim.meta?.changes ?? 0) === 0) continue;
+    try {
+      await sendApproved(env, owner, r, now, deps);
+      await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET held_reason = NULL WHERE id = ?1").bind(r.id).run();
+      lines.push(`${brandDisplayName(r.brand)}: sent (you approved it; the PDF is made now)`);
+    } catch (err) {
+      lines.push(`${brandDisplayName(r.brand)}: ${await sendFailed(env, r, err, now)}`);
+    }
+  }
+  if (lines.length) {
+    await emailHer(env, firmScope, `retry:${due.map((r) => r.id).join(",")}`.slice(0, 120), {
+      what: "approved answers, sent on their own",
+      tldr: `${lines.filter((l) => /: sent /.test(l)).length} sent, from your mailbox, on their threads.`,
+      sections: [{ label: "Done", bullets: lines.slice(0, 6) }],
+    }).catch(() => false);
+  }
+  return lines;
+}
+
 /** Her approved answer, through the brand-sales lane: approval card, executor, her own Gmail, threaded. */
 async function sendApproved(env: Env, owner: Actor, r: ReplyRow & { brand: string; contact_email: string; stage: string }, now: Date, deps: BrandReplyDeps = {}): Promise<string | null> {
   const { BRAND_REPLY_TO, approvedFor, clubViewOf, renderPdfFor } = await import("./learningClub");
   const deal = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(r.deal_id).first<TlcDealRow>())!;
   const ev = await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>();
-  // The samples PDF goes with a yes to the samples; the priced pitch only in answer to a yes after a call (her rule).
-  const samples = r.samples_id ? await samplesAttachment(env, r.samples_id) : null;
-  if (r.samples_id && !samples) throw new Error("the samples PDF is missing from the store, so nothing was sent");
+  // The samples PDF goes with a yes to the samples, made NOW from her preview, once; the priced pitch only in answer
+  // to a yes after a call (her rule). A PDF that cannot be made stops the send before anything leaves.
+  const samples = r.samples_id ? await finalizeSamplesPdf(env, r.samples_id, deps.samples ?? {}) : null;
   const pitchAllowed = r.intent === "YES" && !r.samples_id && ev?.topic && !noMoneyNow(await wynnRules(env, r.firm_scope), deal.stage);
   const stored: EmailAttachment[] = [];
   for (const f of JSON.parse(r.attachments_json ?? "[]") as StoredFile[]) {
