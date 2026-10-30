@@ -12,11 +12,13 @@
  *           partnering gets the brand.
  *
  * Her design (pinecone.html, "The attachment: one 3-page PDF") is the source of the look: a navy band with a gold
- * rule. Rules the template keeps by construction and `samplesProblems` checks: no price, fee or tier anywhere; no
+ * rule. The baseline has no price, fee or tier; an explicit owner note can place an exact price in one deal's PDF.
+ * `samplesProblems` also checks the remaining rules: no
  * guest names (roles and types only); no number we cannot stand behind (the guest range is the standard one, the
  * community is the confirmed 5,000+, the mix is labelled approximate); we host every segment ourselves or bring a
  * host, so the brand never has to send anyone. PURE: no database, no network.
  */
+import { z } from "zod";
 import { BRAND_MUST_STAFF, MONEY_WORDS } from "./brandReply";
 import { fillTemplate, hiLine } from "./brandFlow";
 import { TLC_OWNER, TLC_SEATS, monthWords, replyLooksLikeNo, type Seats } from "./learningClub";
@@ -48,9 +50,34 @@ export function readMix(raw: string | null | undefined): MixSlice[] {
   }
 }
 
+/** Per-deal copy, never HTML. Missing fields keep the baseline; arrays replace whole sections. */
+const copy = z.string().trim().min(1).max(2000);
+export const samplesOverridesSchema = z.object({
+  page1Rows: z.array(z.object({ label: copy, title: copy, line: copy, highlight: z.boolean().optional() }).strict()).min(1).max(20).optional(),
+  series: z.array(z.object({ label: copy, title: copy, line: copy, highlight: z.boolean().optional() }).strict()).min(1).max(12).optional(),
+  seriesHeading: copy.optional(), seriesSub: copy.optional(),
+  whyItWorks: z.array(copy).min(1).max(12).optional(),
+  partnerGets: z.array(copy).min(1).max(12).optional(), footer2: copy.optional(),
+  bring: copy.optional(), leaveWith: copy.optional(), reach: copy.optional(),
+}).strict();
+export type SamplesOverrides = z.infer<typeof samplesOverridesSchema>;
+
+/** Exact amounts only. The model cannot grant this permission; only an explicit owner instruction can. */
+const PRICE_AMOUNT = /(?:[$£€]\s*\d[\d,]*(?:\.\d{1,2})?\s*[kKmM]?|\b\d[\d,]*(?:\.\d{1,2})?\s*(?:USD|dollars|GBP|EUR)\b)/g;
+export function approvedSamplePrices(note: string): string[] {
+  return [...new Set(note.split(/[!?;\n]+|\.(?:\s|$)/)
+    .filter((sentence) => !/\b(?:not|never|without|unless|don't|do not|no|if|remove|exclude|omit)\b/i.test(sentence))
+    .flatMap((sentence) => sentence.split(/,(?!\d)|\b(?:and|but)\b/i)).flatMap((sentence) => {
+    if (/\b(?:not|never|without|unless|don't|do not|no|if|remove|exclude|omit)\b/i.test(sentence)) return [];
+    if (/\b(?:email|draft|invoice|agreement)\b/i.test(sentence)) return [];
+    if (!/\b(?:put|include|add|show|insert|set|use)\b/i.test(sentence) || !/\b(?:pdf|samples|attachment)\b/i.test(sentence)) return [];
+    return (sentence.match(PRICE_AMOUNT) ?? []).map((p) => p.trim());
+  }))];
+}
+
 /**
  * THE WORDS THAT CHANGE PER BRAND (her <mark> spans; owner-approved template, artifact v7, 26 Oct 2026). Everything
- * else on the three pages is the template's own text, word for word.
+ * else starts from the template; per-deal overrides carry the owner's edits.
  */
 export interface SamplesInput {
   brand: string;
@@ -65,6 +92,7 @@ export interface SamplesInput {
   /** Who the room is weighted toward, page 3 ("founders and operators deciding what their teams build on"). */
   reach: string;
   mix: readonly MixSlice[];
+  overrides?: SamplesOverrides;
 }
 
 /** The template text that belongs to the club's topic: the approved copy for its topic, or the generic evening. */
@@ -187,10 +215,11 @@ export const whenWords = (month: string, tentative: boolean): string => `${month
 
 /** THE PDF, as print-ready HTML (three US-letter pages). The title names the topic so the PDF check can confirm it. */
 export function renderSamplesPdf(i: SamplesInput): string {
-  const c = topicContent(i.topic);
+  const o = samplesOverridesSchema.parse(i.overrides ?? {});
+  const c = { ...topicContent(i.topic), ...(o.bring ? { bring: o.bring } : {}), ...(o.leaveWith ? { leaveWith: o.leaveWith } : {}) };
   const b = esc(i.brand);
   const g = STANDARD_GUESTS;
-  const series = c.series.map((s, k) =>
+  const series = o.series ? o.series.map((s) => `<div${s.highlight ? ' class="hl"' : ""}><i>${esc(s.label)}</i><b>${esc(s.title)}</b><span>${esc(s.line)}</span></div>`).join("") : c.series.map((s, k) =>
     k === 1
       ? `<div class="hl"><i>02</i><b>${esc(i.seriesTitle)}</b><span>${b}'s signature evening</span></div>`
       : `<div><i>0${k + 1}</i><b>${esc(s.title)}</b><span>${esc(s.line)}</span></div>`).join("");
@@ -200,42 +229,50 @@ export function renderSamplesPdf(i: SamplesInput): string {
 <div class="sub">An evening in New York · ${esc(whenWords(i.month, i.tentative))} · in partnership with ${b}</div>
 <div class="facts"><span><b>${g.min}–${g.max}</b> guests, flexible to your goals</span><span><b>3½ hours</b> · 6:00–9:30pm</span><span><b>Hands-on</b> · ${esc(c.leaveFact)}</span></div></div>
 <div class="body"><h5>The evening</h5><div class="ros">
-${row("6:00", "<strong>Arrival</strong> · drinks, name cards, tables of five set by background")}
-${row("6:20", `<strong>Opening talk</strong> · ${esc(c.opening)}`)}
-${row("6:40", `<strong>Panel</strong> · ${esc(c.panel)}`)}
-${row("7:15", `<strong>Dinner at the tables</strong> · ${esc(c.dinner)}`)}
-${row("7:45", `<strong>Build session</strong> · ${esc(c.build)}`)}
-${row("8:15", `<strong>${esc(i.segmentTitle)}</strong> · a 15-minute segment led by ${b} or by our host`, true)}
-${row("8:45", `<strong>Show and tell</strong> · ${esc(c.showAndTell)}`)}
-${row("9:05", "<strong>Close</strong> · drinks, introductions, follow-up resources")}
+${o.page1Rows ? o.page1Rows.map((r) => row(esc(r.label), `<strong>${esc(r.title)}</strong> · ${esc(r.line)}`, r.highlight)).join("\n") : [row("6:00", "<strong>Arrival</strong> · drinks, name cards, tables of five set by background"),
+row("6:20", `<strong>Opening talk</strong> · ${esc(c.opening)}`),
+row("6:40", `<strong>Panel</strong> · ${esc(c.panel)}`),
+row("7:15", `<strong>Dinner at the tables</strong> · ${esc(c.dinner)}`),
+row("7:45", `<strong>Build session</strong> · ${esc(c.build)}`),
+row("8:15", `<strong>${esc(i.segmentTitle)}</strong> · a 15-minute segment led by ${b} or by our host`, true),
+row("8:45", `<strong>Show and tell</strong> · ${esc(c.showAndTell)}`),
+row("9:05", "<strong>Close</strong> · drinks, introductions, follow-up resources")].join("\n")}
 </div><div class="two"><div class="box"><h6>Guests bring</h6><p>${esc(c.bring)}</p></div>
 <div class="box"><h6>Guests leave with</h6><p>${esc(c.leaveWith)}</p></div></div>
 <div class="foot"><span>We host and facilitate the whole evening. ${b} sends a speaker or team only if it wants to.</span><span>1 / 3</span></div></div></section>`;
-  const page2 = `<section class="sheet"><div class="band">${kick}<div class="ttl sm">A series of six</div><div class="sub">Each club builds on the last. Dates move with ${b}'s launch calendar.</div></div>
+  const page2 = `<section class="sheet"><div class="band">${kick}<div class="ttl sm">${esc(o.seriesHeading ?? "A series of six")}</div><div class="sub">${o.seriesSub ? esc(o.seriesSub) : `Each club builds on the last. Dates move with ${b}'s launch calendar.`}</div></div>
 <div class="body"><div class="six">${series}</div><h5>Why a series works for a partner</h5><ul class="why">
-<li><b>Six evenings, one community:</b> the same ${esc(c.guests)} come back, so your name is part of what they learn.</li>
+${o.whyItWorks ? o.whyItWorks.map((l) => `<li>${esc(l)}</li>`).join("\n") : `<li><b>Six evenings, one community:</b> the same ${esc(c.guests)} come back, so your name is part of what they learn.</li>
 <li><b>${g.min * 6}–${g.max * 6} ${esc(c.guests)}</b> across the series at the standard size, all hands-on.</li>
-<li><b>A story to tell:</b> content from every evening (photos, short clips, the guide) you can use in your own channels.</li></ul>
-<div class="foot"><span>Founding partners carry the series. Any single evening can be partnered on its own.</span><span>2 / 3</span></div></div></section>`;
+<li><b>A story to tell:</b> content from every evening (photos, short clips, the guide) you can use in your own channels.</li>`}</ul>
+<div class="foot"><span>${esc(o.footer2 ?? "Founding partners carry the series. Any single evening can be partnered on its own.")}</span><span>2 / 3</span></div></div></section>`;
   const legend = i.mix.map((s, k) => `<div><i style="background:${COLORS[k % COLORS.length]}"></i><b>${esc(s.label)} · ${s.pct}%</b><span>${esc(s.roles.join(", "))}</span></div>`).join("");
   const page3 = `<section class="sheet"><div class="band">${kick}<div class="ttl sm">Who's in the room</div><div class="sub">Guests are invited from our community of 5,000+, shaped around who ${b} wants to reach.</div></div>
 <div class="body"><div class="wheel">${donutSvg(i.mix)}<div class="legend">${legend}</div></div><p class="tiny">Approximate mix of our community.</p>
 <h5>What partnering gets ${b}</h5><ul class="why">
-<li><b>Your product in their hands:</b> ${esc(c.inHands)}.</li>
-<li><b>The guest list you want:</b> we weight the room toward ${esc(i.reach)}.</li>
+${o.partnerGets ? o.partnerGets.map((l) => `<li>${esc(l)}</li>`).join("\n") : `<li><b>Your product in their hands:</b> ${esc(c.inHands)}.</li>
+<li><b>The guest list you want:</b> we weight the room toward ${esc(o.reach ?? i.reach)}.</li>
 <li><b>Your name on the evening:</b> invitations, the guide, the room and the follow-up.</li>
 <li><b>Warm introductions</b> to guests ${esc(c.keepGoing)}.</li>
-<li><b>Content from the evening</b> for your own channels.</li></ul>
+<li><b>Content from the evening</b> for your own channels.</li>`}</ul>
 <div class="foot"><span>West Peek Ventures · founding GP Scooter Taylor, creator of Quarantine Con (2020) · ${esc(TLC_OWNER.email)}</span><span>3 / 3</span></div></div></section>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The Learning Club: ${esc(i.topic)} · ${b}</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,600&family=IBM+Plex+Sans:wght@400;600&display=swap">${STYLE}</head><body>${page1}${page2}${page3}</body></html>`;
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,600&family=IBM+Plex+Sans:wght@400;600&display=swap">${STYLE}${i.overrides ? "<style>.sheet{height:auto;min-height:11in;overflow:visible}</style>" : ""}</head><body>${page1}${page2}${page3}</body></html>`;
 }
 
 /** What the template must never carry: a price, a brand put on the hook for a segment, a mix that is not 100. */
-export function samplesProblems(html: string, mix: readonly MixSlice[]): string[] {
+export function samplesProblems(html: string, mix: readonly MixSlice[], approvedPrices: readonly string[] = []): string[] {
   const text = html.replace(/<style[\s\S]*?<\/style>/g, " ").replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&");
   const out: string[] = [];
-  if (MONEY_WORDS.test(text)) out.push("a price, fee or tier");
+  let priceText = text;
+  let usedApproval = false;
+  priceText = priceText.replace(PRICE_AMOUNT, (amount) => {
+    if (!approvedPrices.includes(amount.trim())) return amount;
+    usedApproval = true;
+    return " ";
+  });
+  if (usedApproval) priceText = priceText.replace(/\b(?:price|prices|pricing|priced|cost|costs|fee|fees)\b/gi, " ");
+  if (MONEY_WORDS.test(priceText) || /[$£€]\s*\d/.test(priceText)) out.push("a price, fee or tier");
   if (BRAND_MUST_STAFF.test(text)) out.push("a segment the brand must staff");
   if (Math.round(mix.reduce((a, s) => a + s.pct, 0)) !== 100) out.push("a community mix that does not add up to 100");
   if (!/Approximate mix of our community/.test(text)) out.push("the mix is not labelled approximate");
@@ -262,4 +299,10 @@ export function isYesToSamples(text: string): boolean {
   const t = text.replace(/[’]/g, "'").toLowerCase();
   if (replyLooksLikeNo(t) || /\b(?:not (?:right )?now|not at this time|no need|maybe later|hold off)\b/.test(t)) return false;
   return /\b(?:sure|yes|yeah|yep|absolutely|definitely|please do|please send|send (?:it|them|those|that|it over|them over|over|along)|would love (?:to see|that|them|it)|love to see|happy to (?:see|take a look|look)|sounds (?:good|great)|go ahead|that would be (?:great|helpful|lovely)|share (?:them|it)|take a look)\b/.test(t);
+}
+
+/** A direct request names the materials, so it does not require a previous offer. */
+export function requestsSamples(text: string): boolean {
+  if (replyLooksLikeNo(text) || /\b(?:not now|not right now|no need|hold off|don't send|do not send)\b/i.test(text)) return false;
+  return /\b(?:send|share|see|receive|look at)\b[^.!?\n]{0,100}\b(?:samples|materials|pdf|run of show|series of six)\b/i.test(text);
 }
