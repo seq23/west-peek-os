@@ -4,11 +4,11 @@ import type { RouteContext } from "../router";
 import { runAi } from "../ai/runAi";
 import type { EmailAttachment } from "../effects/emailTransport";
 import { pdfPageCount, renderHtmlPdf, type PdfRenderer } from "../effects/htmlPdf";
-import { MONEY_WORDS } from "../../shared/tlc/brandReply";
+import { BRAND_MUST_STAFF, MONEY_WORDS } from "../../shared/tlc/brandReply";
 import { brandDisplayName } from "../../shared/tlc/learningClub";
 import {
-  approvedSamplePrices, samplesOverridesSchema, COMMUNITY_MIX_SETTING, isAgentTopic, readMix, renderSamplesPdf, renderSamplesPreview, samplesPdfName, samplesProblems, whatChangedLine,
-  type SamplesInput,
+  approvedSamplePrices, samplesOverridesSchema, samplesWordsSchema, COMMUNITY_MIX_SETTING, NEVER_TEXT, clubTitle, completeWords, fallbackWords, isAgentTopic, readMix, renderSamplesPdf, renderSamplesPreview, samplesPdfName, samplesProblems, whatChangedLine,
+  type LegacySamplesWords, type SamplesInput, type SamplesWords,
 } from "../../shared/tlc/samples";
 import { uploadDocument } from "./documents";
 import type { Actor } from "./authorize";
@@ -28,7 +28,9 @@ export interface SamplesRow {
   id: string; deal_id: string; input_json: string; state: string; pdf_r2_key: string | null; pdf_name: string | null; problem: string | null; firm_scope: string;
   sent_at?: string | null;
 }
-export type SamplesWords = Pick<SamplesInput, "segmentTitle" | "seriesTitle" | "reach">;
+export type { SamplesWords } from "../../shared/tlc/samples";
+/** What a row's input_json holds: the brand's full words, or (rows from before 30 Oct 2026) three phrases. */
+type StoredWords = SamplesWords | LegacySamplesWords;
 export type SamplesWriter = (env: Env, actor: Actor, prompt: string) => Promise<{ ok: boolean; text: string }>;
 export interface SamplesDeps { renderPdf?: PdfRenderer; writer?: SamplesWriter }
 
@@ -48,17 +50,17 @@ export const tlcRevisionWriter: SamplesWriter = async (env, actor, prompt) => {
 };
 
 /** The input the page and the PDF are both made from: one function, so the two can never differ. */
-async function samplesInputOf(env: Env, deal: TlcDealRow, ev: TlcEventRow, words: SamplesWords, overridesJson: string | null): Promise<SamplesInput> {
+async function samplesInputOf(env: Env, deal: TlcDealRow, ev: TlcEventRow, words: StoredWords, overridesJson: string | null): Promise<SamplesInput> {
   const mixRaw = (await env.WP_OS_DB.prepare("SELECT value FROM tlc_setting WHERE key = ?1").bind(COMMUNITY_MIX_SETTING).first<{ value: string | null }>())?.value ?? null;
+  const brand = brandDisplayName(deal.brand);
   return {
-    brand: brandDisplayName(deal.brand), topic: ev.topic ?? "", month: ev.month,
-    // A club not yet at its go-check is tentative ("could move, or repeat"), and the document says so.
-    tentative: !["GO", "DONE"].includes(String((ev as { status?: string }).status ?? "")),
-    ...words, mix: readMix(mixRaw),
+    // The date line is the year, "dates flexible", whatever the club's status (owner, 30 Oct 2026).
+    brand, topic: ev.topic ?? "", month: ev.month,
+    words: completeWords(words, brand, ev.topic ?? ""), mix: readMix(mixRaw),
     ...(overridesJson ? { overrides: samplesOverridesSchema.parse(JSON.parse(overridesJson)) } : {}),
   };
 }
-const inputOfRow = (env: Env, deal: TlcDealRow, ev: TlcEventRow, row: SamplesRow) => samplesInputOf(env, deal, ev, JSON.parse(row.input_json) as SamplesWords, row.overrides_json);
+const inputOfRow = (env: Env, deal: TlcDealRow, ev: TlcEventRow, row: SamplesRow) => samplesInputOf(env, deal, ev, JSON.parse(row.input_json) as StoredWords, row.overrides_json);
 
 /** The document's HTML as it stands: what the preview page shows and what the PDF is made from. */
 export async function samplesHtml(env: Env, deal: TlcDealRow, ev: TlcEventRow, row: SamplesRow): Promise<string> {
@@ -94,7 +96,8 @@ export async function reviseSamples(env: Env, deal: TlcDealRow, ev: TlcEventRow,
     const out = await (deps.writer ?? tlcRevisionWriter)(env, parkerActor(deal.firm_scope), [
       "Revise this deal's Learning Club samples document using every instruction in the owner's note. The template is a baseline, and major edits are allowed.",
       "Return ONLY a JSON object of copy overrides. Omitted keys retain the current copy. Arrays replace a whole section; return the complete revised array.",
-      "Keys: title: string (the page 1 heading and the document's title); page1Rows and series: [{label,title,line,highlight?:boolean}]; seriesHeading, seriesSub, footer2, bring, leaveWith, reach: strings; whyItWorks, partnerGets: string arrays.",
+      "Keys: title: string (the words after \"The Learning Club: \" on page 1 and in the document's title); page1Rows and series: [{label,title,line,highlight?:boolean}]; seriesHeading, seriesSub, footer2, bring, leaveWith: strings; whyItWorks, partnerGets: string arrays (partnerGets are the brand's own points; the standard \"A room your size\" point always follows them).",
+      "The standard text is fixed and is not yours to change: the date line, the guest range, the hours, the community size, the wheel and its note, the team, the legal block and the Confidential · Preliminary footers. Change only what the owner's note asks for.",
       "All values are plain text, no HTML. Do not invent facts, people or numbers. Keep the community mix approximate and the brand's staffing optional.",
       "No prices or money unless the owner explicitly instructs putting a specific price in the PDF. A price mentioned for context is not permission.",
       "Current document (HTML, for context only):", await samplesHtml(env, deal, ev, row),
@@ -108,7 +111,7 @@ export async function reviseSamples(env: Env, deal: TlcDealRow, ev: TlcEventRow,
     const approved = approvedSamplePrices(note);
     const previousPrices = JSON.parse(row.approved_prices_json ?? "[]") as string[];
     const prices = /\b(?:no|remove|omit|exclude|without|don't|do not)\b[^.!?\n]*\b(?:price|prices|pricing|money|fee|fees)\b/i.test(note) ? [] : [...new Set([...previousPrices, ...approved])];
-    const input = await samplesInputOf(env, deal, ev, JSON.parse(row.input_json) as SamplesWords, JSON.stringify(overrides));
+    const input = await samplesInputOf(env, deal, ev, JSON.parse(row.input_json) as StoredWords, JSON.stringify(overrides));
     const problems = samplesProblems(renderSamplesPdf(input), input.mix, prices);
     if (problems.length) throw new Error(`the change broke a rule: ${problems.join("; ")}`);
     const kept = await env.WP_OS_DB.prepare(
@@ -133,42 +136,72 @@ export async function samplesForDeal(env: Env, dealId: string): Promise<SamplesR
   return env.WP_OS_DB.prepare("SELECT * FROM tlc_samples WHERE deal_id = ?1").bind(dealId).first<SamplesRow>();
 }
 
-/** The brand's words, read strictly: short, no digits, no money. Anything else is not used. */
-export function wordsProblems(w: Partial<SamplesWords>): string[] {
-  const out: string[] = [];
-  for (const [k, max] of [["segmentTitle", 60], ["seriesTitle", 40], ["reach", 120]] as const) {
-    const v = String(w[k] ?? "").trim();
-    if (!v) out.push(`${k} is empty`);
-    else if (v.length > max) out.push(`${k} is longer than ${max}`);
-    else if (/\d/.test(v) || MONEY_WORDS.test(v)) out.push(`${k} carries a number or money`);
+/**
+ * The brand's words, read strictly: the full set (`samplesWordsSchema`), no money anywhere, no number in the title or
+ * the segment's name, no brand put on the hook to staff it, and none of the template's retired text. A row from
+ * before 30 Oct 2026 (three phrases) is read by its old rule. Anything else is not used.
+ */
+export function wordsProblems(w: StoredWords): string[] {
+  if (!("months" in w) && !("title" in w)) {
+    const out: string[] = [];
+    const legacy = w as LegacySamplesWords;
+    for (const [k, max] of [["segmentTitle", 60], ["seriesTitle", 40], ["reach", 120]] as const) {
+      const v = String(legacy[k] ?? "").trim();
+      if (!v) out.push(`${k} is empty`);
+      else if (v.length > max) out.push(`${k} is longer than ${max}`);
+      else if (/\d/.test(v) || MONEY_WORDS.test(v)) out.push(`${k} carries a number or money`);
+    }
+    return out;
   }
+  const parsed = samplesWordsSchema.safeParse(w);
+  if (!parsed.success) return parsed.error.issues.map((i) => `${i.path.join(".") || "words"}: ${i.message}`);
+  const out: string[] = [];
+  const v = parsed.data;
+  const all = [v.title, v.leaveFact, v.openingTheme, v.panelAngle, v.dinnerPick, v.segmentTitle, v.segmentDoes, v.leaveWith, v.seriesTitle, v.seriesTail,
+    ...v.months.flatMap((m) => [m.title, m.line]), v.whyLead, v.whyLine, ...v.perks.flatMap((p) => [p.lead, p.line])].join("\n");
+  if (MONEY_WORDS.test(all)) out.push("the words carry money");
+  if (BRAND_MUST_STAFF.test(all)) out.push("the words put the brand's people on a segment");
+  for (const t of NEVER_TEXT) if (all.includes(t)) out.push(`the words say "${t}"`);
+  for (const [k, t] of [["title", v.title], ["segmentTitle", v.segmentTitle]] as const) if (/\d/.test(t)) out.push(`${k} carries a number`);
   return out;
 }
 
-const fallbackWords = (brand: string): SamplesWords => ({
-  segmentTitle: `Where ${brand} comes in`,
-  seriesTitle: `The ${brand} evening`,
-  reach: `the people ${brand} most wants to reach`,
-});
-
-/** Parker writes the brand's words from what we know of it; the plain fallback stands in when he cannot. */
-async function writeWords(env: Env, deal: TlcDealRow, ev: TlcEventRow, theirText: string, research: string | null, deps: SamplesDeps): Promise<SamplesWords> {
-  const brand = brandDisplayName(deal.brand);
-  const prompt = [
-    `You are Parker, who plans The Learning Club at West Peek Ventures. ${brand} said yes to seeing three samples for the club "${ev.topic ?? ""}".`,
-    "Write ONLY the three phrases that change per brand on the approved template. Everything else is fixed.",
-    `segment_title: the name of ${brand}'s 15-minute segment in the evening, tied to what ${brand} makes (at most 6 words${isAgentTopic(ev.topic ?? "") ? ', like "Giving your agent a memory"' : ""}).`,
-    `series_title: the name of ${brand}'s own evening in a series of six (at most 5 words${isAgentTopic(ev.topic ?? "") ? ', like "Give it a memory"' : ""}).`,
-    `reach: who the room is weighted toward for ${brand}, as types of people, never names (at most 14 words, like "founders and operators deciding what their teams build on").`,
-    "No numbers, no prices, no names of people. Invent nothing about the brand.",
+/**
+ * Wynn writes ONLY the per-brand words of the standard template (owner, 30 Oct 2026). The standard text is never in
+ * his hands: the prompt asks for these fields, the schema accepts nothing else, and the page is assembled in code.
+ */
+export function samplesWordsPrompt(brand: string, topic: string, whyFit: string | null, research: string | null, theirText: string): string {
+  return [
+    `You are Wynn, who looks after brand partners for The Learning Club at West Peek Ventures. ${brand} said yes to seeing three sample pages for the club "${clubTitle(topic)}".`,
+    "The pages are a fixed template. Everything else on them is standard and written already (the date, the guest range, the hours, the evening's shape, the community, the team, the legal text). Write ONLY these fields, for this brand:",
+    `title: the evening's title, shown after "The Learning Club: " (at most 7 words, title case, like "Your AI Chief of Staff" or "Build Your First AI Agent").`,
+    `leaveFact: a short promise after "Hands-on · " (like "everyone leaves with a working assistant").`,
+    `openingTheme: the opening talk's theme, shown in quotes (like "What an AI chief of staff can take off your plate").`,
+    `panelAngle: completes "three builders on …" (like "what changed when they handed off their busywork").`,
+    `dinnerPick: completes "facilitators help each table …" (like "pick the assistant they'll build").`,
+    `segmentTitle: the name of ${brand}'s 30-minute hands-on segment, tied to what ${brand} makes (at most 6 words${isAgentTopic(topic) ? ', like "Giving your agent a memory"' : ""}).`,
+    `segmentDoes: what every table does in that segment, completing "30 minutes, hands-on: …" (like "every table connects ${brand} to its assistant"). Never say ${brand}'s people must run it.`,
+    `leaveWith: what each guest leaves with, completing "… , the step-by-step guide, and introductions to the people at their table." (like "A working AI chief of staff of their own").`,
+    `seriesTitle: the sample series' name, after "A sample series: " (like "six months of AI at work").`,
+    `seriesTail: ends the sentence "one build that grows every month, …" (like "with ${brand} built in from month 3 on.").`,
+    `months: exactly six {title, line, brand}: a monthly build that grows; title follows "The Learning Club: "; line is one sentence; brand is true for the month(s) where ${brand} is at the centre.`,
+    `whyLead and whyLine: one reason six months works for ${brand} (like "Real habits, not a demo:" and "members keep using the workflows they built after the series ends.").`,
+    `perks: two to four {lead, line}: what partnering gets ${brand}, specific to its product (like {"lead":"Built in from day one:","line":"${brand} is set up in every workflow guests build."}).`,
+    "No prices, money or fees. No names of people. Invent nothing about the brand. No guest numbers or community size (those are standard).",
     "",
-    `Why the brand fits: ${deal.why_fit ?? "(not recorded)"}`,
+    `Why the brand fits: ${whyFit ?? "(not recorded)"}`,
     ...(research ? ["What we found researching them:", research] : []),
     "Their message:",
     theirText,
     "",
-    'Return ONLY JSON: {"segment_title":"","series_title":"","reach":""}',
+    'Return ONLY JSON: {"title":"","leaveFact":"","openingTheme":"","panelAngle":"","dinnerPick":"","segmentTitle":"","segmentDoes":"","leaveWith":"","seriesTitle":"","seriesTail":"","months":[{"title":"","line":"","brand":false}],"whyLead":"","whyLine":"","perks":[{"lead":"","line":""}]}',
   ].join("\n");
+}
+
+/** Wynn writes the brand's words from what we know of it; the plain fallback stands in when he cannot. */
+async function writeWords(env: Env, deal: TlcDealRow, ev: TlcEventRow, theirText: string, research: string | null, deps: SamplesDeps): Promise<SamplesWords> {
+  const brand = brandDisplayName(deal.brand);
+  const prompt = samplesWordsPrompt(brand, ev.topic ?? "", deal.why_fit ?? null, research, theirText);
   const writer: SamplesWriter = deps.writer ?? (async (e, actor, p) => {
     const { run } = await runAi(e, {
       purpose: "The Learning Club: the brand's words on the three samples",
@@ -176,7 +209,7 @@ async function writeWords(env: Env, deal: TlcDealRow, ev: TlcEventRow, theirText
       inputs: [p],
       sensitivity: "PUBLIC" as never,
       // Brand-facing: important work (Claude seat, then Codex, never a free lane).
-      budgetContext: { requiresSearch: false, expectedOutputTokens: 300, judgement: true, important: true },
+      budgetContext: { requiresSearch: false, expectedOutputTokens: 1200, judgement: true, important: true },
       routing: { category: "INTELLIGENCE" },
     } as never);
     return { ok: run.status === "COMPLETED" && Boolean(run.output_text), text: run.output_text ?? "" };
@@ -184,16 +217,16 @@ async function writeWords(env: Env, deal: TlcDealRow, ev: TlcEventRow, theirText
   const out = await writer(env, parkerActor(deal.firm_scope), prompt).catch(() => ({ ok: false, text: "" }));
   if (out.ok) {
     try {
-      const j = JSON.parse(/\{[\s\S]*\}/.exec(out.text)?.[0] ?? "") as Record<string, unknown>;
-      const w = { segmentTitle: String(j.segment_title ?? "").trim(), seriesTitle: String(j.series_title ?? "").trim(), reach: String(j.reach ?? "").trim() };
-      if (wordsProblems(w).length === 0) return w;
+      const j = JSON.parse(/\{[\s\S]*\}/.exec(out.text)?.[0] ?? "") as unknown;
+      const w = samplesWordsSchema.safeParse(j);
+      if (w.success && wordsProblems(w.data).length === 0) return w.data;
     } catch { /* the fallback stands in */ }
   }
-  return fallbackWords(brand);
+  return fallbackWords(brand, ev.topic ?? "");
 }
 
 /** Plan a deal's samples ahead of time with the words given (her own, for a brand we expect to say yes). Sends nothing. */
-export async function planSamples(env: Env, deal: TlcDealRow, words: SamplesWords): Promise<string> {
+export async function planSamples(env: Env, deal: TlcDealRow, words: StoredWords): Promise<string> {
   const problems = wordsProblems(words);
   if (problems.length) throw new Error(`the samples' words are not usable: ${problems.join("; ")}`);
   const existing = await samplesForDeal(env, deal.id);
@@ -220,7 +253,7 @@ export async function buildSamples(
     await samplesPreviewLink(env, row.id);
     return { ok: true, row: (await samplesForDeal(env, deal.id))! };
   }
-  const words: SamplesWords = row ? (JSON.parse(row.input_json) as SamplesWords) : await writeWords(env, deal, ev, ctx.theirText ?? "", ctx.research ?? null, deps);
+  const words: StoredWords = row ? (JSON.parse(row.input_json) as StoredWords) : await writeWords(env, deal, ev, ctx.theirText ?? "", ctx.research ?? null, deps);
   const id = row?.id ?? `tls_${crypto.randomUUID()}`;
   if (!row) {
     await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO tlc_samples (id, deal_id, input_json, state, firm_scope) VALUES (?1, ?2, ?3, 'PLANNED', ?4)").bind(id, deal.id, JSON.stringify(words), deal.firm_scope).run();
@@ -321,6 +354,12 @@ export async function handleTlcSamplesPreview(ctx: RouteContext): Promise<Respon
   const deal = row ? await ctx.env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(row.deal_id).first<TlcDealRow>() : null;
   const ev = deal ? await ctx.env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>() : null;
   if (!row || !deal || !ev) return notFound();
+  // A SENT row is what the brand received: its stored PDF, byte for byte, never the template re-rendered (a template
+  // change must not change what she sees as "sent"). Only a sent row with no stored PDF falls back to the page.
+  if (row.state === "SENT" && row.pdf_r2_key && ctx.env.WP_OS_DOCUMENTS) {
+    const obj = await ctx.env.WP_OS_DOCUMENTS.get(row.pdf_r2_key);
+    if (obj) return new Response(await obj.arrayBuffer(), { headers: { ...headers, "content-type": "application/pdf", "content-disposition": `inline; filename="${(row.pdf_name ?? "The Learning Club.pdf").replace(/["\\\r\n]/g, "")}"` } });
+  }
   const html = renderSamplesPreview(await samplesHtml(ctx.env, deal, ev, row), {
     brand: brandDisplayName(deal.brand),
     status: row.state === "SENT" ? "SENT" : row.state === "READY" ? "DRAFT" : "WORKING",

@@ -5,6 +5,7 @@ import {
   TLC_NET_TARGET_USD,
   TLC_OWNER,
   TLC_SEATS,
+  BRAND_ROOM_WORDS,
   TLC_TARGET_PATH,
   TLC_TICKET_PRICE_USD,
   TLC_TIERS,
@@ -51,7 +52,7 @@ export interface TlcClubView {
   recap: string | null;
   /** The AI segment in the run of show (every non-AI club has one). */
   aiSegment?: string | null;
-  /** The club's own planned room size (the partners set it; 25–40 by default). */
+  /** The club's own planned room size (the partners set it; internal, never what a brand is told). */
   seats?: Seats;
 }
 export interface TlcInternalView extends TlcClubView {
@@ -73,11 +74,11 @@ export interface TlcInternalView extends TlcClubView {
 }
 
 /**
- * WHAT A BRAND IS TOLD ABOUT THE ROOM (owner, 26 Oct 2026): every brand email and pitch says 25–40 guests per
+ * WHAT A BRAND IS TOLD ABOUT THE ROOM (owner, 30 Oct 2026): every brand email and pitch says 25 to 100+ guests per
  * event, flexible to the brand's needs, whatever size the club is planned for. The planned size stays internal
  * (the one-pager and the economics read it).
  */
-export const BRAND_GUESTS_WORDS = `${TLC_SEATS.min}–${TLC_SEATS.max} guests per event, flexible to your goals`;
+export const BRAND_GUESTS_WORDS = `${BRAND_ROOM_WORDS} guests per event, flexible to your goals`;
 
 const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const usd = (n: number): string => `$${Math.round(n).toLocaleString("en-US")}`;
@@ -199,7 +200,7 @@ export function renderBrandPitch(v: TlcClubView): string {
 <p>${esc(why)}</p>
 ${sourcesList(v.sources)}
 <h2>Who is in the room</h2>
-<ul><li>${TLC_SEATS.min}–${TLC_SEATS.max} New Yorkers per event, a number we flex to your goals, who chose this topic. Every seat is a paid ticket ($${TLC_TICKET_PRICE_USD}), so everyone in the room chose to come.</li>
+<ul><li>${BRAND_ROOM_WORDS} New Yorkers per event, a number we flex to your goals, who chose this topic. Every seat is a paid ticket ($${TLC_TICKET_PRICE_USD}), so everyone in the room chose to come.</li>
 <li>Founders, operators, creatives and builders from a community of more than 5,000.</li>
 <li>Taught by someone who does this for a living. The session: arrive, learn, an hour hands-on, a real meal, go deeper, share, close.</li>
 ${v.aiSegment ? `<li>The AI segment: ${esc(brandSafe(v.aiSegment))}</li>` : ""}

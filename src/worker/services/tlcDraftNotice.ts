@@ -6,7 +6,7 @@ import { mailAuthority } from "../../shared/intake/partnerAuthority";
 import { newTextOf } from "../../shared/events/packetDecisionToken";
 import { NOTICE_REF_RE, isEmptyReply, parseDraftReply } from "../../shared/tlc/draftReply";
 import { herNoteOf } from "../../shared/tlc/brandReply";
-import { BRAND_GUESTS, TLC_INTERNAL_NOTE, TLC_OWNER, TLC_PS_BY_STEP, TLC_SAMPLES_OFFER, TLC_SEATS, TLC_SIGNATURE, brandDisplayName, dripEmail, monthWords, seatsOf } from "../../shared/tlc/learningClub";
+import { BRAND_GUESTS, BRAND_ROOM_WORDS, TLC_INTERNAL_NOTE, TLC_OWNER, TLC_PS_BY_STEP, TLC_SAMPLES_OFFER, TLC_SEATS, TLC_SIGNATURE, brandDisplayName, dripEmail, monthWords, seatsOf } from "../../shared/tlc/learningClub";
 import { actorForFirmUser, type Actor } from "./authorize";
 
 /**
@@ -462,7 +462,7 @@ export async function recomposeSecondEmails(env: Env, firmScope = "west-peek"): 
 }
 
 /**
- * A BRAND IS TOLD 25–40 GUESTS PER EVENT, FLEXIBLE (owner, 26 Oct 2026), in queued drafts too. An unsent drip draft
+ * A BRAND IS TOLD 25 TO 100+ GUESTS PER EVENT, FLEXIBLE (owner, 30 Oct 2026), in queued drafts too. An unsent drip draft
  * (undecided, or approved and waiting for its allowance) whose room size is the club's planned size ("60 to 75
  * people spending…", "80 to 120 New Yorkers, each…") gets the standard words in place; nothing else in it changes.
  * Sent mail is never touched; nor is her own redraft.
@@ -470,7 +470,7 @@ export async function recomposeSecondEmails(env: Env, firmScope = "west-peek"): 
 export function standardGuestWords(body: string): string {
   return body
     .replace(/\b\d+(?: to \d+)? people spending\b/g, `${BRAND_GUESTS} spending`)
-    .replace(/\b\d+(?: to \d+)? New Yorkers, each\b/g, `${TLC_SEATS.min} to ${TLC_SEATS.max} New Yorkers (flexible to your goals), each`);
+    .replace(/\b\d+(?: to \d+)? New Yorkers, each\b/g, `${BRAND_ROOM_WORDS} New Yorkers (flexible to your goals), each`);
 }
 export async function recomposeGuestCounts(env: Env, firmScope = "west-peek"): Promise<string[]> {
   const rows = (await env.WP_OS_DB.prepare(
