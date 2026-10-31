@@ -13,8 +13,9 @@
  *
  *   1. does the installed Codex accept the flag set the fallback uses (`--sandbox`, `--add-dir`, …)?
  *   2. can it EDIT in a linked worktree?
- *   3. can it COMMIT — i.e. write into the ORIGINAL repo's `.git/worktrees/…` (some versions protect .git)?
- *   4. can it PUSH, and does the network work inside the sandbox?
+ *   3. does the RUNNER commit what Codex left (31 Oct 2026: Codex's sandbox keeps git metadata read-only,
+ *      boss-os PR #187, so Codex only edits and `finishCodexBuild` commits outside the sandbox)?
+ *   4. does the runner PUSH it, and does the network work inside the sandbox?
  *
  * HOW IT JUDGES. The script verifies each outcome ITSELF, from git, never from what the model says:
  * the file is on disk, the commit is in the worktree's log, the commit arrived in the local bare remote.
@@ -34,13 +35,14 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { codexExecArgs, codexSeatUsable, gitCommonDirs, helpMentions } from "../lib/codex-seat.mjs";
+import { execFileSync } from "node:child_process";
+import { codexExecArgs, codexSeatUsable, finishCodexBuild, helpMentions } from "../lib/codex-seat.mjs";
 import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
 import { claudeChildEnv } from "../lib/vault-env.mjs";
 
 const execFileAsync = promisify(execFile);
 const RUN_TIMEOUT_MS = 300_000;
-export const COMMIT_SUBJECT = "probe: codex commit";
+export const COMMIT_SUBJECT = "probe: codex edit, runner commit";
 
 // ── Pure parts ───────────────────────────────────────────────────────────────────────────────
 
@@ -49,9 +51,8 @@ export function probePrompt({ branch, remoteUrl }) {
   return [
     "This is a connectivity probe, not real work. Do exactly these steps in the current directory, in order, and nothing else.",
     "1. Create a file named PROBE.txt whose entire content is the single line: codex-probe",
-    `2. Run: git add PROBE.txt && git commit -m "${COMMIT_SUBJECT}"`,
-    `3. Run: git push origin HEAD:refs/heads/${branch}`,
-    ...(remoteUrl ? [`4. Run: git ls-remote ${remoteUrl} HEAD > LSREMOTE.txt   (write its output to that file; do not commit it)`] : []),
+    `2. Do NOT commit or push: leave PROBE.txt uncommitted on ${branch}; the runner commits it after you exit.`,
+    ...(remoteUrl ? [`3. Run: git ls-remote ${remoteUrl} HEAD > LSREMOTE.txt   (write its output to that file)`] : []),
     "When done, reply with the word DONE. If any step fails, reply with the failing command and its error.",
   ].join("\n");
 }
@@ -71,8 +72,8 @@ export function verdicts(o) {
     return rows;
   }
   rows.push({ q: "Codex can EDIT a file in a linked worktree", status: o.fileText?.trim() === "codex-probe" ? "PROVEN" : "FAILED", evidence: o.fileText == null ? "PROBE.txt does not exist in the worktree" : `PROBE.txt contains: ${JSON.stringify(o.fileText.trim().slice(0, 60))}` });
-  rows.push({ q: "Codex can COMMIT (write into the original repo's .git/worktrees/…)", status: o.commitSubject === COMMIT_SUBJECT ? "PROVEN" : "FAILED", evidence: o.commitSubject ? `worktree's latest commit: ${JSON.stringify(o.commitSubject)}` : "no probe commit in the worktree's log" });
-  rows.push({ q: "Codex can PUSH (to a local bare remote)", status: o.remoteHasCommit ? "PROVEN" : "FAILED", evidence: o.remoteHasCommit ? "the commit arrived in the local remote" : "the commit never reached the local remote" });
+  rows.push({ q: "the runner COMMITS Codex's edit, outside the sandbox", status: o.commitSubject === COMMIT_SUBJECT ? "PROVEN" : "FAILED", evidence: o.commitSubject ? `worktree's latest commit: ${JSON.stringify(o.commitSubject)}` : "no probe commit in the worktree's log" });
+  rows.push({ q: "the runner PUSHES the work branch (to a local bare remote)", status: o.remoteHasCommit ? "PROVEN" : "FAILED", evidence: o.remoteHasCommit ? "the commit arrived in the local remote" : "the commit never reached the local remote" });
   if (o.remoteChecked) {
     const same = o.sandboxHash && o.sandboxHash === o.outsideHash;
     rows.push({ q: "the sandbox's network and credentials can READ the real remote", status: same ? "PROVEN" : "FAILED", evidence: same ? `inside and outside the sandbox both saw ${o.outsideHash.slice(0, 10)}…` : `inside: ${o.sandboxHash ?? "nothing"}; outside: ${o.outsideHash ?? "nothing"}` });
@@ -85,14 +86,6 @@ export function verdicts(o) {
 async function git(cwd, args) {
   const r = await execFileAsync("git", ["-C", cwd, ...args], { timeout: 60_000 });
   return String(r.stdout).trim();
-}
-
-async function gitCommonDirOf(dir) {
-  try {
-    return String((await execFileAsync("git", ["-C", dir, "rev-parse", "--git-common-dir"], { timeout: 15_000 })).stdout).trim() || null;
-  } catch {
-    return null;
-  }
 }
 
 function spawnCodex({ bin, args, cwd, prompt }) {
@@ -150,27 +143,30 @@ export async function runProbe({ codexBin = "codex", home = homedir(), remoteUrl
     const branch = "probe-branch";
     await git(repo, ["worktree", "add", "-q", "-b", branch, wt]);
 
-    // Exactly what the fallback does: the worktree's git common dir is named as a writable folder.
-    const dirs = [wt];
-    const found = await Promise.all(dirs.map((d) => gitCommonDirOf(d)));
-    const writable = gitCommonDirs(dirs, (d) => found[dirs.indexOf(d)]);
-    const args = codexExecArgs(writable);
+    // Exactly what the fallback does: no git directory is named writable; Codex only edits.
+    const args = codexExecArgs([]);
     const run = await spawnCodex({ bin: codexBin, args, cwd: wt, prompt: probePrompt({ branch, remoteUrl }) });
     const limit = detectUsageLimit({ stdout: run.out, stderr: run.err });
     if (limit.limited) return { rows: verdicts({ lacks, untested: `the plan is out of usage: ${limit.snippet}` }), dir };
     if (run.timedOut) return { rows: verdicts({ lacks, untested: "Codex did not finish within the time limit, so nothing is concluded" }), dir };
 
-    // THE SCRIPT LOOKS; THE MODEL IS NOT BELIEVED.
+    // THE SCRIPT LOOKS; THE MODEL IS NOT BELIEVED. What Codex left is read first.
     const fileText = existsSync(path.join(wt, "PROBE.txt")) ? readFileSync(path.join(wt, "PROBE.txt"), "utf8") : null;
+    const lsFile = path.join(wt, "LSREMOTE.txt");
+    const sandboxHash = remoteUrl && existsSync(lsFile) ? lsRemoteHash(readFileSync(lsFile, "utf8")) : null;
+    rmSync(lsFile, { force: true });
+    // THE RUNNER'S GIT STEPS, exactly as the duty runs them: real git, and a stand-in gh (no GitHub PR here).
+    const runner = (cmd, a, o) => {
+      if (cmd === "gh") return a[1] === "view" ? { status: 1, stdout: "", stderr: "none" } : { status: 0, stdout: "https://github.com/probe/probe/pull/1\n", stderr: "" };
+      try { return { status: 0, stdout: execFileSync(cmd, a, { cwd: o.cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }), stderr: "" }; } catch (e) { return { status: e.status ?? 1, stdout: String(e.stdout ?? ""), stderr: String(e.stderr ?? "") }; }
+    };
+    finishCodexBuild({ cwd: wt, branch, out: { phase: "BUILD", status: "ok", pr_title: COMMIT_SUBJECT }, run: runner });
     let commitSubject = null;
     try { commitSubject = await git(wt, ["log", "-1", "--format=%s"]); } catch { /* none */ }
     let remoteHasCommit = false;
     try { remoteHasCommit = (await git(bare, ["log", "--format=%s", branch])).split("\n").includes(COMMIT_SUBJECT); } catch { /* the branch never arrived */ }
-    let sandboxHash = null;
     let outsideHash = null;
     if (remoteUrl) {
-      const lsFile = path.join(wt, "LSREMOTE.txt");
-      sandboxHash = existsSync(lsFile) ? lsRemoteHash(readFileSync(lsFile, "utf8")) : null;
       try { outsideHash = lsRemoteHash(String((await execFileAsync("git", ["ls-remote", remoteUrl, "HEAD"], { timeout: 60_000 })).stdout)); } catch { outsideHash = null; }
     }
     return { rows: verdicts({ lacks, fileText, commitSubject, remoteHasCommit, remoteChecked: Boolean(remoteUrl), sandboxHash, outsideHash }), dir };

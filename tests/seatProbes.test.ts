@@ -9,10 +9,11 @@ import { PDF_CODE_WORD, claudeArgs, codexArgs, judge, promptFor, solidPng, textP
  * THE TWO MAC PROBES, PROVEN TO CATCH WHAT THEY EXIST TO CATCH (1 Oct 2026).
  *
  * These are scripts the owner runs on her Mac to settle what the cloud sandbox cannot: whether the Codex
- * CLI can commit and push from a linked worktree, and whether either seat can read a picture or a PDF.
+ * CLI can edit a linked worktree that the runner then commits and pushes (31 Oct 2026: Codex's sandbox keeps
+ * git metadata read-only, boss-os PR #187, so the runner does the git steps), and whether either seat can read a picture or a PDF.
  * A probe that reports PROVEN for the wrong reason is worse than no probe, so each is driven here with
- * FAKE `codex` programs against REAL git repositories — one that does everything, one that edits but
- * cannot commit, one that says its plan is spent, one that does nothing — and the verdict must follow
+ * FAKE `codex` programs against REAL git repositories — one that edits, one whose own git steps are refused
+ * as the real sandbox refuses them, one that says its plan is spent, one that does nothing — and the verdict must follow
  * what git shows, not what the fake says.
  *
  * WHAT THIS DOES NOT PROVE: anything about the real Codex or Claude Code CLIs. That is what the probes are for.
@@ -40,28 +41,25 @@ ${body}
   return { bin, home };
 }
 
-const COMMIT_AND_PUSH = `printf 'codex-probe\\n' > PROBE.txt
-git add PROBE.txt
-git commit -q -m "${COMMIT_SUBJECT}"
-git push -q origin HEAD:refs/heads/probe-branch
+const EDIT_ONLY = `printf 'codex-probe\\n' > PROBE.txt
 echo DONE`;
 
 const status = (rows: Array<{ q: string; status: string }>, needle: string): string => rows.find((r) => r.q.includes(needle))?.status ?? "MISSING";
 
 describe("the Codex repo-job probe", () => {
-  it("reports every step PROVEN only when git shows the file, the commit and the push", async () => {
-    const f = fakeCodex(COMMIT_AND_PUSH);
+  it("reports every step PROVEN only when git shows Codex's file, the runner's commit and the push", async () => {
+    const f = fakeCodex(EDIT_ONLY);
     const { rows } = await runProbe({ codexBin: f.bin, home: f.home });
     expect(rows.map((r) => r.status)).toEqual(["PROVEN", "PROVEN", "PROVEN", "PROVEN"]);
   }, 60_000);
 
-  it("catches a Codex that edits but cannot commit — the .git-write unknown it exists for", async () => {
-    // Writes the file, then "fails" the commit exactly as a sandbox that protects .git would.
-    const f = fakeCodex(`printf 'codex-probe\\n' > PROBE.txt\necho "fatal: cannot lock ref" >&2\nexit 1`);
+  it("a Codex whose git steps are refused, as the real sandbox refuses them, still ends committed and pushed — by the runner", async () => {
+    // Writes the file, then its own commit fails exactly as Codex's read-only git metadata makes it fail.
+    const f = fakeCodex(`printf 'codex-probe\\n' > PROBE.txt\necho "fatal: Unable to create '.git/worktrees/wt/index.lock': Operation not permitted" >&2\nexit 1`);
     const { rows } = await runProbe({ codexBin: f.bin, home: f.home });
     expect(status(rows, "EDIT")).toBe("PROVEN");
-    expect(status(rows, "COMMIT")).toBe("FAILED");
-    expect(status(rows, "PUSH")).toBe("FAILED");
+    expect(rows.find((r) => r.q.includes("COMMIT"))).toMatchObject({ status: "PROVEN", evidence: expect.stringContaining(COMMIT_SUBJECT) });
+    expect(status(rows, "PUSH")).toBe("PROVEN");
   }, 60_000);
 
   it("does not believe a model that SAYS it committed", async () => {
@@ -80,7 +78,7 @@ describe("the Codex repo-job probe", () => {
   }, 60_000);
 
   it("refuses to run on a seat that has drifted off the subscription (it would bill per token)", async () => {
-    const f = fakeCodex(COMMIT_AND_PUSH);
+    const f = fakeCodex(EDIT_ONLY);
     writeFileSync(path.join(f.home, ".codex", "auth.json"), JSON.stringify({ auth_mode: "apikey" }));
     const { rows } = await runProbe({ codexBin: f.bin, home: f.home });
     expect(rows.at(-1)!.status).toBe("UNTESTED");
@@ -88,8 +86,8 @@ describe("the Codex repo-job probe", () => {
   }, 60_000);
 
   it("a Codex whose help text lacks --add-dir is FAILED on the flag check and nothing is run", async () => {
-    const f = fakeCodex(COMMIT_AND_PUSH);
-    writeFileSync(f.bin, `#!/bin/sh\nif [ "$2" = "--help" ]; then echo "  --sandbox <MODE>"; exit 0; fi\ncat >/dev/null\n${COMMIT_AND_PUSH}\n`);
+    const f = fakeCodex(EDIT_ONLY);
+    writeFileSync(f.bin, `#!/bin/sh\nif [ "$2" = "--help" ]; then echo "  --sandbox <MODE>"; exit 0; fi\ncat >/dev/null\n${EDIT_ONLY}\n`);
     const { rows } = await runProbe({ codexBin: f.bin, home: f.home });
     expect(rows[0]).toMatchObject({ status: "FAILED" });
     expect(rows[0]!.evidence).toMatch(/--add-dir/);

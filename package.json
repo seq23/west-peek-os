@@ -90,6 +90,7 @@
     "validate:room-hears": "node scripts/validate/every-hearing-state-has-a-sentence.mjs && node scripts/validate/every-hearing-state-has-a-sentence.mjs --self-test",
     "validate:whisper-not-fireflies": "node scripts/validate/no-fireflies-import-door.mjs && node scripts/validate/no-fireflies-import-door.mjs --self-test",
     "validate:artifacts": "node scripts/validate/a-build-has-one-producer.mjs && node scripts/validate/a-build-has-one-producer.mjs --self-test",
+    "validate:codex-lane": "node scripts/validate/the-codex-lane-can-produce-a-commit.mjs && node scripts/validate/the-codex-lane-can-produce-a-commit.mjs --self-test && node scripts/probes/codex-repo-job-probe.mjs --self-test",
     "validate:duty-executor": "node scripts/validate/a-duty-has-an-executor.mjs && node scripts/validate/a-duty-has-an-executor.mjs --self-test && node scripts/claimer/local-job-claimer.mjs --self-test && node scripts/duties/web-property-change.mjs --self-test && node scripts/drive/pull.mjs --self-test",
     "validate:no-land-without-approval": "node scripts/validate/no-land-without-approval.mjs && node scripts/validate/no-land-without-approval.mjs --self-test",
     "validate:cc-partners-only": "node scripts/validate/cc-partners-only.mjs && node scripts/validate/cc-partners-only.mjs --self-test",

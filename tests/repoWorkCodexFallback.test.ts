@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { codexExecArgs, codexSeatUsable, gitCommonDirs, runWithCodexFallback, type RunResult } from "../scripts/lib/codex-seat.mjs";
+import { CODEX_BUILD_NOTE, codexExecArgs, codexSeatUsable, finishCodexBuild, isGitSandboxBlock, runWithCodexFallback, type RunResult } from "../scripts/lib/codex-seat.mjs";
 import { claudeSpentUsage, codexSpentUsage } from "../scripts/duties/web-property-change.mjs";
 
 /**
@@ -144,49 +144,103 @@ describe("the Codex run itself", () => {
   });
 });
 
-describe("a linked worktree commits into the ORIGINAL repository's .git — so that must be writable (PR #213 review)", () => {
-  const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" } }).trim();
-  const gitDirOf = (dir: string): string | null => {
+describe("Codex edits; the runner commits, pushes and opens the PR — never merges (31 Oct 2026, boss-os #187)", () => {
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] }).trim();
+
+  function scratch(existingPr: { url: string; number: number } | null = null) {
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "codex-finish-")));
+    const origin = path.join(root, "origin.git");
+    git(root, "init", "-q", "--bare", "-b", "main", origin);
+    const main = path.join(root, "main");
+    git(root, "clone", "-q", origin, main);
+    git(main, "commit", "-q", "--allow-empty", "-m", "init");
+    git(main, "push", "-q", "origin", "HEAD:main");
+    const wt = path.join(root, "wt");
+    git(main, "worktree", "add", "-q", wt, "-b", "work/wpc-probe", "origin/main");
+    const gh: string[][] = [];
+    const run = (cmd: string, args: string[], o: { cwd: string }) => {
+      if (cmd === "gh") {
+        gh.push(args);
+        if (args[1] === "view") return existingPr ? { status: 0, stdout: JSON.stringify({ ...existingPr, state: "OPEN" }), stderr: "" } : { status: 1, stdout: "", stderr: "no pull requests found" };
+        return { status: 0, stdout: "https://github.com/seq23/probe/pull/7\n", stderr: "" };
+      }
+      try { return { status: 0, stdout: execFileSync(cmd, args, { cwd: o.cwd, encoding: "utf8", env, stdio: ["ignore", "pipe", "pipe"] }), stderr: "" }; }
+      catch (e: any) { return { status: e.status ?? 1, stdout: String(e.stdout ?? ""), stderr: String(e.stderr ?? "") }; }
+    };
+    return { root, origin, main, wt, gh, run };
+  }
+
+  it("names no git directory as writable: Codex's args carry only the folders the runner passes", () => {
+    const a = codexExecArgs(["/job"]).join(" ");
+    expect(a).not.toMatch(/\.git\b/);
+  });
+
+  it("turns Codex's uncommitted edit (and its index.lock failure) into a commit, a pushed branch and a PR against main", () => {
+    const s = scratch();
     try {
-      return execFileSync("git", ["-C", dir, "rev-parse", "--git-common-dir"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null;
-    } catch {
-      return null;
-    }
-  };
-
-  it("names the original repo's .git for a linked worktree, and nothing for a folder that is no repository", () => {
-    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "wt-")));
-    try {
-      const repo = path.join(root, "repo");
-      mkdirSync(repo);
-      git(repo, "init", "-q", "-b", "main");
-      writeFileSync(path.join(repo, "a.txt"), "a");
-      git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A");
-      git(repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init");
-      const worktree = path.join(root, "wt");
-      git(repo, "worktree", "add", "-q", "-b", "job", worktree);
-      const jobDir = path.join(root, "job");
-      mkdirSync(jobDir);
-
-      const dirs = gitCommonDirs([worktree, jobDir], gitDirOf);
-      expect(dirs, "the worktree's commits go into the original repo's .git").toEqual([path.join(repo, ".git")]);
-      // Proof the premise is real: the linked worktree's own index lives UNDER that directory, outside the worktree.
-      const perWorktree = git(worktree, "rev-parse", "--git-dir");
-      expect(realpathSync(perWorktree).startsWith(path.join(repo, ".git"))).toBe(true);
-      expect(realpathSync(perWorktree).startsWith(worktree)).toBe(false);
-
-      // And the arguments Codex is started with carry it as a writable folder.
-      const args = codexExecArgs([jobDir, ...dirs]);
-      expect(args.join(" ")).toContain(`--add-dir ${path.join(repo, ".git")}`);
+      writeFileSync(path.join(s.wt, "fix.txt"), "the change");
+      const out = { phase: "BUILD", status: "failed", reason: "git commit failed: Unable to create .git/worktrees/wt/index.lock: Operation not permitted", proof: "npm run validate passed", pr_title: "Make the flyers scroll" };
+      const fin = finishCodexBuild({ cwd: s.wt, branch: "work/wpc-probe", out, run: s.run });
+      expect(fin.ok).toBe(true);
+      if (!fin.ok) return;
+      expect(fin.result.status).toBe("ok");
+      expect(fin.result.pr_number).toBe(7);
+      expect(fin.result.pr_url).toBe("https://github.com/seq23/probe/pull/7");
+      expect(fin.result.reason).toBeUndefined();
+      expect(fin.result.proof).toContain("npm run validate passed");
+      expect(fin.result.proof).toContain("outside Codex's sandbox");
+      expect(git(s.wt, "status", "--porcelain")).toBe("");
+      expect(git(s.wt, "log", "-1", "--format=%s")).toBe("Make the flyers scroll");
+      expect(git(s.root, "--git-dir", s.origin, "rev-parse", "refs/heads/work/wpc-probe")).toBe(git(s.wt, "rev-parse", "HEAD"));
+      expect(git(s.root, "--git-dir", s.origin, "log", "--format=%s", "main")).toBe("init");
+      const create = s.gh.find((a) => a[1] === "create") ?? [];
+      expect(create[create.indexOf("--base") + 1]).toBe("main");
+      expect(create[create.indexOf("--head") + 1]).toBe("work/wpc-probe");
+      expect(s.gh.some((a) => a.includes("merge"))).toBe(false);
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      rmSync(s.root, { recursive: true, force: true });
     }
   });
 
-  it("de-duplicates, and tolerates a probe that throws", () => {
-    expect(gitCommonDirs(["/a", "/a/b"], () => "/r/.git")).toEqual(["/r/.git"]);
-    expect(gitCommonDirs(["/a"], () => { throw new Error("no git"); })).toEqual([]);
-    expect(gitCommonDirs(["/a"], () => "")).toEqual([]);
+  it("reuses the open PR on a rebuild instead of opening a second", () => {
+    const s = scratch({ url: "https://github.com/seq23/probe/pull/3", number: 3 });
+    try {
+      writeFileSync(path.join(s.wt, "fix.txt"), "the rebuild");
+      const fin = finishCodexBuild({ cwd: s.wt, branch: "work/wpc-probe", out: { phase: "BUILD", status: "ok", proof: "p" }, run: s.run });
+      expect(fin.ok && fin.result.pr_number).toBe(3);
+      expect(s.gh.some((a) => a[1] === "create")).toBe(false);
+    } finally {
+      rmSync(s.root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses main, Codex's own real failure, a needs_runs turn, and a build with nothing in it", () => {
+    const s = scratch();
+    try {
+      writeFileSync(path.join(s.main, "x.txt"), "x");
+      const onMain = finishCodexBuild({ cwd: s.main, branch: "main", out: { phase: "BUILD", status: "ok" }, run: s.run });
+      expect(onMain.ok ? "" : onMain.tag).toBe("REFUSED_PROTECTED_BRANCH");
+      writeFileSync(path.join(s.wt, "y.txt"), "y");
+      const real = finishCodexBuild({ cwd: s.wt, branch: "work/wpc-probe", out: { phase: "BUILD", status: "failed", reason: "npm run validate failed: 3 tests red" }, run: s.run });
+      expect(real.ok ? "" : real.tag).toBe("CODEX_FAILED");
+      const runs = finishCodexBuild({ cwd: s.wt, branch: "work/wpc-probe", out: { phase: "BUILD", status: "needs_runs", runs: [] }, run: s.run });
+      expect(runs.ok ? "" : runs.tag).toBe("NOT_FINISHED");
+      expect(git(s.wt, "status", "--porcelain")).not.toBe("");
+      rmSync(path.join(s.wt, "y.txt"));
+      const empty = finishCodexBuild({ cwd: s.wt, branch: "work/wpc-probe", out: { phase: "BUILD", status: "ok" }, run: s.run });
+      expect(empty.ok ? "" : empty.tag).toBe("NO_CHANGES");
+      expect(s.gh).toEqual([]);
+    } finally {
+      rmSync(s.root, { recursive: true, force: true });
+    }
+  });
+
+  it("tells Codex the runner does the git steps", () => {
+    expect(CODEX_BUILD_NOTE).toContain("UNCOMMITTED");
+    expect(CODEX_BUILD_NOTE).toContain("never merges");
+    expect(isGitSandboxBlock({ reason: "Unable to create index.lock: Operation not permitted" })).toBe(true);
+    expect(isGitSandboxBlock({ reason: "npm test failed" })).toBe(false);
   });
 });
 

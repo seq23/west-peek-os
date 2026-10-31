@@ -571,6 +571,10 @@ jobs:
       # the claimer's allowlist and is dispatched by the sweep — three lists held to one, plus the Mac scripts' own self-tests.
       - name: Every local duty has an executor, and every executor a duty
         run: npm run validate:duty-executor
+      # 31 Oct 2026 (boss-os #187): Codex's sandbox cannot write git metadata, so a Codex-served BUILD is
+      # committed, pushed and opened by the duty script on the work branch — never main, never merged.
+      - name: The Codex lane produces a commit and a PR, never a merge
+        run: npm run validate:codex-lane
       # Nothing lands a web property change without a recorded plan approval AND a recorded green check — Worker, Mac script, row.
       - name: No land without approval and green
         run: npm run validate:no-land-without-approval
