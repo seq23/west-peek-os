@@ -59,8 +59,8 @@
  * a script on her Mac that pulled in the Worker's TypeScript would need a build step to run.
  */
 
-import { execFile, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFile, spawn, spawnSync } from "node:child_process";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,7 +69,7 @@ import { CLOUDFLARE_ACCOUNT_ID, classify, proofLine, readRequests } from "./lib/
 import { VAULT_INJECTED_VAR, claudeChildEnv, envForRepoRun, strippedNote, vaultLookup } from "../lib/vault-env.mjs";
 import { admittedScripts, constraintsIn, generateRunbook, hostFromRoutes, isProductionRun, productionAsked, withPorterMayRun, likelySecrets, porterMayRun, readWranglerJson, readWranglerToml, runbookSecretNames, secretNamesInSource, vendorPageFor } from "./lib/runbook.mjs";
 import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
-import { codexExecArgs, codexSeatUsable, gitCommonDirs, helpMentions, runWithCodexFallback } from "../lib/codex-seat.mjs";
+import { CODEX_BUILD_NOTE, codexExecArgs, codexSeatUsable, finishCodexBuild, helpMentions, runWithCodexFallback } from "../lib/codex-seat.mjs";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -524,24 +524,12 @@ async function codexLacks(flags) {
   return flags.find((f) => !helpMentions(help, f)) ?? null;
 }
 
-/** `git rev-parse --git-common-dir` for a directory, or null when it is not inside a repository. */
-async function gitCommonDirOf(dir) {
-  try {
-    const r = await execFileAsync("git", ["-C", dir, "rev-parse", "--git-common-dir"], { timeout: 15_000 });
-    return String(r.stdout).trim() || null;
-  } catch {
-    return null;
-  }
-}
-
 /** Run `codex exec` in the worktree with the same prompt on stdin, killable by the job's signal. */
-async function spawnCodex({ prompt, cwd, addDirs, signal, onLine }) {
-  // The worktree's commits are written into the ORIGINAL repository's .git, outside every folder the
-  // sandbox would otherwise let Codex write — so each repository's git directory is named too.
-  const dirs = [cwd, ...(addDirs ?? [])];
-  const found = await Promise.all(dirs.map((d) => gitCommonDirOf(d)));
-  const gitDirs = gitCommonDirs(dirs, (d) => found[dirs.indexOf(d)]);
-  const writable = [...new Set([...(addDirs ?? []), ...gitDirs])];
+async function spawnCodex({ prompt, cwd, addDirs, signal, onLine, phase }) {
+  // Only the job folders are added: NO git directory (31 Oct 2026). Codex's sandbox keeps git metadata
+  // read-only even when it is named, so Codex EDITS and this script commits (finishIfCodex).
+  const writable = [...new Set(addDirs ?? [])];
+  if (phase === "BUILD") prompt = `${prompt}${CODEX_BUILD_NOTE}`;
   return new Promise((resolve) => {
     let withheld = [];
     const child = spawn("codex", codexExecArgs(writable), { cwd, stdio: ["pipe", "pipe", "pipe"], env: claudeChildEnv(process.env, (names) => (withheld = names)) });
@@ -562,6 +550,29 @@ async function spawnCodex({ prompt, cwd, addDirs, signal, onLine }) {
     });
     child.stdin.end(prompt);
   });
+}
+
+/*
+ * A BUILD CODEX SERVED IS COMMITTED, PUSHED AND OPENED BY THIS SCRIPT (31 Oct 2026). Codex's sandbox
+ * cannot write git metadata (boss-os PR #187: a finished repair ended GIT_METADATA_READ_ONLY with no PR),
+ * so this process — outside the sandbox — does the git steps after Codex exits, on the job's work branch
+ * only. It never merges; the PR goes through the checks watch and the LAND phase's `~/bin/land` like
+ * every other build. `validate:codex-lane` holds every BUILD model turn to this.
+ */
+function finishIfCodex(claude, { phase, resultPath, worktree, branch, jobDir, progress }) {
+  if (phase !== "BUILD" || claude?.servedBy !== "codex") return null;
+  let out = null;
+  try {
+    out = existsSync(resultPath) ? JSON.parse(readFileSync(resultPath, "utf8")) : null;
+  } catch {
+    out = null;
+  }
+  const fin = finishCodexBuild({ cwd: worktree, branch, out, run: (cmd, args, o) => spawnSync(cmd, args, { cwd: o.cwd, encoding: "utf8" }) });
+  const line = fin.ok ? `Codex edited; the runner committed, pushed ${branch} and opened ${fin.result.pr_url}` : `the runner did not open a PR for Codex's build: [${fin.tag}] ${fin.why}`;
+  progress?.(line);
+  appendFileSync(path.join(jobDir, "codex-finish.log"), `${new Date().toISOString()} ${line}\n`);
+  if (fin.ok) writeFileSync(resultPath, JSON.stringify(fin.result, null, 2));
+  return fin;
 }
 
 /** Run `claude -p` in the worktree with the prompt, killable by the job's signal. */
@@ -932,7 +943,8 @@ export async function run(job, ctx) {
   const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments, extraLines })}`;
   writeFileSync(path.join(jobDir, `prompt-${phase}.md`), prompt);
   progress(`claude -p (${job.model}) for ${phase}`);
-  let claude = await runClaude({ prompt, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
+  let claude = await runClaude({ prompt, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress, phase });
+  finishIfCodex(claude, { phase, resultPath, worktree: names.worktree, branch: names.branch, jobDir, progress });
   writeFileSync(path.join(jobDir, `claude-${phase}.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
   let cost = costFrom(claude.out);
 
@@ -943,7 +955,8 @@ export async function run(job, ctx) {
     runsDone.push(...done);
     rmSync(resultPath, { force: true });
     const again = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments, extraLines: repoLines(book, secrets, outDir, runsDone, job) })}\n\nRUNS DONE FOR YOU SINCE YOUR LAST TRY: ${done.map((d) => `${d.script} (${d.env}) → exit ${d.exit}: ${d.line}`).join("; ")}`;
-    claude = await runClaude({ prompt: again, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
+    claude = await runClaude({ prompt: again, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress, phase });
+    finishIfCodex(claude, { phase, resultPath, worktree: names.worktree, branch: names.branch, jobDir, progress });
     writeFileSync(path.join(jobDir, `claude-${phase}-runs${round + 1}.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
     cost = (cost ?? 0) + (costFrom(claude.out) ?? 0);
     ({ result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", phase));
@@ -955,7 +968,8 @@ export async function run(job, ctx) {
     const fetched = await fetchDriveAssets(path.join(packageDir, "drive"), wanted, ctx, jobDir, progress);
     if (!fetched.ok) return { phase, status: "failed", reason: fetched.reason };
     rmSync(resultPath, { force: true });
-    claude = await runClaude({ prompt: `${prompt}\n\nFETCHED FOR YOU SINCE YOUR LAST TRY: ${wanted.join(", ")} — now in ${path.join(packageDir, "drive")}.`, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
+    claude = await runClaude({ prompt: `${prompt}\n\nFETCHED FOR YOU SINCE YOUR LAST TRY: ${wanted.join(", ")} — now in ${path.join(packageDir, "drive")}.`, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress, phase });
+    finishIfCodex(claude, { phase, resultPath, worktree: names.worktree, branch: names.branch, jobDir, progress });
     writeFileSync(path.join(jobDir, `claude-${phase}-2.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
     cost = (cost ?? 0) + (costFrom(claude.out) ?? 0);
     ({ result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", phase));
@@ -1584,7 +1598,8 @@ async function runSeveral(job, ctx) {
         const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(partJob, { ...p.names, packageDir, jobDir, resultPath, planText: job.plan?.text ?? null, attachments: assets.attachments, thisPart: p.repo, extraLines: repoLines(p.book, p.secrets, path.join(jobDir, "out"), [], partJob) })}`;
         writeFileSync(path.join(jobDir, `prompt-BUILD-${p.repo}.md`), prompt);
         progress(`claude -p (${job.model}) for BUILD of ${p.repo}`);
-        let claude = await runClaude({ prompt, model: job.model, cwd: p.names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
+        let claude = await runClaude({ prompt, model: job.model, cwd: p.names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress, phase });
+        finishIfCodex(claude, { phase, resultPath, worktree: p.names.worktree, branch: p.names.branch, jobDir, progress });
         writeFileSync(path.join(jobDir, `claude-BUILD-${p.repo}.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
         let { result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "BUILD");
         const wanted = job.drive?.folder_id ? assetsRequested(result) : [];
@@ -1592,7 +1607,8 @@ async function runSeveral(job, ctx) {
           const fetched = await fetchDriveAssets(path.join(packageDir, "drive"), wanted, ctx, jobDir, progress);
           if (!fetched.ok) return { phase, status: "failed", reason: `${p.repo}: ${fetched.reason}`, parts: reports };
           rmSync(resultPath, { force: true });
-          claude = await runClaude({ prompt: `${prompt}\n\nFETCHED FOR YOU SINCE YOUR LAST TRY: ${wanted.join(", ")} — now in ${path.join(packageDir, "drive")}.`, model: job.model, cwd: p.names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
+          claude = await runClaude({ prompt: `${prompt}\n\nFETCHED FOR YOU SINCE YOUR LAST TRY: ${wanted.join(", ")} — now in ${path.join(packageDir, "drive")}.`, model: job.model, cwd: p.names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress, phase });
+          finishIfCodex(claude, { phase, resultPath, worktree: p.names.worktree, branch: p.names.branch, jobDir, progress });
           ({ result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "BUILD"));
         }
         if (Array.isArray(result?.missing_materials)) stillMissing.push(...result.missing_materials);

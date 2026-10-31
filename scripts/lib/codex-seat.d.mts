@@ -2,7 +2,16 @@
 export declare function codexOnSubscription(authJsonText: string): boolean;
 export declare function codexSeatUsable(home?: string): { ok: boolean; why: string };
 export declare function codexExecArgs(addDirs?: string[]): string[];
-export declare function gitCommonDirs(dirs: string[], gitDirOf: (dir: string) => string | null): string[];
+export declare const CODEX_BUILD_NOTE: string;
+export declare function isGitSandboxBlock(result: unknown): boolean;
+export interface SpawnLike { status: number | null; stdout?: string; stderr?: string }
+export declare function finishCodexBuild(args: {
+  cwd: string;
+  branch: string | null;
+  out: Record<string, unknown> | null;
+  run: (cmd: string, args: string[], opts: { cwd: string }) => SpawnLike;
+  base?: string;
+}): { ok: true; result: Record<string, unknown> & { status: "ok"; pr_url: string; pr_number: number; proof: string } } | { ok: false; tag: string; why: string };
 export declare function helpMentions(helpText: string | undefined, flag: string): boolean;
 export interface RunResult {
   code: number | null;

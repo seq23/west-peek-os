@@ -43,6 +43,13 @@ violations) on breach and proves its own detection with a self-test fixture run.
   text as a guide against the real Meetings sources and proves it is caught, plus a missing
   primary act, a ghost testid, a link to no page, a job no migration writes, a missing file, and a
   paragraph-shaped answer.
+- `the-codex-lane-can-produce-a-commit.mjs` (`npm run validate:codex-lane`, 31 Oct 2026) — Codex's
+  workspace-write sandbox keeps git metadata read-only (boss-os PR #187), so a Codex-served BUILD is
+  committed, pushed and opened by the duty script. Runs the shipped `finishCodexBuild` on a scratch repo
+  (bare origin, linked worktree, Codex's uncommitted edit, real git, fake gh): a commit on the work
+  branch, the branch pushed, a PR against main, origin/main unmoved, no merge; refuses main and a real
+  failure; holds every worktree model turn in `web-property-change.mjs` to `finishIfCodex`. Hard-fails
+  on zero turns; `--self-test` catches eight broken copies.
 - `a-duty-has-an-executor.mjs` (`npm run validate:duty-executor`, 20 Sep 2026) — reads the local-job
   registry, the Mac claimer's allowlist, every `scripts/duties/*.mjs` header and the sweep's
   dispatch, and holds them to one list in both directions; hard-fails on zero kinds or scripts;
