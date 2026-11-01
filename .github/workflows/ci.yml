@@ -451,6 +451,13 @@ jobs:
       - name: A green run means something
         run: npm run validate:green-means-something
 
+      # A MIGRATION KEEPS ITS DATA, 1 Nov 2026 (owner-approved). Every new or changed migration is
+      # read against the PR base (or the commit a push replaced) and fails on DROP TABLE, ALTER … DROP,
+      # DELETE without WHERE, TRUNCATE, or a table rebuild that loses a column, unless the file says
+      # `-- destructive-ok: <reason> (backed up: <where>)`. History is grandfathered.
+      - name: A migration keeps its data
+        run: npm run validate:migrations-keep-data
+
       # EVERY COMPANY IS IN THE PIPELINE, 18 Sep 2026. Owner: "all companies should be in the
       # pipeline, no matter how they come in. They are top of funnel if they are in the system."
       # Northwind Robotics and Vynlo sat in the register for a month with no opportunity because one

@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit",
     "validate": "npm run typecheck && npm run test",
     "validate:ai-boundary": "node scripts/validate/no-direct-provider-calls.mjs && node scripts/validate/no-direct-provider-calls.mjs --self-test && node scripts/seed/generate-ai-employee-seed.mjs --check",
+    "validate:migrations-keep-data": "node scripts/validate/migrations-keep-their-data.mjs && node scripts/validate/migrations-keep-their-data.mjs --self-test",
     "validate:angles": "node scripts/validate/one-topic-several-angles.mjs && node scripts/validate/one-topic-several-angles.mjs --self-test",
     "validate:authority": "node scripts/validate/no-unauthorized-effects.mjs && node scripts/validate/no-unauthorized-effects.mjs --self-test && node scripts/seed/generate-machine-seed.mjs --check",
     "validate:deliverable-kinds": "node scripts/validate/a-kind-the-database-accepts.mjs && node scripts/validate/a-kind-the-database-accepts.mjs --self-test",
