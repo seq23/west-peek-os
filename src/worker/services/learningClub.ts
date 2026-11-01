@@ -26,6 +26,7 @@ import { addressReadOffPage, approvedDayZeroFor, handleMustPitch, liveMustPitch,
 import { brandKey } from "../../shared/tlc/mustPitch";
 import { TLC_BENCH_LOW, TLC_NEW_BRANDS_PER_EVENT_WEEK } from "../../shared/tlc/volume";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
+import { COMMITTED_STAGES, DROPPED_NO_SPONSOR, goNoGoDate, goNoGoOf, goNoGoReached } from "../../shared/tlc/goNoGo";
 import {
   BOOKING_PACK_SHAPE,
   BRAND_SEND_SETTING,
@@ -182,6 +183,9 @@ export interface TlcEventRow {
   sponsor_goal_usd?: number | null;
   backup_json?: string | null;
   switch_deadline?: string | null;
+  go_no_go_date?: string | null;
+  dropped_at?: string | null;
+  dropped_reason?: string | null;
   firm_scope: string;
 }
 
@@ -363,10 +367,13 @@ async function openCard(
 export async function ensureRollingEvents(env: Env, now: Date, firmScope = "west-peek"): Promise<string[]> {
   const months = rollingTopicMonths(now);
   for (const m of months) {
-    await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO tlc_event (id, month, event_date, firm_scope, pitch_token) VALUES (?1, ?2, ?3, ?4, lower(hex(randomblob(16))))")
-      .bind(`tlc_${m}`, m, defaultEventDate(m), firmScope)
+    await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO tlc_event (id, month, event_date, firm_scope, pitch_token, go_no_go_date) VALUES (?1, ?2, ?3, ?4, lower(hex(randomblob(16))), ?5)")
+      .bind(`tlc_${m}`, m, defaultEventDate(m), firmScope, goNoGoDate(defaultEventDate(m)))
       .run();
   }
+  // Every club carries its go/no-go date as data (0282), whoever created the row.
+  const missing = (await env.WP_OS_DB.prepare("SELECT id, event_date FROM tlc_event WHERE firm_scope = ?1 AND go_no_go_date IS NULL").bind(firmScope).all<{ id: string; event_date: string }>()).results ?? [];
+  for (const r of missing) await env.WP_OS_DB.prepare("UPDATE tlc_event SET go_no_go_date = ?2 WHERE id = ?1 AND go_no_go_date IS NULL").bind(r.id, goNoGoDate(r.event_date)).run();
   return months;
 }
 
@@ -480,10 +487,47 @@ export async function runDripPass(env: Env, now: Date, firmScope = "west-peek"):
   // first, none for a club that reached its goal. They join the drip here and are drafted on this same pass.
   const { promoteProspects } = await import("./tlcVolume");
   const prospects = await promoteProspects(env, now, firmScope);
+  // Her own first emails get their follow-up date (B, 31 Oct 2026), and a must-pitch brand stuck at "needs a way in"
+  // gets the NeverBounce fallback (C), before the drip drafts what is due.
+  await armOwnerFollowUps(env, now, firmScope);
+  const { wayInFallback } = await import("./tlcMustPitch");
+  await wayInFallback(env, now, firmScope).catch(() => null);
   const drip = await runDrip(env, now, firmScope);
   const repaired = await repairLeakedDrafts(env, now, firmScope);
   const notice = await sendDraftNotice(env, now, firmScope);
-  return { batch, drip, prospects, notice: repaired.startsWith("no draft") ? notice : `${notice}; ${repaired}` };
+  // WYNN'S MONDAY ROUNDUP (31 Oct 2026): once a week, to Sequoia only, after the approval email.
+  const { sendWeeklyRoundup } = await import("./tlcRoundup");
+  const roundup = await sendWeeklyRoundup(env, now, firmScope).catch((err) => `roundup failed: ${err instanceof Error ? err.message : String(err)}`);
+  const said = [notice, repaired.startsWith("no draft") ? "" : repaired, roundup.startsWith("not Monday") || roundup.includes("already went") ? "" : roundup].filter(Boolean).join("; ");
+  return { batch, drip, prospects, notice: said };
+}
+
+/*
+ * A BRAND SHE EMAILED HERSELF GETS ITS FOLLOW-UP (31 Oct 2026). ElevenLabs' two contacts were entered as sent on 23 Oct
+ * from her own mailbox with no next send date, and the drip skipped every owner-contacted brand at every step, so no
+ * follow-up would ever be drafted. A deal whose first email went (drip_step ≥ 1), still pitched, no reply, no date and
+ * no draft for its next step gets the date the sequence gives it; the drip then drafts it for her approval. A draft she
+ * skipped exists (HELD), so it is never re-armed.
+ */
+export async function armOwnerFollowUps(env: Env, now: Date, firmScope = "west-peek"): Promise<string[]> {
+  const mine = await ownerContactedBrands(env, firmScope);
+  if (mine.size === 0) return [];
+  const rows = (await env.WP_OS_DB.prepare(
+    `SELECT d.* FROM tlc_deal d
+      WHERE d.firm_scope = ?1 AND d.stage = 'PITCHED' AND d.stop_reason IS NULL AND d.replied_at IS NULL AND d.next_send_at IS NULL
+        AND d.first_sent_at IS NOT NULL AND d.drip_step >= 1 AND d.drip_step < ?2
+        AND NOT EXISTS (SELECT 1 FROM tlc_drip_message m WHERE m.deal_id = d.id AND m.step = d.drip_step)`,
+  ).bind(firmScope, TLC_DRIP_DAYS.length).all<TlcDealRow>()).results ?? [];
+  const armed: string[] = [];
+  for (const d of rows) {
+    if (!mine.has(brandKey(d.brand))) continue;
+    const at = nextDripAt(d.drip_step, d.first_sent_at ?? null, now, null);
+    if (!at) continue;
+    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = ?2, updated_at = ?3 WHERE id = ?1 AND next_send_at IS NULL").bind(d.id, at, now.toISOString()).run();
+    armed.push(brandDisplayName(d.brand));
+  }
+  if (armed.length) await appendEvent(env, { eventType: "tlc.owner_follow_up_armed", actorType: "system", actorId: "tlc_drip", objectType: "tlc_deal", objectId: armed.join(",").slice(0, 200), firmScope, payload: { armed } });
+  return armed;
 }
 
 // ── The daily pass ──────────────────────────────────────────────────────────────────────────────
@@ -494,6 +538,32 @@ export interface DailyResult {
   goChecks: Array<{ month: string; checkpoint: number; verdict: string }>;
   drip: DripResult;
   failures: string[];
+  /** Clubs dropped today at their go/no-go date (no sponsor committed in writing). */
+  dropped?: string[];
+}
+
+/**
+ * THE GO / NO-GO RULE (shared/tlc/goNoGo.ts). On or after the club's date, with no deal at AGREED or beyond, the club is
+ * DROPPED: CANCELLED with dropped_at and the reason (never deleted), its waiting brand drafts are held so nothing more
+ * goes for it, and its topic goes back on the ideas list. Wynn says so in the Monday roundup. Returns true when dropped.
+ */
+export async function applyGoNoGo(env: Env, ev: TlcEventRow, now: Date, firmScope = "west-peek"): Promise<boolean> {
+  if (ev.dropped_at || ["DONE", "CANCELLED"].includes(ev.status)) return false;
+  if (!goNoGoReached(ev, now)) return false;
+  const committed = await env.WP_OS_DB.prepare(`SELECT 1 FROM tlc_deal WHERE event_id = ?1 AND stage IN (${COMMITTED_STAGES.map((x) => `'${x}'`).join(",")}) LIMIT 1`).bind(ev.id).first();
+  if (committed) return false;
+  const at = now.toISOString();
+  await env.WP_OS_DB.prepare("UPDATE tlc_event SET status = 'CANCELLED', dropped_at = ?2, dropped_reason = ?3, updated_at = ?2 WHERE id = ?1 AND dropped_at IS NULL").bind(ev.id, at, DROPPED_NO_SPONSOR).run();
+  await env.WP_OS_DB.prepare(
+    "UPDATE tlc_drip_message SET state = 'HELD', held_reason = 'the club was dropped at its go/no-go date' WHERE state = 'AWAITING_APPROVAL' AND deal_id IN (SELECT id FROM tlc_deal WHERE event_id = ?1)",
+  ).bind(ev.id).run();
+  await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = NULL, updated_at = ?2 WHERE event_id = ?1 AND stage IN ('PROSPECT','PITCHED')").bind(ev.id, at).run();
+  if (ev.topic) {
+    await env.WP_OS_DB.prepare("UPDATE tlc_idea SET status = 'LATER', status_month = NULL, updated_at = ?2 WHERE firm_scope = ?3 AND topic_key = ?1 AND status IN ('PICKED','ALTERNATIVE')").bind(topicKey(ev.topic), at, firmScope).run();
+    await upsertIdea(env, { topic: ev.topic, origin: "SUGGESTED_LIST", suggestedBy: `Dropped club, ${monthWords(ev.month)}`, suggestedAt: at, status: "LATER", month: null, firmScope });
+  }
+  await appendEvent(env, { eventType: "tlc.club_dropped", actorType: "system", actorId: "tlc_daily", objectType: "tlc_event", objectId: ev.id, firmScope, payload: { month: ev.month, topic: ev.topic, go_no_go_date: goNoGoOf(ev), reason: DROPPED_NO_SPONSOR } });
+  return true;
 }
 
 export async function runTlcDaily(env: Env, now: Date, firmScope = "west-peek"): Promise<DailyResult> {
@@ -503,6 +573,8 @@ export async function runTlcDaily(env: Env, now: Date, firmScope = "west-peek"):
     try {
       const days = daysUntil(ev.event_date, now);
       if (days <= 0) continue;
+      // GO / NO-GO (31 Oct 2026): seven weeks out with no sponsor committed in writing, the club is dropped.
+      if (await applyGoNoGo(env, ev, now, firmScope)) { out.dropped = [...(out.dropped ?? []), ev.month]; continue; }
       const hasTopic = Boolean(ev.topic) && ["TOPIC_READY", "GO", "ESCALATED"].includes(ev.status);
       // SIX WEEKS OUT: the booking pack, options only.
       if (hasTopic && !ev.booking_pack_at && days <= TLC_BOOKING_PACK_DAYS) {
@@ -772,7 +844,8 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
     for (const m of approved) {
       if (sendRoom <= 0) { result.waitingForAllowance += 1; continue; }
       const deal = await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(m.deal_id).first<TlcDealRow>();
-      if (deal && !deal.stop_reason && (await ownerContactedBrands(env, firmScope)).has(brandKey(deal.brand))) {
+      // She wrote email 1 herself: Wynn never sends a first email for that brand. Her approved follow-up to her own email goes.
+      if (deal && !deal.stop_reason && m.step === 0 && (await ownerContactedBrands(env, firmScope)).has(brandKey(deal.brand))) {
         await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'HELD', held_reason = 'Sequoia contacted this brand directly; replies go to her, no drip' WHERE id = ?1").bind(m.id).run();
         continue;
       }
@@ -842,8 +915,9 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
       result.goalStopped = [...new Set([...(result.goalStopped ?? []), monthWords(ev.month)])];
       continue;
     }
-    // SHE CONTACTED THIS BRAND HERSELF: never a drip email from Wynn, at any step, gate open or not.
-    if ((await ownerContactedBrands(env, firmScope)).has(brandKey(deal.brand))) {
+    // SHE CONTACTED THIS BRAND HERSELF: Wynn never writes the first email. Once hers went (first_sent_at), its one
+    // follow-up IS drafted, for her approval like every other (31 Oct 2026: ElevenLabs had none and never would).
+    if ((await ownerContactedBrands(env, firmScope)).has(brandKey(deal.brand)) && !(deal.drip_step > 0 && deal.first_sent_at)) {
       await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = NULL, updated_at = ?2 WHERE id = ?1").bind(deal.id, now.toISOString()).run();
       continue;
     }

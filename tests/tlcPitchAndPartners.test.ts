@@ -234,7 +234,7 @@ describe("the Partners panel, across TLC deals and general Room sponsors", () =>
     expect(tlc.progressWords).toBe("$5,000 of $25,000 · 1 partner");
     expect(tlc.progressPct).toBe(20);
     expect(tlc.partners.map((p) => [p.brand, p.role, p.amountUsd, p.stageWords, p.isNew, p.threadUrl])).toEqual([
-      ["Ever", "Partner", 5000, "said yes", true, null],
+      ["Ever", "Partner", 5000, "asked for the teaser", true, null],
       ["Acme", "Partner", 5000, "agreed", true, "#/work/wc_d1"],
       ["Bolt", "Presenting partner", 15000, "call", false, null],
     ]);

@@ -7361,3 +7361,22 @@ from January 2027; $10 paid ticket; $10,000 net target from sponsors ($7,500 flo
   change, old-title name, preview not the PDF HTML, sent row touched, no retry, PDF attached to her email): each
   turned tests red; restored green. Phone (390 px) and laptop views screenshotted, no horizontal scroll. Live
   rendering and email delivery UNPROVEN until exercised.
+
+## TLC pipeline repairs and Wynn's Monday roundup (31 Oct 2026, migration 0282)
+
+- **A · no draft outside her email.** The weekly approval email was keyed to the week's batch card and sent when it
+  finished; drafts filed after it (Parker's-list promotions later that Monday, follow-ups falling due midweek) were in no
+  email until the next batch. `tlcDraftNotice.sendCatchUpNotice`: once the week's email has gone, a draft unlisted for
+  24 h puts EVERY waiting draft in one email under a new reference (at most one per 24 h). No reply of hers was lost.
+- **B · a brand she emailed herself gets its follow-up** (`armOwnerFollowUps`), drafted for her approval; Wynn still
+  never writes email 1 for an owner-contacted brand.
+- **C · must-pitch brands never wait on her for an address** (`tlcMustPitch.wayInFallback`): Wynn's found address, then
+  role inboxes on the brand's domains, through NeverBounce (valid only), weekly, at most 6 checks a brand.
+- **D · asking for the teaser is not a yes to the event** (owner, 31 Oct 2026): progress and partners-panel words say
+  "asked for the teaser"; "signed on" counts AGREED or beyond only. The stage stays pre-call (CHECK constraint, and her
+  26 Oct rule that only a brand's own call request moves it to CALL).
+- **E · Wynn's Monday roundup** (`tlcRoundup.ts`), to TLC_RECIPIENTS (Sequoia only), once per ISO week from 14:00 UTC.
+- **F · go/no-go date** stored per club (7 weeks out, back to Friday from a weekend); no deal AGREED+ by then → club
+  CANCELLED with `dropped_at`/`dropped_reason`, drafts held, topic back to the ideas list (`applyGoNoGo`).
+- Guards: `tests/tlcPipelineRepairs.test.ts` (9); the catch-up guard was broken on purpose and went red, then restored.
+  Pins in `tlcVolume`/`tlcPitchAndPartners` rewritten to the stricter wording. Live delivery UNPROVEN until exercised.

@@ -201,9 +201,10 @@ export async function clubProgress(env: Env, firmScope: string, now: Date): Prom
     const counts = await env.WP_OS_DB.prepare(
       `SELECT SUM(CASE WHEN first_sent_at IS NOT NULL THEN 1 ELSE 0 END) AS pitched,
               SUM(CASE WHEN replied_at IS NOT NULL OR stop_reason = 'REPLIED' THEN 1 ELSE 0 END) AS replied,
-              SUM(CASE WHEN yes_at IS NOT NULL OR stage IN ('AGREED','PAID','DELIVERED') THEN 1 ELSE 0 END) AS yes
+              SUM(CASE WHEN stage IN ('AGREED','PAID','DELIVERED') THEN 1 ELSE 0 END) AS yes,
+              SUM(CASE WHEN yes_at IS NOT NULL AND stage NOT IN ('AGREED','PAID','DELIVERED','DECLINED','STOPPED') THEN 1 ELSE 0 END) AS teaser
          FROM tlc_deal WHERE event_id = ?1`,
-    ).bind(ev.id).first<{ pitched: number | null; replied: number | null; yes: number | null }>();
+    ).bind(ev.id).first<{ pitched: number | null; replied: number | null; yes: number | null; teaser: number | null }>();
     const committedUsd = await committedCashUsd(env, ev.id);
     const goalUsd = goalOf(ev).goalUsd;
     lines.push(progressLine({
@@ -214,6 +215,7 @@ export async function clubProgress(env: Env, firmScope: string, now: Date): Prom
       pitched: counts?.pitched ?? 0,
       replied: counts?.replied ?? 0,
       yes: counts?.yes ?? 0,
+      teaser: counts?.teaser ?? 0,
       ready: await readyCount(env, ev.id),
       stopped: goalReached(committedUsd, goalUsd),
     }));

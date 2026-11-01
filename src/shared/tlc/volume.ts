@@ -64,12 +64,14 @@ export function orderProspects<T extends ProspectPick>(candidates: readonly T[])
 }
 
 /** One club's line in the weekly email: money against the goal, then the counts. */
-export function progressLine(input: { club: string; topic: string | null; committedUsd: number; goalUsd: number; pitched: number; replied: number; yes: number; ready: number; stopped: boolean }): string {
+export function progressLine(input: { club: string; topic: string | null; committedUsd: number; goalUsd: number; pitched: number; replied: number; yes: number; teaser?: number; ready: number; stopped: boolean }): string {
   const usd = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
   const name = `${input.club}${input.topic ? ` (${input.topic})` : ""}`;
   return [
     `${name}: ${usd(input.committedUsd)} agreed of ${usd(input.goalUsd)}.`,
-    `${input.pitched} pitched, ${input.replied} replied, ${input.yes} said yes.`,
+    // "Signed on" is a sponsorship agreed in writing (AGREED or beyond). A brand that asked for the teaser PDF has NOT
+    // said yes to the event (owner, 31 Oct 2026, Pinecone) and is counted on its own.
+    `${input.pitched} pitched, ${input.replied} replied, ${input.teaser ?? 0} asked for the teaser, ${input.yes} signed on.`,
     input.stopped ? "Goal reached, so new pitches for this club have stopped." : `${input.ready} more brand${input.ready === 1 ? "" : "s"} ready to pitch.`,
   ].join(" ");
 }
