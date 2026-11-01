@@ -76,6 +76,14 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
     why: "So assigning work to an employee means it gets done, and \"in progress\" means somebody is actually on it.",
     deliveredBy: ["the firm"],
   },
+  fund_first_close_readiness: {
+    what:
+      "Every Tuesday Preston reads the fund records — the first close date, the LP records, signed and soft " +
+      "commitments, the deck — and writes how far Fund I is from its first close: what is still needed, in " +
+      "order, who owns each step, and the one step that moves it most this week. Nothing is sent outside the firm.",
+    why: "So the Wednesday sync starts from where the first close actually stands, and a missing record is named rather than guessed.",
+    deliveredBy: ["Preston"],
+  },
   deck_rebuild: {
     what: "Rebuilds the LP deck: reads the current deck page by page, carries everything over, corrects every figure to the fund records, and proposes the new version on Fund strategy.",
     why: "Runs when you send a version back — that opens a card for Preston — or when you press Run it now. Only when asked: a deck is rebuilt when somebody wants one, not every morning.",

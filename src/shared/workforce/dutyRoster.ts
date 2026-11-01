@@ -152,7 +152,6 @@ const WHY_ON_SHIFT: Record<ShiftKey, Record<string, string>> = {
     Waverly: "the community is awake in the evening and the firm is not",
     Parker: "events and the guest list, which are an evening job",
     Winter: "checks the portfolio asks that came in today",
-    Pippa: "reads anything due to go out before it does",
   },
   OVERNIGHT: {
     Willow: "the compliance check that should notice a problem at 3am",
@@ -167,7 +166,7 @@ const SHIFT_PREFERENCE: Record<ShiftKey, readonly string[]> = {
   // Deal hours: sourcing, screening, the analyst, and the people who prepare a decision.
   MIDDAY: ["Pierce", "Wyatt", "Poppy", "Walter", "Waverly"],
   // What got promised, to whom, and the relationships that carry the firm.
-  EVENING: ["Wesley", "Waverly", "Parker", "Winter", "Pippa"],
+  EVENING: ["Wesley", "Waverly", "Parker", "Winter"],
   // Deliberately thin. Compliance and systems, because those are the two things
   // that should notice a problem at 3am; everyone else is off.
   OVERNIGHT: ["Willow", "Porter", "Pax"],

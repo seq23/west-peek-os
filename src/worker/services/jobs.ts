@@ -654,6 +654,23 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
   }
 
   /*
+   * Preston's weekly first-close readiness (0287, 31 Oct 2026). Same shape as Walker's duties: the
+   * job reads the fund records and opens the week's card; the employee sweep does the writing.
+   */
+  if (job.job_key === "fund_first_close_readiness") {
+    const { openFirstCloseCard } = await import("./fundFirstClose");
+    const out = await openFirstCloseCard(env, now, job.firm_scope);
+    artifacts.push({ kind: "WORK_CARD", ref_type: "work_card", ref_id: out.cardId });
+    return {
+      status: "SUCCEEDED",
+      summary: out.opened
+        ? `Opened "${out.title}" on Preston's desk; the employee sweep works it within minutes.`
+        : `This week's card is already open or done: "${out.title}".`,
+      artifacts,
+    };
+  }
+
+  /*
    * THE LEARNING CLUB (0259, owner-approved 22 Oct 2026). Three openers and one daily pass; the
    * employee sweep works each card (services/learningClub.ts). A month with nothing to open is a
    * SUCCEEDED run that says why — the named stop, never an inert green.

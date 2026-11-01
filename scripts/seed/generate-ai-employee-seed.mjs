@@ -117,11 +117,14 @@ const { MANAGING_PARTNER_NAMES } = mps;
  * working the same LP prospect at a fund with roughly forty limited partners. Her row is RETIRED by
  * migration 0126, never deleted — attribution and meeting seating point at it.
  *
+ * It is 18 again since 31 Oct 2026 after 19 for Wynn's return (0259): Pippa (Communications) was
+ * retired by migration 0286 — no card, job or route had used her in production.
+ *
  * The check stays because its real job is catching an ACCIDENTAL loss — a bad merge, a deleted
  * block — which a bare "whatever length the array is" would wave through. Changing this number is a
  * deliberate act and should arrive with the roster change that justifies it.
  */
-const EXPECTED_ROSTER_SIZE = 19;
+const EXPECTED_ROSTER_SIZE = 18;
 
 if (AI_EMPLOYEE_ROSTER.length !== EXPECTED_ROSTER_SIZE) {
   console.error(

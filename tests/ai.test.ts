@@ -970,7 +970,7 @@ describe("pausing and resuming an employee", () => {
   it("refuses to resume an employee no human ever approved", async () => {
     // The line that must not move: this is a first activation wearing a different name.
     const res = await handleRequest(
-      req("/api/ai/employees/aie_pippa/running", MP, "POST", { running: true }),
+      req("/api/ai/employees/aie_winter/running", MP, "POST", { running: true }),
       env,
     );
     expect(res.status).toBe(409);

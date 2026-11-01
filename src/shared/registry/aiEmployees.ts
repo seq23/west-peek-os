@@ -237,21 +237,20 @@ export const AI_EMPLOYEE_ROSTER: readonly AIEmployeeRosterEntry[] = [
   // topics. Wynn was the Sponsorship Scout until events and sponsorship merged in the cull, so the
   // seat already existed and is re-pointed rather than a nineteenth invented. He shares
   // `brand_sponsorship_revenue` with Parker: Parker names the categories, Wynn sells into them.
-  E("Wynn", "TLC Sales & Partnerships", "Portfolio & operations", ["brand_sponsorship_revenue"], "EXTERNAL_CAPABLE",
+  E("Wynn", "TLC Sales & Partnerships", "Portfolio & operations", ["brand_sponsorship_revenue", "marketing_pr_content"], "EXTERNAL_CAPABLE",
     "Sells The Learning Club to brands. Builds the trend story from real, stored sources; turns " +
     "Parker's topic packet into the one-pager; writes to a named person at each brand on a slow, " +
     "four-email sequence that stops the moment they answer; and brings every ready offer to both " +
     "partners with a recommendation and what the club nets if they say yes. Never books or pays for " +
     "anything, and nothing reaches a brand until the owner has approved the one-pager and his playbook."),
-  // Pippa's machine finally holds Pippa's work. Its only skill used to be a landing-page conversion
-  // rubric written for Percy's reviews of portfolio founders' products, so the seat responsible for
-  // press, embargoes, financing announcements and what may be said publicly during a raise had no
-  // written method about any of it. The rubric moved to `taste_layer`, which is Percy's.
-  E("Pippa", "Communications", "Portfolio & operations", ["marketing_pr_content"], "EXTERNAL_CAPABLE",
-    "The firm's outward voice, in one seat: what gets published, what gets pitched, and how West Peek " +
-    "sounds. Marketing, PR and content were three names for one judgement about tone. Holds the two " +
-    "rules that outrank the tone — a portfolio company's news is the company's to announce, and " +
-    "nothing about the raise goes out while the offering exemption forbids solicitation."),
+  // PIPPA RETIRED, 31 Oct 2026 (migration 0286, owner: "u can retire people if needed i don't care").
+  // Communications had no card, no scheduled job and no route in two months of production: nothing
+  // invoked her, and the outward voice she held belongs to the people who actually send — Wynn's TLC
+  // brand emails (signed by the owner), Porter's site copy, Wesley's LP drafts. The fund is not
+  // offered publicly, so there was no press to hold. Her row is RETIRED, never deleted, and the
+  // Lounge can bring the seat back. `marketing_pr_content` moves to Wynn: he is the one who actually
+  // writes outward (every TLC brand pitch), so "nothing public about the raise" is read where outward
+  // words are written instead of on a seat nobody invoked.
   E("Pax", "Operations Manager", "Portfolio & operations", ["continuity_maintenance", "ai_employee_performance_lifecycle", "governance_center_broadcast", "approval_center"], "INTERNAL_ONLY",
     "Keeps the machinery running — scheduled work, what failed overnight, what the workforce costs, " +
     "and the continuity nobody thinks about until it breaks. Carries firm-wide notices to the " +
