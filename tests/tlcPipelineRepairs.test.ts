@@ -73,6 +73,10 @@ describe("F · the go/no-go date is seven weeks out, on a working day, stored on
     expect(goNoGoDate("2027-01-23")).toBe("2026-12-04");
     expect(goNoGoDate("2027-01-24")).toBe("2026-12-04");
     expect(goNoGoDate("2027-03-18")).toBe("2027-01-28");
+    // The holiday week moves to the Friday before 24 Dec: Feb club Thu 11 Feb 2027 → Fri 18 Dec 2026 (not Thu 24 Dec).
+    expect(goNoGoDate("2027-02-11")).toBe("2026-12-18");
+    expect(goNoGoDate("2027-02-19")).toBe("2026-12-18"); // would be Fri 1 Jan
+    expect(goNoGoDate("2027-02-10")).toBe("2026-12-23"); // Wed 23 Dec is outside the window, kept
   });
 });
 
