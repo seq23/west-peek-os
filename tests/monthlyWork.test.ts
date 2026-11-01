@@ -185,7 +185,8 @@ describe("the rebuild survives foreign keys from job_run", () => {
     const after = await t.db.prepare("SELECT COUNT(*) AS n FROM job_run").first<{ n: number }>();
     expect(after!.n).toBe(before!.n);
     const weekly = await t.db.prepare("SELECT day_of_week FROM scheduled_job WHERE job_key = 'productions_hire_search'").first<{ day_of_week: number }>();
-    expect(weekly?.day_of_week, "the WEEKLY row came through the rebuild intact").toBe(1);
+    // 0288 (1 Nov 2026) moved the hire search to Tuesday; the rebuild must carry that day through.
+    expect(weekly?.day_of_week, "the WEEKLY row came through the rebuild intact").toBe(2);
     // The WEEKLY CHECK is live on the rebuilt table.
     await expect(
       t.db.prepare("INSERT INTO scheduled_job (id, job_key, name, kind, schedule_kind, daily_at_utc, target_kind, created_by) VALUES ('sj_bad3','bad_weekly','x','EMPLOYEE_TASK','WEEKLY','14:00','SYSTEM','test')").run(),

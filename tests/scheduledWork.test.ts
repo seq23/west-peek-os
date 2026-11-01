@@ -33,6 +33,13 @@ describe("how often a job runs, in words", () => {
     // Until 0169 productions_monthly was DAILY_AT and the page said "Every day at 14:00 UTC" for a
     // job that opened nothing 29 days out of 30; deck_rebuild was DAILY_AT with the page hard-coding
     // "On request" by job key. Both are real schedule kinds now and the words come from the row.
+    // On her clock (0193 / 0288): the zone is said, never "UTC".
+    expect(cadenceInWords({ schedule_kind: "WEEKLY", interval_minutes: null, daily_at_utc: "09:00", day_of_week: 2, daily_at_tz: "America/Chicago" }))
+      .toBe("Every Tuesday at 09:00 Central");
+    expect(cadenceInWords({ schedule_kind: "DAILY_AT", interval_minutes: null, daily_at_utc: "11:15", daily_at_tz: "America/Chicago" }))
+      .toBe("Every day at 11:15 Central");
+    expect(cadenceInWords({ schedule_kind: "WEEKLY", interval_minutes: null, daily_at_utc: "14:00", day_of_week: 1 }))
+      .toBe("Every Monday at 14:00 UTC");
     expect(cadenceInWords({ schedule_kind: "MONTHLY", interval_minutes: null, daily_at_utc: "14:00", day_of_month: 1 }))
       .toBe("On the 1st of every month at 14:00 UTC");
     expect(cadenceInWords({ schedule_kind: "MONTHLY", interval_minutes: null, daily_at_utc: "09:30", day_of_month: 22 }))

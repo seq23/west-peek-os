@@ -159,7 +159,11 @@ describe("Wynn's ten a week, nearest club first", () => {
     expect(out.prospects.promoted).toHaveLength(3);
     expect(out.drip.gate.open).toBe(false);
     expect(out.drip.held).toBe(3);
-    // Nothing to any brand. The only mail is Wynn's Monday roundup (31 Oct 2026), to Sequoia alone.
+    // 08:00 Central is the brand batch's minute: nothing goes to anyone yet, not even the roundup,
+    // which waits for 08:30 Central (schedule rebalance, 1 Nov 2026).
+    expect(sends).toEqual([]);
+    // The first pass from 08:30 Central sends the only mail: Wynn's Monday roundup, to Sequoia alone.
+    await runDripPass(env, new Date(MONDAY.getTime() + 30 * 60_000));
     expect(sends.filter((s) => s.to !== SEQUOIA)).toEqual([]);
     expect(sends.map((s) => s.to)).toEqual([SEQUOIA]);
     expect(sends[0]!.subject).toMatch(/TLC roundup/);

@@ -60,6 +60,9 @@ function req(path: string, headers: Record<string, string>, method = "GET", body
 
 const MON_W39 = new Date("2026-09-21T14:00:30.000Z");
 const MON_W40 = new Date("2026-09-28T14:00:30.000Z");
+// The hire search runs Tuesdays 09:00 Central (0288, schedule rebalance 1 Nov 2026): 09:00 CDT is 14:00Z.
+const TUE_W39 = new Date("2026-09-22T14:00:30.000Z");
+const TUE_W40 = new Date("2026-09-29T14:00:30.000Z");
 
 const searchJson = JSON.stringify({
   results: [
@@ -128,12 +131,12 @@ describe("WEEKLY is a real schedule kind", () => {
     expect(isoWeekOf(new Date("2026-09-16T12:00:00.000Z"))).toBe("2026-W38");
   });
 
-  it("0172 seeded productions_hire_search WEEKLY on Monday at 14:00, ACTIVE, due on a Monday", async () => {
-    const row = await t.db.prepare("SELECT schedule_kind, day_of_week, daily_at_utc, next_run_at, status, target_id, created_at FROM scheduled_job WHERE job_key = 'productions_hire_search'")
-      .first<{ schedule_kind: string; day_of_week: number; daily_at_utc: string; next_run_at: string; status: string; target_id: string; created_at: string }>();
-    expect(row).toMatchObject({ schedule_kind: "WEEKLY", day_of_week: 1, daily_at_utc: "14:00", status: "ACTIVE", target_id: "aie_walker" });
-    expect(row!.next_run_at).toMatch(/T14:00:00\.000Z$/);
-    expect(new Date(row!.next_run_at).getUTCDay(), "a Monday").toBe(1);
+  it("0172 seeded productions_hire_search WEEKLY; 0288 moved it to Tuesday 09:00 on her clock (America/Chicago), ACTIVE, due on a Tuesday", async () => {
+    const row = await t.db.prepare("SELECT schedule_kind, day_of_week, daily_at_utc, daily_at_tz, next_run_at, status, target_id, created_at FROM scheduled_job WHERE job_key = 'productions_hire_search'")
+      .first<{ schedule_kind: string; day_of_week: number; daily_at_utc: string; daily_at_tz: string; next_run_at: string; status: string; target_id: string; created_at: string }>();
+    expect(row).toMatchObject({ schedule_kind: "WEEKLY", day_of_week: 2, daily_at_utc: "09:00", daily_at_tz: "America/Chicago", status: "ACTIVE", target_id: "aie_walker" });
+    expect(row!.next_run_at).toMatch(/T15:00:00\.000Z$/); // 09:00 CST, the migration's winter literal
+    expect(new Date(row!.next_run_at).getUTCDay(), "a Tuesday").toBe(2);
     // Measured from when the migration ran (created_at), not from the wall clock: the test DB is a
     // copy of a migrated template cached by migration hash, so a template built last week seeded
     // last week's "next Monday" correctly, and a wall-clock comparison failed every Monday after
@@ -162,13 +165,13 @@ describe("WEEKLY is a real schedule kind", () => {
   });
 
   it("a second cron tick in the same week replays; Run it now mints a fresh key; next week is new", async () => {
-    const ran = await runJob(env, MP_ACTOR, "productions_hire_search", { trigger: "SCHEDULED", now: MON_W39 });
+    const ran = await runJob(env, MP_ACTOR, "productions_hire_search", { trigger: "SCHEDULED", now: TUE_W39 });
     expect(ran.replayed).toBe(false);
     expect(ran.run.status, String(ran.run.outcome_summary)).toBe("SUCCEEDED");
     expect(String(ran.run.idempotency_key)).toBe("productions_hire_search:2026-W39");
     expect(String(ran.run.outcome_summary)).toMatch(/Opened "Walker: West Peek Productions hire search \(2026-W39\)" on Walker's desk/);
     const after = await t.db.prepare("SELECT next_run_at FROM scheduled_job WHERE job_key = 'productions_hire_search'").first<{ next_run_at: string }>();
-    expect(after!.next_run_at).toBe("2026-09-28T14:00:00.000Z");
+    expect(after!.next_run_at).toBe("2026-09-29T14:00:00.000Z");
 
     // The same week, days later, with the clock wrongly put back: still one occurrence.
     await t.db.prepare("UPDATE scheduled_job SET next_run_at = ?1 WHERE job_key = 'productions_hire_search'").bind("2026-09-24T00:00:00.000Z").run();
@@ -177,7 +180,7 @@ describe("WEEKLY is a real schedule kind", () => {
     const runs = await t.db.prepare("SELECT COUNT(*) AS n FROM job_run WHERE job_id = 'sjb_productions_hire_search' AND trigger_kind = 'SCHEDULED'").first<{ n: number }>();
     expect(runs!.n).toBe(1);
     const repaired = await t.db.prepare("SELECT next_run_at FROM scheduled_job WHERE job_key = 'productions_hire_search'").first<{ next_run_at: string }>();
-    expect(repaired!.next_run_at).toBe("2026-09-28T14:00:00.000Z");
+    expect(repaired!.next_run_at).toBe("2026-09-29T14:00:00.000Z");
 
     // A person asking gets a fresh occurrence, same week; the card is week-unique so nothing new opens.
     const byHand = await runJob(env, MP_ACTOR, "productions_hire_search", { trigger: "MANUAL", now: new Date("2026-09-24T14:06:00.000Z") });
@@ -187,8 +190,8 @@ describe("WEEKLY is a real schedule kind", () => {
     const cards = await t.db.prepare("SELECT COUNT(*) AS n FROM work_card WHERE kind = 'PRODUCTIONS_HIRE_SEARCH' AND state != 'CANCELLED'").first<{ n: number }>();
     expect(cards!.n).toBe(1);
 
-    // Next Monday is a new occurrence and a new card.
-    const next = await runJob(env, MP_ACTOR, "productions_hire_search", { trigger: "SCHEDULED", now: MON_W40 });
+    // Next Tuesday is a new occurrence and a new card.
+    const next = await runJob(env, MP_ACTOR, "productions_hire_search", { trigger: "SCHEDULED", now: TUE_W40 });
     expect(next.replayed).toBe(false);
     expect(String(next.run.idempotency_key)).toBe("productions_hire_search:2026-W40");
     expect(String(next.run.outcome_summary)).toMatch(/\(2026-W40\)/);

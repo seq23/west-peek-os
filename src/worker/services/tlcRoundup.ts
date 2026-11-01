@@ -5,9 +5,10 @@ import { committedCashUsd } from "./tlcVolume";
 import { COMMITTED_STAGES, dayWords, goNoGoOf } from "../../shared/tlc/goNoGo";
 import { brandDisplayName, goalOf, monthWords } from "../../shared/tlc/learningClub";
 import { isoWeekOf } from "./jobs";
+import { wallClockIn } from "../../shared/time/zonedClock";
 
 /**
- * WYNN'S MONDAY ROUNDUP (owner's ask, 31 Oct 2026). One email a week, Monday from ROUNDUP_HOUR_UTC, to Sequoia only
+ * WYNN'S MONDAY ROUNDUP (owner's ask, 31 Oct 2026). One email a week, Monday from ROUNDUP_LOCAL (08:30 Central), to Sequoia only
  * (`emailOwner` sends to TLC_RECIPIENTS and nobody else — never Scooter). Calm and in plain words, what needs her first:
  *   1 · what is waiting on her, with the count and the approval email it is in;
  *   2 · anything stuck, and any club dropped at its go/no-go date or close to it;
@@ -16,7 +17,19 @@ import { isoWeekOf } from "./jobs";
  * A brand that asked for the teaser PDF is said as exactly that, never "said yes" (owner, 31 Oct 2026, Pinecone).
  * Nothing in it is a decision; she answers drafts in the approval email.
  */
-export const ROUNDUP_HOUR_UTC = 14;
+/**
+ * When the roundup may go: Monday from 08:30 on her clock (schedule rebalance approved 1 Nov 2026 — half an
+ * hour after Wynn's 08:00 brand batch, which shared its minute before). On the Chicago wall clock, so the
+ * clocks changing never moves it; the bare 14:00 UTC it replaced was 09:00 in summer and 08:00 in winter.
+ */
+export const ROUNDUP_LOCAL = { tz: "America/Chicago", weekday: 1, hour: 8, minute: 30 } as const;
+
+/** Whether `now` is Monday at or after 08:30 in Chicago. Pure. */
+export function roundupDue(now: Date): boolean {
+  const w = wallClockIn(ROUNDUP_LOCAL.tz, now);
+  const weekday = new Date(Date.UTC(w.year, w.month - 1, w.day)).getUTCDay();
+  return weekday === ROUNDUP_LOCAL.weekday && w.hour * 60 + w.minute >= ROUNDUP_LOCAL.hour * 60 + ROUNDUP_LOCAL.minute;
+}
 /** The brief's target: about 35 brands emailed per club over its selling window. */
 export const TLC_EMAILED_TARGET = 35;
 /** Her pace: five new brands per club per week (24 Oct 2026). */
@@ -130,7 +143,7 @@ export async function buildRoundup(env: Env, now: Date, firmScope = "west-peek")
 
 /** Monday's roundup, once per ISO week, from the drip pass. Returns what it did. */
 export async function sendWeeklyRoundup(env: Env, now: Date, firmScope = "west-peek", opts: { force?: boolean } = {}): Promise<string> {
-  if (!opts.force && (now.getUTCDay() !== 1 || now.getUTCHours() < ROUNDUP_HOUR_UTC)) return "not Monday morning yet";
+  if (!opts.force && !roundupDue(now)) return "not Monday morning yet";
   const week = isoWeekOf(now);
   const claim = await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO tlc_roundup (week, firm_scope, sent_at) VALUES (?1, ?2, ?3)").bind(week, firmScope, now.toISOString()).run();
   if ((claim.meta?.changes ?? 0) === 0) return `this week's roundup (${week}) already went`;

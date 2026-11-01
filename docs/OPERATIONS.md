@@ -23,6 +23,14 @@ rulings) are not kept here: they live in the West Peek Ventures company brain in
   `job.job_key === "…"` branch in `services/jobs.ts` that opens the period's card (title-unique per
   week or month); the sweep works the card. Seed it with `INSERT … SELECT … WHERE NOT EXISTS`
   (`tests/seededJobs.test.ts`) and describe it in `JOB_FACTS` (`src/shared/work/scheduledWork.ts`).
+- **A duty on her clock.** A `scheduled_job` row with `daily_at_tz = 'America/Chicago'` reads
+  `daily_at_utc` as a Chicago wall clock (and `day_of_week` as the Chicago weekday), so the clock
+  change never moves it (`computeNextRun` → `nextInZone`, 0193). Use it for anything she chose by her
+  clock; a bare UTC hour is 08:00 in winter and 09:00 in summer.
+- **The Monday/Tuesday schedule (rebalanced 1 Nov 2026, migration 0288):** Wynn's TLC brand batch
+  Monday 08:00 Central; Wynn's Monday roundup from 08:30 Central (`ROUNDUP_LOCAL` in
+  `services/tlcRoundup.ts`, sent by the first drip tick after it); Walker's West Peek Productions hire
+  search Tuesday 09:00 Central. All three on the Chicago clock.
 - **Retiring an employee** is removing them from `src/shared/registry/aiEmployees.ts`, changing
   `EXPECTED_ROSTER_SIZE`, and running `node scripts/seed/generate-ai-employee-seed.mjs`, which
   writes the `NNNN_ai_employee_retire.sql` migration. Rows are set RETIRED, never deleted.
