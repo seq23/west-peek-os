@@ -433,7 +433,21 @@ async function rememberQuality(env: Env, state: { qualityNotes?: string[] }, run
   if (note && !(state.qualityNotes ?? []).includes(note)) state.qualityNotes = [...(state.qualityNotes ?? []), note];
 }
 
-async function defaultSynthesise(env: Env, actor: Actor, purpose: string, prompt: string, expectedOutputTokens: number): Promise<{ text: string; aiRunId: string | null }> {
+/**
+ * The parser's own answer to "can I read this?", handed to the router as its verifier.
+ *
+ * WHY (1 Nov 2026, Parker's December Room): a free lane answered the packet prompt with 2,074
+ * tokens of JSON cut off mid-string. The router recorded it COMPLETED, the stage parsed it, failed,
+ * and the whole sweep attempt was spent — "Attempt 2 of 3 did not get anywhere" — while the Claude
+ * seat stood one rung down the same chain. With the parser as the verifier, a reply the stage cannot
+ * read is `verifier_rejected:` inside the walk and the NEXT lane answers in the same attempt.
+ */
+export type ReplyVerifier = (text: string) => string | null;
+export function readableBy(parse: (text: string) => unknown, what: string): ReplyVerifier {
+  return (text) => (parse(text) ? null : `the reply could not be read as ${what} (cut off, malformed, or missing required fields)`);
+}
+
+async function defaultSynthesise(env: Env, actor: Actor, purpose: string, prompt: string, expectedOutputTokens: number, verify?: ReplyVerifier): Promise<{ text: string; aiRunId: string | null }> {
   const { run } = await runAi(env, {
     purpose,
     actor,
@@ -444,6 +458,7 @@ async function defaultSynthesise(env: Env, actor: Actor, purpose: string, prompt
     // The packet Sequoia forwards to Scooter. Not the place a cost posture economises.
     budgetContext: { expectedOutputTokens, providerKey: "openrouter", judgement: true, seatFirst: true },
     routing: { category: "INTELLIGENCE" },
+    ...(verify ? { verify } : {}),
   });
   if (run.status !== "COMPLETED" || !run.output_text) {
     throw new RoomPacketError(502, "synthesis_failed", run.failure_reason ?? `run ${run.status}`);
@@ -662,8 +677,8 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
   const research: ResearchSearch = (e, a, prompt) => rawResearch(e, a, withSteer(prompt));
   const check = deps.urlCheck ?? ((u: string) => urlStatus(u));
   const pageText = deps.pageText ?? ((u: string) => pageTextOf(u));
-  const synth = (purpose: string, prompt: string, tokens: number) =>
-    deps.synthesise ? deps.synthesise(withSteer(prompt)) : defaultSynthesise(env, actor, purpose, withSteer(prompt), tokens);
+  const synth = (purpose: string, prompt: string, tokens: number, verify?: ReplyVerifier) =>
+    deps.synthesise ? deps.synthesise(withSteer(prompt)) : defaultSynthesise(env, actor, purpose, withSteer(prompt), tokens, verify);
   const rawJudge = deps.judge ?? defaultJudge;
   const judge: Judge = (e, a, prompt) => rawJudge(e, a, withSteer(prompt));
   const stage: BuildStage = draft.build_stage === "QUEUED" ? "DISCOVER" : draft.build_stage;
@@ -781,7 +796,7 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
       // Marked at the moment the words are IN the prompt, which is the moment it is true. A steer
       // marked delivered by a build that then failed would be a steer silently dropped.
       if (roomSteer) await markDelivered(env, roomSteerRows.rows, draft.id);
-      const { text, aiRunId: conceptsRun } = await synth("Room packet: one topic, three angles", prompt, 3000);
+      const { text, aiRunId: conceptsRun } = await synth("Room packet: one topic, three angles", prompt, 3000, readableBy((t) => parseConcepts(t, roomSetBy === "PARTNERS" ? roomTopic : null), "three angles on the month's one topic"));
       await rememberQuality(env, state, conceptsRun);
       // A three-subject answer is REJECTED, not flagged: the stage fails, the sweep retries it, and
       // nothing with three subjects in it is ever stored.
@@ -825,7 +840,7 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
         inviteCheck: state.inviteCheck,
         guidance: await guidanceFor(env, firmScope),
       });
-      const { text, aiRunId } = await synth("Room packet proposal", prompt, 7000);
+      const { text, aiRunId } = await synth("Room packet proposal", prompt, 7000, readableBy(parsePacket, "a complete Room packet"));
       const parsed = parsePacket(text);
       if (!parsed) return await failStage("the proposal did not come back as a usable packet");
       const allowed = [...state.venueHits.map((h) => h.url), ...state.venueCitations].filter(Boolean);
@@ -963,7 +978,7 @@ async function runWorkshopStage(
   draft: PacketRow,
   stage: BuildStage,
   state: BuildState,
-  deps: { research: ResearchSearch; judge: Judge; synth: (purpose: string, prompt: string, tokens: number) => Promise<{ text: string; aiRunId: string | null }>; check: UrlCheck; render: RenderPdf; actor: Actor },
+  deps: { research: ResearchSearch; judge: Judge; synth: (purpose: string, prompt: string, tokens: number, verify?: ReplyVerifier) => Promise<{ text: string; aiRunId: string | null }>; check: UrlCheck; render: RenderPdf; actor: Actor },
 ): Promise<StageResult> {
   const firmScope = draft.firm_scope;
   const brief = parseBrief(draft.brief_json);
@@ -1046,7 +1061,7 @@ async function runWorkshopStage(
     const steer = steerRows.text;
     const prompt = buildWorkshopConceptsPrompt({ month: draft.proposed_for_month, topic, set, setBy, steer, brief, notes: state.workshopNotes, ran, guidance: await guidanceFor(env, firmScope) });
     if (steer) await markDelivered(env, steerRows.rows, draft.id);
-    const { text, aiRunId: conceptsRun } = await deps.synth("Workshop packet: one topic, three angles", prompt, 3000);
+    const { text, aiRunId: conceptsRun } = await deps.synth("Workshop packet: one topic, three angles", prompt, 3000, readableBy((t) => parseWorkshopConcepts(t, set ? topic : null), "three angles on the month's one topic"));
     await rememberQuality(env, state, conceptsRun);
     /*
      * A THREE-SUBJECT ANSWER IS REJECTED HERE, NOT ACCEPTED AND FLAGGED.
@@ -1076,7 +1091,7 @@ async function runWorkshopStage(
       concepts: state.concepts as WorkshopConcept[], choiceRationale: state.choiceRationale, pushback: state.pushback,
       guidance: await guidanceFor(env, firmScope),
     });
-    const { text, aiRunId } = await deps.synth("Workshop packet proposal", prompt, 6000);
+    const { text, aiRunId } = await deps.synth("Workshop packet proposal", prompt, 6000, readableBy((t) => parseWorkshopPacket(t, settled), "a complete Workshop packet"));
     const parsed = parseWorkshopPacket(text, settled);
     if (!parsed) return fail("the proposal did not come back as a usable Workshop packet");
     const verified = verifyWorkshopPacket(parsed, state.workshopNotes.map((n) => n.url), text);

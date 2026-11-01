@@ -1114,11 +1114,44 @@ function jsonBody(raw: string): Record<string, unknown> | null {
   const start = body.indexOf("{");
   const end = body.lastIndexOf("}");
   if (start === -1 || end <= start) return null;
+  const slice = body.slice(start, end + 1);
   try {
-    return JSON.parse(body.slice(start, end + 1)) as Record<string, unknown>;
+    return JSON.parse(slice) as Record<string, unknown>;
   } catch {
-    return null;
+    // A model that writes a real line break inside a string ("(30 min)<newline>Sequoia greets…") is
+    // not JSON, but nothing in it is ambiguous: escape the raw control characters that sit INSIDE
+    // strings and read it again. Structure is never guessed at — a reply cut off mid-object still
+    // fails, and the router's verifier walks to the next lane.
+    try {
+      return JSON.parse(escapeRawControlCharsInStrings(slice)) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
   }
+}
+
+/** Escapes raw newline, CR, tab (and other C0 controls) only where they sit inside a JSON string. */
+export function escapeRawControlCharsInStrings(json: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (const ch of json) {
+    if (inString) {
+      if (escaped) { escaped = false; out += ch; continue; }
+      if (ch === "\\") { escaped = true; out += ch; continue; }
+      if (ch === '"') { inString = false; out += ch; continue; }
+      const code = ch.charCodeAt(0);
+      if (code < 0x20) {
+        out += ch === "\n" ? "\\n" : ch === "\r" ? "\\r" : ch === "\t" ? "\\t" : `\\u${code.toString(16).padStart(4, "0")}`;
+        continue;
+      }
+      out += ch;
+    } else {
+      if (ch === '"') inString = true;
+      out += ch;
+    }
+  }
+  return out;
 }
 
 function normaliseUrl(url: string): string {
