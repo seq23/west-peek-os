@@ -109,7 +109,10 @@ describe("bios and outward-facing capability", () => {
     // towards thirty-one is exactly the failure this guards.
     // NINETEEN since 22 Oct 2026: Wynn re-pointed from Sponsorship Scout to TLC Sales &
     // Partnerships (migration 0259) — a retired seat brought back, not a seat invented.
-    expect(AI_EMPLOYEE_ROSTER).toHaveLength(19);
+    // EIGHTEEN since 31 Oct 2026: Pippa (Communications) retired by migration 0286 — no card, job
+    // or route had used her in production. Asserted absent below, exactly like Piper.
+    expect(AI_EMPLOYEE_ROSTER).toHaveLength(18);
+    expect(AI_EMPLOYEE_ROSTER.some((e) => e.name === "Pippa")).toBe(false);
     expect(AI_EMPLOYEE_ROSTER.find((e) => e.name === "Wynn")?.role).toBe("TLC Sales & Partnerships");
     // The merged seat is gone from the REGISTRY and only from there. Her database row is RETIRED
     // by migration 0126 rather than deleted, because ai_run attribution and meeting seating point
@@ -119,7 +122,7 @@ describe("bios and outward-facing capability", () => {
     const layers = new Set(AI_EMPLOYEE_ROSTER.map((e) => e.layer));
     expect(layers.size).toBeGreaterThanOrEqual(4);
     const roles = AI_EMPLOYEE_ROSTER.map((e) => e.role).join(" ").toLowerCase();
-    for (const discipline of ["chief of staff", "compliance", "investment", "analyst", "lp", "portfolio", "finance", "communications", "operations", "professor", "ux design"]) {
+    for (const discipline of ["chief of staff", "compliance", "investment", "analyst", "lp", "portfolio", "finance", "operations", "professor", "ux design"]) {
       expect(roles, `nobody covers ${discipline}`).toContain(discipline);
     }
   });

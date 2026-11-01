@@ -79,6 +79,12 @@ Parent authorities (IMMUTABLE — never modify, move, or rewrite):
 - The full numbered list of partner service rules, each tagged ALL-KINDS or REPO-ONLY with its code
   anchor, is `docs/PARTNER_SERVICE_RULES.md` (`validate:partner-service-rules`).
 
+## Operations
+
+How production actually behaves (the Mac's identity, the work sweep, scheduled duties, retiring an
+employee, the health board, site forms, test traps) is `docs/OPERATIONS.md`; deploying is
+`docs/DEPLOYING.md`. Repo how-tos go there; business facts go to the company brain in Boss OS.
+
 ## Commands
 
 - `npm run typecheck` — strict TS, must be green.

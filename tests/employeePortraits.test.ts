@@ -48,7 +48,7 @@ describe("employee portraits", () => {
     // never employed, which is dead weight in every build.
     const everEmployed = new Set([
       ...AI_EMPLOYEE_ROSTER.map((e) => e.name.toLowerCase()),
-      "paige", "penn", "perrin", "perry", "piper", "priya", "prue",
+      "paige", "penn", "perrin", "perry", "piper", "pippa", "priya", "prue",
       "wendy", "willa", "wilson", "winnie", "winton", "wynn",
     ]);
     expect(onDisk.filter((f) => !everEmployed.has(f))).toEqual([]);

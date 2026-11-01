@@ -27,6 +27,7 @@ most surprising behaviour in the codebase traces back to one of them.
 |---|---|
 | [ENVIRONMENTS.md](ENVIRONMENTS.md) | local / preview / production and how identity differs in each. |
 | [ENVIRONMENT_CONTRACT.md](ENVIRONMENT_CONTRACT.md) | Every binding and secret, and what it is for. |
+| [OPERATIONS.md](OPERATIONS.md) | How production behaves: the Mac's identity, the work sweep, scheduled duties, retiring an employee, the health board, site forms, test traps. |
 | [RECOVERY.md](RECOVERY.md) | Backup and restore. §6 is the production restore drill, proven against live data. |
 | [PROVIDER_READINESS_AUDIT.md](PROVIDER_READINESS_AUDIT.md) | Which AI providers are configured, and what is still gated. |
 

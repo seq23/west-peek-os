@@ -25,8 +25,11 @@ import { provisionLocalD1, queryLocalD1 } from "./support/provision";
 
 const MP = { "x-wpos-dev-user": "scooter@westpeek.ventures" };
 
-/** A seat no other spec drives, put back to unemployed so this journey has somebody to employ. */
-const SEAT = { id: "aie_pippa", name: "Pippa", machineKey: "marketing_pr_content" };
+/**
+ * A seat no other spec drives, put back to unemployed so this journey has somebody to employ.
+ * Percy since 31 Oct 2026: Pippa, who held this seat, is RETIRED (migration 0286) and off the roster.
+ */
+const SEAT = { id: "aie_percy", name: "Percy", machineKey: "taste_layer" };
 
 test("a company pulling ahead becomes a follow-on candidate, a review, and a partner's decision", async ({
   page,

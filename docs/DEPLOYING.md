@@ -88,6 +88,9 @@ Two failures recur and are transient. A straight retry has always cleared them:
   real error; it usually reports `No migrations to apply!` and the next deploy proceeds.
 - **Asset upload stalls or errors mid-way.** Retry.
 
+One failure looks transient and is not: **error 7403** reads like a permissions problem, but it is a
+missing `CLOUDFLARE_ACCOUNT_ID` in the deploy's environment. Set it; a retry will not clear it.
+
 One caution when diagnosing: piping a validator or a deploy through `tail` replaces its exit code
 with `tail`'s, so a `&&` chain sails straight past a failure. A red check was shipped this way once.
 Check the output, not just the absence of a stack trace.
