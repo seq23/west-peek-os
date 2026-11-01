@@ -102,8 +102,11 @@ describe("the rules, as pure functions", () => {
     expect(weekStartUtc(new Date("2026-11-12T23:00:00.000Z"))).toBe("2026-11-09T00:00:00.000Z");
     expect(weekStartUtc(new Date("2026-11-09T00:00:00.000Z"))).toBe("2026-11-09T00:00:00.000Z");
     expect(TLC_NEW_BRANDS_PER_EVENT_WEEK).toBe(10);
+    // A brand that asked for the teaser PDF has not signed on (owner, 31 Oct 2026): counted apart, never as a yes.
+    expect(progressLine({ club: "January 2027", topic: "The Longevity Reset", committedUsd: 0, goalUsd: 25_000, pitched: 2, replied: 1, yes: 0, teaser: 1, ready: 0, stopped: false }))
+      .toBe("January 2027 (The Longevity Reset): $0 agreed of $25,000. 2 pitched, 1 replied, 1 asked for the teaser, 0 signed on. 0 more brands ready to pitch.");
     expect(progressLine({ club: "January 2027", topic: "The Longevity Reset", committedUsd: 15_000, goalUsd: 25_000, pitched: 12, replied: 3, yes: 1, ready: 20, stopped: false }))
-      .toBe("January 2027 (The Longevity Reset): $15,000 agreed of $25,000. 12 pitched, 3 replied, 1 said yes. 20 more brands ready to pitch.");
+      .toBe("January 2027 (The Longevity Reset): $15,000 agreed of $25,000. 12 pitched, 3 replied, 0 asked for the teaser, 1 signed on. 20 more brands ready to pitch.");
   });
 
   it("the daily send cap is the warm-up cap, unchanged: 5 a day in week one, then 10, 20, 30", () => {
@@ -156,7 +159,10 @@ describe("Wynn's ten a week, nearest club first", () => {
     expect(out.prospects.promoted).toHaveLength(3);
     expect(out.drip.gate.open).toBe(false);
     expect(out.drip.held).toBe(3);
-    expect(sends).toEqual([]);
+    // Nothing to any brand. The only mail is Wynn's Monday roundup (31 Oct 2026), to Sequoia alone.
+    expect(sends.filter((s) => s.to !== SEQUOIA)).toEqual([]);
+    expect(sends.map((s) => s.to)).toEqual([SEQUOIA]);
+    expect(sends[0]!.subject).toMatch(/TLC roundup/);
   });
 });
 
@@ -322,7 +328,7 @@ describe("stop at $25,000", () => {
     expect(out.newDrafts.map((d) => d.brand)).toEqual(["Feb More"]);
     expect(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_drip_message m JOIN tlc_deal d ON d.id = m.deal_id WHERE d.event_id = 'tlc_2027-01'").first()).toBeNull();
     // Wynn's own weekly search skips the club too.
-    expect((await clubProgress(env, "west-peek", MONDAY))[0]).toBe("January 2027 (The Longevity Reset): $25,000 agreed of $25,000. 3 pitched, 0 replied, 2 said yes. Goal reached, so new pitches for this club have stopped.");
+    expect((await clubProgress(env, "west-peek", MONDAY))[0]).toBe("January 2027 (The Longevity Reset): $25,000 agreed of $25,000. 3 pitched, 0 replied, 0 asked for the teaser, 2 signed on. Goal reached, so new pitches for this club have stopped.");
   });
 
   it("an email already approved for a club that then reaches its goal is held, not sent; a product partner never counts toward the goal", async () => {
@@ -359,9 +365,9 @@ describe("the one weekly email says where each club stands", () => {
     expect(notices).toHaveLength(1);
     const lines = await clubProgress(env, "west-peek", MONDAY);
     expect(lines).toEqual([
-      "January 2027 (The Longevity Reset): $5,000 agreed of $25,000. 3 pitched, 2 replied, 1 said yes. 2 more brands ready to pitch.",
-      "February 2027 (Fragrance Lab): $0 agreed of $25,000. 0 pitched, 0 replied, 0 said yes. 0 more brands ready to pitch.",
-      "March 2027 (Build Your Own AI Agent): $0 agreed of $25,000. 0 pitched, 0 replied, 0 said yes. 0 more brands ready to pitch.",
+      "January 2027 (The Longevity Reset): $5,000 agreed of $25,000. 3 pitched, 2 replied, 0 asked for the teaser, 1 signed on. 2 more brands ready to pitch.",
+      "February 2027 (Fragrance Lab): $0 agreed of $25,000. 0 pitched, 0 replied, 0 asked for the teaser, 0 signed on. 0 more brands ready to pitch.",
+      "March 2027 (Build Your Own AI Agent): $0 agreed of $25,000. 0 pitched, 0 replied, 0 asked for the teaser, 0 signed on. 0 more brands ready to pitch.",
     ]);
     // The lines are in the one email she gets, under their own heading, above the drafts.
     expect(notices[0]!.text).toContain("Where each club stands");

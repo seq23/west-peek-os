@@ -215,10 +215,12 @@ export async function handleMustPitch(
     }
     // NO ADDRESS PASSED: a "Needs a way in" item, never a silent drop.
     const pages = [...new Set([...(f?.pages_checked ?? []), source].map((p) => p.trim()).filter(isUrl))].slice(0, 8);
+    // The address Wynn found but could not see on the page is kept for the NeverBounce fallback (`wayInFallback`).
+    const foundEmail = CONTACT_EMAIL_RE.test(email) ? email : null;
     if (!way) {
       await env.WP_OS_DB.prepare(
-        "INSERT INTO tlc_way_in (brand_key, brand, firm_scope, state, months_json, pages_checked_json, why, opened_at, checked_at, changed_at) VALUES (?1, ?2, ?3, 'OPEN', ?4, ?5, ?6, ?7, ?7, ?7)",
-      ).bind(g.key, g.brand, firmScope, JSON.stringify(months), JSON.stringify(pages), why, at).run();
+        "INSERT INTO tlc_way_in (brand_key, brand, firm_scope, state, months_json, pages_checked_json, why, opened_at, checked_at, changed_at, found_email) VALUES (?1, ?2, ?3, 'OPEN', ?4, ?5, ?6, ?7, ?7, ?7, ?8)",
+      ).bind(g.key, g.brand, firmScope, JSON.stringify(months), JSON.stringify(pages), why, at, foundEmail).run();
       await log(env, { brand: g.brand, month: months.join(","), action: "NO_ADDRESS", by: "Wynn", at, detail: why, firmScope });
       changed += 1;
     } else {
@@ -226,14 +228,94 @@ export async function handleMustPitch(
       // closed and is open again) — a new list of pages Wynn happened to look at is not news.
       const moved = way.state !== "OPEN" || JSON.stringify(parseList(way.months_json).sort()) !== JSON.stringify(months);
       await env.WP_OS_DB.prepare(
-        `UPDATE tlc_way_in SET state = 'OPEN', months_json = ?3, pages_checked_json = ?4, why = ?5, checked_at = ?6${moved ? ", changed_at = ?6" : ""} WHERE firm_scope = ?1 AND brand_key = ?2`,
-      ).bind(firmScope, g.key, JSON.stringify(months), JSON.stringify(pages), why, at).run();
+        `UPDATE tlc_way_in SET state = 'OPEN', months_json = ?3, pages_checked_json = ?4, why = ?5, checked_at = ?6, found_email = COALESCE(?7, found_email)${moved ? ", changed_at = ?6" : ""} WHERE firm_scope = ?1 AND brand_key = ?2`,
+      ).bind(firmScope, g.key, JSON.stringify(months), JSON.stringify(pages), why, at, foundEmail).run();
       if (moved) changed += 1;
       if (moved) await log(env, { brand: g.brand, month: months.join(","), action: "NO_ADDRESS", by: "Wynn", at, detail: why, firmScope });
     }
     wayIn.push(wayInWords({ brand: g.brand, months, pages }));
   }
   return { queued, wayIn, changed };
+}
+
+/*
+ * A MUST-PITCH BRAND NEVER WAITS ON HER FOR AN ADDRESS (31 Oct 2026). Seven of her nine brands sat as "Needs a way in"
+ * from 24 Oct: the brand sites would not answer the page check, or the address Wynn found was not printed on the page
+ * it named, and the only way forward was her typing a contact in. Now, once a week per brand, each open item is put
+ * through NeverBounce: first the address Wynn found, then the usual partnerships / events / marketing inboxes on the
+ * brand's own domains (the pages checked, and brand.com). The first one NeverBounce calls VALID (never catch-all or
+ * unknown) queues the brand through `queueDeal`, the one insert, so the drip drafts email 1 for her approval like any
+ * other. None valid: the item stays open and is tried again next week. At most WAY_IN_CHECKS paid checks per brand a week.
+ */
+export const WAY_IN_PREFIXES = ["partnerships", "partners", "events", "sponsorships", "marketing", "hello"] as const;
+export const WAY_IN_CHECKS = 6;
+const NOT_A_BRAND_HOST = /(^|\.)(greenhouse\.io|lever\.co|linkedin\.com|prnewswire\.com|prweb\.com|businesswire\.com|instagram\.com|facebook\.com|x\.com|twitter\.com|youtube\.com|tiktok\.com|medium\.com|substack\.com|myshopify\.com|wikipedia\.org|crunchbase\.com)$/i;
+
+/** The addresses to try for one item, best first. */
+export function wayInCandidates(w: Pick<WayInRow, "brand" | "why" | "pages_checked_json"> & { found_email?: string | null }): string[] {
+  const out: string[] = [];
+  const add = (e: string | null | undefined) => {
+    const v = (e ?? "").trim().toLowerCase();
+    if (v && CONTACT_EMAIL_RE.test(v) && !out.includes(v)) out.push(v);
+  };
+  add(w.found_email);
+  add(/^(\S+@\S+) is not on /.exec(w.why ?? "")?.[1]);
+  const slug = brandKey(w.brand).replace(/\bco\.?$/, "co").replace(/[^a-z0-9]/g, "");
+  const hosts: string[] = [];
+  for (const u of parseList(w.pages_checked_json)) {
+    try {
+      const h = new URL(u).hostname.toLowerCase().replace(/^www\./, "");
+      if (!NOT_A_BRAND_HOST.test(h) && !hosts.includes(h)) hosts.push(h);
+    } catch { /* not a URL */ }
+  }
+  if (slug && !hosts.includes(`${slug}.com`)) hosts.push(`${slug}.com`);
+  for (const h of hosts.slice(0, 2)) for (const p of WAY_IN_PREFIXES) add(`${p}@${h}`);
+  return out;
+}
+
+export type AddressOk = (email: string, now: Date) => Promise<"valid" | "refused" | "wait">;
+const neverBounceOk: (env: Env) => AddressOk = (env) => async (email, now) => {
+  const { addressCleared } = await import("./tlcVolume");
+  const a = await addressCleared(env, email, now);
+  return a.ok ? "valid" : "refused" in a ? "refused" : "wait";
+};
+
+export async function wayInFallback(env: Env, now: Date, firmScope = "west-peek", addressOk: AddressOk = neverBounceOk(env)): Promise<{ queued: string[]; tried: string[] }> {
+  const weekAgo = new Date(now.getTime() - 7 * 86_400_000).toISOString();
+  const items = ((await env.WP_OS_DB.prepare("SELECT * FROM tlc_way_in WHERE firm_scope = ?1 AND state = 'OPEN' AND (fallback_checked_at IS NULL OR fallback_checked_at < ?2)").bind(firmScope, weekAgo).all<WayInRow & { found_email: string | null }>()).results ?? []);
+  const out = { queued: [] as string[], tried: [] as string[] };
+  if (items.length === 0) return out;
+  const events = ((await env.WP_OS_DB.prepare("SELECT id, month, event_date FROM tlc_event WHERE firm_scope = ?1 AND status IN ('TOPIC_READY','GO','ESCALATED') ORDER BY month").bind(firmScope).all<{ id: string; month: string; event_date: string }>()).results ?? [])
+    .filter((e) => Date.parse(e.event_date) > now.getTime());
+  if (events.length === 0) return out;
+  const existing = (await env.WP_OS_DB.prepare(`SELECT brand, event_id FROM tlc_deal WHERE event_id IN (${events.map(() => "?").join(",")})`).bind(...events.map((e) => e.id)).all<{ brand: string; event_id: string }>()).results ?? [];
+  const groups = await openGroups(env, events, existing, firmScope);
+  const at = now.toISOString();
+  for (const w of items) {
+    const g = groups.find((x) => x.key === w.brand_key);
+    if (!g) continue;
+    let hit: string | null = null;
+    let waited = false;
+    for (const email of wayInCandidates(w).slice(0, WAY_IN_CHECKS)) {
+      const r = await addressOk(email, now);
+      if (r === "wait") { waited = true; break; }
+      if (r === "valid") { hit = email; break; }
+    }
+    out.tried.push(w.brand);
+    if (waited && !hit) continue;
+    if (!hit) {
+      await env.WP_OS_DB.prepare("UPDATE tlc_way_in SET fallback_checked_at = ?3 WHERE firm_scope = ?1 AND brand_key = ?2").bind(firmScope, w.brand_key, at).run();
+      continue;
+    }
+    for (const ev of g.events) {
+      await queueDeal(env, { eventId: ev.id, brand: g.brand, category: null, contactName: null, contactEmail: hit, contactSourceUrl: `neverbounce-valid:${hit}`, whyFit: g.reasons.join(" ") || null, firmScope }, now);
+    }
+    await env.WP_OS_DB.prepare("UPDATE tlc_way_in SET state = 'FOUND', why = NULL, checked_at = ?3, changed_at = ?3, fallback_checked_at = ?3 WHERE firm_scope = ?1 AND brand_key = ?2").bind(firmScope, w.brand_key, at).run();
+    await log(env, { brand: g.brand, month: g.events.map((e) => e.month).sort().join(","), action: "FOUND", by: "Wynn", at, detail: `${hit}: NeverBounce says valid`, firmScope });
+    out.queued.push(`${g.brand} (${g.events.map((e) => e.month).sort().join(", ")})`);
+  }
+  if (out.queued.length) await appendEvent(env, { eventType: "tlc.way_in_fallback", actorType: "ai_employee", actorId: "aie_wynn", objectType: "tlc_way_in", objectId: out.queued.join(",").slice(0, 200), firmScope, payload: out });
+  return out;
 }
 
 /**

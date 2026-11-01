@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { saidNothing } from "./helpers/interpret";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
@@ -305,6 +305,10 @@ describe("the request door", () => {
      * assertion immediately below pins that saying NEITHER is refused rather than defaulted, which
      * is the behaviour the old version of this test was silently relying on.
      */
+    // THE CLOCK IS PINNED (31 Oct 2026): "beyond the month being delivered" is read off today's date, so on 1 Nov the
+    // real clock made December the month being delivered and this test went red with no commit behind it.
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-20T12:00:00.000Z") });
+    try {
     const countDecember = async (): Promise<number> =>
       (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM evt_room_packet WHERE proposed_for_month = '2026-12'").first<{ n: number }>())?.n ?? -1;
     const before = await countDecember();
@@ -333,6 +337,9 @@ describe("the request door", () => {
     expect(list.workshopSeries["2026-09"]).toBe(WORKSHOP_SERIES["2026-09"]);
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE kind = 'ROOM_PACKET' AND title LIKE '%2026%' AND title NOT LIKE '%September 2026 Workshop%'").run();
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE kind = 'ROOM_PACKET' AND title LIKE '%2027%'").run();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

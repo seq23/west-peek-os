@@ -565,6 +565,12 @@ describe("the Learning Club in the database", () => {
 
   it("the daily pass escalates a club short of the floor two weeks out, to Sequoia, once", async () => {
     const twoWeeks = new Date("2027-01-07T13:30:00.000Z"); // Jan club is the third Thursday, 21 Jan.
+    // GO / NO-GO (31 Oct 2026): a club still running 14 days out had a sponsor committed in writing by its go/no-go date,
+    // seven weeks out, or it was dropped then. One small agreed sponsor each keeps both clubs alive and short of the floor.
+    for (const m of ["2027-01", "2027-02"]) {
+      await env.WP_OS_DB.prepare("INSERT INTO tlc_deal (id, event_id, brand, contact_email, contact_source_url, stage, tier, cash_offer_usd, firm_scope) VALUES (?1, ?2, ?3, ?4, 'https://small.example/team', 'AGREED', 'PARTNER', 1000, 'west-peek')")
+        .bind(`tld_small_${m}`, `tlc_${m}`, `Small Co ${m}`, `pat@small${m.replace("-", "")}.example`).run();
+    }
     const out = await runTlcDaily(env, twoWeeks);
     expect(out.failures).toEqual([]);
     // February (the 18th) is 42 days out the same day: its pace check runs too, and nothing is agreed.

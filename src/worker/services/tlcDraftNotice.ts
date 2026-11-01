@@ -114,7 +114,9 @@ export async function sendDraftNotice(env: Env, now: Date, firmScope = "west-pee
   const card = await env.WP_OS_DB.prepare("SELECT id, state FROM work_card WHERE kind = 'TLC_BRAND_BATCH' AND firm_scope = ?1 AND state != 'CANCELLED' ORDER BY created_at DESC LIMIT 1").bind(firmScope).first<{ id: string; state: string }>();
   if (!card) return "no brand batch yet";
   if (!["DONE", "BLOCKED"].includes(card.state)) return "waiting for the week's batch to finish";
-  if (await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_draft_notice WHERE batch_card_id = ?1").bind(card.id).first()) return "this week's email already went";
+  if (await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_draft_notice WHERE batch_card_id = ?1").bind(card.id).first()) {
+    return (await sendCatchUpNotice(env, now, firmScope)) ?? "this week's email already went";
+  }
   const all = await pendingDrafts(env, firmScope);
   const short = await shortClubs(env, card.id, firmScope, now);
   // WHERE EACH CLUB STANDS (owner, 26 Oct 2026): agreed cash against the $25,000 goal, and pitched / replied / yes.
@@ -149,6 +151,65 @@ export async function sendDraftNotice(env: Env, now: Date, firmScope = "west-pee
   await env.WP_OS_DB.prepare("INSERT INTO tlc_draft_notice (ref, items_json, firm_scope, batch_card_id, root_ref) VALUES (?1, ?2, ?3, ?4, ?1)").bind(ref, JSON.stringify(items), firmScope, card.id).run();
   for (const it of items) if (it.kind !== "pitch") await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET notice_ref = ?2 WHERE id = ?1").bind(it.message_id, ref).run();
   return `this week's email ${ref} listing ${all.length} draft(s)${short.length ? `, ${short.length} club(s) short` : ""} sent to ${sent.join(", ")}`;
+}
+
+/*
+ * NO DRAFT IS LEFT OUT OF HER EMAIL (31 Oct 2026). The weekly email went the moment the week's batch card finished
+ * (TLC-VXMXGG, 26 Oct 15:42, 5 drafts) and was keyed to that card, so everything drafted after it was in no email at
+ * all: 23 first emails from Parker's list promoted at 19:43 the same day, and the 6 follow-ups that fell due on 29–30
+ * Oct. They sat on Approvals for five days while she waited for the email her rule promises. Now, once the week's
+ * email has gone and the batch is finished, any draft that has waited STRANDED_HOURS without being in an email puts
+ * EVERY waiting draft (listed or not) in one email, under a new reference she answers the same way. At most one such
+ * email in CATCH_UP_GAP_HOURS, so it is still one list, never a ping per draft.
+ */
+export const STRANDED_HOURS = 24;
+export const CATCH_UP_GAP_HOURS = 24;
+
+/** Waiting drafts that are in no email she has had. */
+export async function unlistedDrafts(env: Env, firmScope: string): Promise<PendingDraft[]> {
+  const all = await pendingDrafts(env, firmScope);
+  const notices = (await env.WP_OS_DB.prepare("SELECT items_json FROM tlc_draft_notice WHERE firm_scope = ?1").bind(firmScope).all<{ items_json: string }>()).results ?? [];
+  const listedCards = new Set(notices.flatMap((n) => (JSON.parse(n.items_json) as NoticeItem[]).map((it) => it.card_id)));
+  return all.filter((d) => !listedCards.has(d.card_id));
+}
+
+async function sendCatchUpNotice(env: Env, now: Date, firmScope: string): Promise<string | null> {
+  const unlisted = await unlistedDrafts(env, firmScope);
+  if (unlisted.length === 0) return null;
+  const oldest = Math.min(...unlisted.map((d) => Date.parse(d.created_at)));
+  if (now.getTime() - oldest < STRANDED_HOURS * 3_600_000) return null;
+  const last = await env.WP_OS_DB.prepare("SELECT MAX(created_at) AS at FROM tlc_draft_notice WHERE firm_scope = ?1").bind(firmScope).first<{ at: string | null }>();
+  if (last?.at && now.getTime() - Date.parse(last.at) < CATCH_UP_GAP_HOURS * 3_600_000) return null;
+  const all = await pendingDrafts(env, firmScope);
+  const ref = mintRef();
+  const { items, sections, copy } = listOf(all);
+  const { clubProgress } = await import("./tlcVolume");
+  const progress = await clubProgress(env, firmScope, now);
+  const { emailOwner } = await import("./learningClub");
+  const sent = await emailOwner(env, {
+    employee: "Wynn",
+    email: {
+      what: `TLC: this week's brands, ${all.length} to approve · ${ref}`,
+      tldr: `${all.length} brand email${all.length === 1 ? " is" : "s are"} waiting for you, every club at once; ${unlisted.length} of them were not in an email yet. The full text of each is below. Nothing goes to a brand until you approve it.`,
+      tldrBullets: ['Reply "approve all"', 'Or "approve 1, 3" · "skip 2" · "change 2: what to change"'],
+      sections: [
+        ...(progress.length ? [{ label: "Where each club stands", bullets: progress }] : []),
+        ...sections,
+        { label: "Also on Approvals", bullets: ["Each draft is on the Approvals screen too, if you would rather decide there."] },
+      ],
+      details: [`Ref ${ref}`, "", copy].join("\n"),
+    },
+    objectType: "tlc_drip",
+    objectId: ref,
+    cardId: null,
+    cardKind: null,
+    firmScope,
+  }).catch(() => [] as string[]);
+  if (sent.length === 0) return `the catch-up email (${all.length} draft(s)) could not be sent; the next pass tries again`;
+  await env.WP_OS_DB.prepare("INSERT INTO tlc_draft_notice (ref, items_json, firm_scope, batch_card_id, root_ref) VALUES (?1, ?2, ?3, NULL, ?1)").bind(ref, JSON.stringify(items), firmScope).run();
+  for (const it of items) if (it.kind !== "pitch") await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET notice_ref = ?2 WHERE id = ?1").bind(it.message_id, ref).run();
+  await appendEvent(env, { eventType: "tlc.draft_notice_catch_up", actorType: "system", actorId: "tlc_drip", objectType: "tlc_draft_notice", objectId: ref, firmScope, payload: { listed: all.length, unlisted: unlisted.length } });
+  return `catch-up email ${ref} listing ${all.length} draft(s) (${unlisted.length} were in no email) sent to ${sent.join(", ")}`;
 }
 
 // ── Her reply ───────────────────────────────────────────────────────────────────────────────────

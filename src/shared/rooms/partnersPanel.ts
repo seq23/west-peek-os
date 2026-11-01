@@ -14,7 +14,7 @@
 import { TLC_TIERS, isTlcTier } from "../tlc/learningClub";
 
 export type PartnerStage = "SAID_YES" | "CALL" | "AGREED" | "PAID";
-export const PARTNER_STAGE_WORDS: Record<PartnerStage, string> = { SAID_YES: "said yes", CALL: "call", AGREED: "agreed", PAID: "paid" };
+export const PARTNER_STAGE_WORDS: Record<PartnerStage, string> = { SAID_YES: "asked for the teaser", CALL: "call", AGREED: "agreed", PAID: "paid" };
 export const NEW_YES_DAYS = 7;
 
 export interface TlcDealIn {
