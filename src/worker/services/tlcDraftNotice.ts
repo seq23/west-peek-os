@@ -30,12 +30,14 @@ interface NoticeItem { n: number; kind?: ItemKind; message_id: string; card_id: 
 interface PendingDraft {
   kind: ItemKind; message_id: string; card_id: string; subject: string; body: string; step: number; redraft_note: string | null; created_at: string;
   brand: string; contact_name: string | null; contact_email: string; why_fit: string | null; month: string; topic: string | null;
+  contact_source_url?: string | null; owner_angle?: string | null; nb_result?: string | null;
 }
 
 async function pendingDrafts(env: Env, firmScope: string): Promise<PendingDraft[]> {
   const drip = (await env.WP_OS_DB.prepare(
     `SELECT 'drip' AS kind, m.id AS message_id, m.approval_card_id AS card_id, m.subject, m.body, m.step, m.redraft_note, m.created_at,
-            d.brand, d.contact_name, d.contact_email, d.why_fit, e.month, e.topic
+            d.brand, d.contact_name, d.contact_email, d.why_fit, e.month, e.topic, d.contact_source_url, d.owner_angle,
+            (SELECT c.result FROM tlc_address_check c WHERE c.email = lower(d.contact_email)) AS nb_result
        FROM tlc_drip_message m JOIN tlc_deal d ON d.id = m.deal_id JOIN tlc_event e ON e.id = d.event_id
        JOIN approval_card a ON a.id = m.approval_card_id
       WHERE d.firm_scope = ?1 AND m.state = 'AWAITING_APPROVAL' AND a.state = 'pending_review'`,
@@ -56,6 +58,21 @@ function mintRef(): string {
   const abc = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const bytes = crypto.getRandomValues(new Uint8Array(6));
   return `TLC-${[...bytes].map((b) => abc[b % abc.length]).join("")}`;
+}
+
+/**
+ * AN ADDRESS SHE GAVE, SAID SO ON THE DRAFT (0284): it skipped the page check because it is hers, and NeverBounce's
+ * answer is stated plainly (a catch-all or unknown is still hers to use). Her angle is shown beside the draft.
+ */
+export function ownerContactLines(d: Pick<PendingDraft, "contact_source_url" | "owner_angle" | "nb_result" | "step">): string[] {
+  const out: string[] = [];
+  if ((d.contact_source_url ?? "").startsWith("owner-supplied")) {
+    const nb = d.nb_result;
+    const words = nb === "valid" ? "valid" : nb === "catchall" ? "accept-all (the domain takes any address, so it cannot confirm this one)" : nb === "unknown" ? "unknown (it could not tell)" : nb === "invalid" ? "INVALID (it says this mailbox does not exist; check the spelling before approving)" : nb ? nb : "not checked yet";
+    out.push(`Address: the one you gave Wynn yourself, so it is used as you gave it. NeverBounce: ${words}.`);
+  }
+  if (d.owner_angle && d.step === 0) out.push(`Your angle (from your email): ${d.owner_angle.length > 500 ? `${d.owner_angle.slice(0, 499)}…` : d.owner_angle}`);
+  return out;
 }
 
 /** The numbered list (bullets, by club) and the full copy of each draft (details). */
@@ -79,6 +96,7 @@ function listOf(all: readonly PendingDraft[]): { items: NoticeItem[]; sections: 
     `── ${i + 1} · ${d.brand} · ${monthWords(d.month)}${d.topic ? ` (${d.topic})` : ""} · ${d.kind === "pitch" ? "pitch email (they said yes)" : `email ${d.step + 1} of 4`} ──`,
     `To: ${d.contact_name ? `${d.contact_name} ` : ""}<${d.contact_email}>`,
     `Why this brand: ${d.why_fit ?? "on your must-pitch list"}`,
+    ...ownerContactLines(d),
     ...(d.redraft_note ? [`Redrafted for your note: ${d.redraft_note}`] : []),
     `Subject: ${d.subject}`,
     "",

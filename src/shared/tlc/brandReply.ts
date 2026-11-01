@@ -7,6 +7,7 @@
  * Pure: the worker stores, drafts and sends.
  */
 import { TLC_SAMPLES_OFFER, TLC_TIERS, TLC_TIER_KEYS, replyLooksLikeNo } from "./learningClub";
+import { namesAnAddress } from "./ownerInstruction";
 
 export const BRAND_REPLY_REF_RE = /\bTLR-[A-Z0-9]{6}\b/;
 export const BRAND_REPLY_ASK = "Reply approved to send, or reply with changes";
@@ -163,7 +164,9 @@ export function wantsResearch(note: string): boolean {
 const STANDING_CUE = /\b(?:don'?t|do not|never|always|no more|stop|avoid|from now on|going forward|in future|every time|lead with|make sure|i prefer)\b/i;
 export function standingRulesIn(note: string): string[] {
   const sentences = note.replace(/\s+/g, " ").split(/(?<=[.!?;])\s+|\s+-\s+/).map((x) => x.trim()).filter(Boolean);
-  return [...new Set(sentences.filter((x) => STANDING_CUE.test(x) && x.length >= 12 && x.length <= 400).map((x) => x.replace(/[;]$/, "")))];
+  // A sentence that hands Wynn an address is about THAT brand (services/tlcOwnerInstruction.ts applies it), never a
+  // rule for every brand: on 29 Oct 2026 "<address>.When pitching <name>'s partnership team, do not frame this…" became one.
+  return [...new Set(sentences.filter((x) => STANDING_CUE.test(x) && x.length >= 12 && x.length <= 400 && !namesAnAddress(x)).map((x) => x.replace(/[;]$/, "")))];
 }
 
 export interface ResearchReport { care: string[]; value: string[]; sources: Array<{ title: string; url: string }> }
