@@ -180,7 +180,7 @@ describe("the rules, pure", () => {
       // The opt-out is a soft, human P.S. on the first pitch (owner, 24 Oct 2026), its last line; her follow-up
       // template carries none (26 Oct 2026).
       if (steps.indexOf(m) === 0) {
-        expect(m.text.trimEnd().endsWith(TLC_PS_BY_STEP[0]!)).toBe(true);
+        expect(m.text.endsWith(`${TLC_PS_BY_STEP[0]!}\n\n3055 Lombard St #471024, San Francisco, CA 94147`)).toBe(true);
         expect(m.text).toMatch(/P\.S\. If (?:this|it) isn't a fit/);
       } else expect(m.text).not.toMatch(/P\.S\./);
       expect(m.text).not.toMatch(/unsubscribe/i);
@@ -198,7 +198,7 @@ describe("the rules, pure", () => {
     expect((first!.text.match(/\?/g) ?? []).length).toBe(1);
     // Email 2 is her ONE follow-up, word for word (shared/tlc/brandFlow.ts): it offers the three samples, built around
     // the brand; never a call, never a price, no P.S.
-    expect(second!.text).toMatch(/^Hi Jo,\n\nOne quick follow-up on The Learning Club\. Rather than describe it, I'd be happy to show you: a sample run of show for the evening, a sketch of what a series of six could look like, and a breakdown of the kind of people we'd have in the room, all built around Acme\. Just say the word and I'll send them over\.\n\nSequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures$/);
+    expect(second!.text).toMatch(/^Hi Jo,\n\nOne quick follow-up on The Learning Club\. Rather than describe it, I'd be happy to show you: a sample run of show for the evening, a sketch of what a series of six could look like, and a breakdown of the kind of people we'd have in the room, all built around Acme\. Just say the word and I'll send them over\.\n\nSequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures\n\n3055 Lombard St #471024, San Francisco, CA 94147$/);
     expect(second!.text).not.toMatch(/\bcall\b|\$|\bprice|\btier/i);
     expect(second!.text).not.toContain("Would you be open to exploring a partnership?");
   });
@@ -312,7 +312,7 @@ describe("the rules, pure", () => {
     expect(price).toMatch(/^Price: Title partner \$25,000: one brand funds the whole room, the club is "presented by" that brand, it is the only cash partner that night, and in-kind partners need its OK\. In January the Title partner is the primary route to \$25K\. Partner \$5,000/);
     // The room is sized per club, never a fixed 25 to 40.
     const what = m.TLC_PLAYBOOK.find((l) => l.startsWith("What we sell:"))!;
-    expect(what).toContain("a room sized to the partners' goals (25 to 100+ guests, set per club), each guest paid to be there");
+    expect(what).toContain("a room sized to the partners' goals (an email to a brand says rooms of 25+ guests; set per club), each guest paid to be there");
     expect(m.TLC_PLAYBOOK.join(" ")).not.toMatch(/25 to 40|25–40/);
     expect(m.TLC_PLAYBOOK.join(" ")).not.toContain("a room of 25 to 40 people");
     expect(m.TLC_PLAYBOOK.join(" ")).toMatch(/\$25,000 raised from sponsors, costs up to \$15,000, \$10,000 net/);
@@ -532,7 +532,7 @@ describe("the Learning Club in the database", () => {
     expect(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_pitch_followup").first()).toBeNull();
     const br = await env.WP_OS_DB.prepare("SELECT state, intent, their_text, draft_subject, draft_body FROM tlc_brand_reply").first<{ state: string; intent: string; their_text: string; draft_subject: string; draft_body: string }>();
     expect(br).toMatchObject({ state: "DRAFTED", intent: "QUESTION", their_text: "Sounds lovely, tell me more.", draft_subject: "Re: Leaf Co x a Matcha & Tea learning club" });
-    expect(br!.draft_body).toMatch(/Sequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures$/);
+    expect(br!.draft_body).toMatch(/Sequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures\n\n3055 Lombard St #471024, San Francisco, CA 94147$/);
     expect(br!.draft_body).not.toMatch(/\bP\.S\.|attached|PDF/);
   });
 

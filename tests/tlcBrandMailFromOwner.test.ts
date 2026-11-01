@@ -117,10 +117,10 @@ describe("in the database", () => {
       expect(m.card).toBe(card);
       expect(m.state).toBe("AWAITING_APPROVAL");
       const sent = JSON.parse(m.payload_json) as { subject: string; text: string };
-      // No brand qualifier anywhere (the template's own "(flexible to your goals)" is not one).
+      // No brand qualifier anywhere (the template's own "(sized to your goals)" is not one).
       for (const words of [m.subject, m.body, m.summary, sent.subject, sent.text]) {
         expect(words).not.toMatch(/\((?:Generation|questhealth\.com)\)/);
-        expect(words.replace(/\(flexible to your goals\)/g, "")).not.toMatch(/\(/);
+        expect(words.replace(/\(sized to your goals\)/g, "")).not.toMatch(/\(/);
       }
       expect(sent.subject).toBe(`${name} + a small room in New York`);
     }

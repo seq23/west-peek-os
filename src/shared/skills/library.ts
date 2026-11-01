@@ -1757,7 +1757,7 @@ export const SKILL_LIBRARY: readonly DepartmentSkills[] = [
         guidance: [
           "Say what the firm has asked this person for in the last ninety days and what it gave back, before proposing another ask. Two requests in a quarter with nothing returned is an overdraft, and the person who stops replying never tells you why.",
           "Value given is what THEY would name, not what the firm believes it provided. An introduction they did not want, an invitation they did not attend and a newsletter are not value; a customer, a hire, a term-sheet read at short notice are.",
-          "Weight the ask against the relationship's actual depth. Asking a warm acquaintance for a reference call is fine; asking them to broker an LP conversation is spending credit the firm has not earned and cannot repay.",
+          "Weight the ask against the relationship's actual depth. Asking a warm acquaintance for a written reference is fine; asking them to broker an LP conversation is spending credit the firm has not earned and cannot repay.",
           "Cool the account down after a big ask lands. The strongest relationships in a fund are the ones the firm did not touch for six months and then did something useful for unprompted.",
           "Never spend somebody else's capital without telling them what it costs. A warm path that runs through a third person is THEIR credibility, so ask them directly and let them decline — a forwarded introduction they were volunteered for is a debt they did not agree to.",
         ],

@@ -329,21 +329,26 @@ describe("a queued email 2 offers the three samples (owner, 26 Oct 2026)", () =>
       expect(text).toContain("One quick follow-up on The Learning Club. Rather than describe it, I'd be happy to show you: a sample run of show for the evening, a sketch of what a series of six could look like, and a breakdown of the kind of people we'd have in the room, all built around Second Co.");
       expect(text).not.toMatch(/\bcall\b|\$|exploring a partnership|quick picture/i);
     }
-    expect((await row(sent))!.body).toBe(OLD);
-    expect((await row(mine))!.body).toBe(OLD);
+    // Filed with the mailing-address footer (fileDraft adds it), and never re-composed after that.
+    const FILED = `${OLD}\n\n3055 Lombard St #471024, San Francisco, CA 94147`;
+    expect((await row(sent))!.body).toBe(FILED);
+    expect((await row(mine))!.body).toBe(FILED);
     // Once re-composed it is the current template: a second pass changes nothing.
     expect(await recomposeSecondEmails(env)).toEqual([]);
   });
 });
 
-describe("a queued draft tells the brand 25 to 100+ guests per event, flexible (owner, 30 Oct 2026)", () => {
+describe("a queued draft tells the brand rooms of 25+ guests, sized to its goals (owner, 1 Nov 2026), and ends with the mailing address", () => {
   it("re-words the room size in unsent drafts only; everything else in the draft stays as it was", async () => {
     const { fileDraft } = await import("../src/worker/services/learningClub");
     const { recomposeGuestCounts, standardGuestWords } = await import("../src/worker/services/tlcDraftNotice");
-    expect(standardGuestWords("In March we are hosting it: 60 to 75 people spending an evening.")).toBe("In March we are hosting it: 25 to 100+ people per event (flexible to your goals) spending an evening.");
+    expect(standardGuestWords("In March we are hosting it: 60 to 75 people spending an evening.")).toBe("In March we are hosting it: rooms of 25+ guests (sized to your goals) spending an evening.");
+    // Last week's standard words ("25 to 100+") are re-worded too.
+    expect(standardGuestWords("In March we are hosting it: 25 to 100+ people per event (flexible to your goals) spending an evening.")).toBe("In March we are hosting it: rooms of 25+ guests (sized to your goals) spending an evening.");
     // Idempotent: the standard words are never re-worded again.
-    expect(standardGuestWords("In March we are hosting it: 25 to 100+ people per event (flexible to your goals) spending an evening.")).toBe("In March we are hosting it: 25 to 100+ people per event (flexible to your goals) spending an evening.");
-    expect(standardGuestWords("80 to 120 New Yorkers, each paying")).toBe("25 to 100+ New Yorkers (flexible to your goals), each paying");
+    expect(standardGuestWords("In March we are hosting it: rooms of 25+ guests (sized to your goals) spending an evening.")).toBe("In March we are hosting it: rooms of 25+ guests (sized to your goals) spending an evening.");
+    expect(standardGuestWords("80 to 120 New Yorkers, each paying")).toBe("25+ New Yorkers (sized to your goals), each paying");
+    expect(standardGuestWords("25 to 100+ New Yorkers (flexible to your goals), each paying")).toBe("25+ New Yorkers (sized to your goals), each paying");
     const OLD = "Hi Pat,\n\nI am writing because they host tastings.\nIn March 2027 we are hosting The Learning Club in New York: 80 to 120 people spending an afternoon or evening going deep on T, hands-on.";
     const mk = async (brand: string) => {
       await deal(brand, "2027-03");
@@ -358,12 +363,13 @@ describe("a queued draft tells the brand 25 to 100+ guests per event, flexible (
     const body = async (id: string) => (await env.WP_OS_DB.prepare("SELECT m.body, r.payload_json FROM tlc_drip_message m JOIN external_effect_request r ON r.id = m.effect_request_id WHERE m.deal_id = ?1").bind(id).first<{ body: string; payload_json: string }>())!;
     const q = await body(queued);
     for (const text of [q.body, (JSON.parse(q.payload_json) as { text: string }).text]) {
-      expect(text).toContain("25 to 100+ people per event (flexible to your goals) spending");
+      expect(text).toContain("rooms of 25+ guests (sized to your goals) spending");
+      expect(text.endsWith("\n\n3055 Lombard St #471024, San Francisco, CA 94147")).toBe(true);
       expect(text).not.toContain("25 to 40");
       expect(text).not.toContain("80 to 120");
       expect(text).toContain("I am writing because they host tastings.");
     }
-    expect((await body(sent)).body).toBe(OLD);
+    expect((await body(sent)).body).toBe(`${OLD}\n\n3055 Lombard St #471024, San Francisco, CA 94147`); // filed with the footer, then never re-worded
     expect(await recomposeGuestCounts(env)).not.toContain("Room Co");
   });
 });

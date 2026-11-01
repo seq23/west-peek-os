@@ -11,6 +11,7 @@
  * (services/tlcOwnerInstruction.ts) applies it to that brand's deal through the must-pitch path.
  */
 import { brandKey } from "./mustPitch";
+import { withBrandFooter } from "./brandFooter";
 import { BRAND_GUESTS, TLC_DRIP_ASK, TLC_PS_BY_STEP, TLC_SIGNATURE, monthWords } from "./learningClub";
 
 export interface OwnerContactInstruction {
@@ -157,5 +158,5 @@ export function ownerAngleFirstEmail(input: { brand: string; contactName: string
     "",
     TLC_PS_BY_STEP[0]!,
   ].join("\n");
-  return { subject: `${input.brand} + a small room in New York`, text };
+  return { subject: `${input.brand} + a small room in New York`, text: withBrandFooter(text) };
 }

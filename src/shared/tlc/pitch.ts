@@ -74,8 +74,9 @@ export interface TlcInternalView extends TlcClubView {
 }
 
 /**
- * WHAT A BRAND IS TOLD ABOUT THE ROOM (owner, 30 Oct 2026): every brand email and pitch says 25 to 100+ guests per
- * event, flexible to the brand's needs, whatever size the club is planned for. The planned size stays internal
+ * WHAT THE PITCH PDF SAYS ABOUT THE ROOM (owner, 30 Oct 2026): our materials say 25 to 100+ guests per event,
+ * flexible to the brand's needs, whatever size the club is planned for (an EMAIL to a brand says 25+ instead:
+ * BRAND_EMAIL_ROOM_WORDS, 1 Nov 2026). The planned size stays internal
  * (the one-pager and the economics read it).
  */
 export const BRAND_GUESTS_WORDS = `${BRAND_ROOM_WORDS} guests per event, flexible to your goals`;

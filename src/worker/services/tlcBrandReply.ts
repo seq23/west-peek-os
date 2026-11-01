@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { textBodyOf } from "../effects/mimeAttachments";
+import { withBrandFooter } from "../../shared/tlc/brandFooter";
 import type { EmailAttachment } from "../effects/emailTransport";
 import { listGmailRaw } from "../effects/googleClient";
 import { serviceAccountToken } from "../effects/googleWorkspaceClient";
@@ -9,11 +10,11 @@ import { addressIn, authenticationVerdict } from "../../shared/intake/partnerAut
 import { newTextOf } from "../../shared/events/packetDecisionToken";
 import { isEmptyReply, parseDraftReply } from "../../shared/tlc/draftReply";
 import {
-  BRAND_MUST_STAFF, BRAND_REPLY_ASK, BRAND_REPLY_REF_RE, CALL_ASK, WE_HOST, MONEY_WORDS, NO_CALL_ASK, THREE_THINGS_OFFER, WHO_WE_ARE, classifyBrandReply, fallbackReplyBody, herNoteOf, noMoneyNow, readResearch, reportText,
+  BRAND_MUST_STAFF, BRAND_REPLY_ASK, BRAND_REPLY_REF_RE, CALL_ASK, WE_HOST, MONEY_WORDS, THREE_THINGS_OFFER, WHO_WE_ARE, classifyBrandReply, fallbackReplyBody, herNoteOf, noMoneyNow, readResearch, reportText,
   stageAfterReply, standingRulesIn, theirNewText, tierLines, wantsResearch,
   type BrandReplyIntent, type ReplyDraftInput, type WynnRule,
 } from "../../shared/tlc/brandReply";
-import { BRAND_ROOM_WORDS, TLC_DRIP_DAYS, TLC_OWNER, TLC_SEATS, TLC_SIGNATURE, brandDisplayName, monthWords, nextDripAt } from "../../shared/tlc/learningClub";
+import { BRAND_EMAIL_ROOM_WORDS, TLC_DRIP_DAYS, TLC_OWNER, TLC_SEATS, TLC_SIGNATURE, brandDisplayName, signedBrandEmail, monthWords, nextDripAt } from "../../shared/tlc/learningClub";
 import { TLC_BRAND_SALES_JOB } from "../../shared/policy/outsideEmail";
 import { actorForFirmUser, type Actor } from "./authorize";
 import type { TlcDealRow, TlcEventRow } from "./learningClub";
@@ -131,7 +132,7 @@ const PROMPT_RULES = [
   "You are Wynn, who runs sales for The Learning Club at West Peek Ventures. Draft Sequoia Taylor's answer to a brand that replied to her partnership email.",
   "Write as Sequoia, first person, warm, plain and short (under 220 words). Answer exactly what they asked.",
   "Use ONLY the facts given here: who we are, the club, its topic and month, and anything listed below. Invent nothing: no numbers, dates, names or claims that are not below.",
-  "No postal address. No P.S. No signature (it is added after). Never name anyone at West Peek other than Sequoia, except Scooter Taylor as our founding GP where the rules below say so.",
+  "No postal address, no P.S. and no signature: the signature and our mailing-address footer are added after. Never name anyone at West Peek other than Sequoia, except Scooter Taylor as our founding GP where the rules below say so.",
   "Do not attach or mention a PDF or deck unless they asked for one or said yes.",
   "End with one clear next step, as Wynn's standing rules below say.",
 ];
@@ -155,7 +156,7 @@ const defaultDrafter: ReplyDrafter = async (env, actor, i) => {
     `The club: The Learning Club, ${i.topic}, in ${monthWords(i.month)}, New York.`,
     `Why this brand fits (one sentence may be used): ${i.why ?? "a natural fit for the room"}`,
     ...(i.noMoney
-      ? ["No money yet: do NOT mention any price, fee, budget, amount or partnership level; that waits for the call."]
+      ? ["No money yet: do NOT mention any price, fee, budget, amount or partnership level; that waits until the samples have gone. Never suggest a call to get there."]
       : ["Partnership levels (no category exclusivity; never promise any):", ...tierLines().map((l) => `- ${l}`)]),
     ...(i.research ? ["", "What Wynn found researching them (use it; invent nothing beyond it):", i.research] : []),
     i.intent === "YES" && i.pitchUrl && !i.noMoney ? `They said yes: say the one-page pitch PDF is attached and also at ${i.pitchUrl}.` : "",
@@ -164,11 +165,12 @@ const defaultDrafter: ReplyDrafter = async (env, actor, i) => {
       ? "offer" in i.callPlan
         ? ["They asked for a call. Offer exactly these times, word for word, and ask which suits them (or another time that works for them):", ...i.callPlan.offer.map((x) => `- ${slotWords(x)}`)]
         : [`They asked for a call and she is free then: say yes to ${slotWords(i.callPlan.agreed)}, and that a calendar invitation is on its way.`]
-      : i.samplesAttached ? [] : i.rules.some((r) => r.code === NO_CALL_ASK)
-      ? i.intent === "CALL"
+      // NEVER A CALL WE ASK FOR (owner, 1 Nov 2026, a standing rule, no longer only her NO_CALL_ASK row): deals close
+      // by email end to end. A call THEY propose is always a yes, scheduled from her calendar (shared/tlc/callSlots.ts).
+      : i.samplesAttached ? []
+      : i.intent === "CALL"
         ? [`They proposed a call: say yes to it.${i.callLink ? ` Her booking link: ${i.callLink}` : " Ask which times suit them."}`]
-        : [`Never suggest or ask for a call. Next step: ${THREE_THINGS_OFFER}`]
-      : [i.callLink ? `Her booking link for a call: ${i.callLink}` : "No booking link: ask for two times that suit them."]),
+        : [`Never suggest or ask for a call. Next step: ${THREE_THINGS_OFFER}`]),
     "",
     "Their message, word for word:",
     i.theirText,
@@ -187,23 +189,27 @@ const defaultDrafter: ReplyDrafter = async (env, actor, i) => {
 };
 
 /** A draft that breaks her voice rules is not used; the plain template stands in. */
-export function draftProblems(body: string, intent: BrandReplyIntent, opts: { noMoney?: boolean; noCallAsk?: boolean; weHost?: boolean; callPlan?: CallPlan | null } = {}): string[] {
+export function draftProblems(body: string, intent: BrandReplyIntent, opts: { noMoney?: boolean; weHost?: boolean; callPlan?: CallPlan | null } = {}): string[] {
   const out: string[] = [];
   if (/\bP\.?\s?S\.?\b/.test(body)) out.push("a P.S.");
   if (/\b\d{2,5}\s+\w+(?:\s\w+)?\s(?:street|st\.?|avenue|ave\.?|road|rd\.?|blvd|suite)\b/i.test(body)) out.push("a postal address");
   // Scooter is named only as who he is to the brand (her WHO_WE_ARE rule): "Scooter Taylor", our founding GP.
   if (/\bscooter\b(?!\s+taylor)/i.test(body)) out.push("a name other than hers");
   if (opts.noMoney && MONEY_WORDS.test(body)) out.push("money before a call (her rule)");
-  // Every brand email says 25 to 100+ guests per event, flexible (her GUESTS_25_40 rule, revised 30 Oct 2026): never another room size.
+  // Every brand email says rooms of 25+ guests, sized to their goals (her GUESTS_25_40 rule, revised 1 Nov 2026): never a
+  // range ("25 to 100+", "25–40", "60–150") and never another number with a plus. The PDFs keep "25 to 100+".
   for (const m of body.matchAll(/\b(\d+)\s*(?:to|–|-)\s*(\d+)(\+?)\s+(?:people|guests|New Yorkers)\b/gi)) {
-    if (`${m[1]} to ${m[2]}${m[3]}` !== BRAND_ROOM_WORDS) { out.push(`a room of ${m[1]} to ${m[2]}${m[3]} (her rule: ${BRAND_ROOM_WORDS} guests per event, flexible)`); break; }
+    out.push(`a room of ${m[1]} to ${m[2]}${m[3]} (her rule: rooms of ${BRAND_EMAIL_ROOM_WORDS} guests, sized to their goals)`); break;
+  }
+  for (const m of body.matchAll(/(?<!(?:to|–|-)\s*)\b(\d+)\+\s+(?:people|guests|New Yorkers)\b/gi)) {
+    if (`${m[1]}+` !== BRAND_EMAIL_ROOM_WORDS) { out.push(`a room of ${m[1]}+ (her rule: rooms of ${BRAND_EMAIL_ROOM_WORDS} guests, sized to their goals)`); break; }
   }
   if (opts.weHost && BRAND_MUST_STAFF.test(body)) out.push("puts the brand's people on a segment (her rule: led by the brand or by our host)");
   if (opts.callPlan) {
     const want = "offer" in opts.callPlan ? opts.callPlan.offer : [opts.callPlan.agreed];
     for (const x of want) if (!body.includes(slotWords(x))) out.push(`the time ${slotWords(x)} is not in it word for word`);
   }
-  if (opts.noCallAsk && intent !== "CALL" && !opts.callPlan && CALL_ASK.test(body)) out.push("asks for a call (her rule: the brand may propose one, Wynn never does)");
+  if (intent !== "CALL" && !opts.callPlan && CALL_ASK.test(body)) out.push("asks for a call (her rule: the brand may propose one, Wynn never does)");
   if (intent !== "YES" && /\b(attached|attachment|pdf)\b/i.test(body)) out.push("an attachment before a yes");
   if (/\bexclusiv/i.test(body)) out.push("exclusivity");
   return out;
@@ -224,17 +230,16 @@ async function draftFor(env: Env, deal: TlcDealRow, ev: TlcEventRow, intent: Bra
   const rules = await wynnRules(env, deal.firm_scope);
   // Money first appears at step 4 of her flow: once the samples went, prices may be discussed.
   const noMoney = noMoneyNow(rules, deal.stage) && !(await flowStep(env, deal.id)).samplesSent;
-  const noCallAsk = rules.some((r) => r.code === NO_CALL_ASK);
   const weHost = rules.some((r) => r.code === WE_HOST);
   const out = await (deps.drafter ?? defaultDrafter)(env, wynnActor(deal.firm_scope), { ...input, note: redo?.note ?? null, previous: redo?.previous ?? null, rules, noMoney, research: redo?.research ?? null, callPlan, samplesAttached: redo?.samplesAttached })
     .catch((err) => ({ ok: false, body: "", detail: String(err) }));
-  const words = out.ok && draftProblems(out.body, intent, { noMoney, noCallAsk, weHost, callPlan }).length === 0 && (!redo?.samplesAttached || (/\battach(?:ed|ment)\b/i.test(out.body) && !/\b(?:can|could|happy to) (?:send|share)\b/i.test(out.body)))
+  const words = out.ok && draftProblems(out.body, intent, { noMoney, weHost, callPlan }).length === 0 && (!redo?.samplesAttached || (/\battach(?:ed|ment)\b/i.test(out.body) && !/\b(?:can|could|happy to) (?:send|share)\b/i.test(out.body)))
     ? out.body
     : redo?.samplesAttached ? samplesCoverEmail({ brand: brandDisplayName(deal.brand), contactName: deal.contact_name, topic: ev.topic ?? "", segmentTitle: (await flowStep(env, deal.id)).segment ?? "The brand segment" })
     : callPlan
       ? callFallback(deal.contact_name, callPlan)
-      : fallbackReplyBody(input, monthWords, { noMoney, noCallAsk, whoWeAre: rules.find((r) => r.code === WHO_WE_ARE)?.rule ?? null });
-  return [words.trim(), "", ...TLC_SIGNATURE].join("\n");
+      : fallbackReplyBody(input, monthWords, { noMoney, whoWeAre: rules.find((r) => r.code === WHO_WE_ARE)?.rule ?? null });
+  return signedBrandEmail(words);
 }
 
 // ── Research she asked for ─────────────────────────────────────────────────────────────────────
@@ -316,7 +321,7 @@ async function retrySamples(env: Env, r: ReplyRow, now: Date, deps: BrandReplyDe
   const built = await buildSamples(env, deal, ev, { theirText: r.their_text }, deps.samples ?? {});
   if (built.ok) {
     const segment = (JSON.parse(built.row.input_json) as { segmentTitle: string }).segmentTitle;
-    const body = [samplesCoverEmail({ brand: brandDisplayName(deal.brand), contactName: deal.contact_name, topic: ev.topic ?? "", segmentTitle: segment }), "", ...TLC_SIGNATURE].join("\n");
+    const body = signedBrandEmail(samplesCoverEmail({ brand: brandDisplayName(deal.brand), contactName: deal.contact_name, topic: ev.topic ?? "", segmentTitle: segment }));
     await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET draft_body = ?2, samples_id = ?3, research_due = NULL, held_reason = NULL WHERE id = ?1 AND state = 'DRAFTED'").bind(r.id, body, built.row.id).run();
     return;
   }
@@ -391,7 +396,7 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
     samplesId = built.ok ? built.row.id : built.id;
     if (!built.ok) hold = { due: new Date(now.getTime() + RESEARCH_RETRY_MINUTES * 60_000).toISOString(), why: `the samples PDF is not ready yet (${built.detail.slice(0, 200)}); tried again each pass` };
     const segment = built.ok ? (JSON.parse(built.row.input_json) as { segmentTitle: string }).segmentTitle : "";
-    body = [samplesCoverEmail({ brand: brandDisplayName(deal.brand), contactName: deal.contact_name, topic: ev.topic ?? "", segmentTitle: segment }), "", ...TLC_SIGNATURE].join("\n");
+    body = signedBrandEmail(samplesCoverEmail({ brand: brandDisplayName(deal.brand), contactName: deal.contact_name, topic: ev.topic ?? "", segmentTitle: segment }));
   } else if (picked || (cls.intent === "CALL" && rules.some((r) => r.code === "SCHEDULE_THEIR_CALL"))) {
     /*
      * A CALL THEY ASKED FOR IS SCHEDULED (owner, 26 Oct 2026). The time they picked from the ones offered, or the time
@@ -437,7 +442,7 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
       }
       body = fillTemplate("confirm", { hi: hiLine(deal.contact_name), brand: brandName, level: t.label.replace(/ \(in kind\)$/, "") });
     }
-    body = [body, "", ...TLC_SIGNATURE].join("\n");
+    body = signedBrandEmail(body);
     attachments = files;
     if (fail.length) hold = { due: new Date(now.getTime() + RESEARCH_RETRY_MINUTES * 60_000).toISOString(), why: `${fail.join("; ").slice(0, 240)}; she is not asked until the attachments are ready` };
   } else {
@@ -620,7 +625,7 @@ export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-
     "WYNN'S DRAFT OF YOUR ANSWER, WORD FOR WORD",
     `Subject: ${r.draft_subject}`,
     "",
-    r.draft_body,
+    withBrandFooter(r.draft_body),
     ...(attachedTo.has(r.id) ? ["", `ATTACHED (goes with it): ${attachedTo.get(r.id)}`] : []),
     ...(previews.has(r.id) ? [
       "", `THE SAMPLES (3 pages), OPEN ON YOUR PHONE OR LAPTOP: ${previews.get(r.id)!.url}`,
@@ -816,11 +821,11 @@ async function sendApproved(env: Env, owner: Actor, r: ReplyRow & { brand: strin
   const inReplyTo = r.brand_message_id.startsWith("nomid:") ? null : r.brand_message_id;
   await env.WP_OS_DB.prepare(
     "INSERT INTO external_effect_request (id, effect_type, destination, payload_json, requested_by_type, requested_by_id, outside_job) VALUES (?1, 'email.send', ?2, ?3, 'AI', ?4, ?5)",
-  ).bind(requestId, r.contact_email, JSON.stringify({ subject: r.draft_subject, text: r.draft_body, reply_to: BRAND_REPLY_TO, ...(inReplyTo ? { in_reply_to: inReplyTo } : {}), ...(attachments.length ? { attachments } : {}) }), WYNN, TLC_BRAND_SALES_JOB).run();
+  ).bind(requestId, r.contact_email, JSON.stringify({ subject: r.draft_subject, text: withBrandFooter(r.draft_body), reply_to: BRAND_REPLY_TO, ...(inReplyTo ? { in_reply_to: inReplyTo } : {}), ...(attachments.length ? { attachments } : {}) }), WYNN, TLC_BRAND_SALES_JOB).run();
   const { requestApproval, decideApproval } = await import("./approvals");
   const card = await requestApproval(env, wynnActor(r.firm_scope), {
     action_key: "effect.email.send", object_type: "external_effect_request", object_id: requestId,
-    title: `Wynn: TLC answer to ${brandDisplayName(r.brand)}`, summary: `${r.draft_subject}\n\n${r.draft_body}`.slice(0, 1800),
+    title: `Wynn: TLC answer to ${brandDisplayName(r.brand)}`, summary: `${r.draft_subject}\n\n${withBrandFooter(r.draft_body)}`.slice(0, 1800),
     payload: { deal_id: r.deal_id, brand_reply_id: r.id }, submit: true,
   });
   await decideApproval(env, owner, card.id, "approved", `Approved by email reply (${r.notice_ref}).`);

@@ -6,7 +6,8 @@ import { mailAuthority } from "../../shared/intake/partnerAuthority";
 import { newTextOf } from "../../shared/events/packetDecisionToken";
 import { NOTICE_REF_RE, isEmptyReply, parseDraftReply } from "../../shared/tlc/draftReply";
 import { herNoteOf } from "../../shared/tlc/brandReply";
-import { BRAND_GUESTS, BRAND_ROOM_WORDS, TLC_INTERNAL_NOTE, TLC_OWNER, TLC_PS_BY_STEP, TLC_SAMPLES_OFFER, TLC_SEATS, TLC_SIGNATURE, brandDisplayName, dripEmail, monthWords, seatsOf } from "../../shared/tlc/learningClub";
+import { withBrandFooter } from "../../shared/tlc/brandFooter";
+import { BRAND_EMAIL_ROOM_WORDS, BRAND_GUESTS, TLC_INTERNAL_NOTE, TLC_OWNER, TLC_PS_BY_STEP, TLC_SAMPLES_OFFER, TLC_SEATS, TLC_SIGNATURE, brandDisplayName, dripEmail, monthWords, seatsOf, signedBrandEmail } from "../../shared/tlc/learningClub";
 import { actorForFirmUser, type Actor } from "./authorize";
 
 /**
@@ -100,7 +101,8 @@ function listOf(all: readonly PendingDraft[]): { items: NoticeItem[]; sections: 
     ...(d.redraft_note ? [`Redrafted for your note: ${d.redraft_note}`] : []),
     `Subject: ${d.subject}`,
     "",
-    d.body,
+    // Exactly what goes out, the mailing-address footer included (the executor adds it to any older draft too).
+    withBrandFooter(d.body),
   ].join("\n")).join("\n\n");
   return { items, sections, copy };
 }
@@ -366,7 +368,7 @@ export async function applyTlcDraftReply(
     const out = await (deps.redraft ?? defaultRedraft)(env, wynn, { subject: row.subject, body: wordsOf(row.body), note: c.note, brand: row.brand });
     if (!out.ok) { lines.problems.push(`${label(it)}: Wynn could not redraft it (${out.detail}); it is unchanged and still waiting`); continue; }
     await decideApproval(env, actor, it.card_id, "rejected", `Redraft asked by email reply (${ref}): ${c.note}`.slice(0, 1000)).catch(() => undefined);
-    await fileDraft(env, { id: row.deal_id, brand: row.brand, contact_email: row.contact_email, drip_step: row.drip_step }, { subject: out.subject, text: [out.body, "", ...TLC_SIGNATURE, "", TLC_PS_BY_STEP[Math.min(row.drip_step, 3)]!].join("\n") }, firmScope, c.note);
+    await fileDraft(env, { id: row.deal_id, brand: row.brand, contact_email: row.contact_email, drip_step: row.drip_step }, { subject: out.subject, text: signedBrandEmail(out.body, TLC_PS_BY_STEP[Math.min(row.drip_step, 3)]!) }, firmScope, c.note);
     lines.changed.push(`${label(it)}: redrafted for "${c.note}"`);
   }
 
@@ -541,25 +543,27 @@ export async function recomposeSecondEmails(env: Env, firmScope = "west-peek"): 
 }
 
 /**
- * A BRAND IS TOLD 25 TO 100+ GUESTS PER EVENT, FLEXIBLE (owner, 30 Oct 2026), in queued drafts too. An unsent drip draft
- * (undecided, or approved and waiting for its allowance) whose room size is the club's planned size ("60 to 75
- * people spending…", "80 to 120 New Yorkers, each…") gets the standard words in place; nothing else in it changes.
- * Sent mail is never touched; nor is her own redraft.
+ * A BRAND IS TOLD ROOMS OF 25+ GUESTS, SIZED TO ITS GOALS (owner, 1 Nov 2026; was "25 to 100+" from 30 Oct), in queued
+ * drafts too. An unsent drip draft (undecided, or approved and waiting for its allowance) whose room size is a range
+ * ("60 to 75 people spending…", "25 to 100+ people per event (flexible to your goals) spending…", "80 to 120 New
+ * Yorkers, each…") gets the standard words in place; nothing else in it changes. Sent mail is never touched; nor are
+ * the words of her own redraft. Every queued draft, hers included, gains the mailing-address footer (1 Nov 2026).
  */
 export function standardGuestWords(body: string): string {
   return body
-    .replace(/\b\d+(?: to \d+)? people spending\b/g, `${BRAND_GUESTS} spending`)
-    .replace(/\b\d+(?: to \d+)? New Yorkers, each\b/g, `${BRAND_ROOM_WORDS} New Yorkers (flexible to your goals), each`);
+    .replace(/\b\d+(?: to \d+\+?)? people per event \(flexible to your goals\) spending\b/g, `${BRAND_GUESTS} spending`)
+    .replace(/\b\d+(?: to \d+\+?)? people spending\b/g, `${BRAND_GUESTS} spending`)
+    .replace(/\b\d+(?: to \d+\+?)? New Yorkers(?: \(flexible to your goals\))?, each\b/g, `${BRAND_EMAIL_ROOM_WORDS} New Yorkers (sized to your goals), each`);
 }
 export async function recomposeGuestCounts(env: Env, firmScope = "west-peek"): Promise<string[]> {
   const rows = (await env.WP_OS_DB.prepare(
-    `SELECT m.id, m.subject, m.body, m.effect_request_id, m.approval_card_id, d.brand
+    `SELECT m.id, m.subject, m.body, m.effect_request_id, m.approval_card_id, m.redraft_note, d.brand
        FROM tlc_drip_message m JOIN tlc_deal d ON d.id = m.deal_id JOIN approval_card a ON a.id = m.approval_card_id
-      WHERE d.firm_scope = ?1 AND m.state = 'AWAITING_APPROVAL' AND a.state IN ('pending_review','approved') AND m.redraft_note IS NULL`,
-  ).bind(firmScope).all<{ id: string; subject: string; body: string; effect_request_id: string; approval_card_id: string; brand: string }>()).results ?? [];
+      WHERE d.firm_scope = ?1 AND m.state = 'AWAITING_APPROVAL' AND a.state IN ('pending_review','approved')`,
+  ).bind(firmScope).all<{ id: string; subject: string; body: string; effect_request_id: string; approval_card_id: string; brand: string; redraft_note: string | null }>()).results ?? [];
   const done: string[] = [];
   for (const r of rows) {
-    const text = standardGuestWords(r.body);
+    const text = withBrandFooter(r.redraft_note ? r.body : standardGuestWords(r.body));
     if (text === r.body) continue;
     const req = await env.WP_OS_DB.prepare("SELECT payload_json FROM external_effect_request WHERE id = ?1 AND executed_at IS NULL").bind(r.effect_request_id).first<{ payload_json: string }>();
     if (!req) continue;
