@@ -194,3 +194,13 @@ violations) on breach and proves its own detection with a self-test fixture run.
   fragment `src/shared/work/partnerPractices.ts` is included by `steerFor` (every runner the sweep
   dispatches must call it), the general loop and Porter's duty, and renders every block reason to
   prove three parts with an email-only way to clear it. Pass count = rules + inclusions + reasons.
+- `migrations-keep-their-data.mjs` (`npm run validate:migrations-keep-data`, 1 Nov 2026) — no
+  migration deletes a table, a column or a table's rows by accident. Every `migrations/*.sql` new or
+  changed against the base (PR base in CI, the replaced commit on a push, `origin/main` locally,
+  uncommitted and untracked files included) fails on DROP TABLE, ALTER TABLE … DROP, DELETE FROM
+  without WHERE, TRUNCATE, and a rebuild (`_new` + INSERT … SELECT + DROP + RENAME, or the
+  copy-aside variant) whose new table lacks a column the old one had — old columns replayed from
+  every earlier migration. Passes only with `-- destructive-ok: <reason> (backed up: <where>)`.
+  History is grandfathered. Hard-fails on zero migrations or zero replayed tables, and names
+  `MIGRATION_GUARD_NO_BASE` when it cannot find a base. `--self-test`: 31 checks including a
+  throwaway git repo proving only new/changed files are checked.

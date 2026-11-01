@@ -3,6 +3,7 @@
 D1 migrations, applied in filename order by `wrangler d1 migrations apply` (local:
 `npm run migrate:local`). Additive-first; defensive (`IF NOT EXISTS`, `INSERT OR IGNORE`);
 wrangler tracks applied files in `d1_migrations`, so re-application is a no-op.
+**No migration deletes data by accident** (1 Nov 2026): `npm run validate:migrations-keep-data` fails a new or changed file that drops a table or column, deletes every row, truncates, or rebuilds a table without one of its columns, unless it carries `-- destructive-ok: <reason> (backed up: <where>)`.
 
 The set matches the approved plan §9.2 migration sequence, one file per phase:
 
