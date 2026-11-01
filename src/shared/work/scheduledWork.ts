@@ -156,7 +156,7 @@ export const JOB_FACTS: Readonly<Record<string, JobFacts>> = {
   // only. The OS never contacts a candidate; it finds, checks, judges and reports.
   productions_hire_search: {
     what:
-      "For West Peek Productions — Scooter's own agency, not the fund. Every Monday Walker searches " +
+      "For West Peek Productions — Scooter's own agency, not the fund. Every Tuesday Walker searches " +
       "live public sources for a senior experiential producer, freelance, who can bring in brand deals: " +
       "LinkedIn profiles, agency team pages, speaker lists, portfolios, award lists. Every profile URL " +
       "is checked, every candidate is judged against the written archetype, and Scooter gets ONE note — " +
@@ -193,16 +193,21 @@ export function cadenceInWords(job: {
   daily_at_utc: string | null;
   day_of_week?: number | null;
   day_of_month?: number | null;
+  /** 0193: when set, `daily_at_utc` is a wall clock in this zone, not UTC. */
+  daily_at_tz?: string | null;
 }): string {
   if (job.schedule_kind === "ON_REQUEST") return "Only when asked";
+  // A job on her clock says her clock (1 Nov 2026: "Every Tuesday at 09:00 UTC" would have been an hour
+  // or three wrong); any other zone is named as stored.
+  const zone = !job.daily_at_tz ? "UTC" : job.daily_at_tz === "America/Chicago" ? "Central" : job.daily_at_tz;
   if (job.schedule_kind === "WEEKLY" && job.daily_at_utc) {
-    return `Every ${DAY_NAMES[job.day_of_week ?? 1] ?? "Monday"} at ${job.daily_at_utc} UTC`;
+    return `Every ${DAY_NAMES[job.day_of_week ?? 1] ?? "Monday"} at ${job.daily_at_utc} ${zone}`;
   }
   if (job.schedule_kind === "MONTHLY" && job.daily_at_utc) {
-    return `On the ${ordinal(job.day_of_month ?? 1)} of every month at ${job.daily_at_utc} UTC`;
+    return `On the ${ordinal(job.day_of_month ?? 1)} of every month at ${job.daily_at_utc} ${zone}`;
   }
   if ((job.schedule_kind === "DAILY_AT" || job.schedule_kind === "DAILY") && job.daily_at_utc) {
-    return `Every day at ${job.daily_at_utc} UTC`;
+    return `Every day at ${job.daily_at_utc} ${zone}`;
   }
   const m = job.interval_minutes;
   if (m == null) return "No cadence set";

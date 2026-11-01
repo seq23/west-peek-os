@@ -5,7 +5,7 @@ import type { Env } from "../src/worker/env";
 import { applyGoNoGo, armOwnerFollowUps, contentHashes, openBrandBatchCard, runDrip, type TlcEventRow } from "../src/worker/services/learningClub";
 import { sendDraftNotice, unlistedDrafts } from "../src/worker/services/tlcDraftNotice";
 import { wayInCandidates, wayInFallback } from "../src/worker/services/tlcMustPitch";
-import { brandStageWords, buildRoundup, sendWeeklyRoundup } from "../src/worker/services/tlcRoundup";
+import { brandStageWords, buildRoundup, roundupDue, sendWeeklyRoundup } from "../src/worker/services/tlcRoundup";
 import { goNoGoDate } from "../src/shared/tlc/goNoGo";
 import { stageAfterReply } from "../src/shared/tlc/brandReply";
 import { TLC_RECIPIENTS } from "../src/shared/tlc/learningClub";
@@ -24,7 +24,7 @@ let env: Env;
 const sends: Array<{ to: string; subject: string; text: string }> = [];
 const SEQUOIA = "sequoia@westpeek.ventures";
 const SERVICE_ACCOUNT = JSON.stringify({ client_email: "sa@firm.iam.example", private_key: generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs8", format: "pem" }) });
-const MONDAY = new Date("2026-11-09T14:00:00.000Z");
+const MONDAY = new Date("2026-11-09T14:30:00.000Z"); // 08:30 CST, the roundup's first minute
 const flat = (s: string) => s.replace(/=\r?\n/g, "").replace(/=E2=80=99/g, "'").replace(/\*\*/g, "").replace(/\s+/g, " ");
 
 async function deal(brand: string, month: string, extra: Record<string, unknown> = {}): Promise<string> {
@@ -171,6 +171,8 @@ describe("E · Wynn's Monday roundup", () => {
     expect(TLC_RECIPIENTS.map((x) => x.toLowerCase())).toEqual([SEQUOIA]);
     expect(await sendWeeklyRoundup(env, new Date("2026-11-08T15:00:00.000Z"))).toBe("not Monday morning yet");
     expect(await sendWeeklyRoundup(env, new Date("2026-11-09T09:00:00.000Z"))).toBe("not Monday morning yet");
+    // 08:00 CST is the brand batch's minute; the roundup waits for 08:30 (schedule rebalance, 1 Nov 2026).
+    expect(await sendWeeklyRoundup(env, new Date("2026-11-09T14:29:00.000Z"))).toBe("not Monday morning yet");
     expect(await sendWeeklyRoundup(env, MONDAY)).toMatch(/^roundup \d{4}-W\d{2} sent to sequoia@westpeek\.ventures$/);
     expect(sends.map((s) => s.to)).toEqual([SEQUOIA]);
     const text = flat(sends[0]!.text);
@@ -184,6 +186,25 @@ describe("E · Wynn's Monday roundup", () => {
     expect(text).not.toMatch(/scooter/i);
     expect(await sendWeeklyRoundup(env, new Date(MONDAY.getTime() + 3_600_000))).toMatch(/already went/);
     expect(sends).toHaveLength(1);
+  });
+});
+
+describe("E2 · the roundup is on her clock, all year (schedule rebalance, 1 Nov 2026)", () => {
+  it("Monday 08:30 Central in winter and in summer; never on a UTC Monday that is Sunday in Chicago", () => {
+    expect(roundupDue(new Date("2026-11-09T14:29:00.000Z"))).toBe(false); // 08:29 CST
+    expect(roundupDue(new Date("2026-11-09T14:30:00.000Z"))).toBe(true); //  08:30 CST
+    expect(roundupDue(new Date("2027-06-07T13:29:00.000Z"))).toBe(false); // 08:29 CDT
+    expect(roundupDue(new Date("2027-06-07T13:30:00.000Z"))).toBe(true); //  08:30 CDT
+    expect(roundupDue(new Date("2026-11-09T03:00:00.000Z"))).toBe(false); // Monday UTC, Sunday 21:00 CST
+    expect(roundupDue(new Date("2026-11-10T14:30:00.000Z"))).toBe(false); // Tuesday 08:30 CST
+  });
+
+  it("0288: the brand batch is Monday 08:00 on her clock, half an hour before the roundup", async () => {
+    const row = await t.db.prepare("SELECT schedule_kind, day_of_week, daily_at_utc, daily_at_tz, next_run_at FROM scheduled_job WHERE job_key = 'tlc_brand_batch'")
+      .first<{ schedule_kind: string; day_of_week: number; daily_at_utc: string; daily_at_tz: string; next_run_at: string }>();
+    expect(row).toMatchObject({ schedule_kind: "WEEKLY", day_of_week: 1, daily_at_utc: "08:00", daily_at_tz: "America/Chicago" });
+    expect(new Date(row!.next_run_at).getUTCDay(), "a Monday").toBe(1);
+    expect(row!.next_run_at).toMatch(/T14:00:00\.000Z$/); // 08:00 CST
   });
 });
 

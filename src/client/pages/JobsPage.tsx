@@ -64,6 +64,7 @@ interface Job {
   schedule_kind: string;
   interval_minutes: number | null;
   daily_at_utc: string | null;
+  daily_at_tz?: string | null;
   day_of_week?: number | null;
   day_of_month?: number | null;
   target_kind: string;
