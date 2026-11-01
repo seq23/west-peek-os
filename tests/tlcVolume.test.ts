@@ -159,7 +159,10 @@ describe("Wynn's ten a week, nearest club first", () => {
     expect(out.prospects.promoted).toHaveLength(3);
     expect(out.drip.gate.open).toBe(false);
     expect(out.drip.held).toBe(3);
-    expect(sends).toEqual([]);
+    // Nothing to any brand. The only mail is Wynn's Monday roundup (31 Oct 2026), to Sequoia alone.
+    expect(sends.filter((s) => s.to !== SEQUOIA)).toEqual([]);
+    expect(sends.map((s) => s.to)).toEqual([SEQUOIA]);
+    expect(sends[0]!.subject).toMatch(/TLC roundup/);
   });
 });
 

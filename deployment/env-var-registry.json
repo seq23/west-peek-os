@@ -203,6 +203,11 @@
       "kind": "var",
       "required": false,
       "purpose": "projects/{p}/subscriptions/{s} the meet_ingest tick pulls from. Pull, never push: the Worker sits behind Cloudflare Access. Non-secret."
+    },
+    "WP_OS_NEVERBOUNCE_API_KEY": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "NeverBounce: each TLC brand address is checked before Wynn's first email (0277), and must-pitch way-in inboxes (0282). Vault name NEVERBOUNCE_API_KEY. Absent: first emails wait, nothing is sent unchecked."
     }
   }
 }
