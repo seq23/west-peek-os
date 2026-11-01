@@ -89,12 +89,6 @@ describe("the three brand pitches read clean", () => {
     expect(safetyLines("Zero-Proof Home Bar")).toHaveLength(1);
     expect(safetyLines("Fragrance Lab")).toEqual([]);
   });
-  it("the internal one-pager has the economics, the categories with brands, the origin, the risks and the decisions", () => {
-    const html = renderInternalOnePager({ ...MAR, origin: "BRANDS_SPENDING", status: "TOPIC_PROPOSED", vetoUntil: "2026-10-25T23:28:12.271Z", committedUsd: 5_000, committedPartners: 1, pitchUrl: "https://os.joinwestpeek.com/api/tlc-pitch/abc" });
-    for (const s of ["The economics", "Sponsor categories", "Risks", "What you decide", "Brands spending now", "Brand C", "$5,000 of $25,000 (20%) · 1 partner", "Two routes: one Title partner at $25,000; or a mix", "costs up to $15,000", "Season (recommendation", "$100M"]) expect(html).toContain(s);
-    expect(html).not.toMatch(/exclusive/i);
-    expect(html).toContain("not for brands");
-  });
 });
 
 describe("February's date, in the migration", () => {

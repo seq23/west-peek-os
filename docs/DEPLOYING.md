@@ -134,7 +134,6 @@ npx vitest run --no-file-parallelism      # see docs/ENVIRONMENTS.md on why the 
 npm run validate:authority
 npm run validate:ai-boundary
 npm run validate:network-boundary
-npm run validate:brand
 npm run validate:sql          # local only since 22 Aug 2026: parses against the schema the migrations build
 ```
 

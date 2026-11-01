@@ -26,7 +26,6 @@ npm run e2e                    # 70 browser journeys — resets the local DB fir
 npm run validate:authority     # the four validators, below
 npm run validate:ai-boundary
 npm run validate:network-boundary
-npm run validate:brand
 ```
 
 Run all of those before you push. CI is not a substitute for the validators — they encode rules the

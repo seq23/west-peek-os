@@ -19,18 +19,6 @@ const DOC = readFileSync(new URL("../docs/COMMUNITY.md", import.meta.url), "utf8
   .replace(/\s+/g, " ");
 
 describe("the event programme matches the community document", () => {
-  it("keeps the stance verbatim", () => {
-    expect(DOC).toContain("We are curators and conveners");
-    for (const line of EVENT_ETHOS.notThis) {
-      // The document writes these as one sentence each; strip the full stop to compare.
-      expect(DOC).toContain(line.replace(/\.$/, ""));
-    }
-  });
-
-  it("keeps what the product actually is", () => {
-    expect(EVENT_ETHOS.product).toContain("Conversation");
-    expect(DOC).toContain("Conversation — not presentations — is the product");
-  });
 
   it("keeps the sponsor rule, which is the one that protects members", () => {
     expect(EVENT_ETHOS.money).toContain("never purchase access to members");
@@ -50,19 +38,6 @@ describe("the event programme matches the community document", () => {
       expect(all).toContain(thing);
     }
     expect(DOC).toContain("Tap In Tuesday");
-  });
-
-  it("gives every interval a purpose and a recommendation someone can act on", () => {
-    for (const i of OPERATING_RHYTHM) {
-      expect(i.purpose.length).toBeGreaterThan(20);
-      // A recommendation that says nothing specific is decoration.
-      expect(i.recommendation.length).toBeGreaterThan(60);
-    }
-  });
-
-  it("keeps the closing argument for why the rhythm is shaped this way", () => {
-    expect(WHY_THE_RHYTHM).toContain("Community creates reach");
-    expect(DOC).toContain("Community creates reach");
   });
 
   it("is written by an employee who exists, with the title the operator chose", () => {

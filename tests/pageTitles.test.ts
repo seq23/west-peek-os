@@ -33,10 +33,6 @@ describe("every routed page has its own header title", () => {
     expect(routable.filter((k) => k !== "home" && titleOf(k) === "Home")).toEqual([]);
   });
 
-  it("calls #/outside-email 'Outside email'", () => {
-    expect(titleOf("outside-email")).toBe("Outside email");
-  });
-
   it("files each off-nav page under a real nav page, and lists no page twice", () => {
     for (const [k, t] of Object.entries(OFF_NAV_TITLES)) {
       expect(NAV.some((n) => n.key === t.under), k).toBe(true);

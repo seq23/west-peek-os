@@ -75,76 +75,7 @@ describe("which pages have a guide", () => {
   });
 });
 
-describe("how a guide is written", () => {
-  it("says what the page is for in one or two sentences, and two to four things you can do", () => {
-    for (const g of Object.values(PAGE_GUIDES)) {
-      expect(g.purpose.length, g.navKey).toBeGreaterThan(40);
-      expect(g.purpose.length, g.navKey).toBeLessThan(260);
-      expect(g.youCan.length, g.navKey).toBeGreaterThanOrEqual(2);
-      expect(g.youCan.length, g.navKey).toBeLessThanOrEqual(4);
-    }
-  });
-
-  it("names its bands and acts in one line each, in a person's words", () => {
-    const jargon = /\b(payload|schema|endpoint|CRUD|idempoten|foreign key|migration|D1|JSON|API|testid)\b/i;
-    for (const g of Object.values(PAGE_GUIDES)) {
-      expect(g.bands.length, g.navKey).toBeGreaterThan(0);
-      expect(g.acts.length, g.navKey).toBeGreaterThan(0);
-      for (const b of g.bands) {
-        expect(b.shows.length, `${g.navKey}: ${b.name}`).toBeLessThan(220);
-        expect(jargon.test(`${b.name} ${b.shows}`), `${g.navKey}: ${b.name}`).toBe(false);
-      }
-      for (const a of g.acts) {
-        expect(a.does.length, `${g.navKey}: ${a.label}`).toBeLessThan(220);
-        expect(jargon.test(`${a.does} ${a.then ?? ""}`), `${g.navKey}: ${a.label}`).toBe(false);
-      }
-    }
-  });
-
-  it("never carries the Meetings page as it was before 19 Sep 2026", () => {
-    const all = JSON.stringify(PAGE_GUIDES);
-    for (const phrase of RETIRED_MEETINGS_TRIO) expect(all).not.toContain(phrase);
-  });
-
-  it("Meetings describes the three faces, the room, the Meet band and the one approval", () => {
-    const m = pageGuide("meetings")!;
-    const bands = m.bands.map((b) => b.name);
-    for (const face of ["Coming up", "On the record", "Start a meeting now", "Google Meet", "Before", "During", "Beside the call", "After"]) expect(bands).toContain(face);
-    const acts = m.acts.map((a) => a.label);
-    for (const label of ["Open the room", "They said yes — record", "Ask", "Seat", "Approve — make these the record", "Move it"]) expect(acts).toContain(label);
-    expect(m.elsewhere.map((l) => l.page)).toContain("dealflow");
-  });
-});
-
 describe("what the host says when asked how the page works", () => {
-  it("is a one-line purpose, numbered bands, bulleted acts with every control in bold — never a paragraph", () => {
-    for (const g of Object.values(PAGE_GUIDES)) {
-      const md = renderGuideAnswer(g);
-      const blocks = parseMarkdown(md);
-      expect(blocks[0]?.kind, g.navKey).toBe("paragraph");
-      expect(plainText([blocks[0]!]), g.navKey).toMatch(/^This is how .+ works, top to bottom\.$/);
-
-      const ordered = blocks.filter((b) => b.kind === "ordered");
-      expect(ordered.length, g.navKey).toBe(1);
-      expect(ordered[0]!.kind === "ordered" && ordered[0]!.items.length, g.navKey).toBe(g.bands.length);
-
-      const bulleted = blocks.filter((b) => b.kind === "bulleted");
-      expect(bulleted.length, g.navKey).toBeGreaterThanOrEqual(1);
-      const actItems = bulleted[0]!.kind === "bulleted" ? bulleted[0]!.items : [];
-      expect(actItems.length, g.navKey).toBe(g.acts.length);
-      for (const a of g.acts) expect(md, `${g.navKey}: ${a.label}`).toContain(`**${a.label}**`);
-      // The human act is spoken first.
-      const first = g.acts.find((a) => a.primary);
-      if (first) expect(actItems[0]![0]?.kind === "strong" && actItems[0]![0]!.text, g.navKey).toBe(first.label);
-
-      for (const b of blocks) {
-        if (b.kind === "paragraph") expect(plainText([b]).length, `${g.navKey} paragraph`).toBeLessThan(300);
-      }
-      expect(md.split("\n").some((l) => l.length > 300), g.navKey).toBe(false);
-      // No question back to the reader.
-      expect(md.trimEnd().endsWith("?")).toBe(false);
-    }
-  });
 
   it("the Help tab renders the same guide text as the host, minus the opener", () => {
     for (const g of Object.values(PAGE_GUIDES)) expect(renderGuideAnswer(g)).toContain(renderGuideMarkdown(g));

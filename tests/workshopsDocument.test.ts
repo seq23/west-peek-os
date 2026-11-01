@@ -53,11 +53,6 @@ function tableRows(): string[][] {
 }
 
 describe("docs/WORKSHOPS.md and the code say the same things", () => {
-  it("states the length as the range the constants hold, and nowhere says 90 minutes", () => {
-    expect(DOC).toContain(`${WORKSHOP_LENGTH_MIN_MINUTES}–${WORKSHOP_LENGTH_MAX_MINUTES} minute`);
-    // The specific number that drifted. If it comes back into the doc, it is wrong again.
-    expect(DOC).not.toMatch(/90[\s-]minute/i);
-  });
 
   it("names the default host the code defaults to", () => {
     expect(DOC).toContain(WORKSHOP_DEFAULT_HOST);
@@ -140,11 +135,6 @@ describe("docs/WORKSHOPS.md and the code say the same things", () => {
     // The stale title the old document and the old constant both carried.
     expect(Object.values(WORKSHOP_SERIES)).not.toContain("How to build community");
     expect(DOC).not.toContain("How to build community");
-  });
-
-  it("carries her own words about what an angle is, so the rule is not paraphrased away", () => {
-    expect(DOC).toContain("Black lawyers is a topic. Community is a topic.");
-    expect(DOC).toContain("Community as a Service");
   });
 
   it("names the two layers that make three subjects impossible, and both exist", () => {

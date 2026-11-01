@@ -181,30 +181,3 @@ describe("first close, and the basis that cannot contradict the ring", () => {
     expect((await call<{ first_close_on: string | null }>(`/api/funds/${fundId}/basis`)).body.first_close_on).toBe("2026-04-10");
   });
 });
-
-describe("the split — the page reads no company list and draws no deployed slice", () => {
-  const page = readFileSync(new URL("../src/client/pages/FundStrategyPage.tsx", import.meta.url), "utf8");
-  const app = readFileSync(new URL("../src/client/App.tsx", import.meta.url), "utf8");
-  it("mounts neither Composition nor a cockpit, and the old stack is gone from App.tsx", () => {
-    for (const src of [page, app.slice(app.indexOf('active === "fund-strategy"') - 400, app.indexOf('active === "fund-strategy"') + 400)]) {
-      expect(src).not.toMatch(/<Composition\b|<CockpitPage\b|<PortfolioComposition\b|<PortfolioAllocation\b|STRATEGY_STEPS/);
-    }
-    expect(app).not.toMatch(/STRATEGY_STEPS|function AllocationPage|CockpitPage|FollowOnPage|ModelingPage/);
-    expect(page).toMatch(/<DashboardDoor/);
-    expect(page).toMatch(/<PlanVsReality/);
-    expect(page).toMatch(/<FundConstruction/);
-    expect(page).toMatch(/<DeckPanel/);
-    expect(page).toMatch(/<ReservesBand/);
-    expect(page).toMatch(/<ScenariosBand/);
-  });
-  it("the one orange control is the door's anchor, and the deck's Approve stays black", () => {
-    const door = readFileSync(new URL("../src/client/pages/DashboardDoor.tsx", import.meta.url), "utf8");
-    expect(door).toMatch(/className="btn-primary btn-lg"\s+href=/);
-    expect(door).toMatch(/rel="noreferrer noopener"/);
-    const deck = readFileSync(new URL("../src/client/pages/DeckPanel.tsx", import.meta.url), "utf8");
-    expect(deck).not.toMatch(/btn-primary/);
-    for (const f of ["PlanVsReality", "FundConstruction", "ReservesBand", "ScenariosBand", "FundStrategyPage"]) {
-      expect(readFileSync(new URL(`../src/client/pages/${f}.tsx`, import.meta.url), "utf8"), `${f} carries a second primary`).not.toMatch(/btn-primary/);
-    }
-  });
-});

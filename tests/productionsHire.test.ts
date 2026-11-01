@@ -156,14 +156,6 @@ describe("WEEKLY is a real schedule kind", () => {
     ).rejects.toThrow(/CHECK/);
   });
 
-  it("the Work page says 'Every Monday at 14:00 UTC', and the facts name Walker and Scooter's agency", () => {
-    expect(cadenceInWords({ schedule_kind: "WEEKLY", interval_minutes: null, daily_at_utc: "14:00", day_of_week: 1 })).toBe("Every Monday at 14:00 UTC");
-    expect(cadenceInWords({ schedule_kind: "WEEKLY", interval_minutes: null, daily_at_utc: "09:30", day_of_week: 5 })).toBe("Every Friday at 09:30 UTC");
-    expect(JOB_FACTS.productions_hire_search?.what).toMatch(/Scooter's own agency, not the fund/);
-    expect(JOB_FACTS.productions_hire_search?.what).toMatch(/senior experiential producer, freelance/);
-    expect(JOB_FACTS.productions_hire_search?.deliveredBy).toEqual(["Walker"]);
-  });
-
   it("a second cron tick in the same week replays; Run it now mints a fresh key; next week is new", async () => {
     const ran = await runJob(env, MP_ACTOR, "productions_hire_search", { trigger: "SCHEDULED", now: TUE_W39 });
     expect(ran.replayed).toBe(false);

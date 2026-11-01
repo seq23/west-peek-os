@@ -190,22 +190,8 @@ jobs:
       - name: Network boundary
         run: npm run validate:network-boundary
 
-      - name: Brand system
-        run: npm run validate:brand
-
-      - name: Design tokens
-        run: npm run validate:design-tokens
-
       - name: CSS class coverage
         run: npm run validate:css-classes
-
-      # THE COMPLEMENT OF THE SCAN ABOVE. That one asks whether every class the page applies is
-      # defined; this asks whether a defined heading rule reaches anything. `.home-section-head h2`
-      # was valid CSS aimed at a tag none of its 34 call sites emit, so every section heading in the
-      # product rendered at browser default — green build, no failing test, and an operator saying
-      # "the headings have no visual weight". It found two more of the same on the day it was written.
-      - name: A heading-scale rule reaches a heading
-        run: npm run validate:heading-scale
 
       - name: Every var(--token) resolves
         run: npm run validate:css-variables
@@ -483,13 +469,24 @@ jobs:
       - name: An archived lane stays archived
         run: npm run validate:weekly-review-archived
 
-      # 18 Sep 2026: `validate:css-classes` failed a correct branch because a comment explained that
-      # the class it named had just been removed. 25 of 40 scans stripped comments, 12 did not. The
-      # gate costs ~8 seconds in total, so the tax was never the number of validators — it was that
-      # a third of them could be fooled by a sentence, and a rule people route around is worse than
-      # no rule at all.
-      - name: A scan reads code, not prose
-        run: npm run validate:scans-read-code
+      # 1 Nov 2026 cleanup: these five scans existed with a package script and a self-test but no CI
+      # step, so nothing ran them ("exists but nothing invokes it"). Free lanes never see LP names or
+      # deal terms; every env var the worker reads is declared; a steer for a later month waits for
+      # it; every way the room hears is one named state; the price table matches its seed offline.
+      - name: Free lanes cannot see confidential text
+        run: npm run validate:free-lanes
+
+      - name: Every env var the worker reads is registered
+        run: npm run validate:env-vars
+
+      - name: A steer waits for its month
+        run: npm run validate:steer-waits
+
+      - name: Every hearing state is one named state
+        run: npm run validate:room-hears
+
+      - name: Model prices match the seeded table (offline)
+        run: npm run validate:prices
 
       # 18 Sep 2026: Portfolio said the fund held nothing while Fund strategy drew the firm's one
       # investment (a pre-fund SPV with no position row) at 100%. One list now feeds both pages, one

@@ -36,8 +36,9 @@ at the **D1–D4 design-overhaul boundary (2026-08-13)**, and at the **operator-
 
 `src/client/public/icon.svg` carries the same bytes: the PWA icon is the approved mark, not a
 fabricated substitute. The brand authority is marked CANONICAL / LOCKED and must not be edited
-locally — see `AGENTS.md` and `docs/WEST_PEEK_DESIGN_SYSTEM.md` §14. `npm run validate:brand`
-re-checks it, the token discipline, and the mark's presence in the shell on every run.
+locally — see `AGENTS.md` and `docs/WEST_PEEK_DESIGN_SYSTEM.md` §14. The
+style scans that once re-checked it (`validate:brand`, `validate:design-tokens`,
+`validate:heading-scale`) were retired on 1 Nov 2026: style is fixed at its source, never gated.
 
 ## Snapshot rules (approved plan §13.3)
 
