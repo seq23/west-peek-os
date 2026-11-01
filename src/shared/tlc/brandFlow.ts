@@ -8,7 +8,7 @@
  *
  * Her rules the templates keep: she approves every email with one "approved" before it goes; Wynn never asks for
  * a call (a brand may, and then he schedules it); no money before step 4; we host every segment or bring a host;
- * 25–40 guests per event, flexible; never take or process a payment (the invoice carries West Peek's own link).
+ * rooms of 25+ guests, sized to the brand's goals (owner, 1 Nov 2026); never take or process a payment (the invoice carries West Peek's own link).
  */
 export interface FlowStep {
   n: 1 | 2 | 3 | 4 | 5;

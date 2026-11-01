@@ -111,7 +111,7 @@ describe("a brand replied", () => {
     expect(new Set(drafts.map((d) => d.notice_ref)).size).toBe(2);
     for (const [k, d] of drafts.entries()) {
       expect(sends[k]!.text).toContain(d.draft_body);
-      expect(d.draft_body).toMatch(/Sequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures$/);
+      expect(d.draft_body).toMatch(/Sequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures\n\n3055 Lombard St #471024, San Francisco, CA 94147$/);
     }
     // Send-once: the next passes send nothing more; her stage is untouched until she approves.
     expect(await processBrandReplies(env, AFTERNOON, "west-peek", deps)).toBe("brand replies: 0 drafted, 0 auto-reply (drip resumed), 0 declined; inbox not read; no brand reply waiting for her");
@@ -254,11 +254,14 @@ describe("Wynn listens to her whole note, researches when asked, and keeps her s
     expect((await env.WP_OS_DB.prepare("SELECT draft_body FROM tlc_brand_reply WHERE deal_id = 'tld_host'").first<{ draft_body: string }>())!.draft_body).not.toMatch(/your team leads/i);
     const { draftProblems } = await import("../src/worker/services/tlcBrandReply");
     expect(draftProblems("A segment led by Host Co or by our host.", "QUESTION", { weHost: true })).toEqual([]);
-    // 25 to 100+ guests per event, flexible (owner, 30 Oct 2026): never the club's planned size, never the old 25–40.
-    expect(draftProblems("A room of 80 to 120 people.", "QUESTION")).toEqual(["a room of 80 to 120 (her rule: 25 to 100+ guests per event, flexible)"]);
-    expect(draftProblems("A room of 25–40 guests, flexible to your goals.", "QUESTION")).toEqual(["a room of 25 to 40 (her rule: 25 to 100+ guests per event, flexible)"]);
-    expect(draftProblems("A room of 25 to 100 guests.", "QUESTION")).toEqual(["a room of 25 to 100 (her rule: 25 to 100+ guests per event, flexible)"]);
-    expect(draftProblems("A room of 25 to 100+ guests, flexible to your goals.", "QUESTION")).toEqual([]);
+    // Rooms of 25+ guests, sized to their goals (owner, 1 Nov 2026): never a range (the PDFs' "25 to 100+" included), never another "N+".
+    const rule = "(her rule: rooms of 25+ guests, sized to their goals)";
+    expect(draftProblems("A room of 80 to 120 people.", "QUESTION")).toEqual([`a room of 80 to 120 ${rule}`]);
+    expect(draftProblems("A room of 25–40 guests, flexible to your goals.", "QUESTION")).toEqual([`a room of 25 to 40 ${rule}`]);
+    expect(draftProblems("A room of 25 to 100+ guests, flexible to your goals.", "QUESTION")).toEqual([`a room of 25 to 100+ ${rule}`]);
+    expect(draftProblems("A room of 60–150 guests.", "QUESTION")).toEqual([`a room of 60 to 150 ${rule}`]);
+    expect(draftProblems("A room of 40+ guests.", "QUESTION")).toEqual([`a room of 40+ ${rule}`]);
+    expect(draftProblems("Rooms of 25+ guests, sized to your goals.", "QUESTION")).toEqual([]);
     expect(block).toContain("led by the brand or by our host");
     // Money alone (no call ask) is refused too: the no-money rule stands on its own.
     await deal("tld_cash2", "Cash Two", "pat@cash2.example");

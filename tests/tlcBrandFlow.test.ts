@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { BRAND_FLOW, FLOW_TEMPLATES, FOLLOW_UPS, fillTemplate, levelPicked } from "../src/shared/tlc/brandFlow";
 import { TLC_DRIP_DAYS, TLC_SIGNATURE, dripEmail } from "../src/shared/tlc/learningClub";
 import { samplesCoverEmail } from "../src/shared/tlc/samples";
+import { BRAND_MAILING_ADDRESS } from "../src/shared/tlc/brandFooter";
 import { BRAND_MUST_STAFF, CALL_ASK, MONEY_WORDS } from "../src/shared/tlc/brandReply";
 
 /**
@@ -36,7 +37,7 @@ describe("the five steps and the call branch, as the code reads them", () => {
 
   it("the drip's follow-up and the cover email ARE the templates", () => {
     expect(dripEmail({ step: 1, brand: "Vector Co", contactName: "Sam Lee", topic: "T", month: "2027-03", eventDate: "2027-03-18", why: null }).text)
-      .toBe([fillTemplate("followUp", FAKE), "", ...TLC_SIGNATURE].join("\n"));
+      .toBe([fillTemplate("followUp", FAKE), "", ...TLC_SIGNATURE, "", BRAND_MAILING_ADDRESS].join("\n"));
     expect(samplesCoverEmail({ brand: "Vector Co", contactName: "Sam Lee", topic: FAKE.topic, segmentTitle: FAKE.segment })).toBe(fillTemplate("cover", FAKE));
   });
 

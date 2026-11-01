@@ -1,3 +1,4 @@
+import { withBrandFooter } from "../../shared/tlc/brandFooter";
 import { z } from "zod";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
@@ -480,7 +481,7 @@ export async function runDripPass(env: Env, now: Date, firmScope = "west-peek"):
   await recomposeBrandNames(env, firmScope);
   // And a queued email 2 offers the three samples, never a call (owner, 26 Oct 2026).
   await recomposeSecondEmails(env, firmScope);
-  // And every queued draft tells the brand 25 to 100+ guests per event, flexible (owner, 30 Oct 2026).
+  // And every queued draft tells the brand rooms of 25+ guests (owner, 1 Nov 2026) and ends with the mailing address.
   await recomposeGuestCounts(env, firmScope);
   // Samples planned ahead of time are rendered, so the PDF is ready the moment the brand says yes (sends nothing).
   const { renderPlannedSamples } = await import("./tlcSamples");
@@ -735,6 +736,8 @@ export async function brandGateFor(env: Env): Promise<{ open: boolean; reasons: 
 
 export async function fileDraft(env: Env, deal: Pick<TlcDealRow, "id" | "brand" | "contact_email" | "drip_step">, mail: { subject: string; text: string }, firmScope = "west-peek", redraftNote: string | null = null): Promise<string> {
   const wynn = actorFor(WYNN, firmScope);
+  // Every brand email ends with the mailing-address footer (owner, 1 Nov 2026): filed, previewed and sent with it.
+  mail = { ...mail, text: withBrandFooter(mail.text) };
   let threading: { gmail_thread_id: string; in_reply_to: string } | undefined;
   if (deal.drip_step > 0) {
     // A deal is the sequence boundary. Match the actual destination too: a changed contact must
@@ -994,7 +997,8 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
       }
     }
     const heldPitch = (await env.WP_OS_DB.prepare("SELECT f.*, d.contact_email, d.brand, d.event_id FROM tlc_pitch_followup f JOIN tlc_deal d ON d.id = f.deal_id WHERE f.state = 'HELD' AND d.stop_reason = 'REPLIED'").all<{ deal_id: string; subject: string; body: string; contact_email: string; brand: string; event_id: string }>()).results ?? [];
-    for (const f of heldPitch) {
+    for (const held of heldPitch) {
+      const f = { ...held, body: withBrandFooter(held.body) };
       const ev = await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(f.event_id).first<TlcEventRow>();
       if (!ev?.topic) continue;
       const pdf = await renderHtmlPdf(env, renderBrandPitch(clubViewOf(ev)), { onePage: true });
@@ -1013,7 +1017,7 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
         payload: { deal_id: f.deal_id, pitch: true },
         submit: true,
       });
-      await env.WP_OS_DB.prepare("UPDATE tlc_pitch_followup SET state = 'AWAITING_APPROVAL', held_reason = NULL, effect_request_id = ?2, approval_card_id = ?3 WHERE deal_id = ?1").bind(f.deal_id, requestId, card.id).run();
+      await env.WP_OS_DB.prepare("UPDATE tlc_pitch_followup SET state = 'AWAITING_APPROVAL', held_reason = NULL, effect_request_id = ?2, approval_card_id = ?3, body = ?4 WHERE deal_id = ?1").bind(f.deal_id, requestId, card.id, f.body).run();
       result.awaitingApproval += 1;
     }
   }

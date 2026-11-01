@@ -5,6 +5,7 @@ import type { Env } from "../src/worker/env";
 import { handleRequest } from "../src/worker/index";
 import { approvedDayZeroEmail, brandSendGate, TLC_OPT_OUT_LINE } from "../src/shared/tlc/learningClub";
 import { wayInWords } from "../src/shared/tlc/mustPitch";
+import { BRAND_MAILING_ADDRESS } from "../src/shared/tlc/brandFooter";
 import { buildBrandBatchPrompt, contentHashes, openBrandBatchCard, runDrip, runTlcCard } from "../src/worker/services/learningClub";
 import { sweepOnce } from "../src/worker/services/workSweep";
 
@@ -275,8 +276,8 @@ describe("ElevenLabs: her approved first email is kept, she sent it herself, and
     const row = await env.WP_OS_DB.prepare("SELECT day0_subject, day0_body, day0_topic, day0_approved_by FROM tlc_must_pitch WHERE brand = 'ElevenLabs'").first<{ day0_subject: string; day0_body: string; day0_topic: string; day0_approved_by: string }>();
     expect(row).toMatchObject({ day0_subject: "A Valentine's-week room in New York", day0_topic: "Fragrance Lab", day0_approved_by: "Sequoia" });
     expect(row!.day0_body).toBe(`Hi [Name],\n\n${APPROVED_BODY.slice(0, APPROVED_BODY.indexOf(`\n\n${TLC_OPT_OUT_LINE}`))}`);
-    expect(approvedDayZeroEmail({ subject: row!.day0_subject, body: row!.day0_body }, "Ana Lee")).toEqual({ subject: "A Valentine's-week room in New York", text: `Hi Ana,\n\n${APPROVED_BODY}` });
-    expect(approvedDayZeroEmail({ subject: row!.day0_subject, body: row!.day0_body }, null).text).toBe(`Hi,\n\n${APPROVED_BODY}`);
+    expect(approvedDayZeroEmail({ subject: row!.day0_subject, body: row!.day0_body }, "Ana Lee")).toEqual({ subject: "A Valentine's-week room in New York", text: `Hi Ana,\n\n${APPROVED_BODY}\n\n${BRAND_MAILING_ADDRESS}` });
+    expect(approvedDayZeroEmail({ subject: row!.day0_subject, body: row!.day0_body }, null).text).toBe(`Hi,\n\n${APPROVED_BODY}\n\n${BRAND_MAILING_ADDRESS}`);
   });
 
   it("ElevenLabs is marked contacted by Sequoia: never searched, never a way-in item, never dripped", async () => {
@@ -298,13 +299,13 @@ describe("ElevenLabs: her approved first email is kept, she sent it herself, and
     await env.WP_OS_DB.prepare("INSERT INTO tlc_deal (id, event_id, brand, contact_name, contact_email, contact_source_url, next_send_at) VALUES ('tld_scent', 'tlc_2027-02', 'Scent Test Co', 'Ana Lee', 'ana@scent.example', 'https://scent.example/team', '2026-11-01T00:00:00.000Z')").run();
     const scent = async (step: number) => env.WP_OS_DB.prepare("SELECT subject, body, state FROM tlc_drip_message WHERE deal_id = 'tld_scent' AND step = ?1").bind(step).first<{ subject: string; body: string; state: string }>();
     await runDrip(env, new Date("2026-11-09T15:01:00.000Z"));
-    expect(await scent(0)).toEqual({ subject: "A Valentine's-week room in New York", body: `Hi Ana,\n\n${APPROVED_BODY}`, state: "HELD" });
+    expect(await scent(0)).toEqual({ subject: "A Valentine's-week room in New York", body: `Hi Ana,\n\n${APPROVED_BODY}\n\n${BRAND_MAILING_ADDRESS}`, state: "HELD" });
     await env.WP_OS_DB.prepare("UPDATE tlc_event SET topic = 'Find Your Voice' WHERE month = '2027-02'").run();
     await runDrip(env, new Date("2026-11-09T15:02:00.000Z"));
     expect((await scent(0))!.subject).toBe("Scent Test Co + a small room in New York");
     await env.WP_OS_DB.prepare("UPDATE tlc_event SET topic = 'Fragrance Lab: AI meets the nose' WHERE month = '2027-02'").run();
     await runDrip(env, new Date("2026-11-09T15:03:00.000Z"));
-    expect((await scent(0))!.body).toBe(`Hi Ana,\n\n${APPROVED_BODY}`);
+    expect((await scent(0))!.body).toBe(`Hi Ana,\n\n${APPROVED_BODY}\n\n${BRAND_MAILING_ADDRESS}`);
     await env.WP_OS_DB.prepare("UPDATE tlc_deal SET drip_step = 1 WHERE id = 'tld_scent'").run();
     await runDrip(env, new Date("2026-11-09T15:04:00.000Z"));
     expect((await scent(1))!.subject).toBe("Scent Test Co + a small room in New York");

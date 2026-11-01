@@ -309,7 +309,7 @@ describe("the owner's rulings on rooms, money, sponsors and ideas (22 Oct 2026)"
     expect(renderBrandPitch(big)).not.toMatch(/80–120|80 to 120/);
     expect(renderInternalOnePager({ ...big, origin: null, status: "TOPIC_READY", vetoUntil: null, committedUsd: 0, committedPartners: 0, pitchUrl: null })).toContain("Room: planned for 80–120 people");
     const d = dripEmail({ step: 0, brand: "Acme", contactName: null, topic: "T", month: "2027-03", eventDate: "2027-03-18", why: null, seats: { min: 80, max: 120 } });
-    expect(d.text).toContain("25 to 100+ people per event (flexible to your goals)");
+    expect(d.text).toContain("rooms of 25+ guests (sized to your goals)");
     for (const step of [0, 1]) expect(dripEmail({ step, brand: "Acme", contactName: null, topic: "T", month: "2027-03", eventDate: "2027-03-18", why: null, seats: { min: 80, max: 120 } }).text).not.toMatch(/80 to 120|80–120/);
   });
 

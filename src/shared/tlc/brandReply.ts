@@ -200,15 +200,13 @@ export function reportText(brand: string, r: ResearchReport): string {
 }
 
 /** The answer when the model is unavailable: plain, short, true, and in her voice. Signature added after. */
-export function fallbackReplyBody(i: ReplyDraftInput, monthWords: (m: string) => string, opts: { noMoney?: boolean; whoWeAre?: string | null; noCallAsk?: boolean } = {}): string {
+export function fallbackReplyBody(i: ReplyDraftInput, monthWords: (m: string) => string, opts: { noMoney?: boolean; whoWeAre?: string | null } = {}): string {
   const hi = i.contactName ? `Hi ${i.contactName.split(" ")[0]},` : "Hi,";
-  // Her NO_CALL_ASK rule: the next step is the offer of three things, never a call Wynn asks for.
-  const call = opts.noCallAsk
-    ? THREE_THINGS_OFFER
-    : i.callLink ? `If it is easier to talk it through, pick a time that suits you: ${i.callLink}` : "Would a short call next week be easiest? Send me two times that suit you and I will send an invitation.";
+  // NEVER A CALL WE ASK FOR (owner, 1 Nov 2026, standing): the next step is the offer of three things.
+  const call = THREE_THINGS_OFFER;
   // They proposed the call: she says yes to it (their proposal, not Wynn's ask).
   const theirCall = i.callLink ? `Happy to talk. Here is my calendar, pick whatever suits you: ${i.callLink}` : "Happy to talk. Send me the times that suit you and I will send an invitation.";
-  if (i.intent === "CALL") return [hi, "", "Thank you for coming back to me.", "", opts.noCallAsk ? theirCall : call].join("\n");
+  if (i.intent === "CALL") return [hi, "", "Thank you for coming back to me.", "", theirCall].join("\n");
   if (i.intent === "YES") {
     return [hi, "", `Thank you for coming back to me. Here is the one-page pitch for The Learning Club: ${i.topic}, in ${monthWords(i.month)}. The PDF is attached${i.pitchUrl ? `, and it is also here: ${i.pitchUrl}` : "."}`, "", call].join("\n");
   }

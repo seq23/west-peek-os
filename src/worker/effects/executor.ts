@@ -14,6 +14,7 @@ import { OUTBOUND_ATTACHMENTS_MAX_BYTES, assertPreviewLane, attachmentsBytes, is
 import { ASSIGNING_PARTNERS } from "../../shared/intake/partnerAuthority";
 import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
 import { TLC_BRAND_SALES_JOB } from "../../shared/policy/outsideEmail";
+import { brandEmailHtml, withBrandFooter } from "../../shared/tlc/brandFooter";
 import { TLC_OWNER } from "../../shared/tlc/learningClub";
 import { GMAIL_COMPOSE_SCOPE, sendViaGmail } from "./googleClient";
 import { serviceAccountToken } from "./googleWorkspaceClient";
@@ -161,6 +162,8 @@ async function brandMailAsOwner(
     fromName: TLC_OWNER.name,
     subject: message.subject,
     text: message.text,
+    // The same words as HTML, so the mailing-address footer sits small and muted under the signature.
+    html: brandEmailHtml(message.text),
     ...(message.replyTo?.length ? { replyTo: message.replyTo } : {}),
     bcc: [INTAKE_MAILBOX],
     ...(message.attachments?.length ? { attachments: message.attachments } : {}),
@@ -253,7 +256,8 @@ async function performEffect(env: Env, request: ExternalEffectRequestRow): Promi
     // Gmail attempt that comes back refused, falls to the firm transport rather than not sending.
     let result: EmailSendResult | null = null;
     if (ownerSigned) {
-      result = await brandMailAsOwner(env, message);
+      // The backstop: a brand email filed before the footer existed still ends with it (owner, 1 Nov 2026).
+      result = await brandMailAsOwner(env, { ...message, text: withBrandFooter(message.text) });
     } else if (requestedBy && from && from !== env.WP_OS_EMAIL_FROM) {
       try {
         const gmail = await trySendAsPartner(env, requestedBy, { ...message, from });

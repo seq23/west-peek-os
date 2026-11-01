@@ -1,3 +1,4 @@
+import { withBrandFooter, withoutBrandFooter } from "./brandFooter";
 import { PARTNERS } from "../registry/partners";
 import { fillTemplate } from "./brandFlow";
 /**
@@ -33,11 +34,18 @@ export const TLC_CITY = "New York City";
 export const TLC_SEATS = { min: 25, max: 40 } as const;
 /**
  * WHAT A BRAND IS TOLD ABOUT THE ROOM (owner, 30 Oct 2026, the approved samples template): 25 to 100+ guests, sized to
- * the brand's goals. Every brand email, pitch, prompt and the samples PDF says this; TLC_SEATS above stays the
+ * the brand's goals. The samples PDF and the brand pitch PDF say this (an email says 25+, below); TLC_SEATS above stays the
  * internal planning default (tickets, food, the go-check), never a number a brand is told.
  */
 export const BRAND_ROOM = { min: 25, top: "100+" } as const;
 export const BRAND_ROOM_WORDS = `${BRAND_ROOM.min} to ${BRAND_ROOM.top}`;
+/**
+ * BUT AN EMAIL TO A BRAND SAYS "25+" (owner, 1 Nov 2026). Wynn's pitches, her follow-up, every answer to a brand and
+ * the weekly approval email's previews of them say rooms of 25+ guests, sized to the brand's goals: never "25 to
+ * 100+", "25–40" or "60–150". Our materials (the samples PDF, the brand pitch PDF, one-sheets, run of show) keep
+ * BRAND_ROOM_WORDS above.
+ */
+export const BRAND_EMAIL_ROOM_WORDS = `${BRAND_ROOM.min}+`;
 /**
  * THE ROOM IS SIZED TO THE SPONSORS (owner, 22 Oct 2026). 25–40 is the DEFAULT; the partners set
  * each club's own size on the event (60, 100, 150…), and everything that speaks of the room reads
@@ -464,7 +472,7 @@ export interface GoCheck {
 }
 
 export const ESCALATION_OPTIONS = [
-  "Add a sponsor: Wynn takes the next brand in the queue to a call this week.",
+  "Add a sponsor: Wynn takes the next brand in the queue to a yes by email this week.",
   "Cut cost: drop the most expensive booking-pack option for the next one down.",
   "Move the date: push the club a month and keep every agreed sponsor on it.",
 ] as const;
@@ -603,8 +611,8 @@ export interface DripEmailInput {
  */
 export const TLC_DRIP_PROOF_LINE = "Our community of more than 5,000 founders, operators and creatives meets in person through West Peek Rooms, our event series in New York.";
 export const TLC_DRIP_ASK = "Would you be open to exploring a partnership?";
-/** Every brand email says 25 to 100+ guests per event, sized to the brand's goals (owner, 30 Oct 2026), whatever the club's planned size. */
-export const BRAND_GUESTS = `${BRAND_ROOM_WORDS} people per event (flexible to your goals)`;
+/** Every brand email says rooms of 25+ guests, sized to the brand's goals (owner, 1 Nov 2026), whatever the club's planned size. */
+export const BRAND_GUESTS = `rooms of ${BRAND_EMAIL_ROOM_WORDS} guests (sized to your goals)`;
 /**
  * THE NEXT STEP IS THREE SAMPLES, NEVER A CALL (owner, 26 Oct 2026). Wynn never suggests or asks for a call; deals
  * close over email. Email 2 (the one follow-up to a brand that has not replied) and every answer Wynn drafts offer
@@ -614,7 +622,8 @@ export const TLC_SAMPLES_OFFER =
   "If it would help, I can send you three things: a sample run of show for the evening, a sketch of what a series of six could look like, and a breakdown of the kind of people in the room.";
 /*
  * THE OPT-OUT IS A SOFT, HUMAN P.S. (owner, 24 Oct 2026), one per drip step, and it still works: a reply that
- * says it is not a fit (replyLooksLikeNo) stops the sequence for good. The template carries no postal address.
+ * says it is not a fit (replyLooksLikeNo) stops the sequence for good. Under it, the mailing-address footer
+ * (shared/tlc/brandFooter.ts, owner, 1 Nov 2026) is the email's last line; there is no unsubscribe-reply line.
  */
 export const TLC_PS_BY_STEP: readonly string[] = [
   "P.S. If this isn't a fit, just let me know and I won't follow up.",
@@ -624,6 +633,10 @@ export const TLC_PS_BY_STEP: readonly string[] = [
 ];
 export const TLC_OPT_OUT_LINE = TLC_PS_BY_STEP[0]!;
 export const TLC_SIGNATURE: readonly string[] = [TLC_OWNER.name, TLC_OWNER.firm, TLC_OWNER.email];
+/** A brand email's words, signed by her, with the P.S. when there is one, ending with the mailing-address footer. */
+export function signedBrandEmail(words: string, ps: string | null = null): string {
+  return withBrandFooter([withoutBrandFooter(words).trim(), "", ...TLC_SIGNATURE, ...(ps ? ["", ps] : [])].join("\n"));
+}
 /*
  * THE BRAND SEES ONE SENTENCE OF WHY, NEVER THE RESEARCH NOTE (partner tail, 24 Oct 2026). `why_fit` is Parker's
  * note to Sequoia: the reason, then "Limits:", "Caveat:", which tier it fits, who it must not compete with, whether
@@ -678,18 +691,18 @@ export function dripEmail(raw: DripEmailInput): { subject: string; text: string 
   ];
   const step = Math.min(input.step, bodies.length - 1);
   const text = [...bodies[step]!, "", ...TLC_SIGNATURE, ...(step === 0 ? ["", TLC_PS_BY_STEP[0]!] : [])].join("\n");
-  return { subject, text };
+  return { subject, text: withBrandFooter(text) };
 }
 
 /**
  * AN OWNER-APPROVED FIRST EMAIL, WORD FOR WORD (owner, 23 Oct 2026, ElevenLabs). Her text is used as it
  * was approved: "[Name]" becomes the contact's first name, and "Hi [Name]," becomes "Hi," when there is
- * none. Only the opt-out line every brand email carries is added after it. Emails 2 to 4 stay generated.
+ * none. Only the opt-out line every brand email carries, and the mailing-address footer, are added after it. Emails 2 to 4 stay generated.
  */
 export function approvedDayZeroEmail(approved: { subject: string; body: string }, contactName: string | null): { subject: string; text: string } {
   const first = contactName?.trim().split(/\s+/)[0] ?? "";
   const body = (first ? approved.body.replace(/\[Name\]/g, first) : approved.body.replace(/Hi \[Name\],/g, "Hi,").replace(/\s?\[Name\]/g, "")).trimEnd();
-  return { subject: approved.subject, text: [body, "", TLC_OPT_OUT_LINE].join("\n") };
+  return { subject: approved.subject, text: withBrandFooter([withoutBrandFooter(body), "", TLC_OPT_OUT_LINE].join("\n")) };
 }
 
 /** Replies that say no, read from the subject alone; anything else that is a reply may be a yes. */
@@ -980,14 +993,14 @@ const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;"
  */
 export const TLC_PLAYBOOK: readonly string[] = [
   "Who we sell to: brands whose customers are the people a club on this topic draws, in categories Parker named for it. Several partners per club, each in its own role.",
-  "What we sell: real hands-on time with the product, in a room sized to the partners' goals (25 to 100+ guests, set per club), each guest paid to be there, for a 3 to 4 hour deep dive on one topic in New York (one afternoon or one evening). Product in hands during the 60-minute hands-on session where it fits, five minutes during the food break, photo and content rights, opt-in lead capture, a mention in the invitation and on the day, and a recap with numbers.",
+  "What we sell: real hands-on time with the product, in a room sized to the partners' goals (an email to a brand says rooms of 25+ guests; set per club), each guest paid to be there, for a 3 to 4 hour deep dive on one topic in New York (one afternoon or one evening). Product in hands during the 60-minute hands-on session where it fits, five minutes during the food break, photo and content rights, opt-in lead capture, a mention in the invitation and on the day, and a recap with numbers.",
   "Price: Title partner $25,000: one brand funds the whole room, the club is \"presented by\" that brand, it is the only cash partner that night, and in-kind partners need its OK. In January the Title partner is the primary route to $25K. Partner $5,000, the standard for most brands. Lead partner $10,000. Presenting partner $15,000, for a big brand only, with \"Presented by\" billing and top placement. Product partner, in kind, for a product brand that supplies product instead of cash. Custom amounts are fine; neither size nor count is capped.",
   "Goal per club: $25,000 raised from sponsors, costs up to $15,000, $10,000 net; under $7,500 net at a go-check escalates. At least 5 partners at $5,000, or larger sponsors at $10,000 to $15,000, or any mix. In-kind venue or product lowers cost and never counts toward the $25,000. Tickets add to the net but the goal never depends on them.",
   "Sponsors in a club are complementary, never competitors: one brand per kind of product that would compete (one drink base, then mixers, glassware, wellness, food). Never approach a brand that competes with an agreed or featured partner. This is how we put a room together, not a promise to a brand: we never offer or claim category exclusivity.",
   "Who we write to: a named person at the brand whose job is partnerships, events, community or brand marketing, at an address read off a live page. Never a guessed address. Never a contact without an email.",
   "How we write: signed by Sequoia Taylor, West Peek Ventures; replies go to her. Short, plain, warm, professional. Lead with the brand's own reason. One ask: \"Would you be open to exploring a partnership?\" No pitch, price or attachment until they reply. No inflated claims, no numbers we cannot show, no invented case studies. Before the first club runs we describe the format and West Peek Rooms' real history; after it, the real recap.",
   "Cadence: four emails at day 0, 4, 10 and 18. Stop the moment they reply, bounce or ask us to stop. Warm up slowly: 5 a day the first week, then 10, 20, 30.",
-  "When a brand replies yes: send them the brand pitch PDF and a call link, and tell Sequoia. After the call, write up their cash, their in-kind and what they want, and send Sequoia one email with a recommendation and the club's net if we say yes. Her reply decides: yes, no, or counter with an amount.",
+  "When a brand replies yes: send them the brand pitch PDF, and tell Sequoia. Never suggest or ask for a call: deals close by email; if they ask for one, say yes and schedule it from her calendar. Once they have said what they want (by email, or on a call they asked for), write up their cash, their in-kind and what they want, and send Sequoia one email with a recommendation and the club's net if we say yes. Her reply decides: yes, no, or counter with an amount.",
   "Money: we invoice and send West Peek's own payment link. We never book, buy or pay for anything; hosts, venues, food, materials and photographers go to the partners as options with prices and book-by dates.",
   "Privacy: no attendee name, email or list ever goes to a sponsor.",
 ];

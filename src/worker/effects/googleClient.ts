@@ -300,6 +300,8 @@ export interface GmailMessage {
   replyTo?: readonly string[];
   /** Copied blind. Gmail delivers to these and strips the header from what the recipient sees. */
   bcc?: readonly string[];
+  /** An HTML alternative to `text` (multipart/alternative); the plain-text part is always sent. */
+  html?: string;
   /** PDFs and the like, base64. */
   attachments?: ReadonlyArray<{ filename: string; content: string; contentType?: string }>;
   /** The Message-ID this answers: In-Reply-To and References, so it threads on the recipient's message. */
@@ -343,15 +345,18 @@ export function gmailRaw(message: GmailMessage): string {
     "MIME-Version: 1.0",
   ];
   const attachments = message.attachments ?? [];
+  // The body: plain text alone, or plain text and its HTML alternative (the client shows the last one it can).
+  const alt = `wpos_alt_${crypto.randomUUID().replace(/-/g, "")}`;
+  const body: string[] = message.html
+    ? [`Content-Type: multipart/alternative; boundary="${alt}"`, "", `--${alt}`, 'Content-Type: text/plain; charset="UTF-8"', "", message.text, `--${alt}`, 'Content-Type: text/html; charset="UTF-8"', "", message.html, `--${alt}--`]
+    : ['Content-Type: text/plain; charset="UTF-8"', "", message.text];
   if (attachments.length === 0) {
-    return [...head, 'Content-Type: text/plain; charset="UTF-8"', "", message.text].join("\r\n");
+    return [...head, ...body].join("\r\n");
   }
   const boundary = `wpos_${crypto.randomUUID().replace(/-/g, "")}`;
   const parts = [
     `--${boundary}`,
-    'Content-Type: text/plain; charset="UTF-8"',
-    "",
-    message.text,
+    ...body,
     ...attachments.flatMap((a) => {
       const name = clean(a.filename).replace(/"/g, "");
       return [
