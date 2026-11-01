@@ -1,7 +1,7 @@
 /**
  * THE GO / NO-GO DATE (owner's ask, decided 31 Oct 2026). Each club has one, stored on the club (tlc_event.go_no_go_date,
  * migration 0282): seven weeks before the event, moved back to the Friday when that falls on a weekend, so it is a
- * working day (Sat 23 Jan 2027 → Fri 4 Dec 2026). The topic-switch deadline (15 Nov for January) stays as it is.
+ * working day (Sat 23 Jan 2027 → Fri 4 Dec 2026), and out of the holiday week (24 Dec–1 Jan → the Friday before). The topic-switch deadline (15 Nov for January) stays as it is.
  *
  * On that date, a club with no sponsor committed in writing is DROPPED: its status becomes CANCELLED with dropped_at and
  * dropped_reason (never deleted), its topic goes back on the ideas list, and Wynn says so in the Monday roundup.
@@ -19,6 +19,14 @@ export function goNoGoDate(eventDate: string): string {
   const dow = d.getUTCDay();
   if (dow === 6) d.setUTCDate(d.getUTCDate() - 1);
   if (dow === 0) d.setUTCDate(d.getUTCDate() - 2);
+  // THE HOLIDAY WEEK (decided 31 Oct 2026): a date on 24 Dec–1 Jan moves to the Friday before 24 Dec (Feb club: Thu 24 Dec → Fri 18 Dec).
+  const md = d.toISOString().slice(5, 10);
+  if (md >= "12-24" || md === "01-01") {
+    const year = md === "01-01" ? d.getUTCFullYear() - 1 : d.getUTCFullYear();
+    const e = new Date(Date.UTC(year, 11, 23));
+    while (e.getUTCDay() !== 5) e.setUTCDate(e.getUTCDate() - 1);
+    return e.toISOString().slice(0, 10);
+  }
   return d.toISOString().slice(0, 10);
 }
 
