@@ -154,8 +154,11 @@ export function check(src) {
   if (addrAt < 0 || !(addrFileAt < fileAt) || addrAt === addrFileAt) f.push("the drip does not check the address both before it sends an approved email and before it files a draft");
   if ((dripBody.match(/outreachStopped\(/g) ?? []).length < 2) f.push("the drip does not stop a club's outreach once its goal is reached (send and draft)");
   if (!/recordBounce\(env, d\.contact_email/.test(service)) f.push("a bounce does not mark the address for good");
+  // 0284: an address SHE gave skips NeverBounce's "valid" bar, but never a bounce, and only for her own source.
+  if (!/export async function ownerAddressCheck[\s\S]{0,200}if \(await addressBounced\(env, email\)\) return \{ ok: false, refused: "bounced" \};/.test(volume + "\n" + volumeService)) f.push("an address she gave can be written to after it bounced");
+  if (!/dripAddressCheck\(env, deal\.contact_email, m\.step, now, deal\.contact_source_url\.startsWith\(OWNER_SUPPLIED_SOURCE\)\)/.test(service)) f.push("the owner-supplied exception is not tied to her own source");
   if (!/queueDeal\(env, \{ eventId: ev\.id/.test(volumeService)) f.push("Wynn's list does not go into the drip through queueDeal");
-  if (!/neverBounceCheck\(/.test(volumeService)) f.push("the address check does not ask NeverBounce");
+  if (!/export async function addressCleared\([\s\S]{0,700}?neverBounceCheck\(/.test(volumeService)) f.push("the address check does not ask NeverBounce");
   return f;
 }
 
@@ -210,6 +213,8 @@ function selfTest() {
     ["catch-all let through", { volume: good.volume.replace('r === "valid";', 'r === "valid" || r === "catchall";') }],
     ["draft without the address check", { service: good.service.replace("const addr = await volume.dripAddressCheck(", "const addr = await volume.skipCheck(") }],
     ["goal stop dropped", { service: good.service.replace("if (await volume.outreachStopped(env, ev)) {", "if (false) {") }],
+    ["owner address after a bounce", { volumeService: good.volumeService.replace('if (await addressBounced(env, email)) return { ok: false, refused: "bounced" };', "") }],
+    ["owner exception for any source", { service: good.service.replace("deal.contact_source_url.startsWith(OWNER_SUPPLIED_SOURCE))", "true)") }],
     ["bounce forgotten", { service: good.service.replace("recordBounce(env, d.contact_email", "noop(env, d.contact_email") }],
     ["list bypasses queueDeal", { volumeService: good.volumeService.replace("queueDeal(env, { eventId: ev.id", "insertDeal(env, { eventId: ev.id") }],
     ["second deal insert in tlcVolume", { volumeService: `${good.volumeService}\nconst q = "INSERT INTO tlc_deal (id) VALUES (1)";\n` }],

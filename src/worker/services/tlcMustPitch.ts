@@ -59,6 +59,20 @@ export interface WayInRow {
   note: string | null;
   supplied_by: string | null;
   supplied_at: string | null;
+  /** The club months her contact is for (0284); null means every month on her list. */
+  contact_months_json?: string | null;
+}
+
+/** Does her contact on this item cover that club month? */
+export function contactCovers(w: Pick<WayInRow, "state" | "contact_email" | "contact_months_json">, month: string): boolean {
+  if (w.state !== "CONTACT_ADDED" || !w.contact_email) return false;
+  if (!w.contact_months_json) return true;
+  try {
+    const v = JSON.parse(w.contact_months_json);
+    return !Array.isArray(v) || v.includes(month);
+  } catch {
+    return true;
+  }
 }
 
 export interface MustPitchLogRow {
@@ -109,12 +123,12 @@ export async function addressReadOffPage(email: string, source: string, check: (
 /** The one insert into tlc_deal. Every brand starts at PROSPECT on drip step 0; the drip decides the rest. Its created_at is the pass's own clock, so a week's new brands are counted on it (tlcVolume). */
 export async function queueDeal(
   env: Env,
-  d: { eventId: string; brand: string; category: string | null; contactName: string | null; contactEmail: string; contactSourceUrl: string; whyFit: string | null; firmScope: string },
+  d: { eventId: string; brand: string; category: string | null; contactName: string | null; contactEmail: string; contactSourceUrl: string; whyFit: string | null; firmScope: string; ownerAngle?: string | null },
   now: Date,
 ): Promise<boolean> {
   const res = await env.WP_OS_DB.prepare(
-    "INSERT OR IGNORE INTO tlc_deal (id, event_id, brand, category, contact_name, contact_email, contact_source_url, why_fit, next_send_at, firm_scope, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-  ).bind(`tld_${crypto.randomUUID()}`, d.eventId, d.brand, d.category, d.contactName, d.contactEmail.toLowerCase(), d.contactSourceUrl, d.whyFit, nextDripAt(0, null, now, null), d.firmScope, now.toISOString()).run();
+    "INSERT OR IGNORE INTO tlc_deal (id, event_id, brand, category, contact_name, contact_email, contact_source_url, why_fit, next_send_at, firm_scope, created_at, owner_angle) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+  ).bind(`tld_${crypto.randomUUID()}`, d.eventId, d.brand, d.category, d.contactName, d.contactEmail.toLowerCase(), d.contactSourceUrl, d.whyFit, nextDripAt(0, null, now, null), d.firmScope, now.toISOString(), d.ownerAngle ?? null).run();
   return (res.meta?.changes ?? 0) > 0;
 }
 
@@ -122,6 +136,9 @@ async function log(env: Env, e: { brand: string; month?: string | null; action: 
   await env.WP_OS_DB.prepare("INSERT INTO tlc_must_pitch_log (id, brand, month, action, by_who, at, detail, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")
     .bind(`tmpl_${crypto.randomUUID()}`, e.brand, e.month ?? null, e.action, e.by, e.at, e.detail ?? null, e.firmScope).run();
 }
+
+/** The must-pitch history line, for the email-instruction door (services/tlcOwnerInstruction.ts). */
+export const logMustPitch = log;
 
 export async function liveMustPitch(env: Env, firmScope: string, months?: readonly string[]): Promise<MustPitchRow[]> {
   const rows = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_must_pitch WHERE firm_scope = ?1 AND removed_at IS NULL ORDER BY month, brand").bind(firmScope).all<MustPitchRow>()).results ?? [];
@@ -136,7 +153,11 @@ export async function wayInRows(env: Env, firmScope: string): Promise<WayInRow[]
 export async function mustPitchToSearch(env: Env, events: ReadonlyArray<{ id: string; month: string }>, existing: ReadonlyArray<{ brand: string; event_id: string }>, firmScope: string): Promise<Array<{ brand: string; months: string[]; reasons: string[] }>> {
   const groups = await openGroups(env, events, existing, firmScope);
   const ways = new Map((await wayInRows(env, firmScope)).map((w) => [w.brand_key, w]));
-  return groups.filter((g) => ways.get(g.key)?.state !== "CONTACT_ADDED").map((g) => ({ brand: g.brand, months: g.events.map((e) => e.month), reasons: g.reasons }));
+  // A month her contact covers is not searched; a month it does not cover still is (0284: a contact for March only).
+  return groups
+    .map((g) => ({ ...g, events: g.events.filter((e) => !(ways.get(g.key) && contactCovers(ways.get(g.key)!, e.month))) }))
+    .filter((g) => g.events.length > 0)
+    .map((g) => ({ brand: g.brand, months: g.events.map((e) => e.month), reasons: g.reasons }));
 }
 
 /**
@@ -189,17 +210,20 @@ export async function handleMustPitch(
     // The brand batch works one club per tick and hands each must-pitch brand to exactly one of them.
     if (input.onlyBrands && !input.onlyBrands.has(g.key)) continue;
     const way = ways.get(g.key);
-    const months = g.events.map((e) => e.month).sort();
-    // Her own address: no page check, because she supplied it. Only months added after she gave it reach here.
+    // Her own address: no page check, because she supplied it. Only months added after she gave it reach here, and
+    // only the months it is for (0284); any other month goes on to the search below like any brand.
     if (way?.state === "CONTACT_ADDED" && way.contact_email) {
-      for (const ev of g.events) {
+      const covered = g.events.filter((e) => contactCovers(way, e.month));
+      for (const ev of covered) {
         if (await queueDeal(env, { eventId: ev.id, brand: g.brand, category: null, contactName: way.contact_name, contactEmail: way.contact_email, contactSourceUrl: `${OWNER_SUPPLIED_SOURCE}:${way.supplied_by ?? "a partner"}`, whyFit: way.note, firmScope }, now)) {
           await log(env, { brand: g.brand, month: ev.month, action: "QUEUED", by: "Wynn", at, detail: "with the contact you added", firmScope });
         }
       }
-      queued.push(`${g.brand} (${months.join(", ")}, your contact)`);
-      continue;
+      if (covered.length) queued.push(`${g.brand} (${covered.map((e) => e.month).sort().join(", ")}, your contact)`);
+      g.events = g.events.filter((e) => !contactCovers(way, e.month));
+      if (g.events.length === 0) continue;
     }
+    const months = g.events.map((e) => e.month).sort();
     const f = input.findings.find((x) => brandKey(x.brand) === g.key);
     const email = (f?.contact_email ?? "").trim().toLowerCase();
     const source = (f?.contact_source_url ?? "").trim();
@@ -441,7 +465,7 @@ export async function handleWayInContact(ctx: RouteContext): Promise<Response> {
   const at = now.toISOString();
   const { contact_name, contact_email, note } = parsed.data;
   await env.WP_OS_DB.prepare(
-    "UPDATE tlc_way_in SET state = 'CONTACT_ADDED', contact_name = ?3, contact_email = ?4, note = ?5, supplied_by = ?6, supplied_at = ?7, changed_at = ?7 WHERE firm_scope = ?1 AND brand_key = ?2",
+    "UPDATE tlc_way_in SET state = 'CONTACT_ADDED', contact_name = ?3, contact_email = ?4, note = ?5, supplied_by = ?6, supplied_at = ?7, changed_at = ?7, contact_months_json = NULL WHERE firm_scope = ?1 AND brand_key = ?2",
   ).bind(way.firm_scope, way.brand_key, contact_name, contact_email, note ?? null, partner.firstName, at).run();
   await log(env, { brand: way.brand, action: "CONTACT_ADDED", by: partner.firstName, at, detail: note ?? null, firmScope: way.firm_scope });
   const events = (await env.WP_OS_DB.prepare("SELECT id, month FROM tlc_event WHERE firm_scope = ?1 AND status NOT IN ('DONE','CANCELLED')").bind(way.firm_scope).all<{ id: string; month: string }>()).results ?? [];

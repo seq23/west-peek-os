@@ -22,7 +22,7 @@ import { renderBrandPitch, renderInternalOnePager, type TlcClubView, type TlcInt
 import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
 import { TLC_BRAND_SALES_JOB } from "../../shared/policy/outsideEmail";
 import { outsideEmailAllowed } from "./outsideEmail";
-import { addressReadOffPage, approvedDayZeroFor, handleMustPitch, liveMustPitch, ownerContactedBrands, mustPitchToSearch, queueDeal, type MustPitchFinding } from "./tlcMustPitch";
+import { addressReadOffPage, approvedDayZeroFor, handleMustPitch, liveMustPitch, ownerContactedBrands, mustPitchToSearch, OWNER_SUPPLIED_SOURCE, queueDeal, type MustPitchFinding } from "./tlcMustPitch";
 import { brandKey } from "../../shared/tlc/mustPitch";
 import { TLC_BENCH_LOW, TLC_NEW_BRANDS_PER_EVENT_WEEK } from "../../shared/tlc/volume";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
@@ -213,6 +213,8 @@ export interface TlcDealRow {
   decision_card_id: string | null;
   tier?: string | null;
   yes_at?: string | null;
+  /** Her framing for this brand, from her email (0284). */
+  owner_angle?: string | null;
   firm_scope: string;
 }
 
@@ -490,6 +492,10 @@ export async function runDripPass(env: Env, now: Date, firmScope = "west-peek"):
   // Her own first emails get their follow-up date (B, 31 Oct 2026), and a must-pitch brand stuck at "needs a way in"
   // gets the NeverBounce fallback (C), before the drip drafts what is due.
   await armOwnerFollowUps(env, now, firmScope);
+  // HER EMAILED BRAND CONTACTS FIRST (0284): an address she gave Wynn by email, on any thread, is on its brand's deal
+  // before the fallback looks for one and before the drip drafts.
+  const { applyOwnerEmailInstructions } = await import("./tlcOwnerInstruction");
+  await applyOwnerEmailInstructions(env, now, firmScope).catch((err) => appendEvent(env, { eventType: "tlc.owner_email_contact_failed", actorType: "system", actorId: "tlc_drip", objectType: "tlc_way_in", objectId: "owner-email", firmScope, payload: { error: String(err).slice(0, 300) } }));
   const { wayInFallback } = await import("./tlcMustPitch");
   await wayInFallback(env, now, firmScope).catch(() => null);
   const drip = await runDrip(env, now, firmScope);
@@ -814,7 +820,7 @@ export async function categoryRival(env: Env, deal: TlcDealRow, now: Date, sentO
   return row?.brand ?? null;
 }
 
-export async function runDrip(env: Env, now: Date, firmScope = "west-peek", replyDeps: import("./tlcBrandReply").BrandReplyDeps = {}): Promise<DripResult> {
+export async function runDrip(env: Env, now: Date, firmScope = "west-peek", replyDeps: import("./tlcBrandReply").BrandReplyDeps = {}, angleWriter?: import("./tlcOwnerInstruction").AngleWriter): Promise<DripResult> {
   const settings = await tlcSettings(env);
   const gate = brandSendGate(settings, await tlcOutside(env), await contentHashes(env));
   const result: DripResult = { ...emptyDrip(), gate };
@@ -863,7 +869,8 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
         continue;
       }
       // NEVERBOUNCE BEFORE THE FIRST EMAIL, AND NEVER A FOLLOW-UP TO AN ADDRESS THAT BOUNCED.
-      const addr = await dripAddressCheck(env, deal.contact_email, m.step, now);
+      // An address she gave herself is hers to use once she approved the email; only a real bounce stops it (0284).
+      const addr = await dripAddressCheck(env, deal.contact_email, m.step, now, deal.contact_source_url.startsWith(OWNER_SUPPLIED_SOURCE));
       if (!addr.ok && "refused" in addr) {
         await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'HELD', held_reason = ?2 WHERE id = ?1").bind(m.id, await refuseAddress(env, deal, addr.refused, now)).run();
         result.addressRefused = [...(result.addressRefused ?? []), brandDisplayName(deal.brand)];
@@ -947,7 +954,10 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
       continue;
     }
     // NEVERBOUNCE BEFORE THE FIRST EMAIL: an address that fails is never drafted to; one not yet checkable waits.
-    const addr = await volume.dripAddressCheck(env, deal.contact_email, deal.drip_step, now);
+    // An address SHE gave (owner-supplied) is hers to use (owner, 31 Oct 2026): NeverBounce still runs and its answer is
+    // shown on her approval email, but only a real bounce stops it.
+    const ownerGave = deal.contact_source_url.startsWith(OWNER_SUPPLIED_SOURCE);
+    const addr = await volume.dripAddressCheck(env, deal.contact_email, deal.drip_step, now, ownerGave);
     if (!addr.ok) {
       if ("refused" in addr) {
         await volume.refuseAddress(env, deal, addr.refused, now);
@@ -955,7 +965,14 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
       } else result.addressWaiting = (result.addressWaiting ?? 0) + 1;
       continue;
     }
-    const cardId = await fileDraft(env, deal, mail, firmScope);
+    // Email 1 to her angle, when she gave one (0284), unless she approved her own first email for this brand.
+    let toFile = mail;
+    if (deal.drip_step === 0 && !approvedFirst && deal.owner_angle) {
+      const { ownerAngleMail } = await import("./tlcOwnerInstruction");
+      const m = await ownerAngleMail(env, { brand: deal.brand, contact_name: deal.contact_name, owner_angle: deal.owner_angle }, { month: ev.month, topic: ev.topic }, angleWriter);
+      toFile = { subject: m.subject, text: m.text };
+    }
+    const cardId = await fileDraft(env, deal, toFile, firmScope);
     result.awaitingApproval += 1;
     result.newDrafts.push({ brand: deal.brand, month: ev.month, step: deal.drip_step, cardId });
   }

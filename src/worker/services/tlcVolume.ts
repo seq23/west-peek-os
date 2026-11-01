@@ -73,9 +73,28 @@ export async function addressBounced(env: Env, email: string): Promise<boolean> 
  * THE CHECK FOR ONE DRIP EMAIL: a first email needs NeverBounce's valid; a follow-up (to an address we already wrote to)
  * needs only that the address never bounced — never a fresh paid check per follow-up.
  */
-export async function dripAddressCheck(env: Env, email: string, step: number, now: Date): Promise<AddressAnswer> {
+export async function dripAddressCheck(env: Env, email: string, step: number, now: Date, ownerSupplied = false): Promise<AddressAnswer> {
+  // An address SHE gave (owner-supplied source) is hers to use: checked and shown to her, refused only on a bounce.
+  if (ownerSupplied) return ownerAddressCheck(env, email, step, now);
   if (step === 0) return addressCleared(env, email, now);
   return (await addressBounced(env, email)) ? { ok: false, refused: "bounced" } : { ok: true };
+}
+
+/**
+ * AN ADDRESS SHE GAVE WYNN HERSELF (owner, 31 Oct 2026). NeverBounce is asked once and its answer stored, so her
+ * approval email can say it; anything but a real bounce lets the draft go to her (her own address is hers to use).
+ * NeverBounce not answerable yet: the draft waits, like any first email.
+ */
+export async function ownerAddressCheck(env: Env, email: string, step: number, now: Date, fetchImpl: typeof fetch = fetch): Promise<AddressAnswer> {
+  if (await addressBounced(env, email)) return { ok: false, refused: "bounced" };
+  if (step > 0) return { ok: true };
+  const key = email.trim().toLowerCase();
+  if (await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_address_check WHERE email = ?1").bind(key).first()) return { ok: true };
+  const answer = await neverBounceCheck(env.WP_OS_NEVERBOUNCE_API_KEY, key, fetchImpl);
+  if (!answer.ok) return { ok: false, wait: answer.detail };
+  await env.WP_OS_DB.prepare("INSERT INTO tlc_address_check (email, result, source, checked_at) VALUES (?1, ?2, 'neverbounce', ?3) ON CONFLICT (email) DO NOTHING")
+    .bind(key, answer.result, now.toISOString()).run();
+  return { ok: true };
 }
 
 /** A real email to this address bounced: it is never written to again, for any club (her rule: never follow up to a bounce). */
