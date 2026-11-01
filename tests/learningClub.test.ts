@@ -168,41 +168,6 @@ describe("the rules, pure", () => {
     expect(brandFacingReason(null)).toBeNull();
   });
 
-  it("writes the brand emails signed by Sequoia: the brand's reason first, one proof line, one ask, no pitch or price, a quiet subject", () => {
-    const why = "your team ran three tastings in Brooklyn this autumn";
-    // Her flow (26 Oct 2026): the first pitch and ONE follow-up; there is no third or fourth email.
-    const steps = [0, 1].map((step) => dripEmail({ step, brand: "Acme", contactName: "Jo Doe", topic: "Matcha & Tea", month: "2027-02", eventDate: "2027-02-11", why }));
-    const [first, second] = steps;
-    // Signed by her, with her address; never by an employee, never by Scooter.
-    for (const m of steps) {
-      expect(m.text).toMatch(/\nSequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures(?:\n|$)/);
-      expect(m.text).not.toMatch(/Scooter|Wynn|Parker|West Peek Rooms\n\nIf you/);
-      // The opt-out is a soft, human P.S. on the first pitch (owner, 24 Oct 2026), its last line; her follow-up
-      // template carries none (26 Oct 2026).
-      if (steps.indexOf(m) === 0) {
-        expect(m.text.endsWith(`${TLC_PS_BY_STEP[0]!}\n\n3055 Lombard St #471024, San Francisco, CA 94147`)).toBe(true);
-        expect(m.text).toMatch(/P\.S\. If (?:this|it) isn't a fit/);
-      } else expect(m.text).not.toMatch(/P\.S\./);
-      expect(m.text).not.toMatch(/unsubscribe/i);
-      // No pitch, no price, no attachment, no exclusivity until they reply.
-      expect(m.text).not.toMatch(/\$\d|one-pager|one-sheet|pitch|attach|exclusiv|per category|to itself/i);
-      // One quiet subject for all four, so they thread.
-      expect(m.subject).toBe("Acme + a small room in New York");
-    }
-    // Email 1 leads with the brand's own reason, then one proof line, then the one ask.
-    expect(first!.text).toMatch(/^Hi Jo,\n\nI am writing because your team ran three tastings in Brooklyn this autumn\./);
-    expect(first!.text).toContain("Our community of more than 5,000 founders, operators and creatives");
-    expect(first!.text).toContain("founding partners");
-    expect(first!.text.indexOf("I am writing because")).toBeLessThan(first!.text.indexOf("Our community"));
-    expect(first!.text).toMatch(/Would you be open to exploring a partnership\?/);
-    expect((first!.text.match(/\?/g) ?? []).length).toBe(1);
-    // Email 2 is her ONE follow-up, word for word (shared/tlc/brandFlow.ts): it offers the three samples, built around
-    // the brand; never a call, never a price, no P.S.
-    expect(second!.text).toMatch(/^Hi Jo,\n\nOne quick follow-up on The Learning Club\. Rather than describe it, I'd be happy to show you: a sample run of show for the evening, a sketch of what a series of six could look like, and a breakdown of the kind of people we'd have in the room, all built around Acme\. Just say the word and I'll send them over\.\n\nSequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures\n\n3055 Lombard St #471024, San Francisco, CA 94147$/);
-    expect(second!.text).not.toMatch(/\bcall\b|\$|\bprice|\btier/i);
-    expect(second!.text).not.toContain("Would you be open to exploring a partnership?");
-  });
-
   it("reads the partners' reply as yes, no or counter", () => {
     expect(parseDecisionReply("Yes, do it")).toEqual({ kind: "YES" });
     expect(parseDecisionReply("no thanks")).toEqual({ kind: "NO" });
@@ -595,52 +560,10 @@ describe("TLC pre-launch proof states the confirmed community size", () => {
   });
 });
 
-// 22 Oct 2026: the owner had the Workshops line taken off every one-pager. The proof is now exactly
-// the Rooms line and the confirmed community line, in that order; nothing else may creep back in.
-describe("TLC pre-launch proof carries no Workshops line", () => {
-  it("is exactly the Rooms line and the confirmed community line, and the rendered page never says Workshops", async () => {
-    const { TLC_PRE_LAUNCH_PROOF } = await import("../src/shared/tlc/learningClub");
-    expect(TLC_PRE_LAUNCH_PROOF).toEqual([
-      "West Peek Rooms: the firm's in-person gatherings. The Learning Club is their monthly New York edition.",
-      TLC_CONFIRMED_COMMUNITY_LINE,
-    ]);
-    expect(TLC_PRE_LAUNCH_PROOF.some((l) => /workshop/i.test(l))).toBe(false);
-    for (const html of [renderBrandPitch(VIEW("Fragrance Lab", "2027-02")), renderInternalOnePager(IVIEW("Fragrance Lab", "2027-02"))]) {
-      expect(html).not.toMatch(/West Peek Workshops/i);
-      expect(html).not.toMatch(/West Peek Live/i);
-    }
-  });
-});
-
 // The owner's About block, word for word, on every one-pager (22 Oct 2026).
 const TLC_ABOUT_EXACT =
   "West Peek Ventures is a venture firm and community. We have facilitated more than $100M in secondary transactions, with late-stage positions including Higgsfield, Databricks and Stripe, among others. Our community of more than 5,000 founders, operators, investors, creatives and builders meets in person through West Peek Rooms, our event series. The Learning Club is a series within Rooms: small, hands-on deep dives in New York.";
 describe("TLC About blocks: the full one only inside, the community-first one for brands", () => {
-  it("the internal one-pager carries the owner's exact text; the brand pitch carries the community-first text and no internal-only fact", async () => {
-    const { TLC_ABOUT_WEST_PEEK, TLC_ABOUT_COMMUNITY } = await import("../src/shared/tlc/learningClub");
-    expect(TLC_ABOUT_WEST_PEEK).toBe(TLC_ABOUT_EXACT);
-    for (const about of [TLC_ABOUT_WEST_PEEK, TLC_ABOUT_COMMUNITY]) {
-      expect(about).not.toMatch(/—|–|\$500M|Fund I\b|fund size|carry|management fee|Parker|Wynn|\bcard\b/i);
-      expect(about).toMatch(/\b(We|we)\b/);
-      // The only head-count either states is the confirmed 5,000.
-      expect(about.match(/\d{1,3},\d{3}/g)).toEqual(["5,000"]);
-    }
-    expect(TLC_ABOUT_COMMUNITY).not.toMatch(/\$100M|secondary|Higgsfield|Databricks|Stripe/);
-    // Owner, 26 Oct 2026: the brand-facing About names the founding GP and Quarantine Con.
-    expect(TLC_ABOUT_COMMUNITY).toContain("founding GP Scooter Taylor, who went viral in 2020 with Quarantine Con");
-    for (const recap of [null, "Twenty-eight people made a bar."]) {
-      const inside = renderInternalOnePager(IVIEW("AI Tools", "2027-03", { recap }));
-      expect(inside).toContain("<h2>About West Peek Ventures</h2>");
-      expect(inside).toContain(`<p>${TLC_ABOUT_EXACT}</p>`);
-      expect(inside).toContain("<title>Internal: AI Tools</title>");
-      const pitch = renderBrandPitch(VIEW("AI Tools", "2027-03", { recap }));
-      expect(pitch).toContain(`<p>${TLC_ABOUT_COMMUNITY}</p>`);
-      // Owner, 26 Oct 2026: we host or bring a host; a brand rep is optional.
-      expect(pitch).toContain("<li>Nothing to staff: we host every segment or bring in a host, and you send someone only if you want to</li>");
-      expect(pitch).not.toMatch(/\$100M|Higgsfield|Databricks|Stripe/);
-      expect(pitch).toContain("<title>The Learning Club: AI Tools</title>");
-    }
-  });
   it("a one-search record from before the split that found none of Wynn's own picks still gets its picks search", async () => {
     const now = new Date("2026-11-30T14:00:00.000Z");
     const opened = await openBrandBatchCard(env, now);

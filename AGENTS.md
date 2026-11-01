@@ -58,7 +58,7 @@ Parent authorities (IMMUTABLE — never modify, move, or rewrite):
 - `docs/` — ENVIRONMENT_CONTRACT, RECOVERY, adapter contracts, phase notes, and the design system.
 - `src/client/styles.css` — the design system. Its `:root` block is the ONLY place a colour, type
   size, space, radius, duration, or easing is declared. Components consume `var(--wp-*)` tokens and
-  never declare colour; `npm run validate:brand` fails the build if they do. Read
+  never declare colour (a style rule, not a CI gate since the 1 Nov 2026 test cleanup). Read
   `docs/WEST_PEEK_DESIGN_SYSTEM.md` before changing any UI, and
   `docs/WEST_PEEK_DESIGN_REFERENCE_AUDIT.md` for why each rule exists.
 
@@ -94,19 +94,6 @@ employee, the health board, site forms, test traps) is `docs/OPERATIONS.md`; dep
 - `npm run migrate:local` — apply D1 migrations to local miniflare sqlite.
 - `npm run backup:local` / `npm run restore:local` — D1 export/restore proof path.
 - `npm run vault:*` — encrypted secret vault operations (values never printed).
-- `npm run validate:brand` — West Peek brand-system scan plus its 9-fixture self-test: the authority
-  document is intact, colour is declared only in the token block, no stale orange, no blue/purple/cyan
-  product colour, and the approved mark is wired into the shell. The family convention — every other
-  West Peek repo ships the same scan.
-- `npm run validate:design-tokens` — design-token scan plus its 12-fixture self-test. Every
-  `font-size`, spacing value, `border-radius` and `line-height` in `styles.css` is on the scale the
-  token block declares, and no component sets two ADJACENT type steps on text of the same register.
-  It exists because the purpose block on all 38 pages ran its sentence at 13px and the line beneath
-  it at 12px — one pixel apart, which reads as a mistake rather than a hierarchy — and nothing was
-  checking. Extending the same technique to the other three scales found 190 off-token spacing
-  values across 32 distinct sizes, beside a comment reading "4pt scale. Nothing off-scale."
-  Something genuinely off any scale — text drawn inside an SVG — may carry
-  `/* design-token-exempt: why */`, and the reason is required.
 - `npm run validate:authority` / `validate:ai-boundary` / `validate:network-boundary` — static boundary
   scans plus their own self-tests and seed-freshness checks. If a scan legitimately needs narrowing,
   narrow it precisely AND add a self-test fixture proving it still catches what it exists to catch

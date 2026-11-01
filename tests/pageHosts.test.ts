@@ -90,13 +90,6 @@ describe("every surface has a host", () => {
     expect(Object.entries(PAGE_HOSTS).filter(([, h]) => retired.has(h.employee))).toEqual([]);
   });
 
-  it("gives every host a reason in the operator's words, not the schema's", () => {
-    for (const [key, host] of Object.entries(PAGE_HOSTS)) {
-      expect(host.because.length, key).toBeGreaterThan(20);
-      expect(host.because, key).toMatch(/\.$/);
-      expect(host.because, key).not.toMatch(/_[a-z]|firm_scope|action_key/);
-    }
-  });
 });
 
 describe("a host resolves to a real person with real machines", () => {

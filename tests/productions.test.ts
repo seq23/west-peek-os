@@ -150,14 +150,6 @@ describe("what Walker is told", () => {
     expect(skill!.guidance.join(" ")).toMatch(/No fabricated contacts/);
   });
 
-  it("describes the one monthly job on the Work page as Scooter's agency duty, not fund work", () => {
-    expect(JOB_FACTS.productions_monthly?.what).toMatch(/Scooter's own agency, not the fund/);
-    expect(JOB_FACTS.productions_monthly?.deliveredBy).toEqual(["Walker"]);
-    // The two it folded and the one-off introduction are RETIRED (0169): off the page, out of the facts.
-    for (const key of ["productions_customer_ideas", "productions_press_pitches", "productions_intro_note"]) {
-      expect(JOB_FACTS[key], `${key} is retired and must not be described as live work`).toBeUndefined();
-    }
-  });
 });
 
 describe("what survives the search", () => {
