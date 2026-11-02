@@ -110,9 +110,21 @@ describe("reading a model's interpretation back", () => {
     // The caller must block on this. An empty steer and a failed interpretation look identical to
     // a chain that carries on, which is the defect this whole pass exists to remove.
     expect(parseInterpretation("Sure! I'd be happy to help with that.")).toBeNull();
-    expect(parseInterpretation("STEER: do it differently")).toBeNull();
+    expect(parseInterpretation("STEER: none\nCANNOT: N/A")).toBeNull();
     expect(parseInterpretation("")).toBeNull();
     expect(parseInterpretation(null)).toBeNull();
+  });
+
+  it("reads directives the model listed without an UNDERSTOOD line, rather than throwing his words away (2 Nov 2026)", () => {
+    // The real reply from Walker's November rebuild: six STEER lines, no summary. It used to parse
+    // as null, and the card blocked asking Scooter to say again what he had already said.
+    const out = parseInterpretation(
+      "STEER: 1 — Point the live search at national organizations sized like TNTP.\nSTEER: 3 — Reject anything whose only fit is virtual events.\nCANNOT: read private 990 data",
+    );
+    expect(out).not.toBeNull();
+    expect(out!.steer).toEqual(["1 — Point the live search at national organizations sized like TNTP.", "3 — Reject anything whose only fit is virtual events."]);
+    expect(out!.cannot).toEqual(["read private 990 data"]);
+    expect(steerBlock(out)).toContain("national organizations sized like TNTP");
   });
 
   it("puts the steer ABOVE whatever the chain was going to say, and says so", () => {
@@ -260,6 +272,25 @@ describe("her words reach a model, and what comes back is acted on", () => {
     expect(steer.interpretation).toBeNull();
     expect(steer.failure).toContain("did not say what it understood");
     expect(steer.cannot.length).toBeGreaterThan(0);
+  });
+
+  it("asks again after a failure instead of serving the cached failure for the same words (2 Nov 2026)", async () => {
+    await card("wc_retry_after_fail", { prompt: "target national organisations this time" });
+    const first = await steerFor(env, actor(), req("wc_retry_after_fail"), unreadable);
+    expect(first.cannot.length, "the failure still stops the work").toBeGreaterThan(0);
+    let asked = 0;
+    const second = await steerFor(env, actor(), req("wc_retry_after_fail"), async (e, a, p) => {
+      asked += 1;
+      return steersWith("national organisations", "search national organisations only")(e, a, p);
+    });
+    expect(asked, "the same words are put to the model again").toBe(1);
+    expect(second.cannot).toEqual([]);
+    expect(second.text).toContain("search national organisations only");
+    // And a SUCCESS is still reused: no third call for the same words.
+    let again = 0;
+    const third = await steerFor(env, actor(), req("wc_retry_after_fail"), async (e, a, p) => { again += 1; return unreadable(e, a, p); });
+    expect(again).toBe(0);
+    expect(third.text).toContain("search national organisations only");
   });
 });
 

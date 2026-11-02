@@ -376,7 +376,12 @@ async function interpretSteer(
   if (!isWorthInterpreting(pieces)) return NOTHING_SAID;
 
   const prior = await cached(env, req.cardId, pieces);
-  if (prior?.hit) {
+  /*
+   * ONLY A READ IS REUSED (2 Nov 2026). A cached FAILURE used to be served back for the same words
+   * for ever, so a card blocked on a model that answered in the wrong shape re-blocked on every
+   * "try again" without the model ever being asked again. A failure is retried; a success is reused.
+   */
+  if (prior?.hit && prior.row.interpreted_json) {
     const interpretation = prior.row.interpreted_json ? (JSON.parse(prior.row.interpreted_json) as Interpretation) : null;
     // Cached rows written before HANDOFF existed carry no `.handoff` at all.
     const resolved = interpretation ? await resolveHandoffs(env, req, interpretation.handoff ?? []) : { handoffs: [], extraCannot: [] };

@@ -273,7 +273,18 @@ export function parseInterpretation(output: string | null | undefined): Interpre
       else cannot.push(body);
     } else cannot.push(body);
   }
-  if (!understood) return null;
+  /*
+   * DIRECTIVES WITHOUT A SUMMARY ARE STILL AN ANSWER (2 Nov 2026). Walker's rebuild of Scooter's
+   * November note blocked as "the brief is missing" on an interpretation that listed six precise
+   * STEER lines and simply left out the UNDERSTOOD line — his words were read perfectly and then
+   * thrown away, and he was asked to say again what he had already said. Null stays reserved for a
+   * reply with no directive at all (prose, or only "none"), which is what a failed interpretation
+   * looks like; that is still never mistaken for "no steer".
+   */
+  if (!understood) {
+    if (steer.length === 0 && cannot.length === 0 && handoff.length === 0) return null;
+    understood = "the directives below (the model listed them without a one-line summary)";
+  }
   return {
     understood: understood.slice(0, 600),
     steer: steer.map((s) => s.slice(0, 600)),
