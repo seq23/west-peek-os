@@ -663,6 +663,32 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     expect(sends.filter((x) => x.to.includes("flow.example"))).toHaveLength(0);
   });
 
+  it("a reply that only passes the note on ends the template flow: a short thank-you for her approval, never drip step 2, the samples offer or the proposal", async () => {
+    // Owner, 2 Nov 2026: the brand said it was forwarding her note to the right team, and Wynn drafted the drip's
+    // second email (the samples offer) as the answer. The model must not even be asked: the answer is fixed.
+    const e = docEnv();
+    const asked: string[] = [];
+    const pushy: ReplyDrafter = async (_e, _a, i) => { asked.push(i.intent); return { ok: true, body: `Hi,\n\nThanks! ${THREE_THINGS_OFFER}`, detail: "ok" }; };
+    await deal("tld_fwd", "Forward Co", "kai@forward.example");
+    await take(e, "tld_fwd", `Hi Sequoia,\n\nThanks so much for thinking of us! I'm forwarding this information along to the right team at our office. They'll be in touch if this sounds like something we can be a part of at this time.${QUOTED}`, "w-1@forward.example", { drafter: pushy });
+    const r = (await e.WP_OS_DB.prepare("SELECT kind, draft_body, attachments_json FROM tlc_brand_reply WHERE deal_id = 'tld_fwd'").first<{ kind: string; draft_body: string; attachments_json: string | null }>())!;
+    expect(r).toMatchObject({ kind: "THANKS", attachments_json: null });
+    expect(asked).toEqual([]);
+    expect(r.draft_body).not.toMatch(/run of show|series of six|three things|samples|one-pager|\?/i);
+    expect(r.draft_body).toContain("passing it along");
+    // The drip is over for that thread: the next pass files no step 2 for it.
+    expect(await e.WP_OS_DB.prepare("SELECT stop_reason, next_send_at FROM tlc_deal WHERE id = 'tld_fwd'").first()).toEqual({ stop_reason: "REPLIED", next_send_at: null });
+    await runDrip(e, new Date(MON.getTime() + 10 * 86_400_000), "west-peek", { drafter: pushy, mailbox: null });
+    expect((await e.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_drip_message WHERE deal_id = 'tld_fwd'").first<{ n: number }>())!.n).toBe(0);
+    // After the samples went, "looping our VP in" is a handoff too, not interest: no proposal, no price sheet.
+    await deal("tld_loop", "Loop Co", "mo@loop.example");
+    await e.WP_OS_DB.prepare("INSERT INTO tlc_samples (id, deal_id, input_json, state, sent_at) VALUES ('tls_loop', 'tld_loop', ?1, 'SENT', '2026-11-06T15:00:00.000Z')").bind(JSON.stringify({ segmentTitle: "Making it remember" })).run();
+    await take(e, "tld_loop", "Thanks, Sequoia. I'm looping @Ari Vale <ari@loop.example> back in.", "w-2@loop.example", { drafter: pushy });
+    expect(await e.WP_OS_DB.prepare("SELECT intent, kind, attachments_json FROM tlc_brand_reply WHERE deal_id = 'tld_loop'").first()).toEqual({ intent: "QUESTION", kind: "THANKS", attachments_json: null });
+    // A handoff that also asks for something is answered as the ask.
+    expect(classifyBrandReply({ subject: "Re: x", text: "I've looped in our VP of Marketing. Please do send over the materials." }, MON)).toEqual({ kind: "REPLY", intent: "YES" });
+  });
+
   it("a time they proposed is accepted when she is free, and never when she is busy", async () => {
     const { nyToUtc } = await import("../src/shared/tlc/callSlots");
     const thu = nyToUtc(2026, 11, 12, 14, 30).getTime();

@@ -10,7 +10,7 @@ import { addressIn, authenticationVerdict } from "../../shared/intake/partnerAut
 import { newTextOf } from "../../shared/events/packetDecisionToken";
 import { isEmptyReply, parseDraftReply } from "../../shared/tlc/draftReply";
 import {
-  BRAND_MUST_STAFF, BRAND_REPLY_ASK, BRAND_REPLY_REF_RE, CALL_ASK, WE_HOST, MONEY_WORDS, THREE_THINGS_OFFER, WHO_WE_ARE, classifyBrandReply, fallbackReplyBody, herNoteOf, noMoneyNow, readResearch, reportText,
+  BRAND_MUST_STAFF, BRAND_REPLY_ASK, BRAND_REPLY_REF_RE, CALL_ASK, WE_HOST, MONEY_WORDS, THREE_THINGS_OFFER, WHO_WE_ARE, classifyBrandReply, fallbackReplyBody, handoffProblems, handoffThanks, herNoteOf, noMoneyNow, readResearch, reportText,
   stageAfterReply, standingRulesIn, theirNewText, tierLines, wantsResearch,
   type BrandReplyIntent, type ReplyDraftInput, type WynnRule,
 } from "../../shared/tlc/brandReply";
@@ -168,6 +168,8 @@ const defaultDrafter: ReplyDrafter = async (env, actor, i) => {
       // NEVER A CALL WE ASK FOR (owner, 1 Nov 2026, a standing rule, no longer only her NO_CALL_ASK row): deals close
       // by email end to end. A call THEY propose is always a yes, scheduled from her calendar (shared/tlc/callSlots.ts).
       : i.samplesAttached ? []
+      : i.intent === "HANDOFF"
+        ? ["They passed her note to a colleague or the right team and asked nothing. Write ONLY a short thank-you (under 60 words): no pitch, no offer of samples or materials, no question, no call, no price. The next move is theirs."]
       : i.intent === "CALL"
         ? [`They proposed a call: say yes to it.${i.callLink ? ` Her booking link: ${i.callLink}` : " Ask which times suit them."}`]
         : [`Never suggest or ask for a call. Next step: ${THREE_THINGS_OFFER}`]),
@@ -189,13 +191,15 @@ const defaultDrafter: ReplyDrafter = async (env, actor, i) => {
 };
 
 /** A draft that breaks her voice rules is not used; the plain template stands in. */
-export function draftProblems(body: string, intent: BrandReplyIntent, opts: { noMoney?: boolean; weHost?: boolean; callPlan?: CallPlan | null } = {}): string[] {
+export function draftProblems(body: string, intent: BrandReplyIntent, opts: { noMoney?: boolean; weHost?: boolean; callPlan?: CallPlan | null; handoff?: boolean } = {}): string[] {
   const out: string[] = [];
   if (/\bP\.?\s?S\.?\b/.test(body)) out.push("a P.S.");
   if (/\b\d{2,5}\s+\w+(?:\s\w+)?\s(?:street|st\.?|avenue|ave\.?|road|rd\.?|blvd|suite)\b/i.test(body)) out.push("a postal address");
   // Scooter is named only as who he is to the brand (her WHO_WE_ARE rule): "Scooter Taylor", our founding GP.
   if (/\bscooter\b(?!\s+taylor)/i.test(body)) out.push("a name other than hers");
   if (opts.noMoney && MONEY_WORDS.test(body)) out.push("money before a call (her rule)");
+  // A handoff gets a thank-you and nothing more, unless her own note asks for more.
+  if (opts.handoff) out.push(...handoffProblems(body));
   // Every brand email says rooms of 25+ guests, sized to their goals (her GUESTS_25_40 rule, revised 1 Nov 2026): never a
   // range ("25 to 100+", "25–40", "60–150") and never another number with a plus. The PDFs keep "25 to 100+".
   for (const m of body.matchAll(/\b(\d+)\s*(?:to|–|-)\s*(\d+)(\+?)\s+(?:people|guests|New Yorkers)\b/gi)) {
@@ -233,7 +237,7 @@ async function draftFor(env: Env, deal: TlcDealRow, ev: TlcEventRow, intent: Bra
   const weHost = rules.some((r) => r.code === WE_HOST);
   const out = await (deps.drafter ?? defaultDrafter)(env, wynnActor(deal.firm_scope), { ...input, note: redo?.note ?? null, previous: redo?.previous ?? null, rules, noMoney, research: redo?.research ?? null, callPlan, samplesAttached: redo?.samplesAttached })
     .catch((err) => ({ ok: false, body: "", detail: String(err) }));
-  const words = out.ok && draftProblems(out.body, intent, { noMoney, weHost, callPlan }).length === 0 && (!redo?.samplesAttached || (/\battach(?:ed|ment)\b/i.test(out.body) && !/\b(?:can|could|happy to) (?:send|share)\b/i.test(out.body)))
+  const words = out.ok && draftProblems(out.body, intent, { noMoney, weHost, callPlan, handoff: intent === "HANDOFF" && !redo?.note }).length === 0 && (!redo?.samplesAttached || (/\battach(?:ed|ment)\b/i.test(out.body) && !/\b(?:can|could|happy to) (?:send|share)\b/i.test(out.body)))
     ? out.body
     : redo?.samplesAttached ? samplesCoverEmail({ brand: brandDisplayName(deal.brand), contactName: deal.contact_name, topic: ev.topic ?? "", segmentTitle: (await flowStep(env, deal.id)).segment ?? "The brand segment" })
     : callPlan
@@ -308,7 +312,7 @@ async function redraftFor(env: Env, r: ReplyRow, note: string, now: Date, deps: 
       return "RESEARCH_WAITING";
     }
   }
-  const draft = await draftFor(env, deal, ev, r.intent as BrandReplyIntent, r.their_text, deps, { note, previous, research: report, samplesAttached: Boolean(r.samples_id) });
+  const draft = await draftFor(env, deal, ev, r.kind === "THANKS" ? "HANDOFF" : r.intent as BrandReplyIntent, r.their_text, deps, { note, previous, research: report, samplesAttached: Boolean(r.samples_id) });
   await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'DRAFTED', notice_ref = NULL, draft_body = ?2, change_note = ?3, report_text = ?4, research_due = NULL, held_reason = NULL WHERE id = ?1")
     .bind(r.id, draft, note, report).run();
   return "DRAFTED";
@@ -335,6 +339,12 @@ const wordsOf = (body: string): string => {
 };
 
 // ── Taking a reply ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The intent column's CHECK predates HANDOFF and a CHECK cannot be widened additively: a handoff is stored as
+ * QUESTION with kind THANKS, and read back as HANDOFF from the kind.
+ */
+const storedIntent = (i: BrandReplyIntent): string => (i === "HANDOFF" ? "QUESTION" : i);
 
 export type TakeOutcome = "SEEN" | "AUTO_REPLY" | "NO" | "DRAFTED";
 
@@ -390,7 +400,15 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
     "SELECT offered_slots_json FROM tlc_brand_reply WHERE deal_id = ?1 AND state = 'SENT' AND offered_slots_json IS NOT NULL AND agreed_slot IS NULL ORDER BY sent_at DESC LIMIT 1",
   ).bind(deal.id).first<{ offered_slots_json: string }>();
   const picked = pendingSlots ? pickedSlot(words, JSON.parse(pendingSlots.offered_slots_json) as string[], now) : null;
-  if (!picked && (requestsSamples(words) || ((await offeredSamples(env, deal.id)) && isYesToSamples(words)))) {
+  if (!picked && cls.intent === "HANDOFF") {
+    /*
+     * THEY PASSED IT ON (owner, 2 Nov 2026, a brand: "I'm forwarding this along to the right team"). The template
+     * flow does not advance: no samples offer, no proposal, no next drip email. A short thank-you, for her approval
+     * (she may skip it); the deal waits for whoever it was passed to.
+     */
+    kind = "THANKS";
+    body = [handoffThanks(deal.contact_name), "", ...TLC_SIGNATURE].join("\n");
+  } else if (!picked && (requestsSamples(words) || ((await offeredSamples(env, deal.id)) && isYesToSamples(words)))) {
     intent = "YES";
     const built = await buildSamples(env, deal, ev, { theirText: words }, deps.samples ?? {});
     samplesId = built.ok ? built.row.id : built.id;
@@ -452,7 +470,7 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
     `INSERT OR IGNORE INTO tlc_brand_reply (id, deal_id, brand_message_id, their_subject, their_text, received_at, intent, draft_subject, draft_body, state, firm_scope,
        samples_id, offered_slots_json, agreed_slot, research_due, held_reason, kind, tier, attachments_json)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'DRAFTED', ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)`,
-  ).bind(`tbr_${crypto.randomUUID()}`, deal.id, mid, msg.subject.slice(0, 300), words.slice(0, 8000), msg.receivedAt, intent, subject.slice(0, 300), body, deal.firm_scope,
+  ).bind(`tbr_${crypto.randomUUID()}`, deal.id, mid, msg.subject.slice(0, 300), words.slice(0, 8000), msg.receivedAt, storedIntent(intent), subject.slice(0, 300), body, deal.firm_scope,
     samplesId, offered && offered.length ? JSON.stringify(offered) : null, agreed, hold?.due ?? null, hold?.why ?? null,
     kind ?? (samplesId ? "SAMPLES" : agreed || offered ? "CALL" : "ANSWER"), tier, attachments.length ? JSON.stringify(attachments) : null).run();
   await appendEvent(env, { eventType: "tlc.brand_reply_drafted", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: { intent, samples: samplesId !== null, offered: offered?.length ?? 0, agreed } });
@@ -641,7 +659,7 @@ export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-
       tldr: `${waiting.length} brand${many ? "s" : ""} replied to your Learning Club email${many ? "s" : ""}. ${BRAND_REPLY_ASK}.`,
       tldrBullets: many ? ['Reply "approved" to send all', 'Or "approve 1" · "skip 2" · "change 2: what to change"'] : ['Reply "approved" to send it', "Or reply with your changes"],
       sections: [
-        { label: "Who replied", bullets: waiting.map((r, i) => `${i + 1} · ${brandDisplayName(r.brand)} (${monthWords(r.month)}): ${r.kind === "PROPOSAL" ? "step 4: the proposal (prices on the attached one-pager)" : r.kind === "CONFIRM" ? `step 5: ${r.tier ? TLC_TIER_LABEL(r.tier) : "a level"} agreed (agreement and invoice attached)` : r.agreed_slot ? `a call, ${slotWords(r.agreed_slot)}` : r.intent === "CALL" ? "wants a call (times from your calendar offered)" : r.samples_id ? "said yes to the samples (open the samples page in the email; the PDF is made when you approve)" : r.intent === "YES" ? "said yes" : "asked a question"}`).slice(0, 6) },
+        { label: "Who replied", bullets: waiting.map((r, i) => `${i + 1} · ${brandDisplayName(r.brand)} (${monthWords(r.month)}): ${r.kind === "PROPOSAL" ? "step 4: the proposal (prices on the attached one-pager)" : r.kind === "CONFIRM" ? `step 5: ${r.tier ? TLC_TIER_LABEL(r.tier) : "a level"} agreed (agreement and invoice attached)` : r.agreed_slot ? `a call, ${slotWords(r.agreed_slot)}` : r.intent === "CALL" ? "wants a call (times from your calendar offered)" : r.samples_id ? "said yes to the samples (open the samples page in the email; the PDF is made when you approve)" : r.intent === "YES" ? "said yes" : r.kind === "THANKS" ? "passed your note on to a colleague (a short thank-you only; skip it to send nothing)" : "asked a question"}`).slice(0, 6) },
         { label: "What happens on your word", bullets: ["Your answer goes from your own mailbox, on their thread", "A call they asked for moves the deal to Call", "Nothing goes to a brand until you say so"] },
       ],
       details: [...blocks.flatMap((b) => [b, ""]), `Ref ${ref}`].join("\n"),
