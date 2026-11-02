@@ -13,6 +13,9 @@ rulings) are not kept here: they live in the West Peek Ventures company brain in
 - `auth.ts` resolves `CF_ACCESS_CLIENT_ID` to the browser agent first, so one token can never be
   both. **If the listener heartbeat returns 403, check those three places before the code.** The
   listener runs on the Mac as the launchd job `ventures.westpeek.os.meet-listener`.
+- The three Mac pieces (`local-jobs`, `seat-claimer`, `meet-listener`) are always on (KeepAlive).
+  When the Mac is offline they log `fetch failed` cycles: that means running without a network,
+  not dead. Check `launchctl list | grep westpeek` before treating them as down.
 
 ## How work moves
 
