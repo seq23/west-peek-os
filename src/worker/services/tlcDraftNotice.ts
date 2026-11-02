@@ -9,6 +9,7 @@ import { herNoteOf } from "../../shared/tlc/brandReply";
 import { withBrandFooter } from "../../shared/tlc/brandFooter";
 import { BRAND_EMAIL_ROOM_WORDS, BRAND_GUESTS, TLC_INTERNAL_NOTE, TLC_OWNER, TLC_PS_BY_STEP, TLC_SAMPLES_OFFER, TLC_SEATS, TLC_SIGNATURE, brandDisplayName, dripEmail, monthWords, seatsOf, signedBrandEmail } from "../../shared/tlc/learningClub";
 import { actorForFirmUser, type Actor } from "./authorize";
+import type { DripResult } from "./learningClub";
 
 /**
  * ONE TLC EMAIL A WEEK, APPROVED BY REPLY (owner, 24 Oct 2026).
@@ -53,6 +54,36 @@ async function pendingDrafts(env: Env, firmScope: string): Promise<PendingDraft[
   // Brands that said yes first (they are waiting on us), then the new drafts, nearest club first.
   const rank = (d: PendingDraft) => (d.kind === "pitch" ? 0 : 1);
   return [...pitch, ...drip].sort((a, b) => rank(a) - rank(b) || a.month.localeCompare(b.month) || a.brand.localeCompare(b.brand) || a.step - b.step);
+}
+
+/** Where she re-approves the brand pitch and playbook (the Learning Club page's send switch). */
+export const TLC_SEND_SWITCH_URL = "https://os.joinwestpeek.com/#/learning-club";
+
+/** Brand sending is off: what she is told, in the email that asks for (or answers) her approvals. */
+export function sendingOffLine(gate: { open: boolean; reasons: readonly string[] }): string | null {
+  if (gate.open) return null;
+  return `Brand sending is off: ${gate.reasons.join("; ")}. Nothing you approve goes to a brand until then; your approvals are kept and go on the first pass after. Tap to look and approve: ${TLC_SEND_SWITCH_URL}`;
+}
+
+/*
+ * AN APPROVED EMAIL THAT DID NOT GO IS EXPLAINED (partner tail, 2 Nov 2026). Her "approve" on TLC-B5BEZR (Anthropic)
+ * was recorded, but the send gate was closed: #313 re-worded the sales playbook on her 1 Nov rule, which voids her
+ * approval of the old text (approvals are of exact content). Her answer said "1 approved (0 sent now)" and
+ * "Sent now: None yet" with no reason, so a stopped outreach read as a working one. Every approved email that did not
+ * go on this pass is now accounted for, with the reason and what (if anything) she has to do.
+ */
+export function notSentLines(approved: number, drip: Pick<DripResult, "gate" | "sent" | "sentBrands" | "waitingForAllowance" | "addressWaiting" | "addressRefused" | "goalStopped"> | null): string[] {
+  if (!drip || approved === 0) return [];
+  const off = sendingOffLine(drip.gate);
+  if (off) return [`${approved} approved email${approved === 1 ? "" : "s"} not sent. ${off}`];
+  const out: string[] = [];
+  if (drip.waitingForAllowance) out.push(`${drip.waitingForAllowance} wait for the next day's warm-up allowance; nothing needed from you.`);
+  if (drip.addressWaiting) out.push(`${drip.addressWaiting} wait for NeverBounce to answer; the next pass asks again.`);
+  if (drip.addressRefused?.length) out.push(`Never sent, the address failed NeverBounce: ${drip.addressRefused.join(", ")}.`);
+  if (drip.goalStopped?.length) out.push(`Held, the club reached its sponsor goal: ${drip.goalStopped.join(", ")}.`);
+  const accounted = Math.max(drip.sent, drip.sentBrands.length) + drip.waitingForAllowance + (drip.addressWaiting ?? 0) + (drip.addressRefused?.length ?? 0);
+  if (!out.length && accounted < approved) out.push(`${approved - accounted} did not go on this pass (another brand in the same category is live for that club); they go on the first pass that allows them.`);
+  return out;
 }
 
 function mintRef(): string {
@@ -144,7 +175,8 @@ export async function sendDraftNotice(env: Env, now: Date, firmScope = "west-pee
   const progress = await clubProgress(env, firmScope, now);
   const ref = mintRef();
   const { items, sections, copy } = listOf(all);
-  const { emailOwner } = await import("./learningClub");
+  const { emailOwner, brandGateFor } = await import("./learningClub");
+  const off = sendingOffLine(await brandGateFor(env));
   const sent = await emailOwner(env, {
     employee: "Wynn",
     email: {
@@ -154,6 +186,7 @@ export async function sendDraftNotice(env: Env, now: Date, firmScope = "west-pee
         : "No brand email is waiting for you this week; why is below.",
       ...(all.length ? { tldrBullets: ['Reply "approve all"', 'Or "approve 1, 3" · "skip 2" · "change 2: what to change"'] } : {}),
       sections: [
+        ...(off ? [{ label: "Sending is off", bullets: [off] }] : []),
         ...(progress.length ? [{ label: "Where each club stands", bullets: progress }] : []),
         ...sections,
         ...(short.length ? [{ label: "Short this week", bullets: short.slice(0, 6) }] : []),
@@ -205,7 +238,8 @@ async function sendCatchUpNotice(env: Env, now: Date, firmScope: string): Promis
   const { items, sections, copy } = listOf(all);
   const { clubProgress } = await import("./tlcVolume");
   const progress = await clubProgress(env, firmScope, now);
-  const { emailOwner } = await import("./learningClub");
+  const { emailOwner, brandGateFor } = await import("./learningClub");
+  const off = sendingOffLine(await brandGateFor(env));
   const sent = await emailOwner(env, {
     employee: "Wynn",
     email: {
@@ -213,6 +247,7 @@ async function sendCatchUpNotice(env: Env, now: Date, firmScope: string): Promis
       tldr: `${all.length} brand email${all.length === 1 ? " is" : "s are"} waiting for you, every club at once; ${unlisted.length} of them were not in an email yet. The full text of each is below. Nothing goes to a brand until you approve it.`,
       tldrBullets: ['Reply "approve all"', 'Or "approve 1, 3" · "skip 2" · "change 2: what to change"'],
       sections: [
+        ...(off ? [{ label: "Sending is off", bullets: [off] }] : []),
         ...(progress.length ? [{ label: "Where each club stands", bullets: progress }] : []),
         ...sections,
         { label: "Also on Approvals", bullets: ["Each draft is on the Approvals screen too, if you would rather decide there."] },
@@ -382,6 +417,7 @@ export async function applyTlcDraftReply(
    * email's, and In-Reply-To names it, so it reads as one conversation.
    */
   const waiting = await pendingDrafts(env, firmScope);
+  const notSent = notSentLines(lines.approved.length, drip);
   const nextRef = waiting.length ? mintRef() : null;
   const listed = listOf(waiting);
   const root = await env.WP_OS_DB.prepare("SELECT items_json FROM tlc_draft_notice WHERE ref = ?1").bind(rootRef).first<{ items_json: string }>();
@@ -391,11 +427,12 @@ export async function applyTlcDraftReply(
     employee: "Wynn",
     email: {
       what: `TLC: this week's brands, ${rootCount} to approve · ${rootRef}`,
-      tldr: `Done: ${lines.approved.length} approved${drip ? ` (${drip.sentBrands.length} sent now${drip.waitingForAllowance ? `, ${drip.waitingForAllowance} on the next day's warm-up allowance` : ""})` : ""}, ${lines.skipped.length} skipped, ${lines.changed.length} redrafted.${waiting.length ? ` ${waiting.length} still waiting for you, below.` : ""}`,
+      tldr: `Done: ${lines.approved.length} approved${drip ? ` (${drip.sentBrands.length} sent now${drip.waitingForAllowance ? `, ${drip.waitingForAllowance} on the next day's warm-up allowance` : ""})` : ""}, ${lines.skipped.length} skipped, ${lines.changed.length} redrafted.${drip && !drip.gate.open ? " NOTHING WENT TO A BRAND: brand sending is off (why below)." : ""}${waiting.length ? ` ${waiting.length} still waiting for you, below.` : ""}`,
       ...(waiting.length ? { tldrBullets: ['Reply "approve all"', 'Or "approve 1, 3" · "skip 2" · "change 2: what to change"'] } : {}),
       sections: [
         { label: "Approved", bullets: lines.approved.length ? lines.approved.slice(0, 6) : ["None"] },
         { label: "Sent now", bullets: drip?.sentBrands.length ? drip.sentBrands.slice(0, 6) : ["None yet"] },
+        ...(notSent.length ? [{ label: "Approved, not sent yet: why", bullets: notSent }] : []),
         ...(lines.skipped.length ? [{ label: "Skipped (not sent)", bullets: lines.skipped.slice(0, 6) }] : []),
         ...(lines.changed.length ? [{ label: "Redrafted (full text below)", bullets: lines.changed.slice(0, 6) }] : []),
         ...(lines.problems.length ? [{ label: "Not done", bullets: lines.problems.slice(0, 6) }] : []),
@@ -416,7 +453,7 @@ export async function applyTlcDraftReply(
   }
   await appendEvent(env, {
     eventType: "tlc.draft_reply", actorType: "firm_user", actorId: TLC_OWNER.firmUserId, objectType: "tlc_draft_notice", objectId: ref, firmScope,
-    payload: { approved: lines.approved, skipped: lines.skipped, changed: lines.changed, problems: lines.problems, sent: drip?.sentBrands ?? [], next_ref: nextRef },
+    payload: { approved: lines.approved, skipped: lines.skipped, changed: lines.changed, problems: lines.problems, sent: drip?.sentBrands ?? [], not_sent: notSent, next_ref: nextRef },
   });
   return { handled: true, ref, detail: `${lines.approved.length} approved, ${lines.skipped.length} skipped, ${lines.changed.length} redrafted` };
 }

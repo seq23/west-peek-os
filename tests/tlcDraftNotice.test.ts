@@ -3,7 +3,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { contentHashes, openBrandBatchCard, runDrip } from "../src/worker/services/learningClub";
-import { applyTlcDraftReply, repairLeakedDrafts, sendDraftNotice } from "../src/worker/services/tlcDraftNotice";
+import { TLC_SEND_SWITCH_URL, applyTlcDraftReply, notSentLines, repairLeakedDrafts, sendDraftNotice } from "../src/worker/services/tlcDraftNotice";
 import { parseDraftReply } from "../src/shared/tlc/draftReply";
 import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
 
@@ -399,5 +399,48 @@ describe("one brand per category per club at a time (owner, 26 Oct 2026)", () =>
     await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = ?1 WHERE id = 'tld_mem2'").bind(MORNING.toISOString()).run();
     await runDrip(env, MORNING);
     expect(await env.WP_OS_DB.prepare("SELECT state FROM tlc_drip_message WHERE deal_id = 'tld_mem2' AND step = 0").first()).toEqual({ state: "AWAITING_APPROVAL" });
+  });
+});
+
+describe("an approved email that did not go says why (partner tail, TLC-B5BEZR, 2 Nov 2026)", () => {
+  it("sending off (the playbook changed after her approval): her approval is kept, nothing goes, and her answer says why and where to approve", async () => {
+    // A draft filed while sending is on, listed in an email of its own.
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_deal (id, event_id, brand, contact_name, contact_email, contact_source_url, why_fit, next_send_at, firm_scope) VALUES ('tld_gate', 'tlc_2027-03', 'Gate Co', 'Pat Example', 'pat@gateco.example', 'https://example.test/team', 'they build agents', ?1, 'west-peek')").bind(MORNING.toISOString()).run();
+    await runDrip(env, MORNING);
+    const m = (await env.WP_OS_DB.prepare("SELECT id, approval_card_id FROM tlc_drip_message WHERE deal_id = 'tld_gate' AND step = 0").first<{ id: string; approval_card_id: string }>())!;
+    expect(m.approval_card_id).toBeTruthy();
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_draft_notice (ref, items_json, firm_scope, batch_card_id, root_ref) VALUES ('TLC-GATE22', ?1, 'west-peek', NULL, 'TLC-GATE22')")
+      .bind(JSON.stringify([{ n: 1, kind: "drip", message_id: m.id, card_id: m.approval_card_id, brand: "Gate Co", month: "2027-03", step: 0 }])).run();
+    // Then the playbook text changes (a deploy of her own rule): her approval of the old text no longer holds.
+    const approvedPlaybook = (await env.WP_OS_DB.prepare("SELECT value FROM tlc_setting WHERE key = 'playbook_approved_hash'").first<{ value: string }>())!.value;
+    await env.WP_OS_DB.prepare("UPDATE tlc_setting SET value = ?1 WHERE key = 'playbook_approved_hash'").bind("0".repeat(64)).run();
+    sends.length = 0;
+
+    const out = await reply("Re: Wynn: TLC: this week's brands, 1 to approve · TLC-GATE22", asRawMime("Approve\n\n> Ref TLC-GATE22"));
+    expect(out).toMatchObject({ handled: true, ref: "TLC-GATE22" });
+    expect(await cardState("Gate Co")).toBe("approved");
+    expect(await env.WP_OS_DB.prepare("SELECT state FROM tlc_drip_message WHERE id = ?1").bind(m.id).first()).toEqual({ state: "AWAITING_APPROVAL" });
+    expect(sends.some((s) => s.to === "pat@gateco.example")).toBe(false);
+    const toHer = sends.filter((s) => s.to === SEQUOIA);
+    expect(toHer).toHaveLength(1);
+    // Never "0 sent now" with no reason: the gate's own reason and the place to approve are in her answer.
+    expect(toHer[0]!.text).toContain("the sales playbook changed after it was approved");
+    expect(toHer[0]!.text).toContain(TLC_SEND_SWITCH_URL);
+    const evt = await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE event_type = 'tlc.draft_reply' AND object_id = 'TLC-GATE22'").first<{ payload_json: string }>();
+    expect((JSON.parse(evt!.payload_json) as { not_sent: string[] }).not_sent[0]).toMatch(/^1 approved email not sent\. Brand sending is off: the sales playbook changed/);
+
+    // She re-approves the current text: the approval she already gave goes on the next pass, with nothing more asked.
+    await env.WP_OS_DB.prepare("UPDATE tlc_setting SET value = ?1 WHERE key = 'playbook_approved_hash'").bind(approvedPlaybook).run();
+    await runDrip(env, new Date(MORNING.getTime() + 86_400_000));
+    expect(await env.WP_OS_DB.prepare("SELECT state FROM tlc_drip_message WHERE id = ?1").bind(m.id).first()).toEqual({ state: "SENT" });
+  });
+
+  it("every approved email that did not go is accounted for, gate open or shut", () => {
+    const base = { gate: { open: true, reasons: [] as string[] }, sent: 0, sentBrands: [] as string[], waitingForAllowance: 0 };
+    expect(notSentLines(0, base)).toEqual([]);
+    expect(notSentLines(2, { ...base, sent: 2, sentBrands: ["A", "B"] })).toEqual([]);
+    expect(notSentLines(3, { ...base, sent: 1, sentBrands: ["A"], waitingForAllowance: 2 })).toEqual(["2 wait for the next day's warm-up allowance; nothing needed from you."]);
+    expect(notSentLines(1, base)).toHaveLength(1);
+    expect(notSentLines(1, { ...base, gate: { open: false, reasons: ["the TLC brand-send switch is off"] } })[0]).toContain("the TLC brand-send switch is off");
   });
 });
