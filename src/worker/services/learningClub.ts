@@ -791,8 +791,8 @@ export async function fileDraft(env: Env, deal: Pick<TlcDealRow, "id" | "brand" 
  * wire, marked FAILED, and silently re-drafted for approval again — found on the first reply-approval test.
  * The marker is her approval card for this one email and this one recipient; nothing else carries it.
  */
-export function approvedFor(env: Env, approvalCardId: string, recipient: string): Env {
-  const marker: ApprovedSendMarker = { approvalId: approvalCardId, recipient: recipient.trim().toLowerCase() };
+export function approvedFor(env: Env, approvalCardId: string, recipient: string, cc: readonly string[] = []): Env {
+  const marker: ApprovedSendMarker = { approvalId: approvalCardId, recipient: recipient.trim().toLowerCase(), ...(cc.length ? { cc: cc.map((a) => a.trim().toLowerCase()) } : {}) };
   return { ...env, [APPROVED_SEND_ENV_KEY]: marker } as Env;
 }
 

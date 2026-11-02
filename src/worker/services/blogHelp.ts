@@ -1,3 +1,4 @@
+import { COMMUNITY_ABOUT } from "../../shared/community/size";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import type { Actor } from "./authorize";
@@ -56,7 +57,7 @@ export const BLOG_HELP_KIND = "BLOG_HELP";
  */
 export const WEST_PEEK_POSITIONING = [
   "West Peek Ventures is an earliest-stage venture fund built around a free professional mastermind",
-  "community of 5,000+ founders, operators, investors and specialists. Its belief: good people should",
+  `community of ${COMMUNITY_ABOUT} founders, operators, investors and specialists. Its belief: good people should`,
   "meet good people. The output of the community is not engagement; it is EARLY INCLUSION — West Peek",
   "wants to meet founders while they are still thinking about leaving their job, validating an idea,",
   "looking for a cofounder, or making their first hires, because those conversations happen between",

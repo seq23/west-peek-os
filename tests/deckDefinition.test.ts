@@ -273,7 +273,7 @@ describe("the deck answers the question a first-time fund is actually asked", ()
     expect(all).not.toMatch(/\b\d+\s+(?:of|out of)\s+\d+\b/i);
     expect(all).not.toMatch(/small\s+sample/i);
     const page = [slide.headline, slide.standfirst ?? "", ...slide.slots.map(slotWords)].join(" ");
-    expect(page).toContain("5,000+");
+    expect(page).toContain("A community of about 5,000 founders");
     expect(slide.standfirst).toBe("Every company we've looked at reached us through someone in our community: no cold outreach, no paid deal flow.");
     expect(page).toMatch(/Rooms evenings/);
     expect(page).toMatch(/Member intros/);

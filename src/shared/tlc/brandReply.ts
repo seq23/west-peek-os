@@ -12,17 +12,14 @@ import { namesAnAddress } from "./ownerInstruction";
 export const BRAND_REPLY_REF_RE = /\bTLR-[A-Z0-9]{6}\b/;
 export const BRAND_REPLY_ASK = "Reply approved to send, or reply with changes";
 
-/**
- * HANDOFF (owner, 2 Nov 2026): "I'm forwarding this to the right team, they'll be in touch", "looping in our VP". A
- * real reply, so the template sequence is over for that thread, but it asks nothing and says yes to nothing. It must
- * never get the next template email (the samples offer, the proposal): Wynn drafts a short thank-you for her approval
- * and the deal waits for the person it was passed to.
- */
-export type BrandReplyIntent = "QUESTION" | "CALL" | "YES" | "HANDOFF";
+export type BrandReplyIntent = "QUESTION" | "CALL" | "YES";
 export type BrandReplyClass =
   | { kind: "AUTO_REPLY"; resumeAt: string }
   | { kind: "NO" }
+  | { kind: "NO_REPLY_NEEDED"; why: NoReplyWhy }
   | { kind: "REPLY"; intent: BrandReplyIntent };
+/** Why a real reply needs no answer from us: they passed it on, they are reviewing, or they asked for nothing. */
+export type NoReplyWhy = "PASSED_ON" | "REVIEWING" | "NO_ASK";
 
 const AUTO_SUBJECT = /\b(out of (?:the )?office|automatic reply|auto[- ]?reply|autoreply|away from (?:the |my )?(?:office|desk)|on (?:annual |parental |maternity |paternity )?leave|on vacation|on holiday|ooo)\b/i;
 const AUTO_BODY = /\b(i am|i'm|i will be|i'll be) (?:currently )?(?:out of (?:the )?office|away|on (?:annual |parental |maternity |paternity )?leave|on vacation|on holiday|travelling|traveling)\b|\b(?:limited|no) access to (?:my )?e-?mail\b|\bthis is an automatic reply\b|\bauto(?:matic|mated)? (?:reply|response)\b|\b(?:i will|i'll) (?:respond|reply|get back to you) (?:when|once|upon) (?:i return|my return|i'm back|i am back)\b/i;
@@ -68,14 +65,28 @@ export function returnDateIn(text: string, now: Date): Date | null {
   return null;
 }
 
-/** They passed the note on, or looped someone in, and will come back if it fits. */
-const HANDOFF = /\b(?:forward(?:ed|ing)?|pass(?:ed|ing)?|send(?:ing)?|sent|shar(?:ed|ing)|flagg(?:ed|ing))\b[^.!?\n]{0,60}\b(?:along|on to|onto|over to|(?:to|with) (?:the|our|my) [\w -]{0,30}?(?:team|person|people|colleagues?|department|group|folks))\b|\b(?:loop(?:ed|ing)?|cc'?(?:ed|'d|ing)|copied|copying)\b[^!?\n]{0,80}?\b(?:in|here)\b|\b(?:they|she|he|someone|the team)(?:'ll| will) (?:be in touch|reach out|get back to you|follow up|contact you)\b|\bthe right (?:team|person|people|contact)\b/i;
-/** Something they asked for or said yes to: a handoff carrying one is answered as that, not as a thank-you. */
-const HANDOFF_ASK = /\?|\b(?:please (?:send|share)|send (?:over|me|us|the|it)|could you|can you|would you|we(?:'re| are| would be|'d be) interested|interested in|let'?s|count us in|deck|pdf|pricing|price|budget)\b/i;
+/*
+ * DOES THIS NEED A REPLY? (owner, 2 Nov 2026: "Every email doesn't need a fucking reply - this latest email from Mike
+ * pinecone doesn't need a reply they are reviewing the materials i sent"). The first decision on every real reply,
+ * before any draft: Wynn drafts ONLY when the brand asks for or invites something. A reply that passes the note on,
+ * loops someone in, says they are reviewing it or will get back, or simply asks nothing, gets NO draft: the deal
+ * waits on them until they write again.
+ */
+/** They passed the note on, or looped someone in. */
+const PASSED_ON = /\b(?:forward(?:ed|ing)?|pass(?:ed|ing)?|send(?:ing)?|sent|shar(?:ed|ing)|flagg(?:ed|ing))\b[^.!?\n]{0,60}\b(?:along|on to|onto|over to|(?:to|with) (?:the|our|my) [\w -]{0,30}?(?:team|person|people|colleagues?|department|group|folks))\b|\b(?:loop(?:ed|ing)?|cc'?(?:ed|'d|ing)|copied|copying)\b[^!?\n]{0,80}?\b(?:in|here)\b|\bthe right (?:team|person|people|contact)\b/i;
+/** They are looking at it and the next move is theirs. */
+const REVIEWING = /\b(?:review(?:ing)?|reviewed|take a look|taking a look|look(?:ing)? (?:it |this |them )?over|look(?:ing)? into (?:it|this)|(?:will|'ll) (?:get back|circle back|follow up|be in touch|let you know|reach out|revert|come back)|get back to you|circle back|keep you posted|(?:discuss|talk)(?:ing)? (?:it |this )?(?:over )?internally|run (?:it|this) by|thanks? (?:you )?(?:so much )?for (?:sending|sharing)|(?:got|received) (?:it|the|your))\b/i;
+/** A question or a request: always answered, whatever else the message says. */
+const EXPLICIT_ASK = /\?|\b(?:please (?:send|share|do send)|do send|send (?:over|me|us|the|it|more)|could you|can you|would you|tell me more|let'?s (?:set|find|schedule|chat|talk|meet|do|go)|count us in|pricing|price|budget|what (?:do|would|is|are|does)|how (?:do|does|much|would|can))\b/i;
+/** An invitation: answered unless the same message says the next move is theirs. */
+const INVITES = /\b(?:call|chat|meet|meeting|zoom|calendly|hop on|speak|connect live|time next week|availability|available|deck|one[- ]?pager|pdf|deal sheet|we(?:'re| are| would be|'d be) interested|interested in|sounds (?:great|interesting|good)|we(?:'d| would) love to|love (?:the|it|this|these|that)|(?:a few|a couple of|some) (?:notes|thoughts|questions|ideas)|we(?:'d| would)? (?:want|need)|yes|sure|happy to|works for (?:me|us)|go(?:ing)? with|we'?ll take|sign us up|we'?re in|on board)\b/i;
 
-/** A reply that hands the note to someone else and asks nothing (see HANDOFF above). */
-export function isHandoff(words: string): boolean {
-  return HANDOFF.test(words) && !HANDOFF_ASK.test(words);
+/** The first decision: does this reply ask for or invite something? Null when it does; else why it needs nothing. */
+export function noReplyNeeded(words: string): NoReplyWhy | null {
+  if (EXPLICIT_ASK.test(words)) return null;
+  if (PASSED_ON.test(words)) return "PASSED_ON";
+  if (REVIEWING.test(words)) return "REVIEWING";
+  return INVITES.test(words) ? null : "NO_ASK";
 }
 
 export function classifyBrandReply(input: { subject: string; text: string }, now: Date): BrandReplyClass {
@@ -87,10 +98,30 @@ export function classifyBrandReply(input: { subject: string; text: string }, now
     return { kind: "AUTO_REPLY", resumeAt: resume.toISOString() };
   }
   if (replyLooksLikeNo(input.subject) || replyLooksLikeNo(words)) return { kind: "NO" };
+  const why = noReplyNeeded(words);
+  if (why) return { kind: "NO_REPLY_NEEDED", why };
   if (/\b(call|chat|meet|meeting|zoom|calendly|hop on|talk|speak|connect live|time next week|availability|available)\b/i.test(words)) return { kind: "REPLY", intent: "CALL" };
-  if (isHandoff(words)) return { kind: "REPLY", intent: "HANDOFF" };
   if (/\b(send (?:it|me|over|more|the deck|the pitch|details)|deck|one[- ]?pager|pdf|deal sheet|pricing sheet|sponsorship (?:deck|packet|kit)|we(?:'re| are) interested|sounds (?:great|interesting|good)|count us in|we(?:'d| would) love to|let'?s do it|yes)\b/i.test(words)) return { kind: "REPLY", intent: "YES" };
   return { kind: "REPLY", intent: "QUESTION" };
+}
+
+/**
+ * REPLY-ALL (owner, 2 Nov 2026: "We thanked Mike for looping in Aaron but we didn't keep Aaron cc"). Our answer goes to
+ * the sender of the brand's latest message, with everyone else on its To and Cc copied, so a person they looped in
+ * stays on the thread. Our own addresses (any address on `ourDomains`) are left out. A message with no readable
+ * header block goes to `fallbackTo` alone.
+ */
+export function replyAllRecipients(raw: string, fallbackTo: string, ourDomains: readonly string[]): { to: string; cc: string[] } {
+  const head = raw.split(/\r?\n\r?\n/)[0] ?? "";
+  const header = (name: string): string =>
+    [...head.matchAll(new RegExp(`^${name}:[ \\t]*(.*(?:\\r?\\n[ \\t].*)*)`, "gim"))].map((m) => m[1]!.replace(/\r?\n[ \t]+/g, " ")).join(", ");
+  const addresses = (v: string): string[] => (v.match(/[^\s<>,;:"'()]+@[^\s<>,;:"'()]+\.[a-z]{2,}/gi) ?? []).map((a) => a.toLowerCase());
+  const ours = (a: string): boolean => ourDomains.some((d) => a.endsWith(`@${d.toLowerCase()}`));
+  const fallback = fallbackTo.trim().toLowerCase();
+  if (!/^from:/im.test(head)) return { to: fallback, cc: [] };
+  const to = addresses(header("From")).find((a) => !ours(a)) ?? fallback;
+  const cc = [...new Set([...addresses(header("To")), ...addresses(header("Cc"))])].filter((a) => a !== to && !ours(a));
+  return { to, cc };
 }
 
 /**
@@ -214,26 +245,6 @@ export function reportText(brand: string, r: ResearchReport): string {
     "Sources",
     ...r.sources.map((x) => `- ${x.title || x.url}: ${x.url}`),
   ].join("\n");
-}
-
-/**
- * THE ANSWER TO A HANDOFF: a short thank-you, and nothing else. No pitch, no samples offer, no question, no call,
- * no price: the next move is theirs (the person it was passed to). She may skip it and send nothing.
- */
-export function handoffThanks(contactName: string | null): string {
-  const hi = contactName?.trim() ? `Hi ${contactName.trim().split(/\s+/)[0]},` : "Hi,";
-  return [hi, "", "Thank you so much for passing it along, I really appreciate it. I'll look forward to hearing from the team if it feels like a fit."].join("\n");
-}
-
-/** What a handoff answer must never carry: the next template step in any form. */
-export function handoffProblems(body: string): string[] {
-  const out: string[] = [];
-  if (/\b(?:run of show|series of six|three things|samples?|one[- ]pager|pdf|attached)\b/i.test(body)) out.push("the next template step (samples, PDF or one-pager) after a handoff");
-  if (MONEY_WORDS.test(body)) out.push("money after a handoff");
-  if (CALL_ASK.test(body)) out.push("a call after a handoff");
-  if (/\?/.test(body)) out.push("a question after a handoff (the next move is theirs)");
-  if (body.split(/\s+/).filter(Boolean).length > 80) out.push("more than a short thank-you after a handoff");
-  return out;
 }
 
 /** The answer when the model is unavailable: plain, short, true, and in her voice. Signature added after. */

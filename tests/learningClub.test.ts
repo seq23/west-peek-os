@@ -549,8 +549,9 @@ describe("the Learning Club in the database", () => {
 // 22 Oct 2026: a review flagged "more than 5,000 founders…" as unsourced and #258 swapped it for a
 // QuarantineCon line. Sequoia confirmed the same day the 5,000 community figure is real, so the
 // original line is restored. Sponsor copy states the community size only in this exact, confirmed form.
+// 2 Nov 2026: the confirmed form is "about 5,000" (west-peek brain; the measured count is 4,712).
 const TLC_CONFIRMED_COMMUNITY_LINE =
-  "The West Peek community: more than 5,000 founders, operators, investors, creatives and builders.";
+  "The West Peek community: about 5,000 founders, operators, investors, creatives and builders.";
 describe("TLC pre-launch proof states the confirmed community size", () => {
   it("carries the owner-confirmed 5,000 line, and no other head-count", async () => {
     const { TLC_PRE_LAUNCH_PROOF } = await import("../src/shared/tlc/learningClub");
@@ -562,7 +563,7 @@ describe("TLC pre-launch proof states the confirmed community size", () => {
 
 // The owner's About block, word for word, on every one-pager (22 Oct 2026).
 const TLC_ABOUT_EXACT =
-  "West Peek Ventures is a venture firm and community. We have facilitated more than $100M in secondary transactions, with late-stage positions including Higgsfield, Databricks and Stripe, among others. Our community of more than 5,000 founders, operators, investors, creatives and builders meets in person through West Peek Rooms, our event series. The Learning Club is a series within Rooms: small, hands-on deep dives in New York.";
+  "West Peek Ventures is a venture firm and community. We have facilitated more than $100M in secondary transactions, with late-stage positions including Higgsfield, Databricks and Stripe, among others. Our community of about 5,000 founders, operators, investors, creatives and builders meets in person through West Peek Rooms, our event series. The Learning Club is a series within Rooms: small, hands-on deep dives in New York.";
 describe("TLC About blocks: the full one only inside, the community-first one for brands", () => {
   it("a one-search record from before the split that found none of Wynn's own picks still gets its picks search", async () => {
     const now = new Date("2026-11-30T14:00:00.000Z");

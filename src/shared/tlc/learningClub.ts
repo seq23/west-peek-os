@@ -1,3 +1,4 @@
+import { COMMUNITY_ABOUT } from "../community/size";
 import { withBrandFooter, withoutBrandFooter } from "./brandFooter";
 import { PARTNERS } from "../registry/partners";
 import { fillTemplate } from "./brandFlow";
@@ -609,7 +610,7 @@ export interface DripEmailInput {
  * until they reply; the pitch PDF goes only in answer to a yes. Email 2 adds a short picture of the
  * room. No exclusivity line anywhere. A quiet subject, the same on all four so they thread.
  */
-export const TLC_DRIP_PROOF_LINE = "Our community of more than 5,000 founders, operators and creatives meets in person through West Peek Rooms, our event series in New York.";
+export const TLC_DRIP_PROOF_LINE = `Our community of ${COMMUNITY_ABOUT} founders, operators and creatives meets in person through West Peek Rooms, our event series in New York.`;
 export const TLC_DRIP_ASK = "Would you be open to exploring a partnership?";
 /** Every brand email says rooms of 25+ guests, sized to the brand's goals (owner, 1 Nov 2026), whatever the club's planned size. */
 export const BRAND_GUESTS = `rooms of ${BRAND_EMAIL_ROOM_WORDS} guests (sized to your goals)`;
@@ -1078,7 +1079,7 @@ export { TLC_ABOUT_WEST_PEEK, TLC_ABOUT_COMMUNITY } from "./aboutWestPeek";
 /** The real history the one-pager leans on before the first club has run. No invented case study. */
 export const TLC_PRE_LAUNCH_PROOF: readonly string[] = [
   "West Peek Rooms: the firm's in-person gatherings. The Learning Club is their monthly New York edition.",
-  "The West Peek community: more than 5,000 founders, operators, investors, creatives and builders.",
+  `The West Peek community: ${COMMUNITY_ABOUT} founders, operators, investors, creatives and builders.`,
 ];
 
 // ── Parker's topics email to both partners (owner, 22 Oct 2026) ─────────────────────────────────

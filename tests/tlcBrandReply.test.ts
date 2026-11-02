@@ -4,7 +4,7 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import { contentHashes, recordBrandMail, recordBrandReplyText, runDrip } from "../src/worker/services/learningClub";
 import { applyBrandReplyApproval, processBrandReplies, rulesBlock, type BrandResearcher, type DraftExtras, type ReplyDrafter } from "../src/worker/services/tlcBrandReply";
-import { THREE_THINGS_OFFER, classifyBrandReply, herNoteOf, standingRulesIn, theirNewText, type ReplyDraftInput } from "../src/shared/tlc/brandReply";
+import { THREE_THINGS_OFFER, classifyBrandReply, herNoteOf, noReplyNeeded, standingRulesIn, theirNewText, type ReplyDraftInput } from "../src/shared/tlc/brandReply";
 import { parseDraftReply } from "../src/shared/tlc/draftReply";
 import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
 
@@ -13,7 +13,7 @@ import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
  */
 let t: TestDb;
 let env: Env;
-const sends: Array<{ to: string; from: string; subject: string; text: string; inReplyTo: string; replyTo: string; files?: string[] }> = [];
+const sends: Array<{ to: string; from: string; subject: string; text: string; inReplyTo: string; replyTo: string; files?: string[]; cc?: string }> = [];
 const SERVICE_ACCOUNT = JSON.stringify({ client_email: "sa@firm.iam.example", private_key: generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs8", format: "pem" }) });
 const APPROVER = "owner.personal@example.test";
 const auth = (address: string) => `${TRUSTED_AUTHSERV_ID}; dkim=pass header.d=${address.split("@")[1]} header.s=s1; spf=pass smtp.mailfrom=${address}; dmarc=pass header.from=${address.split("@")[1]}`;
@@ -55,7 +55,7 @@ beforeAll(async () => {
       const raw = Buffer.from((JSON.parse(String(init?.body)) as { raw: string }).raw, "base64url").toString();
       const [head, ...body] = raw.split("\r\n\r\n");
       const h = (name: string) => new RegExp(`^${name}: (.*)$`, "m").exec(head!)?.[1] ?? "";
-      sends.push({ to: h("To"), from: h("From"), subject: h("Subject"), text: body.join("\r\n\r\n"), inReplyTo: h("In-Reply-To"), replyTo: h("Reply-To") });
+      sends.push({ to: h("To"), from: h("From"), subject: h("Subject"), text: body.join("\r\n\r\n"), inReplyTo: h("In-Reply-To"), replyTo: h("Reply-To"), cc: h("Cc") });
       return new Response(JSON.stringify({ id: `gm_${sends.length}` }), { status: 200 });
     }
     throw new Error(`unexpected fetch ${String(url)}`);
@@ -272,7 +272,8 @@ describe("Wynn listens to her whole note, researches when asked, and keeps her s
     const body = (await env.WP_OS_DB.prepare("SELECT draft_body FROM tlc_brand_reply WHERE deal_id = 'tld_cash'").first<{ draft_body: string }>())!.draft_body;
     expect(body).not.toMatch(/\$|tier|price|Title partner/i);
     expect(body).not.toMatch(/short call|two times|pick a time/i);
-    expect(body).toContain("more than 5,000 people");
+    expect(body).toContain("a community of about 5,000 people");
+    expect(body).not.toContain("more than 5,000");
     expect(body).toContain("Quarantine Con");
     expect(body).toContain(THREE_THINGS_OFFER);
     expect(body).toContain("Who are the people you most want to reach?");
@@ -663,30 +664,68 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     expect(sends.filter((x) => x.to.includes("flow.example"))).toHaveLength(0);
   });
 
-  it("a reply that only passes the note on ends the template flow: a short thank-you for her approval, never drip step 2, the samples offer or the proposal", async () => {
-    // Owner, 2 Nov 2026: the brand said it was forwarding her note to the right team, and Wynn drafted the drip's
-    // second email (the samples offer) as the answer. The model must not even be asked: the answer is fixed.
+  it("does this need a reply? A pass-along or reviewing reply gets no draft and no sequence step; a reply that asks gets one", async () => {
+    // Owner, 2 Nov 2026: "Every email doesn't need a fucking reply - this latest email from Mike pinecone doesn't need
+    // a reply they are reviewing the materials i sent". The first decision, before any draft or model call.
+    expect(noReplyNeeded("I'm forwarding this information along to the right team at our office. They'll be in touch.")).toBe("PASSED_ON");
+    expect(noReplyNeeded("Thanks, Sequoia. I'm looping @Ari Vale <ari@loop.example> back in.")).toBe("PASSED_ON");
+    expect(noReplyNeeded("Thanks for sending these over. We're reviewing the materials and will get back to you.")).toBe("REVIEWING");
+    expect(noReplyNeeded("Thanks!")).toBe("NO_ASK");
+    // Negative: anything that asks for or invites something is answered.
+    expect(noReplyNeeded("What do you have in mind?")).toBeNull();
+    expect(noReplyNeeded("I've looped in our VP of Marketing. Please do send over the materials.")).toBeNull();
+    expect(noReplyNeeded("Sounds great, we'd love to be part of it.")).toBeNull();
+    expect(classifyBrandReply({ subject: "Re: x", text: "I've looped in our VP of Marketing. Please do send over the materials." }, MON)).toEqual({ kind: "REPLY", intent: "YES" });
+
     const e = docEnv();
     const asked: string[] = [];
     const pushy: ReplyDrafter = async (_e, _a, i) => { asked.push(i.intent); return { ok: true, body: `Hi,\n\nThanks! ${THREE_THINGS_OFFER}`, detail: "ok" }; };
+    const drafts = async (dealId: string) => (await e.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_brand_reply WHERE deal_id = ?1 AND state <> 'CLOSED'").bind(dealId).first<{ n: number }>())!.n;
     await deal("tld_fwd", "Forward Co", "kai@forward.example");
-    await take(e, "tld_fwd", `Hi Sequoia,\n\nThanks so much for thinking of us! I'm forwarding this information along to the right team at our office. They'll be in touch if this sounds like something we can be a part of at this time.${QUOTED}`, "w-1@forward.example", { drafter: pushy });
-    const r = (await e.WP_OS_DB.prepare("SELECT kind, draft_body, attachments_json FROM tlc_brand_reply WHERE deal_id = 'tld_fwd'").first<{ kind: string; draft_body: string; attachments_json: string | null }>())!;
-    expect(r).toMatchObject({ kind: "THANKS", attachments_json: null });
+    expect(await take(e, "tld_fwd", `Hi Sequoia,\n\nThanks so much for thinking of us! I'm forwarding this information along to the right team at our office. They'll be in touch if this sounds like something we can be a part of at this time.${QUOTED}`, "w-1@forward.example", { drafter: pushy })).toBe("WAITING");
+    expect(await drafts("tld_fwd")).toBe(0);
     expect(asked).toEqual([]);
-    expect(r.draft_body).not.toMatch(/run of show|series of six|three things|samples|one-pager|\?/i);
-    expect(r.draft_body).toContain("passing it along");
-    // The drip is over for that thread: the next pass files no step 2 for it.
-    expect(await e.WP_OS_DB.prepare("SELECT stop_reason, next_send_at FROM tlc_deal WHERE id = 'tld_fwd'").first()).toEqual({ stop_reason: "REPLIED", next_send_at: null });
+    expect(await e.WP_OS_DB.prepare("SELECT stop_reason, next_send_at, waiting_since IS NOT NULL AS waiting FROM tlc_deal WHERE id = 'tld_fwd'").first()).toEqual({ stop_reason: "REPLIED", next_send_at: null, waiting: 1 });
+    // No sequence step either: the next drip pass files nothing for that thread, and no approval email lists it.
     await runDrip(e, new Date(MON.getTime() + 10 * 86_400_000), "west-peek", { drafter: pushy, mailbox: null });
     expect((await e.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_drip_message WHERE deal_id = 'tld_fwd'").first<{ n: number }>())!.n).toBe(0);
-    // After the samples went, "looping our VP in" is a handoff too, not interest: no proposal, no price sheet.
+    expect(await drafts("tld_fwd")).toBe(0);
+    // After the samples went, "reviewing" and "looping our VP back in" need nothing from us either.
     await deal("tld_loop", "Loop Co", "mo@loop.example");
     await e.WP_OS_DB.prepare("INSERT INTO tlc_samples (id, deal_id, input_json, state, sent_at) VALUES ('tls_loop', 'tld_loop', ?1, 'SENT', '2026-11-06T15:00:00.000Z')").bind(JSON.stringify({ segmentTitle: "Making it remember" })).run();
-    await take(e, "tld_loop", "Thanks, Sequoia. I'm looping @Ari Vale <ari@loop.example> back in.", "w-2@loop.example", { drafter: pushy });
-    expect(await e.WP_OS_DB.prepare("SELECT intent, kind, attachments_json FROM tlc_brand_reply WHERE deal_id = 'tld_loop'").first()).toEqual({ intent: "QUESTION", kind: "THANKS", attachments_json: null });
-    // A handoff that also asks for something is answered as the ask.
-    expect(classifyBrandReply({ subject: "Re: x", text: "I've looped in our VP of Marketing. Please do send over the materials." }, MON)).toEqual({ kind: "REPLY", intent: "YES" });
+    expect(await take(e, "tld_loop", "Thanks, Sequoia. I'm looping @Ari Vale <ari@loop.example> back in.", "w-2@loop.example", { drafter: pushy })).toBe("WAITING");
+    expect(await take(e, "tld_loop", "Thanks for these. We're reviewing the materials and will get back to you.", "w-3@loop.example", { drafter: pushy })).toBe("WAITING");
+    expect(await drafts("tld_loop")).toBe(0);
+    expect(asked).toEqual([]);
+    // Negative proof: when they write again with a question, Wynn drafts, and the deal is no longer waiting.
+    expect(await take(e, "tld_loop", "Aaron here. What would the evening look like for us?", "w-4@loop.example", { drafter: pushy })).toBe("DRAFTED");
+    expect(await drafts("tld_loop")).toBe(1);
+    expect(await e.WP_OS_DB.prepare("SELECT waiting_since FROM tlc_deal WHERE id = 'tld_loop'").first()).toEqual({ waiting_since: null });
+  });
+
+  it("reply-all: a person the brand newly cc'd stays on the answer, shown to her as To and Cc, and is on the sent email", async () => {
+    const e = docEnv();
+    await deal("tld_cc", "Copy Co", "mike@copy.example");
+    const raw = (cc: string) => [
+      "From: Mike Example <mike@copy.example>", "To: Sequoia Taylor <sequoia@westpeek.ventures>", ...(cc ? [`Cc: ${cc}`] : []), "Subject: Re: x", "Message-ID: <c-1@copy.example>", "",
+      "Hi Sequoia, I've looped in Aaron, our VP of Marketing. What would the evening look like for us?",
+    ].join("\r\n");
+    expect(await take(e, "tld_cc", raw("Aaron Example <aaron@copy.example>, os@joinwestpeek.com"), "c-1@copy.example", { drafter: async () => ({ ok: true, body: "Hi Mike,\n\nThank you.", detail: "ok" }) })).toBe("DRAFTED");
+    expect(await e.WP_OS_DB.prepare("SELECT send_to, send_cc_json FROM tlc_brand_reply WHERE deal_id = 'tld_cc'").first()).toEqual({ send_to: "mike@copy.example", send_cc_json: JSON.stringify(["aaron@copy.example"]) });
+    sends.length = 0;
+    await processBrandReplies(e, MON, "west-peek", { mailbox: null });
+    const notice = sends.find((x) => /brand repl/i.test(x.subject))!;
+    expect(notice.text).toContain("YOUR ANSWER GOES TO: mike@copy.example");
+    expect(notice.text).toContain("Cc: aaron@copy.example");
+    sends.length = 0;
+    await approve(e, await refOf("tld_cc"));
+    const out = sends.filter((x) => x.to.includes("copy.example"));
+    expect(out).toHaveLength(1);
+    expect(out[0]!.cc).toBe("aaron@copy.example");
+    // Negative: with nobody else on their message, nobody is copied.
+    await deal("tld_cc2", "Solo Co", "lee@solo.example");
+    await take(e, "tld_cc2", raw("").replace(/mike@copy\.example/g, "lee@solo.example").replace("c-1@copy", "c-2@solo"), "c-2@solo.example", { drafter: async () => ({ ok: true, body: "Hi Lee,\n\nThank you.", detail: "ok" }) });
+    expect(await e.WP_OS_DB.prepare("SELECT send_to, send_cc_json FROM tlc_brand_reply WHERE deal_id = 'tld_cc2'").first()).toEqual({ send_to: "lee@solo.example", send_cc_json: null });
   });
 
   it("a time they proposed is accepted when she is free, and never when she is busy", async () => {

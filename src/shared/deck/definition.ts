@@ -1,3 +1,5 @@
+import { COMMUNITY_ABOUT } from "../community/size";
+
 /**
  * The LP deck as DATA, with every figure bound to a record.
  *
@@ -223,7 +225,7 @@ export const DECK_SLIDES: readonly Slide[] = [
       "Every company we've looked at reached us through someone in our community: no cold " +
       "outreach, no paid deal flow.",
     slots: [
-      { kind: "text", text: "A community of 5,000+ founders, operators and investors, built during the pandemic" },
+      { kind: "text", text: `A community of ${COMMUNITY_ABOUT} founders, operators and investors, built during the pandemic` },
       { kind: "text", text: "Rooms evenings, where members meet the founders worth knowing, in person" },
       { kind: "text", text: "Member intros: the people who know a founder best bring them to us" },
       { kind: "text", text: "Founders who come to us before they raise, not after the round is set" },
