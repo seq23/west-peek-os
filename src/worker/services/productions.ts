@@ -6,6 +6,7 @@ import { runAi } from "../ai/runAi";
 import { SEARCH_MODEL, servedBySearchLane } from "./liveSearch";
 import { blockCard } from "./blocks";
 import { cannotDetail, steerFor, type Interpreter } from "./instruction";
+import { standingSteer } from "./emailThread";
 import { pageTextOf, urlIsLive } from "../effects/urlLiveness";
 import { createWorkCardInternal } from "./workCards";
 import { sweepIdentity, type SweepCard } from "./workSweep";
@@ -871,6 +872,13 @@ export async function runProductionsCard(
    * The block is Scooter's to clear, not Sequoia's: this is his agency's work and a notice about it
    * on her desk would be the wrong desk (see announceOutcome in workSweep.ts).
    */
+  /*
+   * AND WHAT HE SAID BY REPLYING TO AN EARLIER MONTH'S NOTE (2 Nov 2026). Every monthly card is a new
+   * row, so a reply to October's note ("target national organisations whose brand has fallen behind
+   * their work") was filed in `work_steer` and read by nothing: December's search would have run as
+   * if he had never said it. Same `extra` seam the hire search uses.
+   */
+  const replies = await standingSteer(env, kind, card.firm_scope);
   const steer = await steerFor(env, actor, {
     cardId: card.id,
     cardKind: kind,
@@ -879,6 +887,7 @@ export async function runProductionsCard(
     chain: "a monthly duty for West Peek Productions",
     steps: [...PRODUCTIONS_STEPS],
     firmScope: card.firm_scope,
+    extra: replies,
   }, deps.interpret);
   if (steer.cannot.length > 0) {
     const why = await blockCard(env, card, {

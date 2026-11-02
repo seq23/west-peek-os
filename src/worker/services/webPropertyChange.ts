@@ -2165,7 +2165,7 @@ export function parseActionabilityVerdict(outputText: string | null | undefined)
  * a model — see `defaultInterpreter`/`Interpreter` in instruction.ts and `Synthesise` in
  * dailyIntelligence.ts for the same shape used elsewhere in this repo.
  */
-const defaultClassifyActionability: ActionabilityClassifier = async (env, input) => {
+export const defaultClassifyActionability: ActionabilityClassifier = async (env, input) => {
   const actor: Actor = { type: "AI", aiEmployeeId: PORTER_ID, roles: [], firmScopes: [input.firmScope] };
   const { run } = await runAi(env, {
     purpose: "checking whether a partner's email needs real work, a reply, or nothing at all",

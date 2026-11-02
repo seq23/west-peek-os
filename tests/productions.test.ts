@@ -460,3 +460,44 @@ describe("the finished email names what is still missing (0237, one list for eve
     expect(held!.body_text.indexOf("Still missing")).toBeLessThan(held!.body_text.indexOf("Your call"));
   });
 });
+
+describe("a reply to an earlier month's note steers the next month (2 Nov 2026)", () => {
+  /*
+   * Scooter replied to November's note with three targeting rules. Every monthly card is a new row,
+   * so the reply sat in `work_steer` and December's run read nothing. Proven by what reaches the
+   * search prompt, and negatively: with no reply on file, the interpreter is never called at all.
+   */
+  it("carries the partner's reply on this kind into the interpretation and the search prompt", async () => {
+    await env.WP_OS_DB.prepare("DELETE FROM work_steer WHERE card_kind = 'PRODUCTIONS_MONTHLY'").run();
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN','IN_PROGRESS','BLOCKED')").run();
+    const run = async (when: string) => {
+      const opened = await openProductionsCard(env, "productions_monthly", new Date(when));
+      const card = (await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(opened.cardId).first())!;
+      const interpreted: string[] = [];
+      const searched: string[] = [];
+      await runProductionsCard(env, card as never, {
+        search: async (_e, _a, prompt) => { searched.push(prompt); return { ok: true, text: /journalists/.test(prompt) ? pressJson : customerJson, detail: "ok" }; },
+        urlCheck,
+        judge: keepAll,
+        pageText: async () => "Contact: a.writer@communityweekly.example",
+        now: new Date(when),
+        interpret: async (_e, _a, prompt) => {
+          interpreted.push(prompt);
+          return { ok: true, text: "UNDERSTOOD: target national orgs\nSTEER: only national organisations at or above TNTP's size", aiRunId: null, model: "fake", detail: "COMPLETED" };
+        },
+      });
+      return { interpreted, searched };
+    };
+
+    const before = await run("2026-12-01T14:00:00.000Z");
+    expect(before.interpreted, "no reply on file: no model call at all").toEqual([]);
+
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN','IN_PROGRESS','BLOCKED','DONE') AND kind = 'PRODUCTIONS_MONTHLY'").run();
+    await env.WP_OS_DB.prepare(
+      "INSERT INTO work_steer (id, card_kind, from_card_id, said_by, body, thread_token, firm_scope) VALUES ('wst_t', 'PRODUCTIONS_MONTHLY', NULL, 'scooter@westpeek.ventures', 'Target national organisations whose impact has outgrown their branding, sized like TNTP.', 'tok', 'west-peek')",
+    ).run();
+    const after = await run("2027-01-01T14:00:00.000Z");
+    expect(after.interpreted.join("\n")).toMatch(/outgrown their branding, sized like TNTP/);
+    expect(after.searched.some((p) => /only national organisations at or above TNTP's size/.test(p)), "the steer reaches the search itself").toBe(true);
+  });
+});
