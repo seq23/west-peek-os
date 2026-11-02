@@ -21,6 +21,7 @@ import { previewAllPartnerEmailsIsOn } from "./kindRules";
 import { routedByFor } from "./requestReply";
 import { sendOrPreview } from "./previewApproval";
 import { notifyPartners } from "./notifications";
+import { defaultClassifyActionability, type ActionabilityClassifier } from "./webPropertyChange";
 
 /**
  * A REPLY, MATCHED TO ITS CONVERSATION AND TURNED INTO A STEER (17 Sep 2026).
@@ -248,7 +249,7 @@ export async function steerFromReply(
    * live model call. Omitted, this defaults to Addendum 12's own real answerer — the production
    * path is unchanged by this parameter existing.
    */
-  deps: { answerQuestion?: QuestionAnswerer } = {},
+  deps: { answerQuestion?: QuestionAnswerer; classifyReply?: ActionabilityClassifier } = {},
 ): Promise<SteerFromReply> {
   const tokens = threadTokensIn({ inReplyTo: message.inReplyTo, references: message.references });
 
@@ -643,7 +644,11 @@ export async function steerFromReply(
        * filed into `work_steer` above, unconditionally, regardless of card state; this is only the
        * missing other half.
        */
-      await handleReplyOnClosedCard(env, cardRow, partner, written, thread, message.emlKey, deps.answerQuestion);
+      const reworked =
+        cardRow.state === "DONE" && REWORKABLE_AFTER_DONE.has(cardRow.kind ?? "")
+          ? await reopenForRework(env, cardRow, partner, written, thread, deps.classifyReply ?? defaultClassifyActionability)
+          : false;
+      if (!reworked) await handleReplyOnClosedCard(env, cardRow, partner, written, thread, message.emlKey, deps.answerQuestion);
     }
   }
 
@@ -697,6 +702,56 @@ async function answersAnEarlierStage(env: Env, cardId: string, kind: string | nu
   const notice = await env.WP_OS_DB.prepare("SELECT kind FROM work_card_notice WHERE message_id = ?1 ORDER BY sent_at DESC LIMIT 1").bind(token).first<{ kind: string }>();
   if (!notice || !["RECEIVED", "PLAN"].includes(notice.kind)) return null;
   return notice.kind;
+}
+
+// ── "Redo it with these notes" on a finished deliverable (2 Nov 2026) ─────────────────────────────
+
+/**
+ * Deliverables whose runner can simply be run again on the same card, and that a partner reworks by
+ * replying to the note. Walker's monthly Productions note is the case that found it: Scooter replied
+ * "use these notes to construct a more tailored approach" with three targeting rules, and the reply
+ * became a firm-wide "question after done" notice (his "1. Are national organisations…" reads as a
+ * question opener) while the card stayed DONE. Nothing rebuilt the note; he waited for a revision the
+ * system had no path to make. The weekly hire search is NOT here on purpose: its steer is read by
+ * next week's card (`standingSteer`), and a re-run of last week's search is not what a reply asks.
+ */
+export const REWORKABLE_AFTER_DONE: ReadonlySet<string> = new Set(["PRODUCTIONS_MONTHLY", "PRODUCTIONS_CUSTOMERS", "PRODUCTIONS_PRESS"]);
+
+/**
+ * A reply that asks for work on a reworkable DONE card puts the card back in the sweep with the
+ * partner's words as an unacknowledged note — exactly what `steerFor` reads on the next run — so the
+ * same employee rebuilds the deliverable and the revised note is the answer. A thank-you or a plain
+ * question (the classifier's other two verdicts) leaves the card done and takes the existing door.
+ * Returns true when the card was reopened.
+ */
+async function reopenForRework(
+  env: Env,
+  card: ClosedCardRow & { state: string },
+  partner: Partner,
+  written: string,
+  thread: EmailThreadRow,
+  classify: ActionabilityClassifier,
+): Promise<boolean> {
+  const verdict = await classify(env, { cardId: card.id, firmScope: card.firm_scope, text: written });
+  if (verdict.verdict !== "ACTIONABLE_WORK") return false;
+  await env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)")
+    .bind(`wcn_${crypto.randomUUID()}`, card.id, partner.firmUserId, `${partner.firstName} replied to the finished note asking for it to be redone: ${written}`.slice(0, 4000), card.firm_scope)
+    .run();
+  const reopened = await env.WP_OS_DB.prepare(
+    "UPDATE work_card SET state = 'OPEN', work_attempts = 0, lease_until = NULL, work_last_failure = NULL, next_action = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1 AND state = 'DONE'",
+  )
+    .bind(card.id, `Rebuild the note with ${partner.firstName}'s reply applied and email the revised version once.`)
+    .run();
+  await appendEvent(env, {
+    eventType: "work_card.reopened_for_rework",
+    actorType: "firm_user",
+    actorId: partner.firmUserId,
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope: card.firm_scope,
+    payload: { reason: verdict.reason, ai_run_id: verdict.aiRunId, thread_token: thread.token, reopened: (reopened.meta?.changes ?? 0) > 0 },
+  });
+  return true;
 }
 
 // ── A reply lands on a card that is neither BLOCKED nor OPEN/IN_PROGRESS (22 Sep 2026) ──────────

@@ -343,3 +343,66 @@ describe("a confident answer, when the card's kind has a registered, ACTIVE owne
     expect(previews?.n ?? 0, "nothing is filed waiting for her Send it").toBe(0);
   });
 });
+
+describe("a reply asking for a finished Productions note to be redone reopens it (2 Nov 2026)", () => {
+  /*
+   * THE REAL INCIDENT: Scooter replied to Walker's November note "Please use these notes to construct
+   * a more tailored approach", with a numbered list whose "2. Are national organisations…" reads as a
+   * question opener. It became a firm-wide QUESTION AFTER DONE notice; the card stayed DONE and no
+   * revised note was ever built.
+   */
+  const KIND = "PRODUCTIONS_MONTHLY";
+  const SAID =
+    "Hey Walker — alot of this feels like we're pitching people to create a series of virtual events.\n\nI think we're moreso targeting organizations who 1.\nAre national organizations similar to TNTP.\n\nPlease use these notes to construct a more tailored approach.";
+
+  async function replyOn(cardId: string, verdict: "ACTIONABLE_WORK" | "BANTER_NO_ACTION", said: string) {
+    const subject = "Walker: West Peek Productions this month — 6 lead(s), 2 pitch(es)";
+    const { token } = await startThread(env, { objectType: "work_card", objectId: cardId, cardKind: KIND, employee: "Walker", to: "scooter@westpeek.ventures", subject, firmScope: "west-peek" });
+    const asked: string[] = [];
+    await steerFromReply(
+      env,
+      { fromHeader: SCOOTER_FROM, authenticationResults: GOOD_AUTH, subject: `Re: ${subject}`, raw: gmailReply(said, "1. CRE Finance Council", subject), inReplyTo: threadReference(token), references: null, emlKey: null },
+      { classifyReply: async (_e, input) => { asked.push(input.text); return { verdict, reason: "test", aiRunId: null }; } },
+    );
+    const card = (await env.WP_OS_DB.prepare("SELECT state, work_attempts FROM work_card WHERE id = ?1").bind(cardId).first<{ state: string; work_attempts: number }>())!;
+    return { card, asked };
+  }
+
+  it("a rework request puts the card back in the sweep with his words as the note the runner reads — no notice", async () => {
+    const CARD_ID = "wc_done_monthly_rework";
+    await doneCard(CARD_ID, "Walker: West Peek Productions this month (2026-11)", KIND);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET work_attempts = 1 WHERE id = ?1").bind(CARD_ID).run();
+    const { card, asked } = await replyOn(CARD_ID, "ACTIONABLE_WORK", SAID);
+    expect(asked, "the classifier reads his written words").toHaveLength(1);
+    expect(card).toEqual({ state: "OPEN", work_attempts: 0 });
+    const notes = await noteFor(CARD_ID);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]!.body).toMatch(/construct a more tailored approach/);
+    expect(notes[0]!.body).not.toMatch(/QUESTION AFTER DONE/);
+    const unread = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card_note WHERE work_card_id = ?1 AND acknowledged_at IS NULL").bind(CARD_ID).first<{ n: number }>();
+    expect(unread!.n, "unacknowledged, so steerFor reads it on the rebuild").toBe(1);
+    expect(await notificationsFor(CARD_ID), "nobody is told a question is waiting — the revised note is the answer").toEqual([]);
+  });
+
+  it("a thank-you leaves the note done", async () => {
+    const CARD_ID = "wc_done_monthly_thanks";
+    await doneCard(CARD_ID, "Walker: West Peek Productions this month (2026-11)", KIND);
+    const { card } = await replyOn(CARD_ID, "BANTER_NO_ACTION", "thanks, reached out to two of these");
+    expect(card.state).toBe("DONE");
+  });
+
+  it("the weekly hire search is not re-run by a reply (its steer waits for next week); the classifier is never asked", async () => {
+    const CARD_ID = "wc_done_hire_not_reworked";
+    await doneCard(CARD_ID, "Walker: hire search", "PRODUCTIONS_HIRE_SEARCH");
+    const subject = "Walker: hire search";
+    const { token } = await startThread(env, { objectType: "work_card", objectId: CARD_ID, cardKind: "PRODUCTIONS_HIRE_SEARCH", employee: "Walker", to: "scooter@westpeek.ventures", subject, firmScope: "west-peek" });
+    let called = 0;
+    await steerFromReply(
+      env,
+      { fromHeader: SCOOTER_FROM, authenticationResults: GOOD_AUTH, subject: `Re: ${subject}`, raw: gmailReply("prefer music backgrounds", "1. X", subject), inReplyTo: threadReference(token), references: null, emlKey: null },
+      { classifyReply: async () => { called += 1; return { verdict: "ACTIONABLE_WORK", reason: "t", aiRunId: null }; } },
+    );
+    expect(called).toBe(0);
+    expect((await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(CARD_ID).first<{ state: string }>())!.state).toBe("DONE");
+  });
+});
