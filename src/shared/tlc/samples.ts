@@ -14,6 +14,7 @@
  * `samplesProblems` checks the rules that remain: no price (bar one the owner explicitly put in), no segment the
  * brand must staff, a mix that adds to 100 and is labelled approximate, three pages. PURE: no database, no network.
  */
+import { COMMUNITY_SHORT } from "../community/size";
 import { z } from "zod";
 import { BRAND_MUST_STAFF, MONEY_WORDS } from "./brandReply";
 import { fillTemplate, hiLine } from "./brandFlow";
@@ -179,7 +180,7 @@ const C = 2 * Math.PI * 60;
 const COLORS = ["#1f4e79", "#3f8f6f", "#c2783a", "#8a6db3", "#9a6a00", "#5d6475"];
 
 /** The community, as every brand is told it (owner, 30 Oct 2026): about 5,000, never "5,000+". */
-export const COMMUNITY_SIZE = "~5,000";
+export const COMMUNITY_SIZE = COMMUNITY_SHORT;
 
 /** The community wheel: one ring segment per slice, in order, and the size in the middle. */
 export function donutSvg(mix: readonly MixSlice[]): string {

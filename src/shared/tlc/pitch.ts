@@ -1,3 +1,4 @@
+import { COMMUNITY_ABOUT } from "../community/size";
 import { TLC_ABOUT_COMMUNITY, TLC_ABOUT_WEST_PEEK } from "./aboutWestPeek";
 import {
   TLC_IDEA_ORIGIN_LABEL,
@@ -202,7 +203,7 @@ export function renderBrandPitch(v: TlcClubView): string {
 ${sourcesList(v.sources)}
 <h2>Who is in the room</h2>
 <ul><li>${BRAND_ROOM_WORDS} New Yorkers per event, a number we flex to your goals, who chose this topic. Every seat is a paid ticket ($${TLC_TICKET_PRICE_USD}), so everyone in the room chose to come.</li>
-<li>Founders, operators, creatives and builders from a community of more than 5,000.</li>
+<li>Founders, operators, creatives and builders from a community of ${COMMUNITY_ABOUT}.</li>
 <li>Taught by someone who does this for a living. The session: arrive, learn, an hour hands-on, a real meal, go deeper, share, close.</li>
 ${v.aiSegment ? `<li>The AI segment: ${esc(brandSafe(v.aiSegment))}</li>` : ""}
 ${takeHome ? `<li>They leave with: ${esc(takeHome)}</li>` : ""}</ul>

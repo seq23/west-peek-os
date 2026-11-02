@@ -299,6 +299,8 @@ export interface GmailMessage {
   /** Where a reply goes; Gmail keeps the message in the sender's Sent folder either way. */
   replyTo?: readonly string[];
   /** Copied blind. Gmail delivers to these and strips the header from what the recipient sees. */
+  /** Copied (reply-all to a brand). Each address is held to the same outside-mail rule as `to` before this runs. */
+  cc?: readonly string[];
   bcc?: readonly string[];
   /** An HTML alternative to `text` (multipart/alternative); the plain-text part is always sent. */
   html?: string;
@@ -333,11 +335,13 @@ export function gmailRaw(message: GmailMessage): string {
   const list = (xs: readonly string[] | undefined) => (xs ?? []).map(clean).filter((x) => x.length > 0);
   const from = message.fromName ? `${encodedWord(clean(message.fromName))} <${clean(message.from)}>` : clean(message.from);
   const replyTo = list(message.replyTo);
+  const cc = list(message.cc);
   const bcc = list(message.bcc);
   const head = [
     `From: ${from}`,
     `To: ${clean(message.to)}`,
     ...(replyTo.length ? [`Reply-To: ${replyTo.join(", ")}`] : []),
+    ...(cc.length ? [`Cc: ${cc.join(", ")}`] : []),
     ...(bcc.length ? [`Bcc: ${bcc.join(", ")}`] : []),
     `Subject: ${encodedWord(clean(message.subject))}`,
     ...(message.messageId ? [`Message-ID: ${clean(message.messageId)}`] : []),

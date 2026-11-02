@@ -1,3 +1,4 @@
+import { COMMUNITY_ABOUT } from "../../shared/community/size";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import type { Actor } from "./authorize";
@@ -73,7 +74,7 @@ export const PRODUCTIONS_OFFER = [
   "Growth (distribution, community-led growth); Smarter Operations (workflow automation as infrastructure).",
   "Built for enterprise organisations, national nonprofits, high-growth companies and community ecosystems.",
   "Published price bands: $2,500–$7,500 for moderated webinars; $10,000–$50,000+ for summits, conferences and hybrid.",
-  "Backed by the broader West Peek community of 5,000+ founders, operators, investors, creatives and builders.",
+  `Backed by the broader West Peek community of ${COMMUNITY_ABOUT} founders, operators, investors, creatives and builders.`,
 ].join("\n");
 
 /**

@@ -10,6 +10,7 @@
  * address's domain, else a brand she names as "at <Brand>". The angle is her words after the address. The worker
  * (services/tlcOwnerInstruction.ts) applies it to that brand's deal through the must-pitch path.
  */
+import { COMMUNITY_ABOUT } from "../community/size";
 import { brandKey } from "./mustPitch";
 import { withBrandFooter } from "./brandFooter";
 import { BRAND_GUESTS, TLC_DRIP_ASK, TLC_PS_BY_STEP, TLC_SIGNATURE, monthWords } from "./learningClub";
@@ -148,7 +149,7 @@ export function ownerAngleFirstEmail(input: { brand: string; contactName: string
   const text = [
     hi,
     "",
-    "I'm Sequoia Taylor of West Peek. We are a community of about 5,000 founders, operators, investors, creatives and builders, started by our founding GP Scooter Taylor, who went viral in 2020 with Quarantine Con. We meet in person through West Peek Rooms, our event series in New York, and The Learning Club is a series within Rooms: small, hands-on deep dives, one topic at a time.",
+    `I'm Sequoia Taylor of West Peek. We are a community of ${COMMUNITY_ABOUT} founders, operators, investors, creatives and builders, started by our founding GP Scooter Taylor, who went viral in 2020 with Quarantine Con. We meet in person through West Peek Rooms, our event series in New York, and The Learning Club is a series within Rooms: small, hands-on deep dives, one topic at a time.`,
     "",
     `In ${monthWords(input.month)} the club is ${input.topic}: ${BRAND_GUESTS}, building hands-on. We host every segment, and it can run as a single evening or a series of six.${angle ? ` ${angle}` : ""}`,
     "",

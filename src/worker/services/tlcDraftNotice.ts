@@ -1,3 +1,4 @@
+import { trueCommunityWords } from "../../shared/community/size";
 import { textBodyOf } from "../effects/mimeAttachments";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
@@ -600,7 +601,8 @@ export async function recomposeGuestCounts(env: Env, firmScope = "west-peek"): P
   ).bind(firmScope).all<{ id: string; subject: string; body: string; effect_request_id: string; approval_card_id: string; brand: string; redraft_note: string | null }>()).results ?? [];
   const done: string[] = [];
   for (const r of rows) {
-    const text = withBrandFooter(r.redraft_note ? r.body : standardGuestWords(r.body));
+    // The community size is corrected in every queued draft, hers included: it is a claim, not a choice of words.
+    const text = withBrandFooter(trueCommunityWords(r.redraft_note ? r.body : standardGuestWords(r.body)));
     if (text === r.body) continue;
     const req = await env.WP_OS_DB.prepare("SELECT payload_json FROM external_effect_request WHERE id = ?1 AND executed_at IS NULL").bind(r.effect_request_id).first<{ payload_json: string }>();
     if (!req) continue;

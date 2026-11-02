@@ -152,12 +152,14 @@ export interface EffectExecutionResult {
  */
 async function brandMailAsOwner(
   env: Env,
-  message: { to: string; subject: string; text: string; replyTo?: readonly string[]; attachments?: readonly EmailAttachment[]; inReplyTo?: string; threadId?: string },
+  message: { to: string; cc?: readonly string[]; subject: string; text: string; replyTo?: readonly string[]; attachments?: readonly EmailAttachment[]; inReplyTo?: string; threadId?: string },
 ): Promise<EmailSendResult> {
-  assertPreviewLane(env, { to: message.to, subject: message.subject, text: message.text });
+  // Reply-all: a copied address is held to the outside-mail rule exactly like `to` (each one on her approval).
+  assertPreviewLane(env, { to: message.to, ...(message.cc?.length ? { cc: message.cc } : {}), subject: message.subject, text: message.text });
   const token = await serviceAccountToken(env, [GMAIL_COMPOSE_SCOPE], TLC_OWNER.email);
   const sent = await sendViaGmail(token, {
     to: message.to,
+    ...(message.cc?.length ? { cc: message.cc } : {}),
     from: TLC_OWNER.email,
     fromName: TLC_OWNER.name,
     subject: message.subject,
@@ -257,7 +259,10 @@ async function performEffect(env: Env, request: ExternalEffectRequestRow): Promi
     let result: EmailSendResult | null = null;
     if (ownerSigned) {
       // The backstop: a brand email filed before the footer existed still ends with it (owner, 1 Nov 2026).
-      result = await brandMailAsOwner(env, { ...message, text: withBrandFooter(message.text) });
+      // Reply-all to a brand (2 Nov 2026): the copied addresses go only on her own-mailbox lane, never another transport.
+      const cc = (Array.isArray((payload as { cc?: unknown }).cc) ? (payload as { cc: unknown[] }).cc : [])
+        .map((a) => String(a).trim().toLowerCase()).filter((a) => /^[^\s@<>,]+@[^\s@<>,]+\.[a-z]{2,}$/.test(a));
+      result = await brandMailAsOwner(env, { ...message, ...(cc.length ? { cc } : {}), text: withBrandFooter(message.text) });
     } else if (requestedBy && from && from !== env.WP_OS_EMAIL_FROM) {
       try {
         const gmail = await trySendAsPartner(env, requestedBy, { ...message, from });

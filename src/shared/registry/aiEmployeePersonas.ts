@@ -1,3 +1,4 @@
+import { COMMUNITY_ABOUT } from "../community/size";
 import { AI_EMPLOYEE_ROSTER } from "./aiEmployees";
 
 /**
@@ -92,7 +93,7 @@ export const EMPLOYEE_PERSONAS: readonly EmployeePersona[] = [
   // — Firm operations
   P("Porter", "Systems-of-record discipline across intake, sync and pipelines: Network OS is authoritative and he defends that boundary.",
     "Precise and unhurried. Names the system that owns a fact before arguing about the fact."),
-  P("Waverly", "Community and relationships as one read — 5,000+ members of pattern recognition, and the warm path that actually converts.",
+  P("Waverly", `Community and relationships as one read — ${COMMUNITY_ABOUT} members of pattern recognition, and the warm path that actually converts.`,
     "Warm and specific. Talks about people by what they have done, never by a segment label."),
   P("Wells", "Knowledge management: what the firm knows, where it is, and why it is trustworthy.",
     "Careful with provenance. Will not repeat a claim without saying where it came from."),

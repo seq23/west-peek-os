@@ -250,6 +250,11 @@ export interface ApprovedSendMarker {
   approvalId: string;
   /** The ONE address this approval authorises, lower-case. */
   recipient: string;
+  /**
+   * The addresses the same approval copies, lower-case (reply-all to a brand, 2 Nov 2026): each one shown to her on
+   * the approval, so each is compared exactly like `recipient`. Absent means none.
+   */
+  cc?: readonly string[];
 }
 
 export function approvedSendOf(env: unknown): ApprovedSendMarker | null {
@@ -257,9 +262,9 @@ export function approvedSendOf(env: unknown): ApprovedSendMarker | null {
   const marker = (env as Record<string, unknown>)[APPROVED_SEND_ENV_KEY];
   if (!marker || typeof marker !== "object") return null;
   const m = marker as Partial<ApprovedSendMarker>;
-  return typeof m.approvalId === "string" && typeof m.recipient === "string"
-    ? { approvalId: m.approvalId, recipient: m.recipient.trim().toLowerCase() }
-    : null;
+  if (typeof m.approvalId !== "string" || typeof m.recipient !== "string") return null;
+  const cc = Array.isArray(m.cc) ? m.cc.filter((a): a is string => typeof a === "string").map((a) => a.trim().toLowerCase()) : [];
+  return { approvalId: m.approvalId, recipient: m.recipient.trim().toLowerCase(), ...(cc.length ? { cc } : {}) };
 }
 
 /**
@@ -296,7 +301,7 @@ export function assertPreviewLane(env: unknown, payload: EmailPayload): void {
    * message must be the address she approved. A message addressed to the approved founder AND a
    * journalist is not partly approved, it is refused.
    */
-  const wrong = outside.filter((a) => a !== approved.recipient);
+  const wrong = outside.filter((a) => a !== approved.recipient && !(approved.cc ?? []).includes(a));
   if (wrong.length > 0) {
     throw new SendBlocked(
       `approval ${approved.approvalId} authorises ${approved.recipient} only, and this message is also ` +
