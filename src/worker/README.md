@@ -6,7 +6,7 @@ Cloudflare Worker API (P1). Entry `index.ts`; all server behavior lives here.
   is routed here; everything else delegates to `env.ASSETS` (SPA).
 - `router.ts` — minimal hand-rolled router.
 - `auth.ts` — runtime identity (ADR-006): dev header `x-wpos-dev-user` when
-  `WP_OS_ENV=local`, else `Cf-Access-Authenticated-User-Email`; resolves `firm_user`
+  `WP_OS_ENV=local`, else the claims of a verified Access assertion (`accessJwt.ts`); resolves `firm_user`
   + roles + authority scopes; fail closed.
 - `env.ts` — `Env` bindings (`WP_OS_DB`, `WP_OS_DOCUMENTS`, `WP_OS_KV`, `ASSETS`,
   `WP_OS_ENV`).

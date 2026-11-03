@@ -39,6 +39,7 @@ const OUTBOUND_FETCH = /fetch\s*\(\s*["'`]https?:\/\/(?!localhost\b|127\.0\.0\.1
  * Adding a file here should be a conscious act. Egress from anywhere else stays a violation.
  */
 const EGRESS_ALLOWED = new Map([
+  ["src/worker/accessJwt.ts", "Cloudflare Access public signing keys (GET https://seq-taylor.cloudflareaccess.com/cdn-cgi/access/certs); read-only, one fixed host, nothing leaves but the GET, held an hour in memory (security sweep, 3 Nov 2026)"],
   ["src/worker/effects/feedClient.ts", "RSS/Atom acquisition; https-only, blocks loopback/RFC1918/metadata, size and time capped"],
   ["src/worker/effects/resendClient.ts", "Resend email transport; reachable only after executeExternalEffect() has an approved receipt, and inert unless RESEND_API_KEY and WP_OS_EMAIL_SEND are both set"],
   ["src/worker/effects/secEdgarClient.ts", "SEC EDGAR full-text search; public, read-only, https-only, one request per market map, sends the User-Agent the SEC's fair-access policy requires"],
