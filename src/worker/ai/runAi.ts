@@ -52,7 +52,7 @@ import {
   recordLaneOutage,
   type LaneHealthRow,
 } from "./laneHealth";
-import { CLAIM_WAIT_MS, SEARCH_CLAIM_WAIT_MS, SEAT_REGISTRY, allSeatAvailability, isSeat } from "./subscriptionSeats";
+import { CLAIM_WAIT_MS, SEARCH_CLAIM_WAIT_MS, SEATS_WITHOUT_CONTRACTUAL_NO_TRAINING, SEAT_REGISTRY, allSeatAvailability, isSeat } from "./subscriptionSeats";
 import { orderByVendorFamily } from "../../shared/ai/vendorFamily";
 import { createSubscriptionSeatAdapter } from "./providers/subscriptionSeat";
 
@@ -1633,6 +1633,19 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
       : null,
     inputs: input.inputs,
   });
+
+  /*
+   * 4d. A SEAT WHOSE NO-TRAINING BASIS IS ONLY A SETTING SEES PUBLIC CONTENT ONLY (3 Nov 2026). Codex on
+   * her ChatGPT plan may train if the setting is flipped, so private content (anything not declared
+   * public, and anything a marker revokes) never reaches it. Claude Code and the paid no-training lanes
+   * stay; the chain is shorter, never unsafe.
+   */
+  if (!contentClass.publicModelApproved || input.budgetContext?.confidential === true) {
+    candidates = candidates.filter((p) => !SEATS_WITHOUT_CONTRACTUAL_NO_TRAINING.has(p.provider_key));
+    if (candidates.length === 0) {
+      return { run: await blocked("EGRESS_BLOCKED", "private_content_has_no_lane_with_a_no_training_contract:Codex on a ChatGPT plan may train, so it sees public content only") };
+    }
+  }
 
   // 5. Egress check (D9 default-deny): the sensitivity label must be explicitly
   //    allowed for the provider. Restricted labels can never leave.

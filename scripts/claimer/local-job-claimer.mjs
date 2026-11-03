@@ -44,6 +44,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { CLOUDFLARE_ACCOUNT_ID } from "../duties/lib/pages-delivery.mjs";
+import { loadRoles } from "../lib/model-roles.mjs";
 
 /**
  * THE DUTY MODULE IS RELOADED WHEN THE REPO MOVES. This claimer is a launchd daemon that lives for
@@ -162,7 +163,11 @@ const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const HEARTBEAT_INTERVAL_S = 30;
 /** Must be well inside JOB_SILENCE_MS (10 min) in src/worker/ai/subscriptionSeats.ts. */
 const PROGRESS_INTERVAL_S = 60;
-/** The seat this machine runs jobs on. Jobs run Claude Code; Codex is not a job runner here. */
+/**
+ * The queue this machine claims jobs from. WHICH MODEL works each phase is not decided here or by the
+ * seat name: `model-roles.json` beside this file says it (3 Nov 2026 — Codex does the hands-on phases,
+ * Claude plans and reviews; confidential text stays on Claude), read through scripts/lib/model-roles.mjs.
+ */
 const SEAT = "claude_code";
 const RUN_KIND = "LOCAL_JOB";
 
@@ -225,7 +230,7 @@ export function noteLid(state, log = console.log) {
 }
 
 /** Refuse anything the registry does not name. Pure, so it is self-tested. */
-export function dutyFor(job) {
+export function dutyFor(job, roles = loadRoles()) {
   if (!job || typeof job !== "object") return { ok: false, why: "the run carried no job" };
   const kind = String(job.card_kind ?? "");
   const script = DUTIES[kind];
@@ -234,7 +239,9 @@ export function dutyFor(job) {
   if (!["PLAN", "BUILD", "LAND"].includes(String(job.phase))) return { ok: false, why: `the job names no phase (got "${job.phase}")` };
   if (!["opus", "sonnet", "haiku"].includes(String(job.model))) return { ok: false, why: `the job names no model alias (got "${job.model}")` };
   if (!(Number(job.max_seconds) > 0)) return { ok: false, why: "the job carries no ceiling" };
-  return { ok: true, script, kind };
+  const role = roles.jobs?.[kind]?.[String(job.phase)];
+  if (role !== "worker" && role !== "brain") return { ok: false, why: `scripts/claimer/model-roles.json names no role for ${kind} ${job.phase}` };
+  return { ok: true, script, kind, role };
 }
 
 // ── The wire ─────────────────────────────────────────────────────────────────────────────────
@@ -525,7 +532,7 @@ async function toolPresent(bin) {
 
 async function main() {
   if (SELF_TEST) return selfTest();
-  const tools = { claude: await toolPresent("claude"), gh: await toolPresent("gh"), git: await toolPresent("git"), caffeinate: await toolPresent("caffeinate"), land: existsSync(path.join(homedir(), "bin", "land")) };
+  const tools = { claude: await toolPresent("claude"), codex: await toolPresent("codex"), gh: await toolPresent("gh"), git: await toolPresent("git"), caffeinate: await toolPresent("caffeinate"), land: existsSync(path.join(homedir(), "bin", "land")) };
   const missing = Object.entries(tools).filter(([, ok]) => !ok).map(([k]) => k);
   const service = Boolean(process.env.GSC_SERVICE_ACCOUNT_JSON);
   if (DOCTOR) {
@@ -534,6 +541,7 @@ async function main() {
     console.log(`access token in environment: ${accessHeaders() ? "yes" : "NO — the claimer cannot authenticate"}`);
     console.log(`drive service account in environment: ${service ? "yes" : "NO — the PLAN phase cannot pull a folder"}`);
     console.log(`tools: ${Object.entries(tools).map(([k, ok]) => `${k}=${ok ? "ok" : "MISSING"}`).join(" ")}`);
+    console.log(`roles: ${Object.entries(loadRoles().jobs).map(([k, p]) => `${k} ${Object.entries(p).map(([ph, r]) => `${ph}=${r}`).join(" ")}`).join(", ")}`);
     console.log(`duties: ${Object.entries(DUTIES).map(([k, s]) => `${k} → ${s}${existsSync(path.join(REPO_ROOT, s)) ? "" : " (MISSING)"}`).join(", ")}`);
     process.exit(missing.length === 0 && accessHeaders() && service ? 0 : 1);
   }
@@ -661,6 +669,8 @@ function selfTest() {
     ["a job with no model alias is refused", () => dutyFor({ ...good, model: "gpt-9" }).ok === false],
     ["a job with no ceiling is refused", () => dutyFor({ ...good, max_seconds: 0 }).ok === false],
     ["no job at all is refused", () => dutyFor(null).ok === false],
+    ["a phase the role table does not name is refused", () => dutyFor(good, { jobs: { WEB_PROPERTY_CHANGE: { PLAN: "nobody" } } }).ok === false],
+    ["every registered kind has a role for every phase", () => Object.keys(DUTIES).every((k) => ["PLAN", "BUILD", "LAND"].every((ph) => ["worker", "brain"].includes(loadRoles().jobs?.[k]?.[ph])))],
     ["a job dir cannot escape ~/GitHub/wpos-jobs", () => !jobDirFor("../../etc").includes("..")],
     ["every duty script named here exists", () => Object.values(DUTIES).every((s) => existsSync(path.join(REPO_ROOT, s)))],
   ];

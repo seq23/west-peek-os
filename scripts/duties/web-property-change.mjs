@@ -69,7 +69,8 @@ import { CLOUDFLARE_ACCOUNT_ID, classify, proofLine, readRequests } from "./lib/
 import { VAULT_INJECTED_VAR, claudeChildEnv, envForRepoRun, strippedNote, vaultLookup } from "../lib/vault-env.mjs";
 import { admittedScripts, constraintsIn, generateRunbook, hostFromRoutes, isProductionRun, productionAsked, withPorterMayRun, likelySecrets, porterMayRun, readWranglerJson, readWranglerToml, runbookSecretNames, secretNamesInSource, vendorPageFor } from "./lib/runbook.mjs";
 import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
-import { CODEX_BUILD_NOTE, codexExecArgs, codexSeatUsable, finishCodexBuild, helpMentions, runWithCodexFallback } from "../lib/codex-seat.mjs";
+import { CODEX_BUILD_NOTE, codexExecArgs, codexSeatUsable, finishCodexBuild, soonestReset } from "../lib/codex-seat.mjs";
+import { routeFor, runByRole } from "../lib/model-roles.mjs";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -455,22 +456,40 @@ export { claudeChildEnv };
 const MODEL_DENIED_TOOLS = ["Bash(*vault.mjs*)", "Bash(security:*)", "Bash(*west-peek-os/vault*)"];
 
 /**
- * Run the phase's model in the worktree: Claude Code, and — ONLY when Claude Code reports its plan is
- * out of usage — Codex on her ChatGPT Plus seat, in the same worktree with the same prompt (29 Sep
- * 2026). The phase reads its result from a FILE the model writes, so which model wrote it does not
- * change how the phase is judged. Any other Claude failure is the phase's failure, unchanged.
+ * Run one model turn on its ROLE (owner, 3 Nov 2026: Codex does the hands-on work, Claude is the
+ * brains). `scripts/claimer/model-roles.json` says which phase is which; `routeFor` keeps any turn
+ * whose text or files may carry LP, deal, investor or children's material on Claude, because Codex on
+ * her ChatGPT plan is not proven no-training. A Codex limit ends the turn with
+ * `NAMED STOP [CODEX_LIMIT]` and a reset time (the Worker holds the card and retries) — Claude is
+ * never called in its place. The phase reads its result from a FILE either model writes, so which
+ * model wrote it does not change how the phase is judged.
  */
-async function runClaude(opts) {
-  return runWithCodexFallback({
-    runClaude: () => spawnClaude(opts),
-    runCodex: () => spawnCodex(opts),
-    limited: claudeSpentUsage,
-    codexLimited: codexSpentUsage,
-    usable: () => codexSeatUsable(homedir()),
-    supports: codexLacks,
-    addDirs: opts.addDirs ?? [],
+async function runModel(opts) {
+  // Only the job's own folders are read for confidential material; a worktree is a public repo.
+  const route = routeFor({ kind: opts.job?.card_kind, phase: opts.phase, prompt: opts.prompt, materialDirs: opts.materialDirs ?? [] });
+  appendRouteLog(opts, route);
+  if (route.role === "worker") {
+    const seat = codexSeatUsable(homedir());
+    if (!seat.ok) return { code: 1, out: "", err: `Codex cannot take this hands-on turn: ${seat.why}`, servedBy: "none", role: "worker" };
+  }
+  return runByRole({
+    route,
+    runBrain: () => spawnClaude(opts),
+    runWorker: () => spawnCodex(opts),
+    workerSpent: codexSpentUsage,
+    resetsIn: (note) => soonestReset([note]),
     onLine: opts.onLine,
   });
+}
+
+function appendRouteLog(opts, route) {
+  const dir = opts.jobDir ?? null;
+  if (!dir) return;
+  try {
+    appendFileSync(path.join(dir, "routes.log"), `${new Date().toISOString()} ${opts.phase ?? "?"} → ${route.role}: ${route.why}\n`);
+  } catch {
+    // the log is a convenience; the progress line already carries the route
+  }
 }
 
 /**
@@ -479,6 +498,14 @@ async function runClaude(opts) {
  * resets (`waits_seconds`) and the Worker holds the card until then. Null when the run was anything else.
  */
 export function spentReport(phase, claude) {
+  if (claude?.codexLimited) {
+    const waits = Number.isFinite(claude.resetsInSeconds) && claude.resetsInSeconds > 0 ? Math.round(claude.resetsInSeconds) : 3600;
+    return { phase, status: "failed", reason: `${claude.codexLimited} — Codex's plan is spent; the work waits for the reset and is retried. Claude does not take it over.`.slice(0, 900), waits_seconds: waits };
+  }
+  if (claude?.servedBy === "claude") {
+    const limit = claudeSpentUsage(claude);
+    if (limit) return { phase, status: "failed", reason: `NAMED STOP [CLAUDE_LIMIT] ${limit} — this is a brain turn; it waits for the reset and is retried.`.slice(0, 900), waits_seconds: soonestReset([limit]) };
+  }
   if (!claude?.bothSpent) return null;
   const waits = Number.isFinite(claude.resetsInSeconds) && claude.resetsInSeconds > 0 ? Math.round(claude.resetsInSeconds) : 3600;
   return { phase, status: "failed", reason: String(claude.err ?? "Both subscription seats are out of usage.").split("\n").filter((l) => /Both subscription seats/.test(l)).join(" ").slice(0, 900) || "Both subscription seats are out of usage.", waits_seconds: waits };
@@ -509,19 +536,6 @@ export function claudeSpentUsage({ out, err }) {
     const hit = detectUsageLimit({ stdout: out, stderr: err });
     return hit.limited ? hit.snippet : null;
   }
-}
-
-/** The first flag the installed `codex exec --help` does not mention, or null when it supports them all. */
-async function codexLacks(flags) {
-  let help = "";
-  try {
-    const r = await execFileAsync("codex", ["exec", "--help"], { maxBuffer: 4 * 1024 * 1024, timeout: 20_000, env: claudeChildEnv(process.env) });
-    help = `${r.stdout}\n${r.stderr}`;
-  } catch (e) {
-    help = `${e?.stdout ?? ""}\n${e?.stderr ?? ""}`;
-  }
-  if (!help.trim()) return "`codex exec` (the codex command could not be run)";
-  return flags.find((f) => !helpMentions(help, f)) ?? null;
 }
 
 /** Run `codex exec` in the worktree with the same prompt on stdin, killable by the job's signal. */
@@ -942,8 +956,8 @@ export async function run(job, ctx) {
   const extraLines = repoLines(book, secrets, outDir, runsDone, job);
   const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments, extraLines })}`;
   writeFileSync(path.join(jobDir, `prompt-${phase}.md`), prompt);
-  progress(`claude -p (${job.model}) for ${phase}`);
-  let claude = await runClaude({ prompt, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress, phase });
+  progress(`model turn (${job.model} if Claude) for ${phase}`);
+  let claude = await runModel({ job, prompt, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
   finishIfCodex(claude, { phase, resultPath, worktree: names.worktree, branch: names.branch, jobDir, progress });
   writeFileSync(path.join(jobDir, `claude-${phase}.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
   let cost = costFrom(claude.out);
@@ -955,7 +969,7 @@ export async function run(job, ctx) {
     runsDone.push(...done);
     rmSync(resultPath, { force: true });
     const again = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments, extraLines: repoLines(book, secrets, outDir, runsDone, job) })}\n\nRUNS DONE FOR YOU SINCE YOUR LAST TRY: ${done.map((d) => `${d.script} (${d.env}) → exit ${d.exit}: ${d.line}`).join("; ")}`;
-    claude = await runClaude({ prompt: again, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress, phase });
+    claude = await runModel({ job, prompt: again, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
     finishIfCodex(claude, { phase, resultPath, worktree: names.worktree, branch: names.branch, jobDir, progress });
     writeFileSync(path.join(jobDir, `claude-${phase}-runs${round + 1}.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
     cost = (cost ?? 0) + (costFrom(claude.out) ?? 0);
@@ -968,7 +982,7 @@ export async function run(job, ctx) {
     const fetched = await fetchDriveAssets(path.join(packageDir, "drive"), wanted, ctx, jobDir, progress);
     if (!fetched.ok) return { phase, status: "failed", reason: fetched.reason };
     rmSync(resultPath, { force: true });
-    claude = await runClaude({ prompt: `${prompt}\n\nFETCHED FOR YOU SINCE YOUR LAST TRY: ${wanted.join(", ")} — now in ${path.join(packageDir, "drive")}.`, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress, phase });
+    claude = await runModel({ job, prompt: `${prompt}\n\nFETCHED FOR YOU SINCE YOUR LAST TRY: ${wanted.join(", ")} — now in ${path.join(packageDir, "drive")}.`, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
     finishIfCodex(claude, { phase, resultPath, worktree: names.worktree, branch: names.branch, jobDir, progress });
     writeFileSync(path.join(jobDir, `claude-${phase}-2.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
     cost = (cost ?? 0) + (costFrom(claude.out) ?? 0);
@@ -1572,8 +1586,8 @@ async function runSeveral(job, ctx) {
     if (existsSync(resultPath)) rmSync(resultPath);
     const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext({ ...job, target_repo: parts.map((p) => p.repo).join(" + ") }, { ...parts[0].names, packageDir, jobDir, resultPath, planText: null, attachments: assets.attachments, extraLines: parts.flatMap((p) => [`--- ${p.repo} ---`, ...repoLines(p.book, p.secrets, path.join(jobDir, "out"), [], job)]) })}`;
     writeFileSync(path.join(jobDir, "prompt-PLAN.md"), prompt);
-    progress(`claude -p (${job.model}) for PLAN over ${parts.length} repos`);
-    const claude = await runClaude({ prompt, model: job.model, cwd: worktrees[0], addDirs: [...worktrees.slice(1), jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress });
+    progress(`model turn (${job.model} if Claude) for PLAN over ${parts.length} repos`);
+    const claude = await runModel({ job, prompt, model: job.model, cwd: worktrees[0], addDirs: [...worktrees.slice(1), jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
     writeFileSync(path.join(jobDir, "claude-PLAN.out"), `${claude.out}\n--- stderr ---\n${claude.err}`);
     const cost = costFrom(claude.out);
     const { result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "PLAN");
@@ -1597,8 +1611,8 @@ async function runSeveral(job, ctx) {
         const partJob = { ...job, target_repo: p.repo, property_host: p.property_host, sites: p.sites, request: `${job.request ?? job.ask ?? ""}\n\n(${p.repo}'s part: ${p.ask})` };
         const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(partJob, { ...p.names, packageDir, jobDir, resultPath, planText: job.plan?.text ?? null, attachments: assets.attachments, thisPart: p.repo, extraLines: repoLines(p.book, p.secrets, path.join(jobDir, "out"), [], partJob) })}`;
         writeFileSync(path.join(jobDir, `prompt-BUILD-${p.repo}.md`), prompt);
-        progress(`claude -p (${job.model}) for BUILD of ${p.repo}`);
-        let claude = await runClaude({ prompt, model: job.model, cwd: p.names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress, phase });
+        progress(`model turn (${job.model} if Claude) for BUILD of ${p.repo}`);
+        let claude = await runModel({ job, prompt, model: job.model, cwd: p.names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
         finishIfCodex(claude, { phase, resultPath, worktree: p.names.worktree, branch: p.names.branch, jobDir, progress });
         writeFileSync(path.join(jobDir, `claude-BUILD-${p.repo}.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
         let { result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "BUILD");
@@ -1607,7 +1621,7 @@ async function runSeveral(job, ctx) {
           const fetched = await fetchDriveAssets(path.join(packageDir, "drive"), wanted, ctx, jobDir, progress);
           if (!fetched.ok) return { phase, status: "failed", reason: `${p.repo}: ${fetched.reason}`, parts: reports };
           rmSync(resultPath, { force: true });
-          claude = await runClaude({ prompt: `${prompt}\n\nFETCHED FOR YOU SINCE YOUR LAST TRY: ${wanted.join(", ")} — now in ${path.join(packageDir, "drive")}.`, model: job.model, cwd: p.names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), signal: ctx.signal, onLine: progress, phase });
+          claude = await runModel({ job, prompt: `${prompt}\n\nFETCHED FOR YOU SINCE YOUR LAST TRY: ${wanted.join(", ")} — now in ${path.join(packageDir, "drive")}.`, model: job.model, cwd: p.names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
           finishIfCodex(claude, { phase, resultPath, worktree: p.names.worktree, branch: p.names.branch, jobDir, progress });
           ({ result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "BUILD"));
         }
@@ -1693,7 +1707,7 @@ async function runSeveral(job, ctx) {
   if (existsSync(resultPath)) rmSync(resultPath);
   const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext({ ...job, target_repo: parts.map((p) => p.repo).join(" + ") }, { ...parts[0].names, packageDir, jobDir, resultPath, landOutput: outputs.join("\n\n"), mergeSha: landed.map((l) => `${l.repo}@${l.merge_sha}`).join(", "), attachments: assets.attachments })}`;
   writeFileSync(path.join(jobDir, "prompt-LAND.md"), prompt);
-  const claude = await runClaude({ prompt, model: job.model, cwd: worktrees[0], addDirs: [...worktrees.slice(1), jobDir].filter(existsSync), signal: ctx.signal, onLine: progress });
+  const claude = await runModel({ job, prompt, model: job.model, cwd: worktrees[0], addDirs: [...worktrees.slice(1), jobDir].filter(existsSync), jobDir, materialDirs: [jobDir], signal: ctx.signal, onLine: progress, phase });
   writeFileSync(path.join(jobDir, "claude-LAND.out"), `${claude.out}\n--- stderr ---\n${claude.err}`);
   const { result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "LAND");
   // Every PR merged either way; the proof is what is missing, and that is recorded as such.

@@ -108,10 +108,17 @@ Claude Code seat (Max plan)  →  Codex seat (ChatGPT Plus)  →  FREE lanes  �
   today `openai/gpt-5-mini` through OpenRouter (verified in 0188), and direct OpenAI as the peer of
   an `openai/*` head. A stronger OpenAI model joins the rung the moment it is registered ACTIVE with
   a vendor-read price (`npm run prices:refresh`) and a live probe; nothing here guesses either.
-- **Repo work on cards has the same second model.** The Mac job (Porter, web property change) runs
-  `claude -p` per phase. When Claude Code reports its plan is out of usage, that phase is run again
-  on Codex (ChatGPT Plus seat) in the same worktree with the same prompt, and the job log says so.
-  Any other Claude failure stays the phase's failure. See `scripts/lib/codex-seat.mjs`.
+- **Codex does the hands-on work; Claude is the brains (owner, 3 Nov 2026).** The Mac job (Porter, web
+  property change) asks `scripts/claimer/model-roles.json` (read through `scripts/lib/model-roles.mjs`)
+  which role each phase takes: PLAN → brain (`claude -p`), BUILD and LAND → worker (`codex exec` on her
+  ChatGPT plan; the runner commits, pushes and opens the PR outside Codex's sandbox). A kind or phase the
+  table does not name is brain. **Confidential text stays on Claude:** Codex's no-training basis on a
+  ChatGPT plan is a setting, not a contract (0187), so a worker turn whose prompt or job files carry an
+  LP, deal, investor or children's marker, or a file that cannot be read (PDF, spreadsheet), runs on
+  Claude instead; the job's `routes.log` says why. **A Codex limit is a wait:** `NAMED STOP [CODEX_LIMIT]`
+  with the reset time, the Worker holds the card and the next run retries; Claude never takes it over.
+  The Worker router applies the same rule to the Codex seat: content not declared public never reaches it
+  (`SEATS_WITHOUT_CONTRACTUAL_NO_TRAINING`, runAi step 4d).
 - **A seat may run a live web search, and a search is believed only with proof (0246, 1 Oct 2026).** A
   call that has to reach the live web (`requiresSearch`: Parker's sponsor research, blog help, the
   Productions jobs, venue and market search) used to be offered to no seat, so at `FREE_ONLY` the only lane

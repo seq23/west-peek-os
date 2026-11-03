@@ -152,6 +152,16 @@ export const SEAT_REGISTRY: Record<Seat, { providerId: string; model: string; di
   codex: { providerId: "prov_codex", model: "codex-local", displayName: "Codex CLI" },
 };
 
+/**
+ * SEATS WHOSE NO-TRAINING BASIS IS A SETTING, NOT A CONTRACT (3 Nov 2026). Codex runs on her ChatGPT
+ * plan, where training on what it is sent is an account setting (migration 0187 says so in terms);
+ * Anthropic's Commercial Terms are an unconditional bar. Unknown or revocable terms count as training,
+ * so a run whose content is not declared public (`classifyContent`) never reaches these seats —
+ * runAi removes them before any lane is ranked. Mirrors `worker_route.no_training_proven: false` in
+ * scripts/claimer/model-roles.json on the Mac.
+ */
+export const SEATS_WITHOUT_CONTRACTUAL_NO_TRAINING: ReadonlySet<string> = new Set<Seat>(["codex"]);
+
 export function isSeat(value: string): value is Seat {
   return (SEATS as readonly string[]).includes(value);
 }
