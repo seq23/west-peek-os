@@ -4,7 +4,8 @@
 
   WHAT IT IS. Porter's hands on her Mac: claims LOCAL_JOB runs the Worker parks for a card kind
   registered in src/shared/work/localJobs.ts (today: WEB_PROPERTY_CHANGE), runs the duty script for
-  that kind in a git worktree of the target repo with `claude -p`, keeps the Mac awake while it does,
+  that kind in a git worktree of the target repo with the model scripts/claimer/model-roles.json
+  names for the phase (Codex hands-on, Claude plans and keeps anything confidential), keeps the Mac awake while it does,
   pings every minute, stops the job at its ceiling, and reports what came back. It never creates
   work, never chooses a model or a phase, and never lands anything without the recorded approval and
   the recorded green check the job carries. See scripts/claimer/local-job-claimer.mjs.

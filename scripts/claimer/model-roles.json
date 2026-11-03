@@ -1,0 +1,52 @@
+{
+  "$comment": "WHO DOES THE WORK ON THE MAC (owner, 3 Nov 2026: 'after today we need to default OpenAI and Claude just be the brains'). worker = Codex on her ChatGPT plan, hands-on work (edits, builds, repairs, landing). brain = Claude Code, planning, deciding, reviewing, brain writes. Read by scripts/lib/model-roles.mjs, which the local-job claimer and every duty use; nothing else picks a model. A kind or phase not listed here is brain (fail closed). See docs/AI_GOVERNANCE.md.",
+  "default_role": "brain",
+  "jobs": {
+    "WEB_PROPERTY_CHANGE": {
+      "PLAN": "brain",
+      "BUILD": "worker",
+      "LAND": "worker"
+    }
+  },
+  "worker_route": {
+    "provider_id": "prov_codex",
+    "no_training_proven": false,
+    "$why": "On a ChatGPT Plus plan, training on conversations is an account SETTING, not a contractual bar (migration 0187). A setting she or OpenAI can flip is not proof, so the worker route counts as training-permitting: text that may carry LP names, deal terms, investor names or children's names never goes to it. Only a recorded no-training contract (e.g. a ChatGPT Business/Enterprise workspace) may set this true."
+  },
+  "confidential_markers": [
+    "\\blimited partners?\\b",
+    "\\bLPs?\\b",
+    "\\bLPAC?\\b",
+    "\\binvestors?\\b",
+    "\\bcapital call\\b",
+    "\\bsubscription agreement\\b",
+    "\\bside letter\\b",
+    "\\bcommitment amount\\b",
+    "\\bcommitted capital\\b",
+    "\\bdeal terms?\\b",
+    "\\bterm sheet\\b",
+    "\\bcap table\\b",
+    "\\bpre-?money\\b",
+    "\\bpost-?money\\b",
+    "\\bvaluation\\b",
+    "\\bliquidation preference\\b",
+    "\\bpro ?rata\\b",
+    "\\bSAFE (?:note|agreement)\\b",
+    "\\bconvertible note\\b",
+    "\\bcarried interest\\b",
+    "\\bmanagement fee\\b",
+    "\\b(?:net )?(?:IRR|TVPI|DPI|MOIC)\\b",
+    "\\bdata ?room\\b",
+    "\\bdue diligence\\b",
+    "\\bwire instructions\\b",
+    "\\bchild(?:ren)?\\b",
+    "\\bkids?\\b",
+    "\\bminors?\\b",
+    "\\bstudents?\\b",
+    "<!-- confidential -->"
+  ],
+  "scannable_extensions": ["md", "txt", "csv", "tsv", "json", "html", "htm", "xml", "yml", "yaml", "log", "js", "mjs", "ts", "css", "svg"],
+  "image_extensions": ["png", "jpg", "jpeg", "gif", "webp", "ico", "avif"],
+  "max_material_files": 2000,
+  "max_scan_bytes": 2097152
+}

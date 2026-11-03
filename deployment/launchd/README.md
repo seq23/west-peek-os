@@ -110,11 +110,12 @@ her Mac sleeps, a live call reads `meet_live_no_listener`.
 
 A third launchd job, separate from the seat claimer and the Meet listener: it claims `LOCAL_JOB`
 runs (migration 0219) and runs the duty script for the card's kind — today
-`scripts/duties/web-property-change.mjs` — in a git worktree of the target repo, with `claude -p`,
-tools, caffeinate and a hard ceiling. It never creates work and never lands without the recorded
+`scripts/duties/web-property-change.mjs` — in a git worktree of the target repo, with the model
+`scripts/claimer/model-roles.json` names for the phase (Codex for hands-on work, Claude for planning and
+for anything confidential), tools, caffeinate and a hard ceiling. It never creates work and never lands without the recorded
 approval and green check the job carries (`validate:no-land-without-approval`).
 
-What it needs on this Mac, all of which `--doctor` checks: `claude`, `gh` (signed in), `git`,
+What it needs on this Mac, all of which `--doctor` checks: `claude`, `codex` (signed in on her ChatGPT plan), `gh` (signed in), `git`,
 `caffeinate`, `~/bin/land`, the target repo checked out under `~/GitHub/<repo>` (with a
 `RUNBOOK.md`), and in the vault `WP_OS_MAC_ACCESS_CLIENT_ID`, `WP_OS_MAC_ACCESS_CLIENT_SECRET`
 and `GSC_SERVICE_ACCOUNT_JSON` (the Drive service account, drive.readonly, impersonating

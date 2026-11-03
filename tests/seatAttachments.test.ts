@@ -67,14 +67,19 @@ const env = (): Env => makeTestEnv(t.db, { OPENROUTER_API_KEY: "or", WP_ANTHROPI
 /** A seat that checked in, declaring exactly these capabilities. */
 const awake = (seat: Seat, capabilities: string[]): Promise<void> => recordHeartbeat(env(), { seat, deviceId: "mac-test", hostname: "her-mac", capabilities });
 
-const DOC_CALL = (documents = [DECK], images?: Array<typeof PICTURE>): RunAiInput => ({
-  purpose: "read the deck",
+/*
+ * PUBLIC content (3 Nov 2026): Codex on her ChatGPT plan sees public content only, so the capability
+ * gate is exercised on a call declared public. The same call marked confidential is proved below never
+ * to reach the Codex seat at all.
+ */
+const DOC_CALL = (documents = [DECK], images?: Array<typeof PICTURE>, confidential = false): RunAiInput => ({
+  purpose: "read the event flyer",
   actor: MP_ACTOR,
-  inputs: ["Summarise this deck."],
+  inputs: ["Summarise this flyer."],
   sensitivity: "INTERNAL" as never,
   documents,
   ...(images ? { images } : {}),
-  budgetContext: { expectedOutputTokens: 200, judgement: true, confidential: true },
+  budgetContext: confidential ? { expectedOutputTokens: 200, judgement: true, confidential: true } : { expectedOutputTokens: 200, judgement: true, publicModelApproved: true },
   routing: { category: "OPERATIONS" as const, taskClass: "employee-work" },
 });
 
@@ -238,6 +243,16 @@ describe("the router: a file goes to a seat only if that seat's claimer proved i
     expect(JSON.parse(row!.attachments_json!)[0]).toMatchObject({ n: 0, kind: "document", media_type: "application/pdf" });
     expect(row!.attachments_cleared_at, "the files were removed when the run ended").not.toBeNull();
     expect(bucket.store.size, "nothing is left in R2").toBe(0);
+  }, 60_000);
+
+  it("a CONFIDENTIAL document never reaches the Codex seat, proof or no proof — its no-training basis is a setting", async () => {
+    await awake("codex", [attachmentCapability("codex", "document")]);
+    const c = claimerThatReads(["codex"]);
+    const { run } = await runAi(env(), DOC_CALL([DECK], undefined, true), { fetchImpl: (async () => new Response("{}", { status: 500 })) as unknown as typeof fetch });
+    await c.stop();
+    expect(await rows(), "nothing was parked for Codex").toEqual([]);
+    expect(c.seenBytes).toEqual([]);
+    expect(run.model ?? "").not.toBe("codex-local");
   }, 60_000);
 
   it("a seat that did NOT prove it is never parked the file — the call never touches the queue", async () => {

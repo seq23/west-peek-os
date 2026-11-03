@@ -61,12 +61,12 @@ function scratch() {
   return { root, origin, main, wt, gh, run };
 }
 
-/** The duty's model turns in a job worktree: each `runClaude(` call with `cwd: names.worktree` / `p.names.worktree`. */
+/** The duty's model turns in a job worktree: each `runModel(` call with `cwd: names.worktree` / `p.names.worktree`. */
 function worktreeTurns(duty) {
   const lines = duty.split("\n");
   const turns = [];
   lines.forEach((l, i) => {
-    if (/await runClaude\(\{/.test(l) && /cwd: (p\.)?names\.worktree/.test(l)) turns.push({ line: i + 1, text: l, next: lines[i + 1] ?? "" });
+    if (/await runModel\(\{/.test(l) && /cwd: (p\.)?names\.worktree/.test(l)) turns.push({ line: i + 1, text: l, next: lines[i + 1] ?? "" });
   });
   return turns;
 }
@@ -142,7 +142,7 @@ if (process.argv.includes("--self-test")) {
     { name: "a model turn with no finishIfCodex after it", finish: realFinish, duty: DUTY.replace(firstTurn, "  // removed"), finishSource: realSource },
     { name: "a duty that hands Codex the git dir again", finish: realFinish, duty: `${DUTY}\nconst dirs = gitCommonDirs([cwd], () => null);`, finishSource: realSource },
     { name: "a Codex BUILD prompt without the build note", finish: realFinish, duty: DUTY.replace("if (phase === \"BUILD\") prompt = `${prompt}${CODEX_BUILD_NOTE}`;", ""), finishSource: realSource },
-    { name: "a duty with no worktree turns at all", finish: realFinish, duty: DUTY.replace(/await runClaude\(\{/g, "await other({"), finishSource: realSource },
+    { name: "a duty with no worktree turns at all", finish: realFinish, duty: DUTY.replace(/await runModel\(\{/g, "await other({"), finishSource: realSource },
   ];
   let bad = 0;
   for (const c of cases) {

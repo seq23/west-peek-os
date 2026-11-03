@@ -73,6 +73,14 @@ const PRIVATE_CALL = {
   routing: { category: "OPERATIONS" as const, taskClass: "employee-work" },
 };
 
+/** The same judgement call declared PUBLIC — the only content the Codex seat may see (3 Nov 2026). */
+const PUBLIC_CALL = {
+  ...PRIVATE_CALL,
+  purpose: "draft the run of show for the Rooms evening",
+  inputs: ["Draft the run of show for Thursday's Rooms evening."],
+  budgetContext: { expectedOutputTokens: 200, judgement: true, publicModelApproved: true },
+};
+
 const openRouterAnswers = (model: string, text: string) => () =>
   new Response(
     JSON.stringify({ model, choices: [{ message: { content: text } }], usage: { prompt_tokens: 10, completion_tokens: 10 } }),
@@ -221,22 +229,29 @@ describe("the two seats are independent, which is the reason there are two", () 
     expect(seats.find((s) => s.seat === "codex")?.available).toBe(true);
   });
 
-  it("leads a private run on the one awake seat while the other sleeps, and says so on the run", async () => {
+  it("leads a PUBLIC run on the one awake seat while the other sleeps; a PRIVATE run is never offered to Codex", async () => {
     await heartbeat("codex", 5_000);
     await heartbeat("claude_code", 20 * 60 * 60 * 1000);
 
     /*
      * The seat will not answer inside the test's patience, so the run ends up on a network lane —
      * which is fine and is not what is being asserted. What is asserted is that CODEX WAS OFFERED
-     * THE WORK and Claude Code was not, which the parked row proves directly.
+     * THE PUBLIC WORK and Claude Code was not, which the parked row proves directly.
      */
     const stub = anyVendor("answered after the seat did not");
-    await runAi(env(), PRIVATE_CALL, { fetchImpl: stub.fetchImpl });
+    await runAi(env(), PUBLIC_CALL, { fetchImpl: stub.fetchImpl });
 
     const parked = await t.db.prepare("SELECT seat FROM subscription_seat_run").all<{ seat: string }>();
     const seatsParked = (parked.results ?? []).map((r) => r.seat);
     expect(seatsParked, "the awake seat was offered the run").toContain("codex");
     expect(seatsParked, "the sleeping seat was never assembled").not.toContain("claude_code");
+
+    // Private content: Codex's no-training basis is a setting, so it is never offered the run at all.
+    await t.db.prepare("DELETE FROM subscription_seat_run").run();
+    const { run } = await runAi(env(), PRIVATE_CALL, { fetchImpl: anyVendor("a no-training vendor answered").fetchImpl });
+    const privateParked = (await t.db.prepare("SELECT seat FROM subscription_seat_run").all<{ seat: string }>()).results ?? [];
+    expect(privateParked.map((r) => r.seat), "a private run was never parked for Codex").not.toContain("codex");
+    expect(run.model ?? "").not.toBe("codex-local");
   }, 180_000);
 
   it("keeps a claimer that serves one seat away from the other seat's work", async () => {
@@ -610,13 +625,13 @@ describe("a seat whose plan is out of usage is skipped until it resets (0245)", 
     expect((await laneAvailability(env(), "claude_code")).available).toBe(false);
   });
 
-  it("an exhausted Claude Code hands the private run to the Codex seat, with no 90-second wait and no Claude Code row parked", async () => {
+  it("an exhausted Claude Code hands a PUBLIC run to the Codex seat, with no 90-second wait and no Claude Code row parked — and never a PRIVATE one", async () => {
     await heartbeat("claude_code", 5_000);
     await heartbeat("codex", 5_000);
     await markSeatExhausted(env(), { seat: "claude_code", deviceId: "mac-test", retryAfterSeconds: 3600 });
 
     const stub = anyVendor("SHOULD NOT BE REACHED");
-    const running = runAi(env(), PRIVATE_CALL, { fetchImpl: stub.fetchImpl });
+    const running = runAi(env(), PUBLIC_CALL, { fetchImpl: stub.fetchImpl });
 
     // Play the Codex claimer: wait for the parked row, claim it, answer it.
     let parkedId: string | null = null;
@@ -640,5 +655,11 @@ describe("a seat whose plan is out of usage is skipped until it resets (0245)", 
     expect(stub.seen, "no paid vendor was called").toEqual([]);
     const parkedSeats = (await t.db.prepare("SELECT DISTINCT seat FROM subscription_seat_run").all<{ seat: string }>()).results ?? [];
     expect(parkedSeats.map((r) => r.seat)).toEqual(["codex"]);
+
+    // The same state with PRIVATE content: Codex is never offered it; a no-training lane serves it.
+    await t.db.prepare("DELETE FROM subscription_seat_run").run();
+    const priv = await runAi(env(), PRIVATE_CALL, { fetchImpl: anyVendor("a no-training vendor answered").fetchImpl });
+    expect(((await t.db.prepare("SELECT seat FROM subscription_seat_run").all<{ seat: string }>()).results ?? []).map((r) => r.seat)).not.toContain("codex");
+    expect(priv.run.model ?? "").not.toBe("codex-local");
   }, 60_000);
 });
