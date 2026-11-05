@@ -7408,6 +7408,9 @@ from January 2027; $10 paid ticket; $10,000 net target from sponsors ($7,500 flo
   posted cleared when the gate reopens; also on the event spine. Credential by name: `WP_OS_BOSS_OPEN_LOOPS_TOKEN`
   (vault `BOSS_OPEN_LOOPS_TOKEN`); unset, nothing is sent and one line says so. Live posting UNPROVEN.
 - Sample for review: docs/samples/tlc-sheet-acme-vector-fake.html (fake brand).
+- Reviser routing (owner ruling, 4 Nov 2026: brand and TLC emails are never confidential): `tlcRevisionWriter` is
+  `publicModelApproved`, no longer `confidential` or `important`, so it takes the routine lanes, free ones included.
+  runAi still revokes public approval on LP or deal-term markers. Guard: tests/tlcSamplesRouting.test.ts.
 - Guards: tlcBrandReply (colleague, stranger, executor guard), tlcPitchAndPartners (per-brand sheet, forbidden copy,
   series), tlcPipelineRepairs (B, G), tlcSendPause (new), tlcBrandFlow, learningClub. Gmail, Pinecone recovery, PDF
   rendering in production and deployment remain UNPROVEN; no production rows changed.

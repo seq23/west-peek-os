@@ -39,12 +39,18 @@ export interface SamplesDeps { renderPdf?: PdfRenderer; writer?: SamplesWriter }
 export const samplesPreviewUrl = (token: string): string => `https://os.joinwestpeek.com/api/tlc-pitch/samples/${token}`;
 const newToken = (): string => [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
 
-/** Shared with the email reviser: the governed Claude-first important-work route, always private. */
+/**
+ * BRAND AND TLC EMAILS ARE NEVER CONFIDENTIAL (owner ruling, 4 Nov 2026), so the reviser of Wynn's drafts and the samples
+ * runs on the routine lanes, free ones included, like other brand work: declared public-model approved, never marked
+ * confidential or important. INTERNAL stays the recipient label (it goes to her). runAi still revokes the public
+ * approval by itself if an LP or deal-term marker is in the words.
+ */
+export const TLC_REVISION_BUDGET = { requiresSearch: false, expectedOutputTokens: 4000, judgement: true, publicModelApproved: true } as const;
 export const tlcRevisionWriter: SamplesWriter = async (env, actor, prompt) => {
   const { run } = await runAi(env, {
     purpose: "The Learning Club: revise the brand email or samples",
     actor, inputs: [prompt], sensitivity: "INTERNAL",
-    budgetContext: { requiresSearch: false, expectedOutputTokens: 4000, judgement: true, important: true, confidential: true },
+    budgetContext: { ...TLC_REVISION_BUDGET },
     routing: { category: "INTELLIGENCE" },
   });
   return { ok: run.status === "COMPLETED" && Boolean(run.output_text), text: run.output_text ?? "" };
