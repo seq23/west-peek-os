@@ -10,9 +10,11 @@
  *
  * THE PRIVACY GATE COMES FIRST AND CANNOT BE OVERRIDDEN BY THE TABLE. The worker route's no-training
  * basis is an account SETTING, not a contractual bar (migration 0187), so unless the config records it
- * as proven, the worker counts as a training-permitting route. A turn goes to it only when EVERY text
- * the model would be handed has been read and none of it carries an LP, deal, investor or child marker,
- * and every file beside it is either scannable text without a marker or an image. Anything that cannot
+ * as proven, the worker counts as a training-permitting route. A turn goes to it only when the Worker has
+ * not marked the job private (`private_model_only`: it names a COMMITTED LP — owner ruling 4 Nov 2026), EVERY
+ * text the model would be handed has been read and none of it carries a deal-term or fund-figure marker,
+ * and every file beside it is either scannable text without a marker or an image. LP prospects, brand and
+ * TLC work are not confidential and may go to the worker. Anything that cannot
  * be read (a PDF, a spreadsheet, too many files, an unreadable file) keeps the turn on the brain.
  * A false positive costs one Claude run; a false negative would be permanent. That asymmetry is why
  * the markers are broad and the doubt resolves to the brain.
@@ -100,10 +102,12 @@ export function materialsBlock(dirs, roles = loadRoles()) {
  *   1. The table: kind × phase, anything unnamed is brain.
  *   2. The privacy gate, only for a worker turn, unless the worker route is recorded as no-training.
  */
-export function routeFor({ kind, phase, prompt, materialDirs = [] }, roles = loadRoles()) {
+export function routeFor({ kind, phase, prompt, materialDirs = [], privateModelOnly = false }, roles = loadRoles()) {
   const want = roles.jobs?.[String(kind ?? "")]?.[String(phase ?? "")] ?? roles.default_role ?? "brain";
   if (want !== "worker") return { role: "brain", why: `${kind ?? "?"} ${phase ?? "?"} is planning or review — Claude` };
   if (roles.worker_route?.no_training_proven === true) return { role: "worker", why: `${kind} ${phase} is hands-on — Codex` };
+  // The Worker read the commitment records: this job names an LP who has committed to a West Peek fund.
+  if (privateModelOnly === true) return { role: "brain", why: "kept on Claude: the Worker marked this job private (it names a committed LP), and Codex on her ChatGPT plan is not proven no-training" };
   const hit = confidentialMarkerIn(prompt, roles);
   if (hit) return { role: "brain", why: `kept on Claude: the prompt contains "${hit}", and Codex on her ChatGPT plan is not proven no-training` };
   const block = materialsBlock(materialDirs, roles);

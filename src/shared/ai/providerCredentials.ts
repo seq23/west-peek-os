@@ -35,6 +35,13 @@ export const PROVIDER_CREDENTIAL_NAME: Readonly<Record<string, string>> = Object
    */
   openrouter_free: "OPENROUTER_API_KEY",
   google_free: "GEMINI_API_KEY",
+  /*
+   * THE $0 SEARCH LANE (5 Nov 2026, providers/freeSearch.ts). Its writer and its grounded route are Gemini on the
+   * unpaid quota, so the lane is configured by GEMINI_API_KEY. Brave Search is its second route and has its own
+   * key, read by its own name only (no shared-key fallback).
+   */
+  free_search: "GEMINI_API_KEY",
+  brave_search: "BRAVE_SEARCH_API_KEY",
   openai: "OPENAI_API_KEY",
   /*
    * WP_-PREFIXED ON PURPOSE. DO NOT "TIDY" THIS TO `ANTHROPIC_API_KEY`.

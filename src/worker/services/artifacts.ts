@@ -1,3 +1,4 @@
+import { isCommittedLp, meetingIsConfidential } from "../ai/committedLps";
 import { z } from "zod";
 import type { Env } from "../env";
 import type { FirmUserIdentity } from "../auth";
@@ -158,11 +159,12 @@ export async function aboutLabel(env: Env, about: AboutInput): Promise<string | 
 }
 
 /** An LP object, or a meeting with an LP, is confidential before a single table is read. */
+/** Owner ruling, 4 Nov 2026: only a COMMITTED LP is confidential; an artifact about a prospect is not. */
 async function aboutIsConfidential(env: Env, about: AboutInput): Promise<boolean> {
-  if (about.lp_record_id) return true;
+  if (about.lp_record_id && (await isCommittedLp(env, about.lp_record_id))) return true;
   if (about.meeting_id) {
     const m = await env.WP_OS_DB.prepare("SELECT meeting_type, lp_record_id FROM meeting WHERE id = ?1").bind(about.meeting_id).first<{ meeting_type: string; lp_record_id: string | null }>();
-    if (m && (m.meeting_type === "LP" || m.lp_record_id !== null)) return true;
+    if (m && (await meetingIsConfidential(env, m))) return true;
   }
   return false;
 }

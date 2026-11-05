@@ -278,8 +278,9 @@ function selfTest() {
   if (markers.some((m) => m.test(innocuous))) {
     problems.push(`a marker matches ordinary prose: ${innocuous}`);
   }
-  // And the thing the markers MUST catch, or check 2 would pass on anything.
-  const realLp = "Cross-check the guest list against the limited partner register.";
+  // And the thing the markers MUST catch, or check 2 would pass on anything. Since the owner's ruling of 4 Nov 2026
+  // a mention of LPs is not confidential; a deal term or fund figure is.
+  const realLp = "Cross-check the guest list against each LP's commitment amount.";
   if (!markers.some((m) => m.test(realLp))) problems.push("no marker matches genuine LP material — check 2 would never fail");
 
   const notices = seededFirmNotices();

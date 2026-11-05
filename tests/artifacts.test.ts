@@ -308,12 +308,18 @@ describe("2. door A — the room: 'make this a dashboard' runs the room's own bl
     expect((await loadArtifact(env, id))!.state).toBe("FAILED");
   });
 
-  it("an LP meeting's build is confidential from the request, before any table is read", async () => {
-    const m = await createMeeting(env, MP_ACTOR, { title: "LP catch-up", meeting_type: "LP", lp_record_id: "lpr_artifacts", occurred_at: "2026-09-19T14:00:00.000Z" });
+  it("a COMMITTED LP meeting's build is confidential from the request, before any table is read; a prospect's is not (4 Nov 2026)", async () => {
+    await t.db.prepare("INSERT OR IGNORE INTO lp_record (id, legal_name, lp_type, status, created_by) VALUES ('lpr_artifacts_committed', 'Example Committed Trust', 'FAMILY_OFFICE', 'COMMITTED', 'fu_pat_example')").run();
+    const m = await createMeeting(env, MP_ACTOR, { title: "LP catch-up", meeting_type: "LP", lp_record_id: "lpr_artifacts_committed", occurred_at: "2026-09-19T14:00:00.000Z" });
     const out = await askRoom(env, MP_IDENTITY, m.id, { question: "make me a document on our commitments" }, answers({ mode: "build", build: { kind: "document", brief: "Commitments from this LP" } }));
     const row = (await loadArtifact(env, out.artifact_id!))!;
     expect(row.confidential).toBe(1);
-    expect(row.lp_record_id).toBe("lpr_artifacts");
+    expect(row.lp_record_id).toBe("lpr_artifacts_committed");
+
+    const p = await createMeeting(env, MP_ACTOR, { title: "Prospect intro", meeting_type: "LP", lp_record_id: "lpr_artifacts", occurred_at: "2026-09-19T15:00:00.000Z" });
+    const prospect = await askRoom(env, MP_IDENTITY, p.id, { question: "make me a document on our conversations" }, answers({ mode: "build", build: { kind: "document", brief: "Who this prospect is" } }));
+    expect(prospect.artifact_id, JSON.stringify(prospect)).toBeTruthy();
+    expect((await loadArtifact(env, prospect.artifact_id!))!.confidential, "a prospect is not confidential").toBe(0);
   });
 });
 

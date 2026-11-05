@@ -458,7 +458,8 @@ const MODEL_DENIED_TOOLS = ["Bash(*vault.mjs*)", "Bash(security:*)", "Bash(*west
 /**
  * Run one model turn on its ROLE (owner, 3 Nov 2026: Codex does the hands-on work, Claude is the
  * brains). `scripts/claimer/model-roles.json` says which phase is which; `routeFor` keeps any turn
- * whose text or files may carry LP, deal, investor or children's material on Claude, because Codex on
+ * that names a committed LP (the Worker's `private_model_only`) or whose text or files carry deal terms
+ * or fund figures on Claude, because Codex on
  * her ChatGPT plan is not proven no-training. A Codex limit ends the turn with
  * `NAMED STOP [CODEX_LIMIT]` and a reset time (the Worker holds the card and retries) — Claude is
  * never called in its place. The phase reads its result from a FILE either model writes, so which
@@ -466,7 +467,14 @@ const MODEL_DENIED_TOOLS = ["Bash(*vault.mjs*)", "Bash(security:*)", "Bash(*west
  */
 async function runModel(opts) {
   // Only the job's own folders are read for confidential material; a worktree is a public repo.
-  const route = routeFor({ kind: opts.job?.card_kind, phase: opts.phase, prompt: opts.prompt, materialDirs: opts.materialDirs ?? [] });
+  const route = routeFor({
+    kind: opts.job?.card_kind,
+    phase: opts.phase,
+    prompt: opts.prompt,
+    materialDirs: opts.materialDirs ?? [],
+    // Set by the Worker from the commitment records (owner ruling 4 Nov 2026); absent on an older Worker → false.
+    privateModelOnly: opts.job?.private_model_only === true,
+  });
   appendRouteLog(opts, route);
   if (route.role === "worker") {
     const seat = codexSeatUsable(homedir());

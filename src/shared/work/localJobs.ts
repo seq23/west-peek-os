@@ -135,6 +135,12 @@ export interface LocalJobPayload {
   pre_approved: string | null;
   /** 21 Sep 2026: THE SPECIFICATION — the partner's own words, quoted replies stripped. Handed to Porter verbatim under REQUEST:. */
   request: string;
+  /**
+   * 5 Nov 2026 (owner ruling, 4 Nov): true when the job's text names an LP who has COMMITTED to a West Peek fund,
+   * read by the Worker from the commitment records. The Mac then keeps every model turn on Claude (no Codex).
+   * Absent or false otherwise; deal terms and fund figures are still caught by the Mac's own markers.
+   */
+  private_model_only?: boolean;
   /** 21 Sep 2026: the files they attached, fetched by the Mac by name through `path` (a Worker route) into the package's attachments dir. */
   attachments: Array<{ id: string; filename: string; media_type: string; bytes: number; path: string }>;
   /** From BUILD onward. */

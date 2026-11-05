@@ -156,14 +156,17 @@ describe("Parker's collision, resolved: Free only, a search call, a seat that ca
     expect(out.text).toContain("SEAT SEARCH ANSWER (codex)");
   }, 60_000);
 
-  it("a seat that did NOT say it can search is never parked a search row — the original stop is preserved", async () => {
+  it("a seat that did NOT say it can search is never parked a search row — the $0 search lane takes it, and stops by name", async () => {
     await awake("codex", false);
     const v = vendors();
     const { run } = await runAi(env(), SEARCH_CALL(), { fetchImpl: v.fetchImpl });
     expect(run.status).not.toBe("COMPLETED");
-    expect(run.failure_reason).toContain("free_only_cannot_serve_protected_work");
+    // 5 Nov 2026: no longer the lever's stop. The free search lane ran, found no grounded answer and no Brave key,
+    // and stopped with a named reason rather than research from memory.
+    expect(run.failure_reason).not.toContain("free_only_cannot_serve_protected_work");
+    expect(run.failure_reason).toContain("free_search_named_stop:Couldn't research");
     expect(await rows(), "nothing was parked on a seat that cannot search").toEqual([]);
-    expect(v.models).toEqual([]);
+    expect(v.models.filter((m) => m.startsWith("perplexity")), "the paid search model was never asked").toEqual([]);
   }, 60_000);
 
   it("an answer with NO counted searches is thrown away, and at Free only the run fails rather than accept memory", async () => {

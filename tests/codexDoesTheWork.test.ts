@@ -40,12 +40,12 @@ describe("who does the work on the Mac", () => {
   });
 
   it("a job carrying confidential text never goes to the worker — in the prompt, in a file beside it, or in a file it cannot read", async () => {
-    const texts = [
-      `${PLAIN}\nAlso list our limited partners on the about page.`,
-      `${PLAIN}\nThe LPs want the deck link.`,
-      `${PLAIN}\nPost the term sheet summary.`,
-      `${PLAIN}\nAdd the children's names to the class page.`,
-    ];
+    // Owner ruling, 4 Nov 2026: confidential is ONLY a committed LP's name (the Worker's `private_model_only`) or
+    // deal terms / fund figures. A mention of LPs, prospects, investors or the TLC class page is not.
+    for (const prompt of [`${PLAIN}\nAlso list our limited partners on the about page.`, `${PLAIN}\nThe LPs want the deck link.`, `${PLAIN}\nAdd the children's class page.`]) {
+      expect(routeFor({ kind: "WEB_PROPERTY_CHANGE", phase: "BUILD", prompt }).role, prompt).toBe("worker");
+    }
+    const texts = [`${PLAIN}\nPost the term sheet summary.`, `${PLAIN}\nShow the fund size and the management fee.`, `${PLAIN}\nAdd each LP's commitment amount.`];
     for (const prompt of texts) {
       const route = routeFor({ kind: "WEB_PROPERTY_CHANGE", phase: "BUILD", prompt });
       expect(route.role, prompt).toBe("brain");
@@ -53,9 +53,10 @@ describe("who does the work on the Mac", () => {
       await runByRole({ route, runBrain: f.runBrain, runWorker: f.runWorker });
       expect(f.calls).toEqual(["claude"]);
     }
+    expect(routeFor({ kind: "WEB_PROPERTY_CHANGE", phase: "BUILD", prompt: PLAIN, privateModelOnly: true }).role, "the Worker marked it: it names a committed LP").toBe("brain");
     const dir = mkdtempSync(path.join(tmpdir(), "wpos-roles-"));
     try {
-      writeFileSync(path.join(dir, "notes.md"), "Investor update: valuation and pro rata.");
+      writeFileSync(path.join(dir, "notes.md"), "Investor update: the cap table and pro rata rights.");
       expect(routeFor({ kind: "WEB_PROPERTY_CHANGE", phase: "BUILD", prompt: PLAIN, materialDirs: [dir] }).role).toBe("brain");
       rmSync(path.join(dir, "notes.md"));
       writeFileSync(path.join(dir, "list.pdf"), "%PDF");

@@ -562,16 +562,30 @@ describe("two labels, and neither one implies the other", () => {
     }
   });
 
-  it("AND THE NEGATIVE PROOF: LP and deal material cannot, whatever the card says", () => {
+  it("AND THE NEGATIVE PROOF: a committed LP's name and deal material cannot, whatever the card says", () => {
+    // Owner ruling, 4 Nov 2026: mentioning LPs is not confidential — a prospect dinner may use a free model.
+    expect(
+      classifyContent({ declaredPublicModelApproved: true, machineKey: "west_peek_live_events", inputs: ["Guest list for the LP dinner, cross-checked against the limited partner prospects."] })
+        .publicModelApproved,
+    ).toBe(true);
     // Declared safe by the caller AND sitting on an allow-listed machine — and still refused,
-    // because the text itself carries the marker.
+    // because the text itself carries a deal-term marker.
     const revoked = classifyContent({
       declaredPublicModelApproved: true,
       machineKey: "west_peek_live_events",
-      inputs: ["Guest list for the LP dinner, cross-checked against the limited partner register."],
+      inputs: ["Guest list for the LP dinner, with each guest's commitment amount."],
     });
     expect(revoked.publicModelApproved).toBe(false);
-    expect(revoked.revokedBy).toContain("limited partner");
+    expect(revoked.revokedBy).toContain("commitment amount");
+    // Or because it names an LP who has committed.
+    const named = classifyContent({
+      declaredPublicModelApproved: true,
+      machineKey: "west_peek_live_events",
+      inputs: ["Seat Example Committed Trust next to the speaker."],
+      committedLpNames: ["Example Committed Trust"],
+    });
+    expect(named.publicModelApproved).toBe(false);
+    expect(named.revokedBy).toBe("committed_lp_name");
 
     // And the explicit label always wins on its own.
     expect(classifyContent({ declaredPrivateModelOnly: true, machineKey: "west_peek_live_events", inputs: ["anything"] }).publicModelApproved).toBe(false);

@@ -1,3 +1,4 @@
+import { isFreeSearchModel } from "../../shared/ai/models";
 import { SEAT_REGISTRY, SEATS } from "../ai/subscriptionSeats";
 import type { Env } from "../env";
 import { runAi } from "../ai/runAi";
@@ -37,7 +38,8 @@ export const SEARCH_MODEL = "perplexity/sonar";
  */
 export function servedBySearchLane(model: string | null | undefined): boolean {
   if (!model) return false;
-  return model === SEARCH_MODEL || SEATS.some((seat) => SEAT_REGISTRY[seat].model === model);
+  // The $0 search lane (providers/freeSearch.ts) writes only from pages it fetched and cites each one.
+  return model === SEARCH_MODEL || isFreeSearchModel(model) || SEATS.some((seat) => SEAT_REGISTRY[seat].model === model);
 }
 
 export interface SearchHit {

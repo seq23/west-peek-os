@@ -9,7 +9,9 @@ import { createOpenAiChatAdapter } from "./providers/openAiChat";
 import { createGoogleAdapter } from "./providers/google";
 import { createPerplexityAdapter } from "./providers/perplexity";
 import { createSpecialistAdapter } from "./providers/specialist";
-import { credentialConfigured, credentialValueFor } from "../../shared/ai/providerCredentials";
+import { BRAVE_DAILY_QUERY_CAP, createFreeSearchAdapter, type BraveQuota } from "./providers/freeSearch";
+import { FREE_SEARCH_PROVIDER_KEY } from "../../shared/ai/models";
+import { credentialConfigured, credentialNameFor, credentialValueFor } from "../../shared/ai/providerCredentials";
 
 /**
  * Routing + scoped budgets for the governed AI boundary (P16; GAP-02, GAP-03).
@@ -237,6 +239,24 @@ export function adapterFor(
       credentialConfigured: configured,
     };
   }
+  if (candidate.providerKey === FREE_SEARCH_PROVIDER_KEY) {
+    /*
+     * THE $0 SEARCH LANE (5 Nov 2026): Gemini grounding, then Brave + a free Gemini writer, then a named stop.
+     * Configured by GEMINI_API_KEY (the writer is needed on both routes); BRAVE_SEARCH_API_KEY is read by its own
+     * name only — never the shared legacy key, which belongs to a model vendor and must not be sent to Brave.
+     */
+    return {
+      adapter: createFreeSearchAdapter({
+        // The provider row's own base URL (migration 0295); no hostname is written outside providers/.
+        geminiBaseUrl: baseUrl,
+        geminiApiKey: key,
+        braveApiKey: ownCredentialValue(env, BRAVE_SEARCH_CREDENTIAL_KEY),
+        quota: braveQuotaFor(env),
+        fetchImpl,
+      }),
+      credentialConfigured: configured,
+    };
+  }
   if (candidate.providerKey === "harvey" || candidate.providerKey === "norm") {
     // Specialist lane (P23): same boundary, same quarantine, no bypass. Fails closed with a
     // named reason because neither vendor endpoint nor credential exists here.
@@ -254,6 +274,39 @@ export function adapterFor(
   return {
     adapter: createHttpExternalAdapter({ baseUrl, model: candidate.model, apiKey: key, fetchImpl }),
     credentialConfigured: configured,
+  };
+}
+
+/** The credential map's key for Brave Search (shared/ai/providerCredentials.ts → BRAVE_SEARCH_API_KEY). */
+export const BRAVE_SEARCH_CREDENTIAL_KEY = "brave_search";
+
+/** A credential by its OWN name only, with no shared-key fallback. Never logged. */
+function ownCredentialValue(env: Env, providerKey: string): string | undefined {
+  const value = (env as unknown as Record<string, unknown>)[credentialNameFor(providerKey)];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/**
+ * THE BRAVE CAP, COUNTED IN D1: at most BRAVE_DAILY_QUERY_CAP queries per UTC day, reserved atomically before
+ * the query is sent. An unreadable counter answers "no" — the lane then stops with a named reason rather than
+ * spending past a cap it cannot see.
+ */
+export function braveQuotaFor(env: Env): BraveQuota {
+  return {
+    async take(): Promise<boolean> {
+      const day = new Date().toISOString().slice(0, 10);
+      try {
+        await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO free_search_quota (day, brave_queries) VALUES (?1, 0)").bind(day).run();
+        const r = await env.WP_OS_DB.prepare(
+          "UPDATE free_search_quota SET brave_queries = brave_queries + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE day = ?1 AND brave_queries < ?2",
+        )
+          .bind(day, BRAVE_DAILY_QUERY_CAP)
+          .run();
+        return Number(r.meta?.changes ?? 0) > 0;
+      } catch {
+        return false;
+      }
+    },
   };
 }
 

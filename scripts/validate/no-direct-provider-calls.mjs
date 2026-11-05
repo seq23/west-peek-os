@@ -37,7 +37,8 @@ const PROVIDERS_PREFIX = "src/worker/ai/providers/";
  */
 const OWN_ADAPTER_IMPORT = /(?:from|require\()\s*["']\.{1,2}\/(?:[^"']*\/)?providers\/[^"']*["']/;
 const SDK_IMPORT = /(?:from|require\()\s*["'][^"']*(openai|anthropic|generative-ai|perplexity|openrouter)[^"']*["']/i;
-const MODEL_HOSTNAMES = /(api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis\.com|api\.perplexity\.ai|openrouter\.ai)/;
+// api.search.brave.com (5 Nov 2026): the $0 search lane's second route. Reached only from providers/freeSearch.ts.
+const MODEL_HOSTNAMES = /(api\.openai\.com|api\.anthropic\.com|generativelanguage\.googleapis\.com|api\.perplexity\.ai|openrouter\.ai|api\.search\.brave\.com)/;
 const BEARER = /bearer/i;
 
 function listSourceFiles() {

@@ -3,7 +3,9 @@ import { SEAT_WAIT_CODE, isImportantWork, orderSeats } from "../../shared/ai/sea
 import { appendEvent } from "../events";
 import type { Actor } from "../services/authorize";
 import type { PrivacyLabel } from "../../shared/privacy";
-import { isSearchGrounded } from "../../shared/ai/models";
+import { FREE_SEARCH_PROVIDER_KEY, isSearchGrounded } from "../../shared/ai/models";
+import { committedLps } from "./committedLps";
+import { SEAT_WAIT_DEFAULT_MINUTES, freeLaneMeetsFloor, qualityRank, seatWaitStartedAt, taskQualityFloor } from "./seatWaitFallback";
 import { createMockLocalAdapter, MOCK_LOCAL_MODEL } from "./providers/mockLocal";
 import type { ProviderAdapter } from "./providers/types";
 import { firmNoticesBlock } from "./firmNotices";
@@ -597,6 +599,8 @@ interface PricingRow {
   /** SOURCED | STALE | ILLUSTRATIVE | UNKNOWN — the provenance of the two numbers above. */
   pricing_state: string;
   supports_reasoning: number;
+  /** FULL | DEGRADED | UNMEASURED — the owner's per-model quality decision (0251). */
+  quality_tier?: string | null;
 }
 
 interface ModelOption {
@@ -636,7 +640,7 @@ async function latestPricing(env: Env, providerIds: string[]): Promise<PricingRo
   const placeholders = providerIds.map((_, i) => `?${i + 1}`).join(", ");
   const rows = await env.WP_OS_DB.prepare(
     `SELECT p.provider_id, p.model, p.input_per_mtok_usd, p.output_per_mtok_usd, p.request_usd,
-            m.pricing_state, m.supports_reasoning
+            m.pricing_state, m.supports_reasoning, m.quality_tier
        FROM provider_pricing_snapshot p
        JOIN provider_model m ON m.provider_id = p.provider_id AND m.model = p.model
       WHERE p.provider_id IN (${placeholders})
@@ -1488,7 +1492,23 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
           .map((a) => a.seat as string)
       : [];
     // A seat that may carry the call also means an unusable pin does not block it (review of #223).
-    const seatCanCarryIt = (requiresSearch && searchSeatKeys.size > 0) || seatFirstSeatKeys.length > 0;
+    /*
+     * THE $0 SEARCH LANE STANDS BESIDE THE PIN AT FREE ONLY (5 Nov 2026). Every search call pins the paid search
+     * lane, which Free only cannot pay for, so without this the free search route could never be a candidate. It is
+     * only ADDED here; 4b/4d below remove it from any confidential call, and the egress gate checks its PUBLIC-only
+     * data policy exactly as for every other lane.
+     */
+    const freeSearchRows =
+      behaviour.freeOnly && requiresSearch && !hasFiles
+        ? ((
+            await env.WP_OS_DB.prepare(
+              `SELECT * FROM provider_registry WHERE provider_key = ?1 AND claimable = 0 AND enabled = 1 AND kill_switched = 0 AND ${LANE_NOT_STOOD_DOWN_SQL}`,
+            )
+              .bind(FREE_SEARCH_PROVIDER_KEY)
+              .all<ProviderRow>()
+          ).results ?? [])
+        : [];
+    const seatCanCarryIt = (requiresSearch && searchSeatKeys.size > 0) || seatFirstSeatKeys.length > 0 || freeSearchRows.length > 0;
     const pinUnusable = !pinned || pinned.enabled !== 1 || laneIsStoodDown(pinned, now);
     if (pinUnusable && !seatCanCarryIt && !freeOnlyLadder) {
       return { run: await blocked("PROVIDER_DISABLED", `provider_disabled:${pinnedKey}`) };
@@ -1526,6 +1546,10 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
         const have = new Set(candidates.map((c) => c.id));
         candidates = [...candidates, ...seatRows.filter((r) => !have.has(r.id))];
       }
+    }
+    if (freeSearchRows.length > 0) {
+      const have = new Set(candidates.map((c) => c.id));
+      candidates = [...candidates, ...freeSearchRows.filter((r) => !have.has(r.id))];
     }
     if (freeOnlyLadder) {
       /*
@@ -1623,7 +1647,15 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * `confidential` flag, or by a named machine — never inferred from the recipient, and it is
    * revoked by any LP or deal-term marker actually present in the text.
    */
+  /*
+   * WHO HAS COMMITTED (owner ruling, 4 Nov 2026). A committed LP's name is confidential; a prospect's is not. Read
+   * from the commitment records on every run, so the moment a prospect commits their name stops leaving. Unreadable
+   * records fail closed: nothing is declared public.
+   */
+  const committed = await committedLps(env, firmScope);
   const contentClass: ContentClassVerdict = classifyContent({
+    committedLpNames: committed.names,
+    committedLpListReadable: committed.readable,
     declaredPublicModelApproved: input.budgetContext?.publicModelApproved,
     // `confidential` is the legacy spelling of PRIVATE_MODEL_ONLY and is still honoured verbatim.
     declaredPrivateModelOnly: input.budgetContext?.confidential,
@@ -1641,6 +1673,12 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * stay; the chain is shorter, never unsafe.
    */
   if (!contentClass.publicModelApproved || input.budgetContext?.confidential === true) {
+    /*
+     * AND NO LANE WHOSE TERMS PERMIT TRAINING (5 Nov 2026). The PUBLIC data policy alone is not enough once a
+     * declaration has been REVOKED: a PUBLIC-labelled text naming a committed LP or carrying a deal term would
+     * otherwise still pass a free lane's PUBLIC egress row. Unknown training terms count as training (0178).
+     */
+    candidates = candidates.filter((p) => Number((p as unknown as { training_permitted?: number }).training_permitted ?? 0) !== 1);
     candidates = candidates.filter((p) => !SEATS_WITHOUT_CONTRACTUAL_NO_TRAINING.has(p.provider_key));
     if (candidates.length === 0) {
       return { run: await blocked("EGRESS_BLOCKED", "private_content_has_no_lane_with_a_no_training_contract:Codex on a ChatGPT plan may train, so it sees public content only") };
@@ -1885,7 +1923,9 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     const searchCapable = allCandidates.filter((c) => isSearchGrounded(c.model));
     // Blocked only when NEITHER a search-grounded model NOR a search-capable seat exists (seat-only
     // search, review of #216). A seat is a lane that can search only because its answer needs proof.
-    if (searchCapable.length === 0 && searchSeatKeys.size === 0) {
+    // At Free only the $0 search lane (providers/freeSearch.ts) is a search-capable candidate too.
+    const freeSearchOffered = behaviour.freeOnly && options.some((o) => o.provider.provider_key === FREE_SEARCH_PROVIDER_KEY);
+    if (searchCapable.length === 0 && searchSeatKeys.size === 0 && !freeSearchOffered) {
       return {
         run: await blocked(
           "PREFLIGHT_BLOCKED",
@@ -2023,8 +2063,15 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
           )
         : await allSeatAvailability(env, now), claudeFirst);
   const awakeSeatKeys = new Set(seatAvailability.filter((a) => a.available).map((a) => a.seat as string));
+  /*
+   * IMPORTANT WORK THAT HAS WAITED LONG ENOUGH (owner, 5 Nov 2026). Set below when non-confidential important work
+   * falls back to a free lane after waiting for a seat; recorded on the run's routing explanation.
+   */
+  let seatWaitFallbackNote = "";
   if (behaviour.freeOnly) {
-    const freeAdequate = options
+    // Private content: LP names of COMMITTED LPs, deal terms, fund figures, or a call marked confidential.
+    const privateContent = !contentClass.publicModelApproved || input.budgetContext?.confidential === true;
+    const zeroCostAdequate = options
       .filter((o) => estimateFor(o) === 0)
       // A seat has no credential to configure — the claimer authenticates to US — so "configured"
       // means "awake, not out of usage, and entitled to this run". Every other lane is asked as before.
@@ -2040,17 +2087,61 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
             isSeat(o.provider.provider_key) || isSearchGrounded(o.pricing.model)
           : !(isJudgement && isSearchGrounded(o.pricing.model)),
       )
-      .filter((o) => !isInterpretation || o.pricing.supports_reasoning === 1)
-      // Important work never takes a free lane: at Free only its candidates are the seats, or nothing.
-      .filter((o) => !important || isSeat(o.provider.provider_key));
+      // The $0 search lane serves search calls and nothing else.
+      .filter((o) => o.provider.provider_key !== FREE_SEARCH_PROVIDER_KEY || requiresSearch)
+      .filter((o) => !isInterpretation || o.pricing.supports_reasoning === 1);
+    // Important work leads on the seats. Non-confidential SEARCH may also take the $0 search lane at once: it
+    // writes only from pages it fetched, each fact with its URL, so it is never a free model answering from memory.
+    let freeAdequate = zeroCostAdequate.filter(
+      (o) =>
+        !important ||
+        isSeat(o.provider.provider_key) ||
+        (requiresSearch && !privateContent && o.provider.provider_key === FREE_SEARCH_PROVIDER_KEY),
+    );
+    let seatWaitDetail = "";
+    if (freeAdequate.length === 0 && important && !privateContent) {
+      /*
+       * NON-CONFIDENTIAL IMPORTANT WORK DOES NOT WAIT FOR EVER (owner, 5 Nov 2026). With neither seat free it waits
+       * at most `max_wait_minutes` of the owner's per-task quality floor (default 2 hours), then the best free model
+       * that passes the floor carries it. A floor of SEAT_ONLY keeps it waiting. Confidential work never reaches here.
+       */
+      const floor = await taskQualityFloor(env, firmScope, input.routing?.taskClass ?? null, input.purpose);
+      const maxWait = floor?.max_wait_minutes ?? SEAT_WAIT_DEFAULT_MINUTES;
+      const since = await seatWaitStartedAt(env, { workCardId: input.routing?.workCardId ?? null, purpose: input.purpose }, now);
+      const waited = since === null ? 0 : Math.max(0, Math.floor((now.getTime() - since.getTime()) / 60_000));
+      if (floor?.min_free_tier === "SEAT_ONLY") {
+        seatWaitDetail = ` The owner's quality floor for this task is a seat only, so it keeps waiting.`;
+      } else if (waited < maxWait) {
+        seatWaitDetail =
+          ` It has waited ${waited} of at most ${maxWait} minutes; after that the best free model that passes ` +
+          `${floor ? `the owner's quality floor (${floor.min_free_tier})` : "the quality floor"} carries it.`;
+      } else {
+        const pool = zeroCostAdequate
+          .filter((o) => !isSeat(o.provider.provider_key))
+          .filter((o) => freeLaneMeetsFloor(o.pricing.quality_tier, floor?.min_free_tier ?? null))
+          .sort((a, b) => qualityRank(b.pricing.quality_tier) - qualityRank(a.pricing.quality_tier));
+        if (pool.length === 0) {
+          seatWaitDetail = ` It has waited ${waited} minutes, but no free model passes ${floor ? `the owner's quality floor (${floor.min_free_tier})` : "the quality floor"}, so it keeps waiting.`;
+        } else {
+          freeAdequate = pool;
+          seatWaitFallbackNote =
+            ` seat_wait_free_fallback: this is important work and neither Mac seat was free; it waited ${waited} minutes ` +
+            `(at most ${maxWait}${floor ? `, the owner's quality floor for this task` : `, the default`}), so the best free model that passes ` +
+            `${floor ? `the floor (${floor.min_free_tier})` : "the quality floor"} carries it. It carries no committed LP name, deal term or fund figure.`;
+        }
+      }
+    }
 
     if (freeAdequate.length === 0) {
       if (important) {
         return {
           run: await blocked(
             "PREFLIGHT_BLOCKED",
-            `${SEAT_WAIT_CODE}:this is important work (Claude Code seat, then Codex; never a free lane) and neither seat is free ` +
-              `right now. Purpose: ${input.purpose}. It waits for a seat and tries again by itself; nothing is asked of anyone.`,
+            privateContent
+              ? `${SEAT_WAIT_CODE}:this is important work (Claude Code seat, then Codex; never a free lane) and neither seat is free ` +
+                  `right now. Purpose: ${input.purpose}. It waits for a seat and tries again by itself; nothing is asked of anyone.`
+              : `${SEAT_WAIT_CODE}:this is important work (Claude Code seat, then Codex) and neither seat is free right now. ` +
+                  `Purpose: ${input.purpose}.${seatWaitDetail} It tries again by itself; nothing is asked of anyone.`,
           ),
         };
       }
@@ -2417,7 +2508,8 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * Seats are preferred over free lanes because they do not train, then the free order the chain uses.
    */
   if (ordered.length === 0 && behaviour.freeOnly && routingCandidates.length > 0) {
-    const FREE_PREFERENCE = ["claude_code", "codex", "openrouter_free", "google_free"];
+    // The free-route list. `free_search` is $0 (Gemini unpaid quota + Brave free plan) and serves search calls only.
+    const FREE_PREFERENCE = ["claude_code", "codex", "openrouter_free", "google_free", "free_search"];
     const rank = (c: RoutingCandidate): number => {
       const i = FREE_PREFERENCE.indexOf(c.providerKey);
       return i < 0 ? FREE_PREFERENCE.length : i;
@@ -3055,6 +3147,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
       `If the free quota is exhausted the run falls through to ${head.providerKey}/${head.model} and the handover is recorded.`;
   }
 
+  explanation += seatWaitFallbackNote;
   const run = await executeRun(
     env,
     {

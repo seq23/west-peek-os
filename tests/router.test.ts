@@ -153,17 +153,22 @@ describe("the catalogue is honest about credentials, pricing, and health", () =>
 
   it("runs a health check that says plainly it did not contact the vendor", async () => {
     const res = await call<{ mode: string; ok: boolean; detail: string; problems: string[] }>(
-      "/api/ai/providers/openai/health-check",
+      "/api/ai/providers/anthropic/health-check",
       MP,
       "POST",
     );
     expect(res.status).toBe(201);
     expect(res.body.mode).toBe("LOCAL_FIXTURE");
     expect(res.body.detail).toContain("No request was made");
-    // OpenAI is enabled since 0177 (a key exists in production) and configured in this suite's
+    // Anthropic is enabled since 0177 (a key exists in production) and configured in this suite's
     // environment, so its configuration IS coherent — and the check still refuses to call that
     // evidence the vendor is reachable, which is the whole point of the LOCAL_FIXTURE stamp.
     expect(res.body.ok).toBe(true);
+
+    // The paid OpenAI provider is OFF (owner, 4 Nov 2026; migration 0295 keeps fresh databases in step), so even
+    // with a key configured its check is not coherent.
+    const oa = await call<{ ok: boolean; problems: string[] }>("/api/ai/providers/openai/health-check", MP, "POST");
+    expect(oa.body.ok).toBe(false);
 
     // Fireworks is the provider with no key anywhere, so it is the one that must report a MISSING
     // CREDENTIAL BY ITS OWN NAME. THE FIX THIS ASSERTS: every vendor but OpenRouter used to report
