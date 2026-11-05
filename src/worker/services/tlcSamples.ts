@@ -50,7 +50,7 @@ export const tlcRevisionWriter: SamplesWriter = async (env, actor, prompt) => {
   const { run } = await runAi(env, {
     purpose: "The Learning Club: revise the brand email or samples",
     actor, inputs: [prompt], sensitivity: "INTERNAL",
-    budgetContext: { ...TLC_REVISION_BUDGET },
+    budgetContext: { ...TLC_REVISION_BUDGET, judgement: true },
     routing: { category: "INTELLIGENCE" },
   });
   return { ok: run.status === "COMPLETED" && Boolean(run.output_text), text: run.output_text ?? "" };
