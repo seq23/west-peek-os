@@ -418,8 +418,10 @@ describe("an approved email that did not go says why (partner tail, TLC-B5BEZR, 
     expect(await cardState("Gate Co")).toBe("approved");
     expect(await env.WP_OS_DB.prepare("SELECT state FROM tlc_drip_message WHERE id = ?1").bind(m.id).first()).toEqual({ state: "AWAITING_APPROVAL" });
     expect(sends.some((s) => s.to === "pat@gateco.example")).toBe(false);
-    const toHer = sends.filter((s) => s.to === SEQUOIA);
+    // Her answer, and (owner, 4 Nov 2026) the one "Brand emails are paused" notice for this change: never silent.
+    const toHer = sends.filter((s) => s.to === SEQUOIA && !/Brand emails are paused/.test(s.subject));
     expect(toHer).toHaveLength(1);
+    expect(sends.filter((s) => s.to === SEQUOIA && /Brand emails are paused/.test(s.subject))).toHaveLength(1);
     // Never "0 sent now" with no reason: the gate's own reason and the place to approve are in her answer.
     expect(toHer[0]!.text).toContain("the sales playbook changed after it was approved");
     expect(toHer[0]!.text).toContain(TLC_SEND_SWITCH_URL);

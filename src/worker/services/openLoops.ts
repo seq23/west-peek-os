@@ -6,11 +6,13 @@
  * `cleared: true`, which closes its row "outcome reached". With no token here it records one line and sends nothing; a
  * failed post is one line and never fails the caller.
  *
+ * WHERE IT POSTS: the intake URL docs/open-loops.md names, given as `WP_OS_BOSS_OPEN_LOOPS_URL`. It is configuration, not
+ * a constant: Boss OS is a different business, and its domain appears in no source file here (validate:employee-sender).
+ *
  * THE CREDENTIAL, BY NAME ONLY: Boss OS's `BOSS_OPEN_LOOPS_TOKEN`, given to this Worker as the secret
  * `WP_OS_BOSS_OPEN_LOOPS_TOKEN` (aliased by scripts/vault/cloudflare-mapping.json; the WP_OS_ prefix is this repo's
  * binding rule). It can only post to the intake. Never logged, never echoed.
  */
-export const OPEN_LOOPS_INTAKE = "https://boss.sequoiataylor.com/api/boss/open-loops/intake";
 
 export interface OpenLoopStop { code: string; why?: string; title?: string }
 export interface OpenLoopsReport {
@@ -37,11 +39,11 @@ export function intakePosts({ repo, business, finish, known, stops, words = {} }
 
 export async function reportToOpenLoops(
   report: OpenLoopsReport,
-  { token, fetchImpl = fetch, log = () => undefined }: { token: string | undefined; fetchImpl?: typeof fetch; log?: (line: string) => void },
+  { url, token, fetchImpl = fetch, log = () => undefined }: { url: string | undefined; token: string | undefined; fetchImpl?: typeof fetch; log?: (line: string) => void },
 ): Promise<{ sent: number; failed: number; skipped: number; line: string }> {
   const posts = intakePosts(report);
-  if (!token) {
-    const line = `open loops: not reported (no BOSS_OPEN_LOOPS_TOKEN here); ${posts.length} stop(s) would be sent.`;
+  if (!token || !url || !/^https:\/\//.test(url)) {
+    const line = `open loops: not reported (no ${!token ? "BOSS_OPEN_LOOPS_TOKEN" : "intake URL"} here); ${posts.length} stop(s) would be sent.`;
     log(line);
     return { sent: 0, failed: 0, skipped: posts.length, line };
   }
@@ -49,7 +51,7 @@ export async function reportToOpenLoops(
   let failed = 0;
   for (const body of posts) {
     try {
-      const r = await fetchImpl(OPEN_LOOPS_INTAKE, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
+      const r = await fetchImpl(url, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
       if (r.ok) sent++;
       else { failed++; log(`open loops: ${String(body.stop)} refused (${r.status})`); }
     } catch (e) {

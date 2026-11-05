@@ -213,6 +213,11 @@
       "kind": "secret",
       "required": false,
       "purpose": "Boss OS Open Loops intake token (seq23/boss-os docs/open-loops.md): reports and clears the TLC_SEND_PAUSED named stop. Vault name BOSS_OPEN_LOOPS_TOKEN (from the Boss OS vault). Absent: the stop is recorded on the event spine only and one line says it was not reported."
+    },
+    "WP_OS_BOSS_OPEN_LOOPS_URL": {
+      "kind": "var",
+      "required": false,
+      "purpose": "Boss OS Open Loops intake URL, as seq23/boss-os docs/open-loops.md names it. Kept out of source (Boss OS is another business). Absent: nothing is reported to Open Loops."
     }
   }
 }

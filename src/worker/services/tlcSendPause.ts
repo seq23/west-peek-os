@@ -43,7 +43,7 @@ async function reportStop(env: Env, stop: { why: string } | null): Promise<strin
     known: ["TLC_SEND_PAUSED"],
     stops: stop ? [{ code: "TLC_SEND_PAUSED", why: stop.why }] : [],
     words: { TLC_SEND_PAUSED: { title: "Learning Club brand emails are paused", next_step: "Reply approve to Wynn's paused-emails email", owner: "sequoia" } },
-  }, { token: env.WP_OS_BOSS_OPEN_LOOPS_TOKEN ?? "" }).catch((err) => ({ line: `open loops: not sent (${err instanceof Error ? err.message : String(err)})` }));
+  }, { url: env.WP_OS_BOSS_OPEN_LOOPS_URL ?? "", token: env.WP_OS_BOSS_OPEN_LOOPS_TOKEN ?? "" }).catch((err) => ({ line: `open loops: not sent (${err instanceof Error ? err.message : String(err)})` }));
   return out.line;
 }
 

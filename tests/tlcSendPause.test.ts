@@ -23,9 +23,9 @@ const stops = async () => ((await env.WP_OS_DB.prepare("SELECT payload_json FROM
 
 beforeAll(async () => {
   t = await createTestDb();
-  env = { ...makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled", WP_OS_DOCUMENTS: t.docs } as Partial<Env>), RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures", WP_OS_BOSS_OPEN_LOOPS_TOKEN: "fake-intake-token" } as Env;
+  env = { ...makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled", WP_OS_DOCUMENTS: t.docs } as Partial<Env>), RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures", WP_OS_BOSS_OPEN_LOOPS_TOKEN: "fake-intake-token", WP_OS_BOSS_OPEN_LOOPS_URL: "https://open-loops.example/intake" } as Env;
   vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
-    if (String(url) === "https://boss.sequoiataylor.com/api/boss/open-loops/intake") {
+    if (String(url) === "https://open-loops.example/intake") {
       loops.push({ auth: new Headers(init?.headers).get("authorization"), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
       return new Response("{}", { status: 200 });
     }
@@ -98,9 +98,10 @@ describe("a pitch change pauses brand sending, and she is told once", () => {
     const { reportToOpenLoops } = await import("../src/worker/services/openLoops");
     const report = { repo: "seq23/west-peek-os", business: "west-peek-ventures", finish: "x", known: ["TLC_SEND_PAUSED"], stops: [] };
     const none = vi.fn();
-    expect(await reportToOpenLoops(report, { token: "", fetchImpl: none })).toMatchObject({ sent: 0, skipped: 1, line: "open loops: not reported (no BOSS_OPEN_LOOPS_TOKEN here); 1 stop(s) would be sent." });
+    expect(await reportToOpenLoops(report, { url: "https://open-loops.example/intake", token: "", fetchImpl: none })).toMatchObject({ sent: 0, skipped: 1, line: "open loops: not reported (no BOSS_OPEN_LOOPS_TOKEN here); 1 stop(s) would be sent." });
     expect(none).not.toHaveBeenCalled();
-    expect(await reportToOpenLoops(report, { token: "t", fetchImpl: async () => new Response("no", { status: 401 }) })).toMatchObject({ sent: 0, failed: 1 });
+    expect(await reportToOpenLoops(report, { url: "", token: "t", fetchImpl: none })).toMatchObject({ sent: 0, line: "open loops: not reported (no intake URL here); 1 stop(s) would be sent." });
+    expect(await reportToOpenLoops(report, { url: "https://open-loops.example/intake", token: "t", fetchImpl: async () => new Response("no", { status: 401 }) })).toMatchObject({ sent: 0, failed: 1 });
   });
 
   it("lists the changed lines in plain words, and says so when the old words were not kept", () => {
