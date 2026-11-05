@@ -34,7 +34,7 @@ interface PendingDraft {
   kind: ItemKind; message_id: string; card_id: string; subject: string; body: string; step: number; redraft_note: string | null; created_at: string;
   brand: string; contact_name: string | null; contact_email: string; why_fit: string | null; month: string; topic: string | null;
   contact_source_url?: string | null; owner_angle?: string | null; nb_result?: string | null;
-  /** The brand's samples (made before email 1 reaches her) and their preview link. */
+  /** The brand's samples (made ahead when they can be; email 1 never waits for them) and their preview link. */
   samples_id?: string | null; samples_url?: string | null;
 }
 
@@ -55,7 +55,7 @@ async function pendingDrafts(env: Env, firmScope: string): Promise<PendingDraft[
        JOIN approval_card a ON a.id = f.approval_card_id
       WHERE d.firm_scope = ?1 AND f.state = 'AWAITING_APPROVAL' AND a.state = 'pending_review'`,
   ).bind(firmScope).all<PendingDraft>()).results ?? [];
-  // Email 1 and the samples PDF are approved together (owner, 4 Nov 2026): the PDF's page is linked beside it.
+  // The PDF email 2 will carry is linked beside email 1 when it is made (owner, 4 Nov 2026); email 1 never carries it.
   const { samplesPreviewLink } = await import("./tlcSamples");
   for (const d of drip) if (d.step === 0 && d.samples_id) d.samples_url = await samplesPreviewLink(env, d.samples_id).catch(() => null);
   // Brands that said yes first (they are waiting on us), then the new drafts, nearest club first.
@@ -143,8 +143,8 @@ function listOf(all: readonly PendingDraft[]): { items: NoticeItem[]; sections: 
     withBrandFooter(d.body),
     ...(d.kind === "drip" && d.step === 0
       ? ["", d.samples_url
-        ? `THE 3-PAGE SAMPLES PDF, approved with this email; it goes attached to the one follow-up on day 12: ${d.samples_url}`
-        : "THE 3-PAGE SAMPLES PDF: made, goes attached to the one follow-up on day 12 (approved with this email)."]
+        ? `THE 3-PAGE SAMPLES PDF (not attached to this email): it goes attached to the one follow-up on day 12, on its own by your rule: ${d.samples_url}`
+        : "THE 3-PAGE SAMPLES PDF is not made yet. This email goes without it either way; the follow-up on day 12 waits until it is made."]
       : []),
   ].join("\n")).join("\n\n");
   return { items, sections, copy };

@@ -21,7 +21,7 @@ export interface FlowStep {
 
 export const BRAND_FLOW: readonly FlowStep[] = [
   { n: 1, email: "First pitch", money: "No", movesOnWhen: "They reply", attaches: [] },
-  { n: 2, email: "Reply, or the one follow-up if they're silent (day 12, the only automatic send): the 3-page samples PDF attached, approved with email 1. After it, nothing more", money: "No", movesOnWhen: "Interest or questions", attaches: ["the 3-page samples PDF"] },
+  { n: 2, email: "Reply, or the one follow-up if they're silent (day 12, the only automatic send, by her rule): the 3-page samples PDF attached; it waits until the PDF is made. After it, nothing more", money: "No", movesOnWhen: "Interest or questions", attaches: ["the 3-page samples PDF"] },
   { n: 3, email: "One 3-page PDF, made for them", money: "No", movesOnWhen: "Interest or questions", attaches: ["the 3-page samples PDF"] },
   { n: 4, email: "Proposal: partner options (also straight away when they ask the price)", money: "First time", movesOnWhen: "They pick one", attaches: ["the partner-levels sheet made for this brand, every price per event"] },
   { n: 5, email: "Agreement + invoice", money: "Yes", movesOnWhen: "Signed and paid", attaches: ["a one-page agreement", "the invoice"] },

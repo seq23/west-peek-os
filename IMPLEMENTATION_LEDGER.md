@@ -7395,14 +7395,19 @@ from January 2027; $10 paid ticket; $10,000 net target from sponsors ($7,500 flo
   for `large_brand = 1` or a brand asking to own the room; no why-now, categories, ticket price, weekday or closing
   question; "To say yes" and the one-line About. `brandCopyProblems` refuses guest charges, venues, implied track record.
   Migration 0291 adds `tlc_deal.large_brand` (NULL = unknown = no Title).
-- Drip: `TLC_DRIP_DAYS = [0, 12]`. Email 1 is filed only once the brand's 3-page samples PDF is made
-  (SAMPLES_PDF_NOT_READY holds it otherwise) and the weekly email links it; email 2 attaches it and is decided at filing
-  by whoever approved email 1. Old-template email 2 drafts are held, never re-worded to say "attached".
+- Drip: `TLC_DRIP_DAYS = [0, 12]`. Email 1 never carries the samples PDF and never waits for it (made ahead when it
+  can be, so the weekly email links it). Email 2 attaches it and is held (SAMPLES_PDF_NOT_READY) until it is made.
+  Email 2's card is decided by the policy `policy:drip_step_2` with the rule quoted (shared/tlc/dripPolicy.ts), never
+  by a person; `verifyAuthorizationReceipt` accepts that decider only for the email.send of a step-1 drip message on
+  the brand-sales lane whose card it is. Old-template email 2 drafts are held, never re-worded to say "attached".
 - A price question ("how much", pricing, cost, rates, budget) goes straight to step 4 (proposal + that brand's sheet),
   still a draft for her approval.
 - Send pause: `tlcSendPause.ts` emails her once per changed pitch/playbook hash with the changed lines; her
-  authenticated "approve" (TLP- ref) stores the hashes and words; `tlc.send_paused` events raise and clear
-  repo#TLC_SEND_PAUSED. Delivery of that stop to Boss OS is UNPROVEN (no intake client in this repo).
+  authenticated "approve" (TLP- ref) stores the hashes and words. TLC_SEND_PAUSED is reported to Boss OS Open Loops
+  with the one-call reporter (seq23/boss-os docs/open-loops.md; `services/openLoops.ts`, ported from keepmyproof) and
+  posted cleared when the gate reopens; also on the event spine. Credential by name: `WP_OS_BOSS_OPEN_LOOPS_TOKEN`
+  (vault `BOSS_OPEN_LOOPS_TOKEN`); unset, nothing is sent and one line says so. Live posting UNPROVEN.
+- Sample for review: docs/samples/tlc-sheet-acme-vector-fake.html (fake brand).
 - Guards: tlcBrandReply (colleague, stranger, executor guard), tlcPitchAndPartners (per-brand sheet, forbidden copy,
   series), tlcPipelineRepairs (B, G), tlcSendPause (new), tlcBrandFlow, learningClub. Gmail, Pinecone recovery, PDF
   rendering in production and deployment remain UNPROVEN; no production rows changed.

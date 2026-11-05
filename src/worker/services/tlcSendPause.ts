@@ -15,20 +15,37 @@ import { PITCH_APPROVAL_HASH_SETTING, PLAYBOOK_APPROVAL_HASH_SETTING, TLC_OWNER,
  *   1. Wynn sends her ONE email per new content (de-duplicated on the hashes): "Brand emails are paused: the pitch
  *      changed on <date>. What changed: <the changed lines>. Reply 'approve' to restart." Her authenticated "approve"
  *      on that thread approves exactly the content the email described (a newer change gets its own email).
- *   2. A named stop, repo#TLC_SEND_PAUSED, is raised for Boss OS Open Loops, and cleared (cleared: true) once the gate
- *      opens again. It is written to the event spine (`tlc.send_paused`); this repository has no Boss OS intake client,
- *      so delivery to Boss OS is UNPROVEN until one reads it.
+ *   2. A named stop, TLC_SEND_PAUSED, is reported to Boss OS Open Loops through its one-call reporter
+ *      (services/openLoops.ts; a row seq23/west-peek-os#TLC_SEND_PAUSED), and posted cleared (cleared: true) once the
+ *      gate opens again. Each report is also on the event spine (`tlc.send_paused`).
  * A code change that alters brand copy therefore pauses sending AND tells her, in the same pass.
  */
 
 export const SEND_PAUSE_REF_RE = /\bTLP-[A-Z0-9]{6}\b/;
-export const SEND_PAUSE_LOOP = "repo#TLC_SEND_PAUSED";
+export const SEND_PAUSE_LOOP = "seq23/west-peek-os#TLC_SEND_PAUSED";
 /** The last notice: { key, ref, at, pitch, playbook } as JSON. */
 export const PAUSE_NOTICE_SETTING = "send_pause_notice";
 /** Present while the named stop is raised. */
 export const PAUSE_RAISED_SETTING = "send_pause_raised";
 /** The words she approved, kept so a change can be listed line by line. */
 export const APPROVED_TEXT_SETTING = { pitch: "pitch_approved_text", playbook: "playbook_approved_text" } as const;
+
+const OPEN_LOOPS_REPO = "seq23/west-peek-os";
+const OPEN_LOOPS_BUSINESS = "west-peek-ventures";
+
+/** The stop on Boss OS Open Loops: raised with plain words for her page, or (stop = null) posted cleared. */
+async function reportStop(env: Env, stop: { why: string } | null): Promise<string> {
+  const { reportToOpenLoops } = await import("./openLoops");
+  const out = await reportToOpenLoops({
+    repo: OPEN_LOOPS_REPO,
+    business: OPEN_LOOPS_BUSINESS,
+    finish: "Learning Club brand emails are sending again",
+    known: ["TLC_SEND_PAUSED"],
+    stops: stop ? [{ code: "TLC_SEND_PAUSED", why: stop.why }] : [],
+    words: { TLC_SEND_PAUSED: { title: "Learning Club brand emails are paused", next_step: "Reply approve to Wynn's paused-emails email", owner: "sequoia" } },
+  }, { token: env.WP_OS_BOSS_OPEN_LOOPS_TOKEN ?? "" }).catch((err) => ({ line: `open loops: not sent (${err instanceof Error ? err.message : String(err)})` }));
+  return out.line;
+}
 
 interface PauseNotice { key: string; ref: string; at: string; pitch: string; playbook: string }
 
@@ -69,8 +86,9 @@ export async function tellSendPause(env: Env, now: Date, firmScope: string, gate
   if (gate.open) {
     if (!raised) return "sending is on";
     await putSetting(env, PAUSE_RAISED_SETTING, null, "tlc_drip");
-    await appendEvent(env, { eventType: "tlc.send_paused", actorType: "system", actorId: "tlc_drip", objectType: "open_loop", objectId: SEND_PAUSE_LOOP, firmScope, payload: { loop: SEND_PAUSE_LOOP, cleared: true, ref: raised } });
-    return `brand sending reopened; ${SEND_PAUSE_LOOP} cleared`;
+    const reported = await reportStop(env, null);
+    await appendEvent(env, { eventType: "tlc.send_paused", actorType: "system", actorId: "tlc_drip", objectType: "open_loop", objectId: SEND_PAUSE_LOOP, firmScope, payload: { loop: SEND_PAUSE_LOOP, cleared: true, ref: raised, open_loops: reported } });
+    return `brand sending reopened; ${SEND_PAUSE_LOOP} cleared (${reported})`;
   }
   const settings = await tlcSettings(env);
   const hashes = await contentHashes(env);
@@ -106,8 +124,9 @@ export async function tellSendPause(env: Env, now: Date, firmScope: string, gate
   const notice: PauseNotice = { key, ref, at: now.toISOString(), pitch: hashes.pitch, playbook: hashes.playbook };
   await putSetting(env, PAUSE_NOTICE_SETTING, JSON.stringify(notice), "aie_wynn");
   await putSetting(env, PAUSE_RAISED_SETTING, ref, "aie_wynn");
-  await appendEvent(env, { eventType: "tlc.send_paused", actorType: "ai_employee", actorId: "aie_wynn", objectType: "open_loop", objectId: SEND_PAUSE_LOOP, firmScope, payload: { loop: SEND_PAUSE_LOOP, cleared: false, ref, changed: what } });
-  return `paused; she was told (${ref}): ${what} changed`;
+  const reported = await reportStop(env, { why: `${what} changed on ${dayWords(now)}; her approval of the old text no longer holds` });
+  await appendEvent(env, { eventType: "tlc.send_paused", actorType: "ai_employee", actorId: "aie_wynn", objectType: "open_loop", objectId: SEND_PAUSE_LOOP, firmScope, payload: { loop: SEND_PAUSE_LOOP, cleared: false, ref, changed: what, open_loops: reported } });
+  return `paused; she was told (${ref}): ${what} changed (${reported})`;
 }
 
 /**

@@ -712,9 +712,11 @@ export interface DripResult {
   addressRefused?: string[];
   /** First emails waiting because NeverBounce could not be asked yet; the next pass asks again. */
   addressWaiting?: number;
-  /** Emails held because the brand's samples PDF could not be made yet (SAMPLES_PDF_NOT_READY); tried again each pass. */
+  /** Email 2s held because the brand's samples PDF could not be made yet (SAMPLES_PDF_NOT_READY); tried again each pass. */
   samplesHeld?: string[];
-  /** Follow-ups (email 2, with the samples PDF) queued to go on their own, approved with email 1. */
+  /** Email 1s filed while the samples PDF could not be made yet (never held for it; made again on the next pass). */
+  samplesPending?: string[];
+  /** Follow-ups (email 2, with the samples PDF) queued to go on their own, decided by the drip-step-2 policy. */
   followUpsQueued?: number;
   /** What the send-pause notice did this pass (services/tlcSendPause.ts). */
   pause?: string;
@@ -835,9 +837,9 @@ export async function categoryRival(env: Env, deal: TlcDealRow, now: Date, sentO
 }
 
 /**
- * THE SAMPLES PDF IS MADE BEFORE EMAIL 1 GOES TO HER (owner, 4 Nov 2026). She approves email 1 and the brand's 3-page
- * samples PDF together; email 2 (day 12) carries that PDF. Made once, kept, and reused; a PDF that cannot be made
- * holds the email (the named reason) and the next pass tries again, so email 2 never goes without it.
+ * THE BRAND'S 3-PAGE SAMPLES PDF (owner, 4 Nov 2026). Email 2 (day 12) carries it; email 1 never does. It is made ahead
+ * when email 1 is filed, so her weekly email can link it, but email 1 never waits for it. Made once, kept, reused; a PDF
+ * that cannot be made holds EMAIL 2 only (the named reason) and the next pass tries again.
  */
 export const SAMPLES_NOT_READY = "SAMPLES_PDF_NOT_READY";
 async function samplesPdfFor(env: Env, deal: TlcDealRow, ev: TlcEventRow, deps: import("./tlcSamples").SamplesDeps): Promise<{ ok: true; samplesId: string; attachment: EmailAttachment } | { ok: false; why: string }> {
@@ -852,21 +854,20 @@ async function samplesPdfFor(env: Env, deal: TlcDealRow, ev: TlcEventRow, deps: 
 }
 
 /**
- * EMAIL 2 GOES ON ITS OWN (owner, 4 Nov 2026: the one follow-up is the only automatic brand send). Its card is decided
- * at filing, by whoever approved email 1 (her, when she wrote email 1 herself), with that approval named; the
- * executor's owner-approval guard lets only this step through without her decision on the email itself.
+ * EMAIL 2 GOES ON ITS OWN (owner, 4 Nov 2026: every brand email needs her approval except the 2nd one in the drip). Its
+ * card is decided by the policy (DRIP_STEP_2_POLICY), with the rule quoted, never by a person: nobody read it. The
+ * authorizer accepts that decider for this card's object only, and the executor's owner-approval guard lets only
+ * step 2 through without her decision.
  */
-async function approveFollowUpWithFirst(env: Env, dealId: string, cardId: string): Promise<void> {
-  const first = await env.WP_OS_DB.prepare(
-    "SELECT a.id, a.decided_by FROM tlc_drip_message m JOIN approval_card a ON a.id = m.approval_card_id WHERE m.deal_id = ?1 AND m.step = 0 AND m.state = 'SENT' AND a.state = 'approved'",
-  ).bind(dealId).first<{ id: string; decided_by: string | null }>();
-  const { actorForFirmUser } = await import("./authorize");
-  const by = await actorForFirmUser(env, first?.decided_by ?? TLC_OWNER.firmUserId);
-  if (!by) return;
-  const { decideApproval } = await import("./approvals");
-  await decideApproval(env, by, cardId, "approved", first
-    ? `The one follow-up, approved with email 1 (card ${first.id}); owner ruling 4 Nov 2026: it goes on its own.`
-    : "The one follow-up to her own email 1; owner ruling 4 Nov 2026: it goes on its own.");
+async function approveFollowUpByPolicy(env: Env, cardId: string, firmScope: string): Promise<void> {
+  const { DRIP_STEP_2_POLICY, DRIP_STEP_2_RULE } = await import("../../shared/tlc/dripPolicy");
+  await env.WP_OS_DB.batch([
+    env.WP_OS_DB.prepare("INSERT INTO approval_decision (id, approval_card_id, decision, decided_by, note) VALUES (?1, ?2, 'approved', ?3, ?4)")
+      .bind(`apd_${crypto.randomUUID()}`, cardId, DRIP_STEP_2_POLICY, DRIP_STEP_2_RULE),
+    env.WP_OS_DB.prepare("UPDATE approval_card SET state = 'approved', decided_by = ?2, decided_at = ?3, decision_note = ?4 WHERE id = ?1 AND state IN ('drafted','pending_review')")
+      .bind(cardId, DRIP_STEP_2_POLICY, new Date().toISOString(), DRIP_STEP_2_RULE),
+  ]);
+  await appendEvent(env, { eventType: "approval.decided_by_policy", actorType: "system", actorId: "tlc_drip", objectType: "approval_card", objectId: cardId, firmScope, payload: { policy: DRIP_STEP_2_POLICY, rule: DRIP_STEP_2_RULE } });
 }
 
 export async function runDrip(env: Env, now: Date, firmScope = "west-peek", replyDeps: import("./tlcBrandReply").BrandReplyDeps = {}, angleWriter?: import("./tlcOwnerInstruction").AngleWriter): Promise<DripResult> {
@@ -1028,9 +1029,11 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
       const m = await ownerAngleMail(env, { brand: deal.brand, contact_name: deal.contact_name, owner_angle: deal.owner_angle }, { month: ev.month, topic: ev.topic }, angleWriter);
       toFile = { subject: m.subject, text: m.text };
     }
-    // The samples PDF exists before email 1 reaches her (she approves both together) and goes with email 2.
+    // Email 1 never carries the PDF and never waits for it (owner, 4 Nov 2026): it is made ahead when it can be, so her
+    // weekly email can link it. Email 2 carries it, and only email 2 is held while it cannot be made.
     const samples = await samplesPdfFor(env, deal, ev, replyDeps.samples ?? {});
-    if (!samples.ok) {
+    if (!samples.ok && deal.drip_step === 0) result.samplesPending = [...(result.samplesPending ?? []), brandDisplayName(deal.brand)];
+    if (!samples.ok && deal.drip_step === 1) {
       await env.WP_OS_DB.prepare(
         `INSERT INTO tlc_drip_message (id, deal_id, step, subject, body, state, held_reason) VALUES (?1, ?2, ?3, ?4, ?5, 'HELD', ?6)
          ON CONFLICT (deal_id, step) DO UPDATE SET subject = excluded.subject, body = excluded.body, held_reason = excluded.held_reason
@@ -1040,9 +1043,9 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
       result.samplesHeld = [...(result.samplesHeld ?? []), brandDisplayName(deal.brand)];
       continue;
     }
-    const cardId = await fileDraft(env, deal, toFile, firmScope, null, deal.drip_step === 1 ? [samples.attachment] : []);
+    const cardId = await fileDraft(env, deal, toFile, firmScope, null, deal.drip_step === 1 && samples.ok ? [samples.attachment] : []);
     if (deal.drip_step === 1) {
-      await approveFollowUpWithFirst(env, deal.id, cardId);
+      await approveFollowUpByPolicy(env, cardId, firmScope);
       result.followUpsQueued = (result.followUpsQueued ?? 0) + 1;
       continue;
     }

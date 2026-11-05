@@ -118,6 +118,8 @@ export interface Env {
   WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON?: string;
   /** NeverBounce key for checking a brand address before Wynn's first email (TLC). Vault name NEVERBOUNCE_API_KEY; aliased. */
   WP_OS_NEVERBOUNCE_API_KEY?: string;
+  /** Boss OS Open Loops intake token (services/openLoops.ts): it can only post named stops. Vault name BOSS_OPEN_LOOPS_TOKEN; aliased. */
+  WP_OS_BOSS_OPEN_LOOPS_TOKEN?: string;
   /** The firm calendar's private iCal URL — the fallback that survives a password change. Vault name CAL_ICS_WESTPEEK. */
   WP_OS_CAL_ICS_WESTPEEK?: string;
   /** Non-secret: the GCP project that owns the service account, the Meet API enablement and the Pub/Sub topic. */
