@@ -717,8 +717,8 @@ async function handleIfReply(
   if (!ASSIGNING_PARTNERS.includes((addressIn(sender) ?? "").toLowerCase())) {
     const { recordBrandReplyText } = await import("../services/learningClub");
     const { newTextOf } = await import("../../shared/events/packetDecisionToken");
-    // The whole decoded body: Wynn cuts the quoted original himself, and keeps their words word for word.
-    const brand = await recordBrandReplyText(env, { from: sender, subject, text: textBodyOf(raw), messageId: message.headers.get("message-id") }).catch(() => ({ matched: 0, stop: null }));
+    // Preserve thread and reply-all headers; Wynn decodes the body and removes the quoted original.
+    const brand = await recordBrandReplyText(env, { from: sender, subject, text: raw, messageId: message.headers.get("message-id") }).catch(() => ({ matched: 0, stop: null }));
     void newTextOf;
     if (brand.matched > 0) {
       // A brand's answer is Wynn's (tlcBrandReply), never an "Unclear email" card for Porter.

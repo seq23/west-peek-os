@@ -48,7 +48,7 @@ import { SamplesPdfError, buildSamples, finalizeSamplesPdf, reviseSamples, sampl
  * early") become Wynn's rules (`tlc_wynn_rule`), which every later draft reads and the code enforces where it can.
  *
  * Replies arrive two ways and are de-duplicated on their Message-ID: the intake door (Reply-To names it) and her
- * own inbox, polled each drip pass for messages from deal contacts (a brand she wrote to by hand replies to her
+ * own inbox, polled each drip pass for messages on sent threads or from brand domains (a brand she wrote to by hand replies to her
  * alone).
  */
 
@@ -60,7 +60,7 @@ const GMAIL_READ_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
 const WYNN = "aie_wynn";
 const wynnActor = (firmScope: string): Actor => ({ type: "AI", aiEmployeeId: WYNN, roles: [], firmScopes: [firmScope] } as unknown as Actor);
 
-export interface BrandMessage { messageId: string; subject: string; text: string; receivedAt: string }
+export interface BrandMessage { messageId: string; subject: string; text: string; receivedAt: string; threadId?: string }
 export interface DraftExtras {
   note: string | null;
   previous: string | null;
@@ -508,26 +508,44 @@ export async function offeredSamples(env: Env, dealId: string): Promise<boolean>
   return hit !== null;
 }
 
-/** The deals a reply could belong to, by the sender's address. */
-export async function dealsForSender(env: Env, from: string): Promise<TlcDealRow[]> {
+/** Free-mail domains never establish a brand relationship on their own. */
+export const FREE_MAIL_DOMAINS = new Set(["gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com", "aol.com", "proton.me"]);
+const emailDomain = (email: string): string => email.trim().toLowerCase().split("@")[1] ?? "";
+
+/** Both intake and inbox use the same sent-thread or corporate-domain relationship. */
+export async function dealsForSender(env: Env, from: string, message: { text?: string; threadId?: string } = {}): Promise<TlcDealRow[]> {
   const address = (addressIn(from) ?? from).trim().toLowerCase();
+  if ([TLC_OWNER.email.toLowerCase(), INTAKE_MAILBOX.toLowerCase()].includes(address)) return [];
+  const domain = emailDomain(address);
+  const head = (message.text ?? "").split(/\r?\n\r?\n/)[0] ?? "";
+  const refs = [...head.replace(/\r?\n[ \t]+/g, " ").matchAll(/^(?:In-Reply-To|References):(.+)$/gim)]
+    .flatMap((m) => [...m[1]!.matchAll(/<([^>]+)>/g)].map((x) => normalizeMid(x[1])));
   return (await env.WP_OS_DB.prepare(
-    "SELECT * FROM tlc_deal WHERE lower(contact_email) = ?1 AND stage NOT IN ('DECLINED','STOPPED') AND (stop_reason IS NULL OR stop_reason = 'REPLIED')",
-  ).bind(address).all<TlcDealRow>()).results ?? [];
+    `SELECT d.* FROM tlc_deal d WHERE d.stage NOT IN ('DECLINED','STOPPED')
+      AND (d.stop_reason IS NULL OR d.stop_reason = 'REPLIED')
+      AND (lower(d.contact_email) = ?1
+        OR (?2 != '' AND lower(substr(d.contact_email, instr(d.contact_email, '@') + 1)) = ?2)
+        OR EXISTS (SELECT 1 FROM external_effect_request e
+          WHERE e.id IN (SELECT effect_request_id FROM tlc_drip_message WHERE deal_id = d.id AND state = 'SENT'
+            UNION SELECT effect_request_id FROM tlc_brand_reply WHERE deal_id = d.id AND state = 'SENT'
+            UNION SELECT effect_request_id FROM tlc_pitch_followup WHERE deal_id = d.id AND state = 'SENT')
+          AND (e.gmail_thread_id = ?3 OR trim(e.rfc_message_id, '<>') IN (SELECT value FROM json_each(?4)))))`,
+  ).bind(address, FREE_MAIL_DOMAINS.has(domain) ? "" : domain, message.threadId ?? null, JSON.stringify(refs)).all<TlcDealRow>()).results ?? [];
+
 }
 
 const defaultMailbox: MailboxReader = async (env, query) => {
   const token = await serviceAccountToken(env, [GMAIL_READ_SCOPE], TLC_OWNER.email);
-  return (await listGmailRaw(token, query)).map(({ raw, internalDate }) => {
+  return (await listGmailRaw(token, query)).map(({ raw, internalDate, threadId }) => {
     const head = raw.split(/\r?\n\r?\n/)[0] ?? "";
     const h = (name: string) => new RegExp(`^${name}:\\s*(.*(?:\\r?\\n[ \\t].*)*)`, "im").exec(head)?.[1]?.replace(/\r?\n[ \t]+/g, " ").trim() ?? "";
-    return { messageId: h("Message-ID"), from: h("From"), subject: h("Subject"), text: raw, receivedAt: new Date(Number(internalDate ?? Date.now())).toISOString() };
+    return { threadId: threadId ?? undefined, messageId: h("Message-ID"), from: h("From"), subject: h("Subject"), text: raw, receivedAt: new Date(Number(internalDate ?? Date.now())).toISOString() };
   });
 };
 
 /**
  * Each drip pass: (a) a reply the door stopped on but never read (no words, or before this existed) is read from
- * the stored message; (b) her inbox is read for anything from a deal contact. Returns a line for the job summary.
+ * the stored message; (b) her inbox is read for replies on sent threads or from brand domains. Returns a line for the job summary.
  */
 export async function processBrandReplies(env: Env, now: Date, firmScope = "west-peek", deps: BrandReplyDeps = {}): Promise<string> {
   const d = { ...deps, now };
@@ -539,29 +557,34 @@ export async function processBrandReplies(env: Env, now: Date, firmScope = "west
   ).bind(firmScope).all<TlcDealRow>()).results ?? [];
   for (const deal of unread) {
     const since = new Date(Date.parse(deal.replied_at ?? now.toISOString()) - 10 * 60_000).toISOString();
-    const row = await env.WP_OS_DB.prepare("SELECT message_id, r2_key, subject, received_at FROM inbound_message WHERE lower(from_address) = lower(?1) AND received_at >= ?2 ORDER BY received_at LIMIT 1")
-      .bind(deal.contact_email, since).first<{ message_id: string | null; r2_key: string | null; subject: string; received_at: string }>();
-    const obj = row?.r2_key && env.WP_OS_DOCUMENTS ? await env.WP_OS_DOCUMENTS.get(row.r2_key) : null;
-    if (!row || !obj) continue;
-    counts[await takeBrandReply(env, deal, { messageId: row.message_id ?? "", subject: row.subject, text: await obj.text(), receivedAt: row.received_at }, d)] += 1;
+    const rows = (await env.WP_OS_DB.prepare("SELECT message_id, from_address, r2_key, subject, received_at FROM inbound_message WHERE received_at >= ?1 ORDER BY received_at")
+      .bind(since).all<{ message_id: string | null; from_address: string; r2_key: string | null; subject: string; received_at: string }>()).results ?? [];
+    for (const row of rows) {
+      const obj = row.r2_key && env.WP_OS_DOCUMENTS ? await env.WP_OS_DOCUMENTS.get(row.r2_key) : null;
+      if (!obj) continue;
+      const text = await obj.text();
+      if (!(await dealsForSender(env, row.from_address, { text })).some((x) => x.id === deal.id)) continue;
+      counts[await takeBrandReply(env, deal, { messageId: row.message_id ?? "", subject: row.subject, text, receivedAt: row.received_at }, d)] += 1;
+    }
   }
   let polled = "inbox not read";
   if (deps.mailbox !== null && (deps.mailbox || env.WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON)) {
     const live = (await env.WP_OS_DB.prepare(
-      "SELECT * FROM tlc_deal WHERE firm_scope = ?1 AND first_sent_at IS NOT NULL AND first_sent_at >= ?2 AND stage NOT IN ('DECLINED','STOPPED') AND (stop_reason IS NULL OR stop_reason = 'REPLIED')",
-    ).bind(firmScope, new Date(now.getTime() - 60 * 86_400_000).toISOString()).all<TlcDealRow>()).results ?? [];
+      "SELECT * FROM tlc_deal WHERE firm_scope = ?1 AND first_sent_at IS NOT NULL AND stage NOT IN ('DECLINED','STOPPED') AND (stop_reason IS NULL OR stop_reason = 'REPLIED')",
+    ).bind(firmScope).all<TlcDealRow>()).results ?? [];
     const addresses = [...new Set(live.map((x) => x.contact_email.toLowerCase()))];
     if (addresses.length) {
       const after = Math.floor(Math.min(...live.map((x) => Date.parse(x.first_sent_at!))) / 1000);
       try {
-        const found = await (deps.mailbox ?? defaultMailbox)(env, `from:(${addresses.join(" OR ")}) after:${after}`);
+        const found = await (deps.mailbox ?? defaultMailbox)(env, `in:inbox after:${after}`);
         for (const m of found) {
           const from = (addressIn(m.from) ?? m.from).toLowerCase();
-          for (const deal of live.filter((x) => x.contact_email.toLowerCase() === from && Date.parse(m.receivedAt) > Date.parse(x.first_sent_at!))) {
+          const matches = new Set((await dealsForSender(env, from, m)).map((x) => x.id));
+          for (const deal of live.filter((x) => matches.has(x.id) && Date.parse(m.receivedAt) > Date.parse(x.first_sent_at!))) {
             counts[await takeBrandReply(env, deal, m, d)] += 1;
           }
         }
-        polled = `inbox read (${found.length} message(s) from ${addresses.length} contact(s))`;
+        polled = `inbox read (${found.length} message(s), ${addresses.length} live contact(s))`;
       } catch (err) {
         polled = `inbox not read: ${err instanceof Error ? err.message : String(err)}`.slice(0, 200);
       }

@@ -419,21 +419,27 @@ export async function sendViaGmail(
  * A MAILBOX'S MESSAGES, RAW (26 Oct 2026, the Learning Club): the brand replies in her own inbox, read under
  * `gmail.readonly` as her (the caller's token names the mailbox). Read-only; nothing is changed or marked.
  */
-export async function listGmailRaw(accessToken: string, query: string, max = 25, fetchImpl: typeof fetch = fetch): Promise<Array<{ raw: string; internalDate: string | null }>> {
+export async function listGmailRaw(accessToken: string, query: string, max = 25, fetchImpl: typeof fetch = fetch): Promise<Array<{ raw: string; internalDate: string | null; threadId?: string | null }>> {
   const api = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
   const headers = { authorization: `Bearer ${accessToken}` };
-  const listed = await fetchImpl(`${api}?q=${encodeURIComponent(query)}&maxResults=${max}`, { headers });
-  if (listed.status === 401 || listed.status === 403) throw new Error("google_unauthorised");
-  if (!listed.ok) throw new Error(`gmail refused the search (HTTP ${listed.status})`);
-  const ids = ((await listed.json()) as { messages?: Array<{ id: string }> }).messages ?? [];
-  const out: Array<{ raw: string; internalDate: string | null }> = [];
+  const ids: Array<{ id: string }> = [];
+  let page: string | undefined;
+  do {
+    const listed = await fetchImpl(`${api}?q=${encodeURIComponent(query)}&maxResults=${max}${page ? `&pageToken=${encodeURIComponent(page)}` : ""}`, { headers });
+    if (listed.status === 401 || listed.status === 403) throw new Error("google_unauthorised");
+    if (!listed.ok) throw new Error(`gmail refused the search (HTTP ${listed.status})`);
+    const result = (await listed.json()) as { messages?: Array<{ id: string }>; nextPageToken?: string };
+    ids.push(...(result.messages ?? []));
+    page = result.nextPageToken;
+  } while (page);
+  const out: Array<{ raw: string; internalDate: string | null; threadId?: string | null }> = [];
   for (const m of ids) {
     const res = await fetchImpl(`${api}/${m.id}?format=raw`, { headers });
     if (!res.ok) continue;
-    const j = (await res.json()) as { raw?: string; internalDate?: string };
+    const j = (await res.json()) as { raw?: string; internalDate?: string; threadId?: string };
     if (!j.raw) continue;
     const bin = atob(j.raw.replace(/-/g, "+").replace(/_/g, "/"));
-    out.push({ raw: new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0))), internalDate: j.internalDate ?? null });
+    out.push({ raw: new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0))), internalDate: j.internalDate ?? null, threadId: j.threadId ?? null });
   }
   return out;
 }

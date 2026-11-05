@@ -741,3 +741,53 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     expect((JSON.parse(r.offered_slots_json) as string[]).includes(new Date(thu).toISOString())).toBe(false);
   });
 });
+
+describe("brand colleagues and the approval boundary", () => {
+  it("polls colleagues, drafts reply-all on their thread, and sends only her approval notice", async () => {
+    await deal("tld_colleague", "Brand Co", "mike@brand.example");
+    const mailbox = vi.fn(async () => [{ from: "vp@brand.example", messageId: "vp-question@brand.example", threadId: "brand-thread", subject: "Re: Brand", text: "From: VP <vp@brand.example>\r\nTo: sequoia@westpeek.ventures\r\nCc: mike@brand.example\r\n\r\nHow much is this to do?", receivedAt: MORNING.toISOString() }]);
+    expect(await processBrandReplies(env, MORNING, "west-peek", { drafter, mailbox })).toContain("1 drafted");
+    const r = await env.WP_OS_DB.prepare("SELECT state, send_to, send_cc_json FROM tlc_brand_reply WHERE deal_id = 'tld_colleague'").first();
+    expect(r).toEqual({ state: "NOTIFIED", send_to: "vp@brand.example", send_cc_json: '["mike@brand.example"]' });
+    expect(sends).toHaveLength(1);
+    expect(sends[0]!.to).toBe("sequoia@westpeek.ventures");
+    expect(await processBrandReplies(env, MORNING, "west-peek", { drafter, mailbox })).toContain("0 drafted");
+    expect(sends).toHaveLength(1);
+  });
+
+  it("matches sent Gmail and RFC threads across domains, but rejects unrelated and free-mail strangers", async () => {
+    const { dealsForSender } = await import("../src/worker/services/tlcBrandReply");
+    await deal("tld_thread", "Thread Co", "contact@thread.example");
+    await env.WP_OS_DB.prepare("INSERT INTO external_effect_request (id,effect_type,destination,payload_json,requested_by_type,requested_by_id,gmail_thread_id,rfc_message_id) VALUES ('eer_thread','email.send','contact@thread.example','{}','AI','aie_wynn','sent-thread','sent@thread.example')").run();
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_drip_message (id,deal_id,step,subject,body,state,effect_request_id) VALUES ('tdm_thread','tld_thread',0,'Thread','Hi','SENT','eer_thread')").run();
+    for (const domain of ["unrelated.example", "gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com", "aol.com", "proton.me"]) {
+      expect(await dealsForSender(env, `stranger@${domain}`)).toEqual([]);
+    }
+    expect((await dealsForSender(env, "other@gmail.com", { threadId: "sent-thread" })).map((d) => d.id)).toEqual(["tld_thread"]);
+    expect((await dealsForSender(env, "other@agency.example", { text: "References: <older@example.test>\r\n <sent@thread.example>\r\n\r\nHow much?" })).map((d) => d.id)).toEqual(["tld_thread"]);
+    expect((await dealsForSender(env, "colleague@thread.example")).map((d) => d.id)).toEqual(["tld_thread"]);
+    expect(await recordBrandReplyText(env, { from: "other@agency.example", subject: "Re: Thread", text: "From: other@agency.example\r\nTo: sequoia@westpeek.ventures\r\nCc: contact@thread.example\r\nIn-Reply-To: <sent@thread.example>\r\n\r\nHow much is this to do?", messageId: "agency-question@example.test", now: MORNING })).toEqual({ matched: 1, stop: "REPLIED" });
+    expect(await env.WP_OS_DB.prepare("SELECT state, send_to FROM tlc_brand_reply WHERE deal_id = 'tld_thread'").first()).toEqual({ state: "NOTIFIED", send_to: "other@agency.example" });
+    expect(sends).toHaveLength(1);
+    expect(sends[0]!.to).toBe("sequoia@westpeek.ventures");
+  });
+
+  it("refuses an unapproved brand email at the executor; an approved day-four follow-up still sends", async () => {
+    const { executeExternalEffect } = await import("../src/worker/effects/executor");
+    const { requestApproval, decideApproval } = await import("../src/worker/services/approvals");
+    const { actorForFirmUser } = await import("../src/worker/services/authorize");
+    const { approvedFor } = await import("../src/worker/services/learningClub");
+    const actor = { type: "AI" as const, aiEmployeeId: "aie_wynn", roles: [], firmScopes: ["west-peek"] };
+    await env.WP_OS_DB.prepare("INSERT INTO external_effect_request (id,effect_type,destination,payload_json,requested_by_type,requested_by_id,outside_job) VALUES ('eer_guard','email.send','contact@thread.example',?1,'AI','aie_wynn','tlc_brand_sales')").bind(JSON.stringify({ subject: "Follow-up", text: "Hi again" })).run();
+    await expect(executeExternalEffect(env, actor, "eer_guard", undefined)).rejects.toThrow();
+    expect(sends).toHaveLength(0);
+    const card = await requestApproval(env, actor, { action_key: "effect.email.send", object_type: "external_effect_request", object_id: "eer_guard", title: "Follow-up", summary: "Hi again", payload: {}, submit: true });
+    await decideApproval(env, (await actorForFirmUser(env, "fu_scooter_taylor"))!, card.id, "approved", "Another partner approved");
+    await expect(executeExternalEffect(approvedFor(env, card.id, "contact@thread.example"), actor, "eer_guard", card.id)).rejects.toThrow("TLC_BRAND_OWNER_APPROVAL_REQUIRED");
+    expect(sends).toHaveLength(0);
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_drip_message (id,deal_id,step,subject,body,state,effect_request_id,approval_card_id) VALUES ('tdm_guard','tld_thread',1,'Follow-up','Hi again','AWAITING_APPROVAL','eer_guard',?1)").bind(card.id).run();
+    await executeExternalEffect(approvedFor(env, card.id, "contact@thread.example"), actor, "eer_guard", card.id);
+    expect(sends).toHaveLength(1);
+    expect(sends[0]!.to).toBe("contact@thread.example");
+  });
+});

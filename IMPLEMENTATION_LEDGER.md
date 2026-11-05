@@ -7380,3 +7380,8 @@ from January 2027; $10 paid ticket; $10,000 net target from sponsors ($7,500 flo
   CANCELLED with `dropped_at`/`dropped_reason`, drafts held, topic back to the ideas list (`applyGoNoGo`).
 - Guards: `tests/tlcPipelineRepairs.test.ts` (9); the catch-up guard was broken on purpose and went red, then restored.
   Pins in `tlcVolume`/`tlcPitchAndPartners` rewritten to the stricter wording. Live delivery UNPROVEN until exercised.
+
+### 4 Nov 2026 — TLC replies from brand colleagues
+- Inbox and raw inbound replies share corporate-domain / sent Gmail-thread / RFC Message-ID matching; seven free-mail domains never establish domain membership. Inbox pagination and removal of the 60-day live-deal cutoff let the next drip pass recover existing unanswered mail without live-row edits.
+- Existing classification, competitor holds, deduplication, reply-all and approval notices remain in place. The single TLC Gmail send boundary additionally requires Sequoia's approved card for that request; only the second drip email (step index 1, day four) is exempt from that owner-specific check. General authority and outside-email checks still apply, including to the follow-up. Samples, proposals, confirmations and call-time answers use this boundary; invitations occur only after the approved answer sends.
+- Local verification recorded after execution below. Remote Gmail, live Pinecone recovery and deployment remain UNPROVEN; no production records changed.

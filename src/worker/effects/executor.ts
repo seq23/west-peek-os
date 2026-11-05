@@ -152,8 +152,18 @@ export interface EffectExecutionResult {
  */
 async function brandMailAsOwner(
   env: Env,
+  requestId: string,
+  receiptId: string | undefined,
   message: { to: string; cc?: readonly string[]; subject: string; text: string; replyTo?: readonly string[]; attachments?: readonly EmailAttachment[]; inReplyTo?: string; threadId?: string },
 ): Promise<EmailSendResult> {
+  // Owner ruling, 4 Nov 2026: only the day-four drip may pass without HER decision.
+  const followUp = await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_drip_message WHERE effect_request_id = ?1 AND step = 1").bind(requestId).first();
+  const herApproval = receiptId ? await env.WP_OS_DB.prepare(
+    `SELECT 1 FROM approval_card a JOIN firm_user u ON u.id = a.decided_by
+      WHERE a.id = ?1 AND a.state = 'approved' AND a.action_key = 'effect.email.send'
+        AND a.object_type = 'external_effect_request' AND a.object_id = ?2 AND lower(u.email) = ?3`,
+  ).bind(receiptId, requestId, TLC_OWNER.email.toLowerCase()).first() : null;
+  if (!followUp && !herApproval) throw new Error("TLC_BRAND_OWNER_APPROVAL_REQUIRED: nothing sent; this email needs her approval");
   // Reply-all: a copied address is held to the outside-mail rule exactly like `to` (each one on her approval).
   assertPreviewLane(env, { to: message.to, ...(message.cc?.length ? { cc: message.cc } : {}), subject: message.subject, text: message.text });
   const token = await serviceAccountToken(env, [GMAIL_COMPOSE_SCOPE], TLC_OWNER.email);
@@ -188,7 +198,7 @@ async function brandMailAsOwner(
  * the approval was genuinely granted and swallowing it would lose the receipt. The summary says
  * which of the three happened, so nobody has to guess whether a message actually went out.
  */
-async function performEffect(env: Env, request: ExternalEffectRequestRow): Promise<SimulatedDelivery> {
+async function performEffect(env: Env, request: ExternalEffectRequestRow, receiptId?: string): Promise<SimulatedDelivery> {
   const cloudflareReady = isCloudflareEmailEnabled(env);
   if (request.effect_type === "email.send" && (cloudflareReady || isEmailSendEnabled(env))) {
     const payload = JSON.parse(request.payload_json || "{}") as { subject?: string; text?: string; body?: string; reply_to?: unknown; attachments?: unknown; in_reply_to?: unknown; gmail_thread_id?: unknown };
@@ -262,7 +272,7 @@ async function performEffect(env: Env, request: ExternalEffectRequestRow): Promi
       // Reply-all to a brand (2 Nov 2026): the copied addresses go only on her own-mailbox lane, never another transport.
       const cc = (Array.isArray((payload as { cc?: unknown }).cc) ? (payload as { cc: unknown[] }).cc : [])
         .map((a) => String(a).trim().toLowerCase()).filter((a) => /^[^\s@<>,]+@[^\s@<>,]+\.[a-z]{2,}$/.test(a));
-      result = await brandMailAsOwner(env, { ...message, ...(cc.length ? { cc } : {}), text: withBrandFooter(message.text) });
+      result = await brandMailAsOwner(env, request.id, receiptId, { ...message, ...(cc.length ? { cc } : {}), text: withBrandFooter(message.text) });
     } else if (requestedBy && from && from !== env.WP_OS_EMAIL_FROM) {
       try {
         const gmail = await trySendAsPartner(env, requestedBy, { ...message, from });
@@ -435,7 +445,7 @@ export async function executeExternalEffect(
 
   let delivery: SimulatedDelivery;
   try {
-    delivery = await performEffect(env, request);
+    delivery = await performEffect(env, request, receiptId);
   } catch (err) {
     await env.WP_OS_DB.prepare("UPDATE external_effect_request SET state = 'FAILED' WHERE id = ?1").bind(request.id).run();
     await appendEvent(env, {

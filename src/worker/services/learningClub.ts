@@ -1100,7 +1100,7 @@ export async function recordBrandReplyText(env: Env, input: { from: string; subj
   // drafts her answer to (tlcBrandReply). Nothing is "a yes" by default and no pitch PDF goes before one.
   const now = input.now ?? new Date();
   const { dealsForSender, sendReplyApprovals, takeBrandReply } = await import("./tlcBrandReply");
-  const deals = await dealsForSender(env, input.from);
+  const deals = await dealsForSender(env, input.from, { text: input.text });
   if (deals.length === 0) return { matched: 0, stop: null };
   let stop: string | null = null;
   const drafted = new Set<string>();
