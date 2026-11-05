@@ -266,7 +266,7 @@ export interface InboundOptions {
 
 /** What a non-card handler in the door did with a message. */
 export interface DoorHandled {
-  by: "tlc_draft_reply" | "tlc_brand_reply" | "tlc_brand_reply_approval" | "packet_decision" | "clarification";
+  by: "tlc_draft_reply" | "tlc_brand_reply" | "tlc_brand_reply_approval" | "tlc_send_pause" | "packet_decision" | "clarification";
   ref: string | null;
   detail: string;
 }
@@ -728,6 +728,21 @@ async function handleIfReply(
         payload: { from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX, tlc_brand_reply: brand.stop },
       });
       input.onHandled?.({ by: "tlc_brand_reply", ref: null, detail: `brand reply: ${brand.stop}` });
+      return true;
+    }
+  }
+  {
+    // HER "APPROVE" TO WYNN'S "BRAND EMAILS ARE PAUSED" EMAIL (owner, 4 Nov 2026; services/tlcSendPause.ts).
+    const { applySendPauseApproval } = await import("../services/tlcSendPause");
+    const out = await applySendPauseApproval(env, { fromHeader: message.headers.get("from"), authenticationResults: message.headers.get("authentication-results"), subject, body: raw })
+      .catch((err) => ({ handled: false, ref: null, detail: err instanceof Error ? err.message : String(err) }));
+    if (out.handled) {
+      await appendEvent(env, {
+        eventType: "inbound_email.received", actorType: "system", actorId: "inbound_email", objectType: "inbound_email",
+        objectId: `${message.from}:${subject}`.slice(0, 200), firmScope,
+        payload: { from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX, tlc_send_pause: out.ref, detail: out.detail },
+      });
+      input.onHandled?.({ by: "tlc_send_pause", ref: out.ref, detail: out.detail });
       return true;
     }
   }

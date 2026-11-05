@@ -1,3 +1,4 @@
+import { sponsorOf } from "../../shared/tlc/pitch";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import type { RouteContext } from "../router";
@@ -49,6 +50,9 @@ export const tlcRevisionWriter: SamplesWriter = async (env, actor, prompt) => {
   return { ok: run.status === "COMPLETED" && Boolean(run.output_text), text: run.output_text ?? "" };
 };
 
+const rulesOf = async (env: Env, firmScope: string): Promise<Array<{ code: string | null }>> =>
+  (await env.WP_OS_DB.prepare("SELECT code FROM tlc_wynn_rule WHERE active = 1 AND firm_scope = ?1").bind(firmScope).all<{ code: string | null }>().catch(() => ({ results: [] as Array<{ code: string | null }> }))).results ?? [];
+
 /** The input the page and the PDF are both made from: one function, so the two can never differ. */
 async function samplesInputOf(env: Env, deal: TlcDealRow, ev: TlcEventRow, words: StoredWords, overridesJson: string | null): Promise<SamplesInput> {
   const mixRaw = (await env.WP_OS_DB.prepare("SELECT value FROM tlc_setting WHERE key = ?1").bind(COMMUNITY_MIX_SETTING).first<{ value: string | null }>())?.value ?? null;
@@ -56,6 +60,8 @@ async function samplesInputOf(env: Env, deal: TlcDealRow, ev: TlcEventRow, words
   return {
     // The date line is the year, "dates flexible", whatever the club's status (owner, 30 Oct 2026).
     brand, topic: ev.topic ?? "", month: ev.month,
+    // Her angle or Wynn's rule asks for the series of six: it leads (owner, 4 Nov 2026).
+    leadWithSeries: sponsorOf(deal, await rulesOf(env, deal.firm_scope)).series,
     words: completeWords(words, brand, ev.topic ?? ""), mix: readMix(mixRaw),
     ...(overridesJson ? { overrides: samplesOverridesSchema.parse(JSON.parse(overridesJson)) } : {}),
   };

@@ -7381,7 +7381,28 @@ from January 2027; $10 paid ticket; $10,000 net target from sponsors ($7,500 flo
 - Guards: `tests/tlcPipelineRepairs.test.ts` (9); the catch-up guard was broken on purpose and went red, then restored.
   Pins in `tlcVolume`/`tlcPitchAndPartners` rewritten to the stricter wording. Live delivery UNPROVEN until exercised.
 
-### 4 Nov 2026 — TLC replies from brand colleagues
-- Inbox and raw inbound replies share corporate-domain / sent Gmail-thread / RFC Message-ID matching; seven free-mail domains never establish domain membership. Inbox pagination and removal of the 60-day live-deal cutoff let the next drip pass recover existing unanswered mail without live-row edits.
-- Existing classification, competitor holds, deduplication, reply-all and approval notices remain in place. The single TLC Gmail send boundary additionally requires Sequoia's approved card for that request; only the second drip email (step index 1, day four) is exempt from that owner-specific check. General authority and outside-email checks still apply, including to the follow-up. Samples, proposals, confirmations and call-time answers use this boundary; invitations occur only after the approved answer sends.
-- Local verification recorded after execution below. Remote Gmail, live Pinecone recovery and deployment remain UNPROVEN; no production records changed.
+### 4 Nov 2026 — TLC: brand replies from any colleague, the per-brand sheet, no silent send pauses
+- Replies: a message belongs to a live deal when it is from the contact, on a thread we sent that deal (Gmail threadId,
+  or In-Reply-To/References naming a Message-ID we sent), or, once we have written to the deal, from the contact's own
+  domain (never the seven free-mail domains in `FREE_MAIL_DOMAINS`). Intake and inbox share `dealsForSender`. The inbox
+  is read with two bounded searches per pass (the brands' addresses and domains since the first send; anyone on our
+  threads in a 3-day window), at most 4 + 2 pages of 25; `listGmailRaw` gained a page cap (the WIP walked every page).
+- The one brand send (`brandMailAsOwner`) refuses (TLC_BRAND_OWNER_APPROVAL_REQUIRED, nothing sent) unless it is drip
+  step 2 or carries her approved card for that request. Drip, replies, samples, proposal, confirm and call times all
+  pass it; calendar invites follow only an approved answer.
+- Sheet: `renderBrandPitch(view, sponsor)` per deal (`sponsorOf`: category, `large_brand`, her angle, Wynn's
+  `<BRAND>_SERIES` rule); levels lowest first, every price per event, in-kind only for a physical product, Title only
+  for `large_brand = 1` or a brand asking to own the room; no why-now, categories, ticket price, weekday or closing
+  question; "To say yes" and the one-line About. `brandCopyProblems` refuses guest charges, venues, implied track record.
+  Migration 0291 adds `tlc_deal.large_brand` (NULL = unknown = no Title).
+- Drip: `TLC_DRIP_DAYS = [0, 12]`. Email 1 is filed only once the brand's 3-page samples PDF is made
+  (SAMPLES_PDF_NOT_READY holds it otherwise) and the weekly email links it; email 2 attaches it and is decided at filing
+  by whoever approved email 1. Old-template email 2 drafts are held, never re-worded to say "attached".
+- A price question ("how much", pricing, cost, rates, budget) goes straight to step 4 (proposal + that brand's sheet),
+  still a draft for her approval.
+- Send pause: `tlcSendPause.ts` emails her once per changed pitch/playbook hash with the changed lines; her
+  authenticated "approve" (TLP- ref) stores the hashes and words; `tlc.send_paused` events raise and clear
+  repo#TLC_SEND_PAUSED. Delivery of that stop to Boss OS is UNPROVEN (no intake client in this repo).
+- Guards: tlcBrandReply (colleague, stranger, executor guard), tlcPitchAndPartners (per-brand sheet, forbidden copy,
+  series), tlcPipelineRepairs (B, G), tlcSendPause (new), tlcBrandFlow, learningClub. Gmail, Pinecone recovery, PDF
+  rendering in production and deployment remain UNPROVEN; no production rows changed.

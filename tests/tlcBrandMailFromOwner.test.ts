@@ -1,3 +1,4 @@
+import { DRIP_DEPS } from "./helpers/tlcSamplesPdf";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
@@ -62,7 +63,7 @@ describe("in the database", () => {
   const calls: string[] = [];
   beforeAll(async () => {
     t = await createTestDb();
-    env = { ...makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>), RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures" } as Env;
+    env = { ...makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled", WP_OS_DOCUMENTS: t.docs } as Partial<Env>), RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures" } as Env;
     vi.stubGlobal("fetch", async (url: string | URL | Request) => {
       calls.push(String(url));
       if (String(url) === "https://oauth2.googleapis.com/token") return new Response(JSON.stringify({ error: "unauthorized_client" }), { status: 401 });
@@ -96,7 +97,7 @@ describe("in the database", () => {
     // Each queued address passed NeverBounce, as the first email requires (26 Oct 2026).
     await addressesPassed(env);
     // As the composer wrote them before the display name: the stored brand, parenthetical and all.
-    await runDrip(env, MORNING);
+    await runDrip(env, MORNING, "west-peek", DRIP_DEPS);
     for (const [deal, brand] of [["tld_osmo", "Osmo (Generation)"], ["tld_quest", "Quest Diagnostics (questhealth.com)"]] as const) {
       const m = (await draft(deal))!;
       const subject = m.subject.replace(brandDisplayName(brand), brand);
@@ -138,7 +139,7 @@ describe("in the database", () => {
   it("an approved brand email whose sender Google refuses FAILS with the reason; it never goes out as anybody else", async () => {
     await approve("tld_osmo");
     const osmo = await requestOf("tld_osmo");
-    const noAccount = await runDrip(env, MORNING);
+    const noAccount = await runDrip(env, MORNING, "west-peek", DRIP_DEPS);
     expect(noAccount.sent).toBe(0);
     expect(await failure(osmo)).toEqual({ state: "FAILED", error: expect.stringMatching(/WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON is not set/) });
     expect(calls.filter((c) => c.includes("api.resend.com"))).toEqual([]);
@@ -146,7 +147,7 @@ describe("in the database", () => {
     // With the account but without the delegation grant: still FAILED, still nothing through the firm transport.
     await approve("tld_own");
     const own = await requestOf("tld_own");
-    const refused = await runDrip({ ...env, WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON: SERVICE_ACCOUNT } as Env, MORNING);
+    const refused = await runDrip({ ...env, WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON: SERVICE_ACCOUNT } as Env, MORNING, "west-peek", DRIP_DEPS);
     expect(refused.sent).toBe(0);
     expect(await failure(own)).toEqual({ state: "FAILED", error: expect.stringMatching(/delegation grant does not cover .*gmail\.compose for sequoia@westpeek\.ventures/) });
     expect(calls).toContain("https://oauth2.googleapis.com/token");

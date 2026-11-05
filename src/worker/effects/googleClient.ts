@@ -419,19 +419,22 @@ export async function sendViaGmail(
  * A MAILBOX'S MESSAGES, RAW (26 Oct 2026, the Learning Club): the brand replies in her own inbox, read under
  * `gmail.readonly` as her (the caller's token names the mailbox). Read-only; nothing is changed or marked.
  */
-export async function listGmailRaw(accessToken: string, query: string, max = 25, fetchImpl: typeof fetch = fetch): Promise<Array<{ raw: string; internalDate: string | null; threadId?: string | null }>> {
+export async function listGmailRaw(accessToken: string, query: string, max = 25, fetchImpl: typeof fetch = fetch, maxPages = 1): Promise<Array<{ raw: string; internalDate: string | null; threadId?: string | null }>> {
   const api = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
   const headers = { authorization: `Bearer ${accessToken}` };
   const ids: Array<{ id: string }> = [];
   let page: string | undefined;
+  let pages = 0;
+  // Bounded: at most `maxPages` pages of `max` (a caller that needs more asks for it; never an open-ended walk).
   do {
+    pages += 1;
     const listed = await fetchImpl(`${api}?q=${encodeURIComponent(query)}&maxResults=${max}${page ? `&pageToken=${encodeURIComponent(page)}` : ""}`, { headers });
     if (listed.status === 401 || listed.status === 403) throw new Error("google_unauthorised");
     if (!listed.ok) throw new Error(`gmail refused the search (HTTP ${listed.status})`);
     const result = (await listed.json()) as { messages?: Array<{ id: string }>; nextPageToken?: string };
     ids.push(...(result.messages ?? []));
     page = result.nextPageToken;
-  } while (page);
+  } while (page && pages < Math.max(1, maxPages));
   const out: Array<{ raw: string; internalDate: string | null; threadId?: string | null }> = [];
   for (const m of ids) {
     const res = await fetchImpl(`${api}/${m.id}?format=raw`, { headers });

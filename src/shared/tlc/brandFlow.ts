@@ -21,9 +21,9 @@ export interface FlowStep {
 
 export const BRAND_FLOW: readonly FlowStep[] = [
   { n: 1, email: "First pitch", money: "No", movesOnWhen: "They reply", attaches: [] },
-  { n: 2, email: "Reply, or one follow-up if they're silent: offers the 3 samples", money: "No", movesOnWhen: '"Send it"', attaches: [] },
+  { n: 2, email: "Reply, or the one follow-up if they're silent (day 12, the only automatic send): the 3-page samples PDF attached, approved with email 1. After it, nothing more", money: "No", movesOnWhen: "Interest or questions", attaches: ["the 3-page samples PDF"] },
   { n: 3, email: "One 3-page PDF, made for them", money: "No", movesOnWhen: "Interest or questions", attaches: ["the 3-page samples PDF"] },
-  { n: 4, email: "Proposal: partner options", money: "First time", movesOnWhen: "They pick one", attaches: ["the one-pager with the TLC levels and prices"] },
+  { n: 4, email: "Proposal: partner options (also straight away when they ask the price)", money: "First time", movesOnWhen: "They pick one", attaches: ["the partner-levels sheet made for this brand, every price per event"] },
   { n: 5, email: "Agreement + invoice", money: "Yes", movesOnWhen: "Signed and paid", attaches: ["a one-page agreement", "the invoice"] },
 ];
 
@@ -37,11 +37,11 @@ export const FOLLOW_UPS = 1;
  */
 export const FLOW_TEMPLATES = {
   followUp:
-    "{hi}\n\nOne quick follow-up on The Learning Club. Rather than describe it, I'd be happy to show you: a sample run of show for the evening, a sketch of what a series of six could look like, and a breakdown of the kind of people we'd have in the room, all built around {brand}. Just say the word and I'll send them over.",
+    "{hi}\n\nOne follow-up on The Learning Club: rather than describe it, I've attached a short 3-page PDF built around {brand}.\nIt shows how the evening will run, what a series of six could look like, and who will be in the room.\nIf any of it fits, just reply and I'll take it from there.",
   cover:
     "{hi}\n\nHere's a short 3-page PDF, built around {brand}:\n\n1. Run of show: how the evening flows, and where {brand} comes in: \"{segment}\", a segment led by {brand} or by our host.\n2. A series of six: how the room could grow into {arc}.\n3. Who's in the room: the kinds of people we'd invite, shaped around who you told us you want to reach.\n\nEverything here can bend to your launches and your audience. Tell me what you'd change and I'll come back with options for how {brand} could take part.",
   proposal:
-    "{hi}\n\nThanks for the notes. I've folded them in. Here's how {brand} could take part:\n\n• Partner: \"{segment}\", led by {brand} or by our host, with your brand in the room and on the guest materials.\n• Presenting partner: everything above, plus \"presented by {brand}\" on the event and the guest list shaped around your audience.\n• Title partner: The Learning Club: {topic}, with {brand}. Your name on the night and first say on the format.\n\nEach level works for one club or for the series of six as a founding partner. Prices for each are on the attached one-pager. If you'd rather supply product than cash, we can do that too.\n\nWhich feels closest?",
+    "{hi}\n\nThanks for your note. Here's how {brand} could take part in The Learning Club: {topic}, built around \"{segment}\", led by {brand} or by our host. Every price is per event:\n\n{levels}\n\nLead is the level brands like {brand} would benefit most from. A series of six: the same per-event price for each club, as a founding partner. The attached sheet has the details.\n\nTo say yes, reply with the level; we send a one-page agreement and an invoice, payment due within 14 days, and then we set the date with you.",
   confirm:
     "{hi}\n\nWonderful, we're thrilled to have {brand} as {level}. Attached are a one-page agreement and the invoice. Once both are back, we'll lock the date with you and start shaping the guest list around your audience.",
   callTimes:
@@ -51,6 +51,11 @@ export const FLOW_TEMPLATES = {
 } as const;
 
 export type FlowTemplate = keyof typeof FLOW_TEMPLATES;
+
+/** The proposal's level lines, the same levels and words as that brand's sheet (renderBrandPitch). */
+export function proposalLevelLines(levels: ReadonlyArray<{ label: string; priceUsd: number | null; head: string; adds: readonly string[] }>): string {
+  return levels.map((l) => `• ${l.label} · ${l.priceUsd ? `$${l.priceUsd.toLocaleString("en-US")} per event` : "in kind"}: ${l.head ? `${l.head.replace(/:$/, "")} ` : ""}${l.adds.join("; ")}.`).join("\n");
+}
 
 /** A template filled in. Every placeholder must be given: a missing one throws rather than send "{brand}". */
 export function fillTemplate(name: FlowTemplate, values: Record<string, string>): string {

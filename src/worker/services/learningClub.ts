@@ -19,7 +19,10 @@ import { isProviderOutage } from "../../shared/ai/providerFailure";
 import { APPROVED_SEND_ENV_KEY, type ApprovedSendMarker, type EmailAttachment } from "../effects/emailTransport";
 import { renderHtmlPdf, type PdfRenderer } from "../effects/htmlPdf";
 import { renderedPdfProblem } from "../../shared/pdf/renderedPdf";
-import { renderBrandPitch, renderInternalOnePager, type TlcClubView, type TlcInternalView } from "../../shared/tlc/pitch";
+import { renderBrandPitch, renderInternalOnePager, sponsorOf, type TlcClubView, type TlcInternalView } from "../../shared/tlc/pitch";
+
+const dripRules = async (env: Env, firmScope: string): Promise<Array<{ code: string | null }>> =>
+  (await env.WP_OS_DB.prepare("SELECT code FROM tlc_wynn_rule WHERE active = 1 AND firm_scope = ?1").bind(firmScope).all<{ code: string | null }>().catch(() => ({ results: [] as Array<{ code: string | null }> }))).results ?? [];
 import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
 import { TLC_BRAND_SALES_JOB } from "../../shared/policy/outsideEmail";
 import { outsideEmailAllowed } from "./outsideEmail";
@@ -216,6 +219,8 @@ export interface TlcDealRow {
   yes_at?: string | null;
   /** Her framing for this brand, from her email (0284). */
   owner_angle?: string | null;
+  /** Research marks the brand as large enough to fund a whole room (1), or not (0); NULL is unknown (0291). */
+  large_brand?: number | null;
   firm_scope: string;
 }
 
@@ -707,6 +712,12 @@ export interface DripResult {
   addressRefused?: string[];
   /** First emails waiting because NeverBounce could not be asked yet; the next pass asks again. */
   addressWaiting?: number;
+  /** Emails held because the brand's samples PDF could not be made yet (SAMPLES_PDF_NOT_READY); tried again each pass. */
+  samplesHeld?: string[];
+  /** Follow-ups (email 2, with the samples PDF) queued to go on their own, approved with email 1. */
+  followUpsQueued?: number;
+  /** What the send-pause notice did this pass (services/tlcSendPause.ts). */
+  pause?: string;
 }
 const emptyDrip = (): DripResult => ({ due: 0, held: 0, awaitingApproval: 0, sent: 0, gate: { open: false, reasons: [] }, newDrafts: [], sentBrands: [], waitingForAllowance: 0 });
 
@@ -734,7 +745,7 @@ export async function brandGateFor(env: Env): Promise<{ open: boolean; reasons: 
   return brandSendGate(await tlcSettings(env), await tlcOutside(env), await contentHashes(env));
 }
 
-export async function fileDraft(env: Env, deal: Pick<TlcDealRow, "id" | "brand" | "contact_email" | "drip_step">, mail: { subject: string; text: string }, firmScope = "west-peek", redraftNote: string | null = null): Promise<string> {
+export async function fileDraft(env: Env, deal: Pick<TlcDealRow, "id" | "brand" | "contact_email" | "drip_step">, mail: { subject: string; text: string }, firmScope = "west-peek", redraftNote: string | null = null, attachments: readonly EmailAttachment[] = []): Promise<string> {
   const wynn = actorFor(WYNN, firmScope);
   // Every brand email ends with the mailing-address footer (owner, 1 Nov 2026): filed, previewed and sent with it.
   mail = { ...mail, text: withBrandFooter(mail.text) };
@@ -766,14 +777,14 @@ export async function fileDraft(env: Env, deal: Pick<TlcDealRow, "id" | "brand" 
   const requestId = `eer_${crypto.randomUUID()}`;
   await env.WP_OS_DB.prepare(
     "INSERT INTO external_effect_request (id, effect_type, destination, payload_json, requested_by_type, requested_by_id, outside_job) VALUES (?1, 'email.send', ?2, ?3, 'AI', ?4, ?5)",
-  ).bind(requestId, deal.contact_email, JSON.stringify({ subject: mail.subject, text: mail.text, reply_to: BRAND_REPLY_TO, ...threading }), WYNN, TLC_BRAND_SALES_JOB).run();
+  ).bind(requestId, deal.contact_email, JSON.stringify({ subject: mail.subject, text: mail.text, reply_to: BRAND_REPLY_TO, ...threading, ...(attachments.length ? { attachments } : {}) }), WYNN, TLC_BRAND_SALES_JOB).run();
   const { requestApproval } = await import("./approvals");
   const card = await requestApproval(env, wynn, {
     action_key: "effect.email.send",
     object_type: "external_effect_request",
     object_id: requestId,
-    title: `Wynn: TLC email ${deal.drip_step + 1} of 4 to ${deal.brand}`,
-    summary: `${mail.subject}\n\n${mail.text}`.slice(0, 1800),
+    title: `Wynn: TLC email ${deal.drip_step + 1} of ${TLC_DRIP_DAYS.length} to ${deal.brand}`,
+    summary: `${mail.subject}\n\n${mail.text}${attachments.length ? `\n\n(Attached: ${attachments.map((a) => a.filename).join(", ")})` : ""}`.slice(0, 1800),
     payload: { deal_id: deal.id, step: deal.drip_step },
     submit: true,
   });
@@ -823,11 +834,51 @@ export async function categoryRival(env: Env, deal: TlcDealRow, now: Date, sentO
   return row?.brand ?? null;
 }
 
+/**
+ * THE SAMPLES PDF IS MADE BEFORE EMAIL 1 GOES TO HER (owner, 4 Nov 2026). She approves email 1 and the brand's 3-page
+ * samples PDF together; email 2 (day 12) carries that PDF. Made once, kept, and reused; a PDF that cannot be made
+ * holds the email (the named reason) and the next pass tries again, so email 2 never goes without it.
+ */
+export const SAMPLES_NOT_READY = "SAMPLES_PDF_NOT_READY";
+async function samplesPdfFor(env: Env, deal: TlcDealRow, ev: TlcEventRow, deps: import("./tlcSamples").SamplesDeps): Promise<{ ok: true; samplesId: string; attachment: EmailAttachment } | { ok: false; why: string }> {
+  const { buildSamples, finalizeSamplesPdf } = await import("./tlcSamples");
+  const built = await buildSamples(env, deal, ev, {}, deps).catch((err) => ({ ok: false as const, id: "", detail: err instanceof Error ? err.message : String(err) }));
+  if (!built.ok) return { ok: false, why: `${SAMPLES_NOT_READY}: the samples could not be built (${built.detail.slice(0, 200)}); held, tried again next pass` };
+  try {
+    return { ok: true, samplesId: built.row.id, attachment: await finalizeSamplesPdf(env, built.row.id, deps) };
+  } catch (err) {
+    return { ok: false, why: `${SAMPLES_NOT_READY}: the samples PDF could not be made (${(err instanceof Error ? err.message : String(err)).slice(0, 200)}); held, tried again next pass` };
+  }
+}
+
+/**
+ * EMAIL 2 GOES ON ITS OWN (owner, 4 Nov 2026: the one follow-up is the only automatic brand send). Its card is decided
+ * at filing, by whoever approved email 1 (her, when she wrote email 1 herself), with that approval named; the
+ * executor's owner-approval guard lets only this step through without her decision on the email itself.
+ */
+async function approveFollowUpWithFirst(env: Env, dealId: string, cardId: string): Promise<void> {
+  const first = await env.WP_OS_DB.prepare(
+    "SELECT a.id, a.decided_by FROM tlc_drip_message m JOIN approval_card a ON a.id = m.approval_card_id WHERE m.deal_id = ?1 AND m.step = 0 AND m.state = 'SENT' AND a.state = 'approved'",
+  ).bind(dealId).first<{ id: string; decided_by: string | null }>();
+  const { actorForFirmUser } = await import("./authorize");
+  const by = await actorForFirmUser(env, first?.decided_by ?? TLC_OWNER.firmUserId);
+  if (!by) return;
+  const { decideApproval } = await import("./approvals");
+  await decideApproval(env, by, cardId, "approved", first
+    ? `The one follow-up, approved with email 1 (card ${first.id}); owner ruling 4 Nov 2026: it goes on its own.`
+    : "The one follow-up to her own email 1; owner ruling 4 Nov 2026: it goes on its own.");
+}
+
 export async function runDrip(env: Env, now: Date, firmScope = "west-peek", replyDeps: import("./tlcBrandReply").BrandReplyDeps = {}, angleWriter?: import("./tlcOwnerInstruction").AngleWriter): Promise<DripResult> {
   const settings = await tlcSettings(env);
   const gate = brandSendGate(settings, await tlcOutside(env), await contentHashes(env));
   const result: DripResult = { ...emptyDrip(), gate };
   const wynn = actorFor(WYNN, firmScope);
+  // A pitch or playbook change that closed the gate is told to her once, by email; reopening clears the stop.
+  {
+    const { tellSendPause } = await import("./tlcSendPause");
+    result.pause = await tellSendPause(env, now, firmScope, gate).catch((err) => `the pause notice could not be sent: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // 1 · Execute what a partner has approved (gate re-checked: a switch turned off stops it here).
   if (gate.open) {
@@ -885,6 +936,8 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
         const first = deal.first_sent_at ?? now.toISOString();
         const step = m.step + 1;
         await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'SENT', sent_at = ?2 WHERE id = ?1").bind(m.id, now.toISOString()).run();
+        // Email 2 carried the samples PDF: step 3 of her flow is done, so their next interest gets the proposal.
+        if (m.step === 1) await env.WP_OS_DB.prepare("UPDATE tlc_samples SET state = 'SENT', sent_at = ?2 WHERE deal_id = ?1 AND state = 'READY' AND pdf_r2_key IS NOT NULL").bind(deal.id, now.toISOString()).run();
         sendRoom -= 1;
         result.sentBrands.push(deal.brand);
         await env.WP_OS_DB.prepare(
@@ -945,7 +998,7 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
     const approvedFirst = deal.drip_step === 0 ? await approvedDayZeroFor(env, deal.brand, ev.month, ev.topic, firmScope) : null;
     const mail = approvedFirst
       ? approvedDayZeroEmail(approvedFirst, deal.contact_name)
-      : dripEmail({ step: deal.drip_step, brand: deal.brand, contactName: deal.contact_name, topic: ev.topic, month: ev.month, eventDate: ev.event_date, why: deal.why_fit, seats: seatsOf(ev) });
+      : dripEmail({ step: deal.drip_step, brand: deal.brand, contactName: deal.contact_name, topic: ev.topic, month: ev.month, eventDate: ev.event_date, why: deal.why_fit, seats: seatsOf(ev), series: sponsorOf(deal, await dripRules(env, firmScope)).series });
     if (!gate.open) {
       const why = gate.reasons.join("; ");
       await env.WP_OS_DB.prepare(
@@ -975,7 +1028,24 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
       const m = await ownerAngleMail(env, { brand: deal.brand, contact_name: deal.contact_name, owner_angle: deal.owner_angle }, { month: ev.month, topic: ev.topic }, angleWriter);
       toFile = { subject: m.subject, text: m.text };
     }
-    const cardId = await fileDraft(env, deal, toFile, firmScope);
+    // The samples PDF exists before email 1 reaches her (she approves both together) and goes with email 2.
+    const samples = await samplesPdfFor(env, deal, ev, replyDeps.samples ?? {});
+    if (!samples.ok) {
+      await env.WP_OS_DB.prepare(
+        `INSERT INTO tlc_drip_message (id, deal_id, step, subject, body, state, held_reason) VALUES (?1, ?2, ?3, ?4, ?5, 'HELD', ?6)
+         ON CONFLICT (deal_id, step) DO UPDATE SET subject = excluded.subject, body = excluded.body, held_reason = excluded.held_reason
+         WHERE tlc_drip_message.state IN ('HELD','FAILED')`,
+      ).bind(`tdm_${crypto.randomUUID()}`, deal.id, deal.drip_step, toFile.subject, toFile.text, samples.why).run();
+      result.held += 1;
+      result.samplesHeld = [...(result.samplesHeld ?? []), brandDisplayName(deal.brand)];
+      continue;
+    }
+    const cardId = await fileDraft(env, deal, toFile, firmScope, null, deal.drip_step === 1 ? [samples.attachment] : []);
+    if (deal.drip_step === 1) {
+      await approveFollowUpWithFirst(env, deal.id, cardId);
+      result.followUpsQueued = (result.followUpsQueued ?? 0) + 1;
+      continue;
+    }
     result.awaitingApproval += 1;
     result.newDrafts.push({ brand: deal.brand, month: ev.month, step: deal.drip_step, cardId });
   }
@@ -2355,6 +2425,9 @@ export async function handleTlcApprove(ctx: RouteContext): Promise<Response> {
       return json({ error: "changed", detail: `the ${w === "pitch" ? "brand pitch" : "playbook"} changed since this page loaded; look at it again, then approve` }, { status: 409 });
     }
     await set(w === "pitch" ? PITCH_APPROVAL_HASH_SETTING : PLAYBOOK_APPROVAL_HASH_SETTING, current);
+    // The words approved, kept so a later change can be listed line by line (services/tlcSendPause.ts).
+    const { APPROVED_TEXT_SETTING } = await import("./tlcSendPause");
+    await set(APPROVED_TEXT_SETTING[w], (await contentTexts(ctx.env))[w]);
   }
   if (w === "call_link") {
     if (!parsed.data.call_link || !/^https:\/\//.test(parsed.data.call_link)) return json({ error: "invalid_input", detail: "a call link starts with https://" }, { status: 400 });
@@ -2381,6 +2454,8 @@ const dealPatch = z.object({
   in_kind_value_usd: z.number().min(0).max(1_000_000).optional(),
   wants: z.string().max(1000).nullish(),
   tier: z.enum(["TITLE", "PARTNER", "LEAD", "PRESENTING", "PRODUCT"]).optional(),
+  // From the brand's research: large enough to fund a whole room. Only then does its sheet show Title (4 Nov 2026).
+  large_brand: z.boolean().optional(),
 });
 
 /** POST /api/tlc/deals/:id — record the offer after a call; WAITING_ON_OWNERS opens the decision. */
@@ -2421,8 +2496,8 @@ export async function handleTlcDeal(ctx: RouteContext): Promise<Response> {
   await ctx.env.WP_OS_DB.prepare(
     `UPDATE tlc_deal SET stage = COALESCE(?2, stage), cash_offer_usd = COALESCE(?3, cash_offer_usd), in_kind_offer = COALESCE(?4, in_kind_offer),
        in_kind_value_usd = COALESCE(?5, in_kind_value_usd), wants = COALESCE(?6, wants), next_send_at = CASE WHEN ?2 IS NOT NULL AND ?2 NOT IN ('PROSPECT','PITCHED') THEN NULL ELSE next_send_at END,
-       tier = COALESCE(?8, tier), yes_at = CASE WHEN yes_at IS NULL AND ?2 IN ('CALL','WAITING_ON_OWNERS','AGREED','PAID','DELIVERED') THEN ?7 ELSE yes_at END, updated_at = ?7 WHERE id = ?1`,
-  ).bind(deal.id, p.stage ?? null, p.cash_offer_usd ?? null, p.in_kind_offer ?? null, p.in_kind_value_usd ?? null, p.wants ?? null, now.toISOString(), p.tier ?? null).run();
+       tier = COALESCE(?8, tier), large_brand = COALESCE(?9, large_brand), yes_at = CASE WHEN yes_at IS NULL AND ?2 IN ('CALL','WAITING_ON_OWNERS','AGREED','PAID','DELIVERED') THEN ?7 ELSE yes_at END, updated_at = ?7 WHERE id = ?1`,
+  ).bind(deal.id, p.stage ?? null, p.cash_offer_usd ?? null, p.in_kind_offer ?? null, p.in_kind_value_usd ?? null, p.wants ?? null, now.toISOString(), p.tier ?? null, p.large_brand === undefined ? null : p.large_brand ? 1 : 0).run();
   let decisionCard: string | null = null;
   if (p.stage === "WAITING_ON_OWNERS") decisionCard = await openDecisionCard(ctx.env, (await ctx.env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(deal.id).first<TlcDealRow>())!, now);
   return json({ ok: true, decision_card_id: decisionCard });
@@ -2522,6 +2597,17 @@ export async function contentHashes(env: Env): Promise<{ pitch: string; playbook
   return {
     pitch: await sha256(evs.map((e) => `${e.month}\n${renderBrandPitch(clubViewOf(e))}`).join("\n\n")),
     playbook: await sha256(TLC_PLAYBOOK.join("\n")),
+  };
+}
+
+/** What an approval is of, as the plain lines a person reads: what the "what changed" list is made from. */
+export async function contentTexts(env: Env): Promise<{ pitch: string; playbook: string }> {
+  const evs = await eventsFrom(env, "SELECT * FROM tlc_event WHERE topic IS NOT NULL AND status NOT IN ('DONE','CANCELLED') ORDER BY month");
+  const plain = (html: string) => html.replace(/<style>[\s\S]*?<\/style>/g, "").replace(/<(?:\/?(?:li|p|h1|h2|div|section|footer|ol|ul)\b)[^>]*>/g, "\n").replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").split("\n").map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean).join("\n");
+  return {
+    pitch: evs.map((e) => `${monthWords(e.month)}\n${plain(renderBrandPitch(clubViewOf(e)))}`).join("\n"),
+    playbook: TLC_PLAYBOOK.join("\n"),
   };
 }
 

@@ -22,7 +22,8 @@ import { actorForFirmUser, type Actor } from "./authorize";
 import type { TlcDealRow, TlcEventRow } from "./learningClub";
 import { freeSlots, isFree, pickedSlot, proposedTime, slotWords } from "../../shared/tlc/callSlots";
 import { isYesToSamples, requestsSamples, samplesCoverEmail } from "../../shared/tlc/samples";
-import { fillTemplate, hiLine, levelPicked } from "../../shared/tlc/brandFlow";
+import { fillTemplate, hiLine, levelPicked, proposalLevelLines } from "../../shared/tlc/brandFlow";
+import { brandLevels, sponsorOf, type TlcSponsorView } from "../../shared/tlc/pitch";
 import { herBusy, makeEvent as defaultMakeEvent, callEvent, type BusyReader, type EventMaker } from "./tlcCalls";
 import { SamplesPdfError, buildSamples, finalizeSamplesPdf, reviseSamples, samplesForDeal, samplesPreviewLink, samplesRevisions, tlcRevisionWriter, storePdf, storedAttachment, textPage, type SamplesDeps, type StoredFile } from "./tlcSamples";
 
@@ -73,11 +74,13 @@ export interface DraftExtras {
   /** A call they asked for (her SCHEDULE_THEIR_CALL rule): the times to offer from her calendar, or the time agreed. */
   callPlan?: CallPlan | null;
   samplesAttached?: boolean;
+  /** This brand's own levels (its sheet's), so a draft never offers Title or in-kind where the sheet does not. */
+  levels?: ReturnType<typeof brandLevels>;
 }
 export type CallPlan = { offer: string[] } | { agreed: string };
 export type ReplyDrafter = (env: Env, actor: Actor, input: ReplyDraftInput & DraftExtras) => Promise<{ ok: boolean; body: string; detail: string }>;
 export type BrandResearcher = (env: Env, actor: Actor, prompt: string) => Promise<{ ok: boolean; text: string; detail: string }>;
-export type MailboxReader = (env: Env, query: string) => Promise<Array<BrandMessage & { from: string }>>;
+export type MailboxReader = (env: Env, query: string, maxPages?: number) => Promise<Array<BrandMessage & { from: string }>>;
 export interface BrandReplyDeps {
   now?: Date; drafter?: ReplyDrafter; mailbox?: MailboxReader | null; researcher?: BrandResearcher;
   /** Her calendar's busy times, and the event maker (tests pass fakes; production reads and writes her Google calendar). */
@@ -162,7 +165,7 @@ const defaultDrafter: ReplyDrafter = async (env, actor, i) => {
     `Why this brand fits (one sentence may be used): ${i.why ?? "a natural fit for the room"}`,
     ...(i.noMoney
       ? ["No money yet: do NOT mention any price, fee, budget, amount or partnership level; that waits until the samples have gone. Never suggest a call to get there."]
-      : ["Partnership levels (no category exclusivity; never promise any):", ...tierLines().map((l) => `- ${l}`)]),
+      : ["Partnership levels for this brand, every price per event, lowest first (no category exclusivity; never promise any; never offer a level not listed here):", ...tierLines(i.levels).map((l) => `- ${l}`)]),
     ...(i.research ? ["", "What Wynn found researching them (use it; invent nothing beyond it):", i.research] : []),
     i.intent === "YES" && i.pitchUrl && !i.noMoney ? `They said yes: say the one-page pitch PDF is attached and also at ${i.pitchUrl}.` : "",
     ...(i.samplesAttached ? ["The brand already requested the materials. The current samples PDF is attached. Say it is attached; never offer to send it later."] : []),
@@ -237,7 +240,8 @@ async function draftFor(env: Env, deal: TlcDealRow, ev: TlcEventRow, intent: Bra
   // Money first appears at step 4 of her flow: once the samples went, prices may be discussed.
   const noMoney = noMoneyNow(rules, deal.stage) && !(await flowStep(env, deal.id)).samplesSent;
   const weHost = rules.some((r) => r.code === WE_HOST);
-  const out = await (deps.drafter ?? defaultDrafter)(env, wynnActor(deal.firm_scope), { ...input, note: redo?.note ?? null, previous: redo?.previous ?? null, rules, noMoney, research: redo?.research ?? null, callPlan, samplesAttached: redo?.samplesAttached })
+  const levels = brandLevels(await sponsorFor(env, deal, theirText), ev.topic ?? "");
+  const out = await (deps.drafter ?? defaultDrafter)(env, wynnActor(deal.firm_scope), { ...input, note: redo?.note ?? null, previous: redo?.previous ?? null, rules, noMoney, research: redo?.research ?? null, callPlan, samplesAttached: redo?.samplesAttached, levels })
     .catch((err) => ({ ok: false, body: "", detail: String(err) }));
   const words = out.ok && draftProblems(out.body, intent, { noMoney, weHost, callPlan }).length === 0 && (!redo?.samplesAttached || (/\battach(?:ed|ment)\b/i.test(out.body) && !/\b(?:can|could|happy to) (?:send|share)\b/i.test(out.body)))
     ? out.body
@@ -437,12 +441,14 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
     if (!agreed) offered = freeSlots(busy, now, 3);
     const plan: CallPlan | null = agreed ? { agreed } : offered && offered.length ? { offer: offered } : null;
     body = await draftFor(env, deal, ev, intent, words, deps, null, plan);
-  } else if ((step = await flowStep(env, deal.id)) && (step.proposalSent ? levelPicked(words) !== null : step.samplesSent)) {
+  } else if ((step = await flowStep(env, deal.id)) && (step.proposalSent ? levelPicked(words) !== null : step.samplesSent || asksPrice(words))) {
     /*
      * STEPS 4 AND 5 OF HER FLOW (shared/tlc/brandFlow.ts). After the samples, their interest or questions get the
      * proposal: the partner options in words, the prices on the attached one-pager (the first time money appears).
      * After the proposal, the level they pick gets the confirmation, with a one-page agreement and the invoice
      * (West Peek's own payment link; the OS never takes or processes a payment). Both are drafts for her approval.
+     * A BRAND THAT ASKS THE PRICE GOES STRAIGHT TO STEP 4 (owner, 4 Nov 2026), samples sent or not: the proposal and
+     * the partner-levels sheet made for that brand (its own levels, every price per event). Still a draft for her.
      */
     const files: StoredFile[] = [];
     const brandName = brandDisplayName(deal.brand);
@@ -452,9 +458,10 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
     if (!step.proposalSent) {
       kind = "PROPOSAL";
       const { clubViewOf } = await import("./learningClub");
-      const { renderBrandPitch } = await import("../../shared/tlc/pitch");
-      keep(await storePdf(env, `tlc-flow/${deal.id}/proposal-${crypto.randomUUID()}.pdf`, `The Learning Club - ${safe(ev.topic ?? "")} - partner levels.pdf`, renderBrandPitch(clubViewOf(ev)), deps.samples ?? {}));
-      body = fillTemplate("proposal", { hi: hiLine(deal.contact_name), brand: brandName, topic: ev.topic ?? "", segment: step.segment ?? `Where ${brandName} comes in` });
+      const { renderBrandPitch, brandLevels } = await import("../../shared/tlc/pitch");
+      const sponsor = await sponsorFor(env, deal, words);
+      keep(await storePdf(env, `tlc-flow/${deal.id}/proposal-${crypto.randomUUID()}.pdf`, `The Learning Club - ${safe(ev.topic ?? "")} - partner levels - ${safe(brandName)}.pdf`, renderBrandPitch(clubViewOf(ev), sponsor), deps.samples ?? {}));
+      body = fillTemplate("proposal", { hi: hiLine(deal.contact_name), brand: brandName, topic: ev.topic ?? "", segment: step.segment ?? `Where ${brandName} comes in`, levels: proposalLevelLines(brandLevels(sponsor, ev.topic ?? "")) });
     } else {
       kind = "CONFIRM";
       tier = levelPicked(words);
@@ -462,8 +469,9 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
       const t = TLC_TIERS[tier as keyof typeof TLC_TIERS];
       const cash = t.priceUsd ?? 0;
       const due = new Date(now.getTime() + 14 * 86_400_000).toISOString().slice(0, 10);
+      const picked = brandLevelsFor(await sponsorFor(env, deal, words), ev.topic ?? "").find((l) => l.key === tier);
       keep(await storePdf(env, `tlc-flow/${deal.id}/agreement-${crypto.randomUUID()}.pdf`, `The Learning Club - ${safe(brandName)} - agreement.pdf`,
-        textPage("Partnership agreement", sponsorshipAgreement({ brand: brandName, topic: ev.topic ?? "", eventDate: `${ev.event_date} (tentative)`, cashUsd: cash, inKind: tier === "PRODUCT" ? "product for the night, as agreed" : null, deliverables: `${t.label}: ${t.gets}`, dueDate: due })), deps.samples ?? {}));
+        textPage("Partnership agreement", sponsorshipAgreement({ brand: brandName, topic: ev.topic ?? "", eventDate: `${ev.event_date} (tentative)`, cashUsd: cash, inKind: tier === "PRODUCT" ? "product for the night, as agreed" : null, deliverables: `${t.label}, per event: ${picked ? `${picked.head ? `${picked.head} ` : ""}${picked.adds.join("; ")}` : t.gets.replace(/<Brand>/g, brandName).replace(/<topic>/g, ev.topic ?? "")}`, dueDate: due })), deps.samples ?? {}));
       if (cash > 0) {
         keep(await storePdf(env, `tlc-flow/${deal.id}/invoice-${crypto.randomUUID()}.pdf`, `The Learning Club - ${safe(brandName)} - invoice.pdf`,
           textPage("Invoice", invoiceNote({ brand: brandName, topic: ev.topic ?? "", month: ev.month, cashUsd: cash, dueDate: due, paymentUrl: (ev as { sponsor_payment_url?: string | null }).sponsor_payment_url ?? null })), deps.samples ?? {}));
@@ -488,6 +496,19 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
   return "DRAFTED";
 }
 
+/** A brand asking what it costs ("How much is this to do?", pricing, cost, rates, budget): straight to step 4. */
+export const PRICE_ASK = /\bhow much\b|\bpricing\b|\bprices?\b|\bcosts?\b|\brates\b|\bbudget\b/i;
+export const asksPrice = (words: string): boolean => PRICE_ASK.test(words);
+/** A brand asking to own the whole room: the one case Title is offered without the large-brand flag (rule H). */
+export const OWN_THE_ROOM = /\btitle (?:partner|sponsor)\b|\bown(?:ing)? the (?:whole )?room\b|\bthe whole room\b|\bonly sponsor\b|\bexclusive sponsor\b/i;
+
+/** The sponsor view of a deal: its own row, Wynn's rules, and whether this message asks to own the room. */
+export async function sponsorFor(env: Env, deal: TlcDealRow, theirWords = ""): Promise<TlcSponsorView> {
+  const base = sponsorOf(deal, await wynnRules(env, deal.firm_scope));
+  return OWN_THE_ROOM.test(theirWords) ? { ...base, askedToOwnRoom: true } : base;
+}
+const brandLevelsFor = (s: TlcSponsorView, topic: string) => brandLevels(s, topic);
+
 /** Where a deal is in her flow: the samples sent (step 3 done), the proposal sent (step 4 done), the segment name. */
 export async function flowStep(env: Env, dealId: string): Promise<{ samplesSent: boolean; proposalSent: boolean; segment: string | null }> {
   const s = await env.WP_OS_DB.prepare("SELECT input_json FROM tlc_samples WHERE deal_id = ?1 AND state = 'SENT'").bind(dealId).first<{ input_json: string }>();
@@ -508,35 +529,52 @@ export async function offeredSamples(env: Env, dealId: string): Promise<boolean>
   return hit !== null;
 }
 
-/** Free-mail domains never establish a brand relationship on their own. */
-export const FREE_MAIL_DOMAINS = new Set(["gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com", "aol.com", "proton.me"]);
-const emailDomain = (email: string): string => email.trim().toLowerCase().split("@")[1] ?? "";
+/**
+ * FREE-MAIL DOMAINS NEVER MAKE SOMEONE PART OF A BRAND (owner, 4 Nov 2026): a sender at one of these belongs to a deal
+ * only as its own contact address or on a thread we sent. The one list.
+ */
+export const FREE_MAIL_DOMAINS: ReadonlySet<string> = new Set(["gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com", "aol.com", "proton.me"]);
+export const emailDomain = (email: string): string => email.trim().toLowerCase().split("@")[1] ?? "";
 
-/** Both intake and inbox use the same sent-thread or corporate-domain relationship. */
+/** The Message-IDs a raw message answers: its In-Reply-To and References headers (folded lines unfolded). */
+export function referencedIds(raw: string | undefined): string[] {
+  const head = (raw ?? "").split(/\r?\n\r?\n/)[0] ?? "";
+  return [...head.replace(/\r?\n[ \t]+/g, " ").matchAll(/^(?:In-Reply-To|References):(.+)$/gim)]
+    .flatMap((m) => [...m[1]!.matchAll(/<([^>]+)>/g)].map((x) => normalizeMid(x[1])));
+}
+
+/**
+ * THE DEALS A MESSAGE BELONGS TO (owner, 4 Nov 2026; the Pinecone VP's "How much is this to do?" was never read). A
+ * live deal owns a message when it is from the deal's contact address; or it is on a thread we sent that deal (the
+ * Gmail thread, or In-Reply-To / References naming a Message-ID we sent), whoever sent it; or, once we have written
+ * to the deal, its sender is at the contact's own domain, never a free-mail one. Intake and inbox both ask this.
+ */
 export async function dealsForSender(env: Env, from: string, message: { text?: string; threadId?: string } = {}): Promise<TlcDealRow[]> {
   const address = (addressIn(from) ?? from).trim().toLowerCase();
   if ([TLC_OWNER.email.toLowerCase(), INTAKE_MAILBOX.toLowerCase()].includes(address)) return [];
   const domain = emailDomain(address);
-  const head = (message.text ?? "").split(/\r?\n\r?\n/)[0] ?? "";
-  const refs = [...head.replace(/\r?\n[ \t]+/g, " ").matchAll(/^(?:In-Reply-To|References):(.+)$/gim)]
-    .flatMap((m) => [...m[1]!.matchAll(/<([^>]+)>/g)].map((x) => normalizeMid(x[1])));
+  const refs = referencedIds(message.text);
   return (await env.WP_OS_DB.prepare(
     `SELECT d.* FROM tlc_deal d WHERE d.stage NOT IN ('DECLINED','STOPPED')
       AND (d.stop_reason IS NULL OR d.stop_reason = 'REPLIED')
       AND (lower(d.contact_email) = ?1
-        OR (?2 != '' AND lower(substr(d.contact_email, instr(d.contact_email, '@') + 1)) = ?2)
+        OR (?2 != '' AND d.first_sent_at IS NOT NULL AND lower(substr(d.contact_email, instr(d.contact_email, '@') + 1)) = ?2)
         OR EXISTS (SELECT 1 FROM external_effect_request e
           WHERE e.id IN (SELECT effect_request_id FROM tlc_drip_message WHERE deal_id = d.id AND state = 'SENT'
             UNION SELECT effect_request_id FROM tlc_brand_reply WHERE deal_id = d.id AND state = 'SENT'
             UNION SELECT effect_request_id FROM tlc_pitch_followup WHERE deal_id = d.id AND state = 'SENT')
           AND (e.gmail_thread_id = ?3 OR trim(e.rfc_message_id, '<>') IN (SELECT value FROM json_each(?4)))))`,
   ).bind(address, FREE_MAIL_DOMAINS.has(domain) ? "" : domain, message.threadId ?? null, JSON.stringify(refs)).all<TlcDealRow>()).results ?? [];
-
 }
 
-const defaultMailbox: MailboxReader = async (env, query) => {
+/** How many inbox messages one pass reads per search (25 a page): bounded, so a busy inbox never runs the pass out. */
+export const INBOX_PAGES = { brands: 4, threads: 2 } as const;
+/** Mail on our threads from people outside the brand's domain is looked for in this recent window, each pass. */
+export const THREAD_WINDOW_DAYS = 3;
+
+const defaultMailbox: MailboxReader = async (env, query, maxPages = 1) => {
   const token = await serviceAccountToken(env, [GMAIL_READ_SCOPE], TLC_OWNER.email);
-  return (await listGmailRaw(token, query)).map(({ raw, internalDate, threadId }) => {
+  return (await listGmailRaw(token, query, 25, fetch, maxPages)).map(({ raw, internalDate, threadId }) => {
     const head = raw.split(/\r?\n\r?\n/)[0] ?? "";
     const h = (name: string) => new RegExp(`^${name}:\\s*(.*(?:\\r?\\n[ \\t].*)*)`, "im").exec(head)?.[1]?.replace(/\r?\n[ \t]+/g, " ").trim() ?? "";
     return { threadId: threadId ?? undefined, messageId: h("Message-ID"), from: h("From"), subject: h("Subject"), text: raw, receivedAt: new Date(Number(internalDate ?? Date.now())).toISOString() };
@@ -557,7 +595,8 @@ export async function processBrandReplies(env: Env, now: Date, firmScope = "west
   ).bind(firmScope).all<TlcDealRow>()).results ?? [];
   for (const deal of unread) {
     const since = new Date(Date.parse(deal.replied_at ?? now.toISOString()) - 10 * 60_000).toISOString();
-    const rows = (await env.WP_OS_DB.prepare("SELECT message_id, from_address, r2_key, subject, received_at FROM inbound_message WHERE received_at >= ?1 ORDER BY received_at")
+    // Bounded: the first 50 messages the door kept after their reply; each is matched the same way as the inbox.
+    const rows = (await env.WP_OS_DB.prepare("SELECT message_id, from_address, r2_key, subject, received_at FROM inbound_message WHERE received_at >= ?1 ORDER BY received_at LIMIT 50")
       .bind(since).all<{ message_id: string | null; from_address: string; r2_key: string | null; subject: string; received_at: string }>()).results ?? [];
     for (const row of rows) {
       const obj = row.r2_key && env.WP_OS_DOCUMENTS ? await env.WP_OS_DOCUMENTS.get(row.r2_key) : null;
@@ -573,10 +612,20 @@ export async function processBrandReplies(env: Env, now: Date, firmScope = "west
       "SELECT * FROM tlc_deal WHERE firm_scope = ?1 AND first_sent_at IS NOT NULL AND stage NOT IN ('DECLINED','STOPPED') AND (stop_reason IS NULL OR stop_reason = 'REPLIED')",
     ).bind(firmScope).all<TlcDealRow>()).results ?? [];
     const addresses = [...new Set(live.map((x) => x.contact_email.toLowerCase()))];
+    // Anyone at a live brand's own domain, plus each contact's own address (a free-mail contact stays an address).
+    const domains = [...new Set(live.map((x) => emailDomain(x.contact_email)).filter((x) => x && !FREE_MAIL_DOMAINS.has(x)))];
     if (addresses.length) {
       const after = Math.floor(Math.min(...live.map((x) => Date.parse(x.first_sent_at!))) / 1000);
+      const ours = [...new Set([TLC_OWNER.email, INTAKE_MAILBOX].map((a) => emailDomain(a)))];
+      const recent = Math.max(after, Math.floor((now.getTime() - THREAD_WINDOW_DAYS * 86_400_000) / 1000));
       try {
-        const found = await (deps.mailbox ?? defaultMailbox)(env, `in:inbox after:${after}`);
+        const reader = deps.mailbox ?? defaultMailbox;
+        // Two bounded searches: the brands' own people since our first email, and, in a recent window, anyone else
+        // (an agency, a free-mail colleague) who answered on a thread we sent. dealsForSender decides each one.
+        const byBrand = await reader(env, `from:(${[...addresses, ...domains].join(" OR ")}) after:${after}`, INBOX_PAGES.brands);
+        const onThread = await reader(env, `in:inbox after:${recent} -from:(${ours.join(" OR ")})`, INBOX_PAGES.threads);
+        const seen = new Set<string>();
+        const found = [...byBrand, ...onThread].filter((m) => { const k = normalizeMid(m.messageId) || `${m.from}|${m.receivedAt}`; if (seen.has(k)) return false; seen.add(k); return true; });
         for (const m of found) {
           const from = (addressIn(m.from) ?? m.from).toLowerCase();
           const matches = new Set((await dealsForSender(env, from, m)).map((x) => x.id));
@@ -584,7 +633,7 @@ export async function processBrandReplies(env: Env, now: Date, firmScope = "west
             counts[await takeBrandReply(env, deal, m, d)] += 1;
           }
         }
-        polled = `inbox read (${found.length} message(s), ${addresses.length} live contact(s))`;
+        polled = `inbox read (${found.length} message(s), ${addresses.length} live contact(s), ${domains.length} brand domain(s))`;
       } catch (err) {
         polled = `inbox not read: ${err instanceof Error ? err.message : String(err)}`.slice(0, 200);
       }
@@ -695,7 +744,7 @@ export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-
       tldr: `${waiting.length} brand${many ? "s" : ""} replied to your Learning Club email${many ? "s" : ""}. ${BRAND_REPLY_ASK}.`,
       tldrBullets: many ? ['Reply "approved" to send all', 'Or "approve 1" · "skip 2" · "change 2: what to change"'] : ['Reply "approved" to send it', "Or reply with your changes"],
       sections: [
-        { label: "Who replied", bullets: waiting.map((r, i) => `${i + 1} · ${brandDisplayName(r.brand)} (${monthWords(r.month)}): ${r.kind === "PROPOSAL" ? "step 4: the proposal (prices on the attached one-pager)" : r.kind === "CONFIRM" ? `step 5: ${r.tier ? TLC_TIER_LABEL(r.tier) : "a level"} agreed (agreement and invoice attached)` : r.agreed_slot ? `a call, ${slotWords(r.agreed_slot)}` : r.intent === "CALL" ? "wants a call (times from your calendar offered)" : r.samples_id ? "said yes to the samples (open the samples page in the email; the PDF is made when you approve)" : r.intent === "YES" ? "said yes" : "asked a question"}`).slice(0, 6) },
+        { label: "Who replied", bullets: waiting.map((r, i) => `${i + 1} · ${brandDisplayName(r.brand)} (${monthWords(r.month)}): ${r.kind === "PROPOSAL" ? "step 4: the proposal (their own partner-levels sheet attached)" : r.kind === "CONFIRM" ? `step 5: ${r.tier ? TLC_TIER_LABEL(r.tier) : "a level"} agreed (agreement and invoice attached)` : r.agreed_slot ? `a call, ${slotWords(r.agreed_slot)}` : r.intent === "CALL" ? "wants a call (times from your calendar offered)" : r.samples_id ? "said yes to the samples (open the samples page in the email; the PDF is made when you approve)" : r.intent === "YES" ? "said yes" : "asked a question"}`).slice(0, 6) },
         { label: "What happens on your word", bullets: ["Your answer goes from your own mailbox, on their thread", "A call they asked for moves the deal to Call", "Nothing goes to a brand until you say so"] },
       ],
       details: [...blocks.flatMap((b) => [b, ""]), `Ref ${ref}`].join("\n"),
