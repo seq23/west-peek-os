@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { isFirmSelfTest } from "../../shared/intake/firmSelfTest";
 import { isAdminOrWebsiteSubject } from "../../shared/intake/dealOrigin";
 import { appendEvent } from "../events";
 import { proposePerson } from "./networkOsClient";
@@ -266,7 +267,7 @@ export interface InboundOptions {
 
 /** What a non-card handler in the door did with a message. */
 export interface DoorHandled {
-  by: "tlc_draft_reply" | "tlc_brand_reply" | "tlc_brand_reply_approval" | "tlc_send_pause" | "packet_decision" | "clarification";
+  by: "tlc_draft_reply" | "tlc_brand_reply" | "tlc_brand_reply_approval" | "tlc_send_pause" | "packet_decision" | "clarification" | "firm_self_test";
   ref: string | null;
   detail: string;
 }
@@ -981,6 +982,21 @@ async function handleInboundEmailOnce(
    * It also CONSUMES the stream, so everything below reads `kept.text` rather than `message.raw`.
    */
   const kept = await keepTheMessage(env, { message, subject, sender, authority, firmScope });
+
+  // THE FIRM'S OWN "(ignore)" TEST SEND (6 Nov 2026): kept above, recorded here, and no card. See shared/intake/firmSelfTest.ts.
+  if (isFirmSelfTest({ from: sender, subject, verdict: authority.verdict, isPartner: authority.partnerAddress !== null })) {
+    await appendEvent(env, {
+      eventType: "inbound_email.self_test",
+      actorType: "system",
+      actorId: "inbound_email",
+      objectType: "inbound_email",
+      objectId: `${message.from}:${subject}`.slice(0, 200),
+      firmScope,
+      payload: { from: sender, to: message.to, subject, mailbox: INTAKE_MAILBOX, stored: kept.key },
+    });
+    options.onHandled?.({ by: "firm_self_test", ref: null, detail: "the firm's own test send, marked ignore" });
+    return;
+  }
 
   /*
    * THE THREADING HEADERS, READ ONCE FOR BOTH SIZES (27 Sep 2026). They used to be read below the
