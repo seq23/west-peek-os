@@ -117,7 +117,8 @@ describe("a brand replied", () => {
     for (const n of sends) {
       expect(n.to).toBe("sequoia@westpeek.ventures");
       expect(n.subject).toMatch(/^Wynn: 1 brand reply to approve · TLR-[A-Z0-9]{6}$/);
-      expect(n.text).toContain("Reply approved to send, or reply with changes");
+      // Both partners approve (owner, 6 Nov 2026): the ask names them both.
+      expect(n.text).toContain("Sequoia and Scooter each reply approved to send, or reply with changes");
     }
     expect(sends[0]!.text).toContain("Subject: Re: Vector + a small room in New York\n\nHi Sequoia,\n\nWhat do you have in mind?");
     expect(sends[1]!.text).toContain("Sounds interesting. Can we set up a call?");
