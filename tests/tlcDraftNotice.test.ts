@@ -325,7 +325,7 @@ describe("a queued email 2 in an older template never goes without the samples P
     await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET redraft_note = 'her words' WHERE deal_id = ?1").bind(mine).run();
     expect(await recomposeSecondEmails(env)).toEqual(["Second Co"]);
     const row = (id: string) => env.WP_OS_DB.prepare("SELECT m.body, m.state, m.held_reason FROM tlc_drip_message m WHERE m.deal_id = ?1").bind(id).first<{ body: string; state: string; held_reason: string | null }>();
-    const FILED = `${OLD}\n\n3055 Lombard St #471024, San Francisco, CA 94147`;
+    const FILED = `${OLD}\n\n2055 Lombard St #471024, San Francisco, CA 94147`;
     // Held, its words untouched: the drip files it again with the PDF; the old text is never sent.
     expect(await row(queued)).toEqual({ body: FILED, state: "HELD", held_reason: "an older email 2 without the samples PDF; the drip files it again with the PDF attached" });
     expect(await row(sent)).toMatchObject({ body: FILED, state: "SENT" });
@@ -361,12 +361,12 @@ describe("a queued draft tells the brand rooms of 25+ guests, sized to its goals
     const q = await body(queued);
     for (const text of [q.body, (JSON.parse(q.payload_json) as { text: string }).text]) {
       expect(text).toContain("rooms of 25+ guests (sized to your goals) spending");
-      expect(text.endsWith("\n\n3055 Lombard St #471024, San Francisco, CA 94147")).toBe(true);
+      expect(text.endsWith("\n\n2055 Lombard St #471024, San Francisco, CA 94147")).toBe(true);
       expect(text).not.toContain("25 to 40");
       expect(text).not.toContain("80 to 120");
       expect(text).toContain("I am writing because they host tastings.");
     }
-    expect((await body(sent)).body).toBe(`${OLD}\n\n3055 Lombard St #471024, San Francisco, CA 94147`); // filed with the footer, then never re-worded
+    expect((await body(sent)).body).toBe(`${OLD}\n\n2055 Lombard St #471024, San Francisco, CA 94147`); // filed with the footer, then never re-worded
     expect(await recomposeGuestCounts(env)).not.toContain("Room Co");
   });
 });

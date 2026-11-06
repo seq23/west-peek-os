@@ -520,7 +520,7 @@ describe("the Learning Club in the database", () => {
     expect(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_pitch_followup").first()).toBeNull();
     const br = await env.WP_OS_DB.prepare("SELECT state, intent, their_text, draft_subject, draft_body FROM tlc_brand_reply").first<{ state: string; intent: string; their_text: string; draft_subject: string; draft_body: string }>();
     expect(br).toMatchObject({ state: "DRAFTED", intent: "QUESTION", their_text: "Sounds lovely, tell me more.", draft_subject: "Re: Leaf Co x a Matcha & Tea learning club" });
-    expect(br!.draft_body).toMatch(/Sequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures\n\n3055 Lombard St #471024, San Francisco, CA 94147$/);
+    expect(br!.draft_body).toMatch(/Sequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures\n\n2055 Lombard St #471024, San Francisco, CA 94147$/);
     expect(br!.draft_body).not.toMatch(/\bP\.S\.|attached|PDF/);
   });
 

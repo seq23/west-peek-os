@@ -127,7 +127,7 @@ describe("a brand replied", () => {
     expect(new Set(drafts.map((d) => d.notice_ref)).size).toBe(2);
     for (const [k, d] of drafts.entries()) {
       expect(sends[k]!.text).toContain(d.draft_body);
-      expect(d.draft_body).toMatch(/Sequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures\n\n3055 Lombard St #471024, San Francisco, CA 94147$/);
+      expect(d.draft_body).toMatch(/Sequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures\n\n2055 Lombard St #471024, San Francisco, CA 94147$/);
     }
     // Send-once: the next passes send nothing more; her stage is untouched until she approves.
     expect(await processBrandReplies(env, AFTERNOON, "west-peek", deps)).toBe("brand replies: 0 drafted, 0 auto-reply (drip resumed), 0 declined; inbox not read; no brand reply waiting for her");
