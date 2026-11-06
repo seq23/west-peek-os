@@ -9,6 +9,8 @@ import {
   credentialConfigured,
   credentialNameFor,
   credentialSourceName,
+  credentialInUseName,
+  credentialNote,
   GENERIC_CREDENTIAL_NAME,
 } from "../../shared/ai/providerCredentials";
 import { laneIsStoodDown } from "../ai/routing";
@@ -164,8 +166,10 @@ export async function handleProviderCatalog(ctx: RouteContext): Promise<Response
       return {
         ...p,
         /** The name THIS vendor's own credential lives under — a binding name where it is one. */
-        credential_name: credentialSourceName(p.provider_key),
+        credential_name: configured ? credentialInUseName(ctx.env, p.provider_key) : credentialSourceName(p.provider_key),
         credential_configured: configured,
+        // A lane on its fallback key (the shared GEMINI_API_KEY until WP_GEMINI_API_KEY is set) says so.
+        credential_note: credentialNote(ctx.env, p.provider_key),
         /*
          * ENABLED IS NOT THE SAME AS AVAILABLE, and conflating them is how a lane reads green and
          * cannot be called. A provider that is switched on with no credential is reported here as

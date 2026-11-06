@@ -6,7 +6,8 @@ import { runAi, type RunAiInput } from "../src/worker/ai/runAi";
 import { claimRun, recordHeartbeat, reportRun, type Seat } from "../src/worker/ai/subscriptionSeats";
 import { classifyContent } from "../src/shared/ai/contentClass";
 import { committedLps, isCommittedLp, meetingIsConfidential } from "../src/worker/ai/committedLps";
-import { BRAVE_DAILY_QUERY_CAP, createFreeSearchAdapter } from "../src/worker/ai/providers/freeSearch";
+import { BRAVE_DAILY_QUERY_CAP, FREE_SEARCH_GROUNDED_MODELS, createFreeSearchAdapter } from "../src/worker/ai/providers/freeSearch";
+import { credentialConfigured, credentialNote, credentialValueFor } from "../src/shared/ai/providerCredentials";
 import { FREE_SEARCH_MODEL } from "../src/shared/ai/models";
 import { servedBySearchLane } from "../src/worker/services/liveSearch";
 import { writeWhyLine } from "../src/worker/services/meetingBrief";
@@ -43,9 +44,15 @@ async function setLever(lever: "FREE_ONLY" | "MODERATE" | "OPEN"): Promise<void>
 interface Scenario {
   grounding: "ok" | "none" | "429";
   braveResults?: number;
+  /** Models Google answers 404 "not found / retired" for (1 Dec 2026 and after). */
+  retired?: string[];
+  /** The free Gemini writers answer 429: the key's whole free allowance is gone. */
+  writers429?: boolean;
+  /** The cost OpenRouter reports for a `:free` writer call. */
+  openRouterCost?: number;
 }
 interface Seen {
-  calls: Array<{ host: string; model: string; grounded: boolean }>;
+  calls: Array<{ host: string; model: string; grounded: boolean; geminiKey?: string; maxPrice?: unknown }>;
 }
 
 /** One stub for every vendor, routed by host. Records which host and model each call reached. */
@@ -65,7 +72,11 @@ function vendors(sc: Scenario = { grounding: "ok" }): { fetchImpl: typeof fetch;
     if (host === "generativelanguage.googleapis.com") {
       const model = decodeURIComponent(url.split("/models/")[1]!.split(":")[0]!);
       const grounded = Array.isArray(body.tools);
-      seen.calls.push({ host, model, grounded });
+      seen.calls.push({ host, model, grounded, geminiKey: new Headers(init?.headers).get("x-goog-api-key") ?? "" });
+      if (sc.retired?.includes(model)) {
+        return new Response(JSON.stringify({ error: { code: 404, message: `models/${model} is not found for API version v1beta, or is not supported for generateContent.`, status: "NOT_FOUND" } }), { status: 404 });
+      }
+      if (!grounded && sc.writers429) return new Response(JSON.stringify({ error: { message: "quota" } }), { status: 429 });
       if (grounded) {
         if (sc.grounding === "429") return new Response(JSON.stringify({ error: { message: "quota" } }), { status: 429 });
         return ok({
@@ -94,8 +105,14 @@ function vendors(sc: Scenario = { grounding: "ok" }): { fetchImpl: typeof fetch;
     }
     // OpenRouter (and anything else): the OpenAI shape.
     const model = String(body.model ?? "");
-    seen.calls.push({ host, model, grounded: false });
-    return ok({ model, choices: [{ message: { content: `ANSWER FROM ${model}` }, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 10 } });
+    seen.calls.push({ host, model, grounded: false, maxPrice: (body.provider as { max_price?: unknown } | undefined)?.max_price });
+    const asked = JSON.stringify(body.messages ?? "");
+    const content = asked.includes("Write ONE web search query")
+      ? "Example Ventures founder"
+      : asked.includes("SOURCES:")
+        ? `OPENROUTER ANSWER (${model}) — Pat Example is the founder [${SOURCE_URL}].`
+        : `ANSWER FROM ${model}`;
+    return ok({ model, choices: [{ message: { content }, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 10, ...(sc.openRouterCost ? { cost: sc.openRouterCost } : {}) } });
   }) as unknown as typeof fetch;
   return { fetchImpl, seen };
 }
@@ -313,6 +330,56 @@ describe("Fix 2: live research for $0", () => {
     }) as unknown as typeof fetch;
     const adapter = createFreeSearchAdapter({ geminiBaseUrl: "https://generativelanguage.googleapis.com", geminiApiKey: "g", braveApiKey: "b", quota: { take: async () => true }, fetchImpl });
     await expect(adapter.complete({ purpose: "Example Ventures", inputs: ["who"], model: null })).rejects.toThrow(/^free_search_named_stop:Couldn't research Example Ventures: .*cited none of the fetched pages/);
+  });
+
+  it("1 Dec 2026: gemini-2.5-flash answers 404 and research still completes on the next grounded rung, on West Peek OS's own key", async () => {
+    // No Brave key: before 6 Nov the 404 went straight to Brave, so this run stopped instead of researching.
+    const v = vendors({ grounding: "ok", retired: ["gemini-2.5-flash"] });
+    const { run } = await runAi(env({ BRAVE_SEARCH_API_KEY: "", WP_GEMINI_API_KEY: "wp" }), SEARCH(), { fetchImpl: v.fetchImpl });
+    expect(run.status, run.failure_reason ?? "").toBe("COMPLETED");
+    expect(servedBySearchLane(run.model)).toBe(true);
+    expect(run.output_text).toContain(SOURCE_URL);
+    const grounded = v.seen.calls.filter((c) => c.grounded).map((c) => c.model);
+    expect(grounded.slice(0, 2)).toEqual(["gemini-2.5-flash", FREE_SEARCH_GROUNDED_MODELS[1]]);
+    expect(run.output_text).toContain(`Searched with: Google Search grounding on ${FREE_SEARCH_GROUNDED_MODELS[1]}`);
+    expect(v.seen.calls.every((c) => c.host !== "generativelanguage.googleapis.com" || c.geminiKey === "wp"), "its own key, not the shared one").toBe(true);
+  }, 60_000);
+
+  it("no free grounded model left and the Gemini allowance spent: Brave + an OpenRouter :free writer carries it at $0, and a reported cost stops it", async () => {
+    const v = vendors({ grounding: "429", writers429: true });
+    const { run } = await runAi(env(), SEARCH(), { fetchImpl: v.fetchImpl });
+    expect(run.status, run.failure_reason ?? "").toBe("COMPLETED");
+    expect(run.output_text).toContain(SOURCE_URL);
+    expect(run.output_text).toMatch(/Searched with: Brave Search, written by openrouter\/.+:free/);
+    const or = v.seen.calls.filter((c) => c.host === "openrouter.ai");
+    expect(or.length).toBeGreaterThan(0);
+    for (const c of or) {
+      expect(c.model.endsWith(":free")).toBe(true);
+      expect(c.maxPrice).toEqual({ prompt: 0, completion: 0 });
+    }
+    // Any cost on a :free writer: the answer is not used, no other OpenRouter writer is tried, the lane stops by name.
+    await t.db.prepare("DELETE FROM free_search_quota").run();
+    const priced = vendors({ grounding: "429", writers429: true, openRouterCost: 0.0004 });
+    const { run: stopped } = await runAi(env(), SEARCH(), { fetchImpl: priced.fetchImpl });
+    expect(stopped.status).not.toBe("COMPLETED");
+    expect(stopped.failure_reason).toContain("free_search_named_stop:Couldn't research");
+    expect(stopped.failure_reason).toContain("OPENROUTER_COST");
+    expect(priced.seen.calls.filter((c) => c.host === "openrouter.ai")).toHaveLength(1);
+  }, 60_000);
+
+  it("a search naming a committed LP reaches none of the new rungs: no grounded model, no Brave, no OpenRouter writer", async () => {
+    const v = vendors({ grounding: "ok", retired: ["gemini-2.5-flash"], writers429: true });
+    const { run } = await runAi(env({ WP_GEMINI_API_KEY: "wp" }), SEARCH({}, ["Who runs the investment office at Example Committed Trust? Cite sources."]), { fetchImpl: v.fetchImpl });
+    expect(run.status).not.toBe("COMPLETED");
+    expect(v.seen.calls, "no training-permitting route was called").toEqual([]);
+  }, 60_000);
+
+  it("the Gemini lanes read WP_GEMINI_API_KEY first; until it exists they use GEMINI_API_KEY and say so, never fail", () => {
+    expect(credentialValueFor({ WP_GEMINI_API_KEY: "wp", GEMINI_API_KEY: "g" }, "free_search")).toBe("wp");
+    expect(credentialValueFor({ GEMINI_API_KEY: "g" }, "free_search")).toBe("g");
+    expect(credentialConfigured({ GEMINI_API_KEY: "g" }, "google_free")).toBe(true);
+    expect(credentialNote({ GEMINI_API_KEY: "g" }, "free_search")).toMatch(/WP_GEMINI_API_KEY is not set yet/);
+    expect(credentialNote({ WP_GEMINI_API_KEY: "wp", GEMINI_API_KEY: "g" }, "free_search")).toBeNull();
   });
 
   it("a confidential search call never reaches the $0 search lane", async () => {

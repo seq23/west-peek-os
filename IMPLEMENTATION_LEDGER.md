@@ -7431,3 +7431,19 @@ from January 2027; $10 paid ticket; $10,000 net target from sponsors ($7,500 flo
 - Guards: tlcBrandReply (colleague, stranger, executor guard), tlcPitchAndPartners (per-brand sheet, forbidden copy,
   series), tlcPipelineRepairs (B, G), tlcSendPause (new), tlcBrandFlow, learningClub. Gmail, Pinecone recovery, PDF
   rendering in production and deployment remain UNPROVEN; no production rows changed.
+
+## 6 Nov 2026 — West Peek OS's own Gemini key, and research that survives gemini-2.5-flash retiring (1 Dec 2026)
+
+- **Own key**: `WP_GEMINI_API_KEY` is read first by `google_free`, `free_search` and `google`; `GEMINI_API_KEY` (shared with
+  Boss OS, ~20 grounded requests a day between both) is the fallback (`PROVIDER_CREDENTIAL_FALLBACK`). On the fallback the AI
+  page shows a note (`credentialNote`), never a failure. The Worker secret is set by main; until then the fallback runs.
+- **Grounded rungs**: `FREE_SEARCH_GROUNDED_MODELS` is an ordered list of free-tier ids, tried until one returns grounding
+  chunks with web URLs; 404 / retired / 429 / unsourced moves on; only 401/403 skips the rest (same key).
+- **Writers**: route 2 (Brave) now falls through the free Gemini writers to OpenRouter `:free` writers, sent with `max_price` 0;
+  any reported cost refuses the answer and stops the OpenRouter writers (`OPENROUTER_COST`). Past the lane's named stop the
+  router's seat ladder carries on. Answers end `Searched with: …` naming the rung.
+- **Private data**: unchanged screen (runAi 4b/4d removes `free_search` from any confidential call); a committed-LP search is
+  proven to reach none of the new rungs.
+- Guards (tests/freeModelsForProspects.test.ts): gemini-2.5-flash 404 → next grounded rung completes (fails on the old code,
+  checked); Brave + OpenRouter `:free` at $0 and the cost stop; committed-LP search calls nothing. Live rungs past
+  gemini-2.5-flash and OpenRouter writers are UNPROVEN until the post-deploy research call.
