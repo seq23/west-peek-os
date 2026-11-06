@@ -74,6 +74,11 @@
       "required": false,
       "purpose": "Google Gemini, paid and unpaid quota. Unrelated to GOOGLE_OAUTH_*, which is the calendar client."
     },
+    "WP_GEMINI_API_KEY": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "West Peek OS's own Gemini key, in its own Google Cloud project with no billing account, so its free quota is not shared with Boss OS. Read first by google_free, free_search and google; GEMINI_API_KEY is the fallback until it is set (the AI page shows a note)."
+    },
     "BRAVE_SEARCH_API_KEY": {
       "kind": "secret",
       "required": false,

@@ -8,26 +8,52 @@ import { FREE_SEARCH_MODEL } from "../../../shared/ai/models";
 /**
  * LIVE RESEARCH FOR $0 (5 Nov 2026). One lane, three routes, tried in order inside one attempt:
  *
- *   1. GOOGLE GEMINI DIRECT, `gemini-2.5-flash` with the `google_search` tool (grounding). Verified live on the
- *      owner's own key: the ONLY free-tier model where grounding works (`gemini-2.5-flash-lite` is closed to new
- *      users; grounding on gemini-3.x answers 429 on the free tier). An answer counts only when Google returned
- *      grounding chunks with web URLs — an answer without them is the model talking, not a search. `gemini-2.5-flash`
- *      retires on 1 Dec 2026, which is why route 2 exists.
- *   2. BRAVE SEARCH, then a FREE GEMINI MODEL WRITING ONLY FROM THE FETCHED TEXT. Brave's web search finds the pages,
- *      the top results are fetched with a plain GET, and `gemini-3.6-flash` (then `gemini-3-flash-preview`) writes the
- *      answer from those pages alone, each fact with its URL. An answer that cites none of the fetched URLs is refused.
+ *   1. GOOGLE GEMINI DIRECT with the `google_search` tool (grounding), down an ORDERED LIST of free-tier models
+ *      (FREE_SEARCH_GROUNDED_MODELS, 6 Nov 2026). On 5 Nov only `gemini-2.5-flash` grounded on the free tier
+ *      (grounding on gemini-3.x answered 429), and it retires on 1 Dec 2026 — so the model is never one pinned
+ *      string. Each rung is tried until one returns grounding chunks with web URLs; a 404, a "retired / not found",
+ *      a 429 or an answer without sources moves to the next rung, never to a hard failure. Only a rejected key
+ *      (401/403) skips the rest, because every rung uses the same key.
+ *   2. BRAVE SEARCH, then a FREE MODEL WRITING ONLY FROM THE FETCHED TEXT. Brave's web search finds the pages, the top
+ *      results are fetched with a plain GET, and a free writer writes the answer from those pages alone, each fact with
+ *      its URL. Writers: the free Gemini models, then OpenRouter `:free` models (6 Nov 2026), so the route still runs
+ *      when the Gemini key's whole free allowance is gone. OpenRouter is asked with `max_price` 0 and its reported cost
+ *      is read: any cost above 0 throws the answer away and stops the OpenRouter writers (`OPENROUTER_COST`). An answer
+ *      that cites none of the fetched URLs is refused.
  *      HARD CAP: 20 Brave queries a day, counted in D1 (`free_search_quota`); over the cap is the next route, never an
  *      error.
  *   3. A NAMED STOP: `Couldn't research <name>: <reason>`. Never research from model memory — tested on 4 Nov 2026,
  *      three free models without search invented three different founders for the same firm.
  *
- * Every call is $0 (the unpaid Gemini quota and Brave's free plan), so the cost is reported as 0 and the money guard
+ * Past route 3 the router's own ladder carries the call (the Codex seat, then Claude Code, then the run's named stop).
+ *
+ * Every call is $0 (the unpaid Gemini quota, Brave's free plan and OpenRouter `:free` models), so the cost is reported as 0 and the money guard
  * counts this lane as free. Its terms permit training, so it is registered training-permitting with a PUBLIC-only data
  * policy and never sees confidential text (runAi 4b/4d remove it before any request is formed).
  */
 
-export const FREE_SEARCH_GROUNDED_MODEL = "gemini-2.5-flash";
+/**
+ * The grounded rungs, in order. Every id is a model Google's free tier bills nothing for (the same list Boss OS's
+ * guard holds); gemini-4-argon and the 3.1 Pro previews are metered and are never here.
+ */
+export const FREE_SEARCH_GROUNDED_MODELS = [
+  "gemini-2.5-flash",
+  "gemini-3.8-flash",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.1-flash-lite",
+  "gemini-3-flash-preview",
+] as const;
 export const FREE_SEARCH_WRITER_MODELS = ["gemini-3.6-flash", "gemini-3-flash-preview"] as const;
+/** OpenRouter writers for route 2. Only `:free` slugs; a slug without the suffix is refused before any request. */
+export const FREE_SEARCH_OPENROUTER_WRITERS = [
+  "deepseek/deepseek-v4-flash-0731:free",
+  "z-ai/glm-5.2:free",
+  "nvidia/nemotron-3-super-120b-a12b:free",
+  "meta-llama/llama-3.3-70b-instruct:free",
+] as const;
+export const FREE_SEARCH_OPENROUTER_BASE_URL = "https://openrouter.ai";
+export const OPENROUTER_COST_STOP = "OPENROUTER_COST";
 export const BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search";
 export const BRAVE_DAILY_QUERY_CAP = 20;
 export const FREE_SEARCH_STOP = "free_search_named_stop";
@@ -45,6 +71,9 @@ export interface FreeSearchOptions {
   geminiBaseUrl: string;
   geminiApiKey?: string;
   braveApiKey?: string;
+  /** OpenRouter, for the `:free` writers of route 2 only. */
+  openRouterApiKey?: string;
+  openRouterBaseUrl?: string;
   quota: BraveQuota;
   fetchImpl?: typeof fetch;
   /** Tests only; production uses the per-call deadline. */
@@ -104,9 +133,24 @@ export function createFreeSearchAdapter(options: FreeSearchOptions): ProviderAda
     return (await res.json()) as GeminiBody;
   }
 
-  /** Route 1. Returns the answer, or throws with the reason grounding was not available. */
+  /** Route 1. Walks the grounded rungs; returns the first sourced answer, or throws with every rung's reason. */
   async function grounded(req: ProviderRequest): Promise<ProviderResponse> {
-    const body = await gemini(FREE_SEARCH_GROUNDED_MODEL, req.inputs.join("\n\n"), req, true);
+    const why: string[] = [];
+    for (const model of FREE_SEARCH_GROUNDED_MODELS) {
+      try {
+        return await groundedOn(model, req);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        why.push(`${model}: ${msg}`);
+        // The same key answers for every rung: a rejected key will not be accepted by the next model either.
+        if (/^provider_http_40[13]\b/.test(msg)) break;
+      }
+    }
+    throw new Error(why.join("; "));
+  }
+
+  async function groundedOn(model: string, req: ProviderRequest): Promise<ProviderResponse> {
+    const body = await gemini(model, req.inputs.join("\n\n"), req, true);
     const text = textOf(body);
     const urls = [
       ...new Set(
@@ -118,25 +162,97 @@ export function createFreeSearchAdapter(options: FreeSearchOptions): ProviderAda
     if (!text) throw new Error("grounding returned no answer");
     if (urls.length === 0) throw new Error("grounding unavailable: the answer carried no web sources");
     return {
-      text: `${text}\n\nSources:\n${urls.map((u) => `- ${u}`).join("\n")}`,
+      text: `${text}\n\nSources:\n${urls.map((u) => `- ${u}`).join("\n")}\n\nSearched with: Google Search grounding on ${model}`,
       model: FREE_SEARCH_MODEL,
       finishReason: finishReasonFrom(body.candidates?.[0]?.finishReason),
       usage: { inputTokens: body.usageMetadata?.promptTokenCount ?? 0, outputTokens: body.usageMetadata?.candidatesTokenCount ?? 0, costUsd: 0 },
     };
   }
 
-  /** One free writer call, trying each writer model in turn. */
-  async function write(prompt: string, req: ProviderRequest): Promise<{ text: string; body: GeminiBody }> {
+  interface Written {
+    text: string;
+    writer: string;
+    finishReason: ProviderResponse["finishReason"];
+    inputTokens: number;
+    outputTokens: number;
+  }
+
+  /** One OpenRouter `:free` call: price held at 0, and any reported cost refuses the answer. */
+  async function openRouterFree(model: string, prompt: string, req: ProviderRequest): Promise<Written> {
+    if (!model.endsWith(":free")) throw new Error(`${model} is not a :free model`);
+    const orBase = (options.openRouterBaseUrl ?? FREE_SEARCH_OPENROUTER_BASE_URL).replace(/\/$/, "");
+    const res = await doFetch(`${orBase}/api/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${options.openRouterApiKey ?? ""}` },
+      signal: AbortSignal.timeout(options.timeoutMs ?? req.deadlineMs ?? PROVIDER_TIMEOUT_MS),
+      body: JSON.stringify({
+        model,
+        max_tokens: Math.min(req.maxOutputTokens ?? PROVIDER_MAX_OUTPUT_TOKENS, PROVIDER_MAX_OUTPUT_TOKENS),
+        messages: [
+          { role: "system", content: `West Peek OS governed task: ${req.purpose}` },
+          { role: "user", content: prompt },
+        ],
+        provider: { max_price: { prompt: 0, completion: 0 } },
+        usage: { include: true },
+      }),
+    });
+    if (!res.ok) throw await providerHttpError(res);
+    const body = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string }; finish_reason?: string | null }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number; total_cost?: number };
+    };
+    const cost = Number(body.usage?.cost ?? body.usage?.total_cost ?? 0);
+    if (Number.isFinite(cost) && cost > 0) {
+      throw new Error(`${OPENROUTER_COST_STOP}: ${model} reported a cost of $${cost}; a :free writer must cost nothing, so its answer is not used`);
+    }
+    const text = body.choices?.[0]?.message?.content ?? "";
+    return {
+      text,
+      writer: `openrouter/${model}`,
+      finishReason: finishReasonFrom(body.choices?.[0]?.finish_reason ?? undefined),
+      inputTokens: body.usage?.prompt_tokens ?? 0,
+      outputTokens: body.usage?.completion_tokens ?? 0,
+    };
+  }
+
+  /** One free writer call: each free Gemini model, then each OpenRouter `:free` model, in turn. */
+  async function write(prompt: string, req: ProviderRequest): Promise<Written> {
     const why: string[] = [];
-    for (const model of FREE_SEARCH_WRITER_MODELS) {
-      try {
-        const body = await gemini(model, prompt, req, false);
-        const text = textOf(body);
-        if (text) return { text, body };
-        why.push(`${model} returned nothing`);
-      } catch (err) {
-        why.push(`${model}: ${err instanceof Error ? err.message : String(err)}`);
+    if (options.geminiApiKey) {
+      for (const model of FREE_SEARCH_WRITER_MODELS) {
+        try {
+          const body = await gemini(model, prompt, req, false);
+          const text = textOf(body);
+          if (text) {
+            return {
+              text,
+              writer: model,
+              finishReason: finishReasonFrom(body.candidates?.[0]?.finishReason),
+              inputTokens: body.usageMetadata?.promptTokenCount ?? 0,
+              outputTokens: body.usageMetadata?.candidatesTokenCount ?? 0,
+            };
+          }
+          why.push(`${model} returned nothing`);
+        } catch (err) {
+          why.push(`${model}: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
+    }
+    if (options.openRouterApiKey) {
+      for (const model of FREE_SEARCH_OPENROUTER_WRITERS) {
+        try {
+          const out = await openRouterFree(model, prompt, req);
+          if (out.text) return out;
+          why.push(`${model} returned nothing`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          why.push(`${model}: ${msg}`);
+          // A cost on a :free lane stops every OpenRouter writer: the next one is not trusted to be free either.
+          if (msg.startsWith(OPENROUTER_COST_STOP)) break;
+        }
+      }
+    } else {
+      why.push("OpenRouter writers: OPENROUTER_API_KEY is not set");
     }
     throw new Error(`no free writer answered (${why.join("; ")})`);
   }
@@ -195,26 +311,32 @@ export function createFreeSearchAdapter(options: FreeSearchOptions): ProviderAda
       "SOURCES:",
       ...sources.map((s, i) => `[${i + 1}] ${s.title} — ${s.url}\n${s.text}`),
     ].join("\n");
-    const { text, body } = await write(prompt, req);
+    const written = await write(prompt, req);
+    const text = written.text;
     const cited = sources.filter((s) => text.includes(s.url));
     if (cited.length === 0) throw new Error("the writer cited none of the fetched pages, so its answer cannot be shown to come from them");
     return {
-      text: `${text}\n\nSources:\n${sources.map((s) => `- ${s.url}`).join("\n")}`,
+      text: `${text}\n\nSources:\n${sources.map((s) => `- ${s.url}`).join("\n")}\n\nSearched with: Brave Search, written by ${written.writer}`,
       model: FREE_SEARCH_MODEL,
-      finishReason: finishReasonFrom(body.candidates?.[0]?.finishReason),
-      usage: { inputTokens: body.usageMetadata?.promptTokenCount ?? 0, outputTokens: body.usageMetadata?.candidatesTokenCount ?? 0, costUsd: 0 },
+      finishReason: written.finishReason,
+      usage: { inputTokens: written.inputTokens, outputTokens: written.outputTokens, costUsd: 0 },
     };
   }
 
   return {
     async complete(req: ProviderRequest): Promise<ProviderResponse> {
-      if (!options.geminiApiKey) throw new Error("credential_missing:free_search");
+      // Route 2 can run on Brave + OpenRouter alone, so only a lane with neither route is unconfigured.
+      if (!options.geminiApiKey && !(options.braveApiKey && options.openRouterApiKey)) throw new Error("credential_missing:free_search");
       if (req.images?.length || req.documents?.length) throw new Error("provider_cannot_read_files:free_search");
       const why: string[] = [];
-      try {
-        return await grounded(req);
-      } catch (err) {
-        why.push(`Gemini search grounding: ${err instanceof Error ? err.message : String(err)}`);
+      if (options.geminiApiKey) {
+        try {
+          return await grounded(req);
+        } catch (err) {
+          why.push(`Gemini search grounding: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      } else {
+        why.push("Gemini search grounding: no Gemini key is set");
       }
       try {
         return await braveRoute(req);

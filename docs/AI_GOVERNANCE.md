@@ -164,11 +164,15 @@ Claude Code seat (Max plan)  →  Codex seat (ChatGPT Plus)  →  FREE lanes  �
   `scripts/claimer/model-roles.json`), revokes any declaration, and the run then loses every training-permitting lane (free
   models and Codex). Unreadable records fail closed. The Mac gets only the verdict (`private_model_only` on the job), never the names.
 - **Live research for $0 (5 Nov 2026).** At Free only a non-confidential search call takes the `free_search` lane
-  (`providers/freeSearch.ts`): (1) Gemini `gemini-2.5-flash` with the `google_search` tool, accepted only with grounding
-  sources; (2) Brave Search (`BRAVE_SEARCH_API_KEY`, at most 20 queries a day counted in `free_search_quota`), the top pages
-  fetched, and a free Gemini model (`gemini-3.6-flash`, then `gemini-3-flash-preview`) writing only from them with a URL on every
-  fact; (3) a named stop, `Couldn't research <name>: <reason>`. It never researches from model memory. Seats that can search
-  still lead. `gemini-2.5-flash` retires 1 Dec 2026; route 2 is the successor.
+  (`providers/freeSearch.ts`): (1) Gemini with the `google_search` tool down the ordered list `FREE_SEARCH_GROUNDED_MODELS`
+  (`gemini-2.5-flash` first), accepted only with grounding sources; a 404, retired model, 429 or unsourced answer moves to the
+  next rung (6 Nov 2026, because `gemini-2.5-flash` retires 1 Dec 2026); (2) Brave Search (`BRAVE_SEARCH_API_KEY`, at most 20
+  queries a day counted in `free_search_quota`), the top pages fetched, and a free writer (`gemini-3.6-flash`,
+  `gemini-3-flash-preview`, then OpenRouter `:free` models with `max_price` 0, any reported cost refused as `OPENROUTER_COST`)
+  writing only from them with a URL on every fact; (3) a named stop, `Couldn't research <name>: <reason>`, after which the
+  router's ladder (seats) carries on. It never researches from model memory. The answer ends `Searched with: …` naming the rung.
+  The lane reads `WP_GEMINI_API_KEY` (West Peek OS's own key and quota), falling back to the shared `GEMINI_API_KEY` with a note
+  on the AI page until it is set.
 - **Important work does not wait for ever (5 Nov 2026).** At Free only, non-confidential important work with neither seat free
   waits at most the owner's per-task floor (`task_quality_floor`: `min_free_tier` SEAT_ONLY / FULL / UNMEASURED / DEGRADED and
   `max_wait_minutes`), default 2 hours, then the best free model that passes the floor carries it; the reason

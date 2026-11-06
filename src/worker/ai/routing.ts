@@ -242,7 +242,7 @@ export function adapterFor(
   if (candidate.providerKey === FREE_SEARCH_PROVIDER_KEY) {
     /*
      * THE $0 SEARCH LANE (5 Nov 2026): Gemini grounding, then Brave + a free Gemini writer, then a named stop.
-     * Configured by GEMINI_API_KEY (the writer is needed on both routes); BRAVE_SEARCH_API_KEY is read by its own
+     * Configured by WP_GEMINI_API_KEY, falling back to GEMINI_API_KEY (providerCredentials.ts); BRAVE_SEARCH_API_KEY is read by its own
      * name only — never the shared legacy key, which belongs to a model vendor and must not be sent to Brave.
      */
     return {
@@ -251,6 +251,8 @@ export function adapterFor(
         geminiBaseUrl: baseUrl,
         geminiApiKey: key,
         braveApiKey: ownCredentialValue(env, BRAVE_SEARCH_CREDENTIAL_KEY),
+        // Route 2's `:free` writers when the Gemini allowance is gone. Price held at 0 inside the adapter.
+        openRouterApiKey: ownCredentialValue(env, "openrouter_free"),
         quota: braveQuotaFor(env),
         fetchImpl,
       }),

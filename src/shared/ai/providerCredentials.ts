@@ -34,13 +34,19 @@ export const PROVIDER_CREDENTIAL_NAME: Readonly<Record<string, string>> = Object
    * the same one and `provider_data_policy` is what keeps them apart. See migration 0178.
    */
   openrouter_free: "OPENROUTER_API_KEY",
-  google_free: "GEMINI_API_KEY",
+  /*
+   * WEST PEEK OS'S OWN GEMINI KEY (6 Nov 2026). GEMINI_API_KEY is the key Boss OS also uses, and its free
+   * allowance (about 20 grounded requests a day) was shared between the two. WP_GEMINI_API_KEY is a key in
+   * its own Google Cloud project with its own quota. Until it is set, GEMINI_API_KEY is read
+   * (PROVIDER_CREDENTIAL_FALLBACK) and the AI page says so (`credentialNote`) — a note, never a failure.
+   */
+  google_free: "WP_GEMINI_API_KEY",
   /*
    * THE $0 SEARCH LANE (5 Nov 2026, providers/freeSearch.ts). Its writer and its grounded route are Gemini on the
    * unpaid quota, so the lane is configured by GEMINI_API_KEY. Brave Search is its second route and has its own
    * key, read by its own name only (no shared-key fallback).
    */
-  free_search: "GEMINI_API_KEY",
+  free_search: "WP_GEMINI_API_KEY",
   brave_search: "BRAVE_SEARCH_API_KEY",
   openai: "OPENAI_API_KEY",
   /*
@@ -53,7 +59,7 @@ export const PROVIDER_CREDENTIAL_NAME: Readonly<Record<string, string>> = Object
    */
   anthropic: "WP_ANTHROPIC_API_KEY",
   /** Not GOOGLE_OAUTH_* — that pair is the calendar client and has nothing to do with Gemini. */
-  google: "GEMINI_API_KEY",
+  google: "WP_GEMINI_API_KEY",
   /*
    * NO KEY EXISTS FOR EITHER OF THESE. Both names are declared so the mechanism is ready and the
    * Cockpit can say precisely what is missing; neither provider is enabled, because enabling
@@ -63,6 +69,16 @@ export const PROVIDER_CREDENTIAL_NAME: Readonly<Record<string, string>> = Object
   fireworks: "FIREWORKS_API_KEY",
   harvey: "HARVEY_API_KEY",
   norm: "NORM_API_KEY",
+});
+
+/**
+ * A second name read when a vendor's own name is unset: the Gemini lanes fall back to the shared
+ * GEMINI_API_KEY until West Peek OS's own WP_GEMINI_API_KEY exists.
+ */
+export const PROVIDER_CREDENTIAL_FALLBACK: Readonly<Record<string, string>> = Object.freeze({
+  google_free: "GEMINI_API_KEY",
+  free_search: "GEMINI_API_KEY",
+  google: "GEMINI_API_KEY",
 });
 
 /**
@@ -95,7 +111,34 @@ function readString(env: unknown, name: string): string | undefined {
  */
 export function credentialValueFor(env: unknown, providerKey: string): string | undefined {
   if (providerKey in BINDING_BACKED) return undefined;
-  return readString(env, credentialNameFor(providerKey)) ?? readString(env, GENERIC_CREDENTIAL_NAME);
+  const fallback = PROVIDER_CREDENTIAL_FALLBACK[providerKey];
+  return (
+    readString(env, credentialNameFor(providerKey)) ??
+    (fallback ? readString(env, fallback) : undefined) ??
+    readString(env, GENERIC_CREDENTIAL_NAME)
+  );
+}
+
+/** The name whose value is actually being used in this environment (its own, else its fallback). Never a value. */
+export function credentialInUseName(env: unknown, providerKey: string): string {
+  if (BINDING_BACKED[providerKey]) return BINDING_BACKED[providerKey]!;
+  const own = credentialNameFor(providerKey);
+  if (readString(env, own)) return own;
+  const fallback = PROVIDER_CREDENTIAL_FALLBACK[providerKey];
+  if (fallback && readString(env, fallback)) return fallback;
+  if (readString(env, GENERIC_CREDENTIAL_NAME)) return GENERIC_CREDENTIAL_NAME;
+  return own;
+}
+
+/**
+ * A plain sentence when a vendor is running on its fallback name instead of its own, else null.
+ * Shown on the AI page beside the lane; it is a note, not a failure.
+ */
+export function credentialNote(env: unknown, providerKey: string): string | null {
+  const own = credentialNameFor(providerKey);
+  const fallback = PROVIDER_CREDENTIAL_FALLBACK[providerKey];
+  if (!fallback || readString(env, own) || !readString(env, fallback)) return null;
+  return `${own} is not set yet, so this lane is using ${fallback}, which Boss OS shares; its free daily allowance is split between the two until ${own} is set.`;
 }
 
 /**

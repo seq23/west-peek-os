@@ -142,7 +142,7 @@ describe("the same model by a different road", () => {
     expect(credentialNameFor("openai")).toBe("OPENAI_API_KEY");
     // WP_-prefixed deliberately: the bare name is reserved by the owner's vault.
     expect(credentialNameFor("anthropic")).toBe("WP_ANTHROPIC_API_KEY");
-    expect(credentialNameFor("google")).toBe("GEMINI_API_KEY");
+    expect(credentialNameFor("google")).toBe("WP_GEMINI_API_KEY");
     expect(credentialNameFor("perplexity")).toBe("PERPLEXITY_API_KEY");
 
     const onlyAnthropic = { WP_ANTHROPIC_API_KEY: "k" };

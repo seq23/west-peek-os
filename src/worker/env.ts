@@ -42,6 +42,8 @@ export interface Env {
   WP_ANTHROPIC_API_KEY?: string;
   /** Google Gemini. Unrelated to GOOGLE_OAUTH_CLIENT_ID/SECRET, which are the calendar client. */
   GEMINI_API_KEY?: string;
+  /** West Peek OS's own Gemini key (its own Google Cloud project and free quota). Read before GEMINI_API_KEY. */
+  WP_GEMINI_API_KEY?: string;
   /** Brave Search API, the $0 search lane's second route (providers/freeSearch.ts). Free plan; 20 queries a day. */
   BRAVE_SEARCH_API_KEY?: string;
   /** Declared, not configured: no Perplexity key exists in the vault. The lane stays invisible. */
