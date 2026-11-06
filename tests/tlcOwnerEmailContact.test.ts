@@ -1,3 +1,4 @@
+import { DRIP_DEPS } from "./helpers/tlcSamplesPdf";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
@@ -48,7 +49,7 @@ const RAW = `From: Sequoia Taylor <${SEQUOIA}>\r\nTo: os@joinwestpeek.com\r\nSub
 
 beforeAll(async () => {
   t = await createTestDb();
-  env = { ...makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>), RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures", WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON: SERVICE_ACCOUNT, WP_OS_NEVERBOUNCE_API_KEY: "nb_test" } as Env;
+  env = { ...makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled", WP_OS_DOCUMENTS: t.docs } as Partial<Env>), RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures", WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON: SERVICE_ACCOUNT, WP_OS_NEVERBOUNCE_API_KEY: "nb_test" } as Env;
   vi.stubGlobal("fetch", async (url: string | URL | Request) => {
     const u = String(url);
     if (u.startsWith("https://api.neverbounce.com/")) {
@@ -125,7 +126,7 @@ describe("applied through the must-pitch path, once, for the thread's club", () 
   it("email 1 opens with West Peek, carries her angle in brand words, and goes to her even when NeverBounce says accept-all", async () => {
     nb["pat@acmeai.example"] = "catchall";
     await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = ?1 WHERE lower(brand) = 'acmeai'").bind(NOW.toISOString()).run();
-    const out = await runDrip(env, NOW, "west-peek", {}, async () => "We would build the series on Acmeai: members build on it across six events and publish open-source templates each month.");
+    const out = await runDrip(env, NOW, "west-peek", DRIP_DEPS, async () => "We would build the series on Acmeai: members build on it across six events and publish open-source templates each month.");
     expect(out.addressRefused ?? []).toEqual([]);
     const m = await env.WP_OS_DB.prepare("SELECT m.subject, m.body, m.state FROM tlc_drip_message m JOIN tlc_deal d ON d.id = m.deal_id WHERE lower(d.brand) = 'acmeai'").first<{ subject: string; body: string; state: string }>();
     expect(m?.state).toBe("AWAITING_APPROVAL");

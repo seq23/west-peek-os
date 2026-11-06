@@ -133,11 +133,15 @@ export function stageAfterReply(intent: BrandReplyIntent, from: string): string 
   return null;
 }
 
-/** The tiers and prices, from the one table, as a brand reads them. */
-export function tierLines(): string[] {
-  return TLC_TIER_KEYS.map((k) => {
+/**
+ * The levels and prices as a brand reads them: that brand's own levels when given (the sheet's, per event, lowest
+ * first), else the cash levels any brand may see. Never Title or in-kind unless the brand's levels carry them.
+ */
+export function tierLines(levels?: ReadonlyArray<{ label: string; priceUsd: number | null; head: string; adds: readonly string[] }>): string[] {
+  if (levels) return levels.map((l) => `${l.label}, ${l.priceUsd ? `$${l.priceUsd.toLocaleString("en-US")} per event` : "in kind"}: ${l.head ? `${l.head} ` : ""}${l.adds.join("; ")}`);
+  return TLC_TIER_KEYS.filter((k) => k !== "TITLE" && k !== "PRODUCT").map((k) => {
     const t = TLC_TIERS[k];
-    return `${t.label}${t.priceUsd ? `, $${t.priceUsd.toLocaleString("en-US")}` : ""}: ${t.gets}`;
+    return `${t.label}, $${t.priceUsd!.toLocaleString("en-US")} per event: ${t.gets}`;
   });
 }
 

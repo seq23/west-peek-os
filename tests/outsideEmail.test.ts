@@ -76,7 +76,10 @@ describe("the allowlist decides for every send path", () => {
     for (const g of governed) {
       const body = files.find((f) => f.rel === g.file)!.body;
       expect(body.indexOf("outsideEmailAllowed(")).toBeGreaterThan(-1);
-      expect(body.indexOf("outsideEmailAllowed(")).toBeLessThan(body.indexOf("performEffect(env, request)"));
+      // performEffect also takes the receipt now (the owner-approval guard, 4 Nov 2026); the order is what matters.
+      const perform = body.search(/performEffect\(env, request[,)]/);
+      expect(perform).toBeGreaterThan(-1);
+      expect(body.indexOf("outsideEmailAllowed(")).toBeLessThan(perform);
     }
     const readers = files.filter((f) => /WP_OS_OUTSIDE_EMAIL_BREAK_GLASS|BREAK_GLASS_VAR|outside_email_allow\b|outside_email_mode\b|WP_OS_AI_EMAIL_EXTERNAL/.test(f.body)).map((f) => f.rel).sort();
     expect(readers).toEqual(["src/shared/policy/outsideEmail.ts", "src/worker/env.ts", "src/worker/services/outsideEmail.ts"]);

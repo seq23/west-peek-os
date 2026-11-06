@@ -213,6 +213,16 @@
       "kind": "secret",
       "required": false,
       "purpose": "NeverBounce: each TLC brand address is checked before Wynn's first email (0277), and must-pitch way-in inboxes (0282). Vault name NEVERBOUNCE_API_KEY. Absent: first emails wait, nothing is sent unchecked."
+    },
+    "WP_OS_BOSS_OPEN_LOOPS_TOKEN": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "Boss OS Open Loops intake token (seq23/boss-os docs/open-loops.md): reports and clears the TLC_SEND_PAUSED named stop. Vault name BOSS_OPEN_LOOPS_TOKEN (from the Boss OS vault). Absent: the stop is recorded on the event spine only and one line says it was not reported."
+    },
+    "WP_OS_BOSS_OPEN_LOOPS_URL": {
+      "kind": "var",
+      "required": false,
+      "purpose": "Boss OS Open Loops intake URL, as seq23/boss-os docs/open-loops.md names it. Kept out of source (Boss OS is another business). Absent: nothing is reported to Open Loops."
     }
   }
 }

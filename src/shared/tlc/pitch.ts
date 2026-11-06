@@ -11,6 +11,7 @@ import {
   TLC_TICKET_PRICE_USD,
   TLC_TIERS,
   TLC_TIER_KEYS,
+  type TlcTier,
   competingCategories,
   sponsorMixProblems,
   aiRuleProblems,
@@ -110,7 +111,8 @@ export function brandSafe(text: string | null | undefined): string {
     .replace(/\bDry January\b/gi, "Zero-Proof January")
     .replace(/\s*\((?:lead|supporting|donated|in[- ]kind|frontier model)[^)]*\)/gi, "")
     .replace(/\s*—\s*/g, ", ");
-  return sentences(t).filter((x) => !BRAND_DROP.some((r) => r.test(x))).join(" ");
+  // A sentence that would charge guests, offer a venue or imply a track record is dropped too (owner, 4 Nov 2026).
+  return sentences(t).filter((x) => !BRAND_DROP.some((r) => r.test(x)) && !BRAND_COPY_FORBIDDEN.some(([r]) => r.test(x))).join(" ");
 }
 
 /** Internal copy keeps everything except what is simply untrue: no exclusivity, no stale proposed date. */
@@ -155,7 +157,7 @@ h2{font-size:14px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
 .lede{font-size:19px;max-width:680px;margin:6px 0}.when{color:var(--muted);margin:4px 0 0}
 .tiers{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:8px 0}
 .tier,.box{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
-.tier b{display:block;font-size:22px;letter-spacing:-.01em}.tier span{color:var(--muted);font-size:14px}
+.tier b{display:block;font-size:22px;letter-spacing:-.01em}.tier span{color:var(--muted);font-size:14px}.tier .mark{display:block;color:var(--accent);font-style:normal;font-size:13px;font-weight:700;margin:2px 0 4px}
 ul,ol{padding-left:20px}li{margin:4px 0}.cats{columns:2;column-gap:28px}@media (max-width:560px){.cats{columns:1}}
 .note{border-left:3px solid var(--accent);padding:2px 0 2px 14px}
 table{border-collapse:collapse;width:100%;font-size:14px}td,th{border-top:1px solid var(--line);padding:6px 8px 6px 0;text-align:left;vertical-align:top}
@@ -184,44 +186,155 @@ export function categoryName(c: string): string {
   return brandSafe(c).replace(/[.\s]+$/, "") || c.replace(/\s*\(.*?\)/g, "");
 }
 
-/** THE BRAND PITCH. The title names the topic, so the PDF check can confirm what it is. */
-export function renderBrandPitch(v: TlcClubView): string {
-  const hook = sentences(brandSafe(v.angle)).slice(0, 2).join(" ") || `One ${v.slot === "AFTERNOON" ? "afternoon" : "evening"}, one topic, taught properly.`;
-  const why = brandSafe(v.whyNow);
+/**
+ * THE SPONSOR A SHEET IS RENDERED FOR (owner, 4 Nov 2026). Every fact comes from the deal row and Wynn's rules: the
+ * category Parker gave it, the large-brand flag, her angle. Nothing is invented: an unknown answer leaves a line out
+ * (fail closed: no in-kind level, no Title level, no product line).
+ */
+export interface TlcSponsorView {
+  brand: string;
+  /** A physical product guests can hold: only then is the in-kind level shown. */
+  physicalProduct: boolean;
+  /** Software or a service guests use in the hands-on hour (e.g. a vector database). */
+  software: boolean;
+  /** What the brand is to the guests, from its category ("vector database"); null when not known. */
+  role: string | null;
+  /** The brand's newest relevant product, only where research names one. */
+  newestProduct: string | null;
+  /** Research marks the brand as large enough to fund a whole room: only then is Title shown. */
+  largeBrand: boolean;
+  /** The brand asked about owning the room (a reply draft may then add Title). */
+  askedToOwnRoom?: boolean;
+  /** The deal (her angle or Wynn's rule) leads with the series of six. */
+  series: boolean;
+}
+
+const SOFTWARE = /\b(software|saa?s|api|apis|platform|database|vector|cloud|developer|dev tools?|ai (?:lab|model|assistant|agents?)|llm|frontier model|model provider|app|apps|analytics|infrastructure|search engine|no[- ]code|automation|hosting|data (?:platform|warehouse)|service)\b/i;
+const PHYSICAL = /\b(drinks?|beverages?|spirits?|aperitifs?|wine|beer|zero[- ]proof|mocktails?|mixers?|glassware|coffee|tea|snacks?|food|chocolate|candy|skincare|beauty|cosmetics?|fragrance|perfume|candles?|apparel|clothing|footwear|shoes?|jewel(?:le)?ry|supplements?|vitamins?|wearables?|devices?|hardware|headphones?|speakers?|cameras?|kitchen|cookware|stationery|notebooks?|furniture|home goods|consumer goods|pet food)\b/i;
+
+/** "Pinecone (vector database)" -> its key for Wynn's rules: "PINECONE". */
+export const brandRuleKey = (brand: string): string => brand.replace(/\s*\([^()]*\)/g, "").trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_|_$/g, "");
+const SERIES_ASK = /\bseries of six\b|\bsix[- ](?:room|club|month) series\b|\bsix rooms\b/i;
+
+/** The sponsor view of a deal, from its own row and Wynn's rules. PURE. */
+export function sponsorOf(
+  deal: { brand: string; category?: string | null; why_fit?: string | null; owner_angle?: string | null; large_brand?: number | boolean | null },
+  rules: ReadonlyArray<{ code: string | null }> = [],
+): TlcSponsorView {
+  const brand = deal.brand.replace(/\s*\([^()]*\)/g, "").replace(/\s+/g, " ").trim() || deal.brand.trim();
+  const category = (deal.category ?? "").replace(/\s*\((?:lead|supporting|donated|in[- ]kind|frontier model)[^)]*\)/gi, "").trim();
+  const software = SOFTWARE.test(category);
+  // A physical product only when the category says so and it is not software: unknown never shows in-kind.
+  const physicalProduct = !software && PHYSICAL.test(category);
+  const role = software && category ? category.toLowerCase().replace(/[.\s]+$/, "") : null;
+  const key = brandRuleKey(brand);
+  return {
+    brand, software, physicalProduct, role, newestProduct: null,
+    largeBrand: deal.large_brand === true || deal.large_brand === 1,
+    series: SERIES_ASK.test(deal.owner_angle ?? "") || rules.some((r) => r.code === `${key}_SERIES`),
+  };
+}
+
+export interface BrandLevel { key: TlcTier; label: string; priceUsd: number | null; head: string; adds: string[]; marked: string | null }
+
+/**
+ * THE LEVELS ONE BRAND SEES, lowest price first, each saying what it adds over the one below (owner, 4 Nov 2026).
+ * Title only for a large brand (or one that asked to own the room); in-kind only for a physical product; never a
+ * cash level below $5,000. "Presented by" is sold only at Presenting; Title is "with <Brand>".
+ */
+export function brandLevels(sponsor: TlcSponsorView | null, topic: string): BrandLevel[] {
+  const b = sponsor?.brand ?? "your brand";
+  const B = sponsor?.brand ?? "Your brand";
+  const product = sponsor?.software && sponsor.role
+    ? `${B} is the ${sponsor.role} every guest uses in the hands-on hour, with a starter account set up in the room`
+    : "your product in guests' hands during the hands-on hour, where it fits";
+  const out: BrandLevel[] = [
+    { key: "PARTNER", label: "Partner", priceUsd: TLC_TIERS.PARTNER.priceUsd, head: "", marked: null,
+      adds: ["named on the invitation and on the day", product, "photographs for your channels", "opt-in leads", "a recap with the numbers"] },
+    { key: "LEAD", label: "Lead partner", priceUsd: TLC_TIERS.LEAD.priceUsd, head: "Everything in Partner, plus:",
+      marked: sponsor ? `Most brands like ${b} would benefit most from this` : "Most brands would benefit most from this",
+      adds: ["the hands-on segment built around your product", "five minutes to the room", "first placement among partners"] },
+    { key: "PRESENTING", label: "Presenting partner", priceUsd: TLC_TIERS.PRESENTING.priceUsd, head: "Everything in Lead, plus:", marked: null,
+      adds: [`"Presented by ${B}" on the invitation, signage and recap`] },
+  ];
+  if (sponsor && (sponsor.largeBrand || sponsor.askedToOwnRoom)) {
+    out.push({ key: "TITLE", label: "Title partner", priceUsd: TLC_TIERS.TITLE.priceUsd, head: "Everything in Presenting, plus:", marked: null,
+      adds: [`the whole room is yours: "The Learning Club: ${topic}, with ${B}"`, "the only cash partner that night", "first say on the format"] });
+  }
+  if (sponsor?.physicalProduct) {
+    out.push({ key: "PRODUCT", label: "Product partner", priceUsd: null, head: "In kind, instead of cash:", marked: null,
+      adds: ["your product in guests' hands during the hands-on hour", "named on the invitation"] });
+  }
+  return out;
+}
+
+/** "Partner · $5,000 per event" / "Product partner · in kind". */
+export const levelPriceWords = (l: Pick<BrandLevel, "label" | "priceUsd">): string => `${l.label} · ${l.priceUsd ? `${usd(l.priceUsd)} per event` : "in kind"}`;
+export const SERIES_PRICE_WORDS = "A series of six: the same per-event price for each club, as a founding partner.";
+
+/**
+ * Words no brand-facing copy may carry (owner, 4 Nov 2026): no charge to guests, no venue or "your space", no implied
+ * track record (the first club is in 2027, said in the future tense), and never a flat "we have never hosted".
+ */
+export const BRAND_COPY_FORBIDDEN: ReadonlyArray<[RegExp, string]> = [
+  [/\$10\b(?![,\d])/, "a ticket price"],
+  [/paid ticket|paid for|seats? sold|ticket price|each paid|\bpaid seat/i, "charging guests"],
+  [/\bvenue\b|your (?:office|space)|sponsor'?s office|\bhost it at\b/i, "a venue or their space"],
+  [/most brands choose|brands usually|our last club|past partners|guests who signed up|a few brands partner on each club|several brands partner on each club/i, "an implied track record"],
+  [/never hosted|our first ever|first-ever/i, "saying it has not run"],
+  [/\bwhy now\b/i, "the why-now section"],
+];
+
+/** The forbidden words a brand-facing render carries (style and cited sources aside). [] when clean. */
+export function brandCopyProblems(text: string): string[] {
+  const body = text.replace(/<style>[\s\S]*?<\/style>/g, "").replace(/<[^>]+>/g, " ");
+  return [...new Set(BRAND_COPY_FORBIDDEN.filter(([r]) => r.test(body)).map(([, w]) => w))];
+}
+
+/**
+ * THE PARTNER-LEVELS SHEET, RENDERED FOR ONE SPONSOR (owner, 4 Nov 2026; the approved pattern). Titled "<topic>, with
+ * <Brand>"; why this room works for the brand; the levels that fit it, per event, lowest first; how to say yes; a
+ * one-line About; her sign-off. Without a sponsor it is the club's generic sheet (the public page and the send-gate
+ * hash): no Title, no in-kind. Never another brand's name, a why-now, a ticket price or a fixed weekday.
+ */
+export function renderBrandPitch(v: TlcClubView, sponsor: TlcSponsorView | null = null): string {
+  const B = sponsor?.brand ?? null;
+  const hook = sentences(brandSafe(v.angle)).slice(0, 2).join(" ");
   const takeHome = brandSafe(v.takeHome);
   const safety = safetyLines(v.topic, `${v.angle ?? ""} ${v.handsOn ?? ""} ${v.aiSegment ?? ""}`);
-  // Open slots only: not the bench, not a slot a featured partner already fills.
-  const cats = [...new Set(v.categories.filter((c) => !c.bench && !c.featured).map((c) => categoryName(c.category)))];
+  const levels = brandLevels(sponsor, v.topic);
+  const hasTitle = levels.some((l) => l.key === "TITLE");
+  const why = [
+    B ? (sponsor!.software ? `Every guest will build on ${B} in the hands-on hour.` : `Every guest will have ${B} in hand during the hands-on hour, where it fits the topic.`) : "Every guest will work hands-on with your product in the hands-on hour, where it fits the topic.",
+    ...(B && sponsor!.newestProduct ? [`The build will show ${sponsor!.newestProduct}.`] : []),
+    "Nothing to staff: we host every segment, and you send someone only if you want to.",
+    `A room that chose this topic: every guest will be there for ${v.topic}.`,
+  ];
+  const series = sponsor?.series
+    ? `<p class="lede">A series of six rooms, one a month for six months, with ${esc(B!)} in every room. A single evening is the option.</p>`
+    : "";
   return page(
-    `The Learning Club: ${v.topic}`,
+    B ? `${v.topic}, with ${B}` : `The Learning Club: ${v.topic}`,
     `<div class="eyebrow">West Peek Rooms · The Learning Club</div>
-<h1>${esc(v.topic)}</h1>
-<p class="lede">${esc(hook)}</p>
-<p class="when">${esc(clubWhen(v.eventDate, v.slot))} · New York City · An intimate room: ${BRAND_GUESTS_WORDS}</p>
-<h2>Why now for your category</h2>
-<p>${esc(why)}</p>
-${sourcesList(v.sources)}
-<h2>Who is in the room</h2>
-<ul><li>${BRAND_ROOM_WORDS} New Yorkers per event, a number we flex to your goals, who chose this topic. Every seat is a paid ticket ($${TLC_TICKET_PRICE_USD}), so everyone in the room chose to come.</li>
+<h1>${esc(B ? `${v.topic}, with ${B}` : v.topic)}</h1>
+${hook ? `<p class="lede">${esc(hook)}</p>` : ""}
+${series}
+<p class="when">${esc(monthWords(v.month))} (date flexible) · New York City · ${BRAND_GUESTS_WORDS}</p>
+<h2>Why this room works for ${esc(B ?? "your brand")}</h2>
+<ul>${why.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>
+<h2>Who will be in the room</h2>
+<ul><li>${BRAND_ROOM_WORDS} New Yorkers per event, a number we flex to your goals, who will choose this topic.</li>
 <li>Founders, operators, creatives and builders from a community of ${COMMUNITY_ABOUT}.</li>
-<li>Taught by someone who does this for a living. The session: arrive, learn, an hour hands-on, a real meal, go deeper, share, close.</li>
+<li>Taught by someone who does this for a living. The session will run: arrive, learn, an hour hands-on, a real meal, go deeper, share, close.</li>
 ${v.aiSegment ? `<li>The AI segment: ${esc(brandSafe(v.aiSegment))}</li>` : ""}
-${takeHome ? `<li>They leave with: ${esc(takeHome)}</li>` : ""}</ul>
-${v.recap ? `<p>${esc(v.recap)}</p>` : ""}
-<h2>What you get</h2>
-<ul><li>Your product in attendees' hands during the hands-on hour, where it fits the topic</li>
-<li>Five minutes to the room during the meal, if you would like them</li>
-<li>Nothing to staff: we host every segment or bring in a host, and you send someone only if you want to</li>
-<li>Photo and content rights: photographs from the day for your own channels</li>
-<li>Opt-in lead capture: attendees who choose to can share their details with you. We never share attendee names, emails or lists otherwise.</li>
-<li>Named in the invitation and on the day</li>
-<li>A recap within a week, with the numbers: seats sold, attendance and photographs</li></ul>
+${takeHome ? `<li>They will leave with: ${esc(takeHome)}</li>` : ""}</ul>
 ${safety.length ? `<p class="note">${safety.map(esc).join(" ")}</p>` : ""}
-<h2>Price and the ask</h2>
-<div class="tiers">${TLC_TIER_KEYS.map((t) => `<div class="tier"><b>${esc(TLC_TIERS[t].label)}${TLC_TIERS[t].priceUsd ? `: ${usd(TLC_TIERS[t].priceUsd!)}` : ""}</b><span>${esc(TLC_TIERS[t].gets)}</span></div>`).join("")}</div>
-<p>Several brands partner on each club, each in its own way.</p>
-<p><strong>Would you be open to exploring a partnership?</strong> Reply to the email this came with, or write to ${esc(TLC_OWNER.name)} directly.</p>
-${cats.length ? `<h2>Partner categories for this club</h2><ul class="cats">${cats.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
+<h2>Partner levels, per event</h2>
+<div class="tiers">${levels.map((l) => `<div class="tier" data-level="${l.key}"><b>${esc(levelPriceWords(l))}</b>${l.marked ? `<em class="mark">${esc(l.marked)}</em>` : ""}<span>${l.head ? `${esc(l.head)} ` : ""}${esc(l.adds.join("; "))}.</span></div>`).join("")}</div>
+<p>${esc(SERIES_PRICE_WORDS)}</p>
+<p>${hasTitle ? "Except with a Title partner, a few brands can partner on each club." : "A few brands can partner on each club."}</p>
+<h2>To say yes</h2>
+<ol><li>Reply with the level.</li><li>We send a one-page agreement and an invoice; payment is due within 14 days.</li><li>Then we set the date with you and shape the guest list around your audience.</li></ol>
 <section class="box"><h2>About West Peek</h2><p>${esc(TLC_ABOUT_COMMUNITY)}</p></section>
 <footer><strong>${esc(TLC_OWNER.name)}</strong> · ${esc(TLC_OWNER.firm)} · <a href="mailto:${TLC_OWNER.email}">${TLC_OWNER.email}</a></footer>`,
   );
@@ -310,5 +423,8 @@ export function brandPitchProblems(html: string): string[] {
   if (/\bgoal\b|to raise|our costs|cost budget|\bnet\b|\$15,000 (in )?costs/i.test(body)) out.push("our goal or costs");
   if (/\bseason\b/i.test(body)) out.push("a season offer (internal only)");
   if (!body.includes(TLC_OWNER.email)) out.push("no contact");
+  const plain = body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+  if ([...plain.matchAll(/\$\d[\d,]*/g)].some((m) => !plain.slice(m.index! + m[0].length).startsWith(" per event"))) out.push('a price without "per event"');
+  out.push(...brandCopyProblems(body));
   return [...new Set(out)];
 }
