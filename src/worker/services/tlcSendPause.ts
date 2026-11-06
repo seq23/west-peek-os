@@ -92,8 +92,8 @@ export async function tellSendPause(env: Env, now: Date, firmScope: string, gate
   }
   const settings = await tlcSettings(env);
   const hashes = await contentHashes(env);
-  const pitch = approvalState(settings, PITCH_APPROVAL_HASH_SETTING, hashes.pitch) === "CHANGED";
-  const playbook = approvalState(settings, PLAYBOOK_APPROVAL_HASH_SETTING, hashes.playbook) === "CHANGED";
+  const pitch = approvalState(settings, PITCH_APPROVAL_HASH_SETTING, hashes.pitch, hashes.pitchWords) === "CHANGED";
+  const playbook = approvalState(settings, PLAYBOOK_APPROVAL_HASH_SETTING, hashes.playbook, hashes.playbookWords) === "CHANGED";
   if (!pitch && !playbook) return "sending is off for another reason (no content change to tell her about)";
   const key = `${pitch ? hashes.pitch : "-"}|${playbook ? hashes.playbook : "-"}`;
   const last = (() => { try { return JSON.parse(settings[PAUSE_NOTICE_SETTING] ?? "null") as PauseNotice | null; } catch { return null; } })();

@@ -38,6 +38,20 @@ const arrive = async (from: string, subject: string, text: string, mid: string, 
   await recordBrandMail(env, { from, subject, now: at });
   return recordBrandReplyText(env, { from, subject, text, messageId: `<${mid}>`, now: at });
 };
+/** Scooter's address, from his own firm_user row (never typed in a test). */
+const scooter = async () => (await env.WP_OS_DB.prepare("SELECT email FROM firm_user WHERE id = 'fu_scooter_taylor'").first<{ email: string }>())!.email;
+/**
+ * SCOOTER'S "approved" (owner, 6 Nov 2026): on the brand-reply approval email nothing sends until both partners have
+ * each approved (tests/tlcBrandReplyBothApprove.test.ts proves each half). Where a test below is about what happens
+ * once a reply IS approved, he approves first and his alone sends nothing.
+ */
+const scooterApproves = async (ref: string, at = AFTERNOON, extra: Record<string, unknown> = {}) => {
+  const from = await scooter();
+  const out = await applyBrandReplyApproval(env, { fromHeader: `Scooter <${from}>`, authenticationResults: auth(from), subject: `Re: Wynn: brand replies · ${ref}`, body: `approved\n\nRef ${ref}` }, { now: at, drafter, ...extra });
+  expect(out.handled).toBe(true);
+  expect(out.detail).not.toMatch(/sent from /);
+  return out;
+};
 const herReply = (body: string, ref: string, from = APPROVER, a = auth(from)) =>
   applyBrandReplyApproval(env, { fromHeader: `Her <${from}>`, authenticationResults: a, subject: `Re: Wynn: brand replies · ${ref}`, body }, { now: AFTERNOON, drafter });
 
@@ -132,6 +146,8 @@ describe("a brand replied", () => {
     expect((await herReply(`approved\n\nRef ${ref}`, ref, APPROVER, `${TRUSTED_AUTHSERV_ID}; dkim=fail; spf=fail smtp.mailfrom=${APPROVER}; dmarc=fail`)).handled).toBe(false);
     expect(sends).toHaveLength(0);
 
+    for (const r of refs) await scooterApproves(r);
+    expect(sends.filter((s) => s.to.endsWith(".example"))).toHaveLength(0);
     for (const r of refs) expect((await herReply(`Approved\n\nOn Tue, Wynn wrote:\n> Ref ${r}`, r)).handled).toBe(true);
     const toBrands = sends.filter((s) => s.to.endsWith(".example"));
     expect(toBrands.map((s) => s.to).sort()).toEqual(["lee@bot.example", "sam@vector.example"]);
@@ -318,8 +334,13 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     const d = (await e.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(dealId).first())! as never;
     return takeBrandReply(e, d, { messageId: `<${mid}>`, subject: "Re: x + a small room in New York", text, receivedAt: MON.toISOString() }, { now: MON, drafter, ...extra });
   };
-  const approve = (e: Env, ref: string, deps: Record<string, unknown> = {}) =>
-    applyBrandReplyApproval(e, { fromHeader: `Her <${APPROVER}>`, authenticationResults: auth(APPROVER), subject: `Re: Wynn · ${ref}`, body: `approved\n\nRef ${ref}` }, { now: MON, drafter, ...deps });
+  /** Both partners approve (owner, 6 Nov 2026): Scooter's "approved" first (it alone sends nothing), then hers. */
+  const approve = async (e: Env, ref: string, deps: Record<string, unknown> = {}) => {
+    const from = (await e.WP_OS_DB.prepare("SELECT email FROM firm_user WHERE id = 'fu_scooter_taylor'").first<{ email: string }>())!.email;
+    const his = await applyBrandReplyApproval(e, { fromHeader: `Scooter <${from}>`, authenticationResults: auth(from), subject: `Re: Wynn · ${ref}`, body: `approved\n\nRef ${ref}` }, { now: MON, drafter, ...deps });
+    expect(his.detail).not.toMatch(/sent from /);
+    return applyBrandReplyApproval(e, { fromHeader: `Her <${APPROVER}>`, authenticationResults: auth(APPROVER), subject: `Re: Wynn · ${ref}`, body: `approved\n\nRef ${ref}` }, { now: MON, drafter, ...deps });
+  };
   const refOf = async (dealId: string) => (await env.WP_OS_DB.prepare("SELECT notice_ref FROM tlc_brand_reply WHERE deal_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(dealId).first<{ notice_ref: string }>())!.notice_ref;
 
   const PREVIEW_URL = /https:\/\/os\.joinwestpeek\.com\/api\/tlc-pitch\/samples\/([0-9a-f]{32})/;
@@ -620,6 +641,46 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     expect(made).toEqual([expect.objectContaining({ start: offered[1], attendees: ["kim@call.example"] })]);
     expect(out.detail).toContain("is on your calendar, kim@call.example invited");
     expect((await env.WP_OS_DB.prepare("SELECT stage FROM tlc_deal WHERE id = 'tld_call'").first<{ stage: string }>())!.stage).toBe("CALL");
+  });
+
+  it("a proposal waiting on an older sheet design is made again and comes back as a new email (owner, 6 Nov 2026); approvals to the old email no longer count; a sheet that cannot be made leaves the draft as it was", async () => {
+    const e = docEnv();
+    const { refreshStaleSheets, sendReplyApprovals } = await import("../src/worker/services/tlcBrandReply");
+    const { SHEET_VERSION, SHEET_CHANGE_WORDS } = await import("../src/shared/tlc/pitch");
+    const render = { renderPdf: async () => ({ pdfBase64: Buffer.from("%PDF-1.4 /Type /Page a").toString("base64"), pageCount: 1 }) };
+    await deal("tld_old", "Old Co", "ash@old.example");
+    sends.length = 0;
+    await take(e, "tld_old", "How much is this to do?", "o-1@old.example", { samples: render });
+    await sendReplyApprovals(e, MON);
+    const row = () => e.WP_OS_DB.prepare("SELECT id, state, notice_ref, approved_by_json, attachments_json FROM tlc_brand_reply WHERE deal_id = 'tld_old'").first<{ id: string; state: string; notice_ref: string | null; approved_by_json: string | null; attachments_json: string }>();
+    const first = (await row())!;
+    expect(first.state).toBe("NOTIFIED");
+    // Made now: stamped with the current design, so nothing is made again.
+    expect(JSON.parse(first.attachments_json)[0].sheet).toBe(SHEET_VERSION);
+    expect(await refreshStaleSheets(e, MON, "west-peek", { samples: render })).toBe("");
+    // The same draft as it stood before this design: its sheet carries no stamp.
+    const oldFiles = JSON.parse(first.attachments_json).map((f: { key: string; name: string }) => ({ key: f.key, name: f.name }));
+    await e.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET attachments_json = ?2 WHERE id = ?1").bind(first.id, JSON.stringify(oldFiles)).run();
+    await scooterApproves(first.notice_ref!, MON, { samples: render });
+    // The browser is busy: the draft stays exactly as it was, and says so for the next pass.
+    expect(await refreshStaleSheets(e, MON, "west-peek", { samples: { renderPdf: async () => ({ pdfBase64: null, reason: "fixture browser busy" }) } })).toMatch(/^sheet not made yet \(tried next pass\): Old Co: /);
+    expect((await row())!.notice_ref).toBe(first.notice_ref);
+    expect(await refreshStaleSheets(e, MON, "west-peek", { samples: render })).toBe("sheet made again for Old Co");
+    const redone = (await row())!;
+    expect(redone).toMatchObject({ state: "DRAFTED", notice_ref: null, approved_by_json: null });
+    expect(JSON.parse(redone.attachments_json)).toEqual([expect.objectContaining({ name: "The Learning Club - Build Your Own AI Agent - partner levels - Old Co.pdf", sheet: SHEET_VERSION })]);
+    expect(JSON.parse(redone.attachments_json)[0].key).not.toBe(oldFiles[0].key);
+    sends.length = 0;
+    await sendReplyApprovals(e, MON);
+    const again = (await row())!;
+    expect(again.notice_ref).not.toBe(first.notice_ref);
+    expect(sends[0]!.text.replace(/\s+/g, " ")).toContain(SHEET_CHANGE_WORDS);
+    expect(sends[0]!.files).toEqual(["The Learning Club - Build Your Own AI Agent - partner levels - Old Co.pdf"]);
+    // Her "approved" to the OLD email (Scooter had approved it too) sends nothing: that email no longer stands.
+    sends.length = 0;
+    await applyBrandReplyApproval(e, { fromHeader: `Her <${APPROVER}>`, authenticationResults: auth(APPROVER), subject: `Re: Wynn · ${first.notice_ref}`, body: `approved\n\nRef ${first.notice_ref}` }, { now: MON, drafter });
+    expect(sends.filter((x) => x.to.includes("old.example"))).toHaveLength(0);
+    expect(await refreshStaleSheets(e, MON, "west-peek", { samples: render })).toBe("");
   });
 
   it("steps 4 and 5: after the samples, the proposal with the one-pager; the level they pick gets the agreement and invoice; her approved agrees the deal ONCE", async () => {

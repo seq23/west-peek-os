@@ -334,6 +334,14 @@ export function switchVerdict(backup: TlcBackup | null, deadline: string | null,
 const OWNER_PARTNER = PARTNERS.find((p) => p.firstName === "Sequoia")!;
 export const TLC_OWNER = { firmUserId: OWNER_PARTNER.firmUserId, email: OWNER_PARTNER.email, name: OWNER_PARTNER.fullName, firm: "West Peek Ventures" } as const;
 export const TLC_RECIPIENTS: readonly string[] = [TLC_OWNER.email];
+/**
+ * SCOOTER IS COPIED ON WYNN'S BRAND-REPLY APPROVAL EMAIL, AND ONLY THERE (owner, 6 Nov 2026, on the Pinecone draft:
+ * Scooter "must be cc'd on the next draft sent to her"). The one exception to "TLC mail goes to Sequoia only": the
+ * copy is for him to see; it never lets him approve (applyBrandReplyApproval accepts her addresses alone). Named by
+ * the partner registry; his address is read from his firm_user row at send time, never typed here.
+ */
+export const TLC_BRAND_REPLY_NOTICE_OBJECT = "tlc_brand_reply_notice";
+export const TLC_BRAND_REPLY_NOTICE_CC_IDS: readonly string[] = [PARTNERS.find((p) => p.firstName === "Scooter")!.firmUserId];
 export const TLC_DECIDER_IDS: readonly string[] = [TLC_OWNER.firmUserId];
 /** Whether a partner email is about the Learning Club: a TLC card kind, or a TLC object. */
 export function isTlcMail(input: { cardKind?: string | null; objectType?: string | null }): boolean {
@@ -742,12 +750,26 @@ export const PLAYBOOK_APPROVAL_HASH_SETTING = "playbook_approved_hash";
 export interface ContentHashes {
   pitch: string;
   playbook: string;
+  /** The words each hash is of, as she reads them (contentTexts): a restyle that keeps every word keeps her approval. */
+  pitchWords?: string;
+  playbookWords?: string;
 }
+/** Where the words she approved are kept, beside each hash (written on every approval). */
+export const APPROVED_WORDS_SETTING: Readonly<Record<string, string>> = { [PITCH_APPROVAL_HASH_SETTING]: "pitch_approved_text", [PLAYBOOK_APPROVAL_HASH_SETTING]: "playbook_approved_text" };
 
-export function approvalState(settings: Record<string, string | null | undefined>, key: string, current: string): "APPROVED" | "CHANGED" | "NOT_APPROVED" {
+/**
+ * APPROVED when the exact content she approved is what would go now. WHAT SHE APPROVES IS THE WORDS (owner, 6 Nov
+ * 2026: the partner-levels sheet restyled to West Peek's brand). The hash covers the whole page, styling included, so
+ * a restyle alone changed it and paused every brand send to ask her to approve words she had already approved. When
+ * the hash differs but the words she approved (kept beside it) are identical, word for word, it is still APPROVED;
+ * one changed word is CHANGED, as before.
+ */
+export function approvalState(settings: Record<string, string | null | undefined>, key: string, current: string, currentWords?: string | null): "APPROVED" | "CHANGED" | "NOT_APPROVED" {
   const stored = settings[key];
   if (!stored) return "NOT_APPROVED";
-  return stored === current ? "APPROVED" : "CHANGED";
+  if (stored === current) return "APPROVED";
+  const words = APPROVED_WORDS_SETTING[key] ? settings[APPROVED_WORDS_SETTING[key]!] : null;
+  return typeof currentWords === "string" && currentWords.length > 0 && words === currentWords ? "APPROVED" : "CHANGED";
 }
 
 /**
@@ -766,8 +788,8 @@ export function brandSendGate(
   hashes: ContentHashes,
 ): { open: boolean; reasons: string[]; outside_email_allowed: boolean } {
   const reasons: string[] = [];
-  const pitch = approvalState(settings, PITCH_APPROVAL_HASH_SETTING, hashes.pitch);
-  const playbook = approvalState(settings, PLAYBOOK_APPROVAL_HASH_SETTING, hashes.playbook);
+  const pitch = approvalState(settings, PITCH_APPROVAL_HASH_SETTING, hashes.pitch, hashes.pitchWords);
+  const playbook = approvalState(settings, PLAYBOOK_APPROVAL_HASH_SETTING, hashes.playbook, hashes.playbookWords);
   if (pitch === "NOT_APPROVED") reasons.push("the owner has not approved the brand pitch");
   if (pitch === "CHANGED") reasons.push("the brand pitch changed after it was approved; approve it again");
   if (playbook === "NOT_APPROVED") reasons.push("the owner has not approved the sales playbook");

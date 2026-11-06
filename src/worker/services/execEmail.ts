@@ -10,7 +10,8 @@ import { lintExecEmail, renderExecEmail, type ExecEmailInput } from "../../share
 import { recordThreadDelivery, startThread } from "./emailThread";
 import { threadReference } from "../../shared/email/thread";
 import { EmployeeSenderError, employeeSenderHeader } from "../../shared/registry/employeeMail";
-import { TLC_RECIPIENTS, isTlcKind, isTlcMail } from "../../shared/tlc/learningClub";
+import { TLC_BRAND_REPLY_NOTICE_CC_IDS, TLC_BRAND_REPLY_NOTICE_OBJECT, TLC_RECIPIENTS, isTlcKind, isTlcMail } from "../../shared/tlc/learningClub";
+import { partnerByEmail } from "../../shared/registry/partners";
 
 /**
  * TLC MAIL GOES TO SEQUOIA ONLY (owner, 22 Oct 2026: "this is my project"; she tells Scooter
@@ -23,6 +24,13 @@ export async function isTlcPartnerMail(env: Env, input: { cardKind?: string | nu
   if (input.objectType !== "work_card") return false;
   const row = await env.WP_OS_DB.prepare("SELECT kind FROM work_card WHERE id = ?1").bind(input.objectId).first<{ kind: string | null }>().catch(() => null);
   return isTlcKind(row?.kind ?? null);
+}
+/** A cc a TLC email may keep: Sequoia, or (on the brand-reply approval email only) the partners she named, 6 Nov 2026. */
+export function tlcCcKept(objectType: string, address: string): boolean {
+  const a = address.trim().toLowerCase();
+  if (TLC_RECIPIENTS.includes(a)) return true;
+  const partner = partnerByEmail(a);
+  return objectType === TLC_BRAND_REPLY_NOTICE_OBJECT && partner !== null && TLC_BRAND_REPLY_NOTICE_CC_IDS.includes(partner.firmUserId);
 }
 export function tlcAddressed(to: readonly string[]): string[] {
   const kept = to.filter((a) => TLC_RECIPIENTS.includes(a));
@@ -160,7 +168,7 @@ async function record(
 export async function sendPartnerEmail(env: Env, input: PartnerEmailInput): Promise<PartnerEmailOutcome> {
   const tlc = await isTlcPartnerMail(env, input);
   const to = tlc ? tlcAddressed([input.to.trim().toLowerCase()])[0]! : input.to.trim().toLowerCase();
-  if (tlc) input = { ...input, cc: (input.cc ?? []).filter((a) => TLC_RECIPIENTS.includes(a.trim().toLowerCase())) };
+  if (tlc) input = { ...input, cc: (input.cc ?? []).filter((a) => tlcCcKept(input.objectType, a)) };
   const rendered = renderExecEmail(input.email);
   const events = input.events ?? { sent: "deliverable.emailed_to_partner", notSent: "deliverable.email_not_sent" };
   const actor = { objectType: input.objectType, objectId: input.objectId, firmScope: input.firmScope, actorId: input.actorId ?? "work_sweep", actorType: "system" as const };
