@@ -164,6 +164,7 @@ import {
 import { handleOutsideEmailAllow, handleOutsideEmailCard, handleOutsideEmailMode, handleOutsideEmailScreen } from "./services/outsideEmail";
 import { handleMustPitchAdd, handleMustPitchOverview, handleMustPitchRemove, handleWayInContact, handleWayInHide } from "./services/tlcMustPitch";
 import { handleTlcSamplesPreview } from "./services/tlcSamples";
+import { handleTlcDraftPage } from "./services/tlcBrandReply";
 import { handleTlcApprove, handleTlcDeal, handleTlcIdeaAdd, handleTlcIdeaNote, handleTlcIdeaStatus, handleTlcResearchLinkAdd, handleTlcOnePager, handleTlcOverview, handleTlcPitchPublic, handleTlcPlan, handleTlcTicket } from "./services/learningClub";
 import { handleRoomsPartners } from "./services/partnersPanel";
 import {
@@ -1083,6 +1084,8 @@ const router = new Router()
    * and carries nothing internal, and an unknown token is a bare 404.
    */
   .get("/api/tlc-pitch/samples/:token", handleTlcSamplesPreview, { auth: false })
+  // Round 2's live draft page for the partners (6 Nov 2026): the 128-bit token is the credential, noindex, no-store.
+  .get("/api/tlc-pitch/draft/:token", handleTlcDraftPage, { auth: false })
   .get("/api/tlc-pitch/:token", handleTlcPitchPublic, { auth: false })
   .get("/api/tlc-pitch/:token/pdf", handleTlcPitchPublic, { auth: false })
   .get("/api/rooms/partners", handleRoomsPartners)

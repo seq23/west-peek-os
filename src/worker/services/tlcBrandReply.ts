@@ -1,6 +1,7 @@
 import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
 import { overstatedCommunityClaims, trueCommunityWords } from "../../shared/community/size";
 import type { Env } from "../env";
+import type { RouteContext } from "../router";
 import { appendEvent } from "../events";
 import { textBodyOf } from "../effects/mimeAttachments";
 import { withBrandFooter } from "../../shared/tlc/brandFooter";
@@ -94,7 +95,7 @@ interface ReplyRow {
   draft_subject: string; draft_body: string; state: string; notice_ref: string | null; firm_scope: string;
   send_to?: string | null; send_cc_json?: string | null; approved_by_json?: string | null;
   change_note?: string | null; report_text?: string | null; research_due?: string | null; research_tries?: number;
-  samples_id?: string | null; offered_slots_json?: string | null; agreed_slot?: string | null; calendar_event_id?: string | null; held_reason?: string | null;
+  samples_id?: string | null; previous_draft?: string | null; round?: string | null; inputs_json?: string | null; offered_slots_json?: string | null; agreed_slot?: string | null; calendar_event_id?: string | null; held_reason?: string | null;
   kind?: string | null; tier?: string | null; attachments_json?: string | null; send_retry_due?: string | null; send_tries?: number;
 }
 
@@ -320,8 +321,8 @@ async function redraftFor(env: Env, r: ReplyRow, note: string, now: Date, deps: 
     }
   }
   const draft = await draftFor(env, deal, ev, r.intent as BrandReplyIntent, r.their_text, deps, { note, previous, research: report, samplesAttached: Boolean(r.samples_id) });
-  await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'DRAFTED', notice_ref = NULL, approved_by_json = NULL, draft_body = ?2, change_note = ?3, report_text = ?4, research_due = NULL, held_reason = NULL WHERE id = ?1")
-    .bind(r.id, draft, note, report).run();
+  await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'DRAFTED', notice_ref = NULL, approved_by_json = NULL, draft_body = ?2, change_note = ?3, report_text = ?4, research_due = NULL, held_reason = NULL, previous_draft = ?5 WHERE id = ?1")
+    .bind(r.id, draft, note, report, r.draft_body).run();
   return "DRAFTED";
 }
 
@@ -361,7 +362,7 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
   const mid = normalizeMid(msg.messageId) || `nomid:${msg.receivedAt}`;
   if (await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_brand_reply WHERE deal_id = ?1 AND brand_message_id = ?2").bind(deal.id, mid).first()) return "SEEN";
   const words = theirNewText(textBodyOf(msg.text)) || msg.text.trim();
-  const cls = classifyBrandReply({ subject: msg.subject, text: words }, now);
+  const cls = classifyBrandReply({ subject: msg.subject, text: words, raw: msg.text }, now);
   const close = (intent: string, note: string) => env.WP_OS_DB.prepare(
     "INSERT OR IGNORE INTO tlc_brand_reply (id, deal_id, brand_message_id, their_subject, their_text, received_at, intent, draft_subject, draft_body, state, held_reason, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '', '', 'CLOSED', ?8, ?9)",
   ).bind(`tbr_${crypto.randomUUID()}`, deal.id, mid, msg.subject.slice(0, 300), words.slice(0, 8000), msg.receivedAt, intent, note, deal.firm_scope).run();
@@ -788,32 +789,81 @@ export async function approverAddress(env: Env): Promise<string> {
   return ((await setting(env, APPROVER_SETTING)) ?? TLC_OWNER.email).trim().toLowerCase();
 }
 
+/** A draft that carries prices: the proposal (step 4) or the confirmation (step 5). These get round 2. */
+export const carriesPricing = (r: { kind?: string | null }): boolean => r.kind === "PROPOSAL" || r.kind === "CONFIRM";
+/** Round 2: a pricing draft she approved, now with her and Scooter (a notice that named both partners counts too). */
+export const inPartnerRound = (r: { round?: string | null }): boolean => r.round === "PARTNERS";
+
+export const draftPageUrl = (token: string): string => `https://os.joinwestpeek.com/api/tlc-pitch/draft/${token}`;
+async function draftPageLink(env: Env, replyId: string): Promise<string> {
+  const token = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET page_token = ?2 WHERE id = ?1 AND page_token IS NULL").bind(replyId, token).run();
+  const row = await env.WP_OS_DB.prepare("SELECT page_token FROM tlc_brand_reply WHERE id = ?1").bind(replyId).first<{ page_token: string }>();
+  return draftPageUrl(row!.page_token);
+}
+
+/** Round 2's answers so far: {firm_user_id: {approved, note, at}}. */
+export type PartnerInputs = Record<string, { approved: boolean; note: string | null; at: string }>;
+export const inputsOf = (json: string | null | undefined): PartnerInputs => { try { const v = JSON.parse(json ?? "null"); return v && typeof v === "object" && !Array.isArray(v) ? v as PartnerInputs : {}; } catch { return {}; } };
+
+/** Their words, short enough for a first line: the first sentence or 140 characters. */
+export function theirGist(text: string): string {
+  const flat = wordsOf(text).replace(/\s+/g, " ").trim();
+  const first = flat.match(/^.{1,140}?[.?!](?=\s|$)/)?.[0] ?? (flat.length > 140 ? `${flat.slice(0, 137).trimEnd()}…` : flat);
+  return first;
+}
+
 /**
- * Sends her the approval email for every drafted reply, AT ONCE (owner, 26 Oct 2026: "Why 4pm?"). A reply is rare
- * and time-sensitive, so it never waits for an hour of the day; the once-a-week batching is for outbound drafts only.
- * Send-once: a row moves DRAFTED → NOTIFIED with the email, so the next pass finds nothing to send again. A reply
- * still waiting for the research she asked for (research_due) is not sent until the research ran.
+ * WHAT CHANGED BETWEEN TWO DRAFTS, LINE BY LINE (owner, 6 Nov 2026: the Pinecone redraft "didnt change much"). Shown
+ * at the top of every redraft, so a redraft that ignored a note is visible at a glance. Pure.
+ */
+export function changedLines(before: string, after: string): { removed: string[]; added: string[] } {
+  const a = wordsOf(before).split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  const b = wordsOf(after).split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  return { removed: a.filter((l) => !b.includes(l)), added: b.filter((l) => !a.includes(l)) };
+}
+
+/**
+ * Sends the approval email for every drafted reply, AT ONCE (owner, 26 Oct 2026: "Why 4pm?"). TWO ROUNDS (owner,
+ * 6 Nov 2026): round 1 goes to her ALONE, every draft; a draft with prices that she approves comes back as round 2,
+ * to her and Scooter, as a link to its live draft page (never a PDF going back and forth), and nothing reaches the
+ * brand until both have replied approved. Send-once: a row moves DRAFTED → NOTIFIED with the email. A reply still
+ * waiting for the research she asked for (research_due) is not sent until the research ran.
  */
 export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-peek"): Promise<string> {
   const waiting = (await env.WP_OS_DB.prepare(
     `SELECT r.*, d.brand, d.contact_name, d.contact_email, e.month, e.topic FROM tlc_brand_reply r JOIN tlc_deal d ON d.id = r.deal_id JOIN tlc_event e ON e.id = d.event_id
       WHERE r.firm_scope = ?1 AND r.state = 'DRAFTED' AND r.research_due IS NULL ORDER BY r.received_at`,
-  ).bind(firmScope).all<ReplyRow & { brand: string; contact_name: string | null; contact_email: string; month: string; topic: string | null }>()).results ?? [];
+  ).bind(firmScope).all<WaitingRow>()).results ?? [];
   const researching = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_brand_reply WHERE firm_scope = ?1 AND state = 'DRAFTED' AND research_due IS NOT NULL").bind(firmScope).first<{ n: number }>())?.n ?? 0;
   if (waiting.length === 0) return researching ? `${researching} brand repl${researching === 1 ? "y" : "ies"} waiting for Wynn's research` : "no brand reply waiting for her";
+  const out: string[] = [];
+  const hers = waiting.filter((r) => !inPartnerRound(r));
+  const partners = waiting.filter((r) => inPartnerRound(r));
+  if (hers.length) out.push(await sendRound(env, now, firmScope, hers, false));
+  if (partners.length) out.push(await sendRound(env, now, firmScope, partners, true));
+  return out.join("; ");
+}
+
+type WaitingRow = ReplyRow & { brand: string; contact_name: string | null; contact_email: string; month: string; topic: string | null; round?: string | null; inputs_json?: string | null; page_token?: string | null };
+
+async function sendRound(env: Env, now: Date, firmScope: string, rows: WaitingRow[], partnerRound: boolean): Promise<string> {
   const ct = chicago(now);
   const ref = mintRef();
   const to = TLC_OWNER.email;
+  const copies = partnerRound ? await approvalCopies(env) : { cc: [] as string[], missing: [] as string[] };
+  const needed = [TLC_OWNER.firmUserId, ...copies.cc.map((a) => partnerByEmail(a)!.firmUserId)];
+  const both = needed.length > 1;
   /*
-   * THE SAMPLES ARE A LINK, NOT A FRESH PDF (owner, 30 Oct 2026). While a draft is with her, the samples each yes
-   * carries are her private preview page: exactly what the PDF will be, updated by each change note, with what
-   * changed at the top. The PDF is made once, from that page, on her "approved".
+   * Round 1 carries what goes with the answer (the samples page link; any PDF attached, so she sees exactly what the
+   * brand would get). Round 2 carries NO PDF: one link to the live draft page, which shows the answer, the sheet and
+   * every note so far, and is updated in place by each redraft.
    */
   const attachments: EmailAttachment[] = [];
   const attachedTo = new Map<string, string>();
   const previews = new Map<string, { url: string; latest: string | null }>();
-  for (const r of waiting) {
-    const mine: EmailAttachment[] = [];
+  const pages = new Map<string, string>();
+  for (const r of rows) {
     if (r.samples_id) {
       const sample = await samplesForDeal(env, r.deal_id);
       const url = sample?.state === "READY" ? await samplesPreviewLink(env, sample.id) : null;
@@ -821,53 +871,66 @@ export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-
       const history = await samplesRevisions(env, sample.id);
       previews.set(r.id, { url, latest: history.length > 1 ? history[0]!.line : null });
     }
+    if (partnerRound) { pages.set(r.id, await draftPageLink(env, r.id)); continue; }
+    const mine: EmailAttachment[] = [];
     for (const f of JSON.parse(r.attachments_json ?? "[]") as StoredFile[]) { const a = await storedAttachment(env, f); if (a) mine.push(a); }
-    if (mine.length) { attachments.push(...mine); attachedTo.set(r.id, mine.map((a) => a.filename).join(" · ")); }
+    if (mine.length) { attachments.push(...mine); attachedTo.set(r.id, mine.map((a) => a.filename).join(" and ")); }
   }
-  const blocks = waiting.map((r, i) => [
-    `── ${i + 1} · ${brandDisplayName(r.brand)} · The Learning Club, ${monthWords(r.month)}${r.topic ? ` (${r.topic})` : ""} ──`,
-    `From: ${whoWrote(r)}, ${herClock(r.received_at)}`,
-    `YOUR ANSWER GOES TO: ${answerRecipients(r).to}`,
-    `Cc: ${answerRecipients(r).cc.join(", ") || "nobody"}`,
-    "",
-    "THEIR MESSAGE, WORD FOR WORD",
-    `Subject: ${r.their_subject}`,
-    "",
-    r.their_text,
-    "",
-    ...(r.change_note ? ["YOUR NOTE, WORD FOR WORD", r.change_note, ""] : []),
-    ...(r.report_text ? [r.report_text, ""] : []),
-    ...(r.samples_id && r.held_reason ? [`⚠ ${r.held_reason}`, ""] : []),
-    "WYNN'S DRAFT OF YOUR ANSWER, WORD FOR WORD",
-    `Subject: ${r.draft_subject}`,
-    "",
-    withBrandFooter(r.draft_body),
-    ...(attachedTo.has(r.id) ? ["", `ATTACHED (goes with it): ${attachedTo.get(r.id)}`] : []),
-    ...(previews.has(r.id) ? [
-      "", `THE SAMPLES (3 pages), OPEN ON YOUR PHONE OR LAPTOP: ${previews.get(r.id)!.url}`,
-      ...(previews.get(r.id)!.latest ? [`Latest change: ${previews.get(r.id)!.latest}`] : []),
-      "To change them, reply with what to change. The PDF is made from that page when you reply approved, and goes with your answer.",
-    ] : []),
-    ...(r.agreed_slot ? ["", `ON YOUR WORD: ${slotWords(r.agreed_slot)} goes on your calendar, ${r.contact_email} invited`] : []),
-  ].join("\n"));
-  const many = waiting.length > 1;
-  const copies = await approvalCopies(env);
-  const needed = [TLC_OWNER.firmUserId, ...copies.cc.map((a) => partnerByEmail(a)!.firmUserId)];
-  const both = needed.length > 1;
+  const many = rows.length > 1;
+  const name = (r: WaitingRow) => brandDisplayName(r.brand);
+  const person = (r: WaitingRow) => (r.contact_name?.trim() ? `${r.contact_name.trim()} at ${name(r)}` : name(r));
+  const blocks = rows.map((r, i) => {
+    const { to: answerTo, cc } = answerRecipients(r);
+    const inputs = inputsOf(r.inputs_json);
+    const notes = Object.entries(inputs).filter(([, v]) => v.note).map(([id, v]) => `${firstNameOf(id)} said: ${v.note}`);
+    const diff = r.change_note && r.previous_draft ? changedLines(r.previous_draft, r.draft_body) : null;
+    return [
+      `${many ? `${i + 1}. ` : ""}${name(r).toUpperCase()}, The Learning Club in ${monthWords(r.month)}`,
+      "",
+      `What ${person(r)} wrote (${herClock(r.received_at)}):`,
+      wordsOf(r.their_text),
+      "",
+      ...(r.change_note ? [`The notes Wynn worked from:`, r.change_note, ""] : []),
+      ...(diff ? [diff.added.length || diff.removed.length ? "What Wynn changed:" : "Wynn changed nothing in the wording. Reply with what you want different.", ...diff.removed.map((l) => `  − ${l}`), ...diff.added.map((l) => `  + ${l}`), ""] : []),
+      ...(notes.length ? ["Notes so far on this round:", ...notes, ""] : []),
+      ...(r.report_text ? [r.report_text, ""] : []),
+      ...(r.samples_id && r.held_reason ? [`Note: ${r.held_reason}`, ""] : []),
+      `Your answer, as it would go to ${answerTo}${cc.length ? ` (copying ${cc.join(", ")})` : ""}:`,
+      "",
+      withBrandFooter(r.draft_body),
+      ...(attachedTo.has(r.id) ? ["", `Goes with it: ${attachedTo.get(r.id)}`] : []),
+      ...(pages.has(r.id) ? ["", `The answer and the pricing sheet, on one page: ${pages.get(r.id)}`] : []),
+      ...(previews.has(r.id) ? ["", `The 3 sample pages: ${previews.get(r.id)!.url}`, ...(previews.get(r.id)!.latest ? [`Last change: ${previews.get(r.id)!.latest}`] : []), "To change them, reply with what to change. The PDF is made from that page when you reply approved, and goes with your answer."] : []),
+      ...(r.agreed_slot ? ["", `When it goes, ${slotWords(r.agreed_slot)} goes on your calendar and ${r.contact_email} is invited.`] : []),
+    ].join("\n");
+  });
+  const one = rows[0]!;
+  const pricingNow = !partnerRound && rows.some(carriesPricing);
+  const what = partnerRound
+    ? `${many ? `${rows.length} brands' pricing` : `${name(one)} pricing`}, for you and ${namesOf(needed.slice(1)) || "Scooter"} · ${ref}`
+    : `${many ? `${rows.length} brands replied` : `${name(one)} replied`} · ${ref}`;
+  const tldr = partnerRound
+    ? `Wynn's answer to ${many ? `${rows.length} brands` : name(one)}, with prices, is ready for you both on one page.`
+    : `${many ? `${rows.length} brands wrote back` : `${person(one)} wrote back`}. Wynn drafted your answer${many ? "s" : ""}, below.`;
+  const asks = partnerRound
+    ? [`Open the page, then each reply "approved" or with your notes`, `It goes to ${many ? "the brands" : name(one)} only once you have both said approved`, `Wynn waits for both of you before changing anything`]
+    : many
+      ? ['Reply "approved" to send them all', 'Or "approve 1", "skip 2", or "change 2: what to change"']
+      : pricingNow
+        ? ['Reply "approved" if it is right; it then goes to you and Scooter, nothing to the brand yet', "Or reply with what to change"]
+        : ['Reply "approved" to send it', "Or reply with what to change"];
   try {
     await emailHer(env, firmScope, ref, {
-      what: `${waiting.length} brand repl${many ? "ies" : "y"} to approve · ${ref}`,
-      tldr: `${waiting.length} brand${many ? "s" : ""} replied to your Learning Club email${many ? "s" : ""}. ${both ? `${namesOf(needed)} each reply approved to send, or reply with changes` : BRAND_REPLY_ASK}.`,
-      tldrBullets: [
-        ...(both ? [`Nothing sends until ${namesOf(needed)} have each replied "approved"`] : []),
-        ...(many ? ['Reply "approved" to approve all', 'Or "approve 1" · "skip 2" · "change 2: what to change"'] : both ? ["Or reply with your changes"] : ['Reply "approved" to send it', "Or reply with your changes"]),
-      ],
-      sections: [
-        { label: "Who replied", bullets: waiting.map((r, i) => `${i + 1} · ${brandDisplayName(r.brand)} (${monthWords(r.month)}): ${r.kind === "PROPOSAL" ? "step 4: the proposal (their own partner-levels sheet attached)" : r.kind === "CONFIRM" ? `step 5: ${r.tier ? TLC_TIER_LABEL(r.tier) : "a level"} agreed (agreement and invoice attached)` : r.agreed_slot ? `a call, ${slotWords(r.agreed_slot)}` : r.intent === "CALL" ? "wants a call (times from your calendar offered)" : r.samples_id ? "said yes to the samples (open the samples page in the email; the PDF is made when you approve)" : r.intent === "YES" ? "said yes" : "asked a question"}`).slice(0, 6) },
-        { label: "What happens on your word", bullets: ["Your answer goes from your own mailbox, on their thread", "A call they asked for moves the deal to Call", "Nothing goes to a brand until you say so",
-          ...(both ? [`It goes once ${namesOf(needed)} have each approved; one "approved" alone sends nothing`, `Changes from either of you send it back to Wynn to redraft`] : []),
-          ...(copies.missing.length ? ["Scooter could not be copied this time: his record in the OS was not found"] : [])] },
-      ],
+      what,
+      tldr,
+      tldrBullets: asks,
+      sections: [{ label: many ? "Who wrote" : "What they said", bullets: rows.slice(0, 6).map((r, i) => `${many ? `${i + 1}. ` : ""}${person(r)}: "${theirGist(r.their_text)}"${carriesPricing(r) ? " (your answer has prices in it)" : ""}`) },
+        { label: "What happens next", bullets: partnerRound
+        ? [`${namesOf(needed)}: both need to reply. One "approved" alone sends nothing`, "Notes from either of you wait until the other has answered too; then Wynn redrafts with both", "The answer goes from your mailbox, on their thread, with the PDF made from the page you approved",
+          ...(copies.missing.length ? ["Scooter could not be added: his record in the OS was not found"] : [])]
+        : pricingNow
+          ? ["This answer has prices in it, so after your approval it goes to you and Scooter for both of you to approve", "Nothing goes to the brand until then"]
+          : ["Your answer goes from your mailbox, on their thread", "Nothing goes until you say so"] }],
       details: [...blocks.flatMap((b) => [b, ""]), `Ref ${ref}`].join("\n"),
     }, attachments, copies.cc);
   } catch (err) {
@@ -875,10 +938,10 @@ export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-
   }
   const messageId: string | null = null;
   await env.WP_OS_DB.prepare("INSERT INTO tlc_brand_reply_notice (ref, reply_ids_json, day, firm_scope, sent_at, sent_to, forced, gmail_id, approvers_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)")
-    .bind(ref, JSON.stringify(waiting.map((r) => r.id)), ct.day, firmScope, now.toISOString(), to, 0, messageId, JSON.stringify(needed)).run();
-  for (const r of waiting) await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'NOTIFIED', notice_ref = ?2, approved_by_json = NULL WHERE id = ?1 AND state = 'DRAFTED'").bind(r.id, ref).run();
-  await appendEvent(env, { eventType: "tlc.brand_reply_notice", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_brand_reply_notice", objectId: ref, firmScope, payload: { replies: waiting.length } });
-  return `approval email ${ref} with ${waiting.length} brand repl${many ? "ies" : "y"} sent${copies.cc.length ? `, ${copiedNames(copies.cc)} copied` : ""}${copies.missing.length ? `; NOT copied (no active partner record): ${copies.missing.join(", ")}` : ""}`;
+    .bind(ref, JSON.stringify(rows.map((r) => r.id)), ct.day, firmScope, now.toISOString(), to, 0, messageId, JSON.stringify(needed)).run();
+  for (const r of rows) await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'NOTIFIED', notice_ref = ?2, approved_by_json = NULL, inputs_json = NULL WHERE id = ?1 AND state = 'DRAFTED'").bind(r.id, ref).run();
+  await appendEvent(env, { eventType: "tlc.brand_reply_notice", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_brand_reply_notice", objectId: ref, firmScope, payload: { replies: rows.length, round: partnerRound ? 2 : 1 } });
+  return `${partnerRound ? "round-2" : "round-1"} approval email ${ref} with ${rows.length} brand repl${many ? "ies" : "y"} sent${copies.cc.length ? `, ${copiedNames(copies.cc)} on it` : ""}${copies.missing.length ? `; NOT on it (no active partner record): ${copies.missing.join(", ")}` : ""}`;
 }
 
 // ── Her answer ─────────────────────────────────────────────────────────────────────────────────
@@ -933,24 +996,45 @@ export async function applyBrandReplyApproval(
   let backToHer = false;
   const rowOf = (n: number) => (ids[n - 1] ? env.WP_OS_DB.prepare("SELECT r.*, d.brand, d.contact_email, d.stage FROM tlc_brand_reply r JOIN tlc_deal d ON d.id = r.deal_id WHERE r.id = ?1").bind(ids[n - 1]).first<ReplyRow & { brand: string; contact_email: string; stage: string }>() : Promise.resolve(null));
 
+  /*
+   * TWO ROUNDS (owner, 6 Nov 2026). On a round-1 email (to her alone), her "approved" on a draft with prices does not
+   * send it: it goes to round 2, to her and Scooter. On a round-2 email every partner's answer is recorded, and only
+   * when all of them have answered does anything happen: all approved → it sends; any notes → Wynn redrafts once,
+   * with everyone's notes together ("he should wait for both our inputs").
+   */
+  const partnerRound = needed.length > 1;
+  let toPartners = false;
+  const recordInput = async (r: ReplyRow, input: { approved: boolean; note: string | null }): Promise<PartnerInputs | null> => {
+    const before = r.inputs_json ?? null;
+    const next: PartnerInputs = { ...inputsOf(before), [approverId]: { ...input, at: now.toISOString() } };
+    const rec = await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET inputs_json = ?2 WHERE id = ?1 AND state = 'NOTIFIED' AND notice_ref = ?3 AND COALESCE(inputs_json, '') = ?4")
+      .bind(r.id, JSON.stringify(next), ref, before ?? "").run();
+    return (rec.meta?.changes ?? 0) === 0 ? null : next;
+  };
+  const allAnswered = (inputs: PartnerInputs) => needed.every((id) => inputs[id]);
+  const waitingOn = (inputs: PartnerInputs) => namesOf(needed.filter((id) => !inputs[id]));
+  const notesOf = (inputs: PartnerInputs) => needed.filter((id) => inputs[id]?.note).map((id) => `${firstNameOf(id)}: ${inputs[id]!.note}`).join("\n\n");
+  let redrafted = 0;
+  let learned = 0;
+  const redraftWithAll = async (r: ReplyRow, inputs: PartnerInputs, n: number) => {
+    await redraftFor(env, { ...r, research_tries: 0 }, notesOf(inputs), now, deps);
+    redrafted += 1;
+    lines.push(`${n} · ${brandDisplayName((r as ReplyRow & { brand: string }).brand)}: both of you have answered; Wynn redrafted it with both sets of notes`);
+  };
+
   for (const n of [...approve].sort((a, b) => a - b)) {
     const r = await rowOf(n);
     if (!r) { lines.push(`${n}: not in that email`); continue; }
-    /*
-     * BOTH MUST APPROVE (owner, 6 Nov 2026). This "approved" is recorded against the draft on this email; until every
-     * approver the email named has said it, nothing is sent and the line says who is still needed. Recorded with a
-     * compare-and-set, so two replies landing together cannot lose one another.
-     */
-    if (r.state === "NOTIFIED" && r.notice_ref === ref) {
-      const before = r.approved_by_json ?? null;
-      const approvedBy = [...new Set([...idList(before), approverId])];
-      const rec = await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET approved_by_json = ?2 WHERE id = ?1 AND state = 'NOTIFIED' AND notice_ref = ?3 AND COALESCE(approved_by_json, '') = ?4")
-        .bind(r.id, JSON.stringify(approvedBy), ref, before ?? "").run();
-      if ((rec.meta?.changes ?? 0) === 0) { lines.push(`${n} · ${brandDisplayName(r.brand)}: changed while your reply was read; nothing sent, reply again`); continue; }
-      if (!needed.every((id) => approvedBy.includes(id))) {
-        lines.push(`${n} · ${brandDisplayName(r.brand)}: ${approvalWords(needed, approvedBy)}; nothing sent yet`);
-        continue;
-      }
+    if (!partnerRound && carriesPricing(r) && r.state === "NOTIFIED" && r.notice_ref === ref) {
+      const moved = await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'DRAFTED', round = 'PARTNERS', notice_ref = NULL, approved_by_json = NULL, inputs_json = NULL WHERE id = ?1 AND state = 'NOTIFIED' AND notice_ref = ?2").bind(r.id, ref).run();
+      if ((moved.meta?.changes ?? 0) > 0) { toPartners = true; lines.push(`${n} · ${brandDisplayName(r.brand)}: you approved it; it now goes to you and Scooter, and nothing goes to ${brandDisplayName(r.brand)} until you have both approved`); }
+      continue;
+    }
+    if (partnerRound && r.state === "NOTIFIED" && r.notice_ref === ref) {
+      const inputs = await recordInput(r, { approved: true, note: null });
+      if (!inputs) { lines.push(`${n} · ${brandDisplayName(r.brand)}: changed while your reply was read; nothing sent, reply again`); continue; }
+      if (!allAnswered(inputs)) { lines.push(`${n} · ${brandDisplayName(r.brand)}: ${who} approved; waiting on ${waitingOn(inputs)}, nothing sent yet`); continue; }
+      if (needed.some((id) => !inputs[id]!.approved)) { await redraftWithAll(r, inputs, n); continue; }
     }
     // THE CLAIM: only one "approved" can move it from NOTIFIED, so a second one (or a re-delivery) sends nothing.
     const claim = await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'SENDING' WHERE id = ?1 AND state = 'NOTIFIED' AND notice_ref = ?2").bind(r.id, ref).run();
@@ -969,18 +1053,23 @@ export async function applyBrandReplyApproval(
     await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'SKIPPED', held_reason = ?2 WHERE id = ?1 AND state = 'NOTIFIED'").bind(r.id, `skipped by ${who} (${ref})`).run();
     lines.push(`${n} · ${brandDisplayName(r.brand)}: skipped by ${who}, nothing sent`);
   }
-  let redrafted = 0;
-  let learned = 0;
   for (const c of parsed.change) {
     const r = await rowOf(c.n);
     if (!r || r.state !== "NOTIFIED") continue;
     // The standing parts of HER note are Wynn's rules from now on, for every later draft — this one included. A note
-    // from Scooter redrafts this one draft; it does not become a standing rule.
+    // from Scooter changes this one draft; it does not become a standing rule.
     if (approverId === TLC_OWNER.firmUserId) learned += await learnRules(env, c.note, ref, firmScope);
+    if (partnerRound && r.notice_ref === ref) {
+      const inputs = await recordInput(r, { approved: false, note: c.note });
+      if (!inputs) { lines.push(`${c.n} · ${brandDisplayName(r.brand)}: changed while your reply was read; reply again`); continue; }
+      if (!allAnswered(inputs)) { lines.push(`${c.n} · ${brandDisplayName(r.brand)}: ${who}'s notes are saved; Wynn waits for ${waitingOn(inputs)} before changing anything`); continue; }
+      await redraftWithAll(r, inputs, c.n);
+      continue;
+    }
     await redraftFor(env, { ...r, research_tries: 0 }, c.note, now, deps);
     redrafted += 1;
   }
-  const again = redrafted || backToHer ? await sendReplyApprovals(env, now, firmScope) : null;
+  const again = redrafted || backToHer || toPartners ? await sendReplyApprovals(env, now, firmScope) : null;
   if (lines.length) {
     const sentN = lines.filter((l) => /sent from /.test(l)).length;
     const halfN = lines.filter((l) => /waiting on /.test(l)).length;
@@ -1112,4 +1201,61 @@ async function sendApproved(env: Env, owner: Actor, r: ReplyRow & { brand: strin
     await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET held_reason = ?2 WHERE id = ?1").bind(r.id, `calendar event not made: ${why}`.slice(0, 300)).run();
     return `the call (${slotWords(r.agreed_slot)}) could NOT be put on your calendar (${why.slice(0, 120)}); add it by hand`;
   }
+}
+
+// ── Round 2's live draft page ───────────────────────────────────────────────────────────────────
+
+const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/**
+ * THE DRAFT PAGE (owner, 6 Nov 2026: "not send a full pdf back but an artifact that can be pinged back and forth").
+ * One private link per pricing draft: their email, the answer as it would go, the pricing sheet as the brand would see
+ * it, and every note so far. Each redraft updates the same page in place; she and Scooter answer by replying to the
+ * email. Never indexed, never cached; an unknown or malformed token is a plain 404.
+ */
+export async function handleTlcDraftPage(ctx: RouteContext): Promise<Response> {
+  const token = String(ctx.params.token ?? "");
+  const headers = { "cache-control": "no-store", "x-robots-tag": "noindex, nofollow", "referrer-policy": "no-referrer" };
+  const notFound = () => new Response("Not found", { status: 404, headers });
+  if (!/^[0-9a-f]{32}$/.test(token)) return notFound();
+  const r = await ctx.env.WP_OS_DB.prepare("SELECT * FROM tlc_brand_reply WHERE page_token = ?1").bind(token).first<ReplyRow & { page_token: string }>();
+  const deal = r ? await ctx.env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(r.deal_id).first<TlcDealRow>() : null;
+  const ev = deal ? await ctx.env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>() : null;
+  if (!r || !deal || !ev) return notFound();
+  const brand = brandDisplayName(deal.brand);
+  let sheet = "";
+  if (r.kind === "PROPOSAL") {
+    const { clubViewOf } = await import("./learningClub");
+    const { renderBrandPitch } = await import("../../shared/tlc/pitch");
+    sheet = renderBrandPitch(clubViewOf(ev), await sponsorFor(ctx.env, deal, r.their_text));
+  }
+  const notice = r.notice_ref ? await ctx.env.WP_OS_DB.prepare("SELECT approvers_json FROM tlc_brand_reply_notice WHERE ref = ?1").bind(r.notice_ref).first<{ approvers_json: string | null }>() : null;
+  const needed = idList(notice?.approvers_json).length ? idList(notice?.approvers_json) : [TLC_OWNER.firmUserId];
+  const inputs = inputsOf(r.inputs_json);
+  const status = r.state === "SENT" ? `Sent to ${brand}.`
+    : r.state === "NOTIFIED" ? needed.map((id) => `${firstNameOf(id)}: ${inputs[id] ? (inputs[id]!.approved ? "approved" : "sent notes") : "not answered yet"}`).join(" · ")
+    : r.state === "DRAFTED" || r.state === "SENDING" ? "Wynn is updating this draft." : r.state === "SKIPPED" ? "Skipped; nothing was sent." : "Closed.";
+  const diff = r.previous_draft ? changedLines(r.previous_draft, r.draft_body) : null;
+  const para = (t: string) => esc(t).replace(/\n/g, "<br>");
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
+<title>${esc(brand)}: draft answer</title><style>
+:root{--ink:#1f1d1a;--muted:#6b665e;--ground:#faf7f2;--card:#fff;--line:#e6e0d6;--gold:#9a6b12;--add:#e8f3ea;--del:#f8e9e7}
+@media (prefers-color-scheme:dark){:root{--ink:#f1ece3;--muted:#b3ab9e;--ground:#1b1916;--card:#25221e;--line:#3a352e;--gold:#e0b45c;--add:#1f3324;--del:#3a2421}}
+body{margin:0;background:var(--ground);color:var(--ink);font:15px/1.55 -apple-system,system-ui,sans-serif}
+main{max-width:560px;margin:0 auto;padding:16px}h1{font-size:21px;margin:8px 0 4px}h2{font-size:18px;margin:24px 0 8px}
+.sub{color:var(--muted);font-size:13px}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;overflow-wrap:anywhere}
+.add{background:var(--add)}.del{background:var(--del);text-decoration:line-through}.d{display:block;padding:2px 6px;border-radius:4px;margin:2px 0}
+iframe{width:100%;height:900px;border:1px solid var(--line);border-radius:10px;background:#fff}
+</style></head><body><main>
+<h1>${esc(brand)}: your answer, draft</h1>
+<p class="sub">${esc(status)}</p>
+<p class="sub">To approve or change it, reply to the email this link came in: "approved", or your notes. Wynn waits for everyone's answer before changing anything, then updates this page.</p>
+<h2>What they wrote</h2><div class="card">${para(wordsOf(r.their_text))}</div>
+${diff && (diff.added.length || diff.removed.length) ? `<h2>What changed in the last draft</h2><div class="card">${diff.removed.map((l) => `<span class="d del">${esc(l)}</span>`).join("")}${diff.added.map((l) => `<span class="d add">${esc(l)}</span>`).join("")}</div>` : diff ? `<h2>What changed in the last draft</h2><div class="card">Nothing in the wording changed.</div>` : ""}
+${r.change_note ? `<h2>The notes Wynn worked from</h2><div class="card">${para(r.change_note)}</div>` : ""}
+${Object.keys(inputs).length ? `<h2>Answers on this round</h2><div class="card">${needed.filter((id) => inputs[id]).map((id) => `<p><b>${esc(firstNameOf(id))}</b>: ${inputs[id]!.approved ? "approved" : para(inputs[id]!.note ?? "")}</p>`).join("")}</div>` : ""}
+<h2>Your answer, as it would go</h2><div class="card">${para(withBrandFooter(r.draft_body))}</div>
+${sheet ? `<h2>The pricing sheet ${esc(brand)} would get</h2><iframe title="Pricing sheet" srcdoc="${esc(sheet)}"></iframe>` : ""}
+</main></body></html>`;
+  return new Response(html, { headers: { ...headers, "content-type": "text/html; charset=utf-8" } });
 }

@@ -48,7 +48,11 @@ const scooter = async () => (await env.WP_OS_DB.prepare("SELECT email FROM firm_
 const scooterApproves = async (ref: string, at = AFTERNOON, extra: Record<string, unknown> = {}) => {
   const from = await scooter();
   const out = await applyBrandReplyApproval(env, { fromHeader: `Scooter <${from}>`, authenticationResults: auth(from), subject: `Re: Wynn: brand replies · ${ref}`, body: `approved\n\nRef ${ref}` }, { now: at, drafter, ...extra });
-  expect(out.handled).toBe(true);
+  // TWO ROUNDS (owner, 6 Nov 2026): a round-1 email is hers alone, so his reply to it is refused and changes nothing;
+  // on a round-2 email his "approved" is recorded and alone sends nothing.
+  const notice = await env.WP_OS_DB.prepare("SELECT approvers_json FROM tlc_brand_reply_notice WHERE ref = ?1").bind(ref).first<{ approvers_json: string | null }>();
+  const onIt = JSON.parse(notice?.approvers_json ?? "[]").length > 1;
+  expect(out.handled).toBe(onIt);
   expect(out.detail).not.toMatch(/sent from /);
   return out;
 };
@@ -131,11 +135,12 @@ describe("a brand replied", () => {
     // The firm's boundary keeps employee mail on the partner addresses: her partner inbox.
     for (const n of sends) {
       expect(n.to).toBe("sequoia@westpeek.ventures");
-      expect(n.subject).toMatch(/^Wynn: 1 brand reply to approve · TLR-[A-Z0-9]{6}$/);
-      // Both partners approve (owner, 6 Nov 2026): the ask names them both.
-      expect(n.text).toContain("Sequoia and Scooter each reply approved to send, or reply with changes");
+      expect(n.subject).toMatch(/^Wynn: .+ replied · TLR-[A-Z0-9]{6}$/);
+      // Round 1 is hers alone (owner, 6 Nov 2026): Scooter is not on it, and her "approved" sends it.
+      expect(n.text).toContain('Reply "approved" to send it');
+      expect(n.cc ?? "").not.toMatch(/scooter/i);
     }
-    expect(sends[0]!.text).toContain("Subject: Re: Vector + a small room in New York\n\nHi Sequoia,\n\nWhat do you have in mind?");
+    expect(sends[0]!.text).toContain("Hi Sequoia,\n\nWhat do you have in mind?");
     expect(sends[1]!.text).toContain("Sounds interesting. Can we set up a call?");
     const drafts = (await env.WP_OS_DB.prepare("SELECT draft_body, notice_ref FROM tlc_brand_reply WHERE state = 'NOTIFIED' ORDER BY received_at").all<{ draft_body: string; notice_ref: string }>()).results!;
     expect(drafts).toHaveLength(2);
@@ -234,7 +239,7 @@ describe("Wynn listens to her whole note, researches when asked, and keeps her s
     expect(told.note).toContain(last);
     expect(told.note).not.toMatch(/Sent from my iPhone|^Sequoia$/m);
     expect(sends).toHaveLength(1);
-    expect(sends[0]!.text).toContain("YOUR NOTE, WORD FOR WORD");
+    expect(sends[0]!.text).toContain("The notes Wynn worked from:");
     expect(sends[0]!.text).toContain(last);
   });
 
@@ -255,7 +260,7 @@ describe("Wynn listens to her whole note, researches when asked, and keeps her s
     expect(sends).toHaveLength(1);
     const t = sends[0]!.text;
     for (const part of ["WYNN'S REPORT ON CONE CO", "What they care about now", "The value we bring them", "Sources", "https://cone.example/blog/agents"]) expect(t).toContain(part);
-    expect(t.indexOf("What they care about now")).toBeLessThan(t.indexOf("WYNN'S DRAFT OF YOUR ANSWER"));
+    expect(t.indexOf("What they care about now")).toBeLessThan(t.indexOf("Your answer, as it would go"));
     expect(seen.at(-1)!.research).toContain("developer program for agent builders");
     // Her standing sentence is now one of Wynn's rules.
     expect((await env.WP_OS_DB.prepare("SELECT source FROM tlc_wynn_rule WHERE rule = ?1").bind("Don't discuss money this early.").first<{ source: string }>())!.source).toBe(`her note on ${ref}`);
@@ -351,11 +356,21 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     return takeBrandReply(e, d, { messageId: `<${mid}>`, subject: "Re: x + a small room in New York", text, receivedAt: MON.toISOString() }, { now: MON, drafter, ...extra });
   };
   /** Both partners approve (owner, 6 Nov 2026): Scooter's "approved" first (it alone sends nothing), then hers. */
+  /**
+   * Approved all the way (owner, 6 Nov 2026, two rounds): her "approved" on round 1; a draft with prices then comes
+   * back on a round-2 email to her and Scooter, and goes once both have approved it there.
+   */
   const approve = async (e: Env, ref: string, deps: Record<string, unknown> = {}) => {
+    const her = (r: string) => applyBrandReplyApproval(e, { fromHeader: `Her <${APPROVER}>`, authenticationResults: auth(APPROVER), subject: `Re: Wynn · ${r}`, body: `approved\n\nRef ${r}` }, { now: MON, drafter, ...deps });
+    const ids = JSON.parse((await e.WP_OS_DB.prepare("SELECT reply_ids_json FROM tlc_brand_reply_notice WHERE ref = ?1").bind(ref).first<{ reply_ids_json: string }>())?.reply_ids_json ?? "[]") as string[];
+    const first = await her(ref);
+    const moved = ids.length ? await e.WP_OS_DB.prepare(`SELECT notice_ref FROM tlc_brand_reply WHERE id IN (${ids.map(() => "?").join(",")}) AND round = 'PARTNERS' AND state = 'NOTIFIED' AND notice_ref != ?${ids.length + 1}`).bind(...ids, ref).first<{ notice_ref: string }>() : null;
+    if (!moved) return first;
+    expect(first.detail).not.toMatch(/sent from /);
     const from = (await e.WP_OS_DB.prepare("SELECT email FROM firm_user WHERE id = 'fu_scooter_taylor'").first<{ email: string }>())!.email;
-    const his = await applyBrandReplyApproval(e, { fromHeader: `Scooter <${from}>`, authenticationResults: auth(from), subject: `Re: Wynn · ${ref}`, body: `approved\n\nRef ${ref}` }, { now: MON, drafter, ...deps });
+    const his = await applyBrandReplyApproval(e, { fromHeader: `Scooter <${from}>`, authenticationResults: auth(from), subject: `Re: Wynn · ${moved.notice_ref}`, body: `approved\n\nRef ${moved.notice_ref}` }, { now: MON, drafter, ...deps });
     expect(his.detail).not.toMatch(/sent from /);
-    return applyBrandReplyApproval(e, { fromHeader: `Her <${APPROVER}>`, authenticationResults: auth(APPROVER), subject: `Re: Wynn · ${ref}`, body: `approved\n\nRef ${ref}` }, { now: MON, drafter, ...deps });
+    return her(moved.notice_ref);
   };
   const refOf = async (dealId: string) => (await env.WP_OS_DB.prepare("SELECT notice_ref FROM tlc_brand_reply WHERE deal_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(dealId).first<{ notice_ref: string }>())!.notice_ref;
 
@@ -391,7 +406,7 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     expect(toHer.files).toEqual([]);
     expect(toHer.text).toContain("Here's a short 3-page PDF, built around Sample Co:");
     expect(toHer.text).toContain("led by Sample Co or by our host");
-    expect(toHer.text).toMatch(new RegExp(`THE SAMPLES \\(3 pages\\), OPEN ON YOUR PHONE OR LAPTOP: ${PREVIEW_URL.source}`));
+    expect(toHer.text).toMatch(new RegExp(`The 3 sample pages: ${PREVIEW_URL.source}`));
     expect(toHer.text).toContain("The PDF is made from that page when you reply approved");
     const page = await openPreview(e, PREVIEW_URL.exec(toHer.text)![0]);
     expect(page.status).toBe(200);
@@ -458,7 +473,7 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     expect(sends[0]!.text).not.toContain("/api/documents/");
     // The same link as before (one page per deal), with the latest change named in the email.
     expect(PREVIEW_URL.exec(sends[0]!.text)![0]).toBe(url);
-    expect(sends[0]!.text).toContain('Latest change: Changed the page 2 heading and the page 2 footer (your note: "Replace the series');
+    expect(sends[0]!.text).toContain('Last change: Changed the page 2 heading and the page 2 footer (your note: "Replace the series');
     let page = await (await openPreview(e, url)).text();
     expect(page).toContain("A practice lab");
     expect(page).toContain("Dates agreed together");
@@ -555,7 +570,7 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     const FOUR = { pdfBase64: Buffer.from("%PDF-1.4").toString("base64"), pageCount: 4 };
     await approve(e, await refOf("tld_final"), { samples: { renderPdf: async () => FOUR } });
     expect(sends.filter((x) => x.to.includes("harbor.example"))).toHaveLength(0);
-    const again = sends.find((x) => /brand reply to approve/.test(x.subject))!;
+    const again = sends.find((x) => / replied · /.test(x.subject))!;
     expect(again.text).toContain("Not sent yet: the PDF came to 4 pages, not 3. Open the samples page and reply with what to shorten or change.");
     expect(again.text).toContain(url);
     expect((await samplesForDeal(e, "tld_final"))!.pdf_r2_key).toBeNull();
@@ -650,7 +665,7 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     expect(agreed.agreed_slot).toBe(offered[1]);
     expect(agreed.draft_body).toContain("Wednesday 11 Nov, 11:00am");
     await sendReplyApprovals(env, MON);
-    expect(sends[0]!.text).toContain("ON YOUR WORD: Wednesday 11 Nov, 11:00am goes on your calendar, kim@call.example invited");
+    expect(sends[0]!.text).toContain("Wednesday 11 Nov, 11:00am goes on your calendar and kim@call.example is invited");
     expect(made).toHaveLength(0);
     sends.length = 0;
     const out = await approve(env, await refOf("tld_call"), { makeEvent });
@@ -723,7 +738,7 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     await sendReplyApprovals(e, MON);
     expect(sends[0]!.files).toEqual(["The Learning Club - Build Your Own AI Agent - partner levels - Flow Co.pdf"]);
     // The exec format bolds numbers ("step **4**"), so the line is read without the bold.
-    expect(sends[0]!.text.replace(/\*\*/g, "")).toContain("step 4: the proposal (their own partner-levels sheet attached)");
+    expect(sends[0]!.text.replace(/\*\*/g, "")).toContain("(your answer has prices in it)");
     await approve(e, await refOf("tld_flow"));
     expect(sends.filter((x) => x.to.includes("flow.example"))).toHaveLength(1);
     // They pick a level: the confirmation, with a one-page agreement and the invoice, for her approval.
@@ -798,9 +813,8 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     expect(await e.WP_OS_DB.prepare("SELECT send_to, send_cc_json FROM tlc_brand_reply WHERE deal_id = 'tld_cc'").first()).toEqual({ send_to: "mike@copy.example", send_cc_json: JSON.stringify(["aaron@copy.example"]) });
     sends.length = 0;
     await processBrandReplies(e, MON, "west-peek", { mailbox: null });
-    const notice = sends.find((x) => /brand repl/i.test(x.subject))!;
-    expect(notice.text).toContain("YOUR ANSWER GOES TO: mike@copy.example");
-    expect(notice.text).toContain("Cc: aaron@copy.example");
+    const notice = sends.find((x) => / replied · /.test(x.subject))!;
+    expect(notice.text).toContain("would go to mike@copy.example (copying aaron@copy.example)");
     sends.length = 0;
     await approve(e, await refOf("tld_cc"));
     const out = sends.filter((x) => x.to.includes("copy.example"));
