@@ -836,7 +836,7 @@ export async function categoryRival(env: Env, deal: TlcDealRow, now: Date, sentO
         AND d.stage NOT IN ('DECLINED','STOPPED') AND (d.stop_reason IS NULL OR d.stop_reason = 'REPLIED')
         AND (
           d.stop_reason = 'REPLIED' OR d.stage IN ('CALL','WAITING_ON_OWNERS','AGREED','PAID','DELIVERED')
-          OR (d.first_sent_at IS NOT NULL AND NOT (d.drip_step >= ?5 AND d.last_sent_at < ?6))
+          OR (d.first_sent_at IS NOT NULL AND NOT ((d.drip_step >= ?5 OR (d.drip_step >= 1 AND d.next_send_at IS NULL)) AND d.last_sent_at < ?6))
           OR (?7 = 0 AND EXISTS (SELECT 1 FROM tlc_drip_message m WHERE m.deal_id = d.id AND m.step = 0 AND m.state = 'AWAITING_APPROVAL' AND d.created_at <= ?8))
         )
       ORDER BY d.first_sent_at IS NULL, d.first_sent_at, d.created_at LIMIT 1`,
