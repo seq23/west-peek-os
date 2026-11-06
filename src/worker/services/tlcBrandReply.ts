@@ -16,13 +16,14 @@ import {
   stageAfterReply, standingRulesIn, theirNewText, tierLines, wantsResearch,
   type BrandReplyIntent, type ReplyDraftInput, type WynnRule,
 } from "../../shared/tlc/brandReply";
-import { BRAND_EMAIL_ROOM_WORDS, TLC_DRIP_DAYS, TLC_OWNER, TLC_SEATS, TLC_SIGNATURE, brandDisplayName, signedBrandEmail, monthWords, nextDripAt } from "../../shared/tlc/learningClub";
+import { BRAND_EMAIL_ROOM_WORDS, TLC_BRAND_REPLY_NOTICE_CC_IDS, TLC_BRAND_REPLY_NOTICE_OBJECT, TLC_DRIP_DAYS, TLC_OWNER, TLC_SEATS, TLC_SIGNATURE, brandDisplayName, signedBrandEmail, monthWords, nextDripAt } from "../../shared/tlc/learningClub";
+import { partnerByEmail, partnerByFirmUserId } from "../../shared/registry/partners";
 import { TLC_BRAND_SALES_JOB } from "../../shared/policy/outsideEmail";
 import { actorForFirmUser, type Actor } from "./authorize";
 import type { TlcDealRow, TlcEventRow } from "./learningClub";
 import { freeSlots, isFree, pickedSlot, proposedTime, slotWords } from "../../shared/tlc/callSlots";
 import { isYesToSamples, requestsSamples, samplesCoverEmail } from "../../shared/tlc/samples";
-import { fillTemplate, hiLine, levelPicked, proposalLevelLines } from "../../shared/tlc/brandFlow";
+import { fillTemplate, greetingFor, hiLine, levelPicked, proposalLevelLines } from "../../shared/tlc/brandFlow";
 import { brandLevels, sponsorOf, type TlcSponsorView } from "../../shared/tlc/pitch";
 import { herBusy, makeEvent as defaultMakeEvent, callEvent, type BusyReader, type EventMaker } from "./tlcCalls";
 import { SamplesPdfError, buildSamples, finalizeSamplesPdf, reviseSamples, samplesForDeal, samplesPreviewLink, samplesRevisions, tlcRevisionWriter, storePdf, storedAttachment, textPage, type SamplesDeps, type StoredFile } from "./tlcSamples";
@@ -91,7 +92,7 @@ export interface BrandReplyDeps {
 interface ReplyRow {
   id: string; deal_id: string; brand_message_id: string; their_subject: string; their_text: string; received_at: string; intent: string;
   draft_subject: string; draft_body: string; state: string; notice_ref: string | null; firm_scope: string;
-  send_to?: string | null; send_cc_json?: string | null;
+  send_to?: string | null; send_cc_json?: string | null; approved_by_json?: string | null;
   change_note?: string | null; report_text?: string | null; research_due?: string | null; research_tries?: number;
   samples_id?: string | null; offered_slots_json?: string | null; agreed_slot?: string | null; calendar_event_id?: string | null; held_reason?: string | null;
   kind?: string | null; tier?: string | null; attachments_json?: string | null; send_retry_due?: string | null; send_tries?: number;
@@ -319,7 +320,7 @@ async function redraftFor(env: Env, r: ReplyRow, note: string, now: Date, deps: 
     }
   }
   const draft = await draftFor(env, deal, ev, r.intent as BrandReplyIntent, r.their_text, deps, { note, previous, research: report, samplesAttached: Boolean(r.samples_id) });
-  await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'DRAFTED', notice_ref = NULL, draft_body = ?2, change_note = ?3, report_text = ?4, research_due = NULL, held_reason = NULL WHERE id = ?1")
+  await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'DRAFTED', notice_ref = NULL, approved_by_json = NULL, draft_body = ?2, change_note = ?3, report_text = ?4, research_due = NULL, held_reason = NULL WHERE id = ?1")
     .bind(r.id, draft, note, report).run();
   return "DRAFTED";
 }
@@ -457,11 +458,9 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
     const keep = (out: StoredFile | string) => (typeof out === "string" ? fail.push(out) : files.push(out));
     if (!step.proposalSent) {
       kind = "PROPOSAL";
-      const { clubViewOf } = await import("./learningClub");
-      const { renderBrandPitch, brandLevels } = await import("../../shared/tlc/pitch");
       const sponsor = await sponsorFor(env, deal, words);
-      keep(await storePdf(env, `tlc-flow/${deal.id}/proposal-${crypto.randomUUID()}.pdf`, `The Learning Club - ${safe(ev.topic ?? "")} - partner levels - ${safe(brandName)}.pdf`, renderBrandPitch(clubViewOf(ev), sponsor), deps.samples ?? {}));
-      body = fillTemplate("proposal", { hi: hiLine(deal.contact_name), brand: brandName, topic: ev.topic ?? "", segment: step.segment ?? `Where ${brandName} comes in`, levels: proposalLevelLines(brandLevels(sponsor, ev.topic ?? "")) });
+      keep(await sheetPdf(env, deal, ev, sponsor, deps));
+      body = proposalBody(deal, ev, sponsor, step.segment, greetingFor({ name: deal.contact_name, email: deal.contact_email }, recipients, msg.text));
     } else {
       kind = "CONFIRM";
       tier = levelPicked(words);
@@ -476,7 +475,7 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
         keep(await storePdf(env, `tlc-flow/${deal.id}/invoice-${crypto.randomUUID()}.pdf`, `The Learning Club - ${safe(brandName)} - invoice.pdf`,
           textPage("Invoice", invoiceNote({ brand: brandName, topic: ev.topic ?? "", month: ev.month, cashUsd: cash, dueDate: due, paymentUrl: (ev as { sponsor_payment_url?: string | null }).sponsor_payment_url ?? null })), deps.samples ?? {}));
       }
-      body = fillTemplate("confirm", { hi: hiLine(deal.contact_name), brand: brandName, level: t.label.replace(/ \(in kind\)$/, "") });
+      body = fillTemplate("confirm", { hi: greetingFor({ name: deal.contact_name, email: deal.contact_email }, recipients, msg.text), brand: brandName, level: t.label.replace(/ \(in kind\)$/, "") });
     }
     body = signedBrandEmail(body);
     attachments = files;
@@ -494,6 +493,82 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
     recipients.to, recipients.cc.length ? JSON.stringify(recipients.cc) : null).run();
   await appendEvent(env, { eventType: "tlc.brand_reply_drafted", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: { intent, samples: samplesId !== null, offered: offered?.length ?? 0, agreed } });
   return "DRAFTED";
+}
+
+/** Step 4's email (unsigned): the proposal template, the brand's own levels, the greeting for whoever asked. */
+function proposalBody(deal: TlcDealRow, ev: TlcEventRow, sponsor: Awaited<ReturnType<typeof sponsorFor>>, segment: string | null, hi: string): string {
+  const brandName = brandDisplayName(deal.brand);
+  return fillTemplate("proposal", { hi, brand: brandName, topic: ev.topic ?? "", segment: segment ?? `Where ${brandName} comes in`, levels: proposalLevelLines(brandLevels(sponsor, ev.topic ?? "")) });
+}
+
+/**
+ * WHO WROTE THE MESSAGE SHE IS ANSWERING (6 Nov 2026: the Pinecone reply came from a colleague, while the email said
+ * "From: Mike"). The address we answer is theirs; our contact by name only when it is them.
+ */
+function whoWrote(r: { send_to?: string | null; send_cc_json?: string | null; contact_name: string | null; contact_email: string }): string {
+  const { to, cc } = answerRecipients(r);
+  const contact = `${r.contact_name ? `${r.contact_name} ` : ""}<${r.contact_email}>`;
+  if (to === r.contact_email.trim().toLowerCase()) return contact;
+  const first = r.contact_name?.trim().split(/\s+/)[0] ?? r.contact_email;
+  return `${to}, a colleague of ${first}${cc.includes(r.contact_email.trim().toLowerCase()) ? ` (${first} is on Cc)` : ""}`;
+}
+/** "Wed 4 Nov, 10:32 am CT": her clock, never UTC. */
+function herClock(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const day = new Intl.DateTimeFormat("en-GB", { timeZone: "America/Chicago", weekday: "short", day: "numeric", month: "short" }).format(d).replace(",", "");
+  const time = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" }).format(d).toLowerCase();
+  return `${day}, ${time} CT`;
+}
+
+/** The partner-levels sheet made for this brand, stamped with the sheet design it was made with. */
+async function sheetPdf(env: Env, deal: TlcDealRow, ev: TlcEventRow, sponsor: Awaited<ReturnType<typeof sponsorFor>>, deps: BrandReplyDeps): Promise<StoredFile | string> {
+  const { clubViewOf } = await import("./learningClub");
+  const { renderBrandPitch, SHEET_VERSION } = await import("../../shared/tlc/pitch");
+  const safe = (x: string) => x.replace(/[^\w &-]+/g, "").trim();
+  const out = await storePdf(env, `tlc-flow/${deal.id}/proposal-${crypto.randomUUID()}.pdf`, `The Learning Club - ${safe(ev.topic ?? "")} - partner levels - ${safe(brandDisplayName(deal.brand))}.pdf`, renderBrandPitch(clubViewOf(ev), sponsor), deps.samples ?? {});
+  return typeof out === "string" ? out : { ...out, sheet: SHEET_VERSION };
+}
+const isSheet = (f: StoredFile): boolean => / - partner levels - /.test(f.name);
+
+/**
+ * A PROPOSAL WAITING FOR APPROVAL CARRIES THE CURRENT SHEET (owner, 6 Nov 2026: the Pinecone sheet "needs better
+ * branding"; the next draft to her carries the new one, with Scooter copied). A proposal still with the partners
+ * (drafted or in an approval email) whose sheet was made on an older design is made again, and goes back to them as
+ * a new approval email saying what changed; approvals given to the old email no longer count. A PDF that cannot be
+ * made now leaves the draft as it was and is tried on the next pass, never sent without its sheet.
+ */
+export async function refreshStaleSheets(env: Env, now: Date, firmScope: string, deps: BrandReplyDeps = {}): Promise<string> {
+  const { SHEET_VERSION, SHEET_CHANGE_WORDS } = await import("../../shared/tlc/pitch");
+  const rows = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_brand_reply WHERE firm_scope = ?1 AND kind = 'PROPOSAL' AND state IN ('DRAFTED','NOTIFIED') AND attachments_json IS NOT NULL")
+    .bind(firmScope).all<ReplyRow>()).results ?? [];
+  const done: string[] = [];
+  const failed: string[] = [];
+  for (const r of rows) {
+    const files = JSON.parse(r.attachments_json ?? "[]") as StoredFile[];
+    if (!files.some((f) => isSheet(f) && f.sheet !== SHEET_VERSION)) continue;
+    const deal = await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(r.deal_id).first<TlcDealRow>();
+    const ev = deal ? await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>() : null;
+    if (!deal || !ev) continue;
+    const made = await sheetPdf(env, deal, ev, await sponsorFor(env, deal, r.their_text), deps);
+    if (typeof made === "string") { failed.push(`${brandDisplayName(deal.brand)}: ${made.slice(0, 120)}`); continue; }
+    const next = files.map((f) => (isSheet(f) ? made : f));
+    /*
+     * The proposal's email is made again from the same template too, so a fix to it (the greeting, 6 Nov 2026)
+     * reaches a draft still waiting. Never when a partner's change note shaped the draft: her words are kept.
+     */
+    const sponsor = await sponsorFor(env, deal, r.their_text);
+    const step = await flowStep(env, deal.id);
+    const body = r.change_note ? r.draft_body : signedBrandEmail(proposalBody(deal, ev, sponsor, step.segment, greetingFor({ name: deal.contact_name, email: deal.contact_email }, answerRecipients({ ...r, contact_email: deal.contact_email }))));
+    const what = body === r.draft_body ? `${SHEET_CHANGE_WORDS} Wynn's email is unchanged.` : `${SHEET_CHANGE_WORDS} Wynn's email is made again from the same template; it now greets the person who asked.`;
+    const upd = await env.WP_OS_DB.prepare(
+      "UPDATE tlc_brand_reply SET attachments_json = ?2, draft_body = ?6, state = 'DRAFTED', notice_ref = NULL, approved_by_json = NULL, report_text = ?3 WHERE id = ?1 AND state = ?4 AND COALESCE(notice_ref, '') = ?5",
+    ).bind(r.id, JSON.stringify(next), `WHAT CHANGED SINCE THE LAST EMAIL: ${what}`, r.state, r.notice_ref ?? "", body).run();
+    if ((upd.meta?.changes ?? 0) === 0) continue;
+    await appendEvent(env, { eventType: "tlc.brand_reply_sheet_refreshed", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope, payload: { reply: r.id, was: r.notice_ref, sheet: SHEET_VERSION, at: now.toISOString() } });
+    done.push(brandDisplayName(deal.brand));
+  }
+  return [done.length ? `sheet made again for ${done.join(", ")}` : "", failed.length ? `sheet not made yet (tried next pass): ${failed.join("; ")}` : ""].filter(Boolean).join("; ");
 }
 
 /** A brand asking what it costs ("How much is this to do?", pricing, cost, rates, budget): straight to step 4. */
@@ -647,8 +722,9 @@ export async function processBrandReplies(env: Env, now: Date, firmScope = "west
     else await redraftFor(env, r, r.change_note ?? "", now, d);
   }
   const retried = await retryApprovedSends(env, now, firmScope, d);
+  const refreshed = await refreshStaleSheets(env, now, firmScope, d);
   const notice = await sendReplyApprovals(env, now, firmScope);
-  return `brand replies: ${counts.DRAFTED} drafted, ${counts.WAITING ? `${counts.WAITING} need no reply (waiting on them), ` : ""}${counts.AUTO_REPLY} auto-reply (drip resumed), ${counts.NO} declined; ${polled};${retried.length ? ` approved and sent on their own: ${retried.length};` : ""} ${notice}`;
+  return `brand replies: ${refreshed ? `${refreshed}; ` : ""}${counts.DRAFTED} drafted, ${counts.WAITING ? `${counts.WAITING} need no reply (waiting on them), ` : ""}${counts.AUTO_REPLY} auto-reply (drip resumed), ${counts.NO} declined; ${polled};${retried.length ? ` approved and sent on their own: ${retried.length};` : ""} ${notice}`;
 }
 
 // ── The one approval email a day ───────────────────────────────────────────────────────────────
@@ -664,12 +740,39 @@ function mintRef(): string {
  * partner inbox; `brand_reply_approver_email` (a D1 setting, never this public repository) names another inbox of
  * hers whose authenticated reply is also accepted. Her reply comes back to Wynn and the intake door reads it.
  */
-async function emailHer(env: Env, firmScope: string, objectId: string, email: Omit<ExecEmailInput, "employee">, attachments: readonly EmailAttachment[] = []): Promise<boolean> {
+async function emailHer(env: Env, firmScope: string, objectId: string, email: Omit<ExecEmailInput, "employee">, attachments: readonly EmailAttachment[] = [], cc: readonly string[] = []): Promise<boolean> {
   const { emailOwner } = await import("./learningClub");
-  const sent = await emailOwner(env, { employee: "Wynn", email, objectType: "tlc_brand_reply_notice", objectId, cardId: null, cardKind: null, firmScope, ...(attachments.length ? { attachments } : {}) });
+  const sent = await emailOwner(env, { employee: "Wynn", email, objectType: TLC_BRAND_REPLY_NOTICE_OBJECT, objectId, cardId: null, cardKind: null, firmScope, ...(attachments.length ? { attachments } : {}), ...(cc.length ? { cc } : {}) });
   if (sent.length === 0) throw new Error("the owner email was not sent");
   return true;
 }
+
+/**
+ * WHO IS COPIED ON HER APPROVAL EMAIL, AND MUST APPROVE TOO (owner, 6 Nov 2026: Scooter is cc'd, and nothing is
+ * approved until Sequoia and Scooter have each replied "approved"). Read from each named partner's own firm_user row
+ * (active, and a partner by the registry), so no address is typed in this public repository.
+ */
+export async function approvalCopies(env: Env): Promise<{ cc: string[]; missing: string[] }> {
+  const cc: string[] = [];
+  const missing: string[] = [];
+  for (const id of TLC_BRAND_REPLY_NOTICE_CC_IDS) {
+    const row = await env.WP_OS_DB.prepare("SELECT email, full_name FROM firm_user WHERE id = ?1 AND status = 'ACTIVE'").bind(id).first<{ email: string | null; full_name: string | null }>();
+    const email = (row?.email ?? "").trim().toLowerCase();
+    if (email && partnerByEmail(email)?.firmUserId === id) cc.push(email);
+    else missing.push(id);
+  }
+  return { cc, missing };
+}
+const copiedNames = (cc: readonly string[]): string => cc.map((a) => partnerByEmail(a)?.firstName ?? a).join(" and ");
+const firstNameOf = (id: string): string => partnerByFirmUserId(id)?.firstName ?? id;
+const namesOf = (ids: readonly string[]): string => ids.map(firstNameOf).join(" and ");
+/** "Sequoia approved · waiting on Scooter": who has said yes and who is still needed, in plain words. */
+export function approvalWords(needed: readonly string[], approved: readonly string[]): string {
+  const have = needed.filter((id) => approved.includes(id));
+  const want = needed.filter((id) => !approved.includes(id));
+  return [have.length ? `${namesOf(have)} approved` : "nobody has approved yet", ...(want.length ? [`waiting on ${namesOf(want)}`] : [])].join(" · ");
+}
+const idList = (json: string | null | undefined): string[] => { try { const v = JSON.parse(json ?? "null"); return Array.isArray(v) ? v.map(String) : []; } catch { return []; } };
 
 export async function approverAddress(env: Env): Promise<string> {
   return ((await setting(env, APPROVER_SETTING)) ?? TLC_OWNER.email).trim().toLowerCase();
@@ -713,7 +816,7 @@ export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-
   }
   const blocks = waiting.map((r, i) => [
     `── ${i + 1} · ${brandDisplayName(r.brand)} · The Learning Club, ${monthWords(r.month)}${r.topic ? ` (${r.topic})` : ""} ──`,
-    `From: ${r.contact_name ? `${r.contact_name} ` : ""}<${r.contact_email}>, ${r.received_at.slice(0, 16).replace("T", " ")} UTC`,
+    `From: ${whoWrote(r)}, ${herClock(r.received_at)}`,
     `YOUR ANSWER GOES TO: ${answerRecipients(r).to}`,
     `Cc: ${answerRecipients(r).cc.join(", ") || "nobody"}`,
     "",
@@ -738,26 +841,34 @@ export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-
     ...(r.agreed_slot ? ["", `ON YOUR WORD: ${slotWords(r.agreed_slot)} goes on your calendar, ${r.contact_email} invited`] : []),
   ].join("\n"));
   const many = waiting.length > 1;
+  const copies = await approvalCopies(env);
+  const needed = [TLC_OWNER.firmUserId, ...copies.cc.map((a) => partnerByEmail(a)!.firmUserId)];
+  const both = needed.length > 1;
   try {
     await emailHer(env, firmScope, ref, {
       what: `${waiting.length} brand repl${many ? "ies" : "y"} to approve · ${ref}`,
-      tldr: `${waiting.length} brand${many ? "s" : ""} replied to your Learning Club email${many ? "s" : ""}. ${BRAND_REPLY_ASK}.`,
-      tldrBullets: many ? ['Reply "approved" to send all', 'Or "approve 1" · "skip 2" · "change 2: what to change"'] : ['Reply "approved" to send it', "Or reply with your changes"],
+      tldr: `${waiting.length} brand${many ? "s" : ""} replied to your Learning Club email${many ? "s" : ""}. ${both ? `${namesOf(needed)} each reply approved to send, or reply with changes` : BRAND_REPLY_ASK}.`,
+      tldrBullets: [
+        ...(both ? [`Nothing sends until ${namesOf(needed)} have each replied "approved"`] : []),
+        ...(many ? ['Reply "approved" to approve all', 'Or "approve 1" · "skip 2" · "change 2: what to change"'] : both ? ["Or reply with your changes"] : ['Reply "approved" to send it', "Or reply with your changes"]),
+      ],
       sections: [
         { label: "Who replied", bullets: waiting.map((r, i) => `${i + 1} · ${brandDisplayName(r.brand)} (${monthWords(r.month)}): ${r.kind === "PROPOSAL" ? "step 4: the proposal (their own partner-levels sheet attached)" : r.kind === "CONFIRM" ? `step 5: ${r.tier ? TLC_TIER_LABEL(r.tier) : "a level"} agreed (agreement and invoice attached)` : r.agreed_slot ? `a call, ${slotWords(r.agreed_slot)}` : r.intent === "CALL" ? "wants a call (times from your calendar offered)" : r.samples_id ? "said yes to the samples (open the samples page in the email; the PDF is made when you approve)" : r.intent === "YES" ? "said yes" : "asked a question"}`).slice(0, 6) },
-        { label: "What happens on your word", bullets: ["Your answer goes from your own mailbox, on their thread", "A call they asked for moves the deal to Call", "Nothing goes to a brand until you say so"] },
+        { label: "What happens on your word", bullets: ["Your answer goes from your own mailbox, on their thread", "A call they asked for moves the deal to Call", "Nothing goes to a brand until you say so",
+          ...(both ? [`It goes once ${namesOf(needed)} have each approved; one "approved" alone sends nothing`, `Changes from either of you send it back to Wynn to redraft`] : []),
+          ...(copies.missing.length ? ["Scooter could not be copied this time: his record in the OS was not found"] : [])] },
       ],
       details: [...blocks.flatMap((b) => [b, ""]), `Ref ${ref}`].join("\n"),
-    }, attachments);
+    }, attachments, copies.cc);
   } catch (err) {
     return `the approval email could not be sent (${err instanceof Error ? err.message : String(err)}); the next pass tries again`;
   }
   const messageId: string | null = null;
-  await env.WP_OS_DB.prepare("INSERT INTO tlc_brand_reply_notice (ref, reply_ids_json, day, firm_scope, sent_at, sent_to, forced, gmail_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")
-    .bind(ref, JSON.stringify(waiting.map((r) => r.id)), ct.day, firmScope, now.toISOString(), to, 0, messageId).run();
-  for (const r of waiting) await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'NOTIFIED', notice_ref = ?2 WHERE id = ?1 AND state = 'DRAFTED'").bind(r.id, ref).run();
+  await env.WP_OS_DB.prepare("INSERT INTO tlc_brand_reply_notice (ref, reply_ids_json, day, firm_scope, sent_at, sent_to, forced, gmail_id, approvers_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)")
+    .bind(ref, JSON.stringify(waiting.map((r) => r.id)), ct.day, firmScope, now.toISOString(), to, 0, messageId, JSON.stringify(needed)).run();
+  for (const r of waiting) await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'NOTIFIED', notice_ref = ?2, approved_by_json = NULL WHERE id = ?1 AND state = 'DRAFTED'").bind(r.id, ref).run();
   await appendEvent(env, { eventType: "tlc.brand_reply_notice", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_brand_reply_notice", objectId: ref, firmScope, payload: { replies: waiting.length } });
-  return `approval email ${ref} with ${waiting.length} brand repl${many ? "ies" : "y"} sent`;
+  return `approval email ${ref} with ${waiting.length} brand repl${many ? "ies" : "y"} sent${copies.cc.length ? `, ${copiedNames(copies.cc)} copied` : ""}${copies.missing.length ? `; NOT copied (no active partner record): ${copies.missing.join(", ")}` : ""}`;
 }
 
 // ── Her answer ─────────────────────────────────────────────────────────────────────────────────
@@ -772,21 +883,30 @@ export async function applyBrandReplyApproval(
   const body = textBodyOf(message.body);
   const ref = BRAND_REPLY_REF_RE.exec(body)?.[0] ?? BRAND_REPLY_REF_RE.exec(message.subject)?.[0] ?? null;
   if (!ref) return { handled: false, ref: null, detail: "no brand-reply reference" };
-  const notice = await env.WP_OS_DB.prepare("SELECT * FROM tlc_brand_reply_notice WHERE ref = ?1").bind(ref).first<{ ref: string; reply_ids_json: string; firm_scope: string; sent_to: string | null }>();
+  const notice = await env.WP_OS_DB.prepare("SELECT * FROM tlc_brand_reply_notice WHERE ref = ?1").bind(ref).first<{ ref: string; reply_ids_json: string; firm_scope: string; sent_to: string | null; approvers_json: string | null }>();
   if (!notice) return { handled: false, ref, detail: "unknown brand-reply reference" };
   const firmScope = notice.firm_scope;
   const from = (addressIn(message.fromHeader) ?? "").toLowerCase();
-  const allowed = new Set([await approverAddress(env), TLC_OWNER.email.toLowerCase(), (notice.sent_to ?? "").toLowerCase()].filter(Boolean));
+  /*
+   * WHO MAY ANSWER THIS EMAIL (owner, 6 Nov 2026). Her addresses, as always; and each partner the email was sent to
+   * for approval (approvers_json, fixed when it went: Scooter), read from his own firm_user row now. Anyone else, or
+   * a sender whose authentication did not pass, changes nothing.
+   */
+  const needed = idList(notice.approvers_json).length ? idList(notice.approvers_json) : [TLC_OWNER.firmUserId];
+  const herAddresses = new Set([await approverAddress(env), TLC_OWNER.email.toLowerCase(), (notice.sent_to ?? "").toLowerCase()].filter(Boolean));
+  const copied = (await approvalCopies(env)).cc.filter((a) => needed.includes(partnerByEmail(a)!.firmUserId));
+  const approverId = herAddresses.has(from) ? TLC_OWNER.firmUserId : copied.includes(from) ? partnerByEmail(from)!.firmUserId : null;
   const verdict = authenticationVerdict(message.authenticationResults, from || null);
-  if (!allowed.has(from) || !verdict.passed) {
-    await appendEvent(env, { eventType: "tlc.brand_reply_refused", actorType: "system", actorId: "inbound_email", objectType: "tlc_brand_reply_notice", objectId: ref, firmScope, payload: { from, why: allowed.has(from) ? verdict.reason : "not her address" } });
-    return { handled: false, ref, detail: `a reply to ${ref} was not accepted as hers` };
+  if (!approverId || !verdict.passed) {
+    await appendEvent(env, { eventType: "tlc.brand_reply_refused", actorType: "system", actorId: "inbound_email", objectType: "tlc_brand_reply_notice", objectId: ref, firmScope, payload: { from, why: approverId ? verdict.reason : "not an approver of this email" } });
+    return { handled: false, ref, detail: `a reply to ${ref} was not accepted as an approver's` };
   }
+  const who = firstNameOf(approverId);
   const now = deps.now ?? new Date();
   const ids = JSON.parse(notice.reply_ids_json) as string[];
   // Her words alone: the quoted email and any "Ref TLR-…" line are not part of her instruction.
   // Her WHOLE note: her signature off, never a character cut (herNoteOf; NOTE_MAX is stated if ever reached).
-  const said = herNoteOf(newTextOf(body).split(/\r?\n/).filter((l) => !/^\s*Ref\s+TLR-[A-Z0-9]{6}\s*$/.test(l)).join("\n"), TLC_OWNER.name);
+  const said = herNoteOf(newTextOf(body).split(/\r?\n/).filter((l) => !/^\s*Ref\s+TLR-[A-Z0-9]{6}\s*$/.test(l)).join("\n"), partnerByFirmUserId(approverId)?.fullName ?? TLC_OWNER.name);
   const parsed = parseDraftReply(said);
   // One reply in the email: free text that is not an approve/skip is her change to it.
   if (isEmptyReply(parsed)) {
@@ -806,12 +926,28 @@ export async function applyBrandReplyApproval(
   for (const n of [...approve].sort((a, b) => a - b)) {
     const r = await rowOf(n);
     if (!r) { lines.push(`${n}: not in that email`); continue; }
+    /*
+     * BOTH MUST APPROVE (owner, 6 Nov 2026). This "approved" is recorded against the draft on this email; until every
+     * approver the email named has said it, nothing is sent and the line says who is still needed. Recorded with a
+     * compare-and-set, so two replies landing together cannot lose one another.
+     */
+    if (r.state === "NOTIFIED" && r.notice_ref === ref) {
+      const before = r.approved_by_json ?? null;
+      const approvedBy = [...new Set([...idList(before), approverId])];
+      const rec = await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET approved_by_json = ?2 WHERE id = ?1 AND state = 'NOTIFIED' AND notice_ref = ?3 AND COALESCE(approved_by_json, '') = ?4")
+        .bind(r.id, JSON.stringify(approvedBy), ref, before ?? "").run();
+      if ((rec.meta?.changes ?? 0) === 0) { lines.push(`${n} · ${brandDisplayName(r.brand)}: changed while your reply was read; nothing sent, reply again`); continue; }
+      if (!needed.every((id) => approvedBy.includes(id))) {
+        lines.push(`${n} · ${brandDisplayName(r.brand)}: ${approvalWords(needed, approvedBy)}; nothing sent yet`);
+        continue;
+      }
+    }
     // THE CLAIM: only one "approved" can move it from NOTIFIED, so a second one (or a re-delivery) sends nothing.
     const claim = await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'SENDING' WHERE id = ?1 AND state = 'NOTIFIED' AND notice_ref = ?2").bind(r.id, ref).run();
     if ((claim.meta?.changes ?? 0) === 0) { lines.push(`${n} · ${brandDisplayName(r.brand)}: already ${r.state === "SENT" ? "sent" : r.state.toLowerCase()}, nothing sent again`); continue; }
     try {
       const calendar = await sendApproved(env, owner, r, now, deps);
-      lines.push(`${n} · ${brandDisplayName(r.brand)}: sent from ${TLC_OWNER.email}, on their thread${calendar ? `; ${calendar}` : ""}`);
+      lines.push(`${n} · ${brandDisplayName(r.brand)}: ${needed.length > 1 ? `${approvalWords(needed, needed)}; ` : ""}sent from ${TLC_OWNER.email}, on their thread${calendar ? `; ${calendar}` : ""}`);
     } catch (err) {
       lines.push(`${n} · ${brandDisplayName(r.brand)}: ${await sendFailed(env, r, err, now)}`);
       if (err instanceof SamplesPdfError && !err.retry) backToHer = true;
@@ -820,28 +956,31 @@ export async function applyBrandReplyApproval(
   for (const n of [...skipped]) {
     const r = await rowOf(n);
     if (!r) continue;
-    await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'SKIPPED', held_reason = ?2 WHERE id = ?1 AND state = 'NOTIFIED'").bind(r.id, `skipped by her (${ref})`).run();
-    lines.push(`${n} · ${brandDisplayName(r.brand)}: skipped, nothing sent`);
+    await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'SKIPPED', held_reason = ?2 WHERE id = ?1 AND state = 'NOTIFIED'").bind(r.id, `skipped by ${who} (${ref})`).run();
+    lines.push(`${n} · ${brandDisplayName(r.brand)}: skipped by ${who}, nothing sent`);
   }
   let redrafted = 0;
   let learned = 0;
   for (const c of parsed.change) {
     const r = await rowOf(c.n);
     if (!r || r.state !== "NOTIFIED") continue;
-    // The standing parts of her note are Wynn's rules from now on, for every later draft — this one included.
-    learned += await learnRules(env, c.note, ref, firmScope);
+    // The standing parts of HER note are Wynn's rules from now on, for every later draft — this one included. A note
+    // from Scooter redrafts this one draft; it does not become a standing rule.
+    if (approverId === TLC_OWNER.firmUserId) learned += await learnRules(env, c.note, ref, firmScope);
     await redraftFor(env, { ...r, research_tries: 0 }, c.note, now, deps);
     redrafted += 1;
   }
   const again = redrafted || backToHer ? await sendReplyApprovals(env, now, firmScope) : null;
   if (lines.length) {
+    const sentN = lines.filter((l) => /sent from /.test(l)).length;
+    const halfN = lines.filter((l) => /waiting on /.test(l)).length;
     await emailHer(env, firmScope, `${ref}:done`, {
-      what: `brand replies, done · ${ref}`,
-      tldr: `${lines.filter((l) => /: sent /.test(l)).length} sent, from your mailbox, on their threads.`,
-      sections: [{ label: "Done", bullets: lines.slice(0, 6) }, { label: "Next", bullets: [again ? `Redrafted for your note: ${again}` : "Wynn watches for their answer"] }],
-    }).catch(() => false);
+      what: `brand replies, ${sentN ? "done" : halfN ? "half approved" : "done"} · ${ref}`,
+      tldr: [sentN ? `${sentN} sent, from your mailbox, on their threads.` : "", halfN ? `${halfN} approved by ${who}, not sent yet: waiting on ${namesOf(needed.filter((id) => id !== approverId))}.` : "", !sentN && !halfN ? `${who} answered ${ref}.` : ""].filter(Boolean).join(" "),
+      sections: [{ label: "Done", bullets: lines.slice(0, 6) }, { label: "Next", bullets: [again ? `Redrafted for the note: ${again}` : halfN ? `It goes once ${namesOf(needed)} have each replied "approved" to ${ref}` : "Wynn watches for their answer"] }],
+    }, [], needed.length > 1 ? copied : []).catch(() => false);
   }
-  await appendEvent(env, { eventType: "tlc.brand_reply_decided", actorType: "firm_user", actorId: TLC_OWNER.firmUserId, objectType: "tlc_brand_reply_notice", objectId: ref, firmScope, payload: { lines, redrafted, learned } });
+  await appendEvent(env, { eventType: "tlc.brand_reply_decided", actorType: "firm_user", actorId: approverId, objectType: "tlc_brand_reply_notice", objectId: ref, firmScope, payload: { lines, redrafted, learned } });
   return { handled: true, ref, detail: [...lines, ...(redrafted ? [`${redrafted} redrafted`] : [])].join("; ") || "nothing to do" };
 }
 

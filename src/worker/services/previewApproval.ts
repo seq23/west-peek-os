@@ -349,6 +349,8 @@ function previewEmailFor(
 
 export interface SendOrPreviewInput {
   to: string;
+  /** Partners copied on this one email (the brand-reply approval email copies Scooter: owner, 6 Nov 2026). */
+  cc?: readonly string[];
   email: ExecEmailInput;
   objectType: string;
   objectId: string;
@@ -414,10 +416,12 @@ export interface SendOrPreviewOutcome {
  * notice can disagree with another about who hears it. Cc is finished work only, partners only
  * (`ccList`), never the recipient themselves.
  */
-export async function recipientsFor(env: Env, input: { to: string; workCardId?: string | null; finished?: boolean }): Promise<{ to: string; cc: string[] }> {
+export async function recipientsFor(env: Env, input: { to: string; cc?: readonly string[]; workCardId?: string | null; finished?: boolean }): Promise<{ to: string; cc: string[] }> {
   const to = input.to.trim().toLowerCase();
   const cc = input.finished ? (await ccOfCard(env, input.workCardId)).filter((a) => a !== to) : [];
-  return { to, cc };
+  // A cc the caller names for this one email (partners only: the door refuses anyone else), beside the card's.
+  const named = (input.cc ?? []).map((a) => a.trim().toLowerCase()).filter((a) => a && a !== to);
+  return { to, cc: [...new Set([...named, ...cc])] };
 }
 
 export async function sendOrPreview(env: Env, input: SendOrPreviewInput): Promise<SendOrPreviewOutcome> {

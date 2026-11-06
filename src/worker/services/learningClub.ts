@@ -35,6 +35,7 @@ import {
   BOOKING_PACK_SHAPE,
   BRAND_SEND_SETTING,
   PITCH_APPROVAL_HASH_SETTING,
+  type ContentHashes,
   PLAYBOOK_APPROVAL_HASH_SETTING,
   TLC_DECIDER_IDS,
   TLC_OWNER,
@@ -316,12 +317,13 @@ export async function applyBackupSwitch(env: Env, ev: TlcEventRow, now: Date, fi
  */
 export async function emailOwner(
   env: Env,
-  input: { employee: "Parker" | "Wynn"; email: Omit<ExecEmailInput, "employee">; objectType: string; objectId: string; cardId: string | null; cardKind: string | null; firmScope: string; attachments?: readonly EmailAttachment[]; replyOnThread?: string | null },
+  input: { employee: "Parker" | "Wynn"; email: Omit<ExecEmailInput, "employee">; objectType: string; objectId: string; cardId: string | null; cardKind: string | null; firmScope: string; attachments?: readonly EmailAttachment[]; replyOnThread?: string | null; cc?: readonly string[] },
 ): Promise<string[]> {
   const sent: string[] = [];
   for (const address of TLC_RECIPIENTS) {
     const out = await sendOrPreview(env, {
       to: address,
+      ...(input.cc?.length ? { cc: input.cc } : {}),
       email: { employee: input.employee, ...input.email },
       objectType: input.objectType,
       objectId: input.objectId,
@@ -2439,7 +2441,7 @@ export async function handleTlcApprove(ctx: RouteContext): Promise<Response> {
   if (w === "brand_send_off") await set(BRAND_SEND_SETTING, "off");
   if (w === "brand_send_on") {
     const s = await tlcSettings(ctx.env);
-    if (approvalState(s, PITCH_APPROVAL_HASH_SETTING, hashes.pitch) !== "APPROVED" || approvalState(s, PLAYBOOK_APPROVAL_HASH_SETTING, hashes.playbook) !== "APPROVED") {
+    if (approvalState(s, PITCH_APPROVAL_HASH_SETTING, hashes.pitch, hashes.pitchWords) !== "APPROVED" || approvalState(s, PLAYBOOK_APPROVAL_HASH_SETTING, hashes.playbook, hashes.playbookWords) !== "APPROVED") {
       return json({ error: "not_approved", detail: "approve the current brand pitch and playbook first" }, { status: 409 });
     }
     await set(BRAND_SEND_SETTING, "on");
@@ -2595,11 +2597,14 @@ const sha256 = async (text: string): Promise<string> =>
  * What an approval is OF: the exact brand pitches that would be sent now (every upcoming month with
  * a topic), and the exact playbook text. Any change to either changes its hash and clears the approval.
  */
-export async function contentHashes(env: Env): Promise<{ pitch: string; playbook: string }> {
+export async function contentHashes(env: Env): Promise<ContentHashes> {
   const evs = await eventsFrom(env, "SELECT * FROM tlc_event WHERE topic IS NOT NULL AND status NOT IN ('DONE','CANCELLED') ORDER BY month");
+  const words = await contentTexts(env);
   return {
     pitch: await sha256(evs.map((e) => `${e.month}\n${renderBrandPitch(clubViewOf(e))}`).join("\n\n")),
     playbook: await sha256(TLC_PLAYBOOK.join("\n")),
+    pitchWords: words.pitch,
+    playbookWords: words.playbook,
   };
 }
 
@@ -2620,8 +2625,8 @@ const settingMeta = async (env: Env, key: string): Promise<{ set_by: string | nu
 /** The switch screen's whole state, in plain words. */
 export async function approvalsView(env: Env, settings: Record<string, string | null>) {
   const hashes = await contentHashes(env);
-  const pitch = approvalState(settings, PITCH_APPROVAL_HASH_SETTING, hashes.pitch);
-  const playbook = approvalState(settings, PLAYBOOK_APPROVAL_HASH_SETTING, hashes.playbook);
+  const pitch = approvalState(settings, PITCH_APPROVAL_HASH_SETTING, hashes.pitch, hashes.pitchWords);
+  const playbook = approvalState(settings, PLAYBOOK_APPROVAL_HASH_SETTING, hashes.playbook, hashes.playbookWords);
   const pm = await settingMeta(env, PITCH_APPROVAL_HASH_SETTING);
   const bm = await settingMeta(env, PLAYBOOK_APPROVAL_HASH_SETTING);
   const evs = await eventsFrom(env, "SELECT * FROM tlc_event WHERE topic IS NOT NULL AND status NOT IN ('DONE','CANCELLED') ORDER BY month");

@@ -1,4 +1,5 @@
 import { COMMUNITY_ABOUT } from "../community/size";
+import { MAAX_BOLD_WOFF2, MAAX_REGULAR_WOFF2, WP_MONOGRAM_PNG } from "./brandAssets";
 import { TLC_ABOUT_COMMUNITY, TLC_ABOUT_WEST_PEEK } from "./aboutWestPeek";
 import {
   TLC_IDEA_ORIGIN_LABEL,
@@ -145,31 +146,61 @@ export function safetyLines(topic: string, text = ""): string[] {
   return out;
 }
 
+/**
+ * WEST PEEK'S BRAND ON EVERY TLC DOCUMENT (owner, 6 Nov 2026, on the Pinecone sheet: "the entire page needs better
+ * branding according to West Peek branding and typography"). WEST_PEEK_BRAND_SYSTEM.md: black and white first, West
+ * Peek Orange #F05A1A as the accent only, warm off-white for cards, the WP monogram as the anchor; Maax, self-hosted
+ * (brain, 23 Sep 2026), as the one face. FOUR TYPE SIZES, each a step quieter than the one above (make-it-calm 4):
+ * 1 the title, 2 a section heading or a price, 3 a level's name, 4 body; the small uppercase label is supporting.
+ */
+const MAAX = `@font-face{font-family:Maax;font-weight:400;font-style:normal;src:url(data:font/woff2;base64,${MAAX_REGULAR_WOFF2}) format("woff2")}
+@font-face{font-family:Maax;font-weight:700;font-style:normal;src:url(data:font/woff2;base64,${MAAX_BOLD_WOFF2}) format("woff2")}`;
 const STYLE = `<style>
-:root{--bg:#FFFFFF;--ink:#050505;--muted:#5F5B55;--line:#D9D2C6;--accent:#F05A1A;--card:#F7F2EA}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#050505;--ink:#FFFFFF;--muted:#A8A29A;--line:#2A2A2A;--card:#171717}}
-:root[data-theme="dark"]{--bg:#050505;--ink:#FFFFFF;--muted:#A8A29A;--line:#2A2A2A;--card:#171717}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 -apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif}
-main{max-width:860px;margin:0 auto;padding:40px 16px 64px}
-.eyebrow{letter-spacing:.14em;text-transform:uppercase;font-size:12px;color:var(--accent);font-weight:700}
-h1{font-size:clamp(34px,6vw,56px);line-height:1.05;margin:10px 0 8px;letter-spacing:-.02em}
-h2{font-size:14px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:30px 0 10px;font-weight:700}
-.lede{font-size:19px;max-width:680px;margin:6px 0}.when{color:var(--muted);margin:4px 0 0}
-.tiers{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin:8px 0}
-.tier,.box{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
-.tier b{display:block;font-size:22px;letter-spacing:-.01em}.tier span{color:var(--muted);font-size:14px}.tier .mark{display:block;color:var(--accent);font-style:normal;font-size:13px;font-weight:700;margin:2px 0 4px}
-ul,ol{padding-left:20px}li{margin:4px 0}.cats{columns:2;column-gap:28px}@media (max-width:560px){.cats{columns:1}}
-.note{border-left:3px solid var(--accent);padding:2px 0 2px 14px}
-table{border-collapse:collapse;width:100%;font-size:14px}td,th{border-top:1px solid var(--line);padding:6px 8px 6px 0;text-align:left;vertical-align:top}
-a{color:inherit}.muted{color:var(--muted)}footer{margin-top:28px;border-top:1px solid var(--line);padding-top:14px;font-size:14px}
-.box h2{margin:0 0 6px}.box p{margin:0}.box{margin-top:22px}
-.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:4px 24px}.two h2{margin-top:16px}
-@page{size:letter;margin:.45in}
-@media print{:root,:root:not([data-theme="light"]),:root[data-theme="dark"]{--bg:#FFFFFF;--ink:#050505;--muted:#5F5B55;--line:#D9D2C6;--card:#F7F2EA}
-body{font-size:13px;line-height:1.45;-webkit-print-color-adjust:exact;print-color-adjust:exact}main{max-width:none;padding:0}
-h1{font-size:40px}h2{margin:16px 0 6px;font-size:12px}.lede{font-size:15px}.src{font-size:11px;columns:2;column-gap:28px}
-li{margin:2px 0}.tier,.box,.note,li,tr{break-inside:avoid}.box{margin-top:16px}footer{margin-top:16px}}
+${MAAX}
+:root{--bg:#FFFFFF;--ink:#171717;--muted:#5F5B55;--line:#E4DDD2;--accent:#F05A1A;--card:#F7F2EA;--tint:#FFF1E9;--mast:#050505;--mast-ink:#FFFFFF;
+--t1:40px;--t2:20px;--t3:17px;--t4:16px;--label:12px;--levelcol:clamp(140px,34%,260px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0B0B0B;--ink:#F7F2EA;--muted:#B5AEA4;--line:#2E2B28;--card:#171717;--tint:#2A1A12}}
+:root[data-theme="dark"]{--bg:#0B0B0B;--ink:#F7F2EA;--muted:#B5AEA4;--line:#2E2B28;--card:#171717;--tint:#2A1A12}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:400 var(--t4)/1.5 Maax,-apple-system,BlinkMacSystemFont,"Helvetica Neue",Arial,sans-serif}
+main{max-width:860px;margin:0 auto;padding:0 16px 64px}
+.mast{display:flex;align-items:center;justify-content:space-between;gap:16px;background:var(--mast);color:var(--mast-ink);margin:0 -16px 28px;padding:16px 22px;border-bottom:4px solid var(--accent)}
+.mast img{width:44px;height:44px;filter:invert(1);display:block}
+.eyebrow{letter-spacing:.14em;text-transform:uppercase;font-size:var(--label);font-weight:700;color:var(--accent)}
+.mast .eyebrow{color:var(--mast-ink)}
+h1{font-size:var(--t1);line-height:1.08;margin:0 0 10px;letter-spacing:-.02em;font-weight:700}
+h2{font-size:var(--t2);line-height:1.25;margin:26px 0 8px;font-weight:700;letter-spacing:-.01em}
+h2::before{content:"";display:block;width:28px;height:3px;background:var(--accent);margin-bottom:8px}
+.lede{font-size:var(--t3);max-width:700px;margin:0 0 8px}.when{color:var(--muted);margin:0}
+ul,ol{padding-left:20px;margin:0}li{margin:4px 0}.cats{columns:2;column-gap:28px}@media (max-width:560px){.cats{columns:1}}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0 32px}
+.note{background:var(--card);border-left:3px solid var(--accent);padding:10px 14px;margin:18px 0 0;color:var(--muted)}
+.tiers{border-top:2px solid var(--ink);margin:6px 0 10px}
+.tier{display:grid;grid-template-columns:var(--levelcol) 1fr;column-gap:22px;padding:12px 0;border-bottom:1px solid var(--line)}
+.tier b{grid-row:1 / span 2;font-weight:700}.tier .name{display:block;font-size:var(--t3);line-height:1.25}.tier .dot{display:none}
+.tier .price{display:block;font-size:var(--t2);line-height:1.3;color:var(--accent);letter-spacing:-.01em}
+.tier .mark{display:block;font-style:normal;font-weight:700;font-size:var(--label);letter-spacing:.06em;text-transform:uppercase;color:var(--accent);margin:0 0 4px}
+.tier .adds{color:var(--ink)}.tier .adds::first-letter{text-transform:uppercase}
+.tier[data-level="LEAD"]{background:var(--tint);margin-left:-12px;padding-left:9px;padding-right:12px;border-left:3px solid var(--accent)}
+.tiers + p,.tiers + p + p{margin:6px 0;color:var(--muted)}
+.yes ol{padding-left:20px}
+.box{background:var(--card);border-radius:12px;padding:14px 16px}.box h2{margin-top:0}.box p{margin:0}
+table{border-collapse:collapse;width:100%}td,th{border-top:1px solid var(--line);padding:6px 8px 6px 0;text-align:left;vertical-align:top}
+a{color:inherit}.muted{color:var(--muted)}
+footer{margin-top:24px;border-top:2px solid var(--ink);padding-top:12px;display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px 24px}
+footer a{text-decoration:none;color:var(--accent)}footer .conf{margin:0;color:var(--muted);font-size:var(--label);letter-spacing:.06em;text-transform:uppercase}
+.two .box{margin-top:26px}.two h2{margin-top:26px}
+@page{size:letter;margin:0 0 .45in}
+@media print{:root,:root:not([data-theme="light"]),:root[data-theme="dark"]{--bg:#FFFFFF;--ink:#171717;--muted:#5F5B55;--line:#E4DDD2;--card:#F7F2EA;--tint:#FFF1E9;
+--t1:30px;--t2:16px;--t3:13.5px;--t4:12px;--label:9.5px;--levelcol:2.5in}
+body{line-height:1.45;-webkit-print-color-adjust:exact;print-color-adjust:exact}main{max-width:none;padding:0 .5in}
+.mast{margin:0 -.5in 20px;padding:14px .5in}.mast img{width:36px;height:36px}
+h2{margin:16px 0 6px}h2::before{margin-bottom:6px;width:22px}.src{font-size:10px;columns:2;column-gap:28px}
+li{margin:2px 0}.tier{padding:8px 0}.tier[data-level="LEAD"]{padding:8px 12px 8px 9px}.tier,.box,.note,li,tr{break-inside:avoid}.note{margin-top:12px;padding:8px 12px}
+.two .box,.two h2{margin-top:16px}footer{margin-top:16px}}
 </style>`;
+
+/** The black masthead: the WP monogram (alt "West Peek") and the document's label, the label's words unchanged. */
+const mast = (label: string): string => `<header class="mast"><img src="data:image/png;base64,${WP_MONOGRAM_PNG}" alt="West Peek"><div class="eyebrow">${esc(label)}</div></header>`;
 
 const page = (title: string, body: string): string =>
   `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -269,7 +300,9 @@ export function brandLevels(sponsor: TlcSponsorView | null, topic: string): Bran
 }
 
 /** "Partner · $5,000 per event" / "Product partner · in kind". */
-export const levelPriceWords = (l: Pick<BrandLevel, "label" | "priceUsd">): string => `${l.label} · ${l.priceUsd ? `${usd(l.priceUsd)} per event` : "in kind"}`;
+/** "$5,000 per event" / "in kind". */
+export const priceWords = (l: Pick<BrandLevel, "priceUsd">): string => (l.priceUsd ? `${usd(l.priceUsd)} per event` : "in kind");
+export const levelPriceWords = (l: Pick<BrandLevel, "label" | "priceUsd">): string => `${l.label} · ${priceWords(l)}`;
 export const SERIES_PRICE_WORDS = "A series of six: the same per-event price for each club, as a founding partner.";
 
 /**
@@ -297,6 +330,18 @@ export function brandCopyProblems(text: string): string[] {
  * one-line About; her sign-off. Without a sponsor it is the club's generic sheet (the public page and the send-gate
  * hash): no Title, no in-kind. Never another brand's name, a why-now, a ticket price or a fixed weekday.
  */
+/**
+ * THE SHEET'S DESIGN, NAMED (owner, 6 Nov 2026). Every partner-levels PDF made is stamped with it; a proposal still
+ * waiting for approval whose PDF carries an older stamp is made again on the current design before anyone approves
+ * it (services/tlcBrandReply.ts refreshStaleSheets). Change it whenever the sheet's look changes.
+ */
+export const SHEET_VERSION = "2026-11-06 West Peek brand";
+/** What she is told changed when a waiting proposal comes back with the sheet made again. */
+export const SHEET_CHANGE_WORDS = "The attached partner-levels sheet is rebuilt in West Peek's branding and type (the logo, Maax, the brand colours, a clear price table). The words in the sheet are unchanged.";
+
+/** The confidentiality line on a sheet made for one brand (brand-pitch skill: every sponsor PDF carries one). */
+export const confidentialFor = (brand: string): string => `Prepared for ${brand}. Confidential, for your team only.`;
+
 export function renderBrandPitch(v: TlcClubView, sponsor: TlcSponsorView | null = null): string {
   const B = sponsor?.brand ?? null;
   const hook = sentences(brandSafe(v.angle)).slice(0, 2).join(" ");
@@ -315,28 +360,32 @@ export function renderBrandPitch(v: TlcClubView, sponsor: TlcSponsorView | null 
     : "";
   return page(
     B ? `${v.topic}, with ${B}` : `The Learning Club: ${v.topic}`,
-    `<div class="eyebrow">West Peek Rooms · The Learning Club</div>
+    `${mast("West Peek Rooms · The Learning Club")}
 <h1>${esc(B ? `${v.topic}, with ${B}` : v.topic)}</h1>
 ${hook ? `<p class="lede">${esc(hook)}</p>` : ""}
 ${series}
 <p class="when">${esc(monthWords(v.month))} (date flexible) · New York City · ${BRAND_GUESTS_WORDS}</p>
+<div class="two"><div>
 <h2>Why this room works for ${esc(B ?? "your brand")}</h2>
 <ul>${why.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>
+</div><div>
 <h2>Who will be in the room</h2>
 <ul><li>${BRAND_ROOM_WORDS} New Yorkers per event, a number we flex to your goals, who will choose this topic.</li>
 <li>Founders, operators, creatives and builders from a community of ${COMMUNITY_ABOUT}.</li>
 <li>Taught by someone who does this for a living. The session will run: arrive, learn, an hour hands-on, a real meal, go deeper, share, close.</li>
 ${v.aiSegment ? `<li>The AI segment: ${esc(brandSafe(v.aiSegment))}</li>` : ""}
 ${takeHome ? `<li>They will leave with: ${esc(takeHome)}</li>` : ""}</ul>
+</div></div>
 ${safety.length ? `<p class="note">${safety.map(esc).join(" ")}</p>` : ""}
 <h2>Partner levels, per event</h2>
-<div class="tiers">${levels.map((l) => `<div class="tier" data-level="${l.key}"><b>${esc(levelPriceWords(l))}</b>${l.marked ? `<em class="mark">${esc(l.marked)}</em>` : ""}<span>${l.head ? `${esc(l.head)} ` : ""}${esc(l.adds.join("; "))}.</span></div>`).join("")}</div>
+<div class="tiers">${levels.map((l) => `<div class="tier" data-level="${l.key}"><b><span class="name">${esc(l.label)}</span><span class="dot"> · </span><span class="price">${esc(priceWords(l))}</span></b>${l.marked ? `<em class="mark">${esc(l.marked)}</em>` : ""}<span class="adds">${l.head ? `${esc(l.head)} ` : ""}${esc(l.adds.join("; "))}.</span></div>`).join("")}</div>
 <p>${esc(SERIES_PRICE_WORDS)}</p>
 <p>${hasTitle ? "Except with a Title partner, a few brands can partner on each club." : "A few brands can partner on each club."}</p>
+<div class="two"><div class="yes">
 <h2>To say yes</h2>
 <ol><li>Reply with the level.</li><li>We send a one-page agreement and an invoice; payment is due within 14 days.</li><li>Then we set the date with you and shape the guest list around your audience.</li></ol>
-<section class="box"><h2>About West Peek</h2><p>${esc(TLC_ABOUT_COMMUNITY)}</p></section>
-<footer><strong>${esc(TLC_OWNER.name)}</strong> · ${esc(TLC_OWNER.firm)} · <a href="mailto:${TLC_OWNER.email}">${TLC_OWNER.email}</a></footer>`,
+</div><section class="box"><h2>About West Peek</h2><p>${esc(TLC_ABOUT_COMMUNITY)}</p></section></div>
+<footer><span><strong>${esc(TLC_OWNER.name)}</strong> · ${esc(TLC_OWNER.firm)} · <a href="mailto:${TLC_OWNER.email}">${TLC_OWNER.email}</a></span>${B ? `<p class="conf">${esc(confidentialFor(B))}</p>` : ""}</footer>`,
   );
 }
 
@@ -372,7 +421,7 @@ export function renderInternalOnePager(v: TlcInternalView): string {
   ];
   return page(
     `Internal: ${v.topic}`,
-    `<div class="eyebrow">Internal one-pager · for Sequoia · not for brands</div>
+    `${mast("Internal one-pager · for Sequoia · not for brands")}
 <h1>${esc(v.topic)}</h1>
 <p class="when">${esc(clubWhen(v.eventDate, v.slot))} · New York City · where the idea came from: ${esc(origin)}${v.decidedBy ? ` · ${esc(v.decidedBy)}` : ""}</p>
 <p class="lede">${esc(internalSafe(v.angle))}</p>

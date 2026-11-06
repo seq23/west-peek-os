@@ -45,13 +45,16 @@ const MAR: TlcClubView = {
   categories: [{ category: "AI assistant (lead, category-exclusive)", why: "runs every build", example_brands: ["Brand C"] }], handsOn: "Build 1: paste a real meeting transcript into the assistant.", takeHome: "Three working automations in their own accounts.", recap: null,
 };
 
+/** What a reader sees on the sheet: the words, in order, the layout's tags and styling aside. */
+const seen = (html: string): string => html.replace(/<style>[\s\S]*?<\/style>/g, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+
 describe("the three brand pitches read clean", () => {
   it("no review blocker survives in any month", () => {
     for (const v of [JAN, FEB, MAR]) {
       const html = renderBrandPitch(v);
       expect(brandPitchProblems(html)).toEqual([]);
       // The approved pattern's order (owner, 4 Nov 2026): why it works, who is there, the levels, how to say yes, her sign-off.
-      const at = (h: string) => html.indexOf(h);
+      const at = (h: string) => seen(html).indexOf(h);
       expect(at("Why this room works for")).toBeGreaterThan(0);
       expect(at("Why this room works for")).toBeLessThan(at("Who will be in the room"));
       expect(at("Who will be in the room")).toBeLessThan(at("Partner levels, per event"));
@@ -313,7 +316,8 @@ describe("the partner-levels sheet, made for each sponsor", () => {
     expect(html).toContain("Acme Vector is the vector database every guest uses in the hands-on hour, with a starter account set up in the room");
     expect(html).not.toMatch(/Product partner|in kind|in-kind/i);
     expect(html).not.toContain("Title partner");
-    const lines = [...html.matchAll(/<div class="tier" data-level="(\w+)"><b>([^<]+)<\/b>/g)].map((m) => ({ key: m[1], price: m[2]! }));
+    // Each level's name and price, as read (the sheet lays them out as name over price: owner, 6 Nov 2026).
+    const lines = [...html.matchAll(/<div class="tier" data-level="(\w+)"><b>([\s\S]*?)<\/b>/g)].map((m) => ({ key: m[1], price: m[2]!.replace(/<[^>]+>/g, "") }));
     expect(lines.map((l) => l.key)).toEqual(["PARTNER", "LEAD", "PRESENTING"]);
     for (const l of lines) expect(l.price).toMatch(/· \$[\d,]+ per event$/);
     const prices = lines.map((l) => Number(/\$([\d,]+)/.exec(l.price)![1]!.replace(/,/g, "")));
@@ -330,7 +334,7 @@ describe("the partner-levels sheet, made for each sponsor", () => {
   });
 
   it("in-kind only for a physical product; unknown never shows it (fail closed)", () => {
-    expect(renderBrandPitch(JAN, drinks)).toContain("Product partner · in kind");
+    expect(seen(renderBrandPitch(JAN, drinks))).toContain("Product partner · in kind");
     expect(renderBrandPitch(JAN, unknown)).not.toMatch(/Product partner|in kind/);
     expect(brandLevels(unknown, "T").map((l) => l.key)).toEqual(["PARTNER", "LEAD", "PRESENTING"]);
   });
@@ -338,7 +342,7 @@ describe("the partner-levels sheet, made for each sponsor", () => {
   it("Title only for a brand research marks as large (or one that asks to own the room): 'with <Brand>', never 'Presented by'", () => {
     expect(brandLevels(software, "T").some((l) => l.key === "TITLE")).toBe(false);
     const html = renderBrandPitch(MAR, large);
-    expect(html).toContain("Title partner · $25,000 per event");
+    expect(seen(html)).toContain("Title partner · $25,000 per event");
     expect(html).toContain("the whole room is yours: &quot;The Learning Club: AI Tools for Your Work, with Big Co&quot;; the only cash partner that night; first say on the format");
     expect(html.match(/Presented by/g)).toHaveLength(1);
     expect(html).toContain("Except with a Title partner, a few brands can partner on each club.");

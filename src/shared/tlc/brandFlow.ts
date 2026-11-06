@@ -67,6 +67,23 @@ export function fillTemplate(name: FlowTemplate, values: Record<string, string>)
 
 export const hiLine = (contactName: string | null | undefined): string => (contactName?.trim() ? `Hi ${contactName.trim().split(/\s+/)[0]},` : "Hi,");
 
+/**
+ * WHO THE ANSWER GREETS: THE PERSON WHO ASKED (6 Nov 2026, found reading the Pinecone draft before it went to her: a
+ * colleague asked "How much is this to do?", the answer went To that colleague with our contact in Cc, and opened
+ * "Hi Mike"). Our contact by name when they are the one we answer; otherwise the asker's own first name from the
+ * From line of their message when it shows one; otherwise "Hi all," when others are copied, or "Hi,". Never a name
+ * guessed from an address.
+ */
+export function greetingFor(contact: { name: string | null | undefined; email: string }, recipients: { to: string; cc: readonly string[] }, raw = ""): string {
+  if (!recipients.to || recipients.to.trim().toLowerCase() === contact.email.trim().toLowerCase()) return hiLine(contact.name);
+  const head = raw.split(/\r?\n\r?\n/)[0] ?? "";
+  const from = /^from:[ \t]*(.*)$/im.exec(head)?.[1] ?? "";
+  const display = /^\s*"?([^"<>@]+?)"?\s*<([^>]+)>/.exec(from);
+  const name = display && display[2]!.trim().toLowerCase() === recipients.to.trim().toLowerCase() ? display[1]!.trim() : "";
+  if (/^[A-Za-z\u00C0-\u024F][A-Za-z\u00C0-\u024F'’.-]*(?:\s|$)/.test(name)) return hiLine(name);
+  return recipients.cc.length ? "Hi all," : "Hi,";
+}
+
 /** Which partnership level a brand picked from the proposal ("Presenting works for us", "let's do Partner"), or null. */
 export function levelPicked(text: string): "TITLE" | "PRESENTING" | "LEAD" | "PARTNER" | "PRODUCT" | null {
   const t = text.toLowerCase().replace(/[’]/g, "'");

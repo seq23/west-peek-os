@@ -383,7 +383,12 @@ export async function handleTlcSamplesPreview(ctx: RouteContext): Promise<Respon
 
 // ── Steps 4 and 5: the one-pager, the agreement and the invoice, as stored PDFs ─────────────────
 
-export interface StoredFile { key: string; name: string }
+export interface StoredFile {
+  key: string;
+  name: string;
+  /** On a partner-levels sheet: the sheet design it was made with (shared/tlc/pitch.ts SHEET_VERSION). */
+  sheet?: string;
+}
 
 /** Render one HTML page to a PDF and keep it in R2 for her approval email and the brand's. */
 export async function storePdf(env: Env, key: string, name: string, html: string, deps: SamplesDeps = {}, onePage = true): Promise<StoredFile | string> {
