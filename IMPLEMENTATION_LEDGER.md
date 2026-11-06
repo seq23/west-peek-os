@@ -7447,3 +7447,7 @@ from January 2027; $10 paid ticket; $10,000 net target from sponsors ($7,500 flo
 - Guards (tests/freeModelsForProspects.test.ts): gemini-2.5-flash 404 → next grounded rung completes (fails on the old code,
   checked); Brave + OpenRouter `:free` at $0 and the cost stop; committed-LP search calls nothing. Live rungs past
   gemini-2.5-flash and OpenRouter writers are UNPROVEN until the post-deploy research call.
+- Live call 6 Nov 2026 on WP_GEMINI_API_KEY only (PROVEN): gemini-2.5-flash answers 404 "no longer available to new users"
+  on the new project, gemini-3.8-flash grounding answers 429 on the free tier, so research was carried by Brave written by
+  gemini-3.6-flash at $0. The same call found 3 of 4 pinned OpenRouter `:free` slugs 404 "unavailable for free", so the
+  OpenRouter writers are now read from OpenRouter's live model list (`:free`, priced 0 both ways), preferred ids first.
