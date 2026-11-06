@@ -87,8 +87,8 @@ describe("a brand replied", () => {
   it("an out-of-office: no draft, no approval email, and the drip resumes the day after they are back", async () => {
     expect(await arrive("Pat <pat@away.example>", "Automatic reply: Away Co + a small room in New York", "I'm currently out of the office, returning Monday, November 16.", "ooo-1@away.example", MORNING)).toEqual({ matched: 1, stop: "AUTO_REPLY" });
     expect(await env.WP_OS_DB.prepare("SELECT stop_reason, replied_at, stage, next_send_at FROM tlc_deal WHERE id = 'tld_away'").first())
-      // Back on the drip, never earlier than its own next step: the one follow-up is day 12 (owner, 4 Nov 2026), after they are back.
-      .toEqual({ stop_reason: null, replied_at: null, stage: "PITCHED", next_send_at: "2026-11-21T15:00:00.000Z" });
+      // Back on the drip the day after they are back; its own next step (email 2, day 3 = 12 Nov) has passed by then (owner, 6 Nov 2026).
+      .toEqual({ stop_reason: null, replied_at: null, stage: "PITCHED", next_send_at: "2026-11-17T14:00:00.000Z" });
     expect(await processBrandReplies(env, AFTERNOON, "west-peek", deps)).toMatch(/no brand reply waiting for her$/);
     expect(sends).toHaveLength(0);
   });
@@ -813,7 +813,7 @@ describe("brand colleagues and the approval boundary", () => {
     expect(sends[0]!.to).toBe("sequoia@westpeek.ventures");
   });
 
-  it("refuses an unapproved brand email at the executor (named stop, nothing sent); the drip's one follow-up (step 2) still sends", async () => {
+  it("refuses an unapproved brand email at the executor (named stop, nothing sent); the drip's follow-ups (steps 2 to 4) still send", async () => {
     const { executeExternalEffect } = await import("../src/worker/effects/executor");
     const { requestApproval, decideApproval } = await import("../src/worker/services/approvals");
     const { actorForFirmUser } = await import("../src/worker/services/authorize");

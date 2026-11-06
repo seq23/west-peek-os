@@ -7,6 +7,7 @@ import { addressesPassed } from "./helpers/addressCheck";
 import type { Env } from "../src/worker/env";
 import {
   TLC_DRIP_DAYS,
+  dripWindowClosed,
   TLC_SEATS,
   bookingPackProblems,
   bookingPackTotals,
@@ -126,14 +127,28 @@ describe("the rules, pure", () => {
     expect(ticketVerdict(25).meetsFloor).toBe(true);
   });
 
-  it("sends the first pitch and ONE follow-up at day 12, then no more (owner, 4 Nov 2026), and stops on any stop", () => {
+  it("sends the first pitch and up to THREE follow-ups at day 3, 7 and 14 from the first send, then never again (owner, 6 Nov 2026), and stops on any stop", () => {
     const first = "2027-01-04T14:00:00.000Z";
     const now = new Date(first);
-    expect(TLC_DRIP_DAYS).toEqual([0, 12]);
-    expect(nextDripAt(1, first, now, null)).toBe("2027-01-16T14:00:00.000Z");
-    expect(nextDripAt(2, first, now, null), "after the one follow-up, no more").toBeNull();
-    expect(nextDripAt(3, first, now, null)).toBeNull();
-    expect(nextDripAt(1, first, now, "REPLIED")).toBeNull();
+    expect(TLC_DRIP_DAYS).toEqual([0, 3, 7, 14]);
+    expect(nextDripAt(1, first, now, null)).toBe("2027-01-07T14:00:00.000Z");
+    expect(nextDripAt(2, first, now, null)).toBe("2027-01-11T14:00:00.000Z");
+    expect(nextDripAt(3, first, now, null)).toBe("2027-01-18T14:00:00.000Z");
+    expect(nextDripAt(4, first, now, null), "after the third follow-up, never again").toBeNull();
+    expect(nextDripAt(5, first, now, null)).toBeNull();
+    for (const stop of ["REPLIED", "BOUNCED", "UNSUBSCRIBED", "DECLINED", "COMPLAINED"] as const) for (const step of [1, 2, 3]) expect(nextDripAt(step, first, now, stop), `${stop} at step ${step}`).toBeNull();
+    // Counted from the FIRST send: a late email 2 does not push email 3 past its own day, unless it would land within two days.
+    expect(nextDripAt(2, first, now, null, "2027-01-08T14:00:00.000Z"), "two days after a late email 2 at the soonest").toBe("2027-01-11T14:00:00.000Z");
+    expect(nextDripAt(2, first, now, null, "2027-01-10T14:00:00.000Z")).toBe("2027-01-12T14:00:00.000Z");
+    // Nothing after day 14 (plus one grace day for a warm-up hold): a step that no longer fits is dropped, not sent late.
+    expect(nextDripAt(3, first, now, null, "2027-01-17T14:00:00.000Z")).toBe("2027-01-19T14:00:00.000Z");
+    expect(nextDripAt(3, first, now, null, "2027-01-18T14:00:00.000Z")).toBeNull();
+    expect(dripWindowClosed(3, first, new Date("2027-01-19T14:00:00.000Z"))).toBe(false);
+    expect(dripWindowClosed(3, first, new Date("2027-01-19T14:00:01.000Z"))).toBe(true);
+    expect(dripWindowClosed(0, first, new Date("2027-03-01T00:00:00.000Z")), "the first email is never 'past day 14'").toBe(false);
+    expect(classifyBrandMail({ from: "abuse@mail.example", subject: "Abuse report" })).toBe("COMPLAINED");
+    expect(classifyBrandMail({ from: "pat@brand.example", subject: "Re: this is spam" })).toBe("COMPLAINED");
+    expect(classifyBrandMail({ from: "pat@brand.example", subject: "Re: Vector Co + a small room in New York" })).toBe("REPLIED");
     expect(warmupDailyCap(null, now)).toBe(5);
     expect(warmupDailyCap("2026-12-20T00:00:00Z", now)).toBe(20);
     expect(classifyBrandMail({ from: "MAILER-DAEMON@x.com", subject: "Undeliverable: hi" })).toBe("BOUNCED");

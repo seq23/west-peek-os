@@ -1,4 +1,4 @@
-import { DRIP_STEP_2_POLICY } from "../../shared/tlc/dripPolicy";
+import { DRIP_POLICY_FIRST_STEP, DRIP_POLICY_LAST_STEP, DRIP_STEP_2_POLICY } from "../../shared/tlc/dripPolicy";
 import type { Env } from "../env";
 import type { FirmUserIdentity } from "../auth";
 import { PRIVACY_LABELS, type PrivacyLabel } from "../../shared/privacy";
@@ -258,16 +258,16 @@ export async function verifyAuthorizationReceipt(
   }
   if (!card.decided_by) return { ok: false, reason: "receipt_missing_decider" };
   /*
-   * DECIDED BY POLICY, NOT A PERSON: the drip's 2nd email only (owner ruling, 4 Nov 2026; shared/tlc/dripPolicy.ts).
-   * Valid for exactly one object: the email.send request of a step-1 drip message on the TLC brand-sales lane, whose
-   * card this is. The same decider on any other card is refused, so the policy can never approve anything else.
+   * DECIDED BY POLICY, NOT A PERSON: the drip's follow-ups only (owner rulings, 4 and 6 Nov 2026; shared/tlc/dripPolicy.ts).
+   * Valid for exactly one kind of object: the email.send request of a drip message at a follow-up step (1 to 3) on the
+   * TLC brand-sales lane, whose card this is. The same decider on any other card is refused, email 1 included.
    */
   if (card.decided_by === DRIP_STEP_2_POLICY) {
     const fits = card.action_key === "effect.email.send" && card.object_type === "external_effect_request" && card.object_id
       ? await env.WP_OS_DB.prepare(
         `SELECT 1 FROM tlc_drip_message m JOIN external_effect_request r ON r.id = m.effect_request_id
-          WHERE m.effect_request_id = ?1 AND m.approval_card_id = ?2 AND m.step = 1 AND r.outside_job = 'tlc_brand_sales'`,
-      ).bind(card.object_id, card.id).first()
+          WHERE m.effect_request_id = ?1 AND m.approval_card_id = ?2 AND m.step BETWEEN ?3 AND ?4 AND r.outside_job = 'tlc_brand_sales'`,
+      ).bind(card.object_id, card.id, DRIP_POLICY_FIRST_STEP, DRIP_POLICY_LAST_STEP).first()
       : null;
     return fits ? { ok: true, reason: "receipt_valid_policy_drip_step_2", card } : { ok: false, reason: "receipt_policy_not_applicable" };
   }

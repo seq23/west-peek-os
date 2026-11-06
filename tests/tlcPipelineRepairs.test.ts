@@ -113,14 +113,14 @@ describe("A · no waiting draft is left out of her email", () => {
   });
 });
 
-describe("B · a brand she emailed herself gets its one follow-up, with the samples PDF, on its own", () => {
-  it("drip_step 1 with no date and no draft is armed and queued (owner, 4 Nov 2026: email 2 is the only automatic send); her own first email is never re-sent by Wynn", async () => {
+describe("B · a brand she emailed herself gets its follow-ups, the first with the samples PDF, on their own", () => {
+  it("drip_step 1 with no date and no draft is armed and queued (owner, 6 Nov 2026: the follow-ups are the only automatic sends); her own first email is never re-sent by Wynn", async () => {
     await env.WP_OS_DB.prepare("INSERT INTO tlc_must_pitch (id, month, brand, reason, added_by, added_at, owner_contacted_at) VALUES ('tmp_voice', '2027-02', 'Voice Co', 'AI partner', 'Sequoia', '2026-11-01T00:00:00.000Z', '2026-11-01T22:00:00.000Z')").run();
     await deal("Voice Co", "2027-02", { stage: "PITCHED", drip_step: 1, first_sent_at: "2026-11-01T21:34:13.000Z", next_send_at: null, contact_source_url: "owner-contacted" });
     expect(await armOwnerFollowUps(env, MONDAY)).toEqual(["Voice Co"]);
-    // Due on day 12 from her own first email (owner, 4 Nov 2026), not day 4.
-    expect((await env.WP_OS_DB.prepare("SELECT next_send_at FROM tlc_deal WHERE brand = 'Voice Co'").first<{ next_send_at: string }>())!.next_send_at).toBe("2026-11-13T21:34:13.000Z");
-    const out = await runDrip(env, new Date("2026-11-13T21:40:00.000Z"), "west-peek", DRIP_DEPS);
+    // Due on day 3 from her own first email (owner, 6 Nov 2026; was day 12).
+    expect((await env.WP_OS_DB.prepare("SELECT next_send_at FROM tlc_deal WHERE brand = 'Voice Co'").first<{ next_send_at: string }>())!.next_send_at).toBe("2026-11-04T21:34:13.000Z");
+    const out = await runDrip(env, new Date("2026-11-04T21:40:00.000Z"), "west-peek", DRIP_DEPS);
     // Not a draft for her: queued to go on its own, the PDF attached, its card decided with her ruling named.
     expect(out.newDrafts.filter((d) => d.brand === "Voice Co")).toEqual([]);
     expect(out.followUpsQueued).toBe(1);
@@ -273,20 +273,20 @@ describe("G · email 1 never carries or waits for the samples PDF; email 2 carri
   });
 
   it("email 2 waits for the PDF (SAMPLES_PDF_NOT_READY), then goes with it attached, decided by the policy", async () => {
-    const day12 = new Date(MONDAY.getTime() + 12 * 86_400_000 + 120_000);
-    const held = await runDrip(env, day12, "west-peek", broken);
+    const day3 = new Date(MONDAY.getTime() + 3 * 86_400_000 + 120_000);
+    const held = await runDrip(env, day3, "west-peek", broken);
     expect(held.samplesHeld).toContain("Pdf Co");
     const h = (await pdfCo())!;
     expect(h).toMatchObject({ step: 1, state: "HELD", approval_card_id: null });
     expect(h.held_reason).toMatch(/^SAMPLES_PDF_NOT_READY: the samples PDF could not be made \(the PDF could not be made yet: the renderer is busy\)/);
-    const queued = await runDrip(env, new Date(day12.getTime() + 60_000), "west-peek", DRIP_DEPS);
+    const queued = await runDrip(env, new Date(day3.getTime() + 60_000), "west-peek", DRIP_DEPS);
     expect(queued.followUpsQueued).toBe(1);
     const q = (await pdfCo())!;
     expect(q).toMatchObject({ step: 1, state: "AWAITING_APPROVAL" });
     expect((JSON.parse(q.payload_json!) as { attachments: Array<{ contentType: string }> }).attachments).toEqual([expect.objectContaining({ contentType: "application/pdf" })]);
     expect(await env.WP_OS_DB.prepare("SELECT decided_by, decision_note FROM approval_card WHERE id = ?1").bind(q.approval_card_id).first()).toEqual({ decided_by: "policy:drip_step_2", decision_note: DRIP_STEP_2_RULE });
     sends.length = 0;
-    await runDrip(env, new Date(day12.getTime() + 120_000), "west-peek", DRIP_DEPS);
+    await runDrip(env, new Date(day3.getTime() + 120_000), "west-peek", DRIP_DEPS);
     expect(sends.filter((s) => s.to.includes("pdfco.example"))).toHaveLength(1);
     expect(await env.WP_OS_DB.prepare("SELECT state FROM tlc_samples WHERE deal_id = 'tld_PdfCo'").first()).toEqual({ state: "SENT" });
   });

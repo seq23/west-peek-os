@@ -190,6 +190,9 @@ export async function createTestDb(): Promise<TestDb> {
   if (current?.name.replace(/\.sql$/, "") !== latestMigrationName()) {
     throw new Error(`test database is at ${current?.name ?? "no migration"}, expected ${latestMigrationName()}`);
   }
+  // Fixtures start already timed for today's drip sequence; tests/tlcDrip4Touch.test.ts clears this to prove the re-time.
+  const { TLC_DRIP_DAYS } = await import("../../src/shared/tlc/learningClub");
+  await db.prepare("INSERT OR REPLACE INTO tlc_setting (key, value, set_by, set_at) VALUES ('drip_timed_for_days', ?1, 'test', '2026-01-01T00:00:00.000Z')").bind(TLC_DRIP_DAYS.join(",")).run();
 
   return { mf, db, docs, dir };
 }
