@@ -3,7 +3,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { contentHashes, recordBrandMail, recordBrandReplyText, runDrip } from "../src/worker/services/learningClub";
-import { applyBrandReplyApproval, processBrandReplies, rulesBlock, type BrandResearcher, type DraftExtras, type ReplyDrafter } from "../src/worker/services/tlcBrandReply";
+import { applyBrandReplyApproval, processBrandReplies, rulesBlock, takeBrandReply, type BrandResearcher, type DraftExtras, type ReplyDrafter } from "../src/worker/services/tlcBrandReply";
 import { THREE_THINGS_OFFER, classifyBrandReply, herNoteOf, noReplyNeeded, standingRulesIn, theirNewText, type ReplyDraftInput } from "../src/shared/tlc/brandReply";
 import { parseDraftReply } from "../src/shared/tlc/draftReply";
 import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
@@ -94,6 +94,21 @@ describe("what a brand's message means", () => {
       .toEqual({ kind: "AUTO_REPLY", resumeAt: "2026-11-17T14:00:00.000Z" });
     expect(classifyBrandReply({ subject: "Re: x", text: "Thanks, but this isn't a fit for us." }, MORNING)).toEqual({ kind: "NO" });
     expect(classifyBrandReply({ subject: "Re: x", text: "Happy to hop on a call next week." }, MORNING)).toEqual({ kind: "REPLY", intent: "CALL" });
+  });
+});
+
+describe("a mail server's delivery notice is never a brand's reply (6 Nov 2026 live read)", () => {
+  it("a bounce on the thread gets no draft and no approval email: never 'Hi Mail,' to mailer-daemon", async () => {
+    await deal("tld_dsn", "Talk Co", "marketing@talk.example");
+    const row = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = 'tld_dsn'").first())! as never;
+    const out = await takeBrandReply(env, row, {
+      from: "Mail Delivery Subsystem <mailer-daemon@googlemail.com>", subject: "Delivery Status Notification (Failure)",
+      text: "We're writing to let you know that the group you tried to contact (marketing) may not exist.", messageId: "<dsn-1@googlemail.com>", receivedAt: AFTERNOON.toISOString(),
+    }, { now: AFTERNOON, drafter });
+    expect(out).toBe("SEEN");
+    const r = await env.WP_OS_DB.prepare("SELECT state, draft_body FROM tlc_brand_reply WHERE deal_id = 'tld_dsn'").all<{ state: string; draft_body: string }>();
+    expect(r.results).toEqual([{ state: "CLOSED", draft_body: "" }]);
+    expect(sends).toHaveLength(0);
   });
 });
 

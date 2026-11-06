@@ -106,7 +106,9 @@ export function boldNumbers(line: string): string {
     .map((part) =>
       part.startsWith("**") ? part : part.replace(/(?<![\w*/.#:-])(?<!(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\s)(\$?\d(?:[\d,]*\d)?(?:\.\d+)?(?:%|[kKmM]\b)?)(?!\d)(?!-\d)(?!:\d)(?![\w*/.-]*[A-Za-z/])/g, "**$1**"),
     )
-    .join("");
+    .join("")
+    // A date's year is not a figure (6 Nov 2026 live read: "changed on November 6, **2026**").
+    .replace(/((?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec) \d{1,2},\s)\*\*((?:19|20)\d{2})\*\*/g, "$1$2");
 }
 
 export function execSubject(employee: string, what: string): string {
