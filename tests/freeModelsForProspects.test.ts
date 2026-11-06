@@ -103,6 +103,16 @@ function vendors(sc: Scenario = { grounding: "ok" }): { fetchImpl: typeof fetch;
       seen.calls.push({ host, model: "page", grounded: false });
       return new Response("<html><body><h1>About</h1><p>Pat Example founded Example Ventures in 2019.</p></body></html>", { status: 200, headers: { "content-type": "text/html" } });
     }
+    if (url.endsWith("/api/v1/models")) {
+      seen.calls.push({ host, model: "models-list", grounded: false });
+      // One preferred id has stopped being free (priced), one never-pinned id is live and free.
+      return ok({
+        data: [
+          { id: "nvidia/nemotron-3-ultra-550b-a55b:free", context_length: 1_000_000, pricing: { prompt: "0.0000004", completion: "0.000001" } },
+          { id: "example/live-writer:free", context_length: 262_144, pricing: { prompt: "0", completion: "0" } },
+        ],
+      });
+    }
     // OpenRouter (and anything else): the OpenAI shape.
     const model = String(body.model ?? "");
     seen.calls.push({ host, model, grounded: false, maxPrice: (body.provider as { max_price?: unknown } | undefined)?.max_price });
@@ -351,8 +361,11 @@ describe("Fix 2: live research for $0", () => {
     expect(run.status, run.failure_reason ?? "").toBe("COMPLETED");
     expect(run.output_text).toContain(SOURCE_URL);
     expect(run.output_text).toMatch(/Searched with: Brave Search, written by openrouter\/.+:free/);
-    const or = v.seen.calls.filter((c) => c.host === "openrouter.ai");
+    const or = v.seen.calls.filter((c) => c.host === "openrouter.ai" && c.model !== "models-list");
     expect(or.length).toBeGreaterThan(0);
+    // The live list wins: a pinned id that is no longer priced 0 is never asked; a live free id carries it.
+    expect(or.map((c) => c.model)).not.toContain("nvidia/nemotron-3-ultra-550b-a55b:free");
+    expect(run.output_text).toContain("written by openrouter/example/live-writer:free");
     for (const c of or) {
       expect(c.model.endsWith(":free")).toBe(true);
       expect(c.maxPrice).toEqual({ prompt: 0, completion: 0 });
@@ -364,7 +377,7 @@ describe("Fix 2: live research for $0", () => {
     expect(stopped.status).not.toBe("COMPLETED");
     expect(stopped.failure_reason).toContain("free_search_named_stop:Couldn't research");
     expect(stopped.failure_reason).toContain("OPENROUTER_COST");
-    expect(priced.seen.calls.filter((c) => c.host === "openrouter.ai")).toHaveLength(1);
+    expect(priced.seen.calls.filter((c) => c.host === "openrouter.ai" && c.model !== "models-list")).toHaveLength(1);
   }, 60_000);
 
   it("a search naming a committed LP reaches none of the new rungs: no grounded model, no Brave, no OpenRouter writer", async () => {

@@ -45,13 +45,23 @@ export const FREE_SEARCH_GROUNDED_MODELS = [
   "gemini-3-flash-preview",
 ] as const;
 export const FREE_SEARCH_WRITER_MODELS = ["gemini-3.6-flash", "gemini-3-flash-preview"] as const;
-/** OpenRouter writers for route 2. Only `:free` slugs; a slug without the suffix is refused before any request. */
+/**
+ * OpenRouter writers for route 2: the PREFERRED order only. The live list wins (`liveFreeWriters`): on 6 Nov 2026,
+ * the first live call found three of four pinned `:free` slugs answering 404 "unavailable for free", so a pinned list
+ * would have died quietly. Each call reads OpenRouter's public model list and keeps only `:free` ids priced 0 for
+ * both prompt and completion; preferred ids come first, then other live free ids. If the list cannot be read, these
+ * are tried as they are. A slug without the suffix is refused before any request.
+ */
 export const FREE_SEARCH_OPENROUTER_WRITERS = [
-  "deepseek/deepseek-v4-flash-0731:free",
-  "z-ai/glm-5.2:free",
-  "nvidia/nemotron-3-super-120b-a12b:free",
-  "meta-llama/llama-3.3-70b-instruct:free",
+  "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "google/gemma-4-31b-it:free",
+  "nvidia/nemotron-3.5-super-vl:free",
+  "google/gemma-4-26b-a4b-it:free",
 ] as const;
+/** At most this many OpenRouter writers are tried in one write. */
+const OPENROUTER_WRITER_TRIES = 4;
+/** Smaller models are left out: they cannot write a cited answer from three fetched pages. */
+const OPENROUTER_MIN_CONTEXT = 128_000;
 export const FREE_SEARCH_OPENROUTER_BASE_URL = "https://openrouter.ai";
 export const OPENROUTER_COST_STOP = "OPENROUTER_COST";
 export const BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search";
@@ -215,6 +225,37 @@ export function createFreeSearchAdapter(options: FreeSearchOptions): ProviderAda
     };
   }
 
+  /** OpenRouter's live `:free` list, priced 0 both ways, preferred ids first. The pinned list when it cannot be read. */
+  async function liveFreeWriters(req: ProviderRequest): Promise<string[]> {
+    const preferred: string[] = [...FREE_SEARCH_OPENROUTER_WRITERS];
+    try {
+      const orBase = (options.openRouterBaseUrl ?? FREE_SEARCH_OPENROUTER_BASE_URL).replace(/\/$/, "");
+      const res = await doFetch(`${orBase}/api/v1/models`, {
+        method: "GET",
+        headers: { accept: "application/json" },
+        signal: AbortSignal.timeout(Math.min(options.timeoutMs ?? req.deadlineMs ?? PROVIDER_TIMEOUT_MS, PAGE_TIMEOUT_MS)),
+      });
+      if (!res.ok) return preferred;
+      const data = ((await res.json()) as { data?: Array<{ id?: string; context_length?: number; pricing?: { prompt?: string; completion?: string } }> }).data;
+      if (!Array.isArray(data)) return preferred;
+      const free = data
+        .filter(
+          (m) =>
+            typeof m.id === "string" &&
+            m.id.endsWith(":free") &&
+            Number(m.pricing?.prompt) === 0 &&
+            Number(m.pricing?.completion) === 0 &&
+            Number(m.context_length ?? 0) >= OPENROUTER_MIN_CONTEXT,
+        )
+        .map((m) => m.id!);
+      if (free.length === 0) return preferred;
+      const live = new Set(free);
+      return [...preferred.filter((id) => live.has(id)), ...free.filter((id) => !preferred.includes(id))];
+    } catch {
+      return preferred;
+    }
+  }
+
   /** One free writer call: each free Gemini model, then each OpenRouter `:free` model, in turn. */
   async function write(prompt: string, req: ProviderRequest): Promise<Written> {
     const why: string[] = [];
@@ -239,7 +280,7 @@ export function createFreeSearchAdapter(options: FreeSearchOptions): ProviderAda
       }
     }
     if (options.openRouterApiKey) {
-      for (const model of FREE_SEARCH_OPENROUTER_WRITERS) {
+      for (const model of (await liveFreeWriters(req)).slice(0, OPENROUTER_WRITER_TRIES)) {
         try {
           const out = await openRouterFree(model, prompt, req);
           if (out.text) return out;
