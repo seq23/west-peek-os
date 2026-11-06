@@ -14,7 +14,27 @@ export function pdfPageCount(bytes: Uint8Array): number {
   return (new TextDecoder("latin1").decode(bytes).match(/\/Type\s*\/Page[^s]/g) ?? []).length;
 }
 
-export async function renderHtmlPdf(env: Env, html: string, opts: { onePage?: boolean } = {}): Promise<PdfRender> {
+/**
+ * A RENDER IS BOUNDED (6 Nov 2026). puppeteer.launch has no timeout of its own: a browser session that never connects
+ * held a drip pass until the platform killed it. Past PDF_RENDER_TIMEOUT_MS the render gives up with a named reason
+ * (the caller holds that one email and the next pass tries again) and the session is closed when it does arrive.
+ */
+export const PDF_RENDER_TIMEOUT_MS = 90_000;
+
+export async function renderHtmlPdf(env: Env, html: string, opts: { onePage?: boolean; timeoutMs?: number } = {}): Promise<PdfRender> {
+  const ms = opts.timeoutMs ?? PDF_RENDER_TIMEOUT_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<PdfRender>((resolve) => {
+    timer = setTimeout(() => resolve({ pdfBase64: null, reason: `NAMED STOP [PDF_RENDER_TIMEOUT] the browser did not finish within ${Math.round(ms / 1000)} seconds; tried again next pass` }), ms);
+  });
+  try {
+    return await Promise.race([renderUnbounded(env, html, opts), timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function renderUnbounded(env: Env, html: string, opts: { onePage?: boolean }): Promise<PdfRender> {
   const binding = (env as unknown as { BROWSER?: unknown }).BROWSER;
   if (!binding) return { pdfBase64: null, reason: "no browser is available here — the BROWSER binding is not configured" };
   let browser: { newPage(): Promise<any>; close(): Promise<void> } | null = null;
