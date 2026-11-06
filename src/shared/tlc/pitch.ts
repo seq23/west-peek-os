@@ -1,4 +1,4 @@
-import { COMMUNITY_ABOUT } from "../community/size";
+import { BRAND_COMMUNITY_SHORT, COMMUNITY_ABOUT } from "../community/size";
 import { MAAX_BOLD_WOFF2, MAAX_REGULAR_WOFF2, WP_MONOGRAM_PNG } from "./brandAssets";
 import { TLC_ABOUT_COMMUNITY, TLC_ABOUT_WEST_PEEK } from "./aboutWestPeek";
 import {
@@ -238,6 +238,26 @@ export interface TlcSponsorView {
   askedToOwnRoom?: boolean;
   /** The deal (her angle or Wynn's rule) leads with the series of six. */
   series: boolean;
+  /**
+   * A QUARTERLY SERIES OFFERED TO THIS BRAND (partners, 6 Nov 2026, Pinecone: "a quarterly event series at $10K per
+   * event as a discount"): one evening a quarter, a per-event price and a discounted total. Set per deal by the
+   * partners (tlc_deal.offer_json); when present it replaces the series-of-six line.
+   */
+  quarterly?: QuarterlyOffer | null;
+}
+export interface QuarterlyOffer { year: number; events: number; perEventUsd: number; totalUsd: number }
+/** A partner-set offer, read safely: anything malformed is no offer. PURE. */
+export function quarterlyOf(json: string | null | undefined): QuarterlyOffer | null {
+  try {
+    const v = JSON.parse(json ?? "null") as Partial<QuarterlyOffer> | null;
+    const ok = v && [v.year, v.events, v.perEventUsd, v.totalUsd].every((n) => Number.isInteger(n) && (n as number) > 0) && v.totalUsd! <= v.perEventUsd! * v.events!;
+    return ok ? { year: v!.year!, events: v!.events!, perEventUsd: v!.perEventUsd!, totalUsd: v!.totalUsd! } : null;
+  } catch { return null; }
+}
+/** "A quarterly series in 2027: 4 evenings, one a quarter, $10,000 per event; $35,000 for all four (you save $5,000)." */
+export function quarterlyWords(q: QuarterlyOffer, brand: string): string {
+  const save = q.perEventUsd * q.events - q.totalUsd;
+  return `A quarterly series in ${q.year}: ${q.events} evenings, one a quarter, each built hackathon-style around ${brand}, at ${usd(q.perEventUsd)} per event; ${usd(q.totalUsd)} for all ${q.events === 4 ? "four" : q.events}${save > 0 ? ` (you save ${usd(save)})` : ""}.`;
 }
 
 const SOFTWARE = /\b(software|saa?s|api|apis|platform|database|vector|cloud|developer|dev tools?|ai (?:lab|model|assistant|agents?)|llm|frontier model|model provider|app|apps|analytics|infrastructure|search engine|no[- ]code|automation|hosting|data (?:platform|warehouse)|service)\b/i;
@@ -249,7 +269,7 @@ const SERIES_ASK = /\bseries of six\b|\bsix[- ](?:room|club|month) series\b|\bsi
 
 /** The sponsor view of a deal, from its own row and Wynn's rules. PURE. */
 export function sponsorOf(
-  deal: { brand: string; category?: string | null; why_fit?: string | null; owner_angle?: string | null; large_brand?: number | boolean | null },
+  deal: { brand: string; category?: string | null; why_fit?: string | null; owner_angle?: string | null; large_brand?: number | boolean | null; offer_json?: string | null },
   rules: ReadonlyArray<{ code: string | null }> = [],
 ): TlcSponsorView {
   const brand = deal.brand.replace(/\s*\([^()]*\)/g, "").replace(/\s+/g, " ").trim() || deal.brand.trim();
@@ -263,6 +283,7 @@ export function sponsorOf(
     brand, software, physicalProduct, role, newestProduct: null,
     largeBrand: deal.large_brand === true || deal.large_brand === 1,
     series: SERIES_ASK.test(deal.owner_angle ?? "") || rules.some((r) => r.code === `${key}_SERIES`),
+    quarterly: quarterlyOf(deal.offer_json),
   };
 }
 
@@ -355,7 +376,8 @@ export function renderBrandPitch(v: TlcClubView, sponsor: TlcSponsorView | null 
     "Nothing to staff: we host every segment, and you send someone only if you want to.",
     `A room that chose this topic: every guest will be there for ${v.topic}.`,
   ];
-  const series = sponsor?.series
+  const quarterly = sponsor?.quarterly && B ? quarterlyWords(sponsor.quarterly, B) : null;
+  const series = quarterly ? `<p class="lede">${esc(quarterly)}</p>` : sponsor?.series
     ? `<p class="lede">A series of six rooms, one a month for six months, with ${esc(B!)} in every room. A single evening is the option.</p>`
     : "";
   return page(
@@ -370,8 +392,8 @@ ${series}
 <ul>${why.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>
 </div><div>
 <h2>Who will be in the room</h2>
-<ul><li>${BRAND_ROOM_WORDS} New Yorkers per event, a number we flex to your goals, who will choose this topic.</li>
-<li>Founders, operators, creatives and builders from a community of ${COMMUNITY_ABOUT}.</li>
+<ul><li>Rooms of ${BRAND_ROOM_WORDS} New Yorkers per event, sized to your goals, who will choose this topic.</li>
+<li>Founders, operators, creatives and builders, curated from a community that grew to ${BRAND_COMMUNITY_SHORT}.</li>
 <li>Taught by someone who does this for a living. The session will run: arrive, learn, an hour hands-on, a real meal, go deeper, share, close.</li>
 ${v.aiSegment ? `<li>The AI segment: ${esc(brandSafe(v.aiSegment))}</li>` : ""}
 ${takeHome ? `<li>They will leave with: ${esc(takeHome)}</li>` : ""}</ul>
@@ -379,7 +401,7 @@ ${takeHome ? `<li>They will leave with: ${esc(takeHome)}</li>` : ""}</ul>
 ${safety.length ? `<p class="note">${safety.map(esc).join(" ")}</p>` : ""}
 <h2>Partner levels, per event</h2>
 <div class="tiers">${levels.map((l) => `<div class="tier" data-level="${l.key}"><b><span class="name">${esc(l.label)}</span><span class="dot"> · </span><span class="price">${esc(priceWords(l))}</span></b>${l.marked ? `<em class="mark">${esc(l.marked)}</em>` : ""}<span class="adds">${l.head ? `${esc(l.head)} ` : ""}${esc(l.adds.join("; "))}.</span></div>`).join("")}</div>
-<p>${esc(SERIES_PRICE_WORDS)}</p>
+<p>${esc(quarterly ?? SERIES_PRICE_WORDS)}</p>
 <p>${hasTitle ? "Except with a Title partner, a few brands can partner on each club." : "A few brands can partner on each club."}</p>
 <div class="two"><div class="yes">
 <h2>To say yes</h2>

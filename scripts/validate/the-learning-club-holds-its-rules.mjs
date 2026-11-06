@@ -86,8 +86,9 @@ export function check(src) {
   if (!/settings\[BRAND_SEND_SETTING\] !== "on"/.test(shared)) f.push("brandSendGate does not require the exact string 'on'");
   // 22 Oct 2026: an approval is of exact content: the gate compares stored hashes to the current ones.
   if (!/approvalState\(settings, PITCH_APPROVAL_HASH_SETTING, hashes\.pitch, hashes\.pitchWords\)/.test(shared) || !/approvalState\(settings, PLAYBOOK_APPROVAL_HASH_SETTING, hashes\.playbook, hashes\.playbookWords\)/.test(shared)) f.push("brandSendGate does not require both owner approvals of the current content");
-  // 6 Nov 2026: the exact content is the exact page, or the exact words she approved (a restyle keeps every word).
-  if (!/if \(stored === current\) return "APPROVED";/.test(shared) || !/words === currentWords \? "APPROVED" : "CHANGED"/.test(shared)) f.push("an approval is not tied to the exact content it approved");
+  // 6 Nov 2026: the exact content is the exact page, or the exact words she approved (a restyle keeps every word),
+  // or those words with only the phrases she ordered herself changed (OWNER_ORDERED_WORDING, 6 Nov 2026).
+  if (!/if \(stored === current\) return "APPROVED";/.test(shared) || !/words === currentWords(?: \|\| withOwnerOrderedWording\(words\) === currentWords)? \? "APPROVED" : "CHANGED"/.test(shared)) f.push("an approval is not tied to the exact content it approved");
   // One TLC recipient list, enforced at the partner-mail door (22 Oct 2026: Sequoia only).
   if (!/TLC_RECIPIENTS: readonly string\[\] = \[TLC_OWNER\.email\]/.test(shared)) f.push("TLC mail is not addressed from the one recipient list");
   if (/scooter@/i.test(shared) || /scooter@/i.test(service)) f.push("a TLC file names Scooter's address");
@@ -224,7 +225,7 @@ function selfTest() {
     ["cost budget raised", { shared: good.shared.replace("TLC_COST_BUDGET_USD = 15_000;", "TLC_COST_BUDGET_USD = 20_000;") }],
     ["veto window shortened", { shared: good.shared.replace("TLC_VETO_DAYS = 3;", "TLC_VETO_DAYS = 1;") }],
     ["approval not tied to content", { shared: good.shared.replace('if (stored === current) return "APPROVED";', 'return "APPROVED";') }],
-    ["approval not tied to the approved words", { shared: good.shared.replace('words === currentWords ? "APPROVED" : "CHANGED"', '"APPROVED"') }],
+    ["approval not tied to the approved words", { shared: good.shared.replace('words === currentWords || withOwnerOrderedWording(words) === currentWords ? "APPROVED" : "CHANGED"', '"APPROVED"') }],
     ["pitch approval dropped", { shared: good.shared.replace("approvalState(settings, PITCH_APPROVAL_HASH_SETTING, hashes.pitch, hashes.pitchWords)", '"APPROVED"') }],
     ["TLC mail to both partners", { shared: good.shared.replace("TLC_RECIPIENTS: readonly string[] = [TLC_OWNER.email]", "TLC_RECIPIENTS: readonly string[] = PARTNER_EMAILS") }],
     ["Scooter addressed", { service: `${good.service}\nconst to = "scooter@westpeek.ventures";\n` }],

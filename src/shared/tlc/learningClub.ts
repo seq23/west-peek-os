@@ -1,4 +1,4 @@
-import { COMMUNITY_ABOUT } from "../community/size";
+import { BRAND_COMMUNITY_LINE, COMMUNITY_ABOUT } from "../community/size";
 import { withBrandFooter, withoutBrandFooter } from "./brandFooter";
 import { PARTNERS } from "../registry/partners";
 import { FLOW_TEMPLATES, fillTemplate } from "./brandFlow";
@@ -39,7 +39,8 @@ export const TLC_SEATS = { min: 25, max: 40 } as const;
  * internal planning default (tickets, food, the go-check), never a number a brand is told.
  */
 export const BRAND_ROOM = { min: 25, top: "100+" } as const;
-export const BRAND_ROOM_WORDS = `${BRAND_ROOM.min} to ${BRAND_ROOM.top}`;
+/** Owner, 6 Nov 2026: never promise more than 25; imply 25+ ("rooms of 25+, sized to your goals"). Materials say it too. */
+export const BRAND_ROOM_WORDS = `${BRAND_ROOM.min}+`;
 /**
  * BUT AN EMAIL TO A BRAND SAYS "25+" (owner, 1 Nov 2026). Wynn's pitches, her follow-up, every answer to a brand and
  * the weekly approval email's previews of them say rooms of 25+ guests, sized to the brand's goals: never "25 to
@@ -649,7 +650,7 @@ export interface DripEmailInput {
  * until they reply; the pitch PDF goes only in answer to a yes. Email 2 adds a short picture of the
  * room. No exclusivity line anywhere. A quiet subject, the same on all four so they thread.
  */
-export const TLC_DRIP_PROOF_LINE = `Our community of ${COMMUNITY_ABOUT} founders, operators and creatives meets in person through West Peek Rooms, our event series in New York.`;
+export const TLC_DRIP_PROOF_LINE = `${BRAND_COMMUNITY_LINE} We meet in person through West Peek Rooms, our event series in New York.`;
 export const TLC_DRIP_ASK = "Would you be open to exploring a partnership?";
 /** Every brand email says rooms of 25+ guests, sized to the brand's goals (owner, 1 Nov 2026), whatever the club's planned size. */
 export const BRAND_GUESTS = `rooms of ${BRAND_EMAIL_ROOM_WORDS} guests (sized to your goals)`;
@@ -805,8 +806,24 @@ export function approvalState(settings: Record<string, string | null | undefined
   if (!stored) return "NOT_APPROVED";
   if (stored === current) return "APPROVED";
   const words = APPROVED_WORDS_SETTING[key] ? settings[APPROVED_WORDS_SETTING[key]!] : null;
-  return typeof currentWords === "string" && currentWords.length > 0 && words === currentWords ? "APPROVED" : "CHANGED";
+  if (!(typeof currentWords === "string" && currentWords.length > 0 && typeof words === "string")) return "CHANGED";
+  return words === currentWords || withOwnerOrderedWording(words) === currentWords ? "APPROVED" : "CHANGED";
 }
+
+/**
+ * WORDING SHE ORDERED HERSELF CARRIES HER APPROVAL (owner, 6 Nov 2026: "never promise more than 25 attendees … do not
+ * overpromise on our community … i'm getting u to fix it so i want it to be quick so u reapprove it all"). Exactly
+ * these old → new phrases, applied to the words she approved, read as approved; any other change is still CHANGED and
+ * still pauses sending with an email to her, as always. A new ordered change adds its own dated pair here.
+ */
+export const OWNER_ORDERED_WORDING: ReadonlyArray<readonly [string, string]> = [
+  ["25 to 100+ guests per event, flexible to your goals", "25+ guests per event, flexible to your goals"],
+  ["25 to 100+ New Yorkers per event, a number we flex to your goals, who will choose this topic.", "Rooms of 25+ New Yorkers per event, sized to your goals, who will choose this topic."],
+  ["Founders, operators, creatives and builders from a community of about 5,000.", "Founders, operators, creatives and builders, curated from a community that grew to nearly 5,000 at its height."],
+  ["West Peek is a community of about 5,000 founders, operators, investors, creatives and builders, started by our founding GP Scooter Taylor, who went viral in 2020 with Quarantine Con. We meet in person",
+    "West Peek is a community that grew to nearly 5,000 founders, operators, investors, creatives and builders at its height, started by our founding GP Scooter Taylor, who went viral in 2020 with Quarantine Con. We curate each room from that network and meet in person"],
+];
+export const withOwnerOrderedWording = (words: string): string => OWNER_ORDERED_WORDING.reduce((w, [a, b]) => w.split(a).join(b), words);
 
 /**
  * The words the Brand sending panel shows when TLC brand sales is not on her Outside email list

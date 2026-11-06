@@ -89,9 +89,32 @@ export function noReplyNeeded(words: string): NoReplyWhy | null {
   return INVITES.test(words) ? null : "NO_ASK";
 }
 
-export function classifyBrandReply(input: { subject: string; text: string }, now: Date): BrandReplyClass {
+/**
+ * A MACHINE-SENT ACKNOWLEDGEMENT IS NOT A REPLY (owner, 6 Nov 2026: Osmo's "Thanks for reaching out. Let's get you
+ * connected to the right team" was read as a reply and a pricing proposal was drafted for it; Loop's "Our Partnerships
+ * team will review your message" stopped its drip). A marketing or support autoresponder is recognised by its headers
+ * (RFC 3834 Auto-Submitted, X-Autoreply, Precedence) or by the shapes only a template writes: "the right team / person",
+ * "we have received your message", "a member of our team will", "fill out our form", "this inbox is not monitored".
+ */
+const AUTO_ACK = /\b(?:connected? (?:you )?(?:with|to) the right (?:team|person|people|department)|(?:we(?:'ve| have)?|has been) received your (?:message|email|e-mail|inquiry|enquiry|request|submission|note)|(?:one of our|a member of our|someone from our|our [a-z]+ team) (?:team )?(?:will|members will) (?:review|be in touch|get back|respond|reach out|follow up)|fill out (?:our|the|this) [a-z ]{0,30}form|(?:this|the) (?:mailbox|inbox|email address) is (?:not|no longer) (?:monitored|checked)|do not reply to this (?:email|message)|(?:ticket|case|request) (?:number|#|id)\b|your (?:request|ticket|case) (?:has been|was) (?:received|created|logged)|our mailbox is (?:quite |very )?busy|thank you for (?:contacting|your (?:message|email|inquiry|enquiry|interest))[^.\n]{0,60}\. (?:we|our team)(?: will|'ll))/i;
+const AUTO_HEADERS = /^(?:auto-submitted:[ \t]*(?!no\b)\S|x-autoreply:|x-autorespond:|precedence:[ \t]*(?:bulk|auto_reply|junk)\b)/im;
+/**
+ * Two different template shapes, never one: a person can write "our team will review it" (that is the REVIEWING
+ * no-reply-needed path, which waits on them); only a template stacks "the right team" with "fill out our form".
+ */
+export function looksLikeAutoAck(words: string): boolean {
+  const g = new RegExp(AUTO_ACK.source, "gi");
+  return new Set([...words.matchAll(g)].map((m) => m[0].toLowerCase().slice(0, 18))).size >= 2;
+}
+/** True when the raw message's header block says a machine sent it. Pure; a message with no header block is never. */
+export function machineSentHeaders(raw: string | undefined): boolean {
+  const head = (raw ?? "").split(/\r?\n\r?\n/)[0] ?? "";
+  return /^from:/im.test(head) && AUTO_HEADERS.test(head);
+}
+
+export function classifyBrandReply(input: { subject: string; text: string; raw?: string }, now: Date): BrandReplyClass {
   const words = theirNewText(input.text);
-  if (AUTO_SUBJECT.test(input.subject) || AUTO_BODY.test(words)) {
+  if (AUTO_SUBJECT.test(input.subject) || AUTO_BODY.test(words) || looksLikeAutoAck(`${input.subject}\n${words}`) || machineSentHeaders(input.raw)) {
     const back = returnDateIn(words, now);
     // Resume the day after they are back; with no date in the message, a week from now.
     const resume = back ? new Date(back.getTime() + 86_400_000) : new Date(now.getTime() + 7 * 86_400_000);
