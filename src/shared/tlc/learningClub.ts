@@ -89,8 +89,11 @@ export const TLC_GO_CHECK_DAYS = [21, 14] as const;
 export const TLC_TICKET_GATE_DAYS = 14;
 /** The booking pack goes to the partners ~6 weeks out; a topic with no interested brand is flagged then. */
 export const TLC_BOOKING_PACK_DAYS = 42;
-/** Brand emails: the first pitch, and ONE follow-up four days later (her flow, 26 Oct 2026: "After this, no more follow-ups"). */
-export const TLC_DRIP_DAYS = [0, 4] as const;
+/**
+ * Brand emails: the first pitch, and ONE follow-up twelve days later (owner, 4 Nov 2026; was day four). Email 2 carries
+ * the brand's 3-page samples PDF and is the only brand email that goes without her approval of it. After it, nothing.
+ */
+export const TLC_DRIP_DAYS = [0, 12] as const;
 export const TLC_SPONSOR_CATEGORIES = { min: 5, max: 10 } as const;
 
 /**
@@ -101,15 +104,15 @@ export const TLC_SPONSOR_CATEGORIES = { min: 5, max: 10 } as const;
  * category exclusivity: no copy, prompt or agreement may promise one.
  */
 export const TLC_TIERS = {
-  TITLE: { label: "Title partner", priceUsd: 25_000 as number | null, gets: 'One brand funds the whole room, and the club carries its name: "The Learning Club, presented by" your brand, on the pitch, the invitation, the signage and the recap. The only cash partner that night.' },
-  PARTNER: { label: "Partner", priceUsd: 5_000 as number | null, gets: "The standard partnership, for most brands." },
-  LEAD: { label: "Lead partner", priceUsd: 10_000 as number | null, gets: "A larger role on the day and first placement among the partners." },
-  PRESENTING: { label: "Presenting partner", priceUsd: 15_000 as number | null, gets: '"Presented by" billing and top placement on the invitation and on the day.' },
-  PRODUCT: { label: "Product partner (in kind)", priceUsd: null as number | null, gets: "For product brands: you supply product for the night instead of cash." },
+  TITLE: { label: "Title partner", priceUsd: 25_000 as number | null, gets: 'The whole room is yours: "The Learning Club: <topic>, with <Brand>". The only cash partner that night, and first say on the format.' },
+  PARTNER: { label: "Partner", priceUsd: 5_000 as number | null, gets: "Named on the invitation and on the day, your product in guests' hands during the hands-on hour where it fits, photographs for your channels, opt-in leads, and a recap with the numbers." },
+  LEAD: { label: "Lead partner", priceUsd: 10_000 as number | null, gets: "Everything in Partner, plus the hands-on segment built around your product, five minutes to the room, and first placement among partners." },
+  PRESENTING: { label: "Presenting partner", priceUsd: 15_000 as number | null, gets: 'Everything in Lead, plus "Presented by <Brand>" on the invitation, signage and recap.' },
+  PRODUCT: { label: "Product partner (in kind)", priceUsd: null as number | null, gets: "Your product in guests' hands during the hands-on hour; named on the invitation." },
 } as const;
 export type TlcTier = keyof typeof TLC_TIERS;
-/** Listed in this order everywhere: the Title partner first. */
-export const TLC_TIER_KEYS: readonly TlcTier[] = ["TITLE", "PARTNER", "LEAD", "PRESENTING", "PRODUCT"];
+/** Listed in price order everywhere (owner, 4 Nov 2026): lowest first; the in-kind level, where a brand may see it, after the cash ones. */
+export const TLC_TIER_KEYS: readonly TlcTier[] = ["PARTNER", "LEAD", "PRESENTING", "TITLE", "PRODUCT"];
 /** Tiers that bring cash toward the goal. */
 export const TLC_CASH_TIERS: readonly TlcTier[] = ["TITLE", "PARTNER", "LEAD", "PRESENTING"];
 /**
@@ -601,6 +604,8 @@ export interface DripEmailInput {
   why: string | null;
   /** The club's own room size; the default when not set. */
   seats?: Seats;
+  /** The deal leads with the series of six (her angle or Wynn's rule; shared/tlc/pitch.ts sponsorOf). */
+  series?: boolean;
 }
 
 /**
@@ -681,13 +686,15 @@ export function dripEmail(raw: DripEmailInput): { subject: string; text: string 
       hi,
       "",
       lead,
-      `In ${when} we are hosting The Learning Club in New York: ${BRAND_GUESTS} spending an afternoon or evening going deep on ${input.topic}, hands-on. We are looking for a few founding partners for the first clubs.`,
+      input.series
+        ? `From ${when} we are hosting The Learning Club in New York as a series of six rooms, one a month: ${BRAND_GUESTS} each time, going deep on ${input.topic}, hands-on, with ${input.brand} in every room. A single evening is an option too. We are looking for a few founding partners.`
+        : `In ${when} we are hosting The Learning Club in New York: ${BRAND_GUESTS} spending an afternoon or evening going deep on ${input.topic}, hands-on. We are looking for a few founding partners for the first clubs.`,
       TLC_DRIP_PROOF_LINE,
       "",
       TLC_DRIP_ASK,
     ],
-    // Step 2 of her flow (shared/tlc/brandFlow.ts): the ONE follow-up, which offers the three samples. After it,
-    // no more follow-ups, and it carries no P.S. (her template).
+    // Step 2 of her flow (shared/tlc/brandFlow.ts): the ONE follow-up, day 12, a three-line cover with the brand's
+    // 3-page samples PDF attached (owner, 4 Nov 2026). After it, nothing more; it carries no P.S. (her template).
     [fillTemplate("followUp", { hi, brand: input.brand })],
   ];
   const step = Math.min(input.step, bodies.length - 1);
@@ -993,15 +1000,15 @@ const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;"
  * instruction the model is given — never a document beside it.
  */
 export const TLC_PLAYBOOK: readonly string[] = [
-  "Who we sell to: brands whose customers are the people a club on this topic draws, in categories Parker named for it. Several partners per club, each in its own role.",
-  "What we sell: real hands-on time with the product, in a room sized to the partners' goals (an email to a brand says rooms of 25+ guests; set per club), each guest paid to be there, for a 3 to 4 hour deep dive on one topic in New York (one afternoon or one evening). Product in hands during the 60-minute hands-on session where it fits, five minutes during the food break, photo and content rights, opt-in lead capture, a mention in the invitation and on the day, and a recap with numbers.",
-  "Price: Title partner $25,000: one brand funds the whole room, the club is \"presented by\" that brand, it is the only cash partner that night, and in-kind partners need its OK. In January the Title partner is the primary route to $25K. Partner $5,000, the standard for most brands. Lead partner $10,000. Presenting partner $15,000, for a big brand only, with \"Presented by\" billing and top placement. Product partner, in kind, for a product brand that supplies product instead of cash. Custom amounts are fine; neither size nor count is capped.",
+  "Who we sell to: brands whose customers are the people a club on this topic draws, in categories Parker named for it. A few partners can share a club, each in its own role; with a Title partner, it is the only cash partner.",
+  "What we sell: real hands-on time with the product, in a room sized to the partners' goals (an email to a brand says rooms of 25+ guests; set per club), each guest there by choice, for a 3 to 4 hour deep dive on one topic in New York (one afternoon or one evening). Product in hands during the 60-minute hands-on session where it fits, five minutes during the food break, photo and content rights, opt-in lead capture, a mention in the invitation and on the day, and a recap with numbers.",
+  "Price, every one PER EVENT, offered lowest first, each level adding to the one below: Partner $5,000; Lead partner $10,000 (the level brands like this one would benefit most from); Presenting partner $15,000, the only level sold with \"Presented by <Brand>\"; Title partner $25,000, \"The Learning Club: <topic>, with <Brand>\", the only cash partner that night, shown only to a brand research marks as large enough to fund a whole room, or one that asks to own the room. Product partner, in kind, only for a brand with a physical product guests can hold; never for software or a service. A series of six is the same per-event price for each club, as a founding partner; no discount is invented. Never a level below $5,000.",
   "Goal per club: $25,000 raised from sponsors, costs up to $15,000, $10,000 net; under $7,500 net at a go-check escalates. At least 5 partners at $5,000, or larger sponsors at $10,000 to $15,000, or any mix. In-kind venue or product lowers cost and never counts toward the $25,000. Tickets add to the net but the goal never depends on them.",
   "Sponsors in a club are complementary, never competitors: one brand per kind of product that would compete (one drink base, then mixers, glassware, wellness, food). Never approach a brand that competes with an agreed or featured partner. This is how we put a room together, not a promise to a brand: we never offer or claim category exclusivity.",
   "Who we write to: a named person at the brand whose job is partnerships, events, community or brand marketing, at an address read off a live page. Never a guessed address. Never a contact without an email.",
-  "How we write: signed by Sequoia Taylor, West Peek Ventures; replies go to her. Short, plain, warm, professional. Lead with the brand's own reason. One ask: \"Would you be open to exploring a partnership?\" No pitch, price or attachment until they reply. No inflated claims, no numbers we cannot show, no invented case studies. Before the first club runs we describe the format and West Peek Rooms' real history; after it, the real recap.",
-  "Cadence: four emails at day 0, 4, 10 and 18. Stop the moment they reply, bounce or ask us to stop. Warm up slowly: 5 a day the first week, then 10, 20, 30.",
-  "When a brand replies yes: send them the brand pitch PDF, and tell Sequoia. Never suggest or ask for a call: deals close by email; if they ask for one, say yes and schedule it from her calendar. Once they have said what they want (by email, or on a call they asked for), write up their cash, their in-kind and what they want, and send Sequoia one email with a recommendation and the club's net if we say yes. Her reply decides: yes, no, or counter with an amount.",
+  "How we write: signed by Sequoia Taylor, West Peek Ventures; replies go to her. Short, plain, warm, professional. Lead with the brand's own reason. One ask: \"Would you be open to exploring a partnership?\" No pitch, price or attachment until they reply. No inflated claims, no numbers we cannot show, no invented case studies. The first Learning Club is in 2027: describe it in the future tense; never imply past clubs, past partners, past guests or a track record, and never say outright that it has not run. Never mention charging guests or a ticket price to a brand. Never offer or mention a venue, the brand's office or their space: these are our own branded events.",
+  "Cadence: two emails, at day 0 and day 12. Sequoia approves email 1, which carries no attachment. Email 2 carries the brand's 3-page samples PDF, waits until that PDF is made, and is the only email that goes without her approval of it. After it, nothing more. Stop the moment they reply, bounce or ask us to stop. Warm up slowly: 5 a day the first week, then 10, 20, 30.",
+  "A brand that asks the price goes straight to the proposal with its own partner-levels sheet, as a draft for her approval. When a brand replies yes: send them the brand pitch PDF, and tell Sequoia. Never suggest or ask for a call: deals close by email; if they ask for one, say yes and schedule it from her calendar. Once they have said what they want (by email, or on a call they asked for), write up their cash, their in-kind and what they want, and send Sequoia one email with a recommendation and the club's net if we say yes. Her reply decides: yes, no, or counter with an amount.",
   "Money: we invoice and send West Peek's own payment link. We never book, buy or pay for anything; hosts, venues, food, materials and photographers go to the partners as options with prices and book-by dates.",
   "Privacy: no attendee name, email or list ever goes to a sponsor.",
 ];

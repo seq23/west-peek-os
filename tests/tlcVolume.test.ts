@@ -1,3 +1,4 @@
+import { DRIP_DEPS } from "./helpers/tlcSamplesPdf";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
@@ -54,7 +55,7 @@ afterAll(() => vi.unstubAllGlobals());
 
 beforeEach(async () => {
   t = await createTestDb();
-  env = { ...makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>), RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures", WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON: SERVICE_ACCOUNT, WP_OS_NEVERBOUNCE_API_KEY: "nb_test" } as Env;
+  env = { ...makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled", WP_OS_DOCUMENTS: t.docs } as Partial<Env>), RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures", WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON: SERVICE_ACCOUNT, WP_OS_NEVERBOUNCE_API_KEY: "nb_test" } as Env;
   await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO firm_user (id, email, full_name, status) VALUES ('fu_sequoia_taylor', ?1, 'Sequoia Taylor', 'ACTIVE')").bind(SEQUOIA).run();
   const cats = JSON.stringify([{ category: "Wearable", excluded_brands: ["Rival Ring"] }]);
   for (const [m, d, topic] of [["2027-01", "2027-01-21", "The Longevity Reset"], ["2027-02", "2027-02-11", "Fragrance Lab"], ["2027-03", "2027-03-18", "Build Your Own AI Agent"]] as const) {
@@ -195,7 +196,7 @@ describe("every earlier rule holds for the listed brands", () => {
     await openGate();
     await deal("2027-01", "Ring One", { category: "Wearable", created_at: "2026-11-09T10:00:00.000Z" });
     await deal("2027-01", "Ring Two", { category: "Wearable", created_at: "2026-11-09T11:00:00.000Z" });
-    const out = await runDrip(env, MONDAY);
+    const out = await runDrip(env, MONDAY, "west-peek", DRIP_DEPS);
     expect(out.awaitingApproval).toBe(1);
     expect(out.heldForCategory).toEqual(["Ring Two (after Ring One)"]);
   });
@@ -233,7 +234,7 @@ describe("NeverBounce before any first email", () => {
     nb.set("pat@badaddress.example", "invalid");
     await deal("2027-01", "Bad Address");
     await deal("2027-01", "Fine Address");
-    const out = await runDrip(env, MONDAY);
+    const out = await runDrip(env, MONDAY, "west-peek", DRIP_DEPS);
     expect(out.awaitingApproval).toBe(1);
     expect(out.addressRefused).toEqual(["Bad Address"]);
     expect(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_drip_message WHERE deal_id = 'tld_202701badaddress'").first()).toBeNull();
@@ -244,7 +245,7 @@ describe("NeverBounce before any first email", () => {
     await openGate();
     const noKey = { ...env, WP_OS_NEVERBOUNCE_API_KEY: undefined } as Env;
     await deal("2027-01", "Unchecked");
-    const out = await runDrip(noKey, MONDAY);
+    const out = await runDrip(noKey, MONDAY, "west-peek", DRIP_DEPS);
     expect(out.awaitingApproval).toBe(0);
     expect(out.addressWaiting).toBe(1);
     expect(asked).toEqual([]);
@@ -254,10 +255,10 @@ describe("NeverBounce before any first email", () => {
   it("an approved first email whose address fails at send time is held, never sent", async () => {
     await openGate();
     await deal("2027-01", "Turned Bad");
-    await runDrip(env, MONDAY);
+    await runDrip(env, MONDAY, "west-peek", DRIP_DEPS);
     await approveAll();
     await env.WP_OS_DB.prepare("UPDATE tlc_address_check SET result = 'invalid' WHERE email = 'pat@turnedbad.example'").run();
-    const out = await runDrip(env, new Date("2026-11-09T15:00:00.000Z"));
+    const out = await runDrip(env, new Date("2026-11-09T15:00:00.000Z"), "west-peek", DRIP_DEPS);
     expect(out.sent).toBe(0);
     expect(sends).toEqual([]);
     expect((await env.WP_OS_DB.prepare("SELECT state, held_reason FROM tlc_drip_message WHERE deal_id = 'tld_202701turnedbad'").first())).toEqual({ state: "HELD", held_reason: "the address did not pass NeverBounce (invalid), so it is never written to" });
@@ -273,7 +274,7 @@ describe("never a follow-up to a bounce", () => {
     await fileDraft(env, { id, brand: "Bouncy", contact_email: "pat@bouncy.example", drip_step: 1 }, { subject: "The Learning Club", text: "A follow-up." });
     await approveAll();
     await recordBrandMail(env, { from: "pat@bouncy.example", subject: "Undeliverable: The Learning Club", now: MONDAY });
-    const out = await runDrip(env, new Date("2026-11-09T15:00:00.000Z"));
+    const out = await runDrip(env, new Date("2026-11-09T15:00:00.000Z"), "west-peek", DRIP_DEPS);
     expect(out.sent).toBe(0);
     expect(sends).toEqual([]);
     expect((await env.WP_OS_DB.prepare("SELECT result FROM tlc_address_check WHERE email = 'pat@bouncy.example'").first())).toEqual({ result: "bounced" });
@@ -284,7 +285,7 @@ describe("never a follow-up to a bounce", () => {
     expect(later.dropped).toEqual(["Bouncy (March 2027): the address did not pass NeverBounce (bounced)"]);
     // And a deal for it that slipped in some other way is never drafted.
     await deal("2027-02", "Bouncy Again", { contact_email: "pat@bouncy.example" });
-    const drip = await runDrip(env, new Date("2026-11-16T10:00:00.000Z"));
+    const drip = await runDrip(env, new Date("2026-11-16T10:00:00.000Z"), "west-peek", DRIP_DEPS);
     expect(drip.addressRefused).toEqual(["Bouncy Again"]);
   });
 });
@@ -294,20 +295,20 @@ describe("the daily send cap, spent nearest club first", () => {
     await openGate();
     // February's drafts are filed (and approved) first; January's come a pass later. The nearer club still goes first.
     for (let i = 1; i <= 4; i++) await deal("2027-02", `Feb Send ${i}`, { created_at: `2026-11-09T0${i}:00:00.000Z` });
-    expect((await runDrip(env, MONDAY)).awaitingApproval).toBe(4);
+    expect((await runDrip(env, MONDAY, "west-peek", DRIP_DEPS)).awaitingApproval).toBe(4);
     await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET created_at = '2020-01-01T00:00:00.000Z'").run();
     for (let i = 1; i <= 4; i++) await deal("2027-01", `Jan Send ${i}`, { created_at: `2026-11-09T1${i}:00:00.000Z` });
-    expect((await runDrip(env, MONDAY)).awaitingApproval).toBe(4);
+    expect((await runDrip(env, MONDAY, "west-peek", DRIP_DEPS)).awaitingApproval).toBe(4);
     await approveAll();
-    const today = await runDrip(env, new Date("2026-11-09T15:00:00.000Z"));
+    const today = await runDrip(env, new Date("2026-11-09T15:00:00.000Z"), "west-peek", DRIP_DEPS);
     expect(today.sent).toBe(5);
     expect(today.waitingForAllowance).toBe(3);
     expect(today.sentBrands.slice(0, 4).sort()).toEqual(["Jan Send 1", "Jan Send 2", "Jan Send 3", "Jan Send 4"]);
     expect(sends).toHaveLength(5);
     // Later the same day: the cap is spent.
-    expect((await runDrip(env, new Date("2026-11-09T20:00:00.000Z"))).sent).toBe(0);
+    expect((await runDrip(env, new Date("2026-11-09T20:00:00.000Z"), "west-peek", DRIP_DEPS)).sent).toBe(0);
     // The next day has room again.
-    expect((await runDrip(env, new Date("2026-11-10T15:00:00.000Z"))).sent).toBe(3);
+    expect((await runDrip(env, new Date("2026-11-10T15:00:00.000Z"), "west-peek", DRIP_DEPS)).sent).toBe(3);
   });
 });
 
@@ -327,7 +328,7 @@ describe("stop at $25,000", () => {
     const promoted = await promoteProspects(env, MONDAY);
     expect(promoted.stopped).toEqual(["January 2027"]);
     expect(promoted.promoted).toEqual(["Feb More (February 2027)"]);
-    const out = await runDrip(env, MONDAY);
+    const out = await runDrip(env, MONDAY, "west-peek", DRIP_DEPS);
     expect(out.goalStopped).toEqual(["January 2027"]);
     expect(out.newDrafts.map((d) => d.brand)).toEqual(["Feb More"]);
     expect(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_drip_message m JOIN tlc_deal d ON d.id = m.deal_id WHERE d.event_id = 'tlc_2027-01'").first()).toBeNull();
@@ -338,12 +339,12 @@ describe("stop at $25,000", () => {
   it("an email already approved for a club that then reaches its goal is held, not sent; a product partner never counts toward the goal", async () => {
     await openGate();
     await deal("2027-01", "Was Approved");
-    await runDrip(env, MONDAY);
+    await runDrip(env, MONDAY, "west-peek", DRIP_DEPS);
     await approveAll();
     await agree("2027-01", "Product Co", 0, "PRODUCT");
     await env.WP_OS_DB.prepare("UPDATE tlc_deal SET in_kind_value_usd = 30000 WHERE brand = 'Product Co'").run();
     await agree("2027-01", "Title Co", 25_000, "TITLE");
-    const out = await runDrip(env, new Date("2026-11-09T15:00:00.000Z"));
+    const out = await runDrip(env, new Date("2026-11-09T15:00:00.000Z"), "west-peek", DRIP_DEPS);
     expect(out.sent).toBe(0);
     expect((await env.WP_OS_DB.prepare("SELECT state, held_reason FROM tlc_drip_message WHERE deal_id = 'tld_202701wasapproved'").first())).toEqual({ state: "HELD", held_reason: "the club reached its sponsor goal, so its outreach stopped" });
     // Without the Title partner, the product partner's $30,000 of product does not stop anything.

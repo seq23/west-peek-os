@@ -1,3 +1,4 @@
+import { DRIP_DEPS } from "./helpers/tlcSamplesPdf";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import { addressesPassed } from "./helpers/addressCheck";
@@ -69,7 +70,7 @@ async function batch(now: Date, answer: unknown, pages: Record<string, string> =
 
 beforeAll(async () => {
   t = await createTestDb();
-  env = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>);
+  env = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled", WP_OS_DOCUMENTS: t.docs } as Partial<Env>);
   for (const [m, d, topic] of [["2027-01", "2027-01-21", "The Longevity Reset"], ["2027-02", "2027-02-11", "Fragrance Lab: AI meets the nose"], ["2027-03", "2027-03-18", "Build Your Own AI Agent"]] as const) {
     await env.WP_OS_DB.prepare("INSERT INTO tlc_event (id, month, event_date, slot, topic, angle, status, sponsor_categories_json, pitch_token) VALUES (?1, ?2, ?3, 'EVENING', ?4, 'A hands-on evening.', 'TOPIC_READY', '[]', ?5)")
       .bind(`tlc_${m}`, m, d, topic, `${m.replace("-", "")}`.padEnd(32, "a")).run();
@@ -288,7 +289,7 @@ describe("ElevenLabs: her approved first email is kept, she sent it herself, and
     expect(lastPrompt).not.toContain("- ElevenLabs, for");
     // Even a deal that reached the table some other way is never dripped, at any step.
     await env.WP_OS_DB.prepare("INSERT INTO tlc_deal (id, event_id, brand, contact_name, contact_email, contact_source_url, next_send_at) VALUES ('tld_eleven', 'tlc_2027-02', 'ElevenLabs', 'A Person', 'person@elevenlabs.example', 'https://elevenlabs.example/team', '2026-11-01T00:00:00.000Z')").run();
-    await runDrip(env, new Date("2026-11-09T15:00:00.000Z"));
+    await runDrip(env, new Date("2026-11-09T15:00:00.000Z"), "west-peek", DRIP_DEPS);
     expect(await msg(0)).toBeNull();
     expect((await env.WP_OS_DB.prepare("SELECT next_send_at FROM tlc_deal WHERE id = 'tld_eleven'").first<{ next_send_at: string | null }>())!.next_send_at).toBeNull();
   });
@@ -298,16 +299,16 @@ describe("ElevenLabs: her approved first email is kept, she sent it herself, and
     await env.WP_OS_DB.prepare("INSERT INTO tlc_must_pitch (id, month, brand, reason, added_by, day0_subject, day0_body, day0_topic, day0_approved_by, day0_approved_at) VALUES ('tmp_test_scent', '2027-02', 'Scent Test Co', 'test', 'Sequoia', ?1, ?2, 'Fragrance Lab', 'Sequoia', '2026-10-23T00:00:00.000Z')").bind(row!.day0_subject, row!.day0_body).run();
     await env.WP_OS_DB.prepare("INSERT INTO tlc_deal (id, event_id, brand, contact_name, contact_email, contact_source_url, next_send_at) VALUES ('tld_scent', 'tlc_2027-02', 'Scent Test Co', 'Ana Lee', 'ana@scent.example', 'https://scent.example/team', '2026-11-01T00:00:00.000Z')").run();
     const scent = async (step: number) => env.WP_OS_DB.prepare("SELECT subject, body, state FROM tlc_drip_message WHERE deal_id = 'tld_scent' AND step = ?1").bind(step).first<{ subject: string; body: string; state: string }>();
-    await runDrip(env, new Date("2026-11-09T15:01:00.000Z"));
+    await runDrip(env, new Date("2026-11-09T15:01:00.000Z"), "west-peek", DRIP_DEPS);
     expect(await scent(0)).toEqual({ subject: "A Valentine's-week room in New York", body: `Hi Ana,\n\n${APPROVED_BODY}\n\n${BRAND_MAILING_ADDRESS}`, state: "HELD" });
     await env.WP_OS_DB.prepare("UPDATE tlc_event SET topic = 'Find Your Voice' WHERE month = '2027-02'").run();
-    await runDrip(env, new Date("2026-11-09T15:02:00.000Z"));
+    await runDrip(env, new Date("2026-11-09T15:02:00.000Z"), "west-peek", DRIP_DEPS);
     expect((await scent(0))!.subject).toBe("Scent Test Co + a small room in New York");
     await env.WP_OS_DB.prepare("UPDATE tlc_event SET topic = 'Fragrance Lab: AI meets the nose' WHERE month = '2027-02'").run();
-    await runDrip(env, new Date("2026-11-09T15:03:00.000Z"));
+    await runDrip(env, new Date("2026-11-09T15:03:00.000Z"), "west-peek", DRIP_DEPS);
     expect((await scent(0))!.body).toBe(`Hi Ana,\n\n${APPROVED_BODY}\n\n${BRAND_MAILING_ADDRESS}`);
     await env.WP_OS_DB.prepare("UPDATE tlc_deal SET drip_step = 1 WHERE id = 'tld_scent'").run();
-    await runDrip(env, new Date("2026-11-09T15:04:00.000Z"));
+    await runDrip(env, new Date("2026-11-09T15:04:00.000Z"), "west-peek", DRIP_DEPS);
     expect((await scent(1))!.subject).toBe("Scent Test Co + a small room in New York");
     expect((await scent(1))!.body).not.toContain("Eleven v4");
     await env.WP_OS_DB.prepare("UPDATE tlc_deal SET drip_step = 0 WHERE id = 'tld_scent'").run();
@@ -316,7 +317,7 @@ describe("ElevenLabs: her approved first email is kept, she sent it herself, and
 
 describe("the gate is unchanged", () => {
   it("a must-pitch deal, found or hers, is held while the gate is shut and waits for a per-email approval when it is open", async () => {
-    const held = await runDrip(env, new Date("2026-11-09T15:00:00.000Z"));
+    const held = await runDrip(env, new Date("2026-11-09T15:00:00.000Z"), "west-peek", DRIP_DEPS);
     expect(held.gate.open).toBe(false);
     expect(held.sent + held.awaitingApproval).toBe(0);
     expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM external_effect_request").first<{ n: number }>())!.n).toBe(0);
@@ -330,7 +331,7 @@ describe("the gate is unchanged", () => {
     await env.WP_OS_DB.prepare("INSERT INTO tlc_setting (key, value) VALUES ('pitch_approved_hash', ?1), ('playbook_approved_hash', ?2), ('brand_send', 'on') ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(h.pitch, h.playbook).run();
     // Each queued address passed NeverBounce, as the first email requires (26 Oct 2026).
     await addressesPassed(env);
-    const out = await runDrip(env, new Date("2026-11-09T15:05:00.000Z"));
+    const out = await runDrip(env, new Date("2026-11-09T15:05:00.000Z"), "west-peek", DRIP_DEPS);
     expect(out.gate.open).toBe(true);
     expect(out.sent).toBe(0);
     expect(out.awaitingApproval).toBeGreaterThan(0);

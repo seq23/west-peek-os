@@ -87,7 +87,8 @@ describe("a brand replied", () => {
   it("an out-of-office: no draft, no approval email, and the drip resumes the day after they are back", async () => {
     expect(await arrive("Pat <pat@away.example>", "Automatic reply: Away Co + a small room in New York", "I'm currently out of the office, returning Monday, November 16.", "ooo-1@away.example", MORNING)).toEqual({ matched: 1, stop: "AUTO_REPLY" });
     expect(await env.WP_OS_DB.prepare("SELECT stop_reason, replied_at, stage, next_send_at FROM tlc_deal WHERE id = 'tld_away'").first())
-      .toEqual({ stop_reason: null, replied_at: null, stage: "PITCHED", next_send_at: "2026-11-17T14:00:00.000Z" });
+      // Back on the drip, never earlier than its own next step: the one follow-up is day 12 (owner, 4 Nov 2026), after they are back.
+      .toEqual({ stop_reason: null, replied_at: null, stage: "PITCHED", next_send_at: "2026-11-21T15:00:00.000Z" });
     expect(await processBrandReplies(env, AFTERNOON, "west-peek", deps)).toMatch(/no brand reply waiting for her$/);
     expect(sends).toHaveLength(0);
   });
@@ -631,15 +632,21 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     await take(e, "tld_flow", "Love the samples, a couple of notes: we'd want developers in the room.", "f-1@flow.example", { samples: render });
     const p = (await e.WP_OS_DB.prepare("SELECT kind, draft_body, attachments_json FROM tlc_brand_reply WHERE deal_id = 'tld_flow'").first<{ kind: string; draft_body: string; attachments_json: string }>())!;
     expect(p.kind).toBe("PROPOSAL");
-    expect(p.draft_body).toContain("Here's how Flow Co could take part:");
-    expect(p.draft_body).toContain('• Partner: "Making it remember", led by Flow Co or by our host');
-    expect(p.draft_body).toContain("Prices for each are on the attached one-pager.");
-    expect(JSON.parse(p.attachments_json)).toEqual([expect.objectContaining({ name: "The Learning Club - Build Your Own AI Agent - partner levels.pdf" })]);
+    // The same levels as Flow Co's own sheet, every price per event, lowest first; no Title (not marked large), no in-kind (not a product).
+    expect(p.draft_body).toContain(`Here's how Flow Co could take part in The Learning Club: Build Your Own AI Agent, built around "Making it remember", led by Flow Co or by our host. Every price is per event:`);
+    expect(p.draft_body).toContain("• Partner · $5,000 per event: named on the invitation and on the day;");
+    expect(p.draft_body).toContain("• Lead partner · $10,000 per event: Everything in Partner, plus the hands-on segment built around your product;");
+    expect(p.draft_body).toContain('• Presenting partner · $15,000 per event: Everything in Lead, plus "Presented by Flow Co" on the invitation, signage and recap.');
+    expect(p.draft_body).toContain("Lead is the level brands like Flow Co would benefit most from.");
+    expect(p.draft_body.indexOf("Partner ·")).toBeLessThan(p.draft_body.indexOf("Lead partner ·"));
+    expect(p.draft_body.indexOf("Lead partner ·")).toBeLessThan(p.draft_body.indexOf("Presenting partner ·"));
+    expect(p.draft_body).not.toMatch(/Title partner|Product partner|in kind/);
+    expect(JSON.parse(p.attachments_json)).toEqual([expect.objectContaining({ name: "The Learning Club - Build Your Own AI Agent - partner levels - Flow Co.pdf" })]);
     const { sendReplyApprovals } = await import("../src/worker/services/tlcBrandReply");
     await sendReplyApprovals(e, MON);
-    expect(sends[0]!.files).toEqual(["The Learning Club - Build Your Own AI Agent - partner levels.pdf"]);
+    expect(sends[0]!.files).toEqual(["The Learning Club - Build Your Own AI Agent - partner levels - Flow Co.pdf"]);
     // The exec format bolds numbers ("step **4**"), so the line is read without the bold.
-    expect(sends[0]!.text.replace(/\*\*/g, "")).toContain("step 4: the proposal (prices on the attached one-pager)");
+    expect(sends[0]!.text.replace(/\*\*/g, "")).toContain("step 4: the proposal (their own partner-levels sheet attached)");
     await approve(e, await refOf("tld_flow"));
     expect(sends.filter((x) => x.to.includes("flow.example"))).toHaveLength(1);
     // They pick a level: the confirmation, with a one-page agreement and the invoice, for her approval.
@@ -739,5 +746,89 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     const r = (await env.WP_OS_DB.prepare("SELECT agreed_slot, offered_slots_json FROM tlc_brand_reply WHERE deal_id = 'tld_busy'").first<{ agreed_slot: string | null; offered_slots_json: string }>())!;
     expect(r.agreed_slot).toBeNull();
     expect((JSON.parse(r.offered_slots_json) as string[]).includes(new Date(thu).toISOString())).toBe(false);
+  });
+});
+
+describe("brand colleagues and the approval boundary", () => {
+  /*
+   * THE PINECONE CASE, WITH A FAKE BRAND (4 Nov 2026). The contact looped in his VP, who answered on the same thread from
+   * another address at the brand: "How much is this to do?". Before: her inbox was searched only for the contact's
+   * address, so nothing was drafted and the deal stalled. Now the brand's whole domain is read, the price question goes
+   * straight to step 4 (the proposal, with the sheet made for this brand), and it waits for her approval: nothing is sent
+   * to the brand.
+   */
+  it("a colleague at the brand's domain asks the price on our thread: the proposal with its own sheet waits for her; nothing goes to the brand", async () => {
+    const e = { ...env, WP_OS_DOCUMENTS: t.docs } as Env;
+    const sheets: string[] = [];
+    const samples = { renderPdf: async (html: string) => { sheets.push(html); return { pdfBase64: Buffer.from("%PDF-1.4 /Type /Page a").toString("base64"), pageCount: 1, reason: "" }; } };
+    await deal("tld_colleague", "Brand Co", "mike@brand.example");
+    await e.WP_OS_DB.prepare("UPDATE tlc_deal SET category = 'Vector database' WHERE id = 'tld_colleague'").run();
+    const vp = { from: "VP <vp@brand.example>", messageId: "<vp-question@brand.example>", threadId: "brand-thread", subject: "Re: Brand Co + a small room in New York", text: "From: VP <vp@brand.example>\r\nTo: sequoia@westpeek.ventures\r\nCc: mike@brand.example\r\nMessage-ID: <vp-question@brand.example>\r\n\r\nHow much is this to do?", receivedAt: MORNING.toISOString() };
+    const queries: string[] = [];
+    // The mailbox answers like Gmail would: the VP's message matches a search that names the brand's domain.
+    const mailbox = vi.fn(async (_e: Env, q: string) => { queries.push(q); return /brand\.example/.test(q) || /in:inbox/.test(q) ? [vp] : []; });
+    expect(await processBrandReplies(e, MORNING, "west-peek", { drafter, mailbox, samples })).toContain("1 drafted");
+    expect(queries[0]).toMatch(/^from:\(.*\bbrand\.example\b.*\) after:\d+$/);
+    const r = (await e.WP_OS_DB.prepare("SELECT state, kind, send_to, send_cc_json, draft_body, attachments_json FROM tlc_brand_reply WHERE deal_id = 'tld_colleague'").first<{ state: string; kind: string; send_to: string; send_cc_json: string; draft_body: string; attachments_json: string }>())!;
+    // Reply-all to the VP's message, the contact copied; a draft in her approval email, never sent.
+    expect(r).toMatchObject({ state: "NOTIFIED", kind: "PROPOSAL", send_to: "vp@brand.example", send_cc_json: '["mike@brand.example"]' });
+    expect(r.draft_body).toContain("Every price is per event");
+    expect(JSON.parse(r.attachments_json)).toEqual([expect.objectContaining({ name: "The Learning Club - Build Your Own AI Agent - partner levels - Brand Co.pdf" })]);
+    // The sheet attached is Brand Co's own: software, so no in-kind level; not marked large, so no Title.
+    const sheet = sheets.at(-1)!;
+    expect(sheet).toContain("<h1>Build Your Own AI Agent, with Brand Co</h1>");
+    expect(sheet).toContain("Brand Co is the vector database every guest uses in the hands-on hour, with a starter account set up in the room");
+    expect(sheet).not.toMatch(/Product partner|in kind|Title partner/);
+    expect(sends).toHaveLength(1);
+    expect(sends[0]!.to).toBe("sequoia@westpeek.ventures");
+    expect(sends.some((x) => x.to.includes("brand.example"))).toBe(false);
+    // Seen once: the next pass drafts nothing and sends nothing.
+    expect(await processBrandReplies(e, MORNING, "west-peek", { drafter, mailbox, samples })).toContain("0 drafted");
+    expect(sends).toHaveLength(1);
+  });
+
+  it("a stranger at an unrelated domain, or at a free-mail address not on our thread, is not taken", async () => {
+    await deal("tld_quiet", "Quiet Co", "jo@quiet.example");
+    const stray = (from: string, mid: string) => ({ from, messageId: `<${mid}>`, subject: "Re: Quiet Co + a small room in New York", text: `From: ${from}\r\nTo: sequoia@westpeek.ventures\r\n\r\nHow much is this to do?`, receivedAt: MORNING.toISOString() });
+    const mailbox = vi.fn(async () => [stray("x@unrelated.example", "u-1@unrelated.example"), stray("someone@gmail.com", "g-1@gmail.example"), stray("someone@proton.me", "p-1@proton.example")]);
+    expect(await processBrandReplies(env, MORNING, "west-peek", { drafter, mailbox })).toContain("0 drafted");
+    expect(await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_brand_reply WHERE deal_id = 'tld_quiet'").first<{ n: number }>()).toEqual({ n: 0 });
+    expect(sends).toHaveLength(0);
+  });
+
+  it("matches sent Gmail and RFC threads across domains, but rejects unrelated and free-mail strangers", async () => {
+    const { dealsForSender } = await import("../src/worker/services/tlcBrandReply");
+    await deal("tld_thread", "Thread Co", "contact@thread.example");
+    await env.WP_OS_DB.prepare("INSERT INTO external_effect_request (id,effect_type,destination,payload_json,requested_by_type,requested_by_id,gmail_thread_id,rfc_message_id) VALUES ('eer_thread','email.send','contact@thread.example','{}','AI','aie_wynn','sent-thread','sent@thread.example')").run();
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_drip_message (id,deal_id,step,subject,body,state,effect_request_id) VALUES ('tdm_thread','tld_thread',0,'Thread','Hi','SENT','eer_thread')").run();
+    for (const domain of ["unrelated.example", "gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com", "aol.com", "proton.me"]) {
+      expect(await dealsForSender(env, `stranger@${domain}`)).toEqual([]);
+    }
+    expect((await dealsForSender(env, "other@gmail.com", { threadId: "sent-thread" })).map((d) => d.id)).toEqual(["tld_thread"]);
+    expect((await dealsForSender(env, "other@agency.example", { text: "References: <older@example.test>\r\n <sent@thread.example>\r\n\r\nHow much?" })).map((d) => d.id)).toEqual(["tld_thread"]);
+    expect((await dealsForSender(env, "colleague@thread.example")).map((d) => d.id)).toEqual(["tld_thread"]);
+    expect(await recordBrandReplyText(env, { from: "other@agency.example", subject: "Re: Thread", text: "From: other@agency.example\r\nTo: sequoia@westpeek.ventures\r\nCc: contact@thread.example\r\nIn-Reply-To: <sent@thread.example>\r\n\r\nWhat kind of people will be in the room?", messageId: "agency-question@example.test", now: MORNING })).toEqual({ matched: 1, stop: "REPLIED" });
+    expect(await env.WP_OS_DB.prepare("SELECT state, send_to FROM tlc_brand_reply WHERE deal_id = 'tld_thread'").first()).toEqual({ state: "NOTIFIED", send_to: "other@agency.example" });
+    expect(sends).toHaveLength(1);
+    expect(sends[0]!.to).toBe("sequoia@westpeek.ventures");
+  });
+
+  it("refuses an unapproved brand email at the executor (named stop, nothing sent); the drip's one follow-up (step 2) still sends", async () => {
+    const { executeExternalEffect } = await import("../src/worker/effects/executor");
+    const { requestApproval, decideApproval } = await import("../src/worker/services/approvals");
+    const { actorForFirmUser } = await import("../src/worker/services/authorize");
+    const { approvedFor } = await import("../src/worker/services/learningClub");
+    const actor = { type: "AI" as const, aiEmployeeId: "aie_wynn", roles: [], firmScopes: ["west-peek"] };
+    await env.WP_OS_DB.prepare("INSERT INTO external_effect_request (id,effect_type,destination,payload_json,requested_by_type,requested_by_id,outside_job) VALUES ('eer_guard','email.send','contact@thread.example',?1,'AI','aie_wynn','tlc_brand_sales')").bind(JSON.stringify({ subject: "Follow-up", text: "Hi again" })).run();
+    await expect(executeExternalEffect(env, actor, "eer_guard", undefined)).rejects.toThrow();
+    expect(sends).toHaveLength(0);
+    const card = await requestApproval(env, actor, { action_key: "effect.email.send", object_type: "external_effect_request", object_id: "eer_guard", title: "Follow-up", summary: "Hi again", payload: {}, submit: true });
+    await decideApproval(env, (await actorForFirmUser(env, "fu_scooter_taylor"))!, card.id, "approved", "Another partner approved");
+    await expect(executeExternalEffect(approvedFor(env, card.id, "contact@thread.example"), actor, "eer_guard", card.id)).rejects.toThrow("TLC_BRAND_OWNER_APPROVAL_REQUIRED");
+    expect(sends).toHaveLength(0);
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_drip_message (id,deal_id,step,subject,body,state,effect_request_id,approval_card_id) VALUES ('tdm_guard','tld_thread',1,'Follow-up','Hi again','AWAITING_APPROVAL','eer_guard',?1)").bind(card.id).run();
+    await executeExternalEffect(approvedFor(env, card.id, "contact@thread.example"), actor, "eer_guard", card.id);
+    expect(sends).toHaveLength(1);
+    expect(sends[0]!.to).toBe("contact@thread.example");
   });
 });

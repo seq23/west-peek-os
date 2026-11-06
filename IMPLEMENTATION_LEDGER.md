@@ -7380,3 +7380,37 @@ from January 2027; $10 paid ticket; $10,000 net target from sponsors ($7,500 flo
   CANCELLED with `dropped_at`/`dropped_reason`, drafts held, topic back to the ideas list (`applyGoNoGo`).
 - Guards: `tests/tlcPipelineRepairs.test.ts` (9); the catch-up guard was broken on purpose and went red, then restored.
   Pins in `tlcVolume`/`tlcPitchAndPartners` rewritten to the stricter wording. Live delivery UNPROVEN until exercised.
+
+### 4 Nov 2026 — TLC: brand replies from any colleague, the per-brand sheet, no silent send pauses
+- Replies: a message belongs to a live deal when it is from the contact, on a thread we sent that deal (Gmail threadId,
+  or In-Reply-To/References naming a Message-ID we sent), or, once we have written to the deal, from the contact's own
+  domain (never the seven free-mail domains in `FREE_MAIL_DOMAINS`). Intake and inbox share `dealsForSender`. The inbox
+  is read with two bounded searches per pass (the brands' addresses and domains since the first send; anyone on our
+  threads in a 3-day window), at most 4 + 2 pages of 25; `listGmailRaw` gained a page cap (the WIP walked every page).
+- The one brand send (`brandMailAsOwner`) refuses (TLC_BRAND_OWNER_APPROVAL_REQUIRED, nothing sent) unless it is drip
+  step 2 or carries her approved card for that request. Drip, replies, samples, proposal, confirm and call times all
+  pass it; calendar invites follow only an approved answer.
+- Sheet: `renderBrandPitch(view, sponsor)` per deal (`sponsorOf`: category, `large_brand`, her angle, Wynn's
+  `<BRAND>_SERIES` rule); levels lowest first, every price per event, in-kind only for a physical product, Title only
+  for `large_brand = 1` or a brand asking to own the room; no why-now, categories, ticket price, weekday or closing
+  question; "To say yes" and the one-line About. `brandCopyProblems` refuses guest charges, venues, implied track record.
+  Migration 0291 adds `tlc_deal.large_brand` (NULL = unknown = no Title).
+- Drip: `TLC_DRIP_DAYS = [0, 12]`. Email 1 never carries the samples PDF and never waits for it (made ahead when it
+  can be, so the weekly email links it). Email 2 attaches it and is held (SAMPLES_PDF_NOT_READY) until it is made.
+  Email 2's card is decided by the policy `policy:drip_step_2` with the rule quoted (shared/tlc/dripPolicy.ts), never
+  by a person; `verifyAuthorizationReceipt` accepts that decider only for the email.send of a step-1 drip message on
+  the brand-sales lane whose card it is. Old-template email 2 drafts are held, never re-worded to say "attached".
+- A price question ("how much", pricing, cost, rates, budget) goes straight to step 4 (proposal + that brand's sheet),
+  still a draft for her approval.
+- Send pause: `tlcSendPause.ts` emails her once per changed pitch/playbook hash with the changed lines; her
+  authenticated "approve" (TLP- ref) stores the hashes and words. TLC_SEND_PAUSED is reported to Boss OS Open Loops
+  with the one-call reporter (seq23/boss-os docs/open-loops.md; `services/openLoops.ts`, ported from keepmyproof) and
+  posted cleared when the gate reopens; also on the event spine. Credential by name: `WP_OS_BOSS_OPEN_LOOPS_TOKEN`
+  (vault `BOSS_OPEN_LOOPS_TOKEN`); unset, nothing is sent and one line says so. Live posting UNPROVEN.
+- Sample for review: docs/samples/tlc-sheet-acme-vector-fake.html (fake brand).
+- Reviser routing (owner ruling, 4 Nov 2026: brand and TLC emails are never confidential): `tlcRevisionWriter` is
+  `publicModelApproved`, no longer `confidential` or `important`, so it takes the routine lanes, free ones included.
+  runAi still revokes public approval on LP or deal-term markers. Guard: tests/tlcSamplesRouting.test.ts.
+- Guards: tlcBrandReply (colleague, stranger, executor guard), tlcPitchAndPartners (per-brand sheet, forbidden copy,
+  series), tlcPipelineRepairs (B, G), tlcSendPause (new), tlcBrandFlow, learningClub. Gmail, Pinecone recovery, PDF
+  rendering in production and deployment remain UNPROVEN; no production rows changed.

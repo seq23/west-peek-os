@@ -3,7 +3,10 @@ import { readFileSync, readdirSync } from "node:fs";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { handleRequest } from "../src/worker/index";
-import { brandPitchProblems, clubWhen, renderBrandPitch, renderInternalOnePager, safetyLines, type TlcClubView } from "../src/shared/tlc/pitch";
+import { brandCopyProblems, brandLevels, brandPitchProblems, clubWhen, renderBrandPitch, renderInternalOnePager, safetyLines, sponsorOf, type TlcClubView } from "../src/shared/tlc/pitch";
+import { TLC_ABOUT_COMMUNITY } from "../src/shared/tlc/aboutWestPeek";
+import { dripEmail } from "../src/shared/tlc/learningClub";
+import { renderSamplesPdf } from "../src/shared/tlc/samples";
 import { TLC_OWNER, TLC_RECIPIENTS } from "../src/shared/tlc/learningClub";
 import { partnersPanel } from "../src/shared/rooms/partnersPanel";
 import { sendPartnerEmail, sendPartnersEmail } from "../src/worker/services/execEmail";
@@ -47,39 +50,41 @@ describe("the three brand pitches read clean", () => {
     for (const v of [JAN, FEB, MAR]) {
       const html = renderBrandPitch(v);
       expect(brandPitchProblems(html)).toEqual([]);
-      // The order the review asked for.
+      // The approved pattern's order (owner, 4 Nov 2026): why it works, who is there, the levels, how to say yes, her sign-off.
       const at = (h: string) => html.indexOf(h);
-      expect(at("Why now for your category")).toBeLessThan(at("Who is in the room"));
-      expect(at("Who is in the room")).toBeLessThan(at("What you get"));
-      expect(at("What you get")).toBeLessThan(at("Price and the ask"));
-      expect(at("Price and the ask")).toBeLessThan(at(TLC_OWNER.email));
-      // The tiers, Title first, and what each gets; never our goal, costs or a season offer.
-      const at2 = (h: string) => html.indexOf(h);
-      expect(at2("Title partner: $25,000")).toBeGreaterThan(0);
-      expect(at2("Title partner: $25,000")).toBeLessThan(at2("Partner: $5,000"));
-      for (const t of ["Partner: $5,000", "Lead partner: $10,000", "Presenting partner: $15,000", "Product partner (in kind)", "The Learning Club, presented by"]) expect(html).toContain(t);
+      expect(at("Why this room works for")).toBeGreaterThan(0);
+      expect(at("Why this room works for")).toBeLessThan(at("Who will be in the room"));
+      expect(at("Who will be in the room")).toBeLessThan(at("Partner levels, per event"));
+      expect(at("Partner levels, per event")).toBeLessThan(at("To say yes"));
+      expect(at("To say yes")).toBeLessThan(at(TLC_OWNER.email));
+      // Lowest first, each per event; the club's generic sheet shows neither Title nor in-kind.
+      expect(at("Partner · $5,000 per event")).toBeLessThan(at("Lead partner · $10,000 per event"));
+      expect(at("Lead partner · $10,000 per event")).toBeLessThan(at("Presenting partner · $15,000 per event"));
+      expect(html).not.toMatch(/Title partner|Product partner|in kind|\$25,000/);
       expect(html).not.toMatch(/\bgoal\b|cost budget|\bnet\b|\bseason\b/i);
-      expect(html).toContain("An intimate room: 25 to 100+ guests per event, flexible to your goals");
-      expect(html).not.toContain("An intimate room: 25–40");
-      expect(html).toMatch(/Photo and content rights/);
-      expect(html).toMatch(/Opt-in lead capture/);
-      expect(html).toMatch(/A recap within a week, with the numbers/);
-      // The packet's own why-now and its own sources, never the quarterly trend story.
-      expect(html).toContain(v.sources[0]!.url);
+      expect(html).toContain("25 to 100+ guests per event, flexible to your goals");
+      expect(html).toContain("A few brands can partner on each club.");
+      expect(html).toContain("payment is due within 14 days");
+      // Gone (rule A4): the why-now and its sources, the partner categories, the closing question, a fixed weekday.
+      expect(html).not.toContain(v.sources[0]!.url);
+      expect(html).not.toMatch(/Why now|Partner categories|Would you be open to exploring a partnership\?/);
+      expect(html).toContain(`${["January", "February", "March"][Number(v.month.slice(5)) - 1]} 2027 (date flexible)`);
+      for (const c of v.categories) for (const other of c.example_brands) expect(html).not.toContain(other);
     }
   });
   it("January: 21+ and 0.5% ABV, and never 'Dry January' as our words", () => {
     const html = renderBrandPitch(JAN);
     expect(html).toContain("21+ only, with ID checked at the door. Every drink served is non-alcoholic (0.5% ABV or less).");
-    expect(html.replace(/<ol class="src">[\s\S]*?<\/ol>/g, "")).not.toMatch(/dry january/i);
+    expect(html).not.toMatch(/dry january/i);
     expect(html).toContain("Zero-Proof January, done properly.");
     expect(html).not.toMatch(/\(lead|\(donated/);
   });
-  it("February: Thursday 11 February 2027, evening; the stale proposed date is gone", () => {
+  it("February: the month with the date flexible, never a fixed weekday; the stale proposed date is gone", () => {
+    // The internal one-pager keeps the real date; the brand sees the month.
     expect(clubWhen("2027-02-11", "EVENING")).toBe("Thursday 11 February 2027, 6–10 pm");
     const html = renderBrandPitch(FEB);
-    expect(html).toContain("Thursday 11 February 2027, 6–10 pm");
-    expect(html).not.toMatch(/6 Feb|Proposed date/);
+    expect(html).toContain("February 2027 (date flexible)");
+    expect(html).not.toMatch(/Thursday 11 February|6 Feb|Proposed date/);
   });
   it("March: the confidential-data rule, no promised result, no exclusivity", () => {
     const html = renderBrandPitch(MAR);
@@ -290,6 +295,90 @@ describe("approvals are of exact content, partners only; the public pitch needs 
   });
 });
 
+/*
+ * THE PARTNER-LEVELS SHEET IS MADE FOR EACH BRAND (owner, 4 Nov 2026; her approved pattern). Fake brands only.
+ */
+describe("the partner-levels sheet, made for each sponsor", () => {
+  const software = sponsorOf({ brand: "Acme Vector (acmevector.example)", category: "Vector database" });
+  const drinks = sponsorOf({ brand: "Fizz Co", category: "Zero-proof spirits" });
+  const unknown = sponsorOf({ brand: "Mystery Co", category: null });
+  const large = sponsorOf({ brand: "Big Co", category: "AI assistant", large_brand: 1 });
+  const FORBIDDEN = /\$10\b(?!,)|paid ticket|paid for|seats sold|\bvenue\b|your space|your office|most brands choose|brands usually|our last club|past partners|guests who signed up|a few brands partner on each club|never hosted|Why now/i;
+
+  it("a software brand: titled with its name, no in-kind level, every price per event, lowest first, Lead marked", () => {
+    const html = renderBrandPitch(MAR, software);
+    expect(html).toContain("<title>AI Tools for Your Work, with Acme Vector</title>");
+    expect(html).toContain("<h1>AI Tools for Your Work, with Acme Vector</h1>");
+    expect(html).toContain("Why this room works for Acme Vector");
+    expect(html).toContain("Acme Vector is the vector database every guest uses in the hands-on hour, with a starter account set up in the room");
+    expect(html).not.toMatch(/Product partner|in kind|in-kind/i);
+    expect(html).not.toContain("Title partner");
+    const lines = [...html.matchAll(/<div class="tier" data-level="(\w+)"><b>([^<]+)<\/b>/g)].map((m) => ({ key: m[1], price: m[2]! }));
+    expect(lines.map((l) => l.key)).toEqual(["PARTNER", "LEAD", "PRESENTING"]);
+    for (const l of lines) expect(l.price).toMatch(/· \$[\d,]+ per event$/);
+    const prices = lines.map((l) => Number(/\$([\d,]+)/.exec(l.price)![1]!.replace(/,/g, "")));
+    expect(prices).toEqual([...prices].sort((a, b) => a - b));
+    expect(Math.min(...prices)).toBe(5_000);
+    expect(html).toContain('<em class="mark">Most brands like Acme Vector would benefit most from this</em>');
+    expect(html.indexOf("Most brands like Acme Vector")).toBeGreaterThan(html.indexOf('data-level="LEAD"'));
+    expect(html.indexOf("Most brands like Acme Vector")).toBeLessThan(html.indexOf('data-level="PRESENTING"'));
+    // "Presented by" is sold only at Presenting.
+    expect(html.match(/Presented by/g)).toHaveLength(1);
+    expect(html.indexOf("Presented by")).toBeGreaterThan(html.indexOf('data-level="PRESENTING"'));
+    expect(html).toContain("A series of six: the same per-event price for each club, as a founding partner.");
+    expect(brandPitchProblems(html)).toEqual([]);
+  });
+
+  it("in-kind only for a physical product; unknown never shows it (fail closed)", () => {
+    expect(renderBrandPitch(JAN, drinks)).toContain("Product partner · in kind");
+    expect(renderBrandPitch(JAN, unknown)).not.toMatch(/Product partner|in kind/);
+    expect(brandLevels(unknown, "T").map((l) => l.key)).toEqual(["PARTNER", "LEAD", "PRESENTING"]);
+  });
+
+  it("Title only for a brand research marks as large (or one that asks to own the room): 'with <Brand>', never 'Presented by'", () => {
+    expect(brandLevels(software, "T").some((l) => l.key === "TITLE")).toBe(false);
+    const html = renderBrandPitch(MAR, large);
+    expect(html).toContain("Title partner · $25,000 per event");
+    expect(html).toContain("the whole room is yours: &quot;The Learning Club: AI Tools for Your Work, with Big Co&quot;; the only cash partner that night; first say on the format");
+    expect(html.match(/Presented by/g)).toHaveLength(1);
+    expect(html).toContain("Except with a Title partner, a few brands can partner on each club.");
+    expect(brandLevels({ ...software, askedToOwnRoom: true }, "T").at(-1)!.key).toBe("TITLE");
+  });
+
+  it("no brand-facing render names another brand, a why-now, a ticket price, a venue or a track record", () => {
+    const renders = [
+      ...[JAN, FEB, MAR].flatMap((v) => [renderBrandPitch(v), renderBrandPitch(v, software), renderBrandPitch(v, drinks), renderBrandPitch(v, large)]),
+      TLC_ABOUT_COMMUNITY,
+      dripEmail({ step: 0, brand: "Acme Vector", contactName: null, topic: "T", month: "2027-03", eventDate: "2027-03-18", why: null }).text,
+      dripEmail({ step: 1, brand: "Acme Vector", contactName: null, topic: "T", month: "2027-03", eventDate: "2027-03-18", why: null }).text,
+    ];
+    for (const r of renders) {
+      expect(r.replace(/<style>[\s\S]*?<\/style>/g, "")).not.toMatch(FORBIDDEN);
+      expect(brandCopyProblems(r)).toEqual([]);
+      for (const other of ["Brand A", "Brand B", "Brand C"]) expect(r).not.toContain(other);
+    }
+    // The checker itself catches each phrase it exists to catch.
+    for (const bad of ["Every seat is a paid ticket ($10).", "every seat paid for", "seats sold", "Host it at your space.", "Most brands choose Lead.", "Our last club sold out.", "We have never hosted one.", "A few brands partner on each club."]) {
+      expect(brandCopyProblems(bad), bad).not.toEqual([]);
+    }
+    expect(TLC_ABOUT_COMMUNITY).toMatch(/about 5,000/);
+  });
+
+  it("a deal whose angle (or Wynn's rule) asks for the series of six leads with it: first email, sheet and samples", () => {
+    const viaAngle = sponsorOf({ brand: "Acme Vector", category: "Vector database", owner_angle: "Pitch them the same series of six Build Your Own AI Agent rooms." });
+    const viaRule = sponsorOf({ brand: "Acme Vector", category: "Vector database" }, [{ code: "ACME_VECTOR_SERIES" }]);
+    expect([viaAngle.series, viaRule.series, software.series]).toEqual([true, true, false]);
+    const sheet = renderBrandPitch(MAR, viaRule);
+    expect(sheet.indexOf("A series of six rooms, one a month for six months, with Acme Vector in every room. A single evening is the option.")).toBeLessThan(sheet.indexOf("Why this room works"));
+    expect(dripEmail({ step: 0, brand: "Acme Vector", contactName: null, topic: "Build Your Own AI Agent", month: "2027-03", eventDate: "2027-03-18", why: null, series: true }).text)
+      .toContain("as a series of six rooms, one a month: rooms of 25+ guests (sized to your goals) each time, going deep on Build Your Own AI Agent, hands-on, with Acme Vector in every room. A single evening is an option too.");
+    const words = { title: "T", leaveFact: "a working agent", openingTheme: "o", panelAngle: "p", dinnerPick: "d", segmentTitle: "s", segmentDoes: "does", leaveWith: "w", seriesTitle: "Agents, month by month", seriesTail: "ending with a team of agents.", months: Array.from({ length: 6 }, (_, k) => ({ title: `M${k + 1}`, line: "l", brand: k === 2 })), whyLead: "w", whyLine: "l", perks: [{ lead: "a", line: "b" }] };
+    const samples = renderSamplesPdf({ brand: "Acme Vector", topic: "Build Your Own AI Agent", month: "2027-03", words, mix: [], leadWithSeries: true } as never);
+    expect(samples.indexOf("The series of six")).toBeLessThan(samples.indexOf("The evening"));
+    expect(samples).toContain("Six rooms, one a month, with Acme Vector in every room");
+  });
+});
+
 describe("the owner's rulings on rooms, money, sponsors and ideas (22 Oct 2026)", () => {
   it("the room size is the club's own: pitch, drip and internal page read it, and never a size we have not set", async () => {
     const { dripEmail, seatsOf } = await import("../src/shared/tlc/learningClub");
@@ -298,8 +387,8 @@ describe("the owner's rulings on rooms, money, sponsors and ideas (22 Oct 2026)"
     const big = { ...MAR, seats: { min: 80, max: 120 } };
     // A brand is always told 25 to 100+ guests per event, flexible to its goals (owner, 30 Oct 2026); the planned size
     // stays on the internal one-pager.
-    expect(renderBrandPitch(big)).toContain("An intimate room: 25 to 100+ guests per event, flexible to your goals");
-    expect(renderBrandPitch(big)).toContain("25 to 100+ New Yorkers per event, a number we flex to your goals, who chose this topic");
+    expect(renderBrandPitch(big)).toContain("25 to 100+ guests per event, flexible to your goals");
+    expect(renderBrandPitch(big)).toContain("25 to 100+ New Yorkers per event, a number we flex to your goals, who will choose this topic");
     expect(renderBrandPitch(big)).not.toMatch(/80–120|80 to 120/);
     expect(renderInternalOnePager({ ...big, origin: null, status: "TOPIC_READY", vetoUntil: null, committedUsd: 0, committedPartners: 0, pitchUrl: null })).toContain("Room: planned for 80–120 people");
     const d = dripEmail({ step: 0, brand: "Acme", contactName: null, topic: "T", month: "2027-03", eventDate: "2027-03-18", why: null, seats: { min: 80, max: 120 } });

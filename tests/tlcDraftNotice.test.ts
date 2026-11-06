@@ -1,3 +1,4 @@
+import { DRIP_DEPS } from "./helpers/tlcSamplesPdf";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
@@ -69,7 +70,7 @@ const record = (month: string, added: string[], dropped: string[] = []) =>
 
 beforeAll(async () => {
   t = await createTestDb();
-  env = { ...makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>), RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures", WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON: SERVICE_ACCOUNT, WP_OS_NEVERBOUNCE_API_KEY: "nb_test" } as Env;
+  env = { ...makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled", WP_OS_DOCUMENTS: t.docs } as Partial<Env>), RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures", WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON: SERVICE_ACCOUNT, WP_OS_NEVERBOUNCE_API_KEY: "nb_test" } as Env;
   vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
     if (String(url).startsWith("https://api.neverbounce.com/v4.2/single/check?")) {
       checked.push(new URL(String(url)).searchParams.get("email")!);
@@ -125,7 +126,7 @@ describe("one TLC email a week, every club at once, approved by reply", () => {
   it("sends nothing while the week's batch is still running — not a partial email, not a per-draft ping", async () => {
     const opened = await openBrandBatchCard(env, MORNING);
     cardId = opened.cardId!;
-    const drip = await runDrip(env, MORNING);
+    const drip = await runDrip(env, MORNING, "west-peek", DRIP_DEPS);
     expect(drip.awaitingApproval).toBe(3);
     // Each address was checked with NeverBounce before its first email was drafted, once each.
     expect([...checked].sort()).toEqual(["pat@leafco.example", "pat@rootco.example", "pat@scentco.example"]);
@@ -208,7 +209,7 @@ describe("one TLC email a week, every club at once, approved by reply", () => {
 
   it("a reply decides only the drafts listed in ITS email", async () => {
     await deal("Late Co", "2027-01");
-    await runDrip(env, MORNING);
+    await runDrip(env, MORNING, "west-peek", DRIP_DEPS);
     await reply(`Re: ${subject}`, `approve all\n\n> Ref ${ref}`);
     expect(await cardState("Late Co")).toBe("pending_review");
   });
@@ -217,7 +218,7 @@ describe("one TLC email a week, every club at once, approved by reply", () => {
     const note = "Leak Co makes sleep trackers for longevity rooms. Caveat: the address is a shared PR inbox, and it fits the Lead partner tier.";
     await deal("Leak Co", "2027-01");
     await env.WP_OS_DB.prepare("UPDATE tlc_deal SET why_fit = ?1 WHERE id = 'tld_LeakCo'").bind(note).run();
-    await runDrip(env, MORNING);
+    await runDrip(env, MORNING, "west-peek", DRIP_DEPS);
     // As the old template wrote it: the whole note, first letter lowered, in the brand email.
     const m = (await env.WP_OS_DB.prepare("SELECT id, body, effect_request_id, approval_card_id FROM tlc_drip_message WHERE deal_id = 'tld_LeakCo'").first<{ id: string; body: string; effect_request_id: string; approval_card_id: string }>())!;
     const leakedBody = m.body.replace(/I am writing because [^\n]*/, `I am writing because l${note.slice(1)}`);
@@ -305,8 +306,8 @@ describe("a re-read of her stored reply is reported as done (24 Oct 2026, learne
   });
 });
 
-describe("a queued email 2 offers the three samples (owner, 26 Oct 2026)", () => {
-  it("re-composes unsent email 2 drafts in place; sent mail and her own redrafts are never touched", async () => {
+describe("a queued email 2 in an older template never goes without the samples PDF (owner, 4 Nov 2026)", () => {
+  it("holds unsent old email 2 drafts (never re-worded to say 'attached'); sent mail and her own redrafts are never touched", async () => {
     const { fileDraft } = await import("../src/worker/services/learningClub");
     const { recomposeSecondEmails } = await import("../src/worker/services/tlcDraftNotice");
     const OLD = "Hi Pat,\n\nA quick picture of the room, in case it helps. 30 New Yorkers, each with a paid seat.\n\nWould you be open to exploring a partnership?";
@@ -323,17 +324,13 @@ describe("a queued email 2 offers the three samples (owner, 26 Oct 2026)", () =>
     await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'SENT' WHERE deal_id = ?1").bind(sent).run();
     await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET redraft_note = 'her words' WHERE deal_id = ?1").bind(mine).run();
     expect(await recomposeSecondEmails(env)).toEqual(["Second Co"]);
-    const row = (id: string) => env.WP_OS_DB.prepare("SELECT m.body, r.payload_json FROM tlc_drip_message m JOIN external_effect_request r ON r.id = m.effect_request_id WHERE m.deal_id = ?1").bind(id).first<{ body: string; payload_json: string }>();
-    const q = (await row(queued))!;
-    for (const text of [q.body, (JSON.parse(q.payload_json) as { text: string }).text]) {
-      expect(text).toContain("One quick follow-up on The Learning Club. Rather than describe it, I'd be happy to show you: a sample run of show for the evening, a sketch of what a series of six could look like, and a breakdown of the kind of people we'd have in the room, all built around Second Co.");
-      expect(text).not.toMatch(/\bcall\b|\$|exploring a partnership|quick picture/i);
-    }
-    // Filed with the mailing-address footer (fileDraft adds it), and never re-composed after that.
+    const row = (id: string) => env.WP_OS_DB.prepare("SELECT m.body, m.state, m.held_reason FROM tlc_drip_message m WHERE m.deal_id = ?1").bind(id).first<{ body: string; state: string; held_reason: string | null }>();
     const FILED = `${OLD}\n\n3055 Lombard St #471024, San Francisco, CA 94147`;
-    expect((await row(sent))!.body).toBe(FILED);
-    expect((await row(mine))!.body).toBe(FILED);
-    // Once re-composed it is the current template: a second pass changes nothing.
+    // Held, its words untouched: the drip files it again with the PDF; the old text is never sent.
+    expect(await row(queued)).toEqual({ body: FILED, state: "HELD", held_reason: "an older email 2 without the samples PDF; the drip files it again with the PDF attached" });
+    expect(await row(sent)).toMatchObject({ body: FILED, state: "SENT" });
+    expect(await row(mine)).toMatchObject({ body: FILED, state: "AWAITING_APPROVAL" });
+    // A second pass changes nothing.
     expect(await recomposeSecondEmails(env)).toEqual([]);
   });
 });
@@ -385,7 +382,7 @@ describe("one brand per category per club at a time (owner, 26 Oct 2026)", () =>
     const two = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = 'tld_mem2'").first())! as never;
     // The first replied: the second waits, and no first pitch is drafted for it.
     expect(await categoryRival(env, two, MORNING)).toBe("Memory One");
-    const out = await runDrip(env, MORNING);
+    const out = await runDrip(env, MORNING, "west-peek", DRIP_DEPS);
     expect(out.heldForCategory).toEqual(["Memory Two (after Memory One)"]);
     expect(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_drip_message WHERE deal_id = 'tld_mem2'").first()).toBeNull();
     // The first goes quiet: its one follow-up went eight days ago and it never answered. The category opens.
@@ -397,7 +394,7 @@ describe("one brand per category per club at a time (owner, 26 Oct 2026)", () =>
     // It declines: the second is pitched on the next pass.
     await env.WP_OS_DB.prepare("UPDATE tlc_deal SET stage = 'DECLINED', stop_reason = 'DECLINED' WHERE id = 'tld_mem1'").run();
     await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = ?1 WHERE id = 'tld_mem2'").bind(MORNING.toISOString()).run();
-    await runDrip(env, MORNING);
+    await runDrip(env, MORNING, "west-peek", DRIP_DEPS);
     expect(await env.WP_OS_DB.prepare("SELECT state FROM tlc_drip_message WHERE deal_id = 'tld_mem2' AND step = 0").first()).toEqual({ state: "AWAITING_APPROVAL" });
   });
 });
@@ -406,7 +403,7 @@ describe("an approved email that did not go says why (partner tail, TLC-B5BEZR, 
   it("sending off (the playbook changed after her approval): her approval is kept, nothing goes, and her answer says why and where to approve", async () => {
     // A draft filed while sending is on, listed in an email of its own.
     await env.WP_OS_DB.prepare("INSERT INTO tlc_deal (id, event_id, brand, contact_name, contact_email, contact_source_url, why_fit, next_send_at, firm_scope) VALUES ('tld_gate', 'tlc_2027-03', 'Gate Co', 'Pat Example', 'pat@gateco.example', 'https://example.test/team', 'they build agents', ?1, 'west-peek')").bind(MORNING.toISOString()).run();
-    await runDrip(env, MORNING);
+    await runDrip(env, MORNING, "west-peek", DRIP_DEPS);
     const m = (await env.WP_OS_DB.prepare("SELECT id, approval_card_id FROM tlc_drip_message WHERE deal_id = 'tld_gate' AND step = 0").first<{ id: string; approval_card_id: string }>())!;
     expect(m.approval_card_id).toBeTruthy();
     await env.WP_OS_DB.prepare("INSERT INTO tlc_draft_notice (ref, items_json, firm_scope, batch_card_id, root_ref) VALUES ('TLC-GATE22', ?1, 'west-peek', NULL, 'TLC-GATE22')")
@@ -421,8 +418,10 @@ describe("an approved email that did not go says why (partner tail, TLC-B5BEZR, 
     expect(await cardState("Gate Co")).toBe("approved");
     expect(await env.WP_OS_DB.prepare("SELECT state FROM tlc_drip_message WHERE id = ?1").bind(m.id).first()).toEqual({ state: "AWAITING_APPROVAL" });
     expect(sends.some((s) => s.to === "pat@gateco.example")).toBe(false);
-    const toHer = sends.filter((s) => s.to === SEQUOIA);
+    // Her answer, and (owner, 4 Nov 2026) the one "Brand emails are paused" notice for this change: never silent.
+    const toHer = sends.filter((s) => s.to === SEQUOIA && !/Brand emails are paused/.test(s.subject));
     expect(toHer).toHaveLength(1);
+    expect(sends.filter((s) => s.to === SEQUOIA && /Brand emails are paused/.test(s.subject))).toHaveLength(1);
     // Never "0 sent now" with no reason: the gate's own reason and the place to approve are in her answer.
     expect(toHer[0]!.text).toContain("the sales playbook changed after it was approved");
     expect(toHer[0]!.text).toContain(TLC_SEND_SWITCH_URL);
@@ -431,7 +430,7 @@ describe("an approved email that did not go says why (partner tail, TLC-B5BEZR, 
 
     // She re-approves the current text: the approval she already gave goes on the next pass, with nothing more asked.
     await env.WP_OS_DB.prepare("UPDATE tlc_setting SET value = ?1 WHERE key = 'playbook_approved_hash'").bind(approvedPlaybook).run();
-    await runDrip(env, new Date(MORNING.getTime() + 86_400_000));
+    await runDrip(env, new Date(MORNING.getTime() + 86_400_000), "west-peek", DRIP_DEPS);
     expect(await env.WP_OS_DB.prepare("SELECT state FROM tlc_drip_message WHERE id = ?1").bind(m.id).first()).toEqual({ state: "SENT" });
   });
 

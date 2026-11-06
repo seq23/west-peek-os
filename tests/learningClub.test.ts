@@ -1,3 +1,4 @@
+import { DRIP_DEPS } from "./helpers/tlcSamplesPdf";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { deflateSync } from "node:zlib";
@@ -125,11 +126,11 @@ describe("the rules, pure", () => {
     expect(ticketVerdict(25).meetsFloor).toBe(true);
   });
 
-  it("sends the first pitch and ONE follow-up at day 4, then no more (her flow, 26 Oct 2026), and stops on any stop", () => {
+  it("sends the first pitch and ONE follow-up at day 12, then no more (owner, 4 Nov 2026), and stops on any stop", () => {
     const first = "2027-01-04T14:00:00.000Z";
     const now = new Date(first);
-    expect(TLC_DRIP_DAYS).toEqual([0, 4]);
-    expect(nextDripAt(1, first, now, null)).toBe("2027-01-08T14:00:00.000Z");
+    expect(TLC_DRIP_DAYS).toEqual([0, 12]);
+    expect(nextDripAt(1, first, now, null)).toBe("2027-01-16T14:00:00.000Z");
     expect(nextDripAt(2, first, now, null), "after the one follow-up, no more").toBeNull();
     expect(nextDripAt(3, first, now, null)).toBeNull();
     expect(nextDripAt(1, first, now, "REPLIED")).toBeNull();
@@ -244,9 +245,9 @@ describe("the rules, pure", () => {
     expect(changed.reasons).toEqual(["the brand pitch changed after it was approved; approve it again"]);
   });
 
-  it("prices Title $25,000, Partner $5,000, Lead $10,000, Presenting $15,000 and a Product partner in kind; the goal is $25,000 raised and no exclusivity is promised", async () => {
+  it("prices Partner $5,000, Lead $10,000, Presenting $15,000, Title $25,000 (lowest first) and a Product partner in kind; the goal is $25,000 raised and no exclusivity is promised", async () => {
     const m = await import("../src/shared/tlc/learningClub");
-    expect(m.TLC_TIER_KEYS).toEqual(["TITLE", "PARTNER", "LEAD", "PRESENTING", "PRODUCT"]);
+    expect(m.TLC_TIER_KEYS).toEqual(["PARTNER", "LEAD", "PRESENTING", "TITLE", "PRODUCT"]);
     expect([m.TLC_TIERS.TITLE.priceUsd, m.TLC_TIERS.PARTNER.priceUsd, m.TLC_TIERS.LEAD.priceUsd, m.TLC_TIERS.PRESENTING.priceUsd, m.TLC_TIERS.PRODUCT.priceUsd]).toEqual([25_000, 5_000, 10_000, 15_000, null]);
     expect(m.tierCashUsd("PRODUCT")).toBe(0);
     expect(m.TLC_SPONSOR_GOAL_USD).toBe(25_000);
@@ -271,21 +272,28 @@ describe("the rules, pure", () => {
     for (const text of [m.TLC_PLAYBOOK.join(" ").replace(NO_EXCLUSIVITY, ""), sponsorshipAgreement({ brand: "Acme", topic: "T", eventDate: "2027-02-11", cashUsd: 5000, inKind: null, deliverables: null, dueDate: "2027-02-01" })]) {
       expect(text).not.toMatch(/exclusiv|one (sponsor )?per category|to itself/i);
     }
-    expect(m.TLC_PLAYBOOK.join(" ")).toMatch(/Partner \$5,000.*Lead partner \$10,000.*Presenting partner \$15,000/);
-    // The Title tier, first on the Price line, matching the brand pitch.
-    const price = m.TLC_PLAYBOOK.find((l) => l.startsWith("Price:"))!;
-    expect(price).toMatch(/^Price: Title partner \$25,000: one brand funds the whole room, the club is "presented by" that brand, it is the only cash partner that night, and in-kind partners need its OK\. In January the Title partner is the primary route to \$25K\. Partner \$5,000/);
-    // The room is sized per club, never a fixed 25 to 40.
+    expect(m.TLC_PLAYBOOK.join(" ")).toMatch(/Partner \$5,000.*Lead partner \$10,000.*Presenting partner \$15,000.*Title partner \$25,000/);
+    // Lowest first, every price per event, "Presented by" only at Presenting, Title "with <Brand>" and only where it fits.
+    const price = m.TLC_PLAYBOOK.find((l) => l.startsWith("Price"))!;
+    expect(price).toMatch(/^Price, every one PER EVENT, offered lowest first, each level adding to the one below: Partner \$5,000; Lead partner \$10,000/);
+    expect(price.match(/Presented by/g)).toHaveLength(1);
+    expect(price).toMatch(/Presenting partner \$15,000, the only level sold with "Presented by <Brand>"/);
+    expect(price).toMatch(/Title partner \$25,000, "The Learning Club: <topic>, with <Brand>"/);
+    expect(price).toMatch(/never for software or a service/);
+    expect(price).toMatch(/Never a level below \$5,000\./);
+    // The room is sized per club, never a fixed 25 to 40; a guest is there by choice, never "paid to be there".
     const what = m.TLC_PLAYBOOK.find((l) => l.startsWith("What we sell:"))!;
-    expect(what).toContain("a room sized to the partners' goals (an email to a brand says rooms of 25+ guests; set per club), each guest paid to be there");
+    expect(what).toContain("a room sized to the partners' goals (an email to a brand says rooms of 25+ guests; set per club), each guest there by choice");
+    expect(m.TLC_PLAYBOOK.join(" ")).not.toMatch(/paid to be there|paid ticket|seats sold/);
     expect(m.TLC_PLAYBOOK.join(" ")).not.toMatch(/25 to 40|25–40/);
     expect(m.TLC_PLAYBOOK.join(" ")).not.toContain("a room of 25 to 40 people");
     expect(m.TLC_PLAYBOOK.join(" ")).toMatch(/\$25,000 raised from sponsors, costs up to \$15,000, \$10,000 net/);
   });
 
-  it("the brand pitch sells real hands-on time and paid seats, and carries no script", () => {
+  it("the brand pitch sells real hands-on time, never mentions charging guests, and carries no script", () => {
     const html = renderBrandPitch(VIEW("Matcha & Tea", "2027-02"));
-    expect(html).toMatch(/Every seat is a paid ticket \(\$10\), so everyone in the room chose to come\./);
+    expect(html).not.toMatch(/\$10\b(?!,)|paid ticket|paid for|seats sold/);
+    expect(html).toMatch(/who will choose this topic/);
     expect(html).toMatch(/hands-on hour/);
     expect(html).not.toMatch(/<script/);
     expect(html).toMatch(/prefers-color-scheme:dark/);
@@ -320,7 +328,7 @@ const picksJson = (months: string[], topics: string[]) => JSON.stringify({
 
 beforeAll(async () => {
   t = await createTestDb();
-  env = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>);
+  env = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled", WP_OS_DOCUMENTS: t.docs } as Partial<Env>);
   await env.WP_OS_DB.prepare("UPDATE ai_employee SET status = 'ACTIVE' WHERE id IN ('aie_parker','aie_wynn')").run();
 });
 afterAll(async () => { await disposeTestDb(t); });
@@ -445,7 +453,7 @@ describe("the Learning Club in the database", () => {
   });
 
   it("HOLDS every brand email while the switch is off: composed, stored, nothing filed or sent", async () => {
-    const out = await runDrip(env, new Date("2026-11-09T15:00:00.000Z"));
+    const out = await runDrip(env, new Date("2026-11-09T15:00:00.000Z"), "west-peek", DRIP_DEPS);
     expect(out.gate.open).toBe(false);
     expect(out.held).toBe(1);
     expect(out.awaitingApproval + out.sent).toBe(0);
@@ -459,18 +467,18 @@ describe("the Learning Club in the database", () => {
     // The old time-stamped approvals alone open nothing.
     await env.WP_OS_DB.prepare("INSERT INTO tlc_setting (key, value) VALUES ('onepager_mock_approved_at','x'),('playbook_approved_at','x') ON CONFLICT(key) DO UPDATE SET value = excluded.value").run();
     await env.WP_OS_DB.prepare("UPDATE tlc_setting SET value = 'on' WHERE key = 'brand_send'").run();
-    const onEnv = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>);
+    const onEnv = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled", WP_OS_DOCUMENTS: t.docs } as Partial<Env>);
     // Default deny: nothing is on her Outside email list until she allows it.
-    expect((await runDrip(onEnv, new Date("2026-11-09T15:03:00.000Z"))).gate.reasons).toContain("TLC brand sales is not on your Outside email list — tap to allow.");
+    expect((await runDrip(onEnv, new Date("2026-11-09T15:03:00.000Z"), "west-peek", DRIP_DEPS)).gate.reasons).toContain("TLC brand sales is not on your Outside email list — tap to allow.");
     await env.WP_OS_DB.prepare("INSERT INTO outside_email_allow (item_type, item_id, allowed, changed_by) VALUES ('JOB','tlc_brand_sales',1,'test')").run();
-    expect((await runDrip(onEnv, new Date("2026-11-09T15:04:00.000Z"))).gate.reasons).toEqual(["the owner has not approved the brand pitch", "the owner has not approved the sales playbook"]);
+    expect((await runDrip(onEnv, new Date("2026-11-09T15:04:00.000Z"), "west-peek", DRIP_DEPS)).gate.reasons).toEqual(["the owner has not approved the brand pitch", "the owner has not approved the sales playbook"]);
     const h = await contentHashes(env);
     await env.WP_OS_DB.prepare("INSERT INTO tlc_setting (key, value) VALUES ('pitch_approved_hash', ?1), ('playbook_approved_hash', ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(h.pitch, h.playbook).run();
     await env.WP_OS_DB.prepare("UPDATE tlc_setting SET value = 'on' WHERE key = 'brand_send'").run();
-    const on = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>);
+    const on = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled", WP_OS_DOCUMENTS: t.docs } as Partial<Env>);
     // Each queued address passed NeverBounce, as the first email requires (26 Oct 2026).
     await addressesPassed(env);
-    const out = await runDrip(on, new Date("2026-11-09T15:05:00.000Z"));
+    const out = await runDrip(on, new Date("2026-11-09T15:05:00.000Z"), "west-peek", DRIP_DEPS);
     expect(out.awaitingApproval).toBe(1);
     expect(out.sent).toBe(0);
     // She is told, by name and club, what waits on Approvals.
@@ -512,7 +520,7 @@ describe("the Learning Club in the database", () => {
     expect(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_brand_reply WHERE deal_id = 'tld_noco' AND state != 'CLOSED'").first()).toBeNull();
     expect(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_pitch_followup WHERE deal_id = 'tld_noco'").first()).toBeNull();
     // Nor does the drip's 15-minute fallback ever turn it into a yes.
-    await runDrip(env, new Date("2026-11-10T12:00:00Z"));
+    await runDrip(env, new Date("2026-11-10T12:00:00Z"), "west-peek", DRIP_DEPS);
     expect(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_pitch_followup WHERE deal_id = 'tld_noco'").first()).toBeNull();
   });
 

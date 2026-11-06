@@ -127,6 +127,8 @@ export interface SamplesInput {
   words: SamplesWords;
   mix: readonly MixSlice[];
   overrides?: SamplesOverrides;
+  /** The deal leads with the six-room series (owner, 4 Nov 2026): the series page comes first. */
+  leadWithSeries?: boolean;
 }
 
 /** "The Learning Club: Build Your First AI Agent" and "Build Your First AI Agent" name the same club. */
@@ -277,7 +279,10 @@ ${rows}
     `<li><b>Two full quarters of visibility:</b> the same people come back every month, and ${b} is part of what they learn, not a logo they pass.</li>`,
     `<li><b>${esc(w.whyLead)}</b> ${esc(w.whyLine)}</li>`,
     "<li><b>Builders and their teams:</b> independent builders plus people from companies joining with team seats.</li>"].join(" ");
-  const page2 = `<section class="sheet"><div class="band">${kick}<div class="ttl sm">${o.seriesHeading ? esc(o.seriesHeading) : `A sample series: ${esc(w.seriesTitle)}`}</div><div class="sub">${o.seriesSub ? esc(o.seriesSub) : `Partner on a single evening, or on a series of 6 or more. Here is a sample series of six, to show what one could look like: one build that grows every month, ${esc(w.seriesTail)}`}</div></div>
+  const seriesSub = i.leadWithSeries
+    ? `Six rooms, one a month, with ${b} in every room: one build that grows every month, ${esc(w.seriesTail)} A single evening is the option.`
+    : `Partner on a single evening, or on a series of 6 or more. Here is a sample series of six, to show what one could look like: one build that grows every month, ${esc(w.seriesTail)}`;
+  const page2 = `<section class="sheet"><div class="band">${kick}<div class="ttl sm">${o.seriesHeading ? esc(o.seriesHeading) : `${i.leadWithSeries ? "The series of six" : "A sample series"}: ${esc(w.seriesTitle)}`}</div><div class="sub">${o.seriesSub ? esc(o.seriesSub) : seriesSub}</div></div>
 <div class="body"><div class="six">${cards}</div><h5>Why six months works for a partner</h5><ul class="why"> ${why}</ul>
 <div class="foot"><span>${conf(o.footer2 ? esc(o.footer2) : `Dates move with ${b}'s launch calendar. Any single month can be partnered on its own.`)}</span><span>2 / 3</span></div></div></section>`;
   const legend = i.mix.map((s, k) => `<div><i style="background:${COLORS[k % COLORS.length]}"></i><b>${esc(s.label)} · ~${s.pct}%</b><span>${esc(s.roles.join(", "))}${s.note ? `; ${esc(s.note)}` : ""}</span></div>`).join("");
@@ -287,7 +292,7 @@ ${rows}
 <h5>What partnering gets ${b}</h5><ul class="why"> ${perks} <li><b>A room your size:</b> from an intimate ${BRAND_ROOM_WORDS} guests, and the guest list you want: invitations and room in your name, warm introductions after, and content from every evening for your channels.</li></ul>${TEAM_HTML}
 ${legalHtml(b)}<div class="foot"><span>${conf(`West Peek Ventures · ${esc(TLC_OWNER.email)}`)}</span><span>3 / 3</span></div></div></section>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>The Learning Club: ${title} · ${b}</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,600&family=IBM+Plex+Sans:wght@400;600&display=swap">${STYLE}${i.overrides ? "<style>.sheet{height:auto;min-height:11in;overflow:visible}</style>" : ""}</head><body>${page1}${page2}${page3}</body></html>`;
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,600&family=IBM+Plex+Sans:wght@400;600&display=swap">${STYLE}${i.overrides ? "<style>.sheet{height:auto;min-height:11in;overflow:visible}</style>" : ""}</head><body>${i.leadWithSeries ? `${page2.replace("<span>2 / 3</span>", "<span>1 / 3</span>")}${page1.replace("<span>1 / 3</span>", "<span>2 / 3</span>")}` : `${page1}${page2}`}${page3}</body></html>`;
 }
 
 /** The PDF's file name, from the CURRENT title (her edited one, else the brand's) and the brand. */

@@ -1,3 +1,5 @@
+import { DRIP_DEPS } from "./helpers/tlcSamplesPdf";
+import { DRIP_STEP_2_RULE } from "../src/shared/tlc/dripPolicy";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
@@ -37,7 +39,7 @@ async function deal(brand: string, month: string, extra: Record<string, unknown>
 
 beforeAll(async () => {
   t = await createTestDb();
-  env = { ...makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>), RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures", WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON: SERVICE_ACCOUNT, WP_OS_NEVERBOUNCE_API_KEY: "nb_test" } as Env;
+  env = { ...makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled", WP_OS_DOCUMENTS: t.docs } as Partial<Env>), RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures", WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON: SERVICE_ACCOUNT, WP_OS_NEVERBOUNCE_API_KEY: "nb_test" } as Env;
   vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
     const u = String(url);
     if (u.startsWith("https://api.neverbounce.com/")) return new Response(JSON.stringify({ status: "success", result: "valid" }), { status: 200 });
@@ -84,7 +86,7 @@ describe("A · no waiting draft is left out of her email", () => {
   it("drafts filed after the week's email go to her in ONE catch-up email with every waiting draft, once", async () => {
     await deal("Early Co", "2027-01");
     const card = await openBrandBatchCard(env, MONDAY);
-    await runDrip(env, MONDAY);
+    await runDrip(env, MONDAY, "west-peek", DRIP_DEPS);
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE' WHERE id = ?1").bind(card.cardId).run();
     expect(await sendDraftNotice(env, MONDAY)).toMatch(/^this week's email TLC-\w{6} listing 1 draft/);
     // Later that day Parker's list adds two more; they are drafted, and were in no email (the 26 Oct defect).
@@ -92,7 +94,7 @@ describe("A · no waiting draft is left out of her email", () => {
     await deal("Late One", "2027-02");
     await deal("Late Two", "2027-03");
     await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = ?1 WHERE brand LIKE 'Late%'").bind(later.toISOString()).run();
-    await runDrip(env, later);
+    await runDrip(env, later, "west-peek", DRIP_DEPS);
     await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET created_at = ?1 WHERE deal_id IN ('tld_LateOne','tld_LateTwo')").bind(later.toISOString()).run();
     expect((await unlistedDrafts(env, "west-peek")).map((d) => d.brand).sort()).toEqual(["Late One", "Late Two"]);
     sends.length = 0;
@@ -111,13 +113,22 @@ describe("A · no waiting draft is left out of her email", () => {
   });
 });
 
-describe("B · a brand she emailed herself gets its follow-up, for her approval", () => {
-  it("drip_step 1 with no date and no draft is armed and drafted; her own first email is never re-sent by Wynn", async () => {
+describe("B · a brand she emailed herself gets its one follow-up, with the samples PDF, on its own", () => {
+  it("drip_step 1 with no date and no draft is armed and queued (owner, 4 Nov 2026: email 2 is the only automatic send); her own first email is never re-sent by Wynn", async () => {
     await env.WP_OS_DB.prepare("INSERT INTO tlc_must_pitch (id, month, brand, reason, added_by, added_at, owner_contacted_at) VALUES ('tmp_voice', '2027-02', 'Voice Co', 'AI partner', 'Sequoia', '2026-11-01T00:00:00.000Z', '2026-11-01T22:00:00.000Z')").run();
     await deal("Voice Co", "2027-02", { stage: "PITCHED", drip_step: 1, first_sent_at: "2026-11-01T21:34:13.000Z", next_send_at: null, contact_source_url: "owner-contacted" });
     expect(await armOwnerFollowUps(env, MONDAY)).toEqual(["Voice Co"]);
-    const out = await runDrip(env, MONDAY);
-    expect(out.newDrafts.filter((d) => d.brand === "Voice Co").map((d) => d.step)).toEqual([1]);
+    // Due on day 12 from her own first email (owner, 4 Nov 2026), not day 4.
+    expect((await env.WP_OS_DB.prepare("SELECT next_send_at FROM tlc_deal WHERE brand = 'Voice Co'").first<{ next_send_at: string }>())!.next_send_at).toBe("2026-11-13T21:34:13.000Z");
+    const out = await runDrip(env, new Date("2026-11-13T21:40:00.000Z"), "west-peek", DRIP_DEPS);
+    // Not a draft for her: queued to go on its own, the PDF attached, its card decided with her ruling named.
+    expect(out.newDrafts.filter((d) => d.brand === "Voice Co")).toEqual([]);
+    expect(out.followUpsQueued).toBe(1);
+    const m = (await env.WP_OS_DB.prepare("SELECT m.step, m.state, a.state AS card, a.decided_by, a.decision_note, r.payload_json FROM tlc_drip_message m JOIN tlc_deal d ON d.id = m.deal_id JOIN approval_card a ON a.id = m.approval_card_id JOIN external_effect_request r ON r.id = m.effect_request_id WHERE d.brand = 'Voice Co'").first<{ step: number; state: string; card: string; decided_by: string; decision_note: string; payload_json: string }>())!;
+    // Decided by the policy, with the rule quoted: never recorded as a person's approval.
+    expect(m).toMatchObject({ step: 1, state: "AWAITING_APPROVAL", card: "approved", decided_by: "policy:drip_step_2" });
+    expect(m.decision_note).toBe(DRIP_STEP_2_RULE);
+    expect((JSON.parse(m.payload_json) as { attachments: Array<{ filename: string; contentType: string }> }).attachments).toEqual([expect.objectContaining({ contentType: "application/pdf" })]);
     // Armed once: a draft exists now, so nothing re-arms it (a skip would leave it HELD, still never re-armed).
     expect(await armOwnerFollowUps(env, MONDAY)).toEqual([]);
   });
@@ -229,5 +240,65 @@ describe("F · the go/no-go rule", () => {
     await deal("Signed Co", "2027-01", { stage: "AGREED", tier: "PARTNER", cash_offer_usd: 5000, first_sent_at: "2026-11-01T00:00:00.000Z", next_send_at: null });
     expect(await applyGoNoGo(env, await club("tlc_2027-01"), new Date("2026-12-04T12:00:00.000Z"))).toBe(false);
     expect((await club("tlc_2027-01")).status).toBe("TOPIC_READY");
+  });
+});
+
+describe("G · email 1 never carries or waits for the samples PDF; email 2 carries it (owner, 4 Nov 2026)", () => {
+  const broken = { samples: { renderPdf: async () => ({ pdfBase64: null, pageCount: 0, reason: "the renderer is busy" }), writer: async () => ({ ok: false, text: "" }) } };
+  const pdfCo = () => env.WP_OS_DB.prepare("SELECT m.step, m.state, m.held_reason, m.approval_card_id, r.payload_json FROM tlc_drip_message m LEFT JOIN external_effect_request r ON r.id = m.effect_request_id WHERE m.deal_id = 'tld_PdfCo' ORDER BY m.step DESC").first<{ step: number; state: string; held_reason: string | null; approval_card_id: string | null; payload_json: string | null }>();
+
+  it("email 1 is filed and sends with no PDF present at all", async () => {
+    await deal("Pdf Co", "2027-03");
+    // Earlier tests here changed the clubs; she approves the content as it stands now, so the gate is open.
+    await env.WP_OS_DB.prepare("UPDATE tlc_event SET status = 'TOPIC_READY' WHERE id = 'tlc_2027-03'").run();
+    const h = await contentHashes(env);
+    await env.WP_OS_DB.prepare("UPDATE tlc_setting SET value = CASE key WHEN 'pitch_approved_hash' THEN ?1 ELSE ?2 END WHERE key IN ('pitch_approved_hash','playbook_approved_hash')").bind(h.pitch, h.playbook).run();
+    const first = await runDrip(env, MONDAY, "west-peek", broken);
+    expect(first.newDrafts.filter((d) => d.brand === "Pdf Co").map((d) => d.step)).toEqual([0]);
+    expect(first.samplesPending).toContain("Pdf Co");
+    expect(first.samplesHeld ?? []).not.toContain("Pdf Co");
+    expect(await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_samples WHERE deal_id = 'tld_PdfCo' AND pdf_r2_key IS NOT NULL").first()).toEqual({ n: 0 });
+    const filed = (await pdfCo())!;
+    expect(filed).toMatchObject({ step: 0, state: "AWAITING_APPROVAL", held_reason: null });
+    expect((JSON.parse(filed.payload_json!) as { attachments?: unknown[] }).attachments ?? []).toEqual([]);
+    // Her approval, and email 1 goes, still with no PDF anywhere.
+    const { decideApproval } = await import("../src/worker/services/approvals");
+    const { actorForFirmUser } = await import("../src/worker/services/authorize");
+    await decideApproval(env, (await actorForFirmUser(env, "fu_sequoia_taylor"))!, filed.approval_card_id!, "approved", "approved");
+    sends.length = 0;
+    const out = await runDrip(env, new Date(MONDAY.getTime() + 60_000), "west-peek", broken);
+    expect(out.sentBrands).toContain("Pdf Co");
+    expect(sends.filter((s) => s.to.includes("pdfco.example"))).toHaveLength(1);
+    expect((await env.WP_OS_DB.prepare("SELECT state FROM tlc_drip_message WHERE deal_id = 'tld_PdfCo' AND step = 0").first<{ state: string }>())!.state).toBe("SENT");
+  });
+
+  it("email 2 waits for the PDF (SAMPLES_PDF_NOT_READY), then goes with it attached, decided by the policy", async () => {
+    const day12 = new Date(MONDAY.getTime() + 12 * 86_400_000 + 120_000);
+    const held = await runDrip(env, day12, "west-peek", broken);
+    expect(held.samplesHeld).toContain("Pdf Co");
+    const h = (await pdfCo())!;
+    expect(h).toMatchObject({ step: 1, state: "HELD", approval_card_id: null });
+    expect(h.held_reason).toMatch(/^SAMPLES_PDF_NOT_READY: the samples PDF could not be made \(the PDF could not be made yet: the renderer is busy\)/);
+    const queued = await runDrip(env, new Date(day12.getTime() + 60_000), "west-peek", DRIP_DEPS);
+    expect(queued.followUpsQueued).toBe(1);
+    const q = (await pdfCo())!;
+    expect(q).toMatchObject({ step: 1, state: "AWAITING_APPROVAL" });
+    expect((JSON.parse(q.payload_json!) as { attachments: Array<{ contentType: string }> }).attachments).toEqual([expect.objectContaining({ contentType: "application/pdf" })]);
+    expect(await env.WP_OS_DB.prepare("SELECT decided_by, decision_note FROM approval_card WHERE id = ?1").bind(q.approval_card_id).first()).toEqual({ decided_by: "policy:drip_step_2", decision_note: DRIP_STEP_2_RULE });
+    sends.length = 0;
+    await runDrip(env, new Date(day12.getTime() + 120_000), "west-peek", DRIP_DEPS);
+    expect(sends.filter((s) => s.to.includes("pdfco.example"))).toHaveLength(1);
+    expect(await env.WP_OS_DB.prepare("SELECT state FROM tlc_samples WHERE deal_id = 'tld_PdfCo'").first()).toEqual({ state: "SENT" });
+  });
+
+  it("the policy decides nothing else: the same decider on any other card is no receipt", async () => {
+    const { verifyAuthorizationReceipt } = await import("../src/worker/services/authorize");
+    await env.WP_OS_DB.prepare("INSERT INTO external_effect_request (id,effect_type,destination,payload_json,requested_by_type,requested_by_id,outside_job) VALUES ('eer_forged','email.send','pat@pdfco.example','{}','AI','aie_wynn','tlc_brand_sales')").run();
+    await env.WP_OS_DB.prepare("INSERT INTO approval_card (id, action_key, object_type, object_id, title, payload_json, requested_by_type, requested_by_id, required_approver_roles_json, state, decided_by) VALUES ('apc_forged','effect.email.send','external_effect_request','eer_forged','x','{}','AI','aie_wynn','[\"MANAGING_PARTNER\"]','approved','policy:drip_step_2')").run();
+    expect(await verifyAuthorizationReceipt(env, "apc_forged", "effect.email.send", { objectType: "external_effect_request", objectId: "eer_forged" })).toMatchObject({ ok: false, reason: "receipt_policy_not_applicable" });
+    // A step-0 (email 1) message with that card is still refused.
+    await deal("Forged Co", "2027-03");
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_drip_message (id,deal_id,step,subject,body,state,effect_request_id,approval_card_id) VALUES ('tdm_forged','tld_ForgedCo',0,'x','x','AWAITING_APPROVAL','eer_forged','apc_forged')").run();
+    expect((await verifyAuthorizationReceipt(env, "apc_forged", "effect.email.send", { objectType: "external_effect_request", objectId: "eer_forged" })).ok).toBe(false);
   });
 });

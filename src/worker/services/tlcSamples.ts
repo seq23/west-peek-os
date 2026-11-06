@@ -1,3 +1,4 @@
+import { sponsorOf } from "../../shared/tlc/pitch";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import type { RouteContext } from "../router";
@@ -38,16 +39,25 @@ export interface SamplesDeps { renderPdf?: PdfRenderer; writer?: SamplesWriter }
 export const samplesPreviewUrl = (token: string): string => `https://os.joinwestpeek.com/api/tlc-pitch/samples/${token}`;
 const newToken = (): string => [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
 
-/** Shared with the email reviser: the governed Claude-first important-work route, always private. */
+/**
+ * BRAND AND TLC EMAILS ARE NEVER CONFIDENTIAL (owner ruling, 4 Nov 2026), so the reviser of Wynn's drafts and the samples
+ * runs on the routine lanes, free ones included, like other brand work: declared public-model approved, never marked
+ * confidential or important. INTERNAL stays the recipient label (it goes to her). runAi still revokes the public
+ * approval by itself if an LP or deal-term marker is in the words.
+ */
+export const TLC_REVISION_BUDGET = { requiresSearch: false, expectedOutputTokens: 4000, judgement: true, publicModelApproved: true } as const;
 export const tlcRevisionWriter: SamplesWriter = async (env, actor, prompt) => {
   const { run } = await runAi(env, {
     purpose: "The Learning Club: revise the brand email or samples",
     actor, inputs: [prompt], sensitivity: "INTERNAL",
-    budgetContext: { requiresSearch: false, expectedOutputTokens: 4000, judgement: true, important: true, confidential: true },
+    budgetContext: { ...TLC_REVISION_BUDGET, judgement: true },
     routing: { category: "INTELLIGENCE" },
   });
   return { ok: run.status === "COMPLETED" && Boolean(run.output_text), text: run.output_text ?? "" };
 };
+
+const rulesOf = async (env: Env, firmScope: string): Promise<Array<{ code: string | null }>> =>
+  (await env.WP_OS_DB.prepare("SELECT code FROM tlc_wynn_rule WHERE active = 1 AND firm_scope = ?1").bind(firmScope).all<{ code: string | null }>().catch(() => ({ results: [] as Array<{ code: string | null }> }))).results ?? [];
 
 /** The input the page and the PDF are both made from: one function, so the two can never differ. */
 async function samplesInputOf(env: Env, deal: TlcDealRow, ev: TlcEventRow, words: StoredWords, overridesJson: string | null): Promise<SamplesInput> {
@@ -56,6 +66,8 @@ async function samplesInputOf(env: Env, deal: TlcDealRow, ev: TlcEventRow, words
   return {
     // The date line is the year, "dates flexible", whatever the club's status (owner, 30 Oct 2026).
     brand, topic: ev.topic ?? "", month: ev.month,
+    // Her angle or Wynn's rule asks for the series of six: it leads (owner, 4 Nov 2026).
+    leadWithSeries: sponsorOf(deal, await rulesOf(env, deal.firm_scope)).series,
     words: completeWords(words, brand, ev.topic ?? ""), mix: readMix(mixRaw),
     ...(overridesJson ? { overrides: samplesOverridesSchema.parse(JSON.parse(overridesJson)) } : {}),
   };

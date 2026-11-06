@@ -28,6 +28,9 @@ beforeAll(async () => {
   });
   await t.db.prepare("INSERT INTO firm_user (id, email, full_name, status) VALUES ('fu_thread_fixture', 'partner@example.test', 'Fixture Partner', 'ACTIVE')").run();
   await t.db.prepare("INSERT INTO firm_user_role (firm_user_id, role_id) VALUES ('fu_thread_fixture', 'role_managing_partner')").run();
+  // A brand email needs HER approval of it (owner ruling, 4 Nov 2026): the receipt fixture is decided by her.
+  await t.db.prepare("INSERT OR IGNORE INTO firm_user (id, email, full_name, status) VALUES ('fu_sequoia_taylor', 'sequoia@westpeek.ventures', 'Sequoia Taylor', 'ACTIVE')").run();
+  await t.db.prepare("INSERT OR IGNORE INTO firm_user_role (firm_user_id, role_id) VALUES ('fu_sequoia_taylor', 'role_managing_partner')").run();
 });
 afterEach(() => { sent.length = 0; });
 afterAll(async () => { vi.unstubAllGlobals(); await disposeTestDb(t); });
@@ -42,7 +45,7 @@ async function deal(id: string, email = "hello@fixture.example") {
 async function send(d: Awaited<ReturnType<typeof deal>>, subject: string) {
   const card = await fileDraft(env, d, { subject, text: "Fixture message." });
   // Local receipt fixture only. No approval API or live transport is called.
-  await t.db.prepare("UPDATE approval_card SET state = 'approved', decided_by = 'fu_thread_fixture' WHERE id = ?1").bind(card).run();
+  await t.db.prepare("UPDATE approval_card SET state = 'approved', decided_by = 'fu_sequoia_taylor' WHERE id = ?1").bind(card).run();
   const request = (await t.db.prepare("SELECT object_id FROM approval_card WHERE id = ?1").bind(card).first<{ object_id: string }>())!;
   const result = await executeExternalEffect(approvedFor(env, card, d.contact_email), actor, request.object_id, card);
   await t.db.prepare("UPDATE tlc_drip_message SET state = 'SENT' WHERE effect_request_id = ?1").bind(request.object_id).run();
