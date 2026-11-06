@@ -1,3 +1,4 @@
+import { meetingIsConfidential } from "../ai/committedLps";
 import { z } from "zod";
 import { NOT_SUPERSEDED_NOTE_CLAUSE } from "./meetLiveNotes";
 import { meetLiveView, type MeetLiveView } from "./meetLiveView";
@@ -93,9 +94,12 @@ async function requireMeeting(env: Env, meetingId: string): Promise<MeetingRow> 
   return row;
 }
 
-/** Phase B's rule, reused verbatim: an LP conversation names limited partners. */
-export function isConfidentialMeeting(meeting: Pick<MeetingRow, "meeting_type" | "lp_record_id">): boolean {
-  return meeting.meeting_type === "LP" || meeting.lp_record_id !== null;
+/**
+ * Phase B's rule, narrowed by the owner's ruling of 4 Nov 2026: a meeting is confidential only when it is with an LP
+ * who has COMMITTED to a West Peek fund. A prospect's meeting is not (committedLps.ts).
+ */
+export async function isConfidentialMeeting(env: Env, meeting: Pick<MeetingRow, "meeting_type" | "lp_record_id">): Promise<boolean> {
+  return meetingIsConfidential(env, meeting);
 }
 
 // ── The rolling summary ────────────────────────────────────────────────────────────────────────
@@ -174,7 +178,7 @@ export async function roomState(env: Env, identity: FirmUserIdentity, meetingId:
   ]);
   const builds = await artifactStatuses(env, (artifacts.results ?? []).filter((a) => a.kind === "artifact").map((a) => String(safeJson(a.body_json).artifact_id ?? "")).filter(Boolean));
   return {
-    meeting: { id: meeting.id, title: meeting.title, meeting_type: meeting.meeting_type, status: meeting.status, ai_access_state: meeting.ai_access_state, confidential: isConfidentialMeeting(meeting) },
+    meeting: { id: meeting.id, title: meeting.title, meeting_type: meeting.meeting_type, status: meeting.status, ai_access_state: meeting.ai_access_state, confidential: await isConfidentialMeeting(env, meeting) },
     host: host ? { name: host.name, role: host.role } : null,
     capture,
     summary: summary ?? null,
@@ -321,7 +325,9 @@ const defaultAnswerer: RoomAnswerer = async (env, actor, { prompt, meeting, empl
     // The meeting's own label, never lowered — and the CONTENT rule at the router: an LP
     // conversation is confidential, exactly as Phase B derives it (isConfidentialMeeting).
     sensitivity: meeting.privacy_label as never,
-    budgetContext: { judgement: true, expectedOutputTokens: 600, confidential: isConfidentialMeeting(meeting) },
+    // A prospect's meeting is not confidential (owner ruling, 4 Nov 2026) and is declared public-model approved;
+    // `confidential` wins whenever both are set, and a committed LP's name in the text revokes it at the router.
+    budgetContext: { judgement: true, expectedOutputTokens: 600, confidential: await isConfidentialMeeting(env, meeting), publicModelApproved: meeting.lp_record_id !== null || meeting.meeting_type === "LP" },
     routing: { category: "INTELLIGENCE", taskClass: "ask_the_room" },
   });
   return { ok: run.status === "COMPLETED" && Boolean(run.output_text), text: run.output_text ?? "", aiRunId: run.id, detail: run.failure_reason ?? run.status };

@@ -14,6 +14,7 @@ PRESENT / MISSING / UNPROVEN (UNPROVEN = cannot be confirmed without credentials
 | `GOOGLE_GENERATIVE_AI_API_KEY` | yes (vault) | P4 live proof | AI provider adapter | MISSING — CREDENTIAL GATE |
 | `PERPLEXITY_API_KEY` | yes (vault) | P4 live proof (optional provider) | AI provider adapter | MISSING — CREDENTIAL GATE |
 | `OPENROUTER_API_KEY` | yes (vault) | P4 live proof (optional provider) | AI provider adapter | MISSING — CREDENTIAL GATE |
+| `BRAVE_SEARCH_API_KEY` | yes (Worker secret) | $0 live research, route 2 (5 Nov 2026) | `providers/freeSearch.ts` (Brave Search API, free plan, 20 queries/day) | MISSING — set as a Worker secret |
 | `GOOGLE_OAUTH_CLIENT_ID` | no | P51 calendar + Gmail send | `effects/googleClient.ts` | SET |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | yes (vault) | P51 calendar + Gmail send | `effects/googleClient.ts` | SET |
 | `WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON` | yes (vault, as `GSC_SERVICE_ACCOUNT_JSON`; aliased by `scripts/vault/cloudflare-mapping.json`) | Phase Meet calendar sync + Meet ingest, as the firm | `effects/googleWorkspaceClient.ts` | IN VAULT — sync with `npm run vault:sync:cloudflare` |

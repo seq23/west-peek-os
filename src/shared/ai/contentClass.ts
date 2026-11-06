@@ -51,8 +51,8 @@
  * work product is either published, handed to a guest, or about people the firm is trying to hire.
  * None of it touches the private side of the fund.
  *
- * WHAT IS CONSPICUOUSLY ABSENT, and must stay absent: every INVESTMENT_OS, FUNDRAISING_LP_OS,
- * PORTFOLIO_OS, FINANCE_OS and LEGAL_COMPLIANCE_OS machine, plus RELATIONSHIP_OS (which holds LP
+ * WHAT IS CONSPICUOUSLY ABSENT, and must stay absent: every INVESTMENT_OS, every FUNDRAISING_LP_OS machine
+ * except `lp_fundraising` (prospect work, owner ruling 4 Nov 2026), PORTFOLIO_OS, FINANCE_OS and LEGAL_COMPLIANCE_OS machine, plus RELATIONSHIP_OS (which holds LP
  * relationships) and GOVERNANCE (which reads everything else). Adding a row here is a decision
  * about where the firm's words may go, and it should look like one.
  */
@@ -71,28 +71,33 @@ export const PUBLIC_MODEL_APPROVED_MACHINE_KEYS: ReadonlySet<string> = new Set([
   "venture_teaching",
   // Hiring searches: the people the firm is trying to hire, and the briefs it writes to find them.
   "external_helper_coordination",
+  // LP PROSPECTS (owner ruling, 4 Nov 2026): pipeline, outreach drafts, intro emails, replies before a
+  // commitment, meeting prep. Not confidential. A committed LP's name, or any deal-term or fund-figure
+  // marker, still revokes this per run — so the moment a prospect commits, their name stops leaving.
+  "lp_fundraising",
 ]);
 
 /**
- * Markers that force PRIVATE_MODEL_ONLY, whatever the card says.
+ * Markers that force PRIVATE_MODEL_ONLY, whatever the card says — DEAL TERMS AND FUND FIGURES ONLY.
  *
- * Deliberately few, and every one of them is a term of art that does not appear in ordinary prose
- * about an event or a hire. The words that did the damage in the sister system — "commitment",
- * "capital", "fund", "round", "investor" — are NOT here and must not be added: they are everyday
- * English in exactly the material this rule is meant to let through ("a commitment to the
- * programme", "the capital of the state", "fundraiser").
+ * THE OWNER'S RULING, 4 Nov 2026: private-model-only means ONLY (a) the names of LPs who have COMMITTED to a
+ * West Peek fund and (b) deal terms and fund figures. An LP PROSPECT is not confidential — outreach, intro
+ * emails, replies before a commitment, meeting prep and research on one may use the free models and Codex.
+ * So the bare words "LP", "LPAC", "limited partner" and "investor" are NOT markers any more: they named every
+ * prospect conversation the firm has and sent all of it to one seat. A committed LP is recognised by NAME,
+ * from the records that hold a commitment (`worker/ai/committedLps.ts`), passed in as `committedLpNames`.
  *
- * Each entry is a multi-word phrase or a distinctly financial compound, which is what keeps the
- * false-positive rate near zero: "limited partner" is not a phrase that appears in a run of show.
+ * Every entry is a term of art for a deal term or a fund figure, which is what keeps the false-positive rate
+ * near zero: "term sheet" is not a phrase that appears in a run of show. "Carry" alone is everyday English, so
+ * only a carry stated as a figure counts.
  */
 const PRIVATE_MODEL_ONLY_MARKERS: readonly RegExp[] = Object.freeze([
-  // LP identity and the fundraising relationship.
-  /\blimited partners?\b/i,
-  /\bLPAC?\b/,
+  // The commitment itself.
   /\bcapital call\b/i,
   /\bsubscription agreement\b/i,
   /\bside letter\b/i,
   /\bcommitment amount\b/i,
+  /\bcommitted capital\b/i,
   // Deal terms.
   /\bterm sheet\b/i,
   /\bcap table\b/i,
@@ -102,9 +107,12 @@ const PRIVATE_MODEL_ONLY_MARKERS: readonly RegExp[] = Object.freeze([
   /\bpro ?rata rights?\b/i,
   /\bSAFE (?:note|agreement)\b/,
   /\bconvertible note\b/i,
-  // Fund figures and diligence.
-  /\bcarried interest\b/i,
+  // Fund figures.
+  /\bfund size\b/i,
   /\bmanagement fee\b/i,
+  /\bcarried interest\b/i,
+  /\b\d{1,2}(?:\.\d+)?\s?%\s+carry\b/i,
+  /\bcarry of \d{1,2}(?:\.\d+)?\s?%/i,
   /\bnet (?:IRR|TVPI|DPI|MOIC)\b/i,
   /\bdata ?room\b/i,
   /\bdue diligence (?:questionnaire|request)\b/i,
@@ -155,6 +163,13 @@ export function classifyContent(args: {
   machineKey?: string | null;
   /** The text that would actually be sent. */
   inputs?: readonly string[];
+  /**
+   * Legal names of LPs who have COMMITTED to a West Peek fund (`worker/ai/committedLps.ts`). A text naming
+   * one is PRIVATE_MODEL_ONLY whatever was declared.
+   */
+  committedLpNames?: readonly string[];
+  /** False when the commitment records could not be read: nothing may then be declared public (fail closed). */
+  committedLpListReadable?: boolean;
 }): ContentClassVerdict {
   if (args.declaredPrivateModelOnly === true) {
     return {
@@ -175,6 +190,27 @@ export function classifyContent(args: {
     };
   }
 
+  if (args.committedLpListReadable === false) {
+    return {
+      publicModelApproved: false,
+      revokedBy: "committed_lp_records_unreadable",
+      reason:
+        "the records of which LPs have committed could not be read, so this text cannot be shown to name no committed LP — " +
+        "it was treated as PRIVATE_MODEL_ONLY",
+    };
+  }
+  const named = committedLpNamedIn(args.inputs ?? [], args.committedLpNames ?? []);
+  if (named) {
+    return {
+      publicModelApproved: false,
+      // The marker is named by kind, never by the LP's name: the reason lands on the run record.
+      revokedBy: "committed_lp_name",
+      reason:
+        "the text names an LP who has committed to a West Peek fund, so it was treated as PRIVATE_MODEL_ONLY and no " +
+        "training-permitting route (a free model or Codex) may serve it",
+    };
+  }
+
   for (const marker of PRIVATE_MODEL_ONLY_MARKERS) {
     for (const text of args.inputs ?? []) {
       if (marker.test(text)) {
@@ -182,7 +218,7 @@ export function classifyContent(args: {
           publicModelApproved: false,
           revokedBy: marker.source,
           reason:
-            `this card is marked PUBLIC_MODEL_APPROVED, but the text contains ${marker.source} — an LP or deal-term ` +
+            `this card is marked PUBLIC_MODEL_APPROVED, but the text contains ${marker.source} — a deal-term or fund-figure ` +
             `marker — so it was treated as PRIVATE_MODEL_ONLY and no training-permitting route may serve it`,
         };
       }
@@ -204,3 +240,21 @@ export function classifyContent(args: {
 
 /** The markers, for the tests and the validator. A rule nothing can enumerate cannot be proven. */
 export const privateModelOnlyMarkers: readonly string[] = Object.freeze(PRIVATE_MODEL_ONLY_MARKERS.map((r) => r.source));
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * The committed LP named in this text, or null. Case-insensitive, whole words; a name shorter than three
+ * characters is ignored (it would match ordinary prose and say nothing).
+ */
+export function committedLpNamedIn(texts: readonly string[], names: readonly string[]): string | null {
+  for (const raw of names) {
+    const name = raw.trim().replace(/\s+/g, " ");
+    if (name.length < 3) continue;
+    const re = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(name).replace(/ /g, "\\s+")}(?=$|[^\\p{L}\\p{N}])`, "iu");
+    if (texts.some((t) => re.test(t))) return raw;
+  }
+  return null;
+}

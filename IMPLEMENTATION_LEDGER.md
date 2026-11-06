@@ -7381,6 +7381,23 @@ from January 2027; $10 paid ticket; $10,000 net target from sponsors ($7,500 flo
 - Guards: `tests/tlcPipelineRepairs.test.ts` (9); the catch-up guard was broken on purpose and went red, then restored.
   Pins in `tlcVolume`/`tlcPitchAndPartners` rewritten to the stricter wording. Live delivery UNPROVEN until exercised.
 
+## 5 Nov 2026 — prospects may use free models, live research for $0, important work does not wait for ever
+
+- **Fix 1 · what is confidential** (owner ruling 4 Nov 2026): only a COMMITTED LP's name (`src/worker/ai/committedLps.ts`, read
+  from `lp_commitment` / `lp_record` / `lp_engagement` / `lp_opportunity`) or deal terms / fund figures. The bare words LP,
+  LPAC, limited partner and investor are no longer markers (`shared/ai/contentClass.ts`, `scripts/claimer/model-roles.json`);
+  `lp_fundraising` joins the public-model allow-list; meeting brief / after-draft / room / artifacts mark a meeting confidential
+  only for a committed LP. A revoked declaration now also removes every training-permitting lane (runAi 4d). Web-property jobs
+  carry `private_model_only` (verdict only, never the names). Unreadable records fail closed.
+- **Fix 2 · live research for $0**: `free_search` provider (migration 0295) with `providers/freeSearch.ts` — Gemini 2.5 Flash
+  grounding → Brave Search (20/day, `free_search_quota`) + a free Gemini writer from fetched pages → named stop. Six verified
+  free-tier Gemini ids registered on `google_free`. `servedBySearchLane` accepts the lane.
+- **Fix 3 · seat wait**: non-confidential important work waits at most `task_quality_floor.max_wait_minutes` (default 120) then
+  the best free model passing the floor (`src/worker/ai/seatWaitFallback.ts`); reason in `ai_run_routing`.
+- Paid `openai` provider pinned off in fresh databases (0295 §0); production already off.
+- Guards: `tests/freeModelsForProspects.test.ts` (17). Live Gemini grounding / Brave on the Worker: UNPROVEN until
+  `BRAVE_SEARCH_API_KEY` is set and a deployed run is exercised.
+
 ### 4 Nov 2026 — TLC: brand replies from any colleague, the per-brand sheet, no silent send pauses
 - Replies: a message belongs to a live deal when it is from the contact, on a thread we sent that deal (Gmail threadId,
   or In-Reply-To/References naming a Message-ID we sent), or, once we have written to the deal, from the contact's own

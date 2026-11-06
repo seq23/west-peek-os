@@ -14,7 +14,7 @@ export declare const CODEX_LIMIT_TAG: string;
 export declare function loadRoles(text?: string): Roles;
 export declare function confidentialMarkerIn(text: string, roles?: Roles): string | null;
 export declare function materialsBlock(dirs: readonly string[], roles?: Roles): string | null;
-export declare function routeFor(input: { kind?: string | null; phase?: string | null; prompt: string; materialDirs?: readonly string[] }, roles?: Roles): { role: Role; why: string };
+export declare function routeFor(input: { kind?: string | null; phase?: string | null; prompt: string; materialDirs?: readonly string[]; privateModelOnly?: boolean }, roles?: Roles): { role: Role; why: string };
 export declare function workerLimit(result: RunResult, spent?: (r: RunResult) => string | null): string | null;
 export declare function runByRole(deps: {
   route: { role: Role; why: string };

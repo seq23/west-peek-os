@@ -15,7 +15,17 @@
  * client: `runAi` cannot import a service, and a list that lives in the caller is a list the router
  * does not have.
  */
-export const SEARCH_GROUNDED_MODELS: readonly string[] = ["perplexity/sonar", "perplexity/sonar-pro", "perplexity/sonar-reasoning"];
+/**
+ * THE $0 SEARCH LANE (5 Nov 2026). One provider (`free_search`), one catalogue id, three routes inside its adapter
+ * (providers/freeSearch.ts): Gemini 2.5 Flash with Google Search grounding, then Brave Search + a free Gemini model
+ * writing only from the fetched pages, then a named stop. It is search-grounded by construction — it never answers
+ * from model memory — so it is on the list below and nothing that judges may be routed to it.
+ */
+export const FREE_SEARCH_PROVIDER_KEY = "free_search";
+export const FREE_SEARCH_MODEL = "free-search/grounded";
+export const isFreeSearchModel = (model: string | null | undefined): boolean => model === FREE_SEARCH_MODEL;
+
+export const SEARCH_GROUNDED_MODELS: readonly string[] = ["perplexity/sonar", "perplexity/sonar-pro", "perplexity/sonar-reasoning", FREE_SEARCH_MODEL];
 
 export function isSearchGrounded(model: string | null | undefined): boolean {
   return model ? SEARCH_GROUNDED_MODELS.includes(model) : false;

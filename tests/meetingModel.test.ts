@@ -516,10 +516,11 @@ describe("6. the list carries readiness and outputs; a card returns to its meeti
 // ── 7. LP material is declared private AT THE ROUTER, in both model calls ─────────────────────
 
 describe("7. an LP conversation is declared confidential where the router reads it", () => {
-  it("both run_ai calls derive `confidential` from the meeting type, not from a prompt", () => {
+  it("both run_ai calls derive `confidential` from the meeting's LP commitment, not from a prompt", () => {
+    // Owner ruling, 4 Nov 2026: only a meeting with a COMMITTED LP is confidential (committedLps.ts).
     for (const file of ["meetingAfter.ts", "meetingBrief.ts"]) {
       const src = readFileSync(new URL(`../src/worker/services/${file}`, import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-      expect(src, `${file} does not declare LP content confidential at the boundary`).toMatch(/confidential:\s*meeting\.meeting_type === "LP"/);
+      expect(src, `${file} does not declare committed-LP content confidential at the boundary`).toMatch(/\(await meetingIsConfidential\(env, meeting\)\)\s*\?\s*\{ confidential: true \}/);
       // And the meeting's own label is never lowered on the way in.
       expect(src).toMatch(/sensitivity:\s*meeting\.privacy_label/);
     }

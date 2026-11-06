@@ -1,3 +1,4 @@
+import { meetingIsConfidential } from "../ai/committedLps";
 import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { json } from "../router";
@@ -403,10 +404,11 @@ export async function writeWhyLine(env: Env, actor: Actor, meeting: MeetingRow, 
         ...facts,
       ],
       sensitivity: meeting.privacy_label as never,
+      // Owner ruling 4 Nov 2026: only a COMMITTED LP is confidential. Prep for a prospect may use a free model.
       budgetContext: {
         judgement: true,
         expectedOutputTokens: 80,
-        confidential: meeting.meeting_type === "LP" || meeting.lp_record_id !== null,
+        ...((await meetingIsConfidential(env, meeting)) ? { confidential: true } : { publicModelApproved: true }),
       },
       routing: { category: "INTELLIGENCE" },
     });

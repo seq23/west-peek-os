@@ -268,7 +268,7 @@ export function checkRoomUsesIt(roomSrc) {
   if (runs.length === 0) violations.push("meetingRoom.ts never calls runAi, so nobody can answer");
   for (const r of runs) {
     if (!/inputs:\s*\[prompt\]/.test(r[1])) violations.push("a runAi call in meetingRoom.ts sends something other than [prompt] — rows must never reach a model");
-    if (!/confidential:\s*isConfidentialMeeting\(meeting\)/.test(r[1])) violations.push("a runAi call in meetingRoom.ts does not derive `confidential` from the meeting — an LP conversation could reach a training-permitting lane");
+    if (!/confidential:\s*await\s+isConfidentialMeeting\(env,\s*meeting\)/.test(r[1])) violations.push("a runAi call in meetingRoom.ts does not derive `confidential` from the meeting — an LP conversation could reach a training-permitting lane");
   }
   return { violations, examined };
 }
@@ -316,7 +316,7 @@ async function selfTest() {
   say(uses.violations.length === 0 && uses.examined >= 2, `the room compiles, cites, and hands no rows to a model (${uses.examined} sites examined): ${uses.violations.join("; ")}`);
   say(checkRoomUsesIt(room.replace("const cites = citationsFor(compiled, rows);", "const cites = [];")).violations.some((v) => /citations/.test(v)), "a room that stops citing is caught");
   say(checkRoomUsesIt(room.replace("inputs: [prompt],", "inputs: [prompt, JSON.stringify(rows)],")).violations.some((v) => /rows must never reach a model/.test(v)), "a room that sends rows to a model is caught");
-  say(checkRoomUsesIt(room.replace("expectedOutputTokens: 600, confidential: isConfidentialMeeting(meeting)", "expectedOutputTokens: 600, confidential: false")).violations.some((v) => /derive `confidential`/.test(v)), "a room that stops deriving confidential from the meeting is caught");
+  say(checkRoomUsesIt(room.replace("expectedOutputTokens: 600, confidential: await isConfidentialMeeting(env, meeting)", "expectedOutputTokens: 600, confidential: false")).violations.some((v) => /derive `confidential`/.test(v)), "a room that stops deriving confidential from the meeting is caught");
 
   if (failed > 0) process.exit(1);
   console.log("SELF-TEST PASSED: a drifted column, an unclaused table, a ghost table, a wrong citation, a leaky compiler, an uncapped query, a dropped privacy clause, a non-citing room, a row-leaking room and a non-confidential LP call are each caught; the shipped source passes.");

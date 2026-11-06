@@ -155,6 +155,26 @@ Claude Code seat (Max plan)  →  Codex seat (ChatGPT Plus)  →  FREE lanes  �
   content with the seats away. A quality label ("judgement") decides how good a MODEL must be at a paid setting; it never
   turns "free" into "stop". The note rides on the deliverable (`deliver()` for any work-card deliverable; a flag on a Room
   or Workshop packet), recorded per run in `ai_run.quality_degraded` / `quality_note`.
+- **What is confidential (owner ruling, 4 Nov 2026).** Private-model-only means ONLY (a) the names of LPs who have
+  COMMITTED to a West Peek fund and (b) deal terms and fund figures. LP prospects (outreach, intro emails, replies before a
+  commitment, meeting prep, research), brand and TLC work are not confidential and may use the free models and Codex. A
+  commitment is read from the records that hold one (`lp_commitment` SOFT/SIGNED, `lp_record.status`, `lp_engagement.state`,
+  `lp_opportunity.stage` = COMMITTED; `src/worker/ai/committedLps.ts`) on every run; a committed LP's name, or a deal-term /
+  fund-figure marker (`PRIVATE_MODEL_ONLY_MARKERS` in `shared/ai/contentClass.ts`, mirrored in
+  `scripts/claimer/model-roles.json`), revokes any declaration, and the run then loses every training-permitting lane (free
+  models and Codex). Unreadable records fail closed. The Mac gets only the verdict (`private_model_only` on the job), never the names.
+- **Live research for $0 (5 Nov 2026).** At Free only a non-confidential search call takes the `free_search` lane
+  (`providers/freeSearch.ts`): (1) Gemini `gemini-2.5-flash` with the `google_search` tool, accepted only with grounding
+  sources; (2) Brave Search (`BRAVE_SEARCH_API_KEY`, at most 20 queries a day counted in `free_search_quota`), the top pages
+  fetched, and a free Gemini model (`gemini-3.6-flash`, then `gemini-3-flash-preview`) writing only from them with a URL on every
+  fact; (3) a named stop, `Couldn't research <name>: <reason>`. It never researches from model memory. Seats that can search
+  still lead. `gemini-2.5-flash` retires 1 Dec 2026; route 2 is the successor.
+- **Important work does not wait for ever (5 Nov 2026).** At Free only, non-confidential important work with neither seat free
+  waits at most the owner's per-task floor (`task_quality_floor`: `min_free_tier` SEAT_ONLY / FULL / UNMEASURED / DEGRADED and
+  `max_wait_minutes`), default 2 hours, then the best free model that passes the floor carries it; the reason
+  (`seat_wait_free_fallback`) is written to `ai_run_routing.explanation`. Confidential work keeps waiting for a seat.
+- **The paid OpenAI provider is off.** The owner switched `openai` off on 4 Nov 2026; migration 0295 keeps every fresh database
+  in step. Nothing routes to the paid OpenAI API.
 - **Setting the default is a human act.** Moving production to `FREE_ONLY` is `governance.policy_change`
   (an approval card); no migration does it.
 

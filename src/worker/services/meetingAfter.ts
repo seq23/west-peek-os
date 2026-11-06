@@ -1,3 +1,4 @@
+import { meetingIsConfidential } from "../ai/committedLps";
 import { z } from "zod";
 import { NOT_SUPERSEDED_NOTE_CLAUSE } from "./meetLiveNotes";
 import type { Env } from "../env";
@@ -851,15 +852,19 @@ export async function draftMeetingAfter(
       aiEmployeeId: lead.id ?? undefined,
       inputs: [afterDraftPrompt({ leadName: lead.name, leadRole: lead.role, meeting, participants, text: input.text, deal })],
       // The meeting's own label, never lowered. And the CONTENT rule, enforced at the router and
-      // not in a prompt: an LP conversation names limited partners, so it is declared
-      // PRIVATE_MODEL_ONLY here — `confidential` is read by runAi's content class before a route
-      // is chosen, and no training-permitting lane can serve it. Every other type is undeclared,
-      // which the router already treats as private.
+      // not in a prompt (owner ruling, 4 Nov 2026): a conversation with a COMMITTED LP is declared
+      // PRIVATE_MODEL_ONLY here — no training-permitting lane can serve it. A prospect's is not
+      // confidential and may use a free model; a committed LP's name or a deal term in the text
+      // still revokes that at the router. Every other type is undeclared, which the router treats as private.
       sensitivity: meeting.privacy_label as never,
       budgetContext: {
         judgement: true,
         expectedOutputTokens: 1200,
-        confidential: meeting.meeting_type === "LP" || meeting.lp_record_id !== null,
+        ...((await meetingIsConfidential(env, meeting))
+          ? { confidential: true }
+          : meeting.meeting_type === "LP" || meeting.lp_record_id !== null
+            ? { publicModelApproved: true }
+            : {}),
       },
       routing: { category: "INTELLIGENCE" },
     });

@@ -74,6 +74,11 @@
       "required": false,
       "purpose": "Google Gemini, paid and unpaid quota. Unrelated to GOOGLE_OAUTH_*, which is the calendar client."
     },
+    "BRAVE_SEARCH_API_KEY": {
+      "kind": "secret",
+      "required": false,
+      "purpose": "Brave Search API (free plan), the $0 search lane's second route (src/worker/ai/providers/freeSearch.ts). At most 20 queries a day, counted in D1 (free_search_quota). Read by its own name only."
+    },
     "PERPLEXITY_API_KEY": {
       "kind": "secret",
       "required": false,

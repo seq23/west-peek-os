@@ -112,10 +112,14 @@ describe("1. the reply is parsed and checked in code; the addressee is read from
     expect(addressee("what did we promise")).toEqual({ name: null, rest: "what did we promise" });
   });
 
-  it("an LP meeting is confidential, exactly as Phase B derives it", () => {
-    expect(isConfidentialMeeting({ meeting_type: "LP", lp_record_id: null })).toBe(true);
-    expect(isConfidentialMeeting({ meeting_type: "FOUNDER", lp_record_id: "lp_room" })).toBe(true);
-    expect(isConfidentialMeeting({ meeting_type: "FOUNDER", lp_record_id: null })).toBe(false);
+  it("only a meeting with a COMMITTED LP is confidential (owner ruling, 4 Nov 2026); a prospect's is not", async () => {
+    const env = makeTestEnv(t.db);
+    await t.db.prepare("INSERT OR IGNORE INTO lp_record (id, legal_name, lp_type, status, created_by) VALUES ('lp_room_committed', 'Example Committed Trust', 'FAMILY_OFFICE', 'COMMITTED', 'fu_pat_example')").run();
+    expect(await isConfidentialMeeting(env, { meeting_type: "LP", lp_record_id: null })).toBe(false);
+    expect(await isConfidentialMeeting(env, { meeting_type: "FOUNDER", lp_record_id: "lp_room" })).toBe(false);
+    expect(await isConfidentialMeeting(env, { meeting_type: "LP", lp_record_id: "lp_room_committed" })).toBe(true);
+    expect(await isConfidentialMeeting(env, { meeting_type: "LP", lp_record_id: "lp_not_on_record" }), "an LP the records do not hold fails closed").toBe(true);
+    expect(await isConfidentialMeeting(env, { meeting_type: "FOUNDER", lp_record_id: null })).toBe(false);
   });
 });
 

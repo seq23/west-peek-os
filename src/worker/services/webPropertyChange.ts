@@ -1,3 +1,4 @@
+import { committedLpNamedIn, committedLps } from "../ai/committedLps";
 import { ccAck, ccAsksIn, isOnlyACc, resolveCc } from "../../shared/work/ccPartners";
 import { secondaryNoteAck } from "../../shared/work/partnerOwnership";
 import type { Env } from "../env";
@@ -822,6 +823,15 @@ export async function parkPhase(
     ...(parts.length ? { parts: parts.map(partPayload) } : {}),
     queue_max_seconds: spec.queueMaxSeconds,
   };
+  /*
+   * A COMMITTED LP NAMED ANYWHERE IN THE JOB KEEPS IT ON CLAUDE (owner ruling, 4 Nov 2026). The names never leave
+   * the Worker: only the verdict rides on the job. Unreadable commitment records fail closed (private).
+   */
+  {
+    const committed = await committedLps(env, card.firm_scope);
+    const texts = [payload.card.title, payload.ask, payload.request, payload.plan?.text ?? "", ...(payload.plan?.answers ?? []), ...(payload.drive_files ?? []).map((f) => f.text ?? "")];
+    payload.private_model_only = !committed.readable || committedLpNamedIn(texts, committed.names) !== null;
+  }
 
   let runId: string;
   try {
