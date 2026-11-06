@@ -730,6 +730,8 @@ export interface DripResult {
   spamPauseCleared?: string;
   /** What the send-pause notice did this pass (services/tlcSendPause.ts). */
   pause?: string;
+  /** Due brands not drafted this pass because its time budget ran out (DRIP_COMPOSE_BUDGET_MS); the next pass drafts them. */
+  leftForNextPass?: string[];
 }
 const emptyDrip = (): DripResult => ({ due: 0, held: 0, awaitingApproval: 0, sent: 0, gate: { open: false, reasons: [] }, newDrafts: [], sentBrands: [], waitingForAllowance: 0 });
 
@@ -915,7 +917,18 @@ export async function retimeDrip(env: Env, now: Date, firmScope = "west-peek"): 
   return moved;
 }
 
-export async function runDrip(env: Env, now: Date, firmScope = "west-peek", replyDeps: import("./tlcBrandReply").BrandReplyDeps = {}, angleWriter?: import("./tlcOwnerInstruction").AngleWriter): Promise<DripResult> {
+/**
+ * A DRIP PASS FINISHES INSIDE ONE INVOCATION (6 Nov 2026). The first pass after her "approve" (TLP-GGZPAT) had 15 brands
+ * due and built each one's samples with a model call (~1.5 min each, one after another). Fourteen minutes in, the Worker
+ * invocation was ended: no summary, the job_run left RUNNING, and steps 3 onward (the pitch emails, her draft notice)
+ * never ran that pass. Now drafting stops once this budget is spent; the brands left are named in the summary and drafted
+ * on the next pass (the samples already built are kept and reused, so every pass makes progress).
+ */
+export const DRIP_COMPOSE_BUDGET_MS = 8 * 60_000;
+
+export async function runDrip(env: Env, now: Date, firmScope = "west-peek", replyDeps: import("./tlcBrandReply").BrandReplyDeps = {}, angleWriter?: import("./tlcOwnerInstruction").AngleWriter, opts: { composeBudgetMs?: number } = {}): Promise<DripResult> {
+  const startedAt = Date.now();
+  const composeBudgetMs = opts.composeBudgetMs ?? DRIP_COMPOSE_BUDGET_MS;
   const settings = await tlcSettings(env);
   const gate = brandSendGate(settings, await tlcOutside(env), await contentHashes(env));
   const result: DripResult = { ...emptyDrip(), gate };
@@ -1032,6 +1045,10 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
 
   const volume = await import("./tlcVolume");
   for (const deal of due) {
+    if (Date.now() - startedAt >= composeBudgetMs) {
+      result.leftForNextPass = [...(result.leftForNextPass ?? []), brandDisplayName(deal.brand)];
+      continue;
+    }
     // DAY 14, THEN NEVER AGAIN (owner, 6 Nov 2026): a follow-up whose window closed is never drafted; the sequence ends.
     if (dripWindowClosed(deal.drip_step, deal.first_sent_at ?? null, now)) {
       await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = NULL, updated_at = ?2 WHERE id = ?1").bind(deal.id, now.toISOString()).run();
@@ -1097,7 +1114,10 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
     }
     // Email 1 never carries the PDF and never waits for it (owner, 4 Nov 2026): it is made ahead when it can be, so her
     // weekly email can link it. Email 2 carries it, and only email 2 is held while it cannot be made.
-    const samples = await samplesPdfFor(env, deal, ev, replyDeps.samples ?? {});
+    // Emails 3 and 4 never carry the samples (email 2 did), so no model call is spent building them for those.
+    const samples: Awaited<ReturnType<typeof samplesPdfFor>> = deal.drip_step <= 1
+      ? await samplesPdfFor(env, deal, ev, replyDeps.samples ?? {})
+      : { ok: false, why: "not needed after email 2" };
     if (!samples.ok && deal.drip_step === 0) result.samplesPending = [...(result.samplesPending ?? []), brandDisplayName(deal.brand)];
     if (!samples.ok && deal.drip_step === 1) {
       await env.WP_OS_DB.prepare(

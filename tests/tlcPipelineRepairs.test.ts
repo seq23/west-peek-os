@@ -302,3 +302,26 @@ describe("G · email 1 never carries or waits for the samples PDF; email 2 carri
     expect((await verifyAuthorizationReceipt(env, "apc_forged", "effect.email.send", { objectType: "external_effect_request", objectId: "eer_forged" })).ok).toBe(false);
   });
 });
+
+describe("H · a drip pass finishes inside one invocation (6 Nov 2026: 15 due brands, the pass was ended mid-run)", () => {
+  const NOW = new Date("2026-11-09T15:00:00.000Z");
+  it("past its time budget the pass drafts nothing more, names the brands left, and the next pass drafts them", async () => {
+    await deal("Late Co", "2027-02", { stage: "PITCHED", drip_step: 2, first_sent_at: "2026-11-02T14:00:00.000Z", last_sent_at: "2026-11-05T14:00:00.000Z", next_send_at: "2026-11-09T14:00:00.000Z" });
+    const h = await contentHashes(env);
+    await env.WP_OS_DB.prepare("UPDATE tlc_setting SET value = CASE key WHEN 'pitch_approved_hash' THEN ?1 ELSE ?2 END WHERE key IN ('pitch_approved_hash','playbook_approved_hash')").bind(h.pitch, h.playbook).run();
+    const msg = () => env.WP_OS_DB.prepare("SELECT step, state FROM tlc_drip_message WHERE deal_id = 'tld_LateCo'").first<{ step: number; state: string }>();
+
+    const spent = await runDrip(env, NOW, "west-peek", DRIP_DEPS, undefined, { composeBudgetMs: 0 });
+    expect(spent.gate.open).toBe(true);
+    expect(spent.leftForNextPass).toContain("Late Co");
+    expect(await msg()).toBeNull();
+
+    const next = await runDrip(env, new Date(NOW.getTime() + 60_000), "west-peek", DRIP_DEPS);
+    expect(next.leftForNextPass ?? []).not.toContain("Late Co");
+    expect(await msg()).toEqual({ step: 2, state: "AWAITING_APPROVAL" });
+  });
+
+  it("emails 3 and 4 never spend a model call on samples (only email 2 carries them)", async () => {
+    expect(await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_samples WHERE deal_id = 'tld_LateCo'").first()).toEqual({ n: 0 });
+  });
+});

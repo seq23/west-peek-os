@@ -696,6 +696,7 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
         `${d.goalStopped?.length ? `; goal reached, outreach stopped: ${d.goalStopped.join(", ")}` : ""}` +
         `${d.addressRefused?.length ? `; address failed NeverBounce: ${d.addressRefused.join(", ")}` : ""}` +
         `${d.addressWaiting ? `; ${d.addressWaiting} first email(s) waiting for NeverBounce` : ""}` +
+        `${d.leftForNextPass?.length ? `; ${d.leftForNextPass.length} left for the next pass (time budget): ${d.leftForNextPass.join(", ")}` : ""}` +
         `${d.gate.open ? "" : ` (sending is off: ${d.gate.reasons.join("; ")})`}; notice: ${out.notice}${d.replies ? `; ${d.replies}` : ""}.`,
       artifacts,
     };
