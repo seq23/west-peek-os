@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { createWorkCardInternal } from "../src/worker/services/workCards";
-import { MAX_WORK_ATTEMPTS, sweepIdentity, sweepOnce } from "../src/worker/services/workSweep";
+import { MAX_WORK_ATTEMPTS, SEAT_NO_ANSWER_WAITS, isSeatNoAnswer, sweepIdentity, sweepOnce } from "../src/worker/services/workSweep";
 import { answerBlock, blockOf, LANE_PAUSE_HOURS, LANE_STAND_DOWN_HOURS, TECHNICAL_BLOCK_NAG_HOURS } from "../src/worker/services/blocks";
 import { attemptsAllowedFor, readLaneFailure } from "../src/shared/ai/laneFailure";
 import { blockProblems, describeBlock } from "../src/shared/work/blocks";
@@ -453,6 +453,46 @@ describe("a quiet seat at Free only is a wait, not a spend question", () => {
     expect(c.block_who).toBe("SEQUOIA");
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
     await clearSeats();
+  });
+
+  it("an AWAKE seat that answered too late hands the attempt back — six times, then the card counts it (6 Nov 2026, wc_aa2d2450…)", async () => {
+    await clearSeats();
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO subscription_seat_device (seat, device_id, hostname, agent_version, last_seen_at, capabilities_json, first_seen_at)
+       VALUES ('claude_code', 'dev_mac', 'Sequoias-Mac', 'test', ?1, '[]', ?1)`,
+    )
+      .bind(new Date(T0.getTime() - 60_000).toISOString())
+      .run();
+    const NO_ANSWER =
+      "provider_failure:subscription_seat_unavailable:the Claude Code seat was awake but returned nothing within 2 minutes, " +
+      "so the run moved on to a lane that answers over the network.";
+    const id = await card("Unclear email: Form key check (ignore)", "aie_porter");
+    const runner = refusedRunner(id, NO_ANSWER, "prov_claude_code");
+    for (let k = 0; k < SEAT_NO_ANSWER_WAITS; k++) {
+      await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
+      expect((await sweepOnce(env, new Date(T0.getTime() + k * 60_000), { general: runner })).outcome).toBe("WAITING_ON_SEAT");
+    }
+    let c = await row(id);
+    expect(Number(c.work_attempts), "no attempt is spent on a queue at the Mac").toBe(0);
+    expect(c.state).not.toBe("BLOCKED");
+    expect(String(c.waiting_for)).toMatch(/Waiting for the subscription seat: the Claude Code seat/);
+    expect(c.work_last_failure).not.toMatch(/did not get anywhere/);
+    // The bound: a seat that never answers stops being a wait and is counted as a failed attempt.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
+    const after = await sweepOnce(env, new Date(T0.getTime() + 10 * 60_000), { general: runner });
+    expect(after.outcome).not.toBe("WAITING_ON_SEAT");
+    c = await row(id);
+    expect(Number(c.work_attempts)).toBe(1);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
+    await clearSeats();
+  });
+
+  it("isSeatNoAnswer reads only the router's own no-answer close, not any seat failure", () => {
+    expect(isSeatNoAnswer("provider_failure:subscription_seat_unavailable:the Codex CLI seat was awake but returned nothing within 2 minutes")).toBe(true);
+    expect(isSeatNoAnswer("subscription_seat_unavailable:this run was closed while it was waiting")).toBe(true);
+    expect(isSeatNoAnswer("subscription_seat_failed:Claude Code: usage limit reached")).toBe(false);
+    expect(isSeatNoAnswer("the Claude Code seat was awake but returned nothing")).toBe(false);
+    expect(isSeatNoAnswer(null)).toBe(false);
   });
 
   it("IMPORTANT work waiting for a seat is ALWAYS a wait — even with no seat seen for a day: never BLOCKED on her, never a STUCK email (26 Oct 2026)", async () => {

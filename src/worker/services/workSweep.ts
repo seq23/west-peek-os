@@ -13,6 +13,7 @@ import { deckStillBeingRead, workCard } from "./employeeWork";
 import { SEAT_WAIT_MINUTES, SPEND_SETTING_LANE, SPEND_SETTING_NAME, blockCard, currentSpendState, isSearchCallRefusal, releaseSpendSettingBlocks, resurfaceStaleBlocks, seatToWaitFor, spendStateJson, type StoredBlock } from "./blocks";
 import { resurfaceStalePreviews } from "./previewApproval";
 import { isSeatWait } from "../../shared/ai/seatOrder";
+import { SEAT_UNAVAILABLE } from "../ai/subscriptionSeats";
 import { STEPS_PER_TICK } from "../../shared/work/employeeLoop";
 import { attemptsAllowedFor, isLaneFailure, readLaneFailure, type LaneFailure } from "../../shared/ai/laneFailure";
 
@@ -503,6 +504,25 @@ function titleCase(key: string): string {
  * This is the line the Work page shows while the card is still retrying, so the first failure is
  * visible rather than the third.
  */
+/** How many times an awake seat that answered too late may hand an attempt back before the card counts it. */
+export const SEAT_NO_ANSWER_WAITS = 6;
+
+/** The router's own words when an awake seat's run was closed unanswered (providers/subscriptionSeat.ts). */
+export function isSeatNoAnswer(detail: string | null | undefined): boolean {
+  const t = detail ?? "";
+  return t.includes(SEAT_UNAVAILABLE) && /awake but returned nothing|no machine returned an answer|closed while it was waiting/i.test(t);
+}
+
+async function seatWaitsSoFar(env: Env, cardId: string): Promise<number> {
+  const r = await env.WP_OS_DB.prepare(
+    "SELECT COUNT(*) AS n FROM event_record WHERE object_type = 'work_card' AND object_id = ?1 AND event_type = 'work_card.waiting_for_seat'",
+  )
+    .bind(cardId)
+    .first<{ n: number }>()
+    .catch(() => null);
+  return Number(r?.n ?? 0);
+}
+
 async function noteFailedAttempt(env: Env, card: SweepCard, line: string, now: Date): Promise<void> {
   await env.WP_OS_DB.prepare("UPDATE work_card SET work_last_failure = ?2, work_last_failure_at = ?3 WHERE id = ?1")
     .bind(card.id, line.slice(0, 400), now.toISOString())
@@ -838,7 +858,16 @@ export async function sweepOnce(
    * on the seat by itself: the claim's attempt is handed back, nobody is emailed, nothing is blocked. Only a
    * firm with no such seat reaches the spend-setting block below. See `seatThatCouldServe` in blocks.ts.
    */
-  if (isLaneFailure(lane.failure) && lane.failure.kind === "LEVER") {
+  /*
+   * AN AWAKE SEAT THAT ANSWERED TOO LATE IS THE SAME WAIT (6 Nov 2026, wc_aa2d2450…). Porter's routing card had one
+   * lane — the Claude Code seat — and the seat was busy with Parker's runs, so the router closed two seat runs after
+   * its wait (`subscription_seat_unavailable: … awake but returned nothing`). Each one spent one of the card's three
+   * attempts ("Attempt 2 of 3 did not get anywhere") and raised a friction event; the third try, four minutes later,
+   * finished in 53 seconds. A queue on the Mac is an infrastructure wait: the attempt is handed back and the card
+   * tries again by itself. Bounded by SEAT_NO_ANSWER_WAITS so a seat that never answers still stops and says so.
+   */
+  const seatNoAnswer = isSeatNoAnswer(detail) && (await seatWaitsSoFar(env, card.id)) < SEAT_NO_ANSWER_WAITS;
+  if (seatNoAnswer || (isLaneFailure(lane.failure) && lane.failure.kind === "LEVER")) {
     /*
      * IMPORTANT WORK WAITING FOR A SEAT IS ALWAYS A WAIT (owner, 26 Oct 2026; shared/ai/seatOrder.ts): it may never
      * take a free lane, so a missing seat is a technical wait, never her spend question and never a STUCK email.
