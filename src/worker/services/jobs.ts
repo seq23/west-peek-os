@@ -683,7 +683,10 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
     return { status: "SUCCEEDED", summary: `The Learning Club: ${out.detail}.`, artifacts };
   }
   if (job.job_key === "tlc_drip") {
-    const { runDripPass } = await import("./learningClub");
+    const { runDripPass, claimDripPass } = await import("./learningClub");
+    // One pass at a time; a pass killed at the platform's limit is closed here, not left RUNNING for 30 minutes.
+    const claim = await claimDripPass(env, job.id, runId);
+    if (!claim.ok) return { status: "SUCCEEDED", summary: `The Learning Club drip: ${claim.why}.`, artifacts };
     const out = await runDripPass(env, now, job.firm_scope);
     const d = out.drip;
     return {
@@ -697,7 +700,8 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
         `${d.addressRefused?.length ? `; address failed NeverBounce: ${d.addressRefused.join(", ")}` : ""}` +
         `${d.addressWaiting ? `; ${d.addressWaiting} first email(s) waiting for NeverBounce` : ""}` +
         `${d.leftForNextPass?.length ? `; ${d.leftForNextPass.length} left for the next pass (time budget): ${d.leftForNextPass.join(", ")}` : ""}` +
-        `${d.gate.open ? "" : ` (sending is off: ${d.gate.reasons.join("; ")})`}; notice: ${out.notice}${d.replies ? `; ${d.replies}` : ""}.`,
+        `${d.gate.open ? "" : ` (sending is off: ${d.gate.reasons.join("; ")})`}; notice: ${out.notice}${d.replies ? `; ${d.replies}` : ""}` +
+        `${claim.released ? `; closed ${claim.released} earlier pass(es) killed at the 15-minute limit` : ""}.`,
       artifacts,
     };
   }

@@ -479,6 +479,7 @@ export async function openEvents(env: Env, now: Date, firmScope: string): Promis
  *   2 · the drip runs: approved emails go, due ones are drafted for her approval, and she is emailed the list.
  */
 export async function runDripPass(env: Env, now: Date, firmScope = "west-peek"): Promise<{ batch: string | null; drip: DripResult; notice: string; prospects: import("./tlcVolume").PromoteResult }> {
+  const passStartedAt = Date.now();
   const open = await openEvents(env, now, firmScope);
   let batch: string | null = null;
   if (open.length > 0) {
@@ -509,7 +510,8 @@ export async function runDripPass(env: Env, now: Date, firmScope = "west-peek"):
   await applyOwnerEmailInstructions(env, now, firmScope).catch((err) => appendEvent(env, { eventType: "tlc.owner_email_contact_failed", actorType: "system", actorId: "tlc_drip", objectType: "tlc_way_in", objectId: "owner-email", firmScope, payload: { error: String(err).slice(0, 300) } }));
   const { wayInFallback } = await import("./tlcMustPitch");
   await wayInFallback(env, now, firmScope).catch(() => null);
-  const drip = await runDrip(env, now, firmScope);
+  // The budget counts from the start of the pass: the replies, sheets and prospects above spend it too.
+  const drip = await runDrip(env, now, firmScope, {}, undefined, { composeBudgetMs: Math.max(0, DRIP_COMPOSE_BUDGET_MS - (Date.now() - passStartedAt)) });
   const repaired = await repairLeakedDrafts(env, now, firmScope);
   const notice = await sendDraftNotice(env, now, firmScope);
   // WYNN'S MONDAY ROUNDUP (31 Oct 2026): once a week, to Sequoia only, after the approval email.
@@ -925,6 +927,27 @@ export async function retimeDrip(env: Env, now: Date, firmScope = "west-peek"): 
  * on the next pass (the samples already built are kept and reused, so every pass makes progress).
  */
 export const DRIP_COMPOSE_BUDGET_MS = 8 * 60_000;
+/** The platform ends a cron invocation at 15 minutes of wall time: a run RUNNING longer than this is dead. */
+export const DRIP_PASS_WALL_MS = 15 * 60_000;
+
+/**
+ * ONE PASS AT A TIME. A run still RUNNING past the platform's wall limit is dead (the invocation was killed), so it is
+ * closed now with that reason instead of 30 minutes later; a younger one is alive, and this pass stands down for it.
+ */
+export async function claimDripPass(env: Env, jobId: string, runId: string, nowMs = Date.now()): Promise<{ ok: true; released: number } | { ok: false; why: string }> {
+  const dead = new Date(nowMs - DRIP_PASS_WALL_MS).toISOString();
+  const released = await env.WP_OS_DB.prepare(
+    `UPDATE job_run SET status = 'FAILED', finished_at = ?3,
+            error = 'killed: the pass ran past the 15-minute limit for one run',
+            outcome_summary = CASE WHEN outcome_summary = '' THEN 'FAILED: ran past the 15-minute limit' ELSE outcome_summary END
+      WHERE job_id = ?1 AND id <> ?2 AND status IN ('QUEUED','RUNNING') AND started_at < ?4`,
+  ).bind(jobId, runId, new Date(nowMs).toISOString(), dead).run();
+  const live = await env.WP_OS_DB.prepare("SELECT id, started_at FROM job_run WHERE job_id = ?1 AND id <> ?2 AND status IN ('QUEUED','RUNNING') LIMIT 1")
+    .bind(jobId, runId).first<{ id: string; started_at: string }>();
+  if (live) return { ok: false, why: `NAMED STOP [DRIP_PASS_OVERLAP] the pass started ${live.started_at} is still running; this one stood down and the next pass goes on` };
+  return { ok: true, released: released.meta?.changes ?? 0 };
+}
+
 
 export async function runDrip(env: Env, now: Date, firmScope = "west-peek", replyDeps: import("./tlcBrandReply").BrandReplyDeps = {}, angleWriter?: import("./tlcOwnerInstruction").AngleWriter, opts: { composeBudgetMs?: number } = {}): Promise<DripResult> {
   const startedAt = Date.now();
