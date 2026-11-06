@@ -176,7 +176,9 @@ describe("round 2: nothing goes until both have approved", () => {
     expect(toBrand()).toHaveLength(0);
     const again = toUs().find((s) => s.subject.includes(r.notice_ref))!;
     expect(again.cc).toBe(SCOOTER);
-    expect(again.text).toContain("What Wynn changed:");
+    // Round 2 is a light email: what changed and the link, never the whole draft again.
+    expect(again.text).toMatch(/Wait Co: \d+ lines? changed from your notes\nOpen the draft: https:\/\/os\.joinwestpeek\.com\/api\/tlc-pitch\/draft\/[0-9a-f]{32}/);
+    expect(again.text).not.toContain("Your answer, as it would go");
     // Scooter's notes change this one draft; they do not become a standing rule.
     expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_wynn_rule").first<{ n: number }>())!.n).toBeGreaterThanOrEqual(rulesBefore);
   });
@@ -245,3 +247,52 @@ describe("a machine's acknowledgement is not a reply (6 Nov 2026: Osmo, Loop)", 
     expect(classifyBrandReply({ subject: "Re: x", text: "Sounds good", raw: "From: Pat <pat@acme.example>\r\nAuto-Submitted: no\r\n\r\nSounds good" }, NOW).kind).not.toBe("AUTO_REPLY");
   });
 });
+
+describe("the room and the community, as a brand is told them (owner, 6 Nov 2026)", () => {
+  it("a draft that promises more than 25 guests, a community size today, or a guarantee is refused", async () => {
+    const { draftProblems } = await import("../src/worker/services/tlcBrandReply");
+    expect(draftProblems("We expect about 60 guests.", "QUESTION")).toEqual([expect.stringContaining("promises about 60 guests")]);
+    expect(draftProblems("Our community of about 5,000 founders will be there.", "QUESTION")).toEqual([expect.stringContaining("a community size today")]);
+    expect(draftProblems("We guarantee a full room.", "QUESTION")).toEqual(["a guarantee (her rule: no guarantees)"]);
+    expect(draftProblems("Rooms of 25+ guests, sized to your goals, curated from a community that grew to nearly 5,000 at its height.", "QUESTION")).toEqual([]);
+  });
+  it("queued text and Wynn's stored rules are said the new way", async () => {
+    const { brandCommunityWords } = await import("../src/shared/community/size");
+    expect(brandCommunityWords("Hi.\nOur community of about 5,000 founders, operators and creatives meets in person through West Peek Rooms, our event series in New York.\nBye."))
+      .toBe("Hi.\nWe built a community that grew to nearly 5,000 founders, operators and creatives at its height, and we curate each room from that network. We meet in person through West Peek Rooms, our event series in New York.\nBye.");
+    expect(brandCommunityWords("West Peek is a community of about 5,000 founders, operators, investors, creatives and builders, started by Scooter."))
+      .toBe("West Peek is a community that grew to nearly 5,000 founders, operators, investors, creatives and builders at its height, started by Scooter.");
+  });
+  it("the pricing sheet and the samples never promise more than 25 or a community size today", async () => {
+    const { renderBrandPitch } = await import("../src/shared/tlc/pitch");
+    const { clubViewOf } = await import("../src/worker/services/learningClub");
+    const ev = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = 'tlc_2027-03'").first())! as never;
+    const html = renderBrandPitch(clubViewOf(ev));
+    expect(html).not.toMatch(/100\+|community of about|25 to/);
+    expect(html).toContain("nearly 5,000 at its height");
+  });
+});
+
+describe("her ordered wording keeps her approval, so sending does not pause (owner, 6 Nov 2026)", () => {
+  it("the approved pitch with only her ordered phrases changed is APPROVED; any other change is CHANGED", async () => {
+    const { approvalState, PITCH_APPROVAL_HASH_SETTING, OWNER_ORDERED_WORDING } = await import("../src/shared/tlc/learningClub");
+    const before = `March 2027\nWho will be in the room\n${OWNER_ORDERED_WORDING.map(([a]) => a).join("\n")}`;
+    const after = `March 2027\nWho will be in the room\n${OWNER_ORDERED_WORDING.map(([, b]) => b).join("\n")}`;
+    const settings = { [PITCH_APPROVAL_HASH_SETTING]: "old-hash", pitch_approved_text: before };
+    expect(approvalState(settings, PITCH_APPROVAL_HASH_SETTING, "new-hash", after)).toBe("APPROVED");
+    expect(approvalState(settings, PITCH_APPROVAL_HASH_SETTING, "new-hash", `${after}\nOne more line.`)).toBe("CHANGED");
+  });
+  it("the live pitch, rendered the old way and the new way, differs only by her ordered phrases", async () => {
+    const { contentTexts } = await import("../src/worker/services/learningClub");
+    const { withOwnerOrderedWording } = await import("../src/shared/tlc/learningClub");
+    const now = (await contentTexts(env)).pitch;
+    const old = OLD_WORDS.reduce((w, [a, b]) => w.split(b).join(a), now);
+    expect(old).not.toBe(now);
+    expect(withOwnerOrderedWording(old)).toBe(now);
+  });
+});
+const OLD_WORDS: ReadonlyArray<readonly [string, string]> = [
+  ["25 to 100+ guests per event, flexible to your goals", "25+ guests per event, flexible to your goals"],
+  ["25 to 100+ New Yorkers per event, a number we flex to your goals, who will choose this topic.", "Rooms of 25+ New Yorkers per event, sized to your goals, who will choose this topic."],
+  ["Founders, operators, creatives and builders from a community of about 5,000.", "Founders, operators, creatives and builders, curated from a community that grew to nearly 5,000 at its height."],
+];

@@ -54,7 +54,8 @@ describe("outreach text cannot claim a community count above the source of truth
       JSON.stringify(DECK_SLIDES),
     ];
     for (const text of told) {
-      expect(text).toContain(COMMUNITY_ABOUT);
+      // Brand-facing text says it grew to nearly 5,000 at its height (owner, 6 Nov 2026); the firm's own says about 5,000.
+      expect(text).toMatch(new RegExp(`${COMMUNITY_ABOUT}|nearly 5,000`));
       expect(overstatedCommunityClaims(text)).toEqual([]);
     }
 
@@ -64,7 +65,8 @@ describe("outreach text cannot claim a community count above the source of truth
     const stored = await env.WP_OS_DB.prepare("SELECT rule FROM tlc_wynn_rule WHERE code = 'WHO_WE_ARE'").first<{ rule: string }>();
     expect(overstatedCommunityClaims(stored!.rule)).not.toEqual([]);
     const who = (await wynnRules(env)).find((r) => r.code === "WHO_WE_ARE")!.rule;
-    expect(who).toContain(`community of ${COMMUNITY_ABOUT} people`);
+    // Read the 6 Nov 2026 way: a community that grew to nearly 5,000 at its height, never a size today.
+    expect(who).toContain("community that grew to nearly 5,000 people at its height");
     expect(overstatedCommunityClaims(who)).toEqual([]);
     expect(draftProblems(`Hi Pat,\n\n${OLD_PROOF}`, "INTERESTED" as never).join("|")).toMatch(/community size above the true one/);
     expect(draftProblems(`Hi Pat,\n\n${TLC_DRIP_PROOF_LINE}`, "INTERESTED" as never).join("|")).not.toMatch(/community size/);
@@ -88,7 +90,7 @@ describe("outreach text cannot claim a community count above the source of truth
     ).bind(id).first<{ body: string; payload_json: string; summary: string }>())!;
     const q = await row(queued);
     for (const text of [q.body, (JSON.parse(q.payload_json) as { text: string }).text, q.summary]) {
-      expect(text).toContain(`community of ${COMMUNITY_ABOUT} founders`);
+      expect(text).toContain("community that grew to nearly 5,000 founders, operators and creatives at its height");
       expect(overstatedCommunityClaims(text)).toEqual([]);
     }
     expect((await row(sent)).body).toContain("more than 5,000");

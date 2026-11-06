@@ -8,10 +8,13 @@
 --   · tlc_brand_reply.page_token: the private link to round 2's live draft page (their email, the answer, the sheet,
 --     every note so far); the partners read and comment there instead of a PDF going back and forth.
 --   · tlc_brand_reply.previous_draft: the draft before the last redraft, so the email shows what Wynn changed.
+--   · tlc_deal.offer_json: an offer the partners set for one brand (a quarterly series: year, events, per-event price,
+--     total), shown on that brand's sheet and draft page in place of the series-of-six line.
 -- Additive only; no row changes.
 ALTER TABLE tlc_brand_reply ADD COLUMN round TEXT;
 ALTER TABLE tlc_brand_reply ADD COLUMN inputs_json TEXT;
 ALTER TABLE tlc_brand_reply ADD COLUMN page_token TEXT;
 ALTER TABLE tlc_brand_reply ADD COLUMN previous_draft TEXT;
+ALTER TABLE tlc_deal ADD COLUMN offer_json TEXT;
 
 INSERT OR IGNORE INTO schema_version (migration) VALUES ('0297_tlc_brand_reply_two_rounds');

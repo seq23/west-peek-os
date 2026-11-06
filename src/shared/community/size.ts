@@ -54,3 +54,27 @@ export function trueCommunityWords(text: string): string {
     return `${lead ?? ""}${COMMUNITY_ABOUT}`;
   });
 }
+
+/**
+ * WHAT A BRAND IS TOLD ABOUT THE COMMUNITY (owner, 6 Nov 2026: "do not overpromise on our community: just say we have
+ * built a large community approaching 5000 people at its height … we can curate the room from our vast network … no
+ * guarantees"). Brand-facing words never state a present size: the community GREW TO NEARLY 5,000 AT ITS HEIGHT, and
+ * each room is curated from that network. COMMUNITY_ABOUT above stays for the firm's own and LP materials.
+ */
+export const BRAND_COMMUNITY_SHORT = "nearly 5,000 at its height";
+export const BRAND_COMMUNITY_LINE = "We built a community that grew to nearly 5,000 founders, operators and creatives at its height, and we curate each room from that network.";
+const PRESENT_SIZE = /\bcommunity of (?:about |around |roughly |~)?5,000((?:\s+[a-z]+,)*(?:\s+[a-z]+\s+and)?(?:\s+[a-z]+)?)/gi;
+
+/** A present-tense community size in brand text ("community of about 5,000"): her 6 Nov rule says "grew to nearly 5,000 at its height". */
+export const presentCommunitySize = (text: string): string[] => [...text.matchAll(PRESENT_SIZE)].map((m) => m[0].trim());
+
+/**
+ * Stored or queued brand text said the 6 Nov way: overstated counts first (trueCommunityWords), then the old drip proof
+ * line and any "community of about 5,000 <who>" become "community that grew to nearly 5,000 <who> at its height".
+ */
+export function brandCommunityWords(text: string): string {
+  return trueCommunityWords(text)
+    .replace(/Our community of (?:about |~)?5,000 founders, operators and creatives meets in person through West Peek Rooms, our event series in New York\./g,
+      `${BRAND_COMMUNITY_LINE} We meet in person through West Peek Rooms, our event series in New York.`)
+    .replace(PRESENT_SIZE, (_m, who: string) => `community that grew to nearly 5,000${who} at its height`);
+}

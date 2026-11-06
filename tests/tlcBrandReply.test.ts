@@ -310,7 +310,7 @@ describe("Wynn listens to her whole note, researches when asked, and keeps her s
     const body = (await env.WP_OS_DB.prepare("SELECT draft_body FROM tlc_brand_reply WHERE deal_id = 'tld_cash'").first<{ draft_body: string }>())!.draft_body;
     expect(body).not.toMatch(/\$|tier|price|Title partner/i);
     expect(body).not.toMatch(/short call|two times|pick a time/i);
-    expect(body).toContain("a community of about 5,000 people");
+    expect(body).toContain("a community that grew to nearly 5,000 people at its height");
     expect(body).not.toContain("more than 5,000");
     expect(body).toContain("Quarantine Con");
     expect(body).toContain(THREE_THINGS_OFFER);

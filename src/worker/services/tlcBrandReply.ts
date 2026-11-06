@@ -1,5 +1,5 @@
 import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
-import { overstatedCommunityClaims, trueCommunityWords } from "../../shared/community/size";
+import { brandCommunityWords, overstatedCommunityClaims, presentCommunitySize } from "../../shared/community/size";
 import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { appendEvent } from "../events";
@@ -106,7 +106,7 @@ export async function wynnRules(env: Env, firmScope = "west-peek"): Promise<Wynn
   try {
     // A rule's words are read through the community-size source of truth, so a stored "more than 5,000" never reaches a draft.
     const rows = (await env.WP_OS_DB.prepare("SELECT code, rule FROM tlc_wynn_rule WHERE active = 1 AND firm_scope = ?1 ORDER BY added_at, id").bind(firmScope).all<WynnRule>()).results ?? [];
-    return rows.map((r) => ({ ...r, rule: trueCommunityWords(r.rule) }));
+    return rows.map((r) => ({ ...r, rule: brandCommunityWords(r.rule) }));
   } catch {
     return [];
   }
@@ -145,6 +145,7 @@ const PROMPT_RULES = [
   "No postal address, no P.S. and no signature: the signature and our mailing-address footer are added after. Never name anyone at West Peek other than Sequoia, except Scooter Taylor as our founding GP where the rules below say so.",
   "Do not attach or mention a PDF or deck unless they asked for one or said yes.",
   "End with one clear next step, as Wynn's standing rules below say.",
+  "The room and the community (owner, 6 Nov 2026): never promise a number of guests above 25 and never guarantee attendance; say rooms of 25+, sized to their goals. Never state the community's size today: say we built a community that grew to nearly 5,000 at its height, and that we curate each room from that network. No guarantees of any kind.",
 ];
 
 /** Wynn's rules as the prompt states them; the WHO_WE_ARE row is the facts a first answer must explain. */
@@ -206,7 +207,13 @@ export function draftProblems(body: string, intent: BrandReplyIntent, opts: { no
   // Scooter is named only as who he is to the brand (her WHO_WE_ARE rule): "Scooter Taylor", our founding GP.
   if (/\bscooter\b(?!\s+taylor)/i.test(body)) out.push("a name other than hers");
   if (opts.noMoney && MONEY_WORDS.test(body)) out.push("money before a call (her rule)");
-  for (const c of overstatedCommunityClaims(body)) out.push(`a community size above the true one: "${c}" (say "about 5,000")`);
+  for (const c of overstatedCommunityClaims(body)) out.push(`a community size above the true one: "${c}" (say it grew to nearly 5,000 at its height)`);
+  // Owner, 6 Nov 2026: no present-tense community size, no head count above 25, no guarantee.
+  for (const c of presentCommunitySize(body)) { out.push(`a community size today: "${c}" (say it grew to nearly 5,000 at its height)`); break; }
+  for (const m of body.matchAll(/(?<!(?:to|–|-)\s*)\b(?:up to |as many as |around |about )?(\d{2,4})\s+(?:people|guests|attendees|New Yorkers|founders|builders)\b/gi)) {
+    if (Number(m[1]) > 25 && !out.some((o) => o.startsWith("a room of"))) { out.push(`promises ${m[0].trim()} (her rule: never more than 25; say rooms of ${BRAND_EMAIL_ROOM_WORDS}, sized to their goals)`); break; }
+  }
+  if (/\bguarantee/i.test(body)) out.push("a guarantee (her rule: no guarantees)");
   // Every brand email says rooms of 25+ guests, sized to their goals (her GUESTS_25_40 rule, revised 1 Nov 2026): never a
   // range ("25 to 100+", "25–40", "60–150") and never another number with a plus. The PDFs keep "25 to 100+".
   for (const m of body.matchAll(/\b(\d+)\s*(?:to|–|-)\s*(\d+)(\+?)\s+(?:people|guests|New Yorkers)\b/gi)) {
@@ -879,7 +886,17 @@ async function sendRound(env: Env, now: Date, firmScope: string, rows: WaitingRo
   const many = rows.length > 1;
   const name = (r: WaitingRow) => brandDisplayName(r.brand);
   const person = (r: WaitingRow) => (r.contact_name?.trim() ? `${r.contact_name.trim()} at ${name(r)}` : name(r));
-  const blocks = rows.map((r, i) => {
+  /*
+   * ROUND 2 IS A LINK, LIGHT LIKE THE DECK'S BACK AND FORTH (owner, 6 Nov 2026: "it should be a link and it should be
+   * more light weight"). The page holds their email, the answer, the sheet and every note; the email says only what
+   * changed and where to look.
+   */
+  const lightBlocks = rows.map((r, i) => {
+    const diff = r.change_note && r.previous_draft ? changedLines(r.previous_draft, r.draft_body) : null;
+    const changed = diff ? (diff.added.length || diff.removed.length ? `${diff.added.length + diff.removed.length} line${diff.added.length + diff.removed.length === 1 ? "" : "s"} changed from your notes` : "nothing in the wording changed; say what you want different") : "first look";
+    return `${many ? `${i + 1}. ` : ""}${name(r)}: ${changed}\nOpen the draft: ${pages.get(r.id)}`;
+  });
+  const blocks = partnerRound ? lightBlocks : rows.map((r, i) => {
     const { to: answerTo, cc } = answerRecipients(r);
     const inputs = inputsOf(r.inputs_json);
     const notes = Object.entries(inputs).filter(([, v]) => v.note).map(([id, v]) => `${firstNameOf(id)} said: ${v.note}`);
