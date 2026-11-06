@@ -10,20 +10,34 @@
  * nothing copies the address. It is idempotent: a body that already ends with the footer is returned unchanged.
  * The HTML part (`brandEmailHtml`) is the same text with the footer set small and grey.
  */
-export const BRAND_MAILING_ADDRESS = "3055 Lombard St #471024, San Francisco, CA 94147";
+export const BRAND_MAILING_ADDRESS = "2055 Lombard St #471024, San Francisco, CA 94147";
+
+/**
+ * FOOTERS FILED BEFORE A CORRECTION (6 Nov 2026). The 1 Nov ruling was written down as "3055 Lombard St"; her own
+ * mail since 2021 says 2055 Lombard St (the Marina post office) #471024, CA 94147. Drafts filed for approval before
+ * the fix still end with the old line, so the footer helpers strip it too: an approved draft goes out with exactly
+ * one footer, the right one.
+ */
+export const RETIRED_MAILING_ADDRESSES: readonly string[] = ["3055 Lombard St #471024, San Francisco, CA 94147"];
+const ALL_FOOTERS = [BRAND_MAILING_ADDRESS, ...RETIRED_MAILING_ADDRESSES];
+
+function stripFooters(text: string): string {
+  let body = text.trimEnd();
+  for (let hit = true; hit; ) {
+    hit = false;
+    for (const f of ALL_FOOTERS) if (body.endsWith(f)) { body = body.slice(0, -f.length).trimEnd(); hit = true; }
+  }
+  return body;
+}
 
 /** The text, ending with exactly one mailing-address footer, a blank line under the last line of the email. */
 export function withBrandFooter(text: string): string {
-  let body = text.trimEnd();
-  while (body.endsWith(BRAND_MAILING_ADDRESS)) body = body.slice(0, -BRAND_MAILING_ADDRESS.length).trimEnd();
-  return `${body}\n\n${BRAND_MAILING_ADDRESS}`;
+  return `${stripFooters(text)}\n\n${BRAND_MAILING_ADDRESS}`;
 }
 
 /** The words above the footer: what a redraft or a "words only" reader works from. */
 export function withoutBrandFooter(text: string): string {
-  let body = text.trimEnd();
-  while (body.endsWith(BRAND_MAILING_ADDRESS)) body = body.slice(0, -BRAND_MAILING_ADDRESS.length).trimEnd();
-  return body;
+  return stripFooters(text);
 }
 
 const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
