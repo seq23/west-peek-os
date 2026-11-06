@@ -69,6 +69,10 @@ describe("a pitch change pauses brand sending, and she is told once", () => {
     expect(flat).toContain("Brand emails are paused: the brand pitch changed on November 5, 2026. Reply 'approve' to restart.");
     expect(flat).toContain("Pitch · Now: A hands-on evening for builders.");
     expect(flat).toContain("Pitch · Was: A hands-on evening.");
+    // Told once (6 Nov 2026 live read): a short list is not repeated "in full" below; the year is not bolded.
+    expect(flat).not.toContain("What changed, in full");
+    expect(flat.split("Pitch · Now: A hands-on evening for builders.").length - 1).toBe(1);
+    expect(mail.text).not.toMatch(/\*\*2026\*\*/);
     // The same content on the next passes: nothing more to her.
     await runDrip(env, new Date(NOW.getTime() + 20 * 60_000), "west-peek", DRIP_DEPS);
     await runDrip(env, new Date(NOW.getTime() + 40 * 60_000), "west-peek", DRIP_DEPS);

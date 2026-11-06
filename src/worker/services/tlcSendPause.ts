@@ -116,7 +116,8 @@ export async function tellSendPause(env: Env, now: Date, firmScope: string, gate
         { label: "What changed", bullets: lines.slice(0, 6) },
         { label: "On your word", bullets: ["\"approve\" approves exactly the content this email describes", "Emails you already approved are kept, and go on the next pass", "Until then, nothing goes to a brand"] },
       ],
-      details: ["What changed, in full:", ...lines, "", `Ref ${ref}`].join("\n"),
+      // "In full" only when the list above was cut (6 Nov 2026 live read: four short lines told twice).
+      details: [...(lines.length > 6 || lines.some((l) => l.length > 220) ? ["What changed, in full:", ...lines, ""] : []), `Ref ${ref}`].join("\n"),
     },
     objectType: "tlc_send_pause", objectId: ref, cardId: null, cardKind: null, firmScope,
   });

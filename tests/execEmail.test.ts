@@ -161,6 +161,8 @@ describe("every email kind renders to the busy-executive format", () => {
     expect(r.subject).toBe("Parker: your October 2026 Room — a very long title that keeps going…");
     expect(boldNumbers("3 sponsors at $22,000 and 15% — see https://example.org/2026/09/post-1 on 2026-09-15")).toBe("**3** sponsors at **$22,000** and **15%** — see https://example.org/2026/09/post-1 on 2026-09-15");
     expect(boldNumbers("already **3** bold, 63rd floor, re_1")).toBe("already **3** bold, 63rd floor, re_1");
+    // A date's year is never bolded as a figure (6 Nov 2026 live read).
+    expect(boldNumbers("changed on November 6, 2026, 4 lines")).toBe("changed on November 6, 2026, **4** lines");
   });
 
   it("breaks a wall of prose in the details by construction", () => {

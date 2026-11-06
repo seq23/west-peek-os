@@ -16,7 +16,7 @@ import {
   stageAfterReply, standingRulesIn, theirNewText, tierLines, wantsResearch,
   type BrandReplyIntent, type ReplyDraftInput, type WynnRule,
 } from "../../shared/tlc/brandReply";
-import { BRAND_EMAIL_ROOM_WORDS, TLC_BRAND_REPLY_NOTICE_CC_IDS, TLC_BRAND_REPLY_NOTICE_OBJECT, TLC_DRIP_DAYS, TLC_OWNER, TLC_SEATS, TLC_SIGNATURE, brandDisplayName, signedBrandEmail, monthWords, nextDripAt } from "../../shared/tlc/learningClub";
+import { BRAND_EMAIL_ROOM_WORDS, classifyBrandMail, TLC_BRAND_REPLY_NOTICE_CC_IDS, TLC_BRAND_REPLY_NOTICE_OBJECT, TLC_DRIP_DAYS, TLC_OWNER, TLC_SEATS, TLC_SIGNATURE, brandDisplayName, signedBrandEmail, monthWords, nextDripAt } from "../../shared/tlc/learningClub";
 import { partnerByEmail, partnerByFirmUserId } from "../../shared/registry/partners";
 import { TLC_BRAND_SALES_JOB } from "../../shared/policy/outsideEmail";
 import { actorForFirmUser, type Actor } from "./authorize";
@@ -62,7 +62,7 @@ const GMAIL_READ_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
 const WYNN = "aie_wynn";
 const wynnActor = (firmScope: string): Actor => ({ type: "AI", aiEmployeeId: WYNN, roles: [], firmScopes: [firmScope] } as unknown as Actor);
 
-export interface BrandMessage { messageId: string; subject: string; text: string; receivedAt: string; threadId?: string }
+export interface BrandMessage { messageId: string; subject: string; text: string; receivedAt: string; threadId?: string; from?: string }
 export interface DraftExtras {
   note: string | null;
   previous: string | null;
@@ -366,6 +366,16 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
     "INSERT OR IGNORE INTO tlc_brand_reply (id, deal_id, brand_message_id, their_subject, their_text, received_at, intent, draft_subject, draft_body, state, held_reason, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '', '', 'CLOSED', ?8, ?9)",
   ).bind(`tbr_${crypto.randomUUID()}`, deal.id, mid, msg.subject.slice(0, 300), words.slice(0, 8000), msg.receivedAt, intent, note, deal.firm_scope).run();
 
+  /*
+   * A MAIL SERVER'S DELIVERY NOTICE IS NEVER A BRAND'S REPLY (6 Nov 2026 live read: Talkspace's Google
+   * Group bounced on the thread, and Wynn drafted the proposal "Hi Mail," to mailer-daemon@googlemail.com
+   * and asked both partners to approve it). It is closed with no draft; the door's bounce handling owns
+   * the address. Stored as AUTO_REPLY (the table's machine-sent intent), without the drip resume.
+   */
+  if (classifyBrandMail({ from: msg.from ?? "", subject: msg.subject }) === "BOUNCED") {
+    await close("AUTO_REPLY", "a mail server's delivery notice, not the brand: no answer drafted");
+    return "SEEN";
+  }
   if (cls.kind === "AUTO_REPLY") {
     // Back on the drip, never earlier than its own next step; a finished drip stays finished.
     const due = nextDripAt(deal.drip_step, deal.first_sent_at, now, null);
@@ -678,7 +688,7 @@ export async function processBrandReplies(env: Env, now: Date, firmScope = "west
       if (!obj) continue;
       const text = await obj.text();
       if (!(await dealsForSender(env, row.from_address, { text })).some((x) => x.id === deal.id)) continue;
-      counts[await takeBrandReply(env, deal, { messageId: row.message_id ?? "", subject: row.subject, text, receivedAt: row.received_at }, d)] += 1;
+      counts[await takeBrandReply(env, deal, { messageId: row.message_id ?? "", subject: row.subject, text, receivedAt: row.received_at, from: row.from_address }, d)] += 1;
     }
   }
   let polled = "inbox not read";
