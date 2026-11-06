@@ -89,6 +89,8 @@ import {
   bookingPackTotals,
   brandSendGate,
   classifyBrandMail,
+  dripWindowClosed,
+  SPAM_COMPLAINT_WORDS,
   daysUntil,
   decisionEmail,
   defaultEventDate,
@@ -213,6 +215,7 @@ export interface TlcDealRow {
   drip_step: number;
   next_send_at: string | null;
   first_sent_at: string | null;
+  last_sent_at?: string | null;
   replied_at: string | null;
   stop_reason: string | null;
   decision_card_id: string | null;
@@ -535,7 +538,7 @@ export async function armOwnerFollowUps(env: Env, now: Date, firmScope = "west-p
   const armed: string[] = [];
   for (const d of rows) {
     if (!mine.has(brandKey(d.brand))) continue;
-    const at = nextDripAt(d.drip_step, d.first_sent_at ?? null, now, null);
+    const at = nextDripAt(d.drip_step, d.first_sent_at ?? null, now, null, d.last_sent_at ?? null);
     if (!at) continue;
     await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = ?2, updated_at = ?3 WHERE id = ?1 AND next_send_at IS NULL").bind(d.id, at, now.toISOString()).run();
     armed.push(brandDisplayName(d.brand));
@@ -720,6 +723,11 @@ export interface DripResult {
   samplesPending?: string[];
   /** Follow-ups (email 2, with the samples PDF) queued to go on their own, decided by the drip-step-2 policy. */
   followUpsQueued?: number;
+  /** Follow-ups that never went: the sequence passed day 14 (owner, 6 Nov 2026). */
+  sequenceEnded?: string[];
+  /** Deals re-timed to a new sequence, once per change of TLC_DRIP_DAYS. */
+  retimed?: string[];
+  spamPauseCleared?: string;
   /** What the send-pause notice did this pass (services/tlcSendPause.ts). */
   pause?: string;
 }
@@ -830,7 +838,7 @@ export async function categoryRival(env: Env, deal: TlcDealRow, now: Date, sentO
         AND d.stage NOT IN ('DECLINED','STOPPED') AND (d.stop_reason IS NULL OR d.stop_reason = 'REPLIED')
         AND (
           d.stop_reason = 'REPLIED' OR d.stage IN ('CALL','WAITING_ON_OWNERS','AGREED','PAID','DELIVERED')
-          OR (d.first_sent_at IS NOT NULL AND NOT (d.drip_step >= ?5 AND d.last_sent_at < ?6))
+          OR (d.first_sent_at IS NOT NULL AND NOT ((d.drip_step >= ?5 OR (d.drip_step >= 1 AND d.next_send_at IS NULL)) AND d.last_sent_at < ?6))
           OR (?7 = 0 AND EXISTS (SELECT 1 FROM tlc_drip_message m WHERE m.deal_id = d.id AND m.step = 0 AND m.state = 'AWAITING_APPROVAL' AND d.created_at <= ?8))
         )
       ORDER BY d.first_sent_at IS NULL, d.first_sent_at, d.created_at LIMIT 1`,
@@ -856,10 +864,10 @@ async function samplesPdfFor(env: Env, deal: TlcDealRow, ev: TlcEventRow, deps: 
 }
 
 /**
- * EMAIL 2 GOES ON ITS OWN (owner, 4 Nov 2026: every brand email needs her approval except the 2nd one in the drip). Its
- * card is decided by the policy (DRIP_STEP_2_POLICY), with the rule quoted, never by a person: nobody read it. The
- * authorizer accepts that decider for this card's object only, and the executor's owner-approval guard lets only
- * step 2 through without her decision.
+ * THE FOLLOW-UPS GO ON THEIR OWN (owner, 4 Nov 2026, widened 6 Nov 2026: every brand email needs her approval except the
+ * drip's follow-ups, emails 2 to 4). Their cards are decided by the policy (DRIP_STEP_2_POLICY), with the rule quoted,
+ * never by a person: nobody read them. The authorizer accepts that decider for this card's object only, and the
+ * executor's owner-approval guard lets only drip steps 2 to 4 through without her decision.
  */
 async function approveFollowUpByPolicy(env: Env, cardId: string, firmScope: string): Promise<void> {
   const { DRIP_STEP_2_POLICY, DRIP_STEP_2_RULE } = await import("../../shared/tlc/dripPolicy");
@@ -872,11 +880,54 @@ async function approveFollowUpByPolicy(env: Env, cardId: string, firmScope: stri
   await appendEvent(env, { eventType: "approval.decided_by_policy", actorType: "system", actorId: "tlc_drip", objectType: "approval_card", objectId: cardId, firmScope, payload: { policy: DRIP_STEP_2_POLICY, rule: DRIP_STEP_2_RULE } });
 }
 
+/** The sequence the deals were last timed for; a different TLC_DRIP_DAYS re-times every live sequence once. */
+export const DRIP_TIMED_FOR_SETTING = "drip_timed_for_days";
+
+/**
+ * A NEW SEQUENCE RE-TIMES THE LIVE ONES (owner, 6 Nov 2026: day 0/12 became day 0/3/7/14). Once per change of
+ * TLC_DRIP_DAYS, every deal still in its sequence (pitched, first email gone, no stop, a follow-up left) takes its next
+ * date from first_sent_at under the current days: a deal that had finished the old two-email sequence is armed for its
+ * third email, and a deal past day 14 gets nothing more. A brand whose out-of-office pushed its date later keeps the
+ * later date. Never touches a deal with a draft at its next step that she skipped. Returns the brands re-timed.
+ */
+export async function retimeDrip(env: Env, now: Date, firmScope = "west-peek"): Promise<string[]> {
+  const days = TLC_DRIP_DAYS.join(",");
+  const done = await env.WP_OS_DB.prepare("SELECT value FROM tlc_setting WHERE key = ?1").bind(DRIP_TIMED_FOR_SETTING).first<{ value: string | null }>();
+  if (done?.value === days) return [];
+  const rows = (await env.WP_OS_DB.prepare(
+    `SELECT d.* FROM tlc_deal d
+      WHERE d.firm_scope = ?1 AND d.stage = 'PITCHED' AND d.stop_reason IS NULL AND d.first_sent_at IS NOT NULL
+        AND d.drip_step >= 1 AND d.drip_step < ?2
+        AND (d.next_send_at IS NOT NULL OR NOT EXISTS (SELECT 1 FROM tlc_drip_message m WHERE m.deal_id = d.id AND m.step = d.drip_step))`,
+  ).bind(firmScope, TLC_DRIP_DAYS.length).all<TlcDealRow>()).results ?? [];
+  const moved: string[] = [];
+  for (const d of rows) {
+    const ooo = await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_brand_reply WHERE deal_id = ?1 AND intent = 'AUTO_REPLY' AND received_at >= ?2 LIMIT 1").bind(d.id, d.last_sent_at ?? d.first_sent_at).first();
+    const at = dripWindowClosed(d.drip_step, d.first_sent_at ?? null, now) ? null : nextDripAt(d.drip_step, d.first_sent_at ?? null, now, null, d.last_sent_at ?? null);
+    const next = ooo && d.next_send_at && at && d.next_send_at > at ? d.next_send_at : at;
+    if (next === (d.next_send_at ?? null)) continue;
+    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = ?2, updated_at = ?3 WHERE id = ?1").bind(d.id, next, now.toISOString()).run();
+    moved.push(`${brandDisplayName(d.brand)} → ${next ?? "nothing more (past day 14)"}`);
+  }
+  await env.WP_OS_DB.prepare("INSERT INTO tlc_setting (key, value, set_by, set_at) VALUES (?1, ?2, 'tlc_drip', ?3) ON CONFLICT(key) DO UPDATE SET value = excluded.value, set_by = excluded.set_by, set_at = excluded.set_at")
+    .bind(DRIP_TIMED_FOR_SETTING, days, now.toISOString()).run();
+  await appendEvent(env, { eventType: "tlc.drip_retimed", actorType: "system", actorId: "tlc_drip", objectType: "tlc_deal", objectId: `days:${days}`, firmScope, payload: { days: TLC_DRIP_DAYS, moved } });
+  return moved;
+}
+
 export async function runDrip(env: Env, now: Date, firmScope = "west-peek", replyDeps: import("./tlcBrandReply").BrandReplyDeps = {}, angleWriter?: import("./tlcOwnerInstruction").AngleWriter): Promise<DripResult> {
   const settings = await tlcSettings(env);
   const gate = brandSendGate(settings, await tlcOutside(env), await contentHashes(env));
   const result: DripResult = { ...emptyDrip(), gate };
   const wynn = actorFor(WYNN, firmScope);
+  // Once per sequence change: mid-sequence deals take their next date from the current days (owner, 6 Nov 2026).
+  result.retimed = await retimeDrip(env, now, firmScope);
+  // She turned sending back on after a spam complaint: the pause record goes and its named stop is posted cleared.
+  if (gate.open) {
+    const { clearSpamPause } = await import("./tlcSpamPause");
+    const cleared = await clearSpamPause(env, firmScope).catch(() => null);
+    if (cleared) result.spamPauseCleared = cleared;
+  }
   // A pitch or playbook change that closed the gate is told to her once, by email; reopening clears the stop.
   {
     const { tellSendPause } = await import("./tlcSendPause");
@@ -916,6 +967,13 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
         await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'HELD', held_reason = 'the brand answered or was stopped before it went' WHERE id = ?1").bind(m.id).run();
         continue;
       }
+      // DAY 14, THEN NEVER AGAIN: an approved follow-up that could not go before the sequence's window closed never goes.
+      if (dripWindowClosed(m.step, deal.first_sent_at ?? null, now)) {
+        await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'HELD', held_reason = 'past day 14 of the sequence: no follow-up goes after it' WHERE id = ?1").bind(m.id).run();
+        await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = NULL, updated_at = ?2 WHERE id = ?1").bind(deal.id, now.toISOString()).run();
+        result.sequenceEnded = [...(result.sequenceEnded ?? []), brandDisplayName(deal.brand)];
+        continue;
+      }
       // Approved together with a rival in its category: the first pitch waits (still approved) until that one is done.
       if (m.step === 0 && (await categoryRival(env, deal, now, true))) continue;
       // THE CLUB REACHED ITS GOAL (26 Oct 2026): its outreach stops; the approved email is held, never sent.
@@ -945,7 +1003,7 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
         result.sentBrands.push(deal.brand);
         await env.WP_OS_DB.prepare(
           "UPDATE tlc_deal SET stage = CASE WHEN stage = 'PROSPECT' THEN 'PITCHED' ELSE stage END, drip_step = ?2, first_sent_at = ?3, last_sent_at = ?4, next_send_at = ?5, updated_at = ?4 WHERE id = ?1",
-        ).bind(deal.id, step, first, now.toISOString(), nextDripAt(step, first, now, null)).run();
+        ).bind(deal.id, step, first, now.toISOString(), nextDripAt(step, first, now, null, m.step === 0 ? null : now.toISOString())).run();
         result.sent += 1;
       } catch (err) {
         await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'FAILED', held_reason = ?2 WHERE id = ?1").bind(m.id, err instanceof Error ? err.message.slice(0, 300) : "failed").run();
@@ -974,6 +1032,12 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
 
   const volume = await import("./tlcVolume");
   for (const deal of due) {
+    // DAY 14, THEN NEVER AGAIN (owner, 6 Nov 2026): a follow-up whose window closed is never drafted; the sequence ends.
+    if (dripWindowClosed(deal.drip_step, deal.first_sent_at ?? null, now)) {
+      await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = NULL, updated_at = ?2 WHERE id = ?1").bind(deal.id, now.toISOString()).run();
+      result.sequenceEnded = [...(result.sequenceEnded ?? []), brandDisplayName(deal.brand)];
+      continue;
+    }
     const ev = await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>();
     if (!ev?.topic) continue;
     // THE CLUB REACHED ITS GOAL (26 Oct 2026): no new pitch and no follow-up for it; a brand already talking to us goes on by reply.
@@ -1046,7 +1110,7 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
       continue;
     }
     const cardId = await fileDraft(env, deal, toFile, firmScope, null, deal.drip_step === 1 && samples.ok ? [samples.attachment] : []);
-    if (deal.drip_step === 1) {
+    if (deal.drip_step >= 1) {
       await approveFollowUpByPolicy(env, cardId, firmScope);
       result.followUpsQueued = (result.followUpsQueued ?? 0) + 1;
       continue;
@@ -1109,10 +1173,11 @@ export async function recordBrandMail(env: Env, input: { from: string; subject: 
   const now = (input.now ?? new Date()).toISOString();
   // A "not a fit" answer to the P.S. is a stop for good, read off the subject or, when the door has it, the new text.
   const first = classifyBrandMail(input);
-  const kind = first === "REPLIED" && (replyLooksLikeNo(input.subject) || (input.text !== undefined && replyLooksLikeNo(input.text))) ? "UNSUBSCRIBED" : first;
+  const said = first === "REPLIED" && input.text !== undefined && SPAM_COMPLAINT_WORDS.test(input.text) ? "COMPLAINED" : first;
+  const kind = said === "REPLIED" && (replyLooksLikeNo(input.subject) || (input.text !== undefined && replyLooksLikeNo(input.text))) ? "UNSUBSCRIBED" : said;
   const address = (/<([^>]+)>/.exec(input.from)?.[1] ?? input.from).trim().toLowerCase();
   let deals = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE lower(contact_email) = ?1 AND stop_reason IS NULL").bind(address).all<TlcDealRow>()).results ?? [];
-  if (deals.length === 0 && kind === "BOUNCED") {
+  if (deals.length === 0 && (kind === "BOUNCED" || kind === "COMPLAINED")) {
     const sent = (await env.WP_OS_DB.prepare("SELECT DISTINCT deal_id, subject FROM tlc_drip_message WHERE state = 'SENT'").all<{ deal_id: string; subject: string }>()).results ?? [];
     const ids = sent.filter((s) => input.subject.toLowerCase().includes(s.subject.toLowerCase())).map((s) => s.deal_id);
     for (const id of ids) {
@@ -1127,15 +1192,21 @@ export async function recordBrandMail(env: Env, input: { from: string; subject: 
     const { recordBounce } = await import("./tlcVolume");
     for (const d of deals) await recordBounce(env, d.contact_email, new Date(now));
   }
+  // A SPAM COMPLAINT (owner, 6 Nov 2026): that brand is stopped for good (stored as an opt-out) and ALL brand sending pauses.
+  if (kind === "COMPLAINED") {
+    const { pauseForSpamComplaint } = await import("./tlcSpamPause");
+    await pauseForSpamComplaint(env, { brands: deals.map((d) => d.brand), subject: input.subject, now: new Date(now), firmScope: deals[0]!.firm_scope });
+  }
+  const stored = kind === "COMPLAINED" ? "UNSUBSCRIBED" : kind;
   for (const d of deals) {
     await env.WP_OS_DB.prepare(
       "UPDATE tlc_deal SET stop_reason = ?2, replied_at = CASE WHEN ?2 = 'REPLIED' THEN ?3 ELSE replied_at END, next_send_at = NULL, stage = CASE WHEN ?2 = 'UNSUBSCRIBED' THEN 'STOPPED' ELSE stage END, updated_at = ?3 WHERE id = ?1",
-    ).bind(d.id, kind, now).run();
+    ).bind(d.id, stored, now).run();
     const ev = await env.WP_OS_DB.prepare("SELECT month, topic FROM tlc_event WHERE id = ?1").bind(d.event_id).first<{ month: string; topic: string | null }>();
     const card = await env.WP_OS_DB.prepare("SELECT id FROM work_card WHERE kind = 'TLC_BRAND_BATCH' AND firm_scope = ?1 ORDER BY created_at DESC LIMIT 1").bind(d.firm_scope).first<{ id: string }>();
     if (card) {
       await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || ?2, 1, 16000), updated_at = ?3 WHERE id = ?1")
-        .bind(card.id, `• ${now.slice(0, 16)}Z ${d.brand} (${ev ? monthWords(ev.month) : d.event_id}): ${kind === "REPLIED" ? `replied — "${input.subject.slice(0, 120)}". Sequence stopped; take it to a call and record the offer.` : kind === "BOUNCED" ? "the address bounced. Sequence stopped." : "asked us to stop. Sequence stopped for good."}`, now)
+        .bind(card.id, `• ${now.slice(0, 16)}Z ${d.brand} (${ev ? monthWords(ev.month) : d.event_id}): ${kind === "REPLIED" ? `replied — "${input.subject.slice(0, 120)}". Sequence stopped; take it to a call and record the offer.` : kind === "BOUNCED" ? "the address bounced. Sequence stopped." : kind === "COMPLAINED" ? "marked our email as spam. Stopped for good; ALL brand sending is paused until she turns it back on." : "asked us to stop. Sequence stopped for good."}`, now)
         .run();
     }
   }

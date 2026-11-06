@@ -18,6 +18,7 @@ import { brandEmailHtml, withBrandFooter } from "../../shared/tlc/brandFooter";
 import { TLC_OWNER } from "../../shared/tlc/learningClub";
 import { GMAIL_COMPOSE_SCOPE, sendViaGmail } from "./googleClient";
 import { serviceAccountToken } from "./googleWorkspaceClient";
+import { DRIP_POLICY_FIRST_STEP, DRIP_POLICY_LAST_STEP } from "../../shared/tlc/dripPolicy";
 import {
   cloudflareEmailBlockedReason,
   isCloudflareEmailEnabled,
@@ -156,8 +157,9 @@ async function brandMailAsOwner(
   receiptId: string | undefined,
   message: { to: string; cc?: readonly string[]; subject: string; text: string; replyTo?: readonly string[]; attachments?: readonly EmailAttachment[]; inReplyTo?: string; threadId?: string },
 ): Promise<EmailSendResult> {
-  // Owner ruling, 4 Nov 2026: only the day-four drip may pass without HER decision.
-  const followUp = await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_drip_message WHERE effect_request_id = ?1 AND step = 1").bind(requestId).first();
+  // Owner ruling, 4 Nov 2026 (widened 6 Nov 2026): only the drip's follow-ups (steps 2 to 4) may pass without HER decision.
+  const followUp = await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_drip_message WHERE effect_request_id = ?1 AND step BETWEEN ?2 AND ?3")
+    .bind(requestId, DRIP_POLICY_FIRST_STEP, DRIP_POLICY_LAST_STEP).first();
   const herApproval = receiptId ? await env.WP_OS_DB.prepare(
     `SELECT 1 FROM approval_card a JOIN firm_user u ON u.id = a.decided_by
       WHERE a.id = ?1 AND a.state = 'approved' AND a.action_key = 'effect.email.send'

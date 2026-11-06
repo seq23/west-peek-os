@@ -13,7 +13,7 @@
  *       type other than `email.send`; the booking-pack prompt says the partners book and pay.
  *   3 · NO SPONSOR NAME OR AMOUNT IN THE PUBLIC REPO. No migration inserts a deal, a ticket or a
  *       story row.
- *   4 · THE NUMBERS ARE THE OWNER'S: drip 0/12 (pitch + one follow-up; owner, 4 Nov 2026), 25–40 seats, $10 ticket max, $10,000 target,
+ *   4 · THE NUMBERS ARE THE OWNER'S: drip 0/3/7/14 (pitch + up to three follow-ups, then never again; owner, 6 Nov 2026), 25–40 seats, $10 ticket max, $10,000 target,
  *       $7,500 floor, $5,000 cap, 3-day veto window, 21/14-day checks.
  *   5 · BRANDS WE MUST PITCH COME FIRST AND ARE NEVER DROPPED (owner, 23 Oct 2026). The batch calls
  *       `handleMustPitch(` before it reads the model's own picks; both paths pass the ONE address check
@@ -25,6 +25,11 @@
  *       `dripAddressCheck(` before `fileDraft(` and again before it executes an approved email; a club whose goal is
  *       reached is skipped (`outreachStopped(`); a bounce marks the address for good (`recordBounce(`); Wynn's list
  *       goes into the drip only through `queueDeal(` (tlcVolume has no tlc_deal insert of its own).
+ *
+ *   7 · THE FOUR-EMAIL DRIP (owner, 6 Nov 2026; risk brain R-EML-04). Nothing goes after day 14 (`dripEndsAt(` in
+ *       `nextDripAt`, `dripWindowClosed(` before a follow-up is drafted AND before an approved one is executed); the
+ *       policy that sends follow-ups without her approves steps 1 to 3 only, never email 1, in both the authorizer and
+ *       the executor's owner guard; a spam complaint calls `pauseForSpamComplaint(`, which turns the switch off.
  *
  * Hard-fails on zero: every file it reads must exist and be non-empty. `--self-test` plants each
  * violation and requires it to be caught.
@@ -44,6 +49,10 @@ const FILES = {
   volumeService: "src/worker/services/tlcVolume.ts",
   migration: "migrations/0259_the_learning_club_and_wynn_returns.sql",
   wrangler: "wrangler.toml",
+  dripPolicy: "src/shared/tlc/dripPolicy.ts",
+  authorize: "src/worker/services/authorize.ts",
+  executor: "src/worker/effects/executor.ts",
+  spamPause: "src/worker/services/tlcSpamPause.ts",
 };
 
 // Product source is read WITHOUT its comments: a sentence explaining a rule must never satisfy it,
@@ -61,7 +70,16 @@ export function check(src) {
     if (!v || !v.trim()) f.push(`${k}: file missing or empty — a scan that read nothing is not a pass`);
   }
   if (f.length) return f;
-  const { shared, service, migration, wrangler, migrations, mustPitch, volume, volumeService } = src;
+  const { shared, service, migration, wrangler, migrations, mustPitch, volume, volumeService, dripPolicy, authorize, executor, spamPause } = src;
+
+  // 7 · The four-email drip: never after day 14, the policy never sends email 1, a spam complaint stops everything.
+  if (!/due > dripEndsAt\(firstSentAt\) \? null/.test(shared)) f.push("nextDripAt no longer refuses a follow-up after day 14");
+  if (!/if \(dripWindowClosed\(deal\.drip_step, deal\.first_sent_at/.test(service) || !/if \(dripWindowClosed\(m\.step, deal\.first_sent_at/.test(service)) f.push("the drip no longer checks day 14 both before drafting and before sending a follow-up");
+  if (!/DRIP_POLICY_FIRST_STEP = 1;/.test(dripPolicy) || !/DRIP_POLICY_LAST_STEP = TLC_DRIP_DAYS\.length - 1;/.test(dripPolicy)) f.push("the follow-up policy's steps moved: it must be steps 1 to the last, never email 1");
+  if (!/m\.step BETWEEN \?3 AND \?4[\s\S]{0,200}\.bind\(card\.object_id, card\.id, DRIP_POLICY_FIRST_STEP, DRIP_POLICY_LAST_STEP\)/.test(authorize)) f.push("the authorizer no longer limits the policy decider to the drip's follow-ups");
+  if (!/step BETWEEN \?2 AND \?3"\)\s*\.bind\(requestId, DRIP_POLICY_FIRST_STEP, DRIP_POLICY_LAST_STEP\)/.test(executor)) f.push("the executor's owner guard no longer limits what passes without her to the drip's follow-ups");
+  if (!/kind === "COMPLAINED"\)[\s\S]{0,200}pauseForSpamComplaint\(/.test(service)) f.push("a spam complaint no longer pauses brand sending");
+  if (!/putSetting\(env, BRAND_SEND_SETTING, "off"/.test(spamPause)) f.push("the spam-complaint pause no longer turns the brand-send switch off");
 
   // 1 · The send gate.
   if (!/INSERT INTO tlc_setting \(key, value, set_by\) VALUES \('brand_send', 'off'/.test(migration)) f.push("the brand-send switch is not seeded 'off' in 0259");
@@ -108,7 +126,7 @@ export function check(src) {
   // 4 · The owner's numbers.
   const pins = [
     // Her flow (shared/tlc/brandFlow.ts): the first pitch and ONE follow-up at day 12 (owner, 4 Nov 2026; was day 4), no more.
-    [/TLC_DRIP_DAYS = \[0, 12\] as const/, "drip days 0/12 (the pitch and one follow-up)"],
+    [/TLC_DRIP_DAYS = \[0, 3, 7, 14\] as const/, "drip days 0/3/7/14 (the pitch and up to three follow-ups)"],
     [/TLC_SEATS = \{ min: 25, max: 40 \}/, "25–40 seats"],
     [/TLC_TICKET_PRICE_MAX_USD = 10;/, "$10 ticket max"],
     [/TLC_NET_TARGET_USD = 10_000;/, "$10,000 target"],
@@ -191,7 +209,15 @@ function selfTest() {
     ["a spend effect", { service: `${good.service}\nconst x = "effect_type = 'payment.send'";\n` }],
     ["booking rule dropped", { service: good.service.replace("partners, who book and pay. You never book, reserve or pay for anything", "partners.") }],
     ["sponsor row in a migration", { migrations: [...good.migrations, ["9999_x.sql", "INSERT INTO tlc_deal (id) VALUES ('x');"]] }],
-    ["drip moved", { shared: good.shared.replace("TLC_DRIP_DAYS = [0, 12] as const", "TLC_DRIP_DAYS = [0, 4] as const") }],
+    ["drip moved", { shared: good.shared.replace("TLC_DRIP_DAYS = [0, 3, 7, 14] as const", "TLC_DRIP_DAYS = [0, 3, 7, 14, 21] as const") }],
+    ["no end after day 14", { shared: good.shared.replace("due > dripEndsAt(firstSentAt) ? null", "false ? null") }],
+    ["late follow-up drafted", { service: good.service.replace("if (dripWindowClosed(deal.drip_step, deal.first_sent_at", "if (false && dripWindowClosed(deal.drip_step, deal.first_sent_at") }],
+    ["late follow-up sent", { service: good.service.replace("if (dripWindowClosed(m.step, deal.first_sent_at", "if (false && dripWindowClosed(m.step, deal.first_sent_at") }],
+    ["policy sends email 1", { dripPolicy: good.dripPolicy.replace("DRIP_POLICY_FIRST_STEP = 1;", "DRIP_POLICY_FIRST_STEP = 0;") }],
+    ["authorizer any step", { authorize: good.authorize.replace("m.step BETWEEN ?3 AND ?4", "m.step >= 0") }],
+    ["executor any step", { executor: good.executor.replace("step BETWEEN ?2 AND ?3\")", "step >= 0\")") }],
+    ["complaint ignored", { service: good.service.replace("pauseForSpamComplaint(env,", "noteComplaint(env,") }],
+    ["complaint leaves switch on", { spamPause: good.spamPause.replace('putSetting(env, BRAND_SEND_SETTING, "off"', 'putSetting(env, "brand_send_note", "off"') }],
     ["ticket price raised", { shared: good.shared.replace("TLC_TICKET_PRICE_MAX_USD = 10;", "TLC_TICKET_PRICE_MAX_USD = 25;") }],
     ["non-AI gate loosened", { shared: good.shared.replace("TLC_FUNDED_EVENTS_BEFORE_NON_AI = 6;", "TLC_FUNDED_EVENTS_BEFORE_NON_AI = 2;") }],
     ["goal lowered", { shared: good.shared.replace("TLC_SPONSOR_GOAL_USD = 25_000;", "TLC_SPONSOR_GOAL_USD = 15_000;") }],

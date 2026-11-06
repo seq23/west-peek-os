@@ -385,8 +385,14 @@ describe("one brand per category per club at a time (owner, 26 Oct 2026)", () =>
     const out = await runDrip(env, MORNING, "west-peek", DRIP_DEPS);
     expect(out.heldForCategory).toEqual(["Memory Two (after Memory One)"]);
     expect(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_drip_message WHERE deal_id = 'tld_mem2'").first()).toBeNull();
-    // The first goes quiet: its one follow-up went eight days ago and it never answered. The category opens.
-    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET stop_reason = NULL, drip_step = 2, last_sent_at = '2026-11-01T14:00:00.000Z' WHERE id = 'tld_mem1'").run();
+    // Still mid-sequence (email 2 went, emails 3 and 4 to come): it is live, however long ago the last one went.
+    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET stop_reason = NULL, drip_step = 2, next_send_at = '2026-11-12T14:00:00.000Z', last_sent_at = '2026-11-01T14:00:00.000Z' WHERE id = 'tld_mem1'").run();
+    expect(await categoryRival(env, two, MORNING)).toBe("Memory One");
+    // The first goes quiet: its last follow-up (email 4) went eight days ago and it never answered. The category opens.
+    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET drip_step = 4, next_send_at = NULL WHERE id = 'tld_mem1'").run();
+    expect(await categoryRival(env, two, MORNING)).toBeNull();
+    // A sequence that ended at day 14 before email 4 (nothing more planned) goes quiet the same way.
+    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET drip_step = 3 WHERE id = 'tld_mem1'").run();
     expect(await categoryRival(env, two, MORNING)).toBeNull();
     // A follow-up only two days old is still live.
     await env.WP_OS_DB.prepare("UPDATE tlc_deal SET last_sent_at = '2026-11-07T14:00:00.000Z' WHERE id = 'tld_mem1'").run();

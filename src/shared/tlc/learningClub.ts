@@ -1,7 +1,7 @@
 import { COMMUNITY_ABOUT } from "../community/size";
 import { withBrandFooter, withoutBrandFooter } from "./brandFooter";
 import { PARTNERS } from "../registry/partners";
-import { fillTemplate } from "./brandFlow";
+import { FLOW_TEMPLATES, fillTemplate } from "./brandFlow";
 /**
  * WEST PEEK ROOMS — THE LEARNING CLUB (TLC) EDITION. Owner-approved 22 Oct 2026.
  *
@@ -90,10 +90,19 @@ export const TLC_TICKET_GATE_DAYS = 14;
 /** The booking pack goes to the partners ~6 weeks out; a topic with no interested brand is flagged then. */
 export const TLC_BOOKING_PACK_DAYS = 42;
 /**
- * Brand emails: the first pitch, and ONE follow-up twelve days later (owner, 4 Nov 2026; was day four). Email 2 carries
- * the brand's 3-page samples PDF and is the only brand email that goes without her approval of it. After it, nothing.
+ * Brand emails: the first pitch and up to THREE follow-ups, at day 0, 3, 7 and 14 counted from the first send, then never
+ * again (owner, 6 Nov 2026, replacing "one follow-up at day 12"; risk brain R-EML-04). Email 1 needs her approval; emails
+ * 2 to 4 go by policy (shared/tlc/dripPolicy.ts). Email 2 carries the brand's 3-page samples PDF. Any reply, bounce or
+ * opt-out stops that brand at once; a spam complaint pauses ALL brand sending (services/tlcSpamPause.ts).
  */
-export const TLC_DRIP_DAYS = [0, 12] as const;
+export const TLC_DRIP_DAYS = [0, 3, 7, 14] as const;
+/** Two follow-ups never go closer together than this, even when a held sequence catches up. */
+export const TLC_DRIP_MIN_GAP_DAYS = 2;
+/**
+ * Nothing goes after the last day of the sequence: day 14, plus one day for a warm-up or allowance hold. A sequence that
+ * falls behind (a closed gate, a late approval) drops the steps that no longer fit rather than send past day 14.
+ */
+export const TLC_DRIP_GRACE_DAYS = 1;
 export const TLC_SPONSOR_CATEGORIES = { min: 5, max: 10 } as const;
 
 /**
@@ -558,7 +567,11 @@ export function needsSwap(daysOut: number, deals: ReadonlyArray<{ stage: string;
 
 // ── The drip ────────────────────────────────────────────────────────────────────────────────────
 
-export type DripStop = "REPLIED" | "BOUNCED" | "UNSUBSCRIBED" | "DECLINED";
+export type DripStop = "REPLIED" | "BOUNCED" | "UNSUBSCRIBED" | "DECLINED" | "COMPLAINED";
+
+/** A message that is a spam complaint: a feedback-loop or abuse report, or a person saying so. Stops ALL brand sending. */
+export const SPAM_COMPLAINT_FROM = /\b(?:abuse|fbl|feedback-?loop|complaints?)@|\bfeedback-?loop\b/i;
+export const SPAM_COMPLAINT_WORDS = /\b(?:this is spam|(?:reported|marked|flagged) (?:this |it |you |your email )?as spam|spam complaint|abuse report|complaint feedback|stop spamming)\b/i;
 
 /**
  * When the next email in the sequence is due. `step` is how many have gone; null means the drip is
@@ -575,11 +588,23 @@ export const TLC_BRANDS_PER_CLUB = 5;
  */
 export const TLC_BRANDS_PER_SEARCH = 3;
 
-export function nextDripAt(step: number, firstSentAt: string | null, now: Date, stopped: DripStop | null): string | null {
+export function nextDripAt(step: number, firstSentAt: string | null, now: Date, stopped: DripStop | null, lastSentAt: string | null = null): string | null {
   if (stopped) return null;
   if (step >= TLC_DRIP_DAYS.length) return null;
   if (step === 0 || !firstSentAt) return now.toISOString();
-  return new Date(Date.parse(firstSentAt) + TLC_DRIP_DAYS[step]! * 86_400_000).toISOString();
+  const day = Date.parse(firstSentAt) + TLC_DRIP_DAYS[step]! * 86_400_000;
+  const due = lastSentAt ? Math.max(day, Date.parse(lastSentAt) + TLC_DRIP_MIN_GAP_DAYS * 86_400_000) : day;
+  return due > dripEndsAt(firstSentAt) ? null : new Date(due).toISOString();
+}
+
+/** The last moment any follow-up may go: the sequence's last day from the first send, plus the grace day. */
+export function dripEndsAt(firstSentAt: string): number {
+  return Date.parse(firstSentAt) + (TLC_DRIP_DAYS[TLC_DRIP_DAYS.length - 1]! + TLC_DRIP_GRACE_DAYS) * 86_400_000;
+}
+
+/** True when a follow-up (step 1 or later) may no longer go: the sequence's window has closed. */
+export function dripWindowClosed(step: number, firstSentAt: string | null, now: Date): boolean {
+  return step >= 1 && Boolean(firstSentAt) && now.getTime() > dripEndsAt(firstSentAt!);
 }
 
 /**
@@ -598,6 +623,7 @@ export function classifyBrandMail(input: { from: string; subject: string }): Dri
   const from = input.from.toLowerCase();
   const subject = input.subject.toLowerCase();
   if (/mailer-daemon|postmaster|mail delivery|bounce/.test(from) || /undeliverable|delivery status notification|returned mail|delivery failure/.test(subject)) return "BOUNCED";
+  if (SPAM_COMPLAINT_FROM.test(from) || SPAM_COMPLAINT_WORDS.test(subject)) return "COMPLAINED";
   if (/\bunsubscribe\b|\bremove me\b|\bstop\b/.test(subject)) return "UNSUBSCRIBED";
   return "REPLIED";
 }
@@ -701,12 +727,17 @@ export function dripEmail(raw: DripEmailInput): { subject: string; text: string 
       "",
       TLC_DRIP_ASK,
     ],
-    // Step 2 of her flow (shared/tlc/brandFlow.ts): the ONE follow-up, day 12, a three-line cover with the brand's
-    // 3-page samples PDF attached (owner, 4 Nov 2026). After it, nothing more; it carries no P.S. (her template).
+    // Step 2 of her flow (shared/tlc/brandFlow.ts): the first follow-up, day 3, a three-line cover with the brand's
+    // 3-page samples PDF attached (owner, 4 Nov 2026). It carries no P.S. (her template).
     [fillTemplate("followUp", { hi, brand: input.brand })],
+    // Emails 3 (day 7) and 4 (day 14), owner, 6 Nov 2026: short, something new each, the soft P.S. of their step.
+    [fillTemplate("followUp2", { hi, brand: input.brand, topic: input.topic })],
+    [fillTemplate("followUp3", { hi })],
   ];
-  const step = Math.min(input.step, bodies.length - 1);
-  const text = [...bodies[step]!, "", ...TLC_SIGNATURE, ...(step === 0 ? ["", TLC_PS_BY_STEP[0]!] : [])].join("\n");
+  if (input.step >= bodies.length) throw new Error(`NAMED STOP [DRIP_PAST_LAST_EMAIL] there is no brand email ${input.step + 1}; the sequence is ${bodies.length} emails`);
+  const step = input.step;
+  const ps = step === 1 ? null : TLC_PS_BY_STEP[step] ?? null;
+  const text = [...bodies[step]!, "", ...TLC_SIGNATURE, ...(ps ? ["", ps] : [])].join("\n");
   return { subject, text: withBrandFooter(text) };
 }
 
@@ -736,6 +767,11 @@ export function monthWords(yyyyMm: string): string {
 
 /** THE SWITCH. `tlc_setting.brand_send`; anything but exactly 'on' is off, and no row is off. */
 export const BRAND_SEND_SETTING = "brand_send";
+/**
+ * A SPAM COMPLAINT PAUSES ALL BRAND SENDING (owner, 6 Nov 2026; risk brain R-EML-04). Set with the switch turned off by
+ * services/tlcSpamPause.ts: { at, brand } as JSON. Sending restarts only when she turns the switch back on.
+ */
+export const SPAM_PAUSE_SETTING = "brand_send_spam_pause";
 /** Retired 22 Oct 2026: a time, not tied to any content. Never read as an approval again. */
 export const ONEPAGER_APPROVAL_SETTING = "onepager_mock_approved_at";
 export const PLAYBOOK_APPROVAL_SETTING = "playbook_approved_at";
@@ -794,7 +830,7 @@ export function brandSendGate(
   if (pitch === "CHANGED") reasons.push("the brand pitch changed after it was approved; approve it again");
   if (playbook === "NOT_APPROVED") reasons.push("the owner has not approved the sales playbook");
   if (playbook === "CHANGED") reasons.push("the sales playbook changed after it was approved; approve it again");
-  if (settings[BRAND_SEND_SETTING] !== "on") reasons.push("the TLC brand-send switch is off");
+  if (settings[BRAND_SEND_SETTING] !== "on") reasons.push(settings[SPAM_PAUSE_SETTING] ? "a spam complaint paused all brand sending; it restarts when she turns brand sending back on" : "the TLC brand-send switch is off");
   if (!outside.allowed) reasons.push(outside.code === "NOT_ON_LIST" ? TLC_NOT_ON_OUTSIDE_LIST : `${outside.reason} — tap to open your Outside email list.`);
   return { open: reasons.length === 0, reasons, outside_email_allowed: outside.allowed };
 }
@@ -1018,6 +1054,15 @@ const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;"
 // ── The sales playbook (Wynn's), as the prompts read it ────────────────────────────────────────
 
 /**
+ * Emails 3 and 4 in the playbook, word for word, one line each (owner, 6 Nov 2026): so her approval of the playbook is
+ * of their exact words, and the "Brand emails are paused" email shows each line whole (it cuts a line past 220).
+ */
+function followUpWords(n: 3 | 4, name: "followUp2" | "followUp3", ps: number): string[] {
+  const lines = FLOW_TEMPLATES[name].replace(/^\{hi\}\n+/, "").replace(/\{brand\}/g, "<brand>").replace(/\{topic\}/g, "<club topic>").split("\n").filter(Boolean);
+  return [...lines.map((l, i) => (i === 0 ? `Email ${n} (day ${TLC_DRIP_DAYS[n - 1]}): "${l}"` : `Email ${n}, next: "${l}"`)), `Email ${n} ends with: "${TLC_PS_BY_STEP[ps]}"`];
+}
+
+/**
  * WYNN'S PLAYBOOK. Every TLC prompt carries this text, so the playbook the owner approves IS the
  * instruction the model is given — never a document beside it.
  */
@@ -1029,7 +1074,12 @@ export const TLC_PLAYBOOK: readonly string[] = [
   "Sponsors in a club are complementary, never competitors: one brand per kind of product that would compete (one drink base, then mixers, glassware, wellness, food). Never approach a brand that competes with an agreed or featured partner. This is how we put a room together, not a promise to a brand: we never offer or claim category exclusivity.",
   "Who we write to: a named person at the brand whose job is partnerships, events, community or brand marketing, at an address read off a live page. Never a guessed address. Never a contact without an email.",
   "How we write: signed by Sequoia Taylor, West Peek Ventures; replies go to her. Short, plain, warm, professional. Lead with the brand's own reason. One ask: \"Would you be open to exploring a partnership?\" No pitch, price or attachment until they reply. No inflated claims, no numbers we cannot show, no invented case studies. The first Learning Club is in 2027: describe it in the future tense; never imply past clubs, past partners, past guests or a track record, and never say outright that it has not run. Never mention charging guests or a ticket price to a brand. Never offer or mention a venue, the brand's office or their space: these are our own branded events.",
-  "Cadence: two emails, at day 0 and day 12. Sequoia approves email 1, which carries no attachment. Email 2 carries the brand's 3-page samples PDF, waits until that PDF is made, and is the only email that goes without her approval of it. After it, nothing more. Stop the moment they reply, bounce or ask us to stop. Warm up slowly: 5 a day the first week, then 10, 20, 30.",
+  "Cadence: the first email and up to three follow-ups, at day 0, 3, 7 and 14 from the first send, then never again. Sequoia approves email 1, which carries no attachment.",
+  "Emails 2, 3 and 4 are the only emails that go without her approval of each one. Email 2 carries the brand's 3-page samples PDF and waits until that PDF is made.",
+  "Each follow-up is short, adds something new and never guilt-trips. Stop that brand the moment they reply, bounce or ask us to stop.",
+  "A spam complaint pauses all brand sending until she turns it back on. Warm up slowly: 5 a day the first week, then 10, 20, 30.",
+  ...followUpWords(3, "followUp2", 2),
+  ...followUpWords(4, "followUp3", 3),
   "A brand that asks the price goes straight to the proposal with its own partner-levels sheet, as a draft for her approval. When a brand replies yes: send them the brand pitch PDF, and tell Sequoia. Never suggest or ask for a call: deals close by email; if they ask for one, say yes and schedule it from her calendar. Once they have said what they want (by email, or on a call they asked for), write up their cash, their in-kind and what they want, and send Sequoia one email with a recommendation and the club's net if we say yes. Her reply decides: yes, no, or counter with an amount.",
   "Money: we invoice and send West Peek's own payment link. We never book, buy or pay for anything; hosts, venues, food, materials and photographers go to the partners as options with prices and book-by dates.",
   "Privacy: no attendee name, email or list ever goes to a sponsor.",

@@ -1,7 +1,7 @@
 /**
  * THE TLC BRAND FLOW, START TO FINISH, ALL BY EMAIL (owner, 26 Oct 2026; her spec "Pinecone, start to finish",
  * artifact v8). This file is the durable copy of that spec: the five steps, the call branch, and the email at each
- * one as a template. The code reads it — `dripEmail` (steps 1–2), `samplesCoverEmail` (3), `proposalEmail` (4),
+ * one as a template. The code reads it — `dripEmail` (steps 1–2, and the follow-ups), `samplesCoverEmail` (3), `proposalEmail` (4),
  * `confirmEmail` (5) and the call reply — and tests/tlcBrandFlow.test.ts reads it back. Brand words vary; tone,
  * structure and rules stay. Everything committed uses a FAKE brand; a real brand's instance lives only in the
  * production database.
@@ -21,14 +21,14 @@ export interface FlowStep {
 
 export const BRAND_FLOW: readonly FlowStep[] = [
   { n: 1, email: "First pitch", money: "No", movesOnWhen: "They reply", attaches: [] },
-  { n: 2, email: "Reply, or the one follow-up if they're silent (day 12, the only automatic send, by her rule): the 3-page samples PDF attached; it waits until the PDF is made. After it, nothing more", money: "No", movesOnWhen: "Interest or questions", attaches: ["the 3-page samples PDF"] },
+  { n: 2, email: "Reply, or the follow-ups if they're silent (days 3, 7 and 14 from the first send, the only automatic sends, by her rule): the first carries the 3-page samples PDF and waits until it is made. After day 14, nothing more", money: "No", movesOnWhen: "Interest or questions", attaches: ["the 3-page samples PDF"] },
   { n: 3, email: "One 3-page PDF, made for them", money: "No", movesOnWhen: "Interest or questions", attaches: ["the 3-page samples PDF"] },
   { n: 4, email: "Proposal: partner options (also straight away when they ask the price)", money: "First time", movesOnWhen: "They pick one", attaches: ["the partner-levels sheet made for this brand, every price per event"] },
   { n: 5, email: "Agreement + invoice", money: "Yes", movesOnWhen: "Signed and paid", attaches: ["a one-page agreement", "the invoice"] },
 ];
 
-/** After the one follow-up, no more follow-ups. */
-export const FOLLOW_UPS = 1;
+/** Up to three follow-ups (owner, 6 Nov 2026; risk brain R-EML-04), then never again. */
+export const FOLLOW_UPS = 3;
 
 /**
  * The templates, word for word, with {placeholders}. {first} is the contact's first name ("Hi," when unknown),
@@ -38,6 +38,15 @@ export const FOLLOW_UPS = 1;
 export const FLOW_TEMPLATES = {
   followUp:
     "{hi}\n\nOne follow-up on The Learning Club: rather than describe it, I've attached a short 3-page PDF built around {brand}.\nIt shows how the evening will run, what a series of six could look like, and who will be in the room.\nIf any of it fits, just reply and I'll take it from there.",
+  /*
+   * Emails 3 and 4 (owner, 6 Nov 2026): short, each adds something new, never a guilt line ("just checking in", "did you
+   * see"). Drafted for her approval: they are quoted word for word in the playbook, so changing them pauses brand
+   * sending until she approves (services/tlcSendPause.ts).
+   */
+  followUp2:
+    "{hi}\n\nOne thing I didn't mention: the hands-on hour at The Learning Club ({topic}) is built around a partner's product, so guests will leave having used {brand}, not just heard about it.\nWe host every segment, so nobody from {brand} needs to be there unless you'd like to be.",
+  followUp3:
+    "{hi}\n\nA last note on The Learning Club: the 2027 dates are flexible, and a partner can join for a single evening or a series of six.\nIf the timing works better later in the year, a one-line reply is all it takes and I'll pick it up from there.",
   cover:
     "{hi}\n\nHere's a short 3-page PDF, built around {brand}:\n\n1. Run of show: how the evening flows, and where {brand} comes in: \"{segment}\", a segment led by {brand} or by our host.\n2. A series of six: how the room could grow into {arc}.\n3. Who's in the room: the kinds of people we'd invite, shaped around who you told us you want to reach.\n\nEverything here can bend to your launches and your audience. Tell me what you'd change and I'll come back with options for how {brand} could take part.",
   proposal:
