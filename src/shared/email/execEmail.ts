@@ -63,6 +63,13 @@ export interface ExecEmailInput {
    * rule is worth more than the placement. Omitted, the footer is byte-identical to before.
    */
   routedBy?: string | null;
+  /**
+   * A DOCUMENT EMAIL, ALREADY LAID OUT (owner, 7 Nov 2026: Wynn's draft emails take the shape she approved on the Pinecone
+   * Pricing Reply v2: the subject with its version, the reply word for word, the sheet inline; shared/tlc/wynnDraftEmail.ts).
+   * When present it is sent as it is, instead of the TL;DR layout, and checked by `laidOutProblems` instead of
+   * `lintExecEmail`. Every other gate of the door (who it may go to, the switch, the sender) is the same.
+   */
+  laidOut?: RenderedExecEmail | null;
 }
 
 export interface RenderedExecEmail {
@@ -182,7 +189,18 @@ function normaliseSections(sections: readonly ExecEmailSection[]): ExecEmailSect
 
 // ── Text ─────────────────────────────────────────────────────────────────────
 
+/** What makes a laid-out email unfit to send: an empty part, an over-long subject, markdown stars, an /api/ address. */
+export function laidOutProblems(e: RenderedExecEmail): string[] {
+  const v: string[] = [];
+  if (!e.subject.trim() || e.subject.length > 100 || /[\r\n]/.test(e.subject)) v.push("the subject is empty, over 100 characters or on two lines");
+  if (!e.text.trim() || !e.html.trim()) v.push("a part is empty");
+  if (/\*\*|TL;DR/.test(e.text)) v.push("markdown stars or a TL;DR in the plain text");
+  if (/\/api\/(?!tlc-pitch\/samples\/)/.test(e.text)) v.push("an /api/ address in the text");
+  return v;
+}
+
 export function renderExecEmail(input: ExecEmailInput): RenderedExecEmail {
+  if (input.laidOut) return input.laidOut;
   const sections = normaliseSections(input.sections);
   const tldr = boldNumbers(oneLine(input.tldr).replace(/^\**\s*TL;DR:?\**\s*/i, ""));
   const details = input.details ? breakProseRuns(input.details) : "";

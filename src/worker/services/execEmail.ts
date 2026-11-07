@@ -6,11 +6,11 @@ import type { EmailAttachment, EmailSendResult } from "../effects/emailTransport
 import { aiOutboundSwitches } from "../../shared/policy/aiOutbound";
 import { ASSIGNING_PARTNERS } from "../../shared/intake/partnerAuthority";
 import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
-import { lintExecEmail, renderExecEmail, type ExecEmailInput } from "../../shared/email/execEmail";
+import { laidOutProblems, lintExecEmail, renderExecEmail, type ExecEmailInput } from "../../shared/email/execEmail";
 import { recordThreadDelivery, startThread } from "./emailThread";
 import { threadReference } from "../../shared/email/thread";
 import { EmployeeSenderError, employeeSenderHeader } from "../../shared/registry/employeeMail";
-import { TLC_BRAND_REPLY_NOTICE_CC_IDS, TLC_BRAND_REPLY_NOTICE_OBJECT, TLC_RECIPIENTS, isTlcKind, isTlcMail } from "../../shared/tlc/learningClub";
+import { TLC_BRAND_REPLY_NOTICE_CC_IDS, TLC_PRICING_NOTICE_OBJECT, TLC_RECIPIENTS, isTlcKind, isTlcMail } from "../../shared/tlc/learningClub";
 import { partnerByEmail } from "../../shared/registry/partners";
 
 /**
@@ -25,12 +25,16 @@ export async function isTlcPartnerMail(env: Env, input: { cardKind?: string | nu
   const row = await env.WP_OS_DB.prepare("SELECT kind FROM work_card WHERE id = ?1").bind(input.objectId).first<{ kind: string | null }>().catch(() => null);
   return isTlcKind(row?.kind ?? null);
 }
-/** A cc a TLC email may keep: Sequoia, or (on the brand-reply approval email only) the partners she named, 6 Nov 2026. */
+/**
+ * A cc a TLC email may keep: Sequoia, or the partners she named, ON A PRICING EMAIL ONLY (owner, 7 Nov 2026: "Scooter is
+ * copied ONLY on pricing emails, never on anything else from Wynn"). The pricing round's object is the one door for him;
+ * every other Wynn email, the round-1 approval email included, loses his copy here whatever its caller passed.
+ */
 export function tlcCcKept(objectType: string, address: string): boolean {
   const a = address.trim().toLowerCase();
   if (TLC_RECIPIENTS.includes(a)) return true;
   const partner = partnerByEmail(a);
-  return objectType === TLC_BRAND_REPLY_NOTICE_OBJECT && partner !== null && TLC_BRAND_REPLY_NOTICE_CC_IDS.includes(partner.firmUserId);
+  return objectType === TLC_PRICING_NOTICE_OBJECT && partner !== null && TLC_BRAND_REPLY_NOTICE_CC_IDS.includes(partner.firmUserId);
 }
 export function tlcAddressed(to: readonly string[]): string[] {
   const kept = to.filter((a) => TLC_RECIPIENTS.includes(a));
@@ -185,7 +189,7 @@ export async function sendPartnerEmail(env: Env, input: PartnerEmailInput): Prom
   if (!aiOutboundSwitches(env).toPartners) {
     return { sent: false, to, reason: "employees cannot email the partners: WP_OS_AI_EMAIL_PARTNERS is off", subject: rendered.subject };
   }
-  const violations = lintExecEmail(rendered.subject, rendered.text, input.email.employee);
+  const violations = input.email.laidOut ? laidOutProblems(rendered) : lintExecEmail(rendered.subject, rendered.text, input.email.employee);
   if (violations.length > 0) {
     const reason = `not sent — the email does not meet the format: ${violations.join("; ")}`;
     await record(env, actor, events.notSent, { to, subject: rendered.subject, detail: reason, provider_message_id: null, violations });
@@ -271,7 +275,7 @@ export async function sendPartnersEmail(
   if (!aiOutboundSwitches(env).toPartners) {
     return { sent: false, to: joined, recipients: to, reason: "employees cannot email the partners: WP_OS_AI_EMAIL_PARTNERS is off", subject: rendered.subject };
   }
-  const violations = lintExecEmail(rendered.subject, rendered.text, input.email.employee);
+  const violations = input.email.laidOut ? laidOutProblems(rendered) : lintExecEmail(rendered.subject, rendered.text, input.email.employee);
   if (violations.length > 0) {
     const reason = `not sent — the email does not meet the format: ${violations.join("; ")}`;
     await record(env, actor, events.notSent, { to, subject: rendered.subject, detail: reason, provider_message_id: null, violations });
@@ -401,7 +405,7 @@ export async function sendFirmUserCopy(
   const rendered = renderExecEmail(input.email);
   const to = input.recipient.email.trim().toLowerCase();
   const actor = { objectType: input.objectType, objectId: input.objectId, firmScope: input.firmScope, actorId: input.byFirmUserId, actorType: "firm_user" as const };
-  const violations = lintExecEmail(rendered.subject, rendered.text, input.email.employee);
+  const violations = input.email.laidOut ? laidOutProblems(rendered) : lintExecEmail(rendered.subject, rendered.text, input.email.employee);
   if (violations.length > 0) {
     const reason = `not sent — the email does not meet the format: ${violations.join("; ")}`;
     await record(env, actor, "deliverable.emailed", { to: input.recipient.id, sent: false, provider: null, detail: reason, violations });

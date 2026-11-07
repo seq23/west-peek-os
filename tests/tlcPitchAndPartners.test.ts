@@ -323,9 +323,8 @@ describe("the partner-levels sheet, made for each sponsor", () => {
     const prices = lines.map((l) => Number(/\$([\d,]+)/.exec(l.price)![1]!.replace(/,/g, "")));
     expect(prices).toEqual([...prices].sort((a, b) => a - b));
     expect(Math.min(...prices)).toBe(5_000);
-    expect(html).toContain('<em class="mark">Most brands like Acme Vector would benefit most from this</em>');
-    expect(html.indexOf("Most brands like Acme Vector")).toBeGreaterThan(html.indexOf('data-level="LEAD"'));
-    expect(html.indexOf("Most brands like Acme Vector")).toBeLessThan(html.indexOf('data-level="PRESENTING"'));
+    // A sheet made for one brand carries no "most brands like" mark (Scooter's note wins, 7 Nov 2026).
+    expect(html).not.toMatch(/class="mark"|benefit most/);
     // "Presented by" is sold only at Presenting.
     expect(html.match(/Presented by/g)).toHaveLength(1);
     expect(html.indexOf("Presented by")).toBeGreaterThan(html.indexOf('data-level="PRESENTING"'));
@@ -365,7 +364,8 @@ describe("the partner-levels sheet, made for each sponsor", () => {
     for (const bad of ["Every seat is a paid ticket ($10).", "every seat paid for", "seats sold", "Host it at your space.", "Most brands choose Lead.", "Our last club sold out.", "We have never hosted one.", "A few brands partner on each club."]) {
       expect(brandCopyProblems(bad), bad).not.toEqual([]);
     }
-    expect(TLC_ABOUT_COMMUNITY).toMatch(/grew to nearly 5,000 .* at its height/);
+    expect(TLC_ABOUT_COMMUNITY).toMatch(/community of about 5,000 /);
+    expect(TLC_ABOUT_COMMUNITY).not.toMatch(/at its height/);
   });
 
   it("a deal whose angle (or Wynn's rule) asks for the series of six leads with it: first email, sheet and samples", () => {

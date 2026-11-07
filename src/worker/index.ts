@@ -164,7 +164,7 @@ import {
 import { handleOutsideEmailAllow, handleOutsideEmailCard, handleOutsideEmailMode, handleOutsideEmailScreen } from "./services/outsideEmail";
 import { handleMustPitchAdd, handleMustPitchOverview, handleMustPitchRemove, handleWayInContact, handleWayInHide } from "./services/tlcMustPitch";
 import { handleTlcSamplesPreview } from "./services/tlcSamples";
-import { handleTlcDraftPage } from "./services/tlcBrandReply";
+import { handleTlcDraftPage, handleTlcReplyPage } from "./services/tlcBrandReply";
 import { handleTlcApprove, handleTlcDeal, handleTlcIdeaAdd, handleTlcIdeaNote, handleTlcIdeaStatus, handleTlcResearchLinkAdd, handleTlcOnePager, handleTlcOverview, handleTlcPitchPublic, handleTlcPlan, handleTlcTicket } from "./services/learningClub";
 import { handleRoomsPartners } from "./services/partnersPanel";
 import {
@@ -1086,6 +1086,8 @@ const router = new Router()
   .get("/api/tlc-pitch/samples/:token", handleTlcSamplesPreview, { auth: false })
   // Round 2's live draft page for the partners (6 Nov 2026): the 128-bit token is the credential, noindex, no-store.
   .get("/api/tlc-pitch/draft/:token", handleTlcDraftPage, { auth: false })
+  // The brand's readable reply page (7 Nov 2026): behind the firm's sign-in, like every page but the public pitch.
+  .get("/tlc/:brand/reply", handleTlcReplyPage)
   .get("/api/tlc-pitch/:token", handleTlcPitchPublic, { auth: false })
   .get("/api/tlc-pitch/:token/pdf", handleTlcPitchPublic, { auth: false })
   .get("/api/rooms/partners", handleRoomsPartners)
@@ -1591,10 +1593,13 @@ const router = new Router()
  * Pure request handler — exported so tests can exercise it directly with a
  * miniflare-backed Env, without standing up a server.
  */
+const TLC_PAGE_PATH = /^\/tlc\/[^/]+\/reply\/?$/;
+
 export async function handleRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
 
-  if (!url.pathname.startsWith("/api/")) {
+  // Pages the Worker draws itself (wrangler run_worker_first): the brand reply pages under /tlc/.
+  if (!url.pathname.startsWith("/api/") && !TLC_PAGE_PATH.test(url.pathname)) {
     if (typeof env.ASSETS === "undefined") {
       return json({ error: "assets binding unavailable" }, { status: 503 });
     }
