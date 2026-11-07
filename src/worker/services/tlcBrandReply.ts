@@ -1386,13 +1386,20 @@ export async function dealThread(env: Env, deal: TlcDealRow & { people_json?: st
     const addrs = (v: string) => (v.match(/[^\s<>,;:"'()]+@[^\s<>,;:"'()]+\.[a-z]{2,}/gi) ?? []).map((a) => a.toLowerCase());
     const from = addrs(header("From"))[0] ?? (r.from_address ?? r.send_to ?? deal.contact_email);
     const to = addrs(header("To")).filter((a) => a !== INTAKE_MAILBOX.toLowerCase());
-    items.push({ at: r.received_at, ours: false, from: nameOf(from), to: (to.length ? to : [TLC_OWNER.email]).map(nameOf), cc: addrs(header("Cc")).filter((a) => !ours.has(a)).map(nameOf), subject: r.their_subject, body: theirWordsOnly(r.their_text), files: [], what: `"${theirGist(theirWordsOnly(r.their_text))}"` });
+    items.push({ at: r.received_at, ours: false, from: nameOf(from), to: (to.length ? to : [TLC_OWNER.email]).map(nameOf), cc: addrs(header("Cc")).filter((a) => a !== INTAKE_MAILBOX.toLowerCase()).map(nameOf), subject: r.their_subject, body: theirWordsOnly(r.their_text), files: [], what: `"${threadGist(theirWordsOnly(r.their_text))}"` });
     if (r.state === "SENT" && r.sent_at) {
       const s = await sent(r.effect_request_id ?? null);
-      items.push({ at: r.sent_at, ours: true, from: nameOf(TLC_OWNER.email), to: s.to.map(nameOf), cc: s.cc.map(nameOf), subject: r.draft_subject, body: withoutFooter(r.draft_body), files: s.files, what: s.files.length ? `Our answer, with ${s.files.join(" and ")}` : `Our answer: "${theirGist(withoutFooter(r.draft_body).replace(/^Hi[^\n]*\n+/, ""))}"` });
+      items.push({ at: r.sent_at, ours: true, from: nameOf(TLC_OWNER.email), to: s.to.map(nameOf), cc: s.cc.map(nameOf), subject: r.draft_subject, body: withoutFooter(r.draft_body), files: s.files, what: s.files.length ? `Our answer, with ${s.files.join(" and ")}` : `Our answer: "${threadGist(withoutFooter(r.draft_body))}"` });
     }
   }
   return items.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+}
+/** The one line the thread table shows: the first sentence of four or more words, after any "Hi …," greeting. */
+function threadGist(text: string): string {
+  const flat = text.replace(/^\s*(?:hi|hello|hey|dear)\b[^\n,]*,?\s*\n/i, "").replace(/\s+/g, " ").trim();
+  const sentences = flat.match(/[^.?!]+[.?!]?/g)?.map((x) => x.trim()).filter(Boolean) ?? [flat];
+  const pick = sentences.find((x) => x.split(/\s+/).length >= 4) ?? sentences[0] ?? flat;
+  return pick.length > 140 ? `${pick.slice(0, 137).trimEnd()}…` : pick;
 }
 /** Their words without the signature block under a "--" line. */
 const theirWordsOnly = (t: string): string => t.replace(/\r\n/g, "\n").split(/\n--\s*\n/)[0]!.trim();
@@ -1449,7 +1456,8 @@ export async function handleTlcReplyPage(ctx: RouteContext): Promise<Response> {
   const doc = docNameFor(r.kind, pricing);
   const version = r.version ?? 1;
   const notice = r.notice_ref ? await env.WP_OS_DB.prepare("SELECT approvers_json, sent_at FROM tlc_brand_reply_notice WHERE ref = ?1").bind(r.notice_ref).first<{ approvers_json: string | null; sent_at: string }>() : null;
-  const needed = idList(notice?.approvers_json).length ? idList(notice?.approvers_json) : [TLC_OWNER.firmUserId];
+  const needed = idList(notice?.approvers_json).length ? idList(notice?.approvers_json)
+    : inPartnerRound(r) ? [TLC_OWNER.firmUserId, ...TLC_BRAND_REPLY_NOTICE_CC_IDS] : [TLC_OWNER.firmUserId];
   const inputs = inputsOf(r.inputs_json);
   const status = r.state === "SENT" ? `Sent to ${brand}.`
     : r.state === "NOTIFIED" ? answeredWords(needed, inputs)
@@ -1497,8 +1505,7 @@ ${version > 1 && changes.length ? `<section><h2>What changed since v${version - 
 <section><h2>The reply (v${version})</h2><p class="sub">Word for word, as it would go.</p>
 <div class="card quote"><div class="sub">To: ${esc(asker.full)}${cc.length ? ` · Cc: ${esc(cc.map((a) => personWords(a, deal).full).join(", "))}` : ""}<br>${esc(r.draft_subject)}</div><br>${para(withBrandFooter(r.draft_body))}</div></section>
 ${sheet ? `<section><h2>The pricing sheet (v${version})</h2><p class="sub">The full sheet ${esc(brand)} gets. The PDF is made from this, once you have both approved.</p>${embeddedSheet(sheet)}</section>` : ""}
-<section><h2>Version history</h2>${versions.length ? `<ul>${versions.map((v) => `<li><b>v${v.version}</b> · ${esc(herClock(v.sent_at))} · ${v.round === "PARTNERS" ? "to Sequoia and Scooter" : "to Sequoia"}${(() => { try { const c = changeLinesOf(JSON.parse(v.changes_json ?? "null")); return c.length ? `: ${esc(c.map((x) => `${x.who ? `${x.who}: ` : ""}${x.done}`).join("; "))}` : ""; } catch { return ""; } })()}</li>`).join("")}</ul>` : `<p class="sub" style="margin:0">v${version} is the first version.</p>`}
-${r.previous_draft && versions.length <= 1 ? `<details><summary>Show the previous draft ▾</summary><div class="card">${para(withBrandFooter(r.previous_draft))}</div></details>` : ""}</section>
+<section><h2>Version history</h2>${versions.length ? versions.map((v) => `<p style="margin:6px 0 0"><b>v${v.version}</b> · ${esc(herClock(v.sent_at))} · ${v.round === "PARTNERS" ? "to Sequoia and Scooter" : "to Sequoia"}${(() => { try { const c = changeLinesOf(JSON.parse(v.changes_json ?? "null")); return c.length ? `: ${esc(c.map((x) => `${x.who ? `${x.who}: ` : ""}${x.done}`).join("; "))}` : ""; } catch { return ""; } })()}</p>${v.version !== version ? `<details><summary>Show v${v.version} in full ▾</summary><div class="card">${para(withBrandFooter(v.draft_body))}</div></details>` : ""}`).join("") : `<p class="sub" style="margin:0">v${version} is the first version.</p>`}</section>
 <section><h2>To approve</h2><p style="margin:0">Reply to the email "approved", or with your notes. ${needed.length > 1 ? `Nothing goes to ${esc(brand)} until ${esc(namesOf(needed))} have both replied "approved". Wynn waits for both of you, applies every note (Scooter's wins when they conflict), and the next version comes back here.` : "Wynn applies every note and the next version comes back here."}</p></section>
 </main></body></html>`;
   return new Response(html, { headers: { ...PAGE_HEADERS, "content-type": "text/html; charset=utf-8" } });
