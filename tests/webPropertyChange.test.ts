@@ -1,4 +1,4 @@
-import type { LocalJobPayload } from "../src/shared/work/localJobs";
+import { LOCAL_JOB_KINDS, type LocalJobPayload } from "../src/shared/work/localJobs";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
@@ -472,7 +472,8 @@ describe("Scooter emails a package for the ventures site", () => {
     const job = (await liveJobFor(porterCardId))!;
     const payload = JSON.parse(job.job_json!) as { phase: string; model: string; plan: { text: string; answers: string[]; approved_at: string } };
     expect(payload.phase).toBe("BUILD");
-    expect(payload.model).toBe("sonnet");
+    // Every phase writes, decides or merges: Opus (owner, 5 Nov 2026).
+    expect(payload.model).toBe("opus");
     expect(payload.plan.text).toMatch(/^# Plan: ventures site update/);
     expect(payload.plan.answers[0]).toMatch(/keep black\/white/);
     expect((payload.plan as unknown as { asks: Array<{ recommended: string }> }).asks[0]!.recommended).toMatch(/keep black\/white/);
@@ -559,7 +560,7 @@ describe("Scooter emails a package for the ventures site", () => {
     const job = (await liveJobFor(porterCardId))!;
     const payload = JSON.parse(job.job_json!) as { phase: string; model: string; pr: { url: string; number: number | null; branch: string | null; check_green_at: string; land_approved_at: string } };
     expect(payload.phase).toBe("LAND");
-    expect(payload.model).toBe("haiku");
+    expect(payload.model).toBe("opus");
     expect(payload.pr.check_green_at).toBe(row.check_green_at);
     expect(payload.pr.land_approved_at).toBe(row.land_approved_at);
     // The LAND job must know WHICH PR: the first real newsletter job (21 Sep 2026) was queued with
@@ -630,9 +631,15 @@ describe("land on green OFF asks first", () => {
   });
 
   it("a rule row overrides the model per phase; a bad value falls back to the registry default", () => {
-    expect(phaseModel({ model_plan: "sonnet" }, "PLAN")).toBe("sonnet");
+    // The floor (owner, 5 Nov 2026): a stored sonnet or haiku rule never runs a writing phase below Opus.
+    expect(phaseModel({ model_plan: "sonnet" }, "PLAN")).toBe("opus");
+    expect(phaseModel({ model_build: "sonnet" }, "BUILD")).toBe("opus");
+    expect(phaseModel({ model_land: "haiku" }, "LAND")).toBe("opus");
     expect(phaseModel({ model_plan: "gpt-9" }, "PLAN")).toBe("opus");
-    expect(phaseModel({}, "LAND")).toBe("haiku");
+    expect(phaseModel({}, "LAND")).toBe("opus");
+    // No local job's phase is registered below Opus, and the seat claimer pins Opus on every Claude Code run.
+    for (const k of LOCAL_JOB_KINDS) for (const p of Object.values(k.phases)) expect(p.model).toBe("opus");
+    expect(readFileSync("scripts/claimer/subscription-seat-claimer.mjs", "utf8")).toContain('args: (prompt) => ["-p", "--model", "opus", prompt]');
   });
 });
 

@@ -111,7 +111,9 @@ const SEATS = {
      * `-p` is print mode: read the prompt, answer, exit. Without it the CLI opens an interactive
      * session and a launchd job with no terminal hangs for ever.
      */
-    args: (prompt) => ["-p", prompt],
+    // The model is pinned (owner, 5 Nov 2026): the seat carries the important work, so it runs on Opus, never on
+    // whatever the CLI's default happens to be that day.
+    args: (prompt) => ["-p", "--model", "opus", prompt],
   },
   codex: {
     bin: "codex",

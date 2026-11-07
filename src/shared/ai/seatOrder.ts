@@ -18,6 +18,8 @@
  */
 export const IMPORTANT_SEAT_ORDER = ["claude_code", "codex"] as const;
 export const ROUTINE_SEAT_ORDER = ["codex"] as const;
+/** Private, LP and deal work stays Claude-only (her rule): no Codex, no free lane. */
+export const PRIVATE_SEAT_ORDER = ["claude_code"] as const;
 
 export interface ImportanceMarkers {
   /** classifyContent's verdict: false for private content (LP, deal terms, fund figures). */
@@ -30,22 +32,24 @@ export function isImportantWork(m: ImportanceMarkers): boolean {
   return !m.publicModelApproved || m.confidential === true || m.important === true;
 }
 
-export function seatOrderFor(important: boolean): readonly string[] {
-  return important ? IMPORTANT_SEAT_ORDER : ROUTINE_SEAT_ORDER;
+export function seatOrderFor(important: boolean, privateContent = false): readonly string[] {
+  return privateContent ? PRIVATE_SEAT_ORDER : important ? IMPORTANT_SEAT_ORDER : ROUTINE_SEAT_ORDER;
 }
 
 /** Why a seat took no part in a routine call. */
 export const KEPT_FOR_IMPORTANT = "the Claude Code seat is kept for important work, so this routine call did not use it";
+/** Why the Codex seat took no part in a private call. */
+export const CLAUDE_ONLY_PRIVATE = "private, LP and deal work stays Claude-only, so the Codex seat took no part in this call";
 
 /**
  * Seat verdicts in her order: the seats this call may use first, in order; any other seat is marked as taking no
  * part, with the reason, so the run's explanation still names it.
  */
-export function orderSeats<T extends { seat: string; available: boolean; reason: string }>(verdicts: readonly T[], important: boolean): T[] {
-  const order = seatOrderFor(important);
+export function orderSeats<T extends { seat: string; available: boolean; reason: string }>(verdicts: readonly T[], important: boolean, privateContent = false): T[] {
+  const order = seatOrderFor(important, privateContent);
   const rank = (s: string) => (order.indexOf(s) < 0 ? order.length : order.indexOf(s));
   return [...verdicts]
-    .map((v) => (order.includes(v.seat) ? v : { ...v, available: false, reason: KEPT_FOR_IMPORTANT }))
+    .map((v) => (order.includes(v.seat) ? v : { ...v, available: false, reason: privateContent ? CLAUDE_ONLY_PRIVATE : KEPT_FOR_IMPORTANT }))
     .sort((a, b) => rank(a.seat) - rank(b.seat));
 }
 
