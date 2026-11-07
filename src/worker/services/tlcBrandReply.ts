@@ -999,10 +999,15 @@ async function sendRound(env: Env, now: Date, firmScope: string, rows: WaitingRo
         sheet = sheetMini({ brand, topic: r.topic ?? "", year: r.month.slice(0, 4), roomWords: BRAND_EMAIL_ROOM_WORDS, levels: brandLevels(sponsor, r.topic ?? ""), series: sponsor.seriesPricing ?? null });
       }
     }
-    const ref = mintRef();
-    // The thread's ref for life: this reply's first email's (legacy rows: the earliest email that carried it).
+    /*
+     * ONE REF FOR THE CONVERSATION'S WHOLE LIFE (owner, 7 Nov 2026: "both codes need to work for this job going forward
+     * but a permanent fix so it doesnt happen again is required"). Every version, redraft and step-2 email of this reply
+     * reuses its thread's ref; a ref is minted only for a reply that never had an email. Older codes stay valid as
+     * aliases (currentRef). Legacy rows: the earliest email that carried this reply.
+     */
     const legacy = r.thread_ref ? null : await env.WP_OS_DB.prepare("SELECT ref FROM tlc_brand_reply_notice WHERE reply_ids_json LIKE ?1 ORDER BY sent_at LIMIT 1").bind(`%"${r.id}"%`).first<{ ref: string }>();
-    const threadRef = r.thread_ref ?? legacy?.ref ?? ref;
+    const threadRef = r.thread_ref ?? legacy?.ref ?? mintRef();
+    const ref = threadRef;
     const unchangedNote = unchanged
       ? partnerRound && lastShown!.round !== "PARTNERS"
         ? `${firstNameOf(TLC_OWNER.firmUserId)} approved v${version} as it is; nothing in the words changed since. ${namesOf(needed.slice(1)) || "Scooter"}, this is your first look.`
@@ -1027,10 +1032,14 @@ async function sendRound(env: Env, now: Date, firmScope: string, rows: WaitingRo
       out.push(`${brand}: the approval email could not be sent (${err instanceof Error ? err.message : String(err)}); the next pass tries again`);
       continue;
     }
-    await env.WP_OS_DB.prepare("INSERT INTO tlc_brand_reply_notice (ref, reply_ids_json, day, firm_scope, sent_at, sent_to, forced, gmail_id, approvers_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)")
-      .bind(ref, JSON.stringify([r.id]), ct.day, firmScope, now.toISOString(), TLC_OWNER.email, 0, null, JSON.stringify(needed)).run();
+    // The same ref's email again: its row now names who must answer THIS email (round 2 adds Scooter).
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO tlc_brand_reply_notice (ref, reply_ids_json, day, firm_scope, sent_at, sent_to, forced, gmail_id, approvers_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+       ON CONFLICT(ref) DO UPDATE SET reply_ids_json = excluded.reply_ids_json, day = excluded.day, sent_at = excluded.sent_at, sent_to = excluded.sent_to, approvers_json = excluded.approvers_json`,
+    ).bind(ref, JSON.stringify([r.id]), ct.day, firmScope, now.toISOString(), TLC_OWNER.email, 0, null, JSON.stringify(needed)).run();
+    // One history row per email: the ref is the conversation's, so the row is keyed by ref, version and round.
     await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO tlc_brand_reply_version (reply_id, notice_ref, version, round, draft_body, changes_json, sent_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)")
-      .bind(r.id, ref, version, partnerRound ? "PARTNERS" : "HER", r.draft_body, r.changes_json ?? null, now.toISOString()).run();
+      .bind(r.id, `${ref}/v${version}/${partnerRound ? "PARTNERS" : "HER"}/${now.toISOString()}`, version, partnerRound ? "PARTNERS" : "HER", r.draft_body, r.changes_json ?? null, now.toISOString()).run();
     await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'NOTIFIED', notice_ref = ?2, approved_by_json = NULL, inputs_json = NULL, thread_ref = COALESCE(thread_ref, ?3) WHERE id = ?1 AND state = 'DRAFTED'").bind(r.id, ref, threadRef).run();
     await appendEvent(env, { eventType: "tlc.brand_reply_notice", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_brand_reply_notice", objectId: ref, firmScope, payload: { replies: 1, round: partnerRound ? 2 : 1, version } });
     out.push(`${partnerRound ? "round-2" : "round-1"} approval email ${ref} (${brand} v${version}) sent${copies.cc.length ? `, ${copiedNames(copies.cc)} on it` : ""}${copies.missing.length ? `; NOT on it (no active partner record): ${copies.missing.join(", ")}` : ""}`);
@@ -1054,6 +1063,15 @@ export async function currentRef(env: Env, found: readonly string[]): Promise<st
   }
   for (const ref of refs) {
     const row = await env.WP_OS_DB.prepare("SELECT notice_ref FROM tlc_brand_reply WHERE thread_ref = ?1 AND notice_ref IS NOT NULL ORDER BY received_at DESC LIMIT 1").bind(ref).first<{ notice_ref: string }>();
+    if (row) return row.notice_ref;
+  }
+  // AN OLDER CODE OF THE SAME CONVERSATION IS AN ALIAS: an email that carried exactly one reply routes to that reply's
+  // current email (a batch email that carried several stays as it was: its "approve 2" means that batch).
+  for (const ref of refs) {
+    const old = await env.WP_OS_DB.prepare("SELECT reply_ids_json FROM tlc_brand_reply_notice WHERE ref = ?1").bind(ref).first<{ reply_ids_json: string }>();
+    const ids = old ? idList(old.reply_ids_json) : [];
+    if (ids.length !== 1) continue;
+    const row = await env.WP_OS_DB.prepare("SELECT notice_ref FROM tlc_brand_reply WHERE id = ?1 AND notice_ref IS NOT NULL").bind(ids[0]).first<{ notice_ref: string }>();
     if (row) return row.notice_ref;
   }
   return refs[0] ?? null;
