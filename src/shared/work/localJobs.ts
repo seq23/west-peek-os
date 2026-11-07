@@ -34,6 +34,8 @@ export type WebPropertyChangePhase = (typeof WEB_PROPERTY_CHANGE_PHASES)[number]
 /** A model alias the `claude` CLI accepts on `--model`. Kept as aliases so the CLI resolves the current version. */
 export type ClaudeModelAlias = "opus" | "sonnet" | "haiku";
 export const CLAUDE_MODEL_ALIASES: readonly ClaudeModelAlias[] = ["opus", "sonnet", "haiku"];
+/** Every phase of a local job writes, decides or merges: none runs below Opus, whatever an older stored rule says. */
+export const LOCAL_JOB_MODEL_FLOOR: ClaudeModelAlias = "opus";
 
 export interface PhaseSpec {
   /** Default model alias; the `model_<phase>` rule row overrides it. */
@@ -80,8 +82,10 @@ export const LOCAL_JOB_KINDS: readonly LocalJobKindSpec[] = [
     promptFile: "scripts/duties/web-property-change-prompt.md",
     phases: {
       PLAN: { model: "opus", maxSeconds: 40 * 60, purpose: "Pull the package, read the RUNBOOK, write the plan: decided and ask." },
-      BUILD: { model: "sonnet", maxSeconds: 90 * 60, purpose: "Build it in a worktree, prove it with the repo's validators and screenshots, open the PR." },
-      LAND: { model: "haiku", maxSeconds: 40 * 60, purpose: "Land on green with ~/bin/land and prove it live with curl." },
+      // Opus for anything that writes code, decides or merges (owner, 5 Nov 2026, "the cheapest model that can do the
+      // job safely"): the build writes code and the landing merges, so neither runs below Opus.
+      BUILD: { model: "opus", maxSeconds: 90 * 60, purpose: "Build it in a worktree, prove it with the repo's validators and screenshots, open the PR." },
+      LAND: { model: "opus", maxSeconds: 40 * 60, purpose: "Land on green with ~/bin/land and prove it live with curl." },
     },
     queueMaxSeconds: 12 * 60 * 60,
   },

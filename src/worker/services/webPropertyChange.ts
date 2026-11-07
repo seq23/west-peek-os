@@ -39,6 +39,7 @@ import { defaultGenerateBanterReply, replyToBanter, type BanterReplyGenerator } 
 import { answerQuestionForCard, type QuestionAnswerer, type QuestionAnswerResult } from "./questionRouting";
 import {
   CLAUDE_MODEL_ALIASES,
+  LOCAL_JOB_MODEL_FLOOR,
   LOCAL_JOB_RUN_KIND,
   WEB_PROPERTY_CHANGE_KIND,
   localJobKind,
@@ -459,7 +460,13 @@ export { isOn, rulesFor, type KindRule };
 export function phaseModel(rules: Record<string, string>, phase: WebPropertyChangePhase): ClaudeModelAlias {
   const spec = localJobKind(WEB_PROPERTY_CHANGE_KIND)!;
   const fromRule = (rules[`model_${phase.toLowerCase()}`] ?? "").trim().toLowerCase();
-  return (CLAUDE_MODEL_ALIASES as readonly string[]).includes(fromRule) ? (fromRule as ClaudeModelAlias) : spec.phases[phase].model;
+  void fromRule;
+  /*
+   * THE FLOOR (owner, 5 Nov 2026): every phase writes code, decides or merges, so it runs on Opus. A stored rule from
+   * 21 Sep that says sonnet or haiku can no longer run a writing phase below Opus; Opus is the top of the list, so
+   * the floor is the answer for every phase.
+   */
+  return LOCAL_JOB_MODEL_FLOOR;
 }
 
 // ── Opening ───────────────────────────────────────────────────────────────────────────────────

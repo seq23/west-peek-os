@@ -2047,6 +2047,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
       (!hasFiles || fileSeatKeys.size > 0)) ||
     // At Free only a seat is a $0, full-quality lane for any call that is not a search: it leads, whatever the call's label.
     (freeOnlyLadder && (!hasFiles || fileSeatKeys.size > 0));
+  const privateContent = !contentClass.publicModelApproved;
   const seatAvailability = orderSeats(!seatsEligible
     ? []
     : requiresSearch
@@ -2061,7 +2062,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
               ? { ...a, available: false, reason: `the ${SEAT_REGISTRY[a.seat].displayName} seat is awake but its claimer has not proved it can read ${fileKinds.map((k) => (k === "image" ? "a picture" : "a document")).join(" and ")} on this machine, so it took no part in this call` }
               : a,
           )
-        : await allSeatAvailability(env, now), claudeFirst);
+        : await allSeatAvailability(env, now), claudeFirst, privateContent);
   const awakeSeatKeys = new Set(seatAvailability.filter((a) => a.available).map((a) => a.seat as string));
   /*
    * IMPORTANT WORK THAT HAS WAITED LONG ENOUGH (owner, 5 Nov 2026). Set below when non-confidential important work
