@@ -107,7 +107,7 @@ interface ReplyRow {
   change_note?: string | null; report_text?: string | null; research_due?: string | null; research_tries?: number;
   samples_id?: string | null; previous_draft?: string | null; round?: string | null; inputs_json?: string | null; offered_slots_json?: string | null; agreed_slot?: string | null; calendar_event_id?: string | null; held_reason?: string | null;
   kind?: string | null; tier?: string | null; attachments_json?: string | null; send_retry_due?: string | null; send_tries?: number;
-  version?: number | null; changes_json?: string | null; sent_at?: string | null; effect_request_id?: string | null;
+  version?: number | null; changes_json?: string | null; thread_ref?: string | null; sent_at?: string | null; effect_request_id?: string | null;
 }
 
 export const normalizeMid = (id: string | null | undefined): string => (id ?? "").trim().replace(/^<|>$/g, "");
@@ -1000,6 +1000,9 @@ async function sendRound(env: Env, now: Date, firmScope: string, rows: WaitingRo
       }
     }
     const ref = mintRef();
+    // The thread's ref for life: this reply's first email's (legacy rows: the earliest email that carried it).
+    const legacy = r.thread_ref ? null : await env.WP_OS_DB.prepare("SELECT ref FROM tlc_brand_reply_notice WHERE reply_ids_json LIKE ?1 ORDER BY sent_at LIMIT 1").bind(`%"${r.id}"%`).first<{ ref: string }>();
+    const threadRef = r.thread_ref ?? legacy?.ref ?? ref;
     const unchangedNote = unchanged
       ? partnerRound && lastShown!.round !== "PARTNERS"
         ? `${firstNameOf(TLC_OWNER.firmUserId)} approved v${version} as it is; nothing in the words changed since. ${namesOf(needed.slice(1)) || "Scooter"}, this is your first look.`
@@ -1012,11 +1015,11 @@ async function sendRound(env: Env, now: Date, firmScope: string, rows: WaitingRo
       unchangedNote,
       reply: { to: asker.full, cc: cc.map((a) => personWords(a, r).full), subject: r.draft_subject, body: withBrandFooter(r.draft_body) },
       sheet, attachmentsWord: sheet ? "attached as a PDF when it goes" : null,
-      extras, link: { label: `See the whole ${brand} story`, url: replyPageUrl(r.brand) }, ref,
+      extras, link: { label: `See the whole ${brand} story`, url: replyPageUrl(r.brand) }, ref, threadRef,
       replyHint: 'Reply to this email with "approved" or your notes.',
       bothMustApprove: partnerRound && needed.length > 1,
     });
-    const problems = draftEmailProblems(laidOut, ref);
+    const problems = draftEmailProblems(laidOut, ref, threadRef);
     if (problems.length) { out.push(`NAMED STOP [WYNN_EMAIL_REFUSED] ${brand} v${version}: ${problems.join("; ")}`); continue; }
     try {
       await emailHer(env, firmScope, ref, { what: laidOut.subject, tldr: lead, sections: [], laidOut }, attachments, copies.cc, partnerRound);
@@ -1028,7 +1031,7 @@ async function sendRound(env: Env, now: Date, firmScope: string, rows: WaitingRo
       .bind(ref, JSON.stringify([r.id]), ct.day, firmScope, now.toISOString(), TLC_OWNER.email, 0, null, JSON.stringify(needed)).run();
     await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO tlc_brand_reply_version (reply_id, notice_ref, version, round, draft_body, changes_json, sent_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)")
       .bind(r.id, ref, version, partnerRound ? "PARTNERS" : "HER", r.draft_body, r.changes_json ?? null, now.toISOString()).run();
-    await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'NOTIFIED', notice_ref = ?2, approved_by_json = NULL, inputs_json = NULL WHERE id = ?1 AND state = 'DRAFTED'").bind(r.id, ref).run();
+    await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'NOTIFIED', notice_ref = ?2, approved_by_json = NULL, inputs_json = NULL, thread_ref = COALESCE(thread_ref, ?3) WHERE id = ?1 AND state = 'DRAFTED'").bind(r.id, ref, threadRef).run();
     await appendEvent(env, { eventType: "tlc.brand_reply_notice", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_brand_reply_notice", objectId: ref, firmScope, payload: { replies: 1, round: partnerRound ? 2 : 1, version } });
     out.push(`${partnerRound ? "round-2" : "round-1"} approval email ${ref} (${brand} v${version}) sent${copies.cc.length ? `, ${copiedNames(copies.cc)} on it` : ""}${copies.missing.length ? `; NOT on it (no active partner record): ${copies.missing.join(", ")}` : ""}`);
   }
@@ -1039,13 +1042,30 @@ async function sendRound(env: Env, now: Date, firmScope: string, rows: WaitingRo
 
 export interface ApprovalOutcome { handled: boolean; ref: string | null; detail: string }
 
+/**
+ * WHICH EMAIL A REPLY ANSWERS, BY EITHER CODE (owner, 7 Nov 2026: the thread's ref "is still important"). A ref that is
+ * a reply's current email wins; a ref that is a reply's THREAD ref (its first email's, carried in every later subject)
+ * reaches that reply's current email. Otherwise the first ref found, as before (an old email's ref stays a no-op).
+ */
+export async function currentRef(env: Env, found: readonly string[]): Promise<string | null> {
+  const refs = [...new Set(found)];
+  for (const ref of refs) {
+    if (await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_brand_reply WHERE notice_ref = ?1").bind(ref).first()) return ref;
+  }
+  for (const ref of refs) {
+    const row = await env.WP_OS_DB.prepare("SELECT notice_ref FROM tlc_brand_reply WHERE thread_ref = ?1 AND notice_ref IS NOT NULL ORDER BY received_at DESC LIMIT 1").bind(ref).first<{ notice_ref: string }>();
+    if (row) return row.notice_ref;
+  }
+  return refs[0] ?? null;
+}
+
 export async function applyBrandReplyApproval(
   env: Env,
   message: { fromHeader: string | null; authenticationResults: string | null; subject: string; body: string },
   deps: BrandReplyDeps = {},
 ): Promise<ApprovalOutcome> {
   const body = textBodyOf(message.body);
-  const ref = BRAND_REPLY_REF_RE.exec(body)?.[0] ?? BRAND_REPLY_REF_RE.exec(message.subject)?.[0] ?? null;
+  const ref = await currentRef(env, [...`${body}\n${message.subject}`.matchAll(new RegExp(BRAND_REPLY_REF_RE.source, "g"))].map((m) => m[0]));
   if (!ref) return { handled: false, ref: null, detail: "no brand-reply reference" };
   const notice = await env.WP_OS_DB.prepare("SELECT * FROM tlc_brand_reply_notice WHERE ref = ?1").bind(ref).first<{ ref: string; reply_ids_json: string; firm_scope: string; sent_to: string | null; approvers_json: string | null }>();
   if (!notice) return { handled: false, ref, detail: "unknown brand-reply reference" };

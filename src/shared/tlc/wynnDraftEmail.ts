@@ -50,6 +50,8 @@ export interface WynnDraftEmailInput {
   attachmentsWord?: string | null;
   link: { label: string; url: string };
   ref: string;
+  /** The thread's ref, carried in the subject for every version (the first email's); defaults to `ref`. */
+  threadRef?: string | null;
   replyHint: string;
   /** Both partners must reply "approved" (the pricing round): the subject starts "ACTION REQUIRED: ". */
   bothMustApprove?: boolean;
@@ -70,7 +72,9 @@ const changeText = (c: ChangeLine): string => `${c.who ? `${c.who}: ` : ""}${c.n
 const recipientsLine = (r: WynnDraftEmailInput["reply"]): string => `To: ${r.to}${r.cc.length ? ` · Cc: ${r.cc.join(", ")}` : ""}`;
 
 export function renderWynnDraftEmail(i: WynnDraftEmailInput): RenderedDraftEmail {
-  const subject = docSubject(i.brand, i.docName, i.version, i.ref, i.bothMustApprove === true);
+  const thread = i.threadRef ?? i.ref;
+  const subject = docSubject(i.brand, i.docName, i.version, thread, i.bothMustApprove === true);
+  const refLine = thread === i.ref ? `Ref ${i.ref}` : `Ref ${i.ref} · thread ${thread}`;
   const changesHead = `What changed since v${i.version - 1}`;
   const showChanges = i.version > 1 || (i.changes?.length ?? 0) > 0 || Boolean(i.unchangedNote);
   // An extra marked `top` (Wynn's research report) is read before the reply; the rest after the sheet.
@@ -103,7 +107,7 @@ export function renderWynnDraftEmail(i: WynnDraftEmailInput): RenderedDraftEmail
     `${i.link.label}:`,
     i.link.url,
     "",
-    `${i.replyHint} Ref ${i.ref}`,
+    `${i.replyHint} ${refLine}`,
   ].join("\n").replace(/\n{3,}/g, "\n\n");
 
   const h4 = (t: string) => `<p style="margin:20px 0 6px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:#6b655d;font-weight:600">${esc(t)}</p>`;
@@ -131,20 +135,20 @@ ${h4("The reply, word for word")}
 ${sheetHtml}
 ${extras.map((x) => `${h4(x.label)}<p style="margin:0;font-size:14px">${para(x.text)}${x.url ? `<br><a href="${esc(x.url)}" style="color:#8a6418">${esc(x.url)}</a>` : ""}</p>`).join("\n")}
 <p style="margin:18px 0 6px"><a href="${esc(i.link.url)}" style="display:inline-block;border:1.5px solid #2f7a4f;color:#2f7a4f;border-radius:8px;padding:11px 14px;font-weight:600;text-decoration:none">${esc(i.link.label)} ›</a></p>
-<p style="margin:14px 0 0;font-size:11px;color:#999">${esc(i.replyHint)} Ref ${esc(i.ref)}</p>
+<p style="margin:14px 0 0;font-size:11px;color:#999">${esc(i.replyHint)} ${esc(refLine)}</p>
 </div>`;
   return { subject, text, html };
 }
 
 /** What would make a laid-out draft email wrong to send. [] when it is fit to go. */
-export function draftEmailProblems(e: RenderedDraftEmail, ref: string): string[] {
+export function draftEmailProblems(e: RenderedDraftEmail, ref: string, threadRef: string = ref): string[] {
   const out: string[] = [];
-  if (!e.subject.endsWith(` · ready for your OK · ${ref}`) || !/ · v\d+ · ready for your OK · /.test(e.subject)) out.push('the subject is not "<Brand> <Document> · vN · ready for your OK · <ref>"');
+  if (!e.subject.endsWith(` · ready for your OK · ${threadRef}`) || !/ · v\d+ · ready for your OK · /.test(e.subject)) out.push('the subject is not "<Brand> <Document> · vN · ready for your OK · <ref>"');
   if (/\*\*|TL;DR/.test(e.text)) out.push("markdown stars or a TL;DR in the plain text");
   if (/individual inboxes/i.test(e.text)) out.push("the inbox footer");
   // The samples preview is the one /api/ page meant to be opened (the public pitch path); nothing else is.
   if (/\/api\/(?!tlc-pitch\/samples\/)/.test(e.text)) out.push("an /api/ address");
-  if (!e.text.trimEnd().endsWith(`Ref ${ref}`)) out.push("the ref is not the last thing");
+  if (!e.text.trimEnd().endsWith(threadRef === ref ? `Ref ${ref}` : `Ref ${ref} · thread ${threadRef}`)) out.push("the ref is not the last thing");
   if (!/THE REPLY, WORD FOR WORD/.test(e.text)) out.push("the reply is not in it word for word");
   if (/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(e.text)) out.push("a machine timestamp");
   if (new TextEncoder().encode(e.html).length > 80_000) out.push("over 80 KB of HTML");
