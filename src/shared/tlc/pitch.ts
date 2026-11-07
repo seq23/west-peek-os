@@ -433,7 +433,7 @@ ${seriesP ? seriesSheetHtml(seriesP, levels) : `<p>${esc(quarterly ?? SERIES_PRI
 <p>${hasTitle ? "Except with a Title partner, a few brands can partner on each club." : "A few brands can partner on each club."}</p>
 <div class="two"><div class="yes">
 <h2>To say yes</h2>
-<ol><li>Reply with the level.</li><li>We send a one-page agreement and an invoice; payment is due within 14 days.</li><li>Then we set the date with you and shape the guest list around your audience.</li></ol>
+<ol><li>${seriesP ? "Reply with the level, and whether it's one evening, four or six." : "Reply with the level."}</li><li>We send a one-page agreement and an invoice; payment is due within 14 days.</li><li>Then we set the date with you and shape the guest list around your audience.</li></ol>
 </div><section class="box"><h2>About West Peek</h2><p>${esc(TLC_ABOUT_COMMUNITY)}</p></section></div>
 <footer><span><strong>${esc(TLC_OWNER.name)}</strong> · ${esc(TLC_OWNER.firm)} · <a href="mailto:${TLC_OWNER.email}">${TLC_OWNER.email}</a></span>${B ? `<p class="conf">${esc(confidentialFor(B))}</p>` : ""}</footer>`,
   );
