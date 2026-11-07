@@ -116,6 +116,8 @@ const TAG = new RegExp(`(${KEEP_PREFIX}|${NO_PREFIX})-([A-Z0-9]{${TOKEN_LENGTH},
 export function newTextOf(body: string): string {
   const markers = [
     /^\s*On .{0,200}wrote:\s*$/im,
+    // Gmail wraps a long attribution ("On Fri, Nov 6, 2026 at 1:09 PM Wynn · West Peek <wynn@…>") onto a second line.
+    /^\s*On [^\n]{0,200}\r?\n\s*wrote:\s*$/im,
     /^\s*-{2,}\s*Original Message\s*-{2,}\s*$/im,
     /^\s*Begin forwarded message:\s*$/im,
     /^\s*_{10,}\s*$/m,

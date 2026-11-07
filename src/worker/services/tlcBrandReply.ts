@@ -189,12 +189,12 @@ const defaultDrafter: ReplyDrafter = async (env, actor, i) => {
   ].filter((l) => l !== "").join("\n");
   const out = await tlcRevisionWriter(env, actor, prompt);
   if (!out.ok) return { ok: false, body: "", detail: "the revision model did not complete" };
-  try {
-    const j = JSON.parse(/\{[\s\S]*\}/.exec(out.text)?.[0] ?? "") as { body?: string };
-    return j.body?.trim() ? { ok: true, body: j.body.trim(), detail: "ok" } : { ok: false, body: "", detail: "the draft came back empty" };
-  } catch {
-    return { ok: false, body: "", detail: "the draft could not be read" };
-  }
+  // jsonIn reads a body the model wrote with real line breaks inside the string (TLR-XALAD7); strict JSON.parse threw it away.
+  const { jsonIn } = await import("./learningClub");
+  const j = jsonIn(out.text);
+  if (!j) return { ok: false, body: "", detail: "the draft could not be read" };
+  const body = typeof j.body === "string" ? j.body.trim() : "";
+  return body ? { ok: true, body, detail: "ok" } : { ok: false, body: "", detail: "the draft came back empty" };
 };
 
 /** A draft that breaks her voice rules is not used; the plain template stands in. */
@@ -231,7 +231,10 @@ export function callFallback(contactName: string | null, plan: CallPlan): string
   return fillTemplate("callTimes", { hi: hiLine(contactName), times: plan.offer.map((x) => `• ${slotWords(x)}`).join("\n") });
 }
 
-async function draftFor(env: Env, deal: TlcDealRow, ev: TlcEventRow, intent: BrandReplyIntent, theirText: string, deps: BrandReplyDeps, redo: { note: string; previous: string; research?: string | null; samplesAttached?: boolean } | null = null, callPlan: CallPlan | null = null): Promise<string> {
+/** The draft, and whether the model wrote it (false: a plain template stood in, and `why` says what went wrong). */
+interface Drafted { body: string; fromModel: boolean; why: string }
+
+async function draftFor(env: Env, deal: TlcDealRow, ev: TlcEventRow, intent: BrandReplyIntent, theirText: string, deps: BrandReplyDeps, redo: { note: string; previous: string; research?: string | null; samplesAttached?: boolean } | null = null, callPlan: CallPlan | null = null): Promise<Drafted> {
   const { CALL_LINK_SETTING, pitchPublicUrl } = await import("./learningClub");
   const input: ReplyDraftInput = {
     intent, brand: deal.brand, contactName: deal.contact_name, topic: ev.topic ?? "", month: ev.month, why: deal.why_fit, theirText,
@@ -244,13 +247,17 @@ async function draftFor(env: Env, deal: TlcDealRow, ev: TlcEventRow, intent: Bra
   const levels = brandLevels(await sponsorFor(env, deal, theirText), ev.topic ?? "");
   const out = await (deps.drafter ?? defaultDrafter)(env, wynnActor(deal.firm_scope), { ...input, note: redo?.note ?? null, previous: redo?.previous ?? null, rules, noMoney, research: redo?.research ?? null, callPlan, samplesAttached: redo?.samplesAttached, levels })
     .catch((err) => ({ ok: false, body: "", detail: String(err) }));
-  const words = out.ok && draftProblems(out.body, intent, { noMoney, weHost, callPlan }).length === 0 && (!redo?.samplesAttached || (/\battach(?:ed|ment)\b/i.test(out.body) && !/\b(?:can|could|happy to) (?:send|share)\b/i.test(out.body)))
+  const problems = out.ok ? draftProblems(out.body, intent, { noMoney, weHost, callPlan }) : [];
+  const samplesWordingOk = !redo?.samplesAttached || (/\battach(?:ed|ment)\b/i.test(out.body) && !/\b(?:can|could|happy to) (?:send|share)\b/i.test(out.body));
+  const fromModel = out.ok && problems.length === 0 && samplesWordingOk;
+  const why = !out.ok ? out.detail : problems.length ? `the draft broke her rules (${problems.join("; ")})` : samplesWordingOk ? "ok" : "the draft did not say the samples are attached";
+  const words = fromModel
     ? out.body
     : redo?.samplesAttached ? samplesCoverEmail({ brand: brandDisplayName(deal.brand), contactName: deal.contact_name, topic: ev.topic ?? "", segmentTitle: (await flowStep(env, deal.id)).segment ?? "The brand segment" })
     : callPlan
       ? callFallback(deal.contact_name, callPlan)
       : fallbackReplyBody(input, monthWords, { noMoney, whoWeAre: rules.find((r) => r.code === WHO_WE_ARE)?.rule ?? null });
-  return signedBrandEmail(words);
+  return { body: signedBrandEmail(words), fromModel, why };
 }
 
 // ── Research she asked for ─────────────────────────────────────────────────────────────────────
@@ -319,7 +326,28 @@ async function redraftFor(env: Env, r: ReplyRow, note: string, now: Date, deps: 
       return "RESEARCH_WAITING";
     }
   }
-  const draft = await draftFor(env, deal, ev, r.intent as BrandReplyIntent, r.their_text, deps, { note, previous, research: report, samplesAttached: Boolean(r.samples_id) });
+  const drafted = await draftFor(env, deal, ev, r.intent as BrandReplyIntent, r.their_text, deps, { note, previous, research: report, samplesAttached: Boolean(r.samples_id) });
+  /*
+   * A TEMPLATE IS NEVER SENT BACK AS THE REDRAFT FOR A NOTE (Scooter, 6 Nov 2026, TLR-XALAD7). The model's answer could
+   * not be read, the plain template stood in, and it went back as "redrafted for your note" ignoring every word of it.
+   * A redraft the model did not write waits and is tried again; after RESEARCH_TRIES the EARLIER draft goes back
+   * unchanged, saying plainly that the redraft could not be written. (With samples, the note already changed the
+   * samples page, which is the redraft; the cover email standing in is right, and a retry would apply the note twice.)
+   */
+  if (!drafted.fromModel && !r.samples_id) {
+    const tries = (r.research_tries ?? 0) + 1;
+    if (tries < RESEARCH_TRIES) {
+      const due = new Date(now.getTime() + RESEARCH_RETRY_MINUTES * 60_000).toISOString();
+      await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'DRAFTED', notice_ref = NULL, approved_by_json = NULL, change_note = ?2, research_due = ?3, research_tries = ?4, held_reason = ?5 WHERE id = ?1")
+        .bind(r.id, note, due, tries, `redraft try ${tries} of ${RESEARCH_TRIES} was not written (${drafted.why.slice(0, 160)}); tries again at ${due}`).run();
+      return "RESEARCH_WAITING";
+    }
+    const plainly = `WYNN COULD NOT REDRAFT FOR YOUR NOTE: ${RESEARCH_TRIES} tries did not produce a draft (${drafted.why.slice(0, 200)}). The draft below is the earlier one, unchanged. Reply with your note again, or approve it as it is.`;
+    await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'DRAFTED', notice_ref = NULL, approved_by_json = NULL, change_note = ?2, report_text = ?3, research_due = NULL, held_reason = NULL WHERE id = ?1")
+      .bind(r.id, note, [report, plainly].filter(Boolean).join("\n\n")).run();
+    return "DRAFTED";
+  }
+  const draft = drafted.body;
   await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'DRAFTED', notice_ref = NULL, approved_by_json = NULL, draft_body = ?2, change_note = ?3, report_text = ?4, research_due = NULL, held_reason = NULL WHERE id = ?1")
     .bind(r.id, draft, note, report).run();
   return "DRAFTED";
@@ -441,7 +469,7 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
     agreed = picked ?? (proposed && isFree(proposed, busy, now) ? proposed : null);
     if (!agreed) offered = freeSlots(busy, now, 3);
     const plan: CallPlan | null = agreed ? { agreed } : offered && offered.length ? { offer: offered } : null;
-    body = await draftFor(env, deal, ev, intent, words, deps, null, plan);
+    body = (await draftFor(env, deal, ev, intent, words, deps, null, plan)).body;
   } else if ((step = await flowStep(env, deal.id)) && (step.proposalSent ? levelPicked(words) !== null : step.samplesSent || asksPrice(words))) {
     /*
      * STEPS 4 AND 5 OF HER FLOW (shared/tlc/brandFlow.ts). After the samples, their interest or questions get the
@@ -481,7 +509,7 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
     attachments = files;
     if (fail.length) hold = { due: new Date(now.getTime() + RESEARCH_RETRY_MINUTES * 60_000).toISOString(), why: `${fail.join("; ").slice(0, 240)}; she is not asked until the attachments are ready` };
   } else {
-    body = await draftFor(env, deal, ev, intent, words, deps);
+    body = (await draftFor(env, deal, ev, intent, words, deps)).body;
   }
   await env.WP_OS_DB.prepare(
     `INSERT OR IGNORE INTO tlc_brand_reply (id, deal_id, brand_message_id, their_subject, their_text, received_at, intent, draft_subject, draft_body, state, firm_scope,

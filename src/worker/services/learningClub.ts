@@ -1362,11 +1362,39 @@ export function jsonIn(text: string): Record<string, unknown> | null {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start < 0 || end <= start) return null;
-  try {
-    return JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return null;
+  const raw = text.slice(start, end + 1);
+  for (const candidate of [raw, controlsEscaped(raw)]) {
+    try {
+      return JSON.parse(candidate) as Record<string, unknown>;
+    } catch {
+      /* the next candidate */
+    }
   }
+  return null;
+}
+
+/**
+ * A MODEL'S JSON WITH A REAL LINE BREAK INSIDE A STRING IS STILL ITS ANSWER (Scooter, 6 Nov 2026, TLR-XALAD7).
+ * Free models often write an email body into {"body": "..."} with literal newlines rather than \n. Strict JSON refuses
+ * that, and the whole answer was thrown away: Wynn sent the plain template back as the "redraft" for his note.
+ * Raw control characters inside string literals are escaped (outside strings they are whitespace and left alone).
+ */
+export function controlsEscaped(json: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (const ch of json) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      else if (ch === "\n") { out += "\\n"; continue; }
+      else if (ch === "\r") { out += "\\r"; continue; }
+      else if (ch === "\t") { out += "\\t"; continue; }
+    } else if (ch === '"') inString = true;
+    out += ch;
+  }
+  return out;
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
