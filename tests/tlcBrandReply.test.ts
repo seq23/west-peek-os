@@ -367,7 +367,8 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     const her = (r: string) => applyBrandReplyApproval(e, { fromHeader: `Her <${APPROVER}>`, authenticationResults: auth(APPROVER), subject: `Re: Wynn · ${r}`, body: `approved\n\nRef ${r}` }, { now: MON, drafter, ...deps });
     const ids = JSON.parse((await e.WP_OS_DB.prepare("SELECT reply_ids_json FROM tlc_brand_reply_notice WHERE ref = ?1").bind(ref).first<{ reply_ids_json: string }>())?.reply_ids_json ?? "[]") as string[];
     const first = await her(ref);
-    const moved = ids.length ? await e.WP_OS_DB.prepare(`SELECT notice_ref FROM tlc_brand_reply WHERE id IN (${ids.map(() => "?").join(",")}) AND round = 'PARTNERS' AND state = 'NOTIFIED' AND notice_ref != ?${ids.length + 1}`).bind(...ids, ref).first<{ notice_ref: string }>() : null;
+    // Round 2 keeps the conversation's ref (owner, 7 Nov 2026): moved = her approval put it on a both-partners email.
+    const moved = ids.length && /it now goes to you and Scooter/.test(first.detail) ? await e.WP_OS_DB.prepare(`SELECT notice_ref FROM tlc_brand_reply WHERE id IN (${ids.map(() => "?").join(",")}) AND round = 'PARTNERS' AND state = 'NOTIFIED'`).bind(...ids).first<{ notice_ref: string }>() : null;
     if (!moved) return first;
     expect(first.detail).not.toMatch(/sent from /);
     const from = (await e.WP_OS_DB.prepare("SELECT email FROM firm_user WHERE id = 'fu_scooter_taylor'").first<{ email: string }>())!.email;
@@ -709,7 +710,8 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     sends.length = 0;
     await sendReplyApprovals(e, MON);
     const again = (await row())!;
-    expect(again.notice_ref).not.toBe(first.notice_ref);
+    // One ref for the conversation's life (owner, 7 Nov 2026): the new email keeps it; the approvals given before it were cleared.
+    expect(again.notice_ref).toBe(first.notice_ref);
     const remade = sends.find((x) => x.subject.startsWith("Old Co "))!;
     expect(remade.text.replace(/\s+/g, " ")).toContain(SHEET_CHANGE_WORDS);
     // The sheet is in the email itself; its PDF is made only from the approved version, when it goes (owner, 7 Nov 2026).

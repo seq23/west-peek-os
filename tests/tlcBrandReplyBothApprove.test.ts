@@ -60,7 +60,8 @@ async function toRoundTwo(dealId: string, brand: string, email: string): Promise
   await answer(SEQUOIA, "approved", ref);
   const r = (await row(dealId))!;
   expect(r.round).toBe("PARTNERS");
-  expect(r.notice_ref).not.toBe(ref);
+  // One ref for the conversation's whole life (owner, 7 Nov 2026).
+  expect(r.notice_ref).toBe(ref);
   return r.notice_ref;
 }
 
@@ -143,7 +144,8 @@ describe("round 1 is hers alone", () => {
     // Both must approve: the subject starts ACTION REQUIRED and line 1 says so plainly (owner, 7 Nov 2026).
     // The thread's ref stays in the subject for every version (owner, 7 Nov 2026); this email's own ref is in the footer.
     expect(two.subject).toBe(`ACTION REQUIRED: Price Co Pricing Reply · v1 · ready for your OK · ${ref}`);
-    expect(two.text.trimEnd().endsWith(`Ref ${r.notice_ref} · thread ${ref}`)).toBe(true);
+    expect(r.notice_ref).toBe(ref);
+    expect(two.text.trimEnd().endsWith(`Ref ${ref}`)).toBe(true);
     expect(two.text.split("\n")[0]).toContain('You both need to reply "approved"');
     expect(two.text).toContain("THE REPLY, WORD FOR WORD");
     expect(two.text).toContain("https://os.joinwestpeek.com/tlc/price-co/reply");
@@ -185,7 +187,8 @@ describe("round 2: nothing goes until both have approved", () => {
     expect(toUs().filter((s) => /^Wynn: .*pricing/.test(s.subject))).toHaveLength(0);
     await answer(SEQUOIA, "Keep the opening warm.", ref);
     const r = (await row("tld_wait"))!;
-    expect(r.notice_ref).not.toBe(ref);
+    // One ref for the conversation's whole life (owner, 7 Nov 2026).
+  expect(r.notice_ref).toBe(ref);
     expect(r.round).toBe("PARTNERS");
     expect(r.change_note).toBe("Sequoia: Keep the opening warm.\n\nScooter: Pitch a quarterly series at a discount.");
     expect(r.inputs_json).toBeNull();
@@ -194,7 +197,7 @@ describe("round 2: nothing goes until both have approved", () => {
     expect(again.cc).toBe(SCOOTER);
     // vN counts up, and every note has its own line naming whose it was.
     expect(again.subject).toMatch(/^ACTION REQUIRED: Wait Co Pricing Reply · v2 · ready for your OK · TLR-[A-Z0-9]{6}$/);
-    expect(again.subject).not.toContain(r.notice_ref);
+    expect(again.subject.endsWith(` · ${r.notice_ref}`)).toBe(true);
     expect(again.text).toContain("WHAT CHANGED SINCE V1");
     expect(again.text).toMatch(/- Sequoia: "Keep the opening warm\." → applied/);
     expect(again.text).toMatch(/- Scooter: "Pitch a quarterly series at a discoun/);
@@ -207,7 +210,8 @@ describe("round 2: nothing goes until both have approved", () => {
     await answer(SEQUOIA, "approved", ref);
     await answer(SCOOTER, "Mention the rooftop.", ref);
     const r = (await row("tld_mix"))!;
-    expect(r.notice_ref).not.toBe(ref);
+    // One ref for the conversation's whole life (owner, 7 Nov 2026).
+  expect(r.notice_ref).toBe(ref);
     expect(r.change_note).toBe("Scooter: Mention the rooftop.");
     expect(toBrand()).toHaveLength(0);
   });
@@ -264,15 +268,27 @@ describe("THE GUARD (owner, 7 Nov 2026): pricing goes to the brand only on both 
     await answer(SEQUOIA, "skip", ref);
     expect(sends.filter((s) => s.cc.includes(SCOOTER))).toHaveLength(0);
   });
-  it("an approved quoting EITHER code, the thread's or the current email's, reaches the same draft; it still needs both", async () => {
+  it("ONE REF FOR LIFE (owner, 7 Nov 2026): every later email keeps the conversation's ref; an older code is an alias; a stranger code reaches nothing", async () => {
     const first = await pricingFrom("tld_codes", "Codes Co", "pat@codes.example");
     await answer(SEQUOIA, "approved", first);
-    const current = (await row("tld_codes"))!.notice_ref;
-    expect(current).not.toBe(first);
-    // Scooter answers with only the THREAD's code (the subject he sees), Sequoia with only the current email's.
-    expect((await answer(SCOOTER, "approved", first)).detail).toContain("Scooter approved; waiting on Sequoia");
+    expect((await row("tld_codes"))!.notice_ref).toBe(first);
+    // A redraft from both partners' notes: v2, still the same ref, in its subject.
+    await answer(SCOOTER, "Say the quarterly dates.", first);
     sends.length = 0;
-    expect((await answer(SEQUOIA, "approved", current)).detail).toContain("sent from");
+    await answer(SEQUOIA, "Keep it short.", first);
+    const v2 = (await row("tld_codes"))!;
+    expect(v2.notice_ref).toBe(first);
+    const mail = toUs().find((s) => s.subject.includes("Codes Co Pricing Reply · v2"))!;
+    expect(mail.subject.endsWith(` · ${first}`)).toBe(true);
+    // An older code issued on this conversation (as Pinecone's TLR-DPA7BZ was) routes to the same draft.
+    const id = (await env.WP_OS_DB.prepare("SELECT id FROM tlc_brand_reply WHERE deal_id = 'tld_codes'").first<{ id: string }>())!.id;
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_brand_reply_notice (ref, reply_ids_json, day, firm_scope, sent_at, sent_to, forced, approvers_json) VALUES ('TLR-ALIAS1', ?1, '2026-11-07', 'west-peek', '2026-11-07T14:00:00Z', 'x', 0, '[]')").bind(JSON.stringify([id])).run();
+    expect((await answer(SCOOTER, "approved", "TLR-ALIAS1")).detail).toContain("Scooter approved; waiting on Sequoia");
+    // Negative proof: a code no conversation issued changes nothing.
+    expect((await answer(SEQUOIA, "approved", "TLR-NOSUCH")).handled).toBe(false);
+    expect(toBrand()).toHaveLength(0);
+    sends.length = 0;
+    expect((await answer(SEQUOIA, "approved", first)).detail).toContain("sent from");
     expect(toBrand()).toHaveLength(1);
   });
   it("the door strips Scooter's copy from any Wynn email that is not the pricing round", async () => {
