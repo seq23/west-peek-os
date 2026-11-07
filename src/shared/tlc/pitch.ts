@@ -1,4 +1,5 @@
 import { BRAND_COMMUNITY_SHORT, COMMUNITY_ABOUT } from "../community/size";
+import { SERIES_COUNTS, SERIES_LEVELS, seriesOf, usd as seriesUsd, type SeriesPricing } from "./series";
 import { MAAX_BOLD_WOFF2, MAAX_REGULAR_WOFF2, WP_MONOGRAM_PNG } from "./brandAssets";
 import { TLC_ABOUT_COMMUNITY, TLC_ABOUT_WEST_PEEK } from "./aboutWestPeek";
 import {
@@ -244,6 +245,11 @@ export interface TlcSponsorView {
    * partners (tlc_deal.offer_json); when present it replaces the series-of-six line.
    */
   quarterly?: QuarterlyOffer | null;
+  /**
+   * SERIES PRICES SET FOR THIS BRAND (owner, 7 Nov 2026; tlc_deal.series_json, shared/tlc/series.ts): per-event prices
+   * for 1, 4 and 6 evenings and the named evenings. When present it replaces the quarterly and series-of-six lines.
+   */
+  seriesPricing?: SeriesPricing | null;
 }
 export interface QuarterlyOffer { year: number; events: number; perEventUsd: number; totalUsd: number }
 /** A partner-set offer, read safely: anything malformed is no offer. PURE. */
@@ -269,7 +275,7 @@ const SERIES_ASK = /\bseries of six\b|\bsix[- ](?:room|club|month) series\b|\bsi
 
 /** The sponsor view of a deal, from its own row and Wynn's rules. PURE. */
 export function sponsorOf(
-  deal: { brand: string; category?: string | null; why_fit?: string | null; owner_angle?: string | null; large_brand?: number | boolean | null; offer_json?: string | null },
+  deal: { brand: string; category?: string | null; why_fit?: string | null; owner_angle?: string | null; large_brand?: number | boolean | null; offer_json?: string | null; series_json?: string | null },
   rules: ReadonlyArray<{ code: string | null }> = [],
 ): TlcSponsorView {
   const brand = deal.brand.replace(/\s*\([^()]*\)/g, "").replace(/\s+/g, " ").trim() || deal.brand.trim();
@@ -284,6 +290,7 @@ export function sponsorOf(
     largeBrand: deal.large_brand === true || deal.large_brand === 1,
     series: SERIES_ASK.test(deal.owner_angle ?? "") || rules.some((r) => r.code === `${key}_SERIES`),
     quarterly: quarterlyOf(deal.offer_json),
+    seriesPricing: seriesOf(deal.series_json),
   };
 }
 
@@ -304,7 +311,10 @@ export function brandLevels(sponsor: TlcSponsorView | null, topic: string): Bran
     { key: "PARTNER", label: "Partner", priceUsd: TLC_TIERS.PARTNER.priceUsd, head: "", marked: null,
       adds: ["named on the invitation and on the day", product, "photographs for your channels", "opt-in leads", "a recap with the numbers"] },
     { key: "LEAD", label: "Lead partner", priceUsd: TLC_TIERS.LEAD.priceUsd, head: "Everything in Partner, plus:",
-      marked: sponsor ? `Most brands like ${b} would benefit most from this` : "Most brands would benefit most from this",
+      // A sheet made for one brand carries no "most brands like <Brand>" line (Scooter, 6 Nov 2026: it "reads like AI
+      // produced a proposal"; when their notes conflict Scooter's wins, her ruling 7 Nov 2026). The club's generic
+      // sheet, which she approved word for word, keeps its line.
+      marked: sponsor ? null : "Most brands would benefit most from this",
       adds: ["the hands-on segment built around your product", "five minutes to the room", "first placement among partners"] },
     { key: "PRESENTING", label: "Presenting partner", priceUsd: TLC_TIERS.PRESENTING.priceUsd, head: "Everything in Lead, plus:", marked: null,
       adds: [`"Presented by ${B}" on the invitation, signage and recap`] },
@@ -363,6 +373,23 @@ export const SHEET_CHANGE_WORDS = "The attached partner-levels sheet is rebuilt 
 /** The confidentiality line on a sheet made for one brand (brand-pitch skill: every sponsor PDF carries one). */
 export const confidentialFor = (brand: string): string => `Prepared for ${brand}. Confidential, for your team only.`;
 
+/** The series line under the title: one evening, four quarterly hackathons or six monthly happy hours. */
+export function seriesLede(s: SeriesPricing, brand: string): string {
+  const parts = [s.quarterly ? `${s.quarterly.evenings.length} quarterly hackathons` : "", s.monthly ? `a monthly series of ${s.monthly.evenings.length} happy hours` : ""].filter(Boolean);
+  return `One evening, or a series in ${s.year}: ${parts.join(" or ")}, with ${brand} in every room. Each series costs less per event.`;
+}
+
+/** The price table (per event, for 1, 4 and 6 evenings) and the named evenings of each series. HTML, the sheet's own classes. */
+export function seriesSheetHtml(s: SeriesPricing, levels: ReadonlyArray<{ key: string; label: string }>): string {
+  const shown = SERIES_LEVELS.filter((l) => levels.some((x) => x.key === l));
+  const label = (k: string) => levels.find((x) => x.key === k)?.label ?? k;
+  const block = (b: SeriesPricing["quarterly"]) => (b ? `<section class="box series"><h2>${esc(b.name)}</h2><p>${esc(b.style)}</p><ol>${b.evenings.map((e) => `<li><b>${esc(e.when)}</b> · ${esc(e.title)}</li>`).join("")}</ol></section>` : "");
+  return `<h2>Series prices, per event</h2>
+<table class="series-prices"><thead><tr><th>Per event</th>${SERIES_COUNTS.map((n) => `<th>${n === 1 ? "One evening" : n === 4 ? "4 quarterly" : "6 monthly"}</th>`).join("")}</tr></thead>
+<tbody>${shown.map((l) => `<tr><td>${esc(label(l))}</td>${SERIES_COUNTS.map((n) => `<td>${seriesUsd(s.prices[l][n])}</td>`).join("")}</tr>`).join("")}</tbody></table>
+<div class="two">${block(s.quarterly)}${block(s.monthly)}</div>`;
+}
+
 export function renderBrandPitch(v: TlcClubView, sponsor: TlcSponsorView | null = null): string {
   const B = sponsor?.brand ?? null;
   const hook = sentences(brandSafe(v.angle)).slice(0, 2).join(" ");
@@ -376,8 +403,9 @@ export function renderBrandPitch(v: TlcClubView, sponsor: TlcSponsorView | null 
     "Nothing to staff: we host every segment, and you send someone only if you want to.",
     `A room that chose this topic: every guest will be there for ${v.topic}.`,
   ];
-  const quarterly = sponsor?.quarterly && B ? quarterlyWords(sponsor.quarterly, B) : null;
-  const series = quarterly ? `<p class="lede">${esc(quarterly)}</p>` : sponsor?.series
+  const seriesP = B ? sponsor?.seriesPricing ?? null : null;
+  const quarterly = !seriesP && sponsor?.quarterly && B ? quarterlyWords(sponsor.quarterly, B) : null;
+  const series = seriesP ? `<p class="lede">${esc(seriesLede(seriesP, B!))}</p>` : quarterly ? `<p class="lede">${esc(quarterly)}</p>` : sponsor?.series
     ? `<p class="lede">A series of six rooms, one a month for six months, with ${esc(B!)} in every room. A single evening is the option.</p>`
     : "";
   return page(
@@ -393,7 +421,7 @@ ${series}
 </div><div>
 <h2>Who will be in the room</h2>
 <ul><li>Rooms of ${BRAND_ROOM_WORDS} New Yorkers per event, sized to your goals, who will choose this topic.</li>
-<li>Founders, operators, creatives and builders, curated from a community that grew to ${BRAND_COMMUNITY_SHORT}.</li>
+<li>Founders, operators, creatives and builders, curated from a community of ${BRAND_COMMUNITY_SHORT}.</li>
 <li>Taught by someone who does this for a living. The session will run: arrive, learn, an hour hands-on, a real meal, go deeper, share, close.</li>
 ${v.aiSegment ? `<li>The AI segment: ${esc(brandSafe(v.aiSegment))}</li>` : ""}
 ${takeHome ? `<li>They will leave with: ${esc(takeHome)}</li>` : ""}</ul>
@@ -401,7 +429,7 @@ ${takeHome ? `<li>They will leave with: ${esc(takeHome)}</li>` : ""}</ul>
 ${safety.length ? `<p class="note">${safety.map(esc).join(" ")}</p>` : ""}
 <h2>Partner levels, per event</h2>
 <div class="tiers">${levels.map((l) => `<div class="tier" data-level="${l.key}"><b><span class="name">${esc(l.label)}</span><span class="dot"> · </span><span class="price">${esc(priceWords(l))}</span></b>${l.marked ? `<em class="mark">${esc(l.marked)}</em>` : ""}<span class="adds">${l.head ? `${esc(l.head)} ` : ""}${esc(l.adds.join("; "))}.</span></div>`).join("")}</div>
-<p>${esc(quarterly ?? SERIES_PRICE_WORDS)}</p>
+${seriesP ? seriesSheetHtml(seriesP, levels) : `<p>${esc(quarterly ?? SERIES_PRICE_WORDS)}</p>`}
 <p>${hasTitle ? "Except with a Title partner, a few brands can partner on each club." : "A few brands can partner on each club."}</p>
 <div class="two"><div class="yes">
 <h2>To say yes</h2>

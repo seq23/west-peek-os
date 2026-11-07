@@ -23,7 +23,8 @@ const AFTERNOON = new Date("2026-11-10T22:30:00.000Z"); // 16:30 in Chicago
 const seen: Array<ReplyDraftInput & DraftExtras> = [];
 const drafter: ReplyDrafter = async (_e, _a, i) => {
   seen.push(i);
-  return { ok: true, body: `Hi,\n\n${i.note ? `Shorter, per "${i.note.split("\n")[0]}".` : `Thanks for asking about ${i.topic}.`} ${THREE_THINGS_OFFER}`, detail: "ok" };
+  // Like the real model: a redraft returns one change line per partner's note (her rule, 7 Nov 2026).
+  return { ok: true, body: `Hi,\n\n${i.note ? `Shorter, per "${i.note.split("\n")[0]}".` : `Thanks for asking about ${i.topic}.`} ${THREE_THINGS_OFFER}`, detail: "ok", changes: (i.notes ?? []).map((n) => ({ who: n.who, note: n.note.slice(0, 60), done: "done as asked" })) };
 };
 const deps = { drafter, mailbox: null };
 
@@ -135,7 +136,8 @@ describe("a brand replied", () => {
     // The firm's boundary keeps employee mail on the partner addresses: her partner inbox.
     for (const n of sends) {
       expect(n.to).toBe("sequoia@westpeek.ventures");
-      expect(n.subject).toMatch(/^Wynn: .+ replied · TLR-[A-Z0-9]{6}$/);
+      // Her approved shape (7 Nov 2026): the document, its version and the ref in the subject; no ACTION REQUIRED on hers alone.
+      expect(n.subject).toMatch(/^(?!ACTION REQUIRED)\S.* Reply · v1 · ready for your OK · TLR-[A-Z0-9]{6}$/);
       // Round 1 is hers alone (owner, 6 Nov 2026): Scooter is not on it, and her "approved" sends it.
       expect(n.text).toContain('Reply "approved" to send it');
       expect(n.cc ?? "").not.toMatch(/scooter/i);
@@ -239,8 +241,9 @@ describe("Wynn listens to her whole note, researches when asked, and keeps her s
     expect(told.note).toContain(last);
     expect(told.note).not.toMatch(/Sent from my iPhone|^Sequoia$/m);
     expect(sends).toHaveLength(1);
-    expect(sends[0]!.text).toContain("The notes Wynn worked from:");
-    expect(sends[0]!.text).toContain(last);
+    // The redraft comes back as v2, with a change line for her note.
+    expect(sends[0]!.subject).toMatch(/ · v2 · ready for your OK · TLR-/);
+    expect(sends[0]!.text).toMatch(/WHAT CHANGED SINCE V1\n- Sequoia: "Explain who we are/);
   });
 
   it("a request to research makes Wynn research the brand first: the re-sent approval email carries his report ABOVE the new draft", async () => {
@@ -260,7 +263,7 @@ describe("Wynn listens to her whole note, researches when asked, and keeps her s
     expect(sends).toHaveLength(1);
     const t = sends[0]!.text;
     for (const part of ["WYNN'S REPORT ON CONE CO", "What they care about now", "The value we bring them", "Sources", "https://cone.example/blog/agents"]) expect(t).toContain(part);
-    expect(t.indexOf("What they care about now")).toBeLessThan(t.indexOf("Your answer, as it would go"));
+    expect(t.indexOf("What they care about now")).toBeLessThan(t.indexOf("THE REPLY, WORD FOR WORD"));
     expect(seen.at(-1)!.research).toContain("developer program for agent builders");
     // Her standing sentence is now one of Wynn's rules.
     expect((await env.WP_OS_DB.prepare("SELECT source FROM tlc_wynn_rule WHERE rule = ?1").bind("Don't discuss money this early.").first<{ source: string }>())!.source).toBe(`her note on ${ref}`);
@@ -310,7 +313,7 @@ describe("Wynn listens to her whole note, researches when asked, and keeps her s
     const body = (await env.WP_OS_DB.prepare("SELECT draft_body FROM tlc_brand_reply WHERE deal_id = 'tld_cash'").first<{ draft_body: string }>())!.draft_body;
     expect(body).not.toMatch(/\$|tier|price|Title partner/i);
     expect(body).not.toMatch(/short call|two times|pick a time/i);
-    expect(body).toContain("a community that grew to nearly 5,000 people at its height");
+    expect(body).toContain("a community of about 5,000 people");
     expect(body).not.toContain("more than 5,000");
     expect(body).toContain("Quarantine Con");
     expect(body).toContain(THREE_THINGS_OFFER);
@@ -398,8 +401,10 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     for (const fixed of ["Who's in the room", "The team behind the room", "Confidential", "25 to 100+", "~5,000", "Scooter"]) expect(prompts[0]).not.toContain(fixed);
     const { sendReplyApprovals } = await import("../src/worker/services/tlcBrandReply");
     await sendReplyApprovals(e, MON);
-    expect(sends).toHaveLength(1);
-    const toHer = sends[0]!;
+    // One email per draft (owner, 7 Nov 2026): Sample Co's is its own.
+    const mine = sends.filter((x) => x.subject.startsWith("Sample Co "));
+    expect(mine).toHaveLength(1);
+    const toHer = mine[0]!;
     expect(toHer.to).toBe("sequoia@westpeek.ventures");
     // The samples are a link while she decides: no PDF made, none attached.
     expect(rendered).toHaveLength(0);
@@ -444,9 +449,9 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     const renderPdf = async (html: string) => { rendered.push(html); return THREE_PAGES; };
     await take(e, "tld_edit", "Please send the materials", "edit@meadow.example", { samples: { renderPdf } });
     await sendReplyApprovals(e, MON);
-    expect(sends.at(-1)!.files).toEqual([]);
-    expect(sends.at(-1)!.text).toContain("Here's a short 3-page PDF");
-    const url = PREVIEW_URL.exec(sends.at(-1)!.text)![0];
+    expect(sends.filter((x) => x.subject.startsWith("Meadow Tools ")).at(-1)!.files).toEqual([]);
+    expect(sends.filter((x) => x.subject.startsWith("Meadow Tools ")).at(-1)!.text).toContain("Here's a short 3-page PDF");
+    const url = PREVIEW_URL.exec(sends.filter((x) => x.subject.startsWith("Meadow Tools ")).at(-1)!.text)![0];
     const note = "Replace the series with a practice lab and make the footer say Dates agreed together";
     let patch = { seriesHeading: "A practice lab", footer2: "Dates agreed together" };
     const writer = async (_e: Env, _actor: unknown, prompt: string) => {
@@ -467,13 +472,13 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     expect(rendered).toHaveLength(0);
     expect(edited.pdf_r2_key).toBeNull();
     expect(await samplesAttachment(e, edited.id)).toBeNull();
-    expect(sends).toHaveLength(1);
-    expect(sends[0]!.files).toEqual([]);
-    expect(sends[0]!.text).toContain("Here's the attached PDF with a practice lab.");
-    expect(sends[0]!.text).not.toContain("/api/documents/");
+    expect(sends.filter((x) => x.subject.startsWith("Meadow Tools "))).toHaveLength(1);
+    expect(sends.filter((x) => x.subject.startsWith("Meadow Tools "))[0]!.files).toEqual([]);
+    expect(sends.filter((x) => x.subject.startsWith("Meadow Tools "))[0]!.text).toContain("Here's the attached PDF with a practice lab.");
+    expect(sends.filter((x) => x.subject.startsWith("Meadow Tools "))[0]!.text).not.toContain("/api/documents/");
     // The same link as before (one page per deal), with the latest change named in the email.
-    expect(PREVIEW_URL.exec(sends[0]!.text)![0]).toBe(url);
-    expect(sends[0]!.text).toContain('Last change: Changed the page 2 heading and the page 2 footer (your note: "Replace the series');
+    expect(PREVIEW_URL.exec(sends.filter((x) => x.subject.startsWith("Meadow Tools "))[0]!.text)![0]).toBe(url);
+    expect(sends.filter((x) => x.subject.startsWith("Meadow Tools "))[0]!.text).toContain('Last change: Changed the page 2 heading and the page 2 footer (your note: "Replace the series');
     let page = await (await openPreview(e, url)).text();
     expect(page).toContain("A practice lab");
     expect(page).toContain("Dates agreed together");
@@ -543,11 +548,11 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
       },
     });
     expect(drafted).toBe(true);
-    expect(sends).toHaveLength(1);
-    expect(sends[0]!.text).toContain("The edited Field practice PDF is attached.");
-    expect(sends[0]!.files).toEqual([]);
-    expect(sends[0]!.text).toMatch(PREVIEW_URL);
-    expect(await (await openPreview(e, PREVIEW_URL.exec(sends[0]!.text)![0])).text()).toContain("Field practice");
+    expect(sends.filter((x) => x.subject.startsWith("Sandstone Tools "))).toHaveLength(1);
+    expect(sends.filter((x) => x.subject.startsWith("Sandstone Tools "))[0]!.text).toContain("The edited Field practice PDF is attached.");
+    expect(sends.filter((x) => x.subject.startsWith("Sandstone Tools "))[0]!.files).toEqual([]);
+    expect(sends.filter((x) => x.subject.startsWith("Sandstone Tools "))[0]!.text).toMatch(PREVIEW_URL);
+    expect(await (await openPreview(e, PREVIEW_URL.exec(sends.filter((x) => x.subject.startsWith("Sandstone Tools "))[0]!.text)![0])).text()).toContain("Field practice");
   });
 
   it("her approved: the PDF is named from the CURRENT title; a busy renderer retries on its own; a 4-page PDF comes back to her; a sent row is never touched", async () => {
@@ -561,7 +566,7 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     await sendReplyApprovals(e, MON);
     const titleWriter = async () => ({ ok: true, text: JSON.stringify({ title: "Agents at Work" }) });
     await applyBrandReplyApproval(e, { fromHeader: APPROVER, authenticationResults: auth(APPROVER), subject: await refOf("tld_final"), body: "Call it Agents at Work" }, { now: MON, drafter, samples: { writer: titleWriter } });
-    const url = PREVIEW_URL.exec(sends.at(-1)!.text)![0];
+    const url = PREVIEW_URL.exec(sends.filter((x) => x.subject.startsWith("Harbor Tools ")).at(-1)!.text)![0];
     const page = await (await openPreview(e, url)).text();
     expect(page).toContain("<title>The Learning Club: Agents at Work · Harbor Tools</title>");
     expect(page).toContain("Changed the title");
@@ -570,7 +575,7 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     const FOUR = { pdfBase64: Buffer.from("%PDF-1.4").toString("base64"), pageCount: 4 };
     await approve(e, await refOf("tld_final"), { samples: { renderPdf: async () => FOUR } });
     expect(sends.filter((x) => x.to.includes("harbor.example"))).toHaveLength(0);
-    const again = sends.find((x) => / replied · /.test(x.subject))!;
+    const again = sends.find((x) => x.subject.startsWith("Harbor Tools "))!;
     expect(again.text).toContain("Not sent yet: the PDF came to 4 pages, not 3. Open the samples page and reply with what to shorten or change.");
     expect(again.text).toContain(url);
     expect((await samplesForDeal(e, "tld_final"))!.pdf_r2_key).toBeNull();
@@ -705,8 +710,11 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     await sendReplyApprovals(e, MON);
     const again = (await row())!;
     expect(again.notice_ref).not.toBe(first.notice_ref);
-    expect(sends[0]!.text.replace(/\s+/g, " ")).toContain(SHEET_CHANGE_WORDS);
-    expect(sends[0]!.files).toEqual(["The Learning Club - Build Your Own AI Agent - partner levels - Old Co.pdf"]);
+    const remade = sends.find((x) => x.subject.startsWith("Old Co "))!;
+    expect(remade.text.replace(/\s+/g, " ")).toContain(SHEET_CHANGE_WORDS);
+    // The sheet is in the email itself; its PDF is made only from the approved version, when it goes (owner, 7 Nov 2026).
+    expect(remade.files).toEqual([]);
+    expect(remade.text).toContain("THE SHEET THEY GET");
     // Her "approved" to the OLD email (Scooter had approved it too) sends nothing: that email no longer stands.
     sends.length = 0;
     await applyBrandReplyApproval(e, { fromHeader: `Her <${APPROVER}>`, authenticationResults: auth(APPROVER), subject: `Re: Wynn · ${first.notice_ref}`, body: `approved\n\nRef ${first.notice_ref}` }, { now: MON, drafter });
@@ -729,17 +737,20 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     expect(p.draft_body).toContain("• Partner · $5,000 per event: named on the invitation and on the day;");
     expect(p.draft_body).toContain("• Lead partner · $10,000 per event: Everything in Partner, plus the hands-on segment built around your product;");
     expect(p.draft_body).toContain('• Presenting partner · $15,000 per event: Everything in Lead, plus "Presented by Flow Co" on the invitation, signage and recap.');
-    expect(p.draft_body).toContain("Lead is the level brands like Flow Co would benefit most from.");
+    // No "most brands like Flow Co" line: Scooter's note on the Pinecone draft wins (7 Nov 2026).
+    expect(p.draft_body).not.toMatch(/benefit most/);
     expect(p.draft_body.indexOf("Partner ·")).toBeLessThan(p.draft_body.indexOf("Lead partner ·"));
     expect(p.draft_body.indexOf("Lead partner ·")).toBeLessThan(p.draft_body.indexOf("Presenting partner ·"));
     expect(p.draft_body).not.toMatch(/Title partner|Product partner|in kind/);
     expect(JSON.parse(p.attachments_json)).toEqual([expect.objectContaining({ name: "The Learning Club - Build Your Own AI Agent - partner levels - Flow Co.pdf" })]);
     const { sendReplyApprovals } = await import("../src/worker/services/tlcBrandReply");
     await sendReplyApprovals(e, MON);
-    expect(sends[0]!.files).toEqual(["The Learning Club - Build Your Own AI Agent - partner levels - Flow Co.pdf"]);
-    // The exec format bolds numbers ("step **4**"), so the line is read without the bold.
-    expect(sends[0]!.text.replace(/\*\*/g, "")).toContain("(your answer has prices in it)");
-    await approve(e, await refOf("tld_flow"));
+    const proposal = sends.find((x) => x.subject.startsWith("Flow Co Pricing Reply · v1"))!;
+    // The sheet is inline; no PDF until the approved version goes. Her approval moves it to both partners.
+    expect(proposal.files).toEqual([]);
+    expect(proposal.text).toContain("it goes to you and Scooter for both of you to approve");
+    // The PDF is made now, from the approved version (owner, 7 Nov 2026).
+    await approve(e, await refOf("tld_flow"), { samples: render });
     expect(sends.filter((x) => x.to.includes("flow.example"))).toHaveLength(1);
     // They pick a level: the confirmation, with a one-page agreement and the invoice, for her approval.
     sends.length = 0;
@@ -749,7 +760,7 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     expect(c.draft_body).toContain("we're thrilled to have Flow Co as Presenting partner. Attached are a one-page agreement and the invoice.");
     expect((JSON.parse(c.attachments_json) as Array<{ name: string }>).map((f) => f.name)).toEqual(["The Learning Club - Flow Co - agreement.pdf", "The Learning Club - Flow Co - invoice.pdf"]);
     await sendReplyApprovals(e, MON);
-    expect(sends[0]!.files).toEqual(["The Learning Club - Flow Co - agreement.pdf", "The Learning Club - Flow Co - invoice.pdf"]);
+    expect(sends.find((x) => x.subject.startsWith("Flow Co Agreement"))!.files).toEqual(["The Learning Club - Flow Co - agreement.pdf", "The Learning Club - Flow Co - invoice.pdf"]);
     expect((await e.WP_OS_DB.prepare("SELECT stage FROM tlc_deal WHERE id = 'tld_flow'").first<{ stage: string }>())!.stage).toBe("PITCHED");
     sends.length = 0;
     const ref = await refOf("tld_flow");
@@ -813,8 +824,8 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     expect(await e.WP_OS_DB.prepare("SELECT send_to, send_cc_json FROM tlc_brand_reply WHERE deal_id = 'tld_cc'").first()).toEqual({ send_to: "mike@copy.example", send_cc_json: JSON.stringify(["aaron@copy.example"]) });
     sends.length = 0;
     await processBrandReplies(e, MON, "west-peek", { mailbox: null });
-    const notice = sends.find((x) => / replied · /.test(x.subject))!;
-    expect(notice.text).toContain("would go to mike@copy.example (copying aaron@copy.example)");
+    const notice = sends.find((x) => x.subject.startsWith("Copy Co "))!;
+    expect(notice.text).toContain("To: mike@copy.example · Cc: aaron@copy.example");
     sends.length = 0;
     await approve(e, await refOf("tld_cc"));
     const out = sends.filter((x) => x.to.includes("copy.example"));
@@ -870,12 +881,12 @@ describe("brand colleagues and the approval boundary", () => {
     expect(sheet).toContain("<h1>Build Your Own AI Agent, with Brand Co</h1>");
     expect(sheet).toContain("Brand Co is the vector database every guest uses in the hands-on hour, with a starter account set up in the room");
     expect(sheet).not.toMatch(/Product partner|in kind|Title partner/);
-    expect(sends).toHaveLength(1);
+    expect(sends.filter((x) => x.subject.startsWith("Brand Co "))).toHaveLength(1);
     expect(sends[0]!.to).toBe("sequoia@westpeek.ventures");
     expect(sends.some((x) => x.to.includes("brand.example"))).toBe(false);
     // Seen once: the next pass drafts nothing and sends nothing.
     expect(await processBrandReplies(e, MORNING, "west-peek", { drafter, mailbox, samples })).toContain("0 drafted");
-    expect(sends).toHaveLength(1);
+    expect(sends.filter((x) => x.subject.startsWith("Brand Co "))).toHaveLength(1);
   });
 
   it("a stranger at an unrelated domain, or at a free-mail address not on our thread, is not taken", async () => {

@@ -56,25 +56,27 @@ export function trueCommunityWords(text: string): string {
 }
 
 /**
- * WHAT A BRAND IS TOLD ABOUT THE COMMUNITY (owner, 6 Nov 2026: "do not overpromise on our community: just say we have
- * built a large community approaching 5000 people at its height … we can curate the room from our vast network … no
- * guarantees"). Brand-facing words never state a present size: the community GREW TO NEARLY 5,000 AT ITS HEIGHT, and
- * each room is curated from that network. COMMUNITY_ABOUT above stays for the firm's own and LP materials.
+ * WHAT A BRAND IS TOLD ABOUT THE COMMUNITY. 6 Nov 2026 she asked not to overpromise ("no guarantees"; each room is
+ * curated from the network); 7 Nov 2026, on the Pinecone Pricing Reply v2: say "about 5,000", never "nearly 5,000 at
+ * its height". So brand words give the one true approximate figure, COMMUNITY_ABOUT, and say the room is curated from
+ * that network; never a floor ("more than 5,000") and never the "at its height" wording.
  */
-export const BRAND_COMMUNITY_SHORT = "nearly 5,000 at its height";
-export const BRAND_COMMUNITY_LINE = "We built a community that grew to nearly 5,000 founders, operators and creatives at its height, and we curate each room from that network.";
-const PRESENT_SIZE = /\bcommunity of (?:about |around |roughly |~)?5,000((?:\s+[a-z]+,)*(?:\s+[a-z]+\s+and)?(?:\s+[a-z]+)?)/gi;
+export const BRAND_COMMUNITY_SHORT = COMMUNITY_ABOUT;
+export const BRAND_COMMUNITY_LINE = "We built a community of about 5,000 founders, operators and creatives, and we curate each room from that network.";
+/** The retired 6 Nov wording ("grew to nearly 5,000 … at its height"): a brand never reads it again. */
+const AT_ITS_HEIGHT = /\b(community )that grew to nearly 5,000((?:\s+[a-z]+,)*(?:\s+[a-z]+\s+and)?(?:\s+[a-z]+)?) at its height\b/gi;
 
-/** A present-tense community size in brand text ("community of about 5,000"): her 6 Nov rule says "grew to nearly 5,000 at its height". */
-export const presentCommunitySize = (text: string): string[] => [...text.matchAll(PRESENT_SIZE)].map((m) => m[0].trim());
+/** The retired "nearly 5,000 at its height" wording in brand text, each place it appears. */
+export const atItsHeight = (text: string): string[] => [...text.matchAll(/\bnearly 5,000\b[^.]{0,80}?\bat its height\b|\bnearly 5,000\b/gi)].map((m) => m[0].trim());
 
 /**
- * Stored or queued brand text said the 6 Nov way: overstated counts first (trueCommunityWords), then the old drip proof
- * line and any "community of about 5,000 <who>" become "community that grew to nearly 5,000 <who> at its height".
+ * Stored or queued brand text said the 7 Nov way: overstated counts first (trueCommunityWords), then the retired
+ * "grew to nearly 5,000 <who> at its height" becomes "of about 5,000 <who>".
  */
 export function brandCommunityWords(text: string): string {
   return trueCommunityWords(text)
+    .replace(/We built a community that grew to nearly 5,000 founders, operators and creatives at its height, and we curate each room from that network\./g, BRAND_COMMUNITY_LINE)
     .replace(/Our community of (?:about |~)?5,000 founders, operators and creatives meets in person through West Peek Rooms, our event series in New York\./g,
       `${BRAND_COMMUNITY_LINE} We meet in person through West Peek Rooms, our event series in New York.`)
-    .replace(PRESENT_SIZE, (_m, who: string) => `community that grew to nearly 5,000${who} at its height`);
+    .replace(AT_ITS_HEIGHT, (_m, lead: string, who: string) => `${lead}of about 5,000${who}`);
 }

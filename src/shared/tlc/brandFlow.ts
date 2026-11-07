@@ -50,7 +50,7 @@ export const FLOW_TEMPLATES = {
   cover:
     "{hi}\n\nHere's a short 3-page PDF, built around {brand}:\n\n1. Run of show: how the evening flows, and where {brand} comes in: \"{segment}\", a segment led by {brand} or by our host.\n2. A series of six: how the room could grow into {arc}.\n3. Who's in the room: the kinds of people we'd invite, shaped around who you told us you want to reach.\n\nEverything here can bend to your launches and your audience. Tell me what you'd change and I'll come back with options for how {brand} could take part.",
   proposal:
-    "{hi}\n\nThanks for your note. Here's how {brand} could take part in The Learning Club: {topic}, built around \"{segment}\", led by {brand} or by our host. Every price is per event:\n\n{levels}\n\nLead is the level brands like {brand} would benefit most from. A series of six: the same per-event price for each club, as a founding partner. The attached sheet has the details.\n\nTo say yes, reply with the level; we send a one-page agreement and an invoice, payment due within 14 days, and then we set the date with you.",
+    "{hi}\n\nThanks for your note. Here's how {brand} could take part in The Learning Club: {topic}, built around \"{segment}\", led by {brand} or by our host. Every price is per event:\n\n{levels}\n\n{series}The attached sheet has the details.\n\nTo say yes, reply with the level{howMany}; we send a one-page agreement and an invoice, payment due within 14 days, and then we set the date with you.",
   confirm:
     "{hi}\n\nWonderful, we're thrilled to have {brand} as {level}. Attached are a one-page agreement and the invoice. Once both are back, we'll lock the date with you and start shaping the guest list around your audience.",
   callTimes:

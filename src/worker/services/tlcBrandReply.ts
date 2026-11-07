@@ -1,5 +1,5 @@
 import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
-import { brandCommunityWords, overstatedCommunityClaims, presentCommunitySize } from "../../shared/community/size";
+import { atItsHeight, brandCommunityWords, overstatedCommunityClaims } from "../../shared/community/size";
 import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { appendEvent } from "../events";
@@ -17,7 +17,10 @@ import {
   stageAfterReply, standingRulesIn, theirNewText, tierLines, wantsResearch,
   type BrandReplyIntent, type ReplyDraftInput, type WynnRule,
 } from "../../shared/tlc/brandReply";
-import { BRAND_EMAIL_ROOM_WORDS, classifyBrandMail, TLC_BRAND_REPLY_NOTICE_CC_IDS, TLC_BRAND_REPLY_NOTICE_OBJECT, TLC_DRIP_DAYS, TLC_OWNER, TLC_SEATS, TLC_SIGNATURE, brandDisplayName, signedBrandEmail, monthWords, nextDripAt } from "../../shared/tlc/learningClub";
+import { renderWynnDraftEmail, draftEmailProblems, unansweredNotes, type ChangeLine } from "../../shared/tlc/wynnDraftEmail";
+import { seriesPriceWords } from "../../shared/tlc/series";
+import { docNameFor, peopleOf, replyPageUrl, sheetMini, splitContactName } from "../../shared/tlc/replyDoc";
+import { BRAND_EMAIL_ROOM_WORDS, classifyBrandMail, TLC_BRAND_REPLY_NOTICE_CC_IDS, TLC_BRAND_REPLY_NOTICE_OBJECT, TLC_PRICING_NOTICE_OBJECT, TLC_DRIP_DAYS, TLC_OWNER, TLC_SEATS, TLC_SIGNATURE, brandDisplayName, signedBrandEmail, monthWords, nextDripAt } from "../../shared/tlc/learningClub";
 import { partnerByEmail, partnerByFirmUserId } from "../../shared/registry/partners";
 import { TLC_BRAND_SALES_JOB } from "../../shared/policy/outsideEmail";
 import { actorForFirmUser, type Actor } from "./authorize";
@@ -56,6 +59,11 @@ import { SamplesPdfError, buildSamples, finalizeSamplesPdf, reviseSamples, sampl
  */
 
 export const APPROVER_SETTING = "brand_reply_approver_email";
+/** A redraft that left a partner's note without a change line: held, never sent to them looking finished. */
+export const NOTE_UNANSWERED = "WYNN_NOTE_UNANSWERED";
+/** refreshStaleSheets' note on a draft whose sheet was made again: said as the email's "what changed" line. */
+const STALE_SHEET_PREFIX = "WHAT CHANGED SINCE THE LAST EMAIL:";
+const PARTNER_FIRST_NAMES: readonly string[] = [TLC_OWNER.firmUserId, ...TLC_BRAND_REPLY_NOTICE_CC_IDS].map((id) => partnerByFirmUserId(id)?.firstName ?? id);
 /** How long a reply waits before Wynn tries its research again, and how many tries before the draft goes without it. */
 export const RESEARCH_RETRY_MINUTES = 30;
 export const RESEARCH_TRIES = 3;
@@ -78,9 +86,11 @@ export interface DraftExtras {
   samplesAttached?: boolean;
   /** This brand's own levels (its sheet's), so a draft never offers Title or in-kind where the sheet does not. */
   levels?: ReturnType<typeof brandLevels>;
+  /** Each partner's note on a redraft, by name; Wynn returns at least one change line for each. */
+  notes?: ReadonlyArray<{ who: string; note: string }>;
 }
 export type CallPlan = { offer: string[] } | { agreed: string };
-export type ReplyDrafter = (env: Env, actor: Actor, input: ReplyDraftInput & DraftExtras) => Promise<{ ok: boolean; body: string; detail: string }>;
+export type ReplyDrafter = (env: Env, actor: Actor, input: ReplyDraftInput & DraftExtras) => Promise<{ ok: boolean; body: string; detail: string; changes?: ChangeLine[] }>;
 export type BrandResearcher = (env: Env, actor: Actor, prompt: string) => Promise<{ ok: boolean; text: string; detail: string }>;
 export type MailboxReader = (env: Env, query: string, maxPages?: number) => Promise<Array<BrandMessage & { from: string }>>;
 export interface BrandReplyDeps {
@@ -97,6 +107,7 @@ interface ReplyRow {
   change_note?: string | null; report_text?: string | null; research_due?: string | null; research_tries?: number;
   samples_id?: string | null; previous_draft?: string | null; round?: string | null; inputs_json?: string | null; offered_slots_json?: string | null; agreed_slot?: string | null; calendar_event_id?: string | null; held_reason?: string | null;
   kind?: string | null; tier?: string | null; attachments_json?: string | null; send_retry_due?: string | null; send_tries?: number;
+  version?: number | null; changes_json?: string | null; sent_at?: string | null; effect_request_id?: string | null;
 }
 
 export const normalizeMid = (id: string | null | undefined): string => (id ?? "").trim().replace(/^<|>$/g, "");
@@ -145,7 +156,8 @@ const PROMPT_RULES = [
   "No postal address, no P.S. and no signature: the signature and our mailing-address footer are added after. Never name anyone at West Peek other than Sequoia, except Scooter Taylor as our founding GP where the rules below say so.",
   "Do not attach or mention a PDF or deck unless they asked for one or said yes.",
   "End with one clear next step, as Wynn's standing rules below say.",
-  "The room and the community (owner, 6 Nov 2026): never promise a number of guests above 25 and never guarantee attendance; say rooms of 25+, sized to their goals. Never state the community's size today: say we built a community that grew to nearly 5,000 at its height, and that we curate each room from that network. No guarantees of any kind.",
+  "The room and the community (owner, 6 Nov 2026): never promise a number of guests above 25 and never guarantee attendance; say rooms of 25+, sized to their goals. Say we built a community of about 5,000 and that we curate each room from that network; never 'more than 5,000' and never 'nearly 5,000 at its height' (owner, 7 Nov 2026). No guarantees of any kind.",
+  "When the partners' notes conflict, Scooter's note wins (owner, 7 Nov 2026).",
 ];
 
 /** Wynn's rules as the prompt states them; the WHO_WE_ARE row is the facts a first answer must explain. */
@@ -185,18 +197,21 @@ const defaultDrafter: ReplyDrafter = async (env, actor, i) => {
     "",
     "Their message, word for word:",
     i.theirText,
-    ...(i.note && i.previous ? ["", "Her previous draft:", i.previous, "", "Her note, word for word. Follow EVERY instruction in it, each one, in this redraft:", i.note] : []),
+    ...(i.note && i.previous ? ["", "The previous draft:", i.previous, "", "The partners' notes, word for word, each under the name of who wrote it. Follow EVERY instruction in them, each one, in this redraft. When two notes conflict, Scooter's note wins:", i.note] : []),
     "",
-    'Return ONLY JSON: {"body":""}',
+    i.note && i.previous
+      ? `Return ONLY JSON: {"body":"","changes":[{"who":"${(i.notes ?? []).map((n) => n.who).join('" or "') || "Sequoia"}","note":"their words, short","done":"what you changed for it, in a few words"}]}. At least one line in changes for each person's note; a note you could not follow still gets a line saying why.`
+      : 'Return ONLY JSON: {"body":""}',
   ].filter((l) => l !== "").join("\n");
   const out = await tlcRevisionWriter(env, actor, prompt);
   if (!out.ok) return { ok: false, body: "", detail: "the revision model did not complete" };
-  try {
-    const j = JSON.parse(/\{[\s\S]*\}/.exec(out.text)?.[0] ?? "") as { body?: string };
-    return j.body?.trim() ? { ok: true, body: j.body.trim(), detail: "ok" } : { ok: false, body: "", detail: "the draft came back empty" };
-  } catch {
-    return { ok: false, body: "", detail: "the draft could not be read" };
-  }
+  // jsonIn reads a body the model wrote with real line breaks inside the string (Scooter, 6 Nov 2026, TLR-XALAD7):
+  // strict JSON.parse threw the answer away and a plain template went back as the "redraft".
+  const { jsonIn } = await import("./learningClub");
+  const j = jsonIn(out.text);
+  if (!j) return { ok: false, body: "", detail: "the draft could not be read" };
+  const body = typeof j.body === "string" ? j.body.trim() : "";
+  return body ? { ok: true, body, detail: "ok", changes: changeLinesOf(j.changes) } : { ok: false, body: "", detail: "the draft came back empty" };
 };
 
 /** A draft that breaks her voice rules is not used; the plain template stands in. */
@@ -207,9 +222,9 @@ export function draftProblems(body: string, intent: BrandReplyIntent, opts: { no
   // Scooter is named only as who he is to the brand (her WHO_WE_ARE rule): "Scooter Taylor", our founding GP.
   if (/\bscooter\b(?!\s+taylor)/i.test(body)) out.push("a name other than hers");
   if (opts.noMoney && MONEY_WORDS.test(body)) out.push("money before a call (her rule)");
-  for (const c of overstatedCommunityClaims(body)) out.push(`a community size above the true one: "${c}" (say it grew to nearly 5,000 at its height)`);
-  // Owner, 6 Nov 2026: no present-tense community size, no head count above 25, no guarantee.
-  for (const c of presentCommunitySize(body)) { out.push(`a community size today: "${c}" (say it grew to nearly 5,000 at its height)`); break; }
+  for (const c of overstatedCommunityClaims(body)) out.push(`a community size above the true one: "${c}" (say about 5,000)`);
+  // Owner, 7 Nov 2026: "about 5,000", never the retired "nearly 5,000 at its height"; no head count above 25, no guarantee.
+  for (const c of atItsHeight(body)) { out.push(`the retired community wording: "${c}" (say about 5,000)`); break; }
   for (const m of body.matchAll(/(?<!(?:to|–|-)\s*)\b(?:up to |as many as |around |about )?(\d{2,4})\s+(?:people|guests|attendees|New Yorkers|founders|builders)\b/gi)) {
     if (Number(m[1]) > 25 && !out.some((o) => o.startsWith("a room of"))) { out.push(`promises ${m[0].trim()} (her rule: never more than 25; say rooms of ${BRAND_EMAIL_ROOM_WORDS}, sized to their goals)`); break; }
   }
@@ -239,7 +254,36 @@ export function callFallback(contactName: string | null, plan: CallPlan): string
   return fillTemplate("callTimes", { hi: hiLine(contactName), times: plan.offer.map((x) => `• ${slotWords(x)}`).join("\n") });
 }
 
+/** Change lines as the model returned them, read strictly: each needs what was done. */
+export function changeLinesOf(v: unknown): ChangeLine[] {
+  if (!Array.isArray(v)) return [];
+  return v.flatMap((x) => {
+    if (!x || typeof x !== "object") return [];
+    const o = x as Record<string, unknown>;
+    const done = String(o.done ?? "").trim();
+    return done ? [{ who: String(o.who ?? "").trim() || null, note: String(o.note ?? "").trim().slice(0, 200) || null, done: done.slice(0, 300) }] : [];
+  });
+}
+
+/**
+ * The partners' notes on a draft, by name. A round-2 note is stored "Sequoia: …\n\nScooter: …" (notesOf); a round-1
+ * note is hers alone.
+ */
+export function notesByName(changeNote: string | null | undefined): Array<{ who: string; note: string }> {
+  const t = (changeNote ?? "").trim();
+  if (!t) return [];
+  const names = PARTNER_FIRST_NAMES.join("|");
+  const parts = t.split(new RegExp(`\\n\\s*\\n(?=(?:${names}): )`));
+  const named = parts.map((p) => new RegExp(`^(${names}): ([\\s\\S]*)$`).exec(p.trim()));
+  if (named.every((m) => m)) return named.map((m) => ({ who: m![1]!, note: m![2]!.trim() }));
+  return [{ who: firstNameOf(TLC_OWNER.firmUserId), note: t }];
+}
+
 async function draftFor(env: Env, deal: TlcDealRow, ev: TlcEventRow, intent: BrandReplyIntent, theirText: string, deps: BrandReplyDeps, redo: { note: string; previous: string; research?: string | null; samplesAttached?: boolean } | null = null, callPlan: CallPlan | null = null): Promise<string> {
+  return (await draftWithChanges(env, deal, ev, intent, theirText, deps, redo, callPlan)).body;
+}
+
+async function draftWithChanges(env: Env, deal: TlcDealRow, ev: TlcEventRow, intent: BrandReplyIntent, theirText: string, deps: BrandReplyDeps, redo: { note: string; previous: string; research?: string | null; samplesAttached?: boolean } | null = null, callPlan: CallPlan | null = null): Promise<{ body: string; changes: ChangeLine[] }> {
   const { CALL_LINK_SETTING, pitchPublicUrl } = await import("./learningClub");
   const input: ReplyDraftInput = {
     intent, brand: deal.brand, contactName: deal.contact_name, topic: ev.topic ?? "", month: ev.month, why: deal.why_fit, theirText,
@@ -250,15 +294,18 @@ async function draftFor(env: Env, deal: TlcDealRow, ev: TlcEventRow, intent: Bra
   const noMoney = noMoneyNow(rules, deal.stage) && !(await flowStep(env, deal.id)).samplesSent;
   const weHost = rules.some((r) => r.code === WE_HOST);
   const levels = brandLevels(await sponsorFor(env, deal, theirText), ev.topic ?? "");
-  const out = await (deps.drafter ?? defaultDrafter)(env, wynnActor(deal.firm_scope), { ...input, note: redo?.note ?? null, previous: redo?.previous ?? null, rules, noMoney, research: redo?.research ?? null, callPlan, samplesAttached: redo?.samplesAttached, levels })
+  const notes = redo ? notesByName(redo.note) : [];
+  const out: { ok: boolean; body: string; detail: string; changes?: ChangeLine[] } = await (deps.drafter ?? defaultDrafter)(env, wynnActor(deal.firm_scope), { ...input, note: redo?.note ?? null, previous: redo?.previous ?? null, rules, noMoney, research: redo?.research ?? null, callPlan, samplesAttached: redo?.samplesAttached, levels, notes })
     .catch((err) => ({ ok: false, body: "", detail: String(err) }));
-  const words = out.ok && draftProblems(out.body, intent, { noMoney, weHost, callPlan }).length === 0 && (!redo?.samplesAttached || (/\battach(?:ed|ment)\b/i.test(out.body) && !/\b(?:can|could|happy to) (?:send|share)\b/i.test(out.body)))
+  const used = out.ok && draftProblems(out.body, intent, { noMoney, weHost, callPlan }).length === 0 && (!redo?.samplesAttached || (/\battach(?:ed|ment)\b/i.test(out.body) && !/\b(?:can|could|happy to) (?:send|share)\b/i.test(out.body)));
+  const words = used && draftProblems(out.body, intent, { noMoney, weHost, callPlan }).length === 0 && (!redo?.samplesAttached || (/\battach(?:ed|ment)\b/i.test(out.body) && !/\b(?:can|could|happy to) (?:send|share)\b/i.test(out.body)))
     ? out.body
     : redo?.samplesAttached ? samplesCoverEmail({ brand: brandDisplayName(deal.brand), contactName: deal.contact_name, topic: ev.topic ?? "", segmentTitle: (await flowStep(env, deal.id)).segment ?? "The brand segment" })
     : callPlan
       ? callFallback(deal.contact_name, callPlan)
       : fallbackReplyBody(input, monthWords, { noMoney, whoWeAre: rules.find((r) => r.code === WHO_WE_ARE)?.rule ?? null });
-  return signedBrandEmail(words);
+  // A stand-in template answered no note: it carries no change lines, so the email to her is held (unansweredNotes).
+  return { body: signedBrandEmail(words), changes: used ? out.changes ?? [] : [] };
 }
 
 // ── Research she asked for ─────────────────────────────────────────────────────────────────────
@@ -327,9 +374,19 @@ async function redraftFor(env: Env, r: ReplyRow, note: string, now: Date, deps: 
       return "RESEARCH_WAITING";
     }
   }
-  const draft = await draftFor(env, deal, ev, r.intent as BrandReplyIntent, r.their_text, deps, { note, previous, research: report, samplesAttached: Boolean(r.samples_id) });
-  await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'DRAFTED', notice_ref = NULL, approved_by_json = NULL, draft_body = ?2, change_note = ?3, report_text = ?4, research_due = NULL, held_reason = NULL, previous_draft = ?5 WHERE id = ?1")
-    .bind(r.id, draft, note, report, r.draft_body).run();
+  const { body: draft, changes } = await draftWithChanges(env, deal, ev, r.intent as BrandReplyIntent, r.their_text, deps, { note, previous, research: report, samplesAttached: Boolean(r.samples_id) });
+  /*
+   * vN COUNTS UP PER REDRAFT (owner, 7 Nov 2026): one more than the last version the partners saw (a redraft that was
+   * held and redone before anyone saw it keeps its number). A note with no change line holds the email: Wynn tries
+   * again on the next passes, and after RESEARCH_TRIES the pass names the stop (sendReplyApprovals).
+   */
+  const shown = await env.WP_OS_DB.prepare("SELECT MAX(version) AS v FROM tlc_brand_reply_version WHERE reply_id = ?1").bind(r.id).first<{ v: number | null }>().catch(() => null);
+  const version = (shown?.v ?? r.version ?? 1) + 1;
+  const missing = r.samples_id ? [] : unansweredNotes(notesByName(note), changes);
+  const tries = (r.research_tries ?? 0) + 1;
+  const retry = missing.length > 0 && tries < RESEARCH_TRIES ? new Date(now.getTime() + RESEARCH_RETRY_MINUTES * 60_000).toISOString() : null;
+  await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'DRAFTED', notice_ref = NULL, approved_by_json = NULL, draft_body = ?2, change_note = ?3, report_text = ?4, research_due = ?6, research_tries = ?7, held_reason = ?8, previous_draft = ?5, version = ?9, changes_json = ?10 WHERE id = ?1")
+    .bind(r.id, draft, note, report, r.draft_body, retry, missing.length ? tries : 0, missing.length ? `${NOTE_UNANSWERED}: no change line for ${missing.join(" and ")}'s note (try ${tries} of ${RESEARCH_TRIES})` : null, version, JSON.stringify(changes)).run();
   return "DRAFTED";
 }
 
@@ -516,7 +573,14 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
 /** Step 4's email (unsigned): the proposal template, the brand's own levels, the greeting for whoever asked. */
 function proposalBody(deal: TlcDealRow, ev: TlcEventRow, sponsor: Awaited<ReturnType<typeof sponsorFor>>, segment: string | null, hi: string): string {
   const brandName = brandDisplayName(deal.brand);
-  return fillTemplate("proposal", { hi, brand: brandName, topic: ev.topic ?? "", segment: segment ?? `Where ${brandName} comes in`, levels: proposalLevelLines(brandLevels(sponsor, ev.topic ?? "")) });
+  // No "most brands like <Brand>" line (Scooter's note on the Pinecone draft wins, 7 Nov 2026). A brand with series
+  // prices reads them per event for four and six evenings; any other the series of six at the same per-event price.
+  const sp = sponsor.seriesPricing ?? null;
+  const series = sp
+    ? ["For more than one evening, each series costs less per event:", ...(sp.quarterly ? [`• ${sp.quarterly.name}, ${sp.quarterly.evenings.length} evenings in ${sp.year}: ${sp.quarterly.style} Lead ${seriesPriceWords(sp, "LEAD", 4).replace(/ \(.*\)$/, "")}, Presenting ${seriesPriceWords(sp, "PRESENTING", 4).replace(/ \(.*\)$/, "")}.`] : []),
+      ...(sp.monthly ? [`• ${sp.monthly.name}: ${sp.monthly.style} Lead ${seriesPriceWords(sp, "LEAD", 6).replace(/ \(.*\)$/, "")}, Presenting ${seriesPriceWords(sp, "PRESENTING", 6).replace(/ \(.*\)$/, "")}.`] : [])].join("\n") + "\n\n"
+    : "A series of six: the same per-event price for each club, as a founding partner. ";
+  return fillTemplate("proposal", { hi, brand: brandName, topic: ev.topic ?? "", segment: segment ?? `Where ${brandName} comes in`, levels: proposalLevelLines(brandLevels(sponsor, ev.topic ?? "")), series, howMany: sp ? " and whether it's one evening, four or six" : "" });
 }
 
 /**
@@ -758,9 +822,10 @@ function mintRef(): string {
  * partner inbox; `brand_reply_approver_email` (a D1 setting, never this public repository) names another inbox of
  * hers whose authenticated reply is also accepted. Her reply comes back to Wynn and the intake door reads it.
  */
-async function emailHer(env: Env, firmScope: string, objectId: string, email: Omit<ExecEmailInput, "employee">, attachments: readonly EmailAttachment[] = [], cc: readonly string[] = []): Promise<boolean> {
+async function emailHer(env: Env, firmScope: string, objectId: string, email: Omit<ExecEmailInput, "employee">, attachments: readonly EmailAttachment[] = [], cc: readonly string[] = [], pricing = false): Promise<boolean> {
   const { emailOwner } = await import("./learningClub");
-  const sent = await emailOwner(env, { employee: "Wynn", email, objectType: TLC_BRAND_REPLY_NOTICE_OBJECT, objectId, cardId: null, cardKind: null, firmScope, ...(attachments.length ? { attachments } : {}), ...(cc.length ? { cc } : {}) });
+  // Scooter's copy survives the door only on a pricing email (services/execEmail.ts tlcCcKept, owner 7 Nov 2026).
+  const sent = await emailOwner(env, { employee: "Wynn", email, objectType: pricing ? TLC_PRICING_NOTICE_OBJECT : TLC_BRAND_REPLY_NOTICE_OBJECT, objectId, cardId: null, cardKind: null, firmScope, ...(attachments.length ? { attachments } : {}), ...(cc.length ? { cc } : {}) });
   if (sent.length === 0) throw new Error("the owner email was not sent");
   return true;
 }
@@ -797,10 +862,17 @@ export async function approverAddress(env: Env): Promise<string> {
 }
 
 /** A draft that carries prices: the proposal (step 4) or the confirmation (step 5). These get round 2. */
-export const carriesPricing = (r: { kind?: string | null }): boolean => r.kind === "PROPOSAL" || r.kind === "CONFIRM";
+/**
+ * A draft that carries prices: the proposal (step 4), the confirmation (step 5), or ANY draft whose words name a dollar
+ * amount (7 Nov 2026: an answer Wynn drafted with the levels in it was a pricing email too, and must not go to the brand
+ * on her approval alone). These get round 2.
+ */
+export const carriesPricing = (r: { kind?: string | null; draft_body?: string | null }): boolean =>
+  r.kind === "PROPOSAL" || r.kind === "CONFIRM" || /\$\s?\d/.test(r.draft_body ?? "");
 /** Round 2: a pricing draft she approved, now with her and Scooter (a notice that named both partners counts too). */
 export const inPartnerRound = (r: { round?: string | null }): boolean => r.round === "PARTNERS";
 
+/** The old link in emails already sent: it now redirects to the brand's readable reply page. */
 export const draftPageUrl = (token: string): string => `https://os.joinwestpeek.com/api/tlc-pitch/draft/${token}`;
 async function draftPageLink(env: Env, replyId: string): Promise<string> {
   const token = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -839,7 +911,7 @@ export function changedLines(before: string, after: string): { removed: string[]
  */
 export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-peek"): Promise<string> {
   const waiting = (await env.WP_OS_DB.prepare(
-    `SELECT r.*, d.brand, d.contact_name, d.contact_email, e.month, e.topic FROM tlc_brand_reply r JOIN tlc_deal d ON d.id = r.deal_id JOIN tlc_event e ON e.id = d.event_id
+    `SELECT r.*, d.brand, d.contact_name, d.contact_email, d.people_json, e.month, e.topic FROM tlc_brand_reply r JOIN tlc_deal d ON d.id = r.deal_id JOIN tlc_event e ON e.id = d.event_id
       WHERE r.firm_scope = ?1 AND r.state = 'DRAFTED' AND r.research_due IS NULL ORDER BY r.received_at`,
   ).bind(firmScope).all<WaitingRow>()).results ?? [];
   const researching = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_brand_reply WHERE firm_scope = ?1 AND state = 'DRAFTED' AND research_due IS NOT NULL").bind(firmScope).first<{ n: number }>())?.n ?? 0;
@@ -852,113 +924,115 @@ export async function sendReplyApprovals(env: Env, now: Date, firmScope = "west-
   return out.join("; ");
 }
 
-type WaitingRow = ReplyRow & { brand: string; contact_name: string | null; contact_email: string; month: string; topic: string | null; round?: string | null; inputs_json?: string | null; page_token?: string | null };
+type WaitingRow = ReplyRow & { brand: string; contact_name: string | null; contact_email: string; month: string; topic: string | null; round?: string | null; inputs_json?: string | null; page_token?: string | null; series_json?: string | null; people_json?: string | null; offer_json?: string | null; event_id?: string };
 
+/** "Aaron Kao (VP Marketing)": a person on the thread, by the deal's own names, else the contact's, else the address. */
+function personWords(address: string, r: { contact_email: string; contact_name: string | null; people_json?: string | null }): { name: string; role: string | null; full: string } {
+  const a = address.trim().toLowerCase();
+  const known = peopleOf(r.people_json)[a] ?? (a === r.contact_email.trim().toLowerCase() ? splitContactName(r.contact_name) : null);
+  return known ? { name: known.name, role: known.role, full: `${known.name} <${a}>` } : { name: a, role: null, full: a };
+}
+
+/** Each partner's answer on the current round, in words: "Sequoia: not answered yet · Scooter: approved". */
+export function answeredWords(needed: readonly string[], inputs: PartnerInputs): string {
+  return needed.map((id) => `${firstNameOf(id)}: ${inputs[id] ? (inputs[id]!.approved ? "approved" : "sent notes") : "not answered yet"}`).join(" · ");
+}
+
+/**
+ * ONE EMAIL PER DRAFT, IN THE SHAPE SHE APPROVED (owner, 7 Nov 2026, the Pinecone Pricing Reply v2: "all emails from wynn
+ * should be like this"; shared/tlc/wynnDraftEmail.ts). Round 1 goes to her alone; round 2 (a pricing draft she
+ * approved) to her and Scooter, and is the only Wynn email he is copied on. A redraft whose change lines leave a
+ * partner's note unanswered is held and named, never sent looking finished.
+ */
 async function sendRound(env: Env, now: Date, firmScope: string, rows: WaitingRow[], partnerRound: boolean): Promise<string> {
   const ct = chicago(now);
-  const ref = mintRef();
-  const to = TLC_OWNER.email;
+  const out: string[] = [];
   const copies = partnerRound ? await approvalCopies(env) : { cc: [] as string[], missing: [] as string[] };
   const needed = [TLC_OWNER.firmUserId, ...copies.cc.map((a) => partnerByEmail(a)!.firmUserId)];
-  const both = needed.length > 1;
-  /*
-   * Round 1 carries what goes with the answer (the samples page link; any PDF attached, so she sees exactly what the
-   * brand would get). Round 2 carries NO PDF: one link to the live draft page, which shows the answer, the sheet and
-   * every note so far, and is updated in place by each redraft.
-   */
-  const attachments: EmailAttachment[] = [];
-  const attachedTo = new Map<string, string>();
-  const previews = new Map<string, { url: string; latest: string | null }>();
-  const pages = new Map<string, string>();
   for (const r of rows) {
+    const brand = brandDisplayName(r.brand);
+    const pricing = carriesPricing(r);
+    const version = r.version ?? 1;
+    const changes = (() => { try { return changeLinesOf(JSON.parse(r.changes_json ?? "null")); } catch { return []; } })();
+    const notes = notesByName(r.change_note);
+    const lastShown = await env.WP_OS_DB.prepare("SELECT version, round FROM tlc_brand_reply_version WHERE reply_id = ?1 ORDER BY sent_at DESC LIMIT 1").bind(r.id).first<{ version: number; round: string | null }>();
+    const unchanged = lastShown !== null && lastShown.version === version;
+    // A redraft must show what it did with every note (her rule, 7 Nov 2026). Held, and named on every pass.
+    // (A note on the samples changes the samples PAGE, whose own history says what changed; the email links it.)
+    const missing = !unchanged && version > 1 && !r.samples_id ? unansweredNotes(notes, changes) : [];
+    if (missing.length) { out.push(`NAMED STOP [${NOTE_UNANSWERED}] ${brand} v${version}: no change line for ${missing.join(" and ")}'s note; not sent to the partners`); continue; }
+
+    const extras: Array<{ label: string; text: string; url?: string | null; top?: boolean }> = [];
+    const attachments: EmailAttachment[] = [];
     if (r.samples_id) {
       const sample = await samplesForDeal(env, r.deal_id);
       const url = sample?.state === "READY" ? await samplesPreviewLink(env, sample.id) : null;
-      if (!sample || !url) return "the samples page is not ready; the next pass tries again";
+      if (!sample || !url) { out.push(`${brand}: the samples page is not ready; the next pass tries again`); continue; }
       const history = await samplesRevisions(env, sample.id);
-      previews.set(r.id, { url, latest: history.length > 1 ? history[0]!.line : null });
+      extras.push({ label: "The 3 sample pages", text: `${history.length > 1 ? `Last change: ${history[0]!.line} ` : ""}To change them, reply with what to change. The PDF is made from that page when you reply approved, and goes with your answer.`, url });
     }
-    if (partnerRound) { pages.set(r.id, await draftPageLink(env, r.id)); continue; }
-    const mine: EmailAttachment[] = [];
-    for (const f of JSON.parse(r.attachments_json ?? "[]") as StoredFile[]) { const a = await storedAttachment(env, f); if (a) mine.push(a); }
-    if (mine.length) { attachments.push(...mine); attachedTo.set(r.id, mine.map((a) => a.filename).join(" and ")); }
-  }
-  const many = rows.length > 1;
-  const name = (r: WaitingRow) => brandDisplayName(r.brand);
-  const person = (r: WaitingRow) => (r.contact_name?.trim() ? `${r.contact_name.trim()} at ${name(r)}` : name(r));
-  /*
-   * ROUND 2 IS A LINK, LIGHT LIKE THE DECK'S BACK AND FORTH (owner, 6 Nov 2026: "it should be a link and it should be
-   * more light weight"). The page holds their email, the answer, the sheet and every note; the email says only what
-   * changed and where to look.
-   */
-  const lightBlocks = rows.map((r, i) => {
-    const diff = r.change_note && r.previous_draft ? changedLines(r.previous_draft, r.draft_body) : null;
-    const changed = diff ? (diff.added.length || diff.removed.length ? `${diff.added.length + diff.removed.length} line${diff.added.length + diff.removed.length === 1 ? "" : "s"} changed from your notes` : "nothing in the wording changed; say what you want different") : "first look";
-    return `${many ? `${i + 1}. ` : ""}${name(r)}: ${changed}\nOpen the draft: ${pages.get(r.id)}`;
-  });
-  const blocks = partnerRound ? lightBlocks : rows.map((r, i) => {
+    if (!partnerRound && r.kind !== "PROPOSAL") {
+      for (const f of JSON.parse(r.attachments_json ?? "[]") as StoredFile[]) { const a = await storedAttachment(env, f); if (a) attachments.push(a); }
+      if (attachments.length) extras.push({ label: "Goes with it", text: attachments.map((a) => a.filename).join(" and ") });
+    }
+    if (r.report_text && !r.report_text.startsWith(STALE_SHEET_PREFIX)) extras.push({ label: "Wynn's research", text: r.report_text, top: true });
+    if (r.samples_id && r.held_reason) extras.push({ label: "Note", text: r.held_reason });
+    if (r.agreed_slot) extras.push({ label: "The call", text: `When it goes, ${slotWords(r.agreed_slot)} goes on your calendar and ${r.contact_email} is invited.` });
+
     const { to: answerTo, cc } = answerRecipients(r);
-    const inputs = inputsOf(r.inputs_json);
-    const notes = Object.entries(inputs).filter(([, v]) => v.note).map(([id, v]) => `${firstNameOf(id)} said: ${v.note}`);
-    const diff = r.change_note && r.previous_draft ? changedLines(r.previous_draft, r.draft_body) : null;
-    return [
-      `${many ? `${i + 1}. ` : ""}${name(r).toUpperCase()}, The Learning Club in ${monthWords(r.month)}`,
-      "",
-      `What ${person(r)} wrote (${herClock(r.received_at)}):`,
-      wordsOf(r.their_text),
-      "",
-      ...(r.change_note ? [`The notes Wynn worked from:`, r.change_note, ""] : []),
-      ...(diff ? [diff.added.length || diff.removed.length ? "What Wynn changed:" : "Wynn changed nothing in the wording. Reply with what you want different.", ...diff.removed.map((l) => `  − ${l}`), ...diff.added.map((l) => `  + ${l}`), ""] : []),
-      ...(notes.length ? ["Notes so far on this round:", ...notes, ""] : []),
-      ...(r.report_text ? [r.report_text, ""] : []),
-      ...(r.samples_id && r.held_reason ? [`Note: ${r.held_reason}`, ""] : []),
-      `Your answer, as it would go to ${answerTo}${cc.length ? ` (copying ${cc.join(", ")})` : ""}:`,
-      "",
-      withBrandFooter(r.draft_body),
-      ...(attachedTo.has(r.id) ? ["", `Goes with it: ${attachedTo.get(r.id)}`] : []),
-      ...(pages.has(r.id) ? ["", `The answer and the pricing sheet, on one page: ${pages.get(r.id)}`] : []),
-      ...(previews.has(r.id) ? ["", `The 3 sample pages: ${previews.get(r.id)!.url}`, ...(previews.get(r.id)!.latest ? [`Last change: ${previews.get(r.id)!.latest}`] : []), "To change them, reply with what to change. The PDF is made from that page when you reply approved, and goes with your answer."] : []),
-      ...(r.agreed_slot ? ["", `When it goes, ${slotWords(r.agreed_slot)} goes on your calendar and ${r.contact_email} is invited.`] : []),
-    ].join("\n");
-  });
-  const one = rows[0]!;
-  const pricingNow = !partnerRound && rows.some(carriesPricing);
-  const what = partnerRound
-    ? `${many ? `${rows.length} brands' pricing` : `${name(one)} pricing`}, for you and ${namesOf(needed.slice(1)) || "Scooter"} · ${ref}`
-    : `${many ? `${rows.length} brands replied` : `${name(one)} replied`} · ${ref}`;
-  const tldr = partnerRound
-    ? `Wynn's answer to ${many ? `${rows.length} brands` : name(one)}, with prices, is ready for you both on one page.`
-    : `${many ? `${rows.length} brands wrote back` : `${person(one)} wrote back`}. Wynn drafted your answer${many ? "s" : ""}, below.`;
-  const asks = partnerRound
-    ? [`Open the page, then each reply "approved" or with your notes`, `It goes to ${many ? "the brands" : name(one)} only once you have both said approved`, `Wynn waits for both of you before changing anything`]
-    : many
-      ? ['Reply "approved" to send them all', 'Or "approve 1", "skip 2", or "change 2: what to change"']
-      : pricingNow
-        ? ['Reply "approved" if it is right; it then goes to you and Scooter, nothing to the brand yet', "Or reply with what to change"]
-        : ['Reply "approved" to send it', "Or reply with what to change"];
-  try {
-    await emailHer(env, firmScope, ref, {
-      what,
-      tldr,
-      tldrBullets: asks,
-      sections: [{ label: many ? "Who wrote" : "What they said", bullets: rows.slice(0, 6).map((r, i) => `${many ? `${i + 1}. ` : ""}${person(r)}: "${theirGist(r.their_text)}"${carriesPricing(r) ? " (your answer has prices in it)" : ""}`) },
-        { label: "What happens next", bullets: partnerRound
-        ? [`${namesOf(needed)}: both need to reply. One "approved" alone sends nothing`, "Notes from either of you wait until the other has answered too; then Wynn redrafts with both", "The answer goes from your mailbox, on their thread, with the PDF made from the page you approved",
-          ...(copies.missing.length ? ["Scooter could not be added: his record in the OS was not found"] : [])]
-        : pricingNow
-          ? ["This answer has prices in it, so after your approval it goes to you and Scooter for both of you to approve", "Nothing goes to the brand until then"]
-          : ["Your answer goes from your mailbox, on their thread", "Nothing goes until you say so"] }],
-      details: [...blocks.flatMap((b) => [b, ""]), `Ref ${ref}`].join("\n"),
-    }, attachments, copies.cc);
-  } catch (err) {
-    return `the approval email could not be sent (${err instanceof Error ? err.message : String(err)}); the next pass tries again`;
+    const asker = personWords(answerTo, r);
+    const copied = cc.map((a) => personWords(a, r).name);
+    const about = [asker.role, copied.length ? `${copied.join(" and ")} copied` : ""].filter(Boolean).join("; ");
+    const doc = docNameFor(r.kind, pricing);
+    const what = `Our ${doc.toLowerCase()} to ${asker.name} at ${brand}${about ? ` (${about})` : ""}.`;
+    const lead = partnerRound
+      ? `${what} You both need to reply "approved": nothing goes to ${brand} until both of you do. Or reply with your notes.`
+      : pricing
+        ? `${what} Reply "approved" and it goes to you and Scooter for both of you to approve; nothing goes to ${brand} yet. Or reply with your notes.`
+        : `${what} Reply "approved" to send it from your mailbox, on their thread, or reply with your notes.`;
+
+    let sheet = null as ReturnType<typeof sheetMini> | null;
+    if (r.kind === "PROPOSAL") {
+      const deal = await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(r.deal_id).first<TlcDealRow>();
+      if (deal) {
+        const sponsor = await sponsorFor(env, deal, r.their_text);
+        sheet = sheetMini({ brand, topic: r.topic ?? "", year: r.month.slice(0, 4), roomWords: BRAND_EMAIL_ROOM_WORDS, levels: brandLevels(sponsor, r.topic ?? ""), series: sponsor.seriesPricing ?? null });
+      }
+    }
+    const ref = mintRef();
+    const unchangedNote = unchanged
+      ? partnerRound && lastShown!.round !== "PARTNERS"
+        ? `${firstNameOf(TLC_OWNER.firmUserId)} approved v${version} as it is; nothing in the words changed since. ${namesOf(needed.slice(1)) || "Scooter"}, this is your first look.`
+        : r.report_text?.startsWith(STALE_SHEET_PREFIX) ? r.report_text.slice(STALE_SHEET_PREFIX.length).trim() : "Nothing in the words changed since you last saw it."
+      : null;
+    const laidOut = renderWynnDraftEmail({
+      brand, docName: doc, version, lead,
+      quote: partnerRound ? null : { label: `What ${asker.name} wrote (${herClock(r.received_at)})`, text: wordsOf(r.their_text) },
+      changes: unchanged || version === 1 ? null : changes,
+      unchangedNote,
+      reply: { to: asker.full, cc: cc.map((a) => personWords(a, r).full), subject: r.draft_subject, body: withBrandFooter(r.draft_body) },
+      sheet, attachmentsWord: sheet ? "attached as a PDF when it goes" : null,
+      extras, link: { label: `See the whole ${brand} story`, url: replyPageUrl(r.brand) }, ref,
+      replyHint: 'Reply to this email with "approved" or your notes.',
+      bothMustApprove: partnerRound && needed.length > 1,
+    });
+    const problems = draftEmailProblems(laidOut, ref);
+    if (problems.length) { out.push(`NAMED STOP [WYNN_EMAIL_REFUSED] ${brand} v${version}: ${problems.join("; ")}`); continue; }
+    try {
+      await emailHer(env, firmScope, ref, { what: laidOut.subject, tldr: lead, sections: [], laidOut }, attachments, copies.cc, partnerRound);
+    } catch (err) {
+      out.push(`${brand}: the approval email could not be sent (${err instanceof Error ? err.message : String(err)}); the next pass tries again`);
+      continue;
+    }
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_brand_reply_notice (ref, reply_ids_json, day, firm_scope, sent_at, sent_to, forced, gmail_id, approvers_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)")
+      .bind(ref, JSON.stringify([r.id]), ct.day, firmScope, now.toISOString(), TLC_OWNER.email, 0, null, JSON.stringify(needed)).run();
+    await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO tlc_brand_reply_version (reply_id, notice_ref, version, round, draft_body, changes_json, sent_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)")
+      .bind(r.id, ref, version, partnerRound ? "PARTNERS" : "HER", r.draft_body, r.changes_json ?? null, now.toISOString()).run();
+    await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'NOTIFIED', notice_ref = ?2, approved_by_json = NULL, inputs_json = NULL WHERE id = ?1 AND state = 'DRAFTED'").bind(r.id, ref).run();
+    await appendEvent(env, { eventType: "tlc.brand_reply_notice", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_brand_reply_notice", objectId: ref, firmScope, payload: { replies: 1, round: partnerRound ? 2 : 1, version } });
+    out.push(`${partnerRound ? "round-2" : "round-1"} approval email ${ref} (${brand} v${version}) sent${copies.cc.length ? `, ${copiedNames(copies.cc)} on it` : ""}${copies.missing.length ? `; NOT on it (no active partner record): ${copies.missing.join(", ")}` : ""}`);
   }
-  const messageId: string | null = null;
-  await env.WP_OS_DB.prepare("INSERT INTO tlc_brand_reply_notice (ref, reply_ids_json, day, firm_scope, sent_at, sent_to, forced, gmail_id, approvers_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)")
-    .bind(ref, JSON.stringify(rows.map((r) => r.id)), ct.day, firmScope, now.toISOString(), to, 0, messageId, JSON.stringify(needed)).run();
-  for (const r of rows) await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'NOTIFIED', notice_ref = ?2, approved_by_json = NULL, inputs_json = NULL WHERE id = ?1 AND state = 'DRAFTED'").bind(r.id, ref).run();
-  await appendEvent(env, { eventType: "tlc.brand_reply_notice", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_brand_reply_notice", objectId: ref, firmScope, payload: { replies: rows.length, round: partnerRound ? 2 : 1 } });
-  return `${partnerRound ? "round-2" : "round-1"} approval email ${ref} with ${rows.length} brand repl${many ? "ies" : "y"} sent${copies.cc.length ? `, ${copiedNames(copies.cc)} on it` : ""}${copies.missing.length ? `; NOT on it (no active partner record): ${copies.missing.join(", ")}` : ""}`;
+  return out.join("; ");
 }
 
 // ── Her answer ─────────────────────────────────────────────────────────────────────────────────
@@ -1094,7 +1168,7 @@ export async function applyBrandReplyApproval(
       what: `brand replies, ${sentN ? "done" : halfN ? "half approved" : "done"} · ${ref}`,
       tldr: [sentN ? `${sentN} sent, from your mailbox, on their threads.` : "", halfN ? `${halfN} approved by ${who}, not sent yet: waiting on ${namesOf(needed.filter((id) => id !== approverId))}.` : "", !sentN && !halfN ? `${who} answered ${ref}.` : ""].filter(Boolean).join(" "),
       sections: [{ label: "Done", bullets: lines.slice(0, 6) }, { label: "Next", bullets: [again ? `Redrafted for the note: ${again}` : halfN ? `It goes once ${namesOf(needed)} have each replied "approved" to ${ref}` : "Wynn watches for their answer"] }],
-    }, [], needed.length > 1 ? copied : []).catch(() => false);
+    }, [], needed.length > 1 ? copied : [], needed.length > 1).catch(() => false);
   }
   await appendEvent(env, { eventType: "tlc.brand_reply_decided", actorType: "firm_user", actorId: approverId, objectType: "tlc_brand_reply_notice", objectId: ref, firmScope, payload: { lines, redrafted, learned } });
   return { handled: true, ref, detail: [...lines, ...(redrafted ? [`${redrafted} redrafted`] : [])].join("; ") || "nothing to do" };
@@ -1169,7 +1243,18 @@ async function sendApproved(env: Env, owner: Actor, r: ReplyRow & { brand: strin
   const samples = r.samples_id ? await finalizeSamplesPdf(env, r.samples_id, deps.samples ?? {}) : null;
   const pitchAllowed = r.intent === "YES" && !r.samples_id && ev?.topic && !noMoneyNow(await wynnRules(env, r.firm_scope), deal.stage);
   const stored: EmailAttachment[] = [];
-  for (const f of JSON.parse(r.attachments_json ?? "[]") as StoredFile[]) {
+  /*
+   * THE PDF IS MADE FROM THE APPROVED VERSION (owner, 7 Nov 2026): a proposal's partner-levels sheet is made now, from
+   * the brand's current sheet (its levels and series prices), never the copy made when the first draft was written.
+   */
+  let files = JSON.parse(r.attachments_json ?? "[]") as StoredFile[];
+  if (r.kind === "PROPOSAL" && ev) {
+    const made = await sheetPdf(env, deal, ev, await sponsorFor(env, deal, r.their_text), deps);
+    if (typeof made === "string") throw new SamplesPdfError(`the partner-levels sheet could not be made (${made.slice(0, 160)})`, true);
+    files = [...files.filter((f) => !isSheet(f)), made];
+    await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET attachments_json = ?2 WHERE id = ?1").bind(r.id, JSON.stringify(files)).run();
+  }
+  for (const f of files) {
     const a = await storedAttachment(env, f);
     if (!a) throw new Error(`the attachment "${f.name}" is missing from the store, so nothing was sent`);
     stored.push(a);
@@ -1220,59 +1305,206 @@ async function sendApproved(env: Env, owner: Actor, r: ReplyRow & { brand: strin
   }
 }
 
-// ── Round 2's live draft page ───────────────────────────────────────────────────────────────────
+// ── The brand's reply page ──────────────────────────────────────────────────────────────────────
 
 const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /**
- * THE DRAFT PAGE (owner, 6 Nov 2026: "not send a full pdf back but an artifact that can be pinged back and forth").
- * One private link per pricing draft: their email, the answer as it would go, the pricing sheet as the brand would see
- * it, and every note so far. Each redraft updates the same page in place; she and Scooter answer by replying to the
- * email. Never indexed, never cached; an unknown or malformed token is a plain 404.
+ * The sheet's own stylesheet, scoped under one class so the full sheet sits IN the page (no iframe; owner, 7 Nov 2026)
+ * without its styles reaching the page around it. The sheet's CSS is ours (shared/tlc/pitch.ts): plain rules, @media
+ * and @font-face; @page is dropped.
+ */
+export function scopeCss(css: string, scope: string): string {
+  let out = "";
+  let i = 0;
+  while (i < css.length) {
+    const open = css.indexOf("{", i);
+    if (open < 0) break;
+    const head = css.slice(i, open).trim();
+    let depth = 1;
+    let j = open + 1;
+    while (j < css.length && depth) { if (css[j] === "{") depth += 1; else if (css[j] === "}") depth -= 1; j += 1; }
+    const inner = css.slice(open + 1, j - 1);
+    if (head.startsWith("@media")) out += `${head}{${scopeCss(inner, scope)}}`;
+    else if (head.startsWith("@font-face")) out += `${head}{${inner}}`;
+    else if (!head.startsWith("@")) {
+      out += `${head.split(",").map((sel) => {
+        const t = sel.trim();
+        if (/^:root\[data-theme="dark"\]/.test(t)) return `${scope}[data-theme="dark"]${t.replace(/^:root\[data-theme="dark"\]/, "")}`;
+        if (/^:root/.test(t)) return `${scope}${t.replace(/^:root(?::not\(\[data-theme="light"\]\))?/, "")}`;
+        if (/^(?:body|main)\b/.test(t)) return `${scope}${t.replace(/^(?:body|main)/, "")}`;
+        return `${scope} ${t}`;
+      }).join(",")}{${inner}}`;
+    }
+    i = j;
+  }
+  return out;
+}
+/** A full sheet page as a block of this page: its scoped style and its body. */
+export function embeddedSheet(html: string, scope = ".wp-sheet"): string {
+  const css = /<style>([\s\S]*?)<\/style>/.exec(html)?.[1] ?? "";
+  const body = /<main>([\s\S]*?)<\/main>/.exec(html)?.[1] ?? "";
+  return `<style>${scopeCss(css, scope)}</style><div class="${scope.slice(1)}">${body}</div>`;
+}
+
+export interface ThreadItem { at: string; ours: boolean; from: string; to: string[]; cc: string[]; subject: string; body: string; files: string[]; what: string }
+
+/**
+ * THE THREAD, START TO FINISH, from the OS's own mail records for the deal (the same ones the brand's thread is read
+ * from): every email we sent it (the drip, the follow-up, each approved answer, with its attachments) and every message
+ * of theirs we read (the stored message for its From, To and Cc). Oldest first.
+ */
+export async function dealThread(env: Env, deal: TlcDealRow & { people_json?: string | null }): Promise<ThreadItem[]> {
+  const ours = new Set([TLC_OWNER.email.toLowerCase(), INTAKE_MAILBOX.toLowerCase()]);
+  const nameOf = (address: string): string => {
+    const a = address.trim().toLowerCase();
+    if (ours.has(a) || OUR_MAIL_DOMAINS.some((d) => a.endsWith(`@${d}`))) return firstNameOf(TLC_OWNER.firmUserId);
+    return personWords(a, deal).name.split(/\s+/)[0] ?? a;
+  };
+  const sent = async (effectId: string | null): Promise<{ to: string[]; cc: string[]; files: string[] }> => {
+    const e = effectId ? await env.WP_OS_DB.prepare("SELECT destination, payload_json FROM external_effect_request WHERE id = ?1").bind(effectId).first<{ destination: string; payload_json: string }>() : null;
+    let p: { cc?: string[]; attachments?: Array<{ filename?: string }> } = {};
+    try { p = JSON.parse(e?.payload_json ?? "{}"); } catch { p = {}; }
+    return { to: e ? [e.destination] : [deal.contact_email], cc: p.cc ?? [], files: (p.attachments ?? []).map((a) => a.filename ?? "").filter(Boolean) };
+  };
+  const items: ThreadItem[] = [];
+  const drips = (await env.WP_OS_DB.prepare("SELECT step, subject, body, sent_at, effect_request_id FROM tlc_drip_message WHERE deal_id = ?1 AND state = 'SENT' AND sent_at IS NOT NULL").bind(deal.id).all<{ step: number; subject: string; body: string; sent_at: string; effect_request_id: string | null }>()).results ?? [];
+  for (const d of drips) {
+    const s = await sent(d.effect_request_id);
+    items.push({ at: d.sent_at, ours: true, from: nameOf(TLC_OWNER.email), to: s.to.map(nameOf), cc: s.cc.map(nameOf), subject: d.subject, body: withoutFooter(d.body), files: s.files, what: d.step === 0 ? "First email" : `Follow-up ${d.step}` });
+  }
+  const follow = await env.WP_OS_DB.prepare("SELECT subject, body, sent_at, effect_request_id FROM tlc_pitch_followup WHERE deal_id = ?1 AND state = 'SENT' AND sent_at IS NOT NULL").bind(deal.id).first<{ subject: string; body: string; sent_at: string; effect_request_id: string | null }>();
+  if (follow) { const s = await sent(follow.effect_request_id); items.push({ at: follow.sent_at, ours: true, from: nameOf(TLC_OWNER.email), to: s.to.map(nameOf), cc: s.cc.map(nameOf), subject: follow.subject, body: withoutFooter(follow.body), files: s.files, what: "Follow-up" }); }
+  const replies = (await env.WP_OS_DB.prepare(
+    `SELECT r.*, i.from_address, i.r2_key FROM tlc_brand_reply r LEFT JOIN inbound_message i ON trim(i.message_id, '<>') = r.brand_message_id
+      WHERE r.deal_id = ?1 ORDER BY r.received_at`,
+  ).bind(deal.id).all<ReplyRow & { from_address: string | null; r2_key: string | null; sent_at?: string | null; effect_request_id?: string | null }>()).results ?? [];
+  for (const r of replies) {
+    let head = "";
+    if (r.r2_key && env.WP_OS_DOCUMENTS) { const obj = await env.WP_OS_DOCUMENTS.get(r.r2_key).catch(() => null); if (obj) head = (await obj.text()).split(/\r?\n\r?\n/)[0] ?? ""; }
+    const header = (name: string) => [...head.matchAll(new RegExp(`^${name}:[ \\t]*(.*(?:\\r?\\n[ \\t].*)*)`, "gim"))].map((m) => m[1]!.replace(/\r?\n[ \t]+/g, " ")).join(", ");
+    const addrs = (v: string) => (v.match(/[^\s<>,;:"'()]+@[^\s<>,;:"'()]+\.[a-z]{2,}/gi) ?? []).map((a) => a.toLowerCase());
+    const from = addrs(header("From"))[0] ?? (r.from_address ?? r.send_to ?? deal.contact_email);
+    const to = addrs(header("To")).filter((a) => a !== INTAKE_MAILBOX.toLowerCase());
+    items.push({ at: r.received_at, ours: false, from: nameOf(from), to: (to.length ? to : [TLC_OWNER.email]).map(nameOf), cc: addrs(header("Cc")).filter((a) => !ours.has(a)).map(nameOf), subject: r.their_subject, body: theirWordsOnly(r.their_text), files: [], what: `"${theirGist(theirWordsOnly(r.their_text))}"` });
+    if (r.state === "SENT" && r.sent_at) {
+      const s = await sent(r.effect_request_id ?? null);
+      items.push({ at: r.sent_at, ours: true, from: nameOf(TLC_OWNER.email), to: s.to.map(nameOf), cc: s.cc.map(nameOf), subject: r.draft_subject, body: withoutFooter(r.draft_body), files: s.files, what: s.files.length ? `Our answer, with ${s.files.join(" and ")}` : `Our answer: "${theirGist(withoutFooter(r.draft_body).replace(/^Hi[^\n]*\n+/, ""))}"` });
+    }
+  }
+  return items.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+}
+/** Their words without the signature block under a "--" line. */
+const theirWordsOnly = (t: string): string => t.replace(/\r\n/g, "\n").split(/\n--\s*\n/)[0]!.trim();
+const withoutFooter = (t: string): string => withBrandFooter(t).replace(/\n+[^\n]*\d{4,5}[^\n]*$/, "").trim();
+
+/** The newest brand reply (any round) for a brand, by its slug: the one the page and the email are about. */
+async function replyForSlug(env: Env, slug: string): Promise<{ r: ReplyRow & { page_token?: string | null }; deal: TlcDealRow & { people_json?: string | null; series_json?: string | null }; ev: TlcEventRow } | null> {
+  const { brandSlug } = await import("../../shared/tlc/replyDoc");
+  const deals = ((await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal").all<TlcDealRow & { people_json?: string | null }>()).results ?? []).filter((d) => brandSlug(d.brand) === slug);
+  if (!deals.length) return null;
+  const r = await env.WP_OS_DB.prepare(
+    `SELECT * FROM tlc_brand_reply WHERE deal_id IN (SELECT value FROM json_each(?1)) AND draft_body != '' AND state IN ('DRAFTED','NOTIFIED','SENDING','SENT','FAILED')
+      ORDER BY CASE WHEN state = 'SENT' THEN 1 ELSE 0 END, received_at DESC LIMIT 1`,
+  ).bind(JSON.stringify(deals.map((d) => d.id))).first<ReplyRow & { page_token?: string | null }>();
+  if (!r) return null;
+  const deal = deals.find((d) => d.id === r.deal_id)!;
+  const ev = await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>();
+  return ev ? { r, deal, ev } : null;
+}
+
+const PAGE_HEADERS = { "cache-control": "no-store", "x-robots-tag": "noindex, nofollow", "referrer-policy": "no-referrer" };
+
+/**
+ * THE OLD DRAFT LINK (6 Nov 2026) STILL WORKS: it redirects to the brand's readable reply page. An unknown or malformed
+ * token is a plain 404, as before.
  */
 export async function handleTlcDraftPage(ctx: RouteContext): Promise<Response> {
   const token = String(ctx.params.token ?? "");
-  const headers = { "cache-control": "no-store", "x-robots-tag": "noindex, nofollow", "referrer-policy": "no-referrer" };
-  const notFound = () => new Response("Not found", { status: 404, headers });
+  const notFound = () => new Response("Not found", { status: 404, headers: PAGE_HEADERS });
   if (!/^[0-9a-f]{32}$/.test(token)) return notFound();
-  const r = await ctx.env.WP_OS_DB.prepare("SELECT * FROM tlc_brand_reply WHERE page_token = ?1").bind(token).first<ReplyRow & { page_token: string }>();
-  const deal = r ? await ctx.env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(r.deal_id).first<TlcDealRow>() : null;
-  const ev = deal ? await ctx.env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>() : null;
-  if (!r || !deal || !ev) return notFound();
+  const row = await ctx.env.WP_OS_DB.prepare("SELECT d.brand FROM tlc_brand_reply r JOIN tlc_deal d ON d.id = r.deal_id WHERE r.page_token = ?1").bind(token).first<{ brand: string }>();
+  if (!row) return notFound();
+  const { replyPagePath } = await import("../../shared/tlc/replyDoc");
+  return new Response(null, { status: 302, headers: { ...PAGE_HEADERS, location: replyPagePath(row.brand) } });
+}
+
+/**
+ * THE WHOLE <BRAND> STORY (owner, 7 Nov 2026, the page behind "See the whole Pinecone story ›", built on the thread
+ * rundown made for Scooter): the document and its version, who has answered; where it stands; the thread start to
+ * finish, every email in full in a fold; the reply as it would go; the full sheet, in the page; every version; how to
+ * approve. Behind the firm's sign-in (a partner's identity, as every non-public page); never indexed or cached.
+ * One column, 390 px first, dark mode.
+ */
+export async function handleTlcReplyPage(ctx: RouteContext): Promise<Response> {
+  const slug = String(ctx.params.brand ?? "").toLowerCase();
+  const notFound = () => new Response("Not found", { status: 404, headers: PAGE_HEADERS });
+  if (!/^[a-z0-9-]{1,60}$/.test(slug)) return notFound();
+  const found = await replyForSlug(ctx.env, slug);
+  if (!found) return notFound();
+  const { r, deal, ev } = found;
+  const env = ctx.env;
   const brand = brandDisplayName(deal.brand);
-  let sheet = "";
-  if (r.kind === "PROPOSAL") {
-    const { clubViewOf } = await import("./learningClub");
-    const { renderBrandPitch } = await import("../../shared/tlc/pitch");
-    sheet = renderBrandPitch(clubViewOf(ev), await sponsorFor(ctx.env, deal, r.their_text));
-  }
-  const notice = r.notice_ref ? await ctx.env.WP_OS_DB.prepare("SELECT approvers_json FROM tlc_brand_reply_notice WHERE ref = ?1").bind(r.notice_ref).first<{ approvers_json: string | null }>() : null;
+  const pricing = carriesPricing(r);
+  const doc = docNameFor(r.kind, pricing);
+  const version = r.version ?? 1;
+  const notice = r.notice_ref ? await env.WP_OS_DB.prepare("SELECT approvers_json, sent_at FROM tlc_brand_reply_notice WHERE ref = ?1").bind(r.notice_ref).first<{ approvers_json: string | null; sent_at: string }>() : null;
   const needed = idList(notice?.approvers_json).length ? idList(notice?.approvers_json) : [TLC_OWNER.firmUserId];
   const inputs = inputsOf(r.inputs_json);
   const status = r.state === "SENT" ? `Sent to ${brand}.`
-    : r.state === "NOTIFIED" ? needed.map((id) => `${firstNameOf(id)}: ${inputs[id] ? (inputs[id]!.approved ? "approved" : "sent notes") : "not answered yet"}`).join(" · ")
-    : r.state === "DRAFTED" || r.state === "SENDING" ? "Wynn is updating this draft." : r.state === "SKIPPED" ? "Skipped; nothing was sent." : "Closed.";
-  const diff = r.previous_draft ? changedLines(r.previous_draft, r.draft_body) : null;
+    : r.state === "NOTIFIED" ? answeredWords(needed, inputs)
+    : r.state === "FAILED" ? `Approved; not sent yet: ${r.held_reason ?? "the send is tried again"}.`
+    : r.held_reason ? `Held: ${r.held_reason}` : "Wynn is updating this draft.";
+  const { to, cc } = answerRecipients({ ...r, contact_email: deal.contact_email });
+  const asker = personWords(to, deal);
+  const thread = await dealThread(env, deal);
+  const lastOurs = [...thread].reverse().find((t) => t.ours);
+  const where = `${asker.name}${asker.role ? ` (${asker.role})` : ""} asked "${theirGist(theirWordsOnly(r.their_text))}" on ${herClock(r.received_at)}. ${r.state === "SENT" ? `Our answer went on ${r.sent_at ? herClock(r.sent_at) : "its day"}.` : `This is our v${version} answer, not sent yet.`}${lastOurs && r.state !== "SENT" ? ` The last thing we sent ${brand} was on ${herClock(lastOurs.at)}${lastOurs.files.length ? ` (${lastOurs.files.join(", ")})` : ""}.` : ""}`;
+  const sheet = r.kind === "PROPOSAL" ? await sheetHtmlFor(ev, await sponsorFor(env, deal, r.their_text)) : null;
+  const versions = (await env.WP_OS_DB.prepare("SELECT version, round, draft_body, changes_json, sent_at FROM tlc_brand_reply_version WHERE reply_id = ?1 ORDER BY sent_at").bind(r.id).all<{ version: number; round: string | null; draft_body: string; changes_json: string | null; sent_at: string }>()).results ?? [];
+  const changes = (() => { try { return changeLinesOf(JSON.parse(r.changes_json ?? "null")); } catch { return []; } })();
   const para = (t: string) => esc(t).replace(/\n/g, "<br>");
+  const who = (t: ThreadItem) => `${esc(t.from)} → ${esc(t.to.join(", "))}${t.cc.length ? `, ${esc(t.cc.join(" and "))} copied` : ""}`;
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
-<title>${esc(brand)}: draft answer</title><style>
-:root{--ink:#1f1d1a;--muted:#6b665e;--ground:#faf7f2;--card:#fff;--line:#e6e0d6;--gold:#9a6b12;--add:#e8f3ea;--del:#f8e9e7}
-@media (prefers-color-scheme:dark){:root{--ink:#f1ece3;--muted:#b3ab9e;--ground:#1b1916;--card:#25221e;--line:#3a352e;--gold:#e0b45c;--add:#1f3324;--del:#3a2421}}
-body{margin:0;background:var(--ground);color:var(--ink);font:15px/1.55 -apple-system,system-ui,sans-serif}
-main{max-width:560px;margin:0 auto;padding:16px}h1{font-size:21px;margin:8px 0 4px}h2{font-size:18px;margin:24px 0 8px}
-.sub{color:var(--muted);font-size:13px}.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;overflow-wrap:anywhere}
-.add{background:var(--add)}.del{background:var(--del);text-decoration:line-through}.d{display:block;padding:2px 6px;border-radius:4px;margin:2px 0}
-iframe{width:100%;height:900px;border:1px solid var(--line);border-radius:10px;background:#fff}
+<title>${esc(brand)} ${esc(doc)} · v${version}</title><style>
+:root{--bg:#FBF7F0;--ink:#2A2622;--muted:#6E665C;--line:#E2D9CB;--card:#FFFFFF;--gold:#A87A1E;--green:#2F7A4E;--accent:#F05A1A}
+@media (prefers-color-scheme:dark){:root{--bg:#1A1714;--ink:#F3ECE0;--muted:#B5AA9A;--line:#3A332C;--card:#24201C;--gold:#E0B54E;--green:#6CC08E;--accent:#FF7A3D}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 Karla,-apple-system,system-ui,sans-serif}
+main{max-width:640px;margin:0 auto;padding:0 0 60px}
+.top{background:#111;color:#fff;padding:18px 16px}.top .k{color:var(--accent);font:600 12px ui-monospace,Menlo,monospace;letter-spacing:.12em}
+.top h1{font:600 22px/1.25 Georgia,serif;margin:6px 0 4px}.top .sub{font-size:13px;opacity:.85;margin:0}
+section{padding:14px 16px;border-top:1px solid var(--line)}h2{font:600 18px/1.3 Georgia,serif;margin:0 0 8px}
+.sub{color:var(--muted);font-size:13px}.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:8px 0;overflow-wrap:anywhere}
+table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;vertical-align:top;padding:8px 6px;border-bottom:1px solid var(--line)}
+th{font:500 11px ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+@media (max-width:560px){table.pc thead{display:none}table.pc tr{display:block;border:1px solid var(--line);border-radius:10px;margin:10px 0;padding:6px 10px;background:var(--card)}table.pc td{display:block;border:0;padding:3px 0}table.pc td::before{content:attr(data-label);display:block;font:500 11px ui-monospace,Menlo,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}}
+details summary{cursor:pointer;color:var(--gold);font-weight:600;min-height:44px;display:flex;align-items:center}
+.mail{border-left:3px solid var(--gold)}.mail.us{border-left-color:var(--green)}.mail .hd{font-size:13px;color:var(--muted);margin-bottom:6px}.mail .hd b{color:var(--ink)}
+.quote{border-left:3px solid var(--accent);white-space:normal}.att{display:inline-block;margin-top:6px;font:500 12px ui-monospace,Menlo,monospace;padding:3px 8px;border-radius:6px;border:1px solid var(--line)}
+ul{padding-left:20px;margin:6px 0}li{margin:4px 0}.wp-sheet{border:1px solid var(--line);border-radius:12px;overflow:hidden;padding:0 16px 16px}
 </style></head><body><main>
-<h1>${esc(brand)}: your answer, draft</h1>
-<p class="sub">${esc(status)}</p>
-<p class="sub">To approve or change it, reply to the email this link came in: "approved", or your notes. Wynn waits for everyone's answer before changing anything, then updates this page.</p>
-<h2>What they wrote</h2><div class="card">${para(wordsOf(r.their_text))}</div>
-${diff && (diff.added.length || diff.removed.length) ? `<h2>What changed in the last draft</h2><div class="card">${diff.removed.map((l) => `<span class="d del">${esc(l)}</span>`).join("")}${diff.added.map((l) => `<span class="d add">${esc(l)}</span>`).join("")}</div>` : diff ? `<h2>What changed in the last draft</h2><div class="card">Nothing in the wording changed.</div>` : ""}
-${r.change_note ? `<h2>The notes Wynn worked from</h2><div class="card">${para(r.change_note)}</div>` : ""}
-${Object.keys(inputs).length ? `<h2>Answers on this round</h2><div class="card">${needed.filter((id) => inputs[id]).map((id) => `<p><b>${esc(firstNameOf(id))}</b>: ${inputs[id]!.approved ? "approved" : para(inputs[id]!.note ?? "")}</p>`).join("")}</div>` : ""}
-<h2>Your answer, as it would go</h2><div class="card">${para(withBrandFooter(r.draft_body))}</div>
-${sheet ? `<h2>The pricing sheet ${esc(brand)} would get</h2><iframe title="Pricing sheet" srcdoc="${esc(sheet)}"></iframe>` : ""}
+<header class="top"><div class="k">WEST PEEK · THE LEARNING CLUB</div><h1>${esc(brand)} ${esc(doc)} · v${version}</h1><p class="sub">${esc(status)}</p></header>
+<section><h2>Where it stands</h2><p style="margin:0">${esc(where)}</p></section>
+<section><h2>The thread, start to finish</h2>
+<table class="pc"><thead><tr><th>When (CT)</th><th>Who</th><th>What</th></tr></thead><tbody>
+${thread.map((t) => `<tr><td data-label="When (CT)">${esc(herClock(t.at).replace(/ CT$/, ""))}</td><td data-label="Who">${who(t)}</td><td data-label="What">${esc(t.what)}</td></tr>`).join("\n")}
+${r.state !== "SENT" ? `<tr><td data-label="When (CT)">Not sent</td><td data-label="Who">${esc(firstNameOf(TLC_OWNER.firmUserId))} → ${esc(asker.name.split(/\s+/)[0] ?? asker.name)}</td><td data-label="What">Our v${version} answer, below</td></tr>` : ""}
+</tbody></table>
+<details><summary>Show every email in full ▾</summary><p class="sub">Each email as it went or came in. Quoted earlier messages and signature blocks are trimmed; nothing else is changed.</p>
+${thread.map((t) => `<div class="card mail${t.ours ? " us" : ""}"><div class="hd"><b>${esc(t.from)}</b> · ${esc(herClock(t.at))}<br>To: ${esc(t.to.join(", "))}${t.cc.length ? ` · Cc: ${esc(t.cc.join(", "))}` : ""}<br>${esc(t.subject)}</div>${para(t.body)}${t.files.map((f) => `<br><span class="att">📎 ${esc(f)}</span>`).join("")}</div>`).join("\n")}
+</details></section>
+${version > 1 && changes.length ? `<section><h2>What changed since v${version - 1}</h2><ul>${changes.map((c) => `<li>${c.who ? `<b>${esc(c.who)}:</b> ` : ""}${c.note ? `"${esc(c.note)}" → ` : ""}${esc(c.done)}</li>`).join("")}</ul></section>` : ""}
+<section><h2>The reply (v${version})</h2><p class="sub">Word for word, as it would go.</p>
+<div class="card quote"><div class="sub">To: ${esc(asker.full)}${cc.length ? ` · Cc: ${esc(cc.map((a) => personWords(a, deal).full).join(", "))}` : ""}<br>${esc(r.draft_subject)}</div><br>${para(withBrandFooter(r.draft_body))}</div></section>
+${sheet ? `<section><h2>The pricing sheet (v${version})</h2><p class="sub">The full sheet ${esc(brand)} gets. The PDF is made from this, once you have both approved.</p>${embeddedSheet(sheet)}</section>` : ""}
+<section><h2>Version history</h2>${versions.length ? `<ul>${versions.map((v) => `<li><b>v${v.version}</b> · ${esc(herClock(v.sent_at))} · ${v.round === "PARTNERS" ? "to Sequoia and Scooter" : "to Sequoia"}${(() => { try { const c = changeLinesOf(JSON.parse(v.changes_json ?? "null")); return c.length ? `: ${esc(c.map((x) => `${x.who ? `${x.who}: ` : ""}${x.done}`).join("; "))}` : ""; } catch { return ""; } })()}</li>`).join("")}</ul>` : `<p class="sub" style="margin:0">v${version} is the first version.</p>`}
+${r.previous_draft && versions.length <= 1 ? `<details><summary>Show the previous draft ▾</summary><div class="card">${para(withBrandFooter(r.previous_draft))}</div></details>` : ""}</section>
+<section><h2>To approve</h2><p style="margin:0">Reply to the email "approved", or with your notes. ${needed.length > 1 ? `Nothing goes to ${esc(brand)} until ${esc(namesOf(needed))} have both replied "approved". Wynn waits for both of you, applies every note (Scooter's wins when they conflict), and the next version comes back here.` : "Wynn applies every note and the next version comes back here."}</p></section>
 </main></body></html>`;
-  return new Response(html, { headers: { ...headers, "content-type": "text/html; charset=utf-8" } });
+  return new Response(html, { headers: { ...PAGE_HEADERS, "content-type": "text/html; charset=utf-8" } });
+}
+async function sheetHtmlFor(ev: TlcEventRow, sponsor: TlcSponsorView): Promise<string> {
+  const { clubViewOf } = await import("./learningClub");
+  const { renderBrandPitch } = await import("../../shared/tlc/pitch");
+  return renderBrandPitch(clubViewOf(ev), sponsor);
 }

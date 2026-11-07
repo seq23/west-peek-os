@@ -27,7 +27,7 @@ const text = (html: string) => html.replace(/<style[\s\S]*?<\/style>/g, " ").rep
 describe("the 3-page samples PDF", () => {
   it("is her final template word for word, with only the brand's words changed, and nothing it must never carry", () => {
     const html = renderSamplesPdf(AGENT);
-    expect(createHash("sha256").update(html).digest("hex")).toBe("dd193c73f01930aea72e68b2cbf8389643b052c99c6cf0e7b0d2e463dd8c7c96");
+    expect(createHash("sha256").update(html).digest("hex")).toBe("b85a039a8be685f0d4bfd6088c795cdd91a2c6fce6cc774dbd177457839d3606");
     const t = text(html);
     for (const line of [
       "WEST PEEK ROOMS · THE LEARNING CLUB", "The Learning Club: Build Your First AI Agent", "An evening in New York · 2027 (dates flexible) · in partnership with Vector Co",
@@ -49,7 +49,7 @@ describe("the 3-page samples PDF", () => {
       "Real code proofs: each month leaves open-source starter templates built on Vector Co.",
       "Builders and their teams: independent builders plus people from companies joining with team seats.",
       "Confidential · Preliminary · Dates move with Vector Co's launch calendar. Any single month can be partnered on its own.",
-      "Guests are curated from a community that grew to nearly 5,000 at its height, shaped around who Vector Co wants to reach. No set number is promised.",
+      "Guests are curated from a community of about 5,000, shaped around who Vector Co wants to reach. No set number is promised.",
       "Operators · ~35% marketing, finance, product, sales and people teams; many are intrapreneurs building side businesses with AI tools like Claude and Codex outside work",
       "Creators · ~35% film, music, design, writing and content",
       "Founders · ~25% AI and tech startups, consumer brands, agencies", "Investors & legal · ~5% angels, VCs, family offices, lawyers",
@@ -67,7 +67,7 @@ describe("the 3-page samples PDF", () => {
     expect((html.match(/class="sheet"/g) ?? []).length).toBe(3);
     // The wheel is drawn from the mix: four ring segments that close the circle, "~5,000" in the middle.
     expect((html.match(/<circle /g) ?? []).length).toBe(4);
-    expect(html).toContain('class="wt1">Nearly 5,000</text>');
+    expect(html).toContain('class="wt1">About 5,000</text>');
   });
 
   it("a made-up brand gets every STANDARD part of her final document, and nothing the template no longer says", () => {
@@ -84,10 +84,10 @@ describe("the 3-page samples PDF", () => {
       "Their own laptop. Everything runs in the browser with free accounts set up on arrival. Anyone without a laptop is paired at their table.",
       "We host and facilitate the whole evening. Kestrel sends a speaker or team only if it wants to.",
       "Partner on a single evening, or on a series of 6 or more. Here is a sample series of six, to show what one could look like: one build that grows every month,",
-      "Who's in the room", "a community that grew to nearly 5,000 at its height", "No set number is promised.", "Operators · ~35%", "intrapreneurs building side businesses with AI tools like Claude and Codex outside work",
+      "Who's in the room", "a community of about 5,000", "No set number is promised.", "Operators · ~35%", "intrapreneurs building side businesses with AI tools like Claude and Codex outside work",
       "Creators · ~35%", "Founders · ~25%", "Investors & legal · ~5%", "All numbers, the mix and titles are approximate",
       "A room your size: from an intimate 25+ guests", "The team behind the room",
-      "Scooter Taylor Co-Managing Partner, West Peek Ventures. Founding GP. Went viral in 2020 creating Quarantine Con, the online gathering that grew into West Peek: a community that reached nearly 5,000 founders",
+      "Scooter Taylor Co-Managing Partner, West Peek Ventures. Founding GP. Went viral in 2020 creating Quarantine Con, the online gathering that grew into West Peek: a community of about 5,000 founders",
       "Sequoia Taylor Co-Managing Partner, West Peek Ventures. A decade in investment banking and capital markets at Raymond James; more than $100M in secondary transactions.",
       "Carlos Barksdale Events Consultant, West Peek. Led venture capital business development at Google in New York",
       "Confidential · Preliminary draft · For discussion purposes only. This document was prepared by West Peek Ventures for Kestrel and is confidential.",
@@ -95,11 +95,11 @@ describe("the 3-page samples PDF", () => {
     ]) expect(t, p).toContain(p);
     expect(t.match(/Confidential · Preliminary · /g)?.length).toBe(3);
     for (const never of ["Pinecone", "5,000+", "25–40", "Quarantine Con (2020)", "tentative"]) expect(t, never).not.toContain(never);
-    expect(html).toContain('class="wt1">Nearly 5,000</text>');
+    expect(html).toContain('class="wt1">About 5,000</text>');
     expect(samplesProblems(html, DEFAULT_COMMUNITY_MIX)).toEqual([]);
     // The guards: each one fails on a page that breaks it.
     expect(samplesProblems(html.replace("2027 (dates flexible)", "May 2027 (tentative)"), DEFAULT_COMMUNITY_MIX).join("|")).toMatch(/dates flexible.*tentative/);
-    expect(samplesProblems(html.replace('class="wt1">Nearly 5,000', 'class="wt1">5,000+'), DEFAULT_COMMUNITY_MIX).join("|")).toMatch(/wt1.*5,000\+/);
+    expect(samplesProblems(html.replace('class="wt1">About 5,000', 'class="wt1">5,000+'), DEFAULT_COMMUNITY_MIX).join("|")).toMatch(/wt1.*5,000\+/);
     expect(samplesProblems(html.replace("<b>25+</b> guests", "<b>25–40</b> guests"), DEFAULT_COMMUNITY_MIX).join("|")).toMatch(/sized to your goals.*25–40/);
     expect(samplesProblems(html.replace("Events Consultant, West Peek.", "Advisor."), DEFAULT_COMMUNITY_MIX).join("|")).toContain("The team behind the room");
     expect(samplesProblems(html.replace('<span class="conf">Confidential · Preliminary</span> · We host', "We host"), DEFAULT_COMMUNITY_MIX)).toContain("a page without its Confidential · Preliminary footer");

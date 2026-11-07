@@ -351,6 +351,8 @@ export const TLC_RECIPIENTS: readonly string[] = [TLC_OWNER.email];
  * the partner registry; his address is read from his firm_user row at send time, never typed here.
  */
 export const TLC_BRAND_REPLY_NOTICE_OBJECT = "tlc_brand_reply_notice";
+/** The pricing round's emails (round 2 and its "done" note): the only Wynn emails Scooter is copied on (owner, 7 Nov 2026). */
+export const TLC_PRICING_NOTICE_OBJECT = "tlc_pricing_notice";
 export const TLC_BRAND_REPLY_NOTICE_CC_IDS: readonly string[] = [PARTNERS.find((p) => p.firstName === "Scooter")!.firmUserId];
 export const TLC_DECIDER_IDS: readonly string[] = [TLC_OWNER.firmUserId];
 /** Whether a partner email is about the Learning Club: a TLC card kind, or a TLC object. */
@@ -822,6 +824,13 @@ export const OWNER_ORDERED_WORDING: ReadonlyArray<readonly [string, string]> = [
   ["Founders, operators, creatives and builders from a community of about 5,000.", "Founders, operators, creatives and builders, curated from a community that grew to nearly 5,000 at its height."],
   ["West Peek is a community of about 5,000 founders, operators, investors, creatives and builders, started by our founding GP Scooter Taylor, who went viral in 2020 with Quarantine Con. We meet in person",
     "West Peek is a community that grew to nearly 5,000 founders, operators, investors, creatives and builders at its height, started by our founding GP Scooter Taylor, who went viral in 2020 with Quarantine Con. We curate each room from that network and meet in person"],
+  // 7 Nov 2026, on the Pinecone Pricing Reply v2: "about 5,000", never "nearly 5,000 at its height". Applied after the
+  // 6 Nov pairs, so words approved before either change and words approved after the 6 Nov one both carry over.
+  ["curated from a community that grew to nearly 5,000 at its height.", "curated from a community of about 5,000."],
+  ["West Peek is a community that grew to nearly 5,000 founders, operators, investors, creatives and builders at its height, started by",
+    "West Peek is a community of about 5,000 founders, operators, investors, creatives and builders, started by"],
+  ["We built a community that grew to nearly 5,000 founders, operators and creatives at its height, and we curate each room from that network.",
+    "We built a community of about 5,000 founders, operators and creatives, and we curate each room from that network."],
 ];
 export const withOwnerOrderedWording = (words: string): string => OWNER_ORDERED_WORDING.reduce((w, [a, b]) => w.split(a).join(b), words);
 

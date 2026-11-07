@@ -11,7 +11,7 @@ import { BRAND_MUST_STAFF, CALL_ASK, MONEY_WORDS } from "../src/shared/tlc/brand
  * A fake brand only: the real instance lives in production data.
  */
 const SPONSOR = sponsorOf({ brand: "Vector Co", category: "Vector database" });
-const FAKE = { hi: "Hi Sam,", brand: "Vector Co", topic: "Build Your Own AI Agent", segment: "Giving your agent a memory", arc: "a run that follows the arc of building an agent", level: "Presenting partner", times: "• Tuesday 10 Nov, 2:00pm", time: "Tuesday 10 Nov, 2:00pm", levels: proposalLevelLines(brandLevels(SPONSOR, "Build Your Own AI Agent")) };
+const FAKE = { hi: "Hi Sam,", brand: "Vector Co", topic: "Build Your Own AI Agent", segment: "Giving your agent a memory", arc: "a run that follows the arc of building an agent", level: "Presenting partner", times: "• Tuesday 10 Nov, 2:00pm", time: "Tuesday 10 Nov, 2:00pm", levels: proposalLevelLines(brandLevels(SPONSOR, "Build Your Own AI Agent")), series: "A series of six: the same per-event price for each club, as a founding partner. ", howMany: "" };
 
 describe("the five steps and the call branch, as the code reads them", () => {
   it("five steps; money first at step 4; three follow-ups, the first carrying the samples PDF, each short and saying something new", () => {
@@ -46,7 +46,8 @@ describe("the five steps and the call branch, as the code reads them", () => {
     const proposal = fillTemplate("proposal", FAKE);
     for (const m of proposal.matchAll(/\$[\d,]+/g)) expect(proposal.slice(m.index! + m[0].length).startsWith(" per event"), m[0]).toBe(true);
     expect([...proposal.matchAll(/\$([\d,]+) per event/g)].map((m) => Number(m[1]!.replace(/,/g, "")))).toEqual([5_000, 10_000, 15_000]);
-    expect(proposal).toContain("Lead is the level brands like Vector Co would benefit most from.");
+    // No "most brands like" line (Scooter's note wins, 7 Nov 2026).
+    expect(proposal).not.toMatch(/benefit most/);
     expect(proposal).toContain("A series of six: the same per-event price for each club, as a founding partner.");
     expect(proposal.match(/Presented by/g)).toHaveLength(1);
     expect(proposal).not.toMatch(/Title partner|in kind|Product partner|most brands choose/i);

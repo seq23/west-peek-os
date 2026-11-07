@@ -180,8 +180,8 @@ const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;"
 const C = 2 * Math.PI * 60;
 const COLORS = ["#1f4e79", "#3f8f6f", "#c2783a", "#8a6db3", "#9a6a00", "#5d6475"];
 
-/** The community, as every brand is told it (owner, 6 Nov 2026): it grew to nearly 5,000 at its height; never a present size. */
-export const COMMUNITY_SIZE = "Nearly 5,000";
+/** The community, as every brand is told it (owner, 7 Nov 2026): about 5,000; never "nearly 5,000 at its height". */
+export const COMMUNITY_SIZE = "About 5,000";
 
 /** The community wheel: one ring segment per slice, in order, and the size in the middle. */
 export function donutSvg(mix: readonly MixSlice[]): string {
@@ -193,7 +193,7 @@ export function donutSvg(mix: readonly MixSlice[]): string {
     return ring;
   });
   const label = `Approximate community mix: ${mix.map((s) => `${s.label.toLowerCase()} ${s.pct}%`).join(", ")}`;
-  return `<svg viewBox="0 0 160 160" width="200" height="200" role="img" aria-label="${esc(label)}"><g transform="rotate(-90 80 80)" fill="none" stroke-width="26">${rings.join("")}</g><text x="80" y="76" text-anchor="middle" class="wt1">${COMMUNITY_SIZE}</text><text x="80" y="94" text-anchor="middle" class="wt2">at its height</text></svg>`;
+  return `<svg viewBox="0 0 160 160" width="200" height="200" role="img" aria-label="${esc(label)}"><g transform="rotate(-90 80 80)" fill="none" stroke-width="26">${rings.join("")}</g><text x="80" y="76" text-anchor="middle" class="wt1">${COMMUNITY_SIZE}</text><text x="80" y="94" text-anchor="middle" class="wt2">people</text></svg>`;
 }
 
 const STYLE = `<style>
@@ -228,7 +228,7 @@ h5{font:600 18px Newsreader,Georgia,serif;margin:0;color:#1f4e79}h6{margin:0 0 4
  * page 3. The figure in Sequoia's line is her track record, not a price: `samplesProblems` reads the page without it.
  */
 export const TEAM_HTML = `<h5>The team behind the room</h5><div class="ppl">
-<div><b>Scooter Taylor</b><span>Co-Managing Partner, West Peek Ventures. Founding GP. Went viral in 2020 creating Quarantine Con, the online gathering that grew into West Peek: a community that reached nearly 5,000 founders, operators, creatives and investors across New York, San Francisco and Atlanta at its height. Leads brand, community and culture partnerships, and hosts West Peek Rooms, our in-person event series.</span></div>
+<div><b>Scooter Taylor</b><span>Co-Managing Partner, West Peek Ventures. Founding GP. Went viral in 2020 creating Quarantine Con, the online gathering that grew into West Peek: a community of about 5,000 founders, operators, creatives and investors across New York, San Francisco and Atlanta. Leads brand, community and culture partnerships, and hosts West Peek Rooms, our in-person event series.</span></div>
 <div><b>Sequoia Taylor</b><span>Co-Managing Partner, West Peek Ventures. A decade in investment banking and capital markets at Raymond James; more than $100M in secondary transactions. Venture Partner to two early-stage funds. Leads West Peek’s investing and LP relationships, and builds the AI agents the firm runs on day to day. Wellesley College.</span></div>
 <div><b>Carlos Barksdale</b><span>Events Consultant, West Peek. Led venture capital business development at Google in New York, building partnerships between Google, VCs and startups, with a deep network of venture investors, founders and developers. Founder of Glory By Us; earlier Lukka and Clearco. B.S. Operations Research, Columbia; founding board member, Columbia Engineering BAA.</span></div></div>`;
 
@@ -286,7 +286,7 @@ ${rows}
 <div class="foot"><span>${conf(o.footer2 ? esc(o.footer2) : `Dates move with ${b}'s launch calendar. Any single month can be partnered on its own.`)}</span><span>2 / 3</span></div></div></section>`;
   const legend = i.mix.map((s, k) => `<div><i style="background:${COLORS[k % COLORS.length]}"></i><b>${esc(s.label)} · ~${s.pct}%</b><span>${esc(s.roles.join(", "))}${s.note ? `; ${esc(s.note)}` : ""}</span></div>`).join("");
   const perks = (o.partnerGets ? o.partnerGets.map((l) => `<li>${esc(l)}</li>`) : w.perks.map((p) => `<li><b>${esc(p.lead)}</b> ${esc(p.line)}</li>`)).join(" ");
-  const page3 = `<section class="sheet"><div class="band">${kick}<div class="ttl sm">Who's in the room</div><div class="sub">Guests are curated from a community that grew to nearly 5,000 at its height, shaped around who ${b} wants to reach. No set number is promised.</div></div>
+  const page3 = `<section class="sheet"><div class="band">${kick}<div class="ttl sm">Who's in the room</div><div class="sub">Guests are curated from a community of about 5,000, shaped around who ${b} wants to reach. No set number is promised.</div></div>
 <div class="body"><div class="wheel">${donutSvg(i.mix)}<div class="legend">${legend}</div></div><p class="tiny">${MIX_NOTE}</p>
 <h5>What partnering gets ${b}</h5><ul class="why"> ${perks} <li><b>A room your size:</b> from an intimate ${BRAND_ROOM_WORDS} guests, and the guest list you want: invitations and room in your name, warm introductions after, and content from every evening for your channels.</li></ul>${TEAM_HTML}
 ${legalHtml(b)}<div class="foot"><span>${conf(`West Peek Ventures · ${esc(TLC_OWNER.email)}`)}</span><span>3 / 3</span></div></div></section>`;
@@ -376,7 +376,7 @@ ${latest ? `<p><b>Latest:</b> ${esc(latest.line)}</p>` : ""}`
 /** Standard text no per-deal edit can remove (the parts of every brand's document her edits do not replace). */
 export const STANDARD_TEXT: readonly string[] = [
   " (dates flexible)", `<b>${BRAND_ROOM_WORDS}</b> guests, sized to your goals`, "<b>3½ hours</b> · 6:00–9:30pm",
-  "a community that grew to nearly 5,000 at its height", `<text x="80" y="76" text-anchor="middle" class="wt1">${COMMUNITY_SIZE}</text>`, MIX_NOTE,
+  "a community of about 5,000", `<text x="80" y="76" text-anchor="middle" class="wt1">${COMMUNITY_SIZE}</text>`, MIX_NOTE,
   `<li><b>A room your size:</b> from an intimate ${BRAND_ROOM_WORDS} guests`, TEAM_HTML, "<b>Confidential · Preliminary draft · For discussion purposes only.</b>",
 ];
 /** What the template used to say and must never say again (owner, 30 Oct 2026). */
