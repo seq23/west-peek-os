@@ -1111,6 +1111,8 @@ export async function applyBrandReplyApproval(
   const said = herNoteOf(newTextOf(body).split(/\r?\n/).filter((l) => !/^\s*Ref\s+TLR-[A-Z0-9]{6}\s*$/.test(l)).join("\n"), partnerByFirmUserId(approverId)?.fullName ?? TLC_OWNER.name);
   const parsed = parseDraftReply(said);
   // One reply in the email: free text that is not an approve/skip is her change to it.
+  // A bare "skip" on a one-draft email (the reminder offers it, 9 Nov 2026) skips that draft; it is never a change note.
+  if (isEmptyReply(parsed) && ids.length === 1 && /^\s*(?:skip|skip it|don't send|do not send)[.!]?\s*$/i.test(said)) parsed.skip.push(1);
   if (isEmptyReply(parsed)) {
     if (ids.length === 1 && said && !/^(no|cancel)\b/i.test(said)) parsed.change.push({ n: 1, note: said });
     else return { handled: false, ref, detail: `a reply to ${ref} carried no approve / skip / change instruction` };
