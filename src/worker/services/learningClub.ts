@@ -324,10 +324,11 @@ export async function applyBackupSwitch(env: Env, ev: TlcEventRow, now: Date, fi
  */
 export async function emailOwner(
   env: Env,
-  input: { employee: "Parker" | "Wynn"; email: Omit<ExecEmailInput, "employee">; objectType: string; objectId: string; cardId: string | null; cardKind: string | null; firmScope: string; attachments?: readonly EmailAttachment[]; replyOnThread?: string | null; cc?: readonly string[] },
+  input: { employee: "Parker" | "Wynn"; email: Omit<ExecEmailInput, "employee">; objectType: string; objectId: string; cardId: string | null; cardKind: string | null; firmScope: string; attachments?: readonly EmailAttachment[]; replyOnThread?: string | null; cc?: readonly string[]; to?: readonly string[] },
 ): Promise<string[]> {
   const sent: string[] = [];
-  for (const address of TLC_RECIPIENTS) {
+  // `to`: a reminder goes only to the partner(s) still to answer (tlcApprovalReminder.ts); the door still decides who may be addressed.
+  for (const address of input.to?.length ? input.to : TLC_RECIPIENTS) {
     const out = await sendOrPreview(env, {
       to: address,
       ...(input.cc?.length ? { cc: input.cc } : {}),
@@ -518,10 +519,13 @@ export async function runDripPass(env: Env, now: Date, firmScope = "west-peek"):
   const drip = await runDrip(env, now, firmScope, {}, undefined, { composeBudgetMs: Math.max(0, DRIP_COMPOSE_BUDGET_MS - (Date.now() - passStartedAt)) });
   const repaired = await repairLeakedDrafts(env, now, firmScope);
   const notice = await sendDraftNotice(env, now, firmScope);
+  // WYNN REMINDS ON AN UNANSWERED APPROVAL (owner, 9 Nov 2026): after the batch email, so a new batch replaces the old.
+  const { sendApprovalReminders } = await import("./tlcApprovalReminder");
+  const reminders = await sendApprovalReminders(env, now, firmScope).catch((err) => `NAMED STOP [REMINDER_FAILED] ${err instanceof Error ? err.message : String(err)}`);
   // WYNN'S MONDAY ROUNDUP (31 Oct 2026): once a week, to Sequoia only, after the approval email.
   const { sendWeeklyRoundup } = await import("./tlcRoundup");
   const roundup = await sendWeeklyRoundup(env, now, firmScope).catch((err) => `roundup failed: ${err instanceof Error ? err.message : String(err)}`);
-  const said = [notice, repaired.startsWith("no draft") ? "" : repaired, roundup.startsWith("not Monday") || roundup.includes("already went") ? "" : roundup].filter(Boolean).join("; ");
+  const said = [notice, reminders, repaired.startsWith("no draft") ? "" : repaired, roundup.startsWith("not Monday") || roundup.includes("already went") ? "" : roundup].filter(Boolean).join("; ");
   return { batch, drip, prospects, notice: said };
 }
 

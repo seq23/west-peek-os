@@ -171,7 +171,9 @@ async function record(
  */
 export async function sendPartnerEmail(env: Env, input: PartnerEmailInput): Promise<PartnerEmailOutcome> {
   const tlc = await isTlcPartnerMail(env, input);
-  const to = tlc ? tlcAddressed([input.to.trim().toLowerCase()])[0]! : input.to.trim().toLowerCase();
+  // A TLC email goes to Sequoia, except that a partner who may be copied on it (Scooter, on a pricing email only) may be
+  // its only addressee: a reminder goes only to whoever still has to answer (owner, 9 Nov 2026).
+  const to = tlc && !tlcCcKept(input.objectType, input.to) ? tlcAddressed([input.to.trim().toLowerCase()])[0]! : input.to.trim().toLowerCase();
   if (tlc) input = { ...input, cc: (input.cc ?? []).filter((a) => tlcCcKept(input.objectType, a)) };
   const rendered = renderExecEmail(input.email);
   const events = input.events ?? { sent: "deliverable.emailed_to_partner", notSent: "deliverable.email_not_sent" };

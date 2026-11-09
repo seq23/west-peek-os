@@ -197,7 +197,11 @@ describe("every TLC email to a partner reaches Sequoia only", () => {
   it("sibling sweep: every TLC send in the service goes through the one owner door, and no TLC file names Scooter's address", () => {
     const service = readFileSync(new URL("../src/worker/services/learningClub.ts", import.meta.url), "utf8");
     expect(service.match(/sendOrPreview\(/g)).toHaveLength(1);
-    expect(service).toMatch(/for \(const address of TLC_RECIPIENTS\) \{\n\s+const out = await sendOrPreview\(env, \{\n\s+to: address,/);
+    // Every owner email goes to TLC_RECIPIENTS unless a caller names who (a reminder to whoever has not answered yet,
+    // 9 Nov 2026); the door then re-addresses anyone but Sequoia to her, except Scooter on a pricing email.
+    expect(service).toMatch(/for \(const address of input\.to\?\.length \? input\.to : TLC_RECIPIENTS\) \{\n\s+const out = await sendOrPreview\(env, \{\n\s+to: address,/);
+    const door = readFileSync(new URL("../src/worker/services/execEmail.ts", import.meta.url), "utf8");
+    expect(door).toMatch(/const to = tlc && !tlcCcKept\(input\.objectType, input\.to\) \? tlcAddressed\(/);
     expect(service).not.toMatch(/sendPartnerEmail\(|sendPartnersEmail\(|sendViaResend\(|sendViaCloudflare\(/);
     expect(service).not.toMatch(/emailBoth/);
     for (const f of ["src/shared/tlc/learningClub.ts", "src/shared/tlc/pitch.ts", "src/worker/services/learningClub.ts", ...readdirSync(new URL("../src/client/pages", import.meta.url)).filter((x) => /LearningClub|Partners/.test(x)).map((x) => `src/client/pages/${x}`)]) {
