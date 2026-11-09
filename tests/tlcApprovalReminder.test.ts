@@ -87,7 +87,7 @@ describe("a round-1 reply waiting on her", () => {
     expect(r1.cc).toBe("");
     expect(r1.subject).toBe("Re: Brand AA1 Reply · v1 · ready for your OK · TLR-AAAAA1");
     expect(r1.inReplyTo).toBe(`<${await tokenOf("TLR-AAAAA1")}@joinwestpeek.com>`);
-    expect(r1.text.split("\n")[0]).toBe("Reminder 1: Brand AA1 is waiting for your OK on our reply, sent Monday 9 Nov.");
+    expect(r1.text.split("\n")[0]).toBe("Reminder 1: our reply to Brand AA1 is still waiting for your OK. Wynn sent it to you Monday 9 Nov.");
     expect(r1.text).toContain("Brand AA1 has waited 3 days since their last email (Friday 6 Nov).");
     expect(r1.text).toContain('Reply "approved", "skip", or your changes, on this thread.');
     expect(r1.text).not.toMatch(/tbr_|tld_|wpt_/);

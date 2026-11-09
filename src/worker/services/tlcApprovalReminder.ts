@@ -100,7 +100,7 @@ async function brandReplyItems(env: Env, firmScope: string, now: Date): Promise<
     out.push({
       ref: r.notice_ref, forSentAt: r.notice_sent_at, objectType, to, thread, label: `${brand} ${doc}`,
       render: (n) => reminderEmail(thread?.subject ?? `${brand} ${doc} · ready for your OK · ${r.notice_ref}`, [
-        `${nth(n)}: ${brand} is waiting for your OK on our ${doc}, sent ${dayWords(r.notice_sent_at)}.`,
+        `${nth(n)}: our ${doc} to ${brand} is still waiting for your OK. Wynn sent it to you ${dayWords(r.notice_sent_at)}.`,
         who,
         `${brand} has waited ${waitedWords(r.received_at, now)} since their last email (${dayWords(r.received_at)}).`,
         `Reply "approved", "skip", or your changes, on this thread.${waiting.length > 1 ? " Each of you replies." : ""}`,
