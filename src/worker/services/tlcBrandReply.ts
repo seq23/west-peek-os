@@ -1290,7 +1290,7 @@ async function sendApproved(env: Env, owner: Actor, r: ReplyRow & { brand: strin
   let files = JSON.parse(r.attachments_json ?? "[]") as StoredFile[];
   if (r.kind === "PROPOSAL" && ev) {
     const made = await sheetPdf(env, deal, ev, await sponsorFor(env, deal, r.their_text), deps);
-    if (typeof made === "string") throw new SamplesPdfError(`the partner-levels sheet could not be made (${made.slice(0, 160)})`, true);
+    if (typeof made === "string") throw new SamplesPdfError(`the partner-levels sheet could not be made (${made.slice(0, 240)})`, true);
     files = [...files.filter((f) => !isSheet(f)), made];
     await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET attachments_json = ?2 WHERE id = ?1").bind(r.id, JSON.stringify(files)).run();
   }

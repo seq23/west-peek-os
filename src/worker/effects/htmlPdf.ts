@@ -34,7 +34,7 @@ export async function renderHtmlPdf(env: Env, html: string, opts: { onePage?: bo
   }
 }
 
-async function renderUnbounded(env: Env, html: string, opts: { onePage?: boolean }): Promise<PdfRender> {
+async function renderUnbounded(env: Env, html: string, opts: { onePage?: boolean; timeoutMs?: number }): Promise<PdfRender> {
   const binding = (env as unknown as { BROWSER?: unknown }).BROWSER;
   if (!binding) return { pdfBase64: null, reason: "no browser is available here — the BROWSER binding is not configured" };
   let browser: { newPage(): Promise<any>; close(): Promise<void> } | null = null;
@@ -44,7 +44,15 @@ async function renderUnbounded(env: Env, html: string, opts: { onePage?: boolean
     const page = await browser.newPage();
     await page.setViewport(LETTER_PRINTABLE_PX);
     await page.emulateMediaType("print");
-    await page.setContent(html, { waitUntil: "networkidle0" });
+    /*
+     * "load", NEVER "networkidle0" (10 Nov 2026: Pinecone's approved pricing reply did not go because the sheet failed
+     * with "Navigation timeout of 30000 ms exceeded"). setContent writes the page into about:blank; "networkidle0" waits
+     * for Chrome's networkIdle lifecycle event after that write, which the remote browser does not always send, so a
+     * page with no network requests at all (the sheet carries its fonts and mark inline) could wait out the 30-second
+     * default. "load" fires once the page and its stylesheets are in; fonts.ready then waits for every font, including
+     * a linked one (the samples' Google Fonts). The wait is given the render's own bound, not puppeteer's default.
+     */
+    await page.setContent(html, { waitUntil: "load", timeout: opts.timeoutMs ?? PDF_RENDER_TIMEOUT_MS });
     await page.evaluate(() => (document as unknown as { fonts: { ready: Promise<unknown> } }).fonts.ready);
     const tall: number = opts.onePage ? await page.evaluate(() => document.documentElement.scrollHeight) : LETTER_PRINTABLE_PX.height;
     const print = async (scale: number) => new Uint8Array(await page.pdf({ format: "letter", printBackground: true, preferCSSPageSize: true, scale }));
