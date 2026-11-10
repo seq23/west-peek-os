@@ -213,7 +213,7 @@ export async function sendDraftNotice(env: Env, now: Date, firmScope = "west-pee
     firmScope,
   }).catch(() => [] as string[]);
   if (sent.length === 0) return `this week's email (${all.length} draft(s)) could not be sent; the next pass tries again`;
-  await env.WP_OS_DB.prepare("INSERT INTO tlc_draft_notice (ref, items_json, firm_scope, batch_card_id, root_ref) VALUES (?1, ?2, ?3, ?4, ?1)").bind(ref, JSON.stringify(items), firmScope, card.id).run();
+  await env.WP_OS_DB.prepare("INSERT INTO tlc_draft_notice (ref, items_json, firm_scope, batch_card_id, root_ref, created_at) VALUES (?1, ?2, ?3, ?4, ?1, ?5)").bind(ref, JSON.stringify(items), firmScope, card.id, now.toISOString()).run();
   for (const it of items) if (it.kind !== "pitch") await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET notice_ref = ?2 WHERE id = ?1").bind(it.message_id, ref).run();
   return `this week's email ${ref} listing ${all.length} draft(s)${short.length ? `, ${short.length} club(s) short` : ""} sent to ${sent.join(", ")}`;
 }
@@ -243,6 +243,8 @@ async function sendCatchUpNotice(env: Env, now: Date, firmScope: string): Promis
   if (unlisted.length === 0) return null;
   const oldest = Math.min(...unlisted.map((d) => Date.parse(d.created_at)));
   if (now.getTime() - oldest < STRANDED_HOURS * 3_600_000) return null;
+  // Every notice is stamped with the pass's own clock (10 Nov 2026: the table default stamped the wall clock, so the
+  // gap below compared a pass's time with a different clock and a due catch-up could be held back).
   const last = await env.WP_OS_DB.prepare("SELECT MAX(created_at) AS at FROM tlc_draft_notice WHERE firm_scope = ?1").bind(firmScope).first<{ at: string | null }>();
   if (last?.at && now.getTime() - Date.parse(last.at) < CATCH_UP_GAP_HOURS * 3_600_000) return null;
   const all = await pendingDrafts(env, firmScope);
@@ -273,7 +275,7 @@ async function sendCatchUpNotice(env: Env, now: Date, firmScope: string): Promis
     firmScope,
   }).catch(() => [] as string[]);
   if (sent.length === 0) return `the catch-up email (${all.length} draft(s)) could not be sent; the next pass tries again`;
-  await env.WP_OS_DB.prepare("INSERT INTO tlc_draft_notice (ref, items_json, firm_scope, batch_card_id, root_ref) VALUES (?1, ?2, ?3, NULL, ?1)").bind(ref, JSON.stringify(items), firmScope).run();
+  await env.WP_OS_DB.prepare("INSERT INTO tlc_draft_notice (ref, items_json, firm_scope, batch_card_id, root_ref, created_at) VALUES (?1, ?2, ?3, NULL, ?1, ?4)").bind(ref, JSON.stringify(items), firmScope, now.toISOString()).run();
   for (const it of items) if (it.kind !== "pitch") await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET notice_ref = ?2 WHERE id = ?1").bind(it.message_id, ref).run();
   await appendEvent(env, { eventType: "tlc.draft_notice_catch_up", actorType: "system", actorId: "tlc_drip", objectType: "tlc_draft_notice", objectId: ref, firmScope, payload: { listed: all.length, unlisted: unlisted.length } });
   return `catch-up email ${ref} listing ${all.length} draft(s) (${unlisted.length} were in no email) sent to ${sent.join(", ")}`;
@@ -460,7 +462,7 @@ export async function applyTlcDraftReply(
     replyOnThread: thread?.token ?? null,
   }).catch(() => []);
   if (nextRef) {
-    await env.WP_OS_DB.prepare("INSERT INTO tlc_draft_notice (ref, items_json, firm_scope, batch_card_id, root_ref) VALUES (?1, ?2, ?3, NULL, ?4)").bind(nextRef, JSON.stringify(listed.items), firmScope, rootRef).run();
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_draft_notice (ref, items_json, firm_scope, batch_card_id, root_ref, created_at) VALUES (?1, ?2, ?3, NULL, ?4, ?5)").bind(nextRef, JSON.stringify(listed.items), firmScope, rootRef, now.toISOString()).run();
     for (const it of listed.items) if (it.kind !== "pitch") await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET notice_ref = ?2 WHERE id = ?1").bind(it.message_id, nextRef).run();
   }
   await appendEvent(env, {
@@ -538,7 +540,7 @@ export async function repairLeakedDrafts(env: Env, now: Date, firmScope = "west-
       firmScope,
       replyOnThread: thread?.token ?? null,
     });
-    await env.WP_OS_DB.prepare("INSERT INTO tlc_draft_notice (ref, items_json, firm_scope, batch_card_id, root_ref) VALUES (?1, ?2, ?3, NULL, ?4)").bind(nextRef, JSON.stringify(listed.items), firmScope, rootRef).run();
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_draft_notice (ref, items_json, firm_scope, batch_card_id, root_ref, created_at) VALUES (?1, ?2, ?3, NULL, ?4, ?5)").bind(nextRef, JSON.stringify(listed.items), firmScope, rootRef, now.toISOString()).run();
     for (const it of listed.items) if (it.kind !== "pitch") await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET notice_ref = ?2 WHERE id = ?1").bind(it.message_id, nextRef).run();
   }
   await appendEvent(env, {
