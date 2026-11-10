@@ -391,7 +391,7 @@ export async function renderFinalPdf(env: Env, html: string, launch?: PdfLaunche
     browser = await (launch ?? (async (b: unknown) => (await (await import("@cloudflare/puppeteer")).launch(b as never)) as unknown as { newPage(): Promise<any>; close(): Promise<void> }))(binding);
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 720 });
-    await page.setContent(html, { waitUntil: "networkidle0" });
+    await page.setContent(html, { waitUntil: "load", timeout: 90_000 }); // "load", never "networkidle0": see htmlPdf.ts
     await page.evaluate(() => (document as unknown as { fonts: { ready: Promise<unknown> } }).fonts.ready);
     const over = (await page.evaluate(MEASURE_OVERFLOW_JS)) as Array<{ page: number; what: string }>;
     if (Array.isArray(over) && over.length > 0) {

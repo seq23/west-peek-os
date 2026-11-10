@@ -475,7 +475,7 @@ async function defaultRender(env: Env, html: string): Promise<{ pdfBase64: strin
     const puppeteer = await import("@cloudflare/puppeteer");
     browser = (await puppeteer.launch(binding as never)) as unknown as { newPage(): Promise<any>; close(): Promise<void> };
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: "networkidle0" });
+    await page.setContent(html, { waitUntil: "load", timeout: 90_000 }); // "load", never "networkidle0": see htmlPdf.ts
     await page.evaluate(() => (document as unknown as { fonts: { ready: Promise<unknown> } }).fonts.ready);
     const bytes: Uint8Array = new Uint8Array(await page.pdf({ format: "letter", printBackground: true, margin: { top: "0", right: "0", bottom: "0", left: "0" } }));
     let binary = "";

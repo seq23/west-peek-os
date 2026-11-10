@@ -556,6 +556,48 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     expect(await (await openPreview(e, PREVIEW_URL.exec(sends.filter((x) => x.subject.startsWith("Sandstone Tools "))[0]!.text)![0])).text()).toContain("Field practice");
   });
 
+  it("an approved send whose PDF cannot be made keeps trying on its own for 24 hours, then comes back to her ONCE", async () => {
+    const e = docEnv();
+    const { planSamples } = await import("../src/worker/services/tlcSamples");
+    const { sendReplyApprovals, SEND_TRIES, sendRetryMinutes } = await import("../src/worker/services/tlcBrandReply");
+    await deal("tld_render", "Quarry Labs", "hello@quarry.example");
+    const d = (await e.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = 'tld_render'").first())! as never;
+    await planSamples(e, d, { segmentTitle: "A working session", seriesTitle: "Build it together", reach: "builders" });
+    await take(e, "tld_render", "Please send the materials", "render@quarry.example");
+    await sendReplyApprovals(e, MON);
+    const busy = { samples: { renderPdf: async () => ({ pdfBase64: null, reason: "Navigation timeout of 30000 ms exceeded" }) } };
+    sends.length = 0;
+    await approve(e, await refOf("tld_render"), busy);
+    const row = async () => (await e.WP_OS_DB.prepare("SELECT state, send_retry_due, send_tries, report_text FROM tlc_brand_reply WHERE deal_id = 'tld_render' ORDER BY created_at DESC LIMIT 1").first<{ state: string; send_retry_due: string | null; send_tries: number; report_text: string | null }>())!;
+    let at = MON.getTime();
+    let passes = 0;
+    while ((await row()).state === "FAILED") {
+      const r = await row();
+      expect(r.send_retry_due).toBeTruthy();
+      at = Date.parse(r.send_retry_due!) + 60_000;
+      sends.length = 0;
+      await processBrandReplies(e, new Date(at), "west-peek", { mailbox: null, drafter, ...busy });
+      passes += 1;
+      if (passes === 3) expect(await row()).toMatchObject({ state: "FAILED", send_tries: 4 }); // the old limit gave up here
+      if ((await row()).state === "FAILED") expect(sends).toHaveLength(0); // a failed try is not an email to her
+      expect(passes).toBeLessThan(SEND_TRIES);
+    }
+    expect(passes).toBe(SEND_TRIES - 1);
+    expect(at - MON.getTime()).toBeGreaterThanOrEqual(24 * 3_600_000);
+    expect(sendRetryMinutes(1)).toBe(30);
+    expect(sendRetryMinutes(5)).toBe(60);
+    // Past 24 hours: nothing to the brand, and ONE email to her saying so, with the one thing to do.
+    expect(await row()).toMatchObject({ state: "NOTIFIED", send_tries: 0, send_retry_due: null });
+    expect(sends.filter((x) => x.to.includes("quarry.example"))).toHaveLength(0);
+    const alarm = sends.filter((x) => x.subject.startsWith("Quarry Labs "));
+    expect(alarm).toHaveLength(1);
+    expect(alarm[0]!.text).toContain("nothing went to Quarry Labs");
+    expect(alarm[0]!.text).toContain("approve it again");
+    sends.length = 0;
+    await processBrandReplies(e, new Date(at + 3_600_000), "west-peek", { mailbox: null, drafter, ...busy });
+    expect(sends.filter((x) => x.subject.startsWith("Quarry Labs "))).toHaveLength(0);
+  });
+
   it("her approved: the PDF is named from the CURRENT title; a busy renderer retries on its own; a 4-page PDF comes back to her; a sent row is never touched", async () => {
     const e = docEnv();
     const { planSamples, samplesForDeal } = await import("../src/worker/services/tlcSamples");

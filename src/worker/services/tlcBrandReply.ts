@@ -1214,24 +1214,38 @@ export async function applyBrandReplyApproval(
   return { handled: true, ref, detail: [...lines, ...(redrafted ? [`${redrafted} redrafted`] : [])].join("; ") || "nothing to do" };
 }
 
-/** How often, and how many times, an approved send whose PDF could not be made yet is tried again on its own. */
+/**
+ * AN APPROVED SEND NEVER NEEDS A PERSON TO PUSH IT (10 Nov 2026: three tries 30 minutes apart gave up after an hour
+ * and left Pinecone's approved answer FAILED). A PDF that cannot be made yet is tried again on its own for 24 hours:
+ * twice at SEND_RETRY_MINUTES, then hourly (30 + 30 + 23 x 60 minutes = 24 hours: the approval, then 25 tries).
+ */
 export const SEND_RETRY_MINUTES = 30;
-export const SEND_TRIES = 3;
+export const SEND_TRIES = 26;
+export const sendRetryMinutes = (triesSoFar: number): number => (triesSoFar < 3 ? SEND_RETRY_MINUTES : 60);
 
 /**
  * An approved send that did not go. Nothing left (the PDF is made before the send), so:
- *   - the renderer was busy: tried again on its own every SEND_RETRY_MINUTES, up to SEND_TRIES; she is not asked again;
+ *   - the renderer was busy: tried again on its own (sendRetryMinutes) up to SEND_TRIES; she is not asked again;
+ *     past that (24 hours), ONE email to her: the draft comes back to her approval email, saying what failed, that
+ *     nothing went to the brand, and the one thing to do (approve it again);
  *   - the PDF itself is wrong (not 3 pages): back to her as a draft, saying what to shorten;
  *   - anything else: FAILED, named in her "done" email.
  */
-async function sendFailed(env: Env, r: ReplyRow, err: unknown, now: Date): Promise<string> {
+async function sendFailed(env: Env, r: ReplyRow & { brand?: string }, err: unknown, now: Date): Promise<string> {
   const why = err instanceof Error ? err.message : String(err);
   const tries = (r.send_tries ?? 0) + 1;
   if (err instanceof SamplesPdfError && err.retry && tries < SEND_TRIES) {
-    const due = new Date(now.getTime() + SEND_RETRY_MINUTES * 60_000).toISOString();
+    const due = new Date(now.getTime() + sendRetryMinutes(tries) * 60_000).toISOString();
     await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'FAILED', send_retry_due = ?2, send_tries = ?3, held_reason = ?4 WHERE id = ?1")
       .bind(r.id, due, tries, `approved; ${why}`.slice(0, 300)).run();
     return `approved, not sent yet (${why.slice(0, 120)}); it goes on its own once the PDF is made, nothing for you to do`;
+  }
+  if (err instanceof SamplesPdfError && err.retry) {
+    const brand = r.brand ? brandDisplayName(r.brand) : "the brand";
+    const what = `${STALE_SHEET_PREFIX} You approved this, but for 24 hours the PDF that goes with it could not be made, so nothing went to ${brand}. The one thing to do: approve it again here and it goes, with the PDF made then.`;
+    await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'DRAFTED', notice_ref = NULL, approved_by_json = NULL, inputs_json = NULL, send_retry_due = NULL, send_tries = 0, report_text = ?3, held_reason = ?2 WHERE id = ?1")
+      .bind(r.id, null, what).run();
+    return `NOT sent (the PDF could not be made for 24 hours); it comes back to you to approve again`;
   }
   if (err instanceof SamplesPdfError && !err.retry && r.samples_id) {
     await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'DRAFTED', notice_ref = NULL, send_retry_due = NULL, send_tries = 0, held_reason = ?2 WHERE id = ?1")
@@ -1263,11 +1277,14 @@ export async function retryApprovedSends(env: Env, now: Date, firmScope = "west-
       lines.push(`${brandDisplayName(r.brand)}: ${await sendFailed(env, r, err, now)}`);
     }
   }
-  if (lines.length) {
+  // Only a send is news: a try that failed again is not an email (she would get one an hour), and the one that gives
+  // up after 24 hours reaches her as the draft back in her approval email (sendFailed).
+  const sent = lines.filter((l) => /: sent /.test(l));
+  if (sent.length) {
     await emailHer(env, firmScope, `retry:${due.map((r) => r.id).join(",")}`.slice(0, 120), {
       what: "approved answers, sent on their own",
-      tldr: `${lines.filter((l) => /: sent /.test(l)).length} sent, from your mailbox, on their threads.`,
-      sections: [{ label: "Done", bullets: lines.slice(0, 6) }],
+      tldr: `${sent.length} sent, from your mailbox, on their threads.`,
+      sections: [{ label: "Done", bullets: sent.slice(0, 6) }],
     }).catch(() => false);
   }
   return lines;
@@ -1290,7 +1307,7 @@ async function sendApproved(env: Env, owner: Actor, r: ReplyRow & { brand: strin
   let files = JSON.parse(r.attachments_json ?? "[]") as StoredFile[];
   if (r.kind === "PROPOSAL" && ev) {
     const made = await sheetPdf(env, deal, ev, await sponsorFor(env, deal, r.their_text), deps);
-    if (typeof made === "string") throw new SamplesPdfError(`the partner-levels sheet could not be made (${made.slice(0, 160)})`, true);
+    if (typeof made === "string") throw new SamplesPdfError(`the partner-levels sheet could not be made (${made.slice(0, 240)})`, true);
     files = [...files.filter((f) => !isSheet(f)), made];
     await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET attachments_json = ?2 WHERE id = ?1").bind(r.id, JSON.stringify(files)).run();
   }
