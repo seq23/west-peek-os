@@ -414,3 +414,25 @@ describe("\"ready to work on the deck\" starts the round, with no model deciding
     expect(await env.WP_OS_DB.prepare("SELECT version_no FROM deck_version WHERE state = 'CURRENT'").first(), "v3 stays current until round 4 is approved").toMatchObject({ version_no: 3 });
   });
 });
+
+describe("the deck process note", () => {
+  it("goes to both partners exactly once, and the start words it quotes are words the door takes", async () => {
+    const { sendProcessNoteOnce, processNoteText, PROCESS_NOTE_START_WORDS, PROCESS_NOTE_SUBJECT } = await import("../src/worker/services/deckPreview");
+    const { fundDeckStart } = await import("../src/shared/deck/start");
+    expect(fundDeckStart({ subject: PROCESS_NOTE_START_WORDS, body: "", hasAttachment: false })).not.toBeNull();
+    for (const also of ["Let's work on the deck", "Start the deck"]) {
+      expect(processNoteText()).toContain(also);
+      expect(fundDeckStart({ subject: "", body: `${also}.`, hasAttachment: false }), also).not.toBeNull();
+    }
+    const before = sends.length;
+    expect(await sendProcessNoteOnce(env)).toMatch(/^deck process note emailed/);
+    expect(await sendProcessNoteOnce(env)).toBe("");
+    const mine = sends.slice(before);
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.subject).toBe(PROCESS_NOTE_SUBJECT);
+    expect(mine[0]!.to).toContain("scooter@");
+    expect(mine[0]!.to).toContain("sequoia@");
+    expect(mine[0]!.text).toContain("Sequoia: Wren, wren@joinwestpeek.com");
+    expect(mine[0]!.text).toContain("Scooter: Walker, walker@joinwestpeek.com");
+  });
+});

@@ -431,7 +431,9 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
     // sent. A failure here is said in the summary and never stops the health sweep it rides on.
     const { deckPreviewTick } = await import("./deckPreview");
     const deck = await deckPreviewTick(env).catch((err: unknown) => `deck preview failed: ${err instanceof Error ? err.message : String(err)}`);
-    const deckNote = deck ? ` · ${deck}` : "";
+    const { sendProcessNoteOnce } = await import("./deckPreview");
+    const processNote = await sendProcessNoteOnce(env).catch((err: unknown) => `NAMED STOP [DECK_PROCESS_NOTE_NOT_SENT] ${err instanceof Error ? err.message : String(err)}`);
+    const deckNote = [deck, processNote].filter(Boolean).map((n) => ` · ${n}`).join("");
     return {
       status: "SUCCEEDED",
       // A clean sweep is a success worth recording quietly, not an alert. The interesting line is
