@@ -16,7 +16,23 @@ import { INTAKE_MAILBOX } from "../src/shared/intake/emailTriggers";
 let t: TestDb;
 let env: Env;
 const FUND = "fund_preview_test";
-const sends: Array<{ to: string; subject: string; text: string; headers: Record<string, string> }> = [];
+const sends: Array<{ to: string; subject: string; text: string; headers: Record<string, string>; attachments: Array<{ filename: string; content: string; content_type?: string }> }> = [];
+/** The mail provider refuses any message that carries a file (what a transport that cannot attach does). */
+let refuseAttachments = false;
+const SCOOTER_FROM = "Scooter Taylor <scooter@westpeek.ventures>";
+const authFor = (who: string) => `mx.cloudflare.net; spf=pass smtp.mailfrom=${who}@westpeek.ventures; dkim=pass header.d=westpeek.ventures; dmarc=none`;
+let mailSeq = 0;
+/** A fresh email from a partner, through the real door. */
+async function partnerEmails(from: string, who: string, to: string, subject: string, body: string, attachPdf = false): Promise<void> {
+  const { handleInboundEmail } = await import("../src/worker/effects/inboundEmail");
+  const raw = attachPdf
+    ? [`From: ${from}`, `To: ${to}`, `Subject: ${subject}`, 'Content-Type: multipart/mixed; boundary="b_deck"', "MIME-Version: 1.0", "", "--b_deck", "Content-Type: text/plain; charset=UTF-8", "", body, "", "--b_deck", 'Content-Type: application/pdf; name="Northwind deck.pdf"', 'Content-Disposition: attachment; filename="Northwind deck.pdf"', "Content-Transfer-Encoding: base64", "", btoa(FAKE_PDF), "", "--b_deck--", ""].join("\r\n")
+    : [`From: ${from}`, `To: ${to}`, `Subject: ${subject}`, "", body].join("\n");
+  const bytes = new TextEncoder().encode(raw);
+  const headers = new Headers({ from, to, subject, "authentication-results": authFor(who), "message-id": `<deck-start-${(mailSeq += 1)}@example.com>` });
+  await handleInboundEmail({ from: `${who}@westpeek.ventures`, to, headers, raw: new Blob([bytes]).stream(), rawSize: bytes.byteLength }, env);
+}
+const count = async (sql: string) => (await env.WP_OS_DB.prepare(sql).first<{ n: number }>())!.n;
 
 const SEQUOIA_FROM = "Sequoia Taylor <sequoia@westpeek.ventures>";
 const GOOD_AUTH = "mx.cloudflare.net; spf=pass smtp.mailfrom=sequoia@westpeek.ventures; dkim=pass header.d=westpeek.ventures; dmarc=none";
@@ -24,12 +40,14 @@ const GOOD_AUTH = "mx.cloudflare.net; spf=pass smtp.mailfrom=sequoia@westpeek.ve
 const FAKE_PDF = "%PDF-1.4\n1 0 obj << /Type /Page >> endobj\n2 0 obj << /Type /Page >> endobj\n%%EOF";
 let printed: string | null = null;
 let overflow: unknown[] = [];
+/** A final PDF bigger than an email may carry. */
+let bigPdf = false;
 const fakeLaunch = async () => ({
   newPage: async () => ({
     setViewport: async () => undefined,
     setContent: async (html: string) => { printed = html; },
     evaluate: async (fn: unknown) => (typeof fn === "string" ? overflow : undefined),
-    pdf: async () => new TextEncoder().encode(FAKE_PDF).buffer,
+    pdf: async () => (bigPdf ? new Uint8Array(11 * 1024 * 1024).fill(32).buffer : new TextEncoder().encode(FAKE_PDF).buffer),
   }),
   close: async () => undefined,
 });
@@ -55,8 +73,9 @@ beforeAll(async () => {
   env = { ...makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled", WP_OS_DOCUMENTS: t.docs } as Partial<Env>), RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures" } as Env;
   vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
     if (String(url).includes("api.resend.com")) {
-      const b = JSON.parse(String(init?.body)) as { to: string | string[]; subject: string; text: string; headers?: Record<string, string> };
-      sends.push({ to: Array.isArray(b.to) ? b.to.join(",") : b.to, subject: b.subject, text: b.text, headers: b.headers ?? {} });
+      const b = JSON.parse(String(init?.body)) as { to: string | string[]; subject: string; text: string; headers?: Record<string, string>; attachments?: Array<{ filename: string; content: string; content_type?: string }> };
+      if (refuseAttachments && b.attachments?.length) return new Response(JSON.stringify({ message: "attachments are not accepted" }), { status: 422 });
+      sends.push({ to: Array.isArray(b.to) ? b.to.join(",") : b.to, subject: b.subject, text: b.text, headers: b.headers ?? {}, attachments: b.attachments ?? [] });
       return new Response(JSON.stringify({ id: `re_${sends.length}` }), { status: 200 });
     }
     throw new Error(`unexpected fetch ${String(url)}`);
@@ -195,42 +214,203 @@ describe("records → preview → one email → reply → same preview → appro
     expect(sends[sends.length - 1]!.text).toMatch(/What I couldn't do:\n- I did not save the edit because it typed figures nobody asked for \(\$23M, 8%\)/);
   });
 
-  it("\"approved\" makes the final PDF: current, in that partner's name, the round FINAL, answered on the thread", async () => {
+  it("one \"approved\" makes no PDF, a change in between resets it, and both partners' \"approved\" on the same slides makes exactly ONE PDF, attached and linked", async () => {
     const { recordReply, deckPreviewTick } = await import("../src/worker/services/deckPreview");
     const p = (await env.WP_OS_DB.prepare("SELECT * FROM deck_preview WHERE state = 'OPEN'").first<{ id: string }>())!;
-    // A layout that would cut a line refuses the PDF — a named wait, said once, retried every sweep.
+    const last = () => sends[sends.length - 1]!;
+    const versions = () => count("SELECT COUNT(*) AS n FROM deck_version");
+    const state = async () => (await env.WP_OS_DB.prepare("SELECT state FROM deck_preview WHERE id = ?1").bind(p.id).first<{ state: string }>())!.state;
+
+    // ONE approval: recorded, answered once to both, no PDF, the round stays open.
+    await recordReply(env, p.id, "Approved!", "sequoia@westpeek.ventures");
+    await deckPreviewTick(env, { launch: fakeLaunch });
+    expect(await versions()).toBe(0);
+    expect(await state()).toBe("OPEN");
+    expect(last().to).toBe("scooter@westpeek.ventures,sequoia@westpeek.ventures");
+    expect(last().text).toContain("Sequoia approved the deck as it is in the preview: https://os.joinwestpeek.com/api/deck/preview");
+    expect(last().text).toContain("No PDF yet. I'll make the final PDF when Scooter also replies \"approved\" here.");
+    // The same partner approving twice counts once.
+    await recordReply(env, p.id, "approved", "sequoia@westpeek.ventures");
+    await deckPreviewTick(env, { launch: fakeLaunch });
+    expect(await versions()).toBe(0);
+    expect(last().text).toContain("Sequoia's \"approved\" is already counted.");
+
+    // A CHANGE IN BETWEEN resets it: her approval was of the slides before the change.
+    await recordReply(env, p.id, "page 2 should also say Lab nights", "scooter@westpeek.ventures");
+    const editor = async ({ slides }: { slides: Slide[] }) => ({ slides: slides.map((x) => (x.key === "sourcing" ? { ...x, slots: [...x.slots, { kind: "text" as const, text: "Lab nights" }] } : x)), changes: ["page 2 now also says Lab nights"], cannot: [] });
+    await deckPreviewTick(env, { editor, launch: fakeLaunch });
+    expect(last().text).toContain("The deck changed after Sequoia approved, so both of you need to reply \"approved\" again.");
+    expect(await count("SELECT COUNT(*) AS n FROM deck_preview_change WHERE kind = 'APPROVAL' AND state = 'DONE'")).toBe(0);
+    await recordReply(env, p.id, "approved", "scooter@westpeek.ventures");
+    await deckPreviewTick(env, { launch: fakeLaunch });
+    expect(await versions(), "Scooter alone, after the change, is still one approval").toBe(0);
+    expect(last().text).toContain("I'll make the final PDF when Sequoia also replies \"approved\" here.");
+
+    // BOTH, on the same slides. A layout that would cut a line refuses the PDF — a named wait, said once, retried every sweep.
     overflow = [{ page: 3, what: "Fund size", by: 12 }];
     await recordReply(env, p.id, "Approved!", "sequoia@westpeek.ventures");
     await deckPreviewTick(env, { launch: fakeLaunch });
-    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM deck_version").first<{ n: number }>())!.n).toBe(0);
-    expect(sends[sends.length - 1]!.text).toMatch(/couldn't make the PDF yet: page 3 would cut "Fund size"/);
+    expect(await versions()).toBe(0);
+    expect(last().text).toMatch(/Scooter and Sequoia both approved the deck\. I couldn't make the PDF yet: page 3 would cut "Fund size"/);
     const told = sends.length;
 
     overflow = [];
     await deckPreviewTick(env, { launch: fakeLaunch });
-    const v = await env.WP_OS_DB.prepare("SELECT * FROM deck_version").first<{ state: string; approved_by: string; origin: string; created_by: string; document_id: string | null; page_count: number }>();
-    expect(v).toMatchObject({ state: "CURRENT", approved_by: "fu_sequoia_taylor", origin: "BUILT", created_by: "Preston", page_count: 2 });
+    const v = await env.WP_OS_DB.prepare("SELECT * FROM deck_version").first<{ state: string; approved_by: string; origin: string; created_by: string; document_id: string | null; page_count: number; title: string; change_summary: string }>();
+    // The decision carries the name of the partner who completed the pair; the record names both.
+    expect(v).toMatchObject({ state: "CURRENT", approved_by: "fu_sequoia_taylor", origin: "BUILT", created_by: "Preston", page_count: 2, title: "West Peek Ventures Fund I — approved by Scooter and Sequoia" });
+    expect(v!.change_summary).toContain("approved by Scooter Taylor and Sequoia Taylor by email");
     expect(v!.document_id).toBeTruthy();
     expect(printed).toContain("data:image/png;base64,");
-    expect((await env.WP_OS_DB.prepare("SELECT state FROM deck_preview WHERE id = ?1").bind(p.id).first<{ state: string }>())!.state).toBe("FINAL");
+    expect(printed).toContain("Lab nights");
+    expect(await state()).toBe("FINAL");
+    // ONE reply, to the two partners, with the PDF attached under its version number AND the link.
     expect(sends.length).toBe(told + 1);
-    expect(sends[sends.length - 1]!.text).toMatch(/Sequoia approved the deck, so I made the final PDF: v1, 2 pages/);
-
-    // Once final, the round is closed: a late reply changes nothing and starts nothing.
-    await recordReply(env, p.id, "one more thing on page 2", "scooter@westpeek.ventures");
+    expect(last().to).toBe("scooter@westpeek.ventures,sequoia@westpeek.ventures");
+    expect(last().text).toMatch(/Scooter and Sequoia both approved the deck, so I made the final PDF: v1, 2 pages\. It's attached/);
+    expect(last().text).toContain(`Open it here: https://os.joinwestpeek.com/api/documents/${v!.document_id}/download`);
+    expect(last().attachments).toEqual([{ filename: "West-Peek-Ventures-Fund-I-deck-v1.pdf", content: btoa(FAKE_PDF), content_type: "application/pdf" }]);
+    // Exactly one PDF, however many sweeps follow.
     await deckPreviewTick(env, { launch: fakeLaunch });
-    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM deck_version").first<{ n: number }>())!.n).toBe(1);
+    expect(await versions()).toBe(1);
+    expect(sends.length).toBe(told + 1);
   });
 
-  it("the next records move starts round 2 from the final round's slides, with its own one email", async () => {
+  it("more work after the final PDF puts the approved deck back in the link as the next round; a second \"approved\" changes nothing", async () => {
+    const { recordReply, deckPreviewTick, openPreview } = await import("../src/worker/services/deckPreview");
+    const final = (await env.WP_OS_DB.prepare("SELECT * FROM deck_preview WHERE state = 'FINAL'").first<{ id: string; slides_json: string; final_note: string }>())!;
+    const last = () => sends[sends.length - 1]!;
+
+    // A second "approved" on the finished round: one answer with the PDF that exists (link only), nothing else.
+    await recordReply(env, final.id, "approved", "scooter@westpeek.ventures");
+    await deckPreviewTick(env, { launch: fakeLaunch });
+    expect(last().text).toContain(`This deck is already approved and final: v1. Open it here: ${final.final_note}`);
+    expect(last().attachments).toEqual([]);
+    expect(await count("SELECT COUNT(*) AS n FROM deck_version")).toBe(1);
+    expect(await count("SELECT COUNT(*) AS n FROM deck_preview")).toBe(1);
+
+    // MORE WORK: a reply on the finished thread opens round 2 FROM THE APPROVED SLIDES, and its one email says so.
+    await recordReply(env, final.id, "one more thing: page 2 should mention Pitch Lab", "scooter@westpeek.ventures");
+    const before = sends.length;
+    const editor = vi.fn(async ({ slides }: { slides: Slide[] }) => ({ slides: slides.map((x) => (x.key === "sourcing" ? { ...x, slots: [...x.slots, { kind: "text" as const, text: "Pitch Lab" }] } : x)), changes: ["page 2 now mentions Pitch Lab"], cannot: [] }));
+    await deckPreviewTick(env, { editor, launch: fakeLaunch });
+    const round2 = (await openPreview(env, FUND))!;
+    expect(round2.round_no).toBe(2);
+    expect(round2.slides_json, "starts from the approved deck, untouched").toBe(final.slides_json);
+    expect(sends.length, "one email for the new round, to both").toBe(before + 1);
+    expect(last().to).toBe("scooter@westpeek.ventures,sequoia@westpeek.ventures");
+    expect(last().subject).toBe("Our Fund I deck: preview round 2");
+    expect(last().text).toContain("Scooter asked for more work on our Fund I deck, so the approved deck (v1) is back in the preview: https://os.joinwestpeek.com/api/deck/preview");
+    expect(last().text).toContain("Scooter asked:\n\"one more thing: page 2 should mention Pitch Lab\"");
+    expect(last().text).toContain("v1 stays the current deck until this round is approved.");
+    expect(last().text).toContain("When both of you have replied \"approved\", I'll make the next final PDF.");
+    // His words travel with the round as its first request, and the current deck has not moved.
+    expect(await env.WP_OS_DB.prepare("SELECT preview_id, state FROM deck_preview_change WHERE said LIKE 'one more thing%'").first()).toMatchObject({ preview_id: round2.id, state: "PENDING" });
+    expect(await env.WP_OS_DB.prepare("SELECT version_no FROM deck_version WHERE state = 'CURRENT'").first()).toMatchObject({ version_no: 1 });
+
+    // The next sweep does the work on round 2 and answers on ROUND 2's thread.
+    await deckPreviewTick(env, { editor, launch: fakeLaunch });
+    expect(editor).toHaveBeenCalledOnce();
+    expect((await openPreview(env, FUND))!.slides_json).toContain("Pitch Lab");
+    expect(last().headers["In-Reply-To"]).toBe(threadReference(round2.thread_token!));
+    expect(last().text).toContain("What I changed:\n- page 2 now mentions Pitch Lab");
+
+    // Both approve round 2. The provider refuses the file → the SAME reply goes with the link only, and the round still finishes.
+    refuseAttachments = true;
+    await recordReply(env, round2.id, "approved", "sequoia@westpeek.ventures");
+    await recordReply(env, round2.id, "approved", "scooter@westpeek.ventures");
+    await deckPreviewTick(env, { launch: fakeLaunch });
+    refuseAttachments = false;
+    expect(await env.WP_OS_DB.prepare("SELECT version_no, approved_by FROM deck_version WHERE state = 'CURRENT'").first()).toMatchObject({ version_no: 2, approved_by: "fu_scooter_taylor" });
+    expect(await count("SELECT COUNT(*) AS n FROM deck_version")).toBe(2);
+    expect(last().text).toContain("Sequoia and Scooter both approved the deck, so I made the final PDF: v2, 2 pages. I couldn't attach the file to this email, so please use the link.");
+    expect(last().text).toMatch(/Open it here: https:\/\/os\.joinwestpeek\.com\/api\/documents\/.+\/download/);
+    expect(last().attachments).toEqual([]);
+  });
+
+  it("the next records move starts round 3 from the final round's slides, with its own one email", async () => {
     const { deckPreviewTick, openPreview } = await import("../src/worker/services/deckPreview");
     const before = sends.length;
     await setPolicy("sleeve_policy_version", "sleeve_json", 2, { committed_usd: 32_000_000, estimated_fees_usd: 4_000_000, estimated_expenses_usd: 400_000, sleeves: [{ key: "EARLY_STAGE_PRIMARY", target_pct: 70 }, { key: "SECONDARY_PURCHASE", target_pct: 30 }] });
     await deckPreviewTick(env, { launch: fakeLaunch });
     const open = (await openPreview(env, FUND))!;
-    expect(open.round_no).toBe(2);
+    expect(open.round_no).toBe(3);
     expect(open.slides_json).toContain("Rooms evenings");
+    expect(open.slides_json).toContain("Pitch Lab");
     expect(sends.length).toBe(before + 1);
-    expect(sends[sends.length - 1]!.subject).toBe("Our Fund I deck: preview round 2");
+    expect(sends[sends.length - 1]!.subject).toBe("Our Fund I deck: preview round 3");
+    expect(sends[sends.length - 1]!.text).toContain("Reply here with any changes in plain words, or with \"approved\". When both of you have replied \"approved\", I'll make the final PDF.");
+  });
+});
+
+describe("\"ready to work on the deck\" starts the round, with no model deciding it", () => {
+  it("only the fund's own deck, said plainly: a founder's deck, a tag, a hedge or a question is left to Porter", async () => {
+    const { fundDeckStart } = await import("../src/shared/deck/start");
+    const start = (subject: string, body = "", hasAttachment = false) => fundDeckStart({ subject, body, hasAttachment });
+    for (const [subject, body] of [
+      ["Ready to work on the deck", ""], ["Deck", "Hi Wren,\nLet’s work on our deck.\nSequoia"], ["", "Walker, I'm ready to start the LP deck."], ["Start the deck", ""],
+      ["Preston, please open the Fund I deck", ""], ["hello", "Can you reopen the pitch deck?"], ["Time to update our fund deck", ""], ["We are ready to finish the deck for LPs", ""],
+    ] as const) expect(start(subject, body), `${subject} / ${body}`).not.toBeNull();
+    for (const [subject, body, pdf] of [
+      ["Ready to work on the deck", "Northwind's deck is attached", true], ["#wpdeck ready to work on the deck", "", false], ["Not ready to work on the deck yet", "", false],
+      ["Deck", "I'm not ready to work on the deck.", false], ["Are we ready to work on the deck?", "", false], ["Let's work on the deck after the first close", "", false],
+      ["Ready to work on the Northwind deck", "", false], ["Start the deck for Northwind", "", false], ["Let's review their deck", "", false],
+      ["Re: Ready to work on the deck", "", false], ["Fwd: Start the deck", "", false], ["Deck", "", false], ["Lunch", "Did you see the deck Northwind sent?", false],
+    ] as const) expect(start(subject, body, pdf), `${subject} / ${body}`).toBeNull();
+    // What else they wrote is kept, minus the greeting, the start sentence and the sign-off.
+    expect(start("Deck", "Wren, I'm ready to work on the deck. Page 3 should lead with the fund size.\n\nThanks,\nScooter")!.words).toBe("Page 3 should lead with the fund size.");
+    expect(start("Ready to work on the deck", "Thanks,\nSequoia")!.words).toBe("");
+  });
+
+  it("a partner's email joins the open round (never a second one), then after the final PDF starts the next round from the approved deck", async () => {
+    const { recordReply, deckPreviewTick, openPreview } = await import("../src/worker/services/deckPreview");
+    const last = () => sends[sends.length - 1]!;
+    const round3 = (await openPreview(env, FUND))!;
+    const cards = await count("SELECT COUNT(*) AS n FROM work_card");
+
+    // ROUND 3 IS OPEN AND EMAILED: Scooter's email starts nothing new. Both get the link again on that thread, and his words are a request.
+    let before = sends.length;
+    await partnerEmails(SCOOTER_FROM, "scooter", INTAKE_MAILBOX, "Ready to work on the deck", "Wren, I'm ready to work on the deck. Page 3 should lead with the fund size.\n\nThanks,\nScooter");
+    expect(await count("SELECT COUNT(*) AS n FROM deck_preview")).toBe(3);
+    expect(sends.length, "the asker never gets silence").toBe(before + 1);
+    expect(last().to).toBe("scooter@westpeek.ventures,sequoia@westpeek.ventures");
+    expect(last().headers["In-Reply-To"]).toBe(threadReference(round3.thread_token!));
+    expect(last().text).toContain("Scooter asked to work on the deck. Round 3 is already open, so we carry on in the same preview: https://os.joinwestpeek.com/api/deck/preview");
+    expect(last().text).toContain("Scooter asked:\n\"Page 3 should lead with the fund size.\"");
+    expect(await env.WP_OS_DB.prepare("SELECT preview_id, state, by_whom FROM deck_preview_change WHERE said = 'Page 3 should lead with the fund size.'").first()).toMatchObject({ preview_id: round3.id, state: "PENDING", by_whom: "Scooter" });
+    expect(await count("SELECT COUNT(*) AS n FROM work_card"), "no card, no Porter, no chief of staff in between").toBe(cards);
+
+    // A founder's deck from the same partner, in the same words but with a PDF, is NOT a start: it goes where it always went.
+    before = sends.length;
+    await partnerEmails(SCOOTER_FROM, "scooter", INTAKE_MAILBOX, "Ready to work on the deck", "Northwind sent this, take a look.", true);
+    expect(await count("SELECT COUNT(*) AS n FROM deck_preview_change WHERE kind = 'REQUEST' AND state = 'PENDING'")).toBe(1);
+    expect(await count("SELECT COUNT(*) AS n FROM work_card")).toBe(cards + 1);
+
+    // Finish round 3. A PDF too big for the OS to file is a wait the partners hear about once, never a sweep that dies unsaid.
+    await deckPreviewTick(env, { editor: async () => ({ changes: [], cannot: ["the fund size is a record; it already leads page 3"] }), launch: fakeLaunch });
+    await recordReply(env, round3.id, "approved", "scooter@westpeek.ventures");
+    await recordReply(env, round3.id, "approved", "sequoia@westpeek.ventures");
+    bigPdf = true;
+    await deckPreviewTick(env, { launch: fakeLaunch });
+    bigPdf = false;
+    expect(last().text).toContain("Scooter and Sequoia both approved the deck. I couldn't make the PDF yet: the PDF is too big for the OS to file (over 5 MB).");
+    expect(await env.WP_OS_DB.prepare("SELECT version_no FROM deck_version WHERE state = 'CURRENT'").first()).toMatchObject({ version_no: 2 });
+    await deckPreviewTick(env, { launch: fakeLaunch });
+    expect(await env.WP_OS_DB.prepare("SELECT version_no FROM deck_version WHERE state = 'CURRENT'").first()).toMatchObject({ version_no: 3 });
+    expect(last().attachments.map((a) => a.filename)).toEqual(["West-Peek-Ventures-Fund-I-deck-v3.pdf"]);
+
+    // AFTER THE FINAL PDF, Sequoia writes to her chief of staff's address: round 4 starts from the approved deck, and the sweep emails both.
+    before = sends.length;
+    await partnerEmails(SEQUOIA_FROM, "sequoia", "wren@joinwestpeek.com", "Deck", "Hi Wren,\nLet's work on our deck.\nSequoia");
+    const round4 = (await openPreview(env, FUND))!;
+    expect(round4.round_no).toBe(4);
+    expect(round4.slides_json).toBe((await env.WP_OS_DB.prepare("SELECT slides_json FROM deck_preview WHERE id = ?1").bind(round3.id).first<{ slides_json: string }>())!.slides_json);
+    expect(sends.length, "the handler records; the sweep sends").toBe(before);
+    await deckPreviewTick(env, { launch: fakeLaunch });
+    expect(sends.length).toBe(before + 1);
+    expect(last().subject).toBe("Our Fund I deck: preview round 4");
+    expect(last().text).toContain("Sequoia asked for more work on our Fund I deck, so the approved deck (v3) is back in the preview: https://os.joinwestpeek.com/api/deck/preview");
+    expect(last().text).not.toContain("asked:\n");
+    expect(await env.WP_OS_DB.prepare("SELECT version_no FROM deck_version WHERE state = 'CURRENT'").first(), "v3 stays current until round 4 is approved").toMatchObject({ version_no: 3 });
   });
 });

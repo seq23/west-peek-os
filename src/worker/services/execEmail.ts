@@ -350,6 +350,8 @@ export async function sendPartnersLetter(
     actorId?: string;
     replyOnThread?: string | null;
     events?: { sent: string; notSent: string };
+    /** 11 Nov 2026: the approved final deck PDF, to the two partners only (services/deckPreview.ts finishDeck). */
+    attachments?: readonly EmailAttachment[];
   },
 ): Promise<PartnerEmailOutcome & { recipients: string[] }> {
   const to = [...new Set(input.to.map((a) => a.trim().toLowerCase()))];
@@ -384,7 +386,7 @@ export async function sendPartnersLetter(
     const headers = input.replyOnThread
       ? { References: `${threadReference(input.replyOnThread)} ${thread.headers.References}`, "In-Reply-To": threadReference(input.replyOnThread) }
       : thread.headers;
-    result = await transport(env, { to, subject: input.subject, text: input.text.trim(), html: plainHtml(input.text), from: sender.from, headers });
+    result = await transport(env, { to, subject: input.subject, text: input.text.trim(), html: plainHtml(input.text), from: sender.from, headers, ...(input.attachments?.length ? { attachments: input.attachments } : {}) });
   } catch (err) {
     result = { sent: false, provider: "resend", detail: err instanceof Error ? err.message : String(err), provider_message_id: null };
   }
