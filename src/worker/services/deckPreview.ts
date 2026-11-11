@@ -372,7 +372,15 @@ const defaultEditor = (env: Env): DeckEditor => async ({ slides, said, assets })
     actor,
     inputs: [prompt],
     sensitivity: "INTERNAL" as never,
-    budgetContext: { interpretation: true, expectedOutputTokens: 12_000 },
+    /*
+     * HER MODEL ORDER FOR DECK EDITS (owner, 11 Nov 2026): Claude first, then OpenAI, then the free
+     * OpenRouter and Gemini lanes. `seatFirst` leads on her Claude Code seat, then Codex on her
+     * ChatGPT plan; `publicModelApproved` is what lets a free lane follow them (she chose "Free
+     * Gemini via OpenRouter" over paid Claude as the third step, knowing a free lane may train on
+     * the deck text). Text carrying an LP or deal-term marker is still refused to those lanes by
+     * `contentClass`, whatever this says.
+     */
+    budgetContext: { interpretation: true, expectedOutputTokens: 12_000, seatFirst: true, publicModelApproved: true },
     routing: { category: "RESEARCH", taskClass: "deck_editing" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) return null;
