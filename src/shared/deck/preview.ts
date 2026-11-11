@@ -7,7 +7,7 @@ import { DECK_CSS, PAGE } from "./render";
  * Owner, 26 Oct 2026: stop producing a PDF per change. Preston builds a preview (every slide as a
  * page, a short "what changed" note at the top), ONE email per round goes to both partners, they
  * reply in plain words, he applies it to the SAME preview and says what changed on the thread, and
- * "approved" from either partner is what makes the final PDF.
+ * "approved" from BOTH partners is what makes the final PDF (her ruling, 11 Nov 2026; it was either).
  *
  * Pure: the Worker (services/deckPreview.ts) reads the rows and the pictures and calls this.
  */
@@ -108,19 +108,19 @@ export function renderPreviewPage(input: PreviewPageInput): string {
     input.state === "FINAL"
       ? `Approved. The final PDF is made${input.finalLink ? ` — <a href="${esc(input.finalLink)}">open it on Fund strategy</a>` : ""}.`
       : input.state === "APPROVED"
-        ? "Approved. Preston is making the final PDF now."
+        ? "Approved by both of you. Preston is making the final PDF now."
         : input.state === "SUPERSEDED"
           ? "This round was closed without a final PDF."
           : input.hold
             ? "Not emailed yet. Sequoia is looking at it first."
             : input.sentAt
-              ? `Emailed to Scooter and Sequoia on ${esc(input.sentAt.slice(0, 10))}. Reply to that email with any change, or with “approved”.`
+              ? `Emailed to Scooter and Sequoia on ${esc(input.sentAt.slice(0, 10))}. Reply to that email with any change, or with “approved”. The final PDF is made when both of you have approved.`
               : "Being emailed to Scooter and Sequoia.";
   const release =
     input.state === "OPEN" && input.hold
       ? `<form method="post" action="${PREVIEW_PATH}/release" onsubmit="return confirm('This emails the preview link to Scooter and Sequoia. Send it now?')">
            <button type="submit">Email this preview to Scooter and Sequoia</button>
-           <p class="hint">Nothing is sent until you tap this. After that, either of you replies to the email with changes, or with “approved”.</p>
+           <p class="hint">Nothing is sent until you tap this. After that, either of you replies to the email with changes, or with “approved”. The final PDF is made when both of you have approved.</p>
          </form>`
       : "";
   const history = input.history.length

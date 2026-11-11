@@ -17,6 +17,7 @@ import { EMAIL_TRIGGERS, INTAKE_MAILBOX, NO_TRIGGER_ROUTE, ROUTING_EMPLOYEE, str
 import { applyReplyDecision } from "../services/packetReplyDecision";
 import { writtenAndQuoted } from "../../shared/intake/replyBody";
 import { steerFromReply } from "../services/emailThread";
+import { fundDeckStart } from "../../shared/deck/start";
 
 /**
  * Mail arriving at the firm's machine inbox.
@@ -267,7 +268,7 @@ export interface InboundOptions {
 
 /** What a non-card handler in the door did with a message. */
 export interface DoorHandled {
-  by: "tlc_draft_reply" | "tlc_brand_reply" | "tlc_brand_reply_approval" | "tlc_send_pause" | "packet_decision" | "clarification" | "firm_self_test";
+  by: "tlc_draft_reply" | "tlc_brand_reply" | "tlc_brand_reply_approval" | "tlc_send_pause" | "packet_decision" | "clarification" | "firm_self_test" | "deck_start";
   ref: string | null;
   detail: string;
 }
@@ -1321,6 +1322,31 @@ async function handleInboundEmailOnce(
    * with the failure written on it, exactly like any other unroutable email.
    */
   let assignmentCardId: string | null = null;
+
+  /*
+   * "I'M READY TO WORK ON THE DECK" STARTS THE DECK ROUND, GUARANTEED (owner, 11 Nov 2026).
+   *
+   * Her workflow's first step: either partner emails the OS, or their chief of staff, and Preston
+   * emails both partners the preview link. Left to the assignment below, that is Porter → the chief
+   * of staff → maybe Preston: a model's judgement three times over. So the words are read here by
+   * `fundDeckStart` (pure; no model), only for an authenticated partner's own untagged, unforwarded
+   * message with nothing attached. Anything it is not sure of falls through to the assignment
+   * exactly as before. Recorded now; the round's email and any edit are the sweep's work.
+   */
+  if (summary.unrouted && authority.isAssignment && !origin?.from) {
+    const start = fundDeckStart({ subject, body: textBodyOf(raw), hasAttachment: /^content-disposition:\s*attachment/im.test(raw) || /^content-type:\s*application\/pdf/im.test(raw) });
+    if (start) {
+      const { startDeckFromEmail } = await import("../services/deckPreview");
+      const out = await startDeckFromEmail(env, { partnerAddress: authority.partnerAddress!, words: start.words });
+      await appendEvent(env, {
+        eventType: "inbound_email.received", actorType: "system", actorId: "inbound_email", objectType: "inbound_email",
+        objectId: `${message.from}:${subject}`.slice(0, 200), firmScope,
+        payload: { from: sender, to: message.to, subject, triggers: [], routed: [], mailbox: INTAKE_MAILBOX, deck_start: out.outcome, deck_preview: out.previewId, detail: out.detail, stored: kept.key },
+      });
+      options.onHandled?.({ by: "deck_start", ref: out.previewId, detail: out.detail });
+      return;
+    }
+  }
 
   if (summary.unrouted && authority.isAssignment) {
     assignmentCardId = await openAssignmentCard(env, {

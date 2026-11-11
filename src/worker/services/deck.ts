@@ -50,6 +50,14 @@ import {
  * is written and has no later version to disagree with, so pushing it is right. A deck, a policy, a
  * report that gets superseded — those are linked, never attached.
  *
+ * ONE EXCEPTION, HERS, 11 NOV 2026: "PDF should arrive as attachment and a link". The APPROVED FINAL
+ * PDF — and only that — goes to the two Managing Partners on the round's thread as a file as well as
+ * the link (deckPreview.ts `finishDeck`). The reasoning above still holds and is why the exception is
+ * this narrow: the OS copy is the one current deck, and the attachment is a copy of that approved
+ * version, named with its version number (`West-Peek-Ventures-Fund-I-deck-v19.pdf`) so a forwarded
+ * file always says which version it is. Previews, proposals and every other deck notice stay
+ * link-only, and nobody but the two partners is ever sent the file.
+ *
  * PROVENANCE IS A FIRST-CLASS FIELD. `UPLOADED` is a partner exporting from Canva; `BUILT` is an
  * employee rendering from records. They are different kinds of document and a reader should never
  * have to guess: only a BUILT version can promise its figures match the OS.
