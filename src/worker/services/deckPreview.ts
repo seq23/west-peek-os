@@ -13,6 +13,7 @@ import { DECK_SLIDES, type Slide } from "../../shared/deck/definition";
 import { MEASURE_OVERFLOW_JS, renderDeckHtml, renderDeckPages, type DeckAssets } from "../../shared/deck/render";
 import { PREVIEW_URL, checkSlides, isApproval, renderPreviewPage, typedFigures } from "../../shared/deck/preview";
 import { PARTNERS, partnerByEmail } from "../../shared/registry/partners";
+import { chiefOfStaffFor } from "../../shared/work/chiefOfStaff";
 import { OUTBOUND_ATTACHMENTS_MAX_BYTES, attachmentsBytes, type EmailAttachment } from "../effects/emailTransport";
 
 /**
@@ -694,6 +695,53 @@ export async function deckPreviewTick(env: Env, deps: { editor?: DeckEditor; lau
     notes.push(sent.sent ? `deck preview round ${open.round_no} ${sent.reason}` : `deck preview not emailed: ${sent.reason}`);
   }
   return notes.join(" · ");
+}
+
+// ── The process note, once ────────────────────────────────────────────────────────────────────
+
+export const PROCESS_NOTE_SUBJECT = "How we work on the Fund I deck from now on";
+const PROCESS_NOTE_EVENT = "deck_preview.process_note_sent";
+
+/**
+ * The deck process in the partners' own five steps, with the exact words that start a round and
+ * finish one, and who each partner's chief of staff is (owner's ask, 11 Nov 2026). The start
+ * sentence quoted here is checked against the real matcher by the test, so the note cannot
+ * promise words the door does not take.
+ */
+export const PROCESS_NOTE_START_WORDS = "Ready to work on the deck";
+
+export function processNoteText(): string {
+  const staff = PARTNERS.map((p) => `- ${p.firstName}: ${chiefOfStaffFor(p.firstName)}, ${chiefOfStaffFor(p.firstName).toLowerCase()}@joinwestpeek.com`).join("\n");
+  return [
+    "Hi Scooter and Sequoia,",
+    "Here is how we work on the Fund I deck from now on, start to finish.",
+    `1. Start. Either of you emails os@joinwestpeek.com, or your chief of staff, and writes: "${PROCESS_NOTE_START_WORDS}." Send it as a new email from your West Peek address, with nothing attached. "Let's work on the deck" and "Start the deck" work too.`,
+    `2. The link. I email you both one link to the latest deck: ${PREVIEW_URL}`,
+    "3. Your changes. Either of you replies to that email in plain words, for example \"page 4 should say...\". I update the same link and reply with what I changed.",
+    "4. The PDF. When the deck is right, each of you replies with one word: approved. I make the PDF only when both of you have said it. If the deck changes after one of you approves, I ask you both again. The PDF comes attached, with a link to the same file in the OS.",
+    `5. More work later. Reply to the PDF email with your change, or send "${PROCESS_NOTE_START_WORDS}" again. The approved deck goes back into the link and we carry on from step 2.`,
+    `Your chiefs of staff:\n${staff}\nBoth can also be reached at os@joinwestpeek.com.`,
+    SIGN_OFF,
+  ].join("\n\n");
+}
+
+/**
+ * Sent ONCE, to both partners, tied to the latest preview so a reply to it is a deck reply. A
+ * failed send records nothing and is tried again on the next sweep; with no preview yet it waits.
+ */
+export async function sendProcessNoteOnce(env: Env): Promise<string> {
+  const done = await env.WP_OS_DB.prepare("SELECT 1 AS x FROM event_record WHERE event_type = ?1 LIMIT 1").bind(PROCESS_NOTE_EVENT).first<{ x: number }>();
+  if (done) return "";
+  const fund = await env.WP_OS_DB.prepare("SELECT id FROM fund LIMIT 1").first<{ id: string }>();
+  const p = fund ? ((await openPreview(env, fund.id)) ?? (await latestPreview(env, fund.id))) : null;
+  if (!p) return "deck process note waits: no deck preview yet";
+  const out = await sendPartnersLetter(env, {
+    to: previewRecipients(), employee: DECK_OWNER, subject: PROCESS_NOTE_SUBJECT, text: processNoteText(),
+    objectType: "deck_preview", objectId: p.id, firmScope: p.firm_scope,
+  });
+  if (!out.sent) return `NAMED STOP [DECK_PROCESS_NOTE_NOT_SENT] ${out.reason}`;
+  await appendEvent(env, { eventType: PROCESS_NOTE_EVENT, actorType: "system", actorId: "aie_preston", objectType: "deck_preview", objectId: p.id, firmScope: p.firm_scope, payload: { to: out.recipients } });
+  return `deck process note emailed to ${out.recipients.join(" and ")}`;
 }
 
 // ── HTTP ──────────────────────────────────────────────────────────────────────────────────────
