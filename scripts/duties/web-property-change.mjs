@@ -67,7 +67,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { CLOUDFLARE_ACCOUNT_ID, classify, proofLine, readRequests } from "./lib/pages-delivery.mjs";
 import { VAULT_INJECTED_VAR, claudeChildEnv, envForRepoRun, strippedNote, vaultLookup } from "../lib/vault-env.mjs";
-import { plainText, privateDocsIn, privateProof, privateSentenceIn } from "./private-proof.mjs";
+import { plainText, privateDocsIn, privateProof, privateSentenceIn } from "../lib/private-proof.mjs";
 import { admittedScripts, constraintsIn, generateRunbook, hostFromRoutes, isProductionRun, productionAsked, withPorterMayRun, likelySecrets, porterMayRun, readWranglerJson, readWranglerToml, runbookSecretNames, secretNamesInSource, vendorPageFor } from "./lib/runbook.mjs";
 import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
 import { CODEX_BUILD_NOTE, codexExecArgs, codexSeatUsable, finishCodexBuild, soonestReset } from "../lib/codex-seat.mjs";

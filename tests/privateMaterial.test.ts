@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { privateMaterialConstraint, privateMaterialSentence } from "../src/shared/intake/privateMaterial";
-import { PASSAGE_WORDS, privateDocsIn, privateProof, privateSentenceIn } from "../scripts/duties/private-proof.mjs";
+import { PASSAGE_WORDS, privateDocsIn, privateProof, privateSentenceIn } from "../scripts/lib/private-proof.mjs";
 
 /**
  * #357 (13 Nov 2026): a partner's "keep this private" in a build request rides on the job as a standing constraint and
