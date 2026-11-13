@@ -116,39 +116,75 @@ function onceLog(key, line, log) {
   log(line);
 }
 
+/**
+ * OFF MAIN IS NOT A REASON TO STOP UPDATING (13 Nov 2026, #355). The checkout sat on a merged side
+ * branch from 30 Oct; this function said "not updating it" once in a log nobody reads and the Mac
+ * ran 30 Oct code for two weeks, 42 commits behind. So a clean checkout that is off main is put
+ * back on main when idle (the side branch keeps its commits: nothing is lost) and then
+ * fast-forwarded as before. What this cannot fix by itself — uncommitted changes, a main with
+ * commits origin/main lacks, a detached HEAD holding commits nothing else has, a checkout or merge
+ * that fails — comes back as `stuck`, which the heartbeat carries to the Worker's health board, and
+ * the board tells the partners. A runner that cannot update is not working (Rule 0).
+ */
 export function pullMainIfClean(repoRoot = REPO_ROOT, git = (args) => runGit(repoRoot, args), log = console.log) {
+  const stuck = (reason, key, line) => {
+    onceLog(key, line, log);
+    return { updated: false, reason, stuck: reason };
+  };
   const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]);
   if (!branch.ok) return { updated: false, reason: "no_git" };
-  if (branch.out !== "main") {
-    onceLog(`branch:${branch.out}`, `the checkout at ${repoRoot} is on ${branch.out}, not main; not updating it — new code reaches this claimer only from main`, log);
-    return { updated: false, reason: "not_main" };
-  }
   const status = git(["status", "--porcelain", "--untracked-files=no"]);
   if (!status.ok || status.out !== "") {
-    onceLog("dirty", `the checkout at ${repoRoot} has uncommitted changes; not updating it until it is clean`, log);
-    return { updated: false, reason: "dirty" };
+    return stuck("dirty", "dirty", `the checkout at ${repoRoot} has uncommitted changes; not updating it until it is clean`);
   }
   const fetched = git(["fetch", "--quiet", "origin", "main"]);
   if (!fetched.ok) {
     onceLog("fetch", `could not fetch origin main (${fetched.out.split("\n")[0]}); will try again when idle`, log);
     return { updated: false, reason: "fetch_failed" };
   }
+  let returned = false;
+  if (branch.out !== "main") {
+    // A detached HEAD is the one place a commit can live with no branch holding it.
+    if (branch.out === "HEAD" && !git(["merge-base", "--is-ancestor", "HEAD", "origin/main"]).ok) {
+      return stuck("detached", "detached", `the checkout at ${repoRoot} is on a detached HEAD with commits origin/main does not have; not moving it`);
+    }
+    const switched = git(["checkout", "--quiet", "main"]);
+    if (!switched.ok) {
+      return stuck("checkout_failed", `checkout:${branch.out}`, `the checkout at ${repoRoot} is on ${branch.out} and could not be returned to main (${switched.out.split("\n")[0]})`);
+    }
+    returned = true;
+    log(`returned ${repoRoot} from ${branch.out} to main; ${branch.out} keeps its commits`);
+  }
   const head = git(["rev-parse", "HEAD"]);
   const remote = git(["rev-parse", "origin/main"]);
   if (!head.ok || !remote.ok) return { updated: false, reason: "no_git" };
-  if (head.out === remote.out) return { updated: false, reason: "current" };
+  if (head.out === remote.out) return { updated: returned, reason: returned ? "returned_to_main" : "current" };
   const ff = git(["merge-base", "--is-ancestor", "HEAD", "origin/main"]);
   if (!ff.ok) {
-    onceLog(`diverged:${head.out}`, `the checkout at ${repoRoot} has commits origin/main does not; not updating it — a fast-forward is the only move this claimer makes`, log);
-    return { updated: false, reason: "diverged" };
+    return stuck("diverged", `diverged:${head.out}`, `the checkout at ${repoRoot} has commits on main that origin/main does not; not updating it — a fast-forward is the only move this claimer makes`);
   }
   const merged = git(["merge", "--ff-only", "--quiet", "origin/main"]);
   if (!merged.ok) {
-    onceLog(`merge:${remote.out}`, `could not fast-forward to ${remote.out.slice(0, 10)} (${merged.out.split("\n")[0]})`, log);
-    return { updated: false, reason: "merge_failed" };
+    return stuck("merge_failed", `merge:${remote.out}`, `could not fast-forward to ${remote.out.slice(0, 10)} (${merged.out.split("\n")[0]})`);
   }
   log(`fast-forwarded ${repoRoot} from ${head.out.slice(0, 10)} to ${remote.out.slice(0, 10)}`);
   return { updated: true, reason: "fast_forwarded" };
+}
+
+/**
+ * What the heartbeat says about this runner's code. `CODE_STUCK_MARK` is read by the Worker's
+ * health board (`mac_code` in src/worker/services/health.ts), which is what reaches a partner.
+ * A fetch that failed (offline) or a missing git says nothing new, so the last known state stands
+ * and the board does not flap between "down" and "working again" with the network.
+ */
+export const CODE_STUCK_MARK = "code-stuck:";
+let codeStuck = null;
+export function nextCodeStuck(previous, result) {
+  if (result?.reason === "fetch_failed" || result?.reason === "no_git") return previous ?? null;
+  return result?.stuck ?? null;
+}
+export function agentVersionFor(stuck) {
+  return stuck ? `jobs-1 ${CODE_STUCK_MARK}${stuck}` : "jobs-1";
 }
 
 const execFileAsync = promisify(execFile);
@@ -494,7 +530,7 @@ async function cycle() {
   await call("/api/subscription-seats/heartbeat", {
     device_id: DEVICE_ID,
     hostname: hostname(),
-    agent_version: "jobs-1",
+    agent_version: agentVersionFor(codeStuck),
     seats: [SEAT],
     capabilities: ["local_job", ...Object.keys(DUTIES).map((k) => k.toLowerCase())],
   });
@@ -564,7 +600,7 @@ async function main() {
     if (ONCE) return;
     // IDLE: nothing is running, so this is the one safe moment to pick up new code.
     if (!worked) {
-      pullMainIfClean();
+      codeStuck = nextCodeStuck(codeStuck, pullMainIfClean());
       restartIfRepoMoved(STARTED_HEAD);
       await new Promise((r) => setTimeout(r, HEARTBEAT_INTERVAL_S * 1000));
     }
@@ -602,15 +638,17 @@ function selfTest() {
     ["the idle branch of the loop — and only it — checks for new code, against the HEAD recorded at start", () => {
       const src = readFileSync(fileURLToPath(import.meta.url), "utf8");
       const loop = src.slice(src.indexOf("const STARTED_HEAD = repoHead();"), src.indexOf("function selfTest("));
-      // The pull comes first, so a fast-forward in this idle moment is seen by the HEAD check right after it.
-      return /const STARTED_HEAD = repoHead\(\);/.test(loop) && /if \(!worked\) \{\s*pullMainIfClean\(\);\s*restartIfRepoMoved\(STARTED_HEAD\);/.test(loop) && (loop.match(/restartIfRepoMoved\(/g) ?? []).length === 1 && (loop.match(/pullMainIfClean\(/g) ?? []).length === 1;
+      // The pull comes first, so a fast-forward in this idle moment is seen by the HEAD check right after it;
+      // and what the pull could not do is kept for the next heartbeat.
+      return /const STARTED_HEAD = repoHead\(\);/.test(loop) && /if \(!worked\) \{\s*codeStuck = nextCodeStuck\(codeStuck, pullMainIfClean\(\)\);\s*restartIfRepoMoved\(STARTED_HEAD\);/.test(loop) && (loop.match(/restartIfRepoMoved\(/g) ?? []).length === 1 && (loop.match(/pullMainIfClean\(/g) ?? []).length === 1;
     }],
-    ["idle self-update: only a clean main that is a fast-forward behind is merged; anything else is left alone and said once", () => {
+    ["idle self-update (#355): a clean checkout off main returns to main and fast-forwards; dirty, diverged or unmovable is left alone, said once, and comes back as a named stop", () => {
       const fake = (state) => (args) => {
         const k = args.join(" ");
         if (k === "rev-parse --abbrev-ref HEAD") return { ok: true, out: state.branch };
         if (k.startsWith("status")) return { ok: true, out: state.dirty ? " M x" : "" };
-        if (k.startsWith("fetch")) return { ok: true, out: "" };
+        if (k.startsWith("fetch")) return { ok: state.offline !== true, out: "" };
+        if (k === "checkout --quiet main") { if (state.checkoutFails) return { ok: false, out: "error: would be overwritten" }; state.branch = "main"; state.switched = true; return { ok: true, out: "" }; }
         if (k === "rev-parse HEAD") return { ok: true, out: state.head };
         if (k === "rev-parse origin/main") return { ok: true, out: state.remote };
         if (k.startsWith("merge-base")) return { ok: state.ff, out: "" };
@@ -620,14 +658,41 @@ function selfTest() {
       const lines = [];
       const log = (l) => lines.push(l);
       const clean = { branch: "main", dirty: false, head: "a", remote: "b", ff: true };
+      const sideBranch = { branch: "fix/x", dirty: false, head: "a", remote: "b", ff: true };
+      const sideCurrent = { branch: "fix/x", dirty: false, head: "b", remote: "b", ff: true };
+      const detachedOld = { branch: "HEAD", dirty: false, head: "a", remote: "b", ff: true };
       const dirty = { branch: "main", dirty: true, head: "a", remote: "b", ff: true };
-      const other = { branch: "fix/x", dirty: false, head: "a", remote: "b", ff: true };
+      const dirtySide = { branch: "fix/x", dirty: true, head: "a", remote: "b", ff: true };
       const diverged = { branch: "main", dirty: false, head: "a", remote: "b", ff: false };
+      const detachedOwn = { branch: "HEAD", dirty: false, head: "a", remote: "b", ff: false };
+      const blocked = { branch: "fix/x", dirty: false, head: "a", remote: "b", ff: true, checkoutFails: true };
+      const offline = { branch: "fix/x", dirty: false, head: "a", remote: "b", ff: true, offline: true };
       const ok = pullMainIfClean("/r", fake(clean), log).updated === true && clean.merged === true;
-      const leftAlone = [dirty, other, diverged].every((st) => pullMainIfClean("/r", fake(st), log).updated === false && !st.merged);
+      const back = [sideBranch, detachedOld].every((st) => { const r = pullMainIfClean("/r", fake(st), log); return r.updated === true && r.stuck === undefined && st.switched === true && st.merged === true; });
+      const backOnly = pullMainIfClean("/r", fake(sideCurrent), log);
+      const stops = [[dirty, "dirty"], [dirtySide, "dirty"], [diverged, "diverged"], [detachedOwn, "detached"], [blocked, "checkout_failed"]]
+        .every(([st, why]) => { const r = pullMainIfClean("/r", fake(st), log); return r.updated === false && r.stuck === why && !st.merged && !st.switched; });
+      const away = pullMainIfClean("/r", fake(offline), log);
       const before = lines.length;
       pullMainIfClean("/r", fake(dirty), log);
-      return ok && leftAlone && lines.length === before;
+      return ok && back && backOnly.updated === true && backOnly.reason === "returned_to_main" && sideCurrent.switched === true && !sideCurrent.merged &&
+        stops && away.stuck === undefined && !offline.switched && lines.length === before;
+    }],
+    ["a named stop rides on the heartbeat until the checkout is fixed: offline keeps it, an update clears it (#355)", () => {
+      const src = readFileSync(fileURLToPath(import.meta.url), "utf8");
+      const health = readFileSync(path.join(REPO_ROOT, "src", "worker", "services", "health.ts"), "utf8");
+      return agentVersionFor(null) === "jobs-1" && agentVersionFor("dirty") === `jobs-1 ${CODE_STUCK_MARK}dirty` && agentVersionFor("checkout_failed").length <= 60 &&
+        nextCodeStuck(null, { reason: "dirty", stuck: "dirty" }) === "dirty" && nextCodeStuck("dirty", { reason: "fetch_failed" }) === "dirty" && nextCodeStuck("dirty", { reason: "no_git" }) === "dirty" &&
+        nextCodeStuck("dirty", { reason: "current" }) === null && nextCodeStuck("diverged", { reason: "fast_forwarded", updated: true }) === null &&
+        /agent_version: agentVersionFor\(codeStuck\)/.test(src.slice(src.indexOf("async function cycle()"))) && health.includes(`%${CODE_STUCK_MARK}%`);
+    }],
+    ["the seat claimer and the Meet listener restart on new code too, only when idle and never mid-call (#355)", () => {
+      const seat = readFileSync(path.join(REPO_ROOT, "scripts", "claimer", "subscription-seat-claimer.mjs"), "utf8");
+      const meet = readFileSync(path.join(REPO_ROOT, "scripts", "meet", "live-listener.mjs"), "utf8");
+      const seatLoop = seat.slice(seat.indexOf("const STARTED_HEAD = repoHead();"), seat.indexOf("function selfTest("));
+      const meetLoop = meet.slice(meet.indexOf("const STARTED_HEAD = repoHead();"));
+      const plists = ["seat-claimer", "meet-listener"].every((n) => /<key>KeepAlive<\/key>\s*<true\/>/.test(readFileSync(path.join(REPO_ROOT, "deployment", "launchd", `ventures.westpeek.os.${n}.plist`), "utf8").replace(/<!--[\s\S]*?-->/g, "")));
+      return /if \(!worked\) \{\s*restartIfRepoMoved\(STARTED_HEAD\);/.test(seatLoop) && /if \(out\.active === 0 && headMoved\(STARTED_HEAD, repoHead\(\)\)\)/.test(meetLoop) && /process\.exit\(EXIT_NEW_CODE\)/.test(meetLoop) && plists;
     }],
     ["launchd restarts the claimer on ANY exit (KeepAlive true), so a restart-for-new-code really restarts", () => {
       const plist = readFileSync(path.join(REPO_ROOT, "deployment", "launchd", "ventures.westpeek.os.local-jobs.plist"), "utf8").replace(/<!--[\s\S]*?-->/g, "");

@@ -555,6 +555,38 @@ export async function runHealthChecks(env: Env): Promise<HealthCheck[]> {
     page: "cockpit",
   });
 
+  /*
+   * ── The Mac's own code (#355) ──
+   * The job runner keeps its checkout current by itself. When it cannot (uncommitted changes, a
+   * main that diverged, a branch it could not leave) it says so on its heartbeat, and until 13 Nov
+   * 2026 that was a log line: the Mac ran two-week-old code and nothing told anybody. DOWN, so the
+   * escalation tells both partners once and says when it clears. The mark is the claimer's
+   * `CODE_STUCK_MARK` (scripts/claimer/local-job-claimer.mjs), whose self-test holds the two together.
+   */
+  const stuckMac = await one<{ device_id: string; agent_version: string }>(
+    "subscription_seat_device",
+    "SELECT device_id, agent_version FROM subscription_seat_device WHERE agent_version LIKE '%code-stuck:%' ORDER BY last_seen_at DESC LIMIT 1",
+  );
+  const stuckWhy = stuckMac?.agent_version.split("code-stuck:")[1]?.trim() ?? "";
+  const STUCK_WORDS: Record<string, string> = {
+    dirty: "its copy of the code has changes that were never saved to GitHub",
+    diverged: "its copy of the code has commits GitHub's main does not have",
+    detached: "its copy of the code is parked on commits no branch holds",
+    checkout_failed: "its copy of the code is on a side branch it could not leave",
+    merge_failed: "it could not apply the newest code",
+  };
+  checks.push({
+    key: "mac_code",
+    label: "Code updates on the Mac",
+    state: stuckMac ? "DOWN" : "OK",
+    reading: stuckMac
+      ? `the Mac's job runner is not picking up new code: ${STUCK_WORDS[stuckWhy] ?? `it reported "${stuckWhy}"`}`
+      : "no job runner reports being unable to update",
+    remedy: stuckMac
+      ? "Fixes landed since then are not running on the Mac. Ask Claude to clean up ~/GitHub/west-peek-os on the Mac (save or discard what is there, back on main); the runner updates itself within a minute of that."
+      : undefined,
+  });
+
   // Reported last so it names everything that failed above, and reported at all so a check that
   // could not run is never mistaken for a check that came back clean.
   if (unreadable.length > 0) {
