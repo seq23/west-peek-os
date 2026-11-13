@@ -2,7 +2,7 @@ import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { partnerByEmail } from "../../shared/registry/partners";
 import { answerBlock } from "./blocks";
-import { attachDriveFile } from "./driveShares";
+import { moveShareFiles } from "./driveShares";
 import { topicWords, withoutSignatures, type Candidate, type ClarificationRow, type RouteAs } from "./emailRouting";
 
 /**
@@ -25,13 +25,7 @@ export async function settleShare(env: Env, row: ClarificationRow, written: stri
   if ((claimed.meta?.changes ?? 0) === 0) return { routed: false, routeAs: null };
   let did: string;
   if (named) {
-    const files = (await env.WP_OS_DB.prepare("SELECT file_id, url, title, mime_type, shared_by, shared_at, text, read_error FROM card_drive_file WHERE work_card_id = ?1").bind(cardId).all<{ file_id: string; url: string; title: string; mime_type: string | null; shared_by: string | null; shared_at: string | null; text: string | null; read_error: string | null }>()).results ?? [];
-    for (const f of files) await attachDriveFile(env, named.cardId, { fileId: f.file_id, url: f.url, title: f.title, mimeType: f.mime_type, sharedBy: f.shared_by, sharedAt: f.shared_at, text: f.text, readError: f.read_error });
-    await env.WP_OS_DB.prepare(
-      "UPDATE work_card SET state = 'CANCELLED', merged_into_card_id = ?2, next_action = NULL, block_nag_at = NULL, lease_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
-    )
-      .bind(cardId, named.cardId)
-      .run();
+    await moveShareFiles(env, cardId, named.cardId);
     did = "attached";
   } else if (/^(?:just\s+)?(?:file|keep|store|save)\b|^nothing\b|^drop\b/.test(first)) {
     await env.WP_OS_DB.prepare(

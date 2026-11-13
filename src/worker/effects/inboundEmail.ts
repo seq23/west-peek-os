@@ -11,7 +11,7 @@ import { askWhichCard, withoutSignatures, type RouteAs } from "../services/email
 import { profileNotesIn, recordProfileNotes, refreshWorkingOn } from "../services/partnerProfile";
 import { threadTokensIn } from "../../shared/email/thread";
 import { driveShareNotice } from "../../shared/intake/driveShare";
-import { handleDriveShare } from "../services/driveShares";
+import { handleDriveShare, joinSharesNamedIn } from "../services/driveShares";
 import { openPortfolioUpdateCard } from "../services/portfolioReporting";
 import { EMAIL_TRIGGERS, INTAKE_MAILBOX, NO_TRIGGER_ROUTE, ROUTING_EMPLOYEE, strippedSubject, triggersIn, type EmailTrigger } from "../../shared/intake/emailTriggers";
 import { applyReplyDecision } from "../services/packetReplyDecision";
@@ -602,6 +602,19 @@ async function linkStoredMessage(env: Env, kept: KeptMessage, cardId: string | n
   await env.WP_OS_DB.prepare("UPDATE inbound_message SET work_card_id = ?2 WHERE id = ?1 AND work_card_id IS NULL")
     .bind(kept.rowId, cardId)
     .run();
+  /*
+   * #354: THE EMAIL THAT EXPLAINS A SHARE. This is the one place every path puts a message on a card,
+   * so it is where a partner's email that links a file he shared meets the "Shared by" question that
+   * share opened: joined to this card's job, nothing asked. The partner is the AUTHENTICATED one
+   * recorded on the stored message, never a name read out of it. Never throws into the door.
+   */
+  try {
+    if (!kept.text) return;
+    const who = await env.WP_OS_DB.prepare("SELECT json_extract(mail_authority_json, '$.partner') AS partner FROM inbound_message WHERE id = ?1").bind(kept.rowId).first<{ partner: string | null }>();
+    if (who?.partner) await joinSharesNamedIn(env, { cardId, partnerEmail: who.partner, text: textBodyOf(kept.text) });
+  } catch (err) {
+    console.error("joining a named share failed", err);
+  }
 }
 
 /**

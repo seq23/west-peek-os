@@ -8,7 +8,9 @@ import { handleInboundEmail } from "../src/worker/effects/inboundEmail";
 import { announceOutcome } from "../src/worker/services/workSweep";
 import { handleReingestStoredEmail } from "../src/worker/services/webPropertyChange";
 import { writeProfile } from "../src/worker/services/partnerProfile";
-import { driveFilesFor } from "../src/worker/services/driveShares";
+import { askHeldShareQuestions, driveFilesFor } from "../src/worker/services/driveShares";
+import { applyDriveWatchStatus, type DriveWatchRow } from "../src/worker/services/driveWatches";
+import { PARTNER_MATERIAL_GRACE_MINUTES } from "../src/shared/work/partnerPractices";
 import { cantPlaceEmail, shortSubject } from "../src/worker/services/emailRouting";
 import { driveShareNotice } from "../src/shared/intake/driveShare";
 import { lintExecEmail, renderExecEmail } from "../src/shared/email/execEmail";
@@ -77,6 +79,18 @@ async function reply(subject: string, body: string, inReplyTo: string): Promise<
   const headers = new Headers({ from: `Scooter Taylor <${SCOOTER}>`, to: "os@joinwestpeek.com", subject, "message-id": `<${messageId}>`, "authentication-results": GOOD_AUTH, "in-reply-to": inReplyTo, references: inReplyTo });
   await handleInboundEmail({ from: SCOOTER, to: "os@joinwestpeek.com", headers, raw: new Blob([bytes]).stream(), rawSize: bytes.byteLength }, env);
 }
+
+/** A new-subject email from Scooter, as the door receives it. */
+async function mail(subject: string, body: string): Promise<void> {
+  const messageId = `ask-${Date.now()}-${++seq}@mail.gmail.com`;
+  const raw = [`From: Scooter Taylor <${SCOOTER}>`, "To: os@joinwestpeek.com", `Subject: ${subject}`, `Message-ID: <${messageId}>`, `Authentication-Results: ${GOOD_AUTH}`, "", body].join("\r\n");
+  const bytes = new TextEncoder().encode(raw);
+  const headers = new Headers({ from: `Scooter Taylor <${SCOOTER}>`, to: "os@joinwestpeek.com", subject, "message-id": `<${messageId}>`, "authentication-results": GOOD_AUTH });
+  await handleInboundEmail({ from: SCOOTER, to: "os@joinwestpeek.com", headers, raw: new Blob([bytes]).stream(), rawSize: bytes.byteLength }, env);
+}
+const GRACE_MS = PARTNER_MATERIAL_GRACE_MINUTES * 60_000;
+/** The sweep's clock, this long after now. */
+const later = (ms: number) => new Date(Date.now() + ms);
 
 const one = <T>(sql: string, ...b: unknown[]) => env.WP_OS_DB.prepare(sql).bind(...b).first<T>();
 const all = async <T>(sql: string, ...b: unknown[]) => (await env.WP_OS_DB.prepare(sql).bind(...b).all<T>()).results ?? [];
@@ -208,6 +222,13 @@ describe("a share matching none of his open jobs: a card for him with the file, 
     expect(card!.block_who, "waiting on HIM, not Sequoia").toBe("SCOOTER");
     expect(card!.block_nag_at, "the normal 24-hour reminder runs").not.toBeNull();
     expect((await driveFilesFor(env, card!.id)).map((f) => f.title)).toEqual(["Q4 Podcast Ideas"]);
+    // #354: nothing is asked while the email that explains it may still be on its way…
+    expect(sent.slice(sentBefore).length, "no question at the door").toBe(0);
+    expect(await askHeldShareQuestions(env, later(GRACE_MS - 60_000)), "nor one minute short of the window").toBe(0);
+    expect(sent.slice(sentBefore).length).toBe(0);
+    // …and when the window ends with nothing, the question goes: once.
+    expect(await askHeldShareQuestions(env, later(GRACE_MS + 1_000))).toBe(1);
+    expect(await askHeldShareQuestions(env, later(GRACE_MS + 120_000)), "never a second time").toBe(0);
     const mails = sent.slice(sentBefore);
     expect(mails.filter((m) => m.to === SEQUOIA).length).toBe(0);
     const asked = mails.filter((m) => m.to === SCOOTER);
@@ -229,12 +250,84 @@ describe("a share matching none of his open jobs: a card for him with the file, 
     driveText.set("1BudgetSheetAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "a,b");
     const sentBefore = sent.length;
     await share("Studio photos for later", "1BudgetSheetAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    await askHeldShareQuestions(env, later(GRACE_MS + 1_000));
     const asked = sent.slice(sentBefore).filter((m) => m.to === SCOOTER);
     expect(asked.length).toBe(1);
     const thread = await one<{ token: string }>("SELECT token FROM email_thread WHERE object_type = 'inbound_clarification' ORDER BY created_at DESC LIMIT 1");
     await reply("Re: Porter", "file", threadReference(thread!.token));
     const card = await one<{ state: string }>("SELECT state FROM work_card WHERE title = 'Shared by Scooter: Studio photos for later'");
     expect(card!.state).toBe("DONE");
+  });
+});
+
+/**
+ * FOLDERS AND FILES GET A GRACE PERIOD (owner ruling, 13 Nov 2026, #354). At 12:18Z a partner shared a
+ * folder with os@ and, seven seconds later, emailed the request that links it. The share matched no
+ * open job, so "What should I do with …?" had already gone when the email that answered it arrived.
+ */
+describe("a share and the email that explains it are one job, whichever comes first (#354)", () => {
+  const FOLDER = "1SiteFolderAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  const LATE = "1LateFolderAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  const ASKED = "1AskedFolderAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  const shareCard = (title: string) => one<{ id: string; state: string; merged_into_card_id: string | null }>("SELECT id, state, merged_into_card_id FROM work_card WHERE title = ?1", `Shared by Scooter: ${title}`);
+  const jobLinking = async (id: string) => (await one<{ work_card_id: string }>("SELECT work_card_id FROM card_drive_file f JOIN work_card c ON c.id = f.work_card_id WHERE f.file_id = ?1 AND c.state NOT IN ('DONE','CANCELLED')", id))?.work_card_id ?? null;
+
+  it("share first, then his email linking the folder: joined to that job, the share card merged, and no question ever sent", async () => {
+    await closeAll();
+    driveText.set(FOLDER, "brief.txt\nphotos/");
+    driveName.set(FOLDER, "Studio site materials");
+    const sentBefore = sent.length;
+    await share("Studio site materials", FOLDER);
+    const held = await shareCard("Studio site materials");
+    expect(held?.state, "the share waits on its own card").toBe("BLOCKED");
+    await mail("Studio site and dashboard", `Hey!\n\nPlease build the studio site on westpeekproductions.com. Everything is in this folder:\nhttps://drive.google.com/drive/folders/${FOLDER}?usp=sharing\n\nThanks`);
+    const job = await jobLinking(FOLDER);
+    expect(job, "the folder is on a live job").not.toBeNull();
+    expect(job).not.toBe(held!.id);
+    expect(await shareCard("Studio site materials")).toEqual({ id: held!.id, state: "CANCELLED", merged_into_card_id: job });
+    expect(await one("SELECT resolution, resolved_card_id FROM inbound_clarification WHERE card_id = ?1", held!.id)).toEqual({ resolution: "CARD", resolved_card_id: job });
+    // The window ends: there is nothing left to ask.
+    expect(await askHeldShareQuestions(env, later(GRACE_MS + 1_000))).toBe(0);
+    expect(sent.slice(sentBefore).filter((m) => /What should I do with/.test(m.subject + m.text)).length, "he is never asked what to do with it").toBe(0);
+  });
+
+  it("a question already sent is closed by his email the same way, with no further email about the share", async () => {
+    await closeAll();
+    driveText.set(ASKED, "notes");
+    driveName.set(ASKED, "Dashboard notes");
+    await share("Dashboard notes", ASKED);
+    expect(await askHeldShareQuestions(env, later(GRACE_MS + 1_000)), "the window ended first, so it was asked").toBe(1);
+    const held = await shareCard("Dashboard notes");
+    const sentBefore = sent.length;
+    await mail("Dashboard for the studio", `Hey!\n\nPlease add a dashboard page to westpeekproductions.com from these notes: https://docs.google.com/document/d/${ASKED}/edit\n\nThanks`);
+    const job = await jobLinking(ASKED);
+    expect(await shareCard("Dashboard notes")).toEqual({ id: held!.id, state: "CANCELLED", merged_into_card_id: job });
+    expect(sent.slice(sentBefore).filter((m) => /Dashboard notes/.test(m.subject) || /What should I do with/.test(m.text)).length).toBe(0);
+  });
+
+  it("his email first, then the share of the folder it links: attached to that job, no card and no question", async () => {
+    await closeAll();
+    driveText.set(LATE, "logo.png");
+    driveName.set(LATE, "Assets");
+    await mail("New landing page", `Hey!\n\nPlease build a landing page on westpeekproductions.com. The files are coming in this folder:\nhttps://drive.google.com/drive/folders/${LATE}\n\nThanks`);
+    const cardsBefore = (await one<{ n: number }>("SELECT COUNT(*) AS n FROM work_card"))!.n;
+    const sentBefore = sent.length;
+    await share("Assets", LATE);
+    expect((await one<{ n: number }>("SELECT COUNT(*) AS n FROM work_card"))!.n, "no 'Shared by' card").toBe(cardsBefore);
+    expect(await jobLinking(LATE), "the folder is on the job whose email named it").not.toBeNull();
+    expect(await askHeldShareQuestions(env, later(GRACE_MS + 1_000))).toBe(0);
+    expect(sent.slice(sentBefore).filter((m) => /What should I do with/.test(m.subject + m.text)).length).toBe(0);
+  });
+
+  it("a folder his ask named that is still empty is not mentioned until the same window has passed, then once", async () => {
+    const watch = await one<DriveWatchRow>("SELECT * FROM drive_watch WHERE folder_id = ?1", LATE);
+    expect(watch, "the ask's folder is watched").not.toBeNull();
+    const sentBefore = sent.length;
+    expect(await applyDriveWatchStatus(env, watch!, { files: 0 }, new Date(Date.parse(watch!.created_at) + GRACE_MS - 60_000))).toBe("still_empty");
+    expect(sent.length, "nothing said inside the window").toBe(sentBefore);
+    expect(await applyDriveWatchStatus(env, watch!, { files: 0 }, new Date(Date.parse(watch!.created_at) + GRACE_MS + 1_000))).toBe("told_empty");
+    const again = await one<DriveWatchRow>("SELECT * FROM drive_watch WHERE id = ?1", watch!.id);
+    expect(await applyDriveWatchStatus(env, again!, { files: 0 }, new Date(Date.parse(watch!.created_at) + 2 * GRACE_MS))).toBe("still_empty");
   });
 });
 

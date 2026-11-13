@@ -5,7 +5,7 @@ import { appendEvent } from "../events";
 import { sendOrPreview } from "./previewApproval";
 import { partnerByEmail } from "../../shared/registry/partners";
 import { waitBullets } from "../../shared/work/porterWaits";
-import { driveFoldersIn } from "../../shared/work/partnerPractices";
+import { PARTNER_MATERIAL_GRACE_MINUTES, driveFoldersIn } from "../../shared/work/partnerPractices";
 
 /**
  * A DRIVE FOLDER THE ASK NAMED IS WATCHED UNTIL ITS FILES ARRIVE (R21, addendum item 10, 0254).
@@ -22,7 +22,8 @@ import { driveFoldersIn } from "../../shared/work/partnerPractices";
  *       and the documents' text as a note from the partner — the note every runner's `steerFor` and
  *       the general loop already read — and a blocked card is answered the way the "I added missing
  *       items" button answers it (`materialsAdded`). No new email from anyone.
- *   4 · EMPTY → SAID ONCE: the first empty check emails the partner the three-part DRIVE_EMPTY wait
+ *   4 · EMPTY → SAID ONCE: the first empty check after the grace period
+ *       (PARTNER_MATERIAL_GRACE_MINUTES from when the ask named the folder, #354) emails the partner the three-part DRIVE_EMPTY wait
  *       and stamps `empty_told_at`; later empty checks say nothing. After WATCH_DAYS the row closes.
  */
 
@@ -159,7 +160,8 @@ export async function applyDriveWatchStatus(
     await env.WP_OS_DB.prepare("UPDATE drive_watch SET status = 'CLOSED', updated_at = ?2 WHERE id = ?1").bind(row.id, at).run();
     return "closed";
   }
-  if (!row.empty_told_at) {
+  // #354: a folder he just named gets the grace period to fill before anybody says it is empty.
+  if (!row.empty_told_at && now.getTime() - Date.parse(row.created_at) >= PARTNER_MATERIAL_GRACE_MINUTES * 60_000) {
     // Stamped BEFORE the send: "said once" holds even if two reports race; a failed send is not retried into a second email.
     const claimed = await env.WP_OS_DB.prepare("UPDATE drive_watch SET empty_told_at = ?2 WHERE id = ?1 AND empty_told_at IS NULL").bind(row.id, at).run();
     if ((claimed.meta?.changes ?? 0) > 0) {
