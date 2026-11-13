@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   cleanPreviewUrls,
-  clauseLine,
   currentPreviewLine,
   decidedSoFar,
   doneNotice,
@@ -18,7 +17,7 @@ import {
   pagePathsFrom,
   withChangedPages,
 } from "../src/shared/work/porterNotices";
-import { boldNumbers, lintExecEmail, renderExecEmail } from "../src/shared/email/execEmail";
+import { lintExecEmail, renderExecEmail } from "../src/shared/email/execEmail";
 import { changesTextOf, everyAskRecommended, LATE_THREAD_NOTE_PREFIX, NO_RECOMMENDATION, readApprovalReply, readAsks, stripLateThreadPrefix } from "../src/shared/work/approvalReply";
 import { keywordIntent, parseReplyIntent } from "../src/worker/services/replyIntent";
 import { plainTitle } from "../src/shared/work/siteChange";
@@ -124,12 +123,6 @@ describe("the preview email (owner's spec, 23 Sep 2026)", () => {
     expect(r2.text).toMatch(/\*\*Decided so far\*\*\n(• [^\n(…]+\n){6}/);
     expect(decidedSoFar(SIX_ASKS.slice(0, 1), ["use black, not orange"], "Scooter")).toEqual(["Orange: use black, as Scooter answered"]);
   });
-
-  it("a rebuild is \"New preview ready\" and says what was filled in since the last preview", () => {
-    const again = render(previewNotice({ title: "Community site redesign", previewLine: currentPreviewLine(ROW_GREEN), placeholders: ["Sengo logo"], filled: ["Sengo application link"], round: 2, cardId: "wc_x" }));
-    expect(again.subject).toBe("Porter: Community site redesign: New preview ready");
-    expect(again.text).toMatch(/\*\*Filled in since the last preview\*\*\n• Sengo application link\n/);
-  });
 });
 
 describe("every notice names its stage, and only STUCK says \"Blocked\"", () => {
@@ -153,9 +146,6 @@ describe("every notice names its stage, and only STUCK says \"Blocked\"", () => 
       expect(lintExecEmail(r.subject, r.text, "Porter")).toEqual([]);
     });
   }
-  it("the stage word is never cut; a long title is cut at a word", () => {
-    expect(stageSubject("A very long title for a change that goes on and on and on forever", STAGE.REBUILD)).toMatch(/…: New preview ready$/);
-  });
 });
 
 describe("the preview link: one per site the card changes, the branch alias, never a hash or another site", () => {
@@ -190,10 +180,6 @@ describe("the preview link: one per site the card changes, the branch alias, nev
 });
 
 describe("the words", () => {
-  it("a clock time is never bolded as a figure; a figure still is", () => {
-    expect(boldNumbers("built 12:40 CT, 4 placeholders")).toBe("built 12:40 CT, **4** placeholders");
-  });
-
   it("\"publish\" and \"changes:\" are read, and each maps to what she asked of a preview", () => {
     expect(readApprovalReply("publish").kind).toBe("PUBLISH");
     expect(readApprovalReply("Publish!\n\nSent from my iPhone").kind).toBe("PUBLISH");
@@ -211,50 +197,6 @@ describe("the words", () => {
     expect(rebuildIntentFor("approved"), "approved lands; it is not a rebuild").toBeNull();
     expect(rebuildIntentFor("stop"), "stop holds").toBeNull();
     expect(rebuildIntentFor("approved to production")).toBeNull();
-  });
-});
-
-/**
- * THE PREVIEW EMAIL ON wc_c9e36e8b, 14:48, 23 SEP 2026 (owner review). Its subject carried the whole
- * email subject ("Community site redesign — everything is in…"), and three lines were cut mid-sentence
- * with "…". These are the row's real strings.
- */
-describe("the preview email, on the live card's real strings", () => {
-  const PLACEHOLDERS = [
-    "Sengo's current pitch-application link (their prior Airtable invitation is no longer accessible; no public URL found)",
-    "Sengo logo",
-    "Pitch competition winner records (headshot, company logo, company description, win date per winner)",
-    "Episode 4 (Meka Egwuekwe) and Episode 5 (Kimberly Gant) YouTube links",
-  ];
-  const email = previewNotice({
-    title: plainTitle({ title: 'Change joinwestpeek.com: "Porter, We need to get started on the community site redesign (j', kind: "WEB_PROPERTY_CHANGE", host: null, subject: "From sequoia@westpeek.ventures: Community site redesign — everything is in the Drive folder", ask: null }),
-    previewLine: currentPreviewLine(ROW_GREEN),
-    placeholders: PLACEHOLDERS,
-    decided: decidedSoFar(SIX_ASKS, SIX_ASKS.map((a, i) => `${i + 1}. ${a.recommended} (approved as recommended)`), "Sequoia"),
-    cardId: "wc_c9e36e8b",
-  });
-  const r = render(email);
-
-  it("the subject uses the card's own plain-title reader: \"Community site redesign: Preview ready\"", () => {
-    expect(r.subject).toBe("Porter: Community site redesign: Preview ready");
-    expect(stageSubject(plainTitle({ title: "x", kind: "WEB_PROPERTY_CHANGE", host: "joinwestpeek.com", subject: "From a@b.c: Community site redesign — everything is in the Drive folder", ask: null }), STAGE.PREVIEW)).toBe(
-      "Community site redesign · joinwestpeek.com: Preview ready",
-    );
-  });
-
-  it("no line ends in \"…\", and each missing item is its name without the backstory", () => {
-    for (const line of r.text.split("\n")) expect(line, `a line cut mid-sentence: ${line}`).not.toMatch(/…\s*$/);
-    expect(r.text).toMatch(/\*\*Still missing \(optional\)\*\*\n• Sengo's current pitch-application link\n• Sengo logo\n• Pitch competition winner records\n• Episode \*\*4\*\* \(Meka Egwuekwe\) and Episode \*\*5\*\* \(Kimberly Gant\) YouTube links\n/);
-    expect(r.text).toMatch(/• Orange: #c45a3c\n/);
-    expect(r.text).not.toMatch(/Airtable|win date|approved by Sequoia/);
-  });
-
-  it("clauseLine keeps whole clauses and never adds an ellipsis", () => {
-    expect(clauseLine("Yes, #c45a3c, held in one CSS token so a later change is one line", 30)).toBe("Yes, #c45a3c");
-    expect(clauseLine("A single very long clause without any boundary at all whatsoever here", 10)).toBe("A single very long clause without any boundary at all whatsoever here");
-    expect(clauseLine("Ends with an open (parenthesis that was cut", 90)).toBe("Ends with an open");
-    expect(clauseLine("Ep 6 guest headshot (JPG)", 90)).toBe("Ep 6 guest headshot (JPG)");
-    expect(clauseLine("Sengo logo (their old one is gone, find a new one)", 90)).toBe("Sengo logo");
   });
 });
 

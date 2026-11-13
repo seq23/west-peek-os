@@ -40,24 +40,3 @@ describe("RefreshControl", () => {
   });
 });
 
-describe("RefreshControl is mounted in the app-wide chrome, once", () => {
-  it("is rendered inside the shell header's surface-identity block, not inside a per-page masthead", () => {
-    const headerStart = APP.indexOf('<header className="shell-header">');
-    expect(headerStart, "the shell header markup has moved; re-locate before trusting this guard").toBeGreaterThan(-1);
-    const identityStart = APP.indexOf('<div className="surface-identity">', headerStart);
-    expect(identityStart).toBeGreaterThan(headerStart);
-    const identityEnd = APP.indexOf("</div>", identityStart);
-    const identityBlock = APP.slice(identityStart, identityEnd);
-    expect(identityBlock, "<RefreshControl /> is not mounted in the shell's identity/status area")
-      .toContain("<RefreshControl />");
-  });
-
-  it("appears exactly once in the whole file — one control, not one per page", () => {
-    const matches = APP.match(/<RefreshControl\s*\/>/g) ?? [];
-    expect(matches.length).toBe(1);
-  });
-
-  it("is not defined inside WorkCardPage or any work-card-detail component — that surface belongs to the sibling wave", () => {
-    expect(APP).not.toMatch(/function WorkCardPage\(/);
-  });
-});

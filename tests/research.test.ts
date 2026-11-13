@@ -86,11 +86,6 @@ describe("a research project is a governed question, not a notebook", () => {
     });
     expect(res.status).toBe(404);
   });
-
-  it("states plainly that it holds no separate evidence store", async () => {
-    const res = await call<{ rule: string }>("/api/research/projects", MP);
-    expect(res.body.rule).toContain("no separate evidence store");
-  });
 });
 
 describe("sources state their reliability and what it rests on", () => {

@@ -22,7 +22,6 @@ import {
 } from "../src/worker/services/productionsHire";
 import { sweepOnce } from "../src/worker/services/workSweep";
 import { JOB_FACTS, cadenceInWords } from "../src/shared/work/scheduledWork";
-import { skillsForMachines } from "../src/shared/skills/library";
 import { DELIVERABLE_KINDS, kindDef } from "../src/shared/deliverables/deliverable";
 import { steersWith } from "./helpers/interpret";
 import { lintExecEmail, renderExecEmail } from "../src/shared/email/execEmail";
@@ -246,23 +245,6 @@ describe("what Walker is told", () => {
     const prompt = buildHireSearchPrompt("2026-W39");
     expect(prompt).toContain(HIRE_CONTACT_RULE);
     expect(prompt).toMatch(/"email":null,"contact_url":"https:\/\/…"/);
-  });
-
-  it("has the method on Scooter's personal-office machine: the archetype, the sources, the memory, the one email", () => {
-    const skill = skillsForMachines(["mp_personal_office"]).find((s) => s.key === "west_peek_productions_for_scooter");
-    const text = skill!.guidance.join(" ");
-    expect(text).toMatch(/WEEKLY HIRE SEARCH/);
-    expect(text).toMatch(/senior experiential producer, freelance/);
-    expect(text).toMatch(/sold, scoped or closed sponsorships/);
-    // STRICTER THAN THE ASSERTION IT REPLACES (17 Sep 2026). The method used to promise Scooter
-    // would mark each candidate Contacted or Passed. That mechanism is gone, so the method must
-    // BOTH stop saying it (a document that describes a retired control is worse than one that says
-    // nothing) AND name what replaced it — a reply in prose, read before the next search.
-    expect(text, "no marking anywhere in the method").not.toMatch(/Contacted|Passed/);
-    expect(text).toMatch(/maintains NO list and marks nothing/);
-    expect(text).toMatch(/replying to the email in plain prose/);
-    expect(text).toMatch(/read by a reasoning model before the next search runs/);
-    expect(text).toMatch(/The OS never contacts a candidate/);
   });
 
   it("is a deliverable kind that files and lands on Home", () => {

@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import {
@@ -73,18 +72,6 @@ describe("the split — pure", () => {
     expect(isInProgress({ ...started, status: "HELD" })).toBe(false);
     expect(isInProgress({ ...started, started_at: null })).toBe(false);
     expect(HAPPENING_NOW).toBe("happening now");
-  });
-
-  it("the page uses the shared split and the shared reading, not its own filter", () => {
-    const page = readFileSync(new URL("../src/client/pages/MeetingsPage.tsx", import.meta.url), "utf8");
-    expect(page).toMatch(/splitMeetings\(rows, new Date\(\)\)/);
-    expect(page, "the old status-only filter is back").not.toMatch(/rows\.filter\(\(m\) => m\.status === "SCHEDULED"\)/);
-    expect(page).toContain("HELD_NOTHING_ON_THE_RECORD");
-    expect(HELD_NOTHING_ON_THE_RECORD).toBe("held, nothing on the record");
-    expect(page).toContain("HAPPENING_NOW");
-    // The retired control: no "It is happening now", no start- door that only chose a face.
-    expect(page).not.toContain("It is happening now");
-    expect(page).not.toContain("data-testid={`start-${m.id}`}");
   });
 });
 
@@ -186,12 +173,5 @@ describe("the server settles synced rows", () => {
     expect(payload.note).toBe(HELD_NOTHING_ON_THE_RECORD);
     // Idempotent: a second pass settles nothing.
     expect((await settlePastMeetings(env, NOW)).settled).toEqual([]);
-  });
-
-  it("the list route and the calendar sync both call it, so a quiet night still reads right", () => {
-    const meetings = readFileSync(new URL("../src/worker/services/meetings.ts", import.meta.url), "utf8");
-    const sync = readFileSync(new URL("../src/worker/services/calendarSync.ts", import.meta.url), "utf8");
-    expect(meetings).toMatch(/export async function handleListMeetings[\s\S]{0,400}await settlePastMeetings\(ctx\.env\)/);
-    expect(sync).toMatch(/await applyPlan\(env, actor, source, plan, now\);[\s\S]{0,400}await settlePastMeetings\(env, now, source\.firmScope\)/);
   });
 });

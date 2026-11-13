@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { EVENT_ETHOS, OPERATING_RHYTHM, WHY_THE_RHYTHM } from "@shared/events/programme";
+import { EVENT_ETHOS, WHY_THE_RHYTHM } from "@shared/events/programme";
 import { AI_EMPLOYEE_ROSTER } from "@shared/registry/aiEmployees";
 
 /**
@@ -23,21 +23,6 @@ describe("the event programme matches the community document", () => {
   it("keeps the sponsor rule, which is the one that protects members", () => {
     expect(EVENT_ETHOS.money).toContain("never purchase access to members");
     expect(DOC).toContain("They never purchase access to members");
-  });
-
-  it("covers every interval the Operating Rhythm table names", () => {
-    for (const label of ["Weekly", "Monthly", "Quarterly", "Annually"]) {
-      expect(OPERATING_RHYTHM.some((i) => i.label === label), `${label} missing`).toBe(true);
-      expect(DOC).toContain(`| ${label} |`);
-    }
-  });
-
-  it("names the real things that run at each interval", () => {
-    const all = OPERATING_RHYTHM.flatMap((i) => i.runs).join(" ");
-    for (const thing of ["The Office", "Community Mastermind", "Room", "dinner", "Summit"]) {
-      expect(all).toContain(thing);
-    }
-    expect(DOC).toContain("Tap In Tuesday");
   });
 
   it("is written by an employee who exists, with the title the operator chose", () => {

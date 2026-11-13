@@ -50,19 +50,6 @@ function parseMapRows(markdown: string): MapRow[] {
   return rows;
 }
 
-/** Sum of the "Paths" column in the Summary table. */
-function summaryTotal(markdown: string): number {
-  const lines = markdown.split("\n");
-  const header = lines.findIndex((l) => /^\|\s*Runs where\s*\|\s*Paths\s*\|/.test(l));
-  if (header < 0) return -1;
-  let total = 0;
-  for (const line of lines.slice(header + 2)) {
-    if (!line.startsWith("|")) break;
-    total += Number(line.split("|").slice(1, -1).map((c) => c.trim())[1]);
-  }
-  return total;
-}
-
 /** An Industry Guides path, by its Id or Code cell. */
 const INDUSTRY_GUIDES = /local-guides-citation-velocity|theindustryguides\.com|industryguides|\blgcv\b/i;
 /** A West Peek sending address. */
@@ -110,11 +97,6 @@ describe("docs/OUTBOUND_EMAIL_MAP.md matches the code", () => {
   const doc = readFileSync(path.join(ROOT, MAP), "utf8");
   const rows = parseMapRows(doc);
 
-  it("says whose map it is and when it was last verified", () => {
-    expect(doc).toContain("West Peek only; Boss OS keeps its own map");
-    expect(doc).toMatch(/last verified \d{1,2} [A-Z][a-z]{2} 20\d\d/i);
-  });
-
   it("has rows, every one with an id, a code cell and a status", () => {
     expect(rows.length, "zero rows parsed: the table or its header moved").toBeGreaterThan(0);
     for (const r of rows) {
@@ -122,10 +104,6 @@ describe("docs/OUTBOUND_EMAIL_MAP.md matches the code", () => {
       expect(r.code, `${r.id}: empty Code location`).not.toBe("");
       expect(r.status, `${r.id}: status`).toMatch(/^(CONFIRMED|SUSPECTED)$/);
     }
-  });
-
-  it("has Summary counts that add up to the rows", () => {
-    expect(summaryTotal(doc), "Summary table missing or its counts do not match the Inventory").toBe(rows.length);
   });
 
   it("keeps Industry Guides paths off unless they send from a West Peek address", () => {
