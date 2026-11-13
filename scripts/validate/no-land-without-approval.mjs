@@ -646,7 +646,10 @@ export function checkOwnership({ sql0241, rules, handOff, blocks, thread, source
   examined += 1;
   // The ONE answerBlock() in steerFromReply sits inside the "addressed to this partner" branch: the
   // text from that `if` to its `} else {` holds it, and nothing else in the function calls it.
-  const gateAt = steer ? steer.indexOf("if (!asked || asked === partner.email) {") : -1;
+  // 0301: the one other way in is the DEVELOPER's work instruction — "changes: …" on a website job, from a holder of the
+  // role — and it must be exactly that conjunction: drop `isWorkInstruction` and her "approved" would be an answer.
+  const DEV_GATE = "const developerChanges = Boolean(asked) && cardRow.kind === WEB_PROPERTY_CHANGE_KIND && isWorkInstruction(written) && (await developerDirector(env, partner.firmUserId)) !== null;";
+  const gateAt = steer && steer.includes(DEV_GATE) ? steer.indexOf("if (!asked || asked === partner.email || developerChanges) {") : -1;
   const nextBranchAt = gateAt >= 0 ? steer.indexOf("else if (cardRow && partner && (cardRow.state === \"OPEN\"", gateAt) : -1;
   const gated = gateAt >= 0 && nextBranchAt > gateAt ? steer.slice(gateAt, nextBranchAt) : "";
   // The not-the-partner `else` of that gate keeps a note and must not answer: the text before it holds the one call.
@@ -811,10 +814,11 @@ async function selfTest() {
   owCaught({ handOff: ow.handOff.replace("SET requested_by_email = ?2,", "SET preview_first = preview_first, ignored = ?2,") }, /does not move requested_by_email/, "a hand-off that leaves the requester guards with the ex-primary is caught");
   owCaught({ sources: { ...ow.sources, "src/worker/services/sneaky.ts": "await db.prepare(\"UPDATE work_card SET secondary_partner_email = ?2 WHERE id = ?1\")" } }, /sneaky\.ts writes secondary_partner_email/, "a second writer of the secondary is caught");
   owCaught({ blocks: ow.blocks.replace('roleOf(owners, ctx.identity.email) === "SECONDARY")', 'roleOf(owners, ctx.identity.email) === "NOBODY")') }, /handleUnblockWorkCard\(\) does not refuse the secondary/, "a card button that lets the secondary answer is caught");
-  owCaught({ thread: ow.thread.replace("if (!asked || asked === partner.email) {", "if (true) {") }, /steerFromReply\(\) answers a block for someone other/, "a reply door that lets the secondary approve is caught");
+  owCaught({ thread: ow.thread.replace("if (!asked || asked === partner.email || developerChanges) {", "if (true) {") }, /steerFromReply\(\) answers a block for someone other/, "a reply door that lets the secondary approve is caught");
+  owCaught({ thread: ow.thread.replace(" && isWorkInstruction(written)", "") }, /steerFromReply\(\) answers a block for someone other/, "a developer gate that takes more than a work instruction is caught");
 
   if (failed > 0) process.exit(1);
-  console.log("SELF-TEST PASSED: sixty-nine planted defects are each caught; the shipped source passes.");
+  console.log("SELF-TEST PASSED: seventy planted defects are each caught; the shipped source passes.");
 }
 
 if (process.argv.includes("--self-test")) {

@@ -18,6 +18,7 @@ import { readLocalJobReport, WEB_PROPERTY_CHANGE_KIND } from "../src/shared/work
 import { finishOriginalAsk, needsPreview, parkPhase, phaseModel, readWebPropertyChange, rulesFor, runWebPropertyChangeCard, type WebPropertyChangeRow } from "../src/worker/services/webPropertyChange";
 import { steerFromReply } from "../src/worker/services/emailThread";
 import { threadReference } from "../src/shared/email/thread";
+import { handleDeveloperChanges } from "../src/worker/services/developerDirection";
 import { answerBlock } from "../src/worker/services/blocks";
 import { handleInboundEmail, MAX_BODY_BYTES } from "../src/worker/effects/inboundEmail";
 import { comparableSubject } from "../src/worker/services/emailThread";
@@ -725,6 +726,83 @@ describe("a job that left out part of the original request is reopened by the sy
     expect(row.refresh_intent ?? null).toBeNull();
     expect(row.land_approved_at ?? null).toBeNull();
     expect((await card(id)).state, "still waiting on his word").toBe("BLOCKED");
+  });
+});
+
+/**
+ * #363, migration 0301 (owner, 13 Nov 2026): "i like the safety rule but i should have a developer
+ * role that bypasses it". Only the partner who asked changes a job (0241) — and the developer, for
+ * work instructions only, herself or through her partner tail. Nothing else moves.
+ */
+describe("the developer may direct any job with a work instruction, and with nothing else (#363, 0301)", () => {
+  beforeAll(ageEarlierCards);
+  afterAll(ageEarlierCards);
+  const MAC = { id: "fu_subscription_claimer", email: "subscription-claimer@joinwestpeek.com", fullName: "Mac", status: "ACTIVE", roles: [] as string[], authorityScopes: [] };
+  const door = (id: string, changes: string, identity: typeof MAC = MAC) =>
+    handleDeveloperChanges({ request: new Request(`https://os.joinwestpeek.com/api/work-cards/${id}/developer-changes`, { method: "POST", body: JSON.stringify({ changes }) }), env, identity, params: { id } } as never);
+
+  async function atPreview(tag: string, partnerAddress: string): Promise<string> {
+    const chiefId = await openAssignmentCard(env, { subject: `ventures refresh ${tag}`, partnerAddress, chiefOfStaff: "Walker", raw: `Hey Porter! Please refresh westpeek.ventures — package: https://drive.google.com/drive/folders/${FOLDER}${tag}`, limits: EMAILED_TASK_LIMITS, emlKey: null });
+    const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
+    await tickFor(id);
+    await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "refresh the ventures site", how: "build" }], document: "# Plan\n\nnothing to ask", decided: ["as asked"], asks: [], publish_ready: true });
+    await tickFor(id);
+    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/89", pr_number: 89, branch: `work/wpc-${tag}`, check_state: "GREEN", preview_url: `https://${tag}.west-peek-ventures.pages.dev`, proof: "validate green" });
+    await tickFor(id);
+    expect((await card(id)).state, "waiting on the requester's word on the preview").toBe("BLOCKED");
+    return id;
+  }
+  const rebuildOf = async (id: string) => {
+    const job = await liveJobFor(id);
+    return job ? (JSON.parse(String(job.job_json)) as { phase: string; rebuild: { intent: string; changes: string } | null }) : null;
+  };
+
+  it("her 'changes: …' on his job rebuilds with her words; her 'approved' on it lands nothing", async () => {
+    const id = await atPreview("dev1", SCOOTER);
+    await answerBlock(env, id, "fu_sequoia_taylor", { action: "ANSWER", text: "approved" });
+    await tickFor(id);
+    expect((await readWebPropertyChange(env, id))!.land_approved_at ?? null, "the developer never approves another partner's job").toBeNull();
+    expect(await liveJobFor(id)).toBeNull();
+    await answerBlock(env, id, "fu_sequoia_taylor", { action: "ANSWER", text: "changes: add the members page at /members" });
+    await tickFor(id);
+    const payload = await rebuildOf(id);
+    expect(payload?.phase).toBe("BUILD");
+    expect(payload?.rebuild?.intent).toBe("CHANGES");
+    expect(payload?.rebuild?.changes).toContain("add the members page at /members");
+    expect(String((await card(id)).description)).toContain("Directed by Sequoia (developer)");
+  });
+
+  it("a Managing Partner without the role is refused exactly as before: his 'changes: …' on her job moves nothing", async () => {
+    const id = await atPreview("dev2", SEQUOIA);
+    await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: "changes: add the members page at /members" });
+    await tickFor(id);
+    expect(await liveJobFor(id), "no rebuild").toBeNull();
+    expect((await readWebPropertyChange(env, id))!.refresh_intent ?? null).toBeNull();
+    const holders = await env.WP_OS_DB.prepare("SELECT fur.firm_user_id AS id FROM firm_user_role fur JOIN role r ON r.id = fur.role_id WHERE r.key = 'DEVELOPER'").all<{ id: string }>();
+    expect((holders.results ?? []).map((h) => h.id), "the role is held by the owner and nobody else").toEqual(["fu_sequoia_taylor"]);
+  });
+
+  it("the tail door: the Mac's identity enters her work instruction, recorded as hers through the tail; it refuses approvals, publish, force and every other caller", async () => {
+    const id = await atPreview("dev3", SCOOTER);
+    for (const words of ["approved", "changes: approved", "publish", "approved to production", "preview"]) {
+      const res = await door(id, words);
+      expect(res.status, `"${words}" is not a work instruction`).toBe(400);
+    }
+    const partner = await door(id, "add the members page at /members", { ...MAC, id: "fu_scooter_taylor", email: SCOOTER, roles: ["MANAGING_PARTNER"] });
+    expect(partner.status, "a partner uses the card or email, never this door").toBe(403);
+    expect((await card(id)).state, "nothing above moved the job").toBe("BLOCKED");
+    const res = await door(id, "add the members page at /members");
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { recorded_as: string }).recorded_as).toBe("Sequoia (developer), through the partner tail (Claude)");
+    const c = await env.WP_OS_DB.prepare("SELECT block_answered_by FROM work_card WHERE id = ?1").bind(id).first<{ block_answered_by: string | null }>();
+    expect(c?.block_answered_by, "never recorded as a partner's own answer").toBe("tail:fu_sequoia_taylor");
+    await tickFor(id);
+    const payload = await rebuildOf(id);
+    expect(payload?.rebuild?.intent).toBe("CHANGES");
+    expect(payload?.rebuild?.changes).toContain("add the members page at /members");
+    expect((await readWebPropertyChange(env, id))!.land_approved_at ?? null).toBeNull();
+    const ev = await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE event_type = 'work_card.directed_by_developer' AND object_id = ?1").bind(id).first<{ payload_json: string }>();
+    expect(String(ev?.payload_json)).toContain("partner tail (Claude)");
   });
 });
 

@@ -72,7 +72,9 @@ try {
   const version = out.match(/Current Version ID:\s*([0-9a-f-]+)/)?.[1];
   say(`     deployed ${version ?? "(version id not reported)"}`);
 } catch (err) {
-  die(`deploy failed:\n${err.stdout ?? err.message}`);
+  // BOTH STREAMS, as for the migration step above: wrangler writes its refusal to stderr, and stdout
+  // alone ended at the bindings table with no reason (13 Nov 2026, Cloudflare API code 10013).
+  die(`deploy failed:\n${[err.stdout, err.stderr, err.message].filter((s) => s && String(s).trim()).join("\n")}`);
 }
 
 say("4/4  verifying the worker answers…");
