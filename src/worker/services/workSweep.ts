@@ -513,6 +513,27 @@ export function isSeatNoAnswer(detail: string | null | undefined): boolean {
   return t.includes(SEAT_UNAVAILABLE) && /awake but returned nothing|no machine returned an answer|closed while it was waiting/i.test(t);
 }
 
+/**
+ * THE FREE SEARCH LANE RAN OUT OF ITS FREE ALLOWANCE: A WAIT, NOT A PERSON'S QUESTION (13 Nov 2026, wc_946f0b75…).
+ * Walker's hire search spent both goes in six minutes against Google's free-tier 429s and was BLOCKED on Scooter. The
+ * allowance refills by itself, so the card waits an hour per go, the attempt is handed back and nobody is emailed. Bounded:
+ * after FREE_SEARCH_WAITS hours the card counts attempts again and stops with its named lane block.
+ */
+export const FREE_SEARCH_WAITS = 12;
+export const FREE_SEARCH_WAIT_MINUTES = 60;
+export function isFreeSearchStop(text: string | null | undefined): boolean {
+  return /free_search_named_stop/.test(text ?? "");
+}
+async function freeSearchWaitsSoFar(env: Env, cardId: string): Promise<number> {
+  const r = await env.WP_OS_DB.prepare(
+    "SELECT COUNT(*) AS n FROM event_record WHERE object_type = 'work_card' AND object_id = ?1 AND event_type = 'work_card.waiting_for_free_search'",
+  )
+    .bind(cardId)
+    .first<{ n: number }>()
+    .catch(() => null);
+  return Number(r?.n ?? 0);
+}
+
 async function seatWaitsSoFar(env: Env, cardId: string): Promise<number> {
   const r = await env.WP_OS_DB.prepare(
     "SELECT COUNT(*) AS n FROM event_record WHERE object_type = 'work_card' AND object_id = ?1 AND event_type = 'work_card.waiting_for_seat'",
@@ -903,6 +924,32 @@ export async function sweepOnce(
         outcome: "WAITING_ON_SEAT",
       };
     }
+  }
+  if (isFreeSearchStop(`${lane.raw} ${detail}`) && (await freeSearchWaitsSoFar(env, card.id)) < FREE_SEARCH_WAITS) {
+    const until = new Date(now.getTime() + FREE_SEARCH_WAIT_MINUTES * 60_000).toISOString();
+    const line = `Waiting for the free web search: its free allowance is used up for now, so this tries again by itself in about ${FREE_SEARCH_WAIT_MINUTES} minutes.`;
+    await env.WP_OS_DB.prepare(
+      `UPDATE work_card SET lease_until = ?2, waiting_until = ?2, waiting_for = ?3, next_action = ?3,
+              work_attempts = MAX(COALESCE(work_attempts, 1) - 1, 0), work_last_failure = ?3, work_last_failure_at = ?4
+        WHERE id = ?1 AND state IN ('OPEN', 'IN_PROGRESS')`,
+    )
+      .bind(card.id, until, line, now.toISOString())
+      .run();
+    await appendEvent(env, {
+      eventType: "work_card.waiting_for_free_search",
+      actorType: "system",
+      actorId: "work_sweep",
+      objectType: "work_card",
+      objectId: card.id,
+      firmScope: card.firm_scope,
+      payload: { until, detail: detail.slice(0, 240) },
+    }).catch(() => undefined);
+    return {
+      status: "SUCCEEDED",
+      summary: `"${card.title.slice(0, 60)}" is waiting for the free web search's allowance and tries again by itself at ${until}.`,
+      card: { ...card, work_attempts: Math.max(card.work_attempts - 1, 0), state: "OPEN" },
+      outcome: "WAITING_ON_SEAT",
+    };
   }
   const allowed = attemptsAllowedFor(lane.failure, MAX_WORK_ATTEMPTS);
   await noteFailedAttempt(env, card, attemptLine(card, lane.failure, lane.name, allowed), now);

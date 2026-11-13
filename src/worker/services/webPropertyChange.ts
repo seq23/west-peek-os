@@ -1,4 +1,5 @@
 import { committedLpNamedIn, committedLps } from "../ai/committedLps";
+import { privateMaterialConstraint, privateMaterialSentence } from "../../shared/intake/privateMaterial";
 import { ccAck, ccAsksIn, isOnlyACc, resolveCc } from "../../shared/work/ccPartners";
 import { secondaryNoteAck } from "../../shared/work/partnerOwnership";
 import type { Env } from "../env";
@@ -838,6 +839,12 @@ export async function parkPhase(
     const committed = await committedLps(env, card.firm_scope);
     const texts = [payload.card.title, payload.ask, payload.request, payload.plan?.text ?? "", ...(payload.plan?.answers ?? []), ...(payload.drive_files ?? []).map((f) => f.text ?? "")];
     payload.private_model_only = !committed.readable || committedLpNamedIn(texts, committed.names) !== null;
+    // #357: the partner's "keep this private" is a standing rule on every phase, and keeps the job on the private model.
+    const privateAsk = privateMaterialSentence([payload.ask, payload.request, payload.card.title]);
+    if (privateAsk) {
+      payload.constraints = [...(payload.constraints ?? []), privateMaterialConstraint(privateAsk)];
+      payload.private_model_only = true;
+    }
   }
 
   let runId: string;

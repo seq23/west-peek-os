@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { createWorkCardInternal } from "../src/worker/services/workCards";
-import { MAX_WORK_ATTEMPTS, SEAT_NO_ANSWER_WAITS, isSeatNoAnswer, sweepIdentity, sweepOnce } from "../src/worker/services/workSweep";
+import { FREE_SEARCH_WAITS, MAX_WORK_ATTEMPTS, SEAT_NO_ANSWER_WAITS, isSeatNoAnswer, sweepIdentity, sweepOnce } from "../src/worker/services/workSweep";
 import { answerBlock, blockOf, LANE_PAUSE_HOURS, LANE_STAND_DOWN_HOURS, TECHNICAL_BLOCK_NAG_HOURS } from "../src/worker/services/blocks";
 import { attemptsAllowedFor, readLaneFailure } from "../src/shared/ai/laneFailure";
 import { blockProblems, describeBlock } from "../src/shared/work/blocks";
@@ -532,5 +532,47 @@ describe("her seat order (shared/ai/seatOrder.ts, 26 Oct 2026)", () => {
     expect(isImportantWork({ publicModelApproved: true, important: true })).toBe(true);
     expect(isImportantWork({ publicModelApproved: true, confidential: true })).toBe(true);
     expect(isImportantWork({ publicModelApproved: true })).toBe(false);
+  });
+});
+
+describe("the free search lane's spent allowance is a wait, never 'put more credit on the account' (13 Nov 2026, wc_946f0b75…)", () => {
+  // Walker's hire search, 10 Nov 2026, as the free search lane recorded it (trimmed).
+  const GOOGLE_429 =
+    "provider_http_429:You exceeded your current quota, please check your plan and billing details. For more information on this error, " +
+    "head to: https://aistudio.google.com/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. RESOURCE_EXHAUSTED";
+  const STOP =
+    "provider_failure:free_search_named_stop:Couldn't research Walker: West Peek Productions hire search: Gemini search grounding: " +
+    "gemini-2.5-flash: provider_http_404:This model models/gemini-2.5-flash is no longer available to new users.; " +
+    `gemini-3.8-flash: ${GOOGLE_429}; Brave search: the writer cited none of the fetched pages`;
+
+  it("reads Google's free-tier 429 and the lane's named stop as a rate limit, while an empty account is still CREDIT", () => {
+    expect(readLaneFailure(STOP).kind).toBe("RATE_LIMIT");
+    expect(readLaneFailure(`provider_failure:${GOOGLE_429}`).kind).toBe("RATE_LIMIT");
+    expect(readLaneFailure("provider_failure:provider_http_429:You exceeded your current quota, please check your plan and billing details.").kind).toBe("CREDIT");
+    expect(readLaneFailure("provider_failure:provider_http_400: Your credit balance is too low to access the Anthropic API.").kind).toBe("CREDIT");
+  });
+
+  it("through the sweep: the card waits an hour a go with the attempt handed back, nobody asked; past the bound it counts again", async () => {
+    const T0 = new Date("2026-11-10T15:01:00.000Z");
+    const id = await card("Walker: West Peek Productions hire search (2026-W46)", "aie_walker");
+    const runner = refusedRunner(id, `the live search failed: ${STOP}`, "prov_free_search");
+    for (let k = 0; k < FREE_SEARCH_WAITS; k++) {
+      await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
+      expect((await sweepOnce(env, new Date(T0.getTime() + k * 3_600_000), { general: runner })).outcome).toBe("WAITING_ON_SEAT");
+    }
+    let c = await row(id);
+    expect(Number(c.work_attempts), "no attempt is spent on a free allowance that refills").toBe(0);
+    expect(c.state).not.toBe("BLOCKED");
+    expect(c.block_reason).toBeNull();
+    expect(String(c.waiting_for)).toMatch(/Waiting for the free web search/);
+    expect(new Date(String(c.waiting_until)).getTime()).toBeGreaterThan(T0.getTime() + (FREE_SEARCH_WAITS - 1) * 3_600_000);
+    // The bound: past it the attempt is counted, and as a rate limit it keeps all three goes.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
+    const after = await sweepOnce(env, new Date(T0.getTime() + 13 * 3_600_000), { general: runner });
+    expect(after.outcome).toBe("FAILED");
+    c = await row(id);
+    expect(Number(c.work_attempts)).toBe(1);
+    expect(String(c.work_last_failure)).not.toMatch(/run out of credit/);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
   });
 });
