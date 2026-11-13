@@ -51,8 +51,8 @@ export const SPEND_LEVERS: readonly LeverDef[] = [
     key: "FREE_ONLY",
     label: "Free only",
     what:
-      "Nothing paid, at all. Her Claude Code and Codex seats first (already paid for), then the free lanes — " +
-      "Workers AI and the free frontier tiers.",
+      "Nothing paid, at all. Routine work takes the free lanes first, then her Codex and Claude Code seats (already paid for). " +
+      "Important work goes to her seats first, Claude Code leading.",
     tradeoff:
       "Public work that would have been written by Claude runs on the best free lane instead, and says so; the brief is " +
       "marked as written by a weaker model. Private work (LP names, deal terms, fund figures) can never use a free lane, " +

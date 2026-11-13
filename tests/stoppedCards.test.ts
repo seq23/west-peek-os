@@ -520,14 +520,40 @@ describe("a quiet seat at Free only is a wait, not a spend question", () => {
   });
 });
 
-describe("her seat order (shared/ai/seatOrder.ts, 26 Oct 2026)", () => {
-  it("important: Claude Code then Codex; routine: Codex only, Claude Code named as kept for important work", async () => {
-    const { orderSeats, isImportantWork, KEPT_FOR_IMPORTANT } = await import("../src/shared/ai/seatOrder");
-    const both = [{ seat: "codex", available: true, reason: "codex awake" }, { seat: "claude_code", available: true, reason: "claude awake" }];
-    expect(orderSeats(both, true).map((v) => [v.seat, v.available])).toEqual([["claude_code", true], ["codex", true]]);
-    const routine = orderSeats(both, false);
-    expect(routine.map((v) => [v.seat, v.available])).toEqual([["codex", true], ["claude_code", false]]);
-    expect(routine[1]!.reason).toBe(KEPT_FOR_IMPORTANT);
+describe("her model order, as the one table (shared/ai/seatOrder.ts, 26 Oct and 6 Nov 2026)", () => {
+  it("routine: free lanes (Gemini, then OpenRouter), Codex, Claude Code; important: Claude Code then Codex, no free lane; private: Claude Code only", async () => {
+    const { MODEL_ORDER, orderSeats, orderFreeLanes, ladderFor, workClassOf, isImportantWork, CLAUDE_ONLY_PRIVATE } = await import("../src/shared/ai/seatOrder");
+    const both = [{ seat: "claude_code", available: true, reason: "claude awake" }, { seat: "codex", available: true, reason: "codex awake" }];
+    expect(orderSeats(both, "IMPORTANT").map((v) => [v.seat, v.available])).toEqual([["claude_code", true], ["codex", true]]);
+    expect(orderSeats(both, "NAMED").map((v) => [v.seat, v.available])).toEqual([["claude_code", true], ["codex", true]]);
+    // Routine work now uses BOTH seats, Codex ahead of Claude Code (6 Nov 2026): no seat is held back from it.
+    expect(orderSeats(both, "ROUTINE").map((v) => [v.seat, v.available])).toEqual([["codex", true], ["claude_code", true]]);
+    const priv = orderSeats(both, "PRIVATE");
+    expect(priv.map((v) => [v.seat, v.available])).toEqual([["claude_code", true], ["codex", false]]);
+    expect(priv[1]!.reason).toBe(CLAUDE_ONLY_PRIVATE);
+
+    const free = ["openrouter_free", "some_other_free", "google_free"];
+    expect(orderFreeLanes(free, "ROUTINE", (k) => k)).toEqual(["google_free", "openrouter_free", "some_other_free"]);
+    expect(orderFreeLanes(free, "NAMED", (k) => k)).toEqual(["openrouter_free", "google_free", "some_other_free"]);
+    expect(orderFreeLanes(free, "IMPORTANT", (k) => k)).toEqual([]);
+    expect(orderFreeLanes(free, "PRIVATE", (k) => k)).toEqual([]);
+
+    const lanes = { free: ["gemini", "openrouter"], seats: ["codex", "claude"], behind: ["rest"] };
+    expect(ladderFor("ROUTINE", { ...lanes, behindIsFree: false })).toEqual(["gemini", "openrouter", "codex", "claude", "rest"]);
+    expect(ladderFor("ROUTINE", { ...lanes, behindIsFree: true })).toEqual(["gemini", "openrouter", "rest", "codex", "claude"]);
+    expect(ladderFor("NAMED", { ...lanes, behindIsFree: false })).toEqual(["codex", "claude", "gemini", "openrouter", "rest"]);
+    // A class that may never use a free lane drops one even if a caller hands it in.
+    expect(ladderFor("IMPORTANT", { ...lanes, behindIsFree: false })).toEqual(["codex", "claude", "rest"]);
+    expect(ladderFor("PRIVATE", { ...lanes, behindIsFree: true })).toEqual(["codex", "claude", "rest"]);
+    expect(MODEL_ORDER.PRIVATE).toMatchObject({ seats: ["claude_code"], free: "NEVER" });
+
+    // Private is decided first and fails closed: no other marker moves private content to another class.
+    expect(workClassOf({ publicModelApproved: false })).toBe("PRIVATE");
+    expect(workClassOf({ publicModelApproved: false, seatFirst: true, important: false, confidential: false })).toBe("PRIVATE");
+    expect(workClassOf({ publicModelApproved: true, confidential: true })).toBe("IMPORTANT");
+    expect(workClassOf({ publicModelApproved: true, important: true, seatFirst: true })).toBe("IMPORTANT");
+    expect(workClassOf({ publicModelApproved: true, seatFirst: true })).toBe("NAMED");
+    expect(workClassOf({ publicModelApproved: true })).toBe("ROUTINE");
     expect(isImportantWork({ publicModelApproved: false })).toBe(true);
     expect(isImportantWork({ publicModelApproved: true, important: true })).toBe(true);
     expect(isImportantWork({ publicModelApproved: true, confidential: true })).toBe(true);
