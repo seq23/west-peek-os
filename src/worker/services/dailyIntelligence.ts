@@ -311,6 +311,7 @@ const defaultSynthesise: Synthesise = async (env, actor, prompt, reportDate, fir
     budgetContext: {
       // Her Claude seat, then Codex, else a named stop; never a paid API. See BRIEF_ROUTE.
       ...BRIEF_ROUTE,
+      judgement: true,
       expectedOutputTokens: BRIEF_EXPECTED_OUTPUT_TOKENS,
     },
     /*
