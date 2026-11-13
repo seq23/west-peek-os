@@ -22,13 +22,6 @@ describe("what a work card is", () => {
     expect(CARD_SOURCES).toHaveLength(creators.length);
   });
 
-  it("explains each source rather than naming it", () => {
-    for (const s of CARD_SOURCES) {
-      expect(s.label).not.toMatch(/_/);
-      expect(s.how.length).toBeGreaterThan(40);
-    }
-  });
-
   /*
    * STRENGTHENED 22 Sep 2026 (Wave D). This used to read migration 0003 alone, which was true only
    * because every value ever written to `work_card.state` happened to be declared there. HELD

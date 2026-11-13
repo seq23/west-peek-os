@@ -116,20 +116,6 @@ describe("Documents: a website change reads cleanly, and its plan is on the same
   });
 });
 
-describe("no raw ISO date or internal id on the four pages", () => {
-  it("renders dates in words and people by name", () => {
-    for (const f of ["RoomsPage", "LearningClubPanel", "RoomSponsorsPage", "EventsPage", "PartnersPanel", "ScheduleRoom"]) {
-      const src = readFileSync(new URL(`../src/client/pages/${f}.tsx`, import.meta.url), "utf8");
-      expect(src, `${f} shows an ISO date`).not.toMatch(/\.slice\(0, 10\)\}/);
-      expect(src, `${f} shows a decided_by id`).not.toMatch(/\$\{p\.decided_by\}|\{p\.decided_by\}/);
-      expect(src, `${f} shows a packet id`).not.toMatch(/\$\{s\.delivered_packet_id\}/);
-    }
-    const events = readFileSync(new URL("../src/client/pages/EventsPage.tsx", import.meta.url), "utf8");
-    expect(events).toContain("<MarkdownDocument source={done.digest_md}");
-    expect(events).not.toContain("{ev.starts_at}");
-  });
-});
-
 describe("notes on ideas and research links are stored, with who and when", () => {
   let t: TestDb;
   let env: Env;

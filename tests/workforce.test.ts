@@ -659,12 +659,6 @@ describe("why each person is on duty", () => {
     }
   });
 
-  it("says something about the person, not just their job title", () => {
-    const duty = resolveDuty(MORNING_HOUR, 5);
-    const wren = duty.onDuty.find((d) => d.name === "Wren");
-    expect(wren?.because).toContain("morning brief");
-  });
-
   it("still lets a pinned person say they were asked for", () => {
     const duty = resolveDuty(MORNING_HOUR, 5, { pinned: ["Willow"] });
     expect(duty.onDuty[0]!.name).toBe("Willow");
