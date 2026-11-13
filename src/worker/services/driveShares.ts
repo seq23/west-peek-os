@@ -11,6 +11,7 @@ import type { BlockProvider } from "../../shared/work/blocks";
 import { loadProfile } from "./partnerProfile";
 import { aliasHostsIn, candidateLabel, ctTime, shareQuestionEmail, topicWords, type Candidate } from "./emailRouting";
 import { sendPartnerEmail } from "./execEmail";
+import { PARTNER_MATERIAL_GRACE_MINUTES, driveIdsIn } from "../../shared/work/partnerPractices";
 
 /**
  * A SHARED DRIVE FILE IS THE SHARING PARTNER'S MATERIAL (9 Oct 2026, 0256).
@@ -29,6 +30,11 @@ import { sendPartnerEmail } from "./execEmail";
  *   3 · NO MATCH. A new card for him with the file on it, and ONE plain email: "I got <title> from you
  *       at <time> CT. What would you like me to do with it?" with at most three replies. His reply
  *       routes it; no reply → the card's normal 24-hour reminder (it is BLOCKED on him).
+ *       THE EMAIL WAITS A GRACE PERIOD (13 Nov 2026, #354): he shared a folder and, seven seconds
+ *       later, emailed the request that links it; the question had already gone. Now the question is
+ *       held for PARTNER_MATERIAL_GRACE_MINUTES (`askHeldShareQuestions`, on the sweep). An email of his
+ *       that links the file inside the window joins the share to that job and nothing is asked
+ *       (`joinSharesNamedIn`); a question already sent is closed the same way, with no further email.
  *   4 · NOBODY. Only when no partner can be identified does the door fall back to asking Sequoia.
  */
 
@@ -111,6 +117,12 @@ interface OpenJob {
   title: string;
   property_host: string | null;
   request_json: string | null;
+  description?: string | null;
+}
+
+/** His open job whose own words link this very file or folder: the email came first, the share second. */
+export function jobNamingFile<T extends { description?: string | null; request_json: string | null }>(fileId: string, jobs: readonly T[]): T | null {
+  return jobs.find((j) => driveIdsIn(`${j.description ?? ""}\n${j.request_json ?? ""}`).includes(fileId)) ?? null;
 }
 
 /** His open job this file is about, or null. Pure over the rows and the profile. */
@@ -131,7 +143,7 @@ async function openJobsOf(env: Env, partner: string): Promise<OpenJob[]> {
   return (
     (
       await env.WP_OS_DB.prepare(
-        `SELECT c.id, c.title, c.request_json, w.property_host FROM work_card c LEFT JOIN web_property_change w ON w.work_card_id = c.id
+        `SELECT c.id, c.title, c.request_json, c.description, w.property_host FROM work_card c LEFT JOIN web_property_change w ON w.work_card_id = c.id
           WHERE lower(c.requested_by_email) = ?1 AND c.state NOT IN ('DONE', 'CANCELLED') AND c.merged_into_card_id IS NULL
             AND NOT EXISTS (SELECT 1 FROM work_card ch WHERE ch.assigned_from_card_id = c.id)
           ORDER BY (c.kind = ?2) DESC, c.updated_at DESC LIMIT 20`,
@@ -158,7 +170,7 @@ export async function handleDriveShare(env: Env, input: { notice: DriveShareNoti
   if (!partner) return { handled: false, cardId: null };
   const jobs = await openJobsOf(env, partner.email);
   const profile = await loadProfile(env, partner.email);
-  const match = matchShareToJob(file.title, jobs, aliasHostsIn(file.title, profile));
+  const match = jobNamingFile(file.fileId, jobs) ?? matchShareToJob(file.title, jobs, aliasHostsIn(file.title, profile));
   if (match) {
     await attachDriveFile(env, match.id, file);
     await appendEvent(env, {
@@ -194,24 +206,133 @@ export async function handleDriveShare(env: Env, input: { notice: DriveShareNoti
   });
   const candidates: Candidate[] = jobs.slice(0, 1).map((j) => ({ cardId: j.id, label: candidateLabel(j), host: (j.property_host ?? "").split(/,\s*/)[0] || null }));
   const id = `icl_${crypto.randomUUID()}`;
-  const ins = await env.WP_OS_DB.prepare(
+  await env.WP_OS_DB.prepare(
     "INSERT OR IGNORE INTO inbound_clarification (id, message_id, partner_email, subject, eml_key, candidates_json, kind, card_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'SHARE', ?7)",
   )
     .bind(id, input.messageId, partner.email, file.title.slice(0, 300), input.emlKey, JSON.stringify(candidates), card.id)
     .run();
-  let asked = false;
-  if ((ins.meta?.changes ?? 0) > 0) {
-    const out = await sendPartnerEmail(env, {
-      to: partner.email,
-      email: shareQuestionEmail({ title: file.title, receivedAt: input.receivedAt, url: file.url, candidates }),
-      objectType: "inbound_clarification",
-      objectId: id,
-      firmScope: "west-peek",
-      actorId: partner.firmUserId,
-      events: { sent: "inbound_email.clarification_asked", notSent: "inbound_email.clarification_not_sent" },
-    }).catch(() => ({ sent: false }) as { sent: boolean });
-    asked = out.sent;
-    await env.WP_OS_DB.prepare("UPDATE inbound_clarification SET sent = ?2 WHERE id = ?1").bind(id, asked ? 1 : 0).run();
+  // #354: the row is the held question (`sent` 0). It is asked by `askHeldShareQuestions` once the grace
+  // period has passed with no email of his naming this file; until then nothing is sent to anybody.
+  return { handled: true, cardId: card.id, asked: false };
+}
+
+/**
+ * THE SAME JOIN A PARTNER'S "1" MAKES (`settleShare`), made without asking: the share's question is
+ * resolved to the job, its files go onto the job, and the share's own card is cancelled and merged in.
+ * Claimed on the clarification row, so it happens once whoever gets there first.
+ */
+export async function mergeShareIntoJob(env: Env, row: { id: string; message_id: string; card_id: string }, jobCardId: string, by: string): Promise<boolean> {
+  const claimed = await env.WP_OS_DB.prepare(
+    "UPDATE inbound_clarification SET resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), resolution = 'CARD', resolved_card_id = ?2, resolved_by = ?3 WHERE id = ?1 AND resolved_at IS NULL",
+  )
+    .bind(row.id, jobCardId, by)
+    .run();
+  if ((claimed.meta?.changes ?? 0) === 0) return false;
+  await moveShareFiles(env, row.card_id, jobCardId);
+  await appendEvent(env, {
+    eventType: "inbound_email.clarified",
+    actorType: "system",
+    actorId: by,
+    objectType: "inbound_clarification",
+    objectId: row.id,
+    firmScope: "west-peek",
+    payload: { message_id: row.message_id, kind: "SHARE", did: "attached", card_id: jobCardId },
+  });
+  return true;
+}
+
+/** The share card's files onto the job, and the share card closed into it. */
+export async function moveShareFiles(env: Env, shareCardId: string, jobCardId: string): Promise<void> {
+  const files = (await env.WP_OS_DB.prepare("SELECT file_id, url, title, mime_type, shared_by, shared_at, text, read_error FROM card_drive_file WHERE work_card_id = ?1").bind(shareCardId).all<{ file_id: string; url: string; title: string; mime_type: string | null; shared_by: string | null; shared_at: string | null; text: string | null; read_error: string | null }>()).results ?? [];
+  for (const f of files) await attachDriveFile(env, jobCardId, { fileId: f.file_id, url: f.url, title: f.title, mimeType: f.mime_type, sharedBy: f.shared_by, sharedAt: f.shared_at, text: f.text, readError: f.read_error });
+  await env.WP_OS_DB.prepare(
+    "UPDATE work_card SET state = 'CANCELLED', merged_into_card_id = ?2, next_action = NULL, block_nag_at = NULL, lease_until = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
+  )
+    .bind(shareCardId, jobCardId)
+    .run();
+}
+
+/**
+ * HIS EMAIL NAMES A FILE HE SHARED (#354). Called wherever the door places a partner's message on a
+ * card. Every open "Shared by" question of the same partner whose file the message links is joined to
+ * that card: held or already sent, it is closed with no email. Returns the share cards merged.
+ */
+export async function joinSharesNamedIn(env: Env, input: { cardId: string; partnerEmail: string | null; text: string | null }): Promise<string[]> {
+  const partner = partnerByEmail(input.partnerEmail);
+  const ids = driveIdsIn(input.text);
+  if (!partner || ids.length === 0) return [];
+  // The job doing the work: the live card this one was handed to (a chief's card closes on hand-off), else the card itself.
+  const target = await env.WP_OS_DB.prepare(
+    "SELECT id FROM work_card WHERE (id = ?1 OR assigned_from_card_id = ?1) AND state NOT IN ('DONE', 'CANCELLED') AND merged_into_card_id IS NULL ORDER BY (assigned_from_card_id = ?1) DESC, created_at DESC LIMIT 1",
+  )
+    .bind(input.cardId)
+    .first<{ id: string }>();
+  if (!target) return [];
+  const open = (
+    await env.WP_OS_DB.prepare(
+      `SELECT ic.id, ic.message_id, ic.card_id, f.file_id FROM inbound_clarification ic JOIN card_drive_file f ON f.work_card_id = ic.card_id
+        WHERE ic.kind = 'SHARE' AND ic.resolved_at IS NULL AND ic.partner_email = ?1 AND ic.card_id IS NOT NULL AND ic.card_id != ?2`,
+    )
+      .bind(partner.email.toLowerCase(), target.id)
+      .all<{ id: string; message_id: string; card_id: string; file_id: string }>()
+  ).results ?? [];
+  const merged: string[] = [];
+  for (const row of open) {
+    if (!ids.includes(row.file_id) || merged.includes(row.card_id)) continue;
+    if (await mergeShareIntoJob(env, row, target.id, "inbound_email")) merged.push(row.card_id);
   }
-  return { handled: true, cardId: card.id, asked };
+  return merged;
+}
+
+/**
+ * THE HELD QUESTION, ASKED WHEN THE GRACE PERIOD ENDS WITH NOTHING (#354). On the sweep. A row is due
+ * when it is a share's question, never sent, unresolved, its card still waiting on him, and older than
+ * the window. Claimed (`sent` 0 → -1) before the send so it goes once; 1 when it went. Rows older than
+ * a day are left to the card's own 24-hour reminder.
+ */
+export async function askHeldShareQuestions(env: Env, now: Date = new Date()): Promise<number> {
+  try {
+    const due = new Date(now.getTime() - PARTNER_MATERIAL_GRACE_MINUTES * 60_000).toISOString();
+    const stale = new Date(now.getTime() - 24 * 3_600_000).toISOString();
+    const rows = (
+      await env.WP_OS_DB.prepare(
+        `SELECT ic.id, ic.partner_email, ic.candidates_json, ic.card_id, ic.asked_at FROM inbound_clarification ic JOIN work_card c ON c.id = ic.card_id
+          WHERE ic.kind = 'SHARE' AND ic.sent = 0 AND ic.resolved_at IS NULL AND ic.asked_at <= ?1 AND ic.asked_at > ?2 AND c.state = 'BLOCKED'
+          ORDER BY ic.asked_at LIMIT 5`,
+      )
+        .bind(due, stale)
+        .all<{ id: string; partner_email: string; candidates_json: string; card_id: string; asked_at: string }>()
+    ).results ?? [];
+    let n = 0;
+    for (const row of rows) {
+      const claimed = await env.WP_OS_DB.prepare("UPDATE inbound_clarification SET sent = -1 WHERE id = ?1 AND sent = 0 AND resolved_at IS NULL").bind(row.id).run();
+      if ((claimed.meta?.changes ?? 0) === 0) continue;
+      const partner = partnerByEmail(row.partner_email);
+      const file = await env.WP_OS_DB.prepare("SELECT title, url, shared_at FROM card_drive_file WHERE work_card_id = ?1 ORDER BY created_at LIMIT 1").bind(row.card_id).first<{ title: string; url: string; shared_at: string | null }>();
+      if (!partner || !file) continue;
+      let candidates: Candidate[] = [];
+      try {
+        candidates = JSON.parse(row.candidates_json) as Candidate[];
+      } catch {
+        candidates = [];
+      }
+      const out = await sendPartnerEmail(env, {
+        to: partner.email,
+        email: shareQuestionEmail({ title: file.title, receivedAt: file.shared_at ?? row.asked_at, url: file.url, candidates }),
+        objectType: "inbound_clarification",
+        objectId: row.id,
+        firmScope: "west-peek",
+        actorId: partner.firmUserId,
+        events: { sent: "inbound_email.clarification_asked", notSent: "inbound_email.clarification_not_sent" },
+      }).catch(() => ({ sent: false }) as { sent: boolean });
+      if (out.sent) {
+        await env.WP_OS_DB.prepare("UPDATE inbound_clarification SET sent = 1 WHERE id = ?1").bind(row.id).run();
+        n++;
+      }
+    }
+    return n;
+  } catch (err) {
+    console.error("held share questions failed", err);
+    return 0;
+  }
 }

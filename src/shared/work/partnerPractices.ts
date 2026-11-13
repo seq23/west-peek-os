@@ -108,6 +108,32 @@ export interface NamedDriveFolder {
   url: string;
 }
 
+/**
+ * FOLDERS AND FILES GET A GRACE PERIOD (owner ruling, 13 Nov 2026, #354): "if one of us mentions a
+ * 'folder' or something, Porter or whomever should wait before they ask about it. They should give us
+ * a grace period to send it." ONE window, both directions, every employee, both partners:
+ *   · a share that arrives with no email explaining it waits this long before "What should I do with it?";
+ *   · a folder an email names that is still empty waits this long before "still empty" is said.
+ * When the other half arrives inside the window the two are joined and nothing is asked.
+ *
+ * WHY 15 MINUTES. Every share a partner has sent os@ beside an email about it (production
+ * `inbound_message`, to 13 Nov 2026: two of two) was followed by that email within two minutes: 100
+ * seconds on 9 Oct, 7 seconds on 13 Nov. Fifteen minutes is about nine times the longest gap seen,
+ * long enough to write the email after pressing Share, and it is the Drive watch's own recheck
+ * interval, so a named folder is looked at once more before anybody is told it is empty. The cost of
+ * the window is only that a question nobody was going to answer sooner goes out 15 minutes later.
+ */
+export const PARTNER_MATERIAL_GRACE_MINUTES = 15;
+
+/** Every Drive file or folder id a partner's words link to: Docs, Sheets, Slides, files and folders. */
+export function driveIdsIn(text: string | null | undefined): string[] {
+  const seen = new Set<string>();
+  for (const m of String(text ?? "").matchAll(/https?:\/\/(?:docs|drive)\.google\.com\/(?:(?:document|spreadsheets|presentation|file)\/(?:u\/\d+\/)?d\/|drive\/(?:u\/\d+\/)?folders\/|open\?id=)([A-Za-z0-9_-]{10,})/g)) {
+    if (m[1]) seen.add(m[1]);
+  }
+  return [...seen].slice(0, 20);
+}
+
 /** Every Drive FOLDER link in a partner's words (folders only; a single file is an attachment, not a watch). */
 export function driveFoldersIn(text: string | null | undefined): NamedDriveFolder[] {
   const out: NamedDriveFolder[] = [];
