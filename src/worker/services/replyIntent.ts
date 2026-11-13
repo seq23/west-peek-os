@@ -73,7 +73,33 @@ export function keywordIntent(text: string): ReplyIntent | null {
   // Two phrases the doors write themselves, never a partner's free text.
   if (/^Attached: [^\n]+$/.test(trimmed)) return { ...base, kind: "CONTINUE", changes: null, reason: "files arrived with the reply" };
   if (trimmed.replace(/[.!]+$/, "").toLowerCase() === MATERIALS_ADDED_PHRASE.toLowerCase()) return { ...base, kind: "CONTINUE", changes: null, reason: "the materials-added phrase" };
+  if (reportsAFault(trimmed)) {
+    return { ...base, kind: "CONTINUE", changes: `${FAULT_PREFIX}${trimmed.slice(0, PARTNER_ANSWER_MAX - FAULT_PREFIX.length)}`, reason: "the partner reports that something Porter built does not work" };
+  }
   return null;
+}
+
+/**
+ * A REPORT THAT SOMETHING DOES NOT WORK IS A FIX, NEVER A QUESTION (13 Nov 2026). Scooter forwarded a
+ * screenshot of the preview's dashboard refusing his sign-in: "i tried accessing the dashboard and got
+ * the screenshot below. can you resend the link with the password". The reader called it a QUESTION
+ * and Porter answered "Here is where it stands. The preview is at …" — the link that had just failed
+ * him. A partner telling Porter that what he built errors, refuses him or will not open is
+ * instructions to fix it: carried as CHANGES, so at the preview it rebuilds. Pure; no model call.
+ */
+export const FAULT_PREFIX = "Fix what the partner reports does not work, in his words: ";
+const FAULT_WORDS = [
+  /\b(?:does ?n[o']t|does not|is ?n[o']t|is not|not|never|wo ?n[o']t|will not|ca ?n[o']t|cannot|could ?n[o']t|could not|did ?n[o']t|did not) (?:work|working|load|loading|open|opening|let me|show|showing)\b/i,
+  /\b(?:ca ?n[o']t|cannot|could ?n[o']t|could not|unable to) (?:access|get in|get into|sign in|log ?in|open|see|reach)\b/i,
+  /\b(?:i|we) (?:keep|kept) (?:getting|seeing|hitting)\b/i,
+  /\b(?:got|get|getting|see|seeing|shows?|showing|hit|hitting) (?:this|that|an|the|a) (?:error|screenshot|screen|message)\b/i,
+  /\b(?:an? |this |that |the )?error (?:message|page|screen|says|saying)\b/i,
+  /\b(?:was|were|got|keeps? being|is being) (?:refused|rejected|blocked|denied)\b/i,
+  /\b(?:it'?s|is|looks|seems) broken\b/i,
+];
+export function reportsAFault(text: string | null | undefined): boolean {
+  const t = (text ?? "").replace(/\s+/g, " ");
+  return FAULT_WORDS.some((re) => re.test(t));
 }
 
 /** What the model must answer with, read strictly. Anything unreadable is a CONTINUE with the words carried. */
@@ -114,6 +140,8 @@ export const defaultReadReplyIntent: ReplyIntentReader = async (env, input) => {
             "A long email full of instructions is CONTINUE with those instructions as CHANGES.\n" +
             "STOP — an explicit stop, hold, or \"don't\": the partner does not want anything built or landed right now.\n" +
             "QUESTION — the partner is asking Porter something and wants an answer (may also carry instructions; put those in CHANGES).\n\n" +
+            "A report that something Porter built does not work (an error, a refused sign-in, a page that will not open, a screenshot of a problem), " +
+            "or a request to fix or resend it, is CONTINUE with CHANGES = fix what they reported, in their words — never a QUESTION.\n" +
             "BIAS HARD TOWARD CONTINUE. A reply is permission unless it plainly says to stop. Only answer STOP when the words " +
             "clearly say to hold or not proceed. Only answer QUESTION when there is a real question addressed to Porter that " +
             "needs an answer — a rhetorical or answered-in-the-same-breath question is not one.\n\n" +
