@@ -3,6 +3,7 @@ import { DRIP_STEP_2_POLICY, DRIP_STEP_2_RULE } from "../src/shared/tlc/dripPoli
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
+import { gmailReadStub } from "./helpers/gmailMailbox";
 import type { Env } from "../src/worker/env";
 import { DRIP_TIMED_FOR_SETTING, contentHashes, recordBrandMail, retimeDrip, runDrip } from "../src/worker/services/learningClub";
 import { SPAM_PAUSE_SETTING, TLC_DRIP_DAYS } from "../src/shared/tlc/learningClub";
@@ -35,10 +36,15 @@ async function pitched(brand: string, extra: Record<string, unknown> = {}): Prom
 }
 const dealRow = (id: string) => env.WP_OS_DB.prepare("SELECT drip_step, next_send_at, stop_reason, stage FROM tlc_deal WHERE id = ?1").bind(id).first<{ drip_step: number; next_send_at: string | null; stop_reason: string | null; stage: string }>();
 
+const sentMailbox = gmailReadStub({ sentMail: true });
+
 beforeAll(async () => {
   t = await createTestDb();
   env = { ...makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled", WP_OS_DOCUMENTS: t.docs } as Partial<Env>), RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures", WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON: SERVICE_ACCOUNT, WP_OS_NEVERBOUNCE_API_KEY: "nb_test" } as Env;
   vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
+    // Her mailbox, for reads: a follow-up goes only as a reply on its first email's conversation (tlcBrandThread.ts).
+    const read = sentMailbox(String(url));
+    if (read) return read;
     const u = String(url);
     if (u.startsWith("https://api.neverbounce.com/")) return new Response(JSON.stringify({ status: "success", result: "valid" }), { status: 200 });
     if (u.includes("api.resend.com")) {

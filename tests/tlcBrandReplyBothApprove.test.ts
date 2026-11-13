@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
+import { gmailReadStub } from "./helpers/gmailMailbox";
 import type { Env } from "../src/worker/env";
 import { contentHashes, recordBrandMail, recordBrandReplyText } from "../src/worker/services/learningClub";
 import { applyBrandReplyApproval, approvalWords, changedLines, sendReplyApprovals, type ReplyDrafter } from "../src/worker/services/tlcBrandReply";
@@ -65,6 +66,8 @@ async function toRoundTwo(dealId: string, brand: string, email: string): Promise
   return r.notice_ref;
 }
 
+const mailbox = gmailReadStub();
+
 beforeAll(async () => {
   t = await createTestDb();
   const store = new Map<string, Uint8Array>();
@@ -77,6 +80,9 @@ beforeAll(async () => {
       return new Response(JSON.stringify({ id: `re_${sends.length}` }), { status: 200 });
     }
     if (String(url) === "https://oauth2.googleapis.com/token") return new Response(JSON.stringify({ access_token: "ya29.test" }), { status: 200 });
+    // Her mailbox, for reads: a brand answer goes only once its conversation is found there (tlcBrandThread.ts).
+    const read = mailbox(String(url));
+    if (read) return read;
     if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/messages/send") {
       const raw = Buffer.from((JSON.parse(String(init?.body)) as { raw: string }).raw, "base64url").toString();
       const head = raw.split("\r\n\r\n")[0]!;
