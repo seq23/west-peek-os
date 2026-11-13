@@ -601,7 +601,7 @@ describe("the Technical line's try count and where Check a page is offered (23 S
   // succeeded; then one build run. The sweep's counter read 1 throughout.
   const HISTORY = JSON.stringify([
     { at: "2026-09-23T17:24:18.318Z", run_id: "ccr_a313e6a1", phase: "PLAN", status: "ABANDONED", reason: "went quiet for 11 minutes" },
-    { at: "2026-09-23T17:42:18.591Z", run_id: "ccr_106ab7cb", phase: "PLAN", status: "ok", reason: "" },
+    { at: "2026-09-23T17:42:18.591Z", run_id: "ccr_106ab7cb", phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build" }], reason: "" },
     { at: "2026-09-23T18:18:18.551Z", run_id: "ccr_4561d304", phase: "BUILD", status: "ok", reason: "" },
   ]);
 

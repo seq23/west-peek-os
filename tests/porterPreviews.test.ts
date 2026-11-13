@@ -68,7 +68,7 @@ async function atFirstPreview(subject: string, build: Record<string, unknown> = 
   await tickFor(id);
   // One ask WITHOUT a recommendation, so the plan still blocks and "approved" still clears it (since
   // 27 Sep 2026 a plan whose every ask carries a recommendation is approved by the request).
-  await macReports(id, { phase: "PLAN", status: "ok", document: `# joinwestpeek.com — ${subject} (PLAN)\n\nbody`, decided: [], asks: [{ question: "Orange?", recommended: "#c45a3c" }, { question: "Which Sengo logo — the black or the white?" }], publish_ready: false, placeholders: ["Sengo logo", "Ep 4 link"] });
+  await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build" }], document: `# joinwestpeek.com — ${subject} (PLAN)\n\nbody`, decided: [], asks: [{ question: "Orange?", recommended: "#c45a3c" }, { question: "Which Sengo logo — the black or the white?" }], publish_ready: false, placeholders: ["Sengo logo", "Ep 4 link"] });
   expect((await tickFor(id)).outcome).toBe("BLOCKED");
   expect((await reply(SEQUOIA, id, "approved")).answered).toBe(true);
   expect((await tickFor(id)).summary).toMatch(/BUILD queued/);
@@ -248,7 +248,7 @@ describe("\"I added missing items\" (her label, exactly) and the preview re-sent
     const chief = await openAssignmentCard(env, { subject: "events page", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: `Porter, events page on the community site — https://drive.google.com/drive/folders/${FOLDER}evnts`, limits: EMAILED_TASK_LIMITS, emlKey: null });
     const planId = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chief)).description))![1]!;
     await tickFor(planId);
-    await macReports(planId, { phase: "PLAN", status: "ok", document: "# Plan: events page", decided: [], asks: [{ question: "Dates?", recommended: "as listed" }, { question: "Which venue photo?" }], publish_ready: false, placeholders: ["Ep 6 flyer"] });
+    await macReports(planId, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build" }], document: "# Plan: events page", decided: [], asks: [{ question: "Dates?", recommended: "as listed" }, { question: "Which venue photo?" }], publish_ready: false, placeholders: ["Ep 6 flyer"] });
     await tickFor(planId);
     expect((await post(`/api/work-cards/${planId}/materials-added`, SEQUOIA)).status).toBe(200);
     expect((await row(planId)).plan_approved_at, "the button is never a plan approval").toBeNull();

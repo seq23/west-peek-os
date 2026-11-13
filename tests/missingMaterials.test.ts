@@ -256,6 +256,7 @@ describe("Porter's web lane: the plan asks for the materials, a reply's file rea
     await tickFor(id);
     await macReports({
       phase: "PLAN",
+      accounting: [{ ask: "what the partner asked for", how: "build" }],
       status: "ok",
       document: "# Plan: podcast page\n\nFive episode cards from the package; two headshots are not in the folder.",
       decided: ["episode cards from the manifest"],

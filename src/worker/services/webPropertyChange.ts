@@ -52,6 +52,7 @@ import {
   type LocalJobReport,
   type WebPropertyChangePhase,
 } from "../../shared/work/localJobs";
+import { partnerWrote, planProblems, refusalLine } from "../../shared/work/everyAsk";
 
 /**
  * A WEB PROPERTY CHANGE, worked by Porter on her Mac (20 Sep 2026, Plan A).
@@ -840,6 +841,11 @@ export async function parkPhase(
     const texts = [payload.card.title, payload.ask, payload.request, payload.plan?.text ?? "", ...(payload.plan?.answers ?? []), ...(payload.drive_files ?? []).map((f) => f.text ?? "")];
     payload.private_model_only = !committed.readable || committedLpNamedIn(texts, committed.names) !== null;
     // #357: the partner's "keep this private" is a standing rule on every phase, and keeps the job on the private model.
+    // #363: a refused plan is planned again knowing why; the reason rides on the job as a standing constraint.
+    if (phase === "PLAN") {
+      const last = (() => { try { const h = JSON.parse(row.run_history_json || "[]") as Array<{ status?: string; reason?: string }>; return Array.isArray(h) ? h.at(-1) : undefined; } catch { return undefined; } })();
+      if (last?.status === "REFUSED" && last.reason) payload.constraints = [...(payload.constraints ?? []), last.reason];
+    }
     const privateAsk = privateMaterialSentence([payload.ask, payload.request, payload.card.title]);
     if (privateAsk) {
       payload.constraints = [...(payload.constraints ?? []), privateMaterialConstraint(privateAsk)];
@@ -1346,6 +1352,24 @@ export async function applyReport(
   }
   await recordHistory(env, row, { run_id: run.id, phase: report.phase, status: report.status, reason: (report.reason ?? "").slice(0, 300) });
 
+  /*
+   * #363: EVERY ASK IS BUILT IN THE JOB OR THE PARTNER IS ASKED (owner ruling, 13 Nov 2026). A plan
+   * that leaves an ask unaccounted for, or puts off work the partner did not date, is refused before
+   * anything of it is applied: a failed attempt that says why, on the card and to the next PLAN.
+   */
+  if (report.phase === "PLAN" && report.status === "ok") {
+    const shared = await (await import("./driveShares")).driveFilesFor(env, card.id);
+    const partnerText = [row.request_text ?? "", row.ask ?? "", ...list(row.answers_json), ...shared.map((f) => f.text ?? "")].join("\n");
+    const problems = planProblems({ partnerText, accounting: report.accounting, asks: report.asks, deferred: report.deferred });
+    if (problems.length) {
+      const line = refusalLine(problems);
+      await recordHistory(env, { ...row, run_history_json: (await readWebPropertyChange(env, card.id))?.run_history_json ?? row.run_history_json }, { run_id: run.id, phase: "PLAN", status: "REFUSED", reason: line.slice(0, 1200) });
+      await appendFinding(env, card.id, line);
+      return { finished: false, blocked: false, progressed: false, detail: line.slice(0, 600) };
+    }
+    if (report.accounting?.length) await appendFinding(env, card.id, `Per ask: ${report.accounting.map((a) => `${a.ask.slice(0, 120)} → ${a.how === "build" ? "built in this job" : a.how === "question" ? "asked of the partner" : "later, on the partner's own date"}`).join("; ")}`);
+  }
+
   // 0253: what the repo itself said, the keys the vault lacks (only with the lookup that proves it), the runs.
   const absorbed = await absorbRepoReport(env, card, row, report);
   if (absorbed) return absorbed;
@@ -1471,7 +1495,9 @@ async function absorbRepoReport(env: Env, card: WebPropertyChangeCard, row: WebP
     if (told.length) await appendFinding(env, card.id, `A host outside the firm's Cloudflare zones: ${told.join(", ")}. The partner has the exact record to add at their registrar; the site is live on pages.dev meanwhile and I re-check every 15 minutes for 7 days.`);
   }
   // Addendum 5: work the partner dated for later becomes its own card, leased until its week — never lost on close.
-  if (Array.isArray(report.deferred) && report.deferred.length) {
+  // FROM THE PLAN ONLY (#363): the plan is where the later work is dated and where the partner is told
+  // it is "its own card". BUILD and LAND repeat the plan's list; they do not make promises of their own.
+  if (report.phase === "PLAN" && Array.isArray(report.deferred) && report.deferred.length) {
     for (const d of report.deferred.slice(0, 5)) await deferWork(env, card, row, d);
   }
   if (Array.isArray(report.items) && report.items.length) {
@@ -1487,24 +1513,75 @@ async function absorbRepoReport(env: Env, card: WebPropertyChangeCard, row: WebP
 }
 
 /**
- * DEFERRED WORK WITH A DATE (0253, addendum 5): "for next week, …" is its own card on the same repo,
- * for the same partner, leased until the date so the sweep leaves it alone until then and then
- * runs it as any other job; the partner hears about it when it runs. Idempotent on (card, ask).
+ * DEFERRED WORK WITH A DATE (0253, addendum 5): "for next week, …" is its own card for the same
+ * partner, leased until the date so the sweep leaves it alone until then and then runs it as any
+ * other card; the partner hears about it when it runs. Idempotent on (card, ask).
+ *
+ * TWO RULES FROM 13 Nov 2026 (#363). A partner asked for a website and a dashboard in one email; the
+ * plan put the dashboard in `deferred` and told him it was "its own card". No card was made (the
+ * report reader dropped the field) and nothing said so.
+ *   1 · A DEFERRED ITEM THAT YIELDS NO CARD IS A LOUD FAILURE ON THE SOURCE CARD: a finding on the
+ *       card, an event, and a notice to the partners. Never a silent return.
+ *   2 · ONLY A CHANGE TO THIS SITE BECOMES A SITE JOB HERE (`site_change: true`). Anything else is a
+ *       plain dated card: work that belongs in another system is not built in this site's repo.
+ * Returns the card's id (new or already filed), or null when it could not be filed.
  */
-export async function deferWork(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, d: { ask: string; due_at: string; words?: string }): Promise<void> {
+export async function deferWork(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, d: { ask: string; due_at: string; words?: string; site_change?: boolean }): Promise<string | null> {
   // R14 / R23 FOR EVERY KIND (0254): the dated card itself is made by the shared door; Porter's part is making it a site job.
-  const { deferCard } = await import("./deferredWork");
-  const madeId = await deferCard(
-    env,
-    { id: card.id, title: card.title, owner_id: PORTER_ID, requested_by_email: card.requested_by_email ?? null, firm_scope: card.firm_scope },
-    { ask: d.ask, due_at: d.due_at, words: d.words ?? null },
-    { where: row.target_repo, nextAction: `Waiting for its week (${String(d.due_at).slice(0, 10)}); then planned, built and previewed like any site job.` },
-  );
-  if (!madeId) return;
-  const ask = readWebPropertyAsk(card.request_json);
-  await env.WP_OS_DB.prepare("UPDATE work_card SET kind = ?2 WHERE id = ?1").bind(madeId, WEB_PROPERTY_CHANGE_KIND).run();
-  await openWebPropertyChange(env, { cardId: madeId, ask: { drive_folder_id: row.drive_folder_id, drive_folder_url: row.drive_folder_url, drive_file_url: null, property_host: row.property_host, target_repo: row.target_repo, site: ask?.site ?? null, ask: d.ask, pre_approval: null, force: null, addressee: "Porter", property_unresolved: false }, firmScope: card.firm_scope });
-  await appendFinding(env, card.id, `Deferred, as asked: "${d.ask.slice(0, 160)}" — its own card (${madeId}) runs on ${d.due_at.slice(0, 10)}.`);
+  const { deferCard, deferredCardFor } = await import("./deferredWork");
+  const ask = String(d?.ask ?? "");
+  const dueAt = String(d?.due_at ?? "");
+  const siteChange = d?.site_change === true;
+  let madeId: string | null = null;
+  let why = "";
+  try {
+    madeId = await deferCard(
+      env,
+      { id: card.id, title: card.title, owner_id: PORTER_ID, requested_by_email: card.requested_by_email ?? null, firm_scope: card.firm_scope },
+      { ask, due_at: dueAt, words: d?.words ?? null },
+      siteChange
+        ? { where: row.target_repo, nextAction: `Waiting for its week (${dueAt.slice(0, 10)}); then planned, built and previewed like any site job.` }
+        : { nextAction: `Waiting for its date (${dueAt.slice(0, 10)}). This is not a change to ${row.property_host ?? row.target_repo}: it is worked as its own card, and the partner hears when it starts.` },
+    );
+    if (!madeId) {
+      const already = ask.trim() ? await deferredCardFor(env, card.id, ask) : null;
+      if (already) return already;
+      why = !ask.trim() ? "the item had no ask" : !Number.isFinite(Date.parse(dueAt)) ? `its date ("${dueAt.slice(0, 40)}") could not be read` : "no card was made";
+    }
+  } catch (err) {
+    why = err instanceof Error ? err.message : String(err);
+  }
+  if (!madeId) {
+    await deferredNotFiled(env, card, ask, dueAt, why);
+    return null;
+  }
+  if (siteChange) {
+    const source = readWebPropertyAsk(card.request_json);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = ?2 WHERE id = ?1").bind(madeId, WEB_PROPERTY_CHANGE_KIND).run();
+    await openWebPropertyChange(env, { cardId: madeId, ask: { drive_folder_id: row.drive_folder_id, drive_folder_url: row.drive_folder_url, drive_file_url: null, property_host: row.property_host, target_repo: row.target_repo, site: source?.site ?? null, ask, pre_approval: null, force: null, addressee: "Porter", property_unresolved: false }, firmScope: card.firm_scope });
+  }
+  await appendFinding(env, card.id, `Deferred, as asked: "${ask.slice(0, 160)}" — its own card (${madeId}) runs on ${dueAt.slice(0, 10)}${siteChange ? "" : "; it is not a change to this site, so it is not a site job here"}.`);
+  return madeId;
+}
+
+/** Rule 0 for deferred work: the promise was made to the partner, so its failure is said where people look. */
+async function deferredNotFiled(env: Env, card: WebPropertyChangeCard, ask: string, dueAt: string, why: string): Promise<void> {
+  const what = ask.trim() ? `"${ask.slice(0, 160)}"` : "a deferred item";
+  const line = `DEFERRED WORK NOT FILED: ${what}${dueAt ? ` (due ${dueAt.slice(0, 10)})` : ""} has NO card — ${why.slice(0, 300)}. The partner may have been told it is its own card; it is tracked nowhere until someone files it.`;
+  console.error(`deferWork: ${card.id}: ${why}`);
+  await appendFinding(env, card.id, line).catch(() => {});
+  await appendEvent(env, { eventType: "work_card.deferred_not_filed", actorType: "system", actorId: "work_sweep", objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { due_at: dueAt.slice(0, 40), why: why.slice(0, 300) } }).catch(() => {});
+  const { notifyPartners } = await import("./notifications");
+  await notifyPartners(env, {
+    kind: "PROVIDER_FAILURE",
+    severity: "WARNING",
+    title: "Later work a partner asked for was not filed",
+    body: `On "${card.title.slice(0, 120)}": ${what}${dueAt ? `, due ${dueAt.slice(0, 10)},` : ""} was to become its own card and did not (${why.slice(0, 200)}). Nothing is tracking it.`,
+    objectType: "work_card",
+    objectId: card.id,
+    dedupeKey: `deferred_not_filed:${card.id}:${ask.slice(0, 60)}`,
+    firmScope: card.firm_scope,
+  }).catch(() => {});
 }
 
 /**
@@ -2685,6 +2762,16 @@ export async function runWebPropertyChangeCard(
     }
     // Green, and back here. A change that previews first needs the SECOND "approved" from the
     // requesting partner, read against the time the preview email went out.
+    /*
+     * THE SYSTEM REOPENED THIS JOB TO FINISH THE ORIGINAL REQUEST (#363, `finishOriginalAsk`). The
+     * rebuild it asked for after the last preview is carried out; the old preview is not asked
+     * about again. It approves nothing: the fresh preview waits for the partner's word as always.
+     */
+    if (row.refresh_intent === "CHANGES" && row.rebuilt_for?.startsWith(FINISH_ORIGINAL_ASK) && row.refresh_requested_at && (!row.preview_emailed_at || row.refresh_requested_at > row.preview_emailed_at) && !row.land_approved_at) {
+      const parked = await parkPhase(env, card, row, "BUILD", rules);
+      if (!parked.parked) return { finished: false, blocked: false, progressed: true, detail: parked.reason };
+      return { finished: false, blocked: false, progressed: true, detail: `Reopened to finish the original request; BUILD queued for the Mac (${phaseModel(rules, "BUILD")}).` };
+    }
     if (needsPreview(row) && !row.land_approved_at && !row.forced_by) {
       const answer = answerSince(card, row.preview_emailed_at);
       const requester = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
@@ -2977,6 +3064,71 @@ export async function handleGetWebPropertyChange(ctx: RouteContext): Promise<Res
 }
 
 /** The Mac's claimer, or a Managing Partner — the two who may fetch a request's files. */
+/**
+ * THE JOB LEFT OUT PART OF THE ORIGINAL REQUEST → THE SYSTEM REOPENS IT TO FINISH IT (owner, 13 Nov
+ * 2026, #363). A partner asked for a website and a dashboard; the plan built the website and put
+ * the dashboard off. Her ruling: finishing what was asked needs nobody's permission; permission
+ * is for dropping, deferring or moving an ask. So this is the OS correcting its own incomplete
+ * job, the way `resumeForSecret` resumes one when a key arrives: recorded as the system, never as
+ * a partner, and never as an answer to the block.
+ *
+ *   · ONLY AN ORIGINAL ASK. `ask` must be the partner's own words, found in the stored request
+ *     (`partnerWrote`). Words the partner never wrote are refused: this path cannot add work.
+ *   · ONLY WORK. Instructions that read as an approval, a publish, a preview request or a force
+ *     are refused. Nothing here approves, lands, publishes or sends: the rebuild ends at a fresh
+ *     preview that waits for the requesting partner exactly as every preview does.
+ *   · ONLY A JOB PAST ITS PLAN AND NOT LANDING. A plan that leaves an ask out is refused when it
+ *     reports (`planProblems`), so before BUILD this never needs calling.
+ */
+export const FINISH_ORIGINAL_ASK = "Finish the original request:";
+
+export async function finishOriginalAsk(env: Env, cardId: string, input: { ask: string; instruction: string; enteredBy: string }): Promise<{ ok: true; ask: string } | { ok: false; status: number; reason: string }> {
+  const card = await env.WP_OS_DB.prepare("SELECT id, kind, state, firm_scope FROM work_card WHERE id = ?1").bind(cardId).first<{ id: string; kind: string | null; state: string; firm_scope: string }>();
+  const row = card ? await readWebPropertyChange(env, cardId) : null;
+  if (!card || !row || card.kind !== WEB_PROPERTY_CHANGE_KIND) return { ok: false, status: 404, reason: "no website job with that id" };
+  if (card.state === "DONE" || card.state === "CANCELLED") return { ok: false, status: 409, reason: `the job is ${card.state}` };
+  if (row.phase !== "BUILD" || !row.plan_approved_at) return { ok: false, status: 409, reason: `the job is at ${row.phase}: a plan that leaves an ask out is refused when it reports; this reopens a job that is past its plan` };
+  if (row.land_approved_at || row.forced_by) return { ok: false, status: 409, reason: "the job is approved to land; it is not reopened under the partner's approval" };
+  if (row.current_run_id) return { ok: false, status: 409, reason: "a run is in flight on the Mac; try again when it reports" };
+  const ask = input.ask.trim().slice(0, 300);
+  if (!partnerWrote(ask, `${row.request_text ?? ""}\n${row.ask ?? ""}`)) return { ok: false, status: 400, reason: "those words are not in the partner's request: this path finishes what was asked and adds nothing" };
+  const instruction = input.instruction.trim().replace(/^finish the original request\s*:\s*/i, "");
+  if (instruction.length < 10) return { ok: false, status: 400, reason: "say what to build, in a sentence or more" };
+  for (const t of [instruction, input.instruction.trim()]) {
+    const kind = readApprovalReply(t).kind;
+    if (kind === "APPROVED" || kind === "FORCED" || kind === "PUBLISH" || kind === "PREVIEW") return { ok: false, status: 400, reason: `those words read as ${kind.toLowerCase()}: approving, publishing and forcing take the partner who asked, never this path` };
+  }
+  const now = new Date().toISOString();
+  const words = `${FINISH_ORIGINAL_ASK} ${instruction}`.slice(0, PARTNER_ANSWER_MAX);
+  await update(env, cardId, { refresh_intent: "CHANGES", refresh_requested_at: now, rebuilt_for: words });
+  await appendFinding(env, cardId, `The system reopened this job to finish the original request: "${ask}" was asked for and left out. Rebuilding in the same job and preview; nothing is approved or published by this, and the fresh preview waits for the partner who asked.`);
+  await env.WP_OS_DB.prepare(
+    "UPDATE work_card SET state = 'OPEN', work_attempts = 0, work_steps = 0, lease_until = NULL, waiting_until = NULL, waiting_for = NULL, block_nag_at = NULL, updated_at = ?2 WHERE id = ?1 AND state NOT IN ('DONE', 'CANCELLED')",
+  )
+    .bind(cardId, now)
+    .run();
+  await appendEvent(env, {
+    eventType: "web_property_change.original_ask_reopened",
+    actorType: "system",
+    actorId: "finish_original_ask",
+    objectType: "work_card",
+    objectId: cardId,
+    firmScope: card.firm_scope,
+    payload: { ask, instruction: words, entered_by: input.enteredBy, at: now },
+  });
+  return { ok: true, ask };
+}
+
+/** POST /api/work-cards/:id/finish-original-ask { ask, instruction } — the Mac's own identity or a Managing Partner. */
+export async function handleFinishOriginalAsk(ctx: RouteContext): Promise<Response> {
+  if (!mayFetch(ctx)) return json({ error: "forbidden" }, { status: 403 });
+  const body = (await ctx.request.json().catch(() => null)) as { ask?: unknown; instruction?: unknown } | null;
+  if (typeof body?.ask !== "string" || typeof body?.instruction !== "string") return json({ error: "invalid_input", detail: "ask (the partner's own words) and instruction are required" }, { status: 400 });
+  const out = await finishOriginalAsk(ctx.env, ctx.params.id ?? "", { ask: body.ask, instruction: body.instruction, enteredBy: ctx.identity!.email });
+  if (!out.ok) return json({ error: "refused", detail: out.reason }, { status: out.status });
+  return json({ ok: true, card_id: ctx.params.id, reopened_for: out.ask });
+}
+
 function mayFetch(ctx: RouteContext): boolean {
   const identity = ctx.identity;
   if (!identity) return false;
