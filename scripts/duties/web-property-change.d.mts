@@ -9,7 +9,18 @@ export function branchAlias(branch: string | null | undefined): string;
 export function claudeSpentUsage(run: { out: string; err: string }): string | null;
 export function codexSpentUsage(run: { out: string; err: string }): string | null;
 /** A spent plan (a Codex limit, a spent brain turn, or both seats): a report that asks the Worker to hold the card until the reset, or null for any other run. */
-export function spentReport(phase: string, claude: { bothSpent?: boolean; codexLimited?: string; servedBy?: string; resetsInSeconds?: number; out?: string; err?: string } | null | undefined): { phase: string; status: "failed"; reason: string; waits_seconds: number } | null;
+export function spentReport(phase: string, claude: { bothSpent?: boolean; heldForClaude?: string; servedBy?: string; resetsInSeconds?: number; out?: string; err?: string } | null | undefined, result?: unknown): { phase: string; status: "failed"; reason: string; waits_seconds: number } | null;
+export const CLAUDE_CHECK_NOTE: string;
+export function runModel(
+  opts: { job?: { card_kind?: string; private_model_only?: boolean } | null; phase?: string; prompt: string; jobDir?: string | null; materialDirs?: string[]; onLine?: (line: string) => void; [k: string]: unknown },
+  deps?: {
+    runBrain?: () => Promise<{ code: number | null; out: string; err: string }>;
+    runWorker?: () => Promise<{ code: number | null; out: string; err: string }>;
+    brainSpent?: (r: { out: string; err: string }) => string | null;
+    workerSpent?: (r: { out: string; err: string }) => string | null;
+    workerUsable?: () => { ok: boolean; why: string };
+  },
+): Promise<{ code: number | null; out: string; err: string; servedBy: "claude" | "codex" | "none"; heldForClaude?: string; bothSpent?: boolean; resetsInSeconds?: number }>;
 export function runRefusal(
   run: { script?: string; env?: string; args?: readonly string[] },
   gate: { admittedNow: readonly string[]; base: readonly string[]; job: unknown; phase: string },

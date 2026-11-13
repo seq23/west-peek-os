@@ -111,8 +111,8 @@ her Mac sleeps, a live call reads `meet_live_no_listener`.
 A third launchd job, separate from the seat claimer and the Meet listener: it claims `LOCAL_JOB`
 runs (migration 0219) and runs the duty script for the card's kind — today
 `scripts/duties/web-property-change.mjs` — in a git worktree of the target repo, with the model
-`scripts/claimer/model-roles.json` names for the phase (Codex for hands-on work, Claude for planning and
-for anything confidential), tools, caffeinate and a hard ceiling. It never creates work and never lands without the recorded
+the phase's job class takes in the one rule table (`scripts/claimer/model-roles.json` gives the class,
+`src/shared/ai/modelOrder.json` the routes: hard work on Claude with Codex as a checked backup, private hard work on Claude only), tools, caffeinate and a hard ceiling. It never creates work and never lands without the recorded
 approval and green check the job carries (`validate:no-land-without-approval`).
 
 What it needs on this Mac, all of which `--doctor` checks: `claude`, `codex` (signed in on her ChatGPT plan), `gh` (signed in), `git`,

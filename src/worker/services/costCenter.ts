@@ -106,6 +106,25 @@ function groupSpend(runs: RunCostRow[], key: (r: RunCostRow) => string | null): 
     .sort((a, b) => b.committed_usd - a.committed_usd);
 }
 
+/**
+ * THE MEASURED LINE (owner, 13 Nov 2026): per route, how many runs it completed and how many it failed in the
+ * period, from `ai_run`. A run that never reached a route (a preflight wait or block) belongs to none and is not
+ * counted against any. This is what the order is judged by; no model is named as better anywhere.
+ */
+export function routeScores(runs: ReadonlyArray<{ status: string; provider_key: string | null }>): { rows: Array<{ route: string; completed: number; failed: number }>; line: string } {
+  const map = new Map<string, { completed: number; failed: number }>();
+  for (const r of runs) {
+    if (!r.provider_key) continue;
+    const cur = map.get(r.provider_key) ?? { completed: 0, failed: 0 };
+    if (r.status === "COMPLETED") cur.completed += 1;
+    else if (r.status === "FAILED" || r.status === "BLOCKED_DEFERRED") cur.failed += 1;
+    else continue;
+    map.set(r.provider_key, cur);
+  }
+  const rows = [...map.entries()].map(([route, v]) => ({ route, ...v })).sort((a, b) => b.completed + b.failed - (a.completed + a.failed));
+  return { rows, line: rows.length ? rows.map((r) => `${r.route}: ${r.completed} completed, ${r.failed} failed`).join(" · ") : "no run reached a route in this period" };
+}
+
 export async function handleCostOverview(ctx: RouteContext): Promise<Response> {
   const url = new URL(ctx.request.url);
   const period = (url.searchParams.get("period") ?? "MONTHLY") as BudgetPeriod;
@@ -295,6 +314,7 @@ export async function handleCostOverview(ctx: RouteContext): Promise<Response> {
     },
     by_employee: groupSpend(runs, (r) => r.ai_employee_id),
     by_provider: groupSpend(runs, (r) => r.provider_key),
+    routes: routeScores(runs),
     by_model: groupSpend(runs, (r) => r.model),
     by_machine: groupSpend(runs, (r) => (r.machine_id === null ? null : String(r.machine_id))),
     by_category: groupSpend(runs, (r) => r.category),

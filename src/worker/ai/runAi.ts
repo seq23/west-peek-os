@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { SEAT_WAIT_CODE, isImportantWork, ladderFor, orderFreeLanes, orderSeats, workClassOf } from "../../shared/ai/seatOrder";
+import { MODEL_ORDER, SEAT_WAIT_CODE, dutyKindOf, isImportantWork, isPrivateWork, ladderFor, orderFreeLanes, orderSeats, rerankFromLog, workClassOf } from "../../shared/ai/seatOrder";
 import { appendEvent } from "../events";
 import type { Actor } from "../services/authorize";
 import type { PrivacyLabel } from "../../shared/privacy";
@@ -47,6 +47,7 @@ import { classifyContent, type ContentClassVerdict } from "../../shared/ai/conte
 import { MACHINE_REGISTRY } from "../../shared/registry/machines";
 import { isProviderOutage, isUnservedReply, outageKind, shouldBackOff } from "../../shared/ai/providerFailure";
 import {
+  dutyKindAttempts,
   isCoolingDown,
   laneHealth,
   orderByLaneHealth,
@@ -54,7 +55,7 @@ import {
   recordLaneOutage,
   type LaneHealthRow,
 } from "./laneHealth";
-import { CLAIM_WAIT_MS, SEARCH_CLAIM_WAIT_MS, SEATS_WITHOUT_CONTRACTUAL_NO_TRAINING, SEAT_REGISTRY, allSeatAvailability, isSeat } from "./subscriptionSeats";
+import { CLAIM_WAIT_MS, SEARCH_CLAIM_WAIT_MS, SEAT_REGISTRY, allSeatAvailability, isSeat } from "./subscriptionSeats";
 import { orderByVendorFamily } from "../../shared/ai/vendorFamily";
 import { createSubscriptionSeatAdapter } from "./providers/subscriptionSeat";
 
@@ -806,7 +807,7 @@ async function executeRun(
   adapter: ProviderAdapter,
   quarantine: boolean,
   fallbacks: FallbackOption[] = [],
-  attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string }> = [],
+  attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string; lane?: string }> = [],
   attemptDeadlineMsForTests?: number,
 ): Promise<AIRunRow> {
   const running = await insertRun(env, { ...rec, status: "RUNNING" });
@@ -865,7 +866,7 @@ async function executeAttempt(
   adapter: ProviderAdapter,
   quarantine: boolean,
   fallbacks: FallbackOption[] = [],
-  attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string }> = [],
+  attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string; lane?: string }> = [],
   chain: ChainClock = { startedAtMs: Date.now(), budgetMs: CHAIN_BUDGET_MS },
 ): Promise<AIRunRow> {
   const running = { id: runId };
@@ -962,7 +963,7 @@ async function executeAttempt(
     if (qualityNote) {
       await env.WP_OS_DB.prepare("UPDATE ai_run SET quality_degraded = 1, quality_note = ?2 WHERE id = ?1").bind(running.id, qualityNote).run();
     }
-    attempts.push({ provider_key: rec.providerKey ?? "local", model: response.model, outcome: "COMPLETED" });
+    attempts.push({ provider_key: rec.providerKey ?? "local", model: response.model, outcome: "COMPLETED", lane: `${rec.providerKey ?? "local"}/${rec.model ?? response.model}` });
     /*
      * THIS LANE WORKS. Recorded at the boundary itself, on the model the run was PLANNED on rather
      * than the one the vendor echoed back — `rec.model` is the id selection will look up next time,
@@ -990,7 +991,7 @@ async function executeAttempt(
   } catch (err) {
     // Manual fallback: provider failure is visible, never silently discarded (§3.5).
     const reason = err instanceof Error ? err.message : String(err);
-    attempts.push({ provider_key: rec.providerKey ?? "unknown", model: rec.model ?? "unknown", outcome: "FAILED", detail: reason });
+    attempts.push({ provider_key: rec.providerKey ?? "unknown", model: rec.model ?? "unknown", outcome: "FAILED", detail: reason, lane: `${rec.providerKey ?? "unknown"}/${rec.model ?? "unknown"}` });
 
     // Policy-authorized fallback: retry the NEXT candidate against the same run row, so one unit
     // of governed work stays one run. The failed attempt is preserved in the routing record —
@@ -1412,7 +1413,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
   if (policy.privacy_mode === "LOCKDOWN" || policy.privacy_mode === "LOCAL") {
     // Local/manual path: the deterministic local adapter always works offline.
     const adapter = createMockLocalAdapter();
-    const attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string }> = [];
+    const attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string; lane?: string }> = [];
     const run = await executeRun(
       env,
       { ...baseRec, providerId: null, providerKey: "local", model: MOCK_LOCAL_MODEL, status: "RUNNING", estimate: baseEstimate },
@@ -1667,21 +1668,32 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
   });
 
   /*
-   * 4d. A SEAT WHOSE NO-TRAINING BASIS IS ONLY A SETTING SEES PUBLIC CONTENT ONLY (3 Nov 2026). Codex on
-   * her ChatGPT plan may train if the setting is flipped, so private content (anything not declared
-   * public, and anything a marker revokes) never reaches it. Claude Code and the paid no-training lanes
-   * stay; the chain is shorter, never unsafe.
+   * THE CALL'S ROW IN THE ONE RULE TABLE (shared/ai/modelOrder.json, read through seatOrder.ts). Decided here, before
+   * any lane is ranked, so the privacy limit below and the order further down read the same row.
    */
-  if (!contentClass.publicModelApproved || input.budgetContext?.confidential === true) {
+  const workClass = workClassOf({
+    publicModelApproved: contentClass.publicModelApproved,
+    confidential: input.budgetContext?.confidential,
+    important: input.budgetContext?.important,
+    seatFirst: input.budgetContext?.seatFirst,
+    interpretation: input.budgetContext?.interpretation,
+  });
+  /*
+   * 4d. PRIVATE CONTENT GOES ONLY WHERE ITS ROW SAYS (owner, 13 Nov 2026: "all private stuff can go through codex i
+   * need a backup to claude"). The Codex seat on her ChatGPT plan is the named backup to Claude Code for private work
+   * that is not HARD; private hard work stays on Claude Code. A free or training-permitting lane is never a
+   * candidate for private content: that is a limit on a route's data use, decided first, and nothing lifts it.
+   */
+  if (isPrivateWork({ publicModelApproved: contentClass.publicModelApproved, confidential: input.budgetContext?.confidential })) {
     /*
      * AND NO LANE WHOSE TERMS PERMIT TRAINING (5 Nov 2026). The PUBLIC data policy alone is not enough once a
      * declaration has been REVOKED: a PUBLIC-labelled text naming a committed LP or carrying a deal term would
      * otherwise still pass a free lane's PUBLIC egress row. Unknown training terms count as training (0178).
      */
     candidates = candidates.filter((p) => Number((p as unknown as { training_permitted?: number }).training_permitted ?? 0) !== 1);
-    candidates = candidates.filter((p) => !SEATS_WITHOUT_CONTRACTUAL_NO_TRAINING.has(p.provider_key));
+    candidates = candidates.filter((p) => !isSeat(p.provider_key) || MODEL_ORDER[workClass].seats.includes(p.provider_key));
     if (candidates.length === 0) {
-      return { run: await blocked("EGRESS_BLOCKED", "private_content_has_no_lane_with_a_no_training_contract:Codex on a ChatGPT plan may train, so it sees public content only") };
+      return { run: await blocked("EGRESS_BLOCKED", "private_content_has_no_lane_it_may_use:private work runs on Claude Code, with the Codex seat as its backup unless it is hard work; no free or training-permitting lane may see it") };
     }
   }
 
@@ -2039,12 +2051,6 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * a named call keeps its old ladder behind the seats.
    */
   const claudeFirst = important || input.budgetContext?.seatFirst === true;
-  const workClass = workClassOf({
-    publicModelApproved: contentClass.publicModelApproved,
-    confidential: input.budgetContext?.confidential,
-    important: input.budgetContext?.important,
-    seatFirst: input.budgetContext?.seatFirst,
-  });
   const seatsEligible =
     searchOnSeat ||
     (isJudgement &&
@@ -2142,8 +2148,11 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
         return {
           run: await blocked(
             "PREFLIGHT_BLOCKED",
-            privateContent
-              ? `${SEAT_WAIT_CODE}:this is important work (Claude Code seat, then Codex; never a free lane) and neither seat is free ` +
+            workClass === "PRIVATE_HARD"
+              ? `${SEAT_WAIT_CODE}:this is private hard work (the Claude Code seat only; never Codex, never a free lane) and Claude Code is not free ` +
+                  `right now. Purpose: ${input.purpose}. It waits for Claude Code and tries again by itself; nothing is asked of anyone.`
+              : privateContent
+              ? `${SEAT_WAIT_CODE}:this is private work (Claude Code seat, then Codex as its backup; never a free lane) and neither seat is free ` +
                   `right now. Purpose: ${input.purpose}. It waits for a seat and tries again by itself; nothing is asked of anyone.`
               : `${SEAT_WAIT_CODE}:this is important work (Claude Code seat, then Codex) and neither seat is free right now. ` +
                   `Purpose: ${input.purpose}.${seatWaitDetail} It tries again by itself; nothing is asked of anyone.`,
@@ -3084,8 +3093,9 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * Behind the lead, each step is a smaller concession than the one after it: the chosen head → the policy's own next
    * choice → THE SAME MODEL at its own vendor → any other adequate lane that is working.
    */
-  const behindIsFree = behaviour.freeOnly && !requiresSearch && !hasFiles;
-  const chain: FallbackOption[] = ladderFor(workClass, {
+  // A routine SEARCH has a free lane too (the $0 search lane), so it also starts free; only a call carrying a file does not.
+  const behindIsFree = behaviour.freeOnly && !hasFiles;
+  const tableChain: FallbackOption[] = ladderFor(workClass, {
     free: freeLanes,
     seats: seatLanes,
     behind: [...headOption, ...policyFallbacks, ...outageFallbacks, ...lastResortFallbacks].filter(
@@ -3093,10 +3103,34 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     ),
     behindIsFree,
   });
+  /*
+   * AND THE RUN LOG RE-RANKS IT (owner, 13 Nov 2026; `rerankFromLog` in shared/ai/seatOrder.ts). A lane that failed
+   * this kind of duty twice running is left out for a day, so the work moves to the next candidate by itself; among
+   * the free lanes the one that last completed this kind goes first. No rule here names a model: the table gives the
+   * candidates, the log gives the order.
+   */
+  const freeProviderKeys = new Set(options.filter((o) => Number(o.provider.training_permitted ?? 0) === 1).map((o) => o.provider.provider_key));
+  const laneKey = (f: FallbackOption): string => `${f.candidate.providerKey}/${f.candidate.model}`;
+  const dutyKind = dutyKindOf(input.purpose);
+  // Her three route tiers only: the free lanes and the two seats. A paid lane is governed by the spend lever and its
+  // own back-off (laneHealth), not by this rule.
+  const tierAttempts = (await dutyKindAttempts(env, firmScope, dutyKind, now)).filter((a) => {
+    const providerKey = a.lane.split("/")[0]!;
+    return isSeat(providerKey) || freeProviderKeys.has(providerKey);
+  });
+  const reranked = rerankFromLog(tableChain, laneKey, (f) => freeProviderKeys.has(f.candidate.providerKey), tierAttempts, now);
+  const chain: FallbackOption[] = reranked.chain;
+  const logMoved = chain.length !== tableChain.length || chain.some((f, i) => f !== tableChain[i]);
+  if (logMoved) {
+    explanation +=
+      ` The run log re-ranked the lanes for "${dutyKind}":` +
+      (reranked.rested.length ? ` ${reranked.rested.join(", ")} failed this kind of work twice running and ${reranked.rested.length === 1 ? "is" : "are"} left out for a day;` : "") +
+      (reranked.remembered ? ` ${reranked.remembered} last completed it, so it is tried first among the free lanes.` : "");
+  }
   /** What actually runs first. Undefined when the chosen head itself leads: it runs as selected. */
   const first = chain[0];
   const freeFirst = workClass === "ROUTINE" && behindIsFree;
-  const lead = first && first !== headOption[0] && (freeLanes.includes(first) || seatLanes.includes(first) || freeFirst) ? first : undefined;
+  const lead = first && first !== headOption[0] && (freeLanes.includes(first) || seatLanes.includes(first) || freeFirst || logMoved) ? first : undefined;
   const fallbacks: FallbackOption[] = lead || (first && first === headOption[0]) ? chain.slice(1) : chain;
   if (outageFallbacks.length > 0) {
     explanation +=
@@ -3110,7 +3144,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
       `(${lastResortFallbacks.map((f) => `${f.candidate.providerKey}/${f.candidate.model}`).join(", ")}) ` +
       `stand ready on a provider outage, so this run falls back to one that is working rather than stopping.${lastResortRanked.note}`;
   }
-  const attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string }> = [];
+  const attempts: Array<{ provider_key: string; model: string; outcome: string; detail?: string; lane?: string }> = [];
 
   /*
    * THE LANE IS NAMED WHETHER IT SERVED OR NOT. A run whose explanation mentions her Mac only on

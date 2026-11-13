@@ -168,6 +168,8 @@ beforeEach(async () => {
   await t.db.prepare("DELETE FROM provider_lane_health").run();
   await t.db.prepare("DELETE FROM free_search_quota").run();
   await t.db.prepare("DELETE FROM task_quality_floor").run();
+  // Each case starts with an empty run log: the router re-ranks a duty kind's lanes from it (13 Nov 2026).
+  await t.db.prepare("DELETE FROM ai_run_routing").run();
   await t.db.prepare("UPDATE provider_model SET quality_tier = 'UNMEASURED'").run();
   await setLever("FREE_ONLY");
 });
@@ -221,16 +223,36 @@ describe("Fix 1: only a committed LP, or deal terms and fund figures, are confid
     expect(["openrouter_free", "google_free"]).toContain(await providerOf(run.id));
   }, 60_000);
 
-  it("text naming a committed LP never reaches a training-permitting lane — not a free model, not Codex", async () => {
-    // Codex awake and claiming: it must not be given the run.
+  it("text naming a committed LP never reaches a free lane; Codex is only the backup to Claude, and never for hard work (13 Nov 2026)", async () => {
+    // HARD private work (a partner reads it unchecked), Claude away, Codex awake and claiming: it waits for Claude.
     await awake("codex");
     const c = claimer(["codex"]);
     const v = vendors();
-    const { run } = await runAi(env(), NAMES_COMMITTED_LP(), { fetchImpl: v.fetchImpl });
+    const hard = NAMES_COMMITTED_LP();
+    const { run } = await runAi(env(), { ...hard, budgetContext: { ...hard.budgetContext, important: true } }, { fetchImpl: v.fetchImpl });
     await c.stop();
-    expect(c.handled, "Codex never took it").toEqual([]);
-    expect(run.status).not.toBe("COMPLETED");
-    expect(v.seen.calls, "no vendor that trains was called").toEqual([]);
+    expect(c.handled, "Codex never took private hard work").toEqual([]);
+    expect(run.status).toBe("PREFLIGHT_BLOCKED");
+    expect(run.failure_reason ?? "").toMatch(/^seat_wait_important_work:this is private hard work \(the Claude Code seat only; never Codex, never a free lane\)/);
+    expect(v.seen.calls, "no vendor was called").toEqual([]);
+    // The same private text as SHORT work: Claude is away, so Codex, its backup, takes it. Still no free lane, no vendor.
+    const c2 = claimer(["codex"]);
+    const v1 = vendors();
+    const { run: backup } = await runAi(env(), NAMES_COMMITTED_LP(), { fetchImpl: v1.fetchImpl });
+    await c2.stop();
+    expect(backup.status, backup.failure_reason ?? "").toBe("COMPLETED");
+    expect(c2.handled).toEqual(["codex"]);
+    expect(await providerOf(backup.id)).toBe("codex");
+    expect(v1.seen.calls, "no free lane and no vendor saw it").toEqual([]);
+    // With both seats awake Claude takes it and Codex is not asked.
+    await awake("claude_code");
+    const c3 = claimer(["claude_code", "codex"]);
+    const v0 = vendors();
+    await runAi(env(), NAMES_COMMITTED_LP(), { fetchImpl: v0.fetchImpl });
+    await c3.stop();
+    expect(c3.handled).toEqual(["claude_code"]);
+    expect(v0.seen.calls).toEqual([]);
+    await t.db.prepare("DELETE FROM subscription_seat_device").run();
     // At MODERATE it may go to a paid no-training lane, but never to one that trains.
     await setLever("MODERATE");
     const v2 = vendors();
@@ -248,13 +270,17 @@ describe("Fix 1: only a committed LP, or deal terms and fund figures, are confid
     expect(v.seen.calls).toEqual([]);
   }, 60_000);
 
-  it("the Mac keeps a job that names a committed LP on Claude, and lets prospect and brand work go to Codex", () => {
+  it("the Mac treats a job that names a committed LP or carries deal terms as private, and prospect and brand work as not", () => {
     const roles = loadRoles();
     const base = { kind: "WEB_PROPERTY_CHANGE", phase: "BUILD", materialDirs: [] };
-    expect(routeFor({ ...base, prompt: "Add a page for LP prospects and investors." }, roles).role).toBe("worker");
-    expect(routeFor({ ...base, prompt: "Add the TLC brand page for the kids' workshop." }, roles).role).toBe("worker");
-    expect(routeFor({ ...base, prompt: "Publish the cap table." }, roles).role).toBe("brain");
-    expect(routeFor({ ...base, prompt: "Thank our LP.", privateModelOnly: true }, roles).role).toBe("brain");
+    // Prospect and brand work is not private: the hard-work row, Claude then Codex.
+    expect(routeFor({ ...base, prompt: "Add a page for LP prospects and investors." }, roles)).toMatchObject({ private: false, order: ["claude", "codex"] });
+    expect(routeFor({ ...base, prompt: "Add the TLC brand page for the kids' workshop." }, roles)).toMatchObject({ private: false, order: ["claude", "codex"] });
+    // A deal term, or the Worker's mark: private hard work, Claude only.
+    expect(routeFor({ ...base, prompt: "Publish the cap table." }, roles)).toMatchObject({ private: true, order: ["claude"] });
+    expect(routeFor({ ...base, prompt: "Thank our LP.", privateModelOnly: true }, roles)).toMatchObject({ private: true, order: ["claude"] });
+    // Private work that is not hard may use Codex as the backup to Claude, never ahead of it.
+    expect(routeFor({ ...base, phase: "LAND", prompt: "Thank our LP.", privateModelOnly: true }, roles)).toMatchObject({ private: true, order: ["claude", "codex"] });
   });
 });
 
@@ -354,6 +380,30 @@ describe("Fix 2: live research for $0", () => {
     expect(run.output_text).toContain(`Searched with: Google Search grounding on ${FREE_SEARCH_GROUNDED_MODELS[1]}`);
     expect(v.seen.calls.every((c) => c.host !== "generativelanguage.googleapis.com" || c.geminiKey === "wp"), "its own key, not the shared one").toBe(true);
   }, 60_000);
+
+  it("a writer that cites no page has failed, and the NEXT free writer is asked: the route completes on the one that cites a fetched page (13 Nov 2026)", async () => {
+    const writers: string[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("api.search.brave.com")) return new Response(JSON.stringify({ web: { results: [{ url: SOURCE_URL, title: "x", description: "y" }] } }), { status: 200 });
+      if (url.startsWith("https://example.com")) return new Response("<p>y</p>", { status: 200, headers: { "content-type": "text/html" } });
+      const body = JSON.parse(String(init?.body)) as { tools?: unknown; contents: unknown };
+      if (body.tools) return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "no sources" }] } }] }), { status: 200 });
+      if (JSON.stringify(body.contents).includes("Write ONE web search query")) return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "q" }] } }] }), { status: 200 });
+      const model = decodeURIComponent(url.split("/models/")[1]!.split(":")[0]!);
+      writers.push(model);
+      // The first writer answers from memory; the second cites the page it was given.
+      const text = writers.length === 1 ? "An answer with no URL at all." : `Pat Example is the founder [${SOURCE_URL}].`;
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const adapter = createFreeSearchAdapter({ geminiBaseUrl: "https://generativelanguage.googleapis.com", geminiApiKey: "g", braveApiKey: "b", quota: { take: async () => true }, fetchImpl });
+    const out = await adapter.complete({ purpose: "Example Ventures", inputs: ["who"], model: null });
+    expect(writers.length, "the second free writer was asked after the first cited nothing").toBe(2);
+    expect(writers[0]).not.toBe(writers[1]);
+    expect(out.text).toContain(SOURCE_URL);
+    expect(out.text).toContain(`written by ${writers[1]}`);
+    expect(out.text).not.toContain("An answer with no URL at all.");
+  });
 
   it("no free grounded model left and the Gemini allowance spent: Brave + an OpenRouter :free writer carries it at $0, and a reported cost stops it", async () => {
     const v = vendors({ grounding: "429", writers429: true });

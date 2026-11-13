@@ -55,6 +55,7 @@ import { attachmentNote, capabilitiesFromProof, claudeAttachArgs, codexAttachArg
 import { claudeSearchArgs, codexSearchArgs, parseClaudeSearch, parseCodexSearch, searchOutcome } from "../lib/seat-search.mjs";
 import { VAULT_INJECTED_VAR, claudeChildEnv } from "../lib/vault-env.mjs";
 import { repoHead, restartIfRepoMoved } from "./local-job-claimer.mjs";
+import { loadRoles } from "../lib/model-roles.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -103,6 +104,10 @@ const HEARTBEAT_INTERVAL_S = 30;
  */
 const RUN_TIMEOUT_MS = 150_000;
 
+/** What the Claude seat is started with: one value, in the rule table the router reads. */
+const CLAUDE_SEAT_START = String(loadRoles().table.seat_invocation?.claude_code?.model ?? "");
+if (!CLAUDE_SEAT_START) throw new Error("src/shared/ai/modelOrder.json names nothing to start the Claude seat with (seat_invocation.claude_code.model)");
+
 /** Both seats, and how to invoke each one headlessly. */
 const SEATS = {
   claude_code: {
@@ -112,9 +117,10 @@ const SEATS = {
      * `-p` is print mode: read the prompt, answer, exit. Without it the CLI opens an interactive
      * session and a launchd job with no terminal hangs for ever.
      */
-    // The model is pinned (owner, 5 Nov 2026): the seat carries the important work, so it runs on Opus, never on
-    // whatever the CLI's default happens to be that day.
-    args: (prompt) => ["-p", "--model", "opus", prompt],
+    // What the seat is started with is the seat's own value in the one rule table (seat_invocation in
+    // src/shared/ai/modelOrder.json), never whatever the CLI's default happens to be that day. It is data about
+    // the seat, not a rule about any job (owner, 13 Nov 2026).
+    args: (prompt) => ["-p", "--model", CLAUDE_SEAT_START, prompt],
   },
   codex: {
     bin: "codex",

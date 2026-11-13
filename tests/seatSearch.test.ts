@@ -127,12 +127,14 @@ beforeEach(async () => {
   await t.db.prepare("DELETE FROM subscription_seat_device").run();
   await t.db.prepare("DELETE FROM subscription_seat_run").run();
   await t.db.prepare("DELETE FROM provider_lane_health").run();
+  // Each case starts with an empty run log: the router re-ranks a duty kind's lanes from it (13 Nov 2026).
+  await t.db.prepare("DELETE FROM ai_run_routing").run();
 });
 
 describe("Parker's collision, resolved: Free only, a search call, a seat that can search", () => {
   beforeEach(() => setLever("FREE_ONLY"));
 
-  it("is served by the Codex seat at $0, with the counted searches on the row, and no vendor is called", async () => {
+  it("a routine search starts on the $0 search lane; when that lane stops by name the Codex seat serves it at $0, with the counted searches on the row", async () => {
     await awake("codex", true);
     const c = claimer(["codex"]);
     const v = vendors();
@@ -141,7 +143,11 @@ describe("Parker's collision, resolved: Free only, a search call, a seat that ca
     expect(run.status).toBe("COMPLETED");
     expect(run.output_text).toContain("SEAT SEARCH ANSWER (codex)");
     expect(run.model).toBe("codex-local");
-    expect(v.models, "the paid search model was never asked").toEqual([]);
+    // 13 Nov 2026: routine work starts free. The free search lane was asked first and found nothing it may show
+    // (the stub returns no sources), so the same run moved up to Codex. No model that costs money was asked.
+    expect(v.models.filter(Boolean), "no paid search model was asked").toEqual([]);
+    const attempts = JSON.parse((await t.db.prepare("SELECT attempts_json FROM ai_run_routing WHERE ai_run_id = ?1").bind(run.id).first<{ attempts_json: string }>())!.attempts_json) as Array<{ provider_key: string; outcome: string }>;
+    expect(attempts.map((a) => [a.provider_key, a.outcome])).toEqual([["free_search", "FAILED_OVER"], ["codex", "COMPLETED"]]);
     const [row] = await rows();
     expect(row).toMatchObject({ seat: "codex", status: "REPORTED", needs_search: 1, search_events: 5 });
     expect(JSON.parse(row!.search_queries_json!)).toContain("2026 Black Bar Association event sponsors");
@@ -279,7 +285,10 @@ describe("a search seat survives an unavailable paid pin", () => {
         await mend();
         expect(run.status).toBe("COMPLETED");
         expect(run.output_text).toContain("SEAT SEARCH ANSWER (codex)");
-        expect(v.models, "no vendor was asked").toEqual([]);
+        // At Free only a routine search starts on the $0 search lane (13 Nov 2026), which names no paid model; the
+        // seat then serves it. At any lever, no model that costs money was asked.
+        expect(v.models.filter(Boolean), "no paid model was asked").toEqual([]);
+        if (lever === "MODERATE") expect(v.models, "no vendor at all was asked").toEqual([]);
       }, 60_000);
     }
   }

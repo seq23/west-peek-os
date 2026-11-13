@@ -1,19 +1,13 @@
 {
-  "$comment": "WHO DOES THE WORK ON THE MAC (owner, 3 Nov 2026: 'after today we need to default OpenAI and Claude just be the brains'). worker = Codex on her ChatGPT plan, hands-on work (edits, builds, repairs, landing). brain = Claude Code, planning, deciding, reviewing, brain writes. Read by scripts/lib/model-roles.mjs, which the local-job claimer and every duty use; nothing else picks a model. A kind or phase not listed here is brain (fail closed). See docs/AI_GOVERNANCE.md.",
-  "default_role": "brain",
+  "$comment": "THE JOB CLASS OF EVERY MAC JOB PHASE (owner, 13 Nov 2026), and the markers that make a job private. HARD = writes code that lands, decides, merges, reviews, repairs, touches money, or writes what a partner reads unchecked. CLEAR_BRIEF = well-specified work with a clear brief. SHORT = short and checkable. A kind or phase not listed here is HARD. LAND is SHORT because ~/bin/land has already merged on green before the model's turn, which only writes up the live proof. Which route does each class, private or not, is NOT here: it is the one rule table src/shared/ai/modelOrder.json, read with this file by scripts/lib/model-roles.mjs. No model is named here or there as a rule. See docs/AI_GOVERNANCE.md.",
   "jobs": {
     "WEB_PROPERTY_CHANGE": {
-      "PLAN": "brain",
-      "BUILD": "worker",
-      "LAND": "worker"
+      "PLAN": "HARD",
+      "BUILD": "HARD",
+      "LAND": "SHORT"
     }
   },
-  "worker_route": {
-    "provider_id": "prov_codex",
-    "no_training_proven": false,
-    "$why": "On a ChatGPT Plus plan, training on conversations is an account SETTING, not a contractual bar (migration 0187). A setting she or OpenAI can flip is not proof, so the worker route counts as training-permitting: text naming a committed LP, or carrying deal terms or fund figures, never goes to it. Only a recorded no-training contract (e.g. a ChatGPT Business/Enterprise workspace) may set this true."
-  },
-  "$confidential_why": "Owner ruling, 4 Nov 2026: private-model-only means ONLY (a) the names of LPs who have COMMITTED to a West Peek fund and (b) deal terms and fund figures. LP prospects, brand and TLC work are not confidential, so the bare words LP, limited partner and investor are not markers. A committed LP is recognised by the Worker from the commitment records and arrives on the job as private_model_only (src/worker/ai/committedLps.ts); the markers below catch deal terms and fund figures in the prompt and the job's files. Unreadable files still keep the turn on Claude.",
+  "$confidential_why": "Owner ruling, 4 Nov 2026: private-model-only means ONLY (a) the names of LPs who have COMMITTED to a West Peek fund and (b) deal terms and fund figures. LP prospects, brand and TLC work are not confidential, so the bare words LP, limited partner and investor are not markers. A committed LP is recognised by the Worker from the commitment records and arrives on the job as private_model_only (src/worker/ai/committedLps.ts); the markers below catch deal terms and fund figures in the prompt and the job's files. Unreadable files make the job private too. A private job never goes to a free lane; Codex on her ChatGPT plan is its backup to Claude unless the work is HARD (owner, 13 Nov 2026).",
   "confidential_markers": [
     "\\bcapital call\\b",
     "\\bsubscription agreement\\b",

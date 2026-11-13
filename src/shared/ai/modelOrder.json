@@ -1,0 +1,24 @@
+{
+  "$comment": "THE ONE RULE TABLE FOR WHICH ROUTE DOES WHICH WORK (owner, 13 Nov 2026). Read by src/shared/ai/seatOrder.ts (the Worker's router) and scripts/lib/model-roles.mjs (the Mac's job runner); nothing else holds an order. It speaks of job class, route tier (the free lanes, the Codex seat, the Claude Code seat) and the privacy limit, never of a model's name. A concrete model id may appear only under seat_invocation: it is what a seat is started with, not a rule about any job.",
+  "classes": {
+    "$comment": "Job class by ability, and the row each takes when the work is private or not. HARD = hard judgement and long builds: writes code that lands, decides, merges, reviews, repairs, touches money, edits the Fund deck, or writes what a partner or outsider reads unchecked. CLEAR_BRIEF = well-specified work with a clear brief: housekeeping, docs, bulk edits. SHORT = short and checkable: sorting mail, summaries, first drafts, routine searches, read-only lists that something else checks. A class nobody named is HARD.",
+    "HARD": { "open": "IMPORTANT", "private": "PRIVATE_HARD" },
+    "CLEAR_BRIEF": { "open": "CLEAR_BRIEF", "private": "PRIVATE" },
+    "SHORT": { "open": "ROUTINE", "private": "PRIVATE" }
+  },
+  "default_class": "HARD",
+  "order": {
+    "$comment": "seats: the subscription seats a row may use, in order; a seat not listed takes no part. free: where the free (training-permitting) lanes stand. freeLanes: the free lanes in today's order; the router re-ranks them per duty kind from the ai_run log (the lane that last completed the kind first, a lane that failed it twice running left out for a day). PRIVATE rows never have a free lane: that is a limit on a route's data use, not on ability, and no other marker can lift it. PRIVATE_HARD waits for Claude Code by name and never goes to Codex.",
+    "PRIVATE_HARD": { "seats": ["claude_code"], "free": "NEVER", "freeLanes": [] },
+    "PRIVATE": { "seats": ["claude_code", "codex"], "free": "NEVER", "freeLanes": [] },
+    "IMPORTANT": { "seats": ["claude_code", "codex"], "free": "NEVER", "freeLanes": [] },
+    "NAMED": { "seats": ["claude_code", "codex"], "free": "BEHIND_SEATS", "freeLanes": ["openrouter_free", "google_free"] },
+    "CLEAR_BRIEF": { "seats": ["codex", "claude_code"], "free": "NEVER", "freeLanes": [] },
+    "ROUTINE": { "seats": ["codex", "claude_code"], "free": "FIRST", "freeLanes": ["google_free", "openrouter_free"] }
+  },
+  "codex_result_checked_by_claude": ["IMPORTANT"],
+  "seat_invocation": {
+    "$comment": "What each seat's CLI is started with for a local job. Data for the seat, not a rule about a job: change it here and every job follows.",
+    "claude_code": { "model": "opus" }
+  }
+}

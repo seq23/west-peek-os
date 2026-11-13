@@ -520,15 +520,60 @@ describe("a quiet seat at Free only is a wait, not a spend question", () => {
   });
 });
 
-describe("her model order, as the one table (shared/ai/seatOrder.ts, 26 Oct and 6 Nov 2026)", () => {
-  it("routine: free lanes (Gemini, then OpenRouter), Codex, Claude Code; important: Claude Code then Codex, no free lane; private: Claude Code only", async () => {
-    const { MODEL_ORDER, orderSeats, orderFreeLanes, ladderFor, workClassOf, isImportantWork, CLAUDE_ONLY_PRIVATE } = await import("../src/shared/ai/seatOrder");
+describe("her route order, as the one table (shared/ai/modelOrder.json through seatOrder.ts; 26 Oct, 6 Nov and 13 Nov 2026)", () => {
+  it("the run log re-ranks a duty kind's lanes: twice failed running rests a lane for a day, the free lane that last completed goes first, a spent quota is not a failure", async () => {
+    const { rerankFromLog, isWaitNotFailure, dutyKindOf } = await import("../src/shared/ai/seatOrder");
+    const now = new Date("2026-11-13T12:00:00Z");
+    const ago = (h: number) => new Date(now.getTime() - h * 3_600_000).toISOString();
+    const chain = ["free/a", "free/b", "free/c", "codex/seat", "claude/seat"];
+    const isFree = (l: string) => l.startsWith("free/");
+    const key = (l: string) => l;
+    // No log: the table's order stands.
+    expect(rerankFromLog(chain, key, isFree, [], now).chain).toEqual(chain);
+    // One failure is not two: nothing rests.
+    expect(rerankFromLog(chain, key, isFree, [{ lane: "free/a", ok: false, at: ago(1) }], now).chain).toEqual(chain);
+    // Twice running: the kind moves to the NEXT FREE lane, not up to Codex.
+    const twice = [{ lane: "free/a", ok: false, at: ago(1) }, { lane: "free/a", ok: false, at: ago(2) }];
+    expect(rerankFromLog(chain, key, isFree, twice, now)).toMatchObject({ chain: ["free/b", "free/c", "codex/seat", "claude/seat"], rested: ["free/a"] });
+    // A completion between two failures is not "twice running".
+    expect(rerankFromLog(chain, key, isFree, [{ lane: "free/a", ok: false, at: ago(1) }, { lane: "free/a", ok: true, at: ago(2) }, { lane: "free/a", ok: false, at: ago(3) }], now).rested).toEqual([]);
+    // Every free lane failed twice running: only then does the kind move up to Codex.
+    const allFree = ["free/a", "free/b", "free/c"].flatMap((lane) => [{ lane, ok: false, at: ago(1) }, { lane, ok: false, at: ago(2) }]);
+    expect(rerankFromLog(chain, key, isFree, allFree, now).chain).toEqual(["codex/seat", "claude/seat"]);
+    // A seat that failed twice running rests too, and the job moves up a rung by itself.
+    expect(rerankFromLog(chain, key, isFree, [{ lane: "codex/seat", ok: false, at: ago(1) }, { lane: "codex/seat", ok: false, at: ago(3) }], now).chain).toEqual(["free/a", "free/b", "free/c", "claude/seat"]);
+    // The rest ends after a day, by the clock.
+    expect(rerankFromLog(chain, key, isFree, twice.map((a) => ({ ...a, at: ago(30) })), now).chain).toEqual(chain);
+    // Resting everything would leave nothing: the table's order stands rather than no route at all.
+    const only = ["claude/seat"];
+    expect(rerankFromLog(only, key, isFree, [{ lane: "claude/seat", ok: false, at: ago(1) }, { lane: "claude/seat", ok: false, at: ago(2) }], now).chain).toEqual(only);
+    // Memory: the free lane that LAST completed this kind is tried first; a seat never moves ahead of its row.
+    const remembered = rerankFromLog(chain, key, isFree, [{ lane: "claude/seat", ok: true, at: ago(1) }, { lane: "free/c", ok: true, at: ago(2) }, { lane: "free/b", ok: true, at: ago(5) }, { lane: "free/b", ok: true, at: ago(6) }], now);
+    expect(remembered.chain).toEqual(["free/c", "free/b", "free/a", "codex/seat", "claude/seat"]);
+    expect(remembered.remembered).toBe("free/c");
+    // What is a wait and what is a failure.
+    for (const wait of ["RATE_LIMITED: provider_http_429:quota", "You exceeded your current quota", "codex has run out of usage and said: usage limit reached", "SEAT_ASLEEP: subscription_seat_unavailable:her Mac last checked in 14 hours ago", "credential_missing:google"]) expect(isWaitNotFailure(wait), wait).toBe(true);
+    // The free search lane: Google's spent quota beside a Brave allowance that is used up is a wait; Google's spent
+    // quota beside writers that cited no page is a failure of the search.
+    expect(isWaitNotFailure("free_search_named_stop:Couldn't research X: Gemini search grounding: a: provider_http_429:quota; Brave search: today's 20 Brave queries are used up")).toBe(true);
+    expect(isWaitNotFailure("free_search_named_stop:Couldn't research X: Gemini search grounding: a: provider_http_429:quota; Brave search: no free writer answered (m0: provider_http_429:quota; m1: cited none of the fetched pages, so its answer cannot be shown to come from them)")).toBe(false);
+    for (const failure of ["verifier_rejected:the answer cites no page", "provider_malformed_response", "truncated_reply:256 tokens", "PROVIDER_ERROR: provider_http_503:upstream unavailable", ""]) expect(isWaitNotFailure(failure), failure).toBe(false);
+    expect(dutyKindOf('Porter working "Unclear email: a made-up subject" (step 2)')).toBe("Porter working");
+    expect(dutyKindOf("Walker: West Peek Productions hire search")).toBe("Walker: West Peek Productions hire search");
+  });
+
+  it("routine: free lanes (Gemini, then OpenRouter), Codex, Claude Code; important: Claude Code then Codex, no free lane; private: Claude Code then Codex, hard private: Claude Code only; never a free lane", async () => {
+    const { MODEL_ORDER, orderSeats, orderFreeLanes, ladderFor, workClassOf, workClassFor, jobClassOf, isImportantWork, CLAUDE_ONLY_PRIVATE } = await import("../src/shared/ai/seatOrder");
     const both = [{ seat: "claude_code", available: true, reason: "claude awake" }, { seat: "codex", available: true, reason: "codex awake" }];
     expect(orderSeats(both, "IMPORTANT").map((v) => [v.seat, v.available])).toEqual([["claude_code", true], ["codex", true]]);
     expect(orderSeats(both, "NAMED").map((v) => [v.seat, v.available])).toEqual([["claude_code", true], ["codex", true]]);
     // Routine work now uses BOTH seats, Codex ahead of Claude Code (6 Nov 2026): no seat is held back from it.
     expect(orderSeats(both, "ROUTINE").map((v) => [v.seat, v.available])).toEqual([["codex", true], ["claude_code", true]]);
-    const priv = orderSeats(both, "PRIVATE");
+    expect(orderSeats(both, "CLEAR_BRIEF").map((v) => [v.seat, v.available])).toEqual([["codex", true], ["claude_code", true]]);
+    // Private work that is not hard: Claude Code, then Codex as its backup (13 Nov 2026).
+    expect(orderSeats(both, "PRIVATE").map((v) => [v.seat, v.available])).toEqual([["claude_code", true], ["codex", true]]);
+    // Private HARD work: Claude Code only; Codex takes no part and says why.
+    const priv = orderSeats(both, "PRIVATE_HARD");
     expect(priv.map((v) => [v.seat, v.available])).toEqual([["claude_code", true], ["codex", false]]);
     expect(priv[1]!.reason).toBe(CLAUDE_ONLY_PRIVATE);
 
@@ -537,6 +582,8 @@ describe("her model order, as the one table (shared/ai/seatOrder.ts, 26 Oct and 
     expect(orderFreeLanes(free, "NAMED", (k) => k)).toEqual(["openrouter_free", "google_free", "some_other_free"]);
     expect(orderFreeLanes(free, "IMPORTANT", (k) => k)).toEqual([]);
     expect(orderFreeLanes(free, "PRIVATE", (k) => k)).toEqual([]);
+    expect(orderFreeLanes(free, "PRIVATE_HARD", (k) => k)).toEqual([]);
+    expect(orderFreeLanes(free, "CLEAR_BRIEF", (k) => k)).toEqual([]);
 
     const lanes = { free: ["gemini", "openrouter"], seats: ["codex", "claude"], behind: ["rest"] };
     expect(ladderFor("ROUTINE", { ...lanes, behindIsFree: false })).toEqual(["gemini", "openrouter", "codex", "claude", "rest"]);
@@ -545,12 +592,29 @@ describe("her model order, as the one table (shared/ai/seatOrder.ts, 26 Oct and 
     // A class that may never use a free lane drops one even if a caller hands it in.
     expect(ladderFor("IMPORTANT", { ...lanes, behindIsFree: false })).toEqual(["codex", "claude", "rest"]);
     expect(ladderFor("PRIVATE", { ...lanes, behindIsFree: true })).toEqual(["codex", "claude", "rest"]);
-    expect(MODEL_ORDER.PRIVATE).toMatchObject({ seats: ["claude_code"], free: "NEVER" });
+    expect(ladderFor("PRIVATE_HARD", { ...lanes, behindIsFree: true })).toEqual(["codex", "claude", "rest"]);
+    expect(MODEL_ORDER.PRIVATE_HARD).toMatchObject({ seats: ["claude_code"], free: "NEVER" });
+    expect(MODEL_ORDER.PRIVATE).toMatchObject({ seats: ["claude_code", "codex"], free: "NEVER" });
+    // The privacy limit is on every private row, whatever else the table says: no private row has a free lane.
+    for (const [name, row] of Object.entries(MODEL_ORDER)) if (name.startsWith("PRIVATE")) expect(row, name).toMatchObject({ free: "NEVER", freeLanes: [] });
 
     // Private is decided first and fails closed: no other marker moves private content to another class.
     expect(workClassOf({ publicModelApproved: false })).toBe("PRIVATE");
-    expect(workClassOf({ publicModelApproved: false, seatFirst: true, important: false, confidential: false })).toBe("PRIVATE");
-    expect(workClassOf({ publicModelApproved: true, confidential: true })).toBe("IMPORTANT");
+    expect(workClassOf({ publicModelApproved: true, confidential: true })).toBe("PRIVATE");
+    // Private AND hard (a partner reads it, her named list, or it decides what a partner asked): Claude Code only.
+    expect(workClassOf({ publicModelApproved: false, seatFirst: true, important: false, confidential: false })).toBe("PRIVATE_HARD");
+    expect(workClassOf({ publicModelApproved: false, important: true })).toBe("PRIVATE_HARD");
+    expect(workClassOf({ publicModelApproved: true, confidential: true, interpretation: true })).toBe("PRIVATE_HARD");
+    // No marker can take private content out of a private row.
+    for (const important of [true, false]) for (const seatFirst of [true, false]) for (const interpretation of [true, false]) {
+      expect(workClassOf({ publicModelApproved: false, important, seatFirst, interpretation })).toMatch(/^PRIVATE/);
+    }
+    // Job class, with no classifier: a class nobody named is HARD, and private takes the stricter row of its class.
+    expect(jobClassOf({})).toBe("SHORT");
+    expect(jobClassOf({ important: true })).toBe("HARD");
+    expect([workClassFor("HARD", false), workClassFor("CLEAR_BRIEF", false), workClassFor("SHORT", false)]).toEqual(["IMPORTANT", "CLEAR_BRIEF", "ROUTINE"]);
+    expect([workClassFor("HARD", true), workClassFor("CLEAR_BRIEF", true), workClassFor("SHORT", true)]).toEqual(["PRIVATE_HARD", "PRIVATE", "PRIVATE"]);
+    expect([workClassFor("SOMETHING_NEW", false), workClassFor(undefined, true)]).toEqual(["IMPORTANT", "PRIVATE_HARD"]);
     expect(workClassOf({ publicModelApproved: true, important: true, seatFirst: true })).toBe("IMPORTANT");
     expect(workClassOf({ publicModelApproved: true, seatFirst: true })).toBe("NAMED");
     expect(workClassOf({ publicModelApproved: true })).toBe("ROUTINE");

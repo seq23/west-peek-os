@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { isWaitNotFailure, type LaneAttempt } from "../../shared/ai/seatOrder";
 
 /**
  * CAN THIS LANE SERVE, AND HAS IT EVER? — the question price could not answer.
@@ -271,4 +272,48 @@ export function orderByLaneHealth<T extends { providerId: string; providerKey?: 
 
   const changed = cooling.length > 0 || (served.length > 0 && untried.length > 0 && ordered[0] !== candidates[0]);
   return { ordered, cooling, applied: changed, note: parts.length > 0 ? ` ${parts.join(" ")}` : "" };
+}
+
+
+/**
+ * WHAT THE RUN LOG SAYS ABOUT ONE KIND OF DUTY: every lane attempt of its recent runs, newest first, read from
+ * `ai_run` and the attempts recorded beside each run (`ai_run_routing.attempts_json`). No table of its own: the log
+ * is the memory. `rerankFromLog` (shared/ai/seatOrder.ts) turns it into the order. A read that fails returns
+ * nothing, which leaves the table's own order standing.
+ */
+export const DUTY_LOG_WINDOW_DAYS = 30;
+export async function dutyKindAttempts(env: Env, firmScope: string, dutyKind: string, now: Date): Promise<LaneAttempt[]> {
+  if (!dutyKind) return [];
+  try {
+    const since = new Date(now.getTime() - DUTY_LOG_WINDOW_DAYS * 86_400_000).toISOString();
+    const rows =
+      (
+        await env.WP_OS_DB.prepare(
+          `SELECT g.attempts_json, r.created_at
+             FROM ai_run r JOIN ai_run_routing g ON g.ai_run_id = r.id
+            WHERE r.firm_scope = ?1 AND r.created_at >= ?2 AND substr(r.purpose, 1, length(?3)) = ?3
+            ORDER BY r.created_at DESC, r.rowid DESC LIMIT 60`,
+        )
+          .bind(firmScope, since, dutyKind)
+          .all<{ attempts_json: string; created_at: string }>()
+      ).results ?? [];
+    const out: LaneAttempt[] = [];
+    for (const row of rows) {
+      let attempts: Array<{ provider_key?: string; model?: string; lane?: string; outcome?: string; detail?: string }> = [];
+      try {
+        attempts = JSON.parse(row.attempts_json);
+      } catch {
+        continue;
+      }
+      // Within one run the attempts were pushed oldest first.
+      for (const a of [...attempts].reverse()) {
+        // A route that was not there (spent quota, asleep, no key) neither completed nor failed this kind of work.
+        if (a.outcome !== "COMPLETED" && isWaitNotFailure(a.detail)) continue;
+        out.push({ lane: a.lane ?? `${a.provider_key}/${a.model}`, ok: a.outcome === "COMPLETED", at: row.created_at });
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
 }

@@ -60,7 +60,7 @@
  */
 
 import { execFile, spawn, spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,7 +71,7 @@ import { plainText, privateDocsIn, privateProof, privateSentenceIn } from "../li
 import { admittedScripts, constraintsIn, generateRunbook, hostFromRoutes, isProductionRun, productionAsked, withPorterMayRun, likelySecrets, porterMayRun, readWranglerJson, readWranglerToml, runbookSecretNames, secretNamesInSource, vendorPageFor } from "./lib/runbook.mjs";
 import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
 import { CODEX_BUILD_NOTE, codexExecArgs, codexSeatUsable, finishCodexBuild, soonestReset } from "../lib/codex-seat.mjs";
-import { routeFor, runByRole } from "../lib/model-roles.mjs";
+import { routeFor, runInOrder } from "../lib/model-roles.mjs";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -463,18 +463,32 @@ export { claudeChildEnv };
 const MODEL_DENIED_TOOLS = ["Bash(*vault.mjs*)", "Bash(security:*)", "Bash(*west-peek-os/vault*)"];
 
 /**
- * Run one model turn on its ROLE (owner, 3 Nov 2026: Codex does the hands-on work, Claude is the
- * brains). `scripts/claimer/model-roles.json` says which phase is which; `routeFor` keeps any turn
- * that names a committed LP (the Worker's `private_model_only`) or whose text or files carry deal terms
- * or fund figures on Claude, because Codex on
- * her ChatGPT plan is not proven no-training. A Codex limit ends the turn with
- * `NAMED STOP [CODEX_LIMIT]` and a reset time (the Worker holds the card and retries) — Claude is
- * never called in its place. The phase reads its result from a FILE either model writes, so which
- * model wrote it does not change how the phase is judged.
+ * Run one model turn down ITS ROW of the one rule table (owner, 13 Nov 2026; `routeFor` and `runInOrder` in
+ * scripts/lib/model-roles.mjs, the table in src/shared/ai/modelOrder.json). PLAN and BUILD are HARD work (one
+ * decides, one writes code that lands): Claude first, then Codex on her ChatGPT plan when Claude is out of usage,
+ * and what Codex did is HELD until Claude has checked it. LAND's turn is SHORT (the script has already landed; the
+ * turn writes up the live proof): Codex, then Claude. A job the Worker marked private (`private_model_only`), or whose text or files carry deal terms
+ * or fund figures, is private hard work: Claude only, and with Claude out of usage it WAITS for Claude by name.
+ * The phase reads its result from a FILE either route writes, so which one wrote it does not change how the phase
+ * is judged.
+ *
+ * CODEX'S HARD WORK IS CHECKED BY CLAUDE BEFORE IT LANDS OR REACHES A PARTNER. When Codex served a held turn the
+ * runner still commits and pushes a BUILD (the work is kept), a note is left in the job folder, and the phase
+ * reports a WAIT until Claude's plan resets (`spentReport`). The retried turn then runs on Claude only, with
+ * `CLAUDE_CHECK_NOTE` in its prompt, and its result is the phase's result.
  */
-async function runModel(opts) {
+export const CLAUDE_CHECK_NOTE = `
+
+## CODEX DID THIS TURN WHILE CLAUDE CODE WAS OUT OF USAGE — CHECK IT BEFORE ANYTHING ELSE
+
+Codex already worked this phase: its edits are in this worktree and on this branch (already pushed, with a PR, if
+this is a BUILD), and any result it wrote is in the job folder as codex-result-*.json. Nothing of it has
+landed or been shown to a partner. Check it against the request and the plan as you would review someone else's
+work, fix what is wrong or missing, then write this phase's result file yourself in the usual shape.`;
+
+export async function runModel(opts, deps = {}) {
   // Only the job's own folders are read for confidential material; a worktree is a public repo.
-  const route = routeFor({
+  let route = routeFor({
     kind: opts.job?.card_kind,
     phase: opts.phase,
     prompt: opts.prompt,
@@ -482,19 +496,38 @@ async function runModel(opts) {
     // Set by the Worker from the commitment records (owner ruling 4 Nov 2026); absent on an older Worker → false.
     privateModelOnly: opts.job?.private_model_only === true,
   });
-  appendRouteLog(opts, route);
-  if (route.role === "worker") {
-    const seat = codexSeatUsable(homedir());
-    if (!seat.ok) return { code: 1, out: "", err: `Codex cannot take this hands-on turn: ${seat.why}`, servedBy: "none", role: "worker" };
+  const note = opts.jobDir ? path.join(opts.jobDir, `codex-did-${opts.phase ?? "turn"}.txt`) : null;
+  const checking = Boolean(note && existsSync(note));
+  if (checking) {
+    route = { ...route, order: ["claude"], held: false, why: `${route.why}. Codex did this turn earlier, so Claude checks it now` };
+    opts = { ...opts, prompt: `${opts.prompt}${CLAUDE_CHECK_NOTE}` };
   }
-  return runByRole({
+  appendRouteLog(opts, route);
+  const brainSpent = deps.brainSpent ?? claudeSpentUsage;
+  const r = await runInOrder({
     route,
-    runBrain: () => spawnClaude(opts),
-    runWorker: () => spawnCodex(opts),
-    workerSpent: codexSpentUsage,
-    resetsIn: (note) => soonestReset([note]),
+    runBrain: deps.runBrain ?? (() => spawnClaude(opts)),
+    runWorker: deps.runWorker ?? (() => spawnCodex(opts)),
+    brainSpent,
+    workerSpent: deps.workerSpent ?? codexSpentUsage,
+    // Codex counts only when it is signed in with her ChatGPT plan, never an API key (which bills per token).
+    workerUsable: deps.workerUsable ?? (() => codexSeatUsable(homedir())),
+    resetsIn: (notices) => soonestReset(notices),
     onLine: opts.onLine,
   });
+  if (note) {
+    try {
+      if (r.heldForClaude) {
+        writeFileSync(note, `${new Date().toISOString()} ${r.heldForClaude}\n`);
+        // The next run clears the phase's result file before its turn; Codex's copy is kept for Claude to read.
+        for (const f of readdirSync(opts.jobDir)) if (/^result-.*\.json$/.test(f)) copyFileSync(path.join(opts.jobDir, f), path.join(opts.jobDir, `codex-${f}`));
+      }
+      else if (checking && r.servedBy === "claude" && !brainSpent(r)) rmSync(note, { force: true });
+    } catch {
+      // the note is how the next run knows to check; a job folder that cannot be written fails the phase elsewhere
+    }
+  }
+  return r;
 }
 
 function appendRouteLog(opts, route) {
@@ -508,22 +541,23 @@ function appendRouteLog(opts, route) {
 }
 
 /**
- * BOTH SEATS SPENT IS A WAIT, NOT A FAILURE (1 Oct 2026). When Claude Code and Codex both report a spent plan the
- * phase did nothing wrong and no attempt should be charged to it: the report says how long until the earlier plan
- * resets (`waits_seconds`) and the Worker holds the card until then. Null when the run was anything else.
+ * A SPENT PLAN, OR A CHECK CLAUDE STILL OWES, IS A WAIT, NOT A FAILURE (1 Oct and 13 Nov 2026). The phase did nothing
+ * wrong and no attempt should be charged to it: the report says how long until the plan resets (`waits_seconds`)
+ * and the Worker holds the card until then, with no email to the partner. Null when the run was anything else.
+ *   · Codex did hard work that Claude has not checked yet → held, whatever result file exists;
+ *   · Claude is out of usage and nothing may stand in (private hard work, or Codex not usable) → waits for Claude;
+ *   · every route in the row is out of usage → waits for the earlier reset.
  */
-export function spentReport(phase, claude) {
-  if (claude?.codexLimited) {
-    const waits = Number.isFinite(claude.resetsInSeconds) && claude.resetsInSeconds > 0 ? Math.round(claude.resetsInSeconds) : 3600;
-    return { phase, status: "failed", reason: `${claude.codexLimited} — Codex's plan is spent; the work waits for the reset and is retried. Claude does not take it over.`.slice(0, 900), waits_seconds: waits };
-  }
+export function spentReport(phase, claude, result = null) {
+  const waitsOf = (r) => (Number.isFinite(r?.resetsInSeconds) && r.resetsInSeconds > 0 ? Math.round(r.resetsInSeconds) : 3600);
+  if (claude?.heldForClaude) return { phase, status: "failed", reason: String(claude.heldForClaude).slice(0, 900), waits_seconds: waitsOf(claude) };
+  if (result) return null;
   if (claude?.servedBy === "claude") {
     const limit = claudeSpentUsage(claude);
-    if (limit) return { phase, status: "failed", reason: `NAMED STOP [CLAUDE_LIMIT] ${limit} — this is a brain turn; it waits for the reset and is retried.`.slice(0, 900), waits_seconds: soonestReset([limit]) };
+    if (limit) return { phase, status: "failed", reason: `NAMED WAIT [CLAUDE_LIMIT] ${limit} — Claude Code is out of usage and no other route may take this turn; it waits for the reset and is retried.`.slice(0, 900), waits_seconds: soonestReset([limit]) };
   }
   if (!claude?.bothSpent) return null;
-  const waits = Number.isFinite(claude.resetsInSeconds) && claude.resetsInSeconds > 0 ? Math.round(claude.resetsInSeconds) : 3600;
-  return { phase, status: "failed", reason: String(claude.err ?? "Both subscription seats are out of usage.").split("\n").filter((l) => /Both subscription seats/.test(l)).join(" ").slice(0, 900) || "Both subscription seats are out of usage.", waits_seconds: waits };
+  return { phase, status: "failed", reason: String(claude.err ?? "").split("\n").filter((l) => /out of usage/.test(l)).join(" ").slice(0, 900) || "Both subscription seats are out of usage.", waits_seconds: waitsOf(claude) };
 }
 
 /**
@@ -1158,7 +1192,7 @@ export async function run(job, ctx) {
     cost = (cost ?? 0) + (costFrom(claude.out) ?? 0);
     ({ result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", phase));
   }
-  const spent = !result ? spentReport(phase, claude) : null;
+  const spent = spentReport(phase, claude, result);
   if (spent) return spent;
   if (!result) {
     return { phase, status: "failed", reason: `${phase} ended (claude exit ${claude.code}) but ${problem}${cost !== null ? ` — cost $${cost.toFixed(2)}` : ""}` };
@@ -1771,7 +1805,7 @@ async function runSeveral(job, ctx) {
     writeFileSync(path.join(jobDir, "claude-PLAN.out"), `${claude.out}\n--- stderr ---\n${claude.err}`);
     const cost = costFrom(claude.out);
     const { result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "PLAN");
-    if (!result && spentReport(phase, claude)) return spentReport(phase, claude);
+    if (spentReport(phase, claude, result)) return spentReport(phase, claude, result);
     if (!result) return { phase, status: "failed", reason: `PLAN ended (claude exit ${claude.code}) but ${problem}` };
     if (result.status !== "ok") return { phase, status: result.status, reason: String(result.reason).slice(0, 1500) };
     writeFileSync(path.join(jobDir, "plan.md"), result.document);
@@ -1806,7 +1840,7 @@ async function runSeveral(job, ctx) {
           ({ result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "BUILD"));
         }
         if (Array.isArray(result?.missing_materials)) stillMissing.push(...result.missing_materials);
-        if (!result && spentReport(phase, claude)) return { ...spentReport(phase, claude), parts: reports };
+        if (spentReport(phase, claude, result)) return { ...spentReport(phase, claude, result), parts: reports };
         if (!result) return { phase, status: "failed", reason: `BUILD of ${p.repo} ended (claude exit ${claude.code}) but ${problem}`, parts: reports };
         if (result.status !== "ok") return { phase, status: result.status, reason: `${p.repo}: ${String(result.reason).slice(0, 1400)}`, parts: reports };
         const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress, registryAllowance(p.book, p.secrets), { branch: p.names.branch });
