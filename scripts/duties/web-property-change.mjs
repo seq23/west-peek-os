@@ -710,30 +710,73 @@ async function changedFilesFor(worktree, number) {
   }
 }
 
-async function previewUrlFor(worktree, number, progress, pagesHosts = [], branch = "") {
-  const statuses = [];
-  const comments = [];
-  try {
-    const { stdout } = await sh("gh", ["pr", "view", String(number), "--json", "headRefOid,comments"], { cwd: worktree });
-    const pr = JSON.parse(stdout);
-    for (const c of pr.comments ?? []) comments.push(c.body);
-    const repo = (await sh("gh", ["repo", "view", "--json", "nameWithOwner"], { cwd: worktree })).stdout;
-    const { nameWithOwner } = JSON.parse(repo);
-    const deps = JSON.parse((await sh("gh", ["api", `repos/${nameWithOwner}/deployments?sha=${pr.headRefOid}&per_page=20`], { cwd: worktree })).stdout);
-    for (const d of Array.isArray(deps) ? deps : []) {
-      try {
-        const sts = JSON.parse((await sh("gh", ["api", `repos/${nameWithOwner}/deployments/${d.id}/statuses?per_page=5`], { cwd: worktree })).stdout);
-        for (const st of Array.isArray(sts) ? sts : []) statuses.push(st);
-      } catch {
-        /* a deployment with no statuses yet */
+/**
+ * IS THE PREVIEW A BUILD OF THIS HEAD COMMIT? (13 Nov 2026.) Porter added a dashboard in four commits;
+ * Cloudflare Pages had not built any of them, the deployments read failed on a rate limit, and the
+ * old Pages comment still carried the branch alias. The partner was emailed "New preview ready" for
+ * a preview that did not have the work in it. A link is only a preview of this work when Pages says
+ * it built THIS commit: a deployment status read for the head sha, or the Pages comment naming it.
+ *   BUILT   — say so.   STALE — Pages' comment names another commit.   UNKNOWN — nothing read says.
+ */
+export function previewOfHead(headSha, deploymentStatuses, commentBodies) {
+  const sha = String(headSha ?? "").toLowerCase();
+  if (sha.length < 7) return "UNKNOWN";
+  if ((Array.isArray(deploymentStatuses) ? deploymentStatuses : []).some((st) => String(st?.state ?? "success") === "success" && /\.pages\.dev|\.workers\.dev/.test(String(st?.environment_url ?? "")))) return "BUILT";
+  const pages = (Array.isArray(commentBodies) ? commentBodies : []).map((c) => String(c ?? "")).filter((c) => /\.pages\.dev/.test(c));
+  // The Pages comment names its latest commit and says when that build has succeeded.
+  if (pages.some((c) => c.toLowerCase().includes(sha.slice(0, 7)) && /deploy successful/i.test(c))) return "BUILT";
+  return pages.length ? "STALE" : "UNKNOWN";
+}
+
+const PREVIEW_HEAD_WAIT_MS = 12 * 60_000;
+
+/** The preview link, and `problem` when a link exists but is not confirmed to be a build of the head commit. */
+async function previewUrlFor(worktree, number, progress, pagesHosts = [], branch = "", signal = null) {
+  const started = Date.now();
+  let url = null;
+  let state = "UNKNOWN";
+  let head = "";
+  let readFailed = null;
+  // Not confirmed = the host names another commit, or the read that would say so failed. A repo whose
+  // host leaves no word at all (nothing STALE, nothing unread) keeps its link, as before.
+  const unconfirmed = () => Boolean(url) && (state === "STALE" || (state === "UNKNOWN" && readFailed !== null));
+  for (;;) {
+    const statuses = [];
+    const comments = [];
+    readFailed = null;
+    try {
+      const { stdout } = await sh("gh", ["pr", "view", String(number), "--json", "headRefOid,comments"], { cwd: worktree });
+      const pr = JSON.parse(stdout);
+      head = String(pr.headRefOid ?? "");
+      for (const c of pr.comments ?? []) comments.push(c.body);
+      const repo = (await sh("gh", ["repo", "view", "--json", "nameWithOwner"], { cwd: worktree })).stdout;
+      const { nameWithOwner } = JSON.parse(repo);
+      const deps = JSON.parse((await sh("gh", ["api", `repos/${nameWithOwner}/deployments?sha=${pr.headRefOid}&per_page=20`], { cwd: worktree })).stdout);
+      for (const d of Array.isArray(deps) ? deps : []) {
+        try {
+          const sts = JSON.parse((await sh("gh", ["api", `repos/${nameWithOwner}/deployments/${d.id}/statuses?per_page=5`], { cwd: worktree })).stdout);
+          for (const st of Array.isArray(sts) ? sts : []) statuses.push(st);
+        } catch {
+          /* a deployment with no statuses yet */
+        }
       }
+    } catch (err) {
+      readFailed = err instanceof Error ? err.message.slice(0, 120) : String(err);
+      progress(`preview url: could not read deployments (${readFailed})`);
     }
-  } catch (err) {
-    progress(`preview url: could not read deployments (${err instanceof Error ? err.message.slice(0, 120) : String(err)})`);
+    url = previewUrlsFrom(statuses, comments, pagesHosts, branch);
+    state = previewOfHead(head, statuses, comments);
+    if (!unconfirmed()) break;
+    if (Date.now() - started >= PREVIEW_HEAD_WAIT_MS || signal?.aborted) break;
+    progress(`preview: waiting for a build of ${head.slice(0, 7) || "the head commit"} (${state === "STALE" ? "the last build is of an earlier commit" : "nothing confirms it yet"})`);
+    await new Promise((r) => setTimeout(r, 45_000));
   }
-  const url = previewUrlsFrom(statuses, comments, pagesHosts, branch);
+  if (unconfirmed()) {
+    progress(`preview: NOT CONFIRMED for ${head.slice(0, 7)}`);
+    return { url: null, problem: `the checks are green, but nothing shows a preview build of this work's last commit (${head.slice(0, 7) || "unknown"}) after ${Math.round(PREVIEW_HEAD_WAIT_MS / 60_000)} minutes: ${state === "STALE" ? "the hosting service's last build is of an earlier commit" : "the deployments could not be read"}. The link would show the site without this work, so no preview is announced` };
+  }
   progress(url ? `preview: ${url}` : "preview: none (no Pages deployment on this PR)");
-  return url;
+  return { url, problem: null };
 }
 
 async function watchChecks(worktree, number, signal, progress) {
@@ -1032,7 +1075,10 @@ export async function run(job, ctx) {
     }
     const checks = await watchChecks(names.worktree, pr.number, ctx.signal, progress);
     // The preview link is read AFTER the checks settle: Pages posts its deployment beside them.
-    const previewUrl = checks.state === "GREEN" ? await previewUrlFor(names.worktree, pr.number, progress, job.pages_hosts ?? [], names.branch) : null;
+    const preview = checks.state === "GREEN" ? await previewUrlFor(names.worktree, pr.number, progress, job.pages_hosts ?? [], names.branch, ctx.signal) : { url: null, problem: null };
+    // A preview that is not a build of this work is never announced: a failed attempt, tried again.
+    if (preview.problem) return { phase, status: "failed", reason: preview.problem };
+    const previewUrl = preview.url;
     const changedFiles = await changedFilesFor(names.worktree, pr.number);
     return {
       phase,
@@ -1652,7 +1698,9 @@ async function runSeveral(job, ctx) {
         return { phase, status: "failed", reason: `gh finds no PR on ${p.names.branch} in ${p.repo}: ${err instanceof Error ? err.message.slice(0, 300) : String(err)}`, parts: reports };
       }
       const checks = await watchChecks(p.names.worktree, pr.number, ctx.signal, progress);
-      const previewUrl = checks.state === "GREEN" ? await previewUrlFor(p.names.worktree, pr.number, progress, p.pages_hosts ?? [], p.names.branch) : null;
+      const preview = checks.state === "GREEN" ? await previewUrlFor(p.names.worktree, pr.number, progress, p.pages_hosts ?? [], p.names.branch, ctx.signal) : { url: null, problem: null };
+      if (preview.problem) return { phase, status: "failed", reason: `${p.repo}: ${preview.problem}`, parts: reports };
+      const previewUrl = preview.url;
       const changedFiles = await changedFilesFor(p.names.worktree, pr.number);
       reports.push({ repo: p.repo, pr_url: pr.url, pr_number: pr.number, branch: p.names.branch, check_state: checks.state, check_url: checks.url ?? undefined, preview_url: previewUrl ?? undefined, changed_files: changedFiles, proof: proof || undefined });
     }

@@ -23,7 +23,7 @@ import { keywordIntent, parseReplyIntent } from "../src/worker/services/replyInt
 import { plainTitle } from "../src/shared/work/siteChange";
 import { rebuildIntentFor } from "../src/worker/services/webPropertyChange";
 // The Mac's reader, held to the same answers as the Worker's (one rule, two runtimes).
-import { previewUrlsFrom, branchAlias } from "../scripts/duties/web-property-change.mjs";
+import { previewUrlsFrom, previewOfHead, branchAlias } from "../scripts/duties/web-property-change.mjs";
 
 /**
  * PORTER'S EMAILS, ONE SCREEN, THE ANSWER FIRST (owner, 23 Sep 2026).
@@ -296,5 +296,30 @@ describe("pagePathsFrom / withChangedPages — the preview links each changed pa
     expect(withChangedPages(root, null)).toBe(root);
     expect(withChangedPages(`${root} · https://x.other.pages.dev`, JSON.stringify(["/entry"]))).toBe(`${root} · https://x.other.pages.dev`);
     expect(withChangedPages(null, JSON.stringify(["/entry"]))).toBeNull();
+  });
+});
+
+/**
+ * 13 Nov 2026: Porter added a dashboard in four commits; the host had built none of them, and the old
+ * comment still carried the branch link. "New preview ready" went out for a preview without the work.
+ * A link is a preview of this work only when the host says it built THIS commit.
+ */
+describe("a preview is announced only when the host built the head commit", () => {
+  const HEAD = "d3fb0c6010e552b9c695c9836d230bc528c75a7e";
+  const comment = (sha: string, status: string) =>
+    `## Deploying site with Cloudflare Pages\n<table><tr><td><strong>Latest commit:</strong> </td><td>\n<code>${sha}</code>\n</td></tr>\n<tr><td><strong>Status:</strong></td><td>&nbsp;${status}</td></tr>\n<tr><td><strong>Branch Preview URL:</strong></td><td>\n<a href='https://work-wpc-c548d043.west-peek-productions.pages.dev'>link</a>\n</td></tr></table>`;
+
+  it("the host's comment naming an earlier commit is STALE, however good its link looks", () => {
+    const old = [comment("fd56205", "✅ Deploy successful!")];
+    expect(previewUrlsFrom([], old, ["west-peek-productions.pages.dev"], "work/wpc-c548d043"), "the link alone still reads fine").toBe("https://work-wpc-c548d043.west-peek-productions.pages.dev");
+    expect(previewOfHead(HEAD, [], old)).toBe("STALE");
+    expect(previewOfHead(HEAD, [], [comment("d3fb0c6", "🔨 Building…")]), "named, not yet built").toBe("STALE");
+  });
+
+  it("BUILT when the host's comment names the head commit as deployed, or a deployment status was read for it", () => {
+    expect(previewOfHead(HEAD, [], [comment("fd56205", "✅ Deploy successful!"), comment("d3fb0c6", "✅ Deploy successful!")])).toBe("BUILT");
+    expect(previewOfHead(HEAD, [{ environment_url: "https://a1b2c3d4.west-peek-productions.pages.dev", state: "success" }], [])).toBe("BUILT");
+    expect(previewOfHead(HEAD, [{ environment_url: "https://a1b2c3d4.west-peek-productions.pages.dev", state: "failure" }], [])).toBe("UNKNOWN");
+    expect(previewOfHead(HEAD, [], ["LGTM"]), "nothing read says anything").toBe("UNKNOWN");
   });
 });
