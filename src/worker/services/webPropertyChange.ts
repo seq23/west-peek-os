@@ -2,6 +2,7 @@ import { committedLpNamedIn, committedLps } from "../ai/committedLps";
 import { privateMaterialConstraint, privateMaterialSentence } from "../../shared/intake/privateMaterial";
 import { ccAck, ccAsksIn, isOnlyACc, resolveCc } from "../../shared/work/ccPartners";
 import { secondaryNoteAck } from "../../shared/work/partnerOwnership";
+import { developerDirector } from "./developerDirection";
 import type { Env } from "../env";
 import { json, type RouteContext } from "../router";
 import { appendEvent } from "../events";
@@ -2803,6 +2804,19 @@ export async function runWebPropertyChangeCard(
       // The "I added missing items" button answers the block with exactly that phrase (handleMaterialsAdded).
       const keywordRebuild = landReading?.kind === "APPROVED" || !fromRequester || !answer ? null : rebuildIntentFor(answer);
       if (keywordRebuild) return requestRebuild(env, card, row, keywordRebuild, answer, rules);
+      /*
+       * THE DEVELOPER DIRECTS ANY JOB (owner ruling, 13 Nov 2026, #363; services/developerDirection.ts).
+       * A "changes: …" from the developer, herself or through her tail, rebuilds this job though she
+       * is not the partner who asked. ONLY the literal CHANGES intent: never PREVIEW, PUBLISH, an
+       * approval or a force, which the lines above and below read from the requesting partner alone.
+       */
+      if (answer && !fromRequester && rebuildIntentFor(answer) === "CHANGES") {
+        const director = await developerDirector(env, card.block_answered_by);
+        if (director) {
+          await appendFinding(env, card.id, `Directed by ${director.label}: "${answer.slice(0, 600)}". Rebuilding with it; the preview and its approval stay with ${requester?.firstName ?? "the partner who asked"}.`);
+          return requestRebuild(env, card, row, "CHANGES", answer, rules);
+        }
+      }
       /*
        * FREE TEXT TO A PREVIEW, READ FOR ITS INTENT (owner's decision, 27 Sep 2026). CONTINUE with no
        * changes lands it — the same as "approved" — while `free_reply_lands_preview` is on. CONTINUE

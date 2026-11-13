@@ -1,3 +1,4 @@
+import { developerDirector, isWorkInstruction } from "./developerDirection";
 import { recordCcFrom } from "./ccPartners";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
@@ -597,6 +598,11 @@ export async function steerFromReply(
           const out = await answerBlock(env, cardRow.id, partner.firmUserId, { action: door, text: written.slice(0, 4000) });
           answered = out.ok;
         }
+      } else if (cardRow.kind === WEB_PROPERTY_CHANGE_KIND && isWorkInstruction(written) && (await developerDirector(env, partner.firmUserId))) {
+        // #363 (0301): THE DEVELOPER DIRECTS ANY JOB. Her "changes: …" on another partner's job is his job's
+        // instruction; the runner rebuilds with it and reads nothing else from her (services/developerDirection.ts).
+        const out = await answerBlock(env, cardRow.id, partner.firmUserId, { action: "ANSWER", text: written.slice(0, 4000) });
+        answered = out.ok;
       } else {
         await env.WP_OS_DB.prepare(
           "INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)",
