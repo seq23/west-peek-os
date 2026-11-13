@@ -1,4 +1,5 @@
 import { developerDirector, isWorkInstruction } from "./developerDirection";
+import { recordPartnerBack } from "./blocks";
 import { recordCcFrom } from "./ccPartners";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
@@ -513,6 +514,8 @@ export async function steerFromReply(
     // "CC SCOOTER" IN A REPLY (0239): recorded from the authenticated sender, whatever the state;
     // `recordCcFrom` refuses anyone but the requesting partner and names non-partners it refused.
     if (cardRow && partner) await recordCcFrom(env, cardRow.id, written, partner.email);
+    // 0302: the partner who asked says when he will be back → no reminder about this card before then.
+    if (cardRow && partner && (cardRow.requested_by_email ?? "").trim().toLowerCase() === partner.email) await recordPartnerBack(env, cardRow.id, written, partner.firstName);
 
     /*
      * "HAND THIS TO SCOOTER" / "TAKE THIS BACK" (0241). Read before anything else acts on the reply:
