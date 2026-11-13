@@ -39,6 +39,8 @@ export interface QuestionAnswerInput {
   cardTitle: string;
   /** The partner's own words — the question actually asked. */
   question: string;
+  /** What the card itself records right now (preview link, what is being built, what is still to come). Answered from first. */
+  facts?: string[];
 }
 
 export interface QuestionAnswerResult {
@@ -99,6 +101,7 @@ const defaultAnswerQuestion: QuestionAnswerer = async (env, input) => {
           "fact, a number or a date to appear complete.",
         "",
         `CARD: ${input.cardTitle}`,
+        ...(input.facts?.length ? [`WHAT THE CARD ITSELF RECORDS RIGHT NOW (true; when the question is about this job, answer from these and be confident):\n${input.facts.map((f) => `- ${f}`).join("\n")}`] : []),
         `THE QUESTION, IN THE PARTNER'S OWN WORDS:\n"""\n${input.question.slice(0, 2000)}\n"""`,
         "",
         "BIAS HARD TOWARD NOT CONFIDENT. Sequoia is the fallback and she is always available — a wrong " +
