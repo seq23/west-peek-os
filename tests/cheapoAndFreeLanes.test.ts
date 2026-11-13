@@ -35,17 +35,17 @@ const OK_OPENAI_SHAPE = (text: string) =>
     headers: { "content-type": "application/json" },
   });
 
-function hostRouter(routes: Record<string, () => Response>): { fetchImpl: typeof fetch; seen: string[]; paths: string[] } {
+function hostRouter(routes: Record<string, (init?: RequestInit) => Response>): { fetchImpl: typeof fetch; seen: string[]; paths: string[] } {
   const seen: string[] = [];
   const paths: string[] = [];
-  const fetchImpl = (async (input: RequestInfo | URL) => {
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
     const u = new URL(url);
     seen.push(u.host);
     paths.push(u.pathname);
     const handler = routes[u.host];
     if (!handler) throw new Error(`no stub for ${u.host}`);
-    return handler();
+    return handler(init);
   }) as unknown as typeof fetch;
   return { fetchImpl, seen, paths };
 }
@@ -221,11 +221,12 @@ describe("free frontier capacity carries the important, public-facing work", () 
   });
 
   it("falls through to the paid model when the free quota runs out, and SAYS SO", async () => {
-    let call = 0;
     const { fetchImpl } = hostRouter({
-      // First the free endpoint is rate-limited (which is what an exhausted free tier looks like),
-      // then the paid one answers.
-      "openrouter.ai": () => (++call === 1 ? new Response("{}", { status: 429 }) : OK_OPENAI_SHAPE("the packet, paid for")),
+      // Every free model is rate-limited (which is what an exhausted free tier looks like); the paid one answers.
+      "openrouter.ai": (init) =>
+        String((JSON.parse(String(init?.body ?? "{}")) as { model?: string }).model ?? "").endsWith(":free")
+          ? new Response("{}", { status: 429 })
+          : OK_OPENAI_SHAPE("the packet, paid for"),
       "generativelanguage.googleapis.com": () => new Response("{}", { status: 429 }),
     });
     const { run } = await runAi(
