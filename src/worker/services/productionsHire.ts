@@ -4,6 +4,7 @@ import { json } from "../router";
 import { appendEvent } from "../events";
 import type { Actor } from "./authorize";
 import { runAi } from "../ai/runAi";
+import { markFloorMiss } from "../ai/laneHealth";
 import { SEARCH_MODEL, servedBySearchLane } from "./liveSearch";
 import { blockCard } from "./blocks";
 import { cannotDetail, steerFor, type Interpreter } from "./instruction";
@@ -187,6 +188,8 @@ export interface HireCandidate {
   openingLine: string;
   /** 1–10, the searcher's; the judge's overrides it. */
   fit: number;
+  /** The judge's own one-line reason for keeping them. Set by the judge; read by the floor. */
+  judgeReason?: string;
   /** How the profile answered: live (2xx/3xx), or exists-but-refused an automated read. Set by the check. */
   profileCheck?: "live" | "refused";
   /**
@@ -385,18 +388,18 @@ export async function judgeCandidates(
   week: string,
   candidates: readonly HireCandidate[],
   judge: ProductionsJudge,
-): Promise<{ kept: HireCandidate[]; rejected: { name: string; reason: string }[]; failed: string | null }> {
+): Promise<{ kept: HireCandidate[]; rejected: { name: string; reason: string; profileUrl?: string }[]; failed: string | null }> {
   if (candidates.length === 0) return { kept: [], rejected: [], failed: null };
   const found = await judge(env, actor, buildHireJudgePrompt(week, candidates));
   if (!found.ok) return { kept: [], rejected: [], failed: found.detail };
   const verdicts = parseHireVerdicts(found.text);
   if (verdicts.size === 0) return { kept: [], rejected: [], failed: "the judge answered with no verdicts" };
   const kept: HireCandidate[] = [];
-  const rejected: { name: string; reason: string }[] = [];
+  const rejected: { name: string; reason: string; profileUrl?: string }[] = [];
   for (const c of candidates) {
     const v = verdicts.get(c.name.toLowerCase());
-    if (v?.keep) kept.push({ ...c, fit: v.fit || c.fit });
-    else rejected.push({ name: c.name, reason: v?.reason ?? "the judge gave no verdict on them" });
+    if (v?.keep) kept.push({ ...c, fit: v.fit || c.fit, judgeReason: v.reason });
+    else rejected.push({ name: c.name, reason: v?.reason ?? "the judge gave no verdict on them", profileUrl: c.profileUrl });
   }
   kept.sort((a, b) => b.fit - a.fit);
   return { kept, rejected, failed: null };
@@ -512,6 +515,92 @@ export async function rememberCandidates(
   return { fresh, seenBefore, retired };
 }
 
+/** What is already on file for these profile pages, read only. */
+export async function knownCandidates(env: Env, urls: readonly string[]): Promise<Map<string, { status: CandidateStatus; week: string }>> {
+  const out = new Map<string, { status: CandidateStatus; week: string }>();
+  for (const url of urls) {
+    const row = await env.WP_OS_DB.prepare("SELECT status, week FROM productions_candidate WHERE url = ?1").bind(url).first<{ status: CandidateStatus; week: string }>();
+    if (row) out.set(url, row);
+  }
+  return out;
+}
+
+/** Has this person already been turned down (by the judge, or by Scooter in the old buttons)? */
+export const isPastReject = (known: { status: CandidateStatus } | undefined): boolean => known?.status === "PASSED" || known?.status === "CONTACTED";
+
+/**
+ * A CANDIDATE THE JUDGE TURNED DOWN IS REMEMBERED (13 Nov 2026). Before this only the kept were stored, so a person
+ * rejected in 2026-W43 came back in W46 as new. A reject is filed PASSED (the status the table has always had for
+ * "dealt with, do not show again"), with the judge's reason, and is never judged or shown again. A person already on
+ * file is left as they are: a keep from an earlier week stays a keep.
+ */
+export async function rememberRejects(
+  env: Env,
+  rejected: readonly { name: string; reason: string; profileUrl?: string }[],
+  week: string,
+  cardId: string,
+  now: Date,
+  firmScope = "west-peek",
+): Promise<number> {
+  let filed = 0;
+  const at = now.toISOString();
+  for (const r of rejected) {
+    if (!r.profileUrl) continue;
+    const done = await env.WP_OS_DB.prepare(
+      `INSERT OR IGNORE INTO productions_candidate (id, url, name, title, company, city, why, opening_line, fit_score, first_seen, last_seen, week, last_card_id, status, status_changed_at, status_changed_by, firm_scope)
+       VALUES (?1, ?2, ?3, '', '', '', ?4, '', 0, ?5, ?5, ?6, NULL, 'PASSED', ?5, ?7, ?8)`,
+    )
+      // No `last_card_id`: the card's candidate list (Home, the note) is the people it KEPT. The card is named as who turned them down.
+      .bind(`pcd_${crypto.randomUUID()}`, r.profileUrl, r.name, `Left out on judgement: ${r.reason}`.slice(0, 1000), at, week, `judge:${cardId}`.slice(0, 80), firmScope)
+      .run();
+    filed += Number(done.meta?.changes ?? 0);
+  }
+  return filed;
+}
+
+/**
+ * THE FLOOR: IS THIS A SHORTLIST, OR ONLY THE NEAREST MISSES? (owner, 13 Nov 2026.)
+ *
+ * Read on the finished, judged, de-duplicated list before anything is filed or sent. The standard is the note
+ * Scooter called "overall now this is good" (22 Sep 2026): six people at fit 6 to 9, each with sponsorship or
+ * partnership selling shown on a page. The note that prompted this (2026-W46) had six at fit 4 to 5, every one kept
+ * "because Scooter approved the shortlist" by a judge whose own reason said no page showed any selling.
+ *
+ *   · at least HIRE_FLOOR.kept people, none of them shown or turned down before;
+ *   · each at fit HIRE_FLOOR.fit or more;
+ *   · each with selling (sponsorships, partnerships, brand deals, new business) named in the `why`, on a page that
+ *     answered: the archetype's "part that matters most";
+ *   · a contact address only with the page it was read from (otherwise the note says none was found);
+ *   · a judge whose own reason for a keep says the evidence is missing, or that it kept someone because a partner
+ *     approved, has contradicted itself: that keep does not count.
+ *
+ * Pure. `misses` are plain sentences, shown to the partner when the best a week could do is nearest misses.
+ */
+export const HIRE_FLOOR = { kept: 3, fit: 6 } as const;
+const SALES_ON_THE_PAGE = /sponsor|partnership|brand[- ]deal|business development|new[- ]business|\bsold\b|\bsales\b|revenue|\bpitch(?:es|ed)?\b|\bclosed\b|\bwon\b/i;
+const JUDGE_CONTRADICTS_ITSELF =
+  /approved the shortlist|kept because|\bgaps?:|no page (?:shows|backs|supports)|nothing shows|not (?:page-)?backed|only inferred|is inferred|c(?:an|ould) ?not be confirmed|unverified|no evidence of/i;
+
+export function hireFloor(
+  fresh: readonly HireCandidate[],
+  seenOrRejectedBefore: ReadonlySet<string> = new Set(),
+): { ok: boolean; misses: string[]; good: number } {
+  const misses: string[] = [];
+  let good = 0;
+  for (const c of fresh) {
+    const wrong: string[] = [];
+    if (c.fit < HIRE_FLOOR.fit) wrong.push(`fit ${c.fit}/10, below ${HIRE_FLOOR.fit}`);
+    if (!(SALES_ON_THE_PAGE.test(c.why) && (c.evidenceUrl || c.profileCheck === "live"))) wrong.push("no page shows them selling sponsorships or brand deals");
+    if (c.judgeReason && JUDGE_CONTRADICTS_ITSELF.test(c.judgeReason)) wrong.push("the judge kept them while its own reason says the evidence is missing");
+    if (c.email && !c.contactUrl) wrong.push("a contact address with no page it was read from");
+    if (seenOrRejectedBefore.has(c.profileUrl)) wrong.push("already shown or turned down in an earlier week");
+    if (wrong.length === 0) good += 1;
+    else misses.push(`${c.name}: ${wrong.join("; ")}`);
+  }
+  if (good < HIRE_FLOOR.kept) misses.unshift(`${good} of ${fresh.length} met the standard; a shortlist needs at least ${HIRE_FLOOR.kept}`);
+  return { ok: good >= HIRE_FLOOR.kept && misses.length === 0, misses, good };
+}
+
 // ── Rendering ────────────────────────────────────────────────────────────────
 
 function checkLine(c: HireCandidate): string {
@@ -557,12 +646,17 @@ export function renderHireNote(
    * model's own words, without him having to open the card.
    */
   understood: string | null = null,
+  /** Set when no route's result reached the floor: the note says so first and never calls itself a shortlist. */
+  nearest: readonly string[] | null = null,
 ): string {
   const lines = [
-    `Scooter — Walker, your chief of staff. The week's hire search for a ${HIRE_ROLE} at West Peek Productions (${week}): ${fresh.length} new candidate(s). Nobody has been contacted from here; that stays yours.`,
+    nearest
+      ? `Scooter — Walker, your chief of staff. The week's hire search for a ${HIRE_ROLE} at West Peek Productions (${week}) did NOT reach the standard, so this is not a shortlist: these ${fresh.length} are the NEAREST MISSES, each with what is missing. Nobody has been contacted from here; that stays yours.`
+      : `Scooter — Walker, your chief of staff. The week's hire search for a ${HIRE_ROLE} at West Peek Productions (${week}): ${fresh.length} new candidate(s). Nobody has been contacted from here; that stays yours.`,
     "",
+    ...(nearest ? ["What was missing:", ...nearest.map((m) => `- ${m}`), ""] : []),
     ...(understood ? [`You told me: ${understood.trim()}`, "That is what I searched on this week.", ""] : []),
-    `═══ 1 · NEW THIS WEEK ═══`,
+    nearest ? `═══ 1 · NEAREST MISSES THIS WEEK ═══` : `═══ 1 · NEW THIS WEEK ═══`,
     "Each one is on a live page; the fit is judged against the archetype, not the title alone.",
     "",
     ...fresh.flatMap((c, n) => [
@@ -615,11 +709,14 @@ export function hireSummary(
   seenBefore: readonly HireCandidate[],
   dropped: readonly { name: string; reason: string }[],
   rejected: readonly { name: string; reason: string }[],
+  nearest: readonly string[] | null = null,
 ): { what: string; tldr: string; sections: ExecEmailInput["sections"] } {
   const top = fresh[0];
   return {
-    what: `hire search — ${fresh.length} candidate(s) this week`,
-    tldr: `${fresh.length} new candidate(s) for the ${HIRE_ROLE} role this week${top ? `; top pick **${top.name}** (${top.title}${top.company ? `, ${top.company}` : ""}, fit **${top.fit}/10**)` : ""}. Nobody has been contacted; you choose who to write to.`,
+    what: nearest ? `hire search — nearest misses this week, not a shortlist` : `hire search — ${fresh.length} candidate(s) this week`,
+    tldr: nearest
+      ? `This week's search did **not** reach the standard (at least ${HIRE_FLOOR.kept} people at fit ${HIRE_FLOOR.fit}+ with selling shown on a page), so these ${fresh.length} are the **nearest misses**, each with what is missing. Nobody has been contacted; you choose who to write to.`
+      : `${fresh.length} new candidate(s) for the ${HIRE_ROLE} role this week${top ? `; top pick **${top.name}** (${top.title}${top.company ? `, ${top.company}` : ""}, fit **${top.fit}/10**)` : ""}. Nobody has been contacted; you choose who to write to.`,
     sections: [
       { label: "What you asked", bullets: [`The weekly hire search for a ${HIRE_ROLE} who can bring in brand deals (${week}).`] },
       {
@@ -660,19 +757,20 @@ export function hireSummary(
 
 // ── The runner the sweep calls ───────────────────────────────────────────────
 
-const defaultSearch: ProductionsSearch = async (env, actor, prompt) => {
+const defaultSearch: HireSearch = async (env, actor, prompt) => {
   const { run } = await runAi(env, {
     purpose: "Walker: West Peek Productions hire search",
     actor,
     inputs: [prompt],
     // Public web research; the query leaves for a search engine. Never raised.
     sensitivity: "PUBLIC" as never,
-    budgetContext: { requiresSearch: true, expectedOutputTokens: 3000, preferredModel: SEARCH_MODEL, providerKey: "openrouter" },
+    // Scooter asked for this search: it starts on whichever route has the best record at it (runAi, partnerRequested).
+    budgetContext: { requiresSearch: true, expectedOutputTokens: 3000, preferredModel: SEARCH_MODEL, providerKey: "openrouter", partnerRequested: true },
     routing: { category: "INTELLIGENCE" },
   });
   if (run.status !== "COMPLETED" || !run.output_text) return { ok: false, text: "", detail: run.failure_reason ?? `run ${run.status}` };
   if (!servedBySearchLane(run.model)) return { ok: false, text: "", detail: `search was routed to ${run.model ?? "an unknown model"}, which cannot search the web` };
-  return { ok: true, text: run.output_text, detail: "ok" };
+  return { ok: true, text: run.output_text, detail: "ok", runId: run.id };
 };
 
 const defaultJudge: ProductionsJudge = async (env, actor, prompt) => {
@@ -689,8 +787,13 @@ const defaultJudge: ProductionsJudge = async (env, actor, prompt) => {
   return { ok: true, text: run.output_text, detail: "ok" };
 };
 
+/** A hire search answer, with the run that produced it so a floor miss can be held against the route that wrote it. */
+export type HireSearch = (env: Env, actor: Actor, prompt: string) => Promise<{ ok: boolean; text: string; detail: string; runId?: string }>;
+/** One route per go: the search is run again on the next route when a result misses the floor. */
+export const HIRE_SEARCH_ROUTES = 3;
+
 export interface HireSearchDeps {
-  search?: ProductionsSearch;
+  search?: HireSearch;
   judge?: ProductionsJudge;
   urlStatus?: UrlStatusCheck;
   now?: Date;
@@ -765,6 +868,14 @@ export async function runHireSearchCard(
     firmScope: card.firm_scope,
     extra: replies,
   }, deps.interpret);
+  /*
+   * A STEER THAT COULD NOT BE READ IS A FAILED GO, NOT A MISSING BRIEF (13 Nov 2026, the 2026-W44 card). That week
+   * the model that reads his standing replies did not answer ("the Codex CLI seat was awake but returned nothing"),
+   * and the card was BLOCKED on Scooter asking him to "say in your own words what you wanted" for a scheduled search
+   * whose brief is written in this file. Nothing was sent that week. The sweep now tries again, and stops by its own
+   * lane rules if the reader stays down.
+   */
+  if (steer.failure) return { finished: false, blocked: false, detail: `what Scooter has said about this search could not be read: ${steer.failure}` };
   if (steer.cannot.length > 0) {
     const why2 = await blockCard(env, card, {
       reason: steer.failure ? "the_brief_is_missing" : "asked_for_something_this_work_cannot_do",
@@ -777,9 +888,14 @@ export async function runHireSearchCard(
   }
   const withSteer = (p: string): string => (steer.text ? `${steer.text}\n\n${p}` : p);
   const rawSearch = deps.search ?? defaultSearch;
-  const search: ProductionsSearch = (e, a, p) => rawSearch(e, a, withSteer(p));
-  const rawJudge = deps.judge ?? defaultJudge;
-  const judge: ProductionsJudge = (e, a, p) => rawJudge(e, a, withSteer(p));
+  const search: HireSearch = (e, a, p) => rawSearch(e, a, withSteer(p));
+  /*
+   * HIS STEER GOES TO THE SEARCH, NEVER TO THE JUDGE (13 Nov 2026). In 2026-W46 his remark on an earlier note was
+   * prepended to the judge's prompt, and the judge kept all six "because Scooter approved the shortlist" while its
+   * own reasons said no page showed any selling. What he says changes where Walker LOOKS; the written KEEP/DROP
+   * rules are applied the same way every week.
+   */
+  const judge: ProductionsJudge = deps.judge ?? defaultJudge;
 
   let kept: HireCandidate[] = [];
   let dropped: { name: string; reason: string }[] = [];
@@ -790,23 +906,39 @@ export async function runHireSearchCard(
   let searchDown = "";
   // A judging step that could not answer is a failed attempt, not "nobody stood up to the checks" (1 Oct 2026).
   let judgeDown = "";
+  /*
+   * EACH GO IS HELD TO THE FLOOR, AND A MISS GOES TO THE NEXT ROUTE (13 Nov 2026). A result that misses is held
+   * against the route that wrote it (`markFloorMiss`), so the router's own re-rank starts the next go on the next
+   * route in the ladder. The best go is kept: if none reaches the floor it is sent as nearest misses, by that name.
+   */
+  let best: { kept: HireCandidate[]; dropped: typeof dropped; rejected: typeof rejected; good: number; misses: string[] } | null = null;
+  let passed = false;
   const prompt = buildHireSearchPrompt(week);
-  for (let attempt = 0; attempt < 2 && kept.length === 0; attempt += 1) {
-    const nudge = attempt === 0 ? "" : `\n\nYour previous answer was discarded: ${why}. Every entry MUST have a profile_url a search result showed, an evidence_url that can be read without a login, and page-backed freelance, seniority and brand-deal claims.`;
+  for (let attempt = 0; attempt < HIRE_SEARCH_ROUTES && !passed; attempt += 1) {
+    const nudge = attempt === 0 ? "" : `\n\nYour previous answer was discarded: ${why}. Every entry MUST have a profile_url a search result showed, an evidence_url that can be read without a login, and page-backed freelance, seniority and brand-deal or sponsorship SALES evidence in \`why\`. Do not repeat anyone the previous answer named unless a page backs the missing claim.`;
     const found = await search(env, actor, `${prompt}${nudge}`);
     if (!found.ok) { why = `the live search failed: ${found.detail}`; searchDown = found.detail; continue; }
     searched = true;
+    const miss = async (reason: string): Promise<void> => { why = reason; await markFloorMiss(env, found.runId); };
     const parsed = parseHireCandidates(found.text);
-    if (parsed.length === 0) { why = "the search answered with no usable entry (no profile_url on any)"; continue; }
+    if (parsed.length === 0) { await miss("the search answered with no usable entry (no profile_url on any)"); continue; }
     const checked = await checkCandidatePages(parsed, status);
-    dropped = checked.dropped;
-    if (checked.kept.length === 0) { why = `every page was dead or unreadable: ${checked.dropped.map((d) => d.name).join(", ")}`; continue; }
-    const judged = await judgeCandidates(env, actor, week, checked.kept, judge);
+    if (checked.kept.length === 0) { dropped = checked.dropped; await miss(`every page was dead or unreadable: ${checked.dropped.map((d) => d.name).join(", ")}`); continue; }
+    // Anyone already turned down is not judged again and never returns as new.
+    const known = await knownCandidates(env, checked.kept.map((c) => c.profileUrl));
+    const judged = await judgeCandidates(env, actor, week, checked.kept.filter((c) => !isPastReject(known.get(c.profileUrl))), judge);
     if (judged.failed) { why = `the judgement pass failed: ${judged.failed}`; judgeDown = judged.failed; break; }
-    rejected = judged.rejected;
-    kept = judged.kept;
-    if (kept.length === 0) why = `the judge rejected every candidate: ${rejected.map((r) => `${r.name} — ${r.reason}`).join("; ")}`;
+    await rememberRejects(env, judged.rejected, week, card.id, now, card.firm_scope);
+    const earlier = new Set([...known].filter(([, k]) => isPastReject(k) || k.week !== week || k.status === "SEEN").map(([url]) => url));
+    const floor = hireFloor(judged.kept.filter((c) => !earlier.has(c.profileUrl)));
+    if (!best || floor.good > best.good || (floor.good === best.good && judged.kept.length > best.kept.length)) {
+      best = { kept: judged.kept, dropped: checked.dropped, rejected: judged.rejected, good: floor.good, misses: floor.misses };
+    }
+    if (floor.ok) passed = true;
+    else await miss(judged.kept.length === 0 ? `the judge rejected every candidate: ${judged.rejected.map((r) => `${r.name} — ${r.reason}`).join("; ")}` : `the result did not reach the standard: ${floor.misses.join("; ")}`);
   }
+  if (best) ({ kept, dropped, rejected } = best);
+  const nearest = passed ? null : (best?.misses ?? []);
 
   if (kept.length === 0 && judgeDown) {
     return { finished: false, blocked: false, detail: `the judgement pass failed: ${judgeDown}` };
@@ -841,9 +973,11 @@ export async function runHireSearchCard(
     return { finished: false, blocked: true, detail: blocked };
   }
 
-  const text = renderHireNote(week, remembered.fresh, remembered.seenBefore, dropped, rejected, steer.interpretation?.understood ?? null);
-  const summary = hireSummary(week, remembered.fresh, remembered.seenBefore, dropped, rejected);
-  const title = `Hire search ${week}: ${remembered.fresh.length} candidate(s) for ${HIRE_ROLE}`;
+  const text = renderHireNote(week, remembered.fresh, remembered.seenBefore, dropped, rejected, steer.interpretation?.understood ?? null, nearest);
+  const summary = hireSummary(week, remembered.fresh, remembered.seenBefore, dropped, rejected, nearest);
+  const title = nearest
+    ? `Hire search ${week}: nearest misses (${remembered.fresh.length}), not a shortlist, for ${HIRE_ROLE}`
+    : `Hire search ${week}: ${remembered.fresh.length} candidate(s) for ${HIRE_ROLE}`;
 
   const delivered = await deliver(env, actor, {
     kind: "productions_hire_search",
@@ -863,6 +997,7 @@ export async function runHireSearchCard(
     deliverableId: delivered.id,
     documentId: delivered.document_id ?? null,
     counts: { fresh: remembered.fresh.length, seen_before: remembered.seenBefore.length, dropped: dropped.length, rejected: rejected.length },
+    ...(nearest ? { nearest } : {}),
   };
   return sendHireNote(env, card, note);
 }
@@ -876,6 +1011,8 @@ interface HireNote {
   deliverableId: string;
   documentId: string | null;
   counts: { fresh: number; seen_before: number; dropped: number; rejected: number };
+  /** What the floor found missing, when the note went out as nearest misses. */
+  nearest?: readonly string[];
 }
 
 const HIRE_EMAIL_NOT_SENT = "productions.hire_email_not_sent";
@@ -965,7 +1102,7 @@ async function sendHireNote(env: Env, card: SweepCard, note: HireNote): Promise<
     firmUserId: SCOOTER_FIRM_USER_ID,
     kind: "MEETING",
     severity: "INFO",
-    title: `Walker: ${note.counts.fresh} hire candidate(s) this week — on Home${mail.sent ? " and in your inbox" : ""}`,
+    title: `Walker: ${note.counts.fresh} hire ${note.nearest ? "nearest miss(es), not a shortlist" : "candidate(s)"} this week — on Home${mail.sent ? " and in your inbox" : ""}`,
     body: `${note.title}. Nothing for you to mark — reply to the email in plain words if you want to steer next week's search.`,
     objectType: "deliverable",
     objectId: note.deliverableId,
@@ -985,8 +1122,9 @@ async function sendHireNote(env: Env, card: SweepCard, note: HireNote): Promise<
     note.text,
   ].join("\n");
   await env.WP_OS_DB.prepare(
-    "UPDATE work_card SET state = 'DONE', description = substr(COALESCE(description, '') || char(10) || char(10) || ?2, 1, 16000), next_action = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
-  ).bind(card.id, finding).run();
+    `UPDATE work_card SET state = CASE WHEN ?3 = 1 THEN state ELSE 'DONE' END, description = substr(COALESCE(description, '') || char(10) || char(10) || ?2, 1, 16000),
+            next_action = CASE WHEN ?3 = 1 THEN next_action ELSE NULL END, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1`,
+  ).bind(card.id, finding, note.nearest ? 1 : 0).run();
   await appendEvent(env, {
     eventType: "productions.hire_delivered",
     actorType: "ai_employee",
@@ -994,8 +1132,19 @@ async function sendHireNote(env: Env, card: SweepCard, note: HireNote): Promise<
     objectType: "work_card",
     objectId: card.id,
     firmScope: card.firm_scope,
-    payload: { week: note.week, ...note.counts, emailed: mail.sent, deliverable_id: note.deliverableId, subject: mail.subject },
+    payload: { week: note.week, ...note.counts, emailed: mail.sent, deliverable_id: note.deliverableId, subject: mail.subject, nearest_misses: Boolean(note.nearest) },
   });
+  if (note.nearest) {
+    // BELOW THE FLOOR ON EVERY ROUTE: he has the nearest misses, by that name, and the card stops where it is seen today.
+    const blocked = await blockCard(env, card, {
+      reason: "nothing_good_enough_to_send",
+      trying: card.title,
+      employee: "Walker",
+      who: "SEQUOIA",
+      detail: `The hire search for ${note.week} did not reach its standard on any route (${note.nearest[0] ?? "see the note"}). ${mail.sent ? "Scooter was sent the nearest misses" : "The nearest misses are on Scooter's Home"}, labelled as that, not a shortlist. Say where Walker should look, or leave it until next week.`,
+    });
+    return { finished: false, blocked: true, detail: blocked };
+  }
   return {
     finished: true,
     blocked: false,

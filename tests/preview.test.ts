@@ -48,12 +48,15 @@ const searchJson = JSON.stringify({
       opening_line: "Your Nike House of Innovation build is the kind of thing we want more of.",
       fit: 9,
     },
+    // Two more who stand up, so the week is a shortlist (the floor, 13 Nov 2026: fewer than three is "nearest misses").
+    { name: "Sam Sample", title: "Executive Producer", company: "Freelance", city: "Los Angeles, CA", profile_url: "https://samsample.example", why: "Portfolio shows brand partnerships sold and produced.", opening_line: "hi", fit: 8 },
+    { name: "Avery Sample", title: "Senior Producer (freelance)", company: "Independent", city: "Chicago, IL", profile_url: "https://averysample.example", why: "Own site lists sponsorships sold for two festivals.", opening_line: "hi", fit: 7 },
   ],
 });
 
 const judge = async () => ({
   ok: true,
-  text: JSON.stringify({ verdicts: [{ name: "Jordan Example", keep: true, fit: 9, reason: "freelance, sells sponsorship" }] }),
+  text: JSON.stringify({ verdicts: ["Jordan Example", "Sam Sample", "Avery Sample"].map((name, i) => ({ name, keep: true, fit: 9 - i, reason: "freelance, sells sponsorship" })) }),
   detail: "ok",
 });
 
@@ -266,7 +269,7 @@ describe("a preview of Monday's hire search", () => {
     expect(sent[0]!.text).not.toMatch(/this is not a live send/);
 
     const candidates = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM productions_candidate").first<{ n: number }>();
-    expect(candidates!.n, "the live run DOES remember the candidate").toBe(1);
+    expect(candidates!.n, "the live run DOES remember the candidates").toBe(3);
     const dlv = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM deliverable WHERE kind = 'productions_hire_search'").first<{ n: number }>();
     expect(dlv!.n, "the live run DOES file it on his Home").toBe(1);
   });

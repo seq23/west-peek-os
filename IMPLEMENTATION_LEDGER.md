@@ -7512,3 +7512,30 @@ Why: Scooter's weekly hire search (2026-W46) failed twelve times on the $0 searc
 - NOT DONE here: other duties' "email not sent, still DONE" endings (blog help, the monthly Productions note, partner
   messages) are unchanged; the 2026-W44 card's cause (a steer read that could reach no model is reported as "the brief
   is missing") is left for the hire-search quality change that owns the steer.
+
+## 13 Nov 2026 — the hire search has a floor: a shortlist, or the nearest misses by that name
+
+Why: the 2026-W46 note had six people at fit 4 to 5 against 6 to 9 in the 22 Sep note Scooter called "overall now this
+is good"; the judge kept all six "because Scooter approved the shortlist" while its own reasons said no page showed any
+selling; a person rejected in W43 returned as new; W44 sent nothing.
+- `services/productionsHire.ts`
+  - His steer goes to the search only. The judge reads the written KEEP/DROP rules every week.
+  - `rememberRejects`: a person the judge turns down is filed PASSED (off the card's candidate list) and is never judged
+    or shown again (`knownCandidates`, `isPastReject`).
+  - `hireFloor` (pure), read on the judged, de-duplicated list before anything is filed: at least 3 people, each fit 6+,
+    each with selling named in the `why` on a page that answered, none shown or turned down before, a contact address
+    only with its page, and no keep whose own judge reason says the evidence is missing.
+  - Each go is held to the floor; a miss is recorded against the run that wrote it (`markFloorMiss`, `model_job_outcome`
+    REJECTED) so the next go starts on the next route (`HIRE_SEARCH_ROUTES` = 3 goes). If none reaches the floor the
+    best go is sent titled and worded as NEAREST MISSES, never a shortlist, and the card is BLOCKED the same day on
+    Sequoia (`nothing_good_enough_to_send`).
+  - A steer that could not be read (the 2026-W44 card: the reading model did not answer) is a failed go the sweep
+    retries, not "the brief is missing" on Scooter.
+- `shared/ai/seatOrder.ts`, `worker/ai/laneHealth.ts`, `worker/ai/runAi.ts`: one floor miss rests a lane for that kind of
+  work for a day; `budgetContext.partnerRequested` starts a call on the free lane or seat with the best record of
+  completing that kind of work with an accepted answer (table order on a tie, so free search is the fallback once a
+  seat has done better). No rule names a route.
+- Proof: `hireFloor` fails the W46 output and passes the 22 Sep standard (both as delivered, names, employers and
+  addresses replaced); seven tests fail on the code before this change. No migration.
+- What the floor cannot catch: a fluent wrong `why` that cites a live page, a live page about a different person, a
+  judge that is generous but consistent. The selling check reads words in the `why`; it is a floor, not a proof.
