@@ -1,3 +1,4 @@
+import { sitesOf } from "../src/shared/intake/webPropertyChange";
 import { describe, expect, it } from "vitest";
 import {
   cleanPreviewUrls,
@@ -298,6 +299,20 @@ describe("pagePathsFrom / withChangedPages — the preview links each changed pa
     ).toEqual(["/", "/about", "/entry", "/press", "/rules"]);
     expect(pagePathsFrom(["functions/_middleware.ts", "wrangler.toml"])).toEqual([]);
     expect(pagePathsFrom(null)).toEqual([]);
+  });
+  it("in a repo of several sites, links only the job's own site's pages, at that site's root (13 Nov 2026)", () => {
+    // The real PR (join-west-peek-main#36) a Productions job opened: it rebuilt dist/community/* too.
+    const files = ["RUNBOOK.md", "dist/community/404.html", "dist/community/about.html", "dist/community/episodes/kimberly-gant/index.html", "dist/community/join.html",
+      "dist/productions/about.html", "dist/productions/index.html", "dist/productions/work.html", "dist/productions/community-as-a-service/index.html", "dist/productions/assets/productions.css",
+      "dist/ventures/thesis.html", "shared/identity.json", "sites/productions/about.html", "sites/productions/start.html", "sites/productions/what-we-do.html", "sites/productions/_redirects"];
+    const pages = pagePathsFrom(files, 8, sitesOf("westpeekproductions.com"));
+    expect(pages).toEqual(["/", "/about", "/community-as-a-service", "/start", "/what-we-do", "/work"]);
+    // Negative: unscoped, the same files led with another site's pages under the wrong prefix.
+    expect(pagePathsFrom(files)).toContain("/community/about");
+    expect(pages.some((p) => p.startsWith("/community/") || p.startsWith("/productions") || p.startsWith("/sites/"))).toBe(false);
+    // A one-site repo (".") or an unknown host is unscoped, as before.
+    expect(pagePathsFrom(["public/entry.html"], 8, ["."])).toEqual(["/entry"]);
+    expect(pagePathsFrom(["public/entry.html"], 8, sitesOf(null))).toEqual(["/entry"]);
   });
   it("adds one link per changed page to a single clean link; the root page is the root link itself", () => {
     const root = "https://work-wpc-739461bd.topbarz-voting.pages.dev";

@@ -148,11 +148,32 @@ const NO_PREVIEW = "no preview deployment for this site — the change and its s
  * (src/pages/*, pages/*, app/<route>/page.*) becomes its path — public/entry.html → /entry,
  * public/rules/index.html → /rules, public/index.html → /. Anything else (functions/*, CSS, scripts,
  * images, config) is not a page and links nothing. Sorted, unique, at most `max`. Pure.
+ *
+ * 13 Nov 2026: in a repo with several sites (join-west-peek-main: sites/productions,
+ * sites/community, sites/ventures, each built to dist/<name>/ and served at its own root), a
+ * Productions job's PR also rebuilt dist/community/*, and Scooter's preview linked eight
+ * /community/* pages that do not exist on the Productions preview. `sites` (the job's site
+ * folders, sitesOf(property_host)) keeps only files inside those sites — the source folder or its
+ * built copy (dist/<name>/ …) — with that folder stripped, so sites/productions/about.html and
+ * dist/productions/about.html are both /about, and another site's files link nothing.
  */
-export function pagePathsFrom(files: readonly string[] | null | undefined, max = 8): string[] {
+export function pagePathsFrom(files: readonly string[] | null | undefined, max = 8, sites: readonly string[] = []): string[] {
   const out = new Set<string>();
+  const scoped = sites.map((s) => String(s).trim().replace(/^\.?\/+|\/+$/g, "")).filter((s) => s && s !== ".");
   for (const raw of files ?? []) {
-    const f = String(raw).trim().replace(/^\.?\//, "");
+    let f = String(raw).trim().replace(/^\.?\//, "");
+    if (scoped.length) {
+      const inside = scoped
+        .map((s) => {
+          const leaf = s.split("/").pop()!;
+          if (f.startsWith(`${s}/`)) return f.slice(s.length + 1);
+          const built = new RegExp(`^(?:public|dist|site|static|www|_site|out|build)/${leaf.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/(.+)$`).exec(f);
+          return built ? built[1]! : null;
+        })
+        .find((x): x is string => x !== null);
+      if (inside === undefined) continue;
+      f = inside;
+    }
     if (!f || /(^|\/)(node_modules|functions|api|tests?|e2e|scripts|\.github)\//.test(f)) continue;
     let route: string | null = null;
     const html = /^(?:(?:public|dist|site|static|www|_site|out|build)\/)?(.+)\.html?$/i.exec(f);
