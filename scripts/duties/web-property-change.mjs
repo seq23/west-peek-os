@@ -225,8 +225,14 @@ export function branchAlias(branch) {
   return String(branch ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 28).replace(/-+$/, "");
 }
 
-export function previewUrlsFrom(deploymentStatuses, commentBodies, pagesHosts = [], branch = "") {
+export function previewUrlsFrom(deploymentStatuses, commentBodies, pagesHosts = [], branch = "", headSha = "") {
   const found = [];
+  // ONLY THE HEAD'S DEPLOYMENT (13 Nov 2026, wc_c548d043): the Pages bot's comment from an EARLIER
+  // commit named the branch alias, so a dashboard pushed while the Pages API was down was mailed as
+  // "Preview ready" while the alias still served the 13:26 build. Given the head sha, a comment
+  // counts only when it names that commit (the bot writes "Latest commit: <7 chars>").
+  const head = String(headSha ?? "").trim().toLowerCase().slice(0, 7);
+  if (head) commentBodies = (Array.isArray(commentBodies) ? commentBodies : []).filter((b) => String(b ?? "").toLowerCase().includes(head));
   const add = (raw) => {
     let u;
     try {
@@ -710,12 +716,59 @@ async function changedFilesFor(worktree, number) {
   }
 }
 
-async function previewUrlFor(worktree, number, progress, pagesHosts = [], branch = "") {
+/**
+ * THE PREVIEW OF THE HEAD, OR NONE (13 Nov 2026). For a Pages site, a link is returned only once
+ * Cloudflare has deployed the PR's head commit. When it has not, the Pages build is asked for once
+ * through the API (a push the Pages hook missed during an outage is otherwise never built) and the
+ * read is repeated for up to PREVIEW_WAIT_MS. Null means the head was never deployed: the BUILD
+ * fails with that reason instead of mailing a preview that does not hold the work.
+ */
+const PREVIEW_WAIT_MS = 10 * 60_000;
+const PREVIEW_POLL_MS = 60_000;
+async function previewUrlFor(worktree, number, progress, pagesHosts = [], branch = "", env = {}, signal = undefined) {
+  const started = Date.now();
+  let asked = false;
+  for (;;) {
+    const got = await previewUrlOnce(worktree, number, progress, pagesHosts, branch);
+    if (got.url || pagesHosts.length === 0 || !got.head) return got.url;
+    if (Date.now() - started >= PREVIEW_WAIT_MS || signal?.aborted) {
+      progress(`preview: Cloudflare Pages has not deployed ${got.head.slice(0, 7)} after ${Math.round(PREVIEW_WAIT_MS / 60_000)} min`);
+      return null;
+    }
+    if (!asked) {
+      asked = true;
+      for (const h of pagesHosts) progress(`preview: asked Pages to build ${branch} on ${h}: ${await askPagesBuild(String(h).replace(/\.pages\.dev$/i, ""), branch, env?.CLOUDFLARE_API_TOKEN)}`);
+    }
+    await new Promise((r) => setTimeout(r, PREVIEW_POLL_MS));
+  }
+}
+
+/** One Pages build of the branch's latest commit, through the API. A one-line outcome, never a throw. */
+async function askPagesBuild(project, branch, token) {
+  if (!token) return "not asked (no CLOUDFLARE_API_TOKEN)";
+  try {
+    const form = new FormData();
+    form.set("branch", branch);
+    const res = await fetch(`${CF_API}/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${encodeURIComponent(project)}/deployments`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+      signal: AbortSignal.timeout(60_000),
+    });
+    return res.ok ? "queued" : `Cloudflare answered ${res.status}`;
+  } catch (err) {
+    return `failed (${err instanceof Error ? err.message.slice(0, 80) : String(err)})`;
+  }
+}
+
+async function previewUrlOnce(worktree, number, progress, pagesHosts = [], branch = "") {
   const statuses = [];
   const comments = [];
+  let head = "";
   try {
     const { stdout } = await sh("gh", ["pr", "view", String(number), "--json", "headRefOid,comments"], { cwd: worktree });
     const pr = JSON.parse(stdout);
+    head = String(pr.headRefOid ?? "");
     for (const c of pr.comments ?? []) comments.push(c.body);
     const repo = (await sh("gh", ["repo", "view", "--json", "nameWithOwner"], { cwd: worktree })).stdout;
     const { nameWithOwner } = JSON.parse(repo);
@@ -731,9 +784,15 @@ async function previewUrlFor(worktree, number, progress, pagesHosts = [], branch
   } catch (err) {
     progress(`preview url: could not read deployments (${err instanceof Error ? err.message.slice(0, 120) : String(err)})`);
   }
-  const url = previewUrlsFrom(statuses, comments, pagesHosts, branch);
-  progress(url ? `preview: ${url}` : "preview: none (no Pages deployment on this PR)");
-  return url;
+  const url = previewUrlsFrom(statuses, comments, pagesHosts, branch, head);
+  progress(url ? `preview: ${url}` : `preview: none (no Pages deployment of ${head.slice(0, 7) || "the head"} on this PR)`);
+  return { url, head };
+}
+
+/** The BUILD's refusal when a Pages site's head was never deployed: no preview email for it. Pure. */
+export function undeployedPreviewReason(checkState, previewUrl, pagesHosts, prUrl) {
+  if (checkState !== "GREEN" || previewUrl || !Array.isArray(pagesHosts) || pagesHosts.length === 0) return null;
+  return `Cloudflare Pages has not deployed the latest commit of ${prUrl}, so there is no preview of this build yet; no preview email until there is`;
 }
 
 async function watchChecks(worktree, number, signal, progress) {
@@ -1032,7 +1091,9 @@ export async function run(job, ctx) {
     }
     const checks = await watchChecks(names.worktree, pr.number, ctx.signal, progress);
     // The preview link is read AFTER the checks settle: Pages posts its deployment beside them.
-    const previewUrl = checks.state === "GREEN" ? await previewUrlFor(names.worktree, pr.number, progress, job.pages_hosts ?? [], names.branch) : null;
+    const previewUrl = checks.state === "GREEN" ? await previewUrlFor(names.worktree, pr.number, progress, job.pages_hosts ?? [], names.branch, ctx.env, ctx.signal) : null;
+    const undeployed = undeployedPreviewReason(checks.state, previewUrl, job.pages_hosts, pr.url);
+    if (undeployed) return { phase, status: "failed", reason: undeployed };
     const changedFiles = await changedFilesFor(names.worktree, pr.number);
     return {
       phase,
@@ -1652,7 +1713,9 @@ async function runSeveral(job, ctx) {
         return { phase, status: "failed", reason: `gh finds no PR on ${p.names.branch} in ${p.repo}: ${err instanceof Error ? err.message.slice(0, 300) : String(err)}`, parts: reports };
       }
       const checks = await watchChecks(p.names.worktree, pr.number, ctx.signal, progress);
-      const previewUrl = checks.state === "GREEN" ? await previewUrlFor(p.names.worktree, pr.number, progress, p.pages_hosts ?? [], p.names.branch) : null;
+      const previewUrl = checks.state === "GREEN" ? await previewUrlFor(p.names.worktree, pr.number, progress, p.pages_hosts ?? [], p.names.branch, ctx.env, ctx.signal) : null;
+      const undeployed = undeployedPreviewReason(checks.state, previewUrl, p.pages_hosts, pr.url);
+      if (undeployed) return { phase, status: "failed", reason: `${p.repo}: ${undeployed}`, parts: reports };
       const changedFiles = await changedFilesFor(p.names.worktree, pr.number);
       reports.push({ repo: p.repo, pr_url: pr.url, pr_number: pr.number, branch: p.names.branch, check_state: checks.state, check_url: checks.url ?? undefined, preview_url: previewUrl ?? undefined, changed_files: changedFiles, proof: proof || undefined });
     }
@@ -1834,6 +1897,9 @@ function selfTest() {
     ["a Cloudflare PR comment yields the preview url", () => previewUrlsFrom([], ["Deploying with Cloudflare Pages\n| Preview URL | https://def456.ventures.pages.dev |"]) === "https://def456.ventures.pages.dev"],
     ["a Workers Builds PR comment yields the version preview url", () => previewUrlsFrom([], ["| Preview URL | https://3f9a1c2e-west-peek-live.seq-taylor.workers.dev |"]) === "https://3f9a1c2e-west-peek-live.seq-taylor.workers.dev"],
     ["the production workers.dev host is never read as a preview", () => previewUrlsFrom([], ["deployed to https://west-peek-live.seq-taylor.workers.dev"]) === null],
+    ["13 Nov 2026: a bot comment for an EARLIER commit is not the head's preview", () => previewUrlsFrom([], ["Latest commit: <code>fd56205</code> https://bf96e3d1.west-peek-productions.pages.dev"], ["west-peek-productions.pages.dev"], "work/wpc-c548d043", "d3fb0c6aa") === null],
+    ["13 Nov 2026: the bot comment naming the head commit is the preview", () => previewUrlsFrom([], ["Latest commit: <code>d3fb0c6</code> https://bf96e3d1.west-peek-productions.pages.dev"], ["west-peek-productions.pages.dev"], "work/wpc-c548d043", "d3fb0c6aa") === "https://work-wpc-c548d043.west-peek-productions.pages.dev"],
+    ["13 Nov 2026: a green Pages build with no deployed head fails, never mails a preview", () => undeployedPreviewReason("GREEN", null, ["west-peek-productions.pages.dev"], "pr") !== null && undeployedPreviewReason("GREEN", "https://x.pages.dev", ["a.pages.dev"], "pr") === null && undeployedPreviewReason("GREEN", null, [], "pr") === null],
     ["a repo with no Pages deployment yields null, never a guess", () => previewUrlsFrom([{ environment_url: "" }], ["LGTM"]) === null],
     ["an ask without a recommended default is refused", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), asks: ["colour?"], publish_ready: true }), "PLAN").result === null],
     ["all-success checks are GREEN", () => checkStateOf([{ state: "SUCCESS" }, { state: "SKIPPED" }]) === "GREEN"],
