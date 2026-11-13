@@ -15,6 +15,7 @@ import {
 } from "../src/worker/ai/subscriptionSeats";
 import { allSeatAvailability } from "../src/worker/ai/subscriptionSeats";
 import { BRIEF_USUAL_MODEL, briefServing } from "../src/shared/ai/briefServing";
+import { BRIEF_EXPECTED_OUTPUT_TOKENS, BRIEF_ROUTE } from "../src/worker/services/dailyIntelligence";
 import { orderByVendorFamily, vendorFamilyOf } from "../src/shared/ai/vendorFamily";
 
 /**
@@ -155,8 +156,8 @@ const PRIVATE = call({
   budgetContext: { judgement: true, confidential: true, expectedOutputTokens: 200 },
   routing: { category: "OPERATIONS" as const, taskClass: "employee-work" },
 });
-/** The brief's shape: pinned to Sonnet, allowed to degrade, seat-first, judged by its own verifier. */
-const BRIEF = (extra: { degradeAllowed?: boolean } = {}) =>
+/** A PINNED call's shape (what the brief was until 13 Nov 2026; no caller pins now, and the router still honours one). */
+const PINNED = (extra: { degradeAllowed?: boolean } = {}) =>
   call({
     verify: (text: string) => (text.length >= 20 ? null : "too short to be a brief"),
     budgetContext: {
@@ -317,10 +318,10 @@ describe("MODERATE — the ladder as the owner drew it", () => {
     expect(v.models.some((m) => m.endsWith(":free") || m === "gemini-free"), "no free lane saw private work").toBe(false);
   }, 60_000);
 
-  it("the brief: seats first, then a free lane whose reply the brief's own verifier accepts, then Sonnet", async () => {
+  it("a pinned call: seats first, then a free lane whose reply the caller's own verifier accepts, then the pinned model", async () => {
     // Free lane says something too short for the verifier → refused → the walk reaches Sonnet.
     const v = vendors({ freeText: "short", paidText: "A real brief that is long enough to pass the verifier." });
-    const { run } = await runAi(env(), BRIEF(), { fetchImpl: v.fetchImpl });
+    const { run } = await runAi(env(), PINNED(), { fetchImpl: v.fetchImpl });
     expect(run.status).toBe("COMPLETED");
     expect(run.output_text).toContain("A real brief");
     const { attempts } = await attemptsOf(run.id);
@@ -328,9 +329,9 @@ describe("MODERATE — the ladder as the owner drew it", () => {
     expect(attempts[attempts.length - 1]!.model).toBe("anthropic/claude-sonnet-5");
   }, 90_000);
 
-  it("a free lane that writes an acceptable brief is accepted — and briefServing marks it as a weaker model", async () => {
+  it("a pinned call: a free lane whose reply passes is accepted — and briefServing marks that model as a weaker one", async () => {
     const v = vendors({ freeText: "A free-lane brief that is long enough to pass the verifier." });
-    const { run } = await runAi(env(), BRIEF(), { fetchImpl: v.fetchImpl });
+    const { run } = await runAi(env(), PINNED(), { fetchImpl: v.fetchImpl });
     expect(run.status).toBe("COMPLETED");
     const served = briefServing((run as unknown as { model?: string }).model);
     expect(served.degraded).toBe(true);
@@ -425,9 +426,9 @@ describe("OPEN — the switch for 'I need good work right now'", () => {
     expect(v.models).toEqual([]);
   }, 60_000);
 
-  it("the brief goes seats → Sonnet, with no free lane in between", async () => {
+  it("a pinned call goes seats → the pinned model, with no free lane in between", async () => {
     const v = vendors({ paidText: "A real brief that is long enough to pass the verifier." });
-    const { run } = await runAi(env(), BRIEF(), { fetchImpl: v.fetchImpl });
+    const { run } = await runAi(env(), PINNED(), { fetchImpl: v.fetchImpl });
     expect(run.status).toBe("COMPLETED");
     expect(v.models[0]).toBe("anthropic/claude-sonnet-5");
     expect(briefServing((run as unknown as { model?: string }).model).degraded).toBe(false);
@@ -708,9 +709,9 @@ describe("FREE ONLY — the $0 posture: her seats, then free lanes, and nothing 
     expect(v.models).toEqual([]);
   }, 60_000);
 
-  it("the brief runs on a free lane that passes its verifier, instead of stopping, and the explanation says so", async () => {
+  it("a pinned call that may degrade runs on a free lane that passes its verifier, instead of stopping, and the explanation says so", async () => {
     const v = vendors({ freeText: "A free-lane brief that is long enough to pass the verifier." });
-    const { run } = await runAi(env(), BRIEF(), { fetchImpl: v.fetchImpl });
+    const { run } = await runAi(env(), PINNED(), { fetchImpl: v.fetchImpl });
     expect(run.status).toBe("COMPLETED");
     expect(v.models.every((m) => m.endsWith(":free") || m === "gemini-free")).toBe(true);
     const { explanation } = await attemptsOf(run.id);
@@ -720,11 +721,54 @@ describe("FREE ONLY — the $0 posture: her seats, then free lanes, and nothing 
 
   it("the NEGATIVE PROOF: a pinned call that did NOT say degradeAllowed still stops, exactly as before", async () => {
     const v = vendors();
-    const { run } = await runAi(env(), BRIEF({ degradeAllowed: false }), { fetchImpl: v.fetchImpl });
+    const { run } = await runAi(env(), PINNED({ degradeAllowed: false }), { fetchImpl: v.fetchImpl });
     expect(run.status).not.toBe("COMPLETED");
     expect(run.failure_reason ?? "").toContain("required_model_unavailable");
     expect(v.models).toEqual([]);
   }, 60_000);
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+describe("THE DAILY BRIEF: her Claude seat, Codex as its backup, else a named stop; never a paid API (owner, 13 Nov 2026)", () => {
+  /** The brief's own route (`BRIEF_ROUTE`, the object its write call spreads), with its verifier. */
+  const BRIEF = call({
+    purpose: "daily intelligence report 2026-11-13 for Pat Example",
+    verify: (text: string) => (text.length >= 20 ? null : "too short to be a brief"),
+    budgetContext: { ...BRIEF_ROUTE, expectedOutputTokens: BRIEF_EXPECTED_OUTPUT_TOKENS },
+    routing: { category: "INTELLIGENCE" as const, taskClass: "daily-intelligence" },
+  });
+
+  for (const lever of ["FREE_ONLY", "MODERATE", "OPEN"] as const) {
+    it(`at ${lever}, with both seats away: no vendor is called, paid or free, and the stop names what it needs`, async () => {
+      await setLever(lever);
+      const v = vendors({ freeText: "A free-lane brief that is long enough to pass the verifier.", paidText: "A paid brief that is long enough to pass the verifier." });
+      const { run } = await runAi(env(), BRIEF, { fetchImpl: v.fetchImpl });
+      expect(run.status).not.toBe("COMPLETED");
+      expect(run.failure_reason ?? "").toMatch(/^seat_wait_important_work:this is important work \(Claude Code seat, then Codex[^)]*\) and neither seat is free right now\. Purpose: daily intelligence report/);
+      expect(v.models, "nothing that costs money, and no free lane, was asked").toEqual([]);
+      expect(Number((run as unknown as { cost_usd?: number }).cost_usd ?? 0)).toBe(0);
+    }, 60_000);
+  }
+
+  it("at OPEN with the seats awake: Claude Code writes it; out of usage, Codex does, in the same run; still no vendor", async () => {
+    await setLever("OPEN");
+    await awake("claude_code");
+    await awake("codex");
+    const v = vendors({ paidText: "A paid brief that is long enough to pass the verifier." });
+    let c = claimer(["claude_code", "codex"]);
+    const first = (await runAi(env(), BRIEF, { fetchImpl: v.fetchImpl })).run;
+    await c.stop();
+    expect(first.status, first.failure_reason ?? "").toBe("COMPLETED");
+    expect(c.handled.map((r) => r.seat)).toEqual(["claude_code"]);
+    expect(briefServing((first as unknown as { model?: string }).model)).toMatchObject({ kind: "SEAT", degraded: false });
+    c = claimer(["claude_code", "codex"], { outOfUsage: ["claude_code"], answer: "A brief written on a seat, long enough to pass the verifier." });
+    const second = (await runAi(env(), BRIEF, { fetchImpl: v.fetchImpl })).run;
+    await c.stop();
+    expect(second.status, second.failure_reason ?? "").toBe("COMPLETED");
+    expect(c.handled.map((r) => r.seat), "Claude Code first, then Codex as its backup").toEqual(["claude_code", "codex"]);
+    expect(briefServing((second as unknown as { model?: string }).model)).toMatchObject({ kind: "SEAT", degraded: false });
+    expect(v.models).toEqual([]);
+  }, 120_000);
 });
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════

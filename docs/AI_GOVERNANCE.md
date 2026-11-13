@@ -97,10 +97,9 @@ Claude Code seat (Max plan)  →  Codex seat (ChatGPT Plus)  →  FREE lanes  �
   cooldown otherwise expires by itself (30 minutes when the notice names no time).
 - **Free lanes never see private content.** Unchanged and enforced twice (step 4b and the egress gate).
   So the free rung exists only for public content; private work goes Claude Code → Codex (not for hard work) → a named wait, and to a paid no-training lane only where the spend lever admits one.
-- **The brief may degrade, and says so.** With `requireModel` + `degradeAllowed`, a free lane may stand in
-  front of Sonnet, but only a reply that passes the brief's own verifier is kept, and
-  `briefServing` (shared/ai/briefServing.ts) marks a brief written by anything but Sonnet or a seat as
-  "written by a weaker model" on the report and on the page. A bare `requireModel` is still that model or nothing.
+- **The brief runs on her seats and never on a paid API** (13 Nov 2026). Its call is `BRIEF_ROUTE` in
+  `dailyIntelligence.ts` (`important`, `seatFirst`, `neverPaid`): the Claude seat, then Codex, else a named stop, at
+  every lever position. `requireModel` + `degradeAllowed` remain router options with no caller.
 - **After paid Claude comes OpenAI.** The lanes left once the head and its direct peer have failed are
   ordered Claude family, then OpenAI, then everything else (`shared/ai/vendorFamily.ts`), keeping
   health-then-price order inside each family. Judgement work only: a mechanical call's last resort is

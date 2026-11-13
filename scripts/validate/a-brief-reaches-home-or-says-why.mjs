@@ -31,9 +31,8 @@
  *   E. THE TWO STALE THRESHOLDS ARE ONE NUMBER: `STALE_AFTER_MINUTES` (the sweeper) is defined as
  *      `STALLED_AFTER_MINUTES` (the state).
  *   F. THE DECLARED OUTPUT is at or above the measured p90 of real briefs and under the wire
- *      ceiling; the write call PINS `anthropic/claude-sonnet-5` (`requireModel: BRIEF_MODEL`) — the
- *      owner's "Sonnet for briefs only" — the router honours the pin before free-first and in the
- *      free-first gate, and NO OTHER CALLER pins a model, so every other lane's routing is unchanged.
+ *      ceiling. (Who writes the brief — her Claude seat, then Codex, never a paid API — is a routing
+ *      behaviour proven in tests/ladderOrder.test.ts, not here.)
  *   G. ON DEMAND ONLY: nothing in the service starts a brief on the clock (no `runDailyForAll`,
  *      `briefsOwedToday`, `scheduleMayStart`, `nextScheduledStart`); the tick advances only rows
  *      with `requested_at`; 0211 records the retirement as a RETIRED job row.
@@ -234,23 +233,8 @@ export function checkDeclaredOutput(serviceSrc, ceilingSrc, runAiSrc, otherCalle
   }
   examined += 1;
   if (!/expectedOutputTokens: BRIEF_EXPECTED_OUTPUT_TOKENS/.test(serviceSrc)) violations.push("the write call does not pass the declared constant");
-  examined += 1;
-  if (!/export const BRIEF_MODEL = "anthropic\/claude-sonnet-5";/.test(serviceSrc)) violations.push("the brief's model is not declared as anthropic/claude-sonnet-5 — the owner's 'Sonnet for briefs only'");
-  if (!/requireModel: BRIEF_MODEL/.test(serviceSrc)) violations.push("the write call does not pin the brief's model — thirteen free-lane attempts wrote zero briefs");
-  examined += 1;
-  const ra = stripComments(runAiSrc);
-  const eligible = ra.match(/const freeFirstEligible =([\s\S]*?);/);
-  if (!eligible || !/requireModel/.test(eligible[1])) violations.push("runAi's free-first eligibility does not honour requireModel");
-  // 29 Sep 2026: the owner let the brief run on a free lane when nothing stronger is allowed, provided the page says so.
-  // That relaxes ONE half of the pin and only for a caller that also says `degradeAllowed` — never for a bare requireModel.
-  if (eligible && !/requireModel\s*\|\|[\s\S]*?degradeAllowed/.test(eligible[1])) violations.push("runAi's free-first eligibility lets a pinned call onto the free lanes without the caller having declared degradeAllowed — a bare requireModel must still be that model or nothing");
-  if (!/degradeAllowed: true/.test(serviceSrc)) violations.push("the brief does not declare degradeAllowed — at Free only it would stop instead of running on the best free lane with a note on the page (the owner's 29 Sep 2026 decision)");
-  if (!/routingCandidates = serving;/.test(ra) || !/required_model_unavailable:/.test(ra)) violations.push("runAi does not narrow the candidates to the pinned model, or does not stop by name when none serves it");
-  // ONLY THE BRIEF PINS. Every other caller keeps the free-first ladder untouched.
-  for (const [file, src] of Object.entries(otherCallers)) {
-    examined += 1;
-    if (/requireModel\s*:|degradeAllowed\s*:/.test(stripComments(src))) violations.push(`${file} pins a model — the owner's decision was Sonnet for BRIEFS only; every other lane keeps the ladder`);
-  }
+  // 13 Nov 2026: the brief no longer pins a paid model (her Claude seat, then Codex, else a named stop; never a paid
+  // API). That is a routing behaviour, proven where it lives: tests/ladderOrder.test.ts, "THE DAILY BRIEF".
   return { violations, examined };
 }
 
@@ -436,24 +420,13 @@ async function selfTest() {
   say(checkOneStaleNumber("export const STALE_AFTER_MINUTES = 30;").violations.length === 1, "a hand-typed STALE_AFTER_MINUTES passed");
 
   // F · the real pre-fix declaration: 8000, no pin, a router that does not read it; and a second caller pinning.
-  const preService = src.service.replace(/export const BRIEF_EXPECTED_OUTPUT_TOKENS = [\d_]+;/, "export const BRIEF_EXPECTED_OUTPUT_TOKENS = 8_000;").replace(/requireModel: BRIEF_MODEL,/, "");
-  const preRunAi = src.runAi.replace(/\(!input\.budgetContext\?\.requireModel \|\| input\.budgetContext\?\.degradeAllowed === true\) &&/, "");
-  say(preRunAi !== src.runAi, "the F fixture no longer removes the free-first gate — the self-test would plant nothing");
-  const f = checkDeclaredOutput(preService, src.ceiling, preRunAi);
-  say(f.violations.length >= 3, `the pre-fix 8000/no-pin/no-gate shape passed: ${f.violations.join("; ")}`);
+  const preService = src.service.replace(/export const BRIEF_EXPECTED_OUTPUT_TOKENS = [\d_]+;/, "export const BRIEF_EXPECTED_OUTPUT_TOKENS = 8_000;");
+  say(preService !== src.service, "the F fixture no longer lowers the declaration — the self-test would plant nothing");
+  const f = checkDeclaredOutput(preService, src.ceiling, src.runAi);
+  say(f.violations.length >= 1, `the pre-fix 8000 declaration passed: ${f.violations.join("; ")}`);
   say(checkDeclaredOutput(src.service, src.ceiling, src.runAi).violations.length === 0, `the shipped declaration fails F: ${checkDeclaredOutput(src.service, src.ceiling, src.runAi).violations.join("; ")}`);
   const tooHigh = checkDeclaredOutput(src.service.replace(/export const BRIEF_EXPECTED_OUTPUT_TOKENS = [\d_]+;/, "export const BRIEF_EXPECTED_OUTPUT_TOKENS = 40_000;"), src.ceiling, src.runAi);
   say(tooHigh.violations.length === 1, "a declaration above the wire ceiling passed");
-  // The 29 Sep 2026 relaxation must not become a way round the pin: a gate that lets ANY pinned call onto the free lanes,
-  // a brief that forgets to declare the relaxation, and a second caller declaring it are each caught.
-  const openGate = src.runAi.replace(/\(!input\.budgetContext\?\.requireModel \|\| input\.budgetContext\?\.degradeAllowed === true\) &&/, "(!input.budgetContext?.requireModel || true) &&");
-  say(openGate !== src.runAi && checkDeclaredOutput(src.service, src.ceiling, openGate).violations.length >= 1, "a free-first gate that ignores degradeAllowed passed");
-  const noDegrade = checkDeclaredOutput(src.service.replace(/degradeAllowed: true,/, ""), src.ceiling, src.runAi);
-  say(noDegrade.violations.length === 1 && /degradeAllowed/.test(noDegrade.violations[0]), "a brief that does not declare degradeAllowed passed");
-  const secondDegrade = checkDeclaredOutput(src.service, src.ceiling, src.runAi, { "employeeWork.ts": "budgetContext: { judgement: true, degradeAllowed: true }" });
-  say(secondDegrade.violations.length === 1, "a second caller declaring degradeAllowed passed");
-  const secondPin = checkDeclaredOutput(src.service, src.ceiling, src.runAi, { "employeeWork.ts": "budgetContext: { judgement: true, requireModel: \"anthropic/claude-sonnet-5\" }" });
-  say(secondPin.violations.length === 1 && /Sonnet for BRIEFS only/.test(secondPin.violations[0]), "a second caller pinning a model — the whole ladder pointed at Sonnet — passed");
 
   // G · the pre-fix service: the every-morning path, and a 0211 with no retirement.
   const g = checkOnDemandOnly(src.service + "\nexport async function runDailyForAll() {}\nfunction scheduleMayStart() {}", "-- nothing");
@@ -482,7 +455,7 @@ async function selfTest() {
   say(checkJourneyIsE2e({ "x.spec.ts": "test('nothing')" }).violations.length === 1, "an e2e suite with no brief journey passed");
   say(checkJourneyIsE2e(listSpecs()).violations.length === 0, "the shipped e2e suite has no brief journey");
 
-  console.log("SELF-TEST PASSED: the sweep-job brief branch, a reasonless FAILED writer, the 'any row is an arrival' state, the six-iteration button loop, two stale numbers, the 8000-token declaration without a pin, a second caller pinning, the every-morning path, a migration rewriting weekends, the sentinel board, a router that calls a capped or refused reply complete, an adapter that drops the finish reason, a production caller with the tests-only deadline, and a suite with no journey are each caught; every shipped module passes.");
+  console.log("SELF-TEST PASSED: the sweep-job brief branch, a reasonless FAILED writer, the 'any row is an arrival' state, the six-iteration button loop, two stale numbers, the 8000-token declaration, the every-morning path, a migration rewriting weekends, the sentinel board, a router that calls a capped or refused reply complete, an adapter that drops the finish reason, a production caller with the tests-only deadline, and a suite with no journey are each caught; every shipped module passes.");
 }
 
 if (process.argv.includes("--self-test")) await selfTest();

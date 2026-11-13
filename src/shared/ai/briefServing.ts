@@ -18,7 +18,7 @@
  * catalogue is flagged until somebody decides it is good enough and adds it here.
  */
 
-/** The model the brief is written by at MODERATE and OPEN. Mirrors BRIEF_MODEL in dailyIntelligence.ts. */
+/** The paid model briefs were written by until 19 Sep 2026; kept so those briefs still read as written by Claude. New briefs are written on a seat (BRIEF_ROUTE in dailyIntelligence.ts). */
 export const BRIEF_USUAL_MODEL = "anthropic/claude-sonnet-5";
 
 /** The model ids the two subscription seats record on a run (provider_model, migration 0187). */
@@ -55,7 +55,7 @@ export function briefServing(model: string | null | undefined): BriefServing {
     note:
       `This brief was written by ${id}, not by Claude, because the lanes ahead of it were not available ` +
       `(the Claude Code and Codex seats were away or out of usage, and paid models are off at this setting). ` +
-      `It passed the brief's own checks, but treat it as a weaker draft. Press Build again once a seat is awake, ` +
-      `or move the spend lever to Open, for the usual writer.`,
+      `It passed the brief's own checks, but treat it as a weaker draft. Press Build again once a seat is awake ` +
+      `for the usual writer.`,
   };
 }
