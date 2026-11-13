@@ -128,7 +128,8 @@ describe("the preview email links each changed page, not only the root", () => {
   it("public/entry.html and public/rules/index.html become /entry and /rules links; functions/* links nothing", async () => {
     const before = sent.length;
     const id = await atFirstPreview("contest pages", {
-      changed_files: ["public/entry.html", "public/rules/index.html", "functions/api/entry.ts", "public/styles.css"],
+      // The community site lives at sites/community (built to dist/community) in its multi-site repo.
+      changed_files: ["sites/community/entry.html", "dist/community/rules/index.html", "functions/api/entry.ts", "sites/community/styles.css", "dist/productions/about.html"],
     });
     const root = `https://work-wpc-${id.slice(3, 11)}.west-peek-community.pages.dev`;
     const mail = sent.slice(before).filter((m) => m.to === SEQUOIA && /: Preview ready$/.test(m.subject));
@@ -138,6 +139,7 @@ describe("the preview email links each changed page, not only the root", () => {
     expect(text).toContain(`${root} — changed pages: ${root}/entry · ${root}/rules`);
     expect(text).not.toContain(`${root}/api`);
     expect(text).not.toContain(`${root}/styles`);
+    expect(text, "another site's page in the same PR links nothing").not.toContain(`${root}/about`);
     expect(String((await card(id)).description)).toContain(`${root}/entry`);
     expect(JSON.parse(String((await row(id)).changed_pages_json))).toEqual(["/entry", "/rules"]);
   });

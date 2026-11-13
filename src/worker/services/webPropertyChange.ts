@@ -634,7 +634,7 @@ async function recordPartReports(env: Env, cardId: string, reports: readonly Loc
         check_url: r.check_url ?? null,
         check_green_at: state === "GREEN" ? (part.check_state === "GREEN" && part.check_green_at ? part.check_green_at : now) : null,
         preview_url: r.preview_url ?? null,
-        changed_pages_json: r.changed_files ? JSON.stringify(pagePathsFrom(r.changed_files)) : (part.changed_pages_json ?? null),
+        changed_pages_json: r.changed_files ? JSON.stringify(pagePathsFrom(r.changed_files, 8, sitesOf(part.property_host))) : (part.changed_pages_json ?? null),
         build_proof: (r.proof ?? "").slice(0, 8000) || null,
       });
     }
@@ -2017,7 +2017,7 @@ async function applyBuild(env: Env, card: WebPropertyChangeCard, row: WebPropert
   const state = report.check_state ?? "PENDING";
   const now = new Date().toISOString();
   // 0257: the pages the PR changed, so the preview links /entry and /rules, not only the root.
-  const changedPages = report.changed_files ? JSON.stringify(pagePathsFrom(report.changed_files)) : (row.changed_pages_json ?? null);
+  const changedPages = report.changed_files ? JSON.stringify(pagePathsFrom(report.changed_files, 8, sitesOf(row.property_host))) : (row.changed_pages_json ?? null);
   await update(env, card.id, {
     pr_url: report.pr_url,
     pr_number: report.pr_number ?? null,
