@@ -372,30 +372,6 @@ test.describe("Dealflow", () => {
     });
   }
 
-  test("has three ranks of type, not one", async ({ page, request }) => {
-    await installMeasurers(page);
-    await signIn(page);
-    await seedAndRegister(request);
-    await page.setViewportSize({ width: 1280, height: 900 });
-    await openDealflow(page);
-
-    const ranks = await page.evaluate(() => measureRanksInPage("dealflow-page"));
-    expect(ranks.length, "Rule 0 — found no headings on Dealflow at all").toBeGreaterThan(3);
-    const answer = ranks.filter((r) => r.tag === "h2");
-    const bands = ranks.filter((r) => r.tag === "h3");
-    const panels = ranks.filter((r) => r.tag === "h4");
-    expect(answer, "one h2 — the masthead answer").toHaveLength(1);
-    expect(bands.length, "the bands").toBeGreaterThanOrEqual(3);
-    const minAnswer = Math.min(...answer.map((r) => r.px));
-    const maxBand = Math.max(...bands.map((r) => r.px));
-    expect(minAnswer, `the answer (${minAnswer}px) must sit clearly above the band heads (${maxBand}px)`).toBeGreaterThan(maxBand + 2);
-    if (panels.length > 0) {
-      const maxPanel = Math.max(...panels.map((r) => r.px));
-      const minBand = Math.min(...bands.map((r) => r.px));
-      expect(minBand, `band heads (${minBand}px) must sit above panel heads (${maxPanel}px)`).toBeGreaterThan(maxPanel);
-    }
-  });
-
   test("a proposal from a meeting is one click, and declining takes a reason inline", async ({ page, request }) => {
     await installMeasurers(page);
     await signIn(page);

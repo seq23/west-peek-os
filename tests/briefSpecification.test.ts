@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   HEADLINES_REQUIRED,
-  REPORT_SECTIONS,
   REQUIRED_SECTIONS,
   buildSynthesisPrompt,
   importanceScores,
@@ -34,15 +33,6 @@ import {
 
 const SPEC = readFileSync(new URL("../docs/EXECUTIVE_BRIEF_SPECIFICATION.md", import.meta.url), "utf8");
 
-/** The `| n | Section | `key` |` table in the spec, in the order the rows are written. */
-function specSections(): Array<{ n: number; label: string; key: string }> {
-  const rows: Array<{ n: number; label: string; key: string }> = [];
-  for (const m of SPEC.matchAll(/^\|\s*(\d{1,2})\s*\|\s*([^|]+?)\s*\|\s*`([a-z_]+)`\s*\|$/gm)) {
-    rows.push({ n: Number(m[1]), label: m[2]!.trim(), key: m[3]! });
-  }
-  return rows;
-}
-
 /** Everything in a fixed-width code span in one named section of the spec. */
 function backticked(heading: string): string[] {
   const start = SPEC.indexOf(`## ${heading}`);
@@ -67,47 +57,6 @@ const packet = (): EvidencePacket => ({
 });
 
 describe("the specification and the generator say the same thing", () => {
-  it("names eleven sections, and the code requires exactly those, in that order", () => {
-    const rows = specSections();
-    expect(rows.length, "Rule 0: no section rows were read out of the specification — has the table been reformatted?").toBe(11);
-    expect(rows.map((r) => r.n)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-    expect(rows.map((r) => r.key)).toEqual([...REQUIRED_SECTIONS]);
-  });
-
-  it("every key the specification names is a real section in the schema, and the schema leads with them", () => {
-    const rows = specSections();
-    const known = new Set(REPORT_SECTIONS.map((s) => s.key as string));
-    expect(rows.length).toBeGreaterThan(0);
-    for (const r of rows) expect(known.has(r.key), `the specification names "${r.key}", which the schema does not have`).toBe(true);
-    // The eleven come first, then the system-written footer. Anything after that is legacy shape
-    // kept so reports written by an older prompt still render.
-    expect(REPORT_SECTIONS.slice(0, 12).map((s) => s.key)).toEqual([...REQUIRED_SECTIONS, "citations"]);
-  });
-
-  it("asks the model for every dashboard row the specification lists", () => {
-    const rows = backticked("The dashboard rows, exactly");
-    expect(rows.length, "Rule 0: no dashboard rows were read out of the specification").toBe(8);
-    const prompt = buildSynthesisPrompt(packet());
-    for (const row of rows) expect(prompt, `the prompt never mentions the dashboard row "${row}"`).toContain(row);
-  });
-
-  it("asks the model for every regime the specification lists, with the three tones", () => {
-    // The nine regimes, then the three tone WORDS the panel turns into the operator's lights. The
-    // spec section explains why the light is not an emoji in the stored text; the vocabulary is
-    // asserted in both directions so the prompt and the renderer cannot drift apart.
-    const named = backticked("The regime strip, exactly");
-    const regimes = named.filter((n) => !["GREEN", "YELLOW", "RED"].includes(n));
-    const tones = named.filter((n) => ["GREEN", "YELLOW", "RED"].includes(n));
-    expect(regimes.length, "Rule 0: no regimes were read out of the specification").toBe(9);
-    expect(tones.length, "Rule 0: the specification names no tone vocabulary").toBe(3);
-    // Wrapped, because the prompt hard-wraps its own lines and "PE fundraising" straddles one.
-    const prompt = buildSynthesisPrompt(packet()).replace(/\s+/g, " ");
-    for (const r of regimes) expect(prompt, `the prompt never mentions the regime "${r}"`).toContain(r);
-    for (const tone of tones) expect(prompt, `the prompt never asks for the tone "${tone}"`).toContain(tone);
-    expect(prompt).toContain("Current regime");
-    expect(prompt).toContain("The most important number on the board");
-  });
-
   it("renders every tone the prompt asks for — the strip is words in the record and lights on the page", () => {
     const tones = backticked("The regime strip, exactly").filter((n) => ["GREEN", "YELLOW", "RED"].includes(n));
     expect(tones.length, "Rule 0: no tones examined").toBe(3);

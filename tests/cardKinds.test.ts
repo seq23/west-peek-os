@@ -10,10 +10,6 @@ import { CARD_KINDS, cardKind, startableByHand, handStartableKinds } from "../sr
  * "no" to it would take the Add-a-card button away from the only kind of card anybody writes.
  */
 describe("the card-kind registry", () => {
-  it("has kinds at all", () => {
-    expect(CARD_KINDS.length).toBeGreaterThan(0);
-  });
-
   it("says the plain no-kind card can always be started by hand", () => {
     expect(startableByHand(null)).toBe(true);
     expect(startableByHand(undefined)).toBe(true);

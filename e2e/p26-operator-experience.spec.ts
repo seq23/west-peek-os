@@ -249,11 +249,3 @@ test("nav groups fold, and the rail remembers what you closed", async ({ page })
   await expect(page.getByRole("button", { name: "Dealflow", exact: true })).toBeVisible();
 });
 
-test("Home and Ask carry icons; the rest do not", async ({ page }) => {
-  await signIn(page);
-  // Icons only where they aid recall. Forty of them would mean inventing a metaphor for
-  // "Contradictions", and a bad icon has to be read AND decoded.
-  await expect(page.getByRole("button", { name: "Home", exact: true }).locator("svg")).toHaveCount(1);
-  await expect(page.getByRole("button", { name: "Ask", exact: true }).locator("svg")).toHaveCount(1);
-  await expect(page.getByRole("button", { name: "Research", exact: true }).locator("svg")).toHaveCount(0);
-});

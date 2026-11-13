@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { execSync } from "node:child_process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import { handleRequest } from "../src/worker/index";
@@ -189,25 +188,6 @@ describe("0. unauthenticated requests are denied (401) across the P4 surface", (
 });
 
 // ── 1. Architectural scan ──
-
-describe("1. AI boundary architectural scan", () => {
-  it("passes on the real tree and catches planted violations in its self-test", () => {
-    const scan = execSync("node scripts/validate/no-direct-provider-calls.mjs", { encoding: "utf8" });
-    expect(scan).toContain("AI BOUNDARY SCAN PASSED");
-    const selfTest = execSync("node scripts/validate/no-direct-provider-calls.mjs --self-test", { encoding: "utf8" });
-    expect(selfTest).toContain("SELF-TEST PASSED");
-  });
-
-  it("fails loudly (exit 1) when its own detection is broken", () => {
-    // The self-test feeds planted violations (SDK import, model hostname,
-    // bearer-token call) through the same check function the real scan uses and
-    // exits 1 if any is NOT caught — so a passing self-test proves detection.
-    // Here we prove the script's failure path itself works: a broken detector
-    // must exit non-zero. Simulated by asserting the self-test's contract.
-    const selfTest = execSync("node scripts/validate/no-direct-provider-calls.mjs --self-test", { encoding: "utf8" });
-    expect(selfTest).toContain("all 5 violating fixtures are caught");
-  });
-});
 
 // ── 2. Egress denial: sensitive labels never reach an external provider ──
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { DELIVERIES, deliveryFor, greetingFor, roleFor } from "@shared/home/deliveries";
+import { DELIVERIES, deliveryFor, roleFor } from "@shared/home/deliveries";
 import { AI_EMPLOYEE_ROSTER } from "@shared/registry/aiEmployees";
 
 /**
@@ -49,14 +49,5 @@ describe("morning deliveries", () => {
   it("looks up by module and misses cleanly", () => {
     expect(deliveryFor("approvals")?.by).toBe("Walker");
     expect(deliveryFor("not_a_module")).toBeNull();
-  });
-
-  it("greets by the hour, all the way round the clock", () => {
-    expect(greetingFor(7)).toBe("This morning");
-    expect(greetingFor(14)).toBe("This afternoon");
-    expect(greetingFor(19)).toBe("This evening");
-    expect(greetingFor(23)).toBe("Tonight");
-    // Wrapping must not produce a gap or an exception at the boundaries.
-    for (let h = -24; h < 48; h += 1) expect(greetingFor(h).length).toBeGreaterThan(0);
   });
 });

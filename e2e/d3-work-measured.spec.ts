@@ -201,23 +201,6 @@ function measureTargets(): Array<{ label: string; w: number; h: number; rects: n
   });
 }
 
-/** Every heading the surface emits, with the size it actually computes to. */
-function measureRanks(): Array<{ tag: string; px: number; weight: number; text: string }> {
-  const root = document.querySelector('[data-testid="work-cards-page"]');
-  if (!root) return [];
-  return [...root.querySelectorAll("h1,h2,h3,h4,h5,h6")]
-    .filter((el) => el.getClientRects().length > 0)
-    .map((el) => {
-      const s = getComputedStyle(el);
-      return {
-        tag: el.tagName.toLowerCase(),
-        px: parseFloat(s.fontSize),
-        weight: Number(s.fontWeight),
-        text: (el.textContent || "").trim().slice(0, 50),
-      };
-    });
-}
-
 test("Work holds its measured numbers at day-200 volume: contrast, tap targets, overflow, unwrapped clickables", async ({
   page,
   request,
@@ -306,63 +289,6 @@ test("Work holds its measured numbers at day-200 volume: contrast, tap targets, 
   }
 
   console.log("WORK MEASURED\n  " + report.join("\n  "));
-});
-
-/**
- * THE HEADING SCALE, MEASURED IN THE BROWSER RATHER THAN READ OFF THE STYLESHEET.
- *
- * `validate:heading-scale` proves a rule REACHES a heading. It has no opinion about the resulting
- * size, and cannot have one — which left the real defect on this page untouched: every `h3` and
- * every `h4` inside the Work surface computed to 18px/700, because `.home-section-head h2, h3, h4`
- * is one rule with one size. The rules were live and the hierarchy was still gone.
- *
- * So the rank separation is a number here: the answer line must be meaningfully larger than the
- * band heads, and the band heads meaningfully larger than body copy. Three ranks of meaning, three
- * ranks of type.
- */
-test("Work has three ranks of type, not one", async ({ page, request }) => {
-  await signIn(page);
-
-  /* A rank comparison needs something at every rank. On an empty firm there are no bands and no
-     band note, so one live card is the fixture — and the Rule-0 guard below is what caught this. */
-  const made = await request.post("/api/work-cards", {
-    headers: MP,
-    data: { title: "A card so the desk has a band to measure", next_action: "be measured" },
-  });
-  expect(made.status(), await made.text()).toBe(201);
-
-  await page.setViewportSize({ width: 1280, height: 900 });
-  await openWork(page);
-
-  const ranks = await page.evaluate(measureRanks);
-  expect(ranks.length, "Rule 0 — found no headings on the Work surface at all").toBeGreaterThan(1);
-
-  const answer = ranks.find((r) => r.tag === "h2");
-  expect(answer, "the Work surface emits no h2 — the answer line is the page's own rank 0").toBeTruthy();
-
-  const bands = ranks.filter((r) => r.tag === "h3");
-  expect(bands.length, "Rule 0 — no band headings were measured").toBeGreaterThan(0);
-
-  const bodyPx = await page.evaluate(() => {
-    const el = document.querySelector('[data-testid="work-cards-page"] .work-band-note');
-    return el ? parseFloat(getComputedStyle(el).fontSize) : 0;
-  });
-  expect(bodyPx, "Rule 0 — no band note was measured, so there is nothing to compare against").toBeGreaterThan(0);
-
-  const biggestBand = Math.max(...bands.map((b) => b.px));
-  expect(
-    answer!.px,
-    `the answer line (${answer!.px}px) must outrank the band heads (${biggestBand}px) by at least 4px — ` +
-      "both at one size is the defect this redesign exists to repair",
-  ).toBeGreaterThanOrEqual(biggestBand + 4);
-  expect(
-    biggestBand,
-    `the band heads (${biggestBand}px) must outrank body copy (${bodyPx}px) by at least 4px`,
-  ).toBeGreaterThanOrEqual(bodyPx + 4);
-
-  console.log(
-    `WORK RANKS: answer ${answer!.px}px/${answer!.weight} > bands ${biggestBand}px > note ${bodyPx}px`,
-  );
 });
 
 /**

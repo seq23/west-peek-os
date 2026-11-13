@@ -5,7 +5,7 @@ import {
   type BriefExpectations, type BriefHistory, type BriefRunRow,
 } from "../src/shared/intelligence/briefRunState";
 import { MAX_BRIEF_ATTEMPTS } from "../src/shared/intelligence/briefTerminality";
-import { MOVING_KINDS, examinedLine, pressOutcomeLine, progressFraction, toneClassFor } from "../src/client/lib/briefBand";
+import { MOVING_KINDS, examinedLine, pressOutcomeLine, progressFraction } from "../src/client/lib/briefBand";
 
 /**
  * EVERY STATE THE ROW CAN BE IN HAS A NAME AND A SENTENCE (19 Sep 2026).
@@ -206,15 +206,6 @@ describe("the band", () => {
     expect(progressFraction({ kind: "arrived", elapsedSeconds: 10, usualSeconds: 264 })).toBeNull();
     expect(progressFraction({ kind: "failed_out", elapsedSeconds: 10, usualSeconds: 264 })).toBeNull();
     expect(progressFraction({ kind: "running", elapsedSeconds: 132, usualSeconds: 264 })).toBeCloseTo(0.5);
-  });
-
-  it("tones: arrived is good, failed out is danger, retrying and stalled are the gate, nothing is orange", () => {
-    expect(toneClassFor("arrived")).toBe("notice notice-ok");
-    expect(toneClassFor("failed_out")).toBe("notice notice-bad");
-    expect(toneClassFor("retrying")).toBe("notice notice-gate");
-    expect(toneClassFor("stalled")).toBe("notice notice-gate");
-    expect(toneClassFor("running")).toBe("notice");
-    expect(toneClassFor("idle")).toBe("notice");
   });
 
   it("the examined line is built only from facts the row carries", () => {

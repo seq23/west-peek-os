@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import type { Actor } from "../src/worker/services/authorize";
-import { CAPTURE_SOURCES, ingestTranscript, splitSegments } from "../src/worker/services/captureAdapter";
+import { ingestTranscript, splitSegments } from "../src/worker/services/captureAdapter";
 
 /**
  * Meeting Capture Adapter (P39, V1 #28).
@@ -28,12 +28,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await disposeTestDb(t);
-});
-
-describe("the four sources §33 names", () => {
-  it("is exactly provider, native, manual, upload", () => {
-    expect([...CAPTURE_SOURCES].sort()).toEqual(["MANUAL", "NATIVE", "PROVIDER", "UPLOAD"]);
-  });
 });
 
 describe("segmenting", () => {

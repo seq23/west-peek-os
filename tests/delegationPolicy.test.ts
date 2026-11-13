@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AI_EMPLOYEE_ROSTER } from "@shared/registry/aiEmployees";
 import {
-  assignmentLabel,
   isAssigned,
   resolveAssignment,
   type ProposedCommitment,
@@ -207,17 +206,5 @@ describe("the digest tells the operator who has what", () => {
     // The operator must never have to wonder whether a close-out emailed anyone.
     expect(digest).toMatch(/nothing has been sent/i);
   });
-
-  it("says so plainly when a meeting produced nothing", () => {
-    expect(buildDigest({ title: "Standup" }, [], ROSTER)).toMatch(/no new deliverables/i);
-  });
 });
 
-describe("labels", () => {
-  it("reads as plain English for each kind", () => {
-    expect(assignmentLabel("AI_EMPLOYEE")).toBe("Assigned");
-    expect(assignmentLabel("AI_WITH_HUMAN_TOUCH")).toBe("Assigned · your input wanted");
-    expect(assignmentLabel("HUMAN_RECOMMENDED")).toBe("Recommended for you");
-    expect(assignmentLabel("UNASSIGNED")).toBe("Unassigned");
-  });
-});

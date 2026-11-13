@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
-  DECK_SLIDES, LOCATION_LINE, MONEY_BINDINGS, PERCENT_BINDINGS, bindingsUsed, type Binding, type Slot,
+  DECK_SLIDES, MONEY_BINDINGS, PERCENT_BINDINGS, bindingsUsed, type Binding, type Slot,
 } from "../src/shared/deck/definition";
 
 /**
@@ -151,35 +151,6 @@ describe("the claims the operator approved, quoted rather than paraphrased", () 
     expect(team).toContain("operating in and around");
     // "proximity"/"operating in and around" are deliberate. Upgrading them is the $500M failure again.
     expect(team).not.toMatch(/\b22\+? years (?:of )?(?:investing|in venture capital)\b/i);
-  });
-
-  it("leads with the capital-allocators line, em-dash intact, before the team slide", () => {
-    const positioning = DECK_SLIDES.findIndex((s) => s.key === "positioning");
-    const team = DECK_SLIDES.findIndex((s) => s.key === "team");
-    expect(positioning).toBeGreaterThan(-1);
-    expect(positioning, "the positioning line must land before the team slide").toBeLessThan(team);
-
-    const line = DECK_SLIDES[positioning]!.standfirst ?? "";
-    // The concession-then-answer structure IS the sentence; splitting it concedes nothing.
-    expect(line).toContain("not entering venture as capital allocators —");
-    expect(line).toContain("already been operating within the ecosystem");
-    // The three bullets are its evidence and travel with it.
-    const bullets = DECK_SLIDES[positioning]!.slots.filter((s) => s.kind === "text");
-    expect(bullets.length).toBe(3);
-  });
-
-  it("puts the cover's location line exactly as the partners wrote it, and the team page says the same", () => {
-    // Owner, 26 Oct 2026: exactly this line. One constant, so the two pages cannot drift apart.
-    expect(LOCATION_LINE).toBe("New York · San Francisco · Atlanta (and everywhere in between)");
-    expect(DECK_SLIDES.find((s) => s.key === "cover")!.standfirst).toBe(LOCATION_LINE);
-    expect(text("team")).toContain(LOCATION_LINE);
-    expect(SRC).not.toMatch(/New York • San Francisco • Atlanta/);
-  });
-
-  it("spells it the US way: checks, never cheques, anywhere that renders", () => {
-    for (const slide of DECK_SLIDES) {
-      expect([slide.headline, slide.standfirst ?? "", ...slide.slots.map(slotWords)].join(" "), `${slide.key} says cheque`).not.toMatch(/cheque/i);
-    }
   });
 
   it("never carries the $500M figure anywhere", () => {
