@@ -656,6 +656,54 @@ async function planned(who: string, chief: string, subject: string, plan: Record
   };
 }
 
+/**
+ * #363 (13 Nov 2026): a partner asked for a website and a dashboard in one email. The plan put the
+ * dashboard in `deferred` and told him it was "its own card, starts 17 Nov". The report reader dropped
+ * the field, so no card was made and nothing said so. Driven through the real path: the Mac's stored
+ * report → applyReport.
+ */
+describe("later work the plan dates becomes its own card, or the source card says loudly that it did not (#363)", () => {
+  const deferredFrom = async (sourceId: string) =>
+    (await env.WP_OS_DB.prepare("SELECT id, title, kind, state, owner_id, requested_by_email, lease_until, description FROM work_card WHERE assigned_from_card_id = ?1 ORDER BY created_at").bind(sourceId).all<Record<string, string | null>>()).results ?? [];
+  const plan = (deferred: unknown[]) => ({ document: "# Plan: the site now, the rest later\n\nnothing to ask", decided: ["the site is built now"], asks: [], publish_ready: true, deferred });
+
+  it("an item that is not a change to this site is a plain dated card for the same partner, linked to the source, never a site job on its repo", async () => {
+    const porter = await planned(SCOOTER, "Walker", "studio site and tracker", plan([{ ask: "Build the sponsor tracker in the operating system, not on the public site", due_at: "2031-03-17", words: "the tracker can start the week after", site_change: false }]));
+    const made = await deferredFrom(porter.id);
+    expect(made, "exactly one card for the one deferred item").toHaveLength(1);
+    const c = made[0]!;
+    expect(c.title).toContain("(deferred to 2031-03-17)");
+    expect(c.requested_by_email).toBe(SCOOTER);
+    expect(c.lease_until, "leased to its date, so the sweep leaves it alone until then").toBe("2031-03-17T00:00:00.000Z");
+    expect(c.state).not.toBe("DONE");
+    expect(c.kind, "not forced into a site job").toBeNull();
+    expect(await readWebPropertyChange(env, c.id!), "no job on the source repo").toBeNull();
+    expect(String((await card(porter.id)).description), "the source card says so").toContain(`its own card (${c.id}) runs on 2031-03-17`);
+  });
+
+  it("an item that IS a change to this site becomes a site job on the same repo, leased to its date", async () => {
+    const porter = await planned(SCOOTER, "Walker", "studio hero now and later", plan([{ ask: "Swap the hero photo for the spring one", due_at: "2031-04-01", site_change: true }]));
+    const made = await deferredFrom(porter.id);
+    expect(made).toHaveLength(1);
+    expect(made[0]!.kind).toBe("WEB_PROPERTY_CHANGE");
+    expect(made[0]!.lease_until).toBe("2031-04-01T00:00:00.000Z");
+    expect((await readWebPropertyChange(env, made[0]!.id!))!.target_repo).toBe((await readWebPropertyChange(env, porter.id))!.target_repo);
+  });
+
+  it("an item that cannot be filed is said on the source card and to the partners, never dropped", async () => {
+    const before = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM notification WHERE dedupe_key LIKE 'deferred_not_filed:%'").first<{ n: number }>())!.n;
+    const porter = await planned(SCOOTER, "Walker", "studio page and a later thing", plan([{ ask: "Add the press page", due_at: "sometime in spring" }]));
+    expect(await deferredFrom(porter.id)).toHaveLength(0);
+    const desc = String((await card(porter.id)).description);
+    expect(desc).toContain("DEFERRED WORK NOT FILED");
+    expect(desc).toContain("Add the press page");
+    const ev = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'work_card.deferred_not_filed' AND object_id = ?1").bind(porter.id).first<{ n: number }>();
+    expect(Number(ev?.n)).toBe(1);
+    const after = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM notification WHERE dedupe_key LIKE 'deferred_not_filed:%'").first<{ n: number }>())!.n;
+    expect(after, "the partners are told").toBeGreaterThan(before);
+  });
+});
+
 describe("a plan that is not publish-ready previews first (21 Sep 2026)", () => {
   const PLACEHOLDERS = ["Airtable links", "Sengo logo", "episode records", "approved orange hex"];
   let id = "";

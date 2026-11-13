@@ -1471,7 +1471,9 @@ async function absorbRepoReport(env: Env, card: WebPropertyChangeCard, row: WebP
     if (told.length) await appendFinding(env, card.id, `A host outside the firm's Cloudflare zones: ${told.join(", ")}. The partner has the exact record to add at their registrar; the site is live on pages.dev meanwhile and I re-check every 15 minutes for 7 days.`);
   }
   // Addendum 5: work the partner dated for later becomes its own card, leased until its week — never lost on close.
-  if (Array.isArray(report.deferred) && report.deferred.length) {
+  // FROM THE PLAN ONLY (#363): the plan is where the later work is dated and where the partner is told
+  // it is "its own card". BUILD and LAND repeat the plan's list; they do not make promises of their own.
+  if (report.phase === "PLAN" && Array.isArray(report.deferred) && report.deferred.length) {
     for (const d of report.deferred.slice(0, 5)) await deferWork(env, card, row, d);
   }
   if (Array.isArray(report.items) && report.items.length) {
@@ -1487,24 +1489,75 @@ async function absorbRepoReport(env: Env, card: WebPropertyChangeCard, row: WebP
 }
 
 /**
- * DEFERRED WORK WITH A DATE (0253, addendum 5): "for next week, …" is its own card on the same repo,
- * for the same partner, leased until the date so the sweep leaves it alone until then and then
- * runs it as any other job; the partner hears about it when it runs. Idempotent on (card, ask).
+ * DEFERRED WORK WITH A DATE (0253, addendum 5): "for next week, …" is its own card for the same
+ * partner, leased until the date so the sweep leaves it alone until then and then runs it as any
+ * other card; the partner hears about it when it runs. Idempotent on (card, ask).
+ *
+ * TWO RULES FROM 13 Nov 2026 (#363). A partner asked for a website and a dashboard in one email; the
+ * plan put the dashboard in `deferred` and told him it was "its own card". No card was made (the
+ * report reader dropped the field) and nothing said so.
+ *   1 · A DEFERRED ITEM THAT YIELDS NO CARD IS A LOUD FAILURE ON THE SOURCE CARD: a finding on the
+ *       card, an event, and a notice to the partners. Never a silent return.
+ *   2 · ONLY A CHANGE TO THIS SITE BECOMES A SITE JOB HERE (`site_change: true`). Anything else is a
+ *       plain dated card: work that belongs in another system is not built in this site's repo.
+ * Returns the card's id (new or already filed), or null when it could not be filed.
  */
-export async function deferWork(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, d: { ask: string; due_at: string; words?: string }): Promise<void> {
+export async function deferWork(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, d: { ask: string; due_at: string; words?: string; site_change?: boolean }): Promise<string | null> {
   // R14 / R23 FOR EVERY KIND (0254): the dated card itself is made by the shared door; Porter's part is making it a site job.
-  const { deferCard } = await import("./deferredWork");
-  const madeId = await deferCard(
-    env,
-    { id: card.id, title: card.title, owner_id: PORTER_ID, requested_by_email: card.requested_by_email ?? null, firm_scope: card.firm_scope },
-    { ask: d.ask, due_at: d.due_at, words: d.words ?? null },
-    { where: row.target_repo, nextAction: `Waiting for its week (${String(d.due_at).slice(0, 10)}); then planned, built and previewed like any site job.` },
-  );
-  if (!madeId) return;
-  const ask = readWebPropertyAsk(card.request_json);
-  await env.WP_OS_DB.prepare("UPDATE work_card SET kind = ?2 WHERE id = ?1").bind(madeId, WEB_PROPERTY_CHANGE_KIND).run();
-  await openWebPropertyChange(env, { cardId: madeId, ask: { drive_folder_id: row.drive_folder_id, drive_folder_url: row.drive_folder_url, drive_file_url: null, property_host: row.property_host, target_repo: row.target_repo, site: ask?.site ?? null, ask: d.ask, pre_approval: null, force: null, addressee: "Porter", property_unresolved: false }, firmScope: card.firm_scope });
-  await appendFinding(env, card.id, `Deferred, as asked: "${d.ask.slice(0, 160)}" — its own card (${madeId}) runs on ${d.due_at.slice(0, 10)}.`);
+  const { deferCard, deferredCardFor } = await import("./deferredWork");
+  const ask = String(d?.ask ?? "");
+  const dueAt = String(d?.due_at ?? "");
+  const siteChange = d?.site_change === true;
+  let madeId: string | null = null;
+  let why = "";
+  try {
+    madeId = await deferCard(
+      env,
+      { id: card.id, title: card.title, owner_id: PORTER_ID, requested_by_email: card.requested_by_email ?? null, firm_scope: card.firm_scope },
+      { ask, due_at: dueAt, words: d?.words ?? null },
+      siteChange
+        ? { where: row.target_repo, nextAction: `Waiting for its week (${dueAt.slice(0, 10)}); then planned, built and previewed like any site job.` }
+        : { nextAction: `Waiting for its date (${dueAt.slice(0, 10)}). This is not a change to ${row.property_host ?? row.target_repo}: it is worked as its own card, and the partner hears when it starts.` },
+    );
+    if (!madeId) {
+      const already = ask.trim() ? await deferredCardFor(env, card.id, ask) : null;
+      if (already) return already;
+      why = !ask.trim() ? "the item had no ask" : !Number.isFinite(Date.parse(dueAt)) ? `its date ("${dueAt.slice(0, 40)}") could not be read` : "no card was made";
+    }
+  } catch (err) {
+    why = err instanceof Error ? err.message : String(err);
+  }
+  if (!madeId) {
+    await deferredNotFiled(env, card, ask, dueAt, why);
+    return null;
+  }
+  if (siteChange) {
+    const source = readWebPropertyAsk(card.request_json);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = ?2 WHERE id = ?1").bind(madeId, WEB_PROPERTY_CHANGE_KIND).run();
+    await openWebPropertyChange(env, { cardId: madeId, ask: { drive_folder_id: row.drive_folder_id, drive_folder_url: row.drive_folder_url, drive_file_url: null, property_host: row.property_host, target_repo: row.target_repo, site: source?.site ?? null, ask, pre_approval: null, force: null, addressee: "Porter", property_unresolved: false }, firmScope: card.firm_scope });
+  }
+  await appendFinding(env, card.id, `Deferred, as asked: "${ask.slice(0, 160)}" — its own card (${madeId}) runs on ${dueAt.slice(0, 10)}${siteChange ? "" : "; it is not a change to this site, so it is not a site job here"}.`);
+  return madeId;
+}
+
+/** Rule 0 for deferred work: the promise was made to the partner, so its failure is said where people look. */
+async function deferredNotFiled(env: Env, card: WebPropertyChangeCard, ask: string, dueAt: string, why: string): Promise<void> {
+  const what = ask.trim() ? `"${ask.slice(0, 160)}"` : "a deferred item";
+  const line = `DEFERRED WORK NOT FILED: ${what}${dueAt ? ` (due ${dueAt.slice(0, 10)})` : ""} has NO card — ${why.slice(0, 300)}. The partner may have been told it is its own card; it is tracked nowhere until someone files it.`;
+  console.error(`deferWork: ${card.id}: ${why}`);
+  await appendFinding(env, card.id, line).catch(() => {});
+  await appendEvent(env, { eventType: "work_card.deferred_not_filed", actorType: "system", actorId: "work_sweep", objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { due_at: dueAt.slice(0, 40), why: why.slice(0, 300) } }).catch(() => {});
+  const { notifyPartners } = await import("./notifications");
+  await notifyPartners(env, {
+    kind: "PROVIDER_FAILURE",
+    severity: "WARNING",
+    title: "Later work a partner asked for was not filed",
+    body: `On "${card.title.slice(0, 120)}": ${what}${dueAt ? `, due ${dueAt.slice(0, 10)},` : ""} was to become its own card and did not (${why.slice(0, 200)}). Nothing is tracking it.`,
+    objectType: "work_card",
+    objectId: card.id,
+    dedupeKey: `deferred_not_filed:${card.id}:${ask.slice(0, 60)}`,
+    firmScope: card.firm_scope,
+  }).catch(() => {});
 }
 
 /**

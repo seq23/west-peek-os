@@ -131,6 +131,11 @@ the JOB CONTEXT below. Read it before anything else.
   the partner's account", "due_at": "<ISO date>", "words": "<their words>" }]` — it becomes its own
   card that runs on its date; never lost on close.
 - **Deferred work with a date ("for next week …") is the same `deferred` entry.** One per dated item.
+  Add `"site_change": true` ONLY when that later work is a change to this same site in this same
+  repo. Work that belongs anywhere else (another system such as West Peek OS, another repo, another
+  employee's job) gets `"site_change": false` and an `ask` that says where it belongs: it becomes a
+  plain dated card, never a job on this repo. Either way, tell the partner only that it is its own
+  card with its date.
 - **Copy edits are applied verbatim** from the repo's one editable copy file when the RUNBOOK names
   one; never paraphrased. Links are https only.
 - **Honest limits.** When the ask cannot be done as worded, build the nearest version and state the
