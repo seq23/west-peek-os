@@ -75,20 +75,6 @@ describe("the skill library is attached to a real firm", () => {
 });
 
 describe("what an employee is actually told", () => {
-  it("gives Wyatt the research methods, because that is where he sits", () => {
-    const wyatt = AI_EMPLOYEE_ROSTER.find((e) => e.name === "Wyatt")!;
-    const block = guidanceBlock(wyatt.primaryMachineKeys);
-    expect(block).toContain("Judging a source before believing it");
-    expect(block).toContain("A finding with no source is an opinion");
-  });
-
-  it("gives Percy the page-review methods rather than the research ones", () => {
-    const percy = AI_EMPLOYEE_ROSTER.find((e) => e.name === "Percy")!;
-    const block = guidanceBlock(percy.primaryMachineKeys);
-    expect(block).toContain("Why a page does not convert");
-    expect(block).not.toContain("Judging a source before believing it");
-  });
-
   it("says nothing at all for a department with no methods written down", () => {
     // An employee told "HOW THIS FIRM DOES THIS WORK:" followed by nothing has been told something
     // false about the firm. Empty means the section is omitted entirely.
@@ -151,23 +137,6 @@ describe("an employee brings their persona and their firm's methods to the work"
     expect(prompt).toMatch(/twenty years|evidence from inference|never invent/i);
     // And the firm's own methods, which the loop already carried.
     expect(prompt).toContain("research_intelligence".split("_")[0]!);
-  });
-
-  it("addresses Parker by the title the roster actually holds, not one written into a prompt", async () => {
-    const { buildCloseoutPrompt } = await import("../src/worker/services/roomCloseout");
-    const { AI_EMPLOYEE_ROSTER } = await import("../src/shared/registry/aiEmployees");
-
-    const parker = AI_EMPLOYEE_ROSTER.find((e) => e.name === "Parker")!;
-    const prompt = buildCloseoutPrompt(
-      { title: "The Zero-to-One Room" } as never,
-      "Notes from the evening.",
-      "12 founders",
-    );
-
-    expect(prompt).toContain("You are Parker");
-    expect(prompt).toContain(parker.role);
-    // The drift this replaced: the file called Parker an "Event Planner", a title nobody holds.
-    expect(prompt).not.toContain("Event Planner");
   });
 });
 

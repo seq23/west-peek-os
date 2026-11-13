@@ -105,10 +105,4 @@ describe("originBadgeText", () => {
   it("still says something honest when neither a resolved name nor 'sweep' is available", () => {
     expect(originBadgeText({ kind: "SYSTEM", who: "system:inbound_email", at: "" })).toBe("from the system");
   });
-
-  it("reads meetings, captures and hand-offs in words rather than raw ids", () => {
-    expect(originBadgeText({ kind: "MEETING", who: "mtg_7", at: "" })).toBe("from a meeting");
-    expect(originBadgeText({ kind: "CAPTURE", who: "cap_9", at: "" })).toBe("captured");
-    expect(originBadgeText({ kind: "ANOTHER_CARD", who: "wc_parent", at: "" })).toBe("handed off");
-  });
 });

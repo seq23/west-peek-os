@@ -58,6 +58,7 @@ import { hostname } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createListener, selfTest, VERSION } from "./lib/listener-core.mjs";
+import { EXIT_NEW_CODE, headMoved, repoHead } from "../claimer/local-job-claimer.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const PAGE_SCRIPT = readFileSync(path.join(ROOT, "scripts", "meet", "lib", "meet-media-page.js"), "utf8");
@@ -219,11 +220,18 @@ async function run() {
   const stop = async (sig) => { log(`${sig}: leaving every call`); await listener.shutdown(`listener stopped (${sig})`); await browser?.close(); process.exit(0); };
   process.on("SIGTERM", () => void stop("SIGTERM"));
   process.on("SIGINT", () => void stop("SIGINT"));
+  // #355: the job claimer keeps the checkout current; the listener restarts onto it, never mid-call.
+  const STARTED_HEAD = repoHead();
   log(`listener ${VERSION} on ${DEVICE_ID} → ${BASE_URL}, joining as ${g.subject}`);
   for (;;) {
     try {
       const out = await listener.cycle();
       if (has("--once")) { console.log(JSON.stringify(out)); await listener.shutdown("once"); await browser?.close(); process.exit(0); }
+      if (out.active === 0 && headMoved(STARTED_HEAD, repoHead())) {
+        log(`the repo moved since this listener started and no call is open; exiting ${EXIT_NEW_CODE} so launchd restarts it on the new code`);
+        await browser?.close();
+        process.exit(EXIT_NEW_CODE);
+      }
     } catch (err) {
       log(`cycle failed: ${err?.message ?? err}`);
     }

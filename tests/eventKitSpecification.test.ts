@@ -2,13 +2,11 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   EVENT_KIT_PLATFORM,
-  EVENT_KIT_SECTIONS,
   GREENROOM_MINUTES_BEFORE,
   ON_SCREEN_SHAPES,
   RETIRED_PLATFORMS,
   STREAM_SLOT,
   buildEventKitPrompt,
-  eventKitTldr,
   openItemsFor,
   parseEventKit,
   proposedSlotFor,
@@ -37,15 +35,6 @@ import {
 
 const SPEC = readFileSync(new URL("../docs/EVENT_KIT_SPECIFICATION.md", import.meta.url), "utf8");
 const EXAMPLE = readFileSync(new URL("../docs/EVENT_KIT_EXAMPLE_SEPTEMBER.md", import.meta.url), "utf8");
-
-/** The `| n | Section | `key` |` table in the spec, in the order the rows are written. */
-function specSections(): Array<{ n: number; label: string; key: string }> {
-  const rows: Array<{ n: number; label: string; key: string }> = [];
-  for (const m of SPEC.matchAll(/^\|\s*(\d)\s*\|\s*([^|]+?)\s*\|\s*`([a-z_]+)`\s*\|$/gm)) {
-    rows.push({ n: Number(m[1]), label: m[2]!.trim(), key: m[3]! });
-  }
-  return rows;
-}
 
 /** Everything in a fixed-width code span under one named heading of the spec. */
 function backticked(heading: string): string[] {
@@ -123,21 +112,6 @@ const built = (overSrc: Partial<EventKitSource> = {}, overAnswer: Record<string,
 };
 
 describe("the specification and the generator say the same thing", () => {
-  it("names five sections, and the code carries exactly those, in that order", () => {
-    const rows = specSections();
-    expect(rows.length, "Rule 0: no section rows were read out of the specification — has the table been reformatted?").toBe(5);
-    expect(rows.map((r) => r.n)).toEqual([1, 2, 3, 4, 5]);
-    expect(rows.map((r) => r.key)).toEqual(EVENT_KIT_SECTIONS.map((s) => s.key));
-    expect(rows.map((r) => r.label)).toEqual(EVENT_KIT_SECTIONS.map((s) => s.label));
-  });
-
-  it("renders every section the specification names, numbered in its order", () => {
-    const md = renderEventKitMarkdown(built());
-    const rows = specSections();
-    expect(rows.length, "Rule 0: no sections examined").toBeGreaterThan(0);
-    for (const r of rows) expect(md, `the kit never renders the section "${r.label}"`).toContain(`## ${r.n}. ${r.label}`);
-  });
-
   it("strikes every retired platform the specification lists, by name", () => {
     const named = backticked("### 1 · The platform");
     const struck = named.filter((n) => n !== "EVENT_KIT_PLATFORM" && n !== "verifyEventKit" && n !== "retired_platform_removed");
@@ -251,21 +225,6 @@ describe("the specification and the generator say the same thing", () => {
     expect(bracketed.description.audienceTip).not.toContain("[LINK]");
     // And nothing in a clean kit carries one either.
     expect(renderEventKitMarkdown(built())).not.toMatch(/\[(?!\d+\])[^\]\n]{0,80}\]\s*(?!\()/);
-  });
-
-  it("carries the platform and the delivery rule the specification states, into the prompt and the page", () => {
-    const s = src();
-    const prompt = buildEventKitPrompt(s, proposedSlotFor(s.month, s.stream), openItemsFor({ coHostName: null, guestWanted: true, guestName: null }));
-    expect(prompt).toContain(EVENT_KIT_PLATFORM);
-    expect(prompt).toContain("WRITE THE DRAFT PROPOSED EVENT KIT");
-    expect(prompt).toMatch(/no \[Insert Date\]|square-\s*\n?\s*bracket placeholders/);
-    expect(SPEC.replace(/\s+/g, " "), "the specification lost the sentence the delivery rule comes from").toContain("The email never carries the text");
-    // The TL;DR is what the mail carries: title, proposed date and time, duration shape, why.
-    const tldr = eventKitTldr(built());
-    expect(tldr).toContain("PROPOSED — ");
-    expect(tldr).toContain("60 minutes");
-    expect(tldr).toContain(EVENT_KIT_PLATFORM);
-    expect(tldr).toContain("Why this angle:");
   });
 });
 

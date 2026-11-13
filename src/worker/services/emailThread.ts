@@ -1,3 +1,5 @@
+import { developerDirector, isWorkInstruction } from "./developerDirection";
+import { recordPartnerBack } from "./blocks";
 import { recordCcFrom } from "./ccPartners";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
@@ -512,6 +514,8 @@ export async function steerFromReply(
     // "CC SCOOTER" IN A REPLY (0239): recorded from the authenticated sender, whatever the state;
     // `recordCcFrom` refuses anyone but the requesting partner and names non-partners it refused.
     if (cardRow && partner) await recordCcFrom(env, cardRow.id, written, partner.email);
+    // 0302: the partner who asked says when he will be back → no reminder about this card before then.
+    if (cardRow && partner && (cardRow.requested_by_email ?? "").trim().toLowerCase() === partner.email) await recordPartnerBack(env, cardRow.id, written, partner.firstName);
 
     /*
      * "HAND THIS TO SCOOTER" / "TAKE THIS BACK" (0241). Read before anything else acts on the reply:
@@ -535,7 +539,10 @@ export async function steerFromReply(
       // Handled: the card changed hands (or was refused, and said so). Nothing below reads it.
     } else if (cardRow && partner && cardRow.state === "BLOCKED") {
       const asked = (cardRow.requested_by_email ?? "").trim().toLowerCase();
-      if (!asked || asked === partner.email) {
+      // #363 (0301): THE DEVELOPER DIRECTS ANY JOB. Her "changes: …" on another partner's website job is that job's
+      // instruction, and only that: the runner rebuilds with it and reads no approval from her (services/developerDirection.ts).
+      const developerChanges = Boolean(asked) && cardRow.kind === WEB_PROPERTY_CHANGE_KIND && isWorkInstruction(written) && (await developerDirector(env, partner.firmUserId)) !== null;
+      if (!asked || asked === partner.email || developerChanges) {
         /*
          * A REPLY IS READ AGAINST THE STAGE OF THE EMAIL IT ANSWERS, NEVER THE CARD'S CURRENT STAGE
          * (27 Sep 2026; #194: the approval binds to the latest preview). A website job's plan can be

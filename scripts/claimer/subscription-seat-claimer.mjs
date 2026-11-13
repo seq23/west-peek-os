@@ -54,6 +54,7 @@ import { codexOnSubscription, codexSeatUsable } from "../lib/codex-seat.mjs";
 import { attachmentNote, capabilitiesFromProof, claudeAttachArgs, codexAttachArgs, missingCapability, readProof, safeFileName } from "../lib/seat-attachments.mjs";
 import { claudeSearchArgs, codexSearchArgs, parseClaudeSearch, parseCodexSearch, searchOutcome } from "../lib/seat-search.mjs";
 import { VAULT_INJECTED_VAR, claudeChildEnv } from "../lib/vault-env.mjs";
+import { repoHead, restartIfRepoMoved } from "./local-job-claimer.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -475,7 +476,9 @@ async function main() {
     console.log("No subscription seat is usable on this machine. Exiting quietly; the firm's work is unaffected.");
     return;
   }
-  console.log(`claiming for: ${seats.join(", ")} as ${DEVICE_ID}`);
+  // #355: the job claimer keeps the checkout current; this process restarts onto it when idle.
+  const STARTED_HEAD = repoHead();
+  console.log(`claiming for: ${seats.join(", ")} as ${DEVICE_ID} on ${STARTED_HEAD ?? "an unknown HEAD"}`);
 
   for (;;) {
     let worked = false;
@@ -491,7 +494,10 @@ async function main() {
      * thirty seconds for the second. A cycle that found nothing sleeps for the heartbeat interval,
      * which is also exactly how often the firm needs to hear from us.
      */
-    if (!worked) await new Promise((r) => setTimeout(r, HEARTBEAT_INTERVAL_S * 1000));
+    if (!worked) {
+      restartIfRepoMoved(STARTED_HEAD);
+      await new Promise((r) => setTimeout(r, HEARTBEAT_INTERVAL_S * 1000));
+    }
   }
 }
 

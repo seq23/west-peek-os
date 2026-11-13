@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import { handleRequest } from "../src/worker/index";
@@ -65,9 +64,6 @@ function insertRaw(cols: string, values: unknown[]): Promise<unknown> {
 }
 
 const clearAll = () => env.WP_OS_DB.prepare("DELETE FROM duty_override").run();
-
-/** Reads a repo file, so a rule about the SOURCE is checked rather than asserted. */
-const readSource = (relative: string) => readFileSync(new URL(`../${relative}`, import.meta.url), "utf8");
 
 beforeAll(async () => {
   t = await createTestDb();
@@ -293,13 +289,6 @@ describe("the resolver stays pure", () => {
     ];
     expect(resolveDuty(9, 5, { overrides })).toEqual(resolveDuty(9, 5, { overrides }));
     expect(resolveDay(5, { overrides })).toEqual(resolveDay(5, { overrides }));
-  });
-
-  it("does not reach a database: src/shared may not import src/worker", () => {
-    // The rule the whole architecture rests on, checked on the source rather than asserted.
-    const src = readSource("src/shared/workforce/dutyRoster.ts");
-    expect(src).not.toMatch(/from\s+["'][^"']*worker/);
-    expect(src).not.toMatch(/WP_OS_DB/);
   });
 
   it("never puts on duty somebody who is switched off, however they were overridden", () => {

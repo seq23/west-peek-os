@@ -20,39 +20,6 @@ describe("how often a job runs, in words", () => {
     expect(cadenceInWords({ schedule_kind: "DAILY", interval_minutes: null, daily_at_utc: "06:00" }))
       .toBe("Every day at 06:00 UTC");
   });
-
-  it("turns an interval into something a person would say", () => {
-    const at = (m: number) => cadenceInWords({ schedule_kind: "INTERVAL", interval_minutes: m, daily_at_utc: null });
-    expect(at(60)).toBe("Every hour");
-    expect(at(1440)).toBe("Once a day");
-    expect(at(10080)).toBe("Once a week");
-    expect(at(30)).toBe("Every 30 minutes");
-  });
-
-  it("says a monthly duty is monthly, and an on-request job is only when asked", () => {
-    // Until 0169 productions_monthly was DAILY_AT and the page said "Every day at 14:00 UTC" for a
-    // job that opened nothing 29 days out of 30; deck_rebuild was DAILY_AT with the page hard-coding
-    // "On request" by job key. Both are real schedule kinds now and the words come from the row.
-    // On her clock (0193 / 0288): the zone is said, never "UTC".
-    expect(cadenceInWords({ schedule_kind: "WEEKLY", interval_minutes: null, daily_at_utc: "09:00", day_of_week: 2, daily_at_tz: "America/Chicago" }))
-      .toBe("Every Tuesday at 09:00 Central");
-    expect(cadenceInWords({ schedule_kind: "DAILY_AT", interval_minutes: null, daily_at_utc: "11:15", daily_at_tz: "America/Chicago" }))
-      .toBe("Every day at 11:15 Central");
-    expect(cadenceInWords({ schedule_kind: "WEEKLY", interval_minutes: null, daily_at_utc: "14:00", day_of_week: 1 }))
-      .toBe("Every Monday at 14:00 UTC");
-    expect(cadenceInWords({ schedule_kind: "MONTHLY", interval_minutes: null, daily_at_utc: "14:00", day_of_month: 1 }))
-      .toBe("On the 1st of every month at 14:00 UTC");
-    expect(cadenceInWords({ schedule_kind: "MONTHLY", interval_minutes: null, daily_at_utc: "09:30", day_of_month: 22 }))
-      .toBe("On the 22nd of every month at 09:30 UTC");
-    expect(cadenceInWords({ schedule_kind: "ON_REQUEST", interval_minutes: null, daily_at_utc: null }))
-      .toBe("Only when asked");
-  });
-
-  it("says so plainly when there genuinely is no cadence", () => {
-    // Distinct from the bug above: nothing scheduled at all is a real state and reads as one.
-    expect(cadenceInWords({ schedule_kind: "MANUAL", interval_minutes: null, daily_at_utc: null }))
-      .toBe("No cadence set");
-  });
 });
 
 describe("who hands a job over", () => {

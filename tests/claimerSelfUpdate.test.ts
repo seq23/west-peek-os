@@ -10,8 +10,9 @@ import { pullMainIfClean } from "../scripts/claimer/local-job-claimer.mjs";
  * THE CLAIMER'S CHECKOUT KEEPS ITSELF CURRENT (23 Sep 2026), against REAL git repositories.
  *
  * `land` from a worktree never moved ~/GitHub/west-peek-os, so the launchd claimer ran old code
- * until someone pulled by hand. When idle it now fast-forwards a clean main checkout, and leaves a
- * dirty, non-main or diverged one exactly as it was.
+ * until someone pulled by hand. When idle it now fast-forwards a clean checkout (returning it to
+ * main first when it is on another branch, #355), and leaves a dirty or diverged one exactly as it
+ * was, as a named stop the heartbeat carries.
  */
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 let root: string;
@@ -63,27 +64,46 @@ describe("pullMainIfClean", () => {
     landOnOrigin("third");
     writeFileSync(path.join(co, "first.txt"), "edited");
     const lines: string[] = [];
-    expect(pullMainIfClean(co, undefined, (l: string) => lines.push(l)).reason).toBe("dirty");
+    expect(pullMainIfClean(co, undefined, (l: string) => lines.push(l))).toEqual({ updated: false, reason: "dirty", stuck: "dirty" });
     pullMainIfClean(co, undefined, (l: string) => lines.push(l));
     expect(git(co, "rev-parse", "HEAD")).toBe(before);
     expect(lines.filter((l) => /uncommitted/.test(l))).toHaveLength(1);
   });
 
-  it("never touches a checkout on another branch, or one that has diverged", () => {
+  // #355 (13 Nov 2026): the checkout sat on a merged side branch for two weeks and "not updating it"
+  // was one line in a log. Off main and clean now goes back to main; the branch keeps its commits.
+  it("returns a clean checkout on another branch to main and fast-forwards it; the side branch keeps its commits", () => {
     const branch = cloneAt("branch");
     git(branch, "checkout", "--quiet", "-b", "fix/x");
-    const b0 = git(branch, "rev-parse", "HEAD");
-    landOnOrigin("fourth");
-    expect(pullMainIfClean(branch, undefined, () => {}).reason).toBe("not_main");
-    expect(git(branch, "rev-parse", "HEAD")).toBe(b0);
+    writeFileSync(path.join(branch, "side.txt"), "side work");
+    git(branch, "add", ".");
+    git(branch, "commit", "--quiet", "-m", "side work");
+    const side = git(branch, "rev-parse", "HEAD");
+    const tip = landOnOrigin("fourth");
+    const out = pullMainIfClean(branch, undefined, () => {});
+    expect(out).toEqual({ updated: true, reason: "fast_forwarded" });
+    expect(git(branch, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+    expect(git(branch, "rev-parse", "HEAD")).toBe(tip);
+    expect(git(branch, "rev-parse", "fix/x"), "nothing on the side branch is lost").toBe(side);
+  });
+
+  it("a dirty side branch, or a main that has diverged, is left exactly as it was and comes back as a named stop", () => {
+    const dirtySide = cloneAt("dirty-side");
+    git(dirtySide, "checkout", "--quiet", "-b", "fix/y");
+    writeFileSync(path.join(dirtySide, "first.txt"), "edited");
+    const s0 = git(dirtySide, "rev-parse", "HEAD");
+    landOnOrigin("fifth");
+    expect(pullMainIfClean(dirtySide, undefined, () => {})).toEqual({ updated: false, reason: "dirty", stuck: "dirty" });
+    expect(git(dirtySide, "rev-parse", "--abbrev-ref", "HEAD")).toBe("fix/y");
+    expect(git(dirtySide, "rev-parse", "HEAD")).toBe(s0);
 
     const div = cloneAt("diverged");
     writeFileSync(path.join(div, "local.txt"), "mine");
     git(div, "add", ".");
     git(div, "commit", "--quiet", "-m", "local only");
     const d0 = git(div, "rev-parse", "HEAD");
-    landOnOrigin("fifth");
-    expect(pullMainIfClean(div, undefined, () => {}).reason).toBe("diverged");
+    landOnOrigin("sixth");
+    expect(pullMainIfClean(div, undefined, () => {})).toEqual({ updated: false, reason: "diverged", stuck: "diverged" });
     expect(git(div, "rev-parse", "HEAD")).toBe(d0);
   });
 });

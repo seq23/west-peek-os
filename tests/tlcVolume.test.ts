@@ -2,6 +2,7 @@ import { DRIP_DEPS } from "./helpers/tlcSamplesPdf";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
+import { gmailReadStub } from "./helpers/gmailMailbox";
 import type { Env } from "../src/worker/env";
 import { contentHashes, fileDraft, openBrandBatchCard, recordBrandMail, runDrip, runDripPass } from "../src/worker/services/learningClub";
 import { clubProgress, promoteProspects } from "../src/worker/services/tlcVolume";
@@ -26,8 +27,13 @@ const sends: Array<{ to: string; subject: string; text: string }> = [];
 const nb = new Map<string, string>();
 const asked: string[] = [];
 
+const sentMailbox = gmailReadStub({ sentMail: true });
+
 beforeAll(() => {
   vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
+    // Her mailbox, for reads: a follow-up goes only as a reply on its first email's conversation (tlcBrandThread.ts).
+    const read = sentMailbox(String(url));
+    if (read) return read;
     const u = String(url);
     if (u.startsWith("https://api.neverbounce.com/v4.2/single/check?")) {
       const email = new URL(u).searchParams.get("email")!;

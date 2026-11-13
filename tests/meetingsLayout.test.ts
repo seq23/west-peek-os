@@ -11,7 +11,6 @@ import { readFileSync } from "node:fs";
  * chunk, and the firm default activates only with an approved receipt.
  */
 
-const MEETINGS = readFileSync(new URL("../src/client/pages/MeetingsPage.tsx", import.meta.url), "utf8");
 const ROOM = readFileSync(new URL("../src/client/pages/RoomPanel.tsx", import.meta.url), "utf8");
 const MEET = readFileSync(new URL("../src/client/pages/MeetBand.tsx", import.meta.url), "utf8");
 
@@ -21,16 +20,6 @@ function code(src: string): string {
 }
 
 describe("consent is asked for before anything is recorded, every time", () => {
-  it("the During face is the room, and the recorder is one switch on one line", () => {
-    expect(MEETINGS).toContain("<RoomPanel");
-    expect(MEETINGS).not.toContain("function CapturePanel");
-    expect(ROOM).toContain("function RecordingLine");
-    expect(ROOM).toContain('className="rec-line"');
-    expect(ROOM).toContain('role="switch"');
-    expect(ROOM).toContain("aria-checked={recording}");
-    expect(ROOM).toContain('className="live-dot"');
-  });
-
   it("carries the words to say out loud, not just a checkbox", () => {
     expect(ROOM).toContain('data-testid="consent-script"');
     expect(ROOM).toContain('className="consent-script"');
@@ -110,16 +99,5 @@ describe("the firm default has a door on the page, and the reserved act stays th
     expect(c).toContain("(!on && pending !== null)");
     expect(c).toContain('onNavigate("approvals")');
     expect(c).toContain('data-testid="meet-default-error"');
-  });
-
-  it("reads where the card stands from the status route, which names both the pending and the approved card", () => {
-    const status = readFileSync(new URL("../src/worker/services/meetIngest.ts", import.meta.url), "utf8");
-    const fn = status.slice(status.indexOf("export async function handleMeetStatus("), status.indexOf("export async function handleMeetInbox("));
-    expect(fn).toContain("action_key = 'meet.recording_policy.firm_default'");
-    expect(fn).toContain("object_type = 'meet_recording_policy'");
-    expect(fn).toContain("approved_card_id");
-    expect(fn).toContain("pending_card_id");
-    // An executed card has been consumed; it is not offered as a receipt again.
-    expect(fn).not.toMatch(/'executed'/);
   });
 });

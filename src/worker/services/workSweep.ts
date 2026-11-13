@@ -1,6 +1,7 @@
 import { isTlcKind } from "../../shared/tlc/learningClub";
 import { PARTNERS, partnerByEmail } from "../../shared/registry/partners";
 import { resolveStaleClarifications } from "./emailRouting";
+import { askHeldShareQuestions } from "./driveShares";
 import { refreshAllWorkingOn } from "./partnerProfile";
 import type { Env } from "../env";
 import { deferredItemsIn } from "../../shared/work/partnerPractices";
@@ -593,6 +594,8 @@ export async function sweepOnce(
   await remindRequestersByEmail(env, await resurfaceStaleBlocks(env, now), now);
   // 9 Oct 2026 (rule 1d): a "which job is this for?" with no answer in 24 hours becomes a new card.
   await resolveStaleClarifications(env, now);
+  // 13 Nov 2026 (#354): a share nobody explained is asked about only after its grace period.
+  await askHeldShareQuestions(env, now);
   // 0255 (rule 4): finished and moved cards refresh each partner's "working on now"; 30 days idle drops off.
   await refreshAllWorkingOn(env, now);
   /*

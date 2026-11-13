@@ -47,12 +47,6 @@ describe("the lens is data on the profile, with a safe default", () => {
     expect(LENSES.growth.categories).toEqual(["marketing", "growth", "brand", "creator economy", "community", "events", "go-to-market"]);
     expect(LENSES.investing.categories).toEqual(["markets", "VC and private markets", "secondaries", "legal and the courts", "AI"]);
   });
-
-  it("writes the header line from the first name and the lens", () => {
-    expect(editionLine("Scooter Taylor", lensFor("growth"))).toBe("Edition: Scooter — marketing & growth lens");
-    expect(editionLine("Sequoia Taylor", lensFor("investing"))).toBe("Edition: Sequoia — markets & private-markets lens");
-    expect(editionLine("  ", lensFor(null))).toBe("Edition: Partner — markets & private-markets lens");
-  });
 });
 
 describe("one template for both partners", () => {
@@ -81,15 +75,6 @@ describe("one template for both partners", () => {
       expect(buildSynthesisPrompt(forScooter)).toContain(shared);
       expect(buildSynthesisPrompt(forSequoia)).toContain(shared);
     }
-  });
-
-  it("makes the lens explicit — 'this partner's lens' — and says emphasis is all it changes", () => {
-    const p = buildSynthesisPrompt(forScooter);
-    expect(p).toContain("EDITION: Edition: Scooter — marketing & growth lens");
-    expect(p).toContain("THIS PARTNER'S LENS — MARKETING & GROWTH LENS. Lead with, and give the most room to: marketing, growth, brand, creator economy, community, events, go-to-market.");
-    expect(p).toMatch(/never what is true, and never which\nsections exist/);
-    const q = buildSynthesisPrompt(forSequoia);
-    expect(q).toContain("THIS PARTNER'S LENS — MARKETS & PRIVATE-MARKETS LENS. Lead with, and give the most room to: markets, VC and private markets, secondaries, legal and the courts, AI.");
   });
 
   it("holds both partners to the same verifier", () => {

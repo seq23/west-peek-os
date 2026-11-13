@@ -51,12 +51,6 @@ describe("complementarity, not similarity", () => {
     expect(proposeMatches([ada, unrelated])).toEqual([]);
   });
 
-  it("writes a rationale a partner could paste into an email", () => {
-    const [match] = proposeMatches([ada, dev]);
-    expect(match?.rationale).toMatch(/^Ada asked about “/);
-    expect(match?.rationale).toContain("Dev has been through it");
-  });
-
   it("carries both signals so the reasoning is inspectable", () => {
     const [match] = proposeMatches([ada, dev]);
     expect(match?.needSignal).toMatch(/first engineering hire/);

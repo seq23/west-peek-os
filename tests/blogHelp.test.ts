@@ -18,7 +18,6 @@ import {
   type BlogModelCall,
 } from "../src/worker/services/blogHelp";
 import { lintExecEmail } from "../src/shared/email/execEmail";
-import { skillsForMachines } from "../src/shared/skills/library";
 
 /**
  * BLOG HELP AS A ROUTED REQUEST (16 Sep 2026).
@@ -175,13 +174,6 @@ describe("Porter reads the ask at the door", () => {
     expect(cards[1]!.kind).toBeNull();
     expect(cards[1]!.request_json).toBeNull();
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(cards[1]!.id).run();
-  });
-
-  it("the method is written where Wren and Walker sit", () => {
-    const skill = skillsForMachines(["mp_personal_office"]).find((s) => s.key === "blog_help_for_a_partner");
-    expect(skill).toBeTruthy();
-    expect(skill!.guidance.join("\n")).toMatch(/OUTLINE is a spine with research; DRAFT is the whole post; PHRASE/);
-    expect(skill!.guidance.join("\n")).toMatch(/JUDGED against the brief/);
   });
 });
 

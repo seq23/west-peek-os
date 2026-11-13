@@ -19,12 +19,13 @@ describe("migration 0001 — schema + seeds", () => {
     expect(row?.migration).toBe("0001_runtime_identity");
   });
 
-  it("seeds the eight application roles", async () => {
+  it("seeds the eight application roles, and the developer role added by 0301", async () => {
     const rows = await t.db.prepare("SELECT key FROM role ORDER BY key").all<{ key: string }>();
     expect((rows.results ?? []).map((r) => r.key)).toEqual([
       "ACCOUNTANT_AUDITOR",
       "COMPLIANCE_OFFICER",
       "COUNSEL",
+      "DEVELOPER",
       "FINANCE_AUTHORITY",
       "FUND_ADMINISTRATOR",
       "INVESTMENT_TEAM",
@@ -33,18 +34,19 @@ describe("migration 0001 — schema + seeds", () => {
     ]);
   });
 
-  it("seeds both Managing Partners as firm users with the MANAGING_PARTNER role", async () => {
+  it("seeds both Managing Partners as firm users with the MANAGING_PARTNER role; the developer role is the owner's alone (0301)", async () => {
     const rows = await t.db
       .prepare(
         `SELECT fu.email, fu.full_name, r.key AS role_key
            FROM firm_user fu
            JOIN firm_user_role fur ON fur.firm_user_id = fu.id
            JOIN role r ON r.id = fur.role_id
-          ORDER BY fu.email`,
+          ORDER BY fu.email, r.key`,
       )
       .all<{ email: string; full_name: string; role_key: string }>();
     expect(rows.results).toEqual([
       { email: "scooter@westpeek.ventures", full_name: "Scooter Taylor", role_key: "MANAGING_PARTNER" },
+      { email: "sequoia@westpeek.ventures", full_name: "Sequoia Taylor", role_key: "DEVELOPER" },
       { email: "sequoia@westpeek.ventures", full_name: "Sequoia Taylor", role_key: "MANAGING_PARTNER" },
     ]);
   });

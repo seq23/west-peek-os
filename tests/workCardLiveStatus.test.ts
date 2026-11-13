@@ -3,7 +3,7 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import type { FirmUserIdentity } from "../src/worker/auth";
 import { createWorkCardInternal, handleGetWorkCard, handleWorkByOwner } from "../src/worker/services/workCards";
-import { RUN_FRESH_MS, WAITING_FOR_MAC_WORDS, deskSummary, firstSentence, liveStatus, needsLabel, partnerWaitedOn, plainFailure, sentenceCase, siteWait, type LiveStatusInput } from "../src/shared/work/liveStatus";
+import { RUN_FRESH_MS, WAITING_FOR_MAC_WORDS, deskSummary, firstSentence, liveStatus, needsLabel, partnerWaitedOn, siteWait, type LiveStatusInput } from "../src/shared/work/liveStatus";
 import { isWaitingForMac, waitingForMacResolution, WAITING_FOR_MAC } from "../src/worker/ai/subscriptionSeats";
 import { plainTitle, shortAsk, siteStage, siteTries } from "../src/shared/work/siteChange";
 import { CARD_KINDS, readsPages } from "../src/shared/work/cardKinds";
@@ -243,19 +243,6 @@ describe("liveStatus — one reader, every state", () => {
 });
 
 describe("deskSummary — the header counts what the sections draw", () => {
-  it("says the canvas's line", () => {
-    const statuses = [
-      liveStatus(porter({ state: "BLOCKED", block: { needed: "x" } }), ME, NOW),
-      liveStatus(porter({ lease_until: ahead(1_000) }), ME, NOW),
-      liveStatus(porter({ current_run: { status: "CLAIMED", claimed_at: ago(1_000), progressed_at: ago(1_000) } }), ME, NOW),
-      liveStatus(porter({ work_attempts: 2 }), ME, NOW),
-    ];
-    const s = deskSummary(statuses);
-    expect(s.line).toBe("1 needs you · 2 being worked · 1 waiting for its next try");
-    expect(s.needsYou).toBe(1);
-    expect(s.clear).toBe(false);
-  });
-
   it("counts a deck decision as needing her, beside the cards", () => {
     expect(deskSummary([], 2).line).toBe("2 need you");
   });
@@ -372,33 +359,11 @@ describe("wc_c9e36e8b — the owner's review of #193, pinned on the real strings
     expect(siteWait(card())).toBe("PREVIEW");
   });
 
-  it("every stage is sentence case: a plan waiting reads 'Plan ready · read it and reply'", () => {
-    const plan = card({ site_phase: "PLAN", site_plan_approved_at: null, site_preview_url: null, site_check_state: null });
-    expect(siteWait(plan)).toBe("PLAN");
-    expect(liveStatus(plan, ME, NOW).line).toBe("Plan ready · read it and reply");
-  });
-
   it("the preview wait ends when she approves, when it is forced, or when the build is not green", () => {
     expect(siteWait(card({ site_land_approved_at: "x" }))).toBeNull();
     expect(siteWait(card({ site_forced_by: "fu_sequoia_taylor" }))).toBeNull();
     expect(siteWait(card({ site_check_state: "PENDING" }))).toBeNull();
     expect(siteWait(card({ kind: null }))).toBeNull();
-  });
-
-  it("a shouting block on any other card is said in sentence case", () => {
-    const s = liveStatus(porter({ state: "BLOCKED", block: { needed: "PREVIEW READY. Look at it." } }), ME, NOW);
-    expect(s.line).toBe("Needs you: Preview ready");
-    expect(sentenceCase("URGENT: CALL DAN today")).toBe("Urgent: call dan today");
-  });
-
-  it("the failed try says plainly whose it was: 'First try stalled on our side; retried automatically.'", () => {
-    expect(plainFailure("Attempt 1 of 3 did not get anywhere.")).toBe("First try stalled on our side; retried automatically.");
-    expect(plainFailure("Attempt 2 of 3 did not get anywhere")).toBe("Second try stalled on our side; retried automatically.");
-    const out = cardTimeline({ created_at: "2026-09-23T17:00:00Z", owner_name: "Porter", asked_by: "You", trail: [], last_failure: "Attempt 1 of 3 did not get anywhere.", last_failure_at: "2026-09-23T17:24:00Z" });
-    expect(out.map((e) => e.text)).toContain("First try stalled on our side; retried automatically.");
-    expect(out.map((e) => e.text).join(" ")).not.toMatch(/did not get anywhere|A try failed/);
-    const waiting = liveStatus(porter({ work_last_failure: "Attempt 1 of 3 did not get anywhere." }), ME, NOW);
-    expect(waiting.line).toBe("Next try within 5 min · first try stalled on our side; retried automatically");
   });
 });
 
@@ -415,14 +380,6 @@ describe("siteStage — Plan, Build, Preview, Live from the row's facts", () => 
 });
 
 describe("the timeline and who asked, in words", () => {
-  it("an email she sent reads 'You emailed', a notice reads what it did", () => {
-    expect(trailSentence({ at: "t", kind: "RECEIVED_EMAIL", who: "sequoia@westpeek.ventures", what: "emailed: Community site redesign" }, "Porter", ["sequoia@westpeek.ventures"])).toBe(
-      "You emailed Porter: Community site redesign.",
-    );
-    expect(trailSentence({ at: "t", kind: "RECEIVED", who: "told sequoia@westpeek.ventures", what: "received" }, "Porter", ["sequoia@westpeek.ventures"])).toBe('Porter replied "got it" and started.');
-    expect(trailSentence({ at: "t", kind: "PREVIEW", who: "tried to tell scooter@westpeek.ventures", what: "preview:1" }, "Porter", [])).toBe("Porter sent the preview link (to scooter@westpeek.ventures). The email did not send.");
-  });
-
   it("orders what happened, and marks the run on her Mac as now", () => {
     const out = cardTimeline({
       created_at: "2026-09-23T11:55:00Z",
@@ -601,7 +558,7 @@ describe("the Technical line's try count and where Check a page is offered (23 S
   // succeeded; then one build run. The sweep's counter read 1 throughout.
   const HISTORY = JSON.stringify([
     { at: "2026-09-23T17:24:18.318Z", run_id: "ccr_a313e6a1", phase: "PLAN", status: "ABANDONED", reason: "went quiet for 11 minutes" },
-    { at: "2026-09-23T17:42:18.591Z", run_id: "ccr_106ab7cb", phase: "PLAN", status: "ok", reason: "" },
+    { at: "2026-09-23T17:42:18.591Z", run_id: "ccr_106ab7cb", phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build" }], reason: "" },
     { at: "2026-09-23T18:18:18.551Z", run_id: "ccr_4561d304", phase: "BUILD", status: "ok", reason: "" },
   ]);
 

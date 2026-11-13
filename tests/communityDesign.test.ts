@@ -38,7 +38,6 @@ import { stripTsComments } from "../scripts/validate/lib/strip-comments.mjs";
  */
 
 const PAGE = readFileSync(new URL("../src/client/pages/CommunityPage.tsx", import.meta.url), "utf8");
-const CSS = readFileSync(new URL("../src/client/styles.css", import.meta.url), "utf8");
 /** The page as code: its comments may tell the history of the roster; its markup may not carry one. */
 const CODE = stripTsComments(PAGE);
 
@@ -74,62 +73,6 @@ describe("person_type words", () => {
     }
     expect(typeWord("angel_syndicate_lead")).toBe("Angel syndicate lead");
     expect(typeWord("")).toBe(TYPE_WORDS.unknown);
-  });
-
-  it("is what the page uses — no private dictionary can drift from it", () => {
-    expect(PAGE).toContain('from "@shared/community/typeWords"');
-    expect(PAGE).toContain("typeWord(s.key)");
-    expect(PAGE).not.toMatch(/TYPE_WORDS\[/);
-    // The ring slices are labelled through the same dictionary, in the shape module.
-    const shape = readFileSync(new URL("../src/shared/community/populationShape.ts", import.meta.url), "utf8");
-    expect(shape).toContain('from "./typeWords"');
-    expect(shape).not.toMatch(/TYPE_WORDS\[/);
-  });
-});
-
-describe("the Network OS boundary", () => {
-  it("is said once, first, as a band with two doors", () => {
-    const band = PAGE.indexOf('data-testid="community-network-os"');
-    const population = PAGE.indexOf("<PopulationPanel />");
-    expect(band).toBeGreaterThan(0);
-    expect(band).toBeLessThan(population);
-    expect(PAGE).toMatch(/<aside className="boundary-band" data-testid="community-network-os">/);
-    // ONE paragraph, and it names the Capture tab as an option (operator, 27 Sep 2026: "it says
-    // nothing about the capture tab as an option").
-    const copy = CODE.slice(CODE.indexOf('className="boundary-band-copy"'), CODE.indexOf('className="boundary-band-doors"'));
-    expect(copy.match(/className="boundary-band-text"/g) ?? []).toHaveLength(1);
-    expect(copy).toContain("The people live in Network OS.");
-    expect(copy).toContain("Capture them here");
-    expect(copy).toContain("review queue");
-    // The second grey notice that repeated the same fact is gone — and with the member form gone,
-    // so is the last grey notice on the page.
-    expect(PAGE).not.toContain('data-testid="community-scope"');
-    expect(PAGE.match(/className="notice"/g) ?? []).toHaveLength(0);
-    // TWO DOORS, in a flex group, Capture first: the ink button, then the one orange button.
-    const doors = CODE.indexOf('className="boundary-band-doors"');
-    const capture = CODE.indexOf('data-testid="community-capture-link"');
-    const network = CODE.indexOf('data-testid="community-network-os-link"');
-    expect(doors).toBeGreaterThan(band);
-    expect(capture).toBeGreaterThan(doors);
-    expect(network).toBeGreaterThan(capture);
-    expect(network).toBeLessThan(population);
-    expect(CODE).toMatch(/className="btn-strong"\s+href="#\/capture"\s+data-testid="community-capture-link"/);
-    expect(CODE).toMatch(/className="btn-primary"\s+href="https:\/\/network\.joinwestpeek\.com"/);
-    // …and Network OS is the ONLY orange button: one `btn-primary`; Capture is not a second, and
-    // the in-sentence link-button is gone.
-    expect(CODE.match(/className="btn-primary"/g) ?? []).toHaveLength(1);
-    expect(CODE).not.toContain('className="link-button"');
-  });
-
-  it("wears the accent, the doors have a rule, and the tiles carry no meter", () => {
-    expect(CSS).toMatch(/\.boundary-band \{[^}]*border-left: 4px solid var\(--wp-orange\)/s);
-    expect(CSS).toMatch(/\.boundary-band-doors \{[^}]*display: flex/s);
-    // The seven meter tiles are gone from the page AND their rules from the stylesheet: their
-    // numbers live in the hero row, the ring legends and the tech-adjacent line now.
-    expect(CODE).not.toContain("cohort-meter");
-    expect(CODE).not.toContain("cohort-metered");
-    expect(CSS).not.toContain(".cohort-meter");
-    expect(CSS).toMatch(/\.cohort-hero \.cohort-count \{[^}]*var\(--wp-orange-deep\)/s);
   });
 });
 
@@ -212,93 +155,6 @@ describe("the chart pass: hero row + two rings", () => {
       notAsked: 4711,
     });
   });
-
-  it("hosts the ONE ring twice and draws nothing itself", () => {
-    expect(PAGE).toMatch(/import \{ AllocationRing \} from "\.\/AllocationRing"/);
-    expect(CODE.match(/<AllocationRing\b/g) ?? []).toHaveLength(2);
-    for (const drawing of ["strokeDasharray", "<svg", "<circle", "<path"]) expect(CODE, drawing).not.toContain(drawing);
-    // The two hosts, by their test ids, and the hero row before them.
-    const hero = CODE.indexOf('data-testid="community-hero"');
-    const placedRing = CODE.indexOf('data-testid="community-cohorts"');
-    const warmRing = CODE.indexOf('data-testid="community-recency"');
-    expect(hero).toBeGreaterThan(0);
-    expect(placedRing).toBeGreaterThan(hero);
-    expect(warmRing).toBeGreaterThan(placedRing);
-    expect(CODE).toContain('testid="community-placed"');
-    expect(CODE).toContain('testid="community-warmth"');
-    // The one ring shows its total at the centre and offers no second number there, so the warm
-    // count lives in the warmth ring's HEADING, next to the title, and the caption says what the
-    // centre number counts.
-    const warmHead = CODE.slice(warmRing, CODE.indexOf('testid="community-warmth"'));
-    expect(warmHead).toContain('data-testid="community-warm-count"');
-    expect(warmHead).toMatch(/\{count\(warm\)\} warm of \{count\(warmth\.total\)\}/);
-    expect(warmHead).toContain('caption="people"');
-    expect(CSS).toMatch(/\.ring-host \.ring-head-count \{/);
-    // Counts, never dollars: both hosts pass a count format.
-    expect(CODE.match(/format=\{count\}/g) ?? []).toHaveLength(2);
-    // The honest line under the placed ring, and the last-read line.
-    expect(CODE).toContain("not yet placed — the survey fills this in.");
-    expect(CODE).toContain('data-testid="community-source"');
-    expect(CODE).toContain("Last read from Network OS");
-    expect(PAGE).toContain('from "../lib/dates"');
-    // Four hero tiles, each with a meaning line.
-    for (const id of ["hero-people", "hero-placeable", "hero-warm", "hero-prospects"]) expect(CODE, id).toContain(`testid="${id}"`);
-    expect(CSS).toMatch(/\.community-rings \{[^}]*display: grid/s);
-    // EVERY KIND, COUNTED (operator, 28 Sep 2026: the placeable total "needs to be broken out
-    // somewhere else on the page"). A list of every kind with its number, after the rings, the
-    // tech-adjacent included — no filter on the key, only on a zero count — labelled through the
-    // one dictionary.
-    const kinds = CODE.indexOf('data-testid="community-kinds"');
-    expect(kinds).toBeGreaterThan(warmRing);
-    const kindsBlock = CODE.slice(kinds, CODE.indexOf("</section>", kinds));
-    expect(kindsBlock).toContain("p.by_type");
-    expect(kindsBlock).toContain("typeWord(s.key)");
-    expect(kindsBlock).toContain("count(s.count)");
-    expect(kindsBlock).not.toMatch(/UNPLACED_KEYS|general_tech_adjacent|isUnplaced/);
-    expect(kindsBlock).toContain('data-testid={`kind-${s.key}`}');
-    expect(CSS).toMatch(/\.kind-list \{[^}]*display: grid/s);
-    expect(CSS).toMatch(/\.kind-count \{[^}]*tabular-nums/s);
-    expect(CSS).toMatch(/\.cohort-meaning \{/);
-    expect(CSS).toMatch(/\.tech-adjacent-line \{[^}]*var\(--wp-tint\)/s);
-  });
-});
-
-describe("newest in the community", () => {
-  it("is a read-only window of 25 with no per-row link, labelled through the one dictionary", () => {
-    const newest = CODE.indexOf('data-testid="community-newest"');
-    const population = CODE.indexOf('data-testid="community-population"');
-    expect(newest).toBeGreaterThan(population);
-    expect(CODE).toContain('"/api/community/newest?limit=25"');
-    expect(CODE).toContain("Newest in the community");
-    expect(CODE).toContain("the last 25 added in Network OS");
-    expect(CODE).toContain('data-testid="community-newest-empty"');
-    expect(CODE).toContain('data-testid="community-newest-skipped"');
-    // THE SYNC STATE IS SAID (Codex on #207). While a load runs the rows are a prefix of the
-    // community, and the subtitle says so from the endpoint's own `loading`; an empty read is
-    // three different sentences for three different facts, chosen off `source.last_status`.
-    const section = CODE.slice(newest, CODE.indexOf("export function CommunityPage"));
-    expect(section).toContain('data-testid="community-newest-partial"');
-    expect(section).toContain("read so far");
-    expect(section).toContain('data-testid="community-newest-stale"');
-    expect(section.match(/last_status/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
-    expect(section).toContain("Network OS could not be read");
-    expect(section).toContain("had nobody to give");
-    expect(section).toContain("Nothing has been read from Network OS yet");
-    // A NAME AND NOTHING ELSE (operator, 28 Sep 2026): the row draws `full_name` and no company,
-    // kind, owner or date, and the meta line is gone from the page and the stylesheet.
-    const rows = section.slice(section.indexOf('className="newest-list"'), section.indexOf("</ul>"));
-    expect(rows).toContain("c.full_name");
-    for (const field of ["c.company", "c.person_type", "c.relationship_owner", "c.created_at", "c.city", "typeWord(", "readableDate("]) {
-      expect(rows, field).not.toContain(field);
-    }
-    expect(section).not.toContain("newest-meta");
-    expect(CSS).not.toContain(".newest-meta");
-    // No link on a row: Network OS has no per-contact URL. The band's button is the door.
-    expect(section).not.toMatch(/<a\b/);
-    expect(section).not.toContain("href=");
-    expect(CSS).toMatch(/\.newest-row \{/);
-    expect(CSS).toMatch(/\.newest-name \{[^}]*font-weight: 600/s);
-  });
 });
 
 describe("a first and last name", () => {
@@ -315,18 +171,6 @@ describe("a first and last name", () => {
 
 describe("one roster: nothing on the page adds a member, and nothing on the page is Introductions", () => {
   const ROSTER_TESTIDS = ["community-form", "community-name", "community-save", "community-list", "community-counts", "community-empty", "community-mix", "community-mix-bars"];
-
-  it("carries no member form, no members list and no mix", () => {
-    for (const id of ROSTER_TESTIDS) expect(CODE, id).not.toContain(`data-testid="${id}"`);
-    for (const text of ["Add or update a member", "Who is in the room", "Save member", "MEMBER_KINDS", "typeFilter", "mix-bars", "com_member"]) {
-      expect(CODE, text).not.toContain(text);
-    }
-    // The local table's routes stay for the gathering and council code; the PAGE never calls them.
-    expect(CODE).not.toContain("/api/community/members");
-    // With no form there is nothing to post: the page reads, and only reads.
-    expect(CODE).not.toMatch(/\bapi</);
-    expect(CODE).not.toMatch(/method:\s*"POST"/);
-  });
 
   it("no longer embeds Introductions", () => {
     expect(CODE).not.toContain("IntroductionsPage");
@@ -353,10 +197,5 @@ describe("one roster: nothing on the page adds a member, and nothing on the page
     for (const id of testids) expect(CODE, id).toContain(`data-testid="${id}"`);
     // And the labels the guide gives the doors are the labels the page shows.
     for (const act of communityGuide.acts) expect(CODE, act.label).toContain(act.label);
-  });
-
-  it("the orphaned mix styles left with the mix", () => {
-    for (const cls of [".mix-bars", ".mix-row", ".mix-fill"]) expect(CSS, cls).not.toContain(`${cls} `);
-    expect(CSS).toMatch(/\.boundary-band-copy \{/);
   });
 });

@@ -260,7 +260,14 @@ export interface LocalJobReport {
   /** 0253: what the repo's own config says — the host it serves, its Pages project, its RUNBOOK's secret names, the package's standing constraints. Never from the email. */
   repo_facts?: { repo: string; host?: string | null; pages_host?: string | null; secret_names?: string[]; github_repo?: string | null; runbook_generated?: boolean; constraints?: string[] } | null;
   /** 0253 (addendum 5): work the partner dated for later ("for next week …") — its own card, leased until its week. */
-  deferred?: Array<{ ask: string; due_at: string; words?: string }>;
+  /**
+   * `site_change` (#363, 13 Nov 2026): true only when the later work is a change to THIS job's own
+   * site and repo; then it becomes a site job there. Anything else (work in another system, for
+   * another employee) is a plain dated card, never forced into a site job on the source repo.
+   */
+  deferred?: Array<{ ask: string; due_at: string; words?: string; site_change?: boolean }>;
+  /** #363: PLAN only. One line per thing the partner asked for: built in this job, a question, or (partner-dated) later. */
+  accounting?: Array<{ ask: string; how: string }>;
   /** 0253 (addendum 6): several asks in one email → one done-line per item, partial completion stated per item. */
   items?: Array<{ item: string; state: "done" | "partial" | "not_done"; note?: string }>;
   /**
@@ -385,6 +392,18 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
     ...(Array.isArray(r.parts) ? { parts: readPartReports(r.parts) } : {}),
     ...(Array.isArray(r.missing_materials) ? { missing_materials: readMissingMaterials(r.missing_materials) } : {}),
     ...(Array.isArray(r.assets) ? { assets: strs(r.assets) } : {}),
+    /*
+     * #363: THIS READER IS AN ALLOW-LIST, AND `deferred` WAS NEVER ON IT. From 0253 to 13 Nov 2026 the
+     * Mac wrote the partner's dated later work into the report, the plan email told him it was "its
+     * own card", and the field was dropped right here, so `deferWork` never ran: no card, no trace.
+     * EVERY entry is carried, even a malformed one, so `deferWork` can fail loudly on the source card
+     * instead of this reader thinning the list in silence.
+     */
+    ...(Array.isArray(r.deferred) ? { deferred: readDeferred(r.deferred) } : {}),
+    // #363: the plan's per-ask accounting (`shared/work/everyAsk.ts` holds the plan to it).
+    ...(Array.isArray(r.accounting)
+      ? { accounting: r.accounting.slice(0, 40).map((a) => { const l = (a && typeof a === "object" ? a : {}) as Record<string, unknown>; return { ask: typeof l.ask === "string" ? l.ask.trim().slice(0, 300) : "", how: typeof l.how === "string" ? l.how.trim().toLowerCase().slice(0, 40) : "" }; }) }
+      : {}),
   };
   // A plan naming placeholders is not publish-ready whatever the flag says: the list is the fact.
   if (report.phase === "PLAN" && (report.placeholders?.length ?? 0) > 0) report.publish_ready = false;
@@ -392,6 +411,20 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
   if (report.status === "unchanged" && !report.materials) return { report: null, problem: "an unchanged report must carry the material set it compared" };
   if (report.status !== "ok" && report.status !== "unchanged" && !report.reason) return { report: null, problem: `a ${report.status} report must say why` };
   return { report, problem: null };
+}
+
+/** The report's dated later work, entry for entry: nothing is dropped here (see the reader). */
+function readDeferred(v: unknown[]): NonNullable<LocalJobReport["deferred"]> {
+  return v.slice(0, 5).map((raw) => {
+    const d = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    const words = typeof d.words === "string" && d.words.trim() ? d.words.slice(0, 200) : undefined;
+    return {
+      ask: typeof d.ask === "string" ? d.ask.trim().slice(0, 1200) : "",
+      due_at: typeof d.due_at === "string" ? d.due_at.trim() : "",
+      ...(words ? { words } : {}),
+      ...(typeof d.site_change === "boolean" ? { site_change: d.site_change } : {}),
+    };
+  });
 }
 
 /** A multi-repo report's parts, read as strictly as the report: a part without a repo is dropped. */

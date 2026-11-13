@@ -418,8 +418,13 @@ export async function recordHeartbeat(
     `INSERT INTO subscription_seat_device (seat, device_id, hostname, agent_version, last_seen_at, capabilities_json, first_seen_at)
      VALUES (?6, ?1, ?2, ?3, ?4, ?5, ?4)
      ON CONFLICT (seat, device_id) DO UPDATE SET
-       hostname          = excluded.hostname,
-       agent_version     = excluded.agent_version,
+       /*
+        * AND THE SAME FOR WHO THE DEVICE IS (#355). The claim route's heartbeat names neither, so it
+        * blanked both on every claim — and agent_version is where a runner says it cannot update
+        * its code, which the health board reads. Silence leaves the last word standing.
+        */
+       hostname          = COALESCE(excluded.hostname, subscription_seat_device.hostname),
+       agent_version     = COALESCE(excluded.agent_version, subscription_seat_device.agent_version),
        last_seen_at      = excluded.last_seen_at,
        /*
         * A CALLER THAT SAYS NOTHING ABOUT CAPABILITIES LEAVES THEM ALONE (0246). The claim route writes

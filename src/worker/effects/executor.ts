@@ -155,7 +155,7 @@ async function brandMailAsOwner(
   env: Env,
   requestId: string,
   receiptId: string | undefined,
-  message: { to: string; cc?: readonly string[]; subject: string; text: string; replyTo?: readonly string[]; attachments?: readonly EmailAttachment[]; inReplyTo?: string; threadId?: string },
+  message: { to: string; cc?: readonly string[]; subject: string; text: string; replyTo?: readonly string[]; attachments?: readonly EmailAttachment[]; inReplyTo?: string; threadId?: string; references?: readonly string[] },
 ): Promise<EmailSendResult> {
   // Owner ruling, 4 Nov 2026 (widened 6 Nov 2026): only the drip's follow-ups (steps 2 to 4) may pass without HER decision.
   const followUp = await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_drip_message WHERE effect_request_id = ?1 AND step BETWEEN ?2 AND ?3")
@@ -166,6 +166,17 @@ async function brandMailAsOwner(
         AND a.object_type = 'external_effect_request' AND a.object_id = ?2 AND lower(u.email) = ?3`,
   ).bind(receiptId, requestId, TLC_OWNER.email.toLowerCase()).first() : null;
   if (!followUp && !herApproval) throw new Error("TLC_BRAND_OWNER_APPROVAL_REQUIRED: nothing sent; this email needs her approval");
+  /*
+   * WYNN NEVER DROPS THE THREAD (owner, 13 Nov 2026: "the pinecone latest email did not go in the thread it should
+   * have … never drop the thread!!!"). Only a brand's very first email (the drip's step 1) starts a conversation.
+   * Every other email to a brand (a follow-up, an answer, a proposal, a pricing resend) is a reply ON that brand's
+   * conversation: it carries Gmail's conversation id AND the Message-ID it answers. One without both is refused here,
+   * at the one door every brand email leaves by, and nothing goes out.
+   */
+  const firstEmail = await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_drip_message WHERE effect_request_id = ?1 AND step = 0").bind(requestId).first();
+  if (!firstEmail && !(message.threadId && message.inReplyTo)) {
+    throw new Error("NAMED STOP [TLC_BRAND_THREAD_REQUIRED]: nothing sent; this email is not a reply on the brand's conversation thread");
+  }
   // Reply-all: a copied address is held to the outside-mail rule exactly like `to` (each one on her approval).
   assertPreviewLane(env, { to: message.to, ...(message.cc?.length ? { cc: message.cc } : {}), subject: message.subject, text: message.text });
   const token = await serviceAccountToken(env, [GMAIL_COMPOSE_SCOPE], TLC_OWNER.email);
@@ -183,6 +194,7 @@ async function brandMailAsOwner(
     ...(message.attachments?.length ? { attachments: message.attachments } : {}),
     ...(message.inReplyTo ? { inReplyTo: message.inReplyTo } : {}),
     ...(message.threadId ? { threadId: message.threadId } : {}),
+    ...(message.references?.length ? { references: message.references } : {}),
   });
   return { sent: true, provider: "gmail", provider_message_id: sent.id, gmail_thread_id: sent.threadId, rfc_message_id: sent.messageId, detail: `Delivered to ${message.to} as ${TLC_OWNER.email} through her own Gmail (copy to ${INTAKE_MAILBOX})` };
 }
@@ -203,7 +215,7 @@ async function brandMailAsOwner(
 async function performEffect(env: Env, request: ExternalEffectRequestRow, receiptId?: string): Promise<SimulatedDelivery> {
   const cloudflareReady = isCloudflareEmailEnabled(env);
   if (request.effect_type === "email.send" && (cloudflareReady || isEmailSendEnabled(env))) {
-    const payload = JSON.parse(request.payload_json || "{}") as { subject?: string; text?: string; body?: string; reply_to?: unknown; attachments?: unknown; in_reply_to?: unknown; gmail_thread_id?: unknown };
+    const payload = JSON.parse(request.payload_json || "{}") as { subject?: string; text?: string; body?: string; reply_to?: unknown; attachments?: unknown; in_reply_to?: unknown; gmail_thread_id?: unknown; references?: unknown };
     // WHOSE NAME IS ON IT. A partner who has turned on "send as me" has their approved messages go
     // out under their own address instead of the firm's; everyone else, and every unattributed
     // request, stays as the firm. Resolved from the person who REQUESTED the effect rather than
@@ -260,6 +272,7 @@ async function performEffect(env: Env, request: ExternalEffectRequestRow, receip
       ...(attachments.length && attachmentsBytes(attachments) <= OUTBOUND_ATTACHMENTS_MAX_BYTES ? { attachments } : {}),
       ...(typeof payload.gmail_thread_id === "string" && /^[a-zA-Z0-9_-]{1,200}$/.test(payload.gmail_thread_id) ? { threadId: payload.gmail_thread_id } : {}),
       ...(typeof payload.in_reply_to === "string" && /^[^\s<>]{3,300}$/.test(payload.in_reply_to) ? { inReplyTo: payload.in_reply_to } : {}),
+      ...(Array.isArray(payload.references) ? { references: payload.references.filter((x): x is string => typeof x === "string" && /^[^\s<>]{3,300}$/.test(x)).slice(-30) } : {}),
     };
     // THROUGH THE PARTNER'S OWN GMAIL WHEN THEY HAVE GRANTED IT. Mail sent under a partner's address
     // via the firm transport is legitimate and arrives, but Gmail has never heard of it — so it is

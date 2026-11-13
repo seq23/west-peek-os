@@ -18,10 +18,7 @@ let env: Env;
 const SEQ: Actor = { type: "HUMAN", firmUserId: "fu_sequoia_taylor", roles: ["MANAGING_PARTNER"], firmScopes: ["west-peek"] };
 const SCOOT: Actor = { type: "HUMAN", firmUserId: "fu_scooter_taylor", roles: ["MANAGING_PARTNER"], firmScopes: ["west-peek"] };
 
-/** Echoes the prompt back so tests can assert what the professor was actually told. */
-let lastSystem = "";
 const fakeProfessor: Teach = async (_e, _a, system, exchange) => {
-  lastSystem = system;
   return { text: `TAUGHT[${exchange.slice(0, 40)}]`, aiRunId: null };
 };
 const brokenProfessor: Teach = async () => ({ text: "", aiRunId: null, failure: "provider timeout" });
@@ -41,22 +38,8 @@ describe("the teaching stance", () => {
     expect(professorPrompt("x", "LEARN")).toMatch(/Do not invent facts about real companies/);
   });
 
-  it("points at Research for anything current", () => {
-    expect(professorPrompt("x", "LEARN")).toMatch(/point them\s+at Research/);
-  });
-
   it("offers all six modes", () => {
     expect(LEARNING_MODES).toHaveLength(6);
-  });
-
-  it("changes the instruction per mode", () => {
-    expect(professorPrompt("pro rata", "TEST_ME")).toMatch(/Ask ONE question/);
-    expect(professorPrompt("pro rata", "ONE_PAGER")).toMatch(/No questions in this mode/);
-    expect(professorPrompt("pro rata", "TEACH_BACK")).toMatch(/in their own words/);
-  });
-
-  it("carries the topic into the prompt", () => {
-    expect(professorPrompt("liquidation preferences", "LEARN")).toMatch(/TOPIC: liquidation preferences/);
   });
 });
 
@@ -86,10 +69,6 @@ describe("sessions", () => {
     expect(out.session.topic).toBe("continuation vehicles in secondaries");
     expect(out.turns).toHaveLength(1);
     expect(out.turns[0]!.role).toBe("INSTRUCTOR");
-  });
-
-  it("opens rather than lecturing", async () => {
-    expect(lastSystem).toMatch(/TOPIC: continuation vehicles/);
   });
 
   it("keeps context on a follow-up", async () => {

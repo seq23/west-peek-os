@@ -17,6 +17,12 @@ rulings) are not kept here: they live in the West Peek Ventures company brain in
   When the Mac is offline they log `fetch failed` cycles: that means running without a network,
   not dead. Check `launchctl list | grep westpeek` before treating them as down.
 
+- **How landed code reaches the Mac (#355).** When idle, `local-job-claimer.mjs` (`pullMainIfClean`)
+  puts a clean checkout back on `main` and fast-forwards it; all three pieces then restart
+  themselves on the new HEAD (the listener only with no call open). A checkout it cannot update
+  (uncommitted changes, a diverged main) rides on its heartbeat as `code-stuck:<why>` and shows as
+  the `mac_code` health check, DOWN, which the escalation sends to both partners.
+
 ## How work moves
 
 - **The sweep.** `employee_work_sweep` (every 5 minutes, `src/worker/services/workSweep.ts`) claims
@@ -48,6 +54,20 @@ rulings) are not kept here: they live in the West Peek Ventures company brain in
   the same preview is never sent twice.
 - **Reply matching.** Gmail replies carry only the SES Message-ID, so the `Re:`-subject fallback is
   the path that actually matches them.
+- **Wynn never drops a brand's thread** (13 Nov 2026; `services/tlcBrandThread.ts`). Every brand
+  email after the first is a reply on that brand's conversation in her mailbox: an answer on the
+  thread of the brand message it answers, a follow-up on the thread of the last email we sent that
+  address (answering the Message-ID Gmail really gave it; Gmail replaces the one we supply). No
+  conversation found means `NAMED STOP [TLC_BRAND_THREAD_NOT_FOUND]` and nothing goes out; the last
+  door (`brandMailAsOwner` in `effects/executor.ts`) refuses any such email without Gmail's thread
+  id and an In-Reply-To (`TLC_BRAND_THREAD_REQUIRED`).
+- **The same email again after 7 quiet days** (`resendUnanswered` in `services/tlcBrandReply.ts`).
+  Armed one answer at a time, on her word only: one `tlc_setting` row, key
+  `brand_reply_resend:<tlc_brand_reply id>`, value `{"state":"ARMED","due":"<ISO>","note":"<her
+  words>"}`. Each drip pass: any message from the brand cancels it; never before 7 full days after
+  the answer went; then once, the sent request's own subject, words, copies and PDF, on the brand's
+  thread. The run summary carries `pricing follow-ups: OUTPUT <n> resend_sent (...)`; the row keeps
+  what happened; a stop only a person can clear is `STOPPED` there and emailed to her.
 - **"Show me first"** preview is off firm-wide (migration 0258). A held email on Home means a
   per-card tick, not the firm setting.
 

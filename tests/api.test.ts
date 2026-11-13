@@ -81,7 +81,8 @@ describe("GET /api/me", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { fullName: string; roles: string[] };
     expect(body.fullName).toBe("Sequoia Taylor");
-    expect(body.roles).toEqual(["MANAGING_PARTNER"]);
+    // 0301: the owner also holds the developer role; nobody else does (tests/webPropertyChange.test.ts).
+    expect([...body.roles].sort()).toEqual(["DEVELOPER", "MANAGING_PARTNER"]);
   });
 });
 

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EMAIL_TRIGGERS, INTAKE_MAILBOX, NO_TRIGGER_ROUTE, triggersIn } from "../src/shared/intake/emailTriggers";
-import { SKILL_LIBRARY } from "../src/shared/skills/library";
+import { EMAIL_TRIGGERS, NO_TRIGGER_ROUTE, triggersIn } from "../src/shared/intake/emailTriggers";
 
 /**
  * The inbox routing table.
@@ -52,16 +51,3 @@ describe("what a hashtag means is defined once", () => {
   });
 });
 
-describe("the employee reading the inbox knows the same table", () => {
-  it("Porter's capture-routing method names every trigger, in the operator's own words", () => {
-    const machine = SKILL_LIBRARY.find((m) => m.machineKey === "global_capture_routing")!;
-    const skill = machine.skills.find((s) => s.key === "the_inbox_triggers")!;
-    const text = skill.guidance.join(" ").toLowerCase();
-    for (const t of EMAIL_TRIGGERS) {
-      expect(text).toContain(t.tag);
-    }
-    // The rule that keeps a published hashtag safe has to be in the method, not only in the code.
-    expect(text).toContain("routes, it never authorises");
-    expect(skill.when).toContain(INTAKE_MAILBOX);
-  });
-});

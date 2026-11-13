@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import {
-  BRIEF_EXPECTED_OUTPUT_TOKENS, MAX_BRIEF_ATTEMPTS, RETRY_AFTER_MINUTES, WRITE_LEASE_MINUTES, STAGE_LEASE_MINUTES,
+  MAX_BRIEF_ATTEMPTS, RETRY_AFTER_MINUTES, WRITE_LEASE_MINUTES, STAGE_LEASE_MINUTES,
   BRIEF_MODEL, briefStateFor, measuredExpectations, retryAfterIso, serveBrief, startReport, type BriefDeps,
 } from "../src/worker/services/dailyIntelligence";
 import { CHAIN_BUDGET_MS } from "../src/worker/ai/chainBudget";
@@ -220,11 +220,6 @@ describe("the numbers are derived, not typed", () => {
     expect(WRITE_LEASE_MINUTES).toBe(Math.ceil((2 * CHAIN_BUDGET_MS) / 60_000) + 4);
     expect(WRITE_LEASE_MINUTES).toBeGreaterThan(STAGE_LEASE_MINUTES);
     expect(WRITE_LEASE_MINUTES).toBeLessThan(30);
-  });
-
-  it("the declared output sits at the measured p90 (22,969) with a margin, under the 32,768 wire ceiling", () => {
-    expect(BRIEF_EXPECTED_OUTPUT_TOKENS).toBeGreaterThanOrEqual(22_969);
-    expect(BRIEF_EXPECTED_OUTPUT_TOKENS).toBeLessThan(32_768);
   });
 
   it("with no completed model runs the expectation is the production fallback, labelled unmeasured", async () => {

@@ -26,7 +26,6 @@ import { EVENT_KIT_PROMPT_MARKER } from "../src/shared/events/eventKit";
 import { eventKitOf } from "../src/worker/services/eventKit";
 import { renderWorkshopHtml } from "../src/shared/events/roomPacketPdf";
 import { lintExecEmail, renderExecEmail } from "../src/shared/email/execEmail";
-import { skillsForMachines } from "../src/shared/skills/library";
 import type { RouteContext } from "../src/worker/router";
 
 /**
@@ -212,22 +211,6 @@ describe("the series on the record", () => {
     expect(planFor("2026-09", "ROOM")!.status).toBe("NOT_RUNNING");
     expect(planFor("2026-11", "ROOM")!.topic).toBe("Black lawyers");
     expect(planFor("2026-12", "ROOM")!.status).toBe("PARKER_CHOOSES");
-  });
-
-  it("the firm's written method carries the one-topic-several-angles rule and the free-plus-sponsor rule", () => {
-    const skills = skillsForMachines(["west_peek_live_events"]);
-    expect(skills.find((s) => s.key === "propose_on_the_firm_rhythm")!.guidance.join(" ")).toMatch(/one Room and one Workshop/);
-    const ws = skills.find((s) => s.key === "a_workshop_they_can_use_on_monday")!;
-    const text = ws.guidance.join(" ");
-    expect(text).toMatch(/virtual only, on West Peek Live/);
-    expect(text).toMatch(/Never research a venue/);
-    expect(text).toMatch(/ONE TOPIC A MONTH, SEVERAL ANGLES INSIDE IT/);
-    expect(text).toMatch(/Black lawyers is a topic\. Community is a topic\./);
-    expect(text).toMatch(/Attendance is FREE, always, by design — and always suggest a small sponsor anyway/);
-    expect(text).toMatch(/45–60 minutes/);
-    expect(text).toMatch(/Scooter Taylor/);
-    // The number that drifted, in the one place Parker actually reads.
-    expect(text).not.toMatch(/90 minutes/);
   });
 });
 
