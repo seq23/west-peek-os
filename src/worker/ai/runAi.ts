@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { SEAT_WAIT_CODE, isImportantWork, orderSeats } from "../../shared/ai/seatOrder";
+import { SEAT_WAIT_CODE, isImportantWork, ladderFor, orderFreeLanes, orderSeats, workClassOf } from "../../shared/ai/seatOrder";
 import { appendEvent } from "../events";
 import type { Actor } from "../services/authorize";
 import type { PrivacyLabel } from "../../shared/privacy";
@@ -2024,10 +2024,9 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    */
   const searchOnSeat = requiresSearch && searchSeatKeys.size > 0 && !input.images?.length && !input.documents?.length;
   /*
-   * HER SEAT ORDER (owner, 26 Oct 2026; shared/ai/seatOrder.ts). Important work — private content, a confidential
-   * call, or a call named `important` — leads on Claude Code, then Codex, and never takes a free lane. Every other
-   * judgement call leads on Codex (her ChatGPT plan, "unused basically"), then the free lanes; the Claude seat is
-   * kept for important work. So every judgement call is now offered a seat, not only private and `seatFirst` ones.
+   * HER MODEL ORDER (owner, 26 Oct and 6 Nov 2026; the one table is MODEL_ORDER in shared/ai/seatOrder.ts). Important
+   * work — private content, a confidential call, or a call named `important` — leads on Claude Code and never takes a
+   * free lane. Routine work (everything else) takes the free lanes first, then Codex, then Claude Code, then stops by name.
    */
   const important = isImportantWork({
     publicModelApproved: contentClass.publicModelApproved,
@@ -2040,6 +2039,12 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * a named call keeps its old ladder behind the seats.
    */
   const claudeFirst = important || input.budgetContext?.seatFirst === true;
+  const workClass = workClassOf({
+    publicModelApproved: contentClass.publicModelApproved,
+    confidential: input.budgetContext?.confidential,
+    important: input.budgetContext?.important,
+    seatFirst: input.budgetContext?.seatFirst,
+  });
   const seatsEligible =
     searchOnSeat ||
     (isJudgement &&
@@ -2047,7 +2052,6 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
       (!hasFiles || fileSeatKeys.size > 0)) ||
     // At Free only a seat is a $0, full-quality lane for any call that is not a search: it leads, whatever the call's label.
     (freeOnlyLadder && (!hasFiles || fileSeatKeys.size > 0));
-  const privateContent = !contentClass.publicModelApproved;
   const seatAvailability = orderSeats(!seatsEligible
     ? []
     : requiresSearch
@@ -2062,7 +2066,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
               ? { ...a, available: false, reason: `the ${SEAT_REGISTRY[a.seat].displayName} seat is awake but its claimer has not proved it can read ${fileKinds.map((k) => (k === "image" ? "a picture" : "a document")).join(" and ")} on this machine, so it took no part in this call` }
               : a,
           )
-        : await allSeatAvailability(env, now), claudeFirst, privateContent);
+        : await allSeatAvailability(env, now), workClass);
   const awakeSeatKeys = new Set(seatAvailability.filter((a) => a.available).map((a) => a.seat as string));
   /*
    * IMPORTANT WORK THAT HAS WAITED LONG ENOUGH (owner, 5 Nov 2026). Set below when non-confidential important work
@@ -2821,8 +2825,8 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
             ? ` This is important work, so it leads on the subscription seats (Claude Code, then Codex) and never on a free lane, `
             : claudeFirst
               ? ` This call was named to lead on the subscription seats (Claude Code, then Codex) before any free or paid lane, `
-              : ` This is routine work, so it leads on the Codex seat (her ChatGPT plan) before the free lanes, `) +
-          `so it leads on a seat she already pays for at no cost: ${awake.join("; ")}.`
+              : ` This is routine work: the free lanes go first where one may carry it, then the Codex seat, then the Claude Code seat, `) +
+          `so a seat she already pays for stands in this run at no cost: ${awake.join("; ")}.`
         : ` This call may not use a training-permitting lane, and the subscription seats do not train on what they are ` +
           `sent, so it leads on a seat she already pays for at no cost: ${awake.join("; ")}.`;
       // Said even when it changed nothing, so "why did this cost money" is answerable from the run.
@@ -2889,13 +2893,8 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
      * model behind it is 550B with a million-token window. Gemini's unpaid quota second. Anything
      * else after, in catalogue order.
      */
-    const FREE_LANE_ORDER = ["openrouter_free", "google_free"];
-    freeOptions.sort((a, b) => {
-      const ai = FREE_LANE_ORDER.indexOf(a.provider.provider_key);
-      const bi = FREE_LANE_ORDER.indexOf(b.provider.provider_key);
-      return (ai < 0 ? FREE_LANE_ORDER.length : ai) - (bi < 0 ? FREE_LANE_ORDER.length : bi);
-    });
-    for (const o of freeOptions) {
+    // The order is the class's row in MODEL_ORDER (shared/ai/seatOrder.ts): routine work asks Gemini free first.
+    for (const o of orderFreeLanes(freeOptions, workClass, (f) => f.provider.provider_key)) {
       const candidate: RoutingCandidate = {
         providerId: o.provider.id,
         providerKey: o.provider.provider_key,
@@ -3072,46 +3071,33 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * model that refuses the request on its merits does not get quietly repaid for at frontier
    * prices, while a free tier that has run out (429) does.
    */
-  const paidHeadAsFallback: FallbackOption[] =
-    // A head that IS a seat (FREE_ONLY, private work) is already the lead in `seatLanes`; its own
-    // adapter is the refusal built for a wiring mistake, and must never be offered as a fallback.
-    (freeLanes.length > 0 || seatLanes.length > 0) && !isSeat(head.providerKey)
-      ? [{ candidate: head, adapter, engageOn: "OUTAGE", estimate }]
-      : [];
+  // A head that IS a seat (FREE_ONLY, private work) is already in `seatLanes`; its own adapter is the refusal built
+  // for a wiring mistake, and must never be offered as a fallback.
+  const headOption: FallbackOption[] = isSeat(head.providerKey) ? [] : [{ candidate: head, adapter, engageOn: "OUTAGE", estimate }];
 
   /*
-   * THE ORDER OF LAST RESORT, and each step is a smaller concession than the one after it:
-   * another free lane → the paid head → the policy's own next choice → THE SAME MODEL at its own
-   * vendor → any other adequate lane that is working. Quality is surrendered as late as possible,
-   * and the direct vendor lanes sit behind OpenRouter here exactly as they do in selection.
+   * THE ORDER OF THE WHOLE CHAIN IS ONE RULE: `ladderFor` over MODEL_ORDER (shared/ai/seatOrder.ts).
+   * Routine work: the free lanes, then the Codex seat, then the Claude Code seat, then whatever the spend lever leaves
+   * (nothing at Free only: the run stops with the last lane's named reason). Named and important work: her seats first.
+   * A seat lane exists only for a seat that is awake and entitled to this run, so a shut laptop adds no wait. A
+   * live-search call or one carrying a file starts at the seats: no free lane can serve it.
+   * Behind the lead, each step is a smaller concession than the one after it: the chosen head → the policy's own next
+   * choice → THE SAME MODEL at its own vendor → any other adequate lane that is working.
    */
-  /*
-   * HER MACHINE LEADS WHERE IT IS AWAKE AND ELIGIBLE, AND EVERYTHING ELSE STANDS BEHIND IT
-   * UNCHANGED. `seatLanes` is empty whenever the lane is asleep, absent, or not entitled to
-   * this run, in which case this array is byte-for-byte the chain that landed in 0184 — which is
-   * the property that makes the lane a member rather than a dependency.
-   *
-   * Note what follows it for a PRIVATE_MODEL_ONLY call: `freeLanes` is empty by construction (this
-   * work may not use a training-permitting lane), so the next stop is the paid head. The chain does
-   * not get shorter or weaker; it gains one free frontier step in front of it.
-   */
-  /**
-   * The $0 lanes in the order they are tried, her own machine first. ONE array rather than two
-   * spreads, so the head can never also appear as its own fallback — which is what a hand-written
-   * `slice(1)` on the wrong list quietly does.
-   */
-  const zeroCostLead: FallbackOption[] = [...seatLanes, ...freeLanes];
-
-  const fallbacks: FallbackOption[] = [
-    ...zeroCostLead.slice(1),
-    ...paidHeadAsFallback,
-    ...policyFallbacks,
-    ...outageFallbacks,
-    ...lastResortFallbacks,
-  ];
-
-  /** What actually runs first: her Mac if it is awake, then a free lane, then the chosen model. */
-  const lead = zeroCostLead[0];
+  const behindIsFree = behaviour.freeOnly && !requiresSearch && !hasFiles;
+  const chain: FallbackOption[] = ladderFor(workClass, {
+    free: freeLanes,
+    seats: seatLanes,
+    behind: [...headOption, ...policyFallbacks, ...outageFallbacks, ...lastResortFallbacks].filter(
+      (f) => !(behindIsFree && workClass === "ROUTINE" && isSeat(f.candidate.providerKey)),
+    ),
+    behindIsFree,
+  });
+  /** What actually runs first. Undefined when the chosen head itself leads: it runs as selected. */
+  const first = chain[0];
+  const freeFirst = workClass === "ROUTINE" && behindIsFree;
+  const lead = first && first !== headOption[0] && (freeLanes.includes(first) || seatLanes.includes(first) || freeFirst) ? first : undefined;
+  const fallbacks: FallbackOption[] = lead || (first && first === headOption[0]) ? chain.slice(1) : chain;
   if (outageFallbacks.length > 0) {
     explanation +=
       ` Direct-vendor fallback is available for this call (${outageFallbacks
@@ -3132,7 +3118,11 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * "why did this cost money today" becomes unanswerable on exactly the days it matters.
    */
   explanation += seatNote + requiredNote;
-  if (seatLanes.length > 0 && lead === seatLanes[0]) {
+  if (lead && lead !== seatLanes[0] && seatLanes.length > 0 && workClass === "ROUTINE") {
+    explanation +=
+      ` A free lane is tried first for this routine call (${lead.candidate.providerKey}/${lead.candidate.model}); if the free lanes ` +
+      `do not answer, the run moves on to the ${seatLanes.map((f) => isSeat(f.candidate.providerKey) ? SEAT_REGISTRY[f.candidate.providerKey].displayName : f.candidate.providerKey).join(" seat, then the ")} seat inside this same run and the handover is recorded.`;
+  } else if (seatLanes.length > 0 && lead === seatLanes[0]) {
     const behind = seatLanes.length > 1 ? `the other seat, then ` : "";
     const freeStep = freeLanes.length > 0 ? `the free lanes (${freeLanes.map((f) => f.candidate.model).join(", ")}), then ` : "";
     // A head that is itself a seat (FREE_ONLY, private work) has nothing further to hand on to.

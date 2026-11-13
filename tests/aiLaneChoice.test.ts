@@ -640,7 +640,9 @@ describe("the money: what actually runs, and what it costs", () => {
      * free lanes simply did not exist until migration 0178, which landed the same day. This asserts
      * the outcome rather than the intention.
      */
+    // Routine work asks Gemini free first, then OpenRouter free (6 Nov 2026; MODEL_ORDER in shared/ai/seatOrder.ts).
     const { fetchImpl, seen } = hostRouter({
+      "generativelanguage.googleapis.com": () => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "the brief" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 10 } }), { status: 200, headers: { "content-type": "application/json" } }),
       "openrouter.ai": openRouterAnswers("nvidia/nemotron-3-ultra-550b-a55b:free", "the brief"),
     });
     const env = makeTestEnv(t.db, { OPENROUTER_API_KEY: "or", GEMINI_API_KEY: "g" });
@@ -657,12 +659,12 @@ describe("the money: what actually runs, and what it costs", () => {
     );
 
     expect(run.status).toBe("COMPLETED");
-    expect(run.model).toContain(":free");
     const usage = JSON.parse(run.actual_usage_json!) as { cost_usd: number };
     expect(usage.cost_usd).toBe(0);
-    expect(seen).toEqual(["openrouter.ai"]);
+    expect(seen, "Gemini free answered first, and nothing else was asked").toEqual(["generativelanguage.googleapis.com"]);
 
     const routing = await routingFor(run.id);
+    expect(routing.attempts.find((a) => a.outcome === "COMPLETED")?.provider_key).toBe("google_free");
     // The paid head is still behind it, so a free tier running out does not cost her the brief.
     expect(routing.explanation).toContain("Free frontier capacity is tried first");
     expect(routing.explanation).toContain("falls through to");

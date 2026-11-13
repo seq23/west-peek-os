@@ -81,6 +81,9 @@ const PUBLIC_CALL = {
   budgetContext: { expectedOutputTokens: 200, judgement: true, publicModelApproved: true },
 };
 
+/** Public work she named to lead on her seats (`seatFirst`). Routine public work takes a free lane first (6 Nov 2026; tests/ladderOrder.test.ts). */
+const SEAT_FIRST_PUBLIC_CALL = { ...PUBLIC_CALL, budgetContext: { ...PUBLIC_CALL.budgetContext, seatFirst: true } };
+
 const openRouterAnswers = (model: string, text: string) => () =>
   new Response(
     JSON.stringify({ model, choices: [{ message: { content: text } }], usage: { prompt_tokens: 10, completion_tokens: 10 } }),
@@ -239,7 +242,7 @@ describe("the two seats are independent, which is the reason there are two", () 
      * THE PUBLIC WORK and Claude Code was not, which the parked row proves directly.
      */
     const stub = anyVendor("answered after the seat did not");
-    await runAi(env(), PUBLIC_CALL, { fetchImpl: stub.fetchImpl });
+    await runAi(env(), SEAT_FIRST_PUBLIC_CALL, { fetchImpl: stub.fetchImpl });
 
     const parked = await t.db.prepare("SELECT seat FROM subscription_seat_run").all<{ seat: string }>();
     const seatsParked = (parked.results ?? []).map((r) => r.seat);
@@ -631,7 +634,7 @@ describe("a seat whose plan is out of usage is skipped until it resets (0245)", 
     await markSeatExhausted(env(), { seat: "claude_code", deviceId: "mac-test", retryAfterSeconds: 3600 });
 
     const stub = anyVendor("SHOULD NOT BE REACHED");
-    const running = runAi(env(), PUBLIC_CALL, { fetchImpl: stub.fetchImpl });
+    const running = runAi(env(), SEAT_FIRST_PUBLIC_CALL, { fetchImpl: stub.fetchImpl });
 
     // Play the Codex claimer: wait for the parked row, claim it, answer it.
     let parkedId: string | null = null;

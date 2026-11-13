@@ -35,7 +35,8 @@ async function setLever(lever: "FREE_ONLY" | "MODERATE" | "OPEN"): Promise<void>
     .run();
 }
 
-function vendors(): { fetchImpl: typeof fetch; models: string[] } {
+/** `free429`: every vendor answers 429. At Free only every vendor lane is a free one, so this is "the free lanes are spent". */
+function vendors(opts: { free429?: boolean } = {}): { fetchImpl: typeof fetch; models: string[] } {
   const models: string[] = [];
   const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     let model = "";
@@ -45,6 +46,7 @@ function vendors(): { fetchImpl: typeof fetch; models: string[] } {
       /* not JSON */
     }
     models.push(model);
+    if (opts.free429) return new Response(JSON.stringify({ error: { message: "rate limited" } }), { status: 429 });
     return new Response(JSON.stringify({ model, choices: [{ message: { content: `ANSWER FROM ${model}` }, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 10 } }), { status: 200, headers: { "content-type": "application/json" } });
   }) as unknown as typeof fetch;
   return { fetchImpl, models };
@@ -104,16 +106,29 @@ beforeEach(async () => {
   await setLever("FREE_ONLY");
 });
 
-describe("Free only: the seats lead, at full quality", () => {
-  it("the owner's card — a PUBLIC judgement call pinned to OpenRouter — is served by a seat, with no vendor call and no warning", async () => {
+describe("Free only: a seat serves at full quality when the free lanes cannot", () => {
+  it("the owner's card — a PUBLIC routine judgement call pinned to OpenRouter — takes a free lane first even with a seat awake (6 Nov 2026)", async () => {
     await awake("codex");
     const c = claimer(["codex"]);
     const v = vendors();
     const { run } = await runAi(env(), ROOM_CALL(), { fetchImpl: v.fetchImpl });
     await c.stop();
     expect(run.status, run.failure_reason ?? "").toBe("COMPLETED");
+    expect(run.output_text).toContain("ANSWER FROM");
+    expect(c.handled, "the seat was not asked while a free lane could answer").toEqual([]);
+    expect(v.models.length, "a free lane was asked").toBeGreaterThan(0);
+    expect((await flag(run.id)).quality_degraded, "an unmeasured free lane says so on the deliverable").toBe(1);
+  }, 60_000);
+
+  it("with the free lanes spent, the same card is served by the seat, with no warning — and nothing paid is asked", async () => {
+    await awake("codex");
+    const c = claimer(["codex"]);
+    const v = vendors({ free429: true });
+    const { run } = await runAi(env(), ROOM_CALL(), { fetchImpl: v.fetchImpl });
+    await c.stop();
+    expect(run.status, run.failure_reason ?? "").toBe("COMPLETED");
     expect(run.output_text).toContain("SEAT ANSWER (codex)");
-    expect(v.models, "nothing was sent to a vendor").toEqual([]);
+    expect(c.handled).toEqual(["codex"]);
     expect((await flag(run.id)).quality_degraded, "a seat is full quality and is never flagged").toBe(0);
   }, 60_000);
 
@@ -154,22 +169,29 @@ describe("Free only, seats away: a free lane carries the work and the warning sa
     expect((await flag(run.id)).quality_degraded).toBe(0);
   }, 60_000);
 
-  it("a seat that is out of usage falls to the free lane in the same run", async () => {
+  it("free lanes spent and Codex out of usage: Claude Code takes the routine call in the same run", async () => {
     await awake("codex");
-    // the seat is awake but reports a spent plan; the free lane takes over inside the one run
+    await awake("claude_code");
+    // Codex is awake but reports a spent plan; Claude Code answers. The free lanes were asked first and had nothing left.
+    const handled: string[] = [];
     let live = true;
     const loop = (async () => {
       while (live) {
-        const run = await claimRun(env(), "mac-test", ["codex"], new Date(), ["ANSWER"], false);
+        const run = await claimRun(env(), "mac-test", ["codex", "claude_code"], new Date(), ["ANSWER"], false);
         if (!run) { await new Promise((r) => setTimeout(r, 20)); continue; }
-        await reportRun(env(), { runId: run.id, deviceId: "mac-test", error: "Codex has run out of usage and said: usage limit reached" });
+        handled.push(run.seat);
+        if (run.seat === "codex") await reportRun(env(), { runId: run.id, deviceId: "mac-test", error: "Codex has run out of usage and said: usage limit reached" });
+        else await reportRun(env(), { runId: run.id, deviceId: "mac-test", outputText: `SEAT ANSWER (${run.seat})` });
       }
     })();
-    const { run } = await runAi(env(), ROOM_CALL(), { fetchImpl: vendors().fetchImpl });
+    const v = vendors({ free429: true });
+    const { run } = await runAi(env(), ROOM_CALL(), { fetchImpl: v.fetchImpl });
     live = false; await loop;
     expect(run.status, run.failure_reason ?? "").toBe("COMPLETED");
-    expect(run.output_text).toContain("ANSWER FROM");
-    expect((await flag(run.id)).quality_degraded).toBe(1);
+    expect(run.output_text).toContain("SEAT ANSWER (claude_code)");
+    expect(handled).toEqual(["codex", "claude_code"]);
+    expect(v.models.length, "the free lanes were asked first").toBeGreaterThan(0);
+    expect((await flag(run.id)).quality_degraded).toBe(0);
   }, 60_000);
 });
 
