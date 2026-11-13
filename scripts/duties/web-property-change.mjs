@@ -67,6 +67,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { CLOUDFLARE_ACCOUNT_ID, classify, proofLine, readRequests } from "./lib/pages-delivery.mjs";
 import { VAULT_INJECTED_VAR, claudeChildEnv, envForRepoRun, strippedNote, vaultLookup } from "../lib/vault-env.mjs";
+import { plainText, privateDocsIn, privateProof, privateSentenceIn } from "../lib/private-proof.mjs";
 import { admittedScripts, constraintsIn, generateRunbook, hostFromRoutes, isProductionRun, productionAsked, withPorterMayRun, likelySecrets, porterMayRun, readWranglerJson, readWranglerToml, runbookSecretNames, secretNamesInSource, vendorPageFor } from "./lib/runbook.mjs";
 import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
 import { CODEX_BUILD_NOTE, codexExecArgs, codexSeatUsable, finishCodexBuild, soonestReset } from "../lib/codex-seat.mjs";
@@ -706,6 +707,54 @@ async function prFor(worktree, branch) {
  * THE PR'S CHANGED FILES (9 Oct 2026), as gh lists them — so the preview email can link /entry and
  * /rules directly instead of only the site root. A failed read is an empty list, never a guess.
  */
+/** #357: gather what `privateProof` needs (manifest paths, the named documents' text, the PR's diff) and return its verdict. */
+async function privateProofFor(job, driveDir, worktree, ctx, jobDir, progress) {
+  const constraints = job?.constraints ?? [];
+  const sentence = privateSentenceIn(constraints);
+  if (sentence === null) return { ok: true, checked: 0, line: null };
+  let paths = [];
+  try {
+    paths = (JSON.parse(readFileSync(path.join(driveDir, "DRIVE_MANIFEST.json"), "utf8")).files ?? []).map((f) => String(f?.path ?? "")).filter(Boolean);
+  } catch {
+    paths = [];
+  }
+  const named = privateDocsIn(paths, sentence);
+  const missing = named.filter((p) => !existsSync(path.join(driveDir, p)));
+  if (missing.length) await fetchDriveAssets(driveDir, missing, ctx, jobDir, progress);
+  const docs = [];
+  for (const p of named) {
+    const file = path.join(driveDir, p);
+    let text = null;
+    try {
+      const raw = readFileSync(file);
+      // A .docx is a zip: its words are in word/document.xml.
+      text = raw.subarray(0, 2).toString("latin1") === "PK" ? plainText((await sh("unzip", ["-p", file, "word/document.xml"], { maxBuffer: 64 * 1024 * 1024 })).stdout) : raw.toString("utf8");
+    } catch {
+      text = null;
+    }
+    docs.push({ path: p, text });
+  }
+  let diff = null;
+  try {
+    // The branch against the base it was cut from (`worktree add … origin/main`), read from git itself: the whole
+    // of what the PR adds, at any size, with no API call to be refused or rate-limited.
+    diff = (await sh("git", ["-C", worktree, "diff", "origin/main...HEAD"], { maxBuffer: 256 * 1024 * 1024 })).stdout;
+  } catch {
+    diff = null;
+  }
+  // THE PARTNER'S PUBLIC MATERIAL: the request, and every package document that is not the private one.
+  const publicTexts = [job?.request, job?.ask].filter((t) => typeof t === "string");
+  for (const p of paths.filter((x) => !named.includes(x) && /\.(?:txt|md)$/i.test(x))) {
+    try {
+      publicTexts.push(readFileSync(path.join(driveDir, p), "utf8"));
+    } catch {
+      /* not fetched: it simply adds nothing */
+    }
+  }
+  progress(`private-document check over ${docs.filter((d) => d.text).length} document(s)`);
+  return privateProof({ constraints, paths, docs, diff, publicTexts });
+}
+
 async function changedFilesFor(worktree, number) {
   try {
     const { stdout } = await sh("gh", ["pr", "view", String(number), "--json", "files"], { cwd: worktree });
@@ -1089,6 +1138,10 @@ export async function run(job, ctx) {
     } catch (err) {
       return { phase, status: "failed", reason: `the model reported a PR but gh finds none on ${names.branch}: ${err instanceof Error ? err.message.slice(0, 300) : String(err)}` };
     }
+    // #357: NO PASSAGE OF A PRIVATE DOCUMENT IN THE PR. The script reads the document and the diff itself; a
+    // failure here stops before any check is watched or any preview link is read, so nothing is emailed.
+    const privacy = await privateProofFor(job, path.join(packageDir, "drive"), names.worktree, ctx, jobDir, progress);
+    if (!privacy.ok) return { phase, status: "failed", reason: privacy.reason };
     const checks = await watchChecks(names.worktree, pr.number, ctx.signal, progress);
     // The preview link is read AFTER the checks settle: Pages posts its deployment beside them.
     const previewUrl = checks.state === "GREEN" ? await previewUrlFor(names.worktree, pr.number, progress, job.pages_hosts ?? [], names.branch, ctx.env, ctx.signal) : null;
@@ -1111,7 +1164,7 @@ export async function run(job, ctx) {
       changed_files: changedFiles,
       // The model's own proof, then what the SCRIPT did about delivery config — in that order, so
       // a reader sees the claim and the observation side by side and can tell which is which.
-      proof: [String(result.proof ?? "").slice(0, 8000), ...configLines, ...runLines(runsDone), ...(carried.dns_proof ?? [])].filter(Boolean).join("\n"),
+      proof: [String(result.proof ?? "").slice(0, 8000), ...configLines, ...runLines(runsDone), ...(carried.dns_proof ?? []), privacy.line].filter(Boolean).join("\n"),
       pages_env_proof: configLines,
       // What is still missing after this rebuild, re-checked against the re-mapped package (0237).
       ...(Array.isArray(result.missing_materials) ? { missing_materials: result.missing_materials } : {}),
