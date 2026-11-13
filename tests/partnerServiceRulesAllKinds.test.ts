@@ -167,6 +167,11 @@ describe("R21 (addendum item 10): a Drive folder the ask names is watched, loade
 
     expect(await pending()).toContain(watch!.id);
     const before = sent.length;
+    // #354: inside the grace window the folder may still be filling — nothing is said yet.
+    expect(await status({ files: 0 })).toBe("still_empty");
+    expect(sent.length - before, "no email while the partner may still be sending it").toBe(0);
+    // The window has passed since the ask named the folder, and it is still empty: said once.
+    await env.WP_OS_DB.prepare("UPDATE drive_watch SET created_at = ?2, last_checked_at = '2026-01-01T00:00:00.000Z' WHERE id = ?1").bind(watch!.id, new Date(Date.now() - 16 * 60_000).toISOString()).run();
     expect(await status({ files: 0 })).toBe("told_empty");
     expect(sent.length - before, "one email").toBe(1);
     expect(sent.at(-1)!.text).toMatch(/still empty/);
