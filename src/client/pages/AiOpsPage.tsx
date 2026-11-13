@@ -124,7 +124,6 @@ interface CostResponse {
   };
   by_employee: Array<{ key: string; committed_usd: number; runs: number; blocked: number }>;
   by_provider: Array<{ key: string; committed_usd: number; runs: number; blocked: number }>;
-  routes?: { rows: Array<{ route: string; completed: number; failed: number }>; line: string };
   by_model: Array<{ key: string; committed_usd: number; runs: number; blocked: number }>;
   by_machine: Array<{ key: string; committed_usd: number; runs: number; blocked: number }>;
   by_category: Array<{ key: string; committed_usd: number; runs: number; blocked: number }>;
@@ -932,11 +931,6 @@ export function AiOpsPage({ me }: { me: MeResponse }) {
             ))}
           </div>
 
-          {cost.data.routes && (
-            <p className="muted small" data-testid="route-scores">
-              Runs by route this period: {cost.data.routes.line}
-            </p>
-          )}
           <div className="module-grid">
             <SpendTable title="By employee" rows={cost.data.by_employee} testid="spend-by-employee" />
             <SpendTable title="By provider" rows={cost.data.by_provider} testid="spend-by-provider" />
