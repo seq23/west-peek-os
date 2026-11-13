@@ -1,4 +1,5 @@
 import { brandCommunityWords } from "../../shared/community/size";
+import { BrandThreadError } from "./tlcBrandThread";
 import { textBodyOf } from "../effects/mimeAttachments";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
@@ -417,7 +418,14 @@ export async function applyTlcDraftReply(
     const out = await (deps.redraft ?? defaultRedraft)(env, wynn, { subject: row.subject, body: wordsOf(row.body), note: c.note, brand: row.brand });
     if (!out.ok) { lines.problems.push(`${label(it)}: Wynn could not redraft it (${out.detail}); it is unchanged and still waiting`); continue; }
     await decideApproval(env, actor, it.card_id, "rejected", `Redraft asked by email reply (${ref}): ${c.note}`.slice(0, 1000)).catch(() => undefined);
-    await fileDraft(env, { id: row.deal_id, brand: row.brand, contact_email: row.contact_email, drip_step: row.drip_step }, { subject: out.subject, text: signedBrandEmail(out.body, TLC_PS_BY_STEP[Math.min(row.drip_step, 3)]!) }, firmScope, c.note);
+    try {
+      await fileDraft(env, { id: row.deal_id, brand: row.brand, contact_email: row.contact_email, drip_step: row.drip_step }, { subject: out.subject, text: signedBrandEmail(out.body, TLC_PS_BY_STEP[Math.min(row.drip_step, 3)]!) }, firmScope, c.note);
+    } catch (err) {
+      if (!(err instanceof BrandThreadError)) throw err;
+      // A follow-up with no conversation to reply on is not filed (services/tlcBrandThread.ts): she is told, nothing goes.
+      lines.problems.push(`${label(it)}: not redrafted (${(err instanceof Error ? err.message : String(err)).slice(0, 200)})`);
+      continue;
+    }
     lines.changed.push(`${label(it)}: redrafted for "${c.note}"`);
   }
 

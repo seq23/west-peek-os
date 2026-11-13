@@ -1406,7 +1406,7 @@ export async function resendUnanswered(env: Env, now: Date, firmScope: string, i
     if (!inboxRead) { stops.push(`NAMED STOP [RESEND_INBOX_NOT_READ] ${brand}: her inbox was not read on this pass, so the follow-up waits for the next one`); continue; }
     const owner = await actorForFirmUser(env, TLC_OWNER.firmUserId);
     if (!owner) { stops.push(`NAMED STOP [RESEND_NO_OWNER] ${brand}: her firm user is not active; tried again on the next pass`); continue; }
-    const sentRequest = await env.WP_OS_DB.prepare("SELECT destination, payload_json FROM external_effect_request WHERE id = ?1 AND state = 'EXECUTED'")
+    const sentRequest = await env.WP_OS_DB.prepare("SELECT destination, payload_json FROM external_effect_request WHERE id = ?1 AND executed_at IS NOT NULL")
       .bind(r.effect_request_id).first<{ destination: string; payload_json: string }>();
     const original = (() => { try { return JSON.parse(sentRequest?.payload_json ?? "null") as ({ subject?: string; text?: string; cc?: unknown } & Record<string, unknown>) | null; } catch { return null; } })();
     if (!sentRequest || !original?.subject || !original.text) { await stop("RESEND_ORIGINAL_MISSING", "the email that went is no longer on record, so it cannot be sent again word for word"); continue; }
