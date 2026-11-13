@@ -271,6 +271,33 @@ export const STAGE_STEPS: Readonly<Record<PacketKind, string[]>> = {
 /** How many sponsors get the full research treatment, and how many per tick. */
 export const MAX_RESEARCHED = 6;
 export const RESEARCH_PER_TICK = 2;
+/**
+ * THE SPONSOR RESEARCH'S FLOOR (owner, 13 Nov 2026): at least five researched sponsors, each with a named contact or
+ * a page that answered, none of them in the last two packets. December's packet had six, three of them repeats, and
+ * nothing remembered the earlier ones. A miss researches up to SPONSOR_FLOOR_EXTRA more candidates; if it still
+ * misses, the packet says so in its own note (page, PDF, email) instead of passing as a full list. Pure.
+ */
+export const SPONSOR_FLOOR = 5;
+export const SPONSOR_FLOOR_EXTRA = 4;
+export function sponsorFloor(research: readonly Pick<SponsorResearch, "orgName" | "contact" | "evidence">[], lastTwoPackets: readonly string[] = []): { ok: boolean; good: number; miss: string | null } {
+  const repeats = research.filter((r) => lastTwoPackets.some((old) => sameOrg(old, r.orgName)));
+  const good = research.filter((r) => (r.contact || r.evidence.length > 0) && !repeats.includes(r)).length;
+  if (good >= SPONSOR_FLOOR) return { ok: true, good, miss: null };
+  return {
+    ok: false,
+    good,
+    miss: `Sponsor research is thin this month: ${good} of the ${SPONSOR_FLOOR} a packet needs came with a named contact or a page that answered${repeats.length ? `, and ${repeats.length} (${repeats.map((r) => r.orgName).join(", ")}) were in the last two packets` : ""}, after ${research.length} were researched.`,
+  };
+}
+
+/** The organisations the last two finished Room packets already put forward. */
+async function sponsorsOfLastTwoPackets(env: Env, firmScope: string, exceptPacketId: string): Promise<string[]> {
+  const rows = await env.WP_OS_DB.prepare(
+    `SELECT DISTINCT sp.org_name FROM evt_sponsor_prospect sp
+      WHERE sp.packet_id IN (SELECT id FROM evt_room_packet WHERE firm_scope = ?1 AND id != ?2 AND status != 'DRAFT' ORDER BY created_at DESC LIMIT 2)`,
+  ).bind(firmScope, exceptPacketId).all<{ org_name: string }>();
+  return (rows.results ?? []).map((r) => r.org_name);
+}
 /** How many pages are fetched to verify one sponsor's contact and evidence. */
 const PAGES_PER_SPONSOR = 3;
 
@@ -455,8 +482,10 @@ async function defaultSynthesise(env: Env, actor: Actor, purpose: string, prompt
     // The prompt carries public research, a city, a theme and counts from the firm's own list —
     // no member identities beyond names already in its own records.
     sensitivity: "PUBLIC" as never,
-    // The packet Sequoia forwards to Scooter. Not the place a cost posture economises.
-    budgetContext: { expectedOutputTokens, providerKey: "openrouter", judgement: true, seatFirst: true },
+    // The packet Sequoia forwards to Scooter. Not the place a cost posture economises. IMPORTANT (13 Nov 2026): with
+    // the seats away it used to go straight to a free model nobody had measured (the November and December packets);
+    // it now waits for a seat, and after the wait only a free model measured FULL may carry it.
+    budgetContext: { expectedOutputTokens, providerKey: "openrouter", judgement: true, seatFirst: true, important: true },
     routing: { category: "INTELLIGENCE" },
     ...(verify ? { verify } : {}),
   });
@@ -711,7 +740,11 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
       // Every evidence URL is asked for its status before the candidate is kept. A citation the
       // search transcribed wrongly would otherwise reach the packet as proof.
       const checked = await Promise.all(parsed.map(async (c) => { const status = await check(c.evidenceUrl); return { c, status, verdict: evidenceVerdict(status) }; }));
-      state.candidates = checked.filter((x) => x.verdict !== "dead").map((x) => (x.verdict === "guarded" ? { ...x.c, evidenceNote: `${x.c.evidenceNote}${GUARDED_NOTE}` } : x.c));
+      // NOT THE SAME SPONSORS AS LAST MONTH AND THE MONTH BEFORE: a candidate the last two packets already put forward is
+      // left out here, unless a partner named it for this Room.
+      const lastTwo = await sponsorsOfLastTwoPackets(env, firmScope, draft.id);
+      const repeated = (c: SponsorCandidate): boolean => !c.fromBrief && lastTwo.some((old) => sameOrg(old, c.orgName));
+      state.candidates = checked.filter((x) => x.verdict !== "dead" && !repeated(x.c)).map((x) => (x.verdict === "guarded" ? { ...x.c, evidenceNote: `${x.c.evidenceNote}${GUARDED_NOTE}` } : x.c));
       state.dropped = checked.filter((x) => x.verdict === "dead").map((x) => ({ orgName: x.c.orgName, url: x.c.evidenceUrl, status: x.status }));
       // A seed she named that discovery did not return is still researched: its evidence comes
       // from its own research stage, or the packet says it has none.
@@ -727,8 +760,10 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
 
     if (stage === "RESEARCH") {
       // Hers first, then round-robin by category, so the six researched are not six of one kind.
-      const shortlist = pickForResearch(state.candidates, MAX_RESEARCHED);
-      const todo = shortlist.filter((c) => !state.researched.some((r) => sameOrg(r, c.orgName))).slice(0, Math.max(0, Math.min(RESEARCH_PER_TICK, MAX_RESEARCHED - state.research.length)));
+      // Below the floor after the usual six: up to SPONSOR_FLOOR_EXTRA more candidates are researched before the packet moves on.
+      const cap = state.research.length >= MAX_RESEARCHED && !sponsorFloor(state.research).ok ? MAX_RESEARCHED + SPONSOR_FLOOR_EXTRA : MAX_RESEARCHED;
+      const shortlist = pickForResearch(state.candidates, cap);
+      const todo = shortlist.filter((c) => !state.researched.some((r) => sameOrg(r, c.orgName))).slice(0, Math.max(0, Math.min(RESEARCH_PER_TICK, cap - state.research.length)));
       for (const c of todo) {
         const r = await research(env, actor, buildSponsorResearchPrompt({ orgName: c.orgName, roomLine: roomOneLiner(brief, city), audience: brief?.audience ?? "operators, founders and their advisers" }));
         state.researched.push(c.orgName);
@@ -757,7 +792,10 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
         });
       }
       const remaining = shortlist.filter((c) => !state.researched.some((r) => sameOrg(r, c.orgName))).length;
-      const done = remaining === 0 || state.research.length >= MAX_RESEARCHED;
+      const floor = sponsorFloor(state.research);
+      const done = remaining === 0 || state.research.length >= MAX_RESEARCHED + SPONSOR_FLOOR_EXTRA || (state.research.length >= MAX_RESEARCHED && floor.ok);
+      // STILL BELOW THE FLOOR WITH NOBODY LEFT TO RESEARCH: the packet carries the sentence, so a thin list never reads as a full one.
+      if (done && floor.miss && !(state.qualityNotes ?? []).includes(floor.miss)) state.qualityNotes = [...(state.qualityNotes ?? []), floor.miss];
       await saveStage(env, draft.id, done ? "CONCEPTS" : "RESEARCH", state);
       const last = state.research.slice(-todo.length);
       return {
@@ -848,7 +886,7 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
       const packet = mergeBriefSponsors(verified.packet, brief, state.research);
       state.flags = verified.flags;
       await rememberQuality(env, state, aiRunId);
-      for (const n of state.qualityNotes ?? []) state.flags.push({ code: "written_by_a_weaker_free_model", detail: n });
+      for (const n of state.qualityNotes ?? []) state.flags.push({ code: n.startsWith("Sponsor research is thin") ? "sponsor_research_below_floor" : "written_by_a_weaker_free_model", detail: n });
       const economics = computeEconomics({
         venues: packet.venues,
         targetAttendees: Math.round((packet.targetMin + packet.targetMax) / 2),

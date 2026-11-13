@@ -690,6 +690,19 @@ export function pressSummary(month: string, pitches: readonly PressPitch[], drop
  * per entry; what fails is dropped and the reason kept for the card. The judge does not search —
  * it reads what the searcher wrote and holds it to the brief.
  */
+/**
+ * THE MONTHLY NOTE'S FLOOR (owner, 13 Nov 2026): at least six customer leads and two press pitches, each on a link
+ * that answered (the liveness check upstream). October had nine and three; November six and two. Pure.
+ */
+export const MONTHLY_FLOOR = { leads: 6, pitches: 2 } as const;
+export function monthlyFloor(leads: number, pitches: number): { ok: boolean; misses: string[] } {
+  const misses = [
+    leads < MONTHLY_FLOOR.leads ? `${leads} customer lead(s) stood up, and a month needs ${MONTHLY_FLOOR.leads}` : null,
+    pitches < MONTHLY_FLOOR.pitches ? `${pitches} press pitch(es) stood up, and a month needs ${MONTHLY_FLOOR.pitches}` : null,
+  ].filter((m): m is string => m !== null);
+  return { ok: misses.length === 0, misses };
+}
+
 export type ProductionsJudge = (env: Env, actor: Actor, prompt: string) => Promise<{ ok: boolean; text: string; detail: string }>;
 
 export interface Verdict {
@@ -889,6 +902,13 @@ export async function runProductionsCard(
     firmScope: card.firm_scope,
     extra: replies,
   }, deps.interpret);
+  /*
+   * WHAT HE SAID COULD NOT BE READ: A FAILED GO, NOT "THE BRIEF IS MISSING" (13 Nov 2026). Scooter replied to the
+   * November note with a page of real direction; the model that reads a reply first answered without saying what it
+   * understood and then did not answer at all, and the card was BLOCKED asking him to "say in your own words what you
+   * wanted". The sweep now tries again by its own lane rules.
+   */
+  if (steer.failure) return { finished: false, blocked: false, detail: `what Scooter said about this could not be read: ${steer.failure}` };
   if (steer.cannot.length > 0) {
     const why = await blockCard(env, card, {
       reason: steer.failure ? "the_brief_is_missing" : "asked_for_something_this_work_cannot_do",
@@ -911,9 +931,12 @@ export async function runProductionsCard(
     prompt: string,
     parse: (text: string) => Promise<Judged<T>>,
     nudge: string,
+    /** The floor for this half: a first answer below it is searched once more, and the fuller of the two is used. */
+    enough = 1,
   ): Promise<Judged<T> & { why: string; searchDown: string | null; judgeDown?: string }> {
     let why = "";
     let last: Judged<T> = { kept: [], dropped: [], rejected: [], failed: null };
+    let best: Judged<T> | null = null;
     /*
      * A SEARCH THAT NEVER RAN IS NOT A SEARCH THAT FOUND NOTHING (1 Oct 2026). When every attempt's search call
      * failed — the spend setting refused it, no seat could search, a vendor was down — nothing was looked at, and
@@ -930,13 +953,15 @@ export async function runProductionsCard(
       last = parsed;
       // A judging step that could not answer is not "no lead survived" (1 Oct 2026): `judgeDown` fails the attempt, like searchDown.
       if (parsed.failed) return { ...parsed, why: `the judgement pass failed: ${parsed.failed}`, searchDown: null, judgeDown: parsed.failed };
-      if (parsed.kept.length) return { ...parsed, why: "", searchDown: null };
+      if (parsed.kept.length >= enough) return { ...parsed, why: "", searchDown: null };
+      if (parsed.kept.length > (best?.kept.length ?? 0)) best = parsed;
       why = parsed.rejected.length
         ? `the judge rejected every entry: ${parsed.rejected.map((r) => `${r.name} — ${r.reason}`).join("; ")}`
         : parsed.dropped.length ? `every cited page was dead: ${parsed.dropped.join(", ")}` : "the search answered with no usable entry (no url on any)";
       // The second attempt is told what was wrong with the first, so it is not the same answer twice.
-      nudge = `${nudge} Rejected last time: ${parsed.rejected.map((r) => `${r.name} (${r.reason})`).join("; ") || "nothing usable was returned"}.`;
+      nudge = `${nudge} Rejected last time: ${parsed.rejected.map((r) => `${r.name} (${r.reason})`).join("; ") || "nothing usable was returned"}.${parsed.kept.length ? ` Only ${parsed.kept.length} stood up and ${enough} are needed: find others, not these again.` : ""}`;
     }
+    if (best) return { ...best, why: "", searchDown: null };
     return { ...last, kept: [], why, searchDown: searched ? null : downDetail || "the search call failed" };
   }
 
@@ -944,6 +969,7 @@ export async function runProductionsCard(
   let text: string;
   let count: number;
   let dropped: string[];
+  let thin: string[] = [];
   /** The busy-executive summary; `text` (the full note) goes under its details. */
   let summary: { what: string; tldr: string; sections: ExecEmailInput["sections"] };
   if (kind === "PRODUCTIONS_MONTHLY") {
@@ -964,6 +990,7 @@ export async function runProductionsCard(
         return { ...judged, rejected: [...fresh.excluded, ...judged.rejected], dropped: live.dropped };
       },
       "Your previous answer was discarded. Every entry MUST have the url of the live page that shows the trigger, be a US organisation that hires agencies, and have a trigger from the last ~60 days.",
+      MONTHLY_FLOOR.leads,
     );
     const pitchesLive = await searchUntilSome(
       buildPressPrompt(month),
@@ -973,6 +1000,7 @@ export async function runProductionsCard(
         return { ...judged, dropped: live.dropped };
       },
       "Your previous answer was discarded. Every entry MUST have a live proof_url, a named writer whose beat is shown, and a hook specific to that writer.",
+      MONTHLY_FLOOR.pitches,
     );
     // A SEARCH THAT NEVER RAN IS A FAILED ATTEMPT, NOT A QUESTION FOR SCOOTER (1 Oct 2026). Nothing is emailed and nobody
     // is asked where to look: the sweep classifies the lane's own words, retries, and — when the spend setting or a
@@ -1003,6 +1031,12 @@ export async function runProductionsCard(
     subject = `Walker: West Peek Productions this month — ${ideas.kept.length} customer lead(s) and ${hunted.length} press pitch(es)`;
     text = renderMonthlyEmail(month, ideas.kept, hunted, dropped, rejected);
     summary = monthlySummary(month, ideas.kept, hunted, dropped, rejected);
+    // BELOW THE FLOOR AFTER BOTH SEARCHES: it still goes, saying so first, and the card stops by name (below).
+    thin = monthlyFloor(ideas.kept.length, hunted.length).misses;
+    if (thin.length) {
+      text = `A THIN MONTH: ${thin.join("; ")}. What follows is everything that stood up, not the usual list.\n\n${text}`;
+      summary = { ...summary, what: `${summary.what} — a thin month`, tldr: `**A thin month:** ${thin.join("; ")}. ${summary.tldr}` };
+    }
   } else {
   const found = await search(env, actor, kind === "PRODUCTIONS_CUSTOMERS" ? buildCustomerPrompt(month) : buildPressPrompt(month));
   if (!found.ok) {
@@ -1075,8 +1109,9 @@ export async function runProductionsCard(
     text,
   ].join("\n");
   await env.WP_OS_DB.prepare(
-    "UPDATE work_card SET state = 'DONE', description = substr(COALESCE(description, '') || char(10) || char(10) || ?2, 1, 16000), next_action = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
-  ).bind(card.id, finding).run();
+    `UPDATE work_card SET state = CASE WHEN ?3 = 1 THEN state ELSE 'DONE' END, description = substr(COALESCE(description, '') || char(10) || char(10) || ?2, 1, 16000),
+            next_action = CASE WHEN ?3 = 1 THEN next_action ELSE NULL END, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1`,
+  ).bind(card.id, finding, thin.length ? 1 : 0).run();
   await appendEvent(env, {
     eventType: "productions.delivered",
     actorType: "ai_employee",
@@ -1084,8 +1119,18 @@ export async function runProductionsCard(
     objectType: "work_card",
     objectId: card.id,
     firmScope: card.firm_scope,
-    payload: { kind, month, count, dropped: dropped.length, emailed: mail.sent, subject },
+    payload: { kind, month, count, dropped: dropped.length, emailed: mail.sent, subject, thin_month: thin.length > 0 },
   });
+  if (thin.length) {
+    const why = await blockCard(env, card, {
+      reason: "nothing_good_enough_to_send",
+      trying: card.title,
+      employee: "Walker",
+      who: "SEQUOIA",
+      detail: `This month's note is below its floor after two searches (${thin.join("; ")}). ${mail.sent ? "Scooter was sent what stood up" : "What stood up is on the card"}, labelled a thin month. Say where Walker should look, or leave it this month.`,
+    });
+    return { finished: false, blocked: true, detail: why };
+  }
   return {
     finished: true,
     blocked: false,

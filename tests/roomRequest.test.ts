@@ -320,8 +320,10 @@ describe("her brief becomes a card on Parker's desk, then a packet", () => {
     const draft = await queueDraft(env, actor(), { month: "2026-11", origin: "PARTNER_BRIEF", brief: { ...BRIEF, audience: "founders who sold to private equity", month: "2026-11" } });
     const failing = deps({ synthesise: async () => ({ text: "I cannot help with that.", aiRunId: null }) });
     await runStage(env, await row(draft.id), failing); // DISCOVER
-    await runStage(env, await row(draft.id), failing); // RESEARCH
-    await runStage(env, await row(draft.id), failing); // RESEARCH
+    // RESEARCH, for as many ticks as it takes: sponsors the last two packets already put forward are no longer
+    // candidates (13 Nov 2026), so how many there are to research depends on what earlier packets held.
+    for (let i = 0; i < 6 && (await row(draft.id)).build_stage !== "CONCEPTS"; i += 1) await runStage(env, await row(draft.id), failing);
+    expect((await row(draft.id)).build_stage).toBe("CONCEPTS");
     await expect(runStage(env, await row(draft.id), failing)).rejects.toThrow(/CONCEPTS: the angles did not come back/);
     const stuck = await row(draft.id);
     expect(stuck.status).toBe("DRAFT");
@@ -332,6 +334,20 @@ describe("her brief becomes a card on Parker's desk, then a packet", () => {
     const out = await runStage(env, stuck, deps());
     expect(out.stage).toBe("CONCEPTS");
     expect(out.next).toBe("VENUES");
+  });
+
+  it("a sponsor the last two packets already put forward is not a candidate again, unless the partner named it (13 Nov 2026: December's packet repeated three of six)", async () => {
+    // Two finished packets from the same discovery, so every sponsor it returns has been put forward before.
+    for (const month of ["2027-07", "2027-08"]) await generatePacket(env, actor(), { month, brief: { ...BRIEF, month, sponsorProspects: [] } }, deps());
+    const before = (await env.WP_OS_DB.prepare(
+      "SELECT DISTINCT org_name FROM evt_sponsor_prospect WHERE packet_id IN (SELECT id FROM evt_room_packet WHERE firm_scope = 'west-peek' AND status != 'DRAFT' ORDER BY created_at DESC LIMIT 2)",
+    ).all<{ org_name: string }>()).results!.map((r) => r.org_name);
+    expect(before.length, "the earlier packets put sponsors forward").toBeGreaterThan(0);
+    const draft = await queueDraft(env, actor(), { month: "2027-09", origin: "PARTNER_BRIEF", brief: { ...BRIEF, month: "2027-09", sponsorProspects: [before[0]!] } });
+    await runStage(env, await row(draft.id), deps()); // DISCOVER
+    const candidates = parseState((await row(draft.id)).build_state_json).candidates;
+    expect(candidates.filter((c) => !c.fromBrief && before.some((old) => old.toLowerCase() === c.orgName.toLowerCase())).map((c) => c.orgName)).toEqual([]);
+    expect(candidates.filter((c) => c.fromBrief).map((c) => c.orgName), "the one she named stays").toEqual([before[0]]);
   });
 
   it("dismissing a draft takes its card off Parker's desk; a draft cannot be kept", async () => {

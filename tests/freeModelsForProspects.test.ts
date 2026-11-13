@@ -533,6 +533,19 @@ describe("Fix 2: live research for $0", () => {
 describe("Fix 3: important work that waits for a seat", () => {
   const later = (h: number) => new Date(Date.now() + h * 3_600_000);
 
+  it("a JUDGEMENT with no owner floor never falls to a free model nobody has measured: it keeps waiting for the seat (13 Nov 2026, the Room packet proposal)", async () => {
+    const v = vendors();
+    // The packet proposal's own call shape: a judgement, seat first, public content.
+    const proposal = { ...BRAND_EMAIL(true), purpose: "Room packet: one topic, three angles", budgetContext: { judgement: true, seatFirst: true, important: true, expectedOutputTokens: 3000 } };
+    const tiers = (await t.db.prepare("SELECT DISTINCT m.quality_tier AS tier FROM provider_model m JOIN provider_registry p ON p.id = m.provider_id WHERE p.training_permitted = 1 AND m.status = 'ACTIVE'").all<{ tier: string }>()).results!.map((r) => r.tier);
+    expect(tiers, "every free model here is unmeasured, as in production").toEqual(["UNMEASURED"]);
+    await runAi(env(), proposal, { fetchImpl: v.fetchImpl });
+    const { run } = await runAi(env(), proposal, { fetchImpl: v.fetchImpl, now: later(2.1) });
+    expect(run.status).not.toBe("COMPLETED");
+    expect(run.failure_reason ?? "").toMatch(/^seat_wait_important_work:.*no free model passes the quality floor, so it keeps waiting/);
+    expect(v.seen.calls, "no free model was asked").toEqual([]);
+  }, 60_000);
+
   it("non-confidential important work waits, then after 2 hours the best free model carries it, and the reason is recorded", async () => {
     const v = vendors();
     const first = (await runAi(env(), BRAND_EMAIL(true), { fetchImpl: v.fetchImpl })).run;

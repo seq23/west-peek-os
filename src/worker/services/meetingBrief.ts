@@ -380,8 +380,27 @@ export async function buildMeetingBrief(env: Env, meetingId: string, now: Date =
  * Returns the line, or the reason there is none. Never a made-up line: on any failure the brief's
  * `why` slot says plainly that it could not be written.
  */
+const stillOwed = (list: readonly BriefCommitmentLine[]): BriefCommitmentLine[] => list.filter((c) => c.standing === "OPEN" || c.standing === "OVERDUE");
+
+/**
+ * Is there anything on file that could say why this meeting exists? Null when there is; otherwise the plain sentence
+ * for the slot, naming what is missing. Pure. A meeting with a named counterpart at a known stage is NOT empty: where
+ * the record stands is a reason.
+ */
+export function whyIsMissing(brief: Pick<MeetingBrief, "record" | "find_out" | "last_time" | "diligence">): string | null {
+  const something =
+    brief.find_out.length > 0 || stillOwed(brief.last_time.firm).length > 0 || stillOwed(brief.last_time.counterparty).length > 0 ||
+    Boolean(brief.record.summary) || Boolean(brief.record.stage) || (brief.record.touches ?? []).length > 0 || (brief.diligence?.unanswered ?? 0) > 0;
+  if (something) return null;
+  const who = brief.record.about === "NOBODY" ? "This meeting is not tied to a company or an LP" : `${brief.record.name ?? "The other side"} has no summary or stage on file`;
+  return `Nothing on file says why this meeting exists. ${who}, and there is no earlier meeting, open question or promise to bring. The invitation's own text is not kept, so add one line to the meeting and the next prep carries it.`;
+}
+
 export async function writeWhyLine(env: Env, actor: Actor, meeting: MeetingRow, brief: MeetingBrief): Promise<{ why: string | null; unavailable: string | null; ai_run_id: string | null }> {
   const lead = brief.prepared_by;
+  // NOTHING ON FILE THAT COULD SAY WHY: no model is asked to guess, and the slot names exactly what is missing.
+  const missing = whyIsMissing(brief);
+  if (missing) return { why: null, unavailable: missing, ai_run_id: null };
   const roster = await env.WP_OS_DB.prepare("SELECT id, role FROM ai_employee WHERE name = ?1").bind(lead).first<{ id: string; role: string }>();
   const facts = [
     `MEETING: ${meeting.title} (${meeting.meeting_type})${meeting.scheduled_at ? `, ${meeting.scheduled_at.slice(0, 16).replace("T", " ")}Z` : ""}`,
@@ -390,7 +409,19 @@ export async function writeWhyLine(env: Env, actor: Actor, meeting: MeetingRow, 
     `WE STILL OWE THEM: ${brief.last_time.firm.filter((c) => c.standing === "OPEN" || c.standing === "OVERDUE").length}`,
     `THEY STILL OWE US: ${brief.last_time.counterparty.filter((c) => c.standing === "OPEN" || c.standing === "OVERDUE").length}`,
     brief.diligence ? `DILIGENCE: ${brief.diligence.answered} answered, ${brief.diligence.unanswered} open` : null,
+    /*
+     * THE WORDS, NOT ONLY THE COUNTS (13 Nov 2026). This line has answered UNKNOWN on every prep since September, on
+     * every route: the model was handed a title, a name and four numbers, and told to answer UNKNOWN when the facts did
+     * not say why. They never did. What the record says, what is still open and what was promised are the reason a
+     * meeting exists, so they are given in their own words (the router's own content check still decides the lane).
+     */
+    brief.record.summary ? `WHAT THE RECORD SAYS: ${brief.record.summary.slice(0, 300)}` : null,
+    ...brief.find_out.slice(0, 3).map((q) => `OPEN QUESTION: ${q.text.slice(0, 200)}`),
+    ...stillOwed(brief.last_time.firm).slice(0, 3).map((c) => `WE OWE THEM: ${c.text.slice(0, 200)}`),
+    ...stillOwed(brief.last_time.counterparty).slice(0, 3).map((c) => `THEY OWE US: ${c.text.slice(0, 200)}`),
+    ...(brief.record.touches ?? []).slice(0, 2).map((t) => `EARLIER CONTACT: ${t.text.slice(0, 200)}`),
   ].filter((l): l is string => l !== null);
+
   try {
     const { run } = await runAi(env, {
       purpose: `meeting brief: why this meeting exists (${meeting.id})`,
@@ -399,7 +430,7 @@ export async function writeWhyLine(env: Env, actor: Actor, meeting: MeetingRow, 
       inputs: [
         personaPrompt(lead, roster?.role ?? "Meeting Buddy"),
         "",
-        "Write ONE sentence, under 30 words, saying why this meeting exists — what the firm should get out of it. Use only the facts below. If the facts do not say, answer exactly: UNKNOWN",
+        "Write ONE sentence, under 30 words, saying why this meeting exists — what the firm should get out of it. Use only the facts below: an open question to answer, a promise to collect or keep, or the next step for where the record stands is a reason. If the facts give none of those, answer exactly: UNKNOWN",
         "",
         ...facts,
       ],
@@ -414,7 +445,13 @@ export async function writeWhyLine(env: Env, actor: Actor, meeting: MeetingRow, 
     });
     const text = (run.output_text ?? "").trim().split("\n")[0]?.trim() ?? "";
     if (run.status !== "COMPLETED" || !text) return { why: null, unavailable: `${lead} could not write the line (run ${run.status}).`, ai_run_id: run.id };
-    if (/^unknown\b/i.test(text)) return { why: null, unavailable: `${lead} could not say from the records why this meeting exists.`, ai_run_id: run.id };
+    if (/^unknown\b/i.test(text)) {
+      return {
+        why: null,
+        unavailable: `${lead} read what is on file (${facts.length - 5 > 0 ? `${facts.length - 5} line(s) of record, questions and promises` : "the title, who it is with and the counts"}) and it does not say why this meeting exists. One line on the meeting itself would fix that; the invitation's own text is not kept.`,
+        ai_run_id: run.id,
+      };
+    }
     if (text.length > 240 || /^\[mock-local/.test(text)) return { why: null, unavailable: `${lead} did not return a usable one-line reason.`, ai_run_id: run.id };
     return { why: text, unavailable: null, ai_run_id: run.id };
   } catch (err) {

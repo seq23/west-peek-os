@@ -2134,7 +2134,11 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
       } else {
         const pool = zeroCostAdequate
           .filter((o) => !isSeat(o.provider.provider_key))
-          .filter((o) => freeLaneMeetsFloor(o.pricing.quality_tier, floor?.min_free_tier ?? null))
+          // A JUDGEMENT NEVER FALLS TO AN UNMEASURED FREE LANE BY DEFAULT (13 Nov 2026). With no floor set by the owner,
+          // "passes the floor" used to mean any free model: the November and December Room packets were written by
+          // one nobody had measured, carrying "read with that in mind". Without her floor, a judgement takes only a
+          // free model measured FULL; otherwise it keeps waiting for the seat.
+          .filter((o) => freeLaneMeetsFloor(o.pricing.quality_tier, floor?.min_free_tier ?? (isJudgement ? "FULL" : null)))
           .sort((a, b) => qualityRank(b.pricing.quality_tier) - qualityRank(a.pricing.quality_tier));
         if (pool.length === 0) {
           seatWaitDetail = ` It has waited ${waited} minutes, but no free model passes ${floor ? `the owner's quality floor (${floor.min_free_tier})` : "the quality floor"}, so it keeps waiting.`;

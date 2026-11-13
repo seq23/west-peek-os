@@ -7539,3 +7539,23 @@ selling; a person rejected in W43 returned as new; W44 sent nothing.
   addresses replaced); seven tests fail on the code before this change. No migration.
 - What the floor cannot catch: a fluent wrong `why` that cites a live page, a live page about a different person, a
   judge that is generous but consistent. The selling check reads words in the `why`; it is a floor, not a proof.
+
+## 13 Nov 2026 — floors for five more deliverables
+
+Why: the owner's review of what the employees send found five outputs that passed while being thin, repeated or blank.
+- Productions monthly (`services/productions.ts`): `monthlyFloor` (6 leads, 2 pitches, each on a link that answered). A
+  half below it is searched once more and the fuller answer kept; still below, the note goes labelled A THIN MONTH and
+  the card is BLOCKED on Sequoia (`nothing_good_enough_to_send`). A reply from Scooter that could not be read is a
+  failed go the sweep retries, not "the brief is missing" (the November card).
+- Room sponsor research (`services/roomPacket.ts`): a sponsor the last two packets put forward is not a candidate again
+  unless the partner named it; `sponsorFloor` (5, each with a named contact or a page that answered) researches up to
+  four more on a miss, and a packet still below it carries the sentence (flag `sponsor_research_below_floor`).
+- Room packet proposal: the packet-writing call is marked important, so with the seats away it waits for one; and a
+  judgement with no owner floor row takes only a free model measured FULL after the wait (`worker/ai/runAi.ts`).
+- TLC brand batch (`shared/tlc/mustPitch.ts` `wayInListing`): a "Needs a way in" brand unchanged for three weekly
+  notes is said once more with what was tried, then left out until something changes. It stays on the TLC page.
+- Wednesday prep (`services/meetingBrief.ts`): the why-line is given the record's summary, open questions, promises
+  still owed and earlier contact in their own words (it had a title and four counts, and answered UNKNOWN every time);
+  with nothing on file no model is asked and the slot names what is missing (`whyIsMissing`).
+- Proof: `tests/outputFloors.test.ts`, `tests/productions.test.ts`, `tests/roomRequest.test.ts`,
+  `tests/freeModelsForProspects.test.ts`. No migration, no new job, no new email.
