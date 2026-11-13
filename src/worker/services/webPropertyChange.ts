@@ -52,7 +52,7 @@ import {
   type LocalJobReport,
   type WebPropertyChangePhase,
 } from "../../shared/work/localJobs";
-import { planProblems, refusalLine } from "../../shared/work/everyAsk";
+import { partnerWrote, planProblems, refusalLine } from "../../shared/work/everyAsk";
 
 /**
  * A WEB PROPERTY CHANGE, worked by Porter on her Mac (20 Sep 2026, Plan A).
@@ -2762,6 +2762,16 @@ export async function runWebPropertyChangeCard(
     }
     // Green, and back here. A change that previews first needs the SECOND "approved" from the
     // requesting partner, read against the time the preview email went out.
+    /*
+     * THE SYSTEM REOPENED THIS JOB TO FINISH THE ORIGINAL REQUEST (#363, `finishOriginalAsk`). The
+     * rebuild it asked for after the last preview is carried out; the old preview is not asked
+     * about again. It approves nothing: the fresh preview waits for the partner's word as always.
+     */
+    if (row.refresh_intent === "CHANGES" && row.rebuilt_for?.startsWith(FINISH_ORIGINAL_ASK) && row.refresh_requested_at && (!row.preview_emailed_at || row.refresh_requested_at > row.preview_emailed_at) && !row.land_approved_at) {
+      const parked = await parkPhase(env, card, row, "BUILD", rules);
+      if (!parked.parked) return { finished: false, blocked: false, progressed: true, detail: parked.reason };
+      return { finished: false, blocked: false, progressed: true, detail: `Reopened to finish the original request; BUILD queued for the Mac (${phaseModel(rules, "BUILD")}).` };
+    }
     if (needsPreview(row) && !row.land_approved_at && !row.forced_by) {
       const answer = answerSince(card, row.preview_emailed_at);
       const requester = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
@@ -3054,6 +3064,71 @@ export async function handleGetWebPropertyChange(ctx: RouteContext): Promise<Res
 }
 
 /** The Mac's claimer, or a Managing Partner — the two who may fetch a request's files. */
+/**
+ * THE JOB LEFT OUT PART OF THE ORIGINAL REQUEST → THE SYSTEM REOPENS IT TO FINISH IT (owner, 13 Nov
+ * 2026, #363). A partner asked for a website and a dashboard; the plan built the website and put
+ * the dashboard off. Her ruling: finishing what was asked needs nobody's permission; permission
+ * is for dropping, deferring or moving an ask. So this is the OS correcting its own incomplete
+ * job, the way `resumeForSecret` resumes one when a key arrives: recorded as the system, never as
+ * a partner, and never as an answer to the block.
+ *
+ *   · ONLY AN ORIGINAL ASK. `ask` must be the partner's own words, found in the stored request
+ *     (`partnerWrote`). Words the partner never wrote are refused: this path cannot add work.
+ *   · ONLY WORK. Instructions that read as an approval, a publish, a preview request or a force
+ *     are refused. Nothing here approves, lands, publishes or sends: the rebuild ends at a fresh
+ *     preview that waits for the requesting partner exactly as every preview does.
+ *   · ONLY A JOB PAST ITS PLAN AND NOT LANDING. A plan that leaves an ask out is refused when it
+ *     reports (`planProblems`), so before BUILD this never needs calling.
+ */
+export const FINISH_ORIGINAL_ASK = "Finish the original request:";
+
+export async function finishOriginalAsk(env: Env, cardId: string, input: { ask: string; instruction: string; enteredBy: string }): Promise<{ ok: true; ask: string } | { ok: false; status: number; reason: string }> {
+  const card = await env.WP_OS_DB.prepare("SELECT id, kind, state, firm_scope FROM work_card WHERE id = ?1").bind(cardId).first<{ id: string; kind: string | null; state: string; firm_scope: string }>();
+  const row = card ? await readWebPropertyChange(env, cardId) : null;
+  if (!card || !row || card.kind !== WEB_PROPERTY_CHANGE_KIND) return { ok: false, status: 404, reason: "no website job with that id" };
+  if (card.state === "DONE" || card.state === "CANCELLED") return { ok: false, status: 409, reason: `the job is ${card.state}` };
+  if (row.phase !== "BUILD" || !row.plan_approved_at) return { ok: false, status: 409, reason: `the job is at ${row.phase}: a plan that leaves an ask out is refused when it reports; this reopens a job that is past its plan` };
+  if (row.land_approved_at || row.forced_by) return { ok: false, status: 409, reason: "the job is approved to land; it is not reopened under the partner's approval" };
+  if (row.current_run_id) return { ok: false, status: 409, reason: "a run is in flight on the Mac; try again when it reports" };
+  const ask = input.ask.trim().slice(0, 300);
+  if (!partnerWrote(ask, `${row.request_text ?? ""}\n${row.ask ?? ""}`)) return { ok: false, status: 400, reason: "those words are not in the partner's request: this path finishes what was asked and adds nothing" };
+  const instruction = input.instruction.trim().replace(/^finish the original request\s*:\s*/i, "");
+  if (instruction.length < 10) return { ok: false, status: 400, reason: "say what to build, in a sentence or more" };
+  for (const t of [instruction, input.instruction.trim()]) {
+    const kind = readApprovalReply(t).kind;
+    if (kind === "APPROVED" || kind === "FORCED" || kind === "PUBLISH" || kind === "PREVIEW") return { ok: false, status: 400, reason: `those words read as ${kind.toLowerCase()}: approving, publishing and forcing take the partner who asked, never this path` };
+  }
+  const now = new Date().toISOString();
+  const words = `${FINISH_ORIGINAL_ASK} ${instruction}`.slice(0, PARTNER_ANSWER_MAX);
+  await update(env, cardId, { refresh_intent: "CHANGES", refresh_requested_at: now, rebuilt_for: words });
+  await appendFinding(env, cardId, `The system reopened this job to finish the original request: "${ask}" was asked for and left out. Rebuilding in the same job and preview; nothing is approved or published by this, and the fresh preview waits for the partner who asked.`);
+  await env.WP_OS_DB.prepare(
+    "UPDATE work_card SET state = 'OPEN', work_attempts = 0, work_steps = 0, lease_until = NULL, waiting_until = NULL, waiting_for = NULL, block_nag_at = NULL, updated_at = ?2 WHERE id = ?1 AND state NOT IN ('DONE', 'CANCELLED')",
+  )
+    .bind(cardId, now)
+    .run();
+  await appendEvent(env, {
+    eventType: "web_property_change.original_ask_reopened",
+    actorType: "system",
+    actorId: "finish_original_ask",
+    objectType: "work_card",
+    objectId: cardId,
+    firmScope: card.firm_scope,
+    payload: { ask, instruction: words, entered_by: input.enteredBy, at: now },
+  });
+  return { ok: true, ask };
+}
+
+/** POST /api/work-cards/:id/finish-original-ask { ask, instruction } — the Mac's own identity or a Managing Partner. */
+export async function handleFinishOriginalAsk(ctx: RouteContext): Promise<Response> {
+  if (!mayFetch(ctx)) return json({ error: "forbidden" }, { status: 403 });
+  const body = (await ctx.request.json().catch(() => null)) as { ask?: unknown; instruction?: unknown } | null;
+  if (typeof body?.ask !== "string" || typeof body?.instruction !== "string") return json({ error: "invalid_input", detail: "ask (the partner's own words) and instruction are required" }, { status: 400 });
+  const out = await finishOriginalAsk(ctx.env, ctx.params.id ?? "", { ask: body.ask, instruction: body.instruction, enteredBy: ctx.identity!.email });
+  if (!out.ok) return json({ error: "refused", detail: out.reason }, { status: out.status });
+  return json({ ok: true, card_id: ctx.params.id, reopened_for: out.ask });
+}
+
 function mayFetch(ctx: RouteContext): boolean {
   const identity = ctx.identity;
   if (!identity) return false;
