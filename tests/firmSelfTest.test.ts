@@ -58,6 +58,26 @@ describe("the firm's own (ignore) test send", () => {
     expect(Number(kept?.n)).toBe(1);
   });
 
+  // #360: the forms-mailer's daily signed form check, 12 "Unclear email" cards from 6 Nov to 13 Nov 2026.
+  it("the daily [probe] form check opens no card, and is kept and recorded the same way", async () => {
+    const before = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'inbound_email.self_test'").first<{ n: number }>();
+    await send("hello@joinwestpeek.com", "[probe] New enquiry from a form check", FIRM_AUTH, "Automatic daily check. Ignore.");
+    expect(await cardsTitled("New enquiry from a form check")).toBe(0);
+    const after = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'inbound_email.self_test'").first<{ n: number }>();
+    expect(Number(after?.n) - Number(before?.n)).toBe(1);
+    const kept = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM inbound_message WHERE subject = '[probe] New enquiry from a form check'").first<{ n: number }>();
+    expect(Number(kept?.n)).toBe(1);
+  });
+
+  it("a [probe] subject from a stranger, or forged, still reaches Porter", async () => {
+    await send("someone@example.com", "[probe] New enquiry from outside", "mx.cloudflare.net; spf=pass smtp.mailfrom=example.com; dkim=pass header.d=example.com; dmarc=pass");
+    expect(await cardsTitled("New enquiry from outside")).toBeGreaterThan(0);
+    await send("hello@joinwestpeek.com", "[probe] New enquiry from a forger", "mx.cloudflare.net; spf=fail; dkim=none; dmarc=fail");
+    expect(await cardsTitled("New enquiry from a forger")).toBeGreaterThan(0);
+    await send("hello@joinwestpeek.com", "New enquiry from an unmarked sender", FIRM_AUTH, "A real enquiry.");
+    expect(await cardsTitled("New enquiry from an unmarked sender")).toBeGreaterThan(0);
+  });
+
   it("the same subject from a stranger still reaches Porter", async () => {
     await send("someone@example.com", "Key check (ignore)", "mx.cloudflare.net; spf=pass smtp.mailfrom=example.com; dkim=pass header.d=example.com; dmarc=pass");
     expect(await cardsTitled("Key check (ignore)")).toBeGreaterThan(0);
