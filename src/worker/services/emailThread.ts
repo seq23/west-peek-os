@@ -536,7 +536,10 @@ export async function steerFromReply(
       // Handled: the card changed hands (or was refused, and said so). Nothing below reads it.
     } else if (cardRow && partner && cardRow.state === "BLOCKED") {
       const asked = (cardRow.requested_by_email ?? "").trim().toLowerCase();
-      if (!asked || asked === partner.email) {
+      // #363 (0301): THE DEVELOPER DIRECTS ANY JOB. Her "changes: …" on another partner's website job is that job's
+      // instruction, and only that: the runner rebuilds with it and reads no approval from her (services/developerDirection.ts).
+      const developerChanges = Boolean(asked) && cardRow.kind === WEB_PROPERTY_CHANGE_KIND && isWorkInstruction(written) && (await developerDirector(env, partner.firmUserId)) !== null;
+      if (!asked || asked === partner.email || developerChanges) {
         /*
          * A REPLY IS READ AGAINST THE STAGE OF THE EMAIL IT ANSWERS, NEVER THE CARD'S CURRENT STAGE
          * (27 Sep 2026; #194: the approval binds to the latest preview). A website job's plan can be
@@ -598,11 +601,6 @@ export async function steerFromReply(
           const out = await answerBlock(env, cardRow.id, partner.firmUserId, { action: door, text: written.slice(0, 4000) });
           answered = out.ok;
         }
-      } else if (cardRow.kind === WEB_PROPERTY_CHANGE_KIND && isWorkInstruction(written) && (await developerDirector(env, partner.firmUserId))) {
-        // #363 (0301): THE DEVELOPER DIRECTS ANY JOB. Her "changes: …" on another partner's job is his job's
-        // instruction; the runner rebuilds with it and reads nothing else from her (services/developerDirection.ts).
-        const out = await answerBlock(env, cardRow.id, partner.firmUserId, { action: "ANSWER", text: written.slice(0, 4000) });
-        answered = out.ok;
       } else {
         await env.WP_OS_DB.prepare(
           "INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)",
