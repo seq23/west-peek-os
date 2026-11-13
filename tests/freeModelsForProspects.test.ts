@@ -6,7 +6,7 @@ import { runAi, type RunAiInput } from "../src/worker/ai/runAi";
 import { claimRun, recordHeartbeat, reportRun, type Seat } from "../src/worker/ai/subscriptionSeats";
 import { classifyContent } from "../src/shared/ai/contentClass";
 import { committedLps, isCommittedLp, meetingIsConfidential } from "../src/worker/ai/committedLps";
-import { BRAVE_DAILY_QUERY_CAP, FREE_SEARCH_GROUNDED_MODELS, createFreeSearchAdapter } from "../src/worker/ai/providers/freeSearch";
+import { BRAVE_DAILY_QUERY_CAP, BRAVE_QUERIES_PER_SEARCH, FREE_SEARCH_GROUNDED_MODELS, citesPage, createFreeSearchAdapter, groundedRungs } from "../src/worker/ai/providers/freeSearch";
 import { credentialConfigured, credentialNote, credentialValueFor } from "../src/shared/ai/providerCredentials";
 import { FREE_SEARCH_MODEL } from "../src/shared/ai/models";
 import { servedBySearchLane } from "../src/worker/services/liveSearch";
@@ -91,7 +91,7 @@ function vendors(sc: Scenario = { grounding: "ok" }): { fetchImpl: typeof fetch;
         });
       }
       const prompt = JSON.stringify(body.contents ?? "");
-      const text = prompt.includes("Write ONE web search query") ? "Example Ventures founder" : `GEMINI ANSWER (${model}) — Pat Example is the founder [${SOURCE_URL}].`;
+      const text = prompt.includes("web search queries, one per line") ? "Example Ventures founder" : `GEMINI ANSWER (${model}) — Pat Example is the founder [${SOURCE_URL}].`;
       return ok({ candidates: [{ content: { parts: [{ text }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 10 } });
     }
     if (host === "api.search.brave.com") {
@@ -117,7 +117,7 @@ function vendors(sc: Scenario = { grounding: "ok" }): { fetchImpl: typeof fetch;
     const model = String(body.model ?? "");
     seen.calls.push({ host, model, grounded: false, maxPrice: (body.provider as { max_price?: unknown } | undefined)?.max_price });
     const asked = JSON.stringify(body.messages ?? "");
-    const content = asked.includes("Write ONE web search query")
+    const content = asked.includes("web search queries, one per line")
       ? "Example Ventures founder"
       : asked.includes("SOURCES:")
         ? `OPENROUTER ANSWER (${model}) — Pat Example is the founder [${SOURCE_URL}].`
@@ -311,7 +311,7 @@ const SEARCH = (extra: Partial<RunAiInput["budgetContext"]> = {}, inputs = ["Who
 
 // ── FIX 2 ───────────────────────────────────────────────────────────────────────────────────────
 describe("Fix 2: live research for $0", () => {
-  it("route 1: Gemini 2.5 Flash with grounding answers, cited, at $0 — and a search caller accepts it", async () => {
+  it("route 1: the first free grounded model answers, cited, at $0 — and a search caller accepts it", async () => {
     const v = vendors({ grounding: "ok" });
     const { run } = await runAi(env(), SEARCH({ important: true }), { fetchImpl: v.fetchImpl });
     expect(run.status, run.failure_reason ?? "").toBe("COMPLETED");
@@ -319,7 +319,8 @@ describe("Fix 2: live research for $0", () => {
     expect(run.model).toBe(FREE_SEARCH_MODEL);
     expect(servedBySearchLane(run.model)).toBe(true);
     expect(run.output_text).toContain(SOURCE_URL);
-    expect(v.seen.calls[0]).toMatchObject({ model: "gemini-2.5-flash", grounded: true });
+    expect(v.seen.calls[0]).toMatchObject({ model: FREE_SEARCH_GROUNDED_MODELS[0], grounded: true });
+    expect(FREE_SEARCH_GROUNDED_MODELS, "the model Google retired on this key is not a rung").not.toContain("gemini-2.5-flash");
     expect(v.seen.calls.some((c) => c.host === "api.search.brave.com")).toBe(false);
     const cost = (await t.db.prepare("SELECT cost_estimate_json FROM ai_run WHERE id = ?1").bind(run.id).first<{ cost_estimate_json: string }>())!;
     expect((JSON.parse(cost.cost_estimate_json) as { estimated_cost_usd: number }).estimated_cost_usd, "the money guard counts it as free").toBe(0);
@@ -361,25 +362,89 @@ describe("Fix 2: live research for $0", () => {
       if (url.includes("api.search.brave.com")) return new Response(JSON.stringify({ web: { results: [{ url: SOURCE_URL, title: "x", description: "y" }] } }), { status: 200 });
       if (url.startsWith("https://example.com")) return new Response("<p>y</p>", { status: 200, headers: { "content-type": "text/html" } });
       const body = JSON.parse(String(init?.body)) as { tools?: unknown; contents: unknown };
-      const text = body.tools ? "no sources" : JSON.stringify(body.contents).includes("Write ONE web search query") ? "q" : "An answer with no URL at all.";
+      const text = body.tools ? "no sources" : JSON.stringify(body.contents).includes("web search queries, one per line") ? "q" : "An answer with no URL at all.";
       return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] }), { status: 200 });
     }) as unknown as typeof fetch;
     const adapter = createFreeSearchAdapter({ geminiBaseUrl: "https://generativelanguage.googleapis.com", geminiApiKey: "g", braveApiKey: "b", quota: { take: async () => true }, fetchImpl });
     await expect(adapter.complete({ purpose: "Example Ventures", inputs: ["who"], model: null })).rejects.toThrow(/^free_search_named_stop:Couldn't research Example Ventures: .*cited none of the fetched pages/);
   });
 
-  it("1 Dec 2026: gemini-2.5-flash answers 404 and research still completes on the next grounded rung, on West Peek OS's own key", async () => {
+  it("a grounded model that answers 404 does not stop it: research still completes on the next grounded rung, on West Peek OS's own key", async () => {
     // No Brave key: before 6 Nov the 404 went straight to Brave, so this run stopped instead of researching.
-    const v = vendors({ grounding: "ok", retired: ["gemini-2.5-flash"] });
+    const v = vendors({ grounding: "ok", retired: [FREE_SEARCH_GROUNDED_MODELS[0]] });
     const { run } = await runAi(env({ BRAVE_SEARCH_API_KEY: "", WP_GEMINI_API_KEY: "wp" }), SEARCH(), { fetchImpl: v.fetchImpl });
     expect(run.status, run.failure_reason ?? "").toBe("COMPLETED");
     expect(servedBySearchLane(run.model)).toBe(true);
     expect(run.output_text).toContain(SOURCE_URL);
     const grounded = v.seen.calls.filter((c) => c.grounded).map((c) => c.model);
-    expect(grounded.slice(0, 2)).toEqual(["gemini-2.5-flash", FREE_SEARCH_GROUNDED_MODELS[1]]);
+    expect(grounded.slice(0, 2)).toEqual([FREE_SEARCH_GROUNDED_MODELS[0], FREE_SEARCH_GROUNDED_MODELS[1]]);
     expect(run.output_text).toContain(`Searched with: Google Search grounding on ${FREE_SEARCH_GROUNDED_MODELS[1]}`);
     expect(v.seen.calls.every((c) => c.host !== "generativelanguage.googleapis.com" || c.geminiKey === "wp"), "its own key, not the shared one").toBe(true);
   }, 60_000);
+
+  it("the grounded rungs are what the key can still do: a 404 drops a model for good, a 429 drops it for the day, and neither is asked again (13 Nov 2026)", async () => {
+    const [a, b, c] = FREE_SEARCH_GROUNDED_MODELS;
+    const now = new Date("2026-11-13T18:00:00.000Z");
+    const stop = (at: string, said: string) => ({ at, reason: `free_search_named_stop:Couldn't research X: Gemini search grounding: ${said}; Brave search: nothing` });
+    const stops = [
+      stop("2026-11-13T09:00:00.000Z", `${b}: provider_http_429:You exceeded your current quota`),
+      stop("2026-11-12T09:00:00.000Z", `${c}: provider_http_429:You exceeded your current quota`),
+      stop("2026-10-20T09:00:00.000Z", `${a}: provider_http_404:This model is no longer available to new users`),
+    ];
+    const rungs = groundedRungs(FREE_SEARCH_GROUNDED_MODELS, stops, now);
+    expect(rungs.gone).toEqual([a]);
+    expect(rungs.spentToday, "yesterday's 429 is asked again today").toEqual([b]);
+    expect(rungs.ask).toEqual(FREE_SEARCH_GROUNDED_MODELS.filter((m) => m !== a && m !== b));
+    // A model whose id only begins another's is not confused with it.
+    expect(groundedRungs(["gemini-9-flash", "gemini-9-flash-lite"], [stop("2026-10-20T09:00:00.000Z", "gemini-9-flash-lite: provider_http_404:gone")], now).ask).toEqual(["gemini-9-flash"]);
+    // Through the adapter: the dropped rungs get no request at all, and the stop says why.
+    const v = vendors({ grounding: "429" });
+    const adapter = createFreeSearchAdapter({ geminiBaseUrl: "https://generativelanguage.googleapis.com", geminiApiKey: "g", quota: { take: async () => true }, fetchImpl: v.fetchImpl, groundedStops: async () => stops, now: () => now });
+    await expect(adapter.complete({ purpose: "Example Ventures", inputs: ["who"], model: null })).rejects.toThrow(new RegExp(`no longer offered on this key, so not asked: ${a}; no grounding allowance left today, so not asked again: ${b}`));
+    const asked = v.seen.calls.filter((x) => x.grounded).map((x) => x.model);
+    expect(asked).toEqual(FREE_SEARCH_GROUNDED_MODELS.filter((m) => m !== a && m !== b));
+  });
+
+  it("Brave is asked several questions about what the task wants FOUND, and the query writer reads the END of a long brief (13 Nov 2026, the hire search)", async () => {
+    const braveQueries: string[] = [];
+    let queryPrompt = "";
+    let takes = 0;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("api.search.brave.com")) {
+        const q = new URL(url).searchParams.get("q")!;
+        braveQueries.push(q);
+        return new Response(JSON.stringify({ web: { results: [{ url: `https://example.com/${braveQueries.length}`, title: q, description: `Sam Sample, freelance producer, found by ${q}` }] } }), { status: 200 });
+      }
+      if (url.startsWith("https://example.com")) return new Response("<p>Sam Sample is a freelance producer.</p>", { status: 200, headers: { "content-type": "text/html" } });
+      const body = JSON.parse(String(init?.body)) as { tools?: unknown; contents: unknown };
+      if (body.tools) return new Response(JSON.stringify({ error: { message: "quota" } }), { status: 429 });
+      const asked = JSON.stringify(body.contents);
+      if (asked.includes("web search queries, one per line")) {
+        queryPrompt = asked;
+        return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "1. freelance producer portfolio\n- producer speaker list\nproducer award list\na fourth that is not asked" }] } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "Sam Sample [https://example.com/3]" }] } }] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const adapter = createFreeSearchAdapter({ geminiBaseUrl: "https://generativelanguage.googleapis.com", geminiApiKey: "g", braveApiKey: "b", quota: { take: async () => ((takes += 1), true) }, fetchImpl });
+    const brief = `${"WHO IS ASKING: a made-up agency. ".repeat(400)}TASK: find a freelance producer in the made-up town of Exampleville.`;
+    const out = await adapter.complete({ purpose: "Example search", inputs: [brief], model: null });
+    expect(braveQueries).toEqual(["freelance producer portfolio", "producer speaker list", "producer award list"]);
+    expect(braveQueries).toHaveLength(BRAVE_QUERIES_PER_SEARCH);
+    expect(takes, "each question is counted against the daily cap").toBe(BRAVE_QUERIES_PER_SEARCH);
+    expect(brief.length).toBeGreaterThan(6000);
+    expect(queryPrompt, "the ask at the end of the brief reached the query writer").toContain("Exampleville");
+    // Every question's result is a source the answer may cite, not only the first question's.
+    for (const n of [1, 2, 3]) expect(out.text).toContain(`- https://example.com/${n}`);
+  });
+
+  it("a citation is the fetched page's address, with or without the query string the search result carried; a different page is still no citation", () => {
+    const page = "https://example.com/in/sam-sample-1a2b3c/?_l=en";
+    expect(citesPage('{"profile_url":"https://example.com/in/sam-sample-1a2b3c/"}', page)).toBe(true);
+    expect(citesPage(`as shown at ${page}`, page)).toBe(true);
+    expect(citesPage('{"profile_url":"https://example.com/in/someone-else/"}', page)).toBe(false);
+    expect(citesPage("An answer with no URL at all, from example.com", "https://example.com/")).toBe(false);
+  });
 
   it("a writer that cites no page has failed, and the NEXT free writer is asked: the route completes on the one that cites a fetched page (13 Nov 2026)", async () => {
     const writers: string[] = [];
@@ -389,7 +454,7 @@ describe("Fix 2: live research for $0", () => {
       if (url.startsWith("https://example.com")) return new Response("<p>y</p>", { status: 200, headers: { "content-type": "text/html" } });
       const body = JSON.parse(String(init?.body)) as { tools?: unknown; contents: unknown };
       if (body.tools) return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "no sources" }] } }] }), { status: 200 });
-      if (JSON.stringify(body.contents).includes("Write ONE web search query")) return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "q" }] } }] }), { status: 200 });
+      if (JSON.stringify(body.contents).includes("web search queries, one per line")) return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "q" }] } }] }), { status: 200 });
       const model = decodeURIComponent(url.split("/models/")[1]!.split(":")[0]!);
       writers.push(model);
       // The first writer answers from memory; the second cites the page it was given.

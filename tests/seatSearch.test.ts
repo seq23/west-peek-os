@@ -153,6 +153,22 @@ describe("Parker's collision, resolved: Free only, a search call, a seat that ca
     expect(JSON.parse(row!.search_queries_json!)).toContain("2026 Black Bar Association event sponsors");
   }, 60_000);
 
+  it("a search does not START on the free search lane once that lane failed its last two tries at this kind of work: the third run leads on the seat (13 Nov 2026, wc_946f0b75…)", async () => {
+    await awake("codex", true);
+    const c = claimer(["codex"]);
+    const lanesOf = async (id: string) =>
+      (JSON.parse((await t.db.prepare("SELECT attempts_json FROM ai_run_routing WHERE ai_run_id = ?1").bind(id).first<{ attempts_json: string }>())!.attempts_json) as Array<{ provider_key: string; outcome: string }>).map((a) => [a.provider_key, a.outcome]);
+    for (let n = 0; n < 2; n++) {
+      const { run } = await runAi(env(), SEARCH_CALL(), { fetchImpl: vendors().fetchImpl });
+      expect(run.status).toBe("COMPLETED");
+      expect(await lanesOf(run.id), "the same run moved from the failed free search to the seat").toEqual([["free_search", "FAILED_OVER"], ["codex", "COMPLETED"]]);
+    }
+    const { run: third } = await runAi(env(), SEARCH_CALL(), { fetchImpl: vendors().fetchImpl });
+    await c.stop();
+    expect(third.status).toBe("COMPLETED");
+    expect(await lanesOf(third.id), "the free search lane is not asked a third time running").toEqual([["codex", "COMPLETED"]]);
+  }, 90_000);
+
   it("a real caller accepts it — searchQuestion returns the seat's answer instead of 'routed to a model that cannot search'", async () => {
     await awake("codex", true);
     const c = claimer(["codex"]);
