@@ -39,6 +39,12 @@ export interface QuestionAnswerInput {
   cardTitle: string;
   /** The partner's own words — the question actually asked. */
   question: string;
+  /**
+   * What the card's own record says (13 Nov 2026: Scooter asked "Do you have a link to the
+   * dashboard yet?" and Porter, shown only a title cut at 90 characters, could not say the preview
+   * link it had emailed him five minutes earlier). Facts read from the database, never invented.
+   */
+  cardFacts?: string | null;
 }
 
 export interface QuestionAnswerResult {
@@ -84,34 +90,44 @@ export function parseQuestionAnswer(outputText: string | null | undefined): { co
   return { confident: true, answer, reason: (reasonMatch?.[1] ?? "").trim().slice(0, 400) || "(no reason given)" };
 }
 
+/** The answerer's prompt: persona, the card and its recorded facts, the question, the strict format. */
+export function questionAnswerPrompt(input: QuestionAnswerInput & { employee: { name: string; role: string } }): string {
+  return [
+    personaPrompt(input.employee.name, input.employee.role),
+    "",
+    "A partner asked a plain question on a work card in a domain you own. Read it and decide, in " +
+      "your own judgement, whether you genuinely know the answer — never guess, never invent a " +
+      "fact, a number or a date to appear complete.",
+    "",
+    `CARD: ${input.cardTitle}`,
+    ...(input.cardFacts?.trim()
+      ? [
+          "",
+          "WHAT THE CARD'S RECORD SAYS (facts from the database; answer from these, and anything not here you do not know):",
+          input.cardFacts.trim().slice(0, 4000),
+        ]
+      : []),
+    `THE QUESTION, IN THE PARTNER'S OWN WORDS:\n"""\n${input.question.slice(0, 2000)}\n"""`,
+    "",
+    "BIAS HARD TOWARD NOT CONFIDENT. Sequoia is the fallback and she is always available — a wrong " +
+      "guessed answer reaching a partner is worse than her answering it herself. Say CONFIDENT: yes " +
+      "only when you would stake your name on the answer exactly as written; anything short of that " +
+      "is CONFIDENT: no, whatever the reason.",
+    "",
+    "Answer in exactly this format and nothing else:",
+    "CONFIDENT: yes|no",
+    "ANSWER: <your answer, in your own voice, only if confident — omit or leave blank otherwise>",
+    "REASON: <one short sentence either way>",
+  ].join("\n");
+}
+
 /** THE DEFAULT ANSWERER — one model call, grounded in the owning employee's real persona. */
 const defaultAnswerQuestion: QuestionAnswerer = async (env, input) => {
   const actor: Actor = { type: "AI", aiEmployeeId: input.employee.id, roles: [], firmScopes: [input.firmScope] };
   const { run } = await runAi(env, {
     purpose: `${input.employee.name} tries to answer a partner's question on a ${input.kind ?? "work"} card before it reaches Sequoia`,
     actor,
-    inputs: [
-      [
-        personaPrompt(input.employee.name, input.employee.role),
-        "",
-        "A partner asked a plain question on a work card in a domain you own. Read it and decide, in " +
-          "your own judgement, whether you genuinely know the answer — never guess, never invent a " +
-          "fact, a number or a date to appear complete.",
-        "",
-        `CARD: ${input.cardTitle}`,
-        `THE QUESTION, IN THE PARTNER'S OWN WORDS:\n"""\n${input.question.slice(0, 2000)}\n"""`,
-        "",
-        "BIAS HARD TOWARD NOT CONFIDENT. Sequoia is the fallback and she is always available — a wrong " +
-          "guessed answer reaching a partner is worse than her answering it herself. Say CONFIDENT: yes " +
-          "only when you would stake your name on the answer exactly as written; anything short of that " +
-          "is CONFIDENT: no, whatever the reason.",
-        "",
-        "Answer in exactly this format and nothing else:",
-        "CONFIDENT: yes|no",
-        "ANSWER: <your answer, in your own voice, only if confident — omit or leave blank otherwise>",
-        "REASON: <one short sentence either way>",
-      ].join("\n"),
-    ],
+    inputs: [questionAnswerPrompt(input)],
     sensitivity: "INTERNAL" as never,
     budgetContext: { judgement: true, expectedOutputTokens: 300 },
     routing: { category: "OPERATIONS", taskClass: "question-routing-answer", workCardId: input.cardId },

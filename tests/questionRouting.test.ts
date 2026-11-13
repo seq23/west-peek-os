@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
-import { answerQuestionForCard, type QuestionAnswerer } from "../src/worker/services/questionRouting";
+import { answerQuestionForCard, questionAnswerPrompt, type QuestionAnswerer } from "../src/worker/services/questionRouting";
 
 /**
  * `answerQuestionForCard` — the routing half of Addendum 12, independent of any one card kind's
@@ -82,5 +82,19 @@ describe("answerQuestionForCard — escalates before ever asking a model, when t
     expect(out.answer).toBe("Yes, it's live now.");
     expect(out.employeeName).toBe("Porter");
     expect(out.employeeId).toBe("aie_porter");
+  });
+});
+
+describe("questionAnswerPrompt — the answerer reads the card's record, not just its title (13 Nov 2026)", () => {
+  const employee = { name: "Porter", role: "Systems & Intake Operator" };
+  it("carries the card's recorded facts, so a 'where is the link?' question can be answered from them", () => {
+    const facts = "Preview link (already emailed to the partner): https://work-wpc-c548d043.west-peek-productions.pages.dev";
+    const prompt = questionAnswerPrompt({ cardId: "wc_x", firmScope: "west-peek", kind: "WEB_PROPERTY_CHANGE", cardTitle: 'Change westpeekproductions.com: "Hey Porter and Sequoia! We\'re ready to build the West Pee', question: "Do you have a link to the dashboard yet?", cardFacts: facts, employee });
+    expect(prompt).toContain(facts);
+    expect(prompt.indexOf(facts)).toBeLessThan(prompt.indexOf("Do you have a link to the dashboard yet?"));
+  });
+  it("without facts it has only the title, as before", () => {
+    const prompt = questionAnswerPrompt({ cardId: "wc_x", firmScope: "west-peek", kind: null, cardTitle: "t", question: "?", employee });
+    expect(prompt).not.toContain("WHAT THE CARD'S RECORD SAYS");
   });
 });

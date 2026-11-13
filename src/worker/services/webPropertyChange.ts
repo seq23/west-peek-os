@@ -2027,6 +2027,35 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
 }
 
 /**
+ * WHAT A QUESTION IS ANSWERED FROM (13 Nov 2026). Scooter replied to a preview email "Do you have a
+ * link to the dashboard yet?"; the answerer saw only the card's 90-character title, said the card
+ * was "cut off" and passed it to Sequoia — though the preview link, and that the dashboard sits at
+ * /dashboard on it, were on this row. These are the row's own facts, read back, never invented.
+ */
+export function webPropertyCardFacts(row: WebPropertyChangeRow): string {
+  const pages = (() => {
+    try {
+      const v = JSON.parse(row.changed_pages_json ?? "[]");
+      return Array.isArray(v) ? v.map(String).slice(0, 12) : [];
+    } catch {
+      return [];
+    }
+  })();
+  const base = row.preview_url?.replace(/\/+$/, "") ?? null;
+  const lines = [
+    `Site: ${row.property_host ?? "(not named)"} (repo ${row.target_repo})`,
+    `Stage: ${row.phase}${row.landed_at ? `, landed ${row.landed_at}` : ""}`,
+    base ? `Preview link (already emailed to the partner): ${base}${row.preview_emailed_at ? `, emailed ${row.preview_emailed_at}` : ""}` : "Preview link: none built yet",
+    ...(base && pages.length ? [`Changed pages on the preview: ${pages.map((p) => `${base}${p.startsWith("/") ? p : `/${p}`}`).join(" · ")}`] : []),
+    ...(row.pr_url ? [`Pull request: ${row.pr_url} (checks ${row.check_state ?? "not run"})`] : []),
+    ...(missingSecretsOf(row).length ? [`Still missing keys: ${missingSecretsOf(row).map((m) => m.name).join(", ")}`] : []),
+    ...(row.rebuilt_for ? [`The partner's latest changes, which the current preview was built for:\n"""\n${row.rebuilt_for.slice(0, 1500)}\n"""`] : []),
+    ...(row.request_text ? [`The original request, in the partner's words:\n"""\n${row.request_text.slice(0, 1500)}\n"""`] : []),
+  ];
+  return lines.join("\n");
+}
+
+/**
  * PORTER ANSWERS A QUESTION IN HIS NEXT EMAIL, AND THE WORK CONTINUES (27 Sep 2026). A partner's
  * reply that asks something is a QUESTION intent: the owning employee tries to answer it with real
  * confidence (`answerQuestionForCard`, the same seam Addendum 12 uses) and the answer goes out on
@@ -2034,9 +2063,10 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
  * same email and Sequoia is told quietly; the work still carries on with the recommendations.
  */
 async function answerMidFlowQuestion(env: Env, card: WebPropertyChangeCard, question: string, answerQuestion: QuestionAnswerer | undefined): Promise<string> {
+  const row = await readWebPropertyChange(env, card.id);
   const routed = await answerQuestionForCard(
     env,
-    { cardId: card.id, firmScope: card.firm_scope, kind: card.kind ?? WEB_PROPERTY_CHANGE_KIND, cardTitle: card.title, question },
+    { cardId: card.id, firmScope: card.firm_scope, kind: card.kind ?? WEB_PROPERTY_CHANGE_KIND, cardTitle: card.title, question, cardFacts: row ? webPropertyCardFacts(row) : null },
     answerQuestion,
   );
   const answer =

@@ -99,7 +99,8 @@ const fakeIntentReader: ReplyIntentReader = async (_env, input) => {
   if (question) return { ...base, kind: "QUESTION", changes, question };
   return { ...base, kind: "CONTINUE", changes, question: null };
 };
-const fakeAnswerer: QuestionAnswerer = async (_env, input) => ({ confident: true, answer: `Yes — ${input.question.slice(0, 60)} The hex is #E0632F and it stays.`, reason: "fake", aiRunId: null });
+const answererInputs: Array<{ question: string; cardFacts?: string | null }> = [];
+const fakeAnswerer: QuestionAnswerer = async (_env, input) => (answererInputs.push({ question: input.question, cardFacts: input.cardFacts }), { confident: true, answer: `Yes — ${input.question.slice(0, 60)} The hex is #E0632F and it stays.`, reason: "fake", aiRunId: null });
 const RUNNERS = { webPropertyChange: (e: Env, c: SweepCard) => runWebPropertyChangeCard(e, c, undefined, undefined, fakeAnswerer, fakeIntentReader) };
 
 async function tick(): Promise<Awaited<ReturnType<typeof sweepOnce>>> {
@@ -2085,6 +2086,13 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     await replyFrom(SCOOTER, "Is the orange the final hex?", await q.token());
     const asked = await tickFor(q.id);
     expect(asked.outcome).toBe("BLOCKED");
+    // 13 Nov 2026 (Scooter: "Do you have a link to the dashboard yet?"): the answerer is given the
+    // card's own record — the preview link it already emailed — never only the cut-off title.
+    const seen = answererInputs.filter((a) => a.question.includes("final hex")).at(-1);
+    const qRow = (await readWebPropertyChange(env, q.id))!;
+    expect(qRow.preview_url, "the fixture is at a preview with a link").toBeTruthy();
+    expect(seen?.cardFacts ?? "").toContain(`Preview link (already emailed to the partner): ${qRow.preview_url!.replace(/\/+$/, "")}`);
+    expect(seen?.cardFacts ?? "").toContain(qRow.property_host ?? qRow.target_repo);
     expect(await lastFinding(q.id)).toMatch(/asked a question; answered by email\. The same preview waits for a positive reply — nothing lands until then/);
     expect((await readWebPropertyChange(env, q.id))!.land_approved_at).toBeNull();
     expect(await liveJobFor(q.id), "nothing lands on a question").toBeNull();
