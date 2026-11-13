@@ -225,7 +225,7 @@ function selfTest() {
   say(checkAllowList(valuedSecret).violations.some((x) => /carries a value out of the allow-list/.test(x)), "a secret value written into the allow-list is caught");
 
   const names = [...PAGES_PROJECTS, ...Object.keys(PLAIN_VARS), ...Object.keys(SECRET_VARS)];
-  const onCommandLine = { raw: duty.raw, stripped: duty.stripped.replace('spawn("npx", ["wrangler", "pages", "secret", "put", entry.name, "--project-name", entry.project]', 'spawn("npx", ["wrangler", "pages", "secret", "put", entry.name, "--project-name", entry.project, value]') };
+  const onCommandLine = { raw: duty.raw, stripped: duty.stripped.replace('spawn("npx", ["wrangler", "pages", "secret", "put", entry.name, "--project-name", entry.project, "--env", environment]', 'spawn("npx", ["wrangler", "pages", "secret", "put", entry.name, "--project-name", entry.project, value]') };
   say(checkDutyScript(onCommandLine, names).violations.some((x) => /interpolate|arguments/.test(x)), "the value put on wrangler's command line is caught");
 
   const shelled = { raw: duty.raw, stripped: duty.stripped.replace("child.stdin.end(value);", 'sh("sh", ["-c", `printf "%s" "${value}" | npx wrangler pages secret put ${entry.name}`]);') };
