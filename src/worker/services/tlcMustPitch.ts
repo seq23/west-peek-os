@@ -5,7 +5,7 @@ import { json, type RouteContext } from "../router";
 import { actorFromIdentity, authorize } from "./authorize";
 import { PARTNERS } from "../../shared/registry/partners";
 import { nextDripAt } from "../../shared/tlc/learningClub";
-import { brandKey, CONTACT_EMAIL_RE, wayInWords } from "../../shared/tlc/mustPitch";
+import { brandKey, CONTACT_EMAIL_RE, wayInListing, wayInWords } from "../../shared/tlc/mustPitch";
 
 /*
  * BRANDS WE MUST PITCH (owner, 23 Oct 2026: "are we reaching out to anthropic i think that is important
@@ -257,7 +257,11 @@ export async function handleMustPitch(
       if (moved) changed += 1;
       if (moved) await log(env, { brand: g.brand, month: months.join(","), action: "NO_ADDRESS", by: "Wynn", at, detail: why, firmScope });
     }
-    wayIn.push(wayInWords({ brand: g.brand, months, pages }));
+    // Said as new only while it is new: an item unchanged for three weekly notes is said once more, then left out.
+    const since = way && way.state === "OPEN" ? Date.parse(String(way.changed_at ?? way.opened_at ?? at)) : Date.parse(at);
+    const moved2 = !way || way.state !== "OPEN" || JSON.stringify(parseList(way.months_json).sort()) !== JSON.stringify(months);
+    const line = wayInListing({ brand: g.brand, months, pages }, moved2 ? 0 : Math.max(0, Math.floor((Date.parse(at) - since) / 86_400_000)));
+    if (line) wayIn.push(line);
   }
   return { queued, wayIn, changed };
 }
