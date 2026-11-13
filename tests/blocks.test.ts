@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { createWorkCardInternal } from "../src/worker/services/workCards";
-import { answerBlock, blockCard, blockOf, PARTNER_ANSWER_MAX, resurfaceStaleBlocks } from "../src/worker/services/blocks";
+import { answerBlock, blockCard, blockOf, PARTNER_ANSWER_MAX, recordPartnerBack, resurfaceStaleBlocks } from "../src/worker/services/blocks";
+import { partnerBackIn } from "../src/shared/work/partnerBackBy";
 import { claimNextCard, sweepIdentity, sweepOnce } from "../src/worker/services/workSweep";
 import { auditCatalogue, BLOCK_REASONS, describeBlock, plainLanguageProblems } from "../src/shared/work/blocks";
 
@@ -205,6 +206,43 @@ describe("the owner clears it herself", () => {
     expect(after.state, "a block sent to an engineer is still a block").toBe("BLOCKED");
     expect(after.block_who).toBe("ENGINEER");
     expect(after.block_nag_at, "and it keeps ringing until they have fixed it").not.toBeNull();
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(c.id).run();
+  });
+});
+
+/**
+ * 0302 (owner, 13 Nov 2026): a partner answered a preview with "i will come back with edits this
+ * weekend". The card takes him at his word: no reminder before the time he named has passed.
+ */
+describe("a partner who says when he will be back is not reminded before then (0302)", () => {
+  it("reads only a first-person promise that names when, and lands on the working morning after it, Central time", () => {
+    const FRI = new Date("2026-11-13T15:30:00.000Z"); // Friday 9:30 AM CT
+    const said = partnerBackIn("looks great --a few edits but overall this is great, let's keep building\nwhat we can. i will come back with edits this weekend.\n\nOn Fri, Nov 13, 2026 at 8:28 AM Porter wrote:\n> I will send the preview tomorrow.", FRI);
+    expect(said?.back_at, "Monday 16 Nov, 8:00 AM CT").toBe("2026-11-16T14:00:00.000Z");
+    expect(said?.words).toBe("i will come back with edits this weekend.");
+    expect(partnerBackIn("I'll get back to you tomorrow.", FRI)?.back_at, "the morning after tomorrow").toBe("2026-11-15T14:00:00.000Z");
+    expect(partnerBackIn("We will send the photos Tuesday.", FRI)?.back_at).toBe("2026-11-18T14:00:00.000Z");
+    // In summer the same morning is 13:00 UTC.
+    expect(partnerBackIn("I will review this weekend.", new Date("2026-07-10T15:00:00.000Z"))?.back_at).toBe("2026-07-13T13:00:00.000Z");
+    for (const no of ["The launch is this weekend.", "Looks great, approved.", "I will come back with edits.", "> I will come back with edits this weekend."]) {
+      expect(partnerBackIn(`ok\n${no}`, FRI), no).toBeNull();
+    }
+  });
+
+  it("the block's reminder stays silent until that time has passed, then rings as it always did", async () => {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET block_nag_at = NULL WHERE state = 'BLOCKED'").run();
+    const c = await card("A preview he will come back to");
+    await blockCard(env, c, { reason: "a_question_for_you", trying: c.title, employee: "Porter", detail: "Your word on the preview." }, NOW);
+    // NOW is Wednesday 16 Sep 2026, 7:00 AM CT. "this weekend" → Monday 21 Sep, 8:00 AM CT.
+    const back = await recordPartnerBack(env, c.id, "Looks great. I will come back with edits this weekend.", "Scooter", NOW);
+    expect(back?.back_at).toBe("2026-09-21T13:00:00.000Z");
+    expect(String((await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(c.id).first<{ description: string }>())?.description)).toContain("I will come back with edits this weekend.");
+    for (const hours of [26, 50, 98, 120]) {
+      expect((await resurfaceStaleBlocks(env, new Date(NOW.getTime() + hours * 3_600_000))).map((r) => r.id), `${hours}h on: before Monday morning`).not.toContain(c.id);
+    }
+    expect((await row(c.id)).block_nags, "no reminder was counted").toBe(0);
+    const after = await resurfaceStaleBlocks(env, new Date("2026-09-21T13:05:00.000Z"));
+    expect(after.map((r) => r.id), "Monday 8:05 AM CT: the time he named has passed").toContain(c.id);
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(c.id).run();
   });
 });

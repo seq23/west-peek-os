@@ -1,3 +1,4 @@
+import { partnerBackIn, type PartnerBack } from "../../shared/work/partnerBackBy";
 import type { Env } from "../env";
 import { ownershipOf, roleOf, secondaryApprovalRefusal } from "../../shared/work/partnerOwnership";
 import type { RouteContext } from "../router";
@@ -485,6 +486,8 @@ export async function resurfaceStaleBlocks(env: Env, now: Date): Promise<StoredB
           -- negatively.
           AND held_at IS NULL
           AND block_nag_at IS NOT NULL AND block_nag_at < ?1
+          -- 0302: THE PARTNER SAID WHEN HE WILL BE BACK. No reminder before that time has passed.
+          AND (partner_back_at IS NULL OR partner_back_at < ?1)
         ORDER BY blocked_at ASC LIMIT 5`,
     )
       .bind(now.toISOString())
@@ -1020,4 +1023,21 @@ export async function restoreBlock(env: Env, cardId: string, why: string, now: D
     .bind(cardId, nagAt(now, row?.block_reason ?? null), why.slice(0, 400))
     .run();
   return (res.meta?.changes ?? 0) > 0;
+}
+
+/**
+ * THE PARTNER WHO ASKED SAID WHEN HE WILL BE BACK (0302; `partnerBackIn`). Recorded on the card —
+ * the time, his words, and a line in its history — so `resurfaceStaleBlocks` sends no reminder
+ * before then. A later reply that names a new time replaces it. Returns what was recorded.
+ */
+export async function recordPartnerBack(env: Env, cardId: string, written: string, partnerFirstName: string, now: Date = new Date()): Promise<PartnerBack | null> {
+  const back = partnerBackIn(written, now);
+  if (!back) return null;
+  const day = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", weekday: "long", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(back.back_at));
+  await env.WP_OS_DB.prepare(
+    "UPDATE work_card SET partner_back_at = ?2, partner_back_words = ?3, description = substr(COALESCE(description, '') || char(10) || '• ' || ?4, 1, 16000) WHERE id = ?1",
+  )
+    .bind(cardId, back.back_at, back.words, `${partnerFirstName} said when to expect him (${back.when}): "${back.words}". No reminder about this card before ${day} CT.`)
+    .run();
+  return back;
 }
