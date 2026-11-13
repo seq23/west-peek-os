@@ -5,7 +5,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import { gmailReadStub } from "./helpers/gmailMailbox";
 import type { Env } from "../src/worker/env";
-import { DRIP_TIMED_FOR_SETTING, contentHashes, recordBrandMail, retimeDrip, runDrip } from "../src/worker/services/learningClub";
+import { DRIP_PAST_DAY_14, DRIP_TIMED_FOR_SETTING, contentHashes, recordBrandMail, retimeDrip, runDrip } from "../src/worker/services/learningClub";
 import { SPAM_PAUSE_SETTING, TLC_DRIP_DAYS } from "../src/shared/tlc/learningClub";
 
 /**
@@ -95,6 +95,35 @@ describe("the four emails, day 0/3/7/14, then never again", () => {
     for (const n of [15, 21, 60]) await runDrip(env, day(n), "west-peek", DRIP_DEPS);
     expect(to("fourco"), "never a fifth email").toHaveLength(0);
     expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_drip_message WHERE deal_id = ?1").bind(id).first<{ n: number }>())!.n).toBe(4);
+  });
+
+  it("a due follow-up always ends in one visible outcome: a draft on its thread, or a HELD row that says why; never neither", async () => {
+    // 13 Nov 2026: a follow-up came due past day 14, lost its date and left no row ("1 due, 0 sent, 0 awaiting approval, 0 HELD").
+    const step2 = { drip_step: 2, last_sent_at: day(3, 2).toISOString(), next_send_at: day(7, 0).toISOString() };
+    const threaded = await pitched("Threadco", step2);
+    await env.WP_OS_DB.prepare("INSERT INTO external_effect_request (id, effect_type, destination, payload_json, requested_by_type, requested_by_id, outside_job, gmail_message_id, gmail_thread_id, rfc_message_id) VALUES ('eer_threadco_1', 'email.send', 'pat@threadco.example', '{}', 'AI', 'wynn', 'tlc', 'gm-threadco-1', 'thread-threadco', '<second@mail.gmail.example>')").run();
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_drip_message (id, deal_id, step, subject, body, state, sent_at, effect_request_id) VALUES ('tdm_Threadco_1', ?1, 1, 'Re: Threadco + a small room in New York', 'x', 'SENT', ?2, 'eer_threadco_1')").bind(threaded, day(3, 2).toISOString()).run();
+    const lost = await pitched("Lostco", step2);
+    const late = await pitched("Overdueco", { ...step2, first_sent_at: day(-12).toISOString(), last_sent_at: day(0).toISOString() });
+    const at = (id: string) => env.WP_OS_DB.prepare("SELECT m.state, m.held_reason, r.payload_json FROM tlc_drip_message m LEFT JOIN external_effect_request r ON r.id = m.effect_request_id WHERE m.deal_id = ?1 AND m.step = 2").bind(id).first<{ state: string; held_reason: string | null; payload_json: string | null }>();
+
+    // Her mailbox knows Threadco's last email by its Gmail id and holds nothing else.
+    const out = await runDrip(env, day(7), "west-peek", { ...DRIP_DEPS, thread: async (_e, where) => ("id" in where && where.id === "gm-threadco-1" ? { threadId: "thread-threadco", messageId: "<second@mail.gmail.example>", references: [], subject: "Re: Threadco + a small room in New York" } : null) });
+    expect(out.due).toBe(3);
+    expect(out.unaccounted ?? [], "no due deal ends a pass with no record").toEqual([]);
+
+    const draft = await at(threaded);
+    expect(draft?.state).toBe("AWAITING_APPROVAL");
+    expect(JSON.parse(draft!.payload_json!)).toMatchObject({ gmail_thread_id: "thread-threadco", in_reply_to: "second@mail.gmail.example" });
+
+    expect(await at(lost)).toMatchObject({ state: "HELD", held_reason: expect.stringContaining("TLC_BRAND_THREAD_NOT_FOUND") });
+    expect((await dealRow(lost))!.next_send_at, "still due: tried again each pass").not.toBeNull();
+
+    expect(await at(late)).toMatchObject({ state: "HELD", held_reason: DRIP_PAST_DAY_14 });
+    expect((await dealRow(late))!.next_send_at, "its date is cleared only with that row").toBeNull();
+    expect(out.sequenceEnded).toContain("Overdueco");
+    expect(out.held, "both held follow-ups are counted, so the summary adds up").toBe(2);
+    expect(to("lostco").length + to("overdueco").length, "nothing went").toBe(0);
   });
 
   it("a reply stops that brand's sequence at once: no email 3 or 4", async () => {

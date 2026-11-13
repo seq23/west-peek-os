@@ -736,8 +736,14 @@ export interface DripResult {
   samplesPending?: string[];
   /** Follow-ups (email 2, with the samples PDF) queued to go on their own, decided by the drip-step-2 policy. */
   followUpsQueued?: number;
-  /** Follow-ups that never went: the sequence passed day 14 (owner, 6 Nov 2026). */
+  /** Follow-ups that never went: the sequence passed day 14 (owner, 6 Nov 2026). Each has a HELD row saying so and counts in `held`. */
   sequenceEnded?: string[];
+  /** Due brands whose club has no topic yet: nothing can be written; they stay due. */
+  noTopic?: string[];
+  /** Due first emails to brands she contacted herself: Wynn never writes those, so the date is cleared. */
+  ownerWrites?: string[];
+  /** NAMED STOP [DRIP_DUE_UNACCOUNTED]: due deals that ended the pass with no message row and no named wait (deal ids). */
+  unaccounted?: string[];
   /** Deals re-timed to a new sequence, once per change of TLC_DRIP_DAYS. */
   retimed?: string[];
   spamPauseCleared?: string;
@@ -746,6 +752,8 @@ export interface DripResult {
   /** Due brands not drafted this pass because its time budget ran out (DRIP_COMPOSE_BUDGET_MS); the next pass drafts them. */
   leftForNextPass?: string[];
 }
+/** Why a follow-up that came due after the sequence's window never goes (the held_reason on its row). */
+export const DRIP_PAST_DAY_14 = "past day 14 of the sequence: no follow-up goes after it";
 const emptyDrip = (): DripResult => ({ due: 0, held: 0, awaitingApproval: 0, sent: 0, gate: { open: false, reasons: [] }, newDrafts: [], sentBrands: [], waitingForAllowance: 0 });
 
 /** Where she approves each brand email. */
@@ -1020,7 +1028,7 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
       }
       // DAY 14, THEN NEVER AGAIN: an approved follow-up that could not go before the sequence's window closed never goes.
       if (dripWindowClosed(m.step, deal.first_sent_at ?? null, now)) {
-        await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'HELD', held_reason = 'past day 14 of the sequence: no follow-up goes after it' WHERE id = ?1").bind(m.id).run();
+        await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'HELD', held_reason = ?2 WHERE id = ?1").bind(m.id, DRIP_PAST_DAY_14).run();
         await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = NULL, updated_at = ?2 WHERE id = ?1").bind(deal.id, now.toISOString()).run();
         result.sequenceEnded = [...(result.sequenceEnded ?? []), brandDisplayName(deal.brand)];
         continue;
@@ -1079,31 +1087,48 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
       ORDER BY e.month, d.next_send_at`,
   ).bind(firmScope, TLC_DRIP_DAYS.length, now.toISOString()).all<TlcDealRow>()).results ?? [];
   result.due = due.length;
-
+  // Due deals whose outcome this pass is a named wait with no message row (the summary names each bucket).
+  const waiting = new Set<string>();
 
   const volume = await import("./tlcVolume");
   for (const deal of due) {
     if (Date.now() - startedAt >= composeBudgetMs) {
       result.leftForNextPass = [...(result.leftForNextPass ?? []), brandDisplayName(deal.brand)];
+      waiting.add(deal.id);
       continue;
     }
     // DAY 14, THEN NEVER AGAIN (owner, 6 Nov 2026): a follow-up whose window closed is never drafted; the sequence ends.
     if (dripWindowClosed(deal.drip_step, deal.first_sent_at ?? null, now)) {
+      // A DUE FOLLOW-UP NEVER VANISHES (13 Nov 2026): the first one that came due past day 14 lost its date and left
+      // no record ("1 due, 0 sent, 0 awaiting approval, 0 HELD"). The HELD row says why it never went, and the date
+      // is cleared only once that row exists (it also stops armOwnerFollowUps and retimeDrip arming it again).
+      await env.WP_OS_DB.prepare(
+        `INSERT INTO tlc_drip_message (id, deal_id, step, subject, body, state, held_reason) VALUES (?1, ?2, ?3, ?4, '', 'HELD', ?5)
+         ON CONFLICT (deal_id, step) DO UPDATE SET held_reason = excluded.held_reason WHERE tlc_drip_message.state IN ('HELD','FAILED')`,
+      ).bind(`tdm_${crypto.randomUUID()}`, deal.id, deal.drip_step, `Email ${deal.drip_step + 1} of ${TLC_DRIP_DAYS.length}: not written`, DRIP_PAST_DAY_14).run();
       await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = NULL, updated_at = ?2 WHERE id = ?1").bind(deal.id, now.toISOString()).run();
+      result.held += 1;
       result.sequenceEnded = [...(result.sequenceEnded ?? []), brandDisplayName(deal.brand)];
       continue;
     }
     const ev = await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>();
-    if (!ev?.topic) continue;
+    if (!ev?.topic) {
+      result.noTopic = [...(result.noTopic ?? []), brandDisplayName(deal.brand)];
+      waiting.add(deal.id);
+      continue;
+    }
     // THE CLUB REACHED ITS GOAL (26 Oct 2026): no new pitch and no follow-up for it; a brand already talking to us goes on by reply.
     if (await volume.outreachStopped(env, ev)) {
       result.goalStopped = [...new Set([...(result.goalStopped ?? []), monthWords(ev.month)])];
+      waiting.add(deal.id);
       continue;
     }
     // SHE CONTACTED THIS BRAND HERSELF: Wynn never writes the first email. Once hers went (first_sent_at), its one
     // follow-up IS drafted, for her approval like every other (31 Oct 2026: ElevenLabs had none and never would).
     if ((await ownerContactedBrands(env, firmScope)).has(brandKey(deal.brand)) && !(deal.drip_step > 0 && deal.first_sent_at)) {
       await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = NULL, updated_at = ?2 WHERE id = ?1").bind(deal.id, now.toISOString()).run();
+      result.ownerWrites = [...(result.ownerWrites ?? []), brandDisplayName(deal.brand)];
+      waiting.add(deal.id);
       continue;
     }
     // ONE BRAND PER CATEGORY AT A TIME (owner, 26 Oct 2026): a second brand in the same category for the same club
@@ -1113,6 +1138,7 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
       if (first) {
         await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = ?2, updated_at = ?3 WHERE id = ?1").bind(deal.id, new Date(now.getTime() + 86_400_000).toISOString(), now.toISOString()).run();
         result.heldForCategory = [...(result.heldForCategory ?? []), `${brandDisplayName(deal.brand)} (after ${brandDisplayName(first)})`];
+        waiting.add(deal.id);
         continue;
       }
     }
@@ -1141,6 +1167,7 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
         await volume.refuseAddress(env, deal, addr.refused, now);
         result.addressRefused = [...(result.addressRefused ?? []), brandDisplayName(deal.brand)];
       } else result.addressWaiting = (result.addressWaiting ?? 0) + 1;
+      waiting.add(deal.id);
       continue;
     }
     // Email 1 to her angle, when she gave one (0284), unless she approved her own first email for this brand.
@@ -1189,6 +1216,17 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
     }
     result.awaitingApproval += 1;
     result.newDrafts.push({ brand: deal.brand, month: ev.month, step: deal.drip_step, cardId });
+  }
+  // EVERY DUE DEAL ENDS IN ONE VISIBLE OUTCOME (Rule 0): a message row at its step (a draft, a queued follow-up, or
+  // HELD with its reason) or one of the named waits above. Read back from the table, not from this loop's counters.
+  const lost: string[] = [];
+  for (const deal of due) {
+    if (waiting.has(deal.id)) continue;
+    if (!(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_drip_message WHERE deal_id = ?1 AND step = ?2").bind(deal.id, deal.drip_step).first())) lost.push(deal.id);
+  }
+  if (lost.length) {
+    result.unaccounted = lost;
+    await appendEvent(env, { eventType: "tlc.drip_due_unaccounted", actorType: "system", actorId: "tlc_drip", objectType: "tlc_deal", objectId: lost.join(",").slice(0, 200), firmScope, payload: { deals: lost } });
   }
 
   // 3 · The pitch emails to brands that said yes: execute the approved ones, file the held ones.
