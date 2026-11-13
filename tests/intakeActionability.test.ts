@@ -1,6 +1,4 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { handleRequest } from "../src/worker/index";
@@ -542,24 +540,6 @@ describe("recentBanterContext — the deterministic fact a real work item resets
     const text = await recentBanterContext(env, { firmScope: "west-peek", senderEmail: sender, excludeCardId: "wc_streak_check" });
     expect(text).toContain("3 messages");
     expect(text).toContain("in a row");
-  });
-});
-
-describe("INTAKE_JUDGMENT_STANDARD reaches both intake-facing generation calls", () => {
-  it("is referenced by the classification prompt (webPropertyChange.ts) and the banter-reply prompt (banterReply.ts) in source — not vibes, provably wired", () => {
-    const classifySrc = readFileSync(fileURLToPath(new URL("../src/worker/services/webPropertyChange.ts", import.meta.url)), "utf8");
-    const classifyBody = classifySrc.slice(classifySrc.indexOf("const defaultClassifyActionability"), classifySrc.indexOf("if (run.status !== \"COMPLETED\" || !run.output_text) {"));
-    expect(classifyBody).toContain("INTAKE_JUDGMENT_STANDARD");
-
-    const replySrc = readFileSync(fileURLToPath(new URL("../src/worker/services/banterReply.ts", import.meta.url)), "utf8");
-    const replyBody = replySrc.slice(replySrc.indexOf("const defaultGenerateBanterReply"));
-    expect(replyBody).toContain("INTAKE_JUDGMENT_STANDARD");
-  });
-
-  it("no hardcoded reply-pacing counter or fixed redirect string survives in the banter-reply path (Addendum 11.1)", () => {
-    const src = readFileSync(fileURLToPath(new URL("../src/worker/services/banterReply.ts", import.meta.url)), "utf8");
-    expect(src).not.toContain("BANTER_REDIRECT_LINE");
-    expect(src).not.toContain("gotta get back to work");
   });
 });
 

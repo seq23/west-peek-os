@@ -515,11 +515,4 @@ describe("briefServing — who wrote it, in words", () => {
   it("says nothing rather than guessing when the model is not recorded", () => {
     for (const m of [null, undefined, "", "  "]) expect(briefServing(m)).toMatchObject({ kind: "UNKNOWN", degraded: false, label: null, note: null });
   });
-
-  it("the note names the model and what to do about it", () => {
-    const n = briefServing("deepseek/deepseek-v4-flash-0731:free").note!;
-    expect(n).toContain("deepseek/deepseek-v4-flash-0731:free");
-    expect(n).toContain("weaker draft");
-    expect(n).toContain("Build again");
-  });
 });

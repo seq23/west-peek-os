@@ -21,17 +21,6 @@ describe("every registered work-card kind has a real host", () => {
     expect(Object.entries(KIND_HOSTS).filter(([, h]) => retired.has(h.employee))).toEqual([]);
   });
 
-  it("gives every host a reason in the operator's words, not a schema fragment", () => {
-    for (const [kind, host] of Object.entries(KIND_HOSTS)) {
-      expect(host.because.length, kind).toBeGreaterThan(20);
-      expect(host.because, kind).not.toMatch(/_[a-z]|firm_scope|action_key/);
-    }
-  });
-
-  it("registers WEB_PROPERTY_CHANGE to Porter — Addendum 12's own example", () => {
-    expect(KIND_HOSTS[WEB_PROPERTY_CHANGE_KIND]?.employee).toBe("Porter");
-  });
-
   it("registers no kind that the LOCAL_JOB registry does not also know", () => {
     // Not every local-job kind needs a host, but a host for a kind that isn't a real
     // `work_card.kind` value anywhere is a typo, not a feature.

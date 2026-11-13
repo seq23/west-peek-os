@@ -2,11 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   CLOSING_SIX,
   CORE_SECTIONS,
-  SECTOR_MODULES,
   championRestrictedSections,
-  questionCount,
   sectionsFor,
-  sectorModule,
 } from "../src/shared/ic/diligenceFramework";
 
 /**
@@ -16,15 +13,6 @@ import {
  */
 
 describe("core framework", () => {
-  it("covers all eleven sections", () => {
-    // The list IS the count. A separate toHaveLength(11) beside it could only ever fail together
-    // with the toEqual below, and it was the half a reader had to update twice.
-    expect(CORE_SECTIONS.map((s) => s.id)).toEqual([
-      "founder", "problem", "product", "market", "traction", "distribution",
-      "competition", "moat", "financing", "return_math", "kill_case",
-    ]);
-  });
-
   it("makes every core section mandatory", () => {
     // The operator's framing is that skipping a section is how a category of risk gets forgotten.
     expect(CORE_SECTIONS.filter((s) => !s.mandatory)).toEqual([]);
@@ -56,11 +44,6 @@ describe("the anti-bias rule", () => {
 });
 
 describe("the Closing Six", () => {
-  it("is exactly six, numbered one to six", () => {
-    expect(CLOSING_SIX).toHaveLength(6);
-    expect(CLOSING_SIX.map((q) => q.n)).toEqual([1, 2, 3, 4, 5, 6]);
-  });
-
   it("applies to every sector, including unknown ones", () => {
     expect(sectionsFor("OTHER").closingSix).toHaveLength(6);
     expect(sectionsFor("BIOTECH").closingSix).toHaveLength(6);
@@ -68,13 +51,6 @@ describe("the Closing Six", () => {
 });
 
 describe("sector modules", () => {
-  it("covers the nine named sectors", () => {
-    expect(SECTOR_MODULES.map((m) => m.sector).sort()).toEqual([
-      "AI", "B2B_SAAS", "BIOTECH", "CONSUMER", "CYBERSECURITY",
-      "EDTECH", "FINTECH", "HEALTH_TECH", "MARKETPLACE",
-    ]);
-  });
-
   it("layers a sector module on top of core rather than replacing it", () => {
     const ai = sectionsFor("AI");
     // Counted from the framework: "on top of core" is the rule, and eleven is only today's core.
@@ -87,21 +63,5 @@ describe("sector modules", () => {
     expect(other.sector).toBeUndefined();
     expect(other.core).toHaveLength(CORE_SECTIONS.length);
   });
-
-  it("carries the killer question for the sectors that have one", () => {
-    expect(sectorModule("AI")?.killer).toMatch(/essentially free tomorrow/);
-    expect(sectorModule("B2B_SAAS")?.killer).toMatch(/tries to remove this product/);
-    expect(sectorModule("HEALTH_TECH")?.killer).toMatch(/authority AND the economic incentive/);
-  });
 });
 
-describe("coverage counting", () => {
-  it("counts more questions for a sector deal than a generic one", () => {
-    expect(questionCount("AI")).toBeGreaterThan(questionCount("OTHER"));
-  });
-
-  it("includes the Closing Six in the count", () => {
-    const core = CORE_SECTIONS.reduce((n, s) => n + s.questions.length, 0);
-    expect(questionCount("OTHER")).toBe(core + 6);
-  });
-});

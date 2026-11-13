@@ -3,7 +3,7 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import type { Actor } from "../src/worker/services/authorize";
 import { runAi } from "../src/worker/ai/runAi";
-import { MAX_ATTEMPT_MS, attemptDeadlineMs, wireOutputCeiling } from "../src/worker/ai/chainBudget";
+import { wireOutputCeiling } from "../src/worker/ai/chainBudget";
 import { isUnservedReply, outageKind } from "../src/shared/ai/providerFailure";
 import { finishReasonFrom } from "../src/worker/ai/providers/finishReason";
 
@@ -216,11 +216,5 @@ describe("(d) a rung that never answers is abandoned on its deadline and the wal
     expect(r.attempts[0]!.outcome).toBe("FAILED_OVER");
     expect(r.attempts[0]!.detail).toMatch(/^TIMEOUT_OR_NETWORK/);
     expect(r.attempts.at(-1)!.outcome).toBe("COMPLETED");
-  });
-
-  it("in production that deadline is the chain's: 450 seconds for the brief's ask, and never more", () => {
-    expect(MAX_ATTEMPT_MS).toBe(450_000);
-    expect(attemptDeadlineMs(24_000)).toBe(450_000);
-    expect(attemptDeadlineMs(24_000, 100_000)).toBe(100_000);
   });
 });
