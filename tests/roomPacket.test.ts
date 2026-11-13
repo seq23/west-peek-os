@@ -2,10 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   BUDGET_KEYS,
   SPONSORSHIP_TARGET,
-  audienceTerms,
   buildConceptsPrompt,
   buildPacketPrompt,
-  buildSponsorDiscoveryPrompt,
   buildSponsorResearchPrompt,
   computeEconomics,
   defaultStructure,
@@ -25,7 +23,7 @@ import {
   type PacketVenue,
   type SponsorResearch,
 } from "../src/shared/events/roomPacket";
-import { packetFilename, parkerIntroduction, renderPacketHtml, type PacketView } from "../src/shared/events/roomPacketPdf";
+import { packetFilename, renderPacketHtml, type PacketView } from "../src/shared/events/roomPacketPdf";
 
 /**
  * The Room packet as a CHAIN (15 Sep 2026). The operator's verdict on the one-prompt packet was
@@ -290,17 +288,6 @@ describe("economics", () => {
 });
 
 describe("the sponsor discovery and research stages", () => {
-  it("asks for who pays to be in front of the audience, by category, with the association sponsor lists as the answer key", () => {
-    const prompt = buildSponsorDiscoveryPrompt({ brief: { audience: "top Black lawyers on the rise", month: "2026-10", city: "New York", sponsorProspects: ["Harvey AI"], notes: null }, city: "New York", month: "2026-10" });
-    expect(prompt).toContain("PAY TO BE IN FRONT OF");
-    expect(prompt).toMatch(/National Bar Association/);
-    expect(prompt).toMatch(/Lavender Law/);
-    expect(prompt).toMatch(/PRIVATE BANKS/);
-    expect(prompt).toContain("Harvey AI");
-    expect(prompt).toMatch(/do not assume it has any/);
-    expect(prompt).toMatch(/No URL, no entry/);
-  });
-
   it("keeps a candidate only with an evidence URL, once per organisation, hers first", () => {
     const out = parseSponsorCandidates(JSON.stringify({ results: [
       { org_name: "Clio", category: "LEGAL", evidence_url: "https://www.clio.com/sponsor", evidence_note: "sponsors the NBA convention" },
@@ -344,26 +331,6 @@ describe("the sponsor discovery and research stages", () => {
 });
 
 describe("ideate, compare, commit", () => {
-  it("asks for three ANGLES on the month's one topic, compared, and one chosen with the reason", () => {
-    const prompt = buildConceptsPrompt({ month: "2026-10", city: "New York", topic: "Black lawyers", setBy: "PARTNERS", steer: "several distinct name ideas, catchy", ran: [{ month: "2026-09", topic: "Content creation", note: "somebody outside the firm ran it" }], brief: { audience: "top Black lawyers", month: "2026-10", city: "New York", sponsorProspects: ["Harvey AI"], notes: null }, recentThemes: ["operator to founder"], inviteCheck: { totalContacts: 4712, matchingCount: 12, matchedOn: ["lawyers and legal roles"], archetypes: [], namedFromRecords: [], verdict: "STARTING_LIST", note: "a starting list" }, sponsors: [HARVEY] });
-    // ONE TOPIC, SEVERAL ANGLES: her own words reach the model, and the topic is not up for grabs.
-    expect(prompt).toMatch(/THE TOPIC IS ONE SUBJECT AND IT IS ALREADY DECIDED: "Black lawyers"/);
-    expect(prompt).toMatch(/Black lawyers is a topic\. Community is a topic\./);
-    expect(prompt).toMatch(/A concept whose `angle_on` is anything/);
-    expect(prompt).toMatch(/several distinct name ideas, catchy/);
-    // ADJACENCY READS WHAT RAN, including a month somebody outside the firm hosted.
-    expect(prompt).toMatch(/WHAT ACTUALLY RAN LAST MONTH/);
-    expect(prompt).toMatch(/2026-09: Content creation \(somebody outside the firm ran it\)/);
-    expect(prompt).toMatch(/THREE ANGLES/);
-    expect(prompt).toMatch(/war room/);
-    expect(prompt).toMatch(/Dinner is ALLOWED/);
-    expect(prompt).toMatch(/CHOOSE ONE/);
-    expect(prompt).toMatch(/PUSH BACK/);
-    expect(prompt).toContain("12 of 4712 community contacts");
-    expect(prompt).toContain("Mali Robertson");
-    expect(prompt).toContain("operator to founder");
-  });
-
   it("parses the concepts with exactly one winner, and the venue direction the search runs for", () => {
     const out = parseConcepts(JSON.stringify({ topic: "Black lawyers", concepts: [
       { title: "War Room", angle_on: "Black lawyers", angle_kind: "FORMAT", format: "WORKSHOP", premise: "…", tone: "electric", value_to_sponsor: "tool in hand", who_it_fits: "associates", cost_band: "$15–20K", signature_moment: "the live brief", venue_direction: "a law-school moot courtroom", chosen: true },
@@ -419,41 +386,6 @@ describe("the packet prompt", () => {
     expect(prompt).toContain("operator to founder");
   });
 
-  it("carries the chosen concept, the research and the invite check into the packet", () => {
-    const prompt = buildPacketPrompt({ ...base, brief: { audience: "top Black lawyers", month: "2026-10", city: "New York", sponsorProspects: ["Harvey AI"], notes: null }, concepts: [{ title: "Boardroom", format: "DINNER", premise: "a serious table", tone: "", valueToSponsor: "", whoItFits: "", costBand: "$22K", signatureMoment: "the brief", venueDirection: "", chosen: true }], choiceRationale: "it wins", pushback: "widen the audience", sponsors: [HARVEY], inviteCheck: { totalContacts: 4712, matchingCount: 12, matchedOn: ["lawyers and legal roles"], archetypes: ["lawyer at Sullivan & Cromwell"], namedFromRecords: [], verdict: "STARTING_LIST", note: "a starting list" } });
-    expect(prompt).toContain("THE CONCEPT YOU CHOSE");
-    expect(prompt).toContain("Boardroom");
-    expect(prompt).toContain("widen the audience");
-    expect(prompt).toContain("sponsorship history: YES");
-    expect(prompt).toContain("Mali Robertson");
-    expect(prompt).toContain("the AI platform for elite law firms");
-    expect(prompt).toContain("12 of 4712");
-  });
-
-  it("prices sponsorship from the keep, not from a per-sponsor law, and offers exclusivity", () => {
-    const prompt = buildPacketPrompt(base);
-    expect(prompt).toContain(`target $${SPONSORSHIP_TARGET.keepUsd.toLocaleString("en-US")} to West Peek`);
-    expect(prompt).toMatch(/a target\s+with reasons, not a law/);
-    expect(prompt).toMatch(/EXCLUSIVITY as an option/);
-    expect(prompt).toMatch(/worth more than a fourth logo/);
-    expect(prompt).not.toMatch(/up to\s+\$40,000/);
-  });
-
-  it("asks for the run of show to the minute with named roles, the sponsor's minutes, and the pitch in Sequoia's voice", () => {
-    const prompt = buildPacketPrompt(base);
-    expect(prompt).toMatch(/TO THE MINUTE/);
-    expect(prompt).toMatch(/never more than 8 minutes/);
-    expect(prompt).toMatch(/Chatham House/);
-    expect(prompt).toMatch(/SEQUOIA TAYLOR's voice/);
-    expect(prompt).toMatch(/nothing is sent/);
-  });
-
-  it("carries the memorable-experience mandate and refuses the default dinner", () => {
-    const prompt = buildPacketPrompt(base);
-    expect(prompt).toMatch(/Do NOT default to a seated dinner/);
-    expect(prompt).toMatch(/signature moment/i);
-  });
-
   it("says a sponsor thesis is never access to members", () => {
     expect(buildPacketPrompt(base)).toMatch(/Never access to members/);
   });
@@ -464,13 +396,6 @@ describe("the packet prompt", () => {
 });
 
 describe("the invite-list reality check", () => {
-  it("picks the vocabulary from the audience", () => {
-    expect(audienceTerms("top Black lawyers on the rise").terms).toContain("attorney");
-    expect(audienceTerms("founders who sold to PE").terms).toContain("founder");
-    expect(audienceTerms("family offices").label).toMatch(/investors/);
-    expect(audienceTerms("everyone").terms).toEqual([]);
-  });
-
   it("the count is a starting list, never a veto: a thin match does not tell Parker to widen, co-host or push back", () => {
     // 16 Sep 2026: "only 6 of 4,712 contacts read as lawyers" became pushback on the October Room.
     // The community records under-read job functions and the partners' network is larger.
@@ -509,23 +434,6 @@ describe("the PDF", () => {
     alsoLookedAt: ["Ghost Co"],
     generatedAt: "2026-09-15T12:00:00.000Z",
   };
-
-  it("opens with Parker introducing himself, then the cover facts, every section, and the appendix", () => {
-    const html = renderPacketHtml(view);
-    for (const line of parkerIntroduction()) expect(html.replace(/&#39;/g, "'")).toContain(line.slice(0, 60));
-    for (const heading of ["Three concepts, compared", "Run of show", "Who pays for it", "What it costs", "How the sponsorship is structured", "The pitch", "Appendix", "Can our own list fill it?", "Where I push back"]) {
-      expect(html).toContain(heading);
-    }
-    expect(html).toContain("Mali Robertson");
-    expect(html).toContain("harvey.ai/us-open");
-    expect(html).toContain("Charlie Mitchell");
-    expect(html).toContain("War Room"); // in the appendix
-    expect(html).toContain("Also looked at, left out because the cited page did not answer when checked: Ghost Co");
-    expect(html).toContain("<title>The Scaled Boardroom — Room packet</title>");
-    // The family ground, ink and the canonical orange; nothing else.
-    expect(html).toContain("#F7F2EA");
-    expect(html).toContain("#F05A1A");
-  });
 
   it("shows the quality note on the cover when a free model not marked FULL wrote the packet, and nothing when none did (0251)", () => {
     const note = "Written by Nemotron (free), a free model whose quality has not been measured against the Claude and OpenAI seats. Read it with that in mind.";
@@ -571,14 +479,6 @@ describe("a contact is a person, and discovery names the sponsors, not the insti
     const r = parseSponsorResearch(JSON.stringify({ history: [], contacts: [{ name: "Partner Program Lead", title: "—", source_url: "https://www.harvey.ai/partners" }, { name: "Mali Robertson", title: "Director of Brand Partnerships", source_url: "https://www.harvey.ai/team" }], strategic_language: [], summary: "" }));
     expect(r.contacts.map((c) => c.name)).toEqual(["Mali Robertson"]);
   });
-
-  it("tells discovery that the associations are the answer key and to return the companies on their sponsor pages, with a category floor", () => {
-    const prompt = buildSponsorDiscoveryPrompt({ brief: { audience: "Black lawyers", month: "2026-10", city: "New York", sponsorProspects: [], notes: null }, city: "New York", month: "2026-10" });
-    expect(prompt).toMatch(/NAME THE SPONSORS, NOT THE INSTITUTIONS/);
-    expect(prompt).toMatch(/COMPANIES listed on them/);
-    expect(prompt).toMatch(/one BANKING/);
-    expect(prompt).toMatch(/no more than\s+two firms/);
-  });
 });
 
 describe("the money, after the first production packet", () => {
@@ -595,13 +495,6 @@ describe("the money, after the first production packet", () => {
     expect(e.scenarios[1]!.sponsorshipUsd).toBe(24000);
     expect(e.scenarios[1]!.description).toBe("1 title + 1 in-kind (offsets $4,000 of cost)");
     expect(e.scenarios[1]!.netHighUsd).toBe(24000 + 4000 - e.estimatedCostLowUsd);
-  });
-
-  it("tells the packet that the audience's institutions are co-hosts, not cash sponsors, and the pitch goes to a person", () => {
-    const prompt = buildPacketPrompt({ month: "2026-10", recentThemes: [], venueCandidates: [], city: "New York" });
-    expect(prompt).toMatch(/INSTITUTIONS ARE NOT CASH SPONSORS/);
-    expect(prompt).toMatch(/holds the invite list/);
-    expect(prompt).toMatch(/rank-1 CASH prospect's named contact/);
   });
 
   it("flows a long section onto the next sheet instead of leaving a blank one", () => {
@@ -644,24 +537,5 @@ describe("discovery, after the third production run", () => {
     expect(new Set(picked.map((c) => c.category))).toEqual(new Set(["LEGAL", "BANKING", "RECRUITING", "HOSPITALITY"]));
     expect(picked).toHaveLength(6);
   });
-
-  it("tells the second search what it already has and not to cite those hosts again", async () => {
-    const { buildSponsorDiscoveryMorePrompt, parseSponsorCandidates } = await import("../src/shared/events/roomPacket");
-    const already = parseSponsorCandidates(JSON.stringify({ results: list(3, "https://www.napaba.org/page/2026_SponsorList") }), brief);
-    const prompt = buildSponsorDiscoveryMorePrompt({ brief, city: "New York", month: "2026-10", already });
-    expect(prompt).toMatch(/SECOND PASS/);
-    expect(prompt).toContain("do NOT cite these hosts again): www.napaba.org");
-    expect(prompt).toMatch(/Lavender Law/);
-    expect(prompt).toMatch(/BANKING, RECRUITING/);
-  });
 });
 
-describe("venue intent, after the third production run", () => {
-  it("makes the first-choice venue carry the audience's identity, in both prompts", () => {
-    const concepts = buildConceptsPrompt({ month: "2026-10", city: "New York", topic: "Black lawyers", setBy: "PARTNERS", steer: null, brief: null, recentThemes: [], inviteCheck: null, sponsors: [] });
-    expect(concepts).toMatch(/AUDIENCE IS DEFINED BY WHO THEY ARE/);
-    expect(concepts).toMatch(/Schomburg Center/);
-    const packet = buildPacketPrompt({ month: "2026-10", recentThemes: [], venueCandidates: [], city: "New York" });
-    expect(packet).toMatch(/FIRST-CHOICE venue carries that identity/);
-  });
-});

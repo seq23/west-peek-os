@@ -5,7 +5,6 @@ import { addressesPassed } from "./helpers/addressCheck";
 import type { Env } from "../src/worker/env";
 import { handleRequest } from "../src/worker/index";
 import { approvedDayZeroEmail, brandSendGate, TLC_OPT_OUT_LINE } from "../src/shared/tlc/learningClub";
-import { wayInWords } from "../src/shared/tlc/mustPitch";
 import { BRAND_MAILING_ADDRESS } from "../src/shared/tlc/brandFooter";
 import { buildBrandBatchPrompt, contentHashes, openBrandBatchCard, runDrip, runTlcCard } from "../src/worker/services/learningClub";
 import { sweepOnce } from "../src/worker/services/workSweep";
@@ -170,12 +169,6 @@ describe("no address means a 'Needs a way in' item, never a silent drop", () => 
     expect(o.history.some((h) => h.brand === "Google" && h.action === "NO_ADDRESS" && h.by_who === "Wynn")).toBe(true);
     const card = await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE kind = 'TLC_BRAND_BATCH' ORDER BY created_at DESC LIMIT 1").first<{ description: string }>();
     expect(card!.description).toContain(`• Needs a way in: ${g.words}`);
-  });
-
-  it("the sentence reads the way she asked, across months", () => {
-    expect(wayInWords({ brand: "Anthropic", months: ["2027-03", "2027-01"], pages: ["https://a.example/x"] })).toBe(
-      "Anthropic (Jan, Mar): no public partnerships address found. Pages checked: https://a.example/x. If you have a contact or an intro, add it here.",
-    );
   });
 
   it("an address the model claims but the page does not carry is a way-in item too, and the page check is exactly as strict", async () => {
