@@ -14,3 +14,11 @@ export function runRefusal(
   run: { script?: string; env?: string; args?: readonly string[] },
   gate: { admittedNow: readonly string[]; base: readonly string[]; job: unknown; phase: string },
 ): string | null;
+/** Every allowed delivery variable, set and verified in BOTH Pages environments; returns the proof lines (never a value). */
+export function applyPagesEnv(
+  pagesEnv: unknown,
+  env: Record<string, string | undefined>,
+  progress?: ((line: string) => void) | null,
+  registry?: unknown,
+  opts?: { branch?: string; rebuildWaitMs?: number; putSecret?: (entry: { project: string; name: string }, env: Record<string, string | undefined>, environment: string) => Promise<{ outcome: string; why: string | null }> },
+): Promise<string[]>;

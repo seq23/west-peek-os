@@ -120,7 +120,17 @@ export function readRequests(pagesEnv, registry = null) {
  * One line of the build proof. THE ONLY WAY a delivery step is written down: the project, the
  * variable NAME, and one of `OUTCOMES`. There is no parameter here that could carry a value.
  */
-export function proofLine(project, name, outcome, why) {
+export function proofLine(project, name, outcome, why, environment = null) {
   const state = OUTCOMES.includes(outcome) ? outcome : "failed";
-  return `pages-env: ${project} · ${name} · ${state}${why ? ` (${why})` : ""}`;
+  const where = PAGES_ENVIRONMENTS.includes(environment) ? ` (${environment})` : "";
+  return `pages-env: ${project}${where} · ${name} · ${state}${why ? ` (${why})` : ""}`;
 }
+
+/**
+ * BOTH ENVIRONMENTS, ALWAYS (13 Nov 2026). A Pages project keeps separate variables for production and
+ * for preview builds. The script used to set and check production only: a run logged "RESEND_API_KEY ·
+ * already set" while the job's PREVIEW had no key, so the partner's proof-then-send step on the preview
+ * answered not_configured and no email went. The job's work runs in preview first, so every delivery
+ * variable is set and verified in both, and the proof line says which.
+ */
+export const PAGES_ENVIRONMENTS = Object.freeze(["production", "preview"]);
