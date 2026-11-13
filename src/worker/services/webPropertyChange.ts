@@ -9,6 +9,7 @@ import { appendEvent } from "../events";
 import { actorFromIdentity, type Actor } from "./authorize";
 import { answerBlock, blockCard, PARTNER_ANSWER_MAX, restoreBlock } from "./blocks";
 import { notifyQuietly } from "./notifications";
+import { tellPartner } from "./handOff";
 import { runAi } from "../ai/runAi";
 import { deliver } from "./deliverables";
 import { handOver } from "./employeeWork";
@@ -2033,19 +2034,54 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
  * the card's thread now — it never blocks the card. Not confident → Porter says so honestly in the
  * same email and Sequoia is told quietly; the work still carries on with the recommendations.
  */
+/**
+ * WHERE THE JOB STANDS, FROM THE CARD ITSELF (13 Nov 2026). A partner asked on his job's thread "Do you
+ * have a link to the dashboard yet?". The preview link and the build in flight were on the card; he was
+ * told "I don't know that one for certain" and "Nothing is being built for this". A question on a job's
+ * thread is answered from the card's own state first: the preview, what is being built now, what the
+ * last build was for, what is still to come. Empty only when the card truly records none of it.
+ */
+export async function cardStandingLines(env: Env, cardId: string, row: WebPropertyChangeRow | null): Promise<string[]> {
+  if (!row) return [];
+  const lines: string[] = [];
+  const live = await env.WP_OS_DB.prepare("SELECT status FROM subscription_seat_run WHERE work_card_id = ?1 AND run_kind = 'LOCAL_JOB' AND status IN ('QUEUED', 'CLAIMED') LIMIT 1").bind(cardId).first<{ status: string }>();
+  const link = cleanPreviewUrls(row.preview_url, pagesHostsOf(row.property_host ?? null, await loadRegistry(env)), row.branch ?? "");
+  const forWords = row.rebuilt_for ? row.rebuilt_for.replace(/^(?:changes|finish the original request)\s*:\s*/i, "").replace(/\s+/g, " ").slice(0, 240) : null;
+  if (live) lines.push(`Being built right now${forWords ? `: ${forWords}` : row.phase === "PLAN" ? ": the plan" : ""}. You get a fresh preview email the moment it is ready.`);
+  if (link) lines.push(`${live ? "The preview from the last build" : "The preview"} is at ${link}.`);
+  if (!live && forWords) lines.push(`The last build was for: ${forWords}`);
+  if (!live && row.phase === "BUILD" && row.check_state === "GREEN" && link && !row.land_approved_at) lines.push("Nothing goes live until you approve that preview.");
+  const placeholders = list(row.placeholders_json).length;
+  if (placeholders) lines.push(`Still to come: ${placeholders} placeholder${placeholders === 1 ? "" : "s"} waiting on real material.`);
+  return lines;
+}
+
 async function answerMidFlowQuestion(env: Env, card: WebPropertyChangeCard, question: string, answerQuestion: QuestionAnswerer | undefined): Promise<string> {
+  const standing = await cardStandingLines(env, card.id, await readWebPropertyChange(env, card.id));
   const routed = await answerQuestionForCard(
     env,
-    { cardId: card.id, firmScope: card.firm_scope, kind: card.kind ?? WEB_PROPERTY_CHANGE_KIND, cardTitle: card.title, question },
+    { cardId: card.id, firmScope: card.firm_scope, kind: card.kind ?? WEB_PROPERTY_CHANGE_KIND, cardTitle: card.title, question, facts: standing },
     answerQuestion,
   );
-  const answer =
-    routed.confident && routed.answer
-      ? routed.answer
+  const known = Boolean(routed.confident && routed.answer);
+  // The card answers before anyone is asked: what it records is the answer when Porter has none of his own.
+  const fromCard = !known && standing.length > 0;
+  const answer = known
+    ? routed.answer!
+    : fromCard
+      ? `Here is where it stands. ${standing[0]}`
       : "Good question — I don't know that one for certain, so I've passed it to Sequoia rather than guess. The work carries on with my recommendations in the meantime; nothing goes live until you approve the preview.";
-  const sent = await sendQuestionAnswer(env, card, question, { ...routed, employeeName: routed.employeeName ?? PORTER_NAME, answer });
-  if (!routed.confident || !routed.answer) {
-    // The partner who answers what an employee cannot — named by the registry, never typed here.
+  const sent = await sendQuestionAnswer(env, card, question, { ...routed, employeeName: routed.employeeName ?? PORTER_NAME, answer }, standing);
+  if (!known && !fromCard) {
+    // "PASSED TO SEQUOIA" MEANS SHE IS TOLD WHERE SHE READS: an email on the card, not only a line in the app
+    // (13 Nov 2026: the in-app notice alone reached nobody). The partner named by the registry, never typed here.
+    await tellPartner(env, {
+      cardId: card.id,
+      to: PREVIEW_PARTNER,
+      label: "A question Porter could not answer",
+      line: `${(card.requested_by_email ? partnerByEmail(card.requested_by_email)?.firstName : null) ?? "A partner"} asked on this job: "${question.replace(/\s+/g, " ").slice(0, 300)}". Porter did not know and told him it was passed to you. Nobody has answered it yet: please answer him directly. The work carries on meanwhile.`,
+      subjectTail: "question",
+    });
     await notifyQuietly(env, {
       kind: "MEETING",
       severity: "INFO",
@@ -2474,6 +2510,7 @@ async function sendQuestionAnswer(
   card: WebPropertyChangeCard,
   senderMessage: string,
   routed: QuestionAnswerResult,
+  standing: readonly string[] = [],
 ): Promise<{ sent: boolean; reason: string }> {
   const to = (card.requested_by_email ?? "").trim().toLowerCase();
   const partner = to ? partnerByEmail(to) : null;
@@ -2505,7 +2542,8 @@ async function sendQuestionAnswer(
       tldr: routed.answer.slice(0, 300),
       sections: [
         { label: "What you asked", bullets: [senderMessage.replace(/\s+/g, " ").trim().slice(0, 300) || asked] },
-        { label: "Where things stand", bullets: ["Nothing is being built for this — it was a question, not a job. Reply if you'd like something done."] },
+        // A question on a JOB's thread gets the job's own state; only a question that is not a job gets the plain line.
+        { label: "Where things stand", bullets: standing.length ? [...standing] : ["Nothing is being built for this — it was a question, not a job. Reply if you'd like something done."] },
       ],
       details: routed.answer,
       routedBy,

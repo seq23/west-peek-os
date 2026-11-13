@@ -99,7 +99,13 @@ const fakeIntentReader: ReplyIntentReader = async (_env, input) => {
   if (question) return { ...base, kind: "QUESTION", changes, question };
   return { ...base, kind: "CONTINUE", changes, question: null };
 };
-const fakeAnswerer: QuestionAnswerer = async (_env, input) => ({ confident: true, answer: `Yes — ${input.question.slice(0, 60)} The hex is #E0632F and it stays.`, reason: "fake", aiRunId: null });
+/** What the answerer was handed as the card's own facts, last call. A question with "for certain" in it is one the model cannot answer. */
+let answererFacts: string[] | undefined;
+const fakeAnswerer: QuestionAnswerer = async (_env, input) => {
+  answererFacts = input.facts;
+  if (/for certain/i.test(input.question)) return { confident: false, answer: null, reason: "fake: not sure", aiRunId: null };
+  return { confident: true, answer: `Yes — ${input.question.slice(0, 60)} The hex is #E0632F and it stays.`, reason: "fake", aiRunId: null };
+};
 const RUNNERS = { webPropertyChange: (e: Env, c: SweepCard) => runWebPropertyChangeCard(e, c, undefined, undefined, fakeAnswerer, fakeIntentReader) };
 
 async function tick(): Promise<Awaited<ReturnType<typeof sweepOnce>>> {
@@ -2071,6 +2077,38 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     await replyFrom(SCOOTER, "preview", await p.token());
     await tickFor(p.id);
     expect((await readWebPropertyChange(env, p.id))!.rebuilt_for).toBeNull();
+  });
+
+  /**
+   * 13 Nov 2026: "Do you have a link to the dashboard yet?" on a job's thread was answered "I don't know that one for
+   * certain, so I've passed it to Sequoia" and "Nothing is being built for this", with the preview link on the card —
+   * and nothing reached Sequoia but an in-app line. The card answers first; "passed" means an email to her.
+   */
+  it("PREVIEW: a question Porter is not sure of is answered from the card's own state, never 'passed to Sequoia' while the card has the answer", async () => {
+    const q = await atPreview("preview Q1");
+    const before = sent.length;
+    await replyFrom(SCOOTER, "Do you know for certain where I can see it?", await q.token());
+    expect((await tickFor(q.id)).outcome).toBe("BLOCKED");
+    const link = String((await readWebPropertyChange(env, q.id))!.preview_url).match(/https:\/\/[^\s]+pages\.dev/)![0];
+    expect(answererFacts?.join(" "), "the answerer is handed the card's state").toContain("The preview is at");
+    const mails = sent.slice(before).filter((m) => m.to === SCOOTER && /answered/.test(m.subject));
+    expect(mails).toHaveLength(1);
+    expect(mails[0]!.text).toContain("The preview is at");
+    expect(mails[0]!.text).toContain(new URL(link).hostname.split(".").slice(-3).join("."));
+    expect(mails[0]!.text).not.toMatch(/passed it to Sequoia|Nothing is being built for this/);
+    expect(sent.slice(before).filter((m) => m.to === SEQUOIA), "nothing is sent to her: the card had the answer").toHaveLength(0);
+    expect((await readWebPropertyChange(env, q.id))!.land_approved_at, "a question lands nothing").toBeNull();
+  });
+
+  it("PLAN: when neither Porter nor the card has the answer, 'passed to Sequoia' is an email to her, once", async () => {
+    const porter = await planned(SCOOTER, "Walker", "colours Q2", REAL_QUESTION);
+    const before = sent.length;
+    await replyFrom(SCOOTER, "Do we know for certain who owns the font licence?", await porter.token());
+    await tickFor(porter.id);
+    const mails = sent.slice(before);
+    expect(mails.filter((m) => m.to === SCOOTER && /passed it to Sequoia/.test(m.text)), "he is told it was passed on").toHaveLength(1);
+    const toHer = mails.filter((m) => m.to === SEQUOIA && /who owns the font licence/.test(m.text));
+    expect(toHer, "and it really was: she gets his question by email").toHaveLength(1);
   });
 
   it("PREVIEW: a stop holds it; a question is answered and the preview stays up with nothing landed; the one switch turns free-form landing off", async () => {
