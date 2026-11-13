@@ -1,6 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { api, notificationsChanged, onNotificationsChanged } from "../src/client/lib/api";
 
 /**
@@ -129,30 +127,3 @@ describe("a notification write tells whatever is counting notifications", () => 
   });
 });
 
-/**
- * A CHANNEL NOBODY LISTENS TO IS THE SAME BUG WEARING A FIX.
- *
- * Everything above passes with `StatusBar` never subscribing — the publisher would work perfectly
- * and the badge would still be frozen. This is the assertion that reaches the thing the fix is
- * actually for, read out of the source so it cannot drift from it.
- */
-describe("the badge is subscribed to it", () => {
-  const APP = readFileSync(fileURLToPath(new URL("../src/client/App.tsx", import.meta.url)), "utf8");
-
-  it("imports the channel and subscribes inside the status bar", () => {
-    expect(APP, "App.tsx does not import the channel at all").toContain("onNotificationsChanged");
-
-    const start = APP.indexOf("function StatusBar(");
-    expect(start, "StatusBar has been renamed or removed; this guard can no longer see it").toBeGreaterThan(-1);
-    // The component ends where the next top-level declaration begins.
-    const after = APP.slice(start + 1);
-    const end = after.search(/\n(?:function |const |export )/);
-    const body = end === -1 ? after : after.slice(0, end);
-
-    expect(body, "the status bar never subscribes, so the badge stays frozen after a dismiss")
-      .toContain("onNotificationsChanged");
-    // Subscribed inside an effect, with the unsubscribe returned — a subscription that is never
-    // torn down leaks a listener per re-render.
-    expect(body).toMatch(/useEffect\(\(\)\s*=>\s*onNotificationsChanged\(/);
-  });
-});

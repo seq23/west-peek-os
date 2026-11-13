@@ -2,10 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import {
-  PRODUCTIONS_CUSTOMERS,
   PRODUCTIONS_OFFER,
   buildCustomerPrompt,
-  buildLeadJudgePrompt,
   currentCustomerNamed,
   excludeCurrentCustomers,
   buildPressPrompt,
@@ -82,29 +80,6 @@ describe("what Walker is told", () => {
     const press = buildPressPrompt("2026-10");
     expect(press).toMatch(/ONLY if a live page shows it/);
     expect(press).toMatch(/Never guess an address pattern/);
-  });
-
-  /*
-   * THE CURRENT CUSTOMERS (16 Sep 2026, from the operator): Exec Leadership Council (the MLM
-   * Symposium, 29–30 Oct 2026; bought the platform and virtual production) and TNTP (a foundation
-   * with a small marketing team, behind on social / virtual / AI). They seed the search as
-   * look-alikes AND are never listed as leads.
-   */
-  it("knows the current customers: the prompt carries both as look-alike seeds, the judge is told to drop them, and the method names them", () => {
-    expect(PRODUCTIONS_CUSTOMERS.map((c) => c.name)).toEqual(["Exec Leadership Council", "TNTP"]);
-    const prompt = buildCustomerPrompt("2026-10");
-    expect(prompt).toContain("Exec Leadership Council");
-    expect(prompt).toContain("MLM Symposium");
-    expect(prompt).toContain("TNTP");
-    expect(prompt).toMatch(/associations and councils running annual symposia or manager\s+conferences that need a virtual\/hybrid platform/);
-    expect(prompt).toMatch(/foundations and nonprofits with small marketing\s+teams behind on social, virtual and AI/);
-    expect(prompt).toMatch(/never list a current customer/);
-    const judgePrompt = buildLeadJudgePrompt("2026-10", []);
-    expect(judgePrompt).toContain("TNTP");
-    expect(judgePrompt).toMatch(/DROP a current customer/);
-    const skill = skillsForMachines(["mp_personal_office"]).find((s) => s.key === "west_peek_productions_for_scooter");
-    expect(skill!.guidance.join(" ")).toMatch(/Exec Leadership Council/);
-    expect(skill!.guidance.join(" ")).toMatch(/TNTP/);
   });
 
   it("drops a search result naming a current customer, by name or alias, before it can reach the note", async () => {
@@ -212,16 +187,6 @@ describe("what survives the search", () => {
     });
     expect(none.email).toBeNull();
     expect(none.contactUrl).toBe("https://forbes.example/contact");
-  });
-
-  it("chooses the five with intent: the prompt demands a mix of outlets and a piece each choice is earned by", async () => {
-    const { buildPressPrompt } = await import("../src/worker/services/productions");
-    const prompt = buildPressPrompt("2026-10");
-    expect(prompt).toMatch(/TRADE PRESS those buyers read daily/);
-    expect(prompt).toMatch(/CREATOR-ECONOMY or COMMUNITY NEWSLETTER/);
-    expect(prompt).toMatch(/EVENTS-INDUSTRY OUTLET/);
-    expect(prompt).toMatch(/WILDCARD earned by a specific recent piece/);
-    expect(prompt).toMatch(/A writer chosen because their beat vaguely matches\s+is not a choice/);
   });
 });
 

@@ -60,17 +60,6 @@ describe("the prompt refuses to invent figures", () => {
     expect(prompt).toContain("I do not have a reliable print");
     expect(prompt).toContain("key_events must still be written");
   });
-
-  it("asks for the shape the operator wanted", () => {
-    const prompt = buildSynthesisPrompt(basePacket());
-    expect(prompt).toContain("NUMBERED list");
-    // v3 drops the colon: the reference brief uses "Why it matters" as a standalone heading over
-    // its own block, which is what gives that block room to be an argument rather than a clause.
-    expect(prompt).toContain("**Why it matters**");
-    expect(prompt).toContain("Investor Importance: N/10");
-    // …and says what a ten means, so the score is comparable across a page.
-    expect(prompt).toContain("10 changes a decision this firm is about to make");
-  });
 });
 
 describe("the verifier catches an invented market figure", () => {

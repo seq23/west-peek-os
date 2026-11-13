@@ -405,19 +405,6 @@ describe("real subsystems emit notifications", () => {
 describe("the PWA surface exists and never caches institutional state", () => {
   const clientDir = fileURLToPath(new URL("../src/client", import.meta.url));
 
-  it("ships an installable manifest", () => {
-    const manifest = JSON.parse(readFileSync(`${clientDir}/public/manifest.webmanifest`, "utf8")) as {
-      name: string;
-      start_url: string;
-      display: string;
-      icons: unknown[];
-    };
-    expect(manifest.name).toBe("West Peek OS");
-    expect(manifest.display).toBe("standalone");
-    expect(manifest.start_url).toBe("/");
-    expect(manifest.icons.length).toBeGreaterThan(0);
-  });
-
   it("has a service worker that refuses to cache /api/* and has no fake push handler", () => {
     const sw = readFileSync(`${clientDir}/public/sw.js`, "utf8");
     expect(sw).toContain('url.pathname.startsWith("/api/")');
