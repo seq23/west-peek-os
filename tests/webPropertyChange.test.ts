@@ -810,6 +810,90 @@ describe("the developer may direct any job with a work instruction, and with not
     const ev = await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE event_type = 'work_card.directed_by_developer' AND object_id = ?1").bind(id).first<{ payload_json: string }>();
     expect(String(ev?.payload_json)).toContain("partner tail (Claude)");
   });
+
+  /**
+   * 13 Nov 2026: a partner got "New preview ready" three times in ninety minutes. Two of those builds were
+   * the developer's instructions through the tail door; he had asked for nothing and the link was the one
+   * he already held. One preview email per round of HIS changes; the job still waits on him, on the new build.
+   */
+  const rebuilt = async (id: string, tag: string, branch: string) => {
+    await tickFor(id);
+    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/89", pr_number: 89, branch, changed: true, head_sha: `head-${tag}`, check_state: "GREEN", preview_url: `https://${tag}.west-peek-ventures.pages.dev`, proof: "validate green" });
+    expect((await tickFor(id)).outcome, "the job waits on the partner's word on the preview").toBe("BLOCKED");
+  };
+  const previewMails = (since: number) => sent.slice(since).filter((m) => m.to === SCOOTER && /preview ready$/i.test(m.subject));
+
+  it("a rebuild for the developer's instruction, on the link the partner already holds, waits on him without a second preview email; his own changes get one", async () => {
+    const start = sent.length;
+    const id = await atPreview("dev4", SCOOTER);
+    expect(previewMails(start), "the first preview is always mailed").toHaveLength(1);
+    const first = (await readWebPropertyChange(env, id))!;
+
+    const afterFirst = sent.length;
+    expect((await door(id, "move the sign-in form above the fold")).status).toBe(200);
+    await rebuilt(id, "dev4b", "work/wpc-dev4");
+    expect(sent.slice(afterFirst).filter((m) => m.to === SCOOTER), "nothing he did not ask for reaches him").toHaveLength(0);
+    const quiet = (await readWebPropertyChange(env, id))!;
+    expect(quiet.check_green_at! > first.check_green_at!, "the new build is the one on the card").toBe(true);
+    expect(quiet.preview_emailed_at! > first.preview_emailed_at!, "his approval binds to the new build").toBe(true);
+    const c = await card(id);
+    expect([c.state, c.block_reason, c.block_who], "waiting on his word exactly as after a mailed preview").toEqual(["BLOCKED", "a_question_for_you", "SCOOTER"]);
+    const notice = await env.WP_OS_DB.prepare("SELECT sent FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PREVIEW' AND cause = ?2").bind(id, quiet.check_green_at).first<{ sent: number }>();
+    expect(notice?.sent, "the build is on the notice ledger, as not mailed").toBe(0);
+
+    // A second instruction on top of the first: still the developer's, still the link he holds.
+    expect((await door(id, "and make the button orange")).status).toBe(200);
+    await rebuilt(id, "dev4c", "work/wpc-dev4");
+    expect(sent.slice(afterFirst).filter((m) => m.to === SCOOTER)).toHaveLength(0);
+
+    // His own words are a round of his changes: one email, and it describes the build that is current now.
+    await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: "changes: put the founders photo on the home page" });
+    await rebuilt(id, "dev4d", "work/wpc-dev4");
+    const his = previewMails(afterFirst);
+    expect(his, "one preview email for his round").toHaveLength(1);
+    expect(his[0]!.text).toContain("put the founders photo on the home page");
+    expect(his[0]!.text).toContain("https://work-wpc-dev4.west-peek-ventures.pages.dev");
+
+    // The developer's rebuild that moves the preview to a link he has never been sent is mailed: never silent on a new link.
+    const beforeMove = sent.length;
+    expect((await door(id, "rename the branch for the launch")).status).toBe(200);
+    await rebuilt(id, "dev4e", "work/wpc-dev4-launch");
+    expect(previewMails(beforeMove), "a link he does not hold is mailed").toHaveLength(1);
+    expect(previewMails(beforeMove)[0]!.text).toContain("https://work-wpc-dev4-launch.west-peek-ventures.pages.dev");
+  });
+
+  /**
+   * 13 Nov 2026: Porter's "answered" email told a partner "The last build was for: …" and quoted the
+   * developer's instruction word for word. What a partner reads about a build is what HE asked for.
+   */
+  it("the developer's instruction is never quoted to the partner: not in the answer to his question, the preview email, or what the job says it waits on", async () => {
+    const id = await atPreview("dev5", SCOOTER);
+    await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: "changes: put the founders photo on the home page" });
+    await rebuilt(id, "dev5b", "work/wpc-dev5");
+    const from = sent.length;
+    const INTERNAL = "strip the zebra-crossing fallback from the sign-in handler";
+    expect((await door(id, INTERNAL)).status).toBe(200);
+    await rebuilt(id, "dev5c", "work/wpc-dev5");
+    expect(String((await readWebPropertyChange(env, id))!.rebuilt_for), "the instruction is what the build was for").toContain(INTERNAL);
+
+    await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: "Do you know for certain where I can see it?" });
+    expect((await tickFor(id)).outcome).toBe("BLOCKED");
+    const answered = sent.slice(from).filter((m) => m.to === SCOOTER && /answered/.test(m.subject));
+    expect(answered, "his question is answered from the card").toHaveLength(1);
+    expect(answered[0]!.text).toContain("The preview is at");
+    expect(answererFacts?.join(" "), "nor is it handed to the model that words the answer").not.toContain("zebra-crossing");
+
+    // A preview email that does go out for her instruction (the link moved) says nothing of it either.
+    expect((await door(id, `${INTERNAL}, on the launch branch`)).status).toBe(200);
+    await rebuilt(id, "dev5d", "work/wpc-dev5-launch");
+    expect(previewMails(from)).toHaveLength(1);
+
+    const his = sent.slice(from).filter((m) => m.to === SCOOTER);
+    expect(his.length).toBeGreaterThanOrEqual(2);
+    for (const m of his) expect(`${m.subject}\n${m.text}`, `"${m.subject}" carries no developer instruction`).not.toContain("zebra-crossing");
+    expect(String((await card(id)).block_needed), "what the job says it waits on").not.toContain("zebra-crossing");
+    expect(JSON.parse((await readWebPropertyChange(env, id))!.answers_json).join(" "), "it is not one of his answers").not.toContain("zebra-crossing");
+  });
 });
 
 describe("every ask is built in the job or the partner is asked; later work is only what the partner dated (#363)", () => {

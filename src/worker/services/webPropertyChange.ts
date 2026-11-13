@@ -954,7 +954,52 @@ export function askBlockText(asks: readonly Ask[], readiness?: { publishReady: b
   ].join("\n");
 }
 
-/** The second question: the preview is up, land it? One email for every repo of the job. */
+/**
+ * WHOSE WORDS THE LAST REBUILD WAS FOR (13 Nov 2026). A partner got three "New preview ready" emails
+ * in ninety minutes and an "answered" email quoting an instruction he never wrote: two of the rebuilds
+ * were the developer's, entered through the tail door, and `rebuilt_for` holds whoever's words came
+ * last. The event spine already records who entered them (`work_card.directed_by_developer`, and
+ * `web_property_change.original_ask_reopened` for the system finishing his own ask), so this reads it:
+ *
+ *   · `forPartner`: what a partner-facing email may say the build was for. His own words; for a
+ *     reopened original ask, the ask he wrote; for a developer's instruction, nothing. Every
+ *     partner-facing reader of `rebuilt_for` goes through here.
+ *   · `developer` + `partnerHoldsPreview`: the rebuild was the developer's, and when it was taken up
+ *     the partner already held a preview email he had not answered (`blockOnNewPreview`).
+ */
+export const QUIET_PREVIEW = "not mailed";
+const flat = (v: unknown): string => (typeof v === "string" ? v.replace(/\s+/g, " ").trim() : "");
+export async function rebuildWords(env: Env, cardId: string, row: Pick<WebPropertyChangeRow, "rebuilt_for">): Promise<{ developer: boolean; partnerHoldsPreview: boolean; forPartner: string | null }> {
+  const words = flat(row.rebuilt_for);
+  if (!words) return { developer: false, partnerHoldsPreview: false, forPartner: null };
+  const rows = await env.WP_OS_DB.prepare(
+    "SELECT event_type, payload_json FROM event_record WHERE object_type = 'work_card' AND object_id = ?1 AND event_type IN ('work_card.directed_by_developer', 'web_property_change.original_ask_reopened') ORDER BY created_at DESC, rowid DESC LIMIT 50",
+  )
+    .bind(cardId)
+    .all<{ event_type: string; payload_json: string }>();
+  const events = (rows.results ?? []).map((r) => {
+    let p: Record<string, unknown> = {};
+    try {
+      p = JSON.parse(r.payload_json) as Record<string, unknown>;
+    } catch {
+      /* an unreadable payload matches nothing */
+    }
+    return { type: r.event_type, p };
+  });
+  if (words.startsWith(FINISH_ORIGINAL_ASK)) {
+    const ask = flat(events.find((e) => e.type === "web_property_change.original_ask_reopened" && flat(e.p.instruction) === words)?.p.ask);
+    return { developer: false, partnerHoldsPreview: false, forPartner: ask ? `finishing your original request, ${ask}` : null };
+  }
+  const directed = events.filter((e) => e.type === "work_card.directed_by_developer" && flat(e.p.words) === words);
+  if (!directed.length) return { developer: false, partnerHoldsPreview: false, forPartner: row.rebuilt_for!.trim() };
+  // The runner's own record of taking the instruction up (newest first) says whether he held a preview then.
+  const taken = directed.find((e) => typeof e.p.partner_holds_preview === "boolean");
+  // Her instruction on her OWN job is the requesting partner's words, whichever door carried them.
+  if (taken?.p.own_job === true) return { developer: false, partnerHoldsPreview: false, forPartner: row.rebuilt_for!.trim() };
+  return { developer: true, partnerHoldsPreview: taken?.p.partner_holds_preview === true, forPartner: null };
+}
+
+/** The second question: the preview is up, land it? One email for every repo of the job. `rebuilt_for` is what the partner may read (`rebuildWords`). */
 export function previewBlockText(
   row: Pick<WebPropertyChangeRow, "pr_url" | "preview_url" | "placeholders_json" | "publish_ready"> & Partial<Pick<WebPropertyChangeRow, "property_host" | "branch" | "rebuilt_for" | "changed_pages_json">>,
   parts: readonly (Pick<WebPropertyChangePart, "repo" | "property_host" | "pr_url" | "preview_url"> & Partial<Pick<WebPropertyChangePart, "branch" | "changed_pages_json">>)[] = [],
@@ -1010,7 +1055,7 @@ export async function porterNoticeEmail(env: Env, cardId: string, kind: NoticeKi
   if (kind === "PREVIEW") {
     // A preview's round counts the previews actually sent, re-sends of the same one excluded.
     const sent = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PREVIEW' AND sent = 1 AND cause NOT LIKE 'resend:%'").bind(cardId).first<{ n: number }>();
-    return previewNotice({ title: ctx.title, previewLine: ctx.previewLine, placeholders: list(row.placeholders_json), filled: list(row.filled_json), changed: row.rebuilt_for ?? null, round: Math.max(1, (sent?.n ?? 0) + (opts.resend ? 0 : 1)), cardId, sites: ctx.sites, decided: decidedSoFar(asksOf(row), list(row.answers_json), approverName(row.plan_approved_by)) });
+    return previewNotice({ title: ctx.title, previewLine: ctx.previewLine, placeholders: list(row.placeholders_json), filled: list(row.filled_json), changed: (await rebuildWords(env, cardId, row)).forPartner, round: Math.max(1, (sent?.n ?? 0) + (opts.resend ? 0 : 1)), cardId, sites: ctx.sites, decided: decidedSoFar(asksOf(row), list(row.answers_json), approverName(row.plan_approved_by)) });
   }
   if (kind === "QUESTION") return questionNotice({ title: ctx.title, question: lines.slice(0, 12), previewLine: ctx.previewLine, missing: missing.map((m) => m.item), cardId });
   if (kind === "STUCK") return stuckNotice({ title: ctx.title, blockedBy: lines[0] ?? "something on our side stopped the work", next: lines[1] ?? "Sequoia has been told; you don't need to do anything.", previewLine: ctx.previewLine, cardId });
@@ -1095,13 +1140,14 @@ export function freeReplyLandsPreview(rules: Record<string, string>): boolean {
  * changed. PUBLISH is recorded like the named force — hers alone, with the time — as a landing
  * approval that binds to a build that goes green AFTER it, never to the preview she is looking at.
  */
-async function requestRebuild(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, intent: "PREVIEW" | "PUBLISH" | "CHANGES", answer: string | null, rules: Record<string, string>): Promise<RunOutcome> {
+async function requestRebuild(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, intent: "PREVIEW" | "PUBLISH" | "CHANGES", answer: string | null, rules: Record<string, string>, directedBy: string | null = null): Promise<RunOutcome> {
   const now = new Date().toISOString();
   const requester = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
   const by = card.block_answered_by ?? requester?.firmUserId ?? null;
   const patch: Partial<WebPropertyChangeRow> = { refresh_intent: intent, refresh_requested_at: now };
   if (intent === "CHANGES" && answer) {
-    patch.answers_json = JSON.stringify([...list(row.answers_json), answer.slice(0, PARTNER_ANSWER_MAX)]);
+    // The partner's answers are the partner's: a developer's instruction is the run's job, never one of his answers.
+    if (!directedBy) patch.answers_json = JSON.stringify([...list(row.answers_json), answer.slice(0, PARTNER_ANSWER_MAX)]);
     // 0244: THE WORDS THIS REBUILD IS FOR. A remark or a worry is a change to make; the Mac gets
     // them as the run's whole job, and a build that moves nothing for them is a failed attempt.
     patch.rebuilt_for = answer.slice(0, PARTNER_ANSWER_MAX);
@@ -1113,9 +1159,11 @@ async function requestRebuild(env: Env, card: WebPropertyChangeCard, row: WebPro
   await appendFinding(
     env,
     card.id,
-    intent === "CHANGES"
-      ? `After the preview, ${card.requested_by_email ?? "the partner"} asked for changes ("${(answer ?? "").slice(0, 200)}"): rebuilding with them; a new preview follows.`
-      : `After the preview, ${card.requested_by_email ?? "the partner"} ${answer ? `replied "${answer.slice(0, 80)}"` : "pressed \"I added missing items\""}: checking the Drive folder and the files on the card for anything new. ${intent === "PUBLISH" ? "If something changed, it is filled in and published without another preview" : "If something changed, a new preview follows"}; if nothing did, she is told so.`,
+    directedBy
+      ? `Rebuilding on the instruction of ${directedBy}.`
+      : intent === "CHANGES"
+        ? `After the preview, ${card.requested_by_email ?? "the partner"} asked for changes ("${(answer ?? "").slice(0, 200)}"): rebuilding with them; a new preview follows.`
+        : `After the preview, ${card.requested_by_email ?? "the partner"} ${answer ? `replied "${answer.slice(0, 80)}"` : "pressed \"I added missing items\""}: checking the Drive folder and the files on the card for anything new. ${intent === "PUBLISH" ? "If something changed, it is filled in and published without another preview" : "If something changed, a new preview follows"}; if nothing did, she is told so.`,
   );
   const parked = await parkPhase(env, card, { ...row, ...patch } as WebPropertyChangeRow, "BUILD", rules);
   if (!parked.parked) return { finished: false, blocked: false, progressed: true, detail: parked.reason };
@@ -1128,10 +1176,33 @@ async function blockOnPreview(env: Env, card: WebPropertyChangeCard, row: WebPro
     trying: card.title,
     employee: PORTER_NAME,
     who: whoFor(card),
-    detail: [waitDetail("PREVIEW_APPROVAL", { what: cleanPreviewUrls(row.preview_url, pagesHostsOf(row.property_host ?? null, await loadRegistry(env)), row.branch ?? "") }), previewBlockText(row, await readParts(env, card.id))].join("\n").slice(0, 900),
+    detail: [waitDetail("PREVIEW_APPROVAL", { what: cleanPreviewUrls(row.preview_url, pagesHostsOf(row.property_host ?? null, await loadRegistry(env)), row.branch ?? "") }), previewBlockText({ ...row, rebuilt_for: (await rebuildWords(env, card.id, row)).forPartner }, await readParts(env, card.id))].join("\n").slice(0, 900),
   });
   await update(env, card.id, { preview_emailed_at: new Date().toISOString() });
   return why;
+}
+
+/**
+ * ONE PREVIEW EMAIL PER ROUND OF THE PARTNER'S CHANGES, NOT ONE PER REBUILD (13 Nov 2026). A build
+ * that went green for the developer's instruction (herself or her tail repairing the job) while the
+ * partner already holds an unanswered preview email for the same link is recorded and waits on him
+ * exactly as before, and is not mailed: the notice for this green is written to the ledger unsent, so
+ * the sweep's "once per cause" finds it told. Every email he gets next (a reminder, an answer, the
+ * next preview) is composed from the row, so it describes this build. A first preview, a new link, a
+ * rebuild for his own words or one that finished his original ask is mailed as always.
+ */
+async function blockOnNewPreview(env: Env, card: WebPropertyChangeCard, before: WebPropertyChangeRow, fresh: WebPropertyChangeRow): Promise<string> {
+  const cause = await rebuildWords(env, card.id, fresh);
+  if (cause.developer && cause.partnerHoldsPreview) {
+    const hosts = pagesHostsOf(fresh.property_host ?? null, await loadRegistry(env));
+    const link = cleanPreviewUrls(fresh.preview_url, hosts, fresh.branch ?? "");
+    const mailed = await env.WP_OS_DB.prepare("SELECT 1 AS one FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PREVIEW' AND sent = 1 LIMIT 1").bind(card.id).first<{ one: number }>();
+    if (mailed && link && link === cleanPreviewUrls(before.preview_url, hosts, before.branch ?? "")) {
+      await recordNotice(env, { cardId: card.id, kind: "PREVIEW", cause: fresh.check_green_at ?? "green", to: (card.requested_by_email ?? "").trim().toLowerCase(), messageId: null, sent: false, detail: `${QUIET_PREVIEW}: rebuilt on the developer's instruction; the preview email already waiting on the partner carries the same link`, firmScope: card.firm_scope });
+      await appendFinding(env, card.id, `No new preview email for this build: it was rebuilt on the developer's instruction, and ${card.requested_by_email ?? "the partner"} already holds a preview email for the same link and has not answered it. The link shows this build; the next email describes it.`);
+    }
+  }
+  return blockOnPreview(env, card, fresh);
 }
 
 /**
@@ -1152,7 +1223,7 @@ export async function blockedEmailDetail(env: Env, cardId: string): Promise<stri
   // THE PREVIEW EMAIL: the link, the PR, the placeholders and the proof — the second question.
   if (row.pr_url && row.check_state === "GREEN" && needsPreview(row) && !row.land_approved_at && !row.forced_by) {
     return [
-      previewBlockText(row, await readParts(env, cardId)),
+      previewBlockText({ ...row, rebuilt_for: (await rebuildWords(env, cardId, row)).forPartner }, await readParts(env, cardId)),
       "",
       "WHAT WAS PROVEN BEFORE THE PR:",
       "",
@@ -1433,7 +1504,9 @@ export async function applyReport(
   if (report.phase === "BUILD" && row.refresh_intent === "CHANGES" && report.changed !== true) {
     const asked = (row.rebuilt_for ?? list(row.answers_json).at(-1) ?? "").slice(0, 300);
     await appendFinding(env, card.id, `The rebuild for "${asked}" came back with no new commit on the branch (attempt ${card.work_attempts}) — nothing changed, so no new preview was sent. The next attempt must make the change.`);
-    return { finished: false, blocked: false, progressed: false, detail: `BUILD moved nothing for the partner's request ("${asked.slice(0, 120)}"): no commit on the branch, so no new preview. It runs again.` };
+    // The detail can become a partner's STUCK email after three attempts: it quotes only what he may read.
+    const shown = row.rebuilt_for ? (await rebuildWords(env, card.id, row)).forPartner : asked;
+    return { finished: false, blocked: false, progressed: false, detail: `BUILD moved nothing for ${shown ? `the partner's request ("${shown.slice(0, 120)}")` : "the instruction on the card"}: no commit on the branch, so no new preview. It runs again.` };
   }
   // 0240: the material set this build used, and what it filled in since the last preview.
   if (report.phase === "BUILD") {
@@ -2046,8 +2119,11 @@ export async function cardStandingLines(env: Env, cardId: string, row: WebProper
   const lines: string[] = [];
   const live = await env.WP_OS_DB.prepare("SELECT status FROM subscription_seat_run WHERE work_card_id = ?1 AND run_kind = 'LOCAL_JOB' AND status IN ('QUEUED', 'CLAIMED') LIMIT 1").bind(cardId).first<{ status: string }>();
   const link = cleanPreviewUrls(row.preview_url, pagesHostsOf(row.property_host ?? null, await loadRegistry(env)), row.branch ?? "");
-  const forWords = row.rebuilt_for ? row.rebuilt_for.replace(/^(?:changes|finish the original request)\s*:\s*/i, "").replace(/\s+/g, " ").slice(0, 240) : null;
-  if (live) lines.push(`Being built right now${forWords ? `: ${forWords}` : row.phase === "PLAN" ? ": the plan" : ""}. You get a fresh preview email the moment it is ready.`);
+  // What the build was for, in words the partner may read: his own, never a developer's instruction (`rebuildWords`).
+  const cause = await rebuildWords(env, cardId, row);
+  const forWords = cause.forPartner ? cause.forPartner.replace(/^changes\s*:\s*/i, "").replace(/\s+/g, " ").slice(0, 240) : null;
+  const sameLink = cause.developer && cause.partnerHoldsPreview && link;
+  if (live) lines.push(`Being built right now${forWords ? `: ${forWords}` : row.phase === "PLAN" ? ": the plan" : ""}. ${sameLink ? "The preview link stays the same and shows the new build when it is ready." : "You get a fresh preview email the moment it is ready."}`);
   if (link) lines.push(`${live ? "The preview from the last build" : "The preview"} is at ${link}.`);
   if (!live && forWords) lines.push(`The last build was for: ${forWords}`);
   if (!live && row.phase === "BUILD" && row.check_state === "GREEN" && link && !row.land_approved_at) lines.push("Nothing goes live until you approve that preview.");
@@ -2165,7 +2241,7 @@ async function applyBuild(env: Env, card: WebPropertyChangeCard, row: WebPropert
   if (needsPreview(fresh) && !fresh.land_approved_at && !fresh.forced_by) {
     // EVERY PREVIEW ON THE CARD'S TIMELINE (0240), with what it reflects.
     await appendFinding(env, card.id, `Preview ready — ${currentPreviewLine(fresh, [], { pagesHosts: pagesHostsOf(fresh.property_host), branch: fresh.branch }) ?? report.pr_url}.`);
-    const why = await blockOnPreview(env, card, fresh);
+    const why = await blockOnNewPreview(env, card, row, fresh);
     return { finished: false, blocked: true, progressed: false, detail: why };
   }
   if (isOn(rules.land_on_green)) {
@@ -2203,7 +2279,7 @@ async function applyBuildOfParts(env: Env, card: WebPropertyChangeCard, row: Web
   }
   const fresh: WebPropertyChangeRow = { ...row, pr_url: agg.pr_url, pr_number: null, branch: null, check_state: "GREEN", check_green_at: agg.check_green_at, preview_url: agg.preview_url, build_proof: agg.build_proof };
   if (needsPreview(fresh) && !fresh.land_approved_at && !fresh.forced_by) {
-    const why = await blockOnPreview(env, card, fresh);
+    const why = await blockOnNewPreview(env, card, row, fresh);
     return { finished: false, blocked: true, progressed: false, detail: why };
   }
   if (isOn(rules.land_on_green)) {
@@ -2852,7 +2928,26 @@ export async function runWebPropertyChangeCard(
         const director = await developerDirector(env, card.block_answered_by);
         if (director) {
           await appendFinding(env, card.id, `Directed by ${director.label}: "${answer.slice(0, 600)}". Rebuilding with it; the preview and its approval stay with ${requester?.firstName ?? "the partner who asked"}.`);
-          return requestRebuild(env, card, row, "CHANGES", answer, rules);
+          /*
+           * TAKEN UP, ON THE RECORD (13 Nov 2026), with the one fact the preview email turns on: does the
+           * partner hold a preview email for the build he is looking at, with nothing of his own still
+           * unbuilt? Then this rebuild is not his round and its preview is not mailed (`blockOnNewPreview`).
+           * A rebuild still owed to him, or to an earlier instruction that itself owed him one, is mailed.
+           */
+          const told = await env.WP_OS_DB.prepare("SELECT sent, detail FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PREVIEW' AND cause = ?2").bind(card.id, row.check_green_at ?? "green").first<{ sent: number; detail: string | null }>();
+          const owed = row.refresh_intent ? await rebuildWords(env, card.id, row) : null;
+          const ownJob = director.partner.firmUserId === requester?.firmUserId;
+          const holds = !ownJob && (owed ? owed.developer && owed.partnerHoldsPreview : Boolean(told && (told.sent === 1 || (told.detail ?? "").startsWith(QUIET_PREVIEW))));
+          await appendEvent(env, {
+            eventType: "work_card.directed_by_developer",
+            actorType: "system",
+            actorId: "web_property_change",
+            objectType: "work_card",
+            objectId: card.id,
+            firmScope: card.firm_scope,
+            payload: { for: director.partner.firmUserId, via: director.viaTail ? "partner tail (Claude)" : "her own answer", taken_up: true, words: answer.slice(0, PARTNER_ANSWER_MAX), partner_holds_preview: holds, own_job: ownJob },
+          });
+          return requestRebuild(env, card, row, "CHANGES", answer, rules, ownJob ? null : director.label);
         }
       }
       /*
