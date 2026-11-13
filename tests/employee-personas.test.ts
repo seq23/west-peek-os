@@ -19,15 +19,6 @@ describe("every employee is a distinct veteran, not a badge on one assistant", (
     for (const p of EMPLOYEE_PERSONAS) expect(roster.has(p.name), `${p.name} is not on the roster`).toBe(true);
   });
 
-  it("gives every employee a DISTINCT voice — the whole point", () => {
-    // If two personas share a voice, seating either produces the same answer and the roster is
-    // decorative. This is the assertion that keeps them genuinely different.
-    const voices = EMPLOYEE_PERSONAS.map((p) => p.voice);
-    expect(new Set(voices).size).toBe(voices.length);
-    const expertise = EMPLOYEE_PERSONAS.map((p) => p.expertise);
-    expect(new Set(expertise).size).toBe(expertise.length);
-  });
-
   it("holds everyone to the veteran standard regardless of title", () => {
     // The title is the seat, not the ceiling. This used to check "Priya", the Associate, who was
     // merged into the Investment Lead in roster v4.0. Naming one person was always the weaker

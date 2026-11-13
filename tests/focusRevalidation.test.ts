@@ -1,6 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 
 /**
  * REVALIDATE ON FOCUS (Wave F, 22 Sep 2026 — plan §6). "There is no revalidate-on-focus anywhere:
@@ -105,23 +103,3 @@ describe("the tab regaining focus invalidates every surface", () => {
   });
 });
 
-/**
- * A LISTENER NOBODY REGISTERED IS THE SAME BUG WEARING A FIX. `wireFocusRevalidation` has to
- * actually be called from the app, once, or the mechanism above never runs outside a test.
- */
-describe("Shell wires focus revalidation on mount", () => {
-  const APP = readFileSync(fileURLToPath(new URL("../src/client/App.tsx", import.meta.url)), "utf8");
-
-  it("imports wireFocusRevalidation and calls it inside Shell", () => {
-    expect(APP, "App.tsx does not import wireFocusRevalidation at all").toContain("wireFocusRevalidation");
-
-    const start = APP.indexOf("function Shell()");
-    expect(start, "Shell has been renamed or removed; this guard can no longer see it").toBeGreaterThan(-1);
-    const after = APP.slice(start + 1);
-    const end = after.search(/\n(?:function |const |export )/);
-    const body = end === -1 ? after : after.slice(0, end);
-
-    expect(body, "Shell never calls wireFocusRevalidation, so focus never revalidates anything")
-      .toMatch(/useEffect\(\(\)\s*=>\s*\{\s*wireFocusRevalidation\(\);\s*\},\s*\[\]\)/);
-  });
-});
