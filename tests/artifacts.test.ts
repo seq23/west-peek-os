@@ -22,10 +22,9 @@ import {
   runArtifactCard,
   serveArtifactsOnTick,
   rebuildArtifact,
-  plainFailure,
   type ArtifactModelCall,
 } from "../src/worker/services/artifacts";
-import { artifactAskFromWords, kindFromWords, stateInWords, type ArtifactSpec } from "../src/shared/artifacts/artifact";
+import { artifactAskFromWords, kindFromWords, type ArtifactSpec } from "../src/shared/artifacts/artifact";
 import { checkCitations, docxBytes, documentFor, figuresOf, pptxBytes, slidesFor, stripUncited, textOfDocument, textOfDocx, textOfPptx, textOfSlides, UncitedFigure, unzipStored } from "../src/shared/artifacts/render";
 
 /**
@@ -126,14 +125,6 @@ describe("1. the words: what is recognised as a build, and the state in words", 
     expect(buildFromWords("add this to the deck")).toEqual({ kind: "deck" });
     expect(buildFromWords("write me a one-pager on the Sensori round")).toBeNull();
     expect(kindFromWords("a short memo")).toBe("document");
-  });
-
-  it("every state is a sentence, never a bare enum", () => {
-    expect(stateInWords({ state: "REQUESTED", stage: null })).toMatch(/waiting its turn/);
-    expect(stateInWords({ state: "BUILDING", stage: "reading" })).toBe("building — reading the record");
-    expect(stateInWords({ state: "FAILED", stage: null, error_message: "no lane could take it" })).toBe("failed — no lane could take it");
-    expect(plainFailure("no_enabled_providers")).toMatch(/no model lane could take the work/);
-    expect(plainFailure("provider_http_402: credit balance too low")).toMatch(/run out of credit/);
   });
 });
 

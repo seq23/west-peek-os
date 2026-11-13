@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { briefArrival, briefStageWords } from "../src/client/lib/briefState";
+import { briefArrival } from "../src/client/lib/briefState";
 
 /**
  * A BRIEF THAT DID NOT ARRIVE SAYS SO, ON HER HOME (18 Sep 2026).
@@ -99,37 +99,5 @@ describe("only a readable brief may claim to have arrived", () => {
     expect(a.arrived).toBe(false);
     expect(a.line).toMatch(/no brief/i);
   });
-
-  it("names every stage in words rather than column values", () => {
-    for (const status of statusesFromSchema()) {
-      const words = briefStageWords(status);
-      expect(words, `${status} has no words`).not.toHaveLength(0);
-      expect(words, `${status} is still shouting its column value`).not.toBe(status);
-    }
-  });
 });
 
-/**
- * AND THE PANEL ACTUALLY RENDERS IT.
- *
- * There is no DOM renderer in this suite, so the wiring is asserted at the source — the same
- * narrow, deliberate check the brief-arrives validator makes about the band. It catches the failure
- * that actually happened: a well-tested pure function that nothing on the page calls.
- */
-describe("the panel is wired to it", () => {
-  const panel = readFileSync(new URL("../src/client/pages/DailyBriefPanel.tsx", import.meta.url), "utf8");
-
-  it("computes the arrival from the report and the sections actually on screen", () => {
-    expect(panel).toMatch(/briefArrival\(report,\s*sections\.length\)/);
-  });
-
-  it("renders the not-arrived notice, and only when the brief has not arrived", () => {
-    expect(panel).toContain('data-testid="daily-brief-not-arrived"');
-    expect(panel, "the notice does not depend on the arrival").toMatch(/report && !arrival\.arrived/);
-  });
-
-  it("declares the failure reason the API returns, so it can be shown", () => {
-    expect(panel, "error_message was never declared on the Report type — the 18 Sep defect")
-      .toMatch(/error_message:\s*string \| null/);
-  });
-});

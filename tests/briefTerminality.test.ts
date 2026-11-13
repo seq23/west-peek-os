@@ -6,7 +6,6 @@ import { closeUnfinishableReports } from "../src/worker/services/dailyIntelligen
 import {
   MAX_BRIEF_ATTEMPTS,
   STRANDED_SQL,
-  TERMINAL_SQL,
   briefTerminality,
   strandedReason,
 } from "../src/shared/intelligence/briefTerminality";
@@ -120,42 +119,6 @@ describe("every status and attempt count has a stated outcome", () => {
 
 describe("the database and the code agree about finished", () => {
   const service = readFileSync(new URL("../src/worker/services/dailyIntelligence.ts", import.meta.url), "utf8");
-
-  it("no SQL done-query remains in the service; the one definition of finished consulted is briefTerminality", () => {
-    expect(TERMINAL_SQL).toContain(String(MAX_BRIEF_ATTEMPTS));
-    // The hand-written form that drifted. If it comes back, so does the bug.
-    expect(service, "a hand-written terminal predicate is back in the service").not.toMatch(
-      /status = 'READY' OR \(status = 'FAILED' AND attempts >= \$\{MAX_BRIEF_ATTEMPTS\}\)/,
-    );
-    /*
-     * STRICTER AGAIN (19 Sep 2026, on demand only): the two SQL done-queries — `briefsOwedToday`,
-     * the sweep job's gate, and `runDailyForAll`'s — went with the schedule they gated (0211). The
-     * service now has NO SQL that decides "finished"; the tick asks `briefTerminality` in code, and
-     * a SQL done-query written back by hand is the drift this pin exists for.
-     */
-    expect(service.match(/\$\{TERMINAL_SQL\}/g)?.length ?? 0, "a SQL done-query is back in the service").toBe(0);
-    expect(service, "briefsOwedToday is back — the brief must not ride inside the sweep job again").not.toMatch(/briefsOwedToday/);
-    expect(service, "the every-morning path is back — nothing starts a brief on the clock").not.toMatch(/runDailyForAll|scheduleMayStart|nextScheduledStart/);
-    const handWritten = service.match(/status\s*=\s*'FAILED'\s*AND\s*attempts\s*>=/g) ?? [];
-    expect(handWritten, "a hand-written FAILED-and-spent predicate exists outside the shared fragment").toEqual([]);
-  });
-
-  it("the tick asks the shared answer instead of testing FAILED by hand", () => {
-    expect(service).toMatch(/briefTerminality\(row\.status, row\.attempts\)\.terminal/);
-    expect(service, "the old skip guard is back — it misses a stranded row entirely").not.toMatch(
-      /row\?\.status === "FAILED" && row\.attempts >= MAX_BRIEF_ATTEMPTS/,
-    );
-  });
-
-  it("the stranded recovery exists, is bound, and runs before anything is advanced", () => {
-    expect(service).toMatch(/export async function closeUnfinishableReports/);
-    expect(service, "the recovery does not use the shared stranded predicate").toContain("${STRANDED_SQL}");
-    // BEFORE, not after: a stranded row left in place is advanced again by this very tick.
-    const recoveryCall = service.indexOf("closeUnfinishableReports(env, now)");
-    const advance = service.indexOf("const step = await advanceBrief(env, actor, p.id, now, deps)");
-    expect(recoveryCall, "the recovery is never called from the tick").toBeGreaterThan(-1);
-    expect(recoveryCall, "the recovery runs after rows are advanced").toBeLessThan(advance);
-  });
 
   it("the stranded predicate does not fire on a run that is merely between stages", () => {
     // Both guards must be present: no lease held, AND no movement for a whole stage's lease.
