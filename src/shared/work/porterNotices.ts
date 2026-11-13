@@ -162,6 +162,20 @@ export function pagePathsFrom(files: readonly string[] | null | undefined, max =
   const scoped = sites.map((s) => String(s).trim().replace(/^\.?\/+|\/+$/g, "")).filter((s) => s && s !== ".");
   for (const raw of files ?? []) {
     let f = String(raw).trim().replace(/^\.?\//, "");
+    /*
+     * A PAGE SERVED BY A PAGES FUNCTION IS A PAGE (13 Nov 2026). A job built its dashboard at
+     * functions/dashboard/[[path]].js; the partner asked for the link and the record of pages had none,
+     * because every file under functions/ was skipped. The repo's functions deploy with each of its
+     * sites, so the route is on the job's own preview: functions/dashboard/[[path]].js and
+     * functions/dashboard/index.js are /dashboard. Never /api, a _helper, or a [param] route.
+     */
+    const fn = /^functions\/(.+)\.(?:m?js|ts)$/i.exec(f);
+    if (fn) {
+      const segs = fn[1]!.split("/");
+      if (/^\[\[.+\]\]$/.test(segs.at(-1)!) || segs.at(-1) === "index") segs.pop();
+      if (segs.length && segs[0] !== "api" && !segs.some((x) => x.startsWith("_") || x.includes("["))) out.add(`/${segs.join("/")}`);
+      continue;
+    }
     if (scoped.length) {
       const inside = scoped
         .map((s) => {
