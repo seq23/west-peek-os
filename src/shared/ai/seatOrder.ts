@@ -133,6 +133,11 @@ export const isSeatWait = (text: string | null | undefined): boolean => (text ??
  *   · among the free lanes, the one that LAST COMPLETED this kind is tried first, then the others by how many times
  *     each completed it in the log's window.
  *
+ *   · a free lane whose LAST TWO tries at this kind failed, however long ago, never LEADS it again by itself: once
+ *     its day out is over it stands behind the seats, where a seat's own failure can still reach it and one
+ *     completed run puts it back in front (13 Nov 2026: a partner's weekly search began every week on the lane that
+ *     had failed it the week before).
+ *
  * A failure is an attempt that ran and did not complete (a refusal, an error, an empty or malformed answer, the
  * duty's own check). A spent quota or an absent seat is a wait, not a failure (`isWaitNotFailure`). A seat keeps its place in the table's order; it can only be left out.
  * If leaving lanes out would leave nothing, the chain is returned as the table ordered it: a stale mark must never
@@ -154,16 +159,21 @@ export function rerankFromLog<T>(
   /** This duty kind's attempts, NEWEST FIRST. */
   attempts: readonly LaneAttempt[],
   now: Date,
-): { chain: T[]; rested: string[]; remembered: string | null } {
+  /** Which lanes are her seats. Without it no lane is moved behind them. */
+  isSeat: (lane: T) => boolean = () => false,
+): { chain: T[]; rested: string[]; remembered: string | null; behindSeats: string[] } {
   const byLane = new Map<string, LaneAttempt[]>();
   for (const a of attempts) byLane.set(a.lane, [...(byLane.get(a.lane) ?? []), a]);
   const restedSet = new Set<string>();
+  const failedLastTwo = new Set<string>();
   for (const [lane, list] of byLane) {
     const [last, before] = list;
-    if (last && before && !last.ok && !before.ok && now.getTime() - Date.parse(last.at) < TWICE_FAILED_REST_MS) restedSet.add(lane);
+    if (!(last && before && !last.ok && !before.ok)) continue;
+    if (now.getTime() - Date.parse(last.at) < TWICE_FAILED_REST_MS) restedSet.add(lane);
+    else failedLastTwo.add(lane);
   }
   const kept = chain.filter((l) => !restedSet.has(keyOf(l)));
-  if (kept.length === 0) return { chain: [...chain], rested: [], remembered: null };
+  if (kept.length === 0) return { chain: [...chain], rested: [], remembered: null, behindSeats: [] };
   const inChain = new Set(kept.filter(isFree).map(keyOf));
   const remembered = attempts.find((a) => a.ok && inChain.has(a.lane))?.lane ?? null;
   const completed = (lane: string): number => (byLane.get(lane) ?? []).filter((a) => a.ok).length;
@@ -173,7 +183,12 @@ export function rerankFromLog<T>(
     .sort((a, b) => Number(keyOf(b.l) === remembered) - Number(keyOf(a.l) === remembered) || completed(keyOf(b.l)) - completed(keyOf(a.l)) || a.i - b.i)
     .map((x) => x.l);
   let next = 0;
-  return { chain: kept.map((l) => (isFree(l) ? free[next++]! : l)), rested: [...restedSet].filter((k) => chain.some((l) => keyOf(l) === k)), remembered };
+  const ordered = kept.map((l) => (isFree(l) ? free[next++]! : l));
+  // A free lane that failed its last two tries does not lead: it goes to just behind the last seat, when there is one.
+  const lastSeat = ordered.reduce((at, l, i) => (isSeat(l) ? i : at), -1);
+  const moved = ordered.filter((l, i) => isFree(l) && failedLastTwo.has(keyOf(l)) && i < lastSeat);
+  const out = moved.length === 0 ? ordered : [...ordered.slice(0, lastSeat + 1).filter((l) => !moved.includes(l)), ...moved, ...ordered.slice(lastSeat + 1)];
+  return { chain: out, rested: [...restedSet].filter((k) => chain.some((l) => keyOf(l) === k)), remembered, behindSeats: moved.map(keyOf) };
 }
 
 /**
@@ -183,12 +198,11 @@ export function rerankFromLog<T>(
  * produce a usable answer counts toward "failed it twice running".
  */
 export function isWaitNotFailure(detail: string | null | undefined): boolean {
-  // The $0 search lane's stop lists every route it tried. Its LAST route (Brave, then the free writers) decides: a
-  // spent allowance there is a wait; writers that answered and cited no page have failed the search.
-  const lastRoute = /free_search_named_stop:[\s\S]*Brave search: ([\s\S]*)$/.exec(detail ?? "");
-  const text = lastRoute ? lastRoute[1]! : (detail ?? "");
-  // A writer that answered and failed the lane's own check has failed the search, whatever else was out of quota.
-  if (lastRoute && /cited none of the fetched pages|returned nothing/.test(text)) return false;
+  // The $0 search lane's stop means EVERY route inside it was tried and none produced a sourced answer. Whatever
+  // the routes said (a retired model, a spent allowance, an answer citing no page), the lane failed the search
+  // (13 Nov 2026: read as a wait, it led a partner's weekly search twelve times running).
+  if (/free_search_named_stop/.test(detail ?? "")) return false;
+  const text = detail ?? "";
   return /\b429\b|rate.?limit|quota|usage limit|out of usage|queries are used up|SEAT_ASLEEP|subscription_seat_unavailable|NO_CREDENTIAL|credential_missing|is not set|OUT_OF_CREDIT|credit balance/i.test(text);
 }
 

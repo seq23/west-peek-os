@@ -631,3 +631,62 @@ describe("the finished email names what is still missing (0237, one list for eve
     expect(held!.body_text).toContain("the producer role's day rate — for the opening line to each candidate");
   });
 });
+
+describe("the note reaches his inbox or the card says it did not", () => {
+  it("A NOTE WHOSE EMAIL DID NOT GO IS NOT DONE: the same note is sent again without a second search, and after the last go the card stops by name (13 Nov 2026, the 2026-W45 card)", async () => {
+    await env.WP_OS_DB.prepare("DELETE FROM productions_candidate").run();
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE kind = 'PRODUCTIONS_HIRE_SEARCH'").run();
+    const at = new Date("2026-11-03T15:02:00.000Z");
+    const opened = await openHireSearchCard(env, at);
+    let mailWorks = false;
+    const sends: Array<{ to: string[]; subject: string }> = [];
+    vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
+      const u = String(url);
+      if (!u.includes("api.resend.com")) throw new Error(`unexpected fetch ${u}`);
+      // What the email service answered every send for four days: the firm's key refused.
+      if (!mailWorks) return new Response(JSON.stringify({ message: "API key is invalid" }), { status: 401 });
+      sends.push(JSON.parse(String(init?.body)) as { to: string[]; subject: string });
+      return new Response(JSON.stringify({ id: "re_hire_later" }), { status: 200 });
+    });
+    const withMail = { ...env, RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures" } as Env;
+    let searches = 0;
+    const runners = {
+      productionsHire: (e: Env, card: Parameters<typeof runHireSearchCard>[1]) =>
+        runHireSearchCard(e, card, { search: async () => ((searches += 1), { ok: true, text: searchJson, detail: "ok" }), judge, urlStatus: statusOf, now: at }),
+    };
+    const cardRow = async () => (await env.WP_OS_DB.prepare("SELECT state, block_reason, block_who, block_needed FROM work_card WHERE id = ?1").bind(opened.cardId).first<Record<string, string | null>>())!;
+    const go = async (minutes: number) => {
+      await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(opened.cardId).run();
+      return sweepOnce(withMail, new Date(at.getTime() + minutes * 60_000), runners);
+    };
+    try {
+      const first = await go(3);
+      expect(first.card?.id).toBe(opened.cardId);
+      expect(first.outcome, "a note that did not reach him is not DONE").toBe("FAILED");
+      expect((await cardRow()).state).not.toBe("DONE");
+      const remembered = async () => Number((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM productions_candidate").first<{ n: number }>())?.n);
+      const known = await remembered();
+      expect(known).toBeGreaterThan(0);
+      // The second go sends the SAME note again: no second search, nobody remembered twice.
+      expect((await go(9)).outcome).toBe("FAILED");
+      expect(searches).toBe(1);
+      // The last go: a named stop, on who can repair the sending, the same day.
+      expect((await go(15)).outcome).toBe("BLOCKED");
+      const blocked = await cardRow();
+      expect(blocked).toMatchObject({ state: "BLOCKED", block_reason: "stopped_part_way", block_who: "SEQUOIA" });
+      expect(String(blocked.block_needed)).toMatch(/email to him did not go after 3 tries: the email service refused the firm's sending key/);
+      expect(sends).toHaveLength(0);
+      // Sending repaired and the card tried again: ONE email, the note written on the first go, still no second search.
+      mailWorks = true;
+      await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'OPEN', work_attempts = 0, block_reason = NULL WHERE id = ?1").bind(opened.cardId).run();
+      const last = await go(60);
+      expect(last.outcome, last.summary).toBe("DONE");
+      expect(sends.filter((m) => /^Walker: hire search/.test(m.subject))).toHaveLength(1);
+      expect(searches).toBe(1);
+      expect(await remembered()).toBe(known);
+      expect((await cardRow()).state).toBe("DONE");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

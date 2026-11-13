@@ -515,24 +515,16 @@ export function isSeatNoAnswer(detail: string | null | undefined): boolean {
 }
 
 /**
- * THE FREE SEARCH LANE RAN OUT OF ITS FREE ALLOWANCE: A WAIT, NOT A PERSON'S QUESTION (13 Nov 2026, wc_946f0b75…).
- * Walker's hire search spent both goes in six minutes against Google's free-tier 429s and was BLOCKED on Scooter. The
- * allowance refills by itself, so the card waits an hour per go, the attempt is handed back and nobody is emailed. Bounded:
- * after FREE_SEARCH_WAITS hours the card counts attempts again and stops with its named lane block.
+ * NO ROUTE DID THE SEARCH: A SEAT IS WAITED FOR BRIEFLY, THEN THE CARD STOPS AND SAYS SO THE SAME DAY (13 Nov 2026,
+ * wc_946f0b75…). The router moves a failed free search to the Codex seat, then Claude Code, inside the same run, so
+ * a run that still ended on the free search lane's stop had no seat to move to. First this was BLOCKED on Scooter
+ * with "put more credit on the account"; then it waited an hour a go, twelve times, and his note came three days
+ * late. Now: while a seat that can search could still answer, the card waits for it ten minutes at a time, at most
+ * SEAT_NO_ANSWER_WAITS times; after that the attempts count and the card stops with its named lane block, addressed
+ * to who runs the routes. The free search lane is never what a card waits for.
  */
-export const FREE_SEARCH_WAITS = 12;
-export const FREE_SEARCH_WAIT_MINUTES = 60;
 export function isFreeSearchStop(text: string | null | undefined): boolean {
   return /free_search_named_stop/.test(text ?? "");
-}
-async function freeSearchWaitsSoFar(env: Env, cardId: string): Promise<number> {
-  const r = await env.WP_OS_DB.prepare(
-    "SELECT COUNT(*) AS n FROM event_record WHERE object_type = 'work_card' AND object_id = ?1 AND event_type = 'work_card.waiting_for_free_search'",
-  )
-    .bind(cardId)
-    .first<{ n: number }>()
-    .catch(() => null);
-  return Number(r?.n ?? 0);
 }
 
 async function seatWaitsSoFar(env: Env, cardId: string): Promise<number> {
@@ -890,14 +882,15 @@ export async function sweepOnce(
    * finished in 53 seconds. A queue on the Mac is an infrastructure wait: the attempt is handed back and the card
    * tries again by itself. Bounded by SEAT_NO_ANSWER_WAITS so a seat that never answers still stops and says so.
    */
-  const seatNoAnswer = isSeatNoAnswer(detail) && (await seatWaitsSoFar(env, card.id)) < SEAT_NO_ANSWER_WAITS;
+  const searchStopped = isFreeSearchStop(`${lane.raw} ${detail}`);
+  const seatNoAnswer = (isSeatNoAnswer(detail) || searchStopped) && (await seatWaitsSoFar(env, card.id)) < SEAT_NO_ANSWER_WAITS;
   if (seatNoAnswer || (isLaneFailure(lane.failure) && lane.failure.kind === "LEVER")) {
     /*
      * IMPORTANT WORK WAITING FOR A SEAT IS ALWAYS A WAIT (owner, 26 Oct 2026; shared/ai/seatOrder.ts): it may never
      * take a free lane, so a missing seat is a technical wait, never her spend question and never a STUCK email.
      */
     const seat =
-      (await seatToWaitFor(env, isSearchCallRefusal(`${lane.raw} ${detail}`), now)) ??
+      (await seatToWaitFor(env, searchStopped || isSearchCallRefusal(`${lane.raw} ${detail}`), now)) ??
       (isSeatWait(`${lane.raw} ${detail}`)
         ? { seat: "claude_code", said: "important work waits for the Claude Code or Codex seat (never a free lane), and no seat has checked in for a day" }
         : null);
@@ -928,32 +921,6 @@ export async function sweepOnce(
       };
     }
   }
-  if (isFreeSearchStop(`${lane.raw} ${detail}`) && (await freeSearchWaitsSoFar(env, card.id)) < FREE_SEARCH_WAITS) {
-    const until = new Date(now.getTime() + FREE_SEARCH_WAIT_MINUTES * 60_000).toISOString();
-    const line = `Waiting for the free web search: its free allowance is used up for now, so this tries again by itself in about ${FREE_SEARCH_WAIT_MINUTES} minutes.`;
-    await env.WP_OS_DB.prepare(
-      `UPDATE work_card SET lease_until = ?2, waiting_until = ?2, waiting_for = ?3, next_action = ?3,
-              work_attempts = MAX(COALESCE(work_attempts, 1) - 1, 0), work_last_failure = ?3, work_last_failure_at = ?4
-        WHERE id = ?1 AND state IN ('OPEN', 'IN_PROGRESS')`,
-    )
-      .bind(card.id, until, line, now.toISOString())
-      .run();
-    await appendEvent(env, {
-      eventType: "work_card.waiting_for_free_search",
-      actorType: "system",
-      actorId: "work_sweep",
-      objectType: "work_card",
-      objectId: card.id,
-      firmScope: card.firm_scope,
-      payload: { until, detail: detail.slice(0, 240) },
-    }).catch(() => undefined);
-    return {
-      status: "SUCCEEDED",
-      summary: `"${card.title.slice(0, 60)}" is waiting for the free web search's allowance and tries again by itself at ${until}.`,
-      card: { ...card, work_attempts: Math.max(card.work_attempts - 1, 0), state: "OPEN" },
-      outcome: "WAITING_ON_SEAT",
-    };
-  }
   const allowed = attemptsAllowedFor(lane.failure, MAX_WORK_ATTEMPTS);
   await noteFailedAttempt(env, card, attemptLine(card, lane.failure, lane.name, allowed), now);
   // EVERY TRY THAT DID NOT FINISH IS ON THE CARD'S RECORD (1 Oct 2026), including the last one — written before the exhaustion branch,
@@ -979,7 +946,8 @@ export async function sweepOnce(
      * engineer can find it; what the partner reads is a sentence and four buttons.
      */
     await appendFailureNote(env, card.id, detail);
-    const who = isProductionsKind(card.kind) ? ("SCOOTER" as const) : ("SEQUOIA" as const);
+    // A search no route could do is a fault in the routes, which Scooter cannot clear: it names who runs them.
+    const who = isProductionsKind(card.kind) && !searchStopped ? ("SCOOTER" as const) : ("SEQUOIA" as const);
     const employee = await employeeName(env, card.owner_id);
     /*
      * WHICH BLOCK THIS IS, AND WHY IT MATTERS THAT THEY ARE DIFFERENT.

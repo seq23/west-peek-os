@@ -76,9 +76,12 @@ export function readLaneFailure(detail: string | null | undefined): LaneFailure 
    * search lane's named stop: Google's free tier answered every rung 429 "You exceeded your current quota, please check your
    * plan and billing details … RESOURCE_EXHAUSTED". The billing words read as an empty account, so the card got two goes and
    * was BLOCKED on Scooter with "put more credit on the account" — a free allowance that refills by itself, asked of a person.
-   * Every stop of this lane is an allowance used up or a source-less answer: a rate limit, which clears itself.
+   * CORRECTED THE SAME DAY: read as a rate limit that clears itself, the card then waited an hour a go, twelve times, on a
+   * lane whose first model was retired and whose own search could not find a candidate. When this stop is what a run ended
+   * on, the seats behind it did not serve either, so no route did the search: a lane that is down, two goes, then the
+   * card's named stop. Never CREDIT: there is no account to top up.
    */
-  if (/free_search_named_stop/i.test(text)) return { kind: "RATE_LIMIT", lane: null, vendorWords: "", transient: true };
+  if (/free_search_named_stop/i.test(text)) return { kind: "LANE_DOWN", lane: null, vendorWords: "", transient: false };
 
   const missing = /credential_missing:([a-z0-9_]+)/i.exec(text);
   if (missing) return { kind: "CREDENTIAL", lane: missing[1]!.toLowerCase(), vendorWords: "", transient: false };

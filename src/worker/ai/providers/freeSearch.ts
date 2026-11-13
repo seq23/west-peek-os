@@ -37,7 +37,6 @@ import { FREE_SEARCH_MODEL } from "../../../shared/ai/models";
  * guard holds); gemini-4-argon and the 3.1 Pro previews are metered and are never here.
  */
 export const FREE_SEARCH_GROUNDED_MODELS = [
-  "gemini-2.5-flash",
   "gemini-3.8-flash",
   "gemini-3.6-flash",
   "gemini-3.5-flash-lite",
@@ -68,6 +67,38 @@ export const BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 export const BRAVE_DAILY_QUERY_CAP = 20;
 export const FREE_SEARCH_STOP = "free_search_named_stop";
 const PAGES_TO_FETCH = 3;
+/** Route 2 asks Brave up to this many questions for one search, each aimed at a different kind of source. */
+export const BRAVE_QUERIES_PER_SEARCH = 3;
+const SOURCES_PER_SEARCH = 18;
+
+/**
+ * WHICH GROUNDED RUNGS THIS KEY CAN STILL USE (13 Nov 2026, wc_946f0b75…). Read from the lane's own earlier stops, so
+ * no rung is asked a question its key has already answered: a model Google answered 404 for is gone for good, and one
+ * that answered 429 today has no grounding allowance left today. Pure. `stops` are earlier stop texts with their time.
+ */
+export function groundedRungs(
+  models: readonly string[],
+  stops: readonly { at: string; reason: string }[],
+  now: Date,
+): { ask: string[]; gone: string[]; spentToday: string[] } {
+  const today = now.toISOString().slice(0, 10);
+  const gone: string[] = [];
+  const spentToday: string[] = [];
+  for (const model of models) {
+    const said = new RegExp(`(?:^|[^a-z0-9.-])${model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: provider_http_(\\d{3})`, "g");
+    let isGone = false;
+    let isSpent = false;
+    for (const stop of stops) {
+      for (const m of stop.reason.matchAll(said)) {
+        if (m[1] === "404") isGone = true;
+        if (m[1] === "429" && stop.at.slice(0, 10) === today) isSpent = true;
+      }
+    }
+    if (isGone) gone.push(model);
+    else if (isSpent) spentToday.push(model);
+  }
+  return { ask: models.filter((m) => !gone.includes(m) && !spentToday.includes(m)), gone, spentToday };
+}
 const PAGE_CHARS = 6_000;
 const PAGE_TIMEOUT_MS = 8_000;
 
@@ -85,6 +116,10 @@ export interface FreeSearchOptions {
   openRouterApiKey?: string;
   openRouterBaseUrl?: string;
   quota: BraveQuota;
+  /** The lane's own earlier stops (newest first), so a rung this key cannot use is not asked again. See `groundedRungs`. */
+  groundedStops?: () => Promise<readonly { at: string; reason: string }[]>;
+  /** Tests only. */
+  now?: () => Date;
   fetchImpl?: typeof fetch;
   /** Tests only; production uses the per-call deadline. */
   timeoutMs?: number;
@@ -101,6 +136,16 @@ interface GeminiBody {
 
 const textOf = (b: GeminiBody): string =>
   (b.candidates?.[0]?.content?.parts ?? []).map((p) => p.text).filter((t): t is string => typeof t === "string").join("");
+
+/**
+ * Does the answer cite this fetched page? The page's address as the search gave it, or the same address without its
+ * query string and trailing slash: on 13 Nov 2026 a writer cited a profile exactly, less the "?_l=en" the search
+ * result carried, and its sourced answer was thrown away as citing nothing.
+ */
+export function citesPage(answer: string, url: string): boolean {
+  const bare = url.split(/[?#]/)[0]!.replace(/\/+$/, "");
+  return answer.includes(url) || (bare.length > "https://x.y".length && answer.includes(bare));
+}
 
 /** The subject named in a stop: the run's purpose, trimmed to something a person can read. */
 function subjectOf(req: ProviderRequest): string {
@@ -146,7 +191,11 @@ export function createFreeSearchAdapter(options: FreeSearchOptions): ProviderAda
   /** Route 1. Walks the grounded rungs; returns the first sourced answer, or throws with every rung's reason. */
   async function grounded(req: ProviderRequest): Promise<ProviderResponse> {
     const why: string[] = [];
-    for (const model of FREE_SEARCH_GROUNDED_MODELS) {
+    const stops = options.groundedStops ? await options.groundedStops().catch(() => []) : [];
+    const rungs = groundedRungs(FREE_SEARCH_GROUNDED_MODELS, stops, options.now ? options.now() : new Date());
+    if (rungs.gone.length) why.push(`no longer offered on this key, so not asked: ${rungs.gone.join(", ")}`);
+    if (rungs.spentToday.length) why.push(`no grounding allowance left today, so not asked again: ${rungs.spentToday.join(", ")}`);
+    for (const model of rungs.ask) {
       try {
         return await groundedOn(model, req);
       } catch (err) {
@@ -309,37 +358,74 @@ export function createFreeSearchAdapter(options: FreeSearchOptions): ProviderAda
   async function braveRoute(req: ProviderRequest): Promise<ProviderResponse> {
     if (!options.braveApiKey) throw new Error("BRAVE_SEARCH_API_KEY is not set");
     const task = req.inputs.join("\n\n");
-    const q = (
-      await write(
-        `Write ONE web search query, at most 12 words, that would find the facts this research task needs. Output only the query.\n\nTASK:\n${task.slice(0, 4000)}`,
-        req,
-      )
-    ).text
-      .split("\n")[0]!
-      .replace(/^["'\s]+|["'\s]+$/g, "")
-      .slice(0, 380);
-    if (!q) throw new Error("no search query could be written");
-    if (!(await options.quota.take())) throw new Error(`today's ${BRAVE_DAILY_QUERY_CAP} Brave queries are used up`);
+    /*
+     * SEVERAL QUESTIONS, EACH FOR WHAT THE TASK WANTS FOUND (13 Nov 2026, wc_946f0b75…). Walker's hire search failed
+     * here twelve times: ONE query was written, about the agency that was hiring, so the three pages fetched were about
+     * the agency, held no candidate, and every writer truthfully answered with an empty list that cited nothing.
+     */
+    const queries = [
+      ...new Set(
+        (
+          await write(
+            `Write up to ${BRAVE_QUERIES_PER_SEARCH} web search queries, one per line, each at most 12 words, that together would find what this ` +
+              "research task asks for. Search for the people, organisations or facts the task wants FOUND, never for whoever is " +
+              "asking or who the work is for. When the task lists several kinds of source, aim each query at a different one. " +
+              "When it wants people found, write queries that return individual people's own public pages, not company service pages. " +
+              // The ask is usually at the END of a long brief: the first 4,000 characters of Walker's were who he is and what
+              // the agency sells, so the query writer never saw the role it was searching for.
+              `Output only the queries.\n\nTASK:\n${task.length > 6000 ? `${task.slice(0, 1500)}\n[…]\n${task.slice(-4500)}` : task}`,
+            req,
+          )
+        ).text
+          .split("\n")
+          .map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").replace(/^["'\s]+|["'\s]+$/g, "").slice(0, 380))
+          .filter((l) => l.length > 0),
+      ),
+    ].slice(0, BRAVE_QUERIES_PER_SEARCH);
+    if (queries.length === 0) throw new Error("no search query could be written");
 
-    const res = await doFetch(`${BRAVE_SEARCH_URL}?q=${encodeURIComponent(q)}&count=8`, {
-      method: "GET",
-      headers: { accept: "application/json", "X-Subscription-Token": options.braveApiKey },
-      signal: AbortSignal.timeout(options.timeoutMs ?? req.deadlineMs ?? PROVIDER_TIMEOUT_MS),
-    });
-    if (!res.ok) throw await providerHttpError(res);
-    const found = ((await res.json()) as { web?: { results?: Array<{ title?: string; url?: string; description?: string; extra_snippets?: string[] }> } }).web?.results ?? [];
-    const results = found.filter((r) => typeof r.url === "string" && /^https?:\/\//.test(r.url!));
-    if (results.length === 0) throw new Error(`Brave found nothing for "${q}"`);
+    type Found = { title?: string; url?: string; description?: string; extra_snippets?: string[] };
+    const perQuery: Found[][] = [];
+    for (const q of queries) {
+      if (!(await options.quota.take())) {
+        if (perQuery.length === 0) throw new Error(`today's ${BRAVE_DAILY_QUERY_CAP} Brave queries are used up`);
+        break;
+      }
+      const res = await doFetch(`${BRAVE_SEARCH_URL}?q=${encodeURIComponent(q)}&count=8`, {
+        method: "GET",
+        headers: { accept: "application/json", "X-Subscription-Token": options.braveApiKey },
+        signal: AbortSignal.timeout(options.timeoutMs ?? req.deadlineMs ?? PROVIDER_TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        // The first question's refusal is the route's; a later one (Brave's free plan answers one a second) keeps what was found.
+        if (perQuery.length === 0) throw await providerHttpError(res);
+        break;
+      }
+      const found = ((await res.json()) as { web?: { results?: Found[] } }).web?.results ?? [];
+      perQuery.push(found.filter((r) => typeof r.url === "string" && /^https?:\/\//.test(r.url!)));
+    }
+    // Every question's best result first, then its second, and so on: each kind of source is represented.
+    const results: Found[] = [];
+    for (let rank = 0; results.length < SOURCES_PER_SEARCH && perQuery.some((list) => rank < list.length); rank += 1) {
+      for (const list of perQuery) {
+        const r = list[rank];
+        if (r && !results.some((x) => x.url === r.url) && results.length < SOURCES_PER_SEARCH) results.push(r);
+      }
+    }
+    if (results.length === 0) throw new Error(`Brave found nothing for ${queries.map((q) => `"${q}"`).join(", ")}`);
 
+    // The first pages are read in full; the rest stand as what the search result itself showed.
     const sources: Array<{ url: string; title: string; text: string }> = [];
-    for (const r of results.slice(0, PAGES_TO_FETCH)) {
+    for (const [i, r] of results.entries()) {
       let text = "";
-      try {
-        const page = await doFetch(r.url!, { method: "GET", headers: { accept: "text/html,text/plain" }, signal: AbortSignal.timeout(PAGE_TIMEOUT_MS) });
-        const type = page.headers.get("content-type") ?? "";
-        if (page.ok && /text\/html|text\/plain/i.test(type)) text = htmlToText(await page.text()).slice(0, PAGE_CHARS);
-      } catch {
-        /* the snippet below stands in for a page that would not load */
+      if (i < PAGES_TO_FETCH) {
+        try {
+          const page = await doFetch(r.url!, { method: "GET", headers: { accept: "text/html,text/plain" }, signal: AbortSignal.timeout(PAGE_TIMEOUT_MS) });
+          const type = page.headers.get("content-type") ?? "";
+          if (page.ok && /text\/html|text\/plain/i.test(type)) text = htmlToText(await page.text()).slice(0, PAGE_CHARS);
+        } catch {
+          /* the snippet below stands in for a page that would not load */
+        }
       }
       const snippet = [r.description ?? "", ...(r.extra_snippets ?? [])].join(" ").replace(/<[^>]+>/g, "").trim();
       const body = text || snippet;
@@ -348,7 +434,8 @@ export function createFreeSearchAdapter(options: FreeSearchOptions): ProviderAda
     if (sources.length === 0) throw new Error("none of the pages Brave found could be read");
 
     const prompt = [
-      "Answer the research task below using ONLY the SOURCES that follow. They were fetched from the live web just now.",
+      "Answer the research task below using ONLY the SOURCES that follow. They were fetched from the live web just now",
+      "(the first few as whole pages, the rest as what the search result showed).",
       "Rules: every fact you state must carry, in brackets, the URL of the source it came from. Do not use anything you know",
       "from memory. If the sources do not say something, write that it was not found in the sources. Never invent a name,",
       "a number, a date or a URL.",
@@ -362,7 +449,7 @@ export function createFreeSearchAdapter(options: FreeSearchOptions): ProviderAda
     // The route's own check, applied to EACH writer: an answer that cites none of the fetched pages is that writer's
     // failure, and the next free writer is asked before the route gives up.
     const written = await write(prompt, req, (answer) =>
-      sources.some((s) => answer.includes(s.url)) ? null : "cited none of the fetched pages, so its answer cannot be shown to come from them",
+      sources.some((s) => citesPage(answer, s.url)) ? null : "cited none of the fetched pages, so its answer cannot be shown to come from them",
     );
     const text = written.text;
     return {

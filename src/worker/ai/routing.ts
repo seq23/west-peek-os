@@ -254,6 +254,7 @@ export function adapterFor(
         // Route 2's `:free` writers when the Gemini allowance is gone. Price held at 0 inside the adapter.
         openRouterApiKey: ownCredentialValue(env, "openrouter_free"),
         quota: braveQuotaFor(env),
+        groundedStops: () => freeSearchStops(env),
         fetchImpl,
       }),
       credentialConfigured: configured,
@@ -293,6 +294,17 @@ function ownCredentialValue(env: Env, providerKey: string): string | undefined {
  * the query is sent. An unreadable counter answers "no" — the lane then stops with a named reason rather than
  * spending past a cap it cannot see.
  */
+/** The $0 search lane's own stops over the last 30 days, newest first: what its key has already been told (`groundedRungs`). */
+async function freeSearchStops(env: Env): Promise<Array<{ at: string; reason: string }>> {
+  const rows = await env.WP_OS_DB.prepare(
+    `SELECT r.created_at AS at, g.attempts_json AS reason FROM ai_run r JOIN ai_run_routing g ON g.ai_run_id = r.id
+      WHERE r.created_at >= ?1 AND g.attempts_json LIKE '%free_search_named_stop%' ORDER BY r.created_at DESC LIMIT 20`,
+  )
+    .bind(new Date(Date.now() - 30 * 86_400_000).toISOString())
+    .all<{ at: string; reason: string }>();
+  return rows.results ?? [];
+}
+
 export function braveQuotaFor(env: Env): BraveQuota {
   return {
     async take(): Promise<boolean> {

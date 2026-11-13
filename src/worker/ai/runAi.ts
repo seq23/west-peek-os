@@ -3118,13 +3118,14 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     const providerKey = a.lane.split("/")[0]!;
     return isSeat(providerKey) || freeProviderKeys.has(providerKey);
   });
-  const reranked = rerankFromLog(tableChain, laneKey, (f) => freeProviderKeys.has(f.candidate.providerKey), tierAttempts, now);
+  const reranked = rerankFromLog(tableChain, laneKey, (f) => freeProviderKeys.has(f.candidate.providerKey), tierAttempts, now, (f) => isSeat(f.candidate.providerKey));
   const chain: FallbackOption[] = reranked.chain;
   const logMoved = chain.length !== tableChain.length || chain.some((f, i) => f !== tableChain[i]);
   if (logMoved) {
     explanation +=
       ` The run log re-ranked the lanes for "${dutyKind}":` +
       (reranked.rested.length ? ` ${reranked.rested.join(", ")} failed this kind of work twice running and ${reranked.rested.length === 1 ? "is" : "are"} left out for a day;` : "") +
+      (reranked.behindSeats.length ? ` ${reranked.behindSeats.join(", ")} failed its last two tries at this kind of work, so it stands behind the seats;` : "") +
       (reranked.remembered ? ` ${reranked.remembered} last completed it, so it is tried first among the free lanes.` : "");
   }
   /** What actually runs first. Undefined when the chosen head itself leads: it runs as selected. */

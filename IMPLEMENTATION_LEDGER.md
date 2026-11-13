@@ -7481,3 +7481,34 @@ about any … model".
   short → Codex, private hard waits, never a free lane, second free model + memory, twice-failed moves up),
   tests/stoppedCards.test.ts (the table and the re-rank), tests/freeModelsForProspects.test.ts (the writer check).
   UNPROVEN live: a Codex-served private run, a held Codex build checked by Claude, a free search completed by a second writer.
+
+## 13 Nov 2026 — a search no route could do stops by name the same day; the $0 search can find people; an unsent note is not DONE
+
+Why: Scooter's weekly hire search (2026-W46) failed twelve times on the $0 search lane and reached him three days late.
+- Real cause of the Brave route's failure (PROVEN by a live $0 probe of the real adapter, 13 Nov): the query writer was
+  shown only the first 4,000 characters of the brief (who Walker is, what the agency sells), so it wrote ONE query about
+  the agency itself; the three pages fetched held no candidate; every free writer truthfully answered an empty list,
+  which cites nothing, and was refused as "cited none of the fetched pages". A second fault hid behind it: a writer
+  that cited a profile exactly, less the `?_l=en` the search result carried, was refused too.
+- `providers/freeSearch.ts`: `gemini-2.5-flash` removed (404 on this key); `groundedRungs` skips a rung the key answered
+  404 for (for good) or 429 for (today), read from the lane's logged stops; Brave is asked up to 3 questions written
+  from the START AND END of the brief, about what the task wants found; every result is a source (the first 3 read in
+  full); `citesPage` accepts the fetched page's address without its query string. Still $0, still inside 20 Brave
+  queries a day. Free Google grounding answers 429 on every model for this key: only the Brave route can serve.
+  Live result after the change (PROVEN, same probe and brief): three questions aimed at the role, a sourced candidate list
+  written by a free model, 27 seconds, $0 (before: a named stop after 180 seconds).
+- `shared/ai/seatOrder.ts`: the lane's named stop is always a failure of the search (`isWaitNotFailure`); a free lane
+  whose last two tries failed never leads again by itself (out for a day, then behind the seats).
+- `shared/ai/laneFailure.ts` + `services/workSweep.ts`: the hour-long "waiting for the free web search" (12 goes) is
+  gone. A run that ended on the lane's stop had no seat to move to: the card waits ten minutes for a seat that can
+  search (at most SEAT_NO_ANSWER_WAITS times), then two counted goes, then BLOCKED by name on Sequoia.
+- `services/productionsHire.ts`: where sending is on, a hire note whose email did not go leaves the card open; the next
+  go sends the SAME note with no second search; after the last go the card is BLOCKED (`stopped_part_way`) on Sequoia.
+  Cause of the 2026-W45 miss (production events): the email service answered 401 to every send from 2 Nov 06:34Z to
+  6 Nov 14:34Z (236 sends, every sender), and each card closed DONE.
+- Guards, each failing on the code before this change: tests/stoppedCards.test.ts (the sweep), tests/seatSearch.test.ts
+  (third run leads on the seat), tests/freeModelsForProspects.test.ts (rungs, several questions, citation),
+  tests/productionsHire.test.ts (unsent note).
+- NOT DONE here: other duties' "email not sent, still DONE" endings (blog help, the monthly Productions note, partner
+  messages) are unchanged; the 2026-W44 card's cause (a steer read that could reach no model is reported as "the brief
+  is missing") is left for the hire-search quality change that owns the steer.

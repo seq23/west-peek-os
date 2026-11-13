@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { createWorkCardInternal } from "../src/worker/services/workCards";
-import { FREE_SEARCH_WAITS, MAX_WORK_ATTEMPTS, SEAT_NO_ANSWER_WAITS, isSeatNoAnswer, sweepIdentity, sweepOnce } from "../src/worker/services/workSweep";
+import { MAX_WORK_ATTEMPTS, SEAT_NO_ANSWER_WAITS, isSeatNoAnswer, sweepIdentity, sweepOnce } from "../src/worker/services/workSweep";
 import { answerBlock, blockOf, LANE_PAUSE_HOURS, LANE_STAND_DOWN_HOURS, TECHNICAL_BLOCK_NAG_HOURS } from "../src/worker/services/blocks";
 import { attemptsAllowedFor, readLaneFailure } from "../src/shared/ai/laneFailure";
 import { blockProblems, describeBlock } from "../src/shared/work/blocks";
@@ -542,7 +542,14 @@ describe("her route order, as the one table (shared/ai/modelOrder.json through s
     expect(rerankFromLog(chain, key, isFree, allFree, now).chain).toEqual(["codex/seat", "claude/seat"]);
     // A seat that failed twice running rests too, and the job moves up a rung by itself.
     expect(rerankFromLog(chain, key, isFree, [{ lane: "codex/seat", ok: false, at: ago(1) }, { lane: "codex/seat", ok: false, at: ago(3) }], now).chain).toEqual(["free/a", "free/b", "free/c", "claude/seat"]);
-    // The rest ends after a day, by the clock.
+    // A free lane whose LAST TWO tries failed never leads again by itself: after its day out it stands behind the seats
+    // (still reachable if they fail), and one completed run puts it back in front.
+    const isSeat = (l: string) => l.endsWith("/seat");
+    const old = twice.map((a) => ({ ...a, at: ago(30) }));
+    expect(rerankFromLog(chain, key, isFree, old, now, isSeat)).toMatchObject({ chain: ["free/b", "free/c", "codex/seat", "claude/seat", "free/a"], rested: [], behindSeats: ["free/a"] });
+    expect(rerankFromLog(chain, key, isFree, [{ lane: "free/a", ok: true, at: ago(26) }, ...old], now, isSeat).chain).toEqual(chain);
+    expect(rerankFromLog(["free/a"], key, isFree, old, now, isSeat).chain, "with no seat in the chain it is still tried").toEqual(["free/a"]);
+    // Without knowing the seats, the day out simply ends.
     expect(rerankFromLog(chain, key, isFree, twice.map((a) => ({ ...a, at: ago(30) })), now).chain).toEqual(chain);
     // Resting everything would leave nothing: the table's order stands rather than no route at all.
     const only = ["claude/seat"];
@@ -553,9 +560,10 @@ describe("her route order, as the one table (shared/ai/modelOrder.json through s
     expect(remembered.remembered).toBe("free/c");
     // What is a wait and what is a failure.
     for (const wait of ["RATE_LIMITED: provider_http_429:quota", "You exceeded your current quota", "codex has run out of usage and said: usage limit reached", "SEAT_ASLEEP: subscription_seat_unavailable:her Mac last checked in 14 hours ago", "credential_missing:google"]) expect(isWaitNotFailure(wait), wait).toBe(true);
-    // The free search lane: Google's spent quota beside a Brave allowance that is used up is a wait; Google's spent
-    // quota beside writers that cited no page is a failure of the search.
-    expect(isWaitNotFailure("free_search_named_stop:Couldn't research X: Gemini search grounding: a: provider_http_429:quota; Brave search: today's 20 Brave queries are used up")).toBe(true);
+    // The free search lane's stop means every route inside it was tried and none answered: always a failure of the
+    // search, whatever its routes said, so two of them running take the lane off the front of that duty.
+    expect(isWaitNotFailure("free_search_named_stop:Couldn't research X: Gemini search grounding: a: provider_http_429:quota; Brave search: today's 20 Brave queries are used up")).toBe(false);
+    expect(isWaitNotFailure("free_search_named_stop:Couldn't research X: Gemini search grounding: a: provider_http_404:no longer available; b: provider_http_429:quota; Brave search: BRAVE_SEARCH_API_KEY is not set")).toBe(false);
     expect(isWaitNotFailure("free_search_named_stop:Couldn't research X: Gemini search grounding: a: provider_http_429:quota; Brave search: no free writer answered (m0: provider_http_429:quota; m1: cited none of the fetched pages, so its answer cannot be shown to come from them)")).toBe(false);
     for (const failure of ["verifier_rejected:the answer cites no page", "provider_malformed_response", "truncated_reply:256 tokens", "PROVIDER_ERROR: provider_http_503:upstream unavailable", ""]) expect(isWaitNotFailure(failure), failure).toBe(false);
     expect(dutyKindOf('Porter working "Unclear email: a made-up subject" (step 2)')).toBe("Porter working");
@@ -625,7 +633,7 @@ describe("her route order, as the one table (shared/ai/modelOrder.json through s
   });
 });
 
-describe("the free search lane's spent allowance is a wait, never 'put more credit on the account' (13 Nov 2026, wc_946f0b75…)", () => {
+describe("a search no route could do is a named stop the same day, never 'put more credit on the account' and never a quiet wait (13 Nov 2026, wc_946f0b75…)", () => {
   // Walker's hire search, 10 Nov 2026, as the free search lane recorded it (trimmed).
   const GOOGLE_429 =
     "provider_http_429:You exceeded your current quota, please check your plan and billing details. For more information on this error, " +
@@ -635,34 +643,71 @@ describe("the free search lane's spent allowance is a wait, never 'put more cred
     "gemini-2.5-flash: provider_http_404:This model models/gemini-2.5-flash is no longer available to new users.; " +
     `gemini-3.8-flash: ${GOOGLE_429}; Brave search: the writer cited none of the fetched pages`;
 
-  it("reads Google's free-tier 429 and the lane's named stop as a rate limit, while an empty account is still CREDIT", () => {
-    expect(readLaneFailure(STOP).kind).toBe("RATE_LIMIT");
+  it("reads the lane's named stop as a lane that is down (two goes, not three), Google's free-tier 429 as a rate limit, and neither as an empty account", () => {
+    expect(readLaneFailure(STOP)).toMatchObject({ kind: "LANE_DOWN", transient: false });
     expect(readLaneFailure(`provider_failure:${GOOGLE_429}`).kind).toBe("RATE_LIMIT");
     expect(readLaneFailure("provider_failure:provider_http_429:You exceeded your current quota, please check your plan and billing details.").kind).toBe("CREDIT");
     expect(readLaneFailure("provider_failure:provider_http_400: Your credit balance is too low to access the Anthropic API.").kind).toBe("CREDIT");
   });
 
-  it("through the sweep: the card waits an hour a go with the attempt handed back, nobody asked; past the bound it counts again", async () => {
+  const seat = (at: Date) =>
+    env.WP_OS_DB.prepare(
+      `INSERT INTO subscription_seat_device (seat, device_id, hostname, agent_version, last_seen_at, capabilities_json, first_seen_at)
+       VALUES ('codex', 'dev_search_mac', 'Example-Mac', 'test', ?1, '["web_search"]', ?1)`,
+    ).bind(at.toISOString()).run();
+
+  it("through the sweep, no seat to wait for: the card never waits on the free search; two goes, then BLOCKED by name on who runs the routes, within the hour", async () => {
+    await env.WP_OS_DB.prepare("DELETE FROM subscription_seat_device").run();
     const T0 = new Date("2026-11-10T15:01:00.000Z");
     const id = await card("Walker: West Peek Productions hire search (2026-W46)", "aie_walker");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'PRODUCTIONS_HIRE_SEARCH' WHERE id = ?1").bind(id).run();
     const runner = refusedRunner(id, `the live search failed: ${STOP}`, "prov_free_search");
-    for (let k = 0; k < FREE_SEARCH_WAITS; k++) {
-      await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
-      expect((await sweepOnce(env, new Date(T0.getTime() + k * 3_600_000), { general: runner })).outcome).toBe("WAITING_ON_SEAT");
-    }
+    const first = await sweepOnce(env, T0, { productionsHire: runner });
+    expect(first.outcome, "a failed free search is a counted attempt, not a wait").toBe("FAILED");
     let c = await row(id);
-    expect(Number(c.work_attempts), "no attempt is spent on a free allowance that refills").toBe(0);
-    expect(c.state).not.toBe("BLOCKED");
-    expect(c.block_reason).toBeNull();
-    expect(String(c.waiting_for)).toMatch(/Waiting for the free web search/);
-    expect(new Date(String(c.waiting_until)).getTime()).toBeGreaterThan(T0.getTime() + (FREE_SEARCH_WAITS - 1) * 3_600_000);
-    // The bound: past it the attempt is counted, and as a rate limit it keeps all three goes.
-    await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
-    const after = await sweepOnce(env, new Date(T0.getTime() + 13 * 3_600_000), { general: runner });
-    expect(after.outcome).toBe("FAILED");
-    c = await row(id);
     expect(Number(c.work_attempts)).toBe(1);
-    expect(String(c.work_last_failure)).not.toMatch(/run out of credit/);
+    expect(String(c.waiting_for ?? "")).not.toMatch(/free web search/);
+    expect(String(c.work_last_failure)).not.toMatch(/run out of credit|too much at once/);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
+    const second = await sweepOnce(env, new Date(T0.getTime() + 10 * 60_000), { productionsHire: runner });
+    expect(second.outcome).toBe("BLOCKED");
+    c = await row(id);
+    expect(c.state).toBe("BLOCKED");
+    expect(c.block_reason).toBe("a_lane_refused_the_work");
+    expect(c.block_who, "Scooter cannot repair a search route; the stop names who runs them").toBe("SEQUOIA");
+    expect(String(c.block_needed ?? c.next_action ?? "")).not.toMatch(/credit/);
+    const waits = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE object_id = ?1 AND event_type = 'work_card.waiting_for_free_search'").bind(id).first<{ n: number }>();
+    expect(Number(waits?.n)).toBe(0);
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
+  });
+
+  it("through the sweep, a seat that can search checked in: the card waits TEN MINUTES for the seat, a bounded number of times, then counts and stops the same day", async () => {
+    const T0 = new Date("2026-11-10T15:01:00.000Z");
+    await env.WP_OS_DB.prepare("DELETE FROM subscription_seat_device").run();
+    await seat(new Date(T0.getTime() - 5 * 60_000));
+    const id = await card("Walker: West Peek Productions hire search (2026-W47)", "aie_walker");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'PRODUCTIONS_HIRE_SEARCH' WHERE id = ?1").bind(id).run();
+    const runner = refusedRunner(id, `the live search failed: ${STOP}`, "prov_free_search");
+    let at = T0;
+    for (let k = 0; k < SEAT_NO_ANSWER_WAITS; k++) {
+      await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
+      expect((await sweepOnce(env, at, { productionsHire: runner })).outcome).toBe("WAITING_ON_SEAT");
+      const c = await row(id);
+      expect(String(c.waiting_for)).toMatch(/Waiting for the subscription seat/);
+      expect(new Date(String(c.waiting_until)).getTime() - at.getTime(), "minutes, not an hour").toBeLessThanOrEqual(15 * 60_000);
+      expect(Number(c.work_attempts)).toBe(0);
+      at = new Date(at.getTime() + 11 * 60_000);
+    }
+    for (const want of ["FAILED", "BLOCKED"]) {
+      await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
+      expect((await sweepOnce(env, at, { productionsHire: runner })).outcome).toBe(want);
+      at = new Date(at.getTime() + 6 * 60_000);
+    }
+    const c = await row(id);
+    expect(c.state).toBe("BLOCKED");
+    expect(c.block_who).toBe("SEQUOIA");
+    expect(at.getTime() - T0.getTime(), "stopped by name inside two hours of the first try").toBeLessThan(2 * 3_600_000);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
+    await env.WP_OS_DB.prepare("DELETE FROM subscription_seat_device").run();
   });
 });

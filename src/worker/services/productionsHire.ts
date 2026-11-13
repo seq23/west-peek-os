@@ -9,7 +9,8 @@ import { blockCard } from "./blocks";
 import { cannotDetail, steerFor, type Interpreter } from "./instruction";
 import { urlStatus } from "../effects/urlLiveness";
 import { createWorkCardInternal } from "./workCards";
-import { sweepIdentity, type SweepCard } from "./workSweep";
+import { MAX_WORK_ATTEMPTS, sweepIdentity, type SweepCard } from "./workSweep";
+import { isEmailSendEnabled } from "../effects/resendClient";
 import { sendOrPreview } from "./previewApproval";
 import { withStillMissing } from "./requestMaterials";
 import { deliver } from "./deliverables";
@@ -728,6 +729,10 @@ export async function runHireSearchCard(
   const actor: Actor = { type: "AI", aiEmployeeId: "aie_walker", roles: [], firmScopes: [card.firm_scope] };
   const status = deps.urlStatus ?? defaultUrlStatus;
 
+  // A note already written whose email did not go is sent again: no second search, nothing remembered twice.
+  const unsent = await unsentHireNote(env, card.id);
+  if (unsent) return sendHireNote(env, card, unsent);
+
   /*
    * WHAT SCOOTER HAS ASKED FOR ON THIS PARTICULAR WEEK, READ BY A MODEL FIRST.
    *
@@ -850,23 +855,69 @@ export async function runHireSearchCard(
     sourceId: card.id,
   });
 
+  const note: HireNote = {
+    week,
+    email: { employee: "Walker", what: summary.what, tldr: summary.tldr, sections: await withStillMissing(env, card.id, summary.sections), details: text },
+    title,
+    text,
+    deliverableId: delivered.id,
+    documentId: delivered.document_id ?? null,
+    counts: { fresh: remembered.fresh.length, seen_before: remembered.seenBefore.length, dropped: dropped.length, rejected: rejected.length },
+  };
+  return sendHireNote(env, card, note);
+}
+
+/** Everything the one email needs, kept so a send that failed is sent again without searching again. */
+interface HireNote {
+  week: string;
+  email: ExecEmailInput;
+  title: string;
+  text: string;
+  deliverableId: string;
+  documentId: string | null;
+  counts: { fresh: number; seen_before: number; dropped: number; rejected: number };
+}
+
+const HIRE_EMAIL_NOT_SENT = "productions.hire_email_not_sent";
+
+/** The note this card wrote and could not send, when its last word on the matter is "not sent". */
+async function unsentHireNote(env: Env, cardId: string): Promise<HireNote | null> {
+  const row = await env.WP_OS_DB.prepare(
+    `SELECT event_type, payload_json FROM event_record
+      WHERE object_type = 'work_card' AND object_id = ?1 AND event_type IN ('${HIRE_EMAIL_NOT_SENT}', 'productions.hire_delivered')
+      ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+  ).bind(cardId).first<{ event_type: string; payload_json: string }>();
+  if (!row || row.event_type !== HIRE_EMAIL_NOT_SENT) return null;
+  try {
+    const note = (JSON.parse(row.payload_json) as { note?: HireNote }).note;
+    return note && note.email && note.deliverableId ? note : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * THE NOTE IS NOT DONE UNTIL IT IS IN HIS INBOX (13 Nov 2026). The 2026-W45 card closed DONE with "NOT emailed:
+ * resend rejected the send (HTTP 401)" on it: the email service refused the firm's key for four days, Scooter never
+ * got that week's note and nothing stopped. Where sending is switched on, a note that did not go (and is not
+ * waiting in the preview lane) leaves the card open: the sweep's next go sends the SAME note again, with no second
+ * search, and after the last go the card stops, named, on who can fix the sending. An environment with sending
+ * switched off is not a failed send: the note is on Home and the card closes as before.
+ */
+async function sendHireNote(env: Env, card: SweepCard, note: HireNote): Promise<{ finished: boolean; blocked: boolean; detail: string }> {
   /*
    * THROUGH THE LANE, AND THIS ONE COMES STRAIGHT OUT THE OTHER SIDE (17 Sep 2026).
    *
    * `sendOrPreview` asks `previewFirstFor`, which asks the partner registry. Scooter is a Managing
    * Partner — inside the firm — so Monday's note goes to his inbox on Monday with nobody's hand in
-   * between, exactly as it did before this lane existed. Nothing about this call changes what he
-   * receives or when.
-   *
-   * IT IS ROUTED THROUGH THE LANE ANYWAY, and deliberately. If this address ever became somebody
-   * else's — a freelance producer, a candidate, an agency — the default rule would catch it on the
-   * first run instead of on the first apology. `card.preview_first` is the other half: she can ask
-   * to see even this one first, and then it waits for her yes.
+   * between. It is routed through the lane anyway: if this address ever became somebody else's, the
+   * default rule would catch it on the first run, and `card.preview_first` lets her ask to see even
+   * this one first.
    */
   const mail = await sendOrPreview(env, {
     to: SCOOTER_EMAIL,
     // WHAT IS STILL MISSING (0237): the card's one list, the same section every employee's email carries.
-    email: { employee: "Walker", what: summary.what, tldr: summary.tldr, sections: await withStillMissing(env, card.id, summary.sections), details: text },
+    email: note.email,
     objectType: "work_card",
     objectId: card.id,
     // The KIND goes with it, so a reply steers the SEARCH rather than a card that will be DONE
@@ -881,17 +932,43 @@ export async function runHireSearchCard(
     requestedByEmail: card.requested_by_email ?? null,
     firmScope: card.firm_scope,
     actorId: "aie_walker",
-    what: summary.what,
+    what: note.email.what,
   });
+
+  if (!mail.sent && !mail.previewed && isEmailSendEnabled(env)) {
+    await appendEvent(env, {
+      eventType: HIRE_EMAIL_NOT_SENT,
+      actorType: "ai_employee",
+      actorId: "aie_walker",
+      objectType: "work_card",
+      objectId: card.id,
+      firmScope: card.firm_scope,
+      payload: { week: note.week, reason: mail.reason, attempt: card.work_attempts, note },
+    });
+    if (card.work_attempts >= MAX_WORK_ATTEMPTS) {
+      const refusedKey = /HTTP 40[13]/.test(mail.reason);
+      const blocked = await blockCard(env, card, {
+        reason: "stopped_part_way",
+        trying: card.title,
+        employee: "Walker",
+        who: "SEQUOIA",
+        detail: `The hire note for ${note.week} is written and on Scooter's Home, but its email to him did not go after ${MAX_WORK_ATTEMPTS} tries: ${
+          refusedKey ? "the email service refused the firm's sending key" : "the email service would not take it"
+        }. Once sending works again, trying again sends the same note without searching again.`,
+      });
+      return { finished: false, blocked: true, detail: blocked };
+    }
+    return { finished: false, blocked: false, detail: `the hire note is written and on Home, but the email to Scooter did not send: ${mail.reason}` };
+  }
 
   await notifyQuietly(env, {
     firmUserId: SCOOTER_FIRM_USER_ID,
     kind: "MEETING",
     severity: "INFO",
-    title: `Walker: ${remembered.fresh.length} hire candidate(s) this week — on Home${mail.sent ? " and in your inbox" : ""}`,
-    body: `${title}. Nothing for you to mark — reply to the email in plain words if you want to steer next week's search.`,
+    title: `Walker: ${note.counts.fresh} hire candidate(s) this week — on Home${mail.sent ? " and in your inbox" : ""}`,
+    body: `${note.title}. Nothing for you to mark — reply to the email in plain words if you want to steer next week's search.`,
     objectType: "deliverable",
-    objectId: delivered.id,
+    objectId: note.deliverableId,
     dedupeKey: `productions_hire:${card.id}:delivered`,
     firmScope: card.firm_scope,
   });
@@ -903,9 +980,9 @@ export async function runHireSearchCard(
       : mail.previewed
         ? `• NOT emailed to ${SCOOTER_EMAIL} — it is preview-first: ${mail.reason}`
         : `• NOT emailed to ${SCOOTER_EMAIL}: ${mail.reason}. The deliverable is on Home and in Documents.`,
-    `• Deliverable ${delivered.id}${delivered.document_id ? `, filed as document ${delivered.document_id}` : " (not filed)"}.`,
+    `• Deliverable ${note.deliverableId}${note.documentId ? `, filed as document ${note.documentId}` : " (not filed)"}.`,
     "",
-    text,
+    note.text,
   ].join("\n");
   await env.WP_OS_DB.prepare(
     "UPDATE work_card SET state = 'DONE', description = substr(COALESCE(description, '') || char(10) || char(10) || ?2, 1, 16000), next_action = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1",
@@ -917,7 +994,7 @@ export async function runHireSearchCard(
     objectType: "work_card",
     objectId: card.id,
     firmScope: card.firm_scope,
-    payload: { week, fresh: remembered.fresh.length, seen_before: remembered.seenBefore.length, dropped: dropped.length, rejected: rejected.length, emailed: mail.sent, deliverable_id: delivered.id, subject: mail.subject },
+    payload: { week: note.week, ...note.counts, emailed: mail.sent, deliverable_id: note.deliverableId, subject: mail.subject },
   });
   return {
     finished: true,

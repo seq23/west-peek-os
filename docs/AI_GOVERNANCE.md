@@ -190,8 +190,8 @@ Claude Code seat (Max plan)  →  Codex seat (ChatGPT Plus)  →  FREE lanes  �
   models); Codex on her ChatGPT plan stays only as the backup to Claude, and not at all for hard work (13 Nov 2026). Unreadable records fail closed. The Mac gets only the verdict (`private_model_only` on the job), never the names.
 - **Live research for $0 (5 Nov 2026).** At Free only a non-confidential search call takes the `free_search` lane
   (`providers/freeSearch.ts`): (1) Gemini with the `google_search` tool down the ordered list `FREE_SEARCH_GROUNDED_MODELS`
-  (`gemini-2.5-flash` first), accepted only with grounding sources; a 404, retired model, 429 or unsourced answer moves to the
-  next rung (6 Nov 2026, because `gemini-2.5-flash` retires 1 Dec 2026); (2) Brave Search (`BRAVE_SEARCH_API_KEY`, at most 20
+  (`gemini-2.5-flash` was removed on 13 Nov 2026: Google answers 404 for it on this key), accepted only with grounding sources; a 404, retired model, 429 or unsourced answer moves to the
+  next rung, and a rung the key already answered 404 for (ever) or 429 for (today) is not asked again (`groundedRungs`, read from the lane's own logged stops); (2) Brave Search (`BRAVE_SEARCH_API_KEY`, at most 20
   queries a day counted in `free_search_quota`), the top pages fetched, and a free writer (`gemini-3.6-flash`,
   `gemini-3-flash-preview`, then OpenRouter `:free` models with `max_price` 0, any reported cost refused as `OPENROUTER_COST`)
   writing only from them with a URL on every fact; (3) a named stop, `Couldn't research <name>: <reason>`, after which the
