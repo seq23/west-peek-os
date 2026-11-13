@@ -65,7 +65,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { CLOUDFLARE_ACCOUNT_ID, classify, proofLine, readRequests } from "./lib/pages-delivery.mjs";
+import { CLOUDFLARE_ACCOUNT_ID, PAGES_ENVIRONMENTS, classify, proofLine, readRequests } from "./lib/pages-delivery.mjs";
 import { VAULT_INJECTED_VAR, claudeChildEnv, envForRepoRun, strippedNote, vaultLookup } from "../lib/vault-env.mjs";
 import { plainText, privateDocsIn, privateProof, privateSentenceIn } from "../lib/private-proof.mjs";
 import { admittedScripts, constraintsIn, generateRunbook, hostFromRoutes, isProductionRun, productionAsked, withPorterMayRun, likelySecrets, porterMayRun, readWranglerJson, readWranglerToml, runbookSecretNames, secretNamesInSource, vendorPageFor } from "./lib/runbook.mjs";
@@ -873,7 +873,7 @@ async function watchChecks(worktree, number, signal, progress) {
 
 const CF_API = "https://api.cloudflare.com/client/v4";
 
-/** The production env vars a Pages project already has: name → type (+ value when it is plain). */
+/** The env vars a Pages project already has, per environment: { production, preview } each name → type (+ value when plain). */
 async function pagesEnvTypes(project, token) {
   const res = await fetch(`${CF_API}/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${encodeURIComponent(project)}`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -881,26 +881,30 @@ async function pagesEnvTypes(project, token) {
   });
   const body = await res.json().catch(() => null);
   if (!res.ok || !body?.success) throw new Error(`Cloudflare answered ${res.status} for ${project}`);
-  const vars = body.result?.deployment_configs?.production?.env_vars ?? {};
-  const out = {};
-  for (const [k, v] of Object.entries(vars)) {
-    const type = v?.type ?? "plain_text";
-    out[k] = { type, value: type === "secret_text" ? null : (v?.value ?? null) };
+  const byEnv = {};
+  for (const environment of PAGES_ENVIRONMENTS) {
+    const vars = body.result?.deployment_configs?.[environment]?.env_vars ?? {};
+    const out = {};
+    for (const [k, v] of Object.entries(vars)) {
+      const type = v?.type ?? "plain_text";
+      out[k] = { type, value: type === "secret_text" ? null : (v?.value ?? null) };
+    }
+    byEnv[environment] = out;
   }
-  return out;
+  return byEnv;
 }
 
 /**
  * A PLAIN delivery variable, through the Cloudflare API. The value comes from the allow-list, not
  * from the model and not from the environment, so what gets written is knowable by reading the list.
  */
-async function setPagesPlain(entry, token, existing) {
+async function setPagesPlain(entry, token, existing, environment) {
   const already = existing[entry.name];
   if (already && already.type !== "secret_text" && already.value === entry.value) return "already set";
   const res = await fetch(`${CF_API}/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${encodeURIComponent(entry.project)}`, {
     method: "PATCH",
     headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({ deployment_configs: { production: { env_vars: { [entry.name]: { type: "plain_text", value: entry.value } } } } }),
+    body: JSON.stringify({ deployment_configs: { [environment]: { env_vars: { [entry.name]: { type: "plain_text", value: entry.value } } } } }),
     signal: AbortSignal.timeout(60_000),
   });
   const body = await res.json().catch(() => null);
@@ -909,19 +913,47 @@ async function setPagesPlain(entry, token, existing) {
 }
 
 /**
+ * PAGES APPLIES A SETTING TO THE NEXT BUILD ONLY. After a variable is set for preview, the branch's
+ * preview is built again and the build is awaited, so the preview the partner is sent has it.
+ * Returns the word for the proof line.
+ */
+async function rebuildPreview(project, branch, token, waitMs) {
+  const form = new FormData();
+  form.set("branch", branch);
+  const res = await fetch(`${CF_API}/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${encodeURIComponent(project)}/deployments`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+    signal: AbortSignal.timeout(60_000),
+  });
+  const body = await res.json().catch(() => null);
+  const id = body?.result?.id;
+  if (!res.ok || !body?.success || !id) throw new Error(`Cloudflare answered ${res.status} to the rebuild`);
+  const started = Date.now();
+  for (;;) {
+    const st = await fetch(`${CF_API}/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${encodeURIComponent(project)}/deployments/${id}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(60_000) });
+    const stage = (await st.json().catch(() => null))?.result?.latest_stage;
+    if (stage?.name === "deploy" && stage?.status === "success") return "set";
+    if (stage?.status === "failure" || stage?.status === "canceled") throw new Error(`the rebuilt preview ended ${stage.status}`);
+    if (Date.now() - started >= waitMs) throw new Error(`the rebuilt preview was not ready after ${Math.round(waitMs / 60_000)} minutes`);
+    await new Promise((r) => setTimeout(r, Math.min(15_000, Math.max(1, waitMs / 4))));
+  }
+}
+
+/**
  * A delivery SECRET, through `wrangler pages secret put`, with the value written to the child's
  * STDIN. It is never an argument (a command line is readable by every other process on the
  * machine), never interpolated into a string, and the child's own output never reaches the report —
  * only its exit code becomes a word.
  */
-function setPagesSecret(entry, env) {
+function setPagesSecret(entry, env, environment = "production") {
   return new Promise((resolve) => {
     const value = env?.[entry.vaultKey];
     if (typeof value !== "string" || value.length === 0) {
       resolve({ outcome: "failed", why: `${entry.vaultKey} is not in the environment — the claimer must run under vault.mjs run` });
       return;
     }
-    const child = spawn("npx", ["wrangler", "pages", "secret", "put", entry.name, "--project-name", entry.project], {
+    const child = spawn("npx", ["wrangler", "pages", "secret", "put", entry.name, "--project-name", entry.project, "--env", environment], {
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...env, CI: "1" },
     });
@@ -937,7 +969,8 @@ function setPagesSecret(entry, env) {
  * and nothing that could carry a value. Refusals are recorded, never dropped: a model that asked
  * for something off the list must be able to see that it was refused and why.
  */
-export async function applyPagesEnv(pagesEnv, env, progress, registry = null) {
+export async function applyPagesEnv(pagesEnv, env, progress, registry = null, opts = {}) {
+  const putSecret = opts.putSecret ?? setPagesSecret;
   const { allowed, refused } = readRequests(pagesEnv, registry);
   const lines = [];
   for (const r of refused) {
@@ -951,26 +984,47 @@ export async function applyPagesEnv(pagesEnv, env, progress, registry = null) {
     return lines;
   }
   const seen = new Map();
+  const previewChanged = new Set();
   for (const a of allowed) {
+    // EVERY ENVIRONMENT, each with its own line: "already set" in production says nothing about preview.
+    for (const environment of PAGES_ENVIRONMENTS) {
+      let outcome = "failed";
+      let why = null;
+      try {
+        if (!seen.has(a.project)) seen.set(a.project, await pagesEnvTypes(a.project, token));
+        const existing = seen.get(a.project)[environment];
+        if (a.kind === "plain") {
+          outcome = await setPagesPlain(a, token, existing, environment);
+        } else if (existing[a.name]?.type === "secret_text") {
+          outcome = "already set";
+        } else {
+          const out = await putSecret(a, env, environment);
+          outcome = out.outcome;
+          why = out.why;
+        }
+      } catch (err) {
+        outcome = "failed";
+        why = err instanceof Error ? err.message.slice(0, 160) : "the call did not complete";
+      }
+      if (outcome === "set" && environment === "preview") previewChanged.add(a.project);
+      lines.push(proofLine(a.project, a.name, outcome, why, environment));
+      progress?.(lines[lines.length - 1]);
+    }
+  }
+  // A preview variable that was just set reaches only the NEXT build: build the branch's preview again and wait for it.
+  for (const project of previewChanged) {
     let outcome = "failed";
     let why = null;
-    try {
-      if (!seen.has(a.project)) seen.set(a.project, await pagesEnvTypes(a.project, token));
-      const existing = seen.get(a.project);
-      if (a.kind === "plain") {
-        outcome = await setPagesPlain(a, token, existing);
-      } else if (existing[a.name]?.type === "secret_text") {
-        outcome = "already set";
-      } else {
-        const out = await setPagesSecret(a, env);
-        outcome = out.outcome;
-        why = out.why;
+    if (!opts.branch) why = "no branch was given, so the preview was not rebuilt; the next push builds it";
+    else {
+      try {
+        outcome = await rebuildPreview(project, opts.branch, token, opts.rebuildWaitMs ?? 10 * 60_000);
+        why = `preview of ${opts.branch} rebuilt with the new setting`;
+      } catch (err) {
+        why = err instanceof Error ? err.message.slice(0, 160) : "the rebuild did not complete";
       }
-    } catch (err) {
-      outcome = "failed";
-      why = err instanceof Error ? err.message.slice(0, 160) : "the call did not complete";
     }
-    lines.push(proofLine(a.project, a.name, outcome, why));
+    lines.push(proofLine(project, "rebuild", outcome, why, "preview"));
     progress?.(lines[lines.length - 1]);
   }
   return lines;
@@ -1130,7 +1184,7 @@ export async function run(job, ctx) {
      * what it observed is what goes in the proof. Nothing the model wrote about env vars is carried
      * forward — `configLines` is built entirely from `applyPagesEnv`'s return.
      */
-    const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress, registryAllowance(book, secrets));
+    const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress, registryAllowance(book, secrets), { branch: names.branch });
     // THE SCRIPT OBSERVES THE PR AND ITS CHECKS. The model's pr_url is a claim; gh is the fact.
     let pr;
     try {
@@ -1755,7 +1809,7 @@ async function runSeveral(job, ctx) {
         if (!result && spentReport(phase, claude)) return { ...spentReport(phase, claude), parts: reports };
         if (!result) return { phase, status: "failed", reason: `BUILD of ${p.repo} ended (claude exit ${claude.code}) but ${problem}`, parts: reports };
         if (result.status !== "ok") return { phase, status: result.status, reason: `${p.repo}: ${String(result.reason).slice(0, 1400)}`, parts: reports };
-        const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress, registryAllowance(p.book, p.secrets));
+        const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress, registryAllowance(p.book, p.secrets), { branch: p.names.branch });
         proof = [String(result.proof ?? "").slice(0, 6000), ...configLines].filter(Boolean).join("\n");
         anyRebuilt = true;
       }
