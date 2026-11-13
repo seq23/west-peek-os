@@ -968,6 +968,8 @@ export function askBlockText(asks: readonly Ask[], readiness?: { publishReady: b
  *     the partner already held a preview email he had not answered (`blockOnNewPreview`).
  */
 export const QUIET_PREVIEW = "not mailed";
+/** How a partner is told a rebuild finished his own original ask: our words around his, so never inside quote marks as if he wrote them. */
+const FINISHING_HIS_ASK = "finishing your original request";
 const flat = (v: unknown): string => (typeof v === "string" ? v.replace(/\s+/g, " ").trim() : "");
 export async function rebuildWords(env: Env, cardId: string, row: Pick<WebPropertyChangeRow, "rebuilt_for">): Promise<{ developer: boolean; partnerHoldsPreview: boolean; forPartner: string | null }> {
   const words = flat(row.rebuilt_for);
@@ -988,7 +990,7 @@ export async function rebuildWords(env: Env, cardId: string, row: Pick<WebProper
   });
   if (words.startsWith(FINISH_ORIGINAL_ASK)) {
     const ask = flat(events.find((e) => e.type === "web_property_change.original_ask_reopened" && flat(e.p.instruction) === words)?.p.ask);
-    return { developer: false, partnerHoldsPreview: false, forPartner: ask ? `finishing your original request, ${ask}` : null };
+    return { developer: false, partnerHoldsPreview: false, forPartner: ask ? `${FINISHING_HIS_ASK}, ${ask}` : null };
   }
   const directed = events.filter((e) => e.type === "work_card.directed_by_developer" && flat(e.p.words) === words);
   if (!directed.length) return { developer: false, partnerHoldsPreview: false, forPartner: row.rebuilt_for!.trim() };
@@ -1006,7 +1008,8 @@ export function previewBlockText(
 ): string {
   const placeholders = list(row.placeholders_json);
   // 0244: a preview rebuilt for the partner's words says what it changed, in their words.
-  const changed = row.rebuilt_for?.trim() ? [`Changed since the last preview, as you asked: "${row.rebuilt_for.trim().slice(0, 300)}".`] : [];
+  const said = row.rebuilt_for?.trim().slice(0, 300) ?? "";
+  const changed = said ? [`Changed since the last preview, as you asked: ${said.startsWith(FINISHING_HIS_ASK) ? said : `"${said}"`}.`] : [];
   // THE ONE CLEAN LINK (23 Sep 2026): the site's branch alias, never six URLs and HTML fragments.
   // 0257: plus one link per page the PR changed — /entry and /rules, never only the root.
   row = { ...row, preview_url: withChangedPages(cleanPreviewUrls(row.preview_url, pagesHostsOf(row.property_host ?? null), row.branch ?? ""), row.changed_pages_json) };
@@ -1222,12 +1225,11 @@ export async function blockedEmailDetail(env: Env, cardId: string): Promise<stri
       : null;
   // THE PREVIEW EMAIL: the link, the PR, the placeholders and the proof — the second question.
   if (row.pr_url && row.check_state === "GREEN" && needsPreview(row) && !row.land_approved_at && !row.forced_by) {
+    // The proof of a build the developer directed describes her instruction: it stays on the card, out of his email.
+    const cause = await rebuildWords(env, cardId, row);
     return [
-      previewBlockText({ ...row, rebuilt_for: (await rebuildWords(env, cardId, row)).forPartner }, await readParts(env, cardId)),
-      "",
-      "WHAT WAS PROVEN BEFORE THE PR:",
-      "",
-      row.build_proof ?? "(no proof text came back with the build)",
+      previewBlockText({ ...row, rebuilt_for: cause.forPartner }, await readParts(env, cardId)),
+      ...(cause.developer ? [] : ["", "WHAT WAS PROVEN BEFORE THE PR:", "", row.build_proof ?? "(no proof text came back with the build)"]),
     ].join("\n");
   }
   // Only the PLAN email carries the plan; any other question (land it? stop? "you said no") is
@@ -1251,7 +1253,9 @@ export function missingFromPlan(report: Pick<LocalJobReport, "missing_materials"
 }
 
 /** What the DONE email says: the proof, not the process. A multi-repo job names every repo and its proof. */
-export function doneSummary(row: WebPropertyChangeRow, parts: readonly WebPropertyChangePart[] = []): string {
+export function doneSummary(row: WebPropertyChangeRow, parts: readonly WebPropertyChangePart[] = [], opts: { withoutBuildProof?: boolean } = {}): string {
+  // A build the developer directed: its proof describes her instruction, so the partner's finished summary leaves it on the card.
+  if (opts.withoutBuildProof) row = { ...row, build_proof: null };
   if (parts.length) {
     return [
       forcedLine(row) ?? "",
@@ -1283,7 +1287,7 @@ export function doneSummary(row: WebPropertyChangeRow, parts: readonly WebProper
 }
 
 async function finishCard(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow): Promise<string> {
-  const finding = doneSummary(row, await readParts(env, card.id));
+  const finding = doneSummary(row, await readParts(env, card.id), { withoutBuildProof: (await rebuildWords(env, card.id, row)).developer });
   await appendFinding(env, card.id, finding);
   let deliverableId: string | null = null;
   try {
@@ -2114,7 +2118,7 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
  * thread is answered from the card's own state first: the preview, what is being built now, what the
  * last build was for, what is still to come. Empty only when the card truly records none of it.
  */
-export async function cardStandingLines(env: Env, cardId: string, row: WebPropertyChangeRow | null): Promise<string[]> {
+export async function cardStandingLines(env: Env, cardId: string, row: WebPropertyChangeRow | null, question: string | null = null): Promise<string[]> {
   if (!row) return [];
   const lines: string[] = [];
   const live = await env.WP_OS_DB.prepare("SELECT status FROM subscription_seat_run WHERE work_card_id = ?1 AND run_kind = 'LOCAL_JOB' AND status IN ('QUEUED', 'CLAIMED') LIMIT 1").bind(cardId).first<{ status: string }>();
@@ -2129,11 +2133,27 @@ export async function cardStandingLines(env: Env, cardId: string, row: WebProper
   if (!live && row.phase === "BUILD" && row.check_state === "GREEN" && link && !row.land_approved_at) lines.push("Nothing goes live until you approve that preview.");
   const placeholders = list(row.placeholders_json).length;
   if (placeholders) lines.push(`Still to come: ${placeholders} placeholder${placeholders === 1 ? "" : "s"} waiting on real material.`);
+  /*
+   * THE PAGE HE ASKED ABOUT, WHEN THE BUILD RECORDED IT (13 Nov 2026). "Do you have a link to the dashboard
+   * yet?" was answered with the site's root. A page the build recorded as changed whose path names a word
+   * of his question is linked first; a page the card has no record of is never guessed at.
+   */
+  if (question && link && /^https?:\/\/\S+$/.test(link)) {
+    const asked = new Set(question.toLowerCase().match(/[a-z0-9]{4,}/g) ?? []);
+    const named = (seg: string) => asked.has(seg) || asked.has(`${seg}s`) || (seg.endsWith("s") && asked.has(seg.slice(0, -1)));
+    const pages = list(row.changed_pages_json)
+      .filter((p) => p.startsWith("/") && p !== "/")
+      .map((p) => ({ p, hit: p.toLowerCase().split(/[\/_.-]+/).filter((seg) => seg.length >= 4 && named(seg)) }))
+      .filter((x) => x.hit.length)
+      .sort((a, b) => a.p.length - b.p.length)
+      .slice(0, 3);
+    if (pages.length) lines.unshift(...pages.map((x) => `The ${x.hit[0]} page on the preview is at ${link.replace(/\/+$/, "")}${x.p}.`));
+  }
   return lines;
 }
 
 async function answerMidFlowQuestion(env: Env, card: WebPropertyChangeCard, question: string, answerQuestion: QuestionAnswerer | undefined): Promise<string> {
-  const standing = await cardStandingLines(env, card.id, await readWebPropertyChange(env, card.id));
+  const standing = await cardStandingLines(env, card.id, await readWebPropertyChange(env, card.id), question);
   const routed = await answerQuestionForCard(
     env,
     { cardId: card.id, firmScope: card.firm_scope, kind: card.kind ?? WEB_PROPERTY_CHANGE_KIND, cardTitle: card.title, question, facts: standing },

@@ -15,7 +15,7 @@ import { workCard } from "../src/worker/services/employeeWork";
 import { sweepIdentity } from "../src/worker/services/workSweep";
 import { preApprovalIn } from "../src/shared/work/approvalReply";
 import { readLocalJobReport, WEB_PROPERTY_CHANGE_KIND } from "../src/shared/work/localJobs";
-import { finishOriginalAsk, needsPreview, parkPhase, phaseModel, readWebPropertyChange, rulesFor, runWebPropertyChangeCard, type WebPropertyChangeRow } from "../src/worker/services/webPropertyChange";
+import { blockedEmailDetail, finishOriginalAsk, needsPreview, parkPhase, phaseModel, readWebPropertyChange, rulesFor, runWebPropertyChangeCard, type WebPropertyChangeRow } from "../src/worker/services/webPropertyChange";
 import { steerFromReply } from "../src/worker/services/emailThread";
 import { threadReference } from "../src/shared/email/thread";
 import { handleDeveloperChanges } from "../src/worker/services/developerDirection";
@@ -816,9 +816,9 @@ describe("the developer may direct any job with a work instruction, and with not
    * the developer's instructions through the tail door; he had asked for nothing and the link was the one
    * he already held. One preview email per round of HIS changes; the job still waits on him, on the new build.
    */
-  const rebuilt = async (id: string, tag: string, branch: string) => {
+  const rebuilt = async (id: string, tag: string, branch: string, more: Record<string, unknown> = {}) => {
     await tickFor(id);
-    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/89", pr_number: 89, branch, changed: true, head_sha: `head-${tag}`, check_state: "GREEN", preview_url: `https://${tag}.west-peek-ventures.pages.dev`, proof: "validate green" });
+    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/89", pr_number: 89, branch, changed: true, head_sha: `head-${tag}`, check_state: "GREEN", preview_url: `https://${tag}.west-peek-ventures.pages.dev`, proof: "validate green", ...more });
     expect((await tickFor(id)).outcome, "the job waits on the partner's word on the preview").toBe("BLOCKED");
   };
   const previewMails = (since: number) => sent.slice(since).filter((m) => m.to === SCOOTER && /preview ready$/i.test(m.subject));
@@ -869,12 +869,17 @@ describe("the developer may direct any job with a work instruction, and with not
   it("the developer's instruction is never quoted to the partner: not in the answer to his question, the preview email, or what the job says it waits on", async () => {
     const id = await atPreview("dev5", SCOOTER);
     await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: "changes: put the founders photo on the home page" });
-    await rebuilt(id, "dev5b", "work/wpc-dev5");
+    await rebuilt(id, "dev5b", "work/wpc-dev5", { proof: "founders photo on the home page: checked at 390px" });
+    expect(String(await blockedEmailDetail(env, id)), "the proof of the build he asked for is his to read").toContain("checked at 390px");
     const from = sent.length;
     const INTERNAL = "strip the zebra-crossing fallback from the sign-in handler";
     expect((await door(id, INTERNAL)).status).toBe(200);
-    await rebuilt(id, "dev5c", "work/wpc-dev5");
+    // The build's own summary of what it did describes her instruction just as plainly.
+    const PROOF = "zebra-crossing fallback removed from the sign-in handler; 14 tests green";
+    await rebuilt(id, "dev5c", "work/wpc-dev5", { proof: PROOF });
     expect(String((await readWebPropertyChange(env, id))!.rebuilt_for), "the instruction is what the build was for").toContain(INTERNAL);
+    expect((await readWebPropertyChange(env, id))!.build_proof, "the proof stays on the card").toBe(PROOF);
+    expect(String(await blockedEmailDetail(env, id)), "what the sweep hands his email and his notice").not.toContain("zebra-crossing");
 
     await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: "Do you know for certain where I can see it?" });
     expect((await tickFor(id)).outcome).toBe("BLOCKED");
@@ -885,14 +890,41 @@ describe("the developer may direct any job with a work instruction, and with not
 
     // A preview email that does go out for her instruction (the link moved) says nothing of it either.
     expect((await door(id, `${INTERNAL}, on the launch branch`)).status).toBe(200);
-    await rebuilt(id, "dev5d", "work/wpc-dev5-launch");
+    await rebuilt(id, "dev5d", "work/wpc-dev5-launch", { proof: PROOF });
     expect(previewMails(from)).toHaveLength(1);
+    expect(String(await blockedEmailDetail(env, id))).not.toContain("zebra-crossing");
 
     const his = sent.slice(from).filter((m) => m.to === SCOOTER);
     expect(his.length).toBeGreaterThanOrEqual(2);
     for (const m of his) expect(`${m.subject}\n${m.text}`, `"${m.subject}" carries no developer instruction`).not.toContain("zebra-crossing");
     expect(String((await card(id)).block_needed), "what the job says it waits on").not.toContain("zebra-crossing");
     expect(JSON.parse((await readWebPropertyChange(env, id))!.answers_json).join(" "), "it is not one of his answers").not.toContain("zebra-crossing");
+  });
+
+  /**
+   * 13 Nov 2026: "Do you have a link to the dashboard yet?" was answered with the site's root. A page the
+   * build recorded is linked; a page the card has no record of is not guessed at.
+   */
+  it("a question about a part of the job that has its own page on the preview is answered with that page's link, when the build recorded it; otherwise the site link and nothing invented", async () => {
+    const id = await atPreview("pg1", SCOOTER);
+    await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: "changes: add a members area and tidy the about page" });
+    await rebuilt(id, "pg1b", "work/wpc-pg1", { changed_files: ["sites/ventures/members.html", "sites/ventures/about.html", "sites/ventures/styles.css"] });
+    const root = "https://work-wpc-pg1.west-peek-ventures.pages.dev";
+    const answerTo = async (question: string) => {
+      const from = sent.length;
+      await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: question });
+      expect((await tickFor(id)).outcome).toBe("BLOCKED");
+      const mails = sent.slice(from).filter((m) => m.to === SCOOTER && /answered/.test(m.subject));
+      expect(mails).toHaveLength(1);
+      return mails[0]!.text;
+    };
+    const members = await answerTo("Do you know for certain where the members area is?");
+    expect(members.split("\n")[0], "the page he asked about is the answer").toContain(`${root}/members.`);
+    expect(members, "and the site's own link is still there").toContain(`The preview is at ${root}.`);
+    expect(members).not.toContain(`${root}/about`);
+    const unknown = await answerTo("Do you know for certain where the dashboard is?");
+    expect(unknown).toContain(`The preview is at ${root}.`);
+    expect(unknown, "no page the card does not record").not.toMatch(/pages\.dev\/[a-z]/);
   });
 });
 
