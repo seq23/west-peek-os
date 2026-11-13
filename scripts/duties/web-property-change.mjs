@@ -1444,7 +1444,11 @@ async function carriedFacts({ book, secrets, result, runsDone, job, outDir, work
     ...(deliverables.length ? { deliverables: deliverables.map((d) => ({ filename: d.filename, bytes: d.bytes, via: d.via, drive_url: d.drive_url ?? null })) } : {}),
     repo_facts: { repo: book.repo, host: book.facts.host, pages_host: book.facts.pagesHost, secret_names: all.allowed, github_repo: book.githubRepo ?? null, runbook_generated: book.generated, constraints: book.facts.constraints ?? [] },
     // Addenda 5 + 6: dated deferred work and per-item done-lines, as the model wrote them (validated shapes).
-    ...(Array.isArray(result?.deferred) ? { deferred: result.deferred.filter((d) => d && typeof d === "object" && String(d.ask ?? "").trim() && /^\d{4}-\d{2}-\d{2}/.test(String(d.due_at ?? ""))).map((d) => ({ ask: String(d.ask).slice(0, 1200), due_at: String(d.due_at), words: d.words ? String(d.words).slice(0, 200) : undefined, site_change: d.site_change === true })) } : {}),
+    // #363: EVERY entry is carried, a malformed one included: the Worker fails loudly on an item it cannot file, and
+    // refuses a plan that defers what the partner did not date. Nothing is thinned here in silence.
+    ...(Array.isArray(result?.deferred) ? { deferred: result.deferred.slice(0, 5).map((d) => ({ ask: String(d?.ask ?? "").slice(0, 1200), due_at: String(d?.due_at ?? ""), words: d?.words ? String(d.words).slice(0, 200) : undefined, site_change: d?.site_change === true })) } : {}),
+    // #363: the plan's per-ask accounting, as the model wrote it; the Worker holds the plan to it.
+    ...(Array.isArray(result?.accounting) ? { accounting: result.accounting.slice(0, 40).map((a) => ({ ask: String(a?.ask ?? "").slice(0, 300), how: String(a?.how ?? "").slice(0, 40) })) } : {}),
     ...(Array.isArray(result?.items) ? { items: result.items.filter((i) => i && typeof i === "object" && String(i.item ?? "").trim() && ["done", "partial", "not_done"].includes(i.state)).map((i) => ({ item: String(i.item).slice(0, 200), state: i.state, note: i.note ? String(i.note).slice(0, 300) : undefined })) } : {}),
   };
 }

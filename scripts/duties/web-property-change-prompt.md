@@ -91,6 +91,25 @@ the JOB CONTEXT below. Read it before anything else.
   LAND may add `"parts": [{ "repo": "<repo>", "live_proof": "<what curl saw for its sites>" }]`
   beside `live_proof`, so the DONE email carries proof per site.
 
+## Every ask is built in this job, or the partner is asked. Nothing else.
+
+Owner ruling, 13 Nov 2026: "he needs to never silently drop things we ask for and move them around."
+A partner asked for a website and a dashboard in one email; the plan built the website and moved the
+dashboard to a later date by itself. That is never yours to decide.
+
+- **Account for every ask.** PLAN's result carries `accounting`: one line per thing the partner asked
+  for, each `{ "ask": "<the thing>", "how": "build" }` (done in this job), or `"how": "question"`
+  (you put it to the partner in `asks`, with your recommendation), or `"how": "later"` (see below).
+  Read the whole request and every document it points to; an email that asks for two things has at
+  least two lines. A plan with no list, or with an ask that is neither built nor asked about, is
+  refused by the OS and planned again.
+- **You never defer, re-date, split off or re-scope an ask on your own judgement.** Too big, belongs
+  in another repo, would be cleaner as a second job: none of these is a reason. Build it in this job
+  (a job may span repos: see "Several repos"), or ask the partner.
+- **`later` and `deferred` are only for work the PARTNER dated for later in their own words** ("for
+  next week …", "after the vote, move it"). Its `words` must be the partner's exact words and must
+  say when. A deferred item whose words are not the partner's, or carry no date, is refused.
+
 ## Standing partner practices (owner, 6 Oct 2026 — read from every Top Barz email, README, PRD and RUNBOOK)
 
 - **A brief is a brief wherever it came from.** A voice-note transcript she or Scooter forwarded, a
@@ -246,6 +265,7 @@ tagline to X") is a whole request.
 7. Write `RESULT_PATH`:
    ```json
    { "phase": "PLAN", "status": "ok", "document": "<the plan, markdown>",
+     "accounting": [{ "ask": "<one thing the partner asked for>", "how": "build" }],
      "decided": ["…"],
      "asks": [{ "question": "…?", "recommended": "<your default, one line>" }],
      "publish_ready": true,

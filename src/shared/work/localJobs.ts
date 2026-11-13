@@ -266,6 +266,8 @@ export interface LocalJobReport {
    * another employee) is a plain dated card, never forced into a site job on the source repo.
    */
   deferred?: Array<{ ask: string; due_at: string; words?: string; site_change?: boolean }>;
+  /** #363: PLAN only. One line per thing the partner asked for: built in this job, a question, or (partner-dated) later. */
+  accounting?: Array<{ ask: string; how: string }>;
   /** 0253 (addendum 6): several asks in one email → one done-line per item, partial completion stated per item. */
   items?: Array<{ item: string; state: "done" | "partial" | "not_done"; note?: string }>;
   /**
@@ -398,6 +400,10 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
      * instead of this reader thinning the list in silence.
      */
     ...(Array.isArray(r.deferred) ? { deferred: readDeferred(r.deferred) } : {}),
+    // #363: the plan's per-ask accounting (`shared/work/everyAsk.ts` holds the plan to it).
+    ...(Array.isArray(r.accounting)
+      ? { accounting: r.accounting.slice(0, 40).map((a) => { const l = (a && typeof a === "object" ? a : {}) as Record<string, unknown>; return { ask: typeof l.ask === "string" ? l.ask.trim().slice(0, 300) : "", how: typeof l.how === "string" ? l.how.trim().toLowerCase().slice(0, 40) : "" }; }) }
+      : {}),
   };
   // A plan naming placeholders is not publish-ready whatever the flag says: the list is the fact.
   if (report.phase === "PLAN" && (report.placeholders?.length ?? 0) > 0) report.publish_ready = false;

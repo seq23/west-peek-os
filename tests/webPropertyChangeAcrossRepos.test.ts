@@ -227,6 +227,7 @@ describe("community site + westpeek live in one email, preview first, then land"
   it("ONE plan over both repos → ONE approval email; one \"approved\" parks ONE BUILD with both parts", async () => {
     await macReports(id, {
       phase: "PLAN",
+      accounting: [{ ask: "what the partner asked for", how: "build" }],
       status: "ok",
       document: "# Plan: two fixes\n\n## join-west-peek-main\n- footer link → /team\n\n## westpeek-live\n- banner: Fall Summit, 14 Oct\n",
       decided: ["footer href only"],
@@ -382,7 +383,7 @@ describe("\"preview first\" across two repos", () => {
     id = await porterCardFrom("banner and footer", `${TWO_REPOS} Send me a preview first.`);
     expect((await readWebPropertyChange(env, id))!.preview_only).toBe(1);
     await tickFor(id);
-    await macReports(id, { phase: "PLAN", status: "ok", document: "# Plan: banner and footer\n\nboth repos, structure only.", decided: ["structure"], asks: [], publish_ready: true, placeholders: [] });
+    await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build" }], document: "# Plan: banner and footer\n\nboth repos, structure only.", decided: ["structure"], asks: [], publish_ready: true, placeholders: [] });
     expect((await tickFor(id)).summary, "nothing to ask: built without asking").toMatch(/BUILD queued/);
     const before = blockedTo(SEQUOIA).length;
     await macReports(id, {

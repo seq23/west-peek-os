@@ -52,6 +52,7 @@ import {
   type LocalJobReport,
   type WebPropertyChangePhase,
 } from "../../shared/work/localJobs";
+import { planProblems, refusalLine } from "../../shared/work/everyAsk";
 
 /**
  * A WEB PROPERTY CHANGE, worked by Porter on her Mac (20 Sep 2026, Plan A).
@@ -840,6 +841,11 @@ export async function parkPhase(
     const texts = [payload.card.title, payload.ask, payload.request, payload.plan?.text ?? "", ...(payload.plan?.answers ?? []), ...(payload.drive_files ?? []).map((f) => f.text ?? "")];
     payload.private_model_only = !committed.readable || committedLpNamedIn(texts, committed.names) !== null;
     // #357: the partner's "keep this private" is a standing rule on every phase, and keeps the job on the private model.
+    // #363: a refused plan is planned again knowing why; the reason rides on the job as a standing constraint.
+    if (phase === "PLAN") {
+      const last = (() => { try { const h = JSON.parse(row.run_history_json || "[]") as Array<{ status?: string; reason?: string }>; return Array.isArray(h) ? h.at(-1) : undefined; } catch { return undefined; } })();
+      if (last?.status === "REFUSED" && last.reason) payload.constraints = [...(payload.constraints ?? []), last.reason];
+    }
     const privateAsk = privateMaterialSentence([payload.ask, payload.request, payload.card.title]);
     if (privateAsk) {
       payload.constraints = [...(payload.constraints ?? []), privateMaterialConstraint(privateAsk)];
@@ -1345,6 +1351,24 @@ export async function applyReport(
     return { finished: false, blocked: false, progressed: false, detail: `${row.phase} reported something the OS could not read: ${problem}` };
   }
   await recordHistory(env, row, { run_id: run.id, phase: report.phase, status: report.status, reason: (report.reason ?? "").slice(0, 300) });
+
+  /*
+   * #363: EVERY ASK IS BUILT IN THE JOB OR THE PARTNER IS ASKED (owner ruling, 13 Nov 2026). A plan
+   * that leaves an ask unaccounted for, or puts off work the partner did not date, is refused before
+   * anything of it is applied: a failed attempt that says why, on the card and to the next PLAN.
+   */
+  if (report.phase === "PLAN" && report.status === "ok") {
+    const shared = await (await import("./driveShares")).driveFilesFor(env, card.id);
+    const partnerText = [row.request_text ?? "", row.ask ?? "", ...list(row.answers_json), ...shared.map((f) => f.text ?? "")].join("\n");
+    const problems = planProblems({ partnerText, accounting: report.accounting, asks: report.asks, deferred: report.deferred });
+    if (problems.length) {
+      const line = refusalLine(problems);
+      await recordHistory(env, { ...row, run_history_json: (await readWebPropertyChange(env, card.id))?.run_history_json ?? row.run_history_json }, { run_id: run.id, phase: "PLAN", status: "REFUSED", reason: line.slice(0, 1200) });
+      await appendFinding(env, card.id, line);
+      return { finished: false, blocked: false, progressed: false, detail: line.slice(0, 600) };
+    }
+    if (report.accounting?.length) await appendFinding(env, card.id, `Per ask: ${report.accounting.map((a) => `${a.ask.slice(0, 120)} → ${a.how === "build" ? "built in this job" : a.how === "question" ? "asked of the partner" : "later, on the partner's own date"}`).join("; ")}`);
+  }
 
   // 0253: what the repo itself said, the keys the vault lacks (only with the lookup that proves it), the runs.
   const absorbed = await absorbRepoReport(env, card, row, report);

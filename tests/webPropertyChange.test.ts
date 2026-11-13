@@ -360,6 +360,7 @@ describe("Scooter emails a package for the ventures site", () => {
       deviceId: "mac-test-jobs",
       outputText: JSON.stringify({
         phase: "PLAN",
+        accounting: [{ ask: "what the partner asked for", how: "build" }],
         status: "ok",
         document: "# Plan: ventures site update\n\n## Changes\n- team page\n- portfolio logos\n\n## Live proof\n- https://westpeek.ventures/team\n",
         decided: ["new /team route with a redirect from /people", "logos on cream tiles per the RUNBOOK"],
@@ -603,7 +604,7 @@ describe("land on green OFF asks first", () => {
       expect((await readWebPropertyChange(env, porterId))!.preview_only, "preview-first even when the request forces").toBe(1);
       await tickFor(porterId); // parks PLAN
       // Pre-approved and forced in the request: approved at filing, the force recorded, BUILD parks at once.
-      await macReports(porterId, { phase: "PLAN", status: "ok", document: "# Plan: productions refresh\n\nnothing to ask", decided: ["all structure"], asks: [], publish_ready: true });
+      await macReports(porterId, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build" }], document: "# Plan: productions refresh\n\nnothing to ask", decided: ["all structure"], asks: [], publish_ready: true });
       expect((await tickFor(porterId)).summary).toMatch(/BUILD queued/);
       const forced = (await readWebPropertyChange(env, porterId))!;
       expect(forced.forced_by, "the named force is the only way past the preview").toBe("fu_sequoia_taylor");
@@ -648,7 +649,7 @@ async function planned(who: string, chief: string, subject: string, plan: Record
   const chiefId = await openAssignmentCard(env, { subject, partnerAddress: who, chiefOfStaff: chief, raw: `${subject}: westpeek.ventures — package: https://drive.google.com/drive/folders/${FOLDER}${subject.replace(/\W/g, "").slice(0, 6)}`, limits: EMAILED_TASK_LIMITS, emlKey: null });
   const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
   await tickFor(id); // parks PLAN
-  await macReports(id, { phase: "PLAN", status: "ok", ...plan });
+  await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build" }], ...plan });
   await tickFor(id); // blocks with the plan
   return {
     id,
@@ -657,47 +658,104 @@ async function planned(who: string, chief: string, subject: string, plan: Record
 }
 
 /**
- * #363 (13 Nov 2026): a partner asked for a website and a dashboard in one email. The plan put the
- * dashboard in `deferred` and told him it was "its own card, starts 17 Nov". The report reader dropped
- * the field, so no card was made and nothing said so. Driven through the real path: the Mac's stored
- * report → applyReport.
+ * #363 (13 Nov 2026, owner ruling: "he needs to never silently drop things we ask for and move them
+ * around"). A partner asked for a website and a dashboard in one email. The plan built the website
+ * and, by itself, moved the dashboard to "its own card, starts 17 Nov"; the report reader then dropped
+ * the `deferred` field, so no card was made and nothing said so. Driven through the real path: the
+ * Mac's stored report → applyReport.
  */
-describe("later work the plan dates becomes its own card, or the source card says loudly that it did not (#363)", () => {
+describe("every ask is built in the job or the partner is asked; later work is only what the partner dated (#363)", () => {
   const deferredFrom = async (sourceId: string) =>
     (await env.WP_OS_DB.prepare("SELECT id, title, kind, state, owner_id, requested_by_email, lease_until, description FROM work_card WHERE assigned_from_card_id = ?1 ORDER BY created_at").bind(sourceId).all<Record<string, string | null>>()).results ?? [];
-  const plan = (deferred: unknown[]) => ({ document: "# Plan: the site now, the rest later\n\nnothing to ask", decided: ["the site is built now"], asks: [], publish_ready: true, deferred });
+  // These cards are real; the suite's "is Porter looping?" guard counts an hour of them. Age them out on the way in and out.
+  beforeAll(ageEarlierCards);
+  afterAll(ageEarlierCards);
+  const plan = (more: Record<string, unknown>) => ({ document: "# Plan\n\nnothing to ask", decided: ["the site is built now"], asks: [], publish_ready: true, ...more });
+  /** Open a card and park PLAN, without the helper's assumption that the first plan is accepted. */
+  async function asked(subject: string): Promise<string> {
+    const chiefId = await openAssignmentCard(env, { subject, partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: `${subject}: westpeek.ventures — package: https://drive.google.com/drive/folders/${FOLDER}${subject.replace(/\W/g, "").slice(0, 6)}`, limits: EMAILED_TASK_LIMITS, emlKey: null });
+    const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
+    await tickFor(id);
+    return id;
+  }
 
-  it("an item that is not a change to this site is a plain dated card for the same partner, linked to the source, never a site job on its repo", async () => {
-    const porter = await planned(SCOOTER, "Walker", "studio site and tracker", plan([{ ask: "Build the sponsor tracker in the operating system, not on the public site", due_at: "2031-03-17", words: "the tracker can start the week after", site_change: false }]));
-    const made = await deferredFrom(porter.id);
+  it("rule 1: a plan that puts off an ask the partner did not date is refused, nothing of it is applied, and the next PLAN is told why", async () => {
+    const id = await asked("studio website and a sponsor dashboard");
+    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the studio website", how: "build" }, { ask: "the sponsor dashboard", how: "later" }], deferred: [{ ask: "Build the sponsor dashboard", due_at: "2031-03-17", words: "the dashboard is a bigger build" }] }) });
+    await tickFor(id);
+    const row = (await readWebPropertyChange(env, id))!;
+    expect(row.plan_filed_at, "the plan was not accepted").toBeNull();
+    expect(row.phase).toBe("PLAN");
+    expect(await deferredFrom(id), "and nothing was split off").toHaveLength(0);
+    expect((await card(id)).state, "a refusal is a failed attempt, never a question for the partner").not.toBe("BLOCKED");
+    expect(String((await card(id)).description)).toMatch(/PLAN REFUSED.*sponsor dashboard.*did not date/);
+    expect(sent.filter((m) => /studio website and a sponsor dashboard/i.test(m.subject) && /plan ready|going ahead/i.test(m.subject)), "he is told nothing about a refused plan").toHaveLength(0);
+    // The sweep plans again, and the job carries the reason.
+    const next = (await liveJobFor(id)) ?? (await tickFor(id), await liveJobFor(id));
+    expect(next, "PLAN is queued again").not.toBeNull();
+    expect(String(next!.job_json)).toMatch(/PLAN REFUSED/);
+    // The same request, planned with both asks built: accepted.
+    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the studio website", how: "build" }, { ask: "the sponsor dashboard", how: "build" }] }) });
+    await tickFor(id);
+    expect((await readWebPropertyChange(env, id))!.plan_filed_at).toBeTruthy();
+    expect(String((await card(id)).description)).toContain("the sponsor dashboard → built in this job");
+  });
+
+  it("rule 2: a plan with no per-ask accounting, or with an ask that is neither built nor asked about, is refused", async () => {
+    const id = await asked("press page and a pricing table");
+    await macReports(id, { phase: "PLAN", status: "ok", ...plan({}) });
+    await tickFor(id);
+    expect((await readWebPropertyChange(env, id))!.plan_filed_at).toBeNull();
+    expect(String((await card(id)).description)).toMatch(/PLAN REFUSED.*did not account for each thing/);
+    if (!(await liveJobFor(id))) await tickFor(id);
+    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the press page", how: "build" }, { ask: "the pricing table", how: "out of scope" }] }) });
+    await tickFor(id);
+    expect((await readWebPropertyChange(env, id))!.plan_filed_at).toBeNull();
+    expect(String((await card(id)).description)).toMatch(/"the pricing table" is neither built in this job nor asked about/);
+    if (!(await liveJobFor(id))) await tickFor(id);
+    // A question is a fate; a question with nothing asked is not.
+    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the press page", how: "build" }, { ask: "the pricing table", how: "question" }] }) });
+    await tickFor(id);
+    expect((await readWebPropertyChange(env, id))!.plan_filed_at).toBeNull();
+  });
+
+  it("rules 3 and 4: work the partner dated becomes its own card leased to its date and linked to the source; work that is not a change to this site is never a site job on its repo", async () => {
+    const id = await asked("studio site now and the sponsor tracker next week");
+    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the studio site", how: "build" }, { ask: "the sponsor tracker", how: "later" }], deferred: [{ ask: "Build the sponsor tracker in the operating system, not on the public site", due_at: "2031-03-17", words: "the sponsor tracker next week", site_change: false }] }) });
+    await tickFor(id);
+    expect((await readWebPropertyChange(env, id))!.plan_filed_at, "a partner-dated deferral is a plan like any other").toBeTruthy();
+    const made = await deferredFrom(id);
     expect(made, "exactly one card for the one deferred item").toHaveLength(1);
     const c = made[0]!;
     expect(c.title).toContain("(deferred to 2031-03-17)");
     expect(c.requested_by_email).toBe(SCOOTER);
     expect(c.lease_until, "leased to its date, so the sweep leaves it alone until then").toBe("2031-03-17T00:00:00.000Z");
-    expect(c.state).not.toBe("DONE");
     expect(c.kind, "not forced into a site job").toBeNull();
     expect(await readWebPropertyChange(env, c.id!), "no job on the source repo").toBeNull();
-    expect(String((await card(porter.id)).description), "the source card says so").toContain(`its own card (${c.id}) runs on 2031-03-17`);
+    expect(String((await card(id)).description), "the source card says so").toContain(`its own card (${c.id}) runs on 2031-03-17`);
   });
 
-  it("an item that IS a change to this site becomes a site job on the same repo, leased to its date", async () => {
-    const porter = await planned(SCOOTER, "Walker", "studio hero now and later", plan([{ ask: "Swap the hero photo for the spring one", due_at: "2031-04-01", site_change: true }]));
-    const made = await deferredFrom(porter.id);
+  it("rule 4: a dated change to THIS site is a site job on the same repo, leased to its date", async () => {
+    const id = await asked("studio hero now and swap the photo next month");
+    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the hero", how: "build" }, { ask: "swap the photo", how: "later" }], deferred: [{ ask: "Swap the hero photo for the spring one", due_at: "2031-04-01", words: "swap the photo next month", site_change: true }] }) });
+    await tickFor(id);
+    const made = await deferredFrom(id);
     expect(made).toHaveLength(1);
     expect(made[0]!.kind).toBe("WEB_PROPERTY_CHANGE");
     expect(made[0]!.lease_until).toBe("2031-04-01T00:00:00.000Z");
-    expect((await readWebPropertyChange(env, made[0]!.id!))!.target_repo).toBe((await readWebPropertyChange(env, porter.id))!.target_repo);
+    expect((await readWebPropertyChange(env, made[0]!.id!))!.target_repo).toBe((await readWebPropertyChange(env, id))!.target_repo);
   });
 
-  it("an item that cannot be filed is said on the source card and to the partners, never dropped", async () => {
+  it("rule 3: a deferred item that cannot become a card is said on the source card, in the record and to the partners, never dropped", async () => {
     const before = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM notification WHERE dedupe_key LIKE 'deferred_not_filed:%'").first<{ n: number }>())!.n;
-    const porter = await planned(SCOOTER, "Walker", "studio page and a later thing", plan([{ ask: "Add the press page", due_at: "sometime in spring" }]));
-    expect(await deferredFrom(porter.id)).toHaveLength(0);
-    const desc = String((await card(porter.id)).description);
+    const id = await asked("studio page now and the press page later in spring");
+    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the studio page", how: "build" }, { ask: "the press page", how: "later" }], deferred: [{ ask: "Add the press page", due_at: "sometime in spring", words: "the press page later in spring" }] }) });
+    await tickFor(id);
+    expect(await deferredFrom(id)).toHaveLength(0);
+    const desc = String((await card(id)).description);
     expect(desc).toContain("DEFERRED WORK NOT FILED");
     expect(desc).toContain("Add the press page");
-    const ev = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'work_card.deferred_not_filed' AND object_id = ?1").bind(porter.id).first<{ n: number }>();
+    const ev = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'work_card.deferred_not_filed' AND object_id = ?1").bind(id).first<{ n: number }>();
     expect(Number(ev?.n)).toBe(1);
     const after = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM notification WHERE dedupe_key LIKE 'deferred_not_filed:%'").first<{ n: number }>())!.n;
     expect(after, "the partners are told").toBeGreaterThan(before);
@@ -978,7 +1036,7 @@ async function preApproved(who: string, chief: string, subject: string, phrase: 
   });
   const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
   await tickFor(id); // parks PLAN
-  await macReports(id, { phase: "PLAN", status: "ok", ...plan });
+  await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build" }], ...plan });
   return id;
 }
 
@@ -1259,7 +1317,7 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
 
   it("nothing to ask + publish-ready → built without asking: no plan email, BUILD parked, the card says why; green stops at ONE preview email, his \"approved\" lands it, then DONE", async () => {
     const before = sent.length;
-    await macReports(porterId, { phase: "PLAN", status: "ok", document: "# Plan: Sensori photo swap\n\nReplace sites/ventures/assets/img/portfolio/sensori-founders.jpg with the attachment; same dimensions.", decided: ["same file name and dimensions, so no markup change"], asks: [], publish_ready: true, placeholders: [] });
+    await macReports(porterId, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build" }], document: "# Plan: Sensori photo swap\n\nReplace sites/ventures/assets/img/portfolio/sensori-founders.jpg with the attachment; same dimensions.", decided: ["same file name and dimensions, so no markup change"], asks: [], publish_ready: true, placeholders: [] });
     const out = await tickFor(porterId);
     expect(out.outcome, "no block").toBe("PROGRESSED");
     expect(out.summary).toMatch(/nothing to ask; BUILD queued/);
