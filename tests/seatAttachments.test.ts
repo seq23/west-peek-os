@@ -134,6 +134,8 @@ beforeEach(async () => {
   await t.db.prepare("DELETE FROM subscription_seat_device").run();
   await t.db.prepare("DELETE FROM subscription_seat_run").run();
   await t.db.prepare("DELETE FROM provider_lane_health").run();
+  // Each case starts with an empty run log: the router re-ranks a duty kind's lanes from it (13 Nov 2026).
+  await t.db.prepare("DELETE FROM ai_run_routing").run();
 });
 
 describe("the pure rules", () => {
@@ -245,15 +247,32 @@ describe("the router: a file goes to a seat only if that seat's claimer proved i
     expect(bucket.store.size, "nothing is left in R2").toBe(0);
   }, 60_000);
 
-  it("a CONFIDENTIAL document never reaches the Codex seat, proof or no proof — its no-training basis is a setting", async () => {
+  it("a CONFIDENTIAL document in hard work never reaches the Codex seat, proof or no proof; in short work Codex reads it only as the backup to Claude (13 Nov 2026)", async () => {
+    // Private HARD work (a partner reads the result unchecked): Claude Code only. Codex is awake, proved it can read
+    // documents, and is claiming — and is still never parked the file.
     await awake("codex", [attachmentCapability("codex", "document")]);
     const c = claimerThatReads(["codex"]);
-    const { run } = await runAi(env(), DOC_CALL([DECK], undefined, true), { fetchImpl: (async () => new Response("{}", { status: 500 })) as unknown as typeof fetch });
+    const confidential = DOC_CALL([DECK], undefined, true);
+    const { run } = await runAi(env(), { ...confidential, budgetContext: { ...confidential.budgetContext, important: true } }, { fetchImpl: (async () => new Response("{}", { status: 500 })) as unknown as typeof fetch });
     await c.stop();
     expect(await rows(), "nothing was parked for Codex").toEqual([]);
     expect(c.seenBytes).toEqual([]);
     expect(run.model ?? "").not.toBe("codex-local");
-  }, 60_000);
+    // The same confidential document in short, checkable work, with Claude Code away: Codex is its backup, and only
+    // because its claimer proved it can read the kind.
+    const c2 = claimerThatReads(["codex"]);
+    const { run: backup } = await runAi(env(), confidential, { fetchImpl: (async () => new Response("{}", { status: 500 })) as unknown as typeof fetch });
+    await c2.stop();
+    expect((await rows()).map((r) => r.seat)).toEqual(["codex"]);
+    expect(backup.output_text).toContain("SEAT READ THE FILE (codex)");
+    // With Claude Code awake and able to read it, Claude takes it and Codex is not asked.
+    await t.db.prepare("DELETE FROM subscription_seat_run").run();
+    await awake("claude_code", [attachmentCapability("claude_code", "document")]);
+    const c3 = claimerThatReads(["claude_code", "codex"]);
+    await runAi(env(), confidential, { fetchImpl: (async () => new Response("{}", { status: 500 })) as unknown as typeof fetch });
+    await c3.stop();
+    expect((await rows()).map((r) => r.seat)).toEqual(["claude_code"]);
+  }, 90_000);
 
   it("a seat that did NOT prove it is never parked the file — the call never touches the queue", async () => {
     await awake("codex", ["web_search"]);

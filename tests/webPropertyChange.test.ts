@@ -638,16 +638,15 @@ describe("land on green OFF asks first", () => {
     }
   });
 
-  it("a rule row overrides the model per phase; a bad value falls back to the registry default", () => {
-    // The floor (owner, 5 Nov 2026): a stored sonnet or haiku rule never runs a writing phase below Opus.
-    expect(phaseModel({ model_plan: "sonnet" }, "PLAN")).toBe("opus");
-    expect(phaseModel({ model_build: "sonnet" }, "BUILD")).toBe("opus");
-    expect(phaseModel({ model_land: "haiku" }, "LAND")).toBe("opus");
-    expect(phaseModel({ model_plan: "gpt-9" }, "PLAN")).toBe("opus");
-    expect(phaseModel({}, "LAND")).toBe("opus");
-    // No local job's phase is registered below Opus, and the seat claimer pins Opus on every Claude Code run.
-    for (const k of LOCAL_JOB_KINDS) for (const p of Object.values(k.phases)) expect(p.model).toBe("opus");
-    expect(readFileSync("scripts/claimer/subscription-seat-claimer.mjs", "utf8")).toContain('args: (prompt) => ["-p", "--model", "opus", prompt]');
+  it("no stored per-phase rule chooses what the Claude seat is started with: every phase gets the seat's one value from the rule table", () => {
+    // Owner, 13 Nov 2026: no standing rule about any model. The value is data (seat_invocation in modelOrder.json);
+    // a stored rule row, whatever it names, cannot start a phase with anything else.
+    const seatStart = JSON.parse(readFileSync("src/shared/ai/modelOrder.json", "utf8")).seat_invocation.claude_code.model as string;
+    expect(seatStart.length).toBeGreaterThan(0);
+    for (const stored of ["sonnet", "haiku", "opus", "anything-else", ""]) {
+      for (const phase of ["PLAN", "BUILD", "LAND"] as const) expect(phaseModel({ [`model_${phase.toLowerCase()}`]: stored }, phase)).toBe(seatStart);
+    }
+    for (const k of LOCAL_JOB_KINDS) for (const p of Object.values(k.phases)) expect(p.model).toBe(seatStart);
   });
 });
 

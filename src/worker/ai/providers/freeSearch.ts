@@ -256,15 +256,24 @@ export function createFreeSearchAdapter(options: FreeSearchOptions): ProviderAda
     }
   }
 
-  /** One free writer call: each free Gemini model, then each OpenRouter `:free` model, in turn. */
-  async function write(prompt: string, req: ProviderRequest): Promise<Written> {
+  /**
+   * One free writer call: each free Gemini model, then each OpenRouter `:free` model, in turn. `refuse` is the
+   * caller's own check on the answer (13 Nov 2026): a writer whose answer it refuses has failed, and the NEXT
+   * writer is asked, so one writer that cites no page is not the end of the route.
+   */
+  async function write(prompt: string, req: ProviderRequest, refuse: (text: string) => string | null = () => null): Promise<Written> {
     const why: string[] = [];
+    const usable = (model: string, text: string): boolean => {
+      if (!text) return why.push(`${model} returned nothing`) < 0;
+      const refused = refuse(text);
+      return refused ? why.push(`${model}: ${refused}`) < 0 : true;
+    };
     if (options.geminiApiKey) {
       for (const model of FREE_SEARCH_WRITER_MODELS) {
         try {
           const body = await gemini(model, prompt, req, false);
           const text = textOf(body);
-          if (text) {
+          if (usable(model, text)) {
             return {
               text,
               writer: model,
@@ -273,7 +282,6 @@ export function createFreeSearchAdapter(options: FreeSearchOptions): ProviderAda
               outputTokens: body.usageMetadata?.candidatesTokenCount ?? 0,
             };
           }
-          why.push(`${model} returned nothing`);
         } catch (err) {
           why.push(`${model}: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -283,8 +291,7 @@ export function createFreeSearchAdapter(options: FreeSearchOptions): ProviderAda
       for (const model of (await liveFreeWriters(req)).slice(0, OPENROUTER_WRITER_TRIES)) {
         try {
           const out = await openRouterFree(model, prompt, req);
-          if (out.text) return out;
-          why.push(`${model} returned nothing`);
+          if (usable(model, out.text)) return out;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           why.push(`${model}: ${msg}`);
@@ -352,10 +359,12 @@ export function createFreeSearchAdapter(options: FreeSearchOptions): ProviderAda
       "SOURCES:",
       ...sources.map((s, i) => `[${i + 1}] ${s.title} — ${s.url}\n${s.text}`),
     ].join("\n");
-    const written = await write(prompt, req);
+    // The route's own check, applied to EACH writer: an answer that cites none of the fetched pages is that writer's
+    // failure, and the next free writer is asked before the route gives up.
+    const written = await write(prompt, req, (answer) =>
+      sources.some((s) => answer.includes(s.url)) ? null : "cited none of the fetched pages, so its answer cannot be shown to come from them",
+    );
     const text = written.text;
-    const cited = sources.filter((s) => text.includes(s.url));
-    if (cited.length === 0) throw new Error("the writer cited none of the fetched pages, so its answer cannot be shown to come from them");
     return {
       text: `${text}\n\nSources:\n${sources.map((s) => `- ${s.url}`).join("\n")}\n\nSearched with: Brave Search, written by ${written.writer}`,
       model: FREE_SEARCH_MODEL,

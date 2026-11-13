@@ -189,6 +189,12 @@ export function isProviderOutage(reason: string): boolean {
    * work, so asking a different lane the same question is exactly right. `shouldBackOff` then
    * excludes it, and the reasoning for that split is written there.
    */
+  /*
+   * The $0 search lane ended at its named stop: every free search route was tried and none produced an answer it
+   * may show. A fact about the lane, not about the question, so the next rung (the Codex seat, then Claude Code)
+   * takes the same search (13 Nov 2026: a routine search starts on the free lane).
+   */
+  if (/^free_search_named_stop:/.test(reason)) return true;
   if (/^subscription_seat_unavailable:/.test(reason)) return true;
   /*
    * The claimer took the run and could not finish it — Claude Code errored, the session was

@@ -7451,3 +7451,33 @@ from January 2027; $10 paid ticket; $10,000 net target from sponsors ($7,500 flo
   on the new project, gemini-3.8-flash grounding answers 429 on the free tier, so research was carried by Brave written by
   gemini-3.6-flash at $0. The same call found 3 of 4 pinned OpenRouter `:free` slugs 404 "unavailable for free", so the
   OpenRouter writers are now read from OpenRouter's live model list (`:free`, priced 0 both ways), preferred ids first.
+
+## 13 Nov 2026 — which route does which work: one table by job class and privacy; the run log re-ranks it; no rule names a model
+
+Owner, 13 Nov: "all private stuff can go through codex i need a backup to claude", "its more about model ability too",
+"as much daily and routine work as possible needs to find a compatible free model", "there needs to be no standing rule
+about any … model".
+
+- **One table, as data**: `src/shared/ai/modelOrder.json`, read by the Worker's router (`shared/ai/seatOrder.ts`) and the
+  Mac's job runner (`scripts/lib/model-roles.mjs`). Job class HARD / CLEAR_BRIEF / SHORT (a class nobody named is HARD) ×
+  private or not. Private: HARD is Claude only and waits for Claude by name; CLEAR_BRIEF and SHORT are Claude, then Codex
+  as its backup. No private row has a free lane. Not private: HARD is Claude → Codex (Codex's result held for Claude's
+  check); CLEAR_BRIEF is Codex → Claude; SHORT is the free lanes → Codex → Claude.
+- **Class without a classifier**: Worker calls from their own markers (`important`, `seatFirst`, `interpretation` are
+  HARD, else SHORT); Mac jobs from `scripts/claimer/model-roles.json` (kind × phase).
+- **The Mac runner** (`runModel`, `runInOrder`, `spentReport`): Claude leads PLAN and BUILD; a spent plan moves the turn
+  to the next route in its row; a Codex-served hard turn leaves a note in the job folder, the phase reports a wait, and
+  the retry runs on Claude only with a check note in its prompt. Private hard work never reaches Codex.
+- **The run log re-ranks** (`rerankFromLog`, `dutyKindAttempts`; `ai_run` + `ai_run_routing.attempts_json`, no new table):
+  a lane that failed one duty kind twice running rests for a day; the free lane that last completed the kind goes first;
+  a spent quota or an absent seat is a wait, not a failure.
+- **Routine searches start free**: the `free_search` lane leads a SHORT search call; each free writer must cite a fetched
+  page or the next writer is asked; the lane's named stop hands the search to Codex, then Claude Code.
+- **No model named as a rule**: the local-job "never below" floor and its test are gone; what the Claude seat is started
+  with is the seat's value under `seat_invocation` in the table. STILL NAMED AS A RULE, not changed here: the daily
+  brief's `requireModel` pin (`BRIEF_MODEL`, `briefServing`) and its tests.
+- **Measured line**: `routes` on `GET /api/ai/cost/overview` (per route: completed, failed, from `ai_run`).
+- Guards: tests/codexDoesTheWork.test.ts (Mac rows, the held check, the private wait), tests/ladderOrder.test.ts (private
+  short → Codex, private hard waits, never a free lane, second free model + memory, twice-failed moves up),
+  tests/stoppedCards.test.ts (the table and the re-rank), tests/freeModelsForProspects.test.ts (the writer check).
+  UNPROVEN live: a Codex-served private run, a held Codex build checked by Claude, a free search completed by a second writer.

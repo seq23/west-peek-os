@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import type { Actor } from "../src/worker/services/authorize";
@@ -89,6 +89,10 @@ const judgement = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
+// Each case starts with an empty run log: the router re-ranks a duty kind's lanes from it (13 Nov 2026).
+beforeEach(async () => {
+  await t.db.prepare("DELETE FROM ai_run_routing").run();
+});
 beforeAll(async () => {
   t = await createTestDb();
   // CAUTIOUS posture: free-first is on for public judgement work, exactly as production was.

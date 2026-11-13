@@ -42,7 +42,7 @@ import { defaultGenerateBanterReply, replyToBanter, type BanterReplyGenerator } 
 import { answerQuestionForCard, type QuestionAnswerer, type QuestionAnswerResult } from "./questionRouting";
 import {
   CLAUDE_MODEL_ALIASES,
-  LOCAL_JOB_MODEL_FLOOR,
+  CLAUDE_SEAT_START,
   LOCAL_JOB_RUN_KIND,
   WEB_PROPERTY_CHANGE_KIND,
   localJobKind,
@@ -462,15 +462,14 @@ export { isOn, rulesFor, type KindRule };
  * CLI error on her Mac at two in the morning.
  */
 export function phaseModel(rules: Record<string, string>, phase: WebPropertyChangePhase): ClaudeModelAlias {
-  const spec = localJobKind(WEB_PROPERTY_CHANGE_KIND)!;
-  const fromRule = (rules[`model_${phase.toLowerCase()}`] ?? "").trim().toLowerCase();
-  void fromRule;
   /*
-   * THE FLOOR (owner, 5 Nov 2026): every phase writes code, decides or merges, so it runs on Opus. A stored rule from
-   * 21 Sep that says sonnet or haiku can no longer run a writing phase below Opus; Opus is the top of the list, so
-   * the floor is the answer for every phase.
+   * ONE VALUE, FROM THE RULE TABLE (owner, 13 Nov 2026: no standing rule about any model). The Claude seat is started
+   * with its own value in shared/ai/modelOrder.json for every phase; a stored per-phase rule row from 21 Sep no longer
+   * chooses. What keeps hard work safe is the route order of its job class, not a model's name.
    */
-  return LOCAL_JOB_MODEL_FLOOR;
+  void rules;
+  void phase;
+  return CLAUDE_SEAT_START;
 }
 
 // ── Opening ───────────────────────────────────────────────────────────────────────────────────

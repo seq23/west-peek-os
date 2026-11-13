@@ -44,7 +44,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { CLOUDFLARE_ACCOUNT_ID } from "../duties/lib/pages-delivery.mjs";
-import { loadRoles } from "../lib/model-roles.mjs";
+import { JOB_CLASSES, loadRoles } from "../lib/model-roles.mjs";
 
 /**
  * THE DUTY MODULE IS RELOADED WHEN THE REPO MOVES. This claimer is a launchd daemon that lives for
@@ -201,8 +201,8 @@ const HEARTBEAT_INTERVAL_S = 30;
 const PROGRESS_INTERVAL_S = 60;
 /**
  * The queue this machine claims jobs from. WHICH MODEL works each phase is not decided here or by the
- * seat name: `model-roles.json` beside this file says it (3 Nov 2026 — Codex does the hands-on phases,
- * Claude plans and reviews; confidential text stays on Claude), read through scripts/lib/model-roles.mjs.
+ * seat name: `model-roles.json` beside this file gives each phase its job class and the one rule table
+ * (src/shared/ai/modelOrder.json) gives each class its routes (13 Nov 2026), read through scripts/lib/model-roles.mjs.
  */
 const SEAT = "claude_code";
 const RUN_KIND = "LOCAL_JOB";
@@ -273,11 +273,12 @@ export function dutyFor(job, roles = loadRoles()) {
   if (!script) return { ok: false, why: `this claimer runs no duty for card kind "${kind || "(none)"}"` };
   if (job.script && job.script !== script) return { ok: false, why: `the job names ${job.script} but this claimer runs ${script} for ${kind}` };
   if (!["PLAN", "BUILD", "LAND"].includes(String(job.phase))) return { ok: false, why: `the job names no phase (got "${job.phase}")` };
-  if (!["opus", "sonnet", "haiku"].includes(String(job.model))) return { ok: false, why: `the job names no model alias (got "${job.model}")` };
+  // What the Claude seat is started with: the seat's own invocation value from the rule table, not a rule about the job.
+  if (typeof job.model !== "string" || !/^[a-z0-9][a-z0-9.-]*$/i.test(job.model)) return { ok: false, why: `the job carries no usable value to start the Claude seat with (got "${job.model}")` };
   if (!(Number(job.max_seconds) > 0)) return { ok: false, why: "the job carries no ceiling" };
-  const role = roles.jobs?.[kind]?.[String(job.phase)];
-  if (role !== "worker" && role !== "brain") return { ok: false, why: `scripts/claimer/model-roles.json names no role for ${kind} ${job.phase}` };
-  return { ok: true, script, kind, role };
+  const jobClass = roles.jobs?.[kind]?.[String(job.phase)];
+  if (!JOB_CLASSES.includes(jobClass)) return { ok: false, why: `scripts/claimer/model-roles.json names no job class for ${kind} ${job.phase}` };
+  return { ok: true, script, kind, jobClass };
 }
 
 // ── The wire ─────────────────────────────────────────────────────────────────────────────────
@@ -731,11 +732,11 @@ function selfTest() {
     ["a kind this claimer does not run is refused", () => dutyFor({ ...good, card_kind: "ROOM_PACKET" }).ok === false],
     ["a job naming a different script is refused", () => dutyFor({ ...good, script: "scripts/duties/other.mjs" }).ok === false],
     ["a job with no phase is refused", () => dutyFor({ ...good, phase: "SHIP" }).ok === false],
-    ["a job with no model alias is refused", () => dutyFor({ ...good, model: "gpt-9" }).ok === false],
+    ["a job with nothing to start the Claude seat with is refused", () => dutyFor({ ...good, model: "" }).ok === false],
     ["a job with no ceiling is refused", () => dutyFor({ ...good, max_seconds: 0 }).ok === false],
     ["no job at all is refused", () => dutyFor(null).ok === false],
     ["a phase the role table does not name is refused", () => dutyFor(good, { jobs: { WEB_PROPERTY_CHANGE: { PLAN: "nobody" } } }).ok === false],
-    ["every registered kind has a role for every phase", () => Object.keys(DUTIES).every((k) => ["PLAN", "BUILD", "LAND"].every((ph) => ["worker", "brain"].includes(loadRoles().jobs?.[k]?.[ph])))],
+    ["every registered kind has a job class for every phase", () => Object.keys(DUTIES).every((k) => ["PLAN", "BUILD", "LAND"].every((ph) => JOB_CLASSES.includes(loadRoles().jobs?.[k]?.[ph])))],
     ["a job dir cannot escape ~/GitHub/wpos-jobs", () => !jobDirFor("../../etc").includes("..")],
     ["every duty script named here exists", () => Object.values(DUTIES).every((s) => existsSync(path.join(REPO_ROOT, s)))],
   ];

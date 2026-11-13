@@ -96,7 +96,7 @@ Claude Code seat (Max plan)  →  Codex seat (ChatGPT Plus)  →  FREE lanes  �
   parked and nothing waits 90 seconds on a seat that will refuse. A seat that answers clears it; the
   cooldown otherwise expires by itself (30 minutes when the notice names no time).
 - **Free lanes never see private content.** Unchanged and enforced twice (step 4b and the egress gate).
-  So the free rung exists only for public content; private work goes seats → paid Claude.
+  So the free rung exists only for public content; private work goes Claude Code → Codex (not for hard work) → a named wait, and to a paid no-training lane only where the spend lever admits one.
 - **The brief may degrade, and says so.** With `requireModel` + `degradeAllowed`, a free lane may stand in
   front of Sonnet, but only a reply that passes the brief's own verifier is kept, and
   `briefServing` (shared/ai/briefServing.ts) marks a brief written by anything but Sonnet or a seat as
@@ -108,17 +108,42 @@ Claude Code seat (Max plan)  →  Codex seat (ChatGPT Plus)  →  FREE lanes  �
   today `openai/gpt-5-mini` through OpenRouter (verified in 0188), and direct OpenAI as the peer of
   an `openai/*` head. A stronger OpenAI model joins the rung the moment it is registered ACTIVE with
   a vendor-read price (`npm run prices:refresh`) and a live probe; nothing here guesses either.
-- **Codex does the hands-on work; Claude is the brains (owner, 3 Nov 2026).** The Mac job (Porter, web
-  property change) asks `scripts/claimer/model-roles.json` (read through `scripts/lib/model-roles.mjs`)
-  which role each phase takes: PLAN → brain (`claude -p`), BUILD and LAND → worker (`codex exec` on her
-  ChatGPT plan; the runner commits, pushes and opens the PR outside Codex's sandbox). A kind or phase the
-  table does not name is brain. **Confidential text stays on Claude:** Codex's no-training basis on a
-  ChatGPT plan is a setting, not a contract (0187), so a worker turn whose prompt or job files carry an
-  LP, deal, investor or children's marker, or a file that cannot be read (PDF, spreadsheet), runs on
-  Claude instead; the job's `routes.log` says why. **A Codex limit is a wait:** `NAMED STOP [CODEX_LIMIT]`
-  with the reset time, the Worker holds the card and the next run retries; Claude never takes it over.
-  The Worker router applies the same rule to the Codex seat: content not declared public never reaches it
-  (`SEATS_WITHOUT_CONTRACTUAL_NO_TRAINING`, runAi step 4d).
+- **Which route does which work: one table, by job class and privacy (owner, 13 Nov 2026).** The table is
+  data, `src/shared/ai/modelOrder.json`, read by the Worker's router (`shared/ai/seatOrder.ts`) and by the Mac's
+  job runner (`scripts/lib/model-roles.mjs`); nothing else holds an order, and no rule, test or validator names a
+  model. Routes: CLAUDE (her Claude Code seat), CODEX (the `codex` CLI signed in with her ChatGPT plan, never an API
+  key), FREE (Gemini free, OpenRouter free). Job classes: **HARD** (writes code that lands, decides, merges,
+  reviews, repairs, touches money, edits the Fund deck, or writes what a partner or outsider reads unchecked),
+  **CLEAR_BRIEF** (well-specified work with a clear brief), **SHORT** (short and checkable). A class nobody named
+  is HARD.
+
+  | | HARD | CLEAR_BRIEF | SHORT |
+  |---|---|---|---|
+  | Not private | Claude → Codex → named wait. What Codex did is held until Claude has checked it. | Codex → Claude → named stop | Free lanes → Codex → Claude → named stop |
+  | Private | Claude only, then a named wait for Claude. Never Codex. | Claude → Codex → named stop | Claude → Codex → named stop |
+
+  **No private row has a free lane**, whatever fails: that is a limit on a route's data use, decided first
+  (runAi step 4d; `routeFor` on the Mac), and nothing else on a call can lift it. Fund deck edits and her other
+  named calls (`seatFirst`) keep their own row: Claude → Codex → the free lanes, and never a free lane for text
+  with an LP or deal-term marker.
+  - *How the class is derived (no classifier).* In the Worker, from what the call already says: `important`,
+    `seatFirst` or `interpretation` is HARD, anything else SHORT. On the Mac, from
+    `scripts/claimer/model-roles.json`: kind × phase (a website change's PLAN and BUILD are HARD; its LAND turn is
+    SHORT because `~/bin/land` has already merged on green and the turn only writes up the live proof).
+  - *The order corrects itself from the run log* (`rerankFromLog`; the log is `ai_run` with the attempts in
+    `ai_run_routing`, no table of its own). A lane that failed one kind of duty twice running is left out for a
+    day, so the work moves to the next candidate: the next free lane first, and up to Codex only when no free
+    lane is left. Among the free lanes, the one that last completed that kind of duty is tried first.
+  - *A routine search starts free too.* The `free_search` lane leads a SHORT search call; each of its free writers
+    must pass the lane's own check (cite a fetched page) or the next writer is asked; its named stop hands the
+    search to the Codex seat, then Claude Code.
+  - *On the Mac* a spent plan hands the turn to the next route in the row; when the row runs out, or Claude still
+    owes a check, the phase reports a wait with the reset time (`waits_seconds`), the Worker holds the card, no
+    attempt is charged and no email goes to the partner. The job's `routes.log` says which row was used and why.
+  - *What a seat is started with* is the seat's own value under `seat_invocation` in the table. It is data about
+    the seat, not a rule about any job.
+  - *The measured line.* `GET /api/ai/cost/overview` carries `routes`: per route, runs completed and failed in the
+    period, from `ai_run`.
 - **A seat may run a live web search, and a search is believed only with proof (0246, 1 Oct 2026).** A
   call that has to reach the live web (`requiresSearch`: Parker's sponsor research, blog help, the
   Productions jobs, venue and market search) used to be offered to no seat, so at `FREE_ONLY` the only lane
@@ -161,8 +186,8 @@ Claude Code seat (Max plan)  →  Codex seat (ChatGPT Plus)  →  FREE lanes  �
   commitment is read from the records that hold one (`lp_commitment` SOFT/SIGNED, `lp_record.status`, `lp_engagement.state`,
   `lp_opportunity.stage` = COMMITTED; `src/worker/ai/committedLps.ts`) on every run; a committed LP's name, or a deal-term /
   fund-figure marker (`PRIVATE_MODEL_ONLY_MARKERS` in `shared/ai/contentClass.ts`, mirrored in
-  `scripts/claimer/model-roles.json`), revokes any declaration, and the run then loses every training-permitting lane (free
-  models and Codex). Unreadable records fail closed. The Mac gets only the verdict (`private_model_only` on the job), never the names.
+  `scripts/claimer/model-roles.json`), revokes any declaration, and the run then loses every training-permitting lane (the free
+  models); Codex on her ChatGPT plan stays only as the backup to Claude, and not at all for hard work (13 Nov 2026). Unreadable records fail closed. The Mac gets only the verdict (`private_model_only` on the job), never the names.
 - **Live research for $0 (5 Nov 2026).** At Free only a non-confidential search call takes the `free_search` lane
   (`providers/freeSearch.ts`): (1) Gemini with the `google_search` tool down the ordered list `FREE_SEARCH_GROUNDED_MODELS`
   (`gemini-2.5-flash` first), accepted only with grounding sources; a 404, retired model, 429 or unsourced answer moves to the

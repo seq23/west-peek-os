@@ -15,13 +15,13 @@
  * both sides to it: every kind here names a script that exists and declares this kind, every
  * duty script declares a kind that is here, and the sweep dispatches every kind here.
  *
- * MODEL PER PHASE IS DECIDED HERE, ONCE. Plan on the strongest model (it reads a package and a
- * RUNBOOK and decides what to ask), build on a mid model (it edits and runs validators), land on
- * the cheapest (it runs a script and writes up curl output). The Managing Partners may override
- * each on the Work page (`work_kind_rule`, editable rows); the values here are the defaults the
- * rows were seeded from, and `phaseModel()` in services/webPropertyChange.ts is the only reader.
+ * NO PHASE IS TIED TO A MODEL HERE (owner, 13 Nov 2026). Which route does a phase is its job class in the
+ * one rule table (shared/ai/modelOrder.json; the Mac reads it through scripts/lib/model-roles.mjs). The
+ * `model` on a phase is only what the Claude seat is started with, the seat's own value in that table;
+ * `phaseModel()` in services/webPropertyChange.ts is the only reader.
  */
 
+import ORDER_TABLE from "../ai/modelOrder.json";
 import { readAsks, type Ask } from "./approvalReply";
 import { readMissingMaterials, type MissingMaterial } from "./missingMaterials";
 
@@ -34,8 +34,13 @@ export type WebPropertyChangePhase = (typeof WEB_PROPERTY_CHANGE_PHASES)[number]
 /** A model alias the `claude` CLI accepts on `--model`. Kept as aliases so the CLI resolves the current version. */
 export type ClaudeModelAlias = "opus" | "sonnet" | "haiku";
 export const CLAUDE_MODEL_ALIASES: readonly ClaudeModelAlias[] = ["opus", "sonnet", "haiku"];
-/** Every phase of a local job writes, decides or merges: none runs below Opus, whatever an older stored rule says. */
-export const LOCAL_JOB_MODEL_FLOOR: ClaudeModelAlias = "opus";
+/**
+ * WHAT THE CLAUDE SEAT IS STARTED WITH for a local job: the seat's own value in the one rule table
+ * (`seat_invocation` in shared/ai/modelOrder.json). Data about the seat, not a rule about a job (owner, 13 Nov 2026:
+ * no standing rule about any model). Which ROUTE does a phase is the phase's job class in that table; a hard phase
+ * leads on the Claude seat and what Codex does in its place waits for Claude's check.
+ */
+export const CLAUDE_SEAT_START = ORDER_TABLE.seat_invocation.claude_code.model as ClaudeModelAlias;
 
 export interface PhaseSpec {
   /** Default model alias; the `model_<phase>` rule row overrides it. */
@@ -81,11 +86,9 @@ export const LOCAL_JOB_KINDS: readonly LocalJobKindSpec[] = [
     script: "scripts/duties/web-property-change.mjs",
     promptFile: "scripts/duties/web-property-change-prompt.md",
     phases: {
-      PLAN: { model: "opus", maxSeconds: 40 * 60, purpose: "Pull the package, read the RUNBOOK, write the plan: decided and ask." },
-      // Opus for anything that writes code, decides or merges (owner, 5 Nov 2026, "the cheapest model that can do the
-      // job safely"): the build writes code and the landing merges, so neither runs below Opus.
-      BUILD: { model: "opus", maxSeconds: 90 * 60, purpose: "Build it in a worktree, prove it with the repo's validators and screenshots, open the PR." },
-      LAND: { model: "opus", maxSeconds: 40 * 60, purpose: "Land on green with ~/bin/land and prove it live with curl." },
+      PLAN: { model: CLAUDE_SEAT_START, maxSeconds: 40 * 60, purpose: "Pull the package, read the RUNBOOK, write the plan: decided and ask." },
+      BUILD: { model: CLAUDE_SEAT_START, maxSeconds: 90 * 60, purpose: "Build it in a worktree, prove it with the repo's validators and screenshots, open the PR." },
+      LAND: { model: CLAUDE_SEAT_START, maxSeconds: 40 * 60, purpose: "Land on green with ~/bin/land and prove it live with curl." },
     },
     queueMaxSeconds: 12 * 60 * 60,
   },
@@ -141,7 +144,8 @@ export interface LocalJobPayload {
   request: string;
   /**
    * 5 Nov 2026 (owner ruling, 4 Nov): true when the job's text names an LP who has COMMITTED to a West Peek fund,
-   * read by the Worker from the commitment records. The Mac then keeps every model turn on Claude (no Codex).
+   * read by the Worker from the commitment records. The Mac then treats the job as private: hard phases wait for
+   * Claude and never go to Codex; any other phase runs on Claude with Codex as its backup. Never a free lane.
    * Absent or false otherwise; deal terms and fund figures are still caught by the Mac's own markers.
    */
   private_model_only?: boolean;
