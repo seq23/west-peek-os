@@ -17,6 +17,12 @@ rulings) are not kept here: they live in the West Peek Ventures company brain in
   When the Mac is offline they log `fetch failed` cycles: that means running without a network,
   not dead. Check `launchctl list | grep westpeek` before treating them as down.
 
+- **How landed code reaches the Mac (#355).** When idle, `local-job-claimer.mjs` (`pullMainIfClean`)
+  puts a clean checkout back on `main` and fast-forwards it; all three pieces then restart
+  themselves on the new HEAD (the listener only with no call open). A checkout it cannot update
+  (uncommitted changes, a diverged main) rides on its heartbeat as `code-stuck:<why>` and shows as
+  the `mac_code` health check, DOWN, which the escalation sends to both partners.
+
 ## How work moves
 
 - **The sweep.** `employee_work_sweep` (every 5 minutes, `src/worker/services/workSweep.ts`) claims

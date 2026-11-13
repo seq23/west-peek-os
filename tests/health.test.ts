@@ -60,6 +60,7 @@ import { handleRequest } from "../src/worker/index";
 import type { Env } from "../src/worker/env";
 import { BRIEF_FAULT_WINDOW_HOURS, runHealthChecks } from "../src/worker/services/health";
 import { STALE_AFTER_MINUTES } from "../src/worker/services/dailyIntelligence";
+import { recordHeartbeat } from "../src/worker/ai/subscriptionSeats";
 
 let t: TestDb;
 let env: Env;
@@ -104,6 +105,28 @@ describe("the health board", () => {
     const res = await handleRequest(new Request("https://test.local/api/diagnostics/health", { headers: MP }), env);
     const body = (await res.json()) as { checks: HealthCheck[] };
     expect(body.checks.find((c) => c.key === "readings")).toBeUndefined();
+  });
+
+  // #355: the Mac ran two-week-old code and the only word of it was a log line on the Mac.
+  it("is DOWN while the Mac's job runner says it cannot update its code, through a claim, until it says otherwise", async () => {
+    const macCode = async () => (await runHealthChecks(env)).find((c) => c.key === "mac_code");
+    const beat = (agentVersion?: string) =>
+      recordHeartbeat(env, { seat: "claude_code", deviceId: "mac-test-jobs", ...(agentVersion ? { agentVersion } : {}) });
+
+    await beat("jobs-1");
+    expect((await macCode())?.state).toBe("OK");
+
+    await beat("jobs-1 code-stuck:dirty");
+    const down = await macCode();
+    expect(down?.state).toBe("DOWN");
+    expect(down?.remedy).toBeTruthy();
+
+    // The claim route's heartbeat names no version. It must not wipe the stop the runner declared.
+    await beat();
+    expect((await macCode())?.state).toBe("DOWN");
+
+    await beat("jobs-1");
+    expect((await macCode())?.state).toBe("OK");
   });
 });
 
