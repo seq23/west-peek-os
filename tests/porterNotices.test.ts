@@ -23,7 +23,7 @@ import { keywordIntent, parseReplyIntent } from "../src/worker/services/replyInt
 import { plainTitle } from "../src/shared/work/siteChange";
 import { rebuildIntentFor } from "../src/worker/services/webPropertyChange";
 // The Mac's reader, held to the same answers as the Worker's (one rule, two runtimes).
-import { previewUrlsFrom, branchAlias } from "../scripts/duties/web-property-change.mjs";
+import { previewUrlsFrom, branchAlias, undeployedPreviewReason } from "../scripts/duties/web-property-change.mjs";
 
 /**
  * PORTER'S EMAILS, ONE SCREEN, THE ANSWER FIRST (owner, 23 Sep 2026).
@@ -160,6 +160,15 @@ describe("the preview link: one per site the card changes, the branch alias, nev
   it("the real bot comment for a community-only card yields exactly the community branch alias — on the Mac and in the Worker", () => {
     expect(previewUrlsFrom([], ALL, ["west-peek-community.pages.dev"], "work/wpc-c9e36e8b")).toBe("https://work-wpc-c9e36e8b.west-peek-community.pages.dev");
     expect(cleanPreviewUrls(ALL.join("\n"), ["west-peek-community.pages.dev"], "work/wpc-c9e36e8b")).toBe("https://work-wpc-c9e36e8b.west-peek-community.pages.dev");
+  });
+
+  it("13 Nov 2026 (wc_c548d043): the preview is the HEAD's deployment; an earlier commit's bot comment is no preview, and a green Pages build without one fails", () => {
+    const old = COMMENT.replace("3f2a1b9", "fd56205");
+    expect(previewUrlsFrom([], [old], ["west-peek-community.pages.dev"], "work/wpc-c9e36e8b", "d3fb0c6aa11")).toBeNull();
+    expect(previewUrlsFrom([], [old.replace("fd56205", "d3fb0c6")], ["west-peek-community.pages.dev"], "work/wpc-c9e36e8b", "d3fb0c6aa11")).toBe("https://work-wpc-c9e36e8b.west-peek-community.pages.dev");
+    expect(undeployedPreviewReason("GREEN", null, ["west-peek-community.pages.dev"], "https://github.com/x/y/pull/1")).toMatch(/has not deployed the latest commit/);
+    expect(undeployedPreviewReason("GREEN", "https://work-x.west-peek-community.pages.dev", ["west-peek-community.pages.dev"], "pr")).toBeNull();
+    expect(undeployedPreviewReason("GREEN", null, [], "pr")).toBeNull();
   });
 
   it("the mangled value stored on wc_c9e36e8b reaches her as the one clean link", () => {
