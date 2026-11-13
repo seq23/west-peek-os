@@ -43,6 +43,8 @@ const NOT_A_LANE_FAILURE: LaneFailure = { kind: "NONE", lane: null, vendorWords:
 
 /** Words that mean "the account behind this lane has no money", whatever status they arrive with. */
 const OUT_OF_CREDIT = /credit balance|insufficient (credit|funds|quota|balance)|payment required|billing|out of credit|quota exceeded|exceeded your current quota/i;
+/** Google AI Studio's free-tier quota 429: its status word and its rate-limit docs link. */
+const GOOGLE_FREE_QUOTA = /RESOURCE_EXHAUSTED|aistudio\.google\.com\/docs\/rate-limits|ai\.dev\/rate-limit/i;
 const NOT_SIGNED_IN = /invalid[_ -]?api[_ -]?key|authentication|unauthorized|unauthenticated|forbidden|permission denied/i;
 
 /**
@@ -69,6 +71,15 @@ export function readLaneFailure(detail: string | null | undefined): LaneFailure 
     return { kind: "LEVER", lane: null, vendorWords: "", transient: false };
   }
 
+  /*
+   * THE $0 SEARCH LANE HAS NO ACCOUNT TO RUN DRY (13 Nov 2026, wc_946f0b75…). Walker's weekly hire search stopped on the free
+   * search lane's named stop: Google's free tier answered every rung 429 "You exceeded your current quota, please check your
+   * plan and billing details … RESOURCE_EXHAUSTED". The billing words read as an empty account, so the card got two goes and
+   * was BLOCKED on Scooter with "put more credit on the account" — a free allowance that refills by itself, asked of a person.
+   * Every stop of this lane is an allowance used up or a source-less answer: a rate limit, which clears itself.
+   */
+  if (/free_search_named_stop/i.test(text)) return { kind: "RATE_LIMIT", lane: null, vendorWords: "", transient: true };
+
   const missing = /credential_missing:([a-z0-9_]+)/i.exec(text);
   if (missing) return { kind: "CREDENTIAL", lane: missing[1]!.toLowerCase(), vendorWords: "", transient: false };
 
@@ -82,6 +93,9 @@ export function readLaneFailure(detail: string | null | undefined): LaneFailure 
   if (http) {
     const status = Number(http[1]);
     const vendorWords = (http[2] ?? "").trim();
+    // Google's free-tier 429 carries OpenAI's billing sentence AND its own RESOURCE_EXHAUSTED / rate-limits link: a quota that
+    // refills, never an empty account. OpenAI's real out-of-credit 429 ("insufficient_quota") carries neither marker.
+    if (status === 429 && GOOGLE_FREE_QUOTA.test(vendorWords)) return { kind: "RATE_LIMIT", lane: null, vendorWords, transient: true };
     if (OUT_OF_CREDIT.test(vendorWords) || status === 402) return { kind: "CREDIT", lane: null, vendorWords, transient: false };
     if (status === 429) return { kind: "RATE_LIMIT", lane: null, vendorWords, transient: true };
     if (status === 401 || status === 403 || NOT_SIGNED_IN.test(vendorWords)) return { kind: "CREDENTIAL", lane: null, vendorWords, transient: false };
