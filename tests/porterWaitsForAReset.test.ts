@@ -105,6 +105,16 @@ describe("the Mac side: both seats spent is reported as a wait", () => {
     expect(spentReport("BUILD", undefined)).toBeNull();
   });
 
+  it("#356 (13 Nov 2026, wc_c548d043…): a PLAN whose Claude plan is spent is a named wait for the reset, never 'wrote no result file'", () => {
+    const r = spentReport("PLAN", { servedBy: "claude", code: 1, out: CLAUDE_WEEKLY, err: "" });
+    expect(r).toMatchObject({ phase: "PLAN", status: "failed" });
+    expect(r!.waits_seconds, "a wait the Worker holds the card for, so no attempt is charged").toBeGreaterThan(0);
+    expect(r!.reason).toMatch(/CLAUDE_LIMIT/);
+    expect(r!.reason).toMatch(/weekly limit/);
+    // NEGATIVE: a Claude turn that failed for any other reason is not a wait.
+    expect(spentReport("PLAN", { servedBy: "claude", code: 1, out: JSON.stringify({ is_error: true, result: "the model wrote nothing" }), err: "" })).toBeNull();
+  });
+
   it("the Worker reads waits_seconds, bounds it, and ignores it on a report that is not a failure's", () => {
     const ok = readLocalJobReport(JSON.stringify({ phase: "BUILD", status: "failed", reason: "both spent", waits_seconds: 5400 }));
     expect(ok.report?.waits_seconds).toBe(5400);
