@@ -2118,6 +2118,21 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
  * thread is answered from the card's own state first: the preview, what is being built now, what the
  * last build was for, what is still to come. Empty only when the card truly records none of it.
  */
+const PAGES_BUILT = "web_property_change.pages_built";
+/** Every page of its own site this job has built, across all its builds: the record on the event spine, plus the latest build's list on the row. */
+async function pagesBuilt(env: Env, cardId: string, row: Pick<WebPropertyChangeRow, "changed_pages_json">): Promise<string[]> {
+  const rows = await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_type = 'work_card' AND object_id = ?1 AND event_type = ?2").bind(cardId, PAGES_BUILT).all<{ payload_json: string }>();
+  const all = new Set(list(row.changed_pages_json));
+  for (const r of rows.results ?? []) {
+    try {
+      for (const p of (JSON.parse(r.payload_json) as { pages?: unknown[] }).pages ?? []) all.add(String(p));
+    } catch {
+      /* an unreadable payload adds nothing */
+    }
+  }
+  return [...all];
+}
+
 export async function cardStandingLines(env: Env, cardId: string, row: WebPropertyChangeRow | null, question: string | null = null): Promise<string[]> {
   if (!row) return [];
   const lines: string[] = [];
@@ -2141,7 +2156,7 @@ export async function cardStandingLines(env: Env, cardId: string, row: WebProper
   if (question && link && /^https?:\/\/\S+$/.test(link)) {
     const asked = new Set(question.toLowerCase().match(/[a-z0-9]{4,}/g) ?? []);
     const named = (seg: string) => asked.has(seg) || asked.has(`${seg}s`) || (seg.endsWith("s") && asked.has(seg.slice(0, -1)));
-    const pages = list(row.changed_pages_json)
+    const pages = (await pagesBuilt(env, cardId, row))
       .filter((p) => p.startsWith("/") && p !== "/")
       .map((p) => ({ p, hit: p.toLowerCase().split(/[\/_.-]+/).filter((seg) => seg.length >= 4 && named(seg)) }))
       .filter((x) => x.hit.length)
@@ -2240,6 +2255,14 @@ async function applyBuild(env: Env, card: WebPropertyChangeCard, row: WebPropert
     changed_pages_json: changedPages,
   });
   await appendFinding(env, card.id, `PR opened: ${report.pr_url} — checks ${state}${report.check_url ? ` (${report.check_url})` : ""}.${report.proof ? `\n${report.proof.slice(0, 1500)}` : ""}`);
+  /*
+   * EVERY PAGE THE JOB HAS BUILT, KEPT (13 Nov 2026). `changed_pages_json` is the eight links the
+   * preview email shows for the latest build; a partner asking "where is the dashboard?" two builds
+   * later needs the page an earlier build made. Each build's own-site pages go on the event spine,
+   * uncapped, and `pagesBuilt` reads them all.
+   */
+  const built = report.changed_files ? pagePathsFrom(report.changed_files, 500, sitesOf(row.property_host)) : [];
+  if (built.length) await appendEvent(env, { eventType: PAGES_BUILT, actorType: "system", actorId: "web_property_change", objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { pages: built } });
   if (state !== "GREEN") {
     // The script watched the checks and they are not green. That is a failed attempt: the next
     // BUILD run resumes the same branch and fixes it. Never landed, never asked to be.

@@ -926,6 +926,33 @@ describe("the developer may direct any job with a work instruction, and with not
     expect(unknown).toContain(`The preview is at ${root}.`);
     expect(unknown, "no page the card does not record").not.toMatch(/pages\.dev\/[a-z]/);
   });
+
+  /**
+   * 13 Nov 2026: the dashboard was built by an early build, as a Pages Function; later builds changed other
+   * pages, the card's list of pages was overwritten each time, and "where is the dashboard?" found nothing.
+   */
+  it("a page an earlier build made is still linked after later builds change other pages, a function-served page included", async () => {
+    const id = await atPreview("pg2", SCOOTER);
+    await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: "changes: add a members area and a dashboard" });
+    await rebuilt(id, "pg2b", "work/wpc-pg2", { changed_files: ["sites/ventures/members.html", "functions/dashboard/[[path]].js", "functions/_lib/store.mjs", "functions/api/lead.js", "sites/community/lounge.html"] });
+    await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: "changes: add the nine city pages" });
+    await rebuilt(id, "pg2c", "work/wpc-pg2", { changed_files: ["austin", "boston", "chicago", "denver", "eugene", "fresno", "garland", "houston", "irvine"].map((c) => `sites/ventures/${c}.html`) });
+    const root = "https://work-wpc-pg2.west-peek-ventures.pages.dev";
+    const answerTo = async (question: string) => {
+      const from = sent.length;
+      await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: question });
+      expect((await tickFor(id)).outcome).toBe("BLOCKED");
+      const mails = sent.slice(from).filter((m) => m.to === SCOOTER && /answered/.test(m.subject));
+      expect(mails).toHaveLength(1);
+      return mails[0]!.text;
+    };
+    expect(await answerTo("Do you know for certain where the members area is?"), "build 1's page, after build 2").toContain(`${root}/members.`);
+    expect(await answerTo("Do you know for certain if there is a link to the dashboard yet?"), "the page a function serves").toContain(`${root}/dashboard.`);
+    expect(await answerTo("Do you know for certain where the irvine page is?"), "the ninth page of one build is on the record").toContain(`${root}/irvine.`);
+    const other = await answerTo("Do you know for certain where the lounge is?");
+    expect(other, "another site's page in the same repo is not this job's").not.toContain("/lounge");
+    expect(other).not.toContain("/api");
+  });
 });
 
 describe("every ask is built in the job or the partner is asked; later work is only what the partner dated (#363)", () => {
