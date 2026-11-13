@@ -10,10 +10,15 @@
  * so nobody outside can forge their way into the drop, (c) not a partner, and (d) the subject explicitly marked
  * "(ignore)" / "[ignore]" / "(test)" / "[test]" at its start or end. The message is still kept and an
  * `inbound_email.self_test` event is written, so the arrival is visible; it simply asks no employee to think about it.
+ *
+ * "[probe]" IS THE SAME THING (13 Nov 2026, #360). The forms-mailer's daily signed form check arrives as
+ * "[probe] New enquiry from …" from the same address, and opened an "Unclear email" card every day from 6 Nov (12
+ * cards, each at least one Mac seat run). Its alarm does not read this inbox: it judges the two send calls' own
+ * answers (join-west-peek-main, RUNBOOK "Lead delivery and alarms"), so dropping the card here costs it nothing.
  */
 export const FIRM_SENDING_DOMAIN = "joinwestpeek.com";
 
-const MARK = /(?:^\s*[([](?:ignore|test)[)\]]|[([](?:ignore|test)[)\]]\s*$)/i;
+const MARK = /(?:^\s*[([](?:ignore|test|probe)[)\]]|[([](?:ignore|test|probe)[)\]]\s*$)/i;
 
 export function isFirmSelfTest(input: {
   from: string | null;
