@@ -201,6 +201,11 @@ export interface RunAiBudgetContext {
    */
   seatFirst?: boolean;
   /**
+   * A PARTNER ASKED FOR THIS WORK (owner, 13 Nov 2026): it starts on whichever free lane or seat has the best record
+   * of completing this kind of duty with an answer its floor accepted (`rerankFromLog`, bestFirst). Names no route.
+   */
+  partnerRequested?: boolean;
+  /**
    * THIS CALL MAY BE SERVED BY A WEAKER LANE WHEN THE LEVER FORBIDS PAID, AND THE RESULT SAYS SO
    * (29 Sep 2026). Meaningful only with `requireModel`.
    *
@@ -3118,7 +3123,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     const providerKey = a.lane.split("/")[0]!;
     return isSeat(providerKey) || freeProviderKeys.has(providerKey);
   });
-  const reranked = rerankFromLog(tableChain, laneKey, (f) => freeProviderKeys.has(f.candidate.providerKey), tierAttempts, now, (f) => isSeat(f.candidate.providerKey));
+  const reranked = rerankFromLog(tableChain, laneKey, (f) => freeProviderKeys.has(f.candidate.providerKey), tierAttempts, now, (f) => isSeat(f.candidate.providerKey), input.budgetContext?.partnerRequested === true);
   const chain: FallbackOption[] = reranked.chain;
   const logMoved = chain.length !== tableChain.length || chain.some((f, i) => f !== tableChain[i]);
   if (logMoved) {

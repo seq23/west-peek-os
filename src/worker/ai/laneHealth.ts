@@ -282,6 +282,32 @@ export function orderByLaneHealth<T extends { providerId: string; providerKey?: 
  * nothing, which leaves the table's own order standing.
  */
 export const DUTY_LOG_WINDOW_DAYS = 30;
+/**
+ * THE DUTY'S OWN FLOOR REFUSED THIS RUN'S ANSWER (13 Nov 2026). The lane completed, so the router had nothing against
+ * it; the duty then read the finished work and it fell short. That is recorded where thrown-away output has always
+ * been recorded, `model_job_outcome` REJECTED (the run log itself is append-only), and `dutyKindAttempts` reads it
+ * back: the lane is left out of this kind of work for a day and stops counting as having completed it. Never throws:
+ * a mark that could not be written costs one data point, not the work.
+ */
+export async function markFloorMiss(env: Env, aiRunId: string | null | undefined): Promise<boolean> {
+  if (!aiRunId) return false;
+  try {
+    const run = await env.WP_OS_DB.prepare("SELECT task_kind, provider_id, model, firm_scope FROM ai_run WHERE id = ?1")
+      .bind(aiRunId)
+      .first<{ task_kind: string | null; provider_id: string | null; model: string | null; firm_scope: string }>();
+    if (!run?.provider_id || !run.model) return false;
+    await env.WP_OS_DB.prepare(
+      `INSERT OR IGNORE INTO model_job_outcome (id, task_kind, provider_id, model, outcome, ai_run_id, firm_scope)
+       VALUES (?1, ?2, ?3, ?4, 'REJECTED', ?5, ?6)`,
+    )
+      .bind(`mjo_${crypto.randomUUID()}`, run.task_kind ?? "search", run.provider_id, run.model, aiRunId, run.firm_scope)
+      .run();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function dutyKindAttempts(env: Env, firmScope: string, dutyKind: string, now: Date): Promise<LaneAttempt[]> {
   if (!dutyKind) return [];
   try {
@@ -289,13 +315,14 @@ export async function dutyKindAttempts(env: Env, firmScope: string, dutyKind: st
     const rows =
       (
         await env.WP_OS_DB.prepare(
-          `SELECT g.attempts_json, r.created_at
+          `SELECT g.attempts_json, r.created_at,
+                  EXISTS (SELECT 1 FROM model_job_outcome o WHERE o.ai_run_id = r.id AND o.outcome = 'REJECTED') AS floor_missed
              FROM ai_run r JOIN ai_run_routing g ON g.ai_run_id = r.id
             WHERE r.firm_scope = ?1 AND r.created_at >= ?2 AND substr(r.purpose, 1, length(?3)) = ?3
             ORDER BY r.created_at DESC, r.rowid DESC LIMIT 60`,
         )
           .bind(firmScope, since, dutyKind)
-          .all<{ attempts_json: string; created_at: string }>()
+          .all<{ attempts_json: string; created_at: string; floor_missed: number }>()
       ).results ?? [];
     const out: LaneAttempt[] = [];
     for (const row of rows) {
@@ -309,7 +336,9 @@ export async function dutyKindAttempts(env: Env, firmScope: string, dutyKind: st
       for (const a of [...attempts].reverse()) {
         // A route that was not there (spent quota, asleep, no key) neither completed nor failed this kind of work.
         if (a.outcome !== "COMPLETED" && isWaitNotFailure(a.detail)) continue;
-        out.push({ lane: a.lane ?? `${a.provider_key}/${a.model}`, ok: a.outcome === "COMPLETED", at: row.created_at });
+        // The lane that completed a run whose answer the duty's floor then refused did not do the work.
+        const missedFloor = a.outcome === "COMPLETED" && Number(row.floor_missed) === 1;
+        out.push({ lane: a.lane ?? `${a.provider_key}/${a.model}`, ok: a.outcome === "COMPLETED" && !missedFloor, at: row.created_at, ...(missedFloor ? { missedFloor } : {}) });
       }
     }
     return out;

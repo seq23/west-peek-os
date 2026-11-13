@@ -18,6 +18,9 @@ import {
   rememberCandidates,
   renderHireNote,
   runHireSearchCard,
+  hireFloor,
+  HIRE_FLOOR,
+  HIRE_SEARCH_ROUTES,
   type HireCandidate,
 } from "../src/worker/services/productionsHire";
 import { sweepOnce } from "../src/worker/services/workSweep";
@@ -69,6 +72,8 @@ const searchJson = JSON.stringify({
     { name: "Jordan Example", title: "Senior Experiential Producer (freelance)", company: "Independent", city: "Brooklyn, NY", profile_url: "https://www.linkedin.com/in/jordan-example/", evidence_url: "https://agency.example/team/jordan", why: "Team page lists 12 brand activations produced end to end.\nBio says freelance since 2023 and names two sponsorship deals closed.", opening_line: "Your Nike House of Innovation build is the kind of thing we want more of.", fit: 8 },
     // A portfolio site that answers: kept, marked "live".
     { name: "Sam Sample", title: "Executive Producer", company: "Freelance", city: "Los Angeles, CA", profile_url: "https://samsample.example", why: "Portfolio shows brand partnerships sold and produced.", opening_line: "Loved the Coachella activation.", fit: 7 },
+    // A third who stands up, so the week is a shortlist and not nearest misses (the floor, 13 Nov 2026).
+    { name: "Avery Sample", title: "Senior Producer, Experiential (freelance)", company: "Independent", city: "Chicago, IL", profile_url: "https://averysample.example", why: "Own site lists sponsorships sold and produced for two festivals.", opening_line: "Your festival sponsor work.", fit: 6 },
     // A LinkedIn profile with no second page: dropped — nothing could be shown to exist.
     { name: "Only LinkedIn", title: "Producer", company: "x", city: "Austin, TX", profile_url: "https://linkedin.com/in/only-linkedin", why: "says freelance", opening_line: "hi", fit: 6 },
     // A dead page: dropped.
@@ -256,7 +261,7 @@ describe("what Walker is told", () => {
 describe("what survives the search", () => {
   it("parses only entries with a profile URL, normalises the URL, and keeps one per person", () => {
     const parsed = parseHireCandidates(searchJson);
-    expect(parsed.map((c) => c.name)).toEqual(["Jordan Example", "Sam Sample", "Only LinkedIn", "Dead Link", "Not Senior"]);
+    expect(parsed.map((c) => c.name)).toEqual(["Jordan Example", "Sam Sample", "Avery Sample", "Only LinkedIn", "Dead Link", "Not Senior"]);
     expect(parsed[0]!.profileUrl).toBe("https://linkedin.com/in/jordan-example");
     expect(canonicalProfileUrl("http://WWW.LinkedIn.com/in/x/?trk=abc#top")).toBe("https://linkedin.com/in/x");
     const twice = parseHireCandidates(JSON.stringify({ results: [{ name: "A", profile_url: "https://a.example/" }, { name: "A again", profile_url: "https://www.a.example" }] }));
@@ -265,7 +270,7 @@ describe("what survives the search", () => {
 
   it("keeps a page that answered, keeps a LinkedIn 999 only with a live second page, and drops the rest with the reason", async () => {
     const out = await checkCandidatePages(parseHireCandidates(searchJson), statusOf);
-    expect(out.kept.map((c) => [c.name, c.profileCheck])).toEqual([["Jordan Example", "refused"], ["Sam Sample", "live"], ["Not Senior", "live"]]);
+    expect(out.kept.map((c) => [c.name, c.profileCheck])).toEqual([["Jordan Example", "refused"], ["Sam Sample", "live"], ["Avery Sample", "live"], ["Not Senior", "live"]]);
     expect(out.dropped.map((d) => d.name).sort()).toEqual(["Dead Link", "Only LinkedIn"]);
     expect(out.dropped.find((d) => d.name === "Only LinkedIn")!.reason).toMatch(/refused an automated read \(999\) and no second page/);
     expect(out.dropped.find((d) => d.name === "Dead Link")!.reason).toMatch(/did not answer/);
@@ -346,12 +351,12 @@ describe("the weekly card on Walker's desk", () => {
     expect(mails).toHaveLength(1);
     const payload = JSON.parse(mails[0]!.payload_json) as { to: string; subject: string };
     expect(payload.to).toBe("scooter@westpeek.ventures");
-    expect(payload.subject).toBe("Walker: hire search — 2 candidate(s) this week");
+    expect(payload.subject).toBe("Walker: hire search — 3 candidate(s) this week");
 
     // The deliverable: on Scooter's Home under Walker, with the note as its body.
     const dlv = await env.WP_OS_DB.prepare("SELECT id, kind, prepared_by, prepared_for, title, body FROM deliverable WHERE source_type = 'work_card' AND source_id = ?1").bind(cardId).first<{ id: string; kind: string; prepared_by: string; prepared_for: string; title: string; body: string }>();
     expect(dlv).toMatchObject({ kind: "productions_hire_search", prepared_by: "Walker", prepared_for: "fu_scooter_taylor" });
-    expect(dlv!.title).toBe("Hire search 2026-W39: 2 candidate(s) for senior experiential producer, freelance");
+    expect(dlv!.title).toBe("Hire search 2026-W39: 3 candidate(s) for senior experiential producer, freelance");
     expect(dlv!.body).toMatch(/1\. Jordan Example — Senior Experiential Producer \(freelance\), Independent · Brooklyn, NY · fit 9\/10/);
     expect(dlv!.body).toMatch(/refused an automated read — LinkedIn's standard answer; open it to confirm\. The page that answered: https:\/\/agency\.example\/team\/jordan/);
     expect(dlv!.body).toMatch(/2\. Sam Sample — Executive Producer, Freelance · Los Angeles, CA · fit 8\/10/);
@@ -380,17 +385,20 @@ describe("the weekly card on Walker's desk", () => {
     const summary = hireSummary("2026-W39", rows, [], [], []);
     const rendered = renderExecEmail({ employee: "Walker", ...summary, details: dlv!.body });
     expect(lintExecEmail(rendered.subject, rendered.text, "Walker")).toEqual([]);
-    expect(rendered.text).toMatch(/\*\*TL;DR:\*\* \*\*2\*\* new candidate\(s\) .* top pick \*\*Jordan Example\*\*/);
+    expect(rendered.text).toMatch(/\*\*TL;DR:\*\* \*\*3\*\* new candidate\(s\) .* top pick \*\*Jordan Example\*\*/);
 
     // Scooter is told quietly; Sequoia is not.
     const notices = (await env.WP_OS_DB.prepare("SELECT firm_user_id FROM notification WHERE object_type IN ('work_card','deliverable') AND object_id IN (?1, ?2)").bind(cardId, dlv!.id).all<{ firm_user_id: string | null }>()).results!;
     expect(notices.length).toBeGreaterThan(0);
     expect(new Set(notices.map((n) => n.firm_user_id))).toEqual(new Set(["fu_scooter_taylor"]));
 
-    // Remembered: two rows, NEW, keyed by the normalised URL, this week, this card.
+    // Remembered: the three kept, NEW, keyed by the normalised URL, this week, this card; and the one the judge turned
+    // down, PASSED, off the card's list, so it can never come back as new.
     const remembered = (await env.WP_OS_DB.prepare("SELECT url, status, week, last_card_id FROM productions_candidate ORDER BY name").all<{ url: string; status: string; week: string; last_card_id: string }>()).results!;
     expect(remembered).toEqual([
+      { url: "https://averysample.example", status: "NEW", week: "2026-W39", last_card_id: cardId },
       { url: "https://linkedin.com/in/jordan-example", status: "NEW", week: "2026-W39", last_card_id: cardId },
+      { url: "https://notsenior.example", status: "PASSED", week: "2026-W39", last_card_id: null },
       { url: "https://samsample.example", status: "NEW", week: "2026-W39", last_card_id: cardId },
     ]);
 
@@ -406,6 +414,8 @@ describe("the weekly card on Walker's desk", () => {
     const withContact = JSON.stringify({
       results: [
         { name: "With Contact", title: "Executive Producer", company: "Freelance", city: "Denver, CO", profile_url: "https://withcontact.example/x", why: "Site lists sponsorship deals sold for three festivals.", opening_line: "hi", fit: 8, email: "with@contact.example", contact_url: "https://withcontact.example/about" },
+        { name: "Beside One", title: "Executive Producer", company: "Freelance", city: "Denver, CO", profile_url: "https://besideone.example", why: "Site lists sponsorship deals sold for a conference.", opening_line: "hi", fit: 7 },
+        { name: "Beside Two", title: "Executive Producer", company: "Freelance", city: "Denver, CO", profile_url: "https://besidetwo.example", why: "Site lists brand partnerships sold for a tour.", opening_line: "hi", fit: 7 },
       ],
     });
     const out = await sweepOnce(env, new Date("2026-11-09T14:05:00.000Z"), {
@@ -458,10 +468,12 @@ describe("the weekly card on Walker's desk", () => {
       "UPDATE productions_candidate SET status = 'CONTACTED', status_changed_at = '2026-10-13T00:00:00.000Z', status_changed_by = 'fu_scooter_taylor' WHERE url = 'https://linkedin.com/in/jordan-example'",
     ).run();
 
-    // The next week's search finds the same two plus a new one.
+    // The next week's search finds the same three plus three new ones.
     const nextWeek = JSON.stringify({ results: [
       ...(JSON.parse(searchJson) as { results: unknown[] }).results,
       { name: "New Person", title: "Senior Producer, Experiential (freelance)", company: "Independent", city: "Atlanta, GA", profile_url: "https://newperson.example", why: "Site lists sponsorship deals sold for three festivals.", opening_line: "Your Essence Fest build.", fit: 7 },
+      { name: "Newer Person", title: "Executive Producer (freelance)", company: "Independent", city: "Atlanta, GA", profile_url: "https://newerperson.example", why: "Site lists brand partnerships sold for a tour.", opening_line: "Your tour build.", fit: 6 },
+      { name: "Newest Person", title: "Executive Producer (freelance)", company: "Independent", city: "Atlanta, GA", profile_url: "https://newestperson.example", why: "Site lists sponsorships sold for a summit.", opening_line: "Your summit build.", fit: 6 },
     ] });
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE kind = 'PRODUCTIONS_HIRE_SEARCH'").run();
     const opened = await openHireSearchCard(env, new Date("2026-10-19T14:00:00.000Z"));
@@ -471,7 +483,7 @@ describe("the weekly card on Walker's desk", () => {
     expect(out.card?.id).toBe(opened.cardId);
     expect(out.outcome, out.summary).toBe("DONE");
     const dlv = await env.WP_OS_DB.prepare("SELECT body, title FROM deliverable WHERE source_id = ?1").bind(opened.cardId).first<{ body: string; title: string }>();
-    expect(dlv!.title).toMatch(/^Hire search 2026-W43: 1 candidate\(s\)/);
+    expect(dlv!.title).toMatch(/^Hire search 2026-W43: 3 candidate\(s\)/);
     expect(dlv!.body).toMatch(/1\. New Person/);
     expect(dlv!.body).not.toMatch(/\d\. Jordan Example/);
     expect(dlv!.body).not.toMatch(/\d\. Sam Sample/);
@@ -484,8 +496,13 @@ describe("the weekly card on Walker's desk", () => {
     expect(dlv!.body).not.toMatch(/already acted on|\(contacted\)|\(passed\)|marked Contacted|marked Passed/i);
     const rows = (await env.WP_OS_DB.prepare("SELECT name, status, week FROM productions_candidate ORDER BY name").all<{ name: string; status: string; week: string }>()).results!;
     expect(rows).toEqual([
+      { name: "Avery Sample", status: "SEEN", week: "2026-W43" },
       { name: "Jordan Example", status: "CONTACTED", week: "2026-W42" },
       { name: "New Person", status: "NEW", week: "2026-W43" },
+      { name: "Newer Person", status: "NEW", week: "2026-W43" },
+      { name: "Newest Person", status: "NEW", week: "2026-W43" },
+      // The judge's reject is on file from the first week it was turned down, so it can never return as new.
+      { name: "Not Senior", status: "PASSED", week: "2026-W42" },
       { name: "Sam Sample", status: "SEEN", week: "2026-W43" },
     ]);
 
@@ -501,7 +518,7 @@ describe("the weekly card on Walker's desk", () => {
     expect(again.summary).toMatch(/is blocked: Waiting on: /);
     const row = await env.WP_OS_DB.prepare("SELECT next_action, block_who FROM work_card WHERE id = ?1").bind(third.cardId).first<{ next_action: string; block_who: string }>();
     expect(row!.next_action).toMatch(/ Why: Everything Walker found this time you have already seen/);
-    expect(row!.next_action).toMatch(/every name this week was already in an earlier note \(2 of them\)/i);
+    expect(row!.next_action).toMatch(/every name this week was already in an earlier note \(5 of them\)/i);
     expect(row!.next_action, "even the block asks for nothing but a reply").toMatch(/[Rr]eply to last week's note in plain words/);
     expect(row!.block_who, "Walker's Productions work is Scooter's desk").toBe("SCOOTER");
     const mails = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE object_id = ?1 AND event_type LIKE 'deliverable.%'").bind(third.cardId).first<{ n: number }>();
@@ -522,7 +539,7 @@ describe("the weekly card on Walker's desk", () => {
     });
     expect(out.card?.id).toBe(opened.cardId);
     expect(out.outcome).toBe("BLOCKED");
-    expect(prompts).toHaveLength(2);
+    expect(prompts, "one go per route").toHaveLength(HIRE_SEARCH_ROUTES);
     expect(prompts[1]).toMatch(/Your previous answer was discarded: every page was dead or unreadable: Nobody/);
     expect(out.summary).toMatch(/is blocked: Waiting on: /);
     const stoppedRow = await env.WP_OS_DB.prepare("SELECT next_action FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ next_action: string }>();
@@ -538,7 +555,7 @@ describe("the candidates behind a note are information, not a queue", () => {
     const mine = await handleRequest(req(`/api/productions/candidates?deliverable=${dlv!.id}`, SCOOTER), env);
     expect(mine.status).toBe(200);
     const list = (await mine.json()) as { candidates: Array<{ name: string; status: string }> };
-    expect(list.candidates.map((c) => c.name).sort()).toEqual(["New Person", "Sam Sample"]);
+    expect(list.candidates.map((c) => c.name).sort()).toEqual(["Avery Sample", "New Person", "Newer Person", "Newest Person", "Sam Sample"]);
 
     const hers = await handleRequest(req(`/api/productions/candidates?deliverable=${dlv!.id}`, SEQUOIA), env);
     expect(hers.status, "the list is Scooter's; for anyone else it does not exist").toBe(404);
@@ -623,7 +640,7 @@ describe("the finished email names what is still missing (0237, one list for eve
     await env.WP_OS_DB.prepare("UPDATE work_card SET preview_first = 1, missing_materials_json = ?2 WHERE id = ?1").bind(cardId, JSON.stringify([{ item: "the producer role's day rate", where: "the opening line to each candidate" }])).run();
     const card = (await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(cardId).first())! as unknown as Parameters<typeof runHireSearchCard>[1];
     // New people, so the week has something fresh to send (a week of repeats is BLOCKED, by design).
-    const fresh = searchJson.replace(/Jordan Example/g, "Riley Fresh").replace(/jordan-example|agency\.example\/team\/jordan/g, "riley-fresh").replace(/Sam Sample/g, "Casey Fresh").replace(/samsample/g, "caseyfresh");
+    const fresh = searchJson.replace(/Jordan Example/g, "Riley Fresh").replace(/jordan-example|agency\.example\/team\/jordan/g, "riley-fresh").replace(/Sam Sample/g, "Casey Fresh").replace(/samsample/g, "caseyfresh").replace(/Avery Sample/g, "Devon Fresh").replace(/averysample/g, "devonfresh");
     const out = await runHireSearchCard(env, card, { search: async () => ({ ok: true, text: fresh, detail: "ok" }), judge, urlStatus: statusOf, now: new Date("2027-03-01T14:05:00.000Z") });
     expect(out.finished, out.detail).toBe(true);
     const held = await env.WP_OS_DB.prepare("SELECT body_text FROM preview_approval WHERE work_card_id = ?1").bind(cardId).first<{ body_text: string }>();
@@ -688,5 +705,178 @@ describe("the note reaches his inbox or the card says it did not", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("the floor: a shortlist, or the nearest misses by that name (owner, 13 Nov 2026)", () => {
+  const person = (n: number, over: Partial<HireCandidate>): HireCandidate => ({
+    name: `Person ${n}`, title: "Freelance Senior Experiential Producer", company: "Freelance", city: "Exampleville, United States",
+    profileUrl: `https://person${n}.example`, evidenceUrl: `https://person${n}.example/about`, why: "", openingLine: "", fit: 0, email: null, contactUrl: null, profileCheck: "live", ...over,
+  });
+  // 2026-W46 as it was delivered, names, employers and addresses replaced: six kept at fit 4 to 5, each by a judge whose
+  // own reason said the selling was not on any page.
+  const W46 = [
+    person(1, { fit: 5, why: "A trade profile shows he freelanced six years before founding his own shop and still freelances for three consumer brands.", judgeReason: "Kept because Scooter approved the shortlist as it stands. He freelances for three brands, all backed by a trade profile. Gaps: no page shows sponsorship sales, the profile link is his company site, and he is partly an owner selling his platform." }),
+    person(2, { fit: 5, why: "Her own site says independent senior producer, ten years across commercial and experiential production.", judgeReason: "Kept because Scooter approved the shortlist. Gap: nothing shows brand-deal or sponsorship sales, so she is a proven deliverer but not a proven deal-bringer.", email: "hello@person2.example", contactUrl: "https://person2.example/contact" }),
+    person(3, { fit: 5, why: "Her own site says freelance, contract and fractional, with multi-million-dollar programmes for three technology companies.", judgeReason: "Kept because Scooter approved the shortlist. Gaps: her years of experience are not stated and nothing shows sponsorship sales.", email: "hello@person3.example", contactUrl: "https://person3.example/contact" }),
+    person(4, { fit: 4, why: "Her portfolio shows 14+ years in experiential marketing and large-scale event production.", judgeReason: "Kept because Scooter approved the shortlist. Gaps: she runs her own shop and does not say she takes freelance work, and nothing shows sponsorship sales." }),
+    person(5, { fit: 4, why: "The About page names her as founder producing branded experiences; a second page offers freelance producing to agencies.", judgeReason: "Kept because Scooter approved the shortlist. Gaps: no brands or agencies are named, nothing shows sales, the profile link is her company site.", email: "hello@person5.example", contactUrl: "https://person5.example/contact" }),
+    person(6, { fit: 4, why: "A directory listing, self-reported, shows 21 years on brand experiences and mobile tours, freelance since 2005.", judgeReason: "Kept because Scooter approved the shortlist. Gaps: all of this is self-reported on a directory listing, nothing shows sponsorship sales." }),
+  ];
+  // The 22 Sep 2026 note Scooter called "overall now this is good", the same way: six at fit 6 to 9, selling on the page.
+  const STANDARD = [
+    person(11, { fit: 9, why: "Her profile headline says senior experiential producer and freelance production, and the page names large-scale brand sponsorship activations and mobile tours." }),
+    person(12, { fit: 8, why: "His headline matches freelance brand-activation production and partnership development; the page says he excels in sponsorship and contract negotiations." }),
+    person(13, { fit: 8, why: "Her headline shows freelance senior experiential production, and the page lists sponsorship and sports activation management." }),
+    person(14, { fit: 8, why: "Her page shows freelance experiential production and names pop-up environments, toured events and sponsorship activation." }),
+    person(15, { fit: 7, why: "Her headline identifies a freelance senior producer for conferences and brand experiences; the page mentions sponsorship programs." }),
+    person(16, { fit: 6, why: "Her page shows freelance event and experiential production with brand partnerships named for two festivals." }),
+  ];
+
+  it("the 2026-W46 note fails it on every count that made it worse; the 22 Sep standard passes it", () => {
+    const w46 = hireFloor(W46);
+    expect(w46.ok).toBe(false);
+    expect(w46.good).toBe(0);
+    expect(w46.misses[0]).toBe(`0 of 6 met the standard; a shortlist needs at least ${HIRE_FLOOR.kept}`);
+    expect(w46.misses.join(" | ")).toMatch(/Person 1: fit 5\/10, below 6; no page shows them selling sponsorships or brand deals; the judge kept them while its own reason says the evidence is missing/);
+    expect(w46.misses).toHaveLength(7);
+    expect(hireFloor(STANDARD)).toEqual({ ok: true, misses: [], good: 6 });
+    // Each rule by itself, on the standard: two people, a low fit, a keep the judge argued against, a repeat, an unsourced address.
+    expect(hireFloor(STANDARD.slice(0, 2)).ok).toBe(false);
+    expect(hireFloor([...STANDARD.slice(0, 3), { ...STANDARD[3]!, fit: 5 }]).misses).toEqual(["Person 14: fit 5/10, below 6"]);
+    expect(hireFloor([...STANDARD.slice(0, 3), { ...STANDARD[3]!, judgeReason: "Strong producer. Gap: no page shows sponsorship sales." }]).ok).toBe(false);
+    expect(hireFloor(STANDARD, new Set([STANDARD[0]!.profileUrl])).misses).toEqual(["Person 11: already shown or turned down in an earlier week"]);
+    expect(hireFloor([...STANDARD.slice(0, 3), { ...STANDARD[3]!, email: "x@person14.example", contactUrl: null }]).ok).toBe(false);
+    expect(hireFloor([...STANDARD.slice(0, 3), { ...STANDARD[3]!, evidenceUrl: null, profileCheck: "refused" }]).ok, "selling claimed with no page that answered").toBe(false);
+  });
+
+  const asJson = (people: readonly HireCandidate[]): string =>
+    JSON.stringify({ results: people.map((c) => ({ name: c.name, title: c.title, company: c.company, city: c.city, profile_url: c.profileUrl, evidence_url: c.evidenceUrl, why: c.why, opening_line: "hi", fit: c.fit })) });
+  /** A judge that keeps everyone at the searcher's fit, with the reason the fixture carries. */
+  const judgeAsWritten = (people: readonly HireCandidate[], seen: string[] = []) => async (_e: unknown, _a: unknown, prompt: string) => {
+    seen.push(prompt);
+    const body = JSON.parse(prompt.slice(prompt.indexOf("CANDIDATES:\n") + "CANDIDATES:\n".length, prompt.lastIndexOf("Return ONLY JSON"))) as Array<{ name: string; fit: number }>;
+    return { ok: true, text: JSON.stringify({ verdicts: body.map((b) => ({ name: b.name, keep: true, fit: b.fit, reason: people.find((p) => p.name === b.name)?.judgeReason ?? "page-backed selling and senior freelance production" })) }), detail: "ok" };
+  };
+  const fresh = async (at: string) => {
+    await env.WP_OS_DB.prepare("DELETE FROM productions_candidate").run();
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE kind = 'PRODUCTIONS_HIRE_SEARCH'").run();
+    return openHireSearchCard(env, new Date(at));
+  };
+  const cardOf = async (id: string) => (await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(id).first<Parameters<typeof runHireSearchCard>[1] & Record<string, unknown>>())!;
+
+  it("a result below the floor goes to the next route; the first that reaches it is the shortlist, and the miss is held against the run that wrote it", async () => {
+    const opened = await fresh("2026-11-17T15:00:00.000Z");
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO ai_run (id, purpose, actor_type, actor_id, sensitivity, privacy_mode, cost_mode, provider_id, model, status, input_hash, trace_id, firm_scope, task_kind)
+       VALUES ('air_floor_1', 'Walker: West Peek Productions hire search', 'SYSTEM', 'work_sweep', 'PUBLIC', 'STANDARD', 'NORMAL', 'prov_free_search', 'free-search/grounded', 'COMPLETED', 'h', 'trc_floor_1', 'west-peek', 'search')`,
+    ).run();
+    const prompts: string[] = [];
+    const answers = [asJson(W46), asJson(STANDARD)];
+    const out = await sweepOnce(env, new Date("2026-11-17T15:05:00.000Z"), {
+      productionsHire: (e, card) => runHireSearchCard(e, card, {
+        search: async (_e, _a, prompt) => { prompts.push(prompt); return { ok: true, text: answers[prompts.length - 1]!, detail: "ok", ...(prompts.length === 1 ? { runId: "air_floor_1" } : {}) }; },
+        judge: judgeAsWritten([...W46, ...STANDARD]),
+        urlStatus: statusOf,
+        now: new Date("2026-11-17T15:05:00.000Z"),
+      }),
+    });
+    expect(out.card?.id).toBe(opened.cardId);
+    expect(out.outcome, out.summary).toBe("DONE");
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toMatch(/Your previous answer was discarded: the result did not reach the standard: 0 of 6 met the standard/);
+    const dlv = await env.WP_OS_DB.prepare("SELECT title, body FROM deliverable WHERE source_id = ?1").bind(opened.cardId).first<{ title: string; body: string }>();
+    expect(dlv!.title).toBe("Hire search 2026-W47: 6 candidate(s) for senior experiential producer, freelance");
+    expect(dlv!.body).toMatch(/1\. Person 11 /);
+    expect(dlv!.body).not.toMatch(/NEAREST MISSES|\d\. Person [1-6] /);
+    // The miss is on the record the router re-ranks from: that route is not asked for this kind of work again today.
+    const held = await env.WP_OS_DB.prepare("SELECT outcome, task_kind FROM model_job_outcome WHERE ai_run_id = 'air_floor_1'").first<{ outcome: string; task_kind: string }>();
+    expect(held).toEqual({ outcome: "REJECTED", task_kind: "search" });
+  });
+
+  it("no route reaches the floor: Scooter gets ONE note that calls itself nearest misses, never a shortlist, and the card stops by name on Sequoia that day", async () => {
+    const opened = await fresh("2026-11-24T15:00:00.000Z");
+    let searches = 0;
+    const out = await sweepOnce(env, new Date("2026-11-24T15:05:00.000Z"), {
+      productionsHire: (e, card) => runHireSearchCard(e, card, {
+        search: async () => ((searches += 1), { ok: true, text: asJson(W46), detail: "ok" }),
+        judge: judgeAsWritten(W46),
+        urlStatus: statusOf,
+        now: new Date("2026-11-24T15:05:00.000Z"),
+      }),
+    });
+    expect(out.card?.id).toBe(opened.cardId);
+    expect(searches, "every route had its go").toBe(HIRE_SEARCH_ROUTES);
+    expect(out.outcome).toBe("BLOCKED");
+    const card = await cardOf(opened.cardId);
+    expect(card).toMatchObject({ state: "BLOCKED", block_reason: "nothing_good_enough_to_send", block_who: "SEQUOIA" });
+    expect(String(card.block_needed)).toMatch(/did not reach its standard on any route \(0 of 6 met the standard; a shortlist needs at least 3\)\. The nearest misses are on Scooter's Home, labelled as that, not a shortlist/);
+    const dlv = await env.WP_OS_DB.prepare("SELECT title, body FROM deliverable WHERE source_id = ?1").bind(opened.cardId).first<{ title: string; body: string }>();
+    expect(dlv!.title).toBe("Hire search 2026-W48: nearest misses (6), not a shortlist, for senior experiential producer, freelance");
+    expect(dlv!.body).toMatch(/did NOT reach the standard, so this is not a shortlist: these 6 are the NEAREST MISSES/);
+    expect(dlv!.body).toMatch(/What was missing:\n- 0 of 6 met the standard/);
+    expect(dlv!.body).toMatch(/═══ 1 · NEAREST MISSES THIS WEEK ═══/);
+    expect(dlv!.body).not.toMatch(/NEW THIS WEEK|new candidate\(s\)/);
+    const mails = (await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_type = 'work_card' AND object_id = ?1 AND event_type LIKE 'deliverable.%'").bind(opened.cardId).all<{ payload_json: string }>()).results!;
+    expect(mails).toHaveLength(1);
+    expect((JSON.parse(mails[0]!.payload_json) as { subject: string }).subject).toBe("Walker: hire search — nearest misses this week, not a shortlist");
+  });
+
+  it("his steer reaches the SEARCH and never the JUDGE; a person the judge turned down is on file and never judged or shown again", async () => {
+    const opened = await fresh("2026-12-01T15:00:00.000Z");
+    const searchPrompts: string[] = [];
+    const judgePrompts: string[] = [];
+    const rejecting = async (_e: unknown, _a: unknown, prompt: string) => {
+      judgePrompts.push(prompt);
+      const body = JSON.parse(prompt.slice(prompt.indexOf("CANDIDATES:\n") + "CANDIDATES:\n".length, prompt.lastIndexOf("Return ONLY JSON"))) as Array<{ name: string; fit: number }>;
+      return { ok: true, text: JSON.stringify({ verdicts: body.map((b) => (b.name === "Person 16" ? { name: b.name, keep: false, fit: 3, reason: "an agency owner selling services" } : { name: b.name, keep: true, fit: b.fit, reason: "page-backed selling" })) }), detail: "ok" };
+    };
+    const run = (at: string, text: string) => async (e: Env, card: Parameters<typeof runHireSearchCard>[1]) =>
+      runHireSearchCard(e, card, {
+        search: async (_e, _a, prompt) => { searchPrompts.push(prompt); return { ok: true, text, detail: "ok" }; },
+        judge: rejecting,
+        urlStatus: statusOf,
+        now: new Date(at),
+        interpret: steersWith("He approves of the shortlist and wants more people with a music background.", "Prefer candidates with a music background; he approved last week's shortlist."),
+      });
+    await env.WP_OS_DB.prepare("UPDATE work_card SET prompt = 'this is good, more music people' WHERE id = ?1").bind(opened.cardId).run();
+    const first = await sweepOnce(env, new Date("2026-12-01T15:05:00.000Z"), { productionsHire: run("2026-12-01T15:05:00.000Z", asJson(STANDARD)) });
+    expect(first.outcome, first.summary).toBe("DONE");
+    expect(searchPrompts[0]).toMatch(/music background/);
+    expect(judgePrompts).toHaveLength(1);
+    expect(judgePrompts[0], "the judge reads the written KEEP/DROP rules and nothing he said").not.toMatch(/music background|approved last week's shortlist/);
+    expect(judgePrompts[0]).toMatch(/KEEP a candidate only if ALL of these hold/);
+    expect(await env.WP_OS_DB.prepare("SELECT status, week FROM productions_candidate WHERE url = 'https://person16.example'").first()).toEqual({ status: "PASSED", week: "2026-W49" });
+
+    // The next week the search returns the reject again beside three new people: not judged, not listed, not new.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE kind = 'PRODUCTIONS_HIRE_SEARCH'").run();
+    const next = await openHireSearchCard(env, new Date("2026-12-08T15:00:00.000Z"));
+    const week2 = [STANDARD[5]!, person(21, { fit: 7, why: "Page names sponsorships sold for a tour." }), person(22, { fit: 7, why: "Page names brand partnerships sold." }), person(23, { fit: 6, why: "Page names sponsorship sales for a summit." })];
+    const second = await sweepOnce(env, new Date("2026-12-08T15:05:00.000Z"), { productionsHire: run("2026-12-08T15:05:00.000Z", asJson(week2)) });
+    expect(second.card?.id).toBe(next.cardId);
+    expect(second.outcome, second.summary).toBe("DONE");
+    expect(judgePrompts[1]).not.toMatch(/Person 16/);
+    const dlv = await env.WP_OS_DB.prepare("SELECT title, body FROM deliverable WHERE source_id = ?1").bind(next.cardId).first<{ title: string; body: string }>();
+    expect(dlv!.title).toMatch(/: 3 candidate\(s\)/);
+    expect(dlv!.body).not.toMatch(/Person 16/);
+  });
+
+  it("a steer that could not be read is a failed go the sweep tries again, never 'the brief is missing' on Scooter (the 2026-W44 card)", async () => {
+    const opened = await fresh("2026-12-15T15:00:00.000Z");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET prompt = 'more music people' WHERE id = ?1").bind(opened.cardId).run();
+    let searches = 0;
+    const out = await runHireSearchCard(env, await cardOf(opened.cardId), {
+      search: async () => ((searches += 1), { ok: true, text: asJson(STANDARD), detail: "ok" }),
+      judge: judgeAsWritten(STANDARD),
+      urlStatus: statusOf,
+      now: new Date("2026-12-15T15:05:00.000Z"),
+      interpret: async () => ({ ok: false, text: "", detail: "provider_failure:subscription_seat_unavailable:the seat was awake but returned nothing within 2 minutes", aiRunId: null, model: null }) as never,
+    });
+    expect(out).toMatchObject({ finished: false, blocked: false });
+    expect(out.detail).toMatch(/could not be read: .*subscription_seat_unavailable/);
+    expect(searches).toBe(0);
+    const card = await cardOf(opened.cardId);
+    expect(card.state).not.toBe("BLOCKED");
+    expect(card.block_reason ?? null).toBeNull();
   });
 });

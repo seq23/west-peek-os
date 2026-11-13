@@ -549,6 +549,15 @@ describe("her route order, as the one table (shared/ai/modelOrder.json through s
     expect(rerankFromLog(chain, key, isFree, old, now, isSeat)).toMatchObject({ chain: ["free/b", "free/c", "codex/seat", "claude/seat", "free/a"], rested: [], behindSeats: ["free/a"] });
     expect(rerankFromLog(chain, key, isFree, [{ lane: "free/a", ok: true, at: ago(26) }, ...old], now, isSeat).chain).toEqual(chain);
     expect(rerankFromLog(["free/a"], key, isFree, old, now, isSeat).chain, "with no seat in the chain it is still tried").toEqual(["free/a"]);
+    // An answer the duty's own floor refused is judged work: ONE is enough to move on for a day, and it is no completion.
+    expect(rerankFromLog(chain, key, isFree, [{ lane: "free/a", ok: false, missedFloor: true, at: ago(1) }], now, isSeat)).toMatchObject({ chain: ["free/b", "free/c", "codex/seat", "claude/seat"], rested: ["free/a"] });
+    expect(rerankFromLog(chain, key, isFree, [{ lane: "free/a", ok: false, missedFloor: true, at: ago(30) }], now, isSeat).chain).toEqual(chain);
+    // Work a partner asked for starts on the route with the best record at this kind; equal records keep the table's
+    // order, so the free lanes lead until something has done better, and then they are the fallback.
+    const record = [{ lane: "claude/seat", ok: true, at: ago(2) }, { lane: "claude/seat", ok: true, at: ago(50) }, { lane: "codex/seat", ok: true, at: ago(26) }, { lane: "free/a", ok: false, at: ago(60) }];
+    expect(rerankFromLog(chain, key, isFree, record, now, isSeat, true).chain).toEqual(["claude/seat", "codex/seat", "free/a", "free/b", "free/c"]);
+    expect(rerankFromLog(chain, key, isFree, record, now, isSeat).chain, "other work keeps the table's order").toEqual(chain);
+    expect(rerankFromLog(chain, key, isFree, [], now, isSeat, true).chain, "no record yet: the table's order").toEqual(chain);
     // Without knowing the seats, the day out simply ends.
     expect(rerankFromLog(chain, key, isFree, twice.map((a) => ({ ...a, at: ago(30) })), now).chain).toEqual(chain);
     // Resting everything would leave nothing: the table's order stands rather than no route at all.
@@ -630,6 +639,28 @@ describe("her route order, as the one table (shared/ai/modelOrder.json through s
     expect(isImportantWork({ publicModelApproved: true, important: true })).toBe(true);
     expect(isImportantWork({ publicModelApproved: true, confidential: true })).toBe(true);
     expect(isImportantWork({ publicModelApproved: true })).toBe(false);
+  });
+});
+
+describe("a floor miss is read back from the record (13 Nov 2026)", () => {
+  it("the lane that completed a run whose answer the duty's floor refused counts as a miss, not a completion; an untouched run still counts", async () => {
+    const { dutyKindAttempts, markFloorMiss } = await import("../src/worker/ai/laneHealth");
+    const at = new Date("2026-11-17T15:05:00.000Z");
+    const run = async (id: string, minutesAgo: number) => {
+      await env.WP_OS_DB.prepare(
+        `INSERT INTO ai_run (id, purpose, actor_type, actor_id, sensitivity, privacy_mode, cost_mode, provider_id, model, status, input_hash, trace_id, firm_scope, created_at, task_kind)
+         VALUES (?1, 'Example duty: a made-up search', 'SYSTEM', 'work_sweep', 'PUBLIC', 'STANDARD', 'NORMAL', 'prov_free_search', 'free-search/grounded', 'COMPLETED', 'h', ?1, 'west-peek', ?2, 'search')`,
+      ).bind(id, new Date(at.getTime() - minutesAgo * 60_000).toISOString()).run();
+      await env.WP_OS_DB.prepare("INSERT INTO ai_run_routing (ai_run_id, attempts_json) VALUES (?1, ?2)")
+        .bind(id, JSON.stringify([{ provider_key: "free_search", model: "free-search/grounded", outcome: "COMPLETED", lane: "free_search/free-search/grounded" }]))
+        .run();
+    };
+    await run("air_fm_old", 20);
+    await run("air_fm_new", 5);
+    expect(await markFloorMiss(env, "air_fm_new")).toBe(true);
+    expect(await markFloorMiss(env, null)).toBe(false);
+    const attempts = await dutyKindAttempts(env, "west-peek", "Example duty: a made-up search", at);
+    expect(attempts.map((a) => [a.ok, a.missedFloor === true])).toEqual([[false, true], [true, false]]);
   });
 });
 

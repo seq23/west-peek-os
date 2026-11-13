@@ -149,6 +149,8 @@ export interface LaneAttempt {
   ok: boolean;
   /** ISO instant of the run the attempt belongs to. */
   at: string;
+  /** The lane answered, and the duty's own floor refused the answer (`markFloorMiss` in worker/ai/laneHealth.ts). */
+  missedFloor?: boolean;
 }
 export const TWICE_FAILED_REST_MS = 24 * 60 * 60 * 1000;
 
@@ -161,6 +163,12 @@ export function rerankFromLog<T>(
   now: Date,
   /** Which lanes are her seats. Without it no lane is moved behind them. */
   isSeat: (lane: T) => boolean = () => false,
+  /**
+   * WORK A PARTNER ASKED FOR STARTS ON THE ROUTE WITH THE BEST RECORD (owner, 13 Nov 2026). The free lanes and the
+   * seats are put in order of how many times each COMPLETED this kind of work with an answer its floor accepted;
+   * equal records keep the table's order, so a free lane still leads until something has done better than it.
+   */
+  bestFirst = false,
 ): { chain: T[]; rested: string[]; remembered: string | null; behindSeats: string[] } {
   const byLane = new Map<string, LaneAttempt[]>();
   for (const a of attempts) byLane.set(a.lane, [...(byLane.get(a.lane) ?? []), a]);
@@ -168,6 +176,8 @@ export function rerankFromLog<T>(
   const failedLastTwo = new Set<string>();
   for (const [lane, list] of byLane) {
     const [last, before] = list;
+    // An answer the duty's own floor refused is judged work, not a blip: one is enough to move on for a day.
+    if (last?.missedFloor && now.getTime() - Date.parse(last.at) < TWICE_FAILED_REST_MS) restedSet.add(lane);
     if (!(last && before && !last.ok && !before.ok)) continue;
     if (now.getTime() - Date.parse(last.at) < TWICE_FAILED_REST_MS) restedSet.add(lane);
     else failedLastTwo.add(lane);
@@ -187,7 +197,17 @@ export function rerankFromLog<T>(
   // A free lane that failed its last two tries does not lead: it goes to just behind the last seat, when there is one.
   const lastSeat = ordered.reduce((at, l, i) => (isSeat(l) ? i : at), -1);
   const moved = ordered.filter((l, i) => isFree(l) && failedLastTwo.has(keyOf(l)) && i < lastSeat);
-  const out = moved.length === 0 ? ordered : [...ordered.slice(0, lastSeat + 1).filter((l) => !moved.includes(l)), ...moved, ...ordered.slice(lastSeat + 1)];
+  let out = moved.length === 0 ? ordered : [...ordered.slice(0, lastSeat + 1).filter((l) => !moved.includes(l)), ...moved, ...ordered.slice(lastSeat + 1)];
+  if (bestFirst) {
+    const tier = (l: T): boolean => isFree(l) || isSeat(l);
+    const ranked = out
+      .map((l, i) => ({ l, i }))
+      .filter((x) => tier(x.l))
+      .sort((a, b) => completed(keyOf(b.l)) - completed(keyOf(a.l)) || a.i - b.i)
+      .map((x) => x.l);
+    let at = 0;
+    out = out.map((l) => (tier(l) ? ranked[at++]! : l));
+  }
   return { chain: out, rested: [...restedSet].filter((k) => chain.some((l) => keyOf(l) === k)), remembered, behindSeats: moved.map(keyOf) };
 }
 
