@@ -112,7 +112,8 @@ describe("(a) a reply that stopped at its cap is not a completion", () => {
     const r = await routingFor(run.id);
     expect(r.fallback_used).toBe(1);
     const first = r.attempts[0]!;
-    expect(first.model).toContain(":free");
+    // Gemini free is the first free lane asked for routine work (6 Nov 2026).
+    expect(first.provider_key).toBe("google_free");
     expect(first.outcome).toBe("FAILED_OVER");
     expect(first.detail).toMatch(/^TRUNCATED: truncated_reply:the lane stopped at its output cap \(256 tokens of \d+ allowed\)/);
     expect(r.attempts.at(-1)!.outcome).toBe("COMPLETED");
@@ -154,9 +155,15 @@ describe("(a) a reply that stopped at its cap is not a completion", () => {
 describe("(b) the cap on the wire is the caller's ask, widened — never a platform default", () => {
   it("the free lane is sent max_tokens derived from expectedOutputTokens, well above 256", async () => {
     let sent: number | undefined;
-    const w = wire((init, host) => { if (host.includes("openrouter")) sent = (JSON.parse(String(init.body)) as { max_tokens?: number }).max_tokens; return shaped(host, GOOD); });
+    // Gemini free is asked first and is out of quota here, so the OpenRouter free lane carries the call and its wire is read.
+    const w = wire((init, host) => {
+      if (host.includes("googleapis")) return new Response(JSON.stringify({ error: { message: "rate limited" } }), { status: 429 });
+      sent = (JSON.parse(String(init.body)) as { max_tokens?: number }).max_tokens;
+      return shaped(host, GOOD);
+    });
     const { run } = await runAi(env(), judgement({ budgetContext: { judgement: true, expectedOutputTokens: 24_000 } }), { fetchImpl: w.fetchImpl });
     expect(run.status).toBe("COMPLETED");
+    expect(run.model, "the OpenRouter free lane answered").toContain(":free");
     expect(sent).toBe(wireOutputCeiling(24_000));
     expect(sent!).toBeGreaterThan(256);
     expect(sent!).toBeGreaterThanOrEqual(24_000);
@@ -212,7 +219,7 @@ describe("(d) a rung that never answers is abandoned on its deadline and the wal
     expect(run.status).toBe("COMPLETED");
     expect(Date.now() - started).toBeLessThan(10_000);
     const r = await routingFor(run.id);
-    expect(r.attempts[0]!.model).toContain(":free");
+    expect(r.attempts[0]!.provider_key).toBe("google_free");
     expect(r.attempts[0]!.outcome).toBe("FAILED_OVER");
     expect(r.attempts[0]!.detail).toMatch(/^TIMEOUT_OR_NETWORK/);
     expect(r.attempts.at(-1)!.outcome).toBe("COMPLETED");

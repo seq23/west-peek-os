@@ -26,6 +26,9 @@ import { firmBudgetStates, FIRM_BUDGET_ALERT_USD } from "../src/worker/ai/spend"
 let t: TestDb;
 const MP_ACTOR: Actor = { type: "HUMAN", firmUserId: "fu_scooter_taylor", roles: ["MANAGING_PARTNER"], firmScopes: ["west-peek"] };
 
+const OK_GEMINI_SHAPE = (text: string) =>
+  new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: text }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 10 } }), { status: 200, headers: { "content-type": "application/json" } });
+
 const OK_OPENAI_SHAPE = (text: string) =>
   new Response(JSON.stringify({ choices: [{ message: { content: text } }], usage: { prompt_tokens: 10, completion_tokens: 20 } }), {
     status: 200,
@@ -192,7 +195,9 @@ describe("CHEAPO must not break a live search — the reason the classification 
 
 describe("free frontier capacity carries the important, public-facing work", () => {
   it("tries the free lane first and completes there, spending nothing", async () => {
+    // Routine work asks Gemini free first, then OpenRouter free (6 Nov 2026; MODEL_ORDER in shared/ai/seatOrder.ts).
     const { fetchImpl, seen } = hostRouter({
+      "generativelanguage.googleapis.com": () => OK_GEMINI_SHAPE("the packet, written free"),
       "openrouter.ai": () => OK_OPENAI_SHAPE("the packet, written free"),
     });
     const { run } = await runAi(
@@ -207,8 +212,8 @@ describe("free frontier capacity carries the important, public-facing work", () 
       { fetchImpl },
     );
     expect(run.status).toBe("COMPLETED");
-    expect(run.model).toContain(":free");
-    expect(seen).toContain("openrouter.ai");
+    expect(seen, "Gemini free answered first, and nothing else was asked").toEqual(["generativelanguage.googleapis.com"]);
+    expect((await routingFor(run.id)).attempts.find((a) => a.outcome === "COMPLETED")?.provider_key).toBe("google_free");
     const usage = JSON.parse(run.actual_usage_json!) as { cost_usd: number };
     // Free, and priced as free — the fallback carries its own rates now, so a run is never billed
     // at the rate of a model it did not use.
@@ -238,10 +243,14 @@ describe("free frontier capacity carries the important, public-facing work", () 
     const routing = await routingFor(run.id);
     // QUOTA EXHAUSTION IS VISIBLE, NOT SILENT: "we started paying at 11am on the 9th" is a query.
     expect(routing.fallback_used).toBe(1);
-    const handover = routing.attempts.find((a) => a.outcome === "FAILED_OVER")!;
-    expect(handover.model).toContain(":free");
-    expect(handover.detail).toContain("RATE_LIMITED");
-    expect(routing.attempts.some((a) => a.outcome === "COMPLETED")).toBe(true);
+    const handovers = routing.attempts.filter((a) => a.outcome === "FAILED_OVER");
+    // Both free lanes were asked, Gemini free first, and each handover says why.
+    const lanesInOrder = handovers.map((a) => a.provider_key).filter((k, i, all) => k !== all[i - 1]);
+    expect(lanesInOrder.slice(0, 2)).toEqual(["google_free", "openrouter_free"]);
+    for (const handover of handovers.filter((a) => a.provider_key === "google_free" || a.provider_key === "openrouter_free")) expect(handover.detail).toContain("RATE_LIMITED");
+    const completed = routing.attempts.find((a) => a.outcome === "COMPLETED");
+    expect(completed, "the paid model answered").toBeTruthy();
+    expect(["google_free", "openrouter_free"]).not.toContain(completed!.provider_key);
   });
 
   it("a call pinned to one model (the morning brief) runs on that model and nothing else, and the run says so", async () => {
@@ -326,7 +335,10 @@ describe("the hard line: LP names and deal terms never reach a lane that may tra
   });
 
   it("and the NEGATIVE PROOF: the identical call WITHOUT the flag does reach a free lane", async () => {
-    const { fetchImpl } = hostRouter({ "openrouter.ai": () => OK_OPENAI_SHAPE("the report") });
+    const { fetchImpl } = hostRouter({
+      "generativelanguage.googleapis.com": () => OK_GEMINI_SHAPE("the report"),
+      "openrouter.ai": () => OK_OPENAI_SHAPE("the report"),
+    });
     const { run } = await runAi(
       env(),
       {
@@ -340,7 +352,8 @@ describe("the hard line: LP names and deal terms never reach a lane that may tra
     );
     // If this did not reach the free lane, the assertion above was passing for some other reason
     // and proves nothing about the flag.
-    expect(run.model).toContain(":free");
+    expect(run.status).toBe("COMPLETED");
+    expect((await routingFor(run.id)).attempts.find((a) => a.outcome === "COMPLETED")?.provider_key).toBe("google_free");
   });
 
   it("refuses at the EGRESS GATE too, on the label alone, with no flag involved", async () => {
