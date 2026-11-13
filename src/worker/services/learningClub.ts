@@ -25,6 +25,7 @@ const dripRules = async (env: Env, firmScope: string): Promise<Array<{ code: str
   (await env.WP_OS_DB.prepare("SELECT code FROM tlc_wynn_rule WHERE active = 1 AND firm_scope = ?1").bind(firmScope).all<{ code: string | null }>().catch(() => ({ results: [] as Array<{ code: string | null }> }))).results ?? [];
 import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
 import { TLC_BRAND_SALES_JOB } from "../../shared/policy/outsideEmail";
+import { BrandThreadError, followUpThread, type BrandThreading, type ThreadFinder } from "./tlcBrandThread";
 import { outsideEmailAllowed } from "./outsideEmail";
 import { addressReadOffPage, approvedDayZeroFor, handleMustPitch, liveMustPitch, ownerContactedBrands, mustPitchToSearch, OWNER_SUPPLIED_SOURCE, queueDeal, type MustPitchFinding } from "./tlcMustPitch";
 import { brandKey } from "../../shared/tlc/mustPitch";
@@ -729,6 +730,8 @@ export interface DripResult {
   addressWaiting?: number;
   /** Email 2s held because the brand's samples PDF could not be made yet (SAMPLES_PDF_NOT_READY); tried again each pass. */
   samplesHeld?: string[];
+  /** Follow-ups not filed because their conversation could not be found in her mailbox (NAMED STOP, nothing sent). */
+  threadHeld?: string[];
   /** Email 1s filed while the samples PDF could not be made yet (never held for it; made again on the next pass). */
   samplesPending?: string[];
   /** Follow-ups (email 2, with the samples PDF) queued to go on their own, decided by the drip-step-2 policy. */
@@ -769,16 +772,16 @@ export async function brandGateFor(env: Env): Promise<{ open: boolean; reasons: 
   return brandSendGate(await tlcSettings(env), await tlcOutside(env), await contentHashes(env));
 }
 
-export async function fileDraft(env: Env, deal: Pick<TlcDealRow, "id" | "brand" | "contact_email" | "drip_step">, mail: { subject: string; text: string }, firmScope = "west-peek", redraftNote: string | null = null, attachments: readonly EmailAttachment[] = []): Promise<string> {
+export async function fileDraft(env: Env, deal: Pick<TlcDealRow, "id" | "brand" | "contact_email" | "drip_step">, mail: { subject: string; text: string }, firmScope = "west-peek", redraftNote: string | null = null, attachments: readonly EmailAttachment[] = [], finder?: ThreadFinder): Promise<string> {
   const wynn = actorFor(WYNN, firmScope);
   // Every brand email ends with the mailing-address footer (owner, 1 Nov 2026): filed, previewed and sent with it.
   mail = { ...mail, text: withBrandFooter(mail.text) };
-  let threading: { gmail_thread_id: string; in_reply_to: string } | undefined;
+  let threading: BrandThreading | undefined;
   if (deal.drip_step > 0) {
     // A deal is the sequence boundary. Match the actual destination too: a changed contact must
-    // never inherit another person's conversation. Old sends have no metadata and still go out.
+    // never inherit another person's conversation.
     const previous = await env.WP_OS_DB.prepare(
-      `SELECT r.gmail_thread_id, r.rfc_message_id,
+      `SELECT r.gmail_message_id, r.gmail_thread_id, r.rfc_message_id,
               (SELECT subject FROM tlc_drip_message WHERE deal_id = m.deal_id AND step = 0 AND state = 'SENT') AS original_subject
          FROM tlc_drip_message m
          JOIN tlc_deal d ON d.id = m.deal_id
@@ -786,17 +789,21 @@ export async function fileDraft(env: Env, deal: Pick<TlcDealRow, "id" | "brand" 
         WHERE m.deal_id = ?1 AND m.step < ?2 AND m.state = 'SENT' AND d.firm_scope = ?3
           AND (r.id IS NULL OR lower(trim(r.destination)) = lower(trim(?4)))
         ORDER BY m.step DESC LIMIT 1`,
-    ).bind(deal.id, deal.drip_step, firmScope, deal.contact_email).first<{ gmail_thread_id: string | null; rfc_message_id: string | null; original_subject: string | null }>();
-    if (previous?.gmail_thread_id && previous.rfc_message_id && previous.original_subject) {
-      threading = { gmail_thread_id: previous.gmail_thread_id, in_reply_to: previous.rfc_message_id.replace(/^<|>$/g, "") };
-      mail = { ...mail, subject: `Re: ${previous.original_subject.replace(/^(?:Re:\s*)+/i, "")}` };
-    } else {
+    ).bind(deal.id, deal.drip_step, firmScope, deal.contact_email).first<{ gmail_message_id: string | null; gmail_thread_id: string | null; rfc_message_id: string | null; original_subject: string | null }>();
+    // WYNN NEVER DROPS THE THREAD (owner, 13 Nov 2026; services/tlcBrandThread.ts): a follow-up is a reply on the
+    // conversation its first email started. When nothing says where that is, it is not filed and nothing goes out.
+    const found = await followUpThread(env, deal.contact_email, previous, finder);
+    const original = previous?.original_subject ?? found?.subject ?? null;
+    if (!found || !original) {
       await appendEvent(env, {
-        eventType: "tlc.drip_thread_fallback", actorType: "ai_employee", actorId: WYNN,
+        eventType: "tlc.drip_thread_not_found", actorType: "ai_employee", actorId: WYNN,
         objectType: "tlc_deal", objectId: deal.id, firmScope,
-        payload: { step: deal.drip_step, reason: "previous_send_missing_thread_metadata" },
+        payload: { step: deal.drip_step, reason: "no_conversation_to_reply_on" },
       });
+      throw new BrandThreadError("this follow-up's first email cannot be found in her mailbox, so there is no conversation to reply on");
     }
+    threading = { gmail_thread_id: found.gmail_thread_id, in_reply_to: found.in_reply_to, references: found.references };
+    mail = { ...mail, subject: `Re: ${original.replace(/^(?:Re:\s*)+/i, "")}` };
   }
   const requestId = `eer_${crypto.randomUUID()}`;
   await env.WP_OS_DB.prepare(
@@ -1160,7 +1167,21 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
       result.samplesHeld = [...(result.samplesHeld ?? []), brandDisplayName(deal.brand)];
       continue;
     }
-    const cardId = await fileDraft(env, deal, toFile, firmScope, null, deal.drip_step === 1 && samples.ok ? [samples.attachment] : []);
+    let cardId: string;
+    try {
+      cardId = await fileDraft(env, deal, toFile, firmScope, null, deal.drip_step === 1 && samples.ok ? [samples.attachment] : [], replyDeps.thread);
+    } catch (err) {
+      if (!(err instanceof BrandThreadError)) throw err;
+      // The follow-up is HELD with the named stop (the drip page and the job summary show it); tried again each pass.
+      await env.WP_OS_DB.prepare(
+        `INSERT INTO tlc_drip_message (id, deal_id, step, subject, body, state, held_reason) VALUES (?1, ?2, ?3, ?4, ?5, 'HELD', ?6)
+         ON CONFLICT (deal_id, step) DO UPDATE SET subject = excluded.subject, body = excluded.body, held_reason = excluded.held_reason
+         WHERE tlc_drip_message.state IN ('HELD','FAILED')`,
+      ).bind(`tdm_${crypto.randomUUID()}`, deal.id, deal.drip_step, toFile.subject, toFile.text, err.message.slice(0, 300)).run();
+      result.held += 1;
+      result.threadHeld = [...(result.threadHeld ?? []), brandDisplayName(deal.brand)];
+      continue;
+    }
     if (deal.drip_step >= 1) {
       await approveFollowUpByPolicy(env, cardId, firmScope);
       result.followUpsQueued = (result.followUpsQueued ?? 0) + 1;

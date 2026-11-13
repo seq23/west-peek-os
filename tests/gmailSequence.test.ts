@@ -5,6 +5,7 @@ import { approvedFor, fileDraft } from "../src/worker/services/learningClub";
 import { executeExternalEffect } from "../src/worker/effects/executor";
 import type { Actor } from "../src/worker/services/authorize";
 import type { Env } from "../src/worker/env";
+import type { ThreadFinder } from "../src/worker/services/tlcBrandThread";
 
 let t: TestDb;
 let env: Env;
@@ -42,8 +43,8 @@ async function deal(id: string, email = "hello@fixture.example") {
   return { id, brand: "Fixture Co", contact_email: email, drip_step: 0 };
 }
 
-async function send(d: Awaited<ReturnType<typeof deal>>, subject: string) {
-  const card = await fileDraft(env, d, { subject, text: "Fixture message." });
+async function send(d: Awaited<ReturnType<typeof deal>>, subject: string, finder?: ThreadFinder) {
+  const card = await fileDraft(env, d, { subject, text: "Fixture message." }, "west-peek", null, [], finder);
   // Local receipt fixture only. No approval API or live transport is called.
   await t.db.prepare("UPDATE approval_card SET state = 'approved', decided_by = 'fu_sequoia_taylor' WHERE id = ?1").bind(card).run();
   const request = (await t.db.prepare("SELECT object_id FROM approval_card WHERE id = ?1").bind(card).first<{ object_id: string }>())!;
@@ -77,39 +78,67 @@ describe("Gmail sequence threading", () => {
     }
   });
 
-  it("sends an older sequence without thread data and records why it fell back", async () => {
+  /*
+   * WYNN NEVER DROPS THE THREAD (owner, 13 Nov 2026: "the pinecone latest email did not go in the thread it should
+   * have … never drop the thread!!!"). A follow-up is a reply on its first email's conversation or it is not sent.
+   * In these tests her mailbox cannot be read (the transport stub refuses every read) unless a finder is passed.
+   */
+  const stopped = async (d: Awaited<ReturnType<typeof deal>>, subject: string) => {
+    await expect(send(d, subject)).rejects.toThrow("NAMED STOP [TLC_BRAND_THREAD_NOT_FOUND]: nothing sent");
+    expect(await t.db.prepare("SELECT COUNT(*) AS n FROM tlc_drip_message WHERE deal_id = ?1 AND step = ?2").bind(d.id, d.drip_step).first<{ n: number }>()).toEqual({ n: 0 });
+  };
+
+  it("an older sequence with no thread data and nothing in her mailbox: the follow-up is NOT sent, and the stop is recorded", async () => {
     const d = await deal("thread-legacy");
     await t.db.prepare("INSERT INTO tlc_drip_message (id, deal_id, step, subject, body, state) VALUES ('legacy-message', ?1, 0, 'Old invitation', 'Fixture', 'SENT')").bind(d.id).run();
-    await send({ ...d, drip_step: 1 }, "Today's subject");
-    expect(sent).toHaveLength(1);
-    expect(sent[0]!.threadId).toBeUndefined();
-    expect(header(sent[0]!.raw, "In-Reply-To")).toBeUndefined();
-    expect(header(sent[0]!.raw, "References")).toBeUndefined();
-    expect(header(sent[0]!.raw, "Subject")).toBe("Today's subject");
-    const event = await t.db.prepare("SELECT payload_json FROM event_record WHERE event_type = 'tlc.drip_thread_fallback' AND object_id = ?1").bind(d.id).first<{ payload_json: string }>();
-    expect(JSON.parse(event?.payload_json ?? "{}")).toEqual({ step: 1, reason: "previous_send_missing_thread_metadata" });
+    await stopped({ ...d, drip_step: 1 }, "Today's subject");
+    expect(sent).toHaveLength(0);
+    const event = await t.db.prepare("SELECT payload_json FROM event_record WHERE event_type = 'tlc.drip_thread_not_found' AND object_id = ?1").bind(d.id).first<{ payload_json: string }>();
+    expect(JSON.parse(event?.payload_json ?? "{}")).toEqual({ step: 1, reason: "no_conversation_to_reply_on" });
   });
 
-  it("never borrows a thread from another sequence or a different recipient", async () => {
+  it("never borrows a thread from another sequence or a different recipient: neither follow-up is sent", async () => {
     const d = await deal("thread-recipient");
     await send(d, "Fixture invitation");
-    await send({ ...d, drip_step: 1, contact_email: "other@fixture.example" }, "Different recipient");
-    await send({ ...await deal("thread-other-sequence"), drip_step: 1 }, "Different sequence");
-    for (const message of sent.slice(1)) {
-      expect(message.threadId).toBeUndefined();
-      expect(header(message.raw, "In-Reply-To")).toBeUndefined();
-    }
+    await stopped({ ...d, drip_step: 1, contact_email: "other@fixture.example" }, "Different recipient");
+    await stopped({ ...await deal("thread-other-sequence"), drip_step: 1 }, "Different sequence");
+    expect(sent).toHaveLength(1);
   });
 
-  it.each(["gmail_thread_id", "rfc_message_id"])("falls back when the previous send is missing %s", async (column) => {
+  it.each(["gmail_thread_id", "rfc_message_id"])("the previous send is missing %s and her mailbox cannot be read: the follow-up is NOT sent", async (column) => {
     const d = await deal(`thread-missing-${column}`);
     const first = await send(d, "Fixture invitation");
     // Only local fixture rows are changed. The column name is one of the two literals above.
     await t.db.prepare(`UPDATE external_effect_request SET ${column} = NULL WHERE id = ?1`).bind(first.request.id).run();
-    await send({ ...d, drip_step: 1 }, "Fallback invitation");
-    expect(sent[1]!.threadId).toBeUndefined();
-    expect(header(sent[1]!.raw, "In-Reply-To")).toBeUndefined();
-    expect(header(sent[1]!.raw, "Subject")).toBe("Fallback invitation");
-    expect((await t.db.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'tlc.drip_thread_fallback' AND object_id = ?1").bind(d.id).first<{ n: number }>())?.n).toBe(1);
+    await stopped({ ...d, drip_step: 1 }, "Fallback invitation");
+    expect(sent).toHaveLength(1);
+  });
+
+  it("answers the Message-ID Gmail really gave the first email (Gmail replaces ours), on its thread, with the chain it references", async () => {
+    const d = await deal("thread-real-id");
+    await send(d, "Fixture invitation");
+    const asked: unknown[] = [];
+    const finder: ThreadFinder = async (_env, where) => { asked.push(where); return { threadId: "thread-1", messageId: "CAreal123@mail.gmail.example", references: ["CAolder@mail.gmail.example"], subject: "Fixture invitation" }; };
+    await send({ ...d, drip_step: 1 }, "A different draft subject", finder);
+    expect(asked).toEqual([{ id: "gmail-1" }]);
+    expect(sent[1]!.threadId).toBe("thread-1");
+    expect(header(sent[1]!.raw, "In-Reply-To")).toBe("<CAreal123@mail.gmail.example>");
+    expect(header(sent[1]!.raw, "References")).toBe("<CAolder@mail.gmail.example> <CAreal123@mail.gmail.example>");
+    expect(header(sent[1]!.raw, "Subject")).toBe("Re: Fixture invitation");
+  });
+
+  it("a first email she wrote herself (no send of ours on record): the follow-up goes on her own email's thread, found in her Sent mail to that address", async () => {
+    const d = await deal("thread-her-own", "pat@herown.example");
+    const asked: unknown[] = [];
+    const finder: ThreadFinder = async (_env, where) => { asked.push(where); return "query" in where && where.query === "in:sent to:pat@herown.example" ? { threadId: "herthread9", messageId: "CAhers@mail.gmail.example", references: [], subject: "A room for Fixture Co" } : null; };
+    await send({ ...d, drip_step: 1 }, "Wynn's follow-up subject", finder);
+    expect(asked).toEqual([{ query: "in:sent to:pat@herown.example" }]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.threadId).toBe("herthread9");
+    expect(header(sent[0]!.raw, "In-Reply-To")).toBe("<CAhers@mail.gmail.example>");
+    expect(header(sent[0]!.raw, "Subject")).toBe("Re: A room for Fixture Co");
+    // Negative proof: the same follow-up with nothing in her Sent mail is not filed and not sent.
+    await expect(send({ ...await deal("thread-her-own-none", "sam@none.example"), drip_step: 1 }, "Follow-up", finder)).rejects.toThrow("TLC_BRAND_THREAD_NOT_FOUND");
+    expect(sent).toHaveLength(1);
   });
 });

@@ -700,6 +700,7 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
         `${out.prospects.dropped.length ? `; ${out.prospects.dropped.length} listed brand(s) left out` : ""}` +
         `${d.goalStopped?.length ? `; goal reached, outreach stopped: ${d.goalStopped.join(", ")}` : ""}` +
         `${d.addressRefused?.length ? `; address failed NeverBounce: ${d.addressRefused.join(", ")}` : ""}` +
+        `${d.threadHeld?.length ? `; NAMED STOP [TLC_BRAND_THREAD_NOT_FOUND] follow-up not sent, no conversation to reply on in her mailbox: ${d.threadHeld.join(", ")}` : ""}` +
         `${d.addressWaiting ? `; ${d.addressWaiting} first email(s) waiting for NeverBounce` : ""}` +
         `${d.leftForNextPass?.length ? `; ${d.leftForNextPass.length} left for the next pass (time budget): ${d.leftForNextPass.join(", ")}` : ""}` +
         `${d.gate.open ? "" : ` (sending is off: ${d.gate.reasons.join("; ")})`}; notice: ${out.notice}${d.replies ? `; ${d.replies}` : ""}` +

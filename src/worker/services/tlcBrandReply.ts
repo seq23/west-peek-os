@@ -8,6 +8,7 @@ import { withBrandFooter } from "../../shared/tlc/brandFooter";
 import type { EmailAttachment } from "../effects/emailTransport";
 import { listGmailRaw } from "../effects/googleClient";
 import { serviceAccountToken } from "../effects/googleWorkspaceClient";
+import { BrandThreadError, replyThread, type ThreadFinder } from "./tlcBrandThread";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
 import { addressIn, authenticationVerdict } from "../../shared/intake/partnerAuthority";
 import { newTextOf } from "../../shared/events/packetDecisionToken";
@@ -98,6 +99,8 @@ export interface BrandReplyDeps {
   /** Her calendar's busy times, and the event maker (tests pass fakes; production reads and writes her Google calendar). */
   busy?: BusyReader; makeEvent?: EventMaker;
   samples?: SamplesDeps;
+  /** Where a conversation sits in her mailbox (services/tlcBrandThread.ts); tests pass a fake. */
+  thread?: ThreadFinder;
 }
 
 interface ReplyRow {
@@ -764,6 +767,7 @@ export async function processBrandReplies(env: Env, now: Date, firmScope = "west
     }
   }
   let polled = "inbox not read";
+  let inboxRead = false;
   if (deps.mailbox !== null && (deps.mailbox || env.WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON)) {
     const live = (await env.WP_OS_DB.prepare(
       "SELECT * FROM tlc_deal WHERE firm_scope = ?1 AND first_sent_at IS NOT NULL AND stage NOT IN ('DECLINED','STOPPED') AND (stop_reason IS NULL OR stop_reason = 'REPLIED')",
@@ -791,6 +795,7 @@ export async function processBrandReplies(env: Env, now: Date, firmScope = "west
           }
         }
         polled = `inbox read (${found.length} message(s), ${addresses.length} live contact(s), ${domains.length} brand domain(s))`;
+        inboxRead = true;
       } catch (err) {
         polled = `inbox not read: ${err instanceof Error ? err.message : String(err)}`.slice(0, 200);
       }
@@ -806,7 +811,9 @@ export async function processBrandReplies(env: Env, now: Date, firmScope = "west
   const retried = await retryApprovedSends(env, now, firmScope, d);
   const refreshed = await refreshStaleSheets(env, now, firmScope, d);
   const notice = await sendReplyApprovals(env, now, firmScope);
-  return `brand replies: ${refreshed ? `${refreshed}; ` : ""}${counts.DRAFTED} drafted, ${counts.WAITING ? `${counts.WAITING} need no reply (waiting on them), ` : ""}${counts.AUTO_REPLY} auto-reply (drip resumed), ${counts.NO} declined; ${polled};${retried.length ? ` approved and sent on their own: ${retried.length};` : ""} ${notice}`;
+  // After the inbox was read, so a reply that arrived cancels the follow-up before it could go.
+  const resends = await resendUnanswered(env, now, firmScope, inboxRead, d).catch((err) => `pricing follow-ups: NAMED STOP [RESEND_FAILED] ${err instanceof Error ? err.message : String(err)}`.slice(0, 300));
+  return `brand replies: ${refreshed ? `${refreshed}; ` : ""}${counts.DRAFTED} drafted, ${counts.WAITING ? `${counts.WAITING} need no reply (waiting on them), ` : ""}${counts.AUTO_REPLY} auto-reply (drip resumed), ${counts.NO} declined; ${polled};${retried.length ? ` approved and sent on their own: ${retried.length};` : ""} ${notice}; ${resends}`;
 }
 
 // ── The one approval email a day ───────────────────────────────────────────────────────────────
@@ -1234,11 +1241,15 @@ export const sendRetryMinutes = (triesSoFar: number): number => (triesSoFar < 3 
 async function sendFailed(env: Env, r: ReplyRow & { brand?: string }, err: unknown, now: Date): Promise<string> {
   const why = err instanceof Error ? err.message : String(err);
   const tries = (r.send_tries ?? 0) + 1;
-  if (err instanceof SamplesPdfError && err.retry && tries < SEND_TRIES) {
+  // Her mailbox could not be read to find the conversation (services/tlcBrandThread.ts): tried again the same way.
+  const mailboxBusy = err instanceof BrandThreadError && err.retry;
+  if (((err instanceof SamplesPdfError && err.retry) || mailboxBusy) && tries < SEND_TRIES) {
     const due = new Date(now.getTime() + sendRetryMinutes(tries) * 60_000).toISOString();
     await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'FAILED', send_retry_due = ?2, send_tries = ?3, held_reason = ?4 WHERE id = ?1")
       .bind(r.id, due, tries, `approved; ${why}`.slice(0, 300)).run();
-    return `approved, not sent yet (${why.slice(0, 120)}); it goes on its own once the PDF is made, nothing for you to do`;
+    return mailboxBusy
+      ? `approved, not sent yet (${why.slice(0, 160)}); it is tried again on its own, nothing for you to do`
+      : `approved, not sent yet (${why.slice(0, 120)}); it goes on its own once the PDF is made, nothing for you to do`;
   }
   if (err instanceof SamplesPdfError && err.retry) {
     const brand = r.brand ? brandDisplayName(r.brand) : "the brand";
@@ -1279,15 +1290,166 @@ export async function retryApprovedSends(env: Env, now: Date, firmScope = "west-
   }
   // Only a send is news: a try that failed again is not an email (she would get one an hour), and the one that gives
   // up after 24 hours reaches her as the draft back in her approval email (sendFailed).
+  // A send that stopped for good because its conversation cannot be found is news too: she is the one who can act.
   const sent = lines.filter((l) => /: sent /.test(l));
-  if (sent.length) {
+  const stopped = lines.filter((l) => /: NOT sent \(NAMED STOP/.test(l));
+  if (sent.length || stopped.length) {
     await emailHer(env, firmScope, `retry:${due.map((r) => r.id).join(",")}`.slice(0, 120), {
-      what: "approved answers, sent on their own",
-      tldr: `${sent.length} sent, from your mailbox, on their threads.`,
-      sections: [{ label: "Done", bullets: sent.slice(0, 6) }],
+      what: sent.length ? "approved answers, sent on their own" : "approved answers, NOT sent",
+      tldr: [sent.length ? `${sent.length} sent, from your mailbox, on their threads.` : "", stopped.length ? `${stopped.length} NOT sent: nothing went to the brand.` : ""].filter(Boolean).join(" "),
+      // Two labelled sections: the owner-email door refuses an email with one (it never arrived before 13 Nov 2026).
+      sections: [{ label: sent.length ? "Done" : "Not sent", bullets: [...sent, ...stopped].slice(0, 6) }, { label: "Next", bullets: [stopped.length ? "A stopped answer needs you: reply to that brand yourself from their thread." : "Wynn watches for their answer"] }],
     }).catch(() => false);
   }
   return lines;
+}
+
+/**
+ * ONE EMAIL TO A BRAND, ON ITS CONVERSATION, ON HER APPROVAL: the `email.send` request from Wynn, its approval card
+ * decided by her (the words of her approval are the decision note), then the executor and her own Gmail. The payload
+ * always carries the thread (the executor refuses a brand email after the first without one).
+ */
+async function sendOnThread(
+  env: Env, owner: Actor, r: { id: string; deal_id: string; firm_scope: string }, to: string, cc: readonly string[],
+  payload: { subject: string; text: string; gmail_thread_id: string; in_reply_to: string } & Record<string, unknown>,
+  title: string, approval: string, onFiled: (requestId: string, cardId: string) => Promise<unknown> = async () => undefined,
+): Promise<string> {
+  const { approvedFor } = await import("./learningClub");
+  const requestId = `eer_${crypto.randomUUID()}`;
+  await env.WP_OS_DB.prepare(
+    "INSERT INTO external_effect_request (id, effect_type, destination, payload_json, requested_by_type, requested_by_id, outside_job) VALUES (?1, 'email.send', ?2, ?3, 'AI', ?4, ?5)",
+  ).bind(requestId, to, JSON.stringify(payload), WYNN, TLC_BRAND_SALES_JOB).run();
+  const { requestApproval, decideApproval } = await import("./approvals");
+  const card = await requestApproval(env, wynnActor(r.firm_scope), {
+    action_key: "effect.email.send", object_type: "external_effect_request", object_id: requestId,
+    title, summary: `To: ${to}${cc.length ? `\nCc: ${cc.join(", ")}` : ""}\n${payload.subject}\n\n${payload.text}`.slice(0, 1800),
+    payload: { deal_id: r.deal_id, brand_reply_id: r.id }, submit: true,
+  });
+  await decideApproval(env, owner, card.id, "approved", approval.slice(0, 1000));
+  await onFiled(requestId, card.id);
+  const { executeExternalEffect } = await import("../effects/executor");
+  await executeExternalEffect(approvedFor(env, card.id, to, cc), wynnActor(r.firm_scope), requestId, card.id);
+  return requestId;
+}
+
+/*
+ * THE SAME EMAIL AGAIN, ONCE, WHEN A BRAND SAYS NOTHING (owner, 13 Nov 2026: "we need to follow up on the actual
+ * thread with the exact same pricing email if we do not get a response in 7 days … never drop the thread").
+ *
+ * Armed one answer at a time, on HER word: one `tlc_setting` row, key `brand_reply_resend:<tlc_brand_reply id>`,
+ * value {"state":"ARMED","due":"<ISO time>","note":"<her words>"}. No brand email goes without her approval of it
+ * (4 Nov 2026), so nothing arms this by itself. Each drip pass, for an armed answer:
+ *   - any message from the brand after our email (an auto-reply is not one), or a deal that ended: CANCELLED, for good;
+ *   - before RESEND_QUIET_DAYS full days since our email went (and never before `due`): nothing;
+ *   - then, once: the email that went, byte for byte (the sent request's own subject, words, copies and PDF), as a
+ *     reply on the conversation of the brand's message it answered. SENT, and she is told.
+ * It never sends on a guess: her inbox must have been read on this pass, and a message from the brand that Wynn has
+ * not taken in stops it. A stop that needs a person (no conversation, the sent email gone, a refused send) is
+ * STOPPED and emailed to her; her mailbox being unreadable just now is tried again on the next pass. The row keeps
+ * what happened (state, reason, at, effect_request_id).
+ */
+export const RESEND_QUIET_DAYS = 7;
+export const RESEND_SETTING_PREFIX = "brand_reply_resend:";
+export interface ResendOrder { state: "ARMED" | "SENDING" | "SENT" | "CANCELLED" | "STOPPED"; due?: string; note?: string; reason?: string; at?: string; effect_request_id?: string }
+export const resendDueAt = (sentAt: string, armedFor: string | null | undefined): number =>
+  Math.max(Date.parse(sentAt) + RESEND_QUIET_DAYS * 86_400_000, Date.parse(armedFor ?? "") || 0);
+
+export async function resendUnanswered(env: Env, now: Date, firmScope: string, inboxRead: boolean, deps: BrandReplyDeps = {}): Promise<string> {
+  const orders = (await env.WP_OS_DB.prepare("SELECT key, value FROM tlc_setting WHERE key LIKE ?1 ORDER BY key").bind(`${RESEND_SETTING_PREFIX}%`).all<{ key: string; value: string | null }>()).results ?? [];
+  const n = { sent: 0, waiting: 0, cancelled: 0 };
+  const stops: string[] = [];
+  for (const o of orders) {
+    const order = (() => { try { const v = JSON.parse(o.value ?? "null") as ResendOrder | null; return v && typeof v === "object" && typeof v.state === "string" ? v : null; } catch { return null; } })();
+    if (!order) { stops.push(`NAMED STOP [RESEND_ORDER_UNREADABLE] ${o.key}: its value is not a follow-up order, so nothing is sent for it`); continue; }
+    if (order.state !== "ARMED") continue;
+    const r = await env.WP_OS_DB.prepare(
+      "SELECT r.*, d.brand, d.contact_email, d.stage FROM tlc_brand_reply r JOIN tlc_deal d ON d.id = r.deal_id WHERE r.id = ?1",
+    ).bind(o.key.slice(RESEND_SETTING_PREFIX.length)).first<ReplyRow & { brand: string; contact_email: string; stage: string }>();
+    if (r && r.firm_scope !== firmScope) continue;
+    // The order's own row is the record: each change is made only if the row still says what this pass read (once).
+    let stored = o.value!;
+    const settle = async (state: ResendOrder["state"], why: string, requestId?: string): Promise<boolean> => {
+      const next = JSON.stringify({ ...order, state, reason: why.slice(0, 300), at: now.toISOString(), ...(requestId ? { effect_request_id: requestId } : {}) });
+      const done = await env.WP_OS_DB.prepare("UPDATE tlc_setting SET value = ?2, set_at = ?4 WHERE key = ?1 AND value = ?3").bind(o.key, next, stored, now.toISOString()).run();
+      if ((done.meta?.changes ?? 0) === 0) return false;
+      stored = next;
+      return true;
+    };
+    const brand = r ? brandDisplayName(r.brand) : o.key;
+    /** A stop only a person can clear: recorded, and she is told once (nothing went to the brand). */
+    const stop = async (code: string, why: string): Promise<void> => {
+      await settle("STOPPED", `NAMED STOP [${code}] ${why}`);
+      stops.push(`NAMED STOP [${code}] ${brand}: ${why}`);
+      await appendEvent(env, { eventType: "tlc.brand_reply_resend_stopped", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_brand_reply", objectId: r?.id ?? o.key, firmScope, payload: { code, why: why.slice(0, 300) } });
+      await emailHer(env, firmScope, `resend:${r?.id ?? o.key}:stopped`, {
+        what: `${brand} follow-up NOT sent · ${r?.thread_ref ?? r?.notice_ref ?? ""}`.trim(),
+        tldr: `Nothing went to ${brand}. The follow-up you asked for (the same email again after ${RESEND_QUIET_DAYS} quiet days) stopped.`,
+        sections: [
+          { label: "What stopped it", bullets: [`${why[0]!.toUpperCase()}${why.slice(1).replace(/\bher (mailbox|approval)\b/g, "your $1")}.`] },
+          { label: "The one thing to do", bullets: [`Reply to ${brand} yourself from their thread in your mailbox. Wynn will not try this follow-up again.`] },
+        ],
+      }).catch(() => false);
+    };
+    if (!r) { await stop("RESEND_NOTHING_SENT", "the answer it repeats is not on record"); continue; }
+    if (r.state !== "SENT" || !r.sent_at || !r.effect_request_id) { await stop("RESEND_NOTHING_SENT", "the answer it repeats was never sent"); continue; }
+    if (!order.note?.trim()) { await stop("RESEND_NOT_APPROVED", "her approval of this follow-up is not on record"); continue; }
+    const answered = await env.WP_OS_DB.prepare(
+      "SELECT 1 FROM tlc_brand_reply WHERE deal_id = ?1 AND id != ?2 AND received_at > ?3 AND intent != 'AUTO_REPLY' LIMIT 1",
+    ).bind(r.deal_id, r.id, r.sent_at).first();
+    if (answered || ["DECLINED", "STOPPED"].includes(r.stage)) {
+      await settle("CANCELLED", answered ? "the brand wrote back, so the follow-up is not needed" : "the deal ended");
+      n.cancelled += 1;
+      continue;
+    }
+    if (now.getTime() < resendDueAt(r.sent_at, order.due)) { n.waiting += 1; continue; }
+    // Never on a guess: this pass must have read her inbox, and her mailbox must hold nothing newer from the brand.
+    if (!inboxRead) { stops.push(`NAMED STOP [RESEND_INBOX_NOT_READ] ${brand}: her inbox was not read on this pass, so the follow-up waits for the next one`); continue; }
+    const owner = await actorForFirmUser(env, TLC_OWNER.firmUserId);
+    if (!owner) { stops.push(`NAMED STOP [RESEND_NO_OWNER] ${brand}: her firm user is not active; tried again on the next pass`); continue; }
+    const sentRequest = await env.WP_OS_DB.prepare("SELECT destination, payload_json FROM external_effect_request WHERE id = ?1 AND state = 'EXECUTED'")
+      .bind(r.effect_request_id).first<{ destination: string; payload_json: string }>();
+    const original = (() => { try { return JSON.parse(sentRequest?.payload_json ?? "null") as ({ subject?: string; text?: string; cc?: unknown } & Record<string, unknown>) | null; } catch { return null; } })();
+    if (!sentRequest || !original?.subject || !original.text) { await stop("RESEND_ORIGINAL_MISSING", "the email that went is no longer on record, so it cannot be sent again word for word"); continue; }
+    const to = sentRequest.destination;
+    const cc = (Array.isArray(original.cc) ? original.cc : []).map((a) => String(a).trim().toLowerCase()).filter(Boolean);
+    let thread: Awaited<ReturnType<typeof replyThread>>;
+    try {
+      const finder = deps.thread ?? (await import("./tlcBrandThread")).defaultThreadFinder;
+      const people = [...new Set([to, ...cc, r.contact_email].map((a) => a.trim().toLowerCase()))];
+      const domain = emailDomain(r.contact_email);
+      const newest = await finder(env, { query: `from:(${[...people, ...(domain && !FREE_MAIL_DOMAINS.has(domain) ? [domain] : [])].join(" OR ")}) after:${Math.floor(Date.parse(r.sent_at) / 1000)}` });
+      if (newest) {
+        const known = await env.WP_OS_DB.prepare("SELECT intent FROM tlc_brand_reply WHERE deal_id = ?1 AND brand_message_id = ?2").bind(r.deal_id, normalizeMid(newest.messageId)).first<{ intent: string }>();
+        if (known?.intent !== "AUTO_REPLY") { await stop("RESEND_BRAND_WROTE", "a newer message from the brand is in her mailbox, so the same email is not sent over it"); continue; }
+      }
+      thread = await replyThread(env, r.brand_message_id, to, finder);
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      if (err instanceof BrandThreadError && !err.retry) { await stop("TLC_BRAND_THREAD_NOT_FOUND", "the brand's conversation cannot be found in her mailbox"); continue; }
+      stops.push(`NAMED STOP [RESEND_MAILBOX_NOT_READ] ${brand}: ${why.slice(0, 160)}; tried again on the next pass`);
+      continue;
+    }
+    if (!(await settle("SENDING", "claimed by this pass"))) continue;
+    try {
+      const requestId = await sendOnThread(env, owner, r, to, cc, { ...original, subject: original.subject, text: original.text, ...thread },
+        `Wynn: TLC follow-up to ${brand} (the same email again)`, `Her approval of this one follow-up: ${order.note}`);
+      await settle("SENT", `no reply in ${RESEND_QUIET_DAYS} days: the same email went again on their thread`, requestId);
+      await env.WP_OS_DB.prepare("UPDATE tlc_deal SET last_sent_at = ?2, updated_at = ?2 WHERE id = ?1").bind(r.deal_id, now.toISOString()).run();
+      await appendEvent(env, { eventType: "tlc.brand_reply_resent", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_brand_reply", objectId: r.id, firmScope, payload: { effect_request_id: requestId, gmail_thread_id: thread.gmail_thread_id } });
+      n.sent += 1;
+      await emailHer(env, firmScope, `resend:${r.id}:sent`, {
+        what: `${brand} follow-up, sent · ${r.thread_ref ?? r.notice_ref ?? ""}`.trim(),
+        tldr: `${brand} had not answered in ${RESEND_QUIET_DAYS} days, so the same email went again, from your mailbox, as a reply on their thread, as you asked.`,
+        sections: [
+          { label: "Done", bullets: [`The email of ${herClock(r.sent_at)} went to ${to}${cc.length ? ` (copy to ${cc.join(", ")})` : ""} again, word for word, with the same PDF.`] },
+          { label: "Next", bullets: ["Nothing needed from you. Wynn watches for their answer and will not send it a third time."] },
+        ],
+      }).catch(() => false);
+    } catch (err) {
+      await stop("RESEND_SEND_FAILED", `the send was refused (${(err instanceof Error ? err.message : String(err)).slice(0, 160)})`);
+    }
+  }
+  return `pricing follow-ups: OUTPUT ${n.sent} resend_sent (${n.waiting} armed and waiting, ${n.cancelled} cancelled by a reply)${stops.length ? `; ${stops.join("; ")}` : ""}`;
 }
 
 /** Her approved answer, through the brand-sales lane: approval card, executor, her own Gmail, threaded. */
@@ -1295,6 +1457,10 @@ async function sendApproved(env: Env, owner: Actor, r: ReplyRow & { brand: strin
   const { BRAND_REPLY_TO, approvedFor, clubViewOf, renderPdfFor } = await import("./learningClub");
   const deal = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(r.deal_id).first<TlcDealRow>())!;
   const ev = await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>();
+  const { to, cc } = answerRecipients(r);
+  // WYNN NEVER DROPS THE THREAD (owner, 13 Nov 2026): the conversation is found in her mailbox before anything is
+  // made; when it cannot be found this throws a NAMED STOP and nothing goes out (services/tlcBrandThread.ts).
+  const thread = await replyThread(env, r.brand_message_id, to, deps.thread);
   // The samples PDF goes with a yes to the samples, made NOW from her preview, once; the priced pitch only in answer
   // to a yes after a call (her rule). A PDF that cannot be made stops the send before anything leaves.
   const samples = r.samples_id ? await finalizeSamplesPdf(env, r.samples_id, deps.samples ?? {}) : null;
@@ -1317,22 +1483,10 @@ async function sendApproved(env: Env, owner: Actor, r: ReplyRow & { brand: strin
     stored.push(a);
   }
   const attachments = samples ? [samples] : stored.length ? stored : pitchAllowed && ev?.topic ? await renderPdfFor(env, clubViewOf(ev), ev.topic).catch(() => []) : [];
-  const requestId = `eer_${crypto.randomUUID()}`;
-  const inReplyTo = r.brand_message_id.startsWith("nomid:") ? null : r.brand_message_id;
-  const { to, cc } = answerRecipients(r);
-  await env.WP_OS_DB.prepare(
-    "INSERT INTO external_effect_request (id, effect_type, destination, payload_json, requested_by_type, requested_by_id, outside_job) VALUES (?1, 'email.send', ?2, ?3, 'AI', ?4, ?5)",
-  ).bind(requestId, to, JSON.stringify({ subject: r.draft_subject, text: withBrandFooter(r.draft_body), reply_to: BRAND_REPLY_TO, ...(cc.length ? { cc } : {}), ...(inReplyTo ? { in_reply_to: inReplyTo } : {}), ...(attachments.length ? { attachments } : {}) }), WYNN, TLC_BRAND_SALES_JOB).run();
-  const { requestApproval, decideApproval } = await import("./approvals");
-  const card = await requestApproval(env, wynnActor(r.firm_scope), {
-    action_key: "effect.email.send", object_type: "external_effect_request", object_id: requestId,
-    title: `Wynn: TLC answer to ${brandDisplayName(r.brand)}`, summary: `To: ${to}${cc.length ? `\nCc: ${cc.join(", ")}` : ""}\n${r.draft_subject}\n\n${withBrandFooter(r.draft_body)}`.slice(0, 1800),
-    payload: { deal_id: r.deal_id, brand_reply_id: r.id }, submit: true,
-  });
-  await decideApproval(env, owner, card.id, "approved", `Approved by email reply (${r.notice_ref}).`);
-  await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET effect_request_id = ?2, approval_card_id = ?3 WHERE id = ?1").bind(r.id, requestId, card.id).run();
-  const { executeExternalEffect } = await import("../effects/executor");
-  await executeExternalEffect(approvedFor(env, card.id, to, cc), wynnActor(r.firm_scope), requestId, card.id);
+  await sendOnThread(env, owner, r, to, cc,
+    { subject: r.draft_subject, text: withBrandFooter(r.draft_body), reply_to: BRAND_REPLY_TO, ...(cc.length ? { cc } : {}), ...thread, ...(attachments.length ? { attachments } : {}) },
+    `Wynn: TLC answer to ${brandDisplayName(r.brand)}`, `Approved by email reply (${r.notice_ref}).`,
+    (requestId, cardId) => env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET effect_request_id = ?2, approval_card_id = ?3 WHERE id = ?1").bind(r.id, requestId, cardId).run());
   await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'SENT', sent_at = ?2 WHERE id = ?1").bind(r.id, now.toISOString()).run();
   if (r.samples_id) await env.WP_OS_DB.prepare("UPDATE tlc_samples SET state = 'SENT', sent_at = ?2 WHERE id = ?1").bind(r.samples_id, now.toISOString()).run();
   // Step 5 approved: the deal is agreed at the level they picked (payment arrives against the invoice, never taken here).

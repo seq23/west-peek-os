@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
+import { gmailReadStub } from "./helpers/gmailMailbox";
 import type { Env } from "../src/worker/env";
 import { contentHashes, recordBrandMail, recordBrandReplyText, runDrip } from "../src/worker/services/learningClub";
 import { applyBrandReplyApproval, processBrandReplies, rulesBlock, takeBrandReply, type BrandResearcher, type DraftExtras, type ReplyDrafter } from "../src/worker/services/tlcBrandReply";
@@ -60,6 +61,8 @@ const scooterApproves = async (ref: string, at = AFTERNOON, extra: Record<string
 const herReply = (body: string, ref: string, from = APPROVER, a = auth(from)) =>
   applyBrandReplyApproval(env, { fromHeader: `Her <${from}>`, authenticationResults: a, subject: `Re: Wynn: brand replies · ${ref}`, body }, { now: AFTERNOON, drafter });
 
+const mailbox = gmailReadStub();
+
 beforeAll(async () => {
   t = await createTestDb();
   env = { ...makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>), RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures", WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON: SERVICE_ACCOUNT } as Env;
@@ -70,6 +73,9 @@ beforeAll(async () => {
       return new Response(JSON.stringify({ id: `re_${sends.length}` }), { status: 200 });
     }
     if (String(url) === "https://oauth2.googleapis.com/token") return new Response(JSON.stringify({ access_token: "ya29.test" }), { status: 200 });
+    // Her mailbox, for reads: a brand answer goes only once its conversation is found there (tlcBrandThread.ts).
+    const read = mailbox(String(url));
+    if (read) return read;
     if (String(url) === "https://gmail.googleapis.com/gmail/v1/users/me/messages/send") {
       const raw = Buffer.from((JSON.parse(String(init?.body)) as { raw: string }).raw, "base64url").toString();
       const [head, ...body] = raw.split("\r\n\r\n");
@@ -123,7 +129,7 @@ describe("a brand replied", () => {
     expect(await env.WP_OS_DB.prepare("SELECT stop_reason, replied_at, stage, next_send_at FROM tlc_deal WHERE id = 'tld_away'").first())
       // Back on the drip the day after they are back; its own next step (email 2, day 3 = 12 Nov) has passed by then (owner, 6 Nov 2026).
       .toEqual({ stop_reason: null, replied_at: null, stage: "PITCHED", next_send_at: "2026-11-17T14:00:00.000Z" });
-    expect(await processBrandReplies(env, AFTERNOON, "west-peek", deps)).toMatch(/no brand reply waiting for her$/);
+    expect(await processBrandReplies(env, AFTERNOON, "west-peek", deps)).toMatch(/no brand reply waiting for her; pricing follow-ups: OUTPUT 0 resend_sent \(0 armed and waiting, 0 cancelled by a reply\)$/);
     expect(sends).toHaveLength(0);
   });
 
@@ -152,7 +158,7 @@ describe("a brand replied", () => {
       expect(d.draft_body).toMatch(/Sequoia Taylor\nWest Peek Ventures\nsequoia@westpeek\.ventures\n\n2055 Lombard St #471024, San Francisco, CA 94147$/);
     }
     // Send-once: the next passes send nothing more; her stage is untouched until she approves.
-    expect(await processBrandReplies(env, AFTERNOON, "west-peek", deps)).toBe("brand replies: 0 drafted, 0 auto-reply (drip resumed), 0 declined; inbox not read; no brand reply waiting for her");
+    expect(await processBrandReplies(env, AFTERNOON, "west-peek", deps)).toBe("brand replies: 0 drafted, 0 auto-reply (drip resumed), 0 declined; inbox not read; no brand reply waiting for her; pricing follow-ups: OUTPUT 0 resend_sent (0 armed and waiting, 0 cancelled by a reply)");
     expect(sends).toHaveLength(2);
     expect((await env.WP_OS_DB.prepare("SELECT stage FROM tlc_deal WHERE id = 'tld_bot'").first<{ stage: string }>())!.stage).toBe("PITCHED");
     // A re-delivered reply is the same message: not drafted twice, not sent to her twice.
@@ -973,8 +979,17 @@ describe("brand colleagues and the approval boundary", () => {
     await expect(executeExternalEffect(approvedFor(env, card.id, "contact@thread.example"), actor, "eer_guard", card.id)).rejects.toThrow("TLC_BRAND_OWNER_APPROVAL_REQUIRED");
     expect(sends).toHaveLength(0);
     await env.WP_OS_DB.prepare("INSERT INTO tlc_drip_message (id,deal_id,step,subject,body,state,effect_request_id,approval_card_id) VALUES ('tdm_guard','tld_thread',1,'Follow-up','Hi again','AWAITING_APPROVAL','eer_guard',?1)").bind(card.id).run();
-    await executeExternalEffect(approvedFor(env, card.id, "contact@thread.example"), actor, "eer_guard", card.id);
+    // WYNN NEVER DROPS THE THREAD (owner, 13 Nov 2026): a follow-up that is not a reply on the brand's conversation is refused too.
+    await expect(executeExternalEffect(approvedFor(env, card.id, "contact@thread.example"), actor, "eer_guard", card.id)).rejects.toThrow("TLC_BRAND_THREAD_REQUIRED");
+    expect(sends).toHaveLength(0);
+    // The same follow-up as a reply on the conversation (Gmail's thread and the Message-ID it answers) sends, with no approval of hers.
+    await env.WP_OS_DB.prepare("INSERT INTO external_effect_request (id,effect_type,destination,payload_json,requested_by_type,requested_by_id,outside_job) VALUES ('eer_guard_threaded','email.send','contact@thread.example',?1,'AI','aie_wynn','tlc_brand_sales')").bind(JSON.stringify({ subject: "Re: First", text: "Hi again", gmail_thread_id: "thread1", in_reply_to: "first@mail.example" })).run();
+    const threaded = await requestApproval(env, actor, { action_key: "effect.email.send", object_type: "external_effect_request", object_id: "eer_guard_threaded", title: "Follow-up", summary: "Hi again", payload: {}, submit: true });
+    await decideApproval(env, (await actorForFirmUser(env, "fu_scooter_taylor"))!, threaded.id, "approved", "Another partner approved");
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_drip_message (id,deal_id,step,subject,body,state,effect_request_id,approval_card_id) VALUES ('tdm_guard_threaded','tld_thread',2,'Re: First','Hi again','AWAITING_APPROVAL','eer_guard_threaded',?1)").bind(threaded.id).run();
+    await executeExternalEffect(approvedFor(env, threaded.id, "contact@thread.example"), actor, "eer_guard_threaded", threaded.id);
     expect(sends).toHaveLength(1);
     expect(sends[0]!.to).toBe("contact@thread.example");
+    expect(sends[0]!.inReplyTo).toBe("<first@mail.example>");
   });
 });
