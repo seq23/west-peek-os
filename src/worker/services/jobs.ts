@@ -692,9 +692,15 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
     const out = await runDripPass(env, now, job.firm_scope);
     const d = out.drip;
     return {
-      status: "SUCCEEDED",
+      // A due email that ended the pass with no record is not a clean run (Rule 0): the run fails and names the deals.
+      status: d.unaccounted?.length ? "FAILED" : "SUCCEEDED",
       summary:
         `The Learning Club drip: ${out.batch ? `first batch — ${out.batch}; ` : ""}${d.due} due, ${d.sent} sent, ${d.awaitingApproval} awaiting approval, ${d.held} HELD` +
+        `${d.unaccounted?.length ? `; NAMED STOP [DRIP_DUE_UNACCOUNTED] ${d.unaccounted.length} due email(s) ended the pass with no draft, no HELD row and no named wait: ${d.unaccounted.join(", ")}` : ""}` +
+        `${d.followUpsQueued ? `, ${d.followUpsQueued} follow-up(s) queued` : ""}` +
+        `${d.sequenceEnded?.length ? `; past day 14, never sent (HELD): ${d.sequenceEnded.join(", ")}` : ""}` +
+        `${d.noTopic?.length ? `; ${d.noTopic.length} waiting for their club's topic` : ""}` +
+        `${d.ownerWrites?.length ? `; ${d.ownerWrites.length} first email(s) left to her (she contacted the brand)` : ""}` +
         `${d.heldForCategory?.length ? `, ${d.heldForCategory.length} waiting for their category: ${d.heldForCategory.join(", ")}` : ""}` +
         `${out.prospects.promoted.length ? `; ${out.prospects.promoted.length} new from Parker's list: ${out.prospects.promoted.join(", ")}` : ""}` +
         `${out.prospects.dropped.length ? `; ${out.prospects.dropped.length} listed brand(s) left out` : ""}` +
