@@ -893,6 +893,30 @@ describe("the developer may direct any job with a work instruction, and with not
     expect((await rebuildOf(id))?.rebuild?.stage, "his own changes are never marked staged").toBeUndefined();
   });
 
+  /** 14 Nov 2026: review findings for a developer rebuild that is queued (not waiting on a word) join it, still staged. */
+  it("the tail door adds to a queued developer rebuild, keeping it staged and quiet; a job with no rebuild of hers is refused", async () => {
+    const id = await atPreview("dev10", SCOOTER);
+    expect((await door(id, "rebuild the dashboard to the full scope")).status).toBe(200);
+    await tickFor(id);
+    await macReports(id, { phase: "BUILD", status: "failed", reason: "the review still blocks" });
+    await tickFor(id);
+    expect((await card(id)).state, "between attempts, not waiting on a word").not.toBe("BLOCKED");
+    const res = await door(id, "list the production redirect URL for every account in Help");
+    expect(res.status).toBe(200);
+    let job = null as Awaited<ReturnType<typeof rebuildOf>>;
+    for (let t = 0; t < 4 && !job; t += 1) {
+      await tickFor(id);
+      job = await rebuildOf(id);
+    }
+    expect(job?.rebuild?.changes, "both instructions reach the builder").toContain("rebuild the dashboard to the full scope");
+    expect(job?.rebuild?.changes).toContain("production redirect URL");
+    expect(job?.rebuild?.stage, "still staged").toBe(true);
+    const plain = await atPreview("dev11", SCOOTER);
+    await answerBlock(env, plain, "fu_scooter_taylor", { action: "ANSWER", text: "changes: put the founders photo on the home page" });
+    await tickFor(plain);
+    expect((await door(plain, "and make the button orange")).status, "his own queued rebuild is never added to").toBe(409);
+  });
+
   /** 14 Nov 2026: a retry rebuilt blind and failed the same way; now it is handed the refusal it must fix first. */
   it("a retry after a refused BUILD carries the refusal to the builder; the first attempt carries none", async () => {
     const id = await atPreview("dev9", SCOOTER);
