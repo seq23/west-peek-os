@@ -4,7 +4,7 @@ import type { Env } from "../env";
 import { appendEvent } from "../events";
 import type { Actor } from "./authorize";
 import { runAi } from "../ai/runAi";
-import { SEARCH_MODEL, formatCheck, servedBySearchLane } from "./liveSearch";
+import { SEARCH_MODEL, earlierSearch, formatCheck, runBeganAt, servedBySearchLane } from "./liveSearch";
 import { steeredPrompt } from "../../shared/work/instruction";
 import { blockCard } from "./blocks";
 import { cannotDetail, steerFor, type Interpreter } from "./instruction";
@@ -833,9 +833,17 @@ const defaultJudge: ProductionsJudge = async (env, actor, prompt) => {
  */
 export type ProductionsSearch = (env: Env, actor: Actor, prompt: string, verify?: (text: string) => string | null) => Promise<{ ok: boolean; text: string; detail: string }>;
 
+const SEARCH_PURPOSE = "Walker: West Peek Productions research";
+
+/** The live search, reusing any answer this run of the card already has (see `earlierSearch`). */
+const searchSince = (since: string): ProductionsSearch => async (env, actor, prompt, verify) => {
+  const earlier = await earlierSearch(env, { purpose: SEARCH_PURPOSE, prompt, since, verify });
+  return earlier ? { ok: true, text: earlier.text, detail: "ok (this run's earlier answer)" } : defaultSearch(env, actor, prompt, verify);
+};
+
 const defaultSearch: ProductionsSearch = async (env, actor, prompt, verify) => {
   const { run } = await runAi(env, {
-    purpose: "Walker: West Peek Productions research",
+    purpose: SEARCH_PURPOSE,
     actor,
     inputs: [prompt],
     ...(verify ? { verify } : {}),
@@ -928,7 +936,7 @@ export async function runProductionsCard(
   }
   // His words ride as data and the brief's own output format has the last word (14 Nov 2026, wc_bd8b68cb).
   const withSteer = (prompt: string): string => steeredPrompt(steer.text, prompt);
-  const rawSearch = deps.search ?? defaultSearch;
+  const rawSearch = deps.search ?? searchSince(await runBeganAt(env, card.id));
   const search: ProductionsSearch = (e, a, prompt, verify) => rawSearch(e, a, withSteer(prompt), verify);
   const rawJudge = deps.judge ?? defaultJudge;
   const judge: ProductionsJudge = (e, a, prompt) => rawJudge(e, a, withSteer(prompt));

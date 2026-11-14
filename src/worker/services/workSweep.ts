@@ -72,6 +72,37 @@ import { isTechnicalBlock } from "../../shared/work/blocks";
 
 export const MAX_WORK_ATTEMPTS = 3;
 export const LEASE_MINUTES = 15;
+/**
+ * THE LEASE IS KEPT WHILE THE ATTEMPT IS WORKING (14 Nov 2026, wc_bd8b68cb). The lease was a fixed 15 minutes from
+ * the claim, and a Productions month — two searches, each judged, each searched again when thin, each on a seat that
+ * can take five minutes — runs longer than that. At minute 15 the next tick saw an expired lease, claimed the card
+ * again and started the month over while the first attempt was still searching: attempts 1, 2 and 3 in 45 minutes,
+ * every one repeating the searches the last had done. So while a runner is working, its lease is pushed forward
+ * every few minutes; when the isolate dies the renewals stop with it, and the lease expires exactly as before.
+ */
+export const LEASE_RENEW_MS = 4 * 60_000;
+
+/** Push the card's lease forward every `renewMs` until the returned stop is called. Only ever lengthens it. */
+function keepLease(env: Env, cardId: string, tickNow: Date, renewMs: number): () => void {
+  const startedReal = Date.now();
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const renew = async (): Promise<void> => {
+    if (stopped) return;
+    // Measured from the tick's own clock, so a test (or a replayed tick) with its own `now` is extended, never cut short.
+    const until = new Date(tickNow.getTime() + (Date.now() - startedReal) + LEASE_MINUTES * 60_000).toISOString();
+    await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = ?2 WHERE id = ?1 AND lease_until IS NOT NULL AND lease_until < ?2")
+      .bind(cardId, until)
+      .run()
+      .catch(() => undefined);
+    if (!stopped) timer = setTimeout(() => void renew(), renewMs);
+  };
+  timer = setTimeout(() => void renew(), renewMs);
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+  };
+}
 
 export interface SweepCard {
   id: string;
@@ -580,6 +611,7 @@ export async function sweepOnce(
     partnerMessage?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     webPropertyChange?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; held?: boolean; waitUntil?: string; autoResolved?: boolean; questionAnswered?: boolean; detail: string }>;
   } = {},
+  options: { leaseRenewMs?: number } = {},
 ): Promise<SweepResult> {
   await settleAbandonedCards(env, now);
   // NOTHING STAYS STUCK SILENTLY: a block nobody has acted on rings again rather than ageing out.
@@ -644,6 +676,8 @@ export async function sweepOnce(
   // A question was answered confidently by whoever owns the card's kind, before it ever reached
   // her (Addendum 12, 22 Sep 2026).
   let questionAnswered = false;
+  // Every kind of card runs inside this one try, so every kind keeps its lease while it works.
+  const stopKeepingLease = keepLease(env, card.id, now, options.leaseRenewMs ?? LEASE_RENEW_MS);
   try {
     if (card.kind === "DECK_REWORK") {
       const run = runners.deckRework ?? (await import("./deck")).runDeckRework;
@@ -736,6 +770,7 @@ export async function sweepOnce(
   } catch (err) {
     detail = err instanceof Error ? err.message : String(err);
   } finally {
+    stopKeepingLease();
     await releaseLease(env, card.id);
   }
 
