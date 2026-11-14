@@ -696,3 +696,49 @@ describe("the monthly note's floor: six leads and two pitches, or it says it is 
     expect(after.block_reason).toBeNull();
   });
 });
+
+describe("every ask in Scooter's replies on the card is answered in the note, or the note says why not (wc_bd8b68cb, 14 Nov 2026)", () => {
+  /*
+   * He replied on the November thread: check the past clients he listed against the criteria, flag which fit, find one
+   * or two like a named model. The note went out with leads and pitches only and none of it. Placeholder names only.
+   */
+  it("works the past-client ask, puts the verdicts first in the note, and a later run with no new reply does not redo it", async () => {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN','IN_PROGRESS','BLOCKED')").run();
+    const opened = await openProductionsCard(env, "productions_monthly", new Date("2027-07-01T14:00:00.000Z"));
+    await env.WP_OS_DB.prepare(
+      "INSERT INTO work_steer (id, card_kind, from_card_id, said_by, body, thread_token, firm_scope, created_at) VALUES ('wst_asks', 'PRODUCTIONS_MONTHLY', ?1, 'scooter@westpeek.ventures', 'Check our past clients against your criteria and flag which fit: Placeholder Past Client A, Placeholder Past Client B. Find one or two like Placeholder Model Org for a warm re-entry.', 'tok_asks', 'west-peek', '2027-07-01T15:00:00.000Z')",
+    ).bind(opened.cardId).run();
+    const six = JSON.stringify({ results: Array.from({ length: 6 }, (_, i) => ({ organisation: `Asks Association ${i + 1}`, trigger: "announced a plan", approach: "Head of Events", angle: "a community", url: `https://asks${i + 1}.example/plan` })) });
+    const two = JSON.stringify({ results: [1, 2].map((i) => ({ writer: `Asks Writer ${i}`, outlet: `Asks Outlet ${i}`, why_this_writer: "covers community", hook: "hook", proof_url: `https://asksoutlet${i}.example/piece`, draft: "Hi —" })) });
+    const answered = JSON.stringify({ asks: [{ ask: "Check the past clients against the criteria and flag which fit", status: "done", answer: "Placeholder Past Client A fits (national, results-oriented, quiet brand); Placeholder Past Client B does not (regional)." }] });
+    const prompts: string[] = [];
+    const card = (await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(opened.cardId).first<Parameters<typeof runProductionsCard>[1]>())!;
+    const { vi } = await import("vitest");
+    const sends: string[] = [];
+    vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).includes("api.resend.com")) { sends.push(String(init?.body)); return new Response(JSON.stringify({ id: "re_asks" }), { status: 200 }); }
+      throw new Error(`unexpected fetch ${String(url)}`);
+    });
+    const withMail = { ...env, RESEND_API_KEY: "re_test", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@westpeek.ventures" } as Env;
+    const out = await runProductionsCard(withMail, card, {
+        search: async (_e, _a, prompt) => { prompts.push(prompt); return { ok: true, text: /List EVERY separate thing he asked for/.test(prompt) ? answered : /journalists/.test(prompt) ? two : six, detail: "ok" }; },
+        urlCheck: async () => true,
+        judge: keepAll,
+        pageText: async () => null,
+        now: new Date("2027-07-01T16:00:00.000Z"),
+        interpret: steersWith("Check the past clients and flag which fit."),
+    });
+    vi.unstubAllGlobals();
+    expect(out.finished, out.detail).toBe(true);
+    expect(sends.length, "one email to Scooter").toBe(1);
+    expect(sends[0], "the answer lands on the thread he replied on").toMatch(/In-Reply-To[^,]*tok_asks/);
+    const asksPrompt = prompts.find((p) => /List EVERY separate thing he asked for/.test(p));
+    expect(asksPrompt, "his own words, the names included, reach a model").toMatch(/Placeholder Past Client B/);
+    const row = (await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ description: string }>())!;
+    expect(row.description).toMatch(/WHAT YOU ASKED FOR IN YOUR REPLIES[\s\S]*Placeholder Past Client A fits[\s\S]*1 · WHO COULD BUY/);
+    const delivered = JSON.parse((await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'productions.delivered'").bind(opened.cardId).first<{ payload_json: string }>())!.payload_json) as { replies_through?: string };
+    expect(delivered.replies_through, out.detail).toBe("2027-07-01T15:00:00.000Z");
+    const { unansweredReplies } = await import("../src/worker/services/productions");
+    expect((await unansweredReplies(env, opened.cardId)).words, "answered once is answered").toEqual([]);
+  });
+});

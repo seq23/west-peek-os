@@ -105,7 +105,35 @@ export async function handleDeveloperChanges(ctx: RouteContext): Promise<Respons
 
   const card = await ctx.env.WP_OS_DB.prepare("SELECT id, kind, state, firm_scope FROM work_card WHERE id = ?1").bind(cardId).first<{ id: string; kind: string | null; state: string; firm_scope: string }>();
   if (!card) return json({ error: "not_found" }, { status: 404 });
-  if (card.kind !== WEB_PROPERTY_CHANGE_KIND) return json({ error: "unsupported", detail: "this door directs website jobs; other kinds take a note on the card" }, { status: 409 });
+  /*
+   * A FINISHED NOTE THAT LEFT A PARTNER'S ASK OUT IS REDONE BY THE SAME DOOR (14 Nov 2026, wc_bd8b68cb). Walker's November
+   * note went out without Scooter's past-client check. Exactly what a partner's "redo it" reply does (reopenForRework): her
+   * words as a note on the card, the card back to the sweep, and the same employee rebuilds and emails the note once.
+   */
+  const { REWORKABLE_AFTER_DONE } = await import("./emailThread");
+  if (card.state === "DONE" && REWORKABLE_AFTER_DONE.has(card.kind ?? "")) {
+    const at = new Date().toISOString();
+    await ctx.env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)")
+      .bind(`wcn_${crypto.randomUUID()}`, card.id, director.partner.firmUserId, `${director.label}: ${words}`.slice(0, 4000), card.firm_scope)
+      .run();
+    const reopened = await ctx.env.WP_OS_DB.prepare(
+      "UPDATE work_card SET state = 'OPEN', work_attempts = 0, lease_until = NULL, work_last_failure = NULL, next_action = ?2, description = substr(COALESCE(description, '') || char(10) || '• ' || ?3, 1, 16000), updated_at = ?4 WHERE id = ?1 AND state = 'DONE'",
+    )
+      .bind(card.id, "Rebuild the note with what was asked applied and email the revised version once.", `${director.label}, ${at}: "${text.slice(0, 2500)}"`, at)
+      .run();
+    if (!reopened.meta.changes) return json({ error: "not_recorded", detail: "the card was no longer DONE" }, { status: 409 });
+    await appendEvent(ctx.env, {
+      eventType: "work_card.directed_by_developer",
+      actorType: "firm_user",
+      actorId: ctx.identity.id,
+      objectType: "work_card",
+      objectId: card.id,
+      firmScope: card.firm_scope,
+      payload: { for: director.partner.firmUserId, via: "partner tail (Claude)", entered_by: ctx.identity.email, words: text, reopened_done_note: true, at },
+    });
+    return json({ ok: true, card_id: card.id, recorded_as: director.label, reopened: true, at });
+  }
+  if (card.kind !== WEB_PROPERTY_CHANGE_KIND) return json({ error: "unsupported", detail: "this door directs website jobs and reopens a finished reworkable note; other kinds take a note on the card" }, { status: 409 });
   if (card.state !== "BLOCKED") {
     /*
      * 14 Nov 2026: A DEVELOPER REBUILD ALREADY QUEUED TAKES MORE OF HER WORDS. The tail had review findings for a

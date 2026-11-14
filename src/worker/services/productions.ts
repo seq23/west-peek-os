@@ -683,6 +683,66 @@ export function monthlySummary(
   };
 }
 
+/*
+ * EVERY ASK IN HIS REPLIES IS ANSWERED IN THE NOTE, OR THE NOTE SAYS WHICH ONE WAS NOT DONE AND WHY (14 Nov 2026,
+ * wc_bd8b68cb). Scooter replied on the November thread "check the organizations from our 2021 and 2022 client trackers
+ * against the criteria … and flag which ones fit … find one or two more past organizations" with the ~65 names in the
+ * email. The interpretation read it correctly, but only the interpretation rode into a search whose output format is a
+ * lead list and a pitch list, the names themselves never reached any model, and the note had no place for a verdict on
+ * a list he gave. The note went out with 6 leads and 3 pitches and none of it. Ruling 13 Nov 2026: no employee
+ * silently drops what a partner asked for. So his own words since the last note on this card are worked by one more
+ * live pass that lists every separate ask and does each one, and the answers are the first thing the note says.
+ */
+export type AskStatus = "done" | "in_lists" | "not_done";
+export interface AskAnswer { ask: string; status: AskStatus; answer: string }
+
+/** What he replied on this card's thread since its last note, oldest first, each body once. */
+export async function unansweredReplies(env: Env, cardId: string): Promise<{ words: string[]; thread: string | null; through: string | null }> {
+  // Answered means a note that WORKED them went (its `replies_through`); a note sent without working them answered nothing.
+  const last = await env.WP_OS_DB.prepare("SELECT MAX(json_extract(payload_json, '$.replies_through')) AS at FROM event_record WHERE object_type = 'work_card' AND object_id = ?1 AND event_type = 'productions.delivered'")
+    .bind(cardId).first<{ at: string | null }>().catch(() => null);
+  const rows = (await env.WP_OS_DB.prepare("SELECT body, thread_token, created_at FROM work_steer WHERE from_card_id = ?1 AND created_at > ?2 ORDER BY created_at ASC")
+    .bind(cardId, last?.at ?? "").all<{ body: string; thread_token: string | null; created_at: string }>()).results ?? [];
+  const words = [...new Set(rows.map((r) => r.body.trim()).filter(Boolean))];
+  return { words, thread: rows.filter((r) => r.thread_token).pop()?.thread_token ?? null, through: rows[rows.length - 1]?.created_at ?? null };
+}
+
+export function buildAsksPrompt(month: string, words: readonly string[], leads: readonly string[], pitches: readonly string[]): string {
+  return [
+    `You are Walker, chief of staff for ${PRODUCTIONS_PARTNER.fullName}'s agency West Peek Productions (${PRODUCTIONS_SITE}). ${PRODUCTIONS_OFFER}`,
+    `For ${monthName(month)} his note already carries these customer leads: ${leads.join("; ") || "none"}; and these press pitches: ${pitches.join("; ") || "none"}.`,
+    "He replied to the note with the messages below, in his own words. List EVERY separate thing he asked for in them, and for each one:",
+    '- if the leads or pitches above already answer it, status "in_lists" and say which entries answer it;',
+    '- otherwise DO IT NOW, using live search for any facts it needs (when he gave a list of names, judge every name on it and give each a verdict with a one-line reason), status "done" with the full result;',
+    '- only when it genuinely cannot be done here (it needs contacting someone outside the firm, spending money, or a file that did not arrive), status "not_done" with the plain reason.',
+    "Never leave an ask out. Nobody outside the firm is contacted.",
+    ...words.map((w, i) => `<<<REPLY_${i + 1}\n${w}\nREPLY_${i + 1}>>>`),
+    'Return ONLY JSON: {"asks":[{"ask":"what he asked, in his words","status":"done|in_lists|not_done","answer":"the result, or where it is answered, or why it was not done"}]}',
+  ].join("\n");
+}
+
+export function parseAsks(raw: string): AskAnswer[] {
+  const p = jsonBody(raw);
+  const out: AskAnswer[] = [];
+  for (const r of Array.isArray(p?.asks) ? (p!.asks as Record<string, unknown>[]) : []) {
+    const ask = str(r.ask);
+    const answer = str(r.answer);
+    const status = str(r.status) as AskStatus | null;
+    if (!ask || !answer || !status || !["done", "in_lists", "not_done"].includes(status)) continue;
+    out.push({ ask, status, answer });
+  }
+  return out;
+}
+
+/** His asks, as the note's first section and as the top of its details. */
+export function renderAsks(asks: readonly AskAnswer[]): { section: ExecEmailInput["sections"][number]; text: string } {
+  const line = (a: AskAnswer) => a.status === "not_done" ? `Not done: ${a.ask} — ${a.answer}` : a.status === "in_lists" ? `${a.ask} — in the lists below: ${a.answer}` : `${a.ask} — ${a.answer}`;
+  return {
+    section: { label: "What you asked for in your replies", bullets: asks.map(line) },
+    text: ["═══ 0 · WHAT YOU ASKED FOR IN YOUR REPLIES ═══", "", ...asks.map((a) => `• ${line(a)}`), ""].join("\n"),
+  };
+}
+
 export function customerSummary(month: string, ideas: readonly CustomerIdea[], dropped: readonly string[]): { what: string; tldr: string; sections: ExecEmailInput["sections"] } {
   return {
     what: `${ideas.length} who could buy Community-as-a-Service this month`,
@@ -1031,6 +1091,9 @@ export async function runProductionsCard(
   let count: number;
   let dropped: string[];
   let thin: string[] = [];
+  /** The thread his unanswered replies came on, so the answer lands on it. */
+  let replyThread: string | null = null;
+  let repliesThrough: string | null = null;
   /** The busy-executive summary; `text` (the full note) goes under its details. */
   let summary: { what: string; tldr: string; sections: ExecEmailInput["sections"] };
   if (kind === "PRODUCTIONS_MONTHLY") {
@@ -1109,11 +1172,24 @@ export async function runProductionsCard(
     }
     const hunted: PressPitch[] = [];
     for (const p of pitchesKept) hunted.push(await findWriterAddress(env, actor, { ...p, email: null }, { search, pageText }));
+    // HIS OTHER ASKS ON THIS THREAD (14 Nov 2026, wc_bd8b68cb): each is done here, or the note says why not. Never dropped.
+    const replied = await unansweredReplies(env, card.id);
+    let asks: AskAnswer[] = [];
+    if (replied.words.length) {
+      const worked = await search(env, actor, buildAsksPrompt(month, replied.words, leadsKept.map((i) => i.organisation), hunted.map((p) => `${p.writer} (${p.outlet})`)), formatCheck(parseAsks, "answered ask"));
+      if (!worked.ok) return { finished: false, blocked: false, detail: `the live search failed while working Scooter's replies: ${worked.detail}` };
+      asks = parseAsks(worked.text);
+      if (!asks.length) return { finished: false, blocked: false, detail: "Scooter's replies on this card were not worked: the pass returned no ask" };
+      replyThread = replied.thread;
+      repliesThrough = replied.through;
+    }
     count = leadsKept.length + hunted.length;
     dropped = [...ideas.dropped, ...pitchesLive.dropped];
     subject = `Walker: West Peek Productions in ${monthName(month)} — ${counted(leadsKept.length, "lead")}, ${counted(hunted.length, "pitch", "pitches")}`;
-    text = renderMonthlyEmail(month, leadsKept, hunted, dropped, rejected);
+    const asked = asks.length ? renderAsks(asks) : null;
+    text = (asked ? `${asked.text}\n` : "") + renderMonthlyEmail(month, leadsKept, hunted, dropped, rejected);
     summary = monthlySummary(month, leadsKept, hunted, dropped, rejected);
+    if (asked) summary = { ...summary, sections: [asked.section, ...summary.sections.filter((s) => s.label !== "What you asked")] };
     // AFTER THE LAST PASS: what met the bar goes, as the note, and the floor is recorded (no desk item for anyone).
     thin = monthlyFloor(leadsKept.length, hunted.length).misses;
     await recordFloor(env, { deliverable: "productions_monthly", ok: thin.length === 0, headline: leadsKept.length, measures: { leads: leadsKept.length, pitches: hunted.length, dropped: dropped.length }, sample: text, firmScope: card.firm_scope });
@@ -1180,6 +1256,7 @@ export async function runProductionsCard(
     requestedByEmail: card.requested_by_email ?? null,
     firmScope: card.firm_scope,
     actorId: "aie_walker",
+    replyOnThread: replyThread,
   });
   subject = mail.subject;
 
@@ -1204,7 +1281,7 @@ export async function runProductionsCard(
     objectType: "work_card",
     objectId: card.id,
     firmScope: card.firm_scope,
-    payload: { kind, month, count, dropped: dropped.length, emailed: mail.sent, subject, thin_month: thin.length > 0 },
+    payload: { kind, month, count, dropped: dropped.length, emailed: mail.sent, subject, thin_month: thin.length > 0, ...(repliesThrough && mail.sent ? { replies_through: repliesThrough } : {}) },
   });
   return {
     finished: true,
