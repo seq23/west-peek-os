@@ -908,6 +908,16 @@ describe("the developer may direct any job with a work instruction, and with not
       again = await liveJobFor(id);
     }
     expect((JSON.parse(String(again!.job_json)) as { last_refusal?: string | null }).last_refusal, "the retry hears what to fix").toContain("functions/x.mjs:459");
+    // A second, different refusal: the next retry hears both, so it does not rebuild the first one back in.
+    await macReports(id, { phase: "BUILD", status: "failed", reason: "asked for runs three times without finishing" });
+    let third = null as Awaited<ReturnType<typeof liveJobFor>>;
+    for (let t = 0; t < 4 && !third; t += 1) {
+      await tickFor(id);
+      third = await liveJobFor(id);
+    }
+    const heard = String((JSON.parse(String(third!.job_json)) as { last_refusal?: string | null }).last_refusal);
+    expect(heard).toContain("asked for runs three times");
+    expect(heard, "the older refusal is still in front of it").toContain("functions/x.mjs:459");
   });
 
   /**

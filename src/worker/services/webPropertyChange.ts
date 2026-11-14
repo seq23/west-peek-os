@@ -713,7 +713,10 @@ async function appendFinding(env: Env, cardId: string, text: string): Promise<vo
     .run();
 }
 
-/** Why the newest attempt of this phase was refused, when the newest run on the job was that refusal; else null. Pure. */
+/**
+ * Why the attempts of this phase were refused since its last ok run, newest first, each once (14 Nov 2026: a retry
+ * heard only the newest refusal and rebuilt the older one back in). Null when the newest run was ok. Pure.
+ */
 export function lastRefusalFor(historyJson: string | null | undefined, phase: string): string | null {
   let h: unknown;
   try {
@@ -721,10 +724,15 @@ export function lastRefusalFor(historyJson: string | null | undefined, phase: st
   } catch {
     return null;
   }
-  const last = Array.isArray(h) ? (h.at(-1) as { phase?: unknown; status?: unknown; reason?: unknown } | undefined) : undefined;
-  if (!last || last.phase !== phase || String(last.status ?? "").toLowerCase() === "ok") return null;
-  const reason = typeof last.reason === "string" ? last.reason.trim() : "";
-  return reason ? reason.slice(0, 1500) : null;
+  if (!Array.isArray(h)) return null;
+  const reasons: string[] = [];
+  for (const e of [...h].reverse() as Array<{ phase?: unknown; status?: unknown; reason?: unknown }>) {
+    if (e?.phase !== phase) continue;
+    if (String(e.status ?? "").toLowerCase() === "ok") break;
+    const r = typeof e.reason === "string" ? e.reason.trim() : "";
+    if (r && !reasons.includes(r)) reasons.push(r);
+  }
+  return reasons.length ? reasons.slice(0, 4).map((r, i) => `${i + 1}. ${r.slice(0, 700)}`).join("\n").slice(0, 3000) : null;
 }
 
 async function recordHistory(env: Env, row: WebPropertyChangeRow, entry: Record<string, unknown>): Promise<void> {
