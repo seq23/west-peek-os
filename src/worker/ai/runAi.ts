@@ -206,6 +206,11 @@ export interface RunAiBudgetContext {
    */
   partnerRequested?: boolean;
   /**
+   * THIS CALL NEVER REACHES A LANE THAT COSTS MONEY, WHEREVER THE LEVER STANDS (owner, 13 Nov 2026: "never a paid
+   * API"). It is routed as at Free only: her seats and $0 lanes, and a named stop when none can take it.
+   */
+  neverPaid?: boolean;
+  /**
    * THIS CALL MAY BE SERVED BY A WEAKER LANE WHEN THE LEVER FORBIDS PAID, AND THE RESULT SAYS SO
    * (29 Sep 2026). Meaningful only with `requireModel`.
    *
@@ -1191,7 +1196,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * for that reason and must never be merged.
    */
   const spendLever = leverFromPolicy(policy as unknown as Parameters<typeof leverFromPolicy>[0]);
-  const behaviour: SpendBehaviour = await currentSpendBehaviour(env, firmScope, spendLever, now);
+  const behaviour: SpendBehaviour = await currentSpendBehaviour(env, firmScope, input.budgetContext?.neverPaid === true ? "FREE_ONLY" : spendLever, now);
   const isProtected = protectedFromSpendPressure(input.budgetContext ?? {});
   const taskKind: TaskKind = taskKindOf(input.budgetContext ?? {});
 

@@ -3,7 +3,7 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import {
   MAX_BRIEF_ATTEMPTS, RETRY_AFTER_MINUTES, WRITE_LEASE_MINUTES, STAGE_LEASE_MINUTES,
-  BRIEF_MODEL, briefStateFor, measuredExpectations, retryAfterIso, serveBrief, startReport, type BriefDeps,
+  briefStateFor, measuredExpectations, retryAfterIso, serveBrief, startReport, type BriefDeps,
 } from "../src/worker/services/dailyIntelligence";
 import { CHAIN_BUDGET_MS } from "../src/worker/ai/chainBudget";
 
@@ -91,11 +91,10 @@ describe("the clock starts nothing", () => {
     expect(state.state.line).toMatch(/^No brief today yet\. None has been built yet\./);
   });
 
-  it("the retirement is on the record: a RETIRED job row the seeds cannot re-open, and the brief's model is Sonnet", async () => {
+  it("the retirement is on the record: a RETIRED job row the seeds cannot re-open", async () => {
     const job = await env.WP_OS_DB.prepare("SELECT status, schedule_kind, pause_reason FROM scheduled_job WHERE job_key = 'morning_brief_schedule'").first<{ status: string; schedule_kind: string; pause_reason: string }>();
     expect(job?.status).toBe("RETIRED");
     expect(job?.pause_reason).toMatch(/On demand \+ Sonnet for briefs only/);
-    expect(BRIEF_MODEL).toBe("anthropic/claude-sonnet-5");
   });
 });
 

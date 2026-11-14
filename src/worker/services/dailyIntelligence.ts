@@ -88,15 +88,13 @@ const MAX_CANDIDATES = 30;
 export const BRIEF_EXPECTED_OUTPUT_TOKENS = 24_000;
 
 /**
- * THE ONE MODEL THAT WRITES THE BRIEF — the owner's decision, 19 Sep 2026: "make them use Sonnet
- * … Sonnet for briefs only." Passed to the router as `requireModel`, which reduces the candidates
- * to lanes serving this model (OpenRouter, and Anthropic directly as the outage fallback) before
- * any ordering, assembles no free lane, and stops with a named reason if none serves it. Measured
- * cost on this model: $0.12–$0.30 a brief, mean $0.20 over 51 runs — and now only when she asks.
- * Every other lane in the firm keeps the free-first ladder untouched; `validate:brief-lands` names
- * this as the one caller allowed to pin.
+ * WHO WRITES THE BRIEF (owner, 13 Nov 2026): her Claude seat, with Codex as its backup, and otherwise a named stop
+ * that says a seat is needed. Never a paid API at any lever position, and never a free lane (thirteen free-lane
+ * attempts on 18 Sep wrote zero acceptable briefs). This replaces the 19 Sep pin to a paid model: the scheduled brief
+ * was retired that day and nothing has been built since, and a build pressed with the lever moved off Free only
+ * would have spent money. `important` is "seats, never a free lane"; `neverPaid` holds that at every lever.
  */
-export const BRIEF_MODEL = "anthropic/claude-sonnet-5";
+export const BRIEF_ROUTE = { judgement: true, important: true, seatFirst: true, neverPaid: true } as const;
 
 /**
  * How long a FAILED brief with attempts left waits before the clock tries again. Twenty minutes:
@@ -311,15 +309,10 @@ const defaultSynthesise: Synthesise = async (env, actor, prompt, reportDate, fir
      * correcting it moves the cost estimate and nothing else. $0.12–$0.30 a brief, mean $0.20.
      */
     budgetContext: {
+      // Her Claude seat, then Codex, else a named stop; never a paid API. See BRIEF_ROUTE.
+      ...BRIEF_ROUTE,
       judgement: true,
       expectedOutputTokens: BRIEF_EXPECTED_OUTPUT_TOKENS,
-      // Sonnet at MODERATE and OPEN — see BRIEF_MODEL. Her seats (Claude Code, then Codex) lead it
-      // when they are awake; a free lane may stand in front of Sonnet only if the brief's own
-      // verifier accepts what it writes, and the page says so (29 Sep 2026, superseding "FREE_ONLY
-      // stops it"). `briefServing` marks the result.
-      requireModel: BRIEF_MODEL,
-      seatFirst: true,
-      degradeAllowed: true,
     },
     /*
      * THE BRIEF IS BUILT FROM OTHER PEOPLE'S WORDS, so a credential-shaped span in it is somebody

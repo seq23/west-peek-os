@@ -7559,3 +7559,16 @@ Why: the owner's review of what the employees send found five outputs that passe
   with nothing on file no model is asked and the slot names what is missing (`whyIsMissing`).
 - Proof: `tests/outputFloors.test.ts`, `tests/productions.test.ts`, `tests/roomRequest.test.ts`,
   `tests/freeModelsForProspects.test.ts`. No migration, no new job, no new email.
+
+## 13 Nov 2026 — the daily brief runs on her seats, never a paid API
+
+Why: the brief's write call pinned a paid model (19 Sep), the scheduled brief was retired the same day and none has been
+built since; a build pressed with the lever off Free only would have spent money. Owner: "never a paid API".
+- `services/dailyIntelligence.ts`: `BRIEF_ROUTE` (`important`, `seatFirst`, `neverPaid`) replaces the pin: Claude seat,
+  then Codex, else the named stop `seat_wait_important_work`.
+- `worker/ai/runAi.ts`: `budgetContext.neverPaid` routes a call as at Free only wherever the lever stands.
+- `scripts/validate/a-brief-reaches-home-or-says-why.mjs`: the source-text pins on the model are removed; the behaviour
+  is proven in `tests/ladderOrder.test.ts` ("THE DAILY BRIEF": no vendor is called at any lever).
+- The 151 preflight-blocked runs since 4 Nov were Porter's "Unclear email" cards for the firm's own daily form probe
+  and one Pinecone thread, each waiting for a seat; #362 stopped the probe opening cards (last blocked run 13 Nov
+  12:48Z, all 12 probe cards DONE). Nothing further to change.
