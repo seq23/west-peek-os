@@ -74,6 +74,15 @@ export const REPO_ROOT_SITE = ".";
  * and the community site joinwestpeek.com). `propertiesIn` matches the most specific host first
  * and consumes what it matched, so a subdomain never also names its parent.
  */
+/**
+ * WEST PEEK OS ITSELF (13 Nov 2026): a dashboard or screen INSIDE the OS is a build Porter does in its
+ * own repo. Registered by migration 0303 (this array stays 0253's seed). No words on purpose: naming the
+ * OS in passing is not a build; the reader's "a build inside the OS", its host, or seq23/west-peek-os is.
+ */
+export const OS_HOST = "os.joinwestpeek.com";
+export const OS_REPO = "west-peek-os";
+export const OS_PROPERTY: WebProperty = { host: OS_HOST, repo: OS_REPO, site: REPO_ROOT_SITE, words: [] };
+
 export const WEB_PROPERTIES: readonly WebProperty[] = [
   { host: "westpeek.ventures", repo: "join-west-peek-main", site: "sites/ventures", pagesHost: "west-peek-ventures.pages.dev", words: ["ventures site", "ventures website", "ventures page", "the fund site", "the fund website", "west peek ventures site"] },
   { host: "westpeekproductions.com", repo: "join-west-peek-main", site: "sites/productions", pagesHost: "west-peek-productions.pages.dev", words: ["productions site", "productions website", "agency site", "agency website", "west peek productions site"] },
@@ -305,7 +314,13 @@ export function previewFirstIn(text: string): string | null {
  * a Drive folder in a quoted earlier thread or a signature is not this request's package (21 Sep
  * 2026: the Community package folder rode in on a quote and Porter pulled 200 files for a photo).
  */
-export function parseWebPropertyAsk(subject: string, body: string, registry: readonly WebProperty[] = WEB_PROPERTIES): WebPropertyAsk | null {
+/**
+ * `readAsBuild` (13 Nov 2026, the one build door): the plain-words reader read the email as a build and
+ * no property is named. A property it names wins over this; otherwise the build goes to the target the
+ * reader gave (West Peek OS itself for a screen inside the OS), or is UNRESOLVED and Porter's job
+ * settles it. Every other field is still read from the partner's own written words.
+ */
+export function parseWebPropertyAsk(subject: string, body: string, registry: readonly WebProperty[] = WEB_PROPERTIES, readAsBuild: WebProperty | "UNRESOLVED" | null = null): WebPropertyAsk | null {
   const text = `${subject}\n${body}`.replace(/\r/g, "");
   const written = writtenPart(text);
   const folder = FOLDER_LINK.exec(written);
@@ -324,15 +339,16 @@ export function parseWebPropertyAsk(subject: string, body: string, registry: rea
   // The greeting is the BODY's first line; the subject sits above it in `text`.
   const addressee = addresseeIn(writtenPart(body.replace(/\r/g, "")));
   // "Hey Porter — a spot on the site": addressed to Porter, a property named without its host.
-  const unresolved = !property && addressee === "Porter" && THE_SITE.test(written);
-  if (!folder && !file && !property && !unresolved) return null;
+  const target: WebProperty | null = property ?? (readAsBuild && readAsBuild !== "UNRESOLVED" ? readAsBuild : null);
+  const unresolved = !target && ((addressee === "Porter" && THE_SITE.test(written)) || readAsBuild === "UNRESOLVED");
+  if (!folder && !file && !target && !unresolved) return null;
   return {
     drive_folder_id: folder?.[1] ?? null,
     drive_folder_url: folder ? folder[0]!.replace(/[.,;:]+$/, "") : null,
     drive_file_url: file ? file[0]!.replace(/[.,;:]+$/, "") : null,
-    property_host: property?.host ?? null,
-    target_repo: property?.repo ?? null,
-    site: property?.site ?? null,
+    property_host: target?.host ?? null,
+    target_repo: target?.repo ?? null,
+    site: target?.site ?? null,
     ...(parts.length ? { parts } : {}),
     ask,
     pre_approval: preApprovalIn(written),

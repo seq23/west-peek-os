@@ -11,7 +11,7 @@ import { readSecretLines, secretNameProblem, RESERVED_SECRET_NAMES } from "../sr
 import { outboundFilesFor } from "../src/worker/services/workCardFiles";
 import { recordDnsWaits, recordProblem } from "../src/worker/services/dnsWaits";
 import { missingSecretsOf, readWebPropertyChange } from "../src/worker/services/webPropertyChange";
-import { WEB_PROPERTIES, githubReposIn, hostsSentence, registrationsIn } from "../src/shared/intake/webPropertyChange";
+import { OS_PROPERTY, WEB_PROPERTIES, githubReposIn, hostsSentence, registrationsIn } from "../src/shared/intake/webPropertyChange";
 import { PORTER_WAITS, PORTER_WAIT_KINDS, WAIT_TEXT_FORBIDDEN, waitDetail } from "../src/shared/work/porterWaits";
 import { dueTimeIn } from "../src/shared/intake/dueTime";
 import { blockCard } from "../src/worker/services/blocks";
@@ -112,7 +112,8 @@ describe("the open repo registry (0253)", () => {
   it("is seeded by the migration with every WEB_PROPERTIES row, host → repo verbatim, and the Worker reads the table", async () => {
     const rows = (await env.WP_OS_DB.prepare("SELECT host, repo, site, seeded FROM web_property_registry WHERE seeded = 1 ORDER BY position").all<{ host: string; repo: string; site: string; seeded: number }>()).results ?? [];
     expect(rows.length, "at least six seeded rows").toBeGreaterThanOrEqual(6);
-    expect(rows.map((r) => [r.host, r.repo, r.site])).toEqual(WEB_PROPERTIES.map((p) => [p.host, p.repo, p.site]));
+    // 0303 seeds one more row after 0253's array: West Peek OS itself, a build target (OS_PROPERTY).
+    expect(rows.map((r) => [r.host, r.repo, r.site])).toEqual([...WEB_PROPERTIES, OS_PROPERTY].map((p) => [p.host, p.repo, p.site]));
     const registry = await loadRegistry(env);
     expect(registry.slice(0, rows.length).map((p) => p.host)).toEqual(rows.map((r) => r.host));
     expect(hostsSentence(registry)).toContain("joinwestpeek.com");

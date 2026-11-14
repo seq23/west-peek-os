@@ -35,7 +35,7 @@ beforeAll(async () => {
 });
 afterAll(async () => disposeTestDb(t));
 
-const read = (door: string, seat = "none", intent = "CONTINUE"): ReplyIntentReader => async (_env, input) => ({ ...parseReplyIntent(`INTENT: ${intent}\nDOOR: ${door}\nSEAT: ${seat}\nCHANGES: none\nQUESTION: none\nREASON: test`, input.text), keyword: null, aiRunId: null });
+const read = (door: string, seat = "none", intent = "CONTINUE", buildIn = "none"): ReplyIntentReader => async (_env, input) => ({ ...parseReplyIntent(`INTENT: ${intent}\nDOOR: ${door}\nSEAT: ${seat}\nBUILD_IN: ${buildIn}\nCHANGES: none\nQUESTION: none\nREASON: test`, input.text), keyword: null, aiRunId: null });
 
 async function cardsFrom(chiefCardId: string) {
   return (await env.WP_OS_DB.prepare("SELECT id, owner_id, state, requested_by_email FROM work_card WHERE id = ?1 OR assigned_from_card_id = ?1").bind(chiefCardId).all<{ id: string; owner_id: string; state: string; requested_by_email: string | null }>()).results ?? [];
@@ -107,5 +107,39 @@ describe("a question on a job's thread is answered with where the job stands", (
     expect(jobPhaseLine(plan)).toMatch(/plan is being worked out/);
     expect(jobPhaseLine({ ...(plan as object), phase: "BUILD", plan_approved_at: "2026-11-13T00:00:00Z" } as never)).toMatch(/being built/);
     expect(jobPhaseLine({ ...(plan as object), phase: "BUILD", check_state: "GREEN", plan_approved_at: "x" } as never)).toMatch(/waits on your word on the preview/);
+  });
+});
+
+describe("one build door: every build ask is Porter's job", () => {
+  async function porterJobFrom(chief: string) {
+    const handed = (await cardsFrom(chief)).find((c) => c.id !== chief);
+    if (!handed) return null;
+    const job = await env.WP_OS_DB.prepare("SELECT c.kind, c.owner_id, w.target_repo, w.property_host FROM work_card c JOIN web_property_change w ON w.work_card_id = c.id WHERE c.id = ?1").bind(handed.id).first<{ kind: string; owner_id: string; target_repo: string; property_host: string | null }>();
+    return job;
+  }
+
+  it("a dashboard inside the OS goes to Porter's job in West Peek OS's own repo", async () => {
+    const chief = await openAssignmentCard(env, { subject: "Dashboard for the agents", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Can you build me a dashboard of what the agents did this week, with the drafts waiting on me?", limits: EMAILED_TASK_LIMITS, emlKey: null, readWords: read("BUILD", "none", "CONTINUE", "OS") });
+    const job = await porterJobFrom(chief);
+    expect(job).toMatchObject({ kind: "WEB_PROPERTY_CHANGE", owner_id: "aie_porter", target_repo: "west-peek-os", property_host: "os.joinwestpeek.com" });
+  });
+
+  it("an app with no site named goes to Porter's job unresolved, never assumed to be the last site he worked on", async () => {
+    const chief = await openAssignmentCard(env, { subject: "An app for the Rooms", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Make me a simple app where Room hosts can check people in.", limits: EMAILED_TASK_LIMITS, emlKey: null, readWords: read("BUILD", "none", "CONTINUE", "NEW") });
+    const job = await porterJobFrom(chief);
+    expect(job).toMatchObject({ kind: "WEB_PROPERTY_CHANGE", owner_id: "aie_porter", target_repo: "unresolved", property_host: null });
+  });
+
+  it("a dashboard card typed in the OS is a build for Porter, never a panel report", async () => {
+    const { createWorkCardInternal } = await import("../src/worker/services/workCards");
+    const { runArtifactCard } = await import("../src/worker/services/artifacts");
+    const { systemIdentity } = await import("../src/worker/services/dealIntake");
+    const made = await createWorkCardInternal(env, systemIdentity(), { title: "Wren, build me a dashboard of open cards by employee", owner_type: "AI", owner_id: "aie_wren", firm_scope: "west-peek", priority: "NORMAL" } as never);
+    expect((await env.WP_OS_DB.prepare("SELECT kind FROM work_card WHERE id = ?1").bind(made.id).first<{ kind: string }>())!.kind).toBe("ARTIFACT");
+    const out = await runArtifactCard(env, { id: made.id });
+    expect(out.finished, out.detail).toBe(true);
+    const job = await porterJobFrom(made.id);
+    expect(job).toMatchObject({ kind: "WEB_PROPERTY_CHANGE", owner_id: "aie_porter", target_repo: "west-peek-os" });
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM artifact WHERE work_card_id = ?1").bind(made.id).first<{ n: number }>())!.n).toBe(0);
   });
 });

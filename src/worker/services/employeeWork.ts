@@ -318,6 +318,36 @@ export async function assignCard(
 }
 
 /**
+ * ONE BUILD DOOR (13 Nov 2026): a card that asks for something built is handed to Porter's job, under
+ * the v1.0 bar. The target is the property its words name, else West Peek OS itself (an internal
+ * dashboard or screen). The card it came from is DONE with the hand-off on it, like every hand-off.
+ */
+export async function handBuildToPorter(env: Env, cardId: string): Promise<{ ok: boolean; detail: string; cardId: string | null }> {
+  const card = await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(cardId).first<CardRow & { kind: string | null }>();
+  if (!card) return { ok: false, detail: "no such card", cardId: null };
+  const { parseWebPropertyAsk, OS_PROPERTY, OS_REPO } = await import("../../shared/intake/webPropertyChange");
+  const { loadRegistry, registryEntryFor } = await import("./webPropertyRegistry");
+  const { openWebPropertyChange, PORTER_NAME } = await import("./webPropertyChange");
+  const os = (await registryEntryFor(env, OS_REPO)) ?? OS_PROPERTY;
+  const words = `${card.prompt ?? ""}\n${card.description ?? ""}`.trim();
+  const ask = parseWebPropertyAsk(card.title.replace(/^From [^:]+@[^:]+:\s*/i, ""), words || card.title, await loadRegistry(env), os)!;
+  const holder = card.owner_id ? await env.WP_OS_DB.prepare("SELECT id, name FROM ai_employee WHERE id = ?1").bind(card.owner_id).first<{ id: string; name: string }>() : null;
+  const by = holder ?? { id: "system", name: "West Peek OS" };
+  if (by.name === PORTER_NAME) {
+    // Already Porter's: the card itself becomes the job.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'WEB_PROPERTY_CHANGE', request_json = ?2 WHERE id = ?1").bind(card.id, JSON.stringify(ask)).run();
+    await openWebPropertyChange(env, { cardId: card.id, ask, firmScope: card.firm_scope });
+    return { ok: true, detail: `A build for ${ask.property_host ?? "an unresolved target"}: Porter's job now.`, cardId: card.id };
+  }
+  const handed = await assignCard(env, { ...card, kind: undefined } as CardRow, by, PORTER_NAME, `Build ${ask.property_host ?? "it"}: "${(card.prompt || card.title).replace(/\s+/g, " ").slice(0, 160)}". Plan it on the Mac against the repo's RUNBOOK; build to the v1.0 bar, prove it, open a PR, land on green.`);
+  if (!handed.ok) return { ok: false, detail: `a build, but it could not be handed to Porter: ${handed.reason}`, cardId: null };
+  await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'WEB_PROPERTY_CHANGE', request_json = ?2 WHERE id = ?1").bind(handed.cardId, JSON.stringify(ask)).run();
+  await openWebPropertyChange(env, { cardId: handed.cardId, ask, firmScope: card.firm_scope });
+  await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE', next_action = NULL, description = substr(COALESCE(description, '') || char(10) || '• Handed to Porter as work card ' || ?2 || ': a build, worked on the Mac.', 1, 16000) WHERE id = ?1").bind(card.id, handed.cardId).run();
+  return { ok: true, detail: `Handed to Porter as work card ${handed.cardId}: a build for ${ask.property_host ?? "an unresolved target"}.`, cardId: handed.cardId };
+}
+
+/**
  * THE STORED MESSAGE A CARD IS ABOUT, on this card or the one it was handed from (7 Oct 2026).
  *
  * Wyatt told Sequoia he could not "open the stored message inbound-email/…eml" and asked her to

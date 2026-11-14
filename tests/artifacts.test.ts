@@ -357,10 +357,11 @@ describe("3. door B — a work card: her words become an ARTIFACT card, the same
 
   it("the sweep dispatches an ARTIFACT card to the producer, and one with no object to be about BLOCKS saying so", async () => {
     const card = await createWorkCardInternal(env, MP_IDENTITY, {
-      title: "Put together a dashboard",
+      // A one-pager: a dashboard card is a build for Porter now (tests/plainWordsReader.test.ts).
+      title: "Put together a one-pager",
       owner_type: "AI",
       owner_id: "Wyatt",
-      prompt: "put together a dashboard of everything",
+      prompt: "put together a one-pager on everything",
     });
     expect((await t.db.prepare("SELECT kind FROM work_card WHERE id = ?1").bind(card.id).first<{ kind: string | null }>())?.kind).toBe("ARTIFACT");
     let ran = 0;

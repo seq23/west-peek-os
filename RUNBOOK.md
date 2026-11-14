@@ -108,3 +108,13 @@ export goes to the partner's Drive only. The full numbered list with code anchor
 `npm run validate:open-repo-door`, `npm run validate:partner-service-rules`, `npm run
 validate:delivery-config`, `npm run validate:no-land-without-approval`, `npm run validate:duty-executor`,
 and `tests/openRepoDoor.test.ts`. Each pins the doors above; `scripts/validate/README.md` says what.
+
+## When Porter builds in this repo (13 Nov 2026)
+
+West Peek OS is one of the repos Porter may build in (migration 0303): an internal dashboard or screen a partner asks for by email is a change here. The same gates as every repo hold: his own worktree, a PR, CI green, the partner's word on the preview, `~/bin/land` to merge and deploy, migrations additive only, no secret in the repo, and no change to live card records.
+
+## Porter may run
+- `typecheck`
+- `test`
+- `build`
+- `migrate:local`
