@@ -167,9 +167,28 @@ function looksLikeKnownNoise(stderr) {
  * whole stream — but the whole stream is returned when there is only one block, which is the
  * ordinary case and must not be mangled by a clever parser.
  */
-export function extractAnswer(stdout) {
-  const trimmed = (stdout ?? "").replace(/\r/g, "").trim();
+/*
+ * HER OWN SIGN-OFF IS NEVER AN ANSWER (14 Nov 2026, wc_bd8b68cb). `claude -p` on her Mac loads her personal
+ * ~/.claude/CLAUDE.md, whose rule is to end every reply with a lone "✅ nothing needed from you" or
+ * "🔴 NEEDS YOU: …" line. Taken as the last block, that line WAS the answer: the reading of Scooter's reply came
+ * back as "✅ nothing needed from you" three times, two retries failed on it and his card blocked. Trailing
+ * sign-off lines are dropped from every seat answer, search or not.
+ */
+const SIGN_OFF_LINE = /^\s*(?:✅\s*nothing needed from you|🔴\s*NEEDS YOU:.*)\s*$/iu;
+export function stripSignOff(text) {
+  const lines = (text ?? "").replace(/\r/g, "").split("\n");
+  while (lines.length && (lines[lines.length - 1].trim() === "" || SIGN_OFF_LINE.test(lines[lines.length - 1]))) lines.pop();
+  return lines.join("\n").trim();
+}
+
+/**
+ * `whole`: the CLI prints only its answer (Claude Code's `-p`), so every paragraph of it is the answer and none is
+ * dropped as a "preamble"; the last-block rule below is for a CLI that prints progress first.
+ */
+export function extractAnswer(stdout, { whole = false } = {}) {
+  const trimmed = stripSignOff(stdout);
   if (!trimmed) return "";
+  if (whole) return trimmed;
   const blocks = trimmed.split(/\n{2,}/).map((b) => b.trim()).filter((b) => b.length > 0);
   if (blocks.length <= 1) return trimmed;
   return blocks[blocks.length - 1];
@@ -319,10 +338,12 @@ async function runOnSeat(seat, prompt, { search = false, files = null, cwd = und
       }
       if (searchParsed) {
         // SEARCHED, OR IT IS NOT AN ANSWER. See searchOutcome: zero counted events is a failure in words.
-        resolve(searchOutcome(searchParsed, cfg.displayName));
+        const outcome = searchOutcome(searchParsed, cfg.displayName);
+        if (outcome.ok) outcome.output = stripSignOff(outcome.output);
+        resolve(outcome.ok && !outcome.output ? { ok: false, error: `${cfg.displayName} finished with no answer.` } : outcome);
         return;
       }
-      const answer = extractAnswer(out);
+      const answer = extractAnswer(out, { whole: seat === "claude_code" });
       if (answer.length > 0) {
         // EXIT CODE AND ANSWER DECIDE, NOT STDERR. See `looksLikeKnownNoise` above.
         resolve({ ok: true, output: answer });
@@ -514,6 +535,9 @@ function selfTest() {
     ["the last block wins over a preamble", () => extractAnswer("thinking...\n\nlane is alive") === "lane is alive"],
     ["blank output is empty, never a false answer", () => extractAnswer("   \n \n ") === ""],
     ["undefined output does not throw", () => extractAnswer(undefined) === ""],
+    ["her sign-off is never the answer (wc_bd8b68cb)", () => extractAnswer('UNDERSTOOD: check the trackers\n\n{"steer":["x"]}\n\n✅ nothing needed from you') === '{"steer":["x"]}'],
+    ["a Claude answer keeps every paragraph and drops only her sign-off", () => extractAnswer("UNDERSTOOD: a\n\nANSWER: b\n\n🔴 NEEDS YOU: nothing", { whole: true }) === "UNDERSTOOD: a\n\nANSWER: b"],
+    ["an answer that is only her sign-off is no answer", () => extractAnswer("✅ nothing needed from you", { whole: true }) === ""],
     ["the models-refresh line is known noise", () => looksLikeKnownNoise("ERROR: failed to refresh available models: unknown variant `max`")],
     ["an unrelated stderr line is not excused", () => !looksLikeKnownNoise("ERROR: authentication failed")],
     ["chatgpt auth mode is on the subscription", () => codexOnSubscription('{"auth_mode":"chatgpt","OPENAI_API_KEY":null}')],
