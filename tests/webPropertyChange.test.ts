@@ -700,7 +700,7 @@ describe("a job that left out part of the original request is reopened by the sy
     await tickFor(id);
     const job = await liveJobFor(id);
     expect(job, "BUILD is queued for the Mac").not.toBeNull();
-    const payload = JSON.parse(String(job!.job_json)) as { phase: string; rebuild: { intent: string; changes: string } | null };
+    const payload = JSON.parse(String(job!.job_json)) as { phase: string; rebuild: { intent: string; changes: string; stage?: boolean } | null };
     expect(payload.phase).toBe("BUILD");
     expect(payload.rebuild?.intent).toBe("CHANGES");
     expect(payload.rebuild?.changes).toContain("Build it at /members on this site, behind a password");
@@ -759,7 +759,7 @@ describe("the developer may direct any job with a work instruction, and with not
   }
   const rebuildOf = async (id: string) => {
     const job = await liveJobFor(id);
-    return job ? (JSON.parse(String(job.job_json)) as { phase: string; rebuild: { intent: string; changes: string } | null }) : null;
+    return job ? (JSON.parse(String(job.job_json)) as { phase: string; rebuild: { intent: string; changes: string; stage?: boolean } | null }) : null;
   };
 
   it("her 'changes: …' on his job rebuilds with her words; her 'approved' on it lands nothing", async () => {
@@ -870,6 +870,27 @@ describe("the developer may direct any job with a work instruction, and with not
     await rebuilt(id, "dev4e", "work/wpc-dev4-launch");
     expect(previewMails(beforeMove), "a link he does not hold is mailed").toHaveLength(1);
     expect(previewMails(beforeMove)[0]!.text).toContain("https://work-wpc-dev4-launch.west-peek-ventures.pages.dev");
+  });
+
+  /**
+   * 14 Nov 2026: the partner held a preview link while the developer directed a full rebuild. A half-built change
+   * must never show on the link he holds: the rebuild is STAGED (the job says so), built on "<branch>-next" with its
+   * own preview, and nothing is mailed to him; his own changes are not staged.
+   */
+  it("the developer's rebuild while he holds a preview is staged on its own branch and preview, and not mailed", async () => {
+    const id = await atPreview("dev7", SCOOTER);
+    const afterFirst = sent.length;
+    expect((await door(id, "rebuild the dashboard to the full scope")).status).toBe(200);
+    await tickFor(id);
+    expect((await rebuildOf(id))?.rebuild, "the job tells the Mac to stage it").toMatchObject({ intent: "CHANGES", stage: true });
+    await macReports(id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/90", pr_number: 90, branch: "work/wpc-dev7-next", changed: true, head_sha: "head-dev7b", check_state: "GREEN", preview_url: "https://work-wpc-dev7-next.west-peek-ventures.pages.dev", proof: "validate green" });
+    expect((await tickFor(id)).outcome).toBe("BLOCKED");
+    expect(sent.slice(afterFirst).filter((m) => m.to === SCOOTER), "the staged build is not mailed to him").toHaveLength(0);
+    const row = (await readWebPropertyChange(env, id))!;
+    expect([row.branch, row.pr_number], "the staged PR is the job's PR now").toEqual(["work/wpc-dev7-next", 90]);
+    await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: "changes: put the founders photo on the home page" });
+    await tickFor(id);
+    expect((await rebuildOf(id))?.rebuild?.stage, "his own changes are never marked staged").toBeUndefined();
   });
 
   /**

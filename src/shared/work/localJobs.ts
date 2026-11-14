@@ -168,7 +168,7 @@ export interface LocalJobPayload {
    * the branch head before and after the model's turn and reports `changed`; the Worker treats a
    * CHANGES rebuild that moved nothing as a failed attempt, never a fresh preview.
    */
-  rebuild?: { intent: "CHANGES" | "PREVIEW" | "PUBLISH"; changes: string | null; since: string | null } | null;
+  rebuild?: { intent: "CHANGES" | "PREVIEW" | "PUBLISH"; changes: string | null; since: string | null; stage?: boolean } | null;
   rules: Record<string, string>;
   /**
    * 23 Sep 2026: ONE JOB OVER SEVERAL REPOS — one entry per repo (migration 0236), in order. Absent

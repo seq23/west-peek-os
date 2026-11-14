@@ -829,7 +829,14 @@ export async function parkPhase(
     // as THE job — not one answer among many the model may decide are already done.
     rebuild:
       phase === "BUILD" && row.refresh_intent
-        ? { intent: row.refresh_intent, changes: row.refresh_intent === "CHANGES" ? (row.rebuilt_for ?? list(row.answers_json).at(-1) ?? null) : null, since: row.preview_emailed_at ?? null }
+        ? {
+            intent: row.refresh_intent,
+            changes: row.refresh_intent === "CHANGES" ? (row.rebuilt_for ?? list(row.answers_json).at(-1) ?? null) : null,
+            since: row.preview_emailed_at ?? null,
+            // 14 Nov 2026: the developer's rebuild while the partner holds a preview is STAGED on its own branch and
+            // preview (the Mac's `stagedBranchFor`), so the link he holds never shows a half-built change.
+            ...(row.refresh_intent === "CHANGES" && (await rebuildWords(env, card.id, row).then((w) => w.developer && w.partnerHoldsPreview, () => false)) ? { stage: true } : {}),
+          }
         : null,
     rules,
     ...(parts.length ? { parts: parts.map(partPayload) } : {}),
@@ -969,6 +976,8 @@ export function askBlockText(asks: readonly Ask[], readiness?: { publishReady: b
  *     the partner already held a preview email he had not answered (`blockOnNewPreview`).
  */
 export const QUIET_PREVIEW = "not mailed";
+/** The staging branch suffix the Mac uses for a staged rebuild (scripts/duties/web-property-change.mjs `STAGE_SUFFIX`). */
+export const STAGE_SUFFIX = "-next";
 /** How a partner is told a rebuild finished his own original ask: our words around his, so never inside quote marks as if he wrote them. */
 const FINISHING_HIS_ASK = "finishing your original request";
 const flat = (v: unknown): string => (typeof v === "string" ? v.replace(/\s+/g, " ").trim() : "");
@@ -1201,9 +1210,13 @@ async function blockOnNewPreview(env: Env, card: WebPropertyChangeCard, before: 
     const hosts = pagesHostsOf(fresh.property_host ?? null, await loadRegistry(env));
     const link = cleanPreviewUrls(fresh.preview_url, hosts, fresh.branch ?? "");
     const mailed = await env.WP_OS_DB.prepare("SELECT 1 AS one FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PREVIEW' AND sent = 1 LIMIT 1").bind(card.id).first<{ one: number }>();
-    if (mailed && link && link === cleanPreviewUrls(before.preview_url, hosts, before.branch ?? "")) {
-      await recordNotice(env, { cardId: card.id, kind: "PREVIEW", cause: fresh.check_green_at ?? "green", to: (card.requested_by_email ?? "").trim().toLowerCase(), messageId: null, sent: false, detail: `${QUIET_PREVIEW}: rebuilt on the developer's instruction; the preview email already waiting on the partner carries the same link`, firmScope: card.firm_scope });
-      await appendFinding(env, card.id, `No new preview email for this build: it was rebuilt on the developer's instruction, and ${card.requested_by_email ?? "the partner"} already holds a preview email for the same link and has not answered it. The link shows this build; the next email describes it.`);
+    // A STAGED rebuild (its branch is the old one + "-next") has its own link on purpose: the one he holds stays as it was.
+    const staged = Boolean(fresh.branch && before.branch && fresh.branch === `${before.branch}${STAGE_SUFFIX}`);
+    if (mailed && link && (staged || link === cleanPreviewUrls(before.preview_url, hosts, before.branch ?? ""))) {
+      await recordNotice(env, { cardId: card.id, kind: "PREVIEW", cause: fresh.check_green_at ?? "green", to: (card.requested_by_email ?? "").trim().toLowerCase(), messageId: null, sent: false, detail: `${QUIET_PREVIEW}: rebuilt on the developer's instruction; ${staged ? "staged on its own preview, the one already waiting on the partner is unchanged" : "the preview email already waiting on the partner carries the same link"}`, firmScope: card.firm_scope });
+      await appendFinding(env, card.id, staged
+        ? `No new preview email for this build: it was rebuilt on the developer's instruction and staged on its own preview (${link}); ${card.requested_by_email ?? "the partner"} still holds the earlier preview, which is unchanged. The next email he gets carries the new link.`
+        : `No new preview email for this build: it was rebuilt on the developer's instruction, and ${card.requested_by_email ?? "the partner"} already holds a preview email for the same link and has not answered it. The link shows this build; the next email describes it.`);
     }
   }
   return blockOnPreview(env, card, fresh);
