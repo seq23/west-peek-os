@@ -808,7 +808,7 @@ async function handleReplyOnClosedCard(
    */
   const routed = await answerQuestionForCard(
     env,
-    { cardId: card.id, firmScope: card.firm_scope, kind: card.kind, cardTitle: card.title, question: written },
+    { cardId: card.id, firmScope: card.firm_scope, kind: card.kind, cardTitle: card.title, question: written, partnerName: partner.fullName },
     answerQuestion,
   );
 

@@ -1833,6 +1833,13 @@ async function steeredSearch(env: Env, card: SweepCard, employee: "Parker" | "Wy
     steps: TLC_STEPS[card.kind ?? ""] ?? [],
     firmScope: card.firm_scope,
   }, interpret);
+  /*
+   * A READER THAT COULD NOT READ IS A FAILED GO, NEVER "THE BRIEF IS MISSING" (2-13 Nov 2026). A seat that was down
+   * (Claude "did not say what it understood", Codex unavailable) blocked a Productions card for 11 days asking the
+   * partner to repeat himself. The sweep tries again on its next pass, down the route order, and its attempt bound
+   * is the named stop. Same rule as productions.ts and productionsHire.ts.
+   */
+  if (steer.failure) return { blocked: { finished: false, blocked: false, progressed: false, detail: `what was said about this could not be read: ${steer.failure}` } };
   if (steer.cannot.length > 0) {
     const why = await blockCard(env, card, {
       reason: steer.failure ? "the_brief_is_missing" : "asked_for_something_this_work_cannot_do",

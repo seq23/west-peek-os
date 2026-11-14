@@ -161,7 +161,7 @@ describe("a reply on a DONE card — pure steering only (must not regress)", () 
 });
 
 describe("a reply on a DONE card — a genuine question, no steering content", () => {
-  const KIND = "PRODUCTIONS_HIRE_SEARCH"; // unregistered in kindHosts.ts — escalates deterministically, no model call
+  const KIND = "PRODUCTIONS_HIRE_SEARCH"; // unregistered in kindHosts.ts — Scooter's chief of staff tries it; the local mock is not confident
   const CARD_ID = "wc_done_question_only";
 
   it("is not silently dropped: escalated with a distinctly labelled note and a notification", async () => {
@@ -215,8 +215,9 @@ describe("a reply on a DONE card — a genuine question, no steering content", (
       .bind(CARD_ID)
       .first<{ payload_json: string }>();
     expect(escalated, "an audit trail exists naming who was tried and why").toBeTruthy();
-    const payload = JSON.parse(escalated!.payload_json) as { reason: string };
-    expect(payload.reason).toContain("no owning employee is registered");
+    const payload = JSON.parse(escalated!.payload_json) as { tried_employee: string | null; reason: string };
+    expect(payload.tried_employee, "a kind with no owner is tried by the writer's chief of staff, never nobody").toBe("Walker");
+    expect(payload.reason).toContain("could not read a confident answer");
 
     // The card itself is untouched — still DONE, never quietly reopened into looking unfinished.
     const row = await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(CARD_ID).first<{ state: string }>();
