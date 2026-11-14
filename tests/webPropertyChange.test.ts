@@ -1275,6 +1275,40 @@ describe("the v1.0 bar: every built ask says when it is done, and a build that h
   });
 });
 
+describe("a step the partner kept for himself is his, not unfinished work (14 Nov 2026)", () => {
+  beforeAll(ageEarlierCards);
+  afterAll(ageEarlierCards);
+  it("a check he reserved in his own words goes to preview; the same shape with words he never wrote is refused", async () => {
+    /*
+     * Scooter's brief: "We will walk the rules before any money view ships." The BUILD did every ask and reported
+     * that one check as not met, quoting him; the bar refused it as unfinished and no preview reached him.
+     */
+    const BASE = { document: "# Plan\n\nnothing to ask", decided: ["as asked"], asks: [], publish_ready: true };
+    const checks = ["Scooter signs in with his own password on the preview", "walk the cash rules with Scooter before any money view ships"];
+    const more = "\n\nFinance stays private. We will walk the rules before any money view ships.";
+    const atBuild = async (tag: string): Promise<string> => {
+      const chiefId = await openAssignmentCard(env, { subject: `productions money ${tag}`, partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: `Please build a dashboard on westpeek.ventures where I can sign in and see deals — package: https://drive.google.com/drive/folders/${FOLDER}${tag}${more}`, limits: EMAILED_TASK_LIMITS, emlKey: null });
+      const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
+      await tickFor(id);
+      await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "the dashboard", how: "build", done_when: checks }], ...BASE });
+      await tickFor(id);
+      expect((await readWebPropertyChange(env, id))!.plan_filed_at).toBeTruthy();
+      return id;
+    };
+    const pr = (tag: string) => ({ pr_url: "https://github.com/seq23/join-west-peek-main/pull/92", pr_number: 92, branch: `work/wpc-${tag}`, check_state: "GREEN", preview_url: `https://${tag}.west-peek-ventures.pages.dev`, proof: "validate green" });
+    const his = await atBuild("held1");
+    await macReports(his, { phase: "BUILD", status: "ok", ...pr("held1"), items: [{ item: "the dashboard", state: "partial", done_when: [{ check: checks[0], met: true }, { check: checks[1], met: false, note: "his own words: 'We will walk the rules before any money view ships'; nothing lands without his yes" }] }] });
+    await tickFor(his);
+    expect(String((await card(his)).description), "not refused as unfinished").not.toMatch(/BUILD REFUSED/);
+    expect((await readWebPropertyChange(env, his))!.preview_url).toBe("https://held1.west-peek-ventures.pages.dev");
+    const not = await atBuild("held2");
+    await macReports(not, { phase: "BUILD", status: "ok", ...pr("held2"), items: [{ item: "the dashboard", state: "partial", done_when: [{ check: checks[0], met: true }, { check: checks[1], met: false, note: "his words: 'We will do the money view next month'" }] }] });
+    await tickFor(not);
+    expect(String((await card(not)).description), "words he never wrote hold nothing").toMatch(/BUILD REFUSED.*walk the cash rules/);
+    expect((await readWebPropertyChange(env, not))!.preview_url ?? null).toBeNull();
+  });
+});
+
 describe("a plan that is not publish-ready previews first (21 Sep 2026)", () => {
   const PLACEHOLDERS = ["Airtable links", "Sengo logo", "episode records", "approved orange hex"];
   let id = "";

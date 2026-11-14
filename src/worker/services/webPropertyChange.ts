@@ -1524,7 +1524,9 @@ export async function applyReport(
    * same branch. A several-repo report that rebuilt nothing (every PR re-observed) carries no items and is not judged again.
    */
   if (report.phase === "BUILD" && report.status === "ok" && !(report.parts?.length && report.items === undefined)) {
-    const problems = buildProblems({ items: report.items, missingSecrets: report.missing_secrets?.length ?? 0, missingMaterials: report.missing_materials?.length ?? 0 });
+    const shared = await (await import("./driveShares")).driveFilesFor(env, card.id);
+    const partnerText = [row.request_text ?? "", row.ask ?? "", ...list(row.answers_json), ...shared.map((f) => f.text ?? "")].join("\n");
+    const problems = buildProblems({ items: report.items, missingSecrets: report.missing_secrets?.length ?? 0, missingMaterials: report.missing_materials?.length ?? 0, partnerText });
     if (problems.length) {
       const line = buildRefusalLine(problems);
       await recordHistory(env, { ...row, run_history_json: (await readWebPropertyChange(env, card.id))?.run_history_json ?? row.run_history_json }, { run_id: run.id, phase: "BUILD", status: "REFUSED", reason: line.slice(0, 1200) });
