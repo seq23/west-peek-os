@@ -2210,6 +2210,19 @@ export async function cardStandingLines(env: Env, cardId: string, row: WebProper
   return lines;
 }
 
+/**
+ * A JOB ALWAYS HAS A STANDING (13 Nov 2026). A question on a job's thread with no link or build on
+ * record was told "Nothing is being built for this — it was a question, not a job": wrong, it is a job.
+ * The card's phase says where it is, in one line. Pure. It is never an answer: it only fills
+ * "Where things stand" when the card records nothing more.
+ */
+export function jobPhaseLine(row: Pick<WebPropertyChangeRow, "phase" | "check_state" | "land_approved_at" | "plan_approved_at">): string {
+  if (row.land_approved_at) return "You approved it; it is going live, and you get the live link by email.";
+  if (row.phase === "BUILD" && row.check_state === "GREEN") return "The build is done and waits on your word on the preview email; nothing goes live until you approve it.";
+  if (row.phase === "BUILD" || row.plan_approved_at) return "It is being built; you get a preview email the moment it is ready.";
+  return "The plan is being worked out; you get it by email, and nothing is built until it is settled.";
+}
+
 async function answerMidFlowQuestion(env: Env, card: WebPropertyChangeCard, question: string, answerQuestion: QuestionAnswerer | undefined): Promise<string> {
   const standing = await cardStandingLines(env, card.id, await readWebPropertyChange(env, card.id), question);
   const routed = await answerQuestionForCard(
@@ -2225,7 +2238,8 @@ async function answerMidFlowQuestion(env: Env, card: WebPropertyChangeCard, ques
     : fromCard
       ? `Here is where it stands. ${standing[0]}`
       : "Good question — I don't know that one for certain, so I've passed it to Sequoia rather than guess. The work carries on with my recommendations in the meantime; nothing goes live until you approve the preview.";
-  const sent = await sendQuestionAnswer(env, card, question, { ...routed, employeeName: routed.employeeName ?? PORTER_NAME, answer }, standing);
+  const row = await readWebPropertyChange(env, card.id);
+  const sent = await sendQuestionAnswer(env, card, question, { ...routed, employeeName: routed.employeeName ?? PORTER_NAME, answer }, standing.length || !row ? standing : [jobPhaseLine(row)]);
   if (!known && !fromCard) {
     // "PASSED TO SEQUOIA" MEANS SHE IS TOLD WHERE SHE READS: an email on the card, not only a line in the app
     // (13 Nov 2026: the in-app notice alone reached nobody). The partner named by the registry, never typed here.
@@ -2466,43 +2480,15 @@ export function parseActionabilityVerdict(outputText: string | null | undefined)
  * dailyIntelligence.ts for the same shape used elsewhere in this repo.
  */
 export const defaultClassifyActionability: ActionabilityClassifier = async (env, input) => {
-  const actor: Actor = { type: "AI", aiEmployeeId: PORTER_ID, roles: [], firmScopes: [input.firmScope] };
-  const { run } = await runAi(env, {
-    purpose: "checking whether a partner's email needs real work, a reply, or nothing at all",
-    actor,
-    inputs: [
-      `${INTAKE_JUDGMENT_STANDARD}\n\n` +
-        "A partner emailed the firm's work-intake address. Decide which of three things it is:\n\n" +
-        "ACTIONABLE_WORK — there is a real request or task to do, however casually worded.\n" +
-        "QUESTION_NEEDS_REPLY — a plain question, pushback, or something that needs an answer in " +
-        "words, but nothing to build or change (e.g. \"what are you asking of me?\", \"explain it " +
-        "like a sixth grader\").\n" +
-        "BANTER_NO_ACTION — pure banter, a joke, an acknowledgment (\"thanks\", \"sounds good\", " +
-        "\"lol true\"), or an emoji-only reply — nothing to do and nothing to answer.\n\n" +
-        "BIAS HARD TOWARD ACTIONABLE_WORK. When in doubt, when the message is ambiguous or " +
-        "borderline, or when it could plausibly contain a real ask however casually phrased, answer " +
-        "ACTIONABLE_WORK. Only answer QUESTION_NEEDS_REPLY when you are near-certain it is a plain " +
-        "question with nothing to build, and only answer BANTER_NO_ACTION when you are near-certain " +
-        "there is nothing to do and nothing to answer. A real ask must never be silently guessed " +
-        "away — when genuinely unsure between two of these, pick the one closer to ACTIONABLE_WORK.\n\n" +
-        `THE MESSAGE:\n"""\n${input.text.slice(0, 4000)}\n"""\n\n` +
-        "Answer in exactly this format and nothing else:\n" +
-        "VERDICT: ACTIONABLE_WORK|QUESTION_NEEDS_REPLY|BANTER_NO_ACTION\n" +
-        "REASON: <one short sentence>",
-    ],
-    sensitivity: "INTERNAL" as never,
-    // Mechanical and cheap on purpose (see the note above `defaultClassifyActionability`); a few
-    // words back is all this call needs. Said explicitly (found unclassified by
-    // `validate:call-classification`, 22 Sep 2026, and fixed here rather than left — Rule 0):
-    // "mechanical" was always the intent, it just was not written down for the scan to read.
-    budgetContext: { mechanical: true, expectedOutputTokens: 60 },
-    routing: { category: "OPERATIONS", taskClass: "intake-actionability-classification", workCardId: input.cardId },
-  });
-  if (run.status !== "COMPLETED" || !run.output_text) {
-    return { verdict: "ACTIONABLE_WORK", reason: `classification unavailable (${run.failure_reason ?? run.status}) — defaulting to actionable`, aiRunId: run.id };
-  }
-  const { verdict, reason } = parseActionabilityVerdict(run.output_text);
-  return { verdict, reason, aiRunId: run.id };
+  /*
+   * THE ONE PLAIN-WORDS READER (13 Nov 2026). This used to be its own prompt; it is now the same read
+   * every partner's words get (replyIntent.ts), so a new email and a reply are never read two ways.
+   * NOTHING → banter; a QUESTION whose door is ANSWER and carries no instructions → a plain question;
+   * everything else, and any reader that cannot run, → real work.
+   */
+  const read = await defaultReadReplyIntent(env, { ...input, where: "a new email to the firm's intake address, asking for something; nothing has been built for it yet" });
+  const verdict: ActionabilityVerdict = read.source !== "MODEL" ? "ACTIONABLE_WORK" : read.nothing ? "BANTER_NO_ACTION" : read.kind === "QUESTION" && read.door === "ANSWER" && !read.changes ? "QUESTION_NEEDS_REPLY" : "ACTIONABLE_WORK";
+  return { verdict, reason: read.source === "MODEL" ? read.reason : `classification unavailable (${read.reason}) — defaulting to actionable`, aiRunId: read.aiRunId };
 };
 
 /**

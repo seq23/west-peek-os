@@ -3,6 +3,8 @@ import { describeModes, parseBlogAsk } from "../../shared/intake/blogHelp";
 import { parsePartnerMessageAsk, partnerMessageTitle } from "../../shared/intake/partnerMessage";
 import { isWebPropertyChange, parseWebPropertyAsk, partsFromHosts, registrationsIn } from "../../shared/intake/webPropertyChange";
 import { loadRegistry, registerFromEmail } from "./webPropertyRegistry";
+import { defaultReadReplyIntent, readReplyIntent, type ReplyIntentReader } from "./replyIntent";
+import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
 import { dueTimeIn } from "../../shared/intake/dueTime";
 import { textBodyOf, topHeadersOf } from "../effects/mimeAttachments";
 import { storeAttachments } from "./requestMaterials";
@@ -1023,6 +1025,8 @@ export async function openAssignmentCard(
     receivedTldr?: string | null;
     /** A thread token an earlier note to this partner carried, so the RECEIVED lands in the same conversation. */
     replyOnThread?: string | null;
+    /** The plain-words reader, injectable so a test proves the routing without a model. */
+    readWords?: ReplyIntentReader;
   },
 ): Promise<string> {
   /*
@@ -1325,7 +1329,76 @@ export async function openAssignmentCard(
     return card.id;
   }
 
+  await routeByPlainWords(env, card, input, written);
   return card.id;
+}
+
+/**
+ * THE ONE PLAIN-WORDS READER AT THE FRONT DOOR (13 Nov 2026). Her ask: a partner emails os@ "just like
+ * i speak to you here and its intelligent enough to figure out what to do route it and get it all
+ * done". An email no fixed door claimed (a site change, blog help, a message to pass on) is read once
+ * by the reader every partner's words get (replyIntent.ts), and its reading decides the desk:
+ *
+ *   ROUTE to a named employee  → handed straight to that employee, one card, the chief's card DONE.
+ *   ANSWER, nothing, or unsure → the chief of staff keeps it with the reading on it, as before.
+ *
+ * The reading is logged once (`inbound_email.read`). A reader that cannot run changes nothing: the
+ * chief of staff gets the card exactly as before. One email, one card; the reader asks nothing.
+ */
+async function routeByPlainWords(
+  env: Env,
+  card: { id: string; title: string; description?: string | null; next_action?: string | null; state: string },
+  input: { subject: string; partnerAddress: string; chiefOfStaff: string; readWords?: ReplyIntentReader },
+  written: string,
+): Promise<void> {
+  const words = `${strippedSubject(input.subject)}\n\n${written}`.trim();
+  const read = await readReplyIntent(env, { cardId: card.id, firmScope: FIRM_SCOPE, text: words, where: "a new email to the firm's operating system (os@), not a reply; no job is open for it yet" }, input.readWords ?? defaultReadReplyIntent);
+  const chiefFirst = input.chiefOfStaff.trim().split(/\s+/)[0]!.toLowerCase();
+  const seat = read.door === "ROUTE" && read.seat ? AI_EMPLOYEE_ROSTER.find((e) => e.name.toLowerCase() === read.seat!.toLowerCase()) ?? null : null;
+  const reading = read.source === "MODEL" ? `${read.nothing ? "nothing to do" : read.door === "ROUTE" ? `work for ${read.seat ?? "an employee not named"}` : read.door === "BUILD" ? "a build" : read.door === "ANSWER" ? "a question to answer" : "unclear"} (${read.reason})` : `not read (${read.reason})`;
+  await appendEvent(env, {
+    eventType: "inbound_email.read",
+    actorType: "system",
+    actorId: "inbound_email",
+    objectType: "work_card",
+    objectId: card.id,
+    firmScope: FIRM_SCOPE,
+    payload: { intent: read.kind, door: read.door ?? null, seat: read.seat ?? null, nothing: read.nothing ?? false, source: read.source, reason: read.reason.slice(0, 300), ai_run_id: read.aiRunId },
+  });
+  if (seat && seat.name.toLowerCase() !== chiefFirst && seat.name !== "Porter") {
+    const chief = await env.WP_OS_DB.prepare("SELECT id, name FROM ai_employee WHERE id = ?1").bind(seatId(input.chiefOfStaff)).first<{ id: string; name: string }>();
+    const { assignCard } = await import("./employeeWork");
+    const handed = await assignCard(
+      env,
+      {
+        id: card.id,
+        title: card.title,
+        description: card.description ?? null,
+        next_action: card.next_action ?? null,
+        state: card.state,
+        owner_type: "AI",
+        owner_id: chief?.id ?? seatId(input.chiefOfStaff),
+        allows_browser: 0,
+        model_access: "PUBLIC_MODEL_APPROVED",
+        prompt: null,
+        firm_scope: FIRM_SCOPE,
+        requested_by_email: input.partnerAddress.toLowerCase(),
+      },
+      { id: chief?.id ?? seatId(input.chiefOfStaff), name: chief?.name ?? input.chiefOfStaff },
+      seat.name,
+      `${strippedSubject(input.subject) || "A partner's email"}: ${written.replace(/\s+/g, " ").slice(0, 400)}`,
+    );
+    if (handed.ok) {
+      await env.WP_OS_DB.prepare("UPDATE request_attachment SET work_card_id = ?2 WHERE work_card_id = ?1").bind(card.id, handed.cardId).run();
+      await env.WP_OS_DB.prepare(
+        "UPDATE work_card SET state = 'DONE', next_action = NULL, description = substr(COALESCE(description, '') || char(10) || '• Read as ' || ?3 || '. Handed to ' || ?2 || ' as work card ' || ?4 || '.', 1, 16000) WHERE id = ?1",
+      )
+        .bind(card.id, handed.toName, reading, handed.cardId)
+        .run();
+      return;
+    }
+  }
+  await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || '• Read as ' || ?2 || '.', 1, 16000) WHERE id = ?1").bind(card.id, reading).run();
 }
 
 /** Convenience for the manual door, so its handler reads the same as the other three. */
