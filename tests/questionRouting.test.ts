@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
-import { answerQuestionForCard, type QuestionAnswerer } from "../src/worker/services/questionRouting";
+import { answerQuestionForCard, questionAnswerFormatProblem, type QuestionAnswerer } from "../src/worker/services/questionRouting";
 
 /**
  * `answerQuestionForCard` — the routing half of Addendum 12, independent of any one card kind's
@@ -86,5 +86,17 @@ describe("answerQuestionForCard — escalates before ever asking a model, when t
     expect(out.answer).toBe("Yes, it's live now.");
     expect(out.employeeName).toBe("Porter");
     expect(out.employeeId).toBe("aie_porter");
+  });
+});
+
+describe("an answer without its format walks to the next route, never reads as a no (14 Nov 2026)", () => {
+  it("Walker's bullets with a REASON line and no CONFIDENT header are refused, so the router asks the next lane", () => {
+    const bullets = "- **Cold (MDRC, ServiceSource): open on their news, give one line of proof.**\n- **Warm (Enterprise): lead with the relationship.**\nREASON: This is a request for my view.";
+    expect(questionAnswerFormatProblem(bullets)).not.toBeNull();
+    expect(questionAnswerFormatProblem("CONFIDENT: yes\nANSWER:\nREASON: r")).not.toBeNull();
+  });
+  it("a well-formed yes or no passes", () => {
+    expect(questionAnswerFormatProblem("CONFIDENT: yes\nANSWER: Lead with the vision.\nREASON: r")).toBeNull();
+    expect(questionAnswerFormatProblem("CONFIDENT: no\nANSWER:\nREASON: no email on the card")).toBeNull();
   });
 });

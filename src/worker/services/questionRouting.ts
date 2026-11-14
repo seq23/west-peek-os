@@ -93,6 +93,18 @@ export function parseQuestionAnswer(outputText: string | null | undefined): { co
   return { confident: true, answer, reason: (reasonMatch?.[1] ?? "").trim().slice(0, 400) || "(no reason given)" };
 }
 
+/**
+ * THE ANSWER MUST COME IN ITS FORMAT, OR THE NEXT ROUTE IS ASKED (14 Nov 2026). Walker's
+ * recommendation to Scooter came back from the Mac's seat as bullets with a REASON line and no
+ * CONFIDENT/ANSWER header; parseQuestionAnswer read that as "not confident" and a good answer became
+ * a notice. A reply without the header is a reply the router walks past, never a silent no.
+ */
+export function questionAnswerFormatProblem(text: string): string | null {
+  if (!/CONFIDENT:\s*(yes|no)\b/i.test(text)) return "the reply has no CONFIDENT: yes|no line";
+  if (/CONFIDENT:\s*yes\b/i.test(text) && !parseQuestionAnswer(text).confident) return "CONFIDENT: yes with no ANSWER: text";
+  return null;
+}
+
 /** THE DEFAULT ANSWERER — one model call, grounded in the owning employee's real persona. */
 const defaultAnswerQuestion: QuestionAnswerer = async (env, input) => {
   const actor: Actor = { type: "AI", aiEmployeeId: input.employee.id, roles: [], firmScopes: [input.firmScope] };
@@ -131,6 +143,7 @@ const defaultAnswerQuestion: QuestionAnswerer = async (env, input) => {
     ],
     sensitivity: "INTERNAL" as never,
     budgetContext: { judgement: true, expectedOutputTokens: 300 },
+    verify: questionAnswerFormatProblem,
     routing: { category: "OPERATIONS", taskClass: "question-routing-answer", workCardId: input.cardId },
   });
   if (run.status !== "COMPLETED" || !run.output_text) {
