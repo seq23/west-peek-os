@@ -694,6 +694,9 @@ export function brandFacingReason(why: string | null | undefined): string | null
   if (!text) return null;
   const first = (/^.+?[.!?](?=\s+[A-Z(]|$)/.exec(text)?.[0] ?? text).trim();
   if (!first || TLC_INTERNAL_NOTE.test(first)) return null;
+  // A research note written as fragments ("Sleep and recovery ring; ran its own SoHo pop-up; …") is not a
+  // sentence a brand should read after "I am writing because" (Oura, 14 Nov 2026): the template's own line is used.
+  if (first.includes(";")) return null;
   const sentence = first.replace(/[.!?]?$/, ".");
   const word = /^\S+/.exec(sentence)?.[0] ?? "";
   // Lowercase only an ordinary opening word ("The", "Its"); a name ("Garmin", "InsideTracker") keeps its capital.
