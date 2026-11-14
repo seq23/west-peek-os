@@ -5,6 +5,7 @@ import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
 import { partnerByFirmUserId, type Partner } from "../../shared/registry/partners";
 import { readApprovalReply } from "../../shared/work/approvalReply";
 import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
+import { PARTNER_ANSWER_MAX } from "../../shared/work/blocks";
 
 /**
  * THE DEVELOPER MAY DIRECT ANY JOB (owner ruling, 13 Nov 2026, #363; migration 0301).
@@ -87,7 +88,9 @@ export async function handleDeveloperChanges(ctx: RouteContext): Promise<Respons
       return json({ error: "not_a_work_instruction", detail: `"${t.slice(0, 80)}" reads as ${kind.toLowerCase()}: approving, publishing and forcing take the signed-in partner, never this door` }, { status: 400 });
     }
   }
-  const text = `changes: ${words}`.slice(0, 4000);
+  // The same bound as any partner's answer (PARTNER_ANSWER_MAX): a full scope cut at 4000 rebuilt half of it (13 Nov 2026).
+  if (`changes: ${words}`.length > PARTNER_ANSWER_MAX) return json({ error: "too_long", detail: `the instruction is over ${PARTNER_ANSWER_MAX} characters; shorten it rather than have the end cut off` }, { status: 400 });
+  const text = `changes: ${words}`;
   if (!isWorkInstruction(text)) return json({ error: "not_a_work_instruction", detail: "the words do not read as a work instruction" }, { status: 400 });
 
   const dev = await ctx.env.WP_OS_DB.prepare(

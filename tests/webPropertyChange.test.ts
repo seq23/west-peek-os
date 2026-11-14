@@ -810,6 +810,17 @@ describe("the developer may direct any job with a work instruction, and with not
     expect(String(ev?.payload_json)).toContain("partner tail (Claude)");
   });
 
+  it("the tail door carries a full scope whole, up to the partner-answer bound, and refuses one past it rather than cutting it", async () => {
+    const id = await atPreview("dev3b", SCOOTER);
+    const tail = "the help page is linked from every empty state";
+    const long = `${"build the connections screen with one row per account. ".repeat(110)}${tail}`;
+    expect(long.length).toBeGreaterThan(4000);
+    expect((await door(id, "x".repeat(8001))).status, "past the bound is refused, never cut").toBe(400);
+    expect((await door(id, long)).status).toBe(200);
+    await tickFor(id);
+    expect((await rebuildOf(id))?.rebuild?.changes, "the end of the instruction reaches the builder").toContain(tail);
+  });
+
   /**
    * 13 Nov 2026: a partner got "New preview ready" three times in ninety minutes. Two of those builds were
    * the developer's instructions through the tail door; he had asked for nothing and the link was the one
