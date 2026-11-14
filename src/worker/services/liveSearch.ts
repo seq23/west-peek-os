@@ -82,6 +82,26 @@ export async function earlierSearch(
     if (req.verify && req.verify(r.output_text)) continue;
     return { text: r.output_text, runId: r.id };
   }
+  /*
+   * A SEAT'S ANSWER THAT ARRIVED AFTER THE WORKER WAS GONE IS STILL AN ANSWER (14 Nov 2026, wc_bd8b68cb). Walker's
+   * month runs up to four searches in one cron invocation; with real searches taking minutes, the invocation ended
+   * mid-way, the Mac reported its finished search into a row nobody was waiting on, and the ai_run stayed RUNNING.
+   * Reading only COMPLETED ai_runs threw that search away, so every retry began again from zero and could die at the
+   * same place. A REPORTED search row for this exact prompt, with counted searches, is used instead.
+   */
+  const seatRows = await env.WP_OS_DB.prepare(
+    `SELECT id, output_text FROM subscription_seat_run
+      WHERE purpose = ?1 AND prompt = ?2 AND status = 'REPORTED' AND needs_search = 1 AND COALESCE(search_events, 0) > 0
+        AND created_at >= ?3 AND output_text IS NOT NULL
+      ORDER BY created_at DESC LIMIT 3`,
+  )
+    .bind(req.purpose, req.prompt, req.since)
+    .all<{ id: string; output_text: string }>()
+    .catch(() => ({ results: [] as { id: string; output_text: string }[] }));
+  for (const r of seatRows.results ?? []) {
+    if (req.verify && req.verify(r.output_text)) continue;
+    return { text: r.output_text, runId: r.id };
+  }
   return null;
 }
 
