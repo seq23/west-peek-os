@@ -2142,6 +2142,32 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(chiefId).run();
   });
 
+  it("a partner's long reply answers the block WHOLE: a 4,130-character brief keeps its last lines (14 Nov 2026)", async () => {
+    /*
+     * Scooter's "whole vision" reply to a Porter preview was 4,130 characters. The reply door cut it
+     * at 4,000 before answerBlock saw it: block_answer and the note ended "we expan", his closing
+     * question was gone, and a build started from the part.
+     */
+    const chiefId = await openAssignmentCard(env, { subject: "Something long Walker holds", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Walker, find me three podcast hosts who cover seed funds.", limits: EMAILED_TASK_LIMITS, emlKey: null });
+    const { blockCard } = await import("../src/worker/services/blocks");
+    await blockCard(env, { id: chiefId, title: "From scooter@westpeek.ventures: Something long Walker holds", firm_scope: "west-peek" }, { reason: "permission_to_open_a_page", trying: "podcast hosts", employee: "Walker", url: "https://example.org" });
+    const { replyToRequester } = await import("../src/worker/services/requestReply");
+    const c0 = await card(chiefId);
+    await replyToRequester(env, { id: chiefId, title: String(c0.title), requested_by_email: SCOOTER, firm_scope: "west-peek" }, "BLOCKED", "Walker", String(c0.block_needed));
+    const subject = sent.at(-1)!.subject;
+    const lines = Array.from({ length: 66 }, (_, i) => `${i + 1}. Point ${i + 1} of the brief, a full line of what he wants built.`);
+    const body = `Hey Walker!\n\n${lines.join("\n")}\n\nWhen that works end to end with real data, we expand.\n\nWhat do you need from me to start?\n\nBest,\nScooter`;
+    expect(body.length, "the fixture is past the old 4,000 cut").toBeGreaterThan(4100);
+    await handleInboundEmail(inbound(SCOOTER_MIME({ subject: `Re: ${subject}`, body }), { subject: `=?UTF-8?B?${Buffer.from(`Re: ${subject}`).toString("base64")}?=` }), env);
+    const c = await card(chiefId);
+    expect(c.state).toBe("OPEN");
+    expect(String(c.block_answer), "his closing question is on the card").toMatch(/we expand\.\s+What do you need from me to start\?/);
+    expect(String(c.block_answer)).not.toMatch(/cut here/);
+    const note = await env.WP_OS_DB.prepare("SELECT body FROM work_card_note WHERE work_card_id = ?1 AND body LIKE 'You asked what to do.%' ORDER BY created_at DESC LIMIT 1").bind(chiefId).first<{ body: string }>();
+    expect(String(note?.body), "and in the note the employee reads").toMatch(/What do you need from me to start\?/);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(chiefId).run();
+  });
+
   it("an OVERSIZE partner reply steers the card it answers — by our token, and by the Re: subject alone (doubled prefix included) — and opens no card (27 Sep 2026)", async () => {
     /*
      * TWICE IN ONE DAY. Scooter's 3 MB reply to the hand-off email and his 472 KB reply to the PLAN
