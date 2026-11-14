@@ -367,7 +367,7 @@ describe("Scooter emails a package for the ventures site", () => {
       deviceId: "mac-test-jobs",
       outputText: JSON.stringify({
         phase: "PLAN",
-        accounting: [{ ask: "what the partner asked for", how: "build" }],
+        accounting: [{ ask: "what the partner asked for", how: "build", done_when: ["it works on the preview"] }],
         status: "ok",
         document: "# Plan: ventures site update\n\n## Changes\n- team page\n- portfolio logos\n\n## Live proof\n- https://westpeek.ventures/team\n",
         decided: ["new /team route with a redirect from /people", "logos on cream tiles per the RUNBOOK"],
@@ -507,7 +507,7 @@ describe("Scooter emails a package for the ventures site", () => {
   });
 
   it("BUILD reports a RED check: a failed attempt, nothing landed, BUILD is re-queued on the same branch", async () => {
-    await macReports(porterCardId, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/14", pr_number: 14, branch: "work/wpc-abc12345", check_state: "RED", check_url: "https://github.com/seq23/join-west-peek-main/actions/runs/1", proof: "validate: 2 failed", reason: "validate:disclosure failed" });
+    await macReports(porterCardId, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/14", pr_number: 14, branch: "work/wpc-abc12345", check_state: "RED", check_url: "https://github.com/seq23/join-west-peek-main/actions/runs/1", proof: "validate: 2 failed", reason: "validate:disclosure failed" });
     const out = await tickFor(porterCardId);
     expect(out.outcome).toBe("FAILED");
     const row = (await readWebPropertyChange(env, porterCardId))!;
@@ -523,7 +523,7 @@ describe("Scooter emails a package for the ventures site", () => {
   it("BUILD reports GREEN: every site change previews first (23 Sep 2026), so green STOPS at the preview — LAND is refused, nothing is parked, one preview email; Scooter's \"approved\" after it queues LAND on the cheap model", async () => {
     // A DIFFERENT PR than the red attempt above (#14): the fix-up build opened #15. Pinning 15 is what
     // catches a LAND payload built from a stale row — the row still remembered #14.
-    await macReports(porterCardId, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/15", pr_number: 15, branch: "work/wpc-abc12345-fix", check_state: "GREEN", check_url: "https://github.com/seq23/join-west-peek-main/actions/runs/2", proof: "npm run validate: green · shots/team-desktop.png shots/team-390.png · curl https://example.org 200" });
+    await macReports(porterCardId, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/15", pr_number: 15, branch: "work/wpc-abc12345-fix", check_state: "GREEN", check_url: "https://github.com/seq23/join-west-peek-main/actions/runs/2", proof: "npm run validate: green · shots/team-desktop.png shots/team-390.png · curl https://example.org 200" });
     const green = await tickFor(porterCardId);
     expect(green.outcome, "green stops at the preview; land on green does not override it").toBe("BLOCKED");
     const held = (await readWebPropertyChange(env, porterCardId))!;
@@ -611,12 +611,12 @@ describe("land on green OFF asks first", () => {
       expect((await readWebPropertyChange(env, porterId))!.preview_only, "preview-first even when the request forces").toBe(1);
       await tickFor(porterId); // parks PLAN
       // Pre-approved and forced in the request: approved at filing, the force recorded, BUILD parks at once.
-      await macReports(porterId, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build" }], document: "# Plan: productions refresh\n\nnothing to ask", decided: ["all structure"], asks: [], publish_ready: true });
+      await macReports(porterId, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build", done_when: ["it works on the preview"] }], document: "# Plan: productions refresh\n\nnothing to ask", decided: ["all structure"], asks: [], publish_ready: true });
       expect((await tickFor(porterId)).summary).toMatch(/BUILD queued/);
       const forced = (await readWebPropertyChange(env, porterId))!;
       expect(forced.forced_by, "the named force is the only way past the preview").toBe("fu_sequoia_taylor");
       expect(forced.preview_only, "a force skips the gate; it never clears it").toBe(1);
-      await macReports(porterId, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/15", pr_number: 15, check_state: "GREEN" });
+      await macReports(porterId, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/15", pr_number: 15, check_state: "GREEN" });
       const out = await tickFor(porterId);
       expect(out.outcome).toBe("BLOCKED");
       const c = await card(porterId);
@@ -655,7 +655,7 @@ async function planned(who: string, chief: string, subject: string, plan: Record
   const chiefId = await openAssignmentCard(env, { subject, partnerAddress: who, chiefOfStaff: chief, raw: `${subject}: westpeek.ventures — package: https://drive.google.com/drive/folders/${FOLDER}${subject.replace(/\W/g, "").slice(0, 6)}`, limits: EMAILED_TASK_LIMITS, emlKey: null });
   const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
   await tickFor(id); // parks PLAN
-  await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build" }], ...plan });
+  await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build", done_when: ["it works on the preview"] }], ...plan });
   await tickFor(id); // blocks with the plan
   return {
     id,
@@ -684,9 +684,9 @@ describe("a job that left out part of the original request is reopened by the sy
     const chiefId = await openAssignmentCard(env, { subject: `ventures refresh ${tag}`, partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: `Hey Porter! Please refresh westpeek.ventures and build the members area — package: https://drive.google.com/drive/folders/${FOLDER}${tag}`, limits: EMAILED_TASK_LIMITS, emlKey: null });
     const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
     await tickFor(id);
-    await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "refresh the ventures site", how: "build" }], document: "# Plan\n\nnothing to ask", decided: ["as asked"], asks: [], publish_ready: true });
+    await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "refresh the ventures site", how: "build", done_when: ["it works on the preview"] }], document: "# Plan\n\nnothing to ask", decided: ["as asked"], asks: [], publish_ready: true });
     await tickFor(id);
-    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/88", pr_number: 88, branch: `work/wpc-${tag}`, check_state: "GREEN", preview_url: `https://${tag}.west-peek-ventures.pages.dev`, proof: "validate green" });
+    await macReports(id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/88", pr_number: 88, branch: `work/wpc-${tag}`, check_state: "GREEN", preview_url: `https://${tag}.west-peek-ventures.pages.dev`, proof: "validate green" });
     await tickFor(id);
     expect((await card(id)).state, "waiting on his word on the preview").toBe("BLOCKED");
     expect(await liveJobFor(id)).toBeNull();
@@ -711,7 +711,7 @@ describe("a job that left out part of the original request is reopened by the sy
     const ev = await env.WP_OS_DB.prepare("SELECT actor_type FROM event_record WHERE event_type = 'web_property_change.original_ask_reopened' AND object_id = ?1").bind(id).first<{ actor_type: string }>();
     expect(ev?.actor_type).toBe("system");
     // The rebuilt preview still waits for HIS word.
-    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/88", pr_number: 88, branch: "work/wpc-orig1", changed: true, head_sha: "moved-1", check_state: "GREEN", preview_url: "https://orig1.west-peek-ventures.pages.dev", proof: "validate green" });
+    await macReports(id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/88", pr_number: 88, branch: "work/wpc-orig1", changed: true, head_sha: "moved-1", check_state: "GREEN", preview_url: "https://orig1.west-peek-ventures.pages.dev", proof: "validate green" });
     await tickFor(id);
     expect((await card(id)).state).toBe("BLOCKED");
     expect((await readWebPropertyChange(env, id))!.land_approved_at ?? null).toBeNull();
@@ -750,9 +750,9 @@ describe("the developer may direct any job with a work instruction, and with not
     const chiefId = await openAssignmentCard(env, { subject: `ventures refresh ${tag}`, partnerAddress, chiefOfStaff: "Walker", raw: `Hey Porter! Please refresh westpeek.ventures — package: https://drive.google.com/drive/folders/${FOLDER}${tag}`, limits: EMAILED_TASK_LIMITS, emlKey: null });
     const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
     await tickFor(id);
-    await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "refresh the ventures site", how: "build" }], document: "# Plan\n\nnothing to ask", decided: ["as asked"], asks: [], publish_ready: true });
+    await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "refresh the ventures site", how: "build", done_when: ["it works on the preview"] }], document: "# Plan\n\nnothing to ask", decided: ["as asked"], asks: [], publish_ready: true });
     await tickFor(id);
-    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/89", pr_number: 89, branch: `work/wpc-${tag}`, check_state: "GREEN", preview_url: `https://${tag}.west-peek-ventures.pages.dev`, proof: "validate green" });
+    await macReports(id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/89", pr_number: 89, branch: `work/wpc-${tag}`, check_state: "GREEN", preview_url: `https://${tag}.west-peek-ventures.pages.dev`, proof: "validate green" });
     await tickFor(id);
     expect((await card(id)).state, "waiting on the requester's word on the preview").toBe("BLOCKED");
     return id;
@@ -817,7 +817,7 @@ describe("the developer may direct any job with a work instruction, and with not
    */
   const rebuilt = async (id: string, tag: string, branch: string, more: Record<string, unknown> = {}) => {
     await tickFor(id);
-    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/89", pr_number: 89, branch, changed: true, head_sha: `head-${tag}`, check_state: "GREEN", preview_url: `https://${tag}.west-peek-ventures.pages.dev`, proof: "validate green", ...more });
+    await macReports(id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/89", pr_number: 89, branch, changed: true, head_sha: `head-${tag}`, check_state: "GREEN", preview_url: `https://${tag}.west-peek-ventures.pages.dev`, proof: "validate green", ...more });
     expect((await tickFor(id)).outcome, "the job waits on the partner's word on the preview").toBe("BLOCKED");
   };
   const previewMails = (since: number) => sent.slice(since).filter((m) => m.to === SCOOTER && /preview ready$/i.test(m.subject));
@@ -971,7 +971,7 @@ describe("every ask is built in the job or the partner is asked; later work is o
 
   it("rule 1: a plan that puts off an ask the partner did not date is refused, nothing of it is applied, and the next PLAN is told why", async () => {
     const id = await asked("studio website and a sponsor dashboard");
-    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the studio website", how: "build" }, { ask: "the sponsor dashboard", how: "later" }], deferred: [{ ask: "Build the sponsor dashboard", due_at: "2031-03-17", words: "the dashboard is a bigger build" }] }) });
+    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the studio website", how: "build", done_when: ["it works on the preview"] }, { ask: "the sponsor dashboard", how: "later" }], deferred: [{ ask: "Build the sponsor dashboard", due_at: "2031-03-17", words: "the dashboard is a bigger build" }] }) });
     await tickFor(id);
     const row = (await readWebPropertyChange(env, id))!;
     expect(row.plan_filed_at, "the plan was not accepted").toBeNull();
@@ -985,7 +985,7 @@ describe("every ask is built in the job or the partner is asked; later work is o
     expect(next, "PLAN is queued again").not.toBeNull();
     expect(String(next!.job_json)).toMatch(/PLAN REFUSED/);
     // The same request, planned with both asks built: accepted.
-    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the studio website", how: "build" }, { ask: "the sponsor dashboard", how: "build" }] }) });
+    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the studio website", how: "build", done_when: ["it works on the preview"] }, { ask: "the sponsor dashboard", how: "build", done_when: ["it works on the preview"] }] }) });
     await tickFor(id);
     expect((await readWebPropertyChange(env, id))!.plan_filed_at).toBeTruthy();
     expect(String((await card(id)).description)).toContain("the sponsor dashboard → built in this job");
@@ -998,20 +998,20 @@ describe("every ask is built in the job or the partner is asked; later work is o
     expect((await readWebPropertyChange(env, id))!.plan_filed_at).toBeNull();
     expect(String((await card(id)).description)).toMatch(/PLAN REFUSED.*did not account for each thing/);
     if (!(await liveJobFor(id))) await tickFor(id);
-    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the press page", how: "build" }, { ask: "the pricing table", how: "out of scope" }] }) });
+    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the press page", how: "build", done_when: ["it works on the preview"] }, { ask: "the pricing table", how: "out of scope" }] }) });
     await tickFor(id);
     expect((await readWebPropertyChange(env, id))!.plan_filed_at).toBeNull();
     expect(String((await card(id)).description)).toMatch(/"the pricing table" is neither built in this job nor asked about/);
     if (!(await liveJobFor(id))) await tickFor(id);
     // A question is a fate; a question with nothing asked is not.
-    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the press page", how: "build" }, { ask: "the pricing table", how: "question" }] }) });
+    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the press page", how: "build", done_when: ["it works on the preview"] }, { ask: "the pricing table", how: "question" }] }) });
     await tickFor(id);
     expect((await readWebPropertyChange(env, id))!.plan_filed_at).toBeNull();
   });
 
   it("rules 3 and 4: work the partner dated becomes its own card leased to its date and linked to the source; work that is not a change to this site is never a site job on its repo", async () => {
     const id = await asked("studio site now and the sponsor tracker next week");
-    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the studio site", how: "build" }, { ask: "the sponsor tracker", how: "later" }], deferred: [{ ask: "Build the sponsor tracker in the operating system, not on the public site", due_at: "2031-03-17", words: "the sponsor tracker next week", site_change: false }] }) });
+    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the studio site", how: "build", done_when: ["it works on the preview"] }, { ask: "the sponsor tracker", how: "later" }], deferred: [{ ask: "Build the sponsor tracker in the operating system, not on the public site", due_at: "2031-03-17", words: "the sponsor tracker next week", site_change: false }] }) });
     await tickFor(id);
     expect((await readWebPropertyChange(env, id))!.plan_filed_at, "a partner-dated deferral is a plan like any other").toBeTruthy();
     const made = await deferredFrom(id);
@@ -1027,7 +1027,7 @@ describe("every ask is built in the job or the partner is asked; later work is o
 
   it("rule 4: a dated change to THIS site is a site job on the same repo, leased to its date", async () => {
     const id = await asked("studio hero now and swap the photo next month");
-    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the hero", how: "build" }, { ask: "swap the photo", how: "later" }], deferred: [{ ask: "Swap the hero photo for the spring one", due_at: "2031-04-01", words: "swap the photo next month", site_change: true }] }) });
+    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the hero", how: "build", done_when: ["it works on the preview"] }, { ask: "swap the photo", how: "later" }], deferred: [{ ask: "Swap the hero photo for the spring one", due_at: "2031-04-01", words: "swap the photo next month", site_change: true }] }) });
     await tickFor(id);
     const made = await deferredFrom(id);
     expect(made).toHaveLength(1);
@@ -1039,7 +1039,7 @@ describe("every ask is built in the job or the partner is asked; later work is o
   it("rule 3: a deferred item that cannot become a card is said on the source card, in the record and to the partners, never dropped", async () => {
     const before = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM notification WHERE dedupe_key LIKE 'deferred_not_filed:%'").first<{ n: number }>())!.n;
     const id = await asked("studio page now and the press page later in spring");
-    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the studio page", how: "build" }, { ask: "the press page", how: "later" }], deferred: [{ ask: "Add the press page", due_at: "sometime in spring", words: "the press page later in spring" }] }) });
+    await macReports(id, { phase: "PLAN", status: "ok", ...plan({ accounting: [{ ask: "the studio page", how: "build", done_when: ["it works on the preview"] }, { ask: "the press page", how: "later" }], deferred: [{ ask: "Add the press page", due_at: "sometime in spring", words: "the press page later in spring" }] }) });
     await tickFor(id);
     expect(await deferredFrom(id)).toHaveLength(0);
     const desc = String((await card(id)).description);
@@ -1049,6 +1049,69 @@ describe("every ask is built in the job or the partner is asked; later work is o
     expect(Number(ev?.n)).toBe(1);
     const after = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM notification WHERE dedupe_key LIKE 'deferred_not_filed:%'").first<{ n: number }>())!.n;
     expect(after, "the partners are told").toBeGreaterThan(before);
+  });
+});
+
+/**
+ * THE v1.0 BAR (owner, 13 Nov 2026: builds come out "v1.0 final with persistence and veteran UX/UI POV"). Every built ask
+ * says when it is done; a BUILD reports each ask against those checks, and one not met (and not held by a key or a file
+ * only the partner can supply) is refused before anything reaches the partner.
+ */
+describe("the v1.0 bar: every built ask says when it is done, and a build that has not met it is refused (13 Nov 2026)", () => {
+  beforeAll(ageEarlierCards);
+  afterAll(ageEarlierCards);
+  const BASE = { document: "# Plan\n\nnothing to ask", decided: ["as asked"], asks: [], publish_ready: true };
+  const pr = (tag: string) => ({ pr_url: "https://github.com/seq23/join-west-peek-main/pull/91", pr_number: 91, branch: `work/wpc-${tag}`, check_state: "GREEN", preview_url: `https://${tag}.west-peek-ventures.pages.dev`, proof: "validate green" });
+
+  const checks = ["Scooter signs in with his own password on the preview", "a saved note is still there after a reload"];
+  async function atBuild(tag: string, refusePlanFirst = false): Promise<string> {
+    const chiefId = await openAssignmentCard(env, { subject: `productions dashboard ${tag}`, partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: `Please build a dashboard on westpeek.ventures where I can sign in and edit my notes — package: https://drive.google.com/drive/folders/${FOLDER}${tag}`, limits: EMAILED_TASK_LIMITS, emlKey: null });
+    const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
+    await tickFor(id);
+    if (refusePlanFirst) {
+      // PLAN: a built ask with no done-when checks is refused and planned again.
+      await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "the dashboard", how: "build" }], ...BASE });
+      await tickFor(id);
+      expect((await readWebPropertyChange(env, id))!.plan_filed_at, "the plan was not accepted").toBeNull();
+      expect(String((await card(id)).description)).toMatch(/PLAN REFUSED.*"the dashboard" is to be built, but the plan does not say when it is done/);
+      if (!(await liveJobFor(id))) await tickFor(id);
+    }
+    await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "the dashboard", how: "build", done_when: checks }], ...BASE });
+    await tickFor(id);
+    expect((await readWebPropertyChange(env, id))!.plan_filed_at).toBeTruthy();
+    return id;
+  }
+  const noPreviewTo = (from: number) => sent.slice(from).filter((m) => m.to === SCOOTER && /preview/i.test(`${m.subject}\n${m.text}`));
+
+  it("a built ask with no done-when checks is refused at PLAN; a check not met, held by nothing only the partner can supply, is refused at BUILD with no preview", async () => {
+    const id = await atBuild("v1bar1", true);
+    expect(String((await card(id)).description)).toContain("done when: Scooter signs in with his own password on the preview");
+    const from = sent.length;
+    await macReports(id, { phase: "BUILD", status: "ok", ...pr("v1bar1"), items: [
+      { item: "the dashboard", state: "partial", done_when: [{ check: checks[0], met: true }, { check: checks[1], met: false, note: "reads a snapshot" }] },
+      { item: "the notes editor", state: "partial", blocked_by: "too_big", done_when: [{ check: "an edit saves", met: false }] },
+    ] });
+    await tickFor(id);
+    const desc = String((await card(id)).description);
+    expect(desc).toMatch(/BUILD REFUSED.*"the dashboard" is not finished \(a saved note is still there after a reload\)/);
+    expect(desc).toMatch(/"the notes editor" is not finished \(an edit saves\) and "too_big" is not something only the partner can supply/);
+    expect((await readWebPropertyChange(env, id))!.preview_url ?? null, "the refused build's preview is not recorded").toBeNull();
+    expect((await card(id)).state, "a refusal is a failed attempt, never a question").not.toBe("BLOCKED");
+    expect(noPreviewTo(from), "no preview reached him").toHaveLength(0);
+  });
+
+  it("a BUILD that reports no items is refused; one held only by a file only the partner can send, named as missing, goes to preview", async () => {
+    const id = await atBuild("v1bar2");
+    const from = sent.length;
+    await macReports(id, { phase: "BUILD", status: "ok", ...pr("v1bar2") });
+    await tickFor(id);
+    expect(String((await card(id)).description)).toMatch(/BUILD REFUSED.*no `items` list/);
+    expect(noPreviewTo(from)).toHaveLength(0);
+    const ok = await atBuild("v1bar3");
+    await macReports(ok, { phase: "BUILD", status: "ok", ...pr("v1bar3"), missing_materials: [{ item: "the Productions logo", where: "the dashboard header" }], items: [{ item: "the dashboard", state: "partial", blocked_by: "missing_material", done_when: [{ check: checks[0], met: true }, { check: "the header shows the Productions logo", met: false }] }] });
+    await tickFor(ok);
+    expect((await readWebPropertyChange(env, ok))!.preview_url).toBe("https://v1bar3.west-peek-ventures.pages.dev");
+    expect((await card(ok)).state, "waiting on his word on the preview").toBe("BLOCKED");
   });
 });
 
@@ -1092,7 +1155,7 @@ describe("a plan that is not publish-ready previews first (21 Sep 2026)", () => 
     expect(await liveJobFor(id), "BUILD was parked at filing").not.toBeNull();
     // The card is for westpeek.ventures (planned() names it), so its preview lives under that site's
     // Pages project, and the link she gets is the branch alias — the build she is approving.
-    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/21", pr_number: 21, branch: "work/wpc-comm1234", check_state: "GREEN", preview_url: "https://a1b2c3d4.west-peek-ventures.pages.dev", proof: "npm run validate green · shots/community-desktop.png shots/community-390.png" });
+    await macReports(id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/21", pr_number: 21, branch: "work/wpc-comm1234", check_state: "GREEN", preview_url: "https://a1b2c3d4.west-peek-ventures.pages.dev", proof: "npm run validate green · shots/community-desktop.png shots/community-390.png" });
     const green = await tickFor(id);
     expect(green.outcome, "green stops at the preview, land-on-green notwithstanding").toBe("BLOCKED");
     const row = (await readWebPropertyChange(env, id))!;
@@ -1132,7 +1195,7 @@ describe("a plan that is not publish-ready previews first (21 Sep 2026)", () => 
     expect(job.refresh, "a change is rebuilt whatever the materials").toBe(false);
     expect(String((await card(id)).description)).toMatch(/asked for changes \("changes: the Sengo logo is wrong/);
     const beforeMail = sent.length;
-    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/21", pr_number: 21, branch: "work/wpc-comm1234", changed: true, head_sha: "moved-731", check_state: "GREEN", preview_url: "https://e9f8a7b6.west-peek-ventures.pages.dev", materials: "5:aaaa", proof: "validate green" });
+    await macReports(id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/21", pr_number: 21, branch: "work/wpc-comm1234", changed: true, head_sha: "moved-731", check_state: "GREEN", preview_url: "https://e9f8a7b6.west-peek-ventures.pages.dev", materials: "5:aaaa", proof: "validate green" });
     expect((await tickFor(id)).outcome).toBe("BLOCKED");
     const second = (await readWebPropertyChange(env, id))!;
     expect(second.preview_url).toBe("https://e9f8a7b6.west-peek-ventures.pages.dev");
@@ -1191,7 +1254,7 @@ describe("\"preview\" on a publish-ready plan takes the same road", () => {
     const row1 = (await readWebPropertyChange(env, porter.id))!;
     expect(row1.preview_only).toBe(1);
     expect(String((await card(porter.id)).description)).toMatch(/asked for a preview first/);
-    await macReports(porter.id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/22", pr_number: 22, check_state: "GREEN", proof: "shots/team-desktop.png", materials: "12:abcd1234" });
+    await macReports(porter.id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/22", pr_number: 22, check_state: "GREEN", proof: "shots/team-desktop.png", materials: "12:abcd1234" });
     expect((await tickFor(porter.id)).outcome).toBe("BLOCKED");
     const c = await card(porter.id);
     expect(String(c.block_needed)).toMatch(/No preview deployment exists for this repo — the PR link and the screenshots stand in for it/);
@@ -1240,7 +1303,7 @@ describe("the named bypass: \"approved to production\" (21 Sep 2026)", () => {
     const porter = await planned(SCOOTER, "Walker", "productions news A", notReady);
     await replyFrom(SCOOTER, "approved", await porter.token());
     await tickFor(porter.id);
-    await macReports(porter.id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/31", pr_number: 31, check_state: "GREEN", preview_url: "https://p31.westpeekproductions.pages.dev" });
+    await macReports(porter.id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/31", pr_number: 31, check_state: "GREEN", preview_url: "https://p31.westpeekproductions.pages.dev" });
     expect((await tickFor(porter.id)).outcome).toBe("BLOCKED");
     const row = (await readWebPropertyChange(env, porter.id))!;
     expect(row.forced_by).toBeNull();
@@ -1286,7 +1349,7 @@ describe("the named bypass: \"approved to production\" (21 Sep 2026)", () => {
     expect(row.forced_at).toBeTruthy();
     expect(JSON.parse(row.forced_placeholders_json!)).toEqual(PLACEHOLDERS);
     expect(String((await card(porter.id)).description)).toMatch(/FORCED TO PRODUCTION by Scooter Taylor .*Airtable link; winner records/);
-    await macReports(porter.id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/33", pr_number: 33, check_state: "GREEN", preview_url: "https://p33.westpeekproductions.pages.dev", proof: "validate green" });
+    await macReports(porter.id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/33", pr_number: 33, check_state: "GREEN", preview_url: "https://p33.westpeekproductions.pages.dev", proof: "validate green" });
     const green = await tickFor(porter.id);
     expect(green.outcome, "no preview stop: green lands").toBe("PROGRESSED");
     expect(green.summary).toMatch(/landing is queued/);
@@ -1326,7 +1389,7 @@ async function preApproved(who: string, chief: string, subject: string, phrase: 
   });
   const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
   await tickFor(id); // parks PLAN
-  await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build" }], ...plan });
+  await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build", done_when: ["it works on the preview"] }], ...plan });
   return id;
 }
 
@@ -1368,7 +1431,7 @@ describe("pre-approval in the request: \"your call\" (21 Sep 2026)", () => {
     expect(mail[0]!.subject).toMatch(/got it/i);
     expect(mail[0]!.text).toMatch(/You pre-approved this \("your call"\), so the next thing you'll get is the preview link — reply "approved" and it goes live/);
     expect(mail[0]!.text, "never promises a finished result it will not send first").not.toMatch(/next thing you'll get is the finished result/);
-    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/41", pr_number: 41, check_state: "GREEN" });
+    await macReports(id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/41", pr_number: 41, check_state: "GREEN" });
     const green = await tickFor(id);
     expect(green.outcome, "a pre-approval approves the plan, never the landing").toBe("BLOCKED");
     const held = (await readWebPropertyChange(env, id))!;
@@ -1408,7 +1471,7 @@ describe("pre-approval in the request: \"your call\" (21 Sep 2026)", () => {
     });
     const out = await tickFor(id);
     expect(out.summary).toMatch(/BUILD queued/);
-    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/42", pr_number: 42, check_state: "GREEN", preview_url: "https://p42.pages.dev" });
+    await macReports(id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/42", pr_number: 42, check_state: "GREEN", preview_url: "https://p42.pages.dev" });
     expect((await tickFor(id)).outcome, "not ready stops at the preview even when pre-approved").toBe("BLOCKED");
     const row = (await readWebPropertyChange(env, id))!;
     expect(row.phase).toBe("BUILD");
@@ -1436,7 +1499,7 @@ describe("pre-approval in the request: \"your call\" (21 Sep 2026)", () => {
     expect(row.forced_by).toBe("fu_scooter_taylor");
     expect(JSON.parse(row.forced_placeholders_json!)).toEqual(["logo pack"]);
     expect(String((await card(id)).description)).toMatch(/said "approved to production": a plan that is not publish-ready lands anyway, named as forced by Scooter Taylor/);
-    await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/43", pr_number: 43, check_state: "GREEN", preview_url: "https://p43.pages.dev" });
+    await macReports(id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/43", pr_number: 43, check_state: "GREEN", preview_url: "https://p43.pages.dev" });
     const green = await tickFor(id);
     expect(green.summary, "no preview stop: forced").toMatch(/landing is queued/);
     expect((await readWebPropertyChange(env, id))!.phase).toBe("LAND");
@@ -1607,7 +1670,7 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
 
   it("nothing to ask + publish-ready → built without asking: no plan email, BUILD parked, the card says why; green stops at ONE preview email, his \"approved\" lands it, then DONE", async () => {
     const before = sent.length;
-    await macReports(porterId, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build" }], document: "# Plan: Sensori photo swap\n\nReplace sites/ventures/assets/img/portfolio/sensori-founders.jpg with the attachment; same dimensions.", decided: ["same file name and dimensions, so no markup change"], asks: [], publish_ready: true, placeholders: [] });
+    await macReports(porterId, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build", done_when: ["it works on the preview"] }], document: "# Plan: Sensori photo swap\n\nReplace sites/ventures/assets/img/portfolio/sensori-founders.jpg with the attachment; same dimensions.", decided: ["same file name and dimensions, so no markup change"], asks: [], publish_ready: true, placeholders: [] });
     const out = await tickFor(porterId);
     expect(out.outcome, "no block").toBe("PROGRESSED");
     expect(out.summary).toMatch(/nothing to ask; BUILD queued/);
@@ -1616,7 +1679,7 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     expect(String((await card(porterId)).description)).toMatch(/No partner decisions in this change; built without asking/);
     expect(String((await card(porterId)).description), "the finding says where it stops").toMatch(/On green it stops at a preview link; it lands when the partner approves the preview/);
     expect(sent.slice(before).filter((m) => m.to === SCOOTER), "no plan email").toHaveLength(0);
-    await macReports(porterId, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/51", pr_number: 51, check_state: "GREEN", proof: "validate green · shots" });
+    await macReports(porterId, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/51", pr_number: 51, check_state: "GREEN", proof: "validate green · shots" });
     // PREVIEW FIRST (owner, 23 Sep 2026): green alone never lands, even with nothing to ask.
     expect((await tickFor(porterId)).outcome).toBe("BLOCKED");
     expect((await readWebPropertyChange(env, porterId))!.phase).toBe("BUILD");
@@ -1717,7 +1780,7 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     const toScooter = sent.slice(before).filter((m) => m.to === SCOOTER && !/Got it$/.test(m.subject));
     expect(toScooter.map((m) => m.subject.replace(/^Porter: .*: /, "")), "the question once, then the FYI once").toEqual(["Plan ready", "Going ahead"]);
     // The FYI is once per filing: another tick sends nothing more.
-    await macReports(porter.id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/77", pr_number: 77, check_state: "GREEN", preview_url: "https://p77.west-peek-ventures.pages.dev" });
+    await macReports(porter.id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/77", pr_number: 77, check_state: "GREEN", preview_url: "https://p77.west-peek-ventures.pages.dev" });
     expect((await tickFor(porter.id)).outcome, "green still stops at the preview: the FYI is a plan approval, never a landing approval").toBe("BLOCKED");
     expect((await readWebPropertyChange(env, porter.id))!.land_approved_at).toBeNull();
     expect(sent.slice(before).filter((m) => m.to === SCOOTER && /Going ahead/.test(m.subject))).toHaveLength(1);
@@ -2148,7 +2211,7 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     const row0 = (await readWebPropertyChange(env, porter.id))!;
     expect(row0.plan_approved_by, "approved by the request").toMatch(/^request:/);
     const planToken = (await env.WP_OS_DB.prepare("SELECT message_id FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PLAN'").bind(porter.id).first<{ message_id: string }>())!.message_id;
-    await macReports(porter.id, { phase: "BUILD", status: "ok", pr_url: `https://github.com/seq23/join-west-peek-main/pull/${Math.floor(Math.random() * 9000) + 100}`, pr_number: 9, check_state: "GREEN", preview_url: "https://p9.west-peek-ventures.pages.dev" });
+    await macReports(porter.id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: `https://github.com/seq23/join-west-peek-main/pull/${Math.floor(Math.random() * 9000) + 100}`, pr_number: 9, check_state: "GREEN", preview_url: "https://p9.west-peek-ventures.pages.dev" });
     expect((await tickFor(porter.id)).outcome).toBe("BLOCKED");
     expect(String((await card(porter.id)).block_needed)).toMatch(/^Waiting on: your word on the preview[\s\S]*Why: every site change previews before it goes live[\s\S]*To clear it by email: reply "approved"[\s\S]*PREVIEW READY\./);
     return { ...porter, planToken };
@@ -2174,7 +2237,7 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     expect(row.refresh_intent).toBe("CHANGES");
     expect(row.land_approved_at).toBeNull();
     expect(JSON.parse(row.answers_json).at(-1)).toMatch(/make the hero photo the group shot/);
-    await macReports(p.id, { phase: "BUILD", status: "ok", pr_url: row.pr_url, pr_number: 9, changed: true, head_sha: "moved-1737", check_state: "GREEN", preview_url: "https://p9b.west-peek-ventures.pages.dev" });
+    await macReports(p.id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: row.pr_url, pr_number: 9, changed: true, head_sha: "moved-1737", check_state: "GREEN", preview_url: "https://p9b.west-peek-ventures.pages.dev" });
     expect((await tickFor(p.id)).outcome, "a fresh preview waits").toBe("BLOCKED");
     await replyFrom(SCOOTER, "Perfect, that's the one", await p.token());
     expect((await tickFor(p.id)).summary).toMatch(/LAND queued/);
@@ -2196,7 +2259,7 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     expect(job.rebuild).toMatchObject({ intent: "CHANGES" });
     expect(job.rebuild!.changes).toMatch(/scroll on the flyers/);
     // The Mac verifies the old build, moves nothing, reports ok: a failed attempt, no email.
-    await macReports(p.id, { phase: "BUILD", status: "ok", pr_url: row.pr_url, pr_number: 9, check_state: "GREEN", preview_url: "https://p9b2.west-peek-ventures.pages.dev", changed: false, head_sha: "1a447a3" });
+    await macReports(p.id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: row.pr_url, pr_number: 9, check_state: "GREEN", preview_url: "https://p9b2.west-peek-ventures.pages.dev", changed: false, head_sha: "1a447a3" });
     const inert = await tickFor(p.id);
     expect(inert.outcome, inert.summary).not.toBe("BLOCKED");
     expect(inert.summary).toMatch(/BUILD moved nothing for the partner's request/);
@@ -2207,7 +2270,7 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     expect((await tickFor(p.id)).summary).toMatch(/BUILD queued|BUILD is queued/);
     const again = JSON.parse((await liveJobFor(p.id))!.job_json!) as LocalJobPayload;
     expect(again.rebuild!.changes).toMatch(/scroll on the flyers/);
-    await macReports(p.id, { phase: "BUILD", status: "ok", pr_url: row.pr_url, pr_number: 9, check_state: "GREEN", preview_url: "https://p9b2.west-peek-ventures.pages.dev", changed: true, head_sha: "6f943e3" });
+    await macReports(p.id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: row.pr_url, pr_number: 9, check_state: "GREEN", preview_url: "https://p9b2.west-peek-ventures.pages.dev", changed: true, head_sha: "6f943e3" });
     expect((await tickFor(p.id)).outcome).toBe("BLOCKED");
     expect(await previews()).toBe(before + 1);
     const c = await card(p.id);
@@ -2316,7 +2379,7 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     expect((await readWebPropertyChange(env, p.id))!.refresh_intent).toBe("CHANGES");
     expect((await readWebPropertyChange(env, p.id))!.land_approved_at).toBeNull();
     // And the reply to the PREVIEW email itself still lands it once the new preview is up.
-    await macReports(p.id, { phase: "BUILD", status: "ok", pr_url: (await readWebPropertyChange(env, p.id))!.pr_url, pr_number: 9, changed: true, head_sha: "moved-1847", check_state: "GREEN", preview_url: "https://p9c.west-peek-ventures.pages.dev" });
+    await macReports(p.id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: (await readWebPropertyChange(env, p.id))!.pr_url, pr_number: 9, changed: true, head_sha: "moved-1847", check_state: "GREEN", preview_url: "https://p9c.west-peek-ventures.pages.dev" });
     expect((await tickFor(p.id)).outcome).toBe("BLOCKED");
     await replyFrom(SCOOTER, "approved", await p.token());
     expect((await tickFor(p.id)).summary).toMatch(/Landing approved after the preview; LAND queued/);

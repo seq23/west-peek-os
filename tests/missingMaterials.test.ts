@@ -256,7 +256,7 @@ describe("Porter's web lane: the plan asks for the materials, a reply's file rea
     await tickFor(id);
     await macReports({
       phase: "PLAN",
-      accounting: [{ ask: "what the partner asked for", how: "build" }],
+      accounting: [{ ask: "what the partner asked for", how: "build", done_when: ["it works on the preview"] }],
       status: "ok",
       document: "# Plan: podcast page\n\nFive episode cards from the package; two headshots are not in the folder.",
       decided: ["episode cards from the manifest"],
@@ -302,7 +302,7 @@ describe("Porter's web lane: the plan asks for the materials, a reply's file rea
   });
 
   it("after the rebuild the preview email names ONLY what is still missing", async () => {
-    await macReports({ phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/400", pr_number: 400, check_state: "GREEN", proof: "validate green", missing_materials: [{ item: "Ep 7 guest headshot (JPG)", where: "the Ep 7 card on /podcast" }] });
+    await macReports({ phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/400", pr_number: 400, check_state: "GREEN", proof: "validate green", missing_materials: [{ item: "Ep 7 guest headshot (JPG)", where: "the Ep 7 card on /podcast" }] });
     const before = (await mailFor(id)).length;
     expect((await tickFor(id)).outcome).toBe("BLOCKED");
     const preview = (await mailFor(id)).slice(before).join("\n\n");

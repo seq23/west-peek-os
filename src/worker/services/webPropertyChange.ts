@@ -54,7 +54,7 @@ import {
   type LocalJobReport,
   type WebPropertyChangePhase,
 } from "../../shared/work/localJobs";
-import { partnerWrote, planProblems, refusalLine } from "../../shared/work/everyAsk";
+import { buildProblems, buildRefusalLine, partnerWrote, planProblems, refusalLine } from "../../shared/work/everyAsk";
 
 /**
  * A WEB PROPERTY CHANGE, worked by Porter on her Mac (20 Sep 2026, Plan A).
@@ -1443,7 +1443,23 @@ export async function applyReport(
       await appendFinding(env, card.id, line);
       return { finished: false, blocked: false, progressed: false, detail: line.slice(0, 600) };
     }
-    if (report.accounting?.length) await appendFinding(env, card.id, `Per ask: ${report.accounting.map((a) => `${a.ask.slice(0, 120)} → ${a.how === "build" ? "built in this job" : a.how === "question" ? "asked of the partner" : "later, on the partner's own date"}`).join("; ")}`);
+    if (report.accounting?.length) await appendFinding(env, card.id, `Per ask: ${report.accounting.map((a) => `${a.ask.slice(0, 120)} → ${a.how === "build" ? `built in this job, done when: ${(a.done_when ?? []).join(" · ").slice(0, 300)}` : a.how === "question" ? "asked of the partner" : "later, on the partner's own date"}`).join("; ")}`);
+  }
+
+  /*
+   * THE v1.0 BAR (owner, 13 Nov 2026: "v1.0 final with persistence and veteran UX/UI POV"). An ok BUILD reports every
+   * item against the done-when checks its plan set; one not finished, and not held by something only the partner can
+   * supply, is REFUSED before any of it is applied: no preview email, a failed attempt that says why, retried on the
+   * same branch. A several-repo report that rebuilt nothing (every PR re-observed) carries no items and is not judged again.
+   */
+  if (report.phase === "BUILD" && report.status === "ok" && !(report.parts?.length && report.items === undefined)) {
+    const problems = buildProblems({ items: report.items, missingSecrets: report.missing_secrets?.length ?? 0, missingMaterials: report.missing_materials?.length ?? 0 });
+    if (problems.length) {
+      const line = buildRefusalLine(problems);
+      await recordHistory(env, { ...row, run_history_json: (await readWebPropertyChange(env, card.id))?.run_history_json ?? row.run_history_json }, { run_id: run.id, phase: "BUILD", status: "REFUSED", reason: line.slice(0, 1200) });
+      await appendFinding(env, card.id, line);
+      return { finished: false, blocked: false, progressed: false, detail: line.slice(0, 600) };
+    }
   }
 
   // 0253: what the repo itself said, the keys the vault lacks (only with the lookup that proves it), the runs.

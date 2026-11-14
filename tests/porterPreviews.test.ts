@@ -68,11 +68,11 @@ async function atFirstPreview(subject: string, build: Record<string, unknown> = 
   await tickFor(id);
   // One ask WITHOUT a recommendation, so the plan still blocks and "approved" still clears it (since
   // 27 Sep 2026 a plan whose every ask carries a recommendation is approved by the request).
-  await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build" }], document: `# joinwestpeek.com — ${subject} (PLAN)\n\nbody`, decided: [], asks: [{ question: "Orange?", recommended: "#c45a3c" }, { question: "Which Sengo logo — the black or the white?" }], publish_ready: false, placeholders: ["Sengo logo", "Ep 4 link"] });
+  await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build", done_when: ["it works on the preview"] }], document: `# joinwestpeek.com — ${subject} (PLAN)\n\nbody`, decided: [], asks: [{ question: "Orange?", recommended: "#c45a3c" }, { question: "Which Sengo logo — the black or the white?" }], publish_ready: false, placeholders: ["Sengo logo", "Ep 4 link"] });
   expect((await tickFor(id)).outcome).toBe("BLOCKED");
   expect((await reply(SEQUOIA, id, "approved")).answered).toBe(true);
   expect((await tickFor(id)).summary).toMatch(/BUILD queued/);
-  await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/501", pr_number: 501, branch: `work/wpc-${id.slice(3, 11)}`, check_state: "GREEN", preview_url: "https://1a2b3c4d.west-peek-community.pages.dev", materials: "30:aaaa0001", ...build });
+  await macReports(id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/501", pr_number: 501, branch: `work/wpc-${id.slice(3, 11)}`, check_state: "GREEN", preview_url: "https://1a2b3c4d.west-peek-community.pages.dev", materials: "30:aaaa0001", ...build });
   expect((await tickFor(id)).outcome, "preview 1: built with placeholders straight after the plan").toBe("BLOCKED");
   return id;
 }
@@ -163,7 +163,7 @@ describe("\"publish\" with new materials: filled in and published without anothe
     const early = await parkPhase(env, sweepCard, queued, "LAND", rules);
     expect(early.parked).toBe(false);
     expect((early as { reason: string }).reason).toMatch(/no build with the new materials has gone green since/);
-    const job = await macReports(id, { phase: "BUILD", status: "ok", pr_url: "https://github.com/seq23/join-west-peek-main/pull/501", pr_number: 501, branch: `work/wpc-${id.slice(3, 11)}`, check_state: "GREEN", preview_url: "https://5e6f7a8b.west-peek-community.pages.dev", materials: "31:bbbb0002", missing_materials: [{ item: "Ep 4 link", where: "episodes" }] });
+    const job = await macReports(id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/501", pr_number: 501, branch: `work/wpc-${id.slice(3, 11)}`, check_state: "GREEN", preview_url: "https://5e6f7a8b.west-peek-community.pages.dev", materials: "31:bbbb0002", missing_materials: [{ item: "Ep 4 link", where: "episodes" }] });
     expect(job.refresh, "the Mac was asked to check the materials first").toBe(true);
     expect(job.materials_fingerprint).toBe("30:aaaa0001");
     const landing = await tickFor(id);
@@ -250,7 +250,7 @@ describe("\"I added missing items\" (her label, exactly) and the preview re-sent
     const chief = await openAssignmentCard(env, { subject: "events page", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: `Porter, events page on the community site — https://drive.google.com/drive/folders/${FOLDER}evnts`, limits: EMAILED_TASK_LIMITS, emlKey: null });
     const planId = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chief)).description))![1]!;
     await tickFor(planId);
-    await macReports(planId, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build" }], document: "# Plan: events page", decided: [], asks: [{ question: "Dates?", recommended: "as listed" }, { question: "Which venue photo?" }], publish_ready: false, placeholders: ["Ep 6 flyer"] });
+    await macReports(planId, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build", done_when: ["it works on the preview"] }], document: "# Plan: events page", decided: [], asks: [{ question: "Dates?", recommended: "as listed" }, { question: "Which venue photo?" }], publish_ready: false, placeholders: ["Ep 6 flyer"] });
     await tickFor(planId);
     expect((await post(`/api/work-cards/${planId}/materials-added`, SEQUOIA)).status).toBe(200);
     expect((await row(planId)).plan_approved_at, "the button is never a plan approval").toBeNull();
