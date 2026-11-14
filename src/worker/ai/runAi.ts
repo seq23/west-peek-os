@@ -26,6 +26,7 @@ import { checkFirmBudgets, currentSpendBehaviour, firmSpend } from "./spend";
 import {
   CHAIN_BUDGET_MS,
   attemptDeadlineMs,
+  searchAttemptDeadlineMs,
   canTryAnotherLane,
   chainBudgetExhaustedReason,
   remainingBudgetMs,
@@ -888,7 +889,9 @@ async function executeAttempt(
    * See `chainBudget.ts` for the production sample every one of those numbers comes from.
    */
   const remaining = remainingBudgetMs(chain.startedAtMs, Date.now(), chain.budgetMs);
-  const deadlineMs = chain.attemptDeadlineMsForTests ?? attemptDeadlineMs(rec.estimate.output_tokens, remaining);
+  const deadlineMs =
+    chain.attemptDeadlineMsForTests ??
+    (rec.input.budgetContext?.requiresSearch === true ? searchAttemptDeadlineMs(remaining) : attemptDeadlineMs(rec.estimate.output_tokens, remaining));
   try {
     const response = await adapter.complete({
       purpose: rec.input.purpose,

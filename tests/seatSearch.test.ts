@@ -486,3 +486,30 @@ describe("a seat search never waits past the attempt's deadline (wc_bd8b68cb, 14
     expect(row?.status, "the row is closed so no claimer answers into nothing").toBe("ABANDONED");
   });
 });
+
+describe("a seat search is given long enough to finish (wc_bd8b68cb, 14 Nov 2026, after #406)", () => {
+  beforeEach(() => setLever("MODERATE"));
+
+  it("Walker's research call (2,500 tokens declared) parks each seat leg with at least the longest measured seat search, never the ~169s token arithmetic gives", async () => {
+    // Measured on production subscription_seat_run, 14 Nov: claim to report up to 348s, plus up to ~30s to be claimed.
+    const LONGEST_MEASURED_SEARCH_S = 348 + 30;
+    await awake("claude_code", true);
+    await awake("codex", true);
+    const c = claimer(["claude_code", "codex"], { outOfUsage: ["codex"] });
+    const v = vendors();
+    const { run } = await runAi(
+      env(),
+      { ...SEARCH_CALL(), purpose: "Walker: West Peek Productions research", budgetContext: { requiresSearch: true, expectedOutputTokens: 2500, preferredModel: SEARCH_MODEL, providerKey: "openrouter" } },
+      { fetchImpl: v.fetchImpl },
+    );
+    await c.stop();
+    expect(run.status).toBe("COMPLETED");
+    expect(run.output_text).toContain("SEAT SEARCH ANSWER (claude_code)");
+    const legs = ((await t.db.prepare("SELECT seat, max_seconds FROM subscription_seat_run ORDER BY created_at").all()).results ?? []) as Array<{ seat: string; max_seconds: number }>;
+    expect(legs.map((l) => l.seat)).toEqual(["codex", "claude_code"]);
+    for (const leg of legs) {
+      expect(leg.max_seconds, `${leg.seat} was given long enough for a real search`).toBeGreaterThanOrEqual(LONGEST_MEASURED_SEARCH_S);
+      expect(leg.max_seconds, `${leg.seat} still ends inside the run's own budget`).toBeLessThanOrEqual(480);
+    }
+  }, 90_000);
+});
