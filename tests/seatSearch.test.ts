@@ -464,3 +464,25 @@ describe("the shared check every search caller uses", () => {
     expect(servedBySearchLane(undefined)).toBe(false);
   });
 });
+
+describe("a seat search never waits past the attempt's deadline (wc_bd8b68cb, 14 Nov 2026)", () => {
+  it("with nine minutes of seat wait and a one-minute attempt, it gives up at the attempt's deadline, closes its row and moves on", async () => {
+    const { createSubscriptionSeatAdapter } = await import("../src/worker/ai/providers/subscriptionSeat");
+    await recordHeartbeat(env(), { seat: "claude_code", deviceId: "mac-deadline", hostname: "her-mac", capabilities: [SEAT_SEARCH_CAPABILITY] });
+    const start = Date.now();
+    let clock = start;
+    const adapter = createSubscriptionSeatAdapter({
+      env: env(),
+      seat: "claude_code",
+      modelAccess: "PUBLIC_MODEL_APPROVED",
+      needsSearch: true,
+      // No `waitMs`: the seat's own search wait (minutes) applies, and only the attempt's deadline may cut it short.
+      sleep: async (ms) => { clock += ms; },
+      now: () => new Date(clock),
+    });
+    await expect(adapter.complete({ purpose: "Example research", inputs: ["find example things"], model: null, deadlineMs: 60_000 })).rejects.toThrow(/subscription_seat_unavailable/);
+    expect(clock - start, "waited no longer than the attempt's own deadline").toBeLessThanOrEqual(60_000);
+    const row = await t.db.prepare("SELECT status FROM subscription_seat_run WHERE purpose = 'Example research' ORDER BY created_at DESC LIMIT 1").first<{ status: string }>();
+    expect(row?.status, "the row is closed so no claimer answers into nothing").toBe("ABANDONED");
+  });
+});

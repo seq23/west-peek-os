@@ -687,32 +687,42 @@ describe("a search no route could do is a named stop the same day, never 'put mo
        VALUES ('codex', 'dev_search_mac', 'Example-Mac', 'test', ?1, '["web_search"]', ?1)`,
     ).bind(at.toISOString()).run();
 
-  it("through the sweep, no seat to wait for: the card never waits on the free search; two goes, then BLOCKED by name on who runs the routes, within the hour", async () => {
+  it("through the sweep, no seat to wait for: the card WAITS for a research seat (never fails, nobody emailed), and only after a day stops by name on who runs the routes (owner, 14 Nov 2026)", async () => {
     await env.WP_OS_DB.prepare("DELETE FROM subscription_seat_device").run();
     const T0 = new Date("2026-11-10T15:01:00.000Z");
     const id = await card("Walker: West Peek Productions hire search (2026-W46)", "aie_walker");
     await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'PRODUCTIONS_HIRE_SEARCH' WHERE id = ?1").bind(id).run();
     const runner = refusedRunner(id, `the live search failed: ${STOP}`, "prov_free_search");
     const first = await sweepOnce(env, T0, { productionsHire: runner });
-    expect(first.outcome, "a failed free search is a counted attempt, not a wait").toBe("FAILED");
+    expect(first.outcome, "a search no route could do is a wait, not a counted attempt").toBe("WAITING_ON_SEAT");
     let c = await row(id);
-    expect(Number(c.work_attempts)).toBe(1);
-    expect(String(c.waiting_for ?? "")).not.toMatch(/free web search/);
+    expect(Number(c.work_attempts)).toBe(0);
+    expect(c.state).not.toBe("BLOCKED");
+    expect(String(c.waiting_for)).toMatch(/Waiting for a research seat/);
     expect(String(c.work_last_failure)).not.toMatch(/run out of credit|too much at once/);
+    expect(new Date(String(c.waiting_until)).getTime() - T0.getTime(), "a cheap sweep retry, not a model polling").toBeLessThanOrEqual(30 * 60_000);
+    // Still waiting most of a day later, with no attempt spent.
     await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
-    const second = await sweepOnce(env, new Date(T0.getTime() + 10 * 60_000), { productionsHire: runner });
-    expect(second.outcome).toBe("BLOCKED");
+    expect((await sweepOnce(env, new Date(T0.getTime() + 23 * 3_600_000), { productionsHire: runner })).outcome).toBe("WAITING_ON_SEAT");
+    expect(Number((await row(id)).work_attempts)).toBe(0);
+    // A day after the first wait: the hard cap. Counted, then a named stop on who runs the routes.
+    let at = new Date(T0.getTime() + 24 * 3_600_000 + 60_000);
+    for (const want of ["FAILED", "BLOCKED"]) {
+      await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
+      expect((await sweepOnce(env, at, { productionsHire: runner })).outcome).toBe(want);
+      at = new Date(at.getTime() + 6 * 60_000);
+    }
     c = await row(id);
     expect(c.state).toBe("BLOCKED");
     expect(c.block_reason).toBe("a_lane_refused_the_work");
     expect(c.block_who, "Scooter cannot repair a search route; the stop names who runs them").toBe("SEQUOIA");
     expect(String(c.block_needed ?? c.next_action ?? "")).not.toMatch(/credit/);
-    const waits = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE object_id = ?1 AND event_type = 'work_card.waiting_for_free_search'").bind(id).first<{ n: number }>();
-    expect(Number(waits?.n)).toBe(0);
+    const mailed = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE object_id = ?1 AND event_type = 'deliverable.emailed_to_partner'").bind(id).first<{ n: number }>();
+    expect(Number(mailed?.n), "no partner is emailed about the wait").toBe(0);
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
   });
 
-  it("through the sweep, a seat that can search checked in: the card waits TEN MINUTES for the seat, a bounded number of times, then counts and stops the same day", async () => {
+  it("through the sweep, a seat that can search checked in: the card waits for it TEN MINUTES at a time, as long as it takes up to a day, never spending an attempt", async () => {
     const T0 = new Date("2026-11-10T15:01:00.000Z");
     await env.WP_OS_DB.prepare("DELETE FROM subscription_seat_device").run();
     await seat(new Date(T0.getTime() - 5 * 60_000));
@@ -720,24 +730,18 @@ describe("a search no route could do is a named stop the same day, never 'put mo
     await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'PRODUCTIONS_HIRE_SEARCH' WHERE id = ?1").bind(id).run();
     const runner = refusedRunner(id, `the live search failed: ${STOP}`, "prov_free_search");
     let at = T0;
-    for (let k = 0; k < SEAT_NO_ANSWER_WAITS; k++) {
+    // More waits than the old bound of SEAT_NO_ANSWER_WAITS: research keeps waiting for its seat.
+    for (let k = 0; k < SEAT_NO_ANSWER_WAITS + 3; k++) {
+      await env.WP_OS_DB.prepare("UPDATE subscription_seat_device SET last_seen_at = ?1").bind(new Date(at.getTime() - 60_000).toISOString()).run();
       await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
       expect((await sweepOnce(env, at, { productionsHire: runner })).outcome).toBe("WAITING_ON_SEAT");
       const c = await row(id);
-      expect(String(c.waiting_for)).toMatch(/Waiting for the subscription seat/);
+      expect(String(c.waiting_for)).toMatch(/Waiting for a research seat/);
       expect(new Date(String(c.waiting_until)).getTime() - at.getTime(), "minutes, not an hour").toBeLessThanOrEqual(15 * 60_000);
       expect(Number(c.work_attempts)).toBe(0);
       at = new Date(at.getTime() + 11 * 60_000);
     }
-    for (const want of ["FAILED", "BLOCKED"]) {
-      await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
-      expect((await sweepOnce(env, at, { productionsHire: runner })).outcome).toBe(want);
-      at = new Date(at.getTime() + 6 * 60_000);
-    }
-    const c = await row(id);
-    expect(c.state).toBe("BLOCKED");
-    expect(c.block_who).toBe("SEQUOIA");
-    expect(at.getTime() - T0.getTime(), "stopped by name inside two hours of the first try").toBeLessThan(2 * 3_600_000);
+    expect((await row(id)).state).not.toBe("BLOCKED");
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
     await env.WP_OS_DB.prepare("DELETE FROM subscription_seat_device").run();
   });

@@ -11,6 +11,7 @@ import type { FirmUserIdentity } from "../auth";
 import { appendEvent } from "../events";
 import { notifyPartners, notifyQuietly } from "./notifications";
 import { deckStillBeingRead, workCard } from "./employeeWork";
+import { runBeganAt } from "./liveSearch";
 import { SEAT_WAIT_MINUTES, SPEND_SETTING_LANE, SPEND_SETTING_NAME, blockCard, currentSpendState, isSearchCallRefusal, releaseSpendSettingBlocks, resurfaceStaleBlocks, seatToWaitFor, spendStateJson, type StoredBlock } from "./blocks";
 import { resurfaceStalePreviews } from "./previewApproval";
 import { isSeatWait } from "../../shared/ai/seatOrder";
@@ -430,6 +431,29 @@ export const HELD_MINUTES = 6;
  * under the run. That is the whole reason this rule lives here rather than in a row trigger: it is
  * a fact about time, and a trigger asserting it would abort `releaseLease` mid-tick.
  */
+/**
+ * A RUN NOTHING IS WAITING FOR IS CLOSED, NOT LEFT RUNNING (14 Nov 2026, wc_bd8b68cb). When the Worker invocation that
+ * awaited a model call ends (its wall-clock limit, an evicted isolate), the ai_run row it opened stays RUNNING for
+ * ever: on 14 Nov three of Walker's searches read "running" for hours after the Mac had answered them. No call can
+ * outlive its chain budget, so a row still RUNNING well past it has nobody behind it. A run whose seat leg is still
+ * queued or claimed is left alone. Returns how many were closed.
+ */
+export const ORPHANED_RUN_MINUTES = 30;
+export async function settleOrphanedRuns(env: Env, now: Date): Promise<number> {
+  const cutoff = new Date(now.getTime() - ORPHANED_RUN_MINUTES * 60_000).toISOString();
+  const out = await env.WP_OS_DB.prepare(
+    `UPDATE ai_run
+        SET status = 'FAILED', completed_at = ?2,
+            failure_reason = 'abandoned: the call that opened this run ended without recording a result (its Worker invocation stopped), so it was closed by the sweep'
+      WHERE status = 'RUNNING' AND created_at < ?1
+        AND NOT EXISTS (SELECT 1 FROM subscription_seat_run s WHERE s.ai_run_id = ai_run.id AND s.status IN ('QUEUED', 'CLAIMED'))`,
+  )
+    .bind(cutoff, now.toISOString())
+    .run()
+    .catch(() => null);
+  return out?.meta?.changes ?? 0;
+}
+
 export async function settleAbandonedCards(env: Env, now: Date): Promise<SweepCard[]> {
   const rows = (
     await env.WP_OS_DB.prepare(
@@ -546,7 +570,7 @@ export function isSeatNoAnswer(detail: string | null | undefined): boolean {
 }
 
 /**
- * NO ROUTE DID THE SEARCH: A SEAT IS WAITED FOR BRIEFLY, THEN THE CARD STOPS AND SAYS SO THE SAME DAY (13 Nov 2026,
+ * NO ROUTE DID THE SEARCH (13 Nov 2026; superseded 14 Nov by RESEARCH_SEAT_WAIT_HOURS below: research now waits up to a day,
  * wc_946f0b75…). The router moves a failed free search to the Codex seat, then Claude Code, inside the same run, so
  * a run that still ended on the free search lane's stop had no seat to move to. First this was BLOCKED on Scooter
  * with "put more credit on the account"; then it waited an hour a go, twelve times, and his note came three days
@@ -556,6 +580,30 @@ export function isSeatNoAnswer(detail: string | null | undefined): boolean {
  */
 export function isFreeSearchStop(text: string | null | undefined): boolean {
   return /free_search_named_stop/.test(text ?? "");
+}
+
+/**
+ * RESEARCH NO ROUTE COULD DO WAITS FOR A SEAT, FOR UP TO A DAY (owner, 14 Nov 2026: "Gemini is out it can use Claude or
+ * codex as a fallback chain but if those aren't available idk it has to wait until a seat is available"). The router
+ * already walks a failed free search to the seats in measured order; a run that still ended on the free search lane's
+ * stop had no seat to answer it. The card does not fail and nobody is emailed: it waits ("waiting for a research
+ * seat") and the sweep tries it again by itself, every few minutes while a seat is awake and every half hour while
+ * none is, so it resumes when a seat frees or the free allowance resets. Still waiting a day after the first wait of
+ * this run, it stops by name on who runs the routes.
+ */
+export const RESEARCH_SEAT_WAIT_HOURS = 24;
+const NO_SEAT_RETRY_MINUTES = 30;
+
+async function firstSeatWaitAt(env: Env, cardId: string): Promise<number | null> {
+  const since = await runBeganAt(env, cardId);
+  const r = await env.WP_OS_DB.prepare(
+    // The tick's own clock is in the payload (`at`), so a replayed or tested tick measures the day by its own time.
+    "SELECT MIN(COALESCE(json_extract(payload_json, '$.at'), created_at)) AS at FROM event_record WHERE object_type = 'work_card' AND object_id = ?1 AND event_type = 'work_card.waiting_for_seat' AND created_at >= ?2",
+  )
+    .bind(cardId, since)
+    .first<{ at: string | null }>()
+    .catch(() => null);
+  return r?.at ? new Date(r.at).getTime() : null;
 }
 
 async function seatWaitsSoFar(env: Env, cardId: string): Promise<number> {
@@ -614,6 +662,7 @@ export async function sweepOnce(
   options: { leaseRenewMs?: number } = {},
 ): Promise<SweepResult> {
   await settleAbandonedCards(env, now);
+  await settleOrphanedRuns(env, now);
   // NOTHING STAYS STUCK SILENTLY: a block nobody has acted on rings again rather than ageing out.
   await remindRequestersByEmail(env, await resurfaceStaleBlocks(env, now), now);
   // 9 Oct 2026 (rule 1d): a "which job is this for?" with no answer in 24 hours becomes a new card.
@@ -918,7 +967,40 @@ export async function sweepOnce(
    * tries again by itself. Bounded by SEAT_NO_ANSWER_WAITS so a seat that never answers still stops and says so.
    */
   const searchStopped = isFreeSearchStop(`${lane.raw} ${detail}`);
-  const seatNoAnswer = (isSeatNoAnswer(detail) || searchStopped) && (await seatWaitsSoFar(env, card.id)) < SEAT_NO_ANSWER_WAITS;
+  if (searchStopped) {
+    const firstWait = await firstSeatWaitAt(env, card.id);
+    if (firstWait === null || now.getTime() - firstWait < RESEARCH_SEAT_WAIT_HOURS * 3_600_000) {
+      const seat = await seatToWaitFor(env, true, now);
+      const minutes = seat ? SEAT_WAIT_MINUTES : NO_SEAT_RETRY_MINUTES;
+      const until = new Date(now.getTime() + minutes * 60_000).toISOString();
+      const line = seat
+        ? `Waiting for a research seat: ${seat.said}, so this tries again on it by itself in about ${minutes} minutes.`
+        : `Waiting for a research seat: the free web search is used up and no seat that can search is free, so this tries again by itself every ${minutes} minutes until one is (or the free search resets).`;
+      await env.WP_OS_DB.prepare(
+        `UPDATE work_card SET lease_until = ?2, waiting_until = ?2, waiting_for = ?3, next_action = ?3,
+                work_attempts = MAX(COALESCE(work_attempts, 1) - 1, 0), work_last_failure = ?3, work_last_failure_at = ?4
+          WHERE id = ?1 AND state IN ('OPEN', 'IN_PROGRESS')`,
+      )
+        .bind(card.id, until, line.slice(0, 400), now.toISOString())
+        .run();
+      await appendEvent(env, {
+        eventType: "work_card.waiting_for_seat",
+        actorType: "system",
+        actorId: "work_sweep",
+        objectType: "work_card",
+        objectId: card.id,
+        firmScope: card.firm_scope,
+        payload: { seat: seat?.seat ?? null, at: now.toISOString(), until, research: true, detail: detail.slice(0, 240) },
+      }).catch(() => undefined);
+      return {
+        status: "SUCCEEDED",
+        summary: `"${card.title.slice(0, 60)}" is waiting for a research seat and tries again by itself at ${until}.`,
+        card: { ...card, work_attempts: Math.max(card.work_attempts - 1, 0), state: "OPEN" },
+        outcome: "WAITING_ON_SEAT",
+      };
+    }
+  }
+  const seatNoAnswer = isSeatNoAnswer(detail) && (await seatWaitsSoFar(env, card.id)) < SEAT_NO_ANSWER_WAITS;
   if (seatNoAnswer || (isLaneFailure(lane.failure) && lane.failure.kind === "LEVER")) {
     /*
      * IMPORTANT WORK WAITING FOR A SEAT IS ALWAYS A WAIT (owner, 26 Oct 2026; shared/ai/seatOrder.ts): it may never
