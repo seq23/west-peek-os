@@ -7572,3 +7572,20 @@ built since; a build pressed with the lever off Free only would have spent money
 - The 151 preflight-blocked runs since 4 Nov were Porter's "Unclear email" cards for the firm's own daily form probe
   and one Pinecone thread, each waiting for a seat; #362 stopped the probe opening cards (last blocked run 13 Nov
   12:48Z, all 12 probe cards DONE). Nothing further to change.
+
+## 13 Nov 2026 — drift prevention: each floor's measures are kept, and the Monday roundup reads them back
+
+Why: the owner asked that the floors above cannot quietly slide. No new employee, no new email, no migration.
+- `services/floorLog.ts` (new): `recordFloor` writes each run's measures (the headline number, the counts behind it,
+  the route that wrote it, the start of the real output) as a `floor.measured` event in the existing event log. Called
+  where each floor is read: the hire search, the Productions monthly note, Room sponsor research, the Room packet,
+  the TLC brand batch, Wednesday prep's reason line.
+- `driftLine` / `driftSection`: one row per deliverable in Wynn's Monday roundup to Sequoia: the last seven days
+  against the best past week and the last four measured; flagged only on a floor miss or two weeks running more than
+  25% below the best. A deliverable with no run says "not measured"; it is never left out.
+- `monthlyRead`: once a month, on her Claude seat (Codex as its backup; never a free or paid route), the latest real
+  output of each deliverable is read against its best measured example and a short section is added to the same email.
+  A seat that was away is said in the email and it is tried again the next Monday; it is marked done only once sent.
+- Golden replay: `tests/floorDrift.test.ts` and `tests/productionsHire.test.ts` hold each floor to its stored best
+  example and to the run it was written to catch, on every change in CI. It does not call a model.
+- Before landing: the section was rendered with the review's real numbers and read as she would.

@@ -1,4 +1,5 @@
 import { COMMUNITY_ABOUT } from "../../shared/community/size";
+import { recordFloor } from "./floorLog";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import type { Actor } from "./authorize";
@@ -1033,6 +1034,7 @@ export async function runProductionsCard(
     summary = monthlySummary(month, ideas.kept, hunted, dropped, rejected);
     // BELOW THE FLOOR AFTER BOTH SEARCHES: it still goes, saying so first, and the card stops by name (below).
     thin = monthlyFloor(ideas.kept.length, hunted.length).misses;
+    await recordFloor(env, { deliverable: "productions_monthly", ok: thin.length === 0, headline: ideas.kept.length, measures: { leads: ideas.kept.length, pitches: hunted.length, dropped: dropped.length }, sample: text, firmScope: card.firm_scope });
     if (thin.length) {
       text = `A THIN MONTH: ${thin.join("; ")}. What follows is everything that stood up, not the usual list.\n\n${text}`;
       summary = { ...summary, what: `${summary.what} — a thin month`, tldr: `**A thin month:** ${thin.join("; ")}. ${summary.tldr}` };

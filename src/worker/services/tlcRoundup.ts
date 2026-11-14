@@ -138,6 +138,11 @@ export async function buildRoundup(env: Env, now: Date, firmScope = "west-peek")
   const tldr = pending > 0
     ? `${pending} brand email${pending === 1 ? "" : "s"} waiting for your approval; everything else is below, club by club.`
     : "Nothing is waiting on you this week. Where each club stands is below.";
+  // DRIFT PREVENTION (13 Nov 2026): one row per deliverable against its best past run. (The monthly read is added
+  // by `sendWeeklyRoundup`, because it asks a seat and a preview of this roundup must not.)
+  const { driftSection } = await import("./floorLog");
+  const drift = await driftSection(env, now, firmScope);
+  sections.push({ label: drift.label, bullets: drift.bullets });
   return { tldr, sections, waiting: pending, noticeRef: notice?.ref ?? null };
 }
 
@@ -148,6 +153,9 @@ export async function sendWeeklyRoundup(env: Env, now: Date, firmScope = "west-p
   const claim = await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO tlc_roundup (week, firm_scope, sent_at) VALUES (?1, ?2, ?3)").bind(week, firmScope, now.toISOString()).run();
   if ((claim.meta?.changes ?? 0) === 0) return `this week's roundup (${week}) already went`;
   const r = await buildRoundup(env, now, firmScope);
+  const { monthlyRead, markMonthlyRead } = await import("./floorLog");
+  const read = await monthlyRead(env, now, firmScope).catch((err) => ({ label: "The monthly read", bullets: [`Not read this week: ${err instanceof Error ? err.message : String(err)}. It is tried again next Monday.`], done: false }));
+  if (read) r.sections.push({ label: read.label, bullets: read.bullets });
   const sent = await emailOwner(env, {
     employee: "Wynn",
     email: { what: `TLC roundup, week of ${dayWords(now.toISOString())}`, tldr: r.tldr, sections: r.sections },
@@ -162,6 +170,8 @@ export async function sendWeeklyRoundup(env: Env, now: Date, firmScope = "west-p
     return "the roundup could not be sent; the next pass tries again";
   }
   await env.WP_OS_DB.prepare("UPDATE tlc_roundup SET summary = ?3 WHERE week = ?1 AND firm_scope = ?2").bind(week, firmScope, r.tldr).run();
+  // Marked only once she has it: a roundup that did not send leaves the month's read owed.
+  if (read?.done) await markMonthlyRead(env, now, firmScope, read.bullets);
   await appendEvent(env, { eventType: "tlc.roundup_sent", actorType: "ai_employee", actorId: "aie_wynn", objectType: "tlc_roundup", objectId: week, firmScope, payload: { waiting: r.waiting, notice: r.noticeRef, to: sent } });
   return `roundup ${week} sent to ${sent.join(", ")}`;
 }

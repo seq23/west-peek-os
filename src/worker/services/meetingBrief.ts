@@ -1,4 +1,5 @@
 import { meetingIsConfidential } from "../ai/committedLps";
+import { recordFloor } from "./floorLog";
 import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { json } from "../router";
@@ -572,6 +573,7 @@ export async function assembleMeetingBrief(
     const why = await writeWhyLine(env, actor, meeting, brief);
     brief.why = why.why;
     brief.why_unavailable = why.unavailable;
+    await recordFloor(env, { deliverable: "wednesday_prep", ok: Boolean(why.why), headline: why.why ? 1 : 0, measures: { has_reason: why.why ? 1 : 0 }, aiRunId: why.ai_run_id, sample: why.why ?? why.unavailable });
     aiRunId = aiRunId ?? why.ai_run_id;
   } else {
     brief.why_unavailable = "not requested";
