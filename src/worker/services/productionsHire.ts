@@ -6,7 +6,7 @@ import { appendEvent } from "../events";
 import type { Actor } from "./authorize";
 import { runAi } from "../ai/runAi";
 import { markFloorMiss } from "../ai/laneHealth";
-import { SEARCH_MODEL, formatCheck, servedBySearchLane } from "./liveSearch";
+import { SEARCH_MODEL, earlierSearch, formatCheck, runBeganAt, servedBySearchLane } from "./liveSearch";
 import { steeredPrompt } from "../../shared/work/instruction";
 import { blockCard } from "./blocks";
 import { cannotDetail, steerFor, type Interpreter } from "./instruction";
@@ -759,9 +759,17 @@ export function hireSummary(
 
 // ── The runner the sweep calls ───────────────────────────────────────────────
 
+const HIRE_SEARCH_PURPOSE = "Walker: West Peek Productions hire search";
+
+/** The live search, reusing any answer this run of the card already has (see `earlierSearch`). */
+const searchSince = (since: string): HireSearch => async (env, actor, prompt, verify) => {
+  const earlier = await earlierSearch(env, { purpose: HIRE_SEARCH_PURPOSE, prompt, since, verify });
+  return earlier ? { ok: true, text: earlier.text, detail: "ok (this run's earlier answer)", runId: earlier.runId } : defaultSearch(env, actor, prompt, verify);
+};
+
 const defaultSearch: HireSearch = async (env, actor, prompt, verify) => {
   const { run } = await runAi(env, {
-    purpose: "Walker: West Peek Productions hire search",
+    purpose: HIRE_SEARCH_PURPOSE,
     actor,
     inputs: [prompt],
     ...(verify ? { verify } : {}),
@@ -891,7 +899,7 @@ export async function runHireSearchCard(
   }
   // His words ride as data and the brief's own output format has the last word (14 Nov 2026, wc_bd8b68cb).
   const withSteer = (p: string): string => steeredPrompt(steer.text, p);
-  const rawSearch = deps.search ?? defaultSearch;
+  const rawSearch = deps.search ?? searchSince(await runBeganAt(env, card.id));
   // A reply with no parseable candidate is a failed go on that route: the router asks the next one in the same run.
   const search: HireSearch = (e, a, p) => rawSearch(e, a, withSteer(p), formatCheck(parseHireCandidates, "candidate with a profile_url"));
   /*

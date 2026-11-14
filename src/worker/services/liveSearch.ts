@@ -56,6 +56,46 @@ export function formatCheck<T>(parse: (raw: string) => readonly T[], what: strin
   };
 }
 
+/**
+ * A RESTARTED ATTEMPT REUSES THE SEARCHES ITS RUN ALREADY DID (14 Nov 2026, wc_bd8b68cb). When an attempt dies part
+ * way (an isolate evicted, a seat run lost), the next attempt asks the same questions again; each answer is already in
+ * the ledger. The same purpose and the same prompt, answered on a search lane since this run of the card began, and
+ * still in the required shape, is that answer. `since` is when this run began, so a person's "try again" after a block
+ * searches afresh rather than being handed the answers that blocked it.
+ */
+export async function earlierSearch(
+  env: Env,
+  req: { purpose: string; prompt: string; since: string; verify?: (text: string) => string | null },
+): Promise<{ text: string; runId: string } | null> {
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(req.prompt)));
+  const hash = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const rows = await env.WP_OS_DB.prepare(
+    `SELECT id, model, output_text FROM ai_run
+      WHERE purpose = ?1 AND input_hash = ?2 AND status = 'COMPLETED' AND created_at >= ?3 AND output_text IS NOT NULL
+      ORDER BY created_at DESC LIMIT 3`,
+  )
+    .bind(req.purpose, hash, req.since)
+    .all<{ id: string; model: string | null; output_text: string }>()
+    .catch(() => ({ results: [] as { id: string; model: string | null; output_text: string }[] }));
+  for (const r of rows.results ?? []) {
+    if (!servedBySearchLane(r.model)) continue;
+    if (req.verify && req.verify(r.output_text)) continue;
+    return { text: r.output_text, runId: r.id };
+  }
+  return null;
+}
+
+/** When this run of a card began: its creation, or the latest time a person sent it back after a block. */
+export async function runBeganAt(env: Env, cardId: string): Promise<string> {
+  const row = await env.WP_OS_DB.prepare(
+    "SELECT MAX(created_at, COALESCE(blocked_at, ''), COALESCE(block_answered_at, '')) AS since FROM work_card WHERE id = ?1",
+  )
+    .bind(cardId)
+    .first<{ since: string | null }>()
+    .catch(() => null);
+  return row?.since ?? new Date().toISOString();
+}
+
 export interface SearchHit {
   name: string;
   description: string | null;

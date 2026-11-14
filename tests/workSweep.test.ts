@@ -225,6 +225,34 @@ describe("assignment causes work", () => {
     expect(out.outcome).toBe("DONE");
   });
 
+  it("a slow attempt keeps its lease while it works: the next tick does not claim it again mid-search (wc_bd8b68cb, 14 Nov 2026)", async () => {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN','IN_PROGRESS','BLOCKED')").run();
+    const id = await card("A month that searches for longer than one lease");
+    let firstLease = "";
+    let reclaimed: string | null | undefined;
+    const out = await sweepOnce(
+      env,
+      NOW,
+      {
+        general: async () => {
+          firstLease = (await state(id)).lease_until!;
+          // Still working: wait until the lease has moved on (or give up after 2 s, which is the failure).
+          for (let i = 0; i < 200 && (await state(id)).lease_until === firstLease; i += 1) await new Promise((r) => setTimeout(r, 10));
+          // The next tick arrives just after the lease the claim was given, while this attempt is still searching.
+          const next = await claimNextCard(env, new Date(new Date(firstLease).getTime() + 1));
+          reclaimed = next?.id ?? null;
+          return { finished: true, blocked: false, detail: "done after a long search", steps: [{ action: "note", detail: "done" }] };
+        },
+      },
+      { leaseRenewMs: 20 },
+    );
+    expect(out.card?.id).toBe(id);
+    expect(reclaimed, "the card was claimed again while its first attempt was still working").not.toBe(id);
+    const after = await state(id);
+    expect(after.work_attempts, "one attempt, not a restart").toBe(1);
+    expect(after.lease_until, "the lease is released when the attempt ends, and no renewal outlives it").toBeNull();
+  });
+
   it("with nothing waiting the sweep says so and touches nothing", async () => {
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN','IN_PROGRESS','BLOCKED')").run();
     const out = await sweepOnce(env, NOW);
