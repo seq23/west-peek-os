@@ -24,6 +24,7 @@ import { routedByFor } from "./requestReply";
 import { sendOrPreview } from "./previewApproval";
 import { notifyPartners } from "./notifications";
 import { defaultClassifyActionability, type ActionabilityClassifier } from "./webPropertyChange";
+import { defaultReadReplyIntent, readReplyIntent, type ReplyIntentReader } from "./replyIntent";
 
 /**
  * A REPLY, MATCHED TO ITS CONVERSATION AND TURNED INTO A STEER (17 Sep 2026).
@@ -251,7 +252,7 @@ export async function steerFromReply(
    * live model call. Omitted, this defaults to Addendum 12's own real answerer — the production
    * path is unchanged by this parameter existing.
    */
-  deps: { answerQuestion?: QuestionAnswerer; classifyReply?: ActionabilityClassifier } = {},
+  deps: { answerQuestion?: QuestionAnswerer; classifyReply?: ActionabilityClassifier; readWords?: ReplyIntentReader } = {},
 ): Promise<SteerFromReply> {
   const tokens = threadTokensIn({ inReplyTo: message.inReplyTo, references: message.references });
 
@@ -535,8 +536,41 @@ export async function steerFromReply(
       await tellSecondaryRefused(env, { cardId: cardRow.id, secondary: partner, primary: ownershipOf(cardRow).primary!, said: written, onThread: thread.token });
     }
 
+    /*
+     * A REPLY THAT ASKS FOR A BUILD GOES TO THE BUILD DOOR (14 Nov 2026). Her ask: "intelligent enough to
+     * figure out what to do". A reply on a memo, a deck or a monthly note that asks for a dashboard, an
+     * app or a site is read by the one reader (replyIntent.ts); a build opens Porter's job through the same
+     * door a new email takes (#409, `handBuildToPorter`), linked to this card, and he hears which build is
+     * starting on this thread. The card he replied on is left as it was. A keyword or an unreadable read
+     * never builds anything.
+     */
+    let builtFromReply = false;
+    if (!owned && !secondarySaidApproved && cardRow && partner && cardRow.kind !== WEB_PROPERTY_CHANGE_KIND) {
+      const read = await readReplyIntent(
+        env,
+        { cardId: cardRow.id, firmScope: thread.firm_scope, text: written, where: `a reply on a card that is not a build: "${cardRow.title.slice(0, 120)}" (${cardRow.kind ?? "general work"}, ${cardRow.state})` },
+        deps.readWords ?? defaultReadReplyIntent,
+      );
+      if (read.source === "MODEL" && read.door === "BUILD" && read.kind !== "STOP") {
+        const { handBuildToPorter } = await import("./employeeWork");
+        const out = await handBuildToPorter(env, cardRow.id, { words: written, buildIn: read.buildIn ?? null, requestedBy: partner.email, replyOnThread: thread.token });
+        builtFromReply = out.ok;
+        await appendEvent(env, {
+          eventType: "work.reply_opened_build",
+          actorType: "firm_user",
+          actorId: partner.firmUserId,
+          objectType: "work_card",
+          objectId: cardRow.id,
+          firmScope: thread.firm_scope,
+          payload: { ok: out.ok, build_card: out.cardId, detail: out.detail.slice(0, 300), build_in: read.buildIn ?? null, reason: read.reason.slice(0, 200) },
+        });
+      }
+    }
+
     if (owned) {
       // Handled: the card changed hands (or was refused, and said so). Nothing below reads it.
+    } else if (builtFromReply) {
+      // Handled: the build is Porter's own job now, and the partner was told on this thread.
     } else if (cardRow && partner && cardRow.state === "BLOCKED") {
       const asked = (cardRow.requested_by_email ?? "").trim().toLowerCase();
       // #363 (0301): THE DEVELOPER DIRECTS ANY JOB. Her "changes: …" on another partner's website job is that job's

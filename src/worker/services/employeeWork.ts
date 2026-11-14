@@ -321,28 +321,57 @@ export async function assignCard(
  * ONE BUILD DOOR (13 Nov 2026): a card that asks for something built is handed to Porter's job, under
  * the v1.0 bar. The target is the property its words name, else West Peek OS itself (an internal
  * dashboard or screen). The card it came from is DONE with the hand-off on it, like every hand-off.
+ *
+ * A REPLY THAT ASKS FOR A BUILD (14 Nov 2026): `fromReply` is a partner's reply on a card that is not a
+ * build (a memo, a deck, a monthly note) whose words the reader read as a build. The same door opens the
+ * job from HIS words, linked to the card (`assigned_from_card_id`); the card he replied on stays as it
+ * was, and he hears which build is starting in one reply on the same thread (RECEIVED).
  */
-export async function handBuildToPorter(env: Env, cardId: string): Promise<{ ok: boolean; detail: string; cardId: string | null }> {
+export async function handBuildToPorter(
+  env: Env,
+  cardId: string,
+  fromReply: { words: string; buildIn: "OS" | "EXISTING" | "NEW" | null; requestedBy: string; replyOnThread: string | null } | null = null,
+): Promise<{ ok: boolean; detail: string; cardId: string | null }> {
   const card = await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(cardId).first<CardRow & { kind: string | null }>();
   if (!card) return { ok: false, detail: "no such card", cardId: null };
   const { parseWebPropertyAsk, OS_PROPERTY, OS_REPO } = await import("../../shared/intake/webPropertyChange");
-  const { loadRegistry, registryEntryFor } = await import("./webPropertyRegistry");
-  const { openWebPropertyChange, PORTER_NAME } = await import("./webPropertyChange");
+  const { loadRegistry, registryEntryFor, registerNewRepo } = await import("./webPropertyRegistry");
+  const { openWebPropertyChange, sendReceived, PORTER_NAME } = await import("./webPropertyChange");
   const os = (await registryEntryFor(env, OS_REPO)) ?? OS_PROPERTY;
-  const words = `${card.prompt ?? ""}\n${card.description ?? ""}`.trim();
-  const ask = parseWebPropertyAsk(card.title.replace(/^From [^:]+@[^:]+:\s*/i, ""), words || card.title, await loadRegistry(env), os)!;
+  let ask;
+  if (fromReply) {
+    const subject = card.title.replace(/^From [^:]+@[^:]+:\s*/i, "");
+    const fresh = fromReply.buildIn === "NEW" ? await registerNewRepo(env, { subject: fromReply.words.split(/\r?\n/)[0]!.slice(0, 80) || subject, requestedBy: fromReply.requestedBy, firmScope: card.firm_scope }) : null;
+    ask = parseWebPropertyAsk(subject, fromReply.words, await loadRegistry(env), fromReply.buildIn === "OS" ? os : (fresh ?? "UNRESOLVED"))!;
+    if (fresh && ask.target_repo === fresh.repo) ask.new_repo = true;
+  } else {
+    const words = `${card.prompt ?? ""}\n${card.description ?? ""}`.trim();
+    ask = parseWebPropertyAsk(card.title.replace(/^From [^:]+@[^:]+:\s*/i, ""), words || card.title, await loadRegistry(env), os)!;
+  }
   const holder = card.owner_id ? await env.WP_OS_DB.prepare("SELECT id, name FROM ai_employee WHERE id = ?1").bind(card.owner_id).first<{ id: string; name: string }>() : null;
   const by = holder ?? { id: "system", name: "West Peek OS" };
-  if (by.name === PORTER_NAME) {
+  if (by.name === PORTER_NAME && !fromReply) {
     // Already Porter's: the card itself becomes the job.
     await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'WEB_PROPERTY_CHANGE', request_json = ?2 WHERE id = ?1").bind(card.id, JSON.stringify(ask)).run();
     await openWebPropertyChange(env, { cardId: card.id, ask, firmScope: card.firm_scope });
     return { ok: true, detail: `A build for ${ask.property_host ?? "an unresolved target"}: Porter's job now.`, cardId: card.id };
   }
-  const handed = await assignCard(env, { ...card, kind: undefined } as CardRow, by, PORTER_NAME, `Build ${ask.property_host ?? "it"}: "${(card.prompt || card.title).replace(/\s+/g, " ").slice(0, 160)}". Plan it on the Mac against the repo's RUNBOOK; build to the v1.0 bar, prove it, open a PR, land on green.`);
+  const what = (fromReply?.words || card.prompt || card.title).replace(/\s+/g, " ").slice(0, 160);
+  // The build is for the partner who replied, even on a card someone else asked for.
+  const source = fromReply ? { ...card, kind: undefined, requested_by_email: fromReply.requestedBy } : { ...card, kind: undefined };
+  const handed = await assignCard(env, source as CardRow, by.name === PORTER_NAME ? { id: "system", name: "West Peek OS" } : by, PORTER_NAME, `Build ${ask.property_host ?? "it"}: "${what}". Plan it on the Mac against the repo's RUNBOOK; build to the v1.0 bar, prove it, open a PR, land on green.`);
   if (!handed.ok) return { ok: false, detail: `a build, but it could not be handed to Porter: ${handed.reason}`, cardId: null };
   await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'WEB_PROPERTY_CHANGE', request_json = ?2 WHERE id = ?1").bind(handed.cardId, JSON.stringify(ask)).run();
   await openWebPropertyChange(env, { cardId: handed.cardId, ask, firmScope: card.firm_scope });
+  if (fromReply) {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || '• A reply asked for a build; Porter is building it as work card ' || ?2 || '. This card carries on as it was.', 1, 16000) WHERE id = ?1").bind(card.id, handed.cardId).run();
+    const target = ask.new_repo ? `its own new repo, seq23/${ask.target_repo}, with a free preview link` : ask.target_repo === OS_REPO ? "inside West Peek OS" : ask.property_host ? ask.property_host : null;
+    await sendReceived(env, handed.cardId, {
+      tldr: `Got it — you asked for a build in your reply on "${card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").slice(0, 80)}", so I'm starting it as its own job${target ? `, ${target}` : ""}: "${fromReply.words.replace(/\s+/g, " ").slice(0, 140)}". The ${card.kind === "ARTIFACT" ? "piece" : "work"} you replied on carries on as it was.`,
+      replyOnThread: fromReply.replyOnThread,
+    });
+    return { ok: true, detail: `A reply asked for a build: Porter's work card ${handed.cardId}.`, cardId: handed.cardId };
+  }
   await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE', next_action = NULL, description = substr(COALESCE(description, '') || char(10) || '• Handed to Porter as work card ' || ?2 || ': a build, worked on the Mac.', 1, 16000) WHERE id = ?1").bind(card.id, handed.cardId).run();
   return { ok: true, detail: `Handed to Porter as work card ${handed.cardId}: a build for ${ask.property_host ?? "an unresolved target"}.`, cardId: handed.cardId };
 }
