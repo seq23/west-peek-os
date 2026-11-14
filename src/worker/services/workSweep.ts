@@ -305,6 +305,13 @@ export async function announceOutcome(
     const { noticeFor, porterNoticeEmail } = await import("./webPropertyChange");
     notice = await noticeFor(env, card.id, outcome);
     composed = await porterNoticeEmail(env, card.id, notice.kind, detail);
+    // 14 Nov 2026: a staged developer rebuild's outcome (a failure, a stop, the retry cap) never mails the partner.
+    const { partnerMailHeld, holdPartnerMail } = await import("./webPropertyChange");
+    const held = await partnerMailHeld(env, card.id, notice);
+    if (held) {
+      await holdPartnerMail(env, card, notice, held, detail);
+      return { emailed: null };
+    }
   }
   /*
    * "I GOT AN EMAIL I CAN'T PLACE" (9 Oct 2026). A routing card's question is never the model's essay:

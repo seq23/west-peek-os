@@ -894,6 +894,31 @@ describe("the developer may direct any job with a work instruction, and with not
   });
 
   /**
+   * 14 Nov 2026 (owner: no email to Scooter about the dashboard error). A staged developer rebuild that fails, again
+   * and again, up to the retry cap, emails the partner nothing: every outcome is held for the developer's tail.
+   */
+  it("a staged developer rebuild that fails three times sends the partner zero emails; each outcome is held for the tail", async () => {
+    const id = await atPreview("dev8", SCOOTER);
+    const from = sent.length;
+    expect((await door(id, "rebuild the dashboard to the full scope")).status).toBe(200);
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      let pj = null as Awaited<ReturnType<typeof rebuildOf>>;
+      for (let t = 0; t < 4 && !pj; t += 1) {
+        await tickFor(id);
+        pj = await rebuildOf(id);
+      }
+      expect(pj?.rebuild?.stage, `attempt ${attempt} is staged`).toBe(true);
+      await macReports(id, { phase: "BUILD", status: "failed", reason: "NAMED STOP [REVIEW_NOT_MET] the review still blocks after two fix rounds" });
+    }
+    for (let t = 0; t < 6 && (await card(id)).state !== "BLOCKED"; t += 1) await sweepOnce(env, nextTickTime(), RUNNERS);
+    const c = await card(id);
+    expect([c.state, c.block_reason], "the retry cap stopped it").toEqual(["BLOCKED", "tried_and_could_not_finish"]);
+    expect(sent.slice(from).filter((m) => m.to === SCOOTER), "nothing reaches the partner").toHaveLength(0);
+    const held = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'web_property_change.partner_mail_held' AND object_id = ?1").bind(id).first<{ n: number }>();
+    expect(Number(held?.n), "the outcome is on the spine for the tail").toBeGreaterThan(0);
+  });
+
+  /**
    * 13 Nov 2026: Porter's "answered" email told a partner "The last build was for: …" and quoted the
    * developer's instruction word for word. What a partner reads about a build is what HE asked for.
    */
