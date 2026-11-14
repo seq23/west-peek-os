@@ -106,7 +106,38 @@ export async function handleDeveloperChanges(ctx: RouteContext): Promise<Respons
   const card = await ctx.env.WP_OS_DB.prepare("SELECT id, kind, state, firm_scope FROM work_card WHERE id = ?1").bind(cardId).first<{ id: string; kind: string | null; state: string; firm_scope: string }>();
   if (!card) return json({ error: "not_found" }, { status: 404 });
   if (card.kind !== WEB_PROPERTY_CHANGE_KIND) return json({ error: "unsupported", detail: "this door directs website jobs; other kinds take a note on the card" }, { status: 409 });
-  if (card.state !== "BLOCKED") return json({ error: "not_waiting", detail: `the job is ${card.state}, not waiting on a word; the instruction is entered when it stops at its plan or its preview` }, { status: 409 });
+  if (card.state !== "BLOCKED") {
+    /*
+     * 14 Nov 2026: A DEVELOPER REBUILD ALREADY QUEUED TAKES MORE OF HER WORDS. The tail had review findings for a
+     * rebuild of hers that was queued (held, between attempts); refusing meant a whole extra round afterwards. When the
+     * job's pending rebuild is the developer's own and no run is in flight, the words are added to it: the same staged,
+     * quiet rebuild, recorded as hers, within the partner-answer bound. Anything else is refused as before.
+     */
+    const { readWebPropertyChange, rebuildWords } = await import("./webPropertyChange");
+    const row = card.state === "OPEN" || card.state === "IN_PROGRESS" ? await readWebPropertyChange(ctx.env, card.id) : null;
+    const pending = row && row.refresh_intent === "CHANGES" && !row.current_run_id && row.rebuilt_for ? await rebuildWords(ctx.env, card.id, row) : null;
+    if (!row || !pending?.developer) return json({ error: "not_waiting", detail: `the job is ${card.state}, not waiting on a word; the instruction is entered when it stops at its plan or its preview` }, { status: 409 });
+    const combined = `${row.rebuilt_for!.trim()}\n\nAND: ${words}`;
+    if (combined.length > PARTNER_ANSWER_MAX) return json({ error: "too_long", detail: `added to the queued instruction it would be over ${PARTNER_ANSWER_MAX} characters; shorten it` }, { status: 400 });
+    const at = new Date().toISOString();
+    await ctx.env.WP_OS_DB.prepare("UPDATE web_property_change SET rebuilt_for = ?2, updated_at = ?3 WHERE work_card_id = ?1 AND current_run_id IS NULL").bind(card.id, combined, at).run();
+    // A retry takes its words up again from the card's answer: that answer becomes the combined words too, when it was the queued one.
+    await ctx.env.WP_OS_DB.prepare("UPDATE work_card SET block_answer = ?2 WHERE id = ?1 AND block_answer = ?3").bind(card.id, combined, row.rebuilt_for).run();
+    await ctx.env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || '• ' || ?2, 1, 16000) WHERE id = ?1")
+      .bind(card.id, `${director.label}, ${at}, added to the queued rebuild: "${words.slice(0, 2500)}"`)
+      .run();
+    // The record `rebuildWords` reads: the combined words are still hers, and the partner still holds his preview.
+    await appendEvent(ctx.env, {
+      eventType: "work_card.directed_by_developer",
+      actorType: "firm_user",
+      actorId: ctx.identity.id,
+      objectType: "work_card",
+      objectId: card.id,
+      firmScope: card.firm_scope,
+      payload: { for: director.partner.firmUserId, via: "partner tail (Claude)", entered_by: ctx.identity.email, words: combined, taken_up: true, added_to_queued: true, partner_holds_preview: pending.partnerHoldsPreview, own_job: false, at },
+    });
+    return json({ ok: true, card_id: card.id, recorded_as: director.label, added_to_queued_rebuild: true, at });
+  }
 
   // Written the way `resumeForSecret` answers a block as the system: the answer, who it is for, and the card back to the sweep.
   const at = new Date().toISOString();
