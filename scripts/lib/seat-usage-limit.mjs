@@ -75,8 +75,10 @@ export function retryAfterFrom(text, nowMs = Date.now()) {
     const unit = rel[2].toLowerCase() === "hour" ? 3600 : rel[2].toLowerCase() === "minute" ? 60 : 1;
     return clamp(Number(rel[1]) * unit);
   }
-  // "resets Oct 2 at 8am (America/Chicago)" / "resets on Oct 2, 8:30 pm" / "resets 3pm (America/Chicago)".
-  const abs = /resets?\s+(?:on\s+)?(?:(mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s+)?(?:([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+)?(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b(?:\s*\(([A-Za-z0-9_+\-]+(?:\/[A-Za-z0-9_+\-]+)*)\))?/i.exec(text);
+  // "resets Oct 2 at 8am (America/Chicago)" / "resets on Oct 2, 8:30 pm" / "resets 3pm (America/Chicago)", and
+  // Codex's "try again at Nov 17th, 2026 6:40 PM" (seen 14 Nov 2026: unread, the spent seat was retried every 30 minutes
+  // for three days). A stated year is skipped; the next such date is used, as for a date without one.
+  const abs = /(?:resets?|try again)\s+(?:on\s+|at\s+)?(?:(mon|tue|wed|thu|fri|sat|sun)[a-z]*,?\s+)?(?:([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(?:\d{4},?\s+)?)?(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b(?:\s*\(([A-Za-z0-9_+\-]+(?:\/[A-Za-z0-9_+\-]+)*)\))?/i.exec(text);
   if (abs) {
     const at = resetAt(abs, nowMs);
     if (at !== null) return clamp(Math.round((at - nowMs) / 1000));
