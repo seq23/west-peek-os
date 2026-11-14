@@ -15,7 +15,7 @@ import { workCard } from "../src/worker/services/employeeWork";
 import { sweepIdentity } from "../src/worker/services/workSweep";
 import { preApprovalIn } from "../src/shared/work/approvalReply";
 import { readLocalJobReport, WEB_PROPERTY_CHANGE_KIND } from "../src/shared/work/localJobs";
-import { blockedEmailDetail, finishOriginalAsk, needsPreview, parkPhase, phaseModel, readWebPropertyChange, rulesFor, runWebPropertyChangeCard, type WebPropertyChangeRow } from "../src/worker/services/webPropertyChange";
+import { blockedEmailDetail, finishOriginalAsk, missingSecretsOf, needsPreview, parkPhase, phaseModel, readWebPropertyChange, rulesFor, runWebPropertyChangeCard, type WebPropertyChangeRow } from "../src/worker/services/webPropertyChange";
 import { steerFromReply } from "../src/worker/services/emailThread";
 import { threadReference } from "../src/shared/email/thread";
 import { handleDeveloperChanges } from "../src/worker/services/developerDirection";
@@ -1241,6 +1241,18 @@ describe("the v1.0 bar: every built ask says when it is done, and a build that h
     await tickFor(ok);
     expect((await readWebPropertyChange(env, ok))!.preview_url).toBe("https://v1bar3.west-peek-ventures.pages.dev");
     expect((await card(ok)).state, "waiting on his word on the preview").toBe("BLOCKED");
+  });
+
+  it("one held only by keys only the partner can supply, named as missing with the vault searched, goes to preview and the keys are on the job (14 Nov 2026)", async () => {
+    const id = await atBuild("v1bar4");
+    await macReports(id, { phase: "BUILD", status: "ok", ...pr("v1bar4"),
+      vault_lookup: { searched: ["DROPBOX_APP_KEY", "DROPBOX_APP_SECRET"], found: [], missing: ["DROPBOX_APP_KEY", "DROPBOX_APP_SECRET"] },
+      missing_secrets: [{ name: "DROPBOX_APP_KEY", vendor_url: null, searched: ["DROPBOX_APP_KEY"] }, { name: "DROPBOX_APP_SECRET", vendor_url: null, searched: ["DROPBOX_APP_SECRET"] }],
+      items: [{ item: "the dashboard", state: "partial", blocked_by: "missing_secret", done_when: [{ check: checks[0], met: true }, { check: "Dropbox connects by his own OAuth", met: false }] }] });
+    await tickFor(id);
+    expect(String((await card(id)).description), "not refused as unfinished").not.toMatch(/BUILD REFUSED/);
+    expect((await readWebPropertyChange(env, id))!.preview_url).toBe("https://v1bar4.west-peek-ventures.pages.dev");
+    expect(missingSecretsOf((await readWebPropertyChange(env, id))!).map((m) => m.name), "the job knows the keys it waits on").toEqual(["DROPBOX_APP_KEY", "DROPBOX_APP_SECRET"]);
   });
 });
 
