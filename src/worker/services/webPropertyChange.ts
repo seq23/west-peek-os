@@ -779,6 +779,8 @@ export async function parkPhase(
     target_repo: row.target_repo,
     property_host: row.property_host,
     github_repo: entry?.githubRepo ?? null,
+    // 13 Nov 2026: a repo the door registered for something new — the Mac may create it (public, seq23) and its free Pages project.
+    ...(readWebPropertyAsk(card.request_json)?.new_repo === true ? { new_repo: true } : {}),
     secret_names: [...(entry?.secretNames ?? [])],
     missing_secrets: missingSecretsOf(row),
     constraints: [...(entry?.constraints ?? [])],

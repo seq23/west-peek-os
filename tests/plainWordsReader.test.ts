@@ -124,10 +124,12 @@ describe("one build door: every build ask is Porter's job", () => {
     expect(job).toMatchObject({ kind: "WEB_PROPERTY_CHANGE", owner_id: "aie_porter", target_repo: "west-peek-os", property_host: "os.joinwestpeek.com" });
   });
 
-  it("an app with no site named goes to Porter's job unresolved, never assumed to be the last site he worked on", async () => {
-    const chief = await openAssignmentCard(env, { subject: "An app for the Rooms", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Make me a simple app where Room hosts can check people in.", limits: EMAILED_TASK_LIMITS, emlKey: null, readWords: read("BUILD", "none", "CONTINUE", "NEW") });
+  it("a build of an existing site not named goes to Porter's job unresolved (he asks once which), never a new repo", async () => {
+    // Sequoia: no recent job of hers to infer "our site" from.
+    const chief = await openAssignmentCard(env, { subject: "Fix the sign-up form", partnerAddress: "sequoia@westpeek.ventures", chiefOfStaff: "Wren", raw: "The sign-up form on our site drops the phone number. Can you fix it?", limits: EMAILED_TASK_LIMITS, emlKey: null, readWords: read("BUILD", "none", "CONTINUE", "EXISTING") });
     const job = await porterJobFrom(chief);
-    expect(job).toMatchObject({ kind: "WEB_PROPERTY_CHANGE", owner_id: "aie_porter", target_repo: "unresolved", property_host: null });
+    expect(job).toMatchObject({ kind: "WEB_PROPERTY_CHANGE", owner_id: "aie_porter", target_repo: "unresolved" });
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM web_property_registry WHERE requested_by = ?1 AND seeded = 0").bind("sequoia@westpeek.ventures").first<{ n: number }>())!.n).toBe(0);
   });
 
   it("a dashboard card typed in the OS is a build for Porter, never a panel report", async () => {

@@ -2,7 +2,7 @@ import { PARTNER_WORDS_ON_CARD, statedCut } from "./partnerWords";
 import { describeModes, parseBlogAsk } from "../../shared/intake/blogHelp";
 import { parsePartnerMessageAsk, partnerMessageTitle } from "../../shared/intake/partnerMessage";
 import { isWebPropertyChange, OS_PROPERTY, OS_REPO, parseWebPropertyAsk, partsFromHosts, registrationsIn } from "../../shared/intake/webPropertyChange";
-import { loadRegistry, registerFromEmail, registryEntryFor } from "./webPropertyRegistry";
+import { loadRegistry, registerFromEmail, registerNewRepo, registryEntryFor } from "./webPropertyRegistry";
 import { defaultReadReplyIntent, readReplyIntent, type ReplyIntent, type ReplyIntentReader } from "./replyIntent";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
 import { dueTimeIn } from "../../shared/intake/dueTime";
@@ -1251,7 +1251,13 @@ export async function openAssignmentCard(
     read = await readPlainWords(env, card.id, input, written);
     if (read.door === "BUILD") {
       const os = read.buildIn === "OS" ? ((await registryEntryFor(env, OS_REPO)) ?? OS_PROPERTY) : null;
-      web = parseWebPropertyAsk(input.subject, written, registry, os ?? "UNRESOLVED");
+      // Something that does not exist yet gets its own new seq23 repo with a free Pages preview.
+      const fresh = !os && read.buildIn === "NEW" ? await registerNewRepo(env, { subject: input.subject, requestedBy: input.partnerAddress, firmScope: FIRM_SCOPE }) : null;
+      if (fresh) registry = await loadRegistry(env);
+      web = parseWebPropertyAsk(input.subject, written, registry, os ?? fresh ?? "UNRESOLVED");
+      if (web && fresh && web.target_repo === fresh.repo) {
+        web.new_repo = true;
+      }
     }
   }
   if (web && registeredNow.length) web.registered = registeredNow;
@@ -1320,7 +1326,7 @@ export async function openAssignmentCard(
         // "got it, I'm on it", what was understood, what comes next — once (her decision, 21 Sep).
         await env.WP_OS_DB.prepare("UPDATE request_attachment SET work_card_id = ?2 WHERE work_card_id = ?1").bind(card.id, handed.cardId).run();
         const { sendReceived } = await import("./webPropertyChange");
-        await sendReceived(env, handed.cardId, { tldr: [input.receivedTldr, registeredNow.length ? `Registered ${registeredNow.join(", ")} as a repo I may work on; it is cloned on the Mac if it is not there yet.` : null].filter(Boolean).join(" ") || null, replyOnThread: input.replyOnThread ?? null });
+        await sendReceived(env, handed.cardId, { tldr: [input.receivedTldr, registeredNow.length ? `Registered ${registeredNow.join(", ")} as a repo I may work on; it is cloned on the Mac if it is not there yet.` : null, web.new_repo ? `This is something new, so it gets its own repo, seq23/${web.target_repo}, with a free preview link.` : null].filter(Boolean).join(" ") || null, replyOnThread: input.replyOnThread ?? null });
         await env.WP_OS_DB.prepare(
           "UPDATE work_card SET state = 'DONE', next_action = NULL, description = substr(COALESCE(description, '') || char(10) || '• Handed to Porter as work card ' || ?2 || ': a web property change, worked on the Mac.', 1, 16000) WHERE id = ?1",
         )

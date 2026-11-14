@@ -1,7 +1,7 @@
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { json, type RouteContext } from "../router";
-import { propertyFromRegistration, WEB_PROPERTIES, type WebProperty, type WebPropertyRegistration } from "../../shared/intake/webPropertyChange";
+import { newRepoNameFrom, propertyFromRegistration, WEB_PROPERTIES, type WebProperty, type WebPropertyRegistration } from "../../shared/intake/webPropertyChange";
 
 /**
  * THE OPEN REPO REGISTRY (0253, owner 6 Oct 2026: "'registered west peek repos only' is a problem
@@ -179,4 +179,32 @@ export async function recordRepoFacts(
 export async function handleListWebProperties(ctx: RouteContext): Promise<Response> {
   const rows = await loadRegistry(ctx.env);
   return json({ properties: rows.map((p) => ({ host: p.host, repo: p.repo, site: p.site, seeded: p.seeded === true, github_repo: p.githubRepo ?? null, secret_names: p.secretNames ?? [], constraints: p.constraints ?? [] })) });
+}
+
+/**
+ * A NEW REPO FOR SOMETHING THAT DOES NOT EXIST YET (13 Nov 2026). Registered by the door when the reader
+ * reads a build of something new: seq23/<name>, its free Pages project <name>.pages.dev for previews,
+ * never seeded, the authenticated requester recorded. The Mac creates the repo and the project when it
+ * first runs the job (scripts/duties/web-property-change.mjs ensureCheckout). Nothing here costs money.
+ */
+export async function registerNewRepo(env: Env, input: { subject: string; requestedBy: string; firmScope: string }): Promise<WebProperty> {
+  const taken = ((await env.WP_OS_DB.prepare("SELECT repo FROM web_property_registry").all<{ repo: string }>()).results ?? []).map((r) => r.repo);
+  const repo = newRepoNameFrom(input.subject, taken);
+  const id = `wpr_${crypto.randomUUID()}`;
+  await env.WP_OS_DB.prepare(
+    `INSERT INTO web_property_registry (id, host, repo, github_repo, site, words_json, aliases_json, pages_host, seeded, requested_by, firm_scope, position)
+     VALUES (?1, NULL, ?2, ?3, '.', '[]', '[]', ?4, 0, ?5, ?6, 100)`,
+  )
+    .bind(id, repo, `seq23/${repo}`, `${repo}.pages.dev`, input.requestedBy.toLowerCase(), input.firmScope)
+    .run();
+  await appendEvent(env, {
+    eventType: "web_property_registry.registered",
+    actorType: "firm_user",
+    actorId: input.requestedBy.toLowerCase(),
+    objectType: "web_property_registry",
+    objectId: id,
+    firmScope: input.firmScope,
+    payload: { repo, github_repo: `seq23/${repo}`, pages_host: `${repo}.pages.dev`, new_repo: true },
+  });
+  return (await registryEntryFor(env, repo))!;
 }

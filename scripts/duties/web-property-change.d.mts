@@ -54,3 +54,10 @@ export function itemsOf(result: unknown): Array<{ item: string; state: string; n
 export const SPEND_STOP: string;
 export function spendIn(parsed: unknown): string[];
 export function readResult(text: string, phase: string): { result: Record<string, unknown> | null; problem: string | null };
+export function createNewRepo(
+  repoPath: string,
+  githubRepo: string | null,
+  env: Record<string, string | undefined>,
+  progress: (line: string) => void,
+  deps?: { sh: (cmd: string, args: string[], opts?: Record<string, unknown>) => Promise<{ stdout: string; stderr?: string }>; fetch: typeof fetch },
+): Promise<{ ok: boolean; why?: string; created?: boolean; pagesHost?: string }>;

@@ -345,6 +345,7 @@ export function renderContext(job, paths) {
     // nothing else: a community redesign never touches sites/ventures.
     `SITES: ${sitesLine(job.sites)}`,
     `TARGET_REPO: ${job.target_repo}`,
+    ...(job.new_repo === true ? ["NEW_REPO: yes (created for this ask, with its free Pages project; previews at <branch>." + job.target_repo + ".pages.dev)"] : []),
     `WORKTREE: ${paths.worktree}`,
     `BRANCH: ${paths.branch}`,
     `PACKAGE_DIR: ${paths.packageDir}`,
@@ -996,7 +997,8 @@ async function previewUrlFor(worktree, number, progress, pagesHosts = [], branch
   let asked = false;
   for (;;) {
     const got = await previewUrlOnce(worktree, number, progress, pagesHosts, branch);
-    if (got.url || pagesHosts.length === 0 || !got.head) return got.url;
+    // 13 Nov 2026: a Worker deployed by Workers Builds (westpeek-live) posts its version preview as a PR comment: wait for it too.
+    if (got.url || (pagesHosts.length === 0 && !got.workersBuilds) || !got.head) return got.url;
     if (Date.now() - started >= PREVIEW_WAIT_MS || signal?.aborted) {
       progress(`preview: Cloudflare Pages has not deployed ${got.head.slice(0, 7)} after ${Math.round(PREVIEW_WAIT_MS / 60_000)} min`);
       return null;
@@ -1031,6 +1033,7 @@ async function previewUrlOnce(worktree, number, progress, pagesHosts = [], branc
   const statuses = [];
   const comments = [];
   let head = "";
+  let workersBuilds = false;
   try {
     const { stdout } = await sh("gh", ["pr", "view", String(number), "--json", "headRefOid,comments"], { cwd: worktree });
     const pr = JSON.parse(stdout);
@@ -1038,6 +1041,12 @@ async function previewUrlOnce(worktree, number, progress, pagesHosts = [], branc
     for (const c of pr.comments ?? []) comments.push(c.body);
     const repo = (await sh("gh", ["repo", "view", "--json", "nameWithOwner"], { cwd: worktree })).stdout;
     const { nameWithOwner } = JSON.parse(repo);
+    try {
+      const runs = JSON.parse((await sh("gh", ["api", `repos/${nameWithOwner}/commits/${pr.headRefOid}/check-runs?per_page=50`], { cwd: worktree })).stdout);
+      workersBuilds = (runs.check_runs ?? []).some((r) => /^Workers Builds:/i.test(String(r.name ?? "")));
+    } catch {
+      /* no check runs readable: not a Workers Builds repo as far as this run can tell */
+    }
     const deps = JSON.parse((await sh("gh", ["api", `repos/${nameWithOwner}/deployments?sha=${pr.headRefOid}&per_page=20`], { cwd: worktree })).stdout);
     for (const d of Array.isArray(deps) ? deps : []) {
       try {
@@ -1052,7 +1061,7 @@ async function previewUrlOnce(worktree, number, progress, pagesHosts = [], branc
   }
   const url = previewUrlsFrom(statuses, comments, pagesHosts, branch, head);
   progress(url ? `preview: ${url}` : `preview: none (no Pages deployment of ${head.slice(0, 7) || "the head"} on this PR)`);
-  return { url, head };
+  return { url, head, workersBuilds };
 }
 
 /** The BUILD's refusal when a Pages site's head was never deployed: no preview email for it. Pure. */
@@ -1266,6 +1275,9 @@ export async function run(job, ctx) {
   const repoPath = path.join(homedir(), "GitHub", String(job.target_repo ?? ""));
   if (!job.target_repo) return { phase, status: "failed", reason: "the job names no target repo" };
   // 0253: a repo the registry knows but this Mac does not have yet is cloned, never refused.
+  // 13 Nov 2026: something new — the door registered seq23/<name>; it is created here (public, free) with its free Pages project.
+  const created = job.new_repo === true && !existsSync(path.join(repoPath, ".git")) ? await createNewRepo(repoPath, job.github_repo ?? null, ctx.env ?? {}, progress) : null;
+  if (created && !created.ok) return { phase, status: "failed", reason: created.why };
   const checkout = await ensureCheckout(repoPath, job.github_repo ?? null, progress);
   if (!checkout.ok) return { phase, status: "failed", reason: checkout.why };
   const names = namesFor(job.card?.id ?? "card");
@@ -1468,6 +1480,71 @@ export async function run(job, ctx) {
 }
 
 // ── Any repo she names (0253) ────────────────────────────────────────────────────────────────
+
+/**
+ * A NEW REPO FOR SOMETHING THAT DOES NOT EXIST YET (13 Nov 2026). Only for a job the door marked
+ * `new_repo` and only under seq23. Both steps are free and reversible: `gh repo create --public` with a
+ * first commit on main, then a Cloudflare Pages project of the same name connected to the repo, so every
+ * PR gets a preview at <branch>.<name>.pages.dev. Each step is skipped when it already exists, so a retry
+ * resumes. Nothing paid happens here; a paid step anywhere is SPEND_NEEDS_THE_OWNER (#403).
+ */
+export const NEW_REPO_BUILD_COMMAND = "if [ -f package.json ]; then npm run build --if-present; fi";
+
+export async function createNewRepo(repoPath, githubRepo, env, progress, deps = { sh, fetch: globalThis.fetch }) {
+  const m = /^seq23\/([a-z0-9][a-z0-9-]{1,60})$/.exec(String(githubRepo ?? ""));
+  if (!m) return { ok: false, why: `a new repo is only created under seq23 with a plain name (got "${githubRepo ?? ""}")` };
+  const name = m[1];
+  let exists = false;
+  try {
+    await deps.sh("gh", ["repo", "view", githubRepo, "--json", "name"], { timeout: 60_000 });
+    exists = true;
+  } catch {
+    exists = false;
+  }
+  if (!exists) {
+    try {
+      mkdirSync(repoPath, { recursive: true });
+      writeFileSync(path.join(repoPath, "README.md"), `# ${name}\n\nBuilt by Porter for West Peek. Previews: https://${name}.pages.dev\n`);
+      await deps.sh("git", ["init", "-q", "-b", "main"], { cwd: repoPath });
+      await deps.sh("git", ["add", "README.md"], { cwd: repoPath });
+      await deps.sh("git", ["commit", "-q", "-m", "Start the repo"], { cwd: repoPath });
+      await deps.sh("gh", ["repo", "create", githubRepo, "--public", "--source", repoPath, "--push", "--description", "Built by Porter for West Peek"], { timeout: 5 * 60_000 });
+      progress(`created ${githubRepo} (public) with a first commit on main`);
+    } catch (err) {
+      return { ok: false, why: `gh repo create ${githubRepo} failed: ${String(err?.stderr ?? err?.message ?? err).trim().split("\n").slice(-2).join(" | ").slice(0, 300)}` };
+    }
+  }
+  const token = env?.CLOUDFLARE_API_TOKEN;
+  if (!token) return { ok: false, why: `created ${githubRepo}, but no CLOUDFLARE_API_TOKEN to create its free Pages project ${name}` };
+  const base = `${CF_API}/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects`;
+  try {
+    const have = await deps.fetch(`${base}/${encodeURIComponent(name)}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(60_000) });
+    if (have.ok) {
+      progress(`Pages project ${name} already exists`);
+      return { ok: true, created: !exists, pagesHost: `${name}.pages.dev` };
+    }
+    const res = await deps.fetch(base, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        production_branch: "main",
+        // A plain static repo has no package.json: Pages then serves dist/ as committed (probe, 13 Nov 2026).
+        build_config: { build_command: NEW_REPO_BUILD_COMMAND, destination_dir: "dist", root_dir: "" },
+        source: { type: "github", config: { owner: "seq23", repo_name: name, production_branch: "main", pr_comments_enabled: true, deployments_enabled: true, production_deployments_enabled: true, preview_deployment_setting: "all" } },
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return { ok: false, why: `created ${githubRepo}, but Cloudflare refused its free Pages project (${res.status}: ${body.slice(0, 200)}); a project connected to GitHub needs the Cloudflare Pages app to see seq23/${name}` };
+    }
+    progress(`created the free Pages project ${name} (previews at <branch>.${name}.pages.dev)`);
+  } catch (err) {
+    return { ok: false, why: `created ${githubRepo}, but creating its Pages project failed: ${String(err?.message ?? err).slice(0, 200)}` };
+  }
+  return { ok: true, created: !exists, pagesHost: `${name}.pages.dev` };
+}
 
 /** A checkout under ~/GitHub, cloned from GitHub when this Mac does not have it. */
 async function ensureCheckout(repoPath, githubRepo, progress) {

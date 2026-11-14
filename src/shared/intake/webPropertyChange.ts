@@ -91,9 +91,9 @@ export const WEB_PROPERTIES: readonly WebProperty[] = [
   // the west-peek-live Worker's routes) and a live curl — never guessed.
   { host: "westpeek.live", repo: "westpeek-live", site: REPO_ROOT_SITE, words: ["westpeek live", "west peek live", "westpeek.live", "the live site", "the live website", "the events site", "the events platform", "the event platform"] },
   { host: "pitch.joinwestpeek.com", aliases: ["pitchlab.joinwestpeek.com"], repo: "west-peek-pitch-lab", site: REPO_ROOT_SITE, pagesHost: "west-peek-pitch-lab.pages.dev", words: ["pitch lab", "pitchlab", "the pitch site", "pitch lab site"] },
-  { host: "network.joinwestpeek.com", repo: "west-peek-network-os", site: REPO_ROOT_SITE, words: ["network os", "the network app", "network os app"] },
-  { host: "venturedeals.joinwestpeek.com", repo: "secondaries", site: REPO_ROOT_SITE, words: ["venture deals", "venturedeals", "secondaries site", "the secondaries page", "secondaries page", "secondaries website"] },
-  { host: "dilution.joinwestpeek.com", repo: "founder-dilution-dashboard", site: REPO_ROOT_SITE, words: ["dilution dashboard", "dilution calculator", "the dilution site", "dilution site", "founder dilution"] },
+  { host: "network.joinwestpeek.com", repo: "west-peek-network-os", site: REPO_ROOT_SITE, pagesHost: "west-peek-network-os.pages.dev", words: ["network os", "the network app", "network os app"] },
+  { host: "venturedeals.joinwestpeek.com", repo: "secondaries", site: REPO_ROOT_SITE, pagesHost: "secondaries.pages.dev", words: ["venture deals", "venturedeals", "secondaries site", "the secondaries page", "secondaries page", "secondaries website"] },
+  { host: "dilution.joinwestpeek.com", repo: "founder-dilution-dashboard", site: REPO_ROOT_SITE, pagesHost: "founder-dilution-dashboard.pages.dev", words: ["dilution dashboard", "dilution calculator", "the dilution site", "dilution site", "founder dilution"] },
 ];
 
 /** The seeded rows by name, for readers that mean "what the migration wrote" rather than "what is registered today". */
@@ -141,6 +141,11 @@ export interface WebPropertyAsk {
   preview_first?: string | null;
   /** 23 Sep 2026: sites in SEVERAL repos — one part per repo, one PR each, landed together. Absent for one repo. */
   parts?: WebPropertyPart[];
+  /**
+   * 13 Nov 2026: the reader read "something that does not exist yet" and the door registered a fresh
+   * seq23 repo for it. The Mac creates that repo (public) and its free Pages project when it is missing.
+   */
+  new_repo?: boolean;
   /** 0253: repos this email registered at the door (owner/name), so the RECEIVED email can say so. */
   registered?: string[];
   /** 0253 (addendum 3): the deadline in the partner's own words, read at the door. */
@@ -185,6 +190,23 @@ export function propertyIn(text: string, registry: readonly WebProperty[] = WEB_
 
 /** The site folders a job may change, from the row's `property_host` (one host or several, comma-joined). */
 /** The Pages subdomains the named host(s) preview under ("a, b" for several), [] when none is registered. */
+/**
+ * THE NAME OF A NEW REPO for something that does not exist yet (13 Nov 2026). Pure: the subject's words,
+ * filler dropped, lowercase and hyphenated, at most 40 characters. It is also the Pages project's name,
+ * so its preview lives at <name>.pages.dev. Never empty.
+ */
+const FILLER = new Set(["a", "an", "the", "for", "me", "my", "us", "our", "please", "build", "make", "create", "new", "can", "you", "could", "would", "some", "of", "to", "and", "with", "i", "we", "need", "want", "simple", "quick", "hey", "porter", "re", "fwd"]);
+export function newRepoNameFrom(subject: string, taken: readonly string[] = []): string {
+  const words = (subject ?? "").toLowerCase().replace(/[^a-z0-9\s-]/g, " ").split(/[\s-]+/).filter((w) => w && !FILLER.has(w));
+  let base = words.join("-").slice(0, 40).replace(/-+$/, "");
+  if (!base) base = "west-peek-build";
+  if (!/^west-?peek|^wp-/.test(base)) base = `wp-${base}`.slice(0, 40).replace(/-+$/, "");
+  const lower = new Set(taken.map((t) => t.toLowerCase()));
+  let name = base;
+  for (let n = 2; lower.has(name); n++) name = `${base.slice(0, 36)}-${n}`;
+  return name;
+}
+
 export function pagesHostsOf(propertyHost: string | null | undefined, registry: readonly WebProperty[] = WEB_PROPERTIES): string[] {
   const hosts = String(propertyHost ?? "").split(/,\s*/).map((h) => h.trim().toLowerCase()).filter(Boolean);
   return [...new Set(registry.filter((p) => hosts.includes(p.host) || (p.aliases ?? []).some((a) => hosts.includes(a))).map((p) => p.pagesHost).filter((x): x is string => Boolean(x)))];
@@ -395,6 +417,7 @@ export function readWebPropertyAsk(json: string | null | undefined): WebProperty
       property_unresolved: p.property_unresolved === true,
       ...(Array.isArray(p.parts) && p.parts.length > 1 ? { parts: p.parts } : {}),
       ...(Array.isArray(p.registered) && p.registered.length ? { registered: p.registered.map(String) } : {}),
+      ...(p.new_repo === true ? { new_repo: true } : {}),
       ...(p.due && typeof p.due === "object" && typeof p.due.due_at === "string" ? { due: { due_at: p.due.due_at, due_words: String(p.due.due_words ?? ""), priority: p.due.priority === "URGENT" ? "URGENT" : "HIGH" } } : {}),
     };
   } catch {
