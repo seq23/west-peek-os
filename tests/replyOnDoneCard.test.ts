@@ -218,7 +218,9 @@ describe("a reply on a DONE card — a genuine question, no steering content", (
     expect(escalated, "an audit trail exists naming who was tried and why").toBeTruthy();
     const payload = JSON.parse(escalated!.payload_json) as { tried_employee: string | null; reason: string };
     expect(payload.tried_employee, "a kind with no owner is tried by the writer's chief of staff, never nobody").toBe("Walker");
-    expect(payload.reason).toContain("could not read a confident answer");
+    // The test model never answers in the CONFIDENT/ANSWER format, so every route is walked past
+    // (questionAnswerFormatProblem) and the escalation says no answer came back.
+    expect(payload.reason).toContain("no answer available");
 
     // The card itself is untouched — still DONE, never quietly reopened into looking unfinished.
     const row = await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(CARD_ID).first<{ state: string }>();
