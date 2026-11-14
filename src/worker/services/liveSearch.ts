@@ -42,6 +42,20 @@ export function servedBySearchLane(model: string | null | undefined): boolean {
   return model === SEARCH_MODEL || isFreeSearchModel(model) || SEATS.some((seat) => SEAT_REGISTRY[seat].model === model);
 }
 
+/**
+ * A REPLY THAT DOES NOT PARSE IS A FAILED GO ON THAT ROUTE (14 Nov 2026, wc_bd8b68cb). Builds the `verify` a search
+ * caller hands `runAi`: null when the caller's own parser reads at least one item out of the reply, otherwise what was
+ * wrong. A prose letter, or a non-empty answer with nothing parseable in it, is refused inside the walk, so the next
+ * route on the ladder is asked in the same run; "nothing good enough" is left for answers that parsed and failed the bar.
+ */
+export function formatCheck<T>(parse: (raw: string) => readonly T[], what: string): (text: string) => string | null {
+  return (text) => {
+    if (parse(text).length > 0) return null;
+    const head = text.replace(/\s+/g, " ").trim().slice(0, 140);
+    return `the reply was not in the required format (no ${what} could be read from it)${head ? `; it began: "${head}"` : ""}`;
+  };
+}
+
 export interface SearchHit {
   name: string;
   description: string | null;

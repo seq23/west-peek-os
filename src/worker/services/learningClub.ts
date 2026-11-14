@@ -9,6 +9,7 @@ import { actorFromIdentity, authorize, type Actor } from "./authorize";
 import { SEARCH_MODEL, servedBySearchLane } from "./liveSearch";
 import { blockCard } from "./blocks";
 import { cannotDetail, steerFor, type Interpreter } from "./instruction";
+import { steeredPrompt } from "../../shared/work/instruction";
 import { pageTextOf, urlIsLive } from "../effects/urlLiveness";
 import { createWorkCardInternal } from "./workCards";
 import { sweepIdentity, type SweepCard } from "./workSweep";
@@ -1841,7 +1842,7 @@ async function steeredSearch(env: Env, card: SweepCard, employee: "Parker" | "Wy
     });
     return { blocked: { finished: false, blocked: true, progressed: false, detail: why } };
   }
-  return { search: (e, a, prompt) => search(e, a, steer.text ? `${steer.text}\n\n${prompt}` : prompt) };
+  return { search: (e, a, prompt) => search(e, a, steeredPrompt(steer.text, prompt)) };
 }
 
 export async function runTlcCard(env: Env, card: SweepCard, deps: TlcDeps = {}): Promise<TlcRunResult> {

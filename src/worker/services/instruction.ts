@@ -34,7 +34,8 @@ import {
  *   1. Before its first stage runs, a chain calls `steerFor`.
  *   2. If a human has said anything about this card, exactly ONE governed model call reads all of
  *      it and returns UNDERSTOOD / STEER / CANNOT.
- *   3. The chain puts `steer.text` at the TOP of every stage prompt it builds, above its own brief.
+ *   3. The chain puts `steer.text` at the TOP of every stage prompt it builds, above its own brief — fenced as data,
+ *      with the brief's own output format restated last (`steeredPrompt`, shared/work/instruction.ts; 14 Nov 2026).
  *   4. If `steer.cannot` is non-empty, or the model could not be read, the chain BLOCKS. It does
  *      not carry on with the default, which is the failure this whole file exists to remove.
  *   5. The receipt is stored either way, so she can see her words and what they turned into.

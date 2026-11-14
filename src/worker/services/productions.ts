@@ -4,7 +4,8 @@ import type { Env } from "../env";
 import { appendEvent } from "../events";
 import type { Actor } from "./authorize";
 import { runAi } from "../ai/runAi";
-import { SEARCH_MODEL, servedBySearchLane } from "./liveSearch";
+import { SEARCH_MODEL, formatCheck, servedBySearchLane } from "./liveSearch";
+import { steeredPrompt } from "../../shared/work/instruction";
 import { blockCard } from "./blocks";
 import { cannotDetail, steerFor, type Interpreter } from "./instruction";
 import { standingSteer } from "./emailThread";
@@ -826,13 +827,18 @@ const defaultJudge: ProductionsJudge = async (env, actor, prompt) => {
   return { ok: true, text: run.output_text, detail: "ok" };
 };
 
-export type ProductionsSearch = (env: Env, actor: Actor, prompt: string) => Promise<{ ok: boolean; text: string; detail: string }>;
+/**
+ * `verify`, when given, is the caller's format check: a reply it refuses is a failed go on that route, and the router
+ * asks the next route in the same run (free models in turn, then the seats). See `formatCheck` in liveSearch.ts.
+ */
+export type ProductionsSearch = (env: Env, actor: Actor, prompt: string, verify?: (text: string) => string | null) => Promise<{ ok: boolean; text: string; detail: string }>;
 
-const defaultSearch: ProductionsSearch = async (env, actor, prompt) => {
+const defaultSearch: ProductionsSearch = async (env, actor, prompt, verify) => {
   const { run } = await runAi(env, {
     purpose: "Walker: West Peek Productions research",
     actor,
     inputs: [prompt],
+    ...(verify ? { verify } : {}),
     // Public web research; the query leaves for a search engine. Never raised.
     sensitivity: "PUBLIC" as never,
     budgetContext: { requiresSearch: true, expectedOutputTokens: 2500, preferredModel: SEARCH_MODEL, providerKey: "openrouter" },
@@ -920,9 +926,10 @@ export async function runProductionsCard(
     });
     return { finished: false, blocked: true, detail: why };
   }
-  const withSteer = (prompt: string): string => (steer.text ? `${steer.text}\n\n${prompt}` : prompt);
+  // His words ride as data and the brief's own output format has the last word (14 Nov 2026, wc_bd8b68cb).
+  const withSteer = (prompt: string): string => steeredPrompt(steer.text, prompt);
   const rawSearch = deps.search ?? defaultSearch;
-  const search: ProductionsSearch = (e, a, prompt) => rawSearch(e, a, withSteer(prompt));
+  const search: ProductionsSearch = (e, a, prompt, verify) => rawSearch(e, a, withSteer(prompt), verify);
   const rawJudge = deps.judge ?? defaultJudge;
   const judge: ProductionsJudge = (e, a, prompt) => rawJudge(e, a, withSteer(prompt));
 
@@ -934,6 +941,8 @@ export async function runProductionsCard(
     nudge: string,
     /** The floor for this half: a first answer below it is searched once more, and the fuller of the two is used. */
     enough = 1,
+    /** The reply's required shape: an answer it refuses is a failed go on that route, not "nothing good enough". */
+    verify?: (text: string) => string | null,
   ): Promise<Judged<T> & { why: string; searchDown: string | null; judgeDown?: string }> {
     let why = "";
     let last: Judged<T> = { kept: [], dropped: [], rejected: [], failed: null };
@@ -947,7 +956,7 @@ export async function runProductionsCard(
     let searched = false;
     let downDetail = "";
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const found = await search(env, actor, attempt === 0 ? prompt : `${prompt}\n\n${nudge}`);
+      const found = await search(env, actor, attempt === 0 ? prompt : `${prompt}\n\n${nudge}`, verify);
       if (!found.ok) { why = `the live search failed: ${found.detail}`; downDetail = found.detail; continue; }
       searched = true;
       const parsed = await parse(found.text);
@@ -992,6 +1001,7 @@ export async function runProductionsCard(
       },
       "Your previous answer was discarded. Every entry MUST have the url of the live page that shows the trigger, be a US organisation that hires agencies, and have a trigger from the last ~60 days.",
       MONTHLY_FLOOR.leads,
+      formatCheck(parseCustomerIdeas, "customer lead with an organisation and a url"),
     );
     const pitchesLive = await searchUntilSome(
       buildPressPrompt(month),
@@ -1002,6 +1012,7 @@ export async function runProductionsCard(
       },
       "Your previous answer was discarded. Every entry MUST have a live proof_url, a named writer whose beat is shown, and a hook specific to that writer.",
       MONTHLY_FLOOR.pitches,
+      formatCheck(parsePressPitches, "press pitch with a writer and a proof_url"),
     );
     // A SEARCH THAT NEVER RAN IS A FAILED ATTEMPT, NOT A QUESTION FOR SCOOTER (1 Oct 2026). Nothing is emailed and nobody
     // is asked where to look: the sweep classifies the lane's own words, retries, and — when the spend setting or a
@@ -1040,7 +1051,12 @@ export async function runProductionsCard(
       summary = { ...summary, what: `${summary.what} — a thin month`, tldr: `**A thin month:** ${thin.join("; ")}. ${summary.tldr}` };
     }
   } else {
-  const found = await search(env, actor, kind === "PRODUCTIONS_CUSTOMERS" ? buildCustomerPrompt(month) : buildPressPrompt(month));
+  const found = await search(
+    env,
+    actor,
+    kind === "PRODUCTIONS_CUSTOMERS" ? buildCustomerPrompt(month) : buildPressPrompt(month),
+    kind === "PRODUCTIONS_CUSTOMERS" ? formatCheck(parseCustomerIdeas, "customer lead with an organisation and a url") : formatCheck(parsePressPitches, "press pitch with a writer and a proof_url"),
+  );
   if (!found.ok) {
     return { finished: false, blocked: false, detail: `the live search failed: ${found.detail}` };
   }

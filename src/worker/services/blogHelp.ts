@@ -17,6 +17,7 @@ import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
 import { describeModes, readBlogAsk, type BlogAsk, type BlogMode } from "../../shared/intake/blogHelp";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
 import { cannotDetail, steerFor, type Interpreter } from "./instruction";
+import { steeredPrompt } from "../../shared/work/instruction";
 
 /**
  * Blog help, worked by a partner's chief of staff (16 Sep 2026).
@@ -694,7 +695,7 @@ export async function runBlogHelpCard(
   // Prefixed once, here, so every prompt this runner builds carries it — the search, the judgement
   // and the writing. A steer each step has to remember is a steer one step will forget.
   const steered = (call: BlogModelCall): BlogModelCall =>
-    steer.text ? (e, a, prompt) => call(e, a, `${steer.text}\n\n${prompt}`) : call;
+    steer.text ? (e, a, prompt) => call(e, a, steeredPrompt(steer.text, prompt)) : call;
   const search = steered(deps.search ?? defaultSearch);
   const judge = steered(deps.judge ?? defaultJudge);
   const write = steered(deps.write ?? defaultWrite);
