@@ -1063,6 +1063,27 @@ describe("every ask is built in the job or the partner is asked; later work is o
   });
 });
 
+describe("spending is the owner's: a spend stop holds the card and emails nobody (13 Nov 2026)", () => {
+  beforeAll(ageEarlierCards);
+  afterAll(ageEarlierCards);
+  it("the Mac's NAMED STOP [SPEND_NEEDS_THE_OWNER] holds the card on what it needs, with no email and no retry", async () => {
+    const chiefId = await openAssignmentCard(env, { subject: "studio domain spend", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: `Put the studio site on its own domain westpeek.ventures — package: https://drive.google.com/drive/folders/${FOLDER}spend1`, limits: EMAILED_TASK_LIMITS, emlKey: null });
+    const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
+    await tickFor(id);
+    const from = sent.length;
+    await macReports(id, { phase: "PLAN", status: "failed", reason: "NAMED STOP [SPEND_NEEDS_THE_OWNER] this needs money spent, which only the owner approves: register westpeekstudio.com. Nothing was bought; the card waits for her." });
+    await tickFor(id);
+    const c = await card(id);
+    expect(String(c.waiting_for)).toMatch(/^Needs money spent, which only the owner approves — nothing was bought: .*register westpeekstudio\.com/);
+    expect(Date.parse(String(c.waiting_until))).toBeGreaterThan(Date.now() + 6 * 24 * 3600 * 1000);
+    expect(c.state).not.toBe("BLOCKED");
+    expect(await liveJobFor(id), "no retry that could try to buy it again").toBeNull();
+    expect(sent.slice(from), "nobody is emailed").toHaveLength(0);
+    const ev = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE event_type = 'work_card.spend_needs_owner' AND object_id = ?1").bind(id).first<{ n: number }>();
+    expect(Number(ev?.n)).toBe(1);
+  });
+});
+
 /**
  * THE v1.0 BAR (owner, 13 Nov 2026: builds come out "v1.0 final with persistence and veteran UX/UI POV"). Every built ask
  * says when it is done; a BUILD reports each ask against those checks, and one not met (and not held by a key or a file

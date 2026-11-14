@@ -55,6 +55,8 @@ import {
   type WebPropertyChangePhase,
 } from "../../shared/work/localJobs";
 import { buildProblems, buildRefusalLine, partnerWrote, planProblems, refusalLine } from "../../shared/work/everyAsk";
+/** The Mac's spend stop, by its tag (`SPEND_STOP` in scripts/duties/web-property-change.mjs; tests/spendStop.test.ts holds them equal; tests/webPropertyChange.test.ts holds the card). */
+export const SPEND_STOP = "NAMED STOP [SPEND_NEEDS_THE_OWNER]";
 
 /**
  * A WEB PROPERTY CHANGE, worked by Porter on her Mac (20 Sep 2026, Plan A).
@@ -1465,6 +1467,19 @@ export async function applyReport(
   // 0253: what the repo itself said, the keys the vault lacks (only with the lookup that proves it), the runs.
   const absorbed = await absorbRepoReport(env, card, row, report);
   if (absorbed) return absorbed;
+
+  /*
+   * SPENDING IS THE OWNER'S, AND IT EMAILS NOBODY (13 Nov 2026). The Mac turned a result that would cost money (a
+   * domain, a paid plan, a store fee, a paid key) into a named stop before anything ran. The card is held on her
+   * with what it needs; no partner email, no attempt charged, no retry that could try again to buy it.
+   */
+  if (report.status === "failed" && (report.reason ?? "").startsWith(SPEND_STOP)) {
+    const line = `Needs money spent, which only the owner approves — nothing was bought: ${(report.reason ?? "").slice(SPEND_STOP.length).trim().slice(0, 600)}`;
+    await env.WP_OS_DB.prepare("UPDATE work_card SET waiting_until = ?2, waiting_for = ?3, next_action = ?3 WHERE id = ?1").bind(card.id, new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(), line.slice(0, 900)).run();
+    await appendFinding(env, card.id, `${SPEND_STOP} ${line}`);
+    await appendEvent(env, { eventType: "work_card.spend_needs_owner", actorType: "system", actorId: "web_property_change", objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { phase: report.phase, reason: (report.reason ?? "").slice(0, 1200) } });
+    return { finished: false, blocked: false, progressed: true, held: true, detail: line.slice(0, 600) };
+  }
 
   if (report.status === "failed" && typeof report.waits_seconds === "number") {
     return holdUntilAPlanResets(env, card, report.phase, report.waits_seconds, report.reason ?? "");
