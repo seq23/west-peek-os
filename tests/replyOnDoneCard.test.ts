@@ -6,6 +6,7 @@ import { threadReference } from "../src/shared/email/thread";
 import { containsGenuineQuestion } from "../src/shared/intake/genuineQuestion";
 import { INTAKE_MAILBOX } from "../src/shared/intake/emailTriggers";
 import type { QuestionAnswerer } from "../src/worker/services/questionRouting";
+import type { ReplyIntent, ReplyIntentReader } from "../src/worker/services/replyIntent";
 
 /**
  * A REPLY THAT LANDS ON A CARD THAT IS ALREADY DONE (22 Sep 2026).
@@ -356,14 +357,22 @@ describe("a reply asking for a finished Productions note to be redone reopens it
   const SAID =
     "Hey Walker — alot of this feels like we're pitching people to create a series of virtual events.\n\nI think we're moreso targeting organizations who 1.\nAre national organizations similar to TNTP.\n\nPlease use these notes to construct a more tailored approach.";
 
-  async function replyOn(cardId: string, verdict: "ACTIONABLE_WORK" | "BANTER_NO_ACTION", said: string) {
+  /** The one plain-words reader, as the model would answer it; records what it was asked. */
+  function reader(read: Partial<ReplyIntent>, asked: Array<{ text: string; where?: string }>): ReplyIntentReader {
+    return async (_e, input) => {
+      asked.push({ text: input.text, where: input.where });
+      return { kind: "CONTINUE", changes: null, question: null, keyword: null, source: "MODEL", reason: "test", aiRunId: null, door: "ROUTE", seat: "Walker", nothing: false, ...read };
+    };
+  }
+
+  async function replyOn(cardId: string, read: Partial<ReplyIntent>, said: string, answerQuestion?: QuestionAnswerer) {
     const subject = "Walker: West Peek Productions this month — 6 lead(s), 2 pitch(es)";
     const { token } = await startThread(env, { objectType: "work_card", objectId: cardId, cardKind: KIND, employee: "Walker", to: "scooter@westpeek.ventures", subject, firmScope: "west-peek" });
-    const asked: string[] = [];
+    const asked: Array<{ text: string; where?: string }> = [];
     await steerFromReply(
       env,
       { fromHeader: SCOOTER_FROM, authenticationResults: GOOD_AUTH, subject: `Re: ${subject}`, raw: gmailReply(said, "1. CRE Finance Council", subject), inReplyTo: threadReference(token), references: null, emlKey: null },
-      { classifyReply: async (_e, input) => { asked.push(input.text); return { verdict, reason: "test", aiRunId: null }; } },
+      { readWords: reader(read, asked), ...(answerQuestion ? { answerQuestion } : {}) },
     );
     const card = (await env.WP_OS_DB.prepare("SELECT state, work_attempts FROM work_card WHERE id = ?1").bind(cardId).first<{ state: string; work_attempts: number }>())!;
     return { card, asked };
@@ -373,8 +382,9 @@ describe("a reply asking for a finished Productions note to be redone reopens it
     const CARD_ID = "wc_done_monthly_rework";
     await doneCard(CARD_ID, "Walker: West Peek Productions this month (2026-11)", KIND);
     await env.WP_OS_DB.prepare("UPDATE work_card SET work_attempts = 1 WHERE id = ?1").bind(CARD_ID).run();
-    const { card, asked } = await replyOn(CARD_ID, "ACTIONABLE_WORK", SAID);
-    expect(asked, "the classifier reads his written words").toHaveLength(1);
+    const { card, asked } = await replyOn(CARD_ID, { kind: "CONTINUE", changes: "construct a more tailored approach" }, SAID);
+    expect(asked, "his written words are read once, not once per door").toHaveLength(1);
+    expect(asked[0]!.where, "the reader is told the note is finished, so CONTINUE means redo it").toMatch(/already finished/);
     expect(card).toEqual({ state: "OPEN", work_attempts: 0 });
     const notes = await noteFor(CARD_ID);
     expect(notes).toHaveLength(1);
@@ -385,25 +395,49 @@ describe("a reply asking for a finished Productions note to be redone reopens it
     expect(await notificationsFor(CARD_ID), "nobody is told a question is waiting — the revised note is the answer").toEqual([]);
   });
 
+  it("praise, context on the leads and a question (14 Nov 2026) is answered by Walker and never rebuilds the note", async () => {
+    /*
+     * THE REAL INCIDENT: "ok this is great all around … MDRC seems like EXACTLY what TNTP does … what
+     * do we lead with? case study or a vision?" The reader called it a ROUTE to Walker with his
+     * notes as CHANGES and "none of it is a build", yet the separate actionability mapping turned
+     * that into ACTIONABLE_WORK and reopened the note he had just praised for a full rebuild.
+     */
+    const CARD_ID = "wc_done_monthly_praised_question";
+    await doneCard(CARD_ID, "Walker: West Peek Productions this month (2026-11)", KIND);
+    const asked: string[] = [];
+    const walker: QuestionAnswerer = async (_e, input) => {
+      asked.push(input.question);
+      return { confident: true, answer: "Lead with the case study.", reason: "t", aiRunId: null };
+    };
+    sent.length = 0;
+    const said = "ok this is great all around.\n\ngoing to take you up on the press pitches.\n\nMDRC seems like EXACTLY what TNTP does. what do we lead with? case study or a vision?";
+    const { card } = await replyOn(CARD_ID, { kind: "QUESTION", changes: "MDRC seems like EXACTLY what TNTP does", question: "what do we lead with? case study or a vision?" }, said, walker);
+    expect(card.state, "the note he praised is not rebuilt").toBe("DONE");
+    expect(asked, "Walker is asked his question").toHaveLength(1);
+    expect(asked[0]).toMatch(/case study or a vision/);
+    expect(sent.filter((m) => m.to === "scooter@westpeek.ventures").map((m) => m.text).join("\n")).toContain("Lead with the case study.");
+    expect((await noteFor(CARD_ID)).some((n) => /asking for it to be redone/.test(n.body)), "no rework note").toBe(false);
+  });
+
   it("a thank-you leaves the note done", async () => {
     const CARD_ID = "wc_done_monthly_thanks";
     await doneCard(CARD_ID, "Walker: West Peek Productions this month (2026-11)", KIND);
-    const { card } = await replyOn(CARD_ID, "BANTER_NO_ACTION", "thanks, reached out to two of these");
+    const { card } = await replyOn(CARD_ID, { kind: "CONTINUE", nothing: true }, "thanks, reached out to two of these");
     expect(card.state).toBe("DONE");
   });
 
-  it("the weekly hire search is not re-run by a reply (its steer waits for next week); the classifier is never asked", async () => {
+  it("the weekly hire search is not re-run by a reply (its steer waits for next week), whatever the reader says", async () => {
     const CARD_ID = "wc_done_hire_not_reworked";
     await doneCard(CARD_ID, "Walker: hire search", "PRODUCTIONS_HIRE_SEARCH");
     const subject = "Walker: hire search";
     const { token } = await startThread(env, { objectType: "work_card", objectId: CARD_ID, cardKind: "PRODUCTIONS_HIRE_SEARCH", employee: "Walker", to: "scooter@westpeek.ventures", subject, firmScope: "west-peek" });
-    let called = 0;
+    const asked: Array<{ text: string; where?: string }> = [];
     await steerFromReply(
       env,
       { fromHeader: SCOOTER_FROM, authenticationResults: GOOD_AUTH, subject: `Re: ${subject}`, raw: gmailReply("prefer music backgrounds", "1. X", subject), inReplyTo: threadReference(token), references: null, emlKey: null },
-      { classifyReply: async () => { called += 1; return { verdict: "ACTIONABLE_WORK", reason: "t", aiRunId: null }; } },
+      { readWords: reader({ kind: "CONTINUE", changes: "prefer music backgrounds" }, asked) },
     );
-    expect(called).toBe(0);
+    expect(asked[0]?.where ?? "", "it is not told CONTINUE means redo").not.toMatch(/already finished/);
     expect((await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(CARD_ID).first<{ state: string }>())!.state).toBe("DONE");
   });
 });

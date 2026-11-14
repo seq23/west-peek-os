@@ -23,8 +23,7 @@ import { previewAllPartnerEmailsIsOn } from "./kindRules";
 import { routedByFor } from "./requestReply";
 import { sendOrPreview } from "./previewApproval";
 import { notifyPartners } from "./notifications";
-import { defaultClassifyActionability, type ActionabilityClassifier } from "./webPropertyChange";
-import { defaultReadReplyIntent, readReplyIntent, type ReplyIntentReader } from "./replyIntent";
+import { defaultReadReplyIntent, readReplyIntent, type ReplyIntent, type ReplyIntentReader } from "./replyIntent";
 
 /**
  * A REPLY, MATCHED TO ITS CONVERSATION AND TURNED INTO A STEER (17 Sep 2026).
@@ -252,7 +251,7 @@ export async function steerFromReply(
    * live model call. Omitted, this defaults to Addendum 12's own real answerer — the production
    * path is unchanged by this parameter existing.
    */
-  deps: { answerQuestion?: QuestionAnswerer; classifyReply?: ActionabilityClassifier; readWords?: ReplyIntentReader } = {},
+  deps: { answerQuestion?: QuestionAnswerer; readWords?: ReplyIntentReader } = {},
 ): Promise<SteerFromReply> {
   const tokens = threadTokensIn({ inReplyTo: message.inReplyTo, references: message.references });
 
@@ -545,12 +544,14 @@ export async function steerFromReply(
      * never builds anything.
      */
     let builtFromReply = false;
+    let wordsRead: ReplyIntent | null = null;
     if (!owned && !secondarySaidApproved && cardRow && partner && cardRow.kind !== WEB_PROPERTY_CHANGE_KIND) {
       const read = await readReplyIntent(
         env,
-        { cardId: cardRow.id, firmScope: thread.firm_scope, text: written, where: `a reply on a card that is not a build: "${cardRow.title.slice(0, 120)}" (${cardRow.kind ?? "general work"}, ${cardRow.state})` },
+        { cardId: cardRow.id, firmScope: thread.firm_scope, text: written, where: replyWhere(cardRow) },
         deps.readWords ?? defaultReadReplyIntent,
       );
+      wordsRead = read;
       if (read.source === "MODEL" && read.door === "BUILD" && read.kind !== "STOP") {
         const { handBuildToPorter } = await import("./employeeWork");
         const out = await handBuildToPorter(env, cardRow.id, { words: written, buildIn: read.buildIn ?? null, requestedBy: partner.email, replyOnThread: thread.token });
@@ -687,7 +688,7 @@ export async function steerFromReply(
        */
       const reworked =
         cardRow.state === "DONE" && REWORKABLE_AFTER_DONE.has(cardRow.kind ?? "")
-          ? await reopenForRework(env, cardRow, partner, written, thread, deps.classifyReply ?? defaultClassifyActionability)
+          ? await reopenForRework(env, cardRow, partner, written, thread, wordsRead, deps.readWords ?? defaultReadReplyIntent)
           : false;
       if (!reworked) await handleReplyOnClosedCard(env, cardRow, partner, written, thread, message.emlKey, deps.answerQuestion);
     }
@@ -759,11 +760,31 @@ async function answersAnEarlierStage(env: Env, cardId: string, kind: string | nu
 export const REWORKABLE_AFTER_DONE: ReadonlySet<string> = new Set(["PRODUCTIONS_MONTHLY", "PRODUCTIONS_CUSTOMERS", "PRODUCTIONS_PRESS"]);
 
 /**
- * A reply that asks for work on a reworkable DONE card puts the card back in the sweep with the
+ * What the reader is told the words arrive on. A finished reworkable deliverable says so, and says
+ * what CONTINUE means there (14 Nov 2026): Scooter's "ok this is great all around … what do we lead
+ * with? case study or a vision?" on Walker's rebuilt November note was read as if nothing had been
+ * built yet, came back CONTINUE ("agreement in any words is CONTINUE") and reopened the note he had
+ * just praised for a full rebuild instead of answering his question.
+ */
+function replyWhere(card: { title: string; kind: string | null; state: string }): string {
+  if (card.state === "DONE" && REWORKABLE_AFTER_DONE.has(card.kind ?? "")) {
+    return (
+      `a reply to a note that is already finished and was emailed to them: "${card.title.slice(0, 120)}" (${card.kind}, DONE). ` +
+      "For this note, CONTINUE means they want the note itself redone or revised with changes. " +
+      "If they are happy with it (praise, agreement, comments or context on the items in it, or what they plan to do with it) and ask something, that is QUESTION; with nothing asked, NOTHING"
+    );
+  }
+  return `a reply on a card that is not a build: "${card.title.slice(0, 120)}" (${card.kind ?? "general work"}, ${card.state})`;
+}
+
+/**
+ * A reply that asks for the deliverable to be redone puts the card back in the sweep with the
  * partner's words as an unacknowledged note — exactly what `steerFor` reads on the next run — so the
- * same employee rebuilds the deliverable and the revised note is the answer. A thank-you or a plain
- * question (the classifier's other two verdicts) leaves the card done and takes the existing door.
- * Returns true when the card was reopened.
+ * same employee rebuilds the deliverable and the revised note is the answer. The decision is the
+ * one plain-words reader's own INTENT (read once, above, told the note is finished): CONTINUE or FIX
+ * rebuilds; a QUESTION, NOTHING or STOP leaves the card done and takes the existing door, where a
+ * question is answered by the card's owner. A reader that could not run carries the words on as a
+ * rework (the bias toward acting). Returns true when the card was reopened.
  */
 async function reopenForRework(
   env: Env,
@@ -771,10 +792,12 @@ async function reopenForRework(
   partner: Partner,
   written: string,
   thread: EmailThreadRow,
-  classify: ActionabilityClassifier,
+  already: ReplyIntent | null,
+  reader: ReplyIntentReader,
 ): Promise<boolean> {
-  const verdict = await classify(env, { cardId: card.id, firmScope: card.firm_scope, text: written });
-  if (verdict.verdict !== "ACTIONABLE_WORK") return false;
+  const read = already ?? (await readReplyIntent(env, { cardId: card.id, firmScope: card.firm_scope, text: written, where: replyWhere(card) }, reader));
+  if (read.kind !== "CONTINUE" || read.nothing) return false;
+  const verdict = { reason: read.reason, aiRunId: read.aiRunId };
   await env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)")
     .bind(`wcn_${crypto.randomUUID()}`, card.id, partner.firmUserId, `${partner.firstName} replied to the finished note asking for it to be redone: ${written}`.slice(0, 4000), card.firm_scope)
     .run();
