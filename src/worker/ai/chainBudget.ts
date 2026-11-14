@@ -288,6 +288,23 @@ export function attemptDeadlineMs(expectedOutputTokens: number, remainingMs: num
   return Math.floor(Math.max(0, Math.min(sized, remainingMs)));
 }
 
+/**
+ * WHAT A LIVE WEB SEARCH IS ALLOWED, whatever its declared output (14 Nov 2026, wc_bd8b68cb).
+ *
+ * A search is not sized by the tokens it writes: the model spends minutes reading pages before it
+ * writes 2,500 tokens. MEASURED on subscription_seat_run, Walker's Productions research on 14 Nov,
+ * claim to report: 148s to 348s over 17 runs, plus up to ~30s for the Mac to claim it. The token
+ * arithmetic gave that call 169s, so after #406 capped the seat's wait at the attempt's deadline
+ * every search ran out before the seat could answer, and the card retried forever. A search attempt
+ * gets the longest single attempt this system allows, still cut to what is left of the run's budget.
+ */
+export const SEARCH_ATTEMPT_MS = MAX_ATTEMPT_MS;
+
+/** The deadline for one attempt of a run that must search the live web: see `SEARCH_ATTEMPT_MS`. */
+export function searchAttemptDeadlineMs(remainingMs: number = CHAIN_BUDGET_MS): number {
+  return Math.floor(Math.max(0, Math.min(SEARCH_ATTEMPT_MS, remainingMs)));
+}
+
 /** What is left of the chain's budget, given when it started. */
 export function remainingBudgetMs(startedAtMs: number, now: number, budgetMs: number = CHAIN_BUDGET_MS): number {
   return Math.max(0, budgetMs - (now - startedAtMs));
