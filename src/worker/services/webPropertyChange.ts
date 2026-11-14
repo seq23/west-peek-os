@@ -234,6 +234,33 @@ export async function noticeFor(env: Env, cardId: string, outcome: "DONE" | "BLO
 }
 
 /** One short email through the lane, recorded as a notice; never twice for the same cause. */
+/**
+ * A STAGED DEVELOPER REBUILD NEVER MAILS THE PARTNER (owner, 14 Nov 2026: no email to Scooter about the
+ * dashboard error). While the job's current rebuild is the developer's, staged because he holds a preview
+ * (#405), nothing about it reaches him: a failed build, a review stop, a retry cap, a reminder. Each such
+ * notice is held, recorded on the ledger unsent, and put on the card and the event spine for the developer's
+ * tail. Only a deliberate resend of the preview (a person pressed it) still goes. His own change requests
+ * are never staged, so they keep every email as before. Returns why it is held, or null.
+ */
+export async function partnerMailHeld(env: Env, cardId: string, notice: { kind: NoticeKind; cause: string } | null | undefined): Promise<string | null> {
+  if (notice?.kind === "PREVIEW" && notice.cause.startsWith("resend:")) return null;
+  const row = await readWebPropertyChange(env, cardId);
+  if (!row || !(row.branch?.endsWith(STAGE_SUFFIX) || row.refresh_intent === "CHANGES")) return null;
+  const why = await rebuildWords(env, cardId, row).catch(() => null);
+  // Fails closed: an unreadable record on a staged branch holds the mail rather than risk it.
+  if (!why) return row.branch?.endsWith(STAGE_SUFFIX) ? "a staged rebuild whose record could not be read" : null;
+  return why.developer && why.partnerHoldsPreview ? "the developer's staged rebuild: its outcomes go to the developer tail, never the partner" : null;
+}
+
+/** Hold one notice from the partner (see `partnerMailHeld`): on the ledger unsent, on the card, and on the event spine for the tail. */
+export async function holdPartnerMail(env: Env, card: { id: string; firm_scope: string; requested_by_email?: string | null }, notice: { kind: NoticeKind; cause: string }, reason: string, what: string): Promise<{ sent: false; reason: string }> {
+  const to = (card.requested_by_email ?? "").trim().toLowerCase();
+  await recordNotice(env, { cardId: card.id, kind: notice.kind, cause: notice.cause, to, messageId: null, sent: false, detail: `held from the partner: ${reason}`, firmScope: card.firm_scope });
+  await appendFinding(env, card.id, `Not emailed to ${to || "the partner"} (${notice.kind.toLowerCase()}): ${reason}. For the developer tail: ${what.slice(0, 400)}`);
+  await appendEvent(env, { eventType: "web_property_change.partner_mail_held", actorType: "system", actorId: "web_property_change", objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { kind: notice.kind, cause: notice.cause, to, reason, what: what.slice(0, 1000) } });
+  return { sent: false, reason: `held from the partner: ${reason}` };
+}
+
 async function tellRequester(
   env: Env,
   card: Pick<WebPropertyChangeCard, "id" | "title" | "firm_scope" | "requested_by_email" | "preview_first" | "preview_owner_id"> & { assigned_from_card_id?: string | null },
@@ -246,6 +273,8 @@ async function tellRequester(
   const partner = to ? partnerByEmail(to) : null;
   if (!partner) return { sent: false, reason: "the card was not asked for by a partner's email" };
   if (await alreadyTold(env, card.id, notice.kind, notice.cause)) return { sent: false, reason: `${notice.kind} already sent for this cause` };
+  const held = await partnerMailHeld(env, card.id, notice);
+  if (held) return holdPartnerMail(env, card, notice, held, `${email.what}: ${email.tldr}`);
   /*
    * HER RULE, READ IN ONE PLACE (0223, 22 Sep 2026). A DONE reply takes the preview lane when
    * `done_reply_preview_first` is on, whatever the card's own tick says; everything else — RECEIVED,
