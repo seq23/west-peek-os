@@ -271,9 +271,10 @@ export interface LocalJobReport {
    */
   deferred?: Array<{ ask: string; due_at: string; words?: string; site_change?: boolean }>;
   /** #363: PLAN only. One line per thing the partner asked for: built in this job, a question, or (partner-dated) later. */
-  accounting?: Array<{ ask: string; how: string }>;
+  accounting?: Array<{ ask: string; how: string; done_when?: string[] }>;
   /** 0253 (addendum 6): several asks in one email → one done-line per item, partial completion stated per item. */
-  items?: Array<{ item: string; state: "done" | "partial" | "not_done"; note?: string }>;
+  /** v1.0 bar (13 Nov 2026): each item reports its plan line's `done_when` checks; `blocked_by` names what holds an unmet one. */
+  items?: Array<{ item: string; state: "done" | "partial" | "not_done"; note?: string; done_when?: Array<{ check: string; met: boolean; note?: string }>; blocked_by?: string }>;
   /**
    * "unchanged" (0240, BUILD only): the job asked for a materials check (`refresh`), the Mac re-mapped
    * the folder and read the card's files, and the set is the same one the last build used — so it
@@ -406,8 +407,13 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
     ...(Array.isArray(r.deferred) ? { deferred: readDeferred(r.deferred) } : {}),
     // #363: the plan's per-ask accounting (`shared/work/everyAsk.ts` holds the plan to it).
     ...(Array.isArray(r.accounting)
-      ? { accounting: r.accounting.slice(0, 40).map((a) => { const l = (a && typeof a === "object" ? a : {}) as Record<string, unknown>; return { ask: typeof l.ask === "string" ? l.ask.trim().slice(0, 300) : "", how: typeof l.how === "string" ? l.how.trim().toLowerCase().slice(0, 40) : "" }; }) }
+      ? { accounting: r.accounting.slice(0, 40).map((a) => { const l = (a && typeof a === "object" ? a : {}) as Record<string, unknown>; return { ask: typeof l.ask === "string" ? l.ask.trim().slice(0, 300) : "", how: typeof l.how === "string" ? l.how.trim().toLowerCase().slice(0, 40) : "", ...(Array.isArray(l.done_when) ? { done_when: strs(l.done_when).slice(0, 20).map((c) => c.slice(0, 200)) } : {}) }; }) }
       : {}),
+    /*
+     * v1.0 bar (13 Nov 2026): THIS READER DROPPED `items` UNTIL NOW, so the per-item done-lines the Mac carried never
+     * reached the card. Every entry is carried; `buildProblems` judges them.
+     */
+    ...(Array.isArray(r.items) ? { items: readItems(r.items) } : {}),
   };
   // A plan naming placeholders is not publish-ready whatever the flag says: the list is the fact.
   if (report.phase === "PLAN" && (report.placeholders?.length ?? 0) > 0) report.publish_ready = false;
@@ -415,6 +421,24 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
   if (report.status === "unchanged" && !report.materials) return { report: null, problem: "an unchanged report must carry the material set it compared" };
   if (report.status !== "ok" && report.status !== "unchanged" && !report.reason) return { report: null, problem: `a ${report.status} report must say why` };
   return { report, problem: null };
+}
+
+/** The BUILD's per-item done-lines, entry for entry, with each done-when check as reported. */
+function readItems(v: unknown[]): NonNullable<LocalJobReport["items"]> {
+  return v.slice(0, 40).map((raw) => {
+    const i = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    const state = ["done", "partial", "not_done"].includes(String(i.state)) ? (String(i.state) as "done" | "partial" | "not_done") : "not_done";
+    const checks = Array.isArray(i.done_when)
+      ? i.done_when.slice(0, 20).map((c) => { const o = (c && typeof c === "object" ? c : {}) as Record<string, unknown>; return { check: typeof o.check === "string" ? o.check.slice(0, 200) : "", met: o.met === true, ...(typeof o.note === "string" ? { note: o.note.slice(0, 300) } : {}) }; })
+      : undefined;
+    return {
+      item: typeof i.item === "string" ? i.item.trim().slice(0, 200) : "",
+      state,
+      ...(typeof i.note === "string" ? { note: i.note.slice(0, 300) } : {}),
+      ...(checks ? { done_when: checks } : {}),
+      ...(typeof i.blocked_by === "string" && i.blocked_by.trim() ? { blocked_by: i.blocked_by.trim().slice(0, 40) } : {}),
+    };
+  });
 }
 
 /** The report's dated later work, entry for entry: nothing is dropped here (see the reader). */

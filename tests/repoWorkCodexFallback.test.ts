@@ -207,7 +207,7 @@ describe("Codex edits; the runner commits, pushes and opens the PR — never mer
     const s = scratch({ url: "https://github.com/seq23/probe/pull/3", number: 3 });
     try {
       writeFileSync(path.join(s.wt, "fix.txt"), "the rebuild");
-      const fin = finishCodexBuild({ cwd: s.wt, branch: "work/wpc-probe", out: { phase: "BUILD", status: "ok", proof: "p" }, run: s.run });
+      const fin = finishCodexBuild({ cwd: s.wt, branch: "work/wpc-probe", out: { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], proof: "p" }, run: s.run });
       expect(fin.ok && fin.result.pr_number).toBe(3);
       expect(s.gh.some((a) => a[1] === "create")).toBe(false);
     } finally {
@@ -219,7 +219,7 @@ describe("Codex edits; the runner commits, pushes and opens the PR — never mer
     const s = scratch();
     try {
       writeFileSync(path.join(s.main, "x.txt"), "x");
-      const onMain = finishCodexBuild({ cwd: s.main, branch: "main", out: { phase: "BUILD", status: "ok" }, run: s.run });
+      const onMain = finishCodexBuild({ cwd: s.main, branch: "main", out: { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }] }, run: s.run });
       expect(onMain.ok ? "" : onMain.tag).toBe("REFUSED_PROTECTED_BRANCH");
       writeFileSync(path.join(s.wt, "y.txt"), "y");
       const real = finishCodexBuild({ cwd: s.wt, branch: "work/wpc-probe", out: { phase: "BUILD", status: "failed", reason: "npm run validate failed: 3 tests red" }, run: s.run });
@@ -228,7 +228,7 @@ describe("Codex edits; the runner commits, pushes and opens the PR — never mer
       expect(runs.ok ? "" : runs.tag).toBe("NOT_FINISHED");
       expect(git(s.wt, "status", "--porcelain")).not.toBe("");
       rmSync(path.join(s.wt, "y.txt"));
-      const empty = finishCodexBuild({ cwd: s.wt, branch: "work/wpc-probe", out: { phase: "BUILD", status: "ok" }, run: s.run });
+      const empty = finishCodexBuild({ cwd: s.wt, branch: "work/wpc-probe", out: { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }] }, run: s.run });
       expect(empty.ok ? "" : empty.tag).toBe("NO_CHANGES");
       expect(s.gh).toEqual([]);
     } finally {

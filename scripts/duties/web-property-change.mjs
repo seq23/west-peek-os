@@ -530,6 +530,130 @@ export async function runModel(opts, deps = {}) {
   return r;
 }
 
+/*
+ * ── THE v1.0 BAR: A FRESH-EYES REVIEW AND A FIRST RUN (owner, 13 Nov 2026) ─────────────────────────────────────
+ * Builds came out v0.1: the bar was "the site looks right in screenshots", the builder graded itself, and nobody used
+ * the preview as the partner would before it was emailed (Scooter could not sign in to his dashboard). So BUILD now:
+ *   1 · REVIEW. Before the PR is read, a second model turn in a FRESH context reviews the branch as a veteran engineer,
+ *       a UX designer and a PM, against the plan's done-when checks and the partner's own words. Blocking findings go
+ *       back to the builder on the same branch, at most REVIEW_ROUNDS times; still blocking after that is a NAMED STOP
+ *       on the card, never a preview. The turn runs down the same rule table as every turn (`runModel`), so a private
+ *       job stays private: Claude only, never a free or training route.
+ *   2 · FIRST RUN. Right after the preview link is read, the repo's own `first-run` script plays the partner's first
+ *       session on the preview (sign in, real data, save one change, reload, still there) and must print FIRST_RUN OK.
+ *       Anything else fails the BUILD with a NAMED STOP, so the Worker never emails a preview that does not work.
+ */
+export const REVIEW_PHASE = "REVIEW";
+export const REVIEW_ROUNDS = 2;
+export const FIRST_RUN_SCRIPT = "first-run";
+export const FIRST_RUN_SENTINEL = "FIRST_RUN OK";
+
+/** The reviewer's file: `{ findings: [{ lens, finding, blocking }] }`. Unreadable → null (the caller names the stop). */
+export function readReview(text) {
+  try {
+    const j = JSON.parse(String(text ?? ""));
+    if (!j || typeof j !== "object" || !Array.isArray(j.findings)) return null;
+    const findings = j.findings.filter((f) => f && typeof f === "object" && String(f.finding ?? "").trim()).map((f) => ({ lens: String(f.lens ?? "").slice(0, 20), finding: String(f.finding).slice(0, 600), blocking: f.blocking === true }));
+    return { findings, summary: String(j.summary ?? "").slice(0, 600) };
+  } catch {
+    return null;
+  }
+}
+
+/** One review turn: a fresh context, its own phase on the rule table (HARD; private stays private). */
+export async function runReview(opts, deps = {}) {
+  return runModel({ ...opts, phase: REVIEW_PHASE }, deps);
+}
+
+/**
+ * Review, fix, review again — bounded. `review(round)` → `{ verdict }` or `{ report }` (a wait or a stop to return as
+ * it is); `rebuild(blocking, round)` → `{}` when the builder fixed and wrote a fresh ok result, or `{ report }`.
+ * Returns `{ line }` (for the proof) or `{ report }`.
+ */
+export async function reviewAndFix({ review, rebuild, rounds = REVIEW_ROUNDS, phase = "BUILD" }) {
+  let fixed = 0;
+  for (let round = 0; ; round += 1) {
+    const r = await review(round);
+    if (r.report) return { report: r.report };
+    if (!r.verdict) return { report: { phase, status: "failed", reason: "NAMED STOP [REVIEW_UNREADABLE] the fresh-eyes review wrote no readable review file; the build is not shown to the partner unreviewed." } };
+    const blocking = r.verdict.findings.filter((f) => f.blocking);
+    const notes = r.verdict.findings.length - blocking.length;
+    if (blocking.length === 0) return { line: `reviewed with fresh eyes (engineer, UX, PM): ${fixed} fixed${notes ? `, ${notes} note${notes === 1 ? "" : "s"}` : ""}${r.verdict.summary ? ` — ${r.verdict.summary}` : ""}` };
+    if (round >= rounds) {
+      return { report: { phase, status: "failed", reason: `NAMED STOP [REVIEW_NOT_MET] after ${rounds} fix round${rounds === 1 ? "" : "s"} the review still finds: ${blocking.map((f) => `${f.lens ? `${f.lens}: ` : ""}${f.finding}`).join("; ").slice(0, 1200)}` } };
+    }
+    const b = await rebuild(blocking, round);
+    if (b?.report) return { report: b.report };
+    fixed += blocking.length;
+  }
+}
+
+/** Did the first run pass? Only a zero exit that printed the sentinel counts; no script is a stop, never a pass. */
+export function firstRunVerdict({ hasScript, exit, out }) {
+  if (!hasScript) return { ok: false, line: `NAMED STOP [FIRST_RUN_MISSING] the build left no \`${FIRST_RUN_SCRIPT}\` script in package.json, so nobody has used the preview as the partner will; the preview is not sent.` };
+  const tail = String(out ?? "").trim().split("\n").filter(Boolean).slice(-3).join(" | ").slice(0, 600);
+  if (exit !== 0) return { ok: false, line: `NAMED STOP [FIRST_RUN_FAILED] the first run on the preview exited ${exit}: ${tail}; the preview is not sent.` };
+  const said = String(out ?? "").split("\n").find((l) => l.includes(FIRST_RUN_SENTINEL));
+  if (!said) return { ok: false, line: `NAMED STOP [FIRST_RUN_SILENT] the first run exited 0 but never printed "${FIRST_RUN_SENTINEL}", so it proved nothing; the preview is not sent.` };
+  return { ok: true, line: `first run on the preview: ${said.trim().slice(0, 400)}` };
+}
+
+/** Run the repo's first-run script against the preview with the repo's allowed keys. */
+async function firstRunOn(worktree, previewUrl, env, allowedNames, progress) {
+  let hasScript = false;
+  try {
+    hasScript = Boolean(JSON.parse(readFileSync(path.join(worktree, "package.json"), "utf8"))?.scripts?.[FIRST_RUN_SCRIPT]);
+  } catch {
+    hasScript = false;
+  }
+  if (!hasScript) return firstRunVerdict({ hasScript });
+  progress(`first run on ${previewUrl}`);
+  try {
+    const { stdout, stderr } = await execFileAsync("npm", ["run", FIRST_RUN_SCRIPT, "--", "--url", previewUrl], { cwd: worktree, env: { ...envForRepoRun(env, [...new Set([...allowedNames, ...PLATFORM_RUN_NAMES])]), CI: "1", FIRST_RUN_URL: previewUrl }, timeout: 10 * 60_000, maxBuffer: 16 * 1024 * 1024 });
+    return firstRunVerdict({ hasScript, exit: 0, out: `${stdout}\n${stderr}` });
+  } catch (err) {
+    return firstRunVerdict({ hasScript, exit: typeof err?.code === "number" ? err.code : 1, out: `${err?.stdout ?? ""}\n${err?.stderr ?? ""}\n${err?.message ?? ""}` });
+  }
+}
+
+/**
+ * The review loop for one repo's BUILD, wired to the model. Returns `{ line, result }` (the builder's latest ok result)
+ * or `{ report }`. `base` is the BUILD prompt; the reviewer gets it plus the builder's result and the REVIEW section.
+ */
+async function reviewBuild({ job, base, result, names, jobDir, packageDir, resultPath, ctx, progress, tag = "" }) {
+  let latest = result;
+  const reviewPath = (round) => path.join(jobDir, `review${tag}-${round + 1}.json`);
+  const out = await reviewAndFix({
+    review: async (round) => {
+      rmSync(reviewPath(round), { force: true });
+      const prompt = `${base}\n\nTHIS RUN IS PHASE REVIEW, NOT BUILD: follow "## Phase REVIEW" only. Do not edit the worktree.\nREVIEW_PATH: ${reviewPath(round)}\nTHE BUILDER'S RESULT: ${JSON.stringify(latest).slice(0, 12000)}`;
+      writeFileSync(path.join(jobDir, `prompt-REVIEW${tag}-${round + 1}.md`), prompt);
+      progress(`fresh-eyes review${tag ? ` of ${tag.slice(1)}` : ""}, round ${round + 1}`);
+      const r = await runReview({ job, prompt, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress });
+      writeFileSync(path.join(jobDir, `claude-REVIEW${tag}-${round + 1}.out`), `${r.out}\n--- stderr ---\n${r.err}`);
+      const verdict = existsSync(reviewPath(round)) ? readReview(readFileSync(reviewPath(round), "utf8")) : null;
+      const spent = spentReport("BUILD", r, verdict);
+      return spent ? { report: spent } : { verdict };
+    },
+    rebuild: async (blocking, round) => {
+      rmSync(resultPath, { force: true });
+      const prompt = `${base}\n\nTHE FRESH-EYES REVIEW FOUND (fix every one on this branch, commit, push, then write RESULT_PATH again in the usual shape):\n${blocking.map((f, i) => `${i + 1}. ${f.lens ? `[${f.lens}] ` : ""}${f.finding}`).join("\n")}`;
+      const phase = "BUILD";
+      const claude = await runModel({ job, prompt, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
+      finishIfCodex(claude, { phase, resultPath, worktree: names.worktree, branch: names.branch, jobDir, progress });
+      writeFileSync(path.join(jobDir, `claude-BUILD${tag}-fix${round + 1}.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
+      const { result: again, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "BUILD");
+      const spent = spentReport("BUILD", claude, again);
+      if (spent) return { report: spent };
+      if (!again) return { report: { phase: "BUILD", status: "failed", reason: `the fix after the review ended (exit ${claude.code}) but ${problem}` } };
+      if (again.status !== "ok") return { report: { phase: "BUILD", status: again.status, reason: String(again.reason ?? "").slice(0, 1500) } };
+      latest = again;
+      return {};
+    },
+  });
+  return out.report ? out : { line: out.line, result: latest };
+}
+
 function appendRouteLog(opts, route) {
   const dir = opts.jobDir ?? null;
   if (!dir) return;
@@ -1218,6 +1342,11 @@ export async function run(job, ctx) {
      * what it observed is what goes in the proof. Nothing the model wrote about env vars is carried
      * forward — `configLines` is built entirely from `applyPagesEnv`'s return.
      */
+    // THE v1.0 BAR, PART 1: a fresh-eyes review before the PR is read; its fixes land on the same branch.
+    const reviewed = await reviewBuild({ job, base: prompt, result, names, jobDir, packageDir, resultPath, ctx, progress });
+    if (reviewed.report) return { ...reviewed.report, ...carried };
+    result = reviewed.result;
+    if (Array.isArray(result.items)) carried.items = itemsOf(result);
     const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress, registryAllowance(book, secrets), { branch: names.branch });
     // THE SCRIPT OBSERVES THE PR AND ITS CHECKS. The model's pr_url is a claim; gh is the fact.
     let pr;
@@ -1235,6 +1364,9 @@ export async function run(job, ctx) {
     const previewUrl = checks.state === "GREEN" ? await previewUrlFor(names.worktree, pr.number, progress, job.pages_hosts ?? [], names.branch, ctx.env, ctx.signal) : null;
     const undeployed = undeployedPreviewReason(checks.state, previewUrl, job.pages_hosts, pr.url);
     if (undeployed) return { phase, status: "failed", reason: undeployed };
+    // THE v1.0 BAR, PART 2: the partner's first session, played on the preview before anyone is told it exists.
+    const firstRun = previewUrl ? await firstRunOn(names.worktree, previewUrl, ctx.env, secrets.allowed, progress) : { ok: true, line: "first run: this repo has no preview to run it on" };
+    if (!firstRun.ok) return { phase, status: "failed", reason: firstRun.line, ...carried };
     const changedFiles = await changedFilesFor(names.worktree, pr.number);
     return {
       phase,
@@ -1252,7 +1384,7 @@ export async function run(job, ctx) {
       changed_files: changedFiles,
       // The model's own proof, then what the SCRIPT did about delivery config — in that order, so
       // a reader sees the claim and the observation side by side and can tell which is which.
-      proof: [String(result.proof ?? "").slice(0, 8000), ...configLines, ...runLines(runsDone), ...(carried.dns_proof ?? []), privacy.line].filter(Boolean).join("\n"),
+      proof: [String(result.proof ?? "").slice(0, 8000), reviewed.line, firstRun.line, ...configLines, ...runLines(runsDone), ...(carried.dns_proof ?? []), privacy.line].filter(Boolean).join("\n"),
       pages_env_proof: configLines,
       // What is still missing after this rebuild, re-checked against the re-mapped package (0237).
       ...(Array.isArray(result.missing_materials) ? { missing_materials: result.missing_materials } : {}),
@@ -1650,9 +1782,27 @@ async function carriedFacts({ book, secrets, result, runsDone, job, outDir, work
     // refuses a plan that defers what the partner did not date. Nothing is thinned here in silence.
     ...(Array.isArray(result?.deferred) ? { deferred: result.deferred.slice(0, 5).map((d) => ({ ask: String(d?.ask ?? "").slice(0, 1200), due_at: String(d?.due_at ?? ""), words: d?.words ? String(d.words).slice(0, 200) : undefined, site_change: d?.site_change === true })) } : {}),
     // #363: the plan's per-ask accounting, as the model wrote it; the Worker holds the plan to it.
-    ...(Array.isArray(result?.accounting) ? { accounting: result.accounting.slice(0, 40).map((a) => ({ ask: String(a?.ask ?? "").slice(0, 300), how: String(a?.how ?? "").slice(0, 40) })) } : {}),
-    ...(Array.isArray(result?.items) ? { items: result.items.filter((i) => i && typeof i === "object" && String(i.item ?? "").trim() && ["done", "partial", "not_done"].includes(i.state)).map((i) => ({ item: String(i.item).slice(0, 200), state: i.state, note: i.note ? String(i.note).slice(0, 300) : undefined })) } : {}),
+    ...(Array.isArray(result?.accounting) ? { accounting: accountingOf(result) } : {}),
+    ...(Array.isArray(result?.items) ? { items: itemsOf(result) } : {}),
   };
+}
+
+/** The plan's per-ask accounting with each built ask's done-when checks, as the model wrote it. */
+export function accountingOf(result) {
+  return (Array.isArray(result?.accounting) ? result.accounting : []).slice(0, 40).map((a) => ({ ask: String(a?.ask ?? "").slice(0, 300), how: String(a?.how ?? "").slice(0, 40), ...(Array.isArray(a?.done_when) ? { done_when: a.done_when.map((c) => String(c).slice(0, 200)).slice(0, 20) } : {}) }));
+}
+
+/** The BUILD's per-item done-lines with each done-when check (met or not) and what holds an unmet one. */
+export function itemsOf(result) {
+  return (Array.isArray(result?.items) ? result.items : [])
+    .filter((i) => i && typeof i === "object" && String(i.item ?? "").trim() && ["done", "partial", "not_done"].includes(i.state))
+    .map((i) => ({
+      item: String(i.item).slice(0, 200),
+      state: i.state,
+      note: i.note ? String(i.note).slice(0, 300) : undefined,
+      ...(Array.isArray(i.done_when) ? { done_when: i.done_when.slice(0, 20).map((c) => ({ check: String(c?.check ?? "").slice(0, 200), met: c?.met === true, ...(c?.note ? { note: String(c.note).slice(0, 300) } : {}) })) } : {}),
+      ...(i.blocked_by ? { blocked_by: String(i.blocked_by).slice(0, 40) } : {}),
+    }));
 }
 
 // ── Several repos (0236) ─────────────────────────────────────────────────────────────────────
@@ -1809,11 +1959,13 @@ async function runSeveral(job, ctx) {
     if (!result) return { phase, status: "failed", reason: `PLAN ended (claude exit ${claude.code}) but ${problem}` };
     if (result.status !== "ok") return { phase, status: result.status, reason: String(result.reason).slice(0, 1500) };
     writeFileSync(path.join(jobDir, "plan.md"), result.document);
-    return { phase, status: "ok", document: result.document, decided: result.decided ?? [], asks: result.asks ?? [], publish_ready: result.publish_ready, placeholders: result.placeholders ?? [], missing_materials: result.missing_materials ?? [], assets: result.assets ?? [], notes: costNote(result.notes, cost) };
+    // The plan's accounting and dated later work ride on a several-repo plan too: the Worker refuses a plan without them.
+    return { phase, status: "ok", document: result.document, decided: result.decided ?? [], asks: result.asks ?? [], publish_ready: result.publish_ready, placeholders: result.placeholders ?? [], missing_materials: result.missing_materials ?? [], assets: result.assets ?? [], ...(Array.isArray(result.accounting) ? { accounting: accountingOf(result) } : {}), ...(Array.isArray(result.deferred) ? { deferred: result.deferred.slice(0, 5).map((d) => ({ ask: String(d?.ask ?? "").slice(0, 1200), due_at: String(d?.due_at ?? ""), words: d?.words ? String(d.words).slice(0, 200) : undefined, site_change: d?.site_change === true })) } : {}), notes: costNote(result.notes, cost) };
   }
 
   if (phase === "BUILD") {
     const reports = [];
+    const items = [];
     const stillMissing = [];
     let anyRebuilt = false;
     for (const p of parts) {
@@ -1843,8 +1995,12 @@ async function runSeveral(job, ctx) {
         if (spentReport(phase, claude, result)) return { ...spentReport(phase, claude, result), parts: reports };
         if (!result) return { phase, status: "failed", reason: `BUILD of ${p.repo} ended (claude exit ${claude.code}) but ${problem}`, parts: reports };
         if (result.status !== "ok") return { phase, status: result.status, reason: `${p.repo}: ${String(result.reason).slice(0, 1400)}`, parts: reports };
+        const reviewed = await reviewBuild({ job, base: prompt, result, names: p.names, jobDir, packageDir, resultPath, ctx, progress, tag: `-${p.repo}` });
+        if (reviewed.report) return { ...reviewed.report, reason: `${p.repo}: ${reviewed.report.reason ?? ""}`.slice(0, 1500), parts: reports };
+        result = reviewed.result;
+        items.push(...itemsOf(result).map((i) => ({ ...i, item: `${p.repo}: ${i.item}`.slice(0, 200) })));
         const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress, registryAllowance(p.book, p.secrets), { branch: p.names.branch });
-        proof = [String(result.proof ?? "").slice(0, 6000), ...configLines].filter(Boolean).join("\n");
+        proof = [String(result.proof ?? "").slice(0, 6000), reviewed.line, ...configLines].filter(Boolean).join("\n");
         anyRebuilt = true;
       }
       let pr;
@@ -1857,6 +2013,11 @@ async function runSeveral(job, ctx) {
       const previewUrl = checks.state === "GREEN" ? await previewUrlFor(p.names.worktree, pr.number, progress, p.pages_hosts ?? [], p.names.branch, ctx.env, ctx.signal) : null;
       const undeployed = undeployedPreviewReason(checks.state, previewUrl, p.pages_hosts, pr.url);
       if (undeployed) return { phase, status: "failed", reason: `${p.repo}: ${undeployed}`, parts: reports };
+      if (previewUrl && proof) {
+        const firstRun = await firstRunOn(p.names.worktree, previewUrl, ctx.env, p.secrets.allowed, progress);
+        if (!firstRun.ok) return { phase, status: "failed", reason: `${p.repo}: ${firstRun.line}`.slice(0, 1500), parts: reports };
+        proof = `${proof}\n${firstRun.line}`;
+      }
       const changedFiles = await changedFilesFor(p.names.worktree, pr.number);
       reports.push({ repo: p.repo, pr_url: pr.url, pr_number: pr.number, branch: p.names.branch, check_state: checks.state, check_url: checks.url ?? undefined, preview_url: previewUrl ?? undefined, changed_files: changedFiles, proof: proof || undefined });
     }
@@ -1870,7 +2031,7 @@ async function runSeveral(job, ctx) {
       proof: reports.map((r) => `── ${r.repo} ──\n${r.proof ?? "(re-observed; built in an earlier run)"}`).join("\n\n"),
       parts: reports,
       // What is still missing after THIS rebuild, across every repo rebuilt (absent when none was).
-      ...(anyRebuilt ? { missing_materials: stillMissing } : {}),
+      ...(anyRebuilt ? { missing_materials: stillMissing, items } : {}),
       reason: red.length ? `not every PR is green: ${red.map((r) => `${r.repo} ${r.check_state} (${r.pr_url})`).join(", ")}` : undefined,
     };
   }

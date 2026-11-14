@@ -16,12 +16,29 @@
  *       replies, a file they shared), and they must say WHEN. An employee never dates, re-dates,
  *       splits off or re-scopes an ask by itself.
  *
+ *   3 · EVERY BUILT ASK SAYS WHEN IT IS DONE (owner's v1.0 bar, 13 Nov 2026: builds come out "v1.0 final with
+ *       persistence and veteran UX/UI POV", not v0.1). A `build` line carries `done_when`: the checks that make it
+ *       finished (real data source, survives a reload and a second device, sign-in, empty and error states, help,
+ *       phone first). A BUILD reports each item against its checks (`buildProblems`); a check not met is refused
+ *       unless something only the partner can supply is what holds it (a key, a file) or the partner dated it.
+ *
  * WHAT THIS CANNOT SEE: whether the list is complete. An ask the plan never mentions is caught only
  * by the list being the plan's stated contract, which the partner and the card can read.
  */
 export interface AskLine {
   ask: string;
   how: string;
+  /** For a `build` line: the checks that make this ask finished (the prompt's "Definition of done"). */
+  done_when?: readonly string[] | null;
+}
+
+/** One BUILD item, reported against the checks its plan line set. */
+export interface DoneItem {
+  item: string;
+  state: string;
+  done_when?: ReadonlyArray<{ check: string; met: boolean; note?: string }> | null;
+  /** Why an item is not finished: only what the partner alone can supply, or work they dated themselves. */
+  blocked_by?: string | null;
 }
 
 export interface DeferredLine {
@@ -68,7 +85,9 @@ export function planProblems(input: { partnerText: string; accounting?: readonly
     const how = String(l.how ?? "").toLowerCase();
     const what = `"${String(l.ask ?? "").slice(0, 120)}"`;
     if (!String(l.ask ?? "").trim()) problems.push("an `accounting` line names no ask");
-    else if (how === "build") continue;
+    else if (how === "build") {
+      if (!(l.done_when ?? []).some((c) => String(c ?? "").trim())) problems.push(`${what} is to be built, but the plan does not say when it is done (no \`done_when\` checks)`);
+    }
     else if (how === "question") {
       if ((input.asks ?? []).length === 0) problems.push(`${what} is marked as a question, but the plan asks the partner nothing`);
     } else if (how === "later") later++;
@@ -76,6 +95,40 @@ export function planProblems(input: { partnerText: string; accounting?: readonly
   }
   if (later > datedCount) problems.push(`${later} ask${later === 1 ? " is" : "s are"} marked "later" without the partner's own dated words behind ${later === 1 ? "it" : "each"}`);
   return problems;
+}
+
+/**
+ * Why this BUILD is not finished, in plain words; empty when it is. Every item reports its `done_when`
+ * checks; each must be met. An item that is not met is accepted only when it is held by something the
+ * partner alone can supply AND the report names it (`missing_secret` with a missing key listed,
+ * `missing_material` with a missing file listed), or by work the partner dated (`partner_dated`; the
+ * plan check already holds the dating to their words). Never a silent "partial".
+ */
+export function buildProblems(input: { items?: readonly DoneItem[] | null; missingSecrets?: number; missingMaterials?: number }): string[] {
+  const items = input.items ?? [];
+  if (items.length === 0) return ["it did not report each ask against its done-when checks (no `items` list)"];
+  const problems: string[] = [];
+  for (const i of items) {
+    const what = `"${String(i.item ?? "").slice(0, 120)}"`;
+    const checks = (i.done_when ?? []).filter((c) => String(c?.check ?? "").trim());
+    const unmet = checks.filter((c) => c.met !== true);
+    if (checks.length === 0) {
+      problems.push(`${what} reports no done-when checks`);
+      continue;
+    }
+    if (i.state === "done" && unmet.length === 0) continue;
+    const by = String(i.blocked_by ?? "");
+    const held = (by === "missing_secret" && (input.missingSecrets ?? 0) > 0) || (by === "missing_material" && (input.missingMaterials ?? 0) > 0) || by === "partner_dated";
+    if (held) continue;
+    const named = unmet.length ? unmet.map((c) => c.check.slice(0, 80)).join(", ") : `its state is "${String(i.state).slice(0, 20)}"`;
+    problems.push(`${what} is not finished (${named})${by ? ` and "${by.slice(0, 40)}" is not something only the partner can supply` : ""}`);
+  }
+  return problems;
+}
+
+/** The line a refused build leaves on the card and hands to the next BUILD. */
+export function buildRefusalLine(problems: readonly string[]): string {
+  return `BUILD REFUSED — not finished to the v1.0 bar (the prompt's Definition of done): ${problems.join("; ")}. Build again on the same branch until every done-when check is met.`;
 }
 
 /** The line a refused plan leaves on the card and hands to the next PLAN. */

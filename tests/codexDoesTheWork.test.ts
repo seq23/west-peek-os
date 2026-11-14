@@ -64,7 +64,7 @@ describe("which route does a Mac job's turn", () => {
       const job = { card_kind: WEB };
       const prompts: string[] = [];
       const first = fakes({ claudeSpent: true });
-      writeFileSync(path.join(jobDir, "result-BUILD.json"), JSON.stringify({ phase: "BUILD", status: "ok", pr_url: "https://example.test/pull/1" }));
+      writeFileSync(path.join(jobDir, "result-BUILD.json"), JSON.stringify({ phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://example.test/pull/1" }));
       const held = await runModel({ job, phase: "BUILD", prompt: PLAIN, jobDir }, first);
       expect(held.heldForClaude).toBeTruthy();
       expect(existsSync(path.join(jobDir, "codex-result-BUILD.json")), "Codex's result is kept for Claude to read").toBe(true);

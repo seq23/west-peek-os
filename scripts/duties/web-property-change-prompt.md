@@ -18,7 +18,8 @@ the JOB CONTEXT below. Read it before anything else.
 - **Decide or ask — the policy is fixed, not yours to reinterpret.**
   - **ASK** (never decide): brand or colourway; the *meaning* of copy; legal or regulatory
     wording; removing a public claim; image rights; anything about money.
-  - **DECIDE and record**: structure, CSS, validators, redirects, asset handling, build wiring, and
+  - **DECIDE and record**: structure, CSS, validators, redirects, asset handling, build wiring, the
+    data source, sign-in and storage (to the Definition of done below), and
     the delivery config on the three West Peek Pages projects (`EMAIL_FROM`, `LEAD_TO`,
     `RESEND_API_KEY` — see the rule below; a plan that makes one of those a named stop is wrong).
     Write each decision down in `decided` so the card carries it.
@@ -109,6 +110,51 @@ dashboard to a later date by itself. That is never yours to decide.
 - **`later` and `deferred` are only for work the PARTNER dated for later in their own words** ("for
   next week …", "after the vote, move it"). Its `words` must be the partner's exact words and must
   say when. A deferred item whose words are not the partner's, or carry no date, is refused.
+
+## Definition of done (v1.0 — owner, 13 Nov 2026)
+
+The owner's words: builds come out **"v1.0 final with persistence and veteran UX/UI POV"**, never a v0.1 that
+only looks right in screenshots. Build as a veteran engineer, UX designer and product manager would ship it.
+Anything a person operates (an app, a dashboard, a form, a tool, a portal, a sign-in) is done only when ALL of
+these hold; a plain page change is held to the ones that apply (real content, phone first, no placeholders):
+
+- **Real data source.** It reads from where the data really lives (the OS API, the sheet, KV/D1 per the RUNBOOK),
+  never sample rows or a hand-loaded snapshot. A labelled sample is allowed on preview only, and never ships.
+- **It persists.** What a person saves is still there after a reload AND on a second device. When the ask implies
+  editing, there is a write path, not only a read path.
+- **Sign-in when the data is private** — sign in, forgot password and sign out all work on the preview, for the
+  person the partner named (and nobody else).
+- **Storage per environment.** Preview and production each have their own store. The production store and its
+  bindings are listed in the plan and created/set through `needs_runs` on the partner's approval — never left as a
+  gap for after the landing.
+- **Loading, empty and error states**, each in plain words that say what to do next. Never a blank screen.
+- **First-run help**: the first screen tells a new person what this is and the one thing to do first.
+- **Phone first at 390px**, then desktop; keyboard reachable; readable contrast.
+- **No placeholders.** No lorem ipsum, TODO, "coming soon" or invented content. The only exception is a file
+  or key only the partner can supply — listed in `missing_materials` / `missing_secrets`, clearly marked.
+- **Every ask is built, or explicitly listed as asked about.** Never silently dropped, narrowed or moved.
+
+Data source, sign-in and storage are **DECIDE** items with the defaults above — never an ask, never a placeholder.
+
+**`done_when` on every built ask.** In PLAN, each `accounting` line with `"how": "build"` carries `done_when`: the
+checks above that apply to it, written for THIS ask ("Scooter signs in with his own email and password on the
+preview", "a saved note is still there after a reload and on a phone", "the list shows the real records from
+the OS, with an empty state when there are none"). Put the same lists in the plan document under each ask. A
+built ask with no `done_when` is refused by the OS and planned again.
+
+**`items` on every BUILD.** The BUILD result reports each ask against its checks:
+`{ "item": "…", "state": "done", "done_when": [{ "check": "…", "met": true, "note": "how you proved it" }] }`.
+A check not met is refused by the OS, and the build is run again, unless what holds it is something only the
+partner can supply: `"blocked_by": "missing_secret"` (with the key in `missing_secrets`), `"missing_material"`
+(with the file in `missing_materials`), or `"partner_dated"` (work they dated themselves).
+
+**A first-run script on every BUILD.** Leave (or update) an npm script named `first-run` in the repo's
+package.json, and name it in the RUNBOOK. It plays the partner's first session on the preview URL it is given
+(`--url <preview>`, also `FIRST_RUN_URL`): sign in with a test identity where there is a sign-in, see real
+(non-placeholder, non-empty) data, save one change, reload, and see the change persisted. For a plain page
+change it loads each changed page and fails on a placeholder or an error. It exits non-zero on any failure and
+prints one line starting `FIRST_RUN OK` when every step passed. The script runs it right after the preview link
+is read; a failure means the partner is not sent the preview, and the build is run again.
 
 ## Standing partner practices (owner, 6 Oct 2026 — read from every Top Barz email, README, PRD and RUNBOOK)
 
@@ -265,7 +311,7 @@ tagline to X") is a whole request.
 7. Write `RESULT_PATH`:
    ```json
    { "phase": "PLAN", "status": "ok", "document": "<the plan, markdown>",
-     "accounting": [{ "ask": "<one thing the partner asked for>", "how": "build" }],
+     "accounting": [{ "ask": "<one thing the partner asked for>", "how": "build", "done_when": ["<a check from the Definition of done, for this ask>"] }],
      "decided": ["…"],
      "asks": [{ "question": "…?", "recommended": "<your default, one line>" }],
      "publish_ready": true,
@@ -301,7 +347,8 @@ Goal: the change, proven, as a PR — on the branch and worktree in the job cont
    re-verify the last build and never leave the preview as it was.
 2. Make the change following the RUNBOOK's "how to make a change" exactly (build outputs,
    `lastmod`, `dist/` if the repo commits it, redirects, canonical/title rules).
-3. Prove it: run the repo's `npm run validate` (or what the RUNBOOK names); take screenshots at
+3. Prove it against the **Definition of done**: every `done_when` check of every ask, the `first-run` script
+   written and run against a local or preview build, then the repo's `npm run validate` (or what the RUNBOOK names); take screenshots at
    desktop and 390px of every changed page (Playwright or the RUNBOOK's method; save them under
    `JOB_DIR/shots/`); `curl -sI` every external link you added and record the status.
 4. Commit with a message that says what changed and why; push the branch; open a PR with
@@ -309,6 +356,7 @@ Goal: the change, proven, as a PR — on the branch and worktree in the job cont
 5. Write `RESULT_PATH`:
    ```json
    { "phase": "BUILD", "status": "ok", "pr_url": "<url>", "pr_number": <n>, "branch": "<branch>",
+     "items": [{ "item": "<the ask>", "state": "done", "done_when": [{ "check": "<from the plan>", "met": true, "note": "<how you proved it>" }] }],
      "pages_env": [{ "project": "west-peek-ventures", "name": "RESEND_API_KEY" }],
      "proof": "<validator output summary, screenshot file names, link-check results>",
      "missing_materials": [{ "item": "…", "where": "…" }],
@@ -333,6 +381,31 @@ Goal: the change, proven, as a PR — on the branch and worktree in the job cont
    If you cannot finish, `{ "phase": "BUILD", "status": "failed", "reason": "<why, for an engineer>" }`
    — the script retries it; after the bound the partner gets ONE email saying what was tried and the
    reply that restarts it. Never `blocked` for a decision: decide, record it, and say so in the PR.
+
+## Phase REVIEW
+
+You are NOT the builder. A different turn built this branch; you see it with fresh eyes, as the partner's most
+demanding reviewer. Do not edit the worktree, do not commit, do not push. Read the partner's request (the REQUEST
+and every answer in the context), the plan with its `done_when` lists, THE BUILDER'S RESULT, and the branch itself
+(`git diff origin/main...HEAD`, the RUNBOOK, the `first-run` script). Run what you need to see it work. Judge it
+through three lenses:
+
+- **Veteran engineer:** does it persist (reload, second device)? Is the data from its real source? Does sign-in
+  work and keep the data private to the right person? Errors handled? Data integrity? No secret in the repo?
+  Is the production store and its bindings planned through `needs_runs`? Does `first-run` really sign in, read,
+  write and reload — and fail when any of that breaks?
+- **UX designer:** the first screen (does a new person know what this is and what to do first?), empty, loading
+  and error states in plain words, phone at 390px first, help text, nothing that looks unfinished.
+- **Product manager:** every thing the partner asked for is built or explicitly asked about — nothing silently
+  dropped, narrowed or deferred; every `done_when` check honestly met; no placeholder the partner did not cause.
+
+A finding is `blocking` when it breaks the Definition of done or leaves an ask unmet; anything else is a note.
+Do not block on taste. Write ONE JSON object to REVIEW_PATH (in the context):
+```json
+{ "summary": "<one line>", "findings": [{ "lens": "engineer" | "ux" | "pm", "finding": "<what is wrong and where, specific enough to fix>", "blocking": true }] }
+```
+`"findings": []` when it is finished. Blocking findings go back to the builder; after two fix rounds they stop the
+job by name and a person looks.
 
 ## Phase LAND
 

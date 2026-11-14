@@ -33,3 +33,20 @@ export function applyPagesEnv(
   registry?: unknown,
   opts?: { branch?: string; rebuildWaitMs?: number; putSecret?: (entry: { project: string; name: string }, env: Record<string, string | undefined>, environment: string) => Promise<{ outcome: string; why: string | null }> },
 ): Promise<string[]>;
+/** The v1.0 bar (13 Nov 2026): the fresh-eyes review and the first run on the preview. */
+export const REVIEW_PHASE: string;
+export const REVIEW_ROUNDS: number;
+export const FIRST_RUN_SCRIPT: string;
+export const FIRST_RUN_SENTINEL: string;
+export type ReviewFinding = { lens: string; finding: string; blocking: boolean };
+export function readReview(text: string | null | undefined): { findings: ReviewFinding[]; summary: string } | null;
+export function runReview(opts: Parameters<typeof runModel>[0], deps?: Parameters<typeof runModel>[1] & { resetsIn?: (notices: string[]) => number }): ReturnType<typeof runModel>;
+export function reviewAndFix(args: {
+  review: (round: number) => Promise<{ verdict?: { findings: ReviewFinding[]; summary: string } | null; report?: unknown }>;
+  rebuild: (blocking: ReviewFinding[], round: number) => Promise<{ report?: unknown }>;
+  rounds?: number;
+  phase?: string;
+}): Promise<{ line?: string; report?: { phase: string; status: string; reason: string } & Record<string, unknown> }>;
+export function firstRunVerdict(run: { hasScript: boolean; exit?: number; out?: string }): { ok: boolean; line: string };
+export function accountingOf(result: unknown): Array<{ ask: string; how: string; done_when?: string[] }>;
+export function itemsOf(result: unknown): Array<{ item: string; state: string; note?: string; done_when?: Array<{ check: string; met: boolean; note?: string }>; blocked_by?: string }>;
