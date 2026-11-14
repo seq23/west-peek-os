@@ -60,13 +60,13 @@ const pressJson = JSON.stringify({
 
 const urlCheck = async (url: string): Promise<boolean> => !url.includes("dead.example");
 
-/** The new truth for a month below the floor: the note still goes, labelled a thin month, and the card is a named stop on Sequoia. */
+/** The new truth for a month below the floor (owner, 14 Nov 2026): the note still goes, with no shortfall notice in it, and the card is a named stop on Sequoia. */
 async function expectThinMonth(out: { outcome: string; card?: { id: string } | null }): Promise<void> {
   expect(out.outcome).toBe("BLOCKED");
   const row = (await env.WP_OS_DB.prepare("SELECT state, block_reason, block_who, block_needed, description FROM work_card WHERE id = ?1").bind(out.card!.id).first<Record<string, string | null>>())!;
   expect(row).toMatchObject({ state: "BLOCKED", block_reason: "nothing_good_enough_to_send", block_who: "SEQUOIA" });
-  expect(String(row.block_needed)).toMatch(/below its floor after two searches \(\d+ customer lead\(s\) stood up, and a month needs 6/);
-  expect(String(row.description)).toMatch(/A THIN MONTH: \d+ customer lead\(s\) stood up/);
+  expect(String(row.block_needed)).toMatch(/below its floor after two searches \(\d+ customer leads? stood up, and a month needs 6/);
+  expect(String(row.description), "Scooter's note carries no shortfall notice").not.toMatch(/THIN MONTH|a month needs/i);
 }
 
 beforeAll(async () => {
@@ -309,11 +309,15 @@ describe("the monthly card on Walker's desk", () => {
     const mails = (await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'deliverable.emailed_to_partner'").bind(opened.cardId).all<{ payload_json: string }>()).results ?? [];
     const delivered = (await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ description: string }>())!.description;
     // The subject is the busy-executive one (≤ 70 chars, "Walker: <what>"), and the note is under it.
-    expect(delivered).toMatch(/Walker: West Peek Productions this month — \d+ lead\(s\), \d+ pitch\(es\)/);
+    expect(delivered).toMatch(/Walker: West Peek Productions in November — \d+ leads?, \d+ pitch(es)?/);
     expect(delivered).toMatch(/═══ 1 · WHO COULD BUY THIS MONTH/);
     expect(delivered).toMatch(/═══ 2 · PRESS PITCHES — YOURS TO SEND/);
     expect(delivered).toMatch(/Walker, your chief of staff/);
-    expect(delivered).toMatch(/os@joinwestpeek\.com/);
+    // Where to write back is said once, by the email's own sign-off (the note's second footer was dropped, 14 Nov 2026).
+    const { renderExecEmail } = await import("../src/shared/email/execEmail");
+    const { monthlySummary } = await import("../src/worker/services/productions");
+    const summary = monthlySummary("2026-11", [], [], [], []);
+    expect(renderExecEmail({ employee: "Walker", what: summary.what, tldr: summary.tldr, sections: summary.sections, details: delivered }).text).toMatch(/os@joinwestpeek\.com/);
     expect(mails.length, "at most one email for the month").toBeLessThanOrEqual(1);
     expect(searches).toBeGreaterThanOrEqual(2);
     expect(renderMonthlyEmail("2026-11", [], [], [])).toMatch(/Nothing with a live citation this month/);
@@ -389,7 +393,7 @@ describe("the monthly card on Walker's desk", () => {
     expect(judgePrompts.length, "one judgement per search go").toBe(4);
     expect(judgePrompts[0]).toMatch(/KEEP a lead only if ALL of these hold \(this month is 2027-01\)/);
     const delivered = (await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ description: string }>())!.description;
-    expect(delivered).toMatch(/1 lead\(s\), 1 pitch\(es\)/);
+    expect(delivered).toMatch(/1 lead, 1 pitch\b/);
     expect(delivered).toMatch(/1\. Example Nonprofit/);
     expect(delivered).not.toMatch(/\n\d+\. VK\n/);
     expect(delivered).not.toMatch(/B\. Guesser — GTM Letter/);
@@ -478,13 +482,44 @@ describe("a reply to an earlier month's note steers the next month (2 Nov 2026)"
   });
 });
 
+describe("a first email to a writer names no money and asks for no call (risk rule, 14 Nov 2026)", () => {
+  it("a pitch whose draft quotes prices or asks for a 20-minute conversation never reaches Scooter's note; a clean one does", async () => {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN','IN_PROGRESS','BLOCKED')").run();
+    const opened = await openProductionsCard(env, "productions_monthly", new Date("2027-06-01T14:00:00.000Z"));
+    const card = (await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(opened.cardId).first<Parameters<typeof runProductionsCard>[1]>())!;
+    const leads = JSON.stringify({ results: Array.from({ length: 6 }, (_, i) => ({ organisation: `Made-up Council ${i + 1}`, trigger: "launched a national plan", approach: "Head of Comms", angle: "keep it going", url: `https://council${i + 1}.example/plan` })) });
+    const pitch = (w: string, draft: string) => ({ writer: w, outlet: `${w} Weekly`, why_this_writer: "Slot 5 (wildcard, earned by one recent piece). She wrote about communities.", hook: "hook", proof_url: `https://${w.toLowerCase()}.example/piece`, draft });
+    const writers = JSON.stringify({ results: [
+      pitch("Priced", "Hi — we publish what it costs: $2,500–$7,500 for a webinar."),
+      pitch("Caller", "Hi — would you have time for a 20-minute conversation next week?"),
+      pitch("Clean", "Hi — we publish what our work costs; happy to share what we have learned, and real numbers, if it is useful."),
+      pitch("Plain", "Hi — your piece on communities was good; happy to share examples and numbers if it is useful for a follow-up."),
+    ] });
+    await runProductionsCard(env, card, {
+      search: async (_e, _a, prompt) => ({ ok: true, text: /journalists/.test(prompt) ? writers : leads, detail: "ok" }),
+      urlCheck: async () => true,
+      judge: keepAll,
+      pageText: async () => null,
+      now: new Date("2027-06-01T14:05:00.000Z"),
+      interpret: steersWith("Keep going as you are."),
+    });
+    const row = (await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ description: string }>())!;
+    const note = row.description;
+    expect(note).toMatch(/Clean — Clean Weekly/);
+    expect(note).toMatch(/Plain — Plain Weekly/);
+    expect(note, "a draft with prices is never put in front of Scooter to send").not.toMatch(/Priced — Priced Weekly|\$2,500/);
+    expect(note, "a draft that asks for a call is never put in front of Scooter to send").not.toMatch(/Caller — Caller Weekly|20-minute conversation/);
+    expect(note, "the brief's slot labels stay internal").not.toMatch(/Slot 5/);
+  });
+});
+
 describe("the monthly note's floor: six leads and two pitches, or it says it is a thin month (owner, 13 Nov 2026)", () => {
   it("October (9 and 3) and November (6 and 2) pass; five leads, one pitch, or the 16 Sep note (0 and 4) do not", async () => {
     const { monthlyFloor } = await import("../src/worker/services/productions");
     expect(monthlyFloor(9, 3)).toEqual({ ok: true, misses: [] });
     expect(monthlyFloor(6, 2)).toEqual({ ok: true, misses: [] });
-    expect(monthlyFloor(5, 2).misses).toEqual(["5 customer lead(s) stood up, and a month needs 6"]);
-    expect(monthlyFloor(6, 1).misses).toEqual(["1 press pitch(es) stood up, and a month needs 2"]);
+    expect(monthlyFloor(5, 2).misses).toEqual(["5 customer leads stood up, and a month needs 6"]);
+    expect(monthlyFloor(6, 1).misses).toEqual(["1 press pitch stood up, and a month needs 2"]);
     expect(monthlyFloor(0, 4).ok).toBe(false);
   });
 
@@ -513,7 +548,7 @@ describe("the monthly note's floor: six leads and two pitches, or it says it is 
     expect(prompts.some((p) => /Only [1-5] stood up and 6 are needed: find others, not these again/.test(p)), "the second go is told the first was thin").toBe(true);
     const card = (await env.WP_OS_DB.prepare("SELECT state, description FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ state: string; description: string }>())!;
     expect(card.state).toBe("DONE");
-    expect(card.description).toMatch(/6 lead\(s\), 2 pitch\(es\)/);
+    expect(card.description).toMatch(/6 leads, 2 pitches/);
     expect(card.description).not.toMatch(/THIN MONTH/);
   });
 
@@ -574,7 +609,7 @@ describe("the monthly note's floor: six leads and two pitches, or it says it is 
     expect(row.block_reason, out.detail).not.toBe("nothing_good_enough_to_send");
     expect(out.blocked, out.detail).toBe(false);
     expect(out.finished, out.detail).toBe(true);
-    expect(row.description).toMatch(/6 lead\(s\), 2 pitch\(es\)/);
+    expect(row.description).toMatch(/6 leads, 2 pitches/);
     // His words reached the search as fenced material, and the brief's own output format is the last thing it read.
     const search = prompts.find((p) => /find 10 organisations/.test(p))!;
     expect(search).toMatch(/<<<PARTNER_DIRECTION[\s\S]*outgrown their branding[\s\S]*PARTNER_DIRECTION>>>[\s\S]*Return ONLY JSON/);
