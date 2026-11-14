@@ -308,13 +308,26 @@ export function parsePressPitches(raw: string): PressPitch[] {
       // An address is kept only with the page it was read from; an address with no page is a guess.
       email: email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && httpUrl(r.contact_url) ? email : null,
       contactUrl: httpUrl(r.contact_url),
-      whyThisWriter: str(r.why_this_writer) ?? "",
+      // The brief's internal slot labels ("Slot 5 (wildcard, …).") are for the search, not for Scooter.
+      whyThisWriter: (str(r.why_this_writer) ?? "").replace(/^\s*slot\s*\d+\s*(\([^)]*\))?\s*[.:—-]?\s*/i, ""),
       hook: str(r.hook) ?? "",
       proofUrl,
       draft: str(r.draft) ?? "",
     });
   }
   return out;
+}
+
+/**
+ * WHAT A FIRST EMAIL MAY NOT CARRY (risk rule, 14 Nov 2026): a price or any dollar figure, or a request for a call or a
+ * meeting. A press draft that does either is refused with the reason, so the second search is told why. Null when fine.
+ */
+export function draftProblem(draft: string): string | null {
+  if (/\$\s?\d|\b\d[\d,.]*\s?(?:k|usd|dollars)\b/i.test(draft)) return "the draft names a price or a dollar figure, and a first email carries no money";
+  if (/\b(?:a|quick|short|brief|\d+[- ]?minute)\s+(?:call|chat|conversation|meeting|zoom)\b|\bhop on\b|\bget on a call\b|\bschedule (?:a|some) time\b/i.test(draft)) {
+    return "the draft asks for a call or a meeting, which a first email never does";
+  }
+  return null;
 }
 
 /** True when the URL answers. Lives in effects/, where every outbound request in this system lives. */
@@ -425,10 +438,12 @@ export function buildPressPrompt(month: string): string {
     "  as contact_url. If no public address is shown, leave email null and give the outlet's contact or",
     "  tips page as contact_url. Never guess an address pattern. (The address is checked again afterwards",
     "  by reading the pages — see findWriterAddress — so cite where it is, not what it is.)",
-    "- why_this_writer: which slot (1–5) they fill, the piece they are earned by, and the angle that",
-    "  piece makes natural. hook: the one-line subject.",
-    "- draft: 90–140 words, first person as Scooter, no flattery, one specific ask (a 20-minute",
-    "  conversation), no attachments promised.",
+    "- why_this_writer: the piece they are earned by and the angle that piece makes natural, in plain",
+    "  words for Scooter (never name the slot number or category). hook: the one-line subject.",
+    "- draft: 90–140 words, first person as Scooter, no flattery, no attachments promised. It is a FIRST",
+    "  email: no prices, fees or dollar figures (say only that we publish what our work costs), and never",
+    "  suggest a call or a meeting. Close by offering to share what we have learned, and real numbers, if",
+    "  it is useful.",
     "",
     'Return ONLY JSON: {"results":[{"writer":"…","outlet":"…","email":null,"contact_url":"https://…","why_this_writer":"…","hook":"…","proof_url":"https://…","draft":"…"}]}',
   ].join("\n");
@@ -436,9 +451,20 @@ export function buildPressPrompt(month: string): string {
 
 // ── Rendering the email ──────────────────────────────────────────────────────
 
+/** "1 lead", "4 leads": a note Scooter reads never says "lead(s)" (14 Nov 2026). */
+export function counted(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** "2026-11" → "November". */
+export function monthName(month: string): string {
+  const m = Number(month.slice(5, 7));
+  return ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"][m - 1] ?? month;
+}
+
 export function renderCustomerEmail(month: string, ideas: readonly CustomerIdea[], dropped: readonly string[]): string {
   const lines = [
-    `Scooter — ${ideas.length} organisation(s) that could buy Community-as-a-Service this month (${month}).`,
+    `Scooter — ${counted(ideas.length, "organisation")} that could buy Community-as-a-Service this month (${month}).`,
     "Each one has a trigger you can point at, a role to approach, and the page it came from. Nobody has been contacted.",
     "",
     ...ideas.flatMap((i, n) => [
@@ -548,7 +574,7 @@ export async function findWriterAddress(
 /** The one monthly note: who Walker is, the leads, the pitches. */
 export function renderMonthlyEmail(month: string, ideas: readonly CustomerIdea[], pitches: readonly PressPitch[], dropped: readonly string[], rejected: readonly { name: string; reason: string }[] = []): string {
   const lines = [
-    `Scooter — Walker, your chief of staff. This is West Peek Productions' month in one note: ${ideas.length} organisation(s) that could buy Community-as-a-Service, and ${pitches.length} press pitch draft(s) for you to send. Nobody has been contacted from here; that stays yours.`,
+    `Scooter — Walker, your chief of staff. This is West Peek Productions' month in one note: ${counted(ideas.length, "organisation")} that could buy Community-as-a-Service, and ${counted(pitches.length, "press pitch draft")} for you to send. Nobody has been contacted from here; that stays yours.`,
     "",
     `═══ 1 · WHO COULD BUY THIS MONTH (${month}) ═══`,
     "Each one has a trigger you can point at, a role to approach, and the page it came from.",
@@ -582,15 +608,14 @@ export function renderMonthlyEmail(month: string, ideas: readonly CustomerIdea[]
     pitches.length === 0 ? "No writer with a live citation this month — say where to look and I will." : "",
     dropped.length ? `Left out because the cited page did not answer when checked: ${dropped.join(", ")}` : "",
     rejected.length ? `Left out on judgement (searched, then held to the brief and failed it): ${rejected.map((r) => `${r.name} — ${r.reason}`).join("; ")}` : "",
-    "",
-    "— Walker. Anything you want from me or the team: email os@joinwestpeek.com from this address and Porter routes it. This is Productions work, on your desk only; nothing here touches the fund.",
+    // One sign-off only: the email's own footer is Walker's (14 Nov 2026).
   ];
   return lines.filter((l, i, arr) => !(l === "" && arr[i - 1] === "")).join("\n");
 }
 
 export function renderPressEmail(month: string, pitches: readonly PressPitch[], dropped: readonly string[]): string {
   const lines = [
-    `Scooter — ${pitches.length} press pitch draft(s) for West Peek Productions (${month}). Copy, paste, send — nothing has been sent from here.`,
+    `Scooter — ${counted(pitches.length, "press pitch draft")} for West Peek Productions (${month}). Copy, paste, send — nothing has been sent from here.`,
     "",
     ...pitches.flatMap((p, n) => [
       `${n + 1}. ${p.writer} — ${p.outlet}`,
@@ -632,8 +657,8 @@ export function monthlySummary(
 ): { what: string; tldr: string; sections: ExecEmailInput["sections"] } {
   const withAddress = pitches.filter((p) => p.email).length;
   return {
-    what: `West Peek Productions this month — ${ideas.length} lead(s), ${pitches.length} pitch(es)`,
-    tldr: `${ideas.length} organisation(s) that could buy Community-as-a-Service this month and ${pitches.length} press pitch draft(s) ready to send. Nobody has been contacted; you choose who to approach.`,
+    what: `West Peek Productions in ${monthName(month)} — ${counted(ideas.length, "lead")}, ${counted(pitches.length, "pitch", "pitches")}`,
+    tldr: `${counted(ideas.length, "organisation")} that could buy Community-as-a-Service this month and ${counted(pitches.length, "press pitch draft")} ready to send. Nobody has been contacted; you choose who to approach.`,
     sections: [
       { label: "What you asked", bullets: [`The monthly Productions note for ${month}: who could buy, and who to pitch.`] },
       {
@@ -661,7 +686,7 @@ export function monthlySummary(
 export function customerSummary(month: string, ideas: readonly CustomerIdea[], dropped: readonly string[]): { what: string; tldr: string; sections: ExecEmailInput["sections"] } {
   return {
     what: `${ideas.length} who could buy Community-as-a-Service this month`,
-    tldr: `${ideas.length} organisation(s) with a live trigger that could buy Community-as-a-Service this month. Nobody has been contacted; you choose who to approach.`,
+    tldr: `${counted(ideas.length, "organisation")} with a live trigger that could buy Community-as-a-Service this month. Nobody has been contacted; you choose who to approach.`,
     sections: [
       { label: "What you asked", bullets: [`Customer ideas for West Peek Productions, ${month}.`] },
       { label: "What I found", bullets: [ideas.length ? `Leads: ${names(ideas.map((i) => i.organisation))}.` : "Nothing with a live citation this month.", ...(dropped.length ? [`Dropped ${dropped.length} whose cited page did not answer.`] : [])] },
@@ -673,7 +698,7 @@ export function customerSummary(month: string, ideas: readonly CustomerIdea[], d
 export function pressSummary(month: string, pitches: readonly PressPitch[], dropped: readonly string[]): { what: string; tldr: string; sections: ExecEmailInput["sections"] } {
   return {
     what: `${pitches.length} press pitch drafts — yours to send`,
-    tldr: `${pitches.length} press pitch draft(s) for West Peek Productions, each earned by a recent piece. Yours to send; nothing has gone out.`,
+    tldr: `${counted(pitches.length, "press pitch draft")} for West Peek Productions, each earned by a recent piece. Yours to send; nothing has gone out.`,
     sections: [
       { label: "What you asked", bullets: [`Press pitches for West Peek Productions, ${month}.`] },
       { label: "What I found", bullets: [pitches.length ? `Writers: ${names(pitches.map((p) => `${p.writer} (${p.outlet})`))}.` : "No writer with a live citation this month.", ...(dropped.length ? [`Dropped ${dropped.length} whose cited page did not answer.`] : [])] },
@@ -699,8 +724,8 @@ export function pressSummary(month: string, pitches: readonly PressPitch[], drop
 export const MONTHLY_FLOOR = { leads: 6, pitches: 2 } as const;
 export function monthlyFloor(leads: number, pitches: number): { ok: boolean; misses: string[] } {
   const misses = [
-    leads < MONTHLY_FLOOR.leads ? `${leads} customer lead(s) stood up, and a month needs ${MONTHLY_FLOOR.leads}` : null,
-    pitches < MONTHLY_FLOOR.pitches ? `${pitches} press pitch(es) stood up, and a month needs ${MONTHLY_FLOOR.pitches}` : null,
+    leads < MONTHLY_FLOOR.leads ? `${counted(leads, "customer lead")} stood up, and a month needs ${MONTHLY_FLOOR.leads}` : null,
+    pitches < MONTHLY_FLOOR.pitches ? `${counted(pitches, "press pitch", "press pitches")} stood up, and a month needs ${MONTHLY_FLOOR.pitches}` : null,
   ].filter((m): m is string => m !== null);
   return { ok: misses.length === 0, misses };
 }
@@ -1015,8 +1040,11 @@ export async function runProductionsCard(
       buildPressPrompt(month),
       async (text) => {
         const live = await keepLive(parsePressPitches(text), (p) => p.proofUrl, check);
-        const judged = await judgeEntries(env, actor, live.kept, buildPitchJudgePrompt(month, live.kept), (p) => p.writer, "writer", judge);
-        return { ...judged, dropped: live.dropped };
+        // A first email names no money and asks for no call (risk rule; 14 Nov 2026): refused before the judge sees it.
+        const unsafe = live.kept.map((p) => ({ name: p.writer, reason: draftProblem(p.draft) })).filter((u): u is { name: string; reason: string } => u.reason !== null);
+        const safe = live.kept.filter((p) => draftProblem(p.draft) === null);
+        const judged = await judgeEntries(env, actor, safe, buildPitchJudgePrompt(month, safe), (p) => p.writer, "writer", judge);
+        return { ...judged, rejected: [...unsafe, ...judged.rejected], dropped: live.dropped };
       },
       "Your previous answer was discarded. Every entry MUST have a live proof_url, a named writer whose beat is shown, and a hook specific to that writer.",
       MONTHLY_FLOOR.pitches,
@@ -1048,16 +1076,14 @@ export async function runProductionsCard(
     for (const p of pitchesLive.kept) hunted.push(await findWriterAddress(env, actor, { ...p, email: null }, { search, pageText }));
     count = ideas.kept.length + hunted.length;
     dropped = [...ideas.dropped, ...pitchesLive.dropped];
-    subject = `Walker: West Peek Productions this month — ${ideas.kept.length} customer lead(s) and ${hunted.length} press pitch(es)`;
+    subject = `Walker: West Peek Productions in ${monthName(month)} — ${counted(ideas.kept.length, "lead")}, ${counted(hunted.length, "pitch", "pitches")}`;
     text = renderMonthlyEmail(month, ideas.kept, hunted, dropped, rejected);
     summary = monthlySummary(month, ideas.kept, hunted, dropped, rejected);
     // BELOW THE FLOOR AFTER BOTH SEARCHES: it still goes, saying so first, and the card stops by name (below).
     thin = monthlyFloor(ideas.kept.length, hunted.length).misses;
     await recordFloor(env, { deliverable: "productions_monthly", ok: thin.length === 0, headline: ideas.kept.length, measures: { leads: ideas.kept.length, pitches: hunted.length, dropped: dropped.length }, sample: text, firmScope: card.firm_scope });
-    if (thin.length) {
-      text = `A THIN MONTH: ${thin.join("; ")}. What follows is everything that stood up, not the usual list.\n\n${text}`;
-      summary = { ...summary, what: `${summary.what} — a thin month`, tldr: `**A thin month:** ${thin.join("; ")}. ${summary.tldr}` };
-    }
+    // NO SHORTFALL NOTICE IN SCOOTER'S NOTE (owner, 14 Nov 2026: he gets quality, not a shortfall notice). A month below
+    // the floor is still recorded above and still stops the card by name on Sequoia's desk (below); his note is just the note.
   } else {
   const found = await search(
     env,
@@ -1153,7 +1179,7 @@ export async function runProductionsCard(
       trying: card.title,
       employee: "Walker",
       who: "SEQUOIA",
-      detail: `This month's note is below its floor after two searches (${thin.join("; ")}). ${mail.sent ? "Scooter was sent what stood up" : "What stood up is on the card"}, labelled a thin month. Say where Walker should look, or leave it this month.`,
+      detail: `This month's note is below its floor after two searches (${thin.join("; ")}). ${mail.sent ? "Scooter was sent what stood up" : "What stood up is on the card"}, with no shortfall notice in his note. Say where Walker should look, or leave it this month.`,
     });
     return { finished: false, blocked: true, detail: why };
   }
