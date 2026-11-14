@@ -18,7 +18,7 @@ import { readLocalJobReport, WEB_PROPERTY_CHANGE_KIND } from "../src/shared/work
 import { blockedEmailDetail, finishOriginalAsk, missingSecretsOf, needsPreview, parkPhase, phaseModel, readWebPropertyChange, rulesFor, runWebPropertyChangeCard, type WebPropertyChangeRow } from "../src/worker/services/webPropertyChange";
 import { steerFromReply } from "../src/worker/services/emailThread";
 import { threadReference } from "../src/shared/email/thread";
-import { handleDeveloperChanges } from "../src/worker/services/developerDirection";
+import { handleDeveloperChanges, handleDeveloperEmail } from "../src/worker/services/developerDirection";
 import { answerBlock } from "../src/worker/services/blocks";
 import { handleInboundEmail, MAX_BODY_BYTES } from "../src/worker/effects/inboundEmail";
 import { comparableSubject } from "../src/worker/services/emailThread";
@@ -49,7 +49,7 @@ import { readFileSync } from "node:fs";
 
 let t: TestDb;
 let env: Env;
-const sent: Array<{ to: string; subject: string; text: string }> = [];
+const sent: Array<{ to: string; subject: string; text: string; toAll?: string[]; cc?: string[] }> = [];
 
 const SEQUOIA_PARTNER_EMAIL = "sequoia@westpeek.ventures";
 const SCOOTER = "scooter@westpeek.ventures";
@@ -187,8 +187,8 @@ beforeAll(async () => {
   } as Partial<Env>);
   vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
     if (String(url).includes("api.resend.com")) {
-      const body = JSON.parse(String(init?.body)) as { to: string[]; subject: string; text: string };
-      sent.push({ to: body.to[0]!, subject: body.subject, text: body.text });
+      const body = JSON.parse(String(init?.body)) as { to: string[]; subject: string; text: string; cc?: string[] };
+      sent.push({ to: body.to[0]!, subject: body.subject, text: body.text, toAll: body.to, cc: body.cc ?? [] });
       return new Response(JSON.stringify({ id: `re_${sent.length}` }), { status: 200 });
     }
     throw new Error(`unexpected fetch in test: ${String(url)}`);
@@ -761,6 +761,25 @@ describe("the developer may direct any job with a work instruction, and with not
     const job = await liveJobFor(id);
     return job ? (JSON.parse(String(job.job_json)) as { phase: string; rebuild: { intent: string; changes: string; stage?: boolean } | null }) : null;
   };
+
+  it("her exact email goes, word for word, as Porter, to the one partner who asked, once (14 Nov 2026)", async () => {
+    const id = await atPreview("devmail1", SCOOTER);
+    const TEXT = "Hi Scooter,\n\nYour dashboard is ready.\n- Today shows what needs you first.\n\nPorter";
+    const mail = (identity: typeof MAC = MAC) =>
+      handleDeveloperEmail({ request: new Request(`https://os.joinwestpeek.com/api/work-cards/${id}/developer-email`, { method: "POST", body: JSON.stringify({ subject: "Your dashboard is ready", text: TEXT }) }), env, identity, params: { id } } as never);
+    const from = sent.length;
+    expect((await mail({ ...MAC, email: "someone@westpeek.ventures" })).status, "not the Mac: refused").toBe(403);
+    expect(sent.length).toBe(from);
+    expect((await mail()).status).toBe(200);
+    const mine = sent.slice(from);
+    expect(mine, "exactly one email").toHaveLength(1);
+    expect(mine[0]!.text, "the body is the given text, exactly").toBe(TEXT);
+    expect(mine[0]!.subject).toBe("Your dashboard is ready");
+    expect(mine[0]!.toAll, "to the partner who asked, alone").toEqual([SCOOTER]);
+    expect(mine[0]!.cc, "nobody copied").toEqual([]);
+    expect((await mail()).status, "the same words twice: refused").toBe(409);
+    expect(sent.length - from).toBe(1);
+  });
 
   it("her 'changes: …' on his job rebuilds with her words; her 'approved' on it lands nothing", async () => {
     const id = await atPreview("dev1", SCOOTER);
