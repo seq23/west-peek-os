@@ -75,13 +75,21 @@ export function createSubscriptionSeatAdapter(opts: SubscriptionSeatAdapterOptio
   const env = opts.env;
   const seat = opts.seat;
   const needsSearch = opts.needsSearch === true;
-  const waitMs = opts.waitMs ?? (needsSearch ? SEARCH_CLAIM_WAIT_MS : CLAIM_WAIT_MS);
+  const seatWaitMs = opts.waitMs ?? (needsSearch ? SEARCH_CLAIM_WAIT_MS : CLAIM_WAIT_MS);
   const pollMs = Math.max(1, opts.pollMs ?? CLAIM_POLL_MS);
   const sleep = opts.sleep ?? realSleep;
   const now = opts.now ?? ((): Date => new Date());
 
   return {
     async complete(req: ProviderRequest): Promise<ProviderResponse> {
+      /*
+       * THE WAIT NEVER OUTLIVES THE ATTEMPT (14 Nov 2026, wc_bd8b68cb). The seat's own wait (nine minutes for a search)
+       * ignored the deadline the router gave this attempt, so one month's eight seat calls could wait over an hour
+       * between them, far longer than the Worker invocation awaiting them. The invocation ended, the seat answered into
+       * nothing, and the ai_run was left RUNNING. Now the wait is the shorter of the two, and when it runs out the row is
+       * closed and the chain moves to its next route, ending in the run's named stop.
+       */
+      const waitMs = Math.max(1, Math.min(seatWaitMs, req.deadlineMs ?? seatWaitMs));
       /*
        * A PICTURE OR A DECK IS NOT OFFERED HERE. The claimer hands the model a text instruction
        * over a local pipe; there is no wire format in this design for attachments, and an adapter
