@@ -37,6 +37,15 @@ describe("the reset time a notice states", () => {
     expect(retryAfterFrom("resets Tuesday at 8am (America/Chicago)", NOW)).toBe((Date.UTC(2026, 9, 6, 13, 0) - NOW) / 1000);
     expect(hours(retryAfterFrom("resets Tuesday 3pm (America/Chicago)", NOW))).toBeCloseTo(40 / 60, 2);
   });
+  it("reads Codex's 'try again at Nov 17th, 2026 6:40 PM' (14 Nov 2026), in the Mac's own zone", () => {
+    const now = Date.parse("2026-11-14T21:51:00Z");
+    const notice = "You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at Nov 17th, 2026 6:40 PM.";
+    const r = detectUsageLimit({ stderr: notice }, now);
+    expect(r.limited).toBe(true);
+    const at = new Date(2026, 10, 17, 18, 40).getTime(); // local wall time, as the claimer on the Mac reads it
+    expect(r.retryAfterSeconds).toBe(Math.round((at - now) / 1000));
+    expect(retryAfterFrom("try again at 6:40 PM", now)).not.toBeNull();
+  });
   it("captures any valid zone name, not only two-part ones", () => {
     expect(retryAfterFrom("resets 3pm (UTC)", NOW)).toBe((Date.UTC(2026, 8, 29, 15, 0) + 86_400_000 - NOW) / 1000);
     expect(retryAfterFrom("resets 3pm (Etc/GMT+5)", NOW)).toBe((Date.UTC(2026, 8, 29, 20, 0) - NOW) / 1000);
