@@ -893,6 +893,23 @@ describe("the developer may direct any job with a work instruction, and with not
     expect((await rebuildOf(id))?.rebuild?.stage, "his own changes are never marked staged").toBeUndefined();
   });
 
+  /** 14 Nov 2026: a retry rebuilt blind and failed the same way; now it is handed the refusal it must fix first. */
+  it("a retry after a refused BUILD carries the refusal to the builder; the first attempt carries none", async () => {
+    const id = await atPreview("dev9", SCOOTER);
+    expect((await door(id, "rebuild the dashboard to the full scope")).status).toBe(200);
+    await tickFor(id);
+    const first = await liveJobFor(id);
+    expect((JSON.parse(String(first!.job_json)) as { last_refusal?: string | null }).last_refusal ?? null, "nothing refused yet").toBeNull();
+    const why = "1 passage(s) of the private document are in what this PR adds, at functions/x.mjs:459";
+    await macReports(id, { phase: "BUILD", status: "failed", reason: why });
+    let again = null as Awaited<ReturnType<typeof liveJobFor>>;
+    for (let t = 0; t < 4 && !again; t += 1) {
+      await tickFor(id);
+      again = await liveJobFor(id);
+    }
+    expect((JSON.parse(String(again!.job_json)) as { last_refusal?: string | null }).last_refusal, "the retry hears what to fix").toContain("functions/x.mjs:459");
+  });
+
   /**
    * 14 Nov 2026 (owner: no email to Scooter about the dashboard error). A staged developer rebuild that fails, again
    * and again, up to the retry cap, emails the partner nothing: every outcome is held for the developer's tail.

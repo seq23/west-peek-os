@@ -172,6 +172,8 @@ export interface LocalJobPayload {
    */
   rebuild?: { intent: "CHANGES" | "PREVIEW" | "PUBLISH"; changes: string | null; since: string | null; stage?: boolean } | null;
   rules: Record<string, string>;
+  /** 14 Nov 2026: why the last attempt of this phase was refused, so the retry fixes it first. */
+  last_refusal?: string | null;
   /**
    * 23 Sep 2026: ONE JOB OVER SEVERAL REPOS — one entry per repo (migration 0236), in order. Absent
    * (or fewer than two) for a single-repo job, which runs exactly as before. PLAN writes one plan

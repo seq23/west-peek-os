@@ -393,6 +393,7 @@ export function renderContext(job, paths) {
     lines.push("", `PR: ${job.pr.url} (#${job.pr.number ?? "?"}) on ${job.pr.branch ?? paths.branch} — checks ${job.pr.check_state ?? "unknown"}${job.pr.check_green_at ? ` (green at ${job.pr.check_green_at})` : ""}`);
   }
   lines.push(...rebuildBlock(job));
+  lines.push(...lastRefusalBlock(job));
   if (paths.landOutput) lines.push("", "WHAT ~/bin/land PRINTED:", "```", paths.landOutput.slice(-6000), "```", `MERGE SHA: ${paths.mergeSha ?? "(unknown)"}`);
   return lines.join("\n");
 }
@@ -406,6 +407,12 @@ export function renderContext(job, paths) {
  * The block below puts the partner's words at the front as THIS RUN'S WHOLE JOB, and the script
  * fails the run if the branch head did not move (`inertRebuild`). Pure, self-tested.
  */
+/** A retry is told why the last attempt was refused (14 Nov 2026), so it fixes that before anything else. Pure. */
+export function lastRefusalBlock(job) {
+  const why = String(job?.last_refusal ?? "").trim();
+  return why ? ["", "THE LAST ATTEMPT WAS REFUSED — FIX THIS FIRST, then finish the job:", "```", why.slice(0, 1500), "```"] : [];
+}
+
 export function rebuildBlock(job) {
   if (job?.phase !== "BUILD" || job?.rebuild?.intent !== "CHANGES") return [];
   const words = String(job.rebuild.changes ?? "").trim() || "(the partner's words did not come through — read THE PARTNER'S ANSWERS, the last one is the change)";
@@ -2371,6 +2378,10 @@ function selfTest() {
     ["a staged builder is handed its PR to report, so an ok BUILD can carry pr_url; an unstaged one hears nothing", () =>
       stageContextLines({ branch: "work/wpc-a-next", stagedFrom: "work/wpc-a" }, { url: "https://github.com/o/r/pull/9", number: 9 })[0].includes("https://github.com/o/r/pull/9") &&
       stageContextLines({ branch: "work/wpc-a" }, null).length === 0],
+    ["a retry is told why the last attempt was refused; a first attempt hears nothing", () =>
+      renderContext({ phase: "BUILD", last_refusal: "1 passage(s) of the private document are in what this PR adds, at views.mjs:459" }, { branch: "b" }).includes("THE LAST ATTEMPT WAS REFUSED") &&
+      renderContext({ phase: "BUILD", last_refusal: "1 passage(s) of the private document are in what this PR adds, at views.mjs:459" }, { branch: "b" }).includes("views.mjs:459") &&
+      !renderContext({ phase: "BUILD" }, { branch: "b" }).includes("THE LAST ATTEMPT WAS REFUSED")],
     ["names are stable and safe", () => namesFor("wc_ABC-123_def").branch === "work/wpc-abc123de" && !namesFor("../x").worktree.includes("..")],
     ["the claude child never sees a vaulted secret or an API key, keeps the ordinary environment, and the NAMES withheld are reported", () => {
       let told = [];
