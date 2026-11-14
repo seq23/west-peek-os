@@ -111,7 +111,14 @@ const defaultAnswerQuestion: QuestionAnswerer = async (env, input) => {
         ...(input.facts?.length ? [`WHAT THE CARD ITSELF RECORDS RIGHT NOW (true; when the question is about this job, answer from these and be confident):\n${input.facts.map((f) => `- ${f}`).join("\n")}`] : []),
         `THE QUESTION, IN THE PARTNER'S OWN WORDS:\n"""\n${input.question.slice(0, 2000)}\n"""`,
         "",
-        "BIAS HARD TOWARD NOT CONFIDENT. Sequoia is the fallback and she is always available — a wrong " +
+        "WHEN THEY ASK FOR YOUR VIEW (which to lead with, how to approach someone, what you would do), " +
+          "your recommendation and its reason, drawn from what the card records, is an answer you can " +
+          "stake your name on: give it, say it is your recommendation and that the call is theirs, and " +
+          "never state a fact the card does not record. What the partner tells you in the message is " +
+          "given: build on it, never ask to verify it. Only a fact you would have to supply yourself " +
+          "and do not have is a reason to say no.",
+        "",
+        "FOR A QUESTION OF FACT, BIAS HARD TOWARD NOT CONFIDENT. Sequoia is the fallback and she is always available — a wrong " +
           "guessed answer reaching a partner is worse than her answering it herself. Say CONFIDENT: yes " +
           "only when you would stake your name on the answer exactly as written; anything short of that " +
           "is CONFIDENT: no, whatever the reason.",
