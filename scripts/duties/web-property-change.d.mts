@@ -61,3 +61,5 @@ export function createNewRepo(
   progress: (line: string) => void,
   deps?: { sh: (cmd: string, args: string[], opts?: Record<string, unknown>) => Promise<{ stdout: string; stderr?: string }>; fetch: typeof fetch },
 ): Promise<{ ok: boolean; why?: string; created?: boolean; pagesHost?: string }>;
+/** A fix turn after the review that asked for runs goes through the build turn's run loop (14 Nov 2026). */
+export function settleFixTurn<R extends { status?: string } | null>(result: R, problem: string | null, settleRuns: ((r: NonNullable<R>, note: string | null) => Promise<{ result: unknown; problem: string | null }>) | null, note: string | null): Promise<{ result: any; problem: string | null }>;

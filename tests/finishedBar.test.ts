@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { codexSpentUsage, firstRunVerdict, readReview, REVIEW_ROUNDS, reviewAndFix, runReview } from "../scripts/duties/web-property-change.mjs";
+import { codexSpentUsage, firstRunVerdict, readReview, REVIEW_ROUNDS, reviewAndFix, runReview, settleFixTurn } from "../scripts/duties/web-property-change.mjs";
 
 /**
  * THE v1.0 BAR ON THE MAC (owner, 13 Nov 2026: "v1.0 final with persistence and veteran UX/UI POV"). A fresh-eyes
@@ -73,5 +73,22 @@ describe("the v1.0 bar on the Mac: a fresh-eyes review and a first run", () => {
     const ok = firstRunVerdict({ hasScript: true, exit: 0, out: "> first-run\nFIRST_RUN OK signed in, 12 real rows, saved a note, reload kept it" });
     expect(ok).toMatchObject({ ok: true });
     expect(ok.line).toContain("saved a note, reload kept it");
+  });
+});
+
+describe("a fix turn after the review may ask for runs (14 Nov 2026)", () => {
+  it("its needs_runs goes through the build turn's run loop with the findings kept, never back to the Worker as the report", async () => {
+    const seen: Array<{ status: string; note: string | null }> = [];
+    const settle = async (r: { status: string }, note: string | null) => {
+      seen.push({ status: r.status, note });
+      return { result: { phase: "BUILD", status: "ok", pr_url: "https://github.com/o/r/pull/9" }, problem: null };
+    };
+    const asked = { phase: "BUILD", status: "needs_runs", runs: [{ script: "dashboard:setup", env: "preview" }] };
+    const out = await settleFixTurn(asked, null, settle, "THE FRESH-EYES REVIEW FOUND: 1. the empty state has no button");
+    expect(out.result?.status, "the runs were run and the turn finished").toBe("ok");
+    expect(seen).toEqual([{ status: "needs_runs", note: "THE FRESH-EYES REVIEW FOUND: 1. the empty state has no button" }]);
+    const ok = { phase: "BUILD", status: "ok", pr_url: "https://github.com/o/r/pull/9" };
+    expect((await settleFixTurn(ok, null, settle, "x")).result, "an ok turn is untouched").toBe(ok);
+    expect(seen, "and runs nothing").toHaveLength(1);
   });
 });

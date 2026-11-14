@@ -628,6 +628,16 @@ export async function runReview(opts, deps = {}) {
  * it is); `rebuild(blocking, round)` → `{}` when the builder fixed and wrote a fresh ok result, or `{ report }`.
  * Returns `{ line }` (for the proof) or `{ report }`.
  */
+/**
+ * A FIX TURN AFTER THE REVIEW MAY ASK FOR RUNBOOK RUNS (14 Nov 2026), exactly as the build turn may. Before this its
+ * `needs_runs` reached the Worker as the run's whole report and was charged as a failed attempt (wc_c548d043, attempt 3).
+ * `settleRuns(result, note)` is the build turn's own bounded loop; `note` keeps the review's findings in the next prompt.
+ */
+export async function settleFixTurn(result, problem, settleRuns, note) {
+  if (result?.status !== "needs_runs" || typeof settleRuns !== "function") return { result, problem };
+  return settleRuns(result, note);
+}
+
 export async function reviewAndFix({ review, rebuild, rounds = REVIEW_ROUNDS, phase = "BUILD" }) {
   let fixed = 0;
   for (let round = 0; ; round += 1) {
@@ -678,7 +688,7 @@ async function firstRunOn(worktree, previewUrl, env, allowedNames, progress) {
  * The review loop for one repo's BUILD, wired to the model. Returns `{ line, result }` (the builder's latest ok result)
  * or `{ report }`. `base` is the BUILD prompt; the reviewer gets it plus the builder's result and the REVIEW section.
  */
-async function reviewBuild({ job, base, result, names, jobDir, packageDir, resultPath, ctx, progress, tag = "" }) {
+async function reviewBuild({ job, base, result, names, jobDir, packageDir, resultPath, ctx, progress, tag = "", settleRuns = null }) {
   let latest = result;
   const reviewPath = (round) => path.join(jobDir, `review${tag}-${round + 1}.json`);
   const out = await reviewAndFix({
@@ -700,9 +710,10 @@ async function reviewBuild({ job, base, result, names, jobDir, packageDir, resul
       const claude = await runModel({ job, prompt, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
       finishIfCodex(claude, { phase, resultPath, worktree: names.worktree, branch: names.branch, jobDir, progress });
       writeFileSync(path.join(jobDir, `claude-BUILD${tag}-fix${round + 1}.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
-      const { result: again, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "BUILD");
+      let { result: again, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "BUILD");
       const spent = spentReport("BUILD", claude, again);
       if (spent) return { report: spent };
+      ({ result: again, problem } = await settleFixTurn(again, problem, settleRuns, prompt.slice(base.length)));
       if (!again) return { report: { phase: "BUILD", status: "failed", reason: `the fix after the review ended (exit ${claude.code}) but ${problem}` } };
       if (again.status !== "ok") return { report: { phase: "BUILD", status: again.status, reason: String(again.reason ?? "").slice(0, 1500) } };
       latest = again;
@@ -1387,18 +1398,25 @@ export async function run(job, ctx) {
 
   let { result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", phase);
   // 0253: THE SCRIPT RUNS THE REPO'S OWN SCRIPTS FOR THE MODEL — RUNBOOK-named only, recorded, bounded.
-  for (let round = 0; round < 3 && result?.status === "needs_runs"; round += 1) {
-    const done = await applyRuns(result.runs, { base: book.mayRun, job, phase }, names.worktree, ctx.env, secrets.allowed, progress);
-    runsDone.push(...done);
-    rmSync(resultPath, { force: true });
-    const again = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments, extraLines: [...repoLines(book, secrets, outDir, runsDone, job), ...stageLines] })}\n\nRUNS DONE FOR YOU SINCE YOUR LAST TRY: ${done.map((d) => `${d.script} (${d.env}) → exit ${d.exit}: ${d.line}`).join("; ")}`;
-    claude = await runModel({ job, prompt: again, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
-    finishIfCodex(claude, { phase, resultPath, worktree: names.worktree, branch: names.branch, jobDir, progress });
-    writeFileSync(path.join(jobDir, `claude-${phase}-runs${round + 1}.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
-    cost = (cost ?? 0) + (costFrom(claude.out) ?? 0);
-    ({ result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", phase));
-  }
-  if (result?.status === "needs_runs") result = { ...result, status: "failed", reason: "asked for runs three times without finishing" };
+  // One loop for the build turn and (14 Nov 2026) for a fix turn after the review: `withNote` is that turn's own prompt.
+  const settleRuns = async (asked, withNote = null) => {
+    let res = asked;
+    let prob = null;
+    for (let round = 0; round < 3 && res?.status === "needs_runs"; round += 1) {
+      const done = await applyRuns(res.runs, { base: book.mayRun, job, phase }, names.worktree, ctx.env, secrets.allowed, progress);
+      runsDone.push(...done);
+      rmSync(resultPath, { force: true });
+      const again = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments, extraLines: [...repoLines(book, secrets, outDir, runsDone, job), ...stageLines] })}${withNote ? `\n${withNote}` : ""}\n\nRUNS DONE FOR YOU SINCE YOUR LAST TRY: ${done.map((d) => `${d.script} (${d.env}) → exit ${d.exit}: ${d.line}`).join("; ")}`;
+      claude = await runModel({ job, prompt: again, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
+      finishIfCodex(claude, { phase, resultPath, worktree: names.worktree, branch: names.branch, jobDir, progress });
+      writeFileSync(path.join(jobDir, `claude-${phase}-runs${withNote ? "-fix" : ""}${round + 1}.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
+      cost = (cost ?? 0) + (costFrom(claude.out) ?? 0);
+      ({ result: res, problem: prob } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", phase));
+    }
+    if (res?.status === "needs_runs") res = { ...res, status: "failed", reason: "asked for runs three times without finishing" };
+    return { result: res, problem: prob };
+  };
+  if (result?.status === "needs_runs") ({ result, problem } = await settleRuns(result));
   // A BUILD that needs another Drive asset names it; the script fetches it and runs the model ONCE more.
   const wanted = phase === "BUILD" && job.drive?.folder_id ? assetsRequested(result) : [];
   if (wanted.length) {
@@ -1438,7 +1456,7 @@ export async function run(job, ctx) {
      * forward — `configLines` is built entirely from `applyPagesEnv`'s return.
      */
     // THE v1.0 BAR, PART 1: a fresh-eyes review before the PR is read; its fixes land on the same branch.
-    const reviewed = await reviewBuild({ job, base: prompt, result, names, jobDir, packageDir, resultPath, ctx, progress });
+    const reviewed = await reviewBuild({ job, base: prompt, result, names, jobDir, packageDir, resultPath, ctx, progress, settleRuns });
     if (reviewed.report) return { ...reviewed.report, ...carried };
     result = reviewed.result;
     if (Array.isArray(result.items)) carried.items = itemsOf(result);
