@@ -418,6 +418,16 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
      * reached the card. Every entry is carried; `buildProblems` judges them.
      */
     ...(Array.isArray(r.items) ? { items: readItems(r.items) } : {}),
+    /*
+     * 14 Nov 2026: THIS READER DROPPED `missing_secrets` AND `vault_lookup` TOO. So the Worker never recorded which keys a
+     * build waits on, and the v1.0 bar's exemption ("held by a key only the partner can supply") could never apply: a
+     * dashboard waiting only on the partner's own OAuth app keys was refused as unfinished (wc_c548d043). Carried as the
+     * Mac writes them; `absorbRepoReport` still refuses a missing key named without a vault lookup.
+     */
+    ...(Array.isArray(r.missing_secrets) ? { missing_secrets: readMissingSecrets(r.missing_secrets) } : {}),
+    ...(r.vault_lookup && typeof r.vault_lookup === "object"
+      ? { vault_lookup: { searched: strs((r.vault_lookup as Record<string, unknown>).searched).slice(0, 200), found: strs((r.vault_lookup as Record<string, unknown>).found).slice(0, 200), missing: strs((r.vault_lookup as Record<string, unknown>).missing).slice(0, 200) } }
+      : {}),
   };
   // A plan naming placeholders is not publish-ready whatever the flag says: the list is the fact.
   if (report.phase === "PLAN" && (report.placeholders?.length ?? 0) > 0) report.publish_ready = false;
@@ -425,6 +435,17 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
   if (report.status === "unchanged" && !report.materials) return { report: null, problem: "an unchanged report must carry the material set it compared" };
   if (report.status !== "ok" && report.status !== "unchanged" && !report.reason) return { report: null, problem: `a ${report.status} report must say why` };
   return { report, problem: null };
+}
+
+/** The keys a run says the vault does not hold: a bare name or `{ name, vendor_url, searched }`, entry for entry. */
+function readMissingSecrets(v: unknown[]): MissingSecret[] {
+  return v.slice(0, 40).flatMap((raw) => {
+    const o = (raw && typeof raw === "object" ? raw : { name: raw }) as Record<string, unknown>;
+    const name = typeof o.name === "string" ? o.name.trim().slice(0, 120) : "";
+    if (!name) return [];
+    const searched = Array.isArray(o.searched) ? o.searched.map((x) => String(x).trim()).filter(Boolean).slice(0, 200) : [];
+    return [{ name, vendor_url: typeof o.vendor_url === "string" ? o.vendor_url.slice(0, 300) : null, searched }];
+  });
 }
 
 /** The BUILD's per-item done-lines, entry for entry, with each done-when check as reported. */
