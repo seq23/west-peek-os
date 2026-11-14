@@ -166,8 +166,8 @@ export async function handleDeveloperChanges(ctx: RouteContext): Promise<Respons
  * POST /api/work-cards/:id/developer-email { subject, text } — THE DEVELOPER'S EXACT WORDS TO THE PARTNER WHO ASKED
  * (owner, 14 Nov 2026: "Send it", for Scooter's dashboard ready email). The Mac's own identity only, for a website
  * job only. The text is sent exactly as given, as Porter, to the ONE partner who asked for the job and nobody else
- * (no cc), on the job's own thread, through `sendPartnerEmail` (which still refuses anyone outside the two partner
- * addresses). Recorded as a notice (`developer:<hash>`), so the same words are never sent twice.
+ * (no cc), on the job's own thread, through `sendOrPreview` like every employee's email (so the card's "Show me first?" tick holds,
+ * and `sendPartnerEmail` still refuses anyone outside the two partner addresses). Recorded as a notice (`developer:<hash>`), so the same words are never sent twice.
  */
 export const DEVELOPER_EMAIL_MAX = 6000;
 export async function handleDeveloperEmail(ctx: RouteContext): Promise<Response> {
@@ -180,19 +180,22 @@ export async function handleDeveloperEmail(ctx: RouteContext): Promise<Response>
   const text = typeof body?.text === "string" ? body.text.replace(/\r\n/g, "\n").trim() : "";
   if (!subject || !text) return json({ error: "invalid_input", detail: "subject and text are required" }, { status: 400 });
   if (text.length > DEVELOPER_EMAIL_MAX) return json({ error: "too_long", detail: `the text is over ${DEVELOPER_EMAIL_MAX} characters` }, { status: 400 });
-  const card = await ctx.env.WP_OS_DB.prepare("SELECT id, kind, title, firm_scope, requested_by_email FROM work_card WHERE id = ?1").bind(cardId).first<{ id: string; kind: string | null; title: string; firm_scope: string; requested_by_email: string | null }>();
+  const card = await ctx.env.WP_OS_DB.prepare("SELECT id, kind, title, firm_scope, requested_by_email, preview_first, preview_owner_id FROM work_card WHERE id = ?1").bind(cardId).first<{ id: string; kind: string | null; title: string; firm_scope: string; requested_by_email: string | null; preview_first: number | null; preview_owner_id: string | null }>();
   if (!card) return json({ error: "not_found" }, { status: 404 });
   if (card.kind !== WEB_PROPERTY_CHANGE_KIND) return json({ error: "unsupported", detail: "this door emails about website jobs only" }, { status: 409 });
   const to = (card.requested_by_email ?? "").trim().toLowerCase();
   if (!to) return json({ error: "no_partner", detail: "the job was not asked for by a partner's email" }, { status: 409 });
   const { alreadyTold, recordNotice, threadRootFor } = await import("./requestReply");
-  const { sendPartnerEmail } = await import("./execEmail");
+  const { sendOrPreview } = await import("./previewApproval");
+  const { doneReplyLaneFor } = await import("./kindRules");
   const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${subject}\n${text}`)))).slice(0, 8).map((b) => b.toString(16).padStart(2, "0")).join("");
   const cause = `developer:${digest}`;
   if (await alreadyTold(ctx.env, card.id, "PREVIEW", cause)) return json({ error: "already_sent", detail: "these exact words were already sent on this job" }, { status: 409 });
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const html = text.split(/\n{2,}/).map((p) => `<p>${esc(p).replace(/\n/g, "<br>")}</p>`).join("\n");
-  const out = await sendPartnerEmail(ctx.env, {
+  // Through the lane like every employee's email: the card's "Show me first?" tick still means what it says.
+  const lane = await doneReplyLaneFor(ctx.env, { kind: card.kind, preview_first: card.preview_first, preview_owner_id: card.preview_owner_id }, { kind: "PREVIEW" });
+  const out = await sendOrPreview(ctx.env, {
     to,
     email: { employee: "Porter", what: card.title, tldr: subject, sections: [], laidOut: { subject, text, html } },
     objectType: "work_card",
@@ -200,11 +203,17 @@ export async function handleDeveloperEmail(ctx: RouteContext): Promise<Response>
     firmScope: card.firm_scope,
     actorId: ctx.identity.id,
     cardKind: WEB_PROPERTY_CHANGE_KIND,
+    workCardId: card.id,
+    cardAsked: lane.cardAsked,
+    becauseOfRule: lane.becauseOfRule,
+    tickedByFirmUserId: lane.tickedByFirmUserId,
+    requestedByEmail: to,
+    what: card.title,
     replyOnThread: await threadRootFor(ctx.env, card.id),
   });
   await recordNotice(ctx.env, { cardId: card.id, kind: "PREVIEW", cause, to, messageId: out.threadToken ?? null, sent: out.sent, detail: `${director.label}: ${out.reason}`.slice(0, 500), firmScope: card.firm_scope });
-  await appendEvent(ctx.env, { eventType: "work_card.developer_email", actorType: "firm_user", actorId: ctx.identity.id, objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { to, subject, sent: out.sent, reason: out.reason, thread: out.threadToken ?? null, via: "partner tail (Claude)" } });
-  return json({ ok: out.sent, to, subject, detail: out.reason, thread: out.threadToken ?? null }, { status: out.sent ? 200 : 502 });
+  await appendEvent(ctx.env, { eventType: "work_card.developer_email", actorType: "firm_user", actorId: ctx.identity.id, objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { to, subject, sent: out.sent, previewed: out.previewed, reason: out.reason, thread: out.threadToken ?? null, via: "partner tail (Claude)" } });
+  return json({ ok: out.sent, previewed: out.previewed, to, subject, detail: out.reason, thread: out.threadToken ?? null }, { status: out.sent || out.previewed ? 200 : 502 });
 }
 
 async function soleDeveloper(env: Env): Promise<Director | null> {
