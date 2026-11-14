@@ -517,6 +517,70 @@ describe("the monthly note's floor: six leads and two pitches, or it says it is 
     expect(card.description).not.toMatch(/THIN MONTH/);
   });
 
+  it("Scooter's steer cannot turn the search into a letter to him: a prose reply is a failed go and the next route writes the list (wc_bd8b68cb, 14 Nov 2026)", async () => {
+    const { vi } = await import("vitest");
+    const { FREE_SEARCH_GROUNDED_MODELS } = await import("../src/worker/ai/providers/freeSearch");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN','IN_PROGRESS','BLOCKED')").run();
+    const opened = await openProductionsCard(env, "productions_monthly", new Date("2027-05-01T14:00:00.000Z"));
+    // His reply, in substance: a redo, aimed somewhere new. Read correctly — the fault was what the search did with it.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET prompt = 'Redo this month: national organisations whose impact has outgrown their branding, and let me know what is realistic' WHERE id = ?1").bind(opened.cardId).run();
+    const card = (await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(opened.cardId).first<Parameters<typeof runProductionsCard>[1]>())!;
+    // The real shape of what the first free route wrote on 14 Nov: a status letter to Scooter, no list, no url field.
+    const letter =
+      "Scooter, I can have this month's redo of the customer and press lists finalized by the end of the day. I'm focusing on national " +
+      "organisations whose impact has outgrown their branding, and I'll send the full list over as soon as it's ready.";
+    const prompts: string[] = [];
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (!url.includes("generativelanguage.googleapis.com")) return new Response(JSON.stringify({ error: { message: "down in this test" } }), { status: 503 });
+      const model = decodeURIComponent(url.split("/models/")[1]!.split(":")[0]!);
+      const body = JSON.parse(String(init?.body)) as { tools?: unknown; contents: Array<{ parts: Array<{ text: string }> }> };
+      const prompt = body.contents[0]!.parts[0]!.text;
+      if (!body.tools) return new Response(JSON.stringify({ error: { message: "quota" } }), { status: 429 });
+      prompts.push(prompt);
+      // The first grounded route always writes the letter; the next writes what was asked for.
+      const text = model === FREE_SEARCH_GROUNDED_MODELS[0] ? letter : /journalists/.test(prompt) ? twoWriters : full;
+      return new Response(
+        JSON.stringify({ candidates: [{ content: { parts: [{ text }] }, finishReason: "STOP", groundingMetadata: { groundingChunks: [{ web: { uri: "https://assoc1.example/conference" } }] } }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 10 } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    // A firm whose searches leave for the live web at $0, as production's does (the test DB starts offline). Policy rows
+    // are append-only, so the one in force before is appended again afterwards for the tests that follow.
+    const prior = await env.WP_OS_DB.prepare("SELECT id FROM budget_policy WHERE firm_scope = 'west-peek' ORDER BY created_at DESC, rowid DESC LIMIT 1").first<{ id: string }>();
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO budget_policy (id, firm_scope, cost_mode, privacy_mode, daily_cap_usd, per_run_cap_usd, honours_pins, prefers_frontier, spend_lever, defer_non_critical, set_by)
+       VALUES ('bp_letter_test', 'west-peek', 'NORMAL', 'FRONTIER', 500, 500, 1, 0, 'FREE_ONLY', 0, 'fu_sequoia_taylor')`,
+    ).run();
+    let out: Awaited<ReturnType<typeof runProductionsCard>>;
+    try {
+      out = await runProductionsCard({ ...env, GEMINI_API_KEY: "g" } as Env, card, {
+        urlCheck: async () => true,
+        judge: keepAll,
+        pageText: async () => null,
+        now: new Date("2027-05-01T14:05:00.000Z"),
+        interpret: steersWith("Redo this month's list for national organisations whose impact has outgrown their branding.", "only national organisations whose impact has outgrown their branding"),
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      const cols = "firm_scope, cost_mode, privacy_mode, daily_cap_usd, per_run_cap_usd, honours_pins, prefers_frontier, spend_lever, defer_non_critical, set_by";
+      await env.WP_OS_DB.prepare(
+        prior
+          ? `INSERT INTO budget_policy (id, ${cols}) SELECT 'bp_letter_test_after', ${cols} FROM budget_policy WHERE id = ?1`
+          : `INSERT INTO budget_policy (id, ${cols}) VALUES ('bp_letter_test_after', 'west-peek', 'NORMAL', 'LOCAL', 500, 500, 1, 0, 'MODERATE', 0, 'fu_sequoia_taylor')`,
+      ).bind(...(prior ? [prior.id] : [])).run();
+    }
+    const row = (await env.WP_OS_DB.prepare("SELECT state, block_reason, description FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ state: string; block_reason: string | null; description: string | null }>())!;
+    expect(row.block_reason, out.detail).not.toBe("nothing_good_enough_to_send");
+    expect(out.blocked, out.detail).toBe(false);
+    expect(out.finished, out.detail).toBe(true);
+    expect(row.description).toMatch(/6 lead\(s\), 2 pitch\(es\)/);
+    // His words reached the search as fenced material, and the brief's own output format is the last thing it read.
+    const search = prompts.find((p) => /find 10 organisations/.test(p))!;
+    expect(search).toMatch(/<<<PARTNER_DIRECTION[\s\S]*outgrown their branding[\s\S]*PARTNER_DIRECTION>>>[\s\S]*Return ONLY JSON/);
+    expect(search.trimEnd()).toMatch(/REQUIRED OUTPUT FORMAT[^]*discarded unread\.$/);
+  }, 60_000);
+
   it("what Scooter said could not be read: a failed go the sweep retries, never 'the brief is missing' (the November card)", async () => {
     const { openProductionsCard } = await import("../src/worker/services/productions");
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN','IN_PROGRESS','BLOCKED')").run();

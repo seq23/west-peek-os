@@ -46,6 +46,12 @@ export interface ProviderRequest {
   model: string | null;
   capabilityRequirement?: string;
   /**
+   * THE CALLER'S OWN VERIFIER, for an adapter that walks several models inside one attempt (14 Nov 2026). The router
+   * still verifies whatever the adapter returns; this lets a multi-model lane (the free search lane) refuse one model's
+   * answer and ask its next model, instead of returning the first answer and losing the whole lane to one bad writer.
+   */
+  verify?: (text: string) => string | null;
+  /**
    * THIS CALLER'S OWN ASK, finally reaching the wire.
    *
    * `expectedOutputTokens` has always existed — it is what prices the run — and it stopped at the

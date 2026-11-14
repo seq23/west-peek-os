@@ -220,6 +220,9 @@ export function createFreeSearchAdapter(options: FreeSearchOptions): ProviderAda
     ];
     if (!text) throw new Error("grounding returned no answer");
     if (urls.length === 0) throw new Error("grounding unavailable: the answer carried no web sources");
+    // The caller's own check (14 Nov 2026): an answer in the wrong shape is this rung's failure, and the next rung is asked.
+    const refused = req.verify?.(text);
+    if (refused) throw new Error(`refused by the caller's check: ${refused}`);
     return {
       text: `${text}\n\nSources:\n${urls.map((u) => `- ${u}`).join("\n")}\n\nSearched with: Google Search grounding on ${model}`,
       model: FREE_SEARCH_MODEL,
@@ -445,11 +448,20 @@ export function createFreeSearchAdapter(options: FreeSearchOptions): ProviderAda
       "",
       "SOURCES:",
       ...sources.map((s, i) => `[${i + 1}] ${s.title} — ${s.url}\n${s.text}`),
+      "",
+      // The task's own output format has the last word (14 Nov 2026, wc_bd8b68cb): with the sources after it, a long brief's
+      // "Return ONLY JSON" was thousands of characters back, and a writer answered the partner's note as a letter instead.
+      "Now answer the TASK above in exactly the output format it specifies (when it asks for JSON, return only that JSON,",
+      "with each URL in its own field). You are not writing to anyone: no greeting, no letter, no status update.",
     ].join("\n");
     // The route's own check, applied to EACH writer: an answer that cites none of the fetched pages is that writer's
     // failure, and the next free writer is asked before the route gives up.
     const written = await write(prompt, req, (answer) =>
-      sources.some((s) => citesPage(answer, s.url)) ? null : "cited none of the fetched pages, so its answer cannot be shown to come from them",
+      sources.some((s) => citesPage(answer, s.url))
+        ? // And the caller's own check (14 Nov 2026): a cited answer in the wrong shape — a letter where a list was asked
+          // for — is that writer's failure too, so the next free writer is asked before the route gives up.
+          (req.verify?.(answer) ?? null)
+        : "cited none of the fetched pages, so its answer cannot be shown to come from them",
     );
     const text = written.text;
     return {

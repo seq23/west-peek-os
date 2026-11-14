@@ -897,6 +897,7 @@ async function executeAttempt(
       ...(rec.input.documents?.length ? { documents: rec.input.documents } : {}),
       model: rec.model,
       capabilityRequirement: rec.input.capabilityRequirement,
+      ...(rec.input.verify ? { verify: rec.input.verify } : {}),
       /*
        * THE CALLER'S OWN ASK REACHES THE WIRE AT LAST — widened, never sent bare.
        *

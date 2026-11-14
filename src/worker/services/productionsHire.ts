@@ -6,7 +6,8 @@ import { appendEvent } from "../events";
 import type { Actor } from "./authorize";
 import { runAi } from "../ai/runAi";
 import { markFloorMiss } from "../ai/laneHealth";
-import { SEARCH_MODEL, servedBySearchLane } from "./liveSearch";
+import { SEARCH_MODEL, formatCheck, servedBySearchLane } from "./liveSearch";
+import { steeredPrompt } from "../../shared/work/instruction";
 import { blockCard } from "./blocks";
 import { cannotDetail, steerFor, type Interpreter } from "./instruction";
 import { urlStatus } from "../effects/urlLiveness";
@@ -758,11 +759,12 @@ export function hireSummary(
 
 // ── The runner the sweep calls ───────────────────────────────────────────────
 
-const defaultSearch: HireSearch = async (env, actor, prompt) => {
+const defaultSearch: HireSearch = async (env, actor, prompt, verify) => {
   const { run } = await runAi(env, {
     purpose: "Walker: West Peek Productions hire search",
     actor,
     inputs: [prompt],
+    ...(verify ? { verify } : {}),
     // Public web research; the query leaves for a search engine. Never raised.
     sensitivity: "PUBLIC" as never,
     // Scooter asked for this search: it starts on whichever route has the best record at it (runAi, partnerRequested).
@@ -789,7 +791,7 @@ const defaultJudge: ProductionsJudge = async (env, actor, prompt) => {
 };
 
 /** A hire search answer, with the run that produced it so a floor miss can be held against the route that wrote it. */
-export type HireSearch = (env: Env, actor: Actor, prompt: string) => Promise<{ ok: boolean; text: string; detail: string; runId?: string }>;
+export type HireSearch = (env: Env, actor: Actor, prompt: string, verify?: (text: string) => string | null) => Promise<{ ok: boolean; text: string; detail: string; runId?: string }>;
 /** One route per go: the search is run again on the next route when a result misses the floor. */
 export const HIRE_SEARCH_ROUTES = 3;
 
@@ -887,9 +889,11 @@ export async function runHireSearchCard(
     });
     return { finished: false, blocked: true, detail: why2 };
   }
-  const withSteer = (p: string): string => (steer.text ? `${steer.text}\n\n${p}` : p);
+  // His words ride as data and the brief's own output format has the last word (14 Nov 2026, wc_bd8b68cb).
+  const withSteer = (p: string): string => steeredPrompt(steer.text, p);
   const rawSearch = deps.search ?? defaultSearch;
-  const search: HireSearch = (e, a, p) => rawSearch(e, a, withSteer(p));
+  // A reply with no parseable candidate is a failed go on that route: the router asks the next one in the same run.
+  const search: HireSearch = (e, a, p) => rawSearch(e, a, withSteer(p), formatCheck(parseHireCandidates, "candidate with a profile_url"));
   /*
    * HIS STEER GOES TO THE SEARCH, NEVER TO THE JUDGE (13 Nov 2026). In 2026-W46 his remark on an earlier note was
    * prepended to the judge's prompt, and the judge kept all six "because Scooter approved the shortlist" while its

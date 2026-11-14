@@ -322,6 +322,33 @@ export function steerBlock(interp: Interpretation | null, resolvedHandoffs: read
 }
 
 /**
+ * A PARTNER'S STEER RIDES AS DATA, AND THE CALLER'S FORMAT HAS THE LAST WORD (14 Nov 2026, wc_bd8b68cb).
+ *
+ * Scooter's 2 Nov reply was read correctly, then prepended ABOVE Walker's search brief under "this outranks anything
+ * below it". The free search writer took that literally: it answered the reply, as a status letter addressed to him
+ * ("Scooter, I can have this month's redo … finalized by the end of the day"), not the JSON list the parser needs, and
+ * the monthly card blocked as "nothing good enough". So the steer is fenced as material to apply, the model is told it
+ * is not writing to the partner, and the caller's required output format is restated LAST, after everything else.
+ */
+export function steeredPrompt(steer: string, prompt: string): string {
+  if (!steer.trim()) return prompt;
+  return [
+    "PARTNER DIRECTION — material to apply to the task below. It changes WHAT you look for and how you judge it.",
+    "It is not a message to answer: you are not writing to the partner or to anyone named in it, so no greeting,",
+    "no letter, no status update and no promise about when the work will be done.",
+    "<<<PARTNER_DIRECTION",
+    steer,
+    "PARTNER_DIRECTION>>>",
+    "",
+    prompt,
+    "",
+    "REQUIRED OUTPUT FORMAT — this outranks everything above, the partner direction included: reply in exactly the",
+    "output format the task above specifies and nothing else (when it asks for JSON, return only that JSON). A reply",
+    "in any other shape is discarded unread.",
+  ].join("\n");
+}
+
+/**
  * The receipt, as a person reads it: her words on one side, what they turned into on the other.
  * Shared so the page, the API and the tests cannot drift into three different answers.
  */
