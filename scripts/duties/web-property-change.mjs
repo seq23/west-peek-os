@@ -107,6 +107,12 @@ export function namesFor(cardId, repo = null) {
  * phase stays on the staging branch (its PR is the job's PR). The partner's own branch is never pushed by a staged run.
  */
 export const STAGE_SUFFIX = "-next";
+/** What a staged builder is told: where to push, what never to push, and the PR it reports (opened by the script first). Pure. */
+export function stageContextLines(names, pr) {
+  if (!names?.stagedFrom) return [];
+  const prLine = pr?.url ? ` This branch's PR is already open: ${pr.url} (#${pr.number}); report that url as pr_url and that number as pr_number. Do not open another.` : "";
+  return [`STAGED REBUILD: you are on ${names.branch}, branched from ${names.stagedFrom}. Commit and push HERE (\`git push -u origin ${names.branch}\`). Never push ${names.stagedFrom}: the partner holds its preview.${prLine}`];
+}
 export function stagedBranchFor(job, base) {
   if (!job || job.phase === "PLAN") return null;
   const next = `${base}${STAGE_SUFFIX}`;
@@ -909,11 +915,13 @@ async function headOf(worktree) {
 
 /** A staged rebuild's own PR (see `stagedBranchFor`): pushed and opened by the script, once. */
 async function ensureStagedPr(names, job, progress) {
-  if (await prFor(names.worktree, names.branch).then((p) => p?.state === "OPEN", () => false)) return;
+  const open = await prFor(names.worktree, names.branch).catch(() => null);
+  if (open?.state === "OPEN") return open;
   await git(names.worktree, "push", "-q", "-u", "origin", names.branch);
   const was = job.pr?.url ? ` It replaces ${job.pr.url} once approved.` : "";
   await sh("gh", ["pr", "create", "--base", "main", "--head", names.branch, "--title", `Staged rebuild of ${names.stagedFrom}`, "--body", `A rebuild staged on its own branch and preview so the preview the partner holds (${names.stagedFrom}) stays as it was until this one passes.${was}`], { cwd: names.worktree });
   progress(`opened the staged PR for ${names.branch}`);
+  return prFor(names.worktree, names.branch);
 }
 
 async function prFor(worktree, branch) {
@@ -1355,7 +1363,13 @@ export async function run(job, ctx) {
   mkdirSync(outDir, { recursive: true });
   const runsDone = [];
   const extraLines = repoLines(book, secrets, outDir, runsDone, job);
-  const stageLines = names.stagedFrom ? [`STAGED REBUILD: you are on ${names.branch}, branched from ${names.stagedFrom}. Commit and push HERE (\`git push -u origin ${names.branch}\`). Never push ${names.stagedFrom}: the partner holds its preview. Do not open a PR; the script opens this branch's own.`] : [];
+  /*
+   * THE STAGED PR EXISTS BEFORE THE BUILDER'S TURN (14 Nov 2026). An ok BUILD must carry its PR url (readResult); a
+   * builder told not to open one could never report ok. The script opens the staging branch's PR first and names it.
+   */
+  const stagedPr = names.stagedFrom && phase === "BUILD" ? await ensureStagedPr(names, job, progress).catch((err) => ({ error: err instanceof Error ? err.message : String(err) })) : null;
+  if (stagedPr?.error || (stagedPr && !stagedPr.url)) return { phase, status: "failed", reason: `could not open the staged PR for ${names.branch}: ${String(stagedPr.error ?? "gh returned no url").slice(0, 300)}` };
+  const stageLines = stageContextLines(names, stagedPr);
   const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments, extraLines: [...extraLines, ...stageLines] })}`;
   writeFileSync(path.join(jobDir, `prompt-${phase}.md`), prompt);
   progress(`model turn (${job.model} if Claude) for ${phase}`);
@@ -2354,6 +2368,9 @@ function selfTest() {
       stagedBranchFor({ phase: "LAND", pr: { branch: "work/wpc-a-next" } }, "work/wpc-a") === "work/wpc-a-next" &&
       stagedBranchFor({ phase: "BUILD", rebuild: { intent: "CHANGES" }, pr: { branch: "work/wpc-a" } }, "work/wpc-a") === null &&
       stagedBranchFor({ phase: "PLAN", rebuild: { stage: true } }, "work/wpc-a") === null],
+    ["a staged builder is handed its PR to report, so an ok BUILD can carry pr_url; an unstaged one hears nothing", () =>
+      stageContextLines({ branch: "work/wpc-a-next", stagedFrom: "work/wpc-a" }, { url: "https://github.com/o/r/pull/9", number: 9 })[0].includes("https://github.com/o/r/pull/9") &&
+      stageContextLines({ branch: "work/wpc-a" }, null).length === 0],
     ["names are stable and safe", () => namesFor("wc_ABC-123_def").branch === "work/wpc-abc123de" && !namesFor("../x").worktree.includes("..")],
     ["the claude child never sees a vaulted secret or an API key, keeps the ordinary environment, and the NAMES withheld are reported", () => {
       let told = [];
