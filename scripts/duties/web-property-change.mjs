@@ -218,6 +218,13 @@ function readResultShape(text, phase) {
     }
   }
   if (parsed.deliverables !== undefined && !(Array.isArray(parsed.deliverables) && parsed.deliverables.every((d) => (typeof d === "string" && d.trim()) || (d && typeof d === "object" && String(d.path ?? "").trim())))) return { result: null, problem: "deliverables is a list of file paths (or { path, filename })" };
+  /*
+   * 14 Nov 2026: the model also writes the report's own shape, `{ name, vendor_url, searched }` (wc_c548d043, $1.60 lost).
+   * Its NAME is taken and nothing else; a value anywhere (`NAME=…`, a `value` field) is still refused.
+   */
+  if (Array.isArray(parsed.missing_secrets)) {
+    parsed.missing_secrets = parsed.missing_secrets.map((n) => (n && typeof n === "object" && !("value" in n) && typeof n.name === "string" ? n.name.trim() : n));
+  }
   if (parsed.missing_secrets !== undefined && !(Array.isArray(parsed.missing_secrets) && parsed.missing_secrets.every((n) => typeof n === "string" && /^[A-Z][A-Z0-9_]{2,}$/.test(n)))) return { result: null, problem: "missing_secrets is a list of SCREAMING_SNAKE names — never a value" };
   if (parsed.status === "ok" && phase === "PLAN" && !(typeof parsed.document === "string" && parsed.document.trim().length > 40)) return { result: null, problem: "an ok PLAN must carry a plan document" };
   // Every ask carries a recommended default — "approved" takes them all, so a bare question is not an ask.
@@ -2521,6 +2528,11 @@ function selfTest() {
       return ok.result?.status === "needs_runs" && noRuns.result === null && shell.result === null && badEnv.result === null;
     }],
     ["readResult refuses a missing_secrets entry that is not a NAME", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "x".repeat(50), publish_ready: true, missing_secrets: ["GIPHY_API_KEY=abc"] }), "PLAN").result === null && readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "x".repeat(50), publish_ready: true, missing_secrets: ["GIPHY_API_KEY"] }), "PLAN").result !== null],
+    ["readResult takes the NAME from a { name, vendor_url, searched } entry and still refuses one carrying a value", () => {
+      const ok = readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "x".repeat(50), publish_ready: true, missing_secrets: [{ name: "DROPBOX_APP_KEY", vendor_url: "https://www.dropbox.com/developers/apps", searched: ["DROPBOX_*"] }] }), "PLAN").result;
+      const bad = readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "x".repeat(50), publish_ready: true, missing_secrets: [{ name: "DROPBOX_APP_KEY", value: "abc" }] }), "PLAN").result;
+      return ok !== null && JSON.stringify(ok.missing_secrets) === JSON.stringify(["DROPBOX_APP_KEY"]) && bad === null;
+    }],
     ["the vault is looked up by name then by vendor, and the search is recorded", () => {
       const l = vaultLookup(["RESEND_API_KEY", "GIPHY_KEY", "STRIPE_SECRET"], new Set(["RESEND_API_KEY", "GIPHY_API_KEY"]));
       return l.found.join() === "RESEND_API_KEY" && l.by_vendor.GIPHY_KEY?.join() === "GIPHY_API_KEY" && l.missing.join() === "STRIPE_SECRET" && l.searched.includes("GIPHY_*") && l.searched.includes("STRIPE_*") && l.allowed.join() === "GIPHY_API_KEY,RESEND_API_KEY";
