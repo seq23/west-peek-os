@@ -630,6 +630,16 @@ export async function runArtifactCard(env: Env, sweepCard: { id: string }, deps:
   // The whole row, not the sweep's slice: the words, the meeting and the recipient all live on it.
   const card = await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(sweepCard.id).first<ArtifactCard>();
   if (!card) return { finished: false, blocked: false, detail: "no such card", artifact_id: null };
+  /*
+   * A DASHBOARD IS A BUILD, NEVER A PANEL REPORT (13 Nov 2026, the one build door). This path made an
+   * allow-listed panel over the record, and 0 were ever built. A dashboard someone operates is code:
+   * it goes to Porter's job under the v1.0 bar, in the repo it names, or inside West Peek OS itself.
+   */
+  if (artifactAskFromWords(`${card.title} ${card.prompt ?? ""} ${card.description ?? ""}`)?.kind === "dashboard") {
+    const { handBuildToPorter } = await import("./employeeWork");
+    const out = await handBuildToPorter(env, card.id);
+    return { finished: out.ok, blocked: false, detail: out.detail, artifact_id: null };
+  }
   const employee = card.owner_id ? await env.WP_OS_DB.prepare("SELECT id, name FROM ai_employee WHERE id = ?1").bind(card.owner_id).first<{ id: string; name: string }>() : null;
   const name = employee?.name ?? "Your chief of staff";
   const actor: Actor = employee ? { type: "AI", aiEmployeeId: employee.id, roles: [], firmScopes: [card.firm_scope] } : { type: "SYSTEM", roles: [], firmScopes: [card.firm_scope] };

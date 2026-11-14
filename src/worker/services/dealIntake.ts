@@ -1,9 +1,9 @@
 import { PARTNER_WORDS_ON_CARD, statedCut } from "./partnerWords";
 import { describeModes, parseBlogAsk } from "../../shared/intake/blogHelp";
 import { parsePartnerMessageAsk, partnerMessageTitle } from "../../shared/intake/partnerMessage";
-import { isWebPropertyChange, parseWebPropertyAsk, partsFromHosts, registrationsIn } from "../../shared/intake/webPropertyChange";
-import { loadRegistry, registerFromEmail } from "./webPropertyRegistry";
-import { defaultReadReplyIntent, readReplyIntent, type ReplyIntentReader } from "./replyIntent";
+import { isWebPropertyChange, OS_PROPERTY, OS_REPO, parseWebPropertyAsk, partsFromHosts, registrationsIn } from "../../shared/intake/webPropertyChange";
+import { loadRegistry, registerFromEmail, registryEntryFor } from "./webPropertyRegistry";
+import { defaultReadReplyIntent, readReplyIntent, type ReplyIntent, type ReplyIntentReader } from "./replyIntent";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
 import { dueTimeIn } from "../../shared/intake/dueTime";
 import { textBodyOf, topHeadersOf } from "../effects/mimeAttachments";
@@ -1239,12 +1239,27 @@ export async function openAssignmentCard(
     registeredNow = out.registered;
     if (out.registered.length) registry = await loadRegistry(env);
   }
-  const web = parseWebPropertyAsk(input.subject, written, registry);
+  let web = parseWebPropertyAsk(input.subject, written, registry);
+  /*
+   * ONE BUILD DOOR (13 Nov 2026). No property named: the plain-words reader decides. A build of any
+   * kind — a site, app, dashboard or tool, outside the OS or inside it — goes to Porter's job, under the
+   * same v1.0 bar, never to a panel report or a chief's search loop. Inside the OS it is a change to
+   * West Peek OS's own repo; anything else is unresolved and Porter's PLAN settles where it lives.
+   */
+  let read: ReplyIntent | null = null;
+  if (!isWebPropertyChange(web)) {
+    read = await readPlainWords(env, card.id, input, written);
+    if (read.door === "BUILD") {
+      const os = read.buildIn === "OS" ? ((await registryEntryFor(env, OS_REPO)) ?? OS_PROPERTY) : null;
+      web = parseWebPropertyAsk(input.subject, written, registry, os ?? "UNRESOLVED");
+    }
+  }
   if (web && registeredNow.length) web.registered = registeredNow;
   if (web && due) web.due = due;
   if (web) {
     let assumedFrom: string | null = null;
-    if (web.property_unresolved && !web.target_repo) {
+    // Something new is never assumed to be the site he had Porter on last week.
+    if (web.property_unresolved && !web.target_repo && read?.buildIn !== "NEW") {
       const recent = await env.WP_OS_DB.prepare(
         `SELECT w.property_host, w.target_repo, c.id, c.created_at
            FROM web_property_change w JOIN work_card c ON c.id = w.work_card_id
@@ -1329,8 +1344,14 @@ export async function openAssignmentCard(
     return card.id;
   }
 
-  await routeByPlainWords(env, card, input, written);
+  await routeByPlainWords(env, card, input, written, read);
   return card.id;
+}
+
+/** The one reader, at the front door: the subject and what the partner wrote. */
+async function readPlainWords(env: Env, cardId: string, input: { subject: string; readWords?: ReplyIntentReader }, written: string): Promise<ReplyIntent> {
+  const words = `${strippedSubject(input.subject)}\n\n${written}`.trim();
+  return readReplyIntent(env, { cardId, firmScope: FIRM_SCOPE, text: words, where: "a new email to the firm's operating system (os@), not a reply; no job is open for it yet" }, input.readWords ?? defaultReadReplyIntent);
 }
 
 /**
@@ -1350,9 +1371,9 @@ async function routeByPlainWords(
   card: { id: string; title: string; description?: string | null; next_action?: string | null; state: string },
   input: { subject: string; partnerAddress: string; chiefOfStaff: string; readWords?: ReplyIntentReader },
   written: string,
+  already: ReplyIntent | null,
 ): Promise<void> {
-  const words = `${strippedSubject(input.subject)}\n\n${written}`.trim();
-  const read = await readReplyIntent(env, { cardId: card.id, firmScope: FIRM_SCOPE, text: words, where: "a new email to the firm's operating system (os@), not a reply; no job is open for it yet" }, input.readWords ?? defaultReadReplyIntent);
+  const read = already ?? (await readPlainWords(env, card.id, input, written));
   const chiefFirst = input.chiefOfStaff.trim().split(/\s+/)[0]!.toLowerCase();
   const seat = read.door === "ROUTE" && read.seat ? AI_EMPLOYEE_ROSTER.find((e) => e.name.toLowerCase() === read.seat!.toLowerCase()) ?? null : null;
   const reading = read.source === "MODEL" ? `${read.nothing ? "nothing to do" : read.door === "ROUTE" ? `work for ${read.seat ?? "an employee not named"}` : read.door === "BUILD" ? "a build" : read.door === "ANSWER" ? "a question to answer" : "unclear"} (${read.reason})` : `not read (${read.reason})`;
