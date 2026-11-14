@@ -144,8 +144,39 @@ export function liveLandGate(states) {
   return { ok: true, why: "every PR is green right now" };
 }
 
+/*
+ * NOTHING THAT COSTS MONEY HAPPENS FROM AN EMAIL (owner, 13 Nov 2026: agents never spend money; she or Scooter pays).
+ * A domain, a paid plan or upgrade, an app-store fee, a SaaS signup, a paid API key: the model never does it, it lists
+ * it in `spend`, and a run the model asks for that reads as a purchase counts the same. Either one turns the whole
+ * result into NAMED STOP [SPEND_NEEDS_THE_OWNER], here, at the one place every model result is read — before any run,
+ * any delivery config, any PR read. The Worker holds the card on it and emails nobody.
+ */
+export const SPEND_STOP = "NAMED STOP [SPEND_NEEDS_THE_OWNER]";
+const SPEND_WORDS = /\b(?:buy|purchase|checkout|subscribe|paid[-_ ]?plan|plan[-_ ]?upgrade|register[-_ ]?domain|domains?[-_ ]?(?:register|buy|purchase)|app[-_ ]?store[-_ ]?fee|developer[-_ ]?program)\b/i;
+
+/** What in this result would spend money, in a few words each; empty when nothing would. */
+export function spendIn(parsed) {
+  const out = [];
+  for (const sp of Array.isArray(parsed?.spend) ? parsed.spend : []) {
+    const what = typeof sp === "string" ? sp : String(sp?.what ?? sp?.item ?? "").trim();
+    if (what) out.push(what.slice(0, 200));
+  }
+  for (const r of Array.isArray(parsed?.runs) ? parsed.runs : []) {
+    const line = `${String(r?.script ?? "")} ${(Array.isArray(r?.args) ? r.args : []).join(" ")}`.trim();
+    if (SPEND_WORDS.test(line)) out.push(`the run \`${line.slice(0, 160)}\``);
+  }
+  return out;
+}
+
 /** Read a result file strictly. Null with a reason when the phase said nothing usable. */
 export function readResult(text, phase) {
+  const read = readResultShape(text, phase);
+  const spend = read.result ? spendIn(read.result) : [];
+  if (spend.length === 0) return read;
+  return { result: { phase, status: "failed", spend, reason: `${SPEND_STOP} this needs money spent, which only the owner approves: ${spend.join("; ")}. Nothing was bought; the card waits for her.`.slice(0, 1500) }, problem: null };
+}
+
+function readResultShape(text, phase) {
   if (!text || !text.trim()) return { result: null, problem: "the phase wrote no result file" };
   let parsed;
   try {

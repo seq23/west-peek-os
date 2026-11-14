@@ -51,6 +51,9 @@ the JOB CONTEXT below. Read it before anything else.
   validators in the worktree, not in production.
 - **Write the result file.** Every phase ends by writing ONE JSON object to `RESULT_PATH` (in the
   job context). A phase that does not write it is a failed phase. Nothing you print counts.
+- **Nothing that costs money, ever.** A domain, a paid plan or upgrade, an app-store fee, a SaaS signup, a
+  paid API key: never buy, start or sign up for it. List it in your result as `"spend": [{ "what": "…",
+  "why": "…" }]` and build everything else; the script stops the job by name and the owner decides.
 - **Secrets stay put.** Never print, copy or move a credential. The Drive service account is not
   yours to touch; the package was pulled for you.
 - **The vault is checked first, and a missing key is never a block.** The context lists every key
