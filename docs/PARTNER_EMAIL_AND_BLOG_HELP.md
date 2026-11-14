@@ -32,6 +32,10 @@ still catches each broken rule.
 monthly note and introduction), `roomPacket.ts` (Parker's packet), `deliverables.ts` (a partner's
 own copy), `blogHelp.ts` (below). Each builds the sections; none touches a transport.
 
+## One plain-words reader (13 Nov 2026)
+
+Every partner's words, a new email to os@ or a reply on a thread, are read once by `src/worker/services/replyIntent.ts` (`readReplyIntent`): what they mean for the job (go ahead, fix, question, stop, nothing) and where the work goes (answer, route to a named employee, build). The fixed doors still run first (hashtags, deck start, a named site, blog help, a message to pass on). A new email none of them claimed is handed straight to the employee the reader names; otherwise the chief of staff keeps it with the reading on it. The intake banter/question check uses the same reader. It runs at `INTERNAL`, so it never reaches a free or training route (`tests/plainWordsReader.test.ts`). A reader that cannot run changes nothing: the words are carried on as instructions.
+
 ## Blog help is a routed request
 
 A partner emails `os@joinwestpeek.com` from their own address (it must authenticate — see

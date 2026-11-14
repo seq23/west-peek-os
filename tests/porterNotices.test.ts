@@ -20,7 +20,7 @@ import {
 } from "../src/shared/work/porterNotices";
 import { lintExecEmail, renderExecEmail } from "../src/shared/email/execEmail";
 import { changesTextOf, everyAskRecommended, LATE_THREAD_NOTE_PREFIX, NO_RECOMMENDATION, readApprovalReply, readAsks, stripLateThreadPrefix } from "../src/shared/work/approvalReply";
-import { FAULT_PREFIX, keywordIntent, parseReplyIntent, reportsAFault } from "../src/worker/services/replyIntent";
+import { FAULT_PREFIX, keywordIntent, parseReplyIntent } from "../src/worker/services/replyIntent";
 import { plainTitle } from "../src/shared/work/siteChange";
 import { rebuildIntentFor } from "../src/worker/services/webPropertyChange";
 // The Mac's reader, held to the same answers as the Worker's (one rule, two runtimes).
@@ -278,17 +278,15 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026): the 
 
   it("a partner reporting that what Porter built does not work is a fix to rebuild, never a question (Scooter, 13 Nov 2026)", () => {
     const scooter = "Hey porter, i tried accessing the dashboard and got the screenshot below.\ncna you resend the link with the password\n\nI keep getting this error";
-    const read = keywordIntent(scooter);
-    expect(read).toMatchObject({ kind: "CONTINUE", source: "KEYWORD" });
-    expect(read!.changes).toContain(FAULT_PREFIX);
-    expect(read!.changes).toContain("resend the link with the password");
-    for (const said of ["The sign in page doesn't work on my phone", "I can't access the dashboard", "That sign-in was refused", "the about page won't load"]) {
-      expect(keywordIntent(said)?.kind, said).toBe("CONTINUE");
-      expect(reportsAFault(said), said).toBe(true);
-    }
-    for (const asked of ["Can we make the orange darker on mobile?", "Will the old service pages redirect?", "looks great, ship it when ready", "Do you have a link to the dashboard yet?"]) {
-      expect(reportsAFault(asked), asked).toBe(false);
-    }
+    // The one reader reads it as a FIX: carried as the change to make, so at the preview it rebuilds.
+    const read = parseReplyIntent("INTENT: FIX\nDOOR: BUILD\nSEAT: none\nCHANGES: none\nQUESTION: none\nREASON: the sign-in refused him", scooter);
+    expect(read).toMatchObject({ kind: "CONTINUE", question: null, door: "BUILD", source: "MODEL" });
+    expect(read.changes).toContain(FAULT_PREFIX);
+    expect(read.changes).toContain("resend the link with the password");
+    // A reader that cannot run still carries his words on as the change — never an answer to a question.
+    expect(parseReplyIntent("", scooter)).toMatchObject({ kind: "CONTINUE", changes: scooter, source: "FALLBACK" });
+    // A fault report is free text for the reader, never decided by a word list.
+    expect(keywordIntent(scooter)).toBeNull();
   });
 
   it("parseReplyIntent reads the fixed format strictly and FAILS OPEN to CONTINUE with the words carried", () => {

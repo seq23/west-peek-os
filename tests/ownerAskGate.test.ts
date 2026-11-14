@@ -16,7 +16,7 @@ vi.mock("../src/worker/ai/runAi", async (importOriginal) => {
   return {
     ...actual,
     runAi: async (_env: unknown, input: { purpose: string; inputs: string[] }) => {
-      const text = replies.shift() ?? '{"action":"note","finding":"(no scripted reply)"}';
+      const text = /reading a partner's words/.test(input.purpose) ? "INTENT: CONTINUE\nDOOR: ANSWER\nSEAT: none\nCHANGES: none\nQUESTION: none\nREASON: the chief keeps it" : (replies.shift() ?? '{"action":"note","finding":"(no scripted reply)"}');
       return { run: { id: `run_${crypto.randomUUID()}`, status: "COMPLETED", output_text: text, failure_reason: null } };
     },
   };
