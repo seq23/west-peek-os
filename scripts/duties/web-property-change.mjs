@@ -100,6 +100,19 @@ export function namesFor(cardId, repo = null) {
   };
 }
 
+/**
+ * A STAGED REBUILD (14 Nov 2026). When the developer directs a rebuild while the partner holds an unanswered
+ * preview email, the Worker marks it `rebuild.stage`. It is built on `<branch>-next`, with its own Pages preview
+ * and its own PR, so the link the partner holds never shows a half-built change; once a job is staged, every later
+ * phase stays on the staging branch (its PR is the job's PR). The partner's own branch is never pushed by a staged run.
+ */
+export const STAGE_SUFFIX = "-next";
+export function stagedBranchFor(job, base) {
+  if (!job || job.phase === "PLAN") return null;
+  const next = `${base}${STAGE_SUFFIX}`;
+  return job.rebuild?.stage === true || String(job.pr?.branch ?? "") === next ? next : null;
+}
+
 /** A job over several repos (0236). One repo, or none, is the single-repo road, unchanged. */
 export function isSeveral(job) {
   return Array.isArray(job?.parts) && job.parts.length > 1;
@@ -858,10 +871,16 @@ async function ensureWorktree(repoPath, names, phase, progress) {
     if (remote.stdout.trim()) {
       await git(repoPath, "worktree", "add", names.worktree, "-B", names.branch, `origin/${names.branch}`);
     } else {
-      await git(repoPath, "worktree", "add", names.worktree, "-b", names.branch, "origin/main");
+      await git(repoPath, "worktree", "add", names.worktree, "-b", names.branch, names.stagedFrom ? `origin/${names.stagedFrom}` : "origin/main");
     }
     progress(`worktree ${names.worktree} on ${names.branch}`);
   } else if (phase !== "PLAN") {
+    // A staged rebuild's first run: the staging branch starts from the partner's branch as origin has it.
+    if (names.stagedFrom && !(await git(names.worktree, "rev-parse", "--verify", "-q", `refs/heads/${names.branch}`).then(() => true, () => false))) {
+      const remote = await git(repoPath, "ls-remote", "--heads", "origin", names.branch);
+      await git(names.worktree, "checkout", "-q", "-b", names.branch, remote.stdout.trim() ? `origin/${names.branch}` : `origin/${names.stagedFrom}`);
+      progress(`staged rebuild on ${names.branch}, from ${names.stagedFrom}; ${names.stagedFrom} and its preview stay as they are`);
+    }
     // Resume: the branch may have moved (a previous BUILD pushed). Take what origin has.
     await git(names.worktree, "checkout", "-q", names.branch).catch(() => {});
     await git(names.worktree, "pull", "--ff-only", "-q", "origin", names.branch).catch(() => {});
@@ -885,6 +904,15 @@ async function headOf(worktree) {
   } catch {
     return null;
   }
+}
+
+/** A staged rebuild's own PR (see `stagedBranchFor`): pushed and opened by the script, once. */
+async function ensureStagedPr(names, job, progress) {
+  if (await prFor(names.worktree, names.branch).then((p) => p?.state === "OPEN", () => false)) return;
+  await git(names.worktree, "push", "-q", "-u", "origin", names.branch);
+  const was = job.pr?.url ? ` It replaces ${job.pr.url} once approved.` : "";
+  await sh("gh", ["pr", "create", "--base", "main", "--head", names.branch, "--title", `Staged rebuild of ${names.stagedFrom}`, "--body", `A rebuild staged on its own branch and preview so the preview the partner holds (${names.stagedFrom}) stays as it was until this one passes.${was}`], { cwd: names.worktree });
+  progress(`opened the staged PR for ${names.branch}`);
 }
 
 async function prFor(worktree, branch) {
@@ -1241,6 +1269,8 @@ export async function run(job, ctx) {
   const checkout = await ensureCheckout(repoPath, job.github_repo ?? null, progress);
   if (!checkout.ok) return { phase, status: "failed", reason: checkout.why };
   const names = namesFor(job.card?.id ?? "card");
+  const staged = stagedBranchFor(job, names.branch);
+  if (staged) Object.assign(names, { stagedFrom: names.branch, branch: staged });
   const jobDir = ctx.jobDir;
   mkdirSync(jobDir, { recursive: true });
   const packageDir = path.join(path.dirname(names.worktree), `pkg-${path.basename(names.worktree).replace(/^wt-/, "")}`);
@@ -1313,7 +1343,8 @@ export async function run(job, ctx) {
   mkdirSync(outDir, { recursive: true });
   const runsDone = [];
   const extraLines = repoLines(book, secrets, outDir, runsDone, job);
-  const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments, extraLines })}`;
+  const stageLines = names.stagedFrom ? [`STAGED REBUILD: you are on ${names.branch}, branched from ${names.stagedFrom}. Commit and push HERE (\`git push -u origin ${names.branch}\`). Never push ${names.stagedFrom}: the partner holds its preview. Do not open a PR; the script opens this branch's own.`] : [];
+  const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments, extraLines: [...extraLines, ...stageLines] })}`;
   writeFileSync(path.join(jobDir, `prompt-${phase}.md`), prompt);
   progress(`model turn (${job.model} if Claude) for ${phase}`);
   let claude = await runModel({ job, prompt, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
@@ -1327,7 +1358,7 @@ export async function run(job, ctx) {
     const done = await applyRuns(result.runs, { base: book.mayRun, job, phase }, names.worktree, ctx.env, secrets.allowed, progress);
     runsDone.push(...done);
     rmSync(resultPath, { force: true });
-    const again = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments, extraLines: repoLines(book, secrets, outDir, runsDone, job) })}\n\nRUNS DONE FOR YOU SINCE YOUR LAST TRY: ${done.map((d) => `${d.script} (${d.env}) → exit ${d.exit}: ${d.line}`).join("; ")}`;
+    const again = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments, extraLines: [...repoLines(book, secrets, outDir, runsDone, job), ...stageLines] })}\n\nRUNS DONE FOR YOU SINCE YOUR LAST TRY: ${done.map((d) => `${d.script} (${d.env}) → exit ${d.exit}: ${d.line}`).join("; ")}`;
     claude = await runModel({ job, prompt: again, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
     finishIfCodex(claude, { phase, resultPath, worktree: names.worktree, branch: names.branch, jobDir, progress });
     writeFileSync(path.join(jobDir, `claude-${phase}-runs${round + 1}.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
@@ -1382,6 +1413,7 @@ export async function run(job, ctx) {
     // THE SCRIPT OBSERVES THE PR AND ITS CHECKS. The model's pr_url is a claim; gh is the fact.
     let pr;
     try {
+      if (names.stagedFrom) await ensureStagedPr(names, job, progress);
       pr = await prFor(names.worktree, names.branch);
     } catch (err) {
       return { phase, status: "failed", reason: `the model reported a PR but gh finds none on ${names.branch}: ${err instanceof Error ? err.message.slice(0, 300) : String(err)}` };
@@ -2239,6 +2271,12 @@ function selfTest() {
     ["one failure makes RED", () => checkStateOf([{ state: "SUCCESS" }, { state: "FAILURE" }]) === "RED"],
     ["a pending check is PENDING", () => checkStateOf([{ state: "SUCCESS" }, { state: "PENDING" }]) === "PENDING"],
     ["no checks is PENDING, not green", () => checkStateOf([]) === "PENDING"],
+    ["a staged rebuild builds on <branch>-next and stays there; the partner's branch and a PLAN never are", () =>
+      stagedBranchFor({ phase: "BUILD", rebuild: { intent: "CHANGES", stage: true } }, "work/wpc-a") === "work/wpc-a-next" &&
+      stagedBranchFor({ phase: "BUILD", rebuild: { intent: "CHANGES" }, pr: { branch: "work/wpc-a-next" } }, "work/wpc-a") === "work/wpc-a-next" &&
+      stagedBranchFor({ phase: "LAND", pr: { branch: "work/wpc-a-next" } }, "work/wpc-a") === "work/wpc-a-next" &&
+      stagedBranchFor({ phase: "BUILD", rebuild: { intent: "CHANGES" }, pr: { branch: "work/wpc-a" } }, "work/wpc-a") === null &&
+      stagedBranchFor({ phase: "PLAN", rebuild: { stage: true } }, "work/wpc-a") === null],
     ["names are stable and safe", () => namesFor("wc_ABC-123_def").branch === "work/wpc-abc123de" && !namesFor("../x").worktree.includes("..")],
     ["the claude child never sees a vaulted secret or an API key, keeps the ordinary environment, and the NAMES withheld are reported", () => {
       let told = [];
