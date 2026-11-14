@@ -91,7 +91,7 @@ export const WEB_PROPERTIES: readonly WebProperty[] = [
   // the west-peek-live Worker's routes) and a live curl — never guessed.
   { host: "westpeek.live", repo: "westpeek-live", site: REPO_ROOT_SITE, words: ["westpeek live", "west peek live", "westpeek.live", "the live site", "the live website", "the events site", "the events platform", "the event platform"] },
   { host: "pitch.joinwestpeek.com", aliases: ["pitchlab.joinwestpeek.com"], repo: "west-peek-pitch-lab", site: REPO_ROOT_SITE, pagesHost: "west-peek-pitch-lab.pages.dev", words: ["pitch lab", "pitchlab", "the pitch site", "pitch lab site"] },
-  { host: "network.joinwestpeek.com", repo: "west-peek-network-os", site: REPO_ROOT_SITE, pagesHost: "west-peek-network-os.pages.dev", words: ["network os", "the network app", "network os app"] },
+  { host: "network.joinwestpeek.com", repo: "west-peek-network-os", site: REPO_ROOT_SITE, words: ["network os", "the network app", "network os app"] },
   { host: "venturedeals.joinwestpeek.com", repo: "secondaries", site: REPO_ROOT_SITE, pagesHost: "secondaries.pages.dev", words: ["venture deals", "venturedeals", "secondaries site", "the secondaries page", "secondaries page", "secondaries website"] },
   { host: "dilution.joinwestpeek.com", repo: "founder-dilution-dashboard", site: REPO_ROOT_SITE, pagesHost: "founder-dilution-dashboard.pages.dev", words: ["dilution dashboard", "dilution calculator", "the dilution site", "dilution site", "founder dilution"] },
 ];
