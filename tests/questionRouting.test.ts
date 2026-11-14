@@ -29,22 +29,26 @@ const shouldNeverBeCalled: QuestionAnswerer = async () => {
 };
 
 describe("answerQuestionForCard — escalates before ever asking a model, when there is nobody real to ask", () => {
-  it("a kind with no registered host is not confident, and the model is never called", async () => {
-    const out = await answerQuestionForCard(
+  it("a kind with no registered host goes to the writing partner's chief of staff, never to nobody (2 Nov 2026: 11 days unread)", async () => {
+    const asked: string[] = [];
+    const answerer: QuestionAnswerer = async (_e, input) => (asked.push(input.employee.name), { confident: true, answer: "The list goes out Monday.", reason: "on the card", aiRunId: null });
+    const scooter = await answerQuestionForCard(
       env,
-      { cardId: "wc_test", firmScope: "west-peek", kind: "ARTIFACT", cardTitle: "t", question: "what does this do?" },
-      shouldNeverBeCalled,
+      { cardId: "wc_test", firmScope: "west-peek", kind: "PRODUCTIONS_MONTHLY", cardTitle: "t", question: "when do the leads come?", partnerName: "Scooter Taylor" },
+      answerer,
     );
-    expect(out.confident).toBe(false);
-    expect(out.answer).toBeNull();
-    expect(out.employeeName).toBeNull();
-    expect(out.reason).toContain("no owning employee is registered");
+    expect(scooter.employeeName).toBe("Walker");
+    expect(scooter.confident).toBe(true);
+    expect(scooter.answer).toBe("The list goes out Monday.");
+    const sequoia = await answerQuestionForCard(env, { cardId: "wc_test", firmScope: "west-peek", kind: "ARTIFACT", cardTitle: "t", question: "what does this do?", partnerName: "Sequoia Taylor" }, answerer);
+    expect(sequoia.employeeName).toBe("Wren");
+    expect(asked, "the chief of staff is really asked").toEqual(["Walker", "Wren"]);
   });
 
-  it("null/unknown kind is not confident, and the model is never called", async () => {
-    const out = await answerQuestionForCard(env, { cardId: "wc_test", firmScope: "west-peek", kind: null, cardTitle: "t", question: "?" }, shouldNeverBeCalled);
+  it("a null kind from an unknown writer still has someone to try it", async () => {
+    const out = await answerQuestionForCard(env, { cardId: "wc_test", firmScope: "west-peek", kind: null, cardTitle: "t", question: "?" }, async () => ({ confident: false, answer: null, reason: "not sure", aiRunId: null }));
     expect(out.confident).toBe(false);
-    expect(out.employeeName).toBeNull();
+    expect(out.employeeName).toBe("Wren");
   });
 
   it("a registered host who is not ACTIVE right now is not confident, and the model is never called", async () => {

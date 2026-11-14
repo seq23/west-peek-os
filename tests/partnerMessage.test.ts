@@ -12,6 +12,7 @@ import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
 import { parsePartnerMessageAsk, partnerMessageTitle } from "../src/shared/intake/partnerMessage";
 import { execSubject } from "../src/shared/email/execEmail";
 import { saidNothing, cannotDo } from "./helpers/interpret";
+import type { Interpreter } from "../src/worker/services/instruction";
 
 /**
  * PARTNER_MESSAGE — one named employee tells one named partner something short (22 Sep 2026).
@@ -266,6 +267,21 @@ describe("runPartnerMessageCard — the real send door", () => {
       .bind(card.id)
       .first();
     expect(approval).toBeNull();
+  });
+
+  it("a reader whose seats were all down is a failed go the sweep retries, never BLOCKED as 'the brief is missing' (the 11-day November card)", async () => {
+    const card = await makeCard({ ownerId: "aie_porter", resultRecipient: "Scooter", prompt: "tell him the venue moved to the loft" });
+    let composed = 0;
+    const down: Interpreter = async () => ({ ok: false, text: "", aiRunId: null, model: null, detail: "Claude did not answer and the Codex seat was unavailable" });
+    const hi = compose("hi");
+    const out = await runPartnerMessageCard(env, card, { interpret: down, compose: (async (...a: Parameters<typeof hi>) => ((composed += 1), hi(...a))) as typeof hi });
+    expect(out).toMatchObject({ finished: false, blocked: false });
+    expect(out.detail).toMatch(/could not be read/);
+    expect(composed, "nothing is written to him on an unread instruction").toBe(0);
+    const row = await cardRow(card.id);
+    expect(row.state).not.toBe("BLOCKED");
+    // Out of the way of the sweep tests below.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(card.id).run();
   });
 
   it("BLOCKS when the named employee is real but not ACTIVE", async () => {

@@ -3,6 +3,7 @@ import type { Actor } from "./authorize";
 import { runAi } from "../ai/runAi";
 import { personaPrompt } from "../../shared/registry/aiEmployeePersonas";
 import { kindHost } from "../../shared/work/kindHosts";
+import { chiefOfStaffFor } from "../../shared/work/chiefOfStaff";
 
 /**
  * WHOEVER OWNS THE KIND ANSWERS FIRST (Addendum 12, 22 Sep 2026).
@@ -41,10 +42,16 @@ export interface QuestionAnswerInput {
   question: string;
   /** What the card itself records right now (preview link, what is being built, what is still to come). Answered from first. */
   facts?: string[];
+  /**
+   * The partner who wrote, by full name. A kind with no registered owner goes to THEIR chief of staff
+   * (Walker for Scooter, Wren for Sequoia), never to nobody (2 Nov 2026: a reply on a Productions card
+   * reached "no owning employee" and sat unread for 11 days).
+   */
+  partnerName?: string | null;
 }
 
 export interface QuestionAnswerResult {
-  /** Null when no kind host is registered, or the registered employee is not ACTIVE. */
+  /** The kind's host, or the partner's chief of staff when the kind has none. */
   employeeName: string | null;
   employeeId: string | null;
   confident: boolean;
@@ -129,8 +136,8 @@ const defaultAnswerQuestion: QuestionAnswerer = async (env, input) => {
 /**
  * Try the employee who owns this card's KIND before anybody escalates to her.
  *
- * Refuses to try anyone when no kind host is registered, or the registered employee is not
- * ACTIVE — the same "status is not assumed, it comes from the database" rule `pageHosts.ts` holds
+ * A kind with no registered host is tried by the partner's chief of staff (never nobody). Refuses
+ * to try anyone when that employee is not ACTIVE — the same "status is not assumed, it comes from the database" rule `pageHosts.ts` holds
  * for a page host. Either way this returns `confident: false` rather than throwing, so the caller's
  * fallback (the existing `a_question_for_you` block) is always the safe default path.
  */
@@ -139,10 +146,8 @@ export async function answerQuestionForCard(
   input: QuestionAnswerInput,
   answer: QuestionAnswerer = defaultAnswerQuestion,
 ): Promise<QuestionAnswerResult> {
-  const host = kindHost(input.kind);
-  if (!host) {
-    return { employeeName: null, employeeId: null, confident: false, answer: null, reason: `no owning employee is registered for kind "${input.kind ?? "(none)"}"`, aiRunId: null };
-  }
+  // A kind with no fixed owner is the writing partner's chief of staff's: someone always tries it.
+  const host = kindHost(input.kind) ?? { name: chiefOfStaffFor(String(input.partnerName ?? "")) };
   const emp = await env.WP_OS_DB.prepare("SELECT id, name, role, status FROM ai_employee WHERE name = ?1")
     .bind(host.name)
     .first<{ id: string; name: string; role: string; status: string }>();
