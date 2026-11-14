@@ -404,9 +404,12 @@ describe("a reply asking for a finished Productions note to be redone reopens it
      */
     const CARD_ID = "wc_done_monthly_praised_question";
     await doneCard(CARD_ID, "Walker: West Peek Productions this month (2026-11)", KIND);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET description = ?2 WHERE id = ?1").bind(CARD_ID, "1. MDRC — Trigger: launched a mobility initiative").run();
     const asked: string[] = [];
+    const facts: string[] = [];
     const walker: QuestionAnswerer = async (_e, input) => {
       asked.push(input.question);
+      facts.push(...(input.facts ?? []));
       return { confident: true, answer: "Lead with the case study.", reason: "t", aiRunId: null };
     };
     sent.length = 0;
@@ -415,6 +418,7 @@ describe("a reply asking for a finished Productions note to be redone reopens it
     expect(card.state, "the note he praised is not rebuilt").toBe("DONE");
     expect(asked, "Walker is asked his question").toHaveLength(1);
     expect(asked[0]).toMatch(/case study or a vision/);
+    expect(facts.join("\n"), "Walker answers from the note he sent, not blind").toContain("1. MDRC — Trigger: launched a mobility initiative");
     expect(sent.filter((m) => m.to === "scooter@westpeek.ventures").map((m) => m.text).join("\n")).toContain("Lead with the case study.");
     expect((await noteFor(CARD_ID)).some((n) => /asking for it to be redone/.test(n.body)), "no rework note").toBe(false);
   });

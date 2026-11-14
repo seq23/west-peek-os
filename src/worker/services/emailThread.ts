@@ -863,9 +863,18 @@ async function handleReplyOnClosedCard(
    * stored data (a candidate search's actual results, not just a persona's say-so), this call needs
    * no change — the mechanism it reuses gets better underneath it.
    */
+  /*
+   * WHAT THE CARD SENT IS PART OF THE QUESTION (14 Nov 2026). Scooter asked Walker, about the leads in
+   * the note Walker had just sent him, "what do we lead with? case study or a vision?" Walker was
+   * asked without the note, could not stand behind any answer, and the question went to a notice
+   * instead of back to Scooter. The finished card's own note is now the facts the owner answers from:
+   * its END, because a reworked card's record keeps every version and the newest is last.
+   */
+  const sentNote = await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(card.id).first<{ description: string | null }>();
+  const facts = sentNote?.description?.trim() ? [`The note this card sent the partner, which the question is about (the card's record, newest version last):\n${sentNote.description.trim().slice(-8000)}`] : undefined;
   const routed = await answerQuestionForCard(
     env,
-    { cardId: card.id, firmScope: card.firm_scope, kind: card.kind, cardTitle: card.title, question: written, partnerName: partner.fullName },
+    { cardId: card.id, firmScope: card.firm_scope, kind: card.kind, cardTitle: card.title, question: written, partnerName: partner.fullName, ...(facts ? { facts } : {}) },
     answerQuestion,
   );
 
