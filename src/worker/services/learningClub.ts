@@ -1,4 +1,5 @@
 import { withBrandFooter } from "../../shared/tlc/brandFooter";
+import { recordFloor } from "./floorLog";
 import { z } from "zod";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
@@ -2255,6 +2256,7 @@ async function runBrandBatch(env: Env, card: SweepCard, now: Date, search: TlcSe
   const wayIn = done.flatMap((d) => d.wayIn);
   const changed = done.reduce((n, d) => n + d.changed, 0);
   const mustLines = [queued.length ? `• Brands we must pitch, queued first: ${queued.join("; ")}.` : "", ...wayIn.map((w) => `• Needs a way in: ${w}`)].filter(Boolean);
+  await recordFloor(env, { deliverable: "tlc_brand_batch", ok: true, headline: added.length, measures: { added: added.length, dropped: dropped.length, must_pitch_queued: queued.length, needs_a_way_in: wayIn.length }, sample: added.join("\n") });
   // NEVER A NAG: a week whose only news is a new or changed "Needs a way in" item finishes, and the item
   // itself is the stop she sees (TLC panel and Approvals). An unchanged week with nothing queued blocks as before.
   // A week where every club was covered by Parker's list (or its goal) is a finished week, never a nag.

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { recordFloor } from "./floorLog";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { json } from "../router";
@@ -796,6 +797,13 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
       const done = remaining === 0 || state.research.length >= MAX_RESEARCHED + SPONSOR_FLOOR_EXTRA || (state.research.length >= MAX_RESEARCHED && floor.ok);
       // STILL BELOW THE FLOOR WITH NOBODY LEFT TO RESEARCH: the packet carries the sentence, so a thin list never reads as a full one.
       if (done && floor.miss && !(state.qualityNotes ?? []).includes(floor.miss)) state.qualityNotes = [...(state.qualityNotes ?? []), floor.miss];
+      if (done) {
+        await recordFloor(env, {
+          deliverable: "room_sponsors", ok: floor.ok, headline: floor.good, firmScope,
+          measures: { researched: state.research.length, good: floor.good, with_contact: state.research.filter((r) => r.contact).length },
+          sample: state.research.map((r) => `${r.orgName}: ${r.contact ? `${r.contact.name}, ${r.contact.title}` : "no named contact"}; ${r.evidence.length} page(s)`).join("\n"),
+        });
+      }
       await saveStage(env, draft.id, done ? "CONCEPTS" : "RESEARCH", state);
       const last = state.research.slice(-todo.length);
       return {
@@ -896,6 +904,7 @@ export async function runStage(env: Env, draft: PacketRow, deps: ChainDeps = {})
       if (!economics.reachesKeep) state.flags.push({ code: "structure_short_of_keep", detail: `All slots sold bring $${economics.sponsorTargetHighUsd.toLocaleString("en-US")} against $${economics.requiredUsd.toLocaleString("en-US")} needed for cost plus the firm's keep.` });
       await storePacket(env, draft, packet, economics, aiRunId, state, actor);
       await saveQualityNote(env, draft.id, state.qualityNotes);
+      await recordFloor(env, { deliverable: "room_packet", ok: (state.qualityNotes ?? []).length === 0, headline: (state.qualityNotes ?? []).length === 0 ? 1 : 0, measures: { caveats: (state.qualityNotes ?? []).length }, aiRunId, sample: (state.qualityNotes ?? []).join(" ") || "No caveat: written on a seat with a full sponsor list.", firmScope });
       return { stage, next: "KIT", note: `"${packet.title}": ${packet.venues.length} venue(s), ${packet.sponsorProspects.length} sponsor(s) ranked, ${packet.runOfShow.length} run-of-show lines, ${economics.scenarios.length} slot(s) — the firm keeps $${economics.netHighUsd.toLocaleString("en-US")} if all land` };
     }
 

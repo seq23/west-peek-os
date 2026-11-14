@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { recordFloor } from "./floorLog";
 import type { RouteContext } from "../router";
 import { json } from "../router";
 import { appendEvent } from "../events";
@@ -931,6 +932,11 @@ export async function runHireSearchCard(
     await rememberRejects(env, judged.rejected, week, card.id, now, card.firm_scope);
     const earlier = new Set([...known].filter(([, k]) => isPastReject(k) || k.week !== week || k.status === "SEEN").map(([url]) => url));
     const floor = hireFloor(judged.kept.filter((c) => !earlier.has(c.profileUrl)));
+    await recordFloor(env, {
+      deliverable: "hire_search", ok: floor.misses.length === 0, headline: floor.good, firmScope: card.firm_scope,
+      measures: { kept: judged.kept.length, at_floor: floor.good, turned_down: judged.rejected.length, pages_dead: checked.dropped.length },
+      sample: judged.kept.map((c) => `fit ${c.fit}: ${c.why}`).join("\n"),
+    });
     if (!best || floor.good > best.good || (floor.good === best.good && judged.kept.length > best.kept.length)) {
       best = { kept: judged.kept, dropped: checked.dropped, rejected: judged.rejected, good: floor.good, misses: floor.misses };
     }
