@@ -118,6 +118,8 @@ export interface LocalJobPayload {
   property_host: string | null;
   /** 0253: owner/name on GitHub, so the Mac can clone a checkout it does not have. */
   github_repo?: string | null;
+  /** 13 Nov 2026: the door registered this repo for something new; the Mac creates it (public, seq23) and its free Pages project when missing. */
+  new_repo?: boolean;
   /** 0253: the secret NAMES the registry allows for this repo (its RUNBOOK's `## Secrets` + vault vendor matches). Never a value. */
   secret_names?: string[];
   /** 0253: keys an earlier phase found missing from the vault; the build goes ahead without them. */

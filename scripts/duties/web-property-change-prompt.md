@@ -159,6 +159,11 @@ change it loads each changed page and fails on a placeholder or an error. It exi
 prints one line starting `FIRST_RUN OK` when every step passed. The script runs it right after the preview link
 is read; a failure means the partner is not sent the preview, and the build is run again.
 
+## A new repo, and West Peek OS itself (13 Nov 2026)
+
+- **NEW_REPO: yes** means the repo was just created for this ask (public, seq23) with a Cloudflare Pages project of the same name connected to it. Pages runs `npm run build` when there is a package.json and serves `dist/`: put the built site in `dist/` (a plain static site is copied there by the build script). Write its RUNBOOK. Every PR gets a preview at `<branch>.<repo>.pages.dev`. Nothing in a public repo is private: keys stay server-side, LP names and deal terms never go in it.
+- **TARGET_REPO: west-peek-os** is the firm's own operating system. An internal dashboard or screen is built there as a page of the OS, reading the OS's own records through its own API and auth; never a copy of its data. Migrations are additive only; no change to live records; `~/bin/land` lands it.
+
 ## Standing partner practices (owner, 6 Oct 2026 — read from every Top Barz email, README, PRD and RUNBOOK)
 
 - **A brief is a brief wherever it came from.** A voice-note transcript she or Scooter forwarded, a
