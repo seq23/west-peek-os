@@ -13,6 +13,7 @@ import {
   parsePressPitches,
   renderPressEmail,
   runProductionsCard,
+  MONTHLY_EXTRA_PASSES,
 } from "../src/worker/services/productions";
 import { sweepOnce } from "../src/worker/services/workSweep";
 import { steersWith } from "./helpers/interpret";
@@ -60,13 +61,20 @@ const pressJson = JSON.stringify({
 
 const urlCheck = async (url: string): Promise<boolean> => !url.includes("dead.example");
 
-/** The new truth for a month below the floor (owner, 14 Nov 2026): the note still goes, with no shortfall notice in it, and the card is a named stop on Sequoia. */
-async function expectThinMonth(out: { outcome: string; card?: { id: string } | null }): Promise<void> {
-  expect(out.outcome).toBe("BLOCKED");
-  const row = (await env.WP_OS_DB.prepare("SELECT state, block_reason, block_who, block_needed, description FROM work_card WHERE id = ?1").bind(out.card!.id).first<Record<string, string | null>>())!;
-  expect(row).toMatchObject({ state: "BLOCKED", block_reason: "nothing_good_enough_to_send", block_who: "SEQUOIA" });
-  expect(String(row.block_needed)).toMatch(/below its floor after two searches \(\d+ customer leads? stood up, and a month needs 6/);
-  expect(String(row.description), "Scooter's note carries no shortfall notice").not.toMatch(/THIN MONTH|a month needs/i);
+/**
+ * The new truth for a month below the floor (owner, 14 Nov 2026): nothing for Sequoia and nothing sent yet; the card is
+ * researched again the next day, up to MONTHLY_EXTRA_PASSES times, then what met the bar goes to Scooter and it is DONE.
+ */
+async function expectThinMonth(out: Awaited<ReturnType<typeof sweepOnce>>, runner: Parameters<typeof sweepOnce>[2], from: Date): Promise<void> {
+  expect(out.outcome, out.summary).toBe("PROGRESSED");
+  const id = out.card!.id;
+  const row = async () => (await env.WP_OS_DB.prepare("SELECT state, block_who, description FROM work_card WHERE id = ?1").bind(id).first<Record<string, string | null>>())!;
+  expect((await row()).block_who).toBeNull();
+  let last = out;
+  for (let n = 1; n <= MONTHLY_EXTRA_PASSES; n += 1) last = await sweepOnce(env, new Date(from.getTime() + n * 25 * 3_600_000), runner);
+  expect(last.outcome, last.summary).toBe("DONE");
+  expect(await row()).toMatchObject({ state: "DONE", block_who: null });
+  expect(String((await row()).description), "Scooter's note carries no shortfall notice").not.toMatch(/THIN MONTH|a month needs/i);
 }
 
 beforeAll(async () => {
@@ -109,7 +117,7 @@ describe("what Walker is told", () => {
     // keep it, and it still never reaches the note — the exclusion is before the judge, not after.
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN','IN_PROGRESS','BLOCKED')").run();
     const opened = await openProductionsCard(env, "productions_monthly", new Date("2027-03-01T14:00:00.000Z"));
-    const out = await sweepOnce(env, new Date("2027-03-01T14:05:00.000Z"), {
+    const runner: Parameters<typeof sweepOnce>[2] = {
       productions: (e, card) => runProductionsCard(e, card, {
         search: async (_e, _a, prompt) => ({ ok: true, text: /journalists/.test(prompt) ? pressJson : raw, detail: "ok" }),
         urlCheck: async () => true,
@@ -117,9 +125,10 @@ describe("what Walker is told", () => {
         pageText: async () => "Contact: a.writer@communityweekly.example",
         now: new Date("2027-03-01T14:05:00.000Z"),
       }),
-    });
+    };
+    const out = await sweepOnce(env, new Date("2027-03-01T14:05:00.000Z"), runner);
     expect(out.card?.id).toBe(opened.cardId);
-    await expectThinMonth(out); // fewer than six leads and two pitches: it goes, labelled, and the card stops by name (13 Nov 2026)
+    await expectThinMonth(out, runner, new Date("2027-03-01T14:05:00.000Z")); // fewer than six leads and two pitches: it goes, labelled, and the card stops by name (13 Nov 2026)
     const delivered = (await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ description: string }>())!.description;
     expect(delivered).toMatch(/1\. Fresh Association/);
     expect(delivered).not.toMatch(/\d\. Exec Leadership Council/);
@@ -295,7 +304,7 @@ describe("the monthly card on Walker's desk", () => {
     const opened = await openProductionsCard(env, "productions_monthly", new Date("2026-11-01T14:00:00.000Z"));
     expect(opened.title).toBe("Walker: West Peek Productions this month (2026-11)");
     let searches = 0;
-    const out = await sweepOnce(env, new Date("2026-11-01T14:05:00.000Z"), {
+    const runner: Parameters<typeof sweepOnce>[2] = {
       productions: (e, card) => runProductionsCard(e, card, {
         search: async (_e, _a, prompt) => { searches += 1; return { ok: true, text: /journalists/.test(prompt) ? pressJson : customerJson, detail: "ok" }; },
         urlCheck,
@@ -303,9 +312,10 @@ describe("the monthly card on Walker's desk", () => {
         pageText: async () => "Contact: a.writer@communityweekly.example",
         now: new Date("2026-11-01T14:05:00.000Z"),
       }),
-    });
+    };
+    const out = await sweepOnce(env, new Date("2026-11-01T14:05:00.000Z"), runner);
     expect(out.card?.id).toBe(opened.cardId);
-    await expectThinMonth(out); // fewer than six leads and two pitches: it goes, labelled, and the card stops by name (13 Nov 2026)
+    await expectThinMonth(out, runner, new Date("2026-11-01T14:05:00.000Z")); // fewer than six leads and two pitches: it goes, labelled, and the card stops by name (13 Nov 2026)
     const mails = (await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'deliverable.emailed_to_partner'").bind(opened.cardId).all<{ payload_json: string }>()).results ?? [];
     const delivered = (await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ description: string }>())!.description;
     // The subject is the busy-executive one (≤ 70 chars, "Walker: <what>"), and the note is under it.
@@ -323,7 +333,7 @@ describe("the monthly card on Walker's desk", () => {
     expect(renderMonthlyEmail("2026-11", [], [], [])).toMatch(/Nothing with a live citation this month/);
   });
 
-  it("BOTH HALVES OR NOTHING: a customer search with no urls is asked once more, and if still empty the card is BLOCKED and NO email goes out", async () => {
+  it("BOTH HALVES OR NOTHING: a customer search with no urls is asked once more, and if still empty after every extra pass NO email goes out and nothing goes on a desk", async () => {
     // 16 Sep 2026, 00:02Z: Scooter received "0 customer lead(s) and 4 press pitch(es)" because the
     // customer search answered without a url on any entry and the card emailed anyway.
     const { openProductionsCard } = await import("../src/worker/services/productions");
@@ -331,7 +341,7 @@ describe("the monthly card on Walker's desk", () => {
     const opened = await openProductionsCard(env, "productions_monthly", new Date("2026-12-01T14:00:00.000Z"));
     const noUrls = JSON.stringify({ results: [{ organisation: "U.S. Space Force", trigger: "a launch programme", approach: "Comms lead", angle: "n/a" }] });
     const customerPrompts: string[] = [];
-    const out = await sweepOnce(env, new Date("2026-12-01T14:05:00.000Z"), {
+    const runner: Parameters<typeof sweepOnce>[2] = {
       productions: (e, card) => runProductionsCard(e, card, {
         search: async (_e, _a, prompt) => {
           if (/journalists/.test(prompt)) return { ok: true, text: pressJson, detail: "ok" };
@@ -343,18 +353,22 @@ describe("the monthly card on Walker's desk", () => {
         pageText: async () => "Contact: a.writer@communityweekly.example",
         now: new Date("2026-12-01T14:05:00.000Z"),
       }),
-    });
+    };
+    const out = await sweepOnce(env, new Date("2026-12-01T14:05:00.000Z"), runner);
     expect(out.card?.id).toBe(opened.cardId);
-    expect(out.outcome).toBe("BLOCKED");
+    expect(out.outcome, out.summary).toBe("PROGRESSED");
     expect(customerPrompts.length, "asked once, then once more with the miss named").toBe(2);
     expect(customerPrompts[1]).toMatch(/Your previous answer was discarded[\s\S]*Rejected last time: nothing usable was returned/);
+    let last = out;
+    for (let n = 1; n <= MONTHLY_EXTRA_PASSES; n += 1) last = await sweepOnce(env, new Date(Date.parse("2026-12-01T14:05:00.000Z") + n * 25 * 3_600_000), runner);
+    expect(last.outcome, last.summary).toBe("DONE");
     const mails = (await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'deliverable.emailed_to_partner'").bind(opened.cardId).all<{ payload_json: string }>()).results ?? [];
     expect(mails.length, "a half note must not be sent").toBe(0);
-    const row = (await env.WP_OS_DB.prepare("SELECT state, next_action FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ state: string; next_action: string }>())!;
-    expect(row.state).toBe("BLOCKED");
-    expect(row.next_action).toMatch(/Walker looked and found nothing solid enough to put in front of you/);
-    expect(row.next_action).toMatch(/no customer lead survived \(the search answered with no usable entry/);
-    expect(row.next_action).toMatch(/Scooter can settle this/);
+    const row = (await env.WP_OS_DB.prepare("SELECT state, block_who, description FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ state: string; block_who: string | null; description: string }>())!;
+    expect(row).toMatchObject({ state: "DONE", block_who: null });
+    expect(row.description).toMatch(/so nothing was sent; next month's note searches afresh/);
+    const desk = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM notification WHERE object_id = ?1 AND firm_user_id = 'fu_sequoia_taylor'").bind(opened.cardId).first<{ n: number }>())!.n;
+    expect(desk, "nothing on Sequoia's desk").toBe(0);
   });
   it("THE JUDGEMENT PASS: what the searcher found is held to the brief by a second model; failures are dropped and the reason is on the note", async () => {
     // 16 Sep 2026: the searcher, told "United States, no government", returned VK, the Space Force
@@ -368,7 +382,7 @@ describe("the monthly card on Walker's desk", () => {
       { organisation: "U.S. Space Force", trigger: "launch programme forecast to grow", approach: "Comms lead", angle: "storytelling", url: "https://www.spaceforce.mil/News/" },
     ] });
     const judgePrompts: string[] = [];
-    const out = await sweepOnce(env, new Date("2027-01-01T14:05:00.000Z"), {
+    const runner: Parameters<typeof sweepOnce>[2] = {
       productions: (e, card) => runProductionsCard(e, card, {
         search: async (_e, _a, prompt) => ({ ok: true, text: /journalists/.test(prompt) ? pressJson : mixed, detail: "ok" }),
         judge: async (_e, _a, prompt) => {
@@ -386,11 +400,12 @@ describe("the monthly card on Walker's desk", () => {
         pageText: async () => "Contact: a.writer@communityweekly.example",
         now: new Date("2027-01-01T14:05:00.000Z"),
       }),
-    });
+    };
+    const out = await sweepOnce(env, new Date("2027-01-01T14:05:00.000Z"), runner);
     expect(out.card?.id).toBe(opened.cardId);
-    await expectThinMonth(out); // fewer than six leads and two pitches: it goes, labelled, and the card stops by name (13 Nov 2026)
+    await expectThinMonth(out, runner, new Date("2027-01-01T14:05:00.000Z")); // fewer than six leads and two pitches: it goes, labelled, and the card stops by name (13 Nov 2026)
     // Each half is below its floor (one lead, one pitch), so each is searched once more, with one judgement per search.
-    expect(judgePrompts.length, "one judgement per search go").toBe(4);
+    expect(judgePrompts.length, "one judgement per search go, on every pass").toBe(4 * (MONTHLY_EXTRA_PASSES + 1));
     expect(judgePrompts[0]).toMatch(/KEEP a lead only if ALL of these hold \(this month is 2027-01\)/);
     const delivered = (await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ description: string }>())!.description;
     expect(delivered).toMatch(/1 lead, 1 pitch\b/);
@@ -479,6 +494,49 @@ describe("a reply to an earlier month's note steers the next month (2 Nov 2026)"
     const after = await run("2027-01-01T14:00:00.000Z");
     expect(after.interpreted.join("\n")).toMatch(/outgrown their branding, sized like TNTP/);
     expect(after.searched.some((p) => /only national organisations at or above TNTP's size/.test(p)), "the steer reaches the search itself").toBe(true);
+  });
+});
+
+describe("a month below the floor is researched again, never put on Sequoia's desk (owner, 14 Nov 2026)", () => {
+  it("below the floor: nothing for Sequoia, the card retries the next day, and after the last pass Scooter gets what met the bar", async () => {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN','IN_PROGRESS','BLOCKED')").run();
+    const start = new Date("2027-07-01T14:00:00.000Z");
+    const opened = await openProductionsCard(env, "productions_monthly", start);
+    const leads = JSON.stringify({ results: [{ organisation: "Thin Council", trigger: "launched a national plan", approach: "Head of Comms", url: "https://thin.example/plan" }] });
+    const prompts: string[] = [];
+    const tick = (at: Date) => sweepOnce(env, at, {
+      productions: (e, card) => runProductionsCard(e, card, {
+        search: async (_e, _a, prompt) => { prompts.push(prompt); return { ok: true, text: /journalists/.test(prompt) ? pressJson : leads, detail: "ok" }; },
+        urlCheck: async () => true,
+        judge: keepAll,
+        pageText: async () => "Contact: a.writer@communityweekly.example",
+        now: at,
+        interpret: steersWith("Keep going as you are."),
+      }),
+    });
+    const forSequoia = async () => (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM notification WHERE object_id = ?1 AND firm_user_id = 'fu_sequoia_taylor'").bind(opened.cardId).first<{ n: number }>())!.n;
+    // A send attempt to Scooter (the test env has no transport, so "sent" is the attempt and its delivery record).
+    const emails = async () => (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE object_id = ?1 AND event_type IN ('deliverable.emailed_to_partner', 'deliverable.email_not_sent', 'productions.delivered')").bind(opened.cardId).first<{ n: number }>())!.n;
+    const card = async () => (await env.WP_OS_DB.prepare("SELECT state, block_who, lease_until FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ state: string; block_who: string | null; lease_until: string | null }>())!;
+
+    const first = await tick(new Date(start.getTime() + 5 * 60_000));
+    expect(first.card?.id).toBe(opened.cardId);
+    expect(first.outcome, first.summary).toBe("PROGRESSED");
+    expect((await card()).state).not.toBe("BLOCKED");
+    expect((await card()).block_who).toBeNull();
+    expect(String((await card()).lease_until) > new Date(start.getTime() + 23 * 3_600_000).toISOString(), "it waits a day before the next pass").toBe(true);
+    expect(await emails(), "nothing is sent below the floor before the last pass").toBe(0);
+    expect(await forSequoia(), "nothing reaches Sequoia's desk").toBe(0);
+    expect((await tick(new Date(start.getTime() + 2 * 3_600_000))).card, "not picked up again the same day").toBeNull();
+
+    let last = first;
+    for (let n = 1; n <= MONTHLY_EXTRA_PASSES; n += 1) last = await tick(new Date(start.getTime() + n * 25 * 3_600_000));
+    expect(last.outcome, last.summary).toBe("DONE");
+    expect(prompts.some((pr) => /find OTHERS, not these: Thin Council/.test(pr)), "a later pass asks for others").toBe(true);
+    expect(await emails(), `after the last pass, what met the bar goes to Scooter: ${last.summary}`).toBeGreaterThanOrEqual(1);
+    expect(last.summary).toMatch(/in July — 1 lead, \d+ pitch/);
+    expect(await forSequoia(), "and still nothing for Sequoia").toBe(0);
+    expect((await card()).block_who).toBeNull();
   });
 });
 

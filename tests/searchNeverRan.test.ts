@@ -66,7 +66,7 @@ describe("Walker's monthly Productions card", () => {
     expect(String(c.block_needed)).not.toMatch(/where to look/i);
   });
 
-  it("a search that RAN and found nothing is still the old question, because that one really is about where to look", async () => {
+  it("a search that RAN and found nothing is researched again, not a question on anyone's desk (owner, 14 Nov 2026)", async () => {
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN','IN_PROGRESS','BLOCKED')").run();
     const when = new Date("2027-01-01T14:00:00.000Z");
     const opened = await openProductionsCard(env, "productions_monthly", when);
@@ -74,8 +74,9 @@ describe("Walker's monthly Productions card", () => {
       productions: (e, c) => runProductionsCard(e, c, { search: async () => ({ ok: true, text: "I could not find anything.", detail: "ok" }), now: when }),
     });
     expect(out.card?.id).toBe(opened.cardId);
-    expect(out.outcome).toBe("BLOCKED");
-    expect((await row(opened.cardId)).block_reason).toBe("nothing_good_enough_to_send");
+    expect(out.outcome, out.summary).toBe("PROGRESSED");
+    expect((await row(opened.cardId)).block_reason).toBeNull();
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(opened.cardId).run();
   });
 });
 

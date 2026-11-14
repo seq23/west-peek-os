@@ -650,7 +650,7 @@ export async function sweepOnce(
   runners: {
     general?: (env: Env, ctx: RouteContext, cardId: string, options: { maxSteps: number }) => Promise<{ finished: boolean; blocked: boolean; detail: string; steps: Array<{ action: string; detail: string }> }>;
     deckRework?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
-    productions?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
+    productions?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string; progressed?: boolean; waitUntil?: string }>;
     productionsHire?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     tlc?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; held?: boolean; waitUntil?: string; detail: string }>;
     roomPacket?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; detail: string }>;
@@ -805,6 +805,9 @@ export async function sweepOnce(
       const out = await run(env, card);
       finished = out.finished;
       blocked = out.blocked;
+      // A month below its floor is researched again the next day (14 Nov 2026): progressed, leased until then.
+      progressed = out.progressed === true;
+      waitUntil = out.waitUntil ?? null;
       detail = out.detail;
     } else {
       const run = runners.general ?? workCard;
@@ -918,8 +921,8 @@ export async function sweepOnce(
     // THIS TICK'S WORK IS DONE AND THE CARD IS NOT. Hand it back for the next tick: the claim's
     // attempt is given back, because an invocation that did what it was asked is not a failure.
     await env.WP_OS_DB.prepare("UPDATE work_card SET work_attempts = MAX(COALESCE(work_attempts, 1) - 1, 0) WHERE id = ?1").bind(card.id).run();
-    if (held) {
-      // HELD BY THE MAC (reached only from the button, never the sweep — `claimNextCard` skips a
+    if (held || (isProductionsKind(card.kind) && waitUntil)) {
+      // HELD BY THE MAC, or a Productions month waiting for its next research pass (reached only from the button, never the sweep — `claimNextCard` skips a
       // card with a live job). Leased so a stray claim cannot spin on it.
       const until = waitUntil ?? new Date(now.getTime() + HELD_MINUTES * 60_000).toISOString();
       await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = ?2 WHERE id = ?1").bind(card.id, until).run();

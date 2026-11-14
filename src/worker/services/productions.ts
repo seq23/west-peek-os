@@ -902,11 +902,29 @@ export const PRODUCTIONS_STEPS: readonly string[] = [
   "A Managing Partner's own instruction extends what you do here — apply it using judgement and whatever you already have access to, rather than treating it as out of scope. Only decline something that genuinely needs a tool, data source or integration that does not exist anywhere in this system, or that would need to pass through approval regardless of who asked.",
 ];
 
+/** Extra research passes a month below its floor gets, one a day, before what met the bar is sent (14 Nov 2026). */
+export const MONTHLY_EXTRA_PASSES = 3;
+const EXTRA_PASS_AFTER_MS = 24 * 3_600_000;
+
+/** What this month's earlier passes kept, and how many there were. */
+async function earlierPasses(env: Env, cardId: string, month: string): Promise<{ passes: number; leads: CustomerIdea[]; pitches: PressPitch[] }> {
+  const rows = (await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_type = 'work_card' AND object_id = ?1 AND event_type = 'productions.research_again' ORDER BY created_at ASC")
+    .bind(cardId).all<{ payload_json: string }>().catch(() => ({ results: [] as { payload_json: string }[] }))).results ?? [];
+  const mine = rows.map((r) => { try { return JSON.parse(r.payload_json) as { month?: string; leads?: CustomerIdea[]; pitches?: PressPitch[] }; } catch { return null; } }).filter((p) => p?.month === month);
+  const last = mine[mine.length - 1];
+  return { passes: mine.length, leads: last?.leads ?? [], pitches: last?.pitches ?? [] };
+}
+
+function mergeByName<T>(earlier: readonly T[], now: readonly T[], name: (t: T) => string): T[] {
+  const seen = new Set<string>();
+  return [...earlier, ...now].filter((t) => { const k = name(t).trim().toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
+}
+
 export async function runProductionsCard(
   env: Env,
   card: SweepCard,
   deps: { search?: ProductionsSearch; judge?: ProductionsJudge; urlCheck?: UrlCheck; pageText?: PageText; now?: Date; interpret?: Interpreter } = {},
-): Promise<{ finished: boolean; blocked: boolean; detail: string }> {
+): Promise<{ finished: boolean; blocked: boolean; detail: string; progressed?: boolean; waitUntil?: string }> {
   const now = deps.now ?? new Date();
   const month = monthOf(now);
   const actor: Actor = { type: "AI", aiEmployeeId: "aie_walker", roles: [], firmScopes: [card.firm_scope] };
@@ -1023,8 +1041,14 @@ export async function runProductionsCard(
     // half note is worse than none — it reads as the work having been done. So a half that comes
     // back empty is searched once more with the miss named, and if either half is still empty the
     // card is BLOCKED with the reason on it and no email goes out.
+    // BELOW THE FLOOR IS RESEARCHED AGAIN, NEVER ESCALATED (owner, 14 Nov 2026: "deliver him quality and what he asked
+    // for"; no preview and no thin-month note to Sequoia). What earlier passes this month kept is carried, and a pass
+    // after the first asks for others, which also gives it a prompt of its own so the same run's answer is not reused.
+    const carried = await earlierPasses(env, card.id, month);
+    const pass = carried.passes + 1;
+    const others = (names: string[]) => (carried.passes && names.length ? `\n\nExtra research pass ${carried.passes} of ${MONTHLY_EXTRA_PASSES} (${now.toISOString().slice(0, 10)}). Already kept, so find OTHERS, not these: ${names.join("; ")}.` : "");
     const ideas = await searchUntilSome(
-      buildCustomerPrompt(month),
+      buildCustomerPrompt(month) + others(carried.leads.map((i) => i.organisation)),
       async (text) => {
         // A current customer is not a lead, whatever the searcher and the judge think of it.
         const fresh = excludeCurrentCustomers(parseCustomerIdeas(text));
@@ -1037,7 +1061,7 @@ export async function runProductionsCard(
       formatCheck(parseCustomerIdeas, "customer lead with an organisation and a url"),
     );
     const pitchesLive = await searchUntilSome(
-      buildPressPrompt(month),
+      buildPressPrompt(month) + others(carried.pitches.map((p) => p.writer)),
       async (text) => {
         const live = await keepLive(parsePressPitches(text), (p) => p.proofUrl, check);
         // A first email names no money and asks for no call (risk rule; 14 Nov 2026): refused before the judge sees it.
@@ -1058,32 +1082,41 @@ export async function runProductionsCard(
     const judgeDown = ideas.judgeDown ?? pitchesLive.judgeDown;
     if (judgeDown) return { finished: false, blocked: false, detail: `the judgement pass failed: ${judgeDown}` };
     const rejected = [...ideas.rejected, ...pitchesLive.rejected];
-    const missing = [
-      ideas.kept.length === 0 ? `no customer lead survived (${ideas.why})` : null,
-      pitchesLive.kept.length === 0 ? `no press pitch survived (${pitchesLive.why})` : null,
-    ].filter((m): m is string => m !== null);
-    if (missing.length) {
-      const why = await blockCard(env, card, {
-        reason: "nothing_good_enough_to_send",
-        trying: card.title,
-        employee: "Walker",
-        who: "SCOOTER",
-        detail: `Tell Walker where to look, or leave it this month — ${missing.join("; ")}, and he will not send half a note.`,
+    const leadsKept = mergeByName(carried.leads, ideas.kept, (i) => i.organisation);
+    const pitchesKept = mergeByName(carried.pitches, pitchesLive.kept, (p) => p.writer);
+    if (monthlyFloor(leadsKept.length, pitchesKept.length).misses.length && carried.passes < MONTHLY_EXTRA_PASSES) {
+      const until = new Date(now.getTime() + EXTRA_PASS_AFTER_MS).toISOString();
+      const line = `Below this month's bar (${counted(leadsKept.length, "lead")}, ${counted(pitchesKept.length, "pitch", "pitches")} kept) · Walker researches again by himself on ${until.slice(0, 10)} (extra pass ${pass} of ${MONTHLY_EXTRA_PASSES}); nothing has been sent`;
+      await env.WP_OS_DB.prepare("UPDATE work_card SET waiting_until = ?2, waiting_for = ?3, next_action = ?3, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1").bind(card.id, until, line).run();
+      await appendEvent(env, {
+        eventType: "productions.research_again",
+        actorType: "ai_employee",
+        actorId: "aie_walker",
+        objectType: "work_card",
+        objectId: card.id,
+        firmScope: card.firm_scope,
+        payload: { month, pass, until, leads: leadsKept, pitches: pitchesKept },
       });
-      return { finished: false, blocked: true, detail: why };
+      return { finished: false, blocked: false, progressed: true, waitUntil: until, detail: line };
+    }
+    if (leadsKept.length === 0 || pitchesKept.length === 0) {
+      // NOTHING (OR ONLY HALF) MET THE BAR AFTER EVERY PASS: a half note is not what he asked for (16 Sep 2026), so
+      // nothing is sent to anyone and nothing is put on a desk; next month's card searches afresh.
+      const line = `Not enough met Scooter's bar for ${monthName(month)} after ${pass} research passes (${counted(leadsKept.length, "lead")}, ${counted(pitchesKept.length, "pitch", "pitches")}), so nothing was sent; next month's note searches afresh.`;
+      await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE', next_action = NULL, waiting_until = NULL, waiting_for = NULL, description = substr(COALESCE(description, '') || char(10) || char(10) || ?2, 1, 16000), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1").bind(card.id, `• ${line}`).run();
+      await appendEvent(env, { eventType: "productions.nothing_sent", actorType: "ai_employee", actorId: "aie_walker", objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { month, passes: pass, rejected: rejected.length } });
+      return { finished: true, blocked: false, detail: line };
     }
     const hunted: PressPitch[] = [];
-    for (const p of pitchesLive.kept) hunted.push(await findWriterAddress(env, actor, { ...p, email: null }, { search, pageText }));
-    count = ideas.kept.length + hunted.length;
+    for (const p of pitchesKept) hunted.push(await findWriterAddress(env, actor, { ...p, email: null }, { search, pageText }));
+    count = leadsKept.length + hunted.length;
     dropped = [...ideas.dropped, ...pitchesLive.dropped];
-    subject = `Walker: West Peek Productions in ${monthName(month)} — ${counted(ideas.kept.length, "lead")}, ${counted(hunted.length, "pitch", "pitches")}`;
-    text = renderMonthlyEmail(month, ideas.kept, hunted, dropped, rejected);
-    summary = monthlySummary(month, ideas.kept, hunted, dropped, rejected);
-    // BELOW THE FLOOR AFTER BOTH SEARCHES: it still goes, saying so first, and the card stops by name (below).
-    thin = monthlyFloor(ideas.kept.length, hunted.length).misses;
-    await recordFloor(env, { deliverable: "productions_monthly", ok: thin.length === 0, headline: ideas.kept.length, measures: { leads: ideas.kept.length, pitches: hunted.length, dropped: dropped.length }, sample: text, firmScope: card.firm_scope });
-    // NO SHORTFALL NOTICE IN SCOOTER'S NOTE (owner, 14 Nov 2026: he gets quality, not a shortfall notice). A month below
-    // the floor is still recorded above and still stops the card by name on Sequoia's desk (below); his note is just the note.
+    subject = `Walker: West Peek Productions in ${monthName(month)} — ${counted(leadsKept.length, "lead")}, ${counted(hunted.length, "pitch", "pitches")}`;
+    text = renderMonthlyEmail(month, leadsKept, hunted, dropped, rejected);
+    summary = monthlySummary(month, leadsKept, hunted, dropped, rejected);
+    // AFTER THE LAST PASS: what met the bar goes, as the note, and the floor is recorded (no desk item for anyone).
+    thin = monthlyFloor(leadsKept.length, hunted.length).misses;
+    await recordFloor(env, { deliverable: "productions_monthly", ok: thin.length === 0, headline: leadsKept.length, measures: { leads: leadsKept.length, pitches: hunted.length, dropped: dropped.length }, sample: text, firmScope: card.firm_scope });
   } else {
   const found = await search(
     env,
@@ -1163,7 +1196,7 @@ export async function runProductionsCard(
   await env.WP_OS_DB.prepare(
     `UPDATE work_card SET state = CASE WHEN ?3 = 1 THEN state ELSE 'DONE' END, description = substr(COALESCE(description, '') || char(10) || char(10) || ?2, 1, 16000),
             next_action = CASE WHEN ?3 = 1 THEN next_action ELSE NULL END, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1`,
-  ).bind(card.id, finding, thin.length ? 1 : 0).run();
+  ).bind(card.id, finding, 0).run();
   await appendEvent(env, {
     eventType: "productions.delivered",
     actorType: "ai_employee",
@@ -1173,16 +1206,6 @@ export async function runProductionsCard(
     firmScope: card.firm_scope,
     payload: { kind, month, count, dropped: dropped.length, emailed: mail.sent, subject, thin_month: thin.length > 0 },
   });
-  if (thin.length) {
-    const why = await blockCard(env, card, {
-      reason: "nothing_good_enough_to_send",
-      trying: card.title,
-      employee: "Walker",
-      who: "SEQUOIA",
-      detail: `This month's note is below its floor after two searches (${thin.join("; ")}). ${mail.sent ? "Scooter was sent what stood up" : "What stood up is on the card"}, with no shortfall notice in his note. Say where Walker should look, or leave it this month.`,
-    });
-    return { finished: false, blocked: true, detail: why };
-  }
   return {
     finished: true,
     blocked: false,
