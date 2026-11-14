@@ -713,6 +713,20 @@ async function appendFinding(env: Env, cardId: string, text: string): Promise<vo
     .run();
 }
 
+/** Why the newest attempt of this phase was refused, when the newest run on the job was that refusal; else null. Pure. */
+export function lastRefusalFor(historyJson: string | null | undefined, phase: string): string | null {
+  let h: unknown;
+  try {
+    h = JSON.parse(historyJson || "[]");
+  } catch {
+    return null;
+  }
+  const last = Array.isArray(h) ? (h.at(-1) as { phase?: unknown; status?: unknown; reason?: unknown } | undefined) : undefined;
+  if (!last || last.phase !== phase || String(last.status ?? "").toLowerCase() === "ok") return null;
+  const reason = typeof last.reason === "string" ? last.reason.trim() : "";
+  return reason ? reason.slice(0, 1500) : null;
+}
+
 async function recordHistory(env: Env, row: WebPropertyChangeRow, entry: Record<string, unknown>): Promise<void> {
   const history = (() => {
     try {
@@ -870,6 +884,9 @@ export async function parkPhase(
           }
         : null,
     rules,
+    // 14 Nov 2026: a retry hears why the last attempt of this phase was refused (a privacy passage, a missing PR),
+    // instead of rebuilding blind and failing the same way. Only the newest entry, and only when it was not ok.
+    last_refusal: lastRefusalFor(row.run_history_json, phase),
     ...(parts.length ? { parts: parts.map(partPayload) } : {}),
     queue_max_seconds: spec.queueMaxSeconds,
   };
