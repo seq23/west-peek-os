@@ -3591,8 +3591,8 @@ export async function handleGetRequestAttachment(ctx: RouteContext): Promise<Res
   if (!bucket) return json({ error: "no_store", detail: "the document store is not bound" }, { status: 503 });
   const obj = await bucket.get(row.eml_key);
   if (!obj) return json({ error: "not_found", detail: `the stored message ${row.eml_key} is gone` }, { status: 404 });
-  // A file read from a Drive link the partner sent (driveShares.readLinkedDriveFiles) is stored as itself, not in a message.
-  if (row.eml_key.startsWith("drive-file/")) {
+  // A file read from a Drive link (driveShares.readLinkedDriveFiles) or unpacked from a ZIP (requestMaterials.fileZipContents) is stored as itself, not in a message.
+  if (row.eml_key.startsWith("drive-file/") || row.eml_key.startsWith("zip-file/")) {
     return new Response(obj.body, {
       headers: { "content-type": row.media_type || "application/octet-stream", "content-disposition": `attachment; filename="${row.filename.replace(/"/g, "")}"`, "cache-control": "private, no-store" },
     });

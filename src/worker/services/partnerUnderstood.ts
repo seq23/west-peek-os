@@ -8,6 +8,9 @@ import { textBodyOf } from "../effects/mimeAttachments";
 import { alreadyTold, recordNotice, threadRootFor } from "./requestReply";
 import { sendOrPreview } from "./previewApproval";
 import { FILES_NOT_OPENED } from "./voiceNotes";
+import { TAKEN_OVER_PREFIX, isTakenOver } from "../../shared/work/takeover";
+import { notifyQuietly } from "./notifications";
+import { PREVIEW_PARTNER } from "../../shared/registry/partners";
 
 /**
  * EMAILING THE OS FEELS LIKE TYPING TO CLAUDE — steps 1 and 7 (her ruling, 14 Nov 2026, west-peek-ventures brain).
@@ -34,7 +37,7 @@ export const UNDERSTOOD_PER_TICK = 2;
 const MAX_ASKS = 12;
 
 export type AskStatus = "DONE" | "IN_PROGRESS" | "NOT_DONE";
-export type SeatRead = (env: Env, input: { prompt: string; firmScope: string; employeeId: string | null; purpose: string }) => Promise<{ ok: boolean; text: string; detail: string }>;
+export type SeatRead = (env: Env, input: { prompt: string; firmScope: string; employeeId: string | null; purpose: string }) => Promise<{ ok: boolean; text: string; detail: string; runId?: string | null }>;
 
 /** Her Claude seat, then Codex as its backup; never a free lane, never a paid one. */
 export const confidentialSeatRead: SeatRead = async (env, input) => {
@@ -48,7 +51,7 @@ export const confidentialSeatRead: SeatRead = async (env, input) => {
       budgetContext: { judgement: true, confidential: true, seatFirst: true, neverPaid: true, expectedOutputTokens: 500 },
       routing: { category: "OPERATIONS" },
     });
-    return run.status === "COMPLETED" && run.output_text ? { ok: true, text: run.output_text, detail: "ok" } : { ok: false, text: "", detail: run.failure_reason ?? `run ${run.status}` };
+    return run.status === "COMPLETED" && run.output_text ? { ok: true, text: run.output_text, detail: "ok", runId: run.id } : { ok: false, text: "", detail: run.failure_reason ?? `run ${run.status}`, runId: run.id };
   } catch (err) {
     return { ok: false, text: "", detail: err instanceof Error ? err.message : String(err) };
   }
@@ -56,14 +59,104 @@ export const confidentialSeatRead: SeatRead = async (env, input) => {
 
 const norm = (s: string): string => s.toLowerCase().replace(/[“”"'‘’`]/g, "").replace(/\s+/g, " ").trim().replace(/^[\s\-–—•*:.,;!?]+|[\s\-–—•*:.,;!?]+$/g, "");
 
-/** His sentences, as written: the no-model "Got it" and the fallback when a read returns nothing usable. */
-export function sentencesOf(words: string): string[] {
+/** A line a mail client wrapped mid-sentence is joined back, so "Attached is" never stands alone. Pure. */
+function unwrapped(words: string): string {
   return words
     .replace(/\r/g, "")
+    .split(/\n\s*\n/)
+    .map((para) => para.split("\n").reduce((acc, line) => {
+      if (!acc) return line;
+      // A new line starts a new item only when it is a list item; otherwise it continues the sentence.
+      return /^\s*(?:\d+[.)]|[-*•])\s+/.test(line) ? `${acc}\n${line}` : `${acc} ${line.trim()}`;
+    }, ""))
+    .join("\n\n");
+}
+
+/** A remark on how something IS (praise, status, a greeting), not something he asked for. */
+const REMARK = /^(?:hi|hey|hello|thanks|thank you|cheers|best|regards|changes)\b[^a-z]*\w*[,!.:]?$|\b(?:in (?:good|great) shape|looks? (?:good|great)|love (?:it|this|the)|nice work|great work|well done|thank you|thanks)\b/i;
+/** Too short to be a thing he asked for on its own: a fragment of a sentence. */
+const isFragment = (s: string): boolean => s.split(/\s+/).filter((w) => /[a-z]/i.test(w)).length < 3 || /[:,;–—-]$/.test(s.trim());
+
+/** His sentences, as written: the no-model "Got it" when the email has no list. Whole sentences, never fragments. */
+export function sentencesOf(words: string): string[] {
+  return unwrapped(words)
     .split(/\n+|(?<=[.!?])\s+(?=[A-Z0-9"“(])/)
     .map((s) => s.replace(/^[\s\-–—•*]+|\s+$/g, "").replace(/\s+/g, " "))
-    .filter((s) => /[a-z]{2}/i.test(s) && s.length >= 4 && !/^(?:hi|hey|hello|thanks|thank you|cheers|best|regards)\b[^a-z]*\w*[,!.]?$/i.test(s))
+    .filter((s) => /[a-z]{2}/i.test(s) && !isFragment(s) && !REMARK.test(s))
     .slice(0, MAX_ASKS);
+}
+
+/** The one item his clarify-first questions become: it says so, and carries his words. */
+export const QUESTIONS_LEAD = "Your questions to settle before I build: ";
+/** A paragraph that asks to clarify or answer something before the work goes on. */
+const CLARIFY_FIRST = /\?|^(?:before (?:building|you build|you start|starting|we build|going)|let'?s (?:clarify|confirm|talk)|can you (?:confirm|clarify|tell)|please (?:confirm|clarify)|what (?:can|is|are|do)|which\b|how (?:do|does|should|will))/i;
+
+/**
+ * HIS ASKS, FROM THE EMAIL'S OWN STRUCTURE (15 Nov 2026). When he numbered his changes, each numbered item is one ask
+ * (its sub-bullets with it), his clarify-first paragraphs together are ONE item that says so, and everything else (a
+ * greeting, "X is in good shape", a "Changes:" heading, an idea for later) is not an ask: it is listed as noted, never
+ * dropped in silence. No model is involved, so the count cannot drift. Null when the email has no numbered list. Pure.
+ */
+export function structuredAsks(words: string): { asks: string[]; noted: string[] } | null {
+  const paras = unwrapped(words).split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  const asks: string[] = [];
+  const questions: string[] = [];
+  const noted: string[] = [];
+  for (const para of paras) {
+    const lines = para.split("\n");
+    if (/^\s*\d+[.)]\s+/.test(lines[0]!)) {
+      let current: string[] = [];
+      const flush = () => { if (current.length) asks.push(current.join(" ").replace(/\s+/g, " ").trim()); current = []; };
+      for (const line of lines) {
+        if (/^\s*\d+[.)]\s+/.test(line)) { flush(); current.push(line.replace(/^\s*\d+[.)]\s+/, "")); }
+        else current.push(line.replace(/^\s*[-*•]\s+/, "").replace(/^/, current.length ? "; " : ""));
+      }
+      flush();
+    } else {
+      const flat = para.replace(/\s+/g, " ").trim();
+      if (CLARIFY_FIRST.test(flat)) questions.push(flat);
+      else if (!REMARK.test(flat) && !isFragment(flat)) noted.push(flat);
+    }
+  }
+  if (asks.length === 0) return null;
+  const items = asks.slice(0, MAX_ASKS).map((a) => a.replace(/\s*;\s*;/g, ";").replace(/\s+;/g, ";"));
+  if (questions.length) items.push(`${QUESTIONS_LEAD}${questions.join(" ")}`);
+  return { asks: items, noted: noted.slice(0, 4) };
+}
+
+/**
+ * WHAT HE ASKED, the one reader both the live "Got it" and the dry run use. A numbered email is read from its structure
+ * (no model); anything else is read by her seat (`read`) and kept only in his words, else his whole sentences.
+ */
+export async function understand(
+  env: Env,
+  input: { subject: string; written: string; read: SeatRead; employeeId: string | null; firmScope: string },
+): Promise<{ none: boolean; asks: string[]; noted: string[]; next: string; via: "STRUCTURE" | "MODEL" | "FALLBACK"; runId: string | null }> {
+  const { written } = input;
+  const ON_IT = "I'm starting on it now. The next email from me is the result, or one question if something is unclear.";
+  // A voice note's transcript (withVoiceNotes) is his words but not his list: the list is read from what he typed, and
+  // each recording is named as heard and on the card, so a long transcript never swells the questions item.
+  const blocks = written.split(/\n\s*\n(?=Voice note \()/);
+  const typed = blocks[0]!.startsWith("Voice note (") ? "" : blocks[0]!;
+  const heard = blocks.filter((b) => b.startsWith("Voice note (")).map((b) => {
+    const m = /^Voice note \((.+?)\), his words transcribed:\s*([\s\S]*)$/.exec(b);
+    return m ? `${m[1]}: heard and transcribed onto the card (${m[2]!.split(/\s+/).filter(Boolean).length} words)` : null;
+  }).filter((x): x is string => Boolean(x));
+  const structured = typed ? structuredAsks(typed) : null;
+  if (structured) return { none: false, asks: structured.asks, noted: [...structured.noted, ...heard], next: ON_IT, via: "STRUCTURE", runId: null };
+  const out = written ? await input.read(env, { prompt: understoodPrompt(input.subject, written), firmScope: input.firmScope, employeeId: input.employeeId, purpose: "the Got it reply to a partner's email: his asks in his words" }) : { ok: false, text: "", detail: "no words to read" };
+  const parsed = out.ok ? parseUnderstood(out.text, written) : null;
+  if (parsed?.none) return { none: true, asks: ["nothing asked"], noted: [], next: ON_IT, via: "MODEL", runId: out.runId ?? null };
+  if (parsed && parsed.asks.length) return { none: false, asks: parsed.asks.filter((a) => !isFragment(a)), noted: [], next: parsed.next ?? ON_IT, via: "MODEL", runId: out.runId ?? null };
+  const asks = sentencesOf(written);
+  return {
+    none: asks.length === 0,
+    asks,
+    noted: [],
+    next: "No model could read it just now, so these are your sentences as you wrote them. Work starts when the Mac is back; the next email from me is the result, or one question.",
+    via: "FALLBACK",
+    runId: out.runId ?? null,
+  };
 }
 
 /** `ASK: …` lines kept only when they are his words (found in what he wrote); `NEXT: …`; `NONE` = nothing asked. */
@@ -88,6 +181,7 @@ function understoodPrompt(subject: string, written: string): string {
     "Rules: copy his EXACT words for each ask (a phrase or sentence from his email, unchanged, no rewording, no summary).",
     "One line per ask: ASK: <his exact words>",
     "Then one line: NEXT: <what happens next, one plain sentence, no promises of dates, nothing about models or systems>",
+    "A remark on how something is (praise, status, \"X is in good shape\") is NOT an ask. Each numbered item is one ask. Never a fragment of a sentence.",
     "If he asks for nothing (a thank-you, an FYI), answer exactly: NONE",
     "Nothing else in your answer.",
     "",
@@ -111,6 +205,7 @@ interface Candidate {
   prompt: string | null;
   state: string;
   kind: string | null;
+  held_reason: string | null;
 }
 
 async function wordsOf(env: Env, row: Candidate): Promise<string> {
@@ -156,7 +251,7 @@ export async function sendUnderstoodReplies(env: Env, now: Date, read: SeatRead 
     rows = (
       await env.WP_OS_DB.prepare(
         `SELECT m.id, m.message_id, m.r2_key, m.subject, m.received_at, m.firm_scope, lower(json_extract(m.mail_authority_json, '$.partner')) AS partner,
-                c.id AS card_id, c.title, c.owner_id, c.prompt, c.state, c.kind
+                c.id AS card_id, c.title, c.owner_id, c.prompt, c.state, c.kind, c.held_reason
            FROM inbound_message m JOIN work_card c ON c.id = m.work_card_id
           WHERE m.received_at >= ?1 AND m.received_at <= ?2
             AND json_extract(m.mail_authority_json, '$.partner') IS NOT NULL
@@ -199,18 +294,12 @@ async function answerOne(env: Env, row: Candidate, read: SeatRead): Promise<bool
 
   const written = await wordsOf(env, row);
   const subject = (row.subject ?? "").trim() || row.title.replace(/^From [^:]+@[^:]+:\s*/i, "").trim() || row.title;
-  const out = written ? await read(env, { prompt: understoodPrompt(subject, written), firmScope: row.firm_scope, employeeId: row.owner_id, purpose: "the Got it reply to a partner's email: his asks in his words" }) : { ok: false, text: "", detail: "no words to read" };
-  const parsed = out.ok ? parseUnderstood(out.text, written) : null;
-  if (parsed?.none) {
-    await settle(env, row.id, "NOTHING_ASKED", "MODEL", 0, "he asked for nothing (a thank-you or an FYI)");
+  const understood = await understand(env, { subject, written, read, employeeId: row.owner_id, firmScope: row.firm_scope });
+  if (understood.none) {
+    await settle(env, row.id, "NOTHING_ASKED", understood.via, 0, understood.asks.length ? "he asked for nothing (a thank-you or an FYI)" : "no words to quote");
     return false;
   }
-  const viaModel = Boolean(parsed && parsed.asks.length);
-  const asks = viaModel ? parsed!.asks : sentencesOf(written);
-  if (!asks.length) {
-    await settle(env, row.id, "NOTHING_ASKED", viaModel ? "MODEL" : "FALLBACK", 0, "no words to quote");
-    return false;
-  }
+  const { asks, via } = understood;
   const seqBase = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM partner_ask WHERE work_card_id = ?1").bind(row.card_id).first<{ n: number }>())?.n ?? 0;
   for (let i = 0; i < asks.length; i += 1) {
     await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO partner_ask (id, work_card_id, inbound_message_id, seq, words, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")
@@ -220,26 +309,43 @@ async function answerOne(env: Env, row: Candidate, read: SeatRead): Promise<bool
 
   // A noise card the runner already dropped, or a door that already answered him since he wrote: no second email.
   if (row.state === "CANCELLED") {
-    await settle(env, row.id, "NOT_SENT", viaModel ? "MODEL" : "FALLBACK", asks.length, "the card was closed as needing no action");
+    await settle(env, row.id, "NOT_SENT", via, asks.length, "the card was closed as needing no action");
     return false;
   }
   const answered = await env.WP_OS_DB.prepare("SELECT 1 AS x FROM work_card_notice WHERE work_card_id = ?1 AND sent = 1 AND sent_at >= ?2 LIMIT 1").bind(row.card_id, row.received_at).first<{ x: number }>();
   if (answered) {
-    await settle(env, row.id, "NOT_SENT", viaModel ? "MODEL" : "FALLBACK", asks.length, "the door already answered him on this card");
+    await settle(env, row.id, "NOT_SENT", via, asks.length, "the door already answered him on this card");
     return false;
   }
   const cause = `understood:${row.id}`;
   if (await alreadyTold(env, row.card_id, "RECEIVED", cause)) {
-    await settle(env, row.id, "SENT", viaModel ? "MODEL" : "FALLBACK", asks.length, "already sent");
+    await settle(env, row.id, "SENT", via, asks.length, "already sent");
     return false;
   }
 
-  const next = viaModel
-    ? parsed!.next ?? "I'm starting on it now. The next email from me is the result, or one question if something is unclear."
-    : "No model could read it just now, so these are your sentences as you wrote them. Work starts when the Mac is back; the next email from me is the result, or one question.";
+  /*
+   * A CARD A DEVELOPER HAS TAKEN OVER (15 Nov 2026): his reply is filed and nothing starts, so the Got it says so —
+   * never "I'm starting on it now". Sequoia's desk hears that he replied, once per reply, with the card.
+   */
+  const takenOver = isTakenOver(row.held_reason);
+  const next = takenOver ? TAKEN_OVER_NEXT : understood.next;
+  if (takenOver) {
+    await notifyQuietly(env, {
+      firmUserId: PREVIEW_PARTNER.firmUserId,
+      kind: "EMPLOYEE_EXCEPTION",
+      severity: "INFO",
+      title: `${partner.firstName} replied on a card a developer has taken over`,
+      body: `Card ${row.card_id} ("${row.title.slice(0, 120)}"): his reply is filed on the card and nothing was started. He was told it starts once the current round is wrapped up.`,
+      objectType: "work_card",
+      objectId: row.card_id,
+      dedupeKey: `reply_during_takeover:${row.id}`,
+      firmScope: row.firm_scope,
+    });
+  }
   const unopened = await filesNotOpened(env, row.card_id, row.received_at);
+  const filed = ((await env.WP_OS_DB.prepare("SELECT filename FROM request_attachment WHERE work_card_id = ?1 AND created_at >= ?2 ORDER BY created_at, filename").bind(row.card_id, row.received_at).all<{ filename: string }>().catch(() => ({ results: [] as Array<{ filename: string }> }))).results ?? []).map((r) => r.filename);
   const who = await employeeName(env, row.owner_id);
-  const email = gotItEmail({ employee: who, subject, asks, next, unopened });
+  const email = gotItEmail({ employee: who, subject, asks, next, unopened, noted: understood.noted, filed });
   const replyOnThread = await threadRootFor(env, row.card_id);
   const result = await sendOrPreview(env, {
     to: partner.email,
@@ -257,7 +363,7 @@ async function answerOne(env: Env, row: Candidate, read: SeatRead): Promise<bool
     events: { sent: "partner_understood.sent", notSent: "partner_understood.not_sent" },
   });
   await recordNotice(env, { cardId: row.card_id, kind: "RECEIVED", cause, to: partner.email, messageId: result.threadToken ?? null, sent: result.sent, detail: result.reason, firmScope: row.firm_scope });
-  await settle(env, row.id, result.sent ? "SENT" : "NOT_SENT", viaModel ? "MODEL" : "FALLBACK", asks.length, result.reason);
+  await settle(env, row.id, result.sent ? "SENT" : "NOT_SENT", via, asks.length, result.reason);
   await appendEvent(env, {
     eventType: "partner_understood.answered",
     actorType: "system",
@@ -265,23 +371,33 @@ async function answerOne(env: Env, row: Candidate, read: SeatRead): Promise<bool
     objectType: "work_card",
     objectId: row.card_id,
     firmScope: row.firm_scope,
-    payload: { inbound_message_id: row.id, sent: result.sent, via: viaModel ? "MODEL" : "FALLBACK", asks: asks.length, received_at: row.received_at, seat: out.ok ? "answered" : out.detail.slice(0, 200) },
+    payload: { inbound_message_id: row.id, sent: result.sent, via, asks: asks.length, received_at: row.received_at, seat: via },
   }).catch(() => undefined);
   return result.sent;
 }
 
+/** What a Got it on a taken-over card says happens next: the truth, nothing started. */
+export const TAKEN_OVER_NEXT = "I'll start on these as soon as the current round is wrapped up; nothing is lost.";
+
 /** The "Got it" itself: his asks in his words, every file that could not be opened, what happens next. Pure. */
-export function gotItEmail(input: { employee: string; subject: string; asks: readonly string[]; next: string; unopened: ReadonlyArray<{ filename: string; reason: string }> }) {
+export function gotItEmail(input: { employee: string; subject: string; asks: readonly string[]; next: string; unopened: ReadonlyArray<{ filename: string; reason: string }>; noted?: readonly string[]; filed?: readonly string[] }) {
   const { asks, next, unopened } = input;
+  const filed = input.filed ?? [];
+  const noted = input.noted ?? [];
+  const quoted = (a: string) => (a.startsWith(QUESTIONS_LEAD) ? `${QUESTIONS_LEAD}"${a.slice(QUESTIONS_LEAD.length)}"` : `"${a}"`);
   return {
     employee: input.employee,
     what: `got it — ${input.subject.slice(0, 80)}`,
     tldr: `Got it. ${asks.length === 1 ? "One thing" : `${asks.length} things`} you asked, in your words, below. ${next}`,
     tldrBullets: [] as string[],
     sections: [
-      { label: "What you asked", bullets: asks.map((a) => `"${a}"`) },
+      { label: "What you asked", bullets: asks.map(quoted) },
+      // Every file of his now on the card, by name (a ZIP's files each named), so he can see nothing was lost.
+      ...(filed.length ? [{ label: "Files on the card", bullets: filed.length > 15 ? [...filed.slice(0, 15), `and ${filed.length - 15} more`] : [...filed] }] : []),
       // Read first, then answered: every file of his that could not be opened is named, never skipped in silence.
       ...(unopened.length ? [{ label: "What I could not open", bullets: unopened.map((f) => `${f.filename}: ${f.reason}`) }] : []),
+      // What he said that is not an ask (an idea for later, a process note) is shown as kept, never dropped.
+      ...(noted.length ? [{ label: "Also noted", bullets: noted.map((n) => (/: heard and transcribed onto the card \(/.test(n) ? n : `"${n}"`)) }] : []),
       { label: "What happens next", bullets: [next, "Reply to this email to change anything; I read it before I go on."] },
     ],
     details: null,
@@ -352,8 +468,9 @@ export async function raiseUnacknowledgedMail(env: Env, now: Date = new Date()):
       `SELECT m.id, m.work_card_id, m.from_address, m.subject FROM inbound_message m
         WHERE m.work_card_id IS NOT NULL AND json_extract(m.mail_authority_json, '$.partner') IS NOT NULL
           AND m.received_at < ?1 AND m.received_at >= ?2
-          AND NOT EXISTS (SELECT 1 FROM partner_understood u WHERE u.inbound_message_id = m.id) LIMIT 10`,
-    ).bind(late, hour).all<{ id: string; work_card_id: string; from_address: string; subject: string }>()).results ?? [];
+          AND NOT EXISTS (SELECT 1 FROM partner_understood u WHERE u.inbound_message_id = m.id)
+          AND NOT EXISTS (SELECT 1 FROM work_card c WHERE c.id = m.work_card_id AND c.held_reason LIKE ?3 || '%') LIMIT 10`,
+    ).bind(late, hour, TAKEN_OVER_PREFIX).all<{ id: string; work_card_id: string; from_address: string; subject: string }>()).results ?? [];
     for (const m of noGotIt) {
       await raiseUnreadMail(env, {
         dedupeKey: `partner_email_no_got_it:${m.id}`,

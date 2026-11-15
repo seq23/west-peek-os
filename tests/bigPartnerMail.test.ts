@@ -288,7 +288,7 @@ describe("never silent, and never the same wall twice", () => {
 describe("a dry run reads everything and writes nothing", () => {
   it("returns the card it would steer, the files, the transcript and the Got it — and no row, object or email changes", async () => {
     const { cardId, token } = await cardWithThread("DRY");
-    const msg = bigReply({ subject: "Re: Porter: West Peek site DRY: New preview ready", token, words: "Dry words.", totalBytes: 2 * 1024 * 1024, messageId: "dry@mail.gmail.com" });
+    const msg = bigReply({ subject: "Re: Porter: West Peek site DRY: New preview ready", token, words: "1. Swap the hero photo for the new one.\n2. Make the header a little taller.", totalBytes: 2 * 1024 * 1024, messageId: "dry@mail.gmail.com" });
     const key = "inbound-email/2026-11-15/dry.eml";
     store.set(key, msg.bytes);
     await env.WP_OS_DB.prepare(
@@ -309,9 +309,9 @@ describe("a dry run reads everything and writes nothing", () => {
       params: {},
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { would: { would_steer: { object_id: string } | null; attachments: Array<{ filename: string }>; voice_notes: Array<{ text: string }>; got_it: { tldr: string; sections: Array<{ bullets: string[] }> } } };
+    const body = (await res.json()) as { would: { would_steer: { object_id: string } | null; filed: string[]; voice_notes: Array<{ text: string }>; got_it: { tldr: string; sections: Array<{ bullets: string[] }> } } };
     expect(body.would.would_steer?.object_id).toBe(cardId);
-    expect(body.would.attachments.map((a) => a.filename).sort()).toEqual(["IMG_0001.jpg", "New Recording 7.m4a", "assets.zip"]);
+    expect([...body.would.filed].sort()).toEqual(["IMG_0001.jpg", "New Recording 7.m4a", "assets.zip"]);
     expect(body.would.voice_notes[0]?.text).toContain("Move the pricing below the case studies");
     expect(body.would.got_it.tldr).toMatch(/^Got it\./);
 

@@ -1,4 +1,6 @@
 import type { Env } from "../env";
+import { isZip, typeOfName, unzipEntries } from "../effects/zipEntries";
+import { bytesOfBase64 } from "../effects/mimeAttachments";
 import { requestAttachments } from "../effects/mimeAttachments";
 import { missingMaterialsSection, readMissingMaterials, type MissingMaterial } from "../../shared/work/missingMaterials";
 import type { ExecEmailSection } from "../../shared/email/execEmail";
@@ -33,6 +35,41 @@ export async function attachmentsFor(env: Env, cardId: string): Promise<RequestA
  * email and by the thread for a reply. A name against the card and the stored .eml it lives in; the
  * bytes are extracted on demand. Without a stored message nothing can be kept, and that is said.
  */
+/**
+ * THE FILES INSIDE A ZIP, ON THE CARD (15 Nov 2026). Each file is put in R2 as itself (`zip-file/<card>/…`) and gets the
+ * same `request_attachment` row an emailed file gets, so the job's package fetches it like any other attachment. A file
+ * already filed from this archive is not filed twice. `dryRun` lists them and stores nothing.
+ */
+export async function fileZipContents(
+  env: Env,
+  input: { cardId: string | null; zipName: string; dataBase64: string; firmScope: string; source: "REQUEST" | "REPLY"; dryRun?: boolean },
+): Promise<{ stored: string[]; unread: string[] }> {
+  let zip: Uint8Array;
+  try {
+    zip = bytesOfBase64(input.dataBase64);
+  } catch {
+    return { stored: [], unread: [`${input.zipName} (its contents could not be decoded)`] };
+  }
+  const read = await unzipEntries(zip);
+  const unread = read.skipped.map((s) => `${input.zipName}: ${s}`);
+  const stored: string[] = [];
+  for (const f of read.files) {
+    const filename = `${input.zipName}/${f.name}`.slice(0, 200);
+    if (input.dryRun || !input.cardId) { stored.push(filename); continue; }
+    if (!env.WP_OS_DOCUMENTS) { unread.push(`${filename} (the document store is not bound)`); continue; }
+    const twin = await env.WP_OS_DB.prepare("SELECT id FROM request_attachment WHERE work_card_id = ?1 AND filename = ?2 AND eml_key LIKE 'zip-file/%' LIMIT 1").bind(input.cardId, filename).first<{ id: string }>();
+    if (!twin) {
+      const key = `zip-file/${input.cardId}/${crypto.randomUUID()}`;
+      await env.WP_OS_DOCUMENTS.put(key, f.bytes, { httpMetadata: { contentType: typeOfName(f.name) }, customMetadata: { zip: input.zipName.slice(0, 200), name: f.name.slice(0, 200) } });
+      await env.WP_OS_DB.prepare("INSERT INTO request_attachment (id, work_card_id, filename, media_type, bytes, eml_key, firm_scope, source) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")
+        .bind(`ratt_${crypto.randomUUID()}`, input.cardId, filename, typeOfName(f.name), f.bytes.byteLength, key, input.firmScope, input.source)
+        .run();
+    }
+    stored.push(filename);
+  }
+  return { stored, unread };
+}
+
 export async function storeAttachments(
   env: Env,
   input: { cardId: string; raw: string; emlKey: string | null; firmScope: string; source: "REQUEST" | "REPLY" },
@@ -59,6 +96,12 @@ export async function storeAttachments(
           .run();
       }
       stored.push(a.filename);
+      // A ZIP IS ITS FILES (15 Nov 2026): each file inside is filed on the card too, named "<zip>/<path>".
+      if (isZip(a.filename, a.mediaType)) {
+        const inner = await fileZipContents(env, { cardId: input.cardId, zipName: a.filename, dataBase64: a.dataBase64, firmScope: input.firmScope, source: input.source });
+        stored.push(...inner.stored);
+        unread.push(...inner.unread);
+      }
     }
   }
   return { stored, attachments: attachments.length, unread };
