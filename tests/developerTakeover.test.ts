@@ -111,4 +111,42 @@ describe("a developer takeover", () => {
     const notes = Number((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card_note WHERE work_card_id = ?1").bind(w).first<{ n: number }>())!.n);
     expect(notes, "exactly one note, no orphan").toBe(1);
   });
+
+  it("--covers: his emails the developer already answered do not reopen the card; one he did not list still does", async () => {
+    const by = (await developerDirector(env, "tail:fu_sequoia_taylor"))!;
+    const siteJob = async (label: string) => {
+      const w = await card(`Porter: Change westpeekproductions.com ${label}`);
+      await env.WP_OS_DB.prepare(
+        `UPDATE work_card SET kind = 'WEB_PROPERTY_CHANGE', state = 'IN_PROGRESS', requested_by_email = 'scooter@westpeek.ventures',
+           block_reason = 'a_question_for_you', block_who = 'SCOOTER', block_trying = 'Change the site', block_stopped = 'Waiting.',
+           block_needed = 'Waiting on: your word on the preview.', block_actions_json = '[]', blocked_at = '2026-11-14T21:44:15.402Z'
+         WHERE id = ?1`,
+      ).bind(w).run();
+      await takeOverCard(env, w, { why: "fixing the preview by hand", by, enteredBy: "test" });
+      const { token } = await startThread(env, { objectType: "work_card", objectId: w, cardKind: "WEB_PROPERTY_CHANGE", employee: "Porter", to: "scooter@westpeek.ventures", subject: `Porter: site ${label}`, firmScope: "west-peek" });
+      // His reply during the takeover: stored, on the card, and filed by the door.
+      const inm = `inm_covers_${label}`;
+      await env.WP_OS_DB.prepare(
+        `INSERT INTO inbound_message (id, message_id, r2_key, from_address, to_address, subject, received_at, bytes, mail_authority_json, firm_scope, work_card_id)
+         VALUES (?1, ?2, ?7, ?3, 'os@joinwestpeek.com', 'Re: site', ?4, 10, ?5, 'west-peek', ?6)`,
+      ).bind(inm, `covers-${label}@mail.test`, SCOOTER_FROM, new Date(Date.now() + 1000).toISOString(), JSON.stringify({ passed: true, partner: "scooter@westpeek.ventures" }), w, `inbound-email/2026-11-15/covers-${label}.eml`).run();
+      const raw = [`From: ${SCOOTER_FROM}`, `To: ${INTAKE_MAILBOX}`, `Subject: Re: Porter: site ${label}`, "", "Two team photos are broken on the preview.", "", "On Sat, 14 Nov 2026 at 10:02, Porter <porter@joinwestpeek.com> wrote:", "> the preview"].join("\n");
+      await steerFromReply(env, { fromHeader: SCOOTER_FROM, authenticationResults: GOOD_AUTH, subject: `Re: Porter: site ${label}`, raw, inReplyTo: threadReference(token), references: null, emlKey: null, messageId: `covers-${label}@mail.gmail.com` });
+      expect(await events(w, "work_card.reply_filed_during_takeover")).toBe(1);
+      return { w, inm };
+    };
+
+    const listed = await siteJob("listed");
+    const back = await handBackCard(env, listed.w, { note: "Both photos render now.", allDone: true, by, enteredBy: "test", covers: [listed.inm] });
+    expect(back.ok && back.state, "covered: back WAITING on his word, not OPEN").toBe("IN_PROGRESS");
+    const rl = (await row(listed.w))!;
+    expect(rl.block_reason, "still waiting on him").toBe("a_question_for_you");
+    expect(String(rl.next_action)).toMatch(/waits for Scooter's word/);
+    const open = Number((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card_note WHERE work_card_id = ?1 AND acknowledged_at IS NULL").bind(listed.w).first<{ n: number }>())!.n);
+    expect(open, "nothing is left for the employee to pick up and re-send").toBe(0);
+
+    const unlisted = await siteJob("unlisted");
+    const back2 = await handBackCard(env, unlisted.w, { note: "Both photos render now.", allDone: true, by, enteredBy: "test", covers: ["inm_some_other_message"] });
+    expect(back2.ok && back2.state, "a reply he was not told about still reopens the card").toBe("OPEN");
+  });
 });
