@@ -83,6 +83,10 @@ describe("Sequoia emails a request", () => {
     chiefCard = wren[0]!;
     expect(chiefCard.title).toMatch(/^From sequoia@westpeek\.ventures: Check whether Sensori/);
     expect(chiefCard.requested_by_email).toBe("sequoia@westpeek.ventures");
+    // 14 Nov 2026: no door claimed it, so it is worked as a partner session (tests/partnerSession.test.ts). The rest of
+    // this suite proves the general loop's hand-off and the answer by email, which every page-made card still takes.
+    expect((await env.WP_OS_DB.prepare("SELECT kind FROM work_card WHERE id = ?1").bind(chiefCard.id).first<{ kind: string | null }>())!.kind).toBe("PARTNER_SESSION");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = NULL WHERE id = ?1").bind(chiefCard.id).run();
   });
 
   it("the chief's brief offers `assign` with the roster, and a hand-off decision parses", async () => {

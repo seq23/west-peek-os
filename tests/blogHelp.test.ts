@@ -167,11 +167,11 @@ describe("Porter reads the ask at the door", () => {
     expect(cards.every((c) => c.requested_by_email === "scooter@westpeek.ventures")).toBe(true);
   });
 
-  it("an ordinary request from a partner is still an ordinary assignment", async () => {
+  it("an ordinary request from a partner is not blog help: it is worked as a partner session (14 Nov 2026)", async () => {
     await deliverMail("sequoia@westpeek.ventures", "Sensori", "can someone look at Sensori and tell me if it is worth a call?");
     const cards = await cardsOwnedBy("aie_wren");
     expect(cards).toHaveLength(2);
-    expect(cards[1]!.kind).toBeNull();
+    expect(cards[1]!.kind).toBe("PARTNER_SESSION");
     expect(cards[1]!.request_json).toBeNull();
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(cards[1]!.id).run();
   });

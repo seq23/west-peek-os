@@ -27,6 +27,7 @@ import { committedLpNamedIn, committedLps } from "../ai/committedLps";
 import { privateMaterialSentence } from "../../shared/intake/privateMaterial";
 import { EMAILED_TASK_LIMITS } from "../../shared/intake/partnerAuthority";
 import { partnerByEmail } from "../../shared/registry/partners";
+import { PARTNER_ANSWER_MAX } from "../../shared/work/blocks";
 import {
   LOCAL_JOB_RUN_KIND,
   PARTNER_SESSION_KIND,
@@ -318,7 +319,8 @@ export async function redirectSession(env: Env, cardId: string, words: string, f
   const card = await sessionCard(env, cardId);
   const row = await readSession(env, cardId);
   if (!card || !row || card.kind !== PARTNER_SESSION_KIND || ["DONE", "CANCELLED"].includes(card.state)) return null;
-  const said = words.trim().slice(0, 4000);
+  // His whole reply, at the same cap the block door keeps (a long brief keeps its last lines).
+  const said = words.trim().slice(0, PARTNER_ANSWER_MAX);
   if (!said) return null;
   const live = row.current_run_id ? await readRun(env, row.current_run_id) : null;
   let abandoned: string | null = null;

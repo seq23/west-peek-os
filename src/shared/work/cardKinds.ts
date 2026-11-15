@@ -64,6 +64,14 @@ export const CARD_KINDS: readonly CardKind[] = [
     door: "EMAIL",
   },
   {
+    key: "PARTNER_SESSION",
+    label: "Partner session",
+    oneLine: "Your chief of staff works the whole email in one session on the Mac: every clear ask done, the unclear words asked about with options.",
+    startableByHand: true,
+    requires: ["what you want done, in your words"],
+    door: "EMAIL",
+  },
+  {
     key: "BLOG_HELP",
     label: "Blog help",
     oneLine: "Wren researches, writes the piece in the partner's voice, files it, and emails the partner who asked.",

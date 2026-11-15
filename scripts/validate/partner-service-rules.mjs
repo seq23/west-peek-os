@@ -120,6 +120,8 @@ export const INCLUSIONS = [
   { file: "src/shared/work/employeeLoop.ts", needle: "ctx.practices", why: "buildStepPrompt prints the fragment" },
   { file: "src/worker/services/webPropertyChange.ts", needle: "practices: await practicesForCard(", why: "Porter's job carries the fragment to the Mac" },
   { file: "scripts/duties/web-property-change.mjs", needle: "job.practices", why: "renderContext prints the fragment into Porter's prompt" },
+  { file: "src/worker/services/partnerSession.ts", needle: "memory: await practicesForCard(", why: "a partner session carries the fragment (his holds and profile) to the Mac" },
+  { file: "scripts/duties/partner-session.mjs", needle: "job.memory", why: "buildSessionPrompt opens the session's prompt with the fragment" },
   { file: "src/worker/services/blocks.ts", needle: "blockWaitDetail(", why: "the stale-block reminder is three parts" },
   { file: "src/shared/work/blocks.ts", needle: "blockWaitDetail(", why: "blockSentence is three parts for every kind" },
   { file: "src/worker/services/emailThread.ts", needle: "blockReplyDoor(", why: "an email reply's words take the door the block email offers" },
@@ -154,7 +156,8 @@ export function checkSharedLayer(rules, { texts, practices, catalogue, forbidden
     if (c === null) v.push(`${inc.file} is not in the tree (${inc.why})`);
     else if (!c.includes(inc.needle)) v.push(`${inc.file} does not include the shared layer: ${inc.why} (looked for \`${inc.needle}\`)`);
   }
-  const runners = dispatchedRunners(code("src/worker/services/workSweep.ts") ?? "").filter((f) => !f.endsWith("/webPropertyChange.ts"));
+  const runners = dispatchedRunners(code("src/worker/services/workSweep.ts") ?? "").filter((f) => !f.endsWith("/webPropertyChange.ts") && !f.endsWith("/partnerSession.ts"));
+  // Porter's job and a partner session run on the Mac, not through steerFor: their INCLUSIONS above hold them to the fragment.
   if (runners.length < 5) v.push(`only ${runners.length} runner(s) found in the sweep's dispatch — the scan cannot see the kinds (Rule 0)`);
   for (const f of runners) {
     examined += 1;

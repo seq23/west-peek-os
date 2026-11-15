@@ -52,6 +52,16 @@ rulings) are not kept here: they live in the West Peek Ventures company brain in
   property), and a follow-up answers any block. A closed-lid Mac is a wait, never "Blocked". A
   CHANGES rebuild must move the branch head (`changed: true`) or it counts as a failed attempt, so
   the same preview is never sent twice.
+- **A partner's email is one session** (14 Nov 2026, `services/partnerSession.ts`). An email no fixed
+  door claims (not a relay, a named site or repo, a build, a named employee, blog help or "nothing to
+  do") becomes a `PARTNER_SESSION` card on the chief's desk: one `claude -p` session on the Mac
+  (`scripts/duties/partner-session.mjs`, a LOCAL_JOB with a 2 h ceiling, no router deadline), Claude
+  then Codex held for Claude's check, private work waiting for Claude. Its report is one line per ask:
+  a `QUESTION` ask emails once with 2-3 options while `IN_PROGRESS` asks are parked again at once; his
+  reply abandons a live run and parks one new run with his words above the brief ("Changed course:
+  …"). The partner's holds and profile (`practicesForCard`) open every prompt; "remember" lines go
+  through `recordProfileNotes`, which refuses LP names. The working folder is
+  `~/GitHub/wpos-jobs/session-<card id>`, the same for every run of the card.
 - **Reply matching.** Gmail replies carry only the SES Message-ID, so the `Re:`-subject fallback is
   the path that actually matches them.
 - **Wynn never drops a brand's thread** (13 Nov 2026; `services/tlcBrandThread.ts`). Every brand

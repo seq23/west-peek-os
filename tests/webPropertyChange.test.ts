@@ -255,10 +255,10 @@ describe("the door reads a Drive folder and a property", () => {
     expect(parseWebPropertyAsk("x", `community site: ${folder}.`)?.preview_first).toBeNull();
   });
 
-  it("a folder with no property stays an ordinary assignment, with the link recorded", async () => {
+  it("a folder with no property stays an ordinary assignment (a partner session, never a site job), with the link recorded", async () => {
     const id = await openAssignmentCard(env, { subject: "look at this", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: `here: https://drive.google.com/drive/folders/${FOLDER}x\nthoughts?`, limits: EMAILED_TASK_LIMITS, emlKey: null });
     const c = await card(id);
-    expect(c.kind).toBeNull();
+    expect(c.kind).toBe("PARTNER_SESSION");
     expect(String(c.request_json)).toContain(`${FOLDER}x`);
     expect(c.state).toBe("OPEN");
     // Out of the sweep's way for the rest of the file: this file measures Porter's card.
@@ -2208,6 +2208,9 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
 
   it("a partner's 'Re: <our subject>' reply answers the block and creates no card, even without our token", async () => {
     const chiefId = await openAssignmentCard(env, { subject: "Something Walker holds", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Walker, find me three podcast hosts who cover seed funds.", limits: EMAILED_TASK_LIMITS, emlKey: null });
+    // A general-loop card on Walker's desk (an emailed one is a partner session now, whose reply redirects the session:
+    // tests/partnerSession.test.ts); this proves the block-answer door every other card takes.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = NULL WHERE id = ?1").bind(chiefId).run();
     const { blockCard } = await import("../src/worker/services/blocks");
     await blockCard(env, { id: chiefId, title: "From scooter@westpeek.ventures: Something Walker holds", firm_scope: "west-peek" }, { reason: "permission_to_open_a_page", trying: "podcast hosts", employee: "Walker", url: "https://example.org" });
     const { replyToRequester } = await import("../src/worker/services/requestReply");
@@ -2236,6 +2239,7 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
      * question was gone, and a build started from the part.
      */
     const chiefId = await openAssignmentCard(env, { subject: "Something long Walker holds", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Walker, find me three podcast hosts who cover seed funds.", limits: EMAILED_TASK_LIMITS, emlKey: null });
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = NULL WHERE id = ?1").bind(chiefId).run();
     const { blockCard } = await import("../src/worker/services/blocks");
     await blockCard(env, { id: chiefId, title: "From scooter@westpeek.ventures: Something long Walker holds", firm_scope: "west-peek" }, { reason: "permission_to_open_a_page", trying: "podcast hosts", employee: "Walker", url: "https://example.org" });
     const { replyToRequester } = await import("../src/worker/services/requestReply");
