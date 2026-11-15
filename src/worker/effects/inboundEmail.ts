@@ -1885,12 +1885,15 @@ export function forwardedOrigin(raw: string): { from: string | null; subject: st
 
 
 /**
- * A DRY READ OF A STORED MESSAGE (15 Nov 2026): the door's own readers — his words above the quote, every attachment,
- * every voice note transcribed, every Drive link read as him — and the card a reply would steer and the "Got it" it
- * would send, returned and NOT applied. Writes nothing: no steer, no file, no email, no dedupe row, no event. The Got
- * it's asks are his sentences (the no-model form), because the model read is itself a write (an ai_run row).
+ * A DRY READ OF A STORED MESSAGE (15 Nov 2026): the door's own readers — his words above the quote, every attachment
+ * (a ZIP's files each listed), every voice note transcribed, every Drive link read as him — and the card a reply would
+ * steer and the "Got it" it would send, built by the SAME `understand()` the live Got it uses, her seat included.
+ * Returned, NOT applied: no steer, no file, no email, no dedupe row, no business row. The seat can only be reached
+ * through its queue row, so the model read's own bookkeeping (the ai_run, its seat run, attribution, routing and
+ * scoreboard rows) is written by that read and removed the moment it returns (`forgetDryRun`), so no sweep, alarm,
+ * scoreboard or usage report ever counts it. The event spine is append-only by design and keeps its record.
  */
-export async function dryReadMessage(env: Env, raw: string) {
+export async function dryReadMessage(env: Env, raw: string, deps: { read?: import("../services/partnerUnderstood").SeatRead } = {}) {
   const headers = headersOfRaw(raw);
   const subject = decodeMimeHeader(headers.get("subject") ?? "");
   const authority = mailAuthority({ fromHeader: headers.get("from"), authenticationResults: headers.get("authentication-results") });
@@ -1900,22 +1903,52 @@ export async function dryReadMessage(env: Env, raw: string) {
   const split = writtenAndQuoted(`\r\n\r\n${textBodyOf(raw)}`, { inReplyTo: headers.get("in-reply-to"), references: headers.get("references"), subject });
   const typed = (split.applied ? partnersOwnWords(split.written) : split.written).trim();
   const files = requestAttachments(raw);
+  const { fileZipContents } = await import("../services/requestMaterials");
+  const { isZip } = await import("./zipEntries");
+  const filed: string[] = [];
+  const unopened: Array<{ filename: string; reason: string }> = files.unread.map((u) => ({ filename: u.replace(/\s*\(.*$/, ""), reason: u }));
+  for (const a of files.attachments) {
+    filed.push(a.filename);
+    if (isZip(a.filename, a.mediaType)) {
+      const inner = await fileZipContents(env, { cardId: null, zipName: a.filename, dataBase64: a.dataBase64, firmScope: "west-peek", source: "REPLY", dryRun: true });
+      filed.push(...inner.stored);
+      unopened.push(...inner.unread.map((u) => ({ filename: u.replace(/:.*$/, ""), reason: u })));
+    }
+  }
   const { hearVoiceNotes, withVoiceNotes } = await import("../services/voiceNotes");
   const voice = await hearVoiceNotes(env, raw);
   const { readLinkedDriveFiles } = await import("../services/driveShares");
   const drive = await readLinkedDriveFiles(env, { cardId: null, partnerEmail: authority.partnerAddress, text: split.written, dryRun: true });
+  filed.push(...drive.filed);
+  unopened.push(...voice.failed, ...drive.failed);
   const words = withVoiceNotes(withVoiceNotes(typed, voice.heard), drive.heard);
-  const { sentencesOf, gotItEmail } = await import("../services/partnerUnderstood");
-  const unopened = [...files.unread.map((u) => ({ filename: u.replace(/\s*\(.*$/, ""), reason: u })), ...voice.failed, ...drive.failed];
-  const asks = sentencesOf(words);
+  const { understand, gotItEmail, confidentialSeatRead } = await import("../services/partnerUnderstood");
+  const ownerId = thread?.object_type === "work_card" ? ((await env.WP_OS_DB.prepare("SELECT owner_id FROM work_card WHERE id = ?1").bind(thread.object_id).first<{ owner_id: string | null }>())?.owner_id ?? null) : null;
+  const understood = await understand(env, { subject, written: words, read: deps.read ?? confidentialSeatRead, employeeId: ownerId, firmScope: "west-peek" });
+  if (understood.runId) await forgetDryRun(env, understood.runId);
+  const employee = ownerId ? ((await env.WP_OS_DB.prepare("SELECT name FROM ai_employee WHERE id = ?1").bind(ownerId).first<{ name: string }>())?.name ?? "West Peek") : "West Peek";
   return {
     authenticated_partner: authority.partnerAddress,
     would_steer: thread ? { object_type: thread.object_type, object_id: thread.object_id, card_kind: thread.card_kind } : null,
     typed_chars: typed.length,
-    attachments: files.attachments.map((a) => ({ filename: a.filename, media_type: a.mediaType, bytes: a.bytes })),
+    asks_read_by: understood.via,
+    filed,
     voice_notes: voice.heard,
     drive_files: { filed: drive.filed, heard: drive.heard },
     unopened,
-    got_it: gotItEmail({ employee: "Porter", subject, asks, next: "I'm starting on it now.", unopened }),
+    got_it: understood.none ? null : gotItEmail({ employee, subject, asks: understood.asks, next: understood.next, unopened, noted: understood.noted, filed }),
   };
+}
+
+/** The bookkeeping a dry run's model read wrote, removed: nothing downstream may count a practice read as work. */
+export async function forgetDryRun(env: Env, runId: string): Promise<void> {
+  for (const sql of [
+    "DELETE FROM model_job_outcome WHERE ai_run_id = ?1",
+    "DELETE FROM ai_run_attribution WHERE ai_run_id = ?1",
+    "DELETE FROM ai_run_routing WHERE ai_run_id = ?1",
+    "DELETE FROM subscription_seat_run WHERE ai_run_id = ?1",
+    "DELETE FROM ai_run WHERE id = ?1",
+  ]) {
+    await env.WP_OS_DB.prepare(sql).bind(runId).run();
+  }
 }
