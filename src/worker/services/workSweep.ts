@@ -280,6 +280,13 @@ export async function announceOutcome(
     });
     return { emailed: null };
   }
+  /*
+   * ONE COMPLETE FINAL REPLY (14 Nov 2026, plan step 7). Every ask the partner made on this card (partner_ask, 0306) is
+   * marked done / in progress / not done, with why, before the DONE goes. One unmarked ask and nothing is sent: the
+   * card is put back to work with the missing asks named (services/partnerUnderstood.ts `asksAtDone`).
+   */
+  const asks = outcome === "DONE" ? await (await import("./partnerUnderstood")).asksAtDone(env, card, detail) : null;
+  if (asks && !asks.ok) return { emailed: null };
   await notifyPartners(env, {
     kind: "MEETING",
     severity: outcome === "BLOCKED" ? "WARNING" : "INFO",
@@ -381,6 +388,12 @@ export async function announceOutcome(
       );
       return { emailed: reply.sent ? reply.to : null };
     }
+  }
+  if (asks?.ok && asks.section) {
+    const askSection = asks.section;
+    composed = composed
+      ? ({ ...composed, sections: [askSection, ...composed.sections] } as typeof composed)
+      : ((await import("./partnerUnderstood")).doneEmailWithAsks(card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").trim() || card.title, detail, { section: askSection, counts: asks.counts }, card.id) as unknown as typeof composed);
   }
   const reply = await replyToRequester(env, card, outcome, who, detail, notice, composed);
   return { emailed: reply.sent ? reply.to : null };
@@ -708,6 +721,8 @@ export async function sweepOnce(
   // A CARD THE SPEND SETTING STOPPED RESUMES BY ITSELF when the setting (or a search-capable seat) changes —
   // nobody has to notice and press a button. Once per change, never in a loop: see `releaseSpendSettingBlocks`.
   await releaseSpendSettingBlocks(env, now);
+  // 14 Nov 2026 (plan step 1): every partner email that opened or steered a card gets one "Got it" within the minute.
+  await (await import("./partnerUnderstood")).sendUnderstoodReplies(env, now).catch((err) => console.error("Got it replies failed", err));
   const card = await claimNextCard(env, now);
   if (!card) {
     return { status: "SUCCEEDED", summary: "nothing waiting: every card an employee owns is done, blocked, or being worked", card: null, outcome: "NOTHING_WAITING" };
