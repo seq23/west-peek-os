@@ -11,6 +11,7 @@ import { FILES_NOT_OPENED } from "./voiceNotes";
 import { TAKEN_OVER_PREFIX, isTakenOver } from "../../shared/work/takeover";
 import { notifyQuietly } from "./notifications";
 import { PREVIEW_PARTNER } from "../../shared/registry/partners";
+import { SECTION_MAX_LINES } from "../../shared/email/execEmail";
 
 /**
  * EMAILING THE OS FEELS LIKE TYPING TO CLAUDE — steps 1 and 7 (her ruling, 14 Nov 2026, west-peek-ventures brain).
@@ -413,22 +414,28 @@ export function gotItEmail(input: { employee: string; subject: string; asks: rea
     for (const lead of [QUESTIONS_LEAD, QUESTIONS_PLAIN]) if (a.startsWith(lead)) return `${lead}"${a.slice(lead.length)}"`;
     return `"${a}"`;
   };
+  const sections = [
+    { label: "What you asked", bullets: asks.map(quoted) },
+    // Every file of his now on the card, by name (a ZIP's files each named), so he can see nothing was lost.
+    ...(filed.length ? [{ label: "Files on the card", bullets: [...filed] }] : []),
+    // Read first, then answered: every file of his that could not be opened is named, never skipped in silence.
+    ...(unopened.length ? [{ label: "What I could not open", bullets: unopened.map((f) => `${f.filename}: ${f.reason}`) }] : []),
+    // What he said that is not an ask (an idea for later, a process note) is shown as kept, never dropped.
+    ...(noted.length ? [{ label: "Also noted", bullets: noted.map((n) => (/: heard and transcribed onto the card \(/.test(n) ? n : `"${n}"`)) }] : []),
+    { label: "What happens next", bullets: [next, "Reply to this email to change anything; I read it before I go on."] },
+  ];
+  // The renderer shows SECTION_MAX_LINES - 1 lines of a longer section and points at "Details below": the rest of every
+  // such section is written there, so no ask and no file is cut from the email (15 Nov 2026: 5 of 10 asks vanished).
+  const rest = sections
+    .filter((s) => s.bullets.length > SECTION_MAX_LINES)
+    .map((s) => [`**${s.label}, continued**`, ...s.bullets.slice(SECTION_MAX_LINES - 1).map((b) => `• ${b}`)].join("\n"));
   return {
     employee: input.employee,
     what: `got it — ${input.subject.slice(0, 80)}`,
     tldr: `Got it. ${asks.length === 1 ? "One thing" : `${asks.length} things`} you asked, in your words, below. ${next}`,
     tldrBullets: [] as string[],
-    sections: [
-      { label: "What you asked", bullets: asks.map(quoted) },
-      // Every file of his now on the card, by name (a ZIP's files each named), so he can see nothing was lost.
-      ...(filed.length ? [{ label: "Files on the card", bullets: filed.length > 15 ? [...filed.slice(0, 15), `and ${filed.length - 15} more`] : [...filed] }] : []),
-      // Read first, then answered: every file of his that could not be opened is named, never skipped in silence.
-      ...(unopened.length ? [{ label: "What I could not open", bullets: unopened.map((f) => `${f.filename}: ${f.reason}`) }] : []),
-      // What he said that is not an ask (an idea for later, a process note) is shown as kept, never dropped.
-      ...(noted.length ? [{ label: "Also noted", bullets: noted.map((n) => (/: heard and transcribed onto the card \(/.test(n) ? n : `"${n}"`)) }] : []),
-      { label: "What happens next", bullets: [next, "Reply to this email to change anything; I read it before I go on."] },
-    ],
-    details: null,
+    sections,
+    details: rest.length ? rest.join("\n\n") : null,
   };
 }
 

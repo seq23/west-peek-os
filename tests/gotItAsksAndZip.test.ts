@@ -277,3 +277,18 @@ describe("a reply on a card a developer has taken over", () => {
     expect(Number(alarm!.n)).toBe(0);
   });
 });
+
+describe("a long Got it keeps every ask and every file", () => {
+  it("writes what the six-line cap hides under Details, so nothing promised there is missing", async () => {
+    const { renderExecEmail, lintExecEmail } = await import("../src/shared/email/execEmail");
+    const asks = "abcdefghij".split("").map((c) => `Ask ${c.repeat(3)} about the tracker.`);
+    const filed = "abcdefghijklmnopqrstuvwx".split("").map((c) => `logo-${c.repeat(2)}.png`);
+    const r = renderExecEmail(gotItEmail({ employee: "Porter", subject: "site", asks, next: "On it.", unopened: [], filed }));
+    for (const line of [...asks, ...filed]) expect(r.text).toContain(line);
+    expect(r.text).toContain("— Details —");
+    expect(lintExecEmail(r.subject, r.text, "Porter")).toEqual([]);
+    // A short one has no Details at all.
+    const short = renderExecEmail(gotItEmail({ employee: "Porter", subject: "site", asks: ["One ask."], next: "On it.", unopened: [], filed: ["a.png"] }));
+    expect(short.text).not.toContain("— Details —");
+  });
+});
