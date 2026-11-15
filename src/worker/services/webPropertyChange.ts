@@ -2179,6 +2179,8 @@ async function rebuildForKeptWords(env: Env, card: WebPropertyChangeCard, fresh:
   const kept = await keptForNextBuild(env, card.id);
   if (!kept.words) return null;
   await kept.take("Rebuilding the preview with your changes.");
+  // The round is not finished, so this build is not a spent attempt (15 Nov 2026): the next one has the same budget.
+  await env.WP_OS_DB.prepare("UPDATE work_card SET work_attempts = MAX(COALESCE(work_attempts, 1) - 1, 0) WHERE id = ?1").bind(card.id).run();
   // The words this finished build was for reach no preview either, so they stay owed beside the kept ones.
   return requestRebuild(env, card, { ...fresh, current_run_id: null, refresh_intent: fresh.rebuilt_for ? "CHANGES" : fresh.refresh_intent }, "CHANGES", kept.words, rules);
 }

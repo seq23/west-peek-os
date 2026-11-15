@@ -2593,8 +2593,10 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     const row = (await readWebPropertyChange(env, p.id))!;
     const items = [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }];
     expect((await reportRun(env, { runId: run.id, deviceId: "mac-test-jobs", outputText: JSON.stringify({ phase: "BUILD", status: "ok", items, pr_url: row.pr_url, pr_number: 9, changed: true, head_sha: "round-1", check_state: "GREEN", preview_url: "https://p9r.west-peek-ventures.pages.dev" }) })).accepted).toBe(true);
+    const attemptsBefore = Number((await card(p.id)).work_attempts);
     const out = await tickFor(p.id);
     expect(out.outcome, "a build that missed a reply is not the round's reply").not.toBe("BLOCKED");
+    expect(Number((await card(p.id)).work_attempts), "no attempt charged for the unfinished round").toBeLessThanOrEqual(attemptsBefore);
     expect(out.summary).toMatch(/BUILD queued/);
     expect(previewsTo(from), "no preview until a build has covered every reply").toHaveLength(0);
     const again = JSON.parse((await liveJobFor(p.id))!.job_json!) as LocalJobPayload;
