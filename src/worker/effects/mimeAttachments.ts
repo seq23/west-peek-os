@@ -78,12 +78,29 @@ function nestedBoundaryOf(part: string): string | null {
  */
 const MAX_MIME_DEPTH = 6;
 
+/**
+ * PARSED ONCE PER MESSAGE (15 Nov 2026). One reply is read by `textBodyOf`, `requestAttachments`, `audioAttachments`
+ * and the steer's own readers in a row; each used to split the whole multi-megabyte message again. The last split is
+ * kept and handed back for the same string, so the work per message is one pass, not one per reader.
+ */
+let lastSplit: { raw: string; boundary: string; parts: string[] } | null = null;
+/** How many times a message was actually split. Exposed for the regression test that pins one split per message. */
+export const mimeSplitCount = { n: 0 };
+
 /** Every leaf part of a message, flattened — descending into nested multiparts. */
-function leafParts(raw: string, boundary: string, depth = 0): string[] {
+function leafParts(raw: string, boundary: string): string[] {
+  if (lastSplit && lastSplit.raw === raw && lastSplit.boundary === boundary) return lastSplit.parts;
+  mimeSplitCount.n += 1;
+  const parts = splitLeafParts(raw, boundary);
+  lastSplit = { raw, boundary, parts };
+  return parts;
+}
+
+function splitLeafParts(raw: string, boundary: string, depth = 0): string[] {
   const out: string[] = [];
   for (const part of raw.split(`--${boundary}`)) {
     const inner = depth < MAX_MIME_DEPTH ? nestedBoundaryOf(part) : null;
-    if (inner) out.push(...leafParts(part, inner, depth + 1));
+    if (inner) out.push(...splitLeafParts(part, inner, depth + 1));
     else out.push(part);
   }
   return out;
@@ -110,7 +127,12 @@ function unfoldHeaders(raw: string): string {
 function headerIn(part: string, name: string): string | null {
   // Unfolds continuation lines first: a long filename is legally split across lines, and reading
   // only the first would truncate the name to something that looks deliberate.
-  const unfolded = part.replace(/\r?\n[ \t]+/g, " ");
+  // ONLY THE PART'S OWN HEADER BLOCK (15 Nov 2026): unfolding and searching the whole part walked every
+  // megabyte of a base64 attachment, five times per part, per reader — the email door's CPU went there.
+  const crlf = part.indexOf("\r\n\r\n");
+  const lf = part.indexOf("\n\n");
+  const end = crlf === -1 ? lf : lf === -1 ? crlf : Math.min(crlf, lf);
+  const unfolded = (end === -1 ? part : part.slice(0, end)).replace(/\r?\n[ \t]+/g, " ");
   const m = new RegExp(`^${name}\\s*:\\s*(.+)$`, "im").exec(unfolded);
   return m ? m[1]!.trim() : null;
 }
@@ -161,9 +183,7 @@ function decodePartBody(part: string): string {
   const encoding = (headerIn(part, "content-transfer-encoding") ?? "").toLowerCase();
   if (encoding.includes("base64")) {
     try {
-      const bin = atob(body.replace(/[\r\n\s]/g, ""));
-      const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
-      return new TextDecoder("utf-8").decode(bytes);
+      return new TextDecoder("utf-8").decode(bytesOfBase64(body));
     } catch {
       return body;
     }
@@ -244,11 +264,18 @@ export function attachmentBytes(raw: string, filename: string): { bytes: Uint8Ar
   const hit = attachments.find((a) => a.filename === filename);
   if (!hit) return null;
   try {
-    const bin = atob(hit.dataBase64);
-    return { bytes: Uint8Array.from(bin, (c) => c.charCodeAt(0)), mediaType: hit.mediaType };
+    return { bytes: bytesOfBase64(hit.dataBase64), mediaType: hit.mediaType };
   } catch {
     return null;
   }
+}
+
+/** Base64 to bytes in one pass: no per-byte callback, which cost seconds on a multi-megabyte file. Throws on bad base64. */
+export function bytesOfBase64(b64: string): Uint8Array {
+  const bin = atob(b64.replace(/[\r\n\s]/g, ""));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 /** A voice note is up to this big: a phone's few minutes of m4a is 1 to 20 MB. */
@@ -352,7 +379,7 @@ function attachmentsOf(raw: string, accept: (type: string, sentAsFile: boolean) 
  * decoding megabytes of base64 to look for one is the cost this split exists to avoid.
  */
 export function messageText(raw: string): { subject: string; body: string } {
-  const subject = headerIn(unfoldHeaders(raw.split(/\r?\n\r?\n/)[0] ?? ""), "subject") ?? "";
+  const subject = headerIn(unfoldHeaders(raw), "subject") ?? "";
 
   const boundary = boundaryOf(raw);
   if (!boundary) {

@@ -186,6 +186,8 @@ export interface DriveFileRaw {
   name?: string;
   mimeType?: string;
   webViewLink?: string;
+  /** Bytes, as Drive reports it (a decimal string); absent for Google Docs, Sheets, Slides and folders. */
+  size?: string;
   owners?: Array<{ emailAddress?: string }>;
   sharingUser?: { emailAddress?: string };
   lastModifyingUser?: { emailAddress?: string };
@@ -195,7 +197,7 @@ export async function getDriveFile(token: string, fileId: string, fetchImpl: typ
   return getJson<DriveFileRaw>(
     fetchImpl,
     token,
-    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,webViewLink,owners(emailAddress),sharingUser(emailAddress),lastModifyingUser(emailAddress)&supportsAllDrives=true`,
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=id,name,mimeType,webViewLink,size,owners(emailAddress),sharingUser(emailAddress),lastModifyingUser(emailAddress)&supportsAllDrives=true`,
   );
 }
 
@@ -217,6 +219,18 @@ export async function driveFileText(token: string, file: DriveFileRaw, maxChars:
   const res = await fetchWithTimeout(fetchImpl, url, { headers: { authorization: `Bearer ${token}` } });
   if (!res.ok) throw new GoogleWorkspaceError(res.status === 404 ? "not_found" : res.status === 403 ? "forbidden" : "http", res.status, `google responded ${res.status} exporting the file`);
   return (await res.text()).slice(0, maxChars);
+}
+
+/**
+ * THE FILE ITSELF (15 Nov 2026): an audio file, an image, a ZIP a partner linked (or Gmail turned into a Drive link
+ * because it was over 25 MB). The response is handed back unread, so the bytes stream straight to R2 or to the
+ * transcriber and never pass through this isolate's CPU.
+ */
+export async function downloadDriveFile(token: string, fileId: string, fetchImpl: typeof fetch = fetch): Promise<Response> {
+  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`;
+  const res = await fetchWithTimeout(fetchImpl, url, { headers: { authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new GoogleWorkspaceError(res.status === 404 ? "not_found" : res.status === 403 ? "forbidden" : "http", res.status, `google responded ${res.status} downloading the file`);
+  return res;
 }
 
 // ── Calendar (read) ──────────────────────────────────────────────────────────

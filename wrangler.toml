@@ -168,6 +168,11 @@ binding = "BROWSER"
 # # appear to email as anybody else on the domain.
 # allowed_sender_addresses = ["os@westpeek.ventures"]
 
+# CPU (15 Nov 2026): two partner emails were killed by the email handler at 2,010 ms (exceededCpu). Asked for
+# explicitly; the read itself is kept cheap (well under this) and never depends on it.
+[env.production.limits]
+cpu_ms = 30000
+
 [env.production.vars]
 # ── Whether an AI employee may email anybody (P33) ──
 #

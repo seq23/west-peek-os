@@ -138,6 +138,13 @@ export async function transcribeDiarised(
   binding: WhisperBinding | undefined,
   audioBase64: string,
   contentType = "audio/webm",
+  /**
+   * Hand the binding a STREAM, the shape Cloudflare documents for Nova-3 (15 Nov 2026). workerd's AI binding
+   * JSON-serialises any input that is not a ReadableStream, so a multi-megabyte email voice note passed as a
+   * `Uint8Array` became a tens-of-megabytes `{"0":…}` object inside the email handler's CPU budget. Meeting slices are
+   * small and keep the byte array.
+   */
+  opts: { stream?: boolean } = {},
 ): Promise<DiarisedTranscription> {
   if (!transcriptionAvailable(binding)) {
     throw new TranscriptionUnavailable("this build has no connection to the transcription service, so nothing would be written down");
@@ -146,9 +153,21 @@ export async function transcribeDiarised(
   // Decoded before the call, so a malformed body is "not base64" and never mistaken for the model
   // being missing (which would send it to Whisper to fail again).
   const body = bytesFromBase64(audioBase64);
+  return runNova(binding!, opts.stream ? new Blob([body as BlobPart]).stream() : body, contentType);
+}
+
+/** Transcribe audio that is already a stream (a Drive download, a stored object): no bytes pass through this isolate. */
+export async function transcribeDiarisedStream(binding: WhisperBinding | undefined, body: ReadableStream, contentType: string): Promise<DiarisedTranscription> {
+  if (!transcriptionAvailable(binding)) {
+    throw new TranscriptionUnavailable("this build has no connection to the transcription service, so nothing would be written down");
+  }
+  return runNova(binding!, body, contentType);
+}
+
+async function runNova(binding: WhisperBinding, body: Uint8Array | ReadableStream, contentType: string): Promise<DiarisedTranscription> {
   let result: unknown;
   try {
-    result = await binding!.run(NOVA3_MODEL, {
+    result = await binding.run(NOVA3_MODEL, {
       audio: { body, contentType },
       diarize: true,
       punctuate: true,

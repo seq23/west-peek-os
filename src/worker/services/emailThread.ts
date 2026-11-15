@@ -19,7 +19,8 @@ import { ownershipOf, roleOf } from "../../shared/work/partnerOwnership";
 import { LATE_THREAD_NOTE_PREFIX, NEW_EMAIL_NOTE_PREFIX, readApprovalReply } from "../../shared/work/approvalReply";
 import { textBodyOf } from "../effects/mimeAttachments";
 import { storeAttachments } from "./requestMaterials";
-import { hearVoiceNotes, stopOnUnheardVoiceNotes, withVoiceNotes } from "./voiceNotes";
+import { hearVoiceNotes, recordFilesNotOpened, stopOnUnheardVoiceNotes, withVoiceNotes } from "./voiceNotes";
+import { readLinkedDriveFiles } from "./driveShares";
 import { tellStarted } from "./partnerProgress";
 import { isTakenOver } from "../../shared/work/takeover";
 import { answerQuestionForCard, type QuestionAnswerer, type QuestionAnswerResult } from "./questionRouting";
@@ -444,6 +445,11 @@ export async function steerFromReply(
       });
     }
     await stopOnUnheardVoiceNotes(env, { cardId: thread.object_id, firmScope: thread.firm_scope, partner: partnerByEmail(authority.partnerAddress)?.firstName ?? "a partner", failed: voice.failed });
+    // A DRIVE LINK IS HIS MATERIAL TOO (15 Nov 2026): his own link, or Gmail's for a file over 25 MB, read as him.
+    const drive = await readLinkedDriveFiles(env, { cardId: thread.object_id, partnerEmail: authority.partnerAddress, text: split.written, firmScope: thread.firm_scope, source: "REPLY" });
+    written = withVoiceNotes(written, drive.heard);
+    attached = [...attached, ...drive.filed];
+    await recordFilesNotOpened(env, { cardId: thread.object_id, firmScope: thread.firm_scope, failed: [...kept.unread.map((u) => ({ filename: u.replace(/\s*\(.*$/, ""), reason: u })), ...voice.failed, ...drive.failed] });
     if (written.length < 2 && attached.length) written = `Attached: ${attached.join(", ")}`;
   }
   // One character is an answer ("1", Porter's which-job question); only nothing at all is not (15 Nov 2026: the phone's

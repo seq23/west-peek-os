@@ -5,6 +5,7 @@ import { appendEvent } from "../events";
 import { proposePerson } from "./networkOsClient";
 import { dealFromMessage, intakeDealFromEmail, matchFunnelCompany, openAssignmentCard, openRoutingCard } from "../services/dealIntake";
 import { notifyQuietly } from "../services/notifications";
+import { PREVIEW_PARTNER } from "../../shared/registry/partners";
 import { ASSIGNING_PARTNERS, EMAILED_TASK_LIMITS, addressIn, mailAuthority } from "../../shared/intake/partnerAuthority";
 import { pdfAttachments, requestAttachments, textBodyOf } from "./mimeAttachments";
 import { askWhichCard, withoutSignatures, type RouteAs } from "../services/emailRouting";
@@ -13,7 +14,7 @@ import { threadTokensIn } from "../../shared/email/thread";
 import { driveShareNotice } from "../../shared/intake/driveShare";
 import { handleDriveShare, joinSharesNamedIn } from "../services/driveShares";
 import { openPortfolioUpdateCard } from "../services/portfolioReporting";
-import { EMAIL_TRIGGERS, INTAKE_MAILBOX, NO_TRIGGER_ROUTE, ROUTING_EMPLOYEE, strippedSubject, triggersIn, type EmailTrigger } from "../../shared/intake/emailTriggers";
+import { EMAIL_TRIGGERS, INTAKE_MAILBOX, NO_TRIGGER_ROUTE, ROUTING_EMPLOYEE, seatId, strippedSubject, triggersIn, type EmailTrigger } from "../../shared/intake/emailTriggers";
 import { applyReplyDecision } from "../services/packetReplyDecision";
 import { writtenAndQuoted } from "../../shared/intake/replyBody";
 import { steerFromReply } from "../services/emailThread";
@@ -62,6 +63,83 @@ import { fundDeckStart } from "../../shared/deck/start";
  * oversize branch below. "The photo is attached" is a request, not a deck.
  */
 export const MAX_BODY_BYTES = 256 * 1024;
+
+/** A dedupe claim still unfinished after this long belongs to a door that was killed; a redelivery takes it over. */
+export const STALE_CLAIM_MINUTES = 4;
+/** Inline reads a message gets (the first delivery and one redelivery) before it is handed on instead. */
+export const INLINE_READ_ATTEMPTS = 2;
+
+/**
+ * A MESSAGE TWO INLINE READS COULD NOT FINISH (15 Nov 2026). Retrying the same read hits the same wall, so it is not
+ * read here a third time. It goes to the Mac as a PARTNER_SESSION card (the existing lane, no CPU ceiling) carrying the
+ * stored key and the card it answers, with the same rule as the door: read everything first, then one "Got it" naming
+ * what could not be opened, then steer the original card, never a new one. Sequoia's desk is told a Mac session has
+ * it, so nobody acts unless the Mac is asleep (the sweep's five-minute alarm still covers that).
+ */
+export async function handOffUnreadableMail(env: Env, input: { messageId: string; sender: string; subject: string; headers: Headers }): Promise<string | null> {
+  const stored = await env.WP_OS_DB.prepare("SELECT id, r2_key, json_extract(mail_authority_json, '$.partner') AS partner FROM inbound_message WHERE message_id = ?1")
+    .bind(input.messageId)
+    .first<{ id: string; r2_key: string; partner: string | null }>();
+  const { replyThreadFromHeaders } = await import("../services/emailThread");
+  const thread = await replyThreadFromHeaders(env, { fromHeader: input.headers.get("from"), subject: input.subject, inReplyTo: input.headers.get("in-reply-to"), references: input.headers.get("references") });
+  const originalCard = thread?.object_type === "work_card" ? thread.object_id : null;
+  let cardId: string | null = null;
+  if (stored?.partner) {
+    const { createWorkCardInternal } = await import("../services/workCards");
+    const { systemIdentity } = await import("../services/dealIntake");
+    const { openPartnerSession } = await import("../services/partnerSession");
+    const brief = [
+      `Read the stored email ${stored.r2_key} (inbound message ${stored.id}) from ${stored.partner}, subject "${input.subject.slice(0, 200)}".`,
+      "The Worker could not finish reading it twice (it ran out of CPU), so this session reads it instead. In this order:",
+      "1. Read EVERYTHING first: his own words above the quote, every attachment, every voice note (transcribe it), every Drive link (read it as him).",
+      `2. Then send ONE "Got it" on his thread listing his asks in his words and naming each file you could not open.`,
+      originalCard
+        ? `3. Then steer the ORIGINAL card ${originalCard} with his words and file the attachments on it. Never open a new card.`
+        : "3. It answers no card of ours: work it as a new request on this card.",
+    ].join("\n");
+    const card = await createWorkCardInternal(env, systemIdentity(), {
+      title: `Read ${stored.partner}'s email: ${input.subject.slice(0, 120)}`,
+      description: brief,
+      owner_type: "AI",
+      owner_id: seatId(ROUTING_EMPLOYEE),
+      priority: "HIGH",
+      firm_scope: "west-peek",
+      next_action: "Read the stored email on the Mac, then Got it, then steer the original card.",
+    });
+    cardId = card.id;
+    await env.WP_OS_DB.prepare("UPDATE work_card SET requested_by_email = ?2 WHERE id = ?1").bind(card.id, stored.partner.toLowerCase()).run();
+    await openPartnerSession(env, { cardId: card.id, request: brief, requestedBy: stored.partner, firmScope: "west-peek" });
+  }
+  await appendEvent(env, {
+    eventType: "inbound_email.handed_off", actorType: "system", actorId: "inbound_email", objectType: "inbound_email",
+    objectId: input.messageId.slice(0, 200), firmScope: "west-peek",
+    payload: { attempts: INLINE_READ_ATTEMPTS, stored: stored?.r2_key ?? null, inbound_message: stored?.id ?? null, original_card: originalCard, session_card: cardId, why: "two inline reads were stopped before they finished" },
+  });
+  await raiseUnreadMail(env, {
+    dedupeKey: `inbound_email_handed_off:${input.messageId}`,
+    title: cardId ? "A Mac session has taken over an email the Worker could not read" : "An email could not be read twice, so it was not read a third time",
+    body: cardId
+      ? `From ${input.sender.slice(0, 120)}, subject "${input.subject.slice(0, 120)}". Two reads in the Worker were stopped before they finished, so session card ${cardId} reads it on the Mac, sends the Got it and steers ${originalCard ?? "a new card"}. Nobody needs to act unless the Mac is asleep.`
+      : `From ${input.sender.slice(0, 120)}, subject "${input.subject.slice(0, 120)}". Two reads of it were stopped before they finished. ${stored ? `It is stored at ${stored.r2_key} (${stored.id}).` : "It was not stored; it is still in the mailbox."} No "Got it" was sent.`,
+    objectId: input.messageId,
+  });
+  return cardId;
+}
+
+/** An email the OS could not read, on Sequoia's desk (the operator notice path voice notes already use). Never throws. */
+export async function raiseUnreadMail(env: Env, input: { dedupeKey: string; title: string; body: string; objectId: string }): Promise<void> {
+  await notifyQuietly(env, {
+    firmUserId: PREVIEW_PARTNER.firmUserId,
+    kind: "EMPLOYEE_EXCEPTION",
+    severity: "WARNING",
+    title: input.title,
+    body: input.body.slice(0, 900),
+    objectType: "inbound_email",
+    objectId: input.objectId.slice(0, 200),
+    dedupeKey: input.dedupeKey.slice(0, 300),
+    firmScope: "west-peek",
+  });
+}
 /** Cloudflare Email Routing's delivery ceiling. A larger message never arrives; the RECEIVED email cannot mention it. */
 export const EMAIL_DELIVERY_CEILING_BYTES = 25 * 1024 * 1024;
 
@@ -287,16 +365,46 @@ export async function handleInboundEmail(
    * "Got it" emails. The claim is one atomic INSERT; the loser stops here. A door that throws gives the
    * claim back, so a genuine re-delivery after a failure is still read.
    */
+  /*
+   * A CLAIM A KILLED DOOR LEFT BEHIND IS NOT "HANDLED" (15 Nov 2026, 0308). Two partner replies were killed by the CPU
+   * limit mid-read; a killed invocation runs no catch, so the claim stayed and Email Routing's redelivery five minutes
+   * later was dropped as already handled. A claim is written `handled = 0` and set to 1 only when the door finished; one
+   * still at 0 after STALE_CLAIM_MINUTES belongs to a door that died, and this delivery takes it over.
+   */
   if (key) {
-    const claim = await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO inbound_email_seen (message_id, firm_scope) VALUES (?1, ?2)")
+    const claim = await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO inbound_email_seen (message_id, firm_scope, handled) VALUES (?1, ?2, 0)")
       .bind(key, firmScope)
       .run();
     if ((claim.meta?.changes ?? 0) === 0) {
-      const seen = await env.WP_OS_DB.prepare("SELECT seen_at FROM inbound_email_seen WHERE message_id = ?1").bind(key).first<{ seen_at: string }>();
-      console.warn(`inbound email already handled at ${seen?.seen_at ?? "?"}; re-delivery ignored`, { message_id: key });
-      return;
+      const stale = new Date(Date.now() - STALE_CLAIM_MINUTES * 60_000).toISOString();
+      const retaken = await env.WP_OS_DB.prepare(
+        `UPDATE inbound_email_seen SET seen_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), attempts = attempts + 1
+          WHERE message_id = ?1 AND handled = 0 AND seen_at < ?2 AND attempts < ?3`,
+      )
+        .bind(key, stale, INLINE_READ_ATTEMPTS)
+        .run();
+      if ((retaken.meta?.changes ?? 0) === 0) {
+        // TWO INLINE READS DIED: a third would hit the same wall. Handed on once (handled = 2), never read here again.
+        const handed = await env.WP_OS_DB.prepare("UPDATE inbound_email_seen SET handled = 2 WHERE message_id = ?1 AND handled = 0 AND seen_at < ?2 AND attempts >= ?3")
+          .bind(key, stale, INLINE_READ_ATTEMPTS)
+          .run();
+        if ((handed.meta?.changes ?? 0) === 1) {
+          await handOffUnreadableMail(env, { messageId: key, sender: message.headers.get("from") ?? message.from, subject: decodeMimeHeader(message.headers.get("subject") ?? ""), headers: message.headers });
+          return;
+        }
+        const seen = await env.WP_OS_DB.prepare("SELECT seen_at FROM inbound_email_seen WHERE message_id = ?1").bind(key).first<{ seen_at: string }>();
+        console.warn(`inbound email already handled at ${seen?.seen_at ?? "?"}; re-delivery ignored`, { message_id: key });
+        return;
+      }
+      await appendEvent(env, {
+        eventType: "inbound_email.claim_retaken", actorType: "system", actorId: "inbound_email", objectType: "inbound_email",
+        objectId: key.slice(0, 200), firmScope, payload: { why: "the earlier delivery's door never finished (killed), so this delivery reads it" },
+      });
     }
   }
+  const finished = async (): Promise<void> => {
+    if (key) await env.WP_OS_DB.prepare("UPDATE inbound_email_seen SET handled = 1 WHERE message_id = ?1").bind(key).run();
+  };
   /*
    * THE LEARNING CLUB (0259): a reply, bounce or "unsubscribe" from a brand we wrote to stops that
    * brand's sequence before anything else reads the message, and lands on the sales card. Headers
@@ -323,6 +431,7 @@ export async function handleInboundEmail(
         eventType: "tlc.brand_mail_copy", actorType: "system", actorId: "inbound_email", objectType: "tlc_deal", objectId: copy,
         firmScope, payload: { subject: decodeMimeHeader(message.headers.get("subject") ?? "").slice(0, 200) },
       });
+      await finished();
       return;
     }
   }
@@ -330,8 +439,16 @@ export async function handleInboundEmail(
     await handleInboundEmailOnce(message, env, options);
   } catch (err) {
     if (key) await env.WP_OS_DB.prepare("DELETE FROM inbound_email_seen WHERE message_id = ?1").bind(key).run().catch(() => undefined);
+    // NEVER SILENT: a door that threw is on Sequoia's desk now, not only in a log. A partner hears nothing from it.
+    await raiseUnreadMail(env, {
+      dedupeKey: `inbound_email_failed:${key ?? crypto.randomUUID()}`,
+      title: "An email to the OS could not be read",
+      body: `From ${sender.slice(0, 120)}, subject "${decodeMimeHeader(message.headers.get("subject") ?? "").slice(0, 120)}": ${(err instanceof Error ? err.message : String(err)).slice(0, 300)}. No "Got it" was sent. The message is still in the mailbox.`,
+      objectId: key ?? "unknown",
+    });
     throw err;
   }
+  await finished();
   // RULE 4 (0255): every email from a partner refreshes the "working on now" lines of his profile.
   const partner = addressIn(message.headers.get("from"));
   if (partner && ASSIGNING_PARTNERS.includes(partner.toLowerCase())) await refreshWorkingOn(env, partner).catch(() => 0);
@@ -1766,3 +1883,39 @@ export function forwardedOrigin(raw: string): { from: string | null; subject: st
   };
 }
 
+
+/**
+ * A DRY READ OF A STORED MESSAGE (15 Nov 2026): the door's own readers — his words above the quote, every attachment,
+ * every voice note transcribed, every Drive link read as him — and the card a reply would steer and the "Got it" it
+ * would send, returned and NOT applied. Writes nothing: no steer, no file, no email, no dedupe row, no event. The Got
+ * it's asks are his sentences (the no-model form), because the model read is itself a write (an ai_run row).
+ */
+export async function dryReadMessage(env: Env, raw: string) {
+  const headers = headersOfRaw(raw);
+  const subject = decodeMimeHeader(headers.get("subject") ?? "");
+  const authority = mailAuthority({ fromHeader: headers.get("from"), authenticationResults: headers.get("authentication-results") });
+  const { replyThreadFromHeaders } = await import("../services/emailThread");
+  const thread = await replyThreadFromHeaders(env, { fromHeader: headers.get("from"), subject, inReplyTo: headers.get("in-reply-to"), references: headers.get("references") });
+  const { partnersOwnWords } = await import("../../shared/intake/replyBody");
+  const split = writtenAndQuoted(`\r\n\r\n${textBodyOf(raw)}`, { inReplyTo: headers.get("in-reply-to"), references: headers.get("references"), subject });
+  const typed = (split.applied ? partnersOwnWords(split.written) : split.written).trim();
+  const files = requestAttachments(raw);
+  const { hearVoiceNotes, withVoiceNotes } = await import("../services/voiceNotes");
+  const voice = await hearVoiceNotes(env, raw);
+  const { readLinkedDriveFiles } = await import("../services/driveShares");
+  const drive = await readLinkedDriveFiles(env, { cardId: null, partnerEmail: authority.partnerAddress, text: split.written, dryRun: true });
+  const words = withVoiceNotes(withVoiceNotes(typed, voice.heard), drive.heard);
+  const { sentencesOf, gotItEmail } = await import("../services/partnerUnderstood");
+  const unopened = [...files.unread.map((u) => ({ filename: u.replace(/\s*\(.*$/, ""), reason: u })), ...voice.failed, ...drive.failed];
+  const asks = sentencesOf(words);
+  return {
+    authenticated_partner: authority.partnerAddress,
+    would_steer: thread ? { object_type: thread.object_type, object_id: thread.object_id, card_kind: thread.card_kind } : null,
+    typed_chars: typed.length,
+    attachments: files.attachments.map((a) => ({ filename: a.filename, media_type: a.mediaType, bytes: a.bytes })),
+    voice_notes: voice.heard,
+    drive_files: { filed: drive.filed, heard: drive.heard },
+    unopened,
+    got_it: gotItEmail({ employee: "Porter", subject, asks, next: "I'm starting on it now.", unopened }),
+  };
+}
