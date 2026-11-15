@@ -159,6 +159,28 @@ export function holdsOf(words: string): string[] {
 
 const norm = (s: string): string => s.toLowerCase().replace(/[“”"'‘’`]/g, "").replace(/\s+/g, " ").trim().replace(/^[\s\-–—•*:.,;!?]+|[\s\-–—•*:.,;!?]+$/g, "");
 
+/*
+ * ONE HOLD, ONE LINE (15 Nov 2026). His brain's standing holds are added to the email's own, but a standing hold the
+ * email already says in its own words ("Nothing goes live until I see the preview" against the brain's "nothing goes
+ * live until he reviews the preview") was listed twice. Two holds are the same when they share the same key words: at
+ * least three content words in common, covering at least half of the shorter one's. The email's wording is kept.
+ */
+const HOLD_FILLER = new Set(["the", "and", "for", "with", "without", "until", "unless", "before", "after", "his", "her", "him", "she", "you", "your", "our", "any", "anything", "this", "that", "these", "those", "from", "into", "onto", "each", "every", "all", "are", "was", "were", "been", "being", "has", "have", "had", "will", "would", "should", "can", "could", "may", "must", "not", "don", "dont", "never", "yet", "just", "please", "also", "there", "here", "what", "who", "when", "where", "which", "about", "over", "under", "per"]);
+const stem = (w: string): string => w.replace(/(ing|ed|es|s)$/, (m) => (w.length - m.length >= 3 ? "" : m));
+export function holdKeyWords(s: string): Set<string> {
+  return new Set(norm(s).replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length >= 3 && !HOLD_FILLER.has(w)).map(stem));
+}
+export function sameHold(a: string, b: string): boolean {
+  if (norm(a) === norm(b)) return true;
+  const ka = holdKeyWords(a), kb = holdKeyWords(b);
+  const shared = [...ka].filter((w) => kb.has(w)).length;
+  return shared >= 3 && shared * 2 >= Math.min(ka.size, kb.size);
+}
+/** The email's holds in its own words, then each standing hold the email does not already say. */
+export function mergeHolds(emailHolds: readonly string[], standing: readonly string[]): string[] {
+  return [...emailHolds, ...standing.filter((h) => !emailHolds.some((e) => sameHold(e, h)))];
+}
+
 /** A line a mail client wrapped mid-sentence is joined back, so "Attached is" never stands alone. Pure. */
 function unwrapped(words: string): string {
   return words
@@ -316,7 +338,7 @@ export async function understand(
   }
   const runId = runIds[runIds.length - 1] ?? null;
   const emailHolds = parsed ? parsed.holds : holdsOf(written);
-  const holds = [...emailHolds, ...(input.standingHolds ?? []).filter((h) => !emailHolds.some((e) => norm(e) === norm(h)))];
+  const holds = mergeHolds(emailHolds, input.standingHolds ?? []);
   /*
    * HIS QUESTIONS ARE STEADY (15 Nov 2026): taken from his own sentences first, the same way every time (a "?", a
    * "let's clarify", "still open", "whether"), as his asks come from his numbering first. A reader only ADDS questions

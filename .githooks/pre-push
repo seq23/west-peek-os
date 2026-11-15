@@ -1,0 +1,5 @@
+#!/bin/sh
+# Pre-push: the scoped check (scripts/ci/check-changed.mjs). `git push --no-verify` is the human escape hatch only.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+[ -d node_modules ] || { echo "pre-push: no node_modules here — run npm ci first (installs this hook too)"; exit 1; }
+npm run -s check:changed || { echo "pre-push BLOCKED: check:changed failed (above). Fix it; --no-verify is for humans only."; exit 1; }
