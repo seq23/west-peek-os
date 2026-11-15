@@ -873,6 +873,7 @@ async function handleIfReply(
     references,
     emlKey: kept.key,
     routeAs: input.routeAs ?? null,
+    messageId: inboundMessageKey(message.headers),
   });
   /*
    * RULE 1d (9 Oct 2026): THE ROUTER COULD NOT TELL WHICH OPEN JOB THIS IS. Porter asks the partner

@@ -455,7 +455,7 @@ describe("a quiet seat at Free only is a wait, not a spend question", () => {
     await clearSeats();
   });
 
-  it("an AWAKE seat that answered too late hands the attempt back — six times, then the card counts it (6 Nov 2026, wc_aa2d2450…)", async () => {
+  it("an AWAKE seat that answered too late is \"try later\": no attempt is spent however often, for a day from the first wait of this run, then a stop on who runs the seats, never a partner (6 Nov, 15 Nov 2026, wc_aa2d2450…, wc_bd8b68cb…)", async () => {
     await clearSeats();
     await env.WP_OS_DB.prepare(
       `INSERT INTO subscription_seat_device (seat, device_id, hostname, agent_version, last_seen_at, capabilities_json, first_seen_at)
@@ -464,27 +464,74 @@ describe("a quiet seat at Free only is a wait, not a spend question", () => {
       .bind(new Date(T0.getTime() - 60_000).toISOString())
       .run();
     const NO_ANSWER =
-      "provider_failure:subscription_seat_unavailable:the Claude Code seat was awake but returned nothing within 2 minutes, " +
+      "provider_failure:subscription_seat_unavailable:the Claude Code seat was awake but returned nothing within 78 seconds, " +
       "so the run moved on to a lane that answers over the network.";
-    const id = await card("Unclear email: Form key check (ignore)", "aie_porter");
+    const id = await card("Walker: West Peek Productions this month (2099-01)", "aie_walker");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'PRODUCTIONS_MONTHLY' WHERE id = ?1").bind(id).run();
+    // wc_bd8b68cb's shape: the card had already waited on the seat many times in an EARLIER run (the old bound counted those).
+    for (let k = 0; k < SEAT_NO_ANSWER_WAITS + 2; k++) {
+      await env.WP_OS_DB.prepare("INSERT INTO event_record (id, event_type, actor_type, actor_id, object_type, object_id, firm_scope, payload_json, created_at) VALUES (?1, 'work_card.waiting_for_seat', 'system', 'work_sweep', 'work_card', ?2, 'west-peek', '{}', '2000-01-01T00:00:00.000Z')")
+        .bind(`evt_old_wait_${k}_${id}`, id).run();
+    }
     const runner = refusedRunner(id, NO_ANSWER, "prov_claude_code");
-    for (let k = 0; k < SEAT_NO_ANSWER_WAITS; k++) {
+    const productions = async () => ({ ...(await runner()), progressed: false });
+    let at = T0;
+    for (let k = 0; k < SEAT_NO_ANSWER_WAITS + 3; k++) {
       await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
-      expect((await sweepOnce(env, new Date(T0.getTime() + k * 60_000), { general: runner })).outcome).toBe("WAITING_ON_SEAT");
+      expect((await sweepOnce(env, at, { productions })).outcome, `timeout ${k + 1} is a wait`).toBe("WAITING_ON_SEAT");
+      at = new Date(at.getTime() + 11 * 60_000);
     }
     let c = await row(id);
-    expect(Number(c.work_attempts), "no attempt is spent on a queue at the Mac").toBe(0);
+    expect(Number(c.work_attempts), "no attempt is spent on a seat that did not answer").toBe(0);
     expect(c.state).not.toBe("BLOCKED");
-    expect(String(c.waiting_for)).toMatch(/Waiting for the subscription seat: the Claude Code seat/);
+    expect(String(c.waiting_for)).toMatch(/Waiting for the subscription seat/);
     expect(c.work_last_failure).not.toMatch(/did not get anywhere/);
-    // The bound: a seat that never answers stops being a wait and is counted as a failed attempt.
+    // Still waiting most of a day after the first wait.
     await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
-    const after = await sweepOnce(env, new Date(T0.getTime() + 10 * 60_000), { general: runner });
-    expect(after.outcome).not.toBe("WAITING_ON_SEAT");
+    expect((await sweepOnce(env, new Date(T0.getTime() + 23 * 3_600_000), { productions })).outcome).toBe("WAITING_ON_SEAT");
+    // A day after the first wait of this run: counted, then a stop addressed to who runs the seats, not Scooter.
+    at = new Date(T0.getTime() + 24 * 3_600_000 + 60_000);
+    let last = "";
+    for (let k = 0; k < MAX_WORK_ATTEMPTS && last !== "BLOCKED"; k++) {
+      await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
+      last = (await sweepOnce(env, at, { productions })).outcome;
+      at = new Date(at.getTime() + 6 * 60_000);
+    }
     c = await row(id);
-    expect(Number(c.work_attempts)).toBe(1);
+    expect(c.state).toBe("BLOCKED");
+    expect(c.block_who, "a seat that never answered is not the partner's to clear").toBe("SEQUOIA");
+    const mailed = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE object_id = ?1 AND event_type = 'deliverable.emailed_to_partner'").bind(id).first<{ n: number }>();
+    expect(Number(mailed?.n), "no partner is emailed").toBe(0);
+    const told = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM notification WHERE object_id = ?1 AND firm_user_id = 'fu_scooter_taylor'").bind(id).first<{ n: number }>().catch(() => ({ n: 0 }));
+    expect(Number(told?.n), "and nothing lands on Scooter's desk").toBe(0);
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
     await clearSeats();
+  });
+
+  it("a hold written while an attempt is already running wins: the attempt is not counted, the card is not blocked, and the sweep leaves it until the hold ends (15 Nov 2026, wc_bd8b68cb)", async () => {
+    await clearSeats();
+    const id = await card("Walker: a card held mid-run", "aie_parker");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET work_attempts = ?2 WHERE id = ?1").bind(id, MAX_WORK_ATTEMPTS - 1).run();
+    const hold = new Date(T0.getTime() + 30 * 60_000).toISOString();
+    // The last attempt is in flight when the hold is written; then it fails.
+    const runner = async () => {
+      await env.WP_OS_DB.prepare("UPDATE work_card SET waiting_until = ?2 WHERE id = ?1").bind(id, hold).run();
+      return { finished: false, blocked: false, detail: "the model returned nothing usable", steps: [{ action: "failed", detail: "the model returned nothing usable" }] };
+    };
+    // Only this card is waiting, so the tick claims it.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id <> ?1 AND state IN ('OPEN', 'IN_PROGRESS')").bind(id).run();
+    const first = await sweepOnce(env, T0, { general: runner });
+    expect(first.card?.id, "the attempt that was in flight is this card's").toBe(id);
+    let c = await row(id);
+    expect(c.state, "the in-flight attempt does not block the held card").not.toBe("BLOCKED");
+    expect(Number(c.work_attempts), "and is not counted").toBe(MAX_WORK_ATTEMPTS - 1);
+    expect(String(c.lease_until), "the hold keeps the card out of the sweep until it ends").toBe(hold);
+    // A later tick before the hold ends does not claim it.
+    const during = await sweepOnce(env, new Date(T0.getTime() + 10 * 60_000), { general: async () => ({ finished: false, blocked: false, detail: "not this card", steps: [] }) });
+    expect(during.card?.id ?? null).not.toBe(id);
+    c = await row(id);
+    expect(c.state).not.toBe("BLOCKED");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(id).run();
   });
 
   it("isSeatNoAnswer reads only the router's own no-answer close, not any seat failure", () => {

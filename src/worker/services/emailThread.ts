@@ -4,7 +4,7 @@ import { recordCcFrom } from "./ccPartners";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { mintThreadToken, threadHeaders, threadTokensIn, type EmailThreadRow } from "../../shared/email/thread";
-import { writtenAndQuoted } from "../../shared/intake/replyBody";
+import { partnersOwnWords, writtenAndQuoted } from "../../shared/intake/replyBody";
 import { containsGenuineQuestion } from "../../shared/intake/genuineQuestion";
 import { addressIn, mailAuthority } from "../../shared/intake/partnerAuthority";
 import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
@@ -256,6 +256,8 @@ export async function steerFromReply(
     emlKey: string | null;
     /** 9 Oct 2026 (rule 1d): where the partner said this email goes, when he answered Porter's question. */
     routeAs?: RouteAs | null;
+    /** The message's own Message-ID (angle brackets off), so one email is filed as a steer once however often it is read. */
+    messageId?: string | null;
   },
   /**
    * INJECTABLE, LIKE `ActionabilityClassifier`/`QuestionAnswerer` ELSEWHERE, so a test can prove the
@@ -378,7 +380,9 @@ export async function steerFromReply(
     references: message.references,
     subject: message.subject,
   });
-  let written = split.written.trim();
+  // HIS OWN NEW WORDS ONLY (15 Nov 2026): quoted history, a wrapped Gmail attribution, signature and footer are cut here,
+  // deterministically, before anything downstream (or any model) reads the reply. A fresh message or forward is untouched.
+  let written = (split.applied ? partnersOwnWords(split.written) : split.written).trim();
   // A follow-up arrived under its own subject; the subject is part of what was said ("Names missing
   // on the HBCU flyers"), so the note the next stage reads carries it.
   if (followUp && followUp.subject.trim()) written = `${followUp.subject.trim()}\n\n${written}`.trim();
@@ -407,7 +411,9 @@ export async function steerFromReply(
     }
     if (written.length < 2 && attached.length) written = `Attached: ${attached.join(", ")}`;
   }
-  if (written.length < 2) {
+  // One character is an answer ("1", Porter's which-job question); only nothing at all is not (15 Nov 2026: the phone's
+  // footer used to make "1" long enough, and is no longer kept).
+  if (written.length < 1) {
     return {
       steered: false,
       thread,
@@ -464,10 +470,17 @@ export async function steerFromReply(
    * ever. See migration 0180.
    */
   const kind = thread.card_kind;
-  if (kind) {
-    await env.WP_OS_DB.prepare(
-      `INSERT INTO work_steer (id, card_kind, from_card_id, said_by, body, thread_token, firm_scope)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+  /*
+   * ONE EMAIL, ONE STEER (15 Nov 2026, wc_bd8b68cb, 0305). Scooter's 14 Nov reply was read through this door four times
+   * (re-reads of the stored message) and filed four times; every copy rode to the interpreter. The Message-ID is the
+   * key: a second read of the same message files nothing more, and the open-card note below is not written twice.
+   */
+  let alreadyFiled = false;
+  // A steer carries at least two characters (0182's trigger); a one-character answer still answers below.
+  if (kind && written.length >= 2) {
+    const filed = await env.WP_OS_DB.prepare(
+      `INSERT OR IGNORE INTO work_steer (id, card_kind, from_card_id, said_by, body, thread_token, firm_scope, message_id)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
     )
       .bind(
         `wst_${crypto.randomUUID()}`,
@@ -477,8 +490,10 @@ export async function steerFromReply(
         keptWords(written),
         thread.token,
         thread.firm_scope,
+        message.messageId ?? null,
       )
       .run();
+    alreadyFiled = Boolean(message.messageId) && (filed.meta?.changes ?? 0) === 0;
   }
 
   /*
@@ -557,7 +572,7 @@ export async function steerFromReply(
      */
     let builtFromReply = false;
     let wordsRead: ReplyIntent | null = null;
-    if (!owned && !secondarySaidApproved && cardRow && partner && cardRow.kind !== WEB_PROPERTY_CHANGE_KIND) {
+    if (!alreadyFiled && !owned && !secondarySaidApproved && cardRow && partner && cardRow.kind !== WEB_PROPERTY_CHANGE_KIND) {
       const read = await readReplyIntent(
         env,
         { cardId: cardRow.id, firmScope: thread.firm_scope, text: written, where: replyWhere(cardRow) },
@@ -666,6 +681,8 @@ export async function steerFromReply(
           )
           .run();
       }
+    } else if (alreadyFiled) {
+      // The same email read again: what it said is already on the card. Nothing more is filed.
     } else if (cardRow && partner && (cardRow.state === "OPEN" || cardRow.state === "IN_PROGRESS")) {
       /*
        * A NOTE ON THE CARD ITSELF WHEN IT IS STILL OPEN, because the card's thread is where a
@@ -1136,7 +1153,9 @@ export async function standingSteer(
    */
   const seen = new Set<string>();
   return rows
-    .filter((r) => { const k = r.body.trim(); if (seen.has(k)) return false; seen.add(k); return true; })
+    // His own words (a reply filed before 15 Nov may still carry quoted history), each once.
+    .map((r) => ({ ...r, body: partnersOwnWords(r.body) || r.body.trim() }))
+    .filter((r) => { const k = r.body; if (seen.has(k)) return false; seen.add(k); return true; })
     .reverse()
     .map((r) => ({
       source: "NOTE" as const,

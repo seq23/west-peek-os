@@ -9,6 +9,7 @@ import { steeredPrompt } from "../../shared/work/instruction";
 import { blockCard } from "./blocks";
 import { cannotDetail, steerFor, type Interpreter } from "./instruction";
 import { standingSteer } from "./emailThread";
+import { partnersOwnWords } from "../../shared/intake/replyBody";
 import { pageTextOf, urlIsLive } from "../effects/urlLiveness";
 import { createWorkCardInternal } from "./workCards";
 import { sweepIdentity, type SweepCard } from "./workSweep";
@@ -703,7 +704,8 @@ export async function unansweredReplies(env: Env, cardId: string): Promise<{ wor
     .bind(cardId).first<{ at: string | null }>().catch(() => null);
   const rows = (await env.WP_OS_DB.prepare("SELECT body, thread_token, created_at FROM work_steer WHERE from_card_id = ?1 AND created_at > ?2 ORDER BY created_at ASC")
     .bind(cardId, last?.at ?? "").all<{ body: string; thread_token: string | null; created_at: string }>()).results ?? [];
-  const words = [...new Set(rows.map((r) => r.body.trim()).filter(Boolean))];
+  // His own new words only (quoted history, signature and footer cut, deterministically), each once.
+  const words = [...new Set(rows.map((r) => partnersOwnWords(r.body) || r.body.trim()).filter(Boolean))];
   return { words, thread: rows.filter((r) => r.thread_token).pop()?.thread_token ?? null, through: rows[rows.length - 1]?.created_at ?? null };
 }
 

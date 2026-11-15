@@ -670,3 +670,24 @@ describe("a seat whose plan is out of usage is skipped until it resets (0245)", 
     expect(priv.run.model ?? "").not.toBe("codex-local");
   }, 60_000);
 });
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+describe("a partner's ask is claimed ahead of background work on the Mac's seat (15 Nov 2026, wc_bd8b68cb)", () => {
+  it("the claimer takes a run reading a partner's words, or working a card a partner replied on, before older background runs", async () => {
+    await t.db.prepare("DELETE FROM subscription_seat_run").run();
+    const at = (m: number) => new Date(Date.UTC(2099, 0, 1, 0, m)).toISOString();
+    const background1 = await parkRun(env(), { seat: "claude_code", purpose: "the daily brief", prompt: "x", modelAccess: "PRIVATE_MODEL_ONLY", taskClass: "daily-brief" });
+    const background2 = await parkRun(env(), { seat: "claude_code", purpose: "a scheduled scan", prompt: "x", modelAccess: "PRIVATE_MODEL_ONLY" });
+    await t.db.prepare("INSERT INTO work_steer (id, card_kind, from_card_id, said_by, body, firm_scope) VALUES ('wst_seat_order', 'PRODUCTIONS_MONTHLY', 'wc_seat_order_card', 'scooter@westpeek.ventures', 'check these past clients', 'west-peek')").run();
+    await t.db.prepare("INSERT INTO work_card (id, title, owner_type, owner_id, state, firm_scope, created_by) VALUES ('wc_seat_order_card', 'Walker: the month', 'AI', 'aie_walker', 'IN_PROGRESS', 'west-peek', 'system:test')").run();
+    const repliedOn = await parkRun(env(), { seat: "claude_code", purpose: "a stage of the month", prompt: "x", modelAccess: "PRIVATE_MODEL_ONLY", workCardId: "wc_seat_order_card" });
+    const reading = await parkRun(env(), { seat: "claude_code", purpose: "interpreting what a partner asked for", prompt: "x", modelAccess: "PRIVATE_MODEL_ONLY", taskClass: "instruction-interpretation" });
+    // Oldest first by the clock: both background runs were parked before either partner run.
+    for (const [id, m] of [[background1, 0], [background2, 1], [repliedOn, 2], [reading, 3]] as const) await t.db.prepare("UPDATE subscription_seat_run SET created_at = ?2 WHERE id = ?1").bind(id, at(m)).run();
+    const order: string[] = [];
+    for (let k = 0; k < 4; k++) order.push((await claimRun(env(), "mac-a", ["claude_code"]))!.id);
+    expect(order.slice(0, 2).sort(), "a partner's ask first").toEqual([repliedOn, reading].sort());
+    expect(order.slice(2), "then the rest, oldest first").toEqual([background1, background2]);
+    await t.db.prepare("DELETE FROM work_steer WHERE id = 'wst_seat_order'").run();
+  });
+});
