@@ -364,6 +364,8 @@ export interface LocalJobReport {
    * "nothing is missing any more".
    */
   missing_materials?: MissingMaterial[];
+  /** 15 Nov 2026: placeholder text the built pages still show ("Photo to come"), read by the Mac from the page text. */
+  visible_placeholders?: string[];
   /** 0237, PLAN: the DRIVE_MANIFEST paths the build will use; BUILD fetches them. */
   assets?: string[];
 }
@@ -426,6 +428,7 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
     ...(str(r.materials) ? { materials: str(r.materials)!.slice(0, 200) } : {}),
     ...(Array.isArray(r.parts) ? { parts: readPartReports(r.parts) } : {}),
     ...(Array.isArray(r.missing_materials) ? { missing_materials: readMissingMaterials(r.missing_materials) } : {}),
+    ...(Array.isArray(r.visible_placeholders) ? { visible_placeholders: strs(r.visible_placeholders).slice(0, 50) } : {}),
     ...(Array.isArray(r.assets) ? { assets: strs(r.assets) } : {}),
     /*
      * #363: THIS READER IS AN ALLOW-LIST, AND `deferred` WAS NEVER ON IT. From 0253 to 13 Nov 2026 the

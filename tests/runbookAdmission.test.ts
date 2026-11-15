@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { keysReallyMissing } from "../scripts/duties/lib/runbook.mjs";
+import { visiblePlaceholders } from "../scripts/duties/lib/runbook.mjs";
 import {
   DATA_OP_PREFIXES,
   admittedScripts,
@@ -138,5 +139,15 @@ describe("a key is missing only when the site really lacks it (15 Nov 2026, wc_c
     const out = keysReallyMissing(["STRIPE_SECRET_KEY"], { runtimeTexts: ["new Stripe(env.STRIPE_SECRET_KEY)"], configured: null, why: "no CLOUDFLARE_API_TOKEN" });
     expect(out.missing).toEqual([]);
     expect(out.unchecked).toMatch(/^not checked \(no CLOUDFLARE_API_TOKEN\): STRIPE_SECRET_KEY$/);
+  });
+});
+
+describe("placeholders are counted from what a visitor sees, never a class name (15 Nov 2026, wc_c548d043)", () => {
+  it("renaming --todo to --pending hides nothing; a class name alone counts nothing", () => {
+    const page = `<div class="tile tile--pending"><img alt=""><p>Photo to come</p><p>Name to confirm</p></div>
+<div class="tile tile--pending"><p>Photo to come</p><p>Name to confirm</p></div>
+<span className="badge--pending">Placeholder · TNTP's numbers to come</span>`;
+    expect(visiblePlaceholders([page]).length).toBeGreaterThanOrEqual(5);
+    expect(visiblePlaceholders(['<div class="tile--todo photo-to-come"></div><p>Our team</p>'])).toEqual([]);
   });
 });

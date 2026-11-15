@@ -68,7 +68,7 @@ import { promisify } from "node:util";
 import { CLOUDFLARE_ACCOUNT_ID, PAGES_ENVIRONMENTS, classify, proofLine, readRequests } from "./lib/pages-delivery.mjs";
 import { VAULT_INJECTED_VAR, claudeChildEnv, envForRepoRun, strippedNote, vaultLookup } from "../lib/vault-env.mjs";
 import { plainText, privateDocsIn, privateProof, privateSentenceIn } from "../lib/private-proof.mjs";
-import { admittedScripts, keysReallyMissing, constraintsIn, generateRunbook, hostFromRoutes, isProductionRun, productionAsked, withPorterMayRun, likelySecrets, porterMayRun, readWranglerJson, readWranglerToml, runbookSecretNames, secretNamesInSource, vendorPageFor } from "./lib/runbook.mjs";
+import { admittedScripts, keysReallyMissing, visiblePlaceholders, constraintsIn, generateRunbook, hostFromRoutes, isProductionRun, productionAsked, withPorterMayRun, likelySecrets, porterMayRun, readWranglerJson, readWranglerToml, runbookSecretNames, secretNamesInSource, vendorPageFor } from "./lib/runbook.mjs";
 import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
 import { CODEX_BUILD_NOTE, codexExecArgs, codexSeatUsable, finishCodexBuild, soonestReset } from "../lib/codex-seat.mjs";
 import { routeFor, runInOrder } from "../lib/model-roles.mjs";
@@ -1509,6 +1509,8 @@ export async function run(job, ctx) {
       pages_env_proof: configLines,
       // What is still missing after this rebuild, re-checked against the re-mapped package (0237).
       ...(Array.isArray(result.missing_materials) ? { missing_materials: result.missing_materials } : {}),
+      // 15 Nov 2026: what the built pages still SHOW as not done, read from their text (never a class name).
+      visible_placeholders: visiblePlaceholders(pageTextsOf(names.worktree)).slice(0, 50),
       ...carried,
       reason: checks.state === "GREEN" ? undefined : `checks are ${checks.state} on ${pr.url}`,
       notes: `${result.notes ?? ""}${cost !== null ? ` (cost $${cost.toFixed(2)})` : ""}`.trim(),
@@ -1634,6 +1636,34 @@ function sourceTexts(root, max = 400) {
     }
   };
   walk(root, 0);
+  return out;
+}
+
+/** The site's pages and components (what a visitor is shown), never its scripts, tests or docs. */
+function pageTextsOf(worktree) {
+  const out = [];
+  const skip = new Set(["node_modules", ".git", "scripts", "tests", "test", "e2e", "docs", ".wrangler", "coverage", "functions", "workers"]);
+  const walk = (dir, depth) => {
+    if (out.length >= 600 || depth > 6) return;
+    let entries = [];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.isDirectory()) {
+        if (!skip.has(e.name) && !e.name.startsWith(".")) walk(path.join(dir, e.name), depth + 1);
+      } else if (/\.(html?|jsx|tsx|astro|vue|svelte)$/.test(e.name) && !/\.(test|spec)\./.test(e.name)) {
+        try {
+          if (statSync(path.join(dir, e.name)).size <= 512 * 1024) out.push(readFileSync(path.join(dir, e.name), "utf8"));
+        } catch {
+          /* unreadable: skipped */
+        }
+      }
+    }
+  };
+  walk(worktree, 0);
   return out;
 }
 

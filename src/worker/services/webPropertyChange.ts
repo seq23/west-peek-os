@@ -1690,23 +1690,50 @@ export async function applyReport(
     return { finished: false, blocked: false, progressed: false, detail: `BUILD moved nothing for ${shown ? `the partner's request ("${shown.slice(0, 120)}")` : "the instruction on the card"}: no commit on the branch, so no new preview. It runs again.` };
   }
   // 0240: the material set this build used, and what it filled in since the last preview.
+  // 15 Nov 2026 (wc_c548d043): filled ONLY when material for it arrived — never because the build stopped listing it.
+  let stillMissing: MissingMaterial[] | null = null;
   if (report.phase === "BUILD") {
-    const before = (await missingFor(env, card.id)).map((m) => m.item);
+    const beforeItems = await missingFor(env, card.id);
+    const before = beforeItems.map((m) => m.item);
     const after = report.missing_materials ? report.missing_materials.map((m) => m.item) : before;
-    const filled = before.filter((b) => !after.includes(b));
+    const since = [row.preview_emailed_at, row.plan_filed_at].filter((x): x is string => Boolean(x)).sort().pop() ?? "";
+    const newFiles = (await attachmentsFor(env, card.id)).some((a) => (a.created_at ?? "") > since);
+    const arrived = newFiles || Boolean(report.materials && row.materials_fingerprint && report.materials !== row.materials_fingerprint);
+    const hisWords = [row.rebuilt_for ?? "", card.block_answer ?? ""].join("\n");
+    const filled = before.filter((b) => !after.includes(b) && filledBy(b, hisWords, arrived));
+    const kept = beforeItems.filter((m) => !after.includes(m.item) && !filled.includes(m.item));
+    const visible = report.visible_placeholders ?? [];
+    stillMissing = [...(report.missing_materials ?? beforeItems.filter((m) => after.includes(m.item))), ...kept];
+    // The page itself still shows placeholders the lists omit: they are named, so the count is never 0 over them.
+    if (!stillMissing.length && visible.length) stillMissing = [...new Set(visible)].slice(0, 12).map((v) => ({ item: v, where: "on the preview page" }));
+    if (kept.length) await appendFinding(env, card.id, `Still missing, though this build stopped listing ${kept.length === 1 ? "it" : "them"} (no material arrived for ${kept.length === 1 ? "it" : "them"}): ${kept.map((m) => m.item).join("; ")}.`);
     await update(env, card.id, { ...(report.materials ? { materials_fingerprint: report.materials } : {}), filled_json: JSON.stringify(filled), refresh_intent: null });
     row = { ...row, ...(report.materials ? { materials_fingerprint: report.materials } : {}), filled_json: JSON.stringify(filled), refresh_intent: null };
     if (filled.length) await appendFinding(env, card.id, `Filled in by this build: ${filled.join("; ")}.`);
   }
   // AFTER A REBUILD (0237): what is STILL missing, re-checked against the re-mapped package, replaces
   // the plan's list — the preview and DONE emails name only what did not arrive. Not reported: stands.
-  if (report.phase === "BUILD" && report.missing_materials) {
-    await recordMissing(env, card.id, report.missing_materials);
-    await update(env, card.id, { placeholders_json: JSON.stringify(report.missing_materials.map((m) => m.item)) });
-    row = { ...row, placeholders_json: JSON.stringify(report.missing_materials.map((m) => m.item)) };
+  if (report.phase === "BUILD" && stillMissing && (report.missing_materials || stillMissing.length)) {
+    await recordMissing(env, card.id, stillMissing);
+    await update(env, card.id, { placeholders_json: JSON.stringify(stillMissing.map((m) => m.item)) });
+    row = { ...row, placeholders_json: JSON.stringify(stillMissing.map((m) => m.item)) };
   }
   if (report.phase === "BUILD") return applyBuild(env, card, row, report, rules);
   return applyLand(env, card, row, report);
+}
+
+/**
+ * AN ITEM IS FILLED IN ONLY WHEN MATERIAL FOR IT ARRIVED (15 Nov 2026, wc_c548d043): new files on the card or in the
+ * folder, or the partner's own words naming it. A permission ("the client's OK to show results") is never claimed
+ * from files: only when his own words name the item AND give the permission.
+ */
+const PERMISSION = /\b(?:ok|okay|permission|consent|approv\w*|sign[- ]?off|allowed|cleared)\b/i;
+export function filledBy(item: string, hisWords: string, materialArrived: boolean): boolean {
+  const words = hisWords.toLowerCase();
+  const tokens = [...new Set(item.toLowerCase().match(/[a-z][a-z'’]{4,}/g) ?? [])];
+  const named = tokens.length > 0 && tokens.filter((t) => words.includes(t)).length * 2 >= tokens.length;
+  if (PERMISSION.test(item)) return named && PERMISSION.test(hisWords);
+  return materialArrived || named;
 }
 
 /**
