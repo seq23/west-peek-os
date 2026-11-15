@@ -143,8 +143,16 @@ export function pdfAttachments(raw: string): { attachments: Attachment[]; unread
  * client marked `Content-Disposition: attachment` is a file she sent — kept, whatever its type.
  */
 export function requestAttachments(raw: string): { attachments: Attachment[]; unread: string[] } {
-  return attachmentsOf(raw, (type, sentAsFile) => sentAsFile || type.startsWith("image/") || type.includes("application/pdf"), 10);
+  return attachmentsOf(raw, (type, sentAsFile) => sentAsFile || type.startsWith("image/") || type.includes("application/pdf"), 10, MAX_KEPT_FILE_BYTES);
 }
+
+/**
+ * A FILE KEPT AGAINST A CARD IS A POINTER, NOT A READ (15 Nov 2026, wc_c548d043). Scooter's 18.9 MB voice memo was
+ * "too large to read here" under the 12 MB model-read cap, so it was never kept against the card. Keeping a file only
+ * names it against the stored .eml, so the kept-file cap sits above the largest message Email Routing delivers
+ * (25 MiB). `MAX_ATTACHMENT_BYTES` still bounds every path that reads bytes into a model in the Worker.
+ */
+export const MAX_KEPT_FILE_BYTES = 30 * 1024 * 1024;
 
 /** One MIME part's body, decoded from base64 or quoted-printable; the raw body for anything else. */
 function decodePartBody(part: string): string {
@@ -232,7 +240,7 @@ export function topHeadersOf(raw: string): { subject: string; inReplyTo: string;
 
 /** The bytes of one named attachment, decoded. Null when the message carries no such file. */
 export function attachmentBytes(raw: string, filename: string): { bytes: Uint8Array; mediaType: string } | null {
-  const { attachments } = attachmentsOf(raw, () => true, 50);
+  const { attachments } = attachmentsOf(raw, () => true, 50, MAX_KEPT_FILE_BYTES);
   const hit = attachments.find((a) => a.filename === filename);
   if (!hit) return null;
   try {
