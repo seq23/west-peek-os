@@ -159,7 +159,7 @@ describe("the Got it counts what he asked, in his words", () => {
     expect(out.asks).toHaveLength(10);
     const nine = out.asks.slice(0, 9);
     expect(nine[0]).toBe("Keep this pipeline Productions-only. Filter out anything that came from the fund side.");
-    expect(nine[2], "a numbered item keeps its sub-bullets").toBe("Start Discovery with a service picker:; Event production; Brand content; Livestream");
+    expect(nine[2], "a numbered item keeps its sub-bullets, read as one sentence").toBe("Start Discovery with a service picker: Event production; Brand content; Livestream");
     expect(nine[8]).toBe('Remove "Source" from the deal card.');
     expect(out.asks[9]!.startsWith(QUESTIONS_LEAD), "his clarify-first questions are ONE item that says so").toBe(true);
     expect(out.asks[9]).toContain("Is a Lead anything that came in, and a Deal only once we've sent a quote? Should a lost Deal go back to Leads?");
@@ -168,11 +168,21 @@ describe("the Got it counts what he asked, in his words", () => {
       expect(a, "no praise or status remark is an ask").not.toMatch(/good shape|Nice work/);
       // His words, unchanged: every ask (less the lead) is in what he wrote, once whitespace is collapsed.
       const words = a.startsWith(QUESTIONS_LEAD) ? a.slice(QUESTIONS_LEAD.length) : a;
-      for (const piece of words.split("; ")) expect(norm(DASHBOARD).includes(norm(piece)), `his words: ${piece}`).toBe(true);
+      for (const piece of words.split(/; |: (?=Event)/)) expect(norm(DASHBOARD).includes(norm(piece)), `his words: ${piece}`).toBe(true);
     }
     expect(out.noted, "the idea for later is kept as noted, not asked").toEqual(["Transcript-assisted Discovery notes are an idea for later, not this build."]);
     const email = gotItEmail({ employee: "Porter", subject: "dashboard", asks: out.asks, next: out.next, unopened: [], noted: out.noted });
     expect(email.tldr).toMatch(/^Got it\. 10 things you asked/);
+  });
+
+  it("a list item's bullets then a new sentence read as one item, and a plain question is not called clarify-first", async () => {
+    const text = ["1. Service categories, these six, in this order:", "- Content production", "- Web development", "Much less copy per box.", "2. Footer: keep the location line.", "", "What can you get done today? Tell me what's realistic."].join("\n");
+    const out = await understand(env, { subject: "s", written: text, read: async () => ({ ok: false, text: "", detail: "" }), employeeId: null, firmScope: "west-peek" });
+    expect(out.asks).toEqual([
+      "Service categories, these six, in this order: Content production; Web development. Much less copy per box.",
+      "Footer: keep the location line.",
+      "Your questions: What can you get done today? Tell me what's realistic.",
+    ]);
   });
 
   it("an unlisted email's sentences are whole: a wrapped line is never a fragment", () => {

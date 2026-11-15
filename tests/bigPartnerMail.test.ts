@@ -10,6 +10,8 @@ import { systemIdentity } from "../src/worker/services/dealIntake";
 import { raiseUnacknowledgedMail, sendUnderstoodReplies, type SeatRead } from "../src/worker/services/partnerUnderstood";
 import { handleReingestStoredEmail } from "../src/worker/services/webPropertyChange";
 import { threadReference } from "../src/shared/email/thread";
+import { TAKEN_OVER_PREFIX } from "../src/shared/work/takeover";
+import { TAKEN_OVER_NEXT } from "../src/worker/services/partnerUnderstood";
 
 /**
  * A PARTNER'S BIG EMAIL IS READ, THEN ANSWERED (15 Nov 2026).
@@ -295,6 +297,8 @@ describe("a dry run reads everything and writes nothing", () => {
       `INSERT INTO inbound_message (id, message_id, r2_key, from_address, to_address, subject, received_at, bytes, mail_authority_json, firm_scope)
        VALUES ('inm_dry', 'dry@mail.gmail.com', ?1, ?2, 'os@joinwestpeek.com', 'Re: dry', ?3, ?4, ?5, 'west-peek')`,
     ).bind(key, SCOOTER_FROM, new Date().toISOString(), msg.rawSize, JSON.stringify({ passed: true, partner: SCOOTER })).run();
+    // The card is taken over, like wc_c548d043: the dry run's Got it must say what the live one would.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET held_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), held_reason = ?2 WHERE id = ?1").bind(cardId, `${TAKEN_OVER_PREFIX} (test).`).run();
     const tables = ["event_record", "work_steer", "request_attachment", "card_drive_file", "inbound_email_seen", "inbound_message", "notification", "partner_understood", "inbound_reingest_claim", "work_card", "work_card_note", "ai_run"];
     const snapshot = async () => Promise.all(tables.map((tb) => count(`SELECT COUNT(*) AS n FROM ${tb}`)));
     const cardBefore = await one<{ description: string; updated_at: string }>("SELECT description, updated_at FROM work_card WHERE id = ?1", cardId);
@@ -314,6 +318,7 @@ describe("a dry run reads everything and writes nothing", () => {
     expect([...body.would.filed].sort()).toEqual(["IMG_0001.jpg", "New Recording 7.m4a", "assets.zip"]);
     expect(body.would.voice_notes[0]?.text).toContain("Move the pricing below the case studies");
     expect(body.would.got_it.tldr).toMatch(/^Got it\./);
+    expect(body.would.got_it.tldr, "the honest next line on a taken-over card, as the live Got it says it").toContain(TAKEN_OVER_NEXT);
 
     expect(await snapshot(), "no row anywhere").toEqual(rowsBefore);
     expect(store.size, "no stored object").toBe(objectsBefore);
