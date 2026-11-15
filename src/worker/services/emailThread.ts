@@ -19,6 +19,9 @@ import { ownershipOf, roleOf } from "../../shared/work/partnerOwnership";
 import { LATE_THREAD_NOTE_PREFIX, NEW_EMAIL_NOTE_PREFIX, readApprovalReply } from "../../shared/work/approvalReply";
 import { textBodyOf } from "../effects/mimeAttachments";
 import { storeAttachments } from "./requestMaterials";
+import { hearVoiceNotes, stopOnUnheardVoiceNotes, withVoiceNotes } from "./voiceNotes";
+import { tellStarted } from "./partnerProgress";
+import { isTakenOver } from "../../shared/work/takeover";
 import { answerQuestionForCard, type QuestionAnswerer, type QuestionAnswerResult } from "./questionRouting";
 import { previewAllPartnerEmailsIsOn } from "./kindRules";
 import { routedByFor } from "./requestReply";
@@ -409,6 +412,25 @@ export async function steerFromReply(
         )
         .run();
     }
+    /*
+     * A VOICE NOTE IS HIS WORDS (15 Nov 2026, wc_c548d043): "Recording attached." plus a phone recording steered the
+     * card with two words. The recording is transcribed on the platform's own no-training route (voiceNotes.ts) and
+     * its words join what he typed; one that cannot be read is a named stop on Sequoia's desk and on the card.
+     */
+    const voice = await hearVoiceNotes(env, message.raw);
+    written = withVoiceNotes(written, voice.heard);
+    if (voice.heard.length) {
+      await appendEvent(env, {
+        eventType: "work_card.voice_note_transcribed",
+        actorType: "system",
+        actorId: "voice_notes",
+        objectType: "work_card",
+        objectId: thread.object_id,
+        firmScope: thread.firm_scope,
+        payload: { files: voice.heard.map((h) => ({ filename: h.filename, chars: h.text.length })) },
+      });
+    }
+    await stopOnUnheardVoiceNotes(env, { cardId: thread.object_id, firmScope: thread.firm_scope, partner: partnerByEmail(authority.partnerAddress)?.firstName ?? "a partner", failed: voice.failed });
     if (written.length < 2 && attached.length) written = `Attached: ${attached.join(", ")}`;
   }
   // One character is an answer ("1", Porter's which-job question); only nothing at all is not (15 Nov 2026: the phone's
@@ -521,7 +543,7 @@ export async function steerFromReply(
   if (thread.object_type === "work_card") {
     const partner = partnerByEmail(authority.partnerAddress);
     const cardRow = await env.WP_OS_DB.prepare(
-      `SELECT id, title, kind, state, requested_by_email, secondary_partner_email, preview_first, preview_owner_id, assigned_from_card_id, firm_scope
+      `SELECT id, title, kind, state, requested_by_email, secondary_partner_email, preview_first, preview_owner_id, assigned_from_card_id, firm_scope, held_reason
          FROM work_card WHERE id = ?1`,
     )
       .bind(thread.object_id)
@@ -536,7 +558,19 @@ export async function steerFromReply(
         preview_owner_id: string | null;
         assigned_from_card_id: string | null;
         firm_scope: string;
+        held_reason: string | null;
       }>();
+    /*
+     * A CARD A DEVELOPER HAS TAKEN OVER (15 Nov 2026, developerDirection.ts): his reply is filed on the card, once, and
+     * nothing acts on it — no answer, no build, no hand-off. The hand-back gives it to the employee with the rest.
+     */
+    const takenOver = Boolean(cardRow && partner && isTakenOver(cardRow.held_reason));
+    if (takenOver && !alreadyFiled) {
+      await env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)")
+        .bind(`wcn_${crypto.randomUUID()}`, cardRow!.id, partner!.firmUserId, keptWords(written), thread.firm_scope)
+        .run();
+      await appendEvent(env, { eventType: "work_card.reply_filed_during_takeover", actorType: "firm_user", actorId: partner!.firmUserId, objectType: "work_card", objectId: cardRow!.id, firmScope: thread.firm_scope, payload: { thread_token: thread.token, said: written.slice(0, 200) } });
+    }
 
     // "CC SCOOTER" IN A REPLY (0239): recorded from the authenticated sender, whatever the state;
     // `recordCcFrom` refuses anyone but the requesting partner and names non-partners it refused.
@@ -549,7 +583,7 @@ export async function steerFromReply(
      * it moves the card and is never an answer to a block. The authenticated sender decides, through
      * the same rules as the note and the route; a refusal is answered on the sender's own thread.
      */
-    const owned = cardRow && partner ? await ownershipFromWords(env, { cardId: cardRow.id, writer: partner.email, text: written, via: "REPLY", ackOnThread: thread.token }) : null;
+    const owned = !takenOver && cardRow && partner ? await ownershipFromWords(env, { cardId: cardRow.id, writer: partner.email, text: written, via: "REPLY", ackOnThread: thread.token }) : null;
     /*
      * A SECONDARY'S "APPROVED" (0241): refused, and told who approves and how to take it over. The
      * reply is still kept as a note below — read as context, never as an approval.
@@ -572,7 +606,7 @@ export async function steerFromReply(
      */
     let builtFromReply = false;
     let wordsRead: ReplyIntent | null = null;
-    if (!alreadyFiled && !owned && !secondarySaidApproved && cardRow && partner && cardRow.kind !== WEB_PROPERTY_CHANGE_KIND) {
+    if (!alreadyFiled && !takenOver && !owned && !secondarySaidApproved && cardRow && partner && cardRow.kind !== WEB_PROPERTY_CHANGE_KIND) {
       const read = await readReplyIntent(
         env,
         { cardId: cardRow.id, firmScope: thread.firm_scope, text: written, where: replyWhere(cardRow) },
@@ -599,6 +633,8 @@ export async function steerFromReply(
       // Handled: the card changed hands (or was refused, and said so). Nothing below reads it.
     } else if (builtFromReply) {
       // Handled: the build is Porter's own job now, and the partner was told on this thread.
+    } else if (takenOver) {
+      // Filed on the card above; the developer's hand-back is what puts it in front of the employee.
     } else if (cardRow && partner && cardRow.state === "BLOCKED") {
       const asked = (cardRow.requested_by_email ?? "").trim().toLowerCase();
       // #363 (0301): THE DEVELOPER DIRECTS ANY JOB. Her "changes: …" on another partner's website job is that job's
@@ -665,6 +701,8 @@ export async function steerFromReply(
           }
           const out = await answerBlock(env, cardRow.id, partner.firmUserId, { action: door, text: keptWords(written) });
           answered = out.ok;
+          // His answer starts the run again: one note on his thread with when to expect it (partnerProgress.ts).
+          if (out.ok && door === "ANSWER" && cardRow.kind !== WEB_PROPERTY_CHANGE_KIND) await tellStarted(env, { cardId: cardRow.id, partnerEmail: partner.email, thread: thread.token, messageId: message.messageId ?? null });
         }
       } else {
         await env.WP_OS_DB.prepare(
@@ -695,6 +733,8 @@ export async function steerFromReply(
       )
         .bind(`wcn_${crypto.randomUUID()}`, cardRow.id, partner.firmUserId, keptWords(written), thread.firm_scope)
         .run();
+      // The run that reads his note is already going or next: he hears when to expect it (partnerProgress.ts).
+      if (cardRow.kind !== WEB_PROPERTY_CHANGE_KIND) await tellStarted(env, { cardId: cardRow.id, partnerEmail: partner.email, thread: thread.token, messageId: message.messageId ?? null });
     } else if (cardRow && partner && cardRow.kind === "PARTNER_MESSAGE") {
       /*
        * A REPLY TO A PARTNER MESSAGE IS FOR THE PARTNER WHO ASKED FOR IT (9 Oct 2026). Scooter

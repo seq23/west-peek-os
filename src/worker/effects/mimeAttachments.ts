@@ -143,8 +143,16 @@ export function pdfAttachments(raw: string): { attachments: Attachment[]; unread
  * client marked `Content-Disposition: attachment` is a file she sent — kept, whatever its type.
  */
 export function requestAttachments(raw: string): { attachments: Attachment[]; unread: string[] } {
-  return attachmentsOf(raw, (type, sentAsFile) => sentAsFile || type.startsWith("image/") || type.includes("application/pdf"), 10);
+  return attachmentsOf(raw, (type, sentAsFile) => sentAsFile || type.startsWith("image/") || type.includes("application/pdf"), 10, MAX_KEPT_FILE_BYTES);
 }
+
+/**
+ * A FILE KEPT AGAINST A CARD IS A POINTER, NOT A READ (15 Nov 2026, wc_c548d043). Scooter's 18.9 MB voice memo was
+ * "too large to read here" under the 12 MB model-read cap, so it was never kept against the card. Keeping a file only
+ * names it against the stored .eml, so the kept-file cap sits above the largest message Email Routing delivers
+ * (25 MiB). `MAX_ATTACHMENT_BYTES` still bounds every path that reads bytes into a model in the Worker.
+ */
+export const MAX_KEPT_FILE_BYTES = 30 * 1024 * 1024;
 
 /** One MIME part's body, decoded from base64 or quoted-printable; the raw body for anything else. */
 function decodePartBody(part: string): string {
@@ -232,7 +240,7 @@ export function topHeadersOf(raw: string): { subject: string; inReplyTo: string;
 
 /** The bytes of one named attachment, decoded. Null when the message carries no such file. */
 export function attachmentBytes(raw: string, filename: string): { bytes: Uint8Array; mediaType: string } | null {
-  const { attachments } = attachmentsOf(raw, () => true, 50);
+  const { attachments } = attachmentsOf(raw, () => true, 50, MAX_KEPT_FILE_BYTES);
   const hit = attachments.find((a) => a.filename === filename);
   if (!hit) return null;
   try {
@@ -243,7 +251,16 @@ export function attachmentBytes(raw: string, filename: string): { bytes: Uint8Ar
   }
 }
 
-function attachmentsOf(raw: string, accept: (type: string, sentAsFile: boolean) => boolean, max = MAX_ATTACHMENTS): { attachments: Attachment[]; unread: string[] } {
+/** A voice note is up to this big: a phone's few minutes of m4a is 1 to 20 MB. */
+export const MAX_VOICE_NOTE_BYTES = 40 * 1024 * 1024;
+
+/** The audio files a person attached (a phone's "New Recording 4.m4a"), by type or by a sound file's name. */
+export function audioAttachments(raw: string): { attachments: Attachment[]; unread: string[] } {
+  const isAudio = (type: string) => type.startsWith("audio/") || /name\*?=["']?[^"';]+\.(?:m4a|mp3|wav|aac|ogg|oga|opus|caf|amr|webm)\b/i.test(type);
+  return attachmentsOf(raw, (type) => isAudio(type), 5, MAX_VOICE_NOTE_BYTES);
+}
+
+function attachmentsOf(raw: string, accept: (type: string, sentAsFile: boolean) => boolean, max = MAX_ATTACHMENTS, maxBytes = MAX_ATTACHMENT_BYTES): { attachments: Attachment[]; unread: string[] } {
   const attachments: Attachment[] = [];
   const unread: string[] = [];
 
@@ -307,7 +324,7 @@ function attachmentsOf(raw: string, accept: (type: string, sentAsFile: boolean) 
     // Base64 is 4 characters per 3 bytes; close enough to refuse an oversized file without decoding
     // it, which is the whole point — measuring by decoding would cost what reading costs.
     const bytes = Math.floor((dataBase64.length * 3) / 4);
-    if (bytes > MAX_ATTACHMENT_BYTES) {
+    if (bytes > maxBytes) {
       unread.push(`${filename} (${(bytes / 1024 / 1024).toFixed(1)}MB — too large to read here)`);
       continue;
     }

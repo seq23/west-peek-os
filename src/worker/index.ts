@@ -123,7 +123,7 @@ import {
 } from "./services/aiRuns";
 import { handleGetPartnerProfile, handlePutPartnerProfile } from "./services/partnerProfile";
 import { handleGetRequestAttachment, handleFinishOriginalAsk, handleGetWebPropertyChange, handleMaterialsAdded, handleResendPreview, handleReingestStoredEmail, handleSetWorkKindRule, handleWorkKindRules } from "./services/webPropertyChange";
-import { handleDeveloperChanges, handleDeveloperEmail } from "./services/developerDirection";
+import { handleDeveloperChanges, handleDeveloperEmail, handleDeveloperHandBack, handleDeveloperTakeover } from "./services/developerDirection";
 import { handleListWebProperties } from "./services/webPropertyRegistry";
 import { handlePendingSecretHandoffs, handleSecretHandoffStored } from "./services/secretHandoff";
 import { handleDnsWaitStatus, handlePendingDnsWaits } from "./services/dnsWaits";
@@ -1213,6 +1213,8 @@ const router = new Router()
   // #363 (0301): the developer's work instruction, entered by her partner tail as the Mac's own identity. Changes only.
   .post("/api/work-cards/:id/developer-changes", handleDeveloperChanges)
   .post("/api/work-cards/:id/developer-email", handleDeveloperEmail)
+  .post("/api/work-cards/:id/developer-takeover", handleDeveloperTakeover)
+  .post("/api/work-cards/:id/developer-hand-back", handleDeveloperHandBack)
   .get("/api/partner-profiles/:email", handleGetPartnerProfile)
   .post("/api/partner-profiles/:email", handlePutPartnerProfile)
   .get("/api/work-kinds/:kind/rules", handleWorkKindRules)

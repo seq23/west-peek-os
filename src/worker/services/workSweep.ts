@@ -690,6 +690,8 @@ export async function sweepOnce(
   await resolveStaleClarifications(env, now);
   // 13 Nov 2026 (#354): a share nobody explained is asked about only after its grace period.
   await askHeldShareQuestions(env, now);
+  // 15 Nov 2026: a run a partner's reply started that is past the time he was given gets one "taking longer" note.
+  await (await import("./partnerProgress")).tellSlipped(env, now).catch(() => 0);
   // 0255 (rule 4): finished and moved cards refresh each partner's "working on now"; 30 days idle drops off.
   await refreshAllWorkingOn(env, now);
   /*
