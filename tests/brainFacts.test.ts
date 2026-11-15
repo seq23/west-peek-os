@@ -76,11 +76,23 @@ describe("in the Worker: the reader's settled facts", () => {
     for (const want of ["### Scooter Taylor", "### West Peek Productions", "### Top Barz", "Which business is this word?"]) expect(known.text).toContain(want);
     expect(known.text).not.toContain("### Sequoia Taylor");
     expect(known.text).not.toContain("a private line");
-    expect(known.standingHolds, "only his Standing holds line, one per item; his roles line is context, never a hold").toEqual(["Nothing goes live without his OK on a preview", "\"Do not build invoice or billing features yet\""]);
+    expect(known.standingHolds, "only his Standing holds line, one per item; his roles line is context, never a hold").toEqual(["Nothing goes live without his OK on a preview", "Do not build invoice or billing features yet"]);
 
     const reader: Reader = { name: "CLAUDE", read: async (_e, input) => ({ ok: true, detail: "ok", reader: "CLAUDE", text: input.prompt.includes("Never part of the Productions pipeline") ? "ASK: Keep this pipeline studio-only." : "ASK: Keep this pipeline studio-only.\nUNCLEAR: Leave the Top Barz rows out :: is Top Barz part of Productions?" }) };
     const out = await understand(env, { subject: "d", written, read: [reader], employeeId: null, firmScope: "west-peek", known: known.text, standingHolds: known.standingHolds });
     expect(out.brief.unclear, "Top Barz is settled, so nothing about it is unclear").toEqual([]);
     expect(out.brief.holds, "his standing hold counts though the email does not repeat it").toContain("Nothing goes live without his OK on a preview");
+  });
+});
+
+describe("an idea for later is noted, never also a hold", () => {
+  it("lists it once, as noted, and keeps his real holds", async () => {
+    const written = "1. Rename \"Who is buying\" to \"Organization type.\"\n2. Remove \"Source\" from the deal view. Don't delete or change those tracker rows.\n\nTranscript-assisted Discovery notes are an idea for later, not part of this round.";
+    const idea = "Transcript-assisted Discovery notes are an idea for later, not part of this round.";
+    const reader: Reader = { name: "CLAUDE", read: async () => ({ ok: true, detail: "ok", reader: "CLAUDE", text: `ASK: Rename "Who is buying" to "Organization type."\nASK: Remove "Source" from the deal view.\nHOLD: Don't delete or change those tracker rows.\nHOLD: ${idea}` }) };
+    const out = await understand(env, { subject: "d", written, read: [reader], employeeId: null, firmScope: "west-peek" });
+    expect(out.noted.some((n) => /idea for later/.test(n)), "the idea is kept as noted").toBe(true);
+    expect(out.brief.holds.filter((h) => /idea for later/.test(h)), "and is not a hold").toEqual([]);
+    expect(out.brief.holds.some((h) => /tracker rows/.test(h)), "his real hold stays").toBe(true);
   });
 });

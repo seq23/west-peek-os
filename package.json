@@ -8,6 +8,7 @@
     "backup:local": "node scripts/backup/backup.mjs",
     "build": "vite build && node scripts/build/stamp-sw-cache.mjs",
     "check:changed": "node scripts/ci/check-changed.mjs",
+    "practice": "node scripts/practice/practice.mjs",
     "deploy:production": "node scripts/deploy/production.mjs",
     "dev": "npm run build && wrangler dev",
     "e2e": "node scripts/e2e/prepare-local.mjs && CI=true npx wrangler d1 migrations apply WP_OS_DB --local && node scripts/e2e/prepare-local.mjs --verify-only && playwright test",

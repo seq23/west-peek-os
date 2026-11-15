@@ -122,7 +122,9 @@ const HOLD = /\b(?:preview (?:it )?first|nothing (?:goes )?live|not live|don'?t 
  */
 const QUESTION_SHAPED = /\?\s*["”]?$|\b(?:still open|(?:is|are) open|questioning|wonder(?:ing)?|not sure|unsure|let'?s (?:clarify|confirm|discuss|talk)|clarify|whether)\b/i;
 const CONSTRAINT = /\b(?:don'?t|do not|must(?:n'?t)?|never|not yet|nothing|no|not|only|until|without|stays?|separate|before (?:it|anything) goes live|preview (?:it )?first|hold off|wait for)\b/i;
-export const isQuestionShaped = (line: string): boolean => QUESTION_SHAPED.test(line.trim());
+/** A "?" inside a quotation is the quoted thing's ("Keep "How did you hear about us?""), not his question. */
+const unquoted = (line: string): string => line.replace(/"[^"]*"|“[^”]*”/g, "\"\"").trim();
+export const isQuestionShaped = (line: string): boolean => QUESTION_SHAPED.test(unquoted(line));
 export const isConstraint = (line: string): boolean => CONSTRAINT.test(line) && !isQuestionShaped(line);
 /**
  * NOTHING HE SAID IS DROPPED (Sequoia, 15 Nov 2026). Holds, questions and unclear items are kept whole; this bound is
@@ -138,7 +140,7 @@ export function questionsOf(words: string): string[] {
   return unwrapped(typed)
     .split(/\n+|(?<=[.!?])\s+(?=[A-Z0-9"“(])/)
     .map((s) => s.replace(/^[\s\-–—•*]+|\s+$/g, "").replace(/^\d+[.)]\s+/, "").replace(/\s+/g, " "))
-    .filter((s) => s.length > 8 && (isQuestionShaped(s) || CLARIFY_FIRST.test(s)) && !REMARK.test(s));
+    .filter((s) => s.length > 8 && (isQuestionShaped(s) || CLARIFY_FIRST.test(unquoted(s))) && !REMARK.test(s));
 }
 /** His own questions first, in his order; a reader's question is added only when no listed one contains it. Pure. */
 export function mergeQuestions(own: readonly string[], read: readonly string[]): string[] {
@@ -253,7 +255,7 @@ export function structuredAsks(words: string): { asks: string[]; noted: string[]
       flush();
     } else {
       const flat = para.replace(/\s+/g, " ").trim();
-      if (CLARIFY_FIRST.test(flat)) questions.push(flat);
+      if (CLARIFY_FIRST.test(unquoted(flat))) questions.push(flat);
       else if (!REMARK.test(flat) && !isFragment(flat)) noted.push(flat);
     }
   }
@@ -338,7 +340,9 @@ export async function understand(
   }
   const runId = runIds[runIds.length - 1] ?? null;
   const emailHolds = parsed ? parsed.holds : holdsOf(written);
-  const holds = mergeHolds(emailHolds, input.standingHolds ?? []);
+  // An idea for later ("… is an idea for later, not part of this round") is kept as noted, never also as a hold.
+  const notedLines = structured?.noted ?? [];
+  const holds = mergeHolds(emailHolds.filter((h) => !notedLines.some((n) => norm(n) === norm(h))), input.standingHolds ?? []);
   /*
    * HIS QUESTIONS ARE STEADY (15 Nov 2026): taken from his own sentences first, the same way every time (a "?", a
    * "let's clarify", "still open", "whether"), as his asks come from his numbering first. A reader only ADDS questions
@@ -555,7 +559,8 @@ export async function knownFor(
     const standingHolds = holdsLine
       .replace(/^\s*[-*•]\s+\**Standing holds[^:]*:\**\s*/i, "")
       .split(/\s+·\s+/)
-      .map((h) => h.replace(/\*\*/g, "").trim().replace(/[.;]$/, ""))
+      // His own quoted words are stored in quotes in the brain; the Got it quotes each hold itself, so they are unwrapped here.
+      .map((h) => h.replace(/\*\*/g, "").trim().replace(/[.;]$/, "").replace(/^["“]([^"“”]*)["”]$/, "$1"))
       .filter((h) => h.length > 8);
     return { text: [brain ? `FROM THE BRAIN:\n${brain}` : "", other].filter(Boolean).join("\n\n"), standingHolds };
   } catch {

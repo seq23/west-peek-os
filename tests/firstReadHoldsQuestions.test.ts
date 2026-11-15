@@ -23,3 +23,10 @@ describe("a standing hold the email already says is listed once, in the email's 
     expect(mergeHolds([], standing)).toEqual(standing);
   });
 });
+
+describe("a question mark inside his quotation is not his question", () => {
+  it("keeps a quoted form label out of his questions, and his own question in", () => {
+    const q = questionsOf("Keep \"How did you hear about us?\"\n\nWhat can you get done today?");
+    expect(q).toEqual(["What can you get done today?"]);
+  });
+});
