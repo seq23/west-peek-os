@@ -249,3 +249,100 @@ async function soleDeveloper(env: Env): Promise<Director | null> {
   const holders = dev.results ?? [];
   return holders.length === 1 ? developerDirector(env, `${TAIL_PREFIX}${holders[0]!.id}`) : null;
 }
+
+// ── TAKEN OVER / HANDED BACK (owner's design, 15 Nov 2026) ─────────────────────────────────────────────────────────
+//
+// "Taken over": the developer is doing the card by hand. It is HELD (0227: the sweep never claims a held card), with
+// a reason that says so on its face, any queued Mac run for it is withdrawn, and its block reminder is stopped. A
+// partner's reply meanwhile is filed on the card and acted on by nothing (emailThread.ts).
+// "Hand back": the developer's note says what was done and when it finished, and the card returns to its employee,
+// who starts from that note. When the note says every ask is done and no reply came in meanwhile, the card closes and
+// waits for the partner's next word; otherwise it goes back to the sweep with the note and those replies in front of it.
+
+import { TAKEN_OVER_PREFIX, isTakenOver } from "../../shared/work/takeover";
+
+async function theDeveloper(env: Env): Promise<Director | null> {
+  const dev = await env.WP_OS_DB.prepare(
+    "SELECT fu.id FROM firm_user fu JOIN firm_user_role fur ON fur.firm_user_id = fu.id JOIN role r ON r.id = fur.role_id WHERE r.key = ?1 AND fu.status = 'ACTIVE' ORDER BY fu.id",
+  ).bind(DEVELOPER_ROLE).all<{ id: string }>();
+  const holders = dev.results ?? [];
+  return holders.length === 1 ? developerDirector(env, `${TAIL_PREFIX}${holders[0]!.id}`) : null;
+}
+
+function centralStamp(iso: string): { day: string; time: string } {
+  const d = new Date(iso);
+  return {
+    day: new Intl.DateTimeFormat("en-GB", { timeZone: "America/Chicago", day: "numeric", month: "short" }).format(d),
+    time: new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" }).format(d) + " Central",
+  };
+}
+
+export type TakeoverOutcome = { ok: true; card_id: string; state: string; detail: string } | { ok: false; status: number; error: string; detail: string };
+
+export async function takeOverCard(env: Env, cardId: string, input: { why: string; by: Director; enteredBy: string; now?: Date }): Promise<TakeoverOutcome> {
+  const why = input.why.trim();
+  if (why.length < 3) return { ok: false, status: 400, error: "invalid_input", detail: "why is required: what the developer is doing by hand" };
+  const card = await env.WP_OS_DB.prepare("SELECT id, state, held_reason, firm_scope FROM work_card WHERE id = ?1").bind(cardId).first<{ id: string; state: string; held_reason: string | null; firm_scope: string }>();
+  if (!card) return { ok: false, status: 404, error: "not_found", detail: "no such card" };
+  if (isTakenOver(card.held_reason)) return { ok: false, status: 409, error: "already_taken_over", detail: card.held_reason! };
+  if (!["OPEN", "IN_PROGRESS", "BLOCKED"].includes(card.state) && !card.held_reason) return { ok: false, status: 409, error: "illegal_transition", detail: `a ${card.state} card has nothing to take over` };
+  const at = (input.now ?? new Date()).toISOString();
+  const reason = `${TAKEN_OVER_PREFIX} (${input.by.label}, since ${at}): ${why}`.slice(0, 1000);
+  await env.WP_OS_DB.prepare(
+    `UPDATE work_card SET held_reason = ?2, held_by = ?3, held_at = ?4, lease_until = NULL, waiting_until = NULL, block_nag_at = NULL,
+            next_action = ?5, description = substr(COALESCE(description, '') || char(10) || '• ' || ?2, 1, 16000), updated_at = ?4
+      WHERE id = ?1`,
+  ).bind(card.id, reason, `${TAIL_PREFIX}${input.by.partner.firmUserId}`, at, `${TAKEN_OVER_PREFIX}. Nothing runs by itself until it is handed back.`).run();
+  // A run queued on the Mac for this card is withdrawn, so the claimer never picks it up mid-takeover.
+  const withdrawn = await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'ABANDONED', resolution = 'taken over by a developer; withdrawn before a machine claimed it', updated_at = ?2 WHERE work_card_id = ?1 AND status = 'QUEUED'").bind(card.id, at).run();
+  await appendEvent(env, { eventType: "work_card.taken_over_by_developer", actorType: "firm_user", actorId: input.by.partner.firmUserId, objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { by: input.by.label, entered_by: input.enteredBy, why, at, state_before: card.state, withdrawn_runs: withdrawn.meta?.changes ?? 0 } });
+  return { ok: true, card_id: card.id, state: card.state, detail: reason };
+}
+
+export async function handBackCard(env: Env, cardId: string, input: { note: string; allDone: boolean; by: Director; enteredBy: string; finishedAt?: string | null; now?: Date }): Promise<TakeoverOutcome> {
+  const note = input.note.trim();
+  if (note.length < 3) return { ok: false, status: 400, error: "invalid_input", detail: "note is required: what the developer did" };
+  const card = await env.WP_OS_DB.prepare("SELECT id, state, held_reason, held_at, owner_id, requested_by_email, firm_scope FROM work_card WHERE id = ?1").bind(cardId).first<{ id: string; state: string; held_reason: string | null; held_at: string | null; owner_id: string | null; requested_by_email: string | null; firm_scope: string }>();
+  if (!card) return { ok: false, status: 404, error: "not_found", detail: "no such card" };
+  if (!isTakenOver(card.held_reason)) return { ok: false, status: 409, error: "not_taken_over", detail: "this card is not taken over, so there is nothing to hand back" };
+  const now = (input.now ?? new Date()).toISOString();
+  const finished = input.finishedAt && !Number.isNaN(Date.parse(input.finishedAt)) ? new Date(input.finishedAt).toISOString() : now;
+  const employee = (await env.WP_OS_DB.prepare("SELECT name FROM ai_employee WHERE id = ?1").bind(card.owner_id).first<{ name: string }>().catch(() => null))?.name ?? "the employee";
+  const stamp = centralStamp(finished);
+  const words = `Done by a developer on ${stamp.day}, finished at ${stamp.time}; ${employee}, take it from here. ${note}`.slice(0, PARTNER_ANSWER_MAX);
+  // What a partner said while the developer had it: filed on the card, never acted on, and now part of what is picked up.
+  const during = (await env.WP_OS_DB.prepare(
+    "SELECT COUNT(*) AS n FROM event_record WHERE object_type = 'work_card' AND object_id = ?1 AND event_type = 'work_card.reply_filed_during_takeover' AND created_at >= ?2",
+  ).bind(card.id, card.held_at ?? "").first<{ n: number }>())?.n ?? 0;
+  const close = input.allDone && Number(during) === 0;
+  await env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope, acknowledged_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")
+    .bind(`wcn_${crypto.randomUUID()}`, card.id, input.by.partner.firmUserId, words, card.firm_scope, close ? now : null)
+    .run();
+  const partner = (card.requested_by_email ?? "").split("@")[0] || "the partner";
+  const nextAction = close ? `Every ask was done by hand; waiting for ${partner.charAt(0).toUpperCase()}${partner.slice(1)}'s next instruction.` : `Start from the developer's note: ${words.slice(0, 300)}`;
+  await env.WP_OS_DB.prepare(
+    `UPDATE work_card SET state = ?2, held_reason = NULL, held_by = NULL, held_at = NULL, work_attempts = 0, work_steps = 0, lease_until = NULL,
+            block_nag_at = NULL, next_action = ?3, description = substr(COALESCE(description, '') || char(10) || '• ' || ?4, 1, 16000), updated_at = ?5
+      WHERE id = ?1`,
+  ).bind(card.id, close ? "DONE" : "OPEN", nextAction, `Handed back by ${input.by.label}: ${words}`, now).run();
+  await appendEvent(env, { eventType: "work_card.handed_back_by_developer", actorType: "firm_user", actorId: input.by.partner.firmUserId, objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { by: input.by.label, entered_by: input.enteredBy, note: words, finished_at: finished, all_done: input.allDone, replies_during: Number(during), closed: close, at: now } });
+  return { ok: true, card_id: card.id, state: close ? "DONE" : "OPEN", detail: words };
+}
+
+/** POST /api/work-cards/:id/developer-takeover { why } and /developer-hand-back { note, all_done, finished_at? } — the tail door, the Mac's identity only. */
+export async function handleDeveloperTakeover(ctx: RouteContext): Promise<Response> {
+  return takeoverDoor(ctx, "TAKE");
+}
+export async function handleDeveloperHandBack(ctx: RouteContext): Promise<Response> {
+  return takeoverDoor(ctx, "BACK");
+}
+async function takeoverDoor(ctx: RouteContext, which: "TAKE" | "BACK"): Promise<Response> {
+  if (ctx.identity?.email.toLowerCase() !== SUBSCRIPTION_CLAIMER_EMAIL) return json({ error: "forbidden", detail: "this door is the Mac's own identity only" }, { status: 403 });
+  const by = await theDeveloper(ctx.env);
+  if (!by) return json({ error: "no_developer", detail: "exactly one person must hold the developer role" }, { status: 409 });
+  const body = (await ctx.request.json().catch(() => null)) as { why?: unknown; note?: unknown; all_done?: unknown; finished_at?: unknown } | null;
+  const out = which === "TAKE"
+    ? await takeOverCard(ctx.env, ctx.params.id ?? "", { why: typeof body?.why === "string" ? body.why : "", by, enteredBy: ctx.identity.email })
+    : await handBackCard(ctx.env, ctx.params.id ?? "", { note: typeof body?.note === "string" ? body.note : "", allDone: body?.all_done === true, finishedAt: typeof body?.finished_at === "string" ? body.finished_at : null, by, enteredBy: ctx.identity.email });
+  return out.ok ? json(out) : json({ error: out.error, detail: out.detail }, { status: out.status });
+}
