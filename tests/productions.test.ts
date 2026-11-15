@@ -742,3 +742,19 @@ describe("every ask in Scooter's replies on the card is answered in the note, or
     expect((await unansweredReplies(env, opened.cardId)).words, "answered once is answered").toEqual([]);
   });
 });
+
+describe("a reply filed twice reaches the interpreter once (wc_bd8b68cb, 14 Nov 2026)", () => {
+  it("standingSteer keeps one copy of a repeated body", async () => {
+    const { standingSteer } = await import("../src/worker/services/emailThread");
+    for (const [id, at] of [["wst_dup1", "2028-03-01T10:00:00.000Z"], ["wst_dup2", "2028-03-01T10:05:00.000Z"], ["wst_other", "2028-03-01T10:10:00.000Z"]] as const) {
+      await env.WP_OS_DB.prepare("INSERT INTO work_steer (id, card_kind, from_card_id, said_by, body, thread_token, firm_scope, created_at) VALUES (?1, 'PRODUCTIONS_PRESS', NULL, 'scooter@westpeek.ventures', ?2, 'tok_dup', 'west-peek', ?3)")
+        .bind(id, id === "wst_other" ? "A different placeholder reply." : "The same placeholder reply, delivered twice.", at).run();
+    }
+    try {
+      const pieces = await standingSteer(env, "PRODUCTIONS_PRESS");
+      expect(pieces.map((p) => p.text)).toEqual(["The same placeholder reply, delivered twice.", "A different placeholder reply."]);
+    } finally {
+      await env.WP_OS_DB.prepare("DELETE FROM work_steer WHERE id IN ('wst_dup1','wst_dup2','wst_other')").run();
+    }
+  });
+});
