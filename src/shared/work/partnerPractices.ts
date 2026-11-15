@@ -39,7 +39,7 @@ export const PARTNER_PRACTICES: readonly PartnerPractice[] = [
   { rule: "R17", line: "Honest limits: when the ask cannot be done as worded, do the nearest version and state the limit in that item's done-line — never silently narrower, never a question instead of the work." },
   { rule: "R19", line: "The partner's standing constraints below are law for this work: obey every one silently, never ask about them, never list them back." },
   { rule: "R21", line: "Files that arrive later in a Drive folder the partner named are loaded for you automatically; if the folder is still empty, it has already been said once — do not ask for the files again." },
-  { rule: "R22", line: "When the firm's own (or a shared) key or account stands in for the partner's, say so in the reply: the cap it carries, what happens when the cap is hit, the upgrade price if known — and that their own key can be emailed as `SECRET NAME=value` to replace it." },
+  { rule: "R22", line: "When the firm's own (or a shared) key or account stands in for the partner's, say so in the reply: the cap it carries, what happens when the cap is hit, the upgrade price if known — and that the developer can swap in their own key if they want; never ask anyone to email a key or password." },
   { rule: "R23", line: "A promised later migration (\"under our account for now, move it after the vote\") is a stated deviation in the reply plus a `Deferred to YYYY-MM-DD: <the move>` line." },
 ];
 

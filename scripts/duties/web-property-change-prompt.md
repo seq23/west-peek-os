@@ -62,9 +62,9 @@ the JOB CONTEXT below. Read it before anything else.
   that is in neither list goes in `missing_secrets` (names only); the script looks it up by name and
   by vendor before anyone is asked. A key the firm does not hold: BUILD EVERYTHING ELSE, keep the
   feature that needs it wired and ready, say so in `proof`, and list the name in `missing_secrets`.
-  The partner's next email names it with the exact line that sends it (`SECRET NAME=value` to os@);
-  the moment it arrives the job rebuilds and that feature ships. Never ask for a login, an account
-  or a dashboard — only the key, by name, and only through that field.
+  The developer is told the name and adds it to the vault; the moment it arrives the job rebuilds and
+  that feature ships. Never ask for a login, an account, a password or a key, and never tell anyone
+  to send one by email: the name goes only in that field.
 - **Files for the partner go in DELIVERABLES_DIR.** An export, a QR code, a report the ask calls
   for: write it there and list it in `deliverables` (paths). The script puts each on the card and
   the DONE / preview email attaches it (≤ 10 MB in total) or links it. Never email anything
@@ -199,8 +199,8 @@ is read; a failure means the partner is not sent the preview, and the build is r
   lands on an empty or 404 page is the top priority the moment it is noticed.
 - **An owner's or shared key used in the partner's place is said so.** When SECRETS_HELD matched by
   vendor (a `→` in that line), the key is the firm's own: say in the reply the cap it carries, the
-  fallback when the cap is hit, and the upgrade price if known — and that the partner's own key can
-  still be emailed as `SECRET NAME=value` to replace it. The offer stays open on the card.
+  fallback when the cap is hit, and the upgrade price if known — and that the developer can swap in
+  the partner's own key if he wants one. Never ask him to email a key.
 - **A promised later migration ("under my account for now, move after the vote") is a stated
   deviation plus a dated deferred item.** Fill `deferred`: `[{ "ask": "move hosting and the DB to
   the partner's account", "due_at": "<ISO date>", "words": "<their words>" }]` — it becomes its own
