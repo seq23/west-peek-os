@@ -302,7 +302,7 @@ export async function takeOverCard(env: Env, cardId: string, input: { why: strin
 export async function handBackCard(env: Env, cardId: string, input: { note: string; allDone: boolean; by: Director; enteredBy: string; finishedAt?: string | null; now?: Date }): Promise<TakeoverOutcome> {
   const note = input.note.trim();
   if (note.length < 3) return { ok: false, status: 400, error: "invalid_input", detail: "note is required: what the developer did" };
-  const card = await env.WP_OS_DB.prepare("SELECT id, state, held_reason, held_at, owner_id, requested_by_email, firm_scope FROM work_card WHERE id = ?1").bind(cardId).first<{ id: string; state: string; held_reason: string | null; held_at: string | null; owner_id: string | null; requested_by_email: string | null; firm_scope: string }>();
+  const card = await env.WP_OS_DB.prepare("SELECT id, kind, state, held_reason, held_at, owner_id, requested_by_email, firm_scope, block_reason FROM work_card WHERE id = ?1").bind(cardId).first<{ id: string; kind: string | null; state: string; held_reason: string | null; held_at: string | null; owner_id: string | null; requested_by_email: string | null; firm_scope: string; block_reason: string | null }>();
   if (!card) return { ok: false, status: 404, error: "not_found", detail: "no such card" };
   if (!isTakenOver(card.held_reason)) return { ok: false, status: 409, error: "not_taken_over", detail: "this card is not taken over, so there is nothing to hand back" };
   const now = (input.now ?? new Date()).toISOString();
@@ -316,20 +316,33 @@ export async function handBackCard(env: Env, cardId: string, input: { note: stri
   ).bind(card.id, card.held_at ?? "").first<{ n: number }>())?.n ?? 0;
   const close = input.allDone && Number(during) === 0;
   const noteId = `wcn_${crypto.randomUUID()}`;
-  await env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)")
-    .bind(noteId, card.id, input.by.partner.firmUserId, words, card.firm_scope)
-    .run();
-  // Closed: the note is read and answered by the close itself, so no later run takes it up again.
-  if (close) await env.WP_OS_DB.prepare("UPDATE work_card_note SET acknowledged_at = ?2, response = ?3 WHERE id = ?1").bind(noteId, now, "Every ask was done by hand; the card is closed and waits for the partner.").run();
   const partner = (card.requested_by_email ?? "").split("@")[0] || "the partner";
-  const nextAction = close ? `Every ask was done by hand; waiting for ${partner.charAt(0).toUpperCase()}${partner.slice(1)}'s next instruction.` : `Start from the developer's note: ${words.slice(0, 300)}`;
-  await env.WP_OS_DB.prepare(
-    `UPDATE work_card SET state = ?2, held_reason = NULL, held_by = NULL, held_at = NULL, work_attempts = 0, work_steps = 0, lease_until = NULL,
-            block_nag_at = NULL, next_action = ?3, description = substr(COALESCE(description, '') || char(10) || '• ' || ?4, 1, 16000), updated_at = ?5
-      WHERE id = ?1`,
-  ).bind(card.id, close ? "DONE" : "OPEN", nextAction, `Handed back by ${input.by.label}: ${words}`, now).run();
-  await appendEvent(env, { eventType: "work_card.handed_back_by_developer", actorType: "firm_user", actorId: input.by.partner.firmUserId, objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { by: input.by.label, entered_by: input.enteredBy, note: words, finished_at: finished, all_done: input.allDone, replies_during: Number(during), closed: close, at: now } });
-  return { ok: true, card_id: card.id, state: close ? "DONE" : "OPEN", detail: words };
+  const Partner = `${partner.charAt(0).toUpperCase()}${partner.slice(1)}`;
+  // A website job is never DONE without a merged PR (trigger 0219), and a partner's "nothing goes live"
+  // hold forbids that merge (14 Nov 2026: the hand-back for wc_c548d043 hit the trigger with a 500).
+  // So "every ask done" on a website job hands it back WAITING on the partner's word on the preview:
+  // its block stays, any earlier answer is cleared so nothing rebuilds, and the card is not DONE.
+  const waitOnPartner = close && card.kind === WEB_PROPERTY_CHANGE_KIND;
+  const nextAction = waitOnPartner
+    ? `Every ask was done by hand; the preview waits for ${Partner}'s word. Start from his next reply.`
+    : close ? `Every ask was done by hand; waiting for ${Partner}'s next instruction.` : `Start from the developer's note: ${words.slice(0, 300)}`;
+  const state = waitOnPartner ? (card.state === "DONE" ? "IN_PROGRESS" : card.state) : close ? "DONE" : "OPEN";
+  const stmts = [
+    env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)")
+      .bind(noteId, card.id, input.by.partner.firmUserId, words, card.firm_scope),
+    env.WP_OS_DB.prepare(
+      `UPDATE work_card SET state = ?2, held_reason = NULL, held_by = NULL, held_at = NULL, work_attempts = 0, work_steps = 0, lease_until = NULL,
+              block_nag_at = NULL, next_action = ?3, description = substr(COALESCE(description, '') || char(10) || '• ' || ?4, 1, 16000), updated_at = ?5
+        WHERE id = ?1`,
+    ).bind(card.id, state, nextAction, `Handed back by ${input.by.label}: ${words}`, now),
+  ];
+  // Closed: the note is read and answered by the close itself, so no later run takes it up again.
+  if (close) stmts.push(env.WP_OS_DB.prepare("UPDATE work_card_note SET acknowledged_at = ?2, response = ?3 WHERE id = ?1").bind(noteId, now, waitOnPartner ? `Every ask was done by hand; the preview waits for ${Partner}'s word.` : "Every ask was done by hand; the card is closed and waits for the partner."));
+  if (waitOnPartner) stmts.push(env.WP_OS_DB.prepare("UPDATE work_card SET block_answer = NULL, block_answered_by = NULL, block_answered_at = NULL WHERE id = ?1").bind(card.id));
+  // One batch: a refused UPDATE leaves no orphan note behind.
+  await env.WP_OS_DB.batch(stmts);
+  await appendEvent(env, { eventType: "work_card.handed_back_by_developer", actorType: "firm_user", actorId: input.by.partner.firmUserId, objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { by: input.by.label, entered_by: input.enteredBy, note: words, finished_at: finished, all_done: input.allDone, replies_during: Number(during), closed: close && !waitOnPartner, waiting_on_partner: waitOnPartner, at: now } });
+  return { ok: true, card_id: card.id, state, detail: words };
 }
 
 /** POST /api/work-cards/:id/developer-takeover { why } and /developer-hand-back { note, all_done, finished_at? } — the tail door, the Mac's identity only. */
