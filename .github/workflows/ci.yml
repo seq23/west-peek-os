@@ -82,7 +82,7 @@ jobs:
         run: npm run typecheck
 
   tests:
-    name: Unit and integration tests (shard ${{ matrix.shard }}/8)
+    name: Unit and integration tests (shard ${{ matrix.shard }}/10)
     runs-on: ubuntu-latest
     # Normal: ~4–5 minutes a shard (16m00s serial on run 35671568021, split four ways, plus install).
     timeout-minutes: 10
@@ -91,7 +91,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
     steps:
       - name: Checkout
@@ -114,13 +114,14 @@ jobs:
       # the median); `validate:shards` in the validators job fails unless every test file is in
       # exactly one shard. `--no-file-parallelism` keeps each shard serial inside, because every
       # file boots its own Miniflare on its own port and past ~8 in flight the runner runs out of
-      # ephemeral ports (vitest.config.ts). Eight shards, one runner each: the parallelism is
+      # ephemeral ports (vitest.config.ts). Ten shards, one runner each: the parallelism is
       # between jobs, never inside one.
       #
-      # EIGHT, AND THE MAP KEEPS ITSELF HONEST (15 Nov 2026). Four shards had grown to 6–11.5 min
+      # TEN, AND THE MAP KEEPS ITSELF HONEST (15 Nov 2026; eight that day, ten once a slow runner put
+      # one eight-way shard at 6m18s). Four shards had grown to 6–11.5 min
       # (run 43748547909): ~300 files and ~30 min of serial test time, a timings map 115 files
-      # behind, and webPropertyChange.test.ts at 311s against a recorded 61s. Eight shards at
-      # ~4 min, and every shard ends with `--drift`, which puts a warning on the run the moment
+      # behind, and webPropertyChange.test.ts at 311s against a recorded 61s. Ten shards at
+      # ~3.5 min, and every shard ends with `--drift`, which puts a warning on the run the moment
       # what it measured is off what timings.json projected; `npm run timings:refresh` rebuilds
       # the map from the latest green main run.
       #
@@ -139,8 +140,8 @@ jobs:
         run: |
           set -uo pipefail
           log="$RUNNER_TEMP/vitest-shard-${{ matrix.shard }}.log"
-          files="$(node scripts/ci/shard-tests.mjs --shard ${{ matrix.shard }}/8)"
-          [ -n "$files" ] || { echo "::error::shard ${{ matrix.shard }}/8 planned no files — Rule 0"; exit 1; }
+          files="$(node scripts/ci/shard-tests.mjs --shard ${{ matrix.shard }}/10)"
+          [ -n "$files" ] || { echo "::error::shard ${{ matrix.shard }}/10 planned no files — Rule 0"; exit 1; }
           # The plan is one path per line and each line is one argument, so it is deliberately unquoted.
           # shellcheck disable=SC2086
           npx vitest run --no-file-parallelism $files 2>&1 | tee "$log"
@@ -148,11 +149,11 @@ jobs:
           [ "$rc" -eq 0 ] || exit "$rc"
           files="$(sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -oE 'Test Files +[0-9]+ passed' | grep -oE '[0-9]+' | head -1)"
           if [ -z "$files" ] || [ "$files" -lt 1 ]; then
-            echo "::error::shard ${{ matrix.shard }}/8 exited 0 having run no test file — Rule 0, this is a failure"
+            echo "::error::shard ${{ matrix.shard }}/10 exited 0 having run no test file — Rule 0, this is a failure"
             exit 1
           fi
-          echo "shard ${{ matrix.shard }}/8: $files test file(s) passed"
-          node scripts/ci/shard-tests.mjs --drift ${{ matrix.shard }}/8 "$log" || true
+          echo "shard ${{ matrix.shard }}/10: $files test file(s) passed"
+          node scripts/ci/shard-tests.mjs --drift ${{ matrix.shard }}/10 "$log" || true
 
   validators:
     name: Boundary validators and client build
