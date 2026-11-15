@@ -1129,7 +1129,14 @@ export async function standingSteer(
       .bind(cardKind, firmScope, limit)
       .all<{ body: string; said_by: string; created_at: string }>()
   ).results ?? [];
+  /*
+   * THE SAME REPLY ONCE (14 Nov 2026, wc_bd8b68cb). One reply of Scooter's was filed four times (re-delivered mail), and
+   * each copy rode to the interpreter: a third of a 12,700-character prompt was repeats, and the seat that reads it ran
+   * past the router's wait three times in a row. The newest copy of each body is kept.
+   */
+  const seen = new Set<string>();
   return rows
+    .filter((r) => { const k = r.body.trim(); if (seen.has(k)) return false; seen.add(k); return true; })
     .reverse()
     .map((r) => ({
       source: "NOTE" as const,
