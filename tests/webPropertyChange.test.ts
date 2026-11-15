@@ -15,7 +15,7 @@ import { workCard } from "../src/worker/services/employeeWork";
 import { sweepIdentity } from "../src/worker/services/workSweep";
 import { preApprovalIn } from "../src/shared/work/approvalReply";
 import { readLocalJobReport, WEB_PROPERTY_CHANGE_KIND } from "../src/shared/work/localJobs";
-import { blockedEmailDetail, finishOriginalAsk, missingSecretsOf, needsPreview, parkPhase, phaseModel, readWebPropertyChange, rulesFor, runWebPropertyChangeCard, type WebPropertyChangeRow } from "../src/worker/services/webPropertyChange";
+import { KEPT_FOR_NEXT_BUILD, blockedEmailDetail, finishOriginalAsk, missingSecretsOf, needsPreview, parkPhase, phaseModel, readWebPropertyChange, rulesFor, runWebPropertyChangeCard, type WebPropertyChangeRow } from "../src/worker/services/webPropertyChange";
 import { steerFromReply } from "../src/worker/services/emailThread";
 import { threadReference } from "../src/shared/email/thread";
 import { handleDeveloperChanges, handleDeveloperEmail } from "../src/worker/services/developerDirection";
@@ -2520,6 +2520,39 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     expect((await tickFor(p.id)).summary).toMatch(/LAND queued/);
     row = (await readWebPropertyChange(env, p.id))!;
     expect(row.land_approved_at).toBeTruthy();
+  });
+
+  it("PREVIEW: a change said while the rebuild is on the Mac is kept, and the finished build rebuilds for it with the first round; one preview carries both (15 Nov 2026, wc_c548d043)", async () => {
+    const p = await atPreview("preview kept");
+    const previews = async () => (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PREVIEW' AND sent = 1").bind(p.id).first<{ n: number }>())!.n;
+    const before = await previews();
+    await replyFrom(SCOOTER, "Please make the inquiry email easier to read on a phone", await p.token());
+    expect((await tickFor(p.id)).summary).toMatch(/Changes after the preview; BUILD queued/);
+    const first = (await liveJobFor(p.id))!;
+    // His second reply lands while that build is on the Mac.
+    await replyFrom(SCOOTER, "Please make the dashboard lists clearer, no side links", await p.token());
+    await tickFor(p.id);
+    const note = await env.WP_OS_DB.prepare("SELECT acknowledged_at, response FROM work_card_note WHERE work_card_id = ?1 AND body LIKE '%no side links%'").bind(p.id).first<{ acknowledged_at: string | null; response: string | null }>();
+    expect(note?.acknowledged_at, "read, so the sweep does not spin on it").toBeTruthy();
+    expect(note?.response, "kept for the next build, never 'rebuilding' and dropped").toBe(KEPT_FOR_NEXT_BUILD);
+    expect((await liveJobFor(p.id))!.id, "the build on the Mac is left to finish").toBe(first.id);
+    // The first round's build comes back green: it does NOT mail a preview that leaves his second reply out.
+    const row = (await readWebPropertyChange(env, p.id))!;
+    await macReports(p.id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: row.pr_url, pr_number: 9, changed: true, head_sha: "kept-1", check_state: "GREEN", preview_url: "https://p9k.west-peek-ventures.pages.dev" });
+    const after = await tickFor(p.id);
+    expect(after.outcome, after.summary).not.toBe("BLOCKED");
+    expect(after.summary).toMatch(/Changes after the preview; BUILD queued/);
+    expect(await previews(), "no preview that leaves out his second reply").toBe(before);
+    const job = JSON.parse((await liveJobFor(p.id))!.job_json!) as LocalJobPayload;
+    expect(job.rebuild!.changes, "the second reply is this build's job").toMatch(/no side links/);
+    expect(job.rebuild!.changes, "and the first round, never previewed, is still in it").toMatch(/inquiry email/);
+    // That build goes green: exactly one fresh preview, and it names both rounds.
+    await macReports(p.id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: row.pr_url, pr_number: 9, changed: true, head_sha: "kept-2", check_state: "GREEN", preview_url: "https://p9k.west-peek-ventures.pages.dev" });
+    expect((await tickFor(p.id)).outcome).toBe("BLOCKED");
+    expect(await previews()).toBe(before + 1);
+    const said = String((await card(p.id)).block_needed);
+    expect(said).toMatch(/inquiry email/);
+    expect(said).toMatch(/no side links/);
   });
 
   it("PREVIEW: a remark about the site is a change to make — the rebuild carries it as THE job; a build that moved nothing is a failed attempt, never the same preview twice (28 Sep 2026)", async () => {
