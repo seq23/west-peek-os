@@ -247,3 +247,27 @@ describe("the Mac fallback with usage out", () => {
     expect(desk!.body).toContain("usage is spent");
   });
 });
+
+describe("holds are constraints; his open questions are a list of their own", () => {
+  it("a question-shaped line lands in questions, never in holds, whether the reader calls it a HOLD or the OS reads it", async () => {
+    const written = [
+      "Don't delete or change those tracker rows.",
+      "Whether to keep a separate livestream rate card is still open.",
+      "I'm also questioning whether we need the Scale field.",
+      "Is a Lead anything that came in?",
+    ].join("\n");
+    const said = [
+      "ASK: Don't delete or change those tracker rows.",
+      "HOLD: Don't delete or change those tracker rows.",
+      "HOLD: Whether to keep a separate livestream rate card is still open.",
+      "HOLD: I'm also questioning whether we need the Scale field.",
+      "QUESTION: Is a Lead anything that came in?",
+    ].join("\n");
+    const read = await understand(env, { subject: "q", written, read: [readerSaying("CLAUDE", said)], employeeId: null, firmScope: "west-peek" });
+    expect(read.brief.holds).toEqual(["Don't delete or change those tracker rows."]);
+    expect(read.brief.questions).toEqual(["Whether to keep a separate livestream rate card is still open.", "I'm also questioning whether we need the Scale field.", "Is a Lead anything that came in?"]);
+    const os = await understand(env, { subject: "q", written, read: allOut, employeeId: null, firmScope: "west-peek" });
+    expect(os.brief.holds, "the OS's own read: no question is a hold").not.toContain("Is a Lead anything that came in?");
+    expect(os.brief.questions).toEqual(["Whether to keep a separate livestream rate card is still open.", "I'm also questioning whether we need the Scale field.", "Is a Lead anything that came in?"]);
+  });
+});
