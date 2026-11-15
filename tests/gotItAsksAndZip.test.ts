@@ -204,7 +204,8 @@ describe("a ZIP is its files", () => {
     await storeAttachments(env, { cardId: card, raw: mimeWithZip("Logos attached."), emlKey: "inbound-email/2026-11-15/zip.eml", firmScope: "west-peek", source: "REPLY" });
     expect(Number((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM request_attachment WHERE work_card_id = ?1").bind(card).first<{ n: number }>())!.n)).toBe(3);
     const email = gotItEmail({ employee: "Porter", subject: "site", asks: ["Use the logos."], next: "On it.", unopened: [], filed: kept.stored });
-    expect(email.sections.find((s) => s.label === "Files on the card")!.bullets).toEqual(kept.stored);
+    expect(email.sections.find((s) => s.label === "Files on the card")!.bullets).toEqual(["assets.zip (2 files inside)"]);
+    expect(email.details).toContain("**Inside assets.zip**\n• logos/wp-productions.png\n• brand/colors.txt");
   });
 
   it("past the caps, the files not taken are named with the reason", async () => {
@@ -290,5 +291,29 @@ describe("a long Got it keeps every ask and every file", () => {
     // A short one has no Details at all.
     const short = renderExecEmail(gotItEmail({ employee: "Porter", subject: "site", asks: ["One ask."], next: "On it.", unopened: [], filed: ["a.png"] }));
     expect(short.text).not.toContain("— Details —");
+  });
+});
+
+describe("files on the Got it read as he sent them", () => {
+  it("shows a ZIP as one line with its count, loose files first, and names what is inside only under Details", async () => {
+    const { renderExecEmail } = await import("../src/shared/email/execEmail");
+    const zip = "client logos.zip";
+    const inside = "abcdefghijklmnopqrst".split("").map((c) => `${zip}/Logos/logo-${c.repeat(2)}.png`);
+    const filed = [zip, ...inside, "mark.jpg", "headshot.png"];
+    const r = renderExecEmail(gotItEmail({ employee: "Porter", subject: "site", asks: ["Use the logos."], next: "On it.", unopened: [], filed }));
+    const [top, details] = r.text.split("— Details —");
+    const files = top!.slice(top!.indexOf("**Files on the card**")).split("\n\n")[0]!.split("\n").slice(1);
+    expect(files).toEqual(["• mark.jpg", "• headshot.png", `• ${zip} (**20** files inside)`]);
+    expect(top).not.toContain("logo-aa.png");
+    for (const f of inside) expect(details).toContain(f.slice(zip.length + 1));
+  });
+
+  it("names a voice note once, as heard, never also as a plain file", async () => {
+    const { renderExecEmail } = await import("../src/shared/email/execEmail");
+    const heard = "walkthrough.m4a: heard and transcribed (1059 words)";
+    const r = renderExecEmail(gotItEmail({ employee: "Porter", subject: "site", asks: ["Rename it."], next: "On it.", unopened: [], filed: ["walkthrough.m4a"], noted: ["An idea for later.", heard] }));
+    expect(r.text.split("walkthrough.m4a").length - 1).toBe(1);
+    expect(r.text).toContain("• walkthrough.m4a: heard and transcribed (**1059** words)");
+    expect(r.text).toContain('"An idea for later."');
   });
 });

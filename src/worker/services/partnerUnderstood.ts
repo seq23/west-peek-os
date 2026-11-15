@@ -161,7 +161,7 @@ export async function understand(
   const typed = blocks[0]!.startsWith("Voice note (") ? "" : blocks[0]!;
   const heard = blocks.filter((b) => b.startsWith("Voice note (")).map((b) => {
     const m = /^Voice note \((.+?)\), his words transcribed:\s*([\s\S]*)$/.exec(b);
-    return m ? `${m[1]}: heard and transcribed onto the card (${m[2]!.split(/\s+/).filter(Boolean).length} words)` : null;
+    return m ? `${m[1]}: heard and transcribed (${m[2]!.split(/\s+/).filter(Boolean).length} words)` : null;
   }).filter((x): x is string => Boolean(x));
   const structured = typed ? structuredAsks(typed) : null;
   if (structured) return { none: false, asks: structured.asks, noted: [...structured.noted, ...heard], next: ON_IT, via: "STRUCTURE", runId: null };
@@ -409,7 +409,20 @@ export function gotItNext(heldReason: string | null | undefined, next: string): 
 export function gotItEmail(input: { employee: string; subject: string; asks: readonly string[]; next: string; unopened: ReadonlyArray<{ filename: string; reason: string }>; noted?: readonly string[]; filed?: readonly string[] }) {
   const { asks, next, unopened } = input;
   const filed = input.filed ?? [];
-  const noted = input.noted ?? [];
+  // A voice note is named once, by what was heard ("<file>: heard and transcribed (N words)"), never also as a plain file.
+  const HEARD = /^(.+): heard and transcribed \(/;
+  const heard = (input.noted ?? []).filter((n) => HEARD.test(n));
+  const noted = (input.noted ?? []).filter((n) => !HEARD.test(n));
+  const heardName = new Map(heard.map((h) => [HEARD.exec(h)![1]!, h]));
+  // A ZIP is one line ("x.zip (20 files inside)"); its files are named under Details. Loose files come first.
+  const zips = filed.filter((f) => /\.zip$/i.test(f));
+  const inside = (z: string) => filed.filter((f) => f.startsWith(`${z}/`)).map((f) => f.slice(z.length + 1));
+  const loose = filed.filter((f) => !zips.includes(f) && !zips.some((z) => f.startsWith(`${z}/`)));
+  const fileLines = [
+    ...loose.map((f) => heardName.get(f) ?? f),
+    ...heard.filter((h) => !loose.includes(HEARD.exec(h)![1]!)),
+    ...zips.map((z) => { const n = inside(z).length; return n ? `${z} (${n} file${n === 1 ? "" : "s"} inside)` : z; }),
+  ];
   const quoted = (a: string) => {
     for (const lead of [QUESTIONS_LEAD, QUESTIONS_PLAIN]) if (a.startsWith(lead)) return `${lead}"${a.slice(lead.length)}"`;
     return `"${a}"`;
@@ -417,11 +430,11 @@ export function gotItEmail(input: { employee: string; subject: string; asks: rea
   const sections = [
     { label: "What you asked", bullets: asks.map(quoted) },
     // Every file of his now on the card, by name (a ZIP's files each named), so he can see nothing was lost.
-    ...(filed.length ? [{ label: "Files on the card", bullets: [...filed] }] : []),
+    ...(fileLines.length ? [{ label: "Files on the card", bullets: fileLines }] : []),
     // Read first, then answered: every file of his that could not be opened is named, never skipped in silence.
     ...(unopened.length ? [{ label: "What I could not open", bullets: unopened.map((f) => `${f.filename}: ${f.reason}`) }] : []),
     // What he said that is not an ask (an idea for later, a process note) is shown as kept, never dropped.
-    ...(noted.length ? [{ label: "Also noted", bullets: noted.map((n) => (/: heard and transcribed onto the card \(/.test(n) ? n : `"${n}"`)) }] : []),
+    ...(noted.length ? [{ label: "Also noted", bullets: noted.map((n) => `"${n}"`) }] : []),
     { label: "What happens next", bullets: [next, "Reply to this email to change anything; I read it before I go on."] },
   ];
   // The renderer shows SECTION_MAX_LINES - 1 lines of a longer section and points at "Details below": the rest of every
@@ -429,6 +442,7 @@ export function gotItEmail(input: { employee: string; subject: string; asks: rea
   const rest = sections
     .filter((s) => s.bullets.length > SECTION_MAX_LINES)
     .map((s) => [`**${s.label}, continued**`, ...s.bullets.slice(SECTION_MAX_LINES - 1).map((b) => `• ${b}`)].join("\n"));
+  for (const z of zips) if (inside(z).length) rest.push([`**Inside ${z}**`, ...inside(z).map((f) => `• ${f}`)].join("\n"));
   return {
     employee: input.employee,
     what: `got it — ${input.subject.slice(0, 80)}`,
