@@ -815,7 +815,7 @@ export async function parkPhase(
 
   const parts = await readParts(env, card.id);
   // One run covers every repo; BUILD and LAND work them one after another, so the ceiling scales.
-  const maxSeconds = spec.phases[phase].maxSeconds * (phase === "PLAN" ? 1 : Math.max(1, parts.length));
+  const maxSeconds = spec.phases[phase]!.maxSeconds * (phase === "PLAN" ? 1 : Math.max(1, parts.length));
   // 0253: the registry names the repo's GitHub home and the secret NAMES the duty may inject.
   const registry = await loadRegistry(env);
   const entry = await registryEntryFor(env, row.target_repo);
@@ -924,7 +924,7 @@ export async function parkPhase(
     runId = await parkRun(env, {
       seat: "claude_code",
       purpose: `${PORTER_NAME}: ${phase} — ${card.title.slice(0, 80)}`,
-      prompt: `${spec.phases[phase].purpose} See job_json.`,
+      prompt: `${spec.phases[phase]!.purpose} See job_json.`,
       modelAccess: "PUBLIC_MODEL_APPROVED",
       workCardId: card.id,
       aiEmployeeId: PORTER_ID,
@@ -940,7 +940,7 @@ export async function parkPhase(
   }
   await update(env, card.id, { current_run_id: runId, phase });
   await env.WP_OS_DB.prepare("UPDATE work_card SET next_action = ?2, waiting_until = NULL, waiting_for = NULL WHERE id = ?1")
-    .bind(card.id, `${phase} is queued for the Mac (${payload.model}). ${spec.phases[phase].purpose}`.slice(0, 900))
+    .bind(card.id, `${phase} is queued for the Mac (${payload.model}). ${spec.phases[phase]!.purpose}`.slice(0, 900))
     .run();
   await appendEvent(env, {
     eventType: "web_property_change.phase_queued",

@@ -25,7 +25,7 @@ function isProductionsKind(kind: string | null | undefined): boolean {
 }
 import { replyToRequester } from "./requestReply";
 import { PRODUCTIONS_PARTNER } from "../../shared/registry/partners";
-import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
+import { PARTNER_SESSION_KIND, WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
 import { isTechnicalBlock } from "../../shared/work/blocks";
 
 /**
@@ -692,6 +692,7 @@ export async function sweepOnce(
     artifact?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     partnerMessage?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     webPropertyChange?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; held?: boolean; waitUntil?: string; autoResolved?: boolean; questionAnswered?: boolean; detail: string }>;
+    partnerSession?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; held?: boolean; waitUntil?: string; detail: string }>;
   } = {},
   options: { leaseRenewMs?: number } = {},
 ): Promise<SweepResult> {
@@ -809,6 +810,17 @@ export async function sweepOnce(
       waitUntil = out.waitUntil ?? null;
       autoResolved = out.autoResolved === true;
       questionAnswered = out.questionAnswered === true;
+      detail = out.detail;
+    } else if (card.kind === PARTNER_SESSION_KIND) {
+      // A partner's email worked as ONE session on the Mac (14 Nov 2026): a LOCAL_JOB run kept alive by the claimer's
+      // ping, never a router call with a deadline. Held while the Mac has it; see services/partnerSession.ts.
+      const run = runners.partnerSession ?? (await import("./partnerSession")).runPartnerSessionCard;
+      const out = await run(env, card);
+      finished = out.finished;
+      blocked = out.blocked;
+      progressed = out.progressed;
+      held = out.held === true;
+      waitUntil = out.waitUntil ?? null;
       detail = out.detail;
     } else if (card.kind === "PARTNER_MESSAGE") {
       // One named employee tells one named partner something short, composed and filed through

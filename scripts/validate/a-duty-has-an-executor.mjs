@@ -262,7 +262,8 @@ function selfTest() {
   const real = check(files);
   say(real.violations.length === 0 && real.kinds > 0 && real.scripts > 0, `shipped tree passes (${real.kinds} kind(s), ${real.scripts} script(s)): ${real.violations.join("; ")}`);
 
-  const scriptRel = Object.keys(files.dutyScripts)[0];
+  // The planted defects are written against the site job's script (its spawn order is known); every kind is checked above.
+  const scriptRel = files.dutyScripts["scripts/duties/web-property-change.mjs"] ? "scripts/duties/web-property-change.mjs" : Object.keys(files.dutyScripts)[0];
   const missingScript = check({ ...files, registry: files.registry.replace(scriptRel, "scripts/duties/nope.mjs") });
   say(missingScript.violations.some((v) => /does not exist under scripts\/duties/.test(v)), "a registry kind whose script is missing is caught");
 
@@ -275,9 +276,12 @@ function selfTest() {
   const noDispatch = check({ ...files, sweep: files.sweep.replace(/card\.kind === WEB_PROPERTY_CHANGE_KIND/g, "card.kind === 'SOMETHING_ELSE'") });
   say(noDispatch.violations.some((v) => /never dispatches card\.kind === WEB_PROPERTY_CHANGE/.test(v)), "a sweep that no longer dispatches the kind is caught");
 
-  const promptRel = Object.keys(files.promptFiles)[0];
+  const promptRel = "scripts/duties/web-property-change-prompt.md";
   const noPhase = check({ ...files, promptFiles: { ...files.promptFiles, [promptRel]: files.promptFiles[promptRel].replace("## Phase LAND", "## Landing") } });
   say(noPhase.violations.some((v) => /no "## Phase LAND" section/.test(v)), "a prompt file missing a declared phase is caught");
+  const sessionPrompt = "scripts/duties/partner-session-prompt.md";
+  const noSession = files.promptFiles[sessionPrompt] ? check({ ...files, promptFiles: { ...files.promptFiles, [sessionPrompt]: files.promptFiles[sessionPrompt].replace("## Phase SESSION", "## Session") } }) : null;
+  say(noSession !== null && noSession.violations.some((v) => /no "## Phase SESSION" section/.test(v)), "a partner session prompt missing its SESSION phase is caught");
 
   const noAttachments = check({ ...files, dutyScripts: { ...files.dutyScripts, [scriptRel]: { ...files.dutyScripts[scriptRel], stripped: files.dutyScripts[scriptRel].stripped.replace(/ATTACHMENTS:/g, "FILES:") } } });
   say(noAttachments.violations.some((v) => /does not render ATTACHMENTS:/.test(v)), "a duty script that drops ATTACHMENTS: from the context is caught");

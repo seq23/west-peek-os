@@ -1426,6 +1426,17 @@ async function routeByPlainWords(
     }
   }
   await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || '• Read as ' || ?2 || '.', 1, 16000) WHERE id = ?1").bind(card.id, reading).run();
+  /*
+   * NO DEAD END ON THE CHIEF'S DESK (14 Nov 2026, "emailing the OS feels like typing to Claude"). What no door claimed
+   * (a question, several asks at once, unclear words, a reader that could not run) used to wait for the chief's general
+   * step loop. It is worked as ONE session on the Mac instead, on this same card, with his words as the brief: every
+   * clear ask done, the unclear words asked about with options (services/partnerSession.ts). Only "nothing to do" stays
+   * as it was: a thank-you is not a session.
+   */
+  if (!(read.source === "MODEL" && read.nothing)) {
+    const { openPartnerSession } = await import("./partnerSession");
+    await openPartnerSession(env, { cardId: card.id, request: `${strippedSubject(input.subject)}\n\n${written}`.trim(), requestedBy: input.partnerAddress, firmScope: FIRM_SCOPE });
+  }
 }
 
 /** Convenience for the manual door, so its handler reads the same as the other three. */

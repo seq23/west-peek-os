@@ -30,6 +30,12 @@ export const LOCAL_JOB_RUN_KIND = "LOCAL_JOB" as const;
 /** The phases of a web property change, in order. */
 export const WEB_PROPERTY_CHANGE_PHASES = ["PLAN", "BUILD", "LAND"] as const;
 export type WebPropertyChangePhase = (typeof WEB_PROPERTY_CHANGE_PHASES)[number];
+/**
+ * A PARTNER SESSION HAS ONE PHASE (14 Nov 2026, "emailing the OS feels like typing to Claude"): the whole email is
+ * worked in one full session on the Mac, the way a person would work it with Claude Code. No plan/build/land split.
+ */
+export const PARTNER_SESSION_PHASE = "SESSION" as const;
+export type LocalJobPhase = WebPropertyChangePhase | typeof PARTNER_SESSION_PHASE;
 
 /** A model alias the `claude` CLI accepts on `--model`. Kept as aliases so the CLI resolves the current version. */
 export type ClaudeModelAlias = "opus" | "sonnet" | "haiku";
@@ -58,7 +64,8 @@ export interface LocalJobKindSpec {
   script: string;
   /** Repo-relative path of the prompt file the script hands to `claude -p`. */
   promptFile: string;
-  phases: Readonly<Record<WebPropertyChangePhase, PhaseSpec>>;
+  /** Each kind names its own phases; a web property change has PLAN, BUILD and LAND, a partner session has SESSION. */
+  phases: Readonly<Partial<Record<LocalJobPhase, PhaseSpec>>>;
   /**
    * How long a QUEUED job may wait for a machine before the card is blocked naming the lane. The
    * Mac sleeps; a card is not a run. Twelve hours: a job queued at night is picked up in the
@@ -68,6 +75,14 @@ export interface LocalJobKindSpec {
 }
 
 export const WEB_PROPERTY_CHANGE_KIND = "WEB_PROPERTY_CHANGE" as const;
+/**
+ * A PARTNER'S EMAIL WORKED AS ONE SESSION (14 Nov 2026). An email no fixed door claims (not a relay, not a named site
+ * or repo, not a build, not a named employee) used to sit on the chief of staff's desk for the general loop, a fixed
+ * step machine under the router's stopwatch. It now runs as a full Claude Code session on the Mac (Claude, then Codex
+ * checked by Claude; private work waits for Claude; never a free lane), with no per-call deadline: the claimer's
+ * one-minute ping keeps it alive under the phase ceiling. See services/partnerSession.ts.
+ */
+export const PARTNER_SESSION_KIND = "PARTNER_SESSION" as const;
 
 /**
  * THE STANDING RULES WHOSE VALUE IS A SWITCH — one list, read by the Work page (which renders a
@@ -89,6 +104,15 @@ export const LOCAL_JOB_KINDS: readonly LocalJobKindSpec[] = [
       PLAN: { model: CLAUDE_SEAT_START, maxSeconds: 40 * 60, purpose: "Pull the package, read the RUNBOOK, write the plan: decided and ask." },
       BUILD: { model: CLAUDE_SEAT_START, maxSeconds: 90 * 60, purpose: "Build it in a worktree, prove it with the repo's validators and screenshots, open the PR." },
       LAND: { model: CLAUDE_SEAT_START, maxSeconds: 40 * 60, purpose: "Land on green with ~/bin/land and prove it live with curl." },
+    },
+    queueMaxSeconds: 12 * 60 * 60,
+  },
+  {
+    kind: PARTNER_SESSION_KIND,
+    script: "scripts/duties/partner-session.mjs",
+    promptFile: "scripts/duties/partner-session-prompt.md",
+    phases: {
+      SESSION: { model: CLAUDE_SEAT_START, maxSeconds: 2 * 60 * 60, purpose: "Work the partner's email as one session: do every clear ask, ask about the unclear words with options, report each ask." },
     },
     queueMaxSeconds: 12 * 60 * 60,
   },
@@ -504,4 +528,85 @@ function readPartReports(v: unknown[]): LocalJobPartReport[] {
     });
   }
   return out;
+}
+
+// ── A partner session's report (14 Nov 2026) ─────────────────────────────────────────────────────
+
+/** Where one ask of the partner's email stands after a session. */
+export type SessionAskStatus = "DONE" | "IN_PROGRESS" | "QUESTION" | "NOT_DONE";
+export const SESSION_ASK_STATUSES: readonly SessionAskStatus[] = ["DONE", "IN_PROGRESS", "QUESTION", "NOT_DONE"];
+
+export interface SessionAsk {
+  /** The ask in the partner's own words. For a QUESTION, the exact words that are unclear. */
+  words: string;
+  status: SessionAskStatus;
+  /** What was done, what is still running, why it was not done, or what is unclear about the words. */
+  why: string;
+  /** A QUESTION's likely readings, two or three, each one the partner could answer with. */
+  options: string[];
+}
+
+export interface PartnerSessionReport {
+  phase: typeof PARTNER_SESSION_PHASE;
+  status: "ok" | "failed";
+  reason?: string;
+  /** One entry per ask in the email, none dropped. */
+  asks: SessionAsk[];
+  /** The answer to the partner, in plain words, for the final email. */
+  reply?: string;
+  /** "Remember …" lines the session wants kept on the partner's profile; filtered by the Worker before any is kept. */
+  remember: string[];
+  /** A spent plan is a wait: seconds until the earlier reset. */
+  waits_seconds?: number;
+}
+
+/**
+ * Read a session's report strictly. An ok report must account for at least one ask, and a QUESTION must name its
+ * unclear words and carry two or three options; anything else is a problem, never a guessed success (Rule 0).
+ */
+export function readPartnerSessionReport(text: string | null | undefined): { report: PartnerSessionReport | null; problem: string | null } {
+  if (!text || !text.trim()) return { report: null, problem: "the Mac reported nothing" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    const m = text.match(/\{[\s\S]*\}\s*$/);
+    try {
+      parsed = m ? JSON.parse(m[0]) : null;
+    } catch {
+      parsed = null;
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return { report: null, problem: "the report was not JSON" };
+  const r = parsed as Record<string, unknown>;
+  if (r.phase !== PARTNER_SESSION_PHASE) return { report: null, problem: `the report names no SESSION phase (got "${String(r.phase ?? "")}")` };
+  const status = r.status === "ok" || r.status === "failed" ? r.status : null;
+  if (!status) return { report: null, problem: `the report has no status (got "${String(r.status ?? "")}")` };
+  const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+  const asks: SessionAsk[] = (Array.isArray(r.asks) ? r.asks : []).slice(0, 40).map((raw) => {
+    const a = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    const st = String(a.status ?? "").toUpperCase();
+    return {
+      words: str(a.words, 600),
+      status: (SESSION_ASK_STATUSES as readonly string[]).includes(st) ? (st as SessionAskStatus) : "NOT_DONE",
+      why: str(a.why, 900),
+      options: (Array.isArray(a.options) ? a.options : []).map((o) => str(o, 300)).filter(Boolean).slice(0, 3),
+    };
+  });
+  const report: PartnerSessionReport = {
+    phase: PARTNER_SESSION_PHASE,
+    status,
+    ...(str(r.reason, 900) ? { reason: str(r.reason, 900) } : {}),
+    asks,
+    ...(str(r.reply, 12000) ? { reply: str(r.reply, 12000) } : {}),
+    remember: (Array.isArray(r.remember) ? r.remember : []).map((x) => str(x, 600)).filter(Boolean).slice(0, 10),
+    ...(typeof r.waits_seconds === "number" && Number.isFinite(r.waits_seconds) && r.waits_seconds >= 60 ? { waits_seconds: Math.min(Math.round(r.waits_seconds), 7 * 24 * 60 * 60) } : {}),
+  };
+  if (status === "failed") return report.reason ? { report, problem: null } : { report: null, problem: "a failed report must say why" };
+  if (asks.length === 0) return { report: null, problem: "an ok session report must account for every ask, and it named none" };
+  const bad = asks.find((a) => !a.words);
+  if (bad) return { report: null, problem: "an ask in the report has no words" };
+  const vague = asks.find((a) => a.status === "QUESTION" && a.options.length < 2);
+  if (vague) return { report: null, problem: `the question on "${vague.words.slice(0, 80)}" offers fewer than two options` };
+  return { report, problem: null };
 }
