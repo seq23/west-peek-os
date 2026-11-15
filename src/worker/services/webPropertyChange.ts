@@ -1219,7 +1219,16 @@ async function requestRebuild(env: Env, card: WebPropertyChangeCard, row: WebPro
     if (!directedBy) patch.answers_json = JSON.stringify([...list(row.answers_json), answer.slice(0, PARTNER_ANSWER_MAX)]);
     // 0244: THE WORDS THIS REBUILD IS FOR. A remark or a worry is a change to make; the Mac gets
     // them as the run's whole job, and a build that moves nothing for them is a failed attempt.
-    patch.rebuilt_for = answer.slice(0, PARTNER_ANSWER_MAX);
+    /*
+     * A SECOND ROUND BEFORE THE FIRST WAS PREVIEWED ADDS TO IT (15 Nov 2026, wc_c548d043): the words the last rebuild
+     * was for have not reached a preview yet, so they are still owed and stay in the job beside the new ones. A
+     * developer's instruction is never joined to a partner's words (rebuildWords tells them apart by exact text).
+     */
+    const owed =
+      !directedBy && row.rebuilt_for?.trim() && !row.rebuilt_for.startsWith(FINISH_ORIGINAL_ASK) && row.refresh_intent === "CHANGES" && row.refresh_requested_at && (!row.preview_emailed_at || row.refresh_requested_at > row.preview_emailed_at) && !row.rebuilt_for.includes(answer.trim()) && !(await rebuildWords(env, card.id, row)).developer
+        ? row.rebuilt_for.trim()
+        : null;
+    patch.rebuilt_for = (joinWords(owed, answer) ?? answer).slice(0, PARTNER_ANSWER_MAX);
   } else {
     patch.rebuilt_for = null;
   }
@@ -2087,6 +2096,43 @@ async function approveAtFiling(env: Env, card: WebPropertyChangeCard, row: WebPr
  * words that read REFUSED. A queued run is closed so the Mac does not build what she stopped; a run
  * already on the Mac finishes and its report waits on the held card.
  */
+/**
+ * A CHANGE SAID WHILE A BUILD RUNS IS KEPT FOR THE NEXT BUILD, NEVER DROPPED (15 Nov 2026, wc_c548d043). Scooter's
+ * second reply (dashboard UX) arrived while the build for his first (the inquiry email) was on the Mac. The note was
+ * acknowledged "Rebuilding the preview with your changes" and its words were discarded, because a rebuild cannot be
+ * queued while a run is current; the retry rebuilt his first reply only and the preview went out without the second.
+ * Such a note is now acknowledged with this marker (read, so the sweep does not spin on it) and its words are taken
+ * up the moment the run clears: by the next tick, or by the finished build itself, which rebuilds for them instead of
+ * mailing a preview that leaves them out.
+ */
+export const KEPT_FOR_NEXT_BUILD = "Kept for the next build: the build running now started before you wrote this. Your changes are built next, and the new preview carries them.";
+
+/** The requester's words kept while a run was current, oldest first, and a way to mark them taken up. */
+async function keptForNextBuild(env: Env, cardId: string): Promise<{ words: string | null; take: (response: string) => Promise<void> }> {
+  const kept = (
+    await env.WP_OS_DB.prepare("SELECT id, body FROM work_card_note WHERE work_card_id = ?1 AND response = ?2 ORDER BY created_at ASC").bind(cardId, KEPT_FOR_NEXT_BUILD).all<{ id: string; body: string }>()
+  ).results ?? [];
+  const words = kept.map((n) => stripLateThreadPrefix(n.body).text.trim()).filter(Boolean).join("\n\n") || null;
+  return {
+    words,
+    take: async (response: string) => {
+      for (const n of kept) await env.WP_OS_DB.prepare("UPDATE work_card_note SET response = ?2 WHERE id = ?1 AND response = ?3").bind(n.id, response, KEPT_FOR_NEXT_BUILD).run();
+    },
+  };
+}
+
+/** Words kept while a run was current, joined to anything said this tick: one rebuild for all of them. */
+const joinWords = (a: string | null, b: string | null): string | null => [a, b].filter((x): x is string => Boolean(x && x.trim())).join("\n\n") || null;
+
+/** A finished build whose preview would leave out words the partner said while it ran rebuilds for them instead. */
+async function rebuildForKeptWords(env: Env, card: WebPropertyChangeCard, fresh: WebPropertyChangeRow, rules: Record<string, string>): Promise<RunOutcome | null> {
+  const kept = await keptForNextBuild(env, card.id);
+  if (!kept.words) return null;
+  await kept.take("Rebuilding the preview with your changes.");
+  // The words this finished build was for reach no preview either, so they stay owed beside the kept ones.
+  return requestRebuild(env, card, { ...fresh, current_run_id: null, refresh_intent: fresh.rebuilt_for ? "CHANGES" : fresh.refresh_intent }, "CHANGES", kept.words, rules);
+}
+
 /** What the requester's unread words did this tick: a hold, and/or changes to rebuild the preview with. */
 interface RequesterWords {
   held: string | null;
@@ -2205,13 +2251,18 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
       const answered = await answerMidFlowQuestion(env, card, intent.question ?? body, deps.answerQuestion);
       await ack(`Answered by email: ${answered.slice(0, 200)}${intent.changes ? " Your instructions are carried into the build." : " The work carries on with the recommendations."}`);
       if (intent.changes) await update(env, card.id, { answers_json: JSON.stringify([...list(row.answers_json), intent.changes.slice(0, PARTNER_ANSWER_MAX)]) });
-      if (atPreview && intent.changes) rebuildWith = rebuildWith ?? intent.changes;
+      if (atPreview && intent.changes) rebuildWith = joinWords(rebuildWith, intent.changes);
       continue;
     }
     const carried = intent?.changes ?? body;
+    if (atPreview && intent && intent.changes && row.current_run_id) {
+      // A build is on the Mac: a rebuild cannot be queued now, so his words wait for it, never vanish.
+      await ack(KEPT_FOR_NEXT_BUILD);
+      continue;
+    }
     if (atPreview && intent && intent.changes) {
       await ack(`Rebuilding the preview with your changes.${ccSaid ? ` ${ccSaid}` : ""}`);
-      rebuildWith = rebuildWith ?? carried;
+      rebuildWith = joinWords(rebuildWith, carried);
       continue;
     }
     if (atPreview && intent && !intent.changes) {
@@ -2220,6 +2271,14 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
     }
     await ack(`Carried into the next phase as your answer.${ccSaid ? ` ${ccSaid}` : ""}`);
     await update(env, card.id, { answers_json: JSON.stringify([...list(row.answers_json), carried.slice(0, PARTNER_ANSWER_MAX)]) });
+  }
+  // Words kept while a run was current are taken up once it has cleared, with anything said this tick.
+  if (!held && atPreview && !row.current_run_id) {
+    const kept = await keptForNextBuild(env, card.id);
+    if (kept.words) {
+      await kept.take("Rebuilding the preview with your changes.");
+      rebuildWith = joinWords(kept.words, rebuildWith);
+    }
   }
   return { held, rebuildWith };
 }
@@ -2417,6 +2476,8 @@ async function applyBuild(env: Env, card: WebPropertyChangeCard, row: WebPropert
    */
   if (needsPreview(fresh) && !fresh.land_approved_at && !fresh.forced_by) {
     // EVERY PREVIEW ON THE CARD'S TIMELINE (0240), with what it reflects.
+    const again = await rebuildForKeptWords(env, card, fresh, rules);
+    if (again) return again;
     await appendFinding(env, card.id, `Preview ready — ${currentPreviewLine(fresh, [], { pagesHosts: pagesHostsOf(fresh.property_host), branch: fresh.branch }) ?? report.pr_url}.`);
     const why = await blockOnNewPreview(env, card, row, fresh);
     return { finished: false, blocked: true, progressed: false, detail: why };
@@ -2456,6 +2517,8 @@ async function applyBuildOfParts(env: Env, card: WebPropertyChangeCard, row: Web
   }
   const fresh: WebPropertyChangeRow = { ...row, pr_url: agg.pr_url, pr_number: null, branch: null, check_state: "GREEN", check_green_at: agg.check_green_at, preview_url: agg.preview_url, build_proof: agg.build_proof };
   if (needsPreview(fresh) && !fresh.land_approved_at && !fresh.forced_by) {
+    const again = await rebuildForKeptWords(env, card, fresh, rules);
+    if (again) return again;
     const why = await blockOnNewPreview(env, card, row, fresh);
     return { finished: false, blocked: true, progressed: false, detail: why };
   }
