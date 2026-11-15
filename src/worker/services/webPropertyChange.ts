@@ -198,10 +198,30 @@ export function missingSecretsOf(row: Pick<WebPropertyChangeRow, "missing_secret
   }
 }
 
-/** 0253: the "Still missing" section every email about a card carries while a key is absent. */
+/**
+ * What a partner email says while a key is absent (15 Nov 2026): that it is being handled — never the names as a to-do,
+ * never a way to send one. The keys themselves go to the developer (`tellDeveloperKeysMissing`).
+ */
 export function missingSecretsSection(missing: readonly MissingSecret[]): { label: string; bullets: string[] } | null {
   if (!missing.length) return null;
-  return { label: "Still missing (keys)", bullets: missing.map((m) => missingSecretLine(m.name, m.vendor_url ?? null, m.searched.join(", ") || null)) };
+  return { label: "Being set up on our side", bullets: [`${missing.length === 1 ? "One key" : `${missing.length} keys`} the site needs ${missing.length === 1 ? "is" : "are"} not in the vault yet. The developer has been told and adds them; nothing is needed from you, and never send a key or password by email.`] };
+}
+
+/** The missing keys, by name, on the developer's desk: a named stop she sees, deduped per set of names. */
+async function tellDeveloperKeysMissing(env: Env, card: WebPropertyChangeCard, missing: readonly MissingSecret[]): Promise<void> {
+  if (!missing.length) return;
+  const names = missing.map((m) => m.name).sort().join(",");
+  await notifyQuietly(env, {
+    firmUserId: PREVIEW_PARTNER.firmUserId,
+    kind: "PROVIDER_FAILURE",
+    severity: "WARNING",
+    title: `KEYS_MISSING: ${missing.length} key${missing.length === 1 ? "" : "s"} for "${card.title.slice(0, 80)}"`,
+    body: `KEYS_MISSING: ${missing.map((m) => missingSecretLine(m.name, m.vendor_url ?? null, m.searched.join(", ") || null)).join(" · ")}`.slice(0, 1800),
+    objectType: "work_card",
+    objectId: card.id,
+    dedupeKey: `keys_missing:${card.id}:${names}`.slice(0, 200),
+    firmScope: card.firm_scope,
+  });
 }
 
 // A card's files and its missing materials live in one shared module (0237) — every employee's
@@ -1107,6 +1127,34 @@ export function approverName(by: string | null | undefined): string | null {
 }
 
 /**
+ * EVERY ASK OF THE ROUND, MARKED (15 Nov 2026, wc_c548d043). The preview listed one reply's words, clipped at 300
+ * characters, and never said the other reply's asks were not built. A preview now lists every ask stored for his emails
+ * (`partner_ask`, written with each "Got it") since the last preview or final email, whole, each marked: done when the
+ * email arrived before the Mac took this build (a green build met its checks), not done yet when it came later.
+ */
+export async function askedThisRound(env: Env, cardId: string, resend: boolean): Promise<string[]> {
+  const prev = await env.WP_OS_DB.prepare("SELECT sent_at FROM work_card_notice WHERE work_card_id = ?1 AND kind IN ('PREVIEW', 'DONE') AND sent = 1 AND cause NOT LIKE 'resend:%' ORDER BY sent_at DESC LIMIT 1 OFFSET ?2")
+    .bind(cardId, resend ? 1 : 0)
+    .first<{ sent_at: string }>();
+  const asks = (
+    await env.WP_OS_DB.prepare("SELECT a.words, m.received_at FROM partner_ask a JOIN inbound_message m ON m.id = a.inbound_message_id WHERE a.work_card_id = ?1 AND m.received_at > ?2 ORDER BY m.received_at ASC, a.seq ASC")
+      .bind(cardId, prev?.sent_at ?? "")
+      .all<{ words: string; received_at: string }>()
+  ).results ?? [];
+  if (!asks.length) return [];
+  const brief = await env.WP_OS_DB.prepare(
+    "SELECT claimed_at FROM subscription_seat_run WHERE work_card_id = ?1 AND run_kind = 'LOCAL_JOB' AND claimed_at IS NOT NULL AND status NOT IN ('QUEUED', 'CLAIMED') AND job_json LIKE '%\"phase\":\"BUILD\"%' ORDER BY claimed_at DESC LIMIT 1",
+  )
+    .bind(cardId)
+    .first<{ claimed_at: string }>();
+  return asks.map((a) =>
+    brief && a.received_at <= brief.claimed_at
+      ? `Done: "${a.words.trim()}" (built into this preview; its checks passed).`
+      : `Not done yet: "${a.words.trim()}" (it arrived after this build started; the next build makes it, and you get one email when it is up).`,
+  );
+}
+
+/**
  * PORTER'S PLAN AND PREVIEW EMAILS, COMPOSED FROM THE ROW (owner, 23 Sep 2026). The sweep asks for
  * this before it emails the requester; null for every other notice, which keeps the shared skeleton
  * (plus the current preview line, from `porterContext`). See `shared/work/porterNotices.ts`.
@@ -1124,7 +1172,7 @@ export async function porterNoticeEmail(env: Env, cardId: string, kind: NoticeKi
   if (kind === "PREVIEW") {
     // A preview's round counts the previews actually sent, re-sends of the same one excluded.
     const sent = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PREVIEW' AND sent = 1 AND cause NOT LIKE 'resend:%'").bind(cardId).first<{ n: number }>();
-    return previewNotice({ title: ctx.title, previewLine: ctx.previewLine, placeholders: list(row.placeholders_json), filled: list(row.filled_json), changed: (await rebuildWords(env, cardId, row)).forPartner, round: Math.max(1, (sent?.n ?? 0) + (opts.resend ? 0 : 1)), cardId, sites: ctx.sites, decided: decidedSoFar(asksOf(row), list(row.answers_json), approverName(row.plan_approved_by)) });
+    return previewNotice({ title: ctx.title, previewLine: ctx.previewLine, placeholders: list(row.placeholders_json), filled: list(row.filled_json), changed: (await rebuildWords(env, cardId, row)).forPartner, asked: await askedThisRound(env, cardId, opts.resend ?? false), round: Math.max(1, (sent?.n ?? 0) + (opts.resend ? 0 : 1)), cardId, sites: ctx.sites, decided: decidedSoFar(asksOf(row), list(row.answers_json), approverName(row.plan_approved_by)) });
   }
   if (kind === "QUESTION") return questionNotice({ title: ctx.title, question: lines.slice(0, 12), previewLine: ctx.previewLine, missing: missing.map((m) => m.item), cardId });
   if (kind === "STUCK") return stuckNotice({ title: ctx.title, blockedBy: lines[0] ?? "something on our side stopped the work", next: lines[1] ?? "Sequoia has been told; you don't need to do anything.", previewLine: ctx.previewLine, cardId });
@@ -1685,6 +1733,7 @@ async function absorbRepoReport(env: Env, card: WebPropertyChangeCard, row: WebP
     if (report.repo_facts.constraints?.length) await recordPartnerConstraints(env, card.requested_by_email ?? null, report.repo_facts.constraints, `repo ${report.repo_facts.repo}`, card.firm_scope);
     if (report.repo_facts.runbook_generated) await appendFinding(env, card.id, `${report.repo_facts.repo} had no RUNBOOK.md; one was generated from its package.json and wrangler config and committed on the job's branch.`);
   }
+  if (report.keys_check) await appendFinding(env, card.id, `Keys ${report.keys_check} — nobody was told; the next run checks again.`);
   if (Array.isArray(report.missing_secrets)) {
     const searched = [...new Set([...(report.vault_lookup?.searched ?? []), ...report.missing_secrets.flatMap((m) => m.searched ?? [])])];
     if (report.missing_secrets.length && searched.length === 0) {
@@ -1695,7 +1744,8 @@ async function absorbRepoReport(env: Env, card: WebPropertyChangeCard, row: WebP
     const before = missingSecretsOf(row).map((m) => m.name).sort().join(",");
     await update(env, card.id, { missing_secrets_json: JSON.stringify(missing) });
     if (missing.length && before !== missing.map((m) => m.name).sort().join(",")) {
-      await appendFinding(env, card.id, `Keys the vault does not hold: ${missing.map((m) => m.name).join(", ")} (searched ${searched.join(", ")}). Everything that does not need them goes ahead; each email names them and how to send one.`);
+      await appendFinding(env, card.id, `Keys the vault does not hold: ${missing.map((m) => m.name).join(", ")} (searched ${searched.join(", ")}). Everything that does not need them goes ahead; the developer is told by name, the partner never asked for one.`);
+      await tellDeveloperKeysMissing(env, card, missing);
     }
   }
   if (Array.isArray(report.dns) && report.dns.length) {
@@ -2129,6 +2179,8 @@ async function rebuildForKeptWords(env: Env, card: WebPropertyChangeCard, fresh:
   const kept = await keptForNextBuild(env, card.id);
   if (!kept.words) return null;
   await kept.take("Rebuilding the preview with your changes.");
+  // The round is not finished, so this build is not a spent attempt (15 Nov 2026): the next one has the same budget.
+  await env.WP_OS_DB.prepare("UPDATE work_card SET work_attempts = MAX(COALESCE(work_attempts, 1) - 1, 0) WHERE id = ?1").bind(card.id).run();
   // The words this finished build was for reach no preview either, so they stay owed beside the kept ones.
   return requestRebuild(env, card, { ...fresh, current_run_id: null, refresh_intent: fresh.rebuilt_for ? "CHANGES" : fresh.refresh_intent }, "CHANGES", kept.words, rules);
 }

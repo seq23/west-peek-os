@@ -209,6 +209,32 @@ export function secretNamesInSource(texts) {
   return [...out].sort();
 }
 
+/**
+ * A KEY IS MISSING ONLY WHEN IT REALLY IS (15 Nov 2026, wc_c548d043). The detector named twelve keys a site "lacked";
+ * none did: set on the Pages project, read only by a script, guarded by a skip path, or not read at all. A name is
+ * missing only if ALL three hold:
+ *   1 · the site's RUNTIME code reads it (`runtimeTexts`: functions/ and src/, never scripts/ or tests);
+ *   2 · it is not a var or binding on the deploy target (`configured`: names read from Cloudflare, never values);
+ *   3 · no default or skip path guards the read (`?? x`, `|| x`, `&&`, a ternary, `!env.X`, `Boolean(...)`, `if (...)`).
+ * `configured === null` (the target could not be read) → nothing is called missing, and `unchecked` says why.
+ * Pure: texts and names in, names out.
+ */
+export function keysReallyMissing(names, { runtimeTexts = [], configured = null, why = "the deploy target could not be read" } = {}) {
+  const want = [...new Set((names ?? []).map((n) => String(n).trim()).filter(Boolean))];
+  if (configured === null) return { missing: [], unchecked: want.length ? `not checked (${why}): ${want.join(", ")}` : null };
+  const set = configured instanceof Set ? configured : new Set(configured);
+  const lines = runtimeTexts.flatMap((t) => String(t).split(/\r?\n/));
+  const missing = want.filter((name) => {
+    if (set.has(name)) return false;
+    const read = new RegExp(`\\b(?:env|process\\.env|context\\.env|ctx\\.env|platform\\.env)(?:\\?\\.|\\.)${name}\\b|\\benv\\[["']${name}["']\\]`);
+    const reads = lines.filter((l) => read.test(l));
+    if (!reads.length) return false;
+    const guarded = reads.some((l) => /\?\?|\|\||&&|\?(?![.?])|!\s*[\w.]*env|Boolean\(|\bif\s*\(|\btypeof\b/.test(l));
+    return !guarded;
+  });
+  return { missing, unchecked: null };
+}
+
 /** Of the names a repo reads, the ones that look like secrets (a key, token, secret, password, DSN, URL with auth). */
 export function likelySecrets(names) {
   return (names ?? []).filter((n) => /(KEY|TOKEN|SECRET|PASSWORD|PASS|DSN|WEBHOOK|SIGNING|PRIVATE|CREDENTIAL|AUTH)/.test(n) && !/^(WP_OS_ENV|NODE_ENV|CI)$/.test(n));
@@ -264,7 +290,7 @@ export function generateRunbook({ repo, githubRepo, pkg, wrangler, sourceNames =
     "",
     "## Secrets",
     "",
-    "Names only. The duty looks each up in the vault (exact name, then vendor prefix) before any job asks a partner; a missing one is named in the next email with the `SECRET NAME=value` line that sends it.",
+    "Names only. The duty looks each up in the vault (exact name, then vendor prefix) before any job asks a partner; a missing one is named to the developer, who adds it; no partner is ever asked to email a key.",
     "",
     ...(secrets.length ? secrets.map((n) => `- \`${n}\``) : ["- (none read from the environment by the source)"]),
     "",

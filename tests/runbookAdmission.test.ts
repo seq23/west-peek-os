@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { keysReallyMissing } from "../scripts/duties/lib/runbook.mjs";
 import {
   DATA_OP_PREFIXES,
   admittedScripts,
@@ -113,5 +114,29 @@ describe("the production-words gate", () => {
     expect(runRefusal({ script: "load-photos", env: "production" }, { ...gate, job: asked })).toMatch(/written in this job/);
     expect(runRefusal({ script: "load-photos", env: "production" }, { ...gate, job: asked, phase: "LAND" })).toBeNull();
     expect(runRefusal({ script: "load-logos", env: "preview" }, { ...gate, job: asked })).toMatch(/write the script in this PR/);
+  });
+});
+
+describe("a key is missing only when the site really lacks it (15 Nov 2026, wc_c548d043)", () => {
+  const twelve = ["EMAIL_FROM", "FORMS_ALARM_TO", "FORMS_MAILER", "FORMS_MAILER_SECRET", "FORMS_PROBE_CF_TO", "FORMS_PROBE_SECRET", "PRODUCTIONS_DB", "PRODUCTIONS_TOKEN_KEY", "TURNSTILE_SECRET_KEY", "TURNSTILE_SITE_KEY", "CRON_SECRET", "DASHBOARD_PRIVATE_NAMES_FILE"];
+  // The site's runtime code (functions/), in the shapes the Productions site reads them.
+  const runtimeTexts = [
+    "const from = clean(env.EMAIL_FROM);\nconst to = env.FORMS_ALARM_TO;\nconst s = env.FORMS_MAILER_SECRET;\nconst probe = env.FORMS_PROBE_SECRET;\nconst cf = env.FORMS_PROBE_CF_TO;",
+    "const db = env.PRODUCTIONS_DB;\nconst key = env.PRODUCTIONS_TOKEN_KEY;",
+    "return Boolean(clean(env.TURNSTILE_SECRET_KEY) && clean(env.TURNSTILE_SITE_KEY));\nconst body = new URLSearchParams({ secret: clean(env.TURNSTILE_SECRET_KEY) });",
+  ];
+  // What the Pages project has (names only), production and preview together.
+  const configured = ["EMAIL_FROM", "PRODUCTIONS_TOKEN_KEY", "PRODUCTIONS_DB", "FORMS_ALARM_TO", "FORMS_MAILER_SECRET", "FORMS_PROBE_CF_TO", "FORMS_PROBE_SECRET"];
+
+  it("this card's twelve names: none missing (set on the project, skip-guarded, script-only, or never read)", () => {
+    expect(keysReallyMissing(twelve, { runtimeTexts, configured })).toEqual({ missing: [], unchecked: null });
+  });
+  it("a key the runtime reads unguarded and the project lacks is still missing", () => {
+    expect(keysReallyMissing([...twelve, "STRIPE_SECRET_KEY"], { runtimeTexts: [...runtimeTexts, "const stripe = new Stripe(env.STRIPE_SECRET_KEY);"], configured }).missing).toEqual(["STRIPE_SECRET_KEY"]);
+  });
+  it("a target that cannot be read calls nothing missing and says it was not checked", () => {
+    const out = keysReallyMissing(["STRIPE_SECRET_KEY"], { runtimeTexts: ["new Stripe(env.STRIPE_SECRET_KEY)"], configured: null, why: "no CLOUDFLARE_API_TOKEN" });
+    expect(out.missing).toEqual([]);
+    expect(out.unchecked).toMatch(/^not checked \(no CLOUDFLARE_API_TOKEN\): STRIPE_SECRET_KEY$/);
   });
 });

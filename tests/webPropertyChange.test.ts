@@ -25,6 +25,7 @@ import { comparableSubject } from "../src/worker/services/emailThread";
 import { requestAttachments, textBodyOf } from "../src/worker/effects/mimeAttachments";
 import { handleGetRequestAttachment, handleReingestStoredEmail, sendReceived, stuckWindowOpen } from "../src/worker/services/webPropertyChange";
 import { readFileSync } from "node:fs";
+import { SECRET_BY_EMAIL } from "../src/shared/work/porterWaits";
 
 /**
  * PORTER CHANGES A WEB PROPERTY FROM HER MAC (20 Sep 2026, Plan A).
@@ -1317,6 +1318,7 @@ describe("the v1.0 bar: every built ask says when it is done, and a build that h
 
   it("one held only by keys only the partner can supply, named as missing with the vault searched, goes to preview and the keys are on the job (14 Nov 2026)", async () => {
     const id = await atBuild("v1bar4");
+    const from = sent.length;
     await macReports(id, { phase: "BUILD", status: "ok", ...pr("v1bar4"),
       vault_lookup: { searched: ["DROPBOX_APP_KEY", "DROPBOX_APP_SECRET"], found: [], missing: ["DROPBOX_APP_KEY", "DROPBOX_APP_SECRET"] },
       missing_secrets: [{ name: "DROPBOX_APP_KEY", vendor_url: null, searched: ["DROPBOX_APP_KEY"] }, { name: "DROPBOX_APP_SECRET", vendor_url: null, searched: ["DROPBOX_APP_SECRET"] }],
@@ -1325,6 +1327,13 @@ describe("the v1.0 bar: every built ask says when it is done, and a build that h
     expect(String((await card(id)).description), "not refused as unfinished").not.toMatch(/BUILD REFUSED/);
     expect((await readWebPropertyChange(env, id))!.preview_url).toBe("https://v1bar4.west-peek-ventures.pages.dev");
     expect(missingSecretsOf((await readWebPropertyChange(env, id))!).map((m) => m.name), "the job knows the keys it waits on").toEqual(["DROPBOX_APP_KEY", "DROPBOX_APP_SECRET"]);
+    // SAFETY (15 Nov 2026, wc_c548d043): the partner's preview never asks him to email a key; the developer gets the names.
+    const toHim = sent.slice(from).filter((m) => m.to === SCOOTER);
+    expect(toHim.some((m) => /preview/i.test(m.subject)), "the preview reached him").toBe(true);
+    for (const m of toHim) for (const re of SECRET_BY_EMAIL) expect(`${m.subject}\n${m.text}`, "no key by email").not.toMatch(re);
+    expect(toHim.map((m) => m.text).join("\n")).not.toContain("DROPBOX_APP_SECRET");
+    const desk = await env.WP_OS_DB.prepare("SELECT body FROM notification WHERE firm_user_id = 'fu_sequoia_taylor' AND object_id = ?1 AND title LIKE 'KEYS_MISSING%'").bind(id).first<{ body: string }>();
+    expect(desk?.body, "the developer is told the keys by name").toMatch(/DROPBOX_APP_KEY[\s\S]*DROPBOX_APP_SECRET/);
   });
 });
 
@@ -2553,6 +2562,50 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     const said = String((await card(p.id)).block_needed);
     expect(said).toMatch(/inquiry email/);
     expect(said).toMatch(/no side links/);
+  });
+
+  it("ONE ROUND, EVERY REPLY (15 Nov 2026, wc_c548d043): replies while the rebuild is queued or on the Mac are all built before any preview, and the one preview marks every ask, whole", async () => {
+    const p = await atPreview("preview round");
+    const token = await p.token();
+    // What the "Got it" stores for each email (partner_ask), recorded as already answered so the sweep sends no second one.
+    let seq = 0;
+    const asked = async (words: string) => {
+      const m = `inm_round_${crypto.randomUUID()}`;
+      await env.WP_OS_DB.prepare("INSERT INTO inbound_message (id, message_id, r2_key, from_address, to_address, subject, received_at, bytes, work_card_id, firm_scope) VALUES (?1, ?2, 'inbound/' || ?1 || '.eml', ?3, 'os@joinwestpeek.com', 'Re: preview', ?4, 10, ?5, 'west-peek')").bind(m, `<${m}@test>`, SCOOTER, new Date().toISOString(), p.id).run();
+      await env.WP_OS_DB.prepare("INSERT INTO partner_understood (inbound_message_id, work_card_id, partner_email, state, firm_scope) VALUES (?1, ?2, ?3, 'SENT', 'west-peek')").bind(m, p.id, SCOOTER).run();
+      await env.WP_OS_DB.prepare("INSERT INTO partner_ask (id, work_card_id, inbound_message_id, seq, words, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, 'west-peek')").bind(`pa_${crypto.randomUUID()}`, p.id, m, ++seq, words).run();
+    };
+    const previewsTo = (from: number) => sent.slice(from).filter((m) => m.to === SCOOTER && /preview/i.test(m.subject));
+    const from = sent.length;
+    await replyFrom(SCOOTER, "Please make the inquiry email subject read New inquiry", token);
+    await asked("make the inquiry email subject read New inquiry");
+    expect((await tickFor(p.id)).summary).toMatch(/Changes after the preview; BUILD queued/);
+    // The second reply arrives while that BUILD is queued, the third once the Mac has taken it (#447 keeps both).
+    await replyFrom(SCOOTER, "Please use labelled funnel lists on the dashboard", token);
+    await asked("use labelled funnel lists on the dashboard");
+    await tickFor(p.id);
+    const run = (await liveJobFor(p.id))!;
+    await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'CLAIMED', claimed_by = 'mac-test-jobs', claimed_at = ?2, attempt_count = attempt_count + 1 WHERE id = ?1").bind(run.id, new Date().toISOString()).run();
+    await new Promise((r) => setTimeout(r, 5));
+    await replyFrom(SCOOTER, "Please put less on the screen", token);
+    await asked("put less on the screen");
+    await tickFor(p.id);
+    const row = (await readWebPropertyChange(env, p.id))!;
+    const items = [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }];
+    expect((await reportRun(env, { runId: run.id, deviceId: "mac-test-jobs", outputText: JSON.stringify({ phase: "BUILD", status: "ok", items, pr_url: row.pr_url, pr_number: 9, changed: true, head_sha: "round-1", check_state: "GREEN", preview_url: "https://p9r.west-peek-ventures.pages.dev" }) })).accepted).toBe(true);
+    const attemptsBefore = Number((await card(p.id)).work_attempts);
+    const out = await tickFor(p.id);
+    expect(out.outcome, "a build that missed a reply is not the round's reply").not.toBe("BLOCKED");
+    expect(Number((await card(p.id)).work_attempts), "no attempt charged for the unfinished round").toBeLessThanOrEqual(attemptsBefore);
+    expect(out.summary).toMatch(/BUILD queued/);
+    expect(previewsTo(from), "no preview until a build has covered every reply").toHaveLength(0);
+    const again = JSON.parse((await liveJobFor(p.id))!.job_json!) as LocalJobPayload;
+    for (const w of [/New inquiry/, /labelled funnel lists/, /less on the screen/]) expect(again.rebuild!.changes).toMatch(w);
+    await macReports(p.id, { phase: "BUILD", status: "ok", items, pr_url: row.pr_url, pr_number: 9, changed: true, head_sha: "round-2", check_state: "GREEN", preview_url: "https://p9r.west-peek-ventures.pages.dev" });
+    expect((await tickFor(p.id)).outcome).toBe("BLOCKED");
+    const mails = previewsTo(from);
+    expect(mails, "one preview for the round").toHaveLength(1);
+    for (const w of ["make the inquiry email subject read New inquiry", "use labelled funnel lists on the dashboard", "put less on the screen"]) expect(mails[0]!.text).toContain(`Done: "${w}"`);
   });
 
   it("PREVIEW: a remark about the site is a change to make — the rebuild carries it as THE job; a build that moved nothing is a failed attempt, never the same preview twice (28 Sep 2026)", async () => {

@@ -17,3 +17,5 @@ export function generateRunbook(input: {
   hostHint?: string | null;
   today?: string;
 }): { text: string; route: { kind: string; line: string }; host: string | null; mayRun: string[]; secrets: string[] };
+/** A key is missing only when the runtime reads it unguarded and the deploy target lacks it (15 Nov 2026). */
+export function keysReallyMissing(names: readonly string[], opts?: { runtimeTexts?: readonly string[]; configured?: ReadonlySet<string> | readonly string[] | null; why?: string }): { missing: string[]; unchecked: string | null };

@@ -283,6 +283,8 @@ export interface LocalJobReport {
   /** 0253: keys the vault does not hold. Carried with `vault_lookup`, or the Worker refuses the report. */
   missing_secrets?: MissingSecret[];
   vault_lookup?: VaultLookup;
+  /** 15 Nov 2026: the keys the Mac could not judge (the deploy target was unreadable): a note on the card, never an alarm. */
+  keys_check?: string;
   /** 0253: the RUNBOOK-named scripts the SCRIPT ran on the model's request, each with its exit and one line. */
   runs?: DataOpsRun[];
   /** 0253: files the job produced for the partner, already put on the card by the script. Names only. */
@@ -449,6 +451,7 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
      * Mac writes them; `absorbRepoReport` still refuses a missing key named without a vault lookup.
      */
     ...(Array.isArray(r.missing_secrets) ? { missing_secrets: readMissingSecrets(r.missing_secrets) } : {}),
+    ...(typeof r.keys_check === "string" && r.keys_check.trim() ? { keys_check: r.keys_check.slice(0, 600) } : {}),
     ...(r.vault_lookup && typeof r.vault_lookup === "object"
       ? { vault_lookup: { searched: strs((r.vault_lookup as Record<string, unknown>).searched).slice(0, 200), found: strs((r.vault_lookup as Record<string, unknown>).found).slice(0, 200), missing: strs((r.vault_lookup as Record<string, unknown>).missing).slice(0, 200) } }
       : {}),

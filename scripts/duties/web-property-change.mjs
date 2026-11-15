@@ -68,7 +68,7 @@ import { promisify } from "node:util";
 import { CLOUDFLARE_ACCOUNT_ID, PAGES_ENVIRONMENTS, classify, proofLine, readRequests } from "./lib/pages-delivery.mjs";
 import { VAULT_INJECTED_VAR, claudeChildEnv, envForRepoRun, strippedNote, vaultLookup } from "../lib/vault-env.mjs";
 import { plainText, privateDocsIn, privateProof, privateSentenceIn } from "../lib/private-proof.mjs";
-import { admittedScripts, constraintsIn, generateRunbook, hostFromRoutes, isProductionRun, productionAsked, withPorterMayRun, likelySecrets, porterMayRun, readWranglerJson, readWranglerToml, runbookSecretNames, secretNamesInSource, vendorPageFor } from "./lib/runbook.mjs";
+import { admittedScripts, keysReallyMissing, constraintsIn, generateRunbook, hostFromRoutes, isProductionRun, productionAsked, withPorterMayRun, likelySecrets, porterMayRun, readWranglerJson, readWranglerToml, runbookSecretNames, secretNamesInSource, vendorPageFor } from "./lib/runbook.mjs";
 import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
 import { CODEX_BUILD_NOTE, codexExecArgs, codexSeatUsable, finishCodexBuild, soonestReset } from "../lib/codex-seat.mjs";
 import { routeFor, runInOrder } from "../lib/model-roles.mjs";
@@ -1949,15 +1949,44 @@ async function ensurePagesDomain(book, job, env, progress) {
   return { dns, lines };
 }
 
+/** Every var and binding NAME the Pages project has, production and preview together. Never a value. Null when unreadable. */
+async function pagesConfiguredNames(project, token) {
+  if (!project || !token) return { names: null, why: !project ? "no Pages project declared" : "no CLOUDFLARE_API_TOKEN" };
+  try {
+    const res = await fetch(`${CF_API}/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${encodeURIComponent(project)}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(60_000) });
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body?.success) return { names: null, why: `Cloudflare answered ${res.status} for ${project}` };
+    const names = new Set();
+    for (const environment of PAGES_ENVIRONMENTS) {
+      const cfg = body.result?.deployment_configs?.[environment] ?? {};
+      for (const [k, v] of Object.entries(cfg)) if (v && typeof v === "object" && !Array.isArray(v) && /env_vars|_databases|_namespaces|_buckets|services|_producers|_datasets|bindings|^ai/.test(k)) for (const name of Object.keys(v)) names.add(name);
+    }
+    return { names, why: null };
+  } catch (err) {
+    return { names: null, why: String(err?.message ?? err).slice(0, 120) };
+  }
+}
+
+/** The site's runtime code only: what a deploy actually runs (functions/, src/), never its scripts or tests. */
+function runtimeTextsOf(worktree) {
+  return ["functions", "src"].flatMap((d) => (existsSync(path.join(worktree, d)) ? sourceTexts(path.join(worktree, d)) : [])).filter((t) => !/\b(?:describe|it|test)\(\s*["'`]/.test(t));
+}
+
 /** The 0253 fields every report carries, composed from what the script read and did — never from the model's claims. */
 async function carriedFacts({ book, secrets, result, runsDone, job, outDir, worktree, env, progress, phase }) {
   const more = Array.isArray(result?.missing_secrets) ? result.missing_secrets : [];
-  const all = more.length ? secretsFor(book, job, more) : secrets;
+  const looked = more.length ? secretsFor(book, job, more) : secrets;
+  // 15 Nov 2026: of the names the vault lacks, only the ones the site really needs and its target really lacks.
+  const target = looked.missing.length ? await pagesConfiguredNames(book?.facts?.pagesProject ?? null, env?.CLOUDFLARE_API_TOKEN) : { names: new Set(), why: null };
+  const judged = keysReallyMissing(looked.missing.map((m) => m.name), { runtimeTexts: looked.missing.length ? runtimeTextsOf(worktree) : [], configured: target.names, why: target.why ?? undefined });
+  const all = { ...looked, missing: looked.missing.filter((m) => judged.missing.includes(m.name)) };
+  if (judged.unchecked) progress?.(`keys: ${judged.unchecked}`);
   const deliverables = phase === "PLAN" ? [] : await putDeliverables(result, job, outDir, worktree, env, progress);
   const domain = phase === "PLAN" || result?.status !== "ok" ? { dns: [], lines: [] } : await ensurePagesDomain(book, job, env, progress);
   return {
     vault_lookup: { searched: all.lookup.searched, found: all.lookup.found, missing: all.lookup.missing },
     missing_secrets: all.missing,
+    ...(judged.unchecked ? { keys_check: judged.unchecked.slice(0, 600) } : {}),
     ...(domain.dns.length ? { dns: domain.dns } : {}),
     ...(domain.lines.length ? { dns_proof: domain.lines } : {}),
     ...(runsDone.length ? { runs: runsDone } : {}),

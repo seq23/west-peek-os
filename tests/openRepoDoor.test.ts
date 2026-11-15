@@ -12,7 +12,7 @@ import { outboundFilesFor } from "../src/worker/services/workCardFiles";
 import { recordDnsWaits, recordProblem } from "../src/worker/services/dnsWaits";
 import { missingSecretsOf, readWebPropertyChange } from "../src/worker/services/webPropertyChange";
 import { OS_PROPERTY, WEB_PROPERTIES, githubReposIn, hostsSentence, registrationsIn } from "../src/shared/intake/webPropertyChange";
-import { PORTER_WAITS, PORTER_WAIT_KINDS, WAIT_TEXT_FORBIDDEN, waitDetail } from "../src/shared/work/porterWaits";
+import { PORTER_WAITS, PORTER_WAIT_KINDS, SECRET_BY_EMAIL, WAIT_TEXT_FORBIDDEN, waitDetail } from "../src/shared/work/porterWaits";
 import { dueTimeIn } from "../src/shared/intake/dueTime";
 import { blockCard } from "../src/worker/services/blocks";
 
@@ -324,7 +324,12 @@ describe("every wait Porter puts in front of a partner has three parts and clear
       expect(text).toMatch(/^Waiting on: .+\. Why: .+\. To clear it by email: .+\.$/s);
       for (const re of WAIT_TEXT_FORBIDDEN) expect(text, `${kind} must not say ${re}`).not.toMatch(re);
     }
-    expect(waitDetail("MISSING_SECRET", { what: "GIPHY_API_KEY", searched: "GIPHY_API_KEY, GIPHY_*" })).toContain('email "SECRET GIPHY_API_KEY=<value>" to os@joinwestpeek.com');
+    // SAFETY (15 Nov 2026): no wait a partner reads ever asks anyone to send a key by email — the old wording, proven caught.
+    expect(SECRET_BY_EMAIL.some((re) => re.test('email "SECRET GIPHY_API_KEY=<value>" to os@joinwestpeek.com on its own line')), "the check catches the old line").toBe(true);
+    for (const kind of PORTER_WAIT_KINDS) {
+      const text = waitDetail(kind, { what: "GIPHY_API_KEY", searched: "GIPHY_API_KEY, GIPHY_*" });
+      for (const re of SECRET_BY_EMAIL) expect(text, `${kind} never asks for a key by email`).not.toMatch(re);
+    }
     expect(waitDetail("MAC_ASLEEP", { why: "due Mon 6 Oct, 9:00 AM CT" })).toContain("this job is due Mon 6 Oct");
   });
 });

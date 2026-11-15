@@ -93,10 +93,17 @@ export const PORTER_WAITS: Record<PorterWaitKind, (f: PorterWaitFill) => PorterW
     why: `this reads like a question rather than something to build${f.why ? ` (${f.why.slice(0, 200)})` : ""}, and nobody had a confident answer`,
     clear: "reply with what you would like built, or with the answer, and it starts from there",
   }),
+  /*
+   * NEVER A KEY BY EMAIL FROM A PARTNER (15 Nov 2026, wc_c548d043). The preview email told Scooter to email twelve
+   * `SECRET NAME=<value>` lines; his standing hold is no passwords or keys over email, either way, and they were the
+   * developer's infrastructure keys. A missing key is the developer's to add: she is told by name (a note on her desk,
+   * `webPropertyChange.ts#tellDeveloperKeysMissing`); the partner is told only that it is being handled.
+   */
   MISSING_SECRET: (f) => ({
-    waiting: `the key ${f.what ?? "named above"}`,
-    why: `the vault has no entry for it${f.searched ? ` (looked for: ${f.searched})` : ""}; everything that does not need it is going ahead meanwhile`,
-    clear: `email ${q(`SECRET ${f.what ?? "<NAME>"}=<value>`)} to ${INTAKE_ADDRESS} on its own line — it is stored encrypted, moved into the vault, never shown again, and the feature that needs it ships on arrival`,
+    waiting: `a key the site needs (${f.what ?? "named to the developer"})`,
+    why: `the vault has no entry for it yet${f.searched ? ` (looked for: ${f.searched})` : ""}; the developer has been told and adds it herself, and everything that does not need it is going ahead meanwhile`,
+    clear: "nothing — never send a key or password by email; the feature that needs it ships once the developer has added it, and you hear when it does",
+    selfClearing: true,
   }),
   MAC_ASLEEP: (f) => ({
     waiting: "the Mac",
@@ -155,11 +162,16 @@ export function waitBullets(kind: PorterWaitKind, fill: PorterWaitFill = {}): st
   return [`Waiting on: ${w.waiting}`, `Why: ${w.why}`, `To clear it by email: ${w.clear}`];
 }
 
-/** The standing line for every email about a card that still lacks a key: the name, where to get one, how to send it. */
+/**
+ * The line the DEVELOPER gets for a key the vault lacks: the name, where to get one, how to add it. Never in a partner
+ * email (`SECRET_BY_EMAIL` below is what a partner-facing text may never carry).
+ */
 export function missingSecretLine(name: string, vendorUrl?: string | null, searched?: string | null): string {
-  const w = porterWait("MISSING_SECRET", { what: name, searched: searched ?? null });
-  return `Still missing: ${name}${vendorUrl ? ` — create one at ${vendorUrl}` : ""}, then ${w.clear}.`;
+  return `${name}${vendorUrl ? ` (create one at ${vendorUrl})` : ""}: not in the vault${searched ? ` (looked for: ${searched})` : ""}; add it with vault:set ${name}`;
 }
+
+/** A partner-facing text asking anyone to send a secret or key by email. A safety check: partner mail never matches. */
+export const SECRET_BY_EMAIL: readonly RegExp[] = [/\bSECRET\s+[A-Z<][A-Z0-9_<>]*\s*=/, /=<value>/i, /\b(?:email|send|reply with)\b[^.\n]{0,60}\b(?:key|secret|password|token)\b[^.\n]{0,40}\bto\s+\S+@/i];
 
 /**
  * What a wait text must NOT contain — the words that send a partner somewhere other than their
