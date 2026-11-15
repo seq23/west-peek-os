@@ -302,7 +302,9 @@ async function applySessionRun(env: Env, card: SessionCard, row: PartnerSessionR
   if (questions.length) {
     const asked = list(row.asked_json);
     const fresh = questions.filter((q) => !asked.includes(q.words));
-    if (fresh.length) {
+    // ONE QUESTION EMAIL PER CARD (15 Nov 2026): it covers every unclear ask at once, on his thread. A later run's new
+    // question is not a second email; it is answered in the final reply as waiting on him.
+    if (fresh.length && asked.length === 0) {
       const who = await whoWorks(env, card.owner_id);
       await replyToRequester(env, card, "BLOCKED", who, fresh.map((q) => `${q.words}: ${q.options.join(" / ")}`).join("\n"), { kind: "QUESTION", cause: `session-question:${run.id}` }, questionEmail(fresh, going));
       await env.WP_OS_DB.prepare("UPDATE partner_session SET asked_json = ?2 WHERE work_card_id = ?1").bind(card.id, JSON.stringify([...asked, ...fresh.map((q) => q.words)])).run();
@@ -314,7 +316,9 @@ async function applySessionRun(env: Env, card: SessionCard, row: PartnerSessionR
     const parked = await parkSession(env, card, fresh, "continuing the asks still in progress");
     if (parked.parked) return { finished: false, blocked: false, progressed: true, held: true, waitUntil: new Date(now.getTime() + 6 * 60_000).toISOString(), detail: report.asks.map(askLine).join("\n") };
   }
-  if (questions.length) {
+  // Held for his answer only while a question he was actually sent is unanswered.
+  const waitingOnHim = questions.length > 0 && list((await readSession(env, card.id))?.asked_json).length > list(row.answers_json).length;
+  if (waitingOnHim) {
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'IN_PROGRESS', next_action = ?2 WHERE id = ?1").bind(card.id, `Waiting for his answer on: ${questions.map((q) => `"${q.words.slice(0, 60)}"`).join(", ")}`.slice(0, 900)).run();
     return { finished: false, blocked: false, progressed: true, held: true, waitUntil: new Date(now.getTime() + QUESTION_WAIT_HOURS * 3600_000).toISOString(), detail: report.asks.map(askLine).join("\n") };
   }

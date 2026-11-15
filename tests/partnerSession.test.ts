@@ -122,6 +122,22 @@ describe("step 4 · start the clear parts, ask about the rest", () => {
     expect(await notices(id, "QUESTION")).toHaveLength(1);
   });
 
+  it("a card with unclear asks sends at most ONE question email, however many runs find something new to ask", async () => {
+    const id = await emailed("Three things", "Pull the Q3 pipeline numbers, set up the thing with the Nashville folks, and book the usual room.");
+    await runPartnerSessionCard(env, await card(id));
+    const [first] = await runs(id);
+    const ask = (words: string) => ({ words, status: "QUESTION", why: "two readings", options: ["one reading", "another reading"] });
+    const going = { words: "Pull the Q3 pipeline numbers", status: "IN_PROGRESS", why: "half read", options: [] };
+    await macReports(first!.id, { phase: "SESSION", status: "ok", asks: [going, ask("the thing with the Nashville folks")] });
+    await runPartnerSessionCard(env, await card(id));
+    expect(await notices(id, "QUESTION")).toHaveLength(1);
+    // The next run finds a new unclear ask: still no second question email on the card.
+    const second = (await runs(id)).find((r) => r.status === "QUEUED");
+    await macReports(second!.id, { phase: "SESSION", status: "ok", asks: [going, ask("the thing with the Nashville folks"), ask("the usual room")] });
+    await runPartnerSessionCard(env, await card(id));
+    expect(await notices(id, "QUESTION")).toHaveLength(1);
+  });
+
   it("a report that asks without options is refused, never emailed as a question", async () => {
     const id = await emailed("Vague", "Handle the usual.");
     await runPartnerSessionCard(env, await card(id));

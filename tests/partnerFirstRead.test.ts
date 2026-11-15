@@ -271,3 +271,17 @@ describe("holds are constraints; his open questions are a list of their own", ()
     expect(os.brief.questions).toEqual(["Whether to keep a separate livestream rate card is still open.", "I'm also questioning whether we need the Scale field.", "Is a Lead anything that came in?"]);
   });
 });
+
+describe("what the reader could not pin down", () => {
+  it("an UNCLEAR line reaches the brief and the employee's input, which says to ask ONE question and build the rest", async () => {
+    const words = "Swap the hero photo for the new one. Move the pricing below the case studies.";
+    const said = ["ASK: Swap the hero photo for the new one.", "ASK: Move the pricing below the case studies.", "UNCLEAR: Swap the hero photo for the new one :: two new photos are attached and he does not say which", "UNCLEAR: words he never wrote :: dropped"].join("\n");
+    const { cardId, inm } = await partnerEmail("unclear", 0, words);
+    await sendUnderstoodReplies(env, new Date(), [readerSaying("CLAUDE", said)]);
+    const brief = JSON.parse((await understoodRow(inm))!.brief_json!) as { unclear: Array<{ words: string; missing: string }> };
+    expect(brief.unclear).toEqual([{ words: "Swap the hero photo for the new one", missing: "two new photos are attached and he does not say which" }]);
+    const practices = await practicesForCard(env, cardId);
+    expect(practices).toContain("ask him ONE question covering these, and build everything else meanwhile; never guess");
+    expect(practices).toContain('"Swap the hero photo for the new one": two new photos are attached and he does not say which');
+  });
+});
