@@ -363,3 +363,56 @@ describe("a reply is matched to its conversation by References, never by a provi
     );
   });
 });
+
+describe("one email is filed once, and only his own new words reach a model (wc_bd8b68cb, 15 Nov 2026)", () => {
+  const NAMES = Array.from({ length: 59 }, (_, i) => `- Example Organisation ${i + 1}${i % 7 === 0 ? " (also 2021)" : ""}`);
+  const HIS_WORDS = ["Hey Walker!", "", "Can you check these past clients against the criteria and flag which ones fit?", "", ...NAMES, "", "Let me know which ones fit and I'll take it from there."].join("\n");
+  /** Gmail's real shape on 14 Nov: a sign-off, then an attribution WRAPPED over two lines, then the quote. */
+  const raw = [
+    "From: Scooter Taylor <scooter@westpeek.ventures>",
+    `To: ${INTAKE_MAILBOX}`,
+    "Subject: Re: Walker: West Peek Productions in November",
+    "",
+    HIS_WORDS,
+    "",
+    "Best,",
+    "Scooter",
+    "",
+    "On Fri, Nov 13, 2026 at 11:32 PM Walker · West Peek <walker@joinwestpeek.com>",
+    "wrote:",
+    "",
+    "> Here is November: 4 leads and 2 pitches.",
+    "> ---------- Forwarded message ---------",
+    "> earlier history",
+  ].join("\n");
+
+  it("a second read of the same Message-ID files nothing more; his words are stored verbatim, every name kept, nothing quoted", async () => {
+    const { token } = await startThread(env, {
+      objectType: "work_card",
+      objectId: "wc_productions_month_test",
+      cardKind: "PRODUCTIONS_ONCE_TEST",
+      employee: "Walker",
+      to: "scooter@westpeek.ventures",
+      subject: "Walker: West Peek Productions in November",
+      firmScope: "west-peek",
+    });
+    const read = (messageId: string) =>
+      steerFromReply(env, { fromHeader: SCOOTER_FROM, authenticationResults: GOOD_AUTH, subject: "Re: Walker: West Peek Productions in November", raw, inReplyTo: threadReference(token), references: null, emlKey: null, messageId });
+    for (let k = 0; k < 4; k++) expect((await read("CAOWoBQ-same-reply@mail.gmail.com")).steered).toBe(true);
+    const rows = (await env.WP_OS_DB.prepare("SELECT body FROM work_steer WHERE card_kind = 'PRODUCTIONS_ONCE_TEST'").all<{ body: string }>()).results!;
+    expect(rows, "four reads of one email, one steer").toHaveLength(1);
+    expect(rows[0]!.body, "his own words, verbatim: no sign-off, no wrapped attribution, no quote").toBe(HIS_WORDS);
+    for (const n of NAMES) expect(rows[0]!.body).toContain(n);
+    // A different email on the same thread is a new steer.
+    await read("CAOWoBQ-a-second-reply@mail.gmail.com");
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_steer WHERE card_kind = 'PRODUCTIONS_ONCE_TEST'").first<{ n: number }>())!.n).toBe(2);
+  });
+
+  it("a reply filed before this fix, with the quoted history still on it, reaches the model as his words only", async () => {
+    const legacy = `${HIS_WORDS}\n\nBest,\nScooter\n\nOn Fri, Nov 13, 2026 at 11:32 PM Walker · West Peek <walker@joinwestpeek.com>\nwrote:`;
+    await env.WP_OS_DB.prepare("INSERT INTO work_steer (id, card_kind, from_card_id, said_by, body, thread_token, firm_scope) VALUES ('wst_legacy_quoted', 'PRODUCTIONS_LEGACY_TEST', NULL, 'scooter@westpeek.ventures', ?1, 'tok_legacy', 'west-peek')")
+      .bind(legacy).run();
+    const pieces = await standingSteer(env, "PRODUCTIONS_LEGACY_TEST");
+    expect(pieces.map((p) => p.text)).toEqual([HIS_WORDS]);
+  });
+});
