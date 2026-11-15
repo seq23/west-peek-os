@@ -84,6 +84,27 @@ export async function handOffUnreadableMail(env: Env, input: { messageId: string
   const thread = await replyThreadFromHeaders(env, { fromHeader: input.headers.get("from"), subject: input.subject, inReplyTo: input.headers.get("in-reply-to"), references: input.headers.get("references") });
   const originalCard = thread?.object_type === "work_card" ? thread.object_id : null;
   let cardId: string | null = null;
+  /*
+   * OUT OF USAGE NEVER HIDES AN EMAIL (15 Nov 2026, her ruling). The session parks on the Claude Code seat; when that
+   * seat is awake but its plan's usage is spent, no session can start, so it goes straight to Sequoia's desk with the
+   * reason instead of a card nobody will pick up.
+   */
+  const { allSeatAvailability } = await import("../ai/subscriptionSeats");
+  const claude = (await allSeatAvailability(env)).find((s) => s.seat === "claude_code");
+  if (stored?.partner && claude?.exhausted) {
+    await appendEvent(env, {
+      eventType: "inbound_email.hand_off_refused", actorType: "system", actorId: "inbound_email", objectType: "inbound_email",
+      objectId: input.messageId.slice(0, 200), firmScope: "west-peek",
+      payload: { stored: stored.r2_key, inbound_message: stored.id, original_card: originalCard, why: "the Claude Code seat is out of usage", seat: claude.reason.slice(0, 300) },
+    });
+    await raiseUnreadMail(env, {
+      dedupeKey: `inbound_email_hand_off_usage_out:${input.messageId}`,
+      title: "An email the Worker could not read is waiting: the Mac is out of usage",
+      body: `From ${input.sender.slice(0, 120)}, subject "${input.subject.slice(0, 120)}". Two reads in the Worker were stopped before they finished, and the Mac session that would read it instead cannot start: ${claude.reason.slice(0, 300)} It is stored at ${stored.r2_key} (${stored.id})${originalCard ? ` and answers card ${originalCard}` : ""}. No "Got it" has gone.`,
+      objectId: input.messageId,
+    });
+    return null;
+  }
   if (stored?.partner) {
     const { createWorkCardInternal } = await import("../services/workCards");
     const { systemIdentity } = await import("../services/dealIntake");
@@ -1922,22 +1943,24 @@ export async function dryReadMessage(env: Env, raw: string, deps: { read?: impor
   filed.push(...drive.filed);
   unopened.push(...voice.failed, ...drive.failed);
   const words = withVoiceNotes(withVoiceNotes(typed, voice.heard), drive.heard);
-  const { understand, gotItEmail, gotItNext, confidentialSeatRead } = await import("../services/partnerUnderstood");
+  const { understand, gotItEmail, gotItNext, FIRST_READERS } = await import("../services/partnerUnderstood");
   const cardRow = thread?.object_type === "work_card" ? await env.WP_OS_DB.prepare("SELECT owner_id, held_reason FROM work_card WHERE id = ?1").bind(thread.object_id).first<{ owner_id: string | null; held_reason: string | null }>() : null;
   const ownerId = cardRow?.owner_id ?? null;
-  const understood = await understand(env, { subject, written: words, read: deps.read ?? confidentialSeatRead, employeeId: ownerId, firmScope: "west-peek" });
-  if (understood.runId) await forgetDryRun(env, understood.runId);
+  const understood = await understand(env, { subject, written: words, read: deps.read ?? FIRST_READERS, employeeId: ownerId, firmScope: "west-peek", files: filed });
+  for (const runId of understood.runIds) await forgetDryRun(env, runId);
   const employee = ownerId ? ((await env.WP_OS_DB.prepare("SELECT name FROM ai_employee WHERE id = ?1").bind(ownerId).first<{ name: string }>())?.name ?? "West Peek") : "West Peek";
   return {
     authenticated_partner: authority.partnerAddress,
     would_steer: thread ? { object_type: thread.object_type, object_id: thread.object_id, card_kind: thread.card_kind } : null,
     typed_chars: typed.length,
     asks_read_by: understood.via,
+    // The brief the first read would write onto the card (asks, holds, files and what each is for) and who read it.
+    first_read: { reader: understood.brief.reader ?? "OS (no reader was free)", readers_tried: understood.readersTried, would_wait_for_a_reader: understood.readerFailed, brief: understood.brief },
     filed,
     voice_notes: voice.heard,
     drive_files: { filed: drive.filed, heard: drive.heard },
     unopened,
-    got_it: understood.none ? null : gotItEmail({ employee, subject, asks: understood.asks, next: gotItNext(cardRow?.held_reason, understood.next), unopened, noted: understood.noted, filed }),
+    got_it: understood.none ? null : gotItEmail({ employee, subject, asks: understood.asks, next: gotItNext(cardRow?.held_reason, understood.next), unopened, noted: understood.noted, filed, holds: understood.brief.holds }),
   };
 }
 

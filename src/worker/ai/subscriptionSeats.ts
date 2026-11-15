@@ -242,6 +242,8 @@ export interface LaneAvailability {
   canSearch?: boolean;
   /** 0249. Which kinds of file the awake device PROVED it can read on this seat. Always false for an unavailable seat. */
   canRead?: Record<AttachmentKind, boolean>;
+  /** True when the seat is awake but its plan's usage window is spent (0245): out of usage, not asleep. */
+  exhausted?: boolean;
 }
 
 /** What the device's declared capabilities say it can read on this seat (0249). */
@@ -347,6 +349,7 @@ export function seatVerdict(seat: Seat, rows: readonly DeviceRow[], now: Date): 
       seat,
       available: false,
       reason: exhaustedReason(name, spent, now),
+      exhausted: true,
       deviceId: spent.device_id,
       lastSeenAt: spent.last_seen_at,
       ageMs: now.getTime() - Date.parse(spent.last_seen_at),
