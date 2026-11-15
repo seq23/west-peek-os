@@ -6,6 +6,10 @@
  *   node scripts/ci/shard-tests.mjs --check 4            # Rule 0: the 4 shards are a whole, disjoint
  *                                                        # partition of every test file; prints the plan
  *   node scripts/ci/shard-tests.mjs --from-log a.log …   # rebuild tests/timings.json from vitest logs
+ *   node scripts/ci/shard-tests.mjs --from-run [id]      # rebuild it from a CI run's shard logs (gh; default:
+ *                                                        # the latest green CI run on main) — `npm run timings:refresh`
+ *   node scripts/ci/shard-tests.mjs --drift 2/8 a.log    # after a shard: warn (a ::warning:: on the run) when what
+ *                                                        # it measured is far from what timings.json projected
  *
  * WHY. `vitest --shard=n/N` splits the FILE LIST evenly. On the first sharded run (PR #155, 21 Sep
  * 2026) shard 3 finished in 3m18s and shard 4 in 7m04s: 186 files whose durations run from 2ms to
@@ -24,6 +28,7 @@
  * Paths are relative to the repo root; the script is run from there (`npm run …`).
  */
 import { readFileSync, readdirSync, existsSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 
 const ROOT = process.cwd();
@@ -90,6 +95,26 @@ export function fromLogs(logFiles) {
   return Object.fromEntries(Object.entries(timings).sort(([a], [b]) => a.localeCompare(b)));
 }
 
+/**
+ * DRIFT (15 Nov 2026). The map went stale once already: tests/webPropertyChange.test.ts was 61s in
+ * timings.json and 311s on main, and 115 files had no timing at all, so one of four shards took
+ * 11.5 min against a 5-minute gate. Every shard now compares what it measured with what it was
+ * projected and says so on the run (a ::warning:: annotation on the PR) once the shard is over its
+ * projection by half and by a minute, or one file is over twice its timing and by 30s. A warning,
+ * not a failure: a slow runner must not turn main red; the cure is `npm run timings:refresh`.
+ */
+export function drift(plannedFiles, timings, measured, median) {
+  const projected = plannedFiles.reduce((a, f) => a + (Number.isFinite(timings[f]) ? timings[f] : median), 0);
+  const actual = plannedFiles.reduce((a, f) => a + (measured[f] ?? 0), 0);
+  const files = plannedFiles
+    .filter((f) => Number.isFinite(measured[f]))
+    .map((f) => ({ f, was: Number.isFinite(timings[f]) ? timings[f] : null, now: measured[f] }))
+    .filter((x) => x.was === null ? x.now > 30_000 : x.now > 2 * x.was && x.now - x.was > 30_000)
+    .sort((a, b) => b.now - a.now);
+  const over = actual > projected * 1.5 && actual - projected > 60_000;
+  return { projected, actual, over, files };
+}
+
 function selfTest() {
   const fails = [];
   const t = { "tests/a.test.ts": 90, "tests/b.test.ts": 50, "tests/c.test.ts": 40, "tests/d.test.ts": 10 };
@@ -104,8 +129,12 @@ function selfTest() {
   if (!check(["tests/a.test.ts"], [{ files: ["tests/a.test.ts"] }, { files: [] }]).some((b) => b.includes("no files"))) fails.push("an empty shard was not caught");
   const ghost = check(["tests/a.test.ts"], [{ files: ["tests/a.test.ts", "tests/gone.test.ts"] }]);
   if (!ghost.some((b) => b.includes("does not exist"))) fails.push("a planned file that does not exist was not caught");
+  const d = drift(["tests/a.test.ts", "tests/b.test.ts"], { "tests/a.test.ts": 60_000, "tests/b.test.ts": 10_000 }, { "tests/a.test.ts": 300_000, "tests/b.test.ts": 10_000 }, 1000);
+  if (!d.over || d.files.length !== 1 || d.files[0].f !== "tests/a.test.ts") fails.push("a file five times its timing was not reported as drift");
+  const calm = drift(["tests/a.test.ts"], { "tests/a.test.ts": 60_000 }, { "tests/a.test.ts": 70_000 }, 1000);
+  if (calm.over || calm.files.length) fails.push("a shard within its projection was reported as drift");
   if (fails.length) { console.error("SHARD-TESTS SELF-TEST FAILED:\n  ✗ " + fails.join("\n  ✗ ")); process.exit(1); }
-  console.log("SHARD-TESTS SELF-TEST PASSED: 6 case(s).");
+  console.log("SHARD-TESTS SELF-TEST PASSED: 8 case(s).");
 }
 
 function main() {
@@ -118,6 +147,20 @@ function main() {
     if (Object.keys(timings).length === 0) { console.error("SHARD-TESTS: no '✓ tests/… (n tests) Nms' lines in those logs — nothing written."); process.exit(1); }
     writeFileSync(TIMINGS, JSON.stringify(timings, null, 2) + "\n");
     console.log(`wrote ${Object.keys(timings).length} timing(s) to ${path.relative(ROOT, TIMINGS)}`);
+    return;
+  }
+  if (argv.includes("--from-run")) {
+    const gh = (...a) => execFileSync("gh", a, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+    const id = at("--from-run") ?? gh("run", "list", "-w", "CI", "-b", "main", "-s", "success", "-L", "1", "--json", "databaseId", "-q", ".[0].databaseId").trim();
+    const jobs = gh("run", "view", id, "--json", "jobs", "-q", '.jobs[] | select(.name | test("shard")) | .databaseId').split("\n").filter(Boolean);
+    if (jobs.length === 0) { console.error(`SHARD-TESTS: run ${id} has no shard jobs — nothing written.`); process.exit(1); }
+    const logs = jobs.map((j) => { const f = path.join(process.env.RUNNER_TEMP ?? "/tmp", `shard-log-${j}.log`); writeFileSync(f, gh("run", "view", "--job", j, "--log")); return f; });
+    const timings = fromLogs(logs);
+    const files = testFiles();
+    const missing = files.filter((f) => !(f in timings));
+    if (missing.length > files.length / 10) { console.error(`SHARD-TESTS: run ${id} measured ${Object.keys(timings).length} of ${files.length} files — not a whole run, nothing written.`); process.exit(1); }
+    writeFileSync(TIMINGS, JSON.stringify(timings, null, 2) + "\n");
+    console.log(`wrote ${Object.keys(timings).length} timing(s) from run ${id} (${jobs.length} shards) to ${path.relative(ROOT, TIMINGS)}`);
     return;
   }
   const files = testFiles();
@@ -134,6 +177,20 @@ function main() {
     const bad = check(files, p.shards);
     if (bad.length) { console.error("SHARD-TESTS: the plan is not a partition:\n  ✗ " + bad.join("\n  ✗ ")); process.exit(1); }
     for (const f of p.shards[i - 1].files) console.log(f);
+    return;
+  }
+  const driftArg = at("--drift");
+  if (driftArg) {
+    const m = /^(\d+)\/(\d+)$/.exec(driftArg);
+    const log = argv[argv.indexOf("--drift") + 2];
+    if (!m || !log) { console.error("--drift wants n/N <vitest log>"); process.exit(2); }
+    const p = plan(files, timings, Number(m[2]));
+    const d = drift(p.shards[Number(m[1]) - 1].files, timings, fromLogs([log]), p.median);
+    const s = (ms) => `${(ms / 1000).toFixed(0)}s`;
+    const where = d.files.slice(0, 5).map((x) => `${x.f} ${x.was === null ? "unmeasured" : s(x.was)} → ${s(x.now)}`).join("; ");
+    if (d.over || d.files.length) {
+      console.log(`::warning title=Shard ${driftArg} is off its timings::measured ${s(d.actual)} against a projection of ${s(d.projected)}${where ? ` — ${where}` : ""}. tests/timings.json is stale: run \`npm run timings:refresh\` and commit it.`);
+    } else console.log(`shard ${driftArg}: measured ${s(d.actual)}, projected ${s(d.projected)} — the timings hold.`);
     return;
   }
   if (checkArg) {
@@ -154,7 +211,7 @@ function main() {
     );
     return;
   }
-  console.error("usage: --shard n/N | --check N | --from-log <log…> | --self-test");
+  console.error("usage: --shard n/N | --check N | --drift n/N <log> | --from-log <log…> | --from-run [id] | --self-test");
   process.exit(2);
 }
 
