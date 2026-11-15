@@ -178,6 +178,7 @@ function sweepContext(env: Env, firmScope: string): RouteContext {
  */
 export async function claimNextCard(env: Env, now: Date): Promise<SweepCard | null> {
   const nowIso = now.toISOString();
+  const { FIRST_READ_WAIT_MINUTES } = await import("./partnerUnderstood");
   const candidate = await env.WP_OS_DB.prepare(
     `SELECT id, title, kind, owner_id, state, COALESCE(work_attempts, 0) AS work_attempts, firm_scope,
             requested_by_email, preview_first, result_recipient, preview_owner_id,
@@ -209,10 +210,20 @@ export async function claimNextCard(env: Env, now: Date): Promise<SweepCard | nu
           )
           OR EXISTS (SELECT 1 FROM work_card_note n WHERE n.work_card_id = work_card.id AND n.acknowledged_at IS NULL)
         )
+        -- THE FIRST READ COMES FIRST (15 Nov 2026, her ruling). A card with a partner email from the last ten minutes
+        -- whose first read has not settled (no Got it row yet, or claimed and waiting for a reader) is not started:
+        -- the employee starts from the brief. Past ten minutes it starts anyway, from the OS's own read; with no reader
+        -- at all the Got it lane settles at once, so nothing waits (services/partnerUnderstood.ts).
+        AND NOT EXISTS (
+          SELECT 1 FROM inbound_message m
+           WHERE m.work_card_id = work_card.id AND json_extract(m.mail_authority_json, '$.partner') IS NOT NULL
+             AND m.received_at >= ?3 AND m.received_at <= ?4
+             AND NOT EXISTS (SELECT 1 FROM partner_understood u WHERE u.inbound_message_id = m.id AND u.state <> 'CLAIMED')
+        )
       ORDER BY created_at ASC
       LIMIT 1`,
   )
-    .bind(nowIso, MAX_WORK_ATTEMPTS)
+    .bind(nowIso, MAX_WORK_ATTEMPTS, new Date(now.getTime() - FIRST_READ_WAIT_MINUTES * 60_000).toISOString(), new Date(now.getTime() + 60_000).toISOString())
     .first<SweepCard>();
   if (!candidate) return null;
   const lease = new Date(now.getTime() + LEASE_MINUTES * 60_000).toISOString();

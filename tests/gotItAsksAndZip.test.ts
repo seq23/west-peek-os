@@ -151,11 +151,13 @@ afterAll(async () => {
 });
 
 describe("the Got it counts what he asked, in his words", () => {
-  it("a dashboard-shaped email is exactly its nine numbered changes plus one questions item: no praise, no fragment, no model", async () => {
+  it("a dashboard-shaped email is exactly its nine numbered changes plus one questions item: no praise, no fragment, whatever the reader says", async () => {
     let modelCalls = 0;
     const junk: SeatRead = async () => { modelCalls += 1; return { ok: true, text: "ASK: Attached is\nASK: in good shape", detail: "ok" }; };
     const out = await understand(env, { subject: "Re: Porter: dashboard", written: DASHBOARD, read: junk, employeeId: null, firmScope: "west-peek" });
-    expect(modelCalls, "a numbered email is read from its structure").toBe(0);
+    // Every email gets its first read (holds, files); a numbered email's asks still come from its structure, so a
+    // reader that returns fragments and praise as asks changes nothing.
+    expect(modelCalls, "the first read is asked once").toBe(1);
     expect(out.asks).toHaveLength(10);
     const nine = out.asks.slice(0, 9);
     expect(nine[0]).toBe("Keep this pipeline Productions-only. Filter out anything that came from the fund side.");
@@ -260,7 +262,8 @@ describe("a reply on a card a developer has taken over", () => {
   it("the Got it lists his asks but says honestly that nothing starts yet, and Sequoia's desk hears he replied", async () => {
     const { cardId } = await takenOverReply("honest", new Date().toISOString());
     const before = sent.length;
-    await sendUnderstoodReplies(env, new Date(), async () => ({ ok: false, text: "", detail: "unused" }));
+    // No reader is there (out), so the Got it comes from the OS's own read at once.
+    await sendUnderstoodReplies(env, new Date(), async () => ({ ok: false, text: "", detail: "no reader", out: true }));
     const gotIt = sent.slice(before).filter((m) => m.to === "scooter@westpeek.ventures");
     expect(gotIt).toHaveLength(1);
     expect(gotIt[0]!.text).toContain(TAKEN_OVER_NEXT);

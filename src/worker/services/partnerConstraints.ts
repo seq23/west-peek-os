@@ -57,7 +57,9 @@ export async function practicesForCard(env: Env, cardId: string, firmScope = "we
     const email = await partnerEmailForCard(env, cardId);
     // 0255 (rule 4): the requesting partner's living profile rides in the same block, for every kind.
     const profile = await profileBlockFor(env, email).catch(() => "");
-    return [partnerPracticesBlock(await constraintsForPartner(env, email, firmScope)), profile].filter(Boolean).join("\n");
+    // The first read's brief (15 Nov 2026): the same asks, holds and files the Got it told him, for every employee.
+    const brief = await (await import("./partnerUnderstood")).briefBlockFor(env, cardId).catch(() => "");
+    return [partnerPracticesBlock(await constraintsForPartner(env, email, firmScope)), profile, brief].filter(Boolean).join("\n");
   } catch {
     return partnerPracticesBlock([]);
   }

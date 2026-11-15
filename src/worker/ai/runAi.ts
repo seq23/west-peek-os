@@ -212,6 +212,14 @@ export interface RunAiBudgetContext {
    */
   neverPaid?: boolean;
   /**
+   * THE ACCOUNT'S OWN WORKERS AI MAY CARRY THIS CALL, PRIVATE OR NOT (owner, 15 Nov 2026, west-peek-ventures brain:
+   * "Out of Claude usage never stops partner mail"). Workers AI is the Worker's own binding: free within the daily
+   * allowance, never trained on what it is sent (training_permitted = 0), and it runs inside Cloudflare when the Mac
+   * is asleep. With this set, a Free-only or `neverPaid` call counts that lane as $0 and important or private work may
+   * take it. It lifts nothing else: no free lane that trains, no paid lane, and the egress gate still decides.
+   */
+  ownBinding?: boolean;
+  /**
    * THIS CALL MAY BE SERVED BY A WEAKER LANE WHEN THE LEVER FORBIDS PAID, AND THE RESULT SAYS SO
    * (29 Sep 2026). Meaningful only with `requireModel`.
    *
@@ -2096,8 +2104,10 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
   if (behaviour.freeOnly) {
     // Private content: LP names of COMMITTED LPs, deal terms, fund figures, or a call marked confidential.
     const privateContent = !contentClass.publicModelApproved || input.budgetContext?.confidential === true;
+    // The account's own Workers AI binding is $0 to a call that named `ownBinding` (free within the daily allowance).
+    const ownBindingLane = (o: ModelOption): boolean => input.budgetContext?.ownBinding === true && o.provider.provider_key === "workers_ai";
     const zeroCostAdequate = options
-      .filter((o) => estimateFor(o) === 0)
+      .filter((o) => estimateFor(o) === 0 || ownBindingLane(o))
       // A seat has no credential to configure — the claimer authenticates to US — so "configured"
       // means "awake, not out of usage, and entitled to this run". Every other lane is asked as before.
       .filter((o) =>
@@ -2121,6 +2131,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
       (o) =>
         !important ||
         isSeat(o.provider.provider_key) ||
+        ownBindingLane(o) ||
         (requiresSearch && !privateContent && o.provider.provider_key === FREE_SEARCH_PROVIDER_KEY),
     );
     let seatWaitDetail = "";

@@ -299,10 +299,13 @@ describe("a dry run reads everything and writes nothing", () => {
     ).bind(key, SCOOTER_FROM, new Date().toISOString(), msg.rawSize, JSON.stringify({ passed: true, partner: SCOOTER })).run();
     // The card is taken over, like wc_c548d043: the dry run's Got it must say what the live one would.
     await env.WP_OS_DB.prepare("UPDATE work_card SET held_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), held_reason = ?2 WHERE id = ?1").bind(cardId, `${TAKEN_OVER_PREFIX} (test).`).run();
-    const tables = ["event_record", "work_steer", "request_attachment", "card_drive_file", "inbound_email_seen", "inbound_message", "notification", "partner_understood", "inbound_reingest_claim", "work_card", "work_card_note", "ai_run"];
+    // The event spine is append-only and keeps the first read's own ai_run events (dryReadMessage says so); every
+    // other table, the ai_run table included, is exactly as it was.
+    const tables = ["work_steer", "request_attachment", "card_drive_file", "inbound_email_seen", "inbound_message", "notification", "partner_understood", "inbound_reingest_claim", "work_card", "work_card_note", "ai_run"];
     const snapshot = async () => Promise.all(tables.map((tb) => count(`SELECT COUNT(*) AS n FROM ${tb}`)));
     const cardBefore = await one<{ description: string; updated_at: string }>("SELECT description, updated_at FROM work_card WHERE id = ?1", cardId);
     const rowsBefore = await snapshot();
+    const startedAt = new Date(Date.now() - 1).toISOString();
     const objectsBefore = store.size;
     const sentBefore = sent.length;
 
@@ -321,6 +324,8 @@ describe("a dry run reads everything and writes nothing", () => {
     expect(body.would.got_it.tldr, "the honest next line on a taken-over card, as the live Got it says it").toContain(TAKEN_OVER_NEXT);
 
     expect(await snapshot(), "no row anywhere").toEqual(rowsBefore);
+    const newEvents = (await env.WP_OS_DB.prepare("SELECT event_type FROM event_record WHERE created_at >= ?1").bind(startedAt).all<{ event_type: string }>()).results!.map((e) => e.event_type);
+    expect(newEvents.filter((e) => !e.startsWith("ai_run.") && !e.startsWith("ai.")), "no business event, only the read's own run record").toEqual([]);
     expect(store.size, "no stored object").toBe(objectsBefore);
     expect(sent.length, "no email").toBe(sentBefore);
     expect(await one<{ description: string; updated_at: string }>("SELECT description, updated_at FROM work_card WHERE id = ?1", cardId)).toEqual(cardBefore);

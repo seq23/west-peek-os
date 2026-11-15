@@ -38,7 +38,14 @@ export const UNDERSTOOD_PER_TICK = 2;
 const MAX_ASKS = 12;
 
 export type AskStatus = "DONE" | "IN_PROGRESS" | "NOT_DONE";
-export type SeatRead = (env: Env, input: { prompt: string; firmScope: string; employeeId: string | null; purpose: string }) => Promise<{ ok: boolean; text: string; detail: string; runId?: string | null }>;
+export type SeatRead = (env: Env, input: { prompt: string; firmScope: string; employeeId: string | null; purpose: string }) => Promise<ReadOut>;
+/**
+ * What one reader gave back. `reader` names who answered (CLAUDE, CODEX, WORKERS_AI, GEMINI). `out` says the reader
+ * was not there to ask (usage spent, Mac asleep, no binding, the privacy router refused it): not a failed read, so
+ * nobody waits on it.
+ */
+export interface ReadOut { ok: boolean; text: string; detail: string; runId?: string | null; reader?: string | null; out?: boolean }
+export interface Reader { name: string; read: SeatRead }
 
 /** Her Claude seat, then Codex as its backup; never a free lane, never a paid one. */
 export const confidentialSeatRead: SeatRead = async (env, input) => {
@@ -57,6 +64,64 @@ export const confidentialSeatRead: SeatRead = async (env, input) => {
     return { ok: false, text: "", detail: err instanceof Error ? err.message : String(err) };
   }
 };
+
+/** A run that was refused before any model saw it, or answered by the offline stand-in: that reader was not there. */
+const OUT_REASON = /seat_wait|subscription_seat_unavailable|no_active_priced_model|provider_disabled|kill_switched|binding_absent|has_no_lane|free_only_|not configured|usage|quota|allocation|exhaust|rate.?limit|\b429\b/i;
+const OUT_STATUSES = new Set(["PREFLIGHT_BLOCKED", "BUDGET_BLOCKED", "EGRESS_BLOCKED", "KILL_SWITCHED", "PROVIDER_DISABLED"]);
+const READER_OF: Record<string, string> = { claude_code: "CLAUDE", codex: "CODEX", workers_ai: "WORKERS_AI", google_free: "GEMINI" };
+
+/** One first-read call through the one AI boundary, reported as a reader's answer. Never throws. */
+async function readThrough(env: Env, input: Parameters<SeatRead>[1], ask: { sensitivity: string; budgetContext: Record<string, unknown> }): Promise<ReadOut> {
+  try {
+    const actor: Actor = { type: "AI", ...(input.employeeId ? { aiEmployeeId: input.employeeId } : {}), roles: [], firmScopes: [input.firmScope] } as Actor;
+    const { run } = await runAi(env, {
+      purpose: input.purpose,
+      actor,
+      inputs: [input.prompt],
+      sensitivity: ask.sensitivity as never,
+      budgetContext: { judgement: true, neverPaid: true, expectedOutputTokens: 700, ...ask.budgetContext },
+      routing: { category: "OPERATIONS" },
+    });
+    // The lane that answered, read back from the run row (a chain that moved on rewrote it there).
+    const key = (await env.WP_OS_DB.prepare("SELECT p.provider_key FROM ai_run r JOIN provider_registry p ON p.id = r.provider_id WHERE r.id = ?1").bind(run.id).first<{ provider_key: string }>().catch(() => null))?.provider_key ?? null;
+    // The offline stand-in (a firm in LOCAL or LOCKDOWN privacy) is no reader at all.
+    if (run.model === "mock-local") return { ok: false, text: "", detail: "no model reader in this privacy mode", runId: run.id, out: true };
+    if (run.status === "COMPLETED" && run.output_text) return { ok: true, text: run.output_text, detail: "ok", runId: run.id, reader: key ? (READER_OF[key] ?? key.toUpperCase()) : null };
+    const why = run.failure_reason ?? `run ${run.status}`;
+    return { ok: false, text: "", detail: why, runId: run.id, out: OUT_STATUSES.has(run.status) || OUT_REASON.test(why) };
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    return { ok: false, text: "", detail: why, out: OUT_REASON.test(why) };
+  }
+}
+
+/**
+ * THE FIRST READ'S READERS, IN HER ORDER (15 Nov 2026, west-peek-ventures brain, "Out of Claude usage never stops
+ * partner mail"): her Claude seat then Codex (one private call: the router's PRIVATE row, never a free lane); then
+ * Cloudflare's own Workers AI (never trains on it, so private mail is fine, and it runs with the Mac asleep); then free
+ * Gemini, only when the private-data router clears the email (a committed LP's name or a deal term revokes it, so the
+ * call is refused before any request is formed); then no first read at all.
+ */
+export const FIRST_READERS: readonly Reader[] = [
+  { name: "SEAT", read: (env, input) => readThrough(env, input, { sensitivity: "INTERNAL", budgetContext: { confidential: true } }) },
+  { name: "WORKERS_AI", read: (env, input) => readThrough(env, input, { sensitivity: "INTERNAL", budgetContext: { confidential: true, ownBinding: true, providerKey: "workers_ai" } }) },
+  { name: "GEMINI", read: (env, input) => readThrough(env, input, { sensitivity: "PUBLIC", budgetContext: { publicModelApproved: true, providerKey: "google_free" } }) },
+];
+
+/** How long the employee waits for the first read before it starts from the OS's own read (her ruling: ten minutes). */
+export const FIRST_READ_WAIT_MINUTES = 10;
+/** The mark on a claimed row whose readers were there and failed: the next tick reads it again. */
+const WAITING_FOR_READER = "WAITING_FOR_READER";
+
+/** His holds, from his own sentences (the OS's read when no reader answered): "preview first", "nothing live", … Pure. */
+const HOLD = /\b(?:preview (?:it )?first|nothing (?:goes )?live|not live|don'?t (?:go live|publish|push|ship|deploy|merge|send)|do not (?:go live|publish|push|ship|deploy|merge|send)|hold off|wait for (?:my|me)|no (?:client|customer) names?|without (?:my |a |his |her )?(?:written )?(?:ok|okay|approval|sign-?off|consent|permission)|until I (?:say|approve|ok)|before (?:it|anything) goes live)\b/i;
+export function holdsOf(words: string): string[] {
+  return unwrapped(words)
+    .split(/\n+|(?<=[.!?])\s+(?=[A-Z0-9"“(])/)
+    .map((s) => s.replace(/^[\s\-–—•*]+|\s+$/g, "").replace(/^\d+[.)]\s+/, "").replace(/\s+/g, " "))
+    .filter((s) => HOLD.test(s))
+    .slice(0, 6);
+}
 
 const norm = (s: string): string => s.toLowerCase().replace(/[“”"'‘’`]/g, "").replace(/\s+/g, " ").trim().replace(/^[\s\-–—•*:.,;!?]+|[\s\-–—•*:.,;!?]+$/g, "");
 
@@ -149,11 +214,24 @@ export function structuredAsks(words: string): { asks: string[]; noted: string[]
  * WHAT HE ASKED, the one reader both the live "Got it" and the dry run use. A numbered email is read from its structure
  * (no model); anything else is read by her seat (`read`) and kept only in his words, else his whole sentences.
  */
+export interface Brief {
+  /** Every separate ask, in his words. */
+  asks: string[];
+  /** What he said must not happen yet, in his words ("preview first", "no client names without written OK"). */
+  holds: string[];
+  /** Every file on the card from this email, and what it is for (null when no reader could say). */
+  files: Array<{ filename: string; purpose: string | null }>;
+  /** Who read it: CLAUDE, CODEX, WORKERS_AI, GEMINI, or null for the OS's own read. */
+  reader: string | null;
+}
+
 export async function understand(
   env: Env,
-  input: { subject: string; written: string; read: SeatRead; employeeId: string | null; firmScope: string },
-): Promise<{ none: boolean; asks: string[]; noted: string[]; next: string; via: "STRUCTURE" | "MODEL" | "FALLBACK"; runId: string | null }> {
+  input: { subject: string; written: string; read: SeatRead | readonly Reader[]; employeeId: string | null; firmScope: string; files?: readonly string[] },
+): Promise<{ none: boolean; asks: string[]; noted: string[]; next: string; via: "STRUCTURE" | "MODEL" | "FALLBACK"; runId: string | null; runIds: string[]; brief: Brief; readerFailed: boolean; readersTried: string[] }> {
   const { written } = input;
+  const fileNames = [...(input.files ?? [])];
+  const ladder: readonly Reader[] = typeof input.read === "function" ? [{ name: "SEAT", read: input.read }] : input.read;
   const ON_IT = "I'm starting on it now. The next email from me is the result, or one question if something is unclear.";
   // A voice note's transcript (withVoiceNotes) is his words but not his list: the list is read from what he typed, and
   // each recording is named as heard and on the card, so a long transcript never swells the questions item.
@@ -164,26 +242,64 @@ export async function understand(
     return m ? `${m[1]}: heard and transcribed (${m[2]!.split(/\s+/).filter(Boolean).length} words)` : null;
   }).filter((x): x is string => Boolean(x));
   const structured = typed ? structuredAsks(typed) : null;
-  if (structured) return { none: false, asks: structured.asks, noted: [...structured.noted, ...heard], next: ON_IT, via: "STRUCTURE", runId: null };
-  const out = written ? await input.read(env, { prompt: understoodPrompt(input.subject, written), firmScope: input.firmScope, employeeId: input.employeeId, purpose: "the Got it reply to a partner's email: his asks in his words" }) : { ok: false, text: "", detail: "no words to read" };
-  const parsed = out.ok ? parseUnderstood(out.text, written) : null;
-  if (parsed?.none) return { none: true, asks: ["nothing asked"], noted: [], next: ON_IT, via: "MODEL", runId: out.runId ?? null };
-  if (parsed && parsed.asks.length) return { none: false, asks: parsed.asks.filter((a) => !isFragment(a)), noted: [], next: parsed.next ?? ON_IT, via: "MODEL", runId: out.runId ?? null };
+  /*
+   * THE FIRST READ (15 Nov 2026). Every reader in her order is asked until one gives a usable read: his asks (a
+   * numbered email keeps the asks its structure gives; the reader fills the gaps), his holds and what each file is for.
+   * A reader that was not there (`out`) is passed over; one that was there and failed is remembered, so the caller
+   * can wait for it instead of answering from the OS's own read.
+   */
+  const runIds: string[] = [];
+  const readersTried: string[] = [];
+  let readerFailed = false;
+  let parsed: ReturnType<typeof parseUnderstood> | null = null;
+  let reader: string | null = null;
+  if (written) {
+    for (const r of ladder) {
+      const out = await r.read(env, { prompt: understoodPrompt(input.subject, written, fileNames), firmScope: input.firmScope, employeeId: input.employeeId, purpose: "the Got it reply to a partner's email: his asks in his words" });
+      if (out.runId) runIds.push(out.runId);
+      readersTried.push(`${r.name}: ${out.ok ? "read it" : out.out ? `out (${out.detail.slice(0, 120)})` : `failed (${out.detail.slice(0, 120)})`}`);
+      if (!out.ok) {
+        if (!out.out) readerFailed = true;
+        // A firm in LOCAL or LOCKDOWN privacy has no model reader at all: asking the next one would only say so again.
+        if (out.out && /no model reader in this privacy mode/.test(out.detail)) break;
+        continue;
+      }
+      const p = parseUnderstood(out.text, written, fileNames);
+      if (p.none || p.asks.length || structured) {
+        parsed = p;
+        reader = out.reader ?? r.name;
+        break;
+      }
+      readerFailed = true;
+    }
+  }
+  const runId = runIds[runIds.length - 1] ?? null;
+  const holds = parsed?.holds.length ? parsed.holds : holdsOf(written);
+  const files = fileNames.map((filename) => ({ filename, purpose: parsed?.files.find((f) => f.filename === filename)?.purpose ?? null }));
+  const brief = (asks: string[]): Brief => ({ asks, holds, files, reader });
+  const common = { runId, runIds, readerFailed: parsed ? false : readerFailed, readersTried };
+  if (structured) return { ...common, none: false, asks: structured.asks, noted: [...structured.noted, ...heard], next: ON_IT, via: parsed ? "MODEL" : "STRUCTURE", brief: brief(structured.asks) };
+  if (parsed?.none) return { ...common, none: true, asks: ["nothing asked"], noted: [], next: ON_IT, via: "MODEL", brief: brief([]) };
+  if (parsed && parsed.asks.length) {
+    const asks = parsed.asks.filter((a) => !isFragment(a));
+    return { ...common, none: false, asks, noted: [], next: parsed.next ?? ON_IT, via: "MODEL", brief: brief(asks) };
+  }
   const asks = sentencesOf(written);
   return {
+    ...common,
     none: asks.length === 0,
     asks,
     noted: [],
-    next: "No model could read it just now, so these are your sentences as you wrote them. Work starts when the Mac is back; the next email from me is the result, or one question.",
+    next: "No reader was free just now, so these are your sentences as you wrote them, and the work starts from them. The next email from me is the result, or one question.",
     via: "FALLBACK",
-    runId: out.runId ?? null,
+    brief: brief(asks),
   };
 }
 
 /** `ASK: …` lines kept only when they are his words (found in what he wrote); `NEXT: …`; `NONE` = nothing asked. */
-export function parseUnderstood(text: string, written: string): { asks: string[]; next: string | null; none: boolean } {
+export function parseUnderstood(text: string, written: string, files: readonly string[] = []): { asks: string[]; next: string | null; none: boolean; holds: string[]; files: Array<{ filename: string; purpose: string }> } {
   const body = norm(written);
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const lines = text.replace(/<think>[\s\S]*?<\/think>/gi, "").split(/\r?\n/).map((l) => l.trim().replace(/^[-*•]\s+/, "")).filter(Boolean);
   const none = lines.some((l) => /^NONE\b/i.test(l)) && !lines.some((l) => /^ASK\s*:/i.test(l));
   const asks: string[] = [];
   for (const l of lines) {
@@ -193,14 +309,28 @@ export function parseUnderstood(text: string, written: string): { asks: string[]
     if (ask.length >= 3 && body.includes(norm(ask)) && !asks.some((a) => norm(a) === norm(ask))) asks.push(ask);
   }
   const next = lines.map((l) => /^NEXT\s*:\s*(.+)$/i.exec(l)?.[1]?.trim()).find(Boolean) ?? null;
-  return { asks: asks.slice(0, MAX_ASKS), next: next ? next.slice(0, 280) : null, none };
+  // HOLD lines are kept only when they are his words too; FILE lines only for a file that is really on the card.
+  const holds: string[] = [];
+  for (const l of lines) {
+    const hold = /^HOLD\s*:\s*(.+)$/i.exec(l)?.[1]?.trim().replace(/^["“]|["”]$/g, "").trim();
+    if (hold && hold.length >= 3 && body.includes(norm(hold)) && !holds.some((h) => norm(h) === norm(hold))) holds.push(hold);
+  }
+  const purposes: Array<{ filename: string; purpose: string }> = [];
+  for (const l of lines) {
+    const m = /^FILE\s*:\s*(.+?)\s*(?:::|—|–| - |:)\s*(.+)$/i.exec(l);
+    const name = m ? files.find((f) => f.toLowerCase() === m[1]!.trim().replace(/^["“]|["”]$/g, "").toLowerCase()) : undefined;
+    if (m && name && !purposes.some((p) => p.filename === name)) purposes.push({ filename: name, purpose: m[2]!.trim().slice(0, 200) });
+  }
+  return { asks: asks.slice(0, MAX_ASKS), next: next ? next.slice(0, 280) : null, none, holds: holds.slice(0, 6), files: purposes };
 }
 
-function understoodPrompt(subject: string, written: string): string {
+function understoodPrompt(subject: string, written: string, files: readonly string[] = []): string {
   return [
     "A Managing Partner of the firm just emailed the work below. List each separate thing he is asking for.",
     "Rules: copy his EXACT words for each ask (a phrase or sentence from his email, unchanged, no rewording, no summary).",
     "One line per ask: ASK: <his exact words>",
+    "Then one line per hold, anything he says must NOT happen yet or must wait for him (preview first, nothing live, no client names without his written OK): HOLD: <his exact words>",
+    ...(files.length ? [`Then one line per attached file, saying what it is for, from his email: FILE: <file name> :: <what it is for, under 15 words>`, `Files: ${files.join(", ")}`] : []),
     "Then one line: NEXT: <what happens next, one plain sentence, no promises of dates, nothing about models or systems>",
     "A remark on how something is (praise, status, \"X is in good shape\") is NOT an ask. Each numbered item is one ask. Never a fragment of a sentence.",
     "If he asks for nothing (a thank-you, an FYI), answer exactly: NONE",
@@ -252,7 +382,10 @@ async function employeeName(env: Env, id: string | null): Promise<string> {
   return row?.name ?? "West Peek";
 }
 
-async function settle(env: Env, messageId: string, state: string, via: string | null, asks: number, detail: string): Promise<void> {
+async function settle(env: Env, messageId: string, state: string, viaRead: string | null, asks: number, detail: string): Promise<void> {
+  // 0306's CHECK allows MODEL or FALLBACK: an email read from its own numbered structure with no reader is the OS's
+  // own read (FALLBACK). Writing "STRUCTURE" failed the CHECK after the Got it had gone, and left the row NOT_SENT.
+  const via = viaRead === "STRUCTURE" ? "FALLBACK" : viaRead;
   await env.WP_OS_DB.prepare(
     "UPDATE partner_understood SET state = ?2, via = ?3, asks = ?4, detail = ?5, sent_at = CASE WHEN ?2 = 'SENT' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE sent_at END WHERE inbound_message_id = ?1",
   )
@@ -260,11 +393,56 @@ async function settle(env: Env, messageId: string, state: string, via: string | 
     .run();
 }
 
+/** The brief beside the asks it lists (0309): holds, files and who read it. The asks themselves are partner_ask rows. */
+async function saveBrief(env: Env, messageId: string, brief: Brief): Promise<void> {
+  await env.WP_OS_DB.prepare("UPDATE partner_understood SET brief_json = ?2, reader = ?3 WHERE inbound_message_id = ?1")
+    .bind(messageId, JSON.stringify({ holds: brief.holds, files: brief.files }), brief.reader ?? "OS")
+    .run();
+}
+
+/**
+ * THE BRIEF, AS EVERY EMPLOYEE READS IT (15 Nov 2026). The same asks the Got it listed (partner_ask), his holds and his
+ * files with what each is for, for this card's latest partner emails. `practicesForCard` puts it in every employee's
+ * input (Porter's Mac job, a partner session, the general step loop), so the Got it and the work start from one read.
+ */
+export async function briefBlockFor(env: Env, cardId: string): Promise<string> {
+  const rows = (
+    await env.WP_OS_DB.prepare(
+      `SELECT u.inbound_message_id AS id, u.brief_json, u.reader, m.received_at FROM partner_understood u JOIN inbound_message m ON m.id = u.inbound_message_id
+        WHERE u.work_card_id = ?1 AND u.brief_json IS NOT NULL ORDER BY m.received_at DESC LIMIT 3`,
+    )
+      .bind(cardId)
+      .all<{ id: string; brief_json: string; reader: string | null; received_at: string }>()
+      .catch(() => ({ results: [] as Array<{ id: string; brief_json: string; reader: string | null; received_at: string }> }))
+  ).results ?? [];
+  const blocks: string[] = [];
+  for (const r of rows.reverse()) {
+    const asks = ((await env.WP_OS_DB.prepare("SELECT words FROM partner_ask WHERE inbound_message_id = ?1 ORDER BY seq").bind(r.id).all<{ words: string }>()).results ?? []).map((a) => a.words);
+    let brief: { holds?: string[]; files?: Array<{ filename: string; purpose: string | null }> } = {};
+    try {
+      brief = JSON.parse(r.brief_json) as typeof brief;
+    } catch {
+      brief = {};
+    }
+    const holds = brief.holds ?? [];
+    const files = brief.files ?? [];
+    blocks.push(
+      [
+        `THE FIRST READ of his email of ${r.received_at} (${r.reader && r.reader !== "OS" ? `read by ${r.reader}` : "the OS's own read: no reader was free"}). Work from this list; the Got it told him exactly these.`,
+        ...(asks.length ? ["His asks, in his words:", ...asks.map((a, i) => `  ${i + 1}. ${a}`)] : ["He asked for nothing (a thank-you or an FYI)."]),
+        ...(holds.length ? ["His holds (keep to every one):", ...holds.map((h) => `  - ${h}`)] : []),
+        ...(files.length ? ["His files:", ...files.map((f) => `  - ${f.filename}: ${f.purpose ?? "what it is for was not said"}`)] : []),
+      ].join("\n"),
+    );
+  }
+  return blocks.join("\n\n");
+}
+
 /**
  * STEP 1. Every authenticated partner email linked to a card in the last half hour, not yet answered, gets its one
  * "Got it". Returns how many were sent. Never throws into the sweep.
  */
-export async function sendUnderstoodReplies(env: Env, now: Date, read: SeatRead = confidentialSeatRead): Promise<number> {
+export async function sendUnderstoodReplies(env: Env, now: Date, read: SeatRead | readonly Reader[] = FIRST_READERS): Promise<number> {
   const since = new Date(now.getTime() - UNDERSTOOD_WINDOW_MINUTES * 60_000).toISOString();
   const until = new Date(now.getTime() + 60_000).toISOString();
   let rows: Candidate[] = [];
@@ -276,7 +454,8 @@ export async function sendUnderstoodReplies(env: Env, now: Date, read: SeatRead 
            FROM inbound_message m JOIN work_card c ON c.id = m.work_card_id
           WHERE m.received_at >= ?1 AND m.received_at <= ?2
             AND json_extract(m.mail_authority_json, '$.partner') IS NOT NULL
-            AND NOT EXISTS (SELECT 1 FROM partner_understood u WHERE u.inbound_message_id = m.id)
+            -- Not answered yet, or claimed and waiting for a reader that was there and failed (read again).
+            AND NOT EXISTS (SELECT 1 FROM partner_understood u WHERE u.inbound_message_id = m.id AND NOT (u.state = 'CLAIMED' AND u.detail LIKE '${WAITING_FOR_READER}%'))
           ORDER BY m.received_at ASC
           LIMIT ?3`,
       )
@@ -290,7 +469,7 @@ export async function sendUnderstoodReplies(env: Env, now: Date, read: SeatRead 
   let sent = 0;
   for (const row of rows) {
     try {
-      if (await answerOne(env, row, read)) sent += 1;
+      if (await answerOne(env, row, read, now)) sent += 1;
     } catch (err) {
       console.error("a partner's Got it failed", err);
       await settle(env, row.id, "NOT_SENT", null, 0, `failed: ${err instanceof Error ? err.message : String(err)}`).catch(() => undefined);
@@ -299,15 +478,19 @@ export async function sendUnderstoodReplies(env: Env, now: Date, read: SeatRead 
   return sent;
 }
 
-async function answerOne(env: Env, row: Candidate, read: SeatRead): Promise<boolean> {
+async function answerOne(env: Env, row: Candidate, read: SeatRead | readonly Reader[], now: Date = new Date()): Promise<boolean> {
   const partner = partnerByEmail(row.partner);
-  // The claim: a second tick (or a racing one) finds the row and does nothing.
+  // The claim: a second tick (or a racing one) finds the row and does nothing. A row waiting for a reader is re-taken
+  // by one tick only (the conditional update).
   const claimed = await env.WP_OS_DB.prepare(
     "INSERT OR IGNORE INTO partner_understood (inbound_message_id, work_card_id, partner_email, firm_scope) VALUES (?1, ?2, ?3, ?4)",
   )
     .bind(row.id, row.card_id, partner?.email ?? String(row.partner ?? ""), row.firm_scope)
     .run();
-  if ((claimed.meta?.changes ?? 0) !== 1) return false;
+  if ((claimed.meta?.changes ?? 0) !== 1) {
+    const retaken = await env.WP_OS_DB.prepare(`UPDATE partner_understood SET detail = 'reading again' WHERE inbound_message_id = ?1 AND state = 'CLAIMED' AND detail LIKE '${WAITING_FOR_READER}%'`).bind(row.id).run();
+    if ((retaken.meta?.changes ?? 0) !== 1) return false;
+  }
   if (!partner) {
     await settle(env, row.id, "NOT_SENT", null, 0, "the sender is not on the partner registry; a Got it goes to partners only");
     return false;
@@ -315,7 +498,21 @@ async function answerOne(env: Env, row: Candidate, read: SeatRead): Promise<bool
 
   const written = await wordsOf(env, row);
   const subject = (row.subject ?? "").trim() || row.title.replace(/^From [^:]+@[^:]+:\s*/i, "").trim() || row.title;
-  const understood = await understand(env, { subject, written, read, employeeId: row.owner_id, firmScope: row.firm_scope });
+  const filed = ((await env.WP_OS_DB.prepare("SELECT filename FROM request_attachment WHERE work_card_id = ?1 AND created_at >= ?2 ORDER BY created_at, filename").bind(row.card_id, row.received_at).all<{ filename: string }>().catch(() => ({ results: [] as Array<{ filename: string }> }))).results ?? []).map((r) => r.filename);
+  const understood = await understand(env, { subject, written, read, employeeId: row.owner_id, firmScope: row.firm_scope, files: filed });
+  /*
+   * A READER WAS THERE AND FAILED: WAIT FOR IT (15 Nov 2026). Up to FIRST_READ_WAIT_MINUTES from his email the row stays
+   * claimed and the next tick reads it again; the employee waits too (`claimNextCard`). Past that, or when no reader
+   * was there at all, the Got it and the brief come from the OS's own read, now.
+   */
+  const ageMinutes = (now.getTime() - Date.parse(row.received_at)) / 60_000;
+  if (!understood.brief.reader && understood.readerFailed && ageMinutes < FIRST_READ_WAIT_MINUTES) {
+    await env.WP_OS_DB.prepare("UPDATE partner_understood SET detail = ?2 WHERE inbound_message_id = ?1")
+      .bind(row.id, `${WAITING_FOR_READER}: ${understood.readersTried.join("; ")}`.slice(0, 400))
+      .run();
+    return false;
+  }
+  await saveBrief(env, row.id, understood.brief);
   if (understood.none) {
     await settle(env, row.id, "NOTHING_ASKED", understood.via, 0, understood.asks.length ? "he asked for nothing (a thank-you or an FYI)" : "no words to quote");
     return false;
@@ -364,9 +561,8 @@ async function answerOne(env: Env, row: Candidate, read: SeatRead): Promise<bool
     });
   }
   const unopened = await filesNotOpened(env, row.card_id, row.received_at);
-  const filed = ((await env.WP_OS_DB.prepare("SELECT filename FROM request_attachment WHERE work_card_id = ?1 AND created_at >= ?2 ORDER BY created_at, filename").bind(row.card_id, row.received_at).all<{ filename: string }>().catch(() => ({ results: [] as Array<{ filename: string }> }))).results ?? []).map((r) => r.filename);
   const who = await employeeName(env, row.owner_id);
-  const email = gotItEmail({ employee: who, subject, asks, next, unopened, noted: understood.noted, filed });
+  const email = gotItEmail({ employee: who, subject, asks, next, unopened, noted: understood.noted, filed, holds: understood.brief.holds });
   const replyOnThread = await threadRootFor(env, row.card_id);
   const result = await sendOrPreview(env, {
     to: partner.email,
@@ -392,7 +588,7 @@ async function answerOne(env: Env, row: Candidate, read: SeatRead): Promise<bool
     objectType: "work_card",
     objectId: row.card_id,
     firmScope: row.firm_scope,
-    payload: { inbound_message_id: row.id, sent: result.sent, via, asks: asks.length, received_at: row.received_at, seat: via },
+    payload: { inbound_message_id: row.id, sent: result.sent, via, asks: asks.length, holds: understood.brief.holds.length, files: understood.brief.files.length, received_at: row.received_at, reader: understood.brief.reader ?? "OS" },
   }).catch(() => undefined);
   return result.sent;
 }
@@ -406,8 +602,9 @@ export function gotItNext(heldReason: string | null | undefined, next: string): 
 }
 
 /** The "Got it" itself: his asks in his words, every file that could not be opened, what happens next. Pure. */
-export function gotItEmail(input: { employee: string; subject: string; asks: readonly string[]; next: string; unopened: ReadonlyArray<{ filename: string; reason: string }>; noted?: readonly string[]; filed?: readonly string[] }) {
+export function gotItEmail(input: { employee: string; subject: string; asks: readonly string[]; next: string; unopened: ReadonlyArray<{ filename: string; reason: string }>; noted?: readonly string[]; filed?: readonly string[]; holds?: readonly string[] }) {
   const { asks, next, unopened } = input;
+  const holds = input.holds ?? [];
   const filed = input.filed ?? [];
   // A voice note is named once, by what was heard ("<file>: heard and transcribed (N words)"), never also as a plain file.
   const HEARD = /^(.+): heard and transcribed \(/;
@@ -435,6 +632,8 @@ export function gotItEmail(input: { employee: string; subject: string; asks: rea
     ...(unopened.length ? [{ label: "What I could not open", bullets: unopened.map((f) => `${f.filename}: ${f.reason}`) }] : []),
     // What he said that is not an ask (an idea for later, a process note) is shown as kept, never dropped.
     ...(noted.length ? [{ label: "Also noted", bullets: noted.map((n) => `"${n}"`) }] : []),
+    // His holds, in his words, so he can see they were heard before anything is built.
+    ...(holds.length ? [{ label: "What I'll hold to", bullets: holds.map((h) => `"${h}"`) }] : []),
     { label: "What happens next", bullets: [next, "Reply to this email to change anything; I read it before I go on."] },
   ];
   // The renderer shows SECTION_MAX_LINES - 1 lines of a longer section and points at "Details below": the rest of every
