@@ -411,7 +411,9 @@ export async function steerFromReply(
     }
     if (written.length < 2 && attached.length) written = `Attached: ${attached.join(", ")}`;
   }
-  if (written.length < 2) {
+  // One character is an answer ("1", Porter's which-job question); only nothing at all is not (15 Nov 2026: the phone's
+  // footer used to make "1" long enough, and is no longer kept).
+  if (written.length < 1) {
     return {
       steered: false,
       thread,
@@ -474,7 +476,8 @@ export async function steerFromReply(
    * key: a second read of the same message files nothing more, and the open-card note below is not written twice.
    */
   let alreadyFiled = false;
-  if (kind) {
+  // A steer carries at least two characters (0182's trigger); a one-character answer still answers below.
+  if (kind && written.length >= 2) {
     const filed = await env.WP_OS_DB.prepare(
       `INSERT OR IGNORE INTO work_steer (id, card_kind, from_card_id, said_by, body, thread_token, firm_scope, message_id)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
