@@ -83,6 +83,7 @@ export const WRITE_SITES = [
   { file: "src/worker/services/productionsHire.ts", symbol: "HIRE_CARD_KIND", why: "Walker's weekly hire search stamps its card" },
   { file: "src/worker/services/learningClub.ts", symbol: "TLC_CARD_KINDS", why: "The Learning Club's openers stamp their card: Parker's topics and booking packs, Wynn's stories, brands and decisions" },
   { file: "src/worker/services/webPropertyChange.ts", symbol: "WEB_PROPERTY_CHANGE_KIND", why: "Porter's web property change stamps its card" },
+  { file: "src/worker/services/partnerSession.ts", symbol: "PARTNER_SESSION_KIND", why: "an email no fixed door claims is stamped a partner session on the chief's desk" },
   { file: "src/worker/services/roomPacket.ts", why: "SQL literal — the Room packet stamps its own card" },
   { file: "src/worker/services/deck.ts", why: "SQL literal — a sent-back deck version opens Preston's rework" },
   { file: "src/worker/services/dealIntake.ts", why: "SQL literal — an inbound ask for blog help is stamped at the door" },

@@ -468,7 +468,7 @@ describe("the email door — \"Walker, tell Scooter: …\"", () => {
     expect(handed!.kind ?? null).not.toBe("PARTNER_MESSAGE");
   });
 
-  it("does not match, and falls through to an ordinary assignment, when the named partner is not real", async () => {
+  it("does not match, and falls through to an ordinary assignment (a partner session on the chief's desk), when the named partner is not real", async () => {
     const cardId = await openAssignmentCard(env, {
       subject: "quick one D",
       partnerAddress: SEQUOIA_EMAIL,
@@ -478,7 +478,7 @@ describe("the email door — \"Walker, tell Scooter: …\"", () => {
       emlKey: null,
     });
     const row = await cardRow(cardId);
-    expect(row.kind ?? null).toBeNull();
+    expect(row.kind, "never a PARTNER_MESSAGE").toBe("PARTNER_SESSION");
     expect(row.owner_id).toBe("aie_wren");
   });
 });

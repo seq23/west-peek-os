@@ -213,6 +213,7 @@ const RUN_KIND = "LOCAL_JOB";
  */
 export const DUTIES = {
   WEB_PROPERTY_CHANGE: "scripts/duties/web-property-change.mjs",
+  PARTNER_SESSION: "scripts/duties/partner-session.mjs",
 };
 
 /** Where jobs get their working directory: one per run, under ~/GitHub/wpos-jobs. */
@@ -272,7 +273,8 @@ export function dutyFor(job, roles = loadRoles()) {
   const script = DUTIES[kind];
   if (!script) return { ok: false, why: `this claimer runs no duty for card kind "${kind || "(none)"}"` };
   if (job.script && job.script !== script) return { ok: false, why: `the job names ${job.script} but this claimer runs ${script} for ${kind}` };
-  if (!["PLAN", "BUILD", "LAND"].includes(String(job.phase))) return { ok: false, why: `the job names no phase (got "${job.phase}")` };
+  // Each kind's phases are the ones model-roles.json gives a job class (PLAN/BUILD/LAND for a site job, SESSION for a partner session).
+  if (!Object.keys(roles.jobs?.[kind] ?? {}).includes(String(job.phase))) return { ok: false, why: `the job names no phase ${kind} has (got "${job.phase}")` };
   // What the Claude seat is started with: the seat's own invocation value from the rule table, not a rule about the job.
   if (typeof job.model !== "string" || !/^[a-z0-9][a-z0-9.-]*$/i.test(job.model)) return { ok: false, why: `the job carries no usable value to start the Claude seat with (got "${job.model}")` };
   if (!(Number(job.max_seconds) > 0)) return { ok: false, why: "the job carries no ceiling" };
@@ -736,7 +738,10 @@ function selfTest() {
     ["a job with no ceiling is refused", () => dutyFor({ ...good, max_seconds: 0 }).ok === false],
     ["no job at all is refused", () => dutyFor(null).ok === false],
     ["a phase the role table does not name is refused", () => dutyFor(good, { jobs: { WEB_PROPERTY_CHANGE: { PLAN: "nobody" } } }).ok === false],
-    ["every registered kind has a job class for every phase", () => Object.keys(DUTIES).every((k) => ["PLAN", "BUILD", "LAND"].every((ph) => JOB_CLASSES.includes(loadRoles().jobs?.[k]?.[ph])))],
+    ["every registered kind has a job class for every phase", () => Object.keys(DUTIES).every((k) => { const phases = Object.entries(loadRoles().jobs?.[k] ?? {}); return phases.length > 0 && phases.every(([, c]) => JOB_CLASSES.includes(c)); })],
+    ["a site job still has its three phases", () => ["PLAN", "BUILD", "LAND"].every((ph) => JOB_CLASSES.includes(loadRoles().jobs?.WEB_PROPERTY_CHANGE?.[ph]))],
+    ["a partner session's one phase is HARD work", () => loadRoles().jobs?.PARTNER_SESSION?.SESSION === "HARD"],
+    ["a partner session runs its SESSION phase and nothing else", () => dutyFor({ card_kind: "PARTNER_SESSION", phase: "SESSION", model: "opus", max_seconds: 7200 }).ok === true && dutyFor({ card_kind: "PARTNER_SESSION", phase: "BUILD", model: "opus", max_seconds: 7200 }).ok === false],
     ["a job dir cannot escape ~/GitHub/wpos-jobs", () => !jobDirFor("../../etc").includes("..")],
     ["every duty script named here exists", () => Object.values(DUTIES).every((s) => existsSync(path.join(REPO_ROOT, s)))],
   ];

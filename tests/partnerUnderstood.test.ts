@@ -95,6 +95,11 @@ describe("step 1: Got it, in his words", () => {
 describe("step 7: the DONE reply answers every ask", () => {
   it("a report missing an ask sends no DONE and re-parks the card; a full report sends one DONE marking all three", async () => {
     const card = await cardFor("Sensori");
+    // Worked by the general loop here (an emailed card is a partner session now, whose own report carries the asks:
+    // tests/partnerSession.test.ts); this proves the guard every finishing kind passes.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = NULL, lease_until = NULL, waiting_until = NULL WHERE id = ?1").bind(card.id).run();
+    // The earlier tick's session run for it is put away with it.
+    await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'ABANDONED' WHERE work_card_id = ?1 AND status IN ('QUEUED', 'CLAIMED')").bind(card.id).run();
     // The Northwind card is older and still waiting; park it so the sweep claims Sensori.
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE title LIKE '%Northwind%'").run();
     // Every other card in the firm out of the way too, so the claim is this one.
@@ -107,7 +112,7 @@ describe("step 7: the DONE reply answers every ask", () => {
         return { finished: true, blocked: false, detail: `Sensori is worth a call.\n${partial}`, steps: [{ action: "done", detail: `Sensori is worth a call.\n${partial}` }] };
       },
     });
-    expect(first.card?.id).toBe(card.id);
+    expect(first.card?.id, first.summary).toBe(card.id);
     expect(sent.slice(before).filter((m) => /^done|done —/i.test(m.subject)), "no DONE while an ask has no status").toHaveLength(0);
     const parked = await cardFor("Sensori");
     expect(parked.state).toBe("IN_PROGRESS");

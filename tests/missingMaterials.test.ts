@@ -154,7 +154,11 @@ describe("a NON-Porter card: Wren's general loop asks for the files, keeps the r
 
   it("a blocked run records what it needs, and the email asks for each item with where it goes and how to send it", async () => {
     id = await openAssignmentCard(env, { subject: "LP one-pager", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: "Wren, put together a one-pager on the fund for Thursday's LP meeting.", limits: EMAILED_TASK_LIMITS, emlKey: null });
-    expect((await card(id)).kind, "an ordinary assignment, worked by the general loop").toBeNull();
+    // 14 Nov 2026: an emailed assignment no door claims is a partner session now (tests/partnerSession.test.ts). The
+    // general loop still works every card made on the page or handed to an employee, which is what this suite proves.
+    expect((await card(id)).kind, "an emailed ordinary assignment is a partner session").toBe("PARTNER_SESSION");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = NULL WHERE id = ?1").bind(id).run();
+    expect((await card(id)).kind, "worked by the general loop from here").toBeNull();
     replies.push('{"action":"blocked","needs":"I need the fund logo and the Q3 letter to build this.","missing":[{"item":"the fund logo (SVG)","where":"the one-pager header"},{"item":"the Q3 LP letter (PDF)","where":"the performance section"}]}');
     const out = await tickFor(id);
     expect(out.outcome).toBe("BLOCKED");
@@ -193,6 +197,7 @@ describe("a NON-Porter card: Wren's general loop asks for the files, keeps the r
 
   it("a reply that is ONLY a file still reaches the card, and says what it carried", async () => {
     const other = await openAssignmentCard(env, { subject: "Deck check", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: "Wren, check the deck numbers against the model.", limits: EMAILED_TASK_LIMITS, emlKey: null });
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = NULL WHERE id = ?1").bind(other).run();
     replies.push('{"action":"blocked","needs":"Send me the model.","missing":[{"item":"the fund model (XLSX)","where":"the numbers check"}]}');
     await tickFor(other);
     const r = await reply(other, "", { name: "fund-model.xlsx", type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });

@@ -7,7 +7,7 @@ import { mintThreadToken, threadHeaders, threadTokensIn, type EmailThreadRow } f
 import { partnersOwnWords, writtenAndQuoted } from "../../shared/intake/replyBody";
 import { containsGenuineQuestion } from "../../shared/intake/genuineQuestion";
 import { addressIn, mailAuthority } from "../../shared/intake/partnerAuthority";
-import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
+import { PARTNER_SESSION_KIND, WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
 import { answerClarification, siteCardDecision, survivorOf, type Candidate, type RouteAs } from "./emailRouting";
 import { partnerByEmail, PARTNERS, PREVIEW_PARTNER, type Partner } from "../../shared/registry/partners";
 import type { InstructionPiece } from "../../shared/work/instruction";
@@ -606,7 +606,18 @@ export async function steerFromReply(
      */
     let builtFromReply = false;
     let wordsRead: ReplyIntent | null = null;
-    if (!alreadyFiled && !takenOver && !owned && !secondarySaidApproved && cardRow && partner && cardRow.kind !== WEB_PROPERTY_CHANGE_KIND) {
+    /*
+     * A REPLY ON A LIVE PARTNER SESSION REDIRECTS IT (14 Nov 2026). From the partner who asked: his words are a
+     * correction (or the answer to its question). The live run is abandoned with his words as the reason, exactly one
+     * new run is parked in the same working folder with them above the brief, and he hears "Changed course: …".
+     * Read before the build door: "no, make it a one-pager instead" steers this session, it does not open a new job.
+     */
+    const sessionReply =
+      !alreadyFiled && !takenOver && !owned && cardRow && partner && cardRow.kind === PARTNER_SESSION_KIND && !["DONE", "CANCELLED"].includes(cardRow.state) && (cardRow.requested_by_email ?? "").trim().toLowerCase() === partner.email.toLowerCase()
+        ? await (await import("./partnerSession")).redirectSession(env, cardRow.id, written, partner.email, thread.token)
+        : null;
+    if (sessionReply) answered = true;
+    if (!sessionReply && !alreadyFiled && !takenOver && !owned && !secondarySaidApproved && cardRow && partner && cardRow.kind !== WEB_PROPERTY_CHANGE_KIND) {
       const read = await readReplyIntent(
         env,
         { cardId: cardRow.id, firmScope: thread.firm_scope, text: written, where: replyWhere(cardRow) },
@@ -631,6 +642,8 @@ export async function steerFromReply(
 
     if (owned) {
       // Handled: the card changed hands (or was refused, and said so). Nothing below reads it.
+    } else if (sessionReply) {
+      // Handled: the session was redirected (services/partnerSession.ts redirectSession).
     } else if (builtFromReply) {
       // Handled: the build is Porter's own job now, and the partner was told on this thread.
     } else if (takenOver) {
