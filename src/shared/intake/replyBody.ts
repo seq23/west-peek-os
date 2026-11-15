@@ -98,7 +98,15 @@ export function splitQuoted(body: string): SplitBody {
   const lines = body.split(/\r?\n/);
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i]!;
-    if (QUOTE_MARKERS.some((re) => re.test(line))) {
+    /*
+     * GMAIL WRAPS ITS OWN ATTRIBUTION (15 Nov 2026, wc_bd8b68cb). "On Fri, Nov 13, 2026 at 11:32 PM Walker · West Peek
+     * <walker@…>" on one line and "wrote:" on the next: neither line alone is the marker, so the attribution rode into
+     * a partner's stored words. The line is read joined to the next one, up to two more lines.
+     */
+    const wrapped = /^\s*on\s/i.test(line) && !/wrote\s*:/i.test(line)
+      ? [1, 2].some((n) => i + n < lines.length && /^\s*on\s.{0,240}?\bwrote\s*:\s*$/i.test(lines.slice(i, i + n + 1).join(" ")))
+      : false;
+    if (wrapped || QUOTE_MARKERS.some((re) => re.test(line))) {
       return {
         written: lines.slice(0, i).join("\n"),
         quoted: lines.slice(i).join("\n"),
@@ -147,4 +155,35 @@ export function writtenAndQuoted(raw: string, headers: ReplyHeaders): WrittenAnd
   const body = bodyOf(raw);
   if (!isReplyMessage(headers)) return { written: body, quoted: "", hasQuote: false, applied: false };
   return { ...splitQuoted(body), applied: true };
+}
+
+/**
+ * A PARTNER'S OWN NEW WORDS, AND NOTHING ELSE, BEFORE ANY MODEL READS THEM (15 Nov 2026, wc_bd8b68cb).
+ *
+ * Deterministic, no model. What is cut: everything from the first quote marker down (an attribution, wrapped or not,
+ * `>` lines, a forwarded or Outlook block, our own footer), a `-- ` signature and everything below it, a phone's
+ * "Sent from my iPhone", a confidentiality footer, and a closing sign-off at the very end ("Best,\nScooter"). What is
+ * never cut: a line of his own words, a list of names (however long), a link. Nothing is summarised or reworded; the
+ * lines kept are his lines, in his order. Applied when a reply is filed and again when stored replies are read, so a
+ * reply filed before this existed reaches the model clean too.
+ */
+export function partnersOwnWords(text: string): string {
+  const lines = splitQuoted(String(text ?? "").replace(/\r/g, "")).written.split("\n");
+  const out: string[] = [];
+  for (const line of lines) {
+    if (/^--\s*$/.test(line)) break;
+    if (/^\s*(?:confidentiality notice|this (?:e-?mail|message)(?: and any attachments)? (?:is|are|may be|contains?) (?:confidential|privileged))/i.test(line)) break;
+    if (/^\s*(?:sent from my [\w\s]+|get outlook for \w+|sent via [\w\s]+)\.?\s*$/i.test(line)) continue;
+    out.push(line);
+  }
+  while (out.length && !out[out.length - 1]!.trim()) out.pop();
+  // A sign-off at the very end: "Best," (or Thanks, Cheers, Regards…) followed only by up to three short name lines.
+  // Never the whole reply: "Thanks!" on its own is what he said.
+  for (let i = out.length - 1; i >= Math.max(1, out.length - 4); i -= 1) {
+    if (/^\s*(?:best|best regards|kind regards|regards|thanks|thank you|thanks so much|many thanks|cheers|warmly|sincerely|talk soon|all the best|appreciate it)\s*[,!.]?\s*$/i.test(out[i]!)) {
+      if (out.slice(i + 1).every((l) => l.trim().length <= 40)) out.splice(i);
+      break;
+    }
+  }
+  return out.join("\n").trim();
 }

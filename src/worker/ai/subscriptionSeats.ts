@@ -606,6 +606,17 @@ export async function parkRun(
 }
 
 /**
+ * A PARTNER'S ASK GOES AHEAD OF BACKGROUND WORK ON THE MAC'S SEAT (15 Nov 2026, wc_bd8b68cb). The claimer took the
+ * oldest run first, so reading Scooter's replies queued behind whatever scheduled work was parked before it, and the
+ * router's wait ran out three times. A run reading a partner's words, or working a card a partner asked for or
+ * replied on, is claimed first; the rest keep their order. An ORDER BY term over `subscription_seat_run`. Pure SQL.
+ */
+export const PARTNER_ASK_FIRST = `CASE WHEN task_class IN ('instruction-interpretation', 'reply-intent')
+  OR EXISTS (SELECT 1 FROM work_card c WHERE c.id = subscription_seat_run.work_card_id
+              AND (COALESCE(c.requested_by_email, '') <> '' OR EXISTS (SELECT 1 FROM work_steer s WHERE s.from_card_id = c.id)))
+  THEN 0 ELSE 1 END`;
+
+/**
  * Hand the oldest queued run to a device.
  *
  * THE CLAIM IS A CONDITIONAL UPDATE, not a read followed by a write. Two claimers polling the same
@@ -649,7 +660,7 @@ export async function claimRun(
     const candidates =
       (
         await env.WP_OS_DB.prepare(
-          `SELECT id, seat, attachments_json FROM subscription_seat_run WHERE status = 'QUEUED' AND seat IN (${placeholders}) AND run_kind IN (${kindPlaceholders})${canSearch ? "" : " AND needs_search = 0"} ORDER BY created_at ASC LIMIT 25`,
+          `SELECT id, seat, attachments_json FROM subscription_seat_run WHERE status = 'QUEUED' AND seat IN (${placeholders}) AND run_kind IN (${kindPlaceholders})${canSearch ? "" : " AND needs_search = 0"} ORDER BY ${PARTNER_ASK_FIRST}, created_at ASC LIMIT 25`,
         )
           .bind(...seats, ...kinds)
           .all<{ id: string; seat: string; attachments_json: string | null }>()

@@ -165,14 +165,14 @@ export interface SteerRequest {
 }
 
 /** Injectable so a chain's tests can prove their steering without a provider. */
-export type Interpreter = (env: Env, actor: Actor, prompt: string) => Promise<{ ok: boolean; text: string; aiRunId: string | null; model: string | null; detail: string }>;
+export type Interpreter = (env: Env, actor: Actor, prompt: string, cardId?: string) => Promise<{ ok: boolean; text: string; aiRunId: string | null; model: string | null; detail: string }>;
 
 /**
  * The model call. `interpretation: true` is the whole point of this function existing separately
  * from every other runAi caller in the repo — see RunAiBudgetContext in ai/runAi.ts for why
  * `judgement` alone was not enough, and why price may order the candidates but may not choose them.
  */
-const defaultInterpreter: Interpreter = async (env, actor, prompt) => {
+const defaultInterpreter: Interpreter = async (env, actor, prompt, cardId) => {
   const { run } = await runAi(env, {
     purpose: "interpreting what a partner asked for",
     actor,
@@ -189,7 +189,8 @@ const defaultInterpreter: Interpreter = async (env, actor, prompt) => {
       // what its owner asked for before doing any of it.
       critical: true,
     },
-    routing: { category: "OPERATIONS", taskClass: "instruction-interpretation" },
+    // The card rides with the run, so the seat's queue can put a partner's ask first (subscriptionSeats.PARTNER_ASK_FIRST).
+    routing: { category: "OPERATIONS", taskClass: "instruction-interpretation", ...(cardId ? { workCardId: cardId } : {}) },
   });
   return {
     ok: run.status === "COMPLETED" && Boolean(run.output_text),
@@ -411,7 +412,7 @@ async function interpretSteer(
 
   let out: Awaited<ReturnType<Interpreter>>;
   try {
-    out = await interpret(env, actor, prompt);
+    out = await interpret(env, actor, prompt, req.cardId);
   } catch (err) {
     out = { ok: false, text: "", aiRunId: null, model: null, detail: err instanceof Error ? err.message : String(err) };
   }

@@ -114,6 +114,8 @@ export interface SweepCard {
   work_attempts: number;
   firm_scope: string;
   requested_by_email?: string | null;
+  /** `work_card.waiting_until` as the claim read it, so a hold written while this attempt runs is told apart from an old one. */
+  waiting_until?: string | null;
   /**
    * `work_card.preview_first`. NULL is "nobody said" — the default rule then decides from the
    * recipient. 1 is her asking to see this one before it goes, even to a partner. See
@@ -185,7 +187,7 @@ export async function claimNextCard(env: Env, now: Date): Promise<SweepCard | nu
             -- PARTNER_MESSAGE's whole instruction lives here — "how to do it", the Create door's own
             -- field, and the email door's parsed ask (services/dealIntake.ts). Carried, never
             -- interpreted here; see services/partnerMessage.ts.
-            prompt, next_action
+            prompt, next_action, waiting_until
        FROM work_card
       WHERE owner_type = 'AI' AND owner_id IS NOT NULL
         AND state IN ('OPEN', 'IN_PROGRESS')
@@ -195,6 +197,10 @@ export async function claimNextCard(env: Env, now: Date): Promise<SweepCard | nu
         -- until she says so through releaseHeldCard.
         AND held_at IS NULL
         AND (lease_until IS NULL OR lease_until < ?1)
+        -- A HOLD ON A CARD ALREADY BEING WORKED (15 Nov 2026, wc_bd8b68cb). A hold written by hand on an IN_PROGRESS card
+        -- ("waiting_until") was not read here, so the next attempt ran straight through it. A door that reopens a card sets
+        -- it OPEN, so an old wait left on a reopened card never holds it.
+        AND NOT (state = 'IN_PROGRESS' AND waiting_until IS NOT NULL AND waiting_until > ?1)
         AND COALESCE(work_attempts, 0) < ?2
         -- A CARD THE MAC HOLDS IS NOT WAITING (21 Sep 2026). Its LOCAL_JOB is queued or running;
         -- claiming it would spend a tick saying so while every younger card waits. It becomes
@@ -568,7 +574,7 @@ function titleCase(key: string): string {
  * visible rather than the third.
  */
 /** How many times an awake seat that answered too late may hand an attempt back before the card counts it. */
-export const SEAT_NO_ANSWER_WAITS = 6;
+export const SEAT_NO_ANSWER_WAITS = 6; // the old count bound; kept only as a number tests compare against
 
 /** The router's own words when an awake seat's run was closed unanswered (providers/subscriptionSeat.ts). */
 export function isSeatNoAnswer(detail: string | null | undefined): boolean {
@@ -602,7 +608,18 @@ export const RESEARCH_SEAT_WAIT_HOURS = 24;
 const NO_SEAT_RETRY_MINUTES = 30;
 
 async function firstSeatWaitAt(env: Env, cardId: string): Promise<number | null> {
-  const since = await runBeganAt(env, cardId);
+  /*
+   * THIS RUN, NOT THE CARD'S LIFE (15 Nov 2026, wc_bd8b68cb). A monthly card that finished and was reopened is a new run:
+   * its waits are measured from that finish too, never from a wait weeks ago.
+   */
+  const began = await runBeganAt(env, cardId);
+  const done = await env.WP_OS_DB.prepare(
+    "SELECT MAX(created_at) AS at FROM event_record WHERE object_type = 'work_card' AND object_id = ?1 AND event_type = 'work_card.swept' AND json_extract(payload_json, '$.outcome') = 'DONE'",
+  )
+    .bind(cardId)
+    .first<{ at: string | null }>()
+    .catch(() => null);
+  const since = done?.at && done.at > began ? done.at : began;
   const r = await env.WP_OS_DB.prepare(
     // The tick's own clock is in the payload (`at`), so a replayed or tested tick measures the day by its own time.
     "SELECT MIN(COALESCE(json_extract(payload_json, '$.at'), created_at)) AS at FROM event_record WHERE object_type = 'work_card' AND object_id = ?1 AND event_type = 'work_card.waiting_for_seat' AND created_at >= ?2",
@@ -613,14 +630,15 @@ async function firstSeatWaitAt(env: Env, cardId: string): Promise<number | null>
   return r?.at ? new Date(r.at).getTime() : null;
 }
 
-async function seatWaitsSoFar(env: Env, cardId: string): Promise<number> {
-  const r = await env.WP_OS_DB.prepare(
-    "SELECT COUNT(*) AS n FROM event_record WHERE object_type = 'work_card' AND object_id = ?1 AND event_type = 'work_card.waiting_for_seat'",
-  )
-    .bind(cardId)
-    .first<{ n: number }>()
-    .catch(() => null);
-  return Number(r?.n ?? 0);
+/**
+ * A SEAT THAT WAS BUSY, SLOW OR OUT IS "TRY LATER", NEVER A FAILED ATTEMPT (15 Nov 2026, wc_bd8b68cb). The old bound
+ * counted every seat wait in the card's whole life, so a monthly card that had waited six times weeks earlier spent an
+ * attempt on each of tonight's three timeouts on the Mac's Claude seat, and was blocked on Scooter for a queue on the
+ * Mac. Now a seat that did not answer hands the attempt back for as long as RESEARCH_SEAT_WAIT_HOURS from the first
+ * wait of this run; only after that does it count, and the stop names who runs the seats, never the partner.
+ */
+export function isSeatTrouble(text: string | null | undefined): boolean {
+  return isSeatNoAnswer(text) || isSeatWait(text);
 }
 
 async function noteFailedAttempt(env: Env, card: SweepCard, line: string, now: Date): Promise<void> {
@@ -960,6 +978,35 @@ export async function sweepOnce(
    *      itself, so those keep all three. An empty account does not, and repeating it twice more
    *      buys nothing but fourteen minutes of a card looking healthy.
    */
+  /*
+   * A HOLD WRITTEN WHILE THIS ATTEMPT WAS RUNNING WINS (15 Nov 2026, wc_bd8b68cb). A hold was put on the card while its
+   * third attempt was already in flight; the attempt ran out, was counted, and blocked the card on Scooter. A hold that
+   * appeared during the run (not the one the claim read) hands the attempt back and keeps the card out of the sweep
+   * until it ends. Nothing is counted and nobody is emailed.
+   */
+  const holdNow = (await env.WP_OS_DB.prepare("SELECT waiting_until FROM work_card WHERE id = ?1").bind(card.id).first<{ waiting_until: string | null }>().catch(() => null))?.waiting_until ?? null;
+  if (holdNow && holdNow !== (card.waiting_until ?? null) && holdNow > now.toISOString()) {
+    await env.WP_OS_DB.prepare(
+      "UPDATE work_card SET lease_until = ?2, work_attempts = MAX(COALESCE(work_attempts, 1) - 1, 0), state = 'OPEN' WHERE id = ?1 AND state IN ('OPEN', 'IN_PROGRESS')",
+    )
+      .bind(card.id, holdNow)
+      .run();
+    await appendEvent(env, {
+      eventType: "work_card.hold_honoured",
+      actorType: "system",
+      actorId: "work_sweep",
+      objectType: "work_card",
+      objectId: card.id,
+      firmScope: card.firm_scope,
+      payload: { until: holdNow, attempt: card.work_attempts, detail: detail.slice(0, 240) },
+    }).catch(() => undefined);
+    return {
+      status: "SUCCEEDED",
+      summary: `"${card.title.slice(0, 60)}" was put on hold while an attempt ran; that attempt is not counted and the card waits until ${holdNow}.`,
+      card: { ...card, work_attempts: Math.max(card.work_attempts - 1, 0), state: "OPEN" },
+      outcome: "WAITING_ON_SEAT",
+    };
+  }
   const lane = await laneBehindTheFailure(env, card.id, detail, now);
   /*
    * A SEAT THAT DID NOT ANSWER IS AN INFRASTRUCTURE WAIT, NOT HER SPEND DECISION (26 Oct 2026, wc_dd3481d8…).
@@ -1010,8 +1057,14 @@ export async function sweepOnce(
       };
     }
   }
-  const seatNoAnswer = isSeatNoAnswer(detail) && (await seatWaitsSoFar(env, card.id)) < SEAT_NO_ANSWER_WAITS;
-  if (seatNoAnswer || (isLaneFailure(lane.failure) && lane.failure.kind === "LEVER")) {
+  const seatTrouble = !searchStopped && isSeatTrouble(`${lane.raw} ${detail}`);
+  let seatDayUp = false;
+  // Important work waiting for its seat is always a wait (owner, 26 Oct 2026); a seat that keeps not answering stops after a day.
+  if (seatTrouble && !isSeatWait(`${lane.raw} ${detail}`)) {
+    const firstWait = await firstSeatWaitAt(env, card.id);
+    seatDayUp = firstWait !== null && now.getTime() - firstWait >= RESEARCH_SEAT_WAIT_HOURS * 3_600_000;
+  }
+  if ((seatTrouble && !seatDayUp) || (!seatTrouble && isLaneFailure(lane.failure) && lane.failure.kind === "LEVER")) {
     /*
      * IMPORTANT WORK WAITING FOR A SEAT IS ALWAYS A WAIT (owner, 26 Oct 2026; shared/ai/seatOrder.ts): it may never
      * take a free lane, so a missing seat is a technical wait, never her spend question and never a STUCK email.
@@ -1020,7 +1073,9 @@ export async function sweepOnce(
       (await seatToWaitFor(env, searchStopped || isSearchCallRefusal(`${lane.raw} ${detail}`), now)) ??
       (isSeatWait(`${lane.raw} ${detail}`)
         ? { seat: "claude_code", said: "important work waits for the Claude Code or Codex seat (never a free lane), and no seat has checked in for a day" }
-        : null);
+        : seatTrouble
+          ? { seat: "claude_code", said: "the Mac's seat did not answer in time" }
+          : null);
     if (seat) {
       const until = new Date(now.getTime() + SEAT_WAIT_MINUTES * 60_000).toISOString();
       const line = `Waiting for the subscription seat: ${seat.said}, so this tries again on it by itself in about ${SEAT_WAIT_MINUTES} minutes.`;
@@ -1038,7 +1093,7 @@ export async function sweepOnce(
         objectType: "work_card",
         objectId: card.id,
         firmScope: card.firm_scope,
-        payload: { seat: seat.seat, until, detail: detail.slice(0, 240) },
+        payload: { seat: seat.seat, at: now.toISOString(), until, detail: detail.slice(0, 240) },
       }).catch(() => undefined);
       return {
         status: "SUCCEEDED",
@@ -1074,7 +1129,8 @@ export async function sweepOnce(
      */
     await appendFailureNote(env, card.id, detail);
     // A search no route could do is a fault in the routes, which Scooter cannot clear: it names who runs them.
-    const who = isProductionsKind(card.kind) && !searchStopped ? ("SCOOTER" as const) : ("SEQUOIA" as const);
+    // A seat that never answered is the same: a fault in the Mac's seats, never the partner's to clear.
+    const who = isProductionsKind(card.kind) && !searchStopped && !seatTrouble ? ("SCOOTER" as const) : ("SEQUOIA" as const);
     const employee = await employeeName(env, card.owner_id);
     /*
      * WHICH BLOCK THIS IS, AND WHY IT MATTERS THAT THEY ARE DIFFERENT.
@@ -1105,7 +1161,8 @@ export async function sweepOnce(
         : { reason: "tried_and_could_not_finish", trying: card.title, employee, who },
       now,
     );
-    await announceOutcome(env, card, "BLOCKED", why);
+    // A Productions notice goes to Scooter's desk; a seat that never answered is not his to clear, so it stays on hers (the block).
+    if (!(seatTrouble && isProductionsKind(card.kind))) await announceOutcome(env, card, "BLOCKED", why);
     return { status: "SUCCEEDED", summary: `"${card.title.slice(0, 60)}" blocked after ${card.work_attempts} failed attempt(s) and handed to you: ${detail.slice(0, 140)}`, card, outcome: "BLOCKED" };
   }
   // THE SWEEP RAN; THE CARD IS NOT DONE YET. Reporting this as a failed RUN painted "FAILED" on the
