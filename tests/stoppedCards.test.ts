@@ -518,7 +518,10 @@ describe("a quiet seat at Free only is a wait, not a spend question", () => {
       await env.WP_OS_DB.prepare("UPDATE work_card SET waiting_until = ?2 WHERE id = ?1").bind(id, hold).run();
       return { finished: false, blocked: false, detail: "the model returned nothing usable", steps: [{ action: "failed", detail: "the model returned nothing usable" }] };
     };
-    await sweepOnce(env, T0, { general: runner });
+    // Only this card is waiting, so the tick claims it.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id <> ?1 AND state IN ('OPEN', 'IN_PROGRESS')").bind(id).run();
+    const first = await sweepOnce(env, T0, { general: runner });
+    expect(first.card?.id, "the attempt that was in flight is this card's").toBe(id);
     let c = await row(id);
     expect(c.state, "the in-flight attempt does not block the held card").not.toBe("BLOCKED");
     expect(Number(c.work_attempts), "and is not counted").toBe(MAX_WORK_ATTEMPTS - 1);
