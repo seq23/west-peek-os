@@ -66,8 +66,11 @@ function unwrapped(words: string): string {
     .split(/\n\s*\n/)
     .map((para) => para.split("\n").reduce((acc, line) => {
       if (!acc) return line;
-      // A new line starts a new item only when it is a list item; otherwise it continues the sentence.
-      return /^\s*(?:\d+[.)]|[-*•])\s+/.test(line) ? `${acc}\n${line}` : `${acc} ${line.trim()}`;
+      // A new line starts a new item when it is a list item, or when it follows a list item and starts a new sentence;
+      // otherwise a mail client wrapped it and it continues the sentence.
+      const prev = acc.slice(acc.lastIndexOf("\n") + 1);
+      const newItem = /^\s*(?:\d+[.)]|[-*•])\s+/.test(line) || (/^\s*(?:\d+[.)]|[-*•])\s+/.test(prev) && /^\s*[A-Z"“(]/.test(line) && /[.!?:)"”]\s*$|^\s*[-*•]/.test(prev));
+      return newItem ? `${acc}\n${line}` : `${acc} ${line.trim()}`;
     }, ""))
     .join("\n\n");
 }
@@ -88,6 +91,9 @@ export function sentencesOf(words: string): string[] {
 
 /** The one item his clarify-first questions become: it says so, and carries his words. */
 export const QUESTIONS_LEAD = "Your questions to settle before I build: ";
+/** The same item when his questions are not about what to settle first ("What can you get done today?"). */
+export const QUESTIONS_PLAIN = "Your questions: ";
+const BEFORE_BUILDING = /^(?:before (?:building|you build|you start|starting|we build|going)|let'?s (?:clarify|confirm))/i;
 /** A paragraph that asks to clarify or answer something before the work goes on. */
 const CLARIFY_FIRST = /\?|^(?:before (?:building|you build|you start|starting|we build|going)|let'?s (?:clarify|confirm|talk)|can you (?:confirm|clarify|tell)|please (?:confirm|clarify)|what (?:can|is|are|do)|which\b|how (?:do|does|should|will))/i;
 
@@ -105,11 +111,22 @@ export function structuredAsks(words: string): { asks: string[]; noted: string[]
   for (const para of paras) {
     const lines = para.split("\n");
     if (/^\s*\d+[.)]\s+/.test(lines[0]!)) {
-      let current: string[] = [];
-      const flush = () => { if (current.length) asks.push(current.join(" ").replace(/\s+/g, " ").trim()); current = []; };
+      let head = "";
+      let bullets: string[] = [];
+      let tail: string[] = [];
+      const flush = () => {
+        if (!head) return;
+        let item = head.trim();
+        if (bullets.length) item = `${item}${/:$/.test(item) ? " " : "; "}${bullets.join("; ")}`;
+        if (tail.length) item = `${item}${/[.!?]$/.test(item) ? " " : ". "}${tail.join(" ")}`;
+        asks.push(item.replace(/\s+/g, " ").trim());
+        head = ""; bullets = []; tail = [];
+      };
       for (const line of lines) {
-        if (/^\s*\d+[.)]\s+/.test(line)) { flush(); current.push(line.replace(/^\s*\d+[.)]\s+/, "")); }
-        else current.push(line.replace(/^\s*[-*•]\s+/, "").replace(/^/, current.length ? "; " : ""));
+        if (/^\s*\d+[.)]\s+/.test(line)) { flush(); head = line.replace(/^\s*\d+[.)]\s+/, ""); }
+        else if (/^\s*[-*•]\s+/.test(line)) bullets.push(line.replace(/^\s*[-*•]\s+/, "").trim());
+        else if (bullets.length) tail.push(line.trim());
+        else head = `${head} ${line.trim()}`;
       }
       flush();
     } else {
@@ -119,8 +136,11 @@ export function structuredAsks(words: string): { asks: string[]; noted: string[]
     }
   }
   if (asks.length === 0) return null;
-  const items = asks.slice(0, MAX_ASKS).map((a) => a.replace(/\s*;\s*;/g, ";").replace(/\s+;/g, ";"));
-  if (questions.length) items.push(`${QUESTIONS_LEAD}${questions.join(" ")}`);
+  const items = asks.slice(0, MAX_ASKS);
+  if (questions.length) {
+    const first = questions.join(" ");
+    items.push(`${BEFORE_BUILDING.test(first) ? QUESTIONS_LEAD : QUESTIONS_PLAIN}${first}`);
+  }
   return { asks: items, noted: noted.slice(0, 4) };
 }
 
@@ -328,7 +348,7 @@ async function answerOne(env: Env, row: Candidate, read: SeatRead): Promise<bool
    * never "I'm starting on it now". Sequoia's desk hears that he replied, once per reply, with the card.
    */
   const takenOver = isTakenOver(row.held_reason);
-  const next = takenOver ? TAKEN_OVER_NEXT : understood.next;
+  const next = gotItNext(row.held_reason, understood.next);
   if (takenOver) {
     await notifyQuietly(env, {
       firmUserId: PREVIEW_PARTNER.firmUserId,
@@ -379,12 +399,20 @@ async function answerOne(env: Env, row: Candidate, read: SeatRead): Promise<bool
 /** What a Got it on a taken-over card says happens next: the truth, nothing started. */
 export const TAKEN_OVER_NEXT = "I'll start on these as soon as the current round is wrapped up; nothing is lost.";
 
+/** The Got it's "what happens next", the one rule both the live send and the dry run use. Pure. */
+export function gotItNext(heldReason: string | null | undefined, next: string): string {
+  return isTakenOver(heldReason) ? TAKEN_OVER_NEXT : next;
+}
+
 /** The "Got it" itself: his asks in his words, every file that could not be opened, what happens next. Pure. */
 export function gotItEmail(input: { employee: string; subject: string; asks: readonly string[]; next: string; unopened: ReadonlyArray<{ filename: string; reason: string }>; noted?: readonly string[]; filed?: readonly string[] }) {
   const { asks, next, unopened } = input;
   const filed = input.filed ?? [];
   const noted = input.noted ?? [];
-  const quoted = (a: string) => (a.startsWith(QUESTIONS_LEAD) ? `${QUESTIONS_LEAD}"${a.slice(QUESTIONS_LEAD.length)}"` : `"${a}"`);
+  const quoted = (a: string) => {
+    for (const lead of [QUESTIONS_LEAD, QUESTIONS_PLAIN]) if (a.startsWith(lead)) return `${lead}"${a.slice(lead.length)}"`;
+    return `"${a}"`;
+  };
   return {
     employee: input.employee,
     what: `got it — ${input.subject.slice(0, 80)}`,
