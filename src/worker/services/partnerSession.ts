@@ -202,6 +202,8 @@ export function askLine(a: SessionAsk): string {
 
 /** Past this many questions the email gives his request's best reading per item for him to correct (her ruling). */
 export const BEST_READING_OVER = 5;
+/** A safety bound on one question email, never a cap on what is asked: past it the email says "and N more". */
+export const QUESTION_EMAIL_BOUND = 40;
 
 /**
  * THE QUESTION EMAIL (Sequoia, 15 Nov 2026): every unclear item is asked, none merged or dropped, each NUMBERED, quoting
@@ -209,8 +211,11 @@ export const BEST_READING_OVER = 5;
  * request reads several ways and gives the best reading of each for him to correct, still every item. The clear work
  * is said to be going on meanwhile. Pure.
  */
-export function questionEmail(questions: readonly SessionAsk[], going: readonly SessionAsk[]) {
-  const n = questions.length;
+export function questionEmail(all: readonly SessionAsk[], going: readonly SessionAsk[]) {
+  // Every item is asked; past this safety bound the email says how many more there are, never drops them in silence.
+  const questions = all.slice(0, QUESTION_EMAIL_BOUND);
+  const beyond = all.length - questions.length;
+  const n = all.length;
   const several = n > BEST_READING_OVER;
   return {
     what: n === 1 ? `a question — "${questions[0]!.words.slice(0, 60)}"` : several ? `your request reads several ways — ${n} items` : `${n} questions, by number`,
@@ -225,6 +230,7 @@ export function questionEmail(questions: readonly SessionAsk[], going: readonly 
           ? [`What is missing: ${q.why || "which reading you meant"}`, `My best reading: ${q.options[0] ?? "as written"}`]
           : [`What is missing: ${q.why || "which reading you meant"}`, ...q.options.map((o, j) => `Option ${String.fromCharCode(65 + j)}: ${o}`)],
       })),
+      ...(beyond > 0 ? [{ label: `And ${beyond} more`, bullets: [`${beyond} more items read several ways; they are on the card, and I will ask them next by number.`] }] : []),
       ...(going.length ? [{ label: "Still being built while you answer", bullets: going.map(askLine) }] : []),
     ],
     details: null,
