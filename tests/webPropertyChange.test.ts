@@ -1275,6 +1275,40 @@ describe("the v1.0 bar: every built ask says when it is done, and a build that h
   });
 });
 
+describe("a step the partner kept for himself is his, not unfinished work (14 Nov 2026)", () => {
+  beforeAll(ageEarlierCards);
+  afterAll(ageEarlierCards);
+  it("a check he reserved in his own words goes to preview; the same shape with words he never wrote is refused", async () => {
+    /*
+     * Scooter's brief: "We will walk the rules before any money view ships." The BUILD did every ask and reported
+     * that one check as not met, quoting him; the bar refused it as unfinished and no preview reached him.
+     */
+    const BASE = { document: "# Plan\n\nnothing to ask", decided: ["as asked"], asks: [], publish_ready: true };
+    const checks = ["Scooter signs in with his own password on the preview", "walk the cash rules with Scooter before any money view ships"];
+    const more = "\n\nFinance stays private. We will walk the rules before any money view ships.";
+    const atBuild = async (tag: string): Promise<string> => {
+      const chiefId = await openAssignmentCard(env, { subject: `productions money ${tag}`, partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: `Please build a dashboard on westpeek.ventures where I can sign in and see deals — package: https://drive.google.com/drive/folders/${FOLDER}${tag}${more}`, limits: EMAILED_TASK_LIMITS, emlKey: null });
+      const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
+      await tickFor(id);
+      await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "the dashboard", how: "build", done_when: checks }], ...BASE });
+      await tickFor(id);
+      expect((await readWebPropertyChange(env, id))!.plan_filed_at).toBeTruthy();
+      return id;
+    };
+    const pr = (tag: string) => ({ pr_url: "https://github.com/seq23/join-west-peek-main/pull/92", pr_number: 92, branch: `work/wpc-${tag}`, check_state: "GREEN", preview_url: `https://${tag}.west-peek-ventures.pages.dev`, proof: "validate green" });
+    const his = await atBuild("held1");
+    await macReports(his, { phase: "BUILD", status: "ok", ...pr("held1"), items: [{ item: "the dashboard", state: "partial", done_when: [{ check: checks[0], met: true }, { check: checks[1], met: false, note: "his own words: 'We will walk the rules before any money view ships'; nothing lands without his yes" }] }] });
+    await tickFor(his);
+    expect(String((await card(his)).description), "not refused as unfinished").not.toMatch(/BUILD REFUSED/);
+    expect((await readWebPropertyChange(env, his))!.preview_url).toBe("https://held1.west-peek-ventures.pages.dev");
+    const not = await atBuild("held2");
+    await macReports(not, { phase: "BUILD", status: "ok", ...pr("held2"), items: [{ item: "the dashboard", state: "partial", done_when: [{ check: checks[0], met: true }, { check: checks[1], met: false, note: "his words: 'We will do the money view next month'" }] }] });
+    await tickFor(not);
+    expect(String((await card(not)).description), "words he never wrote hold nothing").toMatch(/BUILD REFUSED.*walk the cash rules/);
+    expect((await readWebPropertyChange(env, not))!.preview_url ?? null).toBeNull();
+  });
+});
+
 describe("a plan that is not publish-ready previews first (21 Sep 2026)", () => {
   const PLACEHOLDERS = ["Airtable links", "Sengo logo", "episode records", "approved orange hex"];
   let id = "";
@@ -2139,6 +2173,32 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
     expect(c.state).toBe("OPEN");
     expect(String(c.block_answer)).toMatch(/^Yes he can open/);
     expect(c.block_answered_by).toBe("fu_scooter_taylor");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(chiefId).run();
+  });
+
+  it("a partner's long reply answers the block WHOLE: a 4,130-character brief keeps its last lines (14 Nov 2026)", async () => {
+    /*
+     * Scooter's "whole vision" reply to a Porter preview was 4,130 characters. The reply door cut it
+     * at 4,000 before answerBlock saw it: block_answer and the note ended "we expan", his closing
+     * question was gone, and a build started from the part.
+     */
+    const chiefId = await openAssignmentCard(env, { subject: "Something long Walker holds", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Walker, find me three podcast hosts who cover seed funds.", limits: EMAILED_TASK_LIMITS, emlKey: null });
+    const { blockCard } = await import("../src/worker/services/blocks");
+    await blockCard(env, { id: chiefId, title: "From scooter@westpeek.ventures: Something long Walker holds", firm_scope: "west-peek" }, { reason: "permission_to_open_a_page", trying: "podcast hosts", employee: "Walker", url: "https://example.org" });
+    const { replyToRequester } = await import("../src/worker/services/requestReply");
+    const c0 = await card(chiefId);
+    await replyToRequester(env, { id: chiefId, title: String(c0.title), requested_by_email: SCOOTER, firm_scope: "west-peek" }, "BLOCKED", "Walker", String(c0.block_needed));
+    const subject = sent.at(-1)!.subject;
+    const lines = Array.from({ length: 66 }, (_, i) => `${i + 1}. Point ${i + 1} of the brief, a full line of what he wants built.`);
+    const body = `Hey Walker!\n\n${lines.join("\n")}\n\nWhen that works end to end with real data, we expand.\n\nWhat do you need from me to start?\n\nBest,\nScooter`;
+    expect(body.length, "the fixture is past the old 4,000 cut").toBeGreaterThan(4100);
+    await handleInboundEmail(inbound(SCOOTER_MIME({ subject: `Re: ${subject}`, body }), { subject: `=?UTF-8?B?${Buffer.from(`Re: ${subject}`).toString("base64")}?=` }), env);
+    const c = await card(chiefId);
+    expect(c.state).toBe("OPEN");
+    expect(String(c.block_answer), "his closing question is on the card").toMatch(/we expand\.\s+What do you need from me to start\?/);
+    expect(String(c.block_answer)).not.toMatch(/cut here/);
+    const note = await env.WP_OS_DB.prepare("SELECT body FROM work_card_note WHERE work_card_id = ?1 AND body LIKE 'You asked what to do.%' ORDER BY created_at DESC LIMIT 1").bind(chiefId).first<{ body: string }>();
+    expect(String(note?.body), "and in the note the employee reads").toMatch(/What do you need from me to start\?/);
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(chiefId).run();
   });
 

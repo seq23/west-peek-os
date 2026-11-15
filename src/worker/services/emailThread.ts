@@ -12,7 +12,8 @@ import { answerClarification, siteCardDecision, survivorOf, type Candidate, type
 import { partnerByEmail, PARTNERS, PREVIEW_PARTNER, type Partner } from "../../shared/registry/partners";
 import type { InstructionPiece } from "../../shared/work/instruction";
 import { answerBlock } from "./blocks";
-import { blockReplyDoor } from "../../shared/work/blocks";
+import { statedCut } from "./partnerWords";
+import { blockReplyDoor, PARTNER_ANSWER_MAX } from "../../shared/work/blocks";
 import { ownershipFromWords, tellPartner, tellSecondaryRefused } from "./handOff";
 import { ownershipOf, roleOf } from "../../shared/work/partnerOwnership";
 import { LATE_THREAD_NOTE_PREFIX, NEW_EMAIL_NOTE_PREFIX, readApprovalReply } from "../../shared/work/approvalReply";
@@ -24,6 +25,17 @@ import { routedByFor } from "./requestReply";
 import { sendOrPreview } from "./previewApproval";
 import { notifyPartners } from "./notifications";
 import { defaultReadReplyIntent, readReplyIntent, type ReplyIntent, type ReplyIntentReader } from "./replyIntent";
+
+/**
+ * A PARTNER'S REPLY IS KEPT WHOLE (14 Nov 2026). Scooter's 4,130-character "whole vision" reply to
+ * a Porter preview was cut at 4,000 here before `answerBlock` ever saw it, so the card's answer and
+ * note stopped mid-word at "we expan" and lost "What do you need from me to start?" — and a build
+ * started from it. Every reply this file stores goes through this one cap, which says where it
+ * stopped when it does.
+ */
+function keptWords(text: string): string {
+  return statedCut(text, PARTNER_ANSWER_MAX, "the stored email");
+}
 
 /**
  * A REPLY, MATCHED TO ITS CONVERSATION AND TURNED INTO A STEER (17 Sep 2026).
@@ -462,7 +474,7 @@ export async function steerFromReply(
         kind,
         thread.object_type === "work_card" ? thread.object_id : null,
         authority.partnerAddress!,
-        written.slice(0, 4000),
+        keptWords(written),
         thread.token,
         thread.firm_scope,
       )
@@ -636,7 +648,7 @@ export async function steerFromReply(
             }
             door = blockReplyDoor(written, actions);
           }
-          const out = await answerBlock(env, cardRow.id, partner.firmUserId, { action: door, text: written.slice(0, 4000) });
+          const out = await answerBlock(env, cardRow.id, partner.firmUserId, { action: door, text: keptWords(written) });
           answered = out.ok;
         }
       } else {
@@ -648,8 +660,8 @@ export async function steerFromReply(
             cardRow.id,
             partner.firmUserId,
             roleOf(cardRow, partner.email) === "SECONDARY"
-              ? `(From the secondary partner; read as context, not an approval.) ${written.slice(0, 3900)}`
-              : `(Not the partner this question was addressed to; kept as a note.) ${written.slice(0, 3900)}`,
+              ? `(From the secondary partner; read as context, not an approval.) ${keptWords(written)}`
+              : `(Not the partner this question was addressed to; kept as a note.) ${keptWords(written)}`,
             thread.firm_scope,
           )
           .run();
@@ -664,7 +676,7 @@ export async function steerFromReply(
       await env.WP_OS_DB.prepare(
         "INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)",
       )
-        .bind(`wcn_${crypto.randomUUID()}`, cardRow.id, partner.firmUserId, written.slice(0, 4000), thread.firm_scope)
+        .bind(`wcn_${crypto.randomUUID()}`, cardRow.id, partner.firmUserId, keptWords(written), thread.firm_scope)
         .run();
     } else if (cardRow && partner && cardRow.kind === "PARTNER_MESSAGE") {
       /*
@@ -799,7 +811,7 @@ async function reopenForRework(
   if (read.kind !== "CONTINUE" || read.nothing) return false;
   const verdict = { reason: read.reason, aiRunId: read.aiRunId };
   await env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)")
-    .bind(`wcn_${crypto.randomUUID()}`, card.id, partner.firmUserId, `${partner.firstName} replied to the finished note asking for it to be redone: ${written}`.slice(0, 4000), card.firm_scope)
+    .bind(`wcn_${crypto.randomUUID()}`, card.id, partner.firmUserId, keptWords(`${partner.firstName} replied to the finished note asking for it to be redone: ${written}`), card.firm_scope)
     .run();
   const reopened = await env.WP_OS_DB.prepare(
     "UPDATE work_card SET state = 'OPEN', work_attempts = 0, lease_until = NULL, work_last_failure = NULL, next_action = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1 AND state = 'DONE'",
@@ -920,7 +932,7 @@ async function handleReplyOnClosedCard(
       `wcn_${crypto.randomUUID()}`,
       card.id,
       partner.firmUserId,
-      `[QUESTION AFTER DONE — needs a reply from you] ${written}`.slice(0, 4000),
+      keptWords(`[QUESTION AFTER DONE — needs a reply from you] ${written}`),
       card.firm_scope,
     )
     .run();
@@ -973,7 +985,7 @@ async function relayPartnerMessageReply(
   // The partner who asked for the note; a card naming nobody relays to the other Managing Partner.
   const asked = partnerByEmail(card.requested_by_email ?? null);
   const relayTo = asked ? (asked.email !== replier.email ? asked : null) : (PARTNERS.find((p) => p.email !== replier.email) ?? null);
-  const body = `${PARTNER_MESSAGE_REPLY_NOTE_PREFIX}${replier.firstName} replied: ${written}`.slice(0, 4000);
+  const body = keptWords(`${PARTNER_MESSAGE_REPLY_NOTE_PREFIX}${replier.firstName} replied: ${written}`);
   const seen = await env.WP_OS_DB.prepare("SELECT 1 AS one FROM work_card_note WHERE work_card_id = ?1 AND body = ?2 LIMIT 1")
     .bind(card.id, body)
     .first<{ one: number }>();

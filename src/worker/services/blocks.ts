@@ -3,6 +3,7 @@ import type { Env } from "../env";
 import { ownershipOf, roleOf, secondaryApprovalRefusal } from "../../shared/work/partnerOwnership";
 import type { RouteContext } from "../router";
 import { appendEvent } from "../events";
+import { PARTNER_WORDS_ON_CARD, statedCut } from "./partnerWords";
 import { notifyPartners, notifyQuietly } from "./notifications";
 import { privacyVisibilityClause } from "./authorize";
 import type { FirmUserIdentity } from "../auth";
@@ -613,7 +614,8 @@ export async function answerBlock(
   }
 
   const who = await employeeName(env, card.owner_id);
-  const typed = (input.text ?? "").trim();
+  // Cut only past the one cap, and then saying so: a silent cut lost the end of a partner's reply.
+  const typed = statedCut((input.text ?? "").trim(), PARTNER_ANSWER_MAX, "the stored email");
 
   if (input.action === "DROP") {
     if (typed.length < 2) return { ok: false, state: card.state, said: "Say in a few words why you are dropping it, so the record makes sense later." };
@@ -788,7 +790,7 @@ function choiceLabel(choice: string): string {
  */
 async function leaveNote(env: Env, cardId: string, authorId: string, body: string): Promise<void> {
   await env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body) VALUES (?1, ?2, ?3, ?4)")
-    .bind(`wcn_${crypto.randomUUID()}`, cardId, authorId, body.slice(0, 4000))
+    .bind(`wcn_${crypto.randomUUID()}`, cardId, authorId, statedCut(body, PARTNER_WORDS_ON_CARD, "the card's answer"))
     .run();
 }
 

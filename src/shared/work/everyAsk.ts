@@ -104,7 +104,24 @@ export function planProblems(input: { partnerText: string; accounting?: readonly
  * `missing_material` with a missing file listed), or by work the partner dated (`partner_dated`; the
  * plan check already holds the dating to their words). Never a silent "partial".
  */
-export function buildProblems(input: { items?: readonly DoneItem[] | null; missingSecrets?: number; missingMaterials?: number }): string[] {
+/**
+ * A STEP THE PARTNER KEPT FOR HIMSELF IS HIS, NOT UNFINISHED WORK (partner tail, 14 Nov 2026). Scooter's brief said
+ * "We will walk the rules before any money view ships" and "I approve each step". The BUILD did all seven asks and
+ * reported the one check only he can meet ("walk the rules with Scooter") as not met, quoting him; the v1.0 bar
+ * refused it as unfinished, no preview went to him, and the retries could only fail the same way. A check is held by
+ * the partner when its note quotes words he actually wrote AND those words reserve the step to him ("we will…",
+ * "I will…", "I approve…", "not … yet", "when I am ready").
+ */
+const RESERVES_A_STEP = /\b(?:i|we)(?:'ll|\s+will)\b|\bi\s+approve\b|\bnot\b[^.]{0,60}\byet\b|\bwhen\s+(?:i|we)(?:'m|'re|\s+am|\s+are)?\s+ready\b|\b(?:wait|waits)\s+(?:for|on)\s+me\b/i;
+export function partnerReserved(note: string | null | undefined, partnerText: string): boolean {
+  for (const m of String(note ?? "").matchAll(/["'\u2018\u201C]([^"'\u2019\u201D]{8,400})["'\u2019\u201D]/g)) {
+    const quote = m[1]!;
+    if (RESERVES_A_STEP.test(quote) && partnerWrote(quote, partnerText)) return true;
+  }
+  return false;
+}
+
+export function buildProblems(input: { items?: readonly DoneItem[] | null; missingSecrets?: number; missingMaterials?: number; partnerText?: string }): string[] {
   const items = input.items ?? [];
   if (items.length === 0) return ["it did not report each ask against its done-when checks (no `items` list)"];
   const problems: string[] = [];
@@ -120,6 +137,7 @@ export function buildProblems(input: { items?: readonly DoneItem[] | null; missi
     const by = String(i.blocked_by ?? "");
     const held = (by === "missing_secret" && (input.missingSecrets ?? 0) > 0) || (by === "missing_material" && (input.missingMaterials ?? 0) > 0) || by === "partner_dated";
     if (held) continue;
+    if (unmet.length && input.partnerText && unmet.every((c) => partnerReserved(c.note, input.partnerText!))) continue;
     const named = unmet.length ? unmet.map((c) => c.check.slice(0, 80)).join(", ") : `its state is "${String(i.state).slice(0, 20)}"`;
     problems.push(`${what} is not finished (${named})${by ? ` and "${by.slice(0, 40)}" is not something only the partner can supply` : ""}`);
   }

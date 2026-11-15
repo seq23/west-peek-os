@@ -182,6 +182,9 @@ describe("the rules, pure", () => {
     // An ordinary opening word is lowercased after "because"; a name never is.
     expect(brandFacingReason("Their stores host tastings every week")).toBe("their stores host tastings every week.");
     expect(brandFacingReason(null)).toBeNull();
+    // Oura, 14 Nov 2026: a fragment list went out as "I am writing because Sleep and recovery ring; ran its own…".
+    expect(brandFacingReason("Sleep and recovery ring; ran its own SoHo pop-up; a 'read your own sleep' station.")).toBeNull();
+    expect(dripEmail({ step: 0, brand: "Oura", contactName: null, topic: "Sleep", month: "2027-01", eventDate: "2027-01-14", why: "Sleep and recovery ring; ran its own SoHo pop-up." }).text).not.toMatch(/because Sleep and recovery ring/);
   });
 
   it("reads the partners' reply as yes, no or counter", () => {
