@@ -115,11 +115,28 @@ const WAITING_FOR_READER = "WAITING_FOR_READER";
 
 /** His holds, from his own sentences (the OS's read when no reader answered): "preview first", "nothing live", … Pure. */
 const HOLD = /\b(?:preview (?:it )?first|nothing (?:goes )?live|not live|don'?t (?:go live|publish|push|ship|deploy|merge|send)|do not (?:go live|publish|push|ship|deploy|merge|send)|hold off|wait for (?:my|me)|no (?:client|customer) names?|without (?:my |a |his |her )?(?:written )?(?:ok|okay|approval|sign-?off|consent|permission)|until I (?:say|approve|ok)|before (?:it|anything) goes live)\b/i;
+/**
+ * HOLDS ARE CONSTRAINTS; QUESTIONS ARE QUESTIONS (15 Nov 2026). A hold says what must not happen or must wait ("don't",
+ * "must", "never", "not yet", "nothing live", "only after", "without my OK"). A line that asks, wonders or leaves
+ * something open ("is still open", "I'm questioning whether", "let's clarify", a "?") is a question, never a hold. Pure.
+ */
+const QUESTION_SHAPED = /\?\s*["”]?$|\b(?:still open|(?:is|are) open|questioning|wonder(?:ing)?|not sure|unsure|let'?s (?:clarify|confirm|discuss|talk)|clarify|whether)\b/i;
+const CONSTRAINT = /\b(?:don'?t|do not|must(?:n'?t)?|never|not yet|nothing|no|not|only|until|without|stays?|separate|before (?:it|anything) goes live|preview (?:it )?first|hold off|wait for)\b/i;
+export const isQuestionShaped = (line: string): boolean => QUESTION_SHAPED.test(line.trim());
+export const isConstraint = (line: string): boolean => CONSTRAINT.test(line) && !isQuestionShaped(line);
+/** His open questions, from his own sentences (the OS's read): what he asked to clarify or left open. Pure. */
+export function questionsOf(words: string): string[] {
+  return unwrapped(words)
+    .split(/\n+|(?<=[.!?])\s+(?=[A-Z0-9"“(])/)
+    .map((s) => s.replace(/^[\s\-–—•*]+|\s+$/g, "").replace(/^\d+[.)]\s+/, "").replace(/\s+/g, " "))
+    .filter((s) => s.length > 8 && isQuestionShaped(s))
+    .slice(0, 8);
+}
 export function holdsOf(words: string): string[] {
   return unwrapped(words)
     .split(/\n+|(?<=[.!?])\s+(?=[A-Z0-9"“(])/)
     .map((s) => s.replace(/^[\s\-–—•*]+|\s+$/g, "").replace(/^\d+[.)]\s+/, "").replace(/\s+/g, " "))
-    .filter((s) => HOLD.test(s))
+    .filter((s) => HOLD.test(s) && !isQuestionShaped(s))
     .slice(0, 6);
 }
 
@@ -219,6 +236,13 @@ export interface Brief {
   asks: string[];
   /** What he said must not happen yet, in his words ("preview first", "no client names without written OK"). */
   holds: string[];
+  /** What he asked to clarify or left open, in his words: answered or asked about, never assumed and never a hold. */
+  questions: string[];
+  /**
+   * What the reader could not pin down (a missing fact, a voice note that disagrees with the email, two readings), each
+   * with his exact words and what is missing. The employee asks every one, numbered, in one email, and builds the rest.
+   */
+  unclear: Array<{ words: string; missing: string }>;
   /** Every file on the card from this email, and what it is for (null when no reader could say). */
   files: Array<{ filename: string; purpose: string | null }>;
   /** Who read it: CLAUDE, CODEX, WORKERS_AI, GEMINI, or null for the OS's own read. */
@@ -274,9 +298,11 @@ export async function understand(
     }
   }
   const runId = runIds[runIds.length - 1] ?? null;
-  const holds = parsed?.holds.length ? parsed.holds : holdsOf(written);
+  const holds = parsed ? parsed.holds : holdsOf(written);
+  const questions = parsed ? parsed.questions : questionsOf(written);
+  const unclear = parsed ? parsed.unclear : [];
   const files = fileNames.map((filename) => ({ filename, purpose: parsed?.files.find((f) => f.filename === filename)?.purpose ?? null }));
-  const brief = (asks: string[]): Brief => ({ asks, holds, files, reader });
+  const brief = (asks: string[]): Brief => ({ asks, holds, questions, unclear, files, reader });
   const common = { runId, runIds, readerFailed: parsed ? false : readerFailed, readersTried };
   if (structured) return { ...common, none: false, asks: structured.asks, noted: [...structured.noted, ...heard], next: ON_IT, via: parsed ? "MODEL" : "STRUCTURE", brief: brief(structured.asks) };
   if (parsed?.none) return { ...common, none: true, asks: ["nothing asked"], noted: [], next: ON_IT, via: "MODEL", brief: brief([]) };
@@ -297,7 +323,7 @@ export async function understand(
 }
 
 /** `ASK: …` lines kept only when they are his words (found in what he wrote); `NEXT: …`; `NONE` = nothing asked. */
-export function parseUnderstood(text: string, written: string, files: readonly string[] = []): { asks: string[]; next: string | null; none: boolean; holds: string[]; files: Array<{ filename: string; purpose: string }> } {
+export function parseUnderstood(text: string, written: string, files: readonly string[] = []): { asks: string[]; next: string | null; none: boolean; holds: string[]; questions: string[]; unclear: Array<{ words: string; missing: string }>; files: Array<{ filename: string; purpose: string }> } {
   const body = norm(written);
   const lines = text.replace(/<think>[\s\S]*?<\/think>/gi, "").split(/\r?\n/).map((l) => l.trim().replace(/^[-*•]\s+/, "")).filter(Boolean);
   const none = lines.some((l) => /^NONE\b/i.test(l)) && !lines.some((l) => /^ASK\s*:/i.test(l));
@@ -310,10 +336,23 @@ export function parseUnderstood(text: string, written: string, files: readonly s
   }
   const next = lines.map((l) => /^NEXT\s*:\s*(.+)$/i.exec(l)?.[1]?.trim()).find(Boolean) ?? null;
   // HOLD lines are kept only when they are his words too; FILE lines only for a file that is really on the card.
+  // A HOLD line that is question-shaped is a question, whatever the reader called it; one that constrains nothing is dropped.
   const holds: string[] = [];
+  const questions: string[] = [];
   for (const l of lines) {
-    const hold = /^HOLD\s*:\s*(.+)$/i.exec(l)?.[1]?.trim().replace(/^["“]|["”]$/g, "").trim();
-    if (hold && hold.length >= 3 && body.includes(norm(hold)) && !holds.some((h) => norm(h) === norm(hold))) holds.push(hold);
+    const m = /^(HOLD|QUESTION)\s*:\s*(.+)$/i.exec(l);
+    const words = m?.[2]?.trim().replace(/^["“]|["”]$/g, "").trim();
+    if (!m || !words || words.length < 3 || !body.includes(norm(words))) continue;
+    const asQuestion = m[1]!.toUpperCase() === "QUESTION" || isQuestionShaped(words);
+    const list = asQuestion ? questions : isConstraint(words) ? holds : null;
+    if (list && !list.some((h) => norm(h) === norm(words))) list.push(words);
+  }
+  // UNCLEAR lines: his exact words (found in what he wrote) and what is missing, in the reader's one plain line.
+  const unclear: Array<{ words: string; missing: string }> = [];
+  for (const l of lines) {
+    const m = /^UNCLEAR\s*:\s*(.+?)\s*::\s*(.+)$/i.exec(l);
+    const words = m?.[1]?.trim().replace(/^["“]|["”]$/g, "").trim();
+    if (m && words && words.length >= 3 && body.includes(norm(words)) && !unclear.some((u) => norm(u.words) === norm(words))) unclear.push({ words, missing: m[2]!.trim().slice(0, 240) });
   }
   const purposes: Array<{ filename: string; purpose: string }> = [];
   for (const l of lines) {
@@ -321,7 +360,7 @@ export function parseUnderstood(text: string, written: string, files: readonly s
     const name = m ? files.find((f) => f.toLowerCase() === m[1]!.trim().replace(/^["“]|["”]$/g, "").toLowerCase()) : undefined;
     if (m && name && !purposes.some((p) => p.filename === name)) purposes.push({ filename: name, purpose: m[2]!.trim().slice(0, 200) });
   }
-  return { asks: asks.slice(0, MAX_ASKS), next: next ? next.slice(0, 280) : null, none, holds: holds.slice(0, 6), files: purposes };
+  return { asks: asks.slice(0, MAX_ASKS), next: next ? next.slice(0, 280) : null, none, holds: holds.slice(0, 6), questions: questions.slice(0, 8), unclear: unclear.slice(0, 8), files: purposes };
 }
 
 function understoodPrompt(subject: string, written: string, files: readonly string[] = []): string {
@@ -329,7 +368,9 @@ function understoodPrompt(subject: string, written: string, files: readonly stri
     "A Managing Partner of the firm just emailed the work below. List each separate thing he is asking for.",
     "Rules: copy his EXACT words for each ask (a phrase or sentence from his email, unchanged, no rewording, no summary).",
     "One line per ask: ASK: <his exact words>",
-    "Then one line per hold, anything he says must NOT happen yet or must wait for him (preview first, nothing live, no client names without his written OK): HOLD: <his exact words>",
+    "Then one line per hold: ONLY a constraint, something he says must not happen, must wait for him, or must always or never be done (don't, must, never, not yet, nothing live, no client names without his written OK): HOLD: <his exact words>",
+    "Then one line per open question: anything he asks, wonders about, wants clarified or says is still open. A question is never a hold: QUESTION: <his exact words>",
+    "Then one line per ask you cannot pin down (a fact that is missing, a voice note that disagrees with the email, two different readings): UNCLEAR: <his exact words> :: <what is missing, one plain line>",
     ...(files.length ? [`Then one line per attached file, saying what it is for, from his email: FILE: <file name> :: <what it is for, under 15 words>`, `Files: ${files.join(", ")}`] : []),
     "Then one line: NEXT: <what happens next, one plain sentence, no promises of dates, nothing about models or systems>",
     "A remark on how something is (praise, status, \"X is in good shape\") is NOT an ask. Each numbered item is one ask. Never a fragment of a sentence.",
@@ -396,7 +437,7 @@ async function settle(env: Env, messageId: string, state: string, viaRead: strin
 /** The brief beside the asks it lists (0309): holds, files and who read it. The asks themselves are partner_ask rows. */
 async function saveBrief(env: Env, messageId: string, brief: Brief): Promise<void> {
   await env.WP_OS_DB.prepare("UPDATE partner_understood SET brief_json = ?2, reader = ?3 WHERE inbound_message_id = ?1")
-    .bind(messageId, JSON.stringify({ holds: brief.holds, files: brief.files }), brief.reader ?? "OS")
+    .bind(messageId, JSON.stringify({ holds: brief.holds, questions: brief.questions, unclear: brief.unclear, files: brief.files }), brief.reader ?? "OS")
     .run();
 }
 
@@ -418,19 +459,23 @@ export async function briefBlockFor(env: Env, cardId: string): Promise<string> {
   const blocks: string[] = [];
   for (const r of rows.reverse()) {
     const asks = ((await env.WP_OS_DB.prepare("SELECT words FROM partner_ask WHERE inbound_message_id = ?1 ORDER BY seq").bind(r.id).all<{ words: string }>()).results ?? []).map((a) => a.words);
-    let brief: { holds?: string[]; files?: Array<{ filename: string; purpose: string | null }> } = {};
+    let brief: { holds?: string[]; questions?: string[]; unclear?: Array<{ words: string; missing: string }>; files?: Array<{ filename: string; purpose: string | null }> } = {};
     try {
       brief = JSON.parse(r.brief_json) as typeof brief;
     } catch {
       brief = {};
     }
     const holds = brief.holds ?? [];
+    const questions = brief.questions ?? [];
+    const unclear = brief.unclear ?? [];
     const files = brief.files ?? [];
     blocks.push(
       [
         `THE FIRST READ of his email of ${r.received_at} (${r.reader && r.reader !== "OS" ? `read by ${r.reader}` : "the OS's own read: no reader was free"}). Work from this list; the Got it told him exactly these.`,
         ...(asks.length ? ["His asks, in his words:", ...asks.map((a, i) => `  ${i + 1}. ${a}`)] : ["He asked for nothing (a thank-you or an FYI)."]),
         ...(holds.length ? ["His holds (keep to every one):", ...holds.map((h) => `  - ${h}`)] : []),
+        ...(questions.length ? ["His questions (answer each in your result):", ...questions.map((q) => `  - ${q}`)] : []),
+        ...(unclear.length ? ["Unclear (ask every unclear item, numbered, in one email; never merge, drop or guess; build everything else meanwhile):", ...unclear.map((u) => `  - "${u.words}": ${u.missing}`)] : []),
         ...(files.length ? ["His files:", ...files.map((f) => `  - ${f.filename}: ${f.purpose ?? "what it is for was not said"}`)] : []),
       ].join("\n"),
     );
@@ -588,7 +633,7 @@ async function answerOne(env: Env, row: Candidate, read: SeatRead | readonly Rea
     objectType: "work_card",
     objectId: row.card_id,
     firmScope: row.firm_scope,
-    payload: { inbound_message_id: row.id, sent: result.sent, via, asks: asks.length, holds: understood.brief.holds.length, files: understood.brief.files.length, received_at: row.received_at, reader: understood.brief.reader ?? "OS" },
+    payload: { inbound_message_id: row.id, sent: result.sent, via, asks: asks.length, holds: understood.brief.holds.length, questions: understood.brief.questions.length, unclear: understood.brief.unclear.length, files: understood.brief.files.length, received_at: row.received_at, reader: understood.brief.reader ?? "OS" },
   }).catch(() => undefined);
   return result.sent;
 }

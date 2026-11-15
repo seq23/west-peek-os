@@ -18,7 +18,9 @@ what he is working on). Obey every hold in it. Never restate it to him as a ques
 3. **Ask about the unclear words, and only those.** When a word or phrase could mean two or three different things
    and the choice changes the work, do NOT stop the rest. Mark that ask `QUESTION`, quote the exact unclear words in
    `words`, say in `why` what is unclear about them, and give two or three likely readings in `options`, the one you
-   would pick first. Every other ask keeps going.
+   would pick first. Every other ask keeps going. Ask every unclear item, numbered, in one email; never merge, drop or guess.
+   When the PARTNER MEMORY carries a first read with an **Unclear** list, every item on it is its own `QUESTION` ask
+   in this run (one email per round carries them all, numbered). Answer each of **His questions** in your result.
 4. **Something still running.** If an ask needs more time than this run (a long research pass, a draft that needs his
    answer first to finish), mark it `IN_PROGRESS` with what is done so far and what is next. The next run continues it.
 5. **CHANGED COURSE beats the brief.** When the context has a CHANGED COURSE section, his newest words there override
