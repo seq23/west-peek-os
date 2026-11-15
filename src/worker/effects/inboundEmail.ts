@@ -1946,7 +1946,8 @@ export async function dryReadMessage(env: Env, raw: string, deps: { read?: impor
   const { understand, gotItEmail, gotItNext, FIRST_READERS, knownFor } = await import("../services/partnerUnderstood");
   const cardRow = thread?.object_type === "work_card" ? await env.WP_OS_DB.prepare("SELECT owner_id, held_reason FROM work_card WHERE id = ?1").bind(thread.object_id).first<{ owner_id: string | null; held_reason: string | null }>() : null;
   const ownerId = cardRow?.owner_id ?? null;
-  const understood = await understand(env, { subject, written: words, read: deps.read ?? FIRST_READERS, employeeId: ownerId, firmScope: "west-peek", files: filed, known: await knownFor(env, thread?.object_type === "work_card" ? thread.object_id : null, "west-peek", authority.partnerAddress) });
+  const known = await knownFor(env, thread?.object_type === "work_card" ? thread.object_id : null, "west-peek", authority.partnerAddress, words);
+  const understood = await understand(env, { subject, written: words, read: deps.read ?? FIRST_READERS, employeeId: ownerId, firmScope: "west-peek", files: filed, known: known.text, standingHolds: known.standingHolds });
   for (const runId of understood.runIds) await forgetDryRun(env, runId);
   const employee = ownerId ? ((await env.WP_OS_DB.prepare("SELECT name FROM ai_employee WHERE id = ?1").bind(ownerId).first<{ name: string }>())?.name ?? "West Peek") : "West Peek";
   return {

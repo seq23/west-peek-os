@@ -287,6 +287,21 @@ export interface ProfileSeed {
   aliases?: Array<{ host: string; words: string[] }>;
   notes?: string[];
   working_on?: Array<{ body: string; at?: string }>;
+  /**
+   * The west-peek brain's settled facts (its Partners and Businesses sections and the word lookup), from the Mac's
+   * read of ~/Brains (0310). Firm facts, so they are written on every partner's profile. Each line passes the same
+   * filter as the rest of the profile; a line it refuses is left out, the rest is kept whole.
+   */
+  brain_md?: string;
+}
+
+/** How much brain the profile keeps: far more than the sections the first read needs. */
+export const BRAIN_MD_MAX = 120_000;
+
+/** The brain's settled facts the Mac last wrote (0310), or "" when none has been written. Never throws. */
+export async function brainFactsOf(env: Env): Promise<string> {
+  const row = await env.WP_OS_DB.prepare("SELECT brain_md FROM partner_profile WHERE firm_scope = 'west-peek' AND brain_md IS NOT NULL ORDER BY brain_synced_at DESC LIMIT 1").first<{ brain_md: string }>().catch(() => null);
+  return row?.brain_md ?? "";
 }
 
 /** Write the profile's standing fields (a seed or an edit). Every field passes the filter or is refused whole. */
@@ -316,6 +331,14 @@ export async function writeProfile(env: Env, email: string, seed: ProfileSeed, n
   )
     .bind(e, who ?? null, writes ?? null, asks ?? null, seed.aliases ? JSON.stringify(aliases.map((a) => ({ host: clean(a.host).toLowerCase(), words: a.words.map((w) => clean(w).toLowerCase()) }))) : null)
     .run();
+  if (typeof seed.brain_md === "string" && seed.brain_md.trim()) {
+    const lines = seed.brain_md.replace(/\r/g, "").split("\n");
+    const kept = lines.filter((l) => !l.trim() || profileLineProblem(l, names) === null);
+    if (kept.length < lines.length) refused.push(`${lines.length - kept.length} brain line(s)`);
+    await env.WP_OS_DB.prepare("UPDATE partner_profile SET brain_md = ?1, brain_synced_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE firm_scope = 'west-peek'")
+      .bind(kept.join("\n").slice(0, BRAIN_MD_MAX))
+      .run();
+  }
   if (seed.notes?.length) {
     const before = seed.notes.length;
     const kept = await recordProfileNotes(env, e, seed.notes);

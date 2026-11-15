@@ -299,7 +299,7 @@ export async function takeOverCard(env: Env, cardId: string, input: { why: strin
   return { ok: true, card_id: card.id, state: card.state, detail: reason };
 }
 
-export async function handBackCard(env: Env, cardId: string, input: { note: string; allDone: boolean; by: Director; enteredBy: string; finishedAt?: string | null; now?: Date }): Promise<TakeoverOutcome> {
+export async function handBackCard(env: Env, cardId: string, input: { note: string; allDone: boolean; by: Director; enteredBy: string; finishedAt?: string | null; now?: Date; covers?: readonly string[] }): Promise<TakeoverOutcome> {
   const note = input.note.trim();
   if (note.length < 3) return { ok: false, status: 400, error: "invalid_input", detail: "note is required: what the developer did" };
   const card = await env.WP_OS_DB.prepare("SELECT id, kind, state, held_reason, held_at, owner_id, requested_by_email, firm_scope, block_reason FROM work_card WHERE id = ?1").bind(cardId).first<{ id: string; kind: string | null; state: string; held_reason: string | null; held_at: string | null; owner_id: string | null; requested_by_email: string | null; firm_scope: string; block_reason: string | null }>();
@@ -314,7 +314,20 @@ export async function handBackCard(env: Env, cardId: string, input: { note: stri
   const during = (await env.WP_OS_DB.prepare(
     "SELECT COUNT(*) AS n FROM event_record WHERE object_type = 'work_card' AND object_id = ?1 AND event_type = 'work_card.reply_filed_during_takeover' AND created_at >= ?2",
   ).bind(card.id, card.held_at ?? "").first<{ n: number }>())?.n ?? 0;
-  const close = input.allDone && Number(during) === 0;
+  /*
+   * REPLIES THE DEVELOPER ALREADY ANSWERED (15 Nov 2026). `covers` names his emails (inbound_message ids) that arrived
+   * during the takeover and that the developer's work already answers: they no longer reopen the card, so an "all done"
+   * hand-back goes back WAITING on him and nothing is re-sent. Only his emails on THIS card that arrived during the
+   * takeover count; any other reply filed meanwhile still reopens it, and a reply after the hand-back is a new reply.
+   */
+  const covers = [...new Set((input.covers ?? []).map((c) => c.trim()).filter((c) => /^inm_[\w-]+$/.test(c)))];
+  const covered = covers.length
+    ? ((await env.WP_OS_DB.prepare(
+        `SELECT id FROM inbound_message WHERE work_card_id = ?1 AND received_at >= ?2 AND id IN (${covers.map((_, i) => `?${i + 3}`).join(", ")})`,
+      ).bind(card.id, card.held_at ?? "", ...covers).all<{ id: string }>()).results ?? []).map((r) => r.id)
+    : [];
+  const uncovered = Math.max(0, Number(during) - covered.length);
+  const close = input.allDone && uncovered === 0;
   const noteId = `wcn_${crypto.randomUUID()}`;
   const partner = (card.requested_by_email ?? "").split("@")[0] || "the partner";
   const Partner = `${partner.charAt(0).toUpperCase()}${partner.slice(1)}`;
@@ -339,9 +352,16 @@ export async function handBackCard(env: Env, cardId: string, input: { note: stri
   // Closed: the note is read and answered by the close itself, so no later run takes it up again.
   if (close) stmts.push(env.WP_OS_DB.prepare("UPDATE work_card_note SET acknowledged_at = ?2, response = ?3 WHERE id = ?1").bind(noteId, now, waitOnPartner ? `Every ask was done by hand; the preview waits for ${Partner}'s word.` : "Every ask was done by hand; the card is closed and waits for the partner."));
   if (waitOnPartner) stmts.push(env.WP_OS_DB.prepare("UPDATE work_card SET block_answer = NULL, block_answered_by = NULL, block_answered_at = NULL WHERE id = ?1").bind(card.id));
+  // The replies he sent during the takeover are answered by the developer's work: their filed notes are put away with it.
+  if (close && covered.length) {
+    stmts.push(
+      env.WP_OS_DB.prepare("UPDATE work_card_note SET acknowledged_at = ?2, response = ?3 WHERE work_card_id = ?1 AND acknowledged_at IS NULL AND created_at >= ?4 AND id <> ?5")
+        .bind(card.id, now, "Answered by the developer's work during the takeover.", card.held_at ?? "", noteId),
+    );
+  }
   // One batch: a refused UPDATE leaves no orphan note behind.
   await env.WP_OS_DB.batch(stmts);
-  await appendEvent(env, { eventType: "work_card.handed_back_by_developer", actorType: "firm_user", actorId: input.by.partner.firmUserId, objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { by: input.by.label, entered_by: input.enteredBy, note: words, finished_at: finished, all_done: input.allDone, replies_during: Number(during), closed: close && !waitOnPartner, waiting_on_partner: waitOnPartner, at: now } });
+  await appendEvent(env, { eventType: "work_card.handed_back_by_developer", actorType: "firm_user", actorId: input.by.partner.firmUserId, objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { by: input.by.label, entered_by: input.enteredBy, note: words, finished_at: finished, all_done: input.allDone, replies_during: Number(during), covered, uncovered, closed: close && !waitOnPartner, waiting_on_partner: waitOnPartner, at: now } });
   return { ok: true, card_id: card.id, state, detail: words };
 }
 
@@ -356,9 +376,9 @@ async function takeoverDoor(ctx: RouteContext, which: "TAKE" | "BACK"): Promise<
   if (ctx.identity?.email.toLowerCase() !== SUBSCRIPTION_CLAIMER_EMAIL) return json({ error: "forbidden", detail: "this door is the Mac's own identity only" }, { status: 403 });
   const by = await theDeveloper(ctx.env);
   if (!by) return json({ error: "no_developer", detail: "exactly one person must hold the developer role" }, { status: 409 });
-  const body = (await ctx.request.json().catch(() => null)) as { why?: unknown; note?: unknown; all_done?: unknown; finished_at?: unknown } | null;
+  const body = (await ctx.request.json().catch(() => null)) as { why?: unknown; note?: unknown; all_done?: unknown; finished_at?: unknown; covers?: unknown } | null;
   const out = which === "TAKE"
     ? await takeOverCard(ctx.env, ctx.params.id ?? "", { why: typeof body?.why === "string" ? body.why : "", by, enteredBy: ctx.identity.email })
-    : await handBackCard(ctx.env, ctx.params.id ?? "", { note: typeof body?.note === "string" ? body.note : "", allDone: body?.all_done === true, finishedAt: typeof body?.finished_at === "string" ? body.finished_at : null, by, enteredBy: ctx.identity.email });
+    : await handBackCard(ctx.env, ctx.params.id ?? "", { note: typeof body?.note === "string" ? body.note : "", allDone: body?.all_done === true, finishedAt: typeof body?.finished_at === "string" ? body.finished_at : null, covers: Array.isArray(body?.covers) ? body.covers.filter((c: unknown): c is string => typeof c === "string") : [], by, enteredBy: ctx.identity.email });
   return out.ok ? json(out) : json({ error: out.error, detail: out.detail }, { status: out.status });
 }
