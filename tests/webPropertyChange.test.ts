@@ -735,6 +735,59 @@ describe("a job that left out part of the original request is reopened by the sy
 });
 
 /**
+ * 15 Nov 2026, wc_c548d043…: the partner tail stopped a BUILD that was working from a reply cut short
+ * (her rule, 9 Oct 2026: stop the build first). The sweep charged that stop as a failed attempt, so the
+ * corrected rebuild ran on its last one. A deliberate stop queues the phase again and spends nothing.
+ */
+describe("a build the partner tail stopped on purpose is queued again without spending an attempt", () => {
+  beforeAll(ageEarlierCards);
+  afterAll(ageEarlierCards);
+
+  async function stopLiveBuild(id: string, resolution: string) {
+    const job = await liveJobFor(id);
+    expect(job, "BUILD is queued").not.toBeNull();
+    expect(JSON.parse(String(job!.job_json)).phase).toBe("BUILD");
+    await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'ABANDONED', claimed_by = 'mac-test-jobs', claimed_at = ?2, resolution = ?3 WHERE id = ?1")
+      .bind(job!.id, new Date().toISOString(), resolution)
+      .run();
+    return job!.id;
+  }
+
+  async function atBuild(tag: string): Promise<string> {
+    const chiefId = await openAssignmentCard(env, { subject: `ventures refresh ${tag}`, partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: `Hey Porter! Please refresh westpeek.ventures — package: https://drive.google.com/drive/folders/${FOLDER}${tag}`, limits: EMAILED_TASK_LIMITS, emlKey: null });
+    const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
+    await tickFor(id);
+    await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "refresh the ventures site", how: "build", done_when: ["it works on the preview"] }], document: "# Plan\n\nnothing to ask", decided: ["as asked"], asks: [], publish_ready: true });
+    await tickFor(id);
+    return id;
+  }
+
+  it("the tail's stop is not an attempt; the rebuild is queued on the next tick", async () => {
+    const id = await atBuild("stop1");
+    const before = Number((await card(id)).work_attempts);
+    const stopped = await stopLiveBuild(id, "Stopped by the partner tail 2026-11-14T23:0xZ: built from a known-bad input. The reply was stored cut at 4,000 chars.");
+    const out = await tickFor(id);
+    expect(out.outcome, JSON.stringify(out)).not.toBe("FAILED");
+    const after = await card(id);
+    expect(Number(after.work_attempts), "no attempt was spent on the stop").toBeLessThanOrEqual(before);
+    expect(after.work_last_failure ?? null).toBeNull();
+    await tickFor(id);
+    const again = await liveJobFor(id);
+    expect(again, "BUILD queued again").not.toBeNull();
+    expect(again!.id).not.toBe(stopped);
+    expect(JSON.parse(String(again!.job_json)).phase).toBe("BUILD");
+  });
+
+  it("a run that simply went missing on the Mac still spends its attempt (negative)", async () => {
+    const id = await atBuild("stop2");
+    await stopLiveBuild(id, "mac-test-jobs has held this job for 49 minutes, past its 40 minutes ceiling.");
+    const out = await tickFor(id);
+    expect(out.outcome).toBe("FAILED");
+    expect(String((await card(id)).work_last_failure)).toMatch(/Attempt \d of \d/);
+  });
+});
+
+/**
  * #363, migration 0301 (owner, 13 Nov 2026): "i like the safety rule but i should have a developer
  * role that bypasses it". Only the partner who asked changes a job (0241) — and the developer, for
  * work instructions only, herself or through her partner tail. Nothing else moves.

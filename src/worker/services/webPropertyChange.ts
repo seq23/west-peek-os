@@ -1456,6 +1456,14 @@ export async function holdUntilAPlanResets(env: Env, card: { id: string; firm_sc
 }
 
 /**
+ * A run a person or the partner tail stopped deliberately (a known-bad input), as its resolution says.
+ * Only an ABANDONED run's resolution is read; the reaper's own closings never say this.
+ */
+export function stoppedOnPurpose(resolution: string | null | undefined): boolean {
+  return /^\s*stopped by (the partner tail|sequoia|the developer|a partner)\b|known-bad input/i.test(resolution ?? "");
+}
+
+/**
  * Apply what the Mac reported for the run the row holds. Clears the lease either way.
  */
 export async function applyReport(
@@ -1488,6 +1496,17 @@ export async function applyReport(
         detail: waitDetail("MAC_ASLEEP", { why: dueLine(readWebPropertyAsk(card.request_json)?.due) }).slice(0, 900),
       });
       return { finished: false, blocked: true, progressed: false, detail: why2 };
+    }
+    if (run.status === "ABANDONED" && stoppedOnPurpose(run.resolution)) {
+      /*
+       * A RUN STOPPED ON PURPOSE IS NOT A FAILED ATTEMPT (15 Nov 2026, wc_c548d043…). The partner tail
+       * stopped Porter's BUILD because it was building from Scooter's reply cut at 4,000 characters
+       * (her rule, 9 Oct 2026: stop the build first, preview second). The sweep counted that stop as
+       * "Attempt 2 of 3 did not get anywhere", so the corrected rebuild ran on its LAST attempt: one
+       * sleeping-Mac hiccup and the job would have given up. The stop was a decision, not a failure:
+       * the phase is queued again and no attempt is spent.
+       */
+      return { finished: false, blocked: false, progressed: true, detail: `${row.phase} stopped on purpose and queued again: ${why.slice(0, 200)}` };
     }
     return { finished: false, blocked: false, progressed: false, detail: `${row.phase} on the Mac: ${why}` };
   }
