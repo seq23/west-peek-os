@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import { appendEvent } from "../events";
-import { sendPartnerEmail } from "./execEmail";
+import { sendOrPreview } from "./previewApproval";
 import type { Partner } from "../../shared/registry/partners";
 import { partnerByEmail } from "../../shared/registry/partners";
 
@@ -34,8 +34,13 @@ async function employeeOf(env: Env, cardId: string): Promise<{ name: string; tit
 async function send(env: Env, cardId: string, to: Partner, line: string, thread: string | null, tail: string): Promise<boolean> {
   const e = await employeeOf(env, cardId);
   if (!e) return false;
-  const out = await sendPartnerEmail(env, {
+  const card = await env.WP_OS_DB.prepare("SELECT preview_first FROM work_card WHERE id = ?1").bind(cardId).first<{ preview_first: number | null }>().catch(() => null);
+  // Through the one door every employee email takes, so the card's "Show me first?" tick still holds.
+  const out = await sendOrPreview(env, {
     to: to.email,
+    workCardId: cardId,
+    cardAsked: card?.preview_first === null || card?.preview_first === undefined ? null : card.preview_first === 1,
+    requestedByEmail: to.email,
     email: { employee: e.name, what: `${e.title} — ${tail}`.slice(0, 60), tldr: line, sections: [{ label: "Where it stands", bullets: [line] }], details: null },
     objectType: "work_card",
     objectId: cardId,
