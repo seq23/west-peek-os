@@ -235,6 +235,24 @@ export function keysReallyMissing(names, { runtimeTexts = [], configured = null,
   return { missing, unchecked: null };
 }
 
+/**
+ * WHAT A VISITOR SEES THAT IS NOT DONE (15 Nov 2026, wc_c548d043). A preview said "0 placeholders" and listed two
+ * missing items as filled in while the page still read "Photo to come", "Name to confirm" and "Placeholder · TNTP's
+ * numbers to come": the count keyed on a class name a commit had renamed. Counted from the visible text only:
+ * markup, attributes and class names are stripped first, so renaming a class can never hide one. Pure.
+ */
+export function visiblePlaceholders(texts) {
+  const out = [];
+  for (const t of texts ?? []) {
+    const visible = String(t)
+      .replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]*>/g, "\n")
+      .replace(/\b(?:class|className|id|data-[\w-]+)\s*=\s*(?:"[^"]*"|'[^']*'|\{[^}]*\})/g, " ");
+    for (const m of visible.matchAll(/Placeholder\s*[·:-]\s*[^\n<>"'`{}]{1,80}|\b[A-Z][\w'’]*(?:[ \t]+[\w'’]+){0,3}[ \t]+to[ \t]+(?:come|confirm)\b/g)) out.push(m[0].trim());
+  }
+  return out;
+}
+
 /** Of the names a repo reads, the ones that look like secrets (a key, token, secret, password, DSN, URL with auth). */
 export function likelySecrets(names) {
   return (names ?? []).filter((n) => /(KEY|TOKEN|SECRET|PASSWORD|PASS|DSN|WEBHOOK|SIGNING|PRIVATE|CREDENTIAL|AUTH)/.test(n) && !/^(WP_OS_ENV|NODE_ENV|CI)$/.test(n));

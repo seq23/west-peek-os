@@ -1337,6 +1337,39 @@ describe("the v1.0 bar: every built ask says when it is done, and a build that h
   });
 });
 
+describe("a placeholder is counted from the page, and filled in only when material arrived (15 Nov 2026, wc_c548d043)", () => {
+  beforeAll(ageEarlierCards);
+  afterAll(ageEarlierCards);
+  it("a rebuild whose class was renamed (--todo → --pending) and whose list went empty, with no material sent: 2+ placeholders, nothing filled in", async () => {
+    const BASE = { document: "# Plan\n\nnothing to ask", decided: ["as asked"], asks: [], publish_ready: true };
+    const chiefId = await openAssignmentCard(env, { subject: "productions team tiles ph1", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: `Please update the westpeek.ventures team and work pages — package: https://drive.google.com/drive/folders/${FOLDER}ph1`, limits: EMAILED_TASK_LIMITS, emlKey: null });
+    const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
+    await tickFor(id);
+    await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "the pages", how: "build", done_when: ["the pages show"] }], ...BASE });
+    await tickFor(id);
+    const items = [{ item: "the pages", state: "done", done_when: [{ check: "the pages show", met: true }] }];
+    const team = "Team photos and confirmed names for the two 'Photo to come / Name to confirm' team tiles";
+    const work = "Project images, and the client's OK to show results, for TNTP, NCTA Ripple Effect";
+    const pr = { pr_url: "https://github.com/seq23/join-west-peek-main/pull/93", pr_number: 93, branch: "work/wpc-ph1", check_state: "GREEN", preview_url: "https://ph1.west-peek-ventures.pages.dev", proof: "validate green" };
+    await macReports(id, { phase: "BUILD", status: "ok", ...pr, items, missing_materials: [{ item: team, where: "/" }, { item: work, where: "/work" }] });
+    expect((await tickFor(id)).outcome).toBe("BLOCKED");
+    const token = (await env.WP_OS_DB.prepare("SELECT message_id FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PREVIEW' ORDER BY sent_at DESC LIMIT 1").bind(id).first<{ message_id: string }>())!.message_id;
+    await replyFrom(SCOOTER, "Please tighten the hero copy", token);
+    expect((await tickFor(id)).summary).toMatch(/BUILD queued/);
+    const from = sent.length;
+    // The model's list went empty (it renamed the class to get past the check); the pages still SAY it.
+    await macReports(id, { phase: "BUILD", status: "ok", ...pr, items, changed: true, head_sha: "66ca763", missing_materials: [], visible_placeholders: ["Photo to come", "Name to confirm", "Photo to come", "Name to confirm", "Placeholder · TNTP's numbers to come", "Placeholder · the details and results to come"] });
+    expect((await tickFor(id)).outcome).toBe("BLOCKED");
+    const row = (await readWebPropertyChange(env, id))!;
+    expect(JSON.parse(row.placeholders_json).length, "never 0 over a page that shows placeholders").toBeGreaterThanOrEqual(2);
+    expect(JSON.parse(row.filled_json ?? "[]"), "no material arrived, so nothing is filled in").toEqual([]);
+    const mail = sent.slice(from).filter((m) => m.to === SCOOTER && /preview/i.test(m.subject)).map((m) => m.text).join("\n");
+    expect(mail).not.toMatch(/Filled in since/);
+    expect(mail, "no permission he never gave").not.toMatch(/Filled in[\s\S]*client's OK/);
+    expect(mail).toMatch(/2\*{0,2} placeholders/);
+  });
+});
+
 describe("a step the partner kept for himself is his, not unfinished work (14 Nov 2026)", () => {
   beforeAll(ageEarlierCards);
   afterAll(ageEarlierCards);

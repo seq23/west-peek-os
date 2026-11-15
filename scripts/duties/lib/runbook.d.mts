@@ -19,3 +19,5 @@ export function generateRunbook(input: {
 }): { text: string; route: { kind: string; line: string }; host: string | null; mayRun: string[]; secrets: string[] };
 /** A key is missing only when the runtime reads it unguarded and the deploy target lacks it (15 Nov 2026). */
 export function keysReallyMissing(names: readonly string[], opts?: { runtimeTexts?: readonly string[]; configured?: ReadonlySet<string> | readonly string[] | null; why?: string }): { missing: string[]; unchecked: string | null };
+/** Placeholder text a visitor sees ("Photo to come", "Placeholder · …"), never a class name (15 Nov 2026). */
+export function visiblePlaceholders(texts: readonly string[]): string[];
