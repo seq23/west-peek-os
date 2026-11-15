@@ -22,7 +22,8 @@ const BRAIN = [
   "- the opening section nobody needs here",
   "## Partners",
   "### Scooter Taylor (Managing Partner)",
-  "- Nothing goes live without his OK on a preview.",
+  "- **Roles:** co-MP; never logs into the OS (20 Sep).",
+  "- **Standing holds (his own emails, recorded 15 Nov 2026):** Nothing goes live without his OK on a preview · \"Do not build invoice or billing features yet\"",
   "- Prefers short emails.",
   "<!-- confidential -->a private line<!-- /confidential -->",
   "### Sequoia Taylor",
@@ -75,11 +76,11 @@ describe("in the Worker: the reader's settled facts", () => {
     for (const want of ["### Scooter Taylor", "### West Peek Productions", "### Top Barz", "Which business is this word?"]) expect(known.text).toContain(want);
     expect(known.text).not.toContain("### Sequoia Taylor");
     expect(known.text).not.toContain("a private line");
-    expect(known.standingHolds).toEqual(["Nothing goes live without his OK on a preview."]);
+    expect(known.standingHolds, "only his Standing holds line, one per item; his roles line is context, never a hold").toEqual(["Nothing goes live without his OK on a preview", "\"Do not build invoice or billing features yet\""]);
 
     const reader: Reader = { name: "CLAUDE", read: async (_e, input) => ({ ok: true, detail: "ok", reader: "CLAUDE", text: input.prompt.includes("Never part of the Productions pipeline") ? "ASK: Keep this pipeline studio-only." : "ASK: Keep this pipeline studio-only.\nUNCLEAR: Leave the Top Barz rows out :: is Top Barz part of Productions?" }) };
     const out = await understand(env, { subject: "d", written, read: [reader], employeeId: null, firmScope: "west-peek", known: known.text, standingHolds: known.standingHolds });
     expect(out.brief.unclear, "Top Barz is settled, so nothing about it is unclear").toEqual([]);
-    expect(out.brief.holds, "his standing hold counts though the email does not repeat it").toContain("Nothing goes live without his OK on a preview.");
+    expect(out.brief.holds, "his standing hold counts though the email does not repeat it").toContain("Nothing goes live without his OK on a preview");
   });
 });

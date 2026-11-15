@@ -132,7 +132,10 @@ export const BRIEF_LIST_BOUND = 40;
 
 /** His open questions, from his own sentences (the OS's read): what he asked to clarify or left open. Pure. */
 export function questionsOf(words: string): string[] {
-  return unwrapped(words)
+  // HIS TYPED EMAIL ONLY (15 Nov 2026): a voice note is him thinking out loud ("You know?"), and the email is the final
+  // word; the reader still hears the recording and may add a real question from it.
+  const typed = words.split(/\n\nVoice note \(/)[0] ?? words;
+  return unwrapped(typed)
     .split(/\n+|(?<=[.!?])\s+(?=[A-Z0-9"“(])/)
     .map((s) => s.replace(/^[\s\-–—•*]+|\s+$/g, "").replace(/^\d+[.)]\s+/, "").replace(/\s+/g, " "))
     .filter((s) => s.length > 8 && (isQuestionShaped(s) || CLARIFY_FIRST.test(s)) && !REMARK.test(s));
@@ -524,11 +527,14 @@ export async function knownFor(
     const other = [practices, card ? `The card: ${card.title}${card.description ? `\n${card.description.slice(-1500)}` : ""}` : ""].filter(Boolean).join("\n\n").slice(0, KNOWN_OTHER_MAX);
     // STANDING HOLDS (her ruling): a constraint line in his own brain section is a hold whether or not this email repeats it.
     const mine = partner ? brain.split(/\n(?=### )/).find((sec) => sec.startsWith(`### ${partner.fullName}`)) ?? "" : "";
-    const standingHolds = mine
-      .split("\n")
-      .filter((l) => /^\s*[-*•]\s+/.test(l))
-      .map((l) => l.replace(/^\s*[-*•]\s+/, "").replace(/\*\*/g, "").trim())
-      .filter((l) => l.length > 8 && isConstraint(l));
+    // Only the "Standing holds" line of his section, one hold per "·" item; his roles, habits and update preferences
+    // are context for the reader, never holds.
+    const holdsLine = mine.split("\n").find((l) => /^\s*[-*•]\s+\**Standing holds/i.test(l)) ?? "";
+    const standingHolds = holdsLine
+      .replace(/^\s*[-*•]\s+\**Standing holds[^:]*:\**\s*/i, "")
+      .split(/\s+·\s+/)
+      .map((h) => h.replace(/\*\*/g, "").trim().replace(/[.;]$/, ""))
+      .filter((h) => h.length > 8);
     return { text: [brain ? `FROM THE BRAIN:\n${brain}` : "", other].filter(Boolean).join("\n\n"), standingHolds };
   } catch {
     return { text: "", standingHolds: [] };
