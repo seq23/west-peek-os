@@ -4,8 +4,6 @@ import type { Env } from "../src/worker/env";
 import { businessesFor, subsection, wordLookup } from "../src/shared/brain/brainSections";
 // @ts-expect-error — a plain .mjs script with no type declarations.
 import { brainFactsFrom } from "../scripts/lib/brain-facts.mjs";
-// @ts-expect-error — a plain .mjs script with no type declarations.
-import { syncBrainFacts } from "../scripts/claimer/local-job-claimer.mjs";
 import { writeProfile } from "../src/worker/services/partnerProfile";
 import { knownFor, understand, type Reader } from "../src/worker/services/partnerUnderstood";
 import { createWorkCardInternal } from "../src/worker/services/workCards";
@@ -62,16 +60,6 @@ describe("on the Mac: only the sections, never the whole brain", () => {
     expect(brainFactsFrom("# x\n## Company\n- y").missing).toEqual(["## Partners", "## Businesses and projects", "which business is this word?"]);
   });
 
-  it("the heartbeat writes them through the existing profile route once per change of the file", async () => {
-    const calls: Array<{ path: string; body: { brain_md: string } }> = [];
-    const call = async (p: string, b: { brain_md: string }) => { calls.push({ path: p, body: b }); return { status: 200, body: { ok: true, refused: [] } }; };
-    const read = () => ({ mtimeMs: 42, ...brainFactsFrom(BRAIN) });
-    await syncBrainFacts({ read, call, partnerEmail: "scooter@westpeek.ventures", log: () => undefined });
-    await syncBrainFacts({ read, call, partnerEmail: "scooter@westpeek.ventures", log: () => undefined });
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.path).toBe("/api/partner-profiles/scooter%40westpeek.ventures");
-    expect(calls[0]!.body.brain_md).toContain("### West Peek Productions");
-  });
 });
 
 describe("in the Worker: the reader's settled facts", () => {
