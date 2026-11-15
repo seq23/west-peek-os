@@ -234,3 +234,10 @@ WP_OS_MEET_PUBSUB_SUBSCRIPTION = "projects/gsc-automation-493801/subscriptions/m
 
 [env.production.observability]
 enabled = true
+
+# THE WEST-PEEK BRAIN, READ FROM BOSS OS (15 Nov 2026). Same Cloudflare account, so a service binding to Boss OS's
+# named RPC entrypoint BrainReader: no key, unreachable from the internet. Only the west-peek brain is served.
+[[env.production.services]]
+binding = "WP_OS_BOSS_BRAINS"
+service = "boss-os"
+entrypoint = "BrainReader"

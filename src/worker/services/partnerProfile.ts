@@ -300,6 +300,18 @@ export const BRAIN_MD_MAX = 120_000;
 
 /** The brain's settled facts the Mac last wrote (0310), or "" when none has been written. Never throws. */
 export async function brainFactsOf(env: Env): Promise<string> {
+  /*
+   * THE BRAIN, STRAIGHT FROM BOSS OS (15 Nov 2026). Both Workers are on one Cloudflare account, so West Peek OS reads
+   * the west-peek brain through a service binding to Boss OS's BrainReader entrypoint: no key, not on the internet,
+   * always current, no Mac. The profile column (0310) is only the fallback when the binding is absent or fails.
+   */
+  if (env.WP_OS_BOSS_BRAINS) {
+    const live = await env.WP_OS_BOSS_BRAINS.brain("west-peek").catch((err: unknown) => {
+      console.warn(`first read: Boss OS brain read failed (${err instanceof Error ? err.message : String(err)}); using the stored copy`);
+      return null;
+    });
+    if (live?.body_md) return live.body_md;
+  }
   const row = await env.WP_OS_DB.prepare("SELECT brain_md FROM partner_profile WHERE firm_scope = 'west-peek' AND brain_md IS NOT NULL ORDER BY brain_synced_at DESC LIMIT 1").first<{ brain_md: string }>().catch(() => null);
   return row?.brain_md ?? "";
 }

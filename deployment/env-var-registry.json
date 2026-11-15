@@ -228,6 +228,11 @@
       "kind": "var",
       "required": false,
       "purpose": "Boss OS Open Loops intake URL, as seq23/boss-os docs/open-loops.md names it. Kept out of source (Boss OS is another business). Absent: nothing is reported to Open Loops."
+    },
+    "WP_OS_BOSS_BRAINS": {
+      "kind": "binding",
+      "required": false,
+      "purpose": "Service binding to Boss OS's BrainReader entrypoint (same Cloudflare account): the west-peek brain for the partner first read. Absent or failing falls back to the stored copy on partner_profile."
     }
   }
 }

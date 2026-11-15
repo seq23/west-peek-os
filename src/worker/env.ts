@@ -2,6 +2,8 @@
 export interface Env {
   /** D1 — relational operational truth. */
   WP_OS_DB: D1Database;
+  /** Boss OS BrainReader (service binding, same account): the west-peek brain, confidential spans removed. */
+  WP_OS_BOSS_BRAINS?: { brain(slug: string): Promise<{ slug: string; body_md: string; updated_at: string | number | null } | null> };
   /** R2 — governed binary documents/artifacts only. Optional at runtime; absence degrades cleanly. */
   WP_OS_DOCUMENTS?: R2Bucket;
   /** KV — ephemeral/config/cache only. Never institutional truth. */

@@ -45,7 +45,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { CLOUDFLARE_ACCOUNT_ID } from "../duties/lib/pages-delivery.mjs";
 import { JOB_CLASSES, loadRoles } from "../lib/model-roles.mjs";
-import { readBrainFacts } from "../lib/brain-facts.mjs";
 
 /**
  * THE DUTY MODULE IS RELOADED WHEN THE REPO MOVES. This claimer is a launchd daemon that lives for
@@ -526,44 +525,6 @@ function vaultSet(name, value) {
   });
 }
 
-/**
- * THE BRAIN'S SETTLED FACTS GO TO THE OS (15 Nov 2026). When ~/Brains/west-peek.md changed since the last write (or
- * on the first heartbeat), its Partners and Businesses sections and the word lookup are written onto the partner
- * profile through the existing route, so the first read never flags what the business already settled. A missing
- * file or heading is logged and the read goes on with what the OS already holds.
- */
-let brainSyncedMtime = 0;
-export async function syncBrainFacts(deps = {}) {
-  const log = deps.log ?? console.log;
-  const read = (deps.read ?? readBrainFacts)();
-  if (!read) {
-    if (brainSyncedMtime !== -1) log("brain facts: ~/Brains/west-peek.md is not on this Mac; the first read uses the OS's own facts");
-    brainSyncedMtime = -1;
-    return { written: false };
-  }
-  if (read.mtimeMs === brainSyncedMtime) return { written: false };
-  if (read.missing.length) log(`brain facts: no ${read.missing.join(", ")} in the brain; written without ${read.missing.length === 1 ? "it" : "them"}`);
-  if (!read.md.trim()) return { written: false };
-  let email = deps.partnerEmail;
-  if (!email) {
-    try {
-      email = (await import("../../src/shared/registry/partners.ts")).PARTNERS[0]?.email;
-    } catch (err) {
-      log(`brain facts: the partner registry could not be read here (${err instanceof Error ? err.message : String(err)}); not written`);
-      return { written: false };
-    }
-  }
-  const res = await (deps.call ?? call)(`/api/partner-profiles/${encodeURIComponent(email)}`, { brain_md: read.md });
-  if (res?.status >= 200 && res?.status < 300) {
-    brainSyncedMtime = read.mtimeMs;
-    const refused = res.body?.refused ?? [];
-    log(`brain facts: written (${read.md.length} characters${refused.length ? `; refused ${refused.join(", ")}` : ""})`);
-    return { written: true };
-  }
-  log(`brain facts: the write was refused (${res?.status ?? "no answer"}); tried again on the next heartbeat`);
-  return { written: false };
-}
-
 async function cycle() {
   // THE LID FIRST, before any word to the Worker: a closed lid takes nothing and says nothing.
   const lid = readLidState();
@@ -581,7 +542,6 @@ async function cycle() {
   await pullSecretHandoffs();
   await checkDnsWaits();
   await checkDriveWatches();
-  await syncBrainFacts().catch((err) => console.log(`brain facts: ${err instanceof Error ? err.message : String(err)}`));
   const claimed = await call("/api/subscription-seats/claim", { device_id: DEVICE_ID, seats: [SEAT], kinds: [RUN_KIND] });
   const run = claimed.body?.run;
   if (!run) return { worked: false };
