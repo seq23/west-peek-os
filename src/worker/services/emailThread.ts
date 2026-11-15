@@ -19,7 +19,8 @@ import { ownershipOf, roleOf } from "../../shared/work/partnerOwnership";
 import { LATE_THREAD_NOTE_PREFIX, NEW_EMAIL_NOTE_PREFIX, readApprovalReply } from "../../shared/work/approvalReply";
 import { textBodyOf } from "../effects/mimeAttachments";
 import { storeAttachments } from "./requestMaterials";
-import { hearVoiceNotes, stopOnUnheardVoiceNotes, withVoiceNotes } from "./voiceNotes";
+import { hearVoiceNotes, recordFilesNotOpened, stopOnUnheardVoiceNotes, withVoiceNotes } from "./voiceNotes";
+import { readLinkedDriveFiles } from "./driveShares";
 import { tellStarted } from "./partnerProgress";
 import { isTakenOver } from "../../shared/work/takeover";
 import { answerQuestionForCard, type QuestionAnswerer, type QuestionAnswerResult } from "./questionRouting";
@@ -217,6 +218,68 @@ export async function isReplyToOurs(env: Env, message: { from: string | null; su
 }
 
 /**
+ * WHICH OF OUR THREADS A MESSAGE ANSWERS, FROM ITS HEADERS ALONE (15 Nov 2026). By our `wpt_` token in
+ * `In-Reply-To`/`References`, else by "Re: <a subject we sent this sender>", then the card a merged card went into.
+ * No body is read, so the email door can route a partner's 11 MB reply to its card without decoding it.
+ */
+export async function replyThreadFromHeaders(
+  env: Env,
+  message: { fromHeader: string | null; subject: string; inReplyTo: string | null; references: string | null },
+): Promise<EmailThreadRow | null> {
+  const tokens = threadTokensIn({ inReplyTo: message.inReplyTo, references: message.references });
+  let thread: EmailThreadRow | null = null;
+  for (const token of tokens) {
+    const row = await env.WP_OS_DB.prepare("SELECT * FROM email_thread WHERE token = ?1")
+      .bind(token)
+      .first<EmailThreadRow>();
+    // Newest first, so the first hit is the message being answered rather than the one that started
+    // the conversation four weeks ago.
+    if (row) {
+      thread = row;
+      break;
+    }
+  }
+
+  /*
+   * "RE: <ONE OF OUR SUBJECTS>" IS A REPLY EVEN WHEN THE TOKEN DID NOT COME BACK (21 Sep 2026).
+   * Scooter answered Walker's blocked note from his iPhone — "Yes he can open." — and the
+   * References header did not carry our token, so the door opened a NEW assignment card (kind
+   * BLOG_HELP, because the subject said "newsletter") and would have written a blog outline on
+   * "Yes he can open". A message from an authenticated partner whose subject is Re:/Fwd: of a note
+   * we sent THEM is that note's reply: matched on the subject we rendered and the address we sent
+   * it to, newest first. Only for the partners (the authority check below still decides), and
+   * only for subjects that are ours.
+   */
+  if (!thread && tokens.length === 0 && /^\s*(?:re|fwd?|aw|sv)\s*:/i.test(message.subject)) {
+    const from = (addressIn(message.fromHeader) ?? "").toLowerCase();
+    const bare = comparableSubject(message.subject);
+    if (from && bare) {
+      /*
+       * COMPARED IN CODE, NOT IN SQL (27 Sep 2026). Both of Scooter's replies today carried only the
+       * SES message id in References — no `wpt_` token — so this fallback was the only match, and an
+       * exact string compare is brittle against what a mail client does to a subject: Gmail's
+       * encoding, a dash rewritten, an ellipsis dropped, and our own doubled prefix ("Porter: Porter:
+       * Plan ready", stored on the threads sent that morning). The partner's recent threads are read
+       * newest first and compared on a normalised form of each side.
+       */
+      const recent =
+        (await env.WP_OS_DB.prepare("SELECT * FROM email_thread WHERE to_address = ?1 ORDER BY created_at DESC LIMIT 200").bind(from).all<EmailThreadRow>()).results ?? [];
+      thread = recent.find((r) => comparableSubject(r.subject) === bare) ?? null;
+    }
+  }
+  /*
+   * RULE 1a (9 Oct 2026): A REPLY STEERS ITS CARD — OR THE CARD THAT CARD WAS MERGED INTO. A reply to a
+   * card merged away (two cards from two re-reads, a follow-up folded into the open job) used to land
+   * on the dead card: a closed-card answer, or nothing. It steers the survivor, on the same token.
+   */
+  if (thread && thread.object_type === "work_card") {
+    const survivor = await survivorOf(env, thread.object_id);
+    if (survivor !== thread.object_id) thread = { ...thread, object_id: survivor };
+  }
+  return thread;
+}
+
+/**
  * Read an arriving message as a steer on the work it is replying to.
  *
  * ─── TWO FACTS, BOTH REQUIRED, AND NEITHER IS A SECRET ─────────────────────────────────────────
@@ -271,47 +334,7 @@ export async function steerFromReply(
   deps: { answerQuestion?: QuestionAnswerer; readWords?: ReplyIntentReader } = {},
 ): Promise<SteerFromReply> {
   const tokens = threadTokensIn({ inReplyTo: message.inReplyTo, references: message.references });
-
-  let thread: EmailThreadRow | null = null;
-  for (const token of tokens) {
-    const row = await env.WP_OS_DB.prepare("SELECT * FROM email_thread WHERE token = ?1")
-      .bind(token)
-      .first<EmailThreadRow>();
-    // Newest first, so the first hit is the message being answered rather than the one that started
-    // the conversation four weeks ago.
-    if (row) {
-      thread = row;
-      break;
-    }
-  }
-
-  /*
-   * "RE: <ONE OF OUR SUBJECTS>" IS A REPLY EVEN WHEN THE TOKEN DID NOT COME BACK (21 Sep 2026).
-   * Scooter answered Walker's blocked note from his iPhone — "Yes he can open." — and the
-   * References header did not carry our token, so the door opened a NEW assignment card (kind
-   * BLOG_HELP, because the subject said "newsletter") and would have written a blog outline on
-   * "Yes he can open". A message from an authenticated partner whose subject is Re:/Fwd: of a note
-   * we sent THEM is that note's reply: matched on the subject we rendered and the address we sent
-   * it to, newest first. Only for the partners (the authority check below still decides), and
-   * only for subjects that are ours.
-   */
-  if (!thread && tokens.length === 0 && /^\s*(?:re|fwd?|aw|sv)\s*:/i.test(message.subject)) {
-    const from = (addressIn(message.fromHeader) ?? "").toLowerCase();
-    const bare = comparableSubject(message.subject);
-    if (from && bare) {
-      /*
-       * COMPARED IN CODE, NOT IN SQL (27 Sep 2026). Both of Scooter's replies today carried only the
-       * SES message id in References — no `wpt_` token — so this fallback was the only match, and an
-       * exact string compare is brittle against what a mail client does to a subject: Gmail's
-       * encoding, a dash rewritten, an ellipsis dropped, and our own doubled prefix ("Porter: Porter:
-       * Plan ready", stored on the threads sent that morning). The partner's recent threads are read
-       * newest first and compared on a normalised form of each side.
-       */
-      const recent =
-        (await env.WP_OS_DB.prepare("SELECT * FROM email_thread WHERE to_address = ?1 ORDER BY created_at DESC LIMIT 200").bind(from).all<EmailThreadRow>()).results ?? [];
-      thread = recent.find((r) => comparableSubject(r.subject) === bare) ?? null;
-    }
-  }
+  let thread = await replyThreadFromHeaders(env, message);
   /*
    * ── A PARTNER'S NEW EMAIL ABOUT A SITE JOB ALREADY OPEN IS A FOLLOW-UP ON THAT JOB (28 Sep 2026) ──
    *
@@ -332,15 +355,6 @@ export async function steerFromReply(
    * reset, an OPEN card given the note the next stage reads) applies unchanged. Nothing new is
    * created. The invariant this keeps: ONE open website card per partner per repo.
    */
-  /*
-   * RULE 1a (9 Oct 2026): A REPLY STEERS ITS CARD — OR THE CARD THAT CARD WAS MERGED INTO. A reply to a
-   * card merged away (two cards from two re-reads, a follow-up folded into the open job) used to land
-   * on the dead card: a closed-card answer, or nothing. It steers the survivor, on the same token.
-   */
-  if (thread && thread.object_type === "work_card") {
-    const survivor = await survivorOf(env, thread.object_id);
-    if (survivor !== thread.object_id) thread = { ...thread, object_id: survivor };
-  }
   let followUp: { cardId: string; subject: string } | null = null;
   if (!thread && tokens.length === 0) {
     const decision = await siteCardDecision(env, message, message.routeAs ?? null);
@@ -431,6 +445,11 @@ export async function steerFromReply(
       });
     }
     await stopOnUnheardVoiceNotes(env, { cardId: thread.object_id, firmScope: thread.firm_scope, partner: partnerByEmail(authority.partnerAddress)?.firstName ?? "a partner", failed: voice.failed });
+    // A DRIVE LINK IS HIS MATERIAL TOO (15 Nov 2026): his own link, or Gmail's for a file over 25 MB, read as him.
+    const drive = await readLinkedDriveFiles(env, { cardId: thread.object_id, partnerEmail: authority.partnerAddress, text: split.written, firmScope: thread.firm_scope, source: "REPLY" });
+    written = withVoiceNotes(written, drive.heard);
+    attached = [...attached, ...drive.filed];
+    await recordFilesNotOpened(env, { cardId: thread.object_id, firmScope: thread.firm_scope, failed: [...kept.unread.map((u) => ({ filename: u.replace(/\s*\(.*$/, ""), reason: u })), ...voice.failed, ...drive.failed] });
     if (written.length < 2 && attached.length) written = `Attached: ${attached.join(", ")}`;
   }
   // One character is an answer ("1", Porter's which-job question); only nothing at all is not (15 Nov 2026: the phone's

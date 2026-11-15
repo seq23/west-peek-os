@@ -7,6 +7,7 @@ import { partnersOwnWords } from "../../shared/intake/replyBody";
 import { textBodyOf } from "../effects/mimeAttachments";
 import { alreadyTold, recordNotice, threadRootFor } from "./requestReply";
 import { sendOrPreview } from "./previewApproval";
+import { FILES_NOT_OPENED } from "./voiceNotes";
 
 /**
  * EMAILING THE OS FEELS LIKE TYPING TO CLAUDE — steps 1 and 7 (her ruling, 14 Nov 2026, west-peek-ventures brain).
@@ -98,6 +99,7 @@ function understoodPrompt(subject: string, written: string): string {
 
 interface Candidate {
   id: string;
+  message_id: string | null;
   r2_key: string | null;
   subject: string | null;
   received_at: string;
@@ -112,6 +114,12 @@ interface Candidate {
 }
 
 async function wordsOf(env: Env, row: Candidate): Promise<string> {
+  // WHAT THE DOOR ACTUALLY READ (15 Nov 2026): a reply's steer carries his typed words AND each voice note's and linked
+  // recording's transcript, so the Got it answers what was heard, never only what was typed.
+  if (row.message_id) {
+    const steer = await env.WP_OS_DB.prepare("SELECT body FROM work_steer WHERE message_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(row.message_id).first<{ body: string }>().catch(() => null);
+    if (steer?.body?.trim()) return steer.body.trim();
+  }
   let raw = "";
   try {
     raw = row.r2_key && env.WP_OS_DOCUMENTS ? ((await (await env.WP_OS_DOCUMENTS.get(row.r2_key))?.text()) ?? "") : "";
@@ -147,7 +155,7 @@ export async function sendUnderstoodReplies(env: Env, now: Date, read: SeatRead 
   try {
     rows = (
       await env.WP_OS_DB.prepare(
-        `SELECT m.id, m.r2_key, m.subject, m.received_at, m.firm_scope, lower(json_extract(m.mail_authority_json, '$.partner')) AS partner,
+        `SELECT m.id, m.message_id, m.r2_key, m.subject, m.received_at, m.firm_scope, lower(json_extract(m.mail_authority_json, '$.partner')) AS partner,
                 c.id AS card_id, c.title, c.owner_id, c.prompt, c.state, c.kind
            FROM inbound_message m JOIN work_card c ON c.id = m.work_card_id
           WHERE m.received_at >= ?1 AND m.received_at <= ?2
@@ -229,18 +237,9 @@ async function answerOne(env: Env, row: Candidate, read: SeatRead): Promise<bool
   const next = viaModel
     ? parsed!.next ?? "I'm starting on it now. The next email from me is the result, or one question if something is unclear."
     : "No model could read it just now, so these are your sentences as you wrote them. Work starts when the Mac is back; the next email from me is the result, or one question.";
+  const unopened = await filesNotOpened(env, row.card_id, row.received_at);
   const who = await employeeName(env, row.owner_id);
-  const email = {
-    employee: who,
-    what: `got it — ${subject.slice(0, 80)}`,
-    tldr: `Got it. ${asks.length === 1 ? "One thing" : `${asks.length} things`} you asked, in your words, below. ${next}`,
-    tldrBullets: [] as string[],
-    sections: [
-      { label: "What you asked", bullets: asks.map((a) => `"${a}"`) },
-      { label: "What happens next", bullets: [next, "Reply to this email to change anything; I read it before I go on."] },
-    ],
-    details: null,
-  };
+  const email = gotItEmail({ employee: who, subject, asks, next, unopened });
   const replyOnThread = await threadRootFor(env, row.card_id);
   const result = await sendOrPreview(env, {
     to: partner.email,
@@ -269,6 +268,118 @@ async function answerOne(env: Env, row: Candidate, read: SeatRead): Promise<bool
     payload: { inbound_message_id: row.id, sent: result.sent, via: viaModel ? "MODEL" : "FALLBACK", asks: asks.length, received_at: row.received_at, seat: out.ok ? "answered" : out.detail.slice(0, 200) },
   }).catch(() => undefined);
   return result.sent;
+}
+
+/** The "Got it" itself: his asks in his words, every file that could not be opened, what happens next. Pure. */
+export function gotItEmail(input: { employee: string; subject: string; asks: readonly string[]; next: string; unopened: ReadonlyArray<{ filename: string; reason: string }> }) {
+  const { asks, next, unopened } = input;
+  return {
+    employee: input.employee,
+    what: `got it — ${input.subject.slice(0, 80)}`,
+    tldr: `Got it. ${asks.length === 1 ? "One thing" : `${asks.length} things`} you asked, in your words, below. ${next}`,
+    tldrBullets: [] as string[],
+    sections: [
+      { label: "What you asked", bullets: asks.map((a) => `"${a}"`) },
+      // Read first, then answered: every file of his that could not be opened is named, never skipped in silence.
+      ...(unopened.length ? [{ label: "What I could not open", bullets: unopened.map((f) => `${f.filename}: ${f.reason}`) }] : []),
+      { label: "What happens next", bullets: [next, "Reply to this email to change anything; I read it before I go on."] },
+    ],
+    details: null,
+  };
+}
+
+/** Every file of this message the door could not open (files, voice notes, Drive links), from the card's record. */
+async function filesNotOpened(env: Env, cardId: string, receivedAt: string): Promise<Array<{ filename: string; reason: string }>> {
+  const rows = (
+    await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_type = 'work_card' AND object_id = ?1 AND event_type = ?2 AND created_at >= ?3 ORDER BY created_at")
+      .bind(cardId, FILES_NOT_OPENED, receivedAt)
+      .all<{ payload_json: string }>()
+      .catch(() => ({ results: [] as Array<{ payload_json: string }> }))
+  ).results ?? [];
+  const out: Array<{ filename: string; reason: string }> = [];
+  for (const r of rows) {
+    try {
+      for (const f of (JSON.parse(r.payload_json) as { files?: Array<{ filename: string; reason: string }> }).files ?? []) {
+        if (!out.some((o) => o.filename === f.filename)) out.push(f);
+      }
+    } catch {
+      /* a payload that is not JSON names nothing */
+    }
+  }
+  return out.slice(0, 12);
+}
+
+/** Past this, a partner email with no acknowledgement is raised on Sequoia's desk (her rule: never silent). */
+export const UNACKNOWLEDGED_MINUTES = 5;
+
+/**
+ * NEVER SILENT (15 Nov 2026). On the sweep, after the Got it lane. Three shapes, each raised once on Sequoia's desk:
+ *   1 · a door that started and never finished (its claim still unfinished past the window): killed. Two of those on one
+ *       message and it is handed to a Mac session instead of being read inline a third time.
+ *   2 · a partner email placed on a card with no Got it past the window.
+ *   3 · a message handed to a Mac session that has not finished it past the window (the Mac is asleep).
+ * Returns how many were raised. Never throws into the sweep.
+ */
+export async function raiseUnacknowledgedMail(env: Env, now: Date = new Date()): Promise<number> {
+  const { raiseUnreadMail, handOffUnreadableMail, headersOfRaw, INLINE_READ_ATTEMPTS } = await import("../effects/inboundEmail");
+  const late = new Date(now.getTime() - UNACKNOWLEDGED_MINUTES * 60_000).toISOString();
+  const day = new Date(now.getTime() - 24 * 3_600_000).toISOString();
+  const hour = new Date(now.getTime() - 60 * 60_000).toISOString();
+  let raised = 0;
+  try {
+    const died = (await env.WP_OS_DB.prepare(
+      `SELECT s.message_id, s.attempts, m.r2_key, m.from_address, m.subject FROM inbound_email_seen s LEFT JOIN inbound_message m ON m.message_id = s.message_id
+        WHERE s.handled = 0 AND s.seen_at < ?1 AND s.seen_at >= ?2 LIMIT 10`,
+    ).bind(late, day).all<{ message_id: string; attempts: number; r2_key: string | null; from_address: string | null; subject: string | null }>()).results ?? [];
+    for (const d of died) {
+      if (d.attempts >= INLINE_READ_ATTEMPTS) {
+        const claimed = await env.WP_OS_DB.prepare("UPDATE inbound_email_seen SET handled = 2 WHERE message_id = ?1 AND handled = 0").bind(d.message_id).run();
+        if ((claimed.meta?.changes ?? 0) !== 1) continue;
+        // Only the header block is read back (a ranged get): never the body.
+        const head = d.r2_key && env.WP_OS_DOCUMENTS ? await (await env.WP_OS_DOCUMENTS.get(d.r2_key, { range: { offset: 0, length: 64 * 1024 } }))?.text() : null;
+        await handOffUnreadableMail(env, { messageId: d.message_id, sender: d.from_address ?? "unknown", subject: d.subject ?? "", headers: headersOfRaw(head ?? "") });
+      } else {
+        await raiseUnreadMail(env, {
+          dedupeKey: `inbound_email_door_died:${d.message_id}`,
+          title: "An email's read was stopped before it finished",
+          body: `From ${(d.from_address ?? "unknown").slice(0, 120)}, subject "${(d.subject ?? "").slice(0, 120)}". The Worker began reading it and was stopped; no "Got it" was sent. A redelivery reads it again${d.r2_key ? `; it is stored at ${d.r2_key}` : ""}.`,
+          objectId: d.message_id,
+        });
+      }
+      raised += 1;
+    }
+    const noGotIt = (await env.WP_OS_DB.prepare(
+      `SELECT m.id, m.work_card_id, m.from_address, m.subject FROM inbound_message m
+        WHERE m.work_card_id IS NOT NULL AND json_extract(m.mail_authority_json, '$.partner') IS NOT NULL
+          AND m.received_at < ?1 AND m.received_at >= ?2
+          AND NOT EXISTS (SELECT 1 FROM partner_understood u WHERE u.inbound_message_id = m.id) LIMIT 10`,
+    ).bind(late, hour).all<{ id: string; work_card_id: string; from_address: string; subject: string }>()).results ?? [];
+    for (const m of noGotIt) {
+      await raiseUnreadMail(env, {
+        dedupeKey: `partner_email_no_got_it:${m.id}`,
+        title: `No "Got it" went to a partner within ${UNACKNOWLEDGED_MINUTES} minutes`,
+        body: `From ${m.from_address.slice(0, 120)}, subject "${m.subject.slice(0, 120)}", on card ${m.work_card_id}. It was read and placed on the card, but no Got it has gone.`,
+        objectId: m.id,
+      });
+      raised += 1;
+    }
+    const macSlow = (await env.WP_OS_DB.prepare(
+      `SELECT e.object_id AS message_id, json_extract(e.payload_json, '$.session_card') AS card FROM event_record e JOIN work_card c ON c.id = json_extract(e.payload_json, '$.session_card')
+        WHERE e.event_type = 'inbound_email.handed_off' AND e.created_at < ?1 AND e.created_at >= ?2 AND c.state NOT IN ('DONE', 'CANCELLED') LIMIT 10`,
+    ).bind(late, day).all<{ message_id: string; card: string }>()).results ?? [];
+    for (const m of macSlow) {
+      await raiseUnreadMail(env, {
+        dedupeKey: `inbound_email_mac_slow:${m.message_id}`,
+        title: "The Mac has not read an email it took over",
+        body: `Session card ${m.card} was handed an email the Worker could not read, and it has not finished after ${UNACKNOWLEDGED_MINUTES} minutes. The Mac may be asleep; no "Got it" has gone.`,
+        objectId: m.message_id,
+      });
+      raised += 1;
+    }
+  } catch (err) {
+    console.error("raising unacknowledged mail failed", err);
+  }
+  return raised;
 }
 
 // ── STEP 7 ─────────────────────────────────────────────────────────────────────────────────────────────────────────

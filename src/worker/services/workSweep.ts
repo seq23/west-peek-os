@@ -724,6 +724,8 @@ export async function sweepOnce(
   await releaseSpendSettingBlocks(env, now);
   // 14 Nov 2026 (plan step 1): every partner email that opened or steered a card gets one "Got it" within the minute.
   await (await import("./partnerUnderstood")).sendUnderstoodReplies(env, now).catch((err) => console.error("Got it replies failed", err));
+  // 15 Nov 2026: NEVER SILENT — a door that died, a placed email with no Got it, or a Mac hand-off not finished, past five minutes, is on Sequoia's desk.
+  await (await import("./partnerUnderstood")).raiseUnacknowledgedMail(env, now).catch((err) => console.error("unacknowledged mail check failed", err));
   const card = await claimNextCard(env, now);
   if (!card) {
     return { status: "SUCCEEDED", summary: "nothing waiting: every card an employee owns is done, blocked, or being worked", card: null, outcome: "NOTHING_WAITING" };

@@ -3,7 +3,9 @@ import { appendEvent } from "../events";
 import type { DriveShareNotice } from "../../shared/intake/driveShare";
 import { PARTNERS, partnerByEmail, type Partner } from "../../shared/registry/partners";
 import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
-import { driveFileText, getDriveFile, GoogleWorkspaceError, SCOPE, serviceAccountToken, type DriveFileRaw } from "../effects/googleWorkspaceClient";
+import { downloadDriveFile, driveFileText, getDriveFile, GoogleWorkspaceError, SCOPE, serviceAccountToken, type DriveFileRaw } from "../effects/googleWorkspaceClient";
+import { transcribeDiarisedStream } from "../ai/providers/workersAiNova3";
+import { voiceNoteType } from "./voiceNotes";
 import { createWorkCardInternal } from "./workCards";
 import { systemIdentity } from "./dealIntake";
 import { blockCard } from "./blocks";
@@ -50,6 +52,8 @@ export interface SharedFile {
   sharedAt: string | null;
   text: string | null;
   readError: string | null;
+  /** Set when the file's bytes were kept on the card as an attachment (a Drive download), so nothing says "could not be read". */
+  kept?: string | null;
 }
 
 /** Read the file as the partner who shared it. Never throws: an unreadable file is attached by its link, with the reason. */
@@ -95,7 +99,7 @@ export async function attachDriveFile(env: Env, cardId: string, f: SharedFile, f
   const who = partnerByEmail(f.sharedBy)?.firstName ?? "A partner";
   const lines = [
     `• SHARED DOCUMENT from ${who} (${f.sharedAt ? ctTime(f.sharedAt) : "today"}): "${f.title}" — ${f.url}`,
-    f.text ? `--- "${f.title}", as read through the firm's Drive access (first ${Math.min(f.text.length, DESCRIPTION_TEXT_MAX)} characters) ---\n${f.text.slice(0, DESCRIPTION_TEXT_MAX)}\n--- end of "${f.title}" ---` : `(Its text could not be read here${f.readError ? `: ${f.readError}` : ""}; the link opens it.)`,
+    f.text ? `--- "${f.title}", as read through the firm's Drive access (first ${Math.min(f.text.length, DESCRIPTION_TEXT_MAX)} characters) ---\n${f.text.slice(0, DESCRIPTION_TEXT_MAX)}\n--- end of "${f.title}" ---` : f.kept ? `(Kept on the card as a file: ${f.kept}.)` : `(Its text could not be read here${f.readError ? `: ${f.readError}` : ""}; the link opens it.)`,
   ].join("\n");
   await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || ?2, 1, 30000), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1")
     .bind(cardId, lines)
@@ -335,4 +339,109 @@ export async function askHeldShareQuestions(env: Env, now: Date = new Date()): P
     console.error("held share questions failed", err);
     return 0;
   }
+}
+
+/** A linked audio file is transcribed up to this size (a phone recording of a few minutes is 1 to 20 MB). */
+export const DRIVE_AUDIO_MAX_BYTES = 40 * 1024 * 1024;
+/** A linked file is kept on the card up to this size: the largest file a job is handed. */
+export const DRIVE_FILE_MAX_BYTES = 100 * 1024 * 1024;
+const LINKED_FILES_MAX = 8;
+
+export interface LinkedDrive {
+  /** Each linked recording's words, verbatim — joined to what he typed, exactly as an attached voice note's are. */
+  heard: Array<{ filename: string; text: string }>;
+  /** Each file kept on the card (a document's text, a file's bytes). */
+  filed: string[];
+  /** Each linked file that could not be opened, and why. Named in the "Got it". */
+  failed: Array<{ filename: string; reason: string }>;
+}
+
+const isAudio = (mime: string, name: string): boolean => mime.startsWith("audio/") || /\.(?:m4a|mp3|wav|aac|ogg|oga|opus|caf|amr|webm)$/i.test(name);
+
+/**
+ * A DRIVE LINK IN A PARTNER'S EMAIL IS HIS MATERIAL (15 Nov 2026). A link he pasted, or the one Gmail writes in place of
+ * an attachment over 25 MB (often not shared with os@ at all), is read AS HIM through the firm's delegation: a Doc,
+ * Sheet or Slides as text; a recording downloaded and transcribed on the same no-training route as an attached voice
+ * note; any other file (an image, a ZIP) kept on the card as an attachment, the same row an emailed file gets. The
+ * bytes stream from Google to R2 and to the transcriber; nothing is decoded here. A file already on the card is not
+ * read twice. `dryRun` reads and transcribes and returns what it would file, writing nothing. Never throws.
+ */
+export async function readLinkedDriveFiles(
+  env: Env,
+  input: { cardId: string | null; partnerEmail: string | null; text: string | null; firmScope?: string; dryRun?: boolean; source?: "REQUEST" | "REPLY" },
+): Promise<LinkedDrive> {
+  const out: LinkedDrive = { heard: [], filed: [], failed: [] };
+  const ids = driveIdsIn(input.text).slice(0, LINKED_FILES_MAX);
+  const partner = partnerByEmail(input.partnerEmail);
+  if (ids.length === 0 || !partner) return out;
+  const firmScope = input.firmScope ?? "west-peek";
+  let token: string;
+  try {
+    token = await serviceAccountToken(env, [SCOPE.driveRead], partner.email);
+  } catch (err) {
+    const reason = err instanceof GoogleWorkspaceError ? `${err.code}: ${err.message}` : err instanceof Error ? err.message : String(err);
+    for (const id of ids) out.failed.push({ filename: `Drive file ${id}`, reason: `the firm's Drive access did not answer (${reason})` });
+    return out;
+  }
+  for (const id of ids) {
+    let name = `Drive file ${id}`;
+    try {
+      if (input.cardId && !input.dryRun) {
+        const already = await env.WP_OS_DB.prepare("SELECT 1 AS x FROM card_drive_file WHERE work_card_id = ?1 AND file_id = ?2").bind(input.cardId, id).first<{ x: number }>();
+        if (already) continue;
+      }
+      const raw = await getDriveFile(token, id);
+      name = raw.name || name;
+      const mime = raw.mimeType ?? "";
+      const url = raw.webViewLink ?? `https://drive.google.com/file/d/${id}/view`;
+      const file: SharedFile = { fileId: id, url, title: name, mimeType: mime || null, sharedBy: partner.email, sharedAt: new Date().toISOString(), text: null, readError: null };
+      const native = mime.startsWith("application/vnd.google-apps.") || mime.startsWith("text/");
+      if (native) {
+        file.text = await driveFileText(token, raw, DRIVE_TEXT_MAX);
+      } else {
+        const size = Number(raw.size ?? 0);
+        const audio = isAudio(mime, name);
+        const cap = audio ? DRIVE_AUDIO_MAX_BYTES : DRIVE_FILE_MAX_BYTES;
+        if (!size || size > cap) {
+          out.failed.push({ filename: name, reason: size ? `${(size / 1024 / 1024).toFixed(1)} MB is over the ${(cap / 1024 / 1024).toFixed(0)} MB this reads` : "Drive did not say how big it is" });
+          continue;
+        }
+        const res = await downloadDriveFile(token, id);
+        if (input.dryRun) {
+          if (audio) file.text = (await transcribeDiarisedStream(env.AI, res.body!, voiceNoteType(name, mime))).text.trim();
+          else await res.body?.cancel();
+        } else {
+          if (!env.WP_OS_DOCUMENTS || !input.cardId) throw new Error("the document store is not bound");
+          const key = `drive-file/${input.cardId}/${crypto.randomUUID()}`;
+          const sized = new FixedLengthStream(size);
+          const pumped = res.body!.pipeTo(sized.writable);
+          await env.WP_OS_DOCUMENTS.put(key, sized.readable, { httpMetadata: { contentType: mime || "application/octet-stream" }, customMetadata: { drive_file: id, name: name.slice(0, 200) } });
+          await pumped;
+          await env.WP_OS_DB.prepare("INSERT INTO request_attachment (id, work_card_id, filename, media_type, bytes, eml_key, firm_scope, source) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")
+            .bind(`ratt_${crypto.randomUUID()}`, input.cardId, name.slice(0, 200), mime || "application/octet-stream", size, key, firmScope, input.source ?? "REPLY")
+            .run();
+          file.kept = name;
+          if (audio) {
+            // The file is kept whatever the transcriber says; only its words can be missing.
+            try {
+              const stored = await env.WP_OS_DOCUMENTS.get(key);
+              if (!stored) throw new Error("the downloaded recording could not be read back");
+              file.text = (await transcribeDiarisedStream(env.AI, stored.body, voiceNoteType(name, mime))).text.trim();
+            } catch (err) {
+              file.readError = (err instanceof Error ? err.message : String(err)).slice(0, 300);
+            }
+          }
+        }
+        if (audio) {
+          if (file.text) out.heard.push({ filename: name, text: file.text });
+          else out.failed.push({ filename: name, reason: file.readError ? `it could not be transcribed: ${file.readError}` : "the transcriber heard no words in it" });
+        }
+      }
+      if (!input.dryRun && input.cardId) await attachDriveFile(env, input.cardId, file, firmScope);
+      out.filed.push(name);
+    } catch (err) {
+      out.failed.push({ filename: name, reason: (err instanceof GoogleWorkspaceError ? `${err.code}: ${err.message}` : err instanceof Error ? err.message : String(err)).slice(0, 300) });
+    }
+  }
+  return out;
 }

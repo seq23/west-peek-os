@@ -1090,8 +1090,13 @@ export async function openAssignmentCard(
   // ONE MECHANISM (0237): the door and the thread keep a message's files the same way.
   const emlKey = input.emlKey;
   const kept = await storeAttachments(env, { cardId: card.id, raw: input.raw, emlKey, firmScope: FIRM_SCOPE, source: "REQUEST" });
-  const attachedNames: string[] = kept.stored;
-  const unread = kept.unread;
+  // A DRIVE LINK IN HIS REQUEST (his own, or Gmail's for a file over 25 MB) is read as him, like an attachment (15 Nov 2026).
+  const { readLinkedDriveFiles } = await import("./driveShares");
+  const drive = await readLinkedDriveFiles(env, { cardId: card.id, partnerEmail: input.partnerAddress, text: written, firmScope: FIRM_SCOPE, source: "REQUEST" });
+  const attachedNames: string[] = [...kept.stored, ...drive.filed];
+  const unread = [...kept.unread, ...drive.failed.map((f) => `${f.filename} (${f.reason})`)];
+  const { recordFilesNotOpened } = await import("./voiceNotes");
+  await recordFilesNotOpened(env, { cardId: card.id, firmScope: FIRM_SCOPE, failed: unread.map((u) => ({ filename: u.replace(/\s*\(.*$/, ""), reason: u })) });
   // ALWAYS, not only when something was attached: the line that says where the original is has to
   // be on every card, because "where is the email this came from" is the question this whole
   // overhaul exists to answer.

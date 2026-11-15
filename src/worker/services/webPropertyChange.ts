@@ -3591,6 +3591,12 @@ export async function handleGetRequestAttachment(ctx: RouteContext): Promise<Res
   if (!bucket) return json({ error: "no_store", detail: "the document store is not bound" }, { status: 503 });
   const obj = await bucket.get(row.eml_key);
   if (!obj) return json({ error: "not_found", detail: `the stored message ${row.eml_key} is gone` }, { status: 404 });
+  // A file read from a Drive link the partner sent (driveShares.readLinkedDriveFiles) is stored as itself, not in a message.
+  if (row.eml_key.startsWith("drive-file/")) {
+    return new Response(obj.body, {
+      headers: { "content-type": row.media_type || "application/octet-stream", "content-disposition": `attachment; filename="${row.filename.replace(/"/g, "")}"`, "cache-control": "private, no-store" },
+    });
+  }
   const extracted = attachmentBytes(await obj.text(), row.filename);
   if (!extracted) return json({ error: "not_found", detail: `${row.filename} is not in the stored message` }, { status: 404 });
   return new Response(new Blob([extracted.bytes as BlobPart]), {
@@ -3610,8 +3616,22 @@ export async function handleGetRequestAttachment(ctx: RouteContext): Promise<Res
  */
 export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Response> {
   if (!mayFetch(ctx)) return json({ error: "forbidden" }, { status: 403 });
-  const body = (await ctx.request.json().catch(() => null)) as { object_key?: unknown; received_tldr?: unknown; reply_on_thread?: unknown } | null;
-  const key = typeof body?.object_key === "string" ? body.object_key.trim() : "";
+  const body = (await ctx.request.json().catch(() => null)) as { object_key?: unknown; received_tldr?: unknown; reply_on_thread?: unknown; dry_run?: unknown; inbound_message_id?: unknown } | null;
+  let key = typeof body?.object_key === "string" ? body.object_key.trim() : "";
+  /*
+   * DRY RUN (15 Nov 2026): the full read of a stored message, returned and not applied. Nothing is claimed, cleared,
+   * steered, filed or sent; see `dryReadMessage`. By `inbound_message_id` or by `object_key`.
+   */
+  if (body?.dry_run === true) {
+    if (!key && typeof body.inbound_message_id === "string") {
+      key = (await ctx.env.WP_OS_DB.prepare("SELECT r2_key FROM inbound_message WHERE id = ?1").bind(body.inbound_message_id).first<{ r2_key: string }>())?.r2_key ?? "";
+    }
+    if (!/^inbound-email\/[\w./-]+\.eml$/.test(key)) return json({ error: "invalid_input", detail: "object_key (or inbound_message_id) must name a stored inbound-email/….eml" }, { status: 400 });
+    const stored = await ctx.env.WP_OS_DOCUMENTS?.get(key);
+    if (!stored) return json({ error: "not_found" }, { status: 404 });
+    const { dryReadMessage } = await import("../effects/inboundEmail");
+    return json({ ok: true, dry_run: true, object_key: key, would: await dryReadMessage(ctx.env, await stored.text()) });
+  }
   const receivedTldr = typeof body?.received_tldr === "string" ? body.received_tldr.trim().slice(0, 600) : null;
   const replyOnThread = typeof body?.reply_on_thread === "string" && /^wpt_[a-f0-9]{32}$/.test(body.reply_on_thread) ? body.reply_on_thread : null;
   if (!/^inbound-email\/[\w./-]+\.eml$/.test(key)) return json({ error: "invalid_input", detail: "object_key must be a stored inbound-email/….eml" }, { status: 400 });

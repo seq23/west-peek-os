@@ -48,7 +48,7 @@ export async function hearVoiceNotes(env: Env, raw: string): Promise<VoiceNotes>
     try {
       let text: string;
       try {
-        text = (await transcribeDiarised(env.AI, a.dataBase64, voiceNoteType(a.filename, a.mediaType))).text.trim();
+        text = (await transcribeDiarised(env.AI, a.dataBase64, voiceNoteType(a.filename, a.mediaType), { stream: true })).text.trim();
       } catch (err) {
         if (!(err instanceof DiarisationUnavailable)) throw err;
         text = (await transcribeChunk(env.AI, a.dataBase64)).text.trim();
@@ -96,5 +96,22 @@ export async function stopOnUnheardVoiceNotes(env: Env, input: { cardId: string;
     objectId: input.cardId,
     dedupeKey: `${VOICE_NOTE_STOP}:${input.cardId}:${input.failed.map((f) => f.filename).join(",")}`,
     firmScope: input.firmScope,
+  });
+}
+
+/** The event the "Got it" reads to name every file of a message that could not be opened (15 Nov 2026). */
+export const FILES_NOT_OPENED = "work_card.files_not_opened";
+
+/** Every file of one message that could not be opened, on the card's record; the "Got it" names each one. */
+export async function recordFilesNotOpened(env: Env, input: { cardId: string; firmScope: string; failed: ReadonlyArray<{ filename: string; reason: string }> }): Promise<void> {
+  if (input.failed.length === 0) return;
+  await appendEvent(env, {
+    eventType: FILES_NOT_OPENED,
+    actorType: "system",
+    actorId: "inbound_email",
+    objectType: "work_card",
+    objectId: input.cardId,
+    firmScope: input.firmScope,
+    payload: { files: input.failed.slice(0, 20).map((f) => ({ filename: f.filename.slice(0, 200), reason: f.reason.slice(0, 300) })) },
   });
 }
