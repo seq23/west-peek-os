@@ -19,6 +19,8 @@ import { ownershipOf, roleOf } from "../../shared/work/partnerOwnership";
 import { LATE_THREAD_NOTE_PREFIX, NEW_EMAIL_NOTE_PREFIX, readApprovalReply } from "../../shared/work/approvalReply";
 import { textBodyOf } from "../effects/mimeAttachments";
 import { storeAttachments } from "./requestMaterials";
+import { hearVoiceNotes, stopOnUnheardVoiceNotes, withVoiceNotes } from "./voiceNotes";
+import { tellStarted } from "./partnerProgress";
 import { answerQuestionForCard, type QuestionAnswerer, type QuestionAnswerResult } from "./questionRouting";
 import { previewAllPartnerEmailsIsOn } from "./kindRules";
 import { routedByFor } from "./requestReply";
@@ -409,6 +411,25 @@ export async function steerFromReply(
         )
         .run();
     }
+    /*
+     * A VOICE NOTE IS HIS WORDS (15 Nov 2026, wc_c548d043): "Recording attached." plus a phone recording steered the
+     * card with two words. The recording is transcribed on the platform's own no-training route (voiceNotes.ts) and
+     * its words join what he typed; one that cannot be read is a named stop on Sequoia's desk and on the card.
+     */
+    const voice = await hearVoiceNotes(env, message.raw);
+    written = withVoiceNotes(written, voice.heard);
+    if (voice.heard.length) {
+      await appendEvent(env, {
+        eventType: "work_card.voice_note_transcribed",
+        actorType: "system",
+        actorId: "voice_notes",
+        objectType: "work_card",
+        objectId: thread.object_id,
+        firmScope: thread.firm_scope,
+        payload: { files: voice.heard.map((h) => ({ filename: h.filename, chars: h.text.length })) },
+      });
+    }
+    await stopOnUnheardVoiceNotes(env, { cardId: thread.object_id, firmScope: thread.firm_scope, partner: partnerByEmail(authority.partnerAddress)?.firstName ?? "a partner", failed: voice.failed });
     if (written.length < 2 && attached.length) written = `Attached: ${attached.join(", ")}`;
   }
   // One character is an answer ("1", Porter's which-job question); only nothing at all is not (15 Nov 2026: the phone's
@@ -665,6 +686,8 @@ export async function steerFromReply(
           }
           const out = await answerBlock(env, cardRow.id, partner.firmUserId, { action: door, text: keptWords(written) });
           answered = out.ok;
+          // His answer starts the run again: one note on his thread with when to expect it (partnerProgress.ts).
+          if (out.ok && door === "ANSWER" && cardRow.kind !== WEB_PROPERTY_CHANGE_KIND) await tellStarted(env, { cardId: cardRow.id, partnerEmail: partner.email, thread: thread.token, messageId: message.messageId ?? null });
         }
       } else {
         await env.WP_OS_DB.prepare(
@@ -695,6 +718,8 @@ export async function steerFromReply(
       )
         .bind(`wcn_${crypto.randomUUID()}`, cardRow.id, partner.firmUserId, keptWords(written), thread.firm_scope)
         .run();
+      // The run that reads his note is already going or next: he hears when to expect it (partnerProgress.ts).
+      if (cardRow.kind !== WEB_PROPERTY_CHANGE_KIND) await tellStarted(env, { cardId: cardRow.id, partnerEmail: partner.email, thread: thread.token, messageId: message.messageId ?? null });
     } else if (cardRow && partner && cardRow.kind === "PARTNER_MESSAGE") {
       /*
        * A REPLY TO A PARTNER MESSAGE IS FOR THE PARTNER WHO ASKED FOR IT (9 Oct 2026). Scooter

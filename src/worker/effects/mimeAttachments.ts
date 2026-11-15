@@ -243,7 +243,16 @@ export function attachmentBytes(raw: string, filename: string): { bytes: Uint8Ar
   }
 }
 
-function attachmentsOf(raw: string, accept: (type: string, sentAsFile: boolean) => boolean, max = MAX_ATTACHMENTS): { attachments: Attachment[]; unread: string[] } {
+/** A voice note is up to this big: a phone's few minutes of m4a is 1 to 20 MB. */
+export const MAX_VOICE_NOTE_BYTES = 40 * 1024 * 1024;
+
+/** The audio files a person attached (a phone's "New Recording 4.m4a"), by type or by a sound file's name. */
+export function audioAttachments(raw: string): { attachments: Attachment[]; unread: string[] } {
+  const isAudio = (type: string) => type.startsWith("audio/") || /name\*?=["']?[^"';]+\.(?:m4a|mp3|wav|aac|ogg|oga|opus|caf|amr|webm)\b/i.test(type);
+  return attachmentsOf(raw, (type) => isAudio(type), 5, MAX_VOICE_NOTE_BYTES);
+}
+
+function attachmentsOf(raw: string, accept: (type: string, sentAsFile: boolean) => boolean, max = MAX_ATTACHMENTS, maxBytes = MAX_ATTACHMENT_BYTES): { attachments: Attachment[]; unread: string[] } {
   const attachments: Attachment[] = [];
   const unread: string[] = [];
 
@@ -307,7 +316,7 @@ function attachmentsOf(raw: string, accept: (type: string, sentAsFile: boolean) 
     // Base64 is 4 characters per 3 bytes; close enough to refuse an oversized file without decoding
     // it, which is the whole point — measuring by decoding would cost what reading costs.
     const bytes = Math.floor((dataBase64.length * 3) / 4);
-    if (bytes > MAX_ATTACHMENT_BYTES) {
+    if (bytes > maxBytes) {
       unread.push(`${filename} (${(bytes / 1024 / 1024).toFixed(1)}MB — too large to read here)`);
       continue;
     }

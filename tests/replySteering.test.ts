@@ -416,3 +416,81 @@ describe("one email is filed once, and only his own new words reach a model (wc_
     expect(pieces.map((p) => p.text)).toEqual([HIS_WORDS]);
   });
 });
+
+describe("a voice note on a partner's reply is his words (wc_c548d043, 15 Nov 2026)", () => {
+  const AUDIO = btoa("not really audio, but bytes a phone attached");
+  const mime = (boundary: string) => [
+    "From: Scooter Taylor <scooter@westpeek.ventures>",
+    `To: ${INTAKE_MAILBOX}`,
+    "Subject: Re: Porter: New preview ready",
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "",
+    "Recording attached.",
+    "",
+    `--${boundary}`,
+    'Content-Type: audio/mp4; name="New Recording 4.m4a"',
+    'Content-Disposition: attachment; filename="New Recording 4.m4a"',
+    "Content-Transfer-Encoding: base64",
+    "",
+    AUDIO,
+    `--${boundary}--`,
+    "",
+  ].join("\r\n");
+
+  async function thread(kind: string): Promise<string> {
+    return (await startThread(env, { objectType: "work_card", objectId: `wc_voice_${kind}`, cardKind: kind, employee: "Porter", to: "scooter@westpeek.ventures", subject: "Porter: New preview ready", firmScope: "west-peek" })).token;
+  }
+
+  it("the recording is transcribed on the platform's no-training route and its words are the steer", async () => {
+    const calls: Array<{ model: string; input: Record<string, unknown> }> = [];
+    const AI = { run: async (model: string, input: Record<string, unknown>) => { calls.push({ model, input }); return { results: { channels: [{ alternatives: [{ transcript: "Make the hero say Community as a Service, and move the pricing below the case studies." }] }] } }; } };
+    const token = await thread("VOICE_HEARD_TEST");
+    const out = await steerFromReply({ ...env, AI } as Env, { fromHeader: SCOOTER_FROM, authenticationResults: GOOD_AUTH, subject: "Re: Porter: New preview ready", raw: mime("b1"), inReplyTo: threadReference(token), references: null, emlKey: null, messageId: "voice-heard@mail.gmail.com" });
+    expect(out.steered).toBe(true);
+    expect(calls, "one recording, one transcription").toHaveLength(1);
+    expect(calls[0]!.input.mip_opt_out, "never anybody's training data").toBe(true);
+    expect((calls[0]!.input.audio as { contentType: string }).contentType).toBe("audio/mp4");
+    const body = (await env.WP_OS_DB.prepare("SELECT body FROM work_steer WHERE card_kind = 'VOICE_HEARD_TEST'").first<{ body: string }>())!.body;
+    expect(body).toContain("Recording attached.");
+    expect(body, "his spoken words, verbatim").toContain("Make the hero say Community as a Service, and move the pricing below the case studies.");
+  });
+
+  it("with no route that may hear it, the recording is a named stop on the record, never silence", async () => {
+    const token = await thread("VOICE_UNHEARD_TEST");
+    const noAi = { ...env, AI: undefined } as Env;
+    await steerFromReply(noAi, { fromHeader: SCOOTER_FROM, authenticationResults: GOOD_AUTH, subject: "Re: Porter: New preview ready", raw: mime("b2"), inReplyTo: threadReference(token), references: null, emlKey: null, messageId: "voice-unheard@mail.gmail.com" });
+    const stop = await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE event_type = 'work_card.voice_note_not_transcribed' AND object_id = 'wc_voice_VOICE_UNHEARD_TEST'").first<{ payload_json: string }>();
+    expect(stop, "a named stop").not.toBeNull();
+    expect(stop!.payload_json).toContain("New Recording 4.m4a");
+    const told = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM notification WHERE object_id = 'wc_voice_VOICE_UNHEARD_TEST' AND firm_user_id = 'fu_sequoia_taylor'").first<{ n: number }>();
+    expect(Number(told!.n), "on Sequoia's desk").toBeGreaterThan(0);
+  });
+});
+
+describe("a partner is never left in silence on a long job (wc_bd8b68cb, 15 Nov 2026)", () => {
+  it("a reply that starts a run is told when to expect it, once per email, and told once more if that time passes", async () => {
+    const { tellSlipped } = await import("../src/worker/services/partnerProgress");
+    const cardId = "wc_progress_test";
+    await env.WP_OS_DB.prepare("INSERT INTO work_card (id, title, kind, owner_type, owner_id, state, firm_scope, created_by) VALUES (?1, 'Walker: West Peek Productions this month (2099-02)', 'PROGRESS_TEST', 'AI', 'aie_walker', 'OPEN', 'west-peek', 'system:test')").bind(cardId).run();
+    const { token } = await startThread(env, { objectType: "work_card", objectId: cardId, cardKind: "PROGRESS_TEST", employee: "Walker", to: "scooter@westpeek.ventures", subject: "Walker: November", firmScope: "west-peek" });
+    const reply = (messageId: string) => steerFromReply(env, { fromHeader: SCOOTER_FROM, authenticationResults: GOOD_AUTH, subject: "Re: Walker: November", raw: gmailReply("Can you check these 59 past clients today?", "the note"), inReplyTo: threadReference(token), references: null, emlKey: null, messageId });
+    const count = async (type: string) => Number((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE object_id = ?1 AND event_type = ?2").bind(cardId, type).first<{ n: number }>())!.n);
+    await reply("progress-1@mail.gmail.com");
+    await reply("progress-1@mail.gmail.com");
+    expect(await count("work_card.partner_told_started"), "one note for the email he sent, however often it is read").toBe(1);
+    const started = JSON.parse((await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'work_card.partner_told_started'").bind(cardId).first<{ payload_json: string }>())!.payload_json) as { expect_by: string; thread: string };
+    expect(started.thread, "on his own thread").toBe(token);
+    // Before the promised time nothing more is said; after it, once.
+    await tellSlipped(env, new Date(Date.parse(started.expect_by) - 60_000));
+    expect(await count("work_card.partner_told_slipped")).toBe(0);
+    await tellSlipped(env, new Date(Date.parse(started.expect_by) + 60_000));
+    await tellSlipped(env, new Date(Date.parse(started.expect_by) + 120_000));
+    expect(await count("work_card.partner_told_slipped"), "one 'taking longer' note, never a stream").toBe(1);
+    // A finished card is not chased.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE' WHERE id = ?1").bind(cardId).run();
+  });
+});
