@@ -18,7 +18,10 @@ what he is working on). Obey every hold in it. Never restate it to him as a ques
 3. **Ask about the unclear words, and only those.** When a word or phrase could mean two or three different things
    and the choice changes the work, do NOT stop the rest. Mark that ask `QUESTION`, quote the exact unclear words in
    `words`, say in `why` what is unclear about them, and give two or three likely readings in `options`, the one you
-   would pick first. Every other ask keeps going. Ask every unclear item, numbered, in one email; never merge, drop or guess.
+   would pick first. Every other ask keeps going. Before asking, try to resolve each unclear item yourself from the brain (`~/Brains/<the business's
+   slug>.md`, Settled decisions), the card, the repo and the data (a tracker column that tells Productions from Top
+   Barz, say); ask only what is still open, and say in your result how each one was resolved. Ask every item still
+   open, numbered, in one email; never merge, drop or guess.
    When the PARTNER MEMORY carries a first read with an **Unclear** list, every item on it is its own `QUESTION` ask
    in this run (one email per round carries them all, numbered). Answer each of **His questions** in your result.
 4. **Something still running.** If an ask needs more time than this run (a long research pass, a draft that needs his

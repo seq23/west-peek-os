@@ -281,7 +281,9 @@ describe("what the reader could not pin down", () => {
     const brief = JSON.parse((await understoodRow(inm))!.brief_json!) as { unclear: Array<{ words: string; missing: string }> };
     expect(brief.unclear).toEqual([{ words: "Swap the hero photo for the new one", missing: "two new photos are attached and he does not say which" }]);
     const practices = await practicesForCard(env, cardId);
-    expect(practices).toContain("ask every unclear item, numbered, in one email; never merge, drop or guess");
+    expect(practices).toContain("Before asking, try to resolve each one from the brain");
+    expect(practices).toContain("numbered, in one email; never merge, drop or guess");
+    expect(practices).toContain("say in your result how each one was resolved");
     expect(practices).toContain('"Swap the hero photo for the new one": two new photos are attached and he does not say which');
   });
 });
@@ -306,5 +308,27 @@ describe("his questions are steady", () => {
     const second = await understand(env, { subject: "d", written: DASHBOARD, read: [readerSaying("CODEX", "HOLD: No client names on it without my written OK.")], employeeId: null, firmScope: "west-peek" });
     expect(first.brief.questions).toEqual(os.brief.questions);
     expect(second.brief.questions).toEqual(os.brief.questions);
+  });
+});
+
+describe("what the firm already knows is never asked", () => {
+  it("an unclear item a settled fact answers never reaches the brief, the employee's input or a question", async () => {
+    // What the OS holds about him: his two businesses are separate, each with its own site.
+    await env.WP_OS_DB.prepare("INSERT OR REPLACE INTO partner_profile (partner_email, firm_scope, who) VALUES (?1, 'west-peek', ?2)")
+      .bind(SCOOTER, "Runs West Peek Productions (its own site) and, separately, the Top Barz contest site.").run();
+    let sawFacts = false;
+    const reader: Reader = {
+      name: "CLAUDE",
+      read: async (_e, input) => {
+        sawFacts = input.prompt.includes("separately, the Top Barz contest site");
+        // A reader that sees the email alone cannot tell the two apart; one that sees the settled facts can.
+        return { ok: true, detail: "ok", reader: "CLAUDE", text: sawFacts ? "ASK: Keep this pipeline studio-only." : "ASK: Keep this pipeline studio-only.\nUNCLEAR: Keep this pipeline studio-only :: is Top Barz part of the studio?" };
+      },
+    };
+    const { cardId, inm } = await partnerEmail("settled", 0, "Keep this pipeline studio-only. Leave the Top Barz rows out.");
+    await sendUnderstoodReplies(env, new Date(), [reader]);
+    expect(sawFacts, "the reader's prompt carries what the firm already knows").toBe(true);
+    expect((JSON.parse((await understoodRow(inm))!.brief_json!) as { unclear: unknown[] }).unclear).toEqual([]);
+    expect(await practicesForCard(env, cardId)).not.toContain("Unclear.");
   });
 });

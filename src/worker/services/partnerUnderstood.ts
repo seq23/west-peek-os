@@ -265,7 +265,7 @@ export interface Brief {
 
 export async function understand(
   env: Env,
-  input: { subject: string; written: string; read: SeatRead | readonly Reader[]; employeeId: string | null; firmScope: string; files?: readonly string[] },
+  input: { subject: string; written: string; read: SeatRead | readonly Reader[]; employeeId: string | null; firmScope: string; files?: readonly string[]; known?: string },
 ): Promise<{ none: boolean; asks: string[]; noted: string[]; next: string; via: "STRUCTURE" | "MODEL" | "FALLBACK"; runId: string | null; runIds: string[]; brief: Brief; readerFailed: boolean; readersTried: string[] }> {
   const { written } = input;
   const fileNames = [...(input.files ?? [])];
@@ -293,7 +293,7 @@ export async function understand(
   let reader: string | null = null;
   if (written) {
     for (const r of ladder) {
-      const out = await r.read(env, { prompt: understoodPrompt(input.subject, written, fileNames), firmScope: input.firmScope, employeeId: input.employeeId, purpose: "the Got it reply to a partner's email: his asks in his words" });
+      const out = await r.read(env, { prompt: understoodPrompt(input.subject, written, fileNames, input.known ?? ""), firmScope: input.firmScope, employeeId: input.employeeId, purpose: "the Got it reply to a partner's email: his asks in his words" });
       if (out.runId) runIds.push(out.runId);
       readersTried.push(`${r.name}: ${out.ok ? "read it" : out.out ? `out (${out.detail.slice(0, 120)})` : `failed (${out.detail.slice(0, 120)})`}`);
       if (!out.ok) {
@@ -382,7 +382,10 @@ export function parseUnderstood(text: string, written: string, files: readonly s
   return { asks: asks.slice(0, MAX_ASKS), next: next ? next.slice(0, 280) : null, none, holds, questions, unclear, files: purposes };
 }
 
-function understoodPrompt(subject: string, written: string, files: readonly string[] = []): string {
+/** How much of what the firm already knows rides in the reader's prompt. */
+const KNOWN_MAX = 4000;
+
+function understoodPrompt(subject: string, written: string, files: readonly string[] = [], known = ""): string {
   return [
     "A Managing Partner of the firm just emailed the work below. List each separate thing he is asking for.",
     "Rules: copy his EXACT words for each ask (a phrase or sentence from his email, unchanged, no rewording, no summary).",
@@ -395,6 +398,13 @@ function understoodPrompt(subject: string, written: string, files: readonly stri
     "A remark on how something is (praise, status, \"X is in good shape\") is NOT an ask. Each numbered item is one ask. Never a fragment of a sentence.",
     "If he asks for nothing (a thank-you, an FYI), answer exactly: NONE",
     "Nothing else in your answer.",
+    ...(known.trim()
+      ? [
+          "",
+          "WHAT THE FIRM ALREADY KNOWS (settled facts about him, his businesses and this card). Never flag as UNCLEAR anything these answer (for example which of his businesses a word refers to):",
+          known.trim().slice(0, KNOWN_MAX),
+        ]
+      : []),
     "",
     `Subject: ${subject}`,
     "Email:",
@@ -453,6 +463,22 @@ async function settle(env: Env, messageId: string, state: string, viaRead: strin
     .run();
 }
 
+/**
+ * WHAT THE FIRM ALREADY KNOWS, for the reader (15 Nov 2026: "west Peek productions and top barz are diff entities why
+ * would anything re top barz be unclear?"). His standing practices and living profile (who he is, his businesses and
+ * their sites, what he is working on) and the card itself, so the reader never flags what is settled. Never throws.
+ */
+export async function knownFor(env: Env, cardId: string | null, firmScope = "west-peek", partnerEmail?: string | null): Promise<string> {
+  try {
+    const { practicesForCard } = await import("./partnerConstraints");
+    const card = cardId ? await env.WP_OS_DB.prepare("SELECT title, description FROM work_card WHERE id = ?1").bind(cardId).first<{ title: string; description: string | null }>() : null;
+    const practices = cardId ? await practicesForCard(env, cardId, firmScope) : partnerEmail ? await (await import("./partnerProfile")).profileBlockFor(env, partnerEmail) : "";
+    return [practices, card ? `The card: ${card.title}${card.description ? `\n${card.description.slice(-1500)}` : ""}` : ""].filter(Boolean).join("\n\n");
+  } catch {
+    return "";
+  }
+}
+
 /** The brief beside the asks it lists (0309): holds, files and who read it. The asks themselves are partner_ask rows. */
 async function saveBrief(env: Env, messageId: string, brief: Brief): Promise<void> {
   await env.WP_OS_DB.prepare("UPDATE partner_understood SET brief_json = ?2, reader = ?3 WHERE inbound_message_id = ?1")
@@ -501,7 +527,7 @@ export async function briefBlockFor(env: Env, cardId: string): Promise<string> {
         ...(asks.length ? ["His asks, in his words:", ...asks.map((a, i) => `  ${i + 1}. ${a}`)] : ["He asked for nothing (a thank-you or an FYI)."]),
         ...(holds.length ? ["His holds (keep to every one):", ...holds.map((h) => `  - ${h}`), ...more(brief.more?.holds)] : []),
         ...(questions.length ? ["His questions (answer each in your result):", ...questions.map((q) => `  - ${q}`), ...more(brief.more?.questions)] : []),
-        ...(unclear.length ? ["Unclear (ask every unclear item, numbered, in one email; never merge, drop or guess; build everything else meanwhile):", ...unclear.map((u) => `  - "${u.words}": ${u.missing}`), ...more(brief.more?.unclear)] : []),
+        ...(unclear.length ? ["Unclear. Before asking, try to resolve each one from the brain (on the Mac: ~/Brains/<the business's slug>.md, Settled decisions), this card, the repo and the data (for example a tracker column that tells Productions from Top Barz). Ask him only what is still open: every such item, numbered, in one email; never merge, drop or guess. Build everything else meanwhile, and say in your result how each one was resolved:", ...unclear.map((u) => `  - "${u.words}": ${u.missing}`), ...more(brief.more?.unclear)] : []),
         ...(files.length ? ["His files:", ...files.map((f) => `  - ${f.filename}: ${f.purpose ?? "what it is for was not said"}`)] : []),
       ].join("\n"),
     );
@@ -570,7 +596,7 @@ async function answerOne(env: Env, row: Candidate, read: SeatRead | readonly Rea
   const written = await wordsOf(env, row);
   const subject = (row.subject ?? "").trim() || row.title.replace(/^From [^:]+@[^:]+:\s*/i, "").trim() || row.title;
   const filed = ((await env.WP_OS_DB.prepare("SELECT filename FROM request_attachment WHERE work_card_id = ?1 AND created_at >= ?2 ORDER BY created_at, filename").bind(row.card_id, row.received_at).all<{ filename: string }>().catch(() => ({ results: [] as Array<{ filename: string }> }))).results ?? []).map((r) => r.filename);
-  const understood = await understand(env, { subject, written, read, employeeId: row.owner_id, firmScope: row.firm_scope, files: filed });
+  const understood = await understand(env, { subject, written, read, employeeId: row.owner_id, firmScope: row.firm_scope, files: filed, known: await knownFor(env, row.card_id, row.firm_scope) });
   /*
    * A READER WAS THERE AND FAILED: WAIT FOR IT (15 Nov 2026). Up to FIRST_READ_WAIT_MINUTES from his email the row stays
    * claimed and the next tick reads it again; the employee waits too (`claimNextCard`). Past that, or when no reader
