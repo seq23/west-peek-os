@@ -315,9 +315,12 @@ export async function handBackCard(env: Env, cardId: string, input: { note: stri
     "SELECT COUNT(*) AS n FROM event_record WHERE object_type = 'work_card' AND object_id = ?1 AND event_type = 'work_card.reply_filed_during_takeover' AND created_at >= ?2",
   ).bind(card.id, card.held_at ?? "").first<{ n: number }>())?.n ?? 0;
   const close = input.allDone && Number(during) === 0;
-  await env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope, acknowledged_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")
-    .bind(`wcn_${crypto.randomUUID()}`, card.id, input.by.partner.firmUserId, words, card.firm_scope, close ? now : null)
+  const noteId = `wcn_${crypto.randomUUID()}`;
+  await env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)")
+    .bind(noteId, card.id, input.by.partner.firmUserId, words, card.firm_scope)
     .run();
+  // Closed: the note is read and answered by the close itself, so no later run takes it up again.
+  if (close) await env.WP_OS_DB.prepare("UPDATE work_card_note SET acknowledged_at = ?2, response = ?3 WHERE id = ?1").bind(noteId, now, "Every ask was done by hand; the card is closed and waits for the partner.").run();
   const partner = (card.requested_by_email ?? "").split("@")[0] || "the partner";
   const nextAction = close ? `Every ask was done by hand; waiting for ${partner.charAt(0).toUpperCase()}${partner.slice(1)}'s next instruction.` : `Start from the developer's note: ${words.slice(0, 300)}`;
   await env.WP_OS_DB.prepare(
