@@ -704,9 +704,9 @@ describe("every ask in Scooter's replies on the card is answered in the note, or
    */
   it("works the past-client ask, puts the verdicts first in the note, and a later run with no new reply does not redo it", async () => {
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN','IN_PROGRESS','BLOCKED')").run();
-    const opened = await openProductionsCard(env, "productions_monthly", new Date("2027-07-01T14:00:00.000Z"));
+    const opened = await openProductionsCard(env, "productions_monthly", new Date("2028-02-01T14:00:00.000Z"));
     await env.WP_OS_DB.prepare(
-      "INSERT INTO work_steer (id, card_kind, from_card_id, said_by, body, thread_token, firm_scope, created_at) VALUES ('wst_asks', 'PRODUCTIONS_MONTHLY', ?1, 'scooter@westpeek.ventures', 'Check our past clients against your criteria and flag which fit: Placeholder Past Client A, Placeholder Past Client B. Find one or two like Placeholder Model Org for a warm re-entry.', 'tok_asks', 'west-peek', '2027-07-01T15:00:00.000Z')",
+      "INSERT INTO work_steer (id, card_kind, from_card_id, said_by, body, thread_token, firm_scope, created_at) VALUES ('wst_asks', 'PRODUCTIONS_MONTHLY', ?1, 'scooter@westpeek.ventures', 'Check our past clients against your criteria and flag which fit: Placeholder Past Client A, Placeholder Past Client B. Find one or two like Placeholder Model Org for a warm re-entry.', 'tok_asks', 'west-peek', '2028-02-01T15:00:00.000Z')",
     ).bind(opened.cardId).run();
     const six = JSON.stringify({ results: Array.from({ length: 6 }, (_, i) => ({ organisation: `Asks Association ${i + 1}`, trigger: "announced a plan", approach: "Head of Events", angle: "a community", url: `https://asks${i + 1}.example/plan` })) });
     const two = JSON.stringify({ results: [1, 2].map((i) => ({ writer: `Asks Writer ${i}`, outlet: `Asks Outlet ${i}`, why_this_writer: "covers community", hook: "hook", proof_url: `https://asksoutlet${i}.example/piece`, draft: "Hi —" })) });
@@ -725,7 +725,7 @@ describe("every ask in Scooter's replies on the card is answered in the note, or
         urlCheck: async () => true,
         judge: keepAll,
         pageText: async () => null,
-        now: new Date("2027-07-01T16:00:00.000Z"),
+        now: new Date("2028-02-01T16:00:00.000Z"),
         interpret: steersWith("Check the past clients and flag which fit."),
     });
     vi.unstubAllGlobals();
@@ -736,8 +736,8 @@ describe("every ask in Scooter's replies on the card is answered in the note, or
     expect(asksPrompt, "his own words, the names included, reach a model").toMatch(/Placeholder Past Client B/);
     const row = (await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ description: string }>())!;
     expect(row.description).toMatch(/WHAT YOU ASKED FOR IN YOUR REPLIES[\s\S]*Placeholder Past Client A fits[\s\S]*1 · WHO COULD BUY/);
-    const delivered = JSON.parse((await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'productions.delivered'").bind(opened.cardId).first<{ payload_json: string }>())!.payload_json) as { replies_through?: string };
-    expect(delivered.replies_through, out.detail).toBe("2027-07-01T15:00:00.000Z");
+    const delivered = JSON.parse((await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'productions.delivered' ORDER BY rowid DESC LIMIT 1").bind(opened.cardId).first<{ payload_json: string }>())!.payload_json) as { replies_through?: string };
+    expect(delivered.replies_through, out.detail).toBe("2028-02-01T15:00:00.000Z");
     const { unansweredReplies } = await import("../src/worker/services/productions");
     expect((await unansweredReplies(env, opened.cardId)).words, "answered once is answered").toEqual([]);
   });
