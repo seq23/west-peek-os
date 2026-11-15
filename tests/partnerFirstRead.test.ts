@@ -297,3 +297,14 @@ describe("nothing he said is dropped", () => {
     for (const q of twelve) expect(practices).toContain(q);
   });
 });
+
+describe("his questions are steady", () => {
+  it("the dashboard email gives the same questions on two reads whose readers said different things, never fewer than the OS read", async () => {
+    const os = await understand(env, { subject: "d", written: DASHBOARD, read: allOut, employeeId: null, firmScope: "west-peek" });
+    expect(os.brief.questions.length).toBeGreaterThan(0);
+    const first = await understand(env, { subject: "d", written: DASHBOARD, read: [readerSaying("CLAUDE", "QUESTION: Is a Lead anything that came in?\nHOLD: Preview first, nothing live until I say so.")], employeeId: null, firmScope: "west-peek" });
+    const second = await understand(env, { subject: "d", written: DASHBOARD, read: [readerSaying("CODEX", "HOLD: No client names on it without my written OK.")], employeeId: null, firmScope: "west-peek" });
+    expect(first.brief.questions).toEqual(os.brief.questions);
+    expect(second.brief.questions).toEqual(os.brief.questions);
+  });
+});

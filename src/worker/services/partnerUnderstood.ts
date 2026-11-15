@@ -135,8 +135,18 @@ export function questionsOf(words: string): string[] {
   return unwrapped(words)
     .split(/\n+|(?<=[.!?])\s+(?=[A-Z0-9"“(])/)
     .map((s) => s.replace(/^[\s\-–—•*]+|\s+$/g, "").replace(/^\d+[.)]\s+/, "").replace(/\s+/g, " "))
-    .filter((s) => s.length > 8 && isQuestionShaped(s));
+    .filter((s) => s.length > 8 && (isQuestionShaped(s) || CLARIFY_FIRST.test(s)) && !REMARK.test(s));
 }
+/** His own questions first, in his order; a reader's question is added only when no listed one contains it. Pure. */
+export function mergeQuestions(own: readonly string[], read: readonly string[]): string[] {
+  const out = [...own];
+  for (const q of read) {
+    const n = norm(q);
+    if (n.length > 0 && !out.some((o) => norm(o).includes(n) || n.includes(norm(o)))) out.push(q);
+  }
+  return out;
+}
+
 export function holdsOf(words: string): string[] {
   return unwrapped(words)
     .split(/\n+|(?<=[.!?])\s+(?=[A-Z0-9"“(])/)
@@ -303,7 +313,12 @@ export async function understand(
   }
   const runId = runIds[runIds.length - 1] ?? null;
   const holds = parsed ? parsed.holds : holdsOf(written);
-  const questions = parsed ? parsed.questions : questionsOf(written);
+  /*
+   * HIS QUESTIONS ARE STEADY (15 Nov 2026): taken from his own sentences first, the same way every time (a "?", a
+   * "let's clarify", "still open", "whether"), as his asks come from his numbering first. A reader only ADDS questions
+   * that are not already there, so a read never finds fewer than the OS's own read, whatever the reader said.
+   */
+  const questions = mergeQuestions(questionsOf(written), parsed?.questions ?? []);
   const unclear = parsed ? parsed.unclear : [];
   const files = fileNames.map((filename) => ({ filename, purpose: parsed?.files.find((f) => f.filename === filename)?.purpose ?? null }));
   const brief = (asks: string[]): Brief => ({ asks, holds, questions, unclear, files, reader });
