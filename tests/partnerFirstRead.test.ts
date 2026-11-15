@@ -285,3 +285,15 @@ describe("what the reader could not pin down", () => {
     expect(practices).toContain('"Swap the hero photo for the new one": two new photos are attached and he does not say which');
   });
 });
+
+describe("nothing he said is dropped", () => {
+  it("twelve questions all reach the brief and the employee's input", async () => {
+    const twelve = Array.from({ length: 12 }, (_, i) => `Should item ${i + 1} stay on the page?`);
+    const { cardId, inm } = await partnerEmail("twelve", 0, ["Tidy the page.", ...twelve].join("\n"));
+    await sendUnderstoodReplies(env, new Date(), [readerSaying("CLAUDE", ["ASK: Tidy the page.", ...twelve.map((q) => `QUESTION: ${q}`)].join("\n"))]);
+    const brief = JSON.parse((await understoodRow(inm))!.brief_json!) as { questions: string[] };
+    expect(brief.questions).toEqual(twelve);
+    const practices = await practicesForCard(env, cardId);
+    for (const q of twelve) expect(practices).toContain(q);
+  });
+});

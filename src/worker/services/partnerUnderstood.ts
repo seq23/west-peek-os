@@ -124,20 +124,24 @@ const QUESTION_SHAPED = /\?\s*["”]?$|\b(?:still open|(?:is|are) open|questioni
 const CONSTRAINT = /\b(?:don'?t|do not|must(?:n'?t)?|never|not yet|nothing|no|not|only|until|without|stays?|separate|before (?:it|anything) goes live|preview (?:it )?first|hold off|wait for)\b/i;
 export const isQuestionShaped = (line: string): boolean => QUESTION_SHAPED.test(line.trim());
 export const isConstraint = (line: string): boolean => CONSTRAINT.test(line) && !isQuestionShaped(line);
+/**
+ * NOTHING HE SAID IS DROPPED (Sequoia, 15 Nov 2026). Holds, questions and unclear items are kept whole; this bound is
+ * only a safety net against a runaway reader, and the brief says "and N more" when it is ever reached.
+ */
+export const BRIEF_LIST_BOUND = 40;
+
 /** His open questions, from his own sentences (the OS's read): what he asked to clarify or left open. Pure. */
 export function questionsOf(words: string): string[] {
   return unwrapped(words)
     .split(/\n+|(?<=[.!?])\s+(?=[A-Z0-9"“(])/)
     .map((s) => s.replace(/^[\s\-–—•*]+|\s+$/g, "").replace(/^\d+[.)]\s+/, "").replace(/\s+/g, " "))
-    .filter((s) => s.length > 8 && isQuestionShaped(s))
-    .slice(0, 8);
+    .filter((s) => s.length > 8 && isQuestionShaped(s));
 }
 export function holdsOf(words: string): string[] {
   return unwrapped(words)
     .split(/\n+|(?<=[.!?])\s+(?=[A-Z0-9"“(])/)
     .map((s) => s.replace(/^[\s\-–—•*]+|\s+$/g, "").replace(/^\d+[.)]\s+/, "").replace(/\s+/g, " "))
-    .filter((s) => HOLD.test(s) && !isQuestionShaped(s))
-    .slice(0, 6);
+    .filter((s) => HOLD.test(s) && !isQuestionShaped(s));
 }
 
 const norm = (s: string): string => s.toLowerCase().replace(/[“”"'‘’`]/g, "").replace(/\s+/g, " ").trim().replace(/^[\s\-–—•*:.,;!?]+|[\s\-–—•*:.,;!?]+$/g, "");
@@ -360,7 +364,7 @@ export function parseUnderstood(text: string, written: string, files: readonly s
     const name = m ? files.find((f) => f.toLowerCase() === m[1]!.trim().replace(/^["“]|["”]$/g, "").toLowerCase()) : undefined;
     if (m && name && !purposes.some((p) => p.filename === name)) purposes.push({ filename: name, purpose: m[2]!.trim().slice(0, 200) });
   }
-  return { asks: asks.slice(0, MAX_ASKS), next: next ? next.slice(0, 280) : null, none, holds: holds.slice(0, 6), questions: questions.slice(0, 8), unclear: unclear.slice(0, 8), files: purposes };
+  return { asks: asks.slice(0, MAX_ASKS), next: next ? next.slice(0, 280) : null, none, holds, questions, unclear, files: purposes };
 }
 
 function understoodPrompt(subject: string, written: string, files: readonly string[] = []): string {
@@ -437,7 +441,13 @@ async function settle(env: Env, messageId: string, state: string, viaRead: strin
 /** The brief beside the asks it lists (0309): holds, files and who read it. The asks themselves are partner_ask rows. */
 async function saveBrief(env: Env, messageId: string, brief: Brief): Promise<void> {
   await env.WP_OS_DB.prepare("UPDATE partner_understood SET brief_json = ?2, reader = ?3 WHERE inbound_message_id = ?1")
-    .bind(messageId, JSON.stringify({ holds: brief.holds, questions: brief.questions, unclear: brief.unclear, files: brief.files }), brief.reader ?? "OS")
+    .bind(messageId, JSON.stringify({
+      holds: brief.holds.slice(0, BRIEF_LIST_BOUND),
+      questions: brief.questions.slice(0, BRIEF_LIST_BOUND),
+      unclear: brief.unclear.slice(0, BRIEF_LIST_BOUND),
+      files: brief.files,
+      more: { holds: Math.max(0, brief.holds.length - BRIEF_LIST_BOUND), questions: Math.max(0, brief.questions.length - BRIEF_LIST_BOUND), unclear: Math.max(0, brief.unclear.length - BRIEF_LIST_BOUND) },
+    }), brief.reader ?? "OS")
     .run();
 }
 
@@ -459,7 +469,7 @@ export async function briefBlockFor(env: Env, cardId: string): Promise<string> {
   const blocks: string[] = [];
   for (const r of rows.reverse()) {
     const asks = ((await env.WP_OS_DB.prepare("SELECT words FROM partner_ask WHERE inbound_message_id = ?1 ORDER BY seq").bind(r.id).all<{ words: string }>()).results ?? []).map((a) => a.words);
-    let brief: { holds?: string[]; questions?: string[]; unclear?: Array<{ words: string; missing: string }>; files?: Array<{ filename: string; purpose: string | null }> } = {};
+    let brief: { holds?: string[]; questions?: string[]; unclear?: Array<{ words: string; missing: string }>; more?: { holds?: number; questions?: number; unclear?: number }; files?: Array<{ filename: string; purpose: string | null }> } = {};
     try {
       brief = JSON.parse(r.brief_json) as typeof brief;
     } catch {
@@ -468,14 +478,15 @@ export async function briefBlockFor(env: Env, cardId: string): Promise<string> {
     const holds = brief.holds ?? [];
     const questions = brief.questions ?? [];
     const unclear = brief.unclear ?? [];
+    const more = (n: number | undefined): string[] => (n && n > 0 ? [`  - and ${n} more in his email: read it whole before you start`] : []);
     const files = brief.files ?? [];
     blocks.push(
       [
         `THE FIRST READ of his email of ${r.received_at} (${r.reader && r.reader !== "OS" ? `read by ${r.reader}` : "the OS's own read: no reader was free"}). Work from this list; the Got it told him exactly these.`,
         ...(asks.length ? ["His asks, in his words:", ...asks.map((a, i) => `  ${i + 1}. ${a}`)] : ["He asked for nothing (a thank-you or an FYI)."]),
-        ...(holds.length ? ["His holds (keep to every one):", ...holds.map((h) => `  - ${h}`)] : []),
-        ...(questions.length ? ["His questions (answer each in your result):", ...questions.map((q) => `  - ${q}`)] : []),
-        ...(unclear.length ? ["Unclear (ask every unclear item, numbered, in one email; never merge, drop or guess; build everything else meanwhile):", ...unclear.map((u) => `  - "${u.words}": ${u.missing}`)] : []),
+        ...(holds.length ? ["His holds (keep to every one):", ...holds.map((h) => `  - ${h}`), ...more(brief.more?.holds)] : []),
+        ...(questions.length ? ["His questions (answer each in your result):", ...questions.map((q) => `  - ${q}`), ...more(brief.more?.questions)] : []),
+        ...(unclear.length ? ["Unclear (ask every unclear item, numbered, in one email; never merge, drop or guess; build everything else meanwhile):", ...unclear.map((u) => `  - "${u.words}": ${u.missing}`), ...more(brief.more?.unclear)] : []),
         ...(files.length ? ["His files:", ...files.map((f) => `  - ${f.filename}: ${f.purpose ?? "what it is for was not said"}`)] : []),
       ].join("\n"),
     );
