@@ -324,7 +324,10 @@ async function mark(env: Env, id: string, status: AskStatus, why: string): Promi
 
 export type AsksAtDone =
   | { ok: true; section: { label: string; bullets: string[] } | null; counts: Record<AskStatus, number> }
-  | { ok: false; missing: string[] };
+  | { ok: false; missing: string[]; seatWait?: boolean };
+
+/** How a card waiting for a seat to mark its asks before the DONE says so (`waiting_for`); the session runner reads it. */
+export const MARKING_SEAT_WAIT = "Waiting for a seat to mark each ask before the final reply";
 
 /**
  * STEP 7's GUARD. Null asks = nothing to do (`section: null`). Otherwise every ask is marked from the report, then
@@ -353,8 +356,10 @@ export async function asksAtDone(
     }
   }
   let open = asks.filter((a) => !a.status);
+  let seatDown: string | null = null;
   if (open.length) {
     const out = await read(env, { prompt: markPrompt(open, detail), firmScope: card.firm_scope, employeeId: card.owner_id, purpose: "marking each of a partner's asks before the final reply" });
+    if (!out.ok) seatDown = out.detail || "no seat answered";
     if (out.ok) {
       for (const line of out.text.split(/\r?\n/)) {
         const m = /^\s*(\d+)\s*[|.)]\s*([A-Z_ -]+?)\s*\|\s*(.+)$/i.exec(line);
@@ -365,6 +370,35 @@ export async function asksAtDone(
     }
     asks = await load();
     open = asks.filter((a) => !a.status);
+  }
+  if (open.length && seatDown) {
+    /*
+     * NO SEAT ANSWERED THE MARKING READ (15 Nov 2026). That is seat trouble, not unfinished work: the same wait #442 gives
+     * every card whose seat is busy or asleep. The claim's attempt is handed back and the card tries the DONE again by
+     * itself in SEAT_WAIT_MINUTES, so a seat outage can never spend the three attempts and end in a Blocked card or a
+     * Blocked note to the partner. Nothing is emailed.
+     */
+    const missing = open.map((a) => a.words);
+    const { SEAT_WAIT_MINUTES } = await import("./blocks");
+    const until = new Date(Date.now() + SEAT_WAIT_MINUTES * 60_000).toISOString();
+    const line = `${MARKING_SEAT_WAIT} (${seatDown.slice(0, 160)}), so the final reply tries again by itself in about ${SEAT_WAIT_MINUTES} minutes.`;
+    await env.WP_OS_DB.prepare(
+      `UPDATE work_card SET state = 'IN_PROGRESS', lease_until = ?2, waiting_until = ?2, waiting_for = ?3, next_action = ?3,
+              work_attempts = MAX(COALESCE(work_attempts, 1) - 1, 0), work_last_failure = ?3, work_last_failure_at = ?4
+        WHERE id = ?1`,
+    )
+      .bind(card.id, until, line.slice(0, 400), new Date().toISOString())
+      .run();
+    await appendEvent(env, {
+      eventType: "work_card.waiting_for_seat",
+      actorType: "system",
+      actorId: "partner_understood",
+      objectType: "work_card",
+      objectId: card.id,
+      firmScope: card.firm_scope,
+      payload: { at: new Date().toISOString(), until, marking_asks: missing.length, detail: seatDown.slice(0, 240) },
+    }).catch(() => undefined);
+    return { ok: false, missing, seatWait: true };
   }
   if (open.length) {
     const missing = open.map((a) => a.words);

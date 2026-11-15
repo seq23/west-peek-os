@@ -250,8 +250,22 @@ export async function runPartnerSessionCard(env: Env, sweepCard: SessionCard, no
     }
     if (run && row.applied_run_id !== run.id && run.status !== "ABANDONED") return applySessionRun(env, card, row, run, now);
     if (run && row.applied_run_id === run.id) {
-      const asks = (JSON.parse(row.report_json ?? "{}")?.asks ?? []) as SessionAsk[];
+      const report = JSON.parse(row.report_json ?? "{}") as { asks?: SessionAsk[]; reply?: string };
+      const asks = report.asks ?? [];
       if (asks.some((a) => a.status === "QUESTION")) return held("Waiting for his answer to the question; the rest is done or running.", QUESTION_WAIT_HOURS * 60);
+      if (asks.length && !asks.some((a) => a.status === "IN_PROGRESS")) {
+        /*
+         * THE WORK FINISHED AND THE FINAL REPLY WAS HELD BACK (plan step 7's guard, services/partnerUnderstood.ts). No seat
+         * to mark his asks is a wait: the same finished report is offered again, never a new session. An ask the report
+         * did not account for goes back to the session as the newest instruction, so the next run accounts for it.
+         */
+        const c = await env.WP_OS_DB.prepare("SELECT next_action, waiting_for FROM work_card WHERE id = ?1").bind(card.id).first<{ next_action: string | null; waiting_for: string | null }>();
+        const { MARKING_SEAT_WAIT } = await import("./partnerUnderstood");
+        const missing = (c?.next_action ?? "").startsWith("Before this is finished") && !(c?.waiting_for ?? "").startsWith(MARKING_SEAT_WAIT) ? c!.next_action! : null;
+        if (!missing) return finish(env, card.id, report.reply, asks);
+        await env.WP_OS_DB.prepare("UPDATE partner_session SET corrections_json = ?2 WHERE work_card_id = ?1").bind(card.id, JSON.stringify([missing, ...list(row.corrections_json)])).run();
+        row = (await readSession(env, card.id))!;
+      }
     }
   }
   if (row.run_count >= MAX_SESSION_RUNS) return finishWithWhatWeHave(env, card, row, "it ran as many times as a session may");
@@ -267,9 +281,7 @@ async function finishWithWhatWeHave(env: Env, card: SessionCard, row: PartnerSes
   } catch {
     report = {};
   }
-  const asks = report.asks ?? [];
-  const detail = [report.reply ?? `Stopped: ${why}.`, ...asks.map(askLine)].join("\n");
-  return { finished: true, blocked: false, progressed: false, detail };
+  return finish(env, card.id, report.reply ?? `Stopped: ${why}.`, report.asks ?? []);
 }
 
 async function applySessionRun(env: Env, card: SessionCard, row: PartnerSessionRow, run: { id: string; status: string; output_text: string | null; error: string | null }, now: Date): Promise<SessionOutcome> {
@@ -306,7 +318,28 @@ async function applySessionRun(env: Env, card: SessionCard, row: PartnerSessionR
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'IN_PROGRESS', next_action = ?2 WHERE id = ?1").bind(card.id, `Waiting for his answer on: ${questions.map((q) => `"${q.words.slice(0, 60)}"`).join(", ")}`.slice(0, 900)).run();
     return { finished: false, blocked: false, progressed: true, held: true, waitUntil: new Date(now.getTime() + QUESTION_WAIT_HOURS * 3600_000).toISOString(), detail: report.asks.map(askLine).join("\n") };
   }
-  return { finished: true, blocked: false, progressed: false, detail: [report.reply ?? "Finished.", "", ...report.asks.map(askLine)].join("\n").trim() };
+  return finish(env, card.id, report.reply, report.asks);
+}
+
+/**
+ * THE FINISHED SESSION: the card is DONE (this runner's own move, as every Mac-run kind's is) and the detail is his
+ * answer followed by the report's own `{"asks":[{"words","status","why"}]}`, which the final reply's guard reads
+ * directly (`reportedAsks`). A question never answered by the end is NOT_DONE, saying it waits on his answer.
+ */
+async function finish(env: Env, cardId: string, reply: string | undefined, asks: readonly SessionAsk[]): Promise<SessionOutcome> {
+  await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE', next_action = NULL, waiting_until = NULL, waiting_for = NULL WHERE id = ?1").bind(cardId).run();
+  return { finished: true, blocked: false, progressed: false, detail: `${(reply ?? "Finished.").trim()}\n\n${sessionAsksJson(asks)}` };
+}
+
+/** The asks as the final reply's guard reads them. Pure. */
+export function sessionAsksJson(asks: readonly SessionAsk[]): string {
+  return JSON.stringify({
+    asks: asks.map((a) => ({
+      words: a.words,
+      status: a.status === "QUESTION" ? "NOT_DONE" : a.status,
+      why: a.status === "QUESTION" ? `waiting on your answer: ${a.why || "which of the options you meant"}` : a.why || (a.status === "DONE" ? "done in this session" : "no reason given"),
+    })),
+  });
 }
 
 /**

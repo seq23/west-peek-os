@@ -174,3 +174,32 @@ describe("step 6 · per-partner memory", () => {
     expect(JSON.parse((await runs(next))[0]!.job_json).memory).toMatch(/bullet points/);
   });
 });
+
+describe("step 7's guard meets a seat outage", () => {
+  it("no seat to mark his asks is a wait: the attempt is handed back, the card is never Blocked, and no new session is parked", async () => {
+    const { sweepOnce } = await import("../src/worker/services/workSweep");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state IN ('OPEN', 'IN_PROGRESS', 'BLOCKED')").run();
+    const id = await emailed("Seat outage", "Send me the list of Memphis angels you found.");
+    await env.WP_OS_DB.prepare("INSERT INTO inbound_message (id, message_id, r2_key, from_address, to_address, subject, received_at, bytes, mail_authority_json, firm_scope) VALUES ('inm_outage', 'outage@x', 'k', ?1, 'os@joinwestpeek.com', 'Seat outage', ?2, 1, '{}', 'west-peek')").bind(SCOOTER, new Date().toISOString()).run();
+    // His ask as the Got it stored it, in words the report does not repeat, so only the (failing) seat could mark it.
+    await env.WP_OS_DB.prepare("INSERT INTO partner_ask (id, work_card_id, inbound_message_id, seq, words) VALUES ('pask_outage', ?1, 'inm_outage', 1, 'the angels list')").bind(id).run();
+    await runPartnerSessionCard(env, await card(id));
+    const [first] = await runs(id);
+    await macReports(first!.id, { phase: "SESSION", status: "ok", asks: [{ words: "Memphis investors", status: "DONE", why: "eight names in the reply" }], reply: "Eight names below." });
+    await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
+    let at = Date.now();
+    for (let tick = 0; tick < 5; tick++) {
+      at += 15 * 60_000; // past each seat wait
+      await sweepOnce(env, new Date(at));
+      const c = await card(id);
+      expect(c.state, `tick ${tick}`).not.toBe("BLOCKED");
+      expect(c.work_attempts, `tick ${tick}: no attempt spent on a seat outage`).toBeLessThanOrEqual(1);
+      await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
+    }
+    expect((await card(id)).state).toBe("IN_PROGRESS");
+    expect(String((await env.WP_OS_DB.prepare("SELECT waiting_for FROM work_card WHERE id = ?1").bind(id).first<{ waiting_for: string }>())!.waiting_for)).toMatch(/^Waiting for a seat to mark each ask/);
+    expect(await runs(id), "the finished work is offered again, never re-run").toHaveLength(1);
+    expect(await notices(id, "DONE")).toHaveLength(0);
+    expect(await notices(id, "STUCK")).toHaveLength(0);
+  });
+});
