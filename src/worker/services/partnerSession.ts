@@ -38,7 +38,7 @@ import {
 } from "../../shared/work/localJobs";
 import { practicesForCard } from "./partnerConstraints";
 import { recordProfileNotes } from "./partnerProfile";
-import { replyToRequester } from "./requestReply";
+import { alreadyTold, replyToRequester } from "./requestReply";
 
 /** A session is parked again at most this many times before it reports what it has (a loop is not work). */
 export const MAX_SESSION_RUNS = 6;
@@ -200,24 +200,46 @@ export function askLine(a: SessionAsk): string {
   return `${tag}: ${a.words}${a.why ? ` — ${a.why}` : ""}`;
 }
 
-/** The QUESTION email: the unclear words first, then two or three replies he can send, the clear work said to be going on. */
+/** Past this many questions the email gives his request's best reading per item for him to correct (her ruling). */
+export const BEST_READING_OVER = 5;
+
+/**
+ * THE QUESTION EMAIL (Sequoia, 15 Nov 2026): every unclear item is asked, none merged or dropped, each NUMBERED, quoting
+ * his words and saying what is missing, so he can answer by number. Past BEST_READING_OVER items it says plainly the
+ * request reads several ways and gives the best reading of each for him to correct, still every item. The clear work
+ * is said to be going on meanwhile. Pure.
+ */
 export function questionEmail(questions: readonly SessionAsk[], going: readonly SessionAsk[]) {
+  const n = questions.length;
+  const several = n > BEST_READING_OVER;
   return {
-    what: `a question — ${questions.length === 1 ? `"${questions[0]!.words.slice(0, 60)}"` : `${questions.length} things I could read two ways`}`,
-    tldr:
-      questions.length === 1
-        ? `I wasn't sure what you meant by "${questions[0]!.words.slice(0, 120)}". Reply with one of the options below, or your own words.`
-        : `${questions.length} things you wrote could mean more than one thing. Reply with an option for each, or your own words.`,
+    what: n === 1 ? `a question — "${questions[0]!.words.slice(0, 60)}"` : several ? `your request reads several ways — ${n} items` : `${n} questions, by number`,
+    tldr: several
+      ? `Your request reads several ways, so below is my best reading of each of the ${n} items. Reply with the number of any I got wrong and what you meant; everything else is being built meanwhile.`
+      : `${n === 1 ? "One question" : `${n} questions`} before I finish ${n === 1 ? "that part" : "those parts"}. Reply with the number and your answer; everything else is being built meanwhile.`,
     tldrBullets: [] as string[],
     sections: [
       ...questions.map((q, i) => ({
-        label: `${questions.length > 1 ? `${i + 1}. ` : ""}"${q.words.slice(0, 120)}"`,
-        bullets: [...(q.why ? [q.why] : []), ...q.options.map((o, j) => `Option ${String.fromCharCode(65 + j)}: ${o}`)],
+        label: `${i + 1}. "${q.words.slice(0, 120)}"`,
+        bullets: several
+          ? [`What is missing: ${q.why || "which reading you meant"}`, `My best reading: ${q.options[0] ?? "as written"}`]
+          : [`What is missing: ${q.why || "which reading you meant"}`, ...q.options.map((o, j) => `Option ${String.fromCharCode(65 + j)}: ${o}`)],
       })),
-      ...(going.length ? [{ label: "Still going while you answer", bullets: going.map(askLine) }] : []),
+      ...(going.length ? [{ label: "Still being built while you answer", bullets: going.map(askLine) }] : []),
     ],
     details: null,
   };
+}
+
+/**
+ * THE ROUND A QUESTION EMAIL BELONGS TO: his newest email on the card (a correction or an answer that raises something
+ * new starts a new round); the opening request when none is stored. One question email per round.
+ */
+async function questionRound(env: Env, cardId: string): Promise<string> {
+  const latest = await env.WP_OS_DB.prepare(
+    "SELECT id FROM inbound_message WHERE work_card_id = ?1 AND json_extract(mail_authority_json, '$.partner') IS NOT NULL ORDER BY received_at DESC LIMIT 1",
+  ).bind(cardId).first<{ id: string }>().catch(() => null);
+  return latest?.id ?? "request";
 }
 
 async function sessionCard(env: Env, cardId: string): Promise<SessionCard | null> {
@@ -302,11 +324,13 @@ async function applySessionRun(env: Env, card: SessionCard, row: PartnerSessionR
   if (questions.length) {
     const asked = list(row.asked_json);
     const fresh = questions.filter((q) => !asked.includes(q.words));
-    // ONE QUESTION EMAIL PER CARD (15 Nov 2026): it covers every unclear ask at once, on his thread. A later run's new
-    // question is not a second email; it is answered in the final reply as waiting on him.
-    if (fresh.length && asked.length === 0) {
+    // ONE QUESTION EMAIL PER ROUND (Sequoia, 15 Nov 2026): every unclear item of this round in one numbered email on
+    // his thread. The same email read again sends nothing more; his next email (a correction, or an answer raising
+    // something new) is a new round.
+    const cause = `session-question:${await questionRound(env, card.id)}`;
+    if (fresh.length && !(await alreadyTold(env, card.id, "QUESTION", cause))) {
       const who = await whoWorks(env, card.owner_id);
-      await replyToRequester(env, card, "BLOCKED", who, fresh.map((q) => `${q.words}: ${q.options.join(" / ")}`).join("\n"), { kind: "QUESTION", cause: `session-question:${run.id}` }, questionEmail(fresh, going));
+      await replyToRequester(env, card, "BLOCKED", who, fresh.map((q) => `${q.words}: ${q.options.join(" / ")}`).join("\n"), { kind: "QUESTION", cause }, questionEmail(fresh, going));
       await env.WP_OS_DB.prepare("UPDATE partner_session SET asked_json = ?2 WHERE work_card_id = ?1").bind(card.id, JSON.stringify([...asked, ...fresh.map((q) => q.words)])).run();
     }
   }

@@ -240,7 +240,7 @@ export interface Brief {
   questions: string[];
   /**
    * What the reader could not pin down (a missing fact, a voice note that disagrees with the email, two readings), each
-   * with his exact words and what is missing. The employee asks ONE question covering all of them and builds the rest.
+   * with his exact words and what is missing. The employee asks every one, numbered, in one email, and builds the rest.
    */
   unclear: Array<{ words: string; missing: string }>;
   /** Every file on the card from this email, and what it is for (null when no reader could say). */
@@ -475,7 +475,7 @@ export async function briefBlockFor(env: Env, cardId: string): Promise<string> {
         ...(asks.length ? ["His asks, in his words:", ...asks.map((a, i) => `  ${i + 1}. ${a}`)] : ["He asked for nothing (a thank-you or an FYI)."]),
         ...(holds.length ? ["His holds (keep to every one):", ...holds.map((h) => `  - ${h}`)] : []),
         ...(questions.length ? ["His questions (answer each in your result):", ...questions.map((q) => `  - ${q}`)] : []),
-        ...(unclear.length ? ["Unclear (ask him ONE question covering these, and build everything else meanwhile; never guess):", ...unclear.map((u) => `  - "${u.words}": ${u.missing}`)] : []),
+        ...(unclear.length ? ["Unclear (ask every unclear item, numbered, in one email; never merge, drop or guess; build everything else meanwhile):", ...unclear.map((u) => `  - "${u.words}": ${u.missing}`)] : []),
         ...(files.length ? ["His files:", ...files.map((f) => `  - ${f.filename}: ${f.purpose ?? "what it is for was not said"}`)] : []),
       ].join("\n"),
     );

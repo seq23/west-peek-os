@@ -4,7 +4,7 @@ import type { Env } from "../src/worker/env";
 import { openAssignmentCard } from "../src/worker/services/dealIntake";
 import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
 import { parseReplyIntent, type ReplyIntentReader } from "../src/worker/services/replyIntent";
-import { redirectSession, runPartnerSessionCard } from "../src/worker/services/partnerSession";
+import { questionEmail, redirectSession, runPartnerSessionCard } from "../src/worker/services/partnerSession";
 import { reportRun } from "../src/worker/ai/subscriptionSeats";
 import { recordPartnerConstraints } from "../src/worker/services/partnerConstraints";
 
@@ -122,20 +122,46 @@ describe("step 4 · start the clear parts, ask about the rest", () => {
     expect(await notices(id, "QUESTION")).toHaveLength(1);
   });
 
-  it("a card with unclear asks sends at most ONE question email, however many runs find something new to ask", async () => {
-    const id = await emailed("Three things", "Pull the Q3 pipeline numbers, set up the thing with the Nashville folks, and book the usual room.");
+  it("every unclear item is asked, numbered, one email per round: his next email is a new round, the same one read again is not", async () => {
+    const id = await emailed("Four things", "Pull the Q3 pipeline numbers, set up the Nashville thing, book the usual room, and send the deck to the new folks.");
     await runPartnerSessionCard(env, await card(id));
-    const [first] = await runs(id);
-    const ask = (words: string) => ({ words, status: "QUESTION", why: "two readings", options: ["one reading", "another reading"] });
+    const ask = (words: string) => ({ words, status: "QUESTION", why: `which ${words} he means`, options: ["one reading", "another reading"] });
     const going = { words: "Pull the Q3 pipeline numbers", status: "IN_PROGRESS", why: "half read", options: [] };
-    await macReports(first!.id, { phase: "SESSION", status: "ok", asks: [going, ask("the thing with the Nashville folks")] });
+    const three = [ask("the Nashville thing"), ask("the usual room"), ask("the new folks")];
+    const queued = async () => (await runs(id)).find((r) => r.status === "QUEUED")!;
+
+    await macReports((await queued()).id, { phase: "SESSION", status: "ok", asks: [going, ...three] });
     await runPartnerSessionCard(env, await card(id));
-    expect(await notices(id, "QUESTION")).toHaveLength(1);
-    // The next run finds a new unclear ask: still no second question email on the card.
-    const second = (await runs(id)).find((r) => r.status === "QUEUED");
-    await macReports(second!.id, { phase: "SESSION", status: "ok", asks: [going, ask("the thing with the Nashville folks"), ask("the usual room")] });
+    expect(await notices(id, "QUESTION"), "three unclear items: one email").toHaveLength(1);
+    const email = questionEmail(three as never, [going] as never);
+    expect(email.sections.filter((x) => /^\d+\. /.test(x.label)).map((x) => x.label)).toEqual(['1. "the Nashville thing"', '2. "the usual room"', '3. "the new folks"']);
+    expect(email.sections[0]!.bullets[0]).toBe("What is missing: which the Nashville thing he means");
+
+    // The same email read again, with a new unclear item found: still the same round, no second email.
+    await macReports((await queued()).id, { phase: "SESSION", status: "ok", asks: [going, ...three, ask("the deck")] });
     await runPartnerSessionCard(env, await card(id));
-    expect(await notices(id, "QUESTION")).toHaveLength(1);
+    expect(await notices(id, "QUESTION"), "the same round never sends twice").toHaveLength(1);
+
+    // His next email on the card raises something new: a new round, a second email.
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO inbound_message (id, message_id, r2_key, from_address, to_address, subject, received_at, bytes, mail_authority_json, firm_scope, work_card_id)
+       VALUES ('inm_round_two', 'round-two@mail.test', 'inbound-email/2026-11-15/round-two.eml', ?1, 'os@joinwestpeek.com', 'Re: Four things', ?2, 10, ?3, 'west-peek', ?4)`,
+    ).bind(SCOOTER, new Date().toISOString(), JSON.stringify({ passed: true, partner: SCOOTER }), id).run();
+    await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL WHERE id = ?1").bind(id).run();
+    const next = await queued().catch(() => null);
+    if (!next) await runPartnerSessionCard(env, await card(id));
+    await macReports((await queued()).id, { phase: "SESSION", status: "ok", asks: [going, ask("the Memphis venue")] });
+    await runPartnerSessionCard(env, await card(id));
+    expect(await notices(id, "QUESTION"), "a new partner email is a new round").toHaveLength(2);
+  });
+
+  it("past five unclear items the email says the request reads several ways and gives a best reading for each, all listed", () => {
+    const six = ["a", "b", "c", "d", "e", "f"].map((c) => ({ words: `item ${c}`, status: "QUESTION", why: `which ${c}`, options: [`best ${c}`, `other ${c}`] }));
+    const email = questionEmail(six as never, []);
+    expect(email.tldr).toMatch(/reads several ways/);
+    const numbered = email.sections.filter((x) => /^\d+\. /.test(x.label));
+    expect(numbered).toHaveLength(6);
+    expect(numbered.map((x) => x.bullets)).toEqual(six.map((q) => [`What is missing: ${q.why}`, `My best reading: ${q.options[0]}`]));
   });
 
   it("a report that asks without options is refused, never emailed as a question", async () => {
