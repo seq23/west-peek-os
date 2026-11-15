@@ -508,7 +508,7 @@ describe("a quiet seat at Free only is a wait, not a spend question", () => {
     await clearSeats();
   });
 
-  it("a hold written while an attempt is already running wins: the attempt is not counted, the card is not blocked, and the next claim waits for the hold (15 Nov 2026, wc_bd8b68cb)", async () => {
+  it("a hold written while an attempt is already running wins: the attempt is not counted, the card is not blocked, and the sweep leaves it until the hold ends (15 Nov 2026, wc_bd8b68cb)", async () => {
     await clearSeats();
     const id = await card("Walker: a card held mid-run", "aie_parker");
     await env.WP_OS_DB.prepare("UPDATE work_card SET work_attempts = ?2 WHERE id = ?1").bind(id, MAX_WORK_ATTEMPTS - 1).run();
@@ -525,8 +525,8 @@ describe("a quiet seat at Free only is a wait, not a spend question", () => {
     let c = await row(id);
     expect(c.state, "the in-flight attempt does not block the held card").not.toBe("BLOCKED");
     expect(Number(c.work_attempts), "and is not counted").toBe(MAX_WORK_ATTEMPTS - 1);
-    // Held: a later tick before the hold ends does not claim it, even with no lease on it.
-    await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL, state = 'IN_PROGRESS' WHERE id = ?1").bind(id).run();
+    expect(String(c.lease_until), "the hold keeps the card out of the sweep until it ends").toBe(hold);
+    // A later tick before the hold ends does not claim it.
     const during = await sweepOnce(env, new Date(T0.getTime() + 10 * 60_000), { general: async () => ({ finished: false, blocked: false, detail: "not this card", steps: [] }) });
     expect(during.card?.id ?? null).not.toBe(id);
     c = await row(id);

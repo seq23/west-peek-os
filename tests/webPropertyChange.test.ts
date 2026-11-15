@@ -2223,7 +2223,7 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
     expect(await countCards(), "a reply opens no card, whatever its size").toBe(before);
     const c1 = await card(porter.id);
     expect(c1.state, "the block is answered").toBe("OPEN");
-    expect(String(c1.block_answer), "what he WROTE, above the quote").toMatch(/^approved\n/);
+    expect(String(c1.block_answer), "what he WROTE, above the quote, and not the phone's footer").toBe("approved");
     expect(c1.block_answered_by).toBe("fu_scooter_taylor");
     const att = (await env.WP_OS_DB.prepare("SELECT filename, source, bytes FROM request_attachment WHERE work_card_id = ?1").bind(porter.id).all<{ filename: string; source: string; bytes: number }>()).results!;
     expect(att.map((a) => [a.filename, a.source]), "the reply's photo is kept against the card it steered").toEqual([["sensori-founders.jpg", "REPLY"]]);

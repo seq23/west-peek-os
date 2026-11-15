@@ -197,10 +197,6 @@ export async function claimNextCard(env: Env, now: Date): Promise<SweepCard | nu
         -- until she says so through releaseHeldCard.
         AND held_at IS NULL
         AND (lease_until IS NULL OR lease_until < ?1)
-        -- A HOLD ON A CARD ALREADY BEING WORKED (15 Nov 2026, wc_bd8b68cb). A hold written by hand on an IN_PROGRESS card
-        -- ("waiting_until") was not read here, so the next attempt ran straight through it. A door that reopens a card sets
-        -- it OPEN, so an old wait left on a reopened card never holds it.
-        AND NOT (state = 'IN_PROGRESS' AND waiting_until IS NOT NULL AND waiting_until > ?1)
         AND COALESCE(work_attempts, 0) < ?2
         -- A CARD THE MAC HOLDS IS NOT WAITING (21 Sep 2026). Its LOCAL_JOB is queued or running;
         -- claiming it would spend a tick saying so while every younger card waits. It becomes
