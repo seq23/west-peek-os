@@ -99,6 +99,25 @@ describe("the three brand pitches read clean", () => {
   });
 });
 
+describe("how to say yes on a brand's one-pager (owner, 4 Nov 2026)", () => {
+  it("every brand's sheet ends with the level, the agreement and invoice, payment due within 14 days; only a deal whose reply said it can't commit yet leaves that out", async () => {
+    const { CANT_COMMIT } = await import("../src/shared/tlc/pitch");
+    const deal = { brand: "Acme Vector", category: "vector database" };
+    const yes = seen(renderBrandPitch(MAR, sponsorOf(deal)));
+    expect(yes).toContain("To say yes");
+    expect(yes).toContain("We send a one-page agreement and an invoice; payment is due within 14 days.");
+    expect(yes.indexOf("To say yes")).toBeLessThan(yes.indexOf(TLC_OWNER.email));
+    // Kyle at Notion, 16 Nov 2026: their own words set the deal's flag; the flag, read back from the deal, drops the payment step.
+    expect(CANT_COMMIT.test("It'll help us understand the fit, though I can\u2019t commit to sponsorship or staffing at this stage.")).toBe(true);
+    expect(CANT_COMMIT.test("Could you send what you'd want from us, including any other commitments?")).toBe(false);
+    const notYet = seen(renderBrandPitch(MAR, sponsorOf({ ...deal, sheet_json: JSON.stringify({ cantCommitYet: true }) })));
+    expect(notYet).not.toMatch(/14 days|invoice|To say yes/);
+    expect(notYet).toContain("Next step");
+    // A malformed or absent flag is the default: the step stays.
+    expect(seen(renderBrandPitch(MAR, sponsorOf({ ...deal, sheet_json: '{"cantCommitYet":"yes"}' })))).toContain("payment is due within 14 days");
+  });
+});
+
 describe("February's date, in the migration", () => {
   let t: TestDb;
   beforeAll(async () => { t = await createTestDb(); });
