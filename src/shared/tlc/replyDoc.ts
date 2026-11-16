@@ -2,7 +2,7 @@
  * A BRAND REPLY AS A DOCUMENT (owner, 7 Nov 2026, the Pinecone Pricing Reply v2): its name, its readable page, and the
  * short sheet the email to the partners carries inline. PURE.
  */
-import { SERIES_COUNTS, SERIES_LEVELS, usd, type SeriesPricing } from "./series";
+import { SERIES_LEVELS, seriesCounts, usd, type SeriesPricing } from "./series";
 import type { SheetMini } from "./wynnDraftEmail";
 
 /** "Pinecone" → "pinecone"; "Liquid Death" → "liquid-death". The brand part of the reply page's address. */
@@ -14,10 +14,14 @@ export const REPLY_PAGE_ORIGIN = "https://os.joinwestpeek.com";
 export const replyPagePath = (brand: string): string => `/tlc/${brandSlug(brand)}/reply`;
 export const replyPageUrl = (brand: string): string => `${REPLY_PAGE_ORIGIN}${replyPagePath(brand)}`;
 
-/** What the document is called in the subject: a draft with prices is the "Pricing Reply". */
+/**
+ * What the document is called in the subject: the proposal is the "Partner one-pager" it carries (owner, 16 Nov 2026,
+ * Notion); any other draft with prices is the "Pricing Reply".
+ */
 export function docNameFor(kind: string | null | undefined, pricing: boolean): string {
   if (kind === "CONFIRM") return "Agreement";
-  if (kind === "PROPOSAL" || pricing) return "Pricing Reply";
+  if (kind === "PROPOSAL") return "Partner one-pager";
+  if (pricing) return "Pricing Reply";
   if (kind === "SAMPLES") return "Materials Reply";
   if (kind === "CALL") return "Call Reply";
   return "Reply";
@@ -54,9 +58,9 @@ export function sheetMini(input: {
   const short = (label: string) => label.replace(/ partner$/i, "");
   if (input.series) {
     const s = input.series;
-    const rows = SERIES_LEVELS.filter((l) => input.levels.some((x) => x.key === l)).map((l) => ({ label: short(input.levels.find((x) => x.key === l)!.label), cells: SERIES_COUNTS.map((n) => usd(s.prices[l][n])) }));
+    const rows = SERIES_LEVELS.filter((l) => input.levels.some((x) => x.key === l)).map((l) => ({ label: short(input.levels.find((x) => x.key === l)!.label), cells: seriesCounts(s).map((n) => usd(s.prices[l][n])) }));
     const named = [s.quarterly ? `the ${s.quarterly.evenings.length} quarterly evenings` : "", s.monthly ? `the ${s.monthly.evenings.length} monthly ones` : ""].filter(Boolean).join(" and ");
-    return { title, line, headers: ["Per event", "1", "4", "6"], rows, foot: named ? `The sheet also names ${named}. The full sheet is on the page.` : "The full sheet is on the page." };
+    return { title, line, headers: ["Per event", ...seriesCounts(s).map(String)], rows, foot: named ? `The sheet also names ${named}. The full sheet is on the page.` : "The full sheet is on the page." };
   }
   return { title, line, headers: ["Level", "Per event"], rows: input.levels.map((l) => ({ label: l.label, cells: [l.priceUsd ? usd(l.priceUsd) : "in kind"] })), foot: "The full sheet is on the page." };
 }

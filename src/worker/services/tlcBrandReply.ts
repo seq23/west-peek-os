@@ -377,6 +377,26 @@ async function redraftFor(env: Env, r: ReplyRow, note: string, now: Date, deps: 
       return "RESEARCH_WAITING";
     }
   }
+  /*
+   * HER NOTE ASKS FOR THE SHEET (owner, 16 Nov 2026, Notion: "Notion asked for a pricing sheet so I think we can remix
+   * the one sent to pinecone"; then "this needs to be a re-worked 1 pager attached to an email"). Rewriting the email's
+   * words could never satisfy that: an answer becomes the proposal, the brand's partner one-pager made and attached and
+   * the short email that introduces it, and each partner's note gets a change line saying so.
+   */
+  if (!r.samples_id && r.kind !== "PROPOSAL" && r.kind !== "CONFIRM" && SHEET_ASK.test(note)) {
+    const made = await sheetPdf(env, deal, ev, await sponsorFor(env, deal, r.their_text), deps);
+    if (typeof made === "string") {
+      const due = new Date(now.getTime() + RESEARCH_RETRY_MINUTES * 60_000).toISOString();
+      await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'DRAFTED', notice_ref = NULL, change_note = ?2, research_due = ?3, held_reason = ?4 WHERE id = ?1").bind(r.id, note, due, `the partner one-pager is not ready yet (${made.slice(0, 200)}); tried again each pass`).run();
+      return "RESEARCH_WAITING";
+    }
+    const body = signedBrandEmail(proposalBody(deal, ev, greetingFor(contactOf(deal), answerRecipients({ ...r, contact_email: deal.contact_email }))));
+    const changes: ChangeLine[] = notesByName(note).map((n) => ({ who: n.who, note: n.note.replace(/\s+/g, " ").slice(0, 160), done: `Made it the partner one-pager for ${brandDisplayName(deal.brand)} (the Pinecone sheet, remixed: the sample event, what guests build, the levels and series, what we would ask), attached as a PDF, with a short email that introduces it and does not assume they remember our first email.` }));
+    const shownP = await env.WP_OS_DB.prepare("SELECT MAX(version) AS v FROM tlc_brand_reply_version WHERE reply_id = ?1").bind(r.id).first<{ v: number | null }>().catch(() => null);
+    await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'DRAFTED', notice_ref = NULL, approved_by_json = NULL, kind = 'PROPOSAL', attachments_json = ?2, draft_body = ?3, change_note = ?4, previous_draft = ?5, research_due = NULL, research_tries = 0, held_reason = NULL, version = ?6, changes_json = ?7 WHERE id = ?1")
+      .bind(r.id, JSON.stringify([made]), body, note, r.draft_body, (shownP?.v ?? r.version ?? 1) + 1, JSON.stringify(changes)).run();
+    return "DRAFTED";
+  }
   const { body: draft, changes } = await draftWithChanges(env, deal, ev, r.intent as BrandReplyIntent, r.their_text, deps, { note, previous, research: report, samplesAttached: Boolean(r.samples_id) });
   /*
    * vN COUNTS UP PER REDRAFT (owner, 7 Nov 2026): one more than the last version the partners saw (a redraft that was
@@ -597,7 +617,7 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
       kind = "PROPOSAL";
       const sponsor = await sponsorFor(env, deal, words);
       keep(await sheetPdf(env, deal, ev, sponsor, deps));
-      body = proposalBody(deal, ev, sponsor, step.segment, greetingFor({ name: deal.contact_name, email: deal.contact_email }, recipients, msg.text));
+      body = proposalBody(deal, ev, greetingFor(contactOf(deal), recipients, msg.text));
     } else {
       kind = "CONFIRM";
       tier = levelPicked(words);
@@ -632,17 +652,17 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
   return "DRAFTED";
 }
 
-/** Step 4's email (unsigned): the proposal template, the brand's own levels, the greeting for whoever asked. */
-function proposalBody(deal: TlcDealRow, ev: TlcEventRow, sponsor: Awaited<ReturnType<typeof sponsorFor>>, segment: string | null, hi: string): string {
-  const brandName = brandDisplayName(deal.brand);
-  // No "most brands like <Brand>" line (Scooter's note on the Pinecone draft wins, 7 Nov 2026). A brand with series
-  // prices reads them per event for four and six evenings; any other the series of six at the same per-event price.
-  const sp = sponsor.seriesPricing ?? null;
-  const series = sp
-    ? ["For more than one evening, each series costs less per event:", ...(sp.quarterly ? [`• ${sp.quarterly.name}, ${sp.quarterly.evenings.length} evenings in ${sp.year}: ${sp.quarterly.style} Lead ${seriesPriceWords(sp, "LEAD", 4).replace(/ \(.*\)$/, "")}, Presenting ${seriesPriceWords(sp, "PRESENTING", 4).replace(/ \(.*\)$/, "")}.`] : []),
-      ...(sp.monthly ? [`• ${sp.monthly.name}: ${sp.monthly.style} Lead ${seriesPriceWords(sp, "LEAD", 6).replace(/ \(.*\)$/, "")}, Presenting ${seriesPriceWords(sp, "PRESENTING", 6).replace(/ \(.*\)$/, "")}.`] : [])].join("\n") + "\n\n"
-    : "A series of six: the same per-event price for each club, as a founding partner. ";
-  return fillTemplate("proposal", { hi, brand: brandName, topic: ev.topic ?? "", segment: segment ?? `Where ${brandName} comes in`, levels: proposalLevelLines(brandLevels(sponsor, ev.topic ?? "")), series, howMany: sp ? " and whether it's one evening, four or six" : "" });
+/** The contact as the greeting names them: the deal's contact name, else the name the deal's people give that address. */
+const contactOf = (deal: TlcDealRow & { people_json?: string | null }): { name: string | null; email: string } =>
+  ({ name: deal.contact_name ?? peopleOf(deal.people_json)[deal.contact_email.trim().toLowerCase()]?.name ?? null, email: deal.contact_email });
+
+/**
+ * Step 4's email (unsigned): SHORT, and it introduces the one-pager attached (owner, 16 Nov 2026, Notion: "the email
+ * body needs to say here is a 1 pager that lays out a sample event we are planning"). It never assumes the brand
+ * remembers our first email, and carries no prices: those are on the one-pager.
+ */
+function proposalBody(deal: TlcDealRow, ev: TlcEventRow, hi: string): string {
+  return fillTemplate("proposal", { hi, brand: brandDisplayName(deal.brand), topic: ev.topic ?? "The Learning Club", when: `${monthWords(ev.month)} (dates flexible)` });
 }
 
 /**
@@ -701,9 +721,7 @@ export async function refreshStaleSheets(env: Env, now: Date, firmScope: string,
      * The proposal's email is made again from the same template too, so a fix to it (the greeting, 6 Nov 2026)
      * reaches a draft still waiting. Never when a partner's change note shaped the draft: her words are kept.
      */
-    const sponsor = await sponsorFor(env, deal, r.their_text);
-    const step = await flowStep(env, deal.id);
-    const body = r.change_note ? r.draft_body : signedBrandEmail(proposalBody(deal, ev, sponsor, step.segment, greetingFor({ name: deal.contact_name, email: deal.contact_email }, answerRecipients({ ...r, contact_email: deal.contact_email }))));
+    const body = r.change_note ? r.draft_body : signedBrandEmail(proposalBody(deal, ev, greetingFor(contactOf(deal), answerRecipients({ ...r, contact_email: deal.contact_email }))));
     const what = body === r.draft_body ? `${SHEET_CHANGE_WORDS} Wynn's email is unchanged.` : `${SHEET_CHANGE_WORDS} Wynn's email is made again from the same template; it now greets the person who asked.`;
     const upd = await env.WP_OS_DB.prepare(
       "UPDATE tlc_brand_reply SET attachments_json = ?2, draft_body = ?6, state = 'DRAFTED', notice_ref = NULL, approved_by_json = NULL, report_text = ?3 WHERE id = ?1 AND state = ?4 AND COALESCE(notice_ref, '') = ?5",
@@ -716,7 +734,14 @@ export async function refreshStaleSheets(env: Env, now: Date, firmScope: string,
 }
 
 /** A brand asking what it costs ("How much is this to do?", pricing, cost, rates, budget): straight to step 4. */
-export const PRICE_ASK = /\bhow much\b|\bpricing\b|\bprices?\b|\bcosts?\b|\brates\b|\bbudget\b/i;
+/**
+ * A BRAND ASKING WHAT IT WOULD PAY (owner, 4 Nov 2026), in any of its words. 16 Nov 2026: Notion asked for "an overview
+ * of what you'd want from us as a founding partner, including any sponsorship fee" and was answered with a plain
+ * "who we are" email, because "fee" was not read as a price.
+ */
+export const PRICE_ASK = /\bhow much\b|\bpricing\b|\bprices?\b|\bcosts?\b|\brates?\b|\brate card\b|\bbudget\b|\bfees?\b|\b(?:sponsorship|partnership|partner) (?:levels?|tiers?|packages?|options|terms|details|deck|sheet|kit)\b|\bwhat (?:you'?d|you would|you) (?:want|need|expect) from us\b/i;
+/** Her note asks for the sheet itself: "a pricing sheet", "a 1 pager", "the partner levels". */
+export const SHEET_ASK = /\b(?:pricing|price|partner(?:ship)?[- ]levels?|sponsorship|sponsor) sheet\b|\b(?:one|1)[- ]?pager\b|\bpartner(?:ship)? levels\b/i;
 export const asksPrice = (words: string): boolean => PRICE_ASK.test(words);
 /** A brand asking to own the whole room: the one case Title is offered without the large-brand flag (rule H). */
 export const OWN_THE_ROOM = /\btitle (?:partner|sponsor)\b|\bown(?:ing)? the (?:whole )?room\b|\bthe whole room\b|\bonly sponsor\b|\bexclusive sponsor\b/i;
@@ -1037,7 +1062,9 @@ async function sendRound(env: Env, now: Date, firmScope: string, rows: WaitingRo
       const history = await samplesRevisions(env, sample.id);
       extras.push({ label: "The 3 sample pages", text: `${history.length > 1 ? `Last change: ${history[0]!.line} ` : ""}To change them, reply with what to change. The PDF is made from that page when you reply approved, and goes with your answer.`, url });
     }
-    if (!partnerRound && r.kind !== "PROPOSAL") {
+    // Round 1 carries the PDF itself (owner, 16 Nov 2026: "what about the attachment"), the one-pager included; round 2
+    // is the live page both partners comment on, and the PDF goes from the approved version.
+    if (!partnerRound) {
       for (const f of JSON.parse(r.attachments_json ?? "[]") as StoredFile[]) { const a = await storedAttachment(env, f); if (a) attachments.push(a); }
       if (attachments.length) extras.push({ label: "Goes with it", text: attachments.map((a) => a.filename).join(" and ") });
     }
@@ -1085,7 +1112,7 @@ async function sendRound(env: Env, now: Date, firmScope: string, rows: WaitingRo
       changes: unchanged || version === 1 ? null : changes,
       unchangedNote,
       reply: { to: asker.full, cc: cc.map((a) => personWords(a, r).full), subject: r.draft_subject, body: withBrandFooter(r.draft_body) },
-      sheet, attachmentsWord: sheet ? "attached as a PDF when it goes" : null,
+      sheet, attachmentsWord: sheet ? (attachments.length ? "the PDF is attached to this email; it goes from the approved version" : "attached as a PDF when it goes") : null,
       extras, link: { label: `See the whole ${brand} story`, url: replyPageUrl(r.brand) }, ref, threadRef,
       replyHint: 'Reply to this email with "approved" or your notes.',
       bothMustApprove: partnerRound && needed.length > 1,

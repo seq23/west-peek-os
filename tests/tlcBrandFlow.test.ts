@@ -11,7 +11,7 @@ import { BRAND_MUST_STAFF, CALL_ASK, MONEY_WORDS } from "../src/shared/tlc/brand
  * A fake brand only: the real instance lives in production data.
  */
 const SPONSOR = sponsorOf({ brand: "Vector Co", category: "Vector database" });
-const FAKE = { hi: "Hi Sam,", brand: "Vector Co", topic: "Build Your Own AI Agent", segment: "Giving your agent a memory", arc: "a run that follows the arc of building an agent", level: "Presenting partner", times: "• Tuesday 10 Nov, 2:00pm", time: "Tuesday 10 Nov, 2:00pm", levels: proposalLevelLines(brandLevels(SPONSOR, "Build Your Own AI Agent")), series: "A series of six: the same per-event price for each club, as a founding partner. ", howMany: "" };
+const FAKE = { hi: "Hi Sam,", brand: "Vector Co", topic: "Build Your Own AI Agent", segment: "Giving your agent a memory", arc: "a run that follows the arc of building an agent", level: "Presenting partner", times: "• Tuesday 10 Nov, 2:00pm", time: "Tuesday 10 Nov, 2:00pm", levels: proposalLevelLines(brandLevels(SPONSOR, "Build Your Own AI Agent")), series: "A series of six: the same per-event price for each club, as a founding partner. ", howMany: "", when: "March 2027 (dates flexible)" };
 
 describe("the five steps and the call branch, as the code reads them", () => {
   it("five steps; money first at step 4; three follow-ups, the first carrying the samples PDF, each short and saying something new", () => {
@@ -42,15 +42,13 @@ describe("the five steps and the call branch, as the code reads them", () => {
         expect(text, name).not.toMatch(CALL_ASK);
       }
     }
-    // Step 4 lists the same levels as that brand's sheet, each per event, lowest first; Lead is the one it would benefit most from.
+    // Step 4 is a short email that introduces the one-pager attached (owner, 16 Nov 2026): no amount in its words (the
+    // prices are on the one-pager), no call ask, and it never assumes they remember our first email.
     const proposal = fillTemplate("proposal", FAKE);
-    for (const m of proposal.matchAll(/\$[\d,]+/g)) expect(proposal.slice(m.index! + m[0].length).startsWith(" per event"), m[0]).toBe(true);
-    expect([...proposal.matchAll(/\$([\d,]+) per event/g)].map((m) => Number(m[1]!.replace(/,/g, "")))).toEqual([5_000, 10_000, 15_000]);
-    // No "most brands like" line (Scooter's note wins, 7 Nov 2026).
-    expect(proposal).not.toMatch(/benefit most/);
-    expect(proposal).toContain("A series of six: the same per-event price for each club, as a founding partner.");
-    expect(proposal.match(/Presented by/g)).toHaveLength(1);
-    expect(proposal).not.toMatch(/Title partner|in kind|Product partner|most brands choose/i);
+    expect(proposal).toContain("Here is a one-pager that lays out a sample event we are planning, Build Your Own AI Agent: one hands-on evening in New York in March 2027 (dates flexible)");
+    expect(proposal).toContain("It is part of The Learning Club, a series within West Peek Rooms");
+    expect(proposal).not.toMatch(/\$\s?\d|benefit most|Title partner|in kind|Product partner|most brands choose/i);
+    expect(proposal).not.toMatch(CALL_ASK);
     expect(fillTemplate("confirm", FAKE)).toContain("Attached are a one-page agreement and the invoice.");
     expect(() => fillTemplate("confirm", { hi: "Hi," })).toThrow(/needs \{brand\}/);
   });

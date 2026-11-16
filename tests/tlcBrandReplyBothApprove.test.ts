@@ -31,7 +31,7 @@ const toBrand = () => sends.filter((s) => s.via === "gmail");
 const toUs = () => sends.filter((s) => s.via === "resend");
 // Her reply quotes nothing: the ref rides back in the subject alone (owner, 7 Nov 2026: "that code is still important").
 const answer = (from: string, body: string, ref: string, a = auth(from), d: Partial<{ drafter: ReplyDrafter }> = {}) =>
-  applyBrandReplyApproval(env, { fromHeader: `Partner <${from}>`, authenticationResults: a, subject: `Re: Some Co Pricing Reply · v1 · ready for your OK · ${ref}`, body }, { now: AT, drafter, samples: PDF, ...d });
+  applyBrandReplyApproval(env, { fromHeader: `Partner <${from}>`, authenticationResults: a, subject: `Re: Some Co Partner one-pager · v1 · ready for your OK · ${ref}`, body }, { now: AT, drafter, samples: PDF, ...d });
 const row = (id: string) => env.WP_OS_DB.prepare("SELECT state, notice_ref, round, inputs_json, draft_body, change_note, page_token FROM tlc_brand_reply WHERE deal_id = ?1 ORDER BY received_at DESC").bind(id).first<{ state: string; notice_ref: string; round: string | null; inputs_json: string | null; draft_body: string; change_note: string | null; page_token: string | null }>();
 const approversOf = async (ref: string) => JSON.parse((await env.WP_OS_DB.prepare("SELECT approvers_json FROM tlc_brand_reply_notice WHERE ref = ?1").bind(ref).first<{ approvers_json: string }>())!.approvers_json) as string[];
 
@@ -135,7 +135,7 @@ describe("round 1 is hers alone", () => {
     const one = toUs().find((s) => s.subject.includes(ref))!;
     expect(one.cc).toBe("");
     // The round-1 email to her alone: no prefix, the ref in the subject.
-    expect(one.subject).toBe(`Price Co Pricing Reply · v1 · ready for your OK · ${ref}`);
+    expect(one.subject).toBe(`Price Co Partner one-pager · v1 · ready for your OK · ${ref}`);
     sends.length = 0;
     const out = await answer(SEQUOIA, "approved", ref);
     expect(out.detail).toContain("it now goes to you and Scooter");
@@ -149,7 +149,7 @@ describe("round 1 is hers alone", () => {
     // The shape she approved: the version and ref in the subject, the reply word for word, one readable link.
     // Both must approve: the subject starts ACTION REQUIRED and line 1 says so plainly (owner, 7 Nov 2026).
     // The thread's ref stays in the subject for every version (owner, 7 Nov 2026); this email's own ref is in the footer.
-    expect(two.subject).toBe(`ACTION REQUIRED: Price Co Pricing Reply · v1 · ready for your OK · ${ref}`);
+    expect(two.subject).toBe(`ACTION REQUIRED: Price Co Partner one-pager · v1 · ready for your OK · ${ref}`);
     expect(r.notice_ref).toBe(ref);
     expect(two.text.trimEnd().endsWith(`Ref ${ref}`)).toBe(true);
     expect(two.text.split("\n")[0]).toContain('You both need to reply "approved"');
@@ -202,7 +202,7 @@ describe("round 2: nothing goes until both have approved", () => {
     const again = toUs().find((s) => s.text.includes(`Ref ${r.notice_ref}`))!;
     expect(again.cc).toBe(SCOOTER);
     // vN counts up, and every note has its own line naming whose it was.
-    expect(again.subject).toMatch(/^ACTION REQUIRED: Wait Co Pricing Reply · v2 · ready for your OK · TLR-[A-Z0-9]{6}$/);
+    expect(again.subject).toMatch(/^ACTION REQUIRED: Wait Co Partner one-pager · v2 · ready for your OK · TLR-[A-Z0-9]{6}$/);
     expect(again.subject.endsWith(` · ${r.notice_ref}`)).toBe(true);
     expect(again.text).toContain("WHAT CHANGED SINCE V1");
     expect(again.text).toMatch(/- Sequoia: "Keep the opening warm\." → applied/);
@@ -284,7 +284,7 @@ describe("THE GUARD (owner, 7 Nov 2026): pricing goes to the brand only on both 
     await answer(SEQUOIA, "Keep it short.", first);
     const v2 = (await row("tld_codes"))!;
     expect(v2.notice_ref).toBe(first);
-    const mail = toUs().find((s) => s.subject.includes("Codes Co Pricing Reply · v2"))!;
+    const mail = toUs().find((s) => s.subject.includes("Codes Co Partner one-pager · v2"))!;
     expect(mail.subject.endsWith(` · ${first}`)).toBe(true);
     // An older code issued on this conversation (as Pinecone's TLR-DPA7BZ was) routes to the same draft.
     const id = (await env.WP_OS_DB.prepare("SELECT id FROM tlc_brand_reply WHERE deal_id = 'tld_codes'").first<{ id: string }>())!.id;
