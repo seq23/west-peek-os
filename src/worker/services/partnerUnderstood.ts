@@ -377,7 +377,13 @@ export async function understand(
     }
   }
   const runId = runIds[runIds.length - 1] ?? null;
-  const emailHolds = parsed ? parsed.holds : holdsOf(written);
+  /*
+   * HIS HOLDS ARE STEADY TOO (15 Nov 2026, practice run): a reader that lists no HOLD lines (Workers AI did, on both of
+   * that day's emails) must not cost him the holds his own typed sentences carry ("nothing goes live"). His sentences
+   * first, then whatever the reader adds, as with his questions.
+   */
+  const ownHolds = holdsOf(written.split(/\n\nVoice note \(/)[0] ?? written);
+  const emailHolds = parsed ? mergeQuestions(ownHolds, parsed.holds) : holdsOf(written);
   // An idea for later ("… is an idea for later, not part of this round") is kept as noted, never also as a hold.
   const notedLines = structured?.noted ?? [];
   const holds = mergeHolds(emailHolds.filter((h) => !notedLines.some((n) => norm(n) === norm(h))), input.standingHolds ?? []);
