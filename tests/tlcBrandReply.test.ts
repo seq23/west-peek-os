@@ -762,8 +762,8 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     expect(again.notice_ref).toBe(first.notice_ref);
     const remade = sends.find((x) => x.subject.startsWith("Old Co "))!;
     expect(remade.text.replace(/\s+/g, " ")).toContain(SHEET_CHANGE_WORDS);
-    // The sheet is in the email itself; its PDF is made only from the approved version, when it goes (owner, 7 Nov 2026).
-    expect(remade.files).toEqual([]);
+    // The sheet is in the email itself, and round 1 carries the remade PDF too (owner, 16 Nov 2026: "what about the attachment").
+    expect(remade.files).toEqual(["The Learning Club - Build Your Own AI Agent - partner levels - Old Co.pdf"]);
     expect(remade.text).toContain("THE SHEET THEY GET");
     // Her "approved" to the OLD email (Scooter had approved it too) sends nothing: that email no longer stands.
     sends.length = 0;
@@ -783,21 +783,15 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     const p = (await e.WP_OS_DB.prepare("SELECT kind, draft_body, attachments_json FROM tlc_brand_reply WHERE deal_id = 'tld_flow'").first<{ kind: string; draft_body: string; attachments_json: string }>())!;
     expect(p.kind).toBe("PROPOSAL");
     // The same levels as Flow Co's own sheet, every price per event, lowest first; no Title (not marked large), no in-kind (not a product).
-    expect(p.draft_body).toContain(`Here's how Flow Co could take part in The Learning Club: Build Your Own AI Agent, built around "Making it remember", led by Flow Co or by our host. Every price is per event:`);
-    expect(p.draft_body).toContain("• Partner · $5,000 per event: named on the invitation and on the day;");
-    expect(p.draft_body).toContain("• Lead partner · $10,000 per event: Everything in Partner, plus the hands-on segment built around your product;");
-    expect(p.draft_body).toContain('• Presenting partner · $15,000 per event: Everything in Lead, plus "Presented by Flow Co" on the invitation, signage and recap.');
-    // No "most brands like Flow Co" line: Scooter's note on the Pinecone draft wins (7 Nov 2026).
-    expect(p.draft_body).not.toMatch(/benefit most/);
-    expect(p.draft_body.indexOf("Partner ·")).toBeLessThan(p.draft_body.indexOf("Lead partner ·"));
-    expect(p.draft_body.indexOf("Lead partner ·")).toBeLessThan(p.draft_body.indexOf("Presenting partner ·"));
-    expect(p.draft_body).not.toMatch(/Title partner|Product partner|in kind/);
+    // A short email that introduces the one-pager (owner, 16 Nov 2026); the prices are on the one-pager, never in the words.
+    expect(p.draft_body).toMatch(/one-pager that lays out a sample event we are planning/);
+    expect(p.draft_body).not.toMatch(/\$\s?\d|benefit most|Title partner|Product partner/);
     expect(JSON.parse(p.attachments_json)).toEqual([expect.objectContaining({ name: "The Learning Club - Build Your Own AI Agent - partner levels - Flow Co.pdf" })]);
     const { sendReplyApprovals } = await import("../src/worker/services/tlcBrandReply");
     await sendReplyApprovals(e, MON);
-    const proposal = sends.find((x) => x.subject.startsWith("Flow Co Pricing Reply · v1"))!;
-    // The sheet is inline; no PDF until the approved version goes. Her approval moves it to both partners.
-    expect(proposal.files).toEqual([]);
+    const proposal = sends.find((x) => x.subject.startsWith("Flow Co Partner one-pager · v1"))!;
+    // Round 1 carries the one-pager's PDF (owner, 16 Nov 2026: "what about the attachment"). Her approval moves it to both partners.
+    expect(proposal.files).toEqual(["The Learning Club - Build Your Own AI Agent - partner levels - Flow Co.pdf"]);
     expect(proposal.text).toContain("it goes to you and Scooter for both of you to approve");
     // The PDF is made now, from the approved version (owner, 7 Nov 2026).
     await approve(e, await refOf("tld_flow"), { samples: render });
@@ -822,6 +816,38 @@ describe("a yes to the samples gets the 3-page PDF; a call they asked for is sch
     sends.length = 0;
     await approve(e, ref);
     expect(sends.filter((x) => x.to.includes("flow.example"))).toHaveLength(0);
+  });
+
+  it("a sponsorship-fee ask, or her note asking for the pricing sheet, gets the partner one-pager attached to a short email (Notion, 16 Nov 2026)", async () => {
+    const e = docEnv();
+    const render = { renderPdf: async () => ({ pdfBase64: Buffer.from("%PDF-1.4 /Type /Page a").toString("base64"), pageCount: 1 }) };
+    const kyle = "Could you send a short overview of what you'd want from us as a founding partner, including any sponsorship fee, hands-on support, or other commitments?";
+    // Their words ask the fee: straight to the one-pager.
+    await deal("tld_fee", "Fee Co", "partners@fee.example");
+    await take(e, "tld_fee", kyle, "fee-1@fee.example", { samples: render });
+    expect(await e.WP_OS_DB.prepare("SELECT kind FROM tlc_brand_reply WHERE deal_id = 'tld_fee'").first()).toEqual({ kind: "PROPOSAL" });
+    // An answer already drafted, and her note asks for the sheet: rewriting the words cannot do that; it becomes the one-pager.
+    await deal("tld_sheet", "Sheet Co", "partners@sheet.example");
+    await e.WP_OS_DB.prepare("UPDATE tlc_deal SET category = 'Workspace', people_json = ?1 WHERE id = 'tld_sheet'").bind(JSON.stringify({ "partners@sheet.example": { name: "Kyle", role: "Startups" } })).run();
+    await take(e, "tld_sheet", "Thanks for thinking of us! Who would be in the room?", "sh-1@sheet.example", { samples: render });
+    expect(await e.WP_OS_DB.prepare("SELECT kind FROM tlc_brand_reply WHERE deal_id = 'tld_sheet'").first()).toEqual({ kind: "ANSWER" });
+    const { sendReplyApprovals } = await import("../src/worker/services/tlcBrandReply");
+    await sendReplyApprovals(e, MON);
+    const ref = await refOf("tld_sheet");
+    sends.length = 0;
+    await applyBrandReplyApproval(e, { fromHeader: `Her <${APPROVER}>`, authenticationResults: auth(APPROVER), subject: `Re: Wynn · ${ref}`, body: `They asked for a pricing sheet: remix the one sent to pinecone. This needs to be a 1 pager attached to an email.\n\nRef ${ref}` }, { now: MON, drafter, samples: render });
+    const r = (await e.WP_OS_DB.prepare("SELECT kind, draft_body, attachments_json, changes_json, version FROM tlc_brand_reply WHERE deal_id = 'tld_sheet'").first<{ kind: string; draft_body: string; attachments_json: string; changes_json: string; version: number }>())!;
+    expect(r.kind).toBe("PROPOSAL");
+    expect(JSON.parse(r.attachments_json)).toEqual([expect.objectContaining({ name: "The Learning Club - Build Your Own AI Agent - partner levels - Sheet Co.pdf" })]);
+    expect(r.draft_body).toMatch(/^Hi Kyle,\n\nThank you for your note\. Here is a one-pager that lays out a sample event we are planning/);
+    expect(r.draft_body).not.toMatch(/\$\s?\d/);
+    expect(JSON.parse(r.changes_json)).toEqual([expect.objectContaining({ who: "Sequoia", done: expect.stringMatching(/partner one-pager/) })]);
+    // Round 1 goes to her alone, the PDF attached, named as the one-pager; nothing to the brand.
+    const mail = sends.find((x) => x.subject.startsWith("Sheet Co Partner one-pager · v2 · ready for your OK · "))!;
+    expect(mail.subject.endsWith(ref)).toBe(true);
+    expect(mail.files).toEqual(["The Learning Club - Build Your Own AI Agent - partner levels - Sheet Co.pdf"]);
+    expect(mail.cc ?? "").not.toMatch(/scooter/i);
+    expect(sends.filter((x) => x.to.includes("sheet.example"))).toHaveLength(0);
   });
 
   it("does this need a reply? A pass-along or reviewing reply gets no draft and no sequence step; a reply that asks gets one", async () => {
@@ -924,7 +950,7 @@ describe("brand colleagues and the approval boundary", () => {
     const r = (await e.WP_OS_DB.prepare("SELECT state, kind, send_to, send_cc_json, draft_body, attachments_json FROM tlc_brand_reply WHERE deal_id = 'tld_colleague'").first<{ state: string; kind: string; send_to: string; send_cc_json: string; draft_body: string; attachments_json: string }>())!;
     // Reply-all to the VP's message, the contact copied; a draft in her approval email, never sent.
     expect(r).toMatchObject({ state: "NOTIFIED", kind: "PROPOSAL", send_to: "vp@brand.example", send_cc_json: '["mike@brand.example"]' });
-    expect(r.draft_body).toContain("Every price is per event");
+    expect(r.draft_body).toContain("Here is a one-pager that lays out a sample event we are planning");
     expect(JSON.parse(r.attachments_json)).toEqual([expect.objectContaining({ name: "The Learning Club - Build Your Own AI Agent - partner levels - Brand Co.pdf" })]);
     // The sheet attached is Brand Co's own: software, so no in-kind level; not marked large, so no Title.
     const sheet = sheets.at(-1)!;

@@ -316,7 +316,7 @@ describe("the partner-levels sheet, made for each sponsor", () => {
     const html = renderBrandPitch(MAR, software);
     expect(html).toContain("<title>AI Tools for Your Work, with Acme Vector</title>");
     expect(html).toContain("<h1>AI Tools for Your Work, with Acme Vector</h1>");
-    expect(html).toContain("Why this room works for Acme Vector");
+    expect(html).toContain("What guests will build with Acme Vector");
     expect(html).toContain("Acme Vector is the vector database every guest uses in the hands-on hour, with a starter account set up in the room");
     expect(html).not.toMatch(/Product partner|in kind|in-kind/i);
     expect(html).not.toContain("Title partner");
@@ -377,7 +377,7 @@ describe("the partner-levels sheet, made for each sponsor", () => {
     const viaRule = sponsorOf({ brand: "Acme Vector", category: "Vector database" }, [{ code: "ACME_VECTOR_SERIES" }]);
     expect([viaAngle.series, viaRule.series, software.series]).toEqual([true, true, false]);
     const sheet = renderBrandPitch(MAR, viaRule);
-    expect(sheet.indexOf("A series of six rooms, one a month for six months, with Acme Vector in every room. A single evening is the option.")).toBeLessThan(sheet.indexOf("Why this room works"));
+    expect(sheet.indexOf("A series of six rooms, one a month for six months, with Acme Vector in every room. A single evening is the option.")).toBeLessThan(sheet.indexOf('class="tiers"'));
     expect(dripEmail({ step: 0, brand: "Acme Vector", contactName: null, topic: "Build Your Own AI Agent", month: "2027-03", eventDate: "2027-03-18", why: null, series: true }).text)
       .toContain("as a series of six rooms, one a month: rooms of 25+ guests (sized to your goals) each time, going deep on Build Your Own AI Agent, hands-on, with Acme Vector in every room. A single evening is an option too.");
     const words = { title: "T", leaveFact: "a working agent", openingTheme: "o", panelAngle: "p", dinnerPick: "d", segmentTitle: "s", segmentDoes: "does", leaveWith: "w", seriesTitle: "Agents, month by month", seriesTail: "ending with a team of agents.", months: Array.from({ length: 6 }, (_, k) => ({ title: `M${k + 1}`, line: "l", brand: k === 2 })), whyLead: "w", whyLine: "l", perks: [{ lead: "a", line: "b" }] };

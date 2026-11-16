@@ -1,5 +1,5 @@
 import { BRAND_COMMUNITY_SHORT, COMMUNITY_ABOUT } from "../community/size";
-import { SERIES_COUNTS, SERIES_LEVELS, seriesOf, usd as seriesUsd, type SeriesPricing } from "./series";
+import { SERIES_LEVELS, seriesCounts, seriesOf, usd as seriesUsd, type SeriesPricing } from "./series";
 import { MAAX_BOLD_WOFF2, MAAX_REGULAR_WOFF2, WP_MONOGRAM_PNG } from "./brandAssets";
 import { TLC_ABOUT_COMMUNITY, TLC_ABOUT_WEST_PEEK } from "./aboutWestPeek";
 import {
@@ -250,6 +250,21 @@ export interface TlcSponsorView {
    * for 1, 4 and 6 evenings and the named evenings. When present it replaces the quarterly and series-of-six lines.
    */
   seriesPricing?: SeriesPricing | null;
+  /**
+   * THIS BRAND'S OWN LINES ON ITS ONE-PAGER (16 Nov 2026, Notion: "what attendees would build with Notion"; tlc_deal.sheet_json).
+   * `build`: what guests will build with the brand, concretely. `asks`: what we would ask of the brand beyond the fee.
+   * Either one unset falls back to the general lines for the brand's kind.
+   */
+  build?: readonly string[] | null;
+  asks?: readonly string[] | null;
+}
+/** A deal's one-pager lines, read safely: anything malformed is no lines at all. PURE. */
+export function sheetLinesOf(json: string | null | undefined): { build: string[] | null; asks: string[] | null } {
+  const list = (v: unknown): string[] | null => (Array.isArray(v) && v.length && v.every((x) => typeof x === "string" && x.trim()) ? v.map((x: string) => x.trim()) : null);
+  try {
+    const v = JSON.parse(json ?? "null") as Record<string, unknown> | null;
+    return v && typeof v === "object" ? { build: list(v.build), asks: list(v.asks) } : { build: null, asks: null };
+  } catch { return { build: null, asks: null }; }
 }
 export interface QuarterlyOffer { year: number; events: number; perEventUsd: number; totalUsd: number }
 /** A partner-set offer, read safely: anything malformed is no offer. PURE. */
@@ -266,7 +281,7 @@ export function quarterlyWords(q: QuarterlyOffer, brand: string): string {
   return `A quarterly series in ${q.year}: ${q.events} evenings, one a quarter, each built hackathon-style around ${brand}, at ${usd(q.perEventUsd)} per event; ${usd(q.totalUsd)} for all ${q.events === 4 ? "four" : q.events}${save > 0 ? ` (you save ${usd(save)})` : ""}.`;
 }
 
-const SOFTWARE = /\b(software|saa?s|api|apis|platform|database|vector|cloud|developer|dev tools?|ai (?:lab|model|assistant|agents?)|llm|frontier model|model provider|app|apps|analytics|infrastructure|search engine|no[- ]code|automation|hosting|data (?:platform|warehouse)|service)\b/i;
+const SOFTWARE = /\b(software|saa?s|api|apis|platform|database|vector|cloud|developer|dev tools?|workspace|productivity|ai (?:lab|model|assistant|agents?)|llm|frontier model|model provider|app|apps|analytics|infrastructure|search engine|no[- ]code|automation|hosting|data (?:platform|warehouse)|service)\b/i;
 const PHYSICAL = /\b(drinks?|beverages?|spirits?|aperitifs?|wine|beer|zero[- ]proof|mocktails?|mixers?|glassware|coffee|tea|snacks?|food|chocolate|candy|skincare|beauty|cosmetics?|fragrance|perfume|candles?|apparel|clothing|footwear|shoes?|jewel(?:le)?ry|supplements?|vitamins?|wearables?|devices?|hardware|headphones?|speakers?|cameras?|kitchen|cookware|stationery|notebooks?|furniture|home goods|consumer goods|pet food)\b/i;
 
 /** "Pinecone (vector database)" -> its key for Wynn's rules: "PINECONE". */
@@ -275,7 +290,7 @@ const SERIES_ASK = /\bseries of six\b|\bsix[- ](?:room|club|month) series\b|\bsi
 
 /** The sponsor view of a deal, from its own row and Wynn's rules. PURE. */
 export function sponsorOf(
-  deal: { brand: string; category?: string | null; why_fit?: string | null; owner_angle?: string | null; large_brand?: number | boolean | null; offer_json?: string | null; series_json?: string | null },
+  deal: { brand: string; category?: string | null; why_fit?: string | null; owner_angle?: string | null; large_brand?: number | boolean | null; offer_json?: string | null; series_json?: string | null; sheet_json?: string | null },
   rules: ReadonlyArray<{ code: string | null }> = [],
 ): TlcSponsorView {
   const brand = deal.brand.replace(/\s*\([^()]*\)/g, "").replace(/\s+/g, " ").trim() || deal.brand.trim();
@@ -291,6 +306,7 @@ export function sponsorOf(
     series: SERIES_ASK.test(deal.owner_angle ?? "") || rules.some((r) => r.code === `${key}_SERIES`),
     quarterly: quarterlyOf(deal.offer_json),
     seriesPricing: seriesOf(deal.series_json),
+    ...sheetLinesOf(deal.sheet_json),
   };
 }
 
@@ -385,38 +401,31 @@ export function seriesSheetHtml(s: SeriesPricing, levels: ReadonlyArray<{ key: s
   const label = (k: string) => levels.find((x) => x.key === k)?.label ?? k;
   const block = (b: SeriesPricing["quarterly"]) => (b ? `<section class="box series"><h2>${esc(b.name)}</h2><p>${esc(b.style)}</p><ol>${b.evenings.map((e) => `<li><b>${esc(e.when)}</b> · ${esc(e.title)}</li>`).join("")}</ol></section>` : "");
   return `<h2>Series prices, per event</h2>
-<table class="series-prices"><thead><tr><th>Per event</th>${SERIES_COUNTS.map((n) => `<th>${n === 1 ? "One evening" : n === 4 ? "4 quarterly" : "6 monthly"}</th>`).join("")}</tr></thead>
-<tbody>${shown.map((l) => `<tr><td>${esc(label(l))}</td>${SERIES_COUNTS.map((n) => `<td>${seriesUsd(s.prices[l][n])}</td>`).join("")}</tr>`).join("")}</tbody></table>
+<table class="series-prices"><thead><tr><th>Per event</th>${seriesCounts(s).map((n) => `<th>${n === 1 ? "One evening" : n === 4 ? "4 quarterly" : "6 monthly"}</th>`).join("")}</tr></thead>
+<tbody>${shown.map((l) => `<tr><td>${esc(label(l))}</td>${seriesCounts(s).map((n) => `<td>${seriesUsd(s.prices[l][n])}</td>`).join("")}</tr>`).join("")}</tbody></table>
 <div class="two">${block(s.quarterly)}${block(s.monthly)}</div>`;
 }
 
 export function renderBrandPitch(v: TlcClubView, sponsor: TlcSponsorView | null = null): string {
-  const B = sponsor?.brand ?? null;
+  if (sponsor) return renderPartnerOnePager(v, sponsor);
+  // The club's generic sheet (the public page and the send-gate hash), approved word for word: no brand, no Title, no in-kind.
   const hook = sentences(brandSafe(v.angle)).slice(0, 2).join(" ");
   const takeHome = brandSafe(v.takeHome);
   const safety = safetyLines(v.topic, `${v.angle ?? ""} ${v.handsOn ?? ""} ${v.aiSegment ?? ""}`);
-  const levels = brandLevels(sponsor, v.topic);
-  const hasTitle = levels.some((l) => l.key === "TITLE");
+  const levels = brandLevels(null, v.topic);
   const why = [
-    B ? (sponsor!.software ? `Every guest will build on ${B} in the hands-on hour.` : `Every guest will have ${B} in hand during the hands-on hour, where it fits the topic.`) : "Every guest will work hands-on with your product in the hands-on hour, where it fits the topic.",
-    ...(B && sponsor!.newestProduct ? [`The build will show ${sponsor!.newestProduct}.`] : []),
+    "Every guest will work hands-on with your product in the hands-on hour, where it fits the topic.",
     "Nothing to staff: we host every segment, and you send someone only if you want to.",
     `A room that chose this topic: every guest will be there for ${v.topic}.`,
   ];
-  const seriesP = B ? sponsor?.seriesPricing ?? null : null;
-  const quarterly = !seriesP && sponsor?.quarterly && B ? quarterlyWords(sponsor.quarterly, B) : null;
-  const series = seriesP ? `<p class="lede">${esc(seriesLede(seriesP, B!))}</p>` : quarterly ? `<p class="lede">${esc(quarterly)}</p>` : sponsor?.series
-    ? `<p class="lede">A series of six rooms, one a month for six months, with ${esc(B!)} in every room. A single evening is the option.</p>`
-    : "";
   return page(
-    B ? `${v.topic}, with ${B}` : `The Learning Club: ${v.topic}`,
+    `The Learning Club: ${v.topic}`,
     `${mast("West Peek Rooms · The Learning Club")}
-<h1>${esc(B ? `${v.topic}, with ${B}` : v.topic)}</h1>
+<h1>${esc(v.topic)}</h1>
 ${hook ? `<p class="lede">${esc(hook)}</p>` : ""}
-${series}
 <p class="when">${esc(monthWords(v.month))} (date flexible) · New York City · ${BRAND_GUESTS_WORDS}</p>
 <div class="two"><div>
-<h2>Why this room works for ${esc(B ?? "your brand")}</h2>
+<h2>Why this room works for your brand</h2>
 <ul>${why.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>
 </div><div>
 <h2>Who will be in the room</h2>
@@ -429,13 +438,105 @@ ${takeHome ? `<li>They will leave with: ${esc(takeHome)}</li>` : ""}</ul>
 ${safety.length ? `<p class="note">${safety.map(esc).join(" ")}</p>` : ""}
 <h2>Partner levels, per event</h2>
 <div class="tiers">${levels.map((l) => `<div class="tier" data-level="${l.key}"><b><span class="name">${esc(l.label)}</span><span class="dot"> · </span><span class="price">${esc(priceWords(l))}</span></b>${l.marked ? `<em class="mark">${esc(l.marked)}</em>` : ""}<span class="adds">${l.head ? `${esc(l.head)} ` : ""}${esc(l.adds.join("; "))}.</span></div>`).join("")}</div>
-${seriesP ? seriesSheetHtml(seriesP, levels) : `<p>${esc(quarterly ?? SERIES_PRICE_WORDS)}</p>`}
-<p>${hasTitle ? "Except with a Title partner, a few brands can partner on each club." : "A few brands can partner on each club."}</p>
+<p>${esc(SERIES_PRICE_WORDS)}</p>
+<p>A few brands can partner on each club.</p>
 <div class="two"><div class="yes">
 <h2>To say yes</h2>
-<ol><li>${seriesP ? "Reply with the level, and whether it's one evening, four or six." : "Reply with the level."}</li><li>We send a one-page agreement and an invoice; payment is due within 14 days.</li><li>Then we set the date with you and shape the guest list around your audience.</li></ol>
+<ol><li>Reply with the level.</li><li>We send a one-page agreement and an invoice; payment is due within 14 days.</li><li>Then we set the date with you and shape the guest list around your audience.</li></ol>
 </div><section class="box"><h2>About West Peek</h2><p>${esc(TLC_ABOUT_COMMUNITY)}</p></section></div>
-<footer><span><strong>${esc(TLC_OWNER.name)}</strong> · ${esc(TLC_OWNER.firm)} · <a href="mailto:${TLC_OWNER.email}">${TLC_OWNER.email}</a></span>${B ? `<p class="conf">${esc(confidentialFor(B))}</p>` : ""}</footer>`,
+<footer><span><strong>${esc(TLC_OWNER.name)}</strong> · ${esc(TLC_OWNER.firm)} · <a href="mailto:${TLC_OWNER.email}">${TLC_OWNER.email}</a></span></footer>`,
+  );
+}
+
+/** The evening, start to finish, in the order the session runs (no clock times: the date is still flexible). */
+export const RUN_OF_SHOW: readonly string[] = [
+  "Arrive and meet the room.",
+  "Learn: a short session from someone who does this for a living.",
+  "Build: an hour hands-on, with help at every table.",
+  "A real meal together.",
+  "Go deeper, then share what you made.",
+  "Close.",
+];
+
+/** What a guest builds with the brand, when the deal sets no lines of its own: the general line for its kind. */
+function buildLines(v: TlcClubView, s: TlcSponsorView): string[] {
+  if (s.build?.length) return [...s.build];
+  const B = s.brand;
+  const takeHome = brandSafe(v.takeHome);
+  return [
+    s.software ? `Every guest builds on ${B} in the hands-on hour${s.role ? `, with ${B} as the ${s.role}` : ""}, from a starter account set up in the room.` : `Every guest has ${B} in hand during the hands-on hour, where it fits the topic.`,
+    ...(s.newestProduct ? [`The build shows ${s.newestProduct}.`] : []),
+    ...(takeHome ? [`They leave with ${takeHome.charAt(0).toLowerCase()}${takeHome.slice(1)}`] : []),
+  ];
+}
+/** What we would ask of the brand beyond the fee, when the deal sets no lines of its own. Staffing is never required. */
+function askLines(s: TlcSponsorView): string[] {
+  if (s.asks?.length) return [...s.asks];
+  const B = s.brand;
+  return [
+    s.software ? `Guest access to ${B}'s paid features for the evening, so every guest builds with the full product.` : `Your product in guests' hands, where it fits the evening.`,
+    `A short brief on what you would most like guests to try or know.`,
+    "Staff are optional: we host every segment, and you send someone only if you want to.",
+  ];
+}
+
+/**
+ * THE PARTNER ONE-PAGER, MADE FOR ONE BRAND (owner, 16 Nov 2026, Notion: "this needs to be a re-worked 1 pager attached
+ * to an email and the email body needs to say here is a 1 pager that lays out a sample event we are planning"). The
+ * Pinecone partner-levels sheet (approved 4 and 6 Nov) remixed so it stands on its own for a reader who does not
+ * remember our first email: what The Learning Club is; the sample event (when, where, who, the run of show); what
+ * guests build with the brand; the levels, every price per event, and the series; what we would ask beyond the fee;
+ * the next step (no invoice or payment terms: those come with the agreement); the confidentiality line. No implied
+ * track record: everything is said as what it will be.
+ */
+function renderPartnerOnePager(v: TlcClubView, s: TlcSponsorView): string {
+  const B = s.brand;
+  const levels = brandLevels(s, v.topic);
+  const hasTitle = levels.some((l) => l.key === "TITLE");
+  // The title already names the topic: an angle that opens with it ("Build Your Own AI Agent: a hackathon-style…") starts after it.
+  const told = sentences(brandSafe(v.angle)).slice(0, 2).join(" ").replace(new RegExp(`^${v.topic.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*:\\s*`, "i"), "");
+  const hook = told ? `${told.charAt(0).toUpperCase()}${told.slice(1)}` : "";
+  const safety = safetyLines(v.topic, `${v.angle ?? ""} ${v.handsOn ?? ""} ${v.aiSegment ?? ""}`);
+  const seriesP = s.seriesPricing ?? null;
+  const quarterly = !seriesP && s.quarterly ? quarterlyWords(s.quarterly, B) : null;
+  const series = seriesP ? seriesLede(seriesP, B) : quarterly ?? (s.series ? `A series of six rooms, one a month for six months, with ${B} in every room. A single evening is the option.` : null);
+  const howMany = seriesP ? (seriesCounts(seriesP).length > 2 ? ", and whether it's one evening, four or six" : seriesCounts(seriesP).includes(6) ? ", and whether it's one evening or the series of six" : seriesCounts(seriesP).includes(4) ? ", and whether it's one evening or the four" : "") : "";
+  const list = (xs: readonly string[]) => `<ul>${xs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
+  return page(
+    `${v.topic}, with ${B}`,
+    `${mast("West Peek Rooms · The Learning Club")}
+<p class="eyebrow">A sample event we are planning</p>
+<h1>${esc(`${v.topic}, with ${B}`)}</h1>
+${hook ? `<p class="lede">${esc(hook)}</p>` : ""}
+<p class="when">${esc(monthWords(v.month))} (dates flexible) · New York City · ${BRAND_GUESTS_WORDS}</p>
+<div class="two"><section class="box"><h2>What The Learning Club is</h2><p>${esc(TLC_ABOUT_COMMUNITY)}</p></section><div>
+<h2>The evening</h2>
+<ol>${RUN_OF_SHOW.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>
+</div></div>
+<div class="two"><div>
+<h2>What guests will build with ${esc(B)}</h2>
+${list(buildLines(v, s))}
+</div><div>
+<h2>Who will be in the room</h2>
+<ul><li>Rooms of ${BRAND_ROOM_WORDS} New Yorkers per event, sized to your goals, who will choose this topic.</li>
+<li>Founders, operators, creatives and builders, curated from a community of ${BRAND_COMMUNITY_SHORT}.</li>
+<li>Taught by someone who does this for a living, with help at every table.</li>
+${v.aiSegment ? `<li>The AI segment: ${esc(brandSafe(v.aiSegment))}</li>` : ""}</ul>
+</div></div>
+${safety.length ? `<p class="note">${safety.map(esc).join(" ")}</p>` : ""}
+<h2>Partner levels, per event</h2>
+${series ? `<p class="lede">${esc(series)}</p>` : ""}
+<div class="tiers">${levels.map((l) => `<div class="tier" data-level="${l.key}"><b><span class="name">${esc(l.label)}</span><span class="dot"> · </span><span class="price">${esc(priceWords(l))}</span></b>${l.marked ? `<em class="mark">${esc(l.marked)}</em>` : ""}<span class="adds">${l.head ? `${esc(l.head)} ` : ""}${esc(l.adds.join("; "))}.</span></div>`).join("")}</div>
+${seriesP ? seriesSheetHtml(seriesP, levels) : `<p>${esc(quarterly ?? SERIES_PRICE_WORDS)}</p>`}
+<p>${hasTitle ? "Except with a Title partner, a few brands can partner on each club." : "A few brands can partner on each club."}</p>
+<div class="two"><div>
+<h2>What we'd ask of ${esc(B)}, beyond the fee</h2>
+${list(askLines(s))}
+</div><div class="yes">
+<h2>Next step</h2>
+<ol><li>${esc(`Reply with any questions, or with the level that fits${howMany}.`)}</li><li>Then we set the date with you and shape the guest list around your audience.</li></ol>
+</div></div>
+<footer><span><strong>${esc(TLC_OWNER.name)}</strong> · ${esc(TLC_OWNER.firm)} · <a href="mailto:${TLC_OWNER.email}">${TLC_OWNER.email}</a></span><p class="conf">${esc(confidentialFor(B))}</p></footer>`,
   );
 }
 

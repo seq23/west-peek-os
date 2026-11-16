@@ -231,6 +231,8 @@ export interface TlcDealRow {
   /** A partner-set offer (0297), per-brand series prices and the people on the thread (0298). */
   offer_json?: string | null;
   series_json?: string | null;
+  /** The brand's own lines on its one-pager: {build: [...], asks: [...]} (migration 0311). */
+  sheet_json?: string | null;
   people_json?: string | null;
   firm_scope: string;
 }

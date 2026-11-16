@@ -64,6 +64,12 @@ export function seriesOf(json: string | null | undefined): SeriesPricing | null 
   return { year: s.year, prices, quarterly: s.quarterly ?? null, monthly: s.monthly ?? null };
 }
 
+/** The evening counts a brand is offered: one evening, plus four when the quarterly series is set and six when the monthly one is. */
+export function seriesCounts(s: Pick<SeriesPricing, "quarterly" | "monthly">): SeriesCount[] {
+  if (!s.quarterly && !s.monthly) return [...SERIES_COUNTS];
+  return SERIES_COUNTS.filter((n) => n === 1 || (n === 4 && s.quarterly) || (n === 6 && s.monthly));
+}
+
 export const usd = (n: number): string => `$${Math.round(n).toLocaleString("en-US")}`;
 
 /** "$9,000 per event ($36,000; you save $4,000)": the per-event price, the total and the saving against one evening each. */
