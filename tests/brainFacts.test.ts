@@ -96,3 +96,12 @@ describe("an idea for later is noted, never also a hold", () => {
     expect(out.brief.holds.some((h) => /tracker rows/.test(h)), "his real hold stays").toBe(true);
   });
 });
+
+describe("a reader that lists no holds does not cost him his own", () => {
+  it("keeps the hold his typed email carries, and the brain's go-live hold collapses into it", async () => {
+    const written = "1. Move \"What we do\" above \"Who we work with.\"\n2. Remove the badge row.\n\nEverything below stays in the preview for me to check first; nothing goes live.";
+    const reader: Reader = { name: "WORKERS_AI", read: async () => ({ ok: true, detail: "ok", reader: "WORKERS_AI", text: "ASK: Move \"What we do\" above \"Who we work with.\"\nASK: Remove the badge row." }) };
+    const out = await understand(env, { subject: "site", written, read: [reader], employeeId: null, firmScope: "west-peek", standingHolds: ["Do not publish or go live with anything - I approve each step", "Do not build invoice or billing features yet"] });
+    expect(out.brief.holds).toEqual(["Everything below stays in the preview for me to check first; nothing goes live.", "Do not build invoice or billing features yet"]);
+  });
+});
