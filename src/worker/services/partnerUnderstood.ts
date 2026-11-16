@@ -122,7 +122,9 @@ const HOLD = /\b(?:preview (?:it )?first|nothing (?:goes )?live|not live|don'?t 
  */
 const QUESTION_SHAPED = /\?\s*["”]?$|\b(?:still open|(?:is|are) open|questioning|wonder(?:ing)?|not sure|unsure|let'?s (?:clarify|confirm|discuss|talk)|clarify|whether)\b/i;
 const CONSTRAINT = /\b(?:don'?t|do not|must(?:n'?t)?|never|not yet|nothing|no|not|only|until|without|stays?|separate|before (?:it|anything) goes live|preview (?:it )?first|hold off|wait for)\b/i;
-export const isQuestionShaped = (line: string): boolean => QUESTION_SHAPED.test(line.trim());
+/** A "?" inside a quotation is the quoted thing's ("Keep "How did you hear about us?""), not his question. */
+const unquoted = (line: string): string => line.replace(/"[^"]*"|“[^”]*”/g, "\"\"").trim();
+export const isQuestionShaped = (line: string): boolean => QUESTION_SHAPED.test(unquoted(line));
 export const isConstraint = (line: string): boolean => CONSTRAINT.test(line) && !isQuestionShaped(line);
 /**
  * NOTHING HE SAID IS DROPPED (Sequoia, 15 Nov 2026). Holds, questions and unclear items are kept whole; this bound is
@@ -138,7 +140,7 @@ export function questionsOf(words: string): string[] {
   return unwrapped(typed)
     .split(/\n+|(?<=[.!?])\s+(?=[A-Z0-9"“(])/)
     .map((s) => s.replace(/^[\s\-–—•*]+|\s+$/g, "").replace(/^\d+[.)]\s+/, "").replace(/\s+/g, " "))
-    .filter((s) => s.length > 8 && (isQuestionShaped(s) || CLARIFY_FIRST.test(s)) && !REMARK.test(s));
+    .filter((s) => s.length > 8 && (isQuestionShaped(s) || CLARIFY_FIRST.test(unquoted(s))) && !REMARK.test(s));
 }
 /** His own questions first, in his order; a reader's question is added only when no listed one contains it. Pure. */
 export function mergeQuestions(own: readonly string[], read: readonly string[]): string[] {
@@ -158,6 +160,28 @@ export function holdsOf(words: string): string[] {
 }
 
 const norm = (s: string): string => s.toLowerCase().replace(/[“”"'‘’`]/g, "").replace(/\s+/g, " ").trim().replace(/^[\s\-–—•*:.,;!?]+|[\s\-–—•*:.,;!?]+$/g, "");
+
+/*
+ * ONE HOLD, ONE LINE (15 Nov 2026). His brain's standing holds are added to the email's own, but a standing hold the
+ * email already says in its own words ("Nothing goes live until I see the preview" against the brain's "nothing goes
+ * live until he reviews the preview") was listed twice. Two holds are the same when they share the same key words: at
+ * least three content words in common, covering at least half of the shorter one's. The email's wording is kept.
+ */
+const HOLD_FILLER = new Set(["the", "and", "for", "with", "without", "until", "unless", "before", "after", "his", "her", "him", "she", "you", "your", "our", "any", "anything", "this", "that", "these", "those", "from", "into", "onto", "each", "every", "all", "are", "was", "were", "been", "being", "has", "have", "had", "will", "would", "should", "can", "could", "may", "must", "not", "don", "dont", "never", "yet", "just", "please", "also", "there", "here", "what", "who", "when", "where", "which", "about", "over", "under", "per"]);
+const stem = (w: string): string => w.replace(/(ing|ed|es|s)$/, (m) => (w.length - m.length >= 3 ? "" : m));
+export function holdKeyWords(s: string): Set<string> {
+  return new Set(norm(s).replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length >= 3 && !HOLD_FILLER.has(w)).map(stem));
+}
+export function sameHold(a: string, b: string): boolean {
+  if (norm(a) === norm(b)) return true;
+  const ka = holdKeyWords(a), kb = holdKeyWords(b);
+  const shared = [...ka].filter((w) => kb.has(w)).length;
+  return shared >= 3 && shared * 2 >= Math.min(ka.size, kb.size);
+}
+/** The email's holds in its own words, then each standing hold the email does not already say. */
+export function mergeHolds(emailHolds: readonly string[], standing: readonly string[]): string[] {
+  return [...emailHolds, ...standing.filter((h) => !emailHolds.some((e) => sameHold(e, h)))];
+}
 
 /** A line a mail client wrapped mid-sentence is joined back, so "Attached is" never stands alone. Pure. */
 function unwrapped(words: string): string {
@@ -231,7 +255,7 @@ export function structuredAsks(words: string): { asks: string[]; noted: string[]
       flush();
     } else {
       const flat = para.replace(/\s+/g, " ").trim();
-      if (CLARIFY_FIRST.test(flat)) questions.push(flat);
+      if (CLARIFY_FIRST.test(unquoted(flat))) questions.push(flat);
       else if (!REMARK.test(flat) && !isFragment(flat)) noted.push(flat);
     }
   }
@@ -316,7 +340,9 @@ export async function understand(
   }
   const runId = runIds[runIds.length - 1] ?? null;
   const emailHolds = parsed ? parsed.holds : holdsOf(written);
-  const holds = [...emailHolds, ...(input.standingHolds ?? []).filter((h) => !emailHolds.some((e) => norm(e) === norm(h)))];
+  // An idea for later ("… is an idea for later, not part of this round") is kept as noted, never also as a hold.
+  const notedLines = structured?.noted ?? [];
+  const holds = mergeHolds(emailHolds.filter((h) => !notedLines.some((n) => norm(n) === norm(h))), input.standingHolds ?? []);
   /*
    * HIS QUESTIONS ARE STEADY (15 Nov 2026): taken from his own sentences first, the same way every time (a "?", a
    * "let's clarify", "still open", "whether"), as his asks come from his numbering first. A reader only ADDS questions
@@ -533,7 +559,8 @@ export async function knownFor(
     const standingHolds = holdsLine
       .replace(/^\s*[-*•]\s+\**Standing holds[^:]*:\**\s*/i, "")
       .split(/\s+·\s+/)
-      .map((h) => h.replace(/\*\*/g, "").trim().replace(/[.;]$/, ""))
+      // His own quoted words are stored in quotes in the brain; the Got it quotes each hold itself, so they are unwrapped here.
+      .map((h) => h.replace(/\*\*/g, "").trim().replace(/[.;]$/, "").replace(/^["“]([^"“”]*)["”]$/, "$1"))
       .filter((h) => h.length > 8);
     return { text: [brain ? `FROM THE BRAIN:\n${brain}` : "", other].filter(Boolean).join("\n\n"), standingHolds };
   } catch {

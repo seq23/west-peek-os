@@ -109,6 +109,13 @@ export goes to the partner's Drive only. The full numbered list with code anchor
 validate:delivery-config`, `npm run validate:no-land-without-approval`, `npm run validate:duty-executor`,
 and `tests/openRepoDoor.test.ts`. Each pins the doors above; `scripts/validate/README.md` says what.
 
+## One round per change (15 Nov 2026)
+
+- **Practice on the branch before the PR:** `npm run practice -- inm_… [inm_…]` reads stored messages with THIS checkout's code (`wrangler dev` on 127.0.0.1, production D1/R2/KV/AI/brain over remote bindings) and prints the brief (asks, holds, questions, unclear, files) and the Got it.
+- It writes nothing but the dry run's own model-run bookkeeping (removed after) and sends nothing: one route, no email binding, no secret, no cron. The Cloudflare token comes from the vault on its own.
+- **Before every push:** the pre-push hook runs `npm run check:changed`: typecheck, the tests that import what changed, and the validators those paths can affect (`scripts/ci/check-changed.mjs` says which are scoped). Installed by `npm ci` (`prepare` sets `core.hooksPath`).
+- `git push --no-verify` is the human escape hatch only. CI still runs the full suite.
+
 ## When Porter builds in this repo (13 Nov 2026)
 
 West Peek OS is one of the repos Porter may build in (migration 0303): an internal dashboard or screen a partner asks for by email is a change here. The same gates as every repo hold: his own worktree, a PR, CI green, the partner's word on the preview, `~/bin/land` to merge and deploy, migrations additive only, no secret in the repo, and no change to live card records.

@@ -7,6 +7,8 @@
   "scripts": {
     "backup:local": "node scripts/backup/backup.mjs",
     "build": "vite build && node scripts/build/stamp-sw-cache.mjs",
+    "check:changed": "node scripts/ci/check-changed.mjs",
+    "practice": "node scripts/practice/practice.mjs",
     "deploy:production": "node scripts/deploy/production.mjs",
     "dev": "npm run build && wrangler dev",
     "e2e": "node scripts/e2e/prepare-local.mjs && CI=true npx wrangler d1 migrations apply WP_OS_DB --local && node scripts/e2e/prepare-local.mjs --verify-only && playwright test",
@@ -98,7 +100,8 @@
     "validate:effect-refetch": "node scripts/validate/an-effect-cannot-refetch-itself.mjs && node scripts/validate/an-effect-cannot-refetch-itself.mjs --self-test",
     "validate:one-employee-one-address": "node scripts/validate/one-employee-one-address.mjs && node scripts/validate/one-employee-one-address.mjs --self-test",
     "validate:card-kinds": "node scripts/validate/a-kind-has-one-registry.mjs && node scripts/validate/a-kind-has-one-registry.mjs --self-test",
-    "validate:every-door-keeps-the-message": "node scripts/validate/every-door-keeps-the-message.mjs && node scripts/validate/every-door-keeps-the-message.mjs --self-test"
+    "validate:every-door-keeps-the-message": "node scripts/validate/every-door-keeps-the-message.mjs && node scripts/validate/every-door-keeps-the-message.mjs --self-test",
+    "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true"
   },
   "dependencies": {
     "@cloudflare/puppeteer": "^1.3.0",
