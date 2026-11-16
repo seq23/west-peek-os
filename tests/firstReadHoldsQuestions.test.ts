@@ -20,7 +20,7 @@ describe("a standing hold the email already says is listed once, in the email's 
   it("keeps a standing hold that only shares a word or two with the email's", () => {
     expect(sameHold("Do not email the client list", "no passwords or secret keys over email, in either direction")).toBe(false);
     expect(sameHold("Keep the Top Barz rows out of the pipeline", "Do not build invoice or billing features yet")).toBe(false);
-    expect(mergeHolds([], standing)).toEqual(standing);
+    expect(mergeHolds([], standing), "every standing hold stays, the second go-live wording collapsing into the first").toEqual([standing[0], standing[1]]);
   });
 });
 
