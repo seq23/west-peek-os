@@ -192,10 +192,10 @@ export function mergeHolds(emailHolds: readonly string[], standing: readonly str
   for (const h of standing) if (!kept.some((k) => sameHold(k, h) || sameConcept(k, h))) kept.push(h);
   return kept;
 }
-/** His words, quoted once: curly quotes outside, any quotes inside his words turned to single ones (never ""x""). */
+/** His words, quoted once: plain quotes outside, any quotes inside his words turned to single ones (never ""x""). */
 export function quoteHis(s: string): string {
   const inner = s.trim().replace(/^["“]|["”]$/g, "").replace(/"([^"]*)"/g, "‘$1’").replace(/“([^”]*)”/g, "‘$1’");
-  return `“${inner}”`;
+  return `"${inner}"`;
 }
 /*
  * IN HIS VOICE, OR NOT AT ALL (15 Nov 2026). A hold shown back to him in a Got it is his own words, quoted, or the

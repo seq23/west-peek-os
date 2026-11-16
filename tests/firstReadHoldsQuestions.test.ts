@@ -39,12 +39,12 @@ describe("the holds he reads back are in his voice, once each", () => {
     expect(shown).toContain("Money figures are for you only");
     expect(shown).toContain("Nothing goes live until you review the preview");
     expect(shown).toContain("Your Blueprint is never copied or forwarded");
-    expect(shown).toContain("“Do not build invoice or billing features yet”");
+    expect(shown).toContain("\"Do not build invoice or billing features yet\"");
     expect(shown.some((h) => /13 Nov|9 Oct/.test(h)), "the brain's dates are bookkeeping").toBe(false);
   });
   it("quotes his words once, even when they hold quotes of their own", () => {
-    expect(quoteHis("Rename \"Who is buying\" to \"Organization type.\"")).toBe("“Rename ‘Who is buying’ to ‘Organization type.’”");
-    expect(quoteHis("\"Do not build invoice or billing features yet\"")).toBe("“Do not build invoice or billing features yet”");
+    expect(quoteHis("Rename \"Who is buying\" to \"Organization type.\"")).toBe("\"Rename ‘Who is buying’ to ‘Organization type.’\"");
+    expect(quoteHis("\"Do not build invoice or billing features yet\"")).toBe("\"Do not build invoice or billing features yet\"");
   });
   it("says 'nothing goes live' once, keeping the email's wording over the brain's", () => {
     const fromBrain = mergeHolds([], brain);
