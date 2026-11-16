@@ -29,7 +29,7 @@ import type { TlcDealRow, TlcEventRow } from "./learningClub";
 import { freeSlots, isFree, pickedSlot, proposedTime, slotWords } from "../../shared/tlc/callSlots";
 import { isYesToSamples, requestsSamples, samplesCoverEmail } from "../../shared/tlc/samples";
 import { fillTemplate, greetingFor, hiLine, levelPicked, proposalLevelLines } from "../../shared/tlc/brandFlow";
-import { brandLevels, sponsorOf, type TlcSponsorView } from "../../shared/tlc/pitch";
+import { brandLevels, CANT_COMMIT, sponsorOf, type TlcSponsorView } from "../../shared/tlc/pitch";
 import { herBusy, makeEvent as defaultMakeEvent, callEvent, type BusyReader, type EventMaker } from "./tlcCalls";
 import { SamplesPdfError, buildSamples, finalizeSamplesPdf, reviseSamples, samplesForDeal, samplesPreviewLink, samplesRevisions, tlcRevisionWriter, storePdf, storedAttachment, textPage, type SamplesDeps, type StoredFile } from "./tlcSamples";
 
@@ -749,6 +749,13 @@ export const OWN_THE_ROOM = /\btitle (?:partner|sponsor)\b|\bown(?:ing)? the (?:
 /** The sponsor view of a deal: its own row, Wynn's rules, and whether this message asks to own the room. */
 export async function sponsorFor(env: Env, deal: TlcDealRow, theirWords = ""): Promise<TlcSponsorView> {
   const base = sponsorOf(deal, await wynnRules(env, deal.firm_scope));
+  // A reply saying they can't commit yet sets the deal's flag, so every later sheet for it leaves out the payment step.
+  if (!base.cantCommitYet && CANT_COMMIT.test(theirWords)) {
+    let sheet: Record<string, unknown> = {};
+    try { const v = JSON.parse(deal.sheet_json ?? "null"); if (v && typeof v === "object" && !Array.isArray(v)) sheet = v; } catch { sheet = {}; }
+    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET sheet_json = ?1 WHERE id = ?2").bind(JSON.stringify({ ...sheet, cantCommitYet: true }), deal.id).run();
+    base.cantCommitYet = true;
+  }
   return OWN_THE_ROOM.test(theirWords) ? { ...base, askedToOwnRoom: true } : base;
 }
 const brandLevelsFor = (s: TlcSponsorView, topic: string) => brandLevels(s, topic);

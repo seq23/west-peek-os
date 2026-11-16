@@ -257,13 +257,21 @@ export interface TlcSponsorView {
    */
   build?: readonly string[] | null;
   asks?: readonly string[] | null;
+  /**
+   * THE BRAND SAID IT CAN'T COMMIT YET (16 Nov 2026, Notion's Kyle: "I can't commit to sponsorship or staffing at this
+   * stage"). Only then does the one-pager leave out the "to say yes … payment due within 14 days" step; every other
+   * brand keeps it (owner, 4 Nov 2026: the sheet "ends with how to say yes"). Set per deal from the brand's own reply.
+   */
+  cantCommitYet?: boolean;
 }
+/** A brand's own words saying it cannot commit yet ("I can't commit to sponsorship at this stage"). */
+export const CANT_COMMIT = /\b(?:can[’']?t|cannot|can not|unable to|not able to|not (?:yet )?in a position to|won[’']?t be able to)\s+(?:yet\s+)?commit\b/i;
 /** A deal's one-pager lines, read safely: anything malformed is no lines at all. PURE. */
-export function sheetLinesOf(json: string | null | undefined): { build: string[] | null; asks: string[] | null } {
+export function sheetLinesOf(json: string | null | undefined): { build: string[] | null; asks: string[] | null; cantCommitYet?: boolean } {
   const list = (v: unknown): string[] | null => (Array.isArray(v) && v.length && v.every((x) => typeof x === "string" && x.trim()) ? v.map((x: string) => x.trim()) : null);
   try {
     const v = JSON.parse(json ?? "null") as Record<string, unknown> | null;
-    return v && typeof v === "object" ? { build: list(v.build), asks: list(v.asks) } : { build: null, asks: null };
+    return v && typeof v === "object" ? { build: list(v.build), asks: list(v.asks), ...(v.cantCommitYet === true ? { cantCommitYet: true } : {}) } : { build: null, asks: null };
   } catch { return { build: null, asks: null }; }
 }
 export interface QuarterlyOffer { year: number; events: number; perEventUsd: number; totalUsd: number }
@@ -486,7 +494,8 @@ function askLines(s: TlcSponsorView): string[] {
  * Pinecone partner-levels sheet (approved 4 and 6 Nov) remixed so it stands on its own for a reader who does not
  * remember our first email: what The Learning Club is; the sample event (when, where, who, the run of show); what
  * guests build with the brand; the levels, every price per event, and the series; what we would ask beyond the fee;
- * the next step (no invoice or payment terms: those come with the agreement); the confidentiality line. No implied
+ * how to say yes (the level, then a one-page agreement and an invoice, payment due within 14 days: her 4 Nov ruling),
+ * or, only for a brand that said it can't commit yet, a next step with no payment terms; the confidentiality line. No implied
  * track record: everything is said as what it will be.
  */
 function renderPartnerOnePager(v: TlcClubView, s: TlcSponsorView): string {
@@ -533,8 +542,11 @@ ${seriesP ? seriesSheetHtml(seriesP, levels) : `<p>${esc(quarterly ?? SERIES_PRI
 <h2>What we'd ask of ${esc(B)}, beyond the fee</h2>
 ${list(askLines(s))}
 </div><div class="yes">
-<h2>Next step</h2>
-<ol><li>${esc(`Reply with any questions, or with the level that fits${howMany}.`)}</li><li>Then we set the date with you and shape the guest list around your audience.</li></ol>
+${s.cantCommitYet
+    ? `<h2>Next step</h2>
+<ol><li>${esc(`Reply with any questions, or with the level that fits${howMany}.`)}</li><li>Then we set the date with you and shape the guest list around your audience.</li></ol>`
+    : `<h2>To say yes</h2>
+<ol><li>${esc(`Reply with the level that fits${howMany}.`)}</li><li>We send a one-page agreement and an invoice; payment is due within 14 days.</li><li>Then we set the date with you and shape the guest list around your audience.</li></ol>`}
 </div></div>
 <footer><span><strong>${esc(TLC_OWNER.name)}</strong> · ${esc(TLC_OWNER.firm)} · <a href="mailto:${TLC_OWNER.email}">${TLC_OWNER.email}</a></span><p class="conf">${esc(confidentialFor(B))}</p></footer>`,
   );
