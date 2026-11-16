@@ -386,7 +386,9 @@ export async function understand(
   const emailHolds = parsed ? mergeQuestions(ownHolds, parsed.holds) : holdsOf(written);
   // An idea for later ("… is an idea for later, not part of this round") is kept as noted, never also as a hold.
   const notedLines = structured?.noted ?? [];
-  const holds = mergeHolds(emailHolds.filter((h) => !notedLines.some((n) => norm(n) === norm(h))), input.standingHolds ?? []);
+  // Only an idea is dropped: a noted line that is a real hold ("… nothing goes live.") stays a hold.
+  const LATER = /\b(?:ideas? for later|for later|not (?:part of )?this round|parking lot|someday)\b/i;
+  const holds = mergeHolds(emailHolds.filter((h) => !(LATER.test(h) && notedLines.some((n) => norm(n) === norm(h)))), input.standingHolds ?? []);
   /*
    * HIS QUESTIONS ARE STEADY (15 Nov 2026): taken from his own sentences first, the same way every time (a "?", a
    * "let's clarify", "still open", "whether"), as his asks come from his numbering first. A reader only ADDS questions
