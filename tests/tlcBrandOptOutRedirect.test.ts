@@ -99,17 +99,20 @@ describe("a reply that points us to another address is a redirect", () => {
 });
 
 describe("a reply through a helpdesk that quotes our email without \"On … wrote:\"", () => {
-  it("is read on their words only: our own P.S. is never their no", async () => {
+  it("is read on their words only: never an auto-reply, and our own P.S. is never their no", async () => {
     await deal("tld_desk", "tlc_2027-03", "Deskapp", "startup-partners@deskapp.example");
     const ours = "Hi,\n\nIn March 2027 we are hosting The Learning Club in New York.\n\nWould you be open to exploring a partnership?\n\nSequoia Taylor\nWest Peek Ventures\n\nP.S. If this isn't a fit, just let me know and I won't follow up.";
     await env.WP_OS_DB.prepare("INSERT INTO tlc_drip_message (id, deal_id, step, subject, body, state, sent_at) VALUES ('tdm_desk', 'tld_desk', 0, 'Deskapp + a small room in New York', ?1, 'SENT', '2026-11-10T00:24:00.000Z')").bind(ours).run();
-    const ticket = `##- Please type your reply above this line -##\n\nKyle (Deskapp for Startups)\n\nNov 16, 2026, 09:41 PST\n\nHi Sequoia,\n\nCould you send a short overview of what you'd want from us as a founding partner, including any sponsorship fee? Happy to review the details here by email!\n\nSequoia Taylor\n\nNov 10, 2026, 00:24 UTC\n\n${ours}\n\nThis email is a service from Deskapp.`;
+    // Notion's real layout (16 Nov): the desk's template line, dashed rules, "Name, date" comment blocks, machine headers.
+    const rule = "----------------------------------------------";
+    const ticket = `From: Deskapp for Startups <startup-partners@deskapp.example>\r\nAuto-Submitted: auto-generated\r\nSubject: [Deskapp] Re: Deskapp + a small room in New York\r\n\r\nWe’ve responded to your message (5517441). If you need further assistance, please reply to this email.\n${rule}\n\nKyle, Nov 16, 2026, 09:41 PST\n\nHi Sequoia,\n\nCould you send a short overview of what you'd want from us as a founding partner, including any sponsorship fee? Happy to review the details here by email!\n\n-\nKyle,\nDeskapp for Startups\n\n${rule}\n\nSequoia Taylor, Nov 9, 2026, 16:24 PST\n\n${ours}`;
 
     await arrive("Deskapp for Startups <startup-partners@deskapp.example>", "[Deskapp] Re: Deskapp + a small room in New York", ticket, "desk-1");
 
     expect((await row("tld_desk"))?.stage).not.toBe("DECLINED");
     const reply = await env.WP_OS_DB.prepare("SELECT intent, their_text FROM tlc_brand_reply WHERE deal_id = 'tld_desk'").first<{ intent: string; their_text: string }>();
-    expect(reply?.intent).not.toBe("NO");
+    expect(reply?.intent).not.toMatch(/^(?:NO|AUTO_REPLY)$/);
+    expect((await row("tld_desk"))?.next_send_at).toBeNull();
     expect(reply?.their_text).toMatch(/sponsorship fee/);
     expect(reply?.their_text).not.toMatch(/isn't a fit/);
   });

@@ -144,15 +144,36 @@ export function redirectAddressIn(text: string, brandDomain: string, notThese: r
   return null;
 }
 
-export function classifyBrandReply(input: { subject: string; text: string; raw?: string; brandDomain?: string; notThese?: readonly string[] }, now: Date): BrandReplyClass {
-  const words = theirNewText(input.text);
+/*
+ * A HELPDESK TICKET UPDATE CARRIES A PERSON'S WORDS (16 Nov 2026: Kyle at Notion for Startups answered through Zendesk,
+ * "We've responded to your message (5517441) … ---- Kyle, Nov 16, 2026, 09:41 PST · Hi Sequoia, could you send …", and
+ * the desk's template line and machine headers made it read as an auto-reply: the drip resumed and her answer was
+ * never drafted). The layout is comment blocks between dashed rules, each opened by "Name, Mon D, YYYY, HH:MM". The
+ * newest block is the person's message; it is read as a human reply, never as an autoresponder.
+ */
+const DESK_RULE = /^\s*-{10,}\s*$/;
+const DESK_HEADER = /^\s*[^,\n]{1,80}, [A-Z][a-z]{2,8} \d{1,2}, \d{4},? \d{1,2}:\d{2}(?:\s*[AP]M)?(?:\s+[A-Z]{2,5}|\s+GMT[+-]?\d*)?\s*$/;
+export function helpdeskComment(text: string): string | null {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const start = lines.findIndex((l, i) => DESK_HEADER.test(l) && lines.slice(0, i).some((x) => DESK_RULE.test(x)));
+  if (start < 0) return null;
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((l) => DESK_RULE.test(l));
+  const body = (end < 0 ? rest : rest.slice(0, end)).join("\n").trim();
+  return body || null;
+}
+
+export function classifyBrandReply(input: { subject: string; text: string; raw?: string; brandDomain?: string; notThese?: readonly string[]; helpdesk?: boolean }, now: Date): BrandReplyClass {
+  const comment = helpdeskComment(input.text);
+  const desk = Boolean(comment) || input.helpdesk === true;
+  const words = comment ?? theirNewText(input.text);
   const said = { no: replyLooksLikeNo(input.subject) || replyLooksLikeNo(words), stop: replyAsksToStop(input.subject) || replyAsksToStop(words) };
   // A redirect counts even from a support desk's assistant; an out-of-office's "for urgent matters" address does not.
   if (input.brandDomain && !said.no && !said.stop && !AUTO_SUBJECT.test(input.subject) && !AUTO_BODY.test(words)) {
     const to = redirectAddressIn(words, input.brandDomain, input.notThese);
     if (to) return { kind: "REDIRECT", to };
   }
-  if (AUTO_SUBJECT.test(input.subject) || AUTO_BODY.test(words) || looksLikeAutoAck(`${input.subject}\n${words}`) || machineSentHeaders(input.raw)) {
+  if (AUTO_SUBJECT.test(input.subject) || AUTO_BODY.test(words) || (!desk && (looksLikeAutoAck(`${input.subject}\n${words}`) || machineSentHeaders(input.raw)))) {
     const back = returnDateIn(words, now);
     // Resume the day after they are back; with no date in the message, a week from now.
     const resume = back ? new Date(back.getTime() + 86_400_000) : new Date(now.getTime() + 7 * 86_400_000);

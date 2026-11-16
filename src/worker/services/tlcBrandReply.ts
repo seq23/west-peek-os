@@ -15,7 +15,7 @@ import { newTextOf } from "../../shared/events/packetDecisionToken";
 import { isEmptyReply, parseDraftReply } from "../../shared/tlc/draftReply";
 import {
   BRAND_MUST_STAFF, BRAND_REPLY_ASK, BRAND_REPLY_REF_RE, CALL_ASK, WE_HOST, MONEY_WORDS, THREE_THINGS_OFFER, WHO_WE_ARE, classifyBrandReply, fallbackReplyBody, herNoteOf, replyAllRecipients, noMoneyNow, readResearch, reportText,
-  stageAfterReply, standingRulesIn, theirNewText, tierLines, wantsResearch,
+  helpdeskComment, stageAfterReply, standingRulesIn, theirNewText, tierLines, wantsResearch,
   type BrandReplyIntent, type ReplyDraftInput, type WynnRule,
 } from "../../shared/tlc/brandReply";
 import { renderWynnDraftEmail, draftEmailProblems, unansweredNotes, type ChangeLine } from "../../shared/tlc/wynnDraftEmail";
@@ -477,10 +477,12 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
   const now = deps.now ?? new Date();
   const mid = normalizeMid(msg.messageId) || `nomid:${msg.receivedAt}`;
   if (await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_brand_reply WHERE deal_id = ?1 AND brand_message_id = ?2").bind(deal.id, mid).first()) return "SEEN";
-  const words = await withoutOurOwnLines(env, deal.id, theirNewText(textBodyOf(msg.text)) || msg.text.trim());
+  const msgBody = textBodyOf(msg.text);
+  const deskWords = helpdeskComment(msgBody);
+  const words = await withoutOurOwnLines(env, deal.id, deskWords ?? (theirNewText(msgBody) || msg.text.trim()));
   const sender = (addressIn(msg.from ?? "") ?? msg.from ?? "").trim().toLowerCase();
   const { brandDomainOf } = await import("./tlcVolume");
-  const cls = classifyBrandReply({ subject: msg.subject, text: words, raw: msg.text, brandDomain: brandDomainOf(deal.contact_email), notThese: [deal.contact_email, sender] }, now);
+  const cls = classifyBrandReply({ subject: msg.subject, text: words, raw: msg.text, brandDomain: brandDomainOf(deal.contact_email), notThese: [deal.contact_email, sender], helpdesk: deskWords !== null }, now);
   const close = (intent: string, note: string) => env.WP_OS_DB.prepare(
     "INSERT OR IGNORE INTO tlc_brand_reply (id, deal_id, brand_message_id, their_subject, their_text, received_at, intent, draft_subject, draft_body, state, held_reason, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '', '', 'CLOSED', ?8, ?9)",
   ).bind(`tbr_${crypto.randomUUID()}`, deal.id, mid, msg.subject.slice(0, 300), words.slice(0, 8000), msg.receivedAt, intent, note, deal.firm_scope).run();
