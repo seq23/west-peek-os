@@ -179,8 +179,46 @@ export function sameHold(a: string, b: string): boolean {
   return shared >= 3 && shared * 2 >= Math.min(ka.size, kb.size);
 }
 /** The email's holds in its own words, then each standing hold the email does not already say. */
+/*
+ * ONE "NOTHING GOES LIVE" (15 Nov 2026). The brain says it twice in different words ("Do not publish or go live with
+ * anything - I approve each step" and "nothing goes live until he reviews the preview"), sharing one key word, and the
+ * email often says it a third way. A standing hold that is a general go-live hold is dropped when a hold already kept
+ * (the email's first, then the brain's in order) is one too. Only standing holds are ever dropped; his email's stay.
+ */
+const GO_LIVE = /\b(?:nothing (?:goes|is going|will go|can go) live|(?:do not|don'?t|never) (?:publish|go live|push live)|not live|before (?:it|anything) goes live)\b/i;
+const sameConcept = (a: string, b: string): boolean => GO_LIVE.test(a) && GO_LIVE.test(b);
 export function mergeHolds(emailHolds: readonly string[], standing: readonly string[]): string[] {
-  return [...emailHolds, ...standing.filter((h) => !emailHolds.some((e) => sameHold(e, h)))];
+  const kept = [...emailHolds];
+  for (const h of standing) if (!kept.some((k) => sameHold(k, h) || sameConcept(k, h))) kept.push(h);
+  return kept;
+}
+/** His words, quoted once: curly quotes outside, any quotes inside his words turned to single ones (never ""x""). */
+export function quoteHis(s: string): string {
+  const inner = s.trim().replace(/^["“]|["”]$/g, "").replace(/"([^"]*)"/g, "‘$1’").replace(/“([^”]*)”/g, "‘$1’");
+  return `“${inner}”`;
+}
+/*
+ * IN HIS VOICE, OR NOT AT ALL (15 Nov 2026). A hold shown back to him in a Got it is his own words, quoted, or the
+ * brain's note about him turned to "you" ("money figures are for him only" → "Money figures are for you only"), with
+ * the brain's bookkeeping ("(13 Nov)", "(every build since 9 Oct)") cut. A note that cannot be turned cleanly (a "her"
+ * that may be "you" or "your") is left out of his email; the employee still has it on the brief.
+ */
+const BRAIN_DATE = /\s*\([^()]*\b(?:\d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)|since)\b[^()]*\)/gi;
+const THIRD = /\b(?:he|him|his|she|her|hers)\b/i;
+/** "he reviews" → "you review", "he goes" → "you go", "he approves" → "you approve". */
+const IRREGULAR: Record<string, string> = { is: "are", has: "have", was: "were", does: "do", goes: "go" };
+const youVerb = (verb: string): string => IRREGULAR[verb.toLowerCase()] ?? (/(?:ss|sh|ch|x|z|o)es$/i.test(verb) ? verb.slice(0, -2) : /ies$/i.test(verb) ? `${verb.slice(0, -3)}y` : /[^s]s$/i.test(verb) ? verb.slice(0, -1) : verb);
+export function holdForHim(h: string): string | null {
+  const t = h.replace(BRAIN_DATE, "").trim();
+  if (!THIRD.test(t)) return quoteHis(t);
+  if (/\b(?:her|hers)\b/i.test(t)) return null;
+  const you = t
+    .replace(/\b(?:he|she)\s+(\w+)/gi, (_m, verb: string) => `you ${youVerb(verb)}`)
+    .replace(/\bhim\b/gi, "you")
+    .replace(/\bhis\b/gi, "your");
+  // Brain notes may quote his words inside ("thinking out loud"): single quotes, so nothing reads as doubled.
+  const tidy = you.replace(/"([^"]*)"/g, "‘$1’");
+  return tidy.charAt(0).toUpperCase() + tidy.slice(1);
 }
 
 /** A line a mail client wrapped mid-sentence is joined back, so "Attached is" never stands alone. Pure. */
@@ -808,9 +846,10 @@ export function gotItEmail(input: { employee: string; subject: string; asks: rea
     ...zips.map((z) => { const n = inside(z).length; return n ? `${z} (${n} file${n === 1 ? "" : "s"} inside)` : z; }),
   ];
   const quoted = (a: string) => {
-    for (const lead of [QUESTIONS_LEAD, QUESTIONS_PLAIN]) if (a.startsWith(lead)) return `${lead}"${a.slice(lead.length)}"`;
-    return `"${a}"`;
+    for (const lead of [QUESTIONS_LEAD, QUESTIONS_PLAIN]) if (a.startsWith(lead)) return `${lead}${quoteHis(a.slice(lead.length))}`;
+    return quoteHis(a);
   };
+  const heldForHim = holds.map(holdForHim).filter((h): h is string => h !== null);
   const sections = [
     { label: "What you asked", bullets: asks.map(quoted) },
     // Every file of his now on the card, by name (a ZIP's files each named), so he can see nothing was lost.
@@ -818,9 +857,9 @@ export function gotItEmail(input: { employee: string; subject: string; asks: rea
     // Read first, then answered: every file of his that could not be opened is named, never skipped in silence.
     ...(unopened.length ? [{ label: "What I could not open", bullets: unopened.map((f) => `${f.filename}: ${f.reason}`) }] : []),
     // What he said that is not an ask (an idea for later, a process note) is shown as kept, never dropped.
-    ...(noted.length ? [{ label: "Also noted", bullets: noted.map((n) => `"${n}"`) }] : []),
+    ...(noted.length ? [{ label: "Also noted", bullets: noted.map(quoteHis) }] : []),
     // His holds, in his words, so he can see they were heard before anything is built.
-    ...(holds.length ? [{ label: "What I'll hold to", bullets: holds.map((h) => `"${h}"`) }] : []),
+    ...(heldForHim.length ? [{ label: "What I'll hold to", bullets: heldForHim }] : []),
     { label: "What happens next", bullets: [next, "Reply to this email to change anything; I read it before I go on."] },
   ];
   // The renderer shows SECTION_MAX_LINES - 1 lines of a longer section and points at "Details below": the rest of every
