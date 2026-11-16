@@ -1014,7 +1014,7 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
     const firstSent = (await env.WP_OS_DB.prepare("SELECT MIN(sent_at) AS at FROM tlc_drip_message WHERE state = 'SENT'").first<{ at: string | null }>())?.at ?? null;
     const sentToday = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_drip_message WHERE state = 'SENT' AND substr(sent_at, 1, 10) = ?1").bind(now.toISOString().slice(0, 10)).first<{ n: number }>())?.n ?? 0;
     let sendRoom = Math.max(0, warmupDailyCap(firstSent, now) - sentToday);
-    const { dripAddressCheck, outreachStopped, refuseAddress } = await import("./tlcVolume");
+    const { brandStopped, dripAddressCheck, outreachStopped, refuseAddress, stopBrandEverywhere } = await import("./tlcVolume");
     // The nearest club's approved emails go first, so the day's allowance is spent where the date is closest.
     for (const m of approved) {
       if (sendRoom <= 0) { result.waitingForAllowance += 1; continue; }
@@ -1026,6 +1026,13 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
       }
       if (!deal || deal.stop_reason) {
         await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'HELD', held_reason = 'the brand answered or was stopped before it went' WHERE id = ?1").bind(m.id).run();
+        continue;
+      }
+      // ANYONE AT THIS BRAND ASKED US TO STOP OR SAID NO, for any club: nothing more goes to it (owner, 16 Nov 2026).
+      const brandGone = await brandStopped(env, deal.brand, deal.contact_email);
+      if (brandGone) {
+        await stopBrandEverywhere(env, { brand: deal.brand, emails: [deal.contact_email], reason: brandGone, now });
+        await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'HELD', held_reason = 'the brand asked us to stop or said no: never emailed again' WHERE id = ?1").bind(m.id).run();
         continue;
       }
       // DAY 14, THEN NEVER AGAIN: an approved follow-up that could not go before the sequence's window closed never goes.
@@ -1111,6 +1118,13 @@ export async function runDrip(env: Env, now: Date, firmScope = "west-peek", repl
       await env.WP_OS_DB.prepare("UPDATE tlc_deal SET next_send_at = NULL, updated_at = ?2 WHERE id = ?1").bind(deal.id, now.toISOString()).run();
       result.held += 1;
       result.sequenceEnded = [...(result.sequenceEnded ?? []), brandDisplayName(deal.brand)];
+      continue;
+    }
+    // A brand that asked us to stop or said no, from any address and for any club, is never drafted to again.
+    const brandGone = await volume.brandStopped(env, deal.brand, deal.contact_email);
+    if (brandGone) {
+      await volume.stopBrandEverywhere(env, { brand: deal.brand, emails: [deal.contact_email], reason: brandGone, now });
+      waiting.add(deal.id);
       continue;
     }
     const ev = await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>();
@@ -1310,6 +1324,11 @@ export async function recordBrandMail(env: Env, input: { from: string; subject: 
     await pauseForSpamComplaint(env, { brands: deals.map((d) => d.brand), subject: input.subject, now: new Date(now), firmScope: deals[0]!.firm_scope });
   }
   const stored = kind === "COMPLAINED" ? "UNSUBSCRIBED" : kind;
+  // An unsubscribe (or a spam complaint) from any address stops the whole brand, in every club (owner, 16 Nov 2026).
+  if (stored === "UNSUBSCRIBED") {
+    const { stopBrandEverywhere } = await import("./tlcVolume");
+    for (const d of deals) await stopBrandEverywhere(env, { brand: d.brand, emails: [d.contact_email, address], reason: "UNSUBSCRIBED", now: new Date(now) });
+  }
   for (const d of deals) {
     await env.WP_OS_DB.prepare(
       "UPDATE tlc_deal SET stop_reason = ?2, replied_at = CASE WHEN ?2 = 'REPLIED' THEN ?3 ELSE replied_at END, next_send_at = NULL, stage = CASE WHEN ?2 = 'UNSUBSCRIBED' THEN 'STOPPED' ELSE stage END, updated_at = ?3 WHERE id = ?1",
@@ -1328,7 +1347,7 @@ export async function recordBrandMail(env: Env, input: { from: string; subject: 
     const { takeBrandReply } = await import("./tlcBrandReply");
     for (const d of deals) {
       const fresh = (await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = ?1").bind(d.id).first<TlcDealRow>())!;
-      await takeBrandReply(env, fresh, { messageId: input.messageId ?? "", subject: input.subject, text: input.text, receivedAt: now }, { now: new Date(now) });
+      await takeBrandReply(env, fresh, { messageId: input.messageId ?? "", subject: input.subject, text: input.text, receivedAt: now, from: input.from }, { now: new Date(now) });
     }
   }
   await appendEvent(env, { eventType: "tlc.brand_mail", actorType: "system", actorId: "inbound_email", objectType: "tlc_deal", objectId: deals[0]!.id, payload: { kind, deals: deals.length } });
@@ -1363,8 +1382,8 @@ export async function recordBrandReplyText(env: Env, input: { from: string; subj
   let stop: string | null = null;
   const drafted = new Set<string>();
   for (const d of deals) {
-    const out = await takeBrandReply(env, d, { messageId: input.messageId ?? "", subject: input.subject, text: input.text, receivedAt: now.toISOString() }, { now });
-    stop = out === "NO" ? "DECLINED" : out === "AUTO_REPLY" ? "AUTO_REPLY" : "REPLIED";
+    const out = await takeBrandReply(env, d, { messageId: input.messageId ?? "", subject: input.subject, text: input.text, receivedAt: now.toISOString(), from: input.from }, { now });
+    stop = out === "NO" ? ((await env.WP_OS_DB.prepare("SELECT stop_reason FROM tlc_deal WHERE id = ?1").bind(d.id).first<{ stop_reason: string | null }>())?.stop_reason ?? "DECLINED") : out === "AUTO_REPLY" ? "AUTO_REPLY" : "REPLIED";
     if (out === "DRAFTED") drafted.add(d.firm_scope);
   }
   // Her approval email goes AT ONCE (owner, 26 Oct 2026: "Why 4pm?"); a failure here is retried by the next drip pass.

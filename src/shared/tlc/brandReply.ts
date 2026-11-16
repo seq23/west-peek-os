@@ -15,7 +15,8 @@ export const BRAND_REPLY_ASK = "Reply approved to send, or reply with changes";
 export type BrandReplyIntent = "QUESTION" | "CALL" | "YES";
 export type BrandReplyClass =
   | { kind: "AUTO_REPLY"; resumeAt: string }
-  | { kind: "NO" }
+  | { kind: "NO"; unsubscribe?: true }
+  | { kind: "REDIRECT"; to: string }
   | { kind: "NO_REPLY_NEEDED"; why: NoReplyWhy }
   | { kind: "REPLY"; intent: BrandReplyIntent };
 /** Why a real reply needs no answer from us: they passed it on, they are reviewing, or they asked for nothing. */
@@ -112,15 +113,53 @@ export function machineSentHeaders(raw: string | undefined): boolean {
   return /^from:/im.test(head) && AUTO_HEADERS.test(head);
 }
 
-export function classifyBrandReply(input: { subject: string; text: string; raw?: string }, now: Date): BrandReplyClass {
+/*
+ * "UNSUBSCRIBE" IS NOT "NO THANKS" (owner, 16 Nov 2026: Malin+Goetz replied "unsubscribe." and it was stored as a
+ * decline). A reply that asks us to stop is stored as UNSUBSCRIBED and stops the whole brand for good.
+ */
+const ASKS_TO_STOP = /\b(?:unsubscribe|remove (?:me|us)|take (?:me|us) off|opt(?:-| )?out|stop (?:emailing|sending|contacting)|please stop|do not (?:email|contact)|don'?t (?:email|contact))\b/i;
+export function replyAsksToStop(text: string): boolean {
+  return ASKS_TO_STOP.test(text.replace(/[’]/g, "'"));
+}
+
+/*
+ * A REPLY THAT POINTS US ELSEWHERE IS A REDIRECT (owner, 16 Nov 2026: Therabody's info@ answered "email
+ * partnerships@therabody.com … include what you do and what you have in mind", and it was closed as "they are
+ * reviewing it"). Only an address on the brand's own domain counts, and only when the words around it send us there;
+ * an address is never guessed. Pure: the caller checks NeverBounce and files email 1 for her approval.
+ */
+const REDIRECT_WORDS = /\b(?:e-?mail|write to|reach out to|reach|contact|send [\w ]{0,30}?to|forward [\w ]{0,20}?to|direct [\w ]{0,20}?to|directed to|the right (?:route|person|team|contact|address|place)|best (?:person|contact|address|way)|handled by|handles)\b/i;
+const ADDRESS = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
+export function redirectAddressIn(text: string, brandDomain: string, notThese: readonly string[] = []): string | null {
+  const domain = brandDomain.trim().toLowerCase();
+  if (!domain) return null;
+  const skip = new Set(notThese.map((a) => a.trim().toLowerCase()));
+  for (const m of text.matchAll(ADDRESS)) {
+    const addr = m[0].toLowerCase().replace(/\.+$/, "");
+    const at = addr.split("@")[1] ?? "";
+    if (skip.has(addr) || /^(?:no-?reply|do-?not-?reply|mailer-daemon|postmaster)@/.test(addr)) continue;
+    if (at !== domain && !at.endsWith(`.${domain}`)) continue;
+    if (REDIRECT_WORDS.test(text.slice(Math.max(0, (m.index ?? 0) - 120), m.index ?? 0))) return addr;
+  }
+  return null;
+}
+
+export function classifyBrandReply(input: { subject: string; text: string; raw?: string; brandDomain?: string; notThese?: readonly string[] }, now: Date): BrandReplyClass {
   const words = theirNewText(input.text);
+  const said = { no: replyLooksLikeNo(input.subject) || replyLooksLikeNo(words), stop: replyAsksToStop(input.subject) || replyAsksToStop(words) };
+  // A redirect counts even from a support desk's assistant; an out-of-office's "for urgent matters" address does not.
+  if (input.brandDomain && !said.no && !said.stop && !AUTO_SUBJECT.test(input.subject) && !AUTO_BODY.test(words)) {
+    const to = redirectAddressIn(words, input.brandDomain, input.notThese);
+    if (to) return { kind: "REDIRECT", to };
+  }
   if (AUTO_SUBJECT.test(input.subject) || AUTO_BODY.test(words) || looksLikeAutoAck(`${input.subject}\n${words}`) || machineSentHeaders(input.raw)) {
     const back = returnDateIn(words, now);
     // Resume the day after they are back; with no date in the message, a week from now.
     const resume = back ? new Date(back.getTime() + 86_400_000) : new Date(now.getTime() + 7 * 86_400_000);
     return { kind: "AUTO_REPLY", resumeAt: resume.toISOString() };
   }
-  if (replyLooksLikeNo(input.subject) || replyLooksLikeNo(words)) return { kind: "NO" };
+  if (said.stop) return { kind: "NO", unsubscribe: true };
+  if (said.no) return { kind: "NO" };
   const why = noReplyNeeded(words);
   if (why) return { kind: "NO_REPLY_NEEDED", why };
   if (/\b(call|chat|meet|meeting|zoom|calendly|hop on|talk|speak|connect live|time next week|availability|available)\b/i.test(words)) return { kind: "REPLY", intent: "CALL" };

@@ -422,14 +422,48 @@ export function answerRecipients(r: { send_to?: string | null; send_cc_json?: st
   return { to: (r.send_to ?? r.contact_email).trim().toLowerCase(), cc: r.send_cc_json ? (JSON.parse(r.send_cc_json) as string[]) : [] };
 }
 
-export type TakeOutcome = "SEEN" | "AUTO_REPLY" | "NO" | "WAITING" | "DRAFTED";
+export type TakeOutcome = "SEEN" | "AUTO_REPLY" | "NO" | "WAITING" | "DRAFTED" | "REDIRECTED";
+
+/*
+ * THEY POINTED US TO ANOTHER ADDRESS (owner, 16 Nov 2026: Therabody's info@ said "email partnerships@therabody.com").
+ * The address is on the brand's own domain (classifyBrandReply), NeverBounce clears it, and a new deal for it starts at
+ * email 1, which the drip drafts for her approval like every first email. The old thread stops (STOPPED, still
+ * REPLIED: they did not say no). Refused by NeverBounce: a named stop on the reply row, nothing sent. NeverBounce not
+ * answering: left unread, so the next pass tries again.
+ */
+async function redirectDeal(env: Env, deal: TlcDealRow, to: string, mid: string, now: Date, close: (intent: string, note: string) => Promise<unknown>): Promise<TakeOutcome> {
+  const { addressCleared, brandStopped } = await import("./tlcVolume");
+  if (await brandStopped(env, deal.brand, to, deal.contact_email)) {
+    await close("QUESTION", `they pointed us to ${to}, but the brand asked us to stop or said no: nothing sent`);
+    return "WAITING";
+  }
+  const addr = await addressCleared(env, to, now);
+  if (!addr.ok && "wait" in addr) return "WAITING";
+  if (!addr.ok) {
+    await close("QUESTION", `NAMED STOP [TLC_REDIRECT_ADDRESS_REFUSED]: they pointed us to ${to}, which NeverBounce answered ${addr.refused}; nothing sent`);
+    await appendEvent(env, { eventType: "tlc.brand_redirect_refused", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: { to, result: addr.refused } });
+    return "WAITING";
+  }
+  const { queueDeal } = await import("./tlcMustPitch");
+  const already = await env.WP_OS_DB.prepare("SELECT id FROM tlc_deal WHERE event_id = ?1 AND contact_email = ?2").bind(deal.event_id, to).first<{ id: string }>();
+  const angle = deal.owner_angle ?? `${brandDisplayName(deal.brand)}'s team at ${deal.contact_email} pointed us to this address for event collaborations and asked us to include what we do and what we have in mind. Open by saying they sent us here, then say what West Peek and The Learning Club are and what we have in mind for ${brandDisplayName(deal.brand)}.`;
+  if (!already) {
+    await queueDeal(env, { eventId: deal.event_id, brand: deal.brand, category: deal.category, contactName: null, contactEmail: to, contactSourceUrl: `brand-reply:${mid}`, whyFit: deal.why_fit, firmScope: deal.firm_scope, ownerAngle: angle }, now);
+  }
+  await env.WP_OS_DB.prepare("UPDATE tlc_deal SET stage = 'STOPPED', next_send_at = NULL, waiting_since = NULL, updated_at = ?2 WHERE id = ?1").bind(deal.id, now.toISOString()).run();
+  await close("QUESTION", `redirect: they asked us to write to ${to}; email 1 to that address goes to Sequoia for approval`);
+  await appendEvent(env, { eventType: "tlc.brand_redirected", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: { to } });
+  return "REDIRECTED";
+}
 
 export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessage, deps: BrandReplyDeps = {}): Promise<TakeOutcome> {
   const now = deps.now ?? new Date();
   const mid = normalizeMid(msg.messageId) || `nomid:${msg.receivedAt}`;
   if (await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_brand_reply WHERE deal_id = ?1 AND brand_message_id = ?2").bind(deal.id, mid).first()) return "SEEN";
   const words = theirNewText(textBodyOf(msg.text)) || msg.text.trim();
-  const cls = classifyBrandReply({ subject: msg.subject, text: words, raw: msg.text }, now);
+  const sender = (addressIn(msg.from ?? "") ?? msg.from ?? "").trim().toLowerCase();
+  const { brandDomainOf } = await import("./tlcVolume");
+  const cls = classifyBrandReply({ subject: msg.subject, text: words, raw: msg.text, brandDomain: brandDomainOf(deal.contact_email), notThese: [deal.contact_email, sender] }, now);
   const close = (intent: string, note: string) => env.WP_OS_DB.prepare(
     "INSERT OR IGNORE INTO tlc_brand_reply (id, deal_id, brand_message_id, their_subject, their_text, received_at, intent, draft_subject, draft_body, state, held_reason, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '', '', 'CLOSED', ?8, ?9)",
   ).bind(`tbr_${crypto.randomUUID()}`, deal.id, mid, msg.subject.slice(0, 300), words.slice(0, 8000), msg.receivedAt, intent, note, deal.firm_scope).run();
@@ -456,14 +490,20 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
     return "AUTO_REPLY";
   }
   if (cls.kind === "NO") {
-    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET stage = 'DECLINED', decision = 'NO', stop_reason = 'DECLINED', next_send_at = NULL, updated_at = ?2 WHERE id = ?1").bind(deal.id, now.toISOString()).run();
-    await close("NO", "they said no");
+    // "Unsubscribe" is stored as UNSUBSCRIBED, never as a decline; either one stops the whole brand, in every club.
+    const reason = cls.unsubscribe ? "UNSUBSCRIBED" : "DECLINED";
+    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET stage = ?3, decision = 'NO', stop_reason = ?4, next_send_at = NULL, updated_at = ?2 WHERE id = ?1")
+      .bind(deal.id, now.toISOString(), cls.unsubscribe ? "STOPPED" : "DECLINED", reason).run();
+    const { stopBrandEverywhere } = await import("./tlcVolume");
+    await stopBrandEverywhere(env, { brand: deal.brand, emails: [deal.contact_email, ...(sender ? [sender] : [])], reason, now });
+    await close("NO", cls.unsubscribe ? "they asked us to stop: the brand is never emailed again" : "they said no");
     await appendEvent(env, { eventType: "tlc.brand_declined", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: {} });
     return "NO";
   }
   const ev = await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>();
   if (!ev) return "SEEN";
   await env.WP_OS_DB.prepare("UPDATE tlc_deal SET stop_reason = 'REPLIED', replied_at = COALESCE(replied_at, ?2), next_send_at = NULL, updated_at = ?2 WHERE id = ?1 AND (stop_reason IS NULL OR stop_reason = 'REPLIED')").bind(deal.id, now.toISOString()).run();
+  if (cls.kind === "REDIRECT") return redirectDeal(env, deal, cls.to, mid, now, close);
   /*
    * NO REPLY NEEDED (owner, 2 Nov 2026). The first decision, before any draft: a reply that passes the note on, loops
    * someone in, says they are reviewing or will get back, or asks nothing, gets no draft at all. The drip is already
@@ -747,7 +787,7 @@ const defaultMailbox: MailboxReader = async (env, query, maxPages = 1) => {
  */
 export async function processBrandReplies(env: Env, now: Date, firmScope = "west-peek", deps: BrandReplyDeps = {}): Promise<string> {
   const d = { ...deps, now };
-  const counts: Record<TakeOutcome, number> = { SEEN: 0, AUTO_REPLY: 0, NO: 0, WAITING: 0, DRAFTED: 0 };
+  const counts: Record<TakeOutcome, number> = { SEEN: 0, AUTO_REPLY: 0, NO: 0, WAITING: 0, DRAFTED: 0, REDIRECTED: 0 };
   const unread = (await env.WP_OS_DB.prepare(
     `SELECT d.* FROM tlc_deal d WHERE d.firm_scope = ?1 AND d.stop_reason = 'REPLIED'
        AND NOT EXISTS (SELECT 1 FROM tlc_brand_reply r WHERE r.deal_id = d.id)

@@ -104,6 +104,58 @@ export async function recordBounce(env: Env, email: string, now: Date): Promise<
   ).bind(email.trim().toLowerCase(), now.toISOString()).run();
 }
 
+/*
+ * A STOP IS FOR THE WHOLE BRAND (owner, 16 Nov 2026: "We got an email saying unsubscribe for one of our brand emails so
+ * never email that brand again"). Malin+Goetz's "unsubscribe." came from a colleague of the address we wrote to, and
+ * only that one address was blocked. An unsubscribe or a no from anyone at a brand stops it for good: every address on
+ * its domain and every club, matched on the brand's name (case, spacing, "+"/"&"/"and" ignored) or its mail domain.
+ */
+const FREE_MAIL = new Set(["gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com", "aol.com", "proton.me"]);
+/** "Malin+Goetz", "Malin + Goetz" and "malin and goetz" are one brand. */
+export function brandNameKey(brand: string): string {
+  return brandKey(brand).replace(/\s*\(.*?\)\s*/g, " ").replace(/[+&]/g, " and ").replace(/[^a-z0-9]+/g, "");
+}
+/** The brand's mail domain (a subdomain counts as the brand's), or "" for a free mailbox. */
+export function brandDomainOf(email: string): string {
+  const host = (email.trim().toLowerCase().split("@")[1] ?? "").replace(/\.+$/, "");
+  if (!host || FREE_MAIL.has(host)) return "";
+  const parts = host.split(".");
+  const cut = parts.length > 2 && parts[parts.length - 1]!.length === 2 && parts[parts.length - 2]!.length <= 3 ? 3 : 2;
+  return parts.slice(-cut).join(".");
+}
+type StoppedRow = { id: string; brand: string; contact_email: string; stop_reason: string };
+function sameBrand(row: { brand: string; contact_email: string }, brand: string, emails: readonly string[]): boolean {
+  if (brandNameKey(row.brand) === brandNameKey(brand)) return true;
+  const theirs = brandDomainOf(row.contact_email);
+  return Boolean(theirs) && emails.some((e) => brandDomainOf(e) === theirs);
+}
+/** Has anyone at this brand (by name or domain) unsubscribed or said no? Then it is never emailed again. */
+export async function brandStopped(env: Env, brand: string, ...emails: string[]): Promise<"UNSUBSCRIBED" | "DECLINED" | null> {
+  const rows = (await env.WP_OS_DB.prepare("SELECT id, brand, contact_email, stop_reason FROM tlc_deal WHERE stop_reason IN ('UNSUBSCRIBED','DECLINED')").all<StoppedRow>()).results ?? [];
+  const hits = rows.filter((r) => sameBrand(r, brand, emails));
+  return hits.some((r) => r.stop_reason === "UNSUBSCRIBED") ? "UNSUBSCRIBED" : hits.length ? "DECLINED" : null;
+}
+/** Stop every deal and unpromoted prospect of this brand, in every club. An unsubscribe outranks a no. */
+export async function stopBrandEverywhere(env: Env, input: { brand: string; emails: readonly string[]; reason: "UNSUBSCRIBED" | "DECLINED"; now: Date }): Promise<number> {
+  const at = input.now.toISOString();
+  const deals = ((await env.WP_OS_DB.prepare("SELECT id, brand, contact_email, stop_reason FROM tlc_deal").all<StoppedRow & { stop_reason: string | null }>()).results ?? [])
+    .filter((d) => sameBrand(d, input.brand, input.emails) && d.stop_reason !== "UNSUBSCRIBED" && !(input.reason === "DECLINED" && d.stop_reason === "DECLINED"));
+  for (const d of deals) {
+    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET stop_reason = ?2, stage = CASE WHEN stage = 'DECLINED' THEN stage ELSE 'STOPPED' END, next_send_at = NULL, updated_at = ?3 WHERE id = ?1").bind(d.id, input.reason, at).run();
+    await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'HELD', held_reason = ?2 WHERE deal_id = ?1 AND state = 'AWAITING_APPROVAL'")
+      .bind(d.id, input.reason === "UNSUBSCRIBED" ? "the brand asked us to stop: never emailed again" : "the brand said no: never emailed again").run();
+  }
+  const prospects = ((await env.WP_OS_DB.prepare("SELECT id, brand, contact_email FROM tlc_prospect WHERE promoted_at IS NULL AND dropped_reason IS NULL").all<{ id: string; brand: string; contact_email: string }>()).results ?? [])
+    .filter((p) => sameBrand(p, input.brand, input.emails));
+  for (const p of prospects) {
+    await env.WP_OS_DB.prepare("UPDATE tlc_prospect SET dropped_reason = ?2 WHERE id = ?1").bind(p.id, input.reason === "UNSUBSCRIBED" ? "the brand asked us to stop" : "the brand said no").run();
+  }
+  if (deals.length || prospects.length) {
+    await appendEvent(env, { eventType: "tlc.brand_stopped_everywhere", actorType: "ai_employee", actorId: "aie_wynn", objectType: "tlc_deal", objectId: brandNameKey(input.brand).slice(0, 120), payload: { reason: input.reason, deals: deals.length, prospects: prospects.length } });
+  }
+  return deals.length;
+}
+
 /** The brand never goes out to that address: the deal stops, and the listed brand (if any) is marked with why. */
 export async function refuseAddress(env: Env, deal: { id: string; contact_email: string }, result: AddressResult, now: Date): Promise<string> {
   const why = `the address did not pass NeverBounce (${result}), so it is never written to`;
@@ -189,8 +241,8 @@ export async function promoteProspects(
             AND (stop_reason = 'REPLIED' OR (stop_reason IS NULL AND (drip_step < ?2 OR last_sent_at >= ?3))) LIMIT 1`,
       ).bind(p.contact_email, TLC_DRIP_DAYS.length, new Date(now.getTime() - CATEGORY_QUIET_DAYS * 86_400_000).toISOString()).first();
       if (thread) { out.waiting.push(`${p.brand} (${monthWords(ev.month)}): its inbox is already in a live thread`); continue; }
-      const gone = await env.WP_OS_DB.prepare("SELECT stop_reason FROM tlc_deal WHERE contact_email = lower(?1) AND stop_reason IN ('UNSUBSCRIBED','DECLINED') LIMIT 1").bind(p.contact_email).first<{ stop_reason: string }>();
-      if (gone) { await drop(`that address ${gone.stop_reason === "UNSUBSCRIBED" ? "asked us to stop" : "said no"}`); continue; }
+      const gone = await brandStopped(env, p.brand, p.contact_email);
+      if (gone) { await drop(`the brand ${gone === "UNSUBSCRIBED" ? "asked us to stop" : "said no"}`); continue; }
       // NEVERBOUNCE BEFORE THE FIRST EMAIL.
       const addr = await addressCleared(env, p.contact_email, now, fetchImpl);
       if (!addr.ok) {
