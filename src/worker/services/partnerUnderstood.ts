@@ -194,7 +194,7 @@ export function mergeHolds(emailHolds: readonly string[], standing: readonly str
 }
 /** His words, quoted once: plain quotes outside, any quotes inside his words turned to single ones (never ""x""). */
 export function quoteHis(s: string): string {
-  const inner = s.trim().replace(/^["“]|["”]$/g, "").replace(/"([^"]*)"/g, "‘$1’").replace(/“([^”]*)”/g, "‘$1’");
+  const inner = s.trim().replace(/^["“]([^"“”]*)["”]$/, "$1").replace(/"([^"]*)"/g, "‘$1’").replace(/“([^”]*)”/g, "‘$1’");
   return `"${inner}"`;
 }
 /*
