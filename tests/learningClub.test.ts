@@ -173,18 +173,27 @@ describe("the rules, pure", () => {
       expect(text).not.toMatch(/Limits|Caveat|never-approach|compete|tier|inbox|press contact|PR agency|before this goes out/i);
       expect(text).toContain(`I am writing because ${brands[i]}`);
     });
-    expect(brandFacingReason(leaked[1])).toBe("Hyperice makes recovery devices that guests can try in the hands-on hour.");
-    expect(brandFacingReason(leaked[3])).toBe("InsideTracker sells blood-biomarker analysis.");
+    expect(brandFacingReason(leaked[1], "Hyperice")).toBe("Hyperice makes recovery devices that guests can try in the hands-on hour.");
+    expect(brandFacingReason(leaked[3], "InsideTracker")).toBe("InsideTracker sells blood-biomarker analysis.");
     // The first sentence is itself internal ("suits a Title partner"): the plain lead, never a half-note.
-    expect(brandFacingReason(leaked[0])).toBeNull();
+    expect(brandFacingReason(leaked[0], "Garmin")).toBeNull();
     expect(dripEmail({ step: 0, brand: "Garmin", contactName: null, topic: "Sleep", month: "2027-01", eventDate: "2027-01-14", why: leaked[0]! }).text)
       .toContain("I am writing because Garmin feels like a natural fit for a room we are building.");
     // An ordinary opening word is lowercased after "because"; a name never is.
-    expect(brandFacingReason("Their stores host tastings every week")).toBe("their stores host tastings every week.");
-    expect(brandFacingReason(null)).toBeNull();
+    expect(brandFacingReason("Their stores host tastings every week", "Eataly")).toBe("their stores host tastings every week.");
+    expect(brandFacingReason(null, "Oura")).toBeNull();
     // Oura, 14 Nov 2026: a fragment list went out as "I am writing because Sleep and recovery ring; ran its own…".
-    expect(brandFacingReason("Sleep and recovery ring; ran its own SoHo pop-up; a 'read your own sleep' station.")).toBeNull();
+    expect(brandFacingReason("Sleep and recovery ring; ran its own SoHo pop-up; a 'read your own sleep' station.", "Oura")).toBeNull();
     expect(dripEmail({ step: 0, brand: "Oura", contactName: null, topic: "Sleep", month: "2027-01", eventDate: "2027-01-14", why: "Sleep and recovery ring; ran its own SoHo pop-up." }).text).not.toMatch(/because Sleep and recovery ring/);
+    // Therabody, 16 Nov 2026: a noun phrase went to the brand as "I am writing because Recovery devices for the hands-on
+    // station."; Weaviate was drafted as "because an open-source vector database, …". Neither is a sentence about the brand.
+    expect(brandFacingReason("Recovery devices for the hands-on station.", "Therabody")).toBeNull();
+    expect(brandFacingReason("An open-source vector database, now marketed as memory for AI agents.", "Weaviate")).toBeNull();
+    expect(dripEmail({ step: 0, brand: "Therabody", contactName: null, topic: "AI Tools for Your Work", month: "2027-01", eventDate: "2027-01-14", why: "Recovery devices for the hands-on station." }).text)
+      .toContain("I am writing because Therabody feels like a natural fit for a room we are building.");
+    // A real reason that names the brand still goes, its capital kept, even under a qualified or two-word name.
+    expect(brandFacingReason("Ulta is the largest US beauty retailer and sells a full fragrance wall.", "Ulta Beauty")).toBe("Ulta is the largest US beauty retailer and sells a full fragrance wall.");
+    expect(brandFacingReason("Osmo's kits teach kids to build.", "Osmo (Generation)")).toBe("Osmo's kits teach kids to build.");
   });
 
   it("reads the partners' reply as yes, no or counter", () => {

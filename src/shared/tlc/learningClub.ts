@@ -688,8 +688,15 @@ export function signedBrandEmail(words: string, ps: string | null = null): strin
  * alone, and none at all when that sentence is itself internal; Approvals still shows her the whole note.
  */
 export const TLC_INTERNAL_NOTE = /\b(?:limits?|caveats?|note|check that|never-approach|must not approach|compet\w*|tier|(?:title|lead|product|presenting) partner|partner seat|inbox|press contact|media contact|PR agency|not (?:a )?partnerships?|job title|newsroom|on the page|the page)\b/i;
-const SENTENCE_STARTERS = new Set(["The", "A", "An", "It", "Its", "This", "These", "That", "Their", "They", "Your", "On", "In", "With", "As", "After", "Since", "Last", "Every", "Each"]);
-export function brandFacingReason(why: string | null | undefined): string | null {
+/*
+ * THE REASON MUST BE A SENTENCE ABOUT THE BRAND (partner tail, 16 Nov 2026). Parker often writes `why_fit` as a noun
+ * phrase: Therabody went out as "I am writing because Recovery devices for the hands-on station." and Weaviate was
+ * drafted as "because an open-source vector database, now marketed as…". Only a reason that opens with the brand's
+ * own name ("Hyperice makes…", "Garmin's band…") or a pronoun or time opener that starts a clause ("Their stores
+ * host…", "Last year they…") is used; anything else, articles included, gets the template's own line.
+ */
+const CLAUSE_OPENERS = new Set(["It", "Its", "Their", "They", "On", "In", "With", "As", "After", "Since", "Last", "Every", "Each"]);
+export function brandFacingReason(why: string | null | undefined, brand: string): string | null {
   const text = (why ?? "").replace(/\s+/g, " ").trim();
   if (!text) return null;
   const first = (/^.+?[.!?](?=\s+[A-Z(]|$)/.exec(text)?.[0] ?? text).trim();
@@ -699,8 +706,12 @@ export function brandFacingReason(why: string | null | undefined): string | null
   if (first.includes(";")) return null;
   const sentence = first.replace(/[.!?]?$/, ".");
   const word = /^\S+/.exec(sentence)?.[0] ?? "";
-  // Lowercase only an ordinary opening word ("The", "Its"); a name ("Garmin", "InsideTracker") keeps its capital.
-  return SENTENCE_STARTERS.has(word) ? `${sentence.charAt(0).toLowerCase()}${sentence.slice(1)}` : sentence;
+  const bare = word.replace(/[’']s$/i, "").replace(/[^\p{L}\p{N}-]/gu, "").toLowerCase();
+  const brandWord = (/^\S+/.exec(brandDisplayName(brand))?.[0] ?? "").replace(/[^\p{L}\p{N}-]/gu, "").toLowerCase();
+  const opensWithBrand = bare !== "" && bare === brandWord;
+  if (!opensWithBrand && !CLAUSE_OPENERS.has(`${word.charAt(0).toUpperCase()}${word.slice(1)}`)) return null;
+  // Lowercase only an ordinary opening word ("Their", "Its"); a name ("Garmin", "InsideTracker") keeps its capital.
+  return !opensWithBrand ? `${sentence.charAt(0).toLowerCase()}${sentence.slice(1)}` : sentence;
 }
 
 /**
@@ -719,7 +730,7 @@ export function dripEmail(raw: DripEmailInput): { subject: string; text: string 
   const hi = input.contactName ? `Hi ${input.contactName.split(" ")[0]},` : "Hi,";
   const when = monthWords(input.month);
   const subject = `${input.brand} + a small room in New York`;
-  const reason = brandFacingReason(input.why);
+  const reason = brandFacingReason(input.why, input.brand);
   const lead = reason ? `I am writing because ${reason}` : `I am writing because ${input.brand} feels like a natural fit for a room we are building.`;
   const bodies = [
     [
