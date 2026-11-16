@@ -39,6 +39,8 @@ import { execFileSync } from "node:child_process";
 import { codexExecArgs, codexSeatUsable, finishCodexBuild, helpMentions } from "../lib/codex-seat.mjs";
 import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
 import { claudeChildEnv } from "../lib/vault-env.mjs";
+// A git hook exports GIT_DIR & co.; a scratch repo built under one would write to (and push from) THIS repo. Never inherit them.
+for (const k of Object.keys(process.env)) if (/^GIT_(DIR|WORK_TREE|INDEX_FILE|PREFIX|OBJECT_DIRECTORY|COMMON_DIR|ALTERNATE_OBJECT_DIRECTORIES|QUARANTINE_PATH)$/.test(k)) delete process.env[k];
 
 const execFileAsync = promisify(execFile);
 const RUN_TIMEOUT_MS = 300_000;

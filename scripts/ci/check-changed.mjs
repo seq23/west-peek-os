@@ -117,10 +117,16 @@ export function selectTests(changed) {
   return { run: [...direct, ...take].map(rel).sort(), left: transitive.length - take.length };
 }
 
+/*
+ * A git hook runs with GIT_DIR (and friends) set to this repo. A validator that builds its own scratch repo
+ * (validate:codex-lane) then ran its `git worktree add` against OURS and failed under the hook only. Children get none.
+ */
+const CHILD_ENV = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^GIT_(DIR|WORK_TREE|INDEX_FILE|PREFIX|OBJECT_DIRECTORY|COMMON_DIR|ALTERNATE_OBJECT_DIRECTORIES|QUARANTINE_PATH)$/.test(k)));
+
 function run(label, cmd, args) {
   return new Promise((resolve) => {
     const t = Date.now();
-    const p = spawn(cmd, args, { cwd: ROOT, env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" } });
+    const p = spawn(cmd, args, { cwd: ROOT, env: { ...CHILD_ENV, NO_COLOR: "1", FORCE_COLOR: "0" } });
     let out = "";
     p.stdout.on("data", (d) => (out += d));
     p.stderr.on("data", (d) => (out += d));

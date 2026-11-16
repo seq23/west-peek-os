@@ -43,6 +43,8 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+// A git hook exports GIT_DIR & co.; a scratch repo built under one would write to (and push from) THIS repo. Never inherit them.
+for (const k of Object.keys(process.env)) if (/^GIT_(DIR|WORK_TREE|INDEX_FILE|PREFIX|OBJECT_DIRECTORY|COMMON_DIR|ALTERNATE_OBJECT_DIRECTORIES|QUARANTINE_PATH)$/.test(k)) delete process.env[k];
 
 const MIGRATIONS_DIR = "migrations";
 

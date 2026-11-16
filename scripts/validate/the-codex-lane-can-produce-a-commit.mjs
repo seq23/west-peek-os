@@ -28,6 +28,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as seat from "../lib/codex-seat.mjs";
+// A git hook exports GIT_DIR & co.; a scratch repo built under one would write to (and push from) THIS repo. Never inherit them.
+for (const k of Object.keys(process.env)) if (/^GIT_(DIR|WORK_TREE|INDEX_FILE|PREFIX|OBJECT_DIRECTORY|COMMON_DIR|ALTERNATE_OBJECT_DIRECTORIES|QUARANTINE_PATH)$/.test(k)) delete process.env[k];
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DUTY = readFileSync(path.join(ROOT, "scripts/duties/web-property-change.mjs"), "utf8");
