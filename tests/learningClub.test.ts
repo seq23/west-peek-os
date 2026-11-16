@@ -184,6 +184,10 @@ describe("the rules, pure", () => {
     expect(brandFacingReason(null, "Oura")).toBeNull();
     // Oura, 14 Nov 2026: a fragment list went out as "I am writing because Sleep and recovery ring; ran its own…".
     expect(brandFacingReason("Sleep and recovery ring; ran its own SoHo pop-up; a 'read your own sleep' station.", "Oura")).toBeNull();
+    // The six that went out with fragments (Givaudan, Glossier, Notion, Hugging Face, Brown Girl Jane, Oura), incl. one opening with the brand.
+    expect(brandFacingReason("Notion AI agents; NYC agent rooms.", "Notion")).toBeNull();
+    expect(brandFacingReason("Glossier You fragrance; New York brand.", "Glossier")).toBeNull();
+    expect(brandFacingReason("2027-02: Black-owned fragrance brand; Sephora collab Sep 2026.", "Brown Girl Jane")).toBeNull();
     expect(dripEmail({ step: 0, brand: "Oura", contactName: null, topic: "Sleep", month: "2027-01", eventDate: "2027-01-14", why: "Sleep and recovery ring; ran its own SoHo pop-up." }).text).not.toMatch(/because Sleep and recovery ring/);
     // Therabody, 16 Nov 2026: a noun phrase went to the brand as "I am writing because Recovery devices for the hands-on
     // station."; Weaviate was drafted as "because an open-source vector database, …". Neither is a sentence about the brand.

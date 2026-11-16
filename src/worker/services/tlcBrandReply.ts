@@ -456,11 +456,28 @@ async function redirectDeal(env: Env, deal: TlcDealRow, to: string, mid: string,
   return "REDIRECTED";
 }
 
+/*
+ * A HELPDESK QUOTES US WITHOUT "On … wrote:" (16 Nov 2026: Notion for Startups answers through a ticket desk that
+ * lays the thread out as plain blocks, our first email included). Our own words are never theirs: any line we sent
+ * this deal (its drip emails and our replies) is taken out before the reply is read, so our P.S. "If this isn't a
+ * fit…" can never be read as their no, nor our sentences as their ask.
+ */
+const lineKey = (l: string) => l.replace(/^[>\s]+/, "").replace(/\s+/g, " ").trim().toLowerCase();
+async function withoutOurOwnLines(env: Env, dealId: string, words: string): Promise<string> {
+  const sent = (await env.WP_OS_DB.prepare(
+    "SELECT body AS b FROM tlc_drip_message WHERE deal_id = ?1 AND state = 'SENT' UNION ALL SELECT draft_body AS b FROM tlc_brand_reply WHERE deal_id = ?1 AND state = 'SENT'",
+  ).bind(dealId).all<{ b: string | null }>()).results ?? [];
+  const ours = new Set(sent.flatMap((r) => (r.b ?? "").split(/\r?\n/)).map(lineKey).filter((k) => k.length >= 12));
+  if (!ours.size) return words;
+  const kept = words.split("\n").filter((l) => !ours.has(lineKey(l)));
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim() || words;
+}
+
 export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessage, deps: BrandReplyDeps = {}): Promise<TakeOutcome> {
   const now = deps.now ?? new Date();
   const mid = normalizeMid(msg.messageId) || `nomid:${msg.receivedAt}`;
   if (await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_brand_reply WHERE deal_id = ?1 AND brand_message_id = ?2").bind(deal.id, mid).first()) return "SEEN";
-  const words = theirNewText(textBodyOf(msg.text)) || msg.text.trim();
+  const words = await withoutOurOwnLines(env, deal.id, theirNewText(textBodyOf(msg.text)) || msg.text.trim());
   const sender = (addressIn(msg.from ?? "") ?? msg.from ?? "").trim().toLowerCase();
   const { brandDomainOf } = await import("./tlcVolume");
   const cls = classifyBrandReply({ subject: msg.subject, text: words, raw: msg.text, brandDomain: brandDomainOf(deal.contact_email), notThese: [deal.contact_email, sender] }, now);
