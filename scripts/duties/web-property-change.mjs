@@ -752,6 +752,14 @@ export function spentReport(phase, claude, result = null) {
   const waitsOf = (r) => (Number.isFinite(r?.resetsInSeconds) && r.resetsInSeconds > 0 ? Math.round(r.resetsInSeconds) : 3600);
   if (claude?.heldForClaude) return { phase, status: "failed", reason: String(claude.heldForClaude).slice(0, 900), waits_seconds: waitsOf(claude) };
   if (result) return null;
+  /*
+   * THE MODEL'S PROGRAM IS MISSING ON THE MAC (17 Nov 2026, wc_76e6d7ff): an auto-update of Claude Code left a stub
+   * with its install script blocked, so the review's `claude` could not even start ("spawn claude ENOENT") and the
+   * BUILD failed as REVIEW_UNREADABLE — a charged attempt on the card's last try, for a laptop's install. That is an
+   * infrastructure wait: the Worker holds the card and the phase starts again by itself, no attempt spent.
+   */
+  const missing = String(claude?.err ?? "").match(/spawn (claude|codex) (ENOENT|EACCES)/);
+  if (missing) return { phase, status: "failed", reason: `NAMED WAIT [MODEL_MISSING] the Mac could not start \`${missing[1]}\` (${missing[2]}); it is reinstalled or repaired on the Mac and this phase starts again by itself.`, waits_seconds: 900 };
   if (claude?.servedBy === "claude") {
     const limit = claudeSpentUsage(claude);
     if (limit) return { phase, status: "failed", reason: `NAMED WAIT [CLAUDE_LIMIT] ${limit} — Claude Code is out of usage and no other route may take this turn; it waits for the reset and is retried.`.slice(0, 900), waits_seconds: soonestReset([limit]) };
@@ -2496,6 +2504,14 @@ function selfTest() {
         previewUrlsFrom(pagesStatusesForHead(deps, "aaaaaaa1111"), comment, hosts, "work/wpc-76e6d7ff", "aaaaaaa1111") === null &&
         // negative: a failed or still-building deployment of the head is not a preview
         pagesStatusesForHead([{ ...deps[0], latest_stage: { status: "failure" } }], "003b8e19cde").length === 0;
+    }],
+    ["17 Nov 2026: a model that could not start on the Mac is a wait, never a failed review or a charged attempt", () => {
+      const w = spentReport("BUILD", { code: -1, out: "", err: "\nspawn claude ENOENT\nwithheld: X", servedBy: "claude" }, null);
+      return w?.waits_seconds > 0 && /MODEL_MISSING/.test(w.reason) &&
+        // negative: a run that started and wrote its result is not a wait
+        spentReport("BUILD", { code: -1, out: "", err: "spawn claude ENOENT", servedBy: "claude" }, { status: "ok" }) === null &&
+        // negative: an ordinary failure with no missing program is not a wait
+        spentReport("BUILD", { code: 1, out: "{}", err: "TypeError: x", servedBy: "claude" }, null) === null;
     }],
     ["a repo with no Pages deployment yields null, never a guess", () => previewUrlsFrom([{ environment_url: "" }], ["LGTM"]) === null],
     ["an ask without a recommended default is refused", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), asks: ["colour?"], publish_ready: true }), "PLAN").result === null],
