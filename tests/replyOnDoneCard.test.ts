@@ -294,6 +294,8 @@ describe("a confident answer, when the card's kind has a registered, ACTIVE owne
       firmScope: "west-peek",
     });
     const raw = gmailReply("does the preview link expire?", "Landed the footer links.", "Porter: footer links");
+    // Earlier escalations in this file now email the partner once each (16 Nov 2026): count only this reply's sends.
+    sent.length = 0;
 
     const confidentAnswer: QuestionAnswerer = async () => ({
       confident: true,

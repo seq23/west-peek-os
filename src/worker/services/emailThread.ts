@@ -636,7 +636,15 @@ export async function steerFromReply(
         ? await (await import("./partnerSession")).redirectSession(env, cardRow.id, written, partner.email, thread.token)
         : null;
     if (sessionReply) answered = true;
-    if (!sessionReply && !alreadyFiled && !takenOver && !owned && !secondarySaidApproved && cardRow && partner && cardRow.kind !== WEB_PROPERTY_CHANGE_KIND) {
+    /*
+     * A FINISHED WEBSITE JOB IS NOT A LIVE ONE (17 Nov 2026). A reply on an OPEN or BLOCKED website card steers that
+     * build (below). One on a DONE or CANCELLED website card has no build left to steer: Scooter's "New build for the
+     * Top Barz site: a holiday party version of the booth flow" came back on the thread of October's cancelled
+     * voting.topbarz.xyz card, skipped this door because the card was a website job, and became a "question after
+     * done" notice — no build opened. A closed website card is read like any other finished card.
+     */
+    const closedSite = cardRow?.kind === WEB_PROPERTY_CHANGE_KIND && ["DONE", "CANCELLED"].includes(cardRow.state);
+    if (!sessionReply && !alreadyFiled && !takenOver && !owned && !secondarySaidApproved && cardRow && partner && (cardRow.kind !== WEB_PROPERTY_CHANGE_KIND || closedSite)) {
       const read = await readReplyIntent(
         env,
         { cardId: cardRow.id, firmScope: thread.firm_scope, text: written, where: replyWhere(cardRow) },
@@ -791,7 +799,7 @@ export async function steerFromReply(
         cardRow.state === "DONE" && REWORKABLE_AFTER_DONE.has(cardRow.kind ?? "")
           ? await reopenForRework(env, cardRow, partner, written, thread, wordsRead, deps.readWords ?? defaultReadReplyIntent)
           : false;
-      if (!reworked) await handleReplyOnClosedCard(env, cardRow, partner, written, thread, message.emlKey, deps.answerQuestion);
+      if (!reworked) await handleReplyOnClosedCard(env, cardRow, partner, written, thread, message.emlKey, deps.answerQuestion, wordsRead);
     }
   }
 
@@ -875,6 +883,12 @@ function replyWhere(card: { title: string; kind: string | null; state: string })
       "If they are happy with it (praise, agreement, comments or context on the items in it, or what they plan to do with it) and ask something, that is QUESTION; with nothing asked, NOTHING"
     );
   }
+  if (card.kind === WEB_PROPERTY_CHANGE_KIND && ["DONE", "CANCELLED"].includes(card.state)) {
+    return (
+      `a reply on a website job that is already closed: "${card.title.slice(0, 120)}" (${card.kind}, ${card.state}). ` +
+      "Nothing is being built on it any more: any change or new build it asks for, on that site or another, is a new BUILD"
+    );
+  }
   return `a reply on a card that is not a build: "${card.title.slice(0, 120)}" (${card.kind ?? "general work"}, ${card.state})`;
 }
 
@@ -948,8 +962,33 @@ async function handleReplyOnClosedCard(
   thread: EmailThreadRow,
   emlKey: string | null,
   answerQuestion: QuestionAnswerer | undefined,
+  wordsRead: ReplyIntent | null = null,
 ): Promise<void> {
-  if (!containsGenuineQuestion(written)) return; // pure steering — nothing further to do, by design.
+  /*
+   * EVERY PARTNER EMAIL GETS ONE EMAIL BACK (owner's ruling, 16 Nov 2026). Scooter's "New build for the Top Barz
+   * site" came back on the thread of a CANCELLED October card: it was filed as a note and a notice, and he heard
+   * nothing. A reply here that asks for work (the reader said BUILD, yet no build opened above) or asks a question
+   * nobody can answer from the finished job now always reaches him: what happened and what to do next.
+   */
+  const askedForBuild = wordsRead?.source === "MODEL" && wordsRead.door === "BUILD" && wordsRead.kind !== "STOP";
+  if (askedForBuild) {
+    await tellPartnerAboutClosedCard(env, card, partner, thread, "build");
+    await env.WP_OS_DB.prepare("INSERT INTO work_card_note (id, work_card_id, author_id, body, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5)")
+      .bind(`wcn_${crypto.randomUUID()}`, card.id, partner.firmUserId, keptWords(`[NEW REQUEST AFTER DONE — no build opened; partner told] ${written}`), card.firm_scope)
+      .run();
+    await notifyPartners(env, {
+      kind: "MEETING",
+      severity: "WARNING",
+      title: `A new request arrived on "${card.title.slice(0, 60)}", which is already closed`,
+      body: `${partner.fullName} asked for new work on a finished card and no build could open from it: "${written.slice(0, 300)}". He has been told to send it as a new email.`,
+      objectType: "work_card",
+      objectId: card.id,
+      dedupeKey: `work_card:${card.id}:request_after_done:${emlKey ?? thread.token}`,
+      firmScope: card.firm_scope,
+    });
+    return;
+  }
+  if (!containsGenuineQuestion(written)) return; // pure steering — filed to work_steer above, by design.
 
   /*
    * ANSWER IT FROM WHAT THE FIRM ACTUALLY HAS, THE SAME WAY A LIVE CARD'S QUESTION IS TRIED FIRST
@@ -1025,6 +1064,7 @@ async function handleReplyOnClosedCard(
       card.firm_scope,
     )
     .run();
+  await tellPartnerAboutClosedCard(env, card, partner, thread, "question");
   await notifyPartners(env, {
     kind: "MEETING",
     severity: "INFO",
@@ -1047,6 +1087,19 @@ async function handleReplyOnClosedCard(
     firmScope: card.firm_scope,
     payload: { tried_employee: routed.employeeName, reason: routed.reason, ai_run_id: routed.aiRunId, thread_token: thread.token },
   });
+}
+
+/**
+ * THE ONE EMAIL BACK FOR A REPLY ON A FINISHED CARD THAT NOTHING COULD ACT ON (16 Nov 2026). Plain words: what
+ * happened, and the one thing to do. A new email to the OS mailbox is the door that always opens a job.
+ */
+async function tellPartnerAboutClosedCard(env: Env, card: ClosedCardRow, partner: Partner, thread: EmailThreadRow, why: "build" | "question"): Promise<void> {
+  const job = card.title.replace(/^Change [^:]+:\s*/, "").replace(/^"|"$/g, "").slice(0, 70);
+  const line =
+    why === "build"
+      ? `Your email came in as a reply to an older job ("${job}") that is already closed, so nothing started from it. To start it, send the same message as a new email to os@joinwestpeek.com (not a reply), and Porter will pick it up right away. Sequoia has a copy too.`
+      : `Your email came in as a reply to an older job ("${job}") that is already closed, and we could not answer it from that job, so Sequoia has it and will reply. If it is a new request, send it as a new email to os@joinwestpeek.com (not a reply) and it will start right away.`;
+  await (await import("./handOff")).tellPartner(env, { cardId: card.id, to: partner, label: why === "build" ? "Not started yet" : "One question", line, subjectTail: why === "build" ? "send as a new email" : "with Sequoia", onThread: thread.token });
 }
 
 /** The marker a relayed partner-message reply carries on its card; the dedupe reads it. */
