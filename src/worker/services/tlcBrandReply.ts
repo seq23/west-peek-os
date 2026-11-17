@@ -8,7 +8,7 @@ import { withBrandFooter } from "../../shared/tlc/brandFooter";
 import type { EmailAttachment } from "../effects/emailTransport";
 import { listGmailRaw } from "../effects/googleClient";
 import { serviceAccountToken } from "../effects/googleWorkspaceClient";
-import { BrandThreadError, replyThread, type ThreadFinder } from "./tlcBrandThread";
+import { BrandThreadError, followUpThread, replyThread, type ThreadFinder } from "./tlcBrandThread";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
 import { addressIn, authenticationVerdict } from "../../shared/intake/partnerAuthority";
 import { newTextOf } from "../../shared/events/packetDecisionToken";
@@ -477,6 +477,49 @@ async function redirectDeal(env: Env, deal: TlcDealRow, to: string, mid: string,
 }
 
 /*
+ * THEIR DESK SENT US BACK TO THE ADDRESS WE ALREADY WROTE TO (17 Nov 2026: Therabody's info@ answered our old thread
+ * twice with "please continue by emailing partnerships@therabody.com … include what you do, where you post, and what
+ * you have in mind", after our email 1 had gone there). The answer goes to that address alone (never back to the
+ * desk), on our own conversation with it, with the sample-event one-pager and no prices (nothing about money before a
+ * call). NeverBounce clears the address first; a draft for her approval like every answer. A PDF that cannot be made
+ * now writes nothing, so the next pass reads the message again.
+ */
+async function sampleEventToContact(
+  env: Env, deal: TlcDealRow, ev: TlcEventRow | null, msg: BrandMessage, words: string, mid: string, sender: string, now: Date,
+  close: (intent: string, note: string) => Promise<unknown>, deps: BrandReplyDeps,
+): Promise<TakeOutcome> {
+  const to = deal.contact_email.trim().toLowerCase();
+  const { addressCleared } = await import("./tlcVolume");
+  const addr = await addressCleared(env, to, now);
+  if (!addr.ok && "wait" in addr) return "WAITING";
+  if (!addr.ok) {
+    await close("QUESTION", `NAMED STOP [TLC_REDIRECT_ADDRESS_REFUSED]: they pointed us to ${to}, which NeverBounce answered ${addr.refused}; nothing sent`);
+    return "WAITING";
+  }
+  if (!ev?.topic) {
+    await close("QUESTION", `NAMED STOP [TLC_SAMPLE_EVENT_NO_TOPIC]: they pointed us to ${to}, but the club has no topic yet; nothing drafted`);
+    return "WAITING";
+  }
+  const { clubViewOf } = await import("./learningClub");
+  const { renderBrandPitch } = await import("../../shared/tlc/pitch");
+  const brand = brandDisplayName(deal.brand);
+  const safe = (x: string) => x.replace(/[^\w &-]+/g, "").trim();
+  const sponsor: TlcSponsorView = { ...(await sponsorFor(env, deal, words)), sampleOnly: true };
+  const pdf = await storePdf(env, `tlc-flow/${deal.id}/sample-event-${crypto.randomUUID()}.pdf`, `The Learning Club - ${safe(ev.topic)} - sample event - ${safe(brand)}.pdf`, renderBrandPitch(clubViewOf(ev), sponsor), deps.samples ?? {});
+  if (typeof pdf === "string") return "WAITING";
+  const first = await env.WP_OS_DB.prepare("SELECT subject FROM tlc_drip_message WHERE deal_id = ?1 AND state = 'SENT' ORDER BY step LIMIT 1").bind(deal.id).first<{ subject: string }>();
+  const subject = `Re: ${(first?.subject ?? `${brand} + a small room in New York`).replace(/^(?:\s*re\s*:\s*)+/i, "")}`;
+  const part = ev.slot === "AFTERNOON" ? "afternoon" : "evening";
+  const body = signedBrandEmail(fillTemplate("sampleEvent", { hi: hiLine(deal.contact_name), desk: sender || `${brand}`, topic: ev.topic, part, when: `${monthWords(ev.month)} (dates flexible)`, brand }));
+  await env.WP_OS_DB.prepare(
+    `INSERT OR IGNORE INTO tlc_brand_reply (id, deal_id, brand_message_id, their_subject, their_text, received_at, intent, draft_subject, draft_body, state, firm_scope, kind, attachments_json, send_to)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'QUESTION', ?7, ?8, 'DRAFTED', ?9, 'SAMPLE_EVENT', ?10, ?11)`,
+  ).bind(`tbr_${crypto.randomUUID()}`, deal.id, mid, msg.subject.slice(0, 300), words.slice(0, 8000), msg.receivedAt, subject.slice(0, 300), body, deal.firm_scope, JSON.stringify([pdf]), to).run();
+  await appendEvent(env, { eventType: "tlc.brand_redirect_to_contact", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: { to, from: sender } });
+  return "DRAFTED";
+}
+
+/*
  * A HELPDESK QUOTES US WITHOUT "On … wrote:" (16 Nov 2026: Notion for Startups answers through a ticket desk that
  * lays the thread out as plain blocks, our first email included). Our own words are never theirs: any line we sent
  * this deal (its drip emails and our replies) is taken out before the reply is read, so our P.S. "If this isn't a
@@ -496,13 +539,25 @@ async function withoutOurOwnLines(env: Env, dealId: string, words: string): Prom
 export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessage, deps: BrandReplyDeps = {}): Promise<TakeOutcome> {
   const now = deps.now ?? new Date();
   const mid = normalizeMid(msg.messageId) || `nomid:${msg.receivedAt}`;
-  if (await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_brand_reply WHERE deal_id = ?1 AND brand_message_id = ?2").bind(deal.id, mid).first()) return "SEEN";
+  const prior = await env.WP_OS_DB.prepare("SELECT id, state, held_reason FROM tlc_brand_reply WHERE deal_id = ?1 AND brand_message_id = ?2").bind(deal.id, mid).first<{ id: string; state: string; held_reason: string | null }>();
+  /*
+   * A REPLY CLOSED AS "NO REPLY NEEDED" IS READ AGAIN (17 Nov 2026: Therabody's desk said "please continue by emailing
+   * partnerships@…" and it was closed as "they are reviewing it"). Only when it now reads as a redirect is the closed
+   * row (no draft, nothing sent) replaced; anything else stays as it was read.
+   */
+  const reread = prior?.state === "CLOSED" && /^no reply needed/.test(prior.held_reason ?? "");
+  if (prior && !reread) return "SEEN";
   const msgBody = textBodyOf(msg.text);
   const deskWords = helpdeskComment(msgBody);
   const words = await withoutOurOwnLines(env, deal.id, deskWords ?? (theirNewText(msgBody) || msg.text.trim()));
   const sender = (addressIn(msg.from ?? "") ?? msg.from ?? "").trim().toLowerCase();
   const { brandDomainOf } = await import("./tlcVolume");
-  const cls = classifyBrandReply({ subject: msg.subject, text: words, raw: msg.text, brandDomain: brandDomainOf(deal.contact_email), notThese: [deal.contact_email, sender], helpdesk: deskWords !== null }, now);
+  const cls = classifyBrandReply({ subject: msg.subject, text: words, raw: msg.text, brandDomain: brandDomainOf(deal.contact_email), notThese: [sender], helpdesk: deskWords !== null }, now);
+  if (prior) {
+    if (cls.kind !== "REDIRECT") return "SEEN";
+    await env.WP_OS_DB.prepare("DELETE FROM tlc_brand_reply WHERE id = ?1 AND state = 'CLOSED'").bind(prior.id).run();
+    await appendEvent(env, { eventType: "tlc.brand_reply_reread", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: { message: mid, was: prior.held_reason, now: "REDIRECT", to: cls.to } });
+  }
   const close = (intent: string, note: string) => env.WP_OS_DB.prepare(
     "INSERT OR IGNORE INTO tlc_brand_reply (id, deal_id, brand_message_id, their_subject, their_text, received_at, intent, draft_subject, draft_body, state, held_reason, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '', '', 'CLOSED', ?8, ?9)",
   ).bind(`tbr_${crypto.randomUUID()}`, deal.id, mid, msg.subject.slice(0, 300), words.slice(0, 8000), msg.receivedAt, intent, note, deal.firm_scope).run();
@@ -542,7 +597,11 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
   const ev = await env.WP_OS_DB.prepare("SELECT * FROM tlc_event WHERE id = ?1").bind(deal.event_id).first<TlcEventRow>();
   if (!ev) return "SEEN";
   await env.WP_OS_DB.prepare("UPDATE tlc_deal SET stop_reason = 'REPLIED', replied_at = COALESCE(replied_at, ?2), next_send_at = NULL, updated_at = ?2 WHERE id = ?1 AND (stop_reason IS NULL OR stop_reason = 'REPLIED')").bind(deal.id, now.toISOString()).run();
-  if (cls.kind === "REDIRECT") return redirectDeal(env, deal, cls.to, mid, now, close);
+  if (cls.kind === "REDIRECT") {
+    return cls.to === deal.contact_email.trim().toLowerCase()
+      ? sampleEventToContact(env, deal, ev, msg, words, mid, sender, now, close, deps)
+      : redirectDeal(env, deal, cls.to, mid, now, close);
+  }
   /*
    * NO REPLY NEEDED (owner, 2 Nov 2026). The first decision, before any draft: a reply that passes the note on, loops
    * someone in, says they are reviewing or will get back, or asks nothing, gets no draft at all. The drip is already
@@ -1084,7 +1143,9 @@ async function sendRound(env: Env, now: Date, firmScope: string, rows: WaitingRo
     const copied = cc.map((a) => personWords(a, r).name);
     const about = [asker.role, copied.length ? `${copied.join(" and ")} copied` : ""].filter(Boolean).join("; ");
     const doc = docNameFor(r.kind, pricing);
-    const what = `Our ${doc.toLowerCase()} to ${asker.name} at ${brand}${about ? ` (${about})` : ""}.`;
+    // The sample event answers their desk on another address: say so, and never call the desk's words the addressee's.
+    const desk = r.kind === "SAMPLE_EVENT";
+    const what = `Our ${doc.toLowerCase()} to ${asker.name} at ${brand}${about ? ` (${about})` : ""}.${desk ? ` Their team asked us to write to this address with what we do, where we post and what we have in mind; it has no prices.` : ""}`;
     const lead = partnerRound
       ? `${what} You both need to reply "approved": nothing goes to ${brand} until both of you do. Or reply with your notes.`
       : pricing
@@ -1115,7 +1176,7 @@ async function sendRound(env: Env, now: Date, firmScope: string, rows: WaitingRo
       : null;
     const laidOut = renderWynnDraftEmail({
       brand, docName: doc, version, lead,
-      quote: partnerRound ? null : { label: `What ${asker.name} wrote (${herClock(r.received_at)})`, text: wordsOf(r.their_text) },
+      quote: partnerRound ? null : { label: `What ${desk ? `${brand}'s team` : asker.name} wrote (${herClock(r.received_at)})`, text: wordsOf(r.their_text) },
       changes: unchanged || version === 1 ? null : changes,
       unchangedNote,
       reply: { to: asker.full, cc: cc.map((a) => personWords(a, r).full), subject: r.draft_subject, body: withBrandFooter(r.draft_body) },
@@ -1545,6 +1606,13 @@ export async function resendUnanswered(env: Env, now: Date, firmScope: string, i
   return `pricing follow-ups: OUTPUT ${n.sent} resend_sent (${n.waiting} armed and waiting, ${n.cancelled} cancelled by a reply)${stops.length ? `; ${stops.join("; ")}` : ""}`;
 }
 
+/** Our own conversation with an address (the last email we sent it), or a NAMED STOP: nothing goes out unthreaded. */
+async function ownThread(env: Env, to: string, finder?: ThreadFinder): Promise<{ gmail_thread_id: string; in_reply_to: string; references: string[] }> {
+  const found = await followUpThread(env, to, null, finder);
+  if (!found) throw new BrandThreadError(`no email we sent ${to} is in her mailbox, so there is no conversation to write on`);
+  return { gmail_thread_id: found.gmail_thread_id, in_reply_to: found.in_reply_to, references: found.references };
+}
+
 /** Her approved answer, through the brand-sales lane: approval card, executor, her own Gmail, threaded. */
 async function sendApproved(env: Env, owner: Actor, r: ReplyRow & { brand: string; contact_email: string; stage: string }, now: Date, deps: BrandReplyDeps = {}): Promise<string | null> {
   const { BRAND_REPLY_TO, approvedFor, clubViewOf, renderPdfFor } = await import("./learningClub");
@@ -1553,7 +1621,8 @@ async function sendApproved(env: Env, owner: Actor, r: ReplyRow & { brand: strin
   const { to, cc } = answerRecipients(r);
   // WYNN NEVER DROPS THE THREAD (owner, 13 Nov 2026): the conversation is found in her mailbox before anything is
   // made; when it cannot be found this throws a NAMED STOP and nothing goes out (services/tlcBrandThread.ts).
-  const thread = await replyThread(env, r.brand_message_id, to, deps.thread);
+  // The sample event goes on our own conversation with that address, never the desk's thread (sampleEventToContact).
+  const thread = r.kind === "SAMPLE_EVENT" ? await ownThread(env, to, deps.thread) : await replyThread(env, r.brand_message_id, to, deps.thread);
   // The samples PDF goes with a yes to the samples, made NOW from her preview, once; the priced pitch only in answer
   // to a yes after a call (her rule). A PDF that cannot be made stops the send before anything leaves.
   const samples = r.samples_id ? await finalizeSamplesPdf(env, r.samples_id, deps.samples ?? {}) : null;

@@ -128,7 +128,8 @@ export function replyAsksToStop(text: string): boolean {
  * reviewing it"). Only an address on the brand's own domain counts, and only when the words around it send us there;
  * an address is never guessed. Pure: the caller checks NeverBounce and files email 1 for her approval.
  */
-const REDIRECT_WORDS = /\b(?:e-?mail|write to|reach out to|reach|contact|send [\w ]{0,30}?to|forward [\w ]{0,20}?to|direct [\w ]{0,20}?to|directed to|the right (?:route|person|team|contact|address|place)|best (?:person|contact|address|way)|handled by|handles)\b/i;
+// "please continue by emailing partnerships@…" (Therabody's desk, 17 Nov 2026) was missed: "emailing" is not "email".
+const REDIRECT_WORDS = /\b(?:e-?mail(?:ing)?|write to|writing to|reach out to|reach|contact|send [\w ]{0,30}?to|forward [\w ]{0,20}?to|direct [\w ]{0,20}?to|directed to|the right (?:route|person|team|contact|address|place)|best (?:person|contact|address|way)|handled by|handles)\b/i;
 const ADDRESS = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
 export function redirectAddressIn(text: string, brandDomain: string, notThese: readonly string[] = []): string | null {
   const domain = brandDomain.trim().toLowerCase();

@@ -3,6 +3,8 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import { recordBrandMail, recordBrandReplyText } from "../src/worker/services/learningClub";
 import { queueDeal } from "../src/worker/services/tlcMustPitch";
+import { takeBrandReply } from "../src/worker/services/tlcBrandReply";
+import type { TlcDealRow } from "../src/worker/services/learningClub";
 
 /**
  * A STOP IS FOR THE WHOLE BRAND, AND A REDIRECT IS FOLLOWED (owner, 16 Nov 2026). Fake brands and addresses only.
@@ -32,7 +34,7 @@ const queue = (eventId: string, brand: string, email: string) =>
 
 beforeAll(async () => {
   t = await createTestDb();
-  env = { ...makeTestEnv(t.db), WP_OS_NEVERBOUNCE_API_KEY: "nb_test" } as Env;
+  env = { ...makeTestEnv(t.db, { WP_OS_DOCUMENTS: t.docs }), WP_OS_NEVERBOUNCE_API_KEY: "nb_test" } as Env;
   vi.stubGlobal("fetch", async (url: string | URL | Request) => {
     const u = new URL(String(url));
     if (u.hostname === "api.neverbounce.com") {
@@ -95,6 +97,32 @@ describe("a reply that points us to another address is a redirect", () => {
     expect(await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_deal WHERE contact_email = 'bad.partners@badaddr.example'").first()).toBeNull();
     const reply = await env.WP_OS_DB.prepare("SELECT held_reason FROM tlc_brand_reply WHERE deal_id = 'tld_bad'").first<{ held_reason: string }>();
     expect(reply?.held_reason).toMatch(/TLC_REDIRECT_ADDRESS_REFUSED/);
+  });
+});
+
+describe("a desk that sends us back to the address we already wrote to", () => {
+  it("drafts the sample-event one-pager, no prices, to that address alone; a reply closed as 'no reply needed' is read again", async () => {
+    // Therabody, 17 Nov 2026: email 1 had gone to partnerships@; info@'s assistant answered the old thread with this,
+    // and it was closed as "they are reviewing it" ("emailing" was not read, and the deal's own address was skipped).
+    await deal("tld_tbp", "tlc_2027-01", "Therabody", "partnerships@therapart.example");
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_drip_message (id, deal_id, step, subject, body, state, sent_at) VALUES ('tdm_tbp', 'tld_tbp', 0, 'West Peek x Therabody: a recovery station', 'Hi, what we do.', 'SENT', '2026-11-10T15:00:00.000Z')").run();
+    const text = "Hello,\n\nThanks for sharing more context. For this kind of event collaboration, please continue by emailing [partnerships@therapart.example](mailto:partnerships@therapart.example).\n\nInclude what you do, where you post, and what you have in mind. The partnerships team reviews opportunities on a rolling basis and keeps information on file for future consideration.\n\nBest,  \nTherabody Virtual Assistant";
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_brand_reply (id, deal_id, brand_message_id, their_subject, their_text, received_at, intent, draft_subject, draft_body, state, held_reason) VALUES ('tbr_old', 'tld_tbp', 'tbp-1', 's', ?1, ?2, 'QUESTION', '', '', 'CLOSED', 'no reply needed (they are reviewing it): waiting on them, nothing drafted')").bind(text, NOW.toISOString()).run();
+    const d = await env.WP_OS_DB.prepare("SELECT * FROM tlc_deal WHERE id = 'tld_tbp'").first<TlcDealRow>();
+    let html = "";
+    const out = await takeBrandReply(env, d!, { messageId: "<tbp-1>", subject: "Therabody + a small room in New York", text, receivedAt: NOW.toISOString(), from: "Therabody <info@therapart.example>" },
+      { now: NOW, samples: { renderPdf: async (h: string) => { html = h; return { pdfBase64: btoa("%PDF-1.4"), reason: null } as never; } } });
+
+    expect(out).toBe("DRAFTED");
+    const r = await env.WP_OS_DB.prepare("SELECT * FROM tlc_brand_reply WHERE deal_id = 'tld_tbp'").all<{ kind: string; state: string; send_to: string; send_cc_json: string | null; draft_subject: string; draft_body: string; attachments_json: string }>();
+    expect(r.results).toHaveLength(1);
+    expect(r.results[0]).toMatchObject({ kind: "SAMPLE_EVENT", state: "DRAFTED", send_to: "partnerships@therapart.example", send_cc_json: null, draft_subject: "Re: West Peek x Therabody: a recovery station" });
+    expect(r.results[0]!.draft_body).toMatch(/one-pager that lays out a sample event we are planning/);
+    expect(JSON.parse(r.results[0]!.attachments_json)).toHaveLength(1);
+    // No money before a call: no price, level or payment terms in the email or the one-pager.
+    const page = html.replace(/<style>[\s\S]*?<\/style>/g, "");
+    for (const words of [r.results[0]!.draft_body, page]) expect(words).not.toMatch(/\$\s?\d|\bfee\b|\bprice|invoice|payment|partner levels/i);
+    expect(page).toMatch(/@westpeek/);
   });
 });
 
