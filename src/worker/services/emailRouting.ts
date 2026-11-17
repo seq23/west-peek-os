@@ -183,10 +183,23 @@ export async function siteCardDecision(
     };
 
     // ── A SITE NAMED: by its host (registered or not), or by the name his profile says he uses ──
-    const named = new Set([...hostsOf(ask?.property_host), ...namedSiteHostsIn(message.subject, body, registry), ...aliasHosts]);
+    /*
+     * EVERY SITE HE WRITES MUST BE THE JOB'S (17 Nov 2026). Scooter's "Google Analytics for the three sites" named
+     * westpeekproductions.com, joinwestpeek.com and westpeek.ventures; it joined the Productions rebuild (one of the
+     * three) because ANY shared host was enough. The two live sites' tags were then a steer on a build scoped to
+     * sites/productions, behind that site's publish hold. A host he writes out (registered or not) that the open job is
+     * not for makes it a new job; a profile alias ("Top Barz") still only picks a card, never widens one.
+     */
+    const written = new Set([...hostsOf(ask?.property_host), ...namedSiteHostsIn(message.subject, body, registry)]);
+    const named = new Set([...written, ...aliasHosts]);
     if (named.size > 0) {
       const same = open.filter((c) => hostsOf(c.property_host).some((h) => named.has(h)));
-      if (same.length > 0) return join(same[0]!, `it names ${[...named].join(", ")}, the site of this open job`);
+      const whole = same.filter((c) => [...written].every((h) => hostsOf(c.property_host).includes(h)));
+      if (whole.length > 0) return join(whole[0]!, `it names ${[...named].join(", ")}, the site of this open job`);
+      if (same.length > 0) {
+        const beyond = [...written].filter((h) => !hostsOf(same[0]!.property_host).includes(h));
+        return { kind: "NEW", why: `it names ${beyond.join(", ")} as well, which the open job for ${hostsOf(same[0]!.property_host).join(", ")} is not for` };
+      }
       return { kind: "NEW", why: `it names ${[...named].join(", ")}, which no open job is for` };
     }
     // ── NO SITE NAMED ──
