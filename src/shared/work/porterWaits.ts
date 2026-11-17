@@ -55,6 +55,19 @@ export interface PorterWaitFill {
   at?: string | null;
   /** DNS_RECORD: the exact record Cloudflare asked for, read from its API — type, name, target, and any TXT. */
   record?: { host: string; type: string; name: string; target: string; txtName?: string | null; txtValue?: string | null; liveAt: string } | null;
+  /** PREVIEW_APPROVAL: the partner said not to ask him for "approved" yet (`asksNoApprovalYet`). */
+  noApprovalAsk?: boolean;
+}
+
+/*
+ * "PLEASE DON'T ASK ME TO REPLY 'APPROVED' UNTIL I SAY SO" (Scooter, 17 Nov 2026, wc_c548d043). The preview email
+ * still ended "reply \"approved\" to publish it". When his latest words say so, the preview email asks for nothing:
+ * nothing lands until he says so, and more edits still come in as "changes: …".
+ */
+export function asksNoApprovalYet(words: string | null | undefined): boolean {
+  const t = String(words ?? "").replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"');
+  return /\b(?:don't|do\s+not|dont)\s+ask\s+(?:me\s+)?(?:to\s+)?(?:reply|say|send|write|answer|for)\s+(?:with\s+)?(?:an?\s+)?["']?approved/i.test(t)
+    || /\bno\s+["']?approved["']?\s+(?:yet|until)\b/i.test(t);
 }
 
 export const INTAKE_ADDRESS = "os@joinwestpeek.com";
@@ -66,7 +79,9 @@ export const PORTER_WAITS: Record<PorterWaitKind, (f: PorterWaitFill) => PorterW
   PREVIEW_APPROVAL: (f) => ({
     waiting: `your word on the preview${f.what ? ` at ${f.what}` : ""}`,
     why: "every site change previews before it goes live — your rule, 23 Sep 2026 — so nothing lands until you have seen it",
-    clear: `reply ${q("approved")} to publish it, ${q("changes: <what to change>")} to adjust it and get a new preview, or ${q("stop")} to hold it`,
+    clear: f.noApprovalAsk
+      ? `nothing is asked of you yet: it stays a preview until you say you are ready, as you asked; reply ${q("changes: <what to change>")} for more edits, or ${q("stop")} to hold it`
+      : `reply ${q("approved")} to publish it, ${q("changes: <what to change>")} to adjust it and get a new preview, or ${q("stop")} to hold it`,
   }),
   PLAN_APPROVAL: (f) => ({
     waiting: "your word on the plan",

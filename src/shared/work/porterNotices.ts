@@ -291,6 +291,12 @@ export const PREVIEW_REPLY_FORMS: readonly string[] = [
   `**Missing items + "preview"**: attach them or add them to Drive, reply "preview", and I'll fill them in and send you another preview.`,
 ];
 
+/** 17 Nov 2026 (wc_c548d043): he said "please don't ask me to reply 'approved' until I say so" — the forms ask nothing of him. */
+export const PREVIEW_NOT_YET_FORMS: readonly string[] = [
+  `**Nothing to approve yet**: it stays a preview until you say you are ready, as you asked.`,
+  `**changes: …**: I'll make them and send you a new preview.`,
+];
+
 const MAX_LINES = 6;
 
 /**
@@ -425,7 +431,7 @@ export function decisionResolutionIn(text: string | null | undefined): { n: numb
 }
 
 /** THE PREVIEW EMAIL — the first one, or a new one after a rebuild. Pure. */
-export function previewNotice(input: { title: string; previewLine: string | null; placeholders: readonly string[]; filled?: readonly string[]; changed?: string | null; asked?: readonly string[]; round?: number; cardId: string; sites?: readonly string[]; decided?: readonly string[] }): NoticeEmail {
+export function previewNotice(input: { title: string; previewLine: string | null; placeholders: readonly string[]; filled?: readonly string[]; changed?: string | null; asked?: readonly string[]; round?: number; cardId: string; sites?: readonly string[]; decided?: readonly string[]; answers?: string | null; noApprovalAsk?: boolean }): NoticeEmail {
   const p = input.placeholders.length;
   const again = (input.round ?? 1) > 1;
   const sections: NoticeEmail["sections"] = [{ label: (input.sites?.length ?? 0) > 1 ? `Preview of ${input.sites!.length} sites — they go live together` : "Preview", bullets: [input.previewLine ?? "The preview link did not come back; it is on the card."] }];
@@ -433,6 +439,9 @@ export function previewNotice(input: { title: string; previewLine: string | null
   // 15 Nov 2026 (wc_c548d043): every thing he asked since the last email, each marked, whole — never one clipped quote.
   if (input.asked?.length) sections.push({ label: "Each thing you asked since my last email", bullets: [...input.asked] });
   else if (input.changed?.trim()) sections.push({ label: "Changed since the last preview, as you asked", bullets: [clauseLine(input.changed.trim(), 300)] });
+  // 17 Nov 2026 (wc_c548d043): what the build answered of his questions ("what's done, what's left, the estimate").
+  const answers = String(input.answers ?? "").split("\n").map((l) => l.replace(/^[•·\-*]\s+/, "").trim()).filter(Boolean);
+  if (answers.length) sections.push({ label: "What you asked, answered", bullets: answers });
   if (input.filled?.length) sections.push(...listSections(again ? "Filled in since the last preview" : "Filled in since the plan", input.filled));
   if (p) sections.push(...listSections(STILL_MISSING, input.placeholders));
   if (input.decided?.length) sections.push(...listSections("Decided so far", input.decided, [], 140));
@@ -441,7 +450,7 @@ export function previewNotice(input: { title: string; previewLine: string | null
   return {
     what: stageSubject(input.title, stage),
     tldr: `${stage}${p ? `, with ${p} placeholder${p === 1 ? "" : "s"}` : ""}. Reply with one of these:`,
-    tldrBullets: [...PREVIEW_REPLY_FORMS],
+    tldrBullets: [...(input.noApprovalAsk ? PREVIEW_NOT_YET_FORMS : PREVIEW_REPLY_FORMS)],
     sections,
   };
 }
