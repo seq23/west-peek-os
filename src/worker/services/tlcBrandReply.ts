@@ -9,7 +9,7 @@ import type { EmailAttachment } from "../effects/emailTransport";
 import { listGmailRaw } from "../effects/googleClient";
 import { serviceAccountToken } from "../effects/googleWorkspaceClient";
 import { BrandThreadError, followUpThread, replyThread, type ThreadFinder } from "./tlcBrandThread";
-import type { ExecEmailInput } from "../../shared/email/execEmail";
+import { ACTION_REQUIRED, type ExecEmailInput } from "../../shared/email/execEmail";
 import { addressIn, authenticationVerdict } from "../../shared/intake/partnerAuthority";
 import { newTextOf } from "../../shared/events/packetDecisionToken";
 import { isEmptyReply, parseDraftReply } from "../../shared/tlc/draftReply";
@@ -1536,7 +1536,7 @@ export async function resendUnanswered(env: Env, now: Date, firmScope: string, i
       stops.push(`NAMED STOP [${code}] ${brand}: ${why}`);
       await appendEvent(env, { eventType: "tlc.brand_reply_resend_stopped", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_brand_reply", objectId: r?.id ?? o.key, firmScope, payload: { code, why: why.slice(0, 300) } });
       await emailHer(env, firmScope, `resend:${r?.id ?? o.key}:stopped`, {
-        what: `${brand} follow-up NOT sent · ${r?.thread_ref ?? r?.notice_ref ?? ""}`.trim(),
+        what: `${ACTION_REQUIRED}${brand} follow-up NOT sent · ${r?.thread_ref ?? r?.notice_ref ?? ""}`.trim(),
         tldr: `Nothing went to ${brand}. The follow-up you asked for (the same email again after ${RESEND_QUIET_DAYS} quiet days) stopped.`,
         sections: [
           { label: "What stopped it", bullets: [`${why[0]!.toUpperCase()}${why.slice(1).replace(/\bher (mailbox|approval)\b/g, "your $1")}.`] },

@@ -297,7 +297,7 @@ describe("her brief becomes a card on Parker's desk, then a packet", () => {
     const mail = (await env.WP_OS_DB.prepare("SELECT event_type, payload_json FROM event_record WHERE object_type = 'room_packet' AND object_id = ?1 AND event_type LIKE 'deliverable.%' ORDER BY created_at").bind(p.id).all<{ event_type: string; payload_json: string }>()).results!;
     expect(mail).toHaveLength(1);
     expect((JSON.parse(mail[0]!.payload_json) as { to: string[] }).to.slice().sort()).toEqual(["scooter@westpeek.ventures", "sequoia@westpeek.ventures"]);
-    expect((JSON.parse(mail[0]!.payload_json) as { subject: string }).subject).toBe("Parker: your October 2026 Room — The Scaled Boardroom (PDF inside)");
+    expect((JSON.parse(mail[0]!.payload_json) as { subject: string }).subject).toBe("ACTION REQUIRED: Parker: your October 2026 Room — The Scaled Boardroom (PDF inside)");
   });
 
   it("renders the whole packet as the email body, opening with who Parker is", async () => {

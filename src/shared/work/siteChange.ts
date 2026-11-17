@@ -67,7 +67,7 @@ function cleanSubject(subject: string): string {
     // "Re:", "Fwd:" — and OUR OWN EMPLOYEE'S PREFIX (27 Sep 2026): a request that arrived as a reply
     // to "Porter: Community site redesign — now yours" is named "Community site redesign", never
     // "Porter" (which then read "Porter: Porter: Got it" in the subject line).
-    const next = s.replace(/^(?:re|fwd?|fw)\s*:\s*/i, "").replace(EMPLOYEE_PREFIX_RE, "");
+    const next = s.replace(/^(?:re|fwd?|fw)\s*:\s*/i, "").replace(/^ACTION REQUIRED:\s*/i, "").replace(EMPLOYEE_PREFIX_RE, "");
     if (next === s) break;
     s = next;
   }

@@ -37,7 +37,7 @@ import {
   type PreviewAction,
   type PreviewLaneReason,
 } from "../../shared/work/previewLane";
-import { renderExecEmail, type ExecEmailInput } from "../../shared/email/execEmail";
+import { ACTION_REQUIRED, renderExecEmail, type ExecEmailInput } from "../../shared/email/execEmail";
 
 /**
  * "YES, SEND THAT." — the preview lane's database, decision and doors (17 Sep 2026).
@@ -315,7 +315,7 @@ function previewEmailFor(
   const link = `${OS_BASE}/api/approve/${input.token}`;
   return {
     employee: input.employee,
-    what: `${input.what} — ready to send, waiting on you`,
+    what: `${ACTION_REQUIRED}${input.what} — ready to send, waiting on you`,
     tldr: `I have finished this and it is addressed to ${input.recipient}, who is outside the firm, so it has not gone anywhere. Say the word and it goes exactly as written.`,
     sections: [
       {

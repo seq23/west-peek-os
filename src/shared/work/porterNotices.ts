@@ -1,3 +1,4 @@
+import { ACTION_REQUIRED } from "../email/execEmail";
 import type { Ask } from "./approvalReply";
 import type { MissingMaterial } from "./missingMaterials";
 
@@ -319,10 +320,18 @@ export const STAGE = {
   UNCHANGED: "Nothing new found",
 } as const;
 
-/** "<plain title>: <stage>" — the title cut at a word if it must be, the stage never. Pure. */
+/**
+ * THE STAGES THAT WAIT ON THE PARTNER (owner, 17 Nov 2026): a plan or preview to answer, a question, or "nothing new
+ * found" (the card stays blocked on the same preview, so he approves or adds the items). Their subject starts
+ * "ACTION REQUIRED: ". Got it, Going ahead, Blocked (a lane fault the reader cannot clear), Waiting for the Mac and Live
+ * only inform.
+ */
+const ACTION_STAGES: ReadonlySet<string> = new Set([STAGE.PLAN, STAGE.PREVIEW, STAGE.REBUILD, STAGE.QUESTION, STAGE.UNCHANGED]);
+
+/** "<plain title>: <stage>" — the title cut at a word if it must be, the stage never; "ACTION REQUIRED: " first when the stage waits on the partner. Pure. */
 export function stageSubject(title: string, stage: string): string {
   const room = SUBJECT_ROOM - stage.length - 2;
-  return `${shorten(title, Math.max(12, room))}: ${stage}`;
+  return `${ACTION_STAGES.has(stage) ? ACTION_REQUIRED : ""}${shorten(title, Math.max(12, room))}: ${stage}`;
 }
 
 /**

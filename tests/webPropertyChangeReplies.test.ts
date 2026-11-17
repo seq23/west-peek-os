@@ -540,7 +540,7 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     })).id;
     expect((await card(asked)).state).toBe("BLOCKED");
     expect((await readWebPropertyChange(env, asked))!.plan_approved_at).toBeNull();
-    expect(sent.filter((m) => m.to === SEQUOIA).pop()!.subject).toBe("Porter: Hero photo rights B: Plan ready");
+    expect(sent.filter((m) => m.to === SEQUOIA).pop()!.subject).toBe("ACTION REQUIRED: Porter: Hero photo rights B: Plan ready");
   });
 
   it("a card BLOCKED at its plan before the rule, every ask recommended, is released by the sweep and goes to BUILD on its own — one FYI, never the question twice", async () => {
@@ -577,7 +577,7 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     expect(row.phase).toBe("BUILD");
     expect(row.plan_approved_by).toBe(`request:${porter.id} (every decision carried a recommendation; taken as the plan was filed)`);
     const toScooter = sent.slice(before).filter((m) => m.to === SCOOTER && !/Got it$/.test(m.subject));
-    expect(toScooter.map((m) => m.subject.replace(/^Porter: .*: /, "")), "the question once, then the FYI once").toEqual(["Plan ready", "Going ahead"]);
+    expect(toScooter.map((m) => m.subject.replace(/^(?:ACTION REQUIRED: )?Porter: .*: /, "")), "the question once, then the FYI once").toEqual(["Plan ready", "Going ahead"]);
     // The FYI is once per filing: another tick sends nothing more.
     await macReports(porter.id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/77", pr_number: 77, check_state: "GREEN", preview_url: "https://p77.west-peek-ventures.pages.dev" });
     expect((await tickFor(porter.id)).outcome, "green still stops at the preview: the FYI is a plan approval, never a landing approval").toBe("BLOCKED");
@@ -747,10 +747,10 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
     expect(reply.sent).toBe(true);
     const cardsBefore = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card").first<{ n: number }>())!.n;
     // The subject we sent is the one he replies to — "a question", never "blocked" (23 Sep 2026).
-    expect(sent.at(-1)!.subject).toBe("Walker: a question — Something Walker holds");
-    const raw = SCOOTER_MIME({ subject: "Re: Walker: a question — Something Walker holds", body: "Yes he can open.\n\nSent from my iPhone" });
+    expect(sent.at(-1)!.subject).toBe("ACTION REQUIRED: Walker: a question — Something Walker holds");
+    const raw = SCOOTER_MIME({ subject: "Re: ACTION REQUIRED: Walker: a question — Something Walker holds", body: "Yes he can open.\n\nSent from my iPhone" });
     // The wire carries the subject RFC 2047-encoded (an em-dash is not a ByteString).
-    await handleInboundEmail(inbound(raw, { subject: `=?UTF-8?B?${Buffer.from("Re: Walker: a question — Something Walker holds").toString("base64")}?=` }), env);
+    await handleInboundEmail(inbound(raw, { subject: `=?UTF-8?B?${Buffer.from("Re: ACTION REQUIRED: Walker: a question — Something Walker holds").toString("base64")}?=` }), env);
     const cardsAfter = (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card").first<{ n: number }>())!.n;
     expect(cardsAfter, "no new card for a reply").toBe(cardsBefore);
     const c = await card(chiefId);

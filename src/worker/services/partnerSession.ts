@@ -20,6 +20,7 @@
  *   · OUTSIDERS STAY GATED. Every email here goes through `replyToRequester`, which sends to the two partner addresses
  *     only; the session itself has no tool that emails anyone.
  */
+import { ACTION_REQUIRED } from "../../shared/email/execEmail";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { abandonRun, parkRun, readRun } from "../ai/subscriptionSeats";
@@ -218,7 +219,7 @@ export function questionEmail(all: readonly SessionAsk[], going: readonly Sessio
   const n = all.length;
   const several = n > BEST_READING_OVER;
   return {
-    what: n === 1 ? `a question — "${questions[0]!.words.slice(0, 60)}"` : several ? `your request reads several ways — ${n} items` : `${n} questions, by number`,
+    what: `${ACTION_REQUIRED}${n === 1 ? `a question — "${questions[0]!.words.slice(0, 60)}"` : several ? `your request reads several ways — ${n} items` : `${n} questions, by number`}`,
     tldr: several
       ? `Your request reads several ways, so below is my best reading of each of the ${n} items. Reply with the number of any I got wrong and what you meant; everything else is being built meanwhile.`
       : `${n === 1 ? "One question" : `${n} questions`} before I finish ${n === 1 ? "that part" : "those parts"}. Reply with the number and your answer; everything else is being built meanwhile.`,

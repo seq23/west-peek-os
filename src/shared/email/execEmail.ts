@@ -118,6 +118,21 @@ export function boldNumbers(line: string): string {
     .replace(/((?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec) \d{1,2},\s)\*\*((?:19|20)\d{2})\*\*/g, "$1$2");
 }
 
+/**
+ * "ACTION REQUIRED: " LEADS EVERY PARTNER EMAIL THAT NEEDS THE PARTNER TO DO SOMETHING (owner, 17 Nov 2026: "in the
+ * future when sending emails to scooter and we need him to do something we need to start the email with ACTION
+ * REQUIRED:"). A sender marks it by starting `what` with this; `execSubject` lifts it in front of the employee's name,
+ * once. An email that only informs never carries it.
+ */
+export const ACTION_REQUIRED = "ACTION REQUIRED: ";
+
+/** The subject with a leading ACTION_REQUIRED (any number of them) taken off. Pure. */
+export function withoutActionRequired(subject: string): string {
+  let s = subject;
+  while (s.startsWith(ACTION_REQUIRED)) s = s.slice(ACTION_REQUIRED.length).trimStart();
+  return s;
+}
+
 export function execSubject(employee: string, what: string): string {
   const head = `${employee}: `;
   const room = SUBJECT_MAX - head.length;
@@ -125,13 +140,20 @@ export function execSubject(employee: string, what: string): string {
   // Porter's own emails had "Porter: …" in its subject, and the RECEIVED went out as "Porter: Porter:
   // Got it". A `what` that already starts with this employee's prefix is not prefixed again.
   let tail = oneLine(what);
-  while (tail.startsWith(head)) tail = tail.slice(head.length).trimStart();
-  if (tail.length <= room) return head + tail;
+  const action = tail.startsWith(ACTION_REQUIRED);
+  const lead = action ? ACTION_REQUIRED + head : head;
+  for (;;) {
+    const next = withoutActionRequired(tail);
+    const bare = next.startsWith(head) ? next.slice(head.length).trimStart() : next;
+    if (bare === tail) break;
+    tail = bare;
+  }
+  if (tail.length <= room) return lead + tail;
   // NEVER MID-WORD (9 Oct 2026): a long title is cut at the last whole word that fits, then "…".
   const limit = Math.max(0, room - 1);
   const space = tail.slice(0, limit + 1).lastIndexOf(" ");
   const cut = space >= Math.floor(limit / 2) ? tail.slice(0, space) : tail.slice(0, limit);
-  return `${head}${cut.replace(/[\s,;:—–-]+$/, "")}…`;
+  return `${lead}${cut.replace(/[\s,;:—–-]+$/, "")}…`;
 }
 
 /**
@@ -317,8 +339,10 @@ function renderHtml(parts: { tldr: string; tldrBullets: readonly string[]; secti
  * OUTPUT of `renderExecEmail` — and on anything else that claims to be one, which is how the
  * self-test proves the lint still bites.
  */
-export function lintExecEmail(subject: string, text: string, employee?: string): string[] {
+export function lintExecEmail(fullSubject: string, text: string, employee?: string): string[] {
   const v: string[] = [];
+  // The ACTION REQUIRED flag sits in front of the shape; the shape and its cap are read after it.
+  const subject = withoutActionRequired(fullSubject);
   if (subject.length > SUBJECT_MAX) v.push(`subject is ${subject.length} characters; the limit is ${SUBJECT_MAX}`);
   if (!/^[A-Z][A-Za-z]+: \S/.test(subject)) v.push(`subject does not read "<Employee>: <what it is>": "${subject.slice(0, 40)}"`);
   if (employee && !subject.startsWith(`${employee}: `)) v.push(`subject does not start with "${employee}: "`);

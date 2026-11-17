@@ -3,7 +3,7 @@ import { porterContext } from "./porterContext";
 import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
 import type { Env } from "../env";
 import { ASSIGNING_PARTNERS } from "../../shared/intake/partnerAuthority";
-import { bulletsFrom, type ExecEmailSection } from "../../shared/email/execEmail";
+import { ACTION_REQUIRED, bulletsFrom, type ExecEmailSection } from "../../shared/email/execEmail";
 import { missingSectionFor } from "./requestMaterials";
 import { partnerByFirmUserId } from "../../shared/registry/partners";
 import { sendOrPreview } from "./previewApproval";
@@ -251,7 +251,7 @@ export async function replyToRequester(
     : {
         employee: who,
         // A LANE FAULT IS "STUCK", NOT A QUESTION: the reader cannot answer it, and it says so.
-        what: outcome === "DONE" ? `done — ${asked}` : stuck ? `stuck — ${asked}` : `a question — ${asked}`,
+        what: outcome === "DONE" ? `done — ${asked}` : stuck ? `stuck — ${asked}` : `${ACTION_REQUIRED}a question — ${asked}`,
         tldr:
           outcome === "DONE"
             ? `Finished what you asked for: ${asked}. Nothing needs deciding unless you want more.`

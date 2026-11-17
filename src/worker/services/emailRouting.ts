@@ -9,6 +9,7 @@ import { textBodyOf } from "../effects/mimeAttachments";
 import { loadRegistry } from "./webPropertyRegistry";
 import { loadProfile, type PartnerProfile } from "./partnerProfile";
 import { sendPartnerEmail } from "./execEmail";
+import { ACTION_REQUIRED } from "../../shared/email/execEmail";
 
 /**
  * WHERE A PARTNER'S NEW EMAIL GOES (9 Oct 2026; owner-approved rules 1a–1e).
@@ -280,7 +281,7 @@ export function cantPlaceEmail(input: { subject: string; receivedAt: string; fro
   const options = input.options.slice(0, 3);
   return {
     employee: "Porter",
-    what: `${CANT_PLACE_PREFIX}${shortSubject(input.subject, CANT_PLACE_PREFIX)}`,
+    what: `${ACTION_REQUIRED}${CANT_PLACE_PREFIX}${shortSubject(input.subject, CANT_PLACE_PREFIX)}`,
     tldr: `I got the following at ${ctTime(input.receivedAt)} from ${input.fromLabel}: ${input.whatItIs}. ${input.doNotKnow ?? "I don't know what to do with it."}`,
     sections: [
       { label: "Reply with one of these", bullets: options.map((o) => `Reply '${o.reply}' ${o.does}`) },
@@ -295,7 +296,7 @@ export function shareQuestionEmail(input: { title: string; receivedAt: string; u
   const lead = "What should I do with ";
   return {
     employee: "Porter",
-    what: `${lead}"${shortSubject(input.title, `${lead}""?`)}"?`,
+    what: `${ACTION_REQUIRED}${lead}"${shortSubject(input.title, `${lead}""?`)}"?`,
     tldr: `I got "${input.title}" from you at ${ctTime(input.receivedAt)}. What would you like me to do with it?`,
     sections: [
       {

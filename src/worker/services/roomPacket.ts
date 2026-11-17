@@ -81,7 +81,7 @@ import { writtenGuidance } from "./firmSkills";
 import { sendOrPreview } from "./previewApproval";
 import { parkerAddressedNote, parkerSponsorAsk } from "../../shared/events/parkerNote";
 import { sendPartnersEmail } from "./execEmail";
-import type { ExecEmailInput } from "../../shared/email/execEmail";
+import { ACTION_REQUIRED, type ExecEmailInput } from "../../shared/email/execEmail";
 import { ASSIGNING_PARTNERS } from "../../shared/intake/partnerAuthority";
 import { notifyPartners } from "./notifications";
 import { createWorkCardInternal } from "./workCards";
@@ -1860,7 +1860,7 @@ export async function emailPacket(env: Env, packet: PacketRow): Promise<{ sent: 
    */
   const out = await sendPartnersEmail(env, {
     to: ASSIGNING_PARTNERS,
-    email: { employee: "Parker", what: `your ${monthName} ${workshop ? "Workshop" : "Room"} — ${packet.title.replace(/^Workshop: /, "")}${packet.document_id ? " (PDF inside)" : ""}`, tldr: summary.tldr, sections: summary.sections, details: text },
+    email: { employee: "Parker", what: `${ACTION_REQUIRED}your ${monthName} ${workshop ? "Workshop" : "Room"} — ${packet.title.replace(/^Workshop: /, "")}${packet.document_id ? " (PDF inside)" : ""}`, tldr: summary.tldr, sections: summary.sections, details: text },
     objectType: "room_packet", objectId: packet.id, firmScope: packet.firm_scope, actorId: "aie_parker",
   });
   const sent: string[] = out.sent ? [...out.recipients] : [];
