@@ -21,7 +21,7 @@ import { hostsSentence, pagesHostsOf, readWebPropertyAsk, sitesOf, type WebPrope
 import { loadRegistry, recordRepoFacts, registryEntryFor } from "./webPropertyRegistry";
 import { outboundFilesFor } from "./workCardFiles";
 import { recordDnsWaits } from "./dnsWaits";
-import { missingSecretLine, waitDetail } from "../../shared/work/porterWaits";
+import { asksNoApprovalYet, missingSecretLine, waitDetail } from "../../shared/work/porterWaits";
 import { dueLine } from "../../shared/intake/dueTime";
 import type { MissingSecret } from "../../shared/work/localJobs";
 import { doneLines } from "../../shared/work/partnerPractices";
@@ -139,6 +139,8 @@ export interface WebPropertyChangeRow {
   check_url: string | null;
   check_green_at: string | null;
   build_proof: string | null;
+  /** What the BUILD answered of the partner's questions (its `notes` and per-item lines), for his preview email. */
+  build_answers?: string | null;
   merge_sha: string | null;
   landed_at: string | null;
   live_proof: string | null;
@@ -1091,6 +1093,7 @@ export async function rebuildWords(env: Env, cardId: string, row: Pick<WebProper
 export function previewBlockText(
   row: Pick<WebPropertyChangeRow, "pr_url" | "preview_url" | "placeholders_json" | "publish_ready"> & Partial<Pick<WebPropertyChangeRow, "property_host" | "branch" | "rebuilt_for" | "changed_pages_json">>,
   parts: readonly (Pick<WebPropertyChangePart, "repo" | "property_host" | "pr_url" | "preview_url"> & Partial<Pick<WebPropertyChangePart, "branch" | "changed_pages_json">>)[] = [],
+  opts: { noApprovalAsk?: boolean } = {},
 ): string {
   const placeholders = list(row.placeholders_json);
   // 0244: a preview rebuilt for the partner's words says what it changed, in their words.
@@ -1107,15 +1110,40 @@ export function previewBlockText(
         `• ${p.repo} (${p.property_host}): ${p.preview_url ? `look at it here: ${withChangedPages(cleanPreviewUrls(p.preview_url, pagesHostsOf(p.property_host ?? null), p.branch ?? ""), p.changed_pages_json) ?? p.preview_url}` : "no preview deployment for this repo — the PR and its screenshots stand in for it"}. The PR: ${p.pr_url ?? "(none)"}.`,
       ),
       ...(placeholders.length ? [`Ships with ${placeholders.length} placeholder${placeholders.length === 1 ? "" : "s"}: ${placeholders.join("; ")}.`] : []),
-      `Reply "approved" to land every PR together, or "changes: …" to hold them all. Nothing lands without that word, and nothing lands unless every PR is green.${placeholders.length ? ` ("approved to production" also lands them and names the placeholders and you in the DONE email.)` : ""}`,
+      opts.noApprovalAsk ? NOT_ASKING_YET : `Reply "approved" to land every PR together, or "changes: …" to hold them all. Nothing lands without that word, and nothing lands unless every PR is green.${placeholders.length ? ` ("approved to production" also lands them and names the placeholders and you in the DONE email.)` : ""}`,
     ].join("\n");
   }
   return [
     `PREVIEW READY. ${row.preview_url ? `Look at it here: ${row.preview_url}` : "No preview deployment exists for this repo — the PR link and the screenshots stand in for it"}. The PR: ${row.pr_url ?? "(none)"}.`,
     ...changed,
     ...(placeholders.length ? [`Ships with ${placeholders.length} placeholder${placeholders.length === 1 ? "" : "s"}: ${placeholders.join("; ")}.`] : []),
-    `Reply "approved" to land it, or "changes: …" to hold it. Nothing lands without that word.${placeholders.length ? ` ("approved to production" also lands it and names the placeholders and you in the DONE email.)` : ""}`,
+    opts.noApprovalAsk ? NOT_ASKING_YET : `Reply "approved" to land it, or "changes: …" to hold it. Nothing lands without that word.${placeholders.length ? ` ("approved to production" also lands it and names the placeholders and you in the DONE email.)` : ""}`,
   ].join("\n");
+}
+
+/** His latest words (the open answer, else the last one the rebuild carried) say not to ask him for "approved" yet. */
+function noApprovalYet(row: Pick<WebPropertyChangeRow, "answers_json">, blockAnswer: string | null | undefined): boolean {
+  return asksNoApprovalYet(blockAnswer?.trim() ? blockAnswer : list(row.answers_json).at(-1) ?? null);
+}
+
+/** The reply line when the partner asked not to be asked for "approved" yet (`asksNoApprovalYet`). */
+const NOT_ASKING_YET = `Nothing lands until you say you are ready, as you asked, so there is nothing to approve yet. More edits: reply "changes: …".`;
+
+/*
+ * WHAT THE BUILD ANSWERED, IN HIS EMAIL (17 Nov 2026, wc_c548d043). Scooter asked "Tell me if you recommend a better
+ * approach" and "Please confirm what's already done, what needs building and your estimate". Porter answered both in
+ * the BUILD's notes and items, and the preview email carried only the link and the technical proof: the answers
+ * stayed on the Mac. Composed here from the report, kept on the row, printed in the preview email. Pure.
+ */
+export function buildAnswersText(report: Pick<LocalJobReport, "notes" | "items">): string | null {
+  const lines: string[] = [];
+  for (const i of report.items ?? []) {
+    const note = (i.done_when ?? []).map((c) => c.note ?? "").find((n) => n.trim()) ?? i.note ?? "";
+    lines.push(`• ${i.state === "done" ? "Done" : i.state === "partial" ? "Partly done" : "Not done"}: ${String(i.item).slice(0, 200)}${note && /\b(?:confirm|answer|estimate|recommend|tell me)\b/i.test(String(i.item)) ? ` — ${note.slice(0, 700)}` : ""}`);
+  }
+  const notes = String(report.notes ?? "").replace(/\s*\(cost \$[\d.]+\)\s*$/, "").trim();
+  if (notes) lines.push("", notes.slice(0, 2500));
+  return lines.length ? lines.join("\n").slice(0, 4000) : null;
 }
 
 /** "fu_sequoia_taylor" / "sequoia@…" → "Sequoia"; anything else (Porter's own approval) as it is. */
@@ -1172,7 +1200,7 @@ export async function porterNoticeEmail(env: Env, cardId: string, kind: NoticeKi
   if (kind === "PREVIEW") {
     // A preview's round counts the previews actually sent, re-sends of the same one excluded.
     const sent = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PREVIEW' AND sent = 1 AND cause NOT LIKE 'resend:%'").bind(cardId).first<{ n: number }>();
-    return previewNotice({ title: ctx.title, previewLine: ctx.previewLine, placeholders: list(row.placeholders_json), filled: list(row.filled_json), changed: (await rebuildWords(env, cardId, row)).forPartner, asked: await askedThisRound(env, cardId, opts.resend ?? false), round: Math.max(1, (sent?.n ?? 0) + (opts.resend ? 0 : 1)), cardId, sites: ctx.sites, decided: decidedSoFar(asksOf(row), list(row.answers_json), approverName(row.plan_approved_by)) });
+    return previewNotice({ title: ctx.title, previewLine: ctx.previewLine, placeholders: list(row.placeholders_json), filled: list(row.filled_json), changed: (await rebuildWords(env, cardId, row)).forPartner, asked: await askedThisRound(env, cardId, opts.resend ?? false), round: Math.max(1, (sent?.n ?? 0) + (opts.resend ? 0 : 1)), cardId, sites: ctx.sites, decided: decidedSoFar(asksOf(row), list(row.answers_json), approverName(row.plan_approved_by)), answers: (await rebuildWords(env, cardId, row)).developer ? null : row.build_answers ?? null, noApprovalAsk: noApprovalYet(row, (await env.WP_OS_DB.prepare("SELECT block_answer FROM work_card WHERE id = ?1").bind(cardId).first<{ block_answer: string | null }>())?.block_answer) });
   }
   if (kind === "QUESTION") return questionNotice({ title: ctx.title, question: lines.slice(0, 12), previewLine: ctx.previewLine, missing: missing.map((m) => m.item), cardId });
   if (kind === "STUCK") return stuckNotice({ title: ctx.title, blockedBy: lines[0] ?? "something on our side stopped the work", next: lines[1] ?? "Sequoia has been told; you don't need to do anything.", previewLine: ctx.previewLine, cardId });
@@ -1302,7 +1330,7 @@ async function blockOnPreview(env: Env, card: WebPropertyChangeCard, row: WebPro
     trying: card.title,
     employee: PORTER_NAME,
     who: whoFor(card),
-    detail: [waitDetail("PREVIEW_APPROVAL", { what: cleanPreviewUrls(row.preview_url, pagesHostsOf(row.property_host ?? null, await loadRegistry(env)), row.branch ?? "") }), previewBlockText({ ...row, rebuilt_for: (await rebuildWords(env, card.id, row)).forPartner }, await readParts(env, card.id))].join("\n").slice(0, 900),
+    detail: [waitDetail("PREVIEW_APPROVAL", { what: cleanPreviewUrls(row.preview_url, pagesHostsOf(row.property_host ?? null, await loadRegistry(env)), row.branch ?? ""), noApprovalAsk: noApprovalYet(row, card.block_answer) }), previewBlockText({ ...row, rebuilt_for: (await rebuildWords(env, card.id, row)).forPartner }, await readParts(env, card.id), { noApprovalAsk: noApprovalYet(row, card.block_answer) })].join("\n").slice(0, 900),
   });
   await update(env, card.id, { preview_emailed_at: new Date().toISOString() });
   return why;
@@ -1354,8 +1382,10 @@ export async function blockedEmailDetail(env: Env, cardId: string): Promise<stri
   if (row.pr_url && row.check_state === "GREEN" && needsPreview(row) && !row.land_approved_at && !row.forced_by) {
     // The proof of a build the developer directed describes her instruction: it stays on the card, out of his email.
     const cause = await rebuildWords(env, cardId, row);
+    const said = (await env.WP_OS_DB.prepare("SELECT block_answer FROM work_card WHERE id = ?1").bind(cardId).first<{ block_answer: string | null }>())?.block_answer ?? null;
     return [
-      previewBlockText({ ...row, rebuilt_for: cause.forPartner }, await readParts(env, cardId)),
+      previewBlockText({ ...row, rebuilt_for: cause.forPartner }, await readParts(env, cardId), { noApprovalAsk: noApprovalYet(row, said) }),
+      ...(cause.developer || !row.build_answers ? [] : ["", "WHAT YOU ASKED, ANSWERED:", "", row.build_answers]),
       ...(cause.developer ? [] : ["", "WHAT WAS PROVEN BEFORE THE PR:", "", row.build_proof ?? "(no proof text came back with the build)"]),
     ].join("\n");
   }
@@ -2523,6 +2553,7 @@ async function applyBuild(env: Env, card: WebPropertyChangeCard, row: WebPropert
     check_url: report.check_url ?? null,
     check_green_at: state === "GREEN" ? now : null,
     build_proof: (report.proof ?? "").slice(0, 8000) || null,
+    build_answers: buildAnswersText(report),
     preview_url: report.preview_url ?? null,
     changed_pages_json: changedPages,
   });
@@ -2547,7 +2578,7 @@ async function applyBuild(env: Env, card: WebPropertyChangeCard, row: WebPropert
    * `land ""` and `gh pr view null`. What the update wrote to the row and what the next phase read
    * from memory were two different rows. One object, every field the report carries.
    */
-  const fresh: WebPropertyChangeRow = { ...row, pr_url: report.pr_url, pr_number: report.pr_number ?? row.pr_number ?? null, branch: report.branch ?? row.branch ?? null, check_state: "GREEN", check_green_at: now, check_url: report.check_url ?? row.check_url ?? null, preview_url: report.preview_url ?? null, changed_pages_json: changedPages, build_proof: (report.proof ?? "").slice(0, 8000) || null };
+  const fresh: WebPropertyChangeRow = { ...row, pr_url: report.pr_url, pr_number: report.pr_number ?? row.pr_number ?? null, branch: report.branch ?? row.branch ?? null, check_state: "GREEN", check_green_at: now, check_url: report.check_url ?? row.check_url ?? null, preview_url: report.preview_url ?? null, changed_pages_json: changedPages, build_proof: (report.proof ?? "").slice(0, 8000) || null, build_answers: buildAnswersText(report) };
   /*
    * A CHANGE THAT PREVIEWS FIRST STOPS HERE (21 Sep 2026). Not publish-ready, or the partner said
    * "preview": the second email carries the preview link, the PR, the placeholders and the proof,

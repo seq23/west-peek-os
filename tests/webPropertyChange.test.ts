@@ -1168,6 +1168,39 @@ describe("the developer may direct any job with a work instruction, and with not
   });
 
   /**
+   * 17 Nov 2026 (wc_c548d043): Scooter asked "confirm what's already done, what needs building and your estimate",
+   * "Tell me if you recommend a better approach", and "please don't ask me to reply \"approved\" until I say so".
+   * Porter answered in the BUILD's notes; the preview email carried none of it and ended 'reply "approved"'.
+   */
+  it("the preview email carries what the build answered, and asks for no \"approved\" when he said not to", async () => {
+    const id = await atPreview("ans1", SCOOTER);
+    await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: "changes: make the logo smaller. Tell me if you recommend a better approach. Please confirm what's already done and your estimate. No publishing yet, and please don't ask me to reply \"approved\" until I say so." });
+    const from = sent.length;
+    await rebuilt(id, "ans1b", "work/wpc-ans1", {
+      items: [
+        { item: "(1) Make the logo smaller", state: "done", done_when: [{ check: "logo 15% smaller", met: true }] },
+        { item: "(2) Confirm what's done and the estimate; recommend a better approach", state: "done", done_when: [{ check: "answered", met: true, note: "Done: the logo. Left: nothing. Estimate: under an hour once copy arrives." }] },
+      ],
+      notes: "BETTER APPROACH: the strip waits 1.5s after a touch before drifting again. (cost $2.10)",
+    });
+    const detail = String(await blockedEmailDetail(env, id));
+    expect(detail).toContain("WHAT YOU ASKED, ANSWERED");
+    expect(detail).toContain("Estimate: under an hour");
+    expect(detail).toContain("waits 1.5s after a touch");
+    expect(detail, "the run's cost is not his to read").not.toContain("cost $");
+    expect(detail, "no ask for the word he said not to ask for").not.toMatch(/Reply "approved" to (?:land|publish)|reply "approved" to publish/);
+    const mail = sent.slice(from).filter((m) => m.to === SCOOTER).map((m) => m.text).join("\n");
+    expect(mail).toContain("Estimate: under an hour");
+    expect(detail).toContain("Nothing lands until you say you are ready");
+    expect(mail, "the email itself asks for no approved either").not.toMatch(/Reply "approved" to (?:land|publish)|reply "approved" to publish/);
+    // Ordinary changes words still get the usual ask.
+    const other = await atPreview("ans2", SCOOTER);
+    await answerBlock(env, other, "fu_scooter_taylor", { action: "ANSWER", text: "changes: make the logo smaller" });
+    await rebuilt(other, "ans2b", "work/wpc-ans2");
+    expect(String(await blockedEmailDetail(env, other))).toMatch(/Reply "approved" to land it/);
+  });
+
+  /**
    * 13 Nov 2026: Porter's "answered" email told a partner "The last build was for: …" and quoted the
    * developer's instruction word for word. What a partner reads about a build is what HE asked for.
    */
