@@ -655,6 +655,22 @@ export async function steerFromReply(
         const { handBuildToPorter } = await import("./employeeWork");
         const out = await handBuildToPorter(env, cardRow.id, { words: written, buildIn: read.buildIn ?? null, requestedBy: partner.email, replyOnThread: thread.token });
         builtFromReply = out.ok;
+        /*
+         * HIS EMAIL AND ITS ASKS FOLLOW THE BUILD (16 Nov 2026). The first read files a partner's asks on the card his
+         * email is linked to, and the final reply cannot go until every ask is answered. A reply that opens a build was
+         * linked to the card he replied on (Scooter's Top Barz brief: October's cancelled card), so the asks sat there
+         * and Porter's build carried none. The message, and any asks already read from it, now move to the build.
+         */
+        if (out.ok && out.cardId) {
+          const moved = await env.WP_OS_DB.prepare(
+            "UPDATE inbound_message SET work_card_id = ?1 WHERE work_card_id = ?2 AND ((?3 IS NOT NULL AND r2_key = ?3) OR (?4 IS NOT NULL AND message_id = ?4)) RETURNING id",
+          )
+            .bind(out.cardId, cardRow.id, message.emlKey ?? null, message.messageId ?? null)
+            .all<{ id: string }>();
+          for (const m of moved.results ?? []) {
+            await env.WP_OS_DB.prepare("UPDATE partner_ask SET work_card_id = ?1 WHERE inbound_message_id = ?2 AND work_card_id = ?3").bind(out.cardId, m.id, cardRow.id).run();
+          }
+        }
         await appendEvent(env, {
           eventType: "work.reply_opened_build",
           actorType: "firm_user",
