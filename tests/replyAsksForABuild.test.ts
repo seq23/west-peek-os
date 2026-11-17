@@ -20,7 +20,7 @@ const AUTH = `mx.cloudflare.net; spf=pass smtp.mailfrom=${SCOOTER}; dkim=pass he
 
 beforeAll(async () => {
   t = await createTestDb();
-  env = makeTestEnv(t.db);
+  env = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>);
   await env.WP_OS_DB.prepare("UPDATE ai_employee SET status = 'ACTIVE' WHERE id IN ('aie_porter', 'aie_walker', 'aie_wren', 'aie_wyatt')").run();
 });
 afterAll(async () => disposeTestDb(t));
@@ -73,7 +73,8 @@ async function replyOnClosedSite(state: "CANCELLED" | "DONE" | "OPEN", written: 
   const builds = (await env.WP_OS_DB.prepare("SELECT c.id, c.owner_id, c.requested_by_email FROM work_card c JOIN web_property_change w ON w.work_card_id = c.id WHERE c.assigned_from_card_id = ?1").bind(card.id).all<{ id: string; owner_id: string; requested_by_email: string }>()).results ?? [];
   const notes = (await env.WP_OS_DB.prepare("SELECT body FROM work_card_note WHERE work_card_id = ?1").bind(card.id).all<{ body: string }>()).results ?? [];
   const after = await env.WP_OS_DB.prepare("SELECT state FROM work_card WHERE id = ?1").bind(card.id).first<{ state: string }>();
-  return { builds, notes, after: after!.state, readerCalls };
+  const told = (await env.WP_OS_DB.prepare("SELECT count(*) AS n FROM event_record WHERE object_id = ?1 AND event_type IN ('work_card.owner_reply_emailed', 'work_card.owner_reply_not_sent')").bind(card.id).first<{ n: number }>())!.n;
+  return { builds, notes, after: after!.state, readerCalls, told };
 }
 
 describe("a reply on a closed website job", () => {
@@ -101,5 +102,31 @@ describe("a reply on a closed website job", () => {
     const r = await replyOnClosedSite("OPEN", ask, reads("BUILD", "EXISTING"));
     expect(r.readerCalls).toBe(0);
     expect(r.builds).toHaveLength(0);
+  });
+});
+
+/**
+ * EVERY PARTNER EMAIL GETS ONE EMAIL BACK (owner's ruling, 16 Nov 2026). A reply on a closed card that asks for work
+ * nothing could start, or asks a question nobody could answer, still reaches the partner once: never silence.
+ */
+describe("a reply on a closed card always gets one email back", () => {
+  const ask = "New build for the Top Barz site: a holiday party version of the booth flow. What already exists vs what's new build, and any red flags?";
+  const noBuild: ReplyIntentReader = async (e, input) => ({ ...(await reads("BUILD", "EXISTING")(e, input)), buildIn: "nowhere-mapped" } as never);
+
+  it("a build is asked for and opens: the partner is told by the build door; no fallback email", async () => {
+    const r = await replyOnClosedSite("CANCELLED", ask, reads("BUILD", "EXISTING"));
+    expect(r.builds).toHaveLength(1);
+    expect(r.notes.some((n) => /NEW REQUEST AFTER DONE/.test(n.body))).toBe(false);
+  });
+
+  it("a question nobody can answer on a cancelled card: exactly one email back to the partner; the card stays cancelled", async () => {
+    const r = await replyOnClosedSite("CANCELLED", "Did the voting page ever get the new rules link?", reads("QUESTION"));
+    expect(r.told).toBe(1);
+    expect(r.after).toBe("CANCELLED");
+  });
+
+  it("a thank-you on a closed card sends nothing", async () => {
+    const r = await replyOnClosedSite("DONE", "Thanks Porter!", reads("NOTHING"));
+    expect(r.told).toBe(0);
   });
 });
