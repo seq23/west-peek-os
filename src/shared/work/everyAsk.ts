@@ -112,10 +112,18 @@ export function planProblems(input: { partnerText: string; accounting?: readonly
  * the partner when its note quotes words he actually wrote AND those words reserve the step to him ("we will…",
  * "I will…", "I approve…", "not … yet", "when I am ready").
  */
-const RESERVES_A_STEP = /\b(?:i|we)(?:'ll|\s+will)\b|\bi\s+approve\b|\bnot\b[^.]{0,60}\byet\b|\bwhen\s+(?:i|we)(?:'m|'re|\s+am|\s+are)?\s+ready\b|\b(?:wait|waits)\s+(?:for|on)\s+me\b/i;
+/*
+ * 17 Nov 2026 (wc_c548d043): Scooter wrote "I'm working on the copy separately, so leave placeholders until I send it."
+ * The BUILD did exactly that and reported the check as not met, quoting him; none of the phrases above matched
+ * ("until I send it", "I'm working on"), so a finished build was REFUSED and retried on its last attempts. Words
+ * that keep the next step for him until HE sends, shares or confirms something reserve it as well. And a quote's
+ * own apostrophes ("I'm") no longer cut it short: single quotes count as quote marks only outside a word.
+ */
+const RESERVES_A_STEP = /\b(?:i|we)(?:'ll|\s+will)\b|\bi\s+approve\b|\bnot\b[^.]{0,60}\byet\b|\bwhen\s+(?:i|we)(?:'m|'re|\s+am|\s+are)?\s+ready\b|\b(?:wait|waits)\s+(?:for|on)\s+me\b|\buntil\s+(?:i|we)\s+(?:send|share|give|confirm|say|provide|write|approve|decide|tell)\b|\b(?:i|we)(?:'m|'re|\s+am|\s+are)\s+(?:working\s+on|writing|drafting)\b/i;
+const QUOTED = /[\u201C"]([^"\u201D]{8,400})[\u201D"]|(?<![\p{L}\d])['\u2018]((?:[^'\u2018\u2019]|(?<=\p{L})['\u2019](?=\p{L})){8,400}?)['\u2019](?![\p{L}\d])/gu;
 export function partnerReserved(note: string | null | undefined, partnerText: string): boolean {
-  for (const m of String(note ?? "").matchAll(/["'\u2018\u201C]([^"'\u2019\u201D]{8,400})["'\u2019\u201D]/g)) {
-    const quote = m[1]!;
+  for (const m of String(note ?? "").matchAll(QUOTED)) {
+    const quote = (m[1] ?? m[2])!;
     if (RESERVES_A_STEP.test(quote) && partnerWrote(quote, partnerText)) return true;
   }
   return false;
