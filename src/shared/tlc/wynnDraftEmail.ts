@@ -1,3 +1,4 @@
+import { ACTION_REQUIRED } from "../email/execEmail";
 /**
  * EVERY WYNN DRAFT EMAIL TO THE PARTNERS, ONE SHAPE (owner, 7 Nov 2026, on the Pinecone Pricing Reply v2 mock-up: "go
  * this is perfect! all emails from wynn should be like this").
@@ -64,7 +65,7 @@ export interface RenderedDraftEmail { subject: string; text: string; html: strin
  * back. A draft BOTH partners must approve starts "ACTION REQUIRED: " (her words: "IF WE BOTH NEED TO APPROVE SO SCOOTER
  * KNOWS HE NEEDS TO DO SOMETHING"); the round-1 email to her alone never does.
  */
-export const ACTION_REQUIRED = "ACTION REQUIRED: ";
+export { ACTION_REQUIRED };
 export const docSubject = (brand: string, docName: string, version: number, ref: string, both = false): string => `${both ? ACTION_REQUIRED : ""}${brand} ${docName} · v${version} · ready for your OK · ${ref}`;
 
 const esc = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");

@@ -58,7 +58,7 @@ describe("the plan email (the 12:42 email she could not use, rewritten)", () => 
   const r = render(n);
 
   it("the subject names the stage: \"<plain title>: Plan ready\" — never \"blocked\", never the brief cut mid-word", () => {
-    expect(r.subject).toBe("Porter: Community site redesign: Plan ready");
+    expect(r.subject).toBe("ACTION REQUIRED: Porter: Community site redesign: Plan ready");
     expect(r.subject).not.toMatch(/blocked|…/i);
   });
 
@@ -101,7 +101,7 @@ describe("the preview email (owner's spec, 23 Sep 2026)", () => {
   const r = render(n);
 
   it("\"<title>: Preview ready\"; the TL;DR is the four reply options, first; then the link, what is still missing, the card", () => {
-    expect(r.subject).toBe("Porter: Community site redesign: Preview ready");
+    expect(r.subject).toBe("ACTION REQUIRED: Porter: Community site redesign: Preview ready");
     const lines = r.text.split("\n");
     expect(lines[0]).toBe("**TL;DR:** Preview ready, with **4** placeholders. Reply with one of these:");
     expect(lines.slice(1, 5)).toEqual(PREVIEW_REPLY_FORMS.map((f) => `• ${f}`));
@@ -139,7 +139,7 @@ describe("every notice names its stage, and only STUCK says \"Blocked\"", () => 
   for (const [stage, n] of notices) {
     it(`${stage}: the subject is "<title>: ${stage}", the preview link rides on it, and "blocked" appears only if it is STUCK`, () => {
       const r = render(n);
-      expect(r.subject).toBe(`Porter: T: ${stage}`);
+      expect(r.subject).toBe(`${stage === STAGE.DONE || stage === STAGE.STUCK ? "" : "ACTION REQUIRED: "}Porter: T: ${stage}`);
       expect(r.text).toMatch(/https:\/\/work-wpc-c9e36e8b\.west-peek-community\.pages\.dev/);
       const said = `${r.subject}\n${r.text}`.replace(/card wc_\S+/g, "");
       if (stage === STAGE.STUCK) expect(r.text).toMatch(/^\*\*TL;DR:\*\* Blocked: the Mac has been asleep for \*\*46\*\* minutes/);
@@ -236,13 +236,26 @@ describe("the plan as an FYI: every ask carries a recommendation (owner, 27 Sep 
     expect(lintExecEmail(r.subject, r.text, "Porter")).toEqual([]);
     // The asking form is unchanged for a plan with a real question.
     const asking = render(planNotice({ title: "Community site redesign", asks: SIX, missing: [], previewLine: null, cardId: "wc_1" }));
-    expect(asking.subject).toBe("Porter: Community site redesign: Plan ready");
+    expect(asking.subject).toBe("ACTION REQUIRED: Porter: Community site redesign: Plan ready");
     expect(asking.text).toMatch(/Reply \*\*approved\*\*/);
+  });
+
+  it("ACTION REQUIRED leads the subject only when the partner must act, once, before the employee's name (owner, 17 Nov 2026)", () => {
+    const subject = (stage: string, title = "Community site redesign") => renderExecEmail({ employee: "Porter", what: stageSubject(title, stage), tldr: "x", tldrBullets: [], sections: [{ label: "A", bullets: ["b"] }], details: null }).subject;
+    for (const stage of [STAGE.PLAN, STAGE.PREVIEW, STAGE.REBUILD, STAGE.QUESTION, STAGE.UNCHANGED]) {
+      expect(subject(stage), stage).toBe(`ACTION REQUIRED: Porter: Community site redesign: ${stage}`);
+      expect(lintExecEmail(subject(stage), "**TL;DR:** x", "Porter").filter((v) => /subject/.test(v)), stage).toEqual([]);
+    }
+    for (const stage of [STAGE.RECEIVED, STAGE.GOING_AHEAD, STAGE.STUCK, STAGE.ASLEEP, STAGE.DONE]) expect(subject(stage), stage).toBe(`Porter: Community site redesign: ${stage}`);
+    // Never twice: a title or `what` that already carries it (a card raised from a reply to one of these emails).
+    expect(subject(STAGE.PLAN, "ACTION REQUIRED: Porter: Community site redesign")).toBe("ACTION REQUIRED: Porter: Community site redesign: Plan ready");
+    expect(renderExecEmail({ employee: "Porter", what: "ACTION REQUIRED: ACTION REQUIRED: Porter: X", tldr: "x", tldrBullets: [], sections: [{ label: "A", bullets: ["b"] }], details: null }).subject).toBe("ACTION REQUIRED: Porter: X");
+    expect(plainTitle({ title: "From scooter@westpeek.ventures: Re: ACTION REQUIRED: Porter: Plan ready", kind: "WEB_PROPERTY_CHANGE", host: null, subject: "Re: ACTION REQUIRED: Porter: Plan ready", ask: "Carlos image. All good." })).toBe("Plan ready");
   });
 
   it("the employee prefix is added once, whatever the title carries (\"Porter: Porter: Got it\", 27 Sep 2026)", () => {
     const r = renderExecEmail({ employee: "Porter", what: stageSubject("Porter: Got it", STAGE.PLAN), tldr: "x", tldrBullets: [], sections: [{ label: "A", bullets: ["b"] }], details: null });
-    expect(r.subject).toBe("Porter: Got it: Plan ready");
+    expect(r.subject).toBe("ACTION REQUIRED: Porter: Got it: Plan ready");
     expect(renderExecEmail({ employee: "Porter", what: "Porter: Porter: Got it", tldr: "x", tldrBullets: [], sections: [{ label: "A", bullets: ["b"] }], details: null }).subject).toBe("Porter: Got it");
     // And the title never becomes "Porter" in the first place: a request that arrived as a reply to
     // one of Porter's own emails is named by what the email was about.

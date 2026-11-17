@@ -180,7 +180,7 @@ describe("a burst of six mixed emails inside a few minutes: each lands on the ri
     const clar = await one<{ id: string; candidates_json: string; sent: number }>("SELECT id, candidates_json, sent FROM inbound_clarification WHERE message_id = ?1", ambiguous);
     expect(clar, "Porter asked which job the ambiguous email is for").not.toBeNull();
     expect(clar!.sent).toBe(1);
-    const asked = sent.slice(sentBefore).filter((m) => m.to === SCOOTER && /^Porter: I got an email I can't place — Buttons$/.test(m.subject));
+    const asked = sent.slice(sentBefore).filter((m) => m.to === SCOOTER && /^ACTION REQUIRED: Porter: I got an email I can't place — Buttons$/.test(m.subject));
     expect(asked.length, "exactly ONE clarifying email").toBe(1);
     // The plain shape (9 Oct 2026 hostile review): the fact first, at most three replies, the original below.
     expect(asked[0]!.text).toMatch(/^\*\*TL;DR:\*\* I got the following at \d{1,2}:\d{2} [AP]M CT from you: "Buttons"\. I don't know which of your jobs it is for\./);
@@ -201,7 +201,7 @@ describe("a burst of six mixed emails inside a few minutes: each lands on the ri
     // THE SAME AMBIGUOUS EMAIL AGAIN (a re-delivery): never a second question.
     await env.WP_OS_DB.prepare("DELETE FROM inbound_email_seen WHERE message_id = ?1").bind(ambiguous).run();
     await deliver("Buttons", "Hey Porter!\r\n\r\nCan you make the buttons bigger and bolder?", { messageId: ambiguous });
-    expect(sent.filter((m) => m.to === SCOOTER && /^Porter: I got an email I can't place — Buttons$/.test(m.subject)).length, "never asked twice about the same email").toBe(1);
+    expect(sent.filter((m) => m.to === SCOOTER && /^ACTION REQUIRED: Porter: I got an email I can't place — Buttons$/.test(m.subject)).length, "never asked twice about the same email").toBe(1);
 
     // HIS ANSWER ROUTES IT: the number of the community card, on the clarifying email's own thread.
     const candidates = JSON.parse(clar!.candidates_json) as Array<{ cardId: string }>;

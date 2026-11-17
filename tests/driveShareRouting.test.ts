@@ -333,10 +333,11 @@ describe("a share and the email that explains it are one job, whichever comes fi
 
 describe("the can't-place question has one plain shape (hostile review of the 13:44Z email)", () => {
   function check(subject: string, text: string, originalSubject: string): void {
-    expect(subject.length).toBeLessThanOrEqual(70);
-    expect(subject).toMatch(/^Porter: I got an email I can't place — /);
+    // A question he must answer: "ACTION REQUIRED: " first (17 Nov 2026); the 70-character cap is the employee's subject after it.
+    expect(subject).toMatch(/^ACTION REQUIRED: Porter: I got an email I can't place — /);
+    expect(subject.slice("ACTION REQUIRED: ".length).length).toBeLessThanOrEqual(70);
     // Never cut mid-word: the short subject is the original's words, whole, up to where it stops.
-    const shown = subject.replace(/^Porter: I got an email I can't place — /, "").replace(/…$/, "");
+    const shown = subject.replace(/^ACTION REQUIRED: Porter: I got an email I can't place — /, "").replace(/…$/, "");
     const words = originalSubject.replace(/^Document shared with you:\s*/i, "").split(/\s+/);
     const shownWords = shown.split(/\s+/);
     expect(words.slice(0, shownWords.length), "cut only between words").toEqual(shownWords);

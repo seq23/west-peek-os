@@ -32,7 +32,7 @@ import { outsideEmailAllowed } from "./outsideEmail";
 import { addressReadOffPage, approvedDayZeroFor, handleMustPitch, liveMustPitch, ownerContactedBrands, mustPitchToSearch, OWNER_SUPPLIED_SOURCE, queueDeal, type MustPitchFinding } from "./tlcMustPitch";
 import { brandKey } from "../../shared/tlc/mustPitch";
 import { TLC_BENCH_LOW, TLC_NEW_BRANDS_PER_EVENT_WEEK } from "../../shared/tlc/volume";
-import type { ExecEmailInput } from "../../shared/email/execEmail";
+import { ACTION_REQUIRED, type ExecEmailInput } from "../../shared/email/execEmail";
 import { COMMITTED_STAGES, DROPPED_NO_SPONSOR, goNoGoDate, goNoGoOf, goNoGoReached } from "../../shared/tlc/goNoGo";
 import {
   BOOKING_PACK_SHAPE,
@@ -674,7 +674,7 @@ export async function runTlcDaily(env: Env, now: Date, firmScope = "west-peek"):
           await emailOwner(env, {
             employee: "Wynn",
             email: {
-              what: `TLC ${monthWords(ev.month)}: ${check.verdict === "GO" ? "go-ahead" : "short of the go-ahead"}, ${check.checkpoint} days out`,
+              what: `${check.verdict === "GO" ? "" : ACTION_REQUIRED}TLC ${monthWords(ev.month)}: ${check.verdict === "GO" ? "go-ahead" : "short of the go-ahead"}, ${check.checkpoint} days out`,
               tldr:
                 check.verdict === "GO"
                   ? `The ${ev.topic} club clears the go-ahead ${check.checkpoint} days out: ${econ.paidTickets} paid tickets, sponsor net $${econ.sponsorNetUsd.toLocaleString("en-US")}.`
@@ -2227,7 +2227,7 @@ async function runBookingPack(env: Env, card: SweepCard, now: Date, search: TlcS
   await emailOwner(env, {
     employee: "Parker",
     email: {
-      what: `TLC booking pack, ${monthWords(ev.month)}`,
+      what: `${ACTION_REQUIRED}TLC booking pack, ${monthWords(ev.month)}`,
       tldr: `Options for you to book and pay; I have booked nothing. The cheapest full plan costs $${totals.costUsd.toLocaleString("en-US")} (budget $${goalOf(ev).costBudgetUsd.toLocaleString("en-US")}) and nets $${totals.netUsd.toLocaleString("en-US")} against agreed sponsor cash of $${totals.sponsorCashUsd.toLocaleString("en-US")}.`,
       sections: [
         { label: "Totals", bullets: [...totals.lines.map((l) => `${l.what}: ${l.name}, $${l.priceUsd.toLocaleString("en-US")}`), `Cost $${totals.costUsd.toLocaleString("en-US")} (best case with a donated venue $${totals.bestCaseCostUsd.toLocaleString("en-US")}) — ${totals.costUsd <= goalOf(ev).costBudgetUsd ? "inside" : "OVER"} the $${goalOf(ev).costBudgetUsd.toLocaleString("en-US")} budget`, `Net vs $10,000 target: ${totals.vsTarget >= 0 ? "met" : `$${(-totals.vsTarget).toLocaleString("en-US")} short`}; vs $7,500 floor: ${totals.vsFloor >= 0 ? "met" : `$${(-totals.vsFloor).toLocaleString("en-US")} short`}`] },

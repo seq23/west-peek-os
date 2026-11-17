@@ -682,7 +682,7 @@ describe("a plan that is not publish-ready previews first (21 Sep 2026)", () => 
     // THE PREVIEW EMAIL (owner's spec, 23 Sep 2026): the four reply options ARE the TL;DR; then
     // the link, the placeholders still showing, and the card. No proof dump, never "blocked".
     const email = sent.filter((m) => m.to === SEQUOIA && /preview ready/i.test(m.subject)).pop()!;
-    expect(email.subject).toBe("Porter: Community rebuild: Preview ready");
+    expect(email.subject).toBe("ACTION REQUIRED: Porter: Community rebuild: Preview ready");
     expect(email.text).toMatch(/^\*\*TL;DR:\*\* Preview ready, with \*{0,2}4\*{0,2} placeholders\. Reply with one of these:\n• \*\*approved\*\*: publish this preview as is \(placeholders included\)\.\n• \*\*changes: …\*\*: I'll make them and send you a new preview\.\n• \*\*Missing items \+ "publish"\*\*: attach them or add them to Drive, reply "publish", and I'll fill them in and publish without another preview\.\n• \*\*Missing items \+ "preview"\*\*: attach them or add them to Drive, reply "preview", and I'll fill them in and send you another preview\.\n/);
     expect(email.text).toMatch(/Current preview \(built \d{1,2}:\d{2} CT, \*{0,2}4\*{0,2} placeholders\): https:\/\/work-wpc-comm1234\.west-peek-ventures\.pages\.dev\n/);
     expect(email.text, "never the per-commit hash").not.toMatch(/a1b2c3d4/);
@@ -713,7 +713,7 @@ describe("a plan that is not publish-ready previews first (21 Sep 2026)", () => 
     expect(second.preview_emailed_at! > firstPreviewAt, "the approval now binds to the NEW preview").toBe(true);
     const newPreview = sent.slice(beforeMail).filter((m) => m.to === SEQUOIA);
     expect(newPreview, "one new preview email").toHaveLength(1);
-    expect(newPreview[0]!.subject).toBe("Porter: Community rebuild: New preview ready");
+    expect(newPreview[0]!.subject).toBe("ACTION REQUIRED: Porter: Community rebuild: New preview ready");
     expect(newPreview[0]!.text, "the same branch alias shows the rebuilt site").toMatch(/Current preview \(built [^)]+\): https:\/\/work-wpc-comm1234\.west-peek-ventures\.pages\.dev\n/);
     expect(String((await card(id)).description)).toMatch(/Preview ready — Current preview \(built [^)]+\): https:\/\/work-wpc-comm1234\.west-peek-ventures\.pages\.dev/);
     const other = await replyFrom(SCOOTER, "approved", await porter.token());

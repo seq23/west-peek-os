@@ -575,7 +575,7 @@ describe("Scooter emails a package for the ventures site", () => {
     // with the recommendation in bold; the plan is on the card, not in the mail; never "blocked".
     const email = sent.find((m) => m.to === SCOOTER && /plan ready/i.test(m.subject));
     expect(email, "the asks are emailed to the requesting partner").toBeDefined();
-    expect(email!.subject).toBe("Porter: Ventures site update: Plan ready");
+    expect(email!.subject).toBe("ACTION REQUIRED: Porter: Ventures site update: Plan ready");
     expect(email!.subject).not.toMatch(/blocked/i);
     expect(email!.text).toMatch(/^\*\*TL;DR:\*\* Plan ready\. Reply \*\*approved\*\* and I'll build the preview now\. Nothing goes live until you approve the preview\.\n• \*\*approved\*\*: take my 2 recommendations and build the preview\n• \*\*approved to production\*\*: skip the preview and land on green\n• \*\*changes: …\*\*: hold it and tell me what to change\n• anything else: read as your answers to the decisions below\n/);
     expect(email!.text).toMatch(/\*\*2 decisions \(my recommendation in bold\)\*\*\n• Use the orange accent on the team page headings, or keep black\/white\? → \*\*keep black\/white — the ventures visual system is frozen\*\*\n/);
@@ -705,10 +705,10 @@ describe("Scooter emails a package for the ventures site", () => {
     // RECEIVED at intake, then exactly three: the plan, the question after his "no", the preview —
     // and never the word "blocked" in any of them (owner, 23 Sep 2026).
     const toScooter = sent.filter((m) => m.to === SCOOTER && !/got it/i.test(m.subject));
-    expect(toScooter.map((m) => m.subject.replace(/:.*?: /, ": ").replace(/ — .*/, "")), "plan, question, preview — nothing else").toEqual(["Porter: Plan ready", "Porter: A question for you", "Porter: Preview ready"]);
+    expect(toScooter.map((m) => m.subject.replace(/Porter: .*: /, "Porter: ").replace(/ — .*/, "")), "plan, question, preview — nothing else, each asking him to act").toEqual(["ACTION REQUIRED: Porter: Plan ready", "ACTION REQUIRED: Porter: A question for you", "ACTION REQUIRED: Porter: Preview ready"]);
     expect(toScooter.every((m) => !/blocked/i.test(m.subject))).toBe(true);
     const previewMail = toScooter.at(-1)!;
-    expect(previewMail.subject).toBe("Porter: Ventures site update: Preview ready");
+    expect(previewMail.subject).toBe("ACTION REQUIRED: Porter: Ventures site update: Preview ready");
     // No preview deployment for this repo: the line says so, and the PR stays on the card — never a
     // PR link in her inbox (23 Sep 2026).
     expect(previewMail.text).toMatch(/Current preview \(built \d{1,2}:\d{2} CT, \*{0,2}0\*{0,2} placeholders\): no preview deployment for this site — the change and its screenshots are on the card\n/);

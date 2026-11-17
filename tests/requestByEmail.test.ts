@@ -202,7 +202,7 @@ describe("Sequoia emails a request", () => {
     expect(last.to).toBe("scooter@westpeek.ventures");
     // NEVER "BLOCKED" TO A PARTNER (owner, 23 Sep 2026): a question is called a question, and the
     // first line says what answers it.
-    expect(last.subject).toBe("Wesley: a question — Find the LP letter");
+    expect(last.subject).toBe("ACTION REQUIRED: Wesley: a question — Find the LP letter");
     expect(last.text).toMatch(/^\*\*TL;DR:\*\* One question before I go on with Find the LP letter: reply to this email with your answer and I carry on\./);
     // 0254 (R7 / R8 for every kind): the three parts, in order, and the only way to clear it is a reply.
     expect(last.text).toMatch(/\*\*What I need from you\*\*\n• Waiting on: Which quarter do you mean\?\n• Why: Wesley needs something from you[^\n]*\n• To clear it by email: reply to this email with your answer/);
@@ -242,7 +242,7 @@ describe("Sequoia emails a request", () => {
     expect(sent.length, "an email now goes out where none did before").toBe(before + 1);
     const last = sent[sent.length - 1]!;
     expect(last.to, "block_who names Scooter, and Scooter is who hears about it").toBe("scooter@westpeek.ventures");
-    expect(last.subject).toBe("Wesley: a question — Approve the March newsletter subject line");
+    expect(last.subject).toBe("ACTION REQUIRED: Wesley: a question — Approve the March newsletter subject line");
     expect(last.subject).not.toMatch(/blocked/i);
     expect(last.text).toMatch(/Spring is here.*March in three deals/s);
   });

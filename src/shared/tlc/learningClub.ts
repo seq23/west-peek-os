@@ -1,3 +1,4 @@
+import { ACTION_REQUIRED } from "../email/execEmail";
 import { BRAND_COMMUNITY_LINE, COMMUNITY_ABOUT } from "../community/size";
 import { withBrandFooter, withoutBrandFooter } from "./brandFooter";
 import { PARTNERS } from "../registry/partners";
@@ -927,7 +928,7 @@ const usd = (n: number): string => `$${Math.round(n).toLocaleString("en-US")}`;
 export function decisionEmail(offer: DealOffer, current: EventEconomics): { what: string; tldr: string; tldrBullets: string[]; sections: Array<{ label: string; bullets: string[] }> } {
   const after = netIfYes(offer, current);
   return {
-    what: `TLC sponsor ${offer.brand.slice(0, 28)}: yes, no or counter?`,
+    what: `${ACTION_REQUIRED}TLC sponsor ${offer.brand.slice(0, 28)}: yes, no or counter?`,
     tldr: `${offer.brand} offers ${usd(offer.cashUsd)} cash${offer.inKind ? ` plus ${offer.inKind}` : ""}. If we say yes the club nets ${usd(after.netUsd)}.`,
     tldrBullets: ['Reply "yes" to agree', 'Reply "no" to pass', 'Reply "counter $X" to ask for a different amount'],
     sections: [
