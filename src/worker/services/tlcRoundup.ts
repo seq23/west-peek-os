@@ -60,6 +60,24 @@ export function brandStageWords(d: Pick<DealRow, "stage" | "first_sent_at" | "st
   return d.pending_step !== null ? "first email waiting for you" : "queued";
 }
 
+/*
+ * NO INBOUND EMAIL CLOSES SILENTLY (owner, 17 Nov 2026). Every brand email the OS closed with no reply from us in the
+ * last week (a "no reply needed", an auto-reply, a no, a stop, a bounce, a named stop) is one line here, with the reason
+ * and who read it (a model, or the word lists when none answered), so a misread is seen within the week. A redirect is
+ * not listed: it became email 1 to the new address, which she approves.
+ */
+export const CLOSED_LABEL = "Closed without a reply this week";
+export const CLOSED_LIST_MAX = 40;
+export async function closedWithoutReply(env: Env, now: Date, firmScope = "west-peek"): Promise<string[]> {
+  const since = new Date(now.getTime() - 7 * 86_400_000).toISOString();
+  const rows = (await env.WP_OS_DB.prepare(
+    `SELECT d.brand, r.received_at, r.held_reason FROM tlc_brand_reply r JOIN tlc_deal d ON d.id = r.deal_id
+      WHERE d.firm_scope = ?1 AND r.state = 'CLOSED' AND r.received_at >= ?2 AND COALESCE(r.held_reason, '') NOT LIKE 'redirect:%' ORDER BY r.received_at`,
+  ).bind(firmScope, since).all<{ brand: string; received_at: string; held_reason: string | null }>()).results ?? [];
+  const lines = rows.map((r) => `${brandDisplayName(r.brand)} (${day(r.received_at)}): ${r.held_reason ?? "closed, no reason recorded"}`);
+  return lines.length > CLOSED_LIST_MAX ? [...lines.slice(0, CLOSED_LIST_MAX), `and ${lines.length - CLOSED_LIST_MAX} more, on the TLC page`] : lines;
+}
+
 export async function buildRoundup(env: Env, now: Date, firmScope = "west-peek"): Promise<{ tldr: string; sections: Array<{ label: string; bullets: string[] }>; waiting: number; noticeRef: string | null }> {
   const db = env.WP_OS_DB;
   const clubs = ((await db.prepare("SELECT * FROM tlc_event WHERE firm_scope = ?1 AND (status IN ('TOPIC_READY','GO','ESCALATED') OR dropped_at >= ?2) ORDER BY month").bind(firmScope, new Date(now.getTime() - 8 * 86_400_000).toISOString()).all<TlcEventRow>()).results ?? [])
@@ -130,9 +148,11 @@ export async function buildRoundup(env: Env, now: Date, firmScope = "west-peek")
       ],
     });
   }
+  const closed = await closedWithoutReply(env, now, firmScope);
   const sections = [
     { label: "Waiting on you", bullets: yours.length ? yours : ["Nothing. All clear."] },
     ...(stuck.length ? [{ label: "Stuck or coming up", bullets: stuck }] : []),
+    ...(closed.length ? [{ label: CLOSED_LABEL, bullets: closed }] : []),
     ...clubSections,
   ];
   const tldr = pending > 0
