@@ -14,7 +14,7 @@ import { addressIn, authenticationVerdict } from "../../shared/intake/partnerAut
 import { newTextOf } from "../../shared/events/packetDecisionToken";
 import { isEmptyReply, parseDraftReply } from "../../shared/tlc/draftReply";
 import {
-  BRAND_MUST_STAFF, BRAND_REPLY_ASK, BRAND_REPLY_REF_RE, CALL_ASK, WE_HOST, MONEY_WORDS, THREE_THINGS_OFFER, WHO_WE_ARE, classifyBrandReply, fallbackReplyBody, herNoteOf, replyAllRecipients, noMoneyNow, readResearch, reportText,
+  BRAND_MUST_STAFF, BRAND_REPLY_ASK, BRAND_REPLY_REF_RE, CALL_ASK, WE_HOST, MONEY_WORDS, THREE_THINGS_OFFER, WHO_WE_ARE, classifyBrandReply, decideBrandReply, fallbackReplyBody, herNoteOf, replyAllRecipients, noMoneyNow, readResearch, reportText,
   helpdeskComment, stageAfterReply, standingRulesIn, theirNewText, tierLines, wantsResearch,
   type BrandReplyIntent, type ReplyDraftInput, type WynnRule,
 } from "../../shared/tlc/brandReply";
@@ -23,6 +23,8 @@ import { seriesPriceWords } from "../../shared/tlc/series";
 import { docNameFor, peopleOf, replyPageUrl, sheetMini, splitContactName } from "../../shared/tlc/replyDoc";
 import { BRAND_EMAIL_ROOM_WORDS, classifyBrandMail, TLC_BRAND_REPLY_NOTICE_CC_IDS, TLC_BRAND_REPLY_NOTICE_OBJECT, TLC_PRICING_NOTICE_OBJECT, TLC_DRIP_DAYS, TLC_OWNER, TLC_SEATS, TLC_SIGNATURE, brandDisplayName, signedBrandEmail, monthWords, nextDripAt } from "../../shared/tlc/learningClub";
 import { partnerByEmail, partnerByFirmUserId } from "../../shared/registry/partners";
+import { NO_MODEL_READER, WORD_LISTS, readerWords } from "../../shared/intake/inboundRead";
+import type { Reader } from "./partnerUnderstood";
 import { TLC_BRAND_SALES_JOB } from "../../shared/policy/outsideEmail";
 import { actorForFirmUser, type Actor } from "./authorize";
 import type { TlcDealRow, TlcEventRow } from "./learningClub";
@@ -101,6 +103,8 @@ export interface BrandReplyDeps {
   samples?: SamplesDeps;
   /** Where a conversation sits in her mailbox (services/tlcBrandThread.ts); tests pass a fake. */
   thread?: ThreadFinder;
+  /** Who reads an inbound brand message first (services/inboundRead.ts); tests pass a stub, production FIRST_READERS. */
+  read?: readonly Reader[];
 }
 
 interface ReplyRow {
@@ -552,15 +556,23 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
   const words = await withoutOurOwnLines(env, deal.id, deskWords ?? (theirNewText(msgBody) || msg.text.trim()));
   const sender = (addressIn(msg.from ?? "") ?? msg.from ?? "").trim().toLowerCase();
   const { brandDomainOf } = await import("./tlcVolume");
-  const cls = classifyBrandReply({ subject: msg.subject, text: words, raw: msg.text, brandDomain: brandDomainOf(deal.contact_email), notThese: [sender], helpdesk: deskWords !== null }, now);
+  const asRead = { subject: msg.subject, text: words, raw: msg.text, brandDomain: brandDomainOf(deal.contact_email), notThese: [sender], helpdesk: deskWords !== null };
+  // A closed row read again is read by the word lists only: a model is asked once per message, never every pass.
+  let cls = classifyBrandReply(asRead, now);
   if (prior) {
     if (cls.kind !== "REDIRECT") return "SEEN";
     await env.WP_OS_DB.prepare("DELETE FROM tlc_brand_reply WHERE id = ?1 AND state = 'CLOSED'").bind(prior.id).run();
     await appendEvent(env, { eventType: "tlc.brand_reply_reread", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: { message: mid, was: prior.held_reason, now: "REDIRECT", to: cls.to } });
   }
+  /*
+   * WHO READ IT IS ON EVERY CLOSE (owner, 17 Nov 2026: no inbound email closes silently). The note ends "· read by …",
+   * and every closed row is listed, one line each, in her Monday roundup (tlcRoundup.ts closedWithoutReply).
+   */
+  let readBy = prior ? `${readerWords(WORD_LISTS)}, read again` : "the mail headers";
+  let said = "";
   const close = (intent: string, note: string) => env.WP_OS_DB.prepare(
     "INSERT OR IGNORE INTO tlc_brand_reply (id, deal_id, brand_message_id, their_subject, their_text, received_at, intent, draft_subject, draft_body, state, held_reason, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '', '', 'CLOSED', ?8, ?9)",
-  ).bind(`tbr_${crypto.randomUUID()}`, deal.id, mid, msg.subject.slice(0, 300), words.slice(0, 8000), msg.receivedAt, intent, note, deal.firm_scope).run();
+  ).bind(`tbr_${crypto.randomUUID()}`, deal.id, mid, msg.subject.slice(0, 300), words.slice(0, 8000), msg.receivedAt, intent, `${note} · read by ${readBy}${said ? `: "${said}"` : ""}`.slice(0, 1000), deal.firm_scope).run();
 
   /*
    * A MAIL SERVER'S DELIVERY NOTICE IS NEVER A BRAND'S REPLY (6 Nov 2026 live read: Talkspace's Google
@@ -571,6 +583,22 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
   if (classifyBrandMail({ from: msg.from ?? "", subject: msg.subject }) === "BOUNCED") {
     await close("AUTO_REPLY", "a mail server's delivery notice, not the brand: no answer drafted");
     return "SEEN";
+  }
+  /*
+   * THE MODEL READS IT FIRST (owner, 17 Nov 2026): the shared inbound read (services/inboundRead.ts, the partner first
+   * read's readers in her order), then `decideBrandReply`; the word lists decide only when no model answers.
+   */
+  if (!prior) {
+    const { readInbound } = await import("./inboundRead");
+    const { read, tried, sender: readSender } = await readInbound(env, {
+      context: `our email to ${brandDisplayName(deal.brand)} (${deal.contact_email}) offering a partnership with The Learning Club, a small hands-on event in New York`,
+      from: msg.from ?? sender, subject: msg.subject, words, firmScope: deal.firm_scope, employeeId: WYNN,
+    }, deps.read);
+    const decided = decideBrandReply(asRead, read, now);
+    cls = decided.cls;
+    readBy = readerWords(decided.reader);
+    said = read?.summary ?? "";
+    await appendEvent(env, { eventType: "inbound_email.read", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: { message: mid, reader: decided.reader, decided: cls.kind, tried, sender: readSender, ...(read ? { read } : { named_stop: NO_MODEL_READER }) } });
   }
   if (cls.kind === "AUTO_REPLY") {
     // Back on the drip, never earlier than its own next step; a finished drip stays finished.
@@ -707,7 +735,7 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
     samplesId, offered && offered.length ? JSON.stringify(offered) : null, agreed, hold?.due ?? null, hold?.why ?? null,
     kind ?? (samplesId ? "SAMPLES" : agreed || offered ? "CALL" : "ANSWER"), tier, attachments.length ? JSON.stringify(attachments) : null,
     recipients.to, recipients.cc.length ? JSON.stringify(recipients.cc) : null).run();
-  await appendEvent(env, { eventType: "tlc.brand_reply_drafted", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: { intent, samples: samplesId !== null, offered: offered?.length ?? 0, agreed } });
+  await appendEvent(env, { eventType: "tlc.brand_reply_drafted", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: { intent, samples: samplesId !== null, offered: offered?.length ?? 0, agreed, read_by: readBy } });
   return "DRAFTED";
 }
 

@@ -8,6 +8,7 @@
  */
 import { TLC_SAMPLES_OFFER, TLC_TIERS, TLC_TIER_KEYS, replyLooksLikeNo } from "./learningClub";
 import { namesAnAddress } from "./ownerInstruction";
+import { WORD_LISTS, type InboundRead } from "../intake/inboundRead";
 
 export const BRAND_REPLY_REF_RE = /\bTLR-[A-Z0-9]{6}\b/;
 export const BRAND_REPLY_ASK = "Reply approved to send, or reply with changes";
@@ -184,9 +185,57 @@ export function classifyBrandReply(input: { subject: string; text: string; raw?:
   if (said.no) return { kind: "NO" };
   const why = noReplyNeeded(words);
   if (why) return { kind: "NO_REPLY_NEEDED", why };
-  if (/\b(call|chat|meet|meeting|zoom|calendly|hop on|talk|speak|connect live|time next week|availability|available)\b/i.test(words)) return { kind: "REPLY", intent: "CALL" };
-  if (/\b(send (?:it|me|over|more|the deck|the pitch|details)|deck|one[- ]?pager|pdf|deal sheet|pricing sheet|sponsorship (?:deck|packet|kit)|we(?:'re| are) interested|sounds (?:great|interesting|good)|count us in|we(?:'d| would) love to|let'?s do it|yes)\b/i.test(words)) return { kind: "REPLY", intent: "YES" };
-  return { kind: "REPLY", intent: "QUESTION" };
+  return { kind: "REPLY", intent: replyIntentOf(words) };
+}
+
+/** What a real reply wants from us: a call, a yes, or (anything else) a question. */
+export function replyIntentOf(words: string): BrandReplyIntent {
+  if (/\b(call|chat|meet|meeting|zoom|calendly|hop on|talk|speak|connect live|time next week|availability|available)\b/i.test(words)) return "CALL";
+  if (/\b(send (?:it|me|over|more|the deck|the pitch|details)|deck|one[- ]?pager|pdf|deal sheet|pricing sheet|sponsorship (?:deck|packet|kit)|we(?:'re| are) interested|sounds (?:great|interesting|good)|count us in|we(?:'d| would) love to|let'?s do it|yes)\b/i.test(words)) return "YES";
+  return "QUESTION";
+}
+
+/*
+ * THE MODEL'S READ DECIDES FIRST; THE WORD LISTS ARE THE FALLBACK (owner, 17 Nov 2026: "maybe every email incoming to the
+ * OS should be read that way"). With no model read, `classifyBrandReply` decides alone (reader WORD_LISTS). With one:
+ *   - a stop from EITHER reader is a stop (safety: the word lists can only add a stop, never remove one);
+ *   - an auto-reply or a machine notice resumes the drip;
+ *   - a redirect is followed only when the address is in their own words, on the brand's own domain, and not the
+ *     sender's own or a no-reply address (the caller then needs NeverBounce to clear it before anything is drafted);
+ *   - a no is a decline (either reader);
+ *   - nothing owed is "no reply needed"; anything owed is a reply drafted for her approval.
+ */
+export function decideBrandReply(
+  input: { subject: string; text: string; raw?: string; brandDomain?: string; notThese?: readonly string[]; helpdesk?: boolean },
+  read: InboundRead | null,
+  now: Date,
+): { cls: BrandReplyClass; reader: string } {
+  const words = helpdeskComment(input.text) ?? theirNewText(input.text);
+  const regex = classifyBrandReply(input, now);
+  if (!read) return { cls: regex, reader: WORD_LISTS };
+  if (read.wantsStop) return { cls: { kind: "NO", unsubscribe: true }, reader: read.reader };
+  if (regex.kind === "NO" && regex.unsubscribe) return { cls: regex, reader: WORD_LISTS };
+  if (read.senderKind === "auto_reply" || read.senderKind === "system") {
+    const back = returnDateIn(words, now);
+    const resume = back ? new Date(back.getTime() + 86_400_000) : new Date(now.getTime() + 7 * 86_400_000);
+    return { cls: { kind: "AUTO_REPLY", resumeAt: resume.toISOString() }, reader: read.reader };
+  }
+  const to = read.redirectTo ? verifiedRedirect(read.redirectTo, words, input.brandDomain ?? "", input.notThese ?? []) : null;
+  if (to && !read.declines) return { cls: { kind: "REDIRECT", to }, reader: read.reader };
+  if (read.declines) return { cls: { kind: "NO" }, reader: read.reader };
+  if (regex.kind === "NO") return { cls: regex, reader: WORD_LISTS };
+  if (!read.weOwe) return { cls: { kind: "NO_REPLY_NEEDED", why: noReplyNeeded(words) ?? "NO_ASK" }, reader: read.reader };
+  return { cls: { kind: "REPLY", intent: replyIntentOf(words) }, reader: read.reader };
+}
+
+/** A model's redirect address, kept only when it is in their words, on the brand's own domain, and not a no-reply. */
+export function verifiedRedirect(address: string, words: string, brandDomain: string, notThese: readonly string[]): string | null {
+  const addr = address.trim().toLowerCase();
+  const domain = brandDomain.trim().toLowerCase();
+  const at = addr.split("@")[1] ?? "";
+  if (!domain || !words.toLowerCase().includes(addr)) return null;
+  if (notThese.some((a) => a.trim().toLowerCase() === addr) || /^(?:no-?reply|do-?not-?reply|mailer-daemon|postmaster)@/.test(addr)) return null;
+  return at === domain || at.endsWith(`.${domain}`) ? addr : null;
 }
 
 /**
