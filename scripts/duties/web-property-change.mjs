@@ -61,6 +61,7 @@
 
 import { execFile, spawn, spawnSync } from "node:child_process";
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -692,6 +693,60 @@ async function firstRunOn(worktree, previewUrl, env, allowedNames, progress) {
 }
 
 /**
+ * HIS FILES, CHECKED BY THEIR BYTES, NOT BY THE BUILDER'S WORD (17 Nov 2026, wc_76e6d7ff). Scooter wrote "use this Blitz
+ * & Bubbles logo instead of the one in my last email" with the new file attached. The rebuild reported the check met
+ * ("the Blitz & Bubbles mark is the already-white file from the follow-up email"), and the fresh-eyes review took
+ * that note on trust. The branch still served the mark made from the OLD file: its source was byte-for-byte his
+ * earlier attachment. The script now measures each file he sent against the worktree (git-ignored sources included)
+ * and hands the reviewer a list of where each one is, byte for byte, or NOT FOUND, so "used his file" can be checked.
+ */
+const SKIP_DIRS = new Set([".git", "node_modules", ".wrangler", ".next", ".turbo", ".cache"]);
+export function hisFilesOnBranch(worktree, attachmentsDir) {
+  let sent = [];
+  try {
+    sent = readdirSync(attachmentsDir, { withFileTypes: true }).filter((d) => d.isFile()).map((d) => path.join(attachmentsDir, d.name));
+  } catch {
+    return [];
+  }
+  if (!sent.length) return [];
+  const sha = (f) => createHash("sha256").update(readFileSync(f)).digest("hex");
+  const wanted = new Map();
+  for (const f of sent) {
+    const size = statSync(f).size;
+    if (!wanted.has(size)) wanted.set(size, []);
+    wanted.get(size).push({ name: path.basename(f), hash: sha(f), found: [] });
+  }
+  const walk = (dir, depth) => {
+    if (depth > 12) return;
+    let entries = [];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (!SKIP_DIRS.has(e.name)) walk(full, depth + 1);
+      } else if (e.isFile()) {
+        const same = wanted.get(statSync(full).size);
+        if (!same) continue;
+        const h = sha(full);
+        for (const w of same) if (w.hash === h) w.found.push(path.relative(worktree, full));
+      }
+    }
+  };
+  walk(worktree, 0);
+  return [...wanted.values()].flat().map((w) => (w.found.length ? `- ${w.name}: on the branch byte for byte at ${w.found.slice(0, 5).join(", ")}` : `- ${w.name}: NOT FOUND byte for byte anywhere in the worktree`));
+}
+
+/** The reviewer's block for `hisFilesOnBranch`; empty when he sent no files. */
+export function hisFilesBlock(lines) {
+  if (!lines.length) return "";
+  return `\n\nHIS FILES, BY THEIR BYTES (measured by the script, not the builder):\n${lines.join("\n")}\nA file an ask tells the build to use (\"use this … instead\", \"here is the logo\") that is NOT FOUND here, and whose use the branch does not otherwise prove (a derived file you opened and compared), is a blocking pm finding; a file it replaced that is still what the branch uses is blocking too. A builder note that says it used his file is a claim, not proof.`;
+}
+
+/**
  * The review loop for one repo's BUILD, wired to the model. Returns `{ line, result }` (the builder's latest ok result)
  * or `{ report }`. `base` is the BUILD prompt; the reviewer gets it plus the builder's result and the REVIEW section.
  */
@@ -701,7 +756,7 @@ async function reviewBuild({ job, base, result, names, jobDir, packageDir, resul
   const out = await reviewAndFix({
     review: async (round) => {
       rmSync(reviewPath(round), { force: true });
-      const prompt = `${base}\n\nTHIS RUN IS PHASE REVIEW, NOT BUILD: follow "## Phase REVIEW" only. Do not edit the worktree.\nREVIEW_PATH: ${reviewPath(round)}\nTHE BUILDER'S RESULT: ${JSON.stringify(latest).slice(0, 12000)}`;
+      const prompt = `${base}\n\nTHIS RUN IS PHASE REVIEW, NOT BUILD: follow "## Phase REVIEW" only. Do not edit the worktree.\nREVIEW_PATH: ${reviewPath(round)}\nTHE BUILDER'S RESULT: ${JSON.stringify(latest).slice(0, 12000)}${hisFilesBlock(hisFilesOnBranch(names.worktree, path.join(packageDir, "attachments")))}`;
       writeFileSync(path.join(jobDir, `prompt-REVIEW${tag}-${round + 1}.md`), prompt);
       progress(`fresh-eyes review${tag ? ` of ${tag.slice(1)}` : ""}, round ${round + 1}`);
       const r = await runReview({ job, prompt, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress });
