@@ -1527,7 +1527,8 @@ export async function holdUntilAPlanResets(env: Env, card: { id: string; firm_sc
   const seconds = Math.min(Math.max(Math.round(waitSeconds), 60), 7 * 24 * 60 * 60);
   const until = new Date(now.getTime() + seconds * 1000).toISOString();
   const when = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(until));
-  const line = `Both AI plans (Claude Code and Codex) are out of usage · ${phase.toLowerCase()} starts again by itself at about ${when} Central`;
+  const what = /^NAMED WAIT \[MODEL_MISSING\]/.test(said) ? "The AI program on the Mac could not start" : "Both AI plans (Claude Code and Codex) are out of usage";
+  const line = `${what} · ${phase.toLowerCase()} starts again by itself at about ${when} Central`;
   await env.WP_OS_DB.prepare("UPDATE work_card SET waiting_until = ?2, waiting_for = ?3, next_action = ?3 WHERE id = ?1").bind(card.id, until, line).run();
   await appendFinding(env, card.id, `${line}. ${said.slice(0, 600)}`);
   await appendEvent(env, {
