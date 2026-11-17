@@ -1359,13 +1359,20 @@ export async function recordBrandMail(env: Env, input: { from: string; subject: 
 /**
  * THE BLIND COPY OF HER OWN BRAND EMAIL (24 Oct 2026): from her address, addressed to a brand we have a deal with.
  * Returns that deal's id, or null for anything else (her ordinary mail to the OS is never caught by this).
+ * (17 Nov 2026) Wynn's answer goes to whoever at the brand wrote back (send_to), reply-all with the deal's first contact
+ * on Cc: To AND Cc are read, and an address Wynn answered counts like the contact. Before this, the Pinecone follow-up
+ * to Aaron (Mike on Cc) came back as a partner assignment, opened a Wren card and a Wynn "review" of mail already sent.
  */
-export async function isOwnBrandMailCopy(env: Env, input: { from: string; to: string }): Promise<string | null> {
+export async function isOwnBrandMailCopy(env: Env, input: { from: string; to: string; cc?: string }): Promise<string | null> {
   const from = (/<([^>]+)>/.exec(input.from)?.[1] ?? input.from).trim().toLowerCase();
   if (from !== TLC_OWNER.email.toLowerCase()) return null;
-  const to = [...input.to.matchAll(/[^\s<>,;"]+@[^\s<>,;"]+/g)].map((m) => m[0].toLowerCase()).filter((a) => a !== INTAKE_MAILBOX);
+  const to = [...new Set([...`${input.to},${input.cc ?? ""}`.matchAll(/[^\s<>,;"]+@[^\s<>,;"]+/g)].map((m) => m[0].toLowerCase()).filter((a) => a !== INTAKE_MAILBOX))];
   if (to.length === 0) return null;
-  const deal = await env.WP_OS_DB.prepare(`SELECT id FROM tlc_deal WHERE lower(contact_email) IN (${to.map((_, i) => `?${i + 1}`).join(",")}) LIMIT 1`).bind(...to).first<{ id: string }>();
+  const marks = to.map((_, i) => `?${i + 1}`).join(",");
+  const deal = await env.WP_OS_DB.prepare(
+    `SELECT id FROM tlc_deal WHERE lower(contact_email) IN (${marks})
+      UNION ALL SELECT deal_id FROM tlc_brand_reply WHERE lower(send_to) IN (${marks}) LIMIT 1`,
+  ).bind(...to).first<{ id: string }>();
   return deal?.id ?? null;
 }
 

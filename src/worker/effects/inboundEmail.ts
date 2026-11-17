@@ -446,7 +446,7 @@ export async function handleInboundEmail(
    */
   {
     const { isOwnBrandMailCopy } = await import("../services/learningClub");
-    const copy = await isOwnBrandMailCopy(env, { from: sender, to: message.headers.get("to") ?? "" }).catch(() => null);
+    const copy = await isOwnBrandMailCopy(env, { from: sender, to: message.headers.get("to") ?? "", cc: message.headers.get("cc") ?? "" }).catch(() => null);
     if (copy) {
       await appendEvent(env, {
         eventType: "tlc.brand_mail_copy", actorType: "system", actorId: "inbound_email", objectType: "tlc_deal", objectId: copy,
