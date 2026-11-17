@@ -276,6 +276,27 @@ describe("the three incidents of 8–9 Oct 2026", () => {
     await writeProfile(env, SCOOTER, { aliases: [{ host: "voting.topbarz.xyz", words: ["top barz", "topbarz", "culturecon"] }] });
   });
 
+  it("17 Nov · an email naming the open job's site AND other sites is a new job; naming only that site still joins", async () => {
+    await closeAllOpenSiteCards();
+    // The westpeek.ventures job from the first incident, waiting on his preview again (no new card: the opening breaker counts them).
+    const prod = (await one<{ id: string }>(
+      "SELECT c.id FROM work_card c JOIN web_property_change w ON w.work_card_id = c.id WHERE w.property_host = 'westpeek.ventures' ORDER BY c.created_at LIMIT 1",
+    ))!.id;
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED' WHERE id = ?1").bind(prod).run();
+    const ga = (hosts: string) => ({
+      fromHeader: `Scooter Taylor <${SCOOTER}>`,
+      authenticationResults: GOOD_AUTH,
+      subject: "Google Analytics for the three sites",
+      raw: ["Subject: Google Analytics for the three sites", "", `Hey Porter,\n\nPlease install Google Analytics 4 on these sites:\n\n${hosts}\n\nBest,\nScooter`].join("\n"),
+    });
+    const three = await siteCardDecision(env, ga("- westpeekproductions.com (new build) - G-1\n- joinwestpeek.com - G-2\n- westpeek.ventures - G-3"));
+    expect(three.kind, "two of the sites are not the open job's").toBe("NEW");
+    expect(three.kind === "NEW" ? three.why : "").toMatch(/joinwestpeek\.com/);
+    const justProd = await siteCardDecision(env, ga("- westpeek.ventures - G-3"));
+    expect(justProd.kind, "only the open job's own site: a follow-up on it").toBe("JOIN");
+    expect(justProd.kind === "JOIN" ? justProd.cardId : null).toBe(prod);
+  });
+
   it("2 · a re-read of that email puts the wrongly answered block BACK — never cancels the card — with its reminder", async () => {
     await closeAllOpenSiteCards();
     const spam = await openSiteJob("Spam on the Ventures form", "Hey! Instinct took a look at the spam coming through the westpeek.ventures form.");
