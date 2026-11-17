@@ -6,7 +6,7 @@ import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
 import { sweepOnce } from "../src/worker/services/workSweep";
 import { reportRun, type SeatRunRow } from "../src/worker/ai/subscriptionSeats";
 import { parseWebPropertyAsk, propertiesIn, slicesByRepo, sitesOf, WEB_PROPERTIES } from "../src/shared/intake/webPropertyChange";
-import { WEB_PROPERTY_CHANGE_KIND, type LocalJobPayload } from "../src/shared/work/localJobs";
+import { BUILD_CEILING_SECONDS, WEB_PROPERTY_CHANGE_KIND, type LocalJobPayload } from "../src/shared/work/localJobs";
 import { aggregateParts, parkPhase, readParts, readWebPropertyChange, rulesFor } from "../src/worker/services/webPropertyChange";
 import { steerFromReply } from "../src/worker/services/emailThread";
 import { threadReference } from "../src/shared/email/thread";
@@ -251,7 +251,7 @@ describe("community site + westpeek live in one email, preview first, then land"
     const payload = await payloadOf(id);
     expect(payload.phase).toBe("BUILD");
     expect(payload.parts).toHaveLength(2);
-    expect(payload.max_seconds, "one run builds both repos, so its ceiling covers both").toBe(2 * 90 * 60);
+    expect(payload.max_seconds, "one run builds both repos, so its ceiling covers both").toBe(2 * BUILD_CEILING_SECONDS);
   });
 
   it("BUILD: one PR per repo; westpeek-live RED holds BOTH — nothing lands, the card names the red repo, LAND is refused and the row refuses a merge", async () => {

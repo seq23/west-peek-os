@@ -95,6 +95,9 @@ export const PARTNER_SESSION_KIND = "PARTNER_SESSION" as const;
  */
 export const ON_OFF_RULE_KEYS: readonly string[] = ["land_on_green", "done_reply_preview_first"];
 
+/** A site BUILD: the build turn, then the review loop (up to 3 reviews and 2 fixes), then the first run. */
+export const BUILD_CEILING_SECONDS = 3 * 60 * 60;
+
 export const LOCAL_JOB_KINDS: readonly LocalJobKindSpec[] = [
   {
     kind: WEB_PROPERTY_CHANGE_KIND,
@@ -102,7 +105,13 @@ export const LOCAL_JOB_KINDS: readonly LocalJobKindSpec[] = [
     promptFile: "scripts/duties/web-property-change-prompt.md",
     phases: {
       PLAN: { model: CLAUDE_SEAT_START, maxSeconds: 40 * 60, purpose: "Pull the package, read the RUNBOOK, write the plan: decided and ask." },
-      BUILD: { model: CLAUDE_SEAT_START, maxSeconds: 90 * 60, purpose: "Build it in a worktree, prove it with the repo's validators and screenshots, open the PR." },
+      /*
+       * THREE HOURS, NOT NINETY MINUTES (17 Nov 2026, wc_76e6d7ff). The 90-minute ceiling predates the fresh-eyes review
+       * (13 Nov), which adds up to three review turns and two fix turns AFTER the build turn. Scooter's six-item rebuild
+       * took 70 minutes to build, 2 to review, and was cut 18 minutes into the first fix: twice in one day the whole
+       * run was thrown away at the cap and his preview waited another round. The ceiling now covers build + review loop.
+       */
+      BUILD: { model: CLAUDE_SEAT_START, maxSeconds: BUILD_CEILING_SECONDS, purpose: "Build it in a worktree, prove it with the repo's validators and screenshots, open the PR." },
       LAND: { model: CLAUDE_SEAT_START, maxSeconds: 40 * 60, purpose: "Land on green with ~/bin/land and prove it live with curl." },
     },
     queueMaxSeconds: 12 * 60 * 60,

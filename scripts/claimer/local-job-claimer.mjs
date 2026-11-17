@@ -372,7 +372,7 @@ async function runJob(run) {
     if (!report || typeof report !== "object" || !report.phase || !report.status) {
       return { ok: false, error: `${duty.script} returned no report for ${job.phase} — a phase that says nothing has not run (Rule 0)` };
     }
-    return { ok: true, output: JSON.stringify(report) };
+    return { ok: true, output: JSON.stringify(outOfTime(report, controller.signal)) };
   } catch (err) {
     const why = controller.signal.aborted ? (controller.signal.reason?.message ?? "stopped") : err instanceof Error ? err.message : String(err);
     return { ok: false, error: `${job.phase} on ${job.target_repo ?? "the repo"}: ${why}`.slice(0, 1900) };
@@ -381,6 +381,19 @@ async function runJob(run) {
     clearInterval(pulse);
     stopAwake();
   }
+}
+
+/**
+ * A RUN CUT AT ITS CEILING SAYS SO (17 Nov 2026, wc_76e6d7ff). The claimer aborts the phase at `max_seconds`; the model
+ * turn then exits with no code and the step that was cut reported only "ended (exit null) but the phase wrote no
+ * result file", which reads like a broken build. A failed report from a run whose signal was aborted is named
+ * OUT_OF_TIME, with what was cut and the fact that the branch keeps whatever was pushed for the next BUILD.
+ */
+export function outOfTime(report, signal) {
+  if (!signal?.aborted || !report || report.status !== "failed" || typeof report.waits_seconds === "number") return report;
+  if (String(report.reason ?? "").startsWith("NAMED STOP [OUT_OF_TIME]")) return report;
+  const why = signal.reason instanceof Error ? signal.reason.message : String(signal.reason ?? "the phase was stopped at its ceiling");
+  return { ...report, reason: `NAMED STOP [OUT_OF_TIME] ${why}; what was pushed on the branch stays and the next ${report.phase ?? "run"} carries on from it. The step that was cut: ${String(report.reason ?? "").slice(0, 600)}` };
 }
 
 /**
