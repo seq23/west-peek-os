@@ -130,3 +130,29 @@ describe("a reply on a closed card always gets one email back", () => {
     expect(r.told).toBe(0);
   });
 });
+
+/**
+ * HIS EMAIL AND ITS ASKS FOLLOW THE BUILD (16 Nov 2026). Scooter's Top Barz brief was read first (9 asks) but filed on
+ * October's cancelled card, so Porter's build carried no asks and its final reply had nothing to check against.
+ */
+describe("a reply that opens a build moves its email and asks to the build", () => {
+  it("the stored message and the asks already read from it land on Porter's new card; the old card keeps none", async () => {
+    const card = await createWorkCardInternal(env, systemIdentity(), { title: "Change voting.topbarz.xyz: asks card", owner_type: "AI", owner_id: "aie_porter", firm_scope: "west-peek", priority: "NORMAL" } as never);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET requested_by_email = ?2, state = 'CANCELLED' WHERE id = ?1").bind(card.id, SCOOTER).run();
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'WEB_PROPERTY_CHANGE' WHERE id = ?1").bind(card.id).run();
+    const key = "inbound-email/2026-11-17/asks-test.eml";
+    await env.WP_OS_DB.prepare("INSERT INTO inbound_message (id, message_id, r2_key, from_address, received_at, work_card_id) VALUES ('inm_asks_test', '<asks-test@x>', ?1, ?2, '2026-11-17T01:09:54Z', ?3)").bind(key, SCOOTER, card.id).run();
+    for (let i = 1; i <= 3; i++) await env.WP_OS_DB.prepare("INSERT INTO partner_ask (id, work_card_id, inbound_message_id, seq, words, firm_scope) VALUES (?1, ?2, 'inm_asks_test', ?3, ?4, 'west-peek')").bind(`pask_t${i}`, card.id, i, `ask ${i}`).run();
+    const { token } = await startThread(env, { objectType: "work_card", objectId: card.id, cardKind: "WEB_PROPERTY_CHANGE", employee: "Porter", to: SCOOTER, subject: "Porter: New site build: New preview ready", firmScope: "west-peek" });
+    const written = "New build for the Top Barz site: a holiday party version of the booth flow.";
+    const raw = [`From: ${SCOOTER}`, "To: os@joinwestpeek.com", "Subject: Re: Porter: New site build: New preview ready", "", written].join("\n");
+    await steerFromReply(env, { fromHeader: `<${SCOOTER}>`, authenticationResults: AUTH, subject: "Re: Porter: New site build: New preview ready", raw, inReplyTo: threadReference(token), references: null, emlKey: key }, { readWords: reads("BUILD", "EXISTING") });
+    const build = await env.WP_OS_DB.prepare("SELECT id FROM work_card WHERE assigned_from_card_id = ?1").bind(card.id).first<{ id: string }>();
+    expect(build).toBeTruthy();
+    const msg = await env.WP_OS_DB.prepare("SELECT work_card_id FROM inbound_message WHERE id = 'inm_asks_test'").first<{ work_card_id: string }>();
+    expect(msg!.work_card_id).toBe(build!.id);
+    const asks = (await env.WP_OS_DB.prepare("SELECT work_card_id FROM partner_ask WHERE inbound_message_id = 'inm_asks_test'").all<{ work_card_id: string }>()).results ?? [];
+    expect(asks).toHaveLength(3);
+    expect(asks.every((a) => a.work_card_id === build!.id)).toBe(true);
+  });
+});
