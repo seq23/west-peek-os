@@ -51,6 +51,13 @@ export const FLOW_TEMPLATES = {
     "{hi}\n\nHere's a short 3-page PDF, built around {brand}:\n\n1. Run of show: how the evening flows, and where {brand} comes in: \"{segment}\", a segment led by {brand} or by our host.\n2. A series of six: how the room could grow into {arc}.\n3. Who's in the room: the kinds of people we'd invite, shaped around who you told us you want to reach.\n\nEverything here can bend to your launches and your audience. Tell me what you'd change and I'll come back with options for how {brand} could take part.",
   proposal:
     "{hi}\n\nThank you for your note. Here is a one-pager that lays out a sample event we are planning, {topic}: one hands-on evening in New York in {when}, with {brand} as a founding partner.\n\nIt is part of The Learning Club, a series within West Peek Rooms, our in-person events for a community of about 5,000 founders, operators and creatives. The one-pager covers who will be in the room, what guests would build with {brand}, the partner levels with the fee for each, and what we would ask of {brand} beyond the fee. Nothing needs staffing: we host every segment.\n\nHappy to answer anything here by email.",
+  /*
+   * Their desk sent us back to the address we already wrote to (17 Nov 2026, Therabody's info@: "please continue by
+   * emailing partnerships@ … include what you do, where you post, and what you have in mind"). The sample-event
+   * one-pager, no prices: nothing about money before a call.
+   */
+  sampleEvent:
+    "{hi}\n\nYour team at {desk} asked us to send what we do, where we post and what we have in mind, so here is a one-pager that lays out a sample event we are planning: {topic}, a hands-on {part} in New York in {when}.\n\nIt covers what The Learning Club is, how the {part} runs, who will be in the room, where we post, and what we have in mind for {brand}. Nothing needs staffing: we host every segment.\n\nIf it fits, a reply is all it takes, and I'll shape the rest around your team.",
   confirm:
     "{hi}\n\nWonderful, we're thrilled to have {brand} as {level}. Attached are a one-page agreement and the invoice. Once both are back, we'll lock the date with you and start shaping the guest list around your audience.",
   callTimes:

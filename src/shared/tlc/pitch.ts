@@ -263,6 +263,13 @@ export interface TlcSponsorView {
    * brand keeps it (owner, 4 Nov 2026: the sheet "ends with how to say yes"). Set per deal from the brand's own reply.
    */
   cantCommitYet?: boolean;
+  /**
+   * THE SAMPLE EVENT ALONE, NO PRICES (17 Nov 2026, Therabody: their desk asked for "what you do, where you post, and
+   * what you have in mind" before any call). A first look for a brand that has not talked with us carries no levels,
+   * no fee and no payment terms (risk R-EML-07; Wynn's NO_MONEY_EARLY rule): the levels sheet comes later, after both
+   * partners approve it. Adds where we post.
+   */
+  sampleOnly?: boolean;
 }
 /** A brand's own words saying it cannot commit yet ("I can't commit to sponsorship at this stage"). */
 export const CANT_COMMIT = /\b(?:can[’']?t|cannot|can not|unable to|not able to|not (?:yet )?in a position to|won[’']?t be able to)\s+(?:yet\s+)?commit\b/i;
@@ -477,12 +484,19 @@ function buildLines(v: TlcClubView, s: TlcSponsorView): string[] {
     ...(takeHome ? [`They leave with ${takeHome.charAt(0).toLowerCase()}${takeHome.slice(1)}`] : []),
   ];
 }
+/** Where we post and reach people: only what the west-peek brain records (handle: her words, 7 Nov 2026). No follower counts. */
+export const WHERE_WE_POST: readonly string[] = [
+  "Instagram: @westpeek.",
+  "joinwestpeek.com, our community site, where members join.",
+  "We invite each room's guests directly from our community.",
+];
+
 /** What we would ask of the brand beyond the fee, when the deal sets no lines of its own. Staffing is never required. */
-function askLines(s: TlcSponsorView): string[] {
+function askLines(s: TlcSponsorView, part = "evening"): string[] {
   if (s.asks?.length) return [...s.asks];
   const B = s.brand;
   return [
-    s.software ? `Guest access to ${B}'s paid features for the evening, so every guest builds with the full product.` : `Your product in guests' hands, where it fits the evening.`,
+    s.software ? `Guest access to ${B}'s paid features for the evening, so every guest builds with the full product.` : `Your product in guests' hands, where it fits the ${part}.`,
     `A short brief on what you would most like guests to try or know.`,
     "Staff are optional: we host every segment, and you send someone only if you want to.",
   ];
@@ -519,11 +533,11 @@ function renderPartnerOnePager(v: TlcClubView, s: TlcSponsorView): string {
 ${hook ? `<p class="lede">${esc(hook)}</p>` : ""}
 <p class="when">${esc(monthWords(v.month))} (dates flexible) · New York City · ${BRAND_GUESTS_WORDS}</p>
 <div class="two"><section class="box"><h2>What The Learning Club is</h2><p>${esc(TLC_ABOUT_COMMUNITY)}</p></section><div>
-<h2>The evening</h2>
+<h2>${v.slot === "AFTERNOON" ? "The afternoon" : "The evening"}</h2>
 <ol>${RUN_OF_SHOW.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>
 </div></div>
 <div class="two"><div>
-<h2>What guests will build with ${esc(B)}</h2>
+<h2>${s.sampleOnly ? `What we have in mind for ${esc(B)}` : `What guests will build with ${esc(B)}`}</h2>
 ${list(buildLines(v, s))}
 </div><div>
 <h2>Who will be in the room</h2>
@@ -533,16 +547,20 @@ ${list(buildLines(v, s))}
 ${v.aiSegment ? `<li>The AI segment: ${esc(brandSafe(v.aiSegment))}</li>` : ""}</ul>
 </div></div>
 ${safety.length ? `<p class="note">${safety.map(esc).join(" ")}</p>` : ""}
-<h2>Partner levels, per event</h2>
+${s.sampleOnly ? `<h2>Where we post</h2>
+${list(WHERE_WE_POST)}` : `<h2>Partner levels, per event</h2>
 ${series ? `<p class="lede">${esc(series)}</p>` : ""}
 <div class="tiers">${levels.map((l) => `<div class="tier" data-level="${l.key}"><b><span class="name">${esc(l.label)}</span><span class="dot"> · </span><span class="price">${esc(priceWords(l))}</span></b>${l.marked ? `<em class="mark">${esc(l.marked)}</em>` : ""}<span class="adds">${l.head ? `${esc(l.head)} ` : ""}${esc(l.adds.join("; "))}.</span></div>`).join("")}</div>
 ${seriesP ? seriesSheetHtml(seriesP, levels) : `<p>${esc(quarterly ?? SERIES_PRICE_WORDS)}</p>`}
-<p>${hasTitle ? "Except with a Title partner, a few brands can partner on each club." : "A few brands can partner on each club."}</p>
+<p>${hasTitle ? "Except with a Title partner, a few brands can partner on each club." : "A few brands can partner on each club."}</p>`}
 <div class="two"><div>
-<h2>What we'd ask of ${esc(B)}, beyond the fee</h2>
-${list(askLines(s))}
+<h2>${s.sampleOnly ? `What we'd ask of ${esc(B)}` : `What we'd ask of ${esc(B)}, beyond the fee`}</h2>
+${list(askLines(s, v.slot === "AFTERNOON" ? "afternoon" : "evening"))}
 </div><div class="yes">
-${s.cantCommitYet
+${s.sampleOnly
+    ? `<h2>Next step</h2>
+<ol><li>Reply with any questions, or with what you would most like guests to try.</li><li>Then we shape the date and the guest list around your audience.</li></ol>`
+    : s.cantCommitYet
     ? `<h2>Next step</h2>
 <ol><li>${esc(`Reply with any questions, or with the level that fits${howMany}.`)}</li><li>Then we set the date with you and shape the guest list around your audience.</li></ol>`
     : `<h2>To say yes</h2>

@@ -11,7 +11,7 @@ import { BRAND_MUST_STAFF, CALL_ASK, MONEY_WORDS } from "../src/shared/tlc/brand
  * A fake brand only: the real instance lives in production data.
  */
 const SPONSOR = sponsorOf({ brand: "Vector Co", category: "Vector database" });
-const FAKE = { hi: "Hi Sam,", brand: "Vector Co", topic: "Build Your Own AI Agent", segment: "Giving your agent a memory", arc: "a run that follows the arc of building an agent", level: "Presenting partner", times: "• Tuesday 10 Nov, 2:00pm", time: "Tuesday 10 Nov, 2:00pm", levels: proposalLevelLines(brandLevels(SPONSOR, "Build Your Own AI Agent")), series: "A series of six: the same per-event price for each club, as a founding partner. ", howMany: "", when: "March 2027 (dates flexible)" };
+const FAKE = { hi: "Hi Sam,", brand: "Vector Co", topic: "Build Your Own AI Agent", segment: "Giving your agent a memory", arc: "a run that follows the arc of building an agent", level: "Presenting partner", times: "• Tuesday 10 Nov, 2:00pm", time: "Tuesday 10 Nov, 2:00pm", levels: proposalLevelLines(brandLevels(SPONSOR, "Build Your Own AI Agent")), series: "A series of six: the same per-event price for each club, as a founding partner. ", howMany: "", when: "March 2027 (dates flexible)", desk: "info@vector.example", part: "evening" };
 
 describe("the five steps and the call branch, as the code reads them", () => {
   it("five steps; money first at step 4; three follow-ups, the first carrying the samples PDF, each short and saying something new", () => {
@@ -37,7 +37,7 @@ describe("the five steps and the call branch, as the code reads them", () => {
       const text = fillTemplate(name, FAKE);
       expect(text, name).not.toMatch(/\{\w+\}/);
       expect(text, name).not.toMatch(BRAND_MUST_STAFF);
-      if (name === "followUp" || name === "followUp2" || name === "followUp3" || name === "cover") {
+      if (name === "followUp" || name === "followUp2" || name === "followUp3" || name === "cover" || name === "sampleEvent") {
         expect(text, name).not.toMatch(MONEY_WORDS);
         expect(text, name).not.toMatch(CALL_ASK);
       }

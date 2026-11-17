@@ -21,6 +21,7 @@ export const replyPageUrl = (brand: string): string => `${REPLY_PAGE_ORIGIN}${re
 export function docNameFor(kind: string | null | undefined, pricing: boolean): string {
   if (kind === "CONFIRM") return "Agreement";
   if (kind === "PROPOSAL") return "Partner one-pager";
+  if (kind === "SAMPLE_EVENT") return "Sample event one-pager";
   if (pricing) return "Pricing Reply";
   if (kind === "SAMPLES") return "Materials Reply";
   if (kind === "CALL") return "Call Reply";
