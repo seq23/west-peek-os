@@ -636,7 +636,15 @@ export async function steerFromReply(
         ? await (await import("./partnerSession")).redirectSession(env, cardRow.id, written, partner.email, thread.token)
         : null;
     if (sessionReply) answered = true;
-    if (!sessionReply && !alreadyFiled && !takenOver && !owned && !secondarySaidApproved && cardRow && partner && cardRow.kind !== WEB_PROPERTY_CHANGE_KIND) {
+    /*
+     * A FINISHED WEBSITE JOB IS NOT A LIVE ONE (17 Nov 2026). A reply on an OPEN or BLOCKED website card steers that
+     * build (below). One on a DONE or CANCELLED website card has no build left to steer: Scooter's "New build for the
+     * Top Barz site: a holiday party version of the booth flow" came back on the thread of October's cancelled
+     * voting.topbarz.xyz card, skipped this door because the card was a website job, and became a "question after
+     * done" notice — no build opened. A closed website card is read like any other finished card.
+     */
+    const closedSite = cardRow?.kind === WEB_PROPERTY_CHANGE_KIND && ["DONE", "CANCELLED"].includes(cardRow.state);
+    if (!sessionReply && !alreadyFiled && !takenOver && !owned && !secondarySaidApproved && cardRow && partner && (cardRow.kind !== WEB_PROPERTY_CHANGE_KIND || closedSite)) {
       const read = await readReplyIntent(
         env,
         { cardId: cardRow.id, firmScope: thread.firm_scope, text: written, where: replyWhere(cardRow) },
@@ -873,6 +881,12 @@ function replyWhere(card: { title: string; kind: string | null; state: string })
       `a reply to a note that is already finished and was emailed to them: "${card.title.slice(0, 120)}" (${card.kind}, DONE). ` +
       "For this note, CONTINUE means they want the note itself redone or revised with changes. " +
       "If they are happy with it (praise, agreement, comments or context on the items in it, or what they plan to do with it) and ask something, that is QUESTION; with nothing asked, NOTHING"
+    );
+  }
+  if (card.kind === WEB_PROPERTY_CHANGE_KIND && ["DONE", "CANCELLED"].includes(card.state)) {
+    return (
+      `a reply on a website job that is already closed: "${card.title.slice(0, 120)}" (${card.kind}, ${card.state}). ` +
+      "Nothing is being built on it any more: any change or new build it asks for, on that site or another, is a new BUILD"
     );
   }
   return `a reply on a card that is not a build: "${card.title.slice(0, 120)}" (${card.kind ?? "general work"}, ${card.state})`;
