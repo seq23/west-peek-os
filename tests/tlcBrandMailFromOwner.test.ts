@@ -159,5 +159,12 @@ describe("in the database", () => {
     expect(await isOwnBrandMailCopy(env, { from: SEQUOIA, to: "os@joinwestpeek.com" })).toBeNull();
     expect(await isOwnBrandMailCopy(env, { from: "Pat <pat@osmo.example>", to: SEQUOIA })).toBeNull();
     expect(await isOwnBrandMailCopy(env, { from: "scooter@westpeek.ventures", to: "pat@osmo.example" })).toBeNull();
+    // Wynn's answer to whoever wrote back, with the deal's contact on Cc (17 Nov 2026, Pinecone): still her own copy.
+    expect(await isOwnBrandMailCopy(env, { from: SEQUOIA, to: "aaron@osmo.example", cc: "pat@osmo.example" })).toBe("tld_osmo");
+    await env.WP_OS_DB.prepare("INSERT INTO tlc_brand_reply (id, deal_id, brand_message_id, their_subject, their_text, received_at, intent, draft_subject, draft_body, state, firm_scope, send_to) VALUES ('tbr_x', 'tld_quest', 'm1', 's', 't', '2026-11-10T00:00:00Z', 'YES', 'd', 'b', 'SENT', 'west-peek', 'ana@quest.example')").run();
+    expect(await isOwnBrandMailCopy(env, { from: SEQUOIA, to: "Ana <ana@quest.example>" })).toBe("tld_quest");
+    // A stranger on Cc of her own mail is not a brand copy, and the brand's own address never matches from them.
+    expect(await isOwnBrandMailCopy(env, { from: SEQUOIA, to: "friend@else.example", cc: "os@joinwestpeek.com" })).toBeNull();
+    expect(await isOwnBrandMailCopy(env, { from: "ana@quest.example", to: "os@joinwestpeek.com", cc: SEQUOIA })).toBeNull();
   });
 });
