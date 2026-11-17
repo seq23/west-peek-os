@@ -1029,7 +1029,7 @@ async function previewUrlFor(worktree, number, progress, pagesHosts = [], branch
   const started = Date.now();
   let asked = false;
   for (;;) {
-    const got = await previewUrlOnce(worktree, number, progress, pagesHosts, branch);
+    const got = await previewUrlOnce(worktree, number, progress, pagesHosts, branch, env?.CLOUDFLARE_API_TOKEN);
     // 13 Nov 2026: a Worker deployed by Workers Builds (westpeek-live) posts its version preview as a PR comment: wait for it too.
     if (got.url || (pagesHosts.length === 0 && !got.workersBuilds) || !got.head) return got.url;
     if (Date.now() - started >= PREVIEW_WAIT_MS || signal?.aborted) {
@@ -1062,7 +1062,43 @@ async function askPagesBuild(project, branch, token) {
   }
 }
 
-async function previewUrlOnce(worktree, number, progress, pagesHosts = [], branch = "") {
+/**
+ * THE PAGES PROJECT'S OWN RECORD OF THE HEAD (17 Nov 2026, wc_76e6d7ff). A repo that deploys its
+ * preview from its own GitHub Action (`wrangler pages deploy`, e.g. topbarz-voting) leaves no GitHub
+ * deployment and a PR comment that never names the commit, so the head-only comment filter found
+ * nothing and a green, deployed build failed as "Pages has not deployed". Cloudflare's deployment
+ * list carries the commit hash whatever deployed it: a successful one for the head is the preview.
+ * Pure: the API's deployment rows in, deployment-status-shaped rows out.
+ */
+export function pagesStatusesForHead(deployments, headSha) {
+  const head = String(headSha ?? "").trim().toLowerCase();
+  if (head.length < 7) return [];
+  const out = [];
+  for (const d of Array.isArray(deployments) ? deployments : []) {
+    const sha = String(d?.deployment_trigger?.metadata?.commit_hash ?? "").toLowerCase();
+    if (!sha || !(sha.startsWith(head) || head.startsWith(sha))) continue;
+    if (String(d?.latest_stage?.status ?? "") !== "success") continue;
+    for (const u of [d?.url, ...(Array.isArray(d?.aliases) ? d.aliases : [])]) if (u) out.push({ environment_url: String(u) });
+  }
+  return out;
+}
+
+async function pagesDeploymentsOf(project, token) {
+  if (!token) return [];
+  try {
+    const res = await fetch(`${CF_API}/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${encodeURIComponent(project)}/deployments?env=preview&per_page=25`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) return [];
+    const body = await res.json();
+    return Array.isArray(body?.result) ? body.result : [];
+  } catch {
+    return [];
+  }
+}
+
+async function previewUrlOnce(worktree, number, progress, pagesHosts = [], branch = "", cfToken = "") {
   const statuses = [];
   const comments = [];
   let head = "";
@@ -1092,6 +1128,7 @@ async function previewUrlOnce(worktree, number, progress, pagesHosts = [], branc
   } catch (err) {
     progress(`preview url: could not read deployments (${err instanceof Error ? err.message.slice(0, 120) : String(err)})`);
   }
+  if (head) for (const h of pagesHosts) statuses.push(...pagesStatusesForHead(await pagesDeploymentsOf(String(h).replace(/\.pages\.dev$/i, ""), cfToken), head));
   const url = previewUrlsFrom(statuses, comments, pagesHosts, branch, head);
   progress(url ? `preview: ${url}` : `preview: none (no Pages deployment of ${head.slice(0, 7) || "the head"} on this PR)`);
   return { url, head, workersBuilds };
@@ -2447,6 +2484,19 @@ function selfTest() {
     ["13 Nov 2026: a bot comment for an EARLIER commit is not the head's preview", () => previewUrlsFrom([], ["Latest commit: <code>fd56205</code> https://bf96e3d1.west-peek-productions.pages.dev"], ["west-peek-productions.pages.dev"], "work/wpc-c548d043", "d3fb0c6aa") === null],
     ["13 Nov 2026: the bot comment naming the head commit is the preview", () => previewUrlsFrom([], ["Latest commit: <code>d3fb0c6</code> https://bf96e3d1.west-peek-productions.pages.dev"], ["west-peek-productions.pages.dev"], "work/wpc-c548d043", "d3fb0c6aa") === "https://work-wpc-c548d043.west-peek-productions.pages.dev"],
     ["13 Nov 2026: a green Pages build with no deployed head fails, never mails a preview", () => undeployedPreviewReason("GREEN", null, ["west-peek-productions.pages.dev"], "pr") !== null && undeployedPreviewReason("GREEN", "https://x.pages.dev", ["a.pages.dev"], "pr") === null && undeployedPreviewReason("GREEN", null, [], "pr") === null],
+    ["17 Nov 2026: a head deployed by the repo's own Action (no GitHub deployment, comment without the sha) is found in Pages' own list", () => {
+      const deps = [
+        { url: "https://9c9c198f.topbarz-voting.pages.dev", aliases: ["https://work-wpc-76e6d7ff.topbarz-voting.pages.dev"], deployment_trigger: { metadata: { commit_hash: "003b8e19cde66fa159b7fe629afd7f07a171be50" } }, latest_stage: { status: "success" } },
+        { url: "https://5324c042.topbarz-voting.pages.dev", deployment_trigger: { metadata: { commit_hash: "4d619f92b419b93462fd98e106cbdb65ea33e890" } }, latest_stage: { status: "success" } },
+      ];
+      const hosts = ["topbarz-voting.pages.dev"];
+      const comment = ["**Preview** (preview data, not production): https://9c9c198f.topbarz-voting.pages.dev — rebuilt on every push to this PR."];
+      return previewUrlsFrom(pagesStatusesForHead(deps, "003b8e19cde66fa159b7fe629afd7f07a171be50"), comment, hosts, "work/wpc-76e6d7ff", "003b8e19cde66fa159b7fe629afd7f07a171be50") === "https://work-wpc-76e6d7ff.topbarz-voting.pages.dev" &&
+        // negative: the head not yet deployed (only an earlier commit is) is still no preview
+        previewUrlsFrom(pagesStatusesForHead(deps, "aaaaaaa1111"), comment, hosts, "work/wpc-76e6d7ff", "aaaaaaa1111") === null &&
+        // negative: a failed or still-building deployment of the head is not a preview
+        pagesStatusesForHead([{ ...deps[0], latest_stage: { status: "failure" } }], "003b8e19cde").length === 0;
+    }],
     ["a repo with no Pages deployment yields null, never a guess", () => previewUrlsFrom([{ environment_url: "" }], ["LGTM"]) === null],
     ["an ask without a recommended default is refused", () => readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), asks: ["colour?"], publish_ready: true }), "PLAN").result === null],
     ["all-success checks are GREEN", () => checkStateOf([{ state: "SUCCESS" }, { state: "SKIPPED" }]) === "GREEN"],
