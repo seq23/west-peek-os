@@ -165,6 +165,13 @@ describe("a brand replied", () => {
     expect(await arrive("Lee <lee@bot.example>", "Re: Bot Co + a small room in New York", "Sounds interesting. Can we set up a call?", "c-1@bot.example", AFTERNOON)).toEqual({ matched: 1, stop: "REPLIED" });
     expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM tlc_brand_reply WHERE deal_id = 'tld_bot'").first<{ n: number }>())!.n).toBe(1);
     expect(sends).toHaveLength(2);
+    // A ticket desk re-sending the same words under a NEW message id (Notion, 18 Nov 2026) is not a second draft either:
+    // it is closed naming the answer already out for approval, and she is not asked again.
+    expect(await arrive("Lee <lee@bot.example>", "Bot Co + a small room in New York", "Sounds  interesting. Can we set up a call?", "c-2@bot.example", AFTERNOON)).toEqual({ matched: 1, stop: "REPLIED" });
+    const bot = (await env.WP_OS_DB.prepare("SELECT state, held_reason FROM tlc_brand_reply WHERE deal_id = 'tld_bot' ORDER BY brand_message_id").all<{ state: string; held_reason: string | null }>()).results!;
+    expect(bot.map((r) => r.state)).toEqual(["NOTIFIED", "CLOSED"]);
+    expect(bot[1]!.held_reason).toMatch(/^the same message again: TLR-[A-Z0-9]{6} already answers it/);
+    expect(sends).toHaveLength(2);
   });
 
   it("a reply from anyone but her is refused; her \"approved\" sends each answer ONCE, from her mailbox, on their thread", async () => {
