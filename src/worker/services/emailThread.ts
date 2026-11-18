@@ -3,7 +3,7 @@ import { recordPartnerBack } from "./blocks";
 import { recordCcFrom } from "./ccPartners";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
-import { mintThreadToken, threadHeaders, threadTokensIn, type EmailThreadRow } from "../../shared/email/thread";
+import { mintThreadToken, threadForSesIds, threadHeaders, threadTokensIn, type EmailThreadRow } from "../../shared/email/thread";
 import { partnersOwnWords, writtenAndQuoted } from "../../shared/intake/replyBody";
 import { containsGenuineQuestion } from "../../shared/intake/genuineQuestion";
 import { addressIn, mailAuthority } from "../../shared/intake/partnerAuthority";
@@ -209,6 +209,7 @@ export function comparableSubject(subject: string): string {
  */
 export async function isReplyToOurs(env: Env, message: { from: string | null; subject: string; inReplyTo: string | null; references: string | null }): Promise<boolean> {
   if (threadTokensIn({ inReplyTo: message.inReplyTo, references: message.references }).length > 0) return true;
+  if ((await replyThreadFromHeaders(env, { fromHeader: message.from, subject: message.subject, inReplyTo: message.inReplyTo, references: message.references })) !== null) return true;
   if (!/^\s*(?:re|fwd?|aw|sv)\s*:/i.test(message.subject)) return false;
   const from = (message.from ?? "").trim().toLowerCase();
   const bare = comparableSubject(message.subject);
@@ -250,6 +251,19 @@ export async function replyThreadFromHeaders(
    * it to, newest first. Only for the partners (the authority check below still decides), and
    * only for subjects that are ours.
    */
+  /*
+   * THE SES MESSAGE-ID, WHATEVER THE SUBJECT BECAME (18 Nov 2026): the reply names the exact email it
+   * answers by its provider id, and that id's clock matches one send to this partner. See
+   * `threadForSesIds` in shared/email/thread.ts for the measurement.
+   */
+  if (!thread && tokens.length === 0) {
+    const from = (addressIn(message.fromHeader) ?? "").toLowerCase();
+    if (from && /amazonses\.com/i.test(`${message.inReplyTo ?? ""} ${message.references ?? ""}`)) {
+      const sent =
+        (await env.WP_OS_DB.prepare("SELECT * FROM email_thread WHERE to_address = ?1 ORDER BY created_at DESC LIMIT 200").bind(from).all<EmailThreadRow>()).results ?? [];
+      thread = threadForSesIds(message, sent);
+    }
+  }
   if (!thread && tokens.length === 0 && /^\s*(?:re|fwd?|aw|sv)\s*:/i.test(message.subject)) {
     const from = (addressIn(message.fromHeader) ?? "").toLowerCase();
     const bare = comparableSubject(message.subject);
