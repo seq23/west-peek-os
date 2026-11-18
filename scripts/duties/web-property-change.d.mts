@@ -68,3 +68,6 @@ export function settleFixTurn<R extends { status?: string } | null>(result: R, p
 export function hisFilesOnBranch(worktree: string, attachmentsDir: string): string[];
 /** The reviewer's block for `hisFilesOnBranch`; empty when he sent no files. */
 export function hisFilesBlock(lines: readonly string[]): string;
+
+/** This round's changed files first, then the rest of the PR, unique (18 Nov 2026). */
+export function roundFirst(prFiles: readonly string[] | null | undefined, roundFiles: readonly string[] | null | undefined): string[];

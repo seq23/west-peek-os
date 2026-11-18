@@ -1096,14 +1096,38 @@ async function privateProofFor(job, driveDir, worktree, ctx, jobDir, progress) {
   return privateProof({ constraints, paths, docs, diff, publicTexts });
 }
 
-async function changedFilesFor(worktree, number) {
+/**
+ * THIS ROUND'S PAGES FIRST (18 Nov 2026, wc_c548d043). Scooter asked for six photos on the case-studies page
+ * and a menu reorder; the preview email's "changed pages" listed the long-running PR's whole diff, sorted and
+ * cut at eight, and /work — the page his photos were on — was not among them. On a rebuild, the files this
+ * run's commits touched (headBefore..HEAD) lead the list, then the rest of the PR, so the pages he asked about
+ * are the ones linked. No round (a first build, or no head before) keeps the PR's order. Pure.
+ */
+export function roundFirst(prFiles, roundFiles) {
+  const pr = (Array.isArray(prFiles) ? prFiles : []).map((f) => String(f ?? "").trim()).filter(Boolean);
+  const round = (Array.isArray(roundFiles) ? roundFiles : []).map((f) => String(f ?? "").trim()).filter(Boolean);
+  return [...new Set([...round, ...pr])].slice(0, 500);
+}
+
+async function changedFilesFor(worktree, number, headBefore = null) {
+  let pr = [];
   try {
     const { stdout } = await sh("gh", ["pr", "view", String(number), "--json", "files"], { cwd: worktree });
     const files = JSON.parse(stdout).files;
-    return Array.isArray(files) ? files.map((f) => String(f?.path ?? "")).filter(Boolean).slice(0, 500) : [];
+    pr = Array.isArray(files) ? files.map((f) => String(f?.path ?? "")).filter(Boolean) : [];
   } catch {
-    return [];
+    /* no PR list: this round's files alone */
   }
+  let round = [];
+  if (typeof headBefore === "string" && headBefore) {
+    try {
+      const { stdout } = await sh("git", ["diff", "--name-only", headBefore, "HEAD"], { cwd: worktree });
+      round = stdout.split("\n").map((x) => x.trim()).filter(Boolean);
+    } catch {
+      /* no round diff: the PR's order */
+    }
+  }
+  return roundFirst(pr, round);
 }
 
 /**
@@ -1615,7 +1639,7 @@ export async function run(job, ctx) {
     // THE v1.0 BAR, PART 2: the partner's first session, played on the preview before anyone is told it exists.
     const firstRun = previewUrl ? await firstRunOn(names.worktree, previewUrl, ctx.env, secrets.allowed, progress) : { ok: true, line: "first run: this repo has no preview to run it on" };
     if (!firstRun.ok) return { phase, status: "failed", reason: firstRun.line, ...carried };
-    const changedFiles = await changedFilesFor(names.worktree, pr.number);
+    const changedFiles = await changedFilesFor(names.worktree, pr.number, headBefore);
     return {
       phase,
       status: "ok",
@@ -2720,6 +2744,8 @@ function selfTest() {
     ["a plain BUILD, a materials check, and a PLAN carry no rebuild block", () =>
       rebuildBlock({ phase: "BUILD", rebuild: null }).length === 0 && rebuildBlock({ phase: "BUILD", rebuild: { intent: "PREVIEW", changes: null } }).length === 0 && rebuildBlock({ phase: "PLAN", rebuild: { intent: "CHANGES", changes: "x" } }).length === 0],
     ["inertRebuild: a CHANGES rebuild whose head did not move is inert; a moved head, a plain build, or an unreadable head is not", () =>
+      JSON.stringify(roundFirst(["a.html", "work.html", "b.html"], ["work.html", "img.webp"])) === JSON.stringify(["work.html", "img.webp", "a.html", "b.html"]) &&
+      JSON.stringify(roundFirst(["a.html", "b.html"], [])) === JSON.stringify(["a.html", "b.html"]) &&
       inertRebuild({ phase: "BUILD", rebuild: { intent: "CHANGES", changes: "x" } }, "abc", "abc") &&
       !inertRebuild({ phase: "BUILD", rebuild: { intent: "CHANGES", changes: "x" } }, "abc", "def") &&
       !inertRebuild({ phase: "BUILD", rebuild: null }, "abc", "abc") &&

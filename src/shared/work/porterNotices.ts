@@ -148,7 +148,7 @@ const NO_PREVIEW = "no preview deployment for this site — the change and its s
  * dist/, site/, static/, www/, _site/, out/, build/ or the repo root) or a framework page
  * (src/pages/*, pages/*, app/<route>/page.*) becomes its path — public/entry.html → /entry,
  * public/rules/index.html → /rules, public/index.html → /. Anything else (functions/*, CSS, scripts,
- * images, config) is not a page and links nothing. Sorted, unique, at most `max`. Pure.
+ * images, config) is not a page and links nothing. Unique, in the order below, at most `max`. Pure.
  *
  * 13 Nov 2026: in a repo with several sites (join-west-peek-main: sites/productions,
  * sites/community, sites/ventures, each built to dist/<name>/ and served at its own root), a
@@ -157,6 +157,7 @@ const NO_PREVIEW = "no preview deployment for this site — the change and its s
  * folders, sitesOf(property_host)) keeps only files inside those sites — the source folder or its
  * built copy (dist/<name>/ …) — with that folder stripped, so sites/productions/about.html and
  * dist/productions/about.html are both /about, and another site's files link nothing.
+ * Order: "/" first, then the files' own order (this round's files lead them).
  */
 export function pagePathsFrom(files: readonly string[] | null | undefined, max = 8, sites: readonly string[] = []): string[] {
   const out = new Set<string>();
@@ -201,7 +202,13 @@ export function pagePathsFrom(files: readonly string[] | null | undefined, max =
     const path = `/${route.replace(/(^|\/)index$/, "").replace(/^\/+|\/+$/g, "")}`;
     out.add(path === "/" ? "/" : path.replace(/\/+$/, ""));
   }
-  return [...out].sort((a, b) => (a === "/" ? -1 : b === "/" ? 1 : a.localeCompare(b))).slice(0, max);
+  /*
+   * 18 Nov 2026 (wc_c548d043): the files arrive this round's first (`roundFirst`), so the cut at `max` keeps
+   * the pages the partner just asked about; "/" leads, the rest keep their order. Sorting them alphabetically
+   * dropped /work, the page his photos were on, from the preview email.
+   */
+  const paths = [...out];
+  return [...paths.filter((p) => p === "/"), ...paths.filter((p) => p !== "/")].slice(0, max);
 }
 
 /**
