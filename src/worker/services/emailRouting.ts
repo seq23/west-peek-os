@@ -449,11 +449,11 @@ export async function answerClarification(env: Env, clarificationId: string, wri
   return { routed, routeAs: read };
 }
 
-/** No answer in 24 hours → a new card (the sweep's tick). Never throws. */
+/** No answer in 24 hours → a new card (the sweep's tick), never for a message already placed on a card (18 Nov 2026). Never throws. */
 export async function resolveStaleClarifications(env: Env, now: Date = new Date()): Promise<number> {
   try {
     const cutoff = new Date(now.getTime() - 24 * 3_600_000).toISOString();
-    const rows = (await env.WP_OS_DB.prepare("SELECT * FROM inbound_clarification WHERE resolved_at IS NULL AND asked_at < ?1 AND kind = 'EMAIL' ORDER BY asked_at LIMIT 5").bind(cutoff).all<ClarificationRow>()).results ?? [];
+    const rows = (await env.WP_OS_DB.prepare("SELECT * FROM inbound_clarification c WHERE resolved_at IS NULL AND asked_at < ?1 AND kind = 'EMAIL' AND NOT EXISTS (SELECT 1 FROM inbound_message m WHERE m.message_id = c.message_id AND m.work_card_id IS NOT NULL) ORDER BY asked_at LIMIT 5").bind(cutoff).all<ClarificationRow>()).results ?? [];
     let n = 0;
     for (const r of rows) if (await settle(env, r, "NEW", "TIMED_OUT", "work_sweep")) n++;
     return n;
