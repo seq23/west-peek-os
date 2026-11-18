@@ -917,6 +917,13 @@ export async function parkPhase(
     // 14 Nov 2026: a retry hears why the last attempt of this phase was refused (a privacy passage, a missing PR),
     // instead of rebuilding blind and failing the same way. Only the newest entry, and only when it was not ok.
     last_refusal: lastRefusalFor(row.run_history_json, phase),
+    /*
+     * THE OTHER OPEN JOBS ON THIS REPO (18 Nov 2026). Scooter asked for "a single preview covering the privacy
+     * pages and the GA tags together"; the GA tags were another open card's PR on the same repo, and the brief
+     * never said so — the builder could only make a privacy-only preview he would have to reject. Listed with
+     * their branch, so words like "together", "same deployment" can be built (that branch merged in).
+     */
+    other_open_jobs: phase === "BUILD" ? await otherOpenJobsOnRepo(env, card.id, row.target_repo) : [],
     ...(parts.length ? { parts: parts.map(partPayload) } : {}),
     queue_max_seconds: spec.queueMaxSeconds,
   };
@@ -3859,6 +3866,21 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
       if (old !== steered) await ctx.env.WP_OS_DB.prepare("UPDATE work_card SET merged_into_card_id = ?2 WHERE id = ?1 AND state = 'CANCELLED' AND merged_into_card_id IS NULL").bind(old, steered).run();
     }
   }
+  /*
+   * THE QUESTION THE MIS-READ ASKED IS ANSWERED BY THE RE-READ (18 Nov 2026). The door asked Scooter
+   * "which job?" about a reply it could not place; replayed through the fixed door, the reply steered
+   * its card — and the open question would still have opened a NEW card from the same email 24 hours
+   * later (`resolveStaleClarifications`), or rerouted it if he answered. Placed now, so it is closed.
+   */
+  const placedOn = card?.id ?? steered;
+  if (placedOn && msgId) {
+    await ctx.env.WP_OS_DB.prepare(
+      `UPDATE inbound_clarification SET resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), resolution = 'CARD', resolved_card_id = ?2, resolved_by = 'reingest'
+        WHERE message_id = ?1 AND resolved_at IS NULL`,
+    )
+      .bind(msgId, placedOn)
+      .run();
+  }
   await appendEvent(ctx.env, {
     eventType: "inbound_email.reingested",
     actorType: "firm_user",
@@ -3889,4 +3911,25 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
   }
   if (!card) return json({ ok: false, object_key: key, superseded, detail: "the door produced no card for this partner from this message — see inbound_email events" }, { status: 409 });
   return json({ ok: true, object_key: key, superseded, new_card: card.id, new_card_kind: card.kind, owner_id: card.owner_id, title: card.title });
+}
+
+
+/** Open website jobs on the same repo as this card, with their PR and branch (18 Nov 2026). Never throws. */
+export async function otherOpenJobsOnRepo(env: Env, cardId: string, targetRepo: string | null): Promise<Array<{ card_id: string; title: string; pr_url: string | null; branch: string | null }>> {
+  if (!targetRepo) return [];
+  try {
+    return (
+      (
+        await env.WP_OS_DB.prepare(
+          `SELECT c.id AS card_id, c.title, w.pr_url, w.branch FROM web_property_change w JOIN work_card c ON c.id = w.work_card_id
+            WHERE w.target_repo = ?2 AND c.id <> ?1 AND c.state NOT IN ('DONE', 'CANCELLED') AND c.merged_into_card_id IS NULL
+            ORDER BY c.created_at DESC LIMIT 5`,
+        )
+          .bind(cardId, targetRepo)
+          .all<{ card_id: string; title: string; pr_url: string | null; branch: string | null }>()
+      ).results ?? []
+    );
+  } catch {
+    return [];
+  }
 }

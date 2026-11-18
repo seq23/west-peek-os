@@ -230,6 +230,21 @@ describe("a burst of six mixed emails inside a few minutes: each lands on the ri
     expect(await cardCount()).toBe(after);
   });
 
+  it("18 Nov 2026: a message already placed on a card is never opened again as a new card when its question times out", async () => {
+    const msg = await deliver("Fonts", "Hey Porter!\r\n\r\nBigger fonts on every page please.");
+    const clar = await one<{ id: string; candidates_json: string }>("SELECT id, candidates_json FROM inbound_clarification WHERE message_id = ?1", msg);
+    expect(clar, "asked").not.toBeNull();
+    // The re-read through a fixed door placed it on its card (what the reingest route records).
+    const placed = (JSON.parse(clar!.candidates_json) as Array<{ cardId: string }>)[0]!.cardId;
+    await env.WP_OS_DB.prepare("UPDATE inbound_message SET work_card_id = ?2 WHERE message_id = ?1").bind(msg, placed).run();
+    const before = await cardCount();
+    expect(await resolveStaleClarifications(env, new Date(Date.now() + 25 * 3_600_000)), "placed: no new card").toBe(0);
+    expect(await cardCount()).toBe(before);
+    expect((await one<{ resolved_at: string | null }>("SELECT resolved_at FROM inbound_clarification WHERE id = ?1", clar!.id))?.resolved_at, "left for the reingest door to close").toBeNull();
+    // (The negative — an unplaced message's question times out into a new job — is the test above.)
+    await env.WP_OS_DB.prepare("UPDATE inbound_clarification SET resolved_at = 'x' WHERE id = ?1").bind(clar!.id).run();
+  });
+
   it("the answer reader: a number, a site, \"new\", and nothing readable", () => {
     const c = [
       { cardId: "wc_a", label: "Spam on the Ventures form · westpeek.ventures", host: "westpeek.ventures" },
