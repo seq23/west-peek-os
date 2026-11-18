@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { codexSpentUsage, firstRunVerdict, readReview, REVIEW_ROUNDS, reviewAndFix, runReview, settleFixTurn } from "../scripts/duties/web-property-change.mjs";
+import { codexSpentUsage, firstRunArgs, firstRunVerdict, readReview, REVIEW_ROUNDS, reviewAndFix, runReview, settleFixTurn } from "../scripts/duties/web-property-change.mjs";
 
 /**
  * THE v1.0 BAR ON THE MAC (owner, 13 Nov 2026: "v1.0 final with persistence and veteran UX/UI POV"). A fresh-eyes
@@ -90,5 +90,21 @@ describe("a fix turn after the review may ask for runs (14 Nov 2026)", () => {
     const ok = { phase: "BUILD", status: "ok", pr_url: "https://github.com/o/r/pull/9" };
     expect((await settleFixTurn(ok, null, settle, "x")).result, "an ok turn is untouched").toBe(ok);
     expect(seen, "and runs nothing").toHaveLength(1);
+  });
+});
+
+describe("first run on a job across several sites of one repo (wc_d4b961bc, 17 Nov 2026)", () => {
+  it("each preview link is its own --url, never the email's joined line", () => {
+    const line = "https://work-wpc-d4b961bc.west-peek-ventures.pages.dev · https://work-wpc-d4b961bc.west-peek-productions.pages.dev · https://work-wpc-d4b961bc.join-west-peek-main.pages.dev";
+    const { args, envUrl } = firstRunArgs(line);
+    expect(args).toEqual([
+      "run", "first-run", "--",
+      "--url", "https://work-wpc-d4b961bc.west-peek-ventures.pages.dev",
+      "--url", "https://work-wpc-d4b961bc.west-peek-productions.pages.dev",
+      "--url", "https://work-wpc-d4b961bc.join-west-peek-main.pages.dev",
+    ]);
+    expect(args.some((a) => a.includes(" · ")), "no argument carries the joined line").toBe(false);
+    expect(envUrl.split(",")).toHaveLength(3);
+    expect(firstRunArgs("https://x.y.pages.dev").args).toEqual(["run", "first-run", "--", "--url", "https://x.y.pages.dev"]);
   });
 });
