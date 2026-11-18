@@ -140,6 +140,10 @@ describe("round 1 is hers alone", () => {
     const out = await answer(SEQUOIA, "approved", ref);
     expect(out.detail).toContain("it now goes to you and Scooter");
     expect(toBrand()).toHaveLength(0);
+    // Her confirmation never claims a redraft she did not ask for (partner tail, 18 Nov 2026, TLR-WXY29K).
+    const done = toUs().find((s) => s.subject.includes(`${ref}`) && !s.text.includes(`Ref ${ref}`) && s.subject.includes("brand replies"))!;
+    expect(done.text).toContain("it now goes to you and Scooter");
+    expect(done.text).not.toMatch(/redrafted/i);
     const r = (await row("tld_price"))!;
     expect(r).toMatchObject({ state: "NOTIFIED", round: "PARTNERS" });
     expect(await approversOf(r.notice_ref)).toEqual(["fu_sequoia_taylor", "fu_scooter_taylor"]);

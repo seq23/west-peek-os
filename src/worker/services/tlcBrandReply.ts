@@ -1396,7 +1396,7 @@ export async function applyBrandReplyApproval(
     await emailHer(env, firmScope, `${ref}:done`, {
       what: `brand replies, ${sentN ? "done" : halfN ? "half approved" : "done"} · ${ref}`,
       tldr: [sentN ? `${sentN} sent, from your mailbox, on their threads.` : "", halfN ? `${halfN} approved by ${who}, not sent yet: waiting on ${namesOf(needed.filter((id) => id !== approverId))}.` : "", !sentN && !halfN ? `${who} answered ${ref}.` : ""].filter(Boolean).join(" "),
-      sections: [{ label: "Done", bullets: lines.slice(0, 6) }, { label: "Next", bullets: [again ? `Redrafted for the note: ${again}` : halfN ? `It goes once ${namesOf(needed)} have each replied "approved" to ${ref}` : "Wynn watches for their answer"] }],
+      sections: [{ label: "Done", bullets: lines.slice(0, 6) }, { label: "Next", bullets: [again ? nextAfterAnswer(again, redrafted > 0) : halfN ? `It goes once ${namesOf(needed)} have each replied "approved" to ${ref}` : "Wynn watches for their answer"] }],
     }, [], needed.length > 1 ? copied : [], needed.length > 1).catch(() => false);
   }
   await appendEvent(env, { eventType: "tlc.brand_reply_decided", actorType: "firm_user", actorId: approverId, objectType: "tlc_brand_reply_notice", objectId: ref, firmScope, payload: { lines, redrafted, learned } });
@@ -1447,6 +1447,15 @@ async function sendFailed(env: Env, r: ReplyRow & { brand?: string }, err: unkno
   }
   await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET state = 'FAILED', send_retry_due = NULL, send_tries = ?3, held_reason = ?2 WHERE id = ?1").bind(r.id, why.slice(0, 300), tries).run();
   return `NOT sent (${why.slice(0, 160)})`;
+}
+
+/**
+ * The "Next" line of her confirmation: "Redrafted for your note" only when a note was redrafted. A plain "approved"
+ * that moved the draft to her and Scooter is said as what happened (partner tail, 18 Nov 2026, TLR-WXY29K: her
+ * "approved" was confirmed as "Redrafted for the note: …" though she wrote no note and nothing was redrafted).
+ */
+export function nextAfterAnswer(sent: string, redrafted: boolean): string {
+  return redrafted ? `Redrafted for your note: ${sent}` : `${sent.charAt(0).toUpperCase()}${sent.slice(1)}`;
 }
 
 /** Each pass: answers she approved whose PDF could not be made yet are sent now, once (a claim), on her approval. */
