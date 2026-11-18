@@ -304,12 +304,26 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026): the 
 
   it("parseReplyIntent reads the fixed format strictly and FAILS OPEN to CONTINUE with the words carried", () => {
     expect(parseReplyIntent("INTENT: CONTINUE\nCHANGES: none\nQUESTION: none\nREASON: agreement in other words", "No problem, looks great")).toMatchObject({ kind: "CONTINUE", changes: null, question: null, source: "MODEL" });
-    expect(parseReplyIntent("INTENT: CONTINUE\nCHANGES: make the hero the group shot\nQUESTION: none\nREASON: go-ahead with one change", "Looks good but make the hero the group shot")).toMatchObject({ kind: "CONTINUE", changes: "make the hero the group shot" });
+    expect(parseReplyIntent("INTENT: CONTINUE\nCHANGES: make the hero the group shot\nQUESTION: none\nREASON: go-ahead with one change", "Looks good but make the hero the group shot"), "the change carried is his whole reply, never the reader's line").toMatchObject({ kind: "CONTINUE", changes: "Looks good but make the hero the group shot" });
     expect(parseReplyIntent("INTENT: STOP\nCHANGES: none\nQUESTION: none\nREASON: says to hold", "Let's not do this yet")).toMatchObject({ kind: "STOP" });
     expect(parseReplyIntent("INTENT: QUESTION\nCHANGES: none\nQUESTION: Is the orange the final hex?\nREASON: asks", "Is the orange the final hex?")).toMatchObject({ kind: "QUESTION", question: "Is the orange the final hex?" });
     expect(parseReplyIntent("INTENT: QUESTION\nCHANGES: none\nQUESTION: none\nREASON: asks", "Is it final?"), "a QUESTION with no question text carries the reply as the question").toMatchObject({ kind: "QUESTION", question: "Is it final?" });
     expect(parseReplyIntent("garbage", "Looks great to me"), "unreadable → CONTINUE, the words carried as instructions, never a block").toMatchObject({ kind: "CONTINUE", changes: "Looks great to me", source: "FALLBACK" });
     expect(parseReplyIntent("", "Looks great to me")).toMatchObject({ kind: "CONTINUE", source: "FALLBACK" });
+  });
+
+  it("a long reply's content reaches the build whole, never the reader's one-line summary (Scooter's case studies, 18 Nov 2026)", () => {
+    const cases = ["NCTA Education Foundation", "Executive Leadership Council", "Foundation for The Mid-South", "TNTP"]
+      .map((c, i) => `Client: ${c}\nThe Problem: problem ${i}.\nWhat we did: work ${i}.\nResults: result ${i}, reach up 327%.`).join("\n\n");
+    const scooter = `Hey Porter,\n\nCase-study copy for the site is below. Please add it to the Case studies page as written and send me another preview.\n\n-----\n\n${cases}`;
+    const summary = "Add the case-study copy to the Case studies page as written, with the five attached images. Send me another preview.";
+    for (const intent of ["CONTINUE", "QUESTION"]) {
+      const read = parseReplyIntent(`INTENT: ${intent}\nDOOR: BUILD\nSEAT: none\nBUILD_IN: EXISTING\nCHANGES: ${summary}\nQUESTION: What is needed to point the domain?\nREASON: copy to add`, scooter);
+      expect(read.changes, intent).toBe(scooter);
+      for (const c of ["Executive Leadership Council", "result 3, reach up 327%"]) expect(read.changes, `${intent}: ${c}`).toContain(c);
+    }
+    // Nothing to change stays nothing: the reader still decides WHETHER there is a change.
+    expect(parseReplyIntent(`INTENT: CONTINUE\nCHANGES: none\nQUESTION: none\nREASON: thanks`, scooter).changes).toBeNull();
   });
 
   it("a late-thread note is marked with one prefix, read back by the runner", () => {

@@ -133,7 +133,14 @@ export function parseReplyIntent(outputText: string | null | undefined, text: st
   const doorWord = (field("DOOR") ?? "").toUpperCase().replace(/[^A-Z]/g, "") as PartnerDoor;
   const door: PartnerDoor | null = DOORS.includes(doorWord) ? doorWord : null;
   const seat = (field("SEAT") ?? "").split(/[\s,.;:(]/)[0]!.replace(/[^A-Za-z'-]/g, "") || null;
-  const changes = field("CHANGES");
+  /*
+   * THE BUILD GETS HIS WORDS, NEVER THE READER'S SUMMARY (18 Nov 2026). The reader decides WHETHER
+   * there is something to change; what to change is the partner's whole reply. Scooter sent four
+   * case studies (problem, what we did, results, TNTP's figures) to go on the site "as written"; the
+   * reader's CHANGES line was one paragraph saying "add the case-study copy as written", and that
+   * paragraph was all the BUILD would have seen. The reader's line stays only when his words are empty.
+   */
+  const changes = field("CHANGES") ? (words ?? field("CHANGES")) : null;
   const question = field("QUESTION");
   const reason = (field("REASON") ?? "(no reason given)").slice(0, 400);
   const where = (field("BUILD_IN") ?? "").toUpperCase().replace(/[^A-Z]/g, "");
@@ -141,7 +148,7 @@ export function parseReplyIntent(outputText: string | null | undefined, text: st
   const base = { source: "MODEL" as const, door, seat: door === "ROUTE" ? seat : null, buildIn: door === "BUILD" || said === "FIX" ? buildIn : null, reason };
   if (said === "FIX") {
     // A fault report is instructions to fix it, in his words — never a question to answer.
-    const fix = (changes ?? words ?? "").slice(0, PARTNER_ANSWER_MAX - FAULT_PREFIX.length);
+    const fix = (words ?? field("CHANGES") ?? "").slice(0, PARTNER_ANSWER_MAX - FAULT_PREFIX.length);
     return { ...base, kind: "CONTINUE", changes: `${FAULT_PREFIX}${fix}`, question: null, nothing: false, door: door ?? "BUILD" };
   }
   if (said === "NOTHING") return { ...base, kind: "CONTINUE", changes: null, question: null, nothing: true };

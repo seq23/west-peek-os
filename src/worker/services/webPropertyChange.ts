@@ -1574,6 +1574,21 @@ export async function applyReport(
     const why = run.error ?? run.resolution ?? `the run ended ${run.status}`;
     await recordHistory(env, row, { run_id: run.id, phase: row.phase, status: run.status, reason: why.slice(0, 300) });
     await appendFinding(env, card.id, `${row.phase} did not finish on the Mac: ${why}`);
+    if (run.status === "ABANDONED" && stoppedOnPurpose(run.resolution)) {
+      /*
+       * A RUN STOPPED ON PURPOSE IS NOT A FAILED ATTEMPT (15 Nov 2026, wc_c548d043…). The partner tail
+       * stopped Porter's BUILD because it was building from Scooter's reply cut at 4,000 characters
+       * (her rule, 9 Oct 2026: stop the build first, preview second). The sweep counted that stop as
+       * "Attempt 2 of 3 did not get anywhere", so the corrected rebuild ran on its LAST attempt: one
+       * sleeping-Mac hiccup and the job would have given up. The stop was a decision, not a failure:
+       * the phase is queued again and no attempt is spent.
+       *
+       * CHECKED BEFORE "NOBODY PICKED IT UP" (18 Nov 2026, wc_c548d043, twice): a tail stops a known-bad BUILD
+       * before the Mac claims it, so the run is ABANDONED with no claimer. Read as a sleeping Mac, the card was
+       * Blocked on Scooter, "Waiting on: the Mac", with no rebuild queued. A stop on purpose is never a queue ceiling.
+       */
+      return { finished: false, blocked: false, progressed: true, detail: `${row.phase} stopped on purpose and queued again: ${why.slice(0, 200)}` };
+    }
     if (run.status === "ABANDONED" && !run.claimed_by) {
       /*
        * Nobody picked it up inside the queue ceiling (twelve hours for a website job). A fault to
@@ -1591,17 +1606,6 @@ export async function applyReport(
         detail: waitDetail("MAC_ASLEEP", { why: dueLine(readWebPropertyAsk(card.request_json)?.due) }).slice(0, 900),
       });
       return { finished: false, blocked: true, progressed: false, detail: why2 };
-    }
-    if (run.status === "ABANDONED" && stoppedOnPurpose(run.resolution)) {
-      /*
-       * A RUN STOPPED ON PURPOSE IS NOT A FAILED ATTEMPT (15 Nov 2026, wc_c548d043…). The partner tail
-       * stopped Porter's BUILD because it was building from Scooter's reply cut at 4,000 characters
-       * (her rule, 9 Oct 2026: stop the build first, preview second). The sweep counted that stop as
-       * "Attempt 2 of 3 did not get anywhere", so the corrected rebuild ran on its LAST attempt: one
-       * sleeping-Mac hiccup and the job would have given up. The stop was a decision, not a failure:
-       * the phase is queued again and no attempt is spent.
-       */
-      return { finished: false, blocked: false, progressed: true, detail: `${row.phase} stopped on purpose and queued again: ${why.slice(0, 200)}` };
     }
     return { finished: false, blocked: false, progressed: false, detail: `${row.phase} on the Mac: ${why}` };
   }
