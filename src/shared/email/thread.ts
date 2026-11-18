@@ -136,9 +136,67 @@ export interface EmailThreadRow {
   /** Who it was addressed to, before any preview redirect. */
   to_address: string;
   subject: string;
-  /** Whatever the transport called its own id. Recorded for the audit trail, never matched on. */
+  /** Whatever the transport called its own id. Never matched as a string; its UUIDv7 clock is (`threadForSesIds`). */
   provider_message_id: string | null;
   provider: string | null;
   firm_scope: string;
   created_at: string;
+}
+
+/*
+ * ─── AND WHEN THE TOKEN DOES NOT COME BACK: THE SES ID'S OWN CLOCK (18 Nov 2026) ─────────────────
+ *
+ * MEASURED: Gmail does not carry our `References` token back. Every one of Scooter's replies since
+ * September names only the SES Message-ID (`<010001a1ec56567f-…@email.amazonses.com>`), so a reply
+ * was matched only when its subject still read "Re: <our subject>". On 18 Nov he answered Porter's
+ * privacy-page preview under a subject of his own ("GA tags + privacy pages: verify first, then ship
+ * together"), and the OS asked him which job he meant — the job his reply was a reply to.
+ *
+ * Both ids carry the send time to the millisecond: Resend's id is a UUIDv7 (first 48 bits = ms since
+ * the epoch) and the SES Message-ID is `0100` + 12 hex digits of the same clock, stamped a few hundred
+ * ms later when Resend hands the mail to SES (five of his replies: 253–362 ms, one candidate each in a
+ * 60 s window). So a reply's SES id names the one email we sent that partner in the seconds before it.
+ * More than one candidate in the window is not guessed: it returns null and the old ladder runs.
+ */
+const SES_ID_RE = /<?0100([0-9a-f]{12})-[0-9a-f-]+@[a-z0-9.-]*amazonses\.com>?/gi;
+/** The gap allowed between Resend accepting a mail and SES stamping it. Measured: under 0.4 s. */
+export const SES_STAMP_WINDOW_MS = 5_000;
+
+/** The send times (ms) of every SES Message-ID in the threading headers, the answered message first. */
+export function sesSentTimesIn(headers: { inReplyTo?: string | null; references?: string | null }): number[] {
+  const times: number[] = [];
+  const refs = [...(headers.references ?? "").matchAll(SES_ID_RE)].map((m) => m[1] ?? "").reverse();
+  const irt = [...(headers.inReplyTo ?? "").matchAll(SES_ID_RE)].map((m) => m[1] ?? "");
+  for (const hex of [...irt, ...refs]) {
+    if (!hex) continue;
+    const t = parseInt(hex, 16);
+    if (Number.isFinite(t) && !times.includes(t)) times.push(t);
+  }
+  return times;
+}
+
+/** The ms clock in a Resend id (UUIDv7), or null for any other shape. */
+export function resendSentAt(providerMessageId: string | null | undefined): number | null {
+  const m = /^([0-9a-f]{8})-([0-9a-f]{4})-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i.exec((providerMessageId ?? "").trim());
+  return m ? parseInt(`${m[1]}${m[2]}`, 16) : null;
+}
+
+/**
+ * The one thread a reply's SES Message-ID points at, among the threads sent to that partner; null when
+ * none, or when two sends fall in the same window (never a guess). Pure, so it is tested on real ids.
+ */
+export function threadForSesIds<T extends { provider: string | null; provider_message_id: string | null }>(
+  headers: { inReplyTo?: string | null; references?: string | null },
+  sent: readonly T[],
+): T | null {
+  for (const stamped of sesSentTimesIn(headers)) {
+    const hits = sent.filter((r) => {
+      if ((r.provider ?? "").toLowerCase() !== "resend") return false;
+      const at = resendSentAt(r.provider_message_id);
+      return at !== null && stamped - at >= 0 && stamped - at <= SES_STAMP_WINDOW_MS;
+    });
+    if (hits.length === 1) return hits[0] ?? null;
+    if (hits.length > 1) return null;
+  }
+  return null;
 }
