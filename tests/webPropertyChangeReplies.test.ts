@@ -23,7 +23,7 @@ import { answerBlock } from "../src/worker/services/blocks";
 import { handleInboundEmail, MAX_BODY_BYTES } from "../src/worker/effects/inboundEmail";
 import { comparableSubject } from "../src/worker/services/emailThread";
 import { requestAttachments, textBodyOf } from "../src/worker/effects/mimeAttachments";
-import { handleGetRequestAttachment, handleReingestStoredEmail, sendReceived, stuckWindowOpen } from "../src/worker/services/webPropertyChange";
+import { liveAddressLine, handleGetRequestAttachment, handleReingestStoredEmail, sendReceived, stuckWindowOpen } from "../src/worker/services/webPropertyChange";
 import { readFileSync } from "node:fs";
 import { SECRET_BY_EMAIL } from "../src/shared/work/porterWaits";
 
@@ -1199,6 +1199,15 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     expect(answered[0]!.text).toMatch(/point westpeekproductions\.com/);
     expect((await readWebPropertyChange(env, q.id))!.refresh_intent, "and his changes are rebuilt").toBe("CHANGES");
     expect((await readWebPropertyChange(env, q.id))!.land_approved_at, "nothing lands").toBeNull();
+  });
+
+  it("PREVIEW: 'what is needed to point the domain?' reaches the answerer with the confirmed live address (18 Nov 2026)", async () => {
+    const q = await atPreview("preview Q4");
+    await replyFrom(SCOOTER, "What's needed on your side to point the domain at the new site?", await q.token());
+    await tickFor(q.id);
+    expect(answererFacts?.join(" ")).toMatch(/goes live at westpeek\.ventures[^.]*already served by the site's own Cloudflare Pages project/);
+    // A host the built-in list does not hold is never claimed as already pointed.
+    expect(liveAddressLine({ property_host: "brand-new-site.example" })).toBeNull();
   });
 
   it("PLAN: when neither Porter nor the card has the answer, 'passed to Sequoia' is an email to her, once", async () => {
