@@ -874,12 +874,12 @@ describe("a build the partner tail stopped on purpose is queued again without sp
   beforeAll(ageEarlierCards);
   afterAll(ageEarlierCards);
 
-  async function stopLiveBuild(id: string, resolution: string) {
+  async function stopLiveBuild(id: string, resolution: string, claimed = true) {
     const job = await liveJobFor(id);
     expect(job, "BUILD is queued").not.toBeNull();
     expect(JSON.parse(String(job!.job_json)).phase).toBe("BUILD");
-    await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'ABANDONED', claimed_by = 'mac-test-jobs', claimed_at = ?2, resolution = ?3 WHERE id = ?1")
-      .bind(job!.id, new Date().toISOString(), resolution)
+    await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'ABANDONED', claimed_by = ?2, claimed_at = ?3, resolution = ?4 WHERE id = ?1")
+      .bind(job!.id, claimed ? "mac-test-jobs" : null, claimed ? new Date().toISOString() : null, resolution)
       .run();
     return job!.id;
   }
@@ -907,6 +907,29 @@ describe("a build the partner tail stopped on purpose is queued again without sp
     expect(again, "BUILD queued again").not.toBeNull();
     expect(again!.id).not.toBe(stopped);
     expect(JSON.parse(String(again!.job_json)).phase).toBe("BUILD");
+  });
+
+  it("a stop before the Mac claimed it is queued again, never a Blocked 'waiting on the Mac' for the partner (18 Nov 2026)", async () => {
+    const id = await atBuild("stop3");
+    const stopped = await stopLiveBuild(id, "Stopped by the partner tail before claim: the BUILD carried a summary of his reply, not his words.", false);
+    const out = await tickFor(id);
+    expect(out.outcome, JSON.stringify(out)).not.toBe("FAILED");
+    const after = await card(id);
+    expect(after.state, "never Blocked on the partner for a stop").not.toBe("BLOCKED");
+    expect(String(after.block_needed ?? "")).not.toMatch(/the Mac/);
+    await tickFor(id);
+    const again = await liveJobFor(id);
+    expect(again, "BUILD queued again").not.toBeNull();
+    expect(again!.id).not.toBe(stopped);
+  });
+
+  it("a run nobody claimed inside the queue ceiling is still the Mac's wait (negative)", async () => {
+    const id = await atBuild("stop4");
+    await stopLiveBuild(id, "no machine claimed this run inside its 43200s queue ceiling", false);
+    await tickFor(id);
+    const after = await card(id);
+    expect(after.state).toBe("BLOCKED");
+    expect(String(after.block_needed ?? "")).toMatch(/the Mac/);
   });
 
   it("a run that simply went missing on the Mac still spends its attempt (negative)", async () => {

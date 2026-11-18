@@ -1574,6 +1574,21 @@ export async function applyReport(
     const why = run.error ?? run.resolution ?? `the run ended ${run.status}`;
     await recordHistory(env, row, { run_id: run.id, phase: row.phase, status: run.status, reason: why.slice(0, 300) });
     await appendFinding(env, card.id, `${row.phase} did not finish on the Mac: ${why}`);
+    if (run.status === "ABANDONED" && stoppedOnPurpose(run.resolution)) {
+      /*
+       * A RUN STOPPED ON PURPOSE IS NOT A FAILED ATTEMPT (15 Nov 2026, wc_c548d043…). The partner tail
+       * stopped Porter's BUILD because it was building from Scooter's reply cut at 4,000 characters
+       * (her rule, 9 Oct 2026: stop the build first, preview second). The sweep counted that stop as
+       * "Attempt 2 of 3 did not get anywhere", so the corrected rebuild ran on its LAST attempt: one
+       * sleeping-Mac hiccup and the job would have given up. The stop was a decision, not a failure:
+       * the phase is queued again and no attempt is spent.
+       *
+       * CHECKED BEFORE "NOBODY PICKED IT UP" (18 Nov 2026, wc_c548d043, twice): a tail stops a known-bad BUILD
+       * before the Mac claims it, so the run is ABANDONED with no claimer. Read as a sleeping Mac, the card was
+       * Blocked on Scooter, "Waiting on: the Mac", with no rebuild queued. A stop on purpose is never a queue ceiling.
+       */
+      return { finished: false, blocked: false, progressed: true, detail: `${row.phase} stopped on purpose and queued again: ${why.slice(0, 200)}` };
+    }
     if (run.status === "ABANDONED" && !run.claimed_by) {
       /*
        * Nobody picked it up inside the queue ceiling (twelve hours for a website job). A fault to
@@ -1591,17 +1606,6 @@ export async function applyReport(
         detail: waitDetail("MAC_ASLEEP", { why: dueLine(readWebPropertyAsk(card.request_json)?.due) }).slice(0, 900),
       });
       return { finished: false, blocked: true, progressed: false, detail: why2 };
-    }
-    if (run.status === "ABANDONED" && stoppedOnPurpose(run.resolution)) {
-      /*
-       * A RUN STOPPED ON PURPOSE IS NOT A FAILED ATTEMPT (15 Nov 2026, wc_c548d043…). The partner tail
-       * stopped Porter's BUILD because it was building from Scooter's reply cut at 4,000 characters
-       * (her rule, 9 Oct 2026: stop the build first, preview second). The sweep counted that stop as
-       * "Attempt 2 of 3 did not get anywhere", so the corrected rebuild ran on its LAST attempt: one
-       * sleeping-Mac hiccup and the job would have given up. The stop was a decision, not a failure:
-       * the phase is queued again and no attempt is spent.
-       */
-      return { finished: false, blocked: false, progressed: true, detail: `${row.phase} stopped on purpose and queued again: ${why.slice(0, 200)}` };
     }
     return { finished: false, blocked: false, progressed: false, detail: `${row.phase} on the Mac: ${why}` };
   }
@@ -2368,7 +2372,7 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
       held = body;
       continue;
     }
-    if (intent?.kind === "QUESTION") {
+    if (intent?.kind === "QUESTION" || intent?.question) {
       const answered = await answerMidFlowQuestion(env, card, intent.question ?? body, deps.answerQuestion);
       await ack(`Answered by email: ${answered.slice(0, 200)}${intent.changes ? " Your instructions are carried into the build." : " The work carries on with the recommendations."}`);
       if (intent.changes) await update(env, card.id, { answers_json: JSON.stringify([...list(row.answers_json), intent.changes.slice(0, PARTNER_ANSWER_MAX)]) });
@@ -3187,7 +3191,7 @@ export async function runWebPropertyChangeCard(
             ? `Plan approved by ${card.requested_by_email ?? "a partner"} — their reply read as ${intent.kind === "QUESTION" ? "a question" : "go ahead"}${intent.changes ? " with instructions" : ", every recommendation taken"} (${intent.reason}): "${answer.slice(0, 400)}"`
             : `Plan approved by ${card.requested_by_email ?? "a partner"} with answers: "${answer.slice(0, 400)}"`,
     );
-    if (intent.kind === "QUESTION") await answerMidFlowQuestion(env, card, intent.question ?? answer, answerQuestion);
+    if (intent.kind === "QUESTION" || intent.question) await answerMidFlowQuestion(env, card, intent.question ?? answer, answerQuestion);
     await appendEvent(env, {
       eventType: "web_property_change.plan_approved",
       actorType: "firm_user",
@@ -3303,6 +3307,12 @@ export async function runWebPropertyChangeCard(
           const why = await blockOnPreview(env, card, row);
           return { finished: false, blocked: true, progressed: false, detail: `Question answered; waiting on the same preview. ${why}` };
         }
+        /*
+         * A QUESTION RIDING ON CHANGES IS STILL ANSWERED (18 Nov 2026, wc_c548d043). Scooter sent case studies to add
+         * and asked "what's needed on your side to point that domain at the new site?"; the reader read it CONTINUE
+         * with the question beside the changes, and only a QUESTION reply was ever answered: his question was dropped.
+         */
+        if (freeIntent.question) await answerMidFlowQuestion(env, card, freeIntent.question, answerQuestion);
         if (freeIntent.changes) return requestRebuild(env, card, row, "CHANGES", freeIntent.changes, rules);
         landsByIntent = freeReplyLandsPreview(rules);
         if (!landsByIntent) await appendFinding(env, card.id, `After the preview, ${card.requested_by_email ?? "the partner"} wrote "${answer.slice(0, 200)}" — read as go-ahead, but ${FREE_REPLY_LANDS_PREVIEW} is off for this kind, so the preview waits for "approved".`);
