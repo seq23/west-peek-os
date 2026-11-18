@@ -674,6 +674,16 @@ export function firstRunVerdict({ hasScript, exit, out }) {
   return { ok: true, line: `first run on the preview: ${said.trim().slice(0, 400)}` };
 }
 
+/**
+ * ONE --url PER PREVIEW LINK (17 Nov 2026, wc_d4b961bc). A job on several sites of one repo gets one preview per Pages
+ * project, joined with " · " for the email. That whole line went to `first-run` as ONE --url, so the run fetched a URL
+ * that does not exist and the BUILD stopped FIRST_RUN_FAILED with every ask met. Pure.
+ */
+export function firstRunArgs(previewUrl) {
+  const urls = String(previewUrl ?? "").split(/\s+·\s+|,\s*/).map((u) => u.trim()).filter(Boolean);
+  return { args: ["run", FIRST_RUN_SCRIPT, "--", ...urls.flatMap((u) => ["--url", u])], envUrl: urls.join(",") };
+}
+
 /** Run the repo's first-run script against the preview with the repo's allowed keys. */
 async function firstRunOn(worktree, previewUrl, env, allowedNames, progress) {
   let hasScript = false;
@@ -685,7 +695,8 @@ async function firstRunOn(worktree, previewUrl, env, allowedNames, progress) {
   if (!hasScript) return firstRunVerdict({ hasScript });
   progress(`first run on ${previewUrl}`);
   try {
-    const { stdout, stderr } = await execFileAsync("npm", ["run", FIRST_RUN_SCRIPT, "--", "--url", previewUrl], { cwd: worktree, env: { ...envForRepoRun(env, [...new Set([...allowedNames, ...PLATFORM_RUN_NAMES])]), CI: "1", FIRST_RUN_URL: previewUrl }, timeout: 10 * 60_000, maxBuffer: 16 * 1024 * 1024 });
+    const { args, envUrl } = firstRunArgs(previewUrl);
+    const { stdout, stderr } = await execFileAsync("npm", args, { cwd: worktree, env: { ...envForRepoRun(env, [...new Set([...allowedNames, ...PLATFORM_RUN_NAMES])]), CI: "1", FIRST_RUN_URL: envUrl }, timeout: 10 * 60_000, maxBuffer: 16 * 1024 * 1024 });
     return firstRunVerdict({ hasScript, exit: 0, out: `${stdout}\n${stderr}` });
   } catch (err) {
     return firstRunVerdict({ hasScript, exit: typeof err?.code === "number" ? err.code : 1, out: `${err?.stdout ?? ""}\n${err?.stderr ?? ""}\n${err?.message ?? ""}` });
