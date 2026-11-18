@@ -2372,7 +2372,7 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
       held = body;
       continue;
     }
-    if (intent?.kind === "QUESTION") {
+    if (intent?.kind === "QUESTION" || intent?.question) {
       const answered = await answerMidFlowQuestion(env, card, intent.question ?? body, deps.answerQuestion);
       await ack(`Answered by email: ${answered.slice(0, 200)}${intent.changes ? " Your instructions are carried into the build." : " The work carries on with the recommendations."}`);
       if (intent.changes) await update(env, card.id, { answers_json: JSON.stringify([...list(row.answers_json), intent.changes.slice(0, PARTNER_ANSWER_MAX)]) });
@@ -3191,7 +3191,7 @@ export async function runWebPropertyChangeCard(
             ? `Plan approved by ${card.requested_by_email ?? "a partner"} — their reply read as ${intent.kind === "QUESTION" ? "a question" : "go ahead"}${intent.changes ? " with instructions" : ", every recommendation taken"} (${intent.reason}): "${answer.slice(0, 400)}"`
             : `Plan approved by ${card.requested_by_email ?? "a partner"} with answers: "${answer.slice(0, 400)}"`,
     );
-    if (intent.kind === "QUESTION") await answerMidFlowQuestion(env, card, intent.question ?? answer, answerQuestion);
+    if (intent.kind === "QUESTION" || intent.question) await answerMidFlowQuestion(env, card, intent.question ?? answer, answerQuestion);
     await appendEvent(env, {
       eventType: "web_property_change.plan_approved",
       actorType: "firm_user",
@@ -3307,6 +3307,12 @@ export async function runWebPropertyChangeCard(
           const why = await blockOnPreview(env, card, row);
           return { finished: false, blocked: true, progressed: false, detail: `Question answered; waiting on the same preview. ${why}` };
         }
+        /*
+         * A QUESTION RIDING ON CHANGES IS STILL ANSWERED (18 Nov 2026, wc_c548d043). Scooter sent case studies to add
+         * and asked "what's needed on your side to point that domain at the new site?"; the reader read it CONTINUE
+         * with the question beside the changes, and only a QUESTION reply was ever answered: his question was dropped.
+         */
+        if (freeIntent.question) await answerMidFlowQuestion(env, card, freeIntent.question, answerQuestion);
         if (freeIntent.changes) return requestRebuild(env, card, row, "CHANGES", freeIntent.changes, rules);
         landsByIntent = freeReplyLandsPreview(rules);
         if (!landsByIntent) await appendFinding(env, card.id, `After the preview, ${card.requested_by_email ?? "the partner"} wrote "${answer.slice(0, 200)}" — read as go-ahead, but ${FREE_REPLY_LANDS_PREVIEW} is off for this kind, so the preview waits for "approved".`);

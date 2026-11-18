@@ -95,6 +95,8 @@ const fakeIntentReader: ReplyIntentReader = async (_env, input) => {
   const t = input.text;
   const base = { keyword: null, aiRunId: null, source: "MODEL" as const, reason: "fake reader" };
   if (/let'?s not|think it over|hold on|hold off|\bstop\b|\bwait\b/i.test(t)) return { ...base, kind: "STOP", changes: null, question: null };
+  // The live reader's 18 Nov shape: CONTINUE, the changes, and the question beside them (wc_c548d043).
+  if (/point that domain/i.test(t)) return { ...base, kind: "CONTINUE", changes: t, question: "What is needed on your side to point westpeekproductions.com at the new site?" };
   const question = /\?/.test(t) ? (t.match(/[^.\n]*\?/)?.[0] ?? t).trim() : null;
   const changes = /\b(but|make|swap|use|instead|please)\b/i.test(t) ? t.replace(/[^.\n]*\?/, "").trim() || null : null;
   if (question) return { ...base, kind: "QUESTION", changes, question };
@@ -1185,6 +1187,18 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     expect(mails[0]!.text).not.toMatch(/passed it to Sequoia|Nothing is being built for this/);
     expect(sent.slice(before).filter((m) => m.to === SEQUOIA), "nothing is sent to her: the card had the answer").toHaveLength(0);
     expect((await readWebPropertyChange(env, q.id))!.land_approved_at, "a question lands nothing").toBeNull();
+  });
+
+  it("PREVIEW: a question riding on changes is answered by email AND the rebuild is queued, never one without the other (18 Nov 2026)", async () => {
+    const q = await atPreview("preview Q3");
+    const before = sent.length;
+    await replyFrom(SCOOTER, "Add the case studies below as written and send another preview. Please tell me what's needed on your side to point that domain at the new site. Don't publish until I reply.", await q.token());
+    await tickFor(q.id);
+    const answered = sent.slice(before).filter((m) => m.to === SCOOTER && /answered/.test(m.subject));
+    expect(answered, "his question is answered by email").toHaveLength(1);
+    expect(answered[0]!.text).toMatch(/point westpeekproductions\.com/);
+    expect((await readWebPropertyChange(env, q.id))!.refresh_intent, "and his changes are rebuilt").toBe("CHANGES");
+    expect((await readWebPropertyChange(env, q.id))!.land_approved_at, "nothing lands").toBeNull();
   });
 
   it("PLAN: when neither Porter nor the card has the answer, 'passed to Sequoia' is an email to her, once", async () => {
