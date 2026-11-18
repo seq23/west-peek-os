@@ -195,7 +195,20 @@ export function isBulletOrLabel(line: string): boolean {
   return isBullet(line) || isLabel(line);
 }
 
-function normaliseSections(sections: readonly ExecEmailSection[]): ExecEmailSection[] {
+/*
+ * A SECTION CUT SHORT IS WRITTEN IN FULL UNDER THE DETAILS (partner tail, 18 Nov 2026, wc_d4b961bc). The cut line says
+ * "… and N more, under Details below"; only a caller that wrote those lines itself (partnerUnderstood) had them there.
+ * Porter's GA4 preview listed 5 of Scooter's 9 answered asks, promised 4 more under Details, and had no Details at all.
+ * The renderer now writes every cut bullet there itself, unless the caller already did ("<label>, continued").
+ */
+function overflowOf(sections: readonly ExecEmailSection[], callerDetails: string): string {
+  return normaliseSections(sections, false)
+    .filter((s) => s.bullets.length > SECTION_MAX_LINES && !callerDetails.includes(`${s.label}, continued`))
+    .map((s) => [`**${s.label}, continued**`, ...s.bullets.slice(SECTION_MAX_LINES - 1).map((b) => `${BULLET} ${b}`)].join("\n"))
+    .join("\n\n");
+}
+
+function normaliseSections(sections: readonly ExecEmailSection[], cut = true): ExecEmailSection[] {
   return sections
     .map((s) => ({
       label: oneLine(s.label).replace(/^\*+|\*+$/g, "").replace(/:$/, ""),
@@ -203,7 +216,7 @@ function normaliseSections(sections: readonly ExecEmailSection[]): ExecEmailSect
     }))
     .filter((s) => s.label && s.bullets.length > 0)
     .map((s) => {
-      if (s.bullets.length <= SECTION_MAX_LINES) return s;
+      if (!cut || s.bullets.length <= SECTION_MAX_LINES) return s;
       const shown = s.bullets.slice(0, SECTION_MAX_LINES - 1);
       return { ...s, bullets: [...shown, `… and **${s.bullets.length - shown.length}** more, under ${DETAILS_RULE.replace(/—/g, "").trim()} below.`] };
     });
@@ -225,7 +238,9 @@ export function renderExecEmail(input: ExecEmailInput): RenderedExecEmail {
   if (input.laidOut) return input.laidOut;
   const sections = normaliseSections(input.sections);
   const tldr = boldNumbers(oneLine(input.tldr).replace(/^\**\s*TL;DR:?\**\s*/i, ""));
-  const details = input.details ? breakProseRuns(input.details) : "";
+  const overflow = overflowOf(input.sections, input.details ?? "");
+  const joined = [overflow, input.details ?? ""].filter((d) => d.trim()).join("\n\n");
+  const details = joined ? breakProseRuns(joined) : "";
   const footer = execFooter(input.employee, input.routedBy);
 
   const tldrBullets = (input.tldrBullets ?? []).map((b) => oneLine(b)).filter(Boolean);
