@@ -17,7 +17,7 @@ import { isWaitingForMac, parkRun, readRun, type SeatRunRow } from "../ai/subscr
 import { PARTNERS, PREVIEW_PARTNER, partnerByEmail } from "../../shared/registry/partners";
 import { sendOrPreview } from "./previewApproval";
 import type { SweepCard } from "./workSweep";
-import { hostsSentence, pagesHostsOf, readWebPropertyAsk, sitesOf, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
+import { hostsSentence, pagesHostsOf, readWebPropertyAsk, sitesOf, WEB_PROPERTIES, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
 import { loadRegistry, recordRepoFacts, registryEntryFor } from "./webPropertyRegistry";
 import { outboundFilesFor } from "./workCardFiles";
 import { recordDnsWaits } from "./dnsWaits";
@@ -2437,6 +2437,19 @@ async function pagesBuilt(env: Env, cardId: string, row: Pick<WebPropertyChangeR
   return [...all];
 }
 
+/**
+ * WHERE IT GOES LIVE (18 Nov 2026, wc_c548d043). Scooter asked "what's needed on your side to point that domain at the
+ * new site?"; the answerer knew no more than the preview, so Porter passed it to Sequoia. For a site whose live address
+ * is CONFIRMED as its Pages project's custom domain (the built-in list, never a host registered by email), landing IS
+ * publishing there: nothing needs pointing. A fact for the answerer only, never the card's standing (a question about
+ * anything else is not answered with it). Pure.
+ */
+export function liveAddressLine(row: Pick<WebPropertyChangeRow, "property_host"> | null): string | null {
+  const served = (row?.property_host ?? "").split(/,\s*/).map((h) => h.trim().toLowerCase()).filter((h) => WEB_PROPERTIES.some((w) => w.host === h && w.pagesHost));
+  if (!served.length) return null;
+  return `Approving the preview lands it and it goes live at ${served.join(" and ")}: ${served.length === 1 ? "that address is" : "those addresses are"} already served by the site's own Cloudflare Pages project, so nothing needs pointing on anyone's side.`;
+}
+
 export async function cardStandingLines(env: Env, cardId: string, row: WebPropertyChangeRow | null, question: string | null = null): Promise<string[]> {
   if (!row) return [];
   const lines: string[] = [];
@@ -2485,10 +2498,12 @@ export function jobPhaseLine(row: Pick<WebPropertyChangeRow, "phase" | "check_st
 }
 
 async function answerMidFlowQuestion(env: Env, card: WebPropertyChangeCard, question: string, answerQuestion: QuestionAnswerer | undefined): Promise<string> {
-  const standing = await cardStandingLines(env, card.id, await readWebPropertyChange(env, card.id), question);
+  const jobRow = await readWebPropertyChange(env, card.id);
+  const standing = await cardStandingLines(env, card.id, jobRow, question);
+  const live = liveAddressLine(jobRow);
   const routed = await answerQuestionForCard(
     env,
-    { cardId: card.id, firmScope: card.firm_scope, kind: card.kind ?? WEB_PROPERTY_CHANGE_KIND, cardTitle: card.title, question, facts: standing },
+    { cardId: card.id, firmScope: card.firm_scope, kind: card.kind ?? WEB_PROPERTY_CHANGE_KIND, cardTitle: card.title, question, facts: live ? [...standing, live] : standing },
     answerQuestion,
   );
   const known = Boolean(routed.confident && routed.answer);
