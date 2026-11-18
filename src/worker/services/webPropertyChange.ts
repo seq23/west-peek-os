@@ -54,7 +54,7 @@ import {
   type LocalJobReport,
   type WebPropertyChangePhase,
 } from "../../shared/work/localJobs";
-import { buildProblems, buildRefusalLine, partnerWrote, planProblems, refusalLine } from "../../shared/work/everyAsk";
+import { buildProblems, buildRefusalLine, partnerWrote, planProblems, refusalLine, splitOffItems } from "../../shared/work/everyAsk";
 /** The Mac's spend stop, by its tag (`SPEND_STOP` in scripts/duties/web-property-change.mjs; tests/spendStop.test.ts holds them equal; tests/webPropertyChange.test.ts holds the card). */
 export const SPEND_STOP = "NAMED STOP [SPEND_NEEDS_THE_OWNER]";
 
@@ -1639,6 +1639,10 @@ export async function applyReport(
       await recordHistory(env, { ...row, run_history_json: (await readWebPropertyChange(env, card.id))?.run_history_json ?? row.run_history_json }, { run_id: run.id, phase: "BUILD", status: "REFUSED", reason: line.slice(0, 1200) });
       await appendFinding(env, card.id, line);
       return { finished: false, blocked: false, progressed: false, detail: line.slice(0, 600) };
+    }
+    // An item the approved answer split off ("its own item after this") is its own site job, filed now, never dropped.
+    for (const s of splitOffItems(report.items, partnerText).slice(0, 5)) {
+      await deferWork(env, card, row, { ask: s.item, due_at: new Date().toISOString(), words: s.words, site_change: true });
     }
   }
 
