@@ -129,6 +129,38 @@ export function partnerReserved(note: string | null | undefined, partnerText: st
   return false;
 }
 
+/*
+ * AN ITEM THE APPROVED ANSWER SPLIT OFF IS ITS OWN JOB, NOT THIS BUILD'S (partner tail, 18 Nov 2026, wc_d4b961bc).
+ * Porter's GA4 plan asked "Add privacy pages?" and recommended "Yes, as its own item after this: the GA tags go live
+ * now; drafted privacy wording comes to you on its own preview". That answer was adopted. The BUILD did the GA work
+ * and reported the privacy item unmet, quoting the answer; the v1.0 bar refused the finished build and told the next
+ * attempt (the card's last) to draft privacy pages inside the GA job, against the answer. Words in the partner's text
+ * or the approved answers that send the item to its own item / card / job / preview, or "separately", split it off:
+ * the build is judged without it and the OS files it as its own site job (`splitOffItems`), so it is never dropped.
+ */
+const SPLITS_OFF = /\b(?:its|their|a)\s+own\s+(?:item|card|job|pr|preview|piece|task)\b|\bseparately\b|\bas\s+a\s+separate\s+(?:item|card|job|pr|task)\b/i;
+function quoteSplitsOff(note: string | null | undefined, partnerText: string): string | null {
+  for (const m of String(note ?? "").matchAll(QUOTED)) {
+    const quote = (m[1] ?? m[2])!;
+    if (SPLITS_OFF.test(quote) && partnerWrote(quote, partnerText)) return quote;
+  }
+  return null;
+}
+
+/** The BUILD items an approved answer or the partner split off as their own job, with the words that did it. */
+export function splitOffItems(items: readonly DoneItem[] | null | undefined, partnerText: string | undefined): Array<{ item: string; words: string }> {
+  if (!partnerText) return [];
+  const out: Array<{ item: string; words: string }> = [];
+  for (const i of items ?? []) {
+    if (i.state === "done") continue;
+    const unmet = (i.done_when ?? []).filter((c) => String(c?.check ?? "").trim() && c.met !== true);
+    if (!unmet.length) continue;
+    const words = unmet.map((c) => quoteSplitsOff(c.note, partnerText));
+    if (words.every((w) => w)) out.push({ item: String(i.item ?? ""), words: words[0]! });
+  }
+  return out;
+}
+
 export function buildProblems(input: { items?: readonly DoneItem[] | null; missingSecrets?: number; missingMaterials?: number; partnerText?: string }): string[] {
   const items = input.items ?? [];
   if (items.length === 0) return ["it did not report each ask against its done-when checks (no `items` list)"];
@@ -146,6 +178,7 @@ export function buildProblems(input: { items?: readonly DoneItem[] | null; missi
     const held = (by === "missing_secret" && (input.missingSecrets ?? 0) > 0) || (by === "missing_material" && (input.missingMaterials ?? 0) > 0) || by === "partner_dated";
     if (held) continue;
     if (unmet.length && input.partnerText && unmet.every((c) => partnerReserved(c.note, input.partnerText!))) continue;
+    if (unmet.length && input.partnerText && unmet.every((c) => quoteSplitsOff(c.note, input.partnerText!))) continue;
     const named = unmet.length ? unmet.map((c) => c.check.slice(0, 80)).join(", ") : `its state is "${String(i.state).slice(0, 20)}"`;
     problems.push(`${what} is not finished (${named})${by ? ` and "${by.slice(0, 40)}" is not something only the partner can supply` : ""}`);
   }
