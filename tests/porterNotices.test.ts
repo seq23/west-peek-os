@@ -1,3 +1,4 @@
+import { roundFirst } from "../scripts/duties/web-property-change.mjs";
 import { sitesOf } from "../src/shared/intake/webPropertyChange";
 import { describe, expect, it } from "vitest";
 import {
@@ -337,7 +338,7 @@ describe("pagePathsFrom / withChangedPages — the preview links each changed pa
   it("reads public pages from a PR's changed files and skips everything that is not a page", () => {
     expect(
       pagePathsFrom(["public/entry.html", "public/rules/index.html", "public/index.html", "functions/api/vote.ts", "public/app.js", "public/styles.css", "README.md", "src/pages/about.astro", "src/pages/[slug].astro", "app/(site)/press/page.tsx", "public/404.html"]),
-    ).toEqual(["/", "/about", "/entry", "/press", "/rules"]);
+    ).toEqual(["/", "/entry", "/rules", "/about", "/press"]);
     expect(pagePathsFrom(["functions/_middleware.ts", "wrangler.toml"])).toEqual([]);
     expect(pagePathsFrom(null)).toEqual([]);
   });
@@ -347,13 +348,26 @@ describe("pagePathsFrom / withChangedPages — the preview links each changed pa
       "dist/productions/about.html", "dist/productions/index.html", "dist/productions/work.html", "dist/productions/community-as-a-service/index.html", "dist/productions/assets/productions.css",
       "dist/ventures/thesis.html", "shared/identity.json", "sites/productions/about.html", "sites/productions/start.html", "sites/productions/what-we-do.html", "sites/productions/_redirects"];
     const pages = pagePathsFrom(files, 8, sitesOf("westpeekproductions.com"));
-    expect(pages).toEqual(["/", "/about", "/community-as-a-service", "/start", "/what-we-do", "/work"]);
+    expect(pages).toEqual(["/", "/about", "/work", "/community-as-a-service", "/start", "/what-we-do"]);
     // Negative: unscoped, the same files led with another site's pages under the wrong prefix.
     expect(pagePathsFrom(files)).toContain("/community/about");
     expect(pages.some((p) => p.startsWith("/community/") || p.startsWith("/productions") || p.startsWith("/sites/"))).toBe(false);
     // A one-site repo (".") or an unknown host is unscoped, as before.
     expect(pagePathsFrom(["public/entry.html"], 8, ["."])).toEqual(["/entry"]);
     expect(pagePathsFrom(["public/entry.html"], 8, sitesOf(null))).toEqual(["/entry"]);
+  });
+  it("a rebuild links the pages THIS round changed, even when the PR changed more than fit (18 Nov 2026, wc_c548d043)", () => {
+    // The real PR (join-west-peek-main#37): Scooter's photos and menu reorder touched /work and every page's menu,
+    // but the PR's whole diff sorted and cut at eight linked /about … /in-house-vs-agency-event-production and never /work.
+    const pr = ["dist/productions/about.html", "dist/productions/community-as-a-service/index.html", "dist/productions/dashboard/index.html", "dist/productions/event-production-cost.html",
+      "dist/productions/get-in-touch.html", "dist/productions/how-to-choose-a-virtual-event-platform.html", "dist/productions/in-house-vs-agency-event-production.html",
+      "dist/productions/index.html", "dist/productions/start.html", "dist/productions/what-we-do.html", "dist/productions/work.html", "sites/productions/work.html"];
+    const round = ["dist/productions/assets/img/work/fms-1.webp", "sites/productions/work.html", "dist/productions/work.html", "scripts/first_run.mjs"];
+    const pages = pagePathsFrom(roundFirst(pr, round), 8, sitesOf("westpeekproductions.com"));
+    expect(pages).toHaveLength(8);
+    expect(pages.slice(0, 2)).toEqual(["/", "/work"]);
+    // Negative: the PR's files alone (a first build) keep their own order, and /work falls past the cut.
+    expect(pagePathsFrom(roundFirst(pr, []), 8, sitesOf("westpeekproductions.com"))).not.toContain("/work");
   });
   it("adds one link per changed page to a single clean link; the root page is the root link itself", () => {
     const root = "https://work-wpc-739461bd.topbarz-voting.pages.dev";
