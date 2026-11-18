@@ -575,6 +575,22 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
   ).bind(`tbr_${crypto.randomUUID()}`, deal.id, mid, msg.subject.slice(0, 300), words.slice(0, 8000), msg.receivedAt, intent, `${note} · read by ${readBy}${said ? `: "${said}"` : ""}`.slice(0, 1000), deal.firm_scope).run();
 
   /*
+   * THE SAME MESSAGE AGAIN IS NEVER A SECOND DRAFT (18 Nov 2026: Notion's ticket desk re-sent Kyle's 16 Nov question
+   * word for word under a new message id; Wynn drafted it again and asked both partners to approve the same answer a
+   * second time, with the first one still waiting on Scooter, so two answers could have gone to Notion). Words that
+   * match a reply still open on this deal (drafted, out for approval or sending) close this one, naming the open one.
+   */
+  if (!prior) {
+    const same = (x: string) => x.replace(/\s+/g, " ").trim().toLowerCase();
+    const open = ((await env.WP_OS_DB.prepare("SELECT id, their_text, notice_ref FROM tlc_brand_reply WHERE deal_id = ?1 AND state IN ('DRAFTED','NOTIFIED','SENDING') AND brand_message_id <> ?2")
+      .bind(deal.id, mid).all<{ id: string; their_text: string; notice_ref: string | null }>()).results ?? []).find((r) => same(r.their_text) === same(words));
+    if (open) {
+      await close("QUESTION", `the same message again: ${open.notice_ref ?? open.id} already answers it, no second draft`);
+      return "SEEN";
+    }
+  }
+
+  /*
    * A MAIL SERVER'S DELIVERY NOTICE IS NEVER A BRAND'S REPLY (6 Nov 2026 live read: Talkspace's Google
    * Group bounced on the thread, and Wynn drafted the proposal "Hi Mail," to mailer-daemon@googlemail.com
    * and asked both partners to approve it). It is closed with no draft; the door's bounce handling owns
