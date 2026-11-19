@@ -172,8 +172,16 @@ export function splitOffItems(items: readonly DoneItem[] | null | undefined, par
  * LAND, whose curl proof the DONE email lists as the live links.
  */
 const AFTER_LAND = /\b(?:after|once|when)\b[^.;]{0,40}?\b(?:merge[ds]?|merging|land(?:s|ed|ing)?|goes\s+live|is\s+live|published|deployed)\b/i;
-export function heldByLanding(check: { check?: string | null }, blockedBy?: string | null): boolean {
-  return blockedBy === "after_land" || AFTER_LAND.test(String(check?.check ?? ""));
+/*
+ * …AND ONE WHOSE PLACE IS PRODUCTION (19 Nov 2026, wc_59ef2d40): "The markers reach production and the address reads
+ * correctly on the live site", noted "Cloudflare only obfuscates on the proxied production host; LAND checks it after
+ * the merge". A preview-first BUILD can never meet it, so the finished build was refused and rebuilt for nothing.
+ */
+const ON_PRODUCTION = /\b(?:on|reach(?:es)?|in|against)\s+(?:the\s+)?(?:live\s+(?:site|dashboard|host)|production(?:\s+host)?)\b/i;
+const LAND_CHECKS_IT = /\bLAND\b[^.;]{0,30}?\b(?:checks?|confirms?|verif(?:y|ies)|proves?|curls?)\b/;
+export function heldByLanding(check: { check?: string | null; note?: string | null }, blockedBy?: string | null): boolean {
+  const words = String(check?.check ?? "");
+  return blockedBy === "after_land" || AFTER_LAND.test(words) || ON_PRODUCTION.test(words) || LAND_CHECKS_IT.test(String(check?.note ?? ""));
 }
 
 /*
