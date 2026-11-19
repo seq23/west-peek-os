@@ -1038,7 +1038,7 @@ async function handleIfReply(
      * failure closed. A steer keeps the written half only — correctly — and until now the quoted
      * half, and the message itself, went nowhere at all.
      */
-    await linkStoredMessage(env, kept, steer.thread!.object_type === "work_card" ? steer.thread!.object_id : null);
+    await linkStoredMessage(env, kept, steer.linkTo ?? (steer.thread!.object_type === "work_card" ? steer.thread!.object_id : null));
     await appendEvent(env, {
       eventType: "inbound_email.received",
       actorType: "system",
