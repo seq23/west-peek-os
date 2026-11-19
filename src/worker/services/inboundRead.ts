@@ -5,8 +5,8 @@
  *   - a COMMITTED Fund I LP (a committed LP's name in the sender, subject or words, by the committed-LP records the
  *     router reads), or the records cannot be read: Claude then Codex ONLY, never a free or training route (fail closed);
  *   - anyone else (brands, help desks, AI assistants, RSVPs, forms; LP prospects included): free Gemini FIRST ("it's
- *     just a first read"), then Claude or Codex, then Workers AI. The router still refuses Gemini before any request is
- *     formed when the text names a committed LP or a deal term, and the next reader reads it.
+ *     just a first read"), then Claude or Codex, then Workers AI. Gemini reads with committed LPs' names and deal terms
+ *     masked (partnerUnderstood.ts `maskedGeminiRead`, owner ruling 19 Nov 2026), and skips the email when it cannot mask.
  * A reader that is not there is passed over; one whose answer does not parse is passed over too. No reader: null, and
  * the caller decides from its word lists and says so (NAMED STOP INBOUND_NO_MODEL_READER).
  */

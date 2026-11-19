@@ -1,3 +1,5 @@
+import { privateModelOnlyPatterns } from "../../shared/ai/contentClass";
+
 /**
  * Credential scrub (P4): no credentials in LLM context, ever.
  *
@@ -95,4 +97,67 @@ export function redactInputs(inputs: string[]): RedactResult {
     return text;
   });
   return { inputs: out, redacted: [...redacted], count };
+}
+
+/** What masking did: the masked inputs, how many stand-ins, and the way back. */
+export interface MaskResult {
+  inputs: string[];
+  count: number;
+  /** Put every original back in a text the model wrote (its stand-ins become what he wrote). */
+  restore: (text: string) => string;
+}
+
+const letters = (i: number): string => (i < 26 ? String.fromCharCode(65 + i) : `${letters(Math.floor(i / 26) - 1)}${String.fromCharCode(65 + (i % 26))}`);
+const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** A stated sum of money ("$2.5M", "$250,000", "$3 million"): a deal term wherever it appears. */
+const AMOUNT = /\$\s?\d[\d,]*(?:\.\d+)?(?:\s?(?:[kmb]n?|mm|million|billion|thousand))?\b/gi;
+const STAND_IN = /\[(?:Investor [A-Z]+|amount \d+|deal term \d+)\]/g;
+
+/**
+ * MASKED, NEVER BLOCKED (owner ruling, 19 Nov 2026): the free Gemini first read reads every partner email, with the
+ * names of COMMITTED LPs and the deal terms replaced by stand-ins before the call ("[Investor A]", "[amount 1]",
+ * "[deal term 1]") and put back in what it wrote afterwards. Built on `redactInputs`, so a credential is still cut out
+ * one way. The caller fails closed: when the committed-LP records cannot be read it never calls this, and it checks
+ * the masked text names no committed LP before anything is sent. Pure.
+ */
+export function maskPrivateInputs(inputs: string[], committedLpNames: readonly string[]): MaskResult {
+  const back = new Map<string, string>();
+  let count = 0;
+  const names = [...new Set(committedLpNames.map((n) => n.trim().replace(/\s+/g, " ")).filter((n) => n.length >= 3))].sort((a, b) => b.length - a.length);
+  const investor = new Map<string, string>();
+  let amounts = 0;
+  let terms = 0;
+  const out = redactInputs(inputs).inputs.map((input) => {
+    let text = input;
+    for (const name of names) {
+      const re = new RegExp(`(^|[^\\p{L}\\p{N}])(${escape(name).replace(/ /g, "\\s+")})(?=$|[^\\p{L}\\p{N}])`, "giu");
+      text = text.replace(re, (_m: string, lead: string, said: string) => {
+        let tag = investor.get(name.toLowerCase());
+        if (!tag) {
+          tag = `[Investor ${letters(investor.size)}]`;
+          investor.set(name.toLowerCase(), tag);
+          back.set(tag, said);
+        }
+        count += 1;
+        return `${lead}${tag}`;
+      });
+    }
+    text = text.replace(AMOUNT, (said: string) => {
+      const tag = `[amount ${++amounts}]`;
+      back.set(tag, said);
+      count += 1;
+      return tag;
+    });
+    for (const marker of privateModelOnlyPatterns) {
+      const global = new RegExp(marker.source, marker.flags.includes("g") ? marker.flags : `${marker.flags}g`);
+      text = text.replace(global, (said: string) => {
+        const tag = `[deal term ${++terms}]`;
+        back.set(tag, said);
+        count += 1;
+        return tag;
+      });
+    }
+    return text;
+  });
+  return { inputs: out, count, restore: (text: string) => text.replace(STAND_IN, (tag) => back.get(tag) ?? tag) };
 }

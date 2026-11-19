@@ -30,6 +30,8 @@ let env: Env;
 const store = new Map<string, Uint8Array>();
 const sent: Array<{ to: string; subject: string; text: string }> = [];
 const geminiCalls: string[] = [];
+/** What the stubbed Gemini answers, given the request body it was sent; the default echoes one fixed ask. */
+let geminiAnswer: ((body: string) => string) | null = null;
 const SCOOTER = "scooter@westpeek.ventures";
 
 const HOLDS = "Preview first, nothing live until I say so. No client names on it without my written OK.";
@@ -111,7 +113,8 @@ beforeAll(async () => {
     }
     if (u.includes("generativelanguage.googleapis.com")) {
       geminiCalls.push(String(init?.body ?? ""));
-      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "ASK: Keep this pipeline studio-only." }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 } }), { status: 200 });
+      const said = geminiAnswer ? geminiAnswer(String(init?.body ?? "")) : "ASK: Keep this pipeline studio-only.";
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: said }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 } }), { status: 200 });
     }
     throw new Error(`unexpected fetch in test: ${u}`);
   });
@@ -218,19 +221,51 @@ describe("the reader ladder, through the real router", () => {
     expect(geminiCalls, "the free lane was never reached").toHaveLength(0);
   });
 
-  it("an email carrying a deal term never reaches the free Gemini lane, even with nothing else to read it", async () => {
+  /*
+   * MASKED, NEVER BLOCKED (owner ruling, 19 Nov 2026). Gemini reads every partner email; deal terms and committed LPs'
+   * names are stood in for before the request and put back in the brief. Rewritten from "never reaches Gemini" to the
+   * new truth, at least as strictly: the request body is read and must carry none of them.
+   */
+  it("an email carrying a deal term is read by free Gemini with the terms masked, and the brief has them back", async () => {
+    const before = geminiCalls.length;
+    geminiAnswer = (body) => {
+      const sheet = /\[deal term \d+\]/.exec(body)?.[0] ?? "?";
+      return `ASK: Send the ${sheet} summary to the founder.`;
+    };
     const out = await understand(routed({}), { subject: "terms", written: "Send the term sheet summary to the founder. Keep the pre-money out of it.", read: FIRST_READERS, employeeId: null, firmScope: "west-peek" });
-    expect(geminiCalls, "nothing was sent to a route that trains").toHaveLength(0);
-    expect(out.brief.reader, "no first read at all: the OS's own read").toBeNull();
-    expect(out.readerFailed, "every reader was out, so nobody waits").toBe(false);
-    expect(out.readersTried.find((r) => r.startsWith("GEMINI"))).toMatch(/^GEMINI: out/);
-    expect(out.asks).toEqual(["Send the term sheet summary to the founder.", "Keep the pre-money out of it."]);
+    geminiAnswer = null;
+    expect(geminiCalls.length - before, "Gemini read it").toBe(1);
+    const body = geminiCalls.at(-1)!;
+    expect(body).not.toMatch(/term sheet/i);
+    expect(body).not.toMatch(/pre-?money/i);
+    expect(body).toMatch(/\[deal term 1\]/);
+    expect(out.brief.reader).toBe("GEMINI");
+    expect(out.asks, "the stand-in is mapped back to his words").toContain("Send the term sheet summary to the founder.");
+  });
+
+  it("a committed LP's name never appears in the Gemini request body, and the brief carries it back", async () => {
+    await t.db.prepare("INSERT INTO lp_record (id, legal_name, lp_type, status, created_by) VALUES ('lpr_masked', 'Quillfeather Family Office', 'FAMILY_OFFICE', 'COMMITTED', 'test')").run();
+    const before = geminiCalls.length;
+    geminiAnswer = (body) => {
+      const who = /\[Investor [A-Z]+\]/.exec(body)?.[0] ?? "?";
+      return `ASK: Add ${who} to the welcome page.\nHOLD: Nothing live until I say so.`;
+    };
+    const written = "Add Quillfeather Family Office to the welcome page. Nothing live until I say so.";
+    const out = await understand(routed({}), { subject: "welcome", written, read: FIRST_READERS, employeeId: null, firmScope: "west-peek" });
+    geminiAnswer = null;
+    await t.db.prepare("DELETE FROM lp_record WHERE id = 'lpr_masked'").run();
+    expect(geminiCalls.length - before, "Gemini read it, masked").toBe(1);
+    expect(geminiCalls.at(-1)!).not.toMatch(/quillfeather/i);
+    expect(geminiCalls.at(-1)!).toContain("[Investor A]");
+    expect(out.brief.reader).toBe("GEMINI");
+    expect(out.asks).toEqual(["Add Quillfeather Family Office to the welcome page."]);
   });
 
   it("free Gemini reads an email the privacy router clears, when Claude, Codex and Workers AI are out", async () => {
+    const before = geminiCalls.length;
     const out = await understand(routed({}), { subject: "pipeline", written: "Keep this pipeline studio-only.", read: FIRST_READERS, employeeId: null, firmScope: "west-peek" });
     expect(out.brief.reader).toBe("GEMINI");
-    expect(geminiCalls).toHaveLength(1);
+    expect(geminiCalls.length - before).toBe(1);
   });
 });
 

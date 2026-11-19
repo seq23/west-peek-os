@@ -2,6 +2,8 @@ import type { Env } from "../env";
 import type { Actor } from "./authorize";
 import { appendEvent } from "../events";
 import { runAi } from "../ai/runAi";
+import { maskPrivateInputs } from "../ai/scrub";
+import { committedLpNamedIn, committedLps } from "../ai/committedLps";
 import { partnerByEmail } from "../../shared/registry/partners";
 import { partnersOwnWords } from "../../shared/intake/replyBody";
 import { textBodyOf } from "../effects/mimeAttachments";
@@ -99,14 +101,35 @@ async function readThrough(env: Env, input: Parameters<SeatRead>[1], ask: { sens
  * THE FIRST READ'S READERS, IN HER ORDER (15 Nov 2026, west-peek-ventures brain, "Out of Claude usage never stops
  * partner mail"): her Claude seat then Codex (one private call: the router's PRIVATE row, never a free lane); then
  * Cloudflare's own Workers AI (never trains on it, so private mail is fine, and it runs with the Mac asleep); then free
- * Gemini, only when the private-data router clears the email (a committed LP's name or a deal term revokes it, so the
- * call is refused before any request is formed); then no first read at all.
+ * Gemini on every email, with committed LPs' names and deal terms masked (owner ruling, 19 Nov 2026,
+ * `maskedGeminiRead`); then no first read at all.
  */
 export const FIRST_READERS: readonly Reader[] = [
   { name: "SEAT", read: (env, input) => readThrough(env, input, { sensitivity: "INTERNAL", budgetContext: { confidential: true } }) },
   { name: "WORKERS_AI", read: (env, input) => readThrough(env, input, { sensitivity: "INTERNAL", budgetContext: { confidential: true, ownBinding: true, providerKey: "workers_ai" } }) },
-  { name: "GEMINI", read: (env, input) => readThrough(env, input, { sensitivity: "PUBLIC", budgetContext: { publicModelApproved: true, providerKey: "google_free" } }) },
+  { name: "GEMINI", read: (env, input) => maskedGeminiRead(env, input) },
 ];
+
+/**
+ * GEMINI READS EVERY PARTNER EMAIL, MASKED (owner ruling, 19 Nov 2026). Before the call, committed LPs' names and deal
+ * terms are replaced by stand-ins (`maskPrivateInputs`: "[Investor A]", "[amount 1]", "[deal term 1]"); the answer is
+ * mapped back before it is parsed, so the brief carries his own words. FAILS CLOSED: if the commitment records cannot
+ * be read, or the masked text still names a committed LP, Gemini is skipped (an `out` reader), never sent unmasked.
+ * The router's own check stays behind it: a marker the mask missed is still refused before any request is formed.
+ */
+async function maskedGeminiRead(env: Env, input: Parameters<SeatRead>[1]): Promise<ReadOut> {
+  let masked: ReturnType<typeof maskPrivateInputs>;
+  try {
+    const committed = await committedLps(env, input.firmScope);
+    if (!committed.readable) return { ok: false, text: "", detail: "masking could not run (the committed-LP records are unreadable); Gemini skipped", out: true };
+    masked = maskPrivateInputs([input.prompt], committed.names);
+    if (committedLpNamedIn(masked.inputs, committed.names)) return { ok: false, text: "", detail: "masking left a committed LP's name; Gemini skipped", out: true };
+  } catch {
+    return { ok: false, text: "", detail: "masking could not run; Gemini skipped", out: true };
+  }
+  const out = await readThrough(env, { ...input, prompt: masked.inputs[0]! }, { sensitivity: "PUBLIC", budgetContext: { publicModelApproved: true, providerKey: "google_free" } });
+  return out.ok ? { ...out, text: masked.restore(out.text) } : out;
+}
 
 /** How long the employee waits for the first read before it starts from the OS's own read (her ruling: ten minutes). */
 export const FIRST_READ_WAIT_MINUTES = 10;

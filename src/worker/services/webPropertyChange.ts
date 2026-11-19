@@ -1,7 +1,8 @@
 import { committedLpNamedIn, committedLps } from "../ai/committedLps";
 import { privateMaterialConstraint, privateMaterialSentence } from "../../shared/intake/privateMaterial";
 import { ccAck, ccAsksIn, isOnlyACc, resolveCc } from "../../shared/work/ccPartners";
-import { secondaryNoteAck } from "../../shared/work/partnerOwnership";
+import { ownershipIntentIn, secondaryNoteAck } from "../../shared/work/partnerOwnership";
+import { firstReadOf, logDecision, propertyNamed, type FirstRead } from "./firstReadDecides";
 import { developerDirector } from "./developerDirection";
 import type { Env } from "../env";
 import { json, type RouteContext } from "../router";
@@ -9,12 +10,12 @@ import { appendEvent } from "../events";
 import { actorFromIdentity, type Actor } from "./authorize";
 import { answerBlock, blockCard, PARTNER_ANSWER_MAX, restoreBlock } from "./blocks";
 import { notifyQuietly } from "./notifications";
-import { tellPartner } from "./handOff";
+import { changeOwnership, tellPartner } from "./handOff";
 import { runAi } from "../ai/runAi";
 import { deliver } from "./deliverables";
 import { handOver } from "./employeeWork";
 import { isWaitingForMac, parkRun, readRun, type SeatRunRow } from "../ai/subscriptionSeats";
-import { PARTNERS, PREVIEW_PARTNER, partnerByEmail } from "../../shared/registry/partners";
+import { PARTNERS, PREVIEW_PARTNER, partnerByEmail, partnerFor } from "../../shared/registry/partners";
 import { sendOrPreview } from "./previewApproval";
 import type { SweepCard } from "./workSweep";
 import { hostsSentence, pagesHostsOf, readWebPropertyAsk, sitesOf, WEB_PROPERTIES, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
@@ -2162,7 +2163,7 @@ async function applyPlan(env: Env, card: WebPropertyChangeCard, row: WebProperty
    * and he wrote back: "The card says I approved the plan and answered the three decisions. I haven't." When his
    * own words ask for the plan or the questions before the build, the plan waits for his word, asks or none.
    */
-  if (planFirstIn(`${fresh.request_text ?? ""}\n${fresh.ask ?? ""}`)) {
+  if (await planWaitsForHim(env, card, `${fresh.request_text ?? ""}\n${fresh.ask ?? ""}`, new Date().toISOString())) {
     const why = await blockWithAsks(env, card, fresh, asks);
     return { finished: false, blocked: true, progressed: false, detail: why };
   }
@@ -2245,13 +2246,13 @@ async function approveByRequest(env: Env, card: WebPropertyChangeCard, row: WebP
 export async function releasePlansNobodyNeedsToAnswer(env: Env): Promise<string[]> {
   const rows = (
     await env.WP_OS_DB.prepare(
-      `SELECT c.id, w.asks_json, w.ask, w.request_text FROM work_card c JOIN web_property_change w ON w.work_card_id = c.id
+      `SELECT c.id, c.firm_scope, w.asks_json, w.ask, w.request_text, w.plan_filed_at FROM work_card c JOIN web_property_change w ON w.work_card_id = c.id
         WHERE c.kind = ?1 AND c.state = 'BLOCKED' AND c.held_at IS NULL AND c.block_reason = 'a_question_for_you'
           AND w.phase = 'PLAN' AND w.plan_filed_at IS NOT NULL AND w.plan_approved_at IS NULL
           AND c.block_answered_at IS NULL`,
     )
       .bind(WEB_PROPERTY_CHANGE_KIND)
-      .all<{ id: string; asks_json: string | null; ask: string | null; request_text: string | null }>()
+      .all<{ id: string; firm_scope: string; asks_json: string | null; ask: string | null; request_text: string | null; plan_filed_at: string | null }>()
   ).results ?? [];
   const released: string[] = [];
   for (const r of rows) {
@@ -2261,7 +2262,7 @@ export async function releasePlansNobodyNeedsToAnswer(env: Env): Promise<string[
     } catch {
       asks = [];
     }
-    if (!everyAskRecommended(asks) || planFirstIn(`${r.request_text ?? ""}\n${r.ask ?? ""}`)) continue;
+    if (!everyAskRecommended(asks) || (await planWaitsForHim(env, r, `${r.request_text ?? ""}\n${r.ask ?? ""}`, r.plan_filed_at, false))) continue;
     await env.WP_OS_DB.prepare(
       `UPDATE work_card
           SET state = 'OPEN', work_attempts = 0, work_steps = 0, lease_until = NULL,
@@ -3144,6 +3145,132 @@ function answerSince(card: WebPropertyChangeCard, since: string | null): string 
   return text.length > 0 ? text : null;
 }
 
+// ── THE FIRST READ DECIDES (owner ruling, 19 Nov 2026; services/firstReadDecides.ts) ─────────────────────────────
+
+/** The reply's first read is not in yet: nothing moves; the sweep comes back when the wait ends. */
+function waitForFirstRead(read: Extract<FirstRead, { state: "WAIT" }>): RunOutcome {
+  return { finished: false, blocked: false, progressed: true, held: true, waitUntil: read.until, detail: `Waiting for the first read of his email (until ${read.until}); nothing acts on his words before it.` };
+}
+
+/** When his reply answered the card, with the door's slack: the newest partner email up to then is the reply. */
+function answeredBy(card: WebPropertyChangeCard): string | null {
+  return card.block_answered_at ?? null;
+}
+
+/**
+ * A HAND-OFF TO SOMEONE WHO IS NOT A PARTNER IS REFUSED, BY THE FIRST READ (19 Nov 2026, #546: "Please move it to the
+ * Productions dashboard project" read "the" as a person). On a BLOCKED website card the door no longer refuses at
+ * intake (emailThread.ts); the refusal is decided here, from the first read's `handOffTo`, or the keywords when it is
+ * absent. True when the reply was a refused hand-off: it is answered and nothing else is read from it.
+ */
+async function refusedHandOff(env: Env, card: WebPropertyChangeCard, answer: string, read: FirstRead): Promise<boolean> {
+  const requester = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
+  if (!requester) return false;
+  const kw = ownershipIntentIn(answer, requester.email);
+  const keywordNamed = kw?.kind === "HAND_OFF" && !kw.to ? kw.named : null;
+  const readNamed = read.state === "READ" && read.decision.handOffTo && !partnerFor(read.decision.handOffTo) ? read.decision.handOffTo : null;
+  const named = read.state === "READ" ? readNamed : keywordNamed;
+  if (read.state !== "READ" ? keywordNamed : readNamed || keywordNamed) {
+    await appendFinding(env, card.id, await logDecision(env, card, { what: "hand-off", read, firstRead: read.state === "READ" ? (readNamed ? `hand to ${readNamed}` : "no hand-off") : null, keyword: keywordNamed ? `hand to ${keywordNamed}` : "no hand-off" }));
+  }
+  if (!named) return false;
+  const out = await changeOwnership(env, { cardId: card.id, actor: requester.email, action: "HAND_OFF", target: named, via: "REPLY", said: answer });
+  if (!out.ok) await tellPartner(env, { cardId: card.id, to: requester, label: "Not changed", line: out.reason ?? "Not changed.", subjectTail: "not handed off" });
+  return true;
+}
+
+/** The keywords' own reading of a reply to a preview, in one word, for the record beside the first read's. */
+function keywordPreviewReading(answer: string): string {
+  const k = readApprovalReply(answer).kind;
+  if (k === "FORCED" || k === "APPROVED") return "approve";
+  if (k === "REFUSED") return "stop";
+  const rebuild = rebuildIntentFor(answer);
+  if (rebuild === "PUBLISH") return "approve";
+  if (rebuild) return "change";
+  return "free text (read for its intent)";
+}
+
+/**
+ * HIS REPLY TO A PREVIEW, DECIDED BY THE FIRST READ (19 Nov 2026, #531: "Hey Porter! Approved. Please publish …" was
+ * rebuilt instead of landed). approve → lands the preview he is looking at; change → rebuilds with his words and a
+ * fresh preview follows; question → answered, the preview waits; stop → held; nothing → the preview waits. Null when
+ * the keyword path is to carry on: the named force or "publish" with an approval (both land), or a "decision N:" line.
+ */
+async function previewByFirstRead(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, answer: string, read: Extract<FirstRead, { state: "READ" }>, rules: Record<string, string>, answerQuestion: QuestionAnswerer | undefined): Promise<RunOutcome | null> {
+  const d = read.decision;
+  const keyword = keywordPreviewReading(answer);
+  await appendFinding(env, card.id, await logDecision(env, card, { what: "the reply to the preview", read, firstRead: d.kind, keyword }));
+  const k = readApprovalReply(answer).kind;
+  if (d.kind === "stop") return holdCard(env, card, row, answer);
+  if (d.kind === "approve") {
+    if (k === "FORCED" || k === "APPROVED" || rebuildIntentFor(answer) === "PUBLISH") return null;
+    const now = new Date().toISOString();
+    await update(env, card.id, { land_approved_at: now, land_approved_by: card.block_answered_by ?? card.requested_by_email ?? null });
+    await appendFinding(env, card.id, `Landing approved after the preview by ${card.requested_by_email ?? "a partner"} — the first read of his email read it as approval: "${answer.slice(0, 200)}".`);
+    const parked = await parkPhase(env, card, { ...row, land_approved_at: now }, "LAND", rules);
+    if (!parked.parked) return { finished: false, blocked: false, progressed: true, detail: parked.reason };
+    return { finished: false, blocked: false, progressed: true, detail: `Landing approved after the preview; LAND queued for the Mac (${phaseModel(rules, "LAND")}).` };
+  }
+  if (d.kind === "change") {
+    if (decisionResolutionIn(answer)) return null;
+    return requestRebuild(env, card, row, "CHANGES", answer, rules);
+  }
+  if (d.kind === "question") {
+    await answerMidFlowQuestion(env, card, answer, answerQuestion);
+    await appendFinding(env, card.id, `After the preview, ${card.requested_by_email ?? "the partner"} asked a question; answered by email. The same preview waits for a positive reply — nothing lands until then.`);
+    const why = await blockOnPreview(env, card, row);
+    return { finished: false, blocked: true, progressed: false, detail: `Question answered; waiting on the same preview. ${why}` };
+  }
+  await appendFinding(env, card.id, `After the preview: "${answer.slice(0, 200)}" — the first read found nothing asked; nothing lands.`);
+  const why = await blockOnPreview(env, card, row);
+  return { finished: false, blocked: true, progressed: false, detail: why };
+}
+
+/**
+ * DOES THE PLAN WAIT FOR HIS WORD? (19 Nov 2026, #546: "Please confirm the plan" was taken as approved.) The first read
+ * of his request says so (`planApproved: false` waits, `true` does not); with no first read, or one that left it open,
+ * the keywords (`planFirstIn`) decide. The request's first read always exists by now or never will: the sweep waited
+ * for it before the PLAN was ever parked (`claimNextCard`).
+ */
+async function planWaitsForHim(env: Env, card: { id: string; firm_scope: string }, requestText: string, before: string | null, log = true): Promise<boolean> {
+  const read = await firstReadOf(env, card.id, { until: before });
+  const keyword = planFirstIn(requestText);
+  const said = read.state === "READ" ? read.decision.planApproved : null;
+  const waits = said === null ? keyword : !said;
+  const usable: FirstRead = said === null && read.state === "READ" ? { state: "ABSENT", messageId: read.messageId } : read;
+  if (log) {
+    const line = await logDecision(env, card, { what: "whether the plan waits for him", read: usable, firstRead: said === null ? null : said ? "approved" : "waits for him", keyword: keyword ? "waits for him" : "approved" });
+    if (waits || keyword) await appendFinding(env, card.id, line);
+  }
+  return waits;
+}
+
+/**
+ * WHICH SITE, BY THE FIRST READ (19 Nov 2026, #542: "the Productions dashboard, separate from Top Barz" was filed under
+ * Top Barz). Before the first PLAN is parked, the property the first read named re-targets a single-repo job the door
+ * filed elsewhere (or could not place). Null when nothing changes; a wait outcome while the read is still due.
+ */
+async function retargetByFirstRead(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow): Promise<{ wait: RunOutcome | null; row: WebPropertyChangeRow }> {
+  if (row.phase !== "PLAN" || row.plan_filed_at || row.current_run_id) return { wait: null, row };
+  if ((await readParts(env, card.id)).length > 0) return { wait: null, row };
+  const read = await firstReadOf(env, card.id);
+  if (read.state === "WAIT") return { wait: waitForFirstRead(read), row };
+  if (read.state === "ABSENT" && read.messageId) await logDecision(env, card, { what: "the site", read, firstRead: null, keyword: row.target_repo === UNRESOLVED_REPO ? "unresolved" : `${row.property_host ?? row.target_repo}` });
+  if (read.state !== "READ" || !read.decision.property) return { wait: null, row };
+  const registry = await loadRegistry(env);
+  const named = propertyNamed(read.decision.property, registry);
+  const current = row.target_repo === UNRESOLVED_REPO ? "unresolved" : `${row.property_host ?? row.target_repo}`;
+  if (!named || (named.repo === row.target_repo && named.host === row.property_host)) {
+    if (named) await logDecision(env, card, { what: "the site", read, firstRead: named.host, keyword: current });
+    return { wait: null, row };
+  }
+  const ask = readWebPropertyAsk(card.request_json) ?? null;
+  if (!ask) return { wait: null, row };
+  await openWebPropertyChange(env, { cardId: card.id, ask: { ...ask, target_repo: named.repo, property_host: named.host, site: named.site, property_unresolved: false, parts: undefined }, firmScope: card.firm_scope });
+  await appendFinding(env, card.id, await logDecision(env, card, { what: "the site", read, firstRead: named.host, keyword: current }));
+  return { wait: null, row: (await readWebPropertyChange(env, card.id)) ?? row };
+}
+
 export async function runWebPropertyChangeCard(
   env: Env,
   sweepCard: SweepCard,
@@ -3178,6 +3305,10 @@ export async function runWebPropertyChangeCard(
     return { finished: false, blocked: true, progressed: false, detail: why };
   }
   if (row.phase === "DONE") return { finished: true, blocked: false, progressed: false, detail: doneSummary(row, await readParts(env, card.id)) };
+  // WHICH SITE IS THE FIRST READ'S (19 Nov 2026, #542): before the first PLAN, the property it named re-targets the job.
+  const retarget = await retargetByFirstRead(env, card, row);
+  if (retarget.wait) return retarget.wait;
+  row = retarget.row;
   if (row.target_repo === UNRESOLVED_REPO) {
     // "the site", and nothing recent to infer it from: the one question only they can answer.
     const why = await blockCard(env, card, {
@@ -3299,6 +3430,17 @@ export async function runWebPropertyChangeCard(
       const why = await blockWithAsks(env, card, row, asks);
       return { finished: false, blocked: true, progressed: false, detail: why };
     }
+    /*
+     * THE FIRST READ DECIDES (owner ruling, 19 Nov 2026). His reply's first read, when it exists, says whether this is
+     * a stop, a refused hand-off, or a plan he has not approved ("Please confirm the plan"); before it is in, nothing
+     * moves; past the ten-minute wait with none, the keywords below decide and that is logged.
+     */
+    const planRead = await firstReadOf(env, card.id, { after: row.plan_filed_at, until: answeredBy(card) });
+    if (planRead.state === "WAIT") return waitForFirstRead(planRead);
+    if (await refusedHandOff(env, card, answer, planRead)) {
+      const why = await blockWithAsks(env, card, row, asks);
+      return { finished: false, blocked: true, progressed: false, detail: `A hand-off to someone who is not a partner was refused; the plan still waits. ${why}` };
+    }
     const reading = readApprovalReply(answer);
     /*
      * A REPLY OF ANY KIND EXCEPT STOP APPROVES THE PLAN (owner, 27 Sep 2026). The keywords decide
@@ -3306,7 +3448,18 @@ export async function runWebPropertyChangeCard(
      * a QUESTION approves on the recommendations and is answered by email, only STOP holds.
      */
     const intent: ReplyIntent = await readReplyIntent(env, { cardId: card.id, firmScope: card.firm_scope, text: answer }, readIntent);
-    if (intent.kind === "STOP") {
+    const planSaid = planRead.state === "READ" ? planRead.decision : null;
+    const keywordPlan = intent.kind === "STOP" ? "stop" : "plan approved";
+    const firstReadPlan = !planSaid ? null : planSaid.kind === "stop" ? "stop" : planSaid.planApproved === false ? "plan not approved yet" : "plan approved";
+    const planLine = await logDecision(env, card, { what: "the reply to the plan", read: planRead, firstRead: firstReadPlan, keyword: keywordPlan });
+    if (firstReadPlan !== keywordPlan) await appendFinding(env, card.id, planLine);
+    if (firstReadPlan === "plan not approved yet") {
+      // He asked about the plan, or to confirm it, and did not approve it: answered when he asked, and it waits for him.
+      if (planSaid!.kind === "question" || intent.question) await answerMidFlowQuestion(env, card, intent.question ?? answer, answerQuestion);
+      const why = await blockWithAsks(env, card, row, asks);
+      return { finished: false, blocked: true, progressed: false, detail: `Not an approval of the plan (the first read of his reply); it waits for his word. ${why}` };
+    }
+    if ((firstReadPlan ?? keywordPlan) === "stop") {
       // "no" / "hold off" HOLDS THE CARD. The text is on the record; the plan stands; nothing is built.
       await appendFinding(env, card.id, `Not approved by ${card.requested_by_email ?? "the partner"}: "${answer.slice(0, 600)}". The plan stands as written until they say what changes, or drop it.`);
       const why = await blockCard(env, card, {
@@ -3387,6 +3540,25 @@ export async function runWebPropertyChangeCard(
       const requester = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
       const fromRequester = !requester || !card.block_answered_by || card.block_answered_by === requester.firmUserId;
       const landReading = answer && fromRequester ? readApprovalReply(answer) : null;
+      /*
+       * THE FIRST READ DECIDES HIS REPLY TO THE PREVIEW (owner ruling, 19 Nov 2026). Land, rebuild, hold or wait is the
+       * first read's call when it exists; before it is in, nothing moves; past the wait with none, the keyword path
+       * below decides and that is logged. Only the requesting partner's reply: the developer's direction is unchanged.
+       */
+      if (answer && fromRequester && answer !== MATERIALS_ADDED_PHRASE) {
+        const previewRead = await firstReadOf(env, card.id, { after: row.preview_emailed_at, until: answeredBy(card) });
+        if (previewRead.state === "WAIT") return waitForFirstRead(previewRead);
+        if (await refusedHandOff(env, card, answer, previewRead)) {
+          const why = await blockOnPreview(env, card, row);
+          return { finished: false, blocked: true, progressed: false, detail: `A hand-off to someone who is not a partner was refused; the preview still waits. ${why}` };
+        }
+        if (previewRead.state === "READ") {
+          const decided = await previewByFirstRead(env, card, row, answer, previewRead, rules, answerQuestion);
+          if (decided) return decided;
+        } else {
+          await logDecision(env, card, { what: "the reply to the preview", read: previewRead, firstRead: null, keyword: keywordPreviewReading(answer) });
+        }
+      }
       if (landReading?.kind === "FORCED") {
         const forced = await recordForce(env, card, row, card.block_answered_by ?? requester?.firmUserId ?? "");
         const parked = await parkPhase(env, card, forced, "LAND", rules);
