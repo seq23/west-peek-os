@@ -710,3 +710,16 @@ describe("the card's trail shows the hand-off and the one email the new primary 
     expect(again.at(-1)).toMatchObject({ kind: "HAND_OFF_EMAIL", who: `told ${SEQUOIA}`, cc: null });
   });
 });
+
+describe("moving the work to a place is not a hand-off (19 Nov 2026, wc_59ef2d40)", () => {
+  it.each([
+    "Please move it to the Productions dashboard project. Nothing about Top Barz should change.",
+    "Move this to the preview.",
+    "Can you move it to another repo",
+  ])("%s", (text) => {
+    expect(ownershipIntentIn(`Hey Porter!\n\n${text}`, "scooter@westpeek.ventures")).toBeNull();
+  });
+  it("a hand-off to someone who is not a partner is still refused by name", () => {
+    expect(ownershipIntentIn("Hand this to Bob.", "scooter@westpeek.ventures")).toMatchObject({ kind: "HAND_OFF", to: null, named: "Bob" });
+  });
+});
