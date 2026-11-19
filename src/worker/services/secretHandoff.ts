@@ -35,7 +35,7 @@ import { sendOrPreview } from "./previewApproval";
  * (the ONE named stop here, and it is the owner's one-time `vault:set` + `vault:sync:cloudflare`),
  * and the value is still scrubbed from everything the Worker kept.
  *
- * `validate:open-repo-door` and `tests/secretHandoff.test.ts` send a fake value through this door
+ * `validate:open-repo-door` and `tests/openRepoDoor.test.ts` send a fake value through this door
  * and grep every sink for it.
  */
 

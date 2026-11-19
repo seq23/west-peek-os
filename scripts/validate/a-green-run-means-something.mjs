@@ -136,7 +136,7 @@ export function checkConfig(source) {
   // process-wide keep-alive agent reused a socket `workerd` closes at 5000ms idle. A
   // `connection: close` header was the first fix and was inert. The guard is a module the config
   // must load, because only the config is evaluated in every worker; the behaviour itself is
-  // counted in tests/e2e-one-connection-per-request.test.ts and e2e/zz-one-connection-per-request.spec.ts.
+  // counted in e2e/zz-one-connection-per-request.spec.ts.
   if (!/^import\s+["']\.\/e2e\/support\/one-connection-per-request(\.ts)?["'];?\s*$/m.test(source)) {
     bad.push(
       "playwright.config.ts does not import ./e2e/support/one-connection-per-request — without it every " +

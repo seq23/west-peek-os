@@ -9,7 +9,7 @@
 -- by her partner tail through the Mac's own identity (recorded as such). It covers work instructions
 -- ONLY: approving a plan or a preview, publish, land, force, sending outside the firm and spending
 -- still take the signed-in partner the OS already requires (`src/worker/services/developerDirection.ts`,
--- tests/developerDirection.test.ts).
+-- tests/developerTakeover.test.ts).
 --
 -- The role is granted here and nowhere else. No route, job or script grants it.
 
