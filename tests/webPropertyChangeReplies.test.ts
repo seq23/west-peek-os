@@ -1227,6 +1227,13 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     expect(answered[0]!.text).toMatch(/point westpeekproductions\.com/);
     expect((await readWebPropertyChange(env, q.id))!.refresh_intent, "and his changes are rebuilt").toBe("CHANGES");
     expect((await readWebPropertyChange(env, q.id))!.land_approved_at, "nothing lands").toBeNull();
+    // 19 Nov 2026, wc_76e6d7ff: the rebuild comes back refused by the v1.0 bar, so the card sits at the same preview
+    // with no run in flight. It queues again; his question is never answered a second time.
+    await macReports(q.id, { phase: "BUILD", status: "ok", changed: true, items: [{ item: "the case studies", state: "partial", done_when: [{ check: "case studies on the page", met: false }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/9", pr_number: 9, check_state: "GREEN", preview_url: "https://p9.west-peek-ventures.pages.dev" });
+    await tickFor(q.id);
+    await tickFor(q.id);
+    expect(await liveJobFor(q.id), "the rebuild is queued again").not.toBeNull();
+    expect(sent.slice(before).filter((m) => m.to === SCOOTER && /answered/.test(m.subject)), "one answer for the one reply").toHaveLength(1);
   });
 
   it("PREVIEW: 'what is needed to point the domain?' reaches the answerer with the confirmed live address (18 Nov 2026)", async () => {
