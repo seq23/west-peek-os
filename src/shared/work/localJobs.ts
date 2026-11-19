@@ -507,7 +507,7 @@ function readItems(v: unknown[]): NonNullable<LocalJobReport["items"]> {
     return {
       item: typeof i.item === "string" ? i.item.trim().slice(0, 200) : "",
       state,
-      ...(typeof i.note === "string" ? { note: i.note.slice(0, 300) } : {}),
+      ...(typeof i.note === "string" ? { note: i.note.slice(0, 700) } : {}),
       ...(checks ? { done_when: checks } : {}),
       ...(typeof i.blocked_by === "string" && i.blocked_by.trim() ? { blocked_by: i.blocked_by.trim().slice(0, 40) } : {}),
     };
