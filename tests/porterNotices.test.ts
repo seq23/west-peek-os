@@ -20,7 +20,7 @@ import {
   withChangedPages,
 } from "../src/shared/work/porterNotices";
 import { lintExecEmail, renderExecEmail } from "../src/shared/email/execEmail";
-import { changesTextOf, everyAskRecommended, LATE_THREAD_NOTE_PREFIX, NO_RECOMMENDATION, readApprovalReply, readAsks, stripLateThreadPrefix } from "../src/shared/work/approvalReply";
+import { changesTextOf, everyAskRecommended, opensWithApproval, LATE_THREAD_NOTE_PREFIX, NO_RECOMMENDATION, readApprovalReply, readAsks, stripLateThreadPrefix } from "../src/shared/work/approvalReply";
 import { FAULT_PREFIX, keywordIntent, parseReplyIntent } from "../src/worker/services/replyIntent";
 import { plainTitle } from "../src/shared/work/siteChange";
 import { rebuildIntentFor } from "../src/worker/services/webPropertyChange";
@@ -274,6 +274,16 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026): the 
       expect(readApprovalReply(go).kind, go).toBe("ANSWERS");
     }
     expect(readApprovalReply("approved").kind).toBe("APPROVED");
+    // A salutation is never the reply (19 Nov 2026, wc_c548d043).
+    expect(readApprovalReply("Hey Porter!\n\nApproved.").kind).toBe("APPROVED");
+    expect(readApprovalReply("Hi Porter and Sequoia,\n\nstop").kind).toBe("REFUSED");
+    expect(readApprovalReply("Hey, stop the build").kind, "'Hey, stop' is not a greeting to skip").toBe("ANSWERS");
+    expect(opensWithApproval("Hey Porter!\n\nApproved. Please publish it and send the live links.")).toBe(true);
+    expect(opensWithApproval("Approved, but swap the logo first")).toBe(false);
+    expect(opensWithApproval("Approved to production. Ship it")).toBe(false);
+    expect(opensWithApproval("Hey Porter!\n\nPlease swap the logo.")).toBe(false);
+    expect(opensWithApproval("Hey Porter!")).toBe(false);
+
     expect(readApprovalReply("changes: swap the logo").kind).toBe("CHANGES");
     expect(changesTextOf("changes: swap the logo")).toBe("swap the logo");
     expect(changesTextOf("Change: swap the logo")).toBe("swap the logo");

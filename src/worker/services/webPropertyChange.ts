@@ -26,7 +26,7 @@ import { dueLine } from "../../shared/intake/dueTime";
 import type { MissingSecret } from "../../shared/work/localJobs";
 import { doneLines } from "../../shared/work/partnerPractices";
 import { practicesForCard, recordPartnerConstraints } from "./partnerConstraints";
-import { approvedAnswers, askLines, decidedFromAsks, everyAskRecommended, readApprovalReply, readAsks, stripLateThreadPrefix, type Ask } from "../../shared/work/approvalReply";
+import { approvedAnswers, askLines, decidedFromAsks, everyAskRecommended, opensWithApproval, readApprovalReply, readAsks, stripLateThreadPrefix, type Ask } from "../../shared/work/approvalReply";
 import { defaultReadReplyIntent, readReplyIntent, type ReplyIntent, type ReplyIntentReader } from "./replyIntent";
 import { isReplyToOurs } from "./emailThread";
 import { abandonRun } from "../ai/subscriptionSeats";
@@ -1339,7 +1339,7 @@ export function freeReplyLandsPreview(rules: Record<string, string>): boolean {
  * changed. PUBLISH is recorded like the named force — hers alone, with the time — as a landing
  * approval that binds to a build that goes green AFTER it, never to the preview she is looking at.
  */
-async function requestRebuild(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, intent: "PREVIEW" | "PUBLISH" | "CHANGES", answer: string | null, rules: Record<string, string>, directedBy: string | null = null): Promise<RunOutcome> {
+async function requestRebuild(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, intent: "PREVIEW" | "PUBLISH" | "CHANGES", answer: string | null, rules: Record<string, string>, directedBy: string | null = null, approvedToLand = false): Promise<RunOutcome> {
   const now = new Date().toISOString();
   const requester = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
   const by = card.block_answered_by ?? requester?.firmUserId ?? null;
@@ -1363,13 +1363,18 @@ async function requestRebuild(env: Env, card: WebPropertyChangeCard, row: WebPro
     patch.rebuilt_for = null;
   }
   if (intent === "PUBLISH") Object.assign(patch, { land_approved_at: now, land_approved_by: by, publish_approved_at: now, publish_approved_by: by });
+  // His "approved" opened the reply: the rebuild for his words lands on green (only the requesting partner's own words).
+  const landsAfter = intent === "CHANGES" && approvedToLand && !directedBy;
+  if (landsAfter) Object.assign(patch, { land_approved_at: now, land_approved_by: by });
   await update(env, card.id, patch);
   await appendFinding(
     env,
     card.id,
     directedBy
       ? `Rebuilding on the instruction of ${directedBy}.`
-      : intent === "CHANGES"
+      : landsAfter
+        ? `After the preview, ${card.requested_by_email ?? "the partner"} approved it and wrote: "${(answer ?? "").slice(0, 200)}". Building his words into it; it lands on green and the live links follow — no second preview to approve.`
+        : intent === "CHANGES"
         ? `After the preview, ${card.requested_by_email ?? "the partner"} asked for changes ("${(answer ?? "").slice(0, 200)}"): rebuilding with them; a new preview follows.`
         : `After the preview, ${card.requested_by_email ?? "the partner"} ${answer ? `replied "${answer.slice(0, 80)}"` : "pressed \"I added missing items\""}: checking the Drive folder and the files on the card for anything new. ${intent === "PUBLISH" ? "If something changed, it is filled in and published without another preview" : "If something changed, a new preview follows"}; if nothing did, she is told so.`,
   );
@@ -3365,7 +3370,7 @@ export async function runWebPropertyChangeCard(
         if (freeIntent.kind === "STOP") return holdCard(env, card, row, answer);
         if (freeIntent.kind === "QUESTION") {
           await answerMidFlowQuestion(env, card, freeIntent.question ?? answer, answerQuestion);
-          if (freeIntent.changes) return requestRebuild(env, card, row, "CHANGES", freeIntent.changes, rules);
+          if (freeIntent.changes) return requestRebuild(env, card, row, "CHANGES", freeIntent.changes, rules, null, opensWithApproval(answer));
           await appendFinding(env, card.id, `After the preview, ${card.requested_by_email ?? "the partner"} asked a question; answered by email. The same preview waits for a positive reply — nothing lands until then.`);
           const why = await blockOnPreview(env, card, row);
           return { finished: false, blocked: true, progressed: false, detail: `Question answered; waiting on the same preview. ${why}` };
@@ -3376,7 +3381,14 @@ export async function runWebPropertyChangeCard(
          * with the question beside the changes, and only a QUESTION reply was ever answered: his question was dropped.
          */
         if (freeIntent.question) await answerMidFlowQuestion(env, card, freeIntent.question, answerQuestion);
-        if (freeIntent.changes) return requestRebuild(env, card, row, "CHANGES", freeIntent.changes, rules);
+        /*
+         * "APPROVED. PLEASE PUBLISH …" IS HIS LANDING APPROVAL (19 Nov 2026, wc_c548d043). Scooter approved the preview
+         * and restated what to publish; the reader carried that as changes, the approved preview was rebuilt, and the
+         * finished build would have mailed him the same preview to approve a second time. An approval word opening the
+         * reply approves the landing now: his words are still built (the run's job, as any changes), and that build
+         * lands on green with the live links, never another preview — the "publish" precedent (23 Sep 2026, option 3).
+         */
+        if (freeIntent.changes) return requestRebuild(env, card, row, "CHANGES", freeIntent.changes, rules, null, opensWithApproval(answer));
         landsByIntent = freeReplyLandsPreview(rules);
         if (!landsByIntent) await appendFinding(env, card.id, `After the preview, ${card.requested_by_email ?? "the partner"} wrote "${answer.slice(0, 200)}" — read as go-ahead, but ${FREE_REPLY_LANDS_PREVIEW} is off for this kind, so the preview waits for "approved".`);
       }

@@ -52,14 +52,44 @@ export const STOP_WORDS = ["no", "stop", "hold", "hold off", "hold on", "wait", 
 /** The first line starts with one of these → STOP ("stop the build", "hold off until Monday", "don't land it yet"). */
 export const STOP_STARTS = ["stop ", "stop,", "stop.", "hold off", "hold on", "hold it", "hold this", "not approved", "not yet", "don't build", "do not build", "don't land", "do not land", "don't publish", "do not publish", "don't ship", "do not ship", "don't go", "do not go", "don't proceed", "do not proceed", "don't continue", "do not continue", "pause ", "pause,", "wait,", "wait ", "cancel "] as const;
 
-/** The first line the person wrote, without a signature, quoted text or punctuation noise. */
-function firstWords(text: string): string {
-  const line = text
+/**
+ * A SALUTATION IS NEVER THE REPLY (19 Nov 2026, wc_c548d043). Scooter wrote "Hey Porter!" on a line of
+ * its own and "Approved. Please publish …" under it; the greeting was read as his first words, so the
+ * approval reached the free-text reader, which read his publish instructions as changes, and the
+ * preview he had approved was rebuilt instead of landed. A greeting word followed only by names
+ * (capitalised) or "there/all/team/both/everyone" is skipped; "Hey, stop" is not a salutation.
+ */
+const SALUTATION = /^(?:[Hh]ey|[Hh]i|[Hh]ello|[Dd]ear|[Gg]ood (?:morning|afternoon|evening))(?:[ ,]+(?:there|all|team|both|everyone|and|&|[A-Z][\w'’-]*))*\s*[!,.:]*$/;
+
+/** The lines the person wrote, without quoted text, blank lines or a salutation before them. */
+function ownLines(text: string): string[] {
+  const lines = text
     .replace(/\r/g, "")
     .split("\n")
     .map((l) => l.trim())
-    .find((l) => l.length > 0 && !l.startsWith(">")) ?? "";
+    .filter((l) => l.length > 0 && !l.startsWith(">"));
+  while (lines.length > 1 && SALUTATION.test(lines[0]!)) lines.shift();
+  return lines;
+}
+
+/** The first line the person wrote, without a salutation, a signature, quoted text or punctuation noise. */
+function firstWords(text: string): string {
+  const line = ownLines(text)[0] ?? "";
   return line.replace(/[.!,;:\s]+$/g, "").trim().toLowerCase();
+}
+
+/**
+ * "APPROVED." AND THEN MORE WORDS (19 Nov 2026, wc_c548d043). True when the reply's first sentence,
+ * after any salutation, is an approval word on its own ("Approved. Please publish it and send the live
+ * links"), never a force phrase. The rest is still read for changes; this says the partner has given
+ * the landing approval for the preview in front of him, so a rebuild for what follows lands on green
+ * and never sends him the same preview to approve again. Pure.
+ */
+export function opensWithApproval(text: string | null | undefined): boolean {
+  const line = ownLines((text ?? "").trim())[0] ?? "";
+  const sentence = (line.split(/[.!;](?:\s|$)|\s[—–-]\s/)[0] ?? "").replace(/[.!,;:\s]+$/g, "").trim().toLowerCase();
+  if ((FORCE_WORDS as readonly string[]).includes(sentence)) return false;
+  return (APPROVAL_WORDS as readonly string[]).includes(sentence);
 }
 
 export function readApprovalReply(text: string | null | undefined): ApprovalReading {
