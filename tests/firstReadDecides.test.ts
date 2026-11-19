@@ -3,7 +3,7 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import { openAssignmentCard } from "../src/worker/services/dealIntake";
 import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
-import { sweepOnce, type SweepCard } from "../src/worker/services/workSweep";
+import { claimNextCard, sweepOnce, type SweepCard } from "../src/worker/services/workSweep";
 import type { ReplyIntentReader } from "../src/worker/services/replyIntent";
 import type { QuestionAnswerer } from "../src/worker/services/questionRouting";
 import { reportRun, type SeatRunRow } from "../src/worker/ai/subscriptionSeats";
@@ -41,7 +41,26 @@ const fakeIntentReader: ReplyIntentReader = async (_env, input) => {
 };
 const fakeAnswerer: QuestionAnswerer = async (_env, input) => ({ confident: true, answer: `Yes — ${input.question.slice(0, 60)}`, reason: "fake", aiRunId: null });
 const RUNNERS = { webPropertyChange: (e: Env, c: SweepCard) => runWebPropertyChangeCard(e, c, undefined, undefined, fakeAnswerer, fakeIntentReader) };
-const runOnce = (id: string) => runWebPropertyChangeCard(env, { id } as SweepCard, undefined, undefined, fakeAnswerer, fakeIntentReader);
+/**
+ * Would the sweep start this card right now (real time)? Claims until it gets this card or nothing, then gives every
+ * claim back. The wait for the first read is the sweep's own (`claimNextCard`): a card whose partner email is younger
+ * than ten minutes with no settled first read is never started.
+ */
+async function sweepWouldStart(id: string): Promise<boolean> {
+  const taken: string[] = [];
+  let hit = false;
+  for (let i = 0; i < 12; i++) {
+    const c = await claimNextCard(env, new Date());
+    if (!c) break;
+    taken.push(c.id);
+    if (c.id === id) {
+      hit = true;
+      break;
+    }
+  }
+  for (const c of taken) await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL, work_attempts = MAX(COALESCE(work_attempts, 1) - 1, 0) WHERE id = ?1").bind(c).run();
+  return hit;
+}
 
 async function tickFor(id: string) {
   for (let i = 0; i < 8; i++) {
@@ -164,8 +183,7 @@ describe("land / publish (#531)", () => {
   it("with no first read nothing moves for ten minutes; then the keywords act (rebuild + landing approval) and say so", async () => {
     const p = await atPreview("fr land fallback");
     const inm = await replies(p, APPROVED_PUBLISH);
-    const waiting = await runOnce(p.id);
-    expect(waiting.held, "his words wait for the first read").toBe(true);
+    expect(await sweepWouldStart(p.id), "his words wait for the first read").toBe(false);
     let row = (await readWebPropertyChange(env, p.id))!;
     expect([row.refresh_intent, row.land_approved_at]).toEqual([null, null]);
     await aged(p.id, inm, 11);
@@ -191,7 +209,7 @@ describe("rebuild", () => {
   it("with no first read it waits, then the keywords read it as go-ahead and land it, logged as the fallback", async () => {
     const p = await atPreview("fr rebuild fallback");
     const inm = await replies(p, QUIET_CHANGE);
-    expect((await runOnce(p.id)).held).toBe(true);
+    expect(await sweepWouldStart(p.id)).toBe(false);
     expect((await readWebPropertyChange(env, p.id))!.land_approved_at).toBeNull();
     await aged(p.id, inm, 11);
     await tickFor(p.id);
@@ -218,7 +236,7 @@ describe("hand-off refusal (#546)", () => {
     const before = sent.length;
     const inm = await replies(p, "Hand this to Bob.");
     expect(notHandedOff(before), "the door does not refuse before the first read").toHaveLength(0);
-    expect((await runOnce(p.id)).held).toBe(true);
+    expect(await sweepWouldStart(p.id)).toBe(false);
     expect(notHandedOff(before)).toHaveLength(0);
     await aged(p.id, inm, 11);
     await tickFor(p.id);
@@ -270,7 +288,7 @@ describe("re-target the property (#542)", () => {
   it("with no first read the plan is not parked for ten minutes; then it goes where the keywords put it", async () => {
     const id = await opened("fr site fallback", `${REQUEST}site02`);
     const inm = await hisEmail(id, new Date().toISOString());
-    expect((await runOnce(id)).held).toBe(true);
+    expect(await sweepWouldStart(id)).toBe(false);
     expect(await liveJob(id), "nothing parked before the first read").toBeNull();
     await env.WP_OS_DB.prepare("UPDATE inbound_message SET received_at = ?2 WHERE id = ?1").bind(inm, new Date(Date.now() - 11 * 60_000).toISOString()).run();
     await tickFor(id);

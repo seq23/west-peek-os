@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import { appendEvent } from "../events";
-import { FIRST_READ_WAIT_MINUTES, firstReadDecision, type FirstReadDecision } from "./partnerUnderstood";
+import { firstReadDecision, type FirstReadDecision } from "./partnerUnderstood";
 import { propertiesIn, type WebProperty } from "../../shared/intake/webPropertyChange";
 
 /**
@@ -14,9 +14,7 @@ import { propertiesIn, type WebProperty } from "../../shared/intake/webPropertyC
  */
 export type FirstRead =
   | { state: "READ"; decision: FirstReadDecision; messageId: string }
-  /** His email is younger than the wait and its first read has not settled: nothing acts yet. */
-  | { state: "WAIT"; until: string; messageId: string }
-  /** No email to read (a button on the card), or the read settled without a decision, or the wait is over. */
+  /** No email to read (a button on the card), or its read settled without a decision, or the ten minutes passed. */
   | { state: "ABSENT"; messageId: string | null };
 
 /** How far past the moment a reply answered the card its message may have been stored (the door links it after). */
@@ -25,15 +23,17 @@ const LINK_SLACK_MS = 2 * 60_000;
 /**
  * The first read of the authenticated partner email behind a reply on this card (or the card it was handed on from):
  * the newest one received after `after` and no later than `until` (+ the door's slack). Never throws.
+ *
+ * THE WAIT IS THE SWEEP'S, ALREADY (`claimNextCard`, 15 Nov 2026): a card with a partner email from the last
+ * FIRST_READ_WAIT_MINUTES whose first read has not settled is not started at all. So by the time a runner reads this,
+ * the first read is in, settled without a decision (no reader was there), or ten minutes late: the keywords' turn.
  */
-export async function firstReadOf(env: Env, cardId: string, opts: { after?: string | null; until?: string | null; now?: Date } = {}): Promise<FirstRead> {
-  const now = opts.now ?? new Date();
+export async function firstReadOf(env: Env, cardId: string, opts: { after?: string | null; until?: string | null } = {}): Promise<FirstRead> {
   const until = opts.until ? new Date(Date.parse(opts.until) + LINK_SLACK_MS).toISOString() : null;
-  let row: { id: string; received_at: string; u_state: string | null } | null = null;
+  let row: { id: string } | null = null;
   try {
     row = await env.WP_OS_DB.prepare(
-      `SELECT m.id, m.received_at, u.state AS u_state
-         FROM inbound_message m LEFT JOIN partner_understood u ON u.inbound_message_id = m.id
+      `SELECT m.id FROM inbound_message m
         WHERE m.work_card_id IN (?1, COALESCE((SELECT assigned_from_card_id FROM work_card WHERE id = ?1), ?1))
           AND json_extract(m.mail_authority_json, '$.partner') IS NOT NULL
           AND (?2 IS NULL OR m.received_at > ?2)
@@ -41,17 +41,13 @@ export async function firstReadOf(env: Env, cardId: string, opts: { after?: stri
         ORDER BY m.received_at DESC LIMIT 1`,
     )
       .bind(cardId, opts.after ?? null, until)
-      .first<{ id: string; received_at: string; u_state: string | null }>();
+      .first<{ id: string }>();
   } catch {
     row = null;
   }
   if (!row) return { state: "ABSENT", messageId: null };
   const decision = await firstReadDecision(env, row.id).catch(() => null);
-  if (decision) return { state: "READ", decision, messageId: row.id };
-  const waitEnds = Date.parse(row.received_at) + FIRST_READ_WAIT_MINUTES * 60_000;
-  const unsettled = row.u_state === null || row.u_state === "CLAIMED";
-  if (unsettled && now.getTime() < waitEnds) return { state: "WAIT", until: new Date(waitEnds).toISOString(), messageId: row.id };
-  return { state: "ABSENT", messageId: row.id };
+  return decision ? { state: "READ", decision, messageId: row.id } : { state: "ABSENT", messageId: row.id };
 }
 
 /**
