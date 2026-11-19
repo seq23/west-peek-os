@@ -1235,7 +1235,10 @@ export function buildAnswersText(report: Pick<LocalJobReport, "notes" | "items">
   const lines: string[] = [];
   for (const i of report.items ?? []) {
     const note = (i.done_when ?? []).map((c) => c.note ?? "").find((n) => n.trim()) ?? i.note ?? "";
-    lines.push(`• ${i.state === "done" ? "Done" : i.state === "partial" ? "Partly done" : "Not done"}: ${String(i.item).slice(0, 200)}${note && /\b(?:confirm|answer|estimate|recommend|tell me)\b/i.test(String(i.item)) ? ` — ${note.slice(0, 700)}` : ""}`);
+    // An item not done always says why (19 Nov 2026, wc_76e6d7ff): "Partly done" alone left the partner guessing.
+    const why = i.state === "done" ? "" : String(i.note ?? "").trim() || ((i.done_when ?? []).find((c) => c.met !== true && c.note?.trim())?.note ?? "");
+    const said = why ? why.replace(/\bRUNBOOK_FORBIDS:\s*/g, "the site's runbook says ") : note && /\b(?:confirm|answer|estimate|recommend|tell me)\b/i.test(String(i.item)) ? note : "";
+    lines.push(`• ${i.state === "done" ? "Done" : i.state === "partial" ? "Partly done" : "Not done"}: ${String(i.item).slice(0, 200)}${said ? ` — ${said.slice(0, 700)}` : ""}`);
   }
   const notes = String(report.notes ?? "").replace(/\s*\(cost \$[\d.]+\)\s*$/, "").trim();
   if (notes) lines.push("", notes.slice(0, 2500));

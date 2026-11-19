@@ -2222,7 +2222,7 @@ export function itemsOf(result) {
     .map((i) => ({
       item: String(i.item).slice(0, 200),
       state: i.state,
-      note: i.note ? String(i.note).slice(0, 300) : undefined,
+      note: i.note ? String(i.note).slice(0, 700) : undefined,
       ...(Array.isArray(i.done_when) ? { done_when: i.done_when.slice(0, 20).map((c) => ({ check: String(c?.check ?? "").slice(0, 200), met: c?.met === true, ...(c?.note ? { note: String(c.note).slice(0, 300) } : {}) })) } : {}),
       ...(i.blocked_by ? { blocked_by: String(i.blocked_by).slice(0, 40) } : {}),
     }));

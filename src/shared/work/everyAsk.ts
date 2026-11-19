@@ -36,6 +36,7 @@ export interface AskLine {
 export interface DoneItem {
   item: string;
   state: string;
+  note?: string | null;
   done_when?: ReadonlyArray<{ check: string; met: boolean; note?: string }> | null;
   /** Why an item is not finished: only what the partner alone can supply, or work they dated themselves. */
   blocked_by?: string | null;
@@ -175,6 +176,20 @@ export function heldByLanding(check: { check?: string | null }, blockedBy?: stri
   return blockedBy === "after_land" || AFTER_LAND.test(String(check?.check ?? ""));
 }
 
+/*
+ * A RUNBOOK "NEVER" RULE IS A DECISION THE BUILD RECORDS, NOT AN UNFINISHED ITEM (partner tail, 19 Nov 2026,
+ * wc_76e6d7ff). Scooter asked to take a song through contest entry "with my own access"; the topbarz RUNBOOK says
+ * "Scooter Taylor's own track is never in the vote", so the BUILD did the nearest thing it allows (a demo song he runs
+ * from the preview), met every done-when check, and reported the item "partial" with `RUNBOOK_FORBIDS: "…"`, exactly
+ * as the prompt orders ("That is a decision, not a question"). The v1.0 bar refused the finished build for the word
+ * "partial", no preview went to him before his partner call, and every retry could only report the same rule. An item
+ * whose every check is met and whose note quotes the RUNBOOK's own words passes; the preview email names the rule.
+ */
+const RUNBOOK_RULE = /\bRUNBOOK_FORBIDS:\s*["\u201C][^"\u201D]{8,400}["\u201D]/;
+export function runbookForbids(note: string | null | undefined): boolean {
+  return RUNBOOK_RULE.test(String(note ?? ""));
+}
+
 export function buildProblems(input: { items?: readonly DoneItem[] | null; missingSecrets?: number; missingMaterials?: number; partnerText?: string }): string[] {
   const items = input.items ?? [];
   if (items.length === 0) return ["it did not report each ask against its done-when checks (no `items` list)"];
@@ -191,6 +206,7 @@ export function buildProblems(input: { items?: readonly DoneItem[] | null; missi
     const by = String(i.blocked_by ?? "");
     const held = (by === "missing_secret" && (input.missingSecrets ?? 0) > 0) || (by === "missing_material" && (input.missingMaterials ?? 0) > 0) || by === "partner_dated";
     if (held) continue;
+    if (unmet.length === 0 && runbookForbids(i.note)) continue;
     if (unmet.length && unmet.every((c) => heldByLanding(c, by))) continue;
     if (unmet.length && input.partnerText && unmet.every((c) => partnerReserved(c.note, input.partnerText!))) continue;
     if (unmet.length && input.partnerText && unmet.every((c) => quoteSplitsOff(c.note, input.partnerText!))) continue;
