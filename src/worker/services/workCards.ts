@@ -131,7 +131,7 @@ export function displayState(card: { state: string; held_at?: string | null }): 
  * Walking back always lands on OPEN rather than on whatever the card was before. What it was is
  * history; what it is now is undecided, and reconstructing a prior state would be inventing one.
  *
- * `tests/work-cards.test.ts` asserts this table against the moves the page can offer, so the two
+ * `tests/workCardModel.test.ts` asserts this table against the moves the page can offer, so the two
  * cannot drift apart again in silence.
  *
  * HELD (0227, Wave D) IS NOT IN THIS TABLE AT ALL, because it is not a value of `state` — see the
@@ -720,8 +720,7 @@ export async function handleListWorkCards(ctx: RouteContext): Promise<Response> 
  * is a single JOIN over every live card and this one is a single JOIN over one row by id; sharing a
  * function would mean either running the board's query for one card (wasteful) or splitting it in a
  * way that has to stay in lockstep by hand — the same "two components, one list" trap this repo
- * keeps a rule against. `tests/wave-a-card-page.test.ts` pins that the two never diverge in the
- * fields they share.
+ * keeps a rule against.
  */
 export async function handleGetWorkCard(ctx: RouteContext): Promise<Response> {
   const card = await getVisibleWorkCard(ctx.env, ctx.identity!, ctx.params.id!);

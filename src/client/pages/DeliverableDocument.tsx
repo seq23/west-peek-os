@@ -28,8 +28,8 @@ export function DeliverableDocument({ body, testId }: { body: string; testId?: s
       {sections.map((section, si) => (
         <section className="deliverable-doc-section" key={`${section.heading ?? "intro"}-${si}`}>
           {/* NOT A HEADING ELEMENT, deliberately. The shell renders the page title as an h2, a
-              section as h3 and a thing inside one as h4; `dealRecordLayout.test.ts` forbids h5
-              anywhere in the client because "there is nothing deeper to navigate to". A run-of-show
+              section as h3 and a thing inside one as h4; the client has no h5 (`tests/documentReading.test.ts` holds
+              the document reader to it) because "there is nothing deeper to navigate to". A run-of-show
               label is exactly that — a label on a block, not a destination — so it is a <p> that
               reads as an eyebrow, and the document outline stays honest. */}
           {section.heading && <p className="deliverable-doc-heading">{section.heading}</p>}

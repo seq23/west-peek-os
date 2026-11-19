@@ -344,7 +344,7 @@ function CompanyCard({ company: c, sectors, arrivedHere, onSaved, onNavigate }: 
       )}
 
       {/* Passed: the VALUES recede — `deal-row-out` on each dd, not on the list. Measured, not
-          chosen by eye (e2e/deals-surfaces.spec.ts composites opacity): ink at .72 on white is
+          chosen by eye (e2e/deals-surfaces.companies.spec.ts composites opacity): ink at .72 on white is
           7.5:1, but the 11px muted labels would be 3.2:1, so the labels keep their strength. */}
       <dl className="company-facts">
         {!left && (

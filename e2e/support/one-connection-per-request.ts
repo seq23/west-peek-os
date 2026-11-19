@@ -35,9 +35,8 @@ import http from "node:http";
  * failure above, it names itself. Measured on main: 3 recovered GETs in 10 CI runs, no POST lost.
  * Closing it means serving the journeys without `wrangler dev`; not done for a race that rare.
  *
- * GUARDED BY `tests/e2e-one-connection-per-request.test.ts` (counts the TCP connections Playwright's
- * `request` actually opens), `e2e/zz-one-connection-per-request.spec.ts` (the same count inside a
- * real journey worker), and `validate:green-means-something` (the config must import this file).
+ * GUARDED BY `e2e/zz-one-connection-per-request.spec.ts` (counts the TCP connections `request`
+ * opens inside a real journey worker), and `validate:green-means-something` (the config must import this file).
  */
 
 const INSTALLED = Symbol.for("wpos.e2e.oneConnectionPerRequest");

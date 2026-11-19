@@ -11,7 +11,7 @@ import { buildShelf, emailSnippet, plainTitle, shelfCount, type ShelfDoc } from 
 
 /**
  * THE ROOMS & EVENTS REDESIGN (owner approved the v8 mock-up, 23 Oct 2026) — the parts that are data
- * rather than layout. Layout is pinned in tests/roomsLayout.test.ts; the sponsor flow in
+ * rather than layout. Layout is pinned in e2e/rooms-four-pages.spec.ts; the sponsor flow in
  * tests/roomSponsorsWaitForSchedule.test.ts.
  */
 

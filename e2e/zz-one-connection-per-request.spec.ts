@@ -5,8 +5,8 @@ import { expect, test } from "@playwright/test";
 /**
  * INSIDE A REAL JOURNEY WORKER, the `request` fixture opens one TCP connection per request.
  *
- * `tests/e2e-one-connection-per-request.test.ts` proves the module works; this proves the config
- * that loads it is what the journeys actually run under — the worker process is where p7's
+ * This proves the module works AND that the config which loads it is what the journeys actually
+ * run under — the worker process is where p7's
  * "socket hang up" happened (23 Sep 2026), and a guard installed only in the runner would pass that
  * test and change nothing here. The server keeps every socket open and never answers
  * `Connection: close`, which is what `workerd` does; a pooled socket would be reused.

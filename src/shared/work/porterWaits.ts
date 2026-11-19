@@ -17,8 +17,8 @@
  * without a recommended default" and their siblings cannot come back. Two of these are the owner's
  * standing waits (the preview before landing, 27 Sep; a key the vault does not hold, 6 Oct); the
  * rest are a partner's own stop, a genuine ambiguity only they can settle, or an infrastructure
- * wait that clears itself and says so. `tests/porterWaits.test.ts` asserts the three parts on every
- * kind.
+ * wait that clears itself and says so. `tests/partnerServiceRulesAllKinds.test.ts` asserts the three parts
+ * on every kind.
  */
 
 export type PorterWaitKind =

@@ -20,7 +20,19 @@ import { execSync } from "node:child_process";
 
 const run = (cmd, opts = {}) => execSync(cmd, { stdio: "pipe", encoding: "utf8", ...opts });
 const say = (s) => process.stdout.write(`${s}\n`);
-const die = (s) => { process.stderr.write(`\n✗ ${s}\n`); process.exit(1); };
+const die = (s, code = 1) => { process.stderr.write(`\n✗ ${s}\n`); process.exit(code); };
+
+/**
+ * A failed command says WHY, every time: its stdout, its stderr, the message and the exit code,
+ * and the script exits non-zero with that code. Two steps once printed one stream only and stopped
+ * on a blank reason (14 Sep and 13 Nov 2026); one step was not guarded at all, and the health check
+ * swallowed its error and then claimed "deployed and verified". Every step goes through here.
+ */
+const fail = (what, err) => {
+  const code = Number.isInteger(err?.status) && err.status > 0 ? err.status : 1;
+  const parts = [err?.stdout, err?.stderr, err?.message].filter((s) => s && String(s).trim()).map((s) => String(s).trim());
+  die(`${what} (exit code ${err?.status ?? "none"}):\n${parts.join("\n") || "(the command printed nothing)"}`, code);
+};
 
 /**
  * The 7403 trap, and why this is defaulted rather than demanded.
@@ -51,13 +63,16 @@ try {
   const applied = [...out.matchAll(/│ (\d{4}_[a-z_]+\.sql)\s+│ ✅/g)].map((m) => m[1]);
   say(applied.length ? `     applied: ${applied.join(", ")}` : "     nothing to apply");
 } catch (err) {
-  // BOTH STREAMS. wrangler writes its refusal to stderr; printing stdout alone produced
-  // "migration apply failed:" followed by nothing (14 Sep 2026), which is a stop with no reason.
-  die(`migration apply failed:\n${[err.stdout, err.stderr, err.message].filter((s) => s && String(s).trim()).join("\n")}`);
+  fail("migration apply failed", err);
 }
 
 say("2/4  verifying no migrations are pending…");
-const list = run("npx wrangler d1 migrations list WP_OS_DB --env production --remote");
+let list;
+try {
+  list = run("npx wrangler d1 migrations list WP_OS_DB --env production --remote");
+} catch (err) {
+  fail("could not list migrations", err);
+}
 if (!/No migrations to apply/i.test(list)) {
   // The whole reason this script exists. A pending migration here means the next step would ship
   // code against a schema that does not have what it needs.
@@ -72,20 +87,20 @@ try {
   const version = out.match(/Current Version ID:\s*([0-9a-f-]+)/)?.[1];
   say(`     deployed ${version ?? "(version id not reported)"}`);
 } catch (err) {
-  // BOTH STREAMS, as for the migration step above: wrangler writes its refusal to stderr, and stdout
-  // alone ended at the bindings table with no reason (13 Nov 2026, Cloudflare API code 10013).
-  die(`deploy failed:\n${[err.stdout, err.stderr, err.message].filter((s) => s && String(s).trim()).join("\n")}`);
+  fail("deploy failed", err);
 }
 
 say("4/4  verifying the worker answers…");
+let health;
 try {
-  const code = run(`curl -s -o /dev/null -w "%{http_code}" --max-time 20 https://os.joinwestpeek.com/api/health`).trim();
-  // 302 is correct and expected: Cloudflare Access redirects an unauthenticated probe to its login.
-  // A 5xx would mean the worker is up but broken, which is the case worth catching here.
-  if (code === "302" || code === "200") say(`     ok (HTTP ${code} — Access redirect is expected)`);
-  else die(`health check returned HTTP ${code}`);
-} catch {
-  say("     could not reach the health endpoint; check manually");
+  health = run(`curl -s -o /dev/null -w "%{http_code}" --max-time 20 https://os.joinwestpeek.com/api/health`).trim();
+} catch (err) {
+  // Not "check manually" and then "✓ deployed and verified": an unreached worker is unverified.
+  fail("the deployed worker could not be reached", err);
 }
+// 302 is correct and expected: Cloudflare Access redirects an unauthenticated probe to its login.
+// A 5xx would mean the worker is up but broken, which is the case worth catching here.
+if (health === "302" || health === "200") say(`     ok (HTTP ${health} — Access redirect is expected)`);
+else die(`health check returned HTTP ${health}`);
 
 say("\n✓ deployed and verified");

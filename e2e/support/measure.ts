@@ -7,7 +7,7 @@ import { expect, type Page } from "@playwright/test";
  * 24px, 0 horizontal overflow and 0 wrapped clickables, at four widths. The Deals tabs are held to
  * the same four, plus the touch floor: below 900px every button is 44px (the stylesheet's own
  * promise), and on a coarse pointer so is every link. The measurers live here so each tab's
- * `describe` in `deals-surfaces.spec.ts` is a few lines that say WHICH surfaces to measure, not
+ * `describe` in the `deals-surfaces.*.spec.ts` files (one per tab) is a few lines that say WHICH surfaces to measure, not
  * how — and so a number that only ever existed in a design review is measured on every run.
  *
  * RULE 0: EXAMINING NOTHING IS A FAILURE. `measureSurface` asserts it found text and clickables

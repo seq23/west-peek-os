@@ -2201,7 +2201,7 @@ function NetworkPage({ me }: { me: MeResponse }) {
                   delivery_id: `d_${Date.now()}`,
                   // `company` because it is a LINKED field (networkAdapter.ts LINKED_FIELDS): since #206 only a
                   // field West Peek OS holds on a linked person can conflict, so a practice run on
-                  // relationship_owner could never show the conflict path. tests/networkPracticeRun.test.ts pins it.
+                  // relationship_owner could never show the conflict path.
                   fields: { email: "founder@example.com", company },
                 },
               ],

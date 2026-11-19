@@ -9,8 +9,7 @@
  * surface rendered its empty state and every button operated on a record that did not exist.
  *
  * A test suite can prove that a button works. It cannot prove that the firm was ever loaded into
- * the system. This script is the missing step, and `tests/commissioned.test.ts` is the missing
- * assertion.
+ * the system. This script is the missing step.
  *
  * IT DRIVES THE REAL API, NEVER SQL. Writing rows straight into D1 would be faster and would be a
  * lie: it would skip authorize(), skip the event_record trail, and skip every validation the

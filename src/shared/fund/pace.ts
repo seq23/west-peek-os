@@ -1,6 +1,6 @@
 /**
  * THE PACE AGAINST THE PLAN — the one chart Fund strategy draws that Portfolio does not
- * (design/FUND_STRATEGY_DESIGN.md §3.2). Pure arithmetic and geometry, so `tests/pace.test.ts`
+ * (design/FUND_STRATEGY_DESIGN.md §3.2). Pure arithmetic and geometry, so `tests/fundStrategyBuild.test.ts`
  * can drive every state without a DOM and the page only draws what this returns.
  *
  * WHAT IT NEVER DOES: guess the origin. The plan line runs from first close over the investment
