@@ -752,6 +752,51 @@ export async function sendProcessNoteOnce(env: Env): Promise<string> {
   return `deck process note emailed to ${out.recipients.join(" and ")}`;
 }
 
+/**
+ * ONE REMINDER OF THE PROCESS, ON THE NOTE'S OWN THREAD (owner, 19 Nov 2026: "reply to the thread and send a follow up
+ * reminder"). Sent when someone asks (the Mac's ops door below), never on a timer. Refused when the note was never sent,
+ * when a partner has already started a round or replied on a deck thread since (the ask is answered), and when one went
+ * today already. A reply to it lands on the deck preview like any reply on the note.
+ */
+const PROCESS_REMINDER_EVENT = "deck_preview.process_reminder_sent";
+
+export function processReminderText(): string {
+  return [
+    "Hi Scooter and Sequoia,",
+    `A quick reminder of how we start on the Fund I deck. When you're ready, either of you sends a new email from your West Peek address to os@joinwestpeek.com that says "${PROCESS_NOTE_START_WORDS}." "Let's work on the deck" and "Start the deck" work too. A reply to this email won't start it; it has to be a new email.`,
+    "I then email you both the link to the latest deck. You reply to that email with any changes in plain words, and when it's right, each of you replies \"approved\" and I send the PDF.",
+    "Nothing is needed until you're ready.",
+    SIGN_OFF,
+  ].join("\n\n");
+}
+
+export async function sendProcessReminder(env: Env, now: Date = new Date()): Promise<{ sent: boolean; reason: string; to?: string[] }> {
+  const note = await env.WP_OS_DB.prepare("SELECT object_id, firm_scope, created_at FROM event_record WHERE event_type = ?1 ORDER BY created_at LIMIT 1").bind(PROCESS_NOTE_EVENT).first<{ object_id: string; firm_scope: string; created_at: string }>();
+  if (!note) return { sent: false, reason: "the process note was never sent, so there is no thread to remind on" };
+  const answered = await env.WP_OS_DB.prepare("SELECT event_type FROM event_record WHERE event_type IN ('deck_preview.start_asked', 'deck_preview.reply') AND created_at > ?1 LIMIT 1").bind(note.created_at).first<{ event_type: string }>();
+  if (answered) return { sent: false, reason: `already answered: a partner has ${answered.event_type === "deck_preview.reply" ? "replied on the deck" : "started a deck round"} since the note` };
+  const day = now.toISOString().slice(0, 10);
+  const today = await env.WP_OS_DB.prepare("SELECT 1 AS x FROM event_record WHERE event_type = ?1 AND json_extract(payload_json, '$.day') = ?2 LIMIT 1").bind(PROCESS_REMINDER_EVENT, day).first();
+  if (today) return { sent: false, reason: "a reminder already went today" };
+  const thread = await env.WP_OS_DB.prepare("SELECT token FROM email_thread WHERE object_type = 'deck_preview' AND object_id = ?1 AND subject = ?2 ORDER BY created_at LIMIT 1").bind(note.object_id, PROCESS_NOTE_SUBJECT).first<{ token: string }>();
+  if (!thread) return { sent: false, reason: "the process note's thread is not on record" };
+  const out = await sendPartnersLetter(env, {
+    to: previewRecipients(), employee: DECK_OWNER, subject: `Re: ${PROCESS_NOTE_SUBJECT}`, text: processReminderText(), replyOnThread: thread.token,
+    objectType: "deck_preview", objectId: note.object_id, firmScope: note.firm_scope,
+  });
+  if (!out.sent) return { sent: false, reason: out.reason };
+  await appendEvent(env, { eventType: PROCESS_REMINDER_EVENT, actorType: "system", actorId: "aie_preston", objectType: "deck_preview", objectId: note.object_id, firmScope: note.firm_scope, payload: { to: out.recipients, thread: thread.token, day } });
+  return { sent: true, reason: out.reason, to: out.recipients };
+}
+
+/** POST /api/deck/process-reminder — the Mac's own identity only (scripts/ops/deck-process-reminder.mjs). */
+export async function handleDeckProcessReminder(ctx: RouteContext): Promise<Response> {
+  const { SUBSCRIPTION_CLAIMER_EMAIL } = await import("../auth");
+  if (ctx.identity?.email.toLowerCase() !== SUBSCRIPTION_CLAIMER_EMAIL) return json({ error: "forbidden", detail: "this door is the Mac's own identity only" }, { status: 403 });
+  const out = await sendProcessReminder(ctx.env);
+  return json(out, { status: out.sent ? 200 : 409 });
+}
+
 // ── HTTP ──────────────────────────────────────────────────────────────────────────────────────
 
 function partnerOnly(ctx: RouteContext): Actor | Response {

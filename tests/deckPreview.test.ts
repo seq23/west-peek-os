@@ -435,4 +435,26 @@ describe("the deck process note", () => {
     expect(mine[0]!.text).toContain("Sequoia: Wren, wren@joinwestpeek.com");
     expect(mine[0]!.text).toContain("Scooter: Walker, walker@joinwestpeek.com");
   });
+
+  it("reminds both partners once a day on the note's own thread, and never once a partner has answered", async () => {
+    const { sendProcessReminder, processReminderText, PROCESS_NOTE_START_WORDS, PROCESS_NOTE_SUBJECT } = await import("../src/worker/services/deckPreview");
+    const { fundDeckStart } = await import("../src/shared/deck/start");
+    expect(processReminderText()).toContain(`"${PROCESS_NOTE_START_WORDS}."`);
+    expect(fundDeckStart({ subject: "", body: `${PROCESS_NOTE_START_WORDS}.`, hasAttachment: false })).not.toBeNull();
+    const note = (await env.WP_OS_DB.prepare("SELECT token FROM email_thread WHERE subject = ?1 ORDER BY created_at LIMIT 1").bind(PROCESS_NOTE_SUBJECT).first<{ token: string }>())!;
+    const before = sends.length;
+    const day = new Date("2030-01-02T15:00:00Z");
+    expect(await sendProcessReminder(env, day)).toMatchObject({ sent: true });
+    expect(await sendProcessReminder(env, day), "once a day").toMatchObject({ sent: false, reason: "a reminder already went today" });
+    const mine = sends.slice(before);
+    expect(mine).toHaveLength(1);
+    expect(mine[0]!.subject).toBe(`Re: ${PROCESS_NOTE_SUBJECT}`);
+    expect(mine[0]!.headers["In-Reply-To"]).toBe(threadReference(note.token));
+    expect(mine[0]!.to).toContain("scooter@");
+    expect(mine[0]!.to).toContain("sequoia@");
+    expect(mine[0]!.to.split(",")).toHaveLength(2);
+    await env.WP_OS_DB.prepare("INSERT INTO event_record (id, event_type, actor_type, actor_id, object_type, object_id, firm_scope, payload_json, created_at) VALUES ('evt_rem_answered', 'deck_preview.start_asked', 'firm_user', 'x', 'deck_preview', 'x', 'west-peek', '{}', '2030-01-03T00:00:00.000Z')").run();
+    expect(await sendProcessReminder(env, new Date("2030-01-04T15:00:00Z"))).toMatchObject({ sent: false, reason: expect.stringMatching(/^already answered/) });
+    expect(sends.length).toBe(before + 1);
+  });
 });
