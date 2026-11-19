@@ -2147,6 +2147,16 @@ async function applyPlan(env: Env, card: WebPropertyChangeCard, row: WebProperty
    * RECEIVED then DONE. A single ask, or a plan that is not ready, still sends the email.
    * `validate:no-land-without-approval` pins that this branch is entered only on both facts.
    */
+  /*
+   * HE ASKED TO SEE THE PLAN FIRST (19 Nov 2026, wc_59ef2d40): "Flag any questions before turning an assumption into
+   * a fixed rule … Please confirm the plan and remaining gaps." The plan was taken as approved by his email anyway,
+   * and he wrote back: "The card says I approved the plan and answered the three decisions. I haven't." When his
+   * own words ask for the plan or the questions before the build, the plan waits for his word, asks or none.
+   */
+  if (planFirstIn(`${fresh.request_text ?? ""}\n${fresh.ask ?? ""}`)) {
+    const why = await blockWithAsks(env, card, fresh, asks);
+    return { finished: false, blocked: true, progressed: false, detail: why };
+  }
   if (asks.length === 0 && fresh.publish_ready === 1) return proceedWithoutAsking(env, card, fresh);
   /*
    * EVERY ASK CARRIES A RECOMMENDATION → THE PLAN NEVER WAITS (owner, 27 Sep 2026). A partner's
@@ -2158,6 +2168,12 @@ async function applyPlan(env: Env, card: WebPropertyChangeCard, row: WebProperty
   if (everyAskRecommended(asks)) return approveByRequest(env, card, fresh, asks);
   const why = await blockWithAsks(env, card, fresh, asks);
   return { finished: false, blocked: true, progressed: false, detail: why };
+}
+
+/** The partner's own words asking to see the plan, or the open questions, before anything is built (19 Nov 2026). */
+const PLAN_FIRST = /\b(?:confirm the plan|(?:send|show) me (?:the|a) plan|plan (?:to me )?first|flag (?:any|the|your) questions(?: first| before)|ask me (?:first|before)|check with me (?:first|before)|before (?:you )?(?:start|build)(?:ing)?,? (?:send|show|ask|check))/i;
+export function planFirstIn(ask: string): boolean {
+  return PLAN_FIRST.test(ask);
 }
 
 /** How `plan_approved_by` reads when the request itself approved the plan. Never a partner's id or email, so 0241's primary-only trigger does not read it as a person. */
@@ -2220,13 +2236,13 @@ async function approveByRequest(env: Env, card: WebPropertyChangeCard, row: WebP
 export async function releasePlansNobodyNeedsToAnswer(env: Env): Promise<string[]> {
   const rows = (
     await env.WP_OS_DB.prepare(
-      `SELECT c.id, w.asks_json FROM work_card c JOIN web_property_change w ON w.work_card_id = c.id
+      `SELECT c.id, w.asks_json, w.ask, w.request_text FROM work_card c JOIN web_property_change w ON w.work_card_id = c.id
         WHERE c.kind = ?1 AND c.state = 'BLOCKED' AND c.held_at IS NULL AND c.block_reason = 'a_question_for_you'
           AND w.phase = 'PLAN' AND w.plan_filed_at IS NOT NULL AND w.plan_approved_at IS NULL
           AND c.block_answered_at IS NULL`,
     )
       .bind(WEB_PROPERTY_CHANGE_KIND)
-      .all<{ id: string; asks_json: string | null }>()
+      .all<{ id: string; asks_json: string | null; ask: string | null; request_text: string | null }>()
   ).results ?? [];
   const released: string[] = [];
   for (const r of rows) {
@@ -2236,7 +2252,7 @@ export async function releasePlansNobodyNeedsToAnswer(env: Env): Promise<string[
     } catch {
       asks = [];
     }
-    if (!everyAskRecommended(asks)) continue;
+    if (!everyAskRecommended(asks) || planFirstIn(`${r.request_text ?? ""}\n${r.ask ?? ""}`)) continue;
     await env.WP_OS_DB.prepare(
       `UPDATE work_card
           SET state = 'OPEN', work_attempts = 0, work_steps = 0, lease_until = NULL,

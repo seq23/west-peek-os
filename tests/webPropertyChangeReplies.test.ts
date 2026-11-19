@@ -545,6 +545,18 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     expect(sent.filter((m) => m.to === SEQUOIA).pop()!.subject).toBe("ACTION REQUIRED: Porter: Hero photo rights B: Plan ready");
   });
 
+  it("he asked to confirm the plan first: every ask recommended, and still the plan waits for his word (19 Nov 2026, wc_59ef2d40)", async () => {
+    const chiefId = await openAssignmentCard(env, { subject: "quote tool", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: `quote tool: westpeek.ventures. Flag any questions before turning an assumption into a fixed rule. Please confirm the plan and remaining gaps. package: https://drive.google.com/drive/folders/${FOLDER}quoteA`, limits: EMAILED_TASK_LIMITS, emlKey: null });
+    const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
+    await tickFor(id);
+    await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "quote tool", how: "build", done_when: ["it works on the preview"] }], document: "# Plan: quote tool", decided: [], asks: [{ question: "Contingency on owner hours?", recommended: "Yes, as the brief's examples do." }], publish_ready: true, placeholders: [] });
+    await tickFor(id);
+    expect((await card(id)).state).toBe("BLOCKED");
+    expect((await readWebPropertyChange(env, id))!.plan_approved_at, "never approved on his behalf").toBeNull();
+    const released = await (await import("../src/worker/services/webPropertyChange")).releasePlansNobodyNeedsToAnswer(env);
+    expect(released, "the sweep does not release it either").not.toContain(id);
+  });
+
   it("a card BLOCKED at its plan before the rule, every ask recommended, is released by the sweep and goes to BUILD on its own — one FYI, never the question twice", async () => {
     const before = sent.length;
     // Blocked the old way: a real question. Then the asks are rewritten as the Mac would have filed

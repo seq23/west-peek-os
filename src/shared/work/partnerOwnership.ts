@@ -83,6 +83,12 @@ const NAME = `(${PARTNERS.flatMap((p) => [p.email, p.firstName.toLowerCase()])
   .join("|")})`;
 const OBJ = "(?:this|it|the card|this card|this one|this job|the job|the rest|the rest of it|everything|the whole thing)";
 const PRONOUNS = /^(?:me|us|you|him|her|them|myself)$/i;
+/**
+ * "Please move it to the Productions dashboard project" (19 Nov 2026, wc_59ef2d40) is moving the WORK to another
+ * place, never handing it to a person called "the": Scooter got a "not handed off" email for it. A determiner or a
+ * place word after "to" names no one.
+ */
+const NOT_A_PERSON = /^(?:the|a|an|this|that|these|those|my|our|your|his|her|its|their|another|other|some|production|preview|staging|main|live|repo|project|site|dashboard|folder|drive)$/i;
 
 /**
  * CLEARLY A HAND-OFF (owner, 23 Sep 2026: "we need to be able to interpret more than just 'hand this
@@ -187,7 +193,7 @@ export function ownershipIntentIn(text: string | null | undefined, writer?: stri
     const any = HAND_OFF_ANYONE.exec(s);
     if (any) {
       const named = any[1]!.replace(/[.,;:!?]+$/, "");
-      if (!PRONOUNS.test(named) && !partnerFor(named)) return { kind: "HAND_OFF", to: null, named };
+      if (!PRONOUNS.test(named) && !NOT_A_PERSON.test(named) && !partnerFor(named)) return { kind: "HAND_OFF", to: null, named };
     }
   }
   for (const s of sentences) if (TAKE_BACK_CLEAR.some((re) => re.test(s))) return { kind: "TAKE_BACK" };
