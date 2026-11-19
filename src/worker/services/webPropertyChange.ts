@@ -1142,6 +1142,53 @@ const NOT_ASKING_YET = `Nothing lands until you say you are ready, as you asked,
  * the BUILD's notes and items, and the preview email carried only the link and the technical proof: the answers
  * stayed on the Mac. Composed here from the report, kept on the row, printed in the preview email. Pure.
  */
+/*
+ * A REFUSED BUILD'S ANSWERS STILL REACH HIM (partner tail, 19 Nov 2026, wc_c548d043). Scooter wrote "Flag any additional
+ * cost before starting." The first BUILD answered "No cost" in its notes, was refused on a live-links check, and the
+ * accepted retry's notes ("Only the live-links proof was missing…") replaced them: the preview email never said there
+ * was no cost. The refused run's notes are kept on its history entry, and the accepted build of the same round carries
+ * every one it does not already say.
+ */
+export function refusedNotesOf(report: Pick<LocalJobReport, "notes">): string | undefined {
+  const notes = String(report.notes ?? "").replace(/\s*\(cost \$[\d.]+\)\s*$/, "").trim();
+  return notes ? notes.slice(0, 1500) : undefined;
+}
+
+/** The notes of the REFUSED builds since the last accepted one, oldest first. Pure. */
+export function refusedNotesThisRound(history: ReadonlyArray<{ phase?: unknown; status?: unknown; notes?: unknown }>): string[] {
+  const out: string[] = [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const e = history[i]!;
+    if (e.phase !== "BUILD") break;
+    if (e.status === "REFUSED") {
+      if (typeof e.notes === "string" && e.notes.trim()) out.unshift(e.notes.trim());
+      continue;
+    }
+    // An "ok" directly followed by its own REFUSED is that refused run; any other ok is an accepted build: stop there.
+    const next = history[i + 1];
+    if (e.status === "ok" && (i === history.length - 1 || next?.status === "REFUSED")) continue;
+    break;
+  }
+  return out;
+}
+
+export function withRefusedNotes(answers: string | null, refused: readonly string[]): string | null {
+  const extra = refused.filter((n) => !(answers ?? "").includes(n.slice(0, 120)));
+  if (!extra.length) return answers;
+  return [answers ?? "", ...extra.map((n) => `From an earlier try this round: ${n}`)].filter(Boolean).join("\n\n").slice(0, 4000);
+}
+
+async function answersWithRefused(env: Env, cardId: string, report: Pick<LocalJobReport, "notes" | "items">): Promise<string | null> {
+  const fresh = await readWebPropertyChange(env, cardId);
+  let parsed: unknown = [];
+  try {
+    parsed = JSON.parse(fresh?.run_history_json || "[]");
+  } catch {
+    parsed = [];
+  }
+  return withRefusedNotes(buildAnswersText(report), refusedNotesThisRound(Array.isArray(parsed) ? parsed : []));
+}
+
 export function buildAnswersText(report: Pick<LocalJobReport, "notes" | "items">): string | null {
   const lines: string[] = [];
   for (const i of report.items ?? []) {
@@ -1647,7 +1694,7 @@ export async function applyReport(
     const problems = buildProblems({ items: report.items, missingSecrets: report.missing_secrets?.length ?? 0, missingMaterials: report.missing_materials?.length ?? 0, partnerText });
     if (problems.length) {
       const line = buildRefusalLine(problems);
-      await recordHistory(env, { ...row, run_history_json: (await readWebPropertyChange(env, card.id))?.run_history_json ?? row.run_history_json }, { run_id: run.id, phase: "BUILD", status: "REFUSED", reason: line.slice(0, 1200) });
+      await recordHistory(env, { ...row, run_history_json: (await readWebPropertyChange(env, card.id))?.run_history_json ?? row.run_history_json }, { run_id: run.id, phase: "BUILD", status: "REFUSED", reason: line.slice(0, 1200), notes: refusedNotesOf(report) });
       await appendFinding(env, card.id, line);
       return { finished: false, blocked: false, progressed: false, detail: line.slice(0, 600) };
     }
@@ -2585,7 +2632,7 @@ async function applyBuild(env: Env, card: WebPropertyChangeCard, row: WebPropert
     check_url: report.check_url ?? null,
     check_green_at: state === "GREEN" ? now : null,
     build_proof: (report.proof ?? "").slice(0, 8000) || null,
-    build_answers: buildAnswersText(report),
+    build_answers: await answersWithRefused(env, card.id, report),
     preview_url: report.preview_url ?? null,
     changed_pages_json: changedPages,
   });
@@ -2610,7 +2657,7 @@ async function applyBuild(env: Env, card: WebPropertyChangeCard, row: WebPropert
    * `land ""` and `gh pr view null`. What the update wrote to the row and what the next phase read
    * from memory were two different rows. One object, every field the report carries.
    */
-  const fresh: WebPropertyChangeRow = { ...row, pr_url: report.pr_url, pr_number: report.pr_number ?? row.pr_number ?? null, branch: report.branch ?? row.branch ?? null, check_state: "GREEN", check_green_at: now, check_url: report.check_url ?? row.check_url ?? null, preview_url: report.preview_url ?? null, changed_pages_json: changedPages, build_proof: (report.proof ?? "").slice(0, 8000) || null, build_answers: buildAnswersText(report) };
+  const fresh: WebPropertyChangeRow = { ...row, pr_url: report.pr_url, pr_number: report.pr_number ?? row.pr_number ?? null, branch: report.branch ?? row.branch ?? null, check_state: "GREEN", check_green_at: now, check_url: report.check_url ?? row.check_url ?? null, preview_url: report.preview_url ?? null, changed_pages_json: changedPages, build_proof: (report.proof ?? "").slice(0, 8000) || null, build_answers: (await readWebPropertyChange(env, card.id))?.build_answers ?? buildAnswersText(report) };
   /*
    * A CHANGE THAT PREVIEWS FIRST STOPS HERE (21 Sep 2026). Not publish-ready, or the partner said
    * "preview": the second email carries the preview link, the PR, the placeholders and the proof,
