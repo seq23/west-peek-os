@@ -3459,7 +3459,9 @@ export async function runWebPropertyChangeCard(
       const why = await blockWithAsks(env, card, row, asks);
       return { finished: false, blocked: true, progressed: false, detail: `Not an approval of the plan (the first read of his reply); it waits for his word. ${why}` };
     }
-    if ((firstReadPlan ?? keywordPlan) === "stop") {
+    // A STOP HOLDS: the first read's stop, or with no first read the keywords' (validate:no-land-without-approval).
+    const planStop = (firstReadPlan ?? keywordPlan) === "stop";
+    if (planStop) {
       // "no" / "hold off" HOLDS THE CARD. The text is on the record; the plan stands; nothing is built.
       await appendFinding(env, card.id, `Not approved by ${card.requested_by_email ?? "the partner"}: "${answer.slice(0, 600)}". The plan stands as written until they say what changes, or drop it.`);
       const why = await blockCard(env, card, {

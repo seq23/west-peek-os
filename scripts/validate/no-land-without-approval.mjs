@@ -205,8 +205,11 @@ export function checkWorker(src) {
     // still block the card and return before plan_approved_at is written.
     const intentAt = runner.indexOf("const intent: ReplyIntent = await readReplyIntent(env, { cardId: card.id, firmScope: card.firm_scope, text: answer }, readIntent);");
     if (intentAt < 0 || (approveAt >= 0 && intentAt > approveAt)) violations.push("the runner approves a plan without reading the reply's intent first — a stop said in more words than \"no\" would build");
-    const refused = runner.match(/if\s*\(intent\.kind\s*===\s*"STOP"\)\s*\{([\s\S]*?)\n\s{4}\}/)?.[1] ?? "";
-    if (!refused) violations.push("the runner has no STOP branch — a reply that says stop would be treated as answers and build");
+    // 19 Nov 2026 (the first read decides): the stop is the first read's, or the keywords' when there is none. The
+    // keyword reading must still feed it, and the branch must still block and return.
+    const refused = runner.match(/if\s*\((?:intent\.kind\s*===\s*"STOP"|planStop)\)\s*\{([\s\S]*?)\n\s{4}\}/)?.[1] ?? "";
+    const keywordFeedsStop = /if\s*\(intent\.kind\s*===\s*"STOP"\)/.test(runner) || (/const keywordPlan = intent\.kind === "STOP" \? "stop"/.test(runner) && /const planStop = \(firstReadPlan \?\? keywordPlan\) === "stop";/.test(runner));
+    if (!refused || !keywordFeedsStop) violations.push("the runner has no STOP branch — a reply that says stop would be treated as answers and build");
     else if (!/return\s*\{/.test(refused) || !/blockCard\(/.test(refused)) violations.push("the runner's STOP branch does not block the card and return — \"no\" would fall through to plan_approved_at");
     const requesterAt = runner.indexOf("block_answered_by !== requester.firmUserId");
     if (requesterAt < 0 || requesterAt > readAt) violations.push("the runner does not check the answer came from the requesting partner before reading it as an approval");
@@ -733,8 +736,10 @@ async function selfTest() {
   const noReading = worker.replace("const reading = readApprovalReply(answer);", "const reading = { kind: \"APPROVED\" };");
   // With the plan's reading gone, the only `readApprovalReply(answer)` left is the preview stage's — after plan_approved_at.
   say(checkWorker(noReading).violations.some((v) => /without reading the reply|before it reads the reply/.test(v)), "a runner that approves without reading the reply is caught");
-  const noRefusal = worker.replace(/if \(intent\.kind === "STOP"\) \{[\s\S]*?\n    \}\n/, "");
+  const noRefusal = worker.replace(/if \((?:intent\.kind === "STOP"|planStop)\) \{[\s\S]*?\n    \}\n/, "");
   say(checkWorker(noRefusal).violations.some((v) => /no STOP branch/.test(v)), "a runner whose STOP branch is gone is caught");
+  const keywordStopIgnored = worker.replace('const keywordPlan = intent.kind === "STOP" ? "stop"', 'const keywordPlan = false ? "stop"');
+  say(checkWorker(keywordStopIgnored).violations.some((v) => /no STOP branch/.test(v)), "a runner whose stop no longer reads the keywords when there is no first read is caught");
   const noIntent = worker.replace("const intent: ReplyIntent = await readReplyIntent(env, { cardId: card.id, firmScope: card.firm_scope, text: answer }, readIntent);", "const intent: ReplyIntent = { kind: \"CONTINUE\", changes: null, question: null, keyword: null, source: \"KEYWORD\", reason: \"\", aiRunId: null };");
   say(checkWorker(noIntent).violations.some((v) => /without reading the reply's intent/.test(v)), "a runner that approves without reading the reply's intent is caught");
   const noRequester = worker.replace("card.block_answered_by !== requester.firmUserId", "false");
