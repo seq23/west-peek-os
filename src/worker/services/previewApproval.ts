@@ -912,9 +912,14 @@ export async function resurfaceStalePreviews(
             last_nagged_at, nag_count, firm_scope
        FROM preview_approval
       WHERE state = 'PENDING'
+        -- 19 Nov 2026: NOTHING MORE CAN COME OF IT, SO IT STOPS RINGING. A preview whose card was cancelled (the
+        -- employee will not work it again), or one that lapsed and has already said so once, is not waiting on anyone
+        -- (the 22 Sep "Porter dropped it" note rang 28 times). The lapsed one still surfaces on Home; it just stops nagging.
+        AND NOT EXISTS (SELECT 1 FROM work_card w WHERE w.id = preview_approval.work_card_id AND w.state = 'CANCELLED')
+        AND NOT (expires_at <= ?1 AND last_nagged_at IS NOT NULL AND last_nagged_at >= expires_at)
       ORDER BY created_at ASC
       LIMIT 5`,
-  ).all<{
+  ).bind(now.toISOString()).all<{
     id: string;
     employee: string;
     what: string;

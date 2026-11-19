@@ -282,6 +282,21 @@ describe("an unanswered preview nags, and a lapsed one surfaces", () => {
     expect(again.nagged).not.toContain(filed.approval.id);
   });
 
+  it("stops nagging once nothing more can come of it: its card cancelled, or lapsed and already said so", async () => {
+    captureFetch([]);
+    const file = (what: string) => filePreview(env, { employee: "Porter", what, subject: `Porter: ${what}`, bodyText: "the body", recipient: "founder@startup.example", laneReason: "DEFAULT_OUTSIDE_FIRM", owner: SCOOTER_PARTNER });
+    const lapsed = await file("a note that lapsed");
+    await t.db.prepare("UPDATE preview_approval SET expires_at = ?2 WHERE id = ?1").bind(lapsed.approval.id, new Date(Date.now() - 3600_000).toISOString()).run();
+    const at = (h: number) => new Date(Date.now() + h * 3600_000);
+    expect((await resurfaceStalePreviews(env, at(PREVIEW_NAG_AFTER_HOURS + 1))).nagged, "it says once that it lapsed").toContain(lapsed.approval.id);
+    expect((await resurfaceStalePreviews(env, at(3 * PREVIEW_NAG_AFTER_HOURS + 1))).nagged, "and then stops").not.toContain(lapsed.approval.id);
+
+    const dropped = await file("a note on a cancelled job");
+    await t.db.prepare("INSERT INTO work_card (id, title, owner_type, owner_id, state, priority, firm_scope, created_by) VALUES ('wc_nag_cancelled', 'cancelled job', 'AI', 'aie_porter', 'CANCELLED', 'NORMAL', 'west-peek', 'system:work_sweep')").run();
+    await t.db.prepare("UPDATE preview_approval SET work_card_id = 'wc_nag_cancelled' WHERE id = ?1").bind(dropped.approval.id).run();
+    expect((await resurfaceStalePreviews(env, at(PREVIEW_NAG_AFTER_HOURS + 1))).nagged, "its card is cancelled").not.toContain(dropped.approval.id);
+  });
+
   it("SURFACES a lapsed preview instead of dropping it, and sends it back rather than out", async () => {
     const sent: Sent[] = [];
     captureFetch(sent);
