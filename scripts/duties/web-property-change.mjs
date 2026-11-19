@@ -1028,6 +1028,31 @@ async function headOf(worktree) {
   }
 }
 
+/**
+ * #510 (19 Nov 2026): WHICH OTHER OPEN JOBS THIS BRANCH NOW CARRIES. Scooter asked for the GA tags and the
+ * privacy pages in one preview; the build merged their branches in, and the GA card still asked him to approve
+ * its own preview. The script reads the fact from git (`isAncestor(branch)` → true when that branch's head is in
+ * HEAD), never from the model's summary. Pure over `isAncestor`, so it is self-tested.
+ */
+export function carriedJobsOf(job, isAncestor) {
+  const jobs = Array.isArray(job?.other_open_jobs) ? job.other_open_jobs.filter((j) => j && j.card_id && j.branch) : [];
+  const carried = [];
+  for (const j of jobs) {
+    try {
+      if (isAncestor(String(j.branch)) === true) carried.push(String(j.card_id));
+    } catch {
+      /* an unreadable branch is not carried */
+    }
+  }
+  return carried;
+}
+
+function branchIsAncestor(worktree, branch) {
+  const fetched = spawnSync("git", ["fetch", "--quiet", "origin", branch], { cwd: worktree, stdio: "ignore", timeout: 120_000 });
+  if (fetched.status !== 0) return false;
+  return spawnSync("git", ["merge-base", "--is-ancestor", "FETCH_HEAD", "HEAD"], { cwd: worktree, stdio: "ignore", timeout: 60_000 }).status === 0;
+}
+
 /** A staged rebuild's own PR (see `stagedBranchFor`): pushed and opened by the script, once. */
 async function ensureStagedPr(names, job, progress) {
   const open = await prFor(names.worktree, names.branch).catch(() => null);
@@ -1640,9 +1665,11 @@ export async function run(job, ctx) {
     const firstRun = previewUrl ? await firstRunOn(names.worktree, previewUrl, ctx.env, secrets.allowed, progress) : { ok: true, line: "first run: this repo has no preview to run it on" };
     if (!firstRun.ok) return { phase, status: "failed", reason: firstRun.line, ...carried };
     const changedFiles = await changedFilesFor(names.worktree, pr.number, headBefore);
+    const carriedJobs = carriedJobsOf(job, (branch) => branchIsAncestor(names.worktree, branch));
     return {
       phase,
       status: "ok",
+      ...(carriedJobs.length ? { carried_jobs: carriedJobs } : {}),
       pr_url: pr.url,
       pr_number: pr.number,
       branch: names.branch,
@@ -2638,6 +2665,11 @@ function selfTest() {
       renderContext({ phase: "BUILD", other_open_jobs: [{ card_id: "wc_ga", title: "GA4 on the three sites", pr_url: "https://github.com/o/r/pull/39", branch: "work/wpc-ga" }] }, { branch: "b" }).includes("branch work/wpc-ga") &&
       !renderContext({ phase: "BUILD", other_open_jobs: [] }, { branch: "b" }).includes("OTHER OPEN JOBS") &&
       otherJobsBlock({ phase: "PLAN", other_open_jobs: [{ card_id: "wc_ga" }] }).length === 0],
+    ["#510: a branch whose head this build contains is reported carried; one it does not, or cannot read, is not", () => {
+      const job = { other_open_jobs: [{ card_id: "wc_ga", branch: "work/wpc-ga" }, { card_id: "wc_priv", branch: "work/wpc-priv" }, { card_id: "wc_odd", branch: "work/wpc-odd" }, { card_id: "wc_nobranch", branch: null }] };
+      const got = carriedJobsOf(job, (b) => { if (b === "work/wpc-odd") throw new Error("gone"); return b === "work/wpc-ga"; });
+      return JSON.stringify(got) === JSON.stringify(["wc_ga"]) && carriedJobsOf({}, () => true).length === 0;
+    }],
     ["a retry is told why the last attempt was refused; a first attempt hears nothing", () =>
       renderContext({ phase: "BUILD", last_refusal: "1 passage(s) of the private document are in what this PR adds, at views.mjs:459" }, { branch: "b" }).includes("THE LAST ATTEMPT WAS REFUSED") &&
       renderContext({ phase: "BUILD", last_refusal: "1 passage(s) of the private document are in what this PR adds, at views.mjs:459" }, { branch: "b" }).includes("views.mjs:459") &&

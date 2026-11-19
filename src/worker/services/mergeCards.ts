@@ -67,6 +67,8 @@ interface CardRow {
 }
 
 export const SCRIPT_ACTOR = "system:script";
+/** #510: a site BUILD that proved it carries another open job's branch folds that card in (`foldCarriedJobs`). */
+export const CARRIED_BY_BUILD_ACTOR = "system:build";
 
 async function readCard(env: Env, id: string): Promise<CardRow | null> {
   return env.WP_OS_DB.prepare("SELECT id, title, kind, state, requested_by_email, merged_into_card_id, firm_scope FROM work_card WHERE id = ?1")
@@ -76,6 +78,7 @@ async function readCard(env: Env, id: string): Promise<CardRow | null> {
 
 function actorName(actor: string): string {
   if (actor === SCRIPT_ACTOR) return "the merge script";
+  if (actor === CARRIED_BY_BUILD_ACTOR) return "Porter's build, which carries its branch";
   return partnerByFirmUserId(actor)?.firstName ?? partnerByEmail(actor)?.firstName ?? actor;
 }
 
@@ -151,7 +154,7 @@ export async function mergeCard(env: Env, input: MergeInput): Promise<MergeOutco
   await bullet(env, f.id, `Merged into card ${i.id} ("${i.title.slice(0, 80)}") by ${who}: ${n(moved.messages, "email")}, ${n(moved.threads, "thread")} and ${n(moved.files, "file")} now read on that card; this one stays cancelled.${why}`);
   await bullet(env, i.id, `Folded in card ${f.id} ("${f.title.slice(0, 80)}", ${f.state.toLowerCase()} → cancelled) by ${who}: ${n(moved.messages, "email")}, ${n(moved.threads, "thread")} and ${n(moved.files, "file")} moved here; its notices and hand-offs read in this card's trail.${why}`);
 
-  const isScript = input.actor === SCRIPT_ACTOR;
+  const isScript = input.actor === SCRIPT_ACTOR || input.actor === CARRIED_BY_BUILD_ACTOR;
   await appendEvent(env, {
     eventType: "work_card.merged",
     actorType: isScript ? "system" : "firm_user",
