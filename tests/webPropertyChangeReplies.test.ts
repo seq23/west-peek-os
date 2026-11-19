@@ -1052,6 +1052,34 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     expect(row.land_approved_at).toBeTruthy();
   });
 
+  it("PREVIEW: 'Hey Porter! Approved. Please publish … send the live links' approves the landing: his words are built and it lands on green, never a second preview to approve (19 Nov 2026, wc_c548d043)", async () => {
+    const p = await atPreview("preview approved-with-words");
+    const previews = async () => (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PREVIEW' AND sent = 1").bind(p.id).first<{ n: number }>())!.n;
+    const before = await previews();
+    await replyFrom(SCOOTER, "Hey Porter!\n\nApproved. Please publish the new site and the privacy pages, as directed in my last email. Keep Clarity off.\n\nPlease send the live links when complete.", await p.token());
+    await tickFor(p.id);
+    let row = (await readWebPropertyChange(env, p.id))!;
+    expect(row.refresh_intent, "his words still reach the build").toBe("CHANGES");
+    expect(row.rebuilt_for).toMatch(/send the live links/);
+    expect(row.land_approved_at, "his approval is recorded at once").toBeTruthy();
+    expect(row.land_approved_by).toBe("fu_scooter_taylor");
+    await macReports(p.id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: row.pr_url, pr_number: 9, changed: true, head_sha: "approved-1", check_state: "GREEN", preview_url: "https://p9a.west-peek-ventures.pages.dev" });
+    expect((await tickFor(p.id)).summary, "green lands").toMatch(/landing is queued/);
+    expect((await liveJobFor(p.id))?.purpose).toMatch(/LAND/);
+    expect(await previews(), "no second preview email for a preview he approved").toBe(before);
+    row = (await readWebPropertyChange(env, p.id))!;
+    expect(row.phase).toBe("LAND");
+  });
+
+  it("PREVIEW: words that change the site WITHOUT an opening approval still send a fresh preview, and a greeting alone never approves (19 Nov 2026)", async () => {
+    const p = await atPreview("preview greeting-changes");
+    await replyFrom(SCOOTER, "Hey Porter!\n\nPlease make the hero photo the group shot.", await p.token());
+    await tickFor(p.id);
+    const row = (await readWebPropertyChange(env, p.id))!;
+    expect(row.refresh_intent).toBe("CHANGES");
+    expect(row.land_approved_at, "changes alone land nothing").toBeNull();
+  });
+
   it("PREVIEW: a change said while the rebuild is on the Mac is kept, and the finished build rebuilds for it with the first round; one preview carries both (15 Nov 2026, wc_c548d043)", async () => {
     const p = await atPreview("preview kept");
     const previews = async () => (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PREVIEW' AND sent = 1").bind(p.id).first<{ n: number }>())!.n;
