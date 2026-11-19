@@ -149,7 +149,8 @@ built ask with no `done_when` is refused by the OS and planned again.
 `{ "item": "…", "state": "done", "done_when": [{ "check": "…", "met": true, "note": "how you proved it" }] }`.
 A check not met is refused by the OS, and the build is run again, unless what holds it is something only the
 partner can supply: `"blocked_by": "missing_secret"` (with the key in `missing_secrets`), `"missing_material"`
-(with the file in `missing_materials`), or `"partner_dated"` (work they dated themselves). A check the partner kept
+(with the file in `missing_materials`), `"partner_dated"` (work they dated themselves), or `"after_land"` (a check
+only the merge can meet, such as the live links: LAND curls them and the DONE email lists them). A check the partner kept
 for himself ("We will walk the rules before any money view ships", "I approve each step") is reported `"met": false`
 with his exact words quoted in its `note`; the OS accepts it as his, not as unfinished work.
 

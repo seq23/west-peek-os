@@ -28,3 +28,23 @@ describe("a step held until the partner sends something is his (17 Nov 2026)", (
     expect(buildProblems({ items: item("no quote at all, copy to come"), partnerText: HIS })).toHaveLength(1);
   });
 });
+
+/*
+ * wc_c548d043, 19 Nov 2026: "Please reply with the live links once complete." The BUILD did every fix and reported the
+ * live-links check unmet because only LAND can curl a live site; the v1.0 bar refused it and the retries could only fail.
+ */
+describe("a check only the merge can meet is LAND's, not an unfinished build (19 Nov 2026)", () => {
+  const links = (check: string, blocked_by?: string) => [
+    { item: "WP mark for the favicon.", state: "done", done_when: [{ check: "favicon is the WP mark", met: true }] },
+    { item: "Please reply with the live links once complete.", state: "partial", ...(blocked_by ? { blocked_by } : {}), done_when: [{ check, met: false, note: "This belongs to the LAND phase after the merge" }] },
+  ];
+  it("'Live links curled after the merge' and blocked_by after_land are accepted", () => {
+    expect(buildProblems({ items: links("Live links curled after the merge") })).toEqual([]);
+    expect(buildProblems({ items: links("Each site's link answers 200", "after_land") })).toEqual([]);
+    expect(buildProblems({ items: links("Live links curled once it lands") })).toEqual([]);
+  });
+  it("a check that does not wait on the merge is still refused", () => {
+    expect(buildProblems({ items: links("Live links listed in the summary") })).toHaveLength(1);
+    expect(buildProblems({ items: links("Favicon replaced on every page") })).toHaveLength(1);
+  });
+});
