@@ -150,4 +150,9 @@ describe("placeholders are counted from what a visitor sees, never a class name 
     expect(visiblePlaceholders([page]).length).toBeGreaterThanOrEqual(5);
     expect(visiblePlaceholders(['<div class="tile--todo photo-to-come"></div><p>Our team</p>'])).toEqual([]);
   });
+  it("a sentence that goes on past 'need to come' is copy, never a stand-in (19 Nov 2026, wc_76e6d7ff)", () => {
+    const prize = "<p>Travel is not included, so winners outside New York need to come to New York.</p><p>We need you to confirm your email.</p>";
+    expect(visiblePlaceholders([prize])).toEqual([]);
+    expect(visiblePlaceholders(["<p>Partner logo to come</p><p>Date to confirm.</p><p>Prize to come soon</p>"])).toEqual(["Partner logo to come", "Date to confirm", "Prize to come"]);
+  });
 });
