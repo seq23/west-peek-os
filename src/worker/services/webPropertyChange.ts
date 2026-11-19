@@ -1735,6 +1735,7 @@ export async function applyReport(
     const shown = row.rebuilt_for ? (await rebuildWords(env, card.id, row)).forPartner : asked;
     return { finished: false, blocked: false, progressed: false, detail: `BUILD moved nothing for ${shown ? `the partner's request ("${shown.slice(0, 120)}")` : "the instruction on the card"}: no commit on the branch, so no new preview. It runs again.` };
   }
+  if (report.phase === "BUILD" && report.carried_jobs?.length) await foldCarriedJobs(env, card, row, report.carried_jobs);
   // 0240: the material set this build used, and what it filled in since the last preview.
   // 15 Nov 2026 (wc_c548d043): filled ONLY when material for it arrived — never because the build stopped listing it.
   let stillMissing: MissingMaterial[] | null = null;
@@ -3940,6 +3941,30 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
 
 
 /** Open website jobs on the same repo as this card, with their PR and branch (18 Nov 2026). Never throws. */
+/**
+ * #510 (19 Nov 2026, wc_c548d043): A JOB THIS BUILD CARRIES IS FOLDED IN. Scooter asked for the GA tags and the
+ * privacy pages to ship together with the new Productions site, and to close the older analytics-only update
+ * without publishing it. The build merged their branches into this PR, yet each card kept its own preview, its
+ * own reminder and its own "approved?" ask. Each card the Mac proved carried (its branch head is in this PR) and
+ * that is still one of this repo's open jobs for the same partner is merged into this card through the one merge
+ * writer: cancelled, its emails and threads moved here, its queued run abandoned. Nothing is emailed.
+ */
+export async function foldCarriedJobs(env: Env, card: { id: string; requested_by_email?: string | null }, row: Pick<WebPropertyChangeRow, "target_repo" | "pr_url">, carried: readonly string[]): Promise<string[]> {
+  const open = new Map((await otherOpenJobsOnRepo(env, card.id, row.target_repo)).map((j) => [j.card_id, j]));
+  const mine = (card.requested_by_email ?? "").trim().toLowerCase();
+  const { mergeCard, CARRIED_BY_BUILD_ACTOR } = await import("./mergeCards");
+  const folded: string[] = [];
+  for (const id of [...new Set(carried)]) {
+    const job = open.get(id);
+    if (!job) continue;
+    const by = await env.WP_OS_DB.prepare("SELECT requested_by_email FROM work_card WHERE id = ?1").bind(id).first<{ requested_by_email: string | null }>();
+    if (!mine || (by?.requested_by_email ?? "").trim().toLowerCase() !== mine) continue;
+    const out = await mergeCard(env, { fromCardId: id, intoCardId: card.id, actor: CARRIED_BY_BUILD_ACTOR, reason: `its branch ${job.branch ?? ""} ships inside ${row.pr_url ?? "this card's PR"}, so it is approved and published with this card, never on its own` });
+    if (out.ok) folded.push(id);
+  }
+  return folded;
+}
+
 export async function otherOpenJobsOnRepo(env: Env, cardId: string, targetRepo: string | null): Promise<Array<{ card_id: string; title: string; pr_url: string | null; branch: string | null }>> {
   if (!targetRepo) return [];
   try {

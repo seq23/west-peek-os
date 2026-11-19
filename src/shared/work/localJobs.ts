@@ -379,6 +379,12 @@ export interface LocalJobReport {
   visible_placeholders?: string[];
   /** 0237, PLAN: the DRIVE_MANIFEST paths the build will use; BUILD fetches them. */
   assets?: string[];
+  /**
+   * #510 (19 Nov 2026), BUILD: the other open jobs (`other_open_jobs`) whose branch head this PR now
+   * contains, read by the SCRIPT with `git merge-base --is-ancestor`, never the model's word. The
+   * Worker folds each into this card, so the partner is never asked to approve a PR this one carries.
+   */
+  carried_jobs?: string[];
 }
 
 const PHASES = new Set<string>(WEB_PROPERTY_CHANGE_PHASES);
@@ -441,6 +447,7 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
     ...(Array.isArray(r.missing_materials) ? { missing_materials: readMissingMaterials(r.missing_materials) } : {}),
     ...(Array.isArray(r.visible_placeholders) ? { visible_placeholders: strs(r.visible_placeholders).slice(0, 50) } : {}),
     ...(Array.isArray(r.assets) ? { assets: strs(r.assets) } : {}),
+    ...(Array.isArray(r.carried_jobs) ? { carried_jobs: strs(r.carried_jobs).filter((id) => /^wc_[A-Za-z0-9-]+$/.test(id)).slice(0, 5) } : {}),
     /*
      * #363: THIS READER IS AN ALLOW-LIST, AND `deferred` WAS NEVER ON IT. From 0253 to 13 Nov 2026 the
      * Mac wrote the partner's dated later work into the report, the plan email told him it was "its
