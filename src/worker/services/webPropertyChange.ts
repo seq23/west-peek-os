@@ -1236,9 +1236,18 @@ export function buildAnswersText(report: Pick<LocalJobReport, "notes" | "items">
   for (const i of report.items ?? []) {
     const note = (i.done_when ?? []).map((c) => c.note ?? "").find((n) => n.trim()) ?? i.note ?? "";
     // An item not done always says why (19 Nov 2026, wc_76e6d7ff): "Partly done" alone left the partner guessing.
-    const why = i.state === "done" ? "" : String(i.note ?? "").trim() || ((i.done_when ?? []).find((c) => c.met !== true && c.note?.trim())?.note ?? "");
+    /*
+     * "DONE" WITH A CHECK STILL OPEN IS NOT DONE (19 Nov 2026, wc_59ef2d40). The build marked "Confirm whether the live
+     * dashboard reads and writes my real tracker" done, with its one answering check met:false, blocked_by after_land, and
+     * the preview said "Done:" over a test name: Scooter's question went unanswered and looked answered. An item whose
+     * check is still open says so, and says what it waits on.
+     */
+    const open = i.state === "done" ? (i.done_when ?? []).find((c) => c.met === false) : undefined;
+    const afterLand = Boolean(open) && (i.blocked_by === "after_land" || /\b(after (?:the )?(?:merge|landing)|live|production)\b/i.test(open?.check ?? ""));
+    const why = i.state === "done" && !open ? "" : String(open?.check ?? "").trim() || String(i.note ?? "").trim() || ((i.done_when ?? []).find((c) => c.met !== true && c.note?.trim())?.note ?? "");
     const said = why ? why.replace(/\bRUNBOOK_FORBIDS:\s*/g, "the site's runbook says ") : note && /\b(?:confirm|answer|estimate|recommend|tell me)\b/i.test(String(i.item)) ? note : "";
-    lines.push(`• ${i.state === "done" ? "Done" : i.state === "partial" ? "Partly done" : "Not done"}: ${String(i.item).slice(0, 200)}${said ? ` — ${said.slice(0, 700)}` : ""}`);
+    const label = open ? (afterLand ? "Built on the preview; not answered until it is live, after you approve" : "Partly done") : i.state === "done" ? "Done" : i.state === "partial" ? "Partly done" : "Not done";
+    lines.push(`• ${label}: ${String(i.item).slice(0, 200)}${said ? ` — ${open ? "still to check: " : ""}${said.slice(0, 700)}` : ""}`);
   }
   const notes = String(report.notes ?? "").replace(/\s*\(cost \$[\d.]+\)\s*$/, "").trim();
   if (notes) lines.push("", notes.slice(0, 2500));
