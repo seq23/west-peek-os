@@ -240,6 +240,8 @@ export function keysReallyMissing(names, { runtimeTexts = [], configured = null,
  * missing items as filled in while the page still read "Photo to come", "Name to confirm" and "Placeholder · TNTP's
  * numbers to come": the count keyed on a class name a commit had renamed. Counted from the visible text only:
  * markup, attributes and class names are stripped first, so renaming a class can never hide one. Pure.
+ * A stand-in ENDS at "to come"/"to confirm" (19 Nov 2026, wc_76e6d7ff): "winners outside New York need to come to
+ * New York" is a sentence, not a placeholder, and was filed on the card as a missing item "New York need to come".
  */
 export function visiblePlaceholders(texts) {
   const out = [];
@@ -248,7 +250,7 @@ export function visiblePlaceholders(texts) {
       .replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, " ")
       .replace(/<[^>]*>/g, "\n")
       .replace(/\b(?:class|className|id|data-[\w-]+)\s*=\s*(?:"[^"]*"|'[^']*'|\{[^}]*\})/g, " ");
-    for (const m of visible.matchAll(/Placeholder\s*[·:-]\s*[^\n<>"'`{}]{1,80}|\b[A-Z][\w'’]*(?:[ \t]+[\w'’]+){0,3}[ \t]+to[ \t]+(?:come|confirm)\b/g)) out.push(m[0].trim());
+    for (const m of visible.matchAll(/Placeholder\s*[·:-]\s*[^\n<>"'`{}]{1,80}|\b[A-Z][\w'’]*(?:[ \t]+[\w'’]+){0,3}[ \t]+to[ \t]+(?:come|confirm)\b(?![ \t]+(?!soon\b|later\b)[\w'’])/g)) out.push(m[0].trim());
   }
   return out;
 }
