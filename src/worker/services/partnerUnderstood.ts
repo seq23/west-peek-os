@@ -1024,7 +1024,7 @@ function markPrompt(asks: AskRow[], detail: string): string {
     ...asks.map((a, i) => `${i + 1}. ${a.words}`),
     "",
     "Report:",
-    detail.slice(0, 6000),
+    detail.slice(0, 15000),
   ].join("\n");
 }
 

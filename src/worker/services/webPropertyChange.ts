@@ -586,6 +586,48 @@ export async function openWebPropertyChange(
     .run();
 }
 
+/**
+ * EVERY BUILD'S OWN ITEM LEDGER, FOR THE FINAL REPLY (19 Nov 2026, wc_c548d043). The DONE email marks every ask the
+ * partner made on the job, and the marking read saw only the LAND report: it proves the merge and the live links, so
+ * 28 asks earlier builds had done and previewed (the menu order, the 15% logo, "Turnkey production services", the
+ * Mid-South case) reached Scooter as "Not done". Each BUILD the Mac reported lists its items with their state; the
+ * newest line per item, newest build first, is handed to the marking read beside the final report. Null when the job
+ * has no reported build.
+ */
+export async function buildItemsLedger(env: Env, cardId: string, cap = 9000): Promise<string | null> {
+  const runs = (
+    await env.WP_OS_DB.prepare("SELECT reported_at, output_text FROM subscription_seat_run WHERE work_card_id = ?1 AND run_kind = 'LOCAL_JOB' AND status = 'REPORTED' AND output_text IS NOT NULL ORDER BY reported_at DESC LIMIT 60")
+      .bind(cardId)
+      .all<{ reported_at: string | null; output_text: string }>()
+  ).results ?? [];
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const r of runs) {
+    let out: { phase?: string; items?: Array<{ item?: string; state?: string; note?: string; done_when?: Array<{ note?: string; check?: string }> }> };
+    try {
+      out = JSON.parse(r.output_text);
+    } catch {
+      continue;
+    }
+    if (out.phase !== "BUILD" || !Array.isArray(out.items)) continue;
+    for (const i of out.items) {
+      const item = String(i.item ?? "").replace(/\s+/g, " ").trim();
+      const key = item.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      if (!item || seen.has(key)) continue;
+      seen.add(key);
+      const note = (i.done_when ?? []).map((c) => c.note ?? "").find((n) => n.trim()) ?? i.note ?? "";
+      lines.push(`- ${(r.reported_at ?? "").slice(0, 10)} ${String(i.state ?? "?").toUpperCase()}: ${item.slice(0, 220)}${note ? ` (${note.replace(/\s+/g, " ").slice(0, 140)})` : ""}`);
+    }
+  }
+  if (!lines.length) return null;
+  let text = "";
+  for (const l of lines) {
+    if (text.length + l.length + 1 > cap) break;
+    text += `${l}\n`;
+  }
+  return `Every build on this job, item by item (newest build first; each item's latest state; a DONE item was built and previewed, and the merge above put it live):\n${text}`;
+}
+
 export async function readWebPropertyChange(env: Env, cardId: string): Promise<WebPropertyChangeRow | null> {
   return env.WP_OS_DB.prepare("SELECT * FROM web_property_change WHERE work_card_id = ?1").bind(cardId).first<WebPropertyChangeRow>();
 }

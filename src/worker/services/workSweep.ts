@@ -296,7 +296,9 @@ export async function announceOutcome(
    * marked done / in progress / not done, with why, before the DONE goes. One unmarked ask and nothing is sent: the
    * card is put back to work with the missing asks named (services/partnerUnderstood.ts `asksAtDone`).
    */
-  const asks = outcome === "DONE" ? await (await import("./partnerUnderstood")).asksAtDone(env, card, detail) : null;
+  // A site job's earlier builds did most of what he asked; the marking reads their item ledgers beside the final report.
+  const ledger = outcome === "DONE" && card.kind === WEB_PROPERTY_CHANGE_KIND ? await (await import("./webPropertyChange")).buildItemsLedger(env, card.id) : null;
+  const asks = outcome === "DONE" ? await (await import("./partnerUnderstood")).asksAtDone(env, card, ledger ? `${detail.slice(0, 5000)}\n\n${ledger}` : detail) : null;
   if (asks && !asks.ok) return { emailed: null };
   await notifyPartners(env, {
     kind: "MEETING",
