@@ -240,18 +240,31 @@ export function jobDirFor(runId) {
  * clamshell mode a real desktop (the Mac stays awake), read from `AppleClamshellCausesSleep = No`.
  * Pure parse, self-tested; the read itself never throws — an unreadable ioreg reads as OPEN, so a
  * machine that cannot answer the question behaves exactly as before this guard existed.
+ *
+ * SLEEP DISABLED (19 Nov 2026). `pmset -a disablesleep 1` keeps the Mac awake with the lid shut,
+ * and ioreg still says `AppleClamshellCausesSleep = Yes`. Scooter's "publish after these fixes"
+ * reply queued a BUILD at 05:27 UTC that sat unclaimed while the lid-down Mac was awake and
+ * running other sessions. `pmset -g` printing `SleepDisabled 1` means a closed lid cannot sleep
+ * the Mac, so it is NOT away; an unreadable pmset changes nothing.
  */
-export function lidStateFrom(ioregText) {
+export function lidStateFrom(ioregText, pmsetText = "") {
   const text = String(ioregText ?? "");
   const closed = /"AppleClamshellState"\s*=\s*Yes/.test(text);
-  const causesSleep = !/"AppleClamshellCausesSleep"\s*=\s*No/.test(text);
+  const sleepDisabled = /^\s*SleepDisabled\s+1\b/m.test(String(pmsetText ?? ""));
+  const causesSleep = !sleepDisabled && !/"AppleClamshellCausesSleep"\s*=\s*No/.test(text);
   return { closed, causesSleep, away: closed && causesSleep };
 }
 
 export function readLidState(exec = execFileSync) {
   try {
     const out = exec("ioreg", ["-r", "-k", "AppleClamshellState", "-d", "4"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000 });
-    return lidStateFrom(out);
+    let pmset = "";
+    try {
+      pmset = exec("pmset", ["-g"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000 });
+    } catch {
+      pmset = "";
+    }
+    return lidStateFrom(out, pmset);
   } catch {
     return { closed: false, causesSleep: true, away: false };
   }
@@ -719,6 +732,14 @@ function selfTest() {
       const open = lidStateFrom('  |   "AppleClamshellState" = No\n  |   "AppleClamshellCausesSleep" = Yes');
       const docked = lidStateFrom('  |   "AppleClamshellState" = Yes\n  |   "AppleClamshellCausesSleep" = No');
       return closed.away === true && open.away === false && docked.away === false && docked.closed === true;
+    }],
+    ["a closed lid on a Mac with sleep disabled (pmset SleepDisabled 1) is NOT away; SleepDisabled 0 still is", () => {
+      const ioreg = '  |   "AppleClamshellState" = Yes\n  |   "AppleClamshellCausesSleep" = Yes';
+      const awake = lidStateFrom(ioreg, "System-wide power settings:\n SleepDisabled\t\t1\nCurrently in use:\n sleep 0");
+      const sleeps = lidStateFrom(ioreg, "System-wide power settings:\n SleepDisabled\t\t0\n");
+      const read = readLidState((cmd) => (cmd === "ioreg" ? ioreg : " SleepDisabled\t\t1\n"));
+      const pmsetBroken = readLidState((cmd) => { if (cmd === "pmset") throw new Error("no pmset"); return ioreg; });
+      return awake.away === false && awake.closed === true && sleeps.away === true && read.away === false && pmsetBroken.away === true;
     }],
     ["an unreadable ioreg reads as an OPEN lid, so the guard can only ever hold jobs back on evidence", () => {
       const broken = readLidState(() => { throw new Error("no ioreg here"); });
