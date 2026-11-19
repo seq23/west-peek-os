@@ -15,7 +15,7 @@ import { answerBlock } from "./blocks";
 import { statedCut } from "./partnerWords";
 import { blockReplyDoor, PARTNER_ANSWER_MAX } from "../../shared/work/blocks";
 import { ownershipFromWords, tellPartner, tellSecondaryRefused } from "./handOff";
-import { ownershipOf, roleOf } from "../../shared/work/partnerOwnership";
+import { ownershipIntentIn, ownershipOf, roleOf } from "../../shared/work/partnerOwnership";
 import { LATE_THREAD_NOTE_PREFIX, NEW_EMAIL_NOTE_PREFIX, readApprovalReply } from "../../shared/work/approvalReply";
 import { textBodyOf } from "../effects/mimeAttachments";
 import { storeAttachments } from "./requestMaterials";
@@ -619,7 +619,18 @@ export async function steerFromReply(
      * it moves the card and is never an answer to a block. The authenticated sender decides, through
      * the same rules as the note and the route; a refusal is answered on the sender's own thread.
      */
-    const owned = !takenOver && cardRow && partner ? await ownershipFromWords(env, { cardId: cardRow.id, writer: partner.email, text: written, via: "REPLY", ackOnThread: thread.token }) : null;
+    /*
+     * …EXCEPT A REFUSAL ON A WEBSITE JOB WAITING FOR HIM (owner ruling, 19 Nov 2026: the first read decides). "Please
+     * move it to the Productions dashboard project" was refused at this door as a hand-off to "the" (#546). On a BLOCKED
+     * website card, words that name someone who is not a partner answer the block as any reply does, and the runner
+     * decides the refusal from the first read of his email (webPropertyChange.ts `refusedHandOff`), the keywords only
+     * when there is none. A hand-off to a partner and a take-back still act here: they decide who the reply is from.
+     */
+    const refusalWaitsForFirstRead = Boolean(cardRow && partner && cardRow.kind === WEB_PROPERTY_CHANGE_KIND && cardRow.state === "BLOCKED" && (() => {
+      const said = ownershipIntentIn(written, partner.email);
+      return said?.kind === "HAND_OFF" && !said.to;
+    })());
+    const owned = !takenOver && !refusalWaitsForFirstRead && cardRow && partner ? await ownershipFromWords(env, { cardId: cardRow.id, writer: partner.email, text: written, via: "REPLY", ackOnThread: thread.token }) : null;
     /*
      * A SECONDARY'S "APPROVED" (0241): refused, and told who approves and how to take it over. The
      * reply is still kept as a note below — read as context, never as an approval.

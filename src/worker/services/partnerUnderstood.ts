@@ -2,6 +2,8 @@ import type { Env } from "../env";
 import type { Actor } from "./authorize";
 import { appendEvent } from "../events";
 import { runAi } from "../ai/runAi";
+import { maskPrivateInputs } from "../ai/scrub";
+import { committedLpNamedIn, committedLps } from "../ai/committedLps";
 import { partnerByEmail } from "../../shared/registry/partners";
 import { partnersOwnWords } from "../../shared/intake/replyBody";
 import { textBodyOf } from "../effects/mimeAttachments";
@@ -99,14 +101,35 @@ async function readThrough(env: Env, input: Parameters<SeatRead>[1], ask: { sens
  * THE FIRST READ'S READERS, IN HER ORDER (15 Nov 2026, west-peek-ventures brain, "Out of Claude usage never stops
  * partner mail"): her Claude seat then Codex (one private call: the router's PRIVATE row, never a free lane); then
  * Cloudflare's own Workers AI (never trains on it, so private mail is fine, and it runs with the Mac asleep); then free
- * Gemini, only when the private-data router clears the email (a committed LP's name or a deal term revokes it, so the
- * call is refused before any request is formed); then no first read at all.
+ * Gemini on every email, with committed LPs' names and deal terms masked (owner ruling, 19 Nov 2026,
+ * `maskedGeminiRead`); then no first read at all.
  */
 export const FIRST_READERS: readonly Reader[] = [
   { name: "SEAT", read: (env, input) => readThrough(env, input, { sensitivity: "INTERNAL", budgetContext: { confidential: true } }) },
   { name: "WORKERS_AI", read: (env, input) => readThrough(env, input, { sensitivity: "INTERNAL", budgetContext: { confidential: true, ownBinding: true, providerKey: "workers_ai" } }) },
-  { name: "GEMINI", read: (env, input) => readThrough(env, input, { sensitivity: "PUBLIC", budgetContext: { publicModelApproved: true, providerKey: "google_free" } }) },
+  { name: "GEMINI", read: (env, input) => maskedGeminiRead(env, input) },
 ];
+
+/**
+ * GEMINI READS EVERY PARTNER EMAIL, MASKED (owner ruling, 19 Nov 2026). Before the call, committed LPs' names and deal
+ * terms are replaced by stand-ins (`maskPrivateInputs`: "[Investor A]", "[amount 1]", "[deal term 1]"); the answer is
+ * mapped back before it is parsed, so the brief carries his own words. FAILS CLOSED: if the commitment records cannot
+ * be read, or the masked text still names a committed LP, Gemini is skipped (an `out` reader), never sent unmasked.
+ * The router's own check stays behind it: a marker the mask missed is still refused before any request is formed.
+ */
+async function maskedGeminiRead(env: Env, input: Parameters<SeatRead>[1]): Promise<ReadOut> {
+  let masked: ReturnType<typeof maskPrivateInputs>;
+  try {
+    const committed = await committedLps(env, input.firmScope);
+    if (!committed.readable) return { ok: false, text: "", detail: "masking could not run (the committed-LP records are unreadable); Gemini skipped", out: true };
+    masked = maskPrivateInputs([input.prompt], committed.names);
+    if (committedLpNamedIn(masked.inputs, committed.names)) return { ok: false, text: "", detail: "masking left a committed LP's name; Gemini skipped", out: true };
+  } catch {
+    return { ok: false, text: "", detail: "masking could not run; Gemini skipped", out: true };
+  }
+  const out = await readThrough(env, { ...input, prompt: masked.inputs[0]! }, { sensitivity: "PUBLIC", budgetContext: { publicModelApproved: true, providerKey: "google_free" } });
+  return out.ok ? { ...out, text: masked.restore(out.text) } : out;
+}
 
 /** How long the employee waits for the first read before it starts from the OS's own read (her ruling: ten minutes). */
 export const FIRST_READ_WAIT_MINUTES = 10;
@@ -310,7 +333,38 @@ export function structuredAsks(words: string): { asks: string[]; noted: string[]
  * WHAT HE ASKED, the one reader both the live "Got it" and the dry run use. A numbered email is read from its structure
  * (no model); anything else is read by her seat (`read`) and kept only in his words, else his whole sentences.
  */
+export interface FirstReadDecision {
+  kind: "approve" | "change" | "question" | "stop" | "nothing";
+  property: string | null;
+  handOffTo: string | null;
+  planApproved: boolean | null;
+  holds: string[];
+}
+
+function parseDecision(value: unknown): FirstReadDecision | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const d = value as Record<string, unknown>;
+  if (!(typeof d.kind === "string" && ["approve", "change", "question", "stop", "nothing"].includes(d.kind)) ||
+      !(d.property === null || typeof d.property === "string") ||
+      !(d.handOffTo === null || typeof d.handOffTo === "string") ||
+      !(d.planApproved === null || typeof d.planApproved === "boolean") ||
+      !Array.isArray(d.holds) || !d.holds.every((h: unknown) => typeof h === "string")) return null;
+  return d as unknown as FirstReadDecision;
+}
+
+/** Old briefs, failed reads and malformed decisions have no decision. */
+export async function firstReadDecision(env: Env, inboundMessageId: string): Promise<FirstReadDecision | null> {
+  const row = await env.WP_OS_DB.prepare("SELECT brief_json FROM partner_understood WHERE inbound_message_id = ?1")
+    .bind(inboundMessageId).first<{ brief_json: string | null }>();
+  try {
+    return row?.brief_json ? parseDecision((JSON.parse(row.brief_json) as { decision?: unknown }).decision) : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface Brief {
+  decision: FirstReadDecision | null;
   /** Every separate ask, in his words. */
   asks: string[];
   /** What he said must not happen yet, in his words ("preview first", "no client names without written OK"). */
@@ -397,7 +451,7 @@ export async function understand(
   const questions = mergeQuestions(questionsOf(written), parsed?.questions ?? []);
   const unclear = parsed ? parsed.unclear : [];
   const files = fileNames.map((filename) => ({ filename, purpose: parsed?.files.find((f) => f.filename === filename)?.purpose ?? null }));
-  const brief = (asks: string[]): Brief => ({ asks, holds, questions, unclear, files, reader });
+  const brief = (asks: string[]): Brief => ({ asks, holds, questions, unclear, files, reader, decision: parsed?.decision ?? null });
   const common = { runId, runIds, readerFailed: parsed ? false : readerFailed, readersTried };
   if (structured) return { ...common, none: false, asks: structured.asks, noted: [...structured.noted, ...heard], next: ON_IT, via: parsed ? "MODEL" : "STRUCTURE", brief: brief(structured.asks) };
   if (parsed?.none) return { ...common, none: true, asks: ["nothing asked"], noted: [], next: ON_IT, via: "MODEL", brief: brief([]) };
@@ -418,7 +472,7 @@ export async function understand(
 }
 
 /** `ASK: …` lines kept only when they are his words (found in what he wrote); `NEXT: …`; `NONE` = nothing asked. */
-export function parseUnderstood(text: string, written: string, files: readonly string[] = []): { asks: string[]; next: string | null; none: boolean; holds: string[]; questions: string[]; unclear: Array<{ words: string; missing: string }>; files: Array<{ filename: string; purpose: string }> } {
+export function parseUnderstood(text: string, written: string, files: readonly string[] = []): { asks: string[]; next: string | null; none: boolean; holds: string[]; questions: string[]; unclear: Array<{ words: string; missing: string }>; files: Array<{ filename: string; purpose: string }>; decision: FirstReadDecision | null } {
   const body = norm(written);
   const lines = text.replace(/<think>[\s\S]*?<\/think>/gi, "").split(/\r?\n/).map((l) => l.trim().replace(/^[-*•]\s+/, "")).filter(Boolean);
   const none = lines.some((l) => /^NONE\b/i.test(l)) && !lines.some((l) => /^ASK\s*:/i.test(l));
@@ -455,7 +509,12 @@ export function parseUnderstood(text: string, written: string, files: readonly s
     const name = m ? files.find((f) => f.toLowerCase() === m[1]!.trim().replace(/^["“]|["”]$/g, "").toLowerCase()) : undefined;
     if (m && name && !purposes.some((p) => p.filename === name)) purposes.push({ filename: name, purpose: m[2]!.trim().slice(0, 200) });
   }
-  return { asks: asks.slice(0, MAX_ASKS), next: next ? next.slice(0, 280) : null, none, holds, questions, unclear, files: purposes };
+  let decision: FirstReadDecision | null = null;
+  const decisionLine = lines.find((l) => /^DECISION\s*:/i.test(l));
+  if (decisionLine) {
+    try { decision = parseDecision(JSON.parse(decisionLine.replace(/^DECISION\s*:\s*/i, ""))); } catch { /* an unusable read falls back */ }
+  }
+  return { decision, asks: asks.slice(0, MAX_ASKS), next: next ? next.slice(0, 280) : null, none, holds, questions, unclear, files: purposes };
 }
 
 /** How much of the OS's OTHER context (profile, practices, the card) rides beside the brain's sections, which are never cut. */
@@ -472,7 +531,8 @@ function understoodPrompt(subject: string, written: string, files: readonly stri
     ...(files.length ? [`Then one line per attached file, saying what it is for, from his email: FILE: <file name> :: <what it is for, under 15 words>`, `Files: ${files.join(", ")}`] : []),
     "Then one line: NEXT: <what happens next, one plain sentence, no promises of dates, nothing about models or systems>",
     "A remark on how something is (praise, status, \"X is in good shape\") is NOT an ask. Each numbered item is one ask. Never a fragment of a sentence.",
-    "If he asks for nothing (a thank-you, an FYI), answer exactly: NONE",
+    'Always include one line DECISION: followed by a JSON object with exactly {"kind":"approve|change|question|stop|nothing","property":string|null,"handOffTo":string|null,"planApproved":boolean|null,"holds":string[]}. Choose the actual kind, not the alternatives. A site mentioned only as separate from the work is not the property. A project or dashboard is not a person. Asking to confirm a plan is not approving it. Use null when unspecified.',
+    "If he asks for nothing (a thank-you, an FYI), include NONE as well as DECISION.",
     "Nothing else in your answer.",
     ...(known.trim()
       ? [
@@ -618,6 +678,7 @@ export async function knownFor(
 async function saveBrief(env: Env, messageId: string, brief: Brief): Promise<void> {
   await env.WP_OS_DB.prepare("UPDATE partner_understood SET brief_json = ?2, reader = ?3 WHERE inbound_message_id = ?1")
     .bind(messageId, JSON.stringify({
+      decision: brief.decision,
       holds: brief.holds.slice(0, BRIEF_LIST_BOUND),
       questions: brief.questions.slice(0, BRIEF_LIST_BOUND),
       unclear: brief.unclear.slice(0, BRIEF_LIST_BOUND),

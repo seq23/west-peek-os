@@ -239,6 +239,8 @@ export function classifyContent(args: {
 }
 
 /** The markers, for the tests and the validator. A rule nothing can enumerate cannot be proven. */
+/** The marker patterns themselves, for the masking that stands in for them before a free read (worker/ai/scrub.ts). */
+export const privateModelOnlyPatterns: readonly RegExp[] = PRIVATE_MODEL_ONLY_MARKERS;
 export const privateModelOnlyMarkers: readonly string[] = Object.freeze(PRIVATE_MODEL_ONLY_MARKERS.map((r) => r.source));
 
 function escapeRegExp(s: string): string {
