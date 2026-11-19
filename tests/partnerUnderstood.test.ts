@@ -4,7 +4,7 @@ import { handleInboundEmail } from "../src/worker/effects/inboundEmail";
 import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
 import { INTAKE_MAILBOX } from "../src/shared/intake/emailTriggers";
 import { sweepOnce } from "../src/worker/services/workSweep";
-import { sendUnderstoodReplies, type SeatRead } from "../src/worker/services/partnerUnderstood";
+import { sendUnderstoodReplies, parseUnderstood, type SeatRead } from "../src/worker/services/partnerUnderstood";
 import type { Env } from "../src/worker/env";
 
 /**
@@ -132,5 +132,16 @@ describe("step 7: the DONE reply answers every ask", () => {
     expect(done[0]!.text).toContain(`Done: "${ASK_1}"`);
     expect(done[0]!.text).toContain(`In progress: "${ASK_2}"`);
     expect(done[0]!.text).toContain(`Not done: "${ASK_3}" — Scooter asked to hold intros this week.`);
+  });
+});
+
+
+describe("first-read decision", () => {
+  it("keeps a structured decision and treats old or malformed reads as absent", () => {
+    const words = "Please confirm the plan";
+    const decision = { kind: "question", property: null, handOffTo: null, planApproved: false, holds: [] };
+    expect(parseUnderstood(`ASK: ${words}\nDECISION: ${JSON.stringify(decision)}`, words).decision).toEqual(decision);
+    expect(parseUnderstood(`ASK: ${words}`, words).decision).toBeNull();
+    expect(parseUnderstood(`ASK: ${words}\nDECISION: {"kind":"approve"}`, words).decision).toBeNull();
   });
 });
