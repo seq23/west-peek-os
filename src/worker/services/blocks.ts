@@ -1,3 +1,4 @@
+import { RECURRING_CARD_KINDS } from "../../shared/work/recurring";
 import { partnerBackIn, type PartnerBack } from "../../shared/work/partnerBackBy";
 import type { Env } from "../env";
 import { ownershipOf, roleOf, secondaryApprovalRefusal } from "../../shared/work/partnerOwnership";
@@ -489,9 +490,18 @@ export async function resurfaceStaleBlocks(env: Env, now: Date): Promise<StoredB
           AND block_nag_at IS NOT NULL AND block_nag_at < ?1
           -- 0302: THE PARTNER SAID WHEN HE WILL BE BACK. No reminder before that time has passed.
           AND (partner_back_at IS NULL OR partner_back_at < ?1)
+          -- 19 Nov 2026: A LATER RUN REPLACED IT. A recurring job's card (cardKinds door "JOB") whose job has since
+          -- opened a newer card of the same kind for the same employee is last week's question: the newer run asks
+          -- afresh, so the old one is lapsed and stops ringing (Walker's 2026-W42 hire search rang 37 times).
+          AND NOT (
+            kind IN (SELECT value FROM json_each(?2))
+            AND EXISTS (SELECT 1 FROM work_card later
+                         WHERE later.kind = work_card.kind AND later.owner_id IS work_card.owner_id
+                           AND later.created_by LIKE 'system:%' AND later.created_at > work_card.created_at)
+          )
         ORDER BY blocked_at ASC LIMIT 5`,
     )
-      .bind(now.toISOString())
+      .bind(now.toISOString(), JSON.stringify(RECURRING_CARD_KINDS))
       .all<StoredBlock>()
   ).results ?? [];
 
