@@ -2595,7 +2595,26 @@ export function jobPhaseLine(row: Pick<WebPropertyChangeRow, "phase" | "check_st
   return "The plan is being worked out; you get it by email, and nothing is built until it is settled.";
 }
 
+/*
+ * ONE ANSWER PER REPLY (partner tail, 19 Nov 2026, wc_76e6d7ff). At the preview, his reply is re-read on every tick
+ * that finds no run in flight, so each refused or stopped rebuild answered "which song should I use?" again: three
+ * identical "Porter: answered" emails in two hours. The rebuild may be queued again; the answer is sent once for the
+ * reply that asked it (the same question, answered since that reply arrived).
+ */
+async function alreadyAnswered(env: Env, card: WebPropertyChangeCard, question: string): Promise<boolean> {
+  const since = card.block_answered_at ?? null;
+  if (!since) return false;
+  const r = await env.WP_OS_DB.prepare(
+    "SELECT 1 AS hit FROM event_record WHERE object_type = 'work_card' AND object_id = ?1 AND event_type = 'work_card.question_answered_mid_flow' AND json_extract(payload_json, '$.question') = ?2 AND json_extract(payload_json, '$.sent') = 1 AND created_at >= ?3 LIMIT 1",
+  )
+    .bind(card.id, question.slice(0, 400), since)
+    .first<{ hit: number }>()
+    .catch(() => null);
+  return Boolean(r?.hit);
+}
+
 async function answerMidFlowQuestion(env: Env, card: WebPropertyChangeCard, question: string, answerQuestion: QuestionAnswerer | undefined): Promise<string> {
+  if (await alreadyAnswered(env, card, question)) return "Already answered by email on this job's thread.";
   const jobRow = await readWebPropertyChange(env, card.id);
   const standing = await cardStandingLines(env, card.id, jobRow, question);
   const live = liveAddressLine(jobRow);
