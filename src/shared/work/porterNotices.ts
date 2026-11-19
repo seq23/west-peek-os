@@ -412,6 +412,10 @@ export function planNotice(input: {
  */
 export function decidedSoFar(asks: readonly Ask[], answers: readonly string[], approvedBy: string | null): string[] {
   const who = approvedBy ?? "the partner";
+  // A REQUEST ANSWERS NOTHING (19 Nov 2026, wc_59ef2d40): a plan approved by the partner's email carries no words of his
+  // for its decisions. Free text on such a plan (a correction, a developer's note) was rendered "as the request answered"
+  // for every decision — the very claim Scooter had asked to have struck. Those decisions stay "if you approve".
+  const fromRequest = /^the request\b/.test(who);
   const approved = new Set<number>();
   const solved = new Map<number, { chosen: string; how: string }>();
   const own: string[] = [];
@@ -419,7 +423,7 @@ export function decidedSoFar(asks: readonly Ask[], answers: readonly string[], a
     const m = /^(\d+)\.\s+(.*?)\s+\((approved as recommended|solved: (.*))\)$/.exec(a);
     if (m && m[3] === "approved as recommended") approved.add(Number(m[1]) - 1);
     else if (m) solved.set(Number(m[1]) - 1, { chosen: m[2]!, how: m[4]! });
-    else if (a !== "approved as written") own.push(a);
+    else if (a !== "approved as written" && !fromRequest) own.push(a);
   }
   return asks.map((a, i) => {
     // "<topic>: <chosen answer, short>" — "Orange: #c45a3c". Who approved it and how is on the card;
@@ -446,6 +450,15 @@ export function decisionResolutionIn(text: string | null | undefined): { n: numb
   return { n: Number(m[1]), chosen: chosen!.trim().replace(/[.]+$/, ""), why: rest.join(" — ").trim() || null };
 }
 
+/**
+ * WHAT WAS FILLED, NOT WHY IT WAS MISSING (19 Nov 2026, wc_59ef2d40). A missing item is stored with its reason ("The quote
+ * brief you said was attached (…): nothing arrived with the email"); listed under "Filled in" verbatim, it told Scooter
+ * his brief had not arrived in the email that said it was built from it. Pure.
+ */
+export function filledLabel(item: string): string {
+  return item.replace(/\s*[:—–]\s*(?:nothing (?:has )?arrived|(?:it )?(?:did not|didn't|has not|hasn't) (?:arrive|come)|(?:was |were )?not attached|(?:the folder |it )?is (?:still )?empty)\b.*$/i, "").trim() || item;
+}
+
 /** THE PREVIEW EMAIL — the first one, or a new one after a rebuild. Pure. */
 export function previewNotice(input: { title: string; previewLine: string | null; placeholders: readonly string[]; filled?: readonly string[]; changed?: string | null; asked?: readonly string[]; round?: number; cardId: string; sites?: readonly string[]; decided?: readonly string[]; answers?: string | null; noApprovalAsk?: boolean }): NoticeEmail {
   const p = input.placeholders.length;
@@ -458,7 +471,7 @@ export function previewNotice(input: { title: string; previewLine: string | null
   // 17 Nov 2026 (wc_c548d043): what the build answered of his questions ("what's done, what's left, the estimate").
   const answers = String(input.answers ?? "").split("\n").map((l) => l.replace(/^[•·\-*]\s+/, "").trim()).filter(Boolean);
   if (answers.length) sections.push({ label: "What you asked, answered", bullets: answers });
-  if (input.filled?.length) sections.push(...listSections(again ? "Filled in since the last preview" : "Filled in since the plan", input.filled));
+  if (input.filled?.length) sections.push(...listSections(again ? "Filled in since the last preview" : "Filled in since the plan", input.filled.map(filledLabel)));
   if (p) sections.push(...listSections(STILL_MISSING, input.placeholders));
   if (input.decided?.length) sections.push(...listSections("Decided so far", input.decided, [], 140));
   sections.push(ON_THE_CARD(input.cardId));
