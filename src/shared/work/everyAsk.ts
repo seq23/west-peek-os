@@ -161,6 +161,20 @@ export function splitOffItems(items: readonly DoneItem[] | null | undefined, par
   return out;
 }
 
+/*
+ * A CHECK THAT CAN ONLY BE MET AFTER THE MERGE IS LAND'S, NOT AN UNFINISHED BUILD (partner tail, 19 Nov 2026,
+ * wc_c548d043). Scooter wrote "Please publish … after these final fixes … Please reply with the live links once
+ * complete." The BUILD did all eight fixes and reported "Live links curled after the merge" unmet ("This belongs to
+ * the LAND phase"); the v1.0 bar refused the finished build, no preview went to him, and every retry could only fail
+ * the same way, because the merge waits on his "approved" to the preview. A check held by the landing itself
+ * (`blocked_by: "after_land"`, or a check that names the merge, landing or the live site as its moment) is judged at
+ * LAND, whose curl proof the DONE email lists as the live links.
+ */
+const AFTER_LAND = /\b(?:after|once|when)\b[^.;]{0,40}?\b(?:merge[ds]?|merging|land(?:s|ed|ing)?|goes\s+live|is\s+live|published|deployed)\b/i;
+export function heldByLanding(check: { check?: string | null }, blockedBy?: string | null): boolean {
+  return blockedBy === "after_land" || AFTER_LAND.test(String(check?.check ?? ""));
+}
+
 export function buildProblems(input: { items?: readonly DoneItem[] | null; missingSecrets?: number; missingMaterials?: number; partnerText?: string }): string[] {
   const items = input.items ?? [];
   if (items.length === 0) return ["it did not report each ask against its done-when checks (no `items` list)"];
@@ -177,6 +191,7 @@ export function buildProblems(input: { items?: readonly DoneItem[] | null; missi
     const by = String(i.blocked_by ?? "");
     const held = (by === "missing_secret" && (input.missingSecrets ?? 0) > 0) || (by === "missing_material" && (input.missingMaterials ?? 0) > 0) || by === "partner_dated";
     if (held) continue;
+    if (unmet.length && unmet.every((c) => heldByLanding(c, by))) continue;
     if (unmet.length && input.partnerText && unmet.every((c) => partnerReserved(c.note, input.partnerText!))) continue;
     if (unmet.length && input.partnerText && unmet.every((c) => quoteSplitsOff(c.note, input.partnerText!))) continue;
     const named = unmet.length ? unmet.map((c) => c.check.slice(0, 80)).join(", ") : `its state is "${String(i.state).slice(0, 20)}"`;
