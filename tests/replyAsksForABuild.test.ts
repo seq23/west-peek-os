@@ -156,3 +156,36 @@ describe("a reply that opens a build moves its email and asks to the build", () 
     expect(asks.every((a) => a.work_card_id === build!.id)).toBe(true);
   });
 });
+
+/*
+ * 19 NOV 2026, wc_59ef2d40: Scooter replied on the DONE Productions site card ("Change westpeekproductions.com: …")
+ * with "One combined update for the Productions dashboard, separate from Top Barz" and the quote-tool brief attached.
+ * The build opened under topbarz-voting (his "separate from Top Barz" read as naming it), two BUILD runs refused the
+ * wrong repo, and Porter said "the brief did not arrive" because the PDF stayed on the card he replied on.
+ */
+describe("a reply that opens a build, with files, on the Productions card", () => {
+  it("builds in join-west-peek-main, never the site he said it is separate from, and the files and message follow the build", async () => {
+    await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO web_property_registry (id, host, repo, github_repo, site, words_json, aliases_json, pages_host, seeded, firm_scope, position) VALUES ('wpr_topbarz_t', 'voting.topbarz.xyz', 'topbarz-voting', 'seq23/topbarz-voting', '.', ?1, '[]', 'topbarz-voting.pages.dev', 0, 'west-peek', 100)").bind(JSON.stringify(["top barz", "topbarz", "the voting site"])).run();
+    const card = await createWorkCardInternal(env, systemIdentity(), { title: 'Change westpeekproductions.com: "Hey Porter and Sequoia! We\'re ready to build the West Peek Productions website and dashboard."', owner_type: "AI", owner_id: "aie_porter", firm_scope: "west-peek", priority: "NORMAL" } as never);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET requested_by_email = ?2, state = 'DONE' WHERE id = ?1").bind(card.id, SCOOTER).run();
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'WEB_PROPERTY_CHANGE' WHERE id = ?1").bind(card.id).run();
+    const key = "inbound-email/2026-11-19/quote-tool-test.eml";
+    const { token } = await startThread(env, { objectType: "work_card", objectId: card.id, cardKind: "WEB_PROPERTY_CHANGE", employee: "Porter", to: SCOOTER, subject: "Porter: West Peek Productions site and dashboard: Live", firmScope: "west-peek" });
+    const written = "Hey Porter!\n\nOne combined update for the Productions dashboard, separate from Top Barz.\n\n1. Quote tool\nThe attached brief has the context, service list, calculation rules and example tests.";
+    const pdf = Buffer.from("%PDF-1.4 quote brief").toString("base64");
+    const raw = [
+      `From: ${SCOOTER}`, "To: os@joinwestpeek.com", "Subject: Productions dashboard: quote tool and fixes", "MIME-Version: 1.0", 'Content-Type: multipart/mixed; boundary="b1"', "",
+      "--b1", "Content-Type: text/plain; charset=UTF-8", "", written, "",
+      "--b1", 'Content-Type: application/pdf; name="WPP-Quote-Tool-Builder-Brief.pdf"', 'Content-Disposition: attachment; filename="WPP-Quote-Tool-Builder-Brief.pdf"', "Content-Transfer-Encoding: base64", "", pdf, "", "--b1--",
+    ].join("\r\n");
+    const out = await steerFromReply(env, { fromHeader: `<${SCOOTER}>`, authenticationResults: AUTH, subject: "Productions dashboard: quote tool and fixes", raw, inReplyTo: threadReference(token), references: null, emlKey: key }, { readWords: reads("BUILD", "EXISTING") });
+    const build = await env.WP_OS_DB.prepare("SELECT c.id, w.target_repo, w.property_host FROM work_card c JOIN web_property_change w ON w.work_card_id = c.id WHERE c.assigned_from_card_id = ?1").bind(card.id).first<{ id: string; target_repo: string; property_host: string }>();
+    expect(build, "one build opened").toBeTruthy();
+    expect(build!.target_repo).toBe("join-west-peek-main");
+    expect(build!.property_host).toBe("westpeekproductions.com");
+    expect(out.linkTo, "the door indexes the message against the build, not the card replied on").toBe(build!.id);
+    const files = (await env.WP_OS_DB.prepare("SELECT work_card_id FROM request_attachment WHERE eml_key = ?1").bind(key).all<{ work_card_id: string }>()).results ?? [];
+    expect(files.length, "the brief was kept").toBeGreaterThan(0);
+    expect(files.every((f) => f.work_card_id === build!.id), "every file is on the build").toBe(true);
+  });
+});

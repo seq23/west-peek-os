@@ -985,8 +985,26 @@ async function fetchAttachment(routePath, target, env) {
   return buf.length;
 }
 
-async function ensureWorktree(repoPath, names, phase, progress) {
+export async function ensureWorktree(repoPath, names, phase, progress) {
   await git(repoPath, "fetch", "origin", "--prune", "-q");
+  /*
+   * A WORKTREE OF ANOTHER REPO IS NEVER REUSED (19 Nov 2026, wc_59ef2d40). The folder is named from the card
+   * alone, so a job re-targeted from topbarz-voting to join-west-peek-main found wt-59ef2d40 still a
+   * topbarz-voting checkout. A clean one with nothing unpushed is removed and made again from this repo; one
+   * holding work is a named stop, never built over.
+   */
+  if (existsSync(names.worktree)) {
+    const [mine, theirs] = await Promise.all([git(repoPath, "remote", "get-url", "origin"), git(names.worktree, "remote", "get-url", "origin").catch(() => ({ stdout: "" }))]);
+    if (theirs.stdout.trim() && theirs.stdout.trim() !== mine.stdout.trim()) {
+      const dirty = (await git(names.worktree, "status", "--porcelain")).stdout.trim();
+      const ahead = (await git(names.worktree, "log", "--oneline", "@{u}..HEAD").catch(() => git(names.worktree, "log", "--oneline", "origin/main..HEAD"))).stdout.trim();
+      if (dirty || ahead) throw new Error(`WORKTREE_OF_ANOTHER_REPO: ${names.worktree} is a checkout of ${theirs.stdout.trim()} with work in it; this job builds ${mine.stdout.trim()}`);
+      // Its `.git` file reads "gitdir: <owner>/.git/worktrees/<name>": the owning repo removes it.
+      const gitdir = readFileSync(path.join(names.worktree, ".git"), "utf8").replace(/^gitdir:\s*/, "").trim();
+      await git(path.resolve(names.worktree, gitdir, "..", "..", ".."), "worktree", "remove", "--force", names.worktree);
+      progress(`removed ${names.worktree}: a clean checkout of ${theirs.stdout.trim()}, not this job's repo`);
+    }
+  }
   if (!existsSync(names.worktree)) {
     mkdirSync(path.dirname(names.worktree), { recursive: true });
     const remote = await git(repoPath, "ls-remote", "--heads", "origin", names.branch);

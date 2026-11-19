@@ -130,6 +130,8 @@ export interface SteerFromReply {
   written: string;
   /** 0237: the files the reply carried, kept against the card for its next run. */
   attached?: string[];
+  /** The build this reply opened (handBuildToPorter): the message is indexed against it, not the card replied on. */
+  linkTo?: string;
   /** Why it was not acted on, for the routing card. Empty when it was. */
   reason: string;
   /** True when the message carried one of our tokens at all — an ordinary email carries none. */
@@ -425,6 +427,7 @@ export async function steerFromReply(
    * is still an answer: it says what it carried.
    */
   let attached: string[] = [];
+  let linkTo: string | null = null;
   if (thread.object_type === "work_card") {
     const kept = await storeAttachments(env, { cardId: thread.object_id, raw: message.raw, emlKey: message.emlKey, firmScope: thread.firm_scope, source: "REPLY" });
     attached = kept.stored;
@@ -684,6 +687,16 @@ export async function steerFromReply(
           for (const m of moved.results ?? []) {
             await env.WP_OS_DB.prepare("UPDATE partner_ask SET work_card_id = ?1 WHERE inbound_message_id = ?2 AND work_card_id = ?3").bind(out.cardId, m.id, cardRow.id).run();
           }
+          /*
+           * HIS FILES FOLLOW THE BUILD TOO (19 Nov 2026, wc_59ef2d40): Scooter attached the quote-tool brief to the reply,
+           * the files were kept on the card he replied on, and Porter's build said "the brief did not arrive". On a new
+           * message the index row is not linked yet (the door links it after this returns), so the move above found
+           * nothing as well: `linkTo` below makes the door link it to the build, where the first read files his asks.
+           */
+          if (message.emlKey) {
+            await env.WP_OS_DB.prepare("UPDATE request_attachment SET work_card_id = ?1 WHERE work_card_id = ?2 AND eml_key = ?3").bind(out.cardId, cardRow.id, message.emlKey).run();
+          }
+          linkTo = out.cardId;
         }
         await appendEvent(env, {
           eventType: "work.reply_opened_build",
@@ -858,7 +871,7 @@ export async function steerFromReply(
     },
   });
 
-  return { steered: true, thread, written, reason: "", attempted: true, answered, attached };
+  return { steered: true, thread, written, reason: "", attempted: true, answered, attached, ...(linkTo ? { linkTo } : {}) };
 }
 
 /**

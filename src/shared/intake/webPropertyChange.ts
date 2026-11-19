@@ -256,13 +256,18 @@ function matchMostSpecificFirst(lower: string, phrasesOf: (p: WebProperty) => re
   for (const { p, phrase } of phrases) {
     const esc = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const re = asHost ? new RegExp(`(?<![a-z0-9.-])${esc}(?![a-z0-9-]|\\.[a-z0-9])`, "g") : new RegExp(esc, "g");
-    if (re.test(rest)) {
-      hit.add(p);
-      rest = rest.replace(re, (m) => " ".repeat(m.length));
-    }
+    rest = rest.replace(re, (m: string, at: number, whole: string) => {
+      // A NEGATED MENTION NAMES NOTHING (19 Nov 2026): "the Productions dashboard, separate from Top Barz" filed
+      // Scooter's quote tool under topbarz-voting. The span is still consumed, so a shorter phrase cannot match it.
+      if (!NEGATED_BEFORE.test(whole.slice(Math.max(0, at - 40), at))) hit.add(p);
+      return " ".repeat(m.length);
+    });
   }
   return registry.filter((p) => hit.has(p));
 }
+
+/** Words right before a property that say the request is NOT about it ("separate from", "not", "nothing to do with"). */
+const NEGATED_BEFORE = /(?:\bseparate(?:ly)? from|\bapart from|\bunrelated to|\bnothing to do with|\bindependent(?:ly)? of|\bother than|\brather than|\binstead of|\bexcept(?: for)?|\bexcluding|\bnot (?:for|about|on|in|part of|including|the)|\bnot|\bdoes not (?:approve|cover|include|touch|change)(?: publishing)?|\bdon'?t (?:touch|change))\s+(?:the\s+)?$/;
 
 /** One repo's share of a job over several repos: its sites, and its slice of the request. */
 export interface WebPropertyPart {
