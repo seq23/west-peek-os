@@ -793,6 +793,17 @@ describe("the first read decides hand-off and take-back; keywords only after the
     expect((await logged(id)).find((e) => e.what === "the hand-off")).toMatchObject({ used: "FIRST_READ", first_read: "hand to Scooter", keyword: "hand to Scooter" });
   });
 
+  it("a first read's hand-off on a conditioned sentence asks once and moves nothing: 'If I'm not back by Friday, hand this to Scooter.' (replay of #556, 20 Nov)", async () => {
+    const id = "wc_fr_iffriday1";
+    const { previewThread } = await seedCard(id);
+    sent.length = 0;
+    const mid = await filed(id, previewThread, "If I'm not back by Friday, hand this to Scooter.");
+    await readIn(mid, reads({ kind: "change", handOffTo: "Scooter" }));
+    expect((await card(id)).requested_by_email).toBe(SEQUOIA);
+    expect(to(SCOOTER)).toHaveLength(0);
+    expect(to(SEQUOIA).some((m) => m.text.includes("Did you mean hand this card to Scooter?"))).toBe(true);
+  });
+
   it("the first read overrules a keyword hand-off: 'pass it over to Scooter for a look, but I still own it'", async () => {
     const id = "wc_fr_keeps_ownr"; // seedCard's preview token is the id's last 8 characters: unique per card
     const { previewThread } = await seedCard(id);
