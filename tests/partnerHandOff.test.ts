@@ -390,6 +390,14 @@ describe("the secondary cannot approve, force or clear the block", () => {
     expect(note!.body).toMatch(/^\(From the secondary partner; read as context, not an approval\.\) approved/);
   });
 
+  it("a secondary's 'Approved, looks great.' with no first read is refused and answered too (replay of #556, 20 Nov)", async () => {
+    sent.length = 0;
+    await replyFrom(SEQUOIA, "Approved, looks great.", token, null);
+    expect(to(SEQUOIA).some((m) => m.text.includes("Only Scooter can approve this now."))).toBe(true);
+    expect(to(SCOOTER)).toHaveLength(0);
+    expect((await card(id)).state).toBe("BLOCKED");
+  });
+
   it("the card's button refuses the secondary too", async () => {
     const out = await call(`/api/work-cards/${id}/unblock`, SEQUOIA, "POST", { action: "ANSWER", text: "approved" });
     expect(out.status).toBe(403);

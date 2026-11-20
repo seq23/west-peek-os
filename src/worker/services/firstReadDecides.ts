@@ -202,8 +202,11 @@ export async function decideReplyWords(
   // A SECONDARY'S "APPROVED" (0241): refused, and told who approves and how to take it over. Kept as a note at the door.
   const fresh = await env.WP_OS_DB.prepare("SELECT requested_by_email, secondary_partner_email FROM work_card WHERE id = ?1").bind(card.id).first<{ requested_by_email: string | null; secondary_partner_email: string | null }>();
   if (!fresh || roleOf(fresh, partner.email) !== "SECONDARY") return;
-  const { readApprovalReply } = await import("../../shared/work/approvalReply");
-  const keywordApproves = ["APPROVED", "FORCED", "PREVIEW", "PUBLISH"].includes(readApprovalReply(words).kind);
+  const { readApprovalReply, opensWithApproval } = await import("../../shared/work/approvalReply");
+  // "Approved, looks great." opens with an approval too: here it only earns the refusal note telling her who approves,
+  // so its first clause counts (replay of #556 on main, 20 Nov: she got silence and would think it approved).
+  const firstClause = (words.trim().split(/\r?\n/)[0] ?? "").replace(/^(\s*[a-z]+),/i, "$1.");
+  const keywordApproves = ["APPROVED", "FORCED", "PREVIEW", "PUBLISH"].includes(readApprovalReply(words).kind) || opensWithApproval(firstClause);
   const readApproves = d?.kind === "approve";
   const approves = read.state === "READ" ? readApproves : keywordApproves;
   if (readApproves || keywordApproves) {
