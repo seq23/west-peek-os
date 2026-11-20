@@ -6,7 +6,7 @@
  * minutes later. This runs, before the push, the part of the gate that the change can break:
  *
  *   (a) the typecheck (incremental, so the second run on a clone is a couple of seconds);
- *   (b) `vitest related --run <changed files>` — only the test files that import what changed;
+ *   (b) the changed test files, then the tests that import what changed, at most TEST_CAP files in all;
  *   (c) the boundary validators CI runs (the `npm run validate:*` lines in .github/workflows/ci.yml,
  *       which is the registry), minus the slow ones whose inputs the change does not touch.
  *
@@ -75,10 +75,22 @@ export function planValidators(changed, validators, scripts) {
 /*
  * WHICH TESTS. `vitest related` follows the whole import graph, and this repo's services reach each other: on #465's
  * diff it picked 192 of ~300 files (partnerProfile.ts is three hops from most of the worker), ~20 minutes of
- * Miniflare. So: every changed test file, every test that imports a changed file DIRECTLY, and the whole transitive
- * set only when it is small (≤ TRANSITIVE_CAP). The rest is said in the summary line; CI's shards run it.
+ * Miniflare. The direct importers alone can be as wide: emailThread.ts and workSweep.ts are entry points that ~70
+ * test files import, so a change to either ran 77 Miniflare files and timed out under load (20 Nov 2026, 34 min).
+ * So, at most TEST_CAP files: every changed test file always, then the direct importers that import the MOST changed
+ * files, then the transitive set only if it all still fits. The rest is said in the summary line; CI's shards run it.
  */
-export const TRANSITIVE_CAP = 20;
+export const TEST_CAP = 20;
+
+/** Pure, so the test can pin it. `direct` maps each importing test to how many changed files it imports. */
+export function capTests(changedTests, direct, transitive, cap = TEST_CAP) {
+  const own = [...new Set(changedTests)];
+  const rest = [...direct.entries()].filter(([t]) => !own.includes(t)).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([t]) => t);
+  const room = Math.max(0, cap - own.length);
+  const picked = [...own, ...rest.slice(0, room)];
+  const takeTransitive = picked.length + transitive.length <= cap ? transitive : [];
+  return { run: [...picked, ...takeTransitive].sort(), left: rest.length - Math.min(rest.length, room) + transitive.length - takeTransitive.length };
+}
 const ALIAS = { "@shared/": "src/shared/", "@worker/": "src/worker/" };
 const IMPORT = /(?:^|\n)\s*(?:import|export)\s+(type\s+)?(?:[^'"]*?\sfrom\s+)?['"]([^'"]+)['"]|import\(\s*['"]([^'"]+)['"]\s*\)/g;
 function resolveSpec(from, spec) {
@@ -100,9 +112,11 @@ function depsOf(file) {
 export function selectTests(changed) {
   const targets = new Set(changed.filter((f) => existsSync(path.join(ROOT, f))).map((f) => path.join(ROOT, f)));
   const all = readdirSync(path.join(ROOT, "tests"), { recursive: true }).filter((f) => String(f).endsWith(".test.ts")).map((f) => path.join(ROOT, "tests", String(f)));
-  const direct = [], transitive = [];
+  const changedTests = [], direct = new Map(), transitive = [];
   for (const t of all) {
-    if (targets.has(t) || depsOf(t).some((d) => targets.has(d))) { direct.push(t); continue; }
+    if (targets.has(t)) { changedTests.push(t); continue; }
+    const hits = depsOf(t).filter((d) => targets.has(d)).length;
+    if (hits) { direct.set(t, hits); continue; }
     const seen = new Set([t]), stack = [...depsOf(t)];
     while (stack.length) {
       const d = stack.pop();
@@ -113,8 +127,8 @@ export function selectTests(changed) {
     }
   }
   const rel = (f) => path.relative(ROOT, f).split(path.sep).join("/");
-  const take = transitive.length <= TRANSITIVE_CAP ? transitive : [];
-  return { run: [...direct, ...take].map(rel).sort(), left: transitive.length - take.length };
+  const { run, left } = capTests(changedTests, direct, transitive);
+  return { run: run.map(rel).sort(), left };
 }
 
 /*
