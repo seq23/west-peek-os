@@ -11,6 +11,7 @@ import { ingestTranscript } from "./captureAdapter";
 import { firmRecordingPolicy, recordPlatformAnnouncedConsent, MeetIngestError } from "./meetIngest";
 import { transcribeWithSpeakers, type ChunkResult } from "./liveTranscription";
 import { TranscriptionUnavailable } from "../ai/providers/workersAiWhisper";
+import { BUDGET_STOP_CODE, TranscriptionBudgetSpent } from "../ai/transcriptionBudget";
 import { ROLL_EVERY_MS, rollSummary } from "./meetingRoom";
 import { AUDIO_CONTENT_TYPE } from "./meetingRoom";
 
@@ -21,7 +22,7 @@ import { AUDIO_CONTENT_TYPE } from "./meetingRoom";
  * Meet alone?" This module is the answer. When a firm-hosted Meet on the calendar is running, the
  * OS joins it as a participant through the Meet Media API and what it hears goes down the SAME
  * path the laptop microphone uses in Phase C: a slice of audio → `transcribeWithSpeakers`
- * (Nova-3, Whisper when the model is not there) → `ingestTranscript` → `importTranscript`, the
+ * (words first: Whisper-large-v3-turbo inside the day's budget, `transcriptionBudget.ts`) → `ingestTranscript` → `importTranscript`, the
  * two gates every transcript passes. So the rolling draft, ask-the-room and the seated employees
  * hear the call with nothing new on the screen.
  *
@@ -74,7 +75,7 @@ export { MEET_LIVE_STATES, LISTENER_STALE_MS, DUE_BEFORE_MS, DUE_AFTER_MS, LIVE_
 import { LIVE_PROVIDER } from "./meetLiveNotes";
 import { MEET_LIVE_STATES, LISTENER_STALE_MS, DUE_BEFORE_MS, DUE_AFTER_MS, LP_POLICY_DETAIL, isFirmHostedMeet, liveAllowedForType, type MeetLiveState } from "./meetLiveView";
 
-/** What the join costs to speak, for the ledger: Nova-3 ≈ 470 neurons a minute (probed 18 Sep 2026), $0.011 per 1,000 after the free 10,000/day. */
+/** Neurons to dollars for the ledger: $0.011 per 1,000 after the free 10,000/day. Live notes run on Whisper (~46/min); Nova-3 is ~470/min. */
 export const USD_PER_NEURON = 0.011 / 1000;
 
 export interface LiveSessionRow {
@@ -398,8 +399,16 @@ export async function liveChunk(env: Env, identity: FirmUserIdentity, sessionId:
 
   let heard: Awaited<ReturnType<typeof transcribeWithSpeakers>>;
   try {
-    heard = await transcribeWithSpeakers(env, input.audio_base64, input.content_type);
+    heard = await transcribeWithSpeakers(env, input.audio_base64, input.content_type, "words", now);
   } catch (err) {
+    if (err instanceof TranscriptionBudgetSpent) {
+      // THE NAMED STOP, on the session and on the meeting the During face reads: the notes pause
+      // until 00:00 UTC rather than bill. The listener keeps posting; each slice is refused here
+      // before any model runs, and the first slice after midnight writes again.
+      await env.WP_OS_DB.prepare("UPDATE meet_live_session SET detail = ?2, updated_at = ?3 WHERE id = ?1").bind(session.id, err.reason, now.toISOString()).run();
+      await env.WP_OS_DB.prepare("UPDATE meeting SET meet_live_detail = ?2, meet_live_updated_at = ?3 WHERE id = ?1").bind(meeting.id, `Notes paused: ${err.reason}.`, now.toISOString()).run();
+      throw new MeetLiveError(503, err.code.toLowerCase(), err.reason);
+    }
     if (err instanceof TranscriptionUnavailable) throw new MeetLiveError(503, "transcription_unavailable", err.reason);
     throw err;
   }
@@ -420,7 +429,11 @@ export async function liveChunk(env: Env, identity: FirmUserIdentity, sessionId:
     `UPDATE meet_live_session SET state = 'LISTENING', joined_at = COALESCE(joined_at, ?2), chunks = chunks + 1, turns = turns + ?3,
        seconds_heard = seconds_heard + ?4, neurons = neurons + ?5, updated_at = ?2 WHERE id = ?1`,
   ).bind(session.id, ts, turnsWritten, input.seconds ?? 0, heard.neurons ?? 0).run();
-  if (session.state === "JOINING") await setMeetLiveState(env, meeting.id, "meet_live_listening", "The OS is in the call and listening.", now);
+  if (session.state === "JOINING" || session.detail?.startsWith(BUDGET_STOP_CODE)) {
+    // Joined, or back from a paused day: the stop's words come off the session and the meeting.
+    if (session.detail?.startsWith(BUDGET_STOP_CODE)) await env.WP_OS_DB.prepare("UPDATE meet_live_session SET detail = NULL WHERE id = ?1").bind(session.id).run();
+    await setMeetLiveState(env, meeting.id, "meet_live_listening", "The OS is in the call and listening.", now);
+  }
 
   // The rolling draft rides the ladder, on the same cadence as the During face's poll, and only
   // when something new was written — the drafter is idempotent over the fingerprint anyway.

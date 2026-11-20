@@ -127,8 +127,8 @@ only path.
 **The owner's question:** "If I push Join on Meet what happens? Is it recording? Are my AI
 employees there from Join on Meet alone?" Now: when a firm-hosted Meet on the calendar is running,
 the OS joins it as a participant through the Meet Media API and what it hears goes down the SAME
-path the laptop microphone uses in Phase C — a slice a minute → Nova-3 (Whisper when the model is
-not there) → the governed import → TRANSCRIPT_DERIVED notes — so the rolling draft, ask-the-room
+path the laptop microphone uses in Phase C — a slice a minute → Whisper-large-v3-turbo (words
+first since 20 Nov 2026; see the cost section) → the governed import → TRANSCRIPT_DERIVED notes — so the rolling draft, ask-the-room
 and the seated employees hear the call with no new UI. `ARCHITECTURAL_DECISIONS.md` (19 Sep 2026)
 records why the WebRTC peer is on her Mac and not in the Worker.
 
@@ -139,6 +139,7 @@ records why the WebRTC peer is on her Mac and not in the Worker.
 | Is the Media API scope delegated? | **Was a STOP; now CONFIRMED** — the owner added it the same day; the token mints under impersonation | `POST oauth2.googleapis.com/token` with `sub=sequoia@…`, scope `meetings.conference.media.readonly` → 200 |
 | Does the service account's own identity see the space? | **CONFIRMED NO** — the join must impersonate the partner; the bot alone is refused on the space | `GET v2/spaces/svf-nzzr-pax` without `sub` → 403 PERMISSION_DENIED; with `sub` → 200 |
 | Is the Media API surface (`v2beta`) served to the project? | **CONFIRMED NO — the second STOP.** Every identity and scope combination gets Google's `404 "Method not found."` on `v2beta`, while `v2` answers 200; the `v2beta` discovery document is not served either. That is the Developer Preview gate: the project, the OAuth principal and the participants must be enrolled | `GET v2beta/spaces/svf-nzzr-pax` → 404 `Method not found`; `POST v2beta/spaces/svf-nzzr-pax:connectActiveConference` → 404 `Method not found` |
+| Does the peer page's audio decode on Whisper-large-v3-turbo? (20 Nov 2026) | **CONFIRMED YES** — an earlier note said it returned no words; re-measured on the exact slices headless Chromium made from the fixture (a GitHub Actions job; base64 `audio` input, the adapter's shape): every word back on every slice | 4 s + 3.9 s → "we agreed to send the term sheet by Friday. The founder said their runway is" / "14 months. Olive will confirm…"; 7.9 s → all 25 words; 60 s slice → 192 words, one wrong ("miles") at the cut; ~1.3 s per short slice, 12 s per 60 s slice |
 | Does the peer page's audio decode on Nova-3? | **CONFIRMED.** The exact `audio/webm;codecs=opus` slices headless Chromium produced from a spoken fixture (`tests/fixtures/meet-live-fixture.wav`) were played to Nova-3 over the Workers AI REST surface: both 200, the sentence back verbatim, 61.5 neurons for 7.9 s | `POST accounts/…/ai/run/@cf/deepgram/nova-3` ×2 → "We agreed to send the term sheet by Friday. The founder said their runway is" / "Fourteen months. Olive will confirm the commitment amount next week." |
 | Does the listener's loop run against the real Google? | **CONFIRMED up to the wall** — heartbeat, `media_scope: GRANTED`, real `spaces.get` on `svf-nzzr-pax`, no active conference → `meet_not_started` on the row | `npm run vault:run -- node scripts/meet/live-listener.mjs --once --base http://127.0.0.1:9631` → `{"due":1,"active":0,"media_scope":"GRANTED"}` |
 
@@ -192,11 +193,27 @@ records why the WebRTC peer is on her Mac and not in the Worker.
   `meet_live_unavailable_preview`, `meet_live_unavailable_edition` (Google's exact error in the
   detail), `meet_live_unavailable_policy`, `meet_live_off_lp_policy`, `meet_live_failed`, and NULL
   for a meeting the live path does not apply to.
-- **Cost per hour of call**, measured: Nova-3 at 7.8 neurons/s on the peer's real slices →
-  ~28,000 neurons/hour → **$0.31/hour** after the free 10,000 neurons/day (~21 minutes free).
-  The rolling draft: at most one run per five minutes with new words, on the ladder's free-first
+- **Cost per hour of call, and the daily stop (20 Nov 2026).** Nova-3 at 7.8 neurons/s was ~28,000
+  neurons/hour: 15 and 16 Nov ran 115,203 and 34,902 neurons, ~$1.40 past the free 10,000/day.
+  Live notes now go **words first**: Whisper-large-v3-turbo, Cloudflare's published $0.00051 per
+  audio minute = ~46 neurons/minute, **~2,800 neurons/hour (~$0.03/hour past free)**, a tenth of
+  Nova-3. What it loses is the diariser's "Speaker 1/2" index, and the official Meet transcript
+  that supersedes the live notes after the call names every speaker anyway. Nova-3 runs for live
+  notes only if Whisper cannot read a slice; the laptop microphone (no later transcript) keeps
+  Nova-3 first; a spoken question to the room is words first.
+- **The budget, in code** (`src/worker/ai/transcriptionBudget.ts`, table
+  `transcription_neuron_day`, 0313): every speech-to-text call (live notes, laptop mic, spoken
+  questions, voice notes, Drive recordings) adds what it spent to the UTC day — Nova-3's neurons as
+  the platform reported them, Whisper's from the model's reported duration at the published rate.
+  Before any call: under **9,000 neurons today** it runs; at or past it no model is called and
+  `NOTES_PAUSED_DAILY_BUDGET` is thrown (a named stop: counted in `stopped` on the row, logged,
+  503 `notes_paused_daily_budget` to the listener, and "Notes paused: …" on the session and the
+  meeting the During face reads). Notes resume on the first slice after 00:00 UTC. 9,000 is
+  ~3.2 hours of Whisper a day. The 10,000 free neurons are the ACCOUNT's: other Workers and apps on
+  it share them, and this row cannot see their spend.
+- The rolling draft: at most one run per five minutes with new words, on the ladder's free-first
   lanes; the session row carries `neurons`, `seconds_heard` and `drafts_rolled`, and
-  `GET /api/meet/live/status` reports `cost.usd_per_hour` from what the platform actually billed.
+  `GET /api/meet/live/status` reports `cost.usd_per_hour` from the session's ledger.
 - Routes, one block `// === Meet live ===`: `POST /api/meet/live/heartbeat`,
   `POST /api/meet/live/sessions`, `POST /api/meet/live/sessions/:id/report`,
   `POST /api/meet/live/sessions/:id/chunk` (listener identity only); `GET /api/meet/live/status`,

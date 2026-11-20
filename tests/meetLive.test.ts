@@ -40,7 +40,11 @@ const LISTENER = { "x-wpos-dev-user": "subscription-claimer@joinwestpeek.com" };
 
 const NOVA = {
   run: async (model: string, input: Record<string, unknown>) => {
-    if (!model.includes("nova-3")) return { text: "words only" };
+    // Whisper (live notes go words-first): the base64 audio is the words, one second per word.
+    if (!model.includes("nova-3")) {
+      const said = Buffer.from(String(input.audio), "base64").toString().trim();
+      return { text: said, word_count: said ? said.split(" ").length : 0, transcription_info: { duration: said ? said.split(" ").length : 0 } };
+    }
     const audio = (input.audio as { body: Uint8Array }).body;
     // The fixture slice says which words it carries, so a test can follow a sentence to a note.
     const said = new TextDecoder().decode(audio);
@@ -214,22 +218,21 @@ describe("4. a slice of the call becomes the room's record", () => {
     sessionId = (await env.WP_OS_DB.prepare("SELECT id FROM meet_live_session WHERE conference_record = 'conferenceRecords/int_live'").first<any>()).id;
   });
 
-  it("a partner may not post audio; the listener's slice goes through Nova-3 and the governed import into TRANSCRIPT_DERIVED notes carrying the meeting's own label", async () => {
+  it("a partner may not post audio; the listener's slice goes words-first through Whisper (never Nova-3) and the governed import into TRANSCRIPT_DERIVED notes carrying the meeting's own label", async () => {
     const partner = await call(`/api/meet/live/sessions/${sessionId}/chunk`, "POST", slice("no", 0));
     expect(partner.status).toBe(403);
     const r = await call(`/api/meet/live/sessions/${sessionId}/chunk`, "POST", slice("We agreed to send the term sheet by Friday and the founder said runway is fourteen months", 0), LISTENER);
     expect(r.status).toBe(201);
-    expect(r.body, JSON.stringify(r.body)).toMatchObject({ sequence: 0, engine: "NOVA3", turns_written: 2 });
-    expect(r.body.speakers).toEqual([0, 1]);
+    expect(r.body, JSON.stringify(r.body)).toMatchObject({ sequence: 0, engine: "WHISPER", turns_written: 1 });
+    expect(r.body.speakers).toEqual([]);
     expect(r.body.neurons).toBeGreaterThan(0);
-    expect(r.body.session).toMatchObject({ state: "LISTENING", chunks: 1, turns: 2, seconds_heard: 60 });
+    expect(r.body.session).toMatchObject({ state: "LISTENING", chunks: 1, turns: 1, seconds_heard: 60 });
     const imp = (await env.WP_OS_DB.prepare("SELECT status, provider_name, source, imported_by, superseded_by FROM transcript_import WHERE meeting_id = ?1").bind(internalMeeting.id).all<any>()).results;
     expect(imp).toEqual([{ status: "IMPORTED", provider_name: LIVE_PROVIDER, source: "NATIVE", imported_by: "system", superseded_by: null }]);
     const notes = (await env.WP_OS_DB.prepare("SELECT body, note_type, privacy_label FROM meeting_note WHERE meeting_id = ?1 ORDER BY created_at, id").bind(internalMeeting.id).all<any>()).results;
-    expect(notes).toHaveLength(2);
+    expect(notes).toHaveLength(1);
     expect(notes[0]).toMatchObject({ note_type: "TRANSCRIPT_DERIVED", privacy_label: internalMeeting.privacy_label });
-    expect(notes[0].body).toBe("Speaker 1: We agreed to send the term sheet by Friday");
-    expect(notes[1].body).toBe("Speaker 2: and the founder said runway is fourteen months");
+    expect(notes[0].body).toBe("We agreed to send the term sheet by Friday and the founder said runway is fourteen months");
     expect((await env.WP_OS_DB.prepare("SELECT meet_live_state FROM meeting WHERE id = ?1").bind(internalMeeting.id).first<any>()).meet_live_state).toBe("meet_live_listening");
   });
 
@@ -238,16 +241,16 @@ describe("4. a slice of the call becomes the room's record", () => {
     expect(r.status).toBe(201);
     expect(r.body).toMatchObject({ text: "", turns_written: 0 });
     expect(r.body.session.chunks).toBe(2);
-    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM meeting_note WHERE meeting_id = ?1").bind(internalMeeting.id).first<any>()).n).toBe(2);
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM meeting_note WHERE meeting_id = ?1").bind(internalMeeting.id).first<any>()).n).toBe(1);
   });
 
   it("the During face reads it: the room's state says listening with the live turns, and the context pack carries what was just said", async () => {
     const identity = (await resolveFirmUser(new Request("https://test.local/", { headers: MP }), env))!;
     const room = await roomState(env, identity, internalMeeting.id);
-    expect(room.meet_live).toMatchObject({ state: "meet_live_listening", applicable: true, live_turns: 2, superseded: false });
-    expect(room.meet_live.session).toMatchObject({ state: "LISTENING", chunks: 2, turns: 2 });
+    expect(room.meet_live).toMatchObject({ state: "meet_live_listening", applicable: true, live_turns: 1, superseded: false });
+    expect(room.meet_live.session).toMatchObject({ state: "LISTENING", chunks: 2, turns: 1 });
     expect(room.meet_live.listener_seen_at).toBeTruthy();
-    expect(room.capture.turns).toBe(2);
+    expect(room.capture.turns).toBe(1);
     const context = await buildRoomContext(env, { ...internalMeeting, source: "google_calendar" });
     expect(context).toContain("term sheet by Friday");
   });
@@ -310,7 +313,7 @@ describe("4. a slice of the call becomes the room's record", () => {
     const m = await env.WP_OS_DB.prepare("SELECT status, meet_live_state, meet_live_detail, call_ended_at FROM meeting WHERE id = ?1").bind(internalMeeting.id).first<any>();
     expect(m.status).toBe("HELD");
     expect(m.meet_live_state).toBe("meet_live_ended");
-    expect(m.meet_live_detail).toContain("4 turn(s) heard live");
+    expect(m.meet_live_detail).toContain("3 turn(s) heard live");
     // THE END-OF-CALL SIGNAL: one column, written by whichever side learns it first.
     expect(m.call_ended_at).toBe(r.body.ended_at);
     const late = await call(`/api/meet/live/sessions/${sessionId}/chunk`, "POST", slice("too late", 9), LISTENER);
@@ -371,7 +374,7 @@ describe("6. the official transcript supersedes the live notes, and consent is r
   it("after the call, the ingest reads the official transcript, supersedes the live import, and the draft input reads only the official words", async () => {
     g.conferences = [INT_CONF];
     const before = await draftInputFor(env, internalMeeting.id);
-    expect(before.notes).toBe(4);
+    expect(before.notes).toBe(3);
     const out = await runMeetIngest(env, { fetchImpl: g.fetch, now: new Date(NOW.getTime() + 60 * 60_000) });
     const read = out.read.find((r) => r.conference_record === "conferenceRecords/int_live")!;
     expect(read.state).toBe("INGESTED");
@@ -387,7 +390,7 @@ describe("6. the official transcript supersedes the live notes, and consent is r
     const live = lives[0];
     expect((await env.WP_OS_DB.prepare("SELECT official_import_id FROM meet_live_session WHERE conference_record = 'conferenceRecords/int_live'").first<any>()).official_import_id).toBe(official.id);
     // The live notes are still on the record …
-    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM meeting_note WHERE meeting_id = ?1 AND transcript_import_id = ?2").bind(internalMeeting.id, live.id).first<any>()).n).toBe(2);
+    expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM meeting_note WHERE meeting_id = ?1 AND transcript_import_id = ?2").bind(internalMeeting.id, live.id).first<any>()).n).toBe(1);
     // … and the After draft reads the official transcript only.
     const after = await draftInputFor(env, internalMeeting.id);
     expect(after.notes).toBe(2);
@@ -397,7 +400,7 @@ describe("6. the official transcript supersedes the live notes, and consent is r
     expect(context).not.toContain("Speaker 1:");
     expect(context).toContain("Scooter Taylor");
     const view = await meetLiveView(env, internalMeeting, new Date());
-    expect(view).toMatchObject({ state: "meet_live_ended", live_turns: 4, superseded: true });
+    expect(view).toMatchObject({ state: "meet_live_ended", live_turns: 3, superseded: true });
     // Consent was recorded when the OS joined and is not recorded again when the transcript lands.
     expect((await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM consent_record WHERE meeting_id = ?1").bind(internalMeeting.id).first<any>()).n).toBe(2);
     // The end-of-call signal: the listener wrote it first, and Google's end time does not overwrite it.
@@ -520,12 +523,11 @@ describe("7. end to end: the listener's loop against a fake Meet media server", 
     await listener.active.get(meeting.id)!.pending;
     const notes = (await env.WP_OS_DB.prepare("SELECT body FROM meeting_note WHERE meeting_id = ?1 ORDER BY created_at, id").bind(meeting.id).all<any>()).results;
     expect(notes.map((n: any) => n.body), log.join("\n")).toEqual([
-      "Speaker 1: Good morning everyone let us start",
-      "Speaker 2: with the pipeline",
-      "Speaker 1: The founder said their runway is fourteen months",
+      "Good morning everyone let us start with the pipeline",
+      "The founder said their runway is fourteen months",
     ]);
     const session = await env.WP_OS_DB.prepare("SELECT state, chunks, turns, seconds_heard FROM meet_live_session WHERE conference_record = ?1").bind(conference.record).first<any>();
-    expect(session).toMatchObject({ state: "LISTENING", chunks: 2, turns: 3, seconds_heard: 120 });
+    expect(session).toMatchObject({ state: "LISTENING", chunks: 2, turns: 2, seconds_heard: 120 });
 
     g.activeConferences.delete(conference.code);
     clock += 60_000 + 1;
@@ -591,5 +593,38 @@ describe("8. the routes, through the router", () => {
     // GET is never refused on this ground: reading from an iframe is the whole point.
     const get = await handleRequest(new Request("https://test.local/api/me", { headers: { ...MP, "sec-fetch-site": "cross-site" } }), env);
     expect(get.status).toBe(200);
+  });
+});
+
+describe("9. the day's speech-to-text budget: Nova-3 never runs past it, and the stop is named", () => {
+  it("under the budget Nova-3 runs and its reported neurons are added to the UTC day; at the budget no model is called and NOTES_PAUSED_DAILY_BUDGET is thrown and counted", async () => {
+    const { transcribeWithSpeakers } = await import("../src/worker/services/liveTranscription");
+    const { TRANSCRIPTION_DAILY_NEURON_BUDGET, TranscriptionBudgetSpent, neuronsToday } = await import("../src/worker/ai/transcriptionBudget");
+    const day = new Date("2030-01-01T12:00:00Z");
+    const models: string[] = [];
+    const spy = { run: async (model: string, input: Record<string, unknown>) => { models.push(model); return NOVA.run(model, input); } };
+    const e = { ...env, AI: spy } as Env;
+    const audio = Buffer.from("We agreed to send the term sheet").toString("base64");
+
+    await env.WP_OS_DB.prepare("INSERT INTO transcription_neuron_day (day, neurons) VALUES ('2030-01-01', ?1)").bind(TRANSCRIPTION_DAILY_NEURON_BUDGET - 40).run();
+    const heard = await transcribeWithSpeakers(e, audio, "audio/webm", "speakers", day);
+    expect(heard.engine).toBe("NOVA3");
+    expect(models).toEqual(["@cf/deepgram/nova-3"]);
+    expect(await neuronsToday(e, day)).toBe(TRANSCRIPTION_DAILY_NEURON_BUDGET - 40 + heard.neurons!);
+    expect(await neuronsToday(e, day)).toBeGreaterThanOrEqual(TRANSCRIPTION_DAILY_NEURON_BUDGET);
+
+    // Now at the budget: neither Nova-3 nor Whisper is called, for either preference.
+    for (const prefer of ["speakers", "words"] as const) {
+      await expect(transcribeWithSpeakers(e, audio, "audio/webm", prefer, day)).rejects.toBeInstanceOf(TranscriptionBudgetSpent);
+    }
+    expect(models).toEqual(["@cf/deepgram/nova-3"]);
+    const row = await env.WP_OS_DB.prepare("SELECT stopped FROM transcription_neuron_day WHERE day = '2030-01-01'").first<any>();
+    expect(row.stopped).toBe(2);
+    await expect(transcribeWithSpeakers(e, audio, "audio/webm", "words", day)).rejects.toThrow(/NOTES_PAUSED_DAILY_BUDGET/);
+
+    // The next UTC day starts empty: words-first goes to Whisper, not Nova-3.
+    const next = await transcribeWithSpeakers(e, audio, "audio/webm", "words", new Date("2030-01-02T00:00:01Z"));
+    expect(next.engine).toBe("WHISPER");
+    expect(models.at(-1)).toBe("@cf/openai/whisper-large-v3-turbo");
   });
 });

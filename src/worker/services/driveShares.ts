@@ -5,6 +5,20 @@ import { PARTNERS, partnerByEmail, type Partner } from "../../shared/registry/pa
 import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
 import { downloadDriveFile, driveFileText, getDriveFile, GoogleWorkspaceError, SCOPE, serviceAccountToken, type DriveFileRaw } from "../effects/googleWorkspaceClient";
 import { transcribeDiarisedStream } from "../ai/providers/workersAiNova3";
+import { recordNeurons, requireBudget } from "../ai/transcriptionBudget";
+
+/** A Drive recording through Nova-3, inside the day's speech-to-text budget (`transcriptionBudget.ts`). */
+async function heardDriveAudio(env: Env, body: ReadableStream, contentType: string): Promise<string> {
+  try {
+    await requireBudget(env);
+  } catch (err) {
+    await body.cancel().catch(() => {});
+    throw err;
+  }
+  const d = await transcribeDiarisedStream(env.AI, body, contentType);
+  await recordNeurons(env, d.neurons ?? 0);
+  return d.text.trim();
+}
 import { voiceNoteType } from "./voiceNotes";
 import { createWorkCardInternal } from "./workCards";
 import { systemIdentity } from "./dealIntake";
@@ -408,7 +422,7 @@ export async function readLinkedDriveFiles(
         }
         const res = await downloadDriveFile(token, id);
         if (input.dryRun) {
-          if (audio) file.text = (await transcribeDiarisedStream(env.AI, res.body!, voiceNoteType(name, mime))).text.trim();
+          if (audio) file.text = await heardDriveAudio(env, res.body!, voiceNoteType(name, mime));
           else await res.body?.cancel();
         } else {
           if (!env.WP_OS_DOCUMENTS || !input.cardId) throw new Error("the document store is not bound");
@@ -426,7 +440,7 @@ export async function readLinkedDriveFiles(
             try {
               const stored = await env.WP_OS_DOCUMENTS.get(key);
               if (!stored) throw new Error("the downloaded recording could not be read back");
-              file.text = (await transcribeDiarisedStream(env.AI, stored.body, voiceNoteType(name, mime))).text.trim();
+              file.text = await heardDriveAudio(env, stored.body, voiceNoteType(name, mime));
             } catch (err) {
               file.readError = (err instanceof Error ? err.message : String(err)).slice(0, 300);
             }

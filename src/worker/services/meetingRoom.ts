@@ -372,7 +372,7 @@ export async function askRoom(env: Env, identity: FirmUserIdentity, meetingId: s
   if (input.audio_base64) {
     via = "VOICE";
     try {
-      const heard = await transcribeWithSpeakers(env, input.audio_base64, input.content_type);
+      const heard = await transcribeWithSpeakers(env, input.audio_base64, input.content_type, "words");
       // A spoken question is one voice; the diariser's labels are noise here.
       question = heard.text.replace(/^Speaker (?:\d+|not identified): /gm, "").replace(/\s+/g, " ").trim();
     } catch (err) {

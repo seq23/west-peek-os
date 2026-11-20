@@ -37,6 +37,8 @@ export interface TranscriptionResult {
   text: string;
   /** Reported by the model when it has it. Never fabricated. */
   wordCount: number | null;
+  /** Seconds of audio the model says it heard (`transcription_info.duration`); what its cost is derived from. */
+  seconds: number | null;
 }
 
 export class TranscriptionUnavailable extends Error {
@@ -68,13 +70,14 @@ export function transcriptionAvailable(binding: WhisperBinding | undefined): boo
  * minute of a meeting.
  */
 function readTranscription(result: unknown): TranscriptionResult {
-  const r = result as { text?: unknown; word_count?: unknown } | null;
+  const r = result as { text?: unknown; word_count?: unknown; transcription_info?: { duration?: unknown } } | null;
   if (typeof r?.text !== "string") {
     throw new TranscriptionUnavailable("the transcription service answered in a shape this build does not understand");
   }
   return {
     text: r.text,
     wordCount: typeof r.word_count === "number" ? r.word_count : null,
+    seconds: typeof r.transcription_info?.duration === "number" ? r.transcription_info.duration : null,
   };
 }
 
