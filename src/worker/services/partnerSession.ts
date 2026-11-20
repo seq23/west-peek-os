@@ -413,7 +413,11 @@ export async function redirectSession(env: Env, cardId: string, words: string, f
       what: `changed course — ${said.replace(/\s+/g, " ").slice(0, 60)}`,
       tldr: `Changed course: ${said.replace(/\s+/g, " ").slice(0, 300)}. I stopped what I was doing and started again with this on top; nothing from before the change goes out.`,
       tldrBullets: [],
-      sections: [{ label: "What happens next", bullets: ["The work restarts with your correction above everything else.", "You hear back when it is done, or sooner if a word could mean two things."] }],
+      // Two labelled sections: the format check refuses an email with one, so this note never left before 20 Nov 2026.
+      sections: [
+        { label: "What you asked", bullets: [said.replace(/\s+/g, " ").slice(0, 300)] },
+        { label: "What happens next", bullets: ["The work restarts with your correction above everything else.", "You hear back when it is done, or sooner if a word could mean two things."] },
+      ],
       details: null,
     });
     note = out.sent;
