@@ -275,6 +275,8 @@ export async function runPartnerMessageCard(
     firmScope: card.firm_scope,
     actorId: employeeRow.id,
     what: card.title,
+    // A message about another job (`from_card_id` at the create door) goes out on that job's own thread.
+    replyOnThread: await onThreadOf(env, card.id),
   });
 
   const delivered = await deliver(env, actor, {
@@ -324,6 +326,18 @@ export async function runPartnerMessageCard(
       ? `${mail.subject} — emailed to ${partner.email}`
       : `${mail.subject} — ${mail.reason}`,
   };
+}
+
+/** The thread of the job this message is about (`from_card_id` at the create door), or null for a message of its own. */
+async function onThreadOf(env: Env, cardId: string): Promise<string | null> {
+  const row = await env.WP_OS_DB.prepare("SELECT request_json FROM work_card WHERE id = ?1").bind(cardId).first<{ request_json: string | null }>();
+  let of: unknown = null;
+  try {
+    of = (JSON.parse(row?.request_json ?? "null") as { on_thread_of?: unknown } | null)?.on_thread_of ?? null;
+  } catch {
+    of = null;
+  }
+  return typeof of === "string" && of ? (await import("./requestReply")).threadRootFor(env, of) : null;
 }
 
 /** One line saying why this message exists, for the second (mandatory) exec-email section. */

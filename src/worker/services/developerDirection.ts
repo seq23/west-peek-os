@@ -2,7 +2,7 @@ import type { Env } from "../env";
 import { json, type RouteContext } from "../router";
 import { appendEvent } from "../events";
 import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
-import { partnerByFirmUserId, type Partner } from "../../shared/registry/partners";
+import { partnerByEmail, partnerByFirmUserId, type Partner } from "../../shared/registry/partners";
 import { readApprovalReply } from "../../shared/work/approvalReply";
 import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
 import { PARTNER_ANSWER_MAX } from "../../shared/work/blocks";
@@ -191,13 +191,40 @@ export async function handleDeveloperChanges(ctx: RouteContext): Promise<Respons
 }
 
 /**
- * POST /api/work-cards/:id/developer-email { subject, text } — THE DEVELOPER'S EXACT WORDS TO THE PARTNER WHO ASKED
- * (owner, 14 Nov 2026: "Send it", for Scooter's dashboard ready email). The Mac's own identity only, for a website
- * job only. The text is sent exactly as given, as Porter, to the ONE partner who asked for the job and nobody else
- * (no cc), on the job's own thread, through `sendOrPreview` like every employee's email (so the card's "Show me first?" tick holds,
- * and `sendPartnerEmail` still refuses anyone outside the two partner addresses). Recorded as a notice (`developer:<hash>`), so the same words are never sent twice.
+ * POST /api/work-cards/:id/developer-email { subject, text } — THE DEVELOPER'S EXACT WORDS TO THE PARTNER THE JOB IS FOR
+ * (owner, 14 Nov 2026: "Send it"; widened to EVERY card kind 20 Nov 2026: "developer email action — should be for ALL
+ * JOBS!"). The Mac's own identity only. The text is sent exactly as given, as the card's own employee, to ONE partner and
+ * nobody else (no cc), on the job's own thread, through `sendOrPreview` like every employee's email (so the card's "Show
+ * me first?" tick holds, and `sendPartnerEmail` still refuses anyone outside the two partner addresses). The partner is
+ * the one who asked (`requested_by_email`), else the partner named on the card (`partnerOnCard`); with neither, or an
+ * address that is not a partner, it is refused with the reason. Recorded as a notice (`developer:<hash>`), so the same
+ * words are never sent twice.
  */
 export const DEVELOPER_EMAIL_MAX = 6000;
+
+interface DeveloperEmailCard {
+  id: string;
+  kind: string | null;
+  title: string;
+  firm_scope: string;
+  requested_by_email: string | null;
+  secondary_partner_email: string | null;
+  result_recipient: string | null;
+  preview_first: number | null;
+  preview_owner_id: string | null;
+  employee: string | null;
+}
+
+/** The one partner a developer email on this card goes to: who asked, else the partner the card names. Pure. */
+export function partnerOnCard(card: Pick<DeveloperEmailCard, "requested_by_email" | "secondary_partner_email" | "result_recipient">): { ok: true; email: string } | { ok: false; reason: string } {
+  const asked = (card.requested_by_email ?? "").trim();
+  const named = [card.secondary_partner_email, card.result_recipient].map((s) => (s ?? "").trim()).find((s) => s.length > 0) ?? "";
+  const address = asked || named;
+  if (!address) return { ok: false, reason: "nobody asked for this job by email and the card names no partner, so there is nobody to send it to" };
+  const partner = partnerByEmail(address);
+  if (!partner) return { ok: false, reason: `${address.slice(0, 120)} is not one of the two partner addresses; a developer email goes to a partner only` };
+  return { ok: true, email: partner.email };
+}
 export async function handleDeveloperEmail(ctx: RouteContext): Promise<Response> {
   if (ctx.identity?.email.toLowerCase() !== SUBSCRIPTION_CLAIMER_EMAIL) return json({ error: "forbidden", detail: "this door is the Mac's own identity only" }, { status: 403 });
   const director = await soleDeveloper(ctx.env);
@@ -208,11 +235,15 @@ export async function handleDeveloperEmail(ctx: RouteContext): Promise<Response>
   const text = typeof body?.text === "string" ? body.text.replace(/\r\n/g, "\n").trim() : "";
   if (!subject || !text) return json({ error: "invalid_input", detail: "subject and text are required" }, { status: 400 });
   if (text.length > DEVELOPER_EMAIL_MAX) return json({ error: "too_long", detail: `the text is over ${DEVELOPER_EMAIL_MAX} characters` }, { status: 400 });
-  const card = await ctx.env.WP_OS_DB.prepare("SELECT id, kind, title, firm_scope, requested_by_email, preview_first, preview_owner_id FROM work_card WHERE id = ?1").bind(cardId).first<{ id: string; kind: string | null; title: string; firm_scope: string; requested_by_email: string | null; preview_first: number | null; preview_owner_id: string | null }>();
+  const card = await ctx.env.WP_OS_DB.prepare(
+    `SELECT wc.id, wc.kind, wc.title, wc.firm_scope, wc.requested_by_email, wc.secondary_partner_email, wc.result_recipient, wc.preview_first, wc.preview_owner_id,
+            e.name AS employee
+       FROM work_card wc LEFT JOIN ai_employee e ON e.id = wc.owner_id AND wc.owner_type = 'AI' WHERE wc.id = ?1`,
+  ).bind(cardId).first<DeveloperEmailCard>();
   if (!card) return json({ error: "not_found" }, { status: 404 });
-  if (card.kind !== WEB_PROPERTY_CHANGE_KIND) return json({ error: "unsupported", detail: "this door emails about website jobs only" }, { status: 409 });
-  const to = (card.requested_by_email ?? "").trim().toLowerCase();
-  if (!to) return json({ error: "no_partner", detail: "the job was not asked for by a partner's email" }, { status: 409 });
+  const who = partnerOnCard(card);
+  if (!who.ok) return json({ error: "no_partner", detail: who.reason }, { status: 409 });
+  const to = who.email;
   const { alreadyTold, recordNotice, threadRootFor } = await import("./requestReply");
   const { sendOrPreview } = await import("./previewApproval");
   const { doneReplyLaneFor } = await import("./kindRules");
@@ -225,12 +256,12 @@ export async function handleDeveloperEmail(ctx: RouteContext): Promise<Response>
   const lane = await doneReplyLaneFor(ctx.env, { kind: card.kind, preview_first: card.preview_first, preview_owner_id: card.preview_owner_id }, { kind: "PREVIEW" });
   const out = await sendOrPreview(ctx.env, {
     to,
-    email: { employee: "Porter", what: card.title, tldr: subject, sections: [], laidOut: { subject, text, html } },
+    email: { employee: card.employee ?? "Porter", what: card.title, tldr: subject, sections: [], laidOut: { subject, text, html } },
     objectType: "work_card",
     objectId: card.id,
     firmScope: card.firm_scope,
     actorId: ctx.identity.id,
-    cardKind: WEB_PROPERTY_CHANGE_KIND,
+    cardKind: card.kind,
     workCardId: card.id,
     cardAsked: lane.cardAsked,
     becauseOfRule: lane.becauseOfRule,
@@ -242,6 +273,11 @@ export async function handleDeveloperEmail(ctx: RouteContext): Promise<Response>
   await recordNotice(ctx.env, { cardId: card.id, kind: "PREVIEW", cause, to, messageId: out.threadToken ?? null, sent: out.sent, detail: `${director.label}: ${out.reason}`.slice(0, 500), firmScope: card.firm_scope });
   await appendEvent(ctx.env, { eventType: "work_card.developer_email", actorType: "firm_user", actorId: ctx.identity.id, objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { to, subject, sent: out.sent, previewed: out.previewed, reason: out.reason, thread: out.threadToken ?? null, via: "partner tail (Claude)" } });
   return json({ ok: out.sent, previewed: out.previewed, to, subject, detail: out.reason, thread: out.threadToken ?? null }, { status: out.sent || out.previewed ? 200 : 502 });
+}
+
+/** The partner the Mac acts for when it opens work: the one active developer, or null when there is not exactly one. */
+export async function macActsFor(env: Env): Promise<Partner | null> {
+  return (await soleDeveloper(env))?.partner ?? null;
 }
 
 async function soleDeveloper(env: Env): Promise<Director | null> {

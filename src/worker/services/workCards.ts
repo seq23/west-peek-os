@@ -4,7 +4,8 @@ import { ownershipView } from "../../shared/work/partnerOwnership";
 import { z } from "zod";
 import type { Env } from "../env";
 import { artifactAskFromWords } from "../../shared/artifacts/artifact";
-import type { FirmUserIdentity } from "../auth";
+import { SUBSCRIPTION_CLAIMER_EMAIL, type FirmUserIdentity } from "../auth";
+import { parsePartnerMessageAsk, partnerMessageTitle } from "../../shared/intake/partnerMessage";
 import type { RouteContext } from "../router";
 import { json } from "../router";
 import { appendEvent } from "../events";
@@ -223,6 +224,13 @@ const createWorkCardSchema = z.object({
    * exists to end.
    */
   kind: z.string().trim().min(1).optional(),
+  /**
+   * "<Employee>, tell <Partner>: <what to say>" — the PARTNER_MESSAGE ask in the words an email to os@ uses, read by the
+   * same `parsePartnerMessageAsk` (scripts/ops/tell-partner.mjs). Fills the owner, the partner and the instruction.
+   */
+  partner_message: z.string().trim().min(1).max(4200).optional(),
+  /** The job this one came from; its thread carries this one's email (see `handleCreateWorkCard`). */
+  from_card_id: z.string().trim().min(1).optional(),
   /**
    * WEB_PROPERTY_CHANGE ONLY. The site, chosen from a dropdown of `WEB_PROPERTIES` hosts — never
    * free text. The handler below is where that rule is actually enforced; this is just the shape.
@@ -614,7 +622,31 @@ export async function handleCreateWorkCard(ctx: RouteContext): Promise<Response>
   const body = await parseJsonBody(ctx.request);
   const parsed = createWorkCardSchema.safeParse(body);
   if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
-  const { property_host, ...input } = parsed.data;
+  const { property_host, from_card_id: fromCardId, partner_message: partnerMessageWords, ...parsedInput } = parsed.data;
+  let input = parsedInput;
+
+  /*
+   * THE PARTNER MESSAGE, IN THE EMAIL'S OWN WORDS (20 Nov 2026, "i should be able to tell u to tell wesley to message a
+   * partner"). The sentence is read by the one parser the os@ door uses, so it means exactly what it means in an email;
+   * the employee must be on the payroll. The card is the PARTNER_MESSAGE the email door makes, and its runner composes
+   * and sends to that partner only, as before.
+   */
+  if (partnerMessageWords !== undefined) {
+    const ask = parsePartnerMessageAsk("", partnerMessageWords);
+    if (!ask) return json({ error: "invalid_input", detail: 'Write it as "<Employee>, tell <Scooter or Sequoia>: <what to say>".' }, { status: 400 });
+    const seat = await env.WP_OS_DB.prepare("SELECT id, name, status FROM ai_employee WHERE lower(name) = lower(?1)").bind(ask.employeeName).first<{ id: string; name: string; status: string }>();
+    if (!seat || seat.status !== "ACTIVE") return json({ error: "invalid_input", detail: `${ask.employeeName} is not an employee working here right now.` }, { status: 400 });
+    input = {
+      ...input,
+      kind: "PARTNER_MESSAGE",
+      title: partnerMessageTitle(ask.partner.firstName, ask.instruction),
+      owner_type: "AI",
+      owner_id: seat.id,
+      result_recipient: ask.partner.email,
+      prompt: ask.instruction,
+      next_action: `Tell ${ask.partner.firstName}: ${ask.instruction}`.slice(0, 300),
+    };
+  }
 
   /*
    * A KIND SOMEBODY CHOSE MUST BE ONE SHE CAN OPEN BY HAND. `startableByHand` reads
@@ -677,6 +709,30 @@ export async function handleCreateWorkCard(ctx: RouteContext): Promise<Response>
       };
     }
     const card = await createWorkCardInternal(env, identity!, derived);
+    /*
+     * A JOB THE MAC OPENS IS ASKED FOR BY THE PARTNER IT ACTS FOR (20 Nov 2026). The claimer opens work on the
+     * developer's word (her tail), and a card with no requester had nobody its employee's reply, questions or finished
+     * email could reach: `replyToRequester` sends only to `requested_by_email`. So it is the one active developer, the
+     * same partner `soleDeveloper` records the Mac's other doors under; none (or two) leaves it unset, as before.
+     */
+    if (identity!.email.toLowerCase() === SUBSCRIPTION_CLAIMER_EMAIL && !card.requested_by_email) {
+      const actsFor = await (await import("./developerDirection")).macActsFor(env);
+      if (actsFor) {
+        await env.WP_OS_DB.prepare("UPDATE work_card SET requested_by_email = ?2 WHERE id = ?1").bind(card.id, actsFor.email).run();
+        card.requested_by_email = actsFor.email;
+      }
+    }
+    /*
+     * FILED ON ANOTHER JOB'S THREAD. `from_card_id` names the job this one is about (a visible card only); a partner
+     * message opened with it goes out on that job's thread (`services/partnerMessage.ts`, `on_thread_of`).
+     */
+    if (fromCardId) {
+      const from = await getVisibleWorkCard(env, identity!, fromCardId);
+      if (!from) return json({ error: "not_found", detail: "from_card_id is not a card you can see" }, { status: 404 });
+      await env.WP_OS_DB.prepare("UPDATE work_card SET assigned_from_card_id = ?2, request_json = COALESCE(request_json, ?3) WHERE id = ?1")
+        .bind(card.id, from.id, JSON.stringify({ on_thread_of: from.id }))
+        .run();
+    }
     return json(card, { status: 201 });
   } catch (err) {
     if (err instanceof WorkCardError) return json({ error: err.code, detail: err.message }, { status: err.status });

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * SEND THE DEVELOPER'S EXACT EMAIL TO THE PARTNER WHO ASKED FOR A WEBSITE JOB, AS PORTER, ON THE JOB'S THREAD
+ * SEND THE DEVELOPER'S EXACT EMAIL TO THE PARTNER A JOB IS FOR (ANY KIND SINCE 20 NOV 2026), AS ITS EMPLOYEE, ON THE JOB'S THREAD
  * (14 Nov 2026). Calls `POST /api/work-cards/<id>/developer-email` as the Mac's own identity
  * (src/worker/services/developerDirection.ts). The file is "Subject: …" (other header lines ignored), a blank
  * line, then the body sent exactly. The Worker sends to the one partner who asked and nobody else.

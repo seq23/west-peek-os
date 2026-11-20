@@ -46,7 +46,16 @@ rulings) are not kept here: they live in the West Peek Ventures company brain in
 - **"Employee, tell a partner …"** is the `PARTNER_MESSAGE` card kind
   (`src/shared/intake/partnerMessage.ts`, `src/worker/services/partnerMessage.ts`): "Porter, tell
   Scooter: …". Never a hand-written Resend script. Search `git log --all` before deciding a
-  mechanism does not exist.
+  mechanism does not exist. **From the Mac** (her ask, 20 Nov 2026): `npm run -s vault:run -- node
+  scripts/ops/tell-partner.mjs "Wesley, tell Scooter: …" [--card wc_…] [--private]` opens the same card
+  through `POST /api/work-cards` (`partner_message`, read by `parsePartnerMessageAsk`); `--card` sends
+  it on that job's thread. It prints the card id, then the subject once the sweep has worked it.
+- **A job the Mac opens** (`POST /api/work-cards` as the claimer) is asked for by the one active
+  developer (Sequoia), so its employee's replies, questions and finished email reach her.
+- **The developer's exact email on any job** (`scripts/ops/developer-email.mjs`, `POST
+  /api/work-cards/:id/developer-email`, every card kind since 20 Nov 2026): sent as the card's own
+  employee, on the job's thread, to the partner who asked, else the partner the card names; a
+  non-partner address, a card naming nobody, or the same words twice is refused.
 - **Porter's website cards.** A partner's new-subject email about a site joins their open
   WEB_PROPERTY_CHANGE card for that property (`openSiteCardFor`: one open card per partner per
   property), and a follow-up answers any block. A closed-lid Mac is a wait, never "Blocked". A
