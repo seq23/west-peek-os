@@ -9,7 +9,7 @@
  *
  * A SENTENCE runs from the previous . ! ? ; or line break to the next one. A phrase found in it does NOT stand when the
  * rest of that sentence
- *   NEGATES it      not, never, no longer, cannot, any n't ("don't", "won't", "isn't")
+ *   NEGATES it      not, never, no longer, cannot, no need to/for, any n't ("don't", "won't", "isn't")
  *   CONDITIONS it   if, unless, when, whenever, once, in case
  *   REPORTS it      said, says, told, tells, mentioned, according to, last time, or the phrase sits inside quotes
  *   ASKS it         the sentence ends with a question mark
@@ -53,7 +53,7 @@ export function sentencesOf(text: string | null | undefined): Sentence[] {
   return out;
 }
 
-const NEGATES = /\b(?:not|never|no longer|cannot)\b|n['’]t\b/i;
+const NEGATES = /\b(?:not|never|no longer|cannot|no need to|no need for)\b|n['’]t\b/i;
 const CONDITIONS = /\b(?:if|unless|when|whenever|once|in case)\b/i;
 const REPORTS = /\b(?:said|says|told|tells|mentioned|according to|last time)\b/i;
 const ASKS = /\?["”’')\]]*$/;
