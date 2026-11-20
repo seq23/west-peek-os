@@ -7,6 +7,7 @@ import { CONSENT_TYPES, currentConsent, markMeetingStarted, recordConsent, type 
 import { ingestTranscript } from "./captureAdapter";
 import { transcribeChunk, transcriptionAvailable, TranscriptionUnavailable } from "../ai/providers/workersAiWhisper";
 import { DiarisationUnavailable, diarisedLine, transcribeDiarised } from "../ai/providers/workersAiNova3";
+import { recordNeurons, requireBudget, whisperNeurons } from "../ai/transcriptionBudget";
 
 /**
  * Recording a meeting from the browser it is being held in (ADR-019).
@@ -194,34 +195,71 @@ export interface ChunkResult {
   speakers: number[];
   /** Why Whisper was used, when it was. */
   fallback_reason: string | null;
-  /** Neurons the platform reported for this slice (Nova-3 reports them; Whisper's adapter does not). Never fabricated. */
+  /** Neurons this slice cost: Nova-3's as the platform reported them; Whisper's from the model's reported duration at the published rate. */
   neurons: number | null;
 }
 
 /**
- * The words, with speaker turns when the platform can give them (Phase C).
+ * Which route a caller wants first. `speakers`: Nova-3's diarised turns while the day's budget allows,
+ * Whisper after (the laptop microphone, where no later transcript names the speakers). `words`:
+ * Whisper-large-v3-turbo first, Nova-3 only if Whisper cannot read the slice (live Meet notes, which
+ * the official Meet transcript supersedes with named speakers after the call; a spoken question).
+ */
+export type TranscriptionPreference = "speakers" | "words";
+
+/** Why Whisper wrote a slice that asked for words first. */
+export const WORDS_FIRST_REASON = "words first: Whisper costs a tenth of Nova-3, and the official Meet transcript names the speakers after the call";
+
+/**
+ * The words, with speaker turns when the route gives them (Phase C; the budget 20 Nov 2026).
  *
- * NOVA-3 FIRST, WHISPER WHEN THE MODEL IS NOT THERE. The fallback is on `DiarisationUnavailable`
- * only — the model missing, refused, not deployed. A slice Nova-3 could read but failed on for any
- * other reason is reported as that slice failing, because retrying it through a second model would
- * make "which engine wrote this line" unanswerable on the record.
+ * THE DAY'S BUDGET COMES FIRST (`transcriptionBudget.ts`): past TRANSCRIPTION_DAILY_NEURON_BUDGET no
+ * model is called and `TranscriptionBudgetSpent` — a TranscriptionUnavailable, so every caller's 503
+ * already carries it — names the stop. Every call that ran adds what it spent to the day.
  *
- * AN UNATTRIBUTED TURN STAYS UNATTRIBUTED. `diarisedLine` writes "Speaker not identified" for a
- * turn the model did not attribute; nothing here guesses from the neighbouring turn.
+ * Measured 20 Nov 2026 on the exact webm/opus slices headless Chromium makes from
+ * `tests/fixtures/meet-live-fixture.wav`: Whisper-large-v3-turbo returned every word (25/25 on the
+ * 7.9 s slice; 192 words on a 60 s slice, one wrong at the cut), at ~46 neurons a minute against
+ * Nova-3's ~470.
+ *
+ * THE NOVA-3 FALLBACK RULE IS UNCHANGED for `speakers`: Whisper only on `DiarisationUnavailable` (the
+ * model missing), never as a retry of a slice Nova-3 failed on. AN UNATTRIBUTED TURN STAYS
+ * UNATTRIBUTED: `diarisedLine` writes "Speaker not identified"; nothing guesses from a neighbour.
  */
 export async function transcribeWithSpeakers(
   env: Env,
   audioBase64: string,
   contentType: string | undefined,
+  prefer: TranscriptionPreference = "speakers",
+  now = new Date(),
 ): Promise<Pick<ChunkResult, "text" | "engine" | "speakers" | "fallback_reason" | "neurons">> {
-  try {
+  await requireBudget(env, now);
+  const nova = async () => {
     const d = await transcribeDiarised(env.AI, audioBase64, contentType);
+    await recordNeurons(env, d.neurons ?? 0, now);
     const text = d.turns.length > 0 ? d.turns.map(diarisedLine).join("\n") : d.text.trim();
-    return { text: text.trim(), engine: "NOVA3", speakers: d.speakers, fallback_reason: null, neurons: d.neurons };
+    return { text: text.trim(), engine: "NOVA3" as const, speakers: d.speakers, fallback_reason: null, neurons: d.neurons };
+  };
+  const whisper = async (reason: string) => {
+    const w = await transcribeChunk(env.AI, audioBase64);
+    const neurons = whisperNeurons(w.seconds);
+    await recordNeurons(env, neurons, now);
+    return { text: w.text.trim(), engine: "WHISPER" as const, speakers: [], fallback_reason: reason.slice(0, 300), neurons: Math.round(neurons * 10) / 10 };
+  };
+  if (prefer === "words") {
+    try {
+      return await whisper(WORDS_FIRST_REASON);
+    } catch (err) {
+      // Nova-3 only if Whisper could not read it; the budget was read above, before either ran.
+      if (!(err instanceof TranscriptionUnavailable)) throw err;
+      return nova();
+    }
+  }
+  try {
+    return await nova();
   } catch (err) {
     if (!(err instanceof DiarisationUnavailable)) throw err;
-    const w = await transcribeChunk(env.AI, audioBase64);
-    return { text: w.text.trim(), engine: "WHISPER", speakers: [], fallback_reason: err.reason.slice(0, 300), neurons: null };
+    return whisper(err.reason);
   }
 }
 

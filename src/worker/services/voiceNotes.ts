@@ -3,6 +3,7 @@ import { appendEvent } from "../events";
 import { audioAttachments } from "../effects/mimeAttachments";
 import { DiarisationUnavailable, transcribeDiarised } from "../ai/providers/workersAiNova3";
 import { transcribeChunk } from "../ai/providers/workersAiWhisper";
+import { recordNeurons, requireBudget, whisperNeurons } from "../ai/transcriptionBudget";
 import { notifyQuietly } from "./notifications";
 import { PREVIEW_PARTNER } from "../../shared/registry/partners";
 
@@ -47,11 +48,16 @@ export async function hearVoiceNotes(env: Env, raw: string): Promise<VoiceNotes>
   for (const a of attachments) {
     try {
       let text: string;
+      await requireBudget(env);
       try {
-        text = (await transcribeDiarised(env.AI, a.dataBase64, voiceNoteType(a.filename, a.mediaType), { stream: true })).text.trim();
+        const d = await transcribeDiarised(env.AI, a.dataBase64, voiceNoteType(a.filename, a.mediaType), { stream: true });
+        await recordNeurons(env, d.neurons ?? 0);
+        text = d.text.trim();
       } catch (err) {
         if (!(err instanceof DiarisationUnavailable)) throw err;
-        text = (await transcribeChunk(env.AI, a.dataBase64)).text.trim();
+        const w = await transcribeChunk(env.AI, a.dataBase64);
+        await recordNeurons(env, whisperNeurons(w.seconds));
+        text = w.text.trim();
       }
       if (text) out.heard.push({ filename: a.filename, text });
       else out.failed.push({ filename: a.filename, reason: "the transcriber heard no words in it" });
