@@ -196,6 +196,31 @@ describe("step 5 · a correction redirects running work", () => {
     expect(await notices(id, "DONE")).toHaveLength(0);
   });
 
+  it("with partner email switched on, the Changed course note actually leaves (it failed the two-section format before 20 Nov 2026)", async () => {
+    const live = makeTestEnv(t.db, { WP_OS_AI_EMAIL_PARTNERS: "enabled", WP_OS_EMAIL_SEND: "enabled", RESEND_API_KEY: "re_test_not_a_real_key", WP_OS_EMAIL_FROM: "os@westpeek.ventures" } as Partial<Env>);
+    const out: string[] = [];
+    vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).includes("api.resend.com")) {
+        out.push(String((JSON.parse(String(init?.body)) as { to: string[] }).to[0]));
+        return new Response(JSON.stringify({ id: `re_${out.length}` }), { status: 200 });
+      }
+      throw new Error(`unexpected fetch in test: ${String(url)}`);
+    });
+    try {
+      const id = await emailed("Pack", "Draft the diligence sheet.");
+      await runPartnerSessionCard(live, await card(id));
+      const [first] = await runs(id);
+      await live.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'CLAIMED', claimed_by = ?2, claimed_at = ?3 WHERE id = ?1").bind(first!.id, MAC, new Date().toISOString()).run();
+      await redirectSession(live, id, "Also build the data room index.", SCOOTER);
+      const went = await live.WP_OS_DB.prepare("SELECT sent, detail FROM work_card_notice WHERE work_card_id = ?1 AND cause LIKE 'changed-course:%'").bind(id).first<{ sent: number; detail: string | null }>();
+      expect(went?.detail ?? "").not.toContain("does not meet the format");
+      expect(went?.sent).toBe(1);
+      expect(out).toEqual([SCOOTER]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("a note typed on the card steers the live session the same way (a note is never accepted into a void)", async () => {
     const id = await emailed("Pack notes", "Draft the diligence sheet from the attached answers.");
     await runPartnerSessionCard(env, await card(id));
