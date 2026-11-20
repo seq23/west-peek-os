@@ -2,6 +2,7 @@ import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { firstReadDecision, type FirstReadDecision } from "./partnerUnderstood";
 import { propertiesIn, type WebProperty } from "../../shared/intake/webPropertyChange";
+import { sentencesOf, vetoOf } from "../../shared/text/wholeSentence";
 
 /**
  * THE FIRST READ DECIDES (owner ruling, 19 Nov 2026). Claude's first read of a partner email (partnerUnderstood.ts,
@@ -174,6 +175,12 @@ export async function decideReplyWords(
   else if (d?.handOffTo) {
     const to = partnerFor(d.handOffTo);
     readIntent = { kind: "HAND_OFF", to, named: to ? to.firstName : d.handOffTo };
+    // ANCHORED TO HIS WORDS (replay of #556 on main, 20 Nov): a hand-off only acts at once when the sentence naming that
+    // partner stands as said. "If I'm not back by Friday, hand this to Scooter" (a condition), a negation or a report
+    // turns the read into Porter's one question ("Did you mean hand this card to Scooter?"), never a hand-off now.
+    if (to && sentencesOf(words).some((s) => new RegExp(`\\b(?:${to.firstName}|${to.email.replace(/[.]/g, "\\.")})\\b`, "i").test(s.text) && (vetoOf(s.text, null, ["CONDITIONS", "NEGATES", "REPORTS"]) !== null))) {
+      readIntent = { kind: "UNSURE_HAND_OFF", to };
+    }
   }
   const intent = ownRead.state === "READ" ? readIntent : keywordIntent;
   if (readIntent || keywordIntent) {
