@@ -82,6 +82,18 @@ export function planValidators(changed, validators, scripts) {
  */
 export const TEST_CAP = 20;
 
+/*
+ * A SUITE THAT CRASHED IS NOT A TEST THAT FAILED (20 Nov 2026, this Mac at load 25-35): 17 of 20 suites died at start
+ * with "fetch failed" / ECONNRESET / "other side closed" from their miniflare worker, and not one test failed. Those
+ * suites are named here so they run once more, one at a time; a run where any test failed is never retried. Pure.
+ */
+const CRASH = /fetch failed|ECONNRESET|other side closed|EADDRNOTAVAIL|Timeout calling "fetch"/;
+export function crashedSuites(out) {
+  const text = String(out ?? "");
+  if (/Tests\s+\d+ failed/.test(text) || !CRASH.test(text)) return [];
+  return [...new Set([...text.matchAll(/FAIL\s+(tests\/\S+\.test\.ts)\s+\[\s*\1\s*\]/g)].map((m) => m[1]))];
+}
+
 /** Pure, so the test can pin it. `direct` maps each importing test to how many changed files it imports. */
 export function capTests(changedTests, direct, transitive, cap = TEST_CAP) {
   const own = [...new Set(changedTests)];
@@ -183,7 +195,17 @@ async function main() {
   steps.push(pool(vRun, Math.max(2, Math.floor(cpus / 2)), (v) => run(v, "npm", ["run", "-s", v])));
   const results = (await Promise.all(steps)).flat();
 
-  const testRun = results.find((r) => r.label === "tests");
+  let testRun = results.find((r) => r.label === "tests");
+  // A suite whose miniflare died under load (no test failed) is run once more, alone, after everything else is done.
+  const crashed = testRun && testRun.code !== 0 ? crashedSuites(testRun.out) : [];
+  if (crashed.length) {
+    const again = await run("tests", "npx", ["vitest", "run", "--no-file-parallelism", "--maxWorkers=1", ...crashed]);
+    const firstPassed = Number((testRun.out.match(/Test Files\s+(?:\d+ failed \| )?(\d+) passed/) ?? [])[1] ?? 0);
+    const againPassed = Number((again.out.match(/Test Files\s+(?:\d+ failed \| )?(\d+) passed/) ?? [])[1] ?? 0);
+    again.out = `${crashed.length} suite(s) crashed under load (no test failed) and were run again, one at a time:\n${again.out}\nTest Files  ${firstPassed + againPassed} passed`;
+    results[results.indexOf(testRun)] = again;
+    testRun = again;
+  }
   const testFiles = testRun ? Number((testRun.out.match(/Test Files\s+(?:\d+ failed \| )?(\d+) passed/) ?? [])[1] ?? 0) : 0;
   // Rule 0: tests were planned and none passed is a failure, never a quiet pass.
   if (testRun && testRun.code === 0 && testFiles === 0) { testRun.code = 1; testRun.out += "\nplanned test files but none passed (Rule 0)"; }

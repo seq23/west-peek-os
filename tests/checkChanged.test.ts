@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { capTests, TEST_CAP } from "../scripts/ci/check-changed.mjs";
+import { capTests, crashedSuites, TEST_CAP } from "../scripts/ci/check-changed.mjs";
 
 describe("the pre-push check runs at most TEST_CAP test files", () => {
   it("a change imported by 70 tests runs the changed tests and the closest importers, not all 70", () => {
@@ -23,5 +23,23 @@ describe("the pre-push check runs at most TEST_CAP test files", () => {
     const { run, left } = capTests(own, new Map([["t/x.test.ts", 5]]), []);
     expect(run).toHaveLength(TEST_CAP + 3);
     expect(left).toBe(1);
+  });
+});
+
+describe("a suite that crashed under load is run again; a failing test never is", () => {
+  const crash = [
+    " FAIL  tests/blocks.test.ts [ tests/blocks.test.ts ]",
+    "TypeError: fetch failed",
+    "Caused by: Error: read ECONNRESET",
+    " FAIL  tests/artifacts.test.ts [ tests/artifacts.test.ts ]",
+    " Test Files  2 failed | 3 passed (5)",
+    "      Tests  72 passed | 351 skipped (423)",
+  ].join("\n");
+  it("names the crashed suites (20 Nov 2026 pre-push log)", () => {
+    expect(crashedSuites(crash)).toEqual(["tests/blocks.test.ts", "tests/artifacts.test.ts"]);
+  });
+  it("a run with a failed test is not a crash", () => {
+    expect(crashedSuites(crash.replace("Tests  72 passed", "Tests  1 failed | 71 passed"))).toEqual([]);
+    expect(crashedSuites(" FAIL  tests/a.test.ts [ tests/a.test.ts ]\nSyntaxError: Unexpected token")).toEqual([]);
   });
 });
