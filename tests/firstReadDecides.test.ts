@@ -244,8 +244,11 @@ describe("hand-off refusal (#546)", () => {
     expect(await sweepWouldStart(p.id)).toBe(false);
     expect(notHandedOff(before)).toHaveLength(0);
     await aged(p.id, inm, 11);
-    // The next tick's first-read step finds no reader answered within the ten minutes: the keywords decide, logged.
-    await sweepOnce(env, new Date(), RUNNERS);
+    // The first-read step finds no reader answered within the ten minutes: the keywords decide, logged. (Older emails
+    // in the store are read first, a few a tick, so tick until his has settled.)
+    for (let i = 0; i < 10 && !(await env.WP_OS_DB.prepare("SELECT 1 AS x FROM partner_understood WHERE inbound_message_id = ?1 AND state <> 'CLAIMED'").bind(inm).first()); i++) {
+      await sweepOnce(env, new Date(), RUNNERS);
+    }
     expect(notHandedOff(before), "refused once the wait is over").toHaveLength(1);
     expect((await card(p.id)).state, "a hand-off is never the answer: the preview still waits on him").toBe("BLOCKED");
     expect((await readWebPropertyChange(env, p.id))!.land_approved_at, "and nothing lands").toBeNull();

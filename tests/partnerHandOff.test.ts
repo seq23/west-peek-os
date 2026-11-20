@@ -752,6 +752,7 @@ describe("the first read decides hand-off and take-back; keywords only after the
   }
   const reads = (decision: Partial<FirstReadDecision>) => async () => ({
     ok: true,
+    detail: "the test's reader",
     text: `NONE\nDECISION: ${JSON.stringify({ kind: "nothing", property: null, handOffTo: null, planApproved: null, holds: [], takeBack: null, cc: [], backBy: null, ...decision })}`,
   });
   /** The first-read step of the sweep, ticked until this email's read has settled (older emails in the store go first). */
