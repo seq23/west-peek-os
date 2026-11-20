@@ -97,7 +97,7 @@ const NOT_A_PERSON = /^(?:the|a|an|this|that|these|those|my|our|your|his|her|its
  */
 const HAND_OFF_CLEAR: readonly RegExp[] = [
   // hand / give / pass / move / assign … (this) (over) to Scooter
-  new RegExp(`\\b(?:hand|give|pass|move|transfer|reassign|assign|send|route|switch)\\s+(?:${OBJ}\\s+)?(?:over\\s+|off\\s+|across\\s+)?to\\s+${NAME}\\b`, "i"),
+  new RegExp(`\\b(?:hand|handing|give|giving|pass|passing|move|transfer|reassign|assign|send|route|switch)\\s+(?:${OBJ}\\s+)?(?:over\\s+|off\\s+|across\\s+)?to\\s+${NAME}\\b`, "i"),
   // "over to Scooter" — only as the sentence itself, never "I passed the logo over to Scooter"
   new RegExp(`^(?:ok(?:ay)?[,.]?\\s+|and\\s+)?(?:it'?s\\s+|this\\s+is\\s+|handing\\s+(?:it|this)\\s+)?over\\s+to\\s+${NAME}\\b`, "i"),
   // Scooter will take it from here / can handle the missing items / should finish this

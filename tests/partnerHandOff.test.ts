@@ -158,6 +158,10 @@ describe("the rules: partners only, the primary hands off, the secondary takes b
 
   it("reads the words from the first written line only", () => {
     expect(ownershipIntentIn("hand this to Scooter")).toMatchObject({ kind: "HAND_OFF", to: { email: SCOOTER } });
+    // Replay of #556 on main, 20 Nov (keyword fallback): a negated take-back took the card back; "handing this to" was missed.
+    expect(ownershipIntentIn("No need to take it back, Scooter has it.", SEQUOIA)).toBeNull();
+    expect(ownershipIntentIn("Handing this to Scooter. He has the venue context.", SEQUOIA)).toMatchObject({ kind: "HAND_OFF", to: { email: SCOOTER } });
+    expect(ownershipIntentIn("I'll take it back from here, thanks Scooter.", SEQUOIA)).toMatchObject({ kind: "TAKE_BACK" });
     expect(ownershipIntentIn("Give this to Sequoia.")).toMatchObject({ kind: "HAND_OFF", to: { email: SEQUOIA } });
     expect(ownershipIntentIn("please pass it over to scooter@westpeek.ventures, thanks")).toMatchObject({ kind: "HAND_OFF", to: { email: SCOOTER } });
     expect(ownershipIntentIn("hand this to Bob")).toEqual({ kind: "HAND_OFF", to: null, named: "Bob" });
