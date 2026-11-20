@@ -20,6 +20,8 @@ export interface PartnerBack {
   when: string;
 }
 
+import { sentencesOf, standingIn } from "../text/wholeSentence";
+
 const PROMISE = /\b(?:i|we)(?:\s+will|'ll|\s+am\s+going\s+to|\s+can|\s+plan\s+to|\s+should)\s+(?:come\s+back|get\s+back|circle\s+back|be\s+back|follow\s+up|send|share|have|reply|respond|review|look|go\s+through|take\s+a\s+look)\b/i;
 const DAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 const WHEN = new RegExp(`\\b(this weekend|over the weekend|the weekend|tonight|tomorrow|next week|early next week|end of (?:the )?week|${DAYS.join("|")})\\b`, "i");
@@ -44,20 +46,45 @@ function centralWeekday(now: Date): number {
 /** When the partner said he will be back, or null. Only the newest part of a reply is read, never the quoted thread. */
 export function partnerBackIn(text: string | null | undefined, now: Date = new Date()): PartnerBack | null {
   const own = String(text ?? "").split(/\n\s*On .{0,120}wrote:|\n>|\n-{2,}\s*Original Message/i)[0] ?? "";
-  for (const sentence of own.replace(/\s+/g, " ").split(/(?<=[.!?])\s+/)) {
-    if (!PROMISE.test(sentence)) continue;
+  for (const { text: sentence } of sentencesOf(own)) {
+    // WHOLE SENTENCES (19 Nov 2026, wholeSentence.ts): "if I can, I'll get back to you Monday", "I won't get back to
+    // you this weekend" and "will you send it tomorrow?" are no promise.
+    if (!standingIn(sentence, PROMISE)) continue;
     const when = WHEN.exec(sentence)?.[1]?.toLowerCase();
     if (!when) continue;
-    const today = centralWeekday(now);
-    // Days until the first working morning AFTER the window he named.
-    let ahead: number;
-    if (when.includes("weekend")) ahead = ((8 - today) % 7) || 7; // → Monday
-    else if (when === "tonight") ahead = 1;
-    else if (when === "tomorrow") ahead = 2;
-    else if (when.includes("next week")) ahead = (((8 - today) % 7) || 7) + 7; // → the Monday after next week
-    else if (when.includes("end of")) ahead = ((8 - today) % 7) || 7; // → Monday
-    else ahead = ((DAYS.indexOf(when) - today + 7) % 7 || 7) + 1; // the named day, then the morning after
-    return { back_at: centralMorning(now, ahead).toISOString(), words: sentence.trim().slice(0, 300), when };
+    return backAfter(when, sentence, now);
   }
   return null;
+}
+
+/** The first working morning after the window he named ("this weekend", "tomorrow", "Monday"), as his PartnerBack. */
+function backAfter(when: string, words: string, now: Date): PartnerBack {
+  const today = centralWeekday(now);
+  // Days until the first working morning AFTER the window he named.
+  let ahead: number;
+  if (when.includes("weekend")) ahead = ((8 - today) % 7) || 7; // → Monday
+  else if (when === "tonight") ahead = 1;
+  else if (when === "tomorrow") ahead = 2;
+  else if (when.includes("next week")) ahead = (((8 - today) % 7) || 7) + 7; // → the Monday after next week
+  else if (when.includes("end of")) ahead = ((8 - today) % 7) || 7; // → Monday
+  else ahead = ((DAYS.indexOf(when) - today + 7) % 7 || 7) + 1; // the named day, then the morning after
+  return { back_at: centralMorning(now, ahead).toISOString(), words: words.trim().slice(0, 300), when };
+}
+
+/**
+ * THE FIRST READ'S DAY (20 Nov 2026): the last day of the window he named, as the first read gave it (YYYY-MM-DD,
+ * Central). He is expected the working morning after it, 8:00 AM CT, exactly as `partnerBackIn` reads his words.
+ */
+export function backByDay(day: string, words: string, now: Date = new Date()): PartnerBack | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day.trim());
+  if (!m) return null;
+  const noon = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 18));
+  if (Number.isNaN(noon.getTime()) || noon.getTime() < now.getTime() - 86_400_000) return null;
+  const ahead = Math.round((Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) - Date.parse(`${centralDay(now)}T00:00:00Z`)) / 86_400_000) + 1;
+  return { back_at: centralMorning(now, ahead).toISOString(), words: words.trim().slice(0, 300), when: new Intl.DateTimeFormat("en-US", { timeZone: TZ, weekday: "long", month: "short", day: "numeric" }).format(noon) };
+}
+
+/** Today's Central calendar day, YYYY-MM-DD. */
+export function centralDay(now: Date): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
 }

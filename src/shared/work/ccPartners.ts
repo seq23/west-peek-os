@@ -1,4 +1,5 @@
 import { PARTNERS, partnerByEmail, partnerByName, type Partner } from "../registry/partners";
+import { sentencesOf, vetoOf } from "../text/wholeSentence";
 
 /**
  * "CC SCOOTER" — A PARTNER COPIED ON THE FINISHED EMAIL (owner, 23 Sep 2026: "yes add cc support").
@@ -23,7 +24,14 @@ const SELF = new Set(["me", "myself"]);
 /** Every token a "cc …" phrase in this text names, in order, lower-cased. Pure. */
 export function ccAsksIn(text: string | null | undefined): string[] {
   const out: string[] = [];
-  for (const m of String(text ?? "").matchAll(/(?:^|[^A-Za-z0-9@])cc\b\s*:?\s*([^\n]*)/gi)) {
+  const all = String(text ?? "");
+  const sentences = sentencesOf(all);
+  for (const m of all.matchAll(/(?:^|[^A-Za-z0-9@])cc\b\s*:?\s*([^\n]*)/gi)) {
+    // WHOLE SENTENCES (19 Nov 2026, wholeSentence.ts): "don't cc Scooter", "should I cc Scooter?", "if he asks, cc
+    // Scooter" and "last time you cc'd Scooter" ask for no copy.
+    const at = (m.index ?? 0) + m[0].search(/cc/i);
+    const sentence = [...sentences].reverse().find((x) => x.start <= at);
+    if (sentence && vetoOf(sentence.text, { from: at - sentence.start, to: Math.min(sentence.text.length, at - sentence.start + m[0].length) })) continue;
     const words = (m[1] ?? "").split(/\s+/).filter(Boolean);
     let expectName = true;
     for (const raw of words) {

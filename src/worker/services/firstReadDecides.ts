@@ -88,3 +88,128 @@ export function propertyNamed(named: string | null | undefined, registry: readon
   const found = propertiesIn(String(named), registry);
   return found.length === 1 ? found[0]! : null;
 }
+
+// ── WHAT HIS REPLY SAYS ABOUT THE CARD ITSELF (owner ruling, 19 Nov 2026; built 20 Nov 2026) ─────────────────────────
+
+/** One part of the first read: READ when the decision carries that field, else ABSENT (an older read, or none at all). */
+function partOf(read: FirstRead, has: boolean): FirstRead {
+  return read.state === "READ" && has ? read : { state: "ABSENT", messageId: read.messageId };
+}
+
+/**
+ * HAND-OFF, TAKE-BACK, A SECOND PARTNER'S "APPROVED", CC AND "BACK ON <DAY>", DECIDED BY THE FIRST READ.
+ *
+ * These used to be read by keywords at the reply door (emailThread.ts), the moment his email arrived, and the partner
+ * tail patched them one phrase at a time ("I don't think Scooter will take it from here" handed the card off). The
+ * door now only files the reply; this runs when the first read of that reply is in (partnerUnderstood.ts, right after
+ * the brief is saved), so the sweep's wait (`claimNextCard`) already holds the card until it has. Each part follows the
+ * first read's DECISION; a part the read did not give (no reader answered within the ten minutes, or an older read)
+ * falls back to the keywords, judged by whole sentences (wholeSentence.ts) and logged "first read absent: keyword
+ * fallback". Both readings go on the event spine for every part either one mentions.
+ *
+ * Only a reply on a card's own thread (a `work_steer` row for the message: what the door filed) is read here; a card a
+ * developer has taken over is left alone, as at the door. A hand-off or take-back is never the answer to the card's
+ * question: when this reply had answered its block, the block is put back before the card changes hands, so it waits
+ * on the new primary. Never throws past its own logging.
+ */
+export async function decideReplyWords(
+  env: Env,
+  input: { inboundId: string; messageId: string | null; receivedAt: string; decision: FirstReadDecision | null },
+): Promise<void> {
+  if (!input.messageId) return;
+  const steer = await env.WP_OS_DB.prepare(
+    "SELECT from_card_id, said_by, body, thread_token FROM work_steer WHERE message_id = ?1 AND from_card_id IS NOT NULL ORDER BY created_at LIMIT 1",
+  )
+    .bind(input.messageId)
+    .first<{ from_card_id: string; said_by: string; body: string; thread_token: string | null }>();
+  if (!steer) return;
+  const card = await env.WP_OS_DB.prepare(
+    "SELECT id, firm_scope, state, requested_by_email, secondary_partner_email, held_reason, block_answered_at, block_answered_by FROM work_card WHERE id = ?1",
+  )
+    .bind(steer.from_card_id)
+    .first<{ id: string; firm_scope: string; state: string; requested_by_email: string | null; secondary_partner_email: string | null; held_reason: string | null; block_answered_at: string | null; block_answered_by: string | null }>();
+  const { partnerByEmail, partnerFor } = await import("../../shared/registry/partners");
+  const partner = partnerByEmail(steer.said_by);
+  const { isTakenOver } = await import("../../shared/work/takeover");
+  if (!card || !partner || isTakenOver(card.held_reason)) return;
+  const words = steer.body;
+  const read: FirstRead = input.decision ? { state: "READ", decision: input.decision, messageId: input.inboundId } : { state: "ABSENT", messageId: input.inboundId };
+  const d = input.decision;
+  const trail = async (line: string) => {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || '• ' || ?2, 1, 16000) WHERE id = ?1").bind(card.id, line.slice(0, 600)).run();
+  };
+
+  // CC (0239): the partners he asked to copy on the finished email.
+  const { ccAsksIn } = await import("../../shared/work/ccPartners");
+  const ccRead = partOf(read, Array.isArray(d?.cc));
+  const ccKeyword = ccAsksIn(words);
+  const cc = ccRead.state === "READ" ? d!.cc! : ccKeyword;
+  if (cc.length || ccKeyword.length) {
+    await logDecision(env, card, { what: "the cc", read: ccRead, firstRead: ccRead.state === "READ" ? cc.join(", ") || "no cc" : null, keyword: ccKeyword.join(", ") || "no cc" });
+    if (cc.length) await (await import("./ccPartners")).recordCc(env, card.id, cc, partner.email);
+  }
+
+  // BACK ON <DAY> (0302): the partner who asked says when to expect him, so nothing reminds him before then.
+  if ((card.requested_by_email ?? "").trim().toLowerCase() === partner.email) {
+    const { backByDay, partnerBackIn } = await import("../../shared/work/partnerBackBy");
+    const at = new Date(Date.parse(input.receivedAt) || Date.now());
+    const backRead = partOf(read, d?.backBy !== undefined);
+    const keyword = partnerBackIn(words, at);
+    const back = backRead.state === "READ" ? (d!.backBy ? backByDay(d!.backBy, words.split("\n")[0] ?? words, at) : null) : keyword;
+    if (back || keyword) {
+      await logDecision(env, card, { what: "when he is back", read: backRead, firstRead: backRead.state === "READ" ? back?.back_at ?? "not said" : null, keyword: keyword?.back_at ?? "not said" });
+      if (back) await (await import("./blocks")).recordPartnerBack(env, card.id, back, partner.firstName);
+    }
+  }
+
+  // HAND-OFF AND TAKE-BACK (0241).
+  const { ownershipIntentIn, roleOf } = await import("../../shared/work/partnerOwnership");
+  const handOff = await import("./handOff");
+  const ownRead = read;
+  const keywordIntent = ownershipIntentIn(words, partner.email);
+  const said = (i: ReturnType<typeof ownershipIntentIn>): string =>
+    !i ? "no hand-off" : i.kind === "TAKE_BACK" ? "take back" : i.kind === "HAND_OFF" ? `hand to ${i.to?.firstName ?? i.named}` : `unsure: ${i.to.firstName}?`;
+  let readIntent: ReturnType<typeof ownershipIntentIn> = null;
+  if (d?.takeBack) readIntent = { kind: "TAKE_BACK" };
+  else if (d?.handOffTo) {
+    const to = partnerFor(d.handOffTo);
+    readIntent = { kind: "HAND_OFF", to, named: to ? to.firstName : d.handOffTo };
+  }
+  const intent = ownRead.state === "READ" ? readIntent : keywordIntent;
+  if (readIntent || keywordIntent) {
+    const line = await logDecision(env, card, { what: "the hand-off", read: ownRead, firstRead: ownRead.state === "READ" ? said(readIntent) : null, keyword: said(keywordIntent) });
+    await trail(line);
+  }
+  const answeredByThis = Boolean(card.block_answered_at) && ["OPEN", "IN_PROGRESS"].includes(card.state) && card.block_answered_by === partner.firmUserId && Date.parse(card.block_answered_at!) >= Date.parse(input.receivedAt) - 2 * 60_000;
+  const owned = await handOff.ownershipFromWords(env, {
+    cardId: card.id,
+    writer: partner.email,
+    text: words,
+    via: "REPLY",
+    ackOnThread: steer.thread_token,
+    // "yes" to Porter's own "Did you mean…?" is read first inside, as the answer to that question (structure, not meaning).
+    intent: read.state === "READ" ? intent : undefined,
+    beforeActing: async () => {
+      if (answeredByThis) await (await import("./blocks")).restoreBlock(env, card.id, "his reply was about who owns the card, not the answer to its question");
+    },
+  });
+  if (owned && !owned.ok) {
+    await handOff.tellPartner(env, { cardId: card.id, to: partner, label: "Not changed", line: owned.reason ?? "Not changed.", subjectTail: "not handed off", onThread: steer.thread_token });
+    return;
+  }
+  if (owned) return;
+
+  // A SECONDARY'S "APPROVED" (0241): refused, and told who approves and how to take it over. Kept as a note at the door.
+  const fresh = await env.WP_OS_DB.prepare("SELECT requested_by_email, secondary_partner_email FROM work_card WHERE id = ?1").bind(card.id).first<{ requested_by_email: string | null; secondary_partner_email: string | null }>();
+  if (!fresh || roleOf(fresh, partner.email) !== "SECONDARY") return;
+  const { readApprovalReply } = await import("../../shared/work/approvalReply");
+  const keywordApproves = ["APPROVED", "FORCED", "PREVIEW", "PUBLISH"].includes(readApprovalReply(words).kind);
+  const readApproves = d?.kind === "approve";
+  const approves = read.state === "READ" ? readApproves : keywordApproves;
+  if (readApproves || keywordApproves) {
+    await logDecision(env, card, { what: "a secondary's approval", read, firstRead: read.state === "READ" ? (readApproves ? "approve" : d!.kind) : null, keyword: keywordApproves ? "approve" : "no approval" });
+  }
+  const { ownershipOf } = await import("../../shared/work/partnerOwnership");
+  const primary = ownershipOf(fresh).primary;
+  if (approves && primary) await handOff.tellSecondaryRefused(env, { cardId: card.id, secondary: partner, primary, said: words, onThread: steer.thread_token });
+}

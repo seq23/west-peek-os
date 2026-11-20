@@ -1,7 +1,8 @@
 import { committedLpNamedIn, committedLps } from "../ai/committedLps";
+import { stands } from "../../shared/text/wholeSentence";
 import { privateMaterialConstraint, privateMaterialSentence } from "../../shared/intake/privateMaterial";
 import { ccAck, ccAsksIn, isOnlyACc, resolveCc } from "../../shared/work/ccPartners";
-import { ownershipIntentIn, secondaryNoteAck } from "../../shared/work/partnerOwnership";
+import { secondaryNoteAck } from "../../shared/work/partnerOwnership";
 import { firstReadOf, logDecision, propertyNamed, type FirstRead } from "./firstReadDecides";
 import { developerDirector } from "./developerDirection";
 import type { Env } from "../env";
@@ -10,12 +11,12 @@ import { appendEvent } from "../events";
 import { actorFromIdentity, type Actor } from "./authorize";
 import { answerBlock, blockCard, PARTNER_ANSWER_MAX, restoreBlock } from "./blocks";
 import { notifyQuietly } from "./notifications";
-import { changeOwnership, tellPartner } from "./handOff";
+import { tellPartner } from "./handOff";
 import { runAi } from "../ai/runAi";
 import { deliver } from "./deliverables";
 import { handOver } from "./employeeWork";
 import { isWaitingForMac, parkRun, readRun, type SeatRunRow } from "../ai/subscriptionSeats";
-import { PARTNERS, PREVIEW_PARTNER, partnerByEmail, partnerFor } from "../../shared/registry/partners";
+import { PARTNERS, PREVIEW_PARTNER, partnerByEmail } from "../../shared/registry/partners";
 import { sendOrPreview } from "./previewApproval";
 import type { SweepCard } from "./workSweep";
 import { hostsSentence, pagesHostsOf, readWebPropertyAsk, sitesOf, WEB_PROPERTIES, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
@@ -2182,8 +2183,13 @@ async function applyPlan(env: Env, card: WebPropertyChangeCard, row: WebProperty
 
 /** The partner's own words asking to see the plan, or the open questions, before anything is built (19 Nov 2026). */
 const PLAN_FIRST = /\b(?:confirm the plan|(?:send|show) me (?:the|a) plan|plan (?:to me )?first|flag (?:any|the|your) questions(?: first| before)|ask me (?:first|before)|check with me (?:first|before)|before (?:you )?(?:start|build)(?:ing)?,? (?:send|show|ask|check))/i;
+/**
+ * Judged by its whole sentence (wholeSentence.ts): "you don't need to confirm the plan" and "last time he said send me
+ * the plan first" do not wait. Waiting is the cautious reading, so a question ("can you send me the plan first?") or a
+ * condition ("if anything is unclear, ask me first") still waits: each still asks for the plan before the build.
+ */
 export function planFirstIn(ask: string): boolean {
-  return PLAN_FIRST.test(ask);
+  return stands(ask, PLAN_FIRST, ["NEGATES", "REPORTS"]);
 }
 
 /** How `plan_approved_by` reads when the request itself approved the plan. Never a partner's id or email, so 0241's primary-only trigger does not read it as a person. */
@@ -3152,28 +3158,6 @@ function answeredBy(card: WebPropertyChangeCard): string | null {
   return card.block_answered_at ?? null;
 }
 
-/**
- * A HAND-OFF TO SOMEONE WHO IS NOT A PARTNER IS REFUSED, BY THE FIRST READ (19 Nov 2026, #546: "Please move it to the
- * Productions dashboard project" read "the" as a person). On a BLOCKED website card the door no longer refuses at
- * intake (emailThread.ts); the refusal is decided here, from the first read's `handOffTo`, or the keywords when it is
- * absent. True when the reply was a refused hand-off: it is answered and nothing else is read from it.
- */
-async function refusedHandOff(env: Env, card: WebPropertyChangeCard, answer: string, read: FirstRead): Promise<boolean> {
-  const requester = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
-  if (!requester) return false;
-  const kw = ownershipIntentIn(answer, requester.email);
-  const keywordNamed = kw?.kind === "HAND_OFF" && !kw.to ? kw.named : null;
-  const readNamed = read.state === "READ" && read.decision.handOffTo && !partnerFor(read.decision.handOffTo) ? read.decision.handOffTo : null;
-  const named = read.state === "READ" ? readNamed : keywordNamed;
-  if (read.state !== "READ" ? keywordNamed : readNamed || keywordNamed) {
-    await appendFinding(env, card.id, await logDecision(env, card, { what: "hand-off", read, firstRead: read.state === "READ" ? (readNamed ? `hand to ${readNamed}` : "no hand-off") : null, keyword: keywordNamed ? `hand to ${keywordNamed}` : "no hand-off" }));
-  }
-  if (!named) return false;
-  const out = await changeOwnership(env, { cardId: card.id, actor: requester.email, action: "HAND_OFF", target: named, via: "REPLY", said: answer });
-  if (!out.ok) await tellPartner(env, { cardId: card.id, to: requester, label: "Not changed", line: out.reason ?? "Not changed.", subjectTail: "not handed off" });
-  return true;
-}
-
 /** The keywords' own reading of a reply to a preview, in one word, for the record beside the first read's. */
 function keywordPreviewReading(answer: string): string {
   const k = readApprovalReply(answer).kind;
@@ -3424,14 +3408,10 @@ export async function runWebPropertyChangeCard(
     }
     /*
      * THE FIRST READ DECIDES (owner ruling, 19 Nov 2026). His reply's first read, when it exists, says whether this is
-     * a stop, a refused hand-off, or a plan he has not approved ("Please confirm the plan"); before it is in, nothing
+     * a stop or a plan he has not approved (a hand-off, refused or not, is the first read's at the door: firstReadDecides.ts#decideReplyWords) ("Please confirm the plan"); before it is in, nothing
      * moves (the sweep's wait, `claimNextCard`); past the ten minutes with none, the keywords below decide, logged.
      */
     const planRead = await firstReadOf(env, card.id, { after: row.plan_filed_at, until: answeredBy(card) });
-    if (await refusedHandOff(env, card, answer, planRead)) {
-      const why = await blockWithAsks(env, card, row, asks);
-      return { finished: false, blocked: true, progressed: false, detail: `A hand-off to someone who is not a partner was refused; the plan still waits. ${why}` };
-    }
     const reading = readApprovalReply(answer);
     /*
      * A REPLY OF ANY KIND EXCEPT STOP APPROVES THE PLAN (owner, 27 Sep 2026). The keywords decide
@@ -3540,10 +3520,6 @@ export async function runWebPropertyChangeCard(
        */
       if (answer && fromRequester && answer !== MATERIALS_ADDED_PHRASE) {
         const previewRead = await firstReadOf(env, card.id, { after: row.preview_emailed_at, until: answeredBy(card) });
-        if (await refusedHandOff(env, card, answer, previewRead)) {
-          const why = await blockOnPreview(env, card, row);
-          return { finished: false, blocked: true, progressed: false, detail: `A hand-off to someone who is not a partner was refused; the preview still waits. ${why}` };
-        }
         if (previewRead.state === "READ") {
           const decided = await previewByFirstRead(env, card, row, answer, previewRead, rules, answerQuestion);
           if (decided) return decided;

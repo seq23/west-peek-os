@@ -1,5 +1,5 @@
 import { RECURRING_CARD_KINDS } from "../../shared/work/recurring";
-import { partnerBackIn, type PartnerBack } from "../../shared/work/partnerBackBy";
+import type { PartnerBack } from "../../shared/work/partnerBackBy";
 import type { Env } from "../env";
 import { ownershipOf, roleOf, secondaryApprovalRefusal } from "../../shared/work/partnerOwnership";
 import type { RouteContext } from "../router";
@@ -1042,8 +1042,7 @@ export async function restoreBlock(env: Env, cardId: string, why: string, now: D
  * the time, his words, and a line in its history — so `resurfaceStaleBlocks` sends no reminder
  * before then. A later reply that names a new time replaces it. Returns what was recorded.
  */
-export async function recordPartnerBack(env: Env, cardId: string, written: string, partnerFirstName: string, now: Date = new Date()): Promise<PartnerBack | null> {
-  const back = partnerBackIn(written, now);
+export async function recordPartnerBack(env: Env, cardId: string, back: PartnerBack | null, partnerFirstName: string): Promise<PartnerBack | null> {
   if (!back) return null;
   const day = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", weekday: "long", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(back.back_at));
   await env.WP_OS_DB.prepare(

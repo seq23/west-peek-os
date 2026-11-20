@@ -1,4 +1,5 @@
 import { forcePhraseIn, preApprovalIn } from "../work/approvalReply";
+import { sentencesOf, vetoOf } from "../text/wholeSentence";
 
 /**
  * Reading a web-property change at the door (20 Sep 2026, Plan A).
@@ -257,9 +258,17 @@ function matchMostSpecificFirst(lower: string, phrasesOf: (p: WebProperty) => re
     const esc = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const re = asHost ? new RegExp(`(?<![a-z0-9.-])${esc}(?![a-z0-9-]|\\.[a-z0-9])`, "g") : new RegExp(esc, "g");
     rest = rest.replace(re, (m: string, at: number, whole: string) => {
-      // A NEGATED MENTION NAMES NOTHING (19 Nov 2026): "the Productions dashboard, separate from Top Barz" filed
-      // Scooter's quote tool under topbarz-voting. The span is still consumed, so a shorter phrase cannot match it.
-      if (!NEGATED_BEFORE.test(whole.slice(Math.max(0, at - 40), at))) hit.add(p);
+      /*
+       * A NEGATED OR REPORTED MENTION NAMES NOTHING (19 Nov 2026): "the Productions dashboard, separate from Top Barz"
+       * filed Scooter's quote tool under topbarz-voting. The words right before a site ("separate from", "not",
+       * "don't touch") exclude that one site; the whole sentence it sits in (wholeSentence.ts) excludes it when it reports
+       * or quotes it ("last time we changed the agency site"). A negation elsewhere in the sentence does not: a bug report
+       * negates the problem, not the site ("the form is not working on joinwestpeek.com"); a question or a condition is
+       * still a request about the site ("can you update the agency site?"). The span is consumed either way.
+       */
+      const sentence = sentencesOf(whole).find((x) => x.start <= at && at < x.start + x.text.length);
+      const vetoed = sentence ? vetoOf(sentence.text, { from: at - sentence.start, to: at - sentence.start + m.length }, ["REPORTS"]) : null;
+      if (!NEGATED_BEFORE.test(whole.slice(Math.max(0, at - 40), at)) && !vetoed) hit.add(p);
       return " ".repeat(m.length);
     });
   }

@@ -11,6 +11,7 @@ import { readWebPropertyChange, runWebPropertyChangeCard } from "../src/worker/s
 import { steerFromReply } from "../src/worker/services/emailThread";
 import { threadReference } from "../src/shared/email/thread";
 import type { FirstReadDecision } from "../src/worker/services/partnerUnderstood";
+import { decideReplyWords } from "../src/worker/services/firstReadDecides";
 
 /**
  * THE FIRST READ DECIDES (owner ruling, 19 Nov 2026). Claude's first read of a partner email is the authority for what
@@ -81,21 +82,21 @@ async function macReports(cardId: string, report: Record<string, unknown>): Prom
   expect((await reportRun(env, { runId: run!.id, deviceId: "mac-test-jobs", outputText: JSON.stringify(report) })).accepted).toBe(true);
 }
 
-async function replyFrom(written: string, token: string) {
+async function replyFrom(written: string, token: string, messageId: string | null = null) {
   const raw = [`From: ${SCOOTER}`, "To: os@joinwestpeek.com", "Subject: Re: Porter: preview", "", written, "", "On Thu, 19 Nov 2026 at 09:02, Porter <os@westpeek.ventures> wrote:", "> The preview is ready."].join("\n");
-  return steerFromReply(env, { fromHeader: `<${SCOOTER}>`, authenticationResults: GOOD_AUTH(SCOOTER), subject: "Re: Porter: preview", raw, inReplyTo: threadReference(token), references: null, emlKey: null });
+  return steerFromReply(env, { fromHeader: `<${SCOOTER}>`, authenticationResults: GOOD_AUTH(SCOOTER), subject: "Re: Porter: preview", raw, inReplyTo: threadReference(token), references: null, emlKey: null, messageId });
 }
 
 /**
  * HIS EMAIL ON THE CARD, as the door stores it, and (when given) its first read's decision. `at` is when it arrived;
  * with no decision and no Got it row the first read is still due.
  */
-async function hisEmail(cardId: string, at: string, decision?: Partial<FirstReadDecision>): Promise<string> {
+async function hisEmail(cardId: string, at: string, decision?: Partial<FirstReadDecision>, messageId?: string): Promise<string> {
   const id = `inm_${crypto.randomUUID().slice(0, 8)}`;
   await env.WP_OS_DB.prepare(
     "INSERT INTO inbound_message (id, message_id, r2_key, from_address, to_address, subject, received_at, bytes, mail_authority_json, work_card_id, firm_scope) VALUES (?1, ?2, ?3, ?4, 'os@joinwestpeek.com', 'Re: Porter', ?5, 10, ?6, ?7, 'west-peek')",
   )
-    .bind(id, `<${id}@test>`, `inbound/${id}.eml`, SCOOTER, at, JSON.stringify({ partner: SCOOTER }), cardId)
+    .bind(id, messageId ?? `<${id}@test>`, `inbound/${id}.eml`, SCOOTER, at, JSON.stringify({ partner: SCOOTER }), cardId)
     .run();
   if (decision) {
     const full: FirstReadDecision = { kind: "change", property: null, handOffTo: null, planApproved: null, holds: [], ...decision };
@@ -133,9 +134,13 @@ async function atPreview(subject: string): Promise<{ id: string; token: string }
 
 /** His reply arrives and is filed on the card; returns his stored email (no first read yet unless a decision is given). */
 async function replies(p: { id: string; token: string }, words: string, decision?: Partial<FirstReadDecision>): Promise<string> {
-  await replyFrom(words, p.token);
+  const messageId = `fr_${crypto.randomUUID().slice(0, 8)}@test`;
+  await replyFrom(words, p.token, messageId);
   const answeredAt = String((await card(p.id)).block_answered_at);
-  return hisEmail(p.id, answeredAt, decision);
+  const inm = await hisEmail(p.id, answeredAt, decision, messageId);
+  // The first read is in: what his reply says about the card itself is decided now, as partnerUnderstood.ts does.
+  if (decision) await decideReplyWords(env, { inboundId: inm, messageId, receivedAt: answeredAt, decision: { kind: "change", property: null, handOffTo: null, planApproved: null, holds: [], ...decision } });
+  return inm;
 }
 
 beforeAll(async () => {
@@ -228,7 +233,7 @@ describe("hand-off refusal (#546)", () => {
     await tickFor(p.id);
     expect(notHandedOff(before), "never a 'not handed off' email").toHaveLength(0);
     expect((await readWebPropertyChange(env, p.id))!.refresh_intent).toBe("CHANGES");
-    expect((await decisionsLogged(p.id)).find((d) => d.what === "hand-off")).toMatchObject({ used: "FIRST_READ", first_read: "no hand-off", keyword: "hand to Productions" });
+    expect((await decisionsLogged(p.id)).find((d) => d.what === "the hand-off")).toMatchObject({ used: "FIRST_READ", first_read: "no hand-off", keyword: "hand to Productions" });
   });
 
   it("'Hand this to Bob.' with no first read: nothing is said at the door or before the wait; then the keywords refuse it", async () => {
@@ -239,10 +244,12 @@ describe("hand-off refusal (#546)", () => {
     expect(await sweepWouldStart(p.id)).toBe(false);
     expect(notHandedOff(before)).toHaveLength(0);
     await aged(p.id, inm, 11);
-    await tickFor(p.id);
+    // The next tick's first-read step finds no reader answered within the ten minutes: the keywords decide, logged.
+    await sweepOnce(env, new Date(), RUNNERS);
     expect(notHandedOff(before), "refused once the wait is over").toHaveLength(1);
+    expect((await card(p.id)).state, "a hand-off is never the answer: the preview still waits on him").toBe("BLOCKED");
     expect((await readWebPropertyChange(env, p.id))!.land_approved_at, "and nothing lands").toBeNull();
-    expect((await decisionsLogged(p.id)).find((d) => d.what === "hand-off")).toMatchObject({ used: "KEYWORD", keyword: "hand to Bob" });
+    expect((await decisionsLogged(p.id)).find((d) => d.what === "the hand-off")).toMatchObject({ used: "KEYWORD", keyword: "hand to Bob" });
   });
 });
 
@@ -272,7 +279,11 @@ describe("plan approval (#546)", () => {
 });
 
 describe("re-target the property (#542)", () => {
-  const REQUEST = `Hey Porter!\n\nOne combined update for the Productions dashboard, not connected to Top Barz.\n\n1. Quote tool\n\npackage: https://drive.google.com/drive/folders/${FOLDER}`;
+  /*
+   * His 19 Nov words said "not connected to Top Barz"; the keywords now judge that whole sentence and no longer file it
+   * there (tests/wholeSentence.test.ts). A mention the keywords still misread keeps the first read's proof honest.
+   */
+  const REQUEST = `Hey Porter!\n\nOne combined update for the Productions dashboard. Top Barz keeps its look as it is.\n\n1. Quote tool\n\npackage: https://drive.google.com/drive/folders/${FOLDER}`;
 
   it("the first read's property re-targets the job the keywords filed under Top Barz, before the plan is parked", async () => {
     const id = await opened("fr site", `${REQUEST}site01`);

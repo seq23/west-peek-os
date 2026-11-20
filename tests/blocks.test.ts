@@ -234,7 +234,7 @@ describe("a partner who says when he will be back is not reminded before then (0
     const c = await card("A preview he will come back to");
     await blockCard(env, c, { reason: "a_question_for_you", trying: c.title, employee: "Porter", detail: "Your word on the preview." }, NOW);
     // NOW is Wednesday 16 Sep 2026, 7:00 AM CT. "this weekend" → Monday 21 Sep, 8:00 AM CT.
-    const back = await recordPartnerBack(env, c.id, "Looks great. I will come back with edits this weekend.", "Scooter", NOW);
+    const back = await recordPartnerBack(env, c.id, partnerBackIn("Looks great. I will come back with edits this weekend.", NOW), "Scooter");
     expect(back?.back_at).toBe("2026-09-21T13:00:00.000Z");
     expect(String((await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(c.id).first<{ description: string }>())?.description)).toContain("I will come back with edits this weekend.");
     for (const hours of [26, 50, 98, 120]) {
