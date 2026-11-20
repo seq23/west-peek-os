@@ -38,6 +38,9 @@ describe("a suite that crashed under load is run again; a failing test never is"
   it("names the crashed suites (20 Nov 2026 pre-push log)", () => {
     expect(crashedSuites(crash)).toEqual(["tests/blocks.test.ts", "tests/artifacts.test.ts"]);
   });
+  it("a setup hook that timed out under load is a crash too (the second 20 Nov run)", () => {
+    expect(crashedSuites(" FAIL  tests/blocks.test.ts [ tests/blocks.test.ts ]\nError: Hook timed out in 60000ms.\n      Tests  74 passed | 351 skipped (425)")).toEqual(["tests/blocks.test.ts"]);
+  });
   it("a run with a failed test is not a crash", () => {
     expect(crashedSuites(crash.replace("Tests  72 passed", "Tests  1 failed | 71 passed"))).toEqual([]);
     expect(crashedSuites(" FAIL  tests/a.test.ts [ tests/a.test.ts ]\nSyntaxError: Unexpected token")).toEqual([]);

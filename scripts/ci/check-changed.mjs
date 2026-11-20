@@ -87,7 +87,7 @@ export const TEST_CAP = 20;
  * with "fetch failed" / ECONNRESET / "other side closed" from their miniflare worker, and not one test failed. Those
  * suites are named here so they run once more, one at a time; a run where any test failed is never retried. Pure.
  */
-const CRASH = /fetch failed|ECONNRESET|other side closed|EADDRNOTAVAIL|Timeout calling "fetch"/;
+const CRASH = /fetch failed|ECONNRESET|other side closed|EADDRNOTAVAIL|Timeout calling "fetch"|Hook timed out in \d+ms/;
 export function crashedSuites(out) {
   const text = String(out ?? "");
   if (/Tests\s+\d+ failed/.test(text) || !CRASH.test(text)) return [];
