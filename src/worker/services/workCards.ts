@@ -29,7 +29,7 @@ import { cardKind, startableByHand } from "../../shared/work/cardKinds";
 import { originBadgeText, originOf } from "../../shared/work/origin";
 import { hostsSentence, type WebPropertyAsk } from "../../shared/intake/webPropertyChange";
 import { loadRegistry } from "./webPropertyRegistry";
-import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
+import { PARTNER_SESSION_KIND, WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
 import { plainTitle, siteTries } from "../../shared/work/siteChange";
 import { CARD_STATES } from "../../shared/work/workCards";
 
@@ -1747,6 +1747,16 @@ export async function handleAddWorkCardNote(ctx: RouteContext): Promise<Response
     .run();
   // "CC SCOOTER" IN A NOTE (0239): the signed-in partner's own address, never one typed in the note.
   const cc = await recordCcFrom(ctx.env, card.id, text, partnerByFirmUserId(ctx.identity!.id)?.email ?? null);
+  /*
+   * A NOTE ON A SESSION CARD STEERS THE SESSION (20 Nov 2026). A PARTNER_SESSION run reads its brief, corrections and
+   * answers from `partner_session`, never `work_card_note`, so a note there was accepted into a void: the session
+   * carried on with the old brief. The note goes through the same door a reply on the thread does (`redirectSession`):
+   * the live run is stopped and one new run is parked in the same working folder with the note above the brief.
+   */
+  const steered =
+    (card as { kind?: string | null }).kind === PARTNER_SESSION_KIND
+      ? await (await import("./partnerSession")).redirectSession(ctx.env, card.id, text, ctx.identity!.email)
+      : null;
 
   await appendEvent(ctx.env, {
     eventType: "work_card.note_left",
@@ -1757,7 +1767,7 @@ export async function handleAddWorkCardNote(ctx: RouteContext): Promise<Response
     payload: { note_id: id },
   });
 
-  return json({ id, waiting: true, ...(cc.ack ? { cc: cc.ack } : {}) }, { status: 201 });
+  return json({ id, waiting: true, ...(cc.ack ? { cc: cc.ack } : {}), ...(steered ? { session: { abandoned: steered.abandoned, run_id: steered.runId } } : {}) }, { status: 201 });
 }
 
 /** What has been said on this card, and what came back. */

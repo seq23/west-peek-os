@@ -7,6 +7,7 @@ import { parseReplyIntent, type ReplyIntentReader } from "../src/worker/services
 import { questionEmail, redirectSession, runPartnerSessionCard } from "../src/worker/services/partnerSession";
 import { reportRun } from "../src/worker/ai/subscriptionSeats";
 import { recordPartnerConstraints } from "../src/worker/services/partnerConstraints";
+import { handleRequest } from "../src/worker/index";
 
 /**
  * EMAILING THE OS FEELS LIKE TYPING TO CLAUDE (14 Nov 2026), steps 2 to 6: an email no fixed door claims becomes ONE
@@ -193,6 +194,21 @@ describe("step 5 · a correction redirects running work", () => {
     expect(changed.filter((n) => n.cause.startsWith("changed-course:"))).toHaveLength(1);
     expect(await notices(id, "PREVIEW")).toHaveLength(0);
     expect(await notices(id, "DONE")).toHaveLength(0);
+  });
+
+  it("a note typed on the card steers the live session the same way (a note is never accepted into a void)", async () => {
+    const id = await emailed("Pack notes", "Draft the diligence sheet from the attached answers.");
+    await runPartnerSessionCard(env, await card(id));
+    const [first] = await runs(id);
+    await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'CLAIMED', claimed_by = ?2, claimed_at = ?3 WHERE id = ?1").bind(first!.id, MAC, new Date().toISOString()).run();
+    const res = await handleRequest(
+      new Request(`https://test.local/api/work-cards/${id}/notes`, { method: "POST", headers: { "x-wpos-dev-user": "sequoia@westpeek.ventures", "content-type": "application/json" }, body: JSON.stringify({ body: "Also build the data room index." }) }),
+      env,
+    );
+    expect(res.status).toBe(201);
+    const all = await runs(id);
+    expect(all.map((r) => r.status)).toEqual(["ABANDONED", "QUEUED"]);
+    expect(JSON.parse(all[1]!.job_json).corrections[0]).toBe("Also build the data room index.");
   });
 });
 
