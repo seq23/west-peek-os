@@ -2,3 +2,4 @@
 export const TEST_CAP: number;
 export function capTests(changedTests: readonly string[], direct: ReadonlyMap<string, number>, transitive: readonly string[], cap?: number): { run: string[]; left: number };
 export function crashedSuites(out: string): string[];
+export function busyMachine(load1: number, cpus: number): boolean;

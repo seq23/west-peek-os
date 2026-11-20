@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { capTests, crashedSuites, TEST_CAP } from "../scripts/ci/check-changed.mjs";
+import { busyMachine, capTests, crashedSuites, TEST_CAP } from "../scripts/ci/check-changed.mjs";
 
 describe("the pre-push check runs at most TEST_CAP test files", () => {
   it("a change imported by 70 tests runs the changed tests and the closest importers, not all 70", () => {
@@ -44,5 +44,12 @@ describe("a suite that crashed under load is run again; a failing test never is"
   it("a run with a failed test is not a crash", () => {
     expect(crashedSuites(crash.replace("Tests  72 passed", "Tests  1 failed | 71 passed"))).toEqual([]);
     expect(crashedSuites(" FAIL  tests/a.test.ts [ tests/a.test.ts ]\nSyntaxError: Unexpected token")).toEqual([]);
+  });
+});
+
+describe("a busy Mac runs the suites one at a time", () => {
+  it("past its cores is busy; under them is not", () => {
+    expect(busyMachine(26.4, 12)).toBe(true);
+    expect(busyMachine(7, 12)).toBe(false);
   });
 });

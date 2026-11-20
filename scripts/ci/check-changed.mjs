@@ -82,6 +82,9 @@ export function planValidators(changed, validators, scripts) {
  */
 export const TEST_CAP = 20;
 
+/** The machine is busy when its one-minute load is past its cores. Pure. */
+export function busyMachine(load1, cpus) { return Number(load1) > Number(cpus); }
+
 /*
  * A SUITE THAT CRASHED IS NOT A TEST THAT FAILED (20 Nov 2026, this Mac at load 25-35): 17 of 20 suites died at start
  * with "fetch failed" / ECONNRESET / "other side closed" from their miniflare worker, and not one test failed. Those
@@ -191,9 +194,14 @@ async function main() {
 
   const cpus = Math.max(2, os.availableParallelism?.() ?? os.cpus().length);
   const steps = [run("typecheck", "npx", ["tsc", "--noEmit", "--incremental", "--tsBuildInfoFile", "node_modules/.cache/check-changed.tsbuildinfo"])];
-  if (tests.run.length) steps.push(run("tests", "npx", ["vitest", "run", ...tests.run]));
-  steps.push(pool(vRun, Math.max(2, Math.floor(cpus / 2)), (v) => run(v, "npm", ["run", "-s", v])));
-  const results = (await Promise.all(steps)).flat();
+  // A Mac already past its cores (other sessions' builds) runs the suites one at a time and the validators after them:
+  // 20 Nov 2026 at load 15-35, parallel miniflare suites died at start or timed out in their setup hooks, 17 of 20.
+  const busy = busyMachine(os.loadavg()[0], cpus);
+  const vitestArgs = busy ? ["--no-file-parallelism", "--maxWorkers=1"] : [];
+  if (busy) console.log(`check:changed: load ${os.loadavg()[0].toFixed(1)} on ${cpus} cores: suites one at a time, validators after them`);
+  const validators_ = () => pool(vRun, Math.max(2, Math.floor(cpus / 2)), (v) => run(v, "npm", ["run", "-s", v]));
+  if (tests.run.length) steps.push(run("tests", "npx", ["vitest", "run", ...vitestArgs, ...tests.run]));
+  const results = busy ? [...(await Promise.all(steps)).flat(), ...(await validators_())] : (await Promise.all([...steps, validators_()])).flat();
 
   let testRun = results.find((r) => r.label === "tests");
   // A suite whose miniflare died under load (no test failed) is run once more, alone, after everything else is done.
