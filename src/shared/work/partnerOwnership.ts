@@ -1,4 +1,5 @@
 import { PARTNERS, partnerByEmail, partnerFor, type Partner } from "../registry/partners";
+import { sentencesOf, standingIn, vetoOf, type Sentence, type Shape } from "../text/wholeSentence";
 
 /**
  * A WORK CARD HAS A PRIMARY PARTNER AND, AFTER A HAND-OFF, A SECONDARY (owner, 23 Sep 2026: "hand a
@@ -139,11 +140,11 @@ const ABOUT_THE_PARTNER = new RegExp(
 const CC = /(?:^|[^a-z])cc(?:'?(?:ing|d))?\b/i;
 
 /**
- * The part of a message that can move a card: the first written paragraph, quote-free, with a
- * greeting paragraph ("Hi Porter,") skipped, split into sentences. A sentence deep in a reply cannot
- * move a card.
+ * The part of a message that can move a card: the first written paragraph, quote-free, with a greeting paragraph
+ * ("Hi Porter,") skipped, split into sentences by the one splitter every keyword rule uses (`wholeSentence.ts`). A
+ * sentence deep in a reply cannot move a card.
  */
-function openingSentences(text: string | null | undefined): string[] {
+function openingSentences(text: string | null | undefined): Sentence[] {
   const lines = String(text ?? "")
     .replace(/\r/g, "")
     .replace(/[‘’]/g, "'")
@@ -153,30 +154,35 @@ function openingSentences(text: string | null | undefined): string[] {
   let cur: string[] = [];
   for (const l of lines) {
     if (l.trim() === "") {
-      if (cur.length) paragraphs.push(cur.join(" "));
+      if (cur.length) paragraphs.push(cur.join("\n"));
       cur = [];
     } else cur.push(l.trim());
   }
-  if (cur.length) paragraphs.push(cur.join(" "));
+  if (cur.length) paragraphs.push(cur.join("\n"));
   const greeting = /^(?:(?:hi|hey|hello|dear|thanks|thank you)\s*,?\s*)?porter\s*[,.!:]?$/i;
   const first = paragraphs.find((p) => !greeting.test(p.trim())) ?? "";
-  return first
-    .replace(/^(?:hi|hey|hello)\s+porter\s*[,.!:-]\s*/i, "")
-    .split(/(?<=[.!?;])\s+/)
-    .map((x) => x.trim().replace(/[.!?;]+$/, ""))
-    .filter(Boolean);
+  return sentencesOf(first.replace(/^(?:hi|hey|hello)\s+porter\s*[,.!:-]\s*/i, ""));
 }
 
 /**
- * HAND-OFF AND TAKE-BACK, READ FROM A PARTNER'S OWN WORDS (reply or note — the one reader). Clear
- * phrasings act; a sentence that names the OTHER partner and sounds like ownership but is not clear is
- * UNSURE, and Porter asks once instead of guessing. A message with "cc" and a partner's name never
- * hands off: a cc is a copy. `writer`, when given, is never read as the partner to hand to. Pure.
+ * UNSURE asks "Did you mean hand this card to Scooter?", so a question is exactly what it is for ("maybe Scooter could
+ * handle it?"); a sentence that negates, conditions or reports the ownership words is not even a question.
+ */
+const UNSURE_SHAPES: readonly Shape[] = ["NEGATES", "CONDITIONS", "REPORTS"];
+
+/**
+ * HAND-OFF AND TAKE-BACK, READ FROM A PARTNER'S OWN WORDS — THE KEYWORD FALLBACK. The first read decides these on a
+ * reply (`firstReadDecides.ts#decideReplyWords`); this reads them only when there is no first read, and for a note
+ * typed on the card. Clear phrasings act only when their whole sentence stands (`wholeSentence.ts`: "I don't think
+ * Scooter will take it from here", "if this fails I'll take it back" act on nothing); a sentence that names the OTHER
+ * partner and sounds like ownership but is not clear is UNSURE, and Porter asks once instead of guessing. A message
+ * with "cc" and a partner's name never hands off: a cc is a copy. `writer`, when given, is never read as the partner
+ * to hand to. Pure.
  */
 export function ownershipIntentIn(text: string | null | undefined, writer?: string | null): OwnershipIntent | null {
   const all = String(text ?? "").replace(/[‘’]/g, "'");
   const me = partnerFor(writer ?? null);
-  const sentences = openingSentences(all);
+  const sentences = openingSentences(all).map((s) => s.text);
   if (sentences.length === 0) return null;
   const mentionsPartner = new RegExp(`\\b${NAME}\\b`, "i");
   if (CC.test(all) && mentionsPartner.test(all)) return null;
@@ -186,19 +192,19 @@ export function ownershipIntentIn(text: string | null | undefined, writer?: stri
   };
   for (const s of sentences) {
     for (const re of HAND_OFF_CLEAR) {
-      const m = re.exec(s);
+      const m = standingIn(s, re);
       const p = m ? other(m[1]!) : null;
       if (p) return { kind: "HAND_OFF", to: p, named: m![1]! };
     }
-    const any = HAND_OFF_ANYONE.exec(s);
+    const any = standingIn(s, HAND_OFF_ANYONE);
     if (any) {
       const named = any[1]!.replace(/[.,;:!?]+$/, "");
       if (!PRONOUNS.test(named) && !NOT_A_PERSON.test(named) && !partnerFor(named)) return { kind: "HAND_OFF", to: null, named };
     }
   }
-  for (const s of sentences) if (TAKE_BACK_CLEAR.some((re) => re.test(s))) return { kind: "TAKE_BACK" };
+  for (const s of sentences) if (TAKE_BACK_CLEAR.some((re) => standingIn(s, re))) return { kind: "TAKE_BACK" };
   for (const s of sentences) {
-    if (ABOUT_THE_PARTNER.test(s) || !OWNERSHIP_HINT.test(s)) continue;
+    if (ABOUT_THE_PARTNER.test(s) || !OWNERSHIP_HINT.test(s) || vetoOf(s, null, UNSURE_SHAPES)) continue;
     const m = new RegExp(`\\b${NAME}\\b`, "i").exec(s);
     const p = m ? other(m[1]!) : null;
     if (p) return { kind: "UNSURE_HAND_OFF", to: p };

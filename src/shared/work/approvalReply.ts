@@ -16,7 +16,12 @@
  * PURE. The words are read the same on Tuesday as on Monday, and the tests can say exactly which
  * word does what. Authority is not decided here: `steerFromReply` only accepts the reply from the
  * partner the question was addressed to, and the runner checks the same before it acts.
+ *
+ * WHOLE SENTENCES (19 Nov 2026): an approval or force word must be the whole first line or first sentence, so a
+ * question, a condition or a quote around it never matches; a stop that starts the line is judged by its sentence.
  */
+
+import { sentencesOf, vetoOf } from "../text/wholeSentence";
 
 export type ApprovalReading =
   | { kind: "APPROVED" }
@@ -102,7 +107,16 @@ export function readApprovalReply(text: string | null | undefined): ApprovalRead
   if ((PUBLISH_WORDS as readonly string[]).includes(head)) return { kind: "PUBLISH" };
   for (const start of CHANGE_STARTS) if (head.startsWith(start)) return { kind: "CHANGES", text: trimmed };
   if ((STOP_WORDS as readonly string[]).includes(head)) return { kind: "REFUSED", text: trimmed };
-  for (const start of STOP_STARTS) if (head.startsWith(start)) return { kind: "REFUSED", text: trimmed };
+  /*
+   * A STOP THAT STARTS THE LINE STANDS ONLY IF ITS WHOLE SENTENCE DOES (owner ruling, 19 Nov 2026; wholeSentence.ts):
+   * "Stop the build?" asks, "Hold off if the client hasn't signed" is a condition, "wait, I don't think that's right" is
+   * no stop. Those are read for their intent like any other words (replyIntent.ts). The stop's own words ("don't land")
+   * never count against it.
+   */
+  const sentence = (sentencesOf(ownLines(trimmed)[0] ?? "")[0]?.text ?? "").toLowerCase();
+  for (const start of STOP_STARTS) {
+    if (head.startsWith(start) && sentence.startsWith(start) && !vetoOf(sentence, { from: 0, to: start.length })) return { kind: "REFUSED", text: trimmed };
+  }
   if (trimmed.length === 0) return { kind: "REFUSED", text: "" };
   return { kind: "ANSWERS", text: trimmed };
 }

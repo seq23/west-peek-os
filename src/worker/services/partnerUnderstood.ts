@@ -6,6 +6,7 @@ import { maskPrivateInputs } from "../ai/scrub";
 import { committedLpNamedIn, committedLps } from "../ai/committedLps";
 import { partnerByEmail } from "../../shared/registry/partners";
 import { partnersOwnWords } from "../../shared/intake/replyBody";
+import { centralDay } from "../../shared/work/partnerBackBy";
 import { textBodyOf } from "../effects/mimeAttachments";
 import { alreadyTold, recordNotice, threadRootFor } from "./requestReply";
 import { sendOrPreview } from "./previewApproval";
@@ -339,6 +340,17 @@ export interface FirstReadDecision {
   handOffTo: string | null;
   planApproved: boolean | null;
   holds: string[];
+  /*
+   * WHAT HIS REPLY SAYS ABOUT THE CARD ITSELF (20 Nov 2026, additive: a decision read before these existed has none of
+   * them, and each missing one falls back to the keywords on its own). `firstReadDecides.ts#decideReplyWords` acts on
+   * them, with `handOffTo` above.
+   */
+  /** He takes the card back himself ("I'll take it back"). */
+  takeBack?: boolean | null;
+  /** The people he asks to copy on the finished email, as he named them ("Scooter", an address). */
+  cc?: string[];
+  /** The last day of the window he said he will come back by (YYYY-MM-DD, Central), or null. */
+  backBy?: string | null;
 }
 
 function parseDecision(value: unknown): FirstReadDecision | null {
@@ -348,7 +360,10 @@ function parseDecision(value: unknown): FirstReadDecision | null {
       !(d.property === null || typeof d.property === "string") ||
       !(d.handOffTo === null || typeof d.handOffTo === "string") ||
       !(d.planApproved === null || typeof d.planApproved === "boolean") ||
-      !Array.isArray(d.holds) || !d.holds.every((h: unknown) => typeof h === "string")) return null;
+      !Array.isArray(d.holds) || !d.holds.every((h: unknown) => typeof h === "string") ||
+      !(d.takeBack === undefined || d.takeBack === null || typeof d.takeBack === "boolean") ||
+      !(d.cc === undefined || (Array.isArray(d.cc) && d.cc.every((c: unknown) => typeof c === "string"))) ||
+      !(d.backBy === undefined || d.backBy === null || (typeof d.backBy === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.backBy)))) return null;
   return d as unknown as FirstReadDecision;
 }
 
@@ -384,7 +399,7 @@ export interface Brief {
 
 export async function understand(
   env: Env,
-  input: { subject: string; written: string; read: SeatRead | readonly Reader[]; employeeId: string | null; firmScope: string; files?: readonly string[]; known?: string; standingHolds?: readonly string[] },
+  input: { subject: string; written: string; read: SeatRead | readonly Reader[]; employeeId: string | null; firmScope: string; files?: readonly string[]; known?: string; standingHolds?: readonly string[]; today?: string },
 ): Promise<{ none: boolean; asks: string[]; noted: string[]; next: string; via: "STRUCTURE" | "MODEL" | "FALLBACK"; runId: string | null; runIds: string[]; brief: Brief; readerFailed: boolean; readersTried: string[] }> {
   const { written } = input;
   const fileNames = [...(input.files ?? [])];
@@ -412,7 +427,7 @@ export async function understand(
   let reader: string | null = null;
   if (written) {
     for (const r of ladder) {
-      const out = await r.read(env, { prompt: understoodPrompt(input.subject, written, fileNames, input.known ?? ""), firmScope: input.firmScope, employeeId: input.employeeId, purpose: "the Got it reply to a partner's email: his asks in his words" });
+      const out = await r.read(env, { prompt: understoodPrompt(input.subject, written, fileNames, input.known ?? "", input.today), firmScope: input.firmScope, employeeId: input.employeeId, purpose: "the Got it reply to a partner's email: his asks in his words" });
       if (out.runId) runIds.push(out.runId);
       readersTried.push(`${r.name}: ${out.ok ? "read it" : out.out ? `out (${out.detail.slice(0, 120)})` : `failed (${out.detail.slice(0, 120)})`}`);
       if (!out.ok) {
@@ -520,7 +535,7 @@ export function parseUnderstood(text: string, written: string, files: readonly s
 /** How much of the OS's OTHER context (profile, practices, the card) rides beside the brain's sections, which are never cut. */
 export const KNOWN_OTHER_MAX = 4000;
 
-function understoodPrompt(subject: string, written: string, files: readonly string[] = [], known = ""): string {
+function understoodPrompt(subject: string, written: string, files: readonly string[] = [], known = "", today = centralDay(new Date())): string {
   return [
     "A Managing Partner of the firm just emailed the work below. List each separate thing he is asking for.",
     "Rules: copy his EXACT words for each ask (a phrase or sentence from his email, unchanged, no rewording, no summary).",
@@ -531,7 +546,8 @@ function understoodPrompt(subject: string, written: string, files: readonly stri
     ...(files.length ? [`Then one line per attached file, saying what it is for, from his email: FILE: <file name> :: <what it is for, under 15 words>`, `Files: ${files.join(", ")}`] : []),
     "Then one line: NEXT: <what happens next, one plain sentence, no promises of dates, nothing about models or systems>",
     "A remark on how something is (praise, status, \"X is in good shape\") is NOT an ask. Each numbered item is one ask. Never a fragment of a sentence.",
-    'Always include one line DECISION: followed by a JSON object with exactly {"kind":"approve|change|question|stop|nothing","property":string|null,"handOffTo":string|null,"planApproved":boolean|null,"holds":string[]}. Choose the actual kind, not the alternatives. A site mentioned only as separate from the work is not the property. A project or dashboard is not a person. Asking to confirm a plan is not approving it. Use null when unspecified.',
+    'Always include one line DECISION: followed by a JSON object with exactly {"kind":"approve|change|question|stop|nothing","property":string|null,"handOffTo":string|null,"planApproved":boolean|null,"holds":string[],"takeBack":boolean|null,"cc":string[],"backBy":"YYYY-MM-DD"|null}. Choose the actual kind, not the alternatives. A site mentioned only as separate from the work is not the property. A project or dashboard is not a person. Asking to confirm a plan is not approving it. Use null when unspecified.',
+    `In DECISION: handOffTo is the person he hands this work to, only when he actually hands it over now (never when he doubts it, negates it, makes it conditional, quotes someone or asks). takeBack is true only when he takes the work back himself now. cc lists the people he asks to copy on the finished email (empty when none). backBy is the last day of the window he says he will come back to this by ("this weekend" is that Sunday), counting from today, ${today}; null when he names none.`,
     "If he asks for nothing (a thank-you, an FYI), include NONE as well as DECISION.",
     "Nothing else in your answer.",
     ...(known.trim()
@@ -793,7 +809,7 @@ async function answerOne(env: Env, row: Candidate, read: SeatRead | readonly Rea
   const subject = (row.subject ?? "").trim() || row.title.replace(/^From [^:]+@[^:]+:\s*/i, "").trim() || row.title;
   const filed = ((await env.WP_OS_DB.prepare("SELECT filename FROM request_attachment WHERE work_card_id = ?1 AND created_at >= ?2 ORDER BY created_at, filename").bind(row.card_id, row.received_at).all<{ filename: string }>().catch(() => ({ results: [] as Array<{ filename: string }> }))).results ?? []).map((r) => r.filename);
   const known = await knownFor(env, row.card_id, row.firm_scope, partner.email, written);
-  const understood = await understand(env, { subject, written, read, employeeId: row.owner_id, firmScope: row.firm_scope, files: filed, known: known.text, standingHolds: known.standingHolds });
+  const understood = await understand(env, { subject, written, read, employeeId: row.owner_id, firmScope: row.firm_scope, files: filed, known: known.text, standingHolds: known.standingHolds, today: centralDay(new Date(row.received_at)) });
   /*
    * A READER WAS THERE AND FAILED: WAIT FOR IT (15 Nov 2026). Up to FIRST_READ_WAIT_MINUTES from his email the row stays
    * claimed and the next tick reads it again; the employee waits too (`claimNextCard`). Past that, or when no reader
@@ -807,6 +823,13 @@ async function answerOne(env: Env, row: Candidate, read: SeatRead | readonly Rea
     return false;
   }
   await saveBrief(env, row.id, understood.brief);
+  /*
+   * WHAT HIS REPLY SAYS ABOUT THE CARD ITSELF IS THE FIRST READ'S (20 Nov 2026): hand-off, take-back, a second
+   * partner's "approved", cc and "back on <day>" are decided here, from the decision just saved, and no longer by
+   * keywords at the reply door. With no decision (no reader answered within the ten minutes), the keywords act, logged.
+   * Before the Got it, so an email that only handed the card on gets the hand-off email, not a Got it as well.
+   */
+  await (await import("./firstReadDecides")).decideReplyWords(env, { inboundId: row.id, messageId: row.message_id, receivedAt: row.received_at, decision: understood.brief.decision }).catch((err) => console.error("deciding a reply's words failed", err));
   if (understood.none) {
     await settle(env, row.id, "NOTHING_ASKED", understood.via, 0, understood.asks.length ? "he asked for nothing (a thank-you or an FYI)" : "no words to quote");
     return false;

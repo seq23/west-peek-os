@@ -174,9 +174,12 @@ describe("the brief comes first, and the employee waits for it", () => {
 
   it(`at ${FIRST_READ_WAIT_MINUTES} minutes with no read, the card starts and the Got it comes from the OS's own read`, async () => {
     const { cardId, inm } = await partnerEmail("ten", FIRST_READ_WAIT_MINUTES + 1);
-    expect(await claimable(cardId), "past ten minutes nothing holds the employee").toBe(true);
+    // Held until the first-read step has reached his email (it also decides what the reply says about the card:
+    // firstReadDecides.ts#decideReplyWords); past ten minutes that step settles it from the OS's own read at once.
+    expect(await claimable(cardId), "not before the first-read step has reached it").toBe(false);
     const before = sent.length;
     await sendUnderstoodReplies(env, new Date(), [failing]);
+    expect(await claimable(cardId), "past ten minutes nothing more holds the employee").toBe(true);
     expect(gotIts(before)).toHaveLength(1);
     const row = (await understoodRow(inm))!;
     expect([row.state, row.via, row.reader]).toEqual(["SENT", "FALLBACK", "OS"]);

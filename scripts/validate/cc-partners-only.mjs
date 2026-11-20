@@ -11,7 +11,7 @@
  *   1 · ONE WRITER. `work_card.cc_emails` is set in `services/ccPartners.ts` (from the requester's
  *       own words), copied from the source card by `assignCard` (a hand-off), and frozen onto a filed
  *       preview through `ccList` — nowhere else. A fourth writer is a cc nobody asked for.
- *   2 · ONLY THE REQUESTER. `recordCcFrom` compares the authenticated writer with the card's
+ *   2 · ONLY THE REQUESTER. `recordCc` compares the authenticated writer with the card's
  *       requester before it writes, and resolves names through `resolveCc`.
  *   3 · PARTNERS BY THE REGISTRY. `resolveCc` resolves through `partnerByEmail` / `partnerByName`
  *       and nothing else; `ccList` drops any stored address `partnerByEmail` does not know.
@@ -77,15 +77,16 @@ export function check(src, all) {
   if (!/cc_emails = COALESCE\(\(SELECT cc_emails FROM work_card WHERE id = \?3\), '\[\]'\)/.test(src.employeeWork)) v.push("assignCard no longer copies cc_emails only from the source card");
   if (!/JSON\.stringify\(ccList\(/.test(src.preview)) v.push("filePreview freezes a cc that did not pass through ccList");
   // 2 · ONLY THE REQUESTER
-  const rec = body(src.service, "export async function recordCcFrom(");
-  if (!rec) v.push("recordCcFrom() is gone");
+  // recordCc() is the one writer (recordCcFrom() reads his words into names and calls it; the first read gives names).
+  const rec = body(src.service, "export async function recordCc(");
+  if (!rec) v.push("recordCc() is gone");
   else {
     examined += 1;
-    if (!/const allowed = Boolean\(requester\) && requester!\.email === writer;/.test(rec)) v.push("recordCcFrom() no longer checks the writer is the card's requester");
+    if (!/const allowed = Boolean\(requester\) && requester!\.email === writer;/.test(rec)) v.push("recordCc() no longer checks the writer is the card's requester");
     const allowAt = rec.indexOf("if (!allowed");
     const writeAt = rec.indexOf("UPDATE work_card SET cc_emails");
-    if (allowAt < 0 || writeAt < 0 || allowAt > writeAt) v.push("recordCcFrom() writes before it refuses a writer who is not the requester");
-    if (!/resolveCc\(tokens, writer\)/.test(rec)) v.push("recordCcFrom() does not resolve through resolveCc");
+    if (allowAt < 0 || writeAt < 0 || allowAt > writeAt) v.push("recordCc() writes before it refuses a writer who is not the requester");
+    if (!/resolveCc\(tokens, writer\)/.test(rec)) v.push("recordCc() does not resolve through resolveCc");
   }
   // 3 · PARTNERS BY THE REGISTRY
   const res = body(src.shared, "export function resolveCc(");

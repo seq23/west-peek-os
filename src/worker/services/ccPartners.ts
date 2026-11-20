@@ -21,7 +21,17 @@ export async function recordCcFrom(
   text: string | null | undefined,
   writerEmail: string | null | undefined,
 ): Promise<{ added: string[]; refused: string[]; ack: string | null }> {
-  const tokens = ccAsksIn(text);
+  return recordCc(env, cardId, ccAsksIn(text), writerEmail);
+}
+
+/** The cc the partner asked for, as names or addresses (the first read's `cc`, or `ccAsksIn` of his words). */
+export async function recordCc(
+  env: Env,
+  cardId: string,
+  named: readonly string[],
+  writerEmail: string | null | undefined,
+): Promise<{ added: string[]; refused: string[]; ack: string | null }> {
+  const tokens = [...new Set(named.map((t) => t.trim().toLowerCase()).filter(Boolean))];
   if (tokens.length === 0) return { added: [], refused: [], ack: null };
   const card = await env.WP_OS_DB.prepare("SELECT requested_by_email, cc_emails FROM work_card WHERE id = ?1")
     .bind(cardId)

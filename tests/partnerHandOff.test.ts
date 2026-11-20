@@ -3,6 +3,8 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import { handleRequest } from "../src/worker/index";
 import { steerFromReply } from "../src/worker/services/emailThread";
+import { decideReplyWords } from "../src/worker/services/firstReadDecides";
+import { sendUnderstoodReplies, type FirstReadDecision } from "../src/worker/services/partnerUnderstood";
 import { threadReference } from "../src/shared/email/thread";
 import { replyToRequester } from "../src/worker/services/requestReply";
 import { runWebPropertyChangeCard, sendStuck, type WebPropertyChangeCard } from "../src/worker/services/webPropertyChange";
@@ -134,9 +136,18 @@ async function seedCard(id: string): Promise<{ previewThread: string }> {
   return { previewThread: notices[2]![3] };
 }
 
-function replyFrom(who: string, written: string, token: string) {
+/**
+ * HER REPLY ARRIVES, THEN ITS FIRST READ IS IN (20 Nov 2026): the door files the reply; what it says about who owns the
+ * card is decided when the first read lands (`decideReplyWords`, called by partnerUnderstood.ts after the brief is
+ * saved). `decision` is the first read's DECISION; null is no first read within the ten minutes (the keyword fallback).
+ */
+async function replyFrom(who: string, written: string, token: string, decision: Partial<FirstReadDecision> | null = null) {
+  const messageId = `ho_${crypto.randomUUID().slice(0, 8)}@test`;
+  const receivedAt = new Date(Date.now() - 1000).toISOString();
   const raw = [`From: ${who}`, "To: os@joinwestpeek.com", "Subject: Re: Porter: blocked", "", written, "", "On Wed, 23 Sep 2026 at 13:18, Porter <porter@joinwestpeek.com> wrote:", "> Preview ready."].join("\n");
-  return steerFromReply(env, { fromHeader: `<${who}>`, authenticationResults: GOOD_AUTH(who), subject: "Re: Porter: blocked", raw, inReplyTo: threadReference(token), references: null, emlKey: null });
+  const out = await steerFromReply(env, { fromHeader: `<${who}>`, authenticationResults: GOOD_AUTH(who), subject: "Re: Porter: blocked", raw, inReplyTo: threadReference(token), references: null, emlKey: null, messageId });
+  await decideReplyWords(env, { inboundId: `inm_${messageId}`, messageId, receivedAt, decision: decision ? { kind: "nothing", property: null, handOffTo: null, planApproved: null, holds: [], ...decision } : null });
+  return out;
 }
 
 // ── THE RULES ─────────────────────────────────────────────────────────────────────────────────
@@ -362,7 +373,7 @@ describe("the secondary cannot approve, force or clear the block", () => {
     ({ previewThread: token } = await seedCard(id));
     await call(`/api/work-cards/${id}/hand-off`, SEQUOIA, "POST", { to: "Scooter" });
     sent.length = 0;
-    const out = await replyFrom(SEQUOIA, "approved", token);
+    const out = await replyFrom(SEQUOIA, "approved", token, { kind: "approve" });
     expect(out.steered).toBe(true);
     expect(out.answered).toBe(false);
     expect(to(SEQUOIA)).toHaveLength(1);
@@ -396,7 +407,7 @@ describe("the secondary cannot approve, force or clear the block", () => {
 
   it("take-back by reply swaps the roles and sends exactly one email", async () => {
     sent.length = 0;
-    const out = await replyFrom(SEQUOIA, "take this back", token);
+    const out = await replyFrom(SEQUOIA, "take this back", token, { takeBack: true });
     expect(out.steered).toBe(true);
     const c = await card(id);
     expect(c.requested_by_email).toBe(SEQUOIA);
@@ -661,13 +672,13 @@ describe("unsure → Porter asks once; 'yes' performs it", () => {
     const id = "wc_handoff_wide_reply";
     const { previewThread } = await seedCard(id);
     sent.length = 0;
-    await replyFrom(SEQUOIA, "cc Scooter", previewThread);
+    await replyFrom(SEQUOIA, "cc Scooter", previewThread, { cc: ["Scooter"] });
     let c = await card(id);
     expect(c.requested_by_email).toBe(SEQUOIA);
     expect(JSON.parse(String(c.cc_emails))).toEqual([SCOOTER]);
     expect(sent.some((m) => /Did you mean/.test(m.text))).toBe(false);
     sent.length = 0;
-    await replyFrom(SEQUOIA, "Scooter will take it from here", previewThread);
+    await replyFrom(SEQUOIA, "Scooter will take it from here", previewThread, { handOffTo: "Scooter" });
     c = await card(id);
     expect(c.requested_by_email).toBe(SCOOTER);
     expect(sent).toHaveLength(1);
@@ -681,7 +692,7 @@ describe("the card's trail shows the hand-off and the one email the new primary 
     const id = "wc_handoff_on_trail";
     const { previewThread } = await seedCard(id);
     sent.length = 0;
-    await replyFrom(SEQUOIA, "Scooter will take it from here", previewThread);
+    await replyFrom(SEQUOIA, "Scooter will take it from here", previewThread, { handOffTo: "Scooter" });
     expect(sent).toHaveLength(1);
     const c = await card(id);
     expect(c.requested_by_email).toBe(SCOOTER);
@@ -721,5 +732,85 @@ describe("moving the work to a place is not a hand-off (19 Nov 2026, wc_59ef2d40
   });
   it("a hand-off to someone who is not a partner is still refused by name", () => {
     expect(ownershipIntentIn("Hand this to Bob.", "scooter@westpeek.ventures")).toMatchObject({ kind: "HAND_OFF", to: null, named: "Bob" });
+  });
+});
+
+// ── THE FIRST READ DECIDES THE WORDS, NOT KEYWORDS AT THE DOOR (owner ruling, 19 Nov 2026) ─────────────────────────
+
+describe("the first read decides hand-off and take-back; keywords only after the wait, by whole sentences", () => {
+  /** Her reply filed by the door, stored as the inbound door stores it, with no first read yet. */
+  async function filed(id: string, token: string, written: string): Promise<string> {
+    const messageId = `fr_${crypto.randomUUID().slice(0, 8)}@test`;
+    const raw = [`From: ${SEQUOIA}`, "To: os@joinwestpeek.com", "Subject: Re: Porter: blocked", "", written].join("\n");
+    await steerFromReply(env, { fromHeader: `<${SEQUOIA}>`, authenticationResults: GOOD_AUTH(SEQUOIA), subject: "Re: Porter: blocked", raw, inReplyTo: threadReference(token), references: null, emlKey: null, messageId });
+    await env.WP_OS_DB.prepare(
+      "INSERT INTO inbound_message (id, message_id, r2_key, from_address, to_address, subject, received_at, bytes, mail_authority_json, work_card_id, firm_scope) VALUES (?1, ?2, 'inbound/' || ?1 || '.eml', ?3, 'os@joinwestpeek.com', 'Re: Porter: blocked', ?4, 10, ?5, ?6, 'west-peek')",
+    )
+      .bind(`inm_${messageId}`, messageId, SEQUOIA, new Date(Date.now() - 30_000).toISOString(), JSON.stringify({ partner: SEQUOIA }), id)
+      .run();
+    return messageId;
+  }
+  const reads = (decision: Partial<FirstReadDecision>) => async () => ({
+    ok: true,
+    detail: "the test's reader",
+    text: `NONE\nDECISION: ${JSON.stringify({ kind: "nothing", property: null, handOffTo: null, planApproved: null, holds: [], takeBack: null, cc: [], backBy: null, ...decision })}`,
+  });
+  /** The first-read step of the sweep, ticked until this email's read has settled (older emails in the store go first). */
+  async function readIn(messageId: string, reader: ReturnType<typeof reads>): Promise<void> {
+    for (let i = 0; i < 6; i++) {
+      await sendUnderstoodReplies(env, new Date(), reader);
+      if (await env.WP_OS_DB.prepare("SELECT 1 AS x FROM partner_understood WHERE inbound_message_id = ?1 AND state <> 'CLAIMED'").bind(`inm_${messageId}`).first()) return;
+    }
+    throw new Error("the first read never settled");
+  }
+  const logged = async (id: string) =>
+    ((await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'partner_reply.first_read_decides' ORDER BY rowid").bind(id).all<{ payload_json: string }>()).results ?? []).map((r) => JSON.parse(r.payload_json) as Record<string, unknown>);
+
+  it("the door moves nothing; the first read's hand-off moves the card, and the block waits on the new primary", async () => {
+    const id = "wc_fr_handoff";
+    const { previewThread } = await seedCard(id);
+    sent.length = 0;
+    const mid = await filed(id, previewThread, "Scooter will take it from here.");
+    expect((await card(id)).requested_by_email, "nothing moves at the door").toBe(SEQUOIA);
+    expect(sent).toHaveLength(0);
+    await readIn(mid, reads({ handOffTo: "Scooter" }));
+    const c = await card(id);
+    expect([c.requested_by_email, c.secondary_partner_email]).toEqual([SCOOTER, SEQUOIA]);
+    expect([c.state, c.block_who, c.block_answer ?? null], "a hand-off is never the answer to the preview").toEqual(["BLOCKED", "SCOOTER", null]);
+    expect(to(SCOOTER)).toHaveLength(1);
+    expect((await logged(id)).find((e) => e.what === "the hand-off")).toMatchObject({ used: "FIRST_READ", first_read: "hand to Scooter", keyword: "hand to Scooter" });
+  });
+
+  it("the first read overrules a keyword hand-off: 'pass it over to Scooter for a look, but I still own it'", async () => {
+    const id = "wc_fr_keeps_ownr"; // seedCard's preview token is the id's last 8 characters: unique per card
+    const { previewThread } = await seedCard(id);
+    const mid = await filed(id, previewThread, "I'll pass it over to Scooter for a look, but I still own it.");
+    await readIn(mid, reads({ kind: "nothing", handOffTo: null }));
+    expect((await card(id)).requested_by_email).toBe(SEQUOIA);
+    expect((await logged(id)).find((e) => e.what === "the hand-off")).toMatchObject({ used: "FIRST_READ", first_read: "no hand-off", keyword: "hand to Scooter" });
+  });
+
+  it("with no first read the keywords act, logged, and judge the whole sentence: 'I don't think Scooter will take it from here' moves nothing and asks nothing", async () => {
+    const id = "wc_fr_negated";
+    const { previewThread } = await seedCard(id);
+    sent.length = 0;
+    await replyFrom(SEQUOIA, "I don't think Scooter will take it from here.", previewThread, null);
+    expect((await card(id)).requested_by_email).toBe(SEQUOIA);
+    expect(sent.some((m) => /Did you mean/.test(m.text))).toBe(false);
+    expect(to(SCOOTER)).toHaveLength(0);
+    // The same words without the negation hand off by the fallback, and the record says it was the fallback.
+    await replyFrom(SEQUOIA, "Scooter will take it from here.", previewThread, null);
+    expect((await card(id)).requested_by_email).toBe(SCOOTER);
+    expect(String((await card(id)).description)).toMatch(/first read absent: keyword fallback \(the hand-off: hand to Scooter\)/);
+  });
+
+  it("'if this fails I'll take it back' from the secondary takes nothing back; the first read's takeBack does", async () => {
+    const id = "wc_fr_takeback";
+    const { previewThread } = await seedCard(id);
+    await call(`/api/work-cards/${id}/hand-off`, SEQUOIA, "POST", { to: "Scooter" });
+    await replyFrom(SEQUOIA, "If this fails I'll take it back.", previewThread, null);
+    expect((await card(id)).requested_by_email).toBe(SCOOTER);
+    await replyFrom(SEQUOIA, "Fine, it's yours to finish, but I want it again now.", previewThread, { takeBack: true });
+    expect((await card(id)).requested_by_email).toBe(SEQUOIA);
   });
 });

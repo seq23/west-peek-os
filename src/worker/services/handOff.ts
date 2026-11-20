@@ -21,6 +21,7 @@ import {
   roleOf,
   secondaryApprovalRefusal,
   type OwnershipDecision,
+  type OwnershipIntent,
 } from "../../shared/work/partnerOwnership";
 import { handOffEmail, type TrailEntry } from "../../shared/work/handOffEmail";
 import { readAsks } from "../../shared/work/approvalReply";
@@ -30,7 +31,7 @@ import { plainTitle } from "../../shared/work/siteChange";
  * HAND A CARD TO THE OTHER PARTNER, AND TAKE IT BACK (owner, 23 Sep 2026; migration 0241).
  *
  * THE ONE WRITER of a card's primary and secondary during a hand-off. Three doors reach it — a reply
- * on the card's thread (`emailThread.ts#steerFromReply`), a note on the card
+ * on the card's thread, once its first read is in (`firstReadDecides.ts#decideReplyWords`), a note on the card
  * (`workCards.ts#handleAddWorkCardNote`) and the two routes below — and every one of them decides
  * through `shared/work/partnerOwnership.ts`, so "who may" has one answer.
  *
@@ -219,7 +220,17 @@ export async function changeOwnership(
  */
 export async function ownershipFromWords(
   env: Env,
-  input: { cardId: string; writer: string; text: string; via: "REPLY" | "NOTE"; ackOnThread?: string | null },
+  input: {
+    cardId: string;
+    writer: string;
+    text: string;
+    via: "REPLY" | "NOTE";
+    ackOnThread?: string | null;
+    /** What the first read decided (`firstReadDecides.ts`); absent → the keywords read the words (the fallback, and a note). */
+    intent?: OwnershipIntent | null;
+    /** Runs once, just before the words act on the card (the reply door restores a block his reply had answered). */
+    beforeActing?: () => Promise<unknown>;
+  },
 ): Promise<OwnershipChange | null> {
   const card = await readCard(env, input.cardId);
   if (!card) return null;
@@ -232,23 +243,26 @@ export async function ownershipFromWords(
       pending.by === writer.email &&
       (input.via === "REPLY" ? Boolean(input.ackOnThread) && pending.token === input.ackOnThread : pending.via === "NOTE");
     if (answersIt) {
+      await input.beforeActing?.();
       await resolveQuestion(env, card, writer!.firmUserId, "confirmed");
       return changeOwnership(env, { cardId: input.cardId, actor: input.writer, action: "HAND_OFF", target: pending!.to, via: input.via, said: input.text, ackOnThread: input.ackOnThread ?? null });
     }
     return null;
   }
-  const intent = ownershipIntentIn(input.text, input.writer);
+  const intent = input.intent === undefined ? ownershipIntentIn(input.text, input.writer) : input.intent;
   if (!intent) return null;
+  if (intent.kind === "TAKE_BACK" && roleOf(card, input.writer) !== "SECONDARY") return null;
+  if (intent.kind === "UNSURE_HAND_OFF" && roleOf(card, input.writer) !== "PRIMARY") return null;
+  await input.beforeActing?.();
   if (intent.kind === "HAND_OFF") {
     return changeOwnership(env, { cardId: input.cardId, actor: input.writer, action: "HAND_OFF", target: intent.to?.email ?? intent.named, via: input.via, said: input.text, ackOnThread: input.ackOnThread ?? null });
   }
   if (intent.kind === "TAKE_BACK") {
-    if (roleOf(card, input.writer) !== "SECONDARY") return null;
     return changeOwnership(env, { cardId: input.cardId, actor: input.writer, action: "TAKE_BACK", via: input.via, said: input.text, ackOnThread: input.ackOnThread ?? null });
   }
   // UNSURE: only the primary can hand off, so only the primary is asked; anyone else's words stand.
   const writer = partnerFor(input.writer);
-  if (!writer || roleOf(card, input.writer) !== "PRIMARY") return null;
+  if (!writer) return null;
   const question = handOffQuestion(intent.to);
   let token: string | null = null;
   if (input.via === "REPLY") {

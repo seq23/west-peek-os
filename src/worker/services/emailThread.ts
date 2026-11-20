@@ -1,6 +1,4 @@
 import { developerDirector, isWorkInstruction } from "./developerDirection";
-import { recordPartnerBack } from "./blocks";
-import { recordCcFrom } from "./ccPartners";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { mintThreadToken, threadForSesIds, threadHeaders, threadTokensIn, type EmailThreadRow } from "../../shared/email/thread";
@@ -14,8 +12,7 @@ import type { InstructionPiece } from "../../shared/work/instruction";
 import { answerBlock } from "./blocks";
 import { statedCut } from "./partnerWords";
 import { blockReplyDoor, PARTNER_ANSWER_MAX } from "../../shared/work/blocks";
-import { ownershipFromWords, tellPartner, tellSecondaryRefused } from "./handOff";
-import { ownershipIntentIn, ownershipOf, roleOf } from "../../shared/work/partnerOwnership";
+import { roleOf } from "../../shared/work/partnerOwnership";
 import { LATE_THREAD_NOTE_PREFIX, NEW_EMAIL_NOTE_PREFIX, readApprovalReply } from "../../shared/work/approvalReply";
 import { textBodyOf } from "../effects/mimeAttachments";
 import { storeAttachments } from "./requestMaterials";
@@ -608,40 +605,13 @@ export async function steerFromReply(
       await appendEvent(env, { eventType: "work_card.reply_filed_during_takeover", actorType: "firm_user", actorId: partner!.firmUserId, objectType: "work_card", objectId: cardRow!.id, firmScope: thread.firm_scope, payload: { thread_token: thread.token, said: written.slice(0, 200) } });
     }
 
-    // "CC SCOOTER" IN A REPLY (0239): recorded from the authenticated sender, whatever the state;
-    // `recordCcFrom` refuses anyone but the requesting partner and names non-partners it refused.
-    if (cardRow && partner) await recordCcFrom(env, cardRow.id, written, partner.email);
-    // 0302: the partner who asked says when he will be back → no reminder about this card before then.
-    if (cardRow && partner && (cardRow.requested_by_email ?? "").trim().toLowerCase() === partner.email) await recordPartnerBack(env, cardRow.id, written, partner.firstName);
-
     /*
-     * "HAND THIS TO SCOOTER" / "TAKE THIS BACK" (0241). Read before anything else acts on the reply:
-     * it moves the card and is never an answer to a block. The authenticated sender decides, through
-     * the same rules as the note and the route; a refusal is answered on the sender's own thread.
+     * WHAT HIS REPLY SAYS ABOUT THE CARD ITSELF IS THE FIRST READ'S (owner ruling, 19 Nov 2026). Hand-off, take-back,
+     * a secondary's "approved", "cc Scooter" (0239) and "back on <day>" (0302) are no longer read here by keywords:
+     * this door files the reply (the steer above, and below), and `firstReadDecides.ts#decideReplyWords` decides them
+     * when the first read of this email is in (the sweep holds the card until then), the keywords only when no reader
+     * answered within the ten minutes. A hand-off that answered a block puts the block back before the card moves.
      */
-    /*
-     * …EXCEPT A REFUSAL ON A WEBSITE JOB WAITING FOR HIM (owner ruling, 19 Nov 2026: the first read decides). "Please
-     * move it to the Productions dashboard project" was refused at this door as a hand-off to "the" (#546). On a BLOCKED
-     * website card, words that name someone who is not a partner answer the block as any reply does, and the runner
-     * decides the refusal from the first read of his email (webPropertyChange.ts `refusedHandOff`), the keywords only
-     * when there is none. A hand-off to a partner and a take-back still act here: they decide who the reply is from.
-     */
-    const refusalWaitsForFirstRead = Boolean(cardRow && partner && cardRow.kind === WEB_PROPERTY_CHANGE_KIND && cardRow.state === "BLOCKED" && (() => {
-      const said = ownershipIntentIn(written, partner.email);
-      return said?.kind === "HAND_OFF" && !said.to;
-    })());
-    const owned = !takenOver && !refusalWaitsForFirstRead && cardRow && partner ? await ownershipFromWords(env, { cardId: cardRow.id, writer: partner.email, text: written, via: "REPLY", ackOnThread: thread.token }) : null;
-    /*
-     * A SECONDARY'S "APPROVED" (0241): refused, and told who approves and how to take it over. The
-     * reply is still kept as a note below — read as context, never as an approval.
-     */
-    const secondarySaidApproved =
-      !owned && cardRow && partner && roleOf(cardRow, partner.email) === "SECONDARY" && ["APPROVED", "FORCED", "PREVIEW", "PUBLISH"].includes(readApprovalReply(written).kind);
-    if (owned && !owned.ok && cardRow && partner) {
-      await tellPartner(env, { cardId: cardRow.id, to: partner, label: "Not changed", line: owned.reason ?? "Not changed.", subjectTail: "not handed off", onThread: thread.token });
-    } else if (secondarySaidApproved && cardRow && partner) {
-      await tellSecondaryRefused(env, { cardId: cardRow.id, secondary: partner, primary: ownershipOf(cardRow).primary!, said: written, onThread: thread.token });
-    }
 
     /*
      * A REPLY THAT ASKS FOR A BUILD GOES TO THE BUILD DOOR (14 Nov 2026). Her ask: "intelligent enough to
@@ -660,7 +630,7 @@ export async function steerFromReply(
      * Read before the build door: "no, make it a one-pager instead" steers this session, it does not open a new job.
      */
     const sessionReply =
-      !alreadyFiled && !takenOver && !owned && cardRow && partner && cardRow.kind === PARTNER_SESSION_KIND && !["DONE", "CANCELLED"].includes(cardRow.state) && (cardRow.requested_by_email ?? "").trim().toLowerCase() === partner.email.toLowerCase()
+      !alreadyFiled && !takenOver && cardRow && partner && cardRow.kind === PARTNER_SESSION_KIND && !["DONE", "CANCELLED"].includes(cardRow.state) && (cardRow.requested_by_email ?? "").trim().toLowerCase() === partner.email.toLowerCase()
         ? await (await import("./partnerSession")).redirectSession(env, cardRow.id, written, partner.email, thread.token)
         : null;
     if (sessionReply) answered = true;
@@ -672,7 +642,7 @@ export async function steerFromReply(
      * done" notice — no build opened. A closed website card is read like any other finished card.
      */
     const closedSite = cardRow?.kind === WEB_PROPERTY_CHANGE_KIND && ["DONE", "CANCELLED"].includes(cardRow.state);
-    if (!sessionReply && !alreadyFiled && !takenOver && !owned && !secondarySaidApproved && cardRow && partner && (cardRow.kind !== WEB_PROPERTY_CHANGE_KIND || closedSite)) {
+    if (!sessionReply && !alreadyFiled && !takenOver && cardRow && partner && (cardRow.kind !== WEB_PROPERTY_CHANGE_KIND || closedSite)) {
       const read = await readReplyIntent(
         env,
         { cardId: cardRow.id, firmScope: thread.firm_scope, text: written, where: replyWhere(cardRow) },
@@ -721,9 +691,7 @@ export async function steerFromReply(
       }
     }
 
-    if (owned) {
-      // Handled: the card changed hands (or was refused, and said so). Nothing below reads it.
-    } else if (sessionReply) {
+    if (sessionReply) {
       // Handled: the session was redirected (services/partnerSession.ts redirectSession).
     } else if (builtFromReply) {
       // Handled: the build is Porter's own job now, and the partner was told on this thread.
