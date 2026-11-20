@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-// @ts-expect-error — a plain .mjs script with no type declarations
 import { capTests, TEST_CAP } from "../scripts/ci/check-changed.mjs";
 
 describe("the pre-push check runs at most TEST_CAP test files", () => {
