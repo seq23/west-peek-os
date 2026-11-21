@@ -410,10 +410,16 @@ through three lenses:
 - **Product manager:** every thing the partner asked for is built or explicitly asked about — nothing silently
   dropped, narrowed or deferred; every `done_when` check honestly met; no placeholder the partner did not cause.
 
+LOOK AT THE REAL OUTPUT YOURSELF, never only the builder's screenshots: build the branch, render every page (or
+email, or screen) the change touches at 390px and at desktop width (Playwright or the RUNBOOK's method), save the
+images in the job folder and open them. Your pass is signed onto the PR as `Ship-ready: PASS — <you> looked at
+<looked_at>`, which is what lets it land, so `looked_at` names exactly what you rendered and saw (pages, widths, what
+was on them). A pass with no `looked_at` is refused.
+
 A finding is `blocking` when it breaks the Definition of done or leaves an ask unmet; anything else is a note.
 Do not block on taste. Write ONE JSON object to REVIEW_PATH (in the context):
 ```json
-{ "summary": "<one line>", "findings": [{ "lens": "engineer" | "ux" | "pm", "finding": "<what is wrong and where, specific enough to fix>", "blocking": true }] }
+{ "summary": "<one line>", "looked_at": "<what you rendered and saw, e.g. the productions homepage at 390px and 1440px: the new sentence word for word, no overflow>", "findings": [{ "lens": "engineer" | "ux" | "pm", "finding": "<what is wrong and where, specific enough to fix>", "blocking": true }] }
 ```
 `"findings": []` when it is finished. Blocking findings go back to the builder; after two fix rounds they stop the
 job by name and a person looks.

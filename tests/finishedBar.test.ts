@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { codexSpentUsage, firstRunArgs, firstRunVerdict, readReview, REVIEW_ROUNDS, reviewAndFix, runReview, settleFixTurn } from "../scripts/duties/web-property-change.mjs";
+import { codexSpentUsage, firstRunArgs, firstRunVerdict, readReview, REVIEW_ROUNDS, reviewAndFix, runReview, settleFixTurn, withShipReady } from "../scripts/duties/web-property-change.mjs";
 
 /**
  * THE v1.0 BAR ON THE MAC (owner, 13 Nov 2026: "v1.0 final with persistence and veteran UX/UI POV"). A fresh-eyes
@@ -45,12 +45,13 @@ describe("the v1.0 bar on the Mac: a fresh-eyes review and a first run", () => {
 
   it("blocking findings go back to the builder, at most REVIEW_ROUNDS times, then a named stop; a clean review passes with what was fixed", async () => {
     const blocking = { findings: [{ lens: "engineer", finding: "notes are kept in memory and vanish on reload", blocking: true }] };
-    const clean = { findings: [{ lens: "ux", finding: "the empty state could say more", blocking: false }], summary: "finished" };
+    const clean = { findings: [{ lens: "ux", finding: "the empty state could say more", blocking: false }], summary: "finished", looked_at: "the notes page at 390px and 1440px" };
     // Fixed on the first round.
     let rebuilds = 0;
     const fixed = await reviewAndFix({ review: async (round) => ({ verdict: readReview(JSON.stringify(round === 0 ? blocking : clean)) }), rebuild: async () => (rebuilds++, {}) });
     expect(rebuilds).toBe(1);
     expect(fixed.line).toMatch(/1 fixed, 1 note — finished/);
+    expect(fixed.signoff).toEqual({ round: 2, looked_at: "the notes page at 390px and 1440px" });
     // Never fixed: exactly REVIEW_ROUNDS fix turns, then a stop a human sees, never a pass.
     rebuilds = 0;
     const stuck = await reviewAndFix({ review: async () => ({ verdict: readReview(JSON.stringify(blocking)) }), rebuild: async () => (rebuilds++, {}) });
@@ -63,6 +64,27 @@ describe("the v1.0 bar on the Mac: a fresh-eyes review and a first run", () => {
     // A wait (the review's route out of usage) is returned as it is.
     const wait = { phase: "BUILD", status: "failed", reason: "NAMED WAIT [CLAUDE_LIMIT] …", waits_seconds: 600 };
     expect((await reviewAndFix({ review: async () => ({ report: wait }), rebuild: async () => ({}) })).report).toBe(wait);
+  });
+
+  it("a pass says what real output it looked at, and the script signs the PR so ~/bin/land lets it land (wc_cbc35cb3, 20 Nov 2026)", async () => {
+    // A clean review that names nothing it looked at is a stop, never an unsigned pass.
+    const blind = await reviewAndFix({ review: async () => ({ verdict: readReview(JSON.stringify({ findings: [], summary: "fine" })) }), rebuild: async () => ({}) });
+    expect(blind.report!.reason).toMatch(/^NAMED STOP \[REVIEW_LOOKED_AT_NOTHING\]/);
+    // ~/bin/land's signoff(): the last line matching this, the reviewer is what sits between the dash and " looked at ".
+    const landSignoff = (body: string) => {
+      const line = body.split("\n").filter((l) => /^[\s>*-]*Ship-ready: *PASS *(—|–|-{1,2}|:) *.+ looked at .+/.test(l)).pop();
+      return line ? line.replace(/^[\s>*-]*Ship-ready: *PASS *(—|–|-{1,2}|:) */, "").replace(/ looked at .*/, "").trim() : null;
+    };
+    const old = "## Change\n- one sentence\n\nShip-ready: PASS — Porter's fresh-eyes review (round 1) looked at the old build";
+    const body = withShipReady(old, { round: 2, lookedAt: "the productions homepage at 390px and 1440px", previewUrl: "https://work-wpc-cbc35cb3.west-peek-productions.pages.dev", job: "ccr_e7e48864" });
+    expect(body.match(/Ship-ready:/g), "a rebuild replaces the earlier line, never stacks a second").toHaveLength(1);
+    expect(body).toContain("## Change\n- one sentence");
+    const reviewer = landSignoff(body)!;
+    expect(reviewer).toMatch(/^Porter's fresh-eyes review \(round 2, a separate model turn from the builder, job ccr_e7e48864\)$/);
+    // land's is_builder: never empty, "me", a placeholder, the builder's names or the Claude co-author.
+    for (const builder of ["seq23", "sequoia taylor", "claude opus 5.5", "noreply@anthropic.com"]) expect(reviewer.toLowerCase()).not.toBe(builder);
+    expect(reviewer.toLowerCase()).not.toContain("noreply@anthropic.com");
+    expect(body).toMatch(/looked at the productions homepage at 390px and 1440px; the first run then passed on the preview https:\/\/work-wpc-cbc35cb3/);
   });
 
   it("the first run passes only with a zero exit that printed FIRST_RUN OK; no script, a failure or silence stops the preview by name", () => {

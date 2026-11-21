@@ -39,14 +39,15 @@ export const REVIEW_ROUNDS: number;
 export const FIRST_RUN_SCRIPT: string;
 export const FIRST_RUN_SENTINEL: string;
 export type ReviewFinding = { lens: string; finding: string; blocking: boolean };
-export function readReview(text: string | null | undefined): { findings: ReviewFinding[]; summary: string } | null;
+export function readReview(text: string | null | undefined): { findings: ReviewFinding[]; summary: string; looked_at: string } | null;
+export function withShipReady(body: string | null | undefined, signoff: { round: number; lookedAt: string; previewUrl?: string | null; job?: string | null }): string;
 export function runReview(opts: Parameters<typeof runModel>[0], deps?: Parameters<typeof runModel>[1] & { resetsIn?: (notices: string[]) => number }): ReturnType<typeof runModel>;
 export function reviewAndFix(args: {
-  review: (round: number) => Promise<{ verdict?: { findings: ReviewFinding[]; summary: string } | null; report?: unknown }>;
+  review: (round: number) => Promise<{ verdict?: { findings: ReviewFinding[]; summary: string; looked_at?: string } | null; report?: unknown }>;
   rebuild: (blocking: ReviewFinding[], round: number) => Promise<{ report?: unknown }>;
   rounds?: number;
   phase?: string;
-}): Promise<{ line?: string; report?: { phase: string; status: string; reason: string } & Record<string, unknown> }>;
+}): Promise<{ line?: string; signoff?: { round: number; looked_at: string }; report?: { phase: string; status: string; reason: string } & Record<string, unknown> }>;
 export function firstRunVerdict(run: { hasScript: boolean; exit?: number; out?: string }): { ok: boolean; line: string };
 export function firstRunArgs(previewUrl: string | null | undefined): { args: string[]; envUrl: string };
 export function accountingOf(result: unknown): Array<{ ask: string; how: string; done_when?: string[] }>;

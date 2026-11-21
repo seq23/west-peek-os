@@ -636,7 +636,7 @@ export function readReview(text) {
     const j = JSON.parse(String(text ?? ""));
     if (!j || typeof j !== "object" || !Array.isArray(j.findings)) return null;
     const findings = j.findings.filter((f) => f && typeof f === "object" && String(f.finding ?? "").trim()).map((f) => ({ lens: String(f.lens ?? "").slice(0, 20), finding: String(f.finding).slice(0, 600), blocking: f.blocking === true }));
-    return { findings, summary: String(j.summary ?? "").slice(0, 600) };
+    return { findings, summary: String(j.summary ?? "").slice(0, 600), looked_at: String(j.looked_at ?? "").replace(/\s+/g, " ").trim().slice(0, 400) };
   } catch {
     return null;
   }
@@ -670,7 +670,9 @@ export async function reviewAndFix({ review, rebuild, rounds = REVIEW_ROUNDS, ph
     if (!r.verdict) return { report: { phase, status: "failed", reason: "NAMED STOP [REVIEW_UNREADABLE] the fresh-eyes review wrote no readable review file; the build is not shown to the partner unreviewed." } };
     const blocking = r.verdict.findings.filter((f) => f.blocking);
     const notes = r.verdict.findings.length - blocking.length;
-    if (blocking.length === 0) return { line: `reviewed with fresh eyes (engineer, UX, PM): ${fixed} fixed${notes ? `, ${notes} note${notes === 1 ? "" : "s"}` : ""}${r.verdict.summary ? ` — ${r.verdict.summary}` : ""}` };
+    // A PASS SAYS WHAT IT LOOKED AT (20 Nov 2026, wc_cbc35cb3): it becomes the PR's Ship-ready line, which ~/bin/land reads.
+    if (blocking.length === 0 && !r.verdict.looked_at) return { report: { phase, status: "failed", reason: "NAMED STOP [REVIEW_LOOKED_AT_NOTHING] the fresh-eyes review passed the build without saying what real output it looked at (looked_at), so nobody has signed it ship-ready; the build is not shown to the partner." } };
+    if (blocking.length === 0) return { line: `reviewed with fresh eyes (engineer, UX, PM): ${fixed} fixed${notes ? `, ${notes} note${notes === 1 ? "" : "s"}` : ""}${r.verdict.summary ? ` — ${r.verdict.summary}` : ""}`, signoff: { round: round + 1, looked_at: r.verdict.looked_at } };
     if (round >= rounds) {
       return { report: { phase, status: "failed", reason: `NAMED STOP [REVIEW_NOT_MET] after ${rounds} fix round${rounds === 1 ? "" : "s"} the review still finds: ${blocking.map((f) => `${f.lens ? `${f.lens}: ` : ""}${f.finding}`).join("; ").slice(0, 1200)}` } };
     }
@@ -681,6 +683,36 @@ export async function reviewAndFix({ review, rebuild, rounds = REVIEW_ROUNDS, ph
 }
 
 /** Did the first run pass? Only a zero exit that printed the sentinel counts; no script is a stop, never a pass. */
+/**
+ * THE PR SAYS WHO PASSED IT SHIP-READY (20 Nov 2026, wc_cbc35cb3). `~/bin/land` stops any PR that changes what
+ * people see unless its body carries `Ship-ready: PASS — <reviewer> looked at <real output>` from a reviewer who is
+ * not the builder. Porter's builds already had that reviewer (the REVIEW turn, a fresh context) and a first run on
+ * the preview, but nothing wrote it where land reads, so Scooter's "approved" hit three refused LANDs and a STUCK
+ * email. The script, not a model, writes the line from what the review recorded, once the first run on the preview
+ * has passed; a rebuild replaces the earlier line. Pure, so it is self-tested.
+ */
+export function withShipReady(body, { round, lookedAt, previewUrl, job }) {
+  const reviewer = `Porter's fresh-eyes review (round ${round}, a separate model turn from the builder${job ? `, job ${job}` : ""})`;
+  const what = `${String(lookedAt ?? "").replace(/\s+/g, " ").trim()}${previewUrl ? `; the first run then passed on the preview ${previewUrl}` : ""}`;
+  const kept = String(body ?? "").split("\n").filter((l) => !/^[\s>*-]*Ship-ready:/i.test(l)).join("\n").replace(/\s+$/, "");
+  return `${kept}${kept ? "\n\n" : ""}Ship-ready: PASS — ${reviewer} looked at ${what}\n`;
+}
+
+/** Write the Ship-ready line onto the PR. Returns null, or why it could not (the BUILD fails and is retried). */
+async function signShipReady(worktree, prNumber, signoff, previewUrl, jobDir, progress) {
+  if (!signoff) return null;
+  try {
+    const { stdout } = await sh("gh", ["pr", "view", String(prNumber), "--json", "body", "-q", ".body"], { cwd: worktree });
+    const file = path.join(jobDir, `pr-${prNumber}-body.md`);
+    writeFileSync(file, withShipReady(stdout, { ...signoff, lookedAt: signoff.looked_at, previewUrl, job: path.basename(jobDir) }));
+    await sh("gh", ["pr", "edit", String(prNumber), "--body-file", file], { cwd: worktree });
+    progress(`PR #${prNumber} signed Ship-ready by the fresh-eyes review`);
+    return null;
+  } catch (err) {
+    return `the PR #${prNumber} body could not be signed Ship-ready (gh: ${err instanceof Error ? err.message.slice(0, 300) : String(err)}), so ~/bin/land would refuse it; the preview is not sent unsigned.`;
+  }
+}
+
 export function firstRunVerdict({ hasScript, exit, out }) {
   if (!hasScript) return { ok: false, line: `NAMED STOP [FIRST_RUN_MISSING] the build left no \`${FIRST_RUN_SCRIPT}\` script in package.json, so nobody has used the preview as the partner will; the preview is not sent.` };
   const tail = String(out ?? "").trim().split("\n").filter(Boolean).slice(-3).join(" | ").slice(0, 600);
@@ -809,7 +841,7 @@ async function reviewBuild({ job, base, result, names, jobDir, packageDir, resul
       return {};
     },
   });
-  return out.report ? out : { line: out.line, result: latest };
+  return out.report ? out : { line: out.line, signoff: out.signoff, result: latest };
 }
 
 function appendRouteLog(opts, route) {
@@ -1682,6 +1714,8 @@ export async function run(job, ctx) {
     // THE v1.0 BAR, PART 2: the partner's first session, played on the preview before anyone is told it exists.
     const firstRun = previewUrl ? await firstRunOn(names.worktree, previewUrl, ctx.env, secrets.allowed, progress) : { ok: true, line: "first run: this repo has no preview to run it on" };
     if (!firstRun.ok) return { phase, status: "failed", reason: firstRun.line, ...carried };
+    const unsigned = await signShipReady(names.worktree, pr.number, reviewed.signoff, previewUrl, jobDir, progress);
+    if (unsigned) return { phase, status: "failed", reason: unsigned, ...carried };
     const changedFiles = await changedFilesFor(names.worktree, pr.number, headBefore);
     const carriedJobs = carriedJobsOf(job, (branch) => branchIsAncestor(names.worktree, branch));
     return {
@@ -2411,6 +2445,7 @@ async function runSeveral(job, ctx) {
     let anyRebuilt = false;
     for (const p of parts) {
       let proof = "";
+      let signoff = null;
       // A repo whose PR is already recorded GREEN is re-observed, never rebuilt.
       if (!(p.pr?.url && p.pr.check_state === "GREEN")) {
         const resultPath = path.join(jobDir, `result-BUILD-${p.repo}.json`);
@@ -2442,6 +2477,7 @@ async function runSeveral(job, ctx) {
         items.push(...itemsOf(result).map((i) => ({ ...i, item: `${p.repo}: ${i.item}`.slice(0, 200) })));
         const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress, registryAllowance(p.book, p.secrets), { branch: p.names.branch });
         proof = [String(result.proof ?? "").slice(0, 6000), reviewed.line, ...configLines].filter(Boolean).join("\n");
+        signoff = reviewed.signoff;
         anyRebuilt = true;
       }
       let pr;
@@ -2458,6 +2494,8 @@ async function runSeveral(job, ctx) {
         const firstRun = await firstRunOn(p.names.worktree, previewUrl, ctx.env, p.secrets.allowed, progress);
         if (!firstRun.ok) return { phase, status: "failed", reason: `${p.repo}: ${firstRun.line}`.slice(0, 1500), parts: reports };
         proof = `${proof}\n${firstRun.line}`;
+        const unsigned = await signShipReady(p.names.worktree, pr.number, signoff, previewUrl, jobDir, progress);
+        if (unsigned) return { phase, status: "failed", reason: `${p.repo}: ${unsigned}`, parts: reports };
       }
       const changedFiles = await changedFilesFor(p.names.worktree, pr.number);
       reports.push({ repo: p.repo, pr_url: pr.url, pr_number: pr.number, branch: p.names.branch, check_state: checks.state, check_url: checks.url ?? undefined, preview_url: previewUrl ?? undefined, changed_files: changedFiles, proof: proof || undefined });
