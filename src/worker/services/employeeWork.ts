@@ -614,8 +614,12 @@ export async function workCard(env: Env, ctx: RouteContext, cardId: string, opti
    * guard to the runner.
    */
   if (card.kind !== "WEB_PROPERTY_CHANGE" && /chief of staff/i.test(employee.role)) {
-    const { parseWebPropertyAsk, isWebPropertyChange } = await import("../../shared/intake/webPropertyChange");
-    const ask = parseWebPropertyAsk(card.title.replace(/^From [^:]+@[^:]+:\s*/i, ""), card.description ?? "");
+    const { parseWebPropertyAsk, isWebPropertyChange, readWebPropertyAsk } = await import("../../shared/intake/webPropertyChange");
+    const { loadRegistry } = await import("./webPropertyRegistry");
+    // ONE READING (21 Nov 2026): the door already read this card (request_json); the title and the job are
+    // both written from that one ask, never from a second parse of the description that could disagree.
+    const stored = readWebPropertyAsk((card as CardRow & { request_json?: string | null }).request_json);
+    const ask = isWebPropertyChange(stored) ? stored : parseWebPropertyAsk(card.title.replace(/^From [^:]+@[^:]+:\s*/i, ""), card.description ?? "", await loadRegistry(env));
     if (isWebPropertyChange(ask)) {
       const { openWebPropertyChange, PORTER_NAME } = await import("./webPropertyChange");
       const handed = await assignCard(env, card, { id: employee.id, name: employee.name }, PORTER_NAME, `Change ${ask.property_host ?? "the site"}: "${(card.description ?? card.title).replace(/\s+/g, " ").slice(0, 120)}". Plan it on the Mac against the repo's RUNBOOK; build, prove, open a PR, land on green.`);

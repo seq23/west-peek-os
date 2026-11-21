@@ -494,9 +494,10 @@ describe("the email door — \"Walker, tell Scooter: …\"", () => {
       subject: "preview links for /entry and /rules, and the homepage question",
       partnerAddress: SEQUOIA_EMAIL,
       chiefOfStaff: "Wren",
-      // 19 Nov 2026: "not the live site" is a negated mention and names nothing; the same note naming the
-      // live site plainly is still a web property change without the "tell Scooter:" prefix.
-      raw: RELAY_BODY.replace("(preview data, not the live site)", "(preview data; the live site is unchanged)"),
+      // 19 Nov 2026: "not the live site" is a negated mention and names nothing; the same note naming a site
+      // plainly is still a web property change without the "tell Scooter:" prefix. 21 Nov 2026: "the live
+      // site" is ordinary English (production) and names no property, so the plain naming is the address.
+      raw: RELAY_BODY.replace("(preview data, not the live site)", "(preview data; westpeek.live is unchanged)"),
       limits: EMAILED_TASK_LIMITS,
       emlKey: null,
     });
