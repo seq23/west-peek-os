@@ -9,7 +9,7 @@ import { appendEvent } from "../events";
 import type { SweepCard } from "./workSweep";
 import { partnerFor, type Partner } from "../../shared/registry/partners";
 import { personaPrompt } from "../../shared/registry/aiEmployeePersonas";
-import { bulletsFrom, type ExecEmailInput } from "../../shared/email/execEmail";
+import type { ExecEmailInput } from "../../shared/email/execEmail";
 
 /**
  * PARTNER_MESSAGE — one employee, named, tells one partner, named, something short (22 Sep 2026).
@@ -91,23 +91,47 @@ function buildComposePrompt(input: {
   partner: Partner;
   instruction: string;
   steerText: string;
+  askedBy: Partner | null;
 }): string {
   return [
     personaPrompt(input.employee, input.role),
     "",
-    `You are writing ONE short message to ${input.partner.fullName}, a Managing Partner of West Peek`,
-    "Ventures. They asked to be told something, and this is the whole job: say it plainly, in your",
-    "own voice, and nothing more.",
+    `You are writing ONE short email to ${input.partner.fullName}, a Managing Partner of West Peek Ventures, as`,
+    `${input.employee}, a colleague who works with them every day. It is a note, not a report: warm, plain and specific.`,
+    ...(input.askedBy ? [`${input.askedBy.firstName} asked you to reach out; say so in a few natural words ("${input.askedBy.firstName} asked me to get in touch").`] : []),
     "",
     ...(input.steerText ? [input.steerText, ""] : []),
-    "WHAT YOU HAVE BEEN ASKED TO TELL THEM, in the words you were given:",
+    "WHAT TO TELL THEM, in the words you were given:",
     input.instruction,
     "",
-    "Write the message now. Plain prose, addressed to them directly, 1 to 4 short sentences. No",
-    '"Hi <name>," greeting and no sign-off — those are added by the format automatically. Say only',
-    "what you were told; never invent a fact, a name, a date or a number you were not given. Output",
-    "nothing but the message itself.",
+    "Write it now in exactly this shape and nothing else:",
+    `SUBJECT: ${input.employee} here: <what the note is about, from its content, under 60 characters>`,
+    "",
+    `Hi ${input.partner.firstName},`,
+    "",
+    "<2 to 5 short sentences in your own voice>",
+    "",
+    input.employee,
+    "",
+    "Rules: no headings, labels, bullets, bold or TL;DR; never repeat the instruction as the subject; never write",
+    '"I was asked to send you this"; never invent a fact, a name, a date, a number or a link you were not given; keep',
+    "any link you were given exactly as written.",
   ].join("\n");
+}
+
+/** The composed note as the email that goes: its own subject, the body as written. Pure; null when it is not a note. */
+export function laidOutNote(written: string, employee: string): { subject: string; text: string; html: string } | null {
+  const raw = written.replace(/\r\n/g, "\n").replace(/\*\*/g, "").trim();
+  const m = /^\s*SUBJECT:\s*(.+)\n+([\s\S]+)$/i.exec(raw);
+  if (!m) return null;
+  let subject = m[1]!.replace(/\s+/g, " ").trim();
+  const text = m[2]!.trim();
+  if (!subject || !text || /^tell\s/i.test(subject.replace(new RegExp(`^${employee}( here)?:\\s*`, "i"), ""))) return null;
+  if (!subject.toLowerCase().startsWith(employee.toLowerCase())) subject = `${employee} here: ${subject}`;
+  if (subject.length > 90) subject = `${subject.slice(0, 89).replace(/\s+\S*$/, "")}…`;
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const html = text.split(/\n{2,}/).map((para) => `<p>${esc(para).replace(/\n/g, "<br>")}</p>`).join("\n");
+  return { subject, text, html };
 }
 
 export interface PartnerMessageDeps {
@@ -232,6 +256,7 @@ export async function runPartnerMessageCard(
     partner,
     instruction,
     steerText: steer.text,
+    askedBy: askedByOther(card, partner),
   });
   const written = await compose(env, actor, prompt);
   const message = written.ok ? written.text.trim() : "";
@@ -245,20 +270,23 @@ export async function runPartnerMessageCard(
     return { finished: false, blocked: true, detail: blocked };
   }
 
-  const bullets = bulletsFrom(message, 6);
-  const headline = bullets[0] ?? message.slice(0, 160);
-  const reasonLine = requesterLine(card, partner);
-
-  const email: ExecEmailInput = {
-    employee: employeeRow.name,
-    what: card.title,
-    tldr: headline,
-    sections: [
-      { label: "The message", bullets: bullets.length > 0 ? bullets : [message.slice(0, 400)] },
-      { label: "Why you're hearing this from me", bullets: [reasonLine] },
-    ],
-    details: null,
-  };
+  /*
+   * A NOTE, NOT A STATUS REPORT (20 Nov 2026). The first real ones went out as "Wesley: Tell Sequoia: a short intro"
+   * with a TL;DR, a "The message" section and "I was asked to send you this". The employee now writes the subject from
+   * the content and the body as a greeting, a few sentences and a sign-off, and it goes laid out exactly as written.
+   * A composition that is not in that shape is not sent: the card blocks with the reason rather than a bad email.
+   */
+  const note = laidOutNote(message, employeeRow.name);
+  if (!note) {
+    const blocked = await blockCard(env, card, {
+      reason: "tried_and_could_not_finish",
+      trying: card.title,
+      employee: employeeRow.name,
+      detail: "The message came back without its own subject and greeting, so it was not sent. Try it again, or say it differently.",
+    });
+    return { finished: false, blocked: true, detail: blocked };
+  }
+  const email: ExecEmailInput = { employee: employeeRow.name, what: card.title, tldr: note.subject, sections: [], details: null, laidOut: note };
 
   // 5 · FILE IT — the one door an employee's finished work leaves through. Never modified, never
   // re-implemented: this call is identical in shape to `handOver()` and `runHireSearchCard`'s own.
@@ -282,7 +310,7 @@ export async function runPartnerMessageCard(
   const delivered = await deliver(env, actor, {
     kind: "employee_finding",
     title: `${employeeRow.name} → ${partner.firstName}: ${card.title}`,
-    body: message,
+    body: note.text,
     preparedBy: employeeRow.name,
     preparedFor: partner.firmUserId,
     sourceType: "work_card",
@@ -298,7 +326,7 @@ export async function runPartnerMessageCard(
         : `• NOT emailed to ${partner.email}: ${mail.reason}.`,
     delivered ? `• Deliverable ${delivered.id}.` : "",
     "",
-    message,
+    note.text,
   ]
     .filter(Boolean)
     .join("\n");
@@ -340,11 +368,8 @@ async function onThreadOf(env: Env, cardId: string): Promise<string | null> {
   return typeof of === "string" && of ? (await import("./requestReply")).threadRootFor(env, of) : null;
 }
 
-/** One line saying why this message exists, for the second (mandatory) exec-email section. */
-function requesterLine(card: SweepCard, partner: Partner): string {
+/** The partner who asked for the message, when it is not the one it goes to. */
+function askedByOther(card: SweepCard, partner: Partner): Partner | null {
   const requester = card.requested_by_email ? partnerFor(card.requested_by_email) : null;
-  if (requester && requester.firmUserId !== partner.firmUserId) {
-    return `${requester.firstName} asked me to pass this to you.`;
-  }
-  return "I was asked to send you this.";
+  return requester && requester.firmUserId !== partner.firmUserId ? requester : null;
 }
