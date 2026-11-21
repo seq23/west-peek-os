@@ -248,30 +248,32 @@ describe("a partner who says when he will be back is not reminded before then (0
 });
 
 describe("nothing stays stuck silently", () => {
-  it("a recurring job's block stops ringing once a later run of the same job has replaced it", async () => {
+  it("a recurring job's block is closed as replaced once a later run of the same job has opened (21 Nov 2026: closed, not only silenced)", async () => {
     await env.WP_OS_DB.prepare("UPDATE work_card SET block_nag_at = NULL WHERE state = 'BLOCKED'").run();
     const old = await card("Walker: West Peek Productions hire search (2026-W42)", "aie_walker");
     await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'PRODUCTIONS_HIRE_SEARCH', created_at = '2026-09-14T14:00:00.000Z' WHERE id = ?1").bind(old.id).run();
     await blockCard(env, old, { reason: "a_question_for_you", trying: old.title, employee: "Walker", detail: "Widen the search?" }, NOW);
-    const later = new Date(NOW.getTime() + 26 * 3_600_000);
+    const later = new Date(NOW.getTime() + 50 * 3_600_000);
     expect((await resurfaceStaleBlocks(env, later)).map((r) => r.id), "still last week's only run: it rings").toContain(old.id);
     const next = await card("Walker: West Peek Productions hire search (2026-W43)", "aie_walker");
     await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'PRODUCTIONS_HIRE_SEARCH', state = 'DONE', created_at = '2026-09-21T14:00:00.000Z' WHERE id = ?1").bind(next.id).run();
     expect((await row(next.id)).created_by, "opened by the job, not a person").toMatch(/^system:/);
     expect((await resurfaceStaleBlocks(env, new Date(later.getTime() + 26 * 3_600_000))).map((r) => r.id), "a later run replaced it").not.toContain(old.id);
     expect((await row(old.id)).block_nags, "and nothing was counted").toBe(1);
+    expect((await row(old.id)).state, "closed as replaced").toBe("CANCELLED");
+    expect(String((await row(old.id)).description)).toContain(`closed as replaced by a later run (card ${next.id})`);
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id IN (?1, ?2)").bind(old.id, next.id).run();
   });
 
-  it("an unanswered block rings again the next day, and keeps ringing", async () => {
+  it("an unanswered block rings again about two days on, and keeps ringing on the cadence", async () => {
     await env.WP_OS_DB.prepare("UPDATE work_card SET block_nag_at = NULL WHERE state = 'BLOCKED'").run();
     const c = await card("Something nobody has looked at");
     await blockCard(env, c, { reason: "a_question_for_you", trying: c.title, employee: "Parker", detail: "Which month?" }, NOW);
 
-    // Same day: nothing rings twice.
-    expect((await resurfaceStaleBlocks(env, new Date(NOW.getTime() + 3_600_000))).map((r) => r.id)).not.toContain(c.id);
+    // Before two days: nothing rings (21 Nov 2026 cadence: about 2 days, then 7, then every 14).
+    expect((await resurfaceStaleBlocks(env, new Date(NOW.getTime() + 26 * 3_600_000))).map((r) => r.id)).not.toContain(c.id);
 
-    const later = new Date(NOW.getTime() + 26 * 3_600_000);
+    const later = new Date(NOW.getTime() + 50 * 3_600_000);
     const rung = await resurfaceStaleBlocks(env, later);
     expect(rung.map((r) => r.id)).toContain(c.id);
     expect((await row(c.id)).block_nags).toBe(1);
@@ -285,7 +287,7 @@ describe("nothing stays stuck silently", () => {
 
     // Answered, it stops ringing.
     await answerBlock(env, c.id, PARTNER, { action: "ANSWER", text: "October." });
-    expect((await resurfaceStaleBlocks(env, new Date(later.getTime() + 48 * 3_600_000))).map((r) => r.id)).not.toContain(c.id);
+    expect((await resurfaceStaleBlocks(env, new Date(later.getTime() + 8 * 24 * 3_600_000))).map((r) => r.id)).not.toContain(c.id);
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(c.id).run();
   });
 });

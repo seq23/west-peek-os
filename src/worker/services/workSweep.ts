@@ -718,7 +718,8 @@ export async function sweepOnce(
   await settleAbandonedCards(env, now);
   await settleOrphanedRuns(env, now);
   // NOTHING STAYS STUCK SILENTLY: a block nobody has acted on rings again rather than ageing out.
-  await remindRequestersByEmail(env, await resurfaceStaleBlocks(env, now), now);
+  // The re-ask emails the partner who asked on the card's thread, on the cadence (blocks.ts, REASK_DAYS).
+  await resurfaceStaleBlocks(env, now);
   // 9 Oct 2026 (rule 1d): a "which job is this for?" with no answer in 24 hours becomes a new card.
   await resolveStaleClarifications(env, now);
   // 13 Nov 2026 (#354): a share nobody explained is asked about only after its grace period.
@@ -1240,24 +1241,3 @@ export async function deferDatedItems(env: Env, card: Pick<SweepCard, "id" | "ti
   return made;
 }
 
-/**
- * THE REMINDER REACHES AN EMAILED REQUESTER BY EMAIL (9 Oct 2026). Every rung block whose card a
- * partner asked for by email, and whose block names that partner, gets the reminder in their inbox
- * as well as the in-app notice — every way to clear it is a reply, so it must arrive where the reply
- * is written. Imported lazily: webPropertyChange already imports blocks and this module.
- */
-export async function remindRequestersByEmail(env: Env, rows: StoredBlock[], now: Date): Promise<Array<{ id: string; sent: boolean; reason: string }>> {
-  const out: Array<{ id: string; sent: boolean; reason: string }> = [];
-  for (const row of rows) {
-    const partner = row.requested_by_email ? partnerByEmail(row.requested_by_email.trim().toLowerCase()) : null;
-    if (!partner || (row.block_who ?? "").toUpperCase() !== partner.firstName.toUpperCase()) continue;
-    try {
-      const { remindRequesterByEmail } = await import("./webPropertyChange");
-      out.push({ id: row.id, ...(await remindRequesterByEmail(env, row, now)) });
-    } catch (err) {
-      // The in-app notice already rang; a failed email never stops the sweep.
-      out.push({ id: row.id, sent: false, reason: err instanceof Error ? err.message : String(err) });
-    }
-  }
-  return out;
-}

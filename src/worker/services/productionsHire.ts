@@ -9,6 +9,7 @@ import { markFloorMiss } from "../ai/laneHealth";
 import { SEARCH_MODEL, earlierSearch, formatCheck, runBeganAt, servedBySearchLane } from "./liveSearch";
 import { steeredPrompt } from "../../shared/work/instruction";
 import { blockCard } from "./blocks";
+import { readReplyIntent, type ReplyIntentReader } from "./replyIntent";
 import { cannotDetail, steerFor, type Interpreter } from "./instruction";
 import { urlStatus } from "../effects/urlLiveness";
 import { createWorkCardInternal } from "./workCards";
@@ -130,6 +131,28 @@ export const HIRE_CONTACT_RULE =
   "rather than inventing one.";
 
 export const HIRE_CARD_KIND = "PRODUCTIONS_HIRE_SEARCH";
+
+/**
+ * A SEARCH THAT FINDS NOTHING NEW WIDENS ITSELF (her ruling 21 Nov 2026, "OS employees act like intelligent agents").
+ * When a go turns up 0–1 people not already sent, the next go in the same run looks wider: nearby titles, more kinds
+ * of source and a wider area. The note says in one plain line what was widened. It never stops to ask "widen?".
+ */
+export const HIRE_WIDENING = {
+  said: "nearby titles, more kinds of source and a wider area",
+  prompt: [
+    "WIDEN THIS SEARCH — the usual search found almost nobody new, so look wider on all three:",
+    "- Nearby titles count: experiential director, brand-partnerships or sponsorship producer, live-events executive producer, head of experiential — as long as a page shows them selling brand deals.",
+    "- More kinds of source: podcast and panel guest lists, trade-press bylines and quotes (Event Marketer, BizBash, Adweek), agency alumni pages, LinkedIn posts and articles that surface in search.",
+    "- A wider area: any US city, not only the big event markets, and people who work remotely or travel for shows.",
+    "Everything else in the brief still holds.",
+  ].join("\n"),
+} as const;
+
+/** A go that turns up this many new people or fewer makes the next go widen. */
+export const WIDEN_AT_OR_BELOW = 1;
+
+/** After this many result emails in a row with no reply from him, the next note asks once whether to keep going. */
+export const KEEP_GOING_AFTER = 3;
 
 export function hireCardTitle(week: string): string {
   return `Walker: West Peek Productions hire search (${week})`;
@@ -810,6 +833,8 @@ export interface HireSearchDeps {
   now?: Date;
   /** The pass that reads what he asked for. See services/instruction.ts, tests/helpers/interpret.ts. */
   interpret?: Interpreter;
+  /** The reader of his reply to the keep-going question (services/replyIntent.ts). */
+  readIntent?: ReplyIntentReader;
 }
 
 /**
@@ -846,6 +871,14 @@ export async function runHireSearchCard(
   // A note already written whose email did not go is sent again: no second search, nothing remembered twice.
   const unsent = await unsentHireNote(env, card.id);
   if (unsent) return sendHireNote(env, card, unsent);
+
+  const pause = await hireSearchPaused(env, card.firm_scope, deps.readIntent);
+  if (pause.paused) {
+    const line = `• Paused: Scooter said to stop ("${pause.words}"). No search this week; it resumes when he replies to say so.`;
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE', next_action = NULL, description = substr(COALESCE(description, '') || char(10) || ?2, 1, 16000), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1").bind(card.id, line).run();
+    await appendEvent(env, { eventType: HIRE_PAUSED, actorType: "ai_employee", actorId: "aie_walker", objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { week, words: pause.words } });
+    return { finished: true, blocked: false, detail: "paused at Scooter's word; no search this week" };
+  }
 
   /*
    * WHAT SCOOTER HAS ASKED FOR ON THIS PARTICULAR WEEK, READ BY A MODEL FIRST.
@@ -926,9 +959,12 @@ export async function runHireSearchCard(
    */
   let best: { kept: HireCandidate[]; dropped: typeof dropped; rejected: typeof rejected; good: number; misses: string[] } | null = null;
   let passed = false;
+  let widened = false;
+  let foundNew = 0;
   const prompt = buildHireSearchPrompt(week);
   for (let attempt = 0; attempt < HIRE_SEARCH_ROUTES && !passed; attempt += 1) {
-    const nudge = attempt === 0 ? "" : `\n\nYour previous answer was discarded: ${why}. Every entry MUST have a profile_url a search result showed, an evidence_url that can be read without a login, and page-backed freelance, seniority and brand-deal or sponsorship SALES evidence in \`why\`. Do not repeat anyone the previous answer named unless a page backs the missing claim.`;
+    const wider = widened ? `\n\n${HIRE_WIDENING.prompt}` : "";
+    const nudge = attempt === 0 ? wider : `${wider}\n\nYour previous answer was discarded: ${why}. Every entry MUST have a profile_url a search result showed, an evidence_url that can be read without a login, and page-backed freelance, seniority and brand-deal or sponsorship SALES evidence in \`why\`. Do not repeat anyone the previous answer named unless a page backs the missing claim.`;
     const found = await search(env, actor, `${prompt}${nudge}`);
     if (!found.ok) { why = `the live search failed: ${found.detail}`; searchDown = found.detail; continue; }
     searched = true;
@@ -943,7 +979,10 @@ export async function runHireSearchCard(
     if (judged.failed) { why = `the judgement pass failed: ${judged.failed}`; judgeDown = judged.failed; break; }
     await rememberRejects(env, judged.rejected, week, card.id, now, card.firm_scope);
     const earlier = new Set([...known].filter(([, k]) => isPastReject(k) || k.week !== week || k.status === "SEEN").map(([url]) => url));
-    const floor = hireFloor(judged.kept.filter((c) => !earlier.has(c.profileUrl)));
+    const newHere = judged.kept.filter((c) => !earlier.has(c.profileUrl));
+    foundNew = Math.max(foundNew, newHere.length);
+    if (newHere.length <= WIDEN_AT_OR_BELOW) widened = true;
+    const floor = hireFloor(newHere);
     await recordFloor(env, {
       deliverable: "hire_search", ok: floor.misses.length === 0, headline: floor.good, firmScope: card.firm_scope,
       measures: { kept: judged.kept.length, at_floor: floor.good, turned_down: judged.rejected.length, pages_dead: checked.dropped.length },
@@ -966,29 +1005,31 @@ export async function runHireSearchCard(
     return { finished: false, blocked: false, detail: `the live search failed: ${searchDown || "the search call failed"}` };
   }
 
-  if (kept.length === 0) {
-    const blocked = await blockCard(env, card, {
-      reason: "nothing_good_enough_to_send",
-      trying: card.title,
-      employee: "Walker",
-      who: "SCOOTER",
-      detail: "Tell Walker where to look or what would count, or leave it until next week — nobody he found this week stood up to the checks.",
-    });
-    return { finished: false, blocked: true, detail: blocked };
-  }
-
-  const remembered = await rememberCandidates(env, kept, week, card.id, now, card.firm_scope);
+  const remembered = kept.length ? await rememberCandidates(env, kept, week, card.id, now, card.firm_scope) : { fresh: [], seenBefore: [], retired: [] };
+  const widenedLine = widened ? `I widened this week's search to ${HIRE_WIDENING.said}, because the usual search found ${foundNew === 0 ? "nobody" : "only one person"} new.` : null;
+  const keepGoing = await keepGoingIsDue(env, card.firm_scope);
   if (remembered.fresh.length === 0) {
-    // Everything found this week was already shown or acted on. A note that repeats last week's
-    // names is noise; the card says why and the quiet notice reaches Scooter.
-    const blocked = await blockCard(env, card, {
-      reason: "nothing_new_since_last_time",
-      trying: card.title,
-      employee: "Walker",
-      who: "SCOOTER",
-      detail: `Say whether to widen the search — every name this week was already in an earlier note (${remembered.seenBefore.length} of them). Reply to last week's note in plain words if you want me to look somewhere else.`,
+    /*
+     * NOTHING NEW, SAID PLAINLY, AND THE WORK GOES ON (21 Nov 2026). This used to block the card on Scooter with "say whether
+     * to widen the search" (2026-W42 asked him 37 times). The search has already widened itself; he hears what it found in
+     * one short note and next week's search runs as normal.
+     */
+    const line = `Nothing new this week: ${widenedLine?.replace(/\.$/, "") ?? "the search ran as usual"}; ${remembered.seenBefore.length ? `everyone it found (${remembered.seenBefore.length}) was already in an earlier note` : "nobody it found stood up to the checks"}. Next week's search runs as usual.`;
+    const titleNone = `Hire search ${week}: nothing new for ${HIRE_ROLE}`;
+    const deliveredNone = await deliver(env, actor, { kind: "productions_hire_search", title: titleNone, body: line, preparedBy: "Walker", preparedFor: SCOOTER_FIRM_USER_ID, sourceType: "work_card", sourceId: card.id });
+    return sendHireNote(env, card, {
+      week,
+      email: { employee: "Walker", what: `Hire search ${week}: nothing new`, tldr: line, sections: [
+        { label: "What I searched", bullets: [widenedLine ?? "The usual search, on every route.", `Already sent before: ${remembered.seenBefore.length}. Turned down this week: ${rejected.length}. Pages that did not answer: ${dropped.length}.`] },
+        { label: "If you want to steer it", bullets: ["Reply in plain words (a city, a title, a kind of person) and next week's search starts there."] },
+      ], ...(keepGoing ? { ask: KEEP_GOING_ASK } : {}) },
+      title: titleNone,
+      text: line,
+      deliverableId: deliveredNone.id,
+      documentId: deliveredNone.document_id ?? null,
+      counts: { fresh: 0, seen_before: remembered.seenBefore.length, dropped: dropped.length, rejected: rejected.length },
+      ...(keepGoing ? { askedKeepGoing: true } : {}),
     });
-    return { finished: false, blocked: true, detail: blocked };
   }
 
   const text = renderHireNote(week, remembered.fresh, remembered.seenBefore, dropped, rejected, steer.interpretation?.understood ?? null, nearest);
@@ -1009,15 +1050,68 @@ export async function runHireSearchCard(
 
   const note: HireNote = {
     week,
-    email: { employee: "Walker", what: summary.what, tldr: summary.tldr, sections: await withStillMissing(env, card.id, summary.sections), details: text },
+    email: {
+      employee: "Walker",
+      what: summary.what,
+      tldr: summary.tldr,
+      sections: [...(widenedLine ? [{ label: "Widened", bullets: [widenedLine] }] : []), ...(await withStillMissing(env, card.id, summary.sections))],
+      details: text,
+      ...(keepGoing ? { ask: KEEP_GOING_ASK } : {}),
+    },
     title,
     text,
     deliverableId: delivered.id,
     documentId: delivered.document_id ?? null,
     counts: { fresh: remembered.fresh.length, seen_before: remembered.seenBefore.length, dropped: dropped.length, rejected: rejected.length },
     ...(nearest ? { nearest } : {}),
+    ...(keepGoing ? { askedKeepGoing: true } : {}),
   };
   return sendHireNote(env, card, note);
+}
+
+/** The one question asked when his lists go unanswered: keep going, or pause. Running on is the default. */
+export const KEEP_GOING_ASK = {
+  reply: `Reply "keep going" to keep these coming every Monday, or "stop" to pause the search until you say otherwise`,
+  ifSilent: "I keep sending one every Monday",
+} as const;
+
+const KEEP_GOING_ASKED = "productions.hire_keep_going_asked";
+const HIRE_PAUSED = "productions.hire_paused";
+
+/** His last reply about this search (work_steer is filed only from a partner's authenticated reply), or null. */
+async function lastReplyAt(env: Env, firmScope: string): Promise<string | null> {
+  const r = await env.WP_OS_DB.prepare("SELECT MAX(created_at) AS at FROM work_steer WHERE card_kind = ?1 AND firm_scope = ?2").bind(HIRE_CARD_KIND, firmScope).first<{ at: string | null }>();
+  return r?.at ?? null;
+}
+
+/**
+ * NO ACTION ON HIS LISTS → ASK ONCE WHETHER TO KEEP GOING (her ruling 21 Nov 2026). Due when the last KEEP_GOING_AFTER
+ * notes went to his inbox with no reply from him since, and the question has not been asked since his last reply.
+ */
+export async function keepGoingIsDue(env: Env, firmScope: string): Promise<boolean> {
+  const since = (await lastReplyAt(env, firmScope)) ?? "";
+  const r = await env.WP_OS_DB.prepare(
+    `SELECT SUM(CASE WHEN event_type = 'productions.hire_delivered' AND json_extract(payload_json, '$.emailed') IN (1, 'true') THEN 1 ELSE 0 END) AS sent,
+            SUM(CASE WHEN event_type = '${KEEP_GOING_ASKED}' THEN 1 ELSE 0 END) AS asked
+       FROM event_record WHERE event_type IN ('productions.hire_delivered', '${KEEP_GOING_ASKED}') AND firm_scope = ?1 AND created_at > ?2`,
+  ).bind(firmScope, since).first<{ sent: number | null; asked: number | null }>();
+  return Number(r?.sent ?? 0) >= KEEP_GOING_AFTER && Number(r?.asked ?? 0) === 0;
+}
+
+/**
+ * HE SAID STOP → THE SEARCH PAUSES (her ruling 21 Nov 2026). Once the keep-going question has gone, his next reply is read
+ * by the reply reader (a model, keyword fast path first). STOP pauses every later week until a later reply reads as
+ * anything else. Only his own replies count: work_steer is written only from a partner's authenticated email.
+ */
+export async function hireSearchPaused(env: Env, firmScope: string, reader?: ReplyIntentReader): Promise<{ paused: boolean; words: string | null }> {
+  const asked = await env.WP_OS_DB.prepare(`SELECT MAX(created_at) AS at FROM event_record WHERE event_type = '${KEEP_GOING_ASKED}' AND firm_scope = ?1`).bind(firmScope).first<{ at: string | null }>();
+  if (!asked?.at) return { paused: false, words: null };
+  const reply = await env.WP_OS_DB.prepare("SELECT body, from_card_id FROM work_steer WHERE card_kind = ?1 AND firm_scope = ?2 AND created_at > ?3 ORDER BY created_at DESC LIMIT 1")
+    .bind(HIRE_CARD_KIND, firmScope, asked.at)
+    .first<{ body: string; from_card_id: string | null }>();
+  if (!reply) return { paused: false, words: null };
+  const intent = await readReplyIntent(env, { cardId: reply.from_card_id ?? "hire_search", firmScope, text: reply.body, where: "a reply to Walker's weekly hire search note, which asked whether to keep going" }, reader);
+  return { paused: intent.kind === "STOP", words: reply.body.slice(0, 200) };
 }
 
 /** Everything the one email needs, kept so a send that failed is sent again without searching again. */
@@ -1031,6 +1125,8 @@ interface HireNote {
   counts: { fresh: number; seen_before: number; dropped: number; rejected: number };
   /** What the floor found missing, when the note went out as nearest misses. */
   nearest?: readonly string[];
+  /** This note carries the keep-going question (logged once it is in his inbox). */
+  askedKeepGoing?: boolean;
 }
 
 const HIRE_EMAIL_NOT_SENT = "productions.hire_email_not_sent";
@@ -1152,6 +1248,9 @@ async function sendHireNote(env: Env, card: SweepCard, note: HireNote): Promise<
     firmScope: card.firm_scope,
     payload: { week: note.week, ...note.counts, emailed: mail.sent, deliverable_id: note.deliverableId, subject: mail.subject, nearest_misses: Boolean(note.nearest) },
   });
+  if (note.askedKeepGoing && mail.sent) {
+    await appendEvent(env, { eventType: KEEP_GOING_ASKED, actorType: "ai_employee", actorId: "aie_walker", objectType: "work_card", objectId: card.id, firmScope: card.firm_scope, payload: { week: note.week } });
+  }
   if (note.nearest) {
     // BELOW THE FLOOR ON EVERY ROUTE: he has the nearest misses, by that name, and the card stops where it is seen today.
     const blocked = await blockCard(env, card, {

@@ -188,7 +188,7 @@ describe("\"publish\" with new materials: filled in and published without anothe
     const told = sent.slice(before).filter((m) => m.to === SEQUOIA);
     expect(told).toHaveLength(1);
     expect(told[0]!.subject).toMatch(/: Nothing new found$/);
-    expect(told[0]!.text).toMatch(/^\*\*TL;DR:\*\* I didn't find anything new in the folder or attached; reply "approved" to publish as is\./);
+    expect(told[0]!.text).toMatch(/^\*\*TL;DR:\*\* \*\*Reply "approved" to publish the current preview as is, or add the missing items to Drive and reply "preview"\.\*\* If I don't hear back, [^\n]+ I didn't find anything new in the folder or attached\./);
   });
 
   it("the other partner's \"publish\" is a note, not a rebuild and not an approval", async () => {
@@ -268,7 +268,7 @@ describe("\"I added missing items\" (her label, exactly) and the preview re-sent
     const mail = sent.slice(before);
     expect(mail).toHaveLength(1);
     expect(mail[0]!.subject).toMatch(/: Preview ready$/);
-    expect(mail[0]!.text).toMatch(/^\*\*TL;DR:\*\* Preview ready, with \*\*2\*\* placeholders\. Reply with one of these:\n• \*\*approved\*\*/);
+    expect(mail[0]!.text).toMatch(/^\*\*TL;DR:\*\* \*\*Reply "approved" to put it live, or "changes: …" with what to adjust\.\*\* If I don\'t hear back, nothing goes live, it stays where it is, and I\'ll ask again in a couple of days\. Preview ready, with \*\*2\*\* placeholders\. Reply with one of these:\n• \*\*approved\*\*/);
     expect(mail[0]!.text).toMatch(new RegExp(`https://work-wpc-${id.slice(3, 11)}\\.west-peek-community\\.pages\\.dev\\n`));
     const again = await post(`/api/work-cards/${id}/resend-preview`, SEQUOIA);
     expect(again.body.ok, "a double press sends nothing twice").toBe(false);

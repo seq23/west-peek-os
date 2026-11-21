@@ -51,8 +51,13 @@ export { PARTNER_ANSWER_MAX };
  * failure the operator described, with an extra text box.
  */
 
-/** How long a block waits for somebody before it rings again. */
-export const BLOCK_NAG_HOURS = 24;
+/**
+ * THE RE-ASK CADENCE (her ruling 21 Nov 2026, "OS employees act like intelligent agents"). A question nobody has
+ * answered is asked again about 2 days after it was asked, then about 7 days after that, then every 14 days, each time
+ * shorter and never in the same words, on the same thread. It replaces the 24-hour ring, which asked Walker's
+ * 2026-W42 hire question 37 times. `nagAt` is the one reader.
+ */
+export const REASK_DAYS: readonly number[] = [2, 7, 14];
 
 /**
  * A TECHNICAL BLOCK RINGS LESS OFTEN THAN A QUESTION, AND HERE IS WHY.
@@ -438,9 +443,9 @@ export async function handleRetryStoppedCards(ctx: RouteContext): Promise<Respon
   });
 }
 
-/** When this block rings again if nobody has acted. A fault gets a gentler interval than a question. */
-export function nagAt(now: Date, reason?: string | null): string {
-  const hours = isTechnicalBlock(reason) ? TECHNICAL_BLOCK_NAG_HOURS : BLOCK_NAG_HOURS;
+/** When this block rings again if nobody has acted, after `asked` re-asks so far. A fault rings on its own interval. */
+export function nagAt(now: Date, reason?: string | null, asked = 0): string {
+  const hours = isTechnicalBlock(reason) ? TECHNICAL_BLOCK_NAG_HOURS : 24 * REASK_DAYS[Math.min(Math.max(0, asked), REASK_DAYS.length - 1)]!;
   return new Date(now.getTime() + hours * 3_600_000).toISOString();
 }
 
@@ -477,6 +482,7 @@ export const BLOCK_COLUMNS =
  * problem is not that she missed it.
  */
 export async function resurfaceStaleBlocks(env: Env, now: Date): Promise<StoredBlock[]> {
+  await closeReplacedRunBlocks(env, now);
   const rows = (
     await env.WP_OS_DB.prepare(
       `SELECT ${BLOCK_COLUMNS} FROM work_card
@@ -490,18 +496,9 @@ export async function resurfaceStaleBlocks(env: Env, now: Date): Promise<StoredB
           AND block_nag_at IS NOT NULL AND block_nag_at < ?1
           -- 0302: THE PARTNER SAID WHEN HE WILL BE BACK. No reminder before that time has passed.
           AND (partner_back_at IS NULL OR partner_back_at < ?1)
-          -- 19 Nov 2026: A LATER RUN REPLACED IT. A recurring job's card (cardKinds door "JOB") whose job has since
-          -- opened a newer card of the same kind for the same employee is last week's question: the newer run asks
-          -- afresh, so the old one is lapsed and stops ringing (Walker's 2026-W42 hire search rang 37 times).
-          AND NOT (
-            kind IN (SELECT value FROM json_each(?2))
-            AND EXISTS (SELECT 1 FROM work_card later
-                         WHERE later.kind = work_card.kind AND later.owner_id IS work_card.owner_id
-                           AND later.created_by LIKE 'system:%' AND later.created_at > work_card.created_at)
-          )
         ORDER BY blocked_at ASC LIMIT 5`,
     )
-      .bind(now.toISOString(), JSON.stringify(RECURRING_CARD_KINDS))
+      .bind(now.toISOString())
       .all<StoredBlock>()
   ).results ?? [];
 
@@ -527,11 +524,68 @@ export async function resurfaceStaleBlocks(env: Env, now: Date): Promise<StoredB
       body,
       dedupeKey: `work_card:${row.id}:block_nag:${nags}`,
     });
+    /*
+     * THE EMAIL IS PART OF THE RE-ASK (21 Nov 2026). The partner who asked by email hears it on the card's thread. A send
+     * that failed (the mail service down, a refused key) leaves the clock where it is, so the next sweep asks the SAME
+     * re-ask again; the notice ledger (cause nag:<n>) and the in-app dedupe key make sure it never lands twice.
+     */
+    const mail = await remindRequester(env, row, nags, now);
+    if (mail && !mail.sent && !mail.settled) continue;
     await env.WP_OS_DB.prepare("UPDATE work_card SET block_nags = ?2, block_nag_at = ?3 WHERE id = ?1")
-      .bind(row.id, nags, nagAt(now, row.block_reason))
+      .bind(row.id, nags, nagAt(now, row.block_reason, nags))
       .run();
   }
   return rows;
+}
+
+/**
+ * A LATER RUN REPLACED IT (19 Nov 2026; closed, not just silenced, 21 Nov 2026). A recurring job's card (cardKinds door
+ * "JOB") still waiting on a partner when its job has since opened a newer card of the same kind for the same employee is
+ * last week's question: the newer run asks afresh. It is closed as replaced, with the newer card named on it and in the
+ * log. Only that card's row changes: every week's results (deliverables, candidates, notes) stay as they are.
+ */
+export async function closeReplacedRunBlocks(env: Env, now: Date = new Date()): Promise<string[]> {
+  const rows = (
+    await env.WP_OS_DB.prepare(
+      `SELECT c.id, c.firm_scope,
+              (SELECT later.id FROM work_card later
+                WHERE later.kind = c.kind AND later.owner_id IS c.owner_id AND later.created_by LIKE 'system:%' AND later.created_at > c.created_at
+                ORDER BY later.created_at DESC LIMIT 1) AS later_id
+         FROM work_card c
+        WHERE c.state = 'BLOCKED' AND c.kind IN (SELECT value FROM json_each(?1))
+          AND EXISTS (SELECT 1 FROM work_card later
+                       WHERE later.kind = c.kind AND later.owner_id IS c.owner_id AND later.created_by LIKE 'system:%' AND later.created_at > c.created_at)
+        LIMIT 20`,
+    )
+      .bind(JSON.stringify(RECURRING_CARD_KINDS))
+      .all<{ id: string; firm_scope: string; later_id: string }>()
+  ).results ?? [];
+  for (const r of rows) {
+    const line = `• ${now.toISOString().slice(0, 10)}: closed as replaced by a later run (card ${r.later_id}); its question is asked afresh there. Nothing else changed.`;
+    await env.WP_OS_DB.prepare(
+      `UPDATE work_card SET state = 'CANCELLED', next_action = ?2, block_nag_at = NULL, lease_until = NULL,
+              description = substr(COALESCE(description, '') || char(10) || ?2, 1, 16000), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ?1 AND state = 'BLOCKED'`,
+    ).bind(r.id, line).run();
+    await appendEvent(env, { eventType: "work_card.replaced_by_later_run", actorType: "system", actorId: "work_sweep", objectType: "work_card", objectId: r.id, firmScope: r.firm_scope, payload: { later_card_id: r.later_id } });
+  }
+  return rows.map((r) => r.id);
+}
+
+/**
+ * The re-ask by email, to the partner who asked by email and is the one it waits on. Null when there is nobody to email.
+ * `settled`: nothing to retry (already sent for this re-ask, held in the preview lane, or not an email card).
+ */
+async function remindRequester(env: Env, row: StoredBlock, nags: number, now: Date): Promise<{ sent: boolean; settled: boolean; reason: string } | null> {
+  const partner = row.requested_by_email ? partnerByEmail(row.requested_by_email.trim().toLowerCase()) : null;
+  if (!partner || (row.block_who ?? "").toUpperCase() !== partner.firstName.toUpperCase()) return null;
+  try {
+    const { remindRequesterByEmail } = await import("./webPropertyChange");
+    const out = await remindRequesterByEmail(env, { ...row, block_nags: nags - 1 }, now);
+    return { ...out, settled: out.sent || !out.failed };
+  } catch (err) {
+    return { sent: false, settled: false, reason: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 async function notifyQuietlyOrPartners(

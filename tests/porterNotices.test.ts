@@ -65,7 +65,8 @@ describe("the plan email (the 12:42 email she could not use, rewritten)", () => 
 
   it("the first line says what to do, with \"approved\"; the TL;DR block is first and carries all four reply forms", () => {
     const lines = r.text.split("\n");
-    expect(lines[0]).toMatch(/^\*\*TL;DR:\*\* Plan ready\. Reply \*\*approved\*\* and I'll build the preview now, with placeholders for the \*\*4\*\* missing items\. Nothing goes live until you approve the preview\./);
+    // 21 Nov 2026: the ask comes first, in bold, with what happens if he says nothing; then where it stands.
+    expect(lines[0]).toMatch(/^\*\*TL;DR:\*\* \*\*Reply "approved" and I\'ll build the preview now, or "changes: …" with what to change first\.\*\* If I don\'t hear back, nothing goes live, it stays where it is, and I\'ll ask again in a couple of days\. Plan ready, with placeholders for the \*\*4\*\* missing items\. Nothing goes live until you approve the preview\./);
     expect(lines.slice(1, 5)).toEqual([
       "• **approved**: take my 6 recommendations and build the preview",
       "• **approved to production**: skip the preview and land on green",
@@ -104,7 +105,7 @@ describe("the preview email (owner's spec, 23 Sep 2026)", () => {
   it("\"<title>: Preview ready\"; the TL;DR is the four reply options, first; then the link, what is still missing, the card", () => {
     expect(r.subject).toBe("ACTION REQUIRED: Porter: Community site redesign: Preview ready");
     const lines = r.text.split("\n");
-    expect(lines[0]).toBe("**TL;DR:** Preview ready, with **4** placeholders. Reply with one of these:");
+    expect(lines[0]).toBe(`**TL;DR:** **Reply "approved" to put it live, or "changes: …" with what to adjust.** If I don't hear back, nothing goes live, it stays where it is, and I'll ask again in a couple of days. Preview ready, with **4** placeholders. Reply with one of these:`);
     expect(lines.slice(1, 5)).toEqual(PREVIEW_REPLY_FORMS.map((f) => `• ${f}`));
     expect(r.text).toMatch(/\*\*Preview\*\*\n• Current preview \(built 12:40 CT, \*\*4\*\* placeholders\): https:\/\/work-wpc-c9e36e8b\.west-peek-community\.pages\.dev\n/);
     expect(r.text).toMatch(/\*\*Still missing \(optional\)\*\*\n• Sengo application link\n/);
@@ -216,7 +217,7 @@ describe("the plan as an FYI: every ask carries a recommendation (owner, 27 Sep 
     { question: "Orange: the package approves black and orange but gives no hex. Use the orange already live on westpeek.ventures (#c45a3c)?", recommended: "Yes, #c45a3c, held in one CSS token" },
     { question: "Workshops copy: ship the brief's wording as written?", recommended: "Yes, ship it as written" },
   ];
-  const render = (n: NoticeEmail) => renderExecEmail({ employee: "Porter", what: n.what, tldr: n.tldr, tldrBullets: n.tldrBullets, sections: n.sections, details: null });
+  const render = (n: NoticeEmail) => renderExecEmail({ employee: "Porter", what: n.what, tldr: n.tldr, tldrBullets: n.tldrBullets, sections: n.sections, ask: n.ask, details: null });
 
   it("everyAskRecommended: no asks, or every ask with a recommendation → true; one ask without → false; readAsks marks a missing one", () => {
     expect(everyAskRecommended([])).toBe(true);
@@ -238,7 +239,7 @@ describe("the plan as an FYI: every ask carries a recommendation (owner, 27 Sep 
     // The asking form is unchanged for a plan with a real question.
     const asking = render(planNotice({ title: "Community site redesign", asks: SIX, missing: [], previewLine: null, cardId: "wc_1" }));
     expect(asking.subject).toBe("ACTION REQUIRED: Porter: Community site redesign: Plan ready");
-    expect(asking.text).toMatch(/Reply \*\*approved\*\*/);
+    expect(asking.text).toMatch(/\*\*Reply "approved" and I'll build the preview now/);
   });
 
   it("ACTION REQUIRED leads the subject only when the partner must act, once, before the employee's name (owner, 17 Nov 2026)", () => {
