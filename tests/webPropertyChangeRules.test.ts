@@ -683,7 +683,7 @@ describe("a plan that is not publish-ready previews first (21 Sep 2026)", () => 
     // the link, the placeholders still showing, and the card. No proof dump, never "blocked".
     const email = sent.filter((m) => m.to === SEQUOIA && /preview ready/i.test(m.subject)).pop()!;
     expect(email.subject).toBe("ACTION REQUIRED: Porter: Community rebuild: Preview ready");
-    expect(email.text).toMatch(/^\*\*TL;DR:\*\* Preview ready, with \*{0,2}4\*{0,2} placeholders\. Reply with one of these:\n• \*\*approved\*\*: publish this preview as is \(placeholders included\)\.\n• \*\*changes: …\*\*: I'll make them and send you a new preview\.\n• \*\*Missing items \+ "publish"\*\*: attach them or add them to Drive, reply "publish", and I'll fill them in and publish without another preview\.\n• \*\*Missing items \+ "preview"\*\*: attach them or add them to Drive, reply "preview", and I'll fill them in and send you another preview\.\n/);
+    expect(email.text).toMatch(/^\*\*TL;DR:\*\* \*\*Reply "approved" to put it live, or "changes: …" with what to adjust\.\*\* If I don\'t hear back, nothing goes live, it stays where it is, and I\'ll ask again in a couple of days\. Preview ready, with \*{0,2}4\*{0,2} placeholders\. Reply with one of these:\n• \*\*approved\*\*: publish this preview as is \(placeholders included\)\.\n• \*\*changes: …\*\*: I'll make them and send you a new preview\.\n• \*\*Missing items \+ "publish"\*\*: attach them or add them to Drive, reply "publish", and I'll fill them in and publish without another preview\.\n• \*\*Missing items \+ "preview"\*\*: attach them or add them to Drive, reply "preview", and I'll fill them in and send you another preview\.\n/);
     expect(email.text).toMatch(/Current preview \(built \d{1,2}:\d{2} CT, \*{0,2}4\*{0,2} placeholders\): https:\/\/work-wpc-comm1234\.west-peek-ventures\.pages\.dev\n/);
     expect(email.text, "never the per-commit hash").not.toMatch(/a1b2c3d4/);
     expect(email.text).toMatch(/\*\*Still missing \(optional\)\*\*\n• Airtable links\n• Sengo logo\n/);
@@ -787,7 +787,7 @@ describe("\"preview\" on a publish-ready plan takes the same road", () => {
     expect(unchangedTick.outcome, unchangedTick.summary).toBe("BLOCKED");
     const told = sent.slice(beforeCheck).filter((m) => m.to === SCOOTER);
     expect(told, "one email: nothing new, no second preview").toHaveLength(1);
-    expect(told[0]!.text).toMatch(/^\*\*TL;DR:\*\* I didn't find anything new in the folder or attached\./);
+    expect(told[0]!.text).toMatch(/^\*\*TL;DR:\*\* \*\*Reply "approved" to publish the current preview as is[^\n]+\*\* If I don't hear back, [^\n]+ I didn't find anything new in the folder or attached\./);
     expect(told[0]!.text, "the preview link rides on it").toMatch(/Current preview \(built/);
     expect((await readWebPropertyChange(env, porter.id))!.land_approved_at).toBeNull();
     expect((await readWebPropertyChange(env, porter.id))!.refresh_intent).toBeNull();

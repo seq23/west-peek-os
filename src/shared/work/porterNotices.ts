@@ -1,4 +1,4 @@
-import { ACTION_REQUIRED } from "../email/execEmail";
+import { ACTION_REQUIRED, type ActionAsk } from "../email/execEmail";
 import type { Ask } from "./approvalReply";
 import type { MissingMaterial } from "./missingMaterials";
 
@@ -263,7 +263,12 @@ export interface NoticeEmail {
   tldr: string;
   tldrBullets: string[];
   sections: Array<{ label: string; bullets: string[] }>;
+  /** Present exactly when the stage waits on the partner (ACTION_STAGES): what to reply, and what happens without it. */
+  ask?: ActionAsk;
 }
+
+/** What Porter does when a waiting stage hears nothing: holds it where it is and asks again (blocks.ts, the cadence). */
+export const PORTER_IF_SILENT = "nothing goes live, it stays where it is, and I'll ask again in a couple of days";
 
 /**
  * THE PLAN AS AN FYI (owner, 27 Sep 2026): every decision carried Porter's recommendation, so the
@@ -399,7 +404,8 @@ export function planNotice(input: {
   }
   return {
     what: stageSubject(input.title, STAGE.PLAN),
-    tldr: `Plan ready. Reply **approved** and I'll build the preview now${m ? `, with placeholders for the ${m} missing item${m === 1 ? "" : "s"}` : ""}. Nothing goes live until you approve the preview.`,
+    tldr: `Plan ready${m ? `, with placeholders for the ${m} missing item${m === 1 ? "" : "s"}` : ""}. Nothing goes live until you approve the preview.`,
+    ask: { reply: `Reply "approved" and I'll build the preview now, or "changes: …" with what to change first`, ifSilent: PORTER_IF_SILENT },
     tldrBullets: planReplyForms(n),
     sections,
   };
@@ -479,6 +485,9 @@ export function previewNotice(input: { title: string; previewLine: string | null
   return {
     what: stageSubject(input.title, stage),
     tldr: `${stage}${p ? `, with ${p} placeholder${p === 1 ? "" : "s"}` : ""}. Reply with one of these:`,
+    ask: input.noApprovalAsk
+      ? { reply: `Reply "changes: …" with anything to adjust on the preview`, ifSilent: "it stays on the preview until you say it is ready" }
+      : { reply: `Reply "approved" to put it live, or "changes: …" with what to adjust`, ifSilent: PORTER_IF_SILENT },
     tldrBullets: [...(input.noApprovalAsk ? PREVIEW_NOT_YET_FORMS : PREVIEW_REPLY_FORMS)],
     sections,
   };
@@ -490,7 +499,7 @@ export function questionNotice(input: { title: string; question: readonly string
   if (input.previewLine) sections.push({ label: "Current preview", bullets: [input.previewLine] });
   if (input.missing.length) sections.push(...listSections(STILL_MISSING, input.missing));
   sections.push(ON_THE_CARD(input.cardId));
-  return { what: stageSubject(input.title, STAGE.QUESTION), tldr: `${STAGE.QUESTION}: reply to this email with your answer and I carry on.`, tldrBullets: [], sections };
+  return { what: stageSubject(input.title, STAGE.QUESTION), tldr: `${STAGE.QUESTION}.`, ask: { reply: "Reply to this email with your answer to the question below, and I carry on", ifSilent: "I keep building everything the question does not touch and ask again in a couple of days" }, tldrBullets: [], sections };
 }
 
 /** STUCK — the one notice that says "Blocked", and says by what, in one line. Pure. */

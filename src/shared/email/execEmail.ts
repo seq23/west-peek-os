@@ -70,6 +70,27 @@ export interface ExecEmailInput {
    * `lintExecEmail`. Every other gate of the door (who it may go to, the switch, the sender) is the same.
    */
   laidOut?: RenderedExecEmail | null;
+  /**
+   * WHAT THE PARTNER MUST DO, WHEN THE CARD WAITS ON HIM (her ruling 21 Nov 2026, "OS employees act like intelligent
+   * agents"). One sentence saying exactly what to reply, and the default the employee takes if no answer comes. Present
+   * → the subject leads with ACTION REQUIRED and the TL;DR opens with the ask in bold. An email that needs nothing
+   * passes none, and never says it. `actionAsk` is the one way to write the sentence.
+   */
+  ask?: ActionAsk | null;
+}
+
+export interface ActionAsk {
+  /** Exactly what to reply: 'Reply "approved" to put it live, or "changes: …" with what to adjust.' */
+  reply: string;
+  /** What happens with no answer: "it stays on the preview and I ask again on Mon 23 Nov". */
+  ifSilent: string;
+}
+
+/** The ask as it reads at the top of the email: the reply in bold, then the default. Pure. */
+export function actionAskLine(ask: ActionAsk): string {
+  const reply = oneLine(ask.reply).replace(/\*\*/g, "").replace(/[.\s]+$/, "");
+  const silent = oneLine(ask.ifSilent).replace(/[.\s]+$/, "");
+  return `**${reply}.** If I don't hear back, ${silent}.`;
 }
 
 export interface RenderedExecEmail {
@@ -237,7 +258,8 @@ export function laidOutProblems(e: RenderedExecEmail): string[] {
 export function renderExecEmail(input: ExecEmailInput): RenderedExecEmail {
   if (input.laidOut) return input.laidOut;
   const sections = normaliseSections(input.sections);
-  const tldr = boldNumbers(oneLine(input.tldr).replace(/^\**\s*TL;DR:?\**\s*/i, ""));
+  const said = boldNumbers(oneLine(input.tldr).replace(/^\**\s*TL;DR:?\**\s*/i, ""));
+  const tldr = input.ask ? `${actionAskLine(input.ask)} ${said}` : said;
   const overflow = overflowOf(input.sections, input.details ?? "");
   const joined = [overflow, input.details ?? ""].filter((d) => d.trim()).join("\n\n");
   const details = joined ? breakProseRuns(joined) : "";
@@ -256,7 +278,7 @@ export function renderExecEmail(input: ExecEmailInput): RenderedExecEmail {
     .replace(/\n{3,}/g, "\n\n");
 
   return {
-    subject: execSubject(input.employee, input.what),
+    subject: execSubject(input.employee, input.ask && !oneLine(input.what).startsWith(ACTION_REQUIRED) ? `${ACTION_REQUIRED}${input.what}` : input.what),
     text,
     html: renderHtml({ tldr, tldrBullets, sections, details, footer }),
   };

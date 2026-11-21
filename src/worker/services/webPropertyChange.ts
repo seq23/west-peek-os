@@ -32,7 +32,8 @@ import { approvedAnswers, askLines, decidedFromAsks, everyAskRecommended, opensW
 import { defaultReadReplyIntent, readReplyIntent, type ReplyIntent, type ReplyIntentReader } from "./replyIntent";
 import { isReplyToOurs } from "./emailThread";
 import { abandonRun } from "../ai/subscriptionSeats";
-import { alreadyTold, recordNotice, routedByFor, threadRootFor, type NoticeKind } from "./requestReply";
+import { alreadyTold, recordNotice, routedByFor, SEND_FAILED, threadRootFor, type NoticeKind } from "./requestReply";
+import { isEmailSendEnabled } from "../effects/resendClient";
 import { doneReplyLaneFor, isOn, previewAllPartnerEmailsIsOn, rulesFor, ON_OFF_RULE_KEYS, type KindRule } from "./kindRules";
 import { attachmentBytes } from "../effects/mimeAttachments";
 import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
@@ -233,7 +234,8 @@ async function tellDeveloperKeysMissing(env: Env, card: WebPropertyChangeCard, m
 export { attachmentsFor };
 export type { RequestAttachment };
 import { attachmentsFor, missingFor, recordMissing, type RequestAttachment } from "./requestMaterials";
-import { cleanPreviewUrls, currentPreviewLine, pagePathsFrom, withChangedPages, decidedSoFar, decisionResolutionIn, doneNotice, liveUrlsFrom, MATERIALS_ADDED_PHRASE, planNotice, previewNotice, questionNotice, STAGE, stageSubject, stuckNotice, type NoticeEmail } from "../../shared/work/porterNotices";
+import { cleanPreviewUrls, currentPreviewLine, pagePathsFrom, withChangedPages, decidedSoFar, decisionResolutionIn, doneNotice, liveUrlsFrom, MATERIALS_ADDED_PHRASE, planNotice, previewNotice, questionNotice, STAGE, stageSubject, stuckNotice, PORTER_IF_SILENT, cardLinkFor, type NoticeEmail } from "../../shared/work/porterNotices";
+import type { ActionAsk } from "../../shared/email/execEmail";
 import { porterContext } from "./porterContext";
 import type { MissingMaterial } from "../../shared/work/missingMaterials";
 
@@ -289,10 +291,10 @@ async function tellRequester(
   env: Env,
   card: Pick<WebPropertyChangeCard, "id" | "title" | "firm_scope" | "requested_by_email" | "preview_first" | "preview_owner_id"> & { assigned_from_card_id?: string | null },
   notice: { kind: NoticeKind; cause: string },
-  email: { what: string; tldr: string; tldrBullets?: string[]; sections: Array<{ label: string; bullets: string[] }>; details?: string | null },
+  email: { what: string; tldr: string; tldrBullets?: string[]; sections: Array<{ label: string; bullets: string[] }>; details?: string | null; ask?: ActionAsk | null },
   /** An earlier note's thread token, so this lands in the partner's same conversation. */
   replyOnThread: string | null = null,
-): Promise<{ sent: boolean; reason: string }> {
+): Promise<{ sent: boolean; reason: string; failed?: boolean }> {
   const to = (card.requested_by_email ?? "").trim().toLowerCase();
   const partner = to ? partnerByEmail(to) : null;
   if (!partner) return { sent: false, reason: "the card was not asked for by a partner's email" };
@@ -331,7 +333,7 @@ async function tellRequester(
   const files = notice.kind === "DONE" || notice.kind === "PREVIEW" ? await outboundFilesFor(env, card.id) : { attachments: [], section: null };
   const keysRow = await readWebPropertyChange(env, card.id);
   const keys = missingSecretsSection(keysRow ? missingSecretsOf(keysRow) : []);
-  let out: { sent: boolean; reason: string; threadToken?: string | null };
+  let out: { sent: boolean; previewed?: boolean; reason: string; threadToken?: string | null };
   try {
     out = await sendOrPreview(env, {
       to,
@@ -353,10 +355,12 @@ async function tellRequester(
       finished: notice.kind === "DONE" || notice.kind === "PREVIEW",
     });
   } catch (err) {
-    out = { sent: false, reason: err instanceof Error ? err.message : String(err) };
+    out = { sent: false, previewed: false, reason: err instanceof Error ? err.message : String(err) };
   }
-  await recordNotice(env, { cardId: card.id, kind: notice.kind, cause: notice.cause, to, messageId: out.threadToken ?? null, sent: out.sent, detail: out.reason, firmScope: card.firm_scope });
-  return { sent: out.sent, reason: out.reason };
+  // Refused by the mail service with sending switched on: marked, so the next go sends it and it never counts as told.
+  const failed = !out.sent && !out.previewed && isEmailSendEnabled(env);
+  await recordNotice(env, { cardId: card.id, kind: notice.kind, cause: notice.cause, to, messageId: out.threadToken ?? null, sent: out.sent, detail: failed ? `${SEND_FAILED}${out.reason}` : out.reason, firmScope: card.firm_scope });
+  return { sent: out.sent, reason: out.reason, failed };
 }
 
 /**
@@ -369,27 +373,70 @@ async function tellRequester(
  */
 export async function remindRequesterByEmail(
   env: Env,
-  row: { id: string; block_needed: string | null; block_nags: number; blocked_at: string | null },
+  row: { id: string; title?: string | null; block_needed: string | null; block_nags: number; blocked_at: string | null; block_reason?: string | null },
   now: Date,
-): Promise<{ sent: boolean; reason: string }> {
-  const card = await env.WP_OS_DB.prepare("SELECT id, title, firm_scope, requested_by_email, preview_first, preview_owner_id, assigned_from_card_id FROM work_card WHERE id = ?1")
+): Promise<{ sent: boolean; reason: string; failed: boolean }> {
+  const card = await env.WP_OS_DB.prepare("SELECT id, title, kind, firm_scope, requested_by_email, preview_first, preview_owner_id, assigned_from_card_id FROM work_card WHERE id = ?1")
     .bind(row.id)
-    .first<WebPropertyChangeCard>();
-  if (!card) return { sent: false, reason: "no such card" };
-  const { kind } = await noticeFor(env, row.id, "BLOCKED");
-  const email = await porterNoticeEmail(env, row.id, kind, row.block_needed ?? "", { resend: true });
-  if (!email) return { sent: false, reason: "not a web property change card" };
+    .first<WebPropertyChangeCard & { kind: string | null }>();
+  if (!card) return { sent: false, reason: "no such card", failed: false };
   const nag = (row.block_nags ?? 0) + 1;
   const days = row.blocked_at ? Math.max(1, Math.round((now.getTime() - Date.parse(row.blocked_at)) / 86_400_000)) : 1;
-  // WHAT CLEARS IT, IN THE CARD'S OWN WORDS — when the composed notice does not already carry them.
-  const needed = (row.block_needed ?? "").split("\n").map((l) => l.replace(/^[•·\-*]\s+/, "").trim()).filter(Boolean);
-  const carried = JSON.stringify(email);
-  const neededSection = needed.length && !needed.every((l) => carried.includes(l)) ? [{ label: "What I'm waiting on", bullets: needed.slice(0, 12) }] : [];
-  return tellRequester(env, card, { kind, cause: `nag:${nag}` }, {
-    ...email,
-    tldr: `Still waiting on you (${days} day${days === 1 ? "" : "s"}). ${email.tldr}`,
-    sections: [...neededSection, ...email.sections],
-  });
+  const { nagAt } = await import("./blocks");
+  const nextOn = nagAt(now, row.block_reason ?? null, nag);
+  // Porter's thread only: another employee's card is not his to email about (its in-app re-ask still rings).
+  if (card.kind !== WEB_PROPERTY_CHANGE_KIND) return { sent: false, reason: "not a web property change card", failed: false };
+  const { kind } = await noticeFor(env, row.id, "BLOCKED");
+  const title = (await porterContext(env, card.id))?.title ?? card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").slice(0, 70);
+  const cardLine = `The card: ${cardLinkFor(card.id)}`;
+  /*
+   * EACH RE-ASK SHORTER, NEVER THE SAME WORDS (her ruling 21 Nov 2026). The first (about 2 days on) is the notice again with
+   * what it waits on; the second (about 9 days on) is the ask and one line of context; every later one is the ask alone.
+   * Each carries its own count and the day it was asked, so no two read alike.
+   */
+  const full = await porterNoticeEmail(env, row.id, kind, row.block_needed ?? "", { resend: true });
+  if (!full) return { sent: false, reason: "not a web property change card", failed: false };
+  // What it waits on is the stage's own ask (approve the preview, answer the question); the block's words otherwise.
+  const ask = full.ask ? { ...full.ask, ifSilent: `${full.ask.ifSilent.replace(/,? and I'll ask again in a couple of days$/, "")}, and I'll ask again on ${dayOf(nextOn)}` } : reAskOf(row.block_needed ?? "", nextOn);
+  let email: Parameters<typeof tellRequester>[3];
+  if (nag === 1) {
+    const needed = (row.block_needed ?? "").split("\n").map((l) => l.replace(/^[•·\-*]\s+/, "").trim()).filter(Boolean);
+    const carried = JSON.stringify(full);
+    const neededSection = needed.length && !needed.every((l) => carried.includes(l)) ? [{ label: "What I'm waiting on", bullets: needed.slice(0, 12) }] : [];
+    email = { ...full, tldr: `A reminder, ${days} day${days === 1 ? "" : "s"} on. ${full.tldr}`, sections: [...neededSection, ...full.sections], ask };
+  } else if (nag <= 2) {
+    email = {
+      what: `${title}: still waiting on you`,
+      tldr: `${nag === 1 ? "A reminder" : "A second reminder"}, ${days} days since I asked; nothing has moved without you.`,
+      sections: [{ label: "Where it stands", bullets: [reAskContext(row.block_needed ?? "", title)] }, { label: "The card", bullets: [cardLine] }],
+      ask,
+    };
+  } else {
+    email = { what: `${title}: still open`, tldr: `Reminder ${nag} (${dayOf(now.toISOString())}).`, sections: [{ label: "Waiting", bullets: [`${days} days`] }, { label: "The card", bullets: [cardLine] }], ask };
+  }
+  const out = await tellRequester(env, card, { kind, cause: `nag:${nag}` }, email);
+  return { sent: out.sent, reason: out.reason, failed: out.failed === true };
+}
+
+/** The ask a re-ask leads with: what the card waits on, as one reply, and what happens if none comes. Pure. */
+export function reAskOf(needed: string, nextAskAt: string): ActionAsk {
+  const flat = needed.replace(/\s+/g, " ").trim();
+  const clear = /To clear it by email:\s*(.+?)\.?$/i.exec(flat)?.[1];
+  const waiting = /Waiting on:\s*(.+?)\.\s*Why:/i.exec(flat)?.[1];
+  const day = dayOf(nextAskAt);
+  const reply = clear
+    ? `${waiting ? `I need ${waiting.replace(/^your /i, "your ")}: ` : ""}${clear.charAt(0).toUpperCase()}${clear.slice(1)}`
+    : `Reply to this email with ${flat ? `your answer (${flat.slice(0, 160)})` : "your answer"}`;
+  return { reply, ifSilent: `I keep it where it is, carry on with anything that does not need you, and ask again on ${day}` };
+}
+
+function dayOf(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "America/Chicago" });
+}
+
+function reAskContext(needed: string, title: string): string {
+  const why = /Why:\s*(.+?)\.\s*To clear it/i.exec(needed.replace(/\s+/g, " "))?.[1];
+  return why ? `Why it waits: ${why}.` : `It is the "${title}" job.`;
 }
 
 /**
@@ -2093,7 +2140,8 @@ async function applyUnchanged(env: Env, card: WebPropertyChangeCard, row: WebPro
   await appendFinding(env, card.id, `Materials check: nothing new since the last build. ${wasPublish ? "The \"publish\" approval is withdrawn; nothing lands. " : ""}Told ${card.requested_by_email ?? "the partner"}: "${said}"`);
   await tellRequester(env, card, { kind: "QUESTION", cause: `unchanged:${row.refresh_requested_at ?? new Date().toISOString()}` }, {
     what: stageSubject((await porterContext(env, card.id))?.title ?? "Your site change", STAGE.UNCHANGED),
-    tldr: said,
+    tldr: "I didn't find anything new in the folder or attached.",
+    ask: { reply: `Reply "approved" to publish the current preview as is, or add the missing items to Drive and reply "preview"`, ifSilent: PORTER_IF_SILENT },
     sections: [
       { label: "What I checked", bullets: ["The Drive folder, re-mapped just now, and every file attached on this card."] },
       { label: "Your call", bullets: [`**approved**: publish the current preview as is.`, `Add the missing items to Drive or attach them to a reply, then reply "preview" or "publish".`, `The card: https://os.joinwestpeek.com/#/work (card ${card.id})`] },
@@ -2234,7 +2282,7 @@ async function approveByRequest(env: Env, card: WebPropertyChangeCard, row: WebP
   // cause so a card whose asking form already went out (blocked before this rule) still hears that
   // it is moving — one email, never the question twice.
   const email = await porterNoticeEmail(env, card.id, "PLAN", "", { fyi: true });
-  if (email) await tellRequester(env, card, { kind: "PLAN", cause: `fyi:${row.plan_filed_at ?? now}` }, { what: email.what, tldr: email.tldr, tldrBullets: email.tldrBullets, sections: email.sections });
+  if (email) await tellRequester(env, card, { kind: "PLAN", cause: `fyi:${row.plan_filed_at ?? now}` }, { what: email.what, tldr: email.tldr, tldrBullets: email.tldrBullets, sections: email.sections, ask: email.ask ?? null });
   const rules = await rulesFor(env, WEB_PROPERTY_CHANGE_KIND);
   const parked = await parkPhase(env, card, fresh, "BUILD", rules);
   if (!parked.parked) return { finished: false, blocked: false, progressed: true, detail: parked.reason };
@@ -3089,7 +3137,7 @@ async function sendQuestionAnswer(
   senderMessage: string,
   routed: QuestionAnswerResult,
   standing: readonly string[] = [],
-): Promise<{ sent: boolean; reason: string }> {
+): Promise<{ sent: boolean; reason: string; failed?: boolean }> {
   const to = (card.requested_by_email ?? "").trim().toLowerCase();
   const partner = to ? partnerByEmail(to) : null;
   if (!partner || !routed.employeeName || !routed.answer) {
@@ -3754,7 +3802,7 @@ export async function handleResendPreview(ctx: RouteContext): Promise<Response> 
   }
   const email = await porterNoticeEmail(ctx.env, card.id, "PREVIEW", "", { resend: true });
   if (!email) return json({ error: "no_preview_waiting" }, { status: 409 });
-  const out = await tellRequester(ctx.env, card, { kind: "PREVIEW", cause: `resend:${row.preview_emailed_at ?? row.check_green_at ?? ""}` }, { what: email.what, tldr: email.tldr, tldrBullets: email.tldrBullets, sections: email.sections });
+  const out = await tellRequester(ctx.env, card, { kind: "PREVIEW", cause: `resend:${row.preview_emailed_at ?? row.check_green_at ?? ""}` }, { what: email.what, tldr: email.tldr, tldrBullets: email.tldrBullets, sections: email.sections, ask: email.ask ?? null });
   const notice = await ctx.env.WP_OS_DB.prepare("SELECT message_id, sent FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PREVIEW' AND cause = ?2").bind(card.id, `resend:${row.preview_emailed_at ?? row.check_green_at ?? ""}`).first<{ message_id: string | null; sent: number }>();
   return json({ ok: out.sent, detail: out.reason, message_id: notice?.message_id ?? null });
 }

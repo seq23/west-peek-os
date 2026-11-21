@@ -406,7 +406,7 @@ describe("\"preview first\" across two repos", () => {
     expect(text).toMatch(/\*\*Preview of 2 sites — they go live together\*\*\n• Current preview \(built \d{1,2}:\d{2} CT, \*{0,2}0\*{0,2} placeholders\): join-west-peek-main: https:\/\/work-wpc-banner12\.west-peek-community\.pages\.dev · westpeek-live: no preview deployment for this site — the change and its screenshots are on the card\n/);
     expect(text, "no PR link in her inbox").not.toMatch(/github\.com/);
     expect(text, "never the per-commit hash").not.toMatch(/e5f6a7b8/);
-    expect(text).toMatch(/^\*\*TL;DR:\*\* Preview ready\. Reply with one of these:\n• \*\*approved\*\*: publish this preview as is/);
+    expect(text).toMatch(/^\*\*TL;DR:\*\* \*\*Reply "approved" to put it live, or "changes: …" with what to adjust\.\*\* If I don\'t hear back, nothing goes live, it stays where it is, and I\'ll ask again in a couple of days\. Preview ready\. Reply with one of these:\n• \*\*approved\*\*: publish this preview as is/);
     expect(text, "the proof is on the card, not in her inbox").not.toMatch(/live-390\.png/);
   });
 

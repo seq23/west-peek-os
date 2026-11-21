@@ -311,7 +311,7 @@ describe("Porter's web lane: the plan asks for the materials, a reply's file rea
     const before = (await mailFor(id)).length;
     expect((await tickFor(id)).outcome).toBe("BLOCKED");
     const preview = (await mailFor(id)).slice(before).join("\n\n");
-    expect(preview).toMatch(/^\*\*TL;DR:\*\* Preview ready, with \*{0,2}1\*{0,2} placeholder\. Reply with one of these:/);
+    expect(preview).toMatch(/^\*\*TL;DR:\*\* \*\*Reply "approved" to put it live, or "changes: …" with what to adjust\.\*\* If I don\'t hear back, nothing goes live, it stays where it is, and I\'ll ask again in a couple of days\. Preview ready, with \*{0,2}1\*{0,2} placeholder\. Reply with one of these:/);
     // What is still showing as a placeholder, and — separately — what this build filled in.
     expect(preview).toMatch(/\*\*Still missing \(optional\)\*\*\n• Ep \*{0,2}7\*{0,2} guest headshot \(JPG\)\n/);
     expect(preview).toMatch(/\*\*Filled in since the plan\*\*\n• Ep \*{0,2}6\*{0,2} guest headshot \(JPG\)\n/);

@@ -506,26 +506,27 @@ describe("the weekly card on Walker's desk", () => {
       { name: "Sam Sample", status: "SEEN", week: "2026-W43" },
     ]);
 
-    // A third week with nothing new: BLOCKED with the reason, nothing emailed.
+    // A third week with nothing new (her ruling 21 Nov 2026): the search widens itself, Scooter gets one short note that
+    // says so, and the card closes. It never blocks on him with "widen the search?".
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE kind = 'PRODUCTIONS_HIRE_SEARCH'").run();
     const third = await openHireSearchCard(env, new Date("2026-10-26T14:00:00.000Z"));
+    const thirdPrompts: string[] = [];
     const again = await sweepOnce(env, new Date("2026-10-26T14:05:00.000Z"), {
-      productionsHire: (e, card) => runHireSearchCard(e, card, { search: async () => ({ ok: true, text: nextWeek, detail: "ok" }), judge, urlStatus: statusOf, now: new Date("2026-10-26T14:05:00.000Z") }),
+      productionsHire: (e, card) => runHireSearchCard(e, card, { search: async (_e, _a, p) => { thirdPrompts.push(p); return { ok: true, text: nextWeek, detail: "ok" }; }, judge, urlStatus: statusOf, now: new Date("2026-10-26T14:05:00.000Z") }),
     });
     expect(again.card?.id).toBe(third.cardId);
-    expect(again.outcome).toBe("BLOCKED");
-    // 0254 (R7 for every kind): three parts — the summary leads with what is waiting; the stopped sentence is the "Why" on the card.
-    expect(again.summary).toMatch(/is blocked: Waiting on: /);
-    const row = await env.WP_OS_DB.prepare("SELECT next_action, block_who FROM work_card WHERE id = ?1").bind(third.cardId).first<{ next_action: string; block_who: string }>();
-    expect(row!.next_action).toMatch(/ Why: Everything Walker found this time you have already seen/);
-    expect(row!.next_action).toMatch(/every name this week was already in an earlier note \(5 of them\)/i);
-    expect(row!.next_action, "even the block asks for nothing but a reply").toMatch(/[Rr]eply to last week's note in plain words/);
-    expect(row!.block_who, "Walker's Productions work is Scooter's desk").toBe("SCOOTER");
-    const mails = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE object_id = ?1 AND event_type LIKE 'deliverable.%'").bind(third.cardId).first<{ n: number }>();
-    expect(mails!.n).toBe(0);
+    expect(again.outcome, again.summary).toBe("DONE");
+    expect(thirdPrompts[0], "the first go is the usual search").not.toMatch(/WIDEN THIS SEARCH/);
+    expect(thirdPrompts[1], "the next go widens: titles, sources, area").toMatch(/WIDEN THIS SEARCH[\s\S]*Nearby titles[\s\S]*More kinds of source[\s\S]*A wider area/);
+    const row = await env.WP_OS_DB.prepare("SELECT state, block_who, block_reason FROM work_card WHERE id = ?1").bind(third.cardId).first<{ state: string; block_who: string | null; block_reason: string | null }>();
+    expect(row).toEqual({ state: "DONE", block_who: null, block_reason: null });
+    const note = await env.WP_OS_DB.prepare("SELECT title, body FROM deliverable WHERE source_id = ?1").bind(third.cardId).first<{ title: string; body: string }>();
+    expect(note!.title).toBe("Hire search 2026-W44: nothing new for senior experiential producer, freelance");
+    expect(note!.body, "one plain line says what it widened and what it found").toMatch(/^Nothing new this week: I widened this week's search to nearby titles, more kinds of source and a wider area, because the usual search found nobody new; everyone it found \(5\) was already in an earlier note\./);
+    expect(note!.body).not.toMatch(/widen\?|whether to widen/i);
   });
 
-  it("blocks with the reason and emails nothing when nothing survives; the second search is told what was wrong", async () => {
+  it("when nothing survives the checks, it says so in one note and closes; it never blocks on him; the second search is told what was wrong", async () => {
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE kind = 'PRODUCTIONS_HIRE_SEARCH'").run();
     const opened = await openHireSearchCard(env, new Date("2026-11-02T14:00:00.000Z"));
     const prompts: string[] = [];
@@ -538,20 +539,20 @@ describe("the weekly card on Walker's desk", () => {
       }),
     });
     expect(out.card?.id).toBe(opened.cardId);
-    expect(out.outcome).toBe("BLOCKED");
+    expect(out.outcome, out.summary).toBe("DONE");
     expect(prompts, "one go per route").toHaveLength(HIRE_SEARCH_ROUTES);
     expect(prompts[1]).toMatch(/Your previous answer was discarded: every page was dead or unreadable: Nobody/);
-    expect(out.summary).toMatch(/is blocked: Waiting on: /);
-    const stoppedRow = await env.WP_OS_DB.prepare("SELECT next_action FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ next_action: string }>();
-    expect(stoppedRow!.next_action, "the plain sentence is the Why, whole").toMatch(/ Why: Walker looked and found nothing solid enough to put in front of you/);
-    const mails = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM event_record WHERE object_id = ?1 AND event_type LIKE 'deliverable.%'").bind(opened.cardId).first<{ n: number }>();
-    expect(mails!.n).toBe(0);
+    const stopped = await env.WP_OS_DB.prepare("SELECT state, block_reason FROM work_card WHERE id = ?1").bind(opened.cardId).first<{ state: string; block_reason: string | null }>();
+    expect(stopped).toEqual({ state: "DONE", block_reason: null });
+    const note = await env.WP_OS_DB.prepare("SELECT body FROM deliverable WHERE source_id = ?1").bind(opened.cardId).first<{ body: string }>();
+    expect(note!.body).toMatch(/nobody it found stood up to the checks/);
   });
 });
 
 describe("the candidates behind a note are information, not a queue", () => {
   it("lists them for Scooter, 404s for Sequoia — and the route that used to set a status is GONE, not merely unused", async () => {
-    const dlv = await env.WP_OS_DB.prepare("SELECT id FROM deliverable WHERE kind = 'productions_hire_search' ORDER BY created_at DESC LIMIT 1").first<{ id: string }>();
+    // The W43 note (W44's "nothing new" note has no candidates behind it).
+    const dlv = await env.WP_OS_DB.prepare("SELECT id FROM deliverable WHERE kind = 'productions_hire_search' AND title LIKE 'Hire search 2026-W43:%' ORDER BY created_at DESC LIMIT 1").first<{ id: string }>();
     const mine = await handleRequest(req(`/api/productions/candidates?deliverable=${dlv!.id}`, SCOOTER), env);
     expect(mine.status).toBe(200);
     const list = (await mine.json()) as { candidates: Array<{ name: string; status: string }> };
@@ -795,6 +796,8 @@ describe("the floor: a shortlist, or the nearest misses by that name (owner, 13 
   });
 
   it("no route reaches the floor: Scooter gets ONE note that calls itself nearest misses, never a shortlist, and the card stops by name on Sequoia that day", async () => {
+    // The keep-going question was already asked, so this note does not ask it again (employeesActLikeAgents.test.ts proves that).
+    await env.WP_OS_DB.prepare("INSERT INTO event_record (id, event_type, actor_type, actor_id, object_type, object_id, firm_scope, payload_json, created_at) VALUES ('ev_asked_already', 'productions.hire_keep_going_asked', 'ai_employee', 'aie_walker', 'work_card', 'wc_earlier', 'west-peek', '{}', '2026-11-23T12:00:00.000Z')").run();
     const opened = await fresh("2026-11-24T15:00:00.000Z");
     let searches = 0;
     const out = await sweepOnce(env, new Date("2026-11-24T15:05:00.000Z"), {

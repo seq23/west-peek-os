@@ -46,8 +46,12 @@ export type NoticeKind = "RECEIVED" | "PLAN" | "PREVIEW" | "QUESTION" | "STUCK" 
  */
 export const NOTICE_KINDS: readonly NoticeKind[] = ["RECEIVED", "PLAN", "PREVIEW", "QUESTION", "STUCK", "DONE"];
 
+/** The mark on a notice whose send the mail service refused: it does not count as told, and a later send replaces it. */
+export const SEND_FAILED = "send failed: ";
+
 export async function alreadyTold(env: Env, cardId: string, kind: NoticeKind, cause: string): Promise<boolean> {
-  const row = await env.WP_OS_DB.prepare("SELECT 1 AS one FROM work_card_notice WHERE work_card_id = ?1 AND kind = ?2 AND cause = ?3")
+  // A send the mail service refused is not "told": the next go sends it (21 Nov 2026, the outage case).
+  const row = await env.WP_OS_DB.prepare(`SELECT 1 AS one FROM work_card_notice WHERE work_card_id = ?1 AND kind = ?2 AND cause = ?3 AND NOT (sent = 0 AND detail LIKE '${SEND_FAILED}%')`)
     .bind(cardId, kind, cause.slice(0, 400))
     .first<{ one: number }>();
   return Boolean(row);
@@ -58,8 +62,10 @@ export async function recordNotice(
   input: { cardId: string; kind: NoticeKind; cause: string; to: string; messageId: string | null; sent: boolean; detail?: string; firmScope: string },
 ): Promise<void> {
   await env.WP_OS_DB.prepare(
-    `INSERT OR IGNORE INTO work_card_notice (id, work_card_id, kind, cause, sent_to, message_id, sent, detail, firm_scope)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+    `INSERT INTO work_card_notice (id, work_card_id, kind, cause, sent_to, message_id, sent, detail, firm_scope)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+     ON CONFLICT (work_card_id, kind, cause) DO UPDATE SET sent_to = excluded.sent_to, message_id = excluded.message_id, sent = excluded.sent, detail = excluded.detail
+       WHERE work_card_notice.sent = 0 AND work_card_notice.detail LIKE '${SEND_FAILED}%'`,
   )
     .bind(`wcn_${crypto.randomUUID()}`, input.cardId, input.kind, input.cause.slice(0, 400), input.to, input.messageId, input.sent ? 1 : 0, (input.detail ?? "").slice(0, 400) || null, input.firmScope)
     .run();
@@ -178,7 +184,7 @@ export async function replyToRequester(
    * "blocked". Everything else about the send (the lane, the cc, the thread, once per cause) is this
    * function's, unchanged.
    */
-  composed?: { what: string; tldr: string; tldrBullets: readonly string[]; sections: ReadonlyArray<{ label: string; bullets: string[] }>; details?: string | null } | null,
+  composed?: { what: string; tldr: string; tldrBullets: readonly string[]; sections: ReadonlyArray<{ label: string; bullets: string[] }>; details?: string | null; ask?: import("../../shared/email/execEmail").ActionAsk | null } | null,
 ): Promise<{ sent: boolean; to: string | null; reason: string }> {
   const to = (card.requested_by_email ?? "").trim().toLowerCase();
   if (!to) return { sent: false, to: null, reason: "the card was not asked for by email" };
@@ -247,7 +253,7 @@ export async function replyToRequester(
   const stuck = outcome === "BLOCKED" && (isTechnicalBlock(blockReason) || ["tried_and_could_not_finish", "stopped_part_way"].includes(blockReason ?? ""));
   const previewSection = porter?.previewLine ? [{ label: "Current preview", bullets: [porter.previewLine] }] : [];
   const email = composed
-    ? { employee: who, what: composed.what, tldr: composed.tldr, tldrBullets: [...composed.tldrBullets], sections: composed.sections.map((s) => ({ label: s.label, bullets: [...s.bullets] })), details: composed.details ?? null, routedBy }
+    ? { employee: who, what: composed.what, tldr: composed.tldr, tldrBullets: [...composed.tldrBullets], sections: composed.sections.map((s) => ({ label: s.label, bullets: [...s.bullets] })), details: composed.details ?? null, ask: composed.ask ?? null, routedBy }
     : {
         employee: who,
         // A LANE FAULT IS "STUCK", NOT A QUESTION: the reader cannot answer it, and it says so.

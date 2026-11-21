@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { resurfaceStaleBlocks } from "../src/worker/services/blocks";
-import { remindRequestersByEmail } from "../src/worker/services/workSweep";
+import { remindRequesterByEmail } from "../src/worker/services/webPropertyChange";
 
 /**
  * A BLOCK REMINDER REACHES AN EMAILED REQUESTER BY EMAIL (9 Oct 2026).
@@ -96,27 +96,27 @@ describe("a block reminder reaches an emailed requester by email", () => {
       .bind(`wcn_${crypto.randomUUID()}`, CARD, SCOOTER, ROOT_TOKEN)
       .run();
 
+    // 21 Nov 2026: the re-ask email is part of the sweep's re-ask itself (resurfaceStaleBlocks), not a second step.
     const rung = await resurfaceStaleBlocks(env, NOW);
     expect(rung.map((r) => r.id)).toEqual([CARD]);
     expect(rung[0]!.requested_by_email).toBe(SCOOTER);
-    const out = await remindRequestersByEmail(env, rung, NOW);
 
-    expect(out).toEqual([{ id: CARD, sent: true, reason: expect.any(String) }]);
     expect(sent).toHaveLength(1);
     expect(sent[0]!.to).toBe(SCOOTER);
     expect(sent[0]!.text).toContain(PREVIEW);
-    expect(sent[0]!.text).toMatch(/Still waiting on you \(\**2\** days\)\./);
+    expect(sent[0]!.text).toMatch(/A reminder, \**2\** days on\./);
+    expect(sent[0]!.subject, "it waits on him").toMatch(/^ACTION REQUIRED: /);
     expect(`${sent[0]!.headers["In-Reply-To"] ?? ""} ${sent[0]!.headers["References"] ?? ""}`).toContain(ROOT_TOKEN);
     expect(await notices(CARD)).toEqual([{ kind: "PREVIEW", cause: "nag:1", sent: 1, sent_to: SCOOTER }]);
     // The in-app notice is kept, exactly as before.
     expect(await inApp(CARD)).toBe(1);
 
-    // (b) The same nag handed over again — a second sweep tick before the next ring — sends nothing.
-    const again = await remindRequestersByEmail(env, rung, NOW);
-    expect(again).toEqual([{ id: CARD, sent: false, reason: "PREVIEW already sent for this cause" }]);
+    // (b) The same re-ask handed over again sends nothing.
+    const again = await remindRequesterByEmail(env, { ...rung[0]!, block_nags: 0 }, NOW);
+    expect(again).toEqual({ sent: false, reason: "PREVIEW already sent for this cause", failed: false });
     expect(sent).toHaveLength(1);
     expect(await notices(CARD)).toHaveLength(1);
-    // And the next real sweep finds nothing due: the clock moved on 24 hours.
+    // And the next real sweep finds nothing due: the clock moved on to the next re-ask (about 7 days).
     expect(await resurfaceStaleBlocks(env, new Date(NOW.getTime() + 60_000))).toEqual([]);
   });
 
@@ -124,7 +124,6 @@ describe("a block reminder reaches an emailed requester by email", () => {
     await seedBlocked(BARE, null);
     const rung = await resurfaceStaleBlocks(env, NOW);
     expect(rung.map((r) => r.id)).toEqual([BARE]);
-    expect(await remindRequestersByEmail(env, rung, NOW)).toEqual([]);
     expect(sent).toHaveLength(0);
     expect(await notices(BARE)).toEqual([]);
     expect(await inApp(BARE)).toBe(1);
