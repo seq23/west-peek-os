@@ -151,6 +151,8 @@ export interface WebPropertyAsk {
   registered?: string[];
   /** 0253 (addendum 3): the deadline in the partner's own words, read at the door. */
   due?: { due_at: string; due_words: string; priority: "URGENT" | "HIGH" } | null;
+  /** 21 Nov 2026: the written address and the words named different properties; the address won. Kept as the log. */
+  property_conflict?: string;
 }
 
 const FOLDER_LINK = /https?:\/\/drive\.google\.com\/(?:drive\/(?:u\/\d+\/)?(?:mobile\/)?folders\/|open\?id=)([A-Za-z0-9_-]{10,})[^\s>)"']*/i;
@@ -172,7 +174,10 @@ export function driveFolderLinks(text: string): Array<{ id: string; url: string 
 
 /** Which property the text names, or null. Host first (exact), then the plain words. */
 export function propertyIn(text: string, registry: readonly WebProperty[] = WEB_PROPERTIES): WebProperty | null {
-  const named = propertiesIn(text, registry);
+  return oneJobOf(propertiesIn(text, registry));
+}
+
+function oneJobOf(named: readonly WebProperty[]): WebProperty | null {
   if (!named.length) return null;
   // ONE JOB FOR SEVERAL SITES IN ONE REPO (23 Sep 2026, her words: "why can't it open one large
   // job working on both sites?"). The three sites share join-west-peek-main, so "the community
@@ -222,24 +227,44 @@ export function sitesOf(propertyHost: string | null | undefined, registry: reado
 }
 
 /**
- * THE SITE SHE ASKED ABOUT, NOT THE FIRST ADDRESS IN THE EMAIL (23 Sep 2026).
+ * THE SITE SHE WROTE, NEVER AN ORDINARY WORD (21 Nov 2026; first 23 Sep 2026).
  *
- * #144 took the first host string anywhere in the email, checking ventures first, so
- * "sequoia@westpeek.ventures" in a signature or a "reply to" line sent a community-site redesign
- * to the ventures site. The three sites share one repo; the site is the folder that gets changed,
- * so reading it wrong changes the wrong site. Now, in order:
- *   1. what she ASKED FOR: "the community site", "the agency site", "the ventures site" —
- *      the words naming a site as the thing to change;
- *   2. only if no site is named that way, a site ADDRESS she wrote (joinwestpeek.com) — never
- *      one inside an email address, which names a mailbox;
- *   3. otherwise nothing: the door infers from her last site card or asks.
+ * Scooter's "Change westpeekproductions.com: Homepage headline copy" said "nothing changes on the live
+ * site until I approve", and the plain words "the live site" outranked the host he wrote in the subject:
+ * the card was titled for westpeek.live. "Live" there means production, as it does in "go live". Now:
+ *   1. a site ADDRESS the partner wrote (joinwestpeek.com) — never one inside an email address, which
+ *      names a mailbox (#144: "sequoia@westpeek.ventures" in a signature sent a community redesign to
+ *      the ventures site);
+ *   2. only if no address is written, the words naming a site ("the community site", "the agency
+ *      site") — and only a phrase with a word of its own: one made only of ordinary words ("the live
+ *      site", "the events site", "the main page") names no property, whatever a registry row lists;
+ *   3. otherwise nothing: the plain-words reader (a model) reads it, the door infers from her last
+ *      site card, or Porter asks once.
  * Returns every property at the winning level; several in one repo are one job (propertyIn).
  */
 export function propertiesIn(text: string, registry: readonly WebProperty[] = WEB_PROPERTIES): WebProperty[] {
-  const lower = text.toLowerCase().replace(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/g, " ");
-  const asked = matchMostSpecificFirst(lower, (p) => p.words, false, registry);
-  if (asked.length) return asked;
-  return matchMostSpecificFirst(lower, (p) => [p.host, ...(p.aliases ?? [])], true, registry);
+  const hosts = hostsNamedIn(text, registry);
+  return hosts.length ? hosts : wordsNamedIn(text, registry);
+}
+
+function withoutMailboxes(text: string): string {
+  return text.toLowerCase().replace(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/g, " ");
+}
+
+/** The properties whose address (host or alias) the text writes out. */
+function hostsNamedIn(text: string, registry: readonly WebProperty[]): WebProperty[] {
+  return matchMostSpecificFirst(withoutMailboxes(text), (p) => [p.host, ...(p.aliases ?? [])], true, registry);
+}
+
+/** The properties the text names by a distinctive phrase ("the agency site"), never by ordinary words alone. */
+function wordsNamedIn(text: string, registry: readonly WebProperty[]): WebProperty[] {
+  return matchMostSpecificFirst(withoutMailboxes(text), (p) => p.words.filter(namesSomething), false, registry);
+}
+
+/** Words that say "a website" or "production" in any partner's English, and so can never pick WHICH one. */
+const ORDINARY = new Set(["the", "a", "an", "our", "your", "my", "this", "that", "live", "site", "website", "web", "page", "homepage", "home", "landing", "main", "app", "events", "event", "platform", "new"]);
+function namesSomething(phrase: string): boolean {
+  return phrase.toLowerCase().split(/[^a-z0-9.]+/).some((w) => w && !ORDINARY.has(w));
 }
 
 /**
@@ -367,11 +392,20 @@ export function parseWebPropertyAsk(subject: string, body: string, registry: rea
    * were unresolved — one job was one repo. Now the card carries every host and every repo, and
    * `parts` says which sites and which slice of the request each repo's PR is for.
    */
-  const named = propertiesIn(written, registry);
+  /*
+   * THE ADDRESS HE WROTE DECIDES, SUBJECT FIRST (21 Nov 2026). A host in the subject is the headline of the
+   * ask; then a host in the body; then the distinctive words. When the words name a different property than
+   * the address, the address wins and the disagreement is kept on the request (`property_conflict`).
+   */
+  const subjectHosts = hostsNamedIn(writtenPart(subject.replace(/\r/g, "")), registry);
+  const named = subjectHosts.length ? subjectHosts : propertiesIn(written, registry);
+  const byWords = wordsNamedIn(written, registry);
+  const fromAddress = subjectHosts.length > 0 || hostsNamedIn(written, registry).length > 0;
+  const outvoted = fromAddress ? byWords.filter((p) => !named.includes(p)) : [];
   const parts = partsFor(named, ask, registry);
   const property: WebProperty | null = parts.length
     ? { host: parts.map((p) => p.property_host).join(", "), repo: parts.map((p) => p.repo).join(" + "), site: parts.map((p) => p.site).join(", "), words: [] }
-    : propertyIn(written, registry);
+    : oneJobOf(named);
   // The greeting is the BODY's first line; the subject sits above it in `text`.
   const addressee = addresseeIn(writtenPart(body.replace(/\r/g, "")));
   // "Hey Porter — a spot on the site": addressed to Porter, a property named without its host.
@@ -392,6 +426,7 @@ export function parseWebPropertyAsk(subject: string, body: string, registry: rea
     addressee,
     property_unresolved: unresolved,
     preview_first: previewFirstIn(written),
+    ...(outvoted.length ? { property_conflict: `The address written (${named.map((p) => p.host).join(", ")}) was used; the words also named ${outvoted.map((p) => p.host).join(", ")}.` } : {}),
   };
 }
 
@@ -432,6 +467,7 @@ export function readWebPropertyAsk(json: string | null | undefined): WebProperty
       ...(Array.isArray(p.parts) && p.parts.length > 1 ? { parts: p.parts } : {}),
       ...(Array.isArray(p.registered) && p.registered.length ? { registered: p.registered.map(String) } : {}),
       ...(p.new_repo === true ? { new_repo: true } : {}),
+      ...(typeof p.property_conflict === "string" && p.property_conflict ? { property_conflict: p.property_conflict } : {}),
       ...(p.due && typeof p.due === "object" && typeof p.due.due_at === "string" ? { due: { due_at: p.due.due_at, due_words: String(p.due.due_words ?? ""), priority: p.due.priority === "URGENT" ? "URGENT" : "HIGH" } } : {}),
     };
   } catch {

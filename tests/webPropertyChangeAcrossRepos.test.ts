@@ -137,7 +137,7 @@ describe("the door reads sites in several repos as ONE job with a part per repo"
   });
 
   it("when the email does not separate them, every part gets the whole request", () => {
-    const whole = "Please put the new West Peek logo on the community site and the live site.";
+    const whole = "Please put the new West Peek logo on the community site and on westpeek live.";
     const ask = parseWebPropertyAsk("logo", whole)!;
     expect(ask.parts).toHaveLength(2);
     for (const p of ask.parts!) expect(p.ask).toBe(whole);
@@ -175,12 +175,15 @@ describe("the door reads sites in several repos as ONE job with a part per repo"
     expect(propertiesIn("questions to sequoia@joinwestpeek.com")).toEqual([]);
   });
 
+  const ORDINARY_ONLY = ["the live site", "the live website", "the events site", "the events platform", "the event platform"];
   it("every registered host is unique, and every host names only its own property", () => {
     const hosts = WEB_PROPERTIES.map((p) => p.host);
     expect(new Set(hosts).size).toBe(hosts.length);
     for (const p of WEB_PROPERTIES) {
       for (const h of [p.host, ...(p.aliases ?? [])]) expect(propertiesIn(`please update ${h} today`), h).toEqual([p]);
-      for (const w of p.words) expect(propertiesIn(`please update ${w} today`), w).toEqual([p]);
+      // 21 Nov 2026: a phrase made only of ordinary English ("the live site" = production) names nothing;
+      // every other phrase names exactly its own property.
+      for (const w of p.words) expect(propertiesIn(`please update ${w} today`), w).toEqual(ORDINARY_ONLY.includes(w) ? [] : [p]);
     }
     expect(WEB_PROPERTIES.map((p) => p.repo), "every West Peek site repo is registered").toEqual(
       expect.arrayContaining(["join-west-peek-main", "westpeek-live", "west-peek-pitch-lab", "west-peek-network-os", "secondaries", "founder-dilution-dashboard"]),

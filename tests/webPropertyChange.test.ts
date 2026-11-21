@@ -9,7 +9,7 @@ import { sweepOnce, type SweepCard } from "../src/worker/services/workSweep";
 import type { ReplyIntentReader } from "../src/worker/services/replyIntent";
 import type { QuestionAnswerer } from "../src/worker/services/questionRouting";
 import { claimRun, parkRun, progressRun, reapSeatRuns, readRun, reportRun, JOB_SILENCE_MS, MAX_JOB_NAPS, type SeatRunRow } from "../src/worker/ai/subscriptionSeats";
-import { parseWebPropertyAsk, isWebPropertyChange, driveFolderLinks, addresseeIn, sitesOf } from "../src/shared/intake/webPropertyChange";
+import { parseWebPropertyAsk, isWebPropertyChange, driveFolderLinks, addresseeIn, sitesOf, readWebPropertyAsk as readWebPropertyAskFromJson } from "../src/shared/intake/webPropertyChange";
 import { parseBlogAsk } from "../src/shared/intake/blogHelp";
 import { workCard } from "../src/worker/services/employeeWork";
 import { sweepIdentity } from "../src/worker/services/workSweep";
@@ -361,6 +361,67 @@ async function ageEarlierCards(): Promise<void> {
  * stands up its own fresh DB with the same beforeAll/afterAll the original had (the shared setup
  * and helpers are repeated verbatim in each). Siblings: webPropertyChangeRules.test.ts, webPropertyChangeReplies.test.ts.
  */
+
+/*
+ * 20 Nov 2026 (inm_83acfab5): Scooter's "Change westpeekproductions.com: Homepage headline copy" said "nothing
+ * changes on the live site until I approve", and the plain words "the live site" outranked the host he wrote:
+ * Porter's card was titled "Change westpeek.live". "Live" is production, never the property.
+ */
+const PRODUCTIONS_SUBJECT = "Change westpeekproductions.com: Homepage headline copy";
+const PRODUCTIONS_BODY = `Hey Porter!
+
+One small copy change, this one on the live homepage. Same rule as always:
+show me on the preview first, nothing changes on the live site until I
+approve.
+
+On the homepage, right after the service cards (Live events, Annual
+reports, Program stories) and just before Capabilities, there is a headline
+with a line under it.
+
+Best,
+Scooter`;
+
+describe("the property comes from the address he wrote, never from the word 'live'", () => {
+  it("Scooter's 20 Nov email resolves to westpeekproductions.com", () => {
+    const ask = parseWebPropertyAsk(PRODUCTIONS_SUBJECT, PRODUCTIONS_BODY)!;
+    expect(ask.property_host).toBe("westpeekproductions.com");
+    expect(ask.target_repo).toBe("join-west-peek-main");
+    expect(ask.site).toBe("sites/productions");
+    expect(ask.parts).toBeUndefined();
+  });
+
+  it("'the live site', 'go live' and 'live homepage' alone never name westpeek.live", () => {
+    for (const body of ["Please fix the typo on the live site.", "Can this go live tomorrow?", "Swap the headline on the live homepage.", "Update the live website footer."]) {
+      const ask = parseWebPropertyAsk("small fix", body);
+      expect(ask?.property_host ?? null, body).not.toBe("westpeek.live");
+      expect(ask?.target_repo ?? null, body).not.toBe("westpeek-live");
+    }
+  });
+
+  it("an email that really names westpeek.live still goes there", () => {
+    expect(parseWebPropertyAsk("Change westpeek.live: event page", "Please add the Fall Summit banner.")!.property_host).toBe("westpeek.live");
+    expect(parseWebPropertyAsk("events", "Add the Fall Summit to westpeek.live, it should go live on Monday.")!.property_host).toBe("westpeek.live");
+    expect(parseWebPropertyAsk("events", "On westpeek live, add the Fall Summit banner.")!.target_repo).toBe("westpeek-live");
+  });
+
+  it("when the subject's address and the body's words disagree, the address wins and the disagreement is kept", () => {
+    const ask = parseWebPropertyAsk("Change westpeekproductions.com: footer", "Hey Porter, the community site footer link should match.")!;
+    expect(ask.property_host).toBe("westpeekproductions.com");
+    expect(ask.property_conflict).toMatch(/westpeekproductions\.com.*joinwestpeek\.com/);
+    expect(readWebPropertyAskFromJson(JSON.stringify(ask))?.property_conflict, "the log survives the round trip").toBe(ask.property_conflict);
+    expect(parseWebPropertyAsk("Change westpeekproductions.com: footer", "Fix the footer.")!.property_conflict, "no disagreement, nothing logged").toBeUndefined();
+  });
+
+  it("through the door: Walker hands it to Porter titled for westpeekproductions.com, and the title and request agree", async () => {
+    const chiefId = await openAssignmentCard(env, { subject: PRODUCTIONS_SUBJECT, partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: PRODUCTIONS_BODY, limits: EMAILED_TASK_LIMITS, emlKey: null });
+    const porterId = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
+    const porter = await card(porterId);
+    expect(String(porter.title)).toMatch(/^Change westpeekproductions\.com:/);
+    expect(JSON.parse(String(porter.request_json)).property_host).toBe("westpeekproductions.com");
+    expect((await readWebPropertyChange(env, porterId))?.property_host).toBe("westpeekproductions.com");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(porterId).run();
+  });
+});
 
 describe("the door reads a Drive folder and a property", () => {
   it("parses the folder id, the property and the repo; a file link is not a folder", () => {
