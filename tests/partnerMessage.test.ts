@@ -130,7 +130,7 @@ async function cardRow(id: string): Promise<Record<string, unknown>> {
   return (await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(id).first<Record<string, unknown>>())!;
 }
 
-const compose = (text: string) => async () => ({ ok: true, text, detail: "ok" });
+const compose = (text: string) => async () => ({ ok: true, text: `SUBJECT: a quick note for you\n\nHi there,\n\n${text}\n\nWesley`, detail: "ok" });
 
 describe("parsePartnerMessageAsk", () => {
   it("reads the employee, the registered partner and the instruction", () => {
@@ -343,6 +343,43 @@ describe("runPartnerMessageCard — the real send door", () => {
     expect(out.outcome).toBe("DONE");
     const row = await cardRow(card.id);
     expect(row.state).toBe("DONE");
+  });
+});
+
+describe("a partner message reads as a note from a colleague (20 Nov 2026)", () => {
+  const NOTE = "SUBJECT: the LP diligence pack for 30 Nov\n\nHi Scooter,\n\nThe questions sheet and the DDQ are both in Drive for Monday. Sequoia and I would like your read before Anita sees anything.\n\nWesley";
+
+  it("its subject is the employee's own, written from the content, never the instruction", async () => {
+    const sent: Sent[] = [];
+    captureFetch(sent);
+    const card = await makeCard({ ownerId: "aie_walker", resultRecipient: "Scooter", prompt: "a short intro", requestedByEmail: SEQUOIA_EMAIL });
+    await runPartnerMessageCard(env, card, { interpret: saidNothing, compose: async () => ({ ok: true, text: NOTE.replace(/Wesley$/, "Walker"), detail: "ok" }) });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.subject).toBe("Walker here: the LP diligence pack for 30 Nov");
+    expect(sent[0]!.subject).not.toMatch(/tell /i);
+  });
+
+  it("its body is the note as written: greeting, sentences, sign-off; no report scaffolding", async () => {
+    const sent: Sent[] = [];
+    captureFetch(sent);
+    const card = await makeCard({ ownerId: "aie_walker", resultRecipient: "Scooter", prompt: "the pack is ready", requestedByEmail: SEQUOIA_EMAIL });
+    await runPartnerMessageCard(env, card, { interpret: saidNothing, compose: async () => ({ ok: true, text: NOTE.replace(/Wesley$/, "Walker"), detail: "ok" }) });
+    const body = sent[0]!.text;
+    expect(body.startsWith("Hi Scooter,")).toBe(true);
+    expect(body.trim().endsWith("Walker")).toBe(true);
+    expect(body).not.toMatch(/TL;DR|The message|I was asked to send you this|\*\*/);
+  });
+
+  it("finishing it sends no second \"done\" receipt to the partner who asked", async () => {
+    const sent: Sent[] = [];
+    captureFetch(sent);
+    const card = await makeCard({ ownerId: "aie_walker", resultRecipient: "Scooter", prompt: "the pack is ready", requestedByEmail: SEQUOIA_EMAIL });
+    const out = await sweepOnce(env, new Date(), {
+      partnerMessage: (e, c) => runPartnerMessageCard(e, c, { interpret: saidNothing, compose: async () => ({ ok: true, text: NOTE.replace(/Wesley$/, "Walker"), detail: "ok" }) }),
+    });
+    expect(out.outcome).toBe("DONE");
+    expect((await cardRow(card.id)).state).toBe("DONE");
+    expect(sent.map((m) => m.to), "the note to Scooter, and nothing to Sequoia").toEqual([[SCOOTER_EMAIL]]);
   });
 });
 

@@ -279,6 +279,9 @@ export async function announceOutcome(
   // busy-executive format, and posts its own notice to them (services/blogHelp.ts). A second
   // "finished the card" email would be the same thing twice. A BLOCKED one still tells both below.
   if (card.kind === "BLOG_HELP" && outcome === "DONE") return { emailed: card.requested_by_email ?? null };
+  // A PARTNER MESSAGE IS ITS OWN EMAIL (20 Nov 2026): the note went to the partner it names, and a "done —" receipt to
+  // the partner who asked rang a second time for one thing. The outcome stays on the card. A BLOCKED one still tells.
+  if (card.kind === "PARTNER_MESSAGE" && outcome === "DONE") return { emailed: null };
   if (isProductionsKind(card.kind)) {
     await notifyQuietly(env, {
       // Whose agency it is, asked of the registry rather than typed. See shared/registry/partners.ts.
