@@ -211,7 +211,8 @@ describe("Sequoia emails a request", () => {
     // NEVER "BLOCKED" TO A PARTNER (owner, 23 Sep 2026): a question is called a question, and the
     // first line says what answers it.
     expect(last.subject).toBe("ACTION REQUIRED: Wesley: a question — Find the LP letter");
-    expect(last.text).toMatch(/^\*\*TL;DR:\*\* One question before I go on with Find the LP letter: reply to this email with your answer and I carry on\./);
+    // 21 Nov 2026: the ask first, in bold, with what happens if no answer comes; then the question it is about.
+    expect(last.text).toMatch(/^\*\*TL;DR:\*\* \*\*Reply to this email with your answer, and I carry on\.\*\* If I don't hear back, I hold it where it is, carry on with anything that does not need you, and ask again in a couple of days\. One question before I go on with Find the LP letter\./);
     // 0254 (R7 / R8 for every kind): the three parts, in order, and the only way to clear it is a reply.
     expect(last.text).toMatch(/\*\*What I need from you\*\*\n• Waiting on: Which quarter do you mean\?\n• Why: Wesley needs something from you[^\n]*\n• To clear it by email: reply to this email with your answer/);
     expect(last.text).not.toMatch(/on the card|#\/work/);

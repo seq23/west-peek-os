@@ -237,6 +237,7 @@ export type { RequestAttachment };
 import { attachmentsFor, missingFor, recordMissing, type RequestAttachment } from "./requestMaterials";
 import { cleanPreviewUrls, currentPreviewLine, pagePathsFrom, withChangedPages, decidedSoFar, decisionResolutionIn, doneNotice, liveUrlsFrom, MATERIALS_ADDED_PHRASE, planNotice, previewNotice, questionNotice, STAGE, stageSubject, stuckNotice, PORTER_IF_SILENT, cardLinkFor, type NoticeEmail } from "../../shared/work/porterNotices";
 import type { ActionAsk } from "../../shared/email/execEmail";
+import { reAskEmail } from "../../shared/work/blocks";
 import { porterContext } from "./porterContext";
 import type { MissingMaterial } from "../../shared/work/missingMaterials";
 
@@ -385,59 +386,16 @@ export async function remindRequesterByEmail(
   const days = row.blocked_at ? Math.max(1, Math.round((now.getTime() - Date.parse(row.blocked_at)) / 86_400_000)) : 1;
   const { nagAt } = await import("./blocks");
   const nextOn = nagAt(now, row.block_reason ?? null, nag);
-  // Porter's thread only: another employee's card is not his to email about (its in-app re-ask still rings).
+  // Porter's thread: every other employee's card is re-asked through the shared sender (blocks.ts, reAsk).
   if (card.kind !== WEB_PROPERTY_CHANGE_KIND) return { sent: false, reason: "not a web property change card", failed: false };
   const { kind } = await noticeFor(env, row.id, "BLOCKED");
   const title = (await porterContext(env, card.id))?.title ?? card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").slice(0, 70);
-  const cardLine = `The card: ${cardLinkFor(card.id)}`;
-  /*
-   * EACH RE-ASK SHORTER, NEVER THE SAME WORDS (her ruling 21 Nov 2026). The first (about 2 days on) is the notice again with
-   * what it waits on; the second (about 9 days on) is the ask and one line of context; every later one is the ask alone.
-   * Each carries its own count and the day it was asked, so no two read alike.
-   */
+  // Porter's first re-ask is his stage notice again (the preview, the plan); the shared writer shapes every re-ask.
   const full = await porterNoticeEmail(env, row.id, kind, row.block_needed ?? "", { resend: true });
   if (!full) return { sent: false, reason: "not a web property change card", failed: false };
-  // What it waits on is the stage's own ask (approve the preview, answer the question); the block's words otherwise.
-  const ask = full.ask ? { ...full.ask, ifSilent: `${full.ask.ifSilent.replace(/,? and I'll ask again in a couple of days$/, "")}, and I'll ask again on ${dayOf(nextOn)}` } : reAskOf(row.block_needed ?? "", nextOn);
-  let email: Parameters<typeof tellRequester>[3];
-  if (nag === 1) {
-    const needed = (row.block_needed ?? "").split("\n").map((l) => l.replace(/^[•·\-*]\s+/, "").trim()).filter(Boolean);
-    const carried = JSON.stringify(full);
-    const neededSection = needed.length && !needed.every((l) => carried.includes(l)) ? [{ label: "What I'm waiting on", bullets: needed.slice(0, 12) }] : [];
-    email = { ...full, tldr: `A reminder, ${days} day${days === 1 ? "" : "s"} on. ${full.tldr}`, sections: [...neededSection, ...full.sections], ask };
-  } else if (nag <= 2) {
-    email = {
-      what: `${title}: still waiting on you`,
-      tldr: `${nag === 1 ? "A reminder" : "A second reminder"}, ${days} days since I asked; nothing has moved without you.`,
-      sections: [{ label: "Where it stands", bullets: [reAskContext(row.block_needed ?? "", title)] }, { label: "The card", bullets: [cardLine] }],
-      ask,
-    };
-  } else {
-    email = { what: `${title}: still open`, tldr: `Reminder ${nag} (${dayOf(now.toISOString())}).`, sections: [{ label: "Waiting", bullets: [`${days} days`] }, { label: "The card", bullets: [cardLine] }], ask };
-  }
+  const email = reAskEmail({ nag, days, title, cardId: card.id, needed: row.block_needed ?? "", nextAskAt: nextOn, now, stage: full });
   const out = await tellRequester(env, card, { kind, cause: `nag:${nag}` }, email);
   return { sent: out.sent, reason: out.reason, failed: out.failed === true };
-}
-
-/** The ask a re-ask leads with: what the card waits on, as one reply, and what happens if none comes. Pure. */
-export function reAskOf(needed: string, nextAskAt: string): ActionAsk {
-  const flat = needed.replace(/\s+/g, " ").trim();
-  const clear = /To clear it by email:\s*(.+?)\.?$/i.exec(flat)?.[1];
-  const waiting = /Waiting on:\s*(.+?)\.\s*Why:/i.exec(flat)?.[1];
-  const day = dayOf(nextAskAt);
-  const reply = clear
-    ? `${waiting ? `I need ${waiting.replace(/^your /i, "your ")}: ` : ""}${clear.charAt(0).toUpperCase()}${clear.slice(1)}`
-    : `Reply to this email with ${flat ? `your answer (${flat.slice(0, 160)})` : "your answer"}`;
-  return { reply, ifSilent: `I keep it where it is, carry on with anything that does not need you, and ask again on ${day}` };
-}
-
-function dayOf(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "America/Chicago" });
-}
-
-function reAskContext(needed: string, title: string): string {
-  const why = /Why:\s*(.+?)\.\s*To clear it/i.exec(needed.replace(/\s+/g, " "))?.[1];
-  return why ? `Why it waits: ${why}.` : `It is the "${title}" job.`;
 }
 
 /**

@@ -1,3 +1,4 @@
+import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
 import { RECURRING_CARD_KINDS } from "../../shared/work/recurring";
 import type { PartnerBack } from "../../shared/work/partnerBackBy";
 import type { Env } from "../env";
@@ -29,7 +30,7 @@ import {
   type BlockProvider,
   type BlockReason,
 } from "../../shared/work/blocks";
-import { blockWaitDetail, PARTNER_ANSWER_MAX } from "../../shared/work/blocks";
+import { blockWaitDetail, PARTNER_ANSWER_MAX, reAskEmail } from "../../shared/work/blocks";
 export { PARTNER_ANSWER_MAX };
 
 
@@ -573,16 +574,33 @@ export async function closeReplacedRunBlocks(env: Env, now: Date = new Date()): 
 }
 
 /**
- * The re-ask by email, to the partner who asked by email and is the one it waits on. Null when there is nobody to email.
- * `settled`: nothing to retry (already sent for this re-ask, held in the preview lane, or not an email card).
+ * THE RE-ASK BY EMAIL, FOR EVERY EMPLOYEE'S CARD THAT WAITS ON A PARTNER (her ruling 21 Nov 2026). It goes to the partner
+ * the card waits on (`block_who`), on the card's thread, in the card's own employee's name. Porter's site job asked for by
+ * that partner reuses his stage notice (the preview, the plan) through his own sender; every other card goes through the
+ * one employee sender (`replyToRequester`). Both are written by `reAskEmail`. Null when no partner is waited on.
+ * `settled`: nothing to retry (sent, already sent for this re-ask, or held in the preview lane).
  */
 async function remindRequester(env: Env, row: StoredBlock, nags: number, now: Date): Promise<{ sent: boolean; settled: boolean; reason: string } | null> {
-  const partner = row.requested_by_email ? partnerByEmail(row.requested_by_email.trim().toLowerCase()) : null;
-  if (!partner || (row.block_who ?? "").toUpperCase() !== partner.firstName.toUpperCase()) return null;
+  const partner = partnerByName(row.block_who ?? "");
+  // A fault on our side (a lane refused, the Mac, attempts spent) waits on no partner's answer: its in-app ring is enough.
+  if (!partner || isTechnicalBlock(row.block_reason) || ["tried_and_could_not_finish", "stopped_part_way"].includes(row.block_reason ?? "")) return null;
   try {
-    const { remindRequesterByEmail } = await import("./webPropertyChange");
-    const out = await remindRequesterByEmail(env, { ...row, block_nags: nags - 1 }, now);
-    return { ...out, settled: out.sent || !out.failed };
+    const card = await env.WP_OS_DB.prepare("SELECT id, title, kind, firm_scope, requested_by_email, preview_first, preview_owner_id, assigned_from_card_id FROM work_card WHERE id = ?1")
+      .bind(row.id)
+      .first<{ id: string; title: string; kind: string | null; firm_scope: string; requested_by_email: string | null; preview_first: number | null; preview_owner_id: string | null; assigned_from_card_id: string | null }>();
+    if (!card) return null;
+    const askedByThem = (card.requested_by_email ?? "").trim().toLowerCase() === partner.email.toLowerCase();
+    if (card.kind === WEB_PROPERTY_CHANGE_KIND && askedByThem) {
+      const { remindRequesterByEmail } = await import("./webPropertyChange");
+      const out = await remindRequesterByEmail(env, { ...row, block_nags: nags - 1 }, now);
+      return { ...out, settled: out.sent || !out.failed };
+    }
+    const days = row.blocked_at ? Math.max(1, Math.round((now.getTime() - Date.parse(row.blocked_at)) / 86_400_000)) : 1;
+    const title = card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").trim() || card.title;
+    const email = reAskEmail({ nag: nags, days, title, cardId: card.id, needed: row.block_needed ?? "", nextAskAt: nagAt(now, row.block_reason, nags), now });
+    const { replyToRequester } = await import("./requestReply");
+    const out = await replyToRequester(env, { ...card, requested_by_email: partner.email }, "BLOCKED", await employeeName(env, row.owner_id), "", { kind: "QUESTION", cause: `nag:${nags}` }, { ...email, tldrBullets: [] });
+    return { sent: out.sent, settled: out.sent || !out.failed, reason: out.reason };
   } catch (err) {
     return { sent: false, settled: false, reason: err instanceof Error ? err.message : String(err) };
   }
