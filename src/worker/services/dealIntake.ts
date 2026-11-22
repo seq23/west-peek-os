@@ -5,7 +5,9 @@ import { isWebPropertyChange, OS_PROPERTY, OS_REPO, parseWebPropertyAsk, partsFr
 import { loadRegistry, registerFromEmail, registerNewRepo, registryEntryFor } from "./webPropertyRegistry";
 import { defaultReadReplyIntent, readReplyIntent, type ReplyIntent, type ReplyIntentReader } from "./replyIntent";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
-import { dueTimeIn } from "../../shared/intake/dueTime";
+import { deadlineOf } from "../../shared/intake/replyMeaning";
+import { readInbound } from "./inboundRead";
+import type { Reader } from "./partnerUnderstood";
 import { textBodyOf, topHeadersOf } from "../effects/mimeAttachments";
 import { storeAttachments } from "./requestMaterials";
 import { isReplyMessage, splitQuoted } from "../../shared/intake/replyBody";
@@ -1027,6 +1029,8 @@ export async function openAssignmentCard(
     replyOnThread?: string | null;
     /** The plain-words reader, injectable so a test proves the routing without a model. */
     readWords?: ReplyIntentReader;
+    /** Who reads the deadline in his email (tests pass a stub; production the partner ladder). */
+    readers?: readonly Reader[];
   },
 ): Promise<string> {
   /*
@@ -1114,7 +1118,13 @@ export async function openAssignmentCard(
 
   // ALL KINDS (owner, 6 Oct 2026): a deadline in their words sets the assignment's priority whatever
   // it is for; a site job also carries it on the request so every wait states it.
-  const due = dueTimeIn(`${input.subject}\n${written}`);
+  // THE DEADLINE IS THE MODEL'S READ (22 Nov 2026): its words must be in his email and its time real and ahead; the
+  // word lists read it only when no model answered (and the log says so).
+  const dueText = `${input.subject}\n${written}`;
+  const { read: dueRead } = await readInbound(env, { context: `a partner's email asking ${input.chiefOfStaff} for work; read the deadline he sets for it`, from: input.partnerAddress, subject: input.subject, words: written, firmScope: FIRM_SCOPE, employeeId: null, now: new Date() }, input.readers);
+  const deadline = deadlineOf(dueRead, dueText, new Date());
+  if (deadline.why) console.warn(`deadline not kept for card ${card.id}: ${deadline.why}`);
+  const due = deadline.due;
   if (due) await env.WP_OS_DB.prepare("UPDATE work_card SET priority = ?2 WHERE id = ?1").bind(card.id, due.priority).run();
 
   /*

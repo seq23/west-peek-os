@@ -2,7 +2,9 @@ import { firstRead } from "./helpers/aiShapes";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
-import { FIRST_READERS, FIRST_READ_WAIT_MINUTES, sendUnderstoodReplies, understand, type Reader } from "../src/worker/services/partnerUnderstood";
+import { FIRST_READERS, FIRST_READ_WAIT_MINUTES, UNDERSTOOD_OUTPUT, sendUnderstoodReplies, understand, type Reader } from "../src/worker/services/partnerUnderstood";
+import { jsonSchemaOf } from "../src/worker/ai/structuredOutput";
+import { NO_MODEL_READER } from "../src/shared/intake/inboundRead";
 import { claimNextCard } from "../src/worker/services/workSweep";
 import { practicesForCard } from "../src/worker/services/partnerConstraints";
 import { handOffUnreadableMail } from "../src/worker/effects/inboundEmail";
@@ -289,24 +291,33 @@ describe("the Mac fallback with usage out", () => {
 });
 
 describe("holds are constraints; his open questions are a list of their own", () => {
-  it("a question-shaped line lands in questions, never in holds, whether the reader calls it a HOLD or the OS reads it", async () => {
+  it("the reader decides holds and questions; the word lists decide only when no model answered", async () => {
     const written = [
       "Don't delete or change those tracker rows.",
       "Whether to keep a separate livestream rate card is still open.",
       "I'm also questioning whether we need the Scale field.",
       "Is a Lead anything that came in?",
     ].join("\n");
-    const said = firstRead({
-      asks: ["Don't delete or change those tracker rows."],
-      holds: ["Don't delete or change those tracker rows.", "Whether to keep a separate livestream rate card is still open.", "I'm also questioning whether we need the Scale field."],
-      questions: ["Is a Lead anything that came in?"],
-    });
+    const open = ["Whether to keep a separate livestream rate card is still open.", "I'm also questioning whether we need the Scale field.", "Is a Lead anything that came in?"];
+    // The reader is told what a hold and a question are (the shape's field descriptions), so the rule is the model's.
+    const shape = JSON.stringify(jsonSchemaOf(UNDERSTOOD_OUTPUT));
+    expect(shape).toContain("never a question or something he leaves open");
+    expect(shape).toContain("including lines with no question mark");
+    // A model read lands as the model said; a line it put in both lists lands once, as a question.
+    const said = firstRead({ asks: ["Don't delete or change those tracker rows."], holds: ["Don't delete or change those tracker rows.", "Is a Lead anything that came in?"], questions: open });
     const read = await understand(env, { subject: "q", written, read: [readerSaying("CLAUDE", said)], employeeId: null, firmScope: "west-peek" });
     expect(read.brief.holds).toEqual(["Don't delete or change those tracker rows."]);
-    expect(read.brief.questions).toEqual(["Whether to keep a separate livestream rate card is still open.", "I'm also questioning whether we need the Scale field.", "Is a Lead anything that came in?"]);
+    expect(read.brief.questions).toEqual(open);
+    // No regex is merged into a model read: what the model left out stays out.
+    const fewer = await understand(env, { subject: "q", written, read: [readerSaying("CLAUDE", firstRead({ asks: ["Don't delete or change those tracker rows."], holds: ["Don't delete or change those tracker rows."], questions: ["Is a Lead anything that came in?"] }))], employeeId: null, firmScope: "west-peek" });
+    expect(fewer.brief.questions).toEqual(["Is a Lead anything that came in?"]);
+    // No model answered: the word lists read his sentences, a question is never a hold, and the log says so.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const os = await understand(env, { subject: "q", written, read: allOut, employeeId: null, firmScope: "west-peek" });
-    expect(os.brief.holds, "the OS's own read: no question is a hold").not.toContain("Is a Lead anything that came in?");
-    expect(os.brief.questions).toEqual(["Whether to keep a separate livestream rate card is still open.", "I'm also questioning whether we need the Scale field.", "Is a Lead anything that came in?"]);
+    expect(warn.mock.calls.some(([m]) => String(m).includes(NO_MODEL_READER))).toBe(true);
+    warn.mockRestore();
+    for (const q of open) expect(os.brief.holds, "the word lists' read: no question is a hold").not.toContain(q);
+    expect(os.brief.questions).toEqual(open);
   });
 });
 
@@ -339,13 +350,13 @@ describe("nothing he said is dropped", () => {
 });
 
 describe("his questions are steady", () => {
-  it("the dashboard email gives the same questions on two reads whose readers said different things, never fewer than the OS read", async () => {
+  it("with no model the dashboard email gives the same questions every read; a model read's questions are only his words", async () => {
     const os = await understand(env, { subject: "d", written: DASHBOARD, read: allOut, employeeId: null, firmScope: "west-peek" });
+    const again = await understand(env, { subject: "d", written: DASHBOARD, read: allOut, employeeId: null, firmScope: "west-peek" });
     expect(os.brief.questions.length).toBeGreaterThan(0);
-    const first = await understand(env, { subject: "d", written: DASHBOARD, read: [readerSaying("CLAUDE", firstRead({ questions: ["Is a Lead anything that came in?"], holds: ["Preview first, nothing live until I say so."] }))], employeeId: null, firmScope: "west-peek" });
-    const second = await understand(env, { subject: "d", written: DASHBOARD, read: [readerSaying("CODEX", firstRead({ holds: ["No client names on it without my written OK."] }))], employeeId: null, firmScope: "west-peek" });
-    expect(first.brief.questions).toEqual(os.brief.questions);
-    expect(second.brief.questions).toEqual(os.brief.questions);
+    expect(again.brief.questions).toEqual(os.brief.questions);
+    const model = await understand(env, { subject: "d", written: DASHBOARD, read: [readerSaying("CLAUDE", firstRead({ asks: ["The pipeline home is in good shape."], questions: ["Is a Lead anything that came in?", "Should the chart show every month since 2019?"] }))], employeeId: null, firmScope: "west-peek" });
+    expect(model.brief.questions, "a question he never wrote is dropped").toEqual(["Is a Lead anything that came in?"]);
   });
 });
 

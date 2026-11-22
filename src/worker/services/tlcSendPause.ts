@@ -4,6 +4,10 @@ import { textBodyOf } from "../effects/mimeAttachments";
 import { addressIn, authenticationVerdict } from "../../shared/intake/partnerAuthority";
 import { newTextOf } from "../../shared/events/packetDecisionToken";
 import { herNoteOf } from "../../shared/tlc/brandReply";
+import { readerWords } from "../../shared/intake/inboundRead";
+import { approvesOf } from "../../shared/intake/replyMeaning";
+import { readInbound } from "./inboundRead";
+import type { Reader } from "./partnerUnderstood";
 import { PITCH_APPROVAL_HASH_SETTING, PLAYBOOK_APPROVAL_HASH_SETTING, TLC_OWNER, approvalState } from "../../shared/tlc/learningClub";
 
 /**
@@ -138,6 +142,7 @@ export async function tellSendPause(env: Env, now: Date, firmScope: string, gate
 export async function applySendPauseApproval(
   env: Env,
   message: { fromHeader: string | null; authenticationResults: string | null; subject: string; body: string },
+  deps: { readers?: readonly Reader[] } = {},
 ): Promise<{ handled: boolean; ref: string | null; detail: string }> {
   const body = textBodyOf(message.body);
   const ref = SEND_PAUSE_REF_RE.exec(body)?.[0] ?? SEND_PAUSE_REF_RE.exec(message.subject)?.[0] ?? null;
@@ -152,7 +157,16 @@ export async function applySendPauseApproval(
     return { handled: false, ref, detail: `a reply to ${ref} was not accepted as hers` };
   }
   const said = herNoteOf(newTextOf(body).split(/\r?\n/).filter((l) => !/^\s*Ref\s+TLP-[A-Z0-9]{6}\s*$/.test(l)).join("\n"), TLC_OWNER.name);
-  if (!/^\s*(?:approve|approved|yes,? approve)\b/i.test(said)) return { handled: false, ref, detail: `a reply to ${ref} did not say approve` };
+  // WHAT SHE SAID IS READ BY A MODEL (22 Nov 2026): only a plain yes approves; "I can't say yes to this" never does.
+  const { read } = await readInbound(env, { context: `Wynn's email "Brand emails are paused" (${ref}): the brand pitch or sales playbook changed, and it asks her to reply approve so brand emails send again`, from: message.fromHeader ?? from, subject: message.subject, words: said, firmScope: "west-peek", employeeId: "aie_wynn" }, deps.readers);
+  const meant = approvesOf(read, said);
+  if (meant.unsure) {
+    // Unsure never approves: the pause email is asked again on the next pass, with a new reference.
+    await putSetting(env, PAUSE_NOTICE_SETTING, "null", "aie_wynn");
+    await appendEvent(env, { eventType: "tlc.send_pause_unsure", actorType: "system", actorId: "inbound_email", objectType: "tlc_send_pause", objectId: ref, payload: { reader: meant.reader } });
+    return { handled: true, ref, detail: `her reply to ${ref} was not clearly an approve (${meant.reader}); nothing approved, the pause email is sent again` };
+  }
+  if (!meant.approved) return { handled: false, ref, detail: `a reply to ${ref} did not say approve (${readerWords(meant.reader)})` };
   const { contentHashes, contentTexts } = await import("./learningClub");
   const hashes = await contentHashes(env);
   if (hashes.pitch !== last.pitch || hashes.playbook !== last.playbook) {
@@ -164,6 +178,6 @@ export async function applySendPauseApproval(
   await putSetting(env, PLAYBOOK_APPROVAL_HASH_SETTING, hashes.playbook, by);
   await putSetting(env, APPROVED_TEXT_SETTING.pitch, texts.pitch, by);
   await putSetting(env, APPROVED_TEXT_SETTING.playbook, texts.playbook, by);
-  await appendEvent(env, { eventType: "tlc.setting", actorType: "firm_user", actorId: by, objectType: "tlc_setting", objectId: "pitch_and_playbook", payload: { what: "approve by email", ref, pitch: hashes.pitch, playbook: hashes.playbook } });
+  await appendEvent(env, { eventType: "tlc.setting", actorType: "firm_user", actorId: by, objectType: "tlc_setting", objectId: "pitch_and_playbook", payload: { what: "approve by email", ref, pitch: hashes.pitch, playbook: hashes.playbook, reader: meant.reader } });
   return { handled: true, ref, detail: "the current brand pitch and playbook are approved; sending restarts on the next pass" };
 }

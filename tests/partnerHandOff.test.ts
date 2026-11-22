@@ -1,4 +1,6 @@
-import { firstRead } from "./helpers/aiShapes";
+import { firstRead, inboundRead } from "./helpers/aiShapes";
+import { ownershipFromWords } from "../src/worker/services/handOff";
+import type { Reader } from "../src/worker/services/partnerUnderstood";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
@@ -678,6 +680,22 @@ describe("unsure → Porter asks once; 'yes' performs it", () => {
     const yes = await call(`/api/work-cards/${id}/notes`, SEQUOIA, "POST", { body: "yes" });
     expect(yes.status).toBe(201);
     expect(yes.body.hand_off).toMatchObject({ ok: true, action: "HAND_OFF", primary: SCOOTER });
+    expect((await card(id)).requested_by_email).toBe(SCOOTER);
+  });
+
+  it("his answer to the question is read by a model: a refusal or unsure never hands off, and the question stands", async () => {
+    const id = "wc_handoff_unsure_model";
+    await seedCard(id);
+    const asked = await call(`/api/work-cards/${id}/notes`, SEQUOIA, "POST", { body: "maybe Scooter could handle it?" });
+    expect(asked.body.ack).toBe("Did you mean hand this card to Scooter? Reply 'yes' and I will.");
+    const says = (answer: string): Reader[] => [{ name: "SEAT", read: async () => ({ ok: true, text: inboundRead({ answer }), detail: "ok", reader: "CLAUDE" }) }];
+    const answer = (text: string, readers: Reader[]) => ownershipFromWords(env, { cardId: id, writer: SEQUOIA, text, via: "NOTE", readers });
+    // ABUSE: "yes" inside a refusal is not a yes.
+    expect(await answer("yes, but I can't say yes to Scooter owning it", says("no"))).toBeNull();
+    expect(await answer("hmm, not sure yet", says("unsure"))).toBeNull();
+    expect((await card(id)).requested_by_email).toBe(SEQUOIA);
+    // The question still stands: a plain yes read by the model hands it over.
+    expect(await answer("Yes, give it to him", says("yes"))).toMatchObject({ ok: true, action: "HAND_OFF", primary: SCOOTER });
     expect((await card(id)).requested_by_email).toBe(SCOOTER);
   });
 

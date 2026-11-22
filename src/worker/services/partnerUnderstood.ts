@@ -6,6 +6,7 @@ import { runAi } from "../ai/runAi";
 import { failedOnShape, readStructured, structuredOutput, type StructuredOutput } from "../ai/structuredOutput";
 import { maskPrivateInputs } from "../ai/scrub";
 import { committedLpNamedIn, committedLps } from "../ai/committedLps";
+import { NO_MODEL_READER } from "../../shared/intake/inboundRead";
 import { partnerByEmail } from "../../shared/registry/partners";
 import { partnersOwnWords } from "../../shared/intake/replyBody";
 import { centralDay } from "../../shared/work/partnerBackBy";
@@ -164,16 +165,14 @@ const WAITING_FOR_READER = "WAITING_FOR_READER";
 /** His holds, from his own sentences (the OS's read when no reader answered): "preview first", "nothing live", … Pure. */
 const HOLD = /\b(?:preview (?:it )?first|nothing (?:goes )?live|not live|don'?t (?:go live|publish|push|ship|deploy|merge|send)|do not (?:go live|publish|push|ship|deploy|merge|send)|hold off|wait for (?:my|me)|no (?:client|customer) names?|without (?:my |a |his |her )?(?:written )?(?:ok|okay|approval|sign-?off|consent|permission)|until I (?:say|approve|ok)|before (?:it|anything) goes live)\b/i;
 /**
- * HOLDS ARE CONSTRAINTS; QUESTIONS ARE QUESTIONS (15 Nov 2026). A hold says what must not happen or must wait ("don't",
- * "must", "never", "not yet", "nothing live", "only after", "without my OK"). A line that asks, wonders or leaves
- * something open ("is still open", "I'm questioning whether", "let's clarify", a "?") is a question, never a hold. Pure.
+ * HOLDS ARE CONSTRAINTS; QUESTIONS ARE QUESTIONS (15 Nov 2026). The word lists' read, used only when no model answered
+ * (22 Nov 2026): a line that asks, wonders or leaves something open ("is still open", "let's clarify", a "?") is a
+ * question, never a hold. Pure.
  */
 const QUESTION_SHAPED = /\?\s*["”]?$|\b(?:still open|(?:is|are) open|questioning|wonder(?:ing)?|not sure|unsure|let'?s (?:clarify|confirm|discuss|talk)|clarify|whether)\b/i;
-const CONSTRAINT = /\b(?:don'?t|do not|must(?:n'?t)?|never|not yet|nothing|no|not|only|until|without|stays?|separate|before (?:it|anything) goes live|preview (?:it )?first|hold off|wait for)\b/i;
 /** A "?" inside a quotation is the quoted thing's ("Keep "How did you hear about us?""), not his question. */
 const unquoted = (line: string): string => line.replace(/"[^"]*"|“[^”]*”/g, "\"\"").trim();
-export const isQuestionShaped = (line: string): boolean => QUESTION_SHAPED.test(unquoted(line));
-export const isConstraint = (line: string): boolean => CONSTRAINT.test(line) && !isQuestionShaped(line);
+const isQuestionShaped = (line: string): boolean => QUESTION_SHAPED.test(unquoted(line));
 /**
  * NOTHING HE SAID IS DROPPED (Sequoia, 15 Nov 2026). Holds, questions and unclear items are kept whole; this bound is
  * only a safety net against a runaway reader, and the brief says "and N more" when it is ever reached.
@@ -190,16 +189,6 @@ export function questionsOf(words: string): string[] {
     .map((s) => s.replace(/^[\s\-–—•*]+|\s+$/g, "").replace(/^\d+[.)]\s+/, "").replace(/\s+/g, " "))
     .filter((s) => s.length > 8 && (isQuestionShaped(s) || CLARIFY_FIRST.test(unquoted(s))) && !REMARK.test(s));
 }
-/** His own questions first, in his order; a reader's question is added only when no listed one contains it. Pure. */
-export function mergeQuestions(own: readonly string[], read: readonly string[]): string[] {
-  const out = [...own];
-  for (const q of read) {
-    const n = norm(q);
-    if (n.length > 0 && !out.some((o) => norm(o).includes(n) || n.includes(norm(o)))) out.push(q);
-  }
-  return out;
-}
-
 export function holdsOf(words: string): string[] {
   return unwrapped(words)
     .split(/\n+|(?<=[.!?])\s+(?=[A-Z0-9"“(])/)
@@ -471,23 +460,18 @@ export async function understand(
   }
   const runId = runIds[runIds.length - 1] ?? null;
   /*
-   * HIS HOLDS ARE STEADY TOO (15 Nov 2026, practice run): a reader that lists no HOLD lines (Workers AI did, on both of
-   * that day's emails) must not cost him the holds his own typed sentences carry ("nothing goes live"). His sentences
-   * first, then whatever the reader adds, as with his questions.
+   * HIS HOLDS AND QUESTIONS ARE THE READER'S (22 Nov 2026, engineering sweep row 5): a model that answered decides what
+   * is a hold and what is a question, kept only where they are his words (`parseUnderstood`). His own sentences are read
+   * by the word lists (HOLD, QUESTION_SHAPED, LATER) ONLY when no model answered, and the log says so. His brain's
+   * standing holds are added either way: they are records, not a read.
    */
-  const ownHolds = holdsOf(written.split(/\n\nVoice note \(/)[0] ?? written);
-  const emailHolds = parsed ? mergeQuestions(ownHolds, parsed.holds) : holdsOf(written);
+  if (!parsed && written) console.warn(`${NO_MODEL_READER}: no model read his email "${input.subject.slice(0, 80)}"; his holds and questions are the word lists' (${readersTried.join("; ").slice(0, 300)})`);
   // An idea for later ("… is an idea for later, not part of this round") is kept as noted, never also as a hold.
   const notedLines = structured?.noted ?? [];
-  // Only an idea is dropped: a noted line that is a real hold ("… nothing goes live.") stays a hold.
   const LATER = /\b(?:ideas? for later|for later|not (?:part of )?this round|parking lot|someday)\b/i;
-  const holds = mergeHolds(emailHolds.filter((h) => !(LATER.test(h) && notedLines.some((n) => norm(n) === norm(h)))), input.standingHolds ?? []);
-  /*
-   * HIS QUESTIONS ARE STEADY (15 Nov 2026): taken from his own sentences first, the same way every time (a "?", a
-   * "let's clarify", "still open", "whether"), as his asks come from his numbering first. A reader only ADDS questions
-   * that are not already there, so a read never finds fewer than the OS's own read, whatever the reader said.
-   */
-  const questions = mergeQuestions(questionsOf(written), parsed?.questions ?? []);
+  const emailHolds = parsed ? parsed.holds : holdsOf(written).filter((h) => !(LATER.test(h) && notedLines.some((n) => norm(n) === norm(h))));
+  const holds = mergeHolds(emailHolds, input.standingHolds ?? []);
+  const questions = parsed ? parsed.questions : questionsOf(written);
   const unclear = parsed ? parsed.unclear : [];
   const files = fileNames.map((filename) => ({ filename, purpose: parsed?.files.find((f) => f.filename === filename)?.purpose ?? null }));
   const brief = (asks: string[]): Brief => ({ asks, holds, questions, unclear, files, reader, decision: parsed?.decision ?? null });
@@ -529,8 +513,8 @@ export const UNDERSTOOD_OUTPUT = structuredOutput(
   z.object({
     none: z.boolean().describe("true when he asks for nothing (a thank-you, an FYI)"),
     asks: z.array(z.string()).describe("each separate ask, in his exact words"),
-    holds: z.array(z.string()).describe("each constraint, in his exact words"),
-    questions: z.array(z.string()).describe("each open question, in his exact words"),
+    holds: z.array(z.string()).describe("each constraint on the work (what must not happen, or must happen first), in his exact words; never a question or something he leaves open"),
+    questions: z.array(z.string()).describe("each open question or thing he leaves undecided, in his exact words, including lines with no question mark (\"whether to … is still open\", \"I'm questioning whether …\"); every one, none dropped"),
     unclear: z.array(z.object({ words: z.string(), missing: z.string() })).describe("each ask you cannot pin down: his exact words and what is missing"),
     files: z.array(z.object({ filename: z.string(), purpose: z.string() })).describe("what each attached file is for"),
     next: z.string().nullable().describe("what happens next, one plain sentence"),
@@ -553,19 +537,16 @@ export function parseUnderstood(text: string, written: string, files: readonly s
   }
   const none = read.none && read.asks.length === 0;
   const next = read.next?.trim() || null;
-  // Holds and questions only when they are his words too. A hold that is question-shaped is a question, whatever the
-  // reader called it; one that constrains nothing is dropped.
+  // Holds and questions only when they are his words too; which is which is the reader's call.
   const holds: string[] = [];
   const questions: string[] = [];
-  const place = (raw: string, said: "HOLD" | "QUESTION") => {
+  const place = (raw: string, list: string[]) => {
     const words = unquote(raw);
-    if (!his(words)) return;
-    const asQuestion = said === "QUESTION" || isQuestionShaped(words);
-    const list = asQuestion ? questions : isConstraint(words) ? holds : null;
-    if (list && !list.some((h) => norm(h) === norm(words))) list.push(words);
+    if (his(words) && !list.some((h) => norm(h) === norm(words))) list.push(words);
   };
-  for (const h of read.holds) place(h, "HOLD");
-  for (const q of read.questions) place(q, "QUESTION");
+  for (const q of read.questions) place(q, questions);
+  // A line the reader gave as both is a question (a question is never a hold).
+  for (const h of read.holds) if (!questions.some((q) => norm(q) === norm(unquote(h)))) place(h, holds);
   const unclear: Array<{ words: string; missing: string }> = [];
   for (const u of read.unclear) {
     const words = unquote(u.words);

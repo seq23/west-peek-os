@@ -202,8 +202,9 @@ export function replyIntentOf(words: string): BrandReplyIntent {
  *   - an auto-reply or a machine notice resumes the drip;
  *   - a redirect is followed only when the address is in their own words, on the brand's own domain, and not the
  *     sender's own or a no-reply address (the caller then needs NeverBounce to clear it before anything is drafted);
- *   - a no is a decline (either reader);
- *   - nothing owed is "no reply needed"; anything owed is a reply drafted for her approval.
+ *   - a no is the model's decline (the word lists' "no" counts only when no model answered, 22 Nov 2026);
+ *   - nothing owed is "no reply needed"; anything owed is a reply drafted for her approval, with the model's intent
+ *     (call, yes, question).
  */
 export function decideBrandReply(
   input: { subject: string; text: string; raw?: string; brandDomain?: string; notThese?: readonly string[]; helpdesk?: boolean },
@@ -223,9 +224,8 @@ export function decideBrandReply(
   const to = read.redirectTo ? verifiedRedirect(read.redirectTo, words, input.brandDomain ?? "", input.notThese ?? []) : null;
   if (to && !read.declines) return { cls: { kind: "REDIRECT", to }, reader: read.reader };
   if (read.declines) return { cls: { kind: "NO" }, reader: read.reader };
-  if (regex.kind === "NO") return { cls: regex, reader: WORD_LISTS };
-  if (!read.weOwe) return { cls: { kind: "NO_REPLY_NEEDED", why: noReplyNeeded(words) ?? "NO_ASK" }, reader: read.reader };
-  return { cls: { kind: "REPLY", intent: replyIntentOf(words) }, reader: read.reader };
+  if (!read.weOwe) return { cls: { kind: "NO_REPLY_NEEDED", why: read.nothingOwed ?? "NO_ASK" }, reader: read.reader };
+  return { cls: { kind: "REPLY", intent: read.intent ?? "QUESTION" }, reader: read.reader };
 }
 
 /** A model's redirect address, kept only when it is in their words, on the brand's own domain, and not a no-reply. */

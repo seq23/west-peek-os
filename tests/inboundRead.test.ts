@@ -1,3 +1,4 @@
+import { inboundRead } from "./helpers/aiShapes";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
@@ -23,7 +24,7 @@ const drafter: ReplyDrafter = async () => ({ ok: true, body: "Hi,\n\nThank you. 
 const samples = { renderPdf: async () => ({ pdfBase64: btoa("%PDF-1.4"), reason: null }) as never };
 
 /** A reader that answers with this JSON, as the model would. */
-const says = (o: Record<string, unknown>): Reader[] => [{ name: "SEAT", read: async () => ({ ok: true, text: JSON.stringify(o), detail: "ok", reader: "CLAUDE" }) }];
+const says = (o: Record<string, unknown>): Reader[] => [{ name: "SEAT", read: async () => ({ ok: true, text: inboundRead({ nothing_owed: o.we_owe === "none" ? "no_ask" : "owed", ...o }), detail: "ok", reader: "CLAUDE" }) }];
 /** Every reader out: usage spent, Workers AI unbound, Gemini refused. */
 const NONE: Reader[] = ["SEAT", "WORKERS_AI", "GEMINI"].map((name) => ({ name, read: async () => ({ ok: false, text: "", detail: "usage limit", out: true }) }));
 
@@ -156,7 +157,7 @@ describe("who reads first depends on who sent it (owner, 17 Nov 2026)", () => {
 });
 
 describe("the code still checks the hard parts of a model's read", () => {
-  const read = (o: Record<string, unknown>) => parseInboundRead(JSON.stringify({ sender_kind: "person", asks: [], redirect_to: null, wants_stop: false, declines: false, we_owe: "answer them", summary: "s", ...o }), "CLAUDE");
+  const read = (o: Record<string, unknown>) => parseInboundRead(inboundRead({ we_owe: "answer them", nothing_owed: "owed", summary: "s", ...o }), "CLAUDE");
   const base = { subject: "Re: x", brandDomain: "brand.example", notThese: ["info@brand.example"] };
   it("a stop that only the word lists see is still a stop", () => {
     expect(decideBrandReply({ ...base, text: "Please unsubscribe me from these." }, read({}), NOW).cls).toEqual({ kind: "NO", unsubscribe: true });

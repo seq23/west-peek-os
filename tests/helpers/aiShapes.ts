@@ -59,3 +59,11 @@ export function banterReply(o: { reply: boolean; line?: string | null }): string
 export function askMarks(marks: Array<{ number: number; status: "DONE" | "IN_PROGRESS" | "NOT_DONE"; why: string }>): string {
   return JSON.stringify({ marks });
 }
+
+/** The one read of an inbound reply (`shared/intake/inboundRead.ts`), with every field a test does not set left empty. */
+export function inboundRead(o: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    sender_kind: "person", asks: [], redirect_to: null, wants_stop: false, declines: false, we_owe: "none", summary: "test",
+    nothing_owed: "no_ask", intent: "none", answer: "not_an_answer", items: [], all_items: "none", deadline: null, ...o,
+  });
+}

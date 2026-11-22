@@ -15,7 +15,11 @@ import { FIRST_READERS, type Reader } from "./partnerUnderstood";
 import { partnerByEmail } from "../../shared/registry/partners";
 import { addressIn } from "../../shared/intake/partnerAuthority";
 import { committedLps, committedLpNamedIn } from "../ai/committedLps";
-import { inboundReadPrompt, parseInboundRead, type InboundRead } from "../../shared/intake/inboundRead";
+import { INBOUND_READ_SHAPE, NO_MODEL_READER, inboundReadPrompt, parseInboundRead, type InboundRead } from "../../shared/intake/inboundRead";
+import { structuredOutput } from "../ai/structuredOutput";
+
+/** The read's shape at the AI boundary: lanes that take a schema are held to it, every answer is checked against it. */
+export const INBOUND_READ_OUTPUT = structuredOutput("inbound_read", INBOUND_READ_SHAPE);
 
 const byName = (names: readonly string[]): Reader[] => names.map((n) => FIRST_READERS.find((r) => r.name === n)!).filter(Boolean);
 export type InboundSenderClass = "PARTNER" | "COMMITTED_LP" | "ANYONE";
@@ -31,7 +35,7 @@ export async function inboundLadder(env: Env, input: { from: string; subject: st
 
 export async function readInbound(
   env: Env,
-  input: { context: string; from: string; subject: string; words: string; firmScope: string; employeeId: string | null },
+  input: { context: string; from: string; subject: string; words: string; firmScope: string; employeeId: string | null; now?: Date },
   stub?: readonly Reader[],
 ): Promise<{ read: InboundRead | null; tried: string[]; sender: InboundSenderClass }> {
   const ladder = await inboundLadder(env, input);
@@ -42,7 +46,7 @@ export async function readInbound(
   if (!input.words.trim()) return { read: null, tried: ["no words to read"], sender };
   const prompt = inboundReadPrompt(input);
   for (const r of readers) {
-    const out = await r.read(env, { prompt, firmScope: input.firmScope, employeeId: input.employeeId, purpose: "the read of an inbound email: who sent it, what they ask, what we owe" });
+    const out = await r.read(env, { prompt, firmScope: input.firmScope, employeeId: input.employeeId, purpose: "the read of an inbound email: who sent it, what they ask, what we owe", output: INBOUND_READ_OUTPUT });
     if (!out.ok) {
       tried.push(`${r.name}: ${out.out ? "out" : "failed"} (${out.detail.slice(0, 100)})`);
       // A firm in LOCAL or LOCKDOWN privacy has no model reader at all: the next one would only say so again.
@@ -54,5 +58,7 @@ export async function readInbound(
     tried.push(`${r.name}: ${read ? "read it" : "answer did not parse"}`);
     if (read) return { read, tried, sender };
   }
+  // The word lists decide now; the log says so, and so does every decision they make (reader WORD_LISTS).
+  console.warn(`${NO_MODEL_READER}: no model read the email "${input.subject.slice(0, 80)}" (${tried.join("; ").slice(0, 300)})`);
   return { read: null, tried, sender };
 }
