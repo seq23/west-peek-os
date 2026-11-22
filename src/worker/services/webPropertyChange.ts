@@ -1775,15 +1775,22 @@ export async function applyReport(
       // 0253: an infrastructure wait, in the three-part shape; it clears itself and the email says so.
       // Each miss is released by itself when the Mac is back (`releaseMacAsleepBlocks`); the third is not a nap.
       const missed = (await macMissedRuns(env, card.id)).length;
+      if (missed >= MAC_ASLEEP_TRIES) {
+        const stopped = await blockCard(env, card, {
+          reason: "a_question_for_you",
+          trying: card.title,
+          employee: PORTER_NAME,
+          who: whoFor(card),
+          detail: waitDetail("TRIED_AND_STOPPED", { what: `${missed} times`, why: "the job was queued for the Mac each time and no machine picked it up, even after the Mac was back" }).slice(0, 900),
+        });
+        return { finished: false, blocked: true, progressed: false, detail: stopped };
+      }
       const why2 = await blockCard(env, card, {
         reason: "a_question_for_you",
         trying: card.title,
         employee: PORTER_NAME,
         who: whoFor(card),
-        detail: (missed >= MAC_ASLEEP_TRIES
-          ? waitDetail("TRIED_AND_STOPPED", { what: `${missed} times`, why: "the job was queued for the Mac each time and no machine picked it up, even after the Mac was back" })
-          : waitDetail("MAC_ASLEEP", { why: dueLine(readWebPropertyAsk(card.request_json)?.due) })
-        ).slice(0, 900),
+        detail: waitDetail("MAC_ASLEEP", { why: dueLine(readWebPropertyAsk(card.request_json)?.due) }).slice(0, 900),
       });
       return { finished: false, blocked: true, progressed: false, detail: why2 };
     }
