@@ -429,6 +429,20 @@ describe("the queue and the download route", () => {
     expect((await download(id, "mac-test", 0, "someone@example.com")).status, "a stranger is refused outright").toBe(403);
   });
 
+  it("with no bucket bound (outage), an ended run's files are never marked cleared; the sweep deletes them once the bucket is back", async () => {
+    const id = await parkWithFile();
+    await t.db.prepare("UPDATE subscription_seat_run SET status = 'ABANDONED' WHERE id = ?1").bind(id).run();
+    const { clearRunAttachments, clearEndedAttachments } = await import("../src/worker/ai/seatAttachments");
+    const noBucket = makeTestEnv(t.db, { WP_OS_DOCUMENTS: undefined } as Partial<Env>);
+    await clearRunAttachments(noBucket, id);
+    expect(await clearEndedAttachments(noBucket)).toBe(0);
+    expect((await rows())[0]!.attachments_cleared_at, "unknown is not cleared").toBeNull();
+    expect(bucket.store.size, "the file is still there").toBe(1);
+    expect(await clearEndedAttachments(env())).toBe(1);
+    expect(bucket.store.size).toBe(0);
+    expect((await rows())[0]!.attachments_cleared_at).not.toBeNull();
+  });
+
   it("an ended run's files are not downloadable and are deleted by the sweep even if the report path never ran", async () => {
     const id = await parkWithFile();
     expect(bucket.store.size).toBe(1);

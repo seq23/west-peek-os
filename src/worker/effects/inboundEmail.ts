@@ -1967,13 +1967,14 @@ export async function dryReadMessage(env: Env, raw: string, deps: { read?: impor
 
 /** The bookkeeping a dry run's model read wrote, removed: nothing downstream may count a practice read as work. */
 export async function forgetDryRun(env: Env, runId: string): Promise<void> {
-  for (const sql of [
-    "DELETE FROM model_job_outcome WHERE ai_run_id = ?1",
-    "DELETE FROM ai_run_attribution WHERE ai_run_id = ?1",
-    "DELETE FROM ai_run_routing WHERE ai_run_id = ?1",
-    "DELETE FROM subscription_seat_run WHERE ai_run_id = ?1",
-    "DELETE FROM ai_run WHERE id = ?1",
-  ]) {
-    await env.WP_OS_DB.prepare(sql).bind(runId).run();
-  }
+  // One batch, all or nothing: a failure part-way never leaves child rows pointing at a removed run.
+  await env.WP_OS_DB.batch(
+    [
+      "DELETE FROM model_job_outcome WHERE ai_run_id = ?1",
+      "DELETE FROM ai_run_attribution WHERE ai_run_id = ?1",
+      "DELETE FROM ai_run_routing WHERE ai_run_id = ?1",
+      "DELETE FROM subscription_seat_run WHERE ai_run_id = ?1",
+      "DELETE FROM ai_run WHERE id = ?1",
+    ].map((sql) => env.WP_OS_DB.prepare(sql).bind(runId)),
+  );
 }

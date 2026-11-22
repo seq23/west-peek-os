@@ -143,7 +143,11 @@ export async function clearRunAttachments(env: Env, runId: string, now: Date = n
       .first<{ attachments_json: string }>();
     if (!row) return;
     const refs = readRefs(row.attachments_json);
-    if (env.WP_OS_DOCUMENTS && refs.length > 0) await env.WP_OS_DOCUMENTS.delete(refs.map((r) => r.key));
+    if (refs.length > 0) {
+      // No bucket bound is an outage, not a deletion: the files are still there, so the run is left for the sweep.
+      if (!env.WP_OS_DOCUMENTS) return;
+      await env.WP_OS_DOCUMENTS.delete(refs.map((r) => r.key));
+    }
     await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET attachments_cleared_at = ?2 WHERE id = ?1").bind(runId, now.toISOString()).run();
   } catch {
     /* the sweep tries again */
@@ -165,8 +169,9 @@ export async function clearEndedAttachments(env: Env, now: Date = new Date()): P
       ).results ?? [];
     for (const row of rows) {
       const refs = readRefs(row.attachments_json);
+      if (refs.length > 0 && !bucket) continue; // no bucket bound: unknown, never "cleared"
       try {
-        if (bucket && refs.length > 0) await bucket.delete(refs.map((r) => r.key));
+        if (refs.length > 0) await bucket!.delete(refs.map((r) => r.key));
       } catch {
         continue; // try again next minute; never mark cleared what was not
       }
