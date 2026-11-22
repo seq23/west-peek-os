@@ -12,6 +12,12 @@
  * parts, decode their base64, and stop at the first few. Anything it cannot confidently read it
  * reports as unread rather than guessing — a deck half-decoded into a model is worse than no deck,
  * because the model will answer anyway.
+ *
+ * WHY STILL HAND-BUILT (measured 22 Nov 2026, engineering sweep row 7). On a 25 MB reply postal-mime 4.2.0 takes
+ * 581-1,768 ms of CPU for its one full parse (ArrayBuffer or base64 attachments), against a handler that died at
+ * ~2,010 ms; it decodes every attachment, even when a caller wants only the body. These reads take 0.1-87 ms each,
+ * because they size a file from its base64 and never decode what they do not hand over.
+ * Bench: `npx tsx scripts/probes/mime-cpu-bench.mts`. Re-measure with it before swapping this for any library.
  */
 
 export interface Attachment {
