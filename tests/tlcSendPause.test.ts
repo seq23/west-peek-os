@@ -2,9 +2,14 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { brandGateFor, contentHashes, contentTexts, runDrip } from "../src/worker/services/learningClub";
-import { PAUSE_RAISED_SETTING, SEND_PAUSE_LOOP, applySendPauseApproval, changedLines } from "../src/worker/services/tlcSendPause";
+import { PAUSE_NOTICE_SETTING, PAUSE_RAISED_SETTING, SEND_PAUSE_LOOP, applySendPauseApproval, changedLines } from "../src/worker/services/tlcSendPause";
+import { inboundRead } from "./helpers/aiShapes";
+import { NO_MODEL_READER } from "../src/shared/intake/inboundRead";
+import type { Reader } from "../src/worker/services/partnerUnderstood";
 import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
 import { DRIP_DEPS } from "./helpers/tlcSamplesPdf";
+// A question like "what changed exactly?" is read by the stand-in model as not an answer; outage tests pass `[]`.
+vi.mock("../src/worker/services/inboundRead", async (orig) => (await import("./helpers/standInModel")).withStandIn(await orig()));
 
 /**
  * BRAND EMAILS NEVER STOP SILENTLY (owner, 4 Nov 2026). A pitch or playbook change voids her approval and closes the
@@ -81,6 +86,40 @@ describe("a pitch change pauses brand sending, and she is told once", () => {
     expect(await stops()).toEqual([expect.objectContaining({ loop: SEND_PAUSE_LOOP, cleared: false })]);
   });
 
+  it("her reply is read by a model: a refusal or a no never approves, unsure asks again, and with every reader out 'approve' is unsure", async () => {
+    const ref = (await env.WP_OS_DB.prepare("SELECT value FROM tlc_setting WHERE key = ?1").bind(PAUSE_RAISED_SETTING).first<{ value: string }>())!.value;
+    const notice = (await env.WP_OS_DB.prepare("SELECT value FROM tlc_setting WHERE key = ?1").bind(PAUSE_NOTICE_SETTING).first<{ value: string }>())!.value;
+    const says = (o: Record<string, unknown>): Reader[] => [{ name: "SEAT", read: async () => ({ ok: true, text: inboundRead(o), detail: "ok", reader: "CLAUDE" }) }];
+    const reply = (body: string, readers: Reader[]) => applySendPauseApproval(env, { fromHeader: `X <${SEQUOIA}>`, authenticationResults: auth(SEQUOIA), subject: `Re: Wynn: Brand emails are paused · ${ref}`, body: `${body}\n\nRef ${ref}` }, { readers });
+    // ABUSE: "I can't say yes to this" carries the word yes; the model reads it as no, and nothing opens.
+    expect((await reply("I can't say yes to this", says({ answer: "no" }))).handled).toBe(false);
+    expect((await brandGateFor(env)).open).toBe(false);
+    // A PLAIN NO: nothing opens and nothing is sent to a brand.
+    expect((await reply("No.", says({ answer: "no" }))).handled).toBe(false);
+    expect((await brandGateFor(env)).open).toBe(false);
+    expect(sends.filter((m) => m.to !== SEQUOIA), "a no sends nothing").toEqual([]);
+    // OUTAGE: every reader is out. Even a bare "approve" is UNSURE, never an approval: nothing opens, nothing is sent,
+    // the pause email is asked again, and the log names the stop.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const out = await reply("approve", []);
+    expect(warn.mock.calls.some(([m]) => String(m).includes(NO_MODEL_READER))).toBe(true);
+    warn.mockRestore();
+    expect(out).toMatchObject({ handled: true, ref, detail: expect.stringContaining("not clearly an approve") });
+    expect((await brandGateFor(env)).open).toBe(false);
+    expect((await env.WP_OS_DB.prepare("SELECT value FROM tlc_setting WHERE key = ?1").bind(PAUSE_NOTICE_SETTING).first<{ value: string }>())!.value, "the pause email is asked again").toBe("null");
+    expect(sends.filter((m) => m.to !== SEQUOIA), "no brand email went out on the outage's 'approve'").toEqual([]);
+    expect(await env.WP_OS_DB.prepare("SELECT 1 AS x FROM event_record WHERE event_type = 'tlc.send_pause_unsure' AND json_extract(payload_json, '$.reader') = 'WORD_LISTS'").first(), "logged as unsure with no model").not.toBeNull();
+    await env.WP_OS_DB.prepare("UPDATE tlc_setting SET value = ?1 WHERE key = ?2").bind(notice, PAUSE_NOTICE_SETTING).run();
+    // UNSURE: nothing approved; the notice is cleared so the next pass sends the pause email again.
+    const unsure = await reply("hmm, maybe, let me look again", says({ answer: "unsure" }));
+    expect(unsure).toMatchObject({ handled: true, ref });
+    expect((await brandGateFor(env)).open).toBe(false);
+    expect((await env.WP_OS_DB.prepare("SELECT value FROM tlc_setting WHERE key = ?1").bind(PAUSE_NOTICE_SETTING).first<{ value: string }>())!.value).toBe("null");
+    expect(await env.WP_OS_DB.prepare("SELECT 1 AS x FROM event_record WHERE event_type = 'tlc.send_pause_unsure'").first()).not.toBeNull();
+    // The pause email stands again for the next test, whose model-read "approve" reopens the gate.
+    await env.WP_OS_DB.prepare("UPDATE tlc_setting SET value = ?1 WHERE key = ?2").bind(notice, PAUSE_NOTICE_SETTING).run();
+  });
+
   it("only her authenticated 'approve' on that thread counts; it reopens the gate, and the stop clears on the next pass", async () => {
     const ref = (await env.WP_OS_DB.prepare("SELECT value FROM tlc_setting WHERE key = ?1").bind(PAUSE_RAISED_SETTING).first<{ value: string }>())!.value;
     const reply = (from: string, body: string, a = auth(from)) => applySendPauseApproval(env, { fromHeader: `X <${from}>`, authenticationResults: a, subject: `Re: Wynn: Brand emails are paused · ${ref}`, body: `${body}\n\nRef ${ref}` });
@@ -88,7 +127,8 @@ describe("a pitch change pauses brand sending, and she is told once", () => {
     expect((await reply(SEQUOIA, "approve", "none")).handled).toBe(false);
     expect((await reply(SEQUOIA, "what changed exactly?")).handled).toBe(false);
     expect((await brandGateFor(env)).open).toBe(false);
-    const ok = await reply(SEQUOIA, "approve");
+    const yes: Reader[] = [{ name: "SEAT", read: async () => ({ ok: true, text: inboundRead({ answer: "yes" }), detail: "ok", reader: "CLAUDE" }) }];
+    const ok = await applySendPauseApproval(env, { fromHeader: `X <${SEQUOIA}>`, authenticationResults: auth(SEQUOIA), subject: `Re: Wynn: Brand emails are paused · ${ref}`, body: `approve\n\nRef ${ref}` }, { readers: yes });
     expect(ok).toMatchObject({ handled: true, ref });
     expect((await brandGateFor(env)).open).toBe(true);
     expect((await runDrip(env, new Date(NOW.getTime() + 60 * 60_000), "west-peek", DRIP_DEPS)).pause).toBe(`brand sending reopened; ${SEND_PAUSE_LOOP} cleared (open loops: 1 reported, 0 failed (1 cleared).)`);

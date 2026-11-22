@@ -5,7 +5,6 @@ import { isWebPropertyChange, OS_PROPERTY, OS_REPO, parseWebPropertyAsk, partsFr
 import { loadRegistry, registerFromEmail, registerNewRepo, registryEntryFor } from "./webPropertyRegistry";
 import { defaultReadReplyIntent, readReplyIntent, type ReplyIntent, type ReplyIntentReader } from "./replyIntent";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
-import { dueTimeIn } from "../../shared/intake/dueTime";
 import { textBodyOf, topHeadersOf } from "../effects/mimeAttachments";
 import { storeAttachments } from "./requestMaterials";
 import { isReplyMessage, splitQuoted } from "../../shared/intake/replyBody";
@@ -1112,10 +1111,8 @@ export async function openAssignmentCard(
     )
     .run();
 
-  // ALL KINDS (owner, 6 Oct 2026): a deadline in their words sets the assignment's priority whatever
-  // it is for; a site job also carries it on the request so every wait states it.
-  const due = dueTimeIn(`${input.subject}\n${written}`);
-  if (due) await env.WP_OS_DB.prepare("UPDATE work_card SET priority = ?2 WHERE id = ?1").bind(card.id, due.priority).run();
+  // ALL KINDS (owner, 6 Oct 2026): a deadline in their words sets the priority of the work, whatever it is for. It is
+  // the FIRST READ's (partnerUnderstood.ts#applyFirstReadDeadline), one model read per email, never a second read here.
 
   /*
    * A PARTNER MESSAGE IS READ FIRST (9 Oct 2026, card wc_824ebb0a). "Porter, tell Scooter: … the
@@ -1266,7 +1263,6 @@ export async function openAssignmentCard(
     }
   }
   if (web && registeredNow.length) web.registered = registeredNow;
-  if (web && due) web.due = due;
   if (web) {
     let assumedFrom: string | null = null;
     // Something new is never assumed to be the site he had Porter on last week.
@@ -1325,8 +1321,6 @@ export async function openAssignmentCard(
       );
       if (handed.ok) {
         await openWebPropertyChange(env, { cardId: handed.cardId, ask: web, firmScope: FIRM_SCOPE, assumedFrom });
-        // Addendum 3: the deadline's priority travels to the card that does the work.
-        if (due) await env.WP_OS_DB.prepare("UPDATE work_card SET priority = ?2 WHERE id = ?1").bind(handed.cardId, due.priority).run();
         // The attachments follow the request to Porter's card, and the partner hears RECEIVED —
         // "got it, I'm on it", what was understood, what comes next — once (her decision, 21 Sep).
         await env.WP_OS_DB.prepare("UPDATE request_attachment SET work_card_id = ?2 WHERE work_card_id = ?1").bind(card.id, handed.cardId).run();

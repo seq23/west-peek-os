@@ -6,8 +6,12 @@ import { gmailReadStub } from "./helpers/gmailMailbox";
 import type { Env } from "../src/worker/env";
 import { contentHashes, openBrandBatchCard, runDrip } from "../src/worker/services/learningClub";
 import { TLC_SEND_SWITCH_URL, applyTlcDraftReply, notSentLines, repairLeakedDrafts, sendDraftNotice } from "../src/worker/services/tlcDraftNotice";
+import { inboundRead } from "./helpers/aiShapes";
+import type { Reader } from "../src/worker/services/partnerUnderstood";
 import { parseDraftReply } from "../src/shared/tlc/draftReply";
 import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
+// Her plain fixture answers are read by the stand-in model (production: a model; no model decides nothing).
+vi.mock("../src/worker/services/inboundRead", async (orig) => (await import("./helpers/standInModel")).withStandIn(await orig()));
 
 /**
  * ONE TLC EMAIL A WEEK, APPROVED BY REPLY (owner, 24 Oct 2026). Fake brands and addresses only.
@@ -218,6 +222,28 @@ describe("one TLC email a week, every club at once, approved by reply", () => {
     await runDrip(env, MORNING, "west-peek", DRIP_DEPS);
     await reply(`Re: ${subject}`, `approve all\n\n> Ref ${ref}`);
     expect(await cardState("Late Co")).toBe("pending_review");
+  });
+
+  it("her answer is read by a model: a refusal sends nothing, and unsure is named back to her and listed again", async () => {
+    await deal("Maybe Co", "2027-01");
+    await runDrip(env, MORNING, "west-peek", DRIP_DEPS);
+    const latest = (await env.WP_OS_DB.prepare("SELECT ref, items_json FROM tlc_draft_notice ORDER BY rowid DESC LIMIT 1").first<{ ref: string; items_json: string }>())!;
+    const says = (o: Record<string, unknown>): Reader[] => [{ name: "SEAT", read: async () => ({ ok: true, text: inboundRead(o), detail: "ok", reader: "CLAUDE" }) }];
+    const answer = (text: string, readers: Reader[]) => applyTlcDraftReply(env, { fromHeader: `Sequoia Taylor <${SEQUOIA}>`, authenticationResults: genuineFrom(SEQUOIA), subject: `Re: ${subject}`, body: `${text}\n\n> Ref ${latest.ref}` }, { now: MORNING, readers });
+    // ABUSE: "I can't say yes to this" is not approval, whatever word it carries.
+    sends.length = 0;
+    const no = await answer("I can't say yes to this", says({ answer: "no", all_items: "approve" }));
+    expect(no.handled).toBe(false);
+    expect(await cardState("Maybe Co")).toBe("pending_review");
+    expect(sends.filter((s) => s.to !== SEQUOIA)).toEqual([]);
+    // UNSURE: nothing is done, and the answer to her names it and lists it again.
+    const unsure = await answer("let me think about these", says({ answer: "unsure" }));
+    expect(unsure).toMatchObject({ handled: true });
+    expect(await cardState("Maybe Co")).toBe("pending_review");
+    const toHer = sends.filter((s) => s.to === SEQUOIA);
+    expect(toHer).toHaveLength(1);
+    expect(toHer[0]!.text).toContain("I could not tell what you want for it, so nothing was done");
+    expect(sends.filter((s) => s.to !== SEQUOIA)).toEqual([]);
   });
 
   it("a waiting draft that pasted the research note is re-composed in place, she gets ONE clean list, nothing is approved for her (TLC-ZF84KK)", async () => {

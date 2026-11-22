@@ -6,7 +6,11 @@ import { appendEvent } from "../events";
 import { runAi } from "../ai/runAi";
 import { mailAuthority } from "../../shared/intake/partnerAuthority";
 import { newTextOf } from "../../shared/events/packetDecisionToken";
-import { NOTICE_REF_RE, isEmptyReply, parseDraftReply } from "../../shared/tlc/draftReply";
+import { NOTICE_REF_RE, isEmptyReply } from "../../shared/tlc/draftReply";
+import { readerWords } from "../../shared/intake/inboundRead";
+import { draftApprovalOf } from "../../shared/intake/replyMeaning";
+import { readInbound } from "./inboundRead";
+import type { Reader } from "./partnerUnderstood";
 import { herNoteOf } from "../../shared/tlc/brandReply";
 import { withBrandFooter } from "../../shared/tlc/brandFooter";
 import { TLC_DRIP_DAYS, BRAND_EMAIL_ROOM_WORDS, BRAND_GUESTS, TLC_INTERNAL_NOTE, TLC_OWNER, TLC_PS_BY_STEP, TLC_SAMPLES_OFFER, TLC_SEATS, TLC_SIGNATURE, brandDisplayName, dripEmail, monthWords, seatsOf, signedBrandEmail } from "../../shared/tlc/learningClub";
@@ -328,7 +332,7 @@ export interface DraftReplyOutcome { handled: boolean; ref: string | null; detai
 export async function applyTlcDraftReply(
   env: Env,
   message: { fromHeader: string | null; authenticationResults: string | null; subject: string; body: string },
-  deps: { now?: Date; redraft?: Redrafter } = {},
+  deps: { now?: Date; redraft?: Redrafter; readers?: readonly Reader[] } = {},
 ): Promise<DraftReplyOutcome> {
   // THE NEWEST REFERENCE: her reply quotes the email it answers first, so the body's first reference is that
   // email's; the subject keeps the week's first reference, so it is the fallback.
@@ -354,8 +358,13 @@ export async function applyTlcDraftReply(
     return refuse(`a reply to ${ref} was not accepted as coming from ${TLC_OWNER.email}: ${authority.reason ?? "another sender"}`);
   }
   // Her words without her signature (owner, 26 Oct 2026): a change note runs onto later lines, so the sign-off must go.
-  const reply = parseDraftReply(herNoteOf(newTextOf(body), TLC_OWNER.name));
-  if (isEmptyReply(reply)) return refuse(`a reply to ${ref} carried no approve / skip / change instruction`);
+  const said = herNoteOf(newTextOf(body), TLC_OWNER.name);
+  const count = (JSON.parse(notice.items_json) as NoticeItem[]).length;
+  // WHAT SHE SAID IS READ BY A MODEL (22 Nov 2026); the word lists only when no model answered (reader WORD_LISTS).
+  const { read } = await readInbound(env, { context: `Wynn's email ${ref} listing ${count} brand draft(s), numbered 1 to ${count}; it asks her to reply "approve all", or approve, skip or change by number`, from: message.fromHeader ?? TLC_OWNER.email, subject: message.subject, words: said, firmScope, employeeId: "aie_wynn" }, deps.readers);
+  const meant = draftApprovalOf(read, said, count);
+  const reply = meant.reply;
+  if (isEmptyReply(reply) && meant.unsure.length === 0) return refuse(`a reply to ${ref} carried no approve / skip / change instruction (${readerWords(meant.reader)})`);
   const actor = await actorForFirmUser(env, TLC_OWNER.firmUserId);
   if (!actor) return refuse(`${TLC_OWNER.email} is not an active person in the OS`);
 
@@ -377,6 +386,8 @@ export async function applyTlcDraftReply(
   };
   const unknown = [...new Set([...approve, ...skipped, ...changed])].filter((n) => !byN.has(n));
   if (unknown.length) lines.problems.push(`${unknown.join(", ")}: not in that email, so nothing was done for ${unknown.length === 1 ? "it" : "them"}`);
+  // Unsure never approves, skips or redrafts: each is named here, and stays in the list below for her to answer again.
+  for (const n of meant.unsure.filter((x) => byN.has(x) && !approve.has(x) && !skipped.has(x) && !changed.has(x))) lines.problems.push(`${label(byN.get(n)!)}: I could not tell what you want for it, so nothing was done; it is listed again below`);
 
   for (const n of [...approve].sort((a, b) => a - b)) {
     const it = byN.get(n);
@@ -475,7 +486,7 @@ export async function applyTlcDraftReply(
   }
   await appendEvent(env, {
     eventType: "tlc.draft_reply", actorType: "firm_user", actorId: TLC_OWNER.firmUserId, objectType: "tlc_draft_notice", objectId: ref, firmScope,
-    payload: { approved: lines.approved, skipped: lines.skipped, changed: lines.changed, problems: lines.problems, sent: drip?.sentBrands ?? [], not_sent: notSent, next_ref: nextRef },
+    payload: { reader: meant.reader, approved: lines.approved, skipped: lines.skipped, changed: lines.changed, problems: lines.problems, sent: drip?.sentBrands ?? [], not_sent: notSent, next_ref: nextRef },
   });
   return { handled: true, ref, detail: `${lines.approved.length} approved, ${lines.skipped.length} skipped, ${lines.changed.length} redrafted` };
 }

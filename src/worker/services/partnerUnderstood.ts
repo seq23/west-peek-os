@@ -6,6 +6,7 @@ import { runAi } from "../ai/runAi";
 import { failedOnShape, readStructured, structuredOutput, type StructuredOutput } from "../ai/structuredOutput";
 import { maskPrivateInputs } from "../ai/scrub";
 import { committedLpNamedIn, committedLps } from "../ai/committedLps";
+import { NO_MODEL_READER, central } from "../../shared/intake/inboundRead";
 import { partnerByEmail } from "../../shared/registry/partners";
 import { partnersOwnWords } from "../../shared/intake/replyBody";
 import { centralDay } from "../../shared/work/partnerBackBy";
@@ -164,16 +165,14 @@ const WAITING_FOR_READER = "WAITING_FOR_READER";
 /** His holds, from his own sentences (the OS's read when no reader answered): "preview first", "nothing live", … Pure. */
 const HOLD = /\b(?:preview (?:it )?first|nothing (?:goes )?live|not live|don'?t (?:go live|publish|push|ship|deploy|merge|send)|do not (?:go live|publish|push|ship|deploy|merge|send)|hold off|wait for (?:my|me)|no (?:client|customer) names?|without (?:my |a |his |her )?(?:written )?(?:ok|okay|approval|sign-?off|consent|permission)|until I (?:say|approve|ok)|before (?:it|anything) goes live)\b/i;
 /**
- * HOLDS ARE CONSTRAINTS; QUESTIONS ARE QUESTIONS (15 Nov 2026). A hold says what must not happen or must wait ("don't",
- * "must", "never", "not yet", "nothing live", "only after", "without my OK"). A line that asks, wonders or leaves
- * something open ("is still open", "I'm questioning whether", "let's clarify", a "?") is a question, never a hold. Pure.
+ * HOLDS ARE CONSTRAINTS; QUESTIONS ARE QUESTIONS (15 Nov 2026). The word lists' read, used only when no model answered
+ * (22 Nov 2026): a line that asks, wonders or leaves something open ("is still open", "let's clarify", a "?") is a
+ * question, never a hold. Pure.
  */
 const QUESTION_SHAPED = /\?\s*["”]?$|\b(?:still open|(?:is|are) open|questioning|wonder(?:ing)?|not sure|unsure|let'?s (?:clarify|confirm|discuss|talk)|clarify|whether)\b/i;
-const CONSTRAINT = /\b(?:don'?t|do not|must(?:n'?t)?|never|not yet|nothing|no|not|only|until|without|stays?|separate|before (?:it|anything) goes live|preview (?:it )?first|hold off|wait for)\b/i;
 /** A "?" inside a quotation is the quoted thing's ("Keep "How did you hear about us?""), not his question. */
 const unquoted = (line: string): string => line.replace(/"[^"]*"|“[^”]*”/g, "\"\"").trim();
-export const isQuestionShaped = (line: string): boolean => QUESTION_SHAPED.test(unquoted(line));
-export const isConstraint = (line: string): boolean => CONSTRAINT.test(line) && !isQuestionShaped(line);
+const isQuestionShaped = (line: string): boolean => QUESTION_SHAPED.test(unquoted(line));
 /**
  * NOTHING HE SAID IS DROPPED (Sequoia, 15 Nov 2026). Holds, questions and unclear items are kept whole; this bound is
  * only a safety net against a runaway reader, and the brief says "and N more" when it is ever reached.
@@ -190,16 +189,6 @@ export function questionsOf(words: string): string[] {
     .map((s) => s.replace(/^[\s\-–—•*]+|\s+$/g, "").replace(/^\d+[.)]\s+/, "").replace(/\s+/g, " "))
     .filter((s) => s.length > 8 && (isQuestionShaped(s) || CLARIFY_FIRST.test(unquoted(s))) && !REMARK.test(s));
 }
-/** His own questions first, in his order; a reader's question is added only when no listed one contains it. Pure. */
-export function mergeQuestions(own: readonly string[], read: readonly string[]): string[] {
-  const out = [...own];
-  for (const q of read) {
-    const n = norm(q);
-    if (n.length > 0 && !out.some((o) => norm(o).includes(n) || n.includes(norm(o)))) out.push(q);
-  }
-  return out;
-}
-
 export function holdsOf(words: string): string[] {
   return unwrapped(words)
     .split(/\n+|(?<=[.!?])\s+(?=[A-Z0-9"“(])/)
@@ -375,6 +364,14 @@ export interface FirstReadDecision {
   cc?: string[];
   /** The last day of the window he said he will come back by (YYYY-MM-DD, Central), or null. */
   backBy?: string | null;
+  /*
+   * ONE READ PER EMAIL (22 Nov 2026, review of #574): the deadline he sets and his answer to Porter's pending hand-off
+   * question come from this read, never from a second model call. Additive like the three above.
+   */
+  /** The deadline he sets for the work, in his exact words, and that time as Central wall-clock (`YYYY-MM-DDTHH:MM`). */
+  deadline?: { words: string; local: string } | null;
+  /** His answer to Porter's pending "Did you mean hand this card to …?" (null when none was pending or he did not answer it). */
+  handOffAnswer?: "yes" | "no" | "unsure" | null;
 }
 
 function parseDecision(value: unknown): FirstReadDecision | null {
@@ -387,8 +384,12 @@ function parseDecision(value: unknown): FirstReadDecision | null {
       !Array.isArray(d.holds) || !d.holds.every((h: unknown) => typeof h === "string") ||
       !(d.takeBack === undefined || d.takeBack === null || typeof d.takeBack === "boolean") ||
       !(d.cc === undefined || (Array.isArray(d.cc) && d.cc.every((c: unknown) => typeof c === "string"))) ||
-      !(d.backBy === undefined || d.backBy === null || (typeof d.backBy === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.backBy)))) return null;
-  return d as unknown as FirstReadDecision;
+      !(d.backBy === undefined || d.backBy === null || (typeof d.backBy === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.backBy))) ||
+      !(d.handOffAnswer === undefined || d.handOffAnswer === null || (typeof d.handOffAnswer === "string" && ["yes", "no", "unsure"].includes(d.handOffAnswer)))) return null;
+  // A deadline that is not a deadline is dropped, never the whole decision.
+  const dl = d.deadline as { words?: unknown; local?: unknown } | null | undefined;
+  const deadline = dl && typeof dl.words === "string" && dl.words.trim() && typeof dl.local === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(dl.local.trim()) ? { words: dl.words.trim(), local: dl.local.trim() } : dl === undefined ? undefined : null;
+  return { ...(d as unknown as FirstReadDecision), ...(deadline === undefined ? {} : { deadline }) };
 }
 
 /** Old briefs, failed reads and malformed decisions have no decision. */
@@ -423,7 +424,7 @@ export interface Brief {
 
 export async function understand(
   env: Env,
-  input: { subject: string; written: string; read: SeatRead | readonly Reader[]; employeeId: string | null; firmScope: string; files?: readonly string[]; known?: string; standingHolds?: readonly string[]; today?: string },
+  input: { subject: string; written: string; read: SeatRead | readonly Reader[]; employeeId: string | null; firmScope: string; files?: readonly string[]; known?: string; standingHolds?: readonly string[]; today?: string; wrote?: Date },
 ): Promise<{ none: boolean; asks: string[]; noted: string[]; next: string; via: "STRUCTURE" | "MODEL" | "FALLBACK"; runId: string | null; runIds: string[]; brief: Brief; readerFailed: boolean; readersTried: string[] }> {
   const { written } = input;
   const fileNames = [...(input.files ?? [])];
@@ -451,7 +452,7 @@ export async function understand(
   let reader: string | null = null;
   if (written) {
     for (const r of ladder) {
-      const out = await r.read(env, { prompt: understoodPrompt(input.subject, written, fileNames, input.known ?? "", input.today), firmScope: input.firmScope, employeeId: input.employeeId, purpose: "the Got it reply to a partner's email: his asks in his words", output: UNDERSTOOD_OUTPUT });
+      const out = await r.read(env, { prompt: understoodPrompt(input.subject, written, fileNames, input.known ?? "", input.today, input.wrote), firmScope: input.firmScope, employeeId: input.employeeId, purpose: "the Got it reply to a partner's email: his asks in his words", output: UNDERSTOOD_OUTPUT });
       if (out.runId) runIds.push(out.runId);
       readersTried.push(`${r.name}: ${out.ok ? "read it" : out.out ? `out (${out.detail.slice(0, 120)})` : `failed (${out.detail.slice(0, 120)})`}`);
       if (!out.ok) {
@@ -471,28 +472,33 @@ export async function understand(
   }
   const runId = runIds[runIds.length - 1] ?? null;
   /*
-   * HIS HOLDS ARE STEADY TOO (15 Nov 2026, practice run): a reader that lists no HOLD lines (Workers AI did, on both of
-   * that day's emails) must not cost him the holds his own typed sentences carry ("nothing goes live"). His sentences
-   * first, then whatever the reader adds, as with his questions.
+   * HIS HOLDS AND QUESTIONS ARE THE READER'S (22 Nov 2026, engineering sweep row 5): a model that answered decides what
+   * is a hold and what is a question, kept only where they are his words (`parseUnderstood`). His own sentences are read
+   * by the word lists (HOLD, QUESTION_SHAPED, LATER) ONLY when no model answered, and the log says so. His brain's
+   * standing holds are added either way: they are records, not a read.
    */
-  const ownHolds = holdsOf(written.split(/\n\nVoice note \(/)[0] ?? written);
-  const emailHolds = parsed ? mergeQuestions(ownHolds, parsed.holds) : holdsOf(written);
+  if (!parsed && written) console.warn(`${NO_MODEL_READER}: no model read his email "${input.subject.slice(0, 80)}"; his holds and questions are the word lists' (${readersTried.join("; ").slice(0, 300)})`);
   // An idea for later ("… is an idea for later, not part of this round") is kept as noted, never also as a hold.
   const notedLines = structured?.noted ?? [];
-  // Only an idea is dropped: a noted line that is a real hold ("… nothing goes live.") stays a hold.
   const LATER = /\b(?:ideas? for later|for later|not (?:part of )?this round|parking lot|someday)\b/i;
-  const holds = mergeHolds(emailHolds.filter((h) => !(LATER.test(h) && notedLines.some((n) => norm(n) === norm(h)))), input.standingHolds ?? []);
+  const emailHolds = parsed ? parsed.holds : holdsOf(written).filter((h) => !(LATER.test(h) && notedLines.some((n) => norm(n) === norm(h))));
+  const holds = mergeHolds(emailHolds, input.standingHolds ?? []);
   /*
-   * HIS QUESTIONS ARE STEADY (15 Nov 2026): taken from his own sentences first, the same way every time (a "?", a
-   * "let's clarify", "still open", "whether"), as his asks come from his numbering first. A reader only ADDS questions
-   * that are not already there, so a read never finds fewer than the OS's own read, whatever the reader said.
+   * A HOLD HE TYPED IS NEVER LOST (review of #574). A line of his that reads like a hold ("nothing goes live") which the
+   * reader neither kept as a hold nor placed as a question or an ask is not dropped on the reader's word (a note is not
+   * a hold; only an idea for later is): it
+   * goes to his questions as "Did you mean this as a hold?", so it is asked, never silently absent.
    */
-  const questions = mergeQuestions(questionsOf(written), parsed?.questions ?? []);
+  const placed = (l: string) => [...emailHolds, ...(parsed?.questions ?? []), ...(parsed?.asks ?? [])].map(norm).filter(Boolean).some((x) => x === norm(l) || x.includes(norm(l)) || norm(l).includes(x));
+  const askedHolds = parsed ? holdsOf(written).filter((h) => !LATER.test(h) && !placed(h)).map((h) => `Did you mean this as a hold? "${h}"`) : [];
+  const questions = parsed ? [...parsed.questions, ...askedHolds] : questionsOf(written);
   const unclear = parsed ? parsed.unclear : [];
   const files = fileNames.map((filename) => ({ filename, purpose: parsed?.files.find((f) => f.filename === filename)?.purpose ?? null }));
   const brief = (asks: string[]): Brief => ({ asks, holds, questions, unclear, files, reader, decision: parsed?.decision ?? null });
   const common = { runId, runIds, readerFailed: parsed ? false : readerFailed, readersTried };
-  if (structured) return { ...common, none: false, asks: structured.asks, noted: [...structured.noted, ...heard], next: ON_IT, via: parsed ? "MODEL" : "STRUCTURE", brief: brief(structured.asks) };
+  // A line is shown to him once: one the reader kept as a hold is not listed again as noted.
+  const notHold = (n: string) => !holds.some((h) => norm(h) === norm(n));
+  if (structured) return { ...common, none: false, asks: structured.asks, noted: [...structured.noted.filter(notHold), ...heard], next: ON_IT, via: parsed ? "MODEL" : "STRUCTURE", brief: brief(structured.asks) };
   if (parsed?.none) return { ...common, none: true, asks: ["nothing asked"], noted: [], next: ON_IT, via: "MODEL", brief: brief([]) };
   if (parsed && parsed.asks.length) {
     const asks = parsed.asks.filter((a) => !isFragment(a));
@@ -523,14 +529,16 @@ const FIRST_READ_DECISION = z.object({
   takeBack: z.boolean().nullable(),
   cc: z.array(z.string()),
   backBy: z.string().nullable().describe("YYYY-MM-DD, Central, or null"),
+  deadline: z.object({ words: z.string(), local: z.string() }).nullable().describe("the deadline he sets for the work: his exact words, and that time as Central YYYY-MM-DDTHH:MM; null when none"),
+  handOffAnswer: z.enum(["yes", "no", "unsure"]).nullable().describe("his answer to Porter's pending hand-off question; null when none is pending"),
 });
 export const UNDERSTOOD_OUTPUT = structuredOutput(
   "first_read",
   z.object({
     none: z.boolean().describe("true when he asks for nothing (a thank-you, an FYI)"),
     asks: z.array(z.string()).describe("each separate ask, in his exact words"),
-    holds: z.array(z.string()).describe("each constraint, in his exact words"),
-    questions: z.array(z.string()).describe("each open question, in his exact words"),
+    holds: z.array(z.string()).describe("each constraint on the work (what must not happen, or must happen first), in his exact words; never a question or something he leaves open"),
+    questions: z.array(z.string()).describe("each open question or thing he leaves undecided, in his exact words, including lines with no question mark (\"whether to … is still open\", \"I'm questioning whether …\"); every one, none dropped"),
     unclear: z.array(z.object({ words: z.string(), missing: z.string() })).describe("each ask you cannot pin down: his exact words and what is missing"),
     files: z.array(z.object({ filename: z.string(), purpose: z.string() })).describe("what each attached file is for"),
     next: z.string().nullable().describe("what happens next, one plain sentence"),
@@ -553,19 +561,16 @@ export function parseUnderstood(text: string, written: string, files: readonly s
   }
   const none = read.none && read.asks.length === 0;
   const next = read.next?.trim() || null;
-  // Holds and questions only when they are his words too. A hold that is question-shaped is a question, whatever the
-  // reader called it; one that constrains nothing is dropped.
+  // Holds and questions only when they are his words too; which is which is the reader's call.
   const holds: string[] = [];
   const questions: string[] = [];
-  const place = (raw: string, said: "HOLD" | "QUESTION") => {
+  const place = (raw: string, list: string[]) => {
     const words = unquote(raw);
-    if (!his(words)) return;
-    const asQuestion = said === "QUESTION" || isQuestionShaped(words);
-    const list = asQuestion ? questions : isConstraint(words) ? holds : null;
-    if (list && !list.some((h) => norm(h) === norm(words))) list.push(words);
+    if (his(words) && !list.some((h) => norm(h) === norm(words))) list.push(words);
   };
-  for (const h of read.holds) place(h, "HOLD");
-  for (const q of read.questions) place(q, "QUESTION");
+  for (const q of read.questions) place(q, questions);
+  // A line the reader gave as both is a question (a question is never a hold).
+  for (const h of read.holds) if (!questions.some((q) => norm(q) === norm(unquote(h)))) place(h, holds);
   const unclear: Array<{ words: string; missing: string }> = [];
   for (const u of read.unclear) {
     const words = unquote(u.words);
@@ -582,7 +587,7 @@ export function parseUnderstood(text: string, written: string, files: readonly s
 /** How much of the OS's OTHER context (profile, practices, the card) rides beside the brain's sections, which are never cut. */
 export const KNOWN_OTHER_MAX = 4000;
 
-function understoodPrompt(subject: string, written: string, files: readonly string[] = [], known = "", today = centralDay(new Date())): string {
+function understoodPrompt(subject: string, written: string, files: readonly string[] = [], known = "", today = centralDay(new Date()), wrote: Date = new Date()): string {
   return [
     "A Managing Partner of the firm just emailed the work below. List each separate thing he is asking for.",
     "Rules: copy his EXACT words for each ask (a phrase or sentence from his email, unchanged, no rewording, no summary): asks.",
@@ -593,7 +598,7 @@ function understoodPrompt(subject: string, written: string, files: readonly stri
     "next: what happens next, one plain sentence, no promises of dates, nothing about models or systems.",
     "A remark on how something is (praise, status, \"X is in good shape\") is NOT an ask. Each numbered item is one ask. Never a fragment of a sentence.",
     "decision: always give it. Choose the actual kind (approve, change, question, stop or nothing). A site mentioned only as separate from the work is not the property. A project or dashboard is not a person. Asking to confirm a plan is not approving it. Use null when unspecified.",
-    `In decision: handOffTo is the person he hands this work to, only when he actually hands it over now (never when he doubts it, negates it, makes it conditional, quotes someone or asks). takeBack is true only when he takes the work back himself now. cc lists the people he asks to copy on the finished email (empty when none). backBy is the last day (YYYY-MM-DD) of the window he says he will come back to this by ("this weekend" is that Sunday), counting from today, ${today}; null when he names none.`,
+    `In decision: handOffTo is the person he hands this work to, only when he actually hands it over now (never when he doubts it, negates it, makes it conditional, quotes someone or asks). takeBack is true only when he takes the work back himself now. cc lists the people he asks to copy on the finished email (empty when none). backBy is the last day (YYYY-MM-DD) of the window he says he will come back to this by ("this weekend" is that Sunday), counting from today, ${today}; null when he names none. deadline is a deadline he sets for the work ("by Monday noon", "today", "asap"): his exact words, and that time as Central YYYY-MM-DDTHH:MM (a day with no hour is 17:00 that day; "asap" is two hours after he wrote; he wrote at ${central(wrote)} Central); null when he sets none. handOffAnswer is his answer to the hand-off question Porter asked him, when one is shown below: yes only when he plainly confirms it, no when he declines it, unsure otherwise; null when no question is shown.`,
     "none: true only if he asks for nothing (a thank-you, an FYI); decision is still given.",
     ...(known.trim()
       ? [
@@ -832,6 +837,30 @@ export async function sendUnderstoodReplies(env: Env, now: Date, read: SeatRead 
   return sent;
 }
 
+/**
+ * THE DEADLINE IS THE FIRST READ'S (22 Nov 2026, review of #574: one model read per email). Its words must be in his
+ * email and its time real and ahead (`deadlineOf`); then the card, and the card it was handed on as (Porter's web job,
+ * its request and a job still queued for the Mac), carry its priority and `due`. A read from before the field existed
+ * (`deadline` absent) falls back to the logged word list; no reader at all → the word list, logged.
+ */
+export async function applyFirstReadDeadline(env: Env, input: { cardId: string; decision: FirstReadDecision | null; written: string; now: Date }): Promise<void> {
+  const { deadlineOf } = await import("../../shared/intake/replyMeaning");
+  const fromRead = input.decision && input.decision.deadline !== undefined ? { deadline: input.decision.deadline, reader: "FIRST_READ" } : null;
+  const deadline = deadlineOf(fromRead, input.written, input.now);
+  if (deadline.why) console.warn(`deadline not kept for card ${input.cardId}: ${deadline.why}`);
+  const due = deadline.due;
+  if (!due) return;
+  const db = env.WP_OS_DB;
+  const cards = [input.cardId, ...((await db.prepare("SELECT id FROM work_card WHERE assigned_from_card_id = ?1").bind(input.cardId).all<{ id: string }>()).results ?? []).map((r) => r.id)];
+  const dueJson = JSON.stringify(due);
+  for (const id of cards) {
+    // A deadline only ever raises the priority (a later "by Friday" never lowers an URGENT card).
+    await db.prepare("UPDATE work_card SET priority = ?2 WHERE id = ?1 AND (CASE COALESCE(priority, 'NORMAL') WHEN 'URGENT' THEN 3 WHEN 'HIGH' THEN 2 WHEN 'NORMAL' THEN 1 ELSE 0 END) < (CASE ?2 WHEN 'URGENT' THEN 3 WHEN 'HIGH' THEN 2 WHEN 'NORMAL' THEN 1 ELSE 0 END)").bind(id, due.priority).run();
+    await db.prepare("UPDATE work_card SET request_json = json_set(request_json, '$.due', json(?2)) WHERE id = ?1 AND request_json IS NOT NULL AND json_valid(request_json) AND json_extract(request_json, '$.due') IS NULL").bind(id, dueJson).run();
+    await db.prepare("UPDATE subscription_seat_run SET job_json = json_set(job_json, '$.due', json(?2)) WHERE work_card_id = ?1 AND run_kind = 'LOCAL_JOB' AND status = 'QUEUED' AND json_valid(job_json) AND json_extract(job_json, '$.due') IS NULL").bind(id, dueJson).run();
+  }
+}
+
 async function answerOne(env: Env, row: Candidate, read: SeatRead | readonly Reader[], now: Date = new Date()): Promise<boolean> {
   const partner = partnerByEmail(row.partner);
   // The claim: a second tick (or a racing one) finds the row and does nothing. A row waiting for a reader is re-taken
@@ -854,7 +883,10 @@ async function answerOne(env: Env, row: Candidate, read: SeatRead | readonly Rea
   const subject = (row.subject ?? "").trim() || row.title.replace(/^From [^:]+@[^:]+:\s*/i, "").trim() || row.title;
   const filed = ((await env.WP_OS_DB.prepare("SELECT filename FROM request_attachment WHERE work_card_id = ?1 AND created_at >= ?2 ORDER BY created_at, filename").bind(row.card_id, row.received_at).all<{ filename: string }>().catch(() => ({ results: [] as Array<{ filename: string }> }))).results ?? []).map((r) => r.filename);
   const known = await knownFor(env, row.card_id, row.firm_scope, partner.email, written);
-  const understood = await understand(env, { subject, written, read, employeeId: row.owner_id, firmScope: row.firm_scope, files: filed, known: known.text, standingHolds: known.standingHolds, today: centralDay(new Date(row.received_at)) });
+  // Porter's pending hand-off question rides in the same read, so his answer to it needs no second model call.
+  const asked = row.card_id ? await (await import("./handOff")).pendingHandOffQuestion(env, row.card_id) : null;
+  if (asked) known.text = [known.text, `THE HAND-OFF QUESTION PORTER ASKED HIM (give handOffAnswer): "${asked}"`].filter(Boolean).join("\n\n");
+  const understood = await understand(env, { subject, written, read, employeeId: row.owner_id, firmScope: row.firm_scope, files: filed, known: known.text, standingHolds: known.standingHolds, today: centralDay(new Date(row.received_at)), wrote: new Date(row.received_at) });
   /*
    * A READER WAS THERE AND FAILED: WAIT FOR IT (15 Nov 2026). Up to FIRST_READ_WAIT_MINUTES from his email the row stays
    * claimed and the next tick reads it again; the employee waits too (`claimNextCard`). Past that, or when no reader
@@ -868,6 +900,8 @@ async function answerOne(env: Env, row: Candidate, read: SeatRead | readonly Rea
     return false;
   }
   await saveBrief(env, row.id, understood.brief);
+  // ALL KINDS (owner, 6 Oct 2026): a deadline in his words sets the work's priority, from this one read (review of #574).
+  if (row.card_id) await applyFirstReadDeadline(env, { cardId: row.card_id, decision: understood.brief.decision, written: `${subject}\n${written}`, now: new Date(row.received_at) }).catch((err) => console.error("applying a deadline failed", err));
   /*
    * WHAT HIS REPLY SAYS ABOUT THE CARD ITSELF IS THE FIRST READ'S (20 Nov 2026): hand-off, take-back, a second
    * partner's "approved", cc and "back on <day>" are decided here, from the decision just saved, and no longer by

@@ -8,6 +8,8 @@ import { applyBrandReplyApproval, processBrandReplies, rulesBlock, takeBrandRepl
 import { THREE_THINGS_OFFER, classifyBrandReply, herNoteOf, noReplyNeeded, standingRulesIn, theirNewText, type ReplyDraftInput } from "../src/shared/tlc/brandReply";
 import { parseDraftReply } from "../src/shared/tlc/draftReply";
 import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
+// Her plain fixture answers are read by the stand-in model (production: a model; no model decides nothing).
+vi.mock("../src/worker/services/inboundRead", async (orig) => (await import("./helpers/standInModel")).withStandIn(await orig()));
 
 /**
  * WYNN ANSWERS A BRAND'S REPLY, SEQUOIA APPROVES IT (owner, 26 Oct 2026). Fake brands and addresses only.

@@ -36,6 +36,15 @@ function chicagoToIso(ref: Date, y: number, m: number, d: number, h: number, min
   return new Date(Date.UTC(y, m - 1, d, h, min) - offsetMin * 60_000).toISOString();
 }
 
+/** A Central wall-clock written `YYYY-MM-DDTHH:MM` → ISO UTC, or null when it is not one. */
+export function centralLocalToIso(local: string, ref: Date): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(local.trim());
+  if (!m) return null;
+  const [y, mo, d, h, min] = m.slice(1).map(Number) as [number, number, number, number, number];
+  if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || min > 59) return null;
+  return chicagoToIso(ref, y, mo, d, h, min);
+}
+
 const HOUR_WORDS: Array<[RegExp, number]> = [
   [/\b(first thing|morning|am\b|breakfast)/i, 9],
   [/\b(noon|midday|lunch)/i, 12],

@@ -86,23 +86,39 @@ describe("in the Worker: the reader's settled facts", () => {
   });
 });
 
-describe("an idea for later is noted, never also a hold", () => {
-  it("lists it once, as noted, and keeps his real holds", async () => {
+describe("an idea for later is shown to him once, never as both a note and a hold", () => {
+  it("the reader decides; a line it kept as a hold is not listed again as noted, and his real hold stays", async () => {
     const written = "1. Rename \"Who is buying\" to \"Organization type.\"\n2. Remove \"Source\" from the deal view. Don't delete or change those tracker rows.\n\nTranscript-assisted Discovery notes are an idea for later, not part of this round.";
     const idea = "Transcript-assisted Discovery notes are an idea for later, not part of this round.";
-    const reader: Reader = { name: "CLAUDE", read: async () => ({ ok: true, detail: "ok", reader: "CLAUDE", text: firstRead({ asks: [`Rename "Who is buying" to "Organization type."`, `Remove "Source" from the deal view.`], holds: [`Don't delete or change those tracker rows.`, idea] }) }) };
-    const out = await understand(env, { subject: "d", written, read: [reader], employeeId: null, firmScope: "west-peek" });
-    expect(out.noted.some((n) => /idea for later/.test(n)), "the idea is kept as noted").toBe(true);
-    expect(out.brief.holds.filter((h) => /idea for later/.test(h)), "and is not a hold").toEqual([]);
-    expect(out.brief.holds.some((h) => /tracker rows/.test(h)), "his real hold stays").toBe(true);
+    const asks = [`Rename "Who is buying" to "Organization type."`, `Remove "Source" from the deal view.`];
+    const readWith = (holds: string[]): Reader => ({ name: "CLAUDE", read: async () => ({ ok: true, detail: "ok", reader: "CLAUDE", text: firstRead({ asks, holds }) }) });
+    const asHold = await understand(env, { subject: "d", written, read: [readWith([`Don't delete or change those tracker rows.`, idea])], employeeId: null, firmScope: "west-peek" });
+    const times = (o: typeof asHold) => [...o.noted, ...o.brief.holds].filter((x) => /idea for later/.test(x)).length;
+    expect(times(asHold), "shown once").toBe(1);
+    expect(asHold.brief.holds.some((h) => /tracker rows/.test(h)), "his real hold stays").toBe(true);
+    const notHold = await understand(env, { subject: "d", written, read: [readWith([`Don't delete or change those tracker rows.`])], employeeId: null, firmScope: "west-peek" });
+    expect(notHold.brief.holds.filter((h) => /idea for later/.test(h)), "a reader that did not call it a hold is not overruled by a word list").toEqual([]);
+    expect(notHold.noted.some((n) => /idea for later/.test(n)), "it is kept as noted").toBe(true);
+    expect(times(notHold)).toBe(1);
   });
 });
 
-describe("a reader that lists no holds does not cost him his own", () => {
-  it("keeps the hold his typed email carries, and the brain's go-live hold collapses into it", async () => {
+describe("his holds are the reader's; his brain's standing holds are records and always stand", () => {
+  it("a hold the reader lists is kept and the brain's go-live hold collapses into it; a typed hold the reader leaves out is asked, never absent", async () => {
     const written = "1. Move \"What we do\" above \"Who we work with.\"\n2. Remove the badge row.\n\nEverything below stays in the preview for me to check first; nothing goes live.";
-    const reader: Reader = { name: "WORKERS_AI", read: async () => ({ ok: true, detail: "ok", reader: "WORKERS_AI", text: firstRead({ asks: ["Move \"What we do\" above \"Who we work with.\"", "Remove the badge row."] }) }) };
-    const out = await understand(env, { subject: "site", written, read: [reader], employeeId: null, firmScope: "west-peek", standingHolds: ["Do not publish or go live with anything - I approve each step", "Do not build invoice or billing features yet"] });
-    expect(out.brief.holds).toEqual(["Everything below stays in the preview for me to check first; nothing goes live.", "Do not build invoice or billing features yet"]);
+    const typedHold = "Everything below stays in the preview for me to check first; nothing goes live.";
+    const asks = ["Move \"What we do\" above \"Who we work with.\"", "Remove the badge row."];
+    const standingHolds = ["Do not publish or go live with anything - I approve each step", "Do not build invoice or billing features yet"];
+    const readWith = (holds: string[]): Reader => ({ name: "WORKERS_AI", read: async () => ({ ok: true, detail: "ok", reader: "WORKERS_AI", text: firstRead({ asks, holds }) }) });
+    const listed = await understand(env, { subject: "site", written, read: [readWith([typedHold])], employeeId: null, firmScope: "west-peek", standingHolds });
+    expect(listed.brief.holds).toEqual([typedHold, "Do not build invoice or billing features yet"]);
+    const none = await understand(env, { subject: "site", written, read: [readWith([])], employeeId: null, firmScope: "west-peek", standingHolds });
+    expect(none.brief.holds, "the brain's holds stand").toEqual(expect.arrayContaining(standingHolds));
+    // His typed hold survives a reader that omits it: kept as a hold, or asked as one; never gone.
+    const kept = none.brief.holds.includes(typedHold);
+    const asked = none.brief.questions.some((q) => q.includes(typedHold) && /hold\?/.test(q));
+    expect(kept || asked, `"${typedHold}" is kept or asked (holds: ${JSON.stringify(none.brief.holds)}; questions: ${JSON.stringify(none.brief.questions)})`).toBe(true);
+    // ...and only once: a reader that kept it as a hold is not asked about it again.
+    expect(listed.brief.questions.filter((q) => q.includes(typedHold))).toEqual([]);
   });
 });

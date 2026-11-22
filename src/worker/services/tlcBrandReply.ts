@@ -12,7 +12,8 @@ import { BrandThreadError, followUpThread, replyThread, type ThreadFinder } from
 import { ACTION_REQUIRED, type ExecEmailInput } from "../../shared/email/execEmail";
 import { addressIn, authenticationVerdict } from "../../shared/intake/partnerAuthority";
 import { newTextOf } from "../../shared/events/packetDecisionToken";
-import { isEmptyReply, parseDraftReply } from "../../shared/tlc/draftReply";
+import { isEmptyReply } from "../../shared/tlc/draftReply";
+import { draftApprovalOf } from "../../shared/intake/replyMeaning";
 import {
   BRAND_MUST_STAFF, BRAND_REPLY_ASK, BRAND_REPLY_REF_RE, CALL_ASK, WE_HOST, MONEY_WORDS, THREE_THINGS_OFFER, WHO_WE_ARE, classifyBrandReply, decideBrandReply, fallbackReplyBody, herNoteOf, replyAllRecipients, noMoneyNow, readResearch, reportText,
   helpdeskComment, stageAfterReply, standingRulesIn, theirNewText, tierLines, wantsResearch,
@@ -1314,14 +1315,13 @@ export async function applyBrandReplyApproval(
   // Her words alone: the quoted email and any "Ref TLR-…" line are not part of her instruction.
   // Her WHOLE note: her signature off, never a character cut (herNoteOf; NOTE_MAX is stated if ever reached).
   const said = herNoteOf(newTextOf(body).split(/\r?\n/).filter((l) => !/^\s*Ref\s+TLR-[A-Z0-9]{6}\s*$/.test(l)).join("\n"), partnerByFirmUserId(approverId)?.fullName ?? TLC_OWNER.name);
-  const parsed = parseDraftReply(said);
-  // One reply in the email: free text that is not an approve/skip is her change to it.
-  // A bare "skip" on a one-draft email (the reminder offers it, 9 Nov 2026) skips that draft; it is never a change note.
-  if (isEmptyReply(parsed) && ids.length === 1 && /^\s*(?:skip|skip it|don't send|do not send)[.!]?\s*$/i.test(said)) parsed.skip.push(1);
-  if (isEmptyReply(parsed)) {
-    if (ids.length === 1 && said && !/^(no|cancel)\b/i.test(said)) parsed.change.push({ n: 1, note: said });
-    else return { handled: false, ref, detail: `a reply to ${ref} carried no approve / skip / change instruction` };
-  }
+  // WHAT SHE SAID IS READ BY A MODEL (22 Nov 2026); the word lists only when no model answered (reader WORD_LISTS).
+  const { readInbound } = await import("./inboundRead");
+  const { read } = await readInbound(env, { context: `Wynn's email ${ref} with ${ids.length} brand reply draft(s) for approval, numbered 1 to ${ids.length}; it asks "${BRAND_REPLY_ASK}" (approve, skip, or her changes, by number)`, from: message.fromHeader ?? from, subject: message.subject, words: said, firmScope, employeeId: WYNN }, deps.read);
+  const meant = draftApprovalOf(read, said, ids.length);
+  const parsed = meant.reply;
+  // NO MODEL, NO DECISION (review of #574): with no reader every draft is unsure, named below and asked again.
+  if (isEmptyReply(parsed) && meant.unsure.length === 0) return { handled: false, ref, detail: `a reply to ${ref} carried no approve / skip / change instruction (${readerWords(meant.reader)})` };
   const owner = await actorForFirmUser(env, TLC_OWNER.firmUserId);
   if (!owner) return { handled: false, ref, detail: `${TLC_OWNER.email} is not an active person in the OS` };
   const changed = new Set(parsed.change.map((c) => c.n));
@@ -1330,6 +1330,8 @@ export async function applyBrandReplyApproval(
   for (const n of [...changed, ...skipped]) approve.delete(n);
   const lines: string[] = [];
   let backToHer = false;
+  // Unsure never sends, skips or redrafts: each is named in the email back to her, and still waits on this reference.
+  for (const n of meant.unsure.filter((x) => !approve.has(x) && !skipped.has(x) && !changed.has(x))) lines.push(`${n}: I could not tell what you want for it, so nothing was sent; reply to ${ref} again with approved, skip or your changes for ${n}`);
   const rowOf = (n: number) => (ids[n - 1] ? env.WP_OS_DB.prepare("SELECT r.*, d.brand, d.contact_email, d.stage FROM tlc_brand_reply r JOIN tlc_deal d ON d.id = r.deal_id WHERE r.id = ?1").bind(ids[n - 1]).first<ReplyRow & { brand: string; contact_email: string; stage: string }>() : Promise.resolve(null));
 
   /*
