@@ -667,9 +667,20 @@ describe("the 30-day purge keeps every promise (eng sweep, 22 Nov 2026)", () => 
     await runWebPropertyChangeCard(env, sweepCardFor(cardId, SCOOTER), fixedClassifier("BANTER_NO_ACTION"), neverReply);
     expect(await exists("work_card_notice", "work_card_id", cardId), "the door wrote its RECEIVED note").toBe(true);
     await env.WP_OS_DB.prepare("UPDATE work_card SET updated_at = ?2 WHERE id = ?1").bind(cardId, OLD).run();
+    // What a real model classification and the banter reply leave behind (a fake classifier writes neither).
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO ai_run (id, purpose, actor_type, actor_id, sensitivity, privacy_mode, cost_mode, provider_id, model, status, input_hash, trace_id, firm_scope)
+       VALUES ('air_pk_real', 'classify', 'SYSTEM', 'porter', 'PUBLIC', 'STANDARD', 'NORMAL', 'prov_free_search', 'free-search/grounded', 'COMPLETED', 'h', 'air_pk_real', 'west-peek')`,
+    ).run();
+    await env.WP_OS_DB.prepare("INSERT INTO ai_run_attribution (ai_run_id, work_card_id) VALUES ('air_pk_real', ?1)").bind(cardId).run();
+    await env.WP_OS_DB.prepare("INSERT INTO email_thread (token, object_type, object_id, to_address, subject) VALUES ('wpt_pk_real', 'work_card', ?1, 'scooter@x.com', 'Got it')").bind(cardId).run();
     const out = await purgeNoActionCards(env, NOW);
     expect(out.kept).toEqual([]);
     expect(out.purged).toContain(cardId);
+    expect(await exists("email_thread", "token", "wpt_pk_real"), "a later reply reaches the door as a new email").toBe(false);
+    const attr = await env.WP_OS_DB.prepare("SELECT work_card_id FROM ai_run_attribution WHERE ai_run_id = 'air_pk_real'").first<{ work_card_id: string | null }>();
+    expect(attr, "spend history is kept").not.toBeNull();
+    expect(attr!.work_card_id).toBeNull();
     expect(await card(cardId)).toBeNull();
     expect(await exists("work_card_notice", "work_card_id", cardId)).toBe(false);
     expect(await exists("web_property_change", "work_card_id", cardId)).toBe(false);
@@ -698,14 +709,14 @@ describe("the 30-day purge keeps every promise (eng sweep, 22 Nov 2026)", () => 
     expect(await exists("inbound_message", "id", "inm_pk_late")).toBe(true);
   });
 
-  it("data loss: a card some other row still points at is kept WHOLE (no blob, index or event lost) and named", async () => {
+  it("data loss: a card some other row still points at is left WHOLE (no blob, index or event lost) and never fails the run", async () => {
     await stowed("wc_pk_referenced");
     const key = await message("inm_pk_referenced", "wc_pk_referenced", OLD);
     await env.WP_OS_DB.prepare("INSERT INTO card_drive_file (id, work_card_id, file_id, url, title) VALUES ('cdf_pk', 'wc_pk_referenced', 'f1', 'https://drive.google.com/x', 'Doc')").run();
     const before = bucket.deletes.length;
     const out = await purgeNoActionCards(env, NOW);
     expect(out.purged).not.toContain("wc_pk_referenced");
-    expect(out.kept.map((k) => k.cardId)).toContain("wc_pk_referenced");
+    expect(out.kept.map((k) => k.cardId)).not.toContain("wc_pk_referenced");
     expect(await card("wc_pk_referenced")).not.toBeNull();
     expect(await exists("inbound_message", "id", "inm_pk_referenced")).toBe(true);
     expect(bucket.store.has(key)).toBe(true);
@@ -730,6 +741,67 @@ describe("the 30-day purge keeps every promise (eng sweep, 22 Nov 2026)", () => 
     expect(await card("wc_pk_no_bucket")).not.toBeNull();
     expect(await exists("inbound_message", "id", "inm_pk_no_bucket")).toBe(true);
     expect(bucket.store.has(key2)).toBe(true);
+  });
+
+  it("abuse / data loss: a stored email another card reads (a re-read of a mis-stowed email) is never deleted", async () => {
+    await stowed("wc_pk_shared_banter");
+    const key = await message("inm_pk_shared", "wc_pk_shared_banter", OLD);
+    // The re-read opened real card B, whose attachments are read out of the same stored email.
+    await env.WP_OS_DB.prepare("INSERT INTO work_card (id, title, kind, state, created_by, firm_scope) VALUES ('wc_pk_shared_real', 'real work from the re-read', ?1, 'OPEN', 'system', 'west-peek')").bind(WEB_PROPERTY_CHANGE_KIND).run();
+    await env.WP_OS_DB.prepare("INSERT INTO request_attachment (id, work_card_id, filename, media_type, bytes, eml_key, firm_scope, source) VALUES ('ratt_pk_shared', 'wc_pk_shared_real', 'plan.pdf', 'application/pdf', 10, ?1, 'west-peek', 'REQUEST')").bind(key).run();
+    // And a re-read with no attachments at all: the reingest event alone is the dispute.
+    await stowed("wc_pk_reread");
+    const rereadKey = await message("inm_pk_reread", "wc_pk_reread", OLD);
+    const { appendEvent } = await import("../src/worker/events");
+    await appendEvent(env, { eventType: "inbound_email.reingested", actorType: "firm_user", actorId: "fu_x", objectType: "inbound_email", objectId: rereadKey, firmScope: "west-peek", payload: {} });
+    const before = bucket.deletes.length;
+    const out = await purgeNoActionCards(env, NOW);
+    for (const id of ["wc_pk_shared_banter", "wc_pk_reread"]) {
+      expect(out.purged, id).not.toContain(id);
+      expect(await card(id), id).not.toBeNull();
+    }
+    expect(out.spared.map((s) => s.cardId)).toContain("wc_pk_shared_banter");
+    expect(bucket.store.has(key)).toBe(true);
+    expect(bucket.store.has(rereadKey)).toBe(true);
+    expect(bucket.deletes.slice(before)).not.toContain(key);
+    expect(await exists("inbound_message", "id", "inm_pk_shared")).toBe(true);
+  });
+
+  it("outage: a batch that fails (here, the event write) deletes nothing, writes no event, touches no blob, and names the card", async () => {
+    await stowed("wc_pk_event_down");
+    const key = await message("inm_pk_event_down", "wc_pk_event_down", OLD);
+    const realDb = env.WP_OS_DB;
+    const failingDb = new Proxy(realDb, {
+      get(target, prop) {
+        if (prop === "batch") return async () => { throw new Error("D1 unavailable: event_record insert failed"); };
+        const v = Reflect.get(target, prop);
+        return typeof v === "function" ? v.bind(target) : v;
+      },
+    });
+    const before = bucket.deletes.length;
+    const out = await purgeNoActionCards({ ...env, WP_OS_DB: failingDb } as Env, NOW);
+    expect(out.purged).not.toContain("wc_pk_event_down");
+    const kept = out.kept.find((k) => k.cardId === "wc_pk_event_down");
+    expect(kept?.detail).toMatch(/inbound_message\.work_card_id/);
+    expect(await card("wc_pk_event_down")).not.toBeNull();
+    expect(await exists("inbound_message", "id", "inm_pk_event_down")).toBe(true);
+    expect(bucket.store.has(key)).toBe(true);
+    expect(bucket.deletes.slice(before)).toEqual([]);
+    expect((await eventsFor("wc_pk_event_down", "work_card.no_action_purged")).length).toBe(0);
+  });
+
+  it("every foreign key to work_card is decided: purged with the card, detached, or keeps the card", async () => {
+    const { PURGED_WITH_CARD, DETACHED_FROM_CARD, KEEPS_THE_CARD } = await import("../src/worker/services/noActionPurge");
+    const tables = (await env.WP_OS_DB.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all<{ name: string }>()).results ?? [];
+    const refs: string[] = [];
+    for (const { name } of tables) {
+      if (name.startsWith("sqlite_") || name.startsWith("_cf_") || name.startsWith("d1_")) continue;
+      const fks = (await env.WP_OS_DB.prepare(`SELECT "table" AS t, "from" AS c FROM pragma_foreign_key_list('${name}')`).all<{ t: string; c: string }>()).results ?? [];
+      for (const fk of fks) if (fk.t === "work_card") refs.push(`${name}.${fk.c}`);
+    }
+    expect(refs.length).toBeGreaterThan(20);
+    const decided = [...PURGED_WITH_CARD, ...DETACHED_FROM_CARD, ...KEEPS_THE_CARD].map(([t, c]) => `${t}.${c}`);
+    expect([...decided].sort()).toEqual([...new Set(refs)].sort());
   });
 
   it("abuse: a sender's banter card never takes another card's message or blob, even from the same address", async () => {

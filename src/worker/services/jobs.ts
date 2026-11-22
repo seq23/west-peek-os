@@ -462,6 +462,7 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
       status: failed ? "FAILED" : "SUCCEEDED",
       summary:
         `${out.examined} stowed card(s) untouched for 30 days examined; ${out.purged.length} purged` +
+        `${out.spared.length > 0 ? `; ${out.spared.length} spared (another card reads its stored email)` : ""}` +
         `${out.kept.length > 0 ? `. KEPT ${out.kept.length} card(s): ${out.kept.map((k) => `${k.cardId} — ${k.detail}`).join("; ")}` : ""}` +
         `${out.blobFailures.length > 0 ? `. FAILED to delete ${out.blobFailures.length} stored blob(s): ${out.blobFailures.map((f) => `${f.r2Key} — ${f.detail}`).join("; ")}` : ""}`,
       artifacts,
