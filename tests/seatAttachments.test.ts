@@ -42,7 +42,8 @@ import { SUBSCRIPTION_CLAIMER_EMAIL } from "../src/worker/auth";
 let t: TestDb;
 const MP_ACTOR: Actor = { type: "HUMAN", firmUserId: "fu_scooter_taylor", roles: ["MANAGING_PARTNER"], firmScopes: ["west-peek"] };
 const DECK = { mediaType: "application/pdf", dataBase64: btoa("%PDF-1.4 a small deck"), label: "Q3 deck.pdf" };
-const PICTURE = { mediaType: "image/png", dataBase64: btoa("not really a png but bytes"), label: "screenshot.png" };
+// Real PNG signature bytes, so the byte check passes and the capability tests test capabilities (review of #575).
+const PICTURE = { mediaType: "image/png", dataBase64: btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13) + "IHDR a small picture"), label: "screenshot.png" };
 
 function fakeBucket() {
   const store = new Map<string, Uint8Array>();
@@ -285,6 +286,8 @@ describe("the router: a file goes to a seat only if that seat's claimer proved i
   }, 60_000);
 
   it("proof for pictures is not proof for documents: a call carrying both needs both", async () => {
+    const { bytesAre } = await import("../src/worker/ai/seatAttachments");
+    expect(bytesAre(PICTURE.mediaType, PICTURE.dataBase64), "the picture passes the byte check, so only the capability rule can refuse it").toBe(true);
     await awake("codex", [attachmentCapability("codex", "image")]);
     const c = claimerThatReads(["codex"]);
     await runAi(env(), DOC_CALL([DECK], [PICTURE]), { fetchImpl: (async () => new Response("{}", { status: 500 })) as unknown as typeof fetch });
@@ -427,6 +430,86 @@ describe("the queue and the download route", () => {
     expect(ok.headers.get("content-type")).toBe("application/pdf");
     expect(new TextDecoder().decode(await ok.arrayBuffer())).toBe("%PDF-1.4 a small deck");
     expect((await download(id, "mac-test", 0, "someone@example.com")).status, "a stranger is refused outright").toBe(403);
+  });
+
+  it("a corrupt file list is unknown: nothing deleted, never stamped cleared, no device offered it, and the sweep skips it", async () => {
+    const id = await parkWithFile();
+    const goodId = await parkWithFile();
+    expect(bucket.store.size).toBe(2);
+    const { clearRunAttachments, clearEndedAttachments, readRefs } = await import("../src/worker/ai/seatAttachments");
+    expect(readRefs("{not json", id), "corrupt JSON").toBeNull();
+    expect(readRefs('{"key":"x"}', id), "not a list").toBeNull();
+    expect(readRefs('[{"n":0}]', id), "an entry with no key").toBeNull();
+    expect(readRefs(null, id)).toEqual([]);
+    // A queued run whose list went corrupt is never handed to a device that only proved documents.
+    await t.db.prepare("UPDATE subscription_seat_run SET attachments_json = '[{\"n\":0}' WHERE id = ?1").bind(id).run();
+    await t.db.prepare("UPDATE subscription_seat_run SET status = 'ABANDONED' WHERE id = ?1").bind(goodId).run();
+    expect(await claimRun(env(), "mac-test", ["codex"], new Date(), ["ANSWER"], false), "unknown files are not offered").toBeNull();
+    // Ended, beside a second ended run whose list is readable: the sweep clears that one and leaves the corrupt one alone.
+    await t.db.prepare("UPDATE subscription_seat_run SET status = 'ABANDONED' WHERE id = ?1").bind(id).run();
+    await clearRunAttachments(env(), id);
+    expect(await clearEndedAttachments(env()), "only the readable list is cleared").toBe(1);
+    expect((await rows()).find((r) => r.id === id)!.attachments_cleared_at, "unknown is not cleared").toBeNull();
+    expect((await rows()).find((r) => r.id === goodId)!.attachments_cleared_at, "the readable run is cleared").not.toBeNull();
+    expect([...bucket.store.keys()].map((k) => k.startsWith(`seat-attachments/${id}/`)), "only the readable run's file was deleted").toEqual([true]);
+    // Valid JSON that is still unknown ([{"n":0}]) is left out by the sweep's own query, so it can never starve real runs.
+    await t.db.prepare("UPDATE subscription_seat_run SET attachments_json = '[{\"n\":0}]' WHERE id = ?1").bind(id).run();
+    expect(await clearEndedAttachments(env())).toBe(0);
+    expect((await rows()).find((r) => r.id === id)!.attachments_cleared_at).toBeNull();
+    expect(bucket.store.size).toBe(1);
+    // STARVATION: fifty-five unknown lists ahead of a real ended run never hold the sweep's fifty slots.
+    const cols = ((await t.db.prepare("PRAGMA table_info(subscription_seat_run)").all<{ name: string }>()).results ?? []).map((c) => c.name);
+    const list = cols.map((c) => (c === "id" ? "?2" : c === "created_at" ? "'2000-01-01T00:00:00.000Z'" : c)).join(", ");
+    for (let i = 0; i < 55; i++) await t.db.prepare(`INSERT INTO subscription_seat_run (${cols.join(", ")}) SELECT ${list} FROM subscription_seat_run WHERE id = ?1`).bind(id, `ccr_unknown_${i}`).run();
+    const late = await parkWithFile();
+    await t.db.prepare("UPDATE subscription_seat_run SET status = 'ABANDONED' WHERE id = ?1").bind(late).run();
+    expect(await clearEndedAttachments(env()), "the real run behind 56 unknown lists is still cleared").toBe(1);
+    expect((await rows()).find((r) => r.id === late)!.attachments_cleared_at).not.toBeNull();
+  });
+
+  it("ABUSE: a list naming a key outside its run's own folder deletes nothing and serves nothing (an inbound email, another run's file)", async () => {
+    const { clearRunAttachments, clearEndedAttachments, readRefs } = await import("../src/worker/ai/seatAttachments");
+    const email = "inbound-email/2026-10-24/keep.eml";
+    await bucket.put(email, "From: someone\r\n\r\nkept by design");
+    const id = await parkWithFile();
+    const other = await parkWithFile();
+    const otherKey = [...bucket.store.keys()].find((k) => k.startsWith(`seat-attachments/${other}/`))!;
+    expect(readRefs(JSON.stringify([{ n: 0, key: email }]), id), "outside seat-attachments/").toBeNull();
+    expect(readRefs(JSON.stringify([{ n: 0, key: otherKey }]), id), "another run's folder").toBeNull();
+    expect(readRefs(JSON.stringify([{ n: 0, key: `seat-attachments/${id}` }]), id), "the folder name without a file").toBeNull();
+    expect(readRefs(JSON.stringify([{ n: 0, key: `seat-attachments/${id}x/a.pdf` }]), id), "a run id that only starts the same").toBeNull();
+    const ref = (key: string) => JSON.stringify([{ n: 0, kind: "document", media_type: "application/pdf", label: "Q3 deck.pdf", key, bytes: 10 }]);
+    // SERVES NOTHING: the holding device asks for file 0 of a run whose list names the email, then another run's file.
+    const run = await claimRun(env(), "mac-test", ["codex"], new Date(), ["ANSWER"], false);
+    expect(run).not.toBeNull();
+    for (const key of [email, otherKey]) {
+      await t.db.prepare("UPDATE subscription_seat_run SET attachments_json = ?2 WHERE id = ?1").bind(run!.id, ref(key)).run();
+      expect((await download(run!.id, "mac-test", 0)).status, `never served: ${key}`).toBe(404);
+    }
+    // DELETES NOTHING: both runs end with lists naming objects that are not theirs; neither path deletes or stamps.
+    const victim = run!.id === id ? other : id;
+    await t.db.prepare("UPDATE subscription_seat_run SET attachments_json = ?2, status = 'ABANDONED' WHERE id = ?1").bind(run!.id, ref(email)).run();
+    await t.db.prepare("UPDATE subscription_seat_run SET attachments_json = ?2, status = 'ABANDONED' WHERE id = ?1").bind(victim, ref(`seat-attachments/${run!.id}/Q3 deck.pdf`)).run();
+    await clearRunAttachments(env(), run!.id);
+    await clearRunAttachments(env(), victim);
+    expect(await clearEndedAttachments(env())).toBe(0);
+    expect(bucket.store.has(email), "the inbound email is still stored").toBe(true);
+    expect(bucket.store.size, "every object is still stored").toBe(3);
+    expect((await rows()).every((r) => r.attachments_cleared_at === null), "nothing stamped cleared").toBe(true);
+  });
+
+  it("an image/png or a PDF whose bytes are something else is refused before it is stored", async () => {
+    const { bytesAre } = await import("../src/worker/ai/seatAttachments");
+    const png = btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13));
+    const jpg = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 0, 16));
+    expect(attachmentRefusal([{ kind: "image", mediaType: "image/png", dataBase64: png }])).toBeNull();
+    expect(attachmentRefusal([{ kind: "image", mediaType: "image/jpeg", dataBase64: jpg }])).toBeNull();
+    expect(attachmentRefusal([{ kind: "image", mediaType: "image/png", dataBase64: DECK.dataBase64 }]), "a PDF called a png").toMatch(/bytes are not the image\/png/);
+    expect(attachmentRefusal([{ kind: "image", mediaType: "image/png", dataBase64: btoa("#!/bin/sh\nrm -rf ~\n") }]), "a script called a png").toMatch(/bytes are not/);
+    expect(attachmentRefusal([{ kind: "document", mediaType: "application/pdf", dataBase64: png }]), "a png called a PDF").toMatch(/bytes are not the application\/pdf/);
+    expect(attachmentRefusal([{ kind: "document", mediaType: "application/pdf", dataBase64: "!!!not base64" }]), "unreadable bytes").toMatch(/bytes are not/);
+    expect(bytesAre("image/webp", btoa("RIFF\0\0\0\0WEBPVP8 "))).toBe(true);
+    expect(bytesAre("image/gif", btoa("GIF89a.."))).toBe(true);
   });
 
   it("with no bucket bound (outage), an ended run's files are never marked cleared; the sweep deletes them once the bucket is back", async () => {

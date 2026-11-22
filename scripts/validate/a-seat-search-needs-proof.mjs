@@ -130,7 +130,7 @@ export function auditAttachmentClaim(seatsSrc) {
   const bad = [];
   const fn = body(seatsSrc, "export async function claimRun(");
   if (!fn) return ["claimRun was not found"];
-  if (!/deviceMayReadRunFiles\(env, deviceId, c\.seat, c\.attachments_json\)/.test(fn)) bad.push("claimRun no longer judges a run's files against the claiming device's own stored capabilities for the run's seat");
+  if (!/deviceMayReadRunFiles\(env, deviceId, c\.seat, c\.id, c\.attachments_json\)/.test(fn)) bad.push("claimRun no longer judges a run's files against the claiming device's own stored capabilities for the run's seat");
   if (/can_read_attachments|canReadAttachments/.test(fn)) bad.push("claimRun trusts a flag in the claim request for files instead of the device's stored capabilities");
   const check = body(seatsSrc, "async function deviceMayReadRunFiles(");
   if (!check || !/refs\.every\(\(r\) => capabilitiesAllow\(row\?\.capabilities_json, seat, r\.kind\)\)/.test(check)) bad.push("the file check no longer requires EVERY kind of file in the run, for this seat, on this device");
@@ -210,7 +210,7 @@ function selfTest() {
     ["a claimer that stops declaring the capability is caught", () => auditClaimer(claimer.replace('const BASE_CAPABILITIES = ["web_search"]', "const BASE_CAPABILITIES = []")).length > 0],
     ["a claimer that stops counting searches is caught", () => auditClaimer(claimer.replace(/searchOutcome\(/g, "x(")).length > 0],
     ["a migration without attachments_json is caught", () => auditAttachmentMigration(read("migrations", "0249_a_seat_can_be_handed_a_file.sql").replace("attachments_json", "x")).length > 0],
-    ["a claimRun that stops checking the device's capabilities for files is caught", () => auditAttachmentClaim(seats.replace("deviceMayReadRunFiles(env, deviceId, c.seat, c.attachments_json)", "true")).length > 0],
+    ["a claimRun that stops checking the device's capabilities for files is caught", () => auditAttachmentClaim(seats.replace("deviceMayReadRunFiles(env, deviceId, c.seat, c.id, c.attachments_json)", "true")).length > 0],
     ["a file check that needs only SOME kind, not every kind, is caught", () => auditAttachmentClaim(seats.replace("refs.every((r) => capabilitiesAllow(", "refs.some((r) => capabilitiesAllow(")).length > 0],
     ["a router that offers files to a seat without proof is caught", () => auditAttachmentRouter(runAi.replaceAll("fileKinds.every((k) => a.canRead?.[k] === true)", "true")).length > 0],
     ["a router that lets files reach the seats whatever was proved is caught", () => auditAttachmentRouter(runAi.replaceAll("(!hasFiles || fileSeatKeys.size > 0)", "true")).length > 0],
