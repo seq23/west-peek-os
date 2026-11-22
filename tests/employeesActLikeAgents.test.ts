@@ -270,14 +270,14 @@ describe("the hire search acts on its own results", () => {
     // His own reply: read by the reader; STOP pauses the next week with no search; "keep going" resumes it.
     await env.WP_OS_DB.prepare("INSERT INTO work_steer (id, card_kind, from_card_id, said_by, body, firm_scope, created_at) VALUES ('wst_stop', 'PRODUCTIONS_HIRE_SEARCH', ?1, ?2, 'Stop sending these for now please', 'west-peek', '2026-12-16T10:00:00.000Z')")
       .bind(asking.cardId, SCOOTER).run();
-    const stopReader: ReplyIntentReader = async () => ({ kind: "STOP", changes: null, question: null, keyword: null, source: "MODEL", door: null, seat: null, nothing: false, reason: "he said stop", aiRunId: null });
+    const stopReader: ReplyIntentReader = async () => ({ kind: "STOP", changes: null, question: null, reading: { kind: "REFUSED", text: "stop" }, source: "MODEL", door: null, seat: null, nothing: false, reason: "he said stop", aiRunId: null });
     const paused = await runWeek(new Date("2026-12-22T15:00:00.000Z"), () => fresh("Xmas"), stopReader);
     expect(paused.out.outcome).toBe("DONE");
     expect(paused.prompts, "paused: no search").toEqual([]);
 
     await env.WP_OS_DB.prepare("INSERT INTO work_steer (id, card_kind, from_card_id, said_by, body, firm_scope, created_at) VALUES ('wst_go', 'PRODUCTIONS_HIRE_SEARCH', ?1, ?2, 'keep going', 'west-peek', '2026-12-23T10:00:00.000Z')")
       .bind(asking.cardId, SCOOTER).run();
-    const goReader: ReplyIntentReader = async () => ({ kind: "CONTINUE", changes: null, question: null, keyword: null, source: "MODEL", door: null, seat: null, nothing: false, reason: "keep going", aiRunId: null });
+    const goReader: ReplyIntentReader = async () => ({ kind: "CONTINUE", changes: null, question: null, reading: { kind: "ANSWERS", text: "" }, source: "MODEL", door: null, seat: null, nothing: false, reason: "keep going", aiRunId: null });
     const resumed = await runWeek(new Date("2026-12-29T15:00:00.000Z"), () => fresh("Nye"), goReader);
     expect(resumed.prompts.length, "resumed").toBeGreaterThan(0);
   });

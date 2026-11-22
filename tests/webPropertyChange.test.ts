@@ -6,7 +6,8 @@ import { handleRequest } from "../src/worker/index";
 import { openAssignmentCard } from "../src/worker/services/dealIntake";
 import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
 import { sweepOnce, type SweepCard } from "../src/worker/services/workSweep";
-import type { ReplyIntentReader } from "../src/worker/services/replyIntent";
+import { keywordIntent, type ReplyIntentReader } from "../src/worker/services/replyIntent";
+import { opensWithApproval } from "../src/shared/work/approvalReply";
 import type { QuestionAnswerer } from "../src/worker/services/questionRouting";
 import { claimRun, parkRun, progressRun, reapSeatRuns, readRun, reportRun, JOB_SILENCE_MS, MAX_JOB_NAPS, type SeatRunRow } from "../src/worker/ai/subscriptionSeats";
 import { parseWebPropertyAsk, isWebPropertyChange, driveFolderLinks, addresseeIn, sitesOf, readWebPropertyAsk as readWebPropertyAskFromJson } from "../src/shared/intake/webPropertyChange";
@@ -85,16 +86,20 @@ function nextTickTime(): Date {
 }
 /**
  * THE INTENT READER, INJECTED (27 Sep 2026). Free text a partner writes is read for its intent
- * through `replyIntent.ts`; the keyword forms never reach it. This fake decides deterministically
- * from the words and records every call, so a test can prove which replies were read by a model
- * and which by the keyword fast path — without a live call.
+ * through `replyIntent.ts`, every reply and the one-word ones too (the model reads first, 22 Nov 2026). This fake
+ * decides deterministically from the words and records every call, so a test can prove each reply was read by the
+ * model, and once — without a live call.
  */
 const intentCalls: string[] = [];
 const fakeIntentReader: ReplyIntentReader = async (_env, input) => {
   intentCalls.push(input.text);
   const t = input.text;
-  const base = { keyword: null, aiRunId: null, source: "MODEL" as const, reason: "fake reader" };
-  if (/let'?s not|think it over|hold on|hold off|\bstop\b|\bwait\b/i.test(t)) return { ...base, kind: "STOP", changes: null, question: null };
+  // The fake stands in for the model, which reads the one-word replies ("approved", "hold off") as the word lists do.
+  const words = keywordIntent(t);
+  // A model carries his whole words as the change (replyIntent.ts#fromReader), never the cut the word lists make.
+  if (words) return { ...words, changes: words.changes === null ? null : t, source: "MODEL" as const, reason: "fake reader" };
+  const base = { reading: { kind: "ANSWERS" as const, text: t }, approves: opensWithApproval(t), aiRunId: null, source: "MODEL" as const, reason: "fake reader" };
+  if (/let'?s not|think it over|hold on|hold off|\bstop\b|\bwait\b/i.test(t)) return { ...base, reading: { kind: "REFUSED" as const, text: t }, approves: false, kind: "STOP", changes: null, question: null };
   const question = /\?/.test(t) ? (t.match(/[^.\n]*\?/)?.[0] ?? t).trim() : null;
   const changes = /\b(but|make|swap|use|instead|please)\b/i.test(t) ? t.replace(/[^.\n]*\?/, "").trim() || null : null;
   if (question) return { ...base, kind: "QUESTION", changes, question };

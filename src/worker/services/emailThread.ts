@@ -13,7 +13,7 @@ import { answerBlock } from "./blocks";
 import { statedCut } from "./partnerWords";
 import { blockReplyDoor, PARTNER_ANSWER_MAX } from "../../shared/work/blocks";
 import { roleOf } from "../../shared/work/partnerOwnership";
-import { LATE_THREAD_NOTE_PREFIX, NEW_EMAIL_NOTE_PREFIX, readApprovalReply } from "../../shared/work/approvalReply";
+import { LATE_THREAD_NOTE_PREFIX, NEW_EMAIL_NOTE_PREFIX } from "../../shared/work/approvalReply";
 import { textBodyOf } from "../effects/mail";
 import { storeAttachments } from "./requestMaterials";
 import { hearVoiceNotes, recordFilesNotOpened, stopOnUnheardVoiceNotes, withVoiceNotes } from "./voiceNotes";

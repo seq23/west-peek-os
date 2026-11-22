@@ -40,6 +40,7 @@ export function firstRead(o: {
 
 export function replyIntent(o: {
   intent?: "CONTINUE" | "FIX" | "QUESTION" | "STOP" | "NOTHING";
+  approval?: "APPROVED" | "PREVIEW" | "PUBLISH" | "FORCED" | "NONE";
   door?: "ANSWER" | "BUILD" | "ROUTE";
   seat?: string | null;
   buildIn?: "OS" | "EXISTING" | "NEW" | null;
@@ -47,7 +48,7 @@ export function replyIntent(o: {
   question?: string | null;
   reason?: string;
 } = {}): string {
-  return JSON.stringify({ intent: "CONTINUE", door: "ANSWER", seat: null, buildIn: null, changes: null, question: null, reason: "test", ...o });
+  return JSON.stringify({ intent: "CONTINUE", approval: "NONE", door: "ANSWER", seat: null, buildIn: null, changes: null, question: null, reason: "test", ...o });
 }
 
 export function questionAnswer(o: { confident: boolean; answer?: string | null; reason?: string }): string {

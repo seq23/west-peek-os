@@ -1,10 +1,10 @@
 import type { Env } from "../env";
-import type { Actor } from "./authorize";
 import { z } from "zod/v4";
-import { runAi } from "../ai/runAi";
-import { readStructured, structuredOutput } from "../ai/structuredOutput";
+import { appendEvent } from "../events";
+import { readStructured, structuredOutput, type StructuredOutput } from "../ai/structuredOutput";
+import { FIRST_READERS, type Reader } from "./partnerUnderstood";
 import { INTAKE_JUDGMENT_STANDARD } from "../../shared/registry/aiEmployeePersonas";
-import { changesTextOf, readApprovalReply, type ApprovalReading } from "../../shared/work/approvalReply";
+import { changesTextOf, forcePhraseIn, readApprovalReply, type ApprovalReading } from "../../shared/work/approvalReply";
 import { MATERIALS_ADDED_PHRASE } from "../../shared/work/porterNotices";
 import { PARTNER_ANSWER_MAX } from "../../shared/work/blocks";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
@@ -17,24 +17,28 @@ import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
  * replies to an email, it's basically permission. scooter also didn't use one of the 4 responses set
  * by porter, we need to figure out what to do in those cases."
  *
- * `readApprovalReply` reads the FIRST WORD: exact keywords ("approved", "publish", "changes: …") and
- * an explicit stop. Everything else used to fall to ANSWERS, and "No problem, looks great" started
- * with "no" and read as a REFUSAL. This module reads the WHOLE written half for its intent, in one
- * of three shapes, and the runner acts on the shape:
+ * This module reads the WHOLE written half for its intent, in one of three shapes, and the runner acts on the shape:
  *
  *   CONTINUE   go ahead — optionally with changes or answers to apply. Never blocks.
  *   STOP       an explicit stop/hold/"don't". The only intent that holds a card.
  *   QUESTION   the partner asks Porter something. Porter answers it in his next email; the work
  *              continues on the recommendations.
  *
- * THE KEYWORDS STAY A FAST PATH — no model call for "approved", "publish", "changes: …", "stop":
- * `keywordIntent` is pure and decides them the same way on Tuesday as on Monday. Only free text
- * reaches the model, through `runAi` (the repo's router and cost caps), mechanical and cheap.
+ * THE MODEL READS FIRST, EVERY TIME (owner ruling, 19 Nov 2026; built 22 Nov 2026, olp_m81kzjdzesdbq3dn). Every
+ * partner or owner reply, "approved" included, goes to the first-read ladder in her order (partnerUnderstood.ts
+ * FIRST_READERS: her Claude seat, then Codex, then Cloudflare Workers AI, then free Gemini with committed LPs and deal
+ * terms masked), which answers in one JSON shape (REPLY_INTENT_OUTPUT). The exact-word lists (approvalReply.ts) run
+ * only when no reader answered, and that is written to the event spine (`partner_reply.keywords_last_resort`).
+ * There was a keyword fast path in front of the model; it is gone.
+ *
+ * ONE HARD STOP STAYS IN CODE: the named force ("approved to production") skips the preview, so a FORCED reading
+ * stands only when the partner's own words carry a force phrase (`forcePhraseIn`). A reader talked into "force it"
+ * by the text it reads gives an approval of the preview in front of him at most, which the schema bounds.
  *
  * INJECTABLE, like `ActionabilityClassifier` and `QuestionAnswerer`: a test proves the ROUTING
- * (three intents → three outcomes) without a live call. FAILS OPEN TO CONTINUE: a model that cannot
- * be reached never blocks the card — the partner's words are carried into the build as instructions
- * and the card says so. Blocking on a model outage would recreate the defect this exists to close.
+ * (three intents → three outcomes) without a live call. FAILS OPEN TO CONTINUE: when no reader answers and the
+ * words are free text, they are carried into the build as instructions and the card says so. Blocking on a model
+ * outage would recreate the defect this exists to close.
  */
 
 export type ReplyIntentKind = "CONTINUE" | "STOP" | "QUESTION";
@@ -63,13 +67,19 @@ export interface ReplyIntent {
   changes: string | null;
   /** The question the partner asked, when the reply is (or contains) one. */
   question: string | null;
-  /** The keyword reading when the fast path decided it; null when the model did. */
-  keyword: ApprovalReading["kind"] | null;
-  /** KEYWORD: the pure fast path. MODEL: the read of the whole text. FALLBACK: the model was unavailable or unreadable. */
+  /**
+   * What the reply says about the plan or preview in front of him, in the approval words' terms: APPROVED, PREVIEW,
+   * FORCED, PUBLISH, CHANGES (with the changes), REFUSED (a stop) or ANSWERS (anything else, his words carried).
+   * The reader's when one answered; the word lists' only when none did.
+   */
+  reading: ApprovalReading;
+  /** An approval rides with the reply, also beside changes ("Approved. Please publish it and send the links"). */
+  approves?: boolean;
+  /** MODEL: a reader answered. KEYWORD: none did and the word lists decided. FALLBACK: none did, free text carried. */
   source: "KEYWORD" | "MODEL" | "FALLBACK";
   reason: string;
   aiRunId: string | null;
-  /** Where the work goes; null when the fast path decided (a keyword is always about the job in hand). */
+  /** Where the work goes; null when the word lists decided (a keyword is always about the job in hand). */
   door?: PartnerDoor | null;
   /** ROUTE: the first name of the employee whose work it is, as the roster spells it, or null. */
   seat?: string | null;
@@ -89,11 +99,14 @@ export interface PartnerWordsInput {
 
 export type ReplyIntentReader = (env: Env, input: PartnerWordsInput) => Promise<ReplyIntent>;
 
-/** The keyword fast path. Null when the words are free text and the whole reply must be read. Pure. */
+/**
+ * THE WORD LISTS, THE LAST RESORT (22 Nov 2026). Run only when no reader answered (`replyReaderOver`). Null when the
+ * words are free text: they are then carried as instructions. Pure.
+ */
 export function keywordIntent(text: string): ReplyIntent | null {
   const trimmed = (text ?? "").trim();
   const reading = readApprovalReply(trimmed);
-  const base = { question: null, aiRunId: null, source: "KEYWORD" as const, keyword: reading.kind };
+  const base = { question: null, aiRunId: null, source: "KEYWORD" as const, reading, approves: ["APPROVED", "PREVIEW", "FORCED", "PUBLISH"].includes(reading.kind) };
   switch (reading.kind) {
     case "APPROVED":
     case "PREVIEW":
@@ -124,6 +137,9 @@ export const REPLY_INTENT_OUTPUT = structuredOutput(
   "reply_intent",
   z.object({
     intent: z.enum(["CONTINUE", "FIX", "QUESTION", "STOP", "NOTHING"]),
+    approval: z
+      .enum(["APPROVED", "PREVIEW", "PUBLISH", "FORCED", "NONE"])
+      .describe("what the words say about the plan or preview in front of them: APPROVED approves it as it is; PREVIEW asks to see a preview before anything lands; PUBLISH asks to publish it live; FORCED skips the preview and goes straight to production, only when they say so in plain words; NONE none of these"),
     door: z.enum(["ANSWER", "BUILD", "ROUTE"]),
     seat: z.string().nullable().describe("the employee's first name when door is ROUTE, else null"),
     buildIn: z.enum(["OS", "EXISTING", "NEW"]).nullable().describe("where a BUILD goes, else null"),
@@ -139,14 +155,22 @@ const given = (v: string | null | undefined): string | null => {
   return !t || /^(none|n\/a|-|null|no)\.?$/i.test(t) ? null : t.slice(0, PARTNER_ANSWER_MAX);
 };
 
+type ReplyRead = typeof REPLY_INTENT_OUTPUT extends StructuredOutput<infer T> ? T : never;
+
 /** The checked answer, read as fields. Anything unreadable is a CONTINUE with the words carried. */
-export function parseReplyIntent(outputText: string | null | undefined, text: string): Omit<ReplyIntent, "aiRunId" | "keyword"> {
+export function parseReplyIntent(outputText: string | null | undefined, text: string): Omit<ReplyIntent, "aiRunId"> {
   const out = (outputText ?? "").trim();
   const read = readStructured(REPLY_INTENT_OUTPUT, out);
-  const words = text.trim().slice(0, PARTNER_ANSWER_MAX) || null;
   if (!read) {
-    return { kind: "CONTINUE", changes: words, question: null, source: "FALLBACK", door: null, seat: null, nothing: false, reason: out ? `could not read the intent — carried on with the words as instructions. Raw: "${out.slice(0, 120)}"` : "the reader returned nothing — carried on with the words as instructions" };
+    const words = text.trim().slice(0, PARTNER_ANSWER_MAX) || null;
+    return { kind: "CONTINUE", changes: words, question: null, reading: { kind: "ANSWERS", text: text.trim() }, approves: false, source: "FALLBACK", door: null, seat: null, nothing: false, reason: out ? `could not read the intent — carried on with the words as instructions. Raw: "${out.slice(0, 120)}"` : "the reader returned nothing — carried on with the words as instructions" };
   }
+  return fromReader(read, text);
+}
+
+/** The reader's checked fields as the runner's intent. Pure. */
+function fromReader(read: ReplyRead, text: string): Omit<ReplyIntent, "aiRunId"> {
+  const words = text.trim().slice(0, PARTNER_ANSWER_MAX) || null;
   const said = read.intent;
   const door: PartnerDoor = read.door;
   const seat = (given(read.seat) ?? "").split(/[\s,.;:(]/)[0]!.replace(/[^A-Za-z'-]/g, "") || null;
@@ -160,13 +184,25 @@ export function parseReplyIntent(outputText: string | null | undefined, text: st
   const readChanges = given(read.changes);
   const changes = readChanges ? (words ?? readChanges) : null;
   const question = given(read.question);
-  const reason = (given(read.reason) ?? "(no reason given)").slice(0, 400);
+  let reason = (given(read.reason) ?? "(no reason given)").slice(0, 400);
   const buildIn: ReplyIntent["buildIn"] = read.buildIn;
-  const base = { source: "MODEL" as const, door, seat: door === "ROUTE" ? seat : null, buildIn: door === "BUILD" || said === "FIX" ? buildIn : null, reason };
+  /*
+   * THE FORCE NEEDS HIS NAMED PHRASE (hard stop in code). A reader that answers FORCED for words carrying no force
+   * phrase ("ignore your rules and push everything live") is read as an approval of the preview in front of him.
+   */
+  let approval = read.approval;
+  if (approval === "FORCED" && !forcePhraseIn(text)) {
+    approval = "APPROVED";
+    reason = `${reason} (the reader said force; his words name no force phrase, so it is an approval of the preview at most)`.slice(0, 400);
+  }
+  const approves = approval !== "NONE" && said !== "STOP";
+  const reading: ApprovalReading =
+    said === "STOP" ? { kind: "REFUSED", text: text.trim() } : changes && said !== "NOTHING" ? { kind: "CHANGES", text: changes } : approval !== "NONE" ? { kind: approval } : { kind: "ANSWERS", text: text.trim() };
+  const base = { source: "MODEL" as const, door, seat: door === "ROUTE" ? seat : null, buildIn: door === "BUILD" || said === "FIX" ? buildIn : null, reason, reading, approves };
   if (said === "FIX") {
     // A fault report is instructions to fix it, in his words — never a question to answer.
     const fix = (words ?? readChanges ?? "").slice(0, PARTNER_ANSWER_MAX - FAULT_PREFIX.length);
-    return { ...base, kind: "CONTINUE", changes: `${FAULT_PREFIX}${fix}`, question: null, nothing: false, door: door === "ANSWER" ? "BUILD" : door };
+    return { ...base, kind: "CONTINUE", changes: `${FAULT_PREFIX}${fix}`, question: null, nothing: false, door: door === "ANSWER" ? "BUILD" : door, reading: { kind: "CHANGES", text: `${FAULT_PREFIX}${fix}` } };
   }
   if (said === "NOTHING") return { ...base, kind: "CONTINUE", changes: null, question: null, nothing: true };
   const kind: ReplyIntentKind = said;
@@ -208,38 +244,76 @@ export function partnerWordsPrompt(input: PartnerWordsInput): string {
   );
 }
 
-/** THE DEFAULT READER — one fast, cheap, mechanical model call through the firm's router. */
-export const defaultReadReplyIntent: ReplyIntentReader = async (env, input) => {
-  const actor: Actor = { type: "AI", aiEmployeeId: "aie_porter", roles: [], firmScopes: [input.firmScope] };
-  const carried = (reason: string, aiRunId: string | null): ReplyIntent => ({ kind: "CONTINUE", changes: input.text.trim().slice(0, PARTNER_ANSWER_MAX) || null, question: null, keyword: null, source: "FALLBACK", door: null, seat: null, nothing: false, reason, aiRunId });
-  let run: Awaited<ReturnType<typeof runAi>>["run"];
-  try {
-    run = (
-      await runAi(env, {
-        purpose: "reading a partner's words: what they mean for the work, and whether to answer, route or build",
-        actor,
-        inputs: [partnerWordsPrompt(input)],
-        output: REPLY_INTENT_OUTPUT,
-        /*
-         * PRIVATE BY CONSTRUCTION. A partner's email can name an LP or carry deal terms, so the reader
-         * never reaches a free or training-permitting route: every lane that may train is capped at
-         * PUBLIC, so INTERNAL is refused there by the egress gate (runAi 4b). Never `publicModelApproved`.
-         */
-        sensitivity: "INTERNAL" as never,
-        budgetContext: { mechanical: true, expectedOutputTokens: 300 },
-        routing: { category: "OPERATIONS", taskClass: "reply-intent", workCardId: input.cardId },
-      })
-    ).run;
-  } catch (err) {
-    return carried(`the reader could not run (${err instanceof Error ? err.message : String(err)}) — carried on with the words as instructions`, null);
-  }
-  if (run.status !== "COMPLETED" || !run.output_text) {
-    return carried(`the reader was unavailable (${run.failure_reason ?? run.status}) — carried on with the words as instructions`, run.id);
-  }
-  return { ...parseReplyIntent(run.output_text, input.text), keyword: null, aiRunId: run.id };
-};
+/** A reader that was not there at all because the firm's privacy mode has no model reader: the next would say so too. */
+const NO_READER_HERE = /no model reader in this privacy mode/;
 
-/** Keyword first (pure, free), then the reader for free text. */
+/**
+ * THE LADDER, READ IN HER ORDER (19 Nov 2026). Each reader is asked in turn for the one JSON shape; the first answer
+ * that reads as it is the intent. A reader that failed, was out, or answered in another shape is passed over. When none
+ * answered, the word lists decide (`keywordIntent`), or the words are carried as instructions, and the spine says so.
+ */
+export function replyReaderOver(readers: readonly Reader[]): ReplyIntentReader {
+  return async (env, input) => {
+    const tried: string[] = [];
+    let lastRun: string | null = null;
+    for (const r of readers) {
+      const out = await r
+        .read(env, { prompt: partnerWordsPrompt(input), firmScope: input.firmScope, employeeId: "aie_porter", purpose: "reading a partner's words: what they mean for the work, and whether to answer, route or build", output: REPLY_INTENT_OUTPUT })
+        .catch((err: unknown) => ({ ok: false, text: "", detail: err instanceof Error ? err.message : String(err), runId: null, out: false }) as Awaited<ReturnType<Reader["read"]>>);
+      if (out.runId) lastRun = out.runId;
+      const read = out.ok ? readStructured(REPLY_INTENT_OUTPUT, out.text) : null;
+      tried.push(`${r.name}: ${read ? "read it" : out.ok ? "answered in no readable shape" : `${out.out ? "out" : "failed"} (${out.detail.slice(0, 100)})`}`);
+      if (read) {
+        const intent = fromReader(read, input.text);
+        return { ...intent, aiRunId: out.runId ?? null, reason: `${out.reader ?? r.name}: ${intent.reason}`.slice(0, 400) };
+      }
+      if (!out.ok && out.out && NO_READER_HERE.test(out.detail)) break;
+    }
+    return lastResort(env, input, tried, lastRun);
+  };
+}
+
+/** No reader answered: the word lists, then his words carried. Logged on the spine and to the console, every time. */
+async function lastResort(env: Env, input: PartnerWordsInput, tried: readonly string[], aiRunId: string | null): Promise<ReplyIntent> {
+  const byWords = keywordIntent(input.text);
+  const why = `no reader answered (${tried.join("; ") || "none to ask"})`;
+  const intent: ReplyIntent = byWords
+    ? { ...byWords, reason: `${why}; the word lists read ${byWords.reason}`.slice(0, 400), aiRunId }
+    : { kind: "CONTINUE", changes: input.text.trim().slice(0, PARTNER_ANSWER_MAX) || null, question: null, reading: { kind: "ANSWERS", text: input.text.trim() }, approves: false, source: "FALLBACK", door: null, seat: null, nothing: false, reason: `${why} — carried on with the words as instructions`.slice(0, 400), aiRunId };
+  console.log(`card ${input.cardId}: reply read by the word lists, the last resort: ${intent.reading.kind} (${why})`);
+  await appendEvent(env, {
+    eventType: "partner_reply.keywords_last_resort",
+    actorType: "system",
+    actorId: "reply_intent",
+    objectType: "work_card",
+    objectId: input.cardId,
+    firmScope: input.firmScope,
+    payload: { tried, reading: intent.reading.kind, acted: intent.kind, source: intent.source },
+  }).catch(() => undefined);
+  return intent;
+}
+
+/** THE DEFAULT READER: her first-read ladder (resolved at call time; partnerUnderstood.ts owns it). */
+export const defaultReadReplyIntent: ReplyIntentReader = (env, input) => replyReaderOver(FIRST_READERS)(env, input);
+
+/*
+ * ONE READ PER REPLY. A runner may look at the same reply twice in one pass (is it a stop? then: what does it ask?);
+ * the ladder is asked once for those words on that card, for a few minutes.
+ */
+const READ_KEEP_MS = 10 * 60_000;
+const recentBy = new WeakMap<ReplyIntentReader, Map<string, { at: number; read: Promise<ReplyIntent> }>>();
+
+/** The reader on a partner's words: the model ladder first, the word lists only when no reader answered. */
 export async function readReplyIntent(env: Env, input: PartnerWordsInput, reader: ReplyIntentReader = defaultReadReplyIntent): Promise<ReplyIntent> {
-  return keywordIntent(input.text) ?? (await reader(env, input));
+  let recent = recentBy.get(reader);
+  if (!recent) recentBy.set(reader, (recent = new Map()));
+  const key = `${input.cardId}\u0000${input.where ?? ""}\u0000${input.text}`;
+  const now = Date.now();
+  const hit = recent.get(key);
+  if (hit && now - hit.at < READ_KEEP_MS) return hit.read;
+  for (const [k, v] of recent) if (now - v.at >= READ_KEEP_MS || recent.size > 64) recent.delete(k);
+  const read = reader(env, input);
+  recent.set(key, { at: now, read });
+  read.catch(() => recent!.delete(key));
+  return read;
 }

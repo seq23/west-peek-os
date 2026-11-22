@@ -36,7 +36,7 @@ beforeAll(async () => {
 });
 afterAll(async () => disposeTestDb(t));
 
-const read = (door: string, seat = "none", intent = "CONTINUE", buildIn = "none"): ReplyIntentReader => async (_env, input) => ({ ...parseReplyIntent(replyIntent({ intent: intent as never, door: door as never, seat: seat === "none" ? null : seat, buildIn: buildIn === "none" ? null : (buildIn as never), reason: "test" }), input.text), keyword: null, aiRunId: null });
+const read = (door: string, seat = "none", intent = "CONTINUE", buildIn = "none"): ReplyIntentReader => async (_env, input) => ({ ...parseReplyIntent(replyIntent({ intent: intent as never, door: door as never, seat: seat === "none" ? null : seat, buildIn: buildIn === "none" ? null : (buildIn as never), reason: "test" }), input.text), aiRunId: null });
 
 async function cardsFrom(chiefCardId: string) {
   return (await env.WP_OS_DB.prepare("SELECT id, owner_id, state, requested_by_email FROM work_card WHERE id = ?1 OR assigned_from_card_id = ?1").bind(chiefCardId).all<{ id: string; owner_id: string; state: string; requested_by_email: string | null }>()).results ?? [];
@@ -88,7 +88,7 @@ describe("a new email goes to the desk its words name", () => {
       ["What is on for Thursday", read("ANSWER")],
       ["Ask Bob", read("ROUTE", "Bob")],
       ["Hand it to my chief", read("ROUTE", "Walker")],
-      ["Reader down", (async (_e, input) => ({ ...parseReplyIntent("", input.text), keyword: null, aiRunId: null })) as ReplyIntentReader],
+      ["Reader down", (async (_e, input) => ({ ...parseReplyIntent("", input.text), aiRunId: null })) as ReplyIntentReader],
     ] as const) {
       const chief = await openAssignmentCard(env, { subject, partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: `${subject}, please.`, limits: EMAILED_TASK_LIMITS, emlKey: null, readWords: reader });
       const cards = await cardsFrom(chief);

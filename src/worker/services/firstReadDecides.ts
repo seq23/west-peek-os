@@ -52,21 +52,23 @@ export async function firstReadOf(env: Env, cardId: string, opts: { after?: stri
 }
 
 /**
- * Both readings on the record, every time a decision is taken: what the first read said, what the keywords said,
- * and which one acted. Returns the line for the card's findings.
+ * The decision on the record, every time one is taken: what the first read said, or (only when no first read is in)
+ * what the word lists said, and which one acted. The word lists are never run beside a first read (22 Nov 2026): a
+ * caller passes `keyword: null` when the first read decided, and the line says the first read alone. Returns the line
+ * for the card's findings.
  */
 export async function logDecision(
   env: Env,
   card: { id: string; firm_scope: string },
-  input: { what: string; read: FirstRead; firstRead: string | null; keyword: string },
+  input: { what: string; read: FirstRead; firstRead: string | null; keyword: string | null },
 ): Promise<string> {
   const used = input.read.state === "READ" ? "FIRST_READ" : "KEYWORD";
   const line =
     input.read.state === "READ"
-      ? input.firstRead === input.keyword
-        ? `First read decides ${input.what}: ${input.firstRead} (the keywords agree).`
-        : `First read decides ${input.what}: ${input.firstRead}; the keywords read ${input.keyword} and were overruled.`
-      : `first read absent: keyword fallback (${input.what}: ${input.keyword}).`;
+      ? input.keyword === null || input.firstRead === input.keyword
+        ? `First read decides ${input.what}: ${input.firstRead}.`
+        : `First read decides ${input.what}: ${input.firstRead}; the reply reader read ${input.keyword} and was overruled.`
+      : `first read absent: keyword fallback (${input.what}: ${input.keyword ?? "nothing"}).`;
   await appendEvent(env, {
     eventType: "partner_reply.first_read_decides",
     actorType: "system",
@@ -143,10 +145,11 @@ export async function decideReplyWords(
   // CC (0239): the partners he asked to copy on the finished email.
   const { ccAsksIn } = await import("../../shared/work/ccPartners");
   const ccRead = partOf(read, Array.isArray(d?.cc));
-  const ccKeyword = ccAsksIn(words);
-  const cc = ccRead.state === "READ" ? d!.cc! : ccKeyword;
-  if (cc.length || ccKeyword.length) {
-    await logDecision(env, card, { what: "the cc", read: ccRead, firstRead: ccRead.state === "READ" ? cc.join(", ") || "no cc" : null, keyword: ccKeyword.join(", ") || "no cc" });
+  // The word lists run only when the first read gave no cc field.
+  const ccKeyword = ccRead.state === "READ" ? null : ccAsksIn(words);
+  const cc = ccRead.state === "READ" ? d!.cc! : ccKeyword!;
+  if (cc.length) {
+    await logDecision(env, card, { what: "the cc", read: ccRead, firstRead: ccRead.state === "READ" ? cc.join(", ") : null, keyword: ccKeyword ? ccKeyword.join(", ") : null });
     if (cc.length) await (await import("./ccPartners")).recordCc(env, card.id, cc, partner.email);
   }
 
@@ -155,10 +158,10 @@ export async function decideReplyWords(
     const { backByDay, partnerBackIn } = await import("../../shared/work/partnerBackBy");
     const at = new Date(Date.parse(input.receivedAt) || Date.now());
     const backRead = partOf(read, d?.backBy !== undefined);
-    const keyword = partnerBackIn(words, at);
-    const back = backRead.state === "READ" ? (d!.backBy ? backByDay(d!.backBy, words.split("\n")[0] ?? words, at) : null) : keyword;
-    if (back || keyword) {
-      await logDecision(env, card, { what: "when he is back", read: backRead, firstRead: backRead.state === "READ" ? back?.back_at ?? "not said" : null, keyword: keyword?.back_at ?? "not said" });
+    const keyword = backRead.state === "READ" ? undefined : partnerBackIn(words, at);
+    const back = backRead.state === "READ" ? (d!.backBy ? backByDay(d!.backBy, words.split("\n")[0] ?? words, at) : null) : keyword!;
+    if (back) {
+      await logDecision(env, card, { what: "when he is back", read: backRead, firstRead: backRead.state === "READ" ? back.back_at : null, keyword: keyword === undefined ? null : back.back_at });
       if (back) await (await import("./blocks")).recordPartnerBack(env, card.id, back, partner.firstName);
     }
   }
@@ -167,7 +170,8 @@ export async function decideReplyWords(
   const { ownershipIntentIn, roleOf } = await import("../../shared/work/partnerOwnership");
   const handOff = await import("./handOff");
   const ownRead = read;
-  const keywordIntent = ownershipIntentIn(words, partner.email);
+  // The word lists run only when no first read is in.
+  const keywordIntent = ownRead.state === "READ" ? null : ownershipIntentIn(words, partner.email);
   const said = (i: ReturnType<typeof ownershipIntentIn>): string =>
     !i ? "no hand-off" : i.kind === "TAKE_BACK" ? "take back" : i.kind === "HAND_OFF" ? `hand to ${i.to?.firstName ?? i.named}` : `unsure: ${i.to.firstName}?`;
   let readIntent: ReturnType<typeof ownershipIntentIn> = null;
@@ -184,7 +188,7 @@ export async function decideReplyWords(
   }
   const intent = ownRead.state === "READ" ? readIntent : keywordIntent;
   if (readIntent || keywordIntent) {
-    const line = await logDecision(env, card, { what: "the hand-off", read: ownRead, firstRead: ownRead.state === "READ" ? said(readIntent) : null, keyword: said(keywordIntent) });
+    const line = await logDecision(env, card, { what: "the hand-off", read: ownRead, firstRead: ownRead.state === "READ" ? said(readIntent) : null, keyword: ownRead.state === "READ" ? null : said(keywordIntent) });
     await trail(line);
   }
   const answeredByThis = Boolean(card.block_answered_at) && ["OPEN", "IN_PROGRESS"].includes(card.state) && card.block_answered_by === partner.firmUserId && Date.parse(card.block_answered_at!) >= Date.parse(input.receivedAt) - 2 * 60_000;
@@ -214,11 +218,12 @@ export async function decideReplyWords(
   // "Approved, looks great." opens with an approval too: here it only earns the refusal note telling her who approves,
   // so its first clause counts (replay of #556 on main, 20 Nov: she got silence and would think it approved).
   const firstClause = (words.trim().split(/\r?\n/)[0] ?? "").replace(/^(\s*[a-z]+),/i, "$1.");
-  const keywordApproves = ["APPROVED", "FORCED", "PREVIEW", "PUBLISH"].includes(readApprovalReply(words).kind) || opensWithApproval(firstClause);
+  // The word lists run only when no first read is in.
+  const keywordApproves = read.state !== "READ" && (["APPROVED", "FORCED", "PREVIEW", "PUBLISH"].includes(readApprovalReply(words).kind) || opensWithApproval(firstClause));
   const readApproves = d?.kind === "approve";
   const approves = read.state === "READ" ? readApproves : keywordApproves;
   if (readApproves || keywordApproves) {
-    await logDecision(env, card, { what: "a secondary's approval", read, firstRead: read.state === "READ" ? (readApproves ? "approve" : d!.kind) : null, keyword: keywordApproves ? "approve" : "no approval" });
+    await logDecision(env, card, { what: "a secondary's approval", read, firstRead: read.state === "READ" ? (readApproves ? "approve" : d!.kind) : null, keyword: read.state === "READ" ? null : keywordApproves ? "approve" : "no approval" });
   }
   const { ownershipOf } = await import("../../shared/work/partnerOwnership");
   const primary = ownershipOf(fresh).primary;
