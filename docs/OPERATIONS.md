@@ -117,10 +117,12 @@ rulings) are not kept here: they live in the West Peek Ventures company brain in
 
 - Files handed to a subscription seat live under `seat-attachments/<run id>/` in `west-peek-os-documents` and are
   deleted when the run ends (`clearRunAttachments`, then the minute sweep `clearEndedAttachments`).
-- **Backstop:** the bucket's lifecycle rule `seat-attachments-expire` expires that prefix after 7 days (runs end
-  within hours), so a file whose run list went unreadable, or a delete that never happened, is gone within a week.
+- **Backstop:** the bucket's lifecycle rule `seat-attachments-expire` expires that prefix after 2 days (runs end
+  within minutes), so a file whose run list went unreadable, or a delete that never happened, is gone within 2 days.
+  The rule is `scripts/deploy/seat-attachments-lifecycle.json`, applied (only that rule, by id) by `npm run deploy:production`
+  step 4/5; a refused call shows as UNVERIFIED in the deploy summary.
   Check: `npx wrangler r2 bucket lifecycle list west-peek-os-documents`. Re-add:
-  `npx wrangler r2 bucket lifecycle add west-peek-os-documents seat-attachments-expire seat-attachments/ --expire-days 7 --force`.
+  `npx wrangler r2 bucket lifecycle add west-peek-os-documents seat-attachments-expire seat-attachments/ --expire-days 2 --force`.
 - A run whose `attachments_json` cannot be read is UNKNOWN: never stamped cleared, never offered to a device, skipped
   by the sweep; the lifecycle rule removes its files.
 

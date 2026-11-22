@@ -1,0 +1,9 @@
+{
+  "bucket": "west-peek-os-documents",
+  "rule": {
+    "id": "seat-attachments-expire",
+    "enabled": true,
+    "conditions": { "prefix": "seat-attachments/" },
+    "deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 172800 } }
+  }
+}

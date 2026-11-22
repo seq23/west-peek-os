@@ -508,6 +508,11 @@ describe("the queue and the download route", () => {
     expect(attachmentRefusal([{ kind: "image", mediaType: "image/png", dataBase64: btoa("#!/bin/sh\nrm -rf ~\n") }]), "a script called a png").toMatch(/bytes are not/);
     expect(attachmentRefusal([{ kind: "document", mediaType: "application/pdf", dataBase64: png }]), "a png called a PDF").toMatch(/bytes are not the application\/pdf/);
     expect(attachmentRefusal([{ kind: "document", mediaType: "application/pdf", dataBase64: "!!!not base64" }]), "unreadable bytes").toMatch(/bytes are not/);
+    // ABUSE (22 Nov 2026): a ".pdf" that is a web page, a Linux program or a Windows program.
+    expect(attachmentRefusal([{ kind: "document", mediaType: "application/pdf", dataBase64: btoa("<!doctype html><script>fetch('/x')</script>") }]), "HTML called a PDF").toMatch(/bytes are not the application\/pdf/);
+    expect(attachmentRefusal([{ kind: "document", mediaType: "application/pdf", dataBase64: btoa("\x7fELF\x02\x01\x01\0\0\0\0\0\0\0\0\0") }]), "an ELF executable called a PDF").toMatch(/bytes are not/);
+    expect(attachmentRefusal([{ kind: "document", mediaType: "application/pdf", dataBase64: btoa("MZ\x90\0\x03\0\0\0\x04\0\0\0") }]), "a Windows executable called a PDF").toMatch(/bytes are not/);
+    expect(attachmentRefusal([{ kind: "image", mediaType: "image/png", dataBase64: btoa("<svg xmlns='http://www.w3.org/2000/svg'><script/></svg>") }]), "HTML/SVG called a png").toMatch(/bytes are not/);
     expect(bytesAre("image/webp", btoa("RIFF\0\0\0\0WEBPVP8 "))).toBe(true);
     expect(bytesAre("image/gif", btoa("GIF89a.."))).toBe(true);
   });
