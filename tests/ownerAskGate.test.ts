@@ -1,3 +1,4 @@
+import { askMarks, firstRead, replyIntent } from "./helpers/aiShapes";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 /*
@@ -17,8 +18,8 @@ vi.mock("../src/worker/ai/runAi", async (importOriginal) => {
     ...actual,
     runAi: async (_env: unknown, input: { purpose: string; inputs: string[] }) => {
       // The Got it read (services/partnerUnderstood.ts) is not the card's own work: it never takes a scripted reply.
-      if (/the Got it reply|marking each of a partner's asks/.test(input.purpose)) return { run: { id: `run_${crypto.randomUUID()}`, status: "COMPLETED", output_text: "NONE", failure_reason: null } };
-      const text = /reading a partner's words/.test(input.purpose) ? "INTENT: CONTINUE\nDOOR: ANSWER\nSEAT: none\nCHANGES: none\nQUESTION: none\nREASON: the chief keeps it" : (replies.shift() ?? '{"action":"note","finding":"(no scripted reply)"}');
+      if (/the Got it reply|marking each of a partner's asks/.test(input.purpose)) return { run: { id: `run_${crypto.randomUUID()}`, status: "COMPLETED", output_text: /marking/.test(input.purpose) ? askMarks([]) : firstRead({ none: true }), failure_reason: null } };
+      const text = /reading a partner's words/.test(input.purpose) ? replyIntent({ intent: "CONTINUE", door: "ANSWER", reason: "the chief keeps it" }) : (replies.shift() ?? '{"action":"note","finding":"(no scripted reply)"}');
       return { run: { id: `run_${crypto.randomUUID()}`, status: "COMPLETED", output_text: text, failure_reason: null } };
     },
   };

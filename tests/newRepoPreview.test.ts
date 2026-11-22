@@ -1,3 +1,4 @@
+import { replyIntent } from "./helpers/aiShapes";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,7 +21,7 @@ vi.mock("../src/worker/ai/runAi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/worker/ai/runAi")>();
   return {
     ...actual,
-    runAi: async () => ({ run: { id: "run_x", status: "COMPLETED", output_text: "INTENT: CONTINUE\nDOOR: BUILD\nSEAT: none\nBUILD_IN: NEW\nCHANGES: none\nQUESTION: none\nREASON: a build", failure_reason: null } }),
+    runAi: async () => ({ run: { id: "run_x", status: "COMPLETED", output_text: replyIntent({ intent: "CONTINUE", door: "BUILD", buildIn: "NEW", reason: "a build" }), failure_reason: null } }),
   };
 });
 
@@ -35,7 +36,7 @@ beforeAll(async () => {
 });
 afterAll(async () => disposeTestDb(t));
 
-const newBuild: ReplyIntentReader = async (_e, input) => ({ ...parseReplyIntent("INTENT: CONTINUE\nDOOR: BUILD\nSEAT: none\nBUILD_IN: NEW\nCHANGES: none\nQUESTION: none\nREASON: a new app", input.text), keyword: null, aiRunId: null });
+const newBuild: ReplyIntentReader = async (_e, input) => ({ ...parseReplyIntent(replyIntent({ intent: "CONTINUE", door: "BUILD", buildIn: "NEW", reason: "a new app" }), input.text), keyword: null, aiRunId: null });
 
 describe("a new repo for something that does not exist yet", () => {
   it("is named from the subject, plainly, and never collides", () => {

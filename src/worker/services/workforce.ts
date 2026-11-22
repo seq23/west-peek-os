@@ -4,7 +4,9 @@ import type { RouteContext } from "../router";
 import { json } from "../router";
 import { appendEvent } from "../events";
 import { runAi } from "../ai/runAi";
+import { structuredOutput } from "../ai/structuredOutput";
 import {
+  UNRETIRE_ADVICE_SHAPE,
   UNRETIRE_ADVICE_VERSION,
   buildUnretirePrompt,
   parseUnretireAdvice,
@@ -1062,6 +1064,7 @@ export async function handleUnretireAdvice(ctx: RouteContext): Promise<Response>
         need: parsed.data.need ?? null,
       }),
     ],
+    output: structuredOutput("unretire_advice", UNRETIRE_ADVICE_SHAPE),
     // The roster and what the firm needs are internal facts about this firm.
     sensitivity: "INTERNAL" as never,
     budgetContext: { judgement: true, expectedOutputTokens: 500 },

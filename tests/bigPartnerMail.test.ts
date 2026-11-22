@@ -1,3 +1,4 @@
+import { firstRead } from "./helpers/aiShapes";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
@@ -118,7 +119,7 @@ async function cardWithThread(label: string): Promise<{ cardId: string; token: s
 const seat: SeatRead = async (_env, input) => {
   const email = input.prompt.split("Email:\n")[1] ?? "";
   const first = email.split(/\n+/).find((l) => l.trim().length > 3) ?? "";
-  return { ok: true, text: `ASK: ${first.trim()}\nNEXT: I'm on it.`, detail: "ok" };
+  return { ok: true, text: firstRead({ asks: [first.trim()], next: `I'm on it.` }), detail: "ok" };
 };
 
 const one = <T>(sql: string, ...b: unknown[]) => env.WP_OS_DB.prepare(sql).bind(...b).first<T>();

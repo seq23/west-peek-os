@@ -59,6 +59,7 @@ import {
 import { CLAIM_WAIT_MS, SEARCH_CLAIM_WAIT_MS, SEAT_REGISTRY, allSeatAvailability, isSeat } from "./subscriptionSeats";
 import { orderByVendorFamily } from "../../shared/ai/vendorFamily";
 import { createSubscriptionSeatAdapter } from "./providers/subscriptionSeat";
+import { SHAPE_REJECTED, type StructuredOutput, jsonSchemaOf, readStructuredText, structuredInstruction } from "./structuredOutput";
 
 /**
  * runAi — THE governed AI boundary (P4). No other module may call a provider
@@ -364,6 +365,13 @@ export interface RunAiInput {
    * Kept out of `budgetContext` because it is a function, not a fact about the money.
    */
   verify?: (text: string) => string | null;
+  /**
+   * THE SHAPE OF THE ANSWER (22 Nov 2026). A caller that reads fields hands the schema here instead of asking for a
+   * prose format: every lane is told it, the lanes that can are constrained to it, and an answer that does not match
+   * walks the chain like a verifier rejection. `output_text` is then the checked JSON; read it with `readStructured`.
+   * The caller's `verify`, if any, sees that JSON. See `structuredOutput.ts`.
+   */
+  output?: StructuredOutput;
   /**
    * Images for vision work. Optional, and deliberately routed through this boundary rather than
    * around it — see the gate in the pipeline below for why that is not a formality.
@@ -909,6 +917,7 @@ async function executeAttempt(
       model: rec.model,
       capabilityRequirement: rec.input.capabilityRequirement,
       ...(rec.input.verify ? { verify: rec.input.verify } : {}),
+      ...(rec.input.output ? { responseSchema: { name: rec.input.output.name, schema: jsonSchemaOf(rec.input.output) } } : {}),
       /*
        * THE CALLER'S OWN ASK REACHES THE WIRE AT LAST — widened, never sent bare.
        *
@@ -947,6 +956,9 @@ async function executeAttempt(
       const why = rec.input.verify(response.text);
       if (why) throw new Error(`verifier_rejected:${why.slice(0, 500)}`);
     }
+    // A shaped answer is stored as the checked JSON (the verifier above has already proved it reads).
+    const shaped = rec.input.output ? readStructuredText(rec.input.output, response.text) : null;
+    const outputText = shaped?.ok ? shaped.json : response.text;
     // WHAT THE RUN ACTUALLY COST, priced locally when the provider will not say.
     //
     // Every completed run was recording cost_usd: 0, because OpenRouter only returns a cost when
@@ -978,7 +990,7 @@ async function executeAttempt(
               output_quarantine = ?4, completed_at = ?5
         WHERE id = ?1`,
     )
-      .bind(running.id, JSON.stringify(actualUsage), response.text, quarantine ? 1 : 0, new Date().toISOString())
+      .bind(running.id, JSON.stringify(actualUsage), outputText, quarantine ? 1 : 0, new Date().toISOString())
       .run();
     // A free lane weaker than the call wants (0251): recorded on the run so the deliverable can carry the warning.
     const qualityNote = await degradedLaneNote(env, rec).catch(() => null);
@@ -1158,7 +1170,27 @@ export function workersAiConfigured(env: Env): boolean {
   return Boolean((env as unknown as { AI?: unknown }).AI);
 }
 
+/**
+ * The schema rides on the last input (every lane reads it) and in front of the caller's verifier (every answer is checked
+ * against it before it counts, inside the walk, so a reply in any other shape moves the chain to its next rung).
+ */
+function withStructuredOutput(input: RunAiInput, output: StructuredOutput): RunAiInput {
+  const inputs = [...input.inputs];
+  inputs[inputs.length - 1] = `${inputs[inputs.length - 1]}\n${structuredInstruction(output)}`;
+  const callerVerify = input.verify;
+  return {
+    ...input,
+    inputs,
+    verify: (text) => {
+      const read = readStructuredText(output, text);
+      if (!read.ok) return `${SHAPE_REJECTED}:${read.why}`;
+      return callerVerify ? callerVerify(read.json) : null;
+    },
+  };
+}
+
 export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}): Promise<AIRunResult> {
+  if (runInput.output) runInput = withStructuredOutput(runInput, runInput.output);
   if (!runInput.purpose || runInput.purpose.trim().length === 0) {
     throw new RunAiError(400, "invalid_input", "purpose is required");
   }

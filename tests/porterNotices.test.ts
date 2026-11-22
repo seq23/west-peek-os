@@ -1,3 +1,4 @@
+import { replyIntent } from "./helpers/aiShapes";
 import { roundFirst } from "../scripts/duties/web-property-change.mjs";
 import { sitesOf } from "../src/shared/intake/webPropertyChange";
 import { describe, expect, it } from "vitest";
@@ -304,7 +305,7 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026): the 
   it("a partner reporting that what Porter built does not work is a fix to rebuild, never a question (Scooter, 13 Nov 2026)", () => {
     const scooter = "Hey porter, i tried accessing the dashboard and got the screenshot below.\ncna you resend the link with the password\n\nI keep getting this error";
     // The one reader reads it as a FIX: carried as the change to make, so at the preview it rebuilds.
-    const read = parseReplyIntent("INTENT: FIX\nDOOR: BUILD\nSEAT: none\nCHANGES: none\nQUESTION: none\nREASON: the sign-in refused him", scooter);
+    const read = parseReplyIntent(replyIntent({ intent: "FIX", door: "BUILD", reason: "the sign-in refused him" }), scooter);
     expect(read).toMatchObject({ kind: "CONTINUE", question: null, door: "BUILD", source: "MODEL" });
     expect(read.changes).toContain(FAULT_PREFIX);
     expect(read.changes).toContain("resend the link with the password");
@@ -314,12 +315,19 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026): the 
     expect(keywordIntent(scooter)).toBeNull();
   });
 
+  it("a fault report the reader filed under the answer door still goes to the build door, in his words", () => {
+    const scooter = "The sign-up button on the page you made does nothing when I tap it";
+    const read = parseReplyIntent(replyIntent({ intent: "FIX", door: "ANSWER", reason: "a broken button" }), scooter);
+    expect(read).toMatchObject({ kind: "CONTINUE", door: "BUILD", question: null, nothing: false });
+    expect(read.changes).toBe(`${FAULT_PREFIX}${scooter}`);
+  });
+
   it("parseReplyIntent reads the fixed format strictly and FAILS OPEN to CONTINUE with the words carried", () => {
-    expect(parseReplyIntent("INTENT: CONTINUE\nCHANGES: none\nQUESTION: none\nREASON: agreement in other words", "No problem, looks great")).toMatchObject({ kind: "CONTINUE", changes: null, question: null, source: "MODEL" });
-    expect(parseReplyIntent("INTENT: CONTINUE\nCHANGES: make the hero the group shot\nQUESTION: none\nREASON: go-ahead with one change", "Looks good but make the hero the group shot"), "the change carried is his whole reply, never the reader's line").toMatchObject({ kind: "CONTINUE", changes: "Looks good but make the hero the group shot" });
-    expect(parseReplyIntent("INTENT: STOP\nCHANGES: none\nQUESTION: none\nREASON: says to hold", "Let's not do this yet")).toMatchObject({ kind: "STOP" });
-    expect(parseReplyIntent("INTENT: QUESTION\nCHANGES: none\nQUESTION: Is the orange the final hex?\nREASON: asks", "Is the orange the final hex?")).toMatchObject({ kind: "QUESTION", question: "Is the orange the final hex?" });
-    expect(parseReplyIntent("INTENT: QUESTION\nCHANGES: none\nQUESTION: none\nREASON: asks", "Is it final?"), "a QUESTION with no question text carries the reply as the question").toMatchObject({ kind: "QUESTION", question: "Is it final?" });
+    expect(parseReplyIntent(replyIntent({ intent: "CONTINUE", reason: "agreement in other words" }), "No problem, looks great")).toMatchObject({ kind: "CONTINUE", changes: null, question: null, source: "MODEL" });
+    expect(parseReplyIntent(replyIntent({ intent: "CONTINUE", changes: "make the hero the group shot", reason: "go-ahead with one change" }), "Looks good but make the hero the group shot"), "the change carried is his whole reply, never the reader's line").toMatchObject({ kind: "CONTINUE", changes: "Looks good but make the hero the group shot" });
+    expect(parseReplyIntent(replyIntent({ intent: "STOP", reason: "says to hold" }), "Let's not do this yet")).toMatchObject({ kind: "STOP" });
+    expect(parseReplyIntent(replyIntent({ intent: "QUESTION", question: "Is the orange the final hex?", reason: "asks" }), "Is the orange the final hex?")).toMatchObject({ kind: "QUESTION", question: "Is the orange the final hex?" });
+    expect(parseReplyIntent(replyIntent({ intent: "QUESTION", reason: "asks" }), "Is it final?"), "a QUESTION with no question text carries the reply as the question").toMatchObject({ kind: "QUESTION", question: "Is it final?" });
     expect(parseReplyIntent("garbage", "Looks great to me"), "unreadable → CONTINUE, the words carried as instructions, never a block").toMatchObject({ kind: "CONTINUE", changes: "Looks great to me", source: "FALLBACK" });
     expect(parseReplyIntent("", "Looks great to me")).toMatchObject({ kind: "CONTINUE", source: "FALLBACK" });
   });
@@ -330,12 +338,12 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026): the 
     const scooter = `Hey Porter,\n\nCase-study copy for the site is below. Please add it to the Case studies page as written and send me another preview.\n\n-----\n\n${cases}`;
     const summary = "Add the case-study copy to the Case studies page as written, with the five attached images. Send me another preview.";
     for (const intent of ["CONTINUE", "QUESTION"]) {
-      const read = parseReplyIntent(`INTENT: ${intent}\nDOOR: BUILD\nSEAT: none\nBUILD_IN: EXISTING\nCHANGES: ${summary}\nQUESTION: What is needed to point the domain?\nREASON: copy to add`, scooter);
+      const read = parseReplyIntent(replyIntent({ intent: intent as never, door: "BUILD", buildIn: "EXISTING", changes: summary, question: `What is needed to point the domain?`, reason: `copy to add` }), scooter);
       expect(read.changes, intent).toBe(scooter);
       for (const c of ["Executive Leadership Council", "result 3, reach up 327%"]) expect(read.changes, `${intent}: ${c}`).toContain(c);
     }
     // Nothing to change stays nothing: the reader still decides WHETHER there is a change.
-    expect(parseReplyIntent(`INTENT: CONTINUE\nCHANGES: none\nQUESTION: none\nREASON: thanks`, scooter).changes).toBeNull();
+    expect(parseReplyIntent(replyIntent({ intent: "CONTINUE", reason: `thanks` }), scooter).changes).toBeNull();
   });
 
   it("a late-thread note is marked with one prefix, read back by the runner", () => {

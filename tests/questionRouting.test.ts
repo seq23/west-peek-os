@@ -1,3 +1,4 @@
+import { questionAnswer } from "./helpers/aiShapes";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
@@ -90,13 +91,13 @@ describe("answerQuestionForCard — escalates before ever asking a model, when t
 });
 
 describe("an answer without its format walks to the next route, never reads as a no (14 Nov 2026)", () => {
-  it("Walker's bullets with a REASON line and no CONFIDENT header are refused, so the router asks the next lane", () => {
+  it("Walker's bullets (prose, not the question_answer shape) are refused, so the router asks the next lane", () => {
     const bullets = "- **Cold (MDRC, ServiceSource): open on their news, give one line of proof.**\n- **Warm (Enterprise): lead with the relationship.**\nREASON: This is a request for my view.";
     expect(questionAnswerFormatProblem(bullets)).not.toBeNull();
-    expect(questionAnswerFormatProblem("CONFIDENT: yes\nANSWER:\nREASON: r")).not.toBeNull();
+    expect(questionAnswerFormatProblem(questionAnswer({ confident: true, answer: "", reason: "r" }))).not.toBeNull();
   });
   it("a well-formed yes or no passes", () => {
-    expect(questionAnswerFormatProblem("CONFIDENT: yes\nANSWER: Lead with the vision.\nREASON: r")).toBeNull();
-    expect(questionAnswerFormatProblem("CONFIDENT: no\nANSWER:\nREASON: no email on the card")).toBeNull();
+    expect(questionAnswerFormatProblem(questionAnswer({ confident: true, answer: "Lead with the vision.", reason: "r" }))).toBeNull();
+    expect(questionAnswerFormatProblem(questionAnswer({ confident: false, reason: "no email on the card" }))).toBeNull();
   });
 });

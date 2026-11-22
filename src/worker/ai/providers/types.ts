@@ -52,6 +52,12 @@ export interface ProviderRequest {
    */
   verify?: (text: string) => string | null;
   /**
+   * THE ANSWER'S JSON SCHEMA, when the caller asked for a shape (`runAi`'s `output`). The schema is already in the
+   * prompt and every answer is checked at the boundary; an adapter whose API constrains decoding to a schema sends it
+   * too (Anthropic `output_config.format`, Gemini `responseJsonSchema`). An adapter without one ignores it safely.
+   */
+  responseSchema?: { name: string; schema: Record<string, unknown> };
+  /**
    * THIS CALLER'S OWN ASK, finally reaching the wire.
    *
    * `expectedOutputTokens` has always existed — it is what prices the run — and it stopped at the

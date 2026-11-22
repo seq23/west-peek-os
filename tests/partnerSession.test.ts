@@ -1,3 +1,4 @@
+import { replyIntent } from "./helpers/aiShapes";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
@@ -40,7 +41,7 @@ beforeAll(async () => {
 });
 afterAll(async () => disposeTestDb(t));
 
-const unclear: ReplyIntentReader = async (_env, input) => ({ ...parseReplyIntent("INTENT: CONTINUE\nDOOR: ANSWER\nSEAT: none\nBUILD_IN: none\nCHANGES: none\nQUESTION: none\nREASON: several asks", input.text), keyword: null, aiRunId: null });
+const unclear: ReplyIntentReader = async (_env, input) => ({ ...parseReplyIntent(replyIntent({ intent: "CONTINUE", door: "ANSWER", reason: "several asks" }), input.text), keyword: null, aiRunId: null });
 
 async function emailed(subject: string, body: string): Promise<string> {
   return openAssignmentCard(env, { subject, partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: body, limits: EMAILED_TASK_LIMITS, emlKey: null, readWords: unclear });

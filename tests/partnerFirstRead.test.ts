@@ -1,3 +1,4 @@
+import { firstRead } from "./helpers/aiShapes";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
@@ -63,13 +64,14 @@ function readerSaying(name: string, text: string): Reader {
 }
 const failing: Reader = { name: "CLAUDE", read: async () => ({ ok: false, text: "", detail: "the seat run timed out" }) };
 const allOut: Reader[] = ["CLAUDE", "WORKERS_AI", "GEMINI"].map((name) => ({ name, read: async () => ({ ok: false, text: "", detail: "usage spent", out: true }) }));
-const GOOD = [
-  "HOLD: Preview first, nothing live until I say so.",
-  "HOLD: No client names on it without my written OK.",
-  "FILE: wireframe.png :: the layout to follow for Discovery",
-  "FILE: pricing.xlsx :: the per-service prices for the Quote",
-  "NEXT: Porter builds the nine changes on preview.",
-].join("\n");
+const GOOD = firstRead({
+  holds: ["Preview first, nothing live until I say so.", "No client names on it without my written OK."],
+  files: [
+    { filename: "wireframe.png", purpose: "the layout to follow for Discovery" },
+    { filename: "pricing.xlsx", purpose: "the per-service prices for the Quote" },
+  ],
+  next: "Porter builds the nine changes on preview.",
+});
 
 let seq = 0;
 async function partnerEmail(label: string, minutesAgo = 0, words = DASHBOARD): Promise<{ cardId: string; inm: string }> {
@@ -113,7 +115,7 @@ beforeAll(async () => {
     }
     if (u.includes("generativelanguage.googleapis.com")) {
       geminiCalls.push(String(init?.body ?? ""));
-      const said = geminiAnswer ? geminiAnswer(String(init?.body ?? "")) : "ASK: Keep this pipeline studio-only.";
+      const said = geminiAnswer ? geminiAnswer(String(init?.body ?? "")) : firstRead({ asks: ["Keep this pipeline studio-only."] });
       return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: said }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 } }), { status: 200 });
     }
     throw new Error(`unexpected fetch in test: ${u}`);
@@ -215,7 +217,7 @@ describe("the reader ladder, through the real router", () => {
 
   it("Workers AI reads it when Claude and Codex are out, and no free lane is asked", async () => {
     const seen: string[] = [];
-    const ai = { run: async (model: string) => { seen.push(model); return { response: "ASK: Hide the venue fields for a livestream.\nHOLD: Preview first, nothing live until I say so.\nNEXT: On it." }; } };
+    const ai = { run: async (model: string) => { seen.push(model); return { response: firstRead({ asks: ["Hide the venue fields for a livestream."], holds: ["Preview first, nothing live until I say so."], next: "On it." }) }; } };
     const out = await understand(routed({ AI: ai as unknown as Env["AI"] }), { subject: "venue", written: "Hide the venue fields for a livestream. Preview first, nothing live until I say so.", read: FIRST_READERS, employeeId: null, firmScope: "west-peek" });
     expect(out.brief.reader).toBe("WORKERS_AI");
     expect(seen.length).toBe(1);
@@ -233,7 +235,7 @@ describe("the reader ladder, through the real router", () => {
     const before = geminiCalls.length;
     geminiAnswer = (body) => {
       const sheet = /\[deal term \d+\]/.exec(body)?.[0] ?? "?";
-      return `ASK: Send the ${sheet} summary to the founder.`;
+      return firstRead({ asks: [`Send the ${sheet} summary to the founder.`] });
     };
     const out = await understand(routed({}), { subject: "terms", written: "Send the term sheet summary to the founder. Keep the pre-money out of it.", read: FIRST_READERS, employeeId: null, firmScope: "west-peek" });
     geminiAnswer = null;
@@ -251,7 +253,7 @@ describe("the reader ladder, through the real router", () => {
     const before = geminiCalls.length;
     geminiAnswer = (body) => {
       const who = /\[Investor [A-Z]+\]/.exec(body)?.[0] ?? "?";
-      return `ASK: Add ${who} to the welcome page.\nHOLD: Nothing live until I say so.`;
+      return firstRead({ asks: [`Add ${who} to the welcome page.`], holds: [`Nothing live until I say so.`] });
     };
     const written = "Add Quillfeather Family Office to the welcome page. Nothing live until I say so.";
     const out = await understand(routed({}), { subject: "welcome", written, read: FIRST_READERS, employeeId: null, firmScope: "west-peek" });
@@ -294,13 +296,11 @@ describe("holds are constraints; his open questions are a list of their own", ()
       "I'm also questioning whether we need the Scale field.",
       "Is a Lead anything that came in?",
     ].join("\n");
-    const said = [
-      "ASK: Don't delete or change those tracker rows.",
-      "HOLD: Don't delete or change those tracker rows.",
-      "HOLD: Whether to keep a separate livestream rate card is still open.",
-      "HOLD: I'm also questioning whether we need the Scale field.",
-      "QUESTION: Is a Lead anything that came in?",
-    ].join("\n");
+    const said = firstRead({
+      asks: ["Don't delete or change those tracker rows."],
+      holds: ["Don't delete or change those tracker rows.", "Whether to keep a separate livestream rate card is still open.", "I'm also questioning whether we need the Scale field."],
+      questions: ["Is a Lead anything that came in?"],
+    });
     const read = await understand(env, { subject: "q", written, read: [readerSaying("CLAUDE", said)], employeeId: null, firmScope: "west-peek" });
     expect(read.brief.holds).toEqual(["Don't delete or change those tracker rows."]);
     expect(read.brief.questions).toEqual(["Whether to keep a separate livestream rate card is still open.", "I'm also questioning whether we need the Scale field.", "Is a Lead anything that came in?"]);
@@ -313,7 +313,7 @@ describe("holds are constraints; his open questions are a list of their own", ()
 describe("what the reader could not pin down", () => {
   it("an UNCLEAR line reaches the brief and the employee's input, which says to ask every item, numbered, and build the rest", async () => {
     const words = "Swap the hero photo for the new one. Move the pricing below the case studies.";
-    const said = ["ASK: Swap the hero photo for the new one.", "ASK: Move the pricing below the case studies.", "UNCLEAR: Swap the hero photo for the new one :: two new photos are attached and he does not say which", "UNCLEAR: words he never wrote :: dropped"].join("\n");
+    const said = firstRead({ asks: ["Swap the hero photo for the new one.", "Move the pricing below the case studies."], unclear: [{ words: "Swap the hero photo for the new one", missing: "two new photos are attached and he does not say which" }, { words: "words he never wrote", missing: "dropped" }] });
     const { cardId, inm } = await partnerEmail("unclear", 0, words);
     await sendUnderstoodReplies(env, new Date(), [readerSaying("CLAUDE", said)]);
     const brief = JSON.parse((await understoodRow(inm))!.brief_json!) as { unclear: Array<{ words: string; missing: string }> };
@@ -330,7 +330,7 @@ describe("nothing he said is dropped", () => {
   it("twelve questions all reach the brief and the employee's input", async () => {
     const twelve = Array.from({ length: 12 }, (_, i) => `Should item ${i + 1} stay on the page?`);
     const { cardId, inm } = await partnerEmail("twelve", 0, ["Tidy the page.", ...twelve].join("\n"));
-    await sendUnderstoodReplies(env, new Date(), [readerSaying("CLAUDE", ["ASK: Tidy the page.", ...twelve.map((q) => `QUESTION: ${q}`)].join("\n"))]);
+    await sendUnderstoodReplies(env, new Date(), [readerSaying("CLAUDE", firstRead({ asks: ["Tidy the page."], questions: twelve }))]);
     const brief = JSON.parse((await understoodRow(inm))!.brief_json!) as { questions: string[] };
     expect(brief.questions).toEqual(twelve);
     const practices = await practicesForCard(env, cardId);
@@ -342,8 +342,8 @@ describe("his questions are steady", () => {
   it("the dashboard email gives the same questions on two reads whose readers said different things, never fewer than the OS read", async () => {
     const os = await understand(env, { subject: "d", written: DASHBOARD, read: allOut, employeeId: null, firmScope: "west-peek" });
     expect(os.brief.questions.length).toBeGreaterThan(0);
-    const first = await understand(env, { subject: "d", written: DASHBOARD, read: [readerSaying("CLAUDE", "QUESTION: Is a Lead anything that came in?\nHOLD: Preview first, nothing live until I say so.")], employeeId: null, firmScope: "west-peek" });
-    const second = await understand(env, { subject: "d", written: DASHBOARD, read: [readerSaying("CODEX", "HOLD: No client names on it without my written OK.")], employeeId: null, firmScope: "west-peek" });
+    const first = await understand(env, { subject: "d", written: DASHBOARD, read: [readerSaying("CLAUDE", firstRead({ questions: ["Is a Lead anything that came in?"], holds: ["Preview first, nothing live until I say so."] }))], employeeId: null, firmScope: "west-peek" });
+    const second = await understand(env, { subject: "d", written: DASHBOARD, read: [readerSaying("CODEX", firstRead({ holds: ["No client names on it without my written OK."] }))], employeeId: null, firmScope: "west-peek" });
     expect(first.brief.questions).toEqual(os.brief.questions);
     expect(second.brief.questions).toEqual(os.brief.questions);
   });
@@ -360,7 +360,7 @@ describe("what the firm already knows is never asked", () => {
       read: async (_e, input) => {
         sawFacts = input.prompt.includes("separately, the Top Barz contest site");
         // A reader that sees the email alone cannot tell the two apart; one that sees the settled facts can.
-        return { ok: true, detail: "ok", reader: "CLAUDE", text: sawFacts ? "ASK: Keep this pipeline studio-only." : "ASK: Keep this pipeline studio-only.\nUNCLEAR: Keep this pipeline studio-only :: is Top Barz part of the studio?" };
+        return { ok: true, detail: "ok", reader: "CLAUDE", text: sawFacts ? firstRead({ asks: ["Keep this pipeline studio-only."] }) : firstRead({ asks: ["Keep this pipeline studio-only."], unclear: [{ words: "Keep this pipeline studio-only", missing: "is Top Barz part of the studio?" }] }) };
       },
     };
     const { cardId, inm } = await partnerEmail("settled", 0, "Keep this pipeline studio-only. Leave the Top Barz rows out.");

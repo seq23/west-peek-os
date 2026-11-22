@@ -1,7 +1,9 @@
 import type { Env } from "../env";
 import type { Actor } from "./authorize";
 import { appendEvent } from "../events";
+import { z } from "zod/v4";
 import { runAi } from "../ai/runAi";
+import { failedOnShape, readStructured, structuredOutput, type StructuredOutput } from "../ai/structuredOutput";
 import { maskPrivateInputs } from "../ai/scrub";
 import { committedLpNamedIn, committedLps } from "../ai/committedLps";
 import { partnerByEmail } from "../../shared/registry/partners";
@@ -41,7 +43,7 @@ export const UNDERSTOOD_PER_TICK = 2;
 const MAX_ASKS = 12;
 
 export type AskStatus = "DONE" | "IN_PROGRESS" | "NOT_DONE";
-export type SeatRead = (env: Env, input: { prompt: string; firmScope: string; employeeId: string | null; purpose: string }) => Promise<ReadOut>;
+export type SeatRead = (env: Env, input: { prompt: string; firmScope: string; employeeId: string | null; purpose: string; output?: StructuredOutput }) => Promise<ReadOut>;
 /**
  * What one reader gave back. `reader` names who answered (CLAUDE, CODEX, WORKERS_AI, GEMINI). `out` says the reader
  * was not there to ask (usage spent, Mac asleep, no binding, the privacy router refused it): not a failed read, so
@@ -58,11 +60,15 @@ export const confidentialSeatRead: SeatRead = async (env, input) => {
       purpose: input.purpose,
       actor,
       inputs: [input.prompt],
+      ...(input.output ? { output: input.output } : {}),
       sensitivity: "INTERNAL" as never,
       budgetContext: { judgement: true, confidential: true, seatFirst: true, neverPaid: true, expectedOutputTokens: 500 },
       routing: { category: "OPERATIONS" },
     });
-    return run.status === "COMPLETED" && run.output_text ? { ok: true, text: run.output_text, detail: "ok", runId: run.id } : { ok: false, text: "", detail: run.failure_reason ?? `run ${run.status}`, runId: run.id };
+    if (run.status === "COMPLETED" && run.output_text) return { ok: true, text: run.output_text, detail: "ok", runId: run.id };
+    // Answered, but in no lane in the asked shape: a read with nothing readable in it (as an unparseable reply always was), never a seat outage.
+    if (failedOnShape(run.failure_reason)) return { ok: true, text: "", detail: run.failure_reason ?? "unreadable", runId: run.id };
+    return { ok: false, text: "", detail: run.failure_reason ?? `run ${run.status}`, runId: run.id };
   } catch (err) {
     return { ok: false, text: "", detail: err instanceof Error ? err.message : String(err) };
   }
@@ -81,6 +87,7 @@ async function readThrough(env: Env, input: Parameters<SeatRead>[1], ask: { sens
       purpose: input.purpose,
       actor,
       inputs: [input.prompt],
+      ...(input.output ? { output: input.output } : {}),
       sensitivity: ask.sensitivity as never,
       budgetContext: { judgement: true, neverPaid: true, expectedOutputTokens: 700, ...ask.budgetContext },
       routing: { category: "OPERATIONS" },
@@ -91,6 +98,7 @@ async function readThrough(env: Env, input: Parameters<SeatRead>[1], ask: { sens
     if (run.model === "mock-local") return { ok: false, text: "", detail: "no model reader in this privacy mode", runId: run.id, out: true };
     if (run.status === "COMPLETED" && run.output_text) return { ok: true, text: run.output_text, detail: "ok", runId: run.id, reader: key ? (READER_OF[key] ?? key.toUpperCase()) : null };
     const why = run.failure_reason ?? `run ${run.status}`;
+    if (failedOnShape(why)) return { ok: true, text: "", detail: why, runId: run.id, reader: key ? (READER_OF[key] ?? key.toUpperCase()) : null };
     return { ok: false, text: "", detail: why, runId: run.id, out: OUT_STATUSES.has(run.status) || OUT_REASON.test(why) };
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
@@ -129,7 +137,23 @@ async function maskedGeminiRead(env: Env, input: Parameters<SeatRead>[1]): Promi
     return { ok: false, text: "", detail: "masking could not run; Gemini skipped", out: true };
   }
   const out = await readThrough(env, { ...input, prompt: masked.inputs[0]! }, { sensitivity: "PUBLIC", budgetContext: { publicModelApproved: true, providerKey: "google_free" } });
-  return out.ok ? { ...out, text: masked.restore(out.text) } : out;
+  if (!out.ok) return out;
+  // A shaped answer is put back value by value, so a restored name can never break the JSON around it.
+  if (input.output) {
+    try {
+      return { ...out, text: JSON.stringify(restoreStrings(JSON.parse(out.text), masked.restore)) };
+    } catch {
+      return { ...out, text: masked.restore(out.text) };
+    }
+  }
+  return { ...out, text: masked.restore(out.text) };
+}
+
+function restoreStrings(value: unknown, restore: (s: string) => string): unknown {
+  if (typeof value === "string") return restore(value);
+  if (Array.isArray(value)) return value.map((v) => restoreStrings(v, restore));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, restoreStrings(v, restore)]));
+  return value;
 }
 
 /** How long the employee waits for the first read before it starts from the OS's own read (her ruling: ten minutes). */
@@ -427,7 +451,7 @@ export async function understand(
   let reader: string | null = null;
   if (written) {
     for (const r of ladder) {
-      const out = await r.read(env, { prompt: understoodPrompt(input.subject, written, fileNames, input.known ?? "", input.today), firmScope: input.firmScope, employeeId: input.employeeId, purpose: "the Got it reply to a partner's email: his asks in his words" });
+      const out = await r.read(env, { prompt: understoodPrompt(input.subject, written, fileNames, input.known ?? "", input.today), firmScope: input.firmScope, employeeId: input.employeeId, purpose: "the Got it reply to a partner's email: his asks in his words", output: UNDERSTOOD_OUTPUT });
       if (out.runId) runIds.push(out.runId);
       readersTried.push(`${r.name}: ${out.ok ? "read it" : out.out ? `out (${out.detail.slice(0, 120)})` : `failed (${out.detail.slice(0, 120)})`}`);
       if (!out.ok) {
@@ -486,50 +510,73 @@ export async function understand(
   };
 }
 
-/** `ASK: …` lines kept only when they are his words (found in what he wrote); `NEXT: …`; `NONE` = nothing asked. */
+/**
+ * THE FIRST READ, AS FIELDS (22 Nov 2026, engineering sweep row 6). The reader answers in this JSON shape at the AI
+ * boundary (a reply in any other shape walks to the next lane); `parseUnderstood` then keeps only what is really his.
+ */
+const FIRST_READ_DECISION = z.object({
+  kind: z.enum(["approve", "change", "question", "stop", "nothing"]),
+  property: z.string().nullable(),
+  handOffTo: z.string().nullable(),
+  planApproved: z.boolean().nullable(),
+  holds: z.array(z.string()),
+  takeBack: z.boolean().nullable(),
+  cc: z.array(z.string()),
+  backBy: z.string().nullable().describe("YYYY-MM-DD, Central, or null"),
+});
+export const UNDERSTOOD_OUTPUT = structuredOutput(
+  "first_read",
+  z.object({
+    none: z.boolean().describe("true when he asks for nothing (a thank-you, an FYI)"),
+    asks: z.array(z.string()).describe("each separate ask, in his exact words"),
+    holds: z.array(z.string()).describe("each constraint, in his exact words"),
+    questions: z.array(z.string()).describe("each open question, in his exact words"),
+    unclear: z.array(z.object({ words: z.string(), missing: z.string() })).describe("each ask you cannot pin down: his exact words and what is missing"),
+    files: z.array(z.object({ filename: z.string(), purpose: z.string() })).describe("what each attached file is for"),
+    next: z.string().nullable().describe("what happens next, one plain sentence"),
+    decision: FIRST_READ_DECISION.nullable(),
+  }),
+);
+
+const unquote = (s: string) => s.trim().replace(/^["“]|["”]$/g, "").trim();
+
+/** The checked first read, kept only where it is his: asks, holds, questions and unclear words must be found in what he wrote; a file must really be on the card. */
 export function parseUnderstood(text: string, written: string, files: readonly string[] = []): { asks: string[]; next: string | null; none: boolean; holds: string[]; questions: string[]; unclear: Array<{ words: string; missing: string }>; files: Array<{ filename: string; purpose: string }>; decision: FirstReadDecision | null } {
+  const read = readStructured(UNDERSTOOD_OUTPUT, text);
+  if (!read) return { decision: null, asks: [], next: null, none: false, holds: [], questions: [], unclear: [], files: [] };
   const body = norm(written);
-  const lines = text.replace(/<think>[\s\S]*?<\/think>/gi, "").split(/\r?\n/).map((l) => l.trim().replace(/^[-*•]\s+/, "")).filter(Boolean);
-  const none = lines.some((l) => /^NONE\b/i.test(l)) && !lines.some((l) => /^ASK\s*:/i.test(l));
+  const his = (w: string) => w.length >= 3 && body.includes(norm(w));
   const asks: string[] = [];
-  for (const l of lines) {
-    const m = /^ASK\s*:\s*(.+)$/i.exec(l);
-    if (!m) continue;
-    const ask = m[1]!.trim().replace(/^["“]|["”]$/g, "").trim();
-    if (ask.length >= 3 && body.includes(norm(ask)) && !asks.some((a) => norm(a) === norm(ask))) asks.push(ask);
+  for (const raw of read.asks) {
+    const ask = unquote(raw);
+    if (his(ask) && !asks.some((a) => norm(a) === norm(ask))) asks.push(ask);
   }
-  const next = lines.map((l) => /^NEXT\s*:\s*(.+)$/i.exec(l)?.[1]?.trim()).find(Boolean) ?? null;
-  // HOLD lines are kept only when they are his words too; FILE lines only for a file that is really on the card.
-  // A HOLD line that is question-shaped is a question, whatever the reader called it; one that constrains nothing is dropped.
+  const none = read.none && read.asks.length === 0;
+  const next = read.next?.trim() || null;
+  // Holds and questions only when they are his words too. A hold that is question-shaped is a question, whatever the
+  // reader called it; one that constrains nothing is dropped.
   const holds: string[] = [];
   const questions: string[] = [];
-  for (const l of lines) {
-    const m = /^(HOLD|QUESTION)\s*:\s*(.+)$/i.exec(l);
-    const words = m?.[2]?.trim().replace(/^["“]|["”]$/g, "").trim();
-    if (!m || !words || words.length < 3 || !body.includes(norm(words))) continue;
-    const asQuestion = m[1]!.toUpperCase() === "QUESTION" || isQuestionShaped(words);
+  const place = (raw: string, said: "HOLD" | "QUESTION") => {
+    const words = unquote(raw);
+    if (!his(words)) return;
+    const asQuestion = said === "QUESTION" || isQuestionShaped(words);
     const list = asQuestion ? questions : isConstraint(words) ? holds : null;
     if (list && !list.some((h) => norm(h) === norm(words))) list.push(words);
-  }
-  // UNCLEAR lines: his exact words (found in what he wrote) and what is missing, in the reader's one plain line.
+  };
+  for (const h of read.holds) place(h, "HOLD");
+  for (const q of read.questions) place(q, "QUESTION");
   const unclear: Array<{ words: string; missing: string }> = [];
-  for (const l of lines) {
-    const m = /^UNCLEAR\s*:\s*(.+?)\s*::\s*(.+)$/i.exec(l);
-    const words = m?.[1]?.trim().replace(/^["“]|["”]$/g, "").trim();
-    if (m && words && words.length >= 3 && body.includes(norm(words)) && !unclear.some((u) => norm(u.words) === norm(words))) unclear.push({ words, missing: m[2]!.trim().slice(0, 240) });
+  for (const u of read.unclear) {
+    const words = unquote(u.words);
+    if (his(words) && u.missing.trim() && !unclear.some((x) => norm(x.words) === norm(words))) unclear.push({ words, missing: u.missing.trim().slice(0, 240) });
   }
   const purposes: Array<{ filename: string; purpose: string }> = [];
-  for (const l of lines) {
-    const m = /^FILE\s*:\s*(.+?)\s*(?:::|—|–| - |:)\s*(.+)$/i.exec(l);
-    const name = m ? files.find((f) => f.toLowerCase() === m[1]!.trim().replace(/^["“]|["”]$/g, "").toLowerCase()) : undefined;
-    if (m && name && !purposes.some((p) => p.filename === name)) purposes.push({ filename: name, purpose: m[2]!.trim().slice(0, 200) });
+  for (const f of read.files) {
+    const name = files.find((x) => x.toLowerCase() === unquote(f.filename).toLowerCase());
+    if (name && f.purpose.trim() && !purposes.some((p) => p.filename === name)) purposes.push({ filename: name, purpose: f.purpose.trim().slice(0, 200) });
   }
-  let decision: FirstReadDecision | null = null;
-  const decisionLine = lines.find((l) => /^DECISION\s*:/i.test(l));
-  if (decisionLine) {
-    try { decision = parseDecision(JSON.parse(decisionLine.replace(/^DECISION\s*:\s*/i, ""))); } catch { /* an unusable read falls back */ }
-  }
-  return { decision, asks: asks.slice(0, MAX_ASKS), next: next ? next.slice(0, 280) : null, none, holds, questions, unclear, files: purposes };
+  return { decision: parseDecision(read.decision), asks: asks.slice(0, MAX_ASKS), next: next ? next.slice(0, 280) : null, none, holds, questions, unclear, files: purposes };
 }
 
 /** How much of the OS's OTHER context (profile, practices, the card) rides beside the brain's sections, which are never cut. */
@@ -538,22 +585,20 @@ export const KNOWN_OTHER_MAX = 4000;
 function understoodPrompt(subject: string, written: string, files: readonly string[] = [], known = "", today = centralDay(new Date())): string {
   return [
     "A Managing Partner of the firm just emailed the work below. List each separate thing he is asking for.",
-    "Rules: copy his EXACT words for each ask (a phrase or sentence from his email, unchanged, no rewording, no summary).",
-    "One line per ask: ASK: <his exact words>",
-    "Then one line per hold: ONLY a constraint, something he says must not happen, must wait for him, or must always or never be done (don't, must, never, not yet, nothing live, no client names without his written OK): HOLD: <his exact words>",
-    "Then one line per open question: anything he asks, wonders about, wants clarified or says is still open. A question is never a hold: QUESTION: <his exact words>",
-    "Then one line per ask you cannot pin down (a fact that is missing, a voice note that disagrees with the email, two different readings): UNCLEAR: <his exact words> :: <what is missing, one plain line>",
-    ...(files.length ? [`Then one line per attached file, saying what it is for, from his email: FILE: <file name> :: <what it is for, under 15 words>`, `Files: ${files.join(", ")}`] : []),
-    "Then one line: NEXT: <what happens next, one plain sentence, no promises of dates, nothing about models or systems>",
+    "Rules: copy his EXACT words for each ask (a phrase or sentence from his email, unchanged, no rewording, no summary): asks.",
+    "holds: ONLY a constraint, something he says must not happen, must wait for him, or must always or never be done (don't, must, never, not yet, nothing live, no client names without his written OK), in his exact words.",
+    "questions: anything he asks, wonders about, wants clarified or says is still open, in his exact words. A question is never a hold.",
+    "unclear: each ask you cannot pin down (a fact that is missing, a voice note that disagrees with the email, two different readings): his exact words, and what is missing in one plain line.",
+    ...(files.length ? [`files: for each attached file, what it is for, from his email (under 15 words).`, `Files: ${files.join(", ")}`] : ["files: empty (nothing is attached)."]),
+    "next: what happens next, one plain sentence, no promises of dates, nothing about models or systems.",
     "A remark on how something is (praise, status, \"X is in good shape\") is NOT an ask. Each numbered item is one ask. Never a fragment of a sentence.",
-    'Always include one line DECISION: followed by a JSON object with exactly {"kind":"approve|change|question|stop|nothing","property":string|null,"handOffTo":string|null,"planApproved":boolean|null,"holds":string[],"takeBack":boolean|null,"cc":string[],"backBy":"YYYY-MM-DD"|null}. Choose the actual kind, not the alternatives. A site mentioned only as separate from the work is not the property. A project or dashboard is not a person. Asking to confirm a plan is not approving it. Use null when unspecified.',
-    `In DECISION: handOffTo is the person he hands this work to, only when he actually hands it over now (never when he doubts it, negates it, makes it conditional, quotes someone or asks). takeBack is true only when he takes the work back himself now. cc lists the people he asks to copy on the finished email (empty when none). backBy is the last day of the window he says he will come back to this by ("this weekend" is that Sunday), counting from today, ${today}; null when he names none.`,
-    "If he asks for nothing (a thank-you, an FYI), include NONE as well as DECISION.",
-    "Nothing else in your answer.",
+    "decision: always give it. Choose the actual kind (approve, change, question, stop or nothing). A site mentioned only as separate from the work is not the property. A project or dashboard is not a person. Asking to confirm a plan is not approving it. Use null when unspecified.",
+    `In decision: handOffTo is the person he hands this work to, only when he actually hands it over now (never when he doubts it, negates it, makes it conditional, quotes someone or asks). takeBack is true only when he takes the work back himself now. cc lists the people he asks to copy on the finished email (empty when none). backBy is the last day (YYYY-MM-DD) of the window he says he will come back to this by ("this weekend" is that Sunday), counting from today, ${today}; null when he names none.`,
+    "none: true only if he asks for nothing (a thank-you, an FYI); decision is still given.",
     ...(known.trim()
       ? [
           "",
-          "WHAT THE FIRM ALREADY KNOWS (settled facts about him, his businesses and this card). Never flag as UNCLEAR anything these answer (for example which of his businesses a word refers to):",
+          "WHAT THE FIRM ALREADY KNOWS (settled facts about him, his businesses and this card). Never list as unclear anything these answer (for example which of his businesses a word refers to):",
           known.trim(),
         ]
       : []),
@@ -1098,12 +1143,18 @@ export function reportedAsks(detail: string): Array<{ words: string; status: Ask
   return [];
 }
 
+/** The marking read, as fields checked at the AI boundary (22 Nov 2026, engineering sweep row 6). */
+export const ASK_MARKS_OUTPUT = structuredOutput(
+  "ask_marks",
+  z.object({
+    marks: z.array(z.object({ number: z.number().int().min(1), status: z.enum(["DONE", "IN_PROGRESS", "NOT_DONE"]), why: z.string() })),
+  }),
+);
+
 function markPrompt(asks: AskRow[], detail: string): string {
   return [
     "A Managing Partner asked for the numbered things below. The work is finished; its report follows.",
-    "For EACH number, say what happened, judged only from the report:",
-    "<number> | DONE or IN_PROGRESS or NOT_DONE | <why, under 25 words, concrete>",
-    "One line per number, every number, nothing else.",
+    "For EACH number, say what happened, judged only from the report: DONE, IN_PROGRESS or NOT_DONE, and why (under 25 words, concrete). Every number.",
     "",
     ...asks.map((a, i) => `${i + 1}. ${a.words}`),
     "",
@@ -1152,14 +1203,12 @@ export async function asksAtDone(
   let open = asks.filter((a) => !a.status);
   let seatDown: string | null = null;
   if (open.length) {
-    const out = await read(env, { prompt: markPrompt(open, detail), firmScope: card.firm_scope, employeeId: card.owner_id, purpose: "marking each of a partner's asks before the final reply" });
+    const out = await read(env, { prompt: markPrompt(open, detail), firmScope: card.firm_scope, employeeId: card.owner_id, purpose: "marking each of a partner's asks before the final reply", output: ASK_MARKS_OUTPUT });
     if (!out.ok) seatDown = out.detail || "no seat answered";
     if (out.ok) {
-      for (const line of out.text.split(/\r?\n/)) {
-        const m = /^\s*(\d+)\s*[|.)]\s*([A-Z_ -]+?)\s*\|\s*(.+)$/i.exec(line);
-        const ask = m ? open[Number(m[1]) - 1] : undefined;
-        const status = m ? statusOf(m[2]) : null;
-        if (ask && status && !ask.status && m![3]!.trim()) await mark(env, ask.id, status, m![3]!.trim());
+      for (const m of readStructured(ASK_MARKS_OUTPUT, out.text)?.marks ?? []) {
+        const ask = open[m.number - 1];
+        if (ask && !ask.status && m.why.trim()) await mark(env, ask.id, m.status, m.why.trim());
       }
     }
     asks = await load();

@@ -1,3 +1,4 @@
+import { askMarks } from "./helpers/aiShapes";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
@@ -47,7 +48,7 @@ describe("the DONE marking reads every build's item ledger", () => {
     let prompt = "";
     const read: SeatRead = async (_e, input) => {
       prompt = input.prompt;
-      return { ok: true, detail: "", text: /15% smaller \(logo is 85%/.test(input.prompt) ? "1 | DONE | the logo build" : "1 | NOT_DONE | not in the report" };
+      return { ok: true, detail: "", text: /15% smaller \(logo is 85%/.test(input.prompt) ? askMarks([{ number: 1, status: "DONE", why: "the logo build" }]) : askMarks([{ number: 1, status: "NOT_DONE", why: "not in the report" }]) };
     };
     const card = (await env.WP_OS_DB.prepare("SELECT id, title, owner_id, firm_scope, requested_by_email FROM work_card WHERE id = ?1").bind(CARD).first<{ id: string; title: string; owner_id: string; firm_scope: string; requested_by_email: string }>())!;
     const ledger = await buildItemsLedger(env, CARD);

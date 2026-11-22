@@ -1,3 +1,4 @@
+import { replyIntent } from "./helpers/aiShapes";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
@@ -25,7 +26,7 @@ beforeAll(async () => {
 });
 afterAll(async () => disposeTestDb(t));
 
-const reads = (door: string, buildIn = "none"): ReplyIntentReader => async (_e, input) => ({ ...parseReplyIntent(`INTENT: CONTINUE\nDOOR: ${door}\nSEAT: none\nBUILD_IN: ${buildIn}\nCHANGES: none\nQUESTION: none\nREASON: test`, input.text), keyword: null, aiRunId: null });
+const reads = (door: string, buildIn = "none"): ReplyIntentReader => async (_e, input) => ({ ...parseReplyIntent(replyIntent({ intent: "CONTINUE", door: door as never, buildIn: buildIn === "none" ? null : (buildIn as never), reason: "test" }), input.text), keyword: null, aiRunId: null });
 
 async function replyOn(title: string, written: string, readWords: ReplyIntentReader) {
   const card = await createWorkCardInternal(env, systemIdentity(), { title, owner_type: "AI", owner_id: "aie_wyatt", firm_scope: "west-peek", priority: "NORMAL" } as never);

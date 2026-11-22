@@ -1,3 +1,4 @@
+import { firstRead } from "./helpers/aiShapes";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
@@ -765,7 +766,7 @@ describe("the first read decides hand-off and take-back; keywords only after the
   const reads = (decision: Partial<FirstReadDecision>) => async () => ({
     ok: true,
     detail: "the test's reader",
-    text: `NONE\nDECISION: ${JSON.stringify({ kind: "nothing", property: null, handOffTo: null, planApproved: null, holds: [], takeBack: null, cc: [], backBy: null, ...decision })}`,
+    text: firstRead({ none: true, decision: { kind: "nothing", ...decision } }),
   });
   /** The first-read step of the sweep, ticked until this email's read has settled (older emails in the store go first). */
   async function readIn(messageId: string, reader: ReturnType<typeof reads>): Promise<void> {

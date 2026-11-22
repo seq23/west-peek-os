@@ -1,3 +1,4 @@
+import { firstRead } from "./helpers/aiShapes";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { deflateRawSync } from "node:zlib";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
@@ -153,7 +154,7 @@ afterAll(async () => {
 describe("the Got it counts what he asked, in his words", () => {
   it("a dashboard-shaped email is exactly its nine numbered changes plus one questions item: no praise, no fragment, whatever the reader says", async () => {
     let modelCalls = 0;
-    const junk: SeatRead = async () => { modelCalls += 1; return { ok: true, text: "ASK: Attached is\nASK: in good shape", detail: "ok" }; };
+    const junk: SeatRead = async () => { modelCalls += 1; return { ok: true, text: firstRead({ asks: ["Attached is", "in good shape"] }), detail: "ok" }; };
     const out = await understand(env, { subject: "Re: Porter: dashboard", written: DASHBOARD, read: junk, employeeId: null, firmScope: "west-peek" });
     // Every email gets its first read (holds, files); a numbered email's asks still come from its structure, so a
     // reader that returns fragments and praise as asks changes nothing.
@@ -233,7 +234,7 @@ describe("the dry run builds the Got it through the live reader, and leaves noth
       ).bind(runId, `tr_${runId}`).run();
       await parkRun(e, { seat: "claude_code" as never, purpose: "the Got it reply", prompt: "p", modelAccess: "PRIVATE_MODEL_ONLY", aiRunId: runId });
       await e.WP_OS_DB.prepare("INSERT INTO model_job_outcome (id, task_kind, provider_id, model, outcome, ai_run_id, firm_scope) VALUES (?1, 'judgement', 'claude_code', 'seat', 'SUCCEEDED', ?2, 'west-peek')").bind(`mjo_${runId}`, runId).run();
-      return { ok: true, text: "ASK: please swap the hero photo for the one in the ZIP\nNEXT: On it.", detail: "ok", runId };
+      return { ok: true, text: firstRead({ asks: ["please swap the hero photo for the one in the ZIP"], next: "On it." }), detail: "ok", runId };
     };
     const out = await dryReadMessage(env, mimeWithZip("Logos attached; please swap the hero photo for the one in the ZIP and make the header taller."), { read: seat });
     expect(runId, "the live reader called her seat").not.toBe("");

@@ -13,8 +13,15 @@ This document describes the governed AI boundary and its cost/privacy machinery.
 `src/worker/ai/runAi.ts` exports:
 
 ```ts
-runAi(env, { purpose, actor, inputs, sensitivity, capabilityRequirement?, budgetContext? }, deps?) → { run }
+runAi(env, { purpose, actor, inputs, sensitivity, output?, verify?, capabilityRequirement?, budgetContext? }, deps?) → { run }
 ```
+
+**Fields, never prose labels (22 Nov 2026).** A caller that needs fields from a model passes `output`
+(`structuredOutput(name, zodSchema)` from `src/worker/ai/structuredOutput.ts`) and reads the run with
+`readStructured`. Every lane is told the JSON Schema in the prompt; Anthropic (`output_config`) and Gemini
+(`responseJsonSchema`) are also sent it, so their decoders cannot answer in another shape; every answer is checked
+against the zod schema before it counts. A reply in the wrong shape is `verifier_rejected:structured_output:…` and
+the chain walks to its next rung; `output_text` is the checked JSON. No new caller parses `INTENT:`-style lines.
 
 `runAi` is the ONLY module that may call a provider. Provider SDK imports, model API
 hostnames, and bearer-token model calls may exist only in `src/worker/ai/providers/`,
