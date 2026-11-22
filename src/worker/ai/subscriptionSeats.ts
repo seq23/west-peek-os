@@ -695,6 +695,7 @@ export async function claimRun(
 /** Did THIS device, for THIS seat, declare it can read every kind of file the run carries? Unreadable means no. */
 async function deviceMayReadRunFiles(env: Env, deviceId: string, seat: string, attachmentsJson: string): Promise<boolean> {
   const refs = readRefs(attachmentsJson);
+  if (!refs) return false; // an unreadable file list: no device is offered what nobody can name
   if (refs.length === 0) return true;
   const row = await env.WP_OS_DB.prepare("SELECT capabilities_json FROM subscription_seat_device WHERE seat = ?1 AND device_id = ?2")
     .bind(seat, deviceId)

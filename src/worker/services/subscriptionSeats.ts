@@ -182,7 +182,7 @@ export async function handleSubscriptionSeatClaim(ctx: RouteContext): Promise<Re
       needs_search: run.needs_search === 1,
       // The files this run carries, by name and kind — never the storage key. The holder fetches each one from
       // `/api/subscription-seats/attachment` while it holds the run.
-      attachments: readRefs(run.attachments_json).map((r) => ({ n: r.n, kind: r.kind, media_type: r.media_type, label: r.label, bytes: r.bytes })),
+      attachments: (readRefs(run.attachments_json) ?? []).map((r) => ({ n: r.n, kind: r.kind, media_type: r.media_type, label: r.label, bytes: r.bytes })),
       job,
       purpose: run.purpose,
       prompt: run.prompt,
@@ -297,7 +297,7 @@ export async function handleSubscriptionSeatAttachment(ctx: RouteContext): Promi
   if (!row || row.status !== "CLAIMED" || row.claimed_by !== deviceId || row.attachments_cleared_at) {
     return json({ error: "not_found", detail: "this device does not hold that run, or the run has ended" }, { status: 404 });
   }
-  const ref = readRefs(row.attachments_json).find((r) => r.n === n);
+  const ref = (readRefs(row.attachments_json) ?? []).find((r) => r.n === n);
   if (!ref || !ctx.env.WP_OS_DOCUMENTS) return json({ error: "not_found", detail: "that run carries no such file" }, { status: 404 });
   const object = await ctx.env.WP_OS_DOCUMENTS.get(ref.key);
   if (!object) return json({ error: "not_found", detail: "the file is no longer stored" }, { status: 404 });

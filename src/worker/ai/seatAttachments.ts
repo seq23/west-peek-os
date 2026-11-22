@@ -79,9 +79,40 @@ export function attachmentRefusal(files: readonly Pick<SeatAttachmentInput, "kin
     total += bytes;
     if (f.kind === "image" && !/^image\/(png|jpe?g|gif|webp)$/.test(f.mediaType)) return `an image type a seat is not asked to read (${f.mediaType})`;
     if (f.kind === "document" && f.mediaType !== "application/pdf") return `a document type a seat is not asked to read (${f.mediaType})`;
+    if (!bytesAre(f.mediaType, f.dataBase64)) return `a file whose bytes are not the ${f.mediaType} it says it is`;
   }
   if (total > MAX_ATTACHMENT_TOTAL_BYTES) return `more than ${MAX_ATTACHMENT_TOTAL_BYTES / 1024 / 1024} MB in all`;
   return null;
+}
+
+/*
+ * THE BYTES MUST BE THE TYPE THEY CLAIM (22 Nov 2026, engineering sweep row 8). The declared media type comes from
+ * whoever sent the file; a seat on the Mac opens it by that type. A "png" that is really a PDF, a script or an
+ * archive is refused here, before it is stored, by its first bytes (the file signature every one of these formats
+ * starts with).
+ */
+const SIGNATURES: Record<string, (b: Uint8Array) => boolean> = {
+  "image/png": (b) => starts(b, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  "image/jpeg": (b) => starts(b, [0xff, 0xd8, 0xff]),
+  "image/jpg": (b) => starts(b, [0xff, 0xd8, 0xff]),
+  "image/gif": (b) => starts(b, [0x47, 0x49, 0x46, 0x38]) && (b[4] === 0x37 || b[4] === 0x39) && b[5] === 0x61,
+  "image/webp": (b) => starts(b, [0x52, 0x49, 0x46, 0x46]) && starts(b.subarray(8), [0x57, 0x45, 0x42, 0x50]),
+  "application/pdf": (b) => starts(b, [0x25, 0x50, 0x44, 0x46, 0x2d]),
+};
+
+function starts(b: Uint8Array, sig: readonly number[]): boolean {
+  return b.length >= sig.length && sig.every((v, i) => b[i] === v);
+}
+
+/** Do the file's first bytes carry its declared type's signature? Unreadable base64 or an unknown type is no. */
+export function bytesAre(mediaType: string, dataBase64: string): boolean {
+  const check = SIGNATURES[mediaType];
+  if (!check) return false;
+  try {
+    return check(decode(dataBase64.replace(/\s+/g, "").slice(0, 16)));
+  } catch {
+    return false;
+  }
 }
 
 function decode(b64: string): Uint8Array {
@@ -101,7 +132,7 @@ export async function putSeatAttachments(env: Env, runId: string, files: readonl
       const f = files[n]!;
       const bytes = decode(f.dataBase64);
       const label = safeLabel(f.label, n, f.mediaType);
-      const key = `seat-attachments/${runId}/${label}`;
+      const key = `${SEAT_ATTACHMENT_PREFIX}${runId}/${label}`;
       await bucket.put(key, bytes, { httpMetadata: { contentType: f.mediaType } });
       refs.push({ n, kind: f.kind, media_type: f.mediaType, label, key, bytes: bytes.byteLength });
     }
@@ -123,15 +154,26 @@ export async function deleteKeys(bucket: { delete: (keys: string[]) => Promise<u
   }
 }
 
-export function readRefs(attachmentsJson: string | null | undefined): SeatAttachmentRef[] {
+/**
+ * The files a run carries, or NULL when the stored list cannot be read (corrupt JSON, not a list, an entry with no
+ * key). Null is UNKNOWN, never "no files": nothing is deleted or stamped cleared from it, no device is offered the run
+ * on its strength, and the bucket's lifecycle rule on `seat-attachments/` (see SEAT_ATTACHMENT_PREFIX) removes the
+ * objects in the end.
+ */
+export function readRefs(attachmentsJson: string | null | undefined): SeatAttachmentRef[] | null {
   if (!attachmentsJson) return [];
   try {
     const parsed: unknown = JSON.parse(attachmentsJson);
-    return Array.isArray(parsed) ? (parsed as SeatAttachmentRef[]).filter((r) => r && typeof r.key === "string" && typeof r.n === "number") : [];
+    if (!Array.isArray(parsed)) return null;
+    const ok = parsed.every((r) => r && typeof r === "object" && typeof (r as SeatAttachmentRef).key === "string" && typeof (r as SeatAttachmentRef).n === "number");
+    return ok ? (parsed as SeatAttachmentRef[]) : null;
   } catch {
-    return [];
+    return null;
   }
 }
+
+/** Every seat file lives under this prefix; the R2 lifecycle rule (docs/OPERATIONS.md) is scoped to it. */
+export const SEAT_ATTACHMENT_PREFIX = "seat-attachments/";
 
 /** Delete one ended run's objects now. Best effort; a failure is left for the sweep. */
 export async function clearRunAttachments(env: Env, runId: string, now: Date = new Date()): Promise<void> {
@@ -143,6 +185,8 @@ export async function clearRunAttachments(env: Env, runId: string, now: Date = n
       .first<{ attachments_json: string }>();
     if (!row) return;
     const refs = readRefs(row.attachments_json);
+    // An unreadable list is unknown: nothing is deleted on its strength and the run is never stamped cleared.
+    if (!refs) return;
     if (refs.length > 0) {
       // No bucket bound is an outage, not a deletion: the files are still there, so the run is left for the sweep.
       if (!env.WP_OS_DOCUMENTS) return;
@@ -164,11 +208,13 @@ export async function clearEndedAttachments(env: Env, now: Date = new Date()): P
         await env.WP_OS_DB.prepare(
           `SELECT id, attachments_json FROM subscription_seat_run
             WHERE attachments_json IS NOT NULL AND attachments_cleared_at IS NULL AND status IN ('REPORTED', 'FAILED', 'ABANDONED')
+              AND json_valid(attachments_json)
             LIMIT 50`,
         ).all<{ id: string; attachments_json: string }>()
       ).results ?? [];
     for (const row of rows) {
       const refs = readRefs(row.attachments_json);
+      if (!refs) continue; // an unreadable list: unknown, never "cleared" (the lifecycle rule is the backstop)
       if (refs.length > 0 && !bucket) continue; // no bucket bound: unknown, never "cleared"
       try {
         if (refs.length > 0) await bucket!.delete(refs.map((r) => r.key));

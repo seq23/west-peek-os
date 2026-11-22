@@ -113,6 +113,17 @@ rulings) are not kept here: they live in the West Peek Ventures company brain in
   calendar; LP and broker meetings never join the live Meet media stream. Both are guarded in code;
   the detail and the validators are in [GOOGLE_MEET.md](GOOGLE_MEET.md).
 
+## Seat files in R2
+
+- Files handed to a subscription seat live under `seat-attachments/<run id>/` in `west-peek-os-documents` and are
+  deleted when the run ends (`clearRunAttachments`, then the minute sweep `clearEndedAttachments`).
+- **Backstop:** the bucket's lifecycle rule `seat-attachments-expire` expires that prefix after 7 days (runs end
+  within hours), so a file whose run list went unreadable, or a delete that never happened, is gone within a week.
+  Check: `npx wrangler r2 bucket lifecycle list west-peek-os-documents`. Re-add:
+  `npx wrangler r2 bucket lifecycle add west-peek-os-documents seat-attachments-expire seat-attachments/ --expire-days 7 --force`.
+- A run whose `attachments_json` cannot be read is UNKNOWN: never stamped cleared, never offered to a device, skipped
+  by the sweep; the lifecycle rule removes its files.
+
 ## Tests
 
 - **Wall-clock fixtures.** `inQuietHours` (`services/notifications.ts`) treats `end` as exclusive,
