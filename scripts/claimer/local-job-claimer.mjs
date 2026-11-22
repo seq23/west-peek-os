@@ -765,9 +765,11 @@ function selfTest() {
       const plists = ["seat-claimer", "meet-listener"].every((n) => /<key>KeepAlive<\/key>\s*<true\/>/.test(readFileSync(path.join(REPO_ROOT, "deployment", "launchd", `ventures.westpeek.os.${n}.plist`), "utf8").replace(/<!--[\s\S]*?-->/g, "")));
       return /if \(!worked\) \{\s*restartIfRepoMoved\(STARTED_HEAD\);/.test(seatLoop) && /if \(out\.active === 0 && headMoved\(STARTED_HEAD, repoHead\(\)\)\)/.test(meetLoop) && /process\.exit\(EXIT_NEW_CODE\)/.test(meetLoop) && plists;
     }],
-    ["launchd restarts the claimer on ANY exit (KeepAlive true), so a restart-for-new-code really restarts", () => {
+    ["launchd restarts the claimer on every NON-ZERO exit (KeepAlive SuccessfulExit false), and every restart-worthy exit is non-zero: new code, no guard; only the window closing exits 0", () => {
       const plist = readFileSync(path.join(REPO_ROOT, "deployment", "launchd", "ventures.westpeek.os.local-jobs.plist"), "utf8").replace(/<!--[\s\S]*?-->/g, "");
-      return /<key>KeepAlive<\/key>\s*<true\/>/.test(plist) && /local-job-claimer\.mjs/.test(plist);
+      return /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>\s*<\/dict>/.test(plist) && /local-job-claimer\.mjs/.test(plist) &&
+        /<string>__HOME__\/bin\/mac-window<\/string><string>run<\/string><string>LIGHT<\/string><string>ventures\.westpeek\.os\.local-jobs<\/string>/.test(plist) &&
+        EXIT_NEW_CODE !== 0 && EXIT_NO_GUARD !== 0;
     }],
     ["a closed lid with no external display is AWAY; an open lid, or a closed lid on a desk display, is not", () => {
       const closed = lidStateFrom('  |   "AppleClamshellState" = Yes\n  |   "AppleClamshellCausesSleep" = Yes');
