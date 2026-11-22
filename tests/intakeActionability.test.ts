@@ -575,7 +575,7 @@ describe("the 30-day purge", () => {
 
     // A. Old enough, still stowed — must be purged, blob and all.
     await env.WP_OS_DB.prepare(
-      "INSERT INTO work_card (id, title, kind, state, created_by, firm_scope, auto_resolution, created_at) VALUES ('wc_purge_old', 'old banter', ?1, 'CANCELLED', 'system', 'west-peek', 'NO_ACTION_NEEDED', ?2)",
+      "INSERT INTO work_card (id, title, kind, state, created_by, firm_scope, auto_resolution, created_at, updated_at) VALUES ('wc_purge_old', 'old banter', ?1, 'CANCELLED', 'system', 'west-peek', 'NO_ACTION_NEEDED', ?2, ?2)",
     )
       .bind(WEB_PROPERTY_CHANGE_KIND, old)
       .run();
@@ -598,21 +598,21 @@ describe("the 30-day purge", () => {
 
     // B. Old, but not stowed at all — real finished work must never be purged.
     await env.WP_OS_DB.prepare(
-      "INSERT INTO work_card (id, title, kind, state, created_by, firm_scope, auto_resolution, created_at) VALUES ('wc_purge_real', 'real finished work', ?1, 'DONE', 'system', 'west-peek', NULL, ?2)",
+      "INSERT INTO work_card (id, title, kind, state, created_by, firm_scope, auto_resolution, created_at, updated_at) VALUES ('wc_purge_real', 'real finished work', ?1, 'DONE', 'system', 'west-peek', NULL, ?2, ?2)",
     )
       .bind(WEB_PROPERTY_CHANGE_KIND, old)
       .run();
 
     // C. Old and stowed, but REOPENED — a dispute within the window must exclude it from the purge.
     await env.WP_OS_DB.prepare(
-      "INSERT INTO work_card (id, title, kind, state, created_by, firm_scope, auto_resolution, created_at) VALUES ('wc_purge_reopened', 'reopened banter', ?1, 'OPEN', 'system', 'west-peek', 'NO_ACTION_NEEDED', ?2)",
+      "INSERT INTO work_card (id, title, kind, state, created_by, firm_scope, auto_resolution, created_at, updated_at) VALUES ('wc_purge_reopened', 'reopened banter', ?1, 'OPEN', 'system', 'west-peek', 'NO_ACTION_NEEDED', ?2, ?2)",
     )
       .bind(WEB_PROPERTY_CHANGE_KIND, old)
       .run();
 
     // D. Stowed, but still inside the 30-day window — must survive this run.
     await env.WP_OS_DB.prepare(
-      "INSERT INTO work_card (id, title, kind, state, created_by, firm_scope, auto_resolution, created_at) VALUES ('wc_purge_recent', 'recent banter', ?1, 'CANCELLED', 'system', 'west-peek', 'NO_ACTION_NEEDED', ?2)",
+      "INSERT INTO work_card (id, title, kind, state, created_by, firm_scope, auto_resolution, created_at, updated_at) VALUES ('wc_purge_recent', 'recent banter', ?1, 'CANCELLED', 'system', 'west-peek', 'NO_ACTION_NEEDED', ?2, ?2)",
     )
       .bind(WEB_PROPERTY_CHANGE_KIND, recent)
       .run();
@@ -620,6 +620,7 @@ describe("the 30-day purge", () => {
     const out = await purgeNoActionCards(env, now);
     expect(out.purged).toEqual(["wc_purge_old"]);
     expect(out.blobFailures).toEqual([]);
+    expect(out.kept).toEqual([]);
 
     expect(await card("wc_purge_old")).toBeNull();
     expect(bucket.deletes).toContain("inbound-email/old.eml");
@@ -636,5 +637,181 @@ describe("the 30-day purge", () => {
     expect(await card("wc_purge_real")).not.toBeNull();
     expect(await card("wc_purge_reopened")).not.toBeNull();
     expect(await card("wc_purge_recent")).not.toBeNull();
+  });
+});
+
+describe("the 30-day purge keeps every promise (eng sweep, 22 Nov 2026)", () => {
+  const NOW = new Date("2026-12-30T09:00:00.000Z");
+  const OLD = new Date(NOW.getTime() - 40 * 24 * 3600_000).toISOString();
+  const INSIDE = new Date(NOW.getTime() - 3 * 24 * 3600_000).toISOString();
+
+  async function stowed(id: string, opts: { created?: string; updated?: string; merged?: string } = {}): Promise<void> {
+    await env.WP_OS_DB.prepare(
+      "INSERT INTO work_card (id, title, kind, state, created_by, firm_scope, auto_resolution, created_at, updated_at, merged_into_card_id) VALUES (?1, 'banter', ?2, 'CANCELLED', 'system', 'west-peek', 'NO_ACTION_NEEDED', ?3, ?4, ?5)",
+    )
+      .bind(id, WEB_PROPERTY_CHANGE_KIND, opts.created ?? OLD, opts.updated ?? OLD, opts.merged ?? null)
+      .run();
+  }
+  async function message(id: string, cardId: string, receivedAt: string): Promise<string> {
+    const key = `inbound-email/${id}.eml`;
+    await env.WP_OS_DB.prepare("INSERT INTO inbound_message (id, message_id, r2_key, from_address, received_at, work_card_id, firm_scope) VALUES (?1, ?2, ?3, 'someone@x.com', ?4, ?5, 'west-peek')")
+      .bind(id, `msg-${id}`, key, receivedAt, cardId)
+      .run();
+    await bucket.put(key, "raw message");
+    return key;
+  }
+  const exists = async (table: string, col: string, id: string) => (await env.WP_OS_DB.prepare(`SELECT 1 AS x FROM ${table} WHERE ${col} = ?1`).bind(id).first()) !== null;
+
+  it("purges a REAL banter card the door opened: its received note and property row go with it in one batch", async () => {
+    const cardId = await openPropertyCard("real banter to purge", SCOOTER, "Walker", "sounds good, thanks!");
+    await runWebPropertyChangeCard(env, sweepCardFor(cardId, SCOOTER), fixedClassifier("BANTER_NO_ACTION"), neverReply);
+    expect(await exists("work_card_notice", "work_card_id", cardId), "the door wrote its RECEIVED note").toBe(true);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET updated_at = ?2 WHERE id = ?1").bind(cardId, OLD).run();
+    // What a real model classification and the banter reply leave behind (a fake classifier writes neither).
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO ai_run (id, purpose, actor_type, actor_id, sensitivity, privacy_mode, cost_mode, provider_id, model, status, input_hash, trace_id, firm_scope)
+       VALUES ('air_pk_real', 'classify', 'SYSTEM', 'porter', 'PUBLIC', 'STANDARD', 'NORMAL', 'prov_free_search', 'free-search/grounded', 'COMPLETED', 'h', 'air_pk_real', 'west-peek')`,
+    ).run();
+    await env.WP_OS_DB.prepare("INSERT INTO ai_run_attribution (ai_run_id, work_card_id) VALUES ('air_pk_real', ?1)").bind(cardId).run();
+    await env.WP_OS_DB.prepare("INSERT INTO email_thread (token, object_type, object_id, to_address, subject) VALUES ('wpt_pk_real', 'work_card', ?1, 'scooter@x.com', 'Got it')").bind(cardId).run();
+    const out = await purgeNoActionCards(env, NOW);
+    expect(out.kept).toEqual([]);
+    expect(out.purged).toContain(cardId);
+    expect(await exists("email_thread", "token", "wpt_pk_real"), "a later reply reaches the door as a new email").toBe(false);
+    const attr = await env.WP_OS_DB.prepare("SELECT work_card_id FROM ai_run_attribution WHERE ai_run_id = 'air_pk_real'").first<{ work_card_id: string | null }>();
+    expect(attr, "spend history is kept").not.toBeNull();
+    expect(attr!.work_card_id).toBeNull();
+    expect(await card(cardId)).toBeNull();
+    expect(await exists("work_card_notice", "work_card_id", cardId)).toBe(false);
+    expect(await exists("web_property_change", "work_card_id", cardId)).toBe(false);
+    expect((await eventsFor(cardId, "work_card.no_action_purged")).length).toBe(1);
+  });
+
+  it("data loss: never takes a card a person moved, a merged card, one with a message inside the window, or one stowed recently", async () => {
+    // Put back, worked, then dropped: still carries the flag, but a person moved it.
+    await stowed("wc_pk_disputed");
+    const { appendEvent } = await import("../src/worker/events");
+    await appendEvent(env, { eventType: "work_card.state_changed", actorType: "firm_user", actorId: "fu_x", objectType: "work_card", objectId: "wc_pk_disputed", firmScope: "west-peek", payload: { from_state: "CANCELLED", to_state: "OPEN" } });
+    const disputedKey = await message("inm_pk_disputed", "wc_pk_disputed", OLD);
+    await env.WP_OS_DB.prepare("INSERT INTO work_card (id, title, kind, state, created_by, firm_scope) VALUES ('wc_pk_target', 'the card it was merged into', ?1, 'OPEN', 'system', 'west-peek')").bind(WEB_PROPERTY_CHANGE_KIND).run();
+    await stowed("wc_pk_merged", { merged: "wc_pk_target" });
+    await stowed("wc_pk_late_mail");
+    const lateKey = await message("inm_pk_late", "wc_pk_late_mail", INSIDE);
+    await stowed("wc_pk_recent_stow", { created: OLD, updated: INSIDE });
+    const out = await purgeNoActionCards(env, NOW);
+    for (const id of ["wc_pk_disputed", "wc_pk_merged", "wc_pk_late_mail", "wc_pk_recent_stow"]) {
+      expect(out.purged, id).not.toContain(id);
+      expect(await card(id), id).not.toBeNull();
+    }
+    expect(out.kept).toEqual([]);
+    expect(bucket.store.has(disputedKey)).toBe(true);
+    expect(bucket.store.has(lateKey)).toBe(true);
+    expect(await exists("inbound_message", "id", "inm_pk_late")).toBe(true);
+  });
+
+  it("data loss: a card some other row still points at is left WHOLE (no blob, index or event lost) and never fails the run", async () => {
+    await stowed("wc_pk_referenced");
+    const key = await message("inm_pk_referenced", "wc_pk_referenced", OLD);
+    await env.WP_OS_DB.prepare("INSERT INTO card_drive_file (id, work_card_id, file_id, url, title) VALUES ('cdf_pk', 'wc_pk_referenced', 'f1', 'https://drive.google.com/x', 'Doc')").run();
+    const before = bucket.deletes.length;
+    const out = await purgeNoActionCards(env, NOW);
+    expect(out.purged).not.toContain("wc_pk_referenced");
+    expect(out.kept.map((k) => k.cardId)).not.toContain("wc_pk_referenced");
+    expect(await card("wc_pk_referenced")).not.toBeNull();
+    expect(await exists("inbound_message", "id", "inm_pk_referenced")).toBe(true);
+    expect(bucket.store.has(key)).toBe(true);
+    expect(bucket.deletes.slice(before)).not.toContain(key);
+    expect((await eventsFor("wc_pk_referenced", "work_card.no_action_purged")).length).toBe(0);
+  });
+
+  it("outage: a bucket that refuses a delete is a named leftover in the purge event; no bucket bound purges nothing", async () => {
+    await stowed("wc_pk_bucket_down");
+    const key = await message("inm_pk_bucket_down", "wc_pk_bucket_down", OLD);
+    const refusing = { ...bucket, delete: async () => { throw new Error("R2 503"); } };
+    const out = await purgeNoActionCards({ ...env, WP_OS_DOCUMENTS: refusing as never }, NOW);
+    expect(out.blobFailures).toEqual([{ cardId: "wc_pk_bucket_down", r2Key: key, detail: "R2 503" }]);
+    const ev = await eventsFor("wc_pk_bucket_down", "work_card.no_action_purged");
+    expect(JSON.parse(ev[0]!.payload_json).r2_keys).toEqual([key]);
+
+    await stowed("wc_pk_no_bucket");
+    const key2 = await message("inm_pk_no_bucket", "wc_pk_no_bucket", OLD);
+    const none = await purgeNoActionCards({ ...env, WP_OS_DOCUMENTS: undefined } as Env, NOW);
+    expect(none.purged).toEqual([]);
+    expect(none.kept.map((k) => k.cardId)).toContain("wc_pk_no_bucket");
+    expect(await card("wc_pk_no_bucket")).not.toBeNull();
+    expect(await exists("inbound_message", "id", "inm_pk_no_bucket")).toBe(true);
+    expect(bucket.store.has(key2)).toBe(true);
+  });
+
+  it("abuse / data loss: a stored email another card reads (a re-read of a mis-stowed email) is never deleted", async () => {
+    await stowed("wc_pk_shared_banter");
+    const key = await message("inm_pk_shared", "wc_pk_shared_banter", OLD);
+    // The re-read opened real card B, whose attachments are read out of the same stored email.
+    await env.WP_OS_DB.prepare("INSERT INTO work_card (id, title, kind, state, created_by, firm_scope) VALUES ('wc_pk_shared_real', 'real work from the re-read', ?1, 'OPEN', 'system', 'west-peek')").bind(WEB_PROPERTY_CHANGE_KIND).run();
+    await env.WP_OS_DB.prepare("INSERT INTO request_attachment (id, work_card_id, filename, media_type, bytes, eml_key, firm_scope, source) VALUES ('ratt_pk_shared', 'wc_pk_shared_real', 'plan.pdf', 'application/pdf', 10, ?1, 'west-peek', 'REQUEST')").bind(key).run();
+    // And a re-read with no attachments at all: the reingest event alone is the dispute.
+    await stowed("wc_pk_reread");
+    const rereadKey = await message("inm_pk_reread", "wc_pk_reread", OLD);
+    const { appendEvent } = await import("../src/worker/events");
+    await appendEvent(env, { eventType: "inbound_email.reingested", actorType: "firm_user", actorId: "fu_x", objectType: "inbound_email", objectId: rereadKey, firmScope: "west-peek", payload: {} });
+    const before = bucket.deletes.length;
+    const out = await purgeNoActionCards(env, NOW);
+    for (const id of ["wc_pk_shared_banter", "wc_pk_reread"]) {
+      expect(out.purged, id).not.toContain(id);
+      expect(await card(id), id).not.toBeNull();
+    }
+    expect(out.spared.map((s) => s.cardId)).toContain("wc_pk_shared_banter");
+    expect(bucket.store.has(key)).toBe(true);
+    expect(bucket.store.has(rereadKey)).toBe(true);
+    expect(bucket.deletes.slice(before)).not.toContain(key);
+    expect(await exists("inbound_message", "id", "inm_pk_shared")).toBe(true);
+  });
+
+  it("outage: a batch that fails (here, the event write) deletes nothing, writes no event, touches no blob, and names the card", async () => {
+    await stowed("wc_pk_event_down");
+    const key = await message("inm_pk_event_down", "wc_pk_event_down", OLD);
+    const realDb = env.WP_OS_DB;
+    const failingDb = new Proxy(realDb, {
+      get(target, prop) {
+        if (prop === "batch") return async () => { throw new Error("D1 unavailable: event_record insert failed"); };
+        const v = Reflect.get(target, prop);
+        return typeof v === "function" ? v.bind(target) : v;
+      },
+    });
+    const before = bucket.deletes.length;
+    const out = await purgeNoActionCards({ ...env, WP_OS_DB: failingDb } as Env, NOW);
+    expect(out.purged).not.toContain("wc_pk_event_down");
+    const kept = out.kept.find((k) => k.cardId === "wc_pk_event_down");
+    expect(kept?.detail).toMatch(/inbound_message\.work_card_id/);
+    expect(await card("wc_pk_event_down")).not.toBeNull();
+    expect(await exists("inbound_message", "id", "inm_pk_event_down")).toBe(true);
+    expect(bucket.store.has(key)).toBe(true);
+    expect(bucket.deletes.slice(before)).toEqual([]);
+    expect((await eventsFor("wc_pk_event_down", "work_card.no_action_purged")).length).toBe(0);
+  });
+
+  it("every foreign key to work_card is decided: purged with the card, detached, or keeps the card", async () => {
+    const { PURGED_WITH_CARD, DETACHED_FROM_CARD, KEEPS_THE_CARD } = await import("../src/worker/services/noActionPurge");
+    const tables = (await env.WP_OS_DB.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all<{ name: string }>()).results ?? [];
+    const refs: string[] = [];
+    for (const { name } of tables) {
+      if (name.startsWith("sqlite_") || name.startsWith("_cf_") || name.startsWith("d1_")) continue;
+      const fks = (await env.WP_OS_DB.prepare(`SELECT "table" AS t, "from" AS c FROM pragma_foreign_key_list('${name}')`).all<{ t: string; c: string }>()).results ?? [];
+      for (const fk of fks) if (fk.t === "work_card") refs.push(`${name}.${fk.c}`);
+    }
+    expect(refs.length).toBeGreaterThan(20);
+    const decided = [...PURGED_WITH_CARD, ...DETACHED_FROM_CARD, ...KEEPS_THE_CARD].map(([t, c]) => `${t}.${c}`);
+    expect([...decided].sort()).toEqual([...new Set(refs)].sort());
+  });
+
+  it("abuse: a sender's banter card never takes another card's message or blob, even from the same address", async () => {
+    await stowed("wc_pk_abuse_banter");
+    await message("inm_pk_abuse_banter", "wc_pk_abuse_banter", OLD);
+    await env.WP_OS_DB.prepare("INSERT INTO work_card (id, title, kind, state, created_by, firm_scope, created_at, updated_at) VALUES ('wc_pk_abuse_real', 'real work', ?1, 'DONE', 'system', 'west-peek', ?2, ?2)").bind(WEB_PROPERTY_CHANGE_KIND, OLD).run();
+    const realKey = await message("inm_pk_abuse_real", "wc_pk_abuse_real", OLD);
+    const out = await purgeNoActionCards(env, NOW);
+    expect(out.purged).toContain("wc_pk_abuse_banter");
+    expect(await exists("inbound_message", "id", "inm_pk_abuse_real")).toBe(true);
+    expect(bucket.store.has(realKey)).toBe(true);
   });
 });

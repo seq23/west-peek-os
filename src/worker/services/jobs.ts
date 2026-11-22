@@ -450,16 +450,20 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
    * THE STOWED-CARD PURGE (Addendum 10, 22 Sep 2026). A banter card the intake classifier caught —
    * `work_card.auto_resolution = 'NO_ACTION_NEEDED'` — carries near-zero lasting value once nobody
    * has disputed the classification, unlike real finished work, which is kept forever. Daily, so a
-   * card never sits stale for more than a day past its 30-day mark. See noActionPurge.ts for why
-   * the WHERE clause alone is the "was it disputed" check and why event_record is never touched.
+   * card never sits stale for more than a day past its 30-day mark. See noActionPurge.ts for which
+   * cards qualify, why the rows go in one batch, and why event_record is never touched. A card kept
+   * whole or a blob the bucket refused fails the run, so a person sees it.
    */
   if (job.job_key === "no_action_card_purge") {
     const { purgeNoActionCards } = await import("./noActionPurge");
     const out = await purgeNoActionCards(env, now);
+    const failed = out.kept.length > 0 || out.blobFailures.length > 0;
     return {
-      status: out.blobFailures.length > 0 ? "FAILED" : "SUCCEEDED",
+      status: failed ? "FAILED" : "SUCCEEDED",
       summary:
-        `${out.examined} stowed card(s) past 30 days examined; ${out.purged.length} purged` +
+        `${out.examined} stowed card(s) untouched for 30 days examined; ${out.purged.length} purged` +
+        `${out.spared.length > 0 ? `; ${out.spared.length} spared (another card reads its stored email)` : ""}` +
+        `${out.kept.length > 0 ? `. KEPT ${out.kept.length} card(s): ${out.kept.map((k) => `${k.cardId} — ${k.detail}`).join("; ")}` : ""}` +
         `${out.blobFailures.length > 0 ? `. FAILED to delete ${out.blobFailures.length} stored blob(s): ${out.blobFailures.map((f) => `${f.r2Key} — ${f.detail}`).join("; ")}` : ""}`,
       artifacts,
     };
