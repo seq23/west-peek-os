@@ -68,8 +68,11 @@ export interface LocalJobKindSpec {
   phases: Readonly<Partial<Record<LocalJobPhase, PhaseSpec>>>;
   /**
    * How long a QUEUED job may wait for a machine before the card is blocked naming the lane. The
-   * Mac sleeps; a card is not a run. Twelve hours: a job queued at night is picked up in the
-   * morning, and a job nobody picked up by the next evening is a fault to look at.
+   * Mac sleeps; a card is not a run. EIGHTEEN HOURS (22 Nov 2026, the Mac's day): the claimer claims
+   * only 10:00-21:59 CT, so a job queued at 21:59 waits twelve closed hours before anyone can take it,
+   * and twelve was exactly the old ceiling: it would have been closed at 09:59, a minute before the
+   * window opened. Eighteen leaves the day's first six hours to work down a queue (a build can hold
+   * the claimer three). A job nobody picked up by the next afternoon is a fault to look at.
    */
   queueMaxSeconds: number;
 }
@@ -98,6 +101,9 @@ export const ON_OFF_RULE_KEYS: readonly string[] = ["land_on_green", "done_reply
 /** A site BUILD: the build turn, then the review loop (up to 3 reviews and 2 fixes), then the first run. */
 export const BUILD_CEILING_SECONDS = 3 * 60 * 60;
 
+/** See `queueMaxSeconds`: the closed hours (22:00-10:00 CT) plus six hours of the next day's window. */
+export const LOCAL_JOB_QUEUE_SECONDS = 18 * 60 * 60;
+
 export const LOCAL_JOB_KINDS: readonly LocalJobKindSpec[] = [
   {
     kind: WEB_PROPERTY_CHANGE_KIND,
@@ -114,7 +120,7 @@ export const LOCAL_JOB_KINDS: readonly LocalJobKindSpec[] = [
       BUILD: { model: CLAUDE_SEAT_START, maxSeconds: BUILD_CEILING_SECONDS, purpose: "Build it in a worktree, prove it with the repo's validators and screenshots, open the PR." },
       LAND: { model: CLAUDE_SEAT_START, maxSeconds: 40 * 60, purpose: "Land on green with ~/bin/land and prove it live with curl." },
     },
-    queueMaxSeconds: 12 * 60 * 60,
+    queueMaxSeconds: LOCAL_JOB_QUEUE_SECONDS,
   },
   {
     kind: PARTNER_SESSION_KIND,
@@ -123,7 +129,7 @@ export const LOCAL_JOB_KINDS: readonly LocalJobKindSpec[] = [
     phases: {
       SESSION: { model: CLAUDE_SEAT_START, maxSeconds: 2 * 60 * 60, purpose: "Work the partner's email as one session: do every clear ask, ask about the unclear words with options, report each ask." },
     },
-    queueMaxSeconds: 12 * 60 * 60,
+    queueMaxSeconds: LOCAL_JOB_QUEUE_SECONDS,
   },
 ];
 

@@ -17,12 +17,20 @@
   NO SECRET IS IN THIS FILE: the two Access token halves and the Drive service account come out of
   the encrypted vault at launch through `vault.mjs run --` and exist only in the child's environment.
 
-  KeepAlive (true = restart on ANY exit): the claimer's own loop waits; launchd restarts it if it
-  dies, AND when it exits on purpose because the repo's HEAD moved while it was idle (23 Sep 2026,
-  `restartIfRepoMoved`) — that is how landed code reaches this long-lived process. Keep it `true`:
-  a SuccessfulExit dict would strand the claimer on old code. ThrottleInterval so a
-  machine without the vault unlocked, or without `claude`/`gh` on PATH, is one quiet line every five
-  minutes, not a spin.
+  THE MAC'S DAY (owner's ruling 21 Nov 2026, Central): a LIGHT job, claiming only 10:00-21:59 CT. It
+  runs behind `~/bin/mac-window run LIGHT` (woken outside the window, the guard prints OUTSIDE_WINDOW,
+  leaves one pending record and exits 0), and the claimer asks `mac-window check LIGHT` before every
+  claim, so at 22:00 it finishes the job in hand and exits 0. launchd starts it at 10:00
+  (StartCalendarInterval) and at boot (RunAtLoad; outside the window the guard holds it).
+
+  KeepAlive restarts it on a NON-ZERO exit only: when the repo's HEAD moved while it was idle
+  (`restartIfRepoMoved` exits 75; that is how landed code reaches this long-lived process), when a
+  tool or the vault is missing, or with no guard (78). A clean exit 0 is the window closing, so it is
+  not restarted overnight. ThrottleInterval so a missing vault or tool is one line every five minutes
+  inside the window, not a spin.
+
+  Install or reload ONLY with `npm run launchd:install:local-jobs` (it writes __HOME__ and reloads
+  through ~/bin/launchd-reload). Proven by boss-os `npm run mac-day:check` (Schedule row wpos-local-jobs).
 -->
 <plist version="1.0">
 <dict>
@@ -31,16 +39,28 @@
 
   <key>ProgramArguments</key>
   <array>
+    <string>__HOME__/bin/mac-window</string><string>run</string><string>LIGHT</string><string>ventures.westpeek.os.local-jobs</string><string>--</string>
     <string>/bin/sh</string>
     <string>-lc</string>
-    <!-- REPLACE ONLY THE REPO PATH if the checkout lives elsewhere. `exec` so launchd supervises node itself. -->
+    <!-- `exec` so launchd supervises node itself (mac-window execs a LIGHT job in place). -->
     <string>cd "$HOME/GitHub/west-peek-os" &amp;&amp; exec node scripts/vault/vault.mjs run -- node scripts/claimer/local-job-claimer.mjs</string>
   </array>
 
   <key>RunAtLoad</key>
   <true/>
+  <!-- 10:00 CT, the start of the LIGHT window (this Mac keeps Central time). -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>10</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
   <key>KeepAlive</key>
-  <true/>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
   <key>ThrottleInterval</key>
   <integer>300</integer>
 

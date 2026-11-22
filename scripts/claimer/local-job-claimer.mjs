@@ -37,7 +37,7 @@
  * sitting in a queue nobody claims.
  */
 
-import { execFile, execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -78,6 +78,43 @@ export function dutyModuleUrl(script, repoRoot = REPO_ROOT) {
 
 /** Non-zero, so the log reads as a restart and not a clean stop; KeepAlive restarts on any exit. */
 export const EXIT_NEW_CODE = 75;
+
+/**
+ * THE MAC'S DAY (owner's ruling 21 Nov 2026, Central, every day): heavy Mac work 22:00-06:55, the Mac
+ * switched OFF 07:00-10:00, every other job from 10:00. This claimer runs `claude -p` builds and partner
+ * sessions, so it is a LIGHT job: it claims only 10:00-21:59 CT, the same window as boss-os's on-demand
+ * Claude jobs (repo-change, mail-tail). The window is not decided here: `~/bin/mac-window check LIGHT` is
+ * the one guard every Mac job passes through (boss-os `npm run mac-day:check` proves the plist).
+ *
+ * Checked BEFORE EVERY CLAIM, between jobs only, never mid-job: outside the window the claimer prints a
+ * named OUTSIDE_WINDOW line and exits 0 having claimed nothing. Every queued job stays QUEUED on the
+ * Worker (its queue ceiling outlasts the closed hours, localJobs.ts) and is claimed when launchd starts
+ * the claimer at 10:00. A Mac without the guard claims nothing either (fail closed, a named stop).
+ */
+export const MAC_DAY_LABEL = "ventures.westpeek.os.local-jobs";
+export const MAC_DAY_CLASS = "LIGHT";
+/** Non-zero, so launchd's KeepAlive (SuccessfulExit false) retries; the guard's own exit is 0. */
+export const EXIT_NO_GUARD = 78;
+
+/** { state: "OPEN" | "CLOSED" | "NO_GUARD", line } from `mac-window check LIGHT` (exit 0 inside, 1 outside). */
+export function macDayWindow(bin = process.env.MAC_WINDOW_BIN || path.join(homedir(), "bin", "mac-window")) {
+  const r = spawnSync(bin, ["check", MAC_DAY_CLASS], { encoding: "utf8", timeout: 10_000 });
+  const said = (`${r.stdout ?? ""}`.trim().split("\n").pop() ?? "").replace(/^OUTSIDE_WINDOW\s+/, "mac-window: ");
+  if (!r.error && r.status === 0) return { state: "OPEN", line: `INSIDE_WINDOW ${MAC_DAY_LABEL} ${MAC_DAY_CLASS}` };
+  if (!r.error && r.status === 1) {
+    return { state: "CLOSED", line: `OUTSIDE_WINDOW ${MAC_DAY_LABEL} ${MAC_DAY_CLASS} (${said || "outside 10:00-21:59 CT"}): nothing claimed; queued jobs stay queued and are claimed when the window opens (launchd starts this claimer at 10:00 CT)` };
+  }
+  const why = r.error ? r.error.message : `exit ${r.status ?? r.signal}`;
+  return { state: "NO_GUARD", line: `NAMED STOP [MAC_WINDOW_MISSING] ${MAC_DAY_LABEL}: ${bin} could not answer (${why}); nothing is claimed without the Mac-day guard` };
+}
+
+/** Between jobs: exits (0 closed, EXIT_NO_GUARD no guard) unless the window is open. Returns true when open. */
+export function stopUnlessMacDayOpen(gate = macDayWindow(), exit = process.exit) {
+  if (gate.state === "OPEN") return true;
+  console.log(gate.line);
+  exit(gate.state === "CLOSED" ? 0 : EXIT_NO_GUARD);
+  return false;
+}
 
 /** True only when both HEADs are known and differ — a missing git never restarts anything. */
 export function headMoved(startedHead, currentHead) {
@@ -607,19 +644,24 @@ async function main() {
     console.log(`drive service account in environment: ${service ? "yes" : "NO — the PLAN phase cannot pull a folder"}`);
     console.log(`tools: ${Object.entries(tools).map(([k, ok]) => `${k}=${ok ? "ok" : "MISSING"}`).join(" ")}`);
     console.log(`roles: ${Object.entries(loadRoles().jobs).map(([k, p]) => `${k} ${Object.entries(p).map(([ph, r]) => `${ph}=${r}`).join(" ")}`).join(", ")}`);
+    console.log(`mac day: ${macDayWindow().line}`);
     console.log(`duties: ${Object.entries(DUTIES).map(([k, s]) => `${k} → ${s}${existsSync(path.join(REPO_ROOT, s)) ? "" : " (MISSING)"}`).join(", ")}`);
     process.exit(missing.length === 0 && accessHeaders() && service ? 0 : 1);
   }
+  if (!stopUnlessMacDayOpen()) return;
   if (missing.length > 0) {
     // Absence is a clean exit, like the seat claimer: the Worker never hears a heartbeat and the
     // card says the lane is away. A launchd KeepAlive with ThrottleInterval makes this one quiet
     // line every five minutes rather than a spin.
-    console.log(`This machine cannot run jobs: missing ${missing.join(", ")}. Exiting quietly.`);
-    return;
+    // Non-zero, so launchd retries within the window (KeepAlive SuccessfulExit false); outside it the guard holds it.
+    console.log(`This machine cannot run jobs: missing ${missing.join(", ")}. Exiting; launchd tries again in five minutes.`);
+    process.exit(1);
   }
   const STARTED_HEAD = repoHead();
   console.log(`claiming ${RUN_KIND} runs as ${DEVICE_ID} on ${STARTED_HEAD ?? "an unknown HEAD"}`);
   for (;;) {
+    // THE MAC'S DAY, before every claim: nothing is claimed outside 10:00-21:59 CT.
+    if (!stopUnlessMacDayOpen()) return;
     let worked = false;
     try {
       ({ worked } = await cycle());
@@ -769,6 +811,20 @@ function selfTest() {
     ["a job naming a different script is refused", () => dutyFor({ ...good, script: "scripts/duties/other.mjs" }).ok === false],
     ["a job with no phase is refused", () => dutyFor({ ...good, phase: "SHIP" }).ok === false],
     ["a job with nothing to start the Claude seat with is refused", () => dutyFor({ ...good, model: "" }).ok === false],
+    ["the Mac-day guard: inside claims, outside exits 0 with OUTSIDE_WINDOW, no guard exits non-zero with a named stop", () => {
+      const open = macDayWindow("/usr/bin/true"), closed = macDayWindow("/usr/bin/false"), none = macDayWindow("/nonexistent/mac-window");
+      const exits = [];
+      const quiet = console.log; console.log = () => {};
+      let r;
+      try { r = [stopUnlessMacDayOpen(open, (c) => exits.push(c)), stopUnlessMacDayOpen(closed, (c) => exits.push(c)), stopUnlessMacDayOpen(none, (c) => exits.push(c))]; } finally { console.log = quiet; }
+      return open.state === "OPEN" && closed.state === "CLOSED" && /^OUTSIDE_WINDOW ventures\.westpeek\.os\.local-jobs LIGHT/.test(closed.line) && none.state === "NO_GUARD" && /MAC_WINDOW_MISSING/.test(none.line) &&
+        r.join() === "true,false,false" && exits.join() === `0,${EXIT_NO_GUARD}`;
+    }],
+    ["the loop asks the Mac-day guard before every cycle, and the start asks it before anything else runs", () => {
+      const src = readFileSync(fileURLToPath(import.meta.url), "utf8");
+      const m = src.slice(src.indexOf("async function main()"), src.indexOf("function selfTest("));
+      return /for \(;;\) \{\s*\/\/[^\n]*\n\s*if \(!stopUnlessMacDayOpen\(\)\) return;\s*let worked = false;/.test(m) && m.indexOf("stopUnlessMacDayOpen()") < m.indexOf("if (missing.length > 0)");
+    }],
     ["a job with no ceiling is refused", () => dutyFor({ ...good, max_seconds: 0 }).ok === false],
     ["no job at all is refused", () => dutyFor(null).ok === false],
     ["a phase the role table does not name is refused", () => dutyFor(good, { jobs: { WEB_PROPERTY_CHANGE: { PLAN: "nobody" } } }).ok === false],
