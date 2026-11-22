@@ -43,4 +43,4 @@ if [ -f "$DEST" ] && [ ! -f "$STATE/good/$LABEL.plist" ] && "$LCTL" print "gui/$
 fi
 cp "$TMP" "$DEST"
 "$RELOAD" "$DEST"
-echo "OUTPUT install-local-jobs: $DEST written (mac-window run LIGHT, 10:00 CT start); launchd-reload said the line above"
+echo "OUTPUT install-local-jobs: $DEST written (mac-window run LIGHT, a 15-minute tick); launchd-reload said the line above"

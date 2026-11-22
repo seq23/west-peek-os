@@ -102,7 +102,7 @@ export function macDayWindow(bin = process.env.MAC_WINDOW_BIN || path.join(homed
   const said = (`${r.stdout ?? ""}`.trim().split("\n").pop() ?? "").replace(/^OUTSIDE_WINDOW\s+/, "mac-window: ");
   if (!r.error && r.status === 0) return { state: "OPEN", line: `INSIDE_WINDOW ${MAC_DAY_LABEL} ${MAC_DAY_CLASS}` };
   if (!r.error && r.status === 1) {
-    return { state: "CLOSED", line: `OUTSIDE_WINDOW ${MAC_DAY_LABEL} ${MAC_DAY_CLASS} (${said || "outside 10:00-21:59 CT"}): nothing claimed; queued jobs stay queued and are claimed when the window opens (launchd starts this claimer at 10:00 CT)` };
+    return { state: "CLOSED", line: `OUTSIDE_WINDOW ${MAC_DAY_LABEL} ${MAC_DAY_CLASS} (${said || "outside 10:00-21:59 CT"}): nothing claimed; queued jobs stay queued and are claimed when the window opens (launchd starts this claimer again within 15 minutes of 10:00 CT)` };
   }
   const why = r.error ? r.error.message : `exit ${r.status ?? r.signal}`;
   return { state: "NO_GUARD", line: `NAMED STOP [MAC_WINDOW_MISSING] ${MAC_DAY_LABEL}: ${bin} could not answer (${why}); nothing is claimed without the Mac-day guard` };
@@ -769,7 +769,9 @@ function selfTest() {
       const plist = readFileSync(path.join(REPO_ROOT, "deployment", "launchd", "ventures.westpeek.os.local-jobs.plist"), "utf8").replace(/<!--[\s\S]*?-->/g, "");
       return /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\/>\s*<\/dict>/.test(plist) && /local-job-claimer\.mjs/.test(plist) &&
         /<string>__HOME__\/bin\/mac-window<\/string><string>run<\/string><string>LIGHT<\/string><string>ventures\.westpeek\.os\.local-jobs<\/string>/.test(plist) &&
-        EXIT_NEW_CODE !== 0 && EXIT_NO_GUARD !== 0;
+        EXIT_NEW_CODE !== 0 && EXIT_NO_GUARD !== 0 &&
+        // no clock hour (a Mac on Eastern would fire it at 09:00 CT): a tick, and the guard reads Central
+        !/StartCalendarInterval/.test(plist) && /<key>StartInterval<\/key>\s*<integer>900<\/integer>/.test(plist);
     }],
     ["a closed lid with no external display is AWAY; an open lid, or a closed lid on a desk display, is not", () => {
       const closed = lidStateFrom('  |   "AppleClamshellState" = Yes\n  |   "AppleClamshellCausesSleep" = Yes');

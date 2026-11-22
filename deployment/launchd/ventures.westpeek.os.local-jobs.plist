@@ -20,8 +20,9 @@
   THE MAC'S DAY (owner's ruling 21 Nov 2026, Central): a LIGHT job, claiming only 10:00-21:59 CT. It
   runs behind `~/bin/mac-window run LIGHT` (woken outside the window, the guard prints OUTSIDE_WINDOW,
   leaves one pending record and exits 0), and the claimer asks `mac-window check LIGHT` before every
-  claim, so at 22:00 it finishes the job in hand and exits 0. launchd starts it at 10:00
-  (StartCalendarInterval) and at boot (RunAtLoad; outside the window the guard holds it).
+  claim, so at 22:00 it finishes the job in hand and exits 0. launchd ticks it every 15 minutes
+  (StartInterval) and at boot (RunAtLoad): outside the window each tick is one OUTSIDE_WINDOW line,
+  inside the first tick after 10:00 CT starts it. No clock hour, so the Mac's zone never moves it.
 
   KeepAlive restarts it on a NON-ZERO exit only: when the repo's HEAD moved while it was idle
   (`restartIfRepoMoved` exits 75; that is how landed code reaches this long-lived process), when a
@@ -48,14 +49,10 @@
 
   <key>RunAtLoad</key>
   <true/>
-  <!-- 10:00 CT, the start of the LIGHT window (this Mac keeps Central time). -->
-  <key>StartCalendarInterval</key>
-  <dict>
-    <key>Hour</key>
-    <integer>10</integer>
-    <key>Minute</key>
-    <integer>0</integer>
-  </dict>
+  <!-- A tick every 15 minutes, never a clock hour: the guard reads Central itself, so a Mac on Eastern
+       (she travels) still starts at 10:00-10:15 CT. While the claimer runs, launchd starts no second copy. -->
+  <key>StartInterval</key>
+  <integer>900</integer>
   <key>KeepAlive</key>
   <dict>
     <key>SuccessfulExit</key>
