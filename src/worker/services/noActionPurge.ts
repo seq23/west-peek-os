@@ -117,20 +117,21 @@ async function pointingAt(db: D1Database, cardId: string): Promise<string[]> {
   return found;
 }
 
-/** Another card that names one of these stored emails, or null. */
+/** Another card that names one of these stored emails, or null. One key per query, so no card's key count can hit D1's bound-parameter limit. */
 async function keyUsedElsewhere(db: D1Database, cardId: string, keys: string[]): Promise<string | null> {
-  if (keys.length === 0) return null;
-  const marks = keys.map((_, i) => `?${i + 2}`).join(", ");
-  const hit = await db
-    .prepare(
-      `SELECT work_card_id AS other FROM inbound_message WHERE r2_key IN (${marks}) AND work_card_id IS NOT ?1
-       UNION ALL SELECT work_card_id FROM request_attachment WHERE eml_key IN (${marks}) AND work_card_id IS NOT ?1
-       UNION ALL SELECT work_card_id FROM pending_deck WHERE object_key IN (${marks}) AND work_card_id IS NOT ?1
-       LIMIT 1`,
-    )
-    .bind(cardId, ...keys)
-    .first<{ other: string | null }>();
-  return hit ? (hit.other ?? "an unlinked stored message") : null;
+  for (const key of keys) {
+    const hit = await db
+      .prepare(
+        `SELECT work_card_id AS other FROM inbound_message WHERE r2_key = ?2 AND work_card_id IS NOT ?1
+         UNION ALL SELECT work_card_id FROM request_attachment WHERE eml_key = ?2 AND work_card_id IS NOT ?1
+         UNION ALL SELECT work_card_id FROM pending_deck WHERE object_key = ?2 AND work_card_id IS NOT ?1
+         LIMIT 1`,
+      )
+      .bind(cardId, key)
+      .first<{ other: string | null }>();
+    if (hit) return hit.other ?? "an unlinked stored message";
+  }
+  return null;
 }
 
 export async function purgeNoActionCards(env: Env, now: Date): Promise<NoActionPurgeResult> {
