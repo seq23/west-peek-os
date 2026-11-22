@@ -141,7 +141,10 @@ describe("first-read decision", () => {
   it("keeps a structured decision and treats old or malformed reads as absent", () => {
     const words = "Please confirm the plan";
     const decision = { kind: "question", property: null, handOffTo: null, planApproved: false, holds: [], takeBack: null, cc: [], backBy: null };
-    expect(parseUnderstood(firstRead({ asks: [words], decision: decision as never }), words).decision).toEqual(decision);
+    expect(parseUnderstood(firstRead({ asks: [words], decision: decision as never }), words).decision).toEqual({ ...decision, deadline: null, handOffAnswer: null });
+    // The two fields the one read now carries (review of #574) come through as read.
+    const withBoth = { ...decision, deadline: { words: "by Monday noon", local: "2026-11-23T12:00" }, handOffAnswer: "no" };
+    expect(parseUnderstood(firstRead({ asks: [words], decision: withBoth as never }), words).decision).toEqual(withBoth);
     expect(parseUnderstood(firstRead({ asks: [words] }), words).decision).toBeNull();
     const malformed = JSON.stringify({ ...JSON.parse(firstRead({ asks: [words] })), decision: { kind: "approve" } });
     expect(parseUnderstood(malformed, words).decision, "a decision missing its fields is not a decision").toBeNull();

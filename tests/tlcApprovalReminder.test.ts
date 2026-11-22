@@ -5,6 +5,9 @@ import { contentHashes } from "../src/worker/services/learningClub";
 import { applyBrandReplyApproval, type ReplyDrafter } from "../src/worker/services/tlcBrandReply";
 import { inReminderWindow, sendApprovalReminders } from "../src/worker/services/tlcApprovalReminder";
 import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
+// Her plain "approved" / "skip" / "make it shorter" is read by the stand-in model (production reads it by a model, and
+// with no model decides nothing); the no-model test passes `read: []`.
+vi.mock("../src/worker/services/inboundRead", async (orig) => (await import("./helpers/standInModel")).withStandIn(await orig()));
 
 /**
  * WYNN REMINDS ON AN UNANSWERED APPROVAL (owner, 9 Nov 2026). 24 hours after the last email on the thread, then every
@@ -168,6 +171,19 @@ describe("a round-2 pricing draft waiting on both partners", () => {
     expect(sends[0]!.to).toBe(SEQUOIA);
     expect(sends[0]!.cc).toBe("");
     expect(sends[0]!.text).toContain("Scooter approved; waiting on you.");
+  });
+
+  it("no model can read Scooter's \"approved\": it is not counted, and both are still reminded", async () => {
+    await waitingReply("rem-n", "TLR-NNNNN1", { partners: true });
+    const his = await applyBrandReplyApproval(env, { fromHeader: `Scooter <${SCOOTER}>`, authenticationResults: auth(SCOOTER), subject: "Re: TLR-NNNNN1", body: "approved\n\nRef TLR-NNNNN1" }, { now: at(1), drafter, read: [] });
+    expect(his.detail).not.toMatch(/Scooter approved/);
+    const inputs = (await env.WP_OS_DB.prepare("SELECT inputs_json FROM tlc_brand_reply WHERE id = 'tbr_TLR-NNNNN1'").first<{ inputs_json: string | null }>())!.inputs_json;
+    expect(JSON.parse(inputs ?? "{}").fu_scooter_taylor?.approved ?? false).toBe(false);
+    sends.length = 0;
+    await remind("rem-n", at(24));
+    expect(sends).toHaveLength(1);
+    expect(sends[0]!.cc).toBe(SCOOTER);
+    expect(sends[0]!.text).toContain("Nobody has approved yet: waiting on Sequoia and Scooter.");
   });
 
   it("Sequoia approved, Scooter not: only he is reminded, on the same thread", async () => {

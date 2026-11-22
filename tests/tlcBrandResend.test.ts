@@ -7,6 +7,9 @@ import { contentHashes, recordBrandMail, recordBrandReplyText } from "../src/wor
 import { applyBrandReplyApproval, resendUnanswered, RESEND_SETTING_PREFIX, type ReplyDrafter, type ResendOrder } from "../src/worker/services/tlcBrandReply";
 import { THREE_THINGS_OFFER } from "../src/shared/tlc/brandReply";
 import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
+// Her plain "approved" / "skip" / "make it shorter" is read by the stand-in model (production reads it by a model, and
+// with no model decides nothing); the no-model test passes `read: []`.
+vi.mock("../src/worker/services/inboundRead", async (orig) => (await import("./helpers/standInModel")).withStandIn(await orig()));
 
 /**
  * WYNN NEVER DROPS THE THREAD, AND FOLLOWS UP ONCE WHEN A BRAND SAYS NOTHING (owner, 13 Nov 2026: "the pinecone latest
@@ -35,14 +38,14 @@ const row = (dealId: string) => env.WP_OS_DB.prepare("SELECT id, state, notice_r
 const order = async (replyId: string) => JSON.parse((await env.WP_OS_DB.prepare("SELECT value FROM tlc_setting WHERE key = ?1").bind(`${RESEND_SETTING_PREFIX}${replyId}`).first<{ value: string }>())!.value) as ResendOrder;
 
 /** A brand asks; Wynn drafts; she approves; the answer goes. Returns what went to the brand. */
-async function answered(dealId: string, brand: string, email: string) {
+async function answered(dealId: string, brand: string, email: string, read?: [] ) {
   await env.WP_OS_DB.prepare(
     "INSERT INTO tlc_deal (id, event_id, brand, contact_email, contact_source_url, why_fit, stage, drip_step, first_sent_at, last_sent_at, next_send_at, firm_scope) VALUES (?1, 'tlc_2027-03', ?2, ?3, 'https://example.test', 'fit', 'PITCHED', 1, '2026-11-09T15:00:00.000Z', '2026-11-09T15:00:00.000Z', NULL, 'west-peek')",
   ).bind(dealId, brand, email).run();
   await recordBrandMail(env, { from: `Pat <${email}>`, subject: `Re: ${brand} + a small room in New York`, now: SENT_AT });
   await recordBrandReplyText(env, { from: `Pat <${email}>`, subject: `Re: ${brand} + a small room in New York`, text: "Hi,\n\nWhat do you have in mind?", messageId: `<${dealId}@brand.example>`, now: SENT_AT });
   const ref = (await row(dealId))!.notice_ref;
-  const out = await applyBrandReplyApproval(env, { fromHeader: `Her <${SEQUOIA}>`, authenticationResults: auth(SEQUOIA), subject: `Re: ${brand} Reply · v1 · ready for your OK · ${ref}`, body: "approved" }, { now: SENT_AT, drafter });
+  const out = await applyBrandReplyApproval(env, { fromHeader: `Her <${SEQUOIA}>`, authenticationResults: auth(SEQUOIA), subject: `Re: ${brand} Reply · v1 · ready for your OK · ${ref}`, body: "approved" }, { now: SENT_AT, drafter, ...(read ? { read } : {}) });
   return out.detail;
 }
 
@@ -113,6 +116,16 @@ describe("her approved answer is a reply on the brand's conversation, or it is n
     expect(toBrand).toHaveLength(0);
     expect((await row("tld_lost"))!.state).toBe("FAILED");
     expect(toUs.some((m) => m.text.includes("NAMED STOP [TLC_BRAND_THREAD_NOT_FOUND]"))).toBe(true);
+  });
+
+  it("no model can read her \"approved\": nothing goes to the brand, the answer stays waiting, and she is asked again", async () => {
+    const detail = await answered("tld_nomodel", "Unread Co", "pat@unreadco.example", []);
+    expect(detail).toContain("I could not tell what you want for it, so nothing was sent");
+    expect(toBrand).toHaveLength(0);
+    const r = (await row("tld_nomodel"))!;
+    expect(r.state).toBe("NOTIFIED");
+    expect(r.sent_at).toBeNull();
+    expect(r.effect_request_id).toBeNull();
   });
 });
 
