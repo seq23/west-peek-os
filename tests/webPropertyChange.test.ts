@@ -1017,6 +1017,11 @@ describe("a build the partner tail stopped on purpose is queued again without sp
     await macSaysHello(night);
     expect(await releaseMacAsleepBlocks(env, night), "the Mac checking in at night is outside its day").not.toContain(id);
     await macSaysHello(noon);
+    // A hello from before the stop is not the Mac coming back: the block came after it.
+    const realBlockedAt = String(first.blocked_at);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET blocked_at = ?2 WHERE id = ?1").bind(id, new Date(noon.getTime() - 10_000).toISOString()).run();
+    expect(await releaseMacAsleepBlocks(env, noon), "the only hello came before it stopped").not.toContain(id);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET blocked_at = ?2 WHERE id = ?1").bind(id, realBlockedAt).run();
     await env.WP_OS_DB.prepare("UPDATE work_card SET held_at = ?2, held_reason = 'her own hold, in the test' WHERE id = ?1").bind(id, new Date().toISOString()).run();
     expect(await releaseMacAsleepBlocks(env, noon), "a held card stays exactly as she left it").not.toContain(id);
     await env.WP_OS_DB.prepare("UPDATE work_card SET held_at = NULL WHERE id = ?1").bind(id).run();
