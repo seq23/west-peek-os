@@ -195,9 +195,11 @@ export function checkWorker(src) {
   if (!runner) violations.push("runWebPropertyChangeCard() is gone");
   else {
     examined += 1;
-    const readAt = runner.indexOf("readApprovalReply(answer)");
+    // 22 Nov 2026 (olp_m81kzjdzesdbq3dn): the plan's reading is the reply reader's (the model first, the word lists
+    // only when none answered), read from the intent below.
+    const readAt = runner.indexOf("const reading = intent.reading;");
     const approveAt = runner.indexOf("plan_approved_at: now");
-    if (readAt < 0) violations.push("the runner approves a plan without reading the reply through readApprovalReply — \"no\" would build");
+    if (readAt < 0) violations.push("the runner approves a plan without reading the reply (the reader's reading) — \"no\" would build");
     if (approveAt < 0) violations.push("the runner never records plan_approved_at — nothing could ever build");
     if (readAt >= 0 && approveAt >= 0 && readAt > approveAt) violations.push("the runner records plan_approved_at before it reads the reply");
     // 27 Sep 2026: the reply is read for its INTENT (keywords first — "no"/"stop"/"hold off" read REFUSED and
@@ -235,7 +237,7 @@ export function checkWorker(src) {
       if (readAt >= 0 && !/landsByIntent = freeReplyLandsPreview\(rules\);/.test(between)) violations.push("a free-form reply lands the preview without the one switch (freeReplyLandsPreview) deciding it");
       if (readAt >= 0 && (between.match(/(?<!let )landsByIntent = /g) ?? []).length !== 1) violations.push("landsByIntent is set in more than one place — a second writer is a landing nobody approved");
       if (!/landReading\?\.kind\s*!==\s*"APPROVED"/.test(between)) violations.push("land_approved_at is written without requiring the reply to read APPROVED — 'preview' or 'no' after the preview would land");
-      if (!/const landReading = answer && fromRequester \? readApprovalReply\(answer\) : null;/.test(between)) violations.push("the second approval is not checked against the requesting partner");
+      if (!/const replyRead = answer && fromRequester \? await readReplyIntent\([^\n]*\) : null;\n\s*const landReading = replyRead\?\.reading \?\? null;/.test(between)) violations.push("the second approval is not checked against the requesting partner");
     }
   }
   // PRE-APPROVAL: written only at the door's open, from the verified request.
@@ -409,7 +411,7 @@ export function checkDoor(door, parser) {
      */
     // 0253: the parse may take the registry as its third argument — and when it does, that registry must
     // be the Worker's own table read (`loadRegistry(env)`), never something the email supplied.
-    const doorChain = /const written = readableMessage\(input\.raw[\s\S]*?parseWebPropertyAsk\(input\.subject,\s*written(?:,\s*registry)?\)/.test(door);
+    const doorChain = /const written = (?:await )?readableMessage\(input\.raw[\s\S]*?parseWebPropertyAsk\(input\.subject,\s*written(?:,\s*registry)?\)/.test(door);
     if (!doorChain) violations.push("the door does not parse the web ask from the partner's own raw request (readableMessage(input.raw) → parseWebPropertyAsk) — pre-approval could come from elsewhere");
     if (/parseWebPropertyAsk\(input\.subject,\s*written,\s*registry\)/.test(door) && !/registry = await loadRegistry\(env\)/.test(door)) violations.push("the door hands parseWebPropertyAsk a registry that did not come from loadRegistry(env) — the list of repos must be the table, never the email");
     const readerChain = /function readableMessage\([^)]*\)[\s\S]{0,200}?textBodyOf\(raw[\s\S]*?splitQuoted\(text\)\.written/.test(door);
@@ -497,10 +499,10 @@ export function checkStaleApproval({ worker, script, sql0240 }) {
   if (writes !== 1 || !rebuild || !/if \(intent === "PUBLISH"\) Object\.assign\(patch, \{ land_approved_at: now, land_approved_by: by, publish_approved_at: now/.test(rebuild)) violations.push(`publish_approved_at is written ${writes} time(s); exactly once, in requestRebuild() under intent PUBLISH — anything else is a landing approval nobody gave`);
   const intentFn = body(worker, "export function rebuildIntentFor(");
   if (!intentFn || !/if \(r\.kind === "PUBLISH"\) return "PUBLISH";/.test(intentFn)) violations.push("rebuildIntentFor() reads PUBLISH from something other than the reader's \"publish\"");
-  if (!/const keywordRebuild = landReading\?\.kind === "APPROVED" \|\| !fromRequester \|\| !answer \? null : rebuildIntentFor\(answer\);/.test(worker)) violations.push("the preview wait takes a rebuild (and a \"publish\") from someone other than the requesting partner");
+  if (!/const wordRebuild = landReading\?\.kind === "APPROVED" \|\| !fromRequester \|\| !answer \|\| !landReading \? null : rebuildIntentFor\(answer, landReading\);/.test(worker)) violations.push("the preview wait takes a rebuild (and a \"publish\") from someone other than the requesting partner");
   // 27 Sep 2026: free text to a preview is read for its intent (CONTINUE lands, CONTINUE+changes rebuilds) — from the requesting partner only.
   examined += 1;
-  if (!/if \(answer && fromRequester && landReading\?\.kind === "ANSWERS"\) \{\s*freeIntent = await readReplyIntent\(/.test(worker)) violations.push("the preview wait reads a free-form reply's intent from someone other than the requesting partner — the other partner's \"looks great\" would land it");
+  if (!/if \(answer && fromRequester && replyRead && \(landReading\?\.kind === "ANSWERS" \|\| \(landReading\?\.kind === "CHANGES" && !keywordRebuild\)\)\) \{\s*freeIntent = replyRead;/.test(worker)) violations.push("the preview wait reads a free-form reply's intent from someone other than the requesting partner — the other partner's \"looks great\" would land it");
   const unchanged = body(worker, "async function applyUnchanged(");
   if (!unchanged || !/if \(wasPublish\) Object\.assign\(patch, \{ land_approved_at: null, land_approved_by: null, publish_approved_at: null/.test(unchanged)) violations.push("applyUnchanged() keeps a \"publish\" approval when nothing new arrived — the old preview would land as if filled in");
   return { violations, examined };
@@ -733,14 +735,13 @@ async function selfTest() {
   const scriptNoSecond = script.replace(/if \(needsPreview && !job\?\.pr\?\.land_approved_at && !job\?\.pr\?\.forced_by\)[^\n]*\n/, "");
   say(checkScript(scriptNoSecond).violations.some((v) => /previewing job without land_approved_at/.test(v)), "a Mac gate that lands a previewing job without the second approval is caught");
 
-  const noReading = worker.replace("const reading = readApprovalReply(answer);", "const reading = { kind: \"APPROVED\" };");
-  // With the plan's reading gone, the only `readApprovalReply(answer)` left is the preview stage's — after plan_approved_at.
+  const noReading = worker.replace("const reading = intent.reading;", "const reading = { kind: \"APPROVED\" };");
   say(checkWorker(noReading).violations.some((v) => /without reading the reply|before it reads the reply/.test(v)), "a runner that approves without reading the reply is caught");
   const noRefusal = worker.replace(/if \((?:intent\.kind === "STOP"|planStop)\) \{[\s\S]*?\n    \}\n/, "");
   say(checkWorker(noRefusal).violations.some((v) => /no STOP branch/.test(v)), "a runner whose STOP branch is gone is caught");
   const keywordStopIgnored = worker.replace('const keywordPlan = intent.kind === "STOP" ? "stop"', 'const keywordPlan = false ? "stop"');
   say(checkWorker(keywordStopIgnored).violations.some((v) => /no STOP branch/.test(v)), "a runner whose stop no longer reads the keywords when there is no first read is caught");
-  const noIntent = worker.replace("const intent: ReplyIntent = await readReplyIntent(env, { cardId: card.id, firmScope: card.firm_scope, text: answer }, readIntent);", "const intent: ReplyIntent = { kind: \"CONTINUE\", changes: null, question: null, keyword: null, source: \"KEYWORD\", reason: \"\", aiRunId: null };");
+  const noIntent = worker.replace("const intent: ReplyIntent = await readReplyIntent(env, { cardId: card.id, firmScope: card.firm_scope, text: answer }, readIntent);", "const intent: ReplyIntent = { kind: \"CONTINUE\", changes: null, question: null, reading: { kind: \"APPROVED\" }, source: \"KEYWORD\", reason: \"\", aiRunId: null };");
   say(checkWorker(noIntent).violations.some((v) => /without reading the reply's intent/.test(v)), "a runner that approves without reading the reply's intent is caught");
   const noRequester = worker.replace("card.block_answered_by !== requester.firmUserId", "false");
   say(checkWorker(noRequester).violations.some((v) => /requesting partner/.test(v)), "a runner that lets the other partner approve is caught");
@@ -801,8 +802,8 @@ async function selfTest() {
   stCaught({ sql0240: st.sql0240.replace("NEW.land_approved_at < NEW.preview_emailed_at", "0") }, /compare the landing approval/, "a trigger blind to stale approvals is caught");
   stCaught({ sql0240: "" }, /no trg_web_property_change_approval_binds_latest_preview/, "a missing 0240 trigger is caught");
   stCaught({ worker: worker.replace("if (r.kind === \"PUBLISH\") return \"PUBLISH\";", "if (r.kind === \"ANSWERS\") return \"PUBLISH\";") }, /rebuildIntentFor/, "a publish read from any answer is caught");
-  stCaught({ worker: worker.replace("const keywordRebuild = landReading?.kind === \"APPROVED\" || !fromRequester || !answer ? null : rebuildIntentFor(answer);", "const keywordRebuild = landReading?.kind === \"APPROVED\" || !answer ? null : rebuildIntentFor(answer);") }, /someone other than the requesting partner/, "a publish from the other partner is caught");
-  stCaught({ worker: worker.replace("if (answer && fromRequester && landReading?.kind === \"ANSWERS\") {", "if (answer && landReading?.kind === \"ANSWERS\") {") }, /free-form reply's intent from someone other than the requesting partner/, "a free-form landing from the other partner is caught");
+  stCaught({ worker: worker.replace("const wordRebuild = landReading?.kind === \"APPROVED\" || !fromRequester || !answer || !landReading ? null : rebuildIntentFor(answer, landReading);", "const wordRebuild = landReading?.kind === \"APPROVED\" || !answer || !landReading ? null : rebuildIntentFor(answer, landReading);") }, /someone other than the requesting partner/, "a publish from the other partner is caught");
+  stCaught({ worker: worker.replace("if (answer && fromRequester && replyRead && (landReading?.kind === \"ANSWERS\"", "if (answer && replyRead && (landReading?.kind === \"ANSWERS\"") }, /free-form reply's intent from someone other than the requesting partner/, "a free-form landing from the other partner is caught");
   stCaught({ worker: worker.replace("if (wasPublish) Object.assign(patch, { land_approved_at: null, land_approved_by: null, publish_approved_at: null", "if (false) Object.assign(patch, { land_approved_at: null, land_approved_by: null, publish_approved_at: null") }, /applyUnchanged/, "a publish kept when nothing new arrived is caught");
 
 
