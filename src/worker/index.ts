@@ -126,8 +126,6 @@ import { handleGetRequestAttachment, handleFinishOriginalAsk, handleGetWebProper
 import { handleDeveloperChanges, handleDeveloperEmail, handleDeveloperHandBack, handleDeveloperTakeover } from "./services/developerDirection";
 import { handleListWebProperties } from "./services/webPropertyRegistry";
 import { handlePendingSecretHandoffs, handleSecretHandoffStored } from "./services/secretHandoff";
-import { handleDnsWaitStatus, handlePendingDnsWaits } from "./services/dnsWaits";
-import { handleDriveWatchStatus, handlePendingDriveWatches } from "./services/driveWatches";
 import { handleGetWorkCardFile, handleListWorkCardFiles, handlePutWorkCardFile } from "./services/workCardFiles";
 import { handleGetRequestMessage, handleGetRequestMessageRaw, handleGetWorkCardMessageTrail, handleGetWorkCardSteps } from "./services/requestMessage";
 import { handleListMergeTargets, handleMergeWorkCardInto } from "./services/mergeCards";
@@ -1523,10 +1521,6 @@ const router = new Router()
   .post("/api/secret-handoffs/pending", handlePendingSecretHandoffs)
   .post("/api/secret-handoffs/stored", handleSecretHandoffStored)
   // 0253: custom domains outside her zones — the Mac re-checks Cloudflare's status; the Worker emails.
-  .post("/api/dns-waits/pending", handlePendingDnsWaits)
-  .post("/api/dns-waits/status", handleDnsWaitStatus)
-  .post("/api/drive-watches/pending", handlePendingDriveWatches)
-  .post("/api/drive-watches/status", handleDriveWatchStatus)
   .get("/api/jobs/runs/:id", handleGetJobRun)
   .post("/api/jobs/runs/:id/cancel", handleCancelJobRun)
   .post("/api/jobs/:key/run", handleRunJob)

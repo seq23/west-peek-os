@@ -1254,6 +1254,8 @@ export async function runDueJobs(
   const results: Array<{ job_key: string; status: string; summary: string }> = [];
   await serveBriefOnTick(env, now, results);
   await serveArtifactsOnTickSafely(env, now, results);
+  // The partner waits ride every tick, a scheduled job due or not: "every 15 minutes" is a promise (22 Nov 2026).
+  await sweepWaitsOnTick(env, now, results);
   for (const job of dueFirst) {
     try {
       const { run } = await runJob(env, systemActor, job.id, { trigger: "SCHEDULED", now });
@@ -1341,6 +1343,7 @@ export async function runDueJobsAll(env: Env, now: Date): Promise<Array<{ job_ke
   const results: Array<{ job_key: string; status: string; summary: string }> = [];
   await serveBriefOnTick(env, now, results);
   await serveArtifactsOnTickSafely(env, now, results);
+  await sweepWaitsOnTick(env, now, results);
 
   const due = (
     await env.WP_OS_DB.prepare(
@@ -1392,6 +1395,29 @@ export async function runDueJobsAll(env: Env, now: Date): Promise<Array<{ job_ke
     }
   }
   return results;
+}
+
+/**
+ * THE WAITS THAT NEED NO MAC, ON THE TICK THAT ALREADY EXISTS (22 Nov 2026). The DNS re-check and the Drive watch
+ * promise partners "every 15 minutes"; on the Mac's claimer they stopped at 22:00 CT (#572). Here they run day and
+ * night; each sweep takes only the rows due, so most ticks are two indexed reads. A line in the tick's results only
+ * when something was looked at. Never throws: a sweep that breaks is a line, and the rest of the tick still runs.
+ */
+export async function sweepWaitsOnTick(env: Env, now: Date, results: Array<{ job_key: string; status: string; summary: string }>, fetchImpl: typeof fetch = fetch): Promise<void> {
+  try {
+    const { sweepDnsWaits } = await import("./dnsWaits");
+    const dns = await sweepDnsWaits(env, now, fetchImpl);
+    if (dns.length) results.push({ job_key: "_dns_waits", status: "SWEPT", summary: dns.map((d) => `${d.host}: ${d.status} (${d.did})`).join("; ").slice(0, 500) });
+  } catch (err) {
+    results.push({ job_key: "_dns_waits", status: "ERROR", summary: err instanceof Error ? err.message : String(err) });
+  }
+  try {
+    const { sweepDriveWatches } = await import("./driveWatches");
+    const drive = await sweepDriveWatches(env, now, fetchImpl);
+    if (drive.length) results.push({ job_key: "_drive_watches", status: "SWEPT", summary: drive.map((d) => `${d.folder}: ${d.did}`).join("; ").slice(0, 500) });
+  } catch (err) {
+    results.push({ job_key: "_drive_watches", status: "ERROR", summary: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 // ── HTTP handlers ──

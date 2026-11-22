@@ -23,7 +23,7 @@ import { hostsSentence, pagesHostsOf, readWebPropertyAsk, sitesOf, WEB_PROPERTIE
 import { loadRegistry, recordRepoFacts, registryEntryFor } from "./webPropertyRegistry";
 import { outboundFilesFor } from "./workCardFiles";
 import { recordDnsWaits } from "./dnsWaits";
-import { asksNoApprovalYet, missingSecretLine, waitDetail } from "../../shared/work/porterWaits";
+import { DNS_RECHECK_MINUTES, DNS_WAIT_DAYS, asksNoApprovalYet, missingSecretLine, waitDetail } from "../../shared/work/porterWaits";
 import { dueLine } from "../../shared/intake/dueTime";
 import type { MissingSecret } from "../../shared/work/localJobs";
 import { doneLines } from "../../shared/work/partnerPractices";
@@ -49,6 +49,8 @@ import {
   LOCAL_JOB_RUN_KIND,
   WEB_PROPERTY_CHANGE_KIND,
   localJobKind,
+  macDayOpenedAt,
+  macDayWords,
   readLocalJobReport,
   type ClaudeModelAlias,
   type LocalJobPart,
@@ -503,7 +505,25 @@ export async function sendStuck(env: Env, card: WebPropertyChangeCard, cause: st
  * asleep, that Porter starts the moment it wakes, and that the owner of the Mac can be asked to wake
  * it. The subject says "Waiting for the Mac", never "Blocked"; the card is not blocked either.
  */
-export async function sendAsleep(env: Env, card: WebPropertyChangeCard, cause: string, reason: string): Promise<{ sent: boolean; reason: string }> {
+export async function sendAsleep(env: Env, card: WebPropertyChangeCard, cause: string, reason: string, overnight = false): Promise<{ sent: boolean; reason: string }> {
+  /*
+   * OUTSIDE THE MAC'S DAY (22 Nov 2026, #572): the claimer takes work only `macDayWords()`. A job queued at night is
+   * not a sleeping Mac and must not be called one; the partner hears, once, that it starts when the Mac's day opens.
+   * Never "if you want it sooner, tell Sequoia": the hours are hers to keep.
+   */
+  if (overnight) {
+    return tellRequester(env, card, { kind: "STUCK", cause }, {
+      what: stageSubject((await porterContext(env, card.id))?.title ?? card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").slice(0, 60), STAGE.ASLEEP),
+      tldr: `Queued: I build on Sequoia's Mac, which takes work ${macDayWords()}, so this starts when it next opens. Nothing you sent is lost and nothing is needed from you.`,
+      sections: [
+        { label: "Why", bullets: [reason] },
+        {
+          label: "What happens next",
+          bullets: ["The job waits in the queue and starts by itself when the Mac's day opens; you hear from me as it goes.", `The card: https://os.joinwestpeek.com/#/work (card ${card.id})`],
+        },
+      ],
+    });
+  }
   return tellRequester(env, card, { kind: "STUCK", cause }, {
     what: stageSubject((await porterContext(env, card.id))?.title ?? card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").slice(0, 60), STAGE.ASLEEP),
     tldr: `Not started yet: the lane I build on (Sequoia's Mac) is asleep. I'll get to work the moment it wakes; nothing you sent is lost.`,
@@ -512,7 +532,7 @@ export async function sendAsleep(env: Env, card: WebPropertyChangeCard, cause: s
       {
         label: "What happens next",
         bullets: [
-          "The job waits in the queue and runs by itself when the Mac wakes; I do not need anything from you.",
+          `The job waits in the queue and runs by itself when the Mac wakes (it takes work ${macDayWords()}); I do not need anything from you.`,
           "If you want it sooner, tell Sequoia to open the Mac.",
           `The card: https://os.joinwestpeek.com/#/work (card ${card.id})`,
         ],
@@ -1753,6 +1773,18 @@ export async function applyReport(
        * "Blocked" for a laptop lid.
        */
       // 0253: an infrastructure wait, in the three-part shape; it clears itself and the email says so.
+      // Each miss is released by itself when the Mac is back (`releaseMacAsleepBlocks`); the third is not a nap.
+      const missed = (await macMissedRuns(env, card.id)).length;
+      if (missed >= MAC_ASLEEP_TRIES) {
+        const stopped = await blockCard(env, card, {
+          reason: "a_question_for_you",
+          trying: card.title,
+          employee: PORTER_NAME,
+          who: whoFor(card),
+          detail: waitDetail("TRIED_AND_STOPPED", { what: `${missed} times`, why: "the job was queued for the Mac each time and no machine picked it up, even after the Mac was back" }).slice(0, 900),
+        });
+        return { finished: false, blocked: true, progressed: false, detail: stopped };
+      }
       const why2 = await blockCard(env, card, {
         reason: "a_question_for_you",
         trying: card.title,
@@ -1979,7 +2011,7 @@ async function absorbRepoReport(env: Env, card: WebPropertyChangeCard, row: WebP
   }
   if (Array.isArray(report.dns) && report.dns.length) {
     const told = await recordDnsWaits(env, { cardId: card.id, repo: row.target_repo, requestedBy: card.requested_by_email ?? null, firmScope: card.firm_scope, records: report.dns });
-    if (told.length) await appendFinding(env, card.id, `A host outside the firm's Cloudflare zones: ${told.join(", ")}. The partner has the exact record to add at their registrar; the site is live on pages.dev meanwhile and I re-check every 15 minutes for 7 days.`);
+    if (told.length) await appendFinding(env, card.id, `A host outside the firm's Cloudflare zones: ${told.join(", ")}. The partner has the exact record to add at their registrar; the site is live on pages.dev meanwhile and I re-check every ${DNS_RECHECK_MINUTES} minutes, day and night, for ${DNS_WAIT_DAYS} days.`);
   }
   // Addendum 5: work the partner dated for later becomes its own card, leased until its week — never lost on close.
   // FROM THE PLAN ONLY (#363): the plan is where the later work is dated and where the partner is told
@@ -2337,6 +2369,92 @@ export async function releasePlansNobodyNeedsToAnswer(env: Env): Promise<string[
       objectId: r.id,
       firmScope: "west-peek",
       payload: { asks: asks.length },
+    });
+    released.push(r.id);
+  }
+  return released;
+}
+
+/**
+ * HOW MANY TIMES THE MAC MAY MISS ONE CARD'S JOB before Porter stops promising it resumes by itself (22 Nov 2026,
+ * review of #577). The third queue ceiling with nobody claiming is not a sleeping laptop; it is a lane that is not
+ * picking this job up, and the card says so and asks for "try again" (TRIED_AND_STOPPED) instead of looping.
+ */
+export const MAC_ASLEEP_TRIES = 3;
+
+/** The LOCAL_JOB runs of a card that ran out their queue ceiling with no machine claiming them (not stopped on purpose). */
+async function macMissedRuns(env: Env, cardId: string): Promise<Array<{ id: string; created_at: string }>> {
+  const rows =
+    (
+      await env.WP_OS_DB.prepare(
+        `SELECT id, created_at, resolution FROM subscription_seat_run
+          WHERE work_card_id = ?1 AND run_kind = 'LOCAL_JOB' AND status = 'ABANDONED' AND claimed_by IS NULL
+          ORDER BY created_at DESC`,
+      )
+        .bind(cardId)
+        .all<{ id: string; created_at: string; resolution: string | null }>()
+    ).results ?? [];
+  return rows.filter((r) => !stoppedOnPurpose(r.resolution));
+}
+
+/**
+ * A CARD THE SLEEPING MAC STOPPED RESUMES BY ITSELF WHEN THE MAC IS BACK (22 Nov 2026, review of #577). The MAC_ASLEEP
+ * wait tells the partner "it resumes by itself the next time the Mac is open"; until now nothing did that, so two
+ * real cards sat BLOCKED for two Mac days on that promise. Each sweep tick inside the Mac's day, a card blocked
+ * because its newest LOCAL_JOB ran out its queue ceiling unclaimed goes back in the queue once a claimer has said
+ * hello (subscription_seat_device) since it was blocked; the next tick parks the same phase again. Read from the
+ * runs, not from the words on the card, so it also releases cards blocked before this existed. Bounded: a card the
+ * Mac has missed MAC_ASLEEP_TRIES times is never released here (it was blocked as TRIED_AND_STOPPED instead).
+ * Shape of `releaseSpendSettingBlocks`. A held card is left exactly as it is.
+ */
+export async function releaseMacAsleepBlocks(env: Env, now: Date = new Date()): Promise<string[]> {
+  const { macDayOpen } = await import("../../shared/work/localJobs");
+  if (!macDayOpen(now)) return [];
+  const { isFresh } = await import("../ai/subscriptionSeats");
+  const seen = await env.WP_OS_DB.prepare("SELECT MAX(last_seen_at) AS at FROM subscription_seat_device").first<{ at: string | null }>();
+  if (!seen?.at || !isFresh(seen.at, now)) return [];
+  const rows =
+    (
+      await env.WP_OS_DB.prepare(
+        `SELECT c.id, c.firm_scope, c.blocked_at FROM work_card c
+          WHERE c.kind = ?1 AND c.state = 'BLOCKED' AND c.held_at IS NULL AND c.block_reason = 'a_question_for_you'
+            AND c.blocked_at IS NOT NULL AND c.blocked_at < ?2
+          LIMIT 50`,
+      )
+        .bind(WEB_PROPERTY_CHANGE_KIND, seen.at)
+        .all<{ id: string; firm_scope: string; blocked_at: string }>()
+    ).results ?? [];
+  const released: string[] = [];
+  for (const r of rows) {
+    const newest = await env.WP_OS_DB.prepare(
+      "SELECT id, status, claimed_by, resolution FROM subscription_seat_run WHERE work_card_id = ?1 AND run_kind = 'LOCAL_JOB' ORDER BY created_at DESC LIMIT 1",
+    )
+      .bind(r.id)
+      .first<{ id: string; status: string; claimed_by: string | null; resolution: string | null }>();
+    // Only a block whose cause is the unclaimed run: any other block on this card is someone's question, not the Mac's.
+    if (!newest || newest.status !== "ABANDONED" || newest.claimed_by || stoppedOnPurpose(newest.resolution)) continue;
+    if ((await macMissedRuns(env, r.id)).length >= MAC_ASLEEP_TRIES) continue;
+    const res = await env.WP_OS_DB.prepare(
+      `UPDATE work_card
+          SET state = 'OPEN', work_attempts = 0, work_steps = 0, lease_until = NULL,
+              work_last_failure = NULL, work_last_failure_at = NULL,
+              next_action = 'Back in the queue: the Mac is open again, so this is being tried again.',
+              block_answer = 'AUTO-RETRY: the Mac is open again', block_answered_by = 'work_sweep', block_answered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+              block_nag_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ?1 AND state = 'BLOCKED' AND held_at IS NULL`,
+    )
+      .bind(r.id)
+      .run();
+    if ((res.meta?.changes ?? 0) === 0) continue;
+    await appendFinding(env, r.id, `Back in the queue by itself: the Mac checked in at ${seen.at}, inside its day, after this stopped for want of it.`);
+    await appendEvent(env, {
+      eventType: "work_card.auto_released",
+      actorType: "system",
+      actorId: "work_sweep",
+      objectType: "work_card",
+      objectId: r.id,
+      firmScope: r.firm_scope,
+      payload: { reason: "mac_back", run: newest.id, seen: seen.at },
     });
     released.push(r.id);
   }
@@ -3374,8 +3492,18 @@ export async function runWebPropertyChangeCard(
        * happens next. A run returned and re-claimed inside the ceiling says nothing.
        */
       const now = new Date();
-      const idleMs = now.getTime() - Date.parse(run.status === "QUEUED" ? run.created_at : (run.progressed_at ?? run.claimed_at ?? run.created_at));
+      /*
+       * IDLE IS COUNTED INSIDE THE MAC'S DAY ONLY (22 Nov 2026). A job queued at 23:00 has not been "waiting for a
+       * sleeping Mac" for eleven hours at 10:01; the claimer was closed on purpose. Outside the day the partner hears
+       * once that it is queued for the morning; inside it, idle starts at the later of the queueing and the opening.
+       */
+      const openedAt = macDayOpenedAt(now);
+      const idleFrom = Date.parse(run.status === "QUEUED" ? run.created_at : (run.progressed_at ?? run.claimed_at ?? run.created_at));
       const ceilingMs = Math.max(5, Number(rules.stuck_after_minutes ?? "45") || 45) * 60_000;
+      if (run.status === "QUEUED" && !openedAt && now.getTime() - idleFrom > ceilingMs && stuckWindowOpen(rules.stuck_window_ct, now)) {
+        await sendAsleep(env, card, `overnight:${run.id}`, `it arrived outside those hours, and the ${row.phase.toLowerCase()} is the next step`, true);
+      }
+      const idleMs = openedAt ? now.getTime() - Math.max(idleFrom, openedAt.getTime()) : 0;
       if (run.status === "QUEUED" && idleMs > ceilingMs && stuckWindowOpen(rules.stuck_window_ct, now)) {
         /*
          * A MAC THAT IS ASLEEP IS NOT A BLOCK (28 Sep 2026). Whether the job was never claimed

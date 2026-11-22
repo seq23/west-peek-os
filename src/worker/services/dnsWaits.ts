@@ -1,10 +1,8 @@
 import type { Env } from "../env";
-import { json, type RouteContext } from "../router";
-import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
 import { appendEvent } from "../events";
 import { sendOrPreview } from "./previewApproval";
 import { partnerByEmail } from "../../shared/registry/partners";
-import { waitBullets } from "../../shared/work/porterWaits";
+import { DNS_RECHECK_MINUTES, DNS_WAIT_DAYS, waitBullets } from "../../shared/work/porterWaits";
 import type { DnsRecordAsked } from "../../shared/work/localJobs";
 
 /**
@@ -18,8 +16,8 @@ import type { DnsRecordAsked } from "../../shared/work/localJobs";
  *   1 · keeps one `web_property_dns` row per host + project;
  *   2 · emails the partner the record ONCE, in the three-part shape (`DNS_RECORD` in porterWaits)
  *       — NOT a block: the card goes on, the site is live on pages.dev meanwhile;
- *   3 · hands the open rows to the Mac's claimer every ~15 minutes (`/pending`), which asks
- *       Cloudflare for the domain's status and reports it (`/status`);
+ *   3 · re-checks every open row on the Worker's cron every DNS_RECHECK_MINUTES, day and night
+ *       (`sweepDnsWaits`): public DNS carries the record and https://<host> answers;
  *   4 · on `active`, emails "live at https://<host>" and closes the row; after 7 days still
  *       inactive, ONE plain reminder with the same record, then silence.
  *
@@ -27,8 +25,7 @@ import type { DnsRecordAsked } from "../../shared/work/localJobs";
  * holds `recordProblem` to that, and the test sends a record through the door and reads the email.
  */
 
-export const DNS_RECHECK_MINUTES = 15;
-export const DNS_WAIT_DAYS = 7;
+export { DNS_RECHECK_MINUTES, DNS_WAIT_DAYS };
 export const PORTER = "Porter";
 
 export interface DnsWaitRow {
@@ -75,18 +72,20 @@ async function email(env: Env, row: DnsWaitRow, kind: "RECORD" | "REMINDER" | "L
     kind === "LIVE"
       ? `${row.host} is live: https://${row.host} now serves the site. Nothing needed from you.`
       : kind === "REMINDER"
-        ? `Seven days on, ${row.host} still has no DNS record pointing at the site; it is live at https://${row.project}.pages.dev meanwhile. The record is below — same as before.`
+        ? row.status === "record_seen"
+          ? `Seven days on, public DNS shows the record for ${row.host}, but https://${row.host} does not serve the site yet; it is live at https://${row.project}.pages.dev meanwhile. The record is below, to check it matches exactly.`
+          : `Seven days on, public DNS still shows no record for ${row.host} pointing at the site; it is live at https://${row.project}.pages.dev meanwhile. The record is below — same as before.`
         : `To put the site on ${row.host}: at your DNS provider add ${row.record_type} ${row.record_name} → ${row.record_target}${row.txt_name && row.txt_value ? ` and TXT ${row.txt_name} → ${row.txt_value}` : ""}. Until then it is live at https://${row.project}.pages.dev.`;
   const sections =
     kind === "LIVE"
       ? [
-          { label: "What happened", bullets: [`Cloudflare reports the custom domain ${row.host} active on the Pages project ${row.project}.`] },
+          { label: "What happened", bullets: [`Public DNS answers ${row.record_type} ${row.host} → ${row.record_target}, the record you added, and https://${row.host} answers with the site.`] },
           { label: "Your call", bullets: ["Nothing — this closes the DNS item on the card."] },
         ]
       : [
           { label: "The record", bullets: [`${row.record_type} ${row.record_name} → ${row.record_target}`, ...(row.txt_name && row.txt_value ? [`TXT ${row.txt_name} → ${row.txt_value}`] : []), `Read from Cloudflare's own answer for project ${row.project}; nothing here is guessed.`] },
           { label: "Where things stand", bullets },
-          { label: "Your call", bullets: [`Add the record at the registrar that holds ${row.host.split(".").slice(-2).join(".")}. No reply is needed; I check every ${DNS_RECHECK_MINUTES} minutes for ${DNS_WAIT_DAYS} days and email when it is live.`] },
+          { label: "Your call", bullets: [`Add the record at the registrar that holds ${row.host.split(".").slice(-2).join(".")}. No reply is needed; I check every ${DNS_RECHECK_MINUTES} minutes, day and night, for ${DNS_WAIT_DAYS} days and email when it is live.`] },
         ];
   try {
     const out = await sendOrPreview(env, {
@@ -150,47 +149,84 @@ export async function recordDnsWaits(env: Env, input: { cardId: string | null; r
   return told;
 }
 
-function isClaimer(ctx: RouteContext): boolean {
-  return ctx.identity?.email.toLowerCase() === SUBSCRIPTION_CLAIMER_EMAIL;
-}
+const DOH = "https://cloudflare-dns.com/dns-query";
 
-/** POST /api/dns-waits/pending — the claimer only: open rows due for a check (every 15 min, for 7 days + the reminder). */
-export async function handlePendingDnsWaits(ctx: RouteContext): Promise<Response> {
-  if (!isClaimer(ctx)) return json({ error: "forbidden", detail: "Only the Mac's claimer checks DNS waits." }, { status: 403 });
-  const due = new Date(Date.now() - DNS_RECHECK_MINUTES * 60_000).toISOString();
-  const rows = await ctx.env.WP_OS_DB.prepare(
-    `SELECT id, host, project, status, created_at, reminded_at FROM web_property_dns
-      WHERE active_at IS NULL AND status != 'on_zone' AND (last_checked_at IS NULL OR last_checked_at < ?1)
-        AND (reminded_at IS NULL OR last_checked_at < ?1)
-      ORDER BY created_at ASC LIMIT 20`,
-  )
-    .bind(due)
-    .all<{ id: string; host: string; project: string; status: string; created_at: string; reminded_at: string | null }>();
-  // After the reminder the check continues (a late record still goes live), but nothing more is emailed.
-  return json({ waits: rows.results ?? [] });
-}
-
-/** POST /api/dns-waits/status { id, status } — the claimer reports Cloudflare's word; the Worker emails and closes. */
-export async function handleDnsWaitStatus(ctx: RouteContext): Promise<Response> {
-  if (!isClaimer(ctx)) return json({ error: "forbidden", detail: "Only the Mac's claimer checks DNS waits." }, { status: 403 });
-  const body = (await ctx.request.json().catch(() => ({}))) as { id?: string; status?: string };
-  const id = String(body.id ?? "").trim();
-  const status = String(body.status ?? "").trim().toLowerCase().slice(0, 40) || "unknown";
-  if (!id) return json({ error: "invalid_input", detail: "id is required" }, { status: 400 });
-  const row = await ctx.env.WP_OS_DB.prepare("SELECT * FROM web_property_dns WHERE id = ?1").bind(id).first<DnsWaitRow>();
-  if (!row) return json({ error: "not_found", detail: "no such wait" }, { status: 404 });
-  const now = new Date().toISOString();
-  await ctx.env.WP_OS_DB.prepare("UPDATE web_property_dns SET status = ?2, last_checked_at = ?3, updated_at = ?3 WHERE id = ?1").bind(id, status, now).run();
-  let did = "checked";
-  if (status === "active" && !row.active_at) {
-    await ctx.env.WP_OS_DB.prepare("UPDATE web_property_dns SET active_at = ?2 WHERE id = ?1").bind(id, now).run();
-    await email(ctx.env, { ...row, status }, "LIVE");
-    await appendEvent(ctx.env, { eventType: "web_property_dns.active", actorType: "system", actorId: "dns_waits", objectType: "web_property_dns", objectId: id, firmScope: row.firm_scope, payload: { host: row.host, project: row.project } });
-    did = "live";
-  } else if (!row.reminded_at && Date.now() - Date.parse(row.created_at) > DNS_WAIT_DAYS * 86_400_000) {
-    await ctx.env.WP_OS_DB.prepare("UPDATE web_property_dns SET reminded_at = ?2 WHERE id = ?1").bind(id, now).run();
-    await email(ctx.env, { ...row, status }, "REMINDER");
-    did = "reminded";
+/** What public DNS answers for the host, lower-case and without the trailing dot; null when the resolver could not be asked. */
+async function resolved(host: string, type: string, fetchImpl: typeof fetch): Promise<string[] | null> {
+  try {
+    const res = await fetchImpl(`${DOH}?name=${encodeURIComponent(host)}&type=${encodeURIComponent(type)}`, { headers: { accept: "application/dns-json" }, signal: AbortSignal.timeout(10_000) });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { Status?: number; Answer?: Array<{ data?: string }> };
+    return (body.Answer ?? []).map((a) => String(a.data ?? "").replace(/\.$/, "").toLowerCase());
+  } catch {
+    return null;
   }
-  return json({ ok: true, did, host: row.host, status });
+}
+
+/**
+ * IS IT LIVE, READ WITHOUT THE MAC (22 Nov 2026). Public DNS must carry the exact record we emailed (a host pointed
+ * somewhere else is never "live" for us), and https://<host> must answer: Pages serves the custom domain only once it
+ * has validated it and issued the certificate, so a working https answer on the right record is Cloudflare's "active".
+ * "pending" = the record is not there yet; "record_seen" = it is, Pages has not finished; "unknown" = a resolver or
+ * network fault, said as a fault and never as live.
+ */
+export async function dnsLiveStatus(row: Pick<DnsWaitRow, "host" | "record_type" | "record_target">, fetchImpl: typeof fetch = fetch): Promise<"active" | "pending" | "record_seen" | "unknown"> {
+  const answers = await resolved(row.host, row.record_type, fetchImpl);
+  if (!answers) return "unknown";
+  if (!answers.includes(row.record_target.replace(/\.$/, "").toLowerCase())) return "pending";
+  try {
+    const res = await fetchImpl(`https://${row.host}/`, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(15_000) });
+    return res.status < 400 ? "active" : "record_seen";
+  } catch {
+    return "record_seen";
+  }
+}
+
+/** One check's answer, applied: "live" emails and closes; past the wait window, one reminder; otherwise a stamp. */
+export async function applyDnsStatus(env: Env, row: DnsWaitRow, status: string, now: Date = new Date()): Promise<"checked" | "live" | "reminded"> {
+  const at = now.toISOString();
+  await env.WP_OS_DB.prepare("UPDATE web_property_dns SET status = ?2, last_checked_at = ?3, updated_at = ?3 WHERE id = ?1").bind(row.id, status, at).run();
+  if (status === "active" && !row.active_at) {
+    // Claimed before the email: two ticks that race send "live" once.
+    const claimed = await env.WP_OS_DB.prepare("UPDATE web_property_dns SET active_at = ?2 WHERE id = ?1 AND active_at IS NULL").bind(row.id, at).run();
+    if ((claimed.meta?.changes ?? 0) === 0) return "checked";
+    await email(env, { ...row, status }, "LIVE");
+    await appendEvent(env, { eventType: "web_property_dns.active", actorType: "system", actorId: "dns_waits", objectType: "web_property_dns", objectId: row.id, firmScope: row.firm_scope, payload: { host: row.host, project: row.project } });
+    return "live";
+  }
+  // A FAILED LOOKUP IS NEVER "NO RECORD" (22 Nov 2026, review of #577): with DNS unreadable nothing is known, so the
+  // reminder waits for the next check that reads it, rather than tell the partner his record is missing.
+  if (status !== "unknown" && !row.reminded_at && now.getTime() - Date.parse(row.created_at) > DNS_WAIT_DAYS * 86_400_000) {
+    const claimed = await env.WP_OS_DB.prepare("UPDATE web_property_dns SET reminded_at = ?2 WHERE id = ?1 AND reminded_at IS NULL").bind(row.id, at).run();
+    if ((claimed.meta?.changes ?? 0) === 0) return "checked";
+    await email(env, { ...row, status }, "REMINDER");
+    return "reminded";
+  }
+  return "checked";
+}
+
+/**
+ * THE RE-CHECK, ON THE WORKER'S CRON (22 Nov 2026). It used to ride the Mac claimer's heartbeat, which since #572 runs
+ * only 10:00-21:59 CT, so "every 15 minutes" was false all night. Every row not checked in DNS_RECHECK_MINUTES is
+ * checked now, day or night. After the reminder the check goes on (a late record still goes live) but nothing more is
+ * emailed. Returns what it did, one entry per row.
+ */
+export async function sweepDnsWaits(env: Env, now: Date, fetchImpl: typeof fetch = fetch): Promise<Array<{ host: string; status: string; did: string }>> {
+  const due = new Date(now.getTime() - DNS_RECHECK_MINUTES * 60_000).toISOString();
+  const rows =
+    (
+      await env.WP_OS_DB.prepare(
+        `SELECT * FROM web_property_dns
+          WHERE active_at IS NULL AND status != 'on_zone' AND (last_checked_at IS NULL OR last_checked_at <= ?1)
+          ORDER BY last_checked_at ASC LIMIT 20`,
+      )
+        .bind(due)
+        .all<DnsWaitRow>()
+    ).results ?? [];
+  const out: Array<{ host: string; status: string; did: string }> = [];
+  for (const row of rows) {
+    const status = await dnsLiveStatus(row, fetchImpl);
+    out.push({ host: row.host, status, did: await applyDnsStatus(env, row, status, now) });
+  }
+  return out;
 }

@@ -213,7 +213,7 @@ export function checkDns(duty, dns) {
   if (!/export function recordProblem[\s\S]*?no name[\s\S]*?no target/.test(dns)) v.push("recordProblem does not refuse a record without name or target");
   if (!/placeholder/.test(dns)) v.push("recordProblem does not refuse a placeholder");
   if (!/const problem = recordProblem\(r\);\s*if \(problem\)/.test(dns)) v.push("recordDnsWaits emails without checking the record");
-  if (!/DNS_RECHECK_MINUTES = 15/.test(dns) || !/DNS_WAIT_DAYS = 7/.test(dns)) v.push("the re-check is not every 15 minutes for 7 days");
+  if (!/export async function sweepDnsWaits[\s\S]*?DNS_RECHECK_MINUTES \* 60_000/.test(dns) || !/DNS_WAIT_DAYS \* 86_400_000/.test(dns)) v.push("the re-check does not run on the promised interval for the promised days");
   return { violations: v, examined: 8 };
 }
 

@@ -9,7 +9,7 @@ import { OUTBOUND_ATTACHMENTS_MAX_BYTES } from "../src/worker/effects/emailTrans
 import { loadRegistry, registerFromEmail, recordRepoFacts } from "../src/worker/services/webPropertyRegistry";
 import { readSecretLines, secretNameProblem, RESERVED_SECRET_NAMES } from "../src/worker/services/secretHandoff";
 import { outboundFilesFor } from "../src/worker/services/workCardFiles";
-import { recordDnsWaits, recordProblem } from "../src/worker/services/dnsWaits";
+import { DNS_RECHECK_MINUTES, recordDnsWaits, recordProblem, sweepDnsWaits } from "../src/worker/services/dnsWaits";
 import { missingSecretsOf, readWebPropertyChange } from "../src/worker/services/webPropertyChange";
 import { OS_PROPERTY, WEB_PROPERTIES, githubReposIn, hostsSentence, registrationsIn } from "../src/shared/intake/webPropertyChange";
 import { PORTER_WAITS, PORTER_WAIT_KINDS, SECRET_BY_EMAIL, WAIT_TEXT_FORBIDDEN, waitDetail } from "../src/shared/work/porterWaits";
@@ -369,13 +369,18 @@ describe("a host outside her Cloudflare zones (0253)", () => {
     expect(mail[0]!.text).toMatch(/To clear it by email: nothing to email — at your DNS provider add CNAME voting → topbarz-voting\.pages\.dev/);
     const row = await env.WP_OS_DB.prepare("SELECT id, emailed_at FROM web_property_dns WHERE host = 'voting.topbarz.xyz'").first<{ id: string; emailed_at: string | null }>();
     expect(row!.emailed_at).not.toBeNull();
-    const pending = await handleRequest(new Request("https://test.local/api/dns-waits/pending", { method: "POST", headers: { ...CLAIMER, "content-type": "application/json" }, body: "{}" }), env);
-    expect(((await pending.json()) as { waits: Array<{ host: string }> }).waits.map((w) => w.host), "not due again for 15 minutes").not.toContain("voting.topbarz.xyz");
+    // The Worker's cron re-checks it (22 Nov 2026): public DNS for the exact record, then https on the host.
+    const world = (async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.startsWith("https://cloudflare-dns.com/dns-query")) return Response.json({ Status: 0, Answer: u.includes("voting.topbarz.xyz") ? [{ data: "topbarz-voting.pages.dev." }] : [] });
+      if (u === "https://voting.topbarz.xyz/") return new Response("<html>", { status: 200 });
+      return new Response("", { status: 404 });
+    }) as typeof fetch;
+    const hosts = async () => (await sweepDnsWaits(env, new Date(), world)).map((w) => w.host);
+    expect(await hosts(), `not due again for ${DNS_RECHECK_MINUTES} minutes`).not.toContain("voting.topbarz.xyz");
     await env.WP_OS_DB.prepare("UPDATE web_property_dns SET last_checked_at = '2026-01-01T00:00:00.000Z' WHERE id = ?1").bind(row!.id).run();
-    const due = await handleRequest(new Request("https://test.local/api/dns-waits/pending", { method: "POST", headers: { ...CLAIMER, "content-type": "application/json" }, body: "{}" }), env);
-    expect(((await due.json()) as { waits: Array<{ host: string }> }).waits.map((w) => w.host)).toContain("voting.topbarz.xyz");
-    const live = await handleRequest(new Request("https://test.local/api/dns-waits/status", { method: "POST", headers: { ...CLAIMER, "content-type": "application/json" }, body: JSON.stringify({ id: row!.id, status: "active" }) }), env);
-    expect(((await live.json()) as { did: string }).did).toBe("live");
+    const swept = await sweepDnsWaits(env, new Date(), world);
+    expect(swept.find((w) => w.host === "voting.topbarz.xyz")?.did).toBe("live");
     expect(sent.at(-1)!.text).toContain("voting.topbarz.xyz is live: https://voting.topbarz.xyz now serves the site");
     expect((await env.WP_OS_DB.prepare("SELECT active_at FROM web_property_dns WHERE id = ?1").bind(row!.id).first<{ active_at: string | null }>())!.active_at).not.toBeNull();
   });

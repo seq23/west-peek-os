@@ -1,10 +1,9 @@
 import type { Env } from "../env";
-import { json, type RouteContext } from "../router";
-import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
 import { appendEvent } from "../events";
 import { sendOrPreview } from "./previewApproval";
-import { partnerByEmail } from "../../shared/registry/partners";
-import { waitBullets } from "../../shared/work/porterWaits";
+import { PARTNERS, partnerByEmail } from "../../shared/registry/partners";
+import { DRIVE_RECHECK_MINUTES, waitBullets } from "../../shared/work/porterWaits";
+import { GoogleWorkspaceError, SCOPE, driveFileText, listDriveChildren, serviceAccountToken, type DriveFileRaw } from "../effects/googleWorkspaceClient";
 import { PARTNER_MATERIAL_GRACE_MINUTES, driveFoldersIn } from "../../shared/work/partnerPractices";
 
 /**
@@ -15,9 +14,8 @@ import { PARTNER_MATERIAL_GRACE_MINUTES, driveFoldersIn } from "../../shared/wor
  *
  *   1 · THE DOOR (`recordDriveWatches`, called by `dealIntake.openAssignmentCard` for every emailed
  *       ask) records each folder link in the partner's words as a `drive_watch` row on the card.
- *   2 · THE SWEEP ON THE MAC: the claimer's heartbeat asks `/api/drive-watches/pending` for the rows
- *       due (every 15 minutes), maps each folder with `scripts/drive/pull.mjs --map` under the
- *       vault's service account, and reports what it saw to `/api/drive-watches/status`.
+ *   2 · THE SWEEP ON THE WORKER'S CRON (`sweepDriveWatches`, 22 Nov 2026): every row due (every
+ *       DRIVE_RECHECK_MINUTES, day and night) is read with the service account (`readWatchedFolder`).
  *   3 · FILES → LOADED ON ARRIVAL: the card (and any live card it was handed to) gets the file names
  *       and the documents' text as a note from the partner — the note every runner's `steerFor` and
  *       the general loop already read — and a blocked card is answered the way the "I added missing
@@ -27,7 +25,7 @@ import { PARTNER_MATERIAL_GRACE_MINUTES, driveFoldersIn } from "../../shared/wor
  *       and stamps `empty_told_at`; later empty checks say nothing. After WATCH_DAYS the row closes.
  */
 
-export const DRIVE_RECHECK_MINUTES = 15;
+export { DRIVE_RECHECK_MINUTES };
 export const DRIVE_WATCH_DAYS = 14;
 
 export interface DriveWatchRow {
@@ -129,7 +127,7 @@ async function tellEmptyOnce(env: Env, row: DriveWatchRow): Promise<boolean> {
 }
 
 /**
- * THE MAC'S REPORT, APPLIED. Pure over the database: files → loaded onto every live card and the row
+ * WHAT THE FOLDER HELD, APPLIED. Pure over the database: files → loaded onto every live card and the row
  * ARRIVED; none → told once, then silent; past the watch window → CLOSED. Returns what it did.
  */
 export async function applyDriveWatchStatus(
@@ -172,37 +170,92 @@ export async function applyDriveWatchStatus(
   return "still_empty";
 }
 
-function isClaimer(ctx: RouteContext): boolean {
-  return ctx.identity?.email.toLowerCase() === SUBSCRIPTION_CLAIMER_EMAIL;
+const TEXT_DOC = /\.(txt|md|csv|json)$/i;
+const GOOGLE_TEXT = new Set(["application/vnd.google-apps.document", "application/vnd.google-apps.spreadsheet", "application/vnd.google-apps.presentation"]);
+const FOLDER = "application/vnd.google-apps.folder";
+const MAX_FILES = 200;
+const MAX_DEPTH = 3;
+
+export type FolderRead = { files: number; names: string[]; documents: Array<{ name: string; text: string }> } | { outage: string };
+
+/**
+ * WHAT IS IN THE FOLDER, READ BY THE WORKER (22 Nov 2026). The same service account the Mac used (drive.readonly,
+ * domain-wide delegation), as the partner who named the folder first and then the other partner, so a folder shared
+ * with either is seen. Walks sub-folders (depth 3, 200 files); carries the text of up to eight small documents.
+ * A folder nobody can see is ZERO files ("empty, or not yet shared", which is what DRIVE_EMPTY says); a key, scope
+ * or network fault is an OUTAGE, never zero, so nobody is told "still empty" because Google was down.
+ */
+export async function readWatchedFolder(env: Env, row: Pick<DriveWatchRow, "folder_id" | "requested_by">, fetchImpl: typeof fetch = fetch): Promise<FolderRead> {
+  const first = partnerByEmail(row.requested_by);
+  const subjects = [...(first ? [first] : []), ...PARTNERS.filter((p) => p.email !== first?.email)];
+  for (const p of subjects) {
+    let token: string;
+    try {
+      token = await serviceAccountToken(env, [SCOPE.driveRead], p.email, fetchImpl);
+    } catch (err) {
+      return { outage: err instanceof Error ? err.message.slice(0, 200) : String(err) };
+    }
+    try {
+      const names: string[] = [];
+      const files: Array<{ raw: DriveFileRaw; path: string }> = [];
+      const walk = async (id: string, prefix: string, depth: number): Promise<void> => {
+        for (const f of await listDriveChildren(token, id, fetchImpl)) {
+          if (files.length >= MAX_FILES) return;
+          const path = `${prefix}${f.name ?? "(unnamed)"}`;
+          if (f.mimeType === FOLDER) {
+            if (depth < MAX_DEPTH && f.id) await walk(f.id, `${path}/`, depth + 1);
+            continue;
+          }
+          files.push({ raw: f, path });
+          names.push(path);
+        }
+      };
+      await walk(row.folder_id, "", 1);
+      const documents: Array<{ name: string; text: string }> = [];
+      for (const f of files.filter((x) => GOOGLE_TEXT.has(x.raw.mimeType ?? "") || (TEXT_DOC.test(x.path) && Number(x.raw.size ?? 0) <= 200_000)).slice(0, 8)) {
+        try {
+          const text = await driveFileText(token, { ...f.raw, mimeType: TEXT_DOC.test(f.path) && !GOOGLE_TEXT.has(f.raw.mimeType ?? "") ? "text/plain" : f.raw.mimeType }, 4000, fetchImpl);
+          if (text) documents.push({ name: f.path, text });
+        } catch {
+          // A document that would not export is still named; its text is simply not carried.
+        }
+      }
+      return { files: files.length, names, documents };
+    } catch (err) {
+      if (err instanceof GoogleWorkspaceError && (err.code === "not_found" || err.code === "forbidden")) continue;
+      return { outage: err instanceof Error ? err.message.slice(0, 200) : String(err) };
+    }
+  }
+  return { files: 0, names: [], documents: [] };
 }
 
-/** POST /api/drive-watches/pending — the claimer only: folders still being watched and due a look. */
-export async function handlePendingDriveWatches(ctx: RouteContext): Promise<Response> {
-  if (!isClaimer(ctx)) return json({ error: "forbidden", detail: "Only the Mac's claimer checks Drive folders." }, { status: 403 });
-  const due = new Date(Date.now() - DRIVE_RECHECK_MINUTES * 60_000).toISOString();
-  const rows = await ctx.env.WP_OS_DB.prepare(
-    `SELECT id, folder_id, folder_url FROM drive_watch
-      WHERE status = 'WATCHING' AND (last_checked_at IS NULL OR last_checked_at < ?1)
-      ORDER BY created_at ASC LIMIT 10`,
-  )
-    .bind(due)
-    .all<{ id: string; folder_id: string; folder_url: string }>();
-  return json({ watches: rows.results ?? [] });
-}
-
-/** POST /api/drive-watches/status { id, files, names?, documents? } — what the Mac saw in the folder. */
-export async function handleDriveWatchStatus(ctx: RouteContext): Promise<Response> {
-  if (!isClaimer(ctx)) return json({ error: "forbidden", detail: "Only the Mac's claimer checks Drive folders." }, { status: 403 });
-  const body = (await ctx.request.json().catch(() => ({}))) as { id?: string; files?: number; names?: unknown; documents?: unknown };
-  const id = String(body.id ?? "").trim();
-  if (!id) return json({ error: "invalid_input", detail: "id is required" }, { status: 400 });
-  const row = await ctx.env.WP_OS_DB.prepare("SELECT * FROM drive_watch WHERE id = ?1").bind(id).first<DriveWatchRow>();
-  if (!row) return json({ error: "not_found", detail: "no such watch" }, { status: 404 });
-  if (row.status !== "WATCHING") return json({ ok: true, did: "already_" + row.status.toLowerCase() });
-  const names = Array.isArray(body.names) ? body.names.map((n) => String(n).slice(0, 200)).slice(0, 200) : [];
-  const documents = Array.isArray(body.documents)
-    ? (body.documents as Array<{ name?: unknown; text?: unknown }>).slice(0, 8).map((d) => ({ name: String(d?.name ?? "").slice(0, 200), text: String(d?.text ?? "").slice(0, 4000) }))
-    : [];
-  const did = await applyDriveWatchStatus(ctx.env, row, { files: Number(body.files) || 0, names, documents });
-  return json({ ok: true, did });
+/**
+ * THE WATCH, ON THE WORKER'S CRON (22 Nov 2026). It used to ride the Mac claimer's heartbeat, which since #572 runs
+ * only 10:00-21:59 CT, so "loaded within 15 minutes" was false all night. Every folder not looked at in
+ * DRIVE_RECHECK_MINUTES is read now, day or night, and the answer applied exactly as before. An outage stamps the
+ * look (so it is retried on the next interval, not every minute) and applies nothing.
+ */
+export async function sweepDriveWatches(env: Env, now: Date, fetchImpl: typeof fetch = fetch): Promise<Array<{ folder: string; did: string }>> {
+  const due = new Date(now.getTime() - DRIVE_RECHECK_MINUTES * 60_000).toISOString();
+  const rows =
+    (
+      await env.WP_OS_DB.prepare(
+        `SELECT * FROM drive_watch WHERE status = 'WATCHING' AND (last_checked_at IS NULL OR last_checked_at <= ?1)
+          ORDER BY last_checked_at ASC LIMIT 10`,
+      )
+        .bind(due)
+        .all<DriveWatchRow>()
+    ).results ?? [];
+  const out: Array<{ folder: string; did: string }> = [];
+  for (const row of rows) {
+    const read = await readWatchedFolder(env, row, fetchImpl);
+    if ("outage" in read) {
+      await env.WP_OS_DB.prepare("UPDATE drive_watch SET last_checked_at = ?2, updated_at = ?2 WHERE id = ?1").bind(row.id, now.toISOString()).run();
+      await appendEvent(env, { eventType: "drive_watch.unread", actorType: "system", actorId: "drive_watch", objectType: "work_card", objectId: row.work_card_id, firmScope: row.firm_scope, payload: { folder: row.folder_id, why: read.outage } });
+      out.push({ folder: row.folder_id, did: "unread" });
+      continue;
+    }
+    out.push({ folder: row.folder_id, did: await applyDriveWatchStatus(env, row, read, now) });
+  }
+  return out;
 }

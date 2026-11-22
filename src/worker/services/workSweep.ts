@@ -742,6 +742,8 @@ export async function sweepOnce(
   // A CARD THE SPEND SETTING STOPPED RESUMES BY ITSELF when the setting (or a search-capable seat) changes —
   // nobody has to notice and press a button. Once per change, never in a loop: see `releaseSpendSettingBlocks`.
   await releaseSpendSettingBlocks(env, now);
+  // A CARD THE SLEEPING MAC STOPPED RESUMES BY ITSELF once the Mac checks in inside its day: see `releaseMacAsleepBlocks`.
+  await (await import("./webPropertyChange")).releaseMacAsleepBlocks(env, now);
   // 14 Nov 2026 (plan step 1): every partner email that opened or steered a card gets one "Got it" within the minute.
   await (await import("./partnerUnderstood")).sendUnderstoodReplies(env, now).catch((err) => console.error("Got it replies failed", err));
   // 15 Nov 2026: NEVER SILENT — a door that died, a placed email with no Got it, or a Mac hand-off not finished, past five minutes, is on Sequoia's desk.

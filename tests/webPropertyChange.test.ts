@@ -15,7 +15,7 @@ import { workCard } from "../src/worker/services/employeeWork";
 import { sweepIdentity } from "../src/worker/services/workSweep";
 import { preApprovalIn } from "../src/shared/work/approvalReply";
 import { readLocalJobReport, WEB_PROPERTY_CHANGE_KIND } from "../src/shared/work/localJobs";
-import { KEPT_FOR_NEXT_BUILD, blockedEmailDetail, finishOriginalAsk, missingSecretsOf, needsPreview, parkPhase, phaseModel, readWebPropertyChange, rulesFor, runWebPropertyChangeCard, type WebPropertyChangeRow } from "../src/worker/services/webPropertyChange";
+import { KEPT_FOR_NEXT_BUILD, MAC_ASLEEP_TRIES, releaseMacAsleepBlocks, blockedEmailDetail, finishOriginalAsk, missingSecretsOf, needsPreview, parkPhase, phaseModel, readWebPropertyChange, rulesFor, runWebPropertyChangeCard, type WebPropertyChangeRow } from "../src/worker/services/webPropertyChange";
 import { steerFromReply } from "../src/worker/services/emailThread";
 import { threadReference } from "../src/shared/email/thread";
 import { handleDeveloperChanges, handleDeveloperEmail } from "../src/worker/services/developerDirection";
@@ -991,6 +991,63 @@ describe("a build the partner tail stopped on purpose is queued again without sp
     const after = await card(id);
     expect(after.state).toBe("BLOCKED");
     expect(String(after.block_needed ?? "")).toMatch(/the Mac/);
+  });
+
+  it("the Mac's wait keeps its word: back in the queue when the Mac checks in inside its day; never at night, never held, never a fourth time", async () => {
+    const id = await atBuild("mac1");
+    const blockedBySleepingMac = async () => {
+      await stopLiveBuild(id, "no machine claimed this run inside its 64800s queue ceiling", false);
+      await tickFor(id);
+      return card(id);
+    };
+    const first = await blockedBySleepingMac();
+    expect(first.state).toBe("BLOCKED");
+    expect(String(first.block_needed ?? "")).toMatch(/resumes by itself the next time the Mac is open/);
+    // Tomorrow 18:00 UTC is midday Central (inside the Mac's day); 09:00 UTC is 03:00-04:00 Central (outside it).
+    const b = new Date(Date.parse(String(first.blocked_at)) + 86_400_000);
+    const noon = new Date(Date.UTC(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate(), 18));
+    const night = new Date(Date.UTC(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate(), 9));
+    const macSaysHello = (at: Date) =>
+      env.WP_OS_DB.prepare(
+        `INSERT OR REPLACE INTO subscription_seat_device (seat, device_id, hostname, agent_version, last_seen_at, capabilities_json, first_seen_at)
+         VALUES ('claude_code', 'dev_mac_wait', 'Sequoias-Mac', 'test', ?1, '[]', ?1)`,
+      ).bind(new Date(at.getTime() - 30_000).toISOString()).run();
+
+    expect(await releaseMacAsleepBlocks(env, noon), "no claimer has said hello since it stopped").not.toContain(id);
+    await macSaysHello(night);
+    expect(await releaseMacAsleepBlocks(env, night), "the Mac checking in at night is outside its day").not.toContain(id);
+    await macSaysHello(noon);
+    // A hello from before the stop is not the Mac coming back: the block came after it.
+    const realBlockedAt = String(first.blocked_at);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET blocked_at = ?2 WHERE id = ?1").bind(id, new Date(noon.getTime() - 10_000).toISOString()).run();
+    expect(await releaseMacAsleepBlocks(env, noon), "the only hello came before it stopped").not.toContain(id);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET blocked_at = ?2 WHERE id = ?1").bind(id, realBlockedAt).run();
+    await env.WP_OS_DB.prepare("UPDATE work_card SET held_at = ?2, held_reason = 'her own hold, in the test' WHERE id = ?1").bind(id, new Date().toISOString()).run();
+    expect(await releaseMacAsleepBlocks(env, noon), "a held card stays exactly as she left it").not.toContain(id);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET held_at = NULL WHERE id = ?1").bind(id).run();
+
+    // Through the sweep's own tick, so the release is proven wired where production runs it.
+    const tick = await sweepOnce(env, noon, RUNNERS);
+    const back = await card(id);
+    expect(back.state, "the Mac is back inside its day").not.toBe("BLOCKED");
+    expect(String(back.block_answer)).toMatch(/AUTO-RETRY: the Mac is open again/);
+    expect(await releaseMacAsleepBlocks(env, noon), "once per stop, never in a loop").not.toContain(id);
+    if (tick.card?.id !== id) await tickFor(id);
+    const again = await liveJobFor(id);
+    expect(again, "the same phase is queued for the Mac again").not.toBeNull();
+    expect(JSON.parse(String(again!.job_json)).phase).toBe("BUILD");
+
+    // Each further miss is released the same way, until the Mac has missed it MAC_ASLEEP_TRIES times.
+    for (let miss = 2; miss < MAC_ASLEEP_TRIES; miss++) {
+      expect((await blockedBySleepingMac()).state).toBe("BLOCKED");
+      expect(await releaseMacAsleepBlocks(env, noon)).toContain(id);
+      await tickFor(id);
+    }
+    const last = await blockedBySleepingMac();
+    expect(last.state).toBe("BLOCKED");
+    expect(String(last.block_needed ?? ""), "the last miss promises nothing it cannot keep").not.toMatch(/resumes by itself/);
+    expect(String(last.block_needed ?? "")).toMatch(/try again/);
+    expect(await releaseMacAsleepBlocks(env, noon), "never released a fourth time").not.toContain(id);
   });
 
   it("a run that simply went missing on the Mac still spends its attempt (negative)", async () => {

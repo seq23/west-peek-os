@@ -1,7 +1,8 @@
+import { generateKeyPairSync } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { DRIVE_RECHECK_MINUTES, sweepDriveWatches } from "../src/worker/services/driveWatches";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
-import { handleRequest } from "../src/worker/index";
 import { openAssignmentCard } from "../src/worker/services/dealIntake";
 import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
 import { steerFor } from "../src/worker/services/instruction";
@@ -28,7 +29,18 @@ let t: TestDb;
 let env: Env;
 const sent: Array<{ to: string; subject: string; text: string }> = [];
 const SEQUOIA = "sequoia@westpeek.ventures";
-const CLAIMER = { "x-wpos-dev-user": "subscription-claimer@joinwestpeek.com", "content-type": "application/json" };
+const SERVICE_ACCOUNT = JSON.stringify({ client_email: "sa@firm.iam.example", private_key: generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs8", format: "pem" }) });
+type DriveFile = { id: string; name: string; mimeType: string; text?: string };
+/** Google as the service account sees it: a token, then every watched folder holding `files`. */
+const driveFetch = (files: DriveFile[]) =>
+  (async (url: string | URL | Request) => {
+    const u = String(url);
+    if (u.startsWith("https://oauth2.googleapis.com/token")) return Response.json({ access_token: "ya29.fixture", expires_in: 3600 });
+    if (u.includes("/drive/v3/files?")) return Response.json({ files: files.map(({ id, name, mimeType }) => ({ id, name, mimeType, size: "40" })) });
+    const one = files.find((f) => u.includes(`/files/${f.id}?alt=media`));
+    if (one?.text) return new Response(one.text);
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
 const FOLDER = "https://drive.google.com/drive/folders/1AbCdEfGhIjKlMnOpQrStUv?usp=sharing";
 
 beforeAll(async () => {
@@ -39,6 +51,7 @@ beforeAll(async () => {
     RESEND_API_KEY: "re_test_not_a_real_key",
     WP_OS_EMAIL_FROM: "os@westpeek.ventures",
     WP_OS_DOCUMENTS: t.docs,
+    WP_OS_GOOGLE_SERVICE_ACCOUNT_JSON: SERVICE_ACCOUNT,
   } as Partial<Env>);
   vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
     if (String(url).includes("api.resend.com")) {
@@ -160,42 +173,83 @@ describe("R21 (addendum item 10): a Drive folder the ask names is watched, loade
     const watch = await env.WP_OS_DB.prepare("SELECT id, status FROM drive_watch WHERE work_card_id = ?1").bind(id).first<{ id: string; status: string }>();
     expect(watch!.status).toBe("WATCHING");
 
-    const pending = async () => ((await (await handleRequest(new Request("https://test.local/api/drive-watches/pending", { method: "POST", headers: CLAIMER, body: "{}" }), env)).json()) as { watches: Array<{ id: string }> }).watches.map((w) => w.id);
-    const status = async (body: object) => ((await (await handleRequest(new Request("https://test.local/api/drive-watches/status", { method: "POST", headers: CLAIMER, body: JSON.stringify({ id: watch!.id, ...body }) }), env)).json()) as { did: string }).did;
-    const forbidden = await handleRequest(new Request("https://test.local/api/drive-watches/pending", { method: "POST", headers: { "x-wpos-dev-user": SEQUOIA, "content-type": "application/json" }, body: "{}" }), env);
-    expect(forbidden.status, "only the Mac's claimer").toBe(403);
+    // The Worker's cron reads the folder through the firm's service account (22 Nov 2026), day and night.
+    const folder: DriveFile[] = [];
+    const sweep = async () => (await sweepDriveWatches(env, new Date(), driveFetch(folder))).find((r) => r.folder === "1AbCdEfGhIjKlMnOpQrStUv")?.did;
+    const due = async () => (await env.WP_OS_DB.prepare("SELECT 1 FROM drive_watch WHERE id = ?1 AND status = 'WATCHING' AND (last_checked_at IS NULL OR last_checked_at <= ?2)").bind(watch!.id, new Date(Date.now() - DRIVE_RECHECK_MINUTES * 60_000).toISOString()).first()) !== null;
 
-    expect(await pending()).toContain(watch!.id);
+    expect(await due()).toBe(true);
     const before = sent.length;
     // #354: inside the grace window the folder may still be filling — nothing is said yet.
-    expect(await status({ files: 0 })).toBe("still_empty");
+    expect(await sweep()).toBe("still_empty");
     expect(sent.length - before, "no email while the partner may still be sending it").toBe(0);
     // The window has passed since the ask named the folder, and it is still empty: said once.
     await env.WP_OS_DB.prepare("UPDATE drive_watch SET created_at = ?2, last_checked_at = '2026-01-01T00:00:00.000Z' WHERE id = ?1").bind(watch!.id, new Date(Date.now() - 16 * 60_000).toISOString()).run();
-    expect(await status({ files: 0 })).toBe("told_empty");
+    expect(await sweep()).toBe("told_empty");
     expect(sent.length - before, "one email").toBe(1);
     expect(sent.at(-1)!.text).toMatch(/still empty/);
     expect(sent.at(-1)!.text).toMatch(/no new email needed/);
-    expect(await pending(), "not due again for 15 minutes").not.toContain(watch!.id);
+    expect(await due(), `not due again for ${DRIVE_RECHECK_MINUTES} minutes`).toBe(false);
+    expect(await sweep(), "a sweep inside the interval leaves it alone").toBeUndefined();
     await env.WP_OS_DB.prepare("UPDATE drive_watch SET last_checked_at = '2026-01-01T00:00:00.000Z' WHERE id = ?1").bind(watch!.id).run();
-    expect(await status({ files: 0 })).toBe("still_empty");
+    expect(await sweep()).toBe("still_empty");
     expect(sent.length - before, "'still empty' is said ONCE").toBe(1);
 
-    expect(await status({ files: 2, names: ["bios.txt", "headshot.png"], documents: [{ name: "bios.txt", text: "Kirx Diaz runs a studio in Memphis." }] })).toBe("loaded");
+    folder.push({ id: "f_bios", name: "bios.txt", mimeType: "text/plain", text: "Kirx Diaz runs a studio in Memphis." }, { id: "f_head", name: "headshot.png", mimeType: "image/png" });
+    await env.WP_OS_DB.prepare("UPDATE drive_watch SET last_checked_at = '2026-01-01T00:00:00.000Z' WHERE id = ?1").bind(watch!.id).run();
+    expect(await sweep()).toBe("loaded");
     expect(sent.length - before, "loading needs no email").toBe(1);
     const note = await env.WP_OS_DB.prepare("SELECT body FROM work_card_note WHERE work_card_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(id).first<{ body: string }>();
     expect(note!.body).toContain("bios.txt, headshot.png");
     expect(note!.body).toContain("Kirx Diaz runs a studio in Memphis.");
     expect((await env.WP_OS_DB.prepare("SELECT status FROM drive_watch WHERE id = ?1").bind(watch!.id).first<{ status: string }>())!.status).toBe("ARRIVED");
-    expect(await pending()).not.toContain(watch!.id);
+    expect(await due()).toBe(false);
+  });
+
+  it("a Google outage is never reported as an empty folder", async () => {
+    const id = await card("Panel notes", `Walker, use the notes in ${FOLDER.replace("1AbCdEfGhIjKlMnOpQrStUv", "1OuTaGeFoLdErXyZ12345")}`);
+    const w = await env.WP_OS_DB.prepare("SELECT id FROM drive_watch WHERE work_card_id = ?1").bind(id).first<{ id: string }>();
+    await env.WP_OS_DB.prepare("UPDATE drive_watch SET created_at = '2026-01-01T00:00:00.000Z' WHERE id = ?1").bind(w!.id).run();
+    const before = sent.length;
+    const down = (async () => new Response("unavailable", { status: 503 })) as typeof fetch;
+    const out = await sweepDriveWatches(env, new Date(), down);
+    expect(out.find((r) => r.folder === "1OuTaGeFoLdErXyZ12345")?.did).toBe("unread");
+    expect(sent.length - before, "no 'still empty' email from a token or Drive failure").toBe(0);
+    const row = await env.WP_OS_DB.prepare("SELECT status, last_checked_at FROM drive_watch WHERE id = ?1").bind(w!.id).first<{ status: string; last_checked_at: string | null }>();
+    expect(row!.status, "still watched").toBe("WATCHING");
+    expect(row!.last_checked_at, "stamped so the next tick, not this one, retries").not.toBeNull();
+  });
+
+  it("outage: the token works but Drive's listing fails (5xx) — unread, never an empty folder, no email", async () => {
+    const id = await card("Panel bios", `Walker, use the notes in ${FOLDER.replace("1AbCdEfGhIjKlMnOpQrStUv", "1LiStDoWnFoLdEr678901")}`);
+    const w = await env.WP_OS_DB.prepare("SELECT id FROM drive_watch WHERE work_card_id = ?1").bind(id).first<{ id: string }>();
+    await env.WP_OS_DB.prepare("UPDATE drive_watch SET created_at = '2026-01-01T00:00:00.000Z' WHERE id = ?1").bind(w!.id).run();
+    let tokens = 0;
+    let lists = 0;
+    const listDown = (async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.startsWith("https://oauth2.googleapis.com/token")) return tokens++, Response.json({ access_token: "ya29.fixture", expires_in: 3600 });
+      if (u.includes("/drive/v3/files?")) return lists++, new Response("backend error", { status: 503 });
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+    const before = sent.length;
+    const out = await sweepDriveWatches(env, new Date(), listDown);
+    expect(tokens, "the token was issued").toBeGreaterThan(0);
+    expect(lists, "the listing itself was what failed").toBeGreaterThan(0);
+    expect(out.find((r) => r.folder === "1LiStDoWnFoLdEr678901")?.did).toBe("unread");
+    expect(sent.length - before, "no 'still empty' email from a Drive listing failure").toBe(0);
+    const row = await env.WP_OS_DB.prepare("SELECT status, empty_told_at, files_seen FROM drive_watch WHERE id = ?1").bind(w!.id).first<{ status: string; empty_told_at: string | null; files_seen: number | null }>();
+    expect(row!.status, "still watched").toBe("WATCHING");
+    expect(row!.empty_told_at, "never recorded as told empty").toBeNull();
   });
 
   it("a blocked card is picked back up when the files land", async () => {
     const id = await card("Deck notes", `Parker, use the notes in ${FOLDER.replace("1AbCdEfGhIjKlMnOpQrStUv", "1QwErTyUiOpAsDfGhJkL")}`);
     await blockCard(env, { id, title: "Deck notes", firm_scope: "west-peek" }, { reason: "a_question_for_you", trying: "Use the notes", employee: "Parker", detail: "The folder is empty." });
     const w = await env.WP_OS_DB.prepare("SELECT id FROM drive_watch WHERE work_card_id = ?1").bind(id).first<{ id: string }>();
-    const res = await handleRequest(new Request("https://test.local/api/drive-watches/status", { method: "POST", headers: CLAIMER, body: JSON.stringify({ id: w!.id, files: 1, names: ["notes.txt"] }) }), env);
-    expect(((await res.json()) as { did: string }).did).toBe("loaded");
+    const out = await sweepDriveWatches(env, new Date(), driveFetch([{ id: "f_notes", name: "notes.txt", mimeType: "text/plain", text: "The deck runs ten slides." }]));
+    expect(out.find((r) => r.folder === "1QwErTyUiOpAsDfGhJkL")?.did).toBe("loaded");
+    expect(w).not.toBeNull();
     const c = await env.WP_OS_DB.prepare("SELECT state, block_answer FROM work_card WHERE id = ?1").bind(id).first<{ state: string; block_answer: string }>();
     expect(c!.state).toBe("OPEN");
     expect(c!.block_answer).toContain("notes.txt");
