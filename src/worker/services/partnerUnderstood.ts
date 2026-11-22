@@ -476,7 +476,9 @@ export async function understand(
   const files = fileNames.map((filename) => ({ filename, purpose: parsed?.files.find((f) => f.filename === filename)?.purpose ?? null }));
   const brief = (asks: string[]): Brief => ({ asks, holds, questions, unclear, files, reader, decision: parsed?.decision ?? null });
   const common = { runId, runIds, readerFailed: parsed ? false : readerFailed, readersTried };
-  if (structured) return { ...common, none: false, asks: structured.asks, noted: [...structured.noted, ...heard], next: ON_IT, via: parsed ? "MODEL" : "STRUCTURE", brief: brief(structured.asks) };
+  // A line is shown to him once: one the reader kept as a hold is not listed again as noted.
+  const notHold = (n: string) => !holds.some((h) => norm(h) === norm(n));
+  if (structured) return { ...common, none: false, asks: structured.asks, noted: [...structured.noted.filter(notHold), ...heard], next: ON_IT, via: parsed ? "MODEL" : "STRUCTURE", brief: brief(structured.asks) };
   if (parsed?.none) return { ...common, none: true, asks: ["nothing asked"], noted: [], next: ON_IT, via: "MODEL", brief: brief([]) };
   if (parsed && parsed.asks.length) {
     const asks = parsed.asks.filter((a) => !isFragment(a));

@@ -58,7 +58,8 @@ export function structuredInstruction(output: StructuredOutput): string {
  * Prose around an object is not the answer: a lane that ignored the format walks on to the next rung.
  */
 function jsonTextOf(text: string): string | null {
-  const bare = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  // Some reasoning lanes drop the opening <think> and send only the closing one: everything before it is reasoning.
+  const bare = text.replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/^[\s\S]*<\/think>/i, "").trim();
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(bare);
   const body = (fenced ? fenced[1]! : bare).trim();
   return body.startsWith("{") && body.endsWith("}") ? body : null;
