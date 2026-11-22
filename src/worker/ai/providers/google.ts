@@ -51,7 +51,11 @@ export function createGoogleAdapter(options: GoogleOptions): ProviderAdapter {
             // truncated every Workers AI run at 256 tokens and failed both partners' briefs on
             // 18 Sep 2026; a default that happens to be generous today is still a number this repo
             // does not control. See `outputCeiling.ts`.
-            generationConfig: { maxOutputTokens: Math.min(req.maxOutputTokens ?? PROVIDER_MAX_OUTPUT_TOKENS, PROVIDER_MAX_OUTPUT_TOKENS) },
+            generationConfig: {
+              maxOutputTokens: Math.min(req.maxOutputTokens ?? PROVIDER_MAX_OUTPUT_TOKENS, PROVIDER_MAX_OUTPUT_TOKENS),
+              // A shaped answer is decoded to its JSON schema, never only asked for in the prompt.
+              ...(req.responseSchema ? { responseMimeType: "application/json", responseJsonSchema: req.responseSchema.schema } : {}),
+            },
             system_instruction: { parts: [{ text: `West Peek OS governed task: ${req.purpose}` }] },
             contents: [{ role: "user", parts }],
           }),

@@ -21,7 +21,9 @@
  * here, which is the opposite of how every other lifecycle change in this system works.
  */
 
-export const UNRETIRE_ADVICE_VERSION = "unretire-advice-v1";
+import { z } from "zod/v4";
+
+export const UNRETIRE_ADVICE_VERSION = "unretire-advice-v2";
 
 export interface UnretireContext {
   candidate: { name: string; role: string; layer: string; retiredReason: string | null };
@@ -58,17 +60,14 @@ export function buildUnretirePrompt(ctx: UnretireContext): string {
     "",
     ctx.need ? `WHAT THE PARTNERS SAY THEY NEED:\n  ${ctx.need}` : "The partners have not said what they need this for.",
     "",
-    "ANSWER IN THIS SHAPE, and nothing else:",
-    "",
-    "VERDICT: one of BRING_BACK / RE_POINT / DECLINE",
-    "  BRING_BACK — the seat as it stands answers something nobody currently does.",
-    "  RE_POINT   — the person is right but the ROLE should change; say what to.",
-    "  DECLINE    — somebody employed already covers this. Name them.",
-    "",
-    "WHY: two or three sentences. Name the specific overlap or the specific gap. If you say DECLINE,",
-    "name who covers it and how. If you say RE_POINT, write the new role title.",
-    "",
-    "WATCH FOR: one sentence on what would make this a mistake in six months.",
+    "WHAT TO ANSWER:",
+    "  verdict — BRING_BACK (the seat as it stands answers something nobody currently does),",
+    "            RE_POINT (the person is right but the ROLE should change), or",
+    "            DECLINE (somebody employed already covers this).",
+    "  why — two or three sentences. Name the specific overlap or the specific gap. If you say DECLINE,",
+    "        name who covers it and how.",
+    "  newRole — for RE_POINT, the new role title; otherwise null.",
+    "  watchFor — one sentence on what would make this a mistake in six months.",
     "",
     "RULES:",
     "- Reason only from the roster above. Do not invent an employee, a need, or a capability.",
@@ -84,6 +83,13 @@ export function buildUnretirePrompt(ctx: UnretireContext): string {
   ].join("\n");
 }
 
+export const UNRETIRE_ADVICE_SHAPE = z.object({
+  verdict: z.enum(["BRING_BACK", "RE_POINT", "DECLINE"]),
+  why: z.string(),
+  newRole: z.string().nullable(),
+  watchFor: z.string(),
+});
+
 export interface UnretireAdvice {
   verdict: "BRING_BACK" | "RE_POINT" | "DECLINE";
   why: string;
@@ -93,21 +99,25 @@ export interface UnretireAdvice {
 }
 
 /**
- * Read the advice back.
+ * The checked answer (the run's output_text, already held to UNRETIRE_ADVICE_SHAPE at the AI boundary) as advice.
  *
  * Returns null rather than guessing a verdict. This is shown to a partner as a recommendation about
- * who works at their firm, and a half-parsed one they act on is worse than none.
+ * who works at their firm, and a half-read one they act on is worse than none.
  */
 export function parseUnretireAdvice(raw: string): UnretireAdvice | null {
-  const verdict = /VERDICT:\s*(BRING_BACK|RE_POINT|DECLINE)/i.exec(raw);
-  if (!verdict) return null;
-  const why = /WHY:\s*([\s\S]*?)(?:\n\s*WATCH FOR:|$)/i.exec(raw);
-  const watch = /WATCH FOR:\s*([\s\S]*?)$/i.exec(raw);
-  const role = /RE_POINT[^\n]*?(?:to|as)\s+["“]?([^"”\n.]{3,80})/i.exec(raw);
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const read = UNRETIRE_ADVICE_SHAPE.safeParse(value);
+  if (!read.success) return null;
+  const a = read.data;
   return {
-    verdict: verdict[1]!.toUpperCase() as UnretireAdvice["verdict"],
-    why: (why?.[1] ?? "").trim().slice(0, 900) || "No reasoning was given.",
-    watchFor: (watch?.[1] ?? "").trim().slice(0, 400),
-    newRole: verdict[1]!.toUpperCase() === "RE_POINT" ? (role?.[1]?.trim() ?? null) : null,
+    verdict: a.verdict,
+    why: a.why.trim().slice(0, 900) || "No reasoning was given.",
+    watchFor: a.watchFor.trim().slice(0, 400),
+    newRole: a.verdict === "RE_POINT" ? a.newRole?.trim() || null : null,
   };
 }

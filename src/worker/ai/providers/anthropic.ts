@@ -70,6 +70,8 @@ export function createAnthropicAdapter(options: AnthropicOptions): ProviderAdapt
           max_tokens: Math.min(req.maxOutputTokens ?? PROVIDER_MAX_OUTPUT_TOKENS, PROVIDER_MAX_OUTPUT_TOKENS),
           system: `West Peek OS governed task: ${req.purpose}`,
           messages: [{ role: "user", content }],
+          // A shaped answer is decoded to its JSON schema (structured outputs), never only asked for in the prompt.
+          ...(req.responseSchema ? { output_config: { format: { type: "json_schema", schema: req.responseSchema.schema } } } : {}),
         }),
       });
       if (!res.ok) throw await providerHttpError(res);

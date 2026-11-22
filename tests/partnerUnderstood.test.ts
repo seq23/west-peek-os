@@ -1,3 +1,4 @@
+import { firstRead } from "./helpers/aiShapes";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import { handleInboundEmail } from "../src/worker/effects/inboundEmail";
@@ -62,7 +63,7 @@ describe("step 1: Got it, in his words", () => {
     await deliver("Sensori", BODY);
     const card = await cardFor("Sensori");
     expect(sent).toHaveLength(0);
-    const read: SeatRead = async () => ({ ok: true, detail: "ok", text: `ASK: ${ASK_1}\nASK: ${ASK_2}\nASK: ${ASK_3}\nASK: something he never wrote\nNEXT: Wren looks at Sensori first.` });
+    const read: SeatRead = async () => ({ ok: true, detail: "ok", text: firstRead({ asks: [ASK_1, ASK_2, ASK_3, `something he never wrote`], next: `Wren looks at Sensori first.` }) });
     expect(await sendUnderstoodReplies(env, new Date(), read)).toBe(1);
     expect(await sendUnderstoodReplies(env, new Date(), read), "a second tick sends nothing").toBe(0);
     expect(sent).toHaveLength(1);
@@ -139,9 +140,10 @@ describe("step 7: the DONE reply answers every ask", () => {
 describe("first-read decision", () => {
   it("keeps a structured decision and treats old or malformed reads as absent", () => {
     const words = "Please confirm the plan";
-    const decision = { kind: "question", property: null, handOffTo: null, planApproved: false, holds: [] };
-    expect(parseUnderstood(`ASK: ${words}\nDECISION: ${JSON.stringify(decision)}`, words).decision).toEqual(decision);
-    expect(parseUnderstood(`ASK: ${words}`, words).decision).toBeNull();
-    expect(parseUnderstood(`ASK: ${words}\nDECISION: {"kind":"approve"}`, words).decision).toBeNull();
+    const decision = { kind: "question", property: null, handOffTo: null, planApproved: false, holds: [], takeBack: null, cc: [], backBy: null };
+    expect(parseUnderstood(firstRead({ asks: [words], decision: decision as never }), words).decision).toEqual(decision);
+    expect(parseUnderstood(firstRead({ asks: [words] }), words).decision).toBeNull();
+    const malformed = JSON.stringify({ ...JSON.parse(firstRead({ asks: [words] })), decision: { kind: "approve" } });
+    expect(parseUnderstood(malformed, words).decision, "a decision missing its fields is not a decision").toBeNull();
   });
 });

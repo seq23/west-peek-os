@@ -1,3 +1,4 @@
+import { questionAnswer } from "./helpers/aiShapes";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
@@ -423,14 +424,14 @@ describe("QUESTION_NEEDS_REPLY tries the kind's owner first, and escalates only 
 });
 
 describe("parseQuestionAnswer — the bias toward not confident", () => {
-  it("reads a clean CONFIDENT: yes answer", () => {
-    const out = parseQuestionAnswer("CONFIDENT: yes\nANSWER: The preview link stays live indefinitely.\nREASON: Documented in the build script.");
+  it("reads a clean confident answer", () => {
+    const out = parseQuestionAnswer(questionAnswer({ confident: true, answer: "The preview link stays live indefinitely.", reason: "Documented in the build script." }));
     expect(out.confident).toBe(true);
     expect(out.answer).toBe("The preview link stays live indefinitely.");
   });
 
   it("reads CONFIDENT: no as not confident, with the reason kept", () => {
-    const out = parseQuestionAnswer("CONFIDENT: no\nREASON: I don't actually know this one.");
+    const out = parseQuestionAnswer(questionAnswer({ confident: false, reason: "I don't actually know this one." }));
     expect(out.confident).toBe(false);
     expect(out.answer).toBeNull();
     expect(out.reason).toContain("don't actually know");
@@ -444,7 +445,7 @@ describe("parseQuestionAnswer — the bias toward not confident", () => {
   });
 
   it("treats a confident answer with no answer text as not confident", () => {
-    const out = parseQuestionAnswer("CONFIDENT: yes\nANSWER: \nREASON: forgot to write one");
+    const out = parseQuestionAnswer(questionAnswer({ confident: true, answer: "", reason: "forgot to write one" }));
     expect(out.confident).toBe(false);
     expect(out.answer).toBeNull();
   });

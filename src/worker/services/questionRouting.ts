@@ -1,5 +1,7 @@
 import type { Env } from "../env";
 import type { Actor } from "./authorize";
+import { z } from "zod/v4";
+import { readStructured, structuredOutput } from "../ai/structuredOutput";
 import { runAi } from "../ai/runAi";
 import { personaPrompt } from "../../shared/registry/aiEmployeePersonas";
 import { kindHost } from "../../shared/work/kindHosts";
@@ -26,7 +28,7 @@ import { chiefOfStaffFor } from "../../shared/work/chiefOfStaff";
  * WHAT "CONFIDENCE" MEANS HERE, DECIDED RATHER THAN LEFT OPEN. Not a numeric score — a model
  * inventing "0.82 confident" would be pseudo-precision with nothing behind it, and this repo's own
  * classifier (`ACTIONABILITY_VERDICTS`) already establishes the pattern for a boundary that gates
- * real infrastructure: a categorical, self-reported CONFIDENT: yes|no in a fixed format, read
+ * real infrastructure: a categorical, self-reported `confident` boolean in a checked JSON shape, read
  * strictly, with the prompt spelling out what "yes" is supposed to mean ("you would stake your name
  * on it"). That is auditable and testable the same way the three-way classifier is; a float would
  * be neither.
@@ -68,40 +70,47 @@ export type QuestionAnswerer = (
   input: QuestionAnswerInput & { employee: { id: string; name: string; role: string } },
 ) => Promise<{ confident: boolean; answer: string | null; reason: string; aiRunId: string | null }>;
 
-/** Read from the model's fixed answer format. Anything unparseable or "no" reads as not confident. */
+/** THE ANSWERER'S REPLY, AS FIELDS (22 Nov 2026, engineering sweep row 6): checked at the AI boundary, never read from prose. */
+export const QUESTION_ANSWER_OUTPUT = structuredOutput(
+  "question_answer",
+  z.object({
+    confident: z.boolean().describe("true only when you would stake your name on the answer exactly as written"),
+    answer: z.string().nullable().describe("your answer, in your own voice, only when confident; otherwise null"),
+    reason: z.string().describe("one short sentence either way"),
+  }),
+);
+
+/** Read from the checked fields. Anything unreadable, or "not confident", reads as not confident. */
 export function parseQuestionAnswer(outputText: string | null | undefined): { confident: boolean; answer: string | null; reason: string } {
   const text = (outputText ?? "").trim();
-  const confidentMatch = /CONFIDENT:\s*(yes|no)/i.exec(text);
-  // Everything after "ANSWER:" up to (never including) a line that starts "REASON:" — greedy
-  // whitespace here would swallow the newline that delimits an EMPTY answer from the reason on
-  // the next line, which is exactly the malformed-but-confident case this function exists to catch.
-  const answerMatch = /ANSWER:([^\n]*(?:\n(?!REASON:)[^\n]*)*)/i.exec(text);
-  const reasonMatch = /REASON:\s*(.+)/i.exec(text);
-  if (!confidentMatch || confidentMatch[1]!.toLowerCase() !== "yes") {
+  const read = readStructured(QUESTION_ANSWER_OUTPUT, text);
+  const reason = (read?.reason ?? "").trim().slice(0, 400);
+  if (!read || !read.confident) {
     return {
       confident: false,
       answer: null,
-      reason: (reasonMatch?.[1] ?? (text ? `could not read a confident answer. Raw: "${text.slice(0, 200)}"` : "the model returned nothing")).trim().slice(0, 400),
+      reason: reason || (text ? `could not read a confident answer. Raw: "${text.slice(0, 200)}"` : "the model returned nothing"),
     };
   }
-  const answer = (answerMatch?.[1] ?? "").trim().slice(0, 2000);
+  const answer = (read.answer ?? "").trim().slice(0, 2000);
   if (!answer) {
     // Said yes but gave nothing to send — treated as not confident. A confident answer with no
     // text is a malformed reply, never something a partner should receive.
     return { confident: false, answer: null, reason: "said confident but gave no answer text — treated as not confident" };
   }
-  return { confident: true, answer, reason: (reasonMatch?.[1] ?? "").trim().slice(0, 400) || "(no reason given)" };
+  return { confident: true, answer, reason: reason || "(no reason given)" };
 }
 
 /**
- * THE ANSWER MUST COME IN ITS FORMAT, OR THE NEXT ROUTE IS ASKED (14 Nov 2026). Walker's
- * recommendation to Scooter came back from the Mac's seat as bullets with a REASON line and no
- * CONFIDENT/ANSWER header; parseQuestionAnswer read that as "not confident" and a good answer became
- * a notice. A reply without the header is a reply the router walks past, never a silent no.
+ * THE ANSWER MUST COME IN ITS SHAPE, OR THE NEXT ROUTE IS ASKED (14 Nov 2026). Walker's recommendation to Scooter came
+ * back from the Mac's seat as bullets with no header, and a good answer became a notice. The boundary now refuses any
+ * reply that is not the JSON shape; this adds the one rule the shape cannot say: confident with no answer text is a
+ * reply the router walks past, never a silent no.
  */
 export function questionAnswerFormatProblem(text: string): string | null {
-  if (!/CONFIDENT:\s*(yes|no)\b/i.test(text)) return "the reply has no CONFIDENT: yes|no line";
-  if (/CONFIDENT:\s*yes\b/i.test(text) && !parseQuestionAnswer(text).confident) return "CONFIDENT: yes with no ANSWER: text";
+  const read = readStructured(QUESTION_ANSWER_OUTPUT, text);
+  if (!read) return "the reply is not the question_answer shape";
+  if (read.confident && !(read.answer ?? "").trim()) return "confident with no answer text";
   return null;
 }
 
@@ -131,18 +140,16 @@ const defaultAnswerQuestion: QuestionAnswerer = async (env, input) => {
           "and do not have is a reason to say no.",
         "",
         "FOR A QUESTION OF FACT, BIAS HARD TOWARD NOT CONFIDENT. Sequoia is the fallback and she is always available — a wrong " +
-          "guessed answer reaching a partner is worse than her answering it herself. Say CONFIDENT: yes " +
+          "guessed answer reaching a partner is worse than her answering it herself. Say confident " +
           "only when you would stake your name on the answer exactly as written; anything short of that " +
-          "is CONFIDENT: no, whatever the reason.",
+          "is not confident, whatever the reason.",
         "",
-        "Answer in exactly this format and nothing else:",
-        "CONFIDENT: yes|no",
-        "ANSWER: <your answer, in your own voice, only if confident — omit or leave blank otherwise>",
-        "REASON: <one short sentence either way>",
+        "Answer with whether you are confident, your answer only if you are (null otherwise), and one short reason either way.",
       ].join("\n"),
     ],
     sensitivity: "INTERNAL" as never,
     budgetContext: { judgement: true, expectedOutputTokens: 300 },
+    output: QUESTION_ANSWER_OUTPUT,
     verify: questionAnswerFormatProblem,
     routing: { category: "OPERATIONS", taskClass: "question-routing-answer", workCardId: input.cardId },
   });

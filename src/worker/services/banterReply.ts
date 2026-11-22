@@ -1,5 +1,7 @@
 import type { Env } from "../env";
 import { appendEvent } from "../events";
+import { z } from "zod/v4";
+import { readStructured, structuredOutput } from "../ai/structuredOutput";
 import { runAi } from "../ai/runAi";
 import type { Actor } from "./authorize";
 import { partnerByEmail } from "../../shared/registry/partners";
@@ -69,6 +71,15 @@ export async function recentBanterContext(env: Env, input: { firmScope: string; 
   return `The ${consecutive} message${consecutive === 1 ? "" : "s"} right before this one from this sender, in a row, were also just banter with nothing to do.`;
 }
 
+/** The banter decision, as fields checked at the AI boundary (22 Nov 2026, engineering sweep row 6). */
+export const BANTER_REPLY_OUTPUT = structuredOutput(
+  "banter_reply",
+  z.object({
+    reply: z.boolean().describe("whether replying again still makes sense"),
+    line: z.string().nullable().describe("your one-line reply in your voice, or null when reply is false"),
+  }),
+);
+
 export type BanterReplyGenerator = (
   env: Env,
   input: { employeeName: string; voice: string; sarcastic: boolean; senderMessage: string; recentContext: string },
@@ -102,9 +113,7 @@ export const defaultGenerateBanterReply: BanterReplyGenerator = async (env, inpu
         `better read is to let this one go quiet. If you reply, ONE short line, in your voice, the ` +
         `way a real colleague would banter back — no labels, no TL;DR, just the line.\n\n` +
         `WHAT THEY WROTE:\n"""\n${input.senderMessage.slice(0, 1000)}\n"""\n\n` +
-        "Answer in exactly this format and nothing else:\n" +
-        "REPLY: yes|no\n" +
-        "LINE: <your one-line reply — omit or leave blank if REPLY is no>",
+        "Answer with whether you reply and, if you do, the one line (null if you do not).",
     ],
     sensitivity: "INTERNAL" as never,
     // JUDGEMENT, NOT MECHANICAL (found unclassified by `validate:call-classification`, 22 Sep
@@ -113,14 +122,14 @@ export const defaultGenerateBanterReply: BanterReplyGenerator = async (env, inpu
     // "writes or decides something a human reads", never the cheapest-model default under CHEAPO.
     budgetContext: { judgement: true, expectedOutputTokens: 60 },
     routing: { category: "OPERATIONS", taskClass: "banter-reply" },
+    output: BANTER_REPLY_OUTPUT,
   });
   if (run.status !== "COMPLETED" || !run.output_text) return { shouldReply: false, line: null, aiRunId: run.id };
-  const replyMatch = /REPLY:\s*(yes|no)/i.exec(run.output_text);
-  const lineMatch = /LINE:\s*(.+)/i.exec(run.output_text);
-  // Unparseable is read as "let it go quiet" — a skipped reply costs nothing; a malformed one sent
+  const read = readStructured(BANTER_REPLY_OUTPUT, run.output_text);
+  // Unreadable is read as "let it go quiet" — a skipped reply costs nothing; a malformed one sent
   // anyway would be the worse failure.
-  if (!replyMatch || replyMatch[1]!.toLowerCase() !== "yes") return { shouldReply: false, line: null, aiRunId: run.id };
-  const line = (lineMatch?.[1] ?? "").trim().slice(0, 300);
+  if (!read || !read.reply) return { shouldReply: false, line: null, aiRunId: run.id };
+  const line = (read.line ?? "").trim().slice(0, 300);
   if (!line) return { shouldReply: false, line: null, aiRunId: run.id };
   return { shouldReply: true, line, aiRunId: run.id };
 };

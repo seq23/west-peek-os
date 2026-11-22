@@ -1,3 +1,4 @@
+import { replyIntent } from "./helpers/aiShapes";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
@@ -35,7 +36,7 @@ beforeAll(async () => {
 });
 afterAll(async () => disposeTestDb(t));
 
-const read = (door: string, seat = "none", intent = "CONTINUE", buildIn = "none"): ReplyIntentReader => async (_env, input) => ({ ...parseReplyIntent(`INTENT: ${intent}\nDOOR: ${door}\nSEAT: ${seat}\nBUILD_IN: ${buildIn}\nCHANGES: none\nQUESTION: none\nREASON: test`, input.text), keyword: null, aiRunId: null });
+const read = (door: string, seat = "none", intent = "CONTINUE", buildIn = "none"): ReplyIntentReader => async (_env, input) => ({ ...parseReplyIntent(replyIntent({ intent: intent as never, door: door as never, seat: seat === "none" ? null : seat, buildIn: buildIn === "none" ? null : (buildIn as never), reason: "test" }), input.text), keyword: null, aiRunId: null });
 
 async function cardsFrom(chiefCardId: string) {
   return (await env.WP_OS_DB.prepare("SELECT id, owner_id, state, requested_by_email FROM work_card WHERE id = ?1 OR assigned_from_card_id = ?1").bind(chiefCardId).all<{ id: string; owner_id: string; state: string; requested_by_email: string | null }>()).results ?? [];
@@ -44,7 +45,7 @@ async function cardsFrom(chiefCardId: string) {
 describe("the reader never reaches a free or training route", () => {
   it("every partner's words are read at INTERNAL, never marked safe for a public model", async () => {
     calls.length = 0;
-    scripted = "INTENT: CONTINUE\nDOOR: ANSWER\nSEAT: none\nCHANGES: none\nQUESTION: none\nREASON: x";
+    scripted = replyIntent({ intent: "CONTINUE", door: "ANSWER", reason: "x" });
     await defaultReadReplyIntent(env, { cardId: "wc_x", firmScope: "west-peek", text: "What did the LP from Tuesday commit?" });
     await defaultClassifyActionability(env, { cardId: "wc_y", firmScope: "west-peek", text: "Can you build me a dashboard?" });
     expect(calls).toHaveLength(2);
@@ -89,11 +90,11 @@ describe("a new email goes to the desk its words name", () => {
 
 describe("one reading, every door", () => {
   it("banter, a plain question and real work read the same way at the intake classifier", async () => {
-    scripted = "INTENT: NOTHING\nDOOR: ANSWER\nSEAT: none\nCHANGES: none\nQUESTION: none\nREASON: thanks";
+    scripted = replyIntent({ intent: "NOTHING", door: "ANSWER", reason: "thanks" });
     expect((await defaultClassifyActionability(env, { cardId: "a", firmScope: "west-peek", text: "lol thanks" })).verdict).toBe("BANTER_NO_ACTION");
-    scripted = "INTENT: QUESTION\nDOOR: ANSWER\nSEAT: none\nCHANGES: none\nQUESTION: what are you asking of me?\nREASON: asks";
+    scripted = replyIntent({ intent: "QUESTION", door: "ANSWER", question: "what are you asking of me?", reason: "asks" });
     expect((await defaultClassifyActionability(env, { cardId: "b", firmScope: "west-peek", text: "what are you asking of me?" })).verdict).toBe("QUESTION_NEEDS_REPLY");
-    scripted = "INTENT: CONTINUE\nDOOR: BUILD\nSEAT: none\nCHANGES: none\nQUESTION: none\nREASON: a build";
+    scripted = replyIntent({ intent: "CONTINUE", door: "BUILD", reason: "a build" });
     expect((await defaultClassifyActionability(env, { cardId: "c", firmScope: "west-peek", text: "build a sign-up page" })).verdict).toBe("ACTIONABLE_WORK");
     scripted = "garbled";
     expect((await defaultClassifyActionability(env, { cardId: "d", firmScope: "west-peek", text: "hmm" })).verdict, "unreadable is real work, never guessed away").toBe("ACTIONABLE_WORK");
