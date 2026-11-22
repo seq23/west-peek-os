@@ -1,3 +1,4 @@
+import seatLifecycle from "../../../scripts/deploy/seat-attachments-lifecycle.json";
 import type { Env } from "../env";
 
 /**
@@ -186,6 +187,13 @@ export function runFolder(runId: string): string {
 
 /** Every seat file lives under this prefix; the R2 lifecycle rule (docs/OPERATIONS.md) is scoped to it. */
 export const SEAT_ATTACHMENT_PREFIX = "seat-attachments/";
+/**
+ * THE BACKSTOP'S DAYS, FROM THE RULE THE DEPLOY APPLIES (22 Nov 2026, olp_m81kzkvq02y98ger). A seat run lives only while
+ * the router waits for it (minutes); 2 days leaves room for a weekend-long outage of the sweep and no more. The rule
+ * itself is scripts/deploy/seat-attachments-lifecycle.json, applied by `npm run deploy:production`; this number is
+ * read from it so nothing can say a different one.
+ */
+export const SEAT_ATTACHMENT_EXPIRE_DAYS: number = seatLifecycle.rule.deleteObjectsTransition.condition.maxAge / 86400;
 
 /** Delete one ended run's objects now. Best effort; a failure is left for the sweep. */
 export async function clearRunAttachments(env: Env, runId: string, now: Date = new Date()): Promise<void> {

@@ -124,22 +124,22 @@ beforeEach(async () => {
 });
 
 describe("reading a company out of a message", () => {
-  it("prefers an explicit Company line", () => {
-    const d = dealFromMessage("#wpdealflow anything", "Company: Northwind Robotics\nSector: AI", "a@b.co", false)!;
+  it("prefers an explicit Company line", async () => {
+    const d = (await dealFromMessage("#wpdealflow anything", "Company: Northwind Robotics\nSector: AI", "a@b.co", false))!;
     expect(d.company).toBe("Northwind Robotics");
     expect(d.sector).toBe("AI");
   });
 
-  it("falls back to the subject with the trigger and Re/Fwd stripped", () => {
-    const d = dealFromMessage("Fwd: #wpdeck Helios Grid", "see attached", "a@b.co", true)!;
+  it("falls back to the subject with the trigger and Re/Fwd stripped", async () => {
+    const d = (await dealFromMessage("Fwd: #wpdeck Helios Grid", "see attached", "a@b.co", true))!;
     expect(d.company).toBe("Helios Grid");
     expect(d.isDeck).toBe(true);
   });
 
-  it("returns nothing rather than guessing a name out of prose", () => {
+  it("returns nothing rather than guessing a name out of prose", async () => {
     // A wrong company at the top of the funnel is worse than no company: somebody has to notice it
     // is wrong before they can delete it.
-    expect(dealFromMessage("#wpdealflow", "have a look at this one", "a@b.co", false)).toBeNull();
+    expect(await dealFromMessage("#wpdealflow", "have a look at this one", "a@b.co", false)).toBeNull();
   });
 });
 

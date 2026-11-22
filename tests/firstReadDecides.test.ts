@@ -4,7 +4,8 @@ import type { Env } from "../src/worker/env";
 import { openAssignmentCard } from "../src/worker/services/dealIntake";
 import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
 import { claimNextCard, sweepOnce, type SweepCard } from "../src/worker/services/workSweep";
-import type { ReplyIntentReader } from "../src/worker/services/replyIntent";
+import { keywordIntent, type ReplyIntentReader } from "../src/worker/services/replyIntent";
+import { opensWithApproval } from "../src/shared/work/approvalReply";
 import type { QuestionAnswerer } from "../src/worker/services/questionRouting";
 import { reportRun, type SeatRunRow } from "../src/worker/ai/subscriptionSeats";
 import { readWebPropertyChange, runWebPropertyChangeCard } from "../src/worker/services/webPropertyChange";
@@ -33,8 +34,12 @@ const nextTickTime = (): Date => new Date((clock += 3 * 60_000));
 /** The same deterministic intent reader the reply suite uses: "please/make/swap/…" are changes, the rest goes ahead. */
 const fakeIntentReader: ReplyIntentReader = async (_env, input) => {
   const t = input.text;
-  const base = { keyword: null, aiRunId: null, source: "MODEL" as const, reason: "fake reader" };
-  if (/let'?s not|hold on|hold off|\bstop\b|\bwait\b/i.test(t)) return { ...base, kind: "STOP", changes: null, question: null };
+  // The fake stands in for the model, which reads the one-word replies ("approved", "hold off") as the word lists do.
+  const words = keywordIntent(t);
+  // A model carries his whole words as the change (replyIntent.ts#fromReader), never the cut the word lists make.
+  if (words) return { ...words, changes: words.changes === null ? null : t, source: "MODEL" as const, reason: "fake reader" };
+  const base = { reading: { kind: "ANSWERS" as const, text: t }, approves: opensWithApproval(t), aiRunId: null, source: "MODEL" as const, reason: "fake reader" };
+  if (/let'?s not|hold on|hold off|\bstop\b|\bwait\b/i.test(t)) return { ...base, reading: { kind: "REFUSED" as const, text: t }, approves: false, kind: "STOP", changes: null, question: null };
   const question = /\?/.test(t) ? (t.match(/[^.\n]*\?/)?.[0] ?? t).trim() : null;
   const changes = /\b(but|make|swap|use|instead|please)\b/i.test(t) ? t.replace(/[^.\n]*\?/, "").trim() || null : null;
   if (question) return { ...base, kind: "QUESTION", changes, question };
@@ -208,7 +213,7 @@ describe("rebuild", () => {
     const row = (await readWebPropertyChange(env, p.id))!;
     expect(row.refresh_intent).toBe("CHANGES");
     expect(row.land_approved_at, "a change lands nothing").toBeNull();
-    expect((await decisionsLogged(p.id)).at(-1)).toMatchObject({ used: "FIRST_READ", first_read: "change", keyword: "free text (read for its intent)" });
+    expect((await decisionsLogged(p.id)).at(-1)).toMatchObject({ used: "FIRST_READ", first_read: "change", keyword: null });
   });
 
   it("with no first read it waits, then the keywords read it as go-ahead and land it, logged as the fallback", async () => {
@@ -233,7 +238,10 @@ describe("hand-off refusal (#546)", () => {
     await tickFor(p.id);
     expect(notHandedOff(before), "never a 'not handed off' email").toHaveLength(0);
     expect((await readWebPropertyChange(env, p.id))!.refresh_intent).toBe("CHANGES");
-    expect((await decisionsLogged(p.id)).find((d) => d.what === "the hand-off")).toMatchObject({ used: "FIRST_READ", first_read: "no hand-off", keyword: "hand to Productions" });
+    // The word lists never ran while the first read was there: no "hand to Productions" guess to overrule or log.
+    const logged = await decisionsLogged(p.id);
+    expect(logged.find((d) => d.what === "the hand-off"), "no keyword hand-off read").toBeUndefined();
+    expect(logged.filter((d) => d.keyword !== null && d.used === "FIRST_READ"), "nothing the word lists read beside a first read").toEqual([]);
   });
 
   it("'Hand this to Bob.' with no first read: nothing is said at the door or before the wait; then the keywords refuse it", async () => {

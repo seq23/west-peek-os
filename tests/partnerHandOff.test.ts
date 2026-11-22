@@ -843,7 +843,7 @@ describe("the first read decides hand-off and take-back; keywords only after the
     expect([c.requested_by_email, c.secondary_partner_email]).toEqual([SCOOTER, SEQUOIA]);
     expect([c.state, c.block_who, c.block_answer ?? null], "a hand-off is never the answer to the preview").toEqual(["BLOCKED", "SCOOTER", null]);
     expect(to(SCOOTER)).toHaveLength(1);
-    expect((await logged(id)).find((e) => e.what === "the hand-off")).toMatchObject({ used: "FIRST_READ", first_read: "hand to Scooter", keyword: "hand to Scooter" });
+    expect((await logged(id)).find((e) => e.what === "the hand-off")).toMatchObject({ used: "FIRST_READ", first_read: "hand to Scooter", keyword: null }); // model first: no keyword read when it answers
   });
 
   it("a first read's hand-off on a conditioned sentence asks once and moves nothing: 'If I'm not back by Friday, hand this to Scooter.' (replay of #556, 20 Nov)", async () => {
@@ -861,9 +861,12 @@ describe("the first read decides hand-off and take-back; keywords only after the
     const id = "wc_fr_keeps_ownr"; // seedCard's preview token is the id's last 8 characters: unique per card
     const { previewThread } = await seedCard(id);
     const mid = await filed(id, previewThread, "I'll pass it over to Scooter for a look, but I still own it.");
+    sent.length = 0;
     await readIn(mid, reads({ kind: "nothing", handOffTo: null }));
     expect((await card(id)).requested_by_email).toBe(SEQUOIA);
-    expect((await logged(id)).find((e) => e.what === "the hand-off")).toMatchObject({ used: "FIRST_READ", first_read: "no hand-off", keyword: "hand to Scooter" });
+    expect(to(SCOOTER), "the keyword 'pass it over to Scooter' moved nothing").toHaveLength(0);
+    // Model first: when the read answers, no keyword reading runs, so no keyword hand-off is ever logged or acted on.
+    expect((await logged(id)).filter((e) => e.what === "the hand-off" && e.used !== "FIRST_READ")).toHaveLength(0);
   });
 
   it("with no first read the keywords act, logged, and judge the whole sentence: 'I don't think Scooter will take it from here' moves nothing and asks nothing", async () => {

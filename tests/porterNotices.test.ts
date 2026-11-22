@@ -198,18 +198,18 @@ describe("the words", () => {
     expect(readApprovalReply("Publish!\n\nSent from my iPhone").kind).toBe("PUBLISH");
     expect(readApprovalReply("changes: swap the logo"), "\"changes: …\" is instructions, never a hold (27 Sep 2026)").toEqual({ kind: "CHANGES", text: "changes: swap the logo" });
     expect(readApprovalReply("no")).toEqual({ kind: "REFUSED", text: "no" });
-    expect(rebuildIntentFor("publish")).toBe("PUBLISH");
-    expect(rebuildIntentFor("preview")).toBe("PREVIEW");
-    expect(rebuildIntentFor("I added missing items")).toBe("PREVIEW");
-    expect(rebuildIntentFor("Attached: logo.png")).toBe("PREVIEW");
-    expect(rebuildIntentFor("changes: bigger header")).toBe("CHANGES");
+    expect(rebuildIntentFor("publish", readApprovalReply("publish"))).toBe("PUBLISH");
+    expect(rebuildIntentFor("preview", readApprovalReply("preview"))).toBe("PREVIEW");
+    expect(rebuildIntentFor("I added missing items", readApprovalReply("I added missing items"))).toBe("PREVIEW");
+    expect(rebuildIntentFor("Attached: logo.png", readApprovalReply("Attached: logo.png"))).toBe("PREVIEW");
+    expect(rebuildIntentFor("changes: bigger header", readApprovalReply("changes: bigger header"))).toBe("CHANGES");
     // FREE TEXT IS NOT A KEYWORD REBUILD (27 Sep 2026): the runner reads it for its intent — CONTINUE
     // with changes rebuilds, CONTINUE without lands, STOP holds, a QUESTION is answered.
-    expect(rebuildIntentFor("make the header bigger"), "free text is read for intent by the runner, not here").toBeNull();
+    expect(rebuildIntentFor("make the header bigger", readApprovalReply("make the header bigger")), "free text is read for intent by the runner, not here").toBeNull();
     expect(keywordIntent("make the header bigger")).toBeNull();
-    expect(rebuildIntentFor("approved"), "approved lands; it is not a rebuild").toBeNull();
-    expect(rebuildIntentFor("stop"), "stop holds").toBeNull();
-    expect(rebuildIntentFor("approved to production")).toBeNull();
+    expect(rebuildIntentFor("approved", readApprovalReply("approved")), "approved lands; it is not a rebuild").toBeNull();
+    expect(rebuildIntentFor("stop", readApprovalReply("stop")), "stop holds").toBeNull();
+    expect(rebuildIntentFor("approved to production", readApprovalReply("approved to production"))).toBeNull();
   });
 });
 
@@ -291,11 +291,11 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026): the 
     expect(changesTextOf("Change: swap the logo")).toBe("swap the logo");
   });
 
-  it("keywordIntent decides the keywords without a model and returns null for free text", () => {
-    expect(keywordIntent("approved")).toMatchObject({ kind: "CONTINUE", changes: null, keyword: "APPROVED", source: "KEYWORD" });
-    expect(keywordIntent("Publish!\n\nSent from my iPhone")).toMatchObject({ kind: "CONTINUE", keyword: "PUBLISH" });
-    expect(keywordIntent("changes: swap the logo")).toMatchObject({ kind: "CONTINUE", changes: "swap the logo", keyword: "CHANGES" });
-    expect(keywordIntent("hold off")).toMatchObject({ kind: "STOP", keyword: "REFUSED" });
+  it("keywordIntent (the last resort when no reader answered) decides the keywords and returns null for free text", () => {
+    expect(keywordIntent("approved")).toMatchObject({ kind: "CONTINUE", changes: null, reading: { kind: "APPROVED" }, source: "KEYWORD" });
+    expect(keywordIntent("Publish!\n\nSent from my iPhone")).toMatchObject({ kind: "CONTINUE", reading: { kind: "PUBLISH" } });
+    expect(keywordIntent("changes: swap the logo")).toMatchObject({ kind: "CONTINUE", changes: "swap the logo", reading: { kind: "CHANGES" } });
+    expect(keywordIntent("hold off")).toMatchObject({ kind: "STOP", reading: { kind: "REFUSED" } });
     expect(keywordIntent("Attached: logo.png")).toMatchObject({ kind: "CONTINUE", changes: null });
     expect(keywordIntent("No problem, looks great"), "free text goes to the reader").toBeNull();
     expect(keywordIntent("Can we make the orange darker on mobile?")).toBeNull();

@@ -365,7 +365,7 @@ describe("a reply asking for a finished Productions note to be redone reopens it
   function reader(read: Partial<ReplyIntent>, asked: Array<{ text: string; where?: string }>): ReplyIntentReader {
     return async (_e, input) => {
       asked.push({ text: input.text, where: input.where });
-      return { kind: "CONTINUE", changes: null, question: null, keyword: null, source: "MODEL", reason: "test", aiRunId: null, door: "ROUTE", seat: "Walker", nothing: false, ...read };
+      return { kind: "CONTINUE", changes: null, question: null, reading: { kind: "ANSWERS", text: "" }, source: "MODEL", reason: "test", aiRunId: null, door: "ROUTE", seat: "Walker", nothing: false, ...read };
     };
   }
 

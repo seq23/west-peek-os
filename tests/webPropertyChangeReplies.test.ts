@@ -6,7 +6,8 @@ import { handleRequest } from "../src/worker/index";
 import { openAssignmentCard } from "../src/worker/services/dealIntake";
 import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
 import { sweepOnce, type SweepCard } from "../src/worker/services/workSweep";
-import type { ReplyIntentReader } from "../src/worker/services/replyIntent";
+import { keywordIntent, type ReplyIntentReader } from "../src/worker/services/replyIntent";
+import { opensWithApproval } from "../src/shared/work/approvalReply";
 import type { QuestionAnswerer } from "../src/worker/services/questionRouting";
 import { claimRun, parkRun, progressRun, reapSeatRuns, readRun, reportRun, JOB_SILENCE_MS, MAX_JOB_NAPS, type SeatRunRow } from "../src/worker/ai/subscriptionSeats";
 import { parseWebPropertyAsk, isWebPropertyChange, driveFolderLinks, addresseeIn, sitesOf } from "../src/shared/intake/webPropertyChange";
@@ -22,7 +23,7 @@ import { handleDeveloperChanges, handleDeveloperEmail } from "../src/worker/serv
 import { answerBlock } from "../src/worker/services/blocks";
 import { handleInboundEmail, MAX_BODY_BYTES } from "../src/worker/effects/inboundEmail";
 import { comparableSubject } from "../src/worker/services/emailThread";
-import { requestAttachments, textBodyOf } from "../src/worker/effects/mimeAttachments";
+import { requestAttachments, textBodyOf } from "../src/worker/effects/mail";
 import { liveAddressLine, handleGetRequestAttachment, handleReingestStoredEmail, sendReceived, stuckWindowOpen } from "../src/worker/services/webPropertyChange";
 import { readFileSync } from "node:fs";
 import { SECRET_BY_EMAIL } from "../src/shared/work/porterWaits";
@@ -85,16 +86,20 @@ function nextTickTime(): Date {
 }
 /**
  * THE INTENT READER, INJECTED (27 Sep 2026). Free text a partner writes is read for its intent
- * through `replyIntent.ts`; the keyword forms never reach it. This fake decides deterministically
- * from the words and records every call, so a test can prove which replies were read by a model
- * and which by the keyword fast path — without a live call.
+ * through `replyIntent.ts`, every reply and the one-word ones too (the model reads first, 22 Nov 2026). This fake
+ * decides deterministically from the words and records every call, so a test can prove each reply was read by the
+ * model, and once — without a live call.
  */
 const intentCalls: string[] = [];
 const fakeIntentReader: ReplyIntentReader = async (_env, input) => {
   intentCalls.push(input.text);
   const t = input.text;
-  const base = { keyword: null, aiRunId: null, source: "MODEL" as const, reason: "fake reader" };
-  if (/let'?s not|think it over|hold on|hold off|\bstop\b|\bwait\b/i.test(t)) return { ...base, kind: "STOP", changes: null, question: null };
+  // The fake stands in for the model, which reads the one-word replies ("approved", "hold off") as the word lists do.
+  const words = keywordIntent(t);
+  // A model carries his whole words as the change (replyIntent.ts#fromReader), never the cut the word lists make.
+  if (words) return { ...words, changes: words.changes === null ? null : t, source: "MODEL" as const, reason: "fake reader" };
+  const base = { reading: { kind: "ANSWERS" as const, text: t }, approves: opensWithApproval(t), aiRunId: null, source: "MODEL" as const, reason: "fake reader" };
+  if (/let'?s not|think it over|hold on|hold off|\bstop\b|\bwait\b/i.test(t)) return { ...base, reading: { kind: "REFUSED" as const, text: t }, approves: false, kind: "STOP", changes: null, question: null };
   // The live reader's 18 Nov shape: CONTINUE, the changes, and the question beside them (wc_c548d043).
   if (/point that domain/i.test(t)) return { ...base, kind: "CONTINUE", changes: t, question: "What is needed on your side to point westpeekproductions.com at the new site?" };
   const question = /\?/.test(t) ? (t.match(/[^.\n]*\?/)?.[0] ?? t).trim() : null;
@@ -369,12 +374,12 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
   const PHOTO_EMAIL = SCOOTER_MIME({ subject: "Sensori photo swap on westpeek.ventures", body: "Swap the Sensori founders photo on westpeek.ventures for the one attached. Same spot, same size.", image: true });
   let porterId = "";
 
-  it("the text body is the partner's words, not the headers; the image is an attachment; a quoted folder link is not the request's", () => {
-    expect(textBodyOf(PHOTO_EMAIL)).toBe("Swap the Sensori founders photo on westpeek.ventures for the one attached. Same spot, same size.");
-    const { attachments } = requestAttachments(PHOTO_EMAIL);
+  it("the text body is the partner's words, not the headers; the image is an attachment; a quoted folder link is not the request's", async () => {
+    expect(await textBodyOf(PHOTO_EMAIL)).toBe("Swap the Sensori founders photo on westpeek.ventures for the one attached. Same spot, same size.");
+    const { attachments } = await requestAttachments(PHOTO_EMAIL);
     expect(attachments.map((a) => [a.filename, a.mediaType])).toEqual([["sensori-founders.jpg", "image/jpeg"]]);
     const quoted = SCOOTER_MIME({ subject: "Re: West Peek Community rebuild", body: "Change the tagline on westpeek.ventures to 'Good people meet good people'.", quoted: "package: https://drive.google.com/drive/folders/1jdhn1qHJW0vurKBU4QYttJIv0ut6-p8d" });
-    const ask = parseWebPropertyAsk("Re: West Peek Community rebuild", textBodyOf(quoted));
+    const ask = parseWebPropertyAsk("Re: West Peek Community rebuild", await textBodyOf(quoted));
     expect(ask?.target_repo).toBe("join-west-peek-main");
     expect(ask?.drive_folder_id, "a folder in a quoted earlier thread is not this request's package").toBeNull();
     expect(isWebPropertyChange(ask), "a request with no folder and no attachment is still a change").toBe(true);
@@ -969,7 +974,7 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     expect(intentCalls, "free text is read once").toEqual(["No problem, looks great"]);
   });
 
-  it("PLAN: a long email full of instructions (Scooter's shape) approves WITH the instructions carried to the build; a keyword reply never reaches the reader", async () => {
+  it("PLAN: a long email full of instructions (Scooter's shape) approves WITH the instructions carried to the build; the one-word reply is read by the model too", async () => {
     const porter = await planned(SCOOTER, "Walker", "colours B", REAL_QUESTION);
     const email = "Hey Hey!\n\nI went through both sites. Please lift the orange from #C45A3C to #E0632F on a white background and use the PDF palette's deep tones as section accents. Swap Darian and Shanna's photos back. Keep 'Join our community' going to Instagram.\n\nSent from my iPhone";
     intentCalls.length = 0;
@@ -982,20 +987,20 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     const job = JSON.parse((await liveJobFor(porter.id))!.job_json!) as { plan: { answers: string[] } };
     expect(job.plan.answers.at(-1)).toMatch(/lift the orange/);
     expect(intentCalls).toHaveLength(1);
-    // The keyword fast path: "approved" on another card never calls the reader.
+    // No keyword fast path: "approved" on another card is read by the model first, once.
     const other = await planned(SCOOTER, "Walker", "colours B2", REAL_QUESTION);
     intentCalls.length = 0;
     await replyFrom(SCOOTER, "approved", await other.token());
     expect((await tickFor(other.id)).summary).toMatch(/BUILD queued/);
-    expect(intentCalls, "a keyword is decided without a model").toEqual([]);
+    expect(intentCalls, "the model reads the one word too").toEqual(["approved"]);
   });
 
-  it("PLAN: \"hold off\" is the one thing that holds — keyword, no model; a stop said in more words holds too", async () => {
+  it("PLAN: \"hold off\" is the one thing that holds, read by the model; a stop said in more words holds too", async () => {
     const porter = await planned(SCOOTER, "Walker", "colours C", REAL_QUESTION);
     intentCalls.length = 0;
     await replyFrom(SCOOTER, "Hold off — I want to check the logos with Sequoia first", await porter.token());
     expect((await tickFor(porter.id)).outcome).toBe("BLOCKED");
-    expect(intentCalls).toEqual([]);
+    expect(intentCalls).toEqual(["Hold off — I want to check the logos with Sequoia first"]);
     const c = await card(porter.id);
     expect(String(c.block_needed)).toMatch(/^Waiting on: your word to carry on\. Why: you said "Hold off/);
     expect(String(c.block_needed)).toMatch(/nothing is built or landed until you say otherwise\. To clear it by email: reply "approved"/);
@@ -1005,7 +1010,7 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     const token = (await env.WP_OS_DB.prepare("SELECT token FROM email_thread WHERE object_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(porter.id).first<{ token: string }>())!.token;
     await replyFrom(SCOOTER, "Let's not do this yet, I want to think it over", token);
     expect((await tickFor(porter.id)).outcome).toBe("BLOCKED");
-    expect(intentCalls).toEqual(["Let's not do this yet, I want to think it over"]);
+    expect(intentCalls).toEqual(["Hold off — I want to check the logos with Sequoia first", "Let's not do this yet, I want to think it over"]);
     expect((await readWebPropertyChange(env, porter.id))!.plan_approved_at).toBeNull();
   });
 

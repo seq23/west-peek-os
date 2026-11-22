@@ -26,7 +26,7 @@ beforeAll(async () => {
 });
 afterAll(async () => disposeTestDb(t));
 
-const reads = (door: string, buildIn = "none"): ReplyIntentReader => async (_e, input) => ({ ...parseReplyIntent(replyIntent({ intent: "CONTINUE", door: door as never, buildIn: buildIn === "none" ? null : (buildIn as never), reason: "test" }), input.text), keyword: null, aiRunId: null });
+const reads = (door: string, buildIn = "none"): ReplyIntentReader => async (_e, input) => ({ ...parseReplyIntent(replyIntent({ intent: "CONTINUE", door: door as never, buildIn: buildIn === "none" ? null : (buildIn as never), reason: "test" }), input.text), aiRunId: null });
 
 async function replyOn(title: string, written: string, readWords: ReplyIntentReader) {
   const card = await createWorkCardInternal(env, systemIdentity(), { title, owner_type: "AI", owner_id: "aie_wyatt", firm_scope: "west-peek", priority: "NORMAL" } as never);

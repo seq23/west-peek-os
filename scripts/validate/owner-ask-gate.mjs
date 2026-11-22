@@ -85,7 +85,7 @@ export function check(src, otherWorkerFiles) {
   if (!work.includes("executorsFor(")) problems.push("employeeWork.ts never offers the executors a card's work calls for");
 
   // 3. Forwards keep their original.
-  const rm = stripComments(src.intake).match(/export function readableMessage[\s\S]*?\n}/)?.[0] ?? "";
+  const rm = stripComments(src.intake).match(/export (?:async )?function readableMessage[\s\S]*?\n}/)?.[0] ?? "";
   if (!rm.includes("isReplyMessage(")) problems.push("readableMessage quote-strips without asking whether the message is a reply (a forward loses its original)");
 
   // 4. The door, and the ENGINEER stop.

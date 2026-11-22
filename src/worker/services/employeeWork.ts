@@ -400,7 +400,7 @@ export async function storedMessageFor(env: Env, cardId: string): Promise<{ key:
       const { readableMessage } = await import("./dealIntake");
       // The whole of what the partner wrote, not a readable preview: this is the text the employee
       // works from, so it is sized for the longest playbook rather than a card's glance.
-      text = readableMessage(await obj.text(), STORED_MESSAGE_IN_PROMPT);
+      text = await readableMessage(await obj.text(), STORED_MESSAGE_IN_PROMPT);
     }
   } catch {
     text = "";

@@ -36,7 +36,7 @@ beforeAll(async () => {
 });
 afterAll(async () => disposeTestDb(t));
 
-const newBuild: ReplyIntentReader = async (_e, input) => ({ ...parseReplyIntent(replyIntent({ intent: "CONTINUE", door: "BUILD", buildIn: "NEW", reason: "a new app" }), input.text), keyword: null, aiRunId: null });
+const newBuild: ReplyIntentReader = async (_e, input) => ({ ...parseReplyIntent(replyIntent({ intent: "CONTINUE", door: "BUILD", buildIn: "NEW", reason: "a new app" }), input.text), aiRunId: null });
 
 describe("a new repo for something that does not exist yet", () => {
   it("is named from the subject, plainly, and never collides", () => {

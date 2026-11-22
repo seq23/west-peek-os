@@ -6,17 +6,20 @@
  * applied. That shipped code against absent tables TWICE in one day — both times the deploy output
  * looked perfect and the feature 500'd in production.
  *
- * The fix is not discipline, it is a script. Four steps, and it stops at the first one that fails:
+ * The fix is not discipline, it is a script. Five steps, and it stops at the first one that fails:
  *
  *   1 · apply migrations
  *   2 · VERIFY none are pending — the step a human skips
  *   3 * build and deploy
- *   4 · verify the worker answers
+ *   4 · the seat-files expiry rule on the bucket (seatLifecycle.mjs; UNVERIFIED is said, never "ok", and does not stop)
+ *   5 · verify the worker answers
  *
  * Migrations before code, because the reverse ships code against tables that do not exist.
  */
 
+import { appendFileSync } from "node:fs";
 import { execSync } from "node:child_process";
+import { applySeatLifecycle } from "./seatLifecycle.mjs";
 
 const run = (cmd, opts = {}) => execSync(cmd, { stdio: "pipe", encoding: "utf8", ...opts });
 const say = (s) => process.stdout.write(`${s}\n`);
@@ -51,13 +54,13 @@ const fail = (what, err) => {
 const ACCOUNT = "8d147e242033699dd37c6f5a451f48d2";
 if (!process.env.CLOUDFLARE_ACCOUNT_ID) {
   process.env.CLOUDFLARE_ACCOUNT_ID = ACCOUNT;
-  say(`0/4  CLOUDFLARE_ACCOUNT_ID was not set; using ${ACCOUNT}.`);
+  say(`0/5  CLOUDFLARE_ACCOUNT_ID was not set; using ${ACCOUNT}.`);
   say("     Without it wrangler returns a 7403 that reads like a permissions error and is not one.");
 } else if (process.env.CLOUDFLARE_ACCOUNT_ID !== ACCOUNT) {
-  say(`0/4  CLOUDFLARE_ACCOUNT_ID is set to ${process.env.CLOUDFLARE_ACCOUNT_ID}, which is not West Peek OS's usual account.`);
+  say(`0/5  CLOUDFLARE_ACCOUNT_ID is set to ${process.env.CLOUDFLARE_ACCOUNT_ID}, which is not West Peek OS's usual account.`);
 }
 
-say("1/4  applying migrations…");
+say("1/5  applying migrations…");
 try {
   const out = run("npx wrangler d1 migrations apply WP_OS_DB --env production --remote");
   const applied = [...out.matchAll(/│ (\d{4}_[a-z_]+\.sql)\s+│ ✅/g)].map((m) => m[1]);
@@ -66,7 +69,7 @@ try {
   fail("migration apply failed", err);
 }
 
-say("2/4  verifying no migrations are pending…");
+say("2/5  verifying no migrations are pending…");
 let list;
 try {
   list = run("npx wrangler d1 migrations list WP_OS_DB --env production --remote");
@@ -80,7 +83,7 @@ if (!/No migrations to apply/i.test(list)) {
 }
 say("     clean");
 
-say("3/4  building and deploying…");
+say("3/5  building and deploying…");
 try {
   run("npm run build");
   const out = run("npx wrangler deploy --env production");
@@ -90,7 +93,17 @@ try {
   fail("deploy failed", err);
 }
 
-say("4/4  verifying the worker answers…");
+say("4/5  the seat-files expiry rule…");
+{
+  const lifecycle = await applySeatLifecycle({ account: process.env.CLOUDFLARE_ACCOUNT_ID, token: process.env.CLOUDFLARE_API_TOKEN });
+  say(`     ${lifecycle.line}`);
+  if (lifecycle.state !== "ok") {
+    if (process.env.GITHUB_ACTIONS) say(`::warning title=Seat files expiry rule::${lifecycle.line}`);
+    if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `- ${lifecycle.line}\n`);
+  }
+}
+
+say("5/5  verifying the worker answers…");
 let health;
 try {
   health = run(`curl -s -o /dev/null -w "%{http_code}" --max-time 20 https://os.joinwestpeek.com/api/health`).trim();

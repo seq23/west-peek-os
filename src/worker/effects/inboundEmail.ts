@@ -7,7 +7,7 @@ import { dealFromMessage, intakeDealFromEmail, matchFunnelCompany, openAssignmen
 import { notifyQuietly } from "../services/notifications";
 import { PREVIEW_PARTNER } from "../../shared/registry/partners";
 import { ASSIGNING_PARTNERS, EMAILED_TASK_LIMITS, addressIn, mailAuthority } from "../../shared/intake/partnerAuthority";
-import { pdfAttachments, requestAttachments, textBodyOf } from "./mimeAttachments";
+import { decodeHeader, pdfAttachments, readMail, requestAttachments, textBodyOf } from "./mail";
 import { askWhichCard, withoutSignatures, type RouteAs } from "../services/emailRouting";
 import { profileNotesIn, recordProfileNotes, refreshWorkingOn } from "../services/partnerProfile";
 import { threadTokensIn } from "../../shared/email/thread";
@@ -164,57 +164,6 @@ export async function raiseUnreadMail(env: Env, input: { dedupeKey: string; titl
 /** Cloudflare Email Routing's delivery ceiling. A larger message never arrives; the RECEIVED email cannot mention it. */
 export const EMAIL_DELIVERY_CEILING_BYTES = 25 * 1024 * 1024;
 
-/**
- * Decode an RFC 2047 encoded-word subject, e.g. `=?UTF-8?Q?=23wpdealflow_Northwind?=`.
- *
- * FOUND BY THE FIRST REAL EMAIL, not by a test. The live routing test arrived with the subject
- * "#wpdealflow Northwind Robotics — seed"; the em-dash made the whole header non-ASCII, so the mail
- * client encoded it, and `#` became `=23`. The trigger survived only because the body happened to
- * repeat it. Anyone putting a trigger in the subject alone — which is the natural place to put one —
- * would have been silently ignored the moment their subject contained a dash, a curly quote or an
- * accented name.
- *
- * It also makes the stored subject readable. A trail whose subject line reads
- * `=?UTF-8?Q?=23wpdealflow...?=` is a trail nobody can scan.
- *
- * Q and B encoding both, because clients pick between them by content and the firm does not control
- * which client a founder uses. Anything unparseable is returned untouched: a subject we cannot
- * decode is still a subject, and dropping it would trade a formatting problem for a lost message.
- */
-export function decodeMimeHeader(value: string): string {
-  if (!value.includes("=?")) return value;
-
-  return value
-    // Encoded words separated only by whitespace are one run and the space is not part of the text.
-    .replace(/\?=\s+=\?/g, "?==?")
-    .replace(/=\?([^?]+)\?([QqBb])\?([^?]*)\?=/g, (whole, _charset: string, enc: string, text: string) => {
-      try {
-        if (enc.toUpperCase() === "B") {
-          const bin = atob(text);
-          const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
-          return new TextDecoder("utf-8").decode(bytes);
-        }
-        // Q encoding: `_` is a space, `=XX` is a byte. Decoded as bytes first so a multi-byte
-        // character split across two escapes (as UTF-8 always is) reassembles correctly.
-        const withSpaces = text.replace(/_/g, " ");
-        const bytes: number[] = [];
-        for (let i = 0; i < withSpaces.length; i += 1) {
-          if (withSpaces[i] === "=" && i + 2 < withSpaces.length) {
-            const hex = withSpaces.slice(i + 1, i + 3);
-            if (/^[0-9a-fA-F]{2}$/.test(hex)) {
-              bytes.push(parseInt(hex, 16));
-              i += 2;
-              continue;
-            }
-          }
-          bytes.push(withSpaces.charCodeAt(i));
-        }
-        return new TextDecoder("utf-8").decode(Uint8Array.from(bytes));
-      } catch {
-        return whole;
-      }
-    });
-}
 
 export interface InboundSummary {
   to: string;
@@ -252,7 +201,7 @@ export function classifyInbound(input: {
 }): InboundSummary {
   // Decoded before matching AND before recording: the subject is the natural place to put a trigger,
   // and it is the header most likely to be encoded.
-  const subject = decodeMimeHeader(input.subject);
+  const subject = decodeHeader(input.subject);
 
   /*
    * ── A TAG IN A QUOTE IS NOT A TAG THE PERSON TYPED (17 Sep 2026) ────────────────────────────
@@ -410,7 +359,7 @@ export async function handleInboundEmail(
           .bind(key, stale, INLINE_READ_ATTEMPTS)
           .run();
         if ((handed.meta?.changes ?? 0) === 1) {
-          await handOffUnreadableMail(env, { messageId: key, sender: message.headers.get("from") ?? message.from, subject: decodeMimeHeader(message.headers.get("subject") ?? ""), headers: message.headers });
+          await handOffUnreadableMail(env, { messageId: key, sender: message.headers.get("from") ?? message.from, subject: decodeHeader(message.headers.get("subject") ?? ""), headers: message.headers });
           return;
         }
         const seen = await env.WP_OS_DB.prepare("SELECT seen_at FROM inbound_email_seen WHERE message_id = ?1").bind(key).first<{ seen_at: string }>();
@@ -434,7 +383,7 @@ export async function handleInboundEmail(
   const sender = message.headers.get("from") ?? message.from;
   if (!ASSIGNING_PARTNERS.includes((addressIn(sender) ?? "").toLowerCase())) {
     const { recordBrandMail } = await import("../services/learningClub");
-    await recordBrandMail(env, { from: sender, subject: decodeMimeHeader(message.headers.get("subject") ?? "") }).catch((err) => {
+    await recordBrandMail(env, { from: sender, subject: decodeHeader(message.headers.get("subject") ?? "") }).catch((err) => {
       console.warn("tlc brand mail not recorded", err instanceof Error ? err.message : String(err));
     });
   }
@@ -450,7 +399,7 @@ export async function handleInboundEmail(
     if (copy) {
       await appendEvent(env, {
         eventType: "tlc.brand_mail_copy", actorType: "system", actorId: "inbound_email", objectType: "tlc_deal", objectId: copy,
-        firmScope, payload: { subject: decodeMimeHeader(message.headers.get("subject") ?? "").slice(0, 200) },
+        firmScope, payload: { subject: decodeHeader(message.headers.get("subject") ?? "").slice(0, 200) },
       });
       await finished();
       return;
@@ -464,7 +413,7 @@ export async function handleInboundEmail(
     await raiseUnreadMail(env, {
       dedupeKey: `inbound_email_failed:${key ?? crypto.randomUUID()}`,
       title: "An email to the OS could not be read",
-      body: `From ${sender.slice(0, 120)}, subject "${decodeMimeHeader(message.headers.get("subject") ?? "").slice(0, 120)}": ${(err instanceof Error ? err.message : String(err)).slice(0, 300)}. No "Got it" was sent. The message is still in the mailbox.`,
+      body: `From ${sender.slice(0, 120)}, subject "${decodeHeader(message.headers.get("subject") ?? "").slice(0, 120)}": ${(err instanceof Error ? err.message : String(err)).slice(0, 300)}. No "Got it" was sent. The message is still in the mailbox.`,
       objectId: key ?? "unknown",
     });
     throw err;
@@ -749,7 +698,7 @@ async function linkStoredMessage(env: Env, kept: KeptMessage, cardId: string | n
   try {
     if (!kept.text) return;
     const who = await env.WP_OS_DB.prepare("SELECT json_extract(mail_authority_json, '$.partner') AS partner FROM inbound_message WHERE id = ?1").bind(kept.rowId).first<{ partner: string | null }>();
-    if (who?.partner) await joinSharesNamedIn(env, { cardId, partnerEmail: who.partner, text: textBodyOf(kept.text) });
+    if (who?.partner) await joinSharesNamedIn(env, { cardId, partnerEmail: who.partner, text: await textBodyOf(kept.text) });
   } catch (err) {
     console.error("joining a named share failed", err);
   }
@@ -799,10 +748,10 @@ async function handleIfReply(
    * pocket send. It used to reach the steer matcher, which opened "a reply I could not act on" card.
    * A forward is never empty here: its content is the forwarded message.
    */
-  const written = withoutSignatures(writtenAndQuoted(`\r\n\r\n${textBodyOf(raw)}`, { inReplyTo, references, subject }).written);
+  const written = withoutSignatures(writtenAndQuoted(`\r\n\r\n${await textBodyOf(raw)}`, { inReplyTo, references, subject }).written);
   const isReply = threadTokensIn({ inReplyTo, references }).length > 0 || /^\s*(?:re|aw|sv)\s*:/i.test(subject);
   const isForward = /^\s*(?:fwd?|fw)\s*:/i.test(subject);
-  const files = requestAttachments(raw);
+  const files = await requestAttachments(raw);
   if (!written && !isForward && files.attachments.length === 0 && files.unread.length === 0 && (isReply || !strippedSubject(subject).trim())) {
     await appendEvent(env, {
       eventType: "inbound_email.empty",
@@ -916,7 +865,7 @@ async function handleIfReply(
   }
   {
     const { applyTlcDraftReply } = await import("../services/tlcDraftNotice");
-    const tlc = await applyTlcDraftReply(env, { fromHeader: message.headers.get("from"), authenticationResults: message.headers.get("authentication-results"), subject, body: textBodyOf(raw) })
+    const tlc = await applyTlcDraftReply(env, { fromHeader: message.headers.get("from"), authenticationResults: message.headers.get("authentication-results"), subject, body: await textBodyOf(raw) })
       .catch((err) => ({ handled: false, ref: null, detail: err instanceof Error ? err.message : String(err) }));
     if (tlc.handled) {
       await appendEvent(env, {
@@ -1101,7 +1050,7 @@ async function handleInboundEmailOnce(
    * could not match it. Any subject with an em dash or an accent arrives encoded, which is most
    * forwards from founders.
    */
-  const subject = decodeMimeHeader(message.headers.get("subject") ?? "");
+  const subject = decodeHeader(message.headers.get("subject") ?? "");
   const firmScope = "west-peek";
 
   /*
@@ -1157,6 +1106,32 @@ async function handleInboundEmailOnce(
    */
   const inReplyTo = message.headers.get("in-reply-to");
   const references = message.headers.get("references");
+
+  /*
+   * A MESSAGE THE PARSER REFUSES IS KEPT AND FLAGGED, NEVER LOST (22 Nov 2026, olp_m81kzk624ngsdh1v). The .eml is
+   * already in R2 (`kept.key`); every reader below sees it as empty, so nothing acts on a guess about its contents,
+   * and the problem goes on Sequoia's desk with the stored key so the message can be opened by hand.
+   */
+  if (kept.text) {
+    const parsed = await readMail(kept.text);
+    if (parsed.problem) {
+      await raiseUnreadMail(env, {
+        dedupeKey: `unparseable:${kept.key ?? message.headers.get("message-id") ?? subject}`,
+        title: `An email could not be read: ${subject || "(no subject)"}`.slice(0, 200),
+        body: `From ${sender}. The mail parser refused it (${parsed.problem}). It is kept as ${kept.key ?? "(not stored)"}; nothing was acted on.`,
+        objectId: kept.key ?? `${sender}:${subject}`,
+      });
+      await appendEvent(env, {
+        actorType: "system",
+        actorId: "inbound_email",
+        eventType: "inbound_email.unparseable",
+        objectType: "inbound_email",
+        objectId: (kept.key ?? `${sender}:${subject}`).slice(0, 200),
+        firmScope,
+        payload: { from: sender, subject, stored: kept.key, problem: parsed.problem },
+      });
+    }
+  }
 
   /*
    * SECRETS BY EMAIL (0253, 6 Oct 2026) — BEFORE ANY DOOR. An authenticated partner's
@@ -1302,7 +1277,7 @@ async function handleInboundEmailOnce(
 
     // An admin or website email is never a deal, even when its subject names a company we know
     // ("Sensori photo swap on westpeek.ventures", 21 Sep 2026): it goes to the routing seat.
-    const oversizeName = isAdminOrWebsiteSubject(subject) ? null : (oversizeMatch?.canonical_name ?? dealFromMessage(subject, "", sender, true)?.company ?? null);
+    const oversizeName = isAdminOrWebsiteSubject(subject) ? null : (oversizeMatch?.canonical_name ?? (await dealFromMessage(subject, "", sender, true))?.company ?? null);
     let oversizeCard: string;
     if (oversizeName) {
       const entry = await intakeDealFromEmail(env, {
@@ -1406,7 +1381,7 @@ async function handleInboundEmailOnce(
    * shared it; the file goes on his open job it is about, or a new card for him with one plain question.
    * Only a share no partner can be identified behind falls through to the ladder's can't-place question.
    */
-  const share = driveShareNotice({ from: message.headers.get("from"), replyTo: message.headers.get("reply-to"), authenticationResults: message.headers.get("authentication-results"), subject, body: textBodyOf(raw) });
+  const share = driveShareNotice({ from: message.headers.get("from"), replyTo: message.headers.get("reply-to"), authenticationResults: message.headers.get("authentication-results"), subject, body: await textBodyOf(raw) });
   if (share) {
     const receivedAt = kept.rowId ? ((await env.WP_OS_DB.prepare("SELECT received_at FROM inbound_message WHERE id = ?1").bind(kept.rowId).first<{ received_at: string }>())?.received_at ?? new Date().toISOString()) : new Date().toISOString();
     const out = await handleDriveShare(env, { notice: share, receivedAt, messageId: inboundMessageKey(message.headers) ?? `no-message-id:${kept.rowId ?? crypto.randomUUID()}`, emlKey: kept.key });
@@ -1486,7 +1461,7 @@ async function handleInboundEmailOnce(
    * exactly as before. Recorded now; the round's email and any edit are the sweep's work.
    */
   if (summary.unrouted && authority.isAssignment && !origin?.from) {
-    const start = fundDeckStart({ subject, body: textBodyOf(raw), hasAttachment: /^content-disposition:\s*attachment/im.test(raw) || /^content-type:\s*application\/pdf/im.test(raw) });
+    const start = fundDeckStart({ subject, body: await textBodyOf(raw), hasAttachment: (await readMail(raw)).files.some((f) => f.sentAsFile || f.mediaType === "application/pdf") });
     if (start) {
       const { startDeckFromEmail } = await import("../services/deckPreview");
       const out = await startDeckFromEmail(env, { partnerAddress: authority.partnerAddress!, words: start.words });
@@ -1560,7 +1535,7 @@ async function handleInboundEmailOnce(
    * `Company:` field convention, so a founder does not have to learn two ways to say who they are.
    */
   if (summary.triggers.includes("#wpupdate")) {
-    const named = dealFromMessage(summary.subject, raw, summary.from, false);
+    const named = await dealFromMessage(summary.subject, raw, summary.from, false);
     updateCardId = await openPortfolioUpdateCard(env, {
       subject: summary.subject,
       from: summary.from,
@@ -1574,7 +1549,7 @@ async function handleInboundEmailOnce(
 
   let dealCompany: string | null = null;
   if (wantsDeal) {
-    let deal = dealFromMessage(summary.subject, raw, summary.from, summary.triggers.includes("#wpdeck"));
+    let deal = await dealFromMessage(summary.subject, raw, summary.from, summary.triggers.includes("#wpdeck"));
     // An untagged subject names a company only when the register already knows it. "check this
     // out" with the tag in the body is a conversation, and a company by that name at the top of the
     // funnel is what the owner's placement matrix caught (16 Sep 2026). A real forward — "Fwd:
@@ -1603,7 +1578,7 @@ async function handleInboundEmailOnce(
        * this handler has 10ms of CPU. The employee reads it on their own step, with their own
        * budget — the same store-now-read-later shape the oversize path uses.
        */
-      const { attachments, unread } = pdfAttachments(raw);
+      const { attachments, unread } = await pdfAttachments(raw);
 
       /*
        * `#wpdeck` AND `#wpdealflow` DO THE SAME THING, and the difference is now decided by looking.
@@ -1916,14 +1891,14 @@ export function forwardedOrigin(raw: string): { from: string | null; subject: st
  */
 export async function dryReadMessage(env: Env, raw: string, deps: { read?: import("../services/partnerUnderstood").SeatRead } = {}) {
   const headers = headersOfRaw(raw);
-  const subject = decodeMimeHeader(headers.get("subject") ?? "");
+  const subject = decodeHeader(headers.get("subject") ?? "");
   const authority = mailAuthority({ fromHeader: headers.get("from"), authenticationResults: headers.get("authentication-results") });
   const { replyThreadFromHeaders } = await import("../services/emailThread");
   const thread = await replyThreadFromHeaders(env, { fromHeader: headers.get("from"), subject, inReplyTo: headers.get("in-reply-to"), references: headers.get("references") });
   const { partnersOwnWords } = await import("../../shared/intake/replyBody");
-  const split = writtenAndQuoted(`\r\n\r\n${textBodyOf(raw)}`, { inReplyTo: headers.get("in-reply-to"), references: headers.get("references"), subject });
+  const split = writtenAndQuoted(`\r\n\r\n${await textBodyOf(raw)}`, { inReplyTo: headers.get("in-reply-to"), references: headers.get("references"), subject });
   const typed = (split.applied ? partnersOwnWords(split.written) : split.written).trim();
-  const files = requestAttachments(raw);
+  const files = await requestAttachments(raw);
   const { fileZipContents } = await import("../services/requestMaterials");
   const { isZip } = await import("./zipEntries");
   const filed: string[] = [];

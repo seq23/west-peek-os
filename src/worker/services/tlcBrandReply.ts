@@ -3,7 +3,7 @@ import { atItsHeight, brandCommunityWords, overstatedCommunityClaims } from "../
 import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { appendEvent } from "../events";
-import { textBodyOf } from "../effects/mimeAttachments";
+import { textBodyOf } from "../effects/mail";
 import { withBrandFooter } from "../../shared/tlc/brandFooter";
 import type { EmailAttachment } from "../effects/emailTransport";
 import { listGmailRaw } from "../effects/googleClient";
@@ -552,7 +552,7 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
    */
   const reread = prior?.state === "CLOSED" && /^no reply needed/.test(prior.held_reason ?? "");
   if (prior && !reread) return "SEEN";
-  const msgBody = textBodyOf(msg.text);
+  const msgBody = await textBodyOf(msg.text);
   const deskWords = helpdeskComment(msgBody);
   const words = await withoutOurOwnLines(env, deal.id, deskWords ?? (theirNewText(msgBody) || msg.text.trim()));
   const sender = (addressIn(msg.from ?? "") ?? msg.from ?? "").trim().toLowerCase();
@@ -1288,7 +1288,7 @@ export async function applyBrandReplyApproval(
   message: { fromHeader: string | null; authenticationResults: string | null; subject: string; body: string },
   deps: BrandReplyDeps = {},
 ): Promise<ApprovalOutcome> {
-  const body = textBodyOf(message.body);
+  const body = await textBodyOf(message.body);
   const ref = await currentRef(env, [...`${body}\n${message.subject}`.matchAll(new RegExp(BRAND_REPLY_REF_RE.source, "g"))].map((m) => m[0]));
   if (!ref) return { handled: false, ref: null, detail: "no brand-reply reference" };
   const notice = await env.WP_OS_DB.prepare("SELECT * FROM tlc_brand_reply_notice WHERE ref = ?1").bind(ref).first<{ ref: string; reply_ids_json: string; firm_scope: string; sent_to: string | null; approvers_json: string | null }>();

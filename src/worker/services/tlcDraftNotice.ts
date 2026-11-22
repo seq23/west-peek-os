@@ -1,6 +1,6 @@
 import { brandCommunityWords } from "../../shared/community/size";
 import { BrandThreadError } from "./tlcBrandThread";
-import { textBodyOf } from "../effects/mimeAttachments";
+import { textBodyOf } from "../effects/mail";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { runAi } from "../ai/runAi";
@@ -338,7 +338,7 @@ export async function applyTlcDraftReply(
   // email's; the subject keeps the week's first reference, so it is the fallback.
   // THE WORDS, NOT THE MIME: a raw message's header block starts with "From:", which `newTextOf` reads as a quote
   // marker, so her "Approve all" on TLC-ZF84KK (24 Oct 2026) came out empty. Decoding is a no-op on plain text.
-  const body = textBodyOf(message.body);
+  const body = await textBodyOf(message.body);
   const ref = NOTICE_REF_RE.exec(body)?.[0] ?? NOTICE_REF_RE.exec(message.subject)?.[0] ?? null;
   if (!ref) return { handled: false, ref: null, detail: "no notice reference" };
   const notice = await env.WP_OS_DB.prepare("SELECT * FROM tlc_draft_notice WHERE ref = ?1").bind(ref).first<{ ref: string; items_json: string; firm_scope: string; root_ref: string | null }>();

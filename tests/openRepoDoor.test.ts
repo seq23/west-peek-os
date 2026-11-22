@@ -3,7 +3,7 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import { handleRequest } from "../src/worker/index";
 import { handleInboundEmail } from "../src/worker/effects/inboundEmail";
-import { carriesSecretValue, scrubSecretValues } from "../src/worker/effects/mimeAttachments";
+import { carriesSecretValue, scrubSecretValues } from "../src/worker/effects/mail";
 import { sendViaResend } from "../src/worker/effects/resendClient";
 import { OUTBOUND_ATTACHMENTS_MAX_BYTES } from "../src/worker/effects/emailTransport";
 import { loadRegistry, registerFromEmail, recordRepoFacts } from "../src/worker/services/webPropertyRegistry";
@@ -131,7 +131,7 @@ describe("the open repo registry (0253)", () => {
     await env.WP_OS_DB.prepare("DELETE FROM web_property_registry WHERE repo = 'evil-repo'").run();
   });
 
-  it("reads a GitHub repo out of an email, by link or by owner/name for a known owner, from the written part only", () => {
+  it("reads a GitHub repo out of an email, by link or by owner/name for a known owner, from the written part only", async () => {
     expect(githubReposIn("please work on https://github.com/seq23/topbarz-voting today").map((r) => r.github_repo)).toEqual(["seq23/topbarz-voting"]);
     expect(githubReposIn("the repo seq23/topbarz-voting (and sites/community is a folder, not a repo)").map((r) => r.github_repo)).toEqual(["seq23/topbarz-voting"]);
     expect(githubReposIn("someone/else is not a known owner")).toEqual([]);
@@ -186,7 +186,7 @@ describe("the open repo registry (0253)", () => {
 });
 
 describe("secrets by email (0253)", () => {
-  it("names are validated: vendor-prefixed, never a reserved name or prefix", () => {
+  it("names are validated: vendor-prefixed, never a reserved name or prefix", async () => {
     expect(secretNameProblem("GIPHY_API_KEY")).toBeNull();
     expect(secretNameProblem("ANTHROPIC_API_KEY")).toMatch(/reserved/);
     expect(secretNameProblem("ANTHROPIC_BASE_URL")).toMatch(/reserved/);
@@ -204,14 +204,14 @@ describe("secrets by email (0253)", () => {
     expect(read.values, "refused values are scrubbed too").toContain("/evil");
   });
 
-  it("a MIME scrub removes the value from a 7bit body, a base64 body and the headers, and keeps the message readable", () => {
+  it("a MIME scrub removes the value from a 7bit body, a base64 body and the headers, and keeps the message readable", async () => {
     const b64 = mime("keys", `SECRET TEST_VENDOR_KEY=${VALUE}\n`, "base64");
-    expect(carriesSecretValue(b64, [VALUE]), "the base64 part decodes to the value").toBe(true);
-    const clean = scrubSecretValues(b64, [VALUE]);
-    expect(carriesSecretValue(clean, [VALUE])).toBe(false);
+    expect(await carriesSecretValue(b64, [VALUE]), "the base64 part decodes to the value").toBe(true);
+    const clean = await scrubSecretValues(b64, [VALUE]);
+    expect(await carriesSecretValue(clean, [VALUE])).toBe(false);
     expect(clean).toContain("[secret redacted]");
     expect(clean).toContain("X-WP-OS-Scrubbed");
-    const plain = scrubSecretValues(mime(`about ${VALUE}`, `SECRET TEST_VENDOR_KEY=${VALUE}`), [VALUE]);
+    const plain = await scrubSecretValues(mime(`about ${VALUE}`, `SECRET TEST_VENDOR_KEY=${VALUE}`), [VALUE]);
     expect(plain).not.toContain(VALUE);
   });
 
@@ -230,7 +230,7 @@ describe("secrets by email (0253)", () => {
     expect(await everyTextColumn(), "no D1 text column carries the value").not.toContain(VALUE);
     const emls = await everyEml();
     expect(emls.length).toBeGreaterThan(0);
-    for (const e of emls) expect(carriesSecretValue(e, [VALUE]), "the stored .eml is scrubbed, decoded parts included").toBe(false);
+    for (const e of emls) expect(await carriesSecretValue(e, [VALUE]), "the stored .eml is scrubbed, decoded parts included").toBe(false);
     expect(emls.some((e) => e.includes("[secret redacted]"))).toBe(true);
     const after = sent.slice(sentBefore);
     expect(after.length, "the partner heard once").toBe(1);
@@ -246,7 +246,7 @@ describe("secrets by email (0253)", () => {
     await inbound(mime("a key", `SECRET ANTHROPIC_API_KEY=${evil}`));
     expect(await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM secret_handoff WHERE name = 'ANTHROPIC_API_KEY'").first<{ n: number }>()).toEqual({ n: 0 });
     expect(await everyTextColumn()).not.toContain(evil);
-    for (const e of await everyEml()) expect(carriesSecretValue(e, [evil])).toBe(false);
+    for (const e of await everyEml()) expect(await carriesSecretValue(e, [evil])).toBe(false);
     const reply = sent.slice(sentBefore).find((m) => m.to === SCOOTER);
     expect(reply!.text).toMatch(/ANTHROPIC_API_KEY: ANTHROPIC_API_KEY is reserved/);
     expect(reply!.text).not.toContain(evil);

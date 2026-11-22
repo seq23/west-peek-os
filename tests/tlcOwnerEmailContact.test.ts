@@ -82,8 +82,8 @@ beforeAll(async () => {
 afterAll(async () => { vi.unstubAllGlobals(); await disposeTestDb(t); });
 
 describe("her note is read for a brand contact", () => {
-  it("finds the brand, the address (ending at '.com' even with no space after it), the name and her angle", () => {
-    const words = herWordsIn(RAW);
+  it("finds the brand, the address (ending at '.com' even with no space after it), the name and her angle", async () => {
+    const words = await herWordsIn(RAW);
     expect(words).not.toContain("nobody@quoted.example"); // the quoted email is not her instruction
     const found = ownerContactInstructions(words, ["Acmeai", "Google"], [{ month: "2027-01", topic: "The Longevity Reset" }, { month: "2027-03", topic: "Build Your Own AI Agent" }]);
     expect(found).toHaveLength(1);
@@ -99,8 +99,8 @@ describe("her note is read for a brand contact", () => {
   it("a brand outside her list still counts when she names it", () => {
     expect(ownerContactInstructions("please reach out to the team at Brightwave - jo@brightwave.example", [])[0]).toMatchObject({ brand: "Brightwave", email: "jo@brightwave.example" });
   });
-  it("the address sentence is never learned as a standing rule for every brand", () => {
-    for (const r of standingRulesIn(herWordsIn(RAW))) expect(r).not.toMatch(/@/);
+  it("the address sentence is never learned as a standing rule for every brand", async () => {
+    for (const r of standingRulesIn(await herWordsIn(RAW))) expect(r).not.toMatch(/@/);
   });
 });
 

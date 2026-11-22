@@ -1,17 +1,16 @@
 /**
  * CPU AND MEMORY OF READING A 26 MB PARTNER REPLY (22 Nov 2026, engineering sweep row 7). Synthetic, same shape as
- * tests/bigPartnerMail (his words, a voice note, a zip, a PDF). It prints, for the hand-built parser
- * (src/worker/effects/mimeAttachments.ts), CPU ms per call, the SUM over one handler's calls, and the memory held
- * after one read (largest single read). When postal-mime is given, it prints the same for the library's one full parse.
+ * tests/bigPartnerMail (his words, a voice note, a zip, a PDF). It prints the CPU of the one postal-mime parse every
+ * reader shares (src/worker/effects/mail.ts, ArrayBuffer mode), the CPU of every reader after it (served from that
+ * parse), and the memory held after the parse. Base64 mode is measured beside it: it is why mail.ts never uses it.
  *
  *   npx -y tsx@4 --expose-gc scripts/probes/mime-cpu-bench.mts   # tsx is not a dev dependency: npx fetches it once
- *   npm i --prefix "$TMPDIR/pm" postal-mime@4.2.0     # the library goes in a scratch folder, never this repo's node_modules
- *   POSTAL_MIME="$TMPDIR/pm/node_modules/postal-mime/dist/esm/postal-mime.js" npx -y tsx@4 --expose-gc scripts/probes/mime-cpu-bench.mts
  *
  * Production CPU is 30 s (wrangler.toml); the 128 MB isolate memory is the limit that decides. Run it before any
- * change that would swap the parser.
+ * change to how mail is parsed.
  */
-const m = await import("../../src/worker/effects/mimeAttachments.ts");
+const m = await import("../../src/worker/effects/mail.ts");
+const PostalMime = (await import("postal-mime")).default;
 const total = (25 * 1024 * 1024) / 0.73;
 const b64 = (n: number, fill: number) => Buffer.alloc(n, fill).toString("base64").replace(/(.{76})/g, "$1\r\n");
 const B = "Apple-Mail=_BIG_TEST";
@@ -46,8 +45,8 @@ if (MEM) {
   const before = held();
   let max = 0;
   const reads: Array<() => unknown> =
-    MEM === "hand-built" ? [() => m.textBodyOf(raw), () => m.messageText(raw), () => m.pdfAttachments(raw), () => m.requestAttachments(raw), () => m.audioAttachments(raw), () => m.attachmentBytes(raw, "files.zip")]
-    : [async () => (await import(process.env.POSTAL_MIME ?? "postal-mime")).default.parse(raw, MEM === "postal-mime-base64" ? { attachmentEncoding: "base64" } : {})];
+    MEM === "mail.ts" ? [() => m.readMail(raw), () => m.textBodyOf(raw), () => m.pdfAttachments(raw), () => m.audioAttachments(raw)]
+    : [() => PostalMime.parse(raw, { attachmentEncoding: "base64" })];
   for (const f of reads) {
     const kept = await f();
     max = Math.max(max, held() - before);
@@ -63,19 +62,16 @@ async function memory(name: string): Promise<void> {
 }
 
 console.log(`message ${(raw.length / 1048576).toFixed(1)} MB`);
-await cpu("textBodyOf", () => m.textBodyOf(raw), true);
-await cpu("messageText", () => m.messageText(raw), true);
-await cpu("pdfAttachments", () => m.pdfAttachments(raw), true);
-await cpu("requestAttachments", () => m.requestAttachments(raw), true);
-await cpu("audioAttachments", () => m.audioAttachments(raw), true);
+let fresh = 0;
+await cpu("the one parse (readMail)", () => m.readMail(`${raw}${"\r\n".repeat((fresh += 1))}`));
+await m.readMail(raw);
+await cpu("textBodyOf, after it", () => m.textBodyOf(raw), true);
+await cpu("messageText, after it", () => m.messageText(raw), true);
+await cpu("pdfAttachments, after it", () => m.pdfAttachments(raw), true);
+await cpu("requestAttachments, after", () => m.requestAttachments(raw), true);
+await cpu("audioAttachments, after it", () => m.audioAttachments(raw), true);
 await cpu("attachmentBytes(zip)", () => m.attachmentBytes(raw, "files.zip"), true);
-console.log(`${"hand-built, summed".padEnd(28)} ${summed.toFixed(1)} ms (one handler's calls on the same message)`);
-await memory("hand-built");
-const lib = await import(process.env.POSTAL_MIME ?? "postal-mime").catch(() => null);
-if (!lib) console.log("postal-mime not installed: skipped");
-else {
-  await cpu("postal-mime (ArrayBuffer)", () => lib.default.parse(raw));
-  await cpu("postal-mime (base64)", () => lib.default.parse(raw, { attachmentEncoding: "base64" }));
-  await memory("postal-mime");
-  await memory("postal-mime-base64");
-}
+console.log(`${"readers, summed".padEnd(28)} ${summed.toFixed(1)} ms (on top of the one parse)`);
+await memory("mail.ts");
+await cpu("postal-mime (base64 mode)", () => PostalMime.parse(raw, { attachmentEncoding: "base64" }));
+await memory("postal-mime-base64");
