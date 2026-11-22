@@ -288,6 +288,32 @@ describe("never silent, and never the same wall twice", () => {
 });
 
 describe("a dry run reads everything and writes nothing", () => {
+  it("forgetting a dry run's bookkeeping is all or nothing: a delete that fails part-way leaves every row in place", async () => {
+    const { forgetDryRun } = await import("../src/worker/effects/inboundEmail");
+    const runId = "air_dry_atomic";
+    await env.WP_OS_DB.prepare(
+      "INSERT INTO ai_run (id, purpose, actor_type, actor_id, sensitivity, privacy_mode, cost_mode, status, input_hash, trace_id, firm_scope) VALUES (?1, 'first read', 'AI', 'aie_porter', 'INTERNAL', 'FRONTIER', 'NORMAL', 'COMPLETED', 'h', 'tr_dry_atomic', 'west-peek')",
+    ).bind(runId).run();
+    await env.WP_OS_DB.prepare("INSERT INTO model_job_outcome (id, task_kind, provider_id, model, outcome, ai_run_id, firm_scope) VALUES ('mjo_dry_atomic', 'judgement', 'claude_code', 'seat', 'SUCCEEDED', ?1, 'west-peek')").bind(runId).run();
+    await env.WP_OS_DB.prepare("INSERT INTO ai_run_routing (ai_run_id, attempts_json) VALUES (?1, '[]')").bind(runId).run();
+    const left = async () => [
+      await count(`SELECT COUNT(*) AS n FROM ai_run WHERE id = '${runId}'`),
+      await count(`SELECT COUNT(*) AS n FROM model_job_outcome WHERE ai_run_id = '${runId}'`),
+      await count(`SELECT COUNT(*) AS n FROM ai_run_routing WHERE ai_run_id = '${runId}'`),
+    ];
+    // The last delete in the batch fails (an outage part-way): the earlier ones must not have happened.
+    await env.WP_OS_DB.prepare("CREATE TRIGGER t_dry_atomic BEFORE DELETE ON ai_run WHEN OLD.id = 'air_dry_atomic' BEGIN SELECT RAISE(ABORT, 'D1 down'); END").run();
+    try {
+      await expect(forgetDryRun(env, runId)).rejects.toThrow();
+      expect(await left(), "nothing half-deleted").toEqual([1, 1, 1]);
+    } finally {
+      await env.WP_OS_DB.prepare("DROP TRIGGER t_dry_atomic").run();
+    }
+    await forgetDryRun(env, runId);
+    expect(await left(), "and all of it goes once the delete works").toEqual([0, 0, 0]);
+  });
+
+
   it("returns the card it would steer, the files, the transcript and the Got it — and no row, object or email changes", async () => {
     const { cardId, token } = await cardWithThread("DRY");
     const msg = bigReply({ subject: "Re: Porter: West Peek site DRY: New preview ready", token, words: "1. Swap the hero photo for the new one.\n2. Make the header a little taller.", totalBytes: 2 * 1024 * 1024, messageId: "dry@mail.gmail.com" });
