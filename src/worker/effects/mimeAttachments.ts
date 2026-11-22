@@ -13,11 +13,18 @@
  * reports as unread rather than guessing — a deck half-decoded into a model is worse than no deck,
  * because the model will answer anyway.
  *
- * WHY STILL HAND-BUILT (measured 22 Nov 2026, engineering sweep row 7). On a 25 MB reply postal-mime 4.2.0 takes
- * 581-1,768 ms of CPU for its one full parse (ArrayBuffer or base64 attachments), against a handler that died at
- * ~2,010 ms; it decodes every attachment, even when a caller wants only the body. These reads take 0.1-87 ms each,
- * because they size a file from its base64 and never decode what they do not hand over.
- * Bench: `npx tsx scripts/probes/mime-cpu-bench.mts`. Re-measure with it before swapping this for any library.
+ * WHY STILL HAND-BUILT (measured 22 Nov 2026, engineering sweep row 7; re-measured for its review). Not CPU: the
+ * production limit is 30 s (`cpu_ms = 30000`, wrangler.toml, since 15 Nov 2026; the ~2,010 ms kill of two partner
+ * emails before that is history). The same wrangler.toml note keeps the rule that this read stays cheap and never
+ * depends on the raised limit, and both parsers meet it on a 26 MB reply: one handler's hand-built calls sum to
+ * ~140 ms, postal-mime 4.2.0's one full parse ~290 ms (ArrayBuffer) or ~920 ms (base64). The deciding figures are
+ * memory and the swap's cost. Held after a read, with GC: a hand-built call holds at most ~25 MB beyond the message
+ * (only what it hands over is decoded); postal-mime holds ~19 MB in ArrayBuffer mode and ~350 MB in base64 mode,
+ * which alone would not fit the 128 MB isolate. So a swap would have to be ArrayBuffer-only, would be about 2x the CPU
+ * for similar memory, and would replace reads whose "unread, never guessed" behaviour the tests pin. With no
+ * measured gain, it stays.
+ * Bench (CPU, the summed figure and memory held): `scripts/probes/mime-cpu-bench.mts`, how to run it is in its header.
+ * Re-measure before swapping this for any library.
  */
 
 export interface Attachment {
