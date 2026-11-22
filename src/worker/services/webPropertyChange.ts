@@ -1746,9 +1746,9 @@ export async function applyReport(
     }
     if (run.status === "ABANDONED" && !run.claimed_by) {
       /*
-       * Nobody picked it up inside the queue ceiling (twelve hours for a website job). A fault to
+       * Nobody picked it up inside the queue ceiling (eighteen hours for a website job). A fault to
        * look at, with the lane named — and addressed to the OWNER OF THE MAC, never the requesting
-       * partner (28 Sep 2026): a Mac that has been asleep for twelve hours is hers to wake, and the
+       * partner (28 Sep 2026): a Mac that has been away for eighteen hours is hers to wake, and the
        * partner already heard once that the lane is asleep (`sendAsleep`). They must never be told
        * "Blocked" for a laptop lid.
        */

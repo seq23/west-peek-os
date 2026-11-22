@@ -124,11 +124,16 @@ sequoia@westpeek.ventures — the Drive folder must be shared with that account 
 ```sh
 node scripts/vault/vault.mjs run -- node scripts/claimer/local-job-claimer.mjs --doctor
 node scripts/vault/vault.mjs run -- node scripts/claimer/local-job-claimer.mjs --once     # one cycle, foreground
-cp deployment/launchd/ventures.westpeek.os.local-jobs.plist ~/Library/LaunchAgents/
-launchctl load -w ~/Library/LaunchAgents/ventures.westpeek.os.local-jobs.plist
+npm run launchd:install:local-jobs     # writes $HOME, reloads through ~/bin/launchd-reload (never a hand bootout)
 launchctl list | grep westpeek.os.local-jobs
 tail -f /tmp/westpeek-os-local-jobs.log
 ```
+
+**The Mac's day (owner's ruling 21 Nov 2026, Central).** The claimer is a LIGHT job: it claims only
+10:00-21:59 CT, behind `~/bin/mac-window run LIGHT`, and asks `mac-window check LIGHT` before every
+claim. At 22:00 it finishes the job in hand and exits 0 (`OUTSIDE_WINDOW ...`); launchd ticks it every 15 minutes and the first tick after 10:00 CT starts it. A job queued overnight stays QUEUED (its queue ceiling is 18 hours, longer than the 12 closed
+hours) and is claimed once at 10:00. The heartbeat's DNS re-checks and Drive watches pause with it.
+Boss OS's `npm run mac-day:check` proves the installed plist.
 
 Job working directories live under `~/GitHub/wpos-jobs/` (one worktree `wt-<card>` and one package
 directory `pkg-<card>` per card, one run directory per run with the prompt, the CLI output and the

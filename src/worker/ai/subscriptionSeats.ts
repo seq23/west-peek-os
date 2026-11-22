@@ -913,7 +913,7 @@ export async function reapSeatRuns(env: Env, now: Date = new Date()): Promise<Re
          * So a silent job goes BACK TO THE QUEUE, not to the grave: the same row, the same job,
          * no attempt spent on the card. The claimer that held it has already been told 409 on its
          * next pulse and has stopped the child. `created_at` is untouched, so the queue ceiling
-         * (`queue_max_seconds`, twelve hours for a website job) still bounds the whole wait, and
+         * (`queue_max_seconds`, eighteen hours for a website job) still bounds the whole wait, and
          * `isWaitingForMac` lets the card's status line and the partner's one notice say what
          * this is. A job that has now gone quiet MAX_JOB_NAPS times is closed: something other
          * than sleep keeps killing it, and a queue that retries for ever is "runs but inert".

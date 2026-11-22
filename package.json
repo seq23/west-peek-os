@@ -8,6 +8,7 @@
     "backup:local": "node scripts/backup/backup.mjs",
     "build": "vite build && node scripts/build/stamp-sw-cache.mjs",
     "check:changed": "node scripts/ci/check-changed.mjs",
+    "launchd:install:local-jobs": "bash scripts/ops/install-local-jobs-launchd.sh",
     "practice": "node scripts/practice/practice.mjs",
     "deploy:production": "node scripts/deploy/production.mjs",
     "dev": "npm run build && wrangler dev",
