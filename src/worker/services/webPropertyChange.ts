@@ -23,7 +23,7 @@ import { hostsSentence, pagesHostsOf, readWebPropertyAsk, sitesOf, WEB_PROPERTIE
 import { loadRegistry, recordRepoFacts, registryEntryFor } from "./webPropertyRegistry";
 import { outboundFilesFor } from "./workCardFiles";
 import { recordDnsWaits } from "./dnsWaits";
-import { asksNoApprovalYet, missingSecretLine, waitDetail } from "../../shared/work/porterWaits";
+import { DNS_RECHECK_MINUTES, DNS_WAIT_DAYS, asksNoApprovalYet, missingSecretLine, waitDetail } from "../../shared/work/porterWaits";
 import { dueLine } from "../../shared/intake/dueTime";
 import type { MissingSecret } from "../../shared/work/localJobs";
 import { doneLines } from "../../shared/work/partnerPractices";
@@ -49,6 +49,8 @@ import {
   LOCAL_JOB_RUN_KIND,
   WEB_PROPERTY_CHANGE_KIND,
   localJobKind,
+  macDayOpenedAt,
+  macDayWords,
   readLocalJobReport,
   type ClaudeModelAlias,
   type LocalJobPart,
@@ -503,7 +505,25 @@ export async function sendStuck(env: Env, card: WebPropertyChangeCard, cause: st
  * asleep, that Porter starts the moment it wakes, and that the owner of the Mac can be asked to wake
  * it. The subject says "Waiting for the Mac", never "Blocked"; the card is not blocked either.
  */
-export async function sendAsleep(env: Env, card: WebPropertyChangeCard, cause: string, reason: string): Promise<{ sent: boolean; reason: string }> {
+export async function sendAsleep(env: Env, card: WebPropertyChangeCard, cause: string, reason: string, overnight = false): Promise<{ sent: boolean; reason: string }> {
+  /*
+   * OUTSIDE THE MAC'S DAY (22 Nov 2026, #572): the claimer takes work only `macDayWords()`. A job queued at night is
+   * not a sleeping Mac and must not be called one; the partner hears, once, that it starts when the Mac's day opens.
+   * Never "if you want it sooner, tell Sequoia": the hours are hers to keep.
+   */
+  if (overnight) {
+    return tellRequester(env, card, { kind: "STUCK", cause }, {
+      what: stageSubject((await porterContext(env, card.id))?.title ?? card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").slice(0, 60), STAGE.ASLEEP),
+      tldr: `Queued: I build on Sequoia's Mac, which takes work ${macDayWords()}, so this starts when it next opens. Nothing you sent is lost and nothing is needed from you.`,
+      sections: [
+        { label: "Why", bullets: [reason] },
+        {
+          label: "What happens next",
+          bullets: ["The job waits in the queue and starts by itself when the Mac's day opens; you hear from me as it goes.", `The card: https://os.joinwestpeek.com/#/work (card ${card.id})`],
+        },
+      ],
+    });
+  }
   return tellRequester(env, card, { kind: "STUCK", cause }, {
     what: stageSubject((await porterContext(env, card.id))?.title ?? card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").slice(0, 60), STAGE.ASLEEP),
     tldr: `Not started yet: the lane I build on (Sequoia's Mac) is asleep. I'll get to work the moment it wakes; nothing you sent is lost.`,
@@ -512,7 +532,7 @@ export async function sendAsleep(env: Env, card: WebPropertyChangeCard, cause: s
       {
         label: "What happens next",
         bullets: [
-          "The job waits in the queue and runs by itself when the Mac wakes; I do not need anything from you.",
+          `The job waits in the queue and runs by itself when the Mac wakes (it takes work ${macDayWords()}); I do not need anything from you.`,
           "If you want it sooner, tell Sequoia to open the Mac.",
           `The card: https://os.joinwestpeek.com/#/work (card ${card.id})`,
         ],
@@ -1979,7 +1999,7 @@ async function absorbRepoReport(env: Env, card: WebPropertyChangeCard, row: WebP
   }
   if (Array.isArray(report.dns) && report.dns.length) {
     const told = await recordDnsWaits(env, { cardId: card.id, repo: row.target_repo, requestedBy: card.requested_by_email ?? null, firmScope: card.firm_scope, records: report.dns });
-    if (told.length) await appendFinding(env, card.id, `A host outside the firm's Cloudflare zones: ${told.join(", ")}. The partner has the exact record to add at their registrar; the site is live on pages.dev meanwhile and I re-check every 15 minutes for 7 days.`);
+    if (told.length) await appendFinding(env, card.id, `A host outside the firm's Cloudflare zones: ${told.join(", ")}. The partner has the exact record to add at their registrar; the site is live on pages.dev meanwhile and I re-check every ${DNS_RECHECK_MINUTES} minutes, day and night, for ${DNS_WAIT_DAYS} days.`);
   }
   // Addendum 5: work the partner dated for later becomes its own card, leased until its week — never lost on close.
   // FROM THE PLAN ONLY (#363): the plan is where the later work is dated and where the partner is told
@@ -3374,8 +3394,18 @@ export async function runWebPropertyChangeCard(
        * happens next. A run returned and re-claimed inside the ceiling says nothing.
        */
       const now = new Date();
-      const idleMs = now.getTime() - Date.parse(run.status === "QUEUED" ? run.created_at : (run.progressed_at ?? run.claimed_at ?? run.created_at));
+      /*
+       * IDLE IS COUNTED INSIDE THE MAC'S DAY ONLY (22 Nov 2026). A job queued at 23:00 has not been "waiting for a
+       * sleeping Mac" for eleven hours at 10:01; the claimer was closed on purpose. Outside the day the partner hears
+       * once that it is queued for the morning; inside it, idle starts at the later of the queueing and the opening.
+       */
+      const openedAt = macDayOpenedAt(now);
+      const idleFrom = Date.parse(run.status === "QUEUED" ? run.created_at : (run.progressed_at ?? run.claimed_at ?? run.created_at));
       const ceilingMs = Math.max(5, Number(rules.stuck_after_minutes ?? "45") || 45) * 60_000;
+      if (run.status === "QUEUED" && !openedAt && now.getTime() - idleFrom > ceilingMs && stuckWindowOpen(rules.stuck_window_ct, now)) {
+        await sendAsleep(env, card, `overnight:${run.id}`, `it arrived outside those hours, and the ${row.phase.toLowerCase()} is the next step`, true);
+      }
+      const idleMs = openedAt ? now.getTime() - Math.max(idleFrom, openedAt.getTime()) : 0;
       if (run.status === "QUEUED" && idleMs > ceilingMs && stuckWindowOpen(rules.stuck_window_ct, now)) {
         /*
          * A MAC THAT IS ASLEEP IS NOT A BLOCK (28 Sep 2026). Whether the job was never claimed

@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { LOCAL_JOB_QUEUE_SECONDS } from "../../shared/work/localJobs";
 import { capabilitiesAllow, clearEndedAttachments, clearRunAttachments, readRefs, type AttachmentKind, type SeatAttachmentRef } from "./seatAttachments";
 
 /**
@@ -975,7 +976,9 @@ export async function reapSeatRuns(env: Env, now: Date = new Date()): Promise<Re
     if (row.run_kind === "LOCAL_JOB") {
       // A card is not a run: a job waits for the Mac to wake, up to the ceiling the kind set on
       // the row (`job_json.queue_max_seconds`), and the card's own runner blocks it after that.
-      const ceiling = queueCeilingSeconds(row.job_json);
+      // NEVER SHORT OF THE MAC'S NIGHT (22 Nov 2026): a job parked before #572 carries twelve hours; queued at 21:30 it
+      // would close at 09:30, before the claimer opens at 10:00. Today's LOCAL_JOB_QUEUE_SECONDS is the floor.
+      const ceiling = Math.max(queueCeilingSeconds(row.job_json), LOCAL_JOB_QUEUE_SECONDS);
       if (!Number.isFinite(createdMs) || nowMs - createdMs <= ceiling * 1000) continue;
       await abandonRun(
         env,

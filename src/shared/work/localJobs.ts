@@ -104,6 +104,40 @@ export const BUILD_CEILING_SECONDS = 3 * 60 * 60;
 /** See `queueMaxSeconds`: the closed hours (22:00-10:00 CT) plus six hours of the next day's window. */
 export const LOCAL_JOB_QUEUE_SECONDS = 18 * 60 * 60;
 
+/**
+ * THE MAC'S DAY, AS A PARTNER IS TOLD IT (22 Nov 2026). Builds and partner sessions need the Mac, and its claimer
+ * claims only inside `~/bin/mac-window`'s LIGHT class: 10:00-21:59 Central. Every partner-facing line about when
+ * Mac work happens is written from these numbers (`macDayWords`), so the promise and the guard cannot drift apart.
+ * Waits that need no Mac (DNS, Drive) run on the Worker's cron, day and night, and never cite this.
+ */
+export const MAC_DAY = { opensHour: 10, closesHour: 22, zone: "America/Chicago" } as const;
+
+function centralMinutes(now: Date): number {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: MAC_DAY.zone, hour: "numeric", minute: "numeric", hour12: false }).formatToParts(now);
+  const hour = Number(parts.find((p) => p.type === "hour")?.value ?? 0) % 24;
+  return hour * 60 + Number(parts.find((p) => p.type === "minute")?.value ?? 0);
+}
+
+/** Is the Mac taking work now? Pure. */
+export function macDayOpen(now: Date): boolean {
+  const m = centralMinutes(now);
+  return m >= MAC_DAY.opensHour * 60 && m < MAC_DAY.closesHour * 60;
+}
+
+/** When today's window opened, if it is open now; null outside it. Idle time is counted from here, never through the night. */
+export function macDayOpenedAt(now: Date): Date | null {
+  if (!macDayOpen(now)) return null;
+  const since = centralMinutes(now) - MAC_DAY.opensHour * 60;
+  return new Date(Math.floor(now.getTime() / 60_000) * 60_000 - since * 60_000);
+}
+
+const clock = (h: number) => `${h % 12 === 0 ? 12 : h % 12}${h < 12 || h === 24 ? "am" : "pm"}`;
+
+/** "between 10am and 10pm Central" — the one way a partner hears when Mac work runs. */
+export function macDayWords(): string {
+  return `between ${clock(MAC_DAY.opensHour)} and ${clock(MAC_DAY.closesHour)} Central`;
+}
+
 export const LOCAL_JOB_KINDS: readonly LocalJobKindSpec[] = [
   {
     kind: WEB_PROPERTY_CHANGE_KIND,

@@ -1,4 +1,4 @@
-import { LOCAL_JOB_KINDS, type LocalJobPayload } from "../src/shared/work/localJobs";
+import { LOCAL_JOB_KINDS, macDayOpen, macDayWords, type LocalJobPayload } from "../src/shared/work/localJobs";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
@@ -1376,8 +1376,11 @@ describe("STUCK is sent once, only when idle past the ceiling inside the window"
     expect(Number((await card(id)).work_attempts ?? 0), "no attempt spent on a sleeping Mac").toBe(attemptsBefore);
     expect((await liveJobFor(id))!.id, "the same job, not a second one").toBe(run.id);
     expect(sent.slice(before).filter((m) => m.to === SCOOTER && /: Blocked$/.test(m.subject)), "nothing says Blocked").toHaveLength(0);
-    // The Mac stays asleep; 46 minutes pass. The partner hears once, in the right words.
-    await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET created_at = ?2 WHERE id = ?1").bind(run.id, new Date(Date.now() - 46 * 60_000).toISOString()).run();
+    // The Mac stays asleep through its own day (noon Central); 46 minutes pass. The partner hears once, in the right words.
+    const noon = new Date(Date.now() + 86_400_000);
+    noon.setUTCHours(18, 0, 0, 0);
+    vi.useFakeTimers({ toFake: ["Date"], now: noon });
+    await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET created_at = ?2 WHERE id = ?1").bind(run.id, new Date(noon.getTime() - 46 * 60_000).toISOString()).run();
     const held = await runWebPropertyChangeCard(env, { id, title: "t", kind: WEB_PROPERTY_CHANGE_KIND, owner_id: "aie_porter", state: "IN_PROGRESS", work_attempts: 0, firm_scope: "west-peek", requested_by_email: SCOOTER });
     expect(held.held).toBe(true);
     const asleep = sent.slice(before).filter((m) => m.to === SCOOTER && /: Waiting for the Mac$/.test(m.subject));
@@ -1391,7 +1394,56 @@ describe("STUCK is sent once, only when idle past the ceiling inside the window"
     expect(sent.slice(before).filter((m) => m.to === SCOOTER && /: Blocked$/.test(m.subject)), "still nothing says Blocked").toHaveLength(0);
     const kinds = (await env.WP_OS_DB.prepare("SELECT kind FROM work_card_notice WHERE work_card_id = ?1 ORDER BY sent_at").bind(id).all<{ kind: string }>()).results!.map((n) => n.kind);
     expect(kinds).toEqual(["RECEIVED", "STUCK"]);
+    vi.useRealTimers();
     await env.WP_OS_DB.prepare("UPDATE work_kind_rule SET value = '06-22' WHERE kind = ?1 AND rule_key = 'stuck_window_ct'").bind(WEB_PROPERTY_CHANGE_KIND).run();
+  });
+
+  it("a build queued after the Mac's day survives the night: the partner hears once, in the true hours, and a pre-#572 twelve-hour ceiling does not close it before 10:00", async () => {
+    /*
+     * 22 Nov 2026 (#572): the claimer takes work only between 10:00 and 21:59 Central. A build queued at 21:30 sits
+     * until 10:00. The partner must not hear "the Mac is asleep" (it is closed on purpose), must hear the real hours
+     * once, and a job that still carries the old twelve-hour ceiling must not be closed at 09:30, before the Mac opens.
+     */
+    const before = sent.length;
+    const chiefId = await openAssignmentCard(env, { subject: "night test", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Change the header on westpeek.ventures.", limits: EMAILED_TASK_LIMITS, emlKey: null });
+    const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
+    await tickFor(id); // PLAN parked
+    const run = (await liveJobFor(id))!;
+    // 21:30 Central on a January evening (CST, so the hours below are exact): queued just before the Mac closes,
+    // carrying the twelve hours every job had before #572.
+    const queued = new Date("2030-01-15T03:30:00.000Z");
+    await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET created_at = ?2, job_json = json_set(job_json, '$.queue_max_seconds', 43200) WHERE id = ?1").bind(run.id, queued.toISOString()).run();
+    const step = () => runWebPropertyChangeCard(env, { id, title: "t", kind: WEB_PROPERTY_CHANGE_KIND, owner_id: "aie_porter", state: "IN_PROGRESS", work_attempts: 0, firm_scope: "west-peek", requested_by_email: SCOOTER });
+    const toScooter = () => sent.slice(before).filter((m) => m.to === SCOOTER && /: Waiting for the Mac$/.test(m.subject));
+    try {
+      // 23:00 Central: outside the partner-email window, so nothing is said at night.
+      vi.useFakeTimers({ toFake: ["Date"], now: new Date(queued.getTime() + 90 * 60_000) });
+      expect((await step()).held).toBe(true);
+      expect(toScooter(), "no email to a partner at 23:00").toHaveLength(0);
+      // 06:30 Central the next morning: the window is open, the Mac's day is not. Said once, in the true hours.
+      vi.setSystemTime(new Date(queued.getTime() + 9 * 3600_000));
+      expect((await step()).held).toBe(true);
+      await step();
+      const told = toScooter();
+      expect(told, "said once").toHaveLength(1);
+      expect(told[0]!.text).toContain(`takes work ${macDayWords()}`);
+      expect(told[0]!.text).not.toMatch(/is asleep/);
+      expect(told[0]!.text).not.toMatch(/tell Sequoia to open the Mac/);
+      // 09:45 Central, 12h15m after queueing (before the Mac opens): its own twelve hours would have closed it. Today's floor holds.
+      const morning = new Date(queued.getTime() + 12.25 * 3600_000);
+      expect(macDayOpen(morning), "the Mac's day is still closed").toBe(false);
+      const reaped = await reapSeatRuns(env, morning);
+      expect(reaped.abandoned, "never closed through the closed hours").not.toContain(run.id);
+      expect((await readRun(env, run.id))!.status).toBe("QUEUED");
+      expect((await card(id)).state).not.toBe("BLOCKED");
+      // Twenty minutes into the Mac's day it has not been idle "45 minutes": no second notice yet.
+      vi.setSystemTime(new Date(queued.getTime() + 12 * 3600_000 + 50 * 60_000)); // 10:20 Central
+      expect(macDayOpen(new Date())).toBe(true);
+      await step();
+      expect(toScooter(), "idle counts from the opening at 10:00, not from 21:30").toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("the window is Central hours", () => {
@@ -1452,8 +1504,11 @@ describe("the reaper judges a job by its pulse and its ceiling", () => {
     expect((await readRun(env, silent))!.resolution).toMatch(/closed rather than offered again/);
     expect((await readRun(env, silent))!.resolution).not.toMatch(/waits for the Mac to wake/);
 
-    // Past its own ceiling, a queued job is closed with the reason.
+    // Its own twelve hours (a job parked before #572) never closes it inside the Mac's night: today's floor holds.
     await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET created_at = ?2 WHERE id = ?1").bind(waiting, new Date(now.getTime() - 13 * 3600_000).toISOString()).run();
+    expect((await reapSeatRuns(env, now)).abandoned).not.toContain(waiting);
+    // Past the ceiling, a queued job is closed with the reason.
+    await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET created_at = ?2 WHERE id = ?1").bind(waiting, new Date(now.getTime() - 19 * 3600_000).toISOString()).run();
     const later = await reapSeatRuns(env, now);
     expect(later.abandoned).toContain(waiting);
     expect((await readRun(env, waiting))!.resolution).toMatch(/No machine claimed this job/);

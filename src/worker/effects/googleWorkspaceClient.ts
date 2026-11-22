@@ -221,6 +221,16 @@ export async function driveFileText(token: string, file: DriveFileRaw, maxChars:
   return (await res.text()).slice(0, maxChars);
 }
 
+/** One folder's direct children (files and sub-folders), not trashed; up to 200. */
+export async function listDriveChildren(token: string, folderId: string, fetchImpl: typeof fetch = fetch): Promise<DriveFileRaw[]> {
+  const list = await getJson<{ files?: DriveFileRaw[] }>(
+    fetchImpl,
+    token,
+    `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(`'${folderId}' in parents and trashed = false`)}&fields=files(id,name,mimeType,size)&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+  );
+  return list.files ?? [];
+}
+
 /**
  * THE FILE ITSELF (15 Nov 2026): an audio file, an image, a ZIP a partner linked (or Gmail turned into a Drive link
  * because it was over 25 MB). The response is handed back unread, so the bytes stream straight to R2 or to the

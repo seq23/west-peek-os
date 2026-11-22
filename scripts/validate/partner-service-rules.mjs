@@ -127,7 +127,7 @@ export const INCLUSIONS = [
   { file: "src/worker/services/emailThread.ts", needle: "blockReplyDoor(", why: "an email reply's words take the door the block email offers" },
   { file: "src/worker/services/workSweep.ts", needle: "deferDatedItems(", why: "every kind's dated deferred lines become cards" },
   { file: "src/worker/services/dealIntake.ts", needle: "recordDriveWatches(", why: "the door records the Drive folders an ask names" },
-  { file: "scripts/claimer/local-job-claimer.mjs", needle: "await checkDriveWatches()", why: "the Mac's heartbeat maps the watched folders" },
+  { file: "src/worker/services/jobs.ts", needle: "sweepDriveWatches(env, now", why: "the Worker's cron reads the watched folders, day and night (22 Nov 2026)" },
 ];
 
 /**

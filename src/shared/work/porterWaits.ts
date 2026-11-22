@@ -21,6 +21,8 @@
  * on every kind.
  */
 
+import { macDayWords } from "./localJobs";
+
 export type PorterWaitKind =
   | "PREVIEW_APPROVAL"
   | "PLAN_APPROVAL"
@@ -72,6 +74,15 @@ export function asksNoApprovalYet(words: string | null | undefined): boolean {
 
 export const INTAKE_ADDRESS = "os@joinwestpeek.com";
 
+/*
+ * THE WAITS THAT NEED NO MAC, AND HOW OFTEN THEY RUN (22 Nov 2026). The DNS re-check and the Drive watch run on the
+ * Worker's own cron (`services/jobs.ts#sweepWaitsOnTick`), day and night; the promise in DNS_RECORD and DRIVE_EMPTY is
+ * written from these numbers and the sweeps read the same ones, so the email cannot promise what the code does not do.
+ */
+export const DNS_RECHECK_MINUTES = 15;
+export const DNS_WAIT_DAYS = 7;
+export const DRIVE_RECHECK_MINUTES = 15;
+
 const q = (s: string) => `"${s}"`;
 
 /** The template per kind. A function, so the specifics ride in; the SHAPE is fixed here. */
@@ -122,8 +133,8 @@ export const PORTER_WAITS: Record<PorterWaitKind, (f: PorterWaitFill) => PorterW
   }),
   MAC_ASLEEP: (f) => ({
     waiting: "the Mac",
-    why: `no machine picked the job up before its queue ceiling — the Mac is asleep, its lid is closed, or it is off power${f.why ? `; this job is ${f.why}` : ""}`,
-    clear: `nothing — it resumes by itself when the Mac is open and on power; if it stays stuck, reply ${q("try again")}`,
+    why: `builds and sessions run on Sequoia's Mac, which takes work ${macDayWords()}, and no machine picked this job up inside those hours before its queue ceiling — the Mac was asleep, its lid closed, or off power${f.why ? `; this job is ${f.why}` : ""}`,
+    clear: `nothing — it resumes by itself the next time the Mac is open, ${macDayWords()}; if it stays stuck, reply ${q("try again")}`,
     selfClearing: true,
   }),
   SEAT_RESET: (f) => ({
@@ -138,14 +149,14 @@ export const PORTER_WAITS: Record<PorterWaitKind, (f: PorterWaitFill) => PorterW
     return {
       waiting: `a DNS record at your registrar for ${r?.host ?? "the host"}`,
       why: `${r ? r.host.split(".").slice(-2).join(".") : "the domain"} is not a Cloudflare zone in the firm's account, so Cloudflare cannot add the record itself; until it exists the site is live at ${r?.liveAt ?? "its pages.dev address"}`,
-      clear: `nothing to email — at your DNS provider add ${r?.type ?? "CNAME"} ${r?.name ?? "<name>"} → ${r?.target ?? "<target>"}${txt}; I check every 15 minutes for 7 days and email you the moment it is live, or reply ${q("check now")} to make me look sooner`,
+      clear: `nothing to email — at your DNS provider add ${r?.type ?? "CNAME"} ${r?.name ?? "<name>"} → ${r?.target ?? "<target>"}${txt}; I check every ${DNS_RECHECK_MINUTES} minutes, day and night, for ${DNS_WAIT_DAYS} days and email you the moment it is live`,
       selfClearing: true,
     };
   },
   DRIVE_EMPTY: (f) => ({
     waiting: `the files in the Drive folder you named${f.what ? ` (${f.what})` : ""}`,
     why: "the folder is still empty, or not yet shared with the firm's Drive account; everything that does not need those files is going ahead",
-    clear: `nothing to email — put the files in the folder (shared with sequoia@westpeek.ventures) and they are loaded within 15 minutes, no new email needed; if it is the wrong folder, reply with the right link`,
+    clear: `nothing to email — put the files in the folder (shared with sequoia@westpeek.ventures) and they are loaded within ${DRIVE_RECHECK_MINUTES} minutes, day or night, no new email needed; if it is the wrong folder, reply with the right link`,
     selfClearing: true,
   }),
   TRIED_AND_STOPPED: (f) => ({
