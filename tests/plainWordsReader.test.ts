@@ -72,6 +72,17 @@ describe("a new email goes to the desk its words name", () => {
     expect(JSON.parse(logged!.payload_json)).toMatchObject({ door: "ROUTE", seat: "Wyatt", source: "MODEL" });
   });
 
+  it("a routed card is titled by the subject, never by the body's first characters (her signature)", async () => {
+    const body = "#dealflow\n\n\nSequoia Taylor\nGeneral Partner\nWest Peek Ventures\n\n415-355-4860\n\nBegin forwarded message:\n\n> From: A Founder <a@example.com>\n> Subject: Pre-seed round\n> We're raising a 1.5M pre-seed round.";
+    const chief = await openAssignmentCard(env, { subject: "Fwd: Pre-seed round", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: body, limits: EMAILED_TASK_LIMITS, emlKey: null, readWords: read("ROUTE", "Wyatt") });
+    const handed = await env.WP_OS_DB.prepare("SELECT title, description FROM work_card WHERE assigned_from_card_id = ?1").bind(chief).first<{ title: string; description: string }>();
+    expect(handed!.title).toBe("Pre-seed round");
+    // The brief is the subject and the reading; her words travel whole under the original request.
+    const brief = handed!.description.split("--- the original request ---")[0]!;
+    expect(brief).not.toContain("415-355-4860");
+    expect(handed!.description.split("--- the original request ---")[1]).toContain("415-355-4860");
+  });
+
   it("a question, an unknown seat, or a reader that cannot run leaves it with the chief of staff, unchanged", async () => {
     for (const [subject, reader] of [
       ["What is on for Thursday", read("ANSWER")],

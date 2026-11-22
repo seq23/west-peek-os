@@ -249,6 +249,7 @@ export async function assignCard(
   by: { id: string; name: string },
   to: string,
   brief: string,
+  opts: { title?: string } = {},
 ): Promise<{ ok: true; cardId: string; toName: string } | { ok: false; reason: string }> {
   const target = await env.WP_OS_DB.prepare("SELECT id, name, role, status FROM ai_employee WHERE lower(name) = lower(?1) OR id = ?2")
     .bind(to.trim(), seatId(to.trim()))
@@ -267,7 +268,7 @@ export async function assignCard(
       authorityScopes: [{ scopeKey: "firm_scope", scopeValue: card.firm_scope }],
     },
     {
-      title: brief.split(/\r?\n/)[0]!.slice(0, 90),
+      title: (opts.title?.trim() || brief.split(/\r?\n/)[0]!).slice(0, 90),
       description: [
         `${by.name} handed this to you${card.requested_by_email ? `; it was asked for by ${card.requested_by_email} by email` : ""}.`,
         "",
