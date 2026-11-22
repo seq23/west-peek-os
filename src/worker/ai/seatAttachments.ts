@@ -132,7 +132,7 @@ export async function putSeatAttachments(env: Env, runId: string, files: readonl
       const f = files[n]!;
       const bytes = decode(f.dataBase64);
       const label = safeLabel(f.label, n, f.mediaType);
-      const key = `${SEAT_ATTACHMENT_PREFIX}${runId}/${label}`;
+      const key = `${runFolder(runId)}${label}`;
       await bucket.put(key, bytes, { httpMetadata: { contentType: f.mediaType } });
       refs.push({ n, kind: f.kind, media_type: f.mediaType, label, key, bytes: bytes.byteLength });
     }
@@ -156,20 +156,32 @@ export async function deleteKeys(bucket: { delete: (keys: string[]) => Promise<u
 
 /**
  * The files a run carries, or NULL when the stored list cannot be read (corrupt JSON, not a list, an entry with no
- * key). Null is UNKNOWN, never "no files": nothing is deleted or stamped cleared from it, no device is offered the run
- * on its strength, and the bucket's lifecycle rule on `seat-attachments/` (see SEAT_ATTACHMENT_PREFIX) removes the
- * objects in the end.
+ * key) or names ANY key outside this run's own folder (`seat-attachments/<runId>/`). Null is UNKNOWN, never "no
+ * files": nothing is deleted or stamped cleared from it, no device is offered the run or served a file on its
+ * strength, and the bucket's lifecycle rule on `seat-attachments/` removes the objects in the end. The folder check
+ * is what keeps a copied, hand-fixed or mis-written list from deleting or serving an inbound email or a document
+ * (the same bucket holds both).
  */
-export function readRefs(attachmentsJson: string | null | undefined): SeatAttachmentRef[] | null {
+export function readRefs(attachmentsJson: string | null | undefined, runId: string): SeatAttachmentRef[] | null {
   if (!attachmentsJson) return [];
+  if (!runId) return null;
+  const folder = runFolder(runId);
   try {
     const parsed: unknown = JSON.parse(attachmentsJson);
     if (!Array.isArray(parsed)) return null;
-    const ok = parsed.every((r) => r && typeof r === "object" && typeof (r as SeatAttachmentRef).key === "string" && typeof (r as SeatAttachmentRef).n === "number");
+    const ok = parsed.every((r) => {
+      const ref = r as SeatAttachmentRef | null;
+      return !!ref && typeof ref === "object" && typeof ref.n === "number" && typeof ref.key === "string" && ref.key.startsWith(folder) && ref.key.length > folder.length;
+    });
     return ok ? (parsed as SeatAttachmentRef[]) : null;
   } catch {
     return null;
   }
+}
+
+/** A run's own folder in the bucket. Every key its list may name starts with this. */
+export function runFolder(runId: string): string {
+  return `${SEAT_ATTACHMENT_PREFIX}${runId}/`;
 }
 
 /** Every seat file lives under this prefix; the R2 lifecycle rule (docs/OPERATIONS.md) is scoped to it. */
@@ -184,7 +196,7 @@ export async function clearRunAttachments(env: Env, runId: string, now: Date = n
       .bind(runId)
       .first<{ attachments_json: string }>();
     if (!row) return;
-    const refs = readRefs(row.attachments_json);
+    const refs = readRefs(row.attachments_json, runId);
     // An unreadable list is unknown: nothing is deleted on its strength and the run is never stamped cleared.
     if (!refs) return;
     if (refs.length > 0) {
@@ -206,14 +218,25 @@ export async function clearEndedAttachments(env: Env, now: Date = new Date()): P
     const rows =
       (
         await env.WP_OS_DB.prepare(
-          `SELECT id, attachments_json FROM subscription_seat_run
+          `SELECT r.id, r.attachments_json FROM subscription_seat_run r
             WHERE attachments_json IS NOT NULL AND attachments_cleared_at IS NULL AND status IN ('REPORTED', 'FAILED', 'ABANDONED')
-              AND json_valid(attachments_json)
+              AND json_valid(attachments_json) AND json_type(attachments_json) = 'array'
+              -- An unknown list (an entry with no key, or a key outside the run's own folder) is left out HERE, not
+              -- skipped after the LIMIT, so fifty of them can never starve the real runs behind them.
+              AND NOT EXISTS (
+                SELECT 1 FROM json_each(r.attachments_json) j
+                 WHERE json_type(j.value, '$.n') NOT IN ('integer', 'real')
+                    OR json_type(j.value, '$.key') IS NOT 'text'
+                    OR substr(json_extract(j.value, '$.key'), 1, length(?1 || r.id || '/')) <> ?1 || r.id || '/'
+                    OR length(json_extract(j.value, '$.key')) <= length(?1 || r.id || '/')
+              )
             LIMIT 50`,
-        ).all<{ id: string; attachments_json: string }>()
+        )
+          .bind(SEAT_ATTACHMENT_PREFIX)
+          .all<{ id: string; attachments_json: string }>()
       ).results ?? [];
     for (const row of rows) {
-      const refs = readRefs(row.attachments_json);
+      const refs = readRefs(row.attachments_json, row.id);
       if (!refs) continue; // an unreadable list: unknown, never "cleared" (the lifecycle rule is the backstop)
       if (refs.length > 0 && !bucket) continue; // no bucket bound: unknown, never "cleared"
       try {
