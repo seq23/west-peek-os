@@ -1147,7 +1147,7 @@ export function reportedAsks(detail: string): Array<{ words: string; status: Ask
 export const ASK_MARKS_OUTPUT = structuredOutput(
   "ask_marks",
   z.object({
-    marks: z.array(z.object({ number: z.number().int(), status: z.enum(["DONE", "IN_PROGRESS", "NOT_DONE"]), why: z.string() })),
+    marks: z.array(z.object({ number: z.number().int().min(1), status: z.enum(["DONE", "IN_PROGRESS", "NOT_DONE"]), why: z.string() })),
   }),
 );
 

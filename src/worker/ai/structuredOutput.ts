@@ -53,14 +53,15 @@ export function structuredInstruction(output: StructuredOutput): string {
   ].join("\n");
 }
 
-/** The JSON object inside a reply: a reasoning model's <think> block and a code fence around it are not the answer. */
+/**
+ * The JSON object a reply IS: a bare object, optionally inside one code fence, after a reasoning model's <think> block.
+ * Prose around an object is not the answer: a lane that ignored the format walks on to the next rung.
+ */
 function jsonTextOf(text: string): string | null {
   const bare = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(bare);
   const body = (fenced ? fenced[1]! : bare).trim();
-  const start = body.indexOf("{");
-  const end = body.lastIndexOf("}");
-  return start >= 0 && end > start ? body.slice(start, end + 1) : null;
+  return body.startsWith("{") && body.endsWith("}") ? body : null;
 }
 
 /** The verifier tag a reply in the wrong shape is rejected with (`verifier_rejected:structured_output:…`). */

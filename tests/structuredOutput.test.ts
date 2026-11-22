@@ -142,7 +142,8 @@ describe("reading a reply", () => {
     expect(readStructuredText(VERDICT, null)).toMatchObject({ ok: false });
     expect(readStructuredText(VERDICT, "{not json}")).toMatchObject({ ok: false, why: expect.stringContaining("not valid JSON") });
     expect(readStructured(VERDICT, '{"ok":"yes","why":"x"}'), "a string is not a boolean").toBeNull();
-    expect(readStructured(VERDICT, 'Sure: {"ok":false,"why":"x"} done')).toEqual({ ok: false, why: "x" });
+    expect(readStructured(VERDICT, 'Sure: {"ok":false,"why":"x"} done'), "prose around an object is a lane that ignored the format").toBeNull();
+    expect(readStructured(VERDICT, '<think>hm</think>\n```json\n{"ok":false,"why":"x"}\n```'), "a think block and one fence are not the answer").toEqual({ ok: false, why: "x" });
   });
   it("the lanes are never sent bounds their decoders refuse, and the boundary still checks them", () => {
     const counted = structuredOutput("counted", z.object({ n: z.number().int().min(1), label: z.string().max(5) }));

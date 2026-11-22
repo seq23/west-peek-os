@@ -315,6 +315,13 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026): the 
     expect(keywordIntent(scooter)).toBeNull();
   });
 
+  it("a fault report the reader filed under the answer door still goes to the build door, in his words", () => {
+    const scooter = "The sign-up button on the page you made does nothing when I tap it";
+    const read = parseReplyIntent(replyIntent({ intent: "FIX", door: "ANSWER", reason: "a broken button" }), scooter);
+    expect(read).toMatchObject({ kind: "CONTINUE", door: "BUILD", question: null, nothing: false });
+    expect(read.changes).toBe(`${FAULT_PREFIX}${scooter}`);
+  });
+
   it("parseReplyIntent reads the fixed format strictly and FAILS OPEN to CONTINUE with the words carried", () => {
     expect(parseReplyIntent(replyIntent({ intent: "CONTINUE", reason: "agreement in other words" }), "No problem, looks great")).toMatchObject({ kind: "CONTINUE", changes: null, question: null, source: "MODEL" });
     expect(parseReplyIntent(replyIntent({ intent: "CONTINUE", changes: "make the hero the group shot", reason: "go-ahead with one change" }), "Looks good but make the hero the group shot"), "the change carried is his whole reply, never the reader's line").toMatchObject({ kind: "CONTINUE", changes: "Looks good but make the hero the group shot" });
