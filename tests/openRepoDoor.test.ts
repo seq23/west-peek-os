@@ -149,11 +149,21 @@ describe("the open repo registry (0253)", () => {
     expect(row!.github_repo).toBe("seq23/topbarz-voting");
     expect(row!.requested_by).toBe(SCOOTER);
     expect(row!.seeded).toBe(0);
+    // "Live by Monday morning" is read by the FIRST READ of this email (one read, review of #574) and set when it lands,
+    // on the email's card and the Porter job handed from it; a lower priority from a later read never lowers it.
+    const { applyFirstReadDeadline } = await import("../src/worker/services/partnerUnderstood");
+    const msg = await env.WP_OS_DB.prepare("SELECT work_card_id, received_at FROM inbound_message WHERE subject = 'Top Barz voting site' ORDER BY received_at DESC LIMIT 1").first<{ work_card_id: string; received_at: string }>();
+    const wrote = new Date(msg!.received_at);
+    const monday = new Date(wrote.getTime() + 3 * 86_400_000).toISOString().slice(0, 10);
+    const decision = { kind: "change" as const, property: null, handOffTo: null, planApproved: null, holds: [], deadline: { words: "Live by Monday morning", local: `${monday}T09:00` }, handOffAnswer: null };
+    await applyFirstReadDeadline(env, { cardId: msg!.work_card_id, decision, written: "rename Beat 3 to Beat C ... Live by Monday morning please.", now: wrote });
+    await applyFirstReadDeadline(env, { cardId: msg!.work_card_id, decision: { ...decision, deadline: { words: "Live by Monday morning", local: `${new Date(wrote.getTime() + 30 * 86_400_000).toISOString().slice(0, 10)}T09:00` } }, written: "Live by Monday morning", now: wrote });
     const job = await env.WP_OS_DB.prepare("SELECT w.target_repo, w.property_host, c.priority, c.request_json FROM web_property_change w JOIN work_card c ON c.id = w.work_card_id WHERE w.target_repo = 'topbarz-voting'").first<{ target_repo: string; property_host: string; priority: string; request_json: string }>();
     expect(job, "a Porter job was opened for the new repo").not.toBeNull();
     expect(job!.property_host).toBe("voting.topbarz.xyz");
     expect(job!.priority, "'Live by Monday morning' set the priority").toMatch(/HIGH|URGENT/);
     expect(JSON.parse(job!.request_json).due.due_words).toMatch(/by Monday morning/i);
+    expect(JSON.parse(job!.request_json).due.due_at.slice(0, 10), "the first due stands; a later read never moves it").toBe(monday);
     expect(await cardCount()).toBeGreaterThan(before);
     const received = sent.slice(sentBefore).find((m) => m.to === SCOOTER && m.text.includes("Registered seq23/topbarz-voting"));
     expect(received, `RECEIVED went to Scooter and says the repo was registered (got: ${sent.slice(sentBefore).map((m) => m.subject).join(" | ")})`).toBeDefined();

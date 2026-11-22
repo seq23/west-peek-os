@@ -194,7 +194,8 @@ export async function decideReplyWords(
     text: words,
     via: "REPLY",
     ackOnThread: steer.thread_token,
-    // "yes" to Porter's own "Did you mean…?" is read first inside, as the answer to that question (structure, not meaning).
+    // His answer to Porter's own "Did you mean…?" is THIS read's field (one read per email); no read → unsure, it stands.
+    answer: read.state === "READ" ? (d?.handOffAnswer ?? null) : null,
     intent: read.state === "READ" ? intent : undefined,
     beforeActing: async () => {
       if (answeredByThis) await (await import("./blocks")).restoreBlock(env, card.id, "his reply was about who owns the card, not the answer to its question");

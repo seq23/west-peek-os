@@ -233,7 +233,12 @@ export async function ownershipFromWords(
     intent?: OwnershipIntent | null;
     /** Runs once, just before the words act on the card (the reply door restores a block his reply had answered). */
     beforeActing?: () => Promise<unknown>;
-    /** Who reads his answer to Porter's question (tests pass a stub; production the partner ladder). */
+    /**
+     * His answer to Porter's pending "Did you mean hand this card to …?", from the FIRST READ of this email (one read per
+     * email, review of #574). Absent (the NOTE path, which has no first read) → his note is read here once.
+     */
+    answer?: "yes" | "no" | "unsure" | null;
+    /** Who reads his answer to Porter's question on the NOTE path (tests pass a stub; production the partner ladder). */
     readers?: readonly Reader[];
   },
 ): Promise<OwnershipChange | null> {
@@ -248,16 +253,23 @@ export async function ownershipFromWords(
     (input.via === "REPLY" ? Boolean(input.ackOnThread) && pending.token === input.ackOnThread : pending.via === "NOTE");
   if (answersIt) {
     /*
-     * HIS ANSWER TO "Did you mean hand this card to …?" IS READ BY A MODEL (22 Nov 2026): only a plain yes hands it
-     * over; unsure does nothing and the question stands. `confirmsHandOff` reads it only when no model answered.
+     * HIS ANSWER TO "Did you mean hand this card to …?" IS READ BY A MODEL (22 Nov 2026), ONCE: on a reply it is the
+     * first read's field; on a note (no first read) his note is read here. Only a plain yes hands it over; a no ends the
+     * question; unsure, or no model at all, does nothing and the question stands. Never a word list.
      */
     const to = partnerFor(pending!.to);
-    const { read } = await readInbound(env, { context: `Porter asked him: "${to ? handOffQuestion(to) : `Did you mean hand this card to ${pending!.to}?`}"`, from: writer!.email, subject: "Re: hand-off question", words: input.text, firmScope: card.firm_scope, employeeId: null }, input.readers);
-    const meant = confirmsOf(read, input.text);
+    const meant =
+      input.answer !== undefined
+        ? confirmsOf(input.answer === null ? { answer: "unsure", reader: "FIRST_READ" } : { answer: input.answer, reader: "FIRST_READ" })
+        : confirmsOf((await readInbound(env, { context: `Porter asked him: "${to ? handOffQuestion(to) : `Did you mean hand this card to ${pending!.to}?`}"`, from: writer!.email, subject: "Re: hand-off question", words: input.text, firmScope: card.firm_scope, employeeId: null }, input.readers)).read);
     if (meant.confirmed) {
       await input.beforeActing?.();
       await resolveQuestion(env, card, writer!.firmUserId, "confirmed");
       return changeOwnership(env, { cardId: input.cardId, actor: input.writer, action: "HAND_OFF", target: pending!.to, via: input.via, said: input.text, ackOnThread: input.ackOnThread ?? null });
+    }
+    if (meant.declined) {
+      await resolveQuestion(env, card, writer!.firmUserId, "declined");
+      return null;
     }
     if (meant.unsure) return null;
   } else if (confirmsHandOff(input.text)) {
@@ -315,6 +327,14 @@ async function pendingQuestion(env: Env, cardId: string): Promise<{ by: string; 
   } catch {
     return null;
   }
+}
+
+/** Porter's pending "Did you mean hand this card to …?", in the words he was asked; null when none is pending. */
+export async function pendingHandOffQuestion(env: Env, cardId: string): Promise<string | null> {
+  const pending = await pendingQuestion(env, cardId).catch(() => null);
+  if (!pending) return null;
+  const to = partnerFor(pending.to);
+  return to ? handOffQuestion(to) : `Did you mean hand this card to ${pending.to}?`;
 }
 
 async function resolveQuestion(env: Env, card: CardRow, actorId: string, how: string): Promise<void> {

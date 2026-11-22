@@ -7,6 +7,8 @@ import { contentHashes, recordBrandMail, recordBrandReplyText } from "../src/wor
 import { applyBrandReplyApproval, approvalWords, changedLines, sendReplyApprovals, type ReplyDrafter } from "../src/worker/services/tlcBrandReply";
 import { THREE_THINGS_OFFER, classifyBrandReply } from "../src/shared/tlc/brandReply";
 import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
+// Her plain fixture answers are read by the stand-in model (production: a model; no model decides nothing).
+vi.mock("../src/worker/services/inboundRead", async (orig) => (await import("./helpers/standInModel")).withStandIn(await orig()));
 
 /**
  * BRAND REPLIES GO IN TWO ROUNDS (owner, 6 Nov 2026: "any emails where they are ready to send pricing info they stop

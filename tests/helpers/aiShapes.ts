@@ -11,6 +11,8 @@ type Decision = {
   takeBack?: boolean | null;
   cc?: string[];
   backBy?: string | null;
+  deadline?: { words: string; local: string } | null;
+  handOffAnswer?: "yes" | "no" | "unsure" | null;
 };
 
 export function firstRead(o: {
@@ -32,7 +34,7 @@ export function firstRead(o: {
     unclear: o.unclear ?? [],
     files: o.files ?? [],
     next: o.next ?? null,
-    decision: d ? { property: null, handOffTo: null, planApproved: null, holds: [], takeBack: null, cc: [], backBy: null, ...d } : null,
+    decision: d ? { property: null, handOffTo: null, planApproved: null, holds: [], takeBack: null, cc: [], backBy: null, deadline: null, handOffAnswer: null, ...d } : null,
   });
 }
 

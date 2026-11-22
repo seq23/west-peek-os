@@ -10,6 +10,8 @@ import { inboundRead } from "./helpers/aiShapes";
 import type { Reader } from "../src/worker/services/partnerUnderstood";
 import { parseDraftReply } from "../src/shared/tlc/draftReply";
 import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
+// Her plain fixture answers are read by the stand-in model (production: a model; no model decides nothing).
+vi.mock("../src/worker/services/inboundRead", async (orig) => (await import("./helpers/standInModel")).withStandIn(await orig()));
 
 /**
  * ONE TLC EMAIL A WEEK, APPROVED BY REPLY (owner, 24 Oct 2026). Fake brands and addresses only.

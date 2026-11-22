@@ -8,7 +8,7 @@
  *     just a first read"), then Claude or Codex, then Workers AI. Gemini reads with committed LPs' names and deal terms
  *     masked (partnerUnderstood.ts `maskedGeminiRead`, owner ruling 19 Nov 2026), and skips the email when it cannot mask.
  * A reader that is not there is passed over; one whose answer does not parse is passed over too. No reader: null, and
- * the caller decides from its word lists and says so (NAMED STOP INBOUND_NO_MODEL_READER).
+ * an approval, skip or hand-off is unsure and the door asks again (NAMED STOP INBOUND_NO_MODEL_READER, logged here).
  */
 import type { Env } from "../env";
 import { FIRST_READERS, type Reader } from "./partnerUnderstood";

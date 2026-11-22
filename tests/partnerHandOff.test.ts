@@ -34,6 +34,8 @@ import {
 import { handOffEmail, trailLine } from "../src/shared/work/handOffEmail";
 import { ackMessage } from "../src/client/pages/NotificationsPage";
 import { trailSentence } from "../src/shared/work/cardTimeline";
+// A plain "yes" NOTE to Porter's question is read by the stand-in model (production: a model; no model decides nothing).
+vi.mock("../src/worker/services/inboundRead", async (orig) => (await import("./helpers/standInModel")).withStandIn(await orig()));
 
 /**
  * HAND A WORK CARD TO THE OTHER PARTNER, WITH PRIMARY AND SECONDARY OWNERS (owner, 23 Sep 2026;
@@ -658,14 +660,34 @@ describe("unsure → Porter asks once; 'yes' performs it", () => {
     sent.length = 0;
     await replyFrom(SEQUOIA, "yes", `wpt_${"a".repeat(32)}`);
     expect((await card(id)).requested_by_email).toBe(SEQUOIA);
-    // "yes" on the question's thread performs it.
+    // With no first read (no reader answered), even "yes" on the question's thread is unsure: the question stands.
     sent.length = 0;
     await replyFrom(SEQUOIA, "yes", token);
+    expect((await card(id)).requested_by_email, "no model, no hand-off").toBe(SEQUOIA);
+    expect(sent).toEqual([]);
+    // "yes" on the question's thread, read as yes by the FIRST READ of that reply (one read per email), performs it.
+    sent.length = 0;
+    await replyFrom(SEQUOIA, "yes", token, { handOffAnswer: "yes" });
     c = await card(id);
     expect(c.requested_by_email).toBe(SCOOTER);
     expect(c.secondary_partner_email).toBe(SEQUOIA);
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ to: [SCOOTER], cc: [SEQUOIA] });
+  });
+
+  it("by reply: the first read's NO to the question ends it, from that one read (no second model call)", async () => {
+    const id = "wc_handoff_reply_no";
+    const { previewThread } = await seedCard(id);
+    await replyFrom(SEQUOIA, "Scooter should probably own this", previewThread);
+    const asked = await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'work_card.hand_off_confirm_asked'").bind(id).first<{ payload_json: string }>();
+    const token = JSON.parse(asked!.payload_json).token as string;
+    const { pendingHandOffQuestion } = await import("../src/worker/services/handOff");
+    expect(await pendingHandOffQuestion(env, id), "the question rides in the first read's context").toBe("Did you mean hand this card to Scooter? Reply 'yes' and I will.");
+    sent.length = 0;
+    await replyFrom(SEQUOIA, "No, keep it with me. Scooter, hand it back if he takes it.", token, { handOffAnswer: "no" });
+    expect((await card(id)).requested_by_email).toBe(SEQUOIA);
+    expect(await pendingHandOffQuestion(env, id), "a no closes the question").toBeNull();
+    expect(sent).toEqual([]);
   });
 
   it("by note: the ack is the question, and a 'yes' note performs it", async () => {
@@ -690,13 +712,25 @@ describe("unsure → Porter asks once; 'yes' performs it", () => {
     expect(asked.body.ack).toBe("Did you mean hand this card to Scooter? Reply 'yes' and I will.");
     const says = (answer: string): Reader[] => [{ name: "SEAT", read: async () => ({ ok: true, text: inboundRead({ answer }), detail: "ok", reader: "CLAUDE" }) }];
     const answer = (text: string, readers: Reader[]) => ownershipFromWords(env, { cardId: id, writer: SEQUOIA, text, via: "NOTE", readers });
-    // ABUSE: "yes" inside a refusal is not a yes.
-    expect(await answer("yes, but I can't say yes to Scooter owning it", says("no"))).toBeNull();
+    // Unsure, or every reader out, never hands off: the question stands.
     expect(await answer("hmm, not sure yet", says("unsure"))).toBeNull();
+    expect(await answer("yes", [])).toBeNull();
     expect((await card(id)).requested_by_email).toBe(SEQUOIA);
     // The question still stands: a plain yes read by the model hands it over.
     expect(await answer("Yes, give it to him", says("yes"))).toMatchObject({ ok: true, action: "HAND_OFF", primary: SCOOTER });
     expect((await card(id)).requested_by_email).toBe(SCOOTER);
+  });
+
+  it("a model's NO ends the question as no: nothing moves, a later 'yes' hands nothing over, and no keyword reading follows", async () => {
+    const id = "wc_handoff_model_no";
+    await seedCard(id);
+    await call(`/api/work-cards/${id}/notes`, SEQUOIA, "POST", { body: "maybe Scooter could handle it?" });
+    const says = (answer: string): Reader[] => [{ name: "SEAT", read: async () => ({ ok: true, text: inboundRead({ answer }), detail: "ok", reader: "CLAUDE" }) }];
+    // ABUSE: "yes" inside a refusal is not a yes, and "hand it to Scooter" in the same words is not read by keywords.
+    expect(await ownershipFromWords(env, { cardId: id, writer: SEQUOIA, text: "yes, but I can't say yes to Scooter owning it. Don't hand it to Scooter.", via: "NOTE", readers: says("no") })).toBeNull();
+    expect(await env.WP_OS_DB.prepare("SELECT json_extract(payload_json, '$.how') AS how FROM event_record WHERE object_id = ?1 AND event_type = 'work_card.hand_off_confirm_resolved'").bind(id).first<{ how: string }>()).toEqual({ how: "declined" });
+    expect(await ownershipFromWords(env, { cardId: id, writer: SEQUOIA, text: "yes", via: "NOTE", readers: says("yes") }), "the question is closed").toBeNull();
+    expect((await card(id)).requested_by_email).toBe(SEQUOIA);
   });
 
   it("a clear phrasing by reply hands off without asking; 'cc Scooter' only records a cc", async () => {

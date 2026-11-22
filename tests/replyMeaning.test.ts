@@ -4,22 +4,24 @@ import { WORD_LISTS, parseInboundRead } from "../src/shared/intake/inboundRead";
 import { approvesOf, confirmsOf, deadlineOf, draftApprovalOf } from "../src/shared/intake/replyMeaning";
 
 /**
- * WHAT A REPLY MEANS IS THE MODEL'S READ (22 Nov 2026, engineering sweep row 5). The word lists run only when no model
- * answered; unsure never approves, skips, sends or hands over; a model's note or deadline is believed only where it is
- * in what was written. Fake text only.
+ * WHAT A REPLY MEANS IS THE MODEL'S READ (22 Nov 2026, engineering sweep row 5). With no model an approval, a skip or
+ * a hand-off is UNSURE (review of #574); only a deadline falls back to its word list. Unsure never approves, skips,
+ * sends or hands over; a model's note or deadline is believed only where it is in what was written. Fake text only.
  */
 const read = (o: Record<string, unknown>) => parseInboundRead(inboundRead(o), "CLAUDE")!;
 
 describe("her approval of numbered drafts", () => {
-  it("a refusal that carries the word yes approves nothing, read by the model or by the word lists", () => {
+  it("a refusal that carries the word yes approves nothing; with no model nothing is approved and every draft is unsure", () => {
     const said = "I can't say yes to this";
     const m = draftApprovalOf(read({ answer: "no", all_items: "approve" }), said, 3);
     expect(m.reply.approveAll, "approve-all needs a plain yes as well").toBe(false);
     expect(m.reply.approve).toEqual([]);
-    const w = draftApprovalOf(null, said, 3);
-    expect(w.reader).toBe(WORD_LISTS);
-    expect(w.reply.approveAll).toBe(false);
-    expect(w.reply.approve).toEqual([]);
+    for (const words of [said, "approve all", "1, 2 and 3 are good", "skip 2"]) {
+      const w = draftApprovalOf(null, words, 3);
+      expect(w.reader).toBe(WORD_LISTS);
+      expect(w.reply, `"${words}" with no model decides nothing`).toEqual({ approveAll: false, approve: [], skip: [], change: [] });
+      expect(w.unsure).toEqual([1, 2, 3]);
+    }
   });
 
   it("unsure items are named and nothing is done for them; an unsure answer to everything leaves every draft waiting", () => {
@@ -41,15 +43,17 @@ describe("her approval of numbered drafts", () => {
 });
 
 describe("one approve (the send pause) and a hand-off yes", () => {
-  it("only a plain yes counts; unsure is unsure; with no model the word lists decide", () => {
+  it("only a plain yes counts; unsure is unsure; with no model an approval is unsure, never approved", () => {
     expect(approvesOf(read({ answer: "no" }), "I can't say yes to this")).toMatchObject({ approved: false, unsure: false });
     expect(approvesOf(read({ answer: "unsure" }), "hmm")).toMatchObject({ approved: false, unsure: true });
     expect(approvesOf(read({ answer: "yes" }), "go ahead")).toMatchObject({ approved: true, reader: "CLAUDE" });
-    expect(approvesOf(null, "I can't say yes to this")).toEqual({ approved: false, unsure: false, reader: WORD_LISTS });
-    expect(approvesOf(null, "approve")).toMatchObject({ approved: true, reader: WORD_LISTS });
-    expect(confirmsOf(read({ answer: "no" }), "yes, but not to her")).toMatchObject({ confirmed: false });
-    expect(confirmsOf(read({ answer: "unsure" }), "maybe")).toMatchObject({ confirmed: false, unsure: true });
-    expect(confirmsOf(read({ answer: "yes" }), "yep, she has it")).toMatchObject({ confirmed: true });
+    expect(approvesOf(null, "I can't say yes to this")).toEqual({ approved: false, unsure: true, reader: WORD_LISTS });
+    expect(approvesOf(null, "approve")).toEqual({ approved: false, unsure: true, reader: WORD_LISTS });
+    expect(approvesOf(null, "Approve? No, not yet.")).toEqual({ approved: false, unsure: true, reader: WORD_LISTS });
+    expect(confirmsOf(read({ answer: "no" }))).toMatchObject({ confirmed: false, declined: true, unsure: false });
+    expect(confirmsOf(read({ answer: "unsure" }))).toMatchObject({ confirmed: false, declined: false, unsure: true });
+    expect(confirmsOf(read({ answer: "yes" }))).toMatchObject({ confirmed: true, declined: false });
+    expect(confirmsOf(null), "no model: the hand-off question stands").toEqual({ confirmed: false, declined: false, unsure: true, reader: WORD_LISTS });
   });
 });
 

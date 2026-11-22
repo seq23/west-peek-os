@@ -1320,12 +1320,7 @@ export async function applyBrandReplyApproval(
   const { read } = await readInbound(env, { context: `Wynn's email ${ref} with ${ids.length} brand reply draft(s) for approval, numbered 1 to ${ids.length}; it asks "${BRAND_REPLY_ASK}" (approve, skip, or her changes, by number)`, from: message.fromHeader ?? from, subject: message.subject, words: said, firmScope, employeeId: WYNN }, deps.read);
   const meant = draftApprovalOf(read, said, ids.length);
   const parsed = meant.reply;
-  if (!read) {
-    // THE WORD LISTS' READ (no model answered). One reply in the email: free text that is not an approve/skip is her
-    // change to it. A bare "skip" on a one-draft email (the reminder offers it, 9 Nov 2026) skips that draft.
-    if (isEmptyReply(parsed) && ids.length === 1 && /^\s*(?:skip|skip it|don't send|do not send)[.!]?\s*$/i.test(said)) parsed.skip.push(1);
-    if (isEmptyReply(parsed) && ids.length === 1 && said && !/^(no|cancel)\b/i.test(said)) parsed.change.push({ n: 1, note: said });
-  }
+  // NO MODEL, NO DECISION (review of #574): with no reader every draft is unsure, named below and asked again.
   if (isEmptyReply(parsed) && meant.unsure.length === 0) return { handled: false, ref, detail: `a reply to ${ref} carried no approve / skip / change instruction (${readerWords(meant.reader)})` };
   const owner = await actorForFirmUser(env, TLC_OWNER.firmUserId);
   if (!owner) return { handled: false, ref, detail: `${TLC_OWNER.email} is not an active person in the OS` };

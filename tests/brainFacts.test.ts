@@ -104,7 +104,7 @@ describe("an idea for later is shown to him once, never as both a note and a hol
 });
 
 describe("his holds are the reader's; his brain's standing holds are records and always stand", () => {
-  it("a hold the reader lists is kept and the brain's go-live hold collapses into it; a reader that lists none is not overruled by the word lists", async () => {
+  it("a hold the reader lists is kept and the brain's go-live hold collapses into it; a typed hold the reader leaves out is asked, never absent", async () => {
     const written = "1. Move \"What we do\" above \"Who we work with.\"\n2. Remove the badge row.\n\nEverything below stays in the preview for me to check first; nothing goes live.";
     const typedHold = "Everything below stays in the preview for me to check first; nothing goes live.";
     const asks = ["Move \"What we do\" above \"Who we work with.\"", "Remove the badge row."];
@@ -113,6 +113,12 @@ describe("his holds are the reader's; his brain's standing holds are records and
     const listed = await understand(env, { subject: "site", written, read: [readWith([typedHold])], employeeId: null, firmScope: "west-peek", standingHolds });
     expect(listed.brief.holds).toEqual([typedHold, "Do not build invoice or billing features yet"]);
     const none = await understand(env, { subject: "site", written, read: [readWith([])], employeeId: null, firmScope: "west-peek", standingHolds });
-    expect(none.brief.holds, "the brain's holds stand; the word lists add nothing to a model read").toEqual(standingHolds);
+    expect(none.brief.holds, "the brain's holds stand").toEqual(expect.arrayContaining(standingHolds));
+    // His typed hold survives a reader that omits it: kept as a hold, or asked as one; never gone.
+    const kept = none.brief.holds.includes(typedHold);
+    const asked = none.brief.questions.some((q) => q.includes(typedHold) && /hold\?/.test(q));
+    expect(kept || asked, `"${typedHold}" is kept or asked (holds: ${JSON.stringify(none.brief.holds)}; questions: ${JSON.stringify(none.brief.questions)})`).toBe(true);
+    // ...and only once: a reader that kept it as a hold is not asked about it again.
+    expect(listed.brief.questions.filter((q) => q.includes(typedHold))).toEqual([]);
   });
 });

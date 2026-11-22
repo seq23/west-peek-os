@@ -356,7 +356,11 @@ describe("his questions are steady", () => {
     expect(os.brief.questions.length).toBeGreaterThan(0);
     expect(again.brief.questions).toEqual(os.brief.questions);
     const model = await understand(env, { subject: "d", written: DASHBOARD, read: [readerSaying("CLAUDE", firstRead({ asks: ["The pipeline home is in good shape."], questions: ["Is a Lead anything that came in?", "Should the chart show every month since 2019?"] }))], employeeId: null, firmScope: "west-peek" });
-    expect(model.brief.questions, "a question he never wrote is dropped").toEqual(["Is a Lead anything that came in?"]);
+    const asked = model.brief.questions.filter((q) => q.startsWith("Did you mean this as a hold? "));
+    expect(model.brief.questions.filter((q) => !asked.includes(q)), "a question he never wrote is dropped").toEqual(["Is a Lead anything that came in?"]);
+    // The holds he typed that this reader left out are asked, never lost (review of #574), each quoting his own line.
+    expect(asked).toEqual(['Did you mean this as a hold? "Preview first, nothing live until I say so."', 'Did you mean this as a hold? "No client names on it without my written OK."']);
+    for (const q of asked) expect(DASHBOARD).toContain(/"(.*)"$/.exec(q)![1]!);
   });
 });
 

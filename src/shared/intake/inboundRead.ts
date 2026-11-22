@@ -79,7 +79,7 @@ export const WORD_LISTS = "WORD_LISTS";
 /** The named stop on every decision the word lists made because no model answered. */
 export const NO_MODEL_READER = "INBOUND_NO_MODEL_READER";
 
-const central = (now: Date): string =>
+export const central = (now: Date): string =>
   new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", weekday: "short", year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(now);
 
 export function inboundReadPrompt(input: { context: string; from: string; subject: string; words: string; now?: Date }): string {
