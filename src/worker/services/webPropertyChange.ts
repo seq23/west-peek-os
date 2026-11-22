@@ -1773,12 +1773,17 @@ export async function applyReport(
        * "Blocked" for a laptop lid.
        */
       // 0253: an infrastructure wait, in the three-part shape; it clears itself and the email says so.
+      // Each miss is released by itself when the Mac is back (`releaseMacAsleepBlocks`); the third is not a nap.
+      const missed = (await macMissedRuns(env, card.id)).length;
       const why2 = await blockCard(env, card, {
         reason: "a_question_for_you",
         trying: card.title,
         employee: PORTER_NAME,
         who: whoFor(card),
-        detail: waitDetail("MAC_ASLEEP", { why: dueLine(readWebPropertyAsk(card.request_json)?.due) }).slice(0, 900),
+        detail: (missed >= MAC_ASLEEP_TRIES
+          ? waitDetail("TRIED_AND_STOPPED", { what: `${missed} times`, why: "the job was queued for the Mac each time and no machine picked it up, even after the Mac was back" })
+          : waitDetail("MAC_ASLEEP", { why: dueLine(readWebPropertyAsk(card.request_json)?.due) })
+        ).slice(0, 900),
       });
       return { finished: false, blocked: true, progressed: false, detail: why2 };
     }
@@ -2357,6 +2362,92 @@ export async function releasePlansNobodyNeedsToAnswer(env: Env): Promise<string[
       objectId: r.id,
       firmScope: "west-peek",
       payload: { asks: asks.length },
+    });
+    released.push(r.id);
+  }
+  return released;
+}
+
+/**
+ * HOW MANY TIMES THE MAC MAY MISS ONE CARD'S JOB before Porter stops promising it resumes by itself (22 Nov 2026,
+ * review of #577). The third queue ceiling with nobody claiming is not a sleeping laptop; it is a lane that is not
+ * picking this job up, and the card says so and asks for "try again" (TRIED_AND_STOPPED) instead of looping.
+ */
+export const MAC_ASLEEP_TRIES = 3;
+
+/** The LOCAL_JOB runs of a card that ran out their queue ceiling with no machine claiming them (not stopped on purpose). */
+async function macMissedRuns(env: Env, cardId: string): Promise<Array<{ id: string; created_at: string }>> {
+  const rows =
+    (
+      await env.WP_OS_DB.prepare(
+        `SELECT id, created_at, resolution FROM subscription_seat_run
+          WHERE work_card_id = ?1 AND run_kind = 'LOCAL_JOB' AND status = 'ABANDONED' AND claimed_by IS NULL
+          ORDER BY created_at DESC`,
+      )
+        .bind(cardId)
+        .all<{ id: string; created_at: string; resolution: string | null }>()
+    ).results ?? [];
+  return rows.filter((r) => !stoppedOnPurpose(r.resolution));
+}
+
+/**
+ * A CARD THE SLEEPING MAC STOPPED RESUMES BY ITSELF WHEN THE MAC IS BACK (22 Nov 2026, review of #577). The MAC_ASLEEP
+ * wait tells the partner "it resumes by itself the next time the Mac is open"; until now nothing did that, so two
+ * real cards sat BLOCKED for two Mac days on that promise. Each sweep tick inside the Mac's day, a card blocked
+ * because its newest LOCAL_JOB ran out its queue ceiling unclaimed goes back in the queue once a claimer has said
+ * hello (subscription_seat_device) since it was blocked; the next tick parks the same phase again. Read from the
+ * runs, not from the words on the card, so it also releases cards blocked before this existed. Bounded: a card the
+ * Mac has missed MAC_ASLEEP_TRIES times is never released here (it was blocked as TRIED_AND_STOPPED instead).
+ * Shape of `releaseSpendSettingBlocks`. A held card is left exactly as it is.
+ */
+export async function releaseMacAsleepBlocks(env: Env, now: Date = new Date()): Promise<string[]> {
+  const { macDayOpen } = await import("../../shared/work/localJobs");
+  if (!macDayOpen(now)) return [];
+  const { isFresh } = await import("../ai/subscriptionSeats");
+  const seen = await env.WP_OS_DB.prepare("SELECT MAX(last_seen_at) AS at FROM subscription_seat_device").first<{ at: string | null }>();
+  if (!seen?.at || !isFresh(seen.at, now)) return [];
+  const rows =
+    (
+      await env.WP_OS_DB.prepare(
+        `SELECT c.id, c.firm_scope, c.blocked_at FROM work_card c
+          WHERE c.kind = ?1 AND c.state = 'BLOCKED' AND c.held_at IS NULL AND c.block_reason = 'a_question_for_you'
+            AND c.blocked_at IS NOT NULL AND c.blocked_at < ?2
+          LIMIT 50`,
+      )
+        .bind(WEB_PROPERTY_CHANGE_KIND, seen.at)
+        .all<{ id: string; firm_scope: string; blocked_at: string }>()
+    ).results ?? [];
+  const released: string[] = [];
+  for (const r of rows) {
+    const newest = await env.WP_OS_DB.prepare(
+      "SELECT id, status, claimed_by, resolution FROM subscription_seat_run WHERE work_card_id = ?1 AND run_kind = 'LOCAL_JOB' ORDER BY created_at DESC LIMIT 1",
+    )
+      .bind(r.id)
+      .first<{ id: string; status: string; claimed_by: string | null; resolution: string | null }>();
+    // Only a block whose cause is the unclaimed run: any other block on this card is someone's question, not the Mac's.
+    if (!newest || newest.status !== "ABANDONED" || newest.claimed_by || stoppedOnPurpose(newest.resolution)) continue;
+    if ((await macMissedRuns(env, r.id)).length >= MAC_ASLEEP_TRIES) continue;
+    const res = await env.WP_OS_DB.prepare(
+      `UPDATE work_card
+          SET state = 'OPEN', work_attempts = 0, work_steps = 0, lease_until = NULL,
+              work_last_failure = NULL, work_last_failure_at = NULL,
+              next_action = 'Back in the queue: the Mac is open again, so this is being tried again.',
+              block_answer = 'AUTO-RETRY: the Mac is open again', block_answered_by = 'work_sweep', block_answered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+              block_nag_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ?1 AND state = 'BLOCKED' AND held_at IS NULL`,
+    )
+      .bind(r.id)
+      .run();
+    if ((res.meta?.changes ?? 0) === 0) continue;
+    await appendFinding(env, r.id, `Back in the queue by itself: the Mac checked in at ${seen.at}, inside its day, after this stopped for want of it.`);
+    await appendEvent(env, {
+      eventType: "work_card.auto_released",
+      actorType: "system",
+      actorId: "work_sweep",
+      objectType: "work_card",
+      objectId: r.id,
+      firmScope: r.firm_scope,
+      payload: { reason: "mac_back", run: newest.id, seen: seen.at },
     });
     released.push(r.id);
   }

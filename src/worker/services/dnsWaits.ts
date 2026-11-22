@@ -72,12 +72,14 @@ async function email(env: Env, row: DnsWaitRow, kind: "RECORD" | "REMINDER" | "L
     kind === "LIVE"
       ? `${row.host} is live: https://${row.host} now serves the site. Nothing needed from you.`
       : kind === "REMINDER"
-        ? `Seven days on, ${row.host} still has no DNS record pointing at the site; it is live at https://${row.project}.pages.dev meanwhile. The record is below — same as before.`
+        ? row.status === "record_seen"
+          ? `Seven days on, public DNS shows the record for ${row.host}, but https://${row.host} does not serve the site yet; it is live at https://${row.project}.pages.dev meanwhile. The record is below, to check it matches exactly.`
+          : `Seven days on, public DNS still shows no record for ${row.host} pointing at the site; it is live at https://${row.project}.pages.dev meanwhile. The record is below — same as before.`
         : `To put the site on ${row.host}: at your DNS provider add ${row.record_type} ${row.record_name} → ${row.record_target}${row.txt_name && row.txt_value ? ` and TXT ${row.txt_name} → ${row.txt_value}` : ""}. Until then it is live at https://${row.project}.pages.dev.`;
   const sections =
     kind === "LIVE"
       ? [
-          { label: "What happened", bullets: [`Cloudflare reports the custom domain ${row.host} active on the Pages project ${row.project}.`] },
+          { label: "What happened", bullets: [`Public DNS answers ${row.record_type} ${row.host} → ${row.record_target}, the record you added, and https://${row.host} answers with the site.`] },
           { label: "Your call", bullets: ["Nothing — this closes the DNS item on the card."] },
         ]
       : [
@@ -192,7 +194,9 @@ export async function applyDnsStatus(env: Env, row: DnsWaitRow, status: string, 
     await appendEvent(env, { eventType: "web_property_dns.active", actorType: "system", actorId: "dns_waits", objectType: "web_property_dns", objectId: row.id, firmScope: row.firm_scope, payload: { host: row.host, project: row.project } });
     return "live";
   }
-  if (!row.reminded_at && now.getTime() - Date.parse(row.created_at) > DNS_WAIT_DAYS * 86_400_000) {
+  // A FAILED LOOKUP IS NEVER "NO RECORD" (22 Nov 2026, review of #577): with DNS unreadable nothing is known, so the
+  // reminder waits for the next check that reads it, rather than tell the partner his record is missing.
+  if (status !== "unknown" && !row.reminded_at && now.getTime() - Date.parse(row.created_at) > DNS_WAIT_DAYS * 86_400_000) {
     const claimed = await env.WP_OS_DB.prepare("UPDATE web_property_dns SET reminded_at = ?2 WHERE id = ?1 AND reminded_at IS NULL").bind(row.id, at).run();
     if ((claimed.meta?.changes ?? 0) === 0) return "checked";
     await email(env, { ...row, status }, "REMINDER");

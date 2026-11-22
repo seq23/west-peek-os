@@ -220,6 +220,29 @@ describe("R21 (addendum item 10): a Drive folder the ask names is watched, loade
     expect(row!.last_checked_at, "stamped so the next tick, not this one, retries").not.toBeNull();
   });
 
+  it("outage: the token works but Drive's listing fails (5xx) — unread, never an empty folder, no email", async () => {
+    const id = await card("Panel bios", `Walker, use the notes in ${FOLDER.replace("1AbCdEfGhIjKlMnOpQrStUv", "1LiStDoWnFoLdEr678901")}`);
+    const w = await env.WP_OS_DB.prepare("SELECT id FROM drive_watch WHERE work_card_id = ?1").bind(id).first<{ id: string }>();
+    await env.WP_OS_DB.prepare("UPDATE drive_watch SET created_at = '2026-01-01T00:00:00.000Z' WHERE id = ?1").bind(w!.id).run();
+    let tokens = 0;
+    let lists = 0;
+    const listDown = (async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.startsWith("https://oauth2.googleapis.com/token")) return tokens++, Response.json({ access_token: "ya29.fixture", expires_in: 3600 });
+      if (u.includes("/drive/v3/files?")) return lists++, new Response("backend error", { status: 503 });
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+    const before = sent.length;
+    const out = await sweepDriveWatches(env, new Date(), listDown);
+    expect(tokens, "the token was issued").toBeGreaterThan(0);
+    expect(lists, "the listing itself was what failed").toBeGreaterThan(0);
+    expect(out.find((r) => r.folder === "1LiStDoWnFoLdEr678901")?.did).toBe("unread");
+    expect(sent.length - before, "no 'still empty' email from a Drive listing failure").toBe(0);
+    const row = await env.WP_OS_DB.prepare("SELECT status, empty_told_at, files_seen FROM drive_watch WHERE id = ?1").bind(w!.id).first<{ status: string; empty_told_at: string | null; files_seen: number | null }>();
+    expect(row!.status, "still watched").toBe("WATCHING");
+    expect(row!.empty_told_at, "never recorded as told empty").toBeNull();
+  });
+
   it("a blocked card is picked back up when the files land", async () => {
     const id = await card("Deck notes", `Parker, use the notes in ${FOLDER.replace("1AbCdEfGhIjKlMnOpQrStUv", "1QwErTyUiOpAsDfGhJkL")}`);
     await blockCard(env, { id, title: "Deck notes", firm_scope: "west-peek" }, { reason: "a_question_for_you", trying: "Use the notes", employee: "Parker", detail: "The folder is empty." });

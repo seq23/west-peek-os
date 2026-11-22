@@ -147,6 +147,35 @@ describe("how it breaks", () => {
     expect(Date.parse(after!.last_checked_at), "stamped, so it is retried next interval rather than every minute").toBeGreaterThan(Date.now() - MS_MIN);
   });
 
+  it("outage at the reminder: DNS unreadable on day 8 sends nothing (never 'no record'); the next check that reads DNS reminds", async () => {
+    const row = await waitFor("dark.topbarz.xyz", "dark.pages.dev");
+    const day8 = new Date(Date.now() + (DNS_WAIT_DAYS + 1) * 86_400_000);
+    const dohDown = (async () => new Response("", { status: 502 })) as typeof fetch;
+    await checkedAgo(row.id, day8, 60);
+    const before = sent.length;
+    const out = await sweepDnsWaits(env, day8, dohDown);
+    expect(out.find((r) => r.host === "dark.topbarz.xyz")).toEqual({ host: "dark.topbarz.xyz", status: "unknown", did: "checked" });
+    expect(sent.length - before, "no email while DNS cannot be read").toBe(0);
+    expect((await env.WP_OS_DB.prepare("SELECT reminded_at FROM web_property_dns WHERE id = ?1").bind(row.id).first<{ reminded_at: string | null }>())!.reminded_at, "the reminder is still owed").toBeNull();
+    await checkedAgo(row.id, day8, 60);
+    expect((await sweepDnsWaits(env, day8, world({}))).find((r) => r.host === "dark.topbarz.xyz")?.did).toBe("reminded");
+    const mail = sent.slice(before).filter((m) => m.to === PARTNER && m.text.includes("dark.topbarz.xyz"));
+    expect(mail).toHaveLength(1);
+    expect(mail[0]!.text).toMatch(/public DNS still shows no record for dark\.topbarz\.xyz/);
+  });
+
+  it("the record is there but the site is not serving on day 8: the reminder says the record is seen, never that it is missing", async () => {
+    const row = await waitFor("half.topbarz.xyz", "half.pages.dev");
+    const day8 = new Date(Date.now() + (DNS_WAIT_DAYS + 1) * 86_400_000);
+    await checkedAgo(row.id, day8, 60);
+    const before = sent.length;
+    expect((await sweepDnsWaits(env, day8, world({ "half.topbarz.xyz": ["half.pages.dev"] }))).find((r) => r.host === "half.topbarz.xyz")).toEqual({ host: "half.topbarz.xyz", status: "record_seen", did: "reminded" });
+    const mail = sent.slice(before).filter((m) => m.to === PARTNER && m.text.includes("half.topbarz.xyz"));
+    expect(mail).toHaveLength(1);
+    expect(mail[0]!.text).toMatch(/public DNS shows the record for half\.topbarz\.xyz/);
+    expect(mail[0]!.text).not.toMatch(/no record|no DNS record/);
+  });
+
   it("data: two sweeps racing on a live host email the partner once", async () => {
     const row = await waitFor("race.topbarz.xyz", "race.pages.dev");
     await checkedAgo(row.id, new Date(), 60);
@@ -155,6 +184,9 @@ describe("how it breaks", () => {
     await checkedAgo(row.id, new Date(), 60);
     await sweepDnsWaits(env, new Date(), live);
     expect(liveMail("race.topbarz.xyz")).toHaveLength(1);
+    // The live email says what was checked (public DNS and the https answer), never a Cloudflare report it did not read.
+    expect(liveMail("race.topbarz.xyz")[0]!.text).toMatch(/Public DNS answers CNAME race\.topbarz\.xyz → race\.pages\.dev, the record you added, and https:\/\/race\.topbarz\.xyz answers with the site/);
+    expect(liveMail("race.topbarz.xyz")[0]!.text).not.toMatch(/Cloudflare reports/);
   });
 
   it("the wait ends: after its days the partner is reminded once, and never again", async () => {
