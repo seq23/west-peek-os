@@ -1418,7 +1418,15 @@ async function routeByPlainWords(
       },
       { id: chief?.id ?? seatId(input.chiefOfStaff), name: chief?.name ?? input.chiefOfStaff },
       seat.name,
-      `${strippedSubject(input.subject) || "A partner's email"}: ${written.replace(/\s+/g, " ").slice(0, 400)}`,
+      /*
+       * THE SUBJECT IS THE TITLE; THE READING IS THE BRIEF (22 Nov 2026, card wc_18b03a20). The
+       * brief was the email body flattened and cut at 400 characters, and the title its first 90:
+       * a forwarded pitch became "Pre-seed round: #dealflow Sequoia Taylor General Partner West Peek
+       * Ventures 415-355-4860 B" (her signature), which the finished email then quoted back to her
+       * as "What you asked". Her whole email already travels under "the original request".
+       */
+      `${strippedSubject(input.subject) || "A partner's email"}\n${read.reason}\nTheir whole email is under "the original request" below; work from that, not from this line.`,
+      { title: strippedSubject(input.subject) || `A partner's email for ${seat.name}` },
     );
     if (handed.ok) {
       await env.WP_OS_DB.prepare("UPDATE request_attachment SET work_card_id = ?2 WHERE work_card_id = ?1").bind(card.id, handed.cardId).run();

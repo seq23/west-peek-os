@@ -263,6 +263,9 @@ export function buildStepPrompt(ctx: LoopContext, stepsLeft: number): string {
  * action, and inventing one on its behalf — usually "done", the cheapest to fake — is how a loop
  * reports success it never had.
  */
+/** The ceiling on an employee's prose fields: far past any real answer, there only to bound a runaway. */
+export const PROSE_MAX = 40_000;
+
 export function parseDecision(raw: string): EmployeeDecision | null {
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
   const candidate = (fenced?.[1] ?? raw).trim();
@@ -285,14 +288,27 @@ export function parseDecision(raw: string): EmployeeDecision | null {
     const t = v.trim();
     return t ? t.slice(0, max) : undefined;
   };
+  /*
+   * PROSE IS NEVER CUT SILENTLY (22 Nov 2026, card wc_18b03a20). `finding` was read with the same
+   * 2,000-character `str` as a URL, so Wyatt's 4,480-character screening of a pitch reached the
+   * partner ending mid-sentence, and the draft reply it promised "below" never arrived. The card,
+   * the deliverable and the email are all sized for long findings (appendFinding, deliver); the
+   * parser was the one place still cutting. Words an employee writes for a person (finding, brief,
+   * needs) are kept whole up to a ceiling no real answer reaches, and past it the cut is said.
+   */
+  const prose = (v: unknown): string | undefined => {
+    const t = str(v, Number.MAX_SAFE_INTEGER);
+    if (!t || t.length <= PROSE_MAX) return t;
+    return `${t.slice(0, PROSE_MAX)}\n[… cut here at ${PROSE_MAX.toLocaleString("en-US")} of ${t.length.toLocaleString("en-US")} characters]`;
+  };
 
   const d: EmployeeDecision = { action: action as EmployeeAction };
   const objective = str(parsed.objective, 400);
   const startUrl = str(parsed.start_url, 2000);
-  const finding = str(parsed.finding, 2000);
-  const needs = str(parsed.needs, 800);
+  const finding = prose(parsed.finding);
+  const needs = prose(parsed.needs);
   const to = str(parsed.to, 40);
-  const brief = str(parsed.brief, 2000);
+  const brief = prose(parsed.brief);
   if (objective) d.objective = objective;
   if (to) d.to = to;
   if (brief) d.brief = brief;

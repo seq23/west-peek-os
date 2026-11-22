@@ -8,7 +8,7 @@ import { sweepIdentity, sweepOnce } from "../src/worker/services/workSweep";
 import { blockCard } from "../src/worker/services/blocks";
 import { replyToRequester } from "../src/worker/services/requestReply";
 import { employeeSenderHeader } from "../src/shared/registry/employeeMail";
-import { buildStepPrompt, parseDecision } from "../src/shared/work/employeeLoop";
+import { PROSE_MAX, buildStepPrompt, parseDecision } from "../src/shared/work/employeeLoop";
 import type { Env } from "../src/worker/env";
 
 /**
@@ -100,6 +100,14 @@ describe("Sequoia emails a request", () => {
       action: "assign", to: "Wyatt", brief: "Verify Sensori is real and on-thesis; say whether it is worth a call.",
     });
     expect(parseDecision('{"action":"assign","to":"Wyatt"}'), "a hand-off with no brief is not a decision").toBeNull();
+    // 22 Nov 2026, card wc_18b03a20: a 4,480-character finding was cut silently at 2,000 and the
+    // draft reply at its end never reached the partner. Prose comes back whole.
+    const long = `${"Evidence line. ".repeat(300)}DRAFT REPLY: 'Please send the deck.'`;
+    expect(parseDecision(JSON.stringify({ action: "done", finding: long }))!.finding).toBe(long.trim());
+    expect(parseDecision(JSON.stringify({ action: "assign", to: "Wyatt", brief: long }))!.brief).toBe(long.trim());
+    // Past the runaway ceiling the cut is said, never silent.
+    const runaway = parseDecision(JSON.stringify({ action: "done", finding: "x".repeat(PROSE_MAX + 10) }))!.finding!;
+    expect(runaway).toMatch(/\[… cut here at 40,000 of 40,010 characters\]$/);
     // Without colleagues the action is not offered at all.
     expect(buildStepPrompt({ title: "x", next_action: null, description: null, employee_name: "Wyatt", employee_role: "Analyst", allows_browser: false, prompt: null, guidance: "", history: [] }, 3)).not.toMatch(/assign —/);
   });
