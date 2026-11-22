@@ -5,7 +5,7 @@ import { isWebPropertyChange, OS_PROPERTY, OS_REPO, parseWebPropertyAsk, partsFr
 import { loadRegistry, registerFromEmail, registerNewRepo, registryEntryFor } from "./webPropertyRegistry";
 import { defaultReadReplyIntent, readReplyIntent, type ReplyIntent, type ReplyIntentReader } from "./replyIntent";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
-import { textBodyOf, topHeadersOf } from "../effects/mimeAttachments";
+import { textBodyOf, topHeadersOf } from "../effects/mail";
 import { storeAttachments } from "./requestMaterials";
 import { isReplyMessage, splitQuoted } from "../../shared/intake/replyBody";
 import type { Env } from "../env";
@@ -292,7 +292,7 @@ export interface EmailDeal {
  * top of the funnel is worse than no company — somebody has to notice it is wrong before they can
  * delete it.
  */
-export function dealFromMessage(subject: string, body: string, from: string, isDeck: boolean): EmailDeal | null {
+export async function dealFromMessage(subject: string, body: string, from: string, isDeck: boolean): Promise<EmailDeal | null> {
   const field = (key: string): string | null => {
     const m = new RegExp(`^\\s*${key}\\s*:\\s*(.+?)\\s*$`, "im").exec(body);
     return m ? m[1]!.trim() : null;
@@ -322,7 +322,7 @@ export function dealFromMessage(subject: string, body: string, from: string, isD
   // still offered — flagged, so the handler accepts it only when the register already knows the
   // name and hands anything else to Porter.
   const subjectUntagged = !named && !tagInSubject;
-  const corroborated = subjectUntagged ? forwardedCompany(subject, textBodyOf(body)) : null;
+  const corroborated = subjectUntagged ? forwardedCompany(subject, await textBodyOf(body)) : null;
 
   return {
     company,
@@ -759,13 +759,13 @@ export async function intakeDealFromEmail(env: Env, deal: EmailDeal): Promise<Fu
    */
   return openIntoFunnel(env, {
     route: "EMAIL",
-    origin: emailDealOrigin({ from: deal.from, text: readableMessage(deal.raw) }),
+    origin: emailDealOrigin({ from: deal.from, text: await readableMessage(deal.raw) }),
     company: deal.company,
     sector: deal.sector ?? null,
     one_liner: deal.one_liner ?? null,
     website: deal.website ?? null,
     source: deal.from,
-    raw: readableMessage(deal.raw),
+    raw: await readableMessage(deal.raw),
     is_deck: deal.isDeck,
     // FORWARDED, and they were not. This wrapper dropped both, so the PDF was extracted from the
     // MIME tree and then discarded one function later — the deck journey would have looked wired up
@@ -883,8 +883,8 @@ export async function handleScoutedIntake(ctx: RouteContext): Promise<Response> 
  * THE SAME 4,000-CHARACTER CAP, deliberately: it is a readable cap on a readable body rather than a
  * byte budget, and the whole message is in R2 for anyone who needs more than that.
  */
-export function readableMessage(raw: string, cap = 4000): string {
-  const text = textBodyOf(raw ?? "");
+export async function readableMessage(raw: string, cap = 4000): Promise<string> {
+  const text = await textBodyOf(raw ?? "");
   /*
    * A FORWARD IS THE PAYLOAD, NEVER A QUOTE (7 Oct 2026). This stripped everything below the first
    * quote marker on EVERY message — and "Begin forwarded message:" is one. Sequoia forwarded a
@@ -894,7 +894,7 @@ export function readableMessage(raw: string, cap = 4000): string {
    * our own earlier email); a MIME message whose headers say it is not a reply keeps its whole body.
    * Text with no headers at all (a typed note) is split as before.
    */
-  const headers = topHeadersOf(raw ?? "");
+  const headers = await topHeadersOf(raw ?? "");
   const notAReply = headers !== null && !isReplyMessage(headers);
   const written = notAReply ? text.trim() : splitQuoted(text).written.trim() || text.trim();
   return statedCut(written, cap, "the stored message");
@@ -959,7 +959,7 @@ export async function openRoutingCard(
       "",
       "--- the message ---",
       // DECODED AND QUOTE-STRIPPED, never `raw.slice`. See `readableMessage`.
-      readableMessage(input.raw),
+      await readableMessage(input.raw),
       "",
       storedMessageLine(input.emlKey, input.storeNote),
     ].join("\n"),
@@ -1033,7 +1033,7 @@ export async function openAssignmentCard(
    * request reached Porter as 6,000 characters of Received: and DKIM headers. What the card
    * carries is the text the partner typed — decoded, and with any quoted reply stripped.
    */
-  const written = readableMessage(input.raw, 100_000);
+  const written = await readableMessage(input.raw, 100_000);
   const card = await createWorkCardInternal(env, systemIdentity(), {
     title: `From ${input.partnerAddress}: ${strippedSubject(input.subject) || "(no subject)"}`,
     description: [

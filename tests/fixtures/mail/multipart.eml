@@ -1,0 +1,50 @@
+Received: from mail-yw1-x112b.google.com (mail-yw1-x112b.google.com [2607:f8b0:4864:20::112b])
+	by mx.cloudflare.net with ESMTPS id 4a1c2f9e0b
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com; s=20251104;
+From: Founder <founder@example.com>
+To: os@joinwestpeek.com
+Subject: Fwd: Northwind deck
+Message-ID: <multipart-fixture@mail.example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="outer_1"
+
+--outer_1
+Content-Type: multipart/related; boundary="rel_2"
+
+--rel_2
+Content-Type: multipart/alternative; boundary="alt_3"
+
+--alt_3
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+#wpdeck Deck attached =E2=80=94 we are raising a seed round.
+
+--alt_3
+Content-Type: text/html; charset=UTF-8
+
+<p>#wpdeck Deck attached &mdash; we are raising a seed round.</p><img src="cid:logo@x">
+--alt_3--
+
+--rel_2
+Content-Type: image/png; name="logo.png"
+Content-ID: <logo@x>
+Content-Disposition: inline; filename="logo.png"
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUg==
+--rel_2--
+
+--outer_1
+Content-Type: application/pdf; name="Northwind_Seed.pdf"
+Content-Disposition: attachment; filename="Northwind_Seed.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKMSAwIG9iajw8Pj5lbmRvYmoKdHJhaWxlcjw8Pj4KJSVFT0YK
+--outer_1
+Content-Type: text/csv; name="cap-table.csv"
+Content-Disposition: attachment; filename="cap-table.csv"
+
+holder,shares
+founders,8000000
+--outer_1--

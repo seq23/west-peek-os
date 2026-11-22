@@ -84,7 +84,7 @@ describe("the gate: an ask reaches a partner only when it is a decision or somet
     expect(ownerAskRefusal({ needs: "Copy and paste the founder's reply here.", holdsStoredMessage: false, staffNames: STAFF })?.rule).toBe("MANUAL_STEP");
   });
 
-  it("lets a real decision, a material only she has, and a secret or login through", () => {
+  it("lets a real decision, a material only she has, and a secret or login through", async () => {
     for (const needs of [
       "Should the memo use the 409A valuation or the last round's price?",
       "Which of the two venues do you want for the November Room?",
@@ -99,23 +99,23 @@ describe("the gate: an ask reaches a partner only when it is a decision or somet
 describe("the door: a forward is the payload, and its original can name the company", () => {
   const raw = iphoneForward("Fwd: Tidepool Robotics | seed round", "ada@tidepoolrobotics.example", "I'm Ada, founder of Tidepool Robotics. We build reef-survey drones.", "fwd-1@westpeek.ventures");
 
-  it("keeps the forwarded original on the card (it used to be quote-stripped to her signature)", () => {
-    const text = readableMessage(raw);
+  it("keeps the forwarded original on the card (it used to be quote-stripped to her signature)", async () => {
+    const text = await readableMessage(raw);
     expect(text).toContain("founder of Tidepool Robotics");
     expect(text).toContain("ada@tidepoolrobotics.example");
   });
 
-  it("still strips the quote from a REPLY", () => {
+  it("still strips the quote from a REPLY", async () => {
     const reply = ["From: sequoia@westpeek.ventures", "Subject: Re: Wyatt: a question", "In-Reply-To: <x@y>", "", "Go ahead.", "", "On Wed, 7 Oct 2026, Wyatt wrote:", "> the question"].join("\r\n");
-    expect(readableMessage(reply)).toBe("Go ahead.");
+    expect(await readableMessage(reply)).toBe("Go ahead.");
   });
 
-  it("reads the company out of the subject's lead only when the forwarded original confirms it", () => {
-    expect(forwardedCompany("Fwd: Tidepool Robotics | seed round", readableMessage(raw))).toEqual({ name: "Tidepool Robotics", by: "an address at tidepoolrobotics.example in the forwarded message" });
+  it("reads the company out of the subject's lead only when the forwarded original confirms it", async () => {
+    expect(forwardedCompany("Fwd: Tidepool Robotics | seed round", await readableMessage(raw))).toEqual({ name: "Tidepool Robotics", by: "an address at tidepoolrobotics.example in the forwarded message" });
     expect(forwardedCompany("Fwd: Tidepool Robotics — intro", "I'm the co-founder of Tidepool Robotics.")?.name).toBe("Tidepool Robotics");
     expect(forwardedCompany("Fwd: check this out", "Hi from ada@gmail.com"), "no evidence, no company").toBeNull();
     expect(forwardedCompany("Fwd: West Peek", "sequoia@westpeek.ventures"), "the firm's own address never confirms a company").toBeNull();
-    expect(dealFromMessage("Fwd: Tidepool Robotics | seed round", raw, "sequoia@westpeek.ventures", false)?.corroborated?.name).toBe("Tidepool Robotics");
+    expect((await dealFromMessage("Fwd: Tidepool Robotics | seed round", raw, "sequoia@westpeek.ventures", false))?.corroborated?.name).toBe("Tidepool Robotics");
   });
 });
 

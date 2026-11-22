@@ -143,7 +143,7 @@ export async function handleGetRequestMessage(ctx: RouteContext): Promise<Respon
       hasRaw = true;
       // The cap is the readable one every door uses, not a byte budget: the whole message is behind
       // the raw route for anyone who may read it.
-      text = readableMessage(await obj.text());
+      text = await readableMessage(await obj.text());
     }
   }
 

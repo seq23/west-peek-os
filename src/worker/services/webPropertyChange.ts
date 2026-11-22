@@ -35,10 +35,9 @@ import { abandonRun } from "../ai/subscriptionSeats";
 import { alreadyTold, recordNotice, routedByFor, SEND_FAILED, threadRootFor, type NoticeKind } from "./requestReply";
 import { isEmailSendEnabled } from "../effects/resendClient";
 import { doneReplyLaneFor, isOn, previewAllPartnerEmailsIsOn, rulesFor, ON_OFF_RULE_KEYS, type KindRule } from "./kindRules";
-import { attachmentBytes } from "../effects/mimeAttachments";
+import { attachmentBytes, decodeHeader } from "../effects/mail";
 import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
 import { strippedSubject } from "../../shared/intake/emailTriggers";
-import { decodeMimeHeader } from "../effects/inboundEmail";
 import { isTechnicalBlock } from "../../shared/work/blocks";
 import { INTAKE_JUDGMENT_STANDARD } from "../../shared/registry/aiEmployeePersonas";
 import { defaultGenerateBanterReply, replyToBanter, type BanterReplyGenerator } from "./banterReply";
@@ -4130,7 +4129,7 @@ export async function handleGetRequestAttachment(ctx: RouteContext): Promise<Res
       headers: { "content-type": row.media_type || "application/octet-stream", "content-disposition": `attachment; filename="${row.filename.replace(/"/g, "")}"`, "cache-control": "private, no-store" },
     });
   }
-  const extracted = attachmentBytes(await obj.text(), row.filename);
+  const extracted = await attachmentBytes(await obj.text(), row.filename);
   if (!extracted) return json({ error: "not_found", detail: `${row.filename} is not in the stored message` }, { status: 404 });
   return new Response(new Blob([extracted.bytes as BlobPart]), {
     headers: {
@@ -4188,7 +4187,7 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
   }
   const msgId = (headers.get("message-id") ?? "").replace(/^<|>$/g, "").trim();
   const from = ((headers.get("from") ?? "").match(/<([^>]+)>/)?.[1] ?? headers.get("from") ?? "").trim().toLowerCase();
-  const subject = decodeMimeHeader(headers.get("subject") ?? "");
+  const subject = decodeHeader(headers.get("subject") ?? "");
   /*
    * ONE RE-READ AT A TIME PER MESSAGE (9 Oct 2026). Two re-reads of Scooter's "New site build" two
    * seconds apart (a person and the partner tail) both cleared the dedupe row and both ran the door:

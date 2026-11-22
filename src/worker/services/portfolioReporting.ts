@@ -397,7 +397,7 @@ export async function openPortfolioUpdateCard(
        * cut off below them — and Winter is asked to "record only figures the message actually
        * states". He could not read the message. See `readableMessage` in `dealIntake.ts`.
        */
-      readableMessage(input.raw),
+      await readableMessage(input.raw),
       "",
       storedMessageLine(input.emlKey, input.storeNote),
     ].join("\n"),

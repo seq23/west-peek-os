@@ -7,18 +7,18 @@ import { dealFromMessage } from "../src/worker/services/dealIntake";
  * inbound. The classifier, fixed at source. Made-up companies throughout.
  */
 describe("an admin or website email is never a deal", () => {
-  it("refuses the subjects that were requests about the firm's own site or admin", () => {
+  it("refuses the subjects that were requests about the firm's own site or admin", async () => {
     for (const s of ["Acme photo swap on westpeek.ventures", "Deck: Acme photo swap on westpeek.ventures", "Swap the photo on the site", "Update our bio on the website", "Invoice #4411 for October", "Website copy fix for the Rooms page"]) {
       expect(isAdminOrWebsiteSubject(s), s).toBe(true);
-      expect(dealFromMessage(s, "", "scooter@westpeek.ventures", true), s).toBeNull();
+      expect(await dealFromMessage(s, "", "scooter@westpeek.ventures", true), s).toBeNull();
     }
   });
 
-  it("still reads a real deal, including a company that builds websites", () => {
+  it("still reads a real deal, including a company that builds websites", async () => {
     for (const s of ["#wpdealflow Sitecraft", "Fwd: Acme Websites | $2M seed round", "#wpdealflow Pagewise website builder"]) {
       expect(isAdminOrWebsiteSubject(s), s).toBe(false);
     }
-    expect(dealFromMessage("#wpdealflow Sitecraft", "", "x@y.co", false)?.company).toBe("Sitecraft");
+    expect((await dealFromMessage("#wpdealflow Sitecraft", "", "x@y.co", false))?.company).toBe("Sitecraft");
   });
 });
 

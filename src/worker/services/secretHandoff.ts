@@ -2,7 +2,7 @@ import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { json, type RouteContext } from "../router";
 import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
-import { carriesSecretValue, scrubSecretValues, textBodyOf } from "../effects/mimeAttachments";
+import { carriesSecretValue, scrubSecretValues, textBodyOf } from "../effects/mail";
 import { githubReposIn, propertiesIn, type WebProperty } from "../../shared/intake/webPropertyChange";
 import { sendOrPreview } from "./previewApproval";
 
@@ -213,19 +213,19 @@ export async function secretDoor(
     replyOnThread?: string | null;
   },
 ): Promise<SecretDoorOutcome> {
-  const written = textBodyOf(input.raw);
+  const written = await textBodyOf(input.raw);
   const read = readSecretLines(written);
   if (!read.found.length && !read.refused.length) return { raw: input.raw, stored: [], refused: [], onlySecrets: false, line: null };
 
-  const scrubbedRaw = scrubSecretValues(input.raw, read.values, SECRET_REDACTED);
+  const scrubbedRaw = await scrubSecretValues(input.raw, read.values, SECRET_REDACTED);
   // The .eml in R2 FIRST, so a failure anywhere below still leaves no value in the store.
   if (input.kept.key && env.WP_OS_DOCUMENTS) {
     try {
       const obj = await env.WP_OS_DOCUMENTS.get(input.kept.key);
       if (obj) {
         const text = await obj.text();
-        const clean = scrubSecretValues(text, read.values, SECRET_REDACTED);
-        if (clean !== text || carriesSecretValue(text, read.values)) {
+        const clean = await scrubSecretValues(text, read.values, SECRET_REDACTED);
+        if (clean !== text || await carriesSecretValue(text, read.values)) {
           await env.WP_OS_DOCUMENTS.put(input.kept.key, clean, { httpMetadata: { contentType: "message/rfc822" }, customMetadata: { ...(obj.customMetadata ?? {}), scrubbed: "secret redacted" } });
         }
       }

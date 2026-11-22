@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import { appendEvent } from "../events";
-import { textBodyOf } from "../effects/mimeAttachments";
+import { textBodyOf } from "../effects/mail";
 import { TLC_OWNER } from "../../shared/tlc/learningClub";
 import { herNoteOf, theirNewText, BRAND_REPLY_REF_RE } from "../../shared/tlc/brandReply";
 import { brandKey } from "../../shared/tlc/mustPitch";
@@ -33,8 +33,8 @@ interface InboundRow { id: string; message_id: string; r2_key: string | null; fr
 interface OpenEvent { id: string; month: string; topic: string | null }
 
 /** Her words in a stored message: the new text only, her signature off. */
-export function herWordsIn(raw: string): string {
-  return herNoteOf(theirNewText(textBodyOf(raw)), TLC_OWNER.name);
+export async function herWordsIn(raw: string): Promise<string> {
+  return herNoteOf(theirNewText(await textBodyOf(raw)), TLC_OWNER.name);
 }
 
 /** Is this stored message authenticated mail from her? */
@@ -137,7 +137,7 @@ export async function applyOwnerEmailInstructions(env: Env, now: Date, firmScope
   for (const row of rows) {
     const raw = await readRaw(row.r2_key!);
     if (raw === null) continue; // not readable yet: tried again next pass
-    const words = herWordsIn(raw);
+    const words = await herWordsIn(raw);
     const found = ownerContactInstructions(words, known, events);
     if (found.length === 0) {
       await env.WP_OS_DB.prepare("INSERT OR IGNORE INTO tlc_owner_instruction (message_id, brand_key, contact_email, months_json, result, applied_at, firm_scope) VALUES (?1, '', NULL, NULL, 'NONE', ?2, ?3)").bind(row.message_id, at, firmScope).run();

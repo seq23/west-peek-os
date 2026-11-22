@@ -4,7 +4,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { handleInboundEmail, INLINE_READ_ATTEMPTS, STALE_CLAIM_MINUTES } from "../src/worker/effects/inboundEmail";
-import { mimeSplitCount } from "../src/worker/effects/mimeAttachments";
+import { mailParseCount } from "../src/worker/effects/mail";
 import { startThread } from "../src/worker/services/emailThread";
 import { createWorkCardInternal } from "../src/worker/services/workCards";
 import { systemIdentity } from "../src/worker/services/dealIntake";
@@ -21,7 +21,7 @@ import { TAKEN_OVER_NEXT } from "../src/worker/services/partnerUnderstood";
  * (exceededCpu at 2,010 ms) mid-read, and the dedupe claim left behind swallowed the redelivery: no steer, no Got it,
  * nothing said. The single largest cost was the voice note handed to the AI binding as a byte array, which the binding
  * JSON-serialises; the rest was header reads walking every megabyte of base64. Pinned here, all synthetic:
- *   · an 11 MB and a 25 MB reply are read inline: split once, the recording handed over as a STREAM, his words and the
+ *   · an 11 MB and a 25 MB reply are read inline: parsed once, the recording handed over as a STREAM, his words and the
  *     transcript steer the card, every file is filed, and only then does the Got it go;
  *   · a Drive link (Gmail's own, for a file over 25 MB) to a recording is read as him and transcribed before the Got it;
  *   · a door that died lets the redelivery in; two that died hand the message to a Mac session, never a third read;
@@ -187,12 +187,12 @@ describe("a partner's big reply is read inline, then answered", () => {
       const { cardId, token, kind } = await cardWithThread(`${mb}MB`);
       const msg = bigReply({ subject: `Re: Porter: West Peek site ${mb}MB: New preview ready`, token, words: "Recording attached. Also swap the hero photo.", totalBytes: mb * 1024 * 1024, messageId: `big-${mb}@mail.gmail.com` });
       expect(msg.rawSize, "the fixture is genuinely that size").toBeGreaterThan(mb * 0.98 * 1024 * 1024);
-      const splitsBefore = mimeSplitCount.n;
+      const splitsBefore = mailParseCount.n;
       const callsBefore = aiCalls.length;
       await handleInboundEmail(msg, env);
 
       // LINEAR, NOT REPEATED: every reader of this one message shares a single split of it.
-      expect(mimeSplitCount.n - splitsBefore, "the message is split once, whatever reads it").toBe(1);
+      expect(mailParseCount.n - splitsBefore, "the message is parsed once, whatever reads it").toBe(1);
       const call = aiCalls.slice(callsBefore);
       expect(call, "one recording, one transcription").toHaveLength(1);
       expect(call[0]!.streamed, "the recording reaches the binding as a stream, never a byte array it would JSON-encode").toBe(true);
@@ -252,11 +252,11 @@ describe("never silent, and never the same wall twice", () => {
        VALUES ('inm_handoff', 'handoff@mail.gmail.com', ?1, ?2, 'os@joinwestpeek.com', 'Re: Porter: West Peek site HANDOFF: New preview ready', ?3, ?4, ?5, 'west-peek')`,
     ).bind(key, SCOOTER_FROM, aged(), msg.rawSize, JSON.stringify({ passed: true, partner: SCOOTER })).run();
     await env.WP_OS_DB.prepare("INSERT INTO inbound_email_seen (message_id, firm_scope, handled, attempts, seen_at) VALUES ('handoff@mail.gmail.com', 'west-peek', 0, ?2, ?1)").bind(aged(), INLINE_READ_ATTEMPTS).run();
-    const splitsBefore = mimeSplitCount.n;
+    const splitsBefore = mailParseCount.n;
 
     await handleInboundEmail(msg, env);
 
-    expect(mimeSplitCount.n - splitsBefore, "no third inline read").toBe(0);
+    expect(mailParseCount.n - splitsBefore, "no third inline read").toBe(0);
     expect(await count("SELECT COUNT(*) AS n FROM work_steer WHERE card_kind = ?1", kind), "nothing steered from here").toBe(0);
     const session = await one<{ id: string; kind: string; description: string }>("SELECT id, kind, description FROM work_card WHERE kind = 'PARTNER_SESSION' AND title LIKE '%HANDOFF%'");
     expect(session?.kind, "an existing Mac lane, not a new one").toBe("PARTNER_SESSION");

@@ -13,8 +13,8 @@ describe("a partner's words are never cut silently (22 Oct 2026)", () => {
     expect(out).toContain("[… cut here at 10 of 50 characters — the rest is in the stored message]");
   });
 
-  it("readableMessage states its own cut rather than stopping mid-word", () => {
-    const out = readableMessage(`Sequoia and Scooter: decide every deal. ${"word ".repeat(2000)}`, 4000);
+  it("readableMessage states its own cut rather than stopping mid-word", async () => {
+    const out = await readableMessage(`Sequoia and Scooter: decide every deal. ${"word ".repeat(2000)}`, 4000);
     expect(out).toMatch(/cut here at 4,000 of [\d,]+ characters/);
   });
 

@@ -22,7 +22,7 @@ import { handleDeveloperChanges, handleDeveloperEmail } from "../src/worker/serv
 import { answerBlock } from "../src/worker/services/blocks";
 import { handleInboundEmail, MAX_BODY_BYTES } from "../src/worker/effects/inboundEmail";
 import { comparableSubject } from "../src/worker/services/emailThread";
-import { requestAttachments, textBodyOf } from "../src/worker/effects/mimeAttachments";
+import { requestAttachments, textBodyOf } from "../src/worker/effects/mail";
 import { liveAddressLine, handleGetRequestAttachment, handleReingestStoredEmail, sendReceived, stuckWindowOpen } from "../src/worker/services/webPropertyChange";
 import { readFileSync } from "node:fs";
 import { SECRET_BY_EMAIL } from "../src/shared/work/porterWaits";
@@ -369,12 +369,12 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
   const PHOTO_EMAIL = SCOOTER_MIME({ subject: "Sensori photo swap on westpeek.ventures", body: "Swap the Sensori founders photo on westpeek.ventures for the one attached. Same spot, same size.", image: true });
   let porterId = "";
 
-  it("the text body is the partner's words, not the headers; the image is an attachment; a quoted folder link is not the request's", () => {
-    expect(textBodyOf(PHOTO_EMAIL)).toBe("Swap the Sensori founders photo on westpeek.ventures for the one attached. Same spot, same size.");
-    const { attachments } = requestAttachments(PHOTO_EMAIL);
+  it("the text body is the partner's words, not the headers; the image is an attachment; a quoted folder link is not the request's", async () => {
+    expect(await textBodyOf(PHOTO_EMAIL)).toBe("Swap the Sensori founders photo on westpeek.ventures for the one attached. Same spot, same size.");
+    const { attachments } = await requestAttachments(PHOTO_EMAIL);
     expect(attachments.map((a) => [a.filename, a.mediaType])).toEqual([["sensori-founders.jpg", "image/jpeg"]]);
     const quoted = SCOOTER_MIME({ subject: "Re: West Peek Community rebuild", body: "Change the tagline on westpeek.ventures to 'Good people meet good people'.", quoted: "package: https://drive.google.com/drive/folders/1jdhn1qHJW0vurKBU4QYttJIv0ut6-p8d" });
-    const ask = parseWebPropertyAsk("Re: West Peek Community rebuild", textBodyOf(quoted));
+    const ask = parseWebPropertyAsk("Re: West Peek Community rebuild", await textBodyOf(quoted));
     expect(ask?.target_repo).toBe("join-west-peek-main");
     expect(ask?.drive_folder_id, "a folder in a quoted earlier thread is not this request's package").toBeNull();
     expect(isWebPropertyChange(ask), "a request with no folder and no attachment is still a change").toBe(true);

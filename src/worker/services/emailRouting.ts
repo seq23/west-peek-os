@@ -5,7 +5,7 @@ import { mailAuthority } from "../../shared/intake/partnerAuthority";
 import { addresseeIn, namedSiteHostsIn, parseWebPropertyAsk, type WebProperty } from "../../shared/intake/webPropertyChange";
 import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
 import { partnerByEmail } from "../../shared/registry/partners";
-import { textBodyOf } from "../effects/mimeAttachments";
+import { textBodyOf } from "../effects/mail";
 import { loadRegistry } from "./webPropertyRegistry";
 import { loadProfile, type PartnerProfile } from "./partnerProfile";
 import { sendPartnerEmail } from "./execEmail";
@@ -149,7 +149,7 @@ export async function siteCardDecision(
       const row = await env.WP_OS_DB.prepare("SELECT target_repo FROM web_property_change WHERE work_card_id = ?1").bind(id).first<{ target_repo: string | null }>();
       return thread ? { kind: "JOIN", cardId: id, thread, targetRepo: row?.target_repo ?? null, why: "the partner said which job" } : { kind: "NEW", why: "the job he named has no conversation to join" };
     }
-    const body = textBodyOf(message.raw);
+    const body = await textBodyOf(message.raw);
     let registry: WebProperty[] | undefined;
     try {
       registry = await loadRegistry(env);
@@ -480,7 +480,7 @@ export async function unclearEmailQuestion(env: Env, cardId: string): Promise<Pl
   } catch {
     raw = "";
   }
-  const body = raw ? textBodyOf(raw) : "";
+  const body = raw ? await textBodyOf(raw) : "";
   const subject = msg.subject ?? "";
   const { driveShareNotice } = await import("../../shared/intake/driveShare");
   const { headersOfRaw } = await import("../effects/inboundEmail");

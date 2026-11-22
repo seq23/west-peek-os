@@ -15,21 +15,21 @@ const cases = [
 
 describe("#wpdealflow is read from subject and/or body", () => {
   for (const c of cases) {
-    it(c.name, () => {
+    it(c.name, async () => {
       const summary = classifyInbound({ to: "os@joinwestpeek.com", from: "sequoia@westpeek.ventures", subject: c.subject, body: c.body });
       expect(summary.triggers).toContain("#wpdealflow");
-      const deal = dealFromMessage(summary.subject, c.body, "sequoia@westpeek.ventures", false);
+      const deal = await dealFromMessage(summary.subject, c.body, "sequoia@westpeek.ventures", false);
       expect(deal?.company).toBe("Northwind Robotics");
     });
   }
-  it("an untagged subject is offered as the company but FLAGGED, so the handler accepts it only when the register knows it", () => {
-    const forward = dealFromMessage("Fwd: Northwind Robotics", "thoughts?\n\n#wpdealflow", "sequoia@westpeek.ventures", false);
+  it("an untagged subject is offered as the company but FLAGGED, so the handler accepts it only when the register knows it", async () => {
+    const forward = await dealFromMessage("Fwd: Northwind Robotics", "thoughts?\n\n#wpdealflow", "sequoia@westpeek.ventures", false);
     expect(forward).toMatchObject({ company: "Northwind Robotics", subjectUntagged: true });
-    const generic = dealFromMessage("check this out", "#wpdealflow\nlooks interesting", "sequoia@westpeek.ventures", false);
+    const generic = await dealFromMessage("check this out", "#wpdealflow\nlooks interesting", "sequoia@westpeek.ventures", false);
     expect(generic).toMatchObject({ company: "check this out", subjectUntagged: true });
-    const tagged = dealFromMessage("#wpdealflow check this out", "hi", "sequoia@westpeek.ventures", false);
+    const tagged = await dealFromMessage("#wpdealflow check this out", "hi", "sequoia@westpeek.ventures", false);
     expect(tagged).toMatchObject({ company: "check this out", subjectUntagged: false });
-    const named = dealFromMessage("check this out", "#wpdealflow\nCompany: Northwind Robotics", "sequoia@westpeek.ventures", false);
+    const named = await dealFromMessage("check this out", "#wpdealflow\nCompany: Northwind Robotics", "sequoia@westpeek.ventures", false);
     expect(named).toMatchObject({ company: "Northwind Robotics", subjectUntagged: false });
   });
 });
