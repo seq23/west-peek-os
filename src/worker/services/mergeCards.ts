@@ -10,10 +10,10 @@ import { mergeRefusal, orderMergeTargets, type MergeTargetCard } from "../../sha
 /**
  * MERGE ONE WORK CARD INTO ANOTHER (owner, 27 Sep 2026; migration 0242).
  *
- * THE ONE WRITER of `work_card.merged_into_card_id` and `work_card_merge`. Two doors reach it — the
- * route below (the "Merge into…" button on the desk and the card page) and the 27–28 Sep one-off
- * repair scripts (ran once, removed 22 Nov 2026; git history keeps them) — and both decide through
- * the pure rules in `shared/work/mergeCards.ts`, so "may this fold into that" has one answer.
+ * THE ONE WRITER of `work_card.merged_into_card_id` and `work_card_merge`. One door reaches it: the
+ * route below (the "Merge into…" button on the desk and the card page; the 27–28 Sep one-off repair
+ * scripts called the same route and were removed 22 Nov 2026). It decides through the pure rules in
+ * `shared/work/mergeCards.ts`, so "may this fold into that" has one answer.
  *
  * WHY IT EXISTS. On 27 Sep two of Scooter's replies were too large for the reply matcher and opened
  * new cards instead of steering the one he was answering. The desk showed four cards for one job.
