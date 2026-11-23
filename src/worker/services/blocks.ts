@@ -31,6 +31,7 @@ import {
   type BlockReason,
 } from "../../shared/work/blocks";
 import { blockWaitDetail, PARTNER_ANSWER_MAX, reAskEmail } from "../../shared/work/blocks";
+import { ASKS_HIM_NOTHING, type PorterWaitKind } from "../../shared/work/porterWaits";
 export { PARTNER_ANSWER_MAX };
 
 
@@ -467,11 +468,13 @@ export interface StoredBlock {
   block_nags: number;
   /** Who asked for the card by email, if anyone — the reminder goes back to them by email too. */
   requested_by_email: string | null;
+  /** Why it is blocked, as a fact (`{"wait":"MAC_ASLEEP",…}`, the spend-setting record); null when unknown. */
+  block_context?: string | null;
 }
 
 export const BLOCK_COLUMNS =
   "id, title, firm_scope, owner_id, block_reason, block_trying, block_stopped, block_needed, " +
-  "block_who, block_actions_json, blocked_at, block_nag_at, COALESCE(block_nags, 0) AS block_nags, requested_by_email";
+  "block_who, block_actions_json, blocked_at, block_nag_at, COALESCE(block_nags, 0) AS block_nags, requested_by_email, block_context";
 
 /**
  * NOTHING STAYS STUCK SILENTLY.
@@ -573,6 +576,16 @@ export async function closeReplacedRunBlocks(env: Env, now: Date = new Date()): 
   return rows.map((r) => r.id);
 }
 
+/** The block's recorded cause is a Porter wait that asks the partner for nothing (`ASKS_HIM_NOTHING`). Unknown → false. */
+export function waitAsksHimNothing(blockContext: string | null | undefined): boolean {
+  try {
+    const wait = (JSON.parse(blockContext ?? "null") as { wait?: unknown } | null)?.wait;
+    return typeof wait === "string" && ASKS_HIM_NOTHING.has(wait as PorterWaitKind);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * THE RE-ASK BY EMAIL, FOR EVERY EMPLOYEE'S CARD THAT WAITS ON A PARTNER (her ruling 21 Nov 2026). It goes to the partner
  * the card waits on (`block_who`), on the card's thread, in the card's own employee's name. Porter's site job asked for by
@@ -584,6 +597,13 @@ async function remindRequester(env: Env, row: StoredBlock, nags: number, now: Da
   const partner = partnerByName(row.block_who ?? "");
   // A fault on our side (a lane refused, the Mac, attempts spent) waits on no partner's answer: its in-app ring is enough.
   if (!partner || isTechnicalBlock(row.block_reason) || ["tried_and_could_not_finish", "stopped_part_way"].includes(row.block_reason ?? "")) return null;
+  /*
+   * A WAIT THAT CLEARS ITSELF IS NOT HIS TO ANSWER (23 Nov 2026, wc_59ef2d40). A build the sleeping Mac never claimed was
+   * blocked "the Mac; it resumes by itself", and a day later Porter's re-ask re-sent his stage notice: "ACTION REQUIRED:
+   * New preview ready", for a rebuild that had not run. A wait that asks him for nothing (the Mac, a plan reset, a key
+   * the developer adds) gets its in-app ring only; a wait he clears himself (a DNS record, the Drive files) is still re-asked.
+   */
+  if (waitAsksHimNothing(row.block_context)) return null;
   try {
     const card = await env.WP_OS_DB.prepare("SELECT id, title, kind, firm_scope, requested_by_email, preview_first, preview_owner_id, assigned_from_card_id FROM work_card WHERE id = ?1")
       .bind(row.id)

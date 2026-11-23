@@ -129,4 +129,27 @@ describe("a block reminder reaches an emailed requester by email", () => {
     expect(await notices(BARE)).toEqual([{ kind: "QUESTION", cause: "nag:1", sent: 1, sent_to: SCOOTER }]);
     expect(await inApp(BARE)).toBe(1);
   });
+  it("(d) a wait that clears itself (the Mac asleep) re-asks him nothing by email; its in-app ring stays (23 Nov 2026, wc_59ef2d40)", async () => {
+    await seedBlocked(CARD, SCOOTER);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET block_context = ?2 WHERE id = ?1").bind(CARD, JSON.stringify({ wait: "MAC_ASLEEP", run: "ccr_test" })).run();
+    const rung = await resurfaceStaleBlocks(env, NOW);
+    expect(rung.map((r) => r.id), "the re-ask still rings").toEqual([CARD]);
+    expect(sent, "no 'ACTION REQUIRED: New preview ready' for a build that never ran").toHaveLength(0);
+    expect(await notices(CARD)).toEqual([]);
+    expect(await inApp(CARD)).toBe(1);
+    expect(await resurfaceStaleBlocks(env, new Date(NOW.getTime() + 60_000)), "the clock moved on: no retry loop").toEqual([]);
+  });
+
+  it("(d) negative: a block whose cause is his own word, or unreadable, is still re-asked by email", async () => {
+    for (const context of [JSON.stringify({ wait: "WHICH_SITE" }), "{not json"]) {
+      sent.length = 0;
+      await env.WP_OS_DB.prepare("DELETE FROM work_card_notice WHERE work_card_id = ?1").bind(CARD).run();
+      await env.WP_OS_DB.prepare("DELETE FROM web_property_change WHERE work_card_id = ?1").bind(CARD).run();
+      await env.WP_OS_DB.prepare("DELETE FROM work_card WHERE id = ?1").bind(CARD).run();
+      await seedBlocked(CARD, SCOOTER);
+      await env.WP_OS_DB.prepare("UPDATE work_card SET block_context = ?2 WHERE id = ?1").bind(CARD, context).run();
+      await resurfaceStaleBlocks(env, NOW);
+      expect(sent.map((m) => m.to), `cause ${context}`).toEqual([SCOOTER]);
+    }
+  });
 });

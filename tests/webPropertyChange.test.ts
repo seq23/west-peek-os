@@ -1102,6 +1102,109 @@ describe("a build the partner tail stopped on purpose is queued again without sp
     expect(await releaseMacAsleepBlocks(env, noon)).toContain(id);
   });
 
+  /**
+   * 23 Nov 2026, wc_59ef2d40 (westpeekproductions.com) and wc_76e6d7ff (voting.topbarz.xyz): Scooter's
+   * "changes: …" queued a rebuild the Mac never claimed (or that failed). Each release re-blocked the card on
+   * the OLD preview, worded "Changed since the last preview, as you asked: …", and stamped it as mailed:
+   * his changes were claimed done and never built. An owed rebuild is queued again with his words; the old
+   * preview is never offered as those changes.
+   */
+  async function atGreenPreview(tag: string): Promise<string> {
+    const id = await atBuild(tag);
+    await macReports(id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/91", pr_number: 91, branch: `work/wpc-${tag}`, check_state: "GREEN", preview_url: `https://${tag}.west-peek-ventures.pages.dev`, proof: "validate green" });
+    await tickFor(id);
+    const c = await card(id);
+    expect(c.state, "negative control: with no rebuild owed, it waits on his word on the preview").toBe("BLOCKED");
+    expect(String(c.block_needed)).not.toMatch(/Changed since the last preview/);
+    return id;
+  }
+  const HIS = "changes: put the founders photo on the home page";
+  const owedJob = async (id: string) => {
+    let job = await liveJobFor(id);
+    for (let t = 0; t < 3 && !job; t += 1) { await tickFor(id); job = await liveJobFor(id); }
+    expect(job, "the owed BUILD is queued again").not.toBeNull();
+    const payload = JSON.parse(String(job!.job_json)) as { phase: string; rebuild: { intent: string; changes: string } | null };
+    expect(payload.phase).toBe("BUILD");
+    expect(payload.rebuild?.intent).toBe("CHANGES");
+    expect(payload.rebuild?.changes, "carrying his words").toContain("put the founders photo on the home page");
+    return job!;
+  };
+
+  it("an owed rebuild the Mac never claimed is queued again with his words when the Mac is back, never re-offered as the old preview (23 Nov 2026)", async () => {
+    const id = await atGreenPreview("owed1");
+    await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: HIS });
+    await tickFor(id);
+    const first = await owedJob(id);
+    await stopLiveBuild(id, "no machine claimed this run inside its 64800s queue ceiling", false);
+    await tickFor(id);
+    const asleep = await card(id);
+    expect(asleep.state).toBe("BLOCKED");
+    expect(String(asleep.block_needed)).toMatch(/the Mac/);
+    const emailedBefore = (await readWebPropertyChange(env, id))!.preview_emailed_at ?? null;
+    const b = new Date(Date.parse(String(asleep.blocked_at)) + 86_400_000);
+    const noon = new Date(Date.UTC(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate(), 18));
+    await env.WP_OS_DB.prepare(
+      `INSERT OR REPLACE INTO subscription_seat_device (seat, device_id, hostname, agent_version, last_seen_at, capabilities_json, first_seen_at)
+       VALUES ('claude_code', 'dev_mac_wait', 'Sequoias-Mac', 'test', ?1, '[]', ?1)`,
+    ).bind(new Date(noon.getTime() - 30_000).toISOString()).run();
+    expect(await releaseMacAsleepBlocks(env, noon)).toContain(id);
+    await tickFor(id);
+    const after = await card(id);
+    expect(after.state, "never re-blocked on the old preview").not.toBe("BLOCKED");
+    expect(String(after.block_needed ?? "")).not.toMatch(/Changed since the last preview/);
+    expect((await readWebPropertyChange(env, id))!.preview_emailed_at ?? null, "the old preview is not stamped as mailed again").toBe(emailedBefore);
+    const again = await owedJob(id);
+    expect(again.id).not.toBe(first.id);
+    // The rebuild finally runs: ONE preview email, for the new build, and his changes are no longer owed.
+    const from = sent.length;
+    await macReports(id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/91", pr_number: 91, branch: "work/wpc-owed1", changed: true, head_sha: "owed1-rebuilt", check_state: "GREEN", preview_url: "https://owed1.west-peek-ventures.pages.dev", proof: "validate green" });
+    await tickFor(id);
+    expect((await card(id)).state, "the new preview waits on his word").toBe("BLOCKED");
+    expect(await liveJobFor(id), "no further BUILD once it built").toBeNull();
+    expect((await readWebPropertyChange(env, id))!.refresh_intent ?? null).toBeNull();
+    const previews = sent.slice(from).filter((m) => m.to === SCOOTER && /preview/i.test(m.subject));
+    expect(previews, "exactly one preview email for the rebuild").toHaveLength(1);
+    expect(previews[0]!.text).toContain("put the founders photo on the home page");
+  });
+
+  it("new changes on a card whose owed rebuild was stamped as previewed by the loop still carry the owed words (23 Nov 2026: preview_emailed_at after refresh_requested_at)", async () => {
+    const id = await atGreenPreview("owed3");
+    await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: HIS });
+    await tickFor(id);
+    await owedJob(id);
+    await stopLiveBuild(id, "no machine claimed this run inside its 64800s queue ceiling", false);
+    await tickFor(id);
+    // Production's state on both cards: the inert loop stamped the old preview as mailed AFTER the rebuild was asked.
+    await env.WP_OS_DB.prepare("UPDATE web_property_change SET refresh_requested_at = ?2, preview_emailed_at = ?3 WHERE work_card_id = ?1")
+      .bind(id, new Date(Date.now() - 120_000).toISOString(), new Date(Date.now() - 60_000).toISOString()).run();
+    await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: "changes: make the logo smaller" });
+    await tickFor(id);
+    const job = await owedJob(id);
+    expect(JSON.parse(String(job.job_json)).rebuild.changes, "his new words join the owed ones").toContain("make the logo smaller");
+  });
+
+  it("an owed rebuild that failed is queued again, not re-offered as the old preview; a question meanwhile is answered and the rebuild still queued", async () => {
+    const id = await atGreenPreview("owed2");
+    await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: HIS });
+    await tickFor(id);
+    await owedJob(id);
+    await macReports(id, { phase: "BUILD", status: "failed", reason: "NAMED STOP [FIRST_RUN_FAILED] step 7 failed on the preview" });
+    await tickFor(id);
+    expect(String((await card(id)).block_needed ?? "")).not.toMatch(/Changed since the last preview/);
+    await owedJob(id);
+    // His question while the rebuild is owed: answered, and the rebuild is still the next step.
+    await stopLiveBuild(id, "no machine claimed this run inside its 64800s queue ceiling", false);
+    await tickFor(id);
+    const from = sent.length;
+    await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: "Are the builds back online? Can you confirm when the outstanding changes will be done?" });
+    await tickFor(id);
+    const c = await card(id);
+    expect(String(c.block_needed ?? "")).not.toMatch(/Changed since the last preview/);
+    expect(sent.slice(from).filter((m) => m.to === SCOOTER && /answered/.test(m.subject)), "his question is answered").toHaveLength(1);
+    expect(sent.slice(from).filter((m) => m.to === SCOOTER && /preview ready/i.test(m.subject)), "no preview email for a build that never ran").toHaveLength(0);
+    await owedJob(id);
+  });
+
   it("a run that simply went missing on the Mac still spends its attempt (negative)", async () => {
     const id = await atBuild("stop2");
     await stopLiveBuild(id, "mac-test-jobs has held this job for 49 minutes, past its 40 minutes ceiling.");

@@ -16,7 +16,7 @@ import { workCard } from "../src/worker/services/employeeWork";
 import { sweepIdentity } from "../src/worker/services/workSweep";
 import { preApprovalIn } from "../src/shared/work/approvalReply";
 import { readLocalJobReport, WEB_PROPERTY_CHANGE_KIND } from "../src/shared/work/localJobs";
-import { KEPT_FOR_NEXT_BUILD, blockedEmailDetail, finishOriginalAsk, missingSecretsOf, needsPreview, parkPhase, phaseModel, readWebPropertyChange, rulesFor, runWebPropertyChangeCard, type WebPropertyChangeRow } from "../src/worker/services/webPropertyChange";
+import { KEPT_FOR_NEXT_BUILD, releaseMacAsleepBlocks, blockedEmailDetail, finishOriginalAsk, missingSecretsOf, needsPreview, parkPhase, phaseModel, readWebPropertyChange, rulesFor, runWebPropertyChangeCard, type WebPropertyChangeRow } from "../src/worker/services/webPropertyChange";
 import { steerFromReply } from "../src/worker/services/emailThread";
 import { threadReference } from "../src/shared/email/thread";
 import { handleDeveloperChanges, handleDeveloperEmail } from "../src/worker/services/developerDirection";
@@ -1086,6 +1086,33 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     expect(await previews(), "no second preview email for a preview he approved").toBe(before);
     row = (await readWebPropertyChange(env, p.id))!;
     expect(row.phase).toBe("LAND");
+  });
+
+  it("PREVIEW: 'Approved. Please publish …' whose build the Mac never claimed builds his words when the Mac is back; the old build never lands (23 Nov 2026)", async () => {
+    await ageEarlierCards(); // one more card in this block: keep the 20-an-hour loop limit for the cards after it
+    const p = await atPreview("preview approved-mac-asleep");
+    await replyFrom(SCOOTER, "Hey Porter!\n\nApproved. Please publish the new site and the privacy pages, as directed in my last email.\n\nPlease send the live links when complete.", await p.token());
+    await tickFor(p.id);
+    expect((await readWebPropertyChange(env, p.id))!.land_approved_at, "his approval rides with his words").toBeTruthy();
+    const job = await liveJobFor(p.id);
+    expect(JSON.parse(String(job!.job_json)).phase).toBe("BUILD");
+    await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'ABANDONED', resolution = 'no machine claimed this run inside its 64800s queue ceiling' WHERE id = ?1").bind(job!.id).run();
+    await tickFor(p.id);
+    const asleep = await env.WP_OS_DB.prepare("SELECT state, blocked_at FROM work_card WHERE id = ?1").bind(p.id).first<{ state: string; blocked_at: string }>();
+    expect(asleep?.state).toBe("BLOCKED");
+    const b = new Date(Date.parse(String(asleep!.blocked_at)) + 86_400_000);
+    const noon = new Date(Date.UTC(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate(), 18));
+    await env.WP_OS_DB.prepare(
+      `INSERT OR REPLACE INTO subscription_seat_device (seat, device_id, hostname, agent_version, last_seen_at, capabilities_json, first_seen_at)
+       VALUES ('claude_code', 'dev_mac_wait_r', 'Sequoias-Mac', 'test', ?1, '[]', ?1)`,
+    ).bind(new Date(noon.getTime() - 30_000).toISOString()).run();
+    expect(await releaseMacAsleepBlocks(env, noon)).toContain(p.id);
+    await tickFor(p.id);
+    const again = await liveJobFor(p.id);
+    expect(again, "a job is queued").not.toBeNull();
+    const payload = JSON.parse(String(again!.job_json)) as { phase: string; rebuild: { changes: string } | null };
+    expect(payload.phase, "his words are built first; the old build is never landed").toBe("BUILD");
+    expect(payload.rebuild?.changes).toMatch(/send the live links/);
   });
 
   it("PREVIEW: words that change the site WITHOUT an opening approval still send a fresh preview, and a greeting alone never approves (19 Nov 2026)", async () => {

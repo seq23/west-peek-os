@@ -1434,7 +1434,7 @@ async function requestRebuild(env: Env, card: WebPropertyChangeCard, row: WebPro
      * developer's instruction is never joined to a partner's words (rebuildWords tells them apart by exact text).
      */
     const owed =
-      !directedBy && row.rebuilt_for?.trim() && !row.rebuilt_for.startsWith(FINISH_ORIGINAL_ASK) && row.refresh_intent === "CHANGES" && row.refresh_requested_at && (!row.preview_emailed_at || row.refresh_requested_at > row.preview_emailed_at) && !row.rebuilt_for.includes(answer.trim()) && !(await rebuildWords(env, card.id, row)).developer
+      !directedBy && row.rebuilt_for?.trim() && !row.rebuilt_for.startsWith(FINISH_ORIGINAL_ASK) && row.refresh_intent === "CHANGES" && !row.rebuilt_for.includes(answer.trim()) && !(await rebuildWords(env, card.id, row)).developer
         ? row.rebuilt_for.trim()
         : null;
     patch.rebuilt_for = (joinWords(owed, answer) ?? answer).slice(0, PARTNER_ANSWER_MAX);
@@ -1472,6 +1472,27 @@ async function blockOnPreview(env: Env, card: WebPropertyChangeCard, row: WebPro
   });
   await update(env, card.id, { preview_emailed_at: new Date().toISOString() });
   return why;
+}
+
+/** A person's answer since `since`; the sweep's own "AUTO-RETRY: …" release is not anyone's reply. */
+function personAnswered(card: WebPropertyChangeCard, since: string | null): boolean {
+  const answer = answerSince(card, since);
+  return Boolean(answer && !/^AUTO-RETRY:/.test(answer) && card.block_answered_by !== "work_sweep");
+}
+
+/** The rebuild asked for after the preview has not been built (its BUILD was never claimed, failed or moved nothing): queue it again. */
+async function parkOwedRebuild(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, rules: Record<string, string>, lead = ""): Promise<RunOutcome> {
+  const parked = await parkPhase(env, card, row, "BUILD", rules);
+  if (!parked.parked) return { finished: false, blocked: false, progressed: true, detail: `${lead}${parked.reason}` };
+  await appendFinding(env, card.id, `The rebuild asked for on ${(row.refresh_requested_at ?? "").slice(0, 10) || "the last reply"} has not reached a preview yet, so BUILD is queued again; the preview already sent is not offered as those changes.`);
+  return { finished: false, blocked: false, progressed: true, detail: `${lead}The rebuild asked for after the preview is still owed; BUILD queued for the Mac (${phaseModel(rules, "BUILD")}).` };
+}
+
+/** Wait on the same preview, unless a rebuild is still owed: then the rebuild runs and the old preview is never re-offered. */
+async function waitOnPreview(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, rules: Record<string, string>, lead = ""): Promise<RunOutcome> {
+  if (row.refresh_intent) return parkOwedRebuild(env, card, row, rules, lead);
+  const why = await blockOnPreview(env, card, row);
+  return { finished: false, blocked: true, progressed: false, detail: `${lead}${why}` };
 }
 
 /**
@@ -3347,12 +3368,10 @@ async function previewByFirstRead(env: Env, card: WebPropertyChangeCard, row: We
   if (d.kind === "question") {
     await answerMidFlowQuestion(env, card, answer, answerQuestion);
     await appendFinding(env, card.id, `After the preview, ${card.requested_by_email ?? "the partner"} asked a question; answered by email. The same preview waits for a positive reply — nothing lands until then.`);
-    const why = await blockOnPreview(env, card, row);
-    return { finished: false, blocked: true, progressed: false, detail: `Question answered; waiting on the same preview. ${why}` };
+    return waitOnPreview(env, card, row, rules, "Question answered. ");
   }
   await appendFinding(env, card.id, `After the preview: "${answer.slice(0, 200)}" — the first read found nothing asked; nothing lands.`);
-  const why = await blockOnPreview(env, card, row);
-  return { finished: false, blocked: true, progressed: false, detail: why };
+  return waitOnPreview(env, card, row, rules);
 }
 
 /**
@@ -3659,15 +3678,15 @@ export async function runWebPropertyChangeCard(
     // Green, and back here. A change that previews first needs the SECOND "approved" from the
     // requesting partner, read against the time the preview email went out.
     /*
-     * THE SYSTEM REOPENED THIS JOB TO FINISH THE ORIGINAL REQUEST (#363, `finishOriginalAsk`). The
-     * rebuild it asked for after the last preview is carried out; the old preview is not asked
-     * about again. It approves nothing: the fresh preview waits for the partner's word as always.
+     * A REBUILD THAT NEVER REACHED A PREVIEW IS STILL OWED (23 Nov 2026, wc_59ef2d40). Scooter's seven redesign changes
+     * (20 Nov) queued a BUILD the Mac never claimed; each time the card came back (the Mac-back release, his status
+     * question) the runner found the OLD green PR and asked him to approve the old preview, "changed since the last
+     * preview, as you asked", for three days. `refresh_intent` is the fact: set when a rebuild is asked, cleared only
+     * when a BUILD reports it built (or found nothing new). Owed and nobody has written since → BUILD again, never the
+     * old preview. Replaces the special case for the system's "finish the original request" reopening (#363), which
+     * was this rule for one kind of words. A partner's new reply is read first (below) and joins the owed words.
      */
-    if (row.refresh_intent === "CHANGES" && row.rebuilt_for?.startsWith(FINISH_ORIGINAL_ASK) && row.refresh_requested_at && (!row.preview_emailed_at || row.refresh_requested_at > row.preview_emailed_at) && !row.land_approved_at) {
-      const parked = await parkPhase(env, card, row, "BUILD", rules);
-      if (!parked.parked) return { finished: false, blocked: false, progressed: true, detail: parked.reason };
-      return { finished: false, blocked: false, progressed: true, detail: `Reopened to finish the original request; BUILD queued for the Mac (${phaseModel(rules, "BUILD")}).` };
-    }
+    if (row.refresh_intent && !personAnswered(card, row.preview_emailed_at)) return parkOwedRebuild(env, card, row, rules);
     if (needsPreview(row) && !row.land_approved_at && !row.forced_by) {
       const answer = answerSince(card, row.preview_emailed_at);
       const requester = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
@@ -3709,8 +3728,7 @@ export async function runWebPropertyChangeCard(
         const entry = `${resolution.n}. ${resolution.chosen} (solved: ${who} confirmed ${resolution.why ?? "it"} (${day}))`;
         await update(env, card.id, { answers_json: JSON.stringify([...list(row.answers_json), entry]) });
         await appendFinding(env, card.id, `Decision ${resolution.n} settled by ${who}: ${resolution.chosen}${resolution.why ? ` — ${resolution.why}` : ""}. No rebuild: the preview already reflects it; the same preview waits for "approved".`);
-        const why = await blockOnPreview(env, card, { ...row, answers_json: JSON.stringify([...list(row.answers_json), entry]) });
-        return { finished: false, blocked: true, progressed: false, detail: `Decision ${resolution.n} recorded; waiting on the same preview. ${why}` };
+        return waitOnPreview(env, card, { ...row, answers_json: JSON.stringify([...list(row.answers_json), entry]) }, rules, `Decision ${resolution.n} recorded. `);
       }
       // The "I added missing items" button answers the block with exactly that phrase (handleMaterialsAdded).
       // A rebuild by the reading's own word: "preview", "publish", the doors' phrases, or (when no reader answered) "changes: …".
@@ -3768,8 +3786,7 @@ export async function runWebPropertyChangeCard(
           await answerMidFlowQuestion(env, card, freeIntent.question ?? answer, answerQuestion);
           if (freeIntent.changes) return requestRebuild(env, card, row, "CHANGES", freeIntent.changes, rules, null, approves);
           await appendFinding(env, card.id, `After the preview, ${card.requested_by_email ?? "the partner"} asked a question; answered by email. The same preview waits for a positive reply — nothing lands until then.`);
-          const why = await blockOnPreview(env, card, row);
-          return { finished: false, blocked: true, progressed: false, detail: `Question answered; waiting on the same preview. ${why}` };
+          return waitOnPreview(env, card, row, rules, "Question answered. ");
         }
         /*
          * A QUESTION RIDING ON CHANGES IS STILL ANSWERED (18 Nov 2026, wc_c548d043). Scooter sent case studies to add
@@ -3792,8 +3809,7 @@ export async function runWebPropertyChangeCard(
         if (answer && !freeIntent) {
           await appendFinding(env, card.id, `${fromRequester ? "After the preview" : `An answer from ${card.block_answered_by} (not the partner who asked)`}: "${answer.slice(0, 400)}" — not a landing approval; nothing lands.`);
         }
-        const why = await blockOnPreview(env, card, row);
-        return { finished: false, blocked: true, progressed: false, detail: why };
+        return waitOnPreview(env, card, row, rules);
       }
       const now = new Date().toISOString();
       await update(env, card.id, { land_approved_at: now, land_approved_by: card.block_answered_by ?? card.requested_by_email ?? null });
