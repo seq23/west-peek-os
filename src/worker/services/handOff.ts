@@ -7,7 +7,7 @@ import { getVisibleWorkCard } from "./workCards";
 import { approverName, needsPreview, readWebPropertyChange, type WebPropertyChangeRow } from "./webPropertyChange";
 import { porterContext } from "./porterContext";
 import { missingFor } from "./requestMaterials";
-import { decidedSoFar, planReplyForms, PREVIEW_REPLY_FORMS } from "../../shared/work/porterNotices";
+import { decidedSoFar, planReplyForms, previewReplyForms } from "../../shared/work/porterNotices";
 import { partnerByEmail, partnerFor, type Partner } from "../../shared/registry/partners";
 import {
   claimAck,
@@ -428,7 +428,7 @@ export function standing(card: Pick<CardRow, "state" | "held_at" | "block_needed
  */
 function replyOptionsFor(row: WebPropertyChangeRow | null, from: Partner): string[] {
   const handBack = `**hand this to ${from.firstName}**: give it back`;
-  if (row && row.pr_url && row.check_state === "GREEN" && needsPreview(row) && !row.land_approved_at && !row.forced_by && !row.merge_sha) return [...PREVIEW_REPLY_FORMS, handBack];
+  if (row && row.pr_url && row.check_state === "GREEN" && needsPreview(row) && !row.land_approved_at && !row.forced_by && !row.merge_sha) return [...previewReplyForms(readPlaceholderCount(row.placeholders_json)), handBack];
   if (row && row.plan_filed_at && !row.plan_approved_at) return [...planReplyForms(readAsks(safeParse(row.asks_json)).length), handBack];
   return ["Nothing is needed now; reply with a note to steer it", handBack];
 }
@@ -574,4 +574,9 @@ export async function handleTakeBackWorkCard(ctx: RouteContext): Promise<Respons
   if (!card) return json({ error: "not_found" }, { status: 404 });
   const out = await changeOwnership(ctx.env, { cardId: card.id, actor: ctx.identity!.email, action: "TAKE_BACK", via: "API" });
   return json(out.ok ? out : { error: "refused", detail: out.reason, ...out }, { status: out.status });
+}
+
+function readPlaceholderCount(json: string | null | undefined): number {
+  const v = safeParse(json ?? "[]");
+  return Array.isArray(v) ? v.length : 0;
 }

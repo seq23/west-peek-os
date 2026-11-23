@@ -297,12 +297,20 @@ export function planReplyForms(askCount: number): string[] {
 }
 
 /** The four ways to answer a PREVIEW (owner's words, 23 Sep 2026), first in the email. */
-export const PREVIEW_REPLY_FORMS: readonly string[] = [
-  `**approved**: publish this preview as is (placeholders included).`,
-  `**changes: …**: I'll make them and send you a new preview.`,
-  `**Missing items + "publish"**: attach them or add them to Drive, reply "publish", and I'll fill them in and publish without another preview.`,
-  `**Missing items + "preview"**: attach them or add them to Drive, reply "preview", and I'll fill them in and send you another preview.`,
-];
+/**
+ * THE PREVIEW'S REPLY OPTIONS, FOR WHAT IS ACTUALLY ON IT (21 Nov 2026). With placeholders: publish as is, change it, or
+ * send the missing items. With none, the missing-items options and "placeholders included" are noise to a busy partner:
+ * only "approved" and "changes: …". Pure.
+ */
+export function previewReplyForms(placeholders: number): string[] {
+  if (placeholders <= 0) return [`**approved**: publish this preview.`, `**changes: …**: I'll make them and send you a new preview.`];
+  return [
+    `**approved**: publish this preview as is (placeholders included).`,
+    `**changes: …**: I'll make them and send you a new preview.`,
+    `**Missing items + "publish"**: attach them or add them to Drive, reply "publish", and I'll fill them in and publish without another preview.`,
+    `**Missing items + "preview"**: attach them or add them to Drive, reply "preview", and I'll fill them in and send you another preview.`,
+  ];
+}
 
 /** 17 Nov 2026 (wc_c548d043): he said "please don't ask me to reply 'approved' until I say so" — the forms ask nothing of him. */
 export const PREVIEW_NOT_YET_FORMS: readonly string[] = [
@@ -488,7 +496,7 @@ export function previewNotice(input: { title: string; previewLine: string | null
     ask: input.noApprovalAsk
       ? { reply: `Reply "changes: …" with anything to adjust on the preview`, ifSilent: "it stays on the preview until you say it is ready" }
       : { reply: `Reply "approved" to put it live, or "changes: …" with what to adjust`, ifSilent: PORTER_IF_SILENT },
-    tldrBullets: [...(input.noApprovalAsk ? PREVIEW_NOT_YET_FORMS : PREVIEW_REPLY_FORMS)],
+    tldrBullets: [...(input.noApprovalAsk ? PREVIEW_NOT_YET_FORMS : previewReplyForms(p))],
     sections,
   };
 }

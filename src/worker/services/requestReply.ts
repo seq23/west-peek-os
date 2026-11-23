@@ -1,3 +1,4 @@
+import { isEmailSendEnabled } from "../effects/resendClient";
 import { isTechnicalBlock } from "../../shared/work/blocks";
 import { porterContext } from "./porterContext";
 import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
@@ -185,7 +186,7 @@ export async function replyToRequester(
    * function's, unchanged.
    */
   composed?: { what: string; tldr: string; tldrBullets: readonly string[]; sections: ReadonlyArray<{ label: string; bullets: string[] }>; details?: string | null; ask?: import("../../shared/email/execEmail").ActionAsk | null } | null,
-): Promise<{ sent: boolean; to: string | null; reason: string }> {
+): Promise<{ sent: boolean; to: string | null; reason: string; failed?: boolean }> {
   const to = (card.requested_by_email ?? "").trim().toLowerCase();
   if (!to) return { sent: false, to: null, reason: "the card was not asked for by email" };
   if (!ASSIGNING_PARTNERS.includes(to)) {
@@ -257,13 +258,15 @@ export async function replyToRequester(
     : {
         employee: who,
         // A LANE FAULT IS "STUCK", NOT A QUESTION: the reader cannot answer it, and it says so.
-        what: outcome === "DONE" ? `done — ${asked}` : stuck ? `stuck — ${asked}` : `${ACTION_REQUIRED}a question — ${asked}`,
+        what: outcome === "DONE" ? `done — ${asked}` : stuck ? `stuck — ${asked}` : `a question — ${asked}`,
+        // A question waits on the partner: the ask in bold and its default, and ACTION REQUIRED (execEmail reads `ask`).
+        ask: outcome === "BLOCKED" && !stuck ? { reply: "Reply to this email with your answer, and I carry on", ifSilent: "I hold it where it is, carry on with anything that does not need you, and ask again in a couple of days" } : null,
         tldr:
           outcome === "DONE"
             ? `Finished what you asked for: ${asked}. Nothing needs deciding unless you want more.`
             : stuck
               ? `I'm stuck on ${asked}: something on our side has to be fixed first. What stopped me is below.`
-              : `One question before I go on with ${asked}: reply to this email with your answer and I carry on.`,
+              : `One question before I go on with ${asked}.`,
         sections: [
           { label: "What you asked", bullets: [asked] },
           outcome === "DONE"
@@ -311,8 +314,10 @@ export async function replyToRequester(
     actorId: "work_sweep",
     events: { sent: "work_card.replied_by_email", notSent: "work_card.reply_not_sent" },
   });
+  // Refused by the mail service with sending on: marked, so the next go sends it and it never counts as told (as tellRequester).
+  const failed = !out.sent && !out.previewed && isEmailSendEnabled(env);
   if (notice) {
-    await recordNotice(env, { cardId: card.id, kind: notice.kind, cause: notice.cause, to, messageId: out.threadToken ?? null, sent: out.sent, detail: out.reason, firmScope: card.firm_scope });
+    await recordNotice(env, { cardId: card.id, kind: notice.kind, cause: notice.cause, to, messageId: out.threadToken ?? null, sent: out.sent, detail: failed ? `${SEND_FAILED}${out.reason}` : out.reason, firmScope: card.firm_scope });
   }
-  return { sent: out.sent, to, reason: out.reason };
+  return { sent: out.sent, to, reason: out.reason, failed };
 }

@@ -10,7 +10,7 @@ import {
   liveUrlsFrom,
   noticeWords,
   planNotice,
-  PREVIEW_REPLY_FORMS,
+  previewReplyForms,
   previewNotice,
   questionNotice,
   STAGE,
@@ -107,7 +107,7 @@ describe("the preview email (owner's spec, 23 Sep 2026)", () => {
     expect(r.subject).toBe("ACTION REQUIRED: Porter: Community site redesign: Preview ready");
     const lines = r.text.split("\n");
     expect(lines[0]).toBe(`**TL;DR:** **Reply "approved" to put it live, or "changes: …" with what to adjust.** If I don't hear back, nothing goes live, it stays where it is, and I'll ask again in a couple of days. Preview ready, with **4** placeholders. Reply with one of these:`);
-    expect(lines.slice(1, 5)).toEqual(PREVIEW_REPLY_FORMS.map((f) => `• ${f}`));
+    expect(lines.slice(1, 5)).toEqual(previewReplyForms(4).map((f) => `• ${f}`));
     expect(r.text).toMatch(/\*\*Preview\*\*\n• Current preview \(built 12:40 CT, \*\*4\*\* placeholders\): https:\/\/work-wpc-c9e36e8b\.west-peek-community\.pages\.dev\n/);
     expect(r.text).toMatch(/\*\*Still missing \(optional\)\*\*\n• Sengo application link\n/);
     expect(r.text, "no PR link, no proof dump, no details block").not.toMatch(/github\.com|WHAT WAS PROVEN|Full details/);

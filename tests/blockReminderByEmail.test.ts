@@ -120,12 +120,13 @@ describe("a block reminder reaches an emailed requester by email", () => {
     expect(await resurfaceStaleBlocks(env, new Date(NOW.getTime() + 60_000))).toEqual([]);
   });
 
-  it("(c) a blocked card nobody asked for by email sends no email and still gets its in-app notice", async () => {
+  it("(c) a card nobody asked for by email still reaches the partner it waits on (21 Nov 2026), once, and still gets its in-app notice", async () => {
     await seedBlocked(BARE, null);
     const rung = await resurfaceStaleBlocks(env, NOW);
     expect(rung.map((r) => r.id)).toEqual([BARE]);
-    expect(sent).toHaveLength(0);
-    expect(await notices(BARE)).toEqual([]);
+    expect(sent.map((m) => m.to), "block_who names Scooter: the re-ask goes to him").toEqual([SCOOTER]);
+    expect(sent[0]!.subject).toMatch(/^ACTION REQUIRED: /);
+    expect(await notices(BARE)).toEqual([{ kind: "QUESTION", cause: "nag:1", sent: 1, sent_to: SCOOTER }]);
     expect(await inApp(BARE)).toBe(1);
   });
 });

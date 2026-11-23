@@ -1,3 +1,4 @@
+import type { ActionAsk } from "../email/execEmail";
 /**
  * What a block has to say, and what the owner can do about it (16 Sep 2026).
  *
@@ -576,3 +577,64 @@ export function blockReplyDoor(text: string, offered: ReadonlyArray<{ key: strin
  * preview". Every place that stores, reads or hands on her answer uses this one cap.
  */
 export const PARTNER_ANSWER_MAX = 8000;
+
+// ── The re-ask, for every employee (her ruling 21 Nov 2026) ──────────────────────────────────────
+
+/** A stage notice the employee already writes for this wait (Porter's preview or plan), reused for the first re-ask. */
+export interface ReAskStage {
+  what: string;
+  tldr: string;
+  tldrBullets?: string[];
+  sections: Array<{ label: string; bullets: string[] }>;
+  ask?: ActionAsk;
+}
+
+/**
+ * THE ONE RE-ASK WRITER, whoever's card it is (21 Nov 2026). Each re-ask is shorter and never in the same words: the first
+ * (about 2 days on) is the wait in full (the employee's own stage notice when it has one); the second (about 9 days on) is
+ * the ask and one line of why; every later one is the ask alone, with its count and day. Every one leads with the ask in
+ * bold and the default (`ExecEmailInput.ask`), so its subject reads ACTION REQUIRED. Pure.
+ */
+export function reAskEmail(input: { nag: number; days: number; title: string; cardId: string; needed: string; nextAskAt: string; now: Date; stage?: ReAskStage | null }): ReAskStage & { ask: ActionAsk } {
+  const { nag, days, title, needed, stage } = input;
+  const on = dayOf(input.nextAskAt);
+  const ask: ActionAsk = stage?.ask ? { ...stage.ask, ifSilent: `${stage.ask.ifSilent.replace(/,? and I'll ask again in a couple of days$/, "")}, and I'll ask again on ${on}` } : reAskOf(needed, input.nextAskAt);
+  const cardLine = `The card: https://os.joinwestpeek.com/#/work (card ${input.cardId})`;
+  const daysWord = `${days} day${days === 1 ? "" : "s"}`;
+  if (nag <= 1) {
+    const lines = needed.split("\n").map((l) => l.replace(/^[•·\-*]\s+/, "").trim()).filter(Boolean);
+    const carried = JSON.stringify(stage ?? {});
+    const waiting = lines.length && !lines.every((l) => carried.includes(l)) ? [{ label: "What I'm waiting on", bullets: lines.slice(0, 12) }] : [];
+    if (stage) return { ...stage, tldr: `A reminder, ${daysWord} on. ${stage.tldr}`, sections: [...waiting, ...stage.sections], ask };
+    return { what: `${title}: still waiting on you`, tldr: `A reminder, ${daysWord} on.`, sections: [...waiting, { label: "The card", bullets: [cardLine] }], ask };
+  }
+  if (nag === 2) {
+    return {
+      what: `${title}: still waiting on you`,
+      tldr: `A second reminder, ${daysWord} since I asked; nothing has moved without you.`,
+      sections: [{ label: "Where it stands", bullets: [reAskContext(needed, title)] }, { label: "The card", bullets: [cardLine] }],
+      ask,
+    };
+  }
+  return { what: `${title}: still open`, tldr: `Reminder ${nag} (${dayOf(input.now.toISOString())}).`, sections: [{ label: "Waiting", bullets: [daysWord] }, { label: "The card", bullets: [cardLine] }], ask };
+}
+
+/** The ask a re-ask leads with when no stage notice says it: what the card waits on, as one reply, and the default. Pure. */
+export function reAskOf(needed: string, nextAskAt: string): ActionAsk {
+  const flat = needed.replace(/\s+/g, " ").trim();
+  const clear = /To clear it by email:\s*(.+?)\.?$/i.exec(flat)?.[1];
+  const waiting = /Waiting on:\s*(.+?)\.\s*Why:/i.exec(flat)?.[1];
+  const reply = clear
+    ? `${waiting ? `I need ${waiting}: ` : ""}${clear.charAt(0).toUpperCase()}${clear.slice(1)}`
+    : `Reply to this email with ${flat ? `your answer (${flat.slice(0, 160)})` : "your answer"}`;
+  return { reply, ifSilent: `I keep it where it is, carry on with anything that does not need you, and ask again on ${dayOf(nextAskAt)}` };
+}
+
+function dayOf(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "America/Chicago" });
+}
+
+function reAskContext(needed: string, title: string): string {
+  const why = /Why:\s*(.+?)\.\s*To clear it/i.exec(needed.replace(/\s+/g, " "))?.[1];
+  return why ? `Why it waits: ${why}.` : `It is the "${title}" job.`;
+}

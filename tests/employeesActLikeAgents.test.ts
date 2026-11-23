@@ -8,7 +8,7 @@ import { sweepOnce } from "../src/worker/services/workSweep";
 import { steerFromReply } from "../src/worker/services/emailThread";
 import { threadReference } from "../src/shared/email/thread";
 import { ACTION_REQUIRED, renderExecEmail } from "../src/shared/email/execEmail";
-import { doneNotice, planNotice, previewNotice, questionNotice, stuckNotice } from "../src/shared/work/porterNotices";
+import { doneNotice, planNotice, previewNotice, previewReplyForms, questionNotice, stuckNotice } from "../src/shared/work/porterNotices";
 import type { ReplyIntentReader } from "../src/worker/services/replyIntent";
 import { saidNothing } from "./helpers/interpret";
 
@@ -280,5 +280,78 @@ describe("the hire search acts on its own results", () => {
     const goReader: ReplyIntentReader = async () => ({ kind: "CONTINUE", changes: null, question: null, reading: { kind: "ANSWERS", text: "" }, source: "MODEL", door: null, seat: null, nothing: false, reason: "keep going", aiRunId: null });
     const resumed = await runWeek(new Date("2026-12-29T15:00:00.000Z"), () => fresh("Nye"), goReader);
     expect(resumed.prompts.length, "resumed").toBeGreaterThan(0);
+  });
+});
+
+// ── follow-ups (21 Nov 2026): a clean preview offers two replies; every employee re-asks the same way ──────────
+
+describe("a preview with no placeholders offers only approved / changes", () => {
+  it("0 placeholders: two options, no 'placeholders included', no 'Missing items'; with placeholders, all four", () => {
+    const clean = renderExecEmail({ employee: "Porter", ...previewNotice({ title: "Homepage headline", previewLine: "https://p.example", placeholders: [], cardId: "wc_x" }) });
+    expect(clean.text).not.toMatch(/placeholders included|Missing items/);
+    expect(clean.text).toMatch(/• \*\*approved\*\*: publish this preview\.\n• \*\*changes: …\*\*: I'll make them and send you a new preview\.\n\n/);
+    expect(previewReplyForms(0)).toHaveLength(2);
+    const gaps = renderExecEmail({ employee: "Porter", ...previewNotice({ title: "Homepage headline", previewLine: "https://p.example", placeholders: ["the logo", "the photo"], cardId: "wc_x" }) });
+    expect(gaps.text).toMatch(/placeholders included/);
+    expect(gaps.text.match(/Missing items \+/g)).toHaveLength(2);
+  });
+});
+
+async function seedEmployeeBlock(id: string, owner: string, who: "SCOOTER" | "SEQUOIA", kind: string | null): Promise<void> {
+  await env.WP_OS_DB.prepare(
+    `INSERT INTO work_card (id, title, description, owner_type, owner_id, state, priority, privacy_label, firm_scope, created_by, kind,
+                            block_who, block_needed, block_reason, block_stopped, block_trying, block_actions_json, blocked_at, block_nag_at, block_nags, created_at)
+     VALUES (?1, 'Productions November leads note', 'x', 'AI', ?2, 'BLOCKED', 'NORMAL', 'INTERNAL', 'west-peek', 'system:job', ?3,
+             ?4, 'Waiting on: which two organisations to lead with. Why: six fit equally. To clear it by email: reply with the two names.', 'a_question_for_you', 'six fit equally', 'the leads note', '[{"key":"ANSWER","label":"Answer"}]', ?5, ?6, 0, ?5)`,
+  ).bind(id, owner, kind, who, T0.toISOString(), nagAt(T0, "a_question_for_you", 0)).run();
+}
+
+describe("every employee's card that waits on a partner is re-asked the same way, in that employee's name", () => {
+  it("Walker's card (no requester email) waiting on Scooter: ACTION REQUIRED re-asks at ~2d and ~9d, from Walker, shorter, on the ledger", async () => {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state = 'BLOCKED'").run();
+    await seedEmployeeBlock("wc_walker_wait", "aie_walker", "SCOOTER", null);
+    await resurfaceStaleBlocks(env, new Date(T0.getTime() + 1.5 * DAY));
+    expect(sent, "nothing before two days").toHaveLength(0);
+    await resurfaceStaleBlocks(env, new Date(T0.getTime() + 2 * DAY + 60_000));
+    await resurfaceStaleBlocks(env, new Date(T0.getTime() + 9 * DAY + 2 * 60_000));
+    expect(sent.map((m) => m.to)).toEqual([SCOOTER, SCOOTER]);
+    for (const m of sent) {
+      expect(m.subject).toMatch(/^ACTION REQUIRED: Walker: Productions November leads note: still waiting on you/);
+      expect(m.html).toMatch(/<strong>I need which two organisations to lead with: Reply with the two names\.<\/strong> If I don't hear back, I keep it where it is, carry on with anything that does not need you, and ask again on [A-Z][a-z]{2}, [A-Z][a-z]{2} \d+\./);
+      expect(m.text, "spoken as Walker").toMatch(/— Walker/);
+      expect(m.text).not.toMatch(/Porter/);
+    }
+    expect(sent[1]!.text).not.toBe(sent[0]!.text);
+    const ledger = (await env.WP_OS_DB.prepare("SELECT kind, cause, sent FROM work_card_notice WHERE work_card_id = 'wc_walker_wait' ORDER BY cause").all<{ kind: string; cause: string; sent: number }>()).results!;
+    expect(ledger).toEqual([{ kind: "QUESTION", cause: "nag:1", sent: 1 }, { kind: "QUESTION", cause: "nag:2", sent: 1 }]);
+  });
+
+  it("Preston's card waiting on Sequoia goes to Sequoia in Preston's name; a fault on our side is never emailed as a question", async () => {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state = 'BLOCKED'").run();
+    await env.WP_OS_DB.prepare("UPDATE ai_employee SET status = 'ACTIVE' WHERE id = 'aie_preston'").run();
+    await seedEmployeeBlock("wc_preston_wait", "aie_preston", "SEQUOIA", null);
+    await resurfaceStaleBlocks(env, new Date(T0.getTime() + 2 * DAY + 60_000));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.to).toBe("sequoia@westpeek.ventures");
+    expect(sent[0]!.subject).toMatch(/^ACTION REQUIRED: Preston: /);
+
+    sent.length = 0;
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state = 'BLOCKED'").run();
+    await seedEmployeeBlock("wc_preston_fault", "aie_preston", "SEQUOIA", null);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET block_reason = 'stopped_part_way' WHERE id = 'wc_preston_fault'").run();
+    await resurfaceStaleBlocks(env, new Date(T0.getTime() + 3 * DAY));
+    expect(sent, "a fault rings in the app, never as a question by email").toHaveLength(0);
+  });
+
+  it("a send that fails for a non-Porter card is retried on the next sweep and sent once", async () => {
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE state = 'BLOCKED'").run();
+    await seedEmployeeBlock("wc_walker_outage", "aie_walker", "SCOOTER", null);
+    const due = new Date(T0.getTime() + 2 * DAY + 60_000);
+    resendDown = true;
+    await resurfaceStaleBlocks(env, due);
+    resendDown = false;
+    await resurfaceStaleBlocks(env, new Date(due.getTime() + 5 * 60_000));
+    await resurfaceStaleBlocks(env, new Date(due.getTime() + 10 * 60_000));
+    expect(sent.filter((m) => m.to === SCOOTER)).toHaveLength(1);
   });
 });
