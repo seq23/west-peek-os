@@ -1,7 +1,7 @@
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { readDeck } from "./deckReader";
-import { decodeHeader, deckLinks, messageText, pdfAttachments, unreadableDeckAttachments } from "../effects/mail";
+import { decodeHeader, deckLinks, messageText, pdfAttachments, readMail, unreadableDeckAttachments } from "../effects/mail";
 import { dealFromMessage, intakeDealFromEmail } from "./dealIntake";
 import { createWorkCardInternal } from "./workCards";
 import { triggersIn } from "../../shared/intake/emailTriggers";
@@ -293,11 +293,15 @@ export async function runDeckReading(env: Env): Promise<{ read: number; failed: 
      * the ceiling on a readable deck was about 190KB — base64 is 4/3 — and the operator's actual
      * 7MB deck could never have been read no matter what else worked.
      */
-    // The whole message, kept before the next block replaces this variable with the attachment.
-    const rawEml = deck.object_key.endsWith(".eml") ? dataBase64 : "";
+    // The message's subject and words, kept before the next block replaces this variable with the attachment.
+    let emlText: { subject: string; body: string } = { subject: "", body: "" };
 
     if (deck.object_key.endsWith(".eml")) {
-      const { attachments, unread } = await pdfAttachments(dataBase64);
+      // ONE PARSE of the message, scoped to this block (22 Nov 2026): its attachment buffers are released before the deck
+      // is read, and nothing outside the block keeps them.
+      const mail = await readMail(dataBase64);
+      emlText = messageText(mail);
+      const { attachments, unread } = pdfAttachments(mail);
       if (attachments.length === 0) {
         /*
          * SAY WHAT ARRIVED, not what was absent.
@@ -313,8 +317,8 @@ export async function runDeckReading(env: Env): Promise<{ read: number; failed: 
          * the browser tool cannot do. Reporting them precisely is the honest half, and it is the
          * half that lets somebody act.
          */
-        const otherFiles = await unreadableDeckAttachments(dataBase64);
-        const { subject: emlSubject, body: emlBody } = await messageText(dataBase64);
+        const otherFiles = unreadableDeckAttachments(mail);
+        const { subject: emlSubject, body: emlBody } = emlText;
         const links = deckLinks(`${emlSubject}\n${emlBody}`);
 
         const reasons: string[] = [];
@@ -367,7 +371,7 @@ export async function runDeckReading(env: Env): Promise<{ read: number; failed: 
        * `=?utf-8?Q?Fwd:_Vynlo_=E2=80=94_pre-seed?=`, and any subject with an em dash or an accent
        * arrives this way — which is most forwards from founders.
        */
-      const raw = await messageText(rawEml);
+      const raw = emlText;
       const emlSubject = decodeHeader(raw.subject);
       const emlBody = raw.body;
       const tags = triggersIn(`${emlSubject}\n${emlBody}`);

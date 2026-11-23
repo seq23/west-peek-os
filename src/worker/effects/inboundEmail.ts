@@ -7,7 +7,7 @@ import { dealFromMessage, intakeDealFromEmail, matchFunnelCompany, openAssignmen
 import { notifyQuietly } from "../services/notifications";
 import { PREVIEW_PARTNER } from "../../shared/registry/partners";
 import { ASSIGNING_PARTNERS, EMAILED_TASK_LIMITS, addressIn, mailAuthority } from "../../shared/intake/partnerAuthority";
-import { decodeHeader, pdfAttachments, readMail, requestAttachments, textBodyOf } from "./mail";
+import { decodeHeader, mailOf, pdfAttachments, readMail, requestAttachments, type Mail } from "./mail";
 import { askWhichCard, withoutSignatures, type RouteAs } from "../services/emailRouting";
 import { profileNotesIn, recordProfileNotes, refreshWorkingOn } from "../services/partnerProfile";
 import { threadTokensIn } from "../../shared/email/thread";
@@ -316,7 +316,7 @@ export interface InboundOptions {
 
 /** What a non-card handler in the door did with a message. */
 export interface DoorHandled {
-  by: "tlc_draft_reply" | "tlc_brand_reply" | "tlc_brand_reply_approval" | "tlc_send_pause" | "packet_decision" | "clarification" | "firm_self_test" | "deck_start";
+  by: "tlc_draft_reply" | "tlc_brand_reply" | "tlc_brand_reply_approval" | "tlc_send_pause" | "packet_decision" | "clarification" | "firm_self_test" | "deck_start" | "unparseable";
   ref: string | null;
   detail: string;
 }
@@ -476,6 +476,11 @@ export interface KeptMessage {
   failure: string;
   /** The whole message as text, when it was small enough to read at the door. */
   text: string | null;
+  /**
+   * `text`, parsed ONCE for this request (null with no text). Set by the door straight after the store and replaced
+   * with `text` whenever a secret is scrubbed out of it; every reader in this request reads this, never a new parse.
+   */
+  mail?: Mail | null;
   /** True when a message claiming a partner's address failed authentication and was NOT kept. */
   refusedAsSpoof: boolean;
 }
@@ -698,7 +703,7 @@ async function linkStoredMessage(env: Env, kept: KeptMessage, cardId: string | n
   try {
     if (!kept.text) return;
     const who = await env.WP_OS_DB.prepare("SELECT json_extract(mail_authority_json, '$.partner') AS partner FROM inbound_message WHERE id = ?1").bind(kept.rowId).first<{ partner: string | null }>();
-    if (who?.partner) await joinSharesNamedIn(env, { cardId, partnerEmail: who.partner, text: await textBodyOf(kept.text) });
+    if (who?.partner) await joinSharesNamedIn(env, { cardId, partnerEmail: who.partner, text: (await mailOf(kept.text, kept.mail)).text });
   } catch (err) {
     console.error("joining a named share failed", err);
   }
@@ -742,16 +747,17 @@ async function handleIfReply(
   },
 ): Promise<boolean> {
   const { message, subject, sender, raw, kept, inReplyTo, references, firmScope } = input;
+  const mail = await mailOf(raw, kept.mail);
   /*
    * RULE 1e (9 Oct 2026): AN EMPTY EMAIL STEERS NOTHING AND OPENS NOTHING. "Sent from my iPhone" and
    * nothing else — no words above the quote, no file — on a reply (or with no subject at all) is a
    * pocket send. It used to reach the steer matcher, which opened "a reply I could not act on" card.
    * A forward is never empty here: its content is the forwarded message.
    */
-  const written = withoutSignatures(writtenAndQuoted(`\r\n\r\n${await textBodyOf(raw)}`, { inReplyTo, references, subject }).written);
+  const written = withoutSignatures(writtenAndQuoted(`\r\n\r\n${mail.text}`, { inReplyTo, references, subject }).written);
   const isReply = threadTokensIn({ inReplyTo, references }).length > 0 || /^\s*(?:re|aw|sv)\s*:/i.test(subject);
   const isForward = /^\s*(?:fwd?|fw)\s*:/i.test(subject);
-  const files = await requestAttachments(raw);
+  const files = requestAttachments(mail);
   if (!written && !isForward && files.attachments.length === 0 && files.unread.length === 0 && (isReply || !strippedSubject(subject).trim())) {
     await appendEvent(env, {
       eventType: "inbound_email.empty",
@@ -820,7 +826,7 @@ async function handleIfReply(
     const { recordBrandReplyText } = await import("../services/learningClub");
     const { newTextOf } = await import("../../shared/events/packetDecisionToken");
     // Preserve thread and reply-all headers; Wynn decodes the body and removes the quoted original.
-    const brand = await recordBrandReplyText(env, { from: sender, subject, text: raw, messageId: message.headers.get("message-id") }).catch(() => ({ matched: 0, stop: null }));
+    const brand = await recordBrandReplyText(env, { from: sender, subject, text: raw, mail, messageId: message.headers.get("message-id") }).catch(() => ({ matched: 0, stop: null }));
     void newTextOf;
     if (brand.matched > 0) {
       // A brand's answer is Wynn's (tlcBrandReply), never an "Unclear email" card for Porter.
@@ -836,7 +842,7 @@ async function handleIfReply(
   {
     // HER "APPROVE" TO WYNN'S "BRAND EMAILS ARE PAUSED" EMAIL (owner, 4 Nov 2026; services/tlcSendPause.ts).
     const { applySendPauseApproval } = await import("../services/tlcSendPause");
-    const out = await applySendPauseApproval(env, { fromHeader: message.headers.get("from"), authenticationResults: message.headers.get("authentication-results"), subject, body: raw })
+    const out = await applySendPauseApproval(env, { fromHeader: message.headers.get("from"), authenticationResults: message.headers.get("authentication-results"), subject, body: raw, mail })
       .catch((err) => ({ handled: false, ref: null, detail: err instanceof Error ? err.message : String(err) }));
     if (out.handled) {
       await appendEvent(env, {
@@ -851,7 +857,7 @@ async function handleIfReply(
   {
     // HER ANSWER TO WYNN'S BRAND-REPLY APPROVAL EMAIL ("approved" / "change: …" / "skip"), from her approval address.
     const { applyBrandReplyApproval } = await import("../services/tlcBrandReply");
-    const out = await applyBrandReplyApproval(env, { fromHeader: message.headers.get("from"), authenticationResults: message.headers.get("authentication-results"), subject, body: raw })
+    const out = await applyBrandReplyApproval(env, { fromHeader: message.headers.get("from"), authenticationResults: message.headers.get("authentication-results"), subject, body: raw, mail })
       .catch((err) => ({ handled: false, ref: null, detail: err instanceof Error ? err.message : String(err) }));
     if (out.handled) {
       await appendEvent(env, {
@@ -865,7 +871,7 @@ async function handleIfReply(
   }
   {
     const { applyTlcDraftReply } = await import("../services/tlcDraftNotice");
-    const tlc = await applyTlcDraftReply(env, { fromHeader: message.headers.get("from"), authenticationResults: message.headers.get("authentication-results"), subject, body: await textBodyOf(raw) })
+    const tlc = await applyTlcDraftReply(env, { fromHeader: message.headers.get("from"), authenticationResults: message.headers.get("authentication-results"), subject, body: raw, mail })
       .catch((err) => ({ handled: false, ref: null, detail: err instanceof Error ? err.message : String(err) }));
     if (tlc.handled) {
       await appendEvent(env, {
@@ -909,6 +915,7 @@ async function handleIfReply(
       subject,
       from: sender,
       raw,
+      mail,
       triggers: [],
       why:
         `This looks like an answer to one of Parker's packets, and I did not act on it: ${replyDecision.capture}. ` +
@@ -956,6 +963,7 @@ async function handleIfReply(
     authenticationResults: message.headers.get("authentication-results"),
     subject,
     raw,
+    mail,
     inReplyTo,
     references,
     emlKey: kept.key,
@@ -1010,6 +1018,7 @@ async function handleIfReply(
       subject,
       from: sender,
       raw,
+      mail,
       triggers: [],
       why: `This replies to one of our own notes and I did not act on it: ${steer.reason}. Nothing was changed.`,
       emlKey: kept.key,
@@ -1108,12 +1117,17 @@ async function handleInboundEmailOnce(
   const references = message.headers.get("references");
 
   /*
-   * A MESSAGE THE PARSER REFUSES IS KEPT AND FLAGGED, NEVER LOST (22 Nov 2026, olp_m81kzk624ngsdh1v). The .eml is
-   * already in R2 (`kept.key`); every reader below sees it as empty, so nothing acts on a guess about its contents,
-   * and the problem goes on Sequoia's desk with the stored key so the message can be opened by hand.
+   * THE ONE PARSE OF THIS MESSAGE (22 Nov 2026). Made here, once, and carried on `kept` to every reader in this request;
+   * it is gone when the request is (nothing in effects/mail.ts keeps it).
+   *
+   * A MESSAGE THE PARSER REFUSES IS KEPT AND FLAGGED, NEVER LOST, AND NEVER READ AS AN EMPTY ONE (22 Nov 2026,
+   * olp_m81kzk624ngsdh1v). The .eml is already in R2 (`kept.key`); the problem goes on Sequoia's desk with the stored
+   * key so the message can be opened by hand, and the door STOPS: no reader below sees it, so no card, reply or steer
+   * is made from a message nobody could read.
    */
-  if (kept.text) {
-    const parsed = await readMail(kept.text);
+  kept.mail = kept.text ? await readMail(kept.text) : null;
+  if (kept.mail) {
+    const parsed = kept.mail;
     if (parsed.problem) {
       await raiseUnreadMail(env, {
         dedupeKey: `unparseable:${kept.key ?? message.headers.get("message-id") ?? subject}`,
@@ -1130,6 +1144,8 @@ async function handleInboundEmailOnce(
         firmScope,
         payload: { from: sender, subject, stored: kept.key, problem: parsed.problem },
       });
+      options.onHandled?.({ by: "unparseable", ref: kept.key, detail: `the mail parser refused it (${parsed.problem}); kept and put on the desk, nothing acted on` });
+      return;
     }
   }
 
@@ -1143,9 +1159,11 @@ async function handleInboundEmailOnce(
   if (authority.isAssignment && kept.text) {
     const { secretDoor } = await import("../services/secretHandoff");
     const { loadRegistry } = await import("../services/webPropertyRegistry");
-    const door = await secretDoor(env, { raw: kept.text, subject, kept, partnerAddress: authority.partnerAddress!, firmScope, registry: await loadRegistry(env), employee: ROUTING_EMPLOYEE, replyOnThread: options.replyOnThread ?? null });
+    const door = await secretDoor(env, { mail: kept.mail!, subject, kept, partnerAddress: authority.partnerAddress!, firmScope, registry: await loadRegistry(env), employee: ROUTING_EMPLOYEE, replyOnThread: options.replyOnThread ?? null });
     if (door.stored.length || door.refused.length) {
-      (kept as { text: string | null }).text = door.raw;
+      // The scrubbed copy and its parse replace the original together, so no reader below sees the value.
+      kept.text = door.mail.raw;
+      kept.mail = door.mail;
       if (door.onlySecrets) {
         await appendEvent(env, {
           eventType: "inbound_email.received",
@@ -1161,6 +1179,8 @@ async function handleInboundEmailOnce(
       if (door.line && !options.receivedTldr) options = { ...options, receivedTldr: door.line };
     }
   }
+
+  const mail = kept.mail ?? null;
 
   /*
    * A BIG MESSAGE IS NOT A REJECTED ONE. This dropped a real deck on the floor.
@@ -1256,6 +1276,7 @@ async function handleInboundEmailOnce(
         partnerAddress: authority.partnerAddress!,
         chiefOfStaff: authority.chiefOfStaff!,
         raw: rawText,
+        mail,
         limits: EMAILED_TASK_LIMITS,
         emlKey: storedKey,
         storeNote: notKept(kept),
@@ -1381,7 +1402,7 @@ async function handleInboundEmailOnce(
    * shared it; the file goes on his open job it is about, or a new card for him with one plain question.
    * Only a share no partner can be identified behind falls through to the ladder's can't-place question.
    */
-  const share = driveShareNotice({ from: message.headers.get("from"), replyTo: message.headers.get("reply-to"), authenticationResults: message.headers.get("authentication-results"), subject, body: await textBodyOf(raw) });
+  const share = driveShareNotice({ from: message.headers.get("from"), replyTo: message.headers.get("reply-to"), authenticationResults: message.headers.get("authentication-results"), subject, body: mail?.text ?? "" });
   if (share) {
     const receivedAt = kept.rowId ? ((await env.WP_OS_DB.prepare("SELECT received_at FROM inbound_message WHERE id = ?1").bind(kept.rowId).first<{ received_at: string }>())?.received_at ?? new Date().toISOString()) : new Date().toISOString();
     const out = await handleDriveShare(env, { notice: share, receivedAt, messageId: inboundMessageKey(message.headers) ?? `no-message-id:${kept.rowId ?? crypto.randomUUID()}`, emlKey: kept.key });
@@ -1461,7 +1482,7 @@ async function handleInboundEmailOnce(
    * exactly as before. Recorded now; the round's email and any edit are the sweep's work.
    */
   if (summary.unrouted && authority.isAssignment && !origin?.from) {
-    const start = fundDeckStart({ subject, body: await textBodyOf(raw), hasAttachment: (await readMail(raw)).files.some((f) => f.sentAsFile || f.mediaType === "application/pdf") });
+    const start = fundDeckStart({ subject, body: mail?.text ?? "", hasAttachment: (mail?.files ?? []).some((f) => f.sentAsFile || f.mediaType === "application/pdf") });
     if (start) {
       const { startDeckFromEmail } = await import("../services/deckPreview");
       const out = await startDeckFromEmail(env, { partnerAddress: authority.partnerAddress!, words: start.words });
@@ -1481,6 +1502,7 @@ async function handleInboundEmailOnce(
       partnerAddress: authority.partnerAddress!,
       chiefOfStaff: authority.chiefOfStaff!,
       raw,
+      mail,
       limits: EMAILED_TASK_LIMITS,
       emlKey: kept.key,
       storeNote: notKept(kept),
@@ -1535,11 +1557,12 @@ async function handleInboundEmailOnce(
    * `Company:` field convention, so a founder does not have to learn two ways to say who they are.
    */
   if (summary.triggers.includes("#wpupdate")) {
-    const named = await dealFromMessage(summary.subject, raw, summary.from, false);
+    const named = await dealFromMessage(summary.subject, raw, summary.from, false, mail);
     updateCardId = await openPortfolioUpdateCard(env, {
       subject: summary.subject,
       from: summary.from,
       raw,
+      mail,
       company: named?.company ?? null,
       emlKey: kept.key,
       storeNote: notKept(kept),
@@ -1549,7 +1572,7 @@ async function handleInboundEmailOnce(
 
   let dealCompany: string | null = null;
   if (wantsDeal) {
-    let deal = await dealFromMessage(summary.subject, raw, summary.from, summary.triggers.includes("#wpdeck"));
+    let deal = await dealFromMessage(summary.subject, raw, summary.from, summary.triggers.includes("#wpdeck"), mail);
     // An untagged subject names a company only when the register already knows it. "check this
     // out" with the tag in the body is a conversation, and a company by that name at the top of the
     // funnel is what the owner's placement matrix caught (16 Sep 2026). A real forward — "Fwd:
@@ -1578,7 +1601,7 @@ async function handleInboundEmailOnce(
        * this handler has 10ms of CPU. The employee reads it on their own step, with their own
        * budget — the same store-now-read-later shape the oversize path uses.
        */
-      const { attachments, unread } = await pdfAttachments(raw);
+      const { attachments, unread } = pdfAttachments(await mailOf(raw, mail));
 
       /*
        * `#wpdeck` AND `#wpdealflow` DO THE SAME THING, and the difference is now decided by looking.
@@ -1637,6 +1660,7 @@ async function handleInboundEmailOnce(
         subject: summary.subject,
         from: summary.from,
         raw,
+        mail,
         triggers: summary.triggers,
         why: "Tagged for deal flow, but no company name could be read out of it.",
         emlKey: kept.key,
@@ -1666,6 +1690,7 @@ async function handleInboundEmailOnce(
       subject: summary.subject,
       from: summary.from,
       raw,
+      mail,
       triggers: [],
       why: claimsToBePartner
         ? `No recognised tag. It says it is from a Managing Partner, and it was NOT treated as an assignment because ${authority.reason}. ` +
@@ -1722,6 +1747,7 @@ async function handleInboundEmailOnce(
         subject: summary.subject,
         from: summary.from,
         raw,
+        mail,
         triggers: summary.triggers,
         why: `Tagged for the network, but the person was not added: ${relayed.detail}.`,
         emlKey: kept.key,
@@ -1896,9 +1922,11 @@ export async function dryReadMessage(env: Env, raw: string, deps: { read?: impor
   const { replyThreadFromHeaders } = await import("../services/emailThread");
   const thread = await replyThreadFromHeaders(env, { fromHeader: headers.get("from"), subject, inReplyTo: headers.get("in-reply-to"), references: headers.get("references") });
   const { partnersOwnWords } = await import("../../shared/intake/replyBody");
-  const split = writtenAndQuoted(`\r\n\r\n${await textBodyOf(raw)}`, { inReplyTo: headers.get("in-reply-to"), references: headers.get("references"), subject });
+  // One parse for the whole dry read, as at the door.
+  const mail = await readMail(raw);
+  const split = writtenAndQuoted(`\r\n\r\n${mail.text}`, { inReplyTo: headers.get("in-reply-to"), references: headers.get("references"), subject });
   const typed = (split.applied ? partnersOwnWords(split.written) : split.written).trim();
-  const files = await requestAttachments(raw);
+  const files = requestAttachments(mail);
   const { fileZipContents } = await import("../services/requestMaterials");
   const { isZip } = await import("./zipEntries");
   const filed: string[] = [];
@@ -1912,7 +1940,7 @@ export async function dryReadMessage(env: Env, raw: string, deps: { read?: impor
     }
   }
   const { hearVoiceNotes, withVoiceNotes } = await import("../services/voiceNotes");
-  const voice = await hearVoiceNotes(env, raw);
+  const voice = await hearVoiceNotes(env, mail);
   const { readLinkedDriveFiles } = await import("../services/driveShares");
   const drive = await readLinkedDriveFiles(env, { cardId: null, partnerEmail: authority.partnerAddress, text: split.written, dryRun: true });
   filed.push(...drive.filed);

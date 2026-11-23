@@ -114,7 +114,7 @@ export function checkSecretSinks(secret, inbound, test) {
   for (const m of secret.matchAll(/appendEvent\(env,\s*\{[\s\S]*?payload:\s*\{([^}]*)\}/g)) {
     if (/\bvalue\b|f\.value|\bciphertext\b/.test(m[1])) v.push(`an event payload carries a value: ${m[1].trim().slice(0, 80)}`);
   }
-  if (!/scrubSecretValues\(input\.raw, read\.values/.test(secret)) v.push("the door does not scrub every value (accepted and refused) from the text handed on");
+  if (!/scrubSecretValues\(input\.mail, read\.values/.test(secret)) v.push("the door does not scrub every value (accepted and refused) from the text handed on");
   if (!/WP_OS_DOCUMENTS\.put\(input\.kept\.key, clean/.test(secret)) v.push("the stored .eml is not re-put scrubbed");
   if (!/secretDoorConfigured|cipherKey\(env\)/.test(secret)) v.push("the door does not fail closed without the key");
   // The door runs BEFORE the oversize branch, the follow-up join and the assignment, and replaces kept.text.
@@ -125,7 +125,7 @@ export function checkSecretSinks(secret, inbound, test) {
   else {
     if (oversizeAt > 0 && doorAt > oversizeAt) v.push("secretDoor runs after the oversize branch reads the text");
     if (replyAt > 0 && doorAt > replyAt) v.push("secretDoor runs after a follow-up could join an open card with the value in it");
-    if (!/\.text = door\.raw/.test(inbound)) v.push("the inbound door does not replace kept.text with the scrubbed text");
+    if (!/\.text = door\.mail\.raw;\s*kept\.mail = door\.mail;/.test(inbound)) v.push("the inbound door does not replace kept.text (and its parse) with the scrubbed text");
   }
   for (const sink of ["everyTextColumn", "everyEml", "carriesSecretValue", "secret_handoff", "api/secret-handoffs/pending"]) {
     if (!test.includes(sink)) v.push(`tests/openRepoDoor.test.ts no longer greps ${sink}`);
@@ -288,7 +288,7 @@ async function selfTest(src, waits) {
   say(checkSeed(src.registryTs.stripped, src.migration.raw, src.registryService.stripped.replace(/seeded !== 1/g, "true")).violations.some((x) => /without checking seeded/.test(x)), "a writer that re-points a seeded host is caught");
   say(checkSecretSinks(src.secret.stripped.replace("enc.ciphertext", "f.value"), src.inbound.stripped, src.test.raw).violations.length > 0, "a row bound to the plaintext is caught");
   say(checkSecretSinks(src.secret.stripped.replace("payload: { name: f.name, repo,", "payload: { name: f.name, value: f.value, repo,"), src.inbound.stripped, src.test.raw).violations.some((x) => /event payload carries a value/.test(x)), "an event carrying the value is caught");
-  say(checkSecretSinks(src.secret.stripped, src.inbound.stripped.replace(".text = door.raw", ".text2 = door.raw"), src.test.raw).violations.some((x) => /does not replace kept\.text/.test(x)), "a door that hands on the unscrubbed text is caught");
+  say(checkSecretSinks(src.secret.stripped, src.inbound.stripped.replace("kept.mail = door.mail;", "kept.mail = kept.mail;"), src.test.raw).violations.some((x) => /does not replace kept\.text/.test(x)), "a door that hands on the unscrubbed text is caught");
   say(checkSecretSinks(src.secret.stripped, src.inbound.stripped, src.test.raw.replace(/everyEml/g, "nothing")).violations.some((x) => /no longer greps everyEml/.test(x)), "a test that stops grepping the .eml is caught");
   say(checkGenerator((input) => ({ text: generateRunbook(input).text.replace(/## Deploy[\s\S]*?## Porter may run/, "## Deploy\n\n- `wrangler deploy` (guessed)\n\n## Porter may run"), route: { kind: "guess" } })).violations.length > 0, "a generator that guesses the deploy route is caught");
   say(checkCap(src.transport.stripped.replace("10 * 1024 * 1024", "100 * 1024 * 1024"), src.resend.stripped, src.files.stripped).violations.some((x) => /not 10 MB/.test(x)), "a raised cap is caught");

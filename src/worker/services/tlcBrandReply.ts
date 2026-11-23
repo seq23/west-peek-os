@@ -3,7 +3,7 @@ import { atItsHeight, brandCommunityWords, overstatedCommunityClaims } from "../
 import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { appendEvent } from "../events";
-import { textBodyOf } from "../effects/mail";
+import { mailOf, type Mail } from "../effects/mail";
 import { withBrandFooter } from "../../shared/tlc/brandFooter";
 import type { EmailAttachment } from "../effects/emailTransport";
 import { listGmailRaw } from "../effects/googleClient";
@@ -75,7 +75,8 @@ const GMAIL_READ_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
 const WYNN = "aie_wynn";
 const wynnActor = (firmScope: string): Actor => ({ type: "AI", aiEmployeeId: WYNN, roles: [], firmScopes: [firmScope] } as unknown as Actor);
 
-export interface BrandMessage { messageId: string; subject: string; text: string; receivedAt: string; threadId?: string; from?: string }
+/** `mail` is this request's parse of `text` when there is one (the door's), so the message is not parsed again. */
+export interface BrandMessage { messageId: string; subject: string; text: string; mail?: Mail | null; receivedAt: string; threadId?: string; from?: string }
 export interface DraftExtras {
   note: string | null;
   previous: string | null;
@@ -552,7 +553,7 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
    */
   const reread = prior?.state === "CLOSED" && /^no reply needed/.test(prior.held_reason ?? "");
   if (prior && !reread) return "SEEN";
-  const msgBody = await textBodyOf(msg.text);
+  const msgBody = (await mailOf(msg.text, msg.mail)).text;
   const deskWords = helpdeskComment(msgBody);
   const words = await withoutOurOwnLines(env, deal.id, deskWords ?? (theirNewText(msgBody) || msg.text.trim()));
   const sender = (addressIn(msg.from ?? "") ?? msg.from ?? "").trim().toLowerCase();
@@ -1285,10 +1286,10 @@ export async function currentRef(env: Env, found: readonly string[]): Promise<st
 
 export async function applyBrandReplyApproval(
   env: Env,
-  message: { fromHeader: string | null; authenticationResults: string | null; subject: string; body: string },
+  message: { fromHeader: string | null; authenticationResults: string | null; subject: string; body: string; mail?: Mail | null },
   deps: BrandReplyDeps = {},
 ): Promise<ApprovalOutcome> {
-  const body = await textBodyOf(message.body);
+  const body = (await mailOf(message.body, message.mail)).text;
   const ref = await currentRef(env, [...`${body}\n${message.subject}`.matchAll(new RegExp(BRAND_REPLY_REF_RE.source, "g"))].map((m) => m[0]));
   if (!ref) return { handled: false, ref: null, detail: "no brand-reply reference" };
   const notice = await env.WP_OS_DB.prepare("SELECT * FROM tlc_brand_reply_notice WHERE ref = ?1").bind(ref).first<{ ref: string; reply_ids_json: string; firm_scope: string; sent_to: string | null; approvers_json: string | null }>();

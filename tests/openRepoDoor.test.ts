@@ -3,7 +3,7 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import type { Env } from "../src/worker/env";
 import { handleRequest } from "../src/worker/index";
 import { handleInboundEmail } from "../src/worker/effects/inboundEmail";
-import { carriesSecretValue, scrubSecretValues } from "../src/worker/effects/mail";
+import { carriesSecretValue, readMail, scrubSecretValues } from "../src/worker/effects/mail";
 import { sendViaResend } from "../src/worker/effects/resendClient";
 import { OUTBOUND_ATTACHMENTS_MAX_BYTES } from "../src/worker/effects/emailTransport";
 import { loadRegistry, registerFromEmail, recordRepoFacts } from "../src/worker/services/webPropertyRegistry";
@@ -206,13 +206,14 @@ describe("secrets by email (0253)", () => {
 
   it("a MIME scrub removes the value from a 7bit body, a base64 body and the headers, and keeps the message readable", async () => {
     const b64 = mime("keys", `SECRET TEST_VENDOR_KEY=${VALUE}\n`, "base64");
-    expect(await carriesSecretValue(b64, [VALUE]), "the base64 part decodes to the value").toBe(true);
-    const clean = await scrubSecretValues(b64, [VALUE]);
-    expect(await carriesSecretValue(clean, [VALUE])).toBe(false);
-    expect(clean).toContain("[secret redacted]");
-    expect(clean).toContain("X-WP-OS-Scrubbed");
-    const plain = await scrubSecretValues(mime(`about ${VALUE}`, `SECRET TEST_VENDOR_KEY=${VALUE}`), [VALUE]);
-    expect(plain).not.toContain(VALUE);
+    expect(await carriesSecretValue(await readMail(b64), [VALUE]), "the base64 part decodes to the value").toBe(true);
+    const clean = await scrubSecretValues(await readMail(b64), [VALUE]);
+    expect(carriesSecretValue(clean, [VALUE])).toBe(false);
+    expect(clean.raw).toContain("[secret redacted]");
+    expect(clean.raw).toContain("X-WP-OS-Scrubbed");
+    expect(clean.text, "the scrubbed copy still parses and reads").toContain("[secret redacted]");
+    const plain = await scrubSecretValues(await readMail(mime(`about ${VALUE}`, `SECRET TEST_VENDOR_KEY=${VALUE}`)), [VALUE]);
+    expect(plain.raw).not.toContain(VALUE);
   });
 
   it("an authenticated partner's SECRET line is stored ENCRYPTED, opens no card, is scrubbed from EVERY sink, and the partner hears 'Stored'", async () => {
@@ -230,7 +231,7 @@ describe("secrets by email (0253)", () => {
     expect(await everyTextColumn(), "no D1 text column carries the value").not.toContain(VALUE);
     const emls = await everyEml();
     expect(emls.length).toBeGreaterThan(0);
-    for (const e of emls) expect(await carriesSecretValue(e, [VALUE]), "the stored .eml is scrubbed, decoded parts included").toBe(false);
+    for (const e of emls) expect(await carriesSecretValue(await readMail(e), [VALUE]), "the stored .eml is scrubbed, decoded parts included").toBe(false);
     expect(emls.some((e) => e.includes("[secret redacted]"))).toBe(true);
     const after = sent.slice(sentBefore);
     expect(after.length, "the partner heard once").toBe(1);
@@ -246,7 +247,7 @@ describe("secrets by email (0253)", () => {
     await inbound(mime("a key", `SECRET ANTHROPIC_API_KEY=${evil}`));
     expect(await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM secret_handoff WHERE name = 'ANTHROPIC_API_KEY'").first<{ n: number }>()).toEqual({ n: 0 });
     expect(await everyTextColumn()).not.toContain(evil);
-    for (const e of await everyEml()) expect(await carriesSecretValue(e, [evil])).toBe(false);
+    for (const e of await everyEml()) expect(await carriesSecretValue(await readMail(e), [evil])).toBe(false);
     const reply = sent.slice(sentBefore).find((m) => m.to === SCOOTER);
     expect(reply!.text).toMatch(/ANTHROPIC_API_KEY: ANTHROPIC_API_KEY is reserved/);
     expect(reply!.text).not.toContain(evil);

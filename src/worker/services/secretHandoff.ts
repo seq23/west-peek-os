@@ -2,7 +2,7 @@ import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { json, type RouteContext } from "../router";
 import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
-import { carriesSecretValue, scrubSecretValues, textBodyOf } from "../effects/mail";
+import { carriesSecretValue, readMail, scrubSecretValues, type Mail } from "../effects/mail";
 import { githubReposIn, propertiesIn, type WebProperty } from "../../shared/intake/webPropertyChange";
 import { sendOrPreview } from "./previewApproval";
 
@@ -163,8 +163,8 @@ export async function decryptSecret(env: Env, row: { ciphertext: string; iv: str
 // ── The door ──────────────────────────────────────────────────────────────────────────────────
 
 export interface SecretDoorOutcome {
-  /** The MIME text with every value scrubbed — what every door downstream must read instead of the original. */
-  raw: string;
+  /** The message with every value scrubbed, and its parse (`mail.raw` is the text) — what every door downstream must read instead of the original. */
+  mail: Mail;
   stored: Array<{ name: string; repo: string | null }>;
   refused: Array<{ name: string; why: string }>;
   /** True when the written part of the email was nothing but SECRET lines (and a greeting): no card is opened. */
@@ -197,12 +197,13 @@ export function nothingButSecrets(scrubbedWritten: string): boolean {
 /**
  * RUN THE DOOR on an authenticated partner's message. Reads the decoded written text, stores what it
  * may, scrubs EVERY value (accepted or refused) from the MIME text and from the stored `.eml`, and
- * replies. Returns the scrubbed text; the caller MUST use it in place of the original.
+ * replies. Returns the scrubbed message, parsed; the caller MUST use it in place of the original.
  */
 export async function secretDoor(
   env: Env,
   input: {
-    raw: string;
+    /** The door's one parse of the message. */
+    mail: Mail;
     /** The subject, read for the repo's name beside the body. */
     subject?: string | null;
     kept: { key: string | null; rowId: string | null };
@@ -213,20 +214,21 @@ export async function secretDoor(
     replyOnThread?: string | null;
   },
 ): Promise<SecretDoorOutcome> {
-  const written = await textBodyOf(input.raw);
-  const read = readSecretLines(written);
-  if (!read.found.length && !read.refused.length) return { raw: input.raw, stored: [], refused: [], onlySecrets: false, line: null };
+  const read = readSecretLines(input.mail.text);
+  if (!read.found.length && !read.refused.length) return { mail: input.mail, stored: [], refused: [], onlySecrets: false, line: null };
 
-  const scrubbedRaw = await scrubSecretValues(input.raw, read.values, SECRET_REDACTED);
+  const scrubbed = await scrubSecretValues(input.mail, read.values, SECRET_REDACTED);
   // The .eml in R2 FIRST, so a failure anywhere below still leaves no value in the store.
   if (input.kept.key && env.WP_OS_DOCUMENTS) {
     try {
       const obj = await env.WP_OS_DOCUMENTS.get(input.kept.key);
       if (obj) {
         const text = await obj.text();
-        const clean = await scrubSecretValues(text, read.values, SECRET_REDACTED);
-        if (clean !== text || await carriesSecretValue(text, read.values)) {
-          await env.WP_OS_DOCUMENTS.put(input.kept.key, clean, { httpMetadata: { contentType: "message/rfc822" }, customMetadata: { ...(obj.customMetadata ?? {}), scrubbed: "secret redacted" } });
+        // The stored copy is the message the door parsed (it was kept from the same bytes): its scrub is the one above.
+        const stored = text === input.mail.raw ? input.mail : await readMail(text);
+        const clean = stored === input.mail ? scrubbed : await scrubSecretValues(stored, read.values, SECRET_REDACTED);
+        if (clean.raw !== text || carriesSecretValue(stored, read.values)) {
+          await env.WP_OS_DOCUMENTS.put(input.kept.key, clean.raw, { httpMetadata: { contentType: "message/rfc822" }, customMetadata: { ...(obj.customMetadata ?? {}), scrubbed: "secret redacted" } });
         }
       }
     } catch {
@@ -317,7 +319,7 @@ export async function secretDoor(
   } catch {
     /* the reply is a courtesy; the store and the scrub are the facts */
   }
-  return { raw: scrubbedRaw, stored, refused, onlySecrets, line };
+  return { mail: scrubbed, stored, refused, onlySecrets, line };
 }
 
 /** The one line a RECEIVED or reply email carries. Names only. */

@@ -1,7 +1,6 @@
 import type { Env } from "../env";
 import { isZip, typeOfName, unzipEntries } from "../effects/zipEntries";
-import { bytesOfBase64 } from "../effects/mail";
-import { requestAttachments } from "../effects/mail";
+import { bytesOfBase64, mailOf, requestAttachments, type Mail } from "../effects/mail";
 import { missingMaterialsSection, readMissingMaterials, type MissingMaterial } from "../../shared/work/missingMaterials";
 import type { ExecEmailSection } from "../../shared/email/execEmail";
 
@@ -72,9 +71,9 @@ export async function fileZipContents(
 
 export async function storeAttachments(
   env: Env,
-  input: { cardId: string; raw: string; emlKey: string | null; firmScope: string; source: "REQUEST" | "REPLY" },
+  input: { cardId: string; raw: string; mail?: Mail | null; emlKey: string | null; firmScope: string; source: "REQUEST" | "REPLY" },
 ): Promise<{ stored: string[]; attachments: number; unread: string[] }> {
-  const { attachments, unread } = await requestAttachments(input.raw);
+  const { attachments, unread } = requestAttachments(await mailOf(input.raw, input.mail));
   const stored: string[] = [];
   if (input.emlKey) {
     for (const a of attachments) {
