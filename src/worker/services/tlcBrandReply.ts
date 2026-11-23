@@ -15,7 +15,7 @@ import { newTextOf } from "../../shared/events/packetDecisionToken";
 import { isEmptyReply } from "../../shared/tlc/draftReply";
 import { draftApprovalOf } from "../../shared/intake/replyMeaning";
 import {
-  BRAND_MUST_STAFF, BRAND_REPLY_ASK, BRAND_REPLY_REF_RE, CALL_ASK, WE_HOST, MONEY_WORDS, THREE_THINGS_OFFER, WHO_WE_ARE, classifyBrandReply, decideBrandReply, fallbackReplyBody, herNoteOf, replyAllRecipients, noMoneyNow, readResearch, reportText,
+  AUTO_REPLY_LIMIT, BRAND_MUST_STAFF, BRAND_REPLY_ASK, BRAND_REPLY_REF_RE, CALL_ASK, WE_HOST, MONEY_WORDS, THREE_THINGS_OFFER, WHO_WE_ARE, classifyBrandReply, decideBrandReply, fallbackReplyBody, herNoteOf, replyAllRecipients, noMoneyNow, readResearch, reportText,
   helpdeskComment, stageAfterReply, standingRulesIn, theirNewText, tierLines, wantsResearch,
   type BrandReplyIntent, type ReplyDraftInput, type WynnRule,
 } from "../../shared/tlc/brandReply";
@@ -42,7 +42,8 @@ import { SamplesPdfError, buildSamples, finalizeSamplesPdf, reviseSamples, sampl
  * The defect this closes: a brand replied (stop_reason REPLIED), the drip stopped, and nothing drafted an answer
  * or asked her anything; any message that was not a bounce or an unsubscribe counted as a reply, out-of-office
  * included. Now every brand message is read by `classifyBrandReply` and:
- *   - an auto-reply resumes the drip the day after they are back (no email to anybody);
+ *   - an auto-reply resumes the drip the day after they are back (no email to anybody), once: the second auto-reply
+ *     from an address, or one saying nobody reads it, stops the drip to that address (owner, 23 Nov 2026);
  *   - a "no" makes the deal DECLINED;
  *   - a real reply gets Sequoia's answer drafted by Wynn, and the approval email goes to her AT ONCE (owner, 26 Oct
  *     2026: "Why 4pm?" — replies are rare and time-sensitive; the once-a-week rule is for outbound drafts only), to
@@ -448,7 +449,34 @@ export function answerRecipients(r: { send_to?: string | null; send_cc_json?: st
   return { to: (r.send_to ?? r.contact_email).trim().toLowerCase(), cc: r.send_cc_json ? (JSON.parse(r.send_cc_json) as string[]) : [] };
 }
 
-export type TakeOutcome = "SEEN" | "AUTO_REPLY" | "NO" | "WAITING" | "DRAFTED" | "REDIRECTED";
+export type TakeOutcome = "SEEN" | "AUTO_REPLY" | "NO" | "WAITING" | "DRAFTED" | "REDIRECTED" | "STOPPED";
+
+/*
+ * NOBODY READS THIS ADDRESS (owner, 23 Nov 2026: one brand inbox answered three drip emails in a row with "this inbox
+ * isn't monitored, email our other team", and each was filed as an out-of-office, so the drip went back every week).
+ * Every open deal written to this address, in every club, stops (STOPPED, REPLIED: they did not say no), its waiting
+ * drafts are held with the reason, and the close row on the message that showed it says why in plain words (her
+ * Monday roundup lists it). No email to anybody. A later club never queues the address again (tlcMustPitch.ts queueDeal), unless she gives it herself.
+ */
+export const ADDRESS_STOPPED_PREFIX = "stopped:";
+async function stopAddress(env: Env, address: string, why: string, now: Date): Promise<number> {
+  const addr = address.trim().toLowerCase();
+  const open = (await env.WP_OS_DB.prepare("SELECT id FROM tlc_deal WHERE lower(contact_email) = ?1 AND stage IN ('PROSPECT','PITCHED') AND (stop_reason IS NULL OR stop_reason = 'REPLIED')")
+    .bind(addr).all<{ id: string }>()).results ?? [];
+  for (const d of open) {
+    await env.WP_OS_DB.prepare("UPDATE tlc_deal SET stage = 'STOPPED', stop_reason = 'REPLIED', replied_at = NULL, next_send_at = NULL, waiting_since = NULL, updated_at = ?2 WHERE id = ?1").bind(d.id, now.toISOString()).run();
+    await env.WP_OS_DB.prepare("UPDATE tlc_drip_message SET state = 'HELD', held_reason = ?2 WHERE deal_id = ?1 AND state = 'AWAITING_APPROVAL'").bind(d.id, why.slice(0, 300)).run();
+  }
+  return open.length;
+}
+/** Auto-replies already filed from this address (every club), this message left out. */
+async function autoRepliesFrom(env: Env, address: string, mid: string): Promise<number> {
+  return (await env.WP_OS_DB.prepare(
+    `SELECT COUNT(*) AS n FROM tlc_brand_reply r JOIN tlc_deal d ON d.id = r.deal_id
+      WHERE lower(d.contact_email) = ?1 AND r.intent = 'AUTO_REPLY' AND r.state = 'CLOSED' AND r.brand_message_id <> ?2
+        AND (r.held_reason LIKE 'auto-reply%' OR r.held_reason LIKE '${ADDRESS_STOPPED_PREFIX}%')`,
+  ).bind(address.trim().toLowerCase(), mid).first<{ n: number }>())?.n ?? 0;
+}
 
 /*
  * THEY POINTED US TO ANOTHER ADDRESS (owner, 16 Nov 2026: Therabody's info@ said "email partnerships@therabody.com").
@@ -457,18 +485,26 @@ export type TakeOutcome = "SEEN" | "AUTO_REPLY" | "NO" | "WAITING" | "DRAFTED" |
  * REPLIED: they did not say no). Refused by NeverBounce: a named stop on the reply row, nothing sent. NeverBounce not
  * answering: left unread, so the next pass tries again.
  */
-async function redirectDeal(env: Env, deal: TlcDealRow, to: string, mid: string, now: Date, close: (intent: string, note: string) => Promise<unknown>): Promise<TakeOutcome> {
+async function redirectDeal(env: Env, deal: TlcDealRow, to: string, mid: string, now: Date, close: (intent: string, note: string) => Promise<unknown>, machine = false): Promise<TakeOutcome> {
   const { addressCleared, brandStopped } = await import("./tlcVolume");
+  // An auto-reply's address we cannot follow stops the drip to the old address too: it said not to write there.
+  const stopOld = async (why: string): Promise<TakeOutcome> => {
+    if (!machine) { await close("QUESTION", why); return "WAITING"; }
+    const note = `${ADDRESS_STOPPED_PREFIX} ${why}; no more emails to ${deal.contact_email}`;
+    await stopAddress(env, deal.contact_email, note, now);
+    await close("AUTO_REPLY", note);
+    return "STOPPED";
+  };
   if (await brandStopped(env, deal.brand, to, deal.contact_email)) {
-    await close("QUESTION", `they pointed us to ${to}, but the brand asked us to stop or said no: nothing sent`);
-    return "WAITING";
+    return stopOld(`they pointed us to ${to}, but the brand asked us to stop or said no: nothing sent`);
   }
+  // NeverBounce not answering: nothing written, so the next pass reads it again; the old address stays off the drip.
   const addr = await addressCleared(env, to, now);
   if (!addr.ok && "wait" in addr) return "WAITING";
   if (!addr.ok) {
-    await close("QUESTION", `NAMED STOP [TLC_REDIRECT_ADDRESS_REFUSED]: they pointed us to ${to}, which NeverBounce answered ${addr.refused}; nothing sent`);
+    const out = await stopOld(`NAMED STOP [TLC_REDIRECT_ADDRESS_REFUSED]: they pointed us to ${to}, which NeverBounce answered ${addr.refused}; nothing sent`);
     await appendEvent(env, { eventType: "tlc.brand_redirect_refused", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: { to, result: addr.refused } });
-    return "WAITING";
+    return out;
   }
   const { queueDeal } = await import("./tlcMustPitch");
   const already = await env.WP_OS_DB.prepare("SELECT id FROM tlc_deal WHERE event_id = ?1 AND contact_email = ?2").bind(deal.event_id, to).first<{ id: string }>();
@@ -476,8 +512,9 @@ async function redirectDeal(env: Env, deal: TlcDealRow, to: string, mid: string,
   if (!already) {
     await queueDeal(env, { eventId: deal.event_id, brand: deal.brand, category: deal.category, contactName: null, contactEmail: to, contactSourceUrl: `brand-reply:${mid}`, whyFit: deal.why_fit, firmScope: deal.firm_scope, ownerAngle: angle }, now);
   }
+  if (machine) await stopAddress(env, deal.contact_email, `redirect: their auto-reply moved us to ${to}`, now);
   await env.WP_OS_DB.prepare("UPDATE tlc_deal SET stage = 'STOPPED', next_send_at = NULL, waiting_since = NULL, updated_at = ?2 WHERE id = ?1").bind(deal.id, now.toISOString()).run();
-  await close("QUESTION", `redirect: they asked us to write to ${to}; email 1 to that address goes to Sequoia for approval`);
+  await close(machine ? "AUTO_REPLY" : "QUESTION", `redirect: moved to the address they gave (${to}); email 1 there goes to Sequoia for approval`);
   await appendEvent(env, { eventType: "tlc.brand_redirected", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: { to } });
   return "REDIRECTED";
 }
@@ -545,14 +582,20 @@ async function withoutOurOwnLines(env: Env, dealId: string, words: string): Prom
 export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessage, deps: BrandReplyDeps = {}): Promise<TakeOutcome> {
   const now = deps.now ?? new Date();
   const mid = normalizeMid(msg.messageId) || `nomid:${msg.receivedAt}`;
-  const prior = await env.WP_OS_DB.prepare("SELECT id, state, held_reason FROM tlc_brand_reply WHERE deal_id = ?1 AND brand_message_id = ?2").bind(deal.id, mid).first<{ id: string; state: string; held_reason: string | null }>();
+  const prior = await env.WP_OS_DB.prepare("SELECT id, state, intent, held_reason FROM tlc_brand_reply WHERE deal_id = ?1 AND brand_message_id = ?2").bind(deal.id, mid).first<{ id: string; state: string; intent: string; held_reason: string | null }>();
   /*
    * A REPLY CLOSED AS "NO REPLY NEEDED" IS READ AGAIN (17 Nov 2026: Therabody's desk said "please continue by emailing
    * partnerships@…" and it was closed as "they are reviewing it"). Only when it now reads as a redirect is the closed
    * row (no draft, nothing sent) replaced; anything else stays as it was read.
+   * AN AUTO-REPLY FILED BEFORE 23 NOV 2026 IS READ AGAIN, ONCE (owner, 23 Nov 2026: an inbox that said "not monitored,
+   * write to X" three times was filed as an out-of-office three times). While its deal is still on the drip, the
+   * message is read again by the same readers as a new one; only a redirect, a dead inbox or a repeat auto-reply acts
+   * (the closed row is replaced); anything else is marked "read again" and never read a third time.
    */
+  const onDrip = prior ? await env.WP_OS_DB.prepare("SELECT 1 FROM tlc_deal WHERE id = ?1 AND stage IN ('PROSPECT','PITCHED') AND stop_reason IS NULL").bind(deal.id).first() : null;
+  const autoReread = prior?.state === "CLOSED" && prior.intent === "AUTO_REPLY" && /^auto-reply; the drip resumes/.test(prior.held_reason ?? "") && !/read again/.test(prior.held_reason ?? "") && Boolean(onDrip);
   const reread = prior?.state === "CLOSED" && /^no reply needed/.test(prior.held_reason ?? "");
-  if (prior && !reread) return "SEEN";
+  if (prior && !reread && !autoReread) return "SEEN";
   const msgBody = (await mailOf(msg.text, msg.mail)).text;
   const deskWords = helpdeskComment(msgBody);
   const words = await withoutOurOwnLines(env, deal.id, deskWords ?? (theirNewText(msgBody) || msg.text.trim()));
@@ -561,7 +604,7 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
   const asRead = { subject: msg.subject, text: words, raw: msg.text, brandDomain: brandDomainOf(deal.contact_email), notThese: [sender], helpdesk: deskWords !== null };
   // A closed row read again is read by the word lists only: a model is asked once per message, never every pass.
   let cls = classifyBrandReply(asRead, now);
-  if (prior) {
+  if (prior && reread) {
     if (cls.kind !== "REDIRECT") return "SEEN";
     await env.WP_OS_DB.prepare("DELETE FROM tlc_brand_reply WHERE id = ?1 AND state = 'CLOSED'").bind(prior.id).run();
     await appendEvent(env, { eventType: "tlc.brand_reply_reread", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: { message: mid, was: prior.held_reason, now: "REDIRECT", to: cls.to } });
@@ -570,7 +613,7 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
    * WHO READ IT IS ON EVERY CLOSE (owner, 17 Nov 2026: no inbound email closes silently). The note ends "· read by …",
    * and every closed row is listed, one line each, in her Monday roundup (tlcRoundup.ts closedWithoutReply).
    */
-  let readBy = prior ? `${readerWords(WORD_LISTS)}, read again` : "the mail headers";
+  let readBy = reread ? `${readerWords(WORD_LISTS)}, read again` : "the mail headers";
   let said = "";
   const close = (intent: string, note: string) => env.WP_OS_DB.prepare(
     "INSERT OR IGNORE INTO tlc_brand_reply (id, deal_id, brand_message_id, their_subject, their_text, received_at, intent, draft_subject, draft_body, state, held_reason, firm_scope) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '', '', 'CLOSED', ?8, ?9)",
@@ -606,7 +649,7 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
    * THE MODEL READS IT FIRST (owner, 17 Nov 2026): the shared inbound read (services/inboundRead.ts, the partner first
    * read's readers in her order), then `decideBrandReply`; the word lists decide only when no model answers.
    */
-  if (!prior) {
+  if (!prior || autoReread) {
     const { readInbound } = await import("./inboundRead");
     const { read, tried, sender: readSender } = await readInbound(env, {
       context: `our email to ${brandDisplayName(deal.brand)} (${deal.contact_email}) offering a partnership with The Learning Club, a small hands-on event in New York`,
@@ -614,9 +657,33 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
     }, deps.read);
     const decided = decideBrandReply(asRead, read, now);
     cls = decided.cls;
-    readBy = readerWords(decided.reader);
+    readBy = `${readerWords(decided.reader)}${autoReread ? ", read again" : ""}`;
     said = read?.summary ?? "";
     await appendEvent(env, { eventType: "inbound_email.read", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: { message: mid, reader: decided.reader, decided: cls.kind, tried, sender: readSender, ...(read ? { read } : { named_stop: NO_MODEL_READER }) } });
+  }
+  /*
+   * THE SECOND AUTO-REPLY STOPS IT (owner, 23 Nov 2026). An address that has already answered with an auto-reply, in any
+   * club, and answers with another is not read by anybody: the drip to it stops, with no third email.
+   */
+  const earlier = cls.kind === "AUTO_REPLY" ? await autoRepliesFrom(env, deal.contact_email, mid) : 0;
+  const repeat = cls.kind === "AUTO_REPLY" && earlier + 1 >= AUTO_REPLY_LIMIT;
+  if (autoReread) {
+    if (!(repeat || cls.kind === "DEAD_INBOX" || cls.kind === "REDIRECT")) {
+      await env.WP_OS_DB.prepare("UPDATE tlc_brand_reply SET held_reason = substr(held_reason || ' · read again', 1, 1000) WHERE id = ?1").bind(prior!.id).run();
+      return "SEEN";
+    }
+    await env.WP_OS_DB.prepare("DELETE FROM tlc_brand_reply WHERE id = ?1 AND state = 'CLOSED'").bind(prior!.id).run();
+    await appendEvent(env, { eventType: "tlc.brand_reply_reread", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: { message: mid, was: prior!.held_reason, now: repeat ? "REPEATED_AUTO_REPLY" : cls.kind } });
+  }
+  if (repeat || cls.kind === "DEAD_INBOX") {
+    const addr = deal.contact_email.trim().toLowerCase();
+    const why = cls.kind === "DEAD_INBOX"
+      ? `${ADDRESS_STOPPED_PREFIX} ${cls.why}; no more emails to ${addr}`
+      : `${ADDRESS_STOPPED_PREFIX} repeated auto-replies (${earlier + 1} from ${addr}); no more emails to it`;
+    await stopAddress(env, addr, why, now);
+    await close("AUTO_REPLY", why);
+    await appendEvent(env, { eventType: "tlc.brand_address_stopped", actorType: "ai_employee", actorId: WYNN, objectType: "tlc_deal", objectId: deal.id, firmScope: deal.firm_scope, payload: { why: repeat ? "REPEATED_AUTO_REPLY" : "DEAD_INBOX", auto_replies: earlier + 1 } });
+    return "STOPPED";
   }
   if (cls.kind === "AUTO_REPLY") {
     // Back on the drip, never earlier than its own next step; a finished drip stays finished.
@@ -646,7 +713,7 @@ export async function takeBrandReply(env: Env, deal: TlcDealRow, msg: BrandMessa
   if (cls.kind === "REDIRECT") {
     return cls.to === deal.contact_email.trim().toLowerCase()
       ? sampleEventToContact(env, deal, ev, msg, words, mid, sender, now, close, deps)
-      : redirectDeal(env, deal, cls.to, mid, now, close);
+      : redirectDeal(env, deal, cls.to, mid, now, close, cls.machine === true);
   }
   /*
    * NO REPLY NEEDED (owner, 2 Nov 2026). The first decision, before any draft: a reply that passes the note on, loops
@@ -943,7 +1010,7 @@ const defaultMailbox: MailboxReader = async (env, query, maxPages = 1) => {
  */
 export async function processBrandReplies(env: Env, now: Date, firmScope = "west-peek", deps: BrandReplyDeps = {}): Promise<string> {
   const d = { ...deps, now };
-  const counts: Record<TakeOutcome, number> = { SEEN: 0, AUTO_REPLY: 0, NO: 0, WAITING: 0, DRAFTED: 0, REDIRECTED: 0 };
+  const counts: Record<TakeOutcome, number> = { SEEN: 0, AUTO_REPLY: 0, NO: 0, WAITING: 0, DRAFTED: 0, REDIRECTED: 0, STOPPED: 0 };
   const unread = (await env.WP_OS_DB.prepare(
     `SELECT d.* FROM tlc_deal d WHERE d.firm_scope = ?1 AND d.stop_reason = 'REPLIED'
        AND NOT EXISTS (SELECT 1 FROM tlc_brand_reply r WHERE r.deal_id = d.id)
@@ -1009,7 +1076,7 @@ export async function processBrandReplies(env: Env, now: Date, firmScope = "west
   const notice = await sendReplyApprovals(env, now, firmScope);
   // After the inbox was read, so a reply that arrived cancels the follow-up before it could go.
   const resends = await resendUnanswered(env, now, firmScope, inboxRead, d).catch((err) => `pricing follow-ups: NAMED STOP [RESEND_FAILED] ${err instanceof Error ? err.message : String(err)}`.slice(0, 300));
-  return `brand replies: ${refreshed ? `${refreshed}; ` : ""}${counts.DRAFTED} drafted, ${counts.WAITING ? `${counts.WAITING} need no reply (waiting on them), ` : ""}${counts.AUTO_REPLY} auto-reply (drip resumed), ${counts.NO} declined; ${polled};${retried.length ? ` approved and sent on their own: ${retried.length};` : ""} ${notice}; ${resends}`;
+  return `brand replies: ${refreshed ? `${refreshed}; ` : ""}${counts.DRAFTED} drafted, ${counts.WAITING ? `${counts.WAITING} need no reply (waiting on them), ` : ""}${counts.AUTO_REPLY} auto-reply (drip resumed), ${counts.STOPPED ? `${counts.STOPPED} address(es) stopped (repeated auto-replies or an unread inbox), ` : ""}${counts.NO} declined; ${polled};${retried.length ? ` approved and sent on their own: ${retried.length};` : ""} ${notice}; ${resends}`;
 }
 
 // ── The one approval email a day ───────────────────────────────────────────────────────────────

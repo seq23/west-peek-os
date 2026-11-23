@@ -43,7 +43,7 @@ const CORPUS = {
 };
 const READS = {
   thera0310: { sender_kind: "ai_assistant", asks: ["details about what you do and your idea"], redirect_to: null, wants_stop: false, declines: false, we_owe: "reply with what we do and our idea", summary: "their assistant asks what we do and our idea" },
-  thera1101: { sender_kind: "ai_assistant", asks: ["continue by emailing partnerships"], redirect_to: "partnerships@thera.example", wants_stop: false, declines: false, we_owe: "write to partnerships@thera.example", summary: "their assistant sends us to partnerships@" },
+  thera1101: { sender_kind: "ai_assistant", asks: ["continue by emailing partnerships"], redirect_to: "partnerships@thera.example", redirect_kind: "instead", wants_stop: false, declines: false, we_owe: "write to partnerships@thera.example", summary: "their assistant sends us to partnerships@" },
   notion: { sender_kind: "helpdesk", asks: ["a short overview including any sponsorship fee"], redirect_to: null, wants_stop: false, declines: false, we_owe: "send the overview", summary: "Kyle asks for an overview and the fee" },
   retool: { sender_kind: "auto_reply", asks: [], redirect_to: null, wants_stop: false, declines: false, we_owe: "none", summary: "a billing-support ticket acknowledgement" },
   pydantic: { sender_kind: "person", asks: [], redirect_to: null, wants_stop: false, declines: true, we_owe: "none", summary: "not the right time for a partnership" },
@@ -165,6 +165,10 @@ describe("the code still checks the hard parts of a model's read", () => {
   it("a redirect off the brand's domain, or not in their words, is never followed", () => {
     expect(decideBrandReply({ ...base, text: "Write to events@agency.example please." }, read({ redirect_to: "events@agency.example" }), NOW).cls.kind).not.toBe("REDIRECT");
     expect(decideBrandReply({ ...base, text: "Write to our partnerships team." }, read({ redirect_to: "partnerships@brand.example" }), NOW).cls.kind).not.toBe("REDIRECT");
+  });
+  it("what an address is for is kept only with an address", () => {
+    expect(read({ redirect_to: "write to our team", redirect_kind: "instead" })).toMatchObject({ redirectTo: null, redirectKind: "none" });
+    expect(read({ redirect_to: "care@brand.example", redirect_kind: "instead" })).toMatchObject({ redirectTo: "care@brand.example", redirectKind: "instead" });
   });
   it("an answer that does not parse is no read at all", () => {
     expect(parseInboundRead("Sure! They want a call.", "CLAUDE")).toBeNull();

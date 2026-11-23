@@ -1,6 +1,10 @@
 /**
  * A BRAND ANSWERED (owner, 26 Oct 2026). Wynn's duty: read the answer, and either
- *   - an out-of-office / auto-reply  → the drip resumes the day after they are back (no email to anybody),
+ *   - an out-of-office / auto-reply  → the drip resumes the day after they are back (no email to anybody); a second
+ *                                       auto-reply from the same address, or one saying nobody reads the inbox, stops
+ *                                       the drip to that address instead (owner, 23 Nov 2026),
+ *   - "write to X instead"            → the drip moves to X (their own domain, in their words, NeverBounce-clean),
+ *                                       from a person or an auto-reply alike,
  *   - a "no"                          → the deal is DECLINED and nothing more goes,
  *   - anything else (a real reply)    → Wynn drafts Sequoia's answer and it waits for her in ONE approval email
  *                                       a day, with their message and the draft word for word.
@@ -17,11 +21,26 @@ export type BrandReplyIntent = "QUESTION" | "CALL" | "YES";
 export type BrandReplyClass =
   | { kind: "AUTO_REPLY"; resumeAt: string }
   | { kind: "NO"; unsubscribe?: true }
-  | { kind: "REDIRECT"; to: string }
+  | { kind: "REDIRECT"; to: string; machine?: true }
+  | { kind: "DEAD_INBOX"; why: string }
   | { kind: "NO_REPLY_NEEDED"; why: NoReplyWhy }
   | { kind: "REPLY"; intent: BrandReplyIntent };
 /** Why a real reply needs no answer from us: they passed it on, they are reviewing, or they asked for nothing. */
 export type NoReplyWhy = "PASSED_ON" | "REVIEWING" | "NO_ASK";
+
+/*
+ * AN AUTO-REPLY IS HEARD ONCE (owner, 23 Nov 2026: "i get auto reply from those TLC brand drip campaign emails … there
+ * is one in my inbox that has sent several auto replies to say to direct emails to a another inbox"). The two numbers,
+ * in one place: an auto-reply with no return date in it puts the drip off a week, and the second auto-reply from one
+ * address stops the drip to that address for good (services/tlcBrandReply.ts counts them across every club).
+ */
+export const AUTO_REPLY_RESUME_DAYS = 7;
+export const AUTO_REPLY_LIMIT = 2;
+/** When the drip may go again after an auto-reply: the day after the return date in it, else a week from now. */
+export function autoReplyResume(words: string, now: Date): string {
+  const back = returnDateIn(words, now);
+  return (back ? new Date(back.getTime() + 86_400_000) : new Date(now.getTime() + AUTO_REPLY_RESUME_DAYS * 86_400_000)).toISOString();
+}
 
 const AUTO_SUBJECT = /\b(out of (?:the )?office|automatic reply|auto[- ]?reply|autoreply|away from (?:the |my )?(?:office|desk)|on (?:annual |parental |maternity |paternity )?leave|on vacation|on holiday|ooo)\b/i;
 const AUTO_BODY = /\b(i am|i'm|i will be|i'll be) (?:currently )?(?:out of (?:the )?office|away|on (?:annual |parental |maternity |paternity )?leave|on vacation|on holiday|travelling|traveling)\b|\b(?:limited|no) access to (?:my )?e-?mail\b|\bthis is an automatic reply\b|\bauto(?:matic|mated)? (?:reply|response)\b|\b(?:i will|i'll) (?:respond|reply|get back to you) (?:when|once|upon) (?:i return|my return|i'm back|i am back)\b/i;
@@ -99,6 +118,10 @@ export function noReplyNeeded(words: string): NoReplyWhy | null {
  * "we have received your message", "a member of our team will", "fill out our form", "this inbox is not monitored".
  */
 const AUTO_ACK = /\b(?:connected? (?:you )?(?:with|to) the right (?:team|person|people|department)|(?:we(?:'ve| have)?|has been) received your (?:message|email|e-mail|inquiry|enquiry|request|submission|note)|(?:one of our|a member of our|someone from our|our [a-z]+ team) (?:team )?(?:will|members will) (?:review|be in touch|get back|respond|reach out|follow up)|fill out (?:our|the|this) [a-z ]{0,30}form|(?:this|the) (?:mailbox|inbox|email address) is (?:not|no longer) (?:monitored|checked)|do not reply to this (?:email|message)|(?:ticket|case|request) (?:number|#|id)\b|your (?:request|ticket|case) (?:has been|was) (?:received|created|logged)|our mailbox is (?:quite |very )?busy|thank you for (?:contacting|your (?:message|email|inquiry|enquiry|interest))[^.\n]{0,60}\. (?:we|our team)(?: will|'ll))/i;
+/** "This inbox isn't (actively) monitored", "this address is no longer in use": nobody reads what we send there. */
+const INBOX_UNREAD = /\b(?:mailbox|inbox|e-?mail address|e-?mail account|address)\b[^.\n]{0,24}?\b(?:is not|isn'?t|is no longer|are not|aren'?t|not being|no longer)\b[^.\n]{0,16}?\b(?:monitored|checked|read|in use|active)\b|\bunmonitored\b/i;
+/** A machine message's address offered only for urgent matters while someone is away: never a redirect. */
+const URGENT_ONLY = /\b(?:urgent|emergenc|time[- ]sensitive|in my absence|while i(?:'m| am) (?:away|out))/i;
 const AUTO_HEADERS = /^(?:auto-submitted:[ \t]*(?!no\b)\S|x-autoreply:|x-autorespond:|precedence:[ \t]*(?:bulk|auto_reply|junk)\b)/im;
 /**
  * Two different template shapes, never one: a person can write "our team will review it" (that is the REVIEWING
@@ -132,7 +155,7 @@ export function replyAsksToStop(text: string): boolean {
 // "please continue by emailing partnerships@…" (Therabody's desk, 17 Nov 2026) was missed: "emailing" is not "email".
 const REDIRECT_WORDS = /\b(?:e-?mail(?:ing)?|write to|writing to|reach out to|reach|contact|send [\w ]{0,30}?to|forward [\w ]{0,20}?to|direct [\w ]{0,20}?to|directed to|the right (?:route|person|team|contact|address|place)|best (?:person|contact|address|way)|handled by|handles)\b/i;
 const ADDRESS = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
-export function redirectAddressIn(text: string, brandDomain: string, notThese: readonly string[] = []): string | null {
+export function redirectAddressIn(text: string, brandDomain: string, notThese: readonly string[] = [], machine = false): string | null {
   const domain = brandDomain.trim().toLowerCase();
   if (!domain) return null;
   const skip = new Set(notThese.map((a) => a.trim().toLowerCase()));
@@ -141,7 +164,9 @@ export function redirectAddressIn(text: string, brandDomain: string, notThese: r
     const at = addr.split("@")[1] ?? "";
     if (skip.has(addr) || /^(?:no-?reply|do-?not-?reply|mailer-daemon|postmaster)@/.test(addr)) continue;
     if (at !== domain && !at.endsWith(`.${domain}`)) continue;
-    if (REDIRECT_WORDS.test(text.slice(Math.max(0, (m.index ?? 0) - 120), m.index ?? 0))) return addr;
+    const before = text.slice(Math.max(0, (m.index ?? 0) - 120), m.index ?? 0);
+    if (machine && URGENT_ONLY.test(before)) continue;
+    if (REDIRECT_WORDS.test(before)) return addr;
   }
   return null;
 }
@@ -170,17 +195,19 @@ export function classifyBrandReply(input: { subject: string; text: string; raw?:
   const desk = Boolean(comment) || input.helpdesk === true;
   const words = comment ?? theirNewText(input.text);
   const said = { no: replyLooksLikeNo(input.subject) || replyLooksLikeNo(words), stop: replyAsksToStop(input.subject) || replyAsksToStop(words) };
-  // A redirect counts even from a support desk's assistant; an out-of-office's "for urgent matters" address does not.
-  if (input.brandDomain && !said.no && !said.stop && !AUTO_SUBJECT.test(input.subject) && !AUTO_BODY.test(words)) {
-    const to = redirectAddressIn(words, input.brandDomain, input.notThese);
-    if (to) return { kind: "REDIRECT", to };
+  const unread = INBOX_UNREAD.test(words);
+  const machine = AUTO_SUBJECT.test(input.subject) || AUTO_BODY.test(words) || unread || (!desk && (looksLikeAutoAck(`${input.subject}\n${words}`) || machineSentHeaders(input.raw)));
+  /*
+   * A redirect counts from a person, a support desk's assistant, or an auto-reply ("this inbox isn't monitored, write to
+   * X"). An out-of-office that names the day they are back, or offers the address only for urgent matters, is not one:
+   * the drip waits for their return.
+   */
+  if (input.brandDomain && !said.no && !said.stop && !(machine && returnDateIn(words, now))) {
+    const to = redirectAddressIn(words, input.brandDomain, input.notThese, machine);
+    if (to) return machine ? { kind: "REDIRECT", to, machine: true } : { kind: "REDIRECT", to };
   }
-  if (AUTO_SUBJECT.test(input.subject) || AUTO_BODY.test(words) || (!desk && (looksLikeAutoAck(`${input.subject}\n${words}`) || machineSentHeaders(input.raw)))) {
-    const back = returnDateIn(words, now);
-    // Resume the day after they are back; with no date in the message, a week from now.
-    const resume = back ? new Date(back.getTime() + 86_400_000) : new Date(now.getTime() + 7 * 86_400_000);
-    return { kind: "AUTO_REPLY", resumeAt: resume.toISOString() };
-  }
+  if (machine && unread) return { kind: "DEAD_INBOX", why: "they said this inbox isn't read" };
+  if (machine) return { kind: "AUTO_REPLY", resumeAt: autoReplyResume(words, now) };
   if (said.stop) return { kind: "NO", unsubscribe: true };
   if (said.no) return { kind: "NO" };
   const why = noReplyNeeded(words);
@@ -199,9 +226,12 @@ export function replyIntentOf(words: string): BrandReplyIntent {
  * THE MODEL'S READ DECIDES FIRST; THE WORD LISTS ARE THE FALLBACK (owner, 17 Nov 2026: "maybe every email incoming to the
  * OS should be read that way"). With no model read, `classifyBrandReply` decides alone (reader WORD_LISTS). With one:
  *   - a stop from EITHER reader is a stop (safety: the word lists can only add a stop, never remove one);
- *   - an auto-reply or a machine notice resumes the drip;
- *   - a redirect is followed only when the address is in their own words, on the brand's own domain, and not the
- *     sender's own or a no-reply address (the caller then needs NeverBounce to clear it before anything is drafted);
+ *   - a redirect is followed only when the model says it is INSTEAD of this address (never an out-of-office's
+ *     "for urgent matters"), the address is in their own words, on the brand's own domain, and not the sender's own
+ *     or a no-reply address (the caller then needs NeverBounce to clear it before anything is drafted); from a
+ *     person or an auto-reply alike (owner, 23 Nov 2026);
+ *   - an auto-reply that says nobody reads this inbox, or sends us to an address that fails those checks, stops the
+ *     drip to this address (DEAD_INBOX); any other auto-reply or machine notice resumes the drip;
  *   - a no is the model's decline (the word lists' "no" counts only when no model answered, 22 Nov 2026);
  *   - nothing owed is "no reply needed"; anything owed is a reply drafted for her approval, with the model's intent
  *     (call, yes, question).
@@ -216,13 +246,16 @@ export function decideBrandReply(
   if (!read) return { cls: regex, reader: WORD_LISTS };
   if (read.wantsStop) return { cls: { kind: "NO", unsubscribe: true }, reader: read.reader };
   if (regex.kind === "NO" && regex.unsubscribe) return { cls: regex, reader: WORD_LISTS };
-  if (read.senderKind === "auto_reply" || read.senderKind === "system") {
-    const back = returnDateIn(words, now);
-    const resume = back ? new Date(back.getTime() + 86_400_000) : new Date(now.getTime() + 7 * 86_400_000);
-    return { cls: { kind: "AUTO_REPLY", resumeAt: resume.toISOString() }, reader: read.reader };
+  const machine = read.senderKind === "auto_reply" || read.senderKind === "system";
+  const instead = read.redirectKind === "instead" && read.redirectTo ? read.redirectTo : null;
+  const to = instead ? verifiedRedirect(instead, words, input.brandDomain ?? "", input.notThese ?? []) : null;
+  if (to && !read.declines) return { cls: machine ? { kind: "REDIRECT", to, machine: true } : { kind: "REDIRECT", to }, reader: read.reader };
+  if (machine) {
+    const own = (input.notThese ?? []).some((a) => a.trim().toLowerCase() === instead);
+    if (read.inboxUnread) return { cls: { kind: "DEAD_INBOX", why: "they said this inbox isn't read" }, reader: read.reader };
+    if (instead && !own) return { cls: { kind: "DEAD_INBOX", why: `the address they gave (${instead}) is not one we write to (not on their own domain or not in their words)` }, reader: read.reader };
+    return { cls: { kind: "AUTO_REPLY", resumeAt: autoReplyResume(words, now) }, reader: read.reader };
   }
-  const to = read.redirectTo ? verifiedRedirect(read.redirectTo, words, input.brandDomain ?? "", input.notThese ?? []) : null;
-  if (to && !read.declines) return { cls: { kind: "REDIRECT", to }, reader: read.reader };
   if (read.declines) return { cls: { kind: "NO" }, reader: read.reader };
   if (!read.weOwe) return { cls: { kind: "NO_REPLY_NEEDED", why: read.nothingOwed ?? "NO_ASK" }, reader: read.reader };
   return { cls: { kind: "REPLY", intent: read.intent ?? "QUESTION" }, reader: read.reader };

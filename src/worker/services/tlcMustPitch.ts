@@ -129,6 +129,11 @@ export async function queueDeal(
   // A brand that unsubscribed or said no, from any address, is never queued again, for any club (owner, 16 Nov 2026).
   const { brandStopped } = await import("./tlcVolume");
   if (await brandStopped(env, d.brand, d.contactEmail)) return false;
+  // An address whose auto-reply said nobody reads it (or kept auto-replying, or moved us elsewhere) is never queued again
+  // (owner, 23 Nov 2026), unless she gives it herself.
+  if (!d.contactSourceUrl.startsWith(OWNER_SUPPLIED_SOURCE) && (await env.WP_OS_DB.prepare(
+    "SELECT 1 FROM tlc_brand_reply r JOIN tlc_deal x ON x.id = r.deal_id WHERE lower(x.contact_email) = ?1 AND r.state = 'CLOSED' AND r.intent = 'AUTO_REPLY' AND (r.held_reason LIKE 'stopped:%' OR r.held_reason LIKE 'redirect:%') LIMIT 1",
+  ).bind(d.contactEmail.trim().toLowerCase()).first())) return false;
   const res = await env.WP_OS_DB.prepare(
     "INSERT OR IGNORE INTO tlc_deal (id, event_id, brand, category, contact_name, contact_email, contact_source_url, why_fit, next_send_at, firm_scope, created_at, owner_angle) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
   ).bind(`tld_${crypto.randomUUID()}`, d.eventId, d.brand, d.category, d.contactName, d.contactEmail.toLowerCase(), d.contactSourceUrl, d.whyFit, nextDripAt(0, null, now, null), d.firmScope, now.toISOString(), d.ownerAngle ?? null).run();
