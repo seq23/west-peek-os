@@ -73,6 +73,7 @@ import { admittedScripts, keysReallyMissing, visiblePlaceholders, constraintsIn,
 import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
 import { CODEX_BUILD_NOTE, codexExecArgs, codexSeatUsable, finishCodexBuild, soonestReset } from "../lib/codex-seat.mjs";
 import { routeFor, runInOrder } from "../lib/model-roles.mjs";
+import { writeSelfReview } from "../lib/pr-self-review.mjs";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -1674,6 +1675,10 @@ export async function run(job, ctx) {
     // failure here stops before any check is watched or any preview link is read, so nothing is emailed.
     const privacy = await privateProofFor(job, path.join(packageDir, "drive"), names.worktree, ctx, jobDir, progress);
     if (!privacy.ok) return { phase, status: "failed", reason: privacy.reason };
+    // 23 Nov 2026: THE PR CARRIES ITS SELF-REVIEW AND MUTATION PROOF, written here from the result, every lane, every
+    // round. Without them the build stops by name before any check is watched or any preview is emailed.
+    const selfReview = writeSelfReview({ cwd: names.worktree, number: pr.number, result, run: (cmd, args, opts) => spawnSync(cmd, args, { encoding: "utf8", ...opts }) });
+    if (!selfReview.ok) return { phase, status: "failed", reason: `[${selfReview.tag}] ${selfReview.why}`.slice(0, 1500), ...carried };
     const checks = await watchChecks(names.worktree, pr.number, ctx.signal, progress);
     // The preview link is read AFTER the checks settle: Pages posts its deployment beside them.
     const previewUrl = checks.state === "GREEN" ? await previewUrlFor(names.worktree, pr.number, progress, job.pages_hosts ?? [], names.branch, ctx.env, ctx.signal) : null;
@@ -1701,7 +1706,7 @@ export async function run(job, ctx) {
       changed_files: changedFiles,
       // The model's own proof, then what the SCRIPT did about delivery config — in that order, so
       // a reader sees the claim and the observation side by side and can tell which is which.
-      proof: [String(result.proof ?? "").slice(0, 8000), reviewed.line, firstRun.line, ...configLines, ...runLines(runsDone), ...(carried.dns_proof ?? []), privacy.line].filter(Boolean).join("\n"),
+      proof: [String(result.proof ?? "").slice(0, 8000), reviewed.line, selfReview.line, firstRun.line, ...configLines, ...runLines(runsDone), ...(carried.dns_proof ?? []), privacy.line].filter(Boolean).join("\n"),
       pages_env_proof: configLines,
       // What is still missing after this rebuild, re-checked against the re-mapped package (0237).
       ...(Array.isArray(result.missing_materials) ? { missing_materials: result.missing_materials } : {}),
