@@ -344,6 +344,8 @@ export async function openPortfolioUpdateCard(
     subject: string;
     from: string;
     raw: string;
+    /** This request's parse of `raw` (the door's one parse). */
+    mail?: import("../effects/mail").Mail | null;
     company: string | null;
     /** The stored `.eml` this message lives in, kept once at the door (0226). */
     emlKey: string | null;
@@ -397,7 +399,7 @@ export async function openPortfolioUpdateCard(
        * cut off below them — and Winter is asked to "record only figures the message actually
        * states". He could not read the message. See `readableMessage` in `dealIntake.ts`.
        */
-      await readableMessage(input.raw),
+      await readableMessage(input.raw, 4000, input.mail),
       "",
       storedMessageLine(input.emlKey, input.storeNote),
     ].join("\n"),

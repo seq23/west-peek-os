@@ -403,7 +403,7 @@ export function checkDoor(door, parser) {
     /*
      * THE ASK IS PARSED FROM THE WRITTEN PART OF THE REQUEST'S OWN TEXT BODY — never a later
      * message. Until 0226 (22 Sep 2026) `openAssignmentCard` decoded `input.raw` inline
-     * (`textBodyOf` then `splitQuoted().written`); it now calls the shared `readableMessage()`
+     * (the parsed message's `text` then `splitQuoted().written`); it now calls the shared `readableMessage()`
      * (also `dealIntake.ts`, so a single door cannot drift from its own decode), which does the
      * identical two steps under one name — `raw.slice(0, 4000)` used to be typed out separately in
      * three doors, and one shared reader is the fix. Checked in two parts so a `readableMessage`
@@ -414,8 +414,8 @@ export function checkDoor(door, parser) {
     const doorChain = /const written = (?:await )?readableMessage\(input\.raw[\s\S]*?parseWebPropertyAsk\(input\.subject,\s*written(?:,\s*registry)?\)/.test(door);
     if (!doorChain) violations.push("the door does not parse the web ask from the partner's own raw request (readableMessage(input.raw) → parseWebPropertyAsk) — pre-approval could come from elsewhere");
     if (/parseWebPropertyAsk\(input\.subject,\s*written,\s*registry\)/.test(door) && !/registry = await loadRegistry\(env\)/.test(door)) violations.push("the door hands parseWebPropertyAsk a registry that did not come from loadRegistry(env) — the list of repos must be the table, never the email");
-    const readerChain = /function readableMessage\([^)]*\)[\s\S]{0,200}?textBodyOf\(raw[\s\S]*?splitQuoted\(text\)\.written/.test(door);
-    if (!readerChain) violations.push("readableMessage() no longer decodes via textBodyOf() → splitQuoted().written — the door's request text would be undecoded or would include the quoted original");
+    const readerChain = /function readableMessage\([^)]*\)[^{]*\{\s*const mail = await mailOf\(raw[\s\S]{0,600}?const text = mail\.text;[\s\S]*?splitQuoted\(text\)\.written/.test(door);
+    if (!readerChain) violations.push("readableMessage() no longer decodes the parsed message (mailOf → mail.text) → splitQuoted().written — the door's request text would be undecoded or would include the quoted original");
   }
   const parse = body(parser, "export function parseWebPropertyAsk(");
   if (!parse) violations.push("parseWebPropertyAsk() is gone");

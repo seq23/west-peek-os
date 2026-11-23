@@ -14,7 +14,7 @@ import { statedCut } from "./partnerWords";
 import { blockReplyDoor, PARTNER_ANSWER_MAX } from "../../shared/work/blocks";
 import { roleOf } from "../../shared/work/partnerOwnership";
 import { LATE_THREAD_NOTE_PREFIX, NEW_EMAIL_NOTE_PREFIX } from "../../shared/work/approvalReply";
-import { textBodyOf } from "../effects/mail";
+import { mailOf, type Mail } from "../effects/mail";
 import { storeAttachments } from "./requestMaterials";
 import { hearVoiceNotes, recordFilesNotOpened, stopOnUnheardVoiceNotes, withVoiceNotes } from "./voiceNotes";
 import { readLinkedDriveFiles } from "./driveShares";
@@ -159,7 +159,7 @@ const NOT_A_REPLY: SteerFromReply = { steered: false, thread: null, written: "",
  */
 export async function openSiteCardFor(
   env: Env,
-  message: { fromHeader: string | null; authenticationResults: string | null; subject: string; raw: string },
+  message: { fromHeader: string | null; authenticationResults: string | null; subject: string; raw: string; mail?: Mail | null },
 ): Promise<{ thread: EmailThreadRow; cardId: string; targetRepo: string | null } | null> {
   /*
    * THE WHOLE RULE NOW LIVES IN services/emailRouting.ts (9 Oct 2026, rules 1c/1d): a named site —
@@ -320,6 +320,8 @@ export async function steerFromReply(
     authenticationResults: string | null;
     subject: string;
     raw: string;
+    /** This request's parse of `raw` (the door's one parse); parsed here once when absent. */
+    mail?: Mail | null;
     inReplyTo: string | null;
     references: string | null;
     /**
@@ -346,6 +348,9 @@ export async function steerFromReply(
    */
   deps: { answerQuestion?: QuestionAnswerer; readWords?: ReplyIntentReader } = {},
 ): Promise<SteerFromReply> {
+  // This request's one parse of the message (the door's), or parsed here once when called on its own; every reader
+  // below, the follow-up match included, reads this one.
+  const mail = await mailOf(message.raw, message.mail);
   const tokens = threadTokensIn({ inReplyTo: message.inReplyTo, references: message.references });
   let thread = await replyThreadFromHeaders(env, message);
   /*
@@ -370,7 +375,7 @@ export async function steerFromReply(
    */
   let followUp: { cardId: string; subject: string } | null = null;
   if (!thread && tokens.length === 0) {
-    const decision = await siteCardDecision(env, message, message.routeAs ?? null);
+    const decision = await siteCardDecision(env, { ...message, mail }, message.routeAs ?? null);
     if (decision.kind === "JOIN") {
       thread = decision.thread;
       followUp = { cardId: decision.thread.object_id, subject: message.subject };
@@ -405,7 +410,7 @@ export async function steerFromReply(
 
   // THE WORDS, NOT THE MIME (21 Sep 2026): a Gmail or iPhone reply is multipart; the answer is its
   // text part, decoded, and only what sits above the quote.
-  const split = writtenAndQuoted(`\r\n\r\n${await textBodyOf(message.raw)}`, {
+  const split = writtenAndQuoted(`\r\n\r\n${mail.text}`, {
     inReplyTo: message.inReplyTo,
     references: message.references,
     subject: message.subject,
@@ -426,7 +431,7 @@ export async function steerFromReply(
   let attached: string[] = [];
   let linkTo: string | null = null;
   if (thread.object_type === "work_card") {
-    const kept = await storeAttachments(env, { cardId: thread.object_id, raw: message.raw, emlKey: message.emlKey, firmScope: thread.firm_scope, source: "REPLY" });
+    const kept = await storeAttachments(env, { cardId: thread.object_id, raw: message.raw, mail, emlKey: message.emlKey, firmScope: thread.firm_scope, source: "REPLY" });
     attached = kept.stored;
     if (kept.stored.length || kept.unread.length || (kept.attachments > 0 && !message.emlKey)) {
       await env.WP_OS_DB.prepare("UPDATE work_card SET description = substr(COALESCE(description, '') || char(10) || ?2, 1, 16000) WHERE id = ?1")
@@ -445,7 +450,7 @@ export async function steerFromReply(
      * card with two words. The recording is transcribed on the platform's own no-training route (voiceNotes.ts) and
      * its words join what he typed; one that cannot be read is a named stop on Sequoia's desk and on the card.
      */
-    const voice = await hearVoiceNotes(env, message.raw);
+    const voice = await hearVoiceNotes(env, mail);
     written = withVoiceNotes(written, voice.heard);
     if (voice.heard.length) {
       await appendEvent(env, {

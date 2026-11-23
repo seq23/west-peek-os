@@ -35,7 +35,7 @@ import { abandonRun } from "../ai/subscriptionSeats";
 import { alreadyTold, recordNotice, routedByFor, SEND_FAILED, threadRootFor, type NoticeKind } from "./requestReply";
 import { isEmailSendEnabled } from "../effects/resendClient";
 import { doneReplyLaneFor, isOn, previewAllPartnerEmailsIsOn, rulesFor, ON_OFF_RULE_KEYS, type KindRule } from "./kindRules";
-import { attachmentBytes, decodeHeader } from "../effects/mail";
+import { attachmentBytes, decodeHeader, readMail } from "../effects/mail";
 import { SUBSCRIPTION_CLAIMER_EMAIL } from "../auth";
 import { strippedSubject } from "../../shared/intake/emailTriggers";
 import { isTechnicalBlock } from "../../shared/work/blocks";
@@ -4135,7 +4135,7 @@ export async function handleGetRequestAttachment(ctx: RouteContext): Promise<Res
       headers: { "content-type": row.media_type || "application/octet-stream", "content-disposition": `attachment; filename="${row.filename.replace(/"/g, "")}"`, "cache-control": "private, no-store" },
     });
   }
-  const extracted = await attachmentBytes(await obj.text(), row.filename);
+  const extracted = attachmentBytes(await readMail(await obj.text()), row.filename);
   if (!extracted) return json({ error: "not_found", detail: `${row.filename} is not in the stored message` }, { status: 404 });
   return new Response(new Blob([extracted.bytes as BlobPart]), {
     headers: {

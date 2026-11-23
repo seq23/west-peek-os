@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import { appendEvent } from "../events";
-import { textBodyOf } from "../effects/mail";
+import { mailOf, type Mail } from "../effects/mail";
 import { addressIn, authenticationVerdict } from "../../shared/intake/partnerAuthority";
 import { newTextOf } from "../../shared/events/packetDecisionToken";
 import { herNoteOf } from "../../shared/tlc/brandReply";
@@ -141,10 +141,10 @@ export async function tellSendPause(env: Env, now: Date, firmScope: string, gate
  */
 export async function applySendPauseApproval(
   env: Env,
-  message: { fromHeader: string | null; authenticationResults: string | null; subject: string; body: string },
+  message: { fromHeader: string | null; authenticationResults: string | null; subject: string; body: string; mail?: Mail | null },
   deps: { readers?: readonly Reader[] } = {},
 ): Promise<{ handled: boolean; ref: string | null; detail: string }> {
-  const body = await textBodyOf(message.body);
+  const body = (await mailOf(message.body, message.mail)).text;
   const ref = SEND_PAUSE_REF_RE.exec(body)?.[0] ?? SEND_PAUSE_REF_RE.exec(message.subject)?.[0] ?? null;
   if (!ref) return { handled: false, ref: null, detail: "no send-pause reference" };
   const last = await getSetting(env, PAUSE_NOTICE_SETTING).then((v) => { try { return JSON.parse(v ?? "null") as PauseNotice | null; } catch { return null; } });

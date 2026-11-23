@@ -1381,7 +1381,7 @@ export async function isOwnBrandMailCopy(env: Env, input: { from: string; to: st
  * the body, a "not a fit / no thanks / stop" answer turns that into a stop for good, and anything else is a yes
  * whose pitch email is drafted for her approval.
  */
-export async function recordBrandReplyText(env: Env, input: { from: string; subject: string; text: string; messageId?: string | null; now?: Date }): Promise<{ matched: number; stop: string | null }> {
+export async function recordBrandReplyText(env: Env, input: { from: string; subject: string; text: string; mail?: import("../effects/mail").Mail | null; messageId?: string | null; now?: Date }): Promise<{ matched: number; stop: string | null }> {
   // (26 Oct 2026) The words decide: an auto-reply resumes the drip, a no is DECLINED, anything else is a reply Wynn
   // drafts her answer to (tlcBrandReply). Nothing is "a yes" by default and no pitch PDF goes before one.
   const now = input.now ?? new Date();
@@ -1391,7 +1391,7 @@ export async function recordBrandReplyText(env: Env, input: { from: string; subj
   let stop: string | null = null;
   const drafted = new Set<string>();
   for (const d of deals) {
-    const out = await takeBrandReply(env, d, { messageId: input.messageId ?? "", subject: input.subject, text: input.text, receivedAt: now.toISOString(), from: input.from }, { now });
+    const out = await takeBrandReply(env, d, { messageId: input.messageId ?? "", subject: input.subject, text: input.text, mail: input.mail, receivedAt: now.toISOString(), from: input.from }, { now });
     stop = out === "NO" ? ((await env.WP_OS_DB.prepare("SELECT stop_reason FROM tlc_deal WHERE id = ?1").bind(d.id).first<{ stop_reason: string | null }>())?.stop_reason ?? "DECLINED") : out === "AUTO_REPLY" ? "AUTO_REPLY" : "REPLIED";
     if (out === "DRAFTED") drafted.add(d.firm_scope);
   }

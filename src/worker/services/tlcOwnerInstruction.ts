@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import { appendEvent } from "../events";
-import { textBodyOf } from "../effects/mail";
+import { readMail } from "../effects/mail";
 import { TLC_OWNER } from "../../shared/tlc/learningClub";
 import { herNoteOf, theirNewText, BRAND_REPLY_REF_RE } from "../../shared/tlc/brandReply";
 import { brandKey } from "../../shared/tlc/mustPitch";
@@ -34,7 +34,7 @@ interface OpenEvent { id: string; month: string; topic: string | null }
 
 /** Her words in a stored message: the new text only, her signature off. */
 export async function herWordsIn(raw: string): Promise<string> {
-  return herNoteOf(theirNewText(await textBodyOf(raw)), TLC_OWNER.name);
+  return herNoteOf(theirNewText((await readMail(raw)).text), TLC_OWNER.name);
 }
 
 /** Is this stored message authenticated mail from her? */

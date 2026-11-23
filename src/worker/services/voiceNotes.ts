@@ -1,6 +1,6 @@
 import type { Env } from "../env";
 import { appendEvent } from "../events";
-import { audioAttachments } from "../effects/mail";
+import { audioAttachments, type Mail } from "../effects/mail";
 import { DiarisationUnavailable, transcribeDiarised } from "../ai/providers/workersAiNova3";
 import { transcribeChunk } from "../ai/providers/workersAiWhisper";
 import { recordNeurons, requireBudget, whisperNeurons } from "../ai/transcriptionBudget";
@@ -42,8 +42,8 @@ export function voiceNoteType(filename: string, mediaType: string): string {
 }
 
 /** Read every recording attached to a message. Never throws: a failure is in `failed`. */
-export async function hearVoiceNotes(env: Env, raw: string): Promise<VoiceNotes> {
-  const { attachments, unread } = await audioAttachments(raw);
+export async function hearVoiceNotes(env: Env, mail: Mail): Promise<VoiceNotes> {
+  const { attachments, unread } = audioAttachments(mail);
   const out: VoiceNotes = { heard: [], failed: unread.map((u) => ({ filename: u.replace(/\s*\(.*$/, ""), reason: u })) };
   for (const a of attachments) {
     try {

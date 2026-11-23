@@ -23,7 +23,7 @@ import { handleDeveloperChanges, handleDeveloperEmail } from "../src/worker/serv
 import { answerBlock } from "../src/worker/services/blocks";
 import { handleInboundEmail, MAX_BODY_BYTES } from "../src/worker/effects/inboundEmail";
 import { comparableSubject } from "../src/worker/services/emailThread";
-import { requestAttachments, textBodyOf } from "../src/worker/effects/mail";
+import { readMail, requestAttachments } from "../src/worker/effects/mail";
 import { handleGetRequestAttachment, handleReingestStoredEmail, sendReceived, stuckWindowOpen } from "../src/worker/services/webPropertyChange";
 import { readFileSync } from "node:fs";
 import { SECRET_BY_EMAIL } from "../src/shared/work/porterWaits";

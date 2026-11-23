@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { classifyInbound, extractAddress, forwardedOrigin, MAX_BODY_BYTES, personFromMessage } from "../src/worker/effects/inboundEmail";
-import { decodeHeader, deckLinks, messageText, pdfAttachments, unreadableDeckAttachments } from "../src/worker/effects/mail";
+import { decodeHeader, deckLinks, messageText, pdfAttachments, readMail, unreadableDeckAttachments } from "../src/worker/effects/mail";
 import { INTAKE_MAILBOX } from "../src/shared/intake/emailTriggers";
 import { defuseTriggers, wouldLoop } from "../src/worker/effects/emailTransport";
 
@@ -203,7 +203,7 @@ describe("a folded header still yields its boundary, so a deck is not dropped in
 
   it("reads a boundary declared on a continuation line", async () => {
     const folded = message('Content-Type: multipart/mixed;\r\n\tboundary="Apple-Mail=_A1B2C3"', "Apple-Mail=_A1B2C3");
-    const { attachments, unread } = await pdfAttachments(folded);
+    const { attachments, unread } = await pdfAttachments(await readMail(folded));
     expect(attachments.map((a) => a.filename)).toEqual(["sensori.pdf"]);
     expect(attachments[0]!.dataBase64).toBe(pdf);
     expect(unread).toEqual([]);
@@ -211,12 +211,12 @@ describe("a folded header still yields its boundary, so a deck is not dropped in
 
   it("still reads one declared on a single line", async () => {
     const same = message('Content-Type: multipart/mixed; boundary="wp(e2e)+bound?ary_1"', "wp(e2e)+bound?ary_1");
-    expect((await pdfAttachments(same)).attachments.map((a) => a.filename)).toEqual(["sensori.pdf"]);
+    expect((await pdfAttachments(await readMail(same))).attachments.map((a) => a.filename)).toEqual(["sensori.pdf"]);
   });
 
   it("finds nothing in a message that is not multipart, and says nothing was lost", async () => {
     const plain = ["From: Ada <ada@sensori.example>", "Subject: #wpdealflow Sensori", "", "Deck to follow."].join("\r\n");
-    expect(await pdfAttachments(plain)).toEqual({ attachments: [], unread: [] });
+    expect(await pdfAttachments(await readMail(plain))).toEqual({ attachments: [], unread: [] });
   });
 });
 
@@ -339,19 +339,19 @@ describe("a forwarded deck, nested the way real mail clients nest it", () => {
   ].join("\r\n");
 
   it("finds the deck inside the nested part", async () => {
-    const { attachments, unread } = await pdfAttachments(forwarded);
+    const { attachments, unread } = await pdfAttachments(await readMail(forwarded));
     expect(attachments, `nothing was found; unread said: ${unread.join("; ")}`).toHaveLength(1);
     expect(attachments[0]!.dataBase64).toBe("JVBERi0xLjQK");
   });
 
   it("reads the filename as a filename, not as the rest of the line", async () => {
     // Unquoted, folded, and followed by another parameter — all three at once, as Apple sends it.
-    expect((await pdfAttachments(forwarded)).attachments[0]!.filename).toBe("Vynlo_PreSeed_Deck_Outreach_2026-08-22.pdf");
+    expect((await pdfAttachments(await readMail(forwarded))).attachments[0]!.filename).toBe("Vynlo_PreSeed_Deck_Outreach_2026-08-22.pdf");
   });
 
   it("reads the body text out of the nested message too, so a tag in it still routes", async () => {
     // The trigger is in the body on a forward, which is the operator's stated common case.
-    const { subject, body } = await messageText(forwarded);
+    const { subject, body } = await messageText(await readMail(forwarded));
     expect(subject).toBe("Fwd: Vynlo");
     expect(body).toContain("#wpdeck");
   });
@@ -392,8 +392,8 @@ describe("a deck that arrived as something we cannot open", () => {
     ].join("\r\n");
 
   it("names a PowerPoint rather than reporting nothing", async () => {
-    const found = await unreadableDeckAttachments(
-      withAttachment("application/vnd.openxmlformats-officedocument.presentationml.presentation", "Vynlo.pptx"),
+    const found = await unreadableDeckAttachments(await readMail(
+      withAttachment("application/vnd.openxmlformats-officedocument.presentationml.presentation", "Vynlo.pptx")),
     );
     expect(found).toHaveLength(1);
     expect(found[0]).toContain("Vynlo.pptx");
@@ -401,11 +401,11 @@ describe("a deck that arrived as something we cannot open", () => {
   });
 
   it("names a Keynote too, which is the other half of what founders send", async () => {
-    expect((await unreadableDeckAttachments(withAttachment("application/x-iwork-keynote-sffkey", "Deck.key")))[0]).toContain("Keynote");
+    expect((await unreadableDeckAttachments(await readMail(withAttachment("application/x-iwork-keynote-sffkey", "Deck.key"))))[0]).toContain("Keynote");
   });
 
   it("does not report a PDF as unreadable — that path reads it", async () => {
-    expect(await unreadableDeckAttachments(withAttachment("application/pdf", "Deck.pdf"))).toEqual([]);
+    expect(await unreadableDeckAttachments(await readMail(withAttachment("application/pdf", "Deck.pdf")))).toEqual([]);
   });
 
   it("finds the deck link when the deck is a link", () => {

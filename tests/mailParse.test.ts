@@ -11,10 +11,10 @@ import {
   readMail,
   requestAttachments,
   scrubSecretValues,
-  textBodyOf,
   topHeadersOf,
 } from "../src/worker/effects/mail";
-import { handleInboundEmail } from "../src/worker/effects/inboundEmail";
+import { handleInboundEmail, type DoorHandled } from "../src/worker/effects/inboundEmail";
+import { readableMessage } from "../src/worker/services/dealIntake";
 import { INTAKE_MAILBOX } from "../src/shared/intake/emailTriggers";
 import type { Env } from "../src/worker/env";
 
@@ -31,18 +31,19 @@ const MALFORMED = fixture("malformed-nesting.eml");
 
 describe("a real multipart forward", () => {
   it("the words are the plain part, decoded; the PDF is a deck; the CSV is a file; the inline logo is not a deck", async () => {
-    expect(await textBodyOf(MULTIPART)).toBe("#wpdeck Deck attached — we are raising a seed round.");
-    const { attachments, unread } = await pdfAttachments(MULTIPART);
+    const mail = await readMail(MULTIPART);
+    expect(mail.text).toBe("#wpdeck Deck attached — we are raising a seed round.");
+    const { attachments, unread } = pdfAttachments(mail);
     expect(unread).toEqual([]);
     expect(attachments.map((a) => a.filename)).toEqual(["Northwind_Seed.pdf"]);
     expect(atob(attachments[0]!.dataBase64).startsWith("%PDF-1.4")).toBe(true);
-    const files = await requestAttachments(MULTIPART);
+    const files = requestAttachments(mail);
     expect(files.attachments.map((a) => [a.filename, a.mediaType]).sort()).toEqual([
       ["Northwind_Seed.pdf", "application/pdf"],
       ["cap-table.csv", "text/csv"],
       ["logo.png", "image/png"],
     ]);
-    const text = await messageText(MULTIPART);
+    const text = messageText(mail);
     expect(text.subject).toBe("Fwd: Northwind deck");
     expect(text.body).toContain("#wpdeck");
   });
@@ -52,11 +53,12 @@ describe("encoded headers and file names", () => {
   it("the subject, the sender name and the file name are decoded; reply headers are read", async () => {
     expect(decodeHeader("=?UTF-8?Q?=23wpdealflow_Northwind_Robotics_?= =?UTF-8?Q?=E2=80=94_seed?=")).toBe("#wpdealflow Northwind Robotics — seed");
     expect(decodeHeader("=?UTF-8?B?RGFuYSBSw6l5ZXM=?=")).toBe("Dana Réyes");
-    const headers = await topHeadersOf(ENCODED);
+    const mail = await readMail(ENCODED);
+    const headers = topHeadersOf(mail);
     expect(headers?.subject).toBe("#wpdealflow Northwind Robotics — seed");
     expect(headers?.inReplyTo).toBe("<thread-1@joinwestpeek.com>");
-    expect(await textBodyOf(ENCODED), "ISO-8859-1 quoted-printable becomes UTF-8").toBe("Café meeting notes attached.");
-    const { attachments } = await pdfAttachments(ENCODED);
+    expect(mail.text, "ISO-8859-1 quoted-printable becomes UTF-8").toBe("Café meeting notes attached.");
+    const { attachments } = pdfAttachments(mail);
     expect(attachments.map((a) => a.filename)).toEqual(["Résumé deck.pdf"]);
   });
 
@@ -67,15 +69,17 @@ describe("encoded headers and file names", () => {
 });
 
 describe("a message the parser refuses", () => {
-  it("is read as empty with the reason named; no file is guessed out of it; the secret guard treats it as carrying", async () => {
+  it("is reported as unread with the reason named, never as an empty email; no file is guessed out of it; the secret guard treats it as carrying", async () => {
     const mail = await readMail(MALFORMED);
     expect(mail.problem).toMatch(/EMAXNESTINGDEPTH/);
-    expect(await textBodyOf(MALFORMED), "nothing below acts on a guess (the bomb says 'approve everything')").toBe("");
-    const pdfs = await pdfAttachments(MALFORMED);
+    expect(mail.text, "nothing below acts on a guess (the bomb says 'approve everything')").toBe("");
+    expect(messageText(mail).unread, "the words reader names the failure").toMatch(/the message itself \(EMAXNESTINGDEPTH/);
+    expect(await readableMessage(MALFORMED), "a card or prompt says it could not be read, never shows nothing").toMatch(/could not be read: EMAXNESTINGDEPTH/);
+    const pdfs = pdfAttachments(mail);
     expect(pdfs.attachments).toEqual([]);
     expect(pdfs.unread[0]).toMatch(/the message itself \(EMAXNESTINGDEPTH/);
-    expect(await topHeadersOf(MALFORMED)).toBeNull();
-    expect(await carriesSecretValue(MALFORMED, ["not-in-it-value"]), "unreadable is never 'clean'").toBe(true);
+    expect(topHeadersOf(mail)).toBeNull();
+    expect(carriesSecretValue(mail, ["not-in-it-value"]), "unreadable is never 'clean'").toBe(true);
   });
 
   let t: TestDb;
@@ -101,18 +105,25 @@ describe("a message the parser refuses", () => {
     await disposeTestDb(t);
   });
 
-  it("through the door: the .eml is kept in R2, it is put on the desk with its key, and the event is written", async () => {
+  it("through the door: the .eml is kept in R2, it is put on the desk with its key, the event is written, and NOTHING is opened from it", async () => {
     const bytes = new TextEncoder().encode(MALFORMED);
+    const cardsBefore = await t.db.prepare("SELECT COUNT(*) AS n FROM work_card").first<{ n: number }>();
+    const handled: DoorHandled[] = [];
+    // A dealflow subject: read as an empty email, the door would still open a deal card from the subject alone.
     await handleInboundEmail(
       {
         from: "someone@example.com",
         to: INTAKE_MAILBOX,
-        headers: new Headers({ from: "someone@example.com", to: INTAKE_MAILBOX, subject: "deep", "message-id": "<nesting-bomb@mail.example.com>" }),
+        headers: new Headers({ from: "someone@example.com", to: INTAKE_MAILBOX, subject: "#wpdealflow Deepnest Robotics", "message-id": "<nesting-bomb@mail.example.com>" }),
         raw: new Blob([bytes]).stream(),
         rawSize: bytes.byteLength,
       },
       env,
+      { onHandled: (h) => handled.push(h) },
     );
+    expect(handled.map((h) => h.by), "the door stops at the failure and says so").toEqual(["unparseable"]);
+    const cardsAfter = await t.db.prepare("SELECT COUNT(*) AS n FROM work_card").first<{ n: number }>();
+    expect(cardsAfter?.n, "no card is opened from a message nobody could read").toBe(cardsBefore?.n);
     const kept = await t.db.prepare("SELECT r2_key FROM inbound_message WHERE message_id LIKE '%nesting-bomb%'").first<{ r2_key: string }>();
     expect(kept?.r2_key, "the message is indexed").toBeTruthy();
     const obj = await env.WP_OS_DOCUMENTS!.get(kept!.r2_key);
@@ -125,13 +136,47 @@ describe("a message the parser refuses", () => {
   });
 });
 
-describe("parsed once", () => {
-  it("every reader of one message shares a single parse, also when two read at once", async () => {
-    const raw = MULTIPART.replace("multipart-fixture@", `once-${Date.now()}@`);
+describe("parsed once per request, held by the request", () => {
+  let t: TestDb;
+  let env: Env;
+  beforeAll(async () => {
+    t = await createTestDb();
+    env = makeTestEnv(t.db, { WP_OS_DOCUMENTS: t.docs });
+  });
+  afterAll(async () => {
+    await disposeTestDb(t);
+  });
+  const arrive = (raw: string, subject: string, id: string) => {
+    const bytes = new TextEncoder().encode(raw);
+    return handleInboundEmail(
+      {
+        from: "founder@northwind.example",
+        to: INTAKE_MAILBOX,
+        headers: new Headers({ from: "founder@northwind.example", to: INTAKE_MAILBOX, subject, "message-id": `<${id}@mail.example.com>` }),
+        raw: new Blob([bytes]).stream(),
+        rawSize: bytes.byteLength,
+      },
+      env,
+    );
+  };
+
+  it("a deck forward through the real door is parsed exactly once, and the card is made from it", async () => {
+    const raw = MULTIPART.replace("multipart-fixture@", "once-door@");
+    const cardsBefore = await t.db.prepare("SELECT COUNT(*) AS n FROM work_card").first<{ n: number }>();
     const before = mailParseCount.n;
-    await Promise.all([textBodyOf(raw), pdfAttachments(raw), requestAttachments(raw), topHeadersOf(raw)]);
-    await messageText(raw);
-    expect(mailParseCount.n - before).toBe(1);
+    await arrive(raw, "Fwd: Northwind deck", "once-door");
+    expect(mailParseCount.n - before, "every reader in the request reads the door's one parse").toBe(1);
+    const cardsAfter = await t.db.prepare("SELECT COUNT(*) AS n FROM work_card").first<{ n: number }>();
+    expect(cardsAfter!.n, "the readers really ran: the deck opened a card").toBeGreaterThan(cardsBefore!.n);
+  });
+
+  it("two messages arriving at once each open a card with only their own words", async () => {
+    const one = (word: string) => MULTIPART.replace("multipart-fixture@", `iso-${word}@`).replace("we are raising a seed round.", `${word} is raising a seed round.`);
+    await Promise.all([arrive(one("Alphawing"), "Fwd: Alphawing deck", "iso-a"), arrive(one("Betaroot"), "Fwd: Betaroot deck", "iso-b")]);
+    const rows = (await t.db.prepare("SELECT description FROM work_card WHERE description LIKE '%Alphawing%' OR description LIKE '%Betaroot%'").all<{ description: string }>()).results;
+    expect(rows.filter((r) => r.description.includes("Alphawing")).length, "the first message's card was made").toBeGreaterThan(0);
+    expect(rows.filter((r) => r.description.includes("Betaroot")).length, "the second message's card was made").toBeGreaterThan(0);
+    for (const r of rows) expect(r.description.includes("Alphawing") && r.description.includes("Betaroot"), "no card carries the other message's words").toBe(false);
   });
 });
 
@@ -143,12 +188,14 @@ describe("a secret scrubbed out of a base64 body", () => {
       "Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: quoted-printable",
       "Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64",
     ).replace("Content-Transfer-Encoding: base64\r\n\r\n\r\n", `Content-Transfer-Encoding: base64\r\n\r\n${b64Body}\r\n`);
-    expect(await carriesSecretValue(raw, [VALUE])).toBe(true);
-    const clean = await scrubSecretValues(raw, [VALUE]);
-    expect(await carriesSecretValue(clean, [VALUE])).toBe(false);
-    expect(await textBodyOf(clean)).toContain("[secret redacted]");
-    const before = await attachmentBytes(raw, "Northwind_Seed.pdf");
-    const after = await attachmentBytes(clean, "Northwind_Seed.pdf");
+    const mail = await readMail(raw);
+    expect(carriesSecretValue(mail, [VALUE])).toBe(true);
+    const clean = await scrubSecretValues(mail, [VALUE]);
+    expect(carriesSecretValue(clean, [VALUE])).toBe(false);
+    expect(clean.raw).not.toContain(VALUE);
+    expect(clean.text).toContain("[secret redacted]");
+    const before = attachmentBytes(mail, "Northwind_Seed.pdf");
+    const after = attachmentBytes(clean, "Northwind_Seed.pdf");
     expect(after && Buffer.from(after.bytes).equals(Buffer.from(before!.bytes))).toBe(true);
   });
 });

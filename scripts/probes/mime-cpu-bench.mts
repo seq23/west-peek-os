@@ -1,8 +1,8 @@
 /**
  * CPU AND MEMORY OF READING A 26 MB PARTNER REPLY (22 Nov 2026, engineering sweep row 7). Synthetic, same shape as
- * tests/bigPartnerMail (his words, a voice note, a zip, a PDF). It prints the CPU of the one postal-mime parse every
- * reader shares (src/worker/effects/mail.ts, ArrayBuffer mode), the CPU of every reader after it (served from that
- * parse), and the memory held after the parse. Base64 mode is measured beside it: it is why mail.ts never uses it.
+ * tests/bigPartnerMail (his words, a voice note, a zip, a PDF). It prints the CPU of the one postal-mime parse a
+ * request makes (src/worker/effects/mail.ts, ArrayBuffer mode), the CPU of every reader of that parse, and the memory
+ * held while the parse is held. Base64 mode is measured beside it: it is why mail.ts never uses it.
  *
  *   npx -y tsx@4 --expose-gc scripts/probes/mime-cpu-bench.mts   # tsx is not a dev dependency: npx fetches it once
  *
@@ -45,7 +45,7 @@ if (MEM) {
   const before = held();
   let max = 0;
   const reads: Array<() => unknown> =
-    MEM === "mail.ts" ? [() => m.readMail(raw), () => m.textBodyOf(raw), () => m.pdfAttachments(raw), () => m.audioAttachments(raw)]
+    MEM === "mail.ts" ? [async () => { const mail = await m.readMail(raw); return [mail, m.messageText(mail), m.pdfAttachments(mail), m.audioAttachments(mail)]; }]
     : [() => PostalMime.parse(raw, { attachmentEncoding: "base64" })];
   for (const f of reads) {
     const kept = await f();
@@ -64,13 +64,12 @@ async function memory(name: string): Promise<void> {
 console.log(`message ${(raw.length / 1048576).toFixed(1)} MB`);
 let fresh = 0;
 await cpu("the one parse (readMail)", () => m.readMail(`${raw}${"\r\n".repeat((fresh += 1))}`));
-await m.readMail(raw);
-await cpu("textBodyOf, after it", () => m.textBodyOf(raw), true);
-await cpu("messageText, after it", () => m.messageText(raw), true);
-await cpu("pdfAttachments, after it", () => m.pdfAttachments(raw), true);
-await cpu("requestAttachments, after", () => m.requestAttachments(raw), true);
-await cpu("audioAttachments, after it", () => m.audioAttachments(raw), true);
-await cpu("attachmentBytes(zip)", () => m.attachmentBytes(raw, "files.zip"), true);
+const mail = await m.readMail(raw);
+await cpu("messageText, of it", () => m.messageText(mail), true);
+await cpu("pdfAttachments, of it", () => m.pdfAttachments(mail), true);
+await cpu("requestAttachments, of it", () => m.requestAttachments(mail), true);
+await cpu("audioAttachments, of it", () => m.audioAttachments(mail), true);
+await cpu("attachmentBytes(zip)", () => m.attachmentBytes(mail, "files.zip"), true);
 console.log(`${"readers, summed".padEnd(28)} ${summed.toFixed(1)} ms (on top of the one parse)`);
 await memory("mail.ts");
 await cpu("postal-mime (base64 mode)", () => PostalMime.parse(raw, { attachmentEncoding: "base64" }));

@@ -10,7 +10,7 @@ import { NO_MODEL_READER, central } from "../../shared/intake/inboundRead";
 import { partnerByEmail } from "../../shared/registry/partners";
 import { partnersOwnWords } from "../../shared/intake/replyBody";
 import { centralDay } from "../../shared/work/partnerBackBy";
-import { textBodyOf } from "../effects/mail";
+import { readMail } from "../effects/mail";
 import { alreadyTold, recordNotice, threadRootFor } from "./requestReply";
 import { sendOrPreview } from "./previewApproval";
 import { FILES_NOT_OPENED } from "./voiceNotes";
@@ -644,7 +644,7 @@ async function wordsOf(env: Env, row: Candidate): Promise<string> {
   } catch {
     raw = "";
   }
-  const own = raw ? partnersOwnWords(await textBodyOf(raw)).trim() : "";
+  const own = raw ? partnersOwnWords((await readMail(raw)).text).trim() : "";
   return own || (row.prompt ?? "").trim() || (row.subject ?? "").trim();
 }
 
