@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
-import { handleInboundEmail, INLINE_READ_ATTEMPTS, STALE_CLAIM_MINUTES } from "../src/worker/effects/inboundEmail";
+import { handleInboundEmail, INLINE_READ_ATTEMPTS, STALE_CLAIM_MINUTES, type DoorHandled } from "../src/worker/effects/inboundEmail";
 import { mailParseCount } from "../src/worker/effects/mail";
 import { startThread } from "../src/worker/services/emailThread";
 import { createWorkCardInternal } from "../src/worker/services/workCards";
@@ -39,6 +39,8 @@ let env: Env;
 const sent: Array<{ to: string; subject: string; text: string }> = [];
 const aiCalls: Array<{ model: string; streamed: boolean; bytes: number }> = [];
 const store = new Map<string, Uint8Array>();
+/** Set by a test to hold every transcription until it lets go: a door stays mid-request while it is set. */
+let holdTranscription: Promise<void> | null = null;
 
 function bucket() {
   return {
@@ -141,6 +143,7 @@ beforeAll(async () => {
   const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048, privateKeyEncoding: { type: "pkcs8", format: "pem" }, publicKeyEncoding: { type: "spki", format: "pem" } });
   const AI = {
     run: async (model: string, input: Record<string, unknown>) => {
+      if (holdTranscription) await holdTranscription;
       const audio = input.audio as { body: unknown } | undefined;
       const streamed = audio?.body instanceof ReadableStream;
       const bytes = streamed ? (await new Response(audio!.body as ReadableStream).arrayBuffer()).byteLength : (audio?.body as Uint8Array | undefined)?.byteLength ?? 0;
@@ -213,6 +216,37 @@ describe("a partner's big reply is read inline, then answered", () => {
     });
   }
 
+  it("two big replies at once: the door reads the second only once the first has finished (one big email in memory at a time)", async () => {
+    const a = await cardWithThread("TURN_A");
+    const b = await cardWithThread("TURN_B");
+    const first = bigReply({ subject: "Re: Porter: West Peek site TURN_A: New preview ready", token: a.token, words: "First reply.", totalBytes: 6 * 1024 * 1024, messageId: "turn-a@mail.gmail.com" });
+    const second = bigReply({ subject: "Re: Porter: West Peek site TURN_B: New preview ready", token: b.token, words: "Second reply.", totalBytes: 6 * 1024 * 1024, messageId: "turn-b@mail.gmail.com" });
+    let letGo!: () => void;
+    holdTranscription = new Promise<void>((r) => (letGo = r));
+    const callsBefore = aiCalls.length;
+    const parsesBefore = mailParseCount.n;
+    try {
+      const doorA = handleInboundEmail(first, env);
+      // Into its transcription: the first message is parsed and held, mid-request. The AI stub counts a call after the hold.
+      for (let i = 0; i < 200 && mailParseCount.n - parsesBefore < 1; i += 1) await new Promise((r) => setTimeout(r, 10));
+      await new Promise((r) => setTimeout(r, 100));
+      const doorB = handleInboundEmail(second, env);
+      await new Promise((r) => setTimeout(r, 200));
+      expect(mailParseCount.n - parsesBefore, "the second waits its turn while the first is still being read").toBe(1);
+      holdTranscription = null;
+      letGo();
+      await Promise.all([doorA, doorB]);
+    } finally {
+      holdTranscription = null;
+      letGo();
+    }
+    expect(mailParseCount.n - parsesBefore, "then it is read, once").toBe(2);
+    expect(aiCalls.length - callsBefore, "both recordings heard").toBe(2);
+    expect((await one<{ body: string }>("SELECT body FROM work_steer WHERE card_kind = ?1", a.kind))?.body).toContain("First reply.");
+    expect((await one<{ body: string }>("SELECT body FROM work_steer WHERE card_kind = ?1", b.kind))?.body).toContain("Second reply.");
+    await sendUnderstoodReplies(env, new Date(), seat); // their Got its go now, so the next test measures only its own
+  });
+
   it("a Drive link Gmail wrote for a file over 25 MB is read as him: the recording is transcribed onto the card before the Got it", async () => {
     const { cardId, token, kind } = await cardWithThread("DRIVE");
     const link = `https://drive.google.com/file/d/${DRIVE_AUDIO_ID}/view?usp=drive_web`;
@@ -267,6 +301,27 @@ describe("never silent, and never the same wall twice", () => {
     expect(desk?.title).toMatch(/A Mac session has taken over/);
     expect(desk?.body).toMatch(/Nobody needs to act unless the Mac is asleep/);
     expect(await count("SELECT COUNT(*) AS n FROM inbound_email_seen WHERE message_id = 'handoff@mail.gmail.com' AND handled = 2")).toBe(1);
+  });
+
+  it("a reply over the 25 MB an email can be is never parsed: no Got it, nothing steered, kept, and on Sequoia's desk saying it was too big", async () => {
+    const { kind } = await cardWithThread("HUGE");
+    const token = (await one<{ token: string }>("SELECT token FROM email_thread WHERE card_kind = ?1", kind))!.token;
+    const msg = bigReply({ subject: "Re: Porter: West Peek site HUGE: New preview ready", token, words: "Too big to read.", totalBytes: 26 * 1024 * 1024, messageId: "huge@mail.gmail.com" });
+    expect(msg.rawSize).toBeGreaterThan(25 * 1024 * 1024);
+    await sendUnderstoodReplies(env, new Date(), seat); // earlier messages' Got its go first, so only this one is measured
+    const before = sent.length;
+    const parsesBefore = mailParseCount.n;
+    const handled: DoorHandled[] = [];
+    await handleInboundEmail(msg, env, { onHandled: (h) => handled.push(h) });
+    expect(handled.map((h) => h.by), "the door stops and says so, never reads it as empty").toEqual(["unparseable"]);
+    expect(mailParseCount.n - parsesBefore, "never handed to the parser").toBe(0);
+    expect(await count("SELECT COUNT(*) AS n FROM work_steer WHERE card_kind = ?1", kind), "nothing steers the card").toBe(0);
+    const kept = await one<{ r2_key: string }>("SELECT r2_key FROM inbound_message WHERE message_id = 'huge@mail.gmail.com'");
+    expect(store.get(kept!.r2_key)?.byteLength, "the whole message is kept").toBe(msg.rawSize);
+    const flag = await one<{ body: string }>("SELECT body FROM notification WHERE dedupe_key = ?1", `unparseable:${kept!.r2_key}`);
+    expect(flag?.body, "her desk says why, in a sentence").toMatch(/too big to read here: 26\.0 MB, over the 25 MB an email can be/);
+    await sendUnderstoodReplies(env, new Date(), seat);
+    expect(sent.slice(before).filter((m) => m.to === SCOOTER), "no Got it for what was not read").toHaveLength(0);
   });
 
   it("a body that cannot be read sends no Got it and is raised on Sequoia's desk; a door that died is raised by the sweep", async () => {

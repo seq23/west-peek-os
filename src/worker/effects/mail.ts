@@ -29,8 +29,12 @@ import PostalMime, { decodeWords, type Email } from "postal-mime";
 export interface Attachment {
   filename: string;
   mediaType: string;
-  /** Base64 of the file, exactly as `readDeck` and the providers want it. */
-  dataBase64: string;
+  /**
+   * Base64 of the file, exactly as `readDeck` and the providers want it. WORKED OUT WHEN READ, NEVER HELD (22 Nov 2026):
+   * a reader's list used to carry a 22 MB string per file whether anything read it or not, two copies per voice note,
+   * held for the whole request. Only a zip, a voice note or a deck is ever read as base64; the rest are only counted.
+   */
+  readonly dataBase64: string;
   bytes: number;
 }
 
@@ -70,6 +74,12 @@ export const MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024;
 export const MAX_KEPT_FILE_BYTES = 30 * 1024 * 1024;
 /** A voice note is up to this big: a phone's few minutes of m4a is 1 to 20 MB. */
 export const MAX_VOICE_NOTE_BYTES = 40 * 1024 * 1024;
+/** Cloudflare Email Routing's delivery ceiling. A larger message never arrives, and one is never parsed here either. */
+export const EMAIL_DELIVERY_CEILING_BYTES = 25 * 1024 * 1024;
+/** A message this big or bigger is handled one at a time in an isolate (`oneBigMailAtATime`). */
+export const BIG_MAIL_BYTES = 4 * 1024 * 1024;
+/** How long a big message waits for the big one before it. A door that hangs never holds the mail behind it for longer. */
+export const BIG_MAIL_WAIT_MS = 120_000;
 /** Enough to carry a forwarded chain and its tags; not so much that scanning it costs real time. */
 const MAX_SCANNED_BODY = 256 * 1024;
 
@@ -93,6 +103,11 @@ export async function readMail(raw: string | null | undefined): Promise<Mail> {
   const text = raw ?? "";
   if (!looksLikeMail(text)) {
     return { raw: text, isMime: false, problem: null, subject: "", inReplyTo: "", references: "", text, html: "", files: [], headerLines: [] };
+  }
+  if (text.length > EMAIL_DELIVERY_CEILING_BYTES) {
+    // TOO BIG IS A FAILURE, NAMED (22 Nov 2026): never parsed (it would not fit beside another), never read as empty.
+    const mb = (text.length / 1024 / 1024).toFixed(1);
+    return { raw: text, isMime: true, problem: `too big to read here: ${mb} MB, over the 25 MB an email can be`, subject: "", inReplyTo: "", references: "", text: "", html: "", files: [], headerLines: [] };
   }
   mailParseCount.n += 1;
   let email: Email | null = null;
@@ -121,6 +136,37 @@ export async function readMail(raw: string | null | undefined): Promise<Mail> {
     })),
     headerLines: email.headerLines.map((h) => h.line),
   };
+}
+
+/**
+ * ONE BIG MESSAGE AT A TIME IN AN ISOLATE (22 Nov 2026). Concurrent requests share one isolate's 128 MB, and a 22 MB
+ * message costs its text, its decoded files and, while a voice note is transcribed, one base64 copy: two at once did
+ * not fit with room to spare. A message of BIG_MAIL_BYTES or more waits here until the big one before it is done
+ * (small mail never waits). What this module keeps is a promise that the message before has finished, never any part
+ * of a message, and it is cleared when the last one is done. The wait is bounded by `waitMs`: a door that hangs
+ * delays the next big message, never stops it.
+ */
+let bigMailBefore: Promise<void> | null = null;
+export async function oneBigMailAtATime<T>(rawSize: number, work: () => Promise<T>, waitMs = BIG_MAIL_WAIT_MS): Promise<T> {
+  if (!(rawSize < BIG_MAIL_BYTES)) {
+    const before = bigMailBefore;
+    let done!: () => void;
+    const mine = new Promise<void>((resolve) => (done = resolve));
+    const chain = (bigMailBefore = (before ?? Promise.resolve()).then(() => mine));
+    if (before) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const waited = await Promise.race([before.then(() => true), new Promise<false>((resolve) => (timer = setTimeout(() => resolve(false), waitMs)))]);
+      clearTimeout(timer);
+      if (!waited) console.warn(`a big message waited ${waitMs} ms for the one before it and is read anyway`);
+    }
+    try {
+      return await work();
+    } finally {
+      done();
+      if (bigMailBefore === chain) bigMailBefore = null;
+    }
+  }
+  return work();
 }
 
 /**
@@ -233,7 +279,15 @@ function attachmentsOf(
       unread.push(`${f.filename} (${(f.content.byteLength / 1024 / 1024).toFixed(1)}MB — too large to read here)`);
       continue;
     }
-    attachments.push({ filename: f.filename, mediaType: f.mediaType, dataBase64: base64Of(f.content), bytes: f.content.byteLength });
+    const content = f.content;
+    attachments.push({
+      filename: f.filename,
+      mediaType: f.mediaType,
+      bytes: content.byteLength,
+      get dataBase64() {
+        return base64Of(content);
+      },
+    });
   }
   return { attachments, unread };
 }

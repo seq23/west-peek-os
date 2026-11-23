@@ -5,7 +5,7 @@ import { mailAuthority } from "../../shared/intake/partnerAuthority";
 import { addresseeIn, namedSiteHostsIn, parseWebPropertyAsk, type WebProperty } from "../../shared/intake/webPropertyChange";
 import { WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
 import { partnerByEmail } from "../../shared/registry/partners";
-import { mailOf, readMail, type Mail } from "../effects/mail";
+import { BIG_MAIL_BYTES, mailOf, oneBigMailAtATime, readMail, type Mail } from "../effects/mail";
 import { loadRegistry } from "./webPropertyRegistry";
 import { loadProfile, type PartnerProfile } from "./partnerProfile";
 import { sendPartnerEmail } from "./execEmail";
@@ -455,7 +455,9 @@ export async function resolveStaleClarifications(env: Env, now: Date = new Date(
     const cutoff = new Date(now.getTime() - 24 * 3_600_000).toISOString();
     const rows = (await env.WP_OS_DB.prepare("SELECT * FROM inbound_clarification c WHERE resolved_at IS NULL AND asked_at < ?1 AND kind = 'EMAIL' AND NOT EXISTS (SELECT 1 FROM inbound_message m WHERE m.message_id = c.message_id AND m.work_card_id IS NOT NULL) ORDER BY asked_at LIMIT 5").bind(cutoff).all<ClarificationRow>()).results ?? [];
     let n = 0;
-    for (const r of rows) if (await settle(env, r, "NEW", "TIMED_OUT", "work_sweep")) n++;
+    // Outside any door, so the sweep takes the one-big-email turn itself: its message's size is not known until it is
+    // read, and a sweep can wait (bounded) where a door could not.
+    for (const r of rows) if (await oneBigMailAtATime(BIG_MAIL_BYTES, () => settle(env, r, "NEW", "TIMED_OUT", "work_sweep"))) n++;
     return n;
   } catch (err) {
     console.error("clarification timeout sweep failed", err);

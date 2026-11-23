@@ -5,6 +5,7 @@ import {
   attachmentBytes,
   carriesSecretValue,
   decodeHeader,
+  EMAIL_DELIVERY_CEILING_BYTES,
   mailParseCount,
   messageText,
   pdfAttachments,
@@ -80,6 +81,22 @@ describe("a message the parser refuses", () => {
     expect(pdfs.unread[0]).toMatch(/the message itself \(EMAXNESTINGDEPTH/);
     expect(topHeadersOf(mail)).toBeNull();
     expect(carriesSecretValue(mail, ["not-in-it-value"]), "unreadable is never 'clean'").toBe(true);
+  });
+
+  it("an email over the 25 MB an email can be is refused as TOO BIG, named, never parsed and never read as empty", async () => {
+    // Email Routing refuses over 25 MB; one that reaches a reader anyway (a stored copy, a replay) is never parsed beside another.
+    const huge = `From: someone@example.com\r\nSubject: huge\r\nContent-Type: text/plain\r\n\r\n${"approve everything ".repeat(Math.ceil((25 * 1024 * 1024) / 19) + 10)}`;
+    expect(huge.length).toBeGreaterThan(EMAIL_DELIVERY_CEILING_BYTES);
+    const before = mailParseCount.n;
+    const mail = await readMail(huge);
+    expect(mailParseCount.n - before, "never handed to the parser").toBe(0);
+    expect(mail.problem).toMatch(/^too big to read here: 25\.0 MB, over the 25 MB an email can be$/);
+    expect(mail.text, "nothing below acts on its words").toBe("");
+    expect(messageText(mail).unread).toMatch(/too big to read here/);
+    expect(await readableMessage(huge), "a card or prompt says why it was not read").toMatch(/could not be read: too big to read here/);
+    // At the ceiling exactly it is still an email, and is read.
+    const atCeiling = huge.slice(0, EMAIL_DELIVERY_CEILING_BYTES);
+    expect((await readMail(atCeiling)).problem).toBeNull();
   });
 
   let t: TestDb;

@@ -7,7 +7,7 @@ import { dealFromMessage, intakeDealFromEmail, matchFunnelCompany, openAssignmen
 import { notifyQuietly } from "../services/notifications";
 import { PREVIEW_PARTNER } from "../../shared/registry/partners";
 import { ASSIGNING_PARTNERS, EMAILED_TASK_LIMITS, addressIn, mailAuthority } from "../../shared/intake/partnerAuthority";
-import { decodeHeader, mailOf, pdfAttachments, readMail, requestAttachments, type Mail } from "./mail";
+import { decodeHeader, mailOf, oneBigMailAtATime, pdfAttachments, readMail, requestAttachments, type Mail } from "./mail";
 import { askWhichCard, withoutSignatures, type RouteAs } from "../services/emailRouting";
 import { profileNotesIn, recordProfileNotes, refreshWorkingOn } from "../services/partnerProfile";
 import { threadTokensIn } from "../../shared/email/thread";
@@ -161,8 +161,6 @@ export async function raiseUnreadMail(env: Env, input: { dedupeKey: string; titl
     firmScope: "west-peek",
   });
 }
-/** Cloudflare Email Routing's delivery ceiling. A larger message never arrives; the RECEIVED email cannot mention it. */
-export const EMAIL_DELIVERY_CEILING_BYTES = 25 * 1024 * 1024;
 
 
 export interface InboundSummary {
@@ -406,7 +404,7 @@ export async function handleInboundEmail(
     }
   }
   try {
-    await handleInboundEmailOnce(message, env, options);
+    await oneBigMailAtATime(message.rawSize, () => handleInboundEmailOnce(message, env, options));
   } catch (err) {
     if (key) await env.WP_OS_DB.prepare("DELETE FROM inbound_email_seen WHERE message_id = ?1").bind(key).run().catch(() => undefined);
     // NEVER SILENT: a door that threw is on Sequoia's desk now, not only in a log. A partner hears nothing from it.
@@ -438,6 +436,8 @@ export async function rerouteStoredMessage(env: Env, input: { emlKey: string | n
   const headers = headersOfRaw(raw);
   const from = (addressIn(headers.get("from")) ?? headers.get("from") ?? "").trim().toLowerCase();
   const bytes = new TextEncoder().encode(raw);
+  // Not through `oneBigMailAtATime`: the caller holds the turn. A reply that settles a clarification is inside its door,
+  // which holds it (taking it again would wait for itself); the clarification sweep takes it before it settles.
   await handleInboundEmailOnce({ from, to: headers.get("to") ?? INTAKE_MAILBOX, headers, raw: new Blob([bytes as BlobPart]).stream(), rawSize: bytes.byteLength }, env, { routeAs: input.routeAs });
   return true;
 }
