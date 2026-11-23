@@ -436,8 +436,8 @@ export async function rerouteStoredMessage(env: Env, input: { emlKey: string | n
   const headers = headersOfRaw(raw);
   const from = (addressIn(headers.get("from")) ?? headers.get("from") ?? "").trim().toLowerCase();
   const bytes = new TextEncoder().encode(raw);
-  // Not through `oneBigMailAtATime`: a reroute runs inside a door that already holds the turn (a reply that settles a
-  // clarification), and it would wait for itself.
+  // Not through `oneBigMailAtATime`: the caller holds the turn. A reply that settles a clarification is inside its door,
+  // which holds it (taking it again would wait for itself); the clarification sweep takes it before it settles.
   await handleInboundEmailOnce({ from, to: headers.get("to") ?? INTAKE_MAILBOX, headers, raw: new Blob([bytes as BlobPart]).stream(), rawSize: bytes.byteLength }, env, { routeAs: input.routeAs });
   return true;
 }

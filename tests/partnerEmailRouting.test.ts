@@ -4,6 +4,7 @@ import type { Env } from "../src/worker/env";
 import { openAssignmentCard } from "../src/worker/services/dealIntake";
 import { blockCard, answerBlock, restoreBlock } from "../src/worker/services/blocks";
 import { handleInboundEmail } from "../src/worker/effects/inboundEmail";
+import { BIG_MAIL_BYTES, oneBigMailAtATime } from "../src/worker/effects/mail";
 import { handleReingestStoredEmail } from "../src/worker/services/webPropertyChange";
 import { resolveStaleClarifications, readClarificationAnswer, siteCardDecision, withoutSignatures } from "../src/worker/services/emailRouting";
 import { loadProfile, profileBlockFor, refreshAllWorkingOn, refreshWorkingOn, writeProfile } from "../src/worker/services/partnerProfile";
@@ -222,7 +223,15 @@ describe("a burst of six mixed emails inside a few minutes: each lands on the ri
     expect(clar, "asked").not.toBeNull();
     const before = await cardCount();
     expect(await resolveStaleClarifications(env, new Date()), "not before 24 hours").toBe(0);
-    expect(await resolveStaleClarifications(env, new Date(Date.now() + 25 * 3_600_000))).toBe(1);
+    // The sweep is outside any door, so it takes the one-big-email turn: nothing is read while a big email holds it.
+    let letGo!: () => void;
+    const bigDoor = oneBigMailAtATime(BIG_MAIL_BYTES, () => new Promise<void>((r) => (letGo = r)));
+    const sweep = resolveStaleClarifications(env, new Date(Date.now() + 25 * 3_600_000));
+    await new Promise((r) => setTimeout(r, 200));
+    expect(await cardCount(), "nothing is rerouted while a big email holds the turn").toBe(before);
+    letGo();
+    await bigDoor;
+    expect(await sweep).toBe(1);
     expect(await cardCount(), "the email became a new job").toBeGreaterThan(before);
     expect((await one<{ resolution: string }>("SELECT resolution FROM inbound_clarification WHERE id = ?1", clar!.id))?.resolution).toBe("TIMED_OUT");
     const after = await cardCount();
