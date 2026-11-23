@@ -1155,6 +1155,32 @@ describe("a build the partner tail stopped on purpose is queued again without sp
     expect((await readWebPropertyChange(env, id))!.preview_emailed_at ?? null, "the old preview is not stamped as mailed again").toBe(emailedBefore);
     const again = await owedJob(id);
     expect(again.id).not.toBe(first.id);
+    // The rebuild finally runs: ONE preview email, for the new build, and his changes are no longer owed.
+    const from = sent.length;
+    await macReports(id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/91", pr_number: 91, branch: "work/wpc-owed1", changed: true, head_sha: "owed1-rebuilt", check_state: "GREEN", preview_url: "https://owed1.west-peek-ventures.pages.dev", proof: "validate green" });
+    await tickFor(id);
+    expect((await card(id)).state, "the new preview waits on his word").toBe("BLOCKED");
+    expect(await liveJobFor(id), "no further BUILD once it built").toBeNull();
+    expect((await readWebPropertyChange(env, id))!.refresh_intent ?? null).toBeNull();
+    const previews = sent.slice(from).filter((m) => m.to === SCOOTER && /preview/i.test(m.subject));
+    expect(previews, "exactly one preview email for the rebuild").toHaveLength(1);
+    expect(previews[0]!.text).toContain("put the founders photo on the home page");
+  });
+
+  it("new changes on a card whose owed rebuild was stamped as previewed by the loop still carry the owed words (23 Nov 2026: preview_emailed_at after refresh_requested_at)", async () => {
+    const id = await atGreenPreview("owed3");
+    await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: HIS });
+    await tickFor(id);
+    await owedJob(id);
+    await stopLiveBuild(id, "no machine claimed this run inside its 64800s queue ceiling", false);
+    await tickFor(id);
+    // Production's state on both cards: the inert loop stamped the old preview as mailed AFTER the rebuild was asked.
+    await env.WP_OS_DB.prepare("UPDATE web_property_change SET refresh_requested_at = ?2, preview_emailed_at = ?3 WHERE work_card_id = ?1")
+      .bind(id, new Date(Date.now() - 120_000).toISOString(), new Date(Date.now() - 60_000).toISOString()).run();
+    await answerBlock(env, id, "fu_scooter_taylor", { action: "ANSWER", text: "changes: make the logo smaller" });
+    await tickFor(id);
+    const job = await owedJob(id);
+    expect(JSON.parse(String(job.job_json)).rebuild.changes, "his new words join the owed ones").toContain("make the logo smaller");
   });
 
   it("an owed rebuild that failed is queued again, not re-offered as the old preview; a question meanwhile is answered and the rebuild still queued", async () => {
@@ -1174,6 +1200,7 @@ describe("a build the partner tail stopped on purpose is queued again without sp
     await tickFor(id);
     const c = await card(id);
     expect(String(c.block_needed ?? "")).not.toMatch(/Changed since the last preview/);
+    expect(sent.slice(from).filter((m) => m.to === SCOOTER && /answered/.test(m.subject)), "his question is answered").toHaveLength(1);
     expect(sent.slice(from).filter((m) => m.to === SCOOTER && /preview ready/i.test(m.subject)), "no preview email for a build that never ran").toHaveLength(0);
     await owedJob(id);
   });

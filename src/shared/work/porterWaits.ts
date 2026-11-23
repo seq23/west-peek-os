@@ -45,6 +45,12 @@ export interface PorterWait {
   selfClearing?: boolean;
 }
 
+/**
+ * The waits that ask the partner for nothing at all: no reminder email goes to him for them (23 Nov 2026, wc_59ef2d40).
+ * DNS_RECORD and DRIVE_EMPTY clear themselves once HE acts, so they are not here: his reminder still goes.
+ */
+export const ASKS_HIM_NOTHING: ReadonlySet<PorterWaitKind> = new Set<PorterWaitKind>(["MAC_ASLEEP", "SEAT_RESET", "MISSING_SECRET"]);
+
 export interface PorterWaitFill {
   /** The preview URL, the key's name, the partner's own words, what was tried — whatever the kind names. */
   what?: string | null;

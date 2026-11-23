@@ -31,7 +31,7 @@ import {
   type BlockReason,
 } from "../../shared/work/blocks";
 import { blockWaitDetail, PARTNER_ANSWER_MAX, reAskEmail } from "../../shared/work/blocks";
-import { PORTER_WAITS, type PorterWaitKind } from "../../shared/work/porterWaits";
+import { ASKS_HIM_NOTHING, type PorterWaitKind } from "../../shared/work/porterWaits";
 export { PARTNER_ANSWER_MAX };
 
 
@@ -576,11 +576,11 @@ export async function closeReplacedRunBlocks(env: Env, now: Date = new Date()): 
   return rows.map((r) => r.id);
 }
 
-/** The block's recorded cause is one of Porter's self-clearing waits (`porterWaits.ts`, `selfClearing`). */
-export function selfClearingWait(blockContext: string | null | undefined): boolean {
+/** The block's recorded cause is a Porter wait that asks the partner for nothing (`ASKS_HIM_NOTHING`). Unknown → false. */
+export function waitAsksHimNothing(blockContext: string | null | undefined): boolean {
   try {
     const wait = (JSON.parse(blockContext ?? "null") as { wait?: unknown } | null)?.wait;
-    return typeof wait === "string" && wait in PORTER_WAITS && PORTER_WAITS[wait as PorterWaitKind]({}).selfClearing === true;
+    return typeof wait === "string" && ASKS_HIM_NOTHING.has(wait as PorterWaitKind);
   } catch {
     return false;
   }
@@ -600,10 +600,10 @@ async function remindRequester(env: Env, row: StoredBlock, nags: number, now: Da
   /*
    * A WAIT THAT CLEARS ITSELF IS NOT HIS TO ANSWER (23 Nov 2026, wc_59ef2d40). A build the sleeping Mac never claimed was
    * blocked "the Mac; it resumes by itself", and a day later Porter's re-ask re-sent his stage notice: "ACTION REQUIRED:
-   * New preview ready", for a rebuild that had not run. A self-clearing wait (the Mac, a plan reset, DNS) asks nothing of
-   * him: its in-app ring is enough.
+   * New preview ready", for a rebuild that had not run. A wait that asks him for nothing (the Mac, a plan reset, a key
+   * the developer adds) gets its in-app ring only; a wait he clears himself (a DNS record, the Drive files) is still re-asked.
    */
-  if (selfClearingWait(row.block_context)) return null;
+  if (waitAsksHimNothing(row.block_context)) return null;
   try {
     const card = await env.WP_OS_DB.prepare("SELECT id, title, kind, firm_scope, requested_by_email, preview_first, preview_owner_id, assigned_from_card_id FROM work_card WHERE id = ?1")
       .bind(row.id)

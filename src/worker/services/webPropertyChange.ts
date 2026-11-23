@@ -3678,11 +3678,6 @@ export async function runWebPropertyChangeCard(
     // Green, and back here. A change that previews first needs the SECOND "approved" from the
     // requesting partner, read against the time the preview email went out.
     /*
-     * THE SYSTEM REOPENED THIS JOB TO FINISH THE ORIGINAL REQUEST (#363, `finishOriginalAsk`). The
-     * rebuild it asked for after the last preview is carried out; the old preview is not asked
-     * about again. It approves nothing: the fresh preview waits for the partner's word as always.
-     */
-    /*
      * A REBUILD THAT NEVER REACHED A PREVIEW IS STILL OWED (23 Nov 2026, wc_59ef2d40). Scooter's seven redesign changes
      * (20 Nov) queued a BUILD the Mac never claimed; each time the card came back (the Mac-back release, his status
      * question) the runner found the OLD green PR and asked him to approve the old preview, "changed since the last
