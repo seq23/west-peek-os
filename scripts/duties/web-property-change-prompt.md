@@ -362,12 +362,29 @@ Goal: the change, proven, as a PR — on the branch and worktree in the job cont
    written and run against a local or preview build, then the repo's `npm run validate` (or what the RUNBOOK names); take screenshots at
    desktop and 390px of every changed page (Playwright or the RUNBOOK's method; save them under
    `JOB_DIR/shots/`); `curl -sI` every external link you added and record the status.
-4. Commit with a message that says what changed and why; push the branch; open a PR with
+4. **Be your own hostile reviewer before anyone else sees it.** A fresh reviewer judges this PR on eight
+   causes of failed reviews; check each one on your real output and fix what you find:
+   `abuse` (every caller lying: forged ids, sizes, cookies; delete only what you own),
+   `real_output` (the changed pages at 320 and 390px, light and dark; every sentence on them is a claim that must be true),
+   `outage` (each store, key, network or model failing ends refused or unsure, never done or free),
+   `tests` (each test can go red), `half_built` (every ask and every promise in the PR body is built),
+   `edges` (empty, one, many, the last day, a clock change), `design` (no keyword deciding meaning, no
+   hand-built copy of a library, no old path kept beside the new one), `ci` (the repo's own checks run and green).
+   Then **prove your tests**: undo each fix in turn (or break it the obvious way), run its test (the
+   `first-run` script, the repo's validator or test), see it go red, restore. Record both in the result
+   (`self_review`, `mutation_proof` below). The SCRIPT writes them into the PR body as `## Self-review`
+   and `## Mutation proof`, replacing any earlier copy; a BUILD without them stops by name and no preview
+   goes out. On a rebuild, keep the rows still true and add this round's: a fix that only changes code an
+   earlier row's unchanged test covers is `{ "fix": "…", "covered_by": <that row's number> }`. A change
+   with truly no behaviour to break (copy only) is `"mutation_proof": { "none": "<why, 6+ words>" }`.
+5. Commit with a message that says what changed and why; push the branch; open a PR with
    `gh pr create` whose body spells the change out and lists the proof. Do not merge it.
-5. Write `RESULT_PATH`:
+6. Write `RESULT_PATH`:
    ```json
    { "phase": "BUILD", "status": "ok", "pr_url": "<url>", "pr_number": <n>, "branch": "<branch>",
      "items": [{ "item": "<the ask>", "state": "done", "done_when": [{ "check": "<from the plan>", "met": true, "note": "<how you proved it>" }] }],
+     "self_review": [{ "check": "abuse", "found": "<what you checked and what you found>" }, "… one row for each of the 8 causes"],
+     "mutation_proof": [{ "fix": "<the fix>", "mutation": "<what you undid or broke>", "test": "<the test or script that went red>", "went_red": true }],
      "pages_env": [{ "project": "west-peek-ventures", "name": "RESEND_API_KEY" }],
      "proof": "<validator output summary, screenshot file names, link-check results>",
      "missing_materials": [{ "item": "…", "where": "…" }],
