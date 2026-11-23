@@ -1789,6 +1789,9 @@ export async function applyReport(
         employee: PORTER_NAME,
         who: whoFor(card),
         detail: waitDetail("MAC_ASLEEP", { why: dueLine(readWebPropertyAsk(card.request_json)?.due) }).slice(0, 900),
+        // WHY IT IS BLOCKED, AS A FACT (22 Nov 2026): the only block `releaseMacAsleepBlocks` may release. Any later block
+        // (a partner's real question, a hold, a key) is written by `blockCard` too, which replaces this with its own.
+        context: macAsleepContext(run.id),
       });
       return { finished: false, blocked: true, progressed: false, detail: why2 };
     }
@@ -2380,6 +2383,25 @@ export async function releasePlansNobodyNeedsToAnswer(env: Env): Promise<string[
  */
 export const MAC_ASLEEP_TRIES = 3;
 
+/** The `block_context` of a card blocked because the Mac never claimed run `runId` (see `macAsleepContext` readers). */
+export function macAsleepContext(runId: string): string {
+  return JSON.stringify({ wait: "MAC_ASLEEP", run: runId });
+}
+
+/**
+ * Is the card blocked now BECAUSE the Mac never claimed `runId`? Read from the block's own record, never from its words
+ * or from the runs alone: a card whose last job the Mac missed may since have stopped on a partner's real question,
+ * and that question is his to answer. No record, an unreadable one or another cause → false: the card stays blocked.
+ */
+export function blockedOnMacFor(blockContext: string | null, runId: string): boolean {
+  try {
+    const c = JSON.parse(blockContext ?? "null") as { wait?: unknown; run?: unknown } | null;
+    return !!c && c.wait === "MAC_ASLEEP" && c.run === runId;
+  } catch {
+    return false;
+  }
+}
+
 /** The LOCAL_JOB runs of a card that ran out their queue ceiling with no machine claiming them (not stopped on purpose). */
 async function macMissedRuns(env: Env, cardId: string): Promise<Array<{ id: string; created_at: string }>> {
   const rows =
@@ -2400,8 +2422,11 @@ async function macMissedRuns(env: Env, cardId: string): Promise<Array<{ id: stri
  * wait tells the partner "it resumes by itself the next time the Mac is open"; until now nothing did that, so two
  * real cards sat BLOCKED for two Mac days on that promise. Each sweep tick inside the Mac's day, a card blocked
  * because its newest LOCAL_JOB ran out its queue ceiling unclaimed goes back in the queue once a claimer has said
- * hello (subscription_seat_device) since it was blocked; the next tick parks the same phase again. Read from the
- * runs, not from the words on the card, so it also releases cards blocked before this existed. Bounded: a card the
+ * hello (subscription_seat_device) since it was blocked; the next tick parks the same phase again. WHY IT IS BLOCKED
+ * DECIDES, not only its last job (22 Nov 2026): the block must be the one the missed run wrote (`block_context`, see
+ * `blockedOnMacFor`). A card that has since stopped on a partner's real question, or whose block someone has answered
+ * or escalated, keeps its block, words and answer exactly as they are; so does one blocked before the record existed
+ * (its cause is unknown, and unknown never releases). Bounded: a card the
  * Mac has missed MAC_ASLEEP_TRIES times is never released here (it was blocked as TRIED_AND_STOPPED instead).
  * Shape of `releaseSpendSettingBlocks`. A held card is left exactly as it is.
  */
@@ -2414,13 +2439,14 @@ export async function releaseMacAsleepBlocks(env: Env, now: Date = new Date()): 
   const rows =
     (
       await env.WP_OS_DB.prepare(
-        `SELECT c.id, c.firm_scope, c.blocked_at FROM work_card c
+        `SELECT c.id, c.firm_scope, c.blocked_at, c.block_context FROM work_card c
           WHERE c.kind = ?1 AND c.state = 'BLOCKED' AND c.held_at IS NULL AND c.block_reason = 'a_question_for_you'
+            AND c.block_answered_at IS NULL
             AND c.blocked_at IS NOT NULL AND c.blocked_at < ?2
           LIMIT 50`,
       )
         .bind(WEB_PROPERTY_CHANGE_KIND, seen.at)
-        .all<{ id: string; firm_scope: string; blocked_at: string }>()
+        .all<{ id: string; firm_scope: string; blocked_at: string; block_context: string | null }>()
     ).results ?? [];
   const released: string[] = [];
   for (const r of rows) {
@@ -2431,6 +2457,8 @@ export async function releaseMacAsleepBlocks(env: Env, now: Date = new Date()): 
       .first<{ id: string; status: string; claimed_by: string | null; resolution: string | null }>();
     // Only a block whose cause is the unclaimed run: any other block on this card is someone's question, not the Mac's.
     if (!newest || newest.status !== "ABANDONED" || newest.claimed_by || stoppedOnPurpose(newest.resolution)) continue;
+    // WHY IT IS BLOCKED, not only what its last job did (22 Nov 2026): blocked on anything but this missed run → held.
+    if (!blockedOnMacFor(r.block_context, newest.id)) continue;
     if ((await macMissedRuns(env, r.id)).length >= MAC_ASLEEP_TRIES) continue;
     const res = await env.WP_OS_DB.prepare(
       `UPDATE work_card
@@ -2439,9 +2467,9 @@ export async function releaseMacAsleepBlocks(env: Env, now: Date = new Date()): 
               next_action = 'Back in the queue: the Mac is open again, so this is being tried again.',
               block_answer = 'AUTO-RETRY: the Mac is open again', block_answered_by = 'work_sweep', block_answered_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
               block_nag_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-        WHERE id = ?1 AND state = 'BLOCKED' AND held_at IS NULL`,
+        WHERE id = ?1 AND state = 'BLOCKED' AND held_at IS NULL AND block_answered_at IS NULL AND block_context IS ?2`,
     )
-      .bind(r.id)
+      .bind(r.id, r.block_context)
       .run();
     if ((res.meta?.changes ?? 0) === 0) continue;
     await appendFinding(env, r.id, `Back in the queue by itself: the Mac checked in at ${seen.at}, inside its day, after this stopped for want of it.`);

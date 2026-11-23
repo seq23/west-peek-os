@@ -20,13 +20,13 @@ import { KEPT_FOR_NEXT_BUILD, MAC_ASLEEP_TRIES, releaseMacAsleepBlocks, blockedE
 import { steerFromReply } from "../src/worker/services/emailThread";
 import { threadReference } from "../src/shared/email/thread";
 import { handleDeveloperChanges, handleDeveloperEmail } from "../src/worker/services/developerDirection";
-import { answerBlock } from "../src/worker/services/blocks";
+import { answerBlock, blockCard } from "../src/worker/services/blocks";
 import { handleInboundEmail, MAX_BODY_BYTES } from "../src/worker/effects/inboundEmail";
 import { comparableSubject } from "../src/worker/services/emailThread";
 import { readMail, requestAttachments } from "../src/worker/effects/mail";
 import { handleGetRequestAttachment, handleReingestStoredEmail, sendReceived, stuckWindowOpen } from "../src/worker/services/webPropertyChange";
 import { readFileSync } from "node:fs";
-import { SECRET_BY_EMAIL } from "../src/shared/work/porterWaits";
+import { SECRET_BY_EMAIL, waitDetail } from "../src/shared/work/porterWaits";
 
 /**
  * PORTER CHANGES A WEB PROPERTY FROM HER MAC (20 Sep 2026, Plan A).
@@ -1053,6 +1053,53 @@ describe("a build the partner tail stopped on purpose is queued again without sp
     expect(String(last.block_needed ?? ""), "the last miss promises nothing it cannot keep").not.toMatch(/resumes by itself/);
     expect(String(last.block_needed ?? "")).toMatch(/try again/);
     expect(await releaseMacAsleepBlocks(env, noon), "never released a fourth time").not.toContain(id);
+  });
+
+  it("why it is blocked decides, not only its last job: a card since blocked on a partner's real question, answered, or of unknown cause stays blocked, its words untouched", async () => {
+    const id = await atBuild("macq");
+    await stopLiveBuild(id, "no machine claimed this run inside its 64800s queue ceiling", false);
+    await tickFor(id);
+    const asleep = await card(id);
+    expect(asleep.state).toBe("BLOCKED");
+    const b = new Date(Date.parse(String(asleep.blocked_at)) + 86_400_000);
+    const noon = new Date(Date.UTC(b.getUTCFullYear(), b.getUTCMonth(), b.getUTCDate(), 18));
+    await env.WP_OS_DB.prepare(
+      `INSERT OR REPLACE INTO subscription_seat_device (seat, device_id, hostname, agent_version, last_seen_at, capabilities_json, first_seen_at)
+       VALUES ('claude_code', 'dev_mac_wait', 'Sequoias-Mac', 'test', ?1, '[]', ?1)`,
+    ).bind(new Date(noon.getTime() - 30_000).toISOString()).run();
+    const words = async () => {
+      const c = await card(id);
+      return { state: c.state, next_action: c.next_action, block_trying: c.block_trying, block_stopped: c.block_stopped, block_needed: c.block_needed, block_who: c.block_who, block_answer: c.block_answer, block_context: c.block_context };
+    };
+
+    // 1. Porter has since asked the partner a real question; his last job is still the missed run.
+    const question = "Which of the two sites did you mean: the main site or the voting page? Reply with one.";
+    await blockCard(env, { id, title: String(asleep.title), firm_scope: String(asleep.firm_scope) }, {
+      reason: "a_question_for_you", trying: String(asleep.title), employee: "Porter", detail: waitDetail("WHICH_SITE", { what: question, hosts: "the main site, the voting page" }).slice(0, 900),
+    }, new Date(Date.parse(String(asleep.blocked_at)) + 60_000));
+    const asked = await words();
+    expect(String(asked.block_needed)).toContain("Waiting on:");
+    expect(await releaseMacAsleepBlocks(env, noon), "blocked on his question, not on the Mac").not.toContain(id);
+    expect(await words(), "his question, its words and the block are exactly as they were").toEqual(asked);
+    expect(asked.block_answer).toBeNull();
+
+    // 2. The Mac's own block, but someone has acted on it (sent to an engineer): their answer is never overwritten.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET block_context = ?2, block_answer = 'Sent to an engineer.', block_answered_by = 'fu_sequoia_taylor', block_answered_at = ?3 WHERE id = ?1")
+      .bind(id, String(asleep.block_context), new Date(noon.getTime() - 60_000).toISOString()).run();
+    const escalated = await words();
+    expect(await releaseMacAsleepBlocks(env, noon), "an answered block is not the sweep's to release").not.toContain(id);
+    expect(await words()).toEqual(escalated);
+
+    // 3. Cause unknown (blocked before the record existed, or unreadable): unknown never releases.
+    for (const context of [null, "{not json", JSON.stringify({ wait: "MAC_ASLEEP", run: "some_other_run" })]) {
+      await env.WP_OS_DB.prepare("UPDATE work_card SET block_context = ?2, block_answer = NULL, block_answered_by = NULL, block_answered_at = NULL WHERE id = ?1").bind(id, context).run();
+      expect(await releaseMacAsleepBlocks(env, noon), `cause ${String(context)}`).not.toContain(id);
+      expect((await card(id)).state).toBe("BLOCKED");
+    }
+
+    // Positive control: the block the missed run wrote, untouched, is released.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET block_context = ?2 WHERE id = ?1").bind(id, String(asleep.block_context)).run();
+    expect(await releaseMacAsleepBlocks(env, noon)).toContain(id);
   });
 
   it("a run that simply went missing on the Mac still spends its attempt (negative)", async () => {
