@@ -385,7 +385,7 @@ const CLEAN_INBOUND = [
 ].join("\n");
 
 const CLEAN_DEAL_INTAKE = [
-  "export function readableMessage(raw, cap = 4000) { return statedCut(splitQuoted(textBodyOf(raw)).written, cap, 'the stored message'); }",
+  "export async function readableMessage(raw, cap = 4000, parsed) { const mail = await mailOf(raw, parsed); return statedCut(splitQuoted(mail.text).written, cap, 'the stored message'); }",
   "",
   "export async function openRoutingCard(env, input) {",
   "  const card = await createWorkCardInternal(env, id, { description: readableMessage(input.raw) });",
@@ -474,7 +474,7 @@ function selfTest() {
       t[EMPLOYEE_WORK] = t[EMPLOYEE_WORK].replace("statedCut(card.description ?? '', PARTNER_WORDS_ON_CARD, card.id)", "(card.description ?? '').slice(0, 4000)");
     },
     "readableMessage cutting without saying so": (t) => {
-      t[DEAL_INTAKE] = t[DEAL_INTAKE].replace("statedCut(splitQuoted(textBodyOf(raw)).written, cap, 'the stored message')", "splitQuoted(textBodyOf(raw)).written.slice(0, cap)");
+      t[DEAL_INTAKE] = t[DEAL_INTAKE].replace("statedCut(splitQuoted(mail.text).written, cap, 'the stored message')", "splitQuoted(mail.text).written.slice(0, cap)");
     },
     "the swallowed catch around the R2 put": (t) => {
       t[INBOUND] = t[INBOUND].replace(
