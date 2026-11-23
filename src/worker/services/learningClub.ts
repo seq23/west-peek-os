@@ -1392,7 +1392,7 @@ export async function recordBrandReplyText(env: Env, input: { from: string; subj
   const drafted = new Set<string>();
   for (const d of deals) {
     const out = await takeBrandReply(env, d, { messageId: input.messageId ?? "", subject: input.subject, text: input.text, mail: input.mail, receivedAt: now.toISOString(), from: input.from }, { now });
-    stop = out === "NO" ? ((await env.WP_OS_DB.prepare("SELECT stop_reason FROM tlc_deal WHERE id = ?1").bind(d.id).first<{ stop_reason: string | null }>())?.stop_reason ?? "DECLINED") : out === "AUTO_REPLY" ? "AUTO_REPLY" : "REPLIED";
+    stop = out === "NO" ? ((await env.WP_OS_DB.prepare("SELECT stop_reason FROM tlc_deal WHERE id = ?1").bind(d.id).first<{ stop_reason: string | null }>())?.stop_reason ?? "DECLINED") : out === "AUTO_REPLY" || out === "STOPPED" ? out : "REPLIED";
     if (out === "DRAFTED") drafted.add(d.firm_scope);
   }
   // Her approval email goes AT ONCE (owner, 26 Oct 2026: "Why 4pm?"); a failure here is retried by the next drip pass.

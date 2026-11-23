@@ -13,6 +13,14 @@ import { z } from "zod/v4";
 
 export const SENDER_KINDS = ["person", "helpdesk", "ai_assistant", "auto_reply", "system"] as const;
 export type SenderKind = (typeof SENDER_KINDS)[number];
+/**
+ * WHAT THEIR "WRITE TO X" MEANS (owner, 23 Nov 2026: a brand inbox that answers every email with "this inbox isn't
+ * monitored, write to X" was treated as an out-of-office, so the drip went back to it every week). The model says
+ * which: instead = write there, not here (followed when the code's checks pass); urgent_only = an out-of-office's
+ * address for urgent matters while the person is away (the drip waits for their return); none = no such address.
+ */
+export const REDIRECT_KINDS = ["none", "instead", "urgent_only"] as const;
+export type RedirectKind = (typeof REDIRECT_KINDS)[number];
 
 /**
  * THE ONE READ OF A REPLY, AS FIELDS (22 Nov 2026, engineering sweep row 5). Every reply the OS acts on is read by a
@@ -29,6 +37,8 @@ export const INBOUND_READ_SHAPE = z.object({
   sender_kind: z.enum(SENDER_KINDS),
   asks: z.array(z.string()).describe("what they ask us for, each in their own words"),
   redirect_to: z.string().nullable().describe("the email address they tell us to write to instead, copied exactly from the email, or null"),
+  redirect_kind: z.enum(REDIRECT_KINDS).describe("instead = they tell us to write to redirect_to instead of this address about what we wrote (this inbox is not monitored or no longer used, the person is gone or away for months and names who covers it, the right team is there) and ask nothing else of us here; urgent_only = an out-of-office that offers redirect_to only for urgent matters until the person is back; none = no such address, or a person who asks or answers something themselves and mentions the address as well"),
+  inbox_unread: z.boolean().describe("true if they say this address is not read, not monitored, or no longer in use"),
   wants_stop: z.boolean().describe("true if they ask us to stop emailing them, unsubscribe or remove them"),
   declines: z.boolean().describe("true if they say no to what we offered (not now, not a fit, pass)"),
   we_owe: z.string().describe('one line saying the reply or action we owe them, or "none"'),
@@ -52,6 +62,10 @@ export interface InboundRead {
   asks: string[];
   /** An address they tell us to write to instead, as written in their message; null when none. */
   redirectTo: string | null;
+  /** What their address is for: write there instead, urgent matters only while they are away, or none. */
+  redirectKind: RedirectKind;
+  /** They say the address we wrote to is not read or no longer in use. */
+  inboxUnread: boolean;
   /** They ask us to stop emailing them (unsubscribe, remove me, do not contact). */
   wantsStop: boolean;
   /** They say no to what we offered. */
@@ -89,7 +103,8 @@ export function inboundReadPrompt(input: { context: string; from: string; subjec
     "company's AI assistant answered; auto_reply = an out-of-office or a machine acknowledgement (ticket received, we will",
     "get back to you) with no person's answer in it; system = a mail server, a notification or a form notice.",
     "we_owe is \"none\" when they only acknowledge, pass it on, say they will review it, or decline. An instruction to",
-    "write to another address IS something we owe (redirect_to says where). Read only their words, never our own quoted email.",
+    "write to another address IS something we owe (redirect_to says where; redirect_kind says whether it is instead of this",
+    "address or only for urgent matters while someone is away). Read only their words, never our own quoted email.",
     "answer: \"yes\" ONLY when they plainly say yes to the question our email asked (approve, yes, go ahead). A refusal, a",
     "negated or doubtful yes (\"I can't say yes to this\", \"not sure\", \"yes but wait\"), or a yes with a condition is",
     "\"no\" or \"unsure\"; when you cannot tell, \"unsure\". \"not_an_answer\" when they do not answer it at all.",
@@ -123,6 +138,8 @@ export function parseInboundRead(text: string, reader: string): InboundRead | nu
     senderKind: o.sender_kind,
     asks: o.asks.map((a) => a.trim()).filter(Boolean).slice(0, 10),
     redirectTo: ADDRESS.test(to) ? to : null,
+    redirectKind: ADDRESS.test(to) ? o.redirect_kind : "none",
+    inboxUnread: o.inbox_unread,
     wantsStop: o.wants_stop,
     declines: o.declines,
     weOwe: owe && !/^(?:none|nothing|n\/a|null|no)\.?$/i.test(owe) ? owe.slice(0, 300) : null,
