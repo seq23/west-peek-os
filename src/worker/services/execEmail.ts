@@ -12,6 +12,7 @@ import { answerHeaders, messageReference, threadReference } from "../../shared/e
 import { EmployeeSenderError, employeeSenderHeader } from "../../shared/registry/employeeMail";
 import { TLC_BRAND_REPLY_NOTICE_CC_IDS, TLC_PRICING_NOTICE_OBJECT, TLC_RECIPIENTS, isTlcKind, isTlcMail } from "../../shared/tlc/learningClub";
 import { partnerByEmail } from "../../shared/registry/partners";
+import { activeCorrection, correctPartnerMail } from "./mailCorrection";
 
 /**
  * TLC MAIL GOES TO SEQUOIA ONLY (owner, 22 Oct 2026: "this is my project"; she tells Scooter
@@ -145,7 +146,8 @@ async function transport(
   env: Env,
   message: { to: string | readonly string[]; cc?: readonly string[]; subject: string; text: string; html: string; from: string; headers?: Record<string, string>; attachments?: readonly EmailAttachment[] },
 ): Promise<EmailSendResult> {
-  const payload = { ...message, replyTo: INTAKE_MAILBOX };
+  // A re-read that corrects a wrong-thread answer: under the partner's email, to both, with an apology (mailCorrection.ts).
+  const payload = { ...correctPartnerMail(activeCorrection(), message), replyTo: INTAKE_MAILBOX };
   return isCloudflareEmailEnabled(env) ? await sendViaCloudflare(env, payload) : await sendViaResend(env, payload);
 }
 

@@ -7,7 +7,8 @@ import { sendOrPreview } from "./previewApproval";
 import { deliver } from "./deliverables";
 import { appendEvent } from "../events";
 import type { SweepCard } from "./workSweep";
-import { partnerFor, type Partner } from "../../shared/registry/partners";
+import { partnerByEmail, partnerFor, type Partner } from "../../shared/registry/partners";
+import { ccOfCard } from "./ccPartners";
 import { personaPrompt } from "../../shared/registry/aiEmployeePersonas";
 import type { ExecEmailInput } from "../../shared/email/execEmail";
 
@@ -89,14 +90,18 @@ function buildComposePrompt(input: {
   employee: string;
   role: string;
   partner: Partner;
+  /** The other partner on a "tell both" message: the greeting names both. */
+  copy?: Partner | null;
   instruction: string;
   steerText: string;
   askedBy: Partner | null;
 }): string {
+  const to = input.copy ? `${input.partner.fullName} and ${input.copy.fullName}, the Managing Partners` : `${input.partner.fullName}, a Managing Partner`;
+  const hi = input.copy ? `${input.partner.firstName} and ${input.copy.firstName}` : input.partner.firstName;
   return [
     personaPrompt(input.employee, input.role),
     "",
-    `You are writing ONE short email to ${input.partner.fullName}, a Managing Partner of West Peek Ventures, as`,
+    `You are writing ONE short email to ${to} of West Peek Ventures, as`,
     `${input.employee}, a colleague who works with them every day. It is a note, not a report: warm, plain and specific.`,
     ...(input.askedBy ? [`${input.askedBy.firstName} asked you to reach out; say so in a few natural words ("${input.askedBy.firstName} asked me to get in touch").`] : []),
     "",
@@ -107,7 +112,7 @@ function buildComposePrompt(input: {
     "Write it now in exactly this shape and nothing else:",
     `SUBJECT: ${input.employee} here: <what the note is about, from its content, under 60 characters>`,
     "",
-    `Hi ${input.partner.firstName},`,
+    `Hi ${hi},`,
     "",
     "<2 to 5 short sentences in your own voice>",
     "",
@@ -194,6 +199,14 @@ export async function runPartnerMessageCard(
     return { finished: false, blocked: true, detail: blocked };
   }
 
+  /*
+   * 2b · BOTH PARTNERS (24 Nov 2026, "an email partner door on all work cards"). A "tell both" card carries the other
+   * partner in `cc_emails` (`recordMessageCopy`); the one email goes to `partner` with that partner copied, and the
+   * greeting names both. Partner addresses only: `ccList` drops anyone else, and the send door refuses anyone else.
+   */
+  const copies = (await ccOfCard(env, card.id)).filter((a) => a !== partner.email);
+  const copy = copies.length ? partnerByEmail(copies[0]) : null;
+
   // 3 · WHAT TO SAY. `card.prompt` ("How to do it") carries the instruction on every door this
   // kind is reachable from — the Create door's own field, and the email door's parsed instruction
   // (`services/dealIntake.ts`). `next_action` is the fallback for a hand-edited card that moved it.
@@ -225,7 +238,7 @@ export async function runPartnerMessageCard(
       cardKind: PARTNER_MESSAGE_KIND,
       title: card.title,
       employee: employeeRow.name,
-      chain: `a short message to ${partner.firstName}`,
+      chain: `a short message to ${copy ? `${partner.firstName} and ${copy.firstName}` : partner.firstName}`,
       steps: [...PARTNER_MESSAGE_STEPS],
       firmScope: card.firm_scope,
     },
@@ -254,6 +267,7 @@ export async function runPartnerMessageCard(
     employee: employeeRow.name,
     role: employeeRow.role,
     partner,
+    copy,
     instruction,
     steerText: steer.text,
     askedBy: askedByOther(card, partner),
@@ -292,6 +306,7 @@ export async function runPartnerMessageCard(
   // re-implemented: this call is identical in shape to `handOver()` and `runHireSearchCard`'s own.
   const mail = await sendOrPreview(env, {
     to: partner.email,
+    ...(copies.length ? { cc: copies } : {}),
     email,
     objectType: "work_card",
     objectId: card.id,
@@ -320,7 +335,7 @@ export async function runPartnerMessageCard(
   const finding = [
     `• ${mail.subject}`,
     mail.sent
-      ? `• Emailed to ${partner.email}.`
+      ? `• Emailed to ${partner.email}${copies.length ? `, ${copies.join(", ")} copied` : ""}.`
       : mail.previewed
         ? `• NOT emailed to ${partner.email} — it is preview-first: ${mail.reason}`
         : `• NOT emailed to ${partner.email}: ${mail.reason}.`,

@@ -53,6 +53,19 @@ export async function recordCc(
   return { added: res.add.map((p) => p.email), refused: res.refused, ack };
 }
 
+/**
+ * THE OTHER PARTNER ON A "TELL BOTH" MESSAGE (24 Nov 2026). Her ask itself named both partners, so no requester check:
+ * the door that parsed it already proved who wrote it. Partner addresses only; adds, never removes.
+ */
+export async function recordMessageCopy(env: Env, cardId: string, copyEmail: string | null | undefined): Promise<void> {
+  const copy = partnerByEmail(copyEmail);
+  if (!copy) return;
+  const row = await env.WP_OS_DB.prepare("SELECT cc_emails FROM work_card WHERE id = ?1").bind(cardId).first<{ cc_emails: string | null }>();
+  if (!row) return;
+  const next = [...new Set([...ccList(row.cc_emails), copy.email])];
+  await env.WP_OS_DB.prepare("UPDATE work_card SET cc_emails = ?2 WHERE id = ?1").bind(cardId, JSON.stringify(next)).run();
+}
+
 /** The ack on the card's own trail, where every other finding lives. */
 async function trail(env: Env, cardId: string, ack: string): Promise<void> {
   await env.WP_OS_DB.prepare(

@@ -1,6 +1,6 @@
 import { PARTNER_WORDS_ON_CARD, statedCut } from "./partnerWords";
 import { describeModes, parseBlogAsk } from "../../shared/intake/blogHelp";
-import { parsePartnerMessageAsk, partnerMessageTitle } from "../../shared/intake/partnerMessage";
+import { parsePartnerMessageAsk, partnerMessageTitle, toldNames } from "../../shared/intake/partnerMessage";
 import { isWebPropertyChange, OS_PROPERTY, OS_REPO, parseWebPropertyAsk, partsFromHosts, registrationsIn } from "../../shared/intake/webPropertyChange";
 import { loadRegistry, registerFromEmail, registerNewRepo, registryEntryFor } from "./webPropertyRegistry";
 import { defaultReadReplyIntent, readReplyIntent, type ReplyIntent, type ReplyIntentReader } from "./replyIntent";
@@ -1167,10 +1167,11 @@ export async function openAssignmentCard(
           card.id,
           partnerMessage.partner.email,
           partnerMessage.instruction,
-          `Tell ${partnerMessage.partner.firstName}: ${partnerMessage.instruction}`.slice(0, 300),
-          partnerMessageTitle(partnerMessage.partner.firstName, partnerMessage.instruction),
+          `Tell ${toldNames(partnerMessage)}: ${partnerMessage.instruction}`.slice(0, 300),
+          partnerMessageTitle(toldNames(partnerMessage), partnerMessage.instruction),
         )
         .run();
+      await (await import("./ccPartners")).recordMessageCopy(env, card.id, partnerMessage.copy?.email);
       return card.id;
     }
 
@@ -1196,7 +1197,7 @@ export async function openAssignmentCard(
       },
       { id: chief?.id ?? seatId(input.chiefOfStaff), name: chief?.name ?? input.chiefOfStaff },
       partnerMessage.employeeName,
-      `Tell ${partnerMessage.partner.firstName}: ${partnerMessage.instruction}`,
+      `Tell ${toldNames(partnerMessage)}: ${partnerMessage.instruction}`,
     );
     if (handed.ok) {
       // The title is the email subject: her first clause, cut readably — never the first hard-wrapped
@@ -1206,9 +1207,10 @@ export async function openAssignmentCard(
           handed.cardId,
           partnerMessage.partner.email,
           partnerMessage.instruction,
-          partnerMessageTitle(partnerMessage.partner.firstName, partnerMessage.instruction),
+          partnerMessageTitle(toldNames(partnerMessage), partnerMessage.instruction),
         )
         .run();
+      await (await import("./ccPartners")).recordMessageCopy(env, handed.cardId, partnerMessage.copy?.email);
       await env.WP_OS_DB.prepare(
         "UPDATE work_card SET state = 'DONE', next_action = NULL, description = substr(COALESCE(description, '') || char(10) || '• Handed to ' || ?2 || ' as work card ' || ?3 || ': a message for ' || ?4 || '.', 1, 16000) WHERE id = ?1",
       )

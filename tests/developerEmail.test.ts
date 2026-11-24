@@ -96,4 +96,18 @@ describe("tell-partner.mjs opens the same PARTNER_MESSAGE the email door makes",
     expect(await row(viaMac)).toEqual(await row(email!.id));
     expect((await row(viaMac))!.requested_by_email).toBe(SEQUOIA);
   });
+
+  it("\"tell both\" from the Mac, on another job's thread: the one card copies the other partner", async () => {
+    const res = await handleRequest(
+      new Request("https://test.local/api/work-cards", { method: "POST", headers: { "x-wpos-dev-user": MAC.email, "content-type": "application/json" }, body: JSON.stringify(tellPartnerRequest("Wesley, tell both: the questions sheet is ready.")) }),
+      env,
+    );
+    expect(res.status).toBe(201);
+    const id = ((await res.json()) as { id: string }).id;
+    const row = await env.WP_OS_DB.prepare("SELECT kind, result_recipient, cc_emails, title FROM work_card WHERE id = ?1").bind(id).first<Record<string, string>>();
+    expect(row!.kind).toBe("PARTNER_MESSAGE");
+    expect(row!.result_recipient).toBe(SEQUOIA);
+    expect(JSON.parse(String(row!.cc_emails))).toEqual([SCOOTER]);
+    expect(row!.title).toMatch(/^Tell Sequoia and Scooter: /);
+  });
 });

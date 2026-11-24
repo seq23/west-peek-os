@@ -42,6 +42,7 @@ const SEQUOIA_ID = "fu_sequoia_taylor";
 
 interface Sent {
   to: string[];
+  cc?: string[];
   subject: string;
   text: string;
 }
@@ -671,5 +672,82 @@ describe("a reply to a partner message (DONE card) is relayed to the partner who
     await scooterReplies(token!, "Got it, looks good.");
     expect(await cardCount()).toBe(before);
     expect(mails.filter((m) => m.to[0] === SEQUOIA_EMAIL && /Scooter replied to your note/.test(m.subject))).toHaveLength(1);
+  });
+});
+
+describe("tell both partners: the email-partner door on any work card (24 Nov 2026)", () => {
+  it("reads \"both\", \"the partners\" and the two names, and never a stranger or the same partner twice", () => {
+    const both = parsePartnerMessageAsk("", "Walker, tell both: the DDQ is ready.");
+    expect(both?.partner.email).toBe(SEQUOIA_EMAIL);
+    expect(both?.copy?.email).toBe(SCOOTER_EMAIL);
+    expect(parsePartnerMessageAsk("", "Walker, tell the partners: x")?.copy).not.toBeNull();
+    expect(parsePartnerMessageAsk("", "Walker, tell both partners: x")?.copy).not.toBeNull();
+    const named = parsePartnerMessageAsk("", "Preston, tell Scooter and Sequoia: the deck is in the same preview.");
+    expect(named?.partner.email).toBe(SCOOTER_EMAIL);
+    expect(named?.copy?.email).toBe(SEQUOIA_EMAIL);
+    expect(parsePartnerMessageAsk("", "Preston, tell Scooter & Sequoia: x")?.copy?.email).toBe(SEQUOIA_EMAIL);
+    expect(parsePartnerMessageAsk("", "Walker, tell Scooter and Nora: x")).toBeNull();
+    expect(parsePartnerMessageAsk("", "Walker, tell Scooter and Scooter: x")).toBeNull();
+    expect(parsePartnerMessageAsk("", "Walker, tell Scooter: x")?.copy).toBeNull();
+  });
+
+  it("the email door opens the card with the other partner copied, titled for both", async () => {
+    const cardId = await openAssignmentCard(env, {
+      subject: "both one",
+      partnerAddress: SEQUOIA_EMAIL,
+      chiefOfStaff: "Wren",
+      raw: "Wren, tell Scooter and Sequoia: the Q3 packet is filed.",
+      limits: EMAILED_TASK_LIMITS,
+      emlKey: null,
+    });
+    const row = await cardRow(cardId);
+    expect(row.kind).toBe("PARTNER_MESSAGE");
+    expect(row.result_recipient).toBe(SCOOTER_EMAIL);
+    expect(JSON.parse(String(row.cc_emails))).toEqual([SEQUOIA_EMAIL]);
+    expect(String(row.title)).toMatch(/^Tell Scooter and Sequoia: /);
+  });
+
+  it("handed to another employee, the copy rides on the handed card too", async () => {
+    const chiefCardId = await openAssignmentCard(env, {
+      subject: "both two",
+      partnerAddress: SEQUOIA_EMAIL,
+      chiefOfStaff: "Wren",
+      raw: "Walker, tell both: the parsing bug is fixed.",
+      limits: EMAILED_TASK_LIMITS,
+      emlKey: null,
+    });
+    const handed = await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE assigned_from_card_id = ?1").bind(chiefCardId).first<Record<string, unknown>>();
+    expect(handed?.kind).toBe("PARTNER_MESSAGE");
+    expect(handed?.owner_id).toBe("aie_walker");
+    expect(JSON.parse(String(handed?.cc_emails))).toEqual([SCOOTER_EMAIL]);
+  });
+
+  it("the runner sends ONE email to the partner with the other copied, and the employee greets both", async () => {
+    const sent: Sent[] = [];
+    captureFetch(sent);
+    const card = await makeCard({ ownerId: "aie_walker", resultRecipient: "Scooter", prompt: "the deck is in the same preview", requestedByEmail: SEQUOIA_EMAIL });
+    const { recordMessageCopy } = await import("../src/worker/services/ccPartners");
+    await recordMessageCopy(env, card.id, SEQUOIA_EMAIL);
+    let prompt = "";
+    const out = await runPartnerMessageCard(env, card, {
+      interpret: saidNothing,
+      compose: async (_e, _a, p) => ((prompt = p), { ok: true, text: "SUBJECT: the deck\n\nHi Scooter and Sequoia,\n\nIt is in the same preview.\n\nWalker", detail: "ok" }),
+    });
+    expect(out.finished).toBe(true);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.to).toEqual([SCOOTER_EMAIL]);
+    expect(sent[0]!.cc).toEqual([SEQUOIA_EMAIL]);
+    expect(prompt).toContain("Hi Scooter and Sequoia,");
+    expect(String((await cardRow(card.id)).description)).toContain(`${SEQUOIA_EMAIL} copied`);
+  });
+
+  it("a stranger in cc_emails is never copied: partner addresses only", async () => {
+    const sent: Sent[] = [];
+    captureFetch(sent);
+    const card = await makeCard({ ownerId: "aie_walker", resultRecipient: "Scooter", prompt: "hello", requestedByEmail: SEQUOIA_EMAIL });
+    await env.WP_OS_DB.prepare("UPDATE work_card SET cc_emails = ?2 WHERE id = ?1").bind(card.id, JSON.stringify(["lp@example.org"])).run();
+    await runPartnerMessageCard(env, card, { interpret: saidNothing, compose: compose("hello") });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.cc ?? []).toEqual([]);
   });
 });

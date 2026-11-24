@@ -1,4 +1,4 @@
-import { partnerByName, type Partner } from "../registry/partners";
+import { PARTNERS, partnerByName, type Partner } from "../registry/partners";
 
 /**
  * Reading "tell a partner something" at the door (22 Sep 2026).
@@ -24,7 +24,7 @@ import { partnerByName, type Partner } from "../registry/partners";
  *
  * THE PARTNER MUST RESOLVE AGAINST THE REGISTRY, OR THIS IS NOT A MATCH AT ALL. `partnerByName`
  * only ever returns one of the two Managing Partners or null — never an arbitrary address. A
- * sentence naming somebody who is not Scooter or Sequoia is not a partner-message ask; it falls
+ * sentence naming somebody who is not Scooter, Sequoia or both is not a partner-message ask; it falls
  * through to the ordinary assignment card, same as any other prose the door cannot place.
  *
  * THE EMPLOYEE NAME IS RETURNED RAW. Whether it names a real, ACTIVE employee is a database
@@ -41,20 +41,41 @@ export interface PartnerMessageAsk {
   partner: Partner;
   /** Everything after the colon, trimmed. What the employee is being asked to say. */
   instruction: string;
+  /**
+   * THE OTHER PARTNER, WHEN SHE ASKED FOR BOTH (24 Nov 2026, her words: "there should be an email partner door on all
+   * work cards"). "tell both", "tell the partners", "tell Scooter and Sequoia": one email to `partner`, the other
+   * partner copied, and the greeting names both. Null for one partner, as before.
+   */
+  copy: Partner | null;
 }
 
 const MAX_INSTRUCTION_CHARS = 4000;
 
-const PATTERN = /^\s*([A-Za-z][A-Za-z'.-]*)\s*,\s*tell\s+([A-Za-z][A-Za-z'.\- ]*?)\s*:\s*([\s\S]+?)\s*$/i;
+const PATTERN = /^\s*([A-Za-z][A-Za-z'.-]*)\s*,\s*tell\s+([A-Za-z][A-Za-z'.\-& ]*?)\s*:\s*([\s\S]+?)\s*$/i;
+
+const BOTH = /^(?:both(?:\s+(?:partners|of\s+(?:them|us)))?|the\s+(?:two\s+)?partners|(?:scooter|sequoia)\s+and\s+(?:scooter|sequoia)|(?:scooter|sequoia)\s*&\s*(?:scooter|sequoia))$/i;
+
+/** One partner, or both: "both" names the two in registry order; "X and Y" keeps her order. Never anyone else. */
+function whoToTell(named: string): { partner: Partner; copy: Partner | null } | null {
+  const one = partnerByName(named);
+  if (one) return { partner: one, copy: null };
+  const words = named.replace(/\s+/g, " ").trim();
+  if (!BOTH.test(words)) return null;
+  const pair = /^(\w+)\s*(?:and|&)\s*(\w+)$/i.exec(words);
+  const first = pair ? partnerByName(pair[1]!) : PARTNERS[0]!;
+  const second = pair ? partnerByName(pair[2]!) : PARTNERS[1]!;
+  if (!first || !second || first.email === second.email) return null;
+  return { partner: first, copy: second };
+}
 
 function matchOne(text: string): PartnerMessageAsk | null {
   const m = PATTERN.exec((text ?? "").trim());
   if (!m) return null;
   const employeeName = m[1]!.trim();
-  const partner = partnerByName(m[2]!.trim());
+  const who = whoToTell(m[2]!.trim());
   const instruction = m[3]!.trim().slice(0, MAX_INSTRUCTION_CHARS);
-  if (!partner || !instruction) return null;
-  return { employeeName, partner, instruction };
+  if (!who || !instruction) return null;
+  return { employeeName, partner: who.partner, copy: who.copy, instruction };
 }
 
 /**
@@ -68,6 +89,11 @@ function matchOne(text: string): PartnerMessageAsk | null {
  * swallowed into the instruction, and a `^`-anchored pattern over a concatenated string would do
  * exactly that.
  */
+/** "Scooter", or "Scooter and Sequoia" when both are told: the title's and the greeting's names. */
+export function toldNames(ask: { partner: Partner; copy: Partner | null }): string {
+  return ask.copy ? `${ask.partner.firstName} and ${ask.copy.firstName}` : ask.partner.firstName;
+}
+
 export function parsePartnerMessageAsk(subject: string, body: string): PartnerMessageAsk | null {
   return matchOne(body) ?? matchOne(subject);
 }

@@ -15,6 +15,9 @@
  *
  *   npm run -s vault:run -- node scripts/ops/replay-stored-email.mjs inbound-email/2026-09-27/4927cc15-8fbb-4bed-8658-c995ec389b6a.eml
  *
+ * `--wrong-thread`: an employee answered this partner email in another thread. Every partner email the re-read sends
+ * goes under the partner's own email, to both partners, opening with the employee's apology (24 Nov 2026).
+ *
  * Options: `--tldr "…"` puts those words first in the RECEIVED email if the read opens a NEW card;
  * `--on-thread wpt_…` threads that RECEIVED under an earlier note. Neither applies when the message
  * is a reply that steers an existing card (the route says so in its answer).
@@ -36,7 +39,7 @@ function accessHeaders() {
 
 function usage(msg) {
   console.error(msg);
-  console.error("usage: node scripts/ops/replay-stored-email.mjs <inbound-email/…/….eml> [--tldr \"…\"] [--on-thread wpt_…]");
+  console.error("usage: node scripts/ops/replay-stored-email.mjs <inbound-email/…/….eml> [--tldr \"…\"] [--on-thread wpt_…] [--wrong-thread]");
   process.exit(1);
 }
 
@@ -52,6 +55,9 @@ const tldr = opt("--tldr");
 if (tldr) body.received_tldr = tldr;
 const onThread = opt("--on-thread");
 if (onThread) body.reply_on_thread = onThread;
+// 24 Nov 2026: the employee answered this partner email in the wrong thread. The re-read answers again, under the
+// partner's own email, to both partners, opening with an apology (src/worker/services/mailCorrection.ts).
+if (args.includes("--wrong-thread")) body.correction = "wrong_thread";
 
 const headers = accessHeaders();
 if (!headers) usage("WP_OS_MAC_ACCESS_CLIENT_ID / WP_OS_MAC_ACCESS_CLIENT_SECRET are not in the environment — run through `npm run -s vault:run -- node …`");
