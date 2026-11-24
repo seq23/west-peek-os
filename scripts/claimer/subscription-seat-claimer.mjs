@@ -83,26 +83,24 @@ function currentCapabilities() {
   return [...BASE_CAPABILITIES, ...capabilitiesFromProof(readProof())];
 }
 
-/**
- * A live web search takes longer than an answer. UNMEASURED — the first number to read off a real run.
- * Longer than the router's own search wait (SEARCH_CLAIM_WAIT_MS, 180s) so the router gives up first and
- * the paid search lane answers; a run it abandoned is closed on the Worker side, not left to be claimed.
- */
-// 24 Oct 2026: 570 s, just past the router's 540 s search wait (measured TLC searches ran 126–272 s and longer).
-const SEARCH_RUN_TIMEOUT_MS = 570_000;
-
 /** Must match HEARTBEAT_INTERVAL_S in src/worker/ai/subscriptionSeats.ts. Asserted at startup. */
 const HEARTBEAT_INTERVAL_S = 30;
 
 /**
- * How long a single local run may take before it is killed and reported as a failure.
- *
- * Deliberately SHORTER than the router's own ninety-second wait would suggest is needed, and that
- * is not a mistake: a run the router has already given up on is work nobody will read, so spending
- * four more minutes of her subscription on it is pure waste. The router's wait and this timeout are
- * both bounded and the smaller one is the one that matters.
+ * HOW LONG ONE RUN MAY TAKE: THE ROW SAYS (24 Nov 2026). The router parks every run with `max_seconds`, the time it
+ * will wait for the answer (its attempt deadline, sized on the output the call may write), and gives up after that.
+ * This claimer stops its child at that same number plus SEAT_RUN_GRACE_MS, never at a fixed timer of its own: the
+ * fixed 150 s here and the router's fixed 90 s threw away 45 of Preston's deck edits on 24 Nov. Must match
+ * SEAT_RUN_GRACE_MS in src/worker/ai/subscriptionSeats.ts (tests/seatWaitIsTheDeadline.test.ts reads both).
  */
-const RUN_TIMEOUT_MS = 150_000;
+const SEAT_RUN_GRACE_MS = 30_000;
+/** A row with no usable `max_seconds` (never written by today's router) gets the router's longest attempt, 450 s. */
+const FALLBACK_RUN_SECONDS = 450;
+
+export function runTimeoutMs(maxSeconds) {
+  const s = Number(maxSeconds);
+  return (Number.isFinite(s) && s > 0 ? s : FALLBACK_RUN_SECONDS) * 1000 + SEAT_RUN_GRACE_MS;
+}
 
 /** What the Claude seat is started with: one value, in the rule table the router reads. */
 const CLAUDE_SEAT_START = String(loadRoles().table.seat_invocation?.claude_code?.model ?? "");
@@ -261,9 +259,9 @@ async function call(pathname, body, method = "POST") {
 }
 
 /** Run one claimed job on its seat. Never throws: a failure is a RESULT the router needs. */
-async function runOnSeat(seat, prompt, { search = false, files = null, cwd = undefined } = {}) {
+async function runOnSeat(seat, prompt, { search = false, files = null, cwd = undefined, maxSeconds = null } = {}) {
   const cfg = SEATS[seat];
-  const timeoutMs = search ? SEARCH_RUN_TIMEOUT_MS : RUN_TIMEOUT_MS;
+  const timeoutMs = runTimeoutMs(maxSeconds);
   // A run that carries files uses the invocation the attachments probe proved (scripts/lib/seat-attachments.mjs).
   const args = files?.length
     ? seat === "codex"
@@ -439,10 +437,10 @@ async function cycle(seats) {
         const got = await downloadAttachments(run);
         fileDir = got.dir;
         prompt = `${prompt}\n\n${attachmentNote(seat, got.files)}`;
-        result = await runOnSeat(seat, prompt, { files: got.files, cwd: got.dir });
+        result = await runOnSeat(seat, prompt, { files: got.files, cwd: got.dir, maxSeconds: run.max_seconds });
       }
     } else {
-      result = await runOnSeat(seat, prompt, { search: run.needs_search === true });
+      result = await runOnSeat(seat, prompt, { search: run.needs_search === true, maxSeconds: run.max_seconds });
     }
   } catch (err) {
     result = { ok: false, error: `the files for this run could not be fetched: ${err instanceof Error ? err.message : String(err)}` };
@@ -555,6 +553,8 @@ function selfTest() {
     ["search: a stream cut off before the turn ended is a failure even with text", () => searchOutcome({ events: 2, queries: [], answer: "partial", errorText: "", terminal: null }, "Codex CLI").ok === false],
     ["search: an answer with no counted searches is a failure in words, not an answer", () => { const o = searchOutcome({ events: 0, queries: [], answer: "Acme sponsors it", errorText: "", terminal: "completed" }, "Codex CLI"); return o.ok === false && /without running a single web search/.test(o.error); }],
     ["search: a Claude weekly-limit stream has no answer and its notice is found", () => { const p = parseClaudeSearch(readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../../tests/fixtures/claude-weekly-limit-stream.jsonl"), "utf8")); return p.answer === "" && detectUsageLimit({ stdout: p.errorText }).limited; }],
+    ["a run is stopped at the row's own max_seconds plus grace (a 450 s deck edit is not killed at 150 s)", () => runTimeoutMs(450) === 480_000 && runTimeoutMs(78) === 108_000],
+    ["a row with no max_seconds gets the router's longest attempt, never zero", () => runTimeoutMs(undefined) === 480_000 && runTimeoutMs(0) === 480_000],
     ["the seat spawn goes through the shared claudeChildEnv", () => /env:\s*claudeChildEnv\(process\.env\b/.test(readFileSync(fileURLToPath(import.meta.url), "utf8").split("function runOnSeat")[1]?.split("\n}\n")[0] ?? "")],
   ];
   let failed = 0;

@@ -49,56 +49,33 @@ export const HEARTBEAT_INTERVAL_S = 30;
  *
  * AND THE WINDOW IS SHORT BECAUSE THE ERRORS ARE NOT SYMMETRIC. Calling the lane away while it is
  * present costs a fraction of a cent on the lane that would have run anyway. Calling it present
- * while it is gone costs the card a parked run and up to `CLAIM_WAIT_MS` of waiting before the
+ * while it is gone costs the card a parked run and up to the attempt's deadline of waiting before the
  * chain rescues it. So the check is biased towards away, which is also the answer that keeps the
  * firm moving on the ordinary day when the laptop is shut.
  */
 export const HEARTBEAT_FRESH_MS = 120_000;
 
-/**
- * How long the router waits for a claimed run to come back before giving up on it and letting the
- * chain answer the card.
- *
- * NINETY SECONDS, and it is a ceiling rather than an expectation: a one-shot prompt to Claude Code
- * on a warm machine answers in well under a minute. The number is chosen from the other side —
- * what a partner will tolerate on a card that is visibly working — rather than from what the model
- * needs, because the consequence of exceeding it is not a failure. It is a handover to a lane that
- * costs a fraction of a cent and answers immediately.
- *
- * THIS IS NOT THE TIMEOUT THE HEARTBEAT REPLACED. The heartbeat's job is that a card pays NOTHING
- * when the Mac is away. This wait is only ever paid when a fresh device said, thirty seconds ago,
- * that it was there and ready — and then did not deliver. That is a rare case, not every card.
- */
-export const CLAIM_WAIT_MS = 90_000;
-
-/** How often the router looks for a result while waiting. 1.5s — 60 reads across the full wait. */
-export const CLAIM_POLL_MS = 1_500;
-
-/**
- * A LIVE WEB SEARCH TAKES LONGER THAN AN ANSWER (0246, 1 Oct 2026).
- *
- * UNMEASURED: the probe on the owner's Mac recorded no end time. This is a bounded guess, stated as
- * one, and it is the first number to read off a real run (`time codex exec …`) and adjust. The claimer's
- * own kill timer (SEARCH_RUN_TIMEOUT_MS in scripts/claimer) is longer than this, so the router gives up
- * first and the paid search lane answers; a run the router has abandoned is closed, never left to be
- * claimed afterwards.
- */
-export const SEARCH_CLAIM_WAIT_MS = 540_000;
 /*
- * MEASURED 22 OCT 2026, and raised from 180 s. Claude Code searches for The Learning Club, read off
- * subscription_seat_run (claimed_at → reported_at): 132 s, 116 s, 114 s, 133 s, 159 s, and one that
- * passed 180 s and was abandoned at the router's limit while the claimer was still working. Under the $0
- * posture there is no paid search lane for the router to give up TO, so giving up early only throws the
- * answer away. The wait now runs to just inside the claimer's own kill timer (240 s), and
- * tests/seatSearchWait.test.ts holds that ordering.
+ * HOW LONG THE ROUTER WAITS FOR A SEAT: THE ATTEMPT'S OWN DEADLINE, AND NOTHING ELSE (24 Nov 2026).
  *
- * MEASURED 24 OCT 2026, and raised from 230 s to 540 s. The TLC brand batch's live searches on her Mac's Claude
- * Code seat: one club with five brands took 126 s in a terminal and 272 s from the claimer's directory; with
- * three brands the 18:53Z run still passed 230 s and was ABANDONED (five ABANDONED runs that day, every one
- * claimed within seconds and still working when the router gave up). The answer was thrown away each time and
- * the card retried every 30 minutes. 540 s sits inside the Worker's 15-minute scheduled limit and just inside
- * the claimer's kill timer (570 s).
+ * There used to be two fixed waits here: ninety seconds for an answer and nine minutes for a search. The search one was
+ * raised three times (180 s, 230 s, 540 s) each time a real search outran it; the answer one was never raised, and on
+ * 24 Nov 2026 Preston's edit of the Fund I deck (12,000 output tokens declared) was claimed by her Mac within seconds and
+ * thrown away at ninety seconds FORTY-FIVE times in twelve hours. Under the $0 posture there was no other lane to hand
+ * it to, so every one deferred, and Scooter's round-1 changes waited all day with nobody saying so.
+ *
+ * So a seat is no different from any other lane: it is given `req.deadlineMs`, the attempt deadline `chainBudget.ts`
+ * derives from the output the call may actually emit at the slowest rate ever measured (a small ask ~78 s, a whole-deck
+ * rewrite or a live search the 450 s cap). The parked row carries that wait as `max_seconds`; the claimer stops its
+ * child at `max_seconds` plus `SEAT_RUN_GRACE_MS`, and the reaper leaves a claimed answer alone until the same point.
+ * One number, read from the row, in all three places; tests/seatWaitIsTheDeadline.test.ts holds it.
  */
+
+/** How far past the row's `max_seconds` the claimer and the reaper allow before treating a claimed run as stuck. */
+export const SEAT_RUN_GRACE_MS = 30_000;
+
+/** How often the router looks for a result while waiting. 1.5s. */
+export const CLAIM_POLL_MS = 1_500;
 
 /** The capability a claimer declares in its heartbeat when it can run a seat in live-search mode. */
 export const SEAT_SEARCH_CAPABILITY = "web_search";
@@ -109,7 +86,7 @@ export const SEARCH_MIN_EVENTS = 1;
 /**
  * How long a CLAIMED run may stay silent before the reaper returns it to the pool.
  *
- * Five minutes, which is deliberately longer than `CLAIM_WAIT_MS`: the router gives up first and
+ * Five minutes, which is deliberately longer than a small ask's deadline: the router gives up first (a long ask's claimed row is judged by its own `max_seconds`, see `reapSeatRuns`) and
  * marks its own row terminal, so the reaper only ever sees rows WITH NO LIVE WAITER — a Worker
  * isolate that was evicted mid-wait, a deploy, a request the client dropped. Those are the rows
  * that stranded work in the sister system for two and a half days.
@@ -851,7 +828,7 @@ export interface ReapResult {
  *
  *   1. A CLAIMED row silent past `CLAIM_TTL_MS` goes back to QUEUED, so a machine that wakes up can
  *      finish the work. Only rows with NO LIVE WAITER ever get here — the router gives up at
- *      ninety seconds and marks its own rows ABANDONED — so this is the evicted-isolate and
+ *      the attempt's deadline and marks its own rows ABANDONED — so this is the evicted-isolate and
  *      dropped-request case, which is real and is exactly what stranded work before.
  *   2. The SECOND silence, or a QUEUED row older than `QUEUE_TTL_MS`, is ABANDONED with a sentence.
  *      Nothing loops for ever, and nothing terminal is ever reopened.
@@ -941,7 +918,12 @@ export async function reapSeatRuns(env: Env, now: Date = new Date()): Promise<Re
         if ((napped.meta?.changes ?? 0) > 0) out.returnedToPool.push(row.id);
         continue;
       }
-      if (!Number.isFinite(claimedMs) || nowMs - claimedMs <= CLAIM_TTL_MS) continue;
+      /*
+       * A ROUTER MAY STILL BE WAITING FOR IT (24 Nov 2026). A deck edit's waiter holds its row for up to 450 s, longer
+       * than five minutes; handing the row back to the pool under a live waiter would throw the Mac's work away.
+       */
+      const quietFor = Math.max(CLAIM_TTL_MS, (Number(row.max_seconds) || 0) * 1000 + SEAT_RUN_GRACE_MS);
+      if (!Number.isFinite(claimedMs) || nowMs - claimedMs <= quietFor) continue;
       const silent = describeAge(nowMs - claimedMs);
       if (row.attempt_count >= MAX_CLAIM_ATTEMPTS) {
         await abandonRun(

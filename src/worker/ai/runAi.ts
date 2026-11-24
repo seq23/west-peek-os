@@ -56,7 +56,7 @@ import {
   recordLaneOutage,
   type LaneHealthRow,
 } from "./laneHealth";
-import { CLAIM_WAIT_MS, SEARCH_CLAIM_WAIT_MS, SEAT_REGISTRY, allSeatAvailability, isSeat } from "./subscriptionSeats";
+import { SEAT_REGISTRY, allSeatAvailability, isSeat } from "./subscriptionSeats";
 import { orderByVendorFamily } from "../../shared/ai/vendorFamily";
 import { createSubscriptionSeatAdapter } from "./providers/subscriptionSeat";
 import { SHAPE_REJECTED, type StructuredOutput, jsonSchemaOf, readStructuredText, structuredInstruction } from "./structuredOutput";
@@ -3224,7 +3224,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     // A head that is itself a seat (FREE_ONLY, private work) has nothing further to hand on to.
     const tail = isSeat(head.providerKey) ? "whatever else is allowed at this lever position" : `${head.providerKey}/${head.model}`;
     explanation +=
-      ` If that seat does not answer within ${Math.round((requiresSearch ? SEARCH_CLAIM_WAIT_MS : CLAIM_WAIT_MS) / 1000)} seconds, or reports a failure or a spent usage limit, the run ` +
+      ` If that seat does not answer within ${Math.round((requiresSearch ? searchAttemptDeadlineMs() : attemptDeadlineMs(estimate.output_tokens)) / 1000)} seconds (this attempt's deadline), or reports a failure or a spent usage limit, the run ` +
       `moves on to ${behind}${freeStep}${tail} inside this same run and the handover is recorded. ` +
       `No seat is asked for the same work twice.`;
   } else if (lead) {

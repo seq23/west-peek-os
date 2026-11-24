@@ -216,6 +216,30 @@ describe("records → preview → one email → reply → same preview → appro
     expect(sends[sends.length - 1]!.text).toMatch(/What I couldn't do:\n- I did not save the edit because it typed figures nobody asked for \(\$23M, 8%\)/);
   });
 
+  it("a long change list reaches Preston WHOLE: every ask after the 4,000th character is still in what the editor reads (24 Nov 2026)", async () => {
+    // Scooter's round-1 list was 6,570 characters; 4,000 were stored, and every ask after slide 7 was lost before Preston read it.
+    const { steerFromReply } = await import("../src/worker/services/emailThread");
+    const { deckPreviewTick, openPreview } = await import("../src/worker/services/deckPreview");
+    const before = (await openPreview(env, FUND))!;
+    const filler = Array.from({ length: 75 }, (_, i) => `Slide note ${i + 1}: keep the current bullets on this page and change nothing else about it.`).join("\n");
+    const lastAsk = "Footer. Add: Pipeline and community figures are internal estimates as of November 2026.";
+    const written = `Hey Preston!\n\n${filler}\n\n${lastAsk}\n\nPlease send both of us the updated link and tell us what changed.`;
+    expect(written.length, "the test's own ask is longer than the old 4,000 cap").toBeGreaterThan(6000);
+    const steer = await steerFromReply(env, {
+      fromHeader: SCOOTER_FROM, authenticationResults: authFor("scooter"), subject: "Re: Our Fund I deck: a new way we'll finish it",
+      raw: [`From: ${SCOOTER_FROM}`, `To: ${INTAKE_MAILBOX}`, "Subject: Re: Our Fund I deck: a new way we'll finish it", "", written].join("\n"),
+      inReplyTo: threadReference(before.thread_token!), references: null, emlKey: null,
+    });
+    expect(steer.steered, steer.reason).toBe(true);
+    const seen: string[] = [];
+    const editor = async ({ said }: { said: string }) => { seen.push(said); return { changes: [], cannot: ["test editor changes nothing"] }; };
+    await deckPreviewTick(env, { editor, launch: fakeLaunch });
+    expect(seen).toHaveLength(1);
+    expect(seen[0], "the last ask is in what Preston reads").toContain(lastAsk);
+    expect(seen[0]).toContain("tell us what changed.");
+    expect(seen[0]!.length).toBeGreaterThanOrEqual(written.length - 5);
+  });
+
   it("one \"approved\" makes no PDF, a change in between resets it, and both partners' \"approved\" on the same slides makes exactly ONE PDF, attached and linked", async () => {
     const { recordReply, deckPreviewTick } = await import("../src/worker/services/deckPreview");
     const p = (await env.WP_OS_DB.prepare("SELECT * FROM deck_preview WHERE state = 'OPEN'").first<{ id: string }>())!;
