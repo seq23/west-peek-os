@@ -502,6 +502,37 @@ describe("Preston answers the partner's own email, and the round is its id, neve
     expect(answer.headers.References).toContain(threadReference(now.thread_token!));
   });
 
+  it("Preston's wrong-thread answer is corrected by re-reading Scooter's stored email: under it, to both, opening with his sorry", async () => {
+    // Her words, 24 Nov 2026: "he should send another duplicate to both of us (scooter gets it 2x thats fine) with an
+    // apology about the wrong thread". The stored 23 Nov email is re-read through the real route with the correction.
+    const { handleReingestStoredEmail } = await import("../src/worker/services/webPropertyChange");
+    const { apologyLine } = await import("../src/worker/services/mailCorrection");
+    const { openPreview } = await import("../src/worker/services/deckPreview");
+    const round = (await openPreview(env, FUND))!;
+    const rounds = await count("SELECT COUNT(*) AS n FROM deck_preview");
+    const key = "inbound-email/2026-11-23/scooter-fund-i-deck.eml";
+    const id = "<CAscooter-fund-i-stored@mail.gmail.com>";
+    await t.docs.put(key, [`From: ${SCOOTER_FROM}`, `To: ${INTAKE_MAILBOX}`, "Subject: Fund I deck", `Message-ID: ${id}`, `Authentication-Results: ${authFor("scooter")}`, "", "Hey Preston! Ready to work on the deck."].join("\r\n"));
+    const before = sends.length;
+    const res = await handleReingestStoredEmail({
+      request: new Request("https://os.joinwestpeek.com/api/inbound-email/reingest", { method: "POST", body: JSON.stringify({ object_key: key, correction: "wrong_thread" }) }),
+      env,
+      identity: { id: "fu_sequoia_taylor", email: "sequoia@westpeek.ventures", fullName: "Sequoia Taylor", status: "ACTIVE", roles: ["MANAGING_PARTNER"], authorityScopes: [] },
+      params: {},
+    } as never);
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect(sends.length, "one email from Preston").toBe(before + 1);
+    const answer = last();
+    expect(answer.to.split(",").sort()).toEqual(["scooter@westpeek.ventures", "sequoia@westpeek.ventures"]);
+    expect(answer.subject).toBe("Re: Fund I deck");
+    expect(answer.headers["In-Reply-To"]).toBe(id);
+    expect(answer.text.startsWith(apologyLine("Scooter")), "his first words are the sorry").toBe(true);
+    expect(answer.text).toContain("It's already open, so we carry on in the same preview");
+    expect(answer.text).toMatch(/Preston/);
+    expect(await count("SELECT COUNT(*) AS n FROM deck_preview"), "still one round").toBe(rounds);
+    expect((await openPreview(env, FUND))!.id).toBe(round.id);
+  });
+
   it("\"approved\" on the OLD thread after the new answer counts for the same round exactly once, and is answered on the new thread", async () => {
     const { steerFromReply } = await import("../src/worker/services/emailThread");
     const { deckPreviewTick, openPreview } = await import("../src/worker/services/deckPreview");

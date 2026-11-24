@@ -4,12 +4,13 @@
  * wesley to message a partner!!!!"). Opens the EXISTING PARTNER_MESSAGE card through `POST /api/work-cards` as the Mac's
  * own identity (the claimer's Access service token, from the vault, never a command line). The Worker reads the sentence
  * with the same `parsePartnerMessageAsk` an email to os@ goes through, so the words mean exactly what they mean there;
- * the employee composes it and the OS sends it to that partner only, as it does for the email door. A job the Mac opens
+ * the employee composes it and the OS sends it to that partner (or, for "tell both", to one with the other copied), as it does for the email door. A job the Mac opens
  * is asked for by the partner it acts for (the developer), so the message says who asked.
  *
  *   npm run -s vault:run -- node scripts/ops/tell-partner.mjs "Wesley, tell Scooter: the DDQ is ready for Monday"
  *   npm run -s vault:run -- node scripts/ops/tell-partner.mjs "Wesley, tell Scooter: …" --card wc_…   (on that job's thread)
  *   npm run -s vault:run -- node scripts/ops/tell-partner.mjs "…" --private                          (Claude only)
+ *   npm run -s vault:run -- node scripts/ops/tell-partner.mjs "Preston, tell both: …" --card wc_…   (both partners, one email; 24 Nov 2026)
  *
  * Prints the card id at once, then waits (up to 15 minutes) for the sweep to send it and prints the subject.
  * Exit 0 when sent; 1 on a refusal or a card that ended without sending; 2 when the wait ran out (the card still runs).

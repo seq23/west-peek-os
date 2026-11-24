@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { Env } from "../env";
 import { artifactAskFromWords } from "../../shared/artifacts/artifact";
 import { SUBSCRIPTION_CLAIMER_EMAIL, type FirmUserIdentity } from "../auth";
-import { parsePartnerMessageAsk, partnerMessageTitle } from "../../shared/intake/partnerMessage";
+import { parsePartnerMessageAsk, partnerMessageTitle, toldNames } from "../../shared/intake/partnerMessage";
 import type { RouteContext } from "../router";
 import { json } from "../router";
 import { appendEvent } from "../events";
@@ -623,6 +623,7 @@ export async function handleCreateWorkCard(ctx: RouteContext): Promise<Response>
   const parsed = createWorkCardSchema.safeParse(body);
   if (!parsed.success) return json({ error: "invalid_input", issues: parsed.error.issues }, { status: 400 });
   const { property_host, from_card_id: fromCardId, partner_message: partnerMessageWords, ...parsedInput } = parsed.data;
+  let messageCopy: string | null = null;
   let input = parsedInput;
 
   /*
@@ -633,18 +634,19 @@ export async function handleCreateWorkCard(ctx: RouteContext): Promise<Response>
    */
   if (partnerMessageWords !== undefined) {
     const ask = parsePartnerMessageAsk("", partnerMessageWords);
-    if (!ask) return json({ error: "invalid_input", detail: 'Write it as "<Employee>, tell <Scooter or Sequoia>: <what to say>".' }, { status: 400 });
+    if (!ask) return json({ error: "invalid_input", detail: 'Write it as "<Employee>, tell <Scooter, Sequoia or both>: <what to say>".' }, { status: 400 });
+    messageCopy = ask.copy?.email ?? null;
     const seat = await env.WP_OS_DB.prepare("SELECT id, name, status FROM ai_employee WHERE lower(name) = lower(?1)").bind(ask.employeeName).first<{ id: string; name: string; status: string }>();
     if (!seat || seat.status !== "ACTIVE") return json({ error: "invalid_input", detail: `${ask.employeeName} is not an employee working here right now.` }, { status: 400 });
     input = {
       ...input,
       kind: "PARTNER_MESSAGE",
-      title: partnerMessageTitle(ask.partner.firstName, ask.instruction),
+      title: partnerMessageTitle(toldNames(ask), ask.instruction),
       owner_type: "AI",
       owner_id: seat.id,
       result_recipient: ask.partner.email,
       prompt: ask.instruction,
-      next_action: `Tell ${ask.partner.firstName}: ${ask.instruction}`.slice(0, 300),
+      next_action: `Tell ${toldNames(ask)}: ${ask.instruction}`.slice(0, 300),
     };
   }
 
@@ -709,6 +711,8 @@ export async function handleCreateWorkCard(ctx: RouteContext): Promise<Response>
       };
     }
     const card = await createWorkCardInternal(env, identity!, derived);
+    // "tell both": the other partner is copied on the one email (`recordMessageCopy`, the cc writer).
+    if (messageCopy) await (await import("./ccPartners")).recordMessageCopy(env, card.id, messageCopy);
     /*
      * A JOB THE MAC OPENS IS ASKED FOR BY THE PARTNER IT ACTS FOR (20 Nov 2026). The claimer opens work on the
      * developer's word (her tail), and a card with no requester had nobody its employee's reply, questions or finished

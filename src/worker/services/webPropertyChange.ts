@@ -4156,7 +4156,7 @@ export async function handleGetRequestAttachment(ctx: RouteContext): Promise<Res
  */
 export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Response> {
   if (!mayFetch(ctx)) return json({ error: "forbidden" }, { status: 403 });
-  const body = (await ctx.request.json().catch(() => null)) as { object_key?: unknown; received_tldr?: unknown; reply_on_thread?: unknown; dry_run?: unknown; inbound_message_id?: unknown } | null;
+  const body = (await ctx.request.json().catch(() => null)) as { object_key?: unknown; received_tldr?: unknown; reply_on_thread?: unknown; dry_run?: unknown; inbound_message_id?: unknown; correction?: unknown } | null;
   let key = typeof body?.object_key === "string" ? body.object_key.trim() : "";
   /*
    * DRY RUN (15 Nov 2026): the full read of a stored message, returned and not applied. Nothing is claimed, cleared,
@@ -4196,6 +4196,23 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
   const msgId = (headers.get("message-id") ?? "").replace(/^<|>$/g, "").trim();
   const from = ((headers.get("from") ?? "").match(/<([^>]+)>/)?.[1] ?? headers.get("from") ?? "").trim().toLowerCase();
   const subject = decodeHeader(headers.get("subject") ?? "");
+  /*
+   * A WRONG-THREAD CORRECTION (24 Nov 2026): the employee answered this email in another thread. Only a partner's own
+   * email with a Message-ID can be corrected; anything else is refused before anything is cleared or re-read.
+   */
+  let correction: import("./mailCorrection").WrongThreadCorrection | null = null;
+  if (body?.correction === "wrong_thread") {
+    const { partnerByEmail } = await import("../../shared/registry/partners");
+    const { messageReference } = await import("../../shared/email/thread");
+    const partner = partnerByEmail(from);
+    const messageId = messageReference(headers.get("message-id"));
+    if (!partner || !messageId) {
+      return json({ error: "invalid_input", detail: "a wrong-thread correction needs a partner's own email with a Message-ID" }, { status: 400 });
+    }
+    correction = { messageId, references: headers.get("references"), subject, partnerFirstName: partner.firstName };
+  } else if (body?.correction !== undefined) {
+    return json({ error: "invalid_input", detail: 'correction must be "wrong_thread"' }, { status: 400 });
+  }
   /*
    * ONE RE-READ AT A TIME PER MESSAGE (9 Oct 2026). Two re-reads of Scooter's "New site build" two
    * seconds apart (a person and the partner tail) both cleared the dedupe row and both ran the door:
@@ -4324,7 +4341,12 @@ export async function handleReingestStoredEmail(ctx: RouteContext): Promise<Resp
   const bytes = new TextEncoder().encode(raw);
   // What a non-card handler did with the message (a TLC drafts reply that approved and sent, a packet decision).
   const handledBy: import("../effects/inboundEmail").DoorHandled[] = [];
-  await handleInboundEmail({ from, to: headers.get("to") ?? "os@joinwestpeek.com", headers, raw: new Blob([bytes as BlobPart]).stream(), rawSize: bytes.byteLength }, ctx.env, { receivedTldr, replyOnThread, onHandled: (h) => handledBy.push(h) });
+  const door = () => handleInboundEmail({ from, to: headers.get("to") ?? "os@joinwestpeek.com", headers, raw: new Blob([bytes as BlobPart]).stream(), rawSize: bytes.byteLength }, ctx.env, { receivedTldr, replyOnThread, onHandled: (h) => handledBy.push(h) });
+  // "wrong_thread" (24 Nov 2026): every partner email this read sends goes under the partner's own email, to both, with an apology.
+  if (correction) {
+    const { withWrongThreadCorrection } = await import("./mailCorrection");
+    await withWrongThreadCorrection(correction, door);
+  } else await door();
   // THE NEW CARD, not "the newest card of the kind": created by this read, for this partner.
   const created = (
     await ctx.env.WP_OS_DB.prepare(
