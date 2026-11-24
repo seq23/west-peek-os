@@ -83,6 +83,8 @@ interface ChangeRow {
   said: string | null;
   applied: string | null;
   replied_at: string | null;
+  /** The email thread the partner wrote this on (migration 0314); Preston answers on it. */
+  reply_thread_token?: string | null;
   created_at: string;
 }
 
@@ -175,10 +177,10 @@ async function latestPreview(env: Env, fundId: string): Promise<PreviewRow | nul
   return env.WP_OS_DB.prepare("SELECT * FROM deck_preview WHERE fund_id = ?1 ORDER BY round_no DESC LIMIT 1").bind(fundId).first<PreviewRow>();
 }
 
-async function addChange(env: Env, previewId: string, c: { kind: ChangeRow["kind"]; state?: ChangeRow["state"]; by?: string | null; said?: string | null; applied?: string | null }): Promise<string> {
+async function addChange(env: Env, previewId: string, c: { kind: ChangeRow["kind"]; state?: ChangeRow["state"]; by?: string | null; said?: string | null; applied?: string | null; thread?: string | null }): Promise<string> {
   const id = `dpc_${crypto.randomUUID()}`;
-  await env.WP_OS_DB.prepare("INSERT INTO deck_preview_change (id, preview_id, kind, state, by_whom, said, applied) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)")
-    .bind(id, previewId, c.kind, c.state ?? "DONE", c.by ?? null, c.said ?? null, c.applied ?? null).run();
+  await env.WP_OS_DB.prepare("INSERT INTO deck_preview_change (id, preview_id, kind, state, by_whom, said, applied, reply_thread_token) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)")
+    .bind(id, previewId, c.kind, c.state ?? "DONE", c.by ?? null, c.said ?? null, c.applied ?? null, c.thread ?? null).run();
   return id;
 }
 
@@ -410,12 +412,12 @@ export async function sendRound(env: Env, previewId: string, opts: { answering?:
  * ask after slide 7 (two new slides, traction, team, track record, slides 16 to 18, the footer) was gone before Preston
  * read it. A partner's words are never cut where they are stored; tests/deckPreview.test.ts holds it.
  */
-export async function recordReply(env: Env, previewId: string, written: string, partnerAddress: string): Promise<{ kind: "REQUEST" | "APPROVAL"; id: string } | null> {
+export async function recordReply(env: Env, previewId: string, written: string, partnerAddress: string, threadToken: string | null = null): Promise<{ kind: "REQUEST" | "APPROVAL"; id: string } | null> {
   const p = await env.WP_OS_DB.prepare("SELECT * FROM deck_preview WHERE id = ?1").bind(previewId).first<PreviewRow>();
   if (!p) return null;
   const who = partnerByEmail(partnerAddress)?.firstName ?? partnerAddress;
   const kind = isApproval(written) ? "APPROVAL" : "REQUEST";
-  const id = await addChange(env, p.id, { kind, state: "PENDING", by: who, said: written });
+  const id = await addChange(env, p.id, { kind, state: "PENDING", by: who, said: written, thread: threadToken });
   await appendEvent(env, { eventType: "deck_preview.reply", actorType: "firm_user", actorId: partnerByEmail(partnerAddress)?.firmUserId ?? "unknown", objectType: "deck_preview", objectId: p.id, firmScope: p.firm_scope, payload: { kind, change_id: id } });
   return { kind, id };
 }
@@ -484,6 +486,25 @@ async function replyOnThread(env: Env, p: PreviewRow, body: string, opts: { atta
 }
 
 /**
+ * THE ANSWER GOES WHERE THE PARTNER WROTE (24 Nov 2026). Scooter sent his round-1 changes as a reply to
+ * "Our Fund I deck: a new way we'll finish it"; Preston answered under "Re: Fund I deck", the round's
+ * newest thread, so the answer sat outside the conversation it answered. A change now remembers the
+ * thread it came in on, and that thread becomes the round's before Preston answers it, so the answer and
+ * everything after it is in the partner's own conversation. A token that is not one of this preview's
+ * own threads is ignored, and an approval keeps #591's rule (answered on the round's newest thread).
+ */
+async function onTheirThread(env: Env, p: PreviewRow, c: ChangeRow): Promise<PreviewRow> {
+  const token = c.reply_thread_token;
+  // A change REQUEST only: an "approved" on an old thread is answered on the round's newest one (#591).
+  if (c.kind !== "REQUEST" || !token || token === p.thread_token) return p;
+  const own = await env.WP_OS_DB.prepare("SELECT token FROM email_thread WHERE token = ?1 AND object_type = 'deck_preview' AND object_id = ?2")
+    .bind(token, p.id).first<{ token: string }>();
+  if (!own) return p;
+  await env.WP_OS_DB.prepare("UPDATE deck_preview SET thread_token = ?2, updated_at = ?3 WHERE id = ?1").bind(p.id, token, nowIso()).run();
+  return { ...p, thread_token: token };
+}
+
+/**
  * Apply every waiting request to its preview, in order, and answer each on the thread. A request the
  * editor cannot apply safely changes nothing and says why. A model that is down leaves the request
  * waiting for the next sweep — it is never dropped.
@@ -492,8 +513,9 @@ export async function applyPending(env: Env, deps: { editor?: DeckEditor; launch
   const notes: string[] = [];
   const pending = (await env.WP_OS_DB.prepare("SELECT * FROM deck_preview_change WHERE state = 'PENDING' ORDER BY created_at LIMIT 5").all<ChangeRow>()).results ?? [];
   for (const c of pending) {
-    const p = await env.WP_OS_DB.prepare("SELECT * FROM deck_preview WHERE id = ?1").bind(c.preview_id).first<PreviewRow>();
-    if (!p) continue;
+    const row = await env.WP_OS_DB.prepare("SELECT * FROM deck_preview WHERE id = ?1").bind(c.preview_id).first<PreviewRow>();
+    if (!row) continue;
+    const p = await onTheirThread(env, row, c);
     // A change applied earlier in this pass may have cleared this approval: read it again.
     const live = await env.WP_OS_DB.prepare("SELECT state FROM deck_preview_change WHERE id = ?1").bind(c.id).first<{ state: string }>();
     if (live?.state !== "PENDING") continue;
@@ -544,8 +566,9 @@ export async function applyPending(env: Env, deps: { editor?: DeckEditor; launch
       `Reply here with anything else, or with "approved" when it's ready. ${BOTH_APPROVE}`,
     ].filter(Boolean).join("\n\n");
     const replied = await replyOnThread(env, p, body);
+    // Stored whole: the preview page's history shows it to both partners, and a cut one ended mid-word (24 Nov 2026).
     await env.WP_OS_DB.prepare("UPDATE deck_preview_change SET state = ?2, applied = ?3, replied_at = ?4, updated_at = ?5 WHERE id = ?1")
-      .bind(c.id, next ? "DONE" : "REFUSED", summary.slice(0, 4000), replied ? nowIso() : null, nowIso()).run();
+      .bind(c.id, next ? "DONE" : "REFUSED", summary, replied ? nowIso() : null, nowIso()).run();
     notes.push(`request ${next ? "applied" : "refused"}${replied ? ", answered on the thread" : ""}`);
   }
   return notes;

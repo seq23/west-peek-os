@@ -240,6 +240,43 @@ describe("records → preview → one email → reply → same preview → appro
     expect(seen[0]!.length).toBeGreaterThanOrEqual(written.length - 5);
   });
 
+  it("a change is answered on the thread the partner wrote it on, even after the round moved to a newer thread, and its summary is kept whole (24 Nov 2026)", async () => {
+    // Scooter replied under "Our Fund I deck: a new way we'll finish it"; the round had since moved to "Fund I deck", and
+    // Preston answered there. The stored summary was also cut at 4,000 characters, mid-word, on the preview page's history.
+    const { steerFromReply } = await import("../src/worker/services/emailThread");
+    const { deckPreviewTick, openPreview } = await import("../src/worker/services/deckPreview");
+    const before = (await openPreview(env, FUND))!;
+    const his = before.thread_token!;
+    const newer = `${his}-newer`;
+    await env.WP_OS_DB.prepare("INSERT INTO email_thread (token, object_type, object_id, card_kind, employee, to_address, subject, provider_message_id, provider, firm_scope) SELECT ?2, object_type, object_id, card_kind, employee, to_address, 'Re: Fund I deck', 'newer-thread@example.com', provider, firm_scope FROM email_thread WHERE token = ?1")
+      .bind(his, newer).run();
+    await env.WP_OS_DB.prepare("UPDATE deck_preview SET thread_token = ?2 WHERE id = ?1").bind(before.id, newer).run();
+    const steer = await steerFromReply(env, {
+      fromHeader: SCOOTER_FROM, authenticationResults: authFor("scooter"), subject: "Re: Our Fund I deck: a new way we'll finish it",
+      raw: [`From: ${SCOOTER_FROM}`, `To: ${INTAKE_MAILBOX}`, "Subject: Re: Our Fund I deck: a new way we'll finish it", "", "Page 2: also say Rooms evenings, please."].join("\n"),
+      inReplyTo: threadReference(his), references: null, emlKey: null,
+    });
+    expect(steer.steered, steer.reason).toBe(true);
+    const changes = Array.from({ length: 60 }, (_, i) => `Page ${i + 1} now carries the line you asked for, in your words, with nothing else on it changed (${i + 1}).`);
+    const editor = async ({ slides }: { slides: Slide[] }) => ({
+      slides: slides.map((s) => (s.key === "sourcing" ? { ...s, slots: [...s.slots, { kind: "text" as const, text: "Rooms evenings again" }] } : s)),
+      changes,
+      cannot: ["The last thing I could not do, said in full."],
+    });
+    const sent = sends.length;
+    await deckPreviewTick(env, { editor, launch: fakeLaunch });
+    const answers = sends.slice(sent).filter((m) => m.text.includes("What I changed:"));
+    expect(answers.length, "ONE answer, to both").toBe(1);
+    expect(answers[0]!.to).toBe("scooter@westpeek.ventures,sequoia@westpeek.ventures");
+    expect(answers[0]!.subject, "under the email he wrote on").toBe("Re: Our Fund I deck: a new way we'll finish it");
+    expect((await openPreview(env, FUND))!.thread_token, "his thread is the round's now").toBe(his);
+    const row = (await env.WP_OS_DB.prepare("SELECT state, applied, reply_thread_token FROM deck_preview_change WHERE said LIKE 'Page 2: also say Rooms evenings%'").first<{ state: string; applied: string; reply_thread_token: string }>())!;
+    expect(row).toMatchObject({ state: "DONE", reply_thread_token: his });
+    expect(row.applied.length).toBeGreaterThan(4000);
+    expect(row.applied.endsWith("The last thing I could not do, said in full.")).toBe(true);
+    await env.WP_OS_DB.prepare("DELETE FROM email_thread WHERE token = ?1").bind(newer).run();
+  });
+
   it("one \"approved\" makes no PDF, a change in between resets it, and both partners' \"approved\" on the same slides makes exactly ONE PDF, attached and linked", async () => {
     const { recordReply, deckPreviewTick } = await import("../src/worker/services/deckPreview");
     const p = (await env.WP_OS_DB.prepare("SELECT * FROM deck_preview WHERE state = 'OPEN'").first<{ id: string }>())!;

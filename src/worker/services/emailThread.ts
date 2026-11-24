@@ -494,7 +494,7 @@ export async function steerFromReply(
    */
   if (thread.object_type === "deck_preview") {
     const { recordReply } = await import("./deckPreview");
-    const out = await recordReply(env, thread.object_id, written, authority.partnerAddress ?? "");
+    const out = await recordReply(env, thread.object_id, written, authority.partnerAddress ?? "", thread.token);
     await appendEvent(env, {
       eventType: "work.steered_by_reply",
       actorType: "firm_user",
