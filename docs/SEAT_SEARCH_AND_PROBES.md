@@ -22,9 +22,10 @@ Then the Cockpit's seat status will show the seat as awake, and a search call at
 
 ## 1 · Time a real search (UNMEASURED today)
 
-The router waits up to **180 s** for a seat's search (`SEARCH_CLAIM_WAIT_MS`); the claimer kills a search
-run at **240 s** (`SEARCH_RUN_TIMEOUT_MS`). Both are guesses — the first probe recorded no end time. Run the
-real Parker prompt with `time` and adjust the two constants to what you see:
+The router waits for a seat exactly as long as the attempt's own deadline (`attemptDeadlineMs` /
+`searchAttemptDeadlineMs` in `src/worker/ai/chainBudget.ts`; a search gets the 450 s cap) and writes it on the row as
+`max_seconds`; the claimer stops its child at `max_seconds` plus `SEAT_RUN_GRACE_MS` (24 Nov 2026; there are no fixed
+seat timers any more). To check a real search against it, run the Parker prompt with `time`:
 
 ```bash
 time codex exec --skip-git-repo-check --sandbox read-only --json -c web_search=live "$(cat ~/parker_prompt.txt)" > ~/codex_probe.jsonl 2> ~/codex_probe.err

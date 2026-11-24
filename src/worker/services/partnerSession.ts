@@ -2,7 +2,7 @@
  * A PARTNER'S EMAIL, WORKED AS ONE SESSION (14 Nov 2026, "emailing the OS feels like typing to Claude").
  *
  * An email no fixed door claims used to sit on the chief of staff's desk for the general step loop: a model call per
- * step under the router's stopwatch (`attemptDeadlineMs`, capped by `CLAIM_WAIT_MS`), fixed kinds, and a dead end for
+ * step under the router's stopwatch (`attemptDeadlineMs`), fixed kinds, and a dead end for
  * anything that did not fit. It is now a PARTNER_SESSION card: one full Claude Code session on her Mac, parked as a
  * LOCAL_JOB run the claimer keeps alive with its one-minute ping, under a two-hour phase ceiling and nothing else.
  *

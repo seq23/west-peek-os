@@ -238,7 +238,7 @@
   "tests/seatFirstBesidePin.test.ts": 5712,
   "tests/seatProbes.test.ts": 459,
   "tests/seatSearch.test.ts": 48215,
-  "tests/seatSearchWait.test.ts": 2,
+  "tests/seatWaitIsTheDeadline.test.ts": 9,
   "tests/seatTwoClaimers.test.ts": 498,
   "tests/seatUsageLimitReset.test.ts": 20,
   "tests/secEdgar.test.ts": 7,

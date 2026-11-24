@@ -1,10 +1,9 @@
 import type { ProviderAdapter, ProviderRequest, ProviderResponse } from "./types";
 import type { Env } from "../../env";
+import { OVERSHOOT_MULTIPLE, attemptDeadlineMs, searchAttemptDeadlineMs } from "../chainBudget";
 import { attachmentRefusal, deleteKeys, putSeatAttachments, type SeatAttachmentInput, type SeatAttachmentRef } from "../seatAttachments";
 import {
   CLAIM_POLL_MS,
-  CLAIM_WAIT_MS,
-  SEARCH_CLAIM_WAIT_MS,
   SEAT_REGISTRY,
   SEAT_UNAVAILABLE,
   abandonRun,
@@ -36,7 +35,7 @@ import {
  *      — the lid is shut — and it costs one indexed read. Nothing is parked, so there is nothing to
  *      clean up and no chance of a machine finding the row an hour later and running it.
  *   2. FRESH, CLAIMED, REPORTED → the answer, at $0.
- *   3. FRESH BUT NOTHING CAME BACK inside `CLAIM_WAIT_MS` → the row is marked ABANDONED so no
+ *   3. FRESH BUT NOTHING CAME BACK inside the attempt's deadline → the row is marked ABANDONED so no
  *      claimer will run it after the fact, and it throws. The chain answers the card now.
  *
  * WHY (3) ABANDONS RATHER THAN LEAVING THE ROW FOR LATER. The card is about to be answered on
@@ -75,7 +74,6 @@ export function createSubscriptionSeatAdapter(opts: SubscriptionSeatAdapterOptio
   const env = opts.env;
   const seat = opts.seat;
   const needsSearch = opts.needsSearch === true;
-  const seatWaitMs = opts.waitMs ?? (needsSearch ? SEARCH_CLAIM_WAIT_MS : CLAIM_WAIT_MS);
   const pollMs = Math.max(1, opts.pollMs ?? CLAIM_POLL_MS);
   const sleep = opts.sleep ?? realSleep;
   const now = opts.now ?? ((): Date => new Date());
@@ -89,7 +87,11 @@ export function createSubscriptionSeatAdapter(opts: SubscriptionSeatAdapterOptio
        * nothing, and the ai_run was left RUNNING. Now the wait is the shorter of the two, and when it runs out the row is
        * closed and the chain moves to its next route, ending in the run's named stop.
        */
-      const waitMs = Math.max(1, Math.min(seatWaitMs, req.deadlineMs ?? seatWaitMs));
+      /*
+       * AND THE WAIT IS THE ATTEMPT (24 Nov 2026): no fixed seat wait of its own, so a 12,000-token deck edit gets the
+       * minutes the router gives every other lane for it. See `SEAT_RUN_GRACE_MS` in ../subscriptionSeats.ts.
+       */
+      const waitMs = Math.max(1, Math.round(opts.waitMs ?? req.deadlineMs ?? (needsSearch ? searchAttemptDeadlineMs() : attemptDeadlineMs(Math.ceil((req.maxOutputTokens ?? 0) / OVERSHOOT_MULTIPLE)))));
       /*
        * A PICTURE OR A DECK IS NOT OFFERED HERE. The claimer hands the model a text instruction
        * over a local pipe; there is no wire format in this design for attachments, and an adapter

@@ -405,13 +405,17 @@ export async function sendRound(env: Env, previewId: string, opts: { answering?:
 /**
  * A partner's reply on the preview thread, recorded at once (inside the email handler: no model call
  * here). "approved" is an APPROVAL; anything else is a REQUEST. The sweep does the work.
+ *
+ * KEPT WHOLE (24 Nov 2026). Scooter's round-1 change list was 6,570 characters and this stored the first 4,000: every
+ * ask after slide 7 (two new slides, traction, team, track record, slides 16 to 18, the footer) was gone before Preston
+ * read it. A partner's words are never cut where they are stored; tests/deckPreview.test.ts holds it.
  */
 export async function recordReply(env: Env, previewId: string, written: string, partnerAddress: string): Promise<{ kind: "REQUEST" | "APPROVAL"; id: string } | null> {
   const p = await env.WP_OS_DB.prepare("SELECT * FROM deck_preview WHERE id = ?1").bind(previewId).first<PreviewRow>();
   if (!p) return null;
   const who = partnerByEmail(partnerAddress)?.firstName ?? partnerAddress;
   const kind = isApproval(written) ? "APPROVAL" : "REQUEST";
-  const id = await addChange(env, p.id, { kind, state: "PENDING", by: who, said: written.slice(0, 4000) });
+  const id = await addChange(env, p.id, { kind, state: "PENDING", by: who, said: written });
   await appendEvent(env, { eventType: "deck_preview.reply", actorType: "firm_user", actorId: partnerByEmail(partnerAddress)?.firmUserId ?? "unknown", objectType: "deck_preview", objectId: p.id, firmScope: p.firm_scope, payload: { kind, change_id: id } });
   return { kind, id };
 }
