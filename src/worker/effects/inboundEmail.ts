@@ -1479,13 +1479,18 @@ async function handleInboundEmailOnce(
    * of staff → maybe Preston: a model's judgement three times over. So the words are read here by
    * `fundDeckStart` (pure; no model), only for an authenticated partner's own untagged, unforwarded
    * message with nothing attached. Anything it is not sure of falls through to the assignment
-   * exactly as before. Recorded now; the round's email and any edit are the sweep's work.
+   * exactly as before. Preston's answer goes now, as a reply to this email (the round's email when
+   * the round is new, the link again when one is open); any edit is the sweep's work.
    */
   if (summary.unrouted && authority.isAssignment && !origin?.from) {
     const start = fundDeckStart({ subject, body: mail?.text ?? "", hasAttachment: (mail?.files ?? []).some((f) => f.sentAsFile || f.mediaType === "application/pdf") });
     if (start) {
       const { startDeckFromEmail } = await import("../services/deckPreview");
-      const out = await startDeckFromEmail(env, { partnerAddress: authority.partnerAddress!, words: start.words });
+      // Preston answers THIS email, so his reply sits under it in both partners' inboxes (24 Nov 2026).
+      const out = await startDeckFromEmail(env, {
+        partnerAddress: authority.partnerAddress!, words: start.words,
+        message: { messageId: message.headers.get("message-id"), references: message.headers.get("references"), subject },
+      });
       await appendEvent(env, {
         eventType: "inbound_email.received", actorType: "system", actorId: "inbound_email", objectType: "inbound_email",
         objectId: `${message.from}:${subject}`.slice(0, 200), firmScope,

@@ -42,7 +42,7 @@ const HEDGED = /\b(?:not|never|no|don't|dont|doesn't|isn't|aren't|won't|can't|ca
 const POLITE_ASK = new RegExp(`^${ADDRESSED}${WORK} `);
 
 const GREETING = /^(?:(?:hi|hey|hello|dear|ok|okay)\b[\s,]*)?(?:(?:preston|wren|walker|porter|team|all|both)\b)?[\s,:!.-]*$/i;
-const SIGN_OFF = /^(?:thanks(?: so much| a lot)?|thank you|thx|ty|best|cheers|regards|warmly|talk soon|sequoia|scooter|st|sent from my .*|get outlook for .*)[\s,.!-]*$/i;
+const SIGN_OFF = /^(?:thanks(?: so much| a lot)?|thank you|thx|ty|best|cheers|regards|warmly|talk soon|sequoia|scooter|st|(?:sequoia|scooter) taylor|west peek(?: ventures)?|managing partner|sent from my .*|get outlook for .*)[\s,.!-]*$/i;
 
 function plain(text: string): string {
   return text.replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\r\n/g, "\n");
@@ -67,6 +67,21 @@ function startSentence(text: string): string | null {
     return s.raw;
   }
   return null;
+}
+
+/**
+ * A line without the greeting it opens with or the sign-off it ends with, so "Hey Preston! …" on
+ * the same line as the start is never carried in as a change request (24 Nov 2026). Only whole
+ * sentences at either end go; the words between are kept exactly as typed.
+ */
+function withoutPleasantries(line: string): string {
+  const parts = [...line.matchAll(/[^.!?\n]+[.!?]*/g)].map((m) => ({ at: m.index ?? 0, raw: m[0] }));
+  let from = 0;
+  let to = parts.length;
+  while (from < to && GREETING.test(parts[from]!.raw.trim())) from += 1;
+  while (to > from && (SIGN_OFF.test(parts[to - 1]!.raw.trim()) || GREETING.test(parts[to - 1]!.raw.trim()))) to -= 1;
+  if (from >= to) return "";
+  return line.slice(parts[from]!.at, parts[to - 1]!.at + parts[to - 1]!.raw.length).trim();
 }
 
 export interface DeckStart {
@@ -104,6 +119,6 @@ export function fundDeckStart(input: { subject: string; body: string; hasAttachm
 
   let rest = lines.join("\n");
   if (inBody) rest = rest.replace(inBody, "").replace(/^[\s,.!-]+/, "");
-  rest = rest.split("\n").map((l) => l.trim()).filter((l) => l && !GREETING.test(l)).join("\n").trim();
+  rest = rest.split("\n").map(withoutPleasantries).filter(Boolean).join("\n").trim();
   return { words: rest.split(/\s+/).filter(Boolean).length >= 2 ? rest : "" };
 }

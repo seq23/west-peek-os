@@ -8,7 +8,7 @@ import { ASSIGNING_PARTNERS } from "../../shared/intake/partnerAuthority";
 import { INTAKE_MAILBOX } from "../../shared/intake/emailTriggers";
 import { laidOutProblems, lintExecEmail, renderExecEmail, type ExecEmailInput } from "../../shared/email/execEmail";
 import { recordThreadDelivery, startThread } from "./emailThread";
-import { threadReference } from "../../shared/email/thread";
+import { answerHeaders, messageReference, threadReference } from "../../shared/email/thread";
 import { EmployeeSenderError, employeeSenderHeader } from "../../shared/registry/employeeMail";
 import { TLC_BRAND_REPLY_NOTICE_CC_IDS, TLC_PRICING_NOTICE_OBJECT, TLC_RECIPIENTS, isTlcKind, isTlcMail } from "../../shared/tlc/learningClub";
 import { partnerByEmail } from "../../shared/registry/partners";
@@ -316,10 +316,10 @@ export async function sendPartnersEmail(
  * either one, even from a phone that drops the References header, matches this conversation by its
  * subject (emailThread.steerFromReply's fallback reads rows by the replying partner's address).
  */
-export function lintPlainLetter(subject: string, text: string, employee: string): string[] {
+export function lintPlainLetter(subject: string, text: string, employee: string, opts: { theirSubject?: boolean } = {}): string[] {
   const v: string[] = [];
   if (!subject.trim()) v.push("the subject is empty");
-  if (subject.length > SUBJECT_MAX_PLAIN) v.push(`subject is ${subject.length} characters; the limit is ${SUBJECT_MAX_PLAIN}`);
+  if (!opts.theirSubject && subject.length > SUBJECT_MAX_PLAIN) v.push(`subject is ${subject.length} characters; the limit is ${SUBJECT_MAX_PLAIN}`);
   if (text.trim().length < 40) v.push("the letter says almost nothing");
   const last = text.trim().split("\n").slice(-2).join(" ");
   if (!last.includes(employee)) v.push(`the letter is not signed by ${employee}`);
@@ -349,6 +349,13 @@ export async function sendPartnersLetter(
     firmScope: string;
     actorId?: string;
     replyOnThread?: string | null;
+    /**
+     * 24 Nov 2026: the partner's own email this answers (its Message-ID and References), so the note
+     * sits under it in both inboxes. Wins over `replyOnThread`; a missing or malformed Message-ID
+     * falls back to `replyOnThread`, then to a new thread. The subject is then theirs ("Re: …"), so
+     * its length is not ours to cap.
+     */
+    answering?: { messageId: string | null; references?: string | null } | null;
     events?: { sent: string; notSent: string };
     /** 11 Nov 2026: the approved final deck PDF, to the two partners only (services/deckPreview.ts finishDeck). */
     attachments?: readonly EmailAttachment[];
@@ -365,7 +372,8 @@ export async function sendPartnersLetter(
   if (!aiOutboundSwitches(env).toPartners) {
     return { sent: false, to: joined, recipients: to, reason: "employees cannot email the partners: WP_OS_AI_EMAIL_PARTNERS is off", subject: input.subject };
   }
-  const violations = lintPlainLetter(input.subject, input.text, input.employee);
+  const answers = messageReference(input.answering?.messageId) !== null;
+  const violations = lintPlainLetter(input.subject, input.text, input.employee, { theirSubject: answers });
   if (violations.length > 0) {
     const reason = `not sent — the letter does not meet the format: ${violations.join("; ")}`;
     await record(env, actor, events.notSent, { to, subject: input.subject, detail: reason, provider_message_id: null, violations });
@@ -383,9 +391,10 @@ export async function sendPartnersLetter(
   const thread = threads[0]!;
   let result: EmailSendResult;
   try {
-    const headers = input.replyOnThread
-      ? { References: `${threadReference(input.replyOnThread)} ${thread.headers.References}`, "In-Reply-To": threadReference(input.replyOnThread) }
-      : thread.headers;
+    const headers = (input.answering ? answerHeaders(thread.token, input.answering) : null)
+      ?? (input.replyOnThread
+        ? { References: `${threadReference(input.replyOnThread)} ${thread.headers.References}`, "In-Reply-To": threadReference(input.replyOnThread) }
+        : thread.headers);
     result = await transport(env, { to, subject: input.subject, text: input.text.trim(), html: plainHtml(input.text), from: sender.from, headers, ...(input.attachments?.length ? { attachments: input.attachments } : {}) });
   } catch (err) {
     result = { sent: false, provider: "resend", detail: err instanceof Error ? err.message : String(err), provider_message_id: null };
