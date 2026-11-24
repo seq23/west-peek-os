@@ -118,6 +118,41 @@ export function threadHeaders(token: string): Record<string, string> {
   return { References: ref, "In-Reply-To": ref };
 }
 
+/**
+ * ANSWERING A PERSON'S OWN EMAIL, SO THE ANSWER SITS UNDER IT (24 Nov 2026).
+ *
+ * Scooter emailed "Fund I deck" to start the deck and Preston answered on the 26 Oct thread, so in
+ * both inboxes Scooter's newest thread had no reply. A note that answers someone's message points
+ * `In-Reply-To` at THEIR Message-ID and carries their `References` chain, then our own token last,
+ * so a reply to the answer still comes back to the same object (`threadTokensIn` reads every token).
+ */
+const MSG_ID = /<[^\s<>"]{1,300}@[^\s<>"]{1,300}>/g;
+
+/** A Message-ID as a header value (`<id@host>`), or null when there is none or it is not one. */
+export function messageReference(raw: string | null | undefined): string | null {
+  const m = /^\s*<?([^\s<>"]{1,300}@[^\s<>"]{1,300})>?\s*$/.exec(raw ?? "");
+  return m ? `<${m[1]}>` : null;
+}
+
+/** "Re: <their subject>", on one line; null when they wrote no subject. */
+export function replySubject(theirs: string | null | undefined): string | null {
+  const s = (theirs ?? "").replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
+  if (!s) return null;
+  return /^re\s*:/i.test(s) ? s : `Re: ${s}`;
+}
+
+/**
+ * The headers of a note that answers someone's message, or null when their Message-ID is missing
+ * or malformed (the caller falls back to its own thread). Their chain is kept to its last eight ids.
+ */
+export function answerHeaders(token: string, theirs: { messageId: string | null | undefined; references?: string | null }): Record<string, string> | null {
+  const id = messageReference(theirs.messageId);
+  if (!id) return null;
+  const earlier = (theirs.references ?? "").match(MSG_ID) ?? [];
+  const chain = [...new Set([...earlier.slice(-8), id])];
+  return { "In-Reply-To": id, References: [...chain, threadReference(token)].join(" ") };
+}
+
 /** What the thread is about, so a matched reply knows where to go. */
 export interface EmailThreadRow {
   token: string;

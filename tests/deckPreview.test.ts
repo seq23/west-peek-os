@@ -22,15 +22,17 @@ let refuseAttachments = false;
 const SCOOTER_FROM = "Scooter Taylor <scooter@westpeek.ventures>";
 const authFor = (who: string) => `mx.cloudflare.net; spf=pass smtp.mailfrom=${who}@westpeek.ventures; dkim=pass header.d=westpeek.ventures; dmarc=none`;
 let mailSeq = 0;
-/** A fresh email from a partner, through the real door. */
-async function partnerEmails(from: string, who: string, to: string, subject: string, body: string, attachPdf = false): Promise<void> {
+/** A fresh email from a partner, through the real door. Returns its Message-ID (null: sent without one). */
+async function partnerEmails(from: string, who: string, to: string, subject: string, body: string, attachPdf = false, opts: { messageId?: string | null } = {}): Promise<string | null> {
   const { handleInboundEmail } = await import("../src/worker/effects/inboundEmail");
   const raw = attachPdf
     ? [`From: ${from}`, `To: ${to}`, `Subject: ${subject}`, 'Content-Type: multipart/mixed; boundary="b_deck"', "MIME-Version: 1.0", "", "--b_deck", "Content-Type: text/plain; charset=UTF-8", "", body, "", "--b_deck", 'Content-Type: application/pdf; name="Northwind deck.pdf"', 'Content-Disposition: attachment; filename="Northwind deck.pdf"', "Content-Transfer-Encoding: base64", "", btoa(FAKE_PDF), "", "--b_deck--", ""].join("\r\n")
     : [`From: ${from}`, `To: ${to}`, `Subject: ${subject}`, "", body].join("\n");
   const bytes = new TextEncoder().encode(raw);
-  const headers = new Headers({ from, to, subject, "authentication-results": authFor(who), "message-id": `<deck-start-${(mailSeq += 1)}@example.com>` });
+  const messageId = opts.messageId === undefined ? `<deck-start-${(mailSeq += 1)}@example.com>` : opts.messageId;
+  const headers = new Headers({ from, to, subject, "authentication-results": authFor(who), ...(messageId === null ? {} : { "message-id": messageId }) });
   await handleInboundEmail({ from: `${who}@westpeek.ventures`, to, headers, raw: new Blob([bytes]).stream(), rawSize: bytes.byteLength }, env);
+  return messageId;
 }
 const count = async (sql: string) => (await env.WP_OS_DB.prepare(sql).first<{ n: number }>())!.n;
 
@@ -368,14 +370,18 @@ describe("\"ready to work on the deck\" starts the round, with no model deciding
     const round3 = (await openPreview(env, FUND))!;
     const cards = await count("SELECT COUNT(*) AS n FROM work_card");
 
-    // ROUND 3 IS OPEN AND EMAILED: Scooter's email starts nothing new. Both get the link again on that thread, and his words are a request.
+    // ROUND 3 IS OPEN AND EMAILED: Scooter's email starts nothing new. Both get the link again AS THE ANSWER TO HIS EMAIL, and his words are a request.
     let before = sends.length;
-    await partnerEmails(SCOOTER_FROM, "scooter", INTAKE_MAILBOX, "Ready to work on the deck", "Wren, I'm ready to work on the deck. Page 3 should lead with the fund size.\n\nThanks,\nScooter");
+    const scooterAsk = await partnerEmails(SCOOTER_FROM, "scooter", INTAKE_MAILBOX, "Ready to work on the deck", "Wren, I'm ready to work on the deck. Page 3 should lead with the fund size.\n\nThanks,\nScooter");
     expect(await count("SELECT COUNT(*) AS n FROM deck_preview")).toBe(3);
     expect(sends.length, "the asker never gets silence").toBe(before + 1);
     expect(last().to).toBe("scooter@westpeek.ventures,sequoia@westpeek.ventures");
-    expect(last().headers["In-Reply-To"]).toBe(threadReference(round3.thread_token!));
-    expect(last().text).toContain("Scooter asked to work on the deck. Round 3 is already open, so we carry on in the same preview: https://os.joinwestpeek.com/api/deck/preview");
+    expect(last().subject, "under HIS email, not the round's old thread").toBe("Re: Ready to work on the deck");
+    expect(last().headers["In-Reply-To"]).toBe(scooterAsk);
+    expect(last().headers.References).toMatch(new RegExp(`^${scooterAsk} <wpt_[0-9a-f]{32}@joinwestpeek\\.com>$`));
+    expect(last().headers.References, "the answer carries the round's NEW thread, which is now the round's").toContain(threadReference((await openPreview(env, FUND))!.thread_token!));
+    expect(last().text).toContain("Scooter asked to work on the deck. It's already open, so we carry on in the same preview: https://os.joinwestpeek.com/api/deck/preview");
+    expect(last().text).toMatch(/\n\nThis is round 3, with no changes since \d{1,2} [A-Z][a-z]{2}\.\n\n/);
     expect(last().text).toContain("Scooter asked:\n\"Page 3 should lead with the fund size.\"");
     expect(await env.WP_OS_DB.prepare("SELECT preview_id, state, by_whom FROM deck_preview_change WHERE said = 'Page 3 should lead with the fund size.'").first()).toMatchObject({ preview_id: round3.id, state: "PENDING", by_whom: "Scooter" });
     expect(await count("SELECT COUNT(*) AS n FROM work_card"), "no card, no Porter, no chief of staff in between").toBe(cards);
@@ -405,10 +411,14 @@ describe("\"ready to work on the deck\" starts the round, with no model deciding
     const round4 = (await openPreview(env, FUND))!;
     expect(round4.round_no).toBe(4);
     expect(round4.slides_json).toBe((await env.WP_OS_DB.prepare("SELECT slides_json FROM deck_preview WHERE id = ?1").bind(round3.id).first<{ slides_json: string }>())!.slides_json);
-    expect(sends.length, "the handler records; the sweep sends").toBe(before);
+    expect(sends.length, "the round's email goes at once, as the answer to her email").toBe(before + 1);
+    expect(last().subject).toBe("Re: Deck");
+    expect(last().to).toBe("scooter@westpeek.ventures,sequoia@westpeek.ventures");
+    expect(last().headers["In-Reply-To"]).toBe(`<deck-start-${mailSeq}@example.com>`);
+    expect(last().headers.References).toContain(threadReference((await openPreview(env, FUND))!.thread_token!));
+    expect(last().text).toMatch(/\n\nThis is round 4, with no changes since \d{1,2} [A-Z][a-z]{2}\.\n\n/);
     await deckPreviewTick(env, { launch: fakeLaunch });
-    expect(sends.length).toBe(before + 1);
-    expect(last().subject).toBe("Our Fund I deck: preview round 4");
+    expect(sends.length, "and the sweep never sends it a second time").toBe(before + 1);
     expect(last().text).toContain("Sequoia asked for more work on our Fund I deck, so the approved deck (v3) is back in the preview: https://os.joinwestpeek.com/api/deck/preview");
     expect(last().text).not.toContain("asked:\n");
     expect(await env.WP_OS_DB.prepare("SELECT version_no FROM deck_version WHERE state = 'CURRENT'").first(), "v3 stays current until round 4 is approved").toMatchObject({ version_no: 3 });
@@ -456,5 +466,118 @@ describe("the deck process note", () => {
     await env.WP_OS_DB.prepare("INSERT INTO event_record (id, event_type, actor_type, actor_id, object_type, object_id, firm_scope, payload_json, created_at) VALUES ('evt_rem_answered', 'deck_preview.start_asked', 'firm_user', 'x', 'deck_preview', 'x', 'west-peek', '{}', '2030-01-03T00:00:00.000Z')").run();
     expect(await sendProcessReminder(env, new Date("2030-01-04T15:00:00Z"))).toMatchObject({ sent: false, reason: expect.stringMatching(/^already answered/) });
     expect(sends.length).toBe(before + 1);
+  });
+});
+
+/*
+ * 24 NOV 2026, HER WORDS: "the last email is from scooter and nothing from preston". Scooter emailed
+ * os@ "Fund I deck" / "Hey Preston! Ready to work on the deck." and Preston re-sent the link on the
+ * 26 Oct thread, so the newest thread in both inboxes had no answer. Preston answers THAT email now;
+ * the round is its id, never a thread.
+ */
+describe("Preston answers the partner's own email, and the round is its id, never a thread", () => {
+  const last = () => sends[sends.length - 1]!;
+  const requests = () => count("SELECT COUNT(*) AS n FROM deck_preview_change WHERE kind = 'REQUEST'");
+
+  it("replays 23 Nov: the answer is under Scooter's email, to both, and \"Hey Preston!\" is never a change", async () => {
+    const { openPreview } = await import("../src/worker/services/deckPreview");
+    const round = (await openPreview(env, FUND))!;
+    const oldThread = round.thread_token!;
+    const rounds = await count("SELECT COUNT(*) AS n FROM deck_preview");
+    const asked = await requests();
+    const before = sends.length;
+    const id = await partnerEmails(SCOOTER_FROM, "scooter", INTAKE_MAILBOX, "Fund I deck", "Hey Preston! Ready to work on the deck.", false, { messageId: "<CAscooter-fund-i@mail.gmail.com>" });
+    expect(sends.length).toBe(before + 1);
+    const answer = last();
+    expect(answer.subject).toBe("Re: Fund I deck");
+    expect(answer.to).toBe("scooter@westpeek.ventures,sequoia@westpeek.ventures");
+    expect(answer.headers["In-Reply-To"]).toBe(id);
+    expect(answer.headers["In-Reply-To"]).not.toBe(threadReference(oldThread));
+    expect(answer.text).toContain(`This is round ${round.round_no}, with no changes since `);
+    expect(await count("SELECT COUNT(*) AS n FROM deck_preview"), "one round").toBe(rounds);
+    expect(await requests(), "the greeting is not a change request").toBe(asked);
+    const now = (await openPreview(env, FUND))!;
+    expect(now.id).toBe(round.id);
+    expect(now.thread_token, "Scooter's thread is now the round's").not.toBe(oldThread);
+    expect(answer.headers.References).toContain(threadReference(now.thread_token!));
+  });
+
+  it("\"approved\" on the OLD thread after the new answer counts for the same round exactly once, and is answered on the new thread", async () => {
+    const { steerFromReply } = await import("../src/worker/services/emailThread");
+    const { deckPreviewTick, openPreview } = await import("../src/worker/services/deckPreview");
+    const round = (await openPreview(env, FUND))!;
+    const oldThread = (await env.WP_OS_DB.prepare("SELECT token FROM email_thread WHERE object_id = ?1 AND subject = 'Re: Deck' ORDER BY created_at LIMIT 1").bind(round.id).first<{ token: string }>())!.token;
+    const newThread = round.thread_token!;
+    const versions = await count("SELECT COUNT(*) AS n FROM deck_version");
+    for (const [subject, token] of [["Re: Deck", oldThread], ["Re: Fund I deck", newThread], ["Re: Deck", oldThread]] as const) {
+      const steer = await steerFromReply(env, {
+        fromHeader: SEQUOIA_FROM, authenticationResults: GOOD_AUTH, subject,
+        raw: reply("approved"), inReplyTo: threadReference(token), references: null, emlKey: null,
+      });
+      expect(steer.steered, steer.reason).toBe(true);
+      expect(steer.thread?.object_id, "every thread of the round is the round").toBe(round.id);
+    }
+    const before = sends.length;
+    await deckPreviewTick(env, { launch: fakeLaunch });
+    expect(await count(`SELECT COUNT(*) AS n FROM deck_preview_change WHERE preview_id = '${round.id}' AND kind = 'APPROVAL' AND by_whom = 'Sequoia' AND state = 'DONE' AND applied LIKE 'approved;%'`), "counted once").toBe(1);
+    expect(await count(`SELECT COUNT(*) AS n FROM deck_preview_change WHERE preview_id = '${round.id}' AND kind = 'APPROVAL' AND applied = 'already approved; counted once'`)).toBe(2);
+    expect(await count("SELECT COUNT(*) AS n FROM deck_version"), "one partner's approval, however many threads, makes no PDF").toBe(versions);
+    const mine = sends.slice(before);
+    expect(mine.length).toBeGreaterThan(0);
+    for (const m of mine) {
+      expect(m.headers["In-Reply-To"], "answered on the round's newest thread").toBe(threadReference(newThread));
+      expect(m.subject, "under the subject that thread already has").toBe("Re: Fund I deck");
+    }
+    expect(mine[0]!.text).toContain("Sequoia approved the deck as it is in the preview");
+  });
+
+  it("no usable Message-ID (missing or malformed): the answer falls back to the round's thread, never an error, never dropped", async () => {
+    const { openPreview } = await import("../src/worker/services/deckPreview");
+    const round = (await openPreview(env, FUND))!;
+    for (const messageId of [null, "not a message id", "<two@ids> <three@ids>"]) {
+      const before = sends.length;
+      await partnerEmails(SCOOTER_FROM, "scooter", INTAKE_MAILBOX, "Deck", "Ready to work on the deck.", false, { messageId });
+      expect(sends.length, String(messageId)).toBe(before + 1);
+      expect(last().headers["In-Reply-To"], String(messageId)).toBe(threadReference(round.thread_token!));
+      expect(last().subject).toBe("Re: Fund I deck");
+      expect(last().to).toBe("scooter@westpeek.ventures,sequoia@westpeek.ventures");
+      expect((await openPreview(env, FUND))!.thread_token, "a fallback keeps the round's thread").toBe(round.thread_token);
+    }
+  });
+
+  it("both partners write \"ready\" in the same minute: one round, one threaded answer to each, never two rounds", async () => {
+    const { deckPreviewTick, openPreview, recordReply } = await import("../src/worker/services/deckPreview");
+    // Finish the open round, so the next "ready" starts a new one.
+    const open = (await openPreview(env, FUND))!;
+    await recordReply(env, open.id, "approved", "scooter@westpeek.ventures");
+    await deckPreviewTick(env, { launch: fakeLaunch });
+    expect(await openPreview(env, FUND)).toBeNull();
+    const rounds = await count("SELECT COUNT(*) AS n FROM deck_preview");
+    const before = sends.length;
+    const LONG = "Fund I deck, let's get the cover, the team page, the terms and the track record pages right";
+    expect(`Re: ${LONG}`.length, "longer than our own subjects may be").toBeGreaterThan(90);
+    await Promise.all([
+      partnerEmails(SCOOTER_FROM, "scooter", INTAKE_MAILBOX, LONG, "Ready to work on the deck.", false, { messageId: "<both-scooter@mail.example>" }),
+      partnerEmails(SEQUOIA_FROM, "sequoia", INTAKE_MAILBOX, "Fund I deck", "Ready to work on the deck.", false, { messageId: "<both-sequoia@mail.example>" }),
+    ]);
+    expect(await count("SELECT COUNT(*) AS n FROM deck_preview"), "one round").toBe(rounds + 1);
+    const mine = sends.slice(before);
+    expect(mine, "one answer to each partner's email").toHaveLength(2);
+    expect(mine.map((m) => m.headers["In-Reply-To"]).sort()).toEqual(["<both-scooter@mail.example>", "<both-sequoia@mail.example>"]);
+    for (const m of mine) {
+      expect(m.to).toBe("scooter@westpeek.ventures,sequoia@westpeek.ventures");
+      expect(m.subject).toBe(m.headers["In-Reply-To"] === "<both-scooter@mail.example>" ? `Re: ${LONG}` : "Re: Fund I deck");
+    }
+    await deckPreviewTick(env, { launch: fakeLaunch });
+    expect(sends.length, "the sweep sends nothing more").toBe(before + 2);
+  });
+
+  it("the start's leftover words keep a real ask and drop greetings, sign-offs and the signature block", async () => {
+    const { fundDeckStart } = await import("../src/shared/deck/start");
+    const words = (body: string) => fundDeckStart({ subject: "Fund I deck", body, hasAttachment: false })!.words;
+    for (const body of ["Hey Preston! Ready to work on the deck.", "Hey Preston!\nReady to work on the deck.", "Hey Preston! Ready to work on the deck. Thanks!", "Hey Preston! Ready to work on the deck.\n\nScooter Taylor\nWest Peek Ventures"]) {
+      expect(words(body), body).toBe("");
+    }
+    expect(words("Hey Preston! Ready to work on the deck. Page 3 needs the 2.5x line. Thanks!")).toBe("Page 3 needs the 2.5x line.");
   });
 });

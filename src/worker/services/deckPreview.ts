@@ -15,6 +15,9 @@ import { PREVIEW_URL, checkSlides, isApproval, renderPreviewPage, typedFigures }
 import { PARTNERS, partnerByEmail } from "../../shared/registry/partners";
 import { chiefOfStaffFor } from "../../shared/work/chiefOfStaff";
 import { OUTBOUND_ATTACHMENTS_MAX_BYTES, attachmentsBytes, type EmailAttachment } from "../effects/emailTransport";
+import { messageReference, replySubject } from "../../shared/email/thread";
+import { wallClockIn } from "../../shared/time/zonedClock";
+import { shortDate } from "../../shared/documents/shelf";
 
 /**
  * THE LP DECK IS FINISHED AS A PREVIEW, AND A PDF ONLY ON "APPROVED" (owner's design, 26 Oct 2026).
@@ -31,7 +34,11 @@ import { OUTBOUND_ATTACHMENTS_MAX_BYTES, attachmentsBytes, type EmailAttachment 
  *
  * THE WORKFLOW AROUND IT (owner, 11 Nov 2026):
  *   0. A partner emails the OS (or writes to their chief of staff) that they are ready to work on the
- *      deck → `startDeckFromEmail` starts the round, with no model deciding it (shared/deck/start.ts).
+ *      deck → `startDeckFromEmail` starts the round, with no model deciding it (shared/deck/start.ts),
+ *      and Preston answers THAT email at once, to both partners, under it in their inboxes (24 Nov
+ *      2026: "the last email is from scooter and nothing from preston"). The round is the round id,
+ *      never a thread: a reply on any of the round's threads counts for it, and Preston's later
+ *      replies go on the newest one.
  *   4. "We should both say 'approved' before a new pdf is printed": the first partner's "approved" is
  *      recorded and answered; the PDF is made when the other one approves too. Any change applied to
  *      the preview in between (a request, a records move) clears the approvals (`clearApprovals`).
@@ -89,6 +96,54 @@ const SIGN_OFF = "Preston\nWest Peek OS";
 const partnerNamed = (firstName: string | null | undefined) => PARTNERS.find((x) => x.firstName === firstName) ?? null;
 /** The one sentence on how a round ends, used by every email that asks for a reply. */
 const BOTH_APPROVE = "When both of you have replied \"approved\", I'll make the final PDF.";
+
+/** A partner's own email that Preston answers: its Message-ID, its References and its subject. */
+export interface PartnerMessage {
+  messageId: string | null;
+  references?: string | null;
+  subject: string;
+}
+
+/** What answering it needs, or null (no Message-ID, a malformed one, no subject): then the round's own thread. */
+function answerable(m: PartnerMessage | null | undefined): { subject: string; answering: { messageId: string; references: string | null } } | null {
+  const subject = replySubject(m?.subject);
+  if (!m || !subject || !messageReference(m.messageId)) return null;
+  return { subject, answering: { messageId: m.messageId!, references: m.references ?? null } };
+}
+
+/** "26 Oct", on the partners' clock (Central). */
+function centralDay(iso: string): string {
+  const w = wallClockIn("America/Chicago", new Date(iso));
+  return shortDate(`${w.year}-${String(w.month).padStart(2, "0")}-${String(w.day).padStart(2, "0")}`);
+}
+
+/** The process note and its reminder are about the deck but carry no link to it. */
+const LINK_EMAILS = "object_type = 'deck_preview' AND provider_message_id IS NOT NULL AND subject NOT IN (?1, ?2)";
+
+/** When the partners were last sent a deck email that reached them: for one round, or for any round. */
+async function lastLinkAt(env: Env, previewId: string | null): Promise<string | null> {
+  const row = await env.WP_OS_DB.prepare(`SELECT MAX(created_at) AS at FROM email_thread WHERE ${LINK_EMAILS}${previewId ? " AND object_id = ?3" : ""}`)
+    .bind(PROCESS_NOTE_SUBJECT, `Re: ${PROCESS_NOTE_SUBJECT}`, ...(previewId ? [previewId] : [])).first<{ at: string | null }>();
+  return row?.at ?? null;
+}
+
+/**
+ * THE ONE LINE ON WHERE WE ARE (24 Nov 2026): which round it is, and what changed since the last
+ * deck email the partners got ("This is round 1, with no changes since 26 Oct.").
+ */
+export function roundLine(roundNo: number, changed: readonly string[], since: string | null): string {
+  const when = since ? ` since ${centralDay(since)}` : "";
+  const items = changed.map((c) => c.trim().replace(/[.\s]+$/, "")).filter(Boolean);
+  return items.length ? `This is round ${roundNo}. Changed${when}: ${items.join("; ")}.` : `This is round ${roundNo}, with no changes${when || " yet"}.`;
+}
+
+/** What was applied to an open round after its last email, which nobody has been told yet. */
+async function changedSince(env: Env, previewId: string, since: string | null): Promise<string[]> {
+  if (!since) return [];
+  const rows = (await env.WP_OS_DB.prepare("SELECT kind, applied FROM deck_preview_change WHERE preview_id = ?1 AND state = 'DONE' AND kind IN ('REQUEST', 'RECORDS') AND replied_at IS NULL AND updated_at > ?2 ORDER BY created_at")
+    .bind(previewId, since).all<{ kind: string; applied: string | null }>()).results ?? [];
+  return rows.map((r) => (r.kind === "REQUEST" ? (/^Changed: ([\s\S]*?)(?: Could not: [\s\S]*)?$/.exec(r.applied ?? "")?.[1] ?? "") : (r.applied ?? ""))).filter(Boolean);
+}
 
 /** The final PDF a FINAL round made: its version number and its link in the OS. */
 async function approvedVersion(env: Env, p: PreviewRow | null): Promise<{ versionNo: number; link: string | null } | null> {
@@ -185,10 +240,17 @@ export async function startOrUpdatePreview(
   const last = await latestPreview(env, fund.id);
   const slides = input.slides ?? (last ? (JSON.parse(last.slides_json) as Slide[]) : [...DECK_SLIDES]);
   const id = `dpv_${crypto.randomUUID()}`;
-  await env.WP_OS_DB.prepare(
-    `INSERT INTO deck_preview (id, fund_id, round_no, state, slides_json, what_changed_json, reason, hold, kept_note, policy_versions_json)
-     VALUES (?1, ?2, ?3, 'OPEN', ?4, ?5, ?6, ?7, ?8, ?9)`,
-  ).bind(id, fund.id, (last?.round_no ?? 0) + 1, JSON.stringify(slides), JSON.stringify(input.changes), input.reason, input.hold ? 1 : 0, input.kept ?? last?.kept_note ?? null, JSON.stringify(snapshot ?? {})).run();
+  try {
+    await env.WP_OS_DB.prepare(
+      `INSERT INTO deck_preview (id, fund_id, round_no, state, slides_json, what_changed_json, reason, hold, kept_note, policy_versions_json)
+       VALUES (?1, ?2, ?3, 'OPEN', ?4, ?5, ?6, ?7, ?8, ?9)`,
+    ).bind(id, fund.id, (last?.round_no ?? 0) + 1, JSON.stringify(slides), JSON.stringify(input.changes), input.reason, input.hold ? 1 : 0, input.kept ?? last?.kept_note ?? null, JSON.stringify(snapshot ?? {})).run();
+  } catch (err) {
+    // Two starts in the same moment (both partners write "ready" at once): the one-open index lets one
+    // round in, and this one folds into it rather than failing the second partner's email.
+    if (/UNIQUE/i.test(err instanceof Error ? err.message : String(err)) && (await openPreview(env, fund.id))) return startOrUpdatePreview(env, input);
+    throw err;
+  }
   await addChange(env, id, { kind: "BUILT", by: input.askedBy ?? DECK_OWNER, applied: input.reason });
   await appendEvent(env, { eventType: "deck_preview.built", actorType: "system", actorId: "aie_preston", objectType: "deck_preview", objectId: id, firmScope: "west-peek", payload: { round_no: (last?.round_no ?? 0) + 1, hold: !!input.hold, reason: input.reason } });
   return { preview: (await env.WP_OS_DB.prepare("SELECT * FROM deck_preview WHERE id = ?1").bind(id).first<PreviewRow>())!, created: true };
@@ -223,13 +285,7 @@ export async function previewIfRecordsMoved(env: Env): Promise<{ moved: boolean;
   if (!created) {
     await addChange(env, preview.id, { kind: "RECORDS", by: DECK_OWNER, applied: line });
     const again = approveAgain(await clearApprovals(env, preview.id));
-    if (preview.sent_at && preview.thread_token) {
-      await sendPartnersLetter(env, {
-        to: previewRecipients(), employee: DECK_OWNER, subject: `Re: ${roundSubject(preview)}`, replyOnThread: preview.thread_token,
-        text: `Hi Scooter and Sequoia,\n\nThe fund records changed, so I updated the same preview: ${PREVIEW_URL}\n\n${line}${again ? `\n\n${again}` : ""}\n\n${SIGN_OFF}`,
-        objectType: "deck_preview", objectId: preview.id, firmScope: preview.firm_scope,
-      });
-    }
+    if (preview.sent_at) await replyOnThread(env, preview, `The fund records changed, so I updated the same preview: ${PREVIEW_URL}\n\n${line}${again ? `\n\n${again}` : ""}`);
   }
   return { moved: true, reason: line };
 }
@@ -248,6 +304,8 @@ export interface RoundContext {
   approvedVersionNo?: number | null;
   /** Requests already waiting on this round when its email goes: the partner's own words. */
   asks?: ReadonlyArray<{ by: string; said: string }>;
+  /** When the partners last got a deck email (any round), for the line on what changed since. */
+  lastLinkAt?: string | null;
 }
 
 /**
@@ -284,8 +342,8 @@ export function roundEmailText(p: Pick<PreviewRow, "round_no" | "what_changed_js
       v
         ? `${ctx.startedBy} asked for more work on our Fund I deck, so the approved deck (v${v}) is back in the preview: ${PREVIEW_URL}`
         : `${ctx.startedBy} asked to work on our Fund I deck, so the latest deck is in the preview: ${PREVIEW_URL}`,
+      `${roundLine(p.round_no, more, ctx.lastLinkAt ?? null)}${kept}`,
       asked,
-      more.length || kept ? `${more.length ? `Also in this preview:\n${more.map((c) => `- ${c}`).join("\n")}` : ""}${kept}`.trim() : "",
       `${v ? `v${v} stays the current deck until this round is approved. ` : ""}Reply here with any changes in plain words, or with "approved". ${v ? BOTH_APPROVE.replace("the final PDF", "the next final PDF") : BOTH_APPROVE}`,
       SIGN_OFF,
     ].filter(Boolean).join("\n\n");
@@ -308,14 +366,19 @@ async function roundContext(env: Env, p: PreviewRow): Promise<RoundContext> {
     ? await env.WP_OS_DB.prepare("SELECT * FROM deck_preview WHERE fund_id = ?1 AND round_no < ?2 ORDER BY round_no DESC LIMIT 1").bind(p.fund_id, p.round_no).first<PreviewRow>()
     : null;
   const asks = (await env.WP_OS_DB.prepare("SELECT by_whom, said FROM deck_preview_change WHERE preview_id = ?1 AND kind = 'REQUEST' AND state = 'PENDING' ORDER BY created_at").bind(p.id).all<{ by_whom: string | null; said: string | null }>()).results ?? [];
-  return { startedBy, approvedVersionNo: (await approvedVersion(env, before))?.versionNo ?? null, asks: asks.map((a) => ({ by: a.by_whom ?? "A partner", said: a.said ?? "" })) };
+  return {
+    startedBy, approvedVersionNo: (await approvedVersion(env, before))?.versionNo ?? null, asks: asks.map((a) => ({ by: a.by_whom ?? "A partner", said: a.said ?? "" })),
+    lastLinkAt: startedBy ? await lastLinkAt(env, null) : null,
+  };
 }
 
 /**
  * ONE EMAIL PER ROUND. Sends only an OPEN, un-held round that has not been sent; the row records the
- * send and the thread, and a second call finds `sent_at` set and sends nothing.
+ * send and the thread, and a second call finds `sent_at` set and sends nothing. Given the partner's
+ * email that asked for the round, it goes as the answer to that email ("Re: <their subject>").
  */
-export async function sendRound(env: Env, previewId: string): Promise<{ sent: boolean; reason: string }> {
+export const ROUND_BEING_SENT = "another pass is sending it";
+export async function sendRound(env: Env, previewId: string, opts: { answering?: PartnerMessage | null } = {}): Promise<{ sent: boolean; reason: string }> {
   const p = await env.WP_OS_DB.prepare("SELECT * FROM deck_preview WHERE id = ?1").bind(previewId).first<PreviewRow>();
   if (!p) return { sent: false, reason: "no such preview" };
   if (p.state !== "OPEN") return { sent: false, reason: `the preview is ${p.state}` };
@@ -323,10 +386,11 @@ export async function sendRound(env: Env, previewId: string): Promise<{ sent: bo
   if (p.sent_at) return { sent: false, reason: `this round was already emailed on ${p.sent_at.slice(0, 10)}; one email per round` };
   // CLAIM FIRST, so two sweeps a second apart cannot both send.
   const claimed = await env.WP_OS_DB.prepare("UPDATE deck_preview SET sent_at = ?2, updated_at = ?2 WHERE id = ?1 AND sent_at IS NULL AND hold = 0 AND state = 'OPEN'").bind(p.id, nowIso()).run();
-  if ((claimed.meta?.changes ?? 0) === 0) return { sent: false, reason: "another pass is sending it" };
+  if ((claimed.meta?.changes ?? 0) === 0) return { sent: false, reason: ROUND_BEING_SENT };
+  const ans = answerable(opts.answering);
   const out = await sendPartnersLetter(env, {
-    to: previewRecipients(), employee: DECK_OWNER, subject: roundSubject(p), text: roundEmailText(p, await roundContext(env, p)),
-    objectType: "deck_preview", objectId: p.id, firmScope: p.firm_scope,
+    to: previewRecipients(), employee: DECK_OWNER, subject: ans?.subject ?? roundSubject(p), text: roundEmailText(p, await roundContext(env, p)),
+    objectType: "deck_preview", objectId: p.id, firmScope: p.firm_scope, ...(ans ? { answering: ans.answering } : {}),
   });
   if (!out.sent) {
     await env.WP_OS_DB.prepare("UPDATE deck_preview SET sent_at = NULL WHERE id = ?1").bind(p.id).run();
@@ -394,13 +458,24 @@ const defaultEditor = (env: Env): DeckEditor => async ({ slides, said, assets })
   }
 };
 
-async function replyOnThread(env: Env, p: PreviewRow, body: string, attachments?: readonly EmailAttachment[]): Promise<boolean> {
-  if (!p.thread_token) return false;
+/**
+ * Preston's reply to both partners about a round: as the answer to a partner's own email when one is
+ * given (and that thread becomes the round's), otherwise on the round's newest thread, under the
+ * subject that thread already has, so it threads in every client.
+ */
+async function replyOnThread(env: Env, p: PreviewRow, body: string, opts: { attachments?: readonly EmailAttachment[]; answering?: PartnerMessage | null } = {}): Promise<boolean> {
+  const ans = answerable(opts.answering);
+  if (!ans && !p.thread_token) return false;
+  const was = ans ? null : await env.WP_OS_DB.prepare("SELECT subject FROM email_thread WHERE token = ?1").bind(p.thread_token).first<{ subject: string }>();
   const out = await sendPartnersLetter(env, {
-    to: previewRecipients(), employee: DECK_OWNER, subject: `Re: ${roundSubject(p)}`, replyOnThread: p.thread_token,
+    to: previewRecipients(), employee: DECK_OWNER, subject: ans?.subject ?? replySubject(was?.subject) ?? `Re: ${roundSubject(p)}`,
+    ...(ans ? { answering: ans.answering } : { replyOnThread: p.thread_token }),
     text: `Hi Scooter and Sequoia,\n\n${body}\n\n${SIGN_OFF}`, objectType: "deck_preview", objectId: p.id, firmScope: p.firm_scope,
-    ...(attachments?.length ? { attachments } : {}),
+    ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
   });
+  if (out.sent && ans && out.threadToken) {
+    await env.WP_OS_DB.prepare("UPDATE deck_preview SET thread_token = ?2, updated_at = ?3 WHERE id = ?1").bind(p.id, out.threadToken, nowIso()).run();
+  }
   return out.sent;
 }
 
@@ -562,11 +637,18 @@ async function roundFor(env: Env, who: string): Promise<{ preview: PreviewRow; c
  * A PARTNER SAID THEY ARE READY TO WORK ON THE DECK (owner, 11 Nov 2026; matched by
  * shared/deck/start.ts, called from the email handler — so no model call and no PDF here).
  *
- * No round open → one starts from the latest deck, and its one email goes to both partners on the
- * next sweep. A round already open and emailed → no second round: both partners get the link again
- * on that round's thread, saying who asked. Whatever else the partner wrote is their first request.
+ * No round open → one starts from the latest deck, and its one email goes to both partners AT ONCE,
+ * as the answer to the partner's own email. A round already open and emailed → no second round:
+ * both partners get the link again, again as the answer to that email, saying which round it is and
+ * what changed since the last link. Whatever else the partner wrote is their first request.
+ *
+ * ONE ROUND, AT MOST ONE ANSWER PER EMAIL. Two partners writing within the same minute: the one-open
+ * index keeps one round, the send claim lets one email go as the round's, and the other partner's
+ * email is answered with the "carry on" note. A message with no usable Message-ID (or no subject) is
+ * answered on the round's own thread instead; an answer that cannot go now is never dropped: an
+ * unsent round's email goes on the next sweep.
  */
-export async function startDeckFromEmail(env: Env, input: { partnerAddress: string; words: string }): Promise<{ outcome: "STARTED" | "JOINED_UNSENT" | "ALREADY_OPEN"; previewId: string; roundNo: number; detail: string }> {
+export async function startDeckFromEmail(env: Env, input: { partnerAddress: string; words: string; message?: PartnerMessage | null }): Promise<{ outcome: "STARTED" | "JOINED_UNSENT" | "ALREADY_OPEN"; previewId: string; roundNo: number; detail: string }> {
   const partner = partnerByEmail(input.partnerAddress);
   if (!partner) throw new Error("only a Managing Partner starts a deck round");
   const who = partner.firstName;
@@ -577,20 +659,28 @@ export async function startDeckFromEmail(env: Env, input: { partnerAddress: stri
   if (!round.created && !p.sent_at) {
     // Open but not emailed yet (held, or waiting for the sweep): the ask releases it, so both partners get the link.
     const asked = `${who} asked to work on the deck`;
-    p = (await startOrUpdatePreview(env, { reason: asked, changes: [asked] })).preview;
+    p = (await startOrUpdatePreview(env, { reason: asked, changes: (JSON.parse(p.what_changed_json) as string[]).some((c) => c.startsWith(asked)) ? [] : [asked] })).preview;
     await env.WP_OS_DB.prepare("UPDATE deck_preview SET hold = 0, updated_at = ?2 WHERE id = ?1").bind(p.id, nowIso()).run();
   }
   if (words) await recordReply(env, p.id, words, input.partnerAddress);
-  await appendEvent(env, { eventType: "deck_preview.start_asked", actorType: "firm_user", actorId: partner.firmUserId, objectType: "deck_preview", objectId: p.id, firmScope: p.firm_scope, payload: { round_no: p.round_no, created: round.created, already_emailed: !!p.sent_at, with_request: !!words } });
-  if (!round.created && p.sent_at) {
-    const replied = await replyOnThread(env, p, [
-      `${who} asked to work on the deck. Round ${p.round_no} is already open, so we carry on in the same preview: ${PREVIEW_URL}`,
-      words ? `${who} asked:\n"${words.slice(0, 1500)}"\n\nI'm working on that now and will reply here with what I changed.` : "",
-      `Reply here with any changes in plain words, or with "approved". ${BOTH_APPROVE}`,
-    ].filter(Boolean).join("\n\n"));
-    return { outcome: "ALREADY_OPEN", previewId: p.id, roundNo: p.round_no, detail: `round ${p.round_no} was already open${replied ? "; both partners were sent the link again on its thread" : "; the reminder could not be sent"}` };
+  await appendEvent(env, { eventType: "deck_preview.start_asked", actorType: "firm_user", actorId: partner.firmUserId, objectType: "deck_preview", objectId: p.id, firmScope: p.firm_scope, payload: { round_no: p.round_no, created: round.created, already_emailed: !!p.sent_at, with_request: !!words, answerable: !!answerable(input.message) } });
+  const answered = answerable(input.message) ? ` as a reply to ${who}'s email` : " on the round's own thread";
+  if (!p.sent_at) {
+    const outcome = round.created ? "STARTED" : "JOINED_UNSENT";
+    const sent = await sendRound(env, p.id, { answering: input.message });
+    if (sent.sent) return { outcome, previewId: p.id, roundNo: p.round_no, detail: `deck preview round ${p.round_no} ${round.created ? "started" : "released"} and emailed to both partners${answered}` };
+    if (sent.reason !== ROUND_BEING_SENT) return { outcome, previewId: p.id, roundNo: p.round_no, detail: `deck preview round ${p.round_no} ${round.created ? "started" : "was waiting to be emailed"}; not emailed yet (${sent.reason}), so the next sweep sends it` };
+    // The other partner's start (or the sweep) is sending this round's email this moment: this email still gets its own answer.
+    p = (await env.WP_OS_DB.prepare("SELECT * FROM deck_preview WHERE id = ?1").bind(p.id).first<PreviewRow>())!;
   }
-  return { outcome: round.created ? "STARTED" : "JOINED_UNSENT", previewId: p.id, roundNo: p.round_no, detail: `deck preview round ${p.round_no} ${round.created ? "started" : "was waiting to be emailed"}; its email goes to both partners on the next sweep` };
+  const since = (await lastLinkAt(env, p.id)) ?? p.sent_at;
+  const replied = await replyOnThread(env, p, [
+    `${who} asked to work on the deck. It's already open, so we carry on in the same preview: ${PREVIEW_URL}`,
+    roundLine(p.round_no, await changedSince(env, p.id, since), since),
+    words ? `${who} asked:\n"${words.slice(0, 1500)}"\n\nI'm working on that now and will reply here with what I changed.` : "",
+    `Reply here with any changes in plain words, or with "approved". ${BOTH_APPROVE}`,
+  ].filter(Boolean).join("\n\n"), { answering: input.message });
+  return { outcome: "ALREADY_OPEN", previewId: p.id, roundNo: p.round_no, detail: `round ${p.round_no} was already open${replied ? `; both partners were sent the link again${answered}` : "; the reminder could not be sent"}` };
 }
 
 /**
@@ -678,7 +768,7 @@ async function finishDeck(env: Env, p: PreviewRow, c: ChangeRow, approvers: read
   const file: EmailAttachment = { filename: finalPdfFilename(version.version_no), content: pdf.pdfBase64, contentType: "application/pdf" };
   // The document store takes less than an email does today, so a filed PDF always fits; the check stays for the day that limit is raised.
   const fits = attachmentsBytes([file]) <= OUTBOUND_ATTACHMENTS_MAX_BYTES;
-  let attached = fits && (await replyOnThread(env, p, made("It's attached, and the same file is in the OS."), [file]));
+  let attached = fits && (await replyOnThread(env, p, made("It's attached, and the same file is in the OS."), { attachments: [file] }));
   if (!attached) {
     await replyOnThread(env, p, made(fits ? "I couldn't attach the file to this email, so please use the link." : "The file is too big to attach to an email, so please use the link."));
     attached = false;
@@ -724,7 +814,7 @@ export function processNoteText(): string {
     "Hi Scooter and Sequoia,",
     "Here is how we work on the Fund I deck from now on, start to finish.",
     `1. Start. Either of you emails os@joinwestpeek.com, or your chief of staff, and writes: "${PROCESS_NOTE_START_WORDS}." Send it as a new email from your West Peek address, with nothing attached. "Let's work on the deck" and "Start the deck" work too.`,
-    `2. The link. I email you both one link to the latest deck: ${PREVIEW_URL}`,
+    `2. The link. I reply to your email, to you both, with one link to the latest deck: ${PREVIEW_URL}`,
     "3. Your changes. Either of you replies to that email in plain words, for example \"page 4 should say...\". I update the same link and reply with what I changed.",
     "4. The PDF. When the deck is right, each of you replies with one word: approved. I make the PDF only when both of you have said it. If the deck changes after one of you approves, I ask you both again. The PDF comes attached, with a link to the same file in the OS.",
     `5. More work later. Reply to the PDF email with your change, or send "${PROCESS_NOTE_START_WORDS}" again. The approved deck goes back into the link and we carry on from step 2.`,
@@ -764,7 +854,7 @@ export function processReminderText(): string {
   return [
     "Hi Scooter and Sequoia,",
     `A quick reminder of how we start on the Fund I deck. When you're ready, either of you sends a new email from your West Peek address to os@joinwestpeek.com that says "${PROCESS_NOTE_START_WORDS}." "Let's work on the deck" and "Start the deck" work too. A reply to this email won't start it; it has to be a new email.`,
-    "I then email you both the link to the latest deck. You reply to that email with any changes in plain words, and when it's right, each of you replies \"approved\" and I send the PDF.",
+    "I then reply to your email, to you both, with the link to the latest deck. You reply to my email with any changes in plain words, and when it's right, each of you replies \"approved\" and I send the PDF.",
     "Nothing is needed until you're ready.",
     SIGN_OFF,
   ].join("\n\n");
