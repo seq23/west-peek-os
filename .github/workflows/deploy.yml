@@ -52,9 +52,11 @@ jobs:
     name: Deploy to production
     # A `workflow_run` fires on failure too. Deploying a red main is the exact
     # accident this is meant to prevent, so the gate is explicit.
+    # A nightly CI run (schedule, 27 Nov 2026) re-tests a commit that already shipped: it never deploys.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event != 'schedule')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
