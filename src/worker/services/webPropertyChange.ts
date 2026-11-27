@@ -963,7 +963,12 @@ export async function parkPhase(
         }
       : null,
     pre_approved: row.pre_approved_phrase,
-    request: row.request_text ?? row.ask,
+    /*
+     * A PLAN WRITTEN AGAIN CARRIES HIS REPLIES (27 Nov 2026, wc_9f7312e4, #605). A plan only ever read the request; his
+     * replies rode on `plan.answers`, which a PLAN job does not have. When a reply came while the plan was being written,
+     * the plan is written again (`applyPlan`), and this is where it reads what he said since.
+     */
+    request: phase === "PLAN" && list(row.answers_json).length ? `${row.request_text ?? row.ask ?? ""}\n\n${HIS_REPLIES_SINCE}\n${list(row.answers_json).map((a, i) => `--- reply ${i + 1} ---\n${a}`).join("\n")}` : (row.request_text ?? row.ask),
     attachments: (await attachmentsFor(env, card.id)).map((a) => ({ id: a.id, filename: a.filename, media_type: a.media_type, bytes: a.bytes, path: `/api/work-cards/${card.id}/attachments/${a.id}` })),
     pr: row.pr_url ? { url: row.pr_url, number: row.pr_number, branch: row.branch, check_state: row.check_state, check_green_at: row.check_green_at, preview_url: row.preview_url, land_approved_at: row.land_approved_at, forced_by: row.forced_by, preview_emailed_at: row.preview_emailed_at ?? null, publish_approved_at: row.publish_approved_at ?? null } : null,
     // 0240: a materials check asked for by her reply or the button, and what the last build used.
@@ -1887,7 +1892,7 @@ export async function applyReport(
   }
 
   if (report.status === "unchanged") return applyUnchanged(env, card, row, report);
-  if (report.phase === "PLAN") return applyPlan(env, card, row, report);
+  if (report.phase === "PLAN") return applyPlan(env, card, row, report, run.created_at);
   /*
    * A REBUILD THAT MOVED NOTHING IS NOT A PREVIEW (0244, 28 Sep 2026). Scooter wrote "I don't know
    * if people know they can scroll on the flyers"; the Mac's BUILD found the branch already had
@@ -2165,9 +2170,34 @@ async function applyUnchanged(env: Env, card: WebPropertyChangeCard, row: WebPro
   return { finished: false, blocked: true, progressed: false, detail: `nothing new in the materials; waiting on the same preview. ${why}` };
 }
 
-async function applyPlan(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, report: LocalJobReport): Promise<RunOutcome> {
+async function applyPlan(env: Env, card: WebPropertyChangeCard, row: WebPropertyChangeRow, report: LocalJobReport, parkedAt: string): Promise<RunOutcome> {
   if (!report.document) {
     return { finished: false, blocked: false, progressed: false, detail: "PLAN came back without a plan document" };
+  }
+  /*
+   * A REPLY WRITTEN WHILE THE PLAN WAS BEING WRITTEN IS PLANNED IN, NEVER SENT PAST (27 Nov 2026, wc_9f7312e4, #605).
+   * Scooter's correction of the homepage top arrived at 22:18:08; the plan, parked at 22:13 from his first email,
+   * reported at 22:18:52. It was approved by the request and mailed to him as "Going ahead" with the top he had just
+   * corrected, its own recommendations were taken as his answers, and BUILD started from it; his reply was read only
+   * afterwards, as one more answer beside a plan that contradicted it. His notes are read only once a plan is
+   * approved, so a note still unread here, written after this PLAN was parked, is words this plan never saw. The plan
+   * is not filed, nothing is mailed or approved from it, and it is written again with his words (the PLAN job's
+   * request carries every reply so far). Bounded by his replies: each is taken up once.
+   */
+  const unseen = await notesSince(env, card, parkedAt);
+  if (unseen.length) {
+    const words = unseen.map((n) => stripLateThreadPrefix(n.body).text.trim()).filter(Boolean);
+    for (const n of unseen) await env.WP_OS_DB.prepare("UPDATE work_card_note SET acknowledged_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), response = ?2 WHERE id = ?1 AND acknowledged_at IS NULL").bind(n.id, REPLANNED_WITH_REPLY).run();
+    const answers = [...list(row.answers_json), ...words.map((w) => w.slice(0, PARTNER_ANSWER_MAX))];
+    await update(env, card.id, { answers_json: JSON.stringify(answers) });
+    // Not a spent attempt: the plan came back fine, it was only overtaken (the shape of `rebuildForKeptWords`).
+    await env.WP_OS_DB.prepare("UPDATE work_card SET work_attempts = MAX(COALESCE(work_attempts, 1) - 1, 0) WHERE id = ?1").bind(card.id).run();
+    const who = (card.requested_by_email ? partnerByEmail(card.requested_by_email)?.firstName : null) ?? "The partner";
+    await appendFinding(env, card.id, `The plan came back, but ${who} wrote ${unseen.length === 1 ? "a reply" : `${unseen.length} replies`} while it was being written ("${words.join(" / ").slice(0, 200)}"). Nothing was mailed, approved or built from the plan that missed ${unseen.length === 1 ? "it" : "them"}; it is being written again with ${unseen.length === 1 ? "it" : "them"}.`);
+    const rules = await rulesFor(env, WEB_PROPERTY_CHANGE_KIND);
+    const parked = await parkPhase(env, card, { ...row, answers_json: JSON.stringify(answers) }, "PLAN", rules);
+    if (!parked.parked) return { finished: false, blocked: false, progressed: false, detail: parked.reason };
+    return { finished: false, blocked: false, progressed: true, detail: `A reply arrived while the plan was being written; PLAN queued again with it (${phaseModel(rules, "PLAN")}).` };
   }
   /*
    * THE PLAN LIVES ON THE CARD, NOT IN DOCUMENTS (0231, Addendum 4.3, 22 Sep 2026). Her words:
@@ -2532,6 +2562,24 @@ async function approveAtFiling(env: Env, card: WebPropertyChangeCard, row: WebPr
  */
 export const KEPT_FOR_NEXT_BUILD = "Kept for the next build: the build running now started before you wrote this. Your changes are built next, and the new preview carries them.";
 
+/** How a reply the plan never saw is acknowledged: it is planned in (see `applyPlan`). */
+export const REPLANNED_WITH_REPLY = "Planned in: the plan being written started before you wrote this, so it is being written again with your words. Nothing was sent or built from the one that missed them.";
+
+/** The heading the PLAN job's request puts over his replies, when a plan is written again. */
+export const HIS_REPLIES_SINCE = "HIS REPLIES SINCE THIS REQUEST, oldest first. Where a reply changes or corrects the request, the reply wins; plan from both:";
+
+/** The requester's unread notes written after `since` (the plan never saw them). Another partner's note is not his steer. */
+async function notesSince(env: Env, card: WebPropertyChangeCard, since: string): Promise<Array<{ id: string; body: string }>> {
+  const requester = card.requested_by_email ? partnerByEmail(card.requested_by_email) : null;
+  const rows =
+    (
+      await env.WP_OS_DB.prepare("SELECT id, author_id, body FROM work_card_note WHERE work_card_id = ?1 AND acknowledged_at IS NULL AND created_at > ?2 ORDER BY created_at ASC")
+        .bind(card.id, since)
+        .all<{ id: string; author_id: string; body: string }>()
+    ).results ?? [];
+  return rows.filter((n) => (!requester || n.author_id === requester.firmUserId) && !n.body.startsWith("You asked what to do.") && !isOnlyACc(n.body));
+}
+
 /** The requester's words kept while a run was current, oldest first, and a way to mark them taken up. */
 async function keptForNextBuild(env: Env, cardId: string): Promise<{ words: string | null; take: (response: string) => Promise<void> }> {
   const kept = (
@@ -2574,6 +2622,14 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
   //     preview is read for its intent by the preview branch itself (once, not twice).
   const answer = answerSince(card, since);
   const atPreview = row.phase === "BUILD" && row.check_state === "GREEN" && needsPreview(row) && !row.land_approved_at && !row.forced_by;
+  /*
+   * THE FIRST BUILD IS ON THE MAC (27 Nov 2026, wc_9f7312e4, #605). Scooter's change at 22:38 ("a Give and Take ask
+   * adds nobody to the network list; leave the privacy page alone") arrived while the first BUILD was claimed. It was
+   * "carried into the build" as an answer on the row, which a claimed job never reads again: that build would have
+   * mailed a preview without it. Changes said while any BUILD is on the Mac are kept, the same as at the preview, and
+   * the finished build rebuilds for them before any preview or landing (`rebuildForKeptWords`).
+   */
+  const buildOnMac = !atPreview && row.phase === "BUILD" && !!row.current_run_id && (await readRun(env, row.current_run_id))?.status === "CLAIMED";
   const reading = answer ? (await readReplyIntent(env, { cardId: card.id, firmScope: card.firm_scope, text: answer }, deps.readIntent)).reading : null;
   let rebuildWith: string | null = null;
   if (answer && (!requester || !card.block_answered_by || card.block_answered_by === requester.firmUserId) && reading?.kind === "REFUSED") {
@@ -2677,13 +2733,18 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
     }
     if (intent?.kind === "QUESTION" || intent?.question) {
       const answered = await answerMidFlowQuestion(env, card, intent.question ?? body, deps.answerQuestion);
+      if (buildOnMac && intent.changes) {
+        // Answered by email just now; his changes wait for the build on the Mac, never vanish beside it.
+        await ack(KEPT_FOR_NEXT_BUILD);
+        continue;
+      }
       await ack(`Answered by email: ${answered.slice(0, 200)}${intent.changes ? " Your instructions are carried into the build." : " The work carries on with the recommendations."}`);
       if (intent.changes) await update(env, card.id, { answers_json: JSON.stringify([...list(row.answers_json), intent.changes.slice(0, PARTNER_ANSWER_MAX)]) });
       if (atPreview && intent.changes) rebuildWith = joinWords(rebuildWith, intent.changes);
       continue;
     }
     const carried = intent?.changes ?? body;
-    if (atPreview && intent && intent.changes && row.current_run_id) {
+    if (((atPreview && row.current_run_id) || buildOnMac) && intent && intent.changes) {
       // A build is on the Mac: a rebuild cannot be queued now, so his words wait for it, never vanish.
       await ack(KEPT_FOR_NEXT_BUILD);
       continue;
@@ -2706,6 +2767,13 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
     if (kept.words) {
       await kept.take("Rebuilding the preview with your changes.");
       rebuildWith = joinWords(kept.words, rebuildWith);
+    }
+  } else if (!held && row.phase === "BUILD" && !row.current_run_id && !atPreview) {
+    // A first build that ended without a preview (failed, stopped): the BUILD parked next carries his kept words as answers.
+    const kept = await keptForNextBuild(env, card.id);
+    if (kept.words) {
+      await kept.take("Carried into the build as your answer.");
+      await update(env, card.id, { answers_json: JSON.stringify([...list(((await readWebPropertyChange(env, card.id)) ?? row).answers_json), kept.words.slice(0, PARTNER_ANSWER_MAX)]) });
     }
   }
   return { held, rebuildWith };
@@ -2946,6 +3014,11 @@ async function applyBuild(env: Env, card: WebPropertyChangeCard, row: WebPropert
     return { finished: false, blocked: true, progressed: false, detail: why };
   }
   if (isOn(rules.land_on_green)) {
+    // Words he said while this build ran are built before anything lands (#605), never landed past.
+    if (!fresh.land_approved_at && !fresh.forced_by) {
+      const again = await rebuildForKeptWords(env, card, fresh, rules);
+      if (again) return again;
+    }
     const parked = await parkPhase(env, card, fresh, "LAND", rules);
     if (!parked.parked) return { finished: false, blocked: false, progressed: false, detail: `green, but LAND could not be queued: ${parked.reason}` };
     return { finished: false, blocked: false, progressed: true, detail: `PR ${report.pr_url} is green; landing is queued for the Mac (${fresh.publish_approved_at ? "published with the new materials, as she asked — no further preview" : "land on green is on"}).` };

@@ -16,7 +16,7 @@ import { workCard } from "../src/worker/services/employeeWork";
 import { sweepIdentity } from "../src/worker/services/workSweep";
 import { preApprovalIn } from "../src/shared/work/approvalReply";
 import { readLocalJobReport, WEB_PROPERTY_CHANGE_KIND } from "../src/shared/work/localJobs";
-import { KEPT_FOR_NEXT_BUILD, releaseMacAsleepBlocks, blockedEmailDetail, finishOriginalAsk, missingSecretsOf, needsPreview, parkPhase, phaseModel, readWebPropertyChange, rulesFor, runWebPropertyChangeCard, type WebPropertyChangeRow } from "../src/worker/services/webPropertyChange";
+import { KEPT_FOR_NEXT_BUILD, REPLANNED_WITH_REPLY, HIS_REPLIES_SINCE, releaseMacAsleepBlocks, blockedEmailDetail, finishOriginalAsk, missingSecretsOf, needsPreview, parkPhase, phaseModel, readWebPropertyChange, rulesFor, runWebPropertyChangeCard, type WebPropertyChangeRow } from "../src/worker/services/webPropertyChange";
 import { steerFromReply } from "../src/worker/services/emailThread";
 import { threadReference } from "../src/shared/email/thread";
 import { handleDeveloperChanges, handleDeveloperEmail } from "../src/worker/services/developerDirection";
@@ -1568,5 +1568,86 @@ describe("the reaper judges a job by its pulse and its ceiling", () => {
     const id = await parkRun(env, { seat: "claude_code", purpose: "p", prompt: "x", modelAccess: "PUBLIC_MODEL_APPROVED", runKind: "LOCAL_JOB", jobJson: "{}" });
     const out = await progressRun(env, { runId: id, deviceId: "someone-else" });
     expect(out.accepted).toBe(false);
+  });
+});
+
+/*
+ * #605 (27 Nov 2026, wc_9f7312e4): Scooter corrected the homepage top while the PLAN was on the Mac, and changed the
+ * Give and Take brief while the first BUILD was. The plan went out as "Going ahead" with the top he had corrected, and
+ * the build ran without his change: both replies sat on the row as answers no running job reads.
+ */
+describe("a reply while a job is on the Mac is built in, never sent past (27 Nov 2026, #605)", () => {
+  // Every card earlier tests left open would be swept first; these two are the only ones in play.
+  beforeAll(() => env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED', lease_until = NULL WHERE state NOT IN ('DONE', 'CANCELLED')").run());
+  const PLAN_REPORT = (document: string) => ({ phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build", done_when: ["it works on the preview"] }], document, decided: [], asks: [{ question: "Tint the six tiles?", recommended: "Yes, light tints." }], publish_ready: true, placeholders: [] });
+  const claim = async (runId: string) => env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'CLAIMED', claimed_by = 'mac-test-jobs', claimed_at = ?2, attempt_count = attempt_count + 1 WHERE id = ?1").bind(runId, new Date().toISOString()).run();
+  const goingAhead = (id: string) => env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PLAN' AND sent = 1").bind(id).first<{ n: number }>().then((r) => r!.n);
+  const previews = (id: string) => env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'PREVIEW' AND sent = 1").bind(id).first<{ n: number }>().then((r) => r!.n);
+  const threadOf = async (id: string) => (await env.WP_OS_DB.prepare("SELECT token FROM email_thread WHERE object_id = ?1 ORDER BY created_at DESC LIMIT 1").bind(id).first<{ token: string }>())!.token;
+
+  it("PLAN: his reply while the plan is on the Mac is planned in — no 'Going ahead', no BUILD from the plan that missed it; the plan written again goes ahead once, carrying it", async () => {
+    const subject = "community redesign replan";
+    const chiefId = await openAssignmentCard(env, { subject, partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: `${subject}: westpeek.ventures — package: https://drive.google.com/drive/folders/${FOLDER}replan`, limits: EMAILED_TASK_LIMITS, emlKey: null });
+    const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
+    await tickFor(id); // parks PLAN
+    const plan1 = (await liveJobFor(id))!;
+    expect(JSON.parse(plan1.job_json!).phase).toBe("PLAN");
+    await claim(plan1.id);
+    await new Promise((r) => setTimeout(r, 5));
+    await replyFrom(SCOOTER, "One correction to the homepage top: a single rotating line under the wordmark, not a tagline plus a separate line.", await threadOf(id));
+    expect((await reportRun(env, { runId: plan1.id, deviceId: "mac-test-jobs", outputText: JSON.stringify(PLAN_REPORT("# Plan\n\nHero: a tagline plus a separate line.")) })).accepted).toBe(true);
+    const out = await tickFor(id);
+    expect(out.summary).toMatch(/PLAN queued again/);
+    expect(await goingAhead(id), "no 'Going ahead' with the plan he had already corrected").toBe(0);
+    const row = (await readWebPropertyChange(env, id))!;
+    expect(row.phase).toBe("PLAN");
+    expect(row.plan_approved_at, "nothing approved from the plan that missed his reply").toBeNull();
+    expect(row.plan_filed_at, "the stale plan is not filed").toBeNull();
+    expect(JSON.parse(row.answers_json), "no recommendation taken as his answer").toEqual([expect.stringMatching(/single rotating line/)]);
+    const plan2 = (await liveJobFor(id))!;
+    expect(plan2.id).not.toBe(plan1.id);
+    const job = JSON.parse(plan2.job_json!) as LocalJobPayload;
+    expect(job.phase).toBe("PLAN");
+    expect(String(job.request), "the plan written again reads his reply beside his request").toContain(HIS_REPLIES_SINCE);
+    expect(String(job.request)).toMatch(/--- reply 1 ---\n[\s\S]*single rotating line/);
+    const note = await env.WP_OS_DB.prepare("SELECT acknowledged_at, response FROM work_card_note WHERE work_card_id = ?1 AND body LIKE '%single rotating line%'").bind(id).first<{ acknowledged_at: string | null; response: string | null }>();
+    expect(note?.acknowledged_at).toBeTruthy();
+    expect(note?.response).toBe(REPLANNED_WITH_REPLY);
+    expect(String((await card(id)).description)).toMatch(/wrote a reply while it was being written[\s\S]*Nothing was mailed, approved or built from the plan that missed it/);
+    expect(Number((await card(id)).work_attempts ?? 0), "an overtaken plan is not a spent attempt").toBeLessThanOrEqual(1);
+    // The plan written with his reply: approved by the request as before, ONE "Going ahead", BUILD carries his words.
+    await macReports(id, PLAN_REPORT("# Plan\n\nHero: one rotating line under the wordmark."));
+    expect((await tickFor(id)).summary).toMatch(/BUILD queued/);
+    expect(await goingAhead(id)).toBe(1);
+    const built = (await readWebPropertyChange(env, id))!;
+    expect(built.phase).toBe("BUILD");
+    expect(built.plan_text).toMatch(/one rotating line/);
+    const build = JSON.parse((await liveJobFor(id))!.job_json!) as { plan: { answers: string[] } };
+    expect(build.plan.answers[0]).toMatch(/single rotating line/);
+  });
+
+  it("BUILD: his change while the FIRST build is on the Mac is kept; that build rebuilds for it before any preview, and one preview carries it", async () => {
+    const p = await planned(SCOOTER, "Walker", "first build kept", { document: "# Plan", decided: [], asks: [{ question: "Tint the six tiles?", recommended: "Yes, light tints." }], publish_ready: true, placeholders: [] });
+    const first = (await liveJobFor(p.id))!;
+    expect(JSON.parse(first.job_json!).phase).toBe("BUILD");
+    await claim(first.id);
+    const before = await previews(p.id);
+    await replyFrom(SCOOTER, "One change before you go further. Please make sure a Give and Take ask adds nobody to the network list.", await p.token());
+    await tickFor(p.id);
+    const note = await env.WP_OS_DB.prepare("SELECT acknowledged_at, response FROM work_card_note WHERE work_card_id = ?1 AND body LIKE '%network list%'").bind(p.id).first<{ acknowledged_at: string | null; response: string | null }>();
+    expect(note?.acknowledged_at, "read, so the sweep does not spin on it").toBeTruthy();
+    expect(note?.response, "kept for the next build, never carried as an answer the running build cannot read").toBe(KEPT_FOR_NEXT_BUILD);
+    expect((await liveJobFor(p.id))!.id, "the build on the Mac is left to finish").toBe(first.id);
+    const green = (sha: string) => ({ phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/605", pr_number: 605, changed: true, head_sha: sha, check_state: "GREEN", preview_url: "https://p605.west-peek-ventures.pages.dev" });
+    expect((await reportRun(env, { runId: first.id, deviceId: "mac-test-jobs", outputText: JSON.stringify(green("first-1")) })).accepted).toBe(true);
+    const after = await tickFor(p.id);
+    expect(after.outcome, after.summary).not.toBe("BLOCKED");
+    expect(await previews(p.id), "no preview that leaves his change out").toBe(before);
+    const job = JSON.parse((await liveJobFor(p.id))!.job_json!) as LocalJobPayload;
+    expect(job.rebuild!.changes, "his change is this build's job").toMatch(/network list/);
+    await macReports(p.id, green("first-2"));
+    expect((await tickFor(p.id)).outcome).toBe("BLOCKED");
+    expect(await previews(p.id)).toBe(before + 1);
+    expect(String((await card(p.id)).block_needed)).toMatch(/network list/);
   });
 });
