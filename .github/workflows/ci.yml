@@ -29,7 +29,27 @@
 # That split is the owner's call, made 21 Sep 2026 after every PR paid ~9 minutes of Playwright
 # and the deploy then waited on it again.
 #
-# Every job carries `timeout-minutes` at roughly four times its normal wall time: a fault
+# ─── TWO LANES (27 Nov 2026) ───────────────────────────────────────────────
+#
+# Her Open Loops row "West Peek OS: merge check under 5 minutes": "Every West Peek OS fix lands
+# after a check of 5 minutes or less" — "Fast checks before merge, long tests on main after, with a
+# time limit". Measured before this change (12 PR runs, 22–24 Nov 2026): 280–643s wall, the ten
+# serial shards 200–370s each, and 13 runners a run, so a busy account queued shards for minutes.
+#
+#   · PULL REQUEST: `typecheck`, every boundary validator (the guards — they never move after the
+#     merge), and `pr-tests`: the PR lane of the vitest suite on SEVEN runners, two files in flight on
+#     each. The PR lane is every test file except the long end-to-end flows `tests/lanes.json` lists
+#     under `after_merge`; one of those still runs here when the PR changes it or a file it imports
+#     directly, and EVERY file runs when the PR changes what all of them stand on (helpers,
+#     fixtures, config, the lock) or its diff cannot be read. `pr_always` files (private data,
+#     money, sends, authority) can never be listed after the merge (`validate:shards`).
+#   · PUSH TO MAIN, NIGHTLY, ON DEMAND: `typecheck`, the validators, and `tests`: the FULL suite on
+#     ten serial shards, exactly as before. `deploy.yml` still fires only on this run's success, so
+#     nothing reaches production before every test has passed. A red full lane opens (or comments on)
+#     ONE issue on this repo, "[main-red] CI is red on main", and the next green run closes it.
+#
+# Every job carries `timeout-minutes` at roughly four times its normal wall time (at least twice
+# its measured p90): a fault
 # detector that reports a hang inside the hour, never a budget a slow runner is expected to fit.
 #
 # Deliberately NOT in this workflow: a deploy step. BACKLOG.md records the decision already made
@@ -50,10 +70,16 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # The full suite again every night on main, so a test that breaks by the calendar or by a flake
+  # is found the next morning, not on the next merge. 08:30 UTC = 02:30 Central in winter, 03:30 in
+  # summer; GitHub's runners, not her Mac. `deploy.yml` never deploys a scheduled run.
+  schedule:
+    - cron: "30 8 * * *"
   workflow_dispatch:
 
+# A nightly run has its own group, so it can never cancel the push run a deploy is waiting on.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ github.event_name == 'schedule' && 'nightly' || 'run' }}
   cancel-in-progress: true
 
 jobs:
@@ -81,11 +107,72 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+  # THE PR LANE (27 Nov 2026). Seven runners, two test files in flight on each: measured on the
+  # full suite (runs 46053107632 and 46053110876, all 340 files green twice) two in flight took the
+  # ten shards from 200–370s to 127–233s. Two, not more: past ~8 Miniflares in flight a runner
+  # runs out of ephemeral ports (vitest.config.ts). The full lane below stays serial.
+  pr-tests:
+    name: PR tests (shard ${{ matrix.pr_shard }}/7)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    # Normal: ~3–4 minutes a shard. The ceiling is a hang detector, not a budget.
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        pr_shard: [1, 2, 3, 4, 5, 6, 7]
+
+    steps:
+      # Depth 2: the PR's merge commit and its first parent (the base), so the diff is readable.
+      # When it is not, shard-tests.mjs runs every file — unsure is never fewer tests.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install (reproducible, from package-lock)
+        run: npm ci
+
+      - name: PR-lane tests
+        env:
+          NO_COLOR: "1"
+        run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/vitest-pr-shard-${{ matrix.pr_shard }}.log"
+          files="$(node scripts/ci/shard-tests.mjs --shard ${{ matrix.pr_shard }}/7 --lane pr --changed-from HEAD^1)"
+          [ -n "$files" ] || { echo "::error::PR shard ${{ matrix.pr_shard }}/7 planned no files — Rule 0"; exit 1; }
+          planned="$(printf '%s\n' "$files" | wc -l | tr -d ' ')"
+          # shellcheck disable=SC2086
+          npx vitest run --maxWorkers=2 --minWorkers=1 $files 2>&1 | tee "$log"
+          rc=${PIPESTATUS[0]}
+          [ "$rc" -eq 0 ] || exit "$rc"
+          passed="$(sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -oE 'Test Files +[0-9]+ passed' | grep -oE '[0-9]+' | head -1)"
+          if [ -z "$passed" ] || [ "$passed" -lt 1 ]; then
+            echo "::error::PR shard ${{ matrix.pr_shard }}/7 exited 0 having run no test file — Rule 0, this is a failure"
+            exit 1
+          fi
+          if [ "$passed" -ne "$planned" ]; then
+            echo "::error::PR shard ${{ matrix.pr_shard }}/7 planned $planned test file(s) and $passed passed — a file was dropped"
+            exit 1
+          fi
+          echo "OUTPUT $passed test files passed (PR shard ${{ matrix.pr_shard }}/7)"
+          node scripts/ci/shard-tests.mjs --drift ${{ matrix.pr_shard }}/7 "$log" --lane pr --changed-from HEAD^1 || true
+
   tests:
     name: Unit and integration tests (shard ${{ matrix.shard }}/10)
+    # THE FULL LANE: every push to main, every night, every dispatch. Never a pull request.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    # Normal: ~4–5 minutes a shard (16m00s serial on run 35671568021, split four ways, plus install).
-    timeout-minutes: 10
+    # Normal: ~4–5 minutes a shard; p90 5m30s over the 12 runs of 22–24 Nov 2026. 12 is twice that.
+    timeout-minutes: 12
     permissions:
       contents: read
     strategy:
@@ -153,6 +240,7 @@ jobs:
             exit 1
           fi
           echo "shard ${{ matrix.shard }}/10: $files test file(s) passed"
+          echo "OUTPUT $files test files passed (full shard ${{ matrix.shard }}/10)"
           node scripts/ci/shard-tests.mjs --drift ${{ matrix.shard }}/10 "$log" || true
 
   validators:
@@ -653,15 +741,84 @@ jobs:
 
   gate:
     name: Merge gate
-    # ONE NAME FOR "THE GATE IS GREEN". `needs` all three, so a branch rule or a reader of
-    # `gh pr checks` has a single check to look at. `land` (~/bin) still reads every bucket
-    # of every check, so a failed shard is refused with or without this job.
-    needs: [typecheck, tests, validators]
+    # ONE NAME FOR "THE GATE IS GREEN". `land` (~/bin) still reads every bucket of every check, so
+    # a failed shard is refused with or without this job. It runs whatever its needs did (never on a
+    # cancelled run) and passes only when the lane this event owes ran green: on a pull request the
+    # PR lane, on anything else the full lane — and the other lane skipped, never silently both.
+    needs: [typecheck, pr-tests, tests, validators]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
       contents: read
 
     steps:
-      - name: Typecheck, four test shards, and the validators are green
-        run: echo "gate green for ${{ github.sha }}"
+      - name: Typecheck, the lane this event owes, and the validators are green
+        env:
+          EVENT: ${{ github.event_name }}
+          TYPECHECK: ${{ needs.typecheck.result }}
+          VALIDATORS: ${{ needs.validators.result }}
+          PR_TESTS: ${{ needs.pr-tests.result }}
+          FULL_TESTS: ${{ needs.tests.result }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then want_pr=success; want_full=skipped; else want_pr=skipped; want_full=success; fi
+          echo "typecheck=$TYPECHECK validators=$VALIDATORS pr-tests=$PR_TESTS (want $want_pr) tests=$FULL_TESTS (want $want_full)"
+          [ "$TYPECHECK" = success ] && [ "$VALIDATORS" = success ] && [ "$PR_TESTS" = "$want_pr" ] && [ "$FULL_TESTS" = "$want_full" ] \
+            || { echo "::error::the merge gate is not green for ${{ github.sha }} on $EVENT"; exit 1; }
+          echo "gate green for ${{ github.sha }} on $EVENT"
+
+  # RED MAIN IS SAID OUT LOUD (27 Nov 2026). The long tests now run after the merge, so a PR can
+  # land green and turn main red. The Deploy already refuses a red run; this makes it visible:
+  # ONE open issue on this repo — the channel the CI sweep and the partner tail already file to —
+  # opened on the first red full run, commented on by each later red one, closed by the next green
+  # one. It names jobs, the commit and the run link only: never a log line, never test text.
+  # A dispatch on a branch files under that branch's own title, which is how the signal is proved
+  # without touching main's. A failure to write the issue on a RED run fails this job (the run is
+  # red anyway); on a GREEN run it is a warning, so an issues hiccup can never hold a deploy.
+  main-red:
+    name: Red main is said out loud
+    needs: [typecheck, tests, validators]
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: Open, update or close the one red-main issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TYPECHECK: ${{ needs.typecheck.result }}
+          TESTS: ${{ needs.tests.result }}
+          VALIDATORS: ${{ needs.validators.result }}
+        run: |
+          set -uo pipefail
+          if [ "$REF_NAME" = main ]; then title="[main-red] CI is red on main"; else title="[main-red] CI is red on $REF_NAME (a dispatch on a branch, not main)"; fi
+          red=""
+          [ "$TYPECHECK" = success ] || red="$red Typecheck ($TYPECHECK);"
+          [ "$TESTS" = success ] || red="$red the full test suite ($TESTS);"
+          [ "$VALIDATORS" = success ] || red="$red the boundary validators ($VALIDATORS);"
+          case "$EVENT" in push) what="the merge commit"; ship="The Deploy did not ship it: deploy.yml ships only a green CI run.";; schedule) what="tonight's full re-run of"; ship="This run deploys nothing; production keeps what it last shipped.";; *) what="an on-demand run of"; ship="This run deploys nothing.";; esac
+          export TITLE="$title"
+          open="$(gh issue list -R "$REPO" --state open --limit 100 --json number,title --jq '[.[] | select(.title == env.TITLE) | .number][0] // empty' 2>&1)" || open="UNREADABLE: $open"
+          if [ -n "$red" ]; then
+            case "$open" in UNREADABLE:*) echo "::error::could not read this repo's issues ($open), so the red-main issue was not written"; exit 1;; esac
+            body="$(printf 'CI is red on %s %s (%s).\n\nRed:%s\n\n%s\n\nRun: %s\n\nThe next green run of CI on %s closes this issue.' "$what" "${SHA:0:7}" "$EVENT" "${red%;}" "$ship" "$RUN_URL" "$REF_NAME")"
+            if [ -n "$open" ]; then gh issue comment "$open" -R "$REPO" --body "$body" || { echo "::error::could not comment on issue #$open"; exit 1; }; n="$open"
+            else n="$(gh issue create -R "$REPO" --title "$title" --body "$body")" || { echo "::error::could not open the red-main issue"; exit 1; }; fi
+            echo "OUTPUT 1 red-main signal written ($n)"
+            echo "::error::CI is red on $REF_NAME at ${SHA:0:7}:${red%;} — $n"
+            exit 1
+          fi
+          case "$open" in
+            UNREADABLE:*) echo "::warning::green, but this repo's issues could not be read ($open), so an open red-main issue may still stand"; echo "OUTPUT 0 red-main signals (issues unreadable)";;
+            "") echo "OUTPUT 0 red-main signals (green, none open)";;
+            *) gh issue close "$open" -R "$REPO" --comment "Green again: CI passed on ${SHA:0:7} ($EVENT). $RUN_URL" \
+                 && echo "OUTPUT 1 red-main issue closed (#$open)" || echo "::warning::green, but issue #$open could not be closed";;
+          esac

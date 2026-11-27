@@ -416,10 +416,84 @@ export function checkShardScript(packageJson, ciRaw) {
   return [];
 }
 
-/** The deploy fires on the gate, and only the gate. */
-export function checkDeploy(raw) {
+/** ci.yml's jobs by key → their block of text (comments removed). */
+function jobsOf(source) {
+  const start = source.search(/^jobs:\s*$/m);
+  if (start === -1) return new Map();
+  return new Map(
+    source.slice(start).split(/\n(?= {2}[a-z][a-z0-9-]*:\s*\n)/).slice(1).map((b) => [b.trim().split(":")[0], b]),
+  );
+}
+
+/**
+ * THE TWO LANES (27 Nov 2026). Fast checks before the merge, the long tests on main after — and
+ * nothing in between may quietly drop a test, a guard, or the signal that main went red:
+ *   · the PR lane's matrix is 1..M and its split is `/M`, by measured time, for the PR's own diff;
+ *   · it runs on pull requests only, and the FULL lane on everything else — never "on neither";
+ *   · the full lane runs on every push to main and on a nightly schedule;
+ *   · the validators (the guards) run on every event: no job-level `if:` may take them off a PR;
+ *   · a red full run writes the one `[main-red]` issue (issues: write), on any run not cancelled.
+ */
+export function checkLanes(raw) {
   const bad = [];
   const source = withoutComments(raw);
+  const jobs = jobsOf(source);
+  const full = [...jobs.entries()].find(([, b]) => /matrix\.shard\b/.test(b));
+  const pr = [...jobs.entries()].find(([, b]) => /matrix\.pr_shard\b/.test(b));
+  const ifOf = (b) => (/^ {4}if:\s*(.+)$/m.exec(b) ?? [])[1]?.trim() ?? "";
+  if (full && ifOf(full[1]) && !pr) {
+    bad.push(`the full test job \`${full[0]}\` is conditioned (\`if: ${ifOf(full[1])}\`) and there is no PR lane — some event runs no tests`);
+  }
+  if (pr) {
+    const [name, block] = pr;
+    if (ifOf(block) !== "github.event_name == 'pull_request'") bad.push(`the PR lane \`${name}\` must run on pull requests only (\`if: github.event_name == 'pull_request'\`), not \`${ifOf(block) || "always"}\``);
+    if (!full) bad.push("there is a PR lane and no full lane — the long tests run nowhere");
+    else if (ifOf(full[1]) !== "github.event_name != 'pull_request'") bad.push(`the full lane \`${full[0]}\` must run on every event but a pull request (\`if: github.event_name != 'pull_request'\`), not \`${ifOf(full[1]) || "always"}\``);
+    const m = /^\s+pr_shard:\s*\[([^\]]*)\]/m.exec(block);
+    const entries = m ? m[1].split(",").map((x) => Number(x.trim())).filter((x) => !Number.isNaN(x)) : [];
+    if (!m || entries.length === 0 || !entries.every((v, i) => v === i + 1)) bad.push(`the PR lane's matrix must be \`pr_shard: [1..M]\`, not ${m ? `[${m[1].trim()}]` : "missing"}`);
+    const lines = [...block.matchAll(/shard-tests\.mjs --shard \$\{\{\s*matrix\.pr_shard\s*\}\}\/(\d+)([^\n]*)/g)];
+    if (lines.length === 0) bad.push("the PR lane does not plan its files with `shard-tests.mjs --shard ${{ matrix.pr_shard }}/M`");
+    for (const [, n, rest] of lines) {
+      if (Number(n) !== entries.length) bad.push(`the PR lane splits \`/${n}\` over a ${entries.length}-entry matrix — some files run nowhere or twice`);
+      if (!/--lane pr\b/.test(rest) || !/--changed-from\s+\S+/.test(rest)) bad.push("the PR lane's plan is missing `--lane pr --changed-from <base>` — it would not run the after-merge files the PR touches");
+    }
+    if ((source.match(/Test Files \+\[0-9\]\+ passed/g) ?? []).length < 2) bad.push("the PR lane does not read vitest's `Test Files N passed` line back (Rule 0)");
+  }
+  if (pr || (full && ifOf(full[1]))) {
+    if (!/^\s+push:\s*\n\s+branches:\s*\[\s*main\s*\]/m.test(source)) bad.push("the full lane no longer runs on every push to main — the long tests run nowhere after a merge");
+    if (!/^\s+schedule:\s*\n\s+-\s*cron:/m.test(source)) bad.push("the full lane has no nightly `schedule:` — a test broken by the calendar waits for the next merge");
+    const signal = [...jobs.entries()].find(([, b]) => /\[main-red\]/.test(b));
+    if (!signal) bad.push("no job writes the `[main-red]` issue — a red main after the merge would be seen by nobody");
+    else {
+      if (!/issues:\s*write/.test(signal[1])) bad.push(`\`${signal[0]}\` writes the red-main issue without \`issues: write\``);
+      if (full && !new RegExp(`needs:\\s*\\[[^\\]]*\\b${full[0]}\\b`).test(signal[1])) bad.push(`\`${signal[0]}\` does not wait on the full lane \`${full[0]}\` — it cannot know main went red`);
+      if (!/^ {4}if:.*!cancelled\(\)/m.test(signal[1])) bad.push(`\`${signal[0]}\` must run whatever the tests did (\`if: \${{ !cancelled() … }}\`) — a red run would skip it`);
+    }
+  }
+  const guards = [...jobs.entries()].find(([, b]) => /npm run validate:shards/.test(b));
+  if (guards && ifOf(guards[1])) bad.push(`the validators job \`${guards[0]}\` is conditioned (\`if: ${ifOf(guards[1])}\`) — the guards run on every pull request, never only after the merge`);
+  return bad;
+}
+
+/** `validate:shards` must also check the PR lane at the PR matrix's count. */
+export function checkPrShardScript(packageJson, ciRaw) {
+  const m = /^\s+pr_shard:\s*\[([^\]]*)\]/m.exec(withoutComments(ciRaw));
+  if (!m) return [];
+  const n = m[1].split(",").filter((x) => x.trim()).length;
+  const c = /shard-tests\.mjs --check (\d+) --lane pr\b/.exec(packageJson);
+  if (!c) return ["package.json's `validate:shards` does not run `shard-tests.mjs --check M --lane pr` — the PR lane's partition and lanes.json are never proven"];
+  if (Number(c[1]) !== n) return [`\`validate:shards\` checks the PR lane at ${c[1]} shard(s) but ci.yml's PR matrix runs ${n}`];
+  return [];
+}
+
+/** The deploy fires on the gate, and only the gate. */
+export function checkDeploy(raw, ciRaw = "") {
+  const bad = [];
+  const source = withoutComments(raw);
+  if (/^\s+schedule:\s*\n\s+-\s*cron:/m.test(withoutComments(ciRaw)) && !/workflow_run\.event\s*!=\s*'schedule'/.test(source)) {
+    bad.push("ci.yml runs nightly and deploy.yml would deploy that run — a scheduled CI run must never deploy (`workflow_run.event != 'schedule'`)");
+  }
   const m = /workflow_run:\s*\n\s+workflows:\s*\[([^\]]*)\]/.exec(source);
   if (!m) {
     bad.push("deploy.yml has no `workflow_run: workflows: [..]` trigger — nothing deploys a green main");
@@ -578,6 +652,38 @@ function selfTest() {
   expectCaught("a shard that no longer proves it ran a file", checkGate(GATE_OK.replace("Test Files +[0-9]+ passed", "Tests +[0-9]+")));
   expectCaught("a job without a ceiling", checkGate(GATE_OK.replace("  gate:\n    needs: [typecheck, tests]\n    timeout-minutes: 2\n", "  gate:\n    needs: [typecheck, tests]\n")));
   expectCaught("a shard count only ever mentioned in a comment", checkGate(GATE_OK.replace("shard: [1, 2, 3, 4]", "# shard: [1, 2, 3, 4]")));
+  // THE TWO LANES (27 Nov 2026).
+  const LANES_OK =
+    "name: CI\non:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\n  schedule:\n    - cron: \"30 8 * * *\"\njobs:\n" +
+    "  pr-tests:\n    if: github.event_name == 'pull_request'\n    timeout-minutes: 10\n    strategy:\n      matrix:\n        pr_shard: [1, 2, 3]\n    steps:\n      - run: |\n" +
+    "          files=\"$(node scripts/ci/shard-tests.mjs --shard ${{ matrix.pr_shard }}/3 --lane pr --changed-from HEAD^1)\"\n" +
+    "          n=\"$(grep -oE 'Test Files +[0-9]+ passed' log)\"\n" +
+    "  tests:\n    if: github.event_name != 'pull_request'\n    timeout-minutes: 12\n    strategy:\n      matrix:\n        shard: [1, 2]\n    steps:\n      - run: |\n" +
+    "          files=\"$(node scripts/ci/shard-tests.mjs --shard ${{ matrix.shard }}/2)\"\n" +
+    "          n=\"$(grep -oE 'Test Files +[0-9]+ passed' log)\"\n" +
+    "  validators:\n    timeout-minutes: 12\n    steps:\n      - run: npm run validate:shards\n" +
+    "  main-red:\n    needs: [typecheck, tests, validators]\n    if: ${{ !cancelled() && github.event_name != 'pull_request' }}\n    timeout-minutes: 3\n    permissions:\n      issues: write\n    steps:\n      - run: echo \"[main-red] CI is red on main\"\n";
+  expectClean("the two-lane shape", [...checkLanes(LANES_OK), ...checkGate(LANES_OK)]);
+  expectClean("the one-lane shape (no PR lane, full lane on every event)", checkLanes(GATE_OK));
+  expectCaught("the PR lane running on every event", checkLanes(LANES_OK.replace("    if: github.event_name == 'pull_request'\n", "")));
+  expectCaught("the full lane skipped on push (run on pull requests only)", checkLanes(LANES_OK.replace("if: github.event_name != 'pull_request'", "if: github.event_name == 'pull_request'")));
+  expectCaught("the full lane conditioned with no PR lane at all", checkLanes(GATE_OK.replace("  tests:\n", "  tests:\n    if: github.event_name != 'pull_request'\n")));
+  expectCaught("the validators (the guards) taken off pull requests", checkLanes(LANES_OK.replace("  validators:\n", "  validators:\n    if: github.event_name != 'pull_request'\n")));
+  expectCaught("a /3 PR split over a two-entry PR matrix", checkLanes(LANES_OK.replace("pr_shard: [1, 2, 3]", "pr_shard: [1, 2]")));
+  expectCaught("the PR lane planned without the PR's diff", checkLanes(LANES_OK.replace(" --lane pr --changed-from HEAD^1", "")));
+  expectCaught("the PR lane not reading its Test Files line back", checkLanes(LANES_OK.replace("          n=\"$(grep -oE 'Test Files +[0-9]+ passed' log)\"\n  tests:", "  tests:")));
+  expectCaught("no nightly schedule for the full lane", checkLanes(LANES_OK.replace("  schedule:\n    - cron: \"30 8 * * *\"\n", "")));
+  expectCaught("the full lane not run on a push to main", checkLanes(LANES_OK.replace("  push:\n    branches: [main]\n", "")));
+  expectCaught("no red-main signal job", checkLanes(LANES_OK.replace("[main-red]", "[nothing]")));
+  expectCaught("the red-main job skipped when the tests fail", checkLanes(LANES_OK.replace("if: ${{ !cancelled() && github.event_name != 'pull_request' }}", "if: success()")));
+  expectCaught("the red-main job not waiting on the full lane", checkLanes(LANES_OK.replace("needs: [typecheck, tests, validators]", "needs: [typecheck, validators]")));
+  expectCaught("the red-main job unable to write an issue", checkLanes(LANES_OK.replace("issues: write", "issues: read")));
+  expectClean("validate:shards checking the PR lane at the PR matrix's count", checkPrShardScript('"validate:shards": "node scripts/ci/shard-tests.mjs --check 2 && node scripts/ci/shard-tests.mjs --check 3 --lane pr"', LANES_OK));
+  expectCaught("validate:shards checking the PR lane at another count", checkPrShardScript('"validate:shards": "node scripts/ci/shard-tests.mjs --check 2 && node scripts/ci/shard-tests.mjs --check 6 --lane pr"', LANES_OK));
+  expectCaught("validate:shards never checking the PR lane", checkPrShardScript('"validate:shards": "node scripts/ci/shard-tests.mjs --check 2"', LANES_OK));
+  const DEPLOY_OK = "name: Deploy\non:\n  workflow_run:\n    workflows: [CI]\n    types: [completed]\njobs:\n  deploy:\n    if: >-\n      github.event.workflow_run.conclusion == 'success' &&\n      github.event.workflow_run.event != 'schedule'\n";
+  expectClean("a deploy that skips the nightly run", checkDeploy(DEPLOY_OK, LANES_OK));
+  expectCaught("a deploy that would ship a nightly run", checkDeploy(DEPLOY_OK.replace(" &&\n      github.event.workflow_run.event != 'schedule'", ""), LANES_OK));
   expectClean("the shipped deploy trigger", checkDeploy("name: Deploy\non:\n  workflow_run:\n    workflows: [CI]\n    types: [completed]\n"));
   expectCaught("a deploy that waits on the journeys", checkDeploy("name: Deploy\non:\n  workflow_run:\n    workflows: [CI, Playwright]\n    types: [completed]\n"));
   expectCaught("a deploy that waits on nothing", checkDeploy("name: Deploy\non:\n  workflow_dispatch:\n"));
@@ -696,7 +802,9 @@ function main() {
   bad.push(...checkWorkflow(readFileSync(WORKFLOW, "utf8")));
   bad.push(...checkGate(readFileSync(GATE, "utf8")));
   bad.push(...checkShardScript(readFileSync(path.join(ROOT, "package.json"), "utf8"), readFileSync(GATE, "utf8")));
-  bad.push(...checkDeploy(readFileSync(DEPLOY, "utf8")));
+  bad.push(...checkLanes(readFileSync(GATE, "utf8")));
+  bad.push(...checkPrShardScript(readFileSync(path.join(ROOT, "package.json"), "utf8"), readFileSync(GATE, "utf8")));
+  bad.push(...checkDeploy(readFileSync(DEPLOY, "utf8"), readFileSync(GATE, "utf8")));
 
   if (bad.length > 0) {
     console.error("A-GREEN-RUN-MEANS-SOMETHING SCAN FAILED — something here lets a red run look green:");
@@ -718,7 +826,8 @@ function main() {
       "row after loading, every one with a loading row in the same slot; the config loads the one-connection-" +
       "per-request transport guard; playwright.yml runs the whole suite twice, on demand only (workflow_dispatch, " +
       "no schedule), and needs both passes; ci.yml is the gate, sharded to its matrix, every shard proving " +
-      "it ran files and every job under a ceiling; deploy.yml fires on the gate alone.",
+      "it ran files and every job under a ceiling; the PR lane runs on pull requests and the full lane on every push, nightly and on demand, " +
+      "the validators on every event, and a red full run writes the one [main-red] issue; deploy.yml fires on the gate alone, never on a nightly run.",
   );
 }
 
