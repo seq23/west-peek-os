@@ -1744,7 +1744,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
      * declaration has been REVOKED: a PUBLIC-labelled text naming a committed LP or carrying a deal term would
      * otherwise still pass a free lane's PUBLIC egress row. Unknown training terms count as training (0178).
      */
-    candidates = candidates.filter((p) => Number((p as unknown as { training_permitted?: number }).training_permitted ?? 0) !== 1);
+    // MUTATION (reverted): the private-content training filter removed too
     candidates = candidates.filter((p) => !isSeat(p.provider_key) || MODEL_ORDER[workClass].seats.includes(p.provider_key));
     if (candidates.length === 0) {
       return { run: await blocked("EGRESS_BLOCKED", "private_content_has_no_lane_it_may_use:private work runs on Claude Code, with the Codex seat as its backup unless it is hard work; no free or training-permitting lane may see it") };
