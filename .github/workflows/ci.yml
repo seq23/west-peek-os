@@ -43,6 +43,8 @@
 #     directly, and EVERY file runs when the PR changes what all of them stand on (helpers,
 #     fixtures, config, the lock) or its diff cannot be read. `pr_always` files (private data,
 #     money, sends, authority) can never be listed after the merge (`validate:shards`).
+#     Measured on #599 itself, which changes lanes.json and so runs EVERY file — the slowest the
+#     PR lane can be: 289s wall on run 46054588509, the seven shards 169–242s each in their runners.
 #   · PUSH TO MAIN, NIGHTLY, ON DEMAND: `typecheck`, the validators, and `tests`: the FULL suite on
 #     ten serial shards, exactly as before. `deploy.yml` still fires only on this run's success, so
 #     nothing reaches production before every test has passed. A red full lane opens (or comments on)
