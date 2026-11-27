@@ -1673,7 +1673,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
    * run, which is not a rule, it is a hope.
    */
   if (input.budgetContext?.confidential === true) {
-    // MUTATION (reverted by the next commit): the confidential-call filter removed
+    candidates = candidates.filter((p) => Number((p as unknown as { training_permitted?: number }).training_permitted ?? 0) !== 1);
     if (candidates.length === 0) {
       return {
         run: await blocked(
