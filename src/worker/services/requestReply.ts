@@ -50,12 +50,30 @@ export const NOTICE_KINDS: readonly NoticeKind[] = ["RECEIVED", "PLAN", "PREVIEW
 /** The mark on a notice whose send the mail service refused: it does not count as told, and a later send replaces it. */
 export const SEND_FAILED = "send failed: ";
 
+/**
+ * ONE RE-ASK KEY PER BLOCK (27 Nov 2026, wc_59ef2d40 and the voting.topbarz.xyz build card). The re-ask cause was
+ * `nag:<n>` alone, and `block_nags` restarts at 0 on every new block, so a card re-blocked on a new preview had its
+ * 2-day re-ask matched to the PREVIOUS block's `nag:1`, "already sent for this cause", and the clock moved on: Scooter
+ * got no reminder on the new preview. The key now names the block it belongs to (its `blocked_at`).
+ */
+export function reAskCause(nag: number, blockedAt: string | null | undefined): string {
+  return blockedAt ? `nag:${nag}@${blockedAt}` : `nag:${nag}`;
+}
+
 export async function alreadyTold(env: Env, cardId: string, kind: NoticeKind, cause: string): Promise<boolean> {
   // A send the mail service refused is not "told": the next go sends it (21 Nov 2026, the outage case).
   const row = await env.WP_OS_DB.prepare(`SELECT 1 AS one FROM work_card_notice WHERE work_card_id = ?1 AND kind = ?2 AND cause = ?3 AND NOT (sent = 0 AND detail LIKE '${SEND_FAILED}%')`)
     .bind(cardId, kind, cause.slice(0, 400))
     .first<{ one: number }>();
-  return Boolean(row);
+  if (row) return true;
+  // A re-ask sent under the old per-card key (`nag:<n>`, before 27 Nov 2026) counts for THIS block only when it went
+  // out after the block began, so an in-flight block is never asked twice and a later block is never silenced.
+  const m = /^nag:(\d+)@(.+)$/.exec(cause);
+  if (!m) return false;
+  const legacy = await env.WP_OS_DB.prepare(`SELECT 1 AS one FROM work_card_notice WHERE work_card_id = ?1 AND kind = ?2 AND cause = ?3 AND sent_at >= ?4 AND NOT (sent = 0 AND detail LIKE '${SEND_FAILED}%')`)
+    .bind(cardId, kind, `nag:${m[1]}`, m[2])
+    .first<{ one: number }>();
+  return Boolean(legacy);
 }
 
 export async function recordNotice(

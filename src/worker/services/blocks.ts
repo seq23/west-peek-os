@@ -534,6 +534,10 @@ export async function resurfaceStaleBlocks(env: Env, now: Date): Promise<StoredB
      * re-ask again; the notice ledger (cause nag:<n>) and the in-app dedupe key make sure it never lands twice.
      */
     const mail = await remindRequester(env, row, nags, now);
+    // A re-ask that sent no email says why on the card (27 Nov 2026): a skip is never silent.
+    if (mail && !mail.sent) {
+      await appendEvent(env, { eventType: "work_card.reask_not_emailed", actorType: "system", actorId: "work_sweep", objectType: "work_card", objectId: row.id, firmScope: row.firm_scope, payload: { nag: nags, reason: mail.reason, will_retry: !mail.settled } });
+    }
     if (mail && !mail.sent && !mail.settled) continue;
     await env.WP_OS_DB.prepare("UPDATE work_card SET block_nags = ?2, block_nag_at = ?3 WHERE id = ?1")
       .bind(row.id, nags, nagAt(now, row.block_reason, nags))
@@ -619,7 +623,7 @@ async function remindRequester(env: Env, row: StoredBlock, nags: number, now: Da
     const title = card.title.replace(/^From [^:]+@[^:]+:\s*/i, "").trim() || card.title;
     const email = reAskEmail({ nag: nags, days, title, cardId: card.id, needed: row.block_needed ?? "", nextAskAt: nagAt(now, row.block_reason, nags), now });
     const { replyToRequester } = await import("./requestReply");
-    const out = await replyToRequester(env, { ...card, requested_by_email: partner.email }, "BLOCKED", await employeeName(env, row.owner_id), "", { kind: "QUESTION", cause: `nag:${nags}` }, { ...email, tldrBullets: [] });
+    const out = await replyToRequester(env, { ...card, requested_by_email: partner.email }, "BLOCKED", await employeeName(env, row.owner_id), "", { kind: "QUESTION", cause: (await import("./requestReply")).reAskCause(nags, row.blocked_at) }, { ...email, tldrBullets: [] });
     return { sent: out.sent, settled: out.sent || !out.failed, reason: out.reason };
   } catch (err) {
     return { sent: false, settled: false, reason: err instanceof Error ? err.message : String(err) };

@@ -107,7 +107,7 @@ describe("a block reminder reaches an emailed requester by email", () => {
     expect(sent[0]!.text).toMatch(/A reminder, \**2\** days on\./);
     expect(sent[0]!.subject, "it waits on him").toMatch(/^ACTION REQUIRED: /);
     expect(`${sent[0]!.headers["In-Reply-To"] ?? ""} ${sent[0]!.headers["References"] ?? ""}`).toContain(ROOT_TOKEN);
-    expect(await notices(CARD)).toEqual([{ kind: "PREVIEW", cause: "nag:1", sent: 1, sent_to: SCOOTER }]);
+    expect(await notices(CARD)).toEqual([{ kind: "PREVIEW", cause: "nag:1@2026-10-07T20:00:00.000Z", sent: 1, sent_to: SCOOTER }]);
     // The in-app notice is kept, exactly as before.
     expect(await inApp(CARD)).toBe(1);
 
@@ -126,7 +126,7 @@ describe("a block reminder reaches an emailed requester by email", () => {
     expect(rung.map((r) => r.id)).toEqual([BARE]);
     expect(sent.map((m) => m.to), "block_who names Scooter: the re-ask goes to him").toEqual([SCOOTER]);
     expect(sent[0]!.subject).toMatch(/^ACTION REQUIRED: /);
-    expect(await notices(BARE)).toEqual([{ kind: "QUESTION", cause: "nag:1", sent: 1, sent_to: SCOOTER }]);
+    expect(await notices(BARE)).toEqual([{ kind: "QUESTION", cause: "nag:1@2026-10-07T20:00:00.000Z", sent: 1, sent_to: SCOOTER }]);
     expect(await inApp(BARE)).toBe(1);
   });
   it("(d) a wait that clears itself (the Mac asleep) re-asks him nothing by email; its in-app ring stays (23 Nov 2026, wc_59ef2d40)", async () => {
@@ -151,5 +151,27 @@ describe("a block reminder reaches an emailed requester by email", () => {
       await resurfaceStaleBlocks(env, NOW);
       expect(sent.map((m) => m.to), `cause ${context}`).toEqual([SCOOTER]);
     }
+  });
+
+  it("(e) a card re-blocked on a NEW preview gets its own 2-day re-ask; the old block's nag:1 never silences it (27 Nov 2026, wc_59ef2d40)", async () => {
+    await seedBlocked(CARD, SCOOTER);
+    // The previous block's re-ask, sent under the old per-card key before this block began.
+    await env.WP_OS_DB.prepare("INSERT INTO work_card_notice (id, work_card_id, kind, cause, sent_to, message_id, sent, sent_at) VALUES (?1, ?2, 'PREVIEW', 'nag:1', ?3, ?4, 1, '2026-10-05T12:00:00.000Z')")
+      .bind(`wcn_${crypto.randomUUID()}`, CARD, SCOOTER, ROOT_TOKEN).run();
+    await resurfaceStaleBlocks(env, NOW);
+    expect(sent.map((m) => m.to), "the new block's re-ask reaches him").toEqual([SCOOTER]);
+    expect((await notices(CARD)).map((n) => n.cause).sort()).toEqual(["nag:1", "nag:1@2026-10-07T20:00:00.000Z"]);
+    await resurfaceStaleBlocks(env, new Date(NOW.getTime() + 60_000));
+    expect(sent, "and only once").toHaveLength(1);
+  });
+
+  it("(e) negative: a re-ask sent under the old key AFTER this block began still counts, so an in-flight block is not asked twice", async () => {
+    await seedBlocked(CARD, SCOOTER);
+    await env.WP_OS_DB.prepare("INSERT INTO work_card_notice (id, work_card_id, kind, cause, sent_to, message_id, sent, sent_at) VALUES (?1, ?2, 'PREVIEW', 'nag:1', ?3, ?4, 1, '2026-10-08T20:30:00.000Z')")
+      .bind(`wcn_${crypto.randomUUID()}`, CARD, SCOOTER, ROOT_TOKEN).run();
+    await resurfaceStaleBlocks(env, NOW);
+    expect(sent, "no duplicate of the reminder he already has").toHaveLength(0);
+    const ev = await env.WP_OS_DB.prepare("SELECT payload_json FROM event_record WHERE object_id = ?1 AND event_type = 'work_card.reask_not_emailed'").bind(CARD).first<{ payload_json: string }>();
+    expect(ev?.payload_json, "the skip is written on the card").toMatch(/already sent/);
   });
 });
