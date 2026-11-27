@@ -810,7 +810,16 @@ export async function sendUnderstoodReplies(env: Env, now: Date, read: SeatRead 
       await env.WP_OS_DB.prepare(
         `SELECT m.id, m.message_id, m.r2_key, m.subject, m.received_at, m.firm_scope, lower(json_extract(m.mail_authority_json, '$.partner')) AS partner,
                 c.id AS card_id, c.title, c.owner_id, c.prompt, c.state, c.kind, c.held_reason
-           FROM inbound_message m JOIN work_card c ON c.id = m.work_card_id
+           FROM inbound_message m JOIN work_card c ON c.id = COALESCE(
+                  -- THE CARD THE DOOR HANDED IT TO (27 Nov 2026, wc_69c64f5e → wc_9f7312e4): an email Walker's desk
+                  -- passed straight on to Porter leaves the door's link on Walker's closed card. Read there, its Got it
+                  -- went out as Walker after Porter's own, and its first read never reached Porter's brief.
+                  (SELECT k.id FROM work_card k JOIN work_card p ON p.id = k.assigned_from_card_id
+                    WHERE k.assigned_from_card_id = m.work_card_id AND p.state = 'DONE'
+                      AND k.state NOT IN ('DONE', 'CANCELLED') AND k.merged_into_card_id IS NULL AND k.waiting_until IS NULL
+                      AND k.created_at >= m.received_at AND k.created_at <= strftime('%Y-%m-%dT%H:%M:%fZ', m.received_at, '+10 minutes')
+                    ORDER BY k.created_at DESC LIMIT 1),
+                  m.work_card_id)
           WHERE m.received_at >= ?1 AND m.received_at <= ?2
             AND json_extract(m.mail_authority_json, '$.partner') IS NOT NULL
             -- Not answered yet, or claimed and waiting for a reader that was there and failed (read again).

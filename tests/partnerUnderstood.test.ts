@@ -5,7 +5,7 @@ import { handleInboundEmail } from "../src/worker/effects/inboundEmail";
 import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
 import { INTAKE_MAILBOX } from "../src/shared/intake/emailTriggers";
 import { sweepOnce } from "../src/worker/services/workSweep";
-import { sendUnderstoodReplies, parseUnderstood, type SeatRead } from "../src/worker/services/partnerUnderstood";
+import { sendUnderstoodReplies, parseUnderstood, briefBlockFor, type SeatRead } from "../src/worker/services/partnerUnderstood";
 import type { Env } from "../src/worker/env";
 
 /**
@@ -136,6 +136,38 @@ describe("step 7: the DONE reply answers every ask", () => {
   });
 });
 
+
+describe("an email the door handed straight on (27 Nov 2026, wc_69c64f5e → wc_9f7312e4)", () => {
+  it("is read on the card it was handed to: no second Got it from the closed card, and its asks reach that card's brief", async () => {
+    // Every earlier card out of the half-hour window's way.
+    await env.WP_OS_DB.prepare("UPDATE inbound_message SET received_at = '2000-01-01T00:00:00.000Z'").run();
+    await deliver("Community redesign", "Porter, please renumber Kimberly to Episode 6. Also add Ila's episode page.");
+    const chief = await cardFor("Community redesign");
+    const m = (await env.WP_OS_DB.prepare("SELECT id, received_at FROM inbound_message WHERE work_card_id = ?1").bind(chief.id).first<{ id: string; received_at: string }>())!;
+    // The door: Walker's card closes on the hand-off; Porter's card is opened from it and sends its own Got it.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE' WHERE id = ?1").bind(chief.id).run();
+    const cols = ((await env.WP_OS_DB.prepare("PRAGMA table_info(work_card)").all<{ name: string }>()).results ?? []).map((c) => c.name);
+    const childId = `wc_${crypto.randomUUID()}`;
+    const at = new Date(Date.parse(m.received_at) + 1000).toISOString();
+    const picked = cols.map((c) => (c === "id" ? "?2" : c === "state" ? "'IN_PROGRESS'" : c === "assigned_from_card_id" ? "?1" : c === "created_at" || c === "updated_at" ? "?3" : c === "waiting_until" ? "NULL" : c));
+    await env.WP_OS_DB.prepare(`INSERT INTO work_card (${cols.join(", ")}) SELECT ${picked.join(", ")} FROM work_card WHERE id = ?1`).bind(chief.id, childId, at).run();
+    await env.WP_OS_DB.prepare("INSERT INTO work_card_notice (id, work_card_id, kind, cause, sent_to, message_id, sent, detail, firm_scope, sent_at) VALUES (?1, ?2, 'RECEIVED', '', 'sequoia@westpeek.ventures', NULL, 1, 'the Got it from Porter', 'west_peek', ?3)")
+      .bind(`wcn_${crypto.randomUUID()}`, childId, at)
+      .run();
+    const before = sent.length;
+    const read: SeatRead = async () => ({ ok: true, detail: "ok", text: firstRead({ asks: ["renumber Kimberly to Episode 6", "add Ila's episode page"] }) });
+    expect(await sendUnderstoodReplies(env, new Date(), read), "Porter already answered: no second Got it").toBe(0);
+    expect(sent.slice(before), "nothing goes out from the closed card").toHaveLength(0);
+    const u = await env.WP_OS_DB.prepare("SELECT work_card_id FROM partner_understood WHERE inbound_message_id = ?1").bind(m.id).first<{ work_card_id: string }>();
+    expect(u?.work_card_id).toBe(childId);
+    const asks = ((await env.WP_OS_DB.prepare("SELECT work_card_id FROM partner_ask WHERE inbound_message_id = ?1").bind(m.id).all<{ work_card_id: string }>()).results ?? []);
+    expect(asks.length).toBe(2);
+    expect(new Set(asks.map((a) => a.work_card_id))).toEqual(new Set([childId]));
+    const brief = await briefBlockFor(env, childId);
+    expect(brief).toContain("renumber Kimberly to Episode 6");
+    expect(brief).toContain("add Ila's episode page");
+  });
+});
 
 describe("first-read decision", () => {
   it("keeps a structured decision and treats old or malformed reads as absent", () => {
