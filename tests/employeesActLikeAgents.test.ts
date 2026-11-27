@@ -171,7 +171,7 @@ describe("an unanswered question is asked again on the cadence", () => {
     expect((await cardState(id))!.block_nags).toBe(1);
     await resurfaceStaleBlocks(env, new Date(due.getTime() + 10 * 60_000));
     expect(sent, "never twice").toHaveLength(1);
-    const rows = (await env.WP_OS_DB.prepare("SELECT sent FROM work_card_notice WHERE work_card_id = ?1 AND cause = 'nag:1'").bind(id).all<{ sent: number }>()).results!;
+    const rows = (await env.WP_OS_DB.prepare("SELECT sent FROM work_card_notice WHERE work_card_id = ?1 AND cause LIKE 'nag:1@%'").bind(id).all<{ sent: number }>()).results!;
     expect(rows).toEqual([{ sent: 1 }]);
   });
 });
@@ -323,7 +323,7 @@ describe("every employee's card that waits on a partner is re-asked the same way
     }
     expect(sent[1]!.text).not.toBe(sent[0]!.text);
     const ledger = (await env.WP_OS_DB.prepare("SELECT kind, cause, sent FROM work_card_notice WHERE work_card_id = 'wc_walker_wait' ORDER BY cause").all<{ kind: string; cause: string; sent: number }>()).results!;
-    expect(ledger).toEqual([{ kind: "QUESTION", cause: "nag:1", sent: 1 }, { kind: "QUESTION", cause: "nag:2", sent: 1 }]);
+    expect(ledger).toEqual([{ kind: "QUESTION", cause: `nag:1@${T0.toISOString()}`, sent: 1 }, { kind: "QUESTION", cause: `nag:2@${T0.toISOString()}`, sent: 1 }]);
   });
 
   it("Preston's card waiting on Sequoia goes to Sequoia in Preston's name; a fault on our side is never emailed as a question", async () => {

@@ -370,7 +370,7 @@ async function tellRequester(
  * the in-app notice centre only; a partner who asked by email (Scooter works by email alone) never
  * saw "Still waiting on you". The sweep hands each rung row here, and the same Porter notice the
  * block first sent (PREVIEW, PLAN, QUESTION, STUCK) goes again on the card's thread, headed by how
- * long it has waited. Cause `nag:<n>` makes it once per ring. Null composer (not a web property
+ * long it has waited. Cause `nag:<n>@<blocked_at>` (reAskCause) makes it once per ring of THIS block. Null composer (not a web property
  * change card) → nothing sent here; the in-app notice stands either way.
  */
 export async function remindRequesterByEmail(
@@ -394,7 +394,8 @@ export async function remindRequesterByEmail(
   const full = await porterNoticeEmail(env, row.id, kind, row.block_needed ?? "", { resend: true });
   if (!full) return { sent: false, reason: "not a web property change card", failed: false };
   const email = reAskEmail({ nag, days, title, cardId: card.id, needed: row.block_needed ?? "", nextAskAt: nextOn, now, stage: full });
-  const out = await tellRequester(env, card, { kind, cause: `nag:${nag}` }, email);
+  const { reAskCause } = await import("./requestReply");
+  const out = await tellRequester(env, card, { kind, cause: reAskCause(nag, row.blocked_at) }, email);
   return { sent: out.sent, reason: out.reason, failed: out.failed === true };
 }
 
