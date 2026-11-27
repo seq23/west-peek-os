@@ -485,7 +485,9 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     expect(String((await card(porterId)).description)).toMatch(/No partner decisions in this change; built without asking/);
     expect(String((await card(porterId)).description), "the finding says where it stops").toMatch(/On green it stops at a preview link; it lands when the partner approves the preview/);
     expect(sent.slice(before).filter((m) => m.to === SCOOTER), "no plan email").toHaveLength(0);
-    await macReports(porterId, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/51", pr_number: 51, check_state: "GREEN", proof: "validate green · shots" });
+    // His two asks reached Porter's card with his email (27 Nov 2026: the door's hand-off no longer strands them on the
+    // closed chief card), so the build's ledger marks each in his words, and the DONE reply goes only once both are.
+    await macReports(porterId, { phase: "BUILD", status: "ok", items: [{ item: "Swap the Sensori founders photo on westpeek.ventures for the one attached.", state: "done", done_when: [{ check: "it works on the preview", met: true }] }, { item: "Same spot, same size.", state: "done", done_when: [{ check: "same file name and dimensions on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/51", pr_number: 51, check_state: "GREEN", proof: "validate green · shots" });
     // PREVIEW FIRST (owner, 23 Sep 2026): green alone never lands, even with nothing to ask.
     expect((await tickFor(porterId)).outcome).toBe("BLOCKED");
     expect((await readWebPropertyChange(env, porterId))!.phase).toBe("BUILD");
@@ -499,6 +501,11 @@ describe("Porter reads the email (21 Sep 2026): the request is the specification
     expect((await replyFrom(SCOOTER, "approved", token)).answered).toBe(true);
     expect((await tickFor(porterId)).summary).toMatch(/Landing approved after the preview; LAND queued/);
     await macReports(porterId, { phase: "LAND", status: "ok", merge_sha: "1111111111222222222233333333334444444444", live_proof: "https://westpeek.ventures/#portfolio → 200, new photo hash" });
+    const asks = (await env.WP_OS_DB.prepare("SELECT words FROM partner_ask WHERE work_card_id = ?1 ORDER BY seq").bind(porterId).all<{ words: string }>()).results!.map((a) => a.words);
+    expect(asks, "his asks are on the card doing the work, not the chief's closed card").toEqual(["Swap the Sensori founders photo on westpeek.ventures for the one attached.", "Same spot, same size."]);
+    // The seat's marking read (tests/doneMarksEveryBuild.test.ts proves it from the build ledger) has no seat here: its
+    // marks are written as it would write them, so this test keeps proving the email count of the DONE itself.
+    await env.WP_OS_DB.prepare("UPDATE partner_ask SET status = 'DONE', why = 'built and live on westpeek.ventures' WHERE work_card_id = ?1").bind(porterId).run();
     expect((await tickFor(porterId)).outcome).toBe("DONE");
     // RECEIVED reached him before this window; since 0258 the DONE reply goes straight to him, so
     // since the BUILD began his inbox has had the preview and the finished email — no plan email.
