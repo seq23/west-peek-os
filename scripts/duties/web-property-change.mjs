@@ -1534,7 +1534,10 @@ export async function landLinesFirst({ job, names, jobDir, packageDir, attachmen
   const turn = deps.turn ?? (async (note, linesPath) => {
     const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath: linesPath, planText: job.plan?.text ?? null, landOutput: null, mergeSha: null, attachments, extraLines: [] })}\n\n${note}`;
     writeFileSync(path.join(jobDir, "prompt-LAND-lines.md"), prompt);
-    const claude = await runModel({ job, prompt, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase: "LAND" });
+    const phase = "LAND";
+    const resultPath = linesPath;
+    const claude = await runModel({ job, prompt, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
+    finishIfCodex(claude, { phase, resultPath, worktree: names.worktree, branch: names.branch, jobDir, progress });
     writeFileSync(path.join(jobDir, "claude-LAND-lines.out"), `${claude.out}\n--- stderr ---\n${claude.err}`);
     try {
       return JSON.parse(readFileSync(linesPath, "utf8"));
