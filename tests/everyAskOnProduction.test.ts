@@ -2,15 +2,16 @@ import { describe, expect, it } from "vitest";
 import { buildProblems } from "../src/shared/work/everyAsk";
 
 /** 19 Nov 2026 (wc_59ef2d40): a check that can only be met on production is LAND's, never an unfinished preview build. */
-describe("a done-when check whose place is production is judged at LAND", () => {
-  const item = (check: string, note = "") => ({ item: "Inquiries shows '[email protected]'", state: "done", done_when: [{ check: "A test fails if any address sits outside the markers", met: true }, { check, met: false, note }] });
-  it("the refused build of wc_59ef2d40 passes", () => {
-    expect(buildProblems({ items: [item("The markers reach production and the address reads correctly on the live site", "Cloudflare only obfuscates on the proxied production host; LAND checks it after the merge")] })).toEqual([]);
+describe("a done-when check whose place is production is LAND's when the review rules so", () => {
+  const ITEM = "Inquiries shows '[email protected]'";
+  const PROD = "The markers reach production and the address reads correctly on the live site";
+  const item = (check: string) => ({ item: ITEM, state: "done", done_when: [{ check: "A test fails if any address sits outside the markers", met: true }, { check, met: false, note: "LAND checks it after the merge" }] });
+  it("the refused build of wc_59ef2d40 passes with the review's landing hold", () => {
+    expect(buildProblems({ items: [item(PROD)], reviewHolds: [{ item: ITEM, check: PROD, held: true, by: "landing", why: "Cloudflare only rewrites the address on the live host." }] })).toEqual([]);
   });
-  it.each(["Confirmed on the live dashboard", "Checked against production", "Some live check"])("named for production or by its note: %s", (check) => {
-    expect(buildProblems({ items: [item(check, check === "Some live check" ? "LAND confirms it on the real host" : "")] })).toEqual([]);
-  });
-  it("an unmet preview check is still refused", () => {
-    expect(buildProblems({ items: [item("On the preview the address is plain text and a tap opens mail", "not done yet")] })).toHaveLength(1);
+  it("the same check with no ruling, or a preview check ruled not held, is refused", () => {
+    expect(buildProblems({ items: [item(PROD)] })).toHaveLength(1);
+    const preview = "On the preview the address is plain text and a tap opens mail";
+    expect(buildProblems({ items: [item(preview)], reviewHolds: [{ item: ITEM, check: preview, held: false }] })).toHaveLength(1);
   });
 });

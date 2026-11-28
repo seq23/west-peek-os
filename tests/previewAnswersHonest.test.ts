@@ -28,11 +28,13 @@ describe("the preview never says done, answered or missing when it is not (19 No
         },
         { item: "Quote tool 1a: settings", state: "done", done_when: [{ check: "saves", met: true }] },
       ],
+      // 28 Nov 2026: what holds the open check is the fresh-eyes review's ruling, never keywords in its wording.
+      review_holds: [{ item: "Confirm whether the live dashboard reads and writes his real tracker", check: "After the merge, dashboard:status --env production gives the answer for the live dashboard", held: true, by: "landing", why: "Only the live dashboard can answer this; LAND runs dashboard:status --env production after the merge." }],
     } as never)!;
     const lines = text.split("\n");
     expect(lines[0]).not.toMatch(/^• Done:/);
     expect(lines[0]).toMatch(/not answered until it is live, after you approve: Confirm whether the live dashboard/);
-    expect(lines[0]).toContain("still to check: After the merge, dashboard:status --env production");
+    expect(lines[0]).toContain("LAND runs dashboard:status --env production after the merge");
     expect(lines).toContain("• Done: Quote tool 1a: settings");
     // An open check with no landing in it is plainly partly done.
     const partial = buildAnswersText({ items: [{ item: "X", state: "done", done_when: [{ check: "the form posts", met: false }] }] } as never)!;

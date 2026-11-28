@@ -20,7 +20,7 @@
  *       persistence and veteran UX/UI POV", not v0.1). A `build` line carries `done_when`: the checks that make it
  *       finished (real data source, survives a reload and a second device, sign-in, empty and error states, help,
  *       phone first). A BUILD reports each item against its checks (`buildProblems`); a check not met is refused
- *       unless something only the partner can supply is what holds it (a key, a file) or the partner dated it.
+ *       unless the fresh-eyes review ruled it held (`review_holds`, below) or a list proves what holds it.
  *
  * WHAT THIS CANNOT SEE: whether the list is complete. An ask the plan never mentions is caught only
  * by the list being the plan's stated contract, which the partner and the card can read.
@@ -98,107 +98,69 @@ export function planProblems(input: { partnerText: string; accounting?: readonly
   return problems;
 }
 
-/**
- * Why this BUILD is not finished, in plain words; empty when it is. Every item reports its `done_when`
- * checks; each must be met. An item that is not met is accepted only when it is held by something the
- * partner alone can supply AND the report names it (`missing_secret` with a missing key listed,
- * `missing_material` with a missing file listed), or by work the partner dated (`partner_dated`; the
- * plan check already holds the dating to their words). Never a silent "partial".
- */
-/**
- * A STEP THE PARTNER KEPT FOR HIMSELF IS HIS, NOT UNFINISHED WORK (partner tail, 14 Nov 2026). Scooter's brief said
- * "We will walk the rules before any money view ships" and "I approve each step". The BUILD did all seven asks and
- * reported the one check only he can meet ("walk the rules with Scooter") as not met, quoting him; the v1.0 bar
- * refused it as unfinished, no preview went to him, and the retries could only fail the same way. A check is held by
- * the partner when its note quotes words he actually wrote AND those words reserve the step to him ("we will…",
- * "I will…", "I approve…", "not … yet", "when I am ready").
- */
 /*
- * 17 Nov 2026 (wc_c548d043): Scooter wrote "I'm working on the copy separately, so leave placeholders until I send it."
- * The BUILD did exactly that and reported the check as not met, quoting him; none of the phrases above matched
- * ("until I send it", "I'm working on"), so a finished build was REFUSED and retried on its last attempts. Words
- * that keep the next step for him until HE sends, shares or confirms something reserve it as well. And a quote's
- * own apostrophes ("I'm") no longer cut it short: single quotes count as quote marks only outside a word.
+ * WHO SAYS AN UNMET CHECK IS NOT THE BUILDER'S TO FINISH: THE FRESH-EYES REVIEW, NEVER A KEYWORD (partner tail,
+ * 28 Nov 2026, wc_9f7312e4). Scooter asked for homepage items 1-7 and said "I don't want one to hold up the other".
+ * The BUILD finished them and reported two checks it could not meet in this repo ("form answers deleted after 24
+ * months": the site keeps none, they live in Network OS; "a Give and Take screen inside Network OS": another repo),
+ * each put to him with a recommendation. The bar refused the whole build, so his homepage preview never came.
+ * It was the SIXTH phrasing the keyword exceptions misread, after five patches: "we will…/I approve" (14 Nov),
+ * "until I send it" (17 Nov, #476), "its own item after this" (18 Nov, #502), "after the merge / on production"
+ * (19 Nov, #526), "RUNBOOK_FORBIDS" (19 Nov, #537). Patch twice → rebuild, so the meaning is now read by a model.
+ *
+ * THE LAW. The review (a second model turn in a fresh context, not the builder) rules on every unmet check in the
+ * builder's result: `held: true` with `by` = partner | landing | another_job | runbook and a plain `why`, or
+ * `held: false` (the builder could finish it here, so it goes back to the builder as a blocking finding). The runner
+ * writes the review's rulings onto the report as `review_holds`, overwriting anything the builder wrote there. Code
+ * only checks structure: an unmet check passes when a held ruling names it, or when a list proves what holds it
+ * (`missing_secret` with a key in `missing_secrets`, `missing_material` with a file in `missing_materials`,
+ * `partner_dated`, which the plan check ties to his own dated words). An unmet check nobody ruled on is refused.
  */
-const RESERVES_A_STEP = /\b(?:i|we)(?:'ll|\s+will)\b|\bi\s+approve\b|\bnot\b[^.]{0,60}\byet\b|\bwhen\s+(?:i|we)(?:'m|'re|\s+am|\s+are)?\s+ready\b|\b(?:wait|waits)\s+(?:for|on)\s+me\b|\buntil\s+(?:i|we)\s+(?:send|share|give|confirm|say|provide|write|approve|decide|tell)\b|\b(?:i|we)(?:'m|'re|\s+am|\s+are)\s+(?:working\s+on|writing|drafting)\b/i;
-const QUOTED = /[\u201C"]([^"\u201D]{8,400})[\u201D"]|(?<![\p{L}\d])['\u2018]((?:[^'\u2018\u2019]|(?<=\p{L})['\u2019](?=\p{L})){8,400}?)['\u2019](?![\p{L}\d])/gu;
-export function partnerReserved(note: string | null | undefined, partnerText: string): boolean {
-  for (const m of String(note ?? "").matchAll(QUOTED)) {
-    const quote = (m[1] ?? m[2])!;
-    if (RESERVES_A_STEP.test(quote) && partnerWrote(quote, partnerText)) return true;
-  }
-  return false;
+export const HOLD_BY = ["partner", "landing", "another_job", "runbook"] as const;
+export type HoldBy = (typeof HOLD_BY)[number];
+/** The `check` a ruling carries for an item reported not done although every check is met. */
+export const ITEM_STATE = "state";
+export interface ReviewHold {
+  item: string;
+  check: string;
+  held: boolean;
+  by?: HoldBy | string | null;
+  why?: string | null;
 }
 
-/*
- * AN ITEM THE APPROVED ANSWER SPLIT OFF IS ITS OWN JOB, NOT THIS BUILD'S (partner tail, 18 Nov 2026, wc_d4b961bc).
- * Porter's GA4 plan asked "Add privacy pages?" and recommended "Yes, as its own item after this: the GA tags go live
- * now; drafted privacy wording comes to you on its own preview". That answer was adopted. The BUILD did the GA work
- * and reported the privacy item unmet, quoting the answer; the v1.0 bar refused the finished build and told the next
- * attempt (the card's last) to draft privacy pages inside the GA job, against the answer. Words in the partner's text
- * or the approved answers that send the item to its own item / card / job / preview, or "separately", split it off:
- * the build is judged without it and the OS files it as its own site job (`splitOffItems`), so it is never dropped.
- */
-const SPLITS_OFF = /\b(?:its|their|a)\s+own\s+(?:item|card|job|pr|preview|piece|task)\b|\bseparately\b|\bas\s+a\s+separate\s+(?:item|card|job|pr|task)\b/i;
-function quoteSplitsOff(note: string | null | undefined, partnerText: string): string | null {
-  for (const m of String(note ?? "").matchAll(QUOTED)) {
-    const quote = (m[1] ?? m[2])!;
-    if (SPLITS_OFF.test(quote) && partnerWrote(quote, partnerText)) return quote;
-  }
-  return null;
+const norm = (s: string | null | undefined): string => tokens(s).join(" ");
+/** Same text, allowing one side to be the other cut short (the runner bounds both at 200 characters). */
+function sameText(a: string | null | undefined, b: string | null | undefined): boolean {
+  const x = norm(a);
+  const y = norm(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const [short, long] = x.length <= y.length ? [x, y] : [y, x];
+  return short.length >= 24 && long.startsWith(short);
 }
 
-/** The BUILD items an approved answer or the partner split off as their own job, with the words that did it. */
-export function splitOffItems(items: readonly DoneItem[] | null | undefined, partnerText: string | undefined): Array<{ item: string; words: string }> {
-  if (!partnerText) return [];
+/** The review's ruling on this item's check, or null when the review ruled on it nowhere. */
+export function reviewRuling(holds: readonly ReviewHold[] | null | undefined, item: string, check: string): ReviewHold | null {
+  return (holds ?? []).find((h) => sameText(h.item, item) && sameText(h.check, check)) ?? null;
+}
+
+const heldBy = (h: ReviewHold | null): h is ReviewHold => Boolean(h && h.held === true && (HOLD_BY as readonly string[]).includes(String(h.by ?? "")) && String(h.why ?? "").trim());
+
+/** The BUILD items the review ruled are another job's (another repo, or split off by him or an approved answer): filed as their own site job, never dropped. */
+export function splitOffItems(items: readonly DoneItem[] | null | undefined, holds: readonly ReviewHold[] | null | undefined): Array<{ item: string; words: string }> {
   const out: Array<{ item: string; words: string }> = [];
   for (const i of items ?? []) {
     if (i.state === "done") continue;
     const unmet = (i.done_when ?? []).filter((c) => String(c?.check ?? "").trim() && c.met !== true);
     if (!unmet.length) continue;
-    const words = unmet.map((c) => quoteSplitsOff(c.note, partnerText));
-    if (words.every((w) => w)) out.push({ item: String(i.item ?? ""), words: words[0]! });
+    const rulings = unmet.map((c) => reviewRuling(holds, i.item, c.check));
+    if (rulings.every((r) => heldBy(r) && r.by === "another_job")) out.push({ item: String(i.item ?? ""), words: String(rulings[0]!.why).slice(0, 300) });
   }
   return out;
 }
 
-/*
- * A CHECK THAT CAN ONLY BE MET AFTER THE MERGE IS LAND'S, NOT AN UNFINISHED BUILD (partner tail, 19 Nov 2026,
- * wc_c548d043). Scooter wrote "Please publish … after these final fixes … Please reply with the live links once
- * complete." The BUILD did all eight fixes and reported "Live links curled after the merge" unmet ("This belongs to
- * the LAND phase"); the v1.0 bar refused the finished build, no preview went to him, and every retry could only fail
- * the same way, because the merge waits on his "approved" to the preview. A check held by the landing itself
- * (`blocked_by: "after_land"`, or a check that names the merge, landing or the live site as its moment) is judged at
- * LAND, whose curl proof the DONE email lists as the live links.
- */
-const AFTER_LAND = /\b(?:after|once|when)\b[^.;]{0,40}?\b(?:merge[ds]?|merging|land(?:s|ed|ing)?|goes\s+live|is\s+live|published|deployed)\b/i;
-/*
- * …AND ONE WHOSE PLACE IS PRODUCTION (19 Nov 2026, wc_59ef2d40): "The markers reach production and the address reads
- * correctly on the live site", noted "Cloudflare only obfuscates on the proxied production host; LAND checks it after
- * the merge". A preview-first BUILD can never meet it, so the finished build was refused and rebuilt for nothing.
- */
-const ON_PRODUCTION = /\b(?:on|reach(?:es)?|in|against)\s+(?:the\s+)?(?:live\s+(?:site|dashboard|host)|production(?:\s+host)?)\b/i;
-const LAND_CHECKS_IT = /\bLAND\b[^.;]{0,30}?\b(?:checks?|confirms?|verif(?:y|ies)|proves?|curls?)\b/;
-export function heldByLanding(check: { check?: string | null; note?: string | null }, blockedBy?: string | null): boolean {
-  const words = String(check?.check ?? "");
-  return blockedBy === "after_land" || AFTER_LAND.test(words) || ON_PRODUCTION.test(words) || LAND_CHECKS_IT.test(String(check?.note ?? ""));
-}
-
-/*
- * A RUNBOOK "NEVER" RULE IS A DECISION THE BUILD RECORDS, NOT AN UNFINISHED ITEM (partner tail, 19 Nov 2026,
- * wc_76e6d7ff). Scooter asked to take a song through contest entry "with my own access"; the topbarz RUNBOOK says
- * "Scooter Taylor's own track is never in the vote", so the BUILD did the nearest thing it allows (a demo song he runs
- * from the preview), met every done-when check, and reported the item "partial" with `RUNBOOK_FORBIDS: "…"`, exactly
- * as the prompt orders ("That is a decision, not a question"). The v1.0 bar refused the finished build for the word
- * "partial", no preview went to him before his partner call, and every retry could only report the same rule. An item
- * whose every check is met and whose note quotes the RUNBOOK's own words passes; the preview email names the rule.
- */
-const RUNBOOK_RULE = /\bRUNBOOK_FORBIDS:\s*["\u201C][^"\u201D]{8,400}["\u201D]/;
-export function runbookForbids(note: string | null | undefined): boolean {
-  return RUNBOOK_RULE.test(String(note ?? ""));
-}
-
-export function buildProblems(input: { items?: readonly DoneItem[] | null; missingSecrets?: number; missingMaterials?: number; partnerText?: string }): string[] {
+/** Why this BUILD is not finished, in plain words; empty when it is. */
+export function buildProblems(input: { items?: readonly DoneItem[] | null; missingSecrets?: number; missingMaterials?: number; reviewHolds?: readonly ReviewHold[] | null }): string[] {
   const items = input.items ?? [];
   if (items.length === 0) return ["it did not report each ask against its done-when checks (no `items` list)"];
   const problems: string[] = [];
@@ -210,16 +172,22 @@ export function buildProblems(input: { items?: readonly DoneItem[] | null; missi
       problems.push(`${what} reports no done-when checks`);
       continue;
     }
-    if (i.state === "done" && unmet.length === 0) continue;
+    if (unmet.length === 0) {
+      // Every check met but reported "partial" / "not_done": the review rules on the item itself (`check: "state"`).
+      if (i.state === "done" || heldBy(reviewRuling(input.reviewHolds, i.item, ITEM_STATE))) continue;
+      problems.push(`${what} is not finished (its state is "${String(i.state).slice(0, 20)}"${reviewRuling(input.reviewHolds, i.item, ITEM_STATE) ? "" : " and the review ruled on it nowhere"})`);
+      continue;
+    }
     const by = String(i.blocked_by ?? "");
-    const held = (by === "missing_secret" && (input.missingSecrets ?? 0) > 0) || (by === "missing_material" && (input.missingMaterials ?? 0) > 0) || by === "partner_dated";
-    if (held) continue;
-    if (unmet.length === 0 && runbookForbids(i.note)) continue;
-    if (unmet.length && unmet.every((c) => heldByLanding(c, by))) continue;
-    if (unmet.length && input.partnerText && unmet.every((c) => partnerReserved(c.note, input.partnerText!))) continue;
-    if (unmet.length && input.partnerText && unmet.every((c) => quoteSplitsOff(c.note, input.partnerText!))) continue;
-    const named = unmet.length ? unmet.map((c) => c.check.slice(0, 80)).join(", ") : `its state is "${String(i.state).slice(0, 20)}"`;
-    problems.push(`${what} is not finished (${named})${by ? ` and "${by.slice(0, 40)}" is not something only the partner can supply` : ""}`);
+    const listed = (by === "missing_secret" && (input.missingSecrets ?? 0) > 0) || (by === "missing_material" && (input.missingMaterials ?? 0) > 0) || by === "partner_dated";
+    if (listed) continue;
+    const open = unmet.filter((c) => !heldBy(reviewRuling(input.reviewHolds, i.item, c.check)));
+    if (open.length === 0) continue;
+    const said = open.map((c) => {
+      const r = reviewRuling(input.reviewHolds, i.item, c.check);
+      return `${c.check.slice(0, 80)}${r ? (r.held === false ? " (the review: the build can finish it here)" : "") : " (the review ruled on it nowhere)"}`;
+    });
+    problems.push(`${what} is not finished (${said.join(", ")})`);
   }
   return problems;
 }
