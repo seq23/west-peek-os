@@ -709,6 +709,25 @@ export async function settleFixTurn(result, problem, settleRuns, note) {
   return settleRuns(result, note);
 }
 
+/**
+ * ONE RUNS LOOP FOR EVERY BUILD TURN (28 Nov 2026, wc_e1d13d5c). The one-repo BUILD ran the RUNBOOK runs a builder asked
+ * for; the several-repo BUILD had no loop at all, so its `needs_runs` came back as the whole report ("join-west-peek-main: ")
+ * and Porter "tried three times" on a job that only needed its runs run. Both paths now build their settler here.
+ * `apply(runs)` → the done records; `rerun(done, round, note)` → `{ result, problem }` of the model's next turn. Bounded.
+ */
+export function makeRunSettler({ apply, rerun, rounds = 3 }) {
+  return async (asked, withNote = null) => {
+    let res = asked;
+    let prob = null;
+    for (let round = 0; round < rounds && res?.status === "needs_runs"; round += 1) {
+      const done = await apply(res.runs);
+      ({ result: res, problem: prob } = await rerun(done, round, withNote));
+    }
+    if (res?.status === "needs_runs") res = { ...res, status: "failed", reason: `asked for runs ${rounds} times without finishing` };
+    return { result: res, problem: prob };
+  };
+}
+
 export async function reviewAndFix({ review, rebuild, rounds = REVIEW_ROUNDS, phase = "BUILD" }) {
   let fixed = 0;
   for (let round = 0; ; round += 1) {
@@ -1717,23 +1736,22 @@ export async function run(job, ctx) {
   let { result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", phase);
   // 0253: THE SCRIPT RUNS THE REPO'S OWN SCRIPTS FOR THE MODEL — RUNBOOK-named only, recorded, bounded.
   // One loop for the build turn and (14 Nov 2026) for a fix turn after the review: `withNote` is that turn's own prompt.
-  const settleRuns = async (asked, withNote = null) => {
-    let res = asked;
-    let prob = null;
-    for (let round = 0; round < 3 && res?.status === "needs_runs"; round += 1) {
-      const done = await applyRuns(res.runs, { base: book.mayRun, job, phase }, names.worktree, ctx.env, secrets.allowed, progress);
+  const settleRuns = makeRunSettler({
+    apply: async (runs) => {
+      const done = await applyRuns(runs, { base: book.mayRun, job, phase }, names.worktree, ctx.env, secrets.allowed, progress);
       runsDone.push(...done);
+      return done;
+    },
+    rerun: async (done, round, withNote) => {
       rmSync(resultPath, { force: true });
       const again = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath, planText, landOutput, mergeSha, attachments, extraLines: [...repoLines(book, secrets, outDir, runsDone, job), ...stageLines] })}${withNote ? `\n${withNote}` : ""}\n\nRUNS DONE FOR YOU SINCE YOUR LAST TRY: ${done.map((d) => `${d.script} (${d.env}) → exit ${d.exit}: ${d.line}`).join("; ")}`;
       claude = await runModel({ job, prompt: again, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
       finishIfCodex(claude, { phase, resultPath, worktree: names.worktree, branch: names.branch, jobDir, progress });
       writeFileSync(path.join(jobDir, `claude-${phase}-runs${withNote ? "-fix" : ""}${round + 1}.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
       cost = (cost ?? 0) + (costFrom(claude.out) ?? 0);
-      ({ result: res, problem: prob } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", phase));
-    }
-    if (res?.status === "needs_runs") res = { ...res, status: "failed", reason: "asked for runs three times without finishing" };
-    return { result: res, problem: prob };
-  };
+      return readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", phase);
+    },
+  });
   if (result?.status === "needs_runs") ({ result, problem } = await settleRuns(result));
   // A BUILD that needs another Drive asset names it; the script fetches it and runs the model ONCE more.
   const wanted = phase === "BUILD" && job.drive?.folder_id ? assetsRequested(result) : [];
@@ -2576,13 +2594,33 @@ async function runSeveral(job, ctx) {
         const resultPath = path.join(jobDir, `result-BUILD-${p.repo}.json`);
         if (existsSync(resultPath)) rmSync(resultPath);
         const partJob = { ...job, target_repo: p.repo, property_host: p.property_host, sites: p.sites, request: `${job.request ?? job.ask ?? ""}\n\n(${p.repo}'s part: ${p.ask})` };
-        const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(partJob, { ...p.names, packageDir, jobDir, resultPath, planText: job.plan?.text ?? null, attachments: assets.attachments, thisPart: p.repo, extraLines: repoLines(p.book, p.secrets, path.join(jobDir, "out"), [], partJob) })}`;
+        const partOut = path.join(jobDir, "out");
+        const runsDone = [];
+        const contextFor = () => `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(partJob, { ...p.names, packageDir, jobDir, resultPath, planText: job.plan?.text ?? null, attachments: assets.attachments, thisPart: p.repo, extraLines: repoLines(p.book, p.secrets, partOut, runsDone, partJob) })}`;
+        const prompt = contextFor();
         writeFileSync(path.join(jobDir, `prompt-BUILD-${p.repo}.md`), prompt);
         progress(`model turn (${job.model} if Claude) for BUILD of ${p.repo}`);
         let claude = await runModel({ job, prompt, model: job.model, cwd: p.names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
         finishIfCodex(claude, { phase, resultPath, worktree: p.names.worktree, branch: p.names.branch, jobDir, progress });
         writeFileSync(path.join(jobDir, `claude-BUILD-${p.repo}.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
         let { result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "BUILD");
+        // The same runs loop as one repo: this repo's RUNBOOK, worktree and keys; each turn sees the runs done so far.
+        const settleRuns = makeRunSettler({
+          apply: async (runs) => {
+            const done = await applyRuns(runs, { base: p.book.mayRun, job: partJob, phase }, p.names.worktree, ctx.env, p.secrets.allowed, progress);
+            runsDone.push(...done);
+            return done;
+          },
+          rerun: async (done, round, withNote) => {
+            rmSync(resultPath, { force: true });
+            const again = `${contextFor()}${withNote ? `\n${withNote}` : ""}\n\nRUNS DONE FOR YOU SINCE YOUR LAST TRY: ${done.map((d) => `${d.script} (${d.env}) → exit ${d.exit}: ${d.line}`).join("; ")}`;
+            claude = await runModel({ job, prompt: again, model: job.model, cwd: p.names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
+            finishIfCodex(claude, { phase, resultPath, worktree: p.names.worktree, branch: p.names.branch, jobDir, progress });
+            writeFileSync(path.join(jobDir, `claude-BUILD-${p.repo}-runs${withNote ? "-fix" : ""}${round + 1}.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
+            return readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "BUILD");
+          },
+        });
+        if (result?.status === "needs_runs") ({ result, problem } = await settleRuns(result));
         const wanted = job.drive?.folder_id ? assetsRequested(result) : [];
         if (wanted.length) {
           const fetched = await fetchDriveAssets(path.join(packageDir, "drive"), wanted, ctx, jobDir, progress);
@@ -2597,14 +2635,14 @@ async function runSeveral(job, ctx) {
         if (spentReport(phase, claude, result)) return { ...spentReport(phase, claude, result), parts: reports };
         if (!result) return { phase, status: "failed", reason: `BUILD of ${p.repo} ended (claude exit ${claude.code}) but ${problem}`, parts: reports };
         if (result.status !== "ok") return { phase, status: result.status, reason: `${p.repo}: ${String(result.reason).slice(0, 1400)}`, parts: reports };
-        const reviewed = await reviewBuild({ job, base: prompt, result, names: p.names, jobDir, packageDir, resultPath, ctx, progress, tag: `-${p.repo}` });
+        const reviewed = await reviewBuild({ job, base: prompt, result, names: p.names, jobDir, packageDir, resultPath, ctx, progress, tag: `-${p.repo}`, settleRuns });
         if (reviewed.report) return { ...reviewed.report, reason: `${p.repo}: ${reviewed.report.reason ?? ""}`.slice(0, 1500), parts: reports };
         result = reviewed.result;
         items.push(...itemsOf(result).map((i) => ({ ...i, item: `${p.repo}: ${i.item}`.slice(0, 200) })));
         answers.push(...answersOf(result));
         reviewHolds.push(...reviewHoldsOf(result).map((h) => ({ ...h, item: `${p.repo}: ${h.item}`.slice(0, 200) })));
         const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress, registryAllowance(p.book, p.secrets), { branch: p.names.branch });
-        proof = [String(result.proof ?? "").slice(0, 6000), reviewed.line, ...configLines].filter(Boolean).join("\n");
+        proof = [String(result.proof ?? "").slice(0, 6000), reviewed.line, ...configLines, ...runLines(runsDone)].filter(Boolean).join("\n");
         anyRebuilt = true;
       }
       let pr;

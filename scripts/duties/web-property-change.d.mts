@@ -69,6 +69,8 @@ export function createNewRepo(
 ): Promise<{ ok: boolean; why?: string; created?: boolean; pagesHost?: string }>;
 /** A fix turn after the review that asked for runs goes through the build turn's run loop (14 Nov 2026). */
 export function settleFixTurn<R extends { status?: string } | null>(result: R, problem: string | null, settleRuns: ((r: NonNullable<R>, note: string | null) => Promise<{ result: unknown; problem: string | null }>) | null, note: string | null): Promise<{ result: any; problem: string | null }>;
+/** One bounded runs loop for every BUILD turn, one repo or several (28 Nov 2026). */
+export function makeRunSettler(opts: { apply: (runs: any) => Promise<any[]>; rerun: (done: any[], round: number, note: string | null) => Promise<{ result: any; problem: string | null }>; rounds?: number }): (asked: any, withNote?: string | null) => Promise<{ result: any; problem: string | null }>;
 /** Where each file the partner sent sits in the worktree, byte for byte, or NOT FOUND (wc_76e6d7ff, 17 Nov 2026). */
 export function hisFilesOnBranch(worktree: string, attachmentsDir: string): string[];
 /** The reviewer's block for `hisFilesOnBranch`; empty when he sent no files. */
