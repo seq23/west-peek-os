@@ -6,6 +6,7 @@ import { runAi } from "../ai/runAi";
 import { failedOnShape, readStructured, structuredOutput, type StructuredOutput } from "../ai/structuredOutput";
 import { maskPrivateInputs } from "../ai/scrub";
 import { committedLpNamedIn, committedLps } from "../ai/committedLps";
+import { credentialConfigured } from "../../shared/ai/providerCredentials";
 import { NO_MODEL_READER, central } from "../../shared/intake/inboundRead";
 import { partnerByEmail } from "../../shared/registry/partners";
 import { partnersOwnWords } from "../../shared/intake/replyBody";
@@ -130,7 +131,7 @@ export const FIRST_READERS: readonly Reader[] = [
 export async function maskedFreeRead(env: Env, input: Parameters<SeatRead>[1], providerKey: "workers_ai" | "google_free", use: "mail" | "chief-draft" = "mail"): Promise<ReadOut> {
   const chiefDraft = use === "chief-draft";
   const workers = providerKey === "workers_ai";
-  if (chiefDraft && (workers ? env.WP_CHIEF_WORKERS_AI_FREE_ONLY !== "true" : !env.WP_GEMINI_API_KEY?.trim())) {
+  if (chiefDraft && (workers ? env.WP_OS_CHIEF_WORKERS_AI_FREE_ONLY !== "true" : !credentialConfigured(env, providerKey, { requireOwnCredential: true }))) {
     return { ok: false, text: "", detail: "the provider does not have a verified free-only configuration for chief drafts", out: true };
   }
   let masked: ReturnType<typeof maskPrivateInputs>;

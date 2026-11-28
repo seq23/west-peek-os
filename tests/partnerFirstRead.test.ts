@@ -320,11 +320,11 @@ describe("the reader ladder, through the real router", () => {
     const before = geminiCalls.length;
     expect(await maskedFreeRead(routed({}), input, "google_free", "chief-draft")).toMatchObject({ ok: false, out: true });
     expect(geminiCalls).toHaveLength(before);
-    const capped = await maskedFreeRead(routed({ AI: ai as unknown as Env["AI"], WP_CHIEF_WORKERS_AI_FREE_ONLY: "true" }), input, "workers_ai", "chief-draft");
+    const capped = await maskedFreeRead(routed({ AI: ai as unknown as Env["AI"], WP_OS_CHIEF_WORKERS_AI_FREE_ONLY: "true" }), input, "workers_ai", "chief-draft");
     expect(capped).toMatchObject({ ok: true, reader: "WORKERS_AI" });
     expect(ai.run).toHaveBeenCalledTimes(1);
     ai.run.mockRejectedValue(new Error("Workers Free quota exhausted"));
-    const quota = await maskedFreeRead(routed({ AI: ai as unknown as Env["AI"], WP_CHIEF_WORKERS_AI_FREE_ONLY: "true" }), input, "workers_ai", "chief-draft");
+    const quota = await maskedFreeRead(routed({ AI: ai as unknown as Env["AI"], WP_OS_CHIEF_WORKERS_AI_FREE_ONLY: "true" }), input, "workers_ai", "chief-draft");
     expect(quota.ok).toBe(false);
     expect(geminiCalls).toHaveLength(before);
   });

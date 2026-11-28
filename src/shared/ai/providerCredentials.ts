@@ -147,9 +147,13 @@ export function credentialNote(env: unknown, providerKey: string): string | null
  * For a binding-backed provider this asks whether the platform granted the binding, which is the
  * same question in a different shape.
  */
-export function credentialConfigured(env: unknown, providerKey: string): boolean {
+export function credentialConfigured(env: unknown, providerKey: string, options?: { requireOwnCredential: boolean }): boolean {
   const binding = BINDING_BACKED[providerKey];
   if (binding) return Boolean((env as Record<string, unknown>)[binding]);
+  if (options?.requireOwnCredential) {
+    const own = PROVIDER_CREDENTIAL_NAME[providerKey];
+    return Boolean(own && readString(env, own)?.trim());
+  }
   return credentialValueFor(env, providerKey) !== undefined;
 }
 

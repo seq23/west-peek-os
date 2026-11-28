@@ -127,7 +127,7 @@ describe("step 3 · no stopwatch", () => {
 
   it("queues a free-route draft for seat review without closing the chief's request", async () => {
     const id = await openChiefTurn(env, systemIdentity(), "aie_walker", "SCHEDULE", "Sort the $25 community event tickets by section.", "west-peek");
-    const withFreeRoutes = { ...env, WP_CHIEF_WORKERS_AI_FREE_ONLY: "true", WP_GEMINI_API_KEY: "fixture-key" };
+    const withFreeRoutes = { ...env, WP_OS_CHIEF_WORKERS_AI_FREE_ONLY: "true", WP_GEMINI_API_KEY: "fixture-key" };
     draftCalls.length = 0;
     geminiDraft = "Group balcony tickets before floor tickets.";
     try {
