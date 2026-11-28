@@ -1,5 +1,7 @@
 import type { Env } from "../env";
-import { LOCAL_JOB_QUEUE_SECONDS } from "../../shared/work/localJobs";
+import { OPERATIONS_ENABLED } from "../services/chiefControls";
+import { LOCAL_JOB_QUEUE_SECONDS, readPartnerSessionReport } from "../../shared/work/localJobs";
+import { scrubInputs } from "./scrub";
 import { capabilitiesAllow, clearEndedAttachments, clearRunAttachments, readRefs, type AttachmentKind, type SeatAttachmentRef } from "./seatAttachments";
 
 /**
@@ -641,7 +643,7 @@ export async function claimRun(
     const candidates =
       (
         await env.WP_OS_DB.prepare(
-          `SELECT id, seat, attachments_json FROM subscription_seat_run WHERE status = 'QUEUED' AND seat IN (${placeholders}) AND run_kind IN (${kindPlaceholders})${canSearch ? "" : " AND needs_search = 0"} ORDER BY ${PARTNER_ASK_FIRST}, created_at ASC LIMIT 25`,
+          `SELECT id, seat, attachments_json FROM subscription_seat_run WHERE ${OPERATIONS_ENABLED} AND status = 'QUEUED' AND seat IN (${placeholders}) AND run_kind IN (${kindPlaceholders})${canSearch ? "" : " AND needs_search = 0"} ORDER BY ${PARTNER_ASK_FIRST}, created_at ASC LIMIT 25`,
         )
           .bind(...seats, ...kinds)
           .all<{ id: string; seat: string; attachments_json: string | null }>()
@@ -658,7 +660,7 @@ export async function claimRun(
       `UPDATE subscription_seat_run
           SET status = 'CLAIMED', claimed_by = ?2, claimed_at = ?3,
               attempt_count = attempt_count + 1, updated_at = ?3
-        WHERE id = ?1 AND status = 'QUEUED'`,
+        WHERE id = ?1 AND status = 'QUEUED' AND ${OPERATIONS_ENABLED}`,
     )
       .bind(next.id, deviceId, now.toISOString())
       .run();
@@ -709,26 +711,37 @@ export async function reportRun(
    * sentence, so the adapter throws and the chain moves on to the paid search lane. The claimer also
    * checks this before it reports; this is the wall that does not depend on the claimer being right.
    */
-  const row = hasOutput
-    ? await env.WP_OS_DB.prepare("SELECT needs_search FROM subscription_seat_run WHERE id = ?1").bind(input.runId).first<{ needs_search: number }>()
-    : null;
+  const row = await env.WP_OS_DB.prepare("SELECT needs_search, task_class FROM subscription_seat_run WHERE id = ?1")
+    .bind(input.runId).first<{ needs_search: number; task_class: string | null }>();
+  let output = input.outputText;
+  let chiefFailure: string | null = null;
+  if (row?.task_class === "partner-session" && hasOutput) {
+    const { report } = readPartnerSessionReport(output);
+    if (!report) chiefFailure = "The chief returned an invalid session report.";
+    else if (scrubInputs([
+      report.reply ?? "", report.reason ?? "", ...report.remember,
+      ...report.asks.flatMap((ask) => [ask.words, ask.why ?? "", ...ask.options]),
+    ]).blocked) chiefFailure = "The chief report contained material that could not be shared.";
+    else output = JSON.stringify(report);
+  }
   const events = Math.max(0, Math.floor(input.searchEvents ?? 0));
   const unproven = Boolean(row && row.needs_search === 1 && events < SEARCH_MIN_EVENTS);
-  const ok = hasOutput && !unproven;
-  const failure = unproven
+  const ok = hasOutput && !unproven && !chiefFailure;
+  const failure = chiefFailure ?? (unproven
     ? "the seat answered without running a single web search, so its answer was thrown away: a search call is believed only with search events counted in the CLI's own record"
-    : (input.error ?? "the claimer reported no output and no reason");
+    : row?.task_class === "partner-session" ? "The chief run exited without a report."
+    : (input.error ?? "the claimer reported no output and no reason"));
   const queries = (input.searchQueries ?? []).map((q) => String(q).slice(0, 300)).slice(0, 60);
   const res = await env.WP_OS_DB.prepare(
     `UPDATE subscription_seat_run
         SET status = ?2, output_text = ?3, error = ?4, reported_at = ?5, updated_at = ?5,
             resolution = ?6, search_events = ?8, search_queries_json = ?9
-      WHERE id = ?1 AND status = 'CLAIMED' AND claimed_by = ?7`,
+      WHERE id = ?1 AND status = 'CLAIMED' AND claimed_by = ?7 AND ${OPERATIONS_ENABLED}`,
   )
     .bind(
       input.runId,
       ok ? "REPORTED" : "FAILED",
-      ok ? input.outputText : null,
+      ok ? output : null,
       ok ? null : failure,
       now.toISOString(),
       ok ? `${input.deviceId} completed this run` : `${input.deviceId} could not complete this run`,
@@ -772,7 +785,7 @@ export async function progressRun(
 ): Promise<{ accepted: boolean; detail: string }> {
   const res = await env.WP_OS_DB.prepare(
     `UPDATE subscription_seat_run SET progressed_at = ?3, progress_note = ?4, updated_at = ?3
-      WHERE id = ?1 AND status = 'CLAIMED' AND claimed_by = ?2`,
+      WHERE id = ?1 AND status = 'CLAIMED' AND claimed_by = ?2 AND ${OPERATIONS_ENABLED}`,
   )
     .bind(input.runId, input.deviceId, now.toISOString(), (input.note ?? "").slice(0, 400) || null)
     .run();

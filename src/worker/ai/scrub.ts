@@ -1,4 +1,4 @@
-import { privateModelOnlyPatterns } from "../../shared/ai/contentClass";
+import { committedLpNamedIn, privateModelOnlyPatterns } from "../../shared/ai/contentClass";
 
 /**
  * Credential scrub (P4): no credentials in LLM context, ever.
@@ -111,7 +111,10 @@ const letters = (i: number): string => (i < 26 ? String.fromCharCode(65 + i) : `
 const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** A stated sum of money ("$2.5M", "$250,000", "$3 million"): a deal term wherever it appears. */
 const AMOUNT = /\$\s?\d[\d,]*(?:\.\d+)?(?:\s?(?:[kmb]n?|mm|million|billion|thousand))?\b/gi;
+const DEAL_FIGURE = /\b\d[\d,]*(?:\.\d+)?(?:\s?(?:%|percent\b|bps\b|basis points?\b|[kmb]n?\b|mm\b|million\b|billion\b|thousand\b|x\b))?/gi;
 const STAND_IN = /\[(?:Investor [A-Z]+|amount \d+|deal term \d+)\]/g;
+const WITH_STAND_INS = new RegExp(`(${STAND_IN.source})`, "g");
+const DEAL_AMOUNT = new RegExp(`${AMOUNT.source}|${DEAL_FIGURE.source}`, "gi");
 
 /**
  * MASKED, NEVER BLOCKED (owner ruling, 19 Nov 2026): the free Gemini first read reads every partner email, with the
@@ -120,13 +123,20 @@ const STAND_IN = /\[(?:Investor [A-Z]+|amount \d+|deal term \d+)\]/g;
  * one way. The caller fails closed: when the committed-LP records cannot be read it never calls this, and it checks
  * the masked text names no committed LP before anything is sent. Pure.
  */
-export function maskPrivateInputs(inputs: string[], committedLpNames: readonly string[]): MaskResult {
+export function maskPrivateInputs(inputs: string[], committedLpNames: readonly string[], onlyPrivate = false): MaskResult {
   const back = new Map<string, string>();
   let count = 0;
   const names = [...new Set(committedLpNames.map((n) => n.trim().replace(/\s+/g, " ")).filter((n) => n.length >= 3))].sort((a, b) => b.length - a.length);
   const investor = new Map<string, string>();
   let amounts = 0;
   let terms = 0;
+  const deal = committedLpNamedIn(inputs, names) !== null || inputs.some((input) => privateModelOnlyPatterns.some((marker) => marker.test(input)));
+  const maskAmount = (said: string) => {
+    const tag = `[amount ${++amounts}]`;
+    back.set(tag, said);
+    count += 1;
+    return tag;
+  };
   const out = redactInputs(inputs).inputs.map((input) => {
     let text = input;
     for (const name of names) {
@@ -142,12 +152,7 @@ export function maskPrivateInputs(inputs: string[], committedLpNames: readonly s
         return `${lead}${tag}`;
       });
     }
-    text = text.replace(AMOUNT, (said: string) => {
-      const tag = `[amount ${++amounts}]`;
-      back.set(tag, said);
-      count += 1;
-      return tag;
-    });
+    // Deal phrases can contain figures themselves (for example, a stated carry percentage).
     for (const marker of privateModelOnlyPatterns) {
       const global = new RegExp(marker.source, marker.flags.includes("g") ? marker.flags : `${marker.flags}g`);
       text = text.replace(global, (said: string) => {
@@ -156,6 +161,12 @@ export function maskPrivateInputs(inputs: string[], committedLpNames: readonly s
         count += 1;
         return tag;
       });
+    }
+    // Preserve generated stand-ins while masking nearby deal figures, including those without a dollar sign.
+    if (deal || !onlyPrivate) {
+      text = text.split(WITH_STAND_INS)
+        .map((part, index) => index % 2 ? part : part.replace(deal ? DEAL_AMOUNT : AMOUNT, maskAmount))
+        .join("");
     }
     return text;
   });

@@ -408,30 +408,21 @@ describe("the email door — \"Walker, tell Scooter: …\"", () => {
       .first<Record<string, unknown>>();
   }
 
-  it("hands the message on to the named employee when it is not the sender's own chief of staff", async () => {
-    const chiefCardId = await openAssignmentCard(env, {
+  it("keeps an instruction mentioning Walker on the sending partner’s own chief session", async () => {
+    const id = await openAssignmentCard(env, {
       subject: "quick one A",
       partnerAddress: SEQUOIA_EMAIL,
       chiefOfStaff: "Wren",
-      raw: "Walker, tell Scooter: Nora's email is nora.motaweh@example.com and the parsing bug is fixed.",
+      raw: "Walker, tell Scooter: the parsing bug is fixed.",
       limits: EMAILED_TASK_LIMITS,
       emlKey: null,
     });
-    const chief = await cardRow(chiefCardId);
-    expect(chief.owner_id).toBe("aie_wren");
-    expect(String(chief.description)).toMatch(/Handed to Walker/);
-    expect(chief.state).toBe("DONE");
-
-    const handed = await firstDescendant(chiefCardId);
-    expect(handed).not.toBeNull();
-    expect(handed!.kind).toBe("PARTNER_MESSAGE");
-    expect(handed!.owner_id).toBe("aie_walker");
-    expect(handed!.result_recipient).toBe(SCOOTER_EMAIL);
-    expect(String(handed!.prompt)).toContain("nora.motaweh@example.com");
+    expect(await cardRow(id)).toMatchObject({ owner_id: "aie_wren", kind: "PARTNER_SESSION", result_recipient: null });
+    expect(await firstDescendant(id)).toBeNull();
   });
 
-  it("stamps the card in place when the named employee is already the sender's own chief of staff", async () => {
-    const cardId = await openAssignmentCard(env, {
+  it("keeps a request to Wren in the original words without setting a recipient", async () => {
+    const id = await openAssignmentCard(env, {
       subject: "quick one B",
       partnerAddress: SEQUOIA_EMAIL,
       chiefOfStaff: "Wren",
@@ -439,13 +430,9 @@ describe("the email door — \"Walker, tell Scooter: …\"", () => {
       limits: EMAILED_TASK_LIMITS,
       emlKey: null,
     });
-    const row = await cardRow(cardId);
-    expect(row.kind).toBe("PARTNER_MESSAGE");
-    expect(row.owner_id).toBe("aie_wren");
-    expect(row.result_recipient).toBe(SCOOTER_EMAIL);
-    expect(String(row.prompt)).toContain("Q3 packet");
-    // Not reassigned — the same card that opened.
-    expect(row.assigned_from_card_id ?? null).toBeNull();
+    expect(await cardRow(id)).toMatchObject({ kind: "PARTNER_SESSION", owner_id: "aie_wren", result_recipient: null });
+    const session = await env.WP_OS_DB.prepare("SELECT request_text FROM partner_session WHERE work_card_id = ?1").bind(id).first<string>("request_text");
+    expect(session).toContain("the Q3 packet is filed");
   });
 
   it("fails closed with a clear reason when the named employee does not exist", async () => {
@@ -708,35 +695,19 @@ describe("tell both partners: the email-partner door on any work card (24 Nov 20
     expect(parsePartnerMessageAsk("", "Walker, tell Scooter: x")?.copy).toBeNull();
   });
 
-  it("the email door opens the card with the other partner copied, titled for both", async () => {
-    const cardId = await openAssignmentCard(env, {
+  it("copies both partners on an explicitly addressed specialist’s message card", async () => {
+    const id = await openAssignmentCard(env, {
       subject: "both one",
       partnerAddress: SEQUOIA_EMAIL,
       chiefOfStaff: "Wren",
-      raw: "Wren, tell Scooter and Sequoia: the Q3 packet is filed.",
+      raw: "Porter, tell Scooter and Sequoia: the Q3 packet is filed.",
       limits: EMAILED_TASK_LIMITS,
       emlKey: null,
     });
-    const row = await cardRow(cardId);
-    expect(row.kind).toBe("PARTNER_MESSAGE");
-    expect(row.result_recipient).toBe(SCOOTER_EMAIL);
-    expect(JSON.parse(String(row.cc_emails))).toEqual([SEQUOIA_EMAIL]);
-    expect(String(row.title)).toMatch(/^Tell Scooter and Sequoia: /);
-  });
-
-  it("handed to another employee, the copy rides on the handed card too", async () => {
-    const chiefCardId = await openAssignmentCard(env, {
-      subject: "both two",
-      partnerAddress: SEQUOIA_EMAIL,
-      chiefOfStaff: "Wren",
-      raw: "Walker, tell both: the parsing bug is fixed.",
-      limits: EMAILED_TASK_LIMITS,
-      emlKey: null,
-    });
-    const handed = await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE assigned_from_card_id = ?1").bind(chiefCardId).first<Record<string, unknown>>();
-    expect(handed?.kind).toBe("PARTNER_MESSAGE");
-    expect(handed?.owner_id).toBe("aie_walker");
-    expect(JSON.parse(String(handed?.cc_emails))).toEqual([SCOOTER_EMAIL]);
+    const handed = await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE assigned_from_card_id = ?1").bind(id).first<Record<string, unknown>>();
+    expect(handed).toMatchObject({ kind: "PARTNER_MESSAGE", owner_id: "aie_porter", result_recipient: SCOOTER_EMAIL });
+    expect(JSON.parse(String(handed?.cc_emails))).toEqual([SEQUOIA_EMAIL]);
+    expect(String(handed?.title)).toMatch(/^Tell Scooter and Sequoia: /);
   });
 
   it("the runner sends ONE email to the partner with the other copied, and the employee greets both", async () => {

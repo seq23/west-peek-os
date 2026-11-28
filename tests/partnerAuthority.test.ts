@@ -152,6 +152,13 @@ describe("only an authenticated partner can assign work by email", () => {
     expect(senderWrote.isAssignment).toBe(false);
     expect(senderWrote.reason).toMatch(/not written by/i);
 
+    const address = "fixture@example.test";
+    const prefixLookalike = authenticationVerdict(
+      `${TRUSTED_AUTHSERV_ID}.example.test; spf=pass smtp.mailfrom=${address}; dkim=pass header.d=example.test; dmarc=pass`,
+      address,
+    );
+    expect(prefixLookalike.passed).toBe(false);
+
     // Cloudflare's real verdict first (a failure), the attacker's forged one appended below it.
     const injected = mailAuthority({
       fromHeader: "sequoia@westpeek.ventures",

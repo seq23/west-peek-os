@@ -39,6 +39,11 @@
       "required": false,
       "purpose": "Workers AI — the cheap tier, and the only free lane whose terms do not permit training."
     },
+    "WP_OS_CHIEF_WORKERS_AI_FREE_ONLY": {
+      "kind": "var",
+      "required": false,
+      "purpose": "Chief text drafts may use the Workers AI binding only when an operator has verified the account is subject to the platform's Workers Free cap. Unset on Workers Paid."
+    },
     "BROWSER": {
       "kind": "binding",
       "required": false,

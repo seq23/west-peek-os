@@ -98,11 +98,11 @@ export function checkDoor(files) {
   if (!open.length) violations.push("openAssignmentCard() is gone");
   else {
     examined += 1;
-    // 0253: the door hands the parse the registry it just read; the order against the blog parse is what is pinned.
-    const web = Math.max(open.indexOf("parseWebPropertyAsk(input.subject, written)"), open.indexOf("parseWebPropertyAsk(input.subject, written, registry)"));
-    const blog = open.indexOf("parseBlogAsk(input.subject, written)");
-    if (web < 0 || blog < 0) violations.push("openAssignmentCard() no longer parses both the web-property ask and the blog ask from the written text");
-    else if (web > blog) violations.push("openAssignmentCard() parses blog help BEFORE the web-property ask — 'newsletter signup on the site' would become a blog outline");
+    const chief = open.indexOf("if (addressee && chiefSessionFor");
+    const specialist = open.indexOf("parseWebPropertyAsk(input.subject, written, registry)");
+    if (chief < 0 || specialist < 0 || chief > specialist || !open.slice(chief, specialist).includes("await openPartnerSession(")) {
+      violations.push("openAssignmentCard() does not give a chief's own mail to the session before specialist routing");
+    }
     /*
      * EVERY MESSAGE IS STORED ONCE, AT THE ENTRY (22 Sep 2026, 0226). `openAssignmentCard` used to
      * gate its own `.eml` store on `input.raw.trim().length > 0` — a second, per-door copy of the
@@ -127,11 +127,11 @@ export function checkDoor(files) {
   else if (ctx >= 0 && site > ctx) violations.push("parseBlogAsk() tests BLOG_CONTEXT before SITE_FEATURE — 'newsletter' wins over 'signup form'");
   const general = files.general.slice(files.general.indexOf("export async function workCard("));
   examined += 1;
-  const guard = general.indexOf("/chief of staff/i.test(employee.role)");
+  const guard = general.indexOf("if (chiefSessionFor(employee.id)");
   const loop = general.indexOf("for (let step = 1; step <= runSteps; step++)");
-  if (guard < 0) violations.push("workCard() no longer hands a chief of staff's web-property card to Porter — the general loop would browse it and email the partner a permission block");
-  else if (loop >= 0 && guard > loop) violations.push("workCard()'s chief-of-staff guard sits after the general loop — too late");
-  if (guard >= 0 && !/isWebPropertyChange\(ask\)[\s\S]{0,600}assignCard\(/.test(general.slice(guard, guard + 2500))) violations.push("workCard()'s chief-of-staff guard does not hand the card on through assignCard");
+  if (guard < 0 || (loop >= 0 && guard > loop)) {
+    violations.push("workCard() lets the general step loop run a chief's session");
+  }
   // A PLAIN READ NEVER WAITS FOR A HUMAN (owner, 21 Sep 2026), and paying/logging in still does.
   examined += 1;
   const reqTask = files.browser.slice(files.browser.indexOf("export async function requestTask("));
@@ -298,8 +298,8 @@ function selfTest() {
   say(rawEnv.violations.some((v) => /spawns codex with env: process\.env/.test(v)), "a codex spawn that passes process.env straight through is caught");
   const noStrip = check({ ...files, dutyScripts: { ...files.dutyScripts, [scriptRel]: { ...files.dutyScripts[scriptRel], stripped: files.dutyScripts[scriptRel].stripped.replace(/import \{[^}]*claudeChildEnv[^}]*\} from "\.\.\/lib\/vault-env\.mjs";/, "const VAULT_INJECTED_VAR = 'X'; const strippedNote = String; const envForRepoRun = (b) => b; const vaultLookup = () => ({}); function claudeChildEnv(b) { return { ...b }; }") } } });
   say(noStrip.violations.some((v) => /does not import claudeChildEnv/.test(v)) && noStrip.violations.some((v) => /defines its own claudeChildEnv/.test(v)), "a duty script with its own env copy instead of the shared vault strip is caught");
-  const blogFirst = check({ ...files, door: files.door.replace("let web = parseWebPropertyAsk(input.subject, written, registry);", "const web0 = parseBlogAsk(input.subject, written); let web = parseWebPropertyAsk(input.subject, written, registry);") });
-  say(blogFirst.violations.some((v) => /parses blog help BEFORE/.test(v)), "a door that reads blog help before the web-property ask is caught");
+  const missingSession = check({ ...files, door: files.door.replace("await openPartnerSession(env", "await otherRunner(env") });
+  say(missingSession.violations.some((v) => /chief's own mail/.test(v)), "the mail path must file the chief session before specialist routing");
   const emlMinted = check({ ...files, door: files.door.replace("const emlKey = input.emlKey;", "let emlKey = input.emlKey;\n  if (!emlKey && env.WP_OS_DOCUMENTS) { emlKey = `inbound-email/${crypto.randomUUID()}.eml`; env.WP_OS_DOCUMENTS.put(emlKey, input.raw); }") });
   say(emlMinted.violations.some((v) => /stores its own \.eml/.test(v)), "a door that mints and stores its own copy of the message again is caught");
   const emlOptionalAt = files.door.indexOf("limits: readonly string[];");
@@ -307,8 +307,8 @@ function selfTest() {
   say(emlOptional.violations.some((v) => /no longer requires emlKey/.test(v)), "a door whose emlKey becomes optional again is caught");
   const noSiteYield = check({ ...files, blog: files.blog.replace("if (SITE_FEATURE.test(text)) return null;", "") });
   say(noSiteYield.violations.some((v) => /no SITE_FEATURE yield/.test(v)), "a blog parser that no longer yields to a site feature is caught");
-  const noGuard = check({ ...files, general: files.general.replace("/chief of staff/i.test(employee.role)", "false && /cos/i.test(employee.role)") });
-  say(noGuard.violations.some((v) => /no longer hands a chief of staff's web-property card/.test(v)), "a general loop that would browse a chief's website change is caught");
+  const noGuard = check({ ...files, general: files.general.replace("if (chiefSessionFor(employee.id)", "if (false && chiefSessionFor(employee.id)") });
+  say(noGuard.violations.some((v) => /lets the general step loop run a chief's session/.test(v)), "a general loop that would handle a chief’s session is caught");
   const cancelAfter = check({ ...files, reingest: files.reingest.replace("state = 'CANCELLED', next_action = ?2, block_nag_at = NULL, lease_until = NULL,", "state = 'CANCELLED_LATER', next_action = ?2,") });
   say(cancelAfter.violations.some((v) => /cancel the live duplicates BEFORE/.test(v)), "a re-read that no longer cancels the live duplicate first is caught");
   const readsWait = check({ ...files, browser: files.browser.replace("if (plainRead) preApproved = true;", "if (plainRead && false) preApproved = true;") });

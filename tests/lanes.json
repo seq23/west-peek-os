@@ -10,6 +10,9 @@
     "tests/webPropertyChangeAcrossRepos.test.ts": "one website job split across several repos (17s); a flow, landing guarded pre-merge by validate:no-land-without-approval"
   },
   "pr_always": {
+    "tests/chiefControls.test.ts": "only direct authenticated owner controls pause the operating and seat queues",
+    "tests/chiefRunner.test.ts": "chief runner tool, credential, attachment and budget boundaries",
+    "tests/chiefSignoff.test.ts": "chief provenance and trusted approval binding to the reviewed head",
     "tests/ladderOrder.test.ts": "private work never reaches a free lane, at every rung",
     "tests/subscriptionSeats.test.ts": "a free lane never sees an LP name; private HARD work never goes to Codex",
     "tests/freeModelsForProspects.test.ts": "private-model-only for committed LP names and deal terms",

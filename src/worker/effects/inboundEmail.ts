@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { applyChiefControlEmail, holdMailForResume, operatingStopped } from "../services/chiefControls";
 import { isFirmSelfTest } from "../../shared/intake/firmSelfTest";
 import { isAdminOrWebsiteSubject } from "../../shared/intake/dealOrigin";
 import { appendEvent } from "../events";
@@ -298,6 +299,11 @@ export function inboundMessageKey(headers: Headers): string | null {
 }
 
 export interface InboundOptions {
+  /**
+   * A message held in the owner's pause and worked after the resume (chiefControls.ts replayHeldMail). Its control, if
+   * it carried one, was applied when it arrived, so it is never read as a control again (recheck of #618, R1).
+   */
+  replayedFromHold?: boolean;
   /** The RECEIVED email's first line, verbatim, when a person re-reads a stored message and has something to say first. */
   receivedTldr?: string | null;
   /** An earlier note's thread token, so the RECEIVED threads under it in the partner's inbox. */
@@ -314,7 +320,7 @@ export interface InboundOptions {
 
 /** What a non-card handler in the door did with a message. */
 export interface DoorHandled {
-  by: "tlc_draft_reply" | "tlc_brand_reply" | "tlc_brand_reply_approval" | "tlc_send_pause" | "packet_decision" | "clarification" | "firm_self_test" | "deck_start" | "unparseable";
+  by: "operating_control" | "operations_paused" | "tlc_draft_reply" | "tlc_brand_reply" | "tlc_brand_reply_approval" | "tlc_send_pause" | "packet_decision" | "clarification" | "firm_self_test" | "deck_start" | "unparseable";
   ref: string | null;
   detail: string;
 }
@@ -379,6 +385,8 @@ export async function handleInboundEmail(
    * only — the message still goes through the ordinary door below and is kept like any other.
    */
   const sender = message.headers.get("from") ?? message.from;
+  // NOT GATED BY THE OWNER'S PAUSE (review of #618, F2): an opt-out, bounce or reply is a record, never agent work,
+  // and a pause that skipped it would let a sequence mail someone who opted out after the resume.
   if (!ASSIGNING_PARTNERS.includes((addressIn(sender) ?? "").toLowerCase())) {
     const { recordBrandMail } = await import("../services/learningClub");
     await recordBrandMail(env, { from: sender, subject: decodeHeader(message.headers.get("subject") ?? "") }).catch((err) => {
@@ -419,7 +427,7 @@ export async function handleInboundEmail(
   await finished();
   // RULE 4 (0255): every email from a partner refreshes the "working on now" lines of his profile.
   const partner = addressIn(message.headers.get("from"));
-  if (partner && ASSIGNING_PARTNERS.includes(partner.toLowerCase())) await refreshWorkingOn(env, partner).catch(() => 0);
+  if (partner && ASSIGNING_PARTNERS.includes(partner.toLowerCase()) && !await operatingStopped(env)) await refreshWorkingOn(env, partner).catch(() => 0);
 }
 
 /**
@@ -439,6 +447,21 @@ export async function rerouteStoredMessage(env: Env, input: { emlKey: string | n
   // Not through `oneBigMailAtATime`: the caller holds the turn. A reply that settles a clarification is inside its door,
   // which holds it (taking it again would wait for itself); the clarification sweep takes it before it settles.
   await handleInboundEmailOnce({ from, to: headers.get("to") ?? INTAKE_MAILBOX, headers, raw: new Blob([bytes as BlobPart]).stream(), rawSize: bytes.byteLength }, env, { routeAs: input.routeAs });
+  return true;
+}
+
+/**
+ * WORK A MESSAGE HELD IN THE OWNER'S PAUSE (review of #618, F2), from its stored .eml, through the same door, once
+ * (`operating_held_mail` is the claim). Its route, when it had one, rides along.
+ */
+export async function replayStoredMessage(env: Env, emlKey: string, routeAs: RouteAs | null): Promise<boolean> {
+  const raw = env.WP_OS_DOCUMENTS ? (await (await env.WP_OS_DOCUMENTS.get(emlKey))?.text()) ?? null : null;
+  if (!raw) return false;
+  const headers = headersOfRaw(raw);
+  const from = (addressIn(headers.get("from")) ?? headers.get("from") ?? "").trim().toLowerCase();
+  const bytes = new TextEncoder().encode(raw);
+  const message = { from, to: headers.get("to") ?? INTAKE_MAILBOX, headers, raw: new Blob([bytes as BlobPart]).stream(), rawSize: bytes.byteLength };
+  await oneBigMailAtATime(message.rawSize, () => handleInboundEmailOnce(message, env, { replayedFromHold: true, ...(routeAs ? { routeAs } : {}) }));
   return true;
 }
 
@@ -1147,6 +1170,33 @@ async function handleInboundEmailOnce(
       options.onHandled?.({ by: "unparseable", ref: kept.key, detail: `the mail parser refused it (${parsed.problem}); kept and put on the desk, nothing acted on` });
       return;
     }
+  }
+
+  const control = kept.mail ? await applyChiefControlEmail(env, {
+    authority,
+    words: kept.mail.text,
+    direct: !options.replayedFromHold && !options.routeAs && !options.replyOnThread && !options.receivedTldr &&
+      !inReplyTo && !references && !/^\s*(?:re|aw|sv|fwd?|fw):/i.test(subject) &&
+      !message.headers.has("resent-from") && !/<blockquote\b/i.test(kept.mail.html) &&
+      !forwardedOrigin(kept.text ?? "") && kept.mail.files.length === 0,
+  }) : { applied: false as const };
+  if (control.applied && !control.alsoAsks) {
+    options.onHandled?.({ by: "operating_control", ref: null, detail: `Owner control applied: ${control.operation}.` });
+    return;
+  }
+  if (await operatingStopped(env)) {
+    // HELD, NEVER ONLY A NOTICE (review of #618, F2): the stored copy is worked through this door after she resumes.
+    if (kept.key) {
+      await holdMailForResume(env, kept.key, options.routeAs ?? null);
+      options.onHandled?.({ by: "operations_paused", ref: kept.key, detail: "Held while agents are paused; worked after the resume." });
+      return;
+    }
+    await raiseUnreadMail(env, { dedupeKey: `operations_paused:${subject}:${sender}`.slice(0, 300),
+      title: "Mail arrived while agents were paused and could not be stored",
+      body: `From ${sender.slice(0, 120)}, subject "${subject.slice(0, 120)}". It could not be kept for after the resume (${kept.failure || "not stored"}); it is still in the mailbox.`,
+      objectId: `${sender}:${subject}`.slice(0, 200) });
+    options.onHandled?.({ by: "operations_paused", ref: null, detail: "Not stored, so it could not be held; on the desk instead." });
+    return;
   }
 
   /*

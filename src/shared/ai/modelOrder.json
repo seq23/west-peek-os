@@ -17,6 +17,10 @@
     "ROUTINE": { "seats": ["codex", "claude_code"], "free": "FIRST", "freeLanes": ["google_free", "openrouter_free"] }
   },
   "codex_result_checked_by_claude": ["IMPORTANT"],
+  "chief_session": {
+    "seats": ["claude_code", "codex"],
+    "draftLanes": ["workers_ai", "google_free"]
+  },
   "seat_invocation": {
     "$comment": "What each seat's CLI is started with for a local job. Data for the seat, not a rule about a job: change it here and every job follows.",
     "claude_code": { "model": "opus" }

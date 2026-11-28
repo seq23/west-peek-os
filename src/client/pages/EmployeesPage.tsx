@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
+import { PREVIEW_PARTNER } from "@shared/registry/partners";
 import { personaFor } from "@shared/registry/aiEmployeePersonas";
+import { chiefSessionFor } from "@shared/work/chiefOfStaff";
+import type { PartnerSessionReport } from "@shared/work/localJobs";
 import { portraitAlt, portraitFor } from "../lib/employeePortraits";
 
 /**
@@ -234,6 +237,69 @@ function statusBadge(status: string): string {
   return "badge";
 }
 
+interface ChiefMessage {
+  id: string;
+  state: string;
+  created_at: string;
+  source: "PAGE" | "SCHEDULE";
+  request_text: string;
+  report: PartnerSessionReport | null;
+}
+
+const chiefDate = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "America/Chicago" });
+
+function ChiefMessages({ id, name, active }: { id: string; name: string; active: boolean }) {
+  const path = `/api/workforce/employees/${id}/messages`;
+  const { data, status, reload } = useApi<{ messages: ChiefMessage[] }>(path);
+  const [words, setWords] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
+  const waiting = data?.messages.some((message) => message.state === "OPEN" || message.state === "IN_PROGRESS") ?? false;
+
+  useEffect(() => {
+    if (!waiting) return;
+    const refresh = window.setInterval(reload, 15_000);
+    return () => window.clearInterval(refresh);
+  }, [waiting, reload]);
+
+  return (
+    <section aria-label={`Messages with ${name}`}>
+      <form onSubmit={async (event) => {
+        event.preventDefault();
+        if (busy || !words.trim()) return;
+        setBusy(true);
+        const response = await api<{ detail?: string }>(path, { method: "POST", body: { message: words } });
+        setBusy(false);
+        if (response.status === 202) {
+          setWords("");
+          setStatusMessage(`Message queued for ${name}.`);
+          reload();
+        } else {
+          setStatusMessage(response.data?.detail ?? "Could not queue the message. Try again.");
+        }
+      }}>
+        <label htmlFor={`message-${id}`}>{`Message ${name}`}</label>
+        <textarea id={`message-${id}`} rows={3} maxLength={4000} value={words} onChange={(event) => setWords(event.target.value)} disabled={!active || busy} />
+        <button type="submit" className="btn-strong" disabled={!active || busy || !words.trim()}>{busy ? "Queuing…" : "Send message"}</button>
+        <p role="status">{statusMessage || (!active ? `${name} is off.` : "")}</p>
+      </form>
+      {status !== null && status !== 200 && <p>Could not load recent messages. <button type="button" onClick={reload}>Try again</button></p>}
+      {data?.messages.map((message) => (
+        <article className="card" key={message.id}>
+          <p className="muted small">{chiefDate.format(new Date(message.created_at))} Central</p>
+          <p><strong>{message.source === "PAGE" ? "You" : "Schedule"}:</strong> {message.source === "PAGE" ? message.request_text : "Daily session"}</p>
+          {message.report?.reply && <p><strong>{name}:</strong> {message.report.reply}</p>}
+          {message.report?.asks.length ? <ul>{message.report.asks.map((ask, index) => (
+            <li key={index}>{ask.words}{ask.why && ` — ${ask.why}`}{ask.options.length > 0 && <ul>{ask.options.map((option) => <li key={option}>{option}</li>)}</ul>}</li>
+          ))}</ul> : null}
+          {message.state === "OPEN" || message.state === "IN_PROGRESS" ? <p className="muted small">{message.state === "OPEN" ? "Queued" : "In progress"}</p> : null}
+          {message.state === "BLOCKED" && <p>{message.report?.reason ?? "The session stopped before it finished."}</p>}
+        </article>
+      ))}
+    </section>
+  );
+}
+
 function EmployeeDetailPanel({ id, me, onChanged }: { id: string; me: MeResponse; onChanged: () => void }) {
   const detail = useApi<EmployeeDetail>(`/api/workforce/employees/${id}`);
   // Approved activation receipts for THIS employee. `approved` is the state the receipt must be
@@ -265,6 +331,10 @@ function EmployeeDetailPanel({ id, me, onChanged }: { id: string; me: MeResponse
         {d.profile?.department ?? "unassigned department"} · prompt {d.employee.prompt_version}
         {d.profile?.manager_employee_id ? ` · reports to ${d.profile.manager_employee_id}` : ""}
       </p>
+
+      {isMp && chiefSessionFor(id)?.principal.firmUserId === me.id && (
+        <ChiefMessages key={id} id={id} name={d.employee.name} active={d.employee.status === "ACTIVE"} />
+      )}
 
       {/* CHANGING A TITLE.
           A title is editorial, not authority: what an employee may DO comes from their tool scope,
@@ -654,6 +724,49 @@ function HandoffsPanel({ onChanged }: { onChanged: () => void }) {
   );
 }
 
+function OperatingControl() {
+  const path = "/api/workforce/operating-control";
+  const { data, status, reload } = useApi<{ stopped: boolean }>(path);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState("");
+
+  async function update(command: "pause-confirmed" | "resume") {
+    setBusy(true);
+    setProblem("");
+    const response = await api(path, { method: "POST", body: command });
+    setBusy(false);
+    if (response.status === 200) {
+      setConfirming(false);
+      reload();
+    } else {
+      setProblem("Could not update the pause. Try again.");
+    }
+  }
+
+  if (!data) {
+    return status !== null && status !== 200
+      ? <p>Could not check whether agents are paused. <button type="button" onClick={reload}>Try again</button></p>
+      : null;
+  }
+  return (
+    <section aria-label="Agent pause">
+      {data.stopped ? (
+        <p>Agents are paused. <button type="button" disabled={busy} onClick={() => void update("resume")}>Resume agents</button></p>
+      ) : confirming ? (
+        <>
+          <p>Pause all West Peek OS agents?</p>
+          <button type="button" className="btn-danger" disabled={busy} onClick={() => void update("pause-confirmed")}>Confirm pause</button>
+          <button type="button" disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
+        </>
+      ) : (
+        <button type="button" className="btn-danger" onClick={() => setConfirming(true)}>Pause all agents</button>
+      )}
+      {problem && <p role="alert">{problem}</p>}
+    </section>
+  );
+}
+
 export function EmployeesPage({ me }: { me: MeResponse }) {
   const lounge = useApi<LoungeResponse>("/api/workforce/lounge");
   const [department, setDepartment] = useState<string>("ALL");
@@ -763,6 +876,7 @@ export function EmployeesPage({ me }: { me: MeResponse }) {
 
   return (
     <section data-testid="employees-page">
+      {isMp && me.id === PREVIEW_PARTNER.firmUserId && <OperatingControl />}
       <p data-testid="lounge-activation-law" className="muted small">
         {lounge.data.active_count} of {lounge.data.max_active} employed. {lounge.data.activation_law}
       </p>

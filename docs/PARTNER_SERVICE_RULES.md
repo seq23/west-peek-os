@@ -69,7 +69,7 @@ ALL-KINDS rules are enforced at the shared layer:
 - **Prompt-enforced (R7, R8, R13–R17, R19, R21–R23):** one line each in
   `src/shared/work/partnerPractices.ts#PARTNER_PRACTICES`, composed with the requesting partner's
   constraints register by `src/worker/services/partnerConstraints.ts#practicesForCard`, and included by
-  `steerFor` (Parker, Walker, Percy, Wyatt, deck, blog help, partner messages), the general employee
+  `steerFor` for specialist work, the chief’s `PARTNER_SESSION`, the general employee
   loop (`buildStepPrompt`) and Porter's Mac duty (`job.practices` → `renderContext`).
 - **Code-enforced:** R7/R8 — every kind's block is three parts (`blockWait`), the reminder too, and an
   email reply's "drop it" / "try again" / "send it to an engineer" takes that door on any kind

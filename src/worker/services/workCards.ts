@@ -41,6 +41,7 @@ import { CARD_STATES } from "../../shared/work/workCards";
 
 export interface WorkCardRow {
   id: string;
+  kind: string | null;
   capture_id: string | null;
   title: string;
   description: string | null;
@@ -1780,6 +1781,14 @@ export async function handleAddWorkCardNote(ctx: RouteContext): Promise<Response
   const card = await getVisibleWorkCard(ctx.env, ctx.identity!, ctx.params.id!);
   if (!card) return json({ error: "not_found" }, { status: 404 });
 
+  const isSession = card.kind === PARTNER_SESSION_KIND;
+  if (isSession) {
+    const session = await (await import("./partnerSession")).readSession(ctx.env, card.id);
+    if (!session || session.requested_by !== partnerByFirmUserId(ctx.identity!.id)?.email) {
+      return json({ error: "not_found" }, { status: 404 });
+    }
+  }
+
   // A note on finished work would never be read: the loop only re-reads notes on a card it is
   // still working. Refusing plainly beats accepting it into a void.
   if (!["OPEN", "IN_PROGRESS", "BLOCKED"].includes(card.state)) {
@@ -1814,7 +1823,7 @@ export async function handleAddWorkCardNote(ctx: RouteContext): Promise<Response
    * the live run is stopped and one new run is parked in the same working folder with the note above the brief.
    */
   const steered =
-    (card as { kind?: string | null }).kind === PARTNER_SESSION_KIND
+    isSession
       ? await (await import("./partnerSession")).redirectSession(ctx.env, card.id, text, ctx.identity!.email)
       : null;
 

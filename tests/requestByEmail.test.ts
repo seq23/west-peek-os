@@ -3,8 +3,8 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 import { handleInboundEmail } from "../src/worker/effects/inboundEmail";
 import { TRUSTED_AUTHSERV_ID } from "../src/shared/intake/partnerAuthority";
 import { INTAKE_MAILBOX } from "../src/shared/intake/emailTriggers";
-import { appendFinding, applyDecision, assignCard, workCard } from "../src/worker/services/employeeWork";
-import { sweepIdentity, sweepOnce } from "../src/worker/services/workSweep";
+import { appendFinding, applyDecision, assignCard, workCard, type CardRow } from "../src/worker/services/employeeWork";
+import { announceOutcome, sweepIdentity, sweepOnce, type SweepCard } from "../src/worker/services/workSweep";
 import { blockCard } from "../src/worker/services/blocks";
 import { replyToRequester } from "../src/worker/services/requestReply";
 import { employeeSenderHeader } from "../src/shared/registry/employeeMail";
@@ -83,10 +83,7 @@ describe("Sequoia emails a request", () => {
     chiefCard = wren[0]!;
     expect(chiefCard.title).toMatch(/^From sequoia@westpeek\.ventures: Check whether Sensori/);
     expect(chiefCard.requested_by_email).toBe("sequoia@westpeek.ventures");
-    // 14 Nov 2026: no door claimed it, so it is worked as a partner session (tests/partnerSession.test.ts). The rest of
-    // this suite proves the general loop's hand-off and the answer by email, which every page-made card still takes.
     expect((await env.WP_OS_DB.prepare("SELECT kind FROM work_card WHERE id = ?1").bind(chiefCard.id).first<{ kind: string | null }>())!.kind).toBe("PARTNER_SESSION");
-    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = NULL WHERE id = ?1").bind(chiefCard.id).run();
   });
 
   it("the chief's brief offers `assign` with the roster, and a hand-off decision parses", async () => {
@@ -112,20 +109,20 @@ describe("Sequoia emails a request", () => {
     expect(buildStepPrompt({ title: "x", next_action: null, description: null, employee_name: "Wyatt", employee_role: "Analyst", allows_browser: false, prompt: null, guidance: "", history: [] }, 3)).not.toMatch(/assign —/);
   });
 
-  it("the sweep works the chief's card; handing it to Wyatt opens Wyatt's card carrying the brief, the request, and who asked", async () => {
-    const out = await sweepOnce(env, NOW, {
-      general: async (e, ctx, cardId) => {
-        // Stand in for the model's single decision; everything after it is the real code path.
-        const card = (await e.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(cardId).first())!;
-        const handed = await assignCard(e, card as never, { id: "aie_wren", name: "Wren" }, "Wyatt", "Verify Sensori is real and on-thesis; say whether it is worth a call.");
-        expect(handed.ok).toBe(true);
-        await e.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE' WHERE id = ?1").bind(cardId).run();
-        const line = `Handed to Wyatt as work card ${(handed as { cardId: string }).cardId}`;
-        return { finished: true, blocked: false, detail: line, steps: [{ action: "assigned", detail: line }] };
-      },
-    });
+  it("the sweep queues the chief session, and the shared handoff keeps the request on Wyatt's card", async () => {
+    const out = await sweepOnce(env, NOW);
     expect(out.card?.id).toBe(chiefCard.id);
-    expect(out.outcome).toBe("HANDED_ON");
+    expect(out.outcome).toBe("PROGRESSED");
+    const queued = await env.WP_OS_DB.prepare("SELECT status, run_kind FROM subscription_seat_run WHERE work_card_id = ?1")
+      .bind(chiefCard.id).first();
+    expect(queued).toEqual({ status: "QUEUED", run_kind: "LOCAL_JOB" });
+
+    // Exercise the shared specialist handoff without running a model or the Mac launcher.
+    const card = (await env.WP_OS_DB.prepare("SELECT * FROM work_card WHERE id = ?1").bind(chiefCard.id).first<CardRow & SweepCard>())!;
+    const handed = await assignCard(env, card, { id: "aie_wren", name: "Wren" }, "Wyatt", "Verify Sensori is real and on-thesis; say whether it is worth a call.");
+    if (!handed.ok) throw new Error(handed.reason);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE' WHERE id = ?1").bind(card.id).run();
+    await announceOutcome(env, card, "HANDED_ON", `Handed to Wyatt as work card ${handed.cardId}`);
     expect(sent, "a hand-off is not the answer; no email yet").toHaveLength(0);
 
     const wyatt = await cardsOwnedBy("aie_wyatt");

@@ -6,29 +6,32 @@
  * anything that did not fit. It is now a PARTNER_SESSION card: one full Claude Code session on her Mac, parked as a
  * LOCAL_JOB run the claimer keeps alive with its one-minute ping, under a two-hour phase ceiling and nothing else.
  *
- *   · THE ROUTE is the one rule table's, on the Mac: HARD work, so Claude first, then Codex held for Claude's check;
- *     private work (a committed LP named, deal terms, "keep this private") waits for Claude. Never a free lane: the
- *     Mac has none, and this file never calls `runAi`.
+ *   · THE ROUTE follows modelOrder.json. The Mac tries the two interactive seats. The Worker can prepare a masked
+ *     text draft after a seat outage and keeps the original turn open for the next seat attempt.
  *   · MEMORY FIRST. The parked job carries the partner's standing practices, his holds and his profile
  *     (`practicesForCard`), and the duty puts them at the very top of the prompt.
  *   · THE CLEAR PARTS RUN; THE UNCLEAR WORDS ARE ASKED ABOUT (her ruling, 14 Nov 2026). The report is one line per
  *     ask. A QUESTION ask sends ONE email naming the unclear words with two or three options, and the card is not
  *     blocked: any IN_PROGRESS ask is parked again at once, so the clear work keeps going while he answers.
  *   · A CORRECTION REDIRECTS RUNNING WORK. His reply on the thread abandons the live run (the claimer stops it on its
- *     next ping; a report from an abandoned run is refused) and parks exactly one new run in the same working folder
+ *     next ping; a report from an abandoned run is refused) and parks exactly one new run on the same card
  *     with his words above the brief, and he hears "Changed course: …".
  *   · OUTSIDERS STAY GATED. Every email here goes through `replyToRequester`, which sends to the two partner addresses
  *     only; the session itself has no tool that emails anyone.
  */
+import { operatingStopped } from "./chiefControls";
 import { ACTION_REQUIRED } from "../../shared/email/execEmail";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
-import { abandonRun, parkRun, readRun } from "../ai/subscriptionSeats";
-import { committedLpNamedIn, committedLps } from "../ai/committedLps";
+import { abandonRun, parkRun, readRun, type SeatRunRow } from "../ai/subscriptionSeats";
+import { redactInputs } from "../ai/scrub";
+import modelOrder from "../../shared/ai/modelOrder.json";
 import { privateMaterialSentence } from "../../shared/intake/privateMaterial";
 import { EMAILED_TASK_LIMITS } from "../../shared/intake/partnerAuthority";
 import { partnerByEmail } from "../../shared/registry/partners";
-import { PARTNER_ANSWER_MAX } from "../../shared/work/blocks";
+import { chiefSessionFor } from "../../shared/work/chiefOfStaff";
+import { personaPrompt } from "../../shared/registry/aiEmployeePersonas";
+import { BLOCK_PROVIDERS, PARTNER_ANSWER_MAX, type BlockReason } from "../../shared/work/blocks";
 import {
   LOCAL_JOB_RUN_KIND,
   PARTNER_SESSION_KIND,
@@ -36,10 +39,16 @@ import {
   localJobKind,
   readPartnerSessionReport,
   type SessionAsk,
+  type PartnerSessionReport,
 } from "../../shared/work/localJobs";
-import { practicesForCard } from "./partnerConstraints";
+import { partnerEmailForCard, practicesForCard } from "./partnerConstraints";
 import { recordProfileNotes } from "./partnerProfile";
 import { alreadyTold, replyToRequester } from "./requestReply";
+import type { FirmUserIdentity } from "../auth";
+import { json, type RouteContext } from "../router";
+import { createWorkCardInternal, WorkCardError } from "./workCards";
+import { blockCard } from "./blocks";
+import { actorFromIdentity, HOME_FIRM_SCOPE } from "./authorize";
 
 /** A session is parked again at most this many times before it reports what it has (a loop is not work). */
 export const MAX_SESSION_RUNS = 6;
@@ -58,6 +67,7 @@ export interface PartnerSessionRow {
   answers_json: string;
   report_json: string | null;
   asked_json: string;
+  source: "EMAIL" | "PAGE" | "SCHEDULE";
 }
 
 interface SessionCard {
@@ -89,22 +99,29 @@ const list = (json: string | null | undefined): string[] => {
   }
 };
 
+function savedSessionReport(row: PartnerSessionRow): Partial<PartnerSessionReport> & { fallback_draft?: string } {
+  try {
+    return JSON.parse(row.report_json ?? "{}") ?? {};
+  } catch {
+    return {};
+  }
+}
+
 export async function readSession(env: Env, cardId: string): Promise<PartnerSessionRow | null> {
   return env.WP_OS_DB.prepare("SELECT * FROM partner_session WHERE work_card_id = ?1").bind(cardId).first<PartnerSessionRow>();
 }
 
 /** Make the card a partner session, with his words as the brief. Idempotent. */
-export async function openPartnerSession(env: Env, input: { cardId: string; request: string; requestedBy: string; firmScope?: string }): Promise<void> {
-  await env.WP_OS_DB.prepare(
-    "UPDATE work_card SET kind = ?2, next_action = ?3 WHERE id = ?1",
-  )
-    .bind(input.cardId, PARTNER_SESSION_KIND, "Worked as one session on the Mac: every clear ask done, the unclear words asked about with options.")
-    .run();
-  await env.WP_OS_DB.prepare(
-    "INSERT OR IGNORE INTO partner_session (work_card_id, firm_scope, requested_by, request_text) VALUES (?1, ?2, ?3, ?4)",
-  )
-    .bind(input.cardId, input.firmScope ?? "west-peek", input.requestedBy.trim().toLowerCase(), input.request.slice(0, 100_000))
-    .run();
+export async function openPartnerSession(env: Env, input: { cardId: string; request: string; requestedBy: string; firmScope?: string; source?: PartnerSessionRow["source"]; employeeId?: string }): Promise<void> {
+  await env.WP_OS_DB.batch([
+    env.WP_OS_DB.prepare(
+      `UPDATE work_card SET kind = ?2, next_action = ?3, owner_id = COALESCE(?4, owner_id),
+                            owner_type = CASE WHEN ?4 IS NOT NULL THEN 'AI' ELSE owner_type END WHERE id = ?1`,
+    ).bind(input.cardId, PARTNER_SESSION_KIND, "Waiting for the session on the Mac.", input.employeeId ?? null),
+    env.WP_OS_DB.prepare(
+      "INSERT OR IGNORE INTO partner_session (work_card_id, firm_scope, requested_by, request_text, source) VALUES (?1, ?2, ?3, ?4, ?5)",
+    ).bind(input.cardId, input.firmScope ?? "west-peek", input.requestedBy.trim().toLowerCase(), input.request.slice(0, 100_000), input.source ?? "EMAIL"),
+  ]);
   await appendEvent(env, {
     eventType: "partner_session.opened",
     actorType: "system",
@@ -116,27 +133,103 @@ export async function openPartnerSession(env: Env, input: { cardId: string; requ
   });
 }
 
+/** The page and the schedule file the same card and hand it to the same sweep as email. */
+export async function openChiefTurn(env: Env, identity: FirmUserIdentity, employeeId: string, source: "PAGE" | "SCHEDULE", request: string, firmScope: string) {
+  const chief = chiefSessionFor(employeeId);
+  if (!chief || (source === "PAGE" && chief.principal.firmUserId !== identity.id)) throw new WorkCardError(403, "forbidden");
+  const seat = await env.WP_OS_DB.prepare("SELECT status FROM ai_employee WHERE id = ?1").bind(employeeId).first<{ status: string }>();
+  if (seat?.status !== "ACTIVE") throw new WorkCardError(409, "inactive", `${chief.employee.name} is off.`);
+  const card = await createWorkCardInternal(env, identity, {
+    title: source === "PAGE" ? `Message to ${chief.employee.name}` : `${chief.employee.name} daily session`,
+    firm_scope: firmScope,
+    // A card remains outside the sweep until the request and its executable kind are filed together.
+    next_action: "The session request is being filed.",
+  });
+  await openPartnerSession(env, { cardId: card.id, request, requestedBy: chief.principal.email, firmScope, source, employeeId });
+  return card.id;
+}
+
+export const CHIEF_MESSAGE_BYTES = 16_384;
+
+export async function handleChiefMessages(ctx: RouteContext): Promise<Response> {
+  const { identity, env, request } = ctx;
+  const employeeId = ctx.params.id!;
+  const chief = chiefSessionFor(employeeId);
+  const firmScope = HOME_FIRM_SCOPE;
+  if (!chief || !identity || chief.principal.firmUserId !== identity.id || !identity.roles.includes("MANAGING_PARTNER") ||
+      !actorFromIdentity(identity).firmScopes.includes(firmScope)) {
+    return json({ error: "not_found" }, { status: 404 });
+  }
+  if (request.method === "GET") {
+    const rows = await env.WP_OS_DB.prepare(
+      `SELECT c.id, c.state, c.created_at, s.source, s.request_text, s.report_json
+         FROM partner_session s JOIN work_card c ON c.id = s.work_card_id
+        WHERE c.owner_id = ?1 AND s.requested_by = ?2 AND s.firm_scope = ?3 AND s.source IN ('PAGE', 'SCHEDULE')
+        ORDER BY c.created_at DESC, c.id DESC LIMIT 10`,
+    ).bind(employeeId, chief.principal.email, firmScope).all<{ id: string; state: string; created_at: string; source: string; request_text: string; report_json: string | null }>();
+    return json({ messages: (rows.results ?? []).map(({ report_json, ...row }) => {
+      const { report } = readPartnerSessionReport(report_json);
+      if (row.source === "SCHEDULE" && report?.routing?.length) {
+        report.reply = [report.reply, `Model routing. ${report.routing.join(" ")}`].filter(Boolean).join("\n\n");
+      }
+      return { ...row, report };
+    }) }, { headers: { "Cache-Control": "no-store" } });
+  }
+  if (request.headers.get("content-type")?.split(";")[0] !== "application/json" || !request.body) {
+    return json({ error: "unsupported_media_type" }, { status: 415 });
+  }
+  const reader = request.body.getReader();
+  const buffer = new Uint8Array(CHIEF_MESSAGE_BYTES);
+  let size = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    if (size + value.length > buffer.length) {
+      await reader.cancel();
+      return json({ error: "message_too_large", detail: "Keep the message under 16 KB." }, { status: 413 });
+    }
+    buffer.set(value, size);
+    size += value.length;
+  }
+  let words = "";
+  try {
+    const body = JSON.parse(new TextDecoder().decode(buffer.subarray(0, size))) as { message?: unknown } | null;
+    if (typeof body?.message === "string") words = body.message.trim();
+  } catch { /* An unreadable body takes the same validation path as an empty message. */ }
+  if (!words) return json({ error: "invalid_input", detail: "Write a message first." }, { status: 400 });
+  try {
+    const id = await openChiefTurn(env, identity, employeeId, "PAGE", words, firmScope);
+    return json({ id }, { status: 202 });
+  } catch (error) {
+    if (error instanceof WorkCardError) return json({ error: error.code, detail: error.message }, { status: error.status });
+    throw error;
+  }
+}
+
 /**
  * PARK ONE SESSION RUN — the only place this kind parks. A LOCAL_JOB with the two-hour ceiling: the claimer's ping
  * keeps it alive, so there is no per-call deadline anywhere on its path.
  */
-export async function parkSession(env: Env, card: Pick<SessionCard, "id" | "title" | "firm_scope">, row: PartnerSessionRow, why: string): Promise<{ parked: true; runId: string } | { parked: false; reason: string }> {
+export async function parkSession(env: Env, card: Pick<SessionCard, "id" | "title" | "firm_scope" | "owner_id">, row: PartnerSessionRow, why: string): Promise<{ parked: true; runId: string } | { parked: false; reason: string }> {
+  if (await operatingStopped(env)) return { parked: false, reason: "The owner paused West Peek OS agents." };
+  const chief = chiefSessionFor(card.owner_id);
+  if (!chief || chief.principal.email !== row.requested_by) return { parked: false, reason: "The session has no verified request from this chief's partner." };
   const spec = localJobKind(PARTNER_SESSION_KIND)!;
   const phase = spec.phases.SESSION!;
   const live = row.current_run_id ? await readRun(env, row.current_run_id) : null;
   if (live && (live.status === "QUEUED" || live.status === "CLAIMED")) return { parked: false, reason: `a session run is already live (${live.id})` };
   const { driveFilesFor } = await import("./driveShares");
   const { attachmentsFor } = await import("./requestMaterials");
-  const earlier = (() => {
-    try {
-      return (JSON.parse(row.report_json ?? "null")?.asks ?? []) as SessionAsk[];
-    } catch {
-      return [];
-    }
-  })();
-  const corrections = list(row.corrections_json);
-  const answers = list(row.answers_json);
-  const driveFiles = await driveFilesFor(env, card.id).catch(() => []);
+  const earlier = savedSessionReport(row);
+  const clean = (text: string) => redactInputs([text]).inputs[0]!;
+  const corrections = list(row.corrections_json).map(clean);
+  const answers = list(row.answers_json).map(clean);
+  const [drive, files] = await Promise.all([
+    driveFilesFor(env, card.id, { requireReadable: true }).catch(() => null),
+    attachmentsFor(env, card.id).catch(() => null),
+  ]);
+  const driveFiles = (drive ?? []).map((file) =>
+    ({ ...file, title: clean(file.title), text: file.text ? clean(file.text) : file.text }));
   const payload = {
     card_kind: PARTNER_SESSION_KIND,
     phase: PARTNER_SESSION_PHASE,
@@ -144,31 +237,30 @@ export async function parkSession(env: Env, card: Pick<SessionCard, "id" | "titl
     max_seconds: phase.maxSeconds,
     prompt_file: spec.promptFile,
     script: spec.script,
-    card: { id: card.id, title: card.title, requested_by: row.requested_by },
+    card: { id: card.id, title: clean(card.title), requested_by: row.requested_by },
     // MEMORY FIRST (step 6): the standing practices, his holds and his profile, read fresh for every run.
-    memory: await practicesForCard(env, card.id, card.firm_scope),
-    request: row.request_text,
+    memory: await practicesForCard(env, card.id, card.firm_scope, chief.principal.email).then(clean),
+    employee: { name: chief.employee.name, persona: personaPrompt(chief.employee.name, chief.employee.role) },
+    source: row.source,
+    request: clean(row.request_text),
     corrections,
     answers,
-    earlier_asks: earlier,
+    earlier_asks: earlier.asks ?? [],
+    fallback_draft: earlier.fallback_draft,
     limits: [...EMAILED_TASK_LIMITS],
-    attachments: (await attachmentsFor(env, card.id).catch(() => [])).map((a) => ({ id: a.id, filename: a.filename, media_type: a.media_type, bytes: a.bytes, path: `/api/work-cards/${card.id}/attachments/${a.id}` })),
+    attachments: (files ?? []).map((a) => ({ id: a.id, filename: a.filename, media_type: a.media_type, bytes: a.bytes, path: `/api/work-cards/${card.id}/attachments/${a.id}` })),
     drive_files: driveFiles,
-    private_model_only: false,
+    materials_readable: drive !== null && files !== null,
     queue_max_seconds: spec.queueMaxSeconds,
   };
-  // A COMMITTED LP NAMED ANYWHERE, OR "KEEP THIS PRIVATE", KEEPS IT ON CLAUDE. Unreadable records fail closed.
-  const committed = await committedLps(env, card.firm_scope);
-  const texts = [card.title, row.request_text, ...corrections, ...answers, ...driveFiles.map((f) => f.text ?? "")];
-  payload.private_model_only = !committed.readable || committedLpNamedIn(texts, committed.names) !== null || privateMaterialSentence([row.request_text, ...corrections]) !== null;
 
   const runId = await parkRun(env, {
-    seat: "claude_code",
-    purpose: `Partner session: ${card.title.slice(0, 80)}`,
+    seat: "claude_code", // The local-job claimer owns both seat invocations.
+    purpose: `${chief.employee.name} session: ${row.source.toLowerCase()}`,
     prompt: `${phase.purpose} See job_json.`,
     modelAccess: "PUBLIC_MODEL_APPROVED",
     workCardId: card.id,
-    aiEmployeeId: null,
+    aiEmployeeId: card.owner_id,
     taskClass: "partner-session",
     firmScope: card.firm_scope,
     maxSeconds: phase.maxSeconds,
@@ -190,7 +282,7 @@ export async function parkSession(env: Env, card: Pick<SessionCard, "id" | "titl
     objectType: "work_card",
     objectId: card.id,
     firmScope: card.firm_scope,
-    payload: { run_id: runId, why, private_model_only: payload.private_model_only, corrections: corrections.length, answers: answers.length },
+    payload: { run_id: runId, why, corrections: corrections.length, answers: answers.length },
   });
   return { parked: true, runId };
 }
@@ -262,13 +354,20 @@ async function whoWorks(env: Env, ownerId: string | null): Promise<string> {
 
 /** The sweep's runner for a PARTNER_SESSION card. Never calls a model: it parks, holds, or reads what came back. */
 export async function runPartnerSessionCard(env: Env, sweepCard: SessionCard, now: Date = new Date()): Promise<SessionOutcome> {
+  if (await operatingStopped(env)) {
+    return { finished: false, blocked: false, progressed: false, held: true, detail: "The owner paused West Peek OS agents." };
+  }
   const card = (await sessionCard(env, sweepCard.id)) ?? sweepCard;
   let row = await readSession(env, card.id);
   if (!row) {
     // A card marked with the kind but never opened at the door: its description carries his words.
     const d = await env.WP_OS_DB.prepare("SELECT description FROM work_card WHERE id = ?1").bind(card.id).first<{ description: string | null }>();
-    await openPartnerSession(env, { cardId: card.id, request: d?.description ?? card.title, requestedBy: card.requested_by_email ?? "", firmScope: card.firm_scope });
+    const requester = await partnerEmailForCard(env, card.id);
+    await openPartnerSession(env, { cardId: card.id, request: d?.description ?? card.title, requestedBy: requester ?? "", firmScope: card.firm_scope, source: card.requested_by_email ? "EMAIL" : "PAGE" });
     row = (await readSession(env, card.id))!;
+  }
+  if (chiefSessionFor(card.owner_id)?.principal.email !== row.requested_by) {
+    return stopSession(env, card, "the_brief_is_missing", "Open the session from the chief’s employee page or from their partner’s verified email.");
   }
   const held = (detail: string, minutes = 6): SessionOutcome => ({ finished: false, blocked: false, progressed: true, held: true, waitUntil: new Date(now.getTime() + minutes * 60_000).toISOString(), detail });
 
@@ -279,9 +378,9 @@ export async function runPartnerSessionCard(env: Env, sweepCard: SessionCard, no
     }
     if (run && row.applied_run_id !== run.id && run.status !== "ABANDONED") return applySessionRun(env, card, row, run, now);
     if (run && row.applied_run_id === run.id) {
-      const report = JSON.parse(row.report_json ?? "{}") as { asks?: SessionAsk[]; reply?: string };
-      const asks = report.asks ?? [];
-      if (asks.some((a) => a.status === "QUESTION")) return held("Waiting for his answer to the question; the rest is done or running.", QUESTION_WAIT_HOURS * 60);
+      const report = savedSessionReport(row);
+      const asks = report.status === "failed" ? [] : report.asks ?? [];
+      if (asks.some((a) => a.status === "QUESTION")) return held("Waiting for the partner’s answer to the question; the rest is done or running.", QUESTION_WAIT_HOURS * 60);
       if (asks.length && !asks.some((a) => a.status === "IN_PROGRESS")) {
         /*
          * THE WORK FINISHED AND THE FINAL REPLY WAS HELD BACK (plan step 7's guard, services/partnerUnderstood.ts). No seat
@@ -291,14 +390,14 @@ export async function runPartnerSessionCard(env: Env, sweepCard: SessionCard, no
         const c = await env.WP_OS_DB.prepare("SELECT next_action, waiting_for FROM work_card WHERE id = ?1").bind(card.id).first<{ next_action: string | null; waiting_for: string | null }>();
         const { MARKING_SEAT_WAIT } = await import("./partnerUnderstood");
         const missing = (c?.next_action ?? "").startsWith("Before this is finished") && !(c?.waiting_for ?? "").startsWith(MARKING_SEAT_WAIT) ? c!.next_action! : null;
-        if (!missing) return finish(env, card.id, report.reply, asks);
+        if (!missing) return finish(env, card.id, report.reply, asks, row.source);
         await env.WP_OS_DB.prepare("UPDATE partner_session SET corrections_json = ?2 WHERE work_card_id = ?1").bind(card.id, JSON.stringify([missing, ...list(row.corrections_json)])).run();
         row = (await readSession(env, card.id))!;
       }
     }
   }
   if (row.run_count >= MAX_SESSION_RUNS) return finishWithWhatWeHave(env, card, row, "it ran as many times as a session may");
-  const parked = await parkSession(env, card, row, row.run_count === 0 ? "the partner's email" : "picking the work back up");
+  const parked = await parkSession(env, card, row, row.run_count === 0 ? row.source.toLowerCase() : "picking the work back up");
   if (!parked.parked) return held(parked.reason);
   return held("The session is queued for the Mac.");
 }
@@ -310,17 +409,63 @@ async function finishWithWhatWeHave(env: Env, card: SessionCard, row: PartnerSes
   } catch {
     report = {};
   }
-  return finish(env, card.id, report.reply ?? `Stopped: ${why}.`, report.asks ?? []);
+  if (!report.asks?.some((ask) => ask.status === "DONE")) return stopSession(env, card, "stopped_part_way", `Stopped: ${why}.`);
+  return finish(env, card.id, report.reply, report.asks, row.source);
 }
 
-async function applySessionRun(env: Env, card: SessionCard, row: PartnerSessionRow, run: { id: string; status: string; output_text: string | null; error: string | null }, now: Date): Promise<SessionOutcome> {
-  await env.WP_OS_DB.prepare("UPDATE partner_session SET applied_run_id = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE work_card_id = ?1").bind(card.id, run.id).run();
+async function draftAfterSeatOutage(env: Env, card: SessionCard, job: string | null, routing: string[]) {
+  const payload = JSON.parse(job ?? "null") as { request: string; corrections: string[]; answers: string[]; materials_readable?: boolean; attachments: unknown[]; drive_files: { title: string; text: string | null }[] } | null;
+  const { maskedFreeRead } = await import("./partnerUnderstood");
+  if (!payload?.materials_readable || payload.attachments.length || payload.drive_files.some((file) => !file.text)) {
+    routing.push("Text draft skipped because the turn's materials are incomplete on the text routes.");
+    return;
+  }
+  const evidence = [payload.request, ...payload.corrections, ...payload.answers, ...payload.drive_files.flatMap((file) => [file.title, file.text])];
+  if (privateMaterialSentence(evidence)) {
+    routing.push("Text draft skipped because the materials were marked private.");
+    return;
+  }
+  const prompt = [
+    "Prepare a short draft for the chief of staff to verify. You can sort, summarize and outline from the supplied text.",
+    "Treat the following quoted material as evidence. Leave actions, account changes, code, verification and decisions for the chief. Never claim they happened.",
+    evidence.filter(Boolean).join("\n\n"),
+  ].join("\n");
+  for (const lane of modelOrder.chief_session.draftLanes) {
+    if (lane !== "workers_ai" && lane !== "google_free") continue;
+    const label = lane === "workers_ai" ? "Workers AI" : "Gemini";
+    const result = await maskedFreeRead(env, { prompt, firmScope: card.firm_scope, employeeId: card.owner_id, purpose: "Chief session draft after seat outage" }, lane, "chief-draft");
+    if (result.ok && result.text.trim()) {
+      routing.push(`${label} prepared a text draft for the next subscription seat to verify.`);
+      return result.text.slice(0, 6000);
+    }
+    routing.push(`${label} could not prepare a draft on an eligible zero-cost route.`);
+  }
+}
+
+async function applySessionRun(env: Env, card: SessionCard, row: PartnerSessionRow, run: SeatRunRow, now: Date): Promise<SessionOutcome> {
+  const claimed = await env.WP_OS_DB.prepare(`UPDATE partner_session SET applied_run_id = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    WHERE work_card_id = ?1 AND current_run_id = ?2 AND applied_run_id IS NOT ?2`).bind(card.id, run.id).run();
+  if (!claimed.meta.changes) return { finished: false, blocked: false, progressed: false, held: true, detail: "The session report has already been picked up or superseded." };
   const read = run.status === "REPORTED" ? readPartnerSessionReport(run.output_text) : { report: null, problem: run.error ?? `the run ended ${run.status}` };
   if (!read.report) return { finished: false, blocked: false, progressed: false, detail: `The session did not finish: ${read.problem}` };
   const report = read.report;
+  const earlier = savedSessionReport(row);
+  report.routing = [...(earlier.routing ?? []), ...(report.routing ?? [])].slice(-12);
   if (report.status === "failed") {
-    if (report.waits_seconds) return { finished: false, blocked: false, progressed: true, held: true, waitUntil: new Date(now.getTime() + report.waits_seconds * 1000).toISOString(), detail: `Waiting for a plan to reset: ${report.reason ?? ""}` };
-    return { finished: false, blocked: false, progressed: false, detail: `The session stopped: ${report.reason}` };
+    if (report.model_unavailable) {
+      const routing = report.routing;
+      const fallback_draft = earlier.fallback_draft ?? await draftAfterSeatOutage(env, card, run.job_json, routing).catch(() => {
+        routing.push("The text draft could not be prepared. The original request was kept.");
+        return undefined;
+      });
+      const saved = { ...report, routing: report.routing.slice(-12), asks: earlier.asks ?? [], fallback_draft };
+      await env.WP_OS_DB.prepare(`UPDATE partner_session SET report_json = ?3, run_count = MAX(0,run_count-1)
+        WHERE work_card_id = ?1 AND current_run_id = ?2`).bind(card.id, run.id, JSON.stringify(saved)).run();
+      const detail = fallback_draft ? "A draft is ready for subscription-seat review. The request is still open." : "No model finished the turn. The request is still open and will retry.";
+      return { finished: false, blocked: false, progressed: true, held: true, waitUntil: new Date(now.getTime() + (report.waits_seconds ?? 1800) * 1000).toISOString(), detail };
+    }
+    if (report.waits_seconds) return { finished: false, blocked: false, progressed: true, held: true, waitUntil: new Date(now.getTime() + report.waits_seconds * 1000).toISOString(), detail: "Waiting for a subscription to reset." };
+    return { finished: false, blocked: false, progressed: false, detail: report.reason ?? "The session stopped before producing a report." };
   }
   await env.WP_OS_DB.prepare("UPDATE partner_session SET report_json = ?2 WHERE work_card_id = ?1").bind(card.id, JSON.stringify(report)).run();
   // MEMORY THE SESSION ASKED TO KEEP (step 6): every line passes the profile filter (no LP names, deal terms or fund details).
@@ -328,6 +473,8 @@ async function applySessionRun(env: Env, card: SessionCard, row: PartnerSessionR
 
   const questions = report.asks.filter((a) => a.status === "QUESTION");
   const going = report.asks.filter((a) => a.status === "IN_PROGRESS");
+  // ASKED BY EMAIL FROM EVERY SOURCE (hard stop 11; review of #618, Step 2 gap 3): a question from a page message or a
+  // daily wake goes to the chief's own partner (the verified requester), never only onto the page.
   if (questions.length) {
     const asked = list(row.asked_json);
     const fresh = questions.filter((q) => !asked.includes(q.words));
@@ -337,7 +484,7 @@ async function applySessionRun(env: Env, card: SessionCard, row: PartnerSessionR
     const cause = `session-question:${await questionRound(env, card.id)}`;
     if (fresh.length && !(await alreadyTold(env, card.id, "QUESTION", cause))) {
       const who = await whoWorks(env, card.owner_id);
-      await replyToRequester(env, card, "BLOCKED", who, fresh.map((q) => `${q.words}: ${q.options.join(" / ")}`).join("\n"), { kind: "QUESTION", cause }, questionEmail(fresh, going));
+      await replyToRequester(env, { ...card, requested_by_email: row.requested_by }, "BLOCKED", who, fresh.map((q) => `${q.words}: ${q.options.join(" / ")}`).join("\n"), { kind: "QUESTION", cause }, questionEmail(fresh, going));
       await env.WP_OS_DB.prepare("UPDATE partner_session SET asked_json = ?2 WHERE work_card_id = ?1").bind(card.id, JSON.stringify([...asked, ...fresh.map((q) => q.words)])).run();
     }
   }
@@ -345,7 +492,7 @@ async function applySessionRun(env: Env, card: SessionCard, row: PartnerSessionR
   if (going.length && row.run_count < MAX_SESSION_RUNS) {
     const fresh = (await readSession(env, card.id))!;
     const parked = await parkSession(env, card, fresh, "continuing the asks still in progress");
-    if (parked.parked) return { finished: false, blocked: false, progressed: true, held: true, waitUntil: new Date(now.getTime() + 6 * 60_000).toISOString(), detail: report.asks.map(askLine).join("\n") };
+    if (parked.parked) return { finished: false, blocked: false, progressed: true, held: true, waitUntil: new Date(now.getTime() + 6 * 60_000).toISOString(), detail: "Queued to continue the open requests." };
   }
   // Held for his answer only while a question he was actually sent is unanswered.
   const waitingOnHim = questions.length > 0 && list((await readSession(env, card.id))?.asked_json).length > list(row.answers_json).length;
@@ -353,7 +500,19 @@ async function applySessionRun(env: Env, card: SessionCard, row: PartnerSessionR
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'IN_PROGRESS', next_action = ?2 WHERE id = ?1").bind(card.id, `Waiting for his answer on: ${questions.map((q) => `"${q.words.slice(0, 60)}"`).join(", ")}`.slice(0, 900)).run();
     return { finished: false, blocked: false, progressed: true, held: true, waitUntil: new Date(now.getTime() + QUESTION_WAIT_HOURS * 3600_000).toISOString(), detail: report.asks.map(askLine).join("\n") };
   }
-  return finish(env, card.id, report.reply, report.asks);
+  if (!report.asks.some((ask) => ask.status === "DONE")) {
+    return stopSession(env, card, "nothing_good_enough_to_send", row.source === "EMAIL" ? report.asks.map(askLine).join("\n") : "Read the session report for what is still open.");
+  }
+  return finish(env, card.id, report.reply, report.asks, row.source);
+}
+
+async function stopSession(env: Env, card: SessionCard, reason: BlockReason, detail: string): Promise<SessionOutcome> {
+  const chief = chiefSessionFor(card.owner_id);
+  const who = BLOCK_PROVIDERS.find((provider) => provider === chief?.principal.firstName.toUpperCase());
+  const description = await blockCard(env, card, {
+    reason, detail, who, trying: card.title, employee: chief?.employee.name ?? "Your chief of staff",
+  });
+  return { finished: false, blocked: true, progressed: false, detail: description };
 }
 
 /**
@@ -361,9 +520,9 @@ async function applySessionRun(env: Env, card: SessionCard, row: PartnerSessionR
  * answer followed by the report's own `{"asks":[{"words","status","why"}]}`, which the final reply's guard reads
  * directly (`reportedAsks`). A question never answered by the end is NOT_DONE, saying it waits on his answer.
  */
-async function finish(env: Env, cardId: string, reply: string | undefined, asks: readonly SessionAsk[]): Promise<SessionOutcome> {
+async function finish(env: Env, cardId: string, reply: string | undefined, asks: readonly SessionAsk[], source: PartnerSessionRow["source"]): Promise<SessionOutcome> {
   await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE', next_action = NULL, waiting_until = NULL, waiting_for = NULL WHERE id = ?1").bind(cardId).run();
-  return { finished: true, blocked: false, progressed: false, detail: `${(reply ?? "Finished.").trim()}\n\n${sessionAsksJson(asks)}` };
+  return { finished: true, blocked: false, progressed: false, detail: source === "EMAIL" ? `${(reply ?? "Finished.").trim()}\n\n${sessionAsksJson(asks)}` : "The session report is on the employee’s page." };
 }
 
 /** The asks as the final reply's guard reads them. Pure. */
@@ -379,7 +538,7 @@ export function sessionAsksJson(asks: readonly SessionAsk[]): string {
 
 /**
  * HIS REPLY REDIRECTS THE SESSION (step 5). A correction while a run is live abandons it with his words as the reason
- * (the claimer's next ping is refused and it stops the job) and parks exactly one new run in the same working folder,
+ * (the claimer's next ping is refused and it stops the job) and parks exactly one new run on the same card,
  * his words above the brief, and he hears "Changed course: …". A reply while no run is live (his answer to a
  * question he has not answered) is kept as an answer and restarts the session with it, without a "Changed course". Returns what happened, or null when the card is not a live session.
  */
@@ -387,6 +546,7 @@ export async function redirectSession(env: Env, cardId: string, words: string, f
   const card = await sessionCard(env, cardId);
   const row = await readSession(env, cardId);
   if (!card || !row || card.kind !== PARTNER_SESSION_KIND || ["DONE", "CANCELLED"].includes(card.state)) return null;
+  if (partnerByEmail(from)?.email !== row.requested_by || chiefSessionFor(card.owner_id)?.principal.email !== row.requested_by) return null;
   // His whole reply, at the same cap the block door keeps (a long brief keeps its last lines).
   const said = words.trim().slice(0, PARTNER_ANSWER_MAX);
   if (!said) return null;
@@ -398,16 +558,16 @@ export async function redirectSession(env: Env, cardId: string, words: string, f
   // An answer to a question he has not answered yet joins the answers; anything else is a correction, above the brief, newest first.
   const answering = list(row.asked_json).length > list(row.answers_json).length;
   if (answering) {
-    await env.WP_OS_DB.prepare("UPDATE partner_session SET answers_json = ?2, run_count = 0 WHERE work_card_id = ?1").bind(cardId, JSON.stringify([...list(row.answers_json), said])).run();
+    await env.WP_OS_DB.prepare("UPDATE partner_session SET answers_json = ?2, run_count = 0, report_json = json_remove(report_json, '$.fallback_draft') WHERE work_card_id = ?1").bind(cardId, JSON.stringify([...list(row.answers_json), said])).run();
   } else {
-    await env.WP_OS_DB.prepare("UPDATE partner_session SET corrections_json = ?2, run_count = 0 WHERE work_card_id = ?1").bind(cardId, JSON.stringify([said, ...list(row.corrections_json)])).run();
+    await env.WP_OS_DB.prepare("UPDATE partner_session SET corrections_json = ?2, run_count = 0, report_json = json_remove(report_json, '$.fallback_draft') WHERE work_card_id = ?1").bind(cardId, JSON.stringify([said, ...list(row.corrections_json)])).run();
   }
   await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'IN_PROGRESS', lease_until = NULL WHERE id = ?1").bind(cardId).run();
   const fresh = (await readSession(env, cardId))!;
   const parked = await parkSession(env, card, fresh, answering ? "his answer" : "his correction");
   const runId = parked.parked ? parked.runId : null;
   let note = false;
-  if (abandoned && runId && !answering) {
+  if (row.source === "EMAIL" && abandoned && runId && !answering) {
     const who = await whoWorks(env, card.owner_id);
     const out = await replyToRequester(env, card, "BLOCKED", who, `Changed course: ${said}`, { kind: "RECEIVED", cause: `changed-course:${runId}` }, {
       what: `changed course — ${said.replace(/\s+/g, " ").slice(0, 60)}`,

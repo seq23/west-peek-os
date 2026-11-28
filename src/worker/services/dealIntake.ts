@@ -1,7 +1,7 @@
+import { chiefSessionFor } from "../../shared/work/chiefOfStaff";
 import { PARTNER_WORDS_ON_CARD, statedCut } from "./partnerWords";
-import { describeModes, parseBlogAsk } from "../../shared/intake/blogHelp";
 import { parsePartnerMessageAsk, partnerMessageTitle, toldNames } from "../../shared/intake/partnerMessage";
-import { isWebPropertyChange, OS_PROPERTY, OS_REPO, parseWebPropertyAsk, partsFromHosts, registrationsIn } from "../../shared/intake/webPropertyChange";
+import { addresseeIn, isWebPropertyChange, OS_PROPERTY, OS_REPO, parseWebPropertyAsk, partsFromHosts, registrationsIn } from "../../shared/intake/webPropertyChange";
 import { loadRegistry, registerFromEmail, registerNewRepo, registryEntryFor } from "./webPropertyRegistry";
 import { defaultReadReplyIntent, readReplyIntent, type ReplyIntent, type ReplyIntentReader } from "./replyIntent";
 import { AI_EMPLOYEE_ROSTER } from "../../shared/registry/aiEmployees";
@@ -1088,14 +1088,6 @@ export async function openAssignmentCard(
   await recordDriveWatches(env, { cardId: card.id, text: written, requestedBy: input.partnerAddress, firmScope: FIRM_SCOPE });
 
   /*
-   * BLOG HELP IS READ AT THE DOOR (16 Sep 2026). "Help me make an outline for a blog post on X",
-   * "write a blog post on X", "a phrase I can repeat across posts" — Porter marks the card
-   * BLOG_HELP and records the modes and topic, so the sweep hands it to the blog runner
-   * (services/blogHelp.ts) instead of the general loop. Only the CONTENT of the ask is read here,
-   * and only to choose a runner: authority came from the authenticated address above and nothing
-   * in the text can widen it.
-   */
-  /*
    * THE FILES THEY ATTACHED ARE ASSETS OF THE REQUEST. Kept by name against the card with the
    * stored message they live in; a small message with a file is stored now, the way an oversize
    * one already was. Extracted on demand by `GET /api/work-cards/:id/attachments/:attId`.
@@ -1128,53 +1120,17 @@ export async function openAssignmentCard(
   // ALL KINDS (owner, 6 Oct 2026): a deadline in their words sets the priority of the work, whatever it is for. It is
   // the FIRST READ's (partnerUnderstood.ts#applyFirstReadDeadline), one model read per email, never a second read here.
 
-  /*
-   * A PARTNER MESSAGE IS READ FIRST (9 Oct 2026, card wc_824ebb0a). "Porter, tell Scooter: … the
-   * entry page https://…pages.dev/entry … (preview data, not the live site)" was opened as a web
-   * property change on westpeek.live and voting.topbarz.xyz, because the property parse below ran
-   * first and matched a host and "the live site" INSIDE the message. "<Employee>, tell <Partner>: …"
-   * is unambiguous: whatever it mentions is content to relay, never a job — so it is read before the
-   * property, registry and blog parses, and nothing in it can register a repo or open a site job.
-   */
-  /*
-   * "WALKER, TELL SCOOTER: …" IS READ AT THE DOOR (22 Sep 2026), the same way blog help and a web
-   * property change already are — a word-shape a partner can learn and repeat, not a model guessing
-   * what an email means. See `shared/intake/partnerMessage.ts`.
-   *
-   * THE NAMED EMPLOYEE, NOT ALWAYS THIS CHIEF OF STAFF. Blog help and a web property change both
-   * stay on, or move to, a FIXED seat; this ask names whoever the partner wants speaking, which is
-   * usually somebody other than their own chief of staff — Sequoia asking for Walker, not Wren.
-   * When it already names the chief of staff who owns this very card, the card is stamped in place;
-   * otherwise it is handed on through `assignCard`, exactly the move the web-property branch below
-   * makes for Porter. `assignCard` itself refuses a non-existent or non-ACTIVE employee, so a typo
-   * fails closed with a reason on THIS card rather than the message quietly going nowhere.
-   */
+  // An email addressed to a chief goes through the chief session, whatever the work is.
+  // A different, explicitly addressed specialist keeps their own intake.
+  const addressee = addresseeIn(written);
+  if (addressee && chiefSessionFor(seatId(addressee))) {
+    const { openPartnerSession } = await import("./partnerSession");
+    await openPartnerSession(env, { cardId: card.id, request: `${strippedSubject(input.subject)}\n\n${written}`.trim(), requestedBy: input.partnerAddress, firmScope: FIRM_SCOPE });
+    return card.id;
+  }
+
   const partnerMessage = parsePartnerMessageAsk(input.subject, written);
-  if (partnerMessage) {
-    const targetEmployee = await env.WP_OS_DB.prepare(
-      "SELECT id, name, status FROM ai_employee WHERE lower(name) = lower(?1) OR id = ?2",
-    )
-      .bind(partnerMessage.employeeName.trim(), seatId(partnerMessage.employeeName.trim()))
-      .first<{ id: string; name: string; status: string }>();
-    const alreadyOnThisDesk =
-      targetEmployee !== null && targetEmployee.name.toLowerCase() === input.chiefOfStaff.trim().toLowerCase();
-
-    if (alreadyOnThisDesk) {
-      await env.WP_OS_DB.prepare(
-        "UPDATE work_card SET kind = 'PARTNER_MESSAGE', result_recipient = ?2, prompt = ?3, next_action = ?4, title = ?5 WHERE id = ?1",
-      )
-        .bind(
-          card.id,
-          partnerMessage.partner.email,
-          partnerMessage.instruction,
-          `Tell ${toldNames(partnerMessage)}: ${partnerMessage.instruction}`.slice(0, 300),
-          partnerMessageTitle(toldNames(partnerMessage), partnerMessage.instruction),
-        )
-        .run();
-      await (await import("./ccPartners")).recordMessageCopy(env, card.id, partnerMessage.copy?.email);
-      return card.id;
-    }
-
+  if (partnerMessage && !chiefSessionFor(seatId(partnerMessage.employeeName.trim().toLowerCase()))) {
     const chief = await env.WP_OS_DB.prepare("SELECT id, name FROM ai_employee WHERE id = ?1")
       .bind(seatId(input.chiefOfStaff))
       .first<{ id: string; name: string }>();
@@ -1237,9 +1193,7 @@ export async function openAssignmentCard(
    * assignment with the link on it, so nothing is lost; it is simply not sped up.
    */
   /*
-   * A WEB PROPERTY CHANGE IS READ BEFORE BLOG HELP (21 Sep 2026; a partner message, above, is read before both). "Newsletter signup on the site" was read as
-   * blog help because the blog parser ran first and matched "newsletter". The property parser
-   * runs before it, and a request addressed to Porter that says "the site" is his even without a
+   * A request addressed to Porter that says "the site" is his even without a
    * host: the host is inferred from this partner's most recent web-property card in the last
    * seven days, the assumption is stated in the RECEIVED email, and Porter asks only when there
    * is nothing recent to infer from.
@@ -1357,14 +1311,6 @@ export async function openAssignmentCard(
     }
   }
 
-  const blog = parseBlogAsk(input.subject, written);
-  if (blog) {
-    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'BLOG_HELP', request_json = ?2, next_action = ?3 WHERE id = ?1")
-      .bind(card.id, JSON.stringify(blog), `Blog help — ${describeModes(blog.modes)} on: ${blog.topic}. Research live and judged, write in the partner's voice, file it, email them once.`)
-      .run();
-    return card.id;
-  }
-
   await routeByPlainWords(env, card, input, written, read);
   return card.id;
 }
@@ -1378,7 +1324,7 @@ async function readPlainWords(env: Env, cardId: string, input: { subject: string
 /**
  * THE ONE PLAIN-WORDS READER AT THE FRONT DOOR (13 Nov 2026). Her ask: a partner emails os@ "just like
  * i speak to you here and its intelligent enough to figure out what to do route it and get it all
- * done". An email no fixed door claimed (a site change, blog help, a message to pass on) is read once
+ * done". An email no fixed door claimed (a specialist build or message) is read once
  * by the reader every partner's words get (replyIntent.ts), and its reading decides the desk:
  *
  *   ROUTE to a named employee  → handed straight to that employee, one card, the chief's card DONE.
@@ -1407,7 +1353,7 @@ async function routeByPlainWords(
     firmScope: FIRM_SCOPE,
     payload: { intent: read.kind, door: read.door ?? null, seat: read.seat ?? null, nothing: read.nothing ?? false, source: read.source, reason: read.reason.slice(0, 300), ai_run_id: read.aiRunId },
   });
-  if (seat && seat.name.toLowerCase() !== chiefFirst && seat.name !== "Porter") {
+  if (seat && !chiefSessionFor(seatId(seat.name)) && seat.name.toLowerCase() !== chiefFirst && seat.name !== "Porter") {
     const chief = await env.WP_OS_DB.prepare("SELECT id, name FROM ai_employee WHERE id = ?1").bind(seatId(input.chiefOfStaff)).first<{ id: string; name: string }>();
     const { assignCard } = await import("./employeeWork");
     const handed = await assignCard(

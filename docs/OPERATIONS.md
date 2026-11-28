@@ -64,13 +64,12 @@ rulings) are not kept here: they live in the West Peek Ventures company brain in
 - **A partner's email is one session** (14 Nov 2026, `services/partnerSession.ts`). An email no fixed
   door claims (not a relay, a named site or repo, a build, a named employee, blog help or "nothing to
   do") becomes a `PARTNER_SESSION` card on the chief's desk: one `claude -p` session on the Mac
-  (`scripts/duties/partner-session.mjs`, a LOCAL_JOB with a 2 h ceiling, no router deadline), Claude
-  then Codex held for Claude's check, private work waiting for Claude. Its report is one line per ask:
+  (`scripts/duties/partner-session.mjs`, a LOCAL_JOB with a 2 h ceiling). The session uses the chief
+  ladder below. Its report accounts for each ask.
   a `QUESTION` ask emails once with 2-3 options while `IN_PROGRESS` asks are parked again at once; his
   reply abandons a live run and parks one new run with his words above the brief ("Changed course:
   …"). The partner's holds and profile (`practicesForCard`) open every prompt; "remember" lines go
-  through `recordProfileNotes`, which refuses LP names. The working folder is
-  `~/GitHub/wpos-jobs/session-<card id>`, the same for every run of the card.
+  through `recordProfileNotes`, which refuses LP names. Each attempt uses its own private working folder.
 - **Reply matching.** Gmail replies carry only the SES Message-ID, so the `Re:`-subject fallback is
   the path that actually matches them.
 - **Wynn never drops a brand's thread** (13 Nov 2026; `services/tlcBrandThread.ts`). Every brand
@@ -136,5 +135,14 @@ rulings) are not kept here: they live in the West Peek Ventures company brain in
 
 ## Model routing
 
+- Chief sessions start on Claude Code. When it cannot serve a text turn, Codex on the ChatGPT
+  subscription takes over, including fund turns. After both seats are unavailable, Workers AI and
+  Gemini are considered in that order for a draft, subject to the router's zero-cost check. The
+  next subscription-seat turn verifies the draft before it can count as work. The session stays
+  open through an outage and records the model choices and reasons in the scheduled note.
+- The shared mail masker stands in known committed-LP names and marked deal figures on the draft
+  routes and restores them for the next seat. Everyday text keeps its wording. A failed LP lookup,
+  unreadable material or a privacy hold keeps the draft on the subscription seats. The Workers AI
+  rung requires the platform's Workers Free cap. Gemini requires West Peek OS's no-billing project key.
 - `perplexity/sonar` needs a pricing row before it is routable, and `liveSearch` refuses an answer
   from a model that cannot search (`tests/modelRegistry.test.ts`).

@@ -6,6 +6,7 @@ import { runAi } from "../ai/runAi";
 import { failedOnShape, readStructured, structuredOutput, type StructuredOutput } from "../ai/structuredOutput";
 import { maskPrivateInputs } from "../ai/scrub";
 import { committedLpNamedIn, committedLps } from "../ai/committedLps";
+import { credentialConfigured } from "../../shared/ai/providerCredentials";
 import { NO_MODEL_READER, central } from "../../shared/intake/inboundRead";
 import { partnerByEmail } from "../../shared/registry/partners";
 import { partnersOwnWords } from "../../shared/intake/replyBody";
@@ -112,12 +113,12 @@ async function readThrough(env: Env, input: Parameters<SeatRead>[1], ask: { sens
  * partner mail"): her Claude seat then Codex (one private call: the router's PRIVATE row, never a free lane); then
  * Cloudflare's own Workers AI (never trains on it, so private mail is fine, and it runs with the Mac asleep); then free
  * Gemini on every email, with committed LPs' names and deal terms masked (owner ruling, 19 Nov 2026,
- * `maskedGeminiRead`); then no first read at all.
+ * `maskedFreeRead`); then no first read at all.
  */
 export const FIRST_READERS: readonly Reader[] = [
   { name: "SEAT", read: (env, input) => readThrough(env, input, { sensitivity: "INTERNAL", budgetContext: { confidential: true } }) },
   { name: "WORKERS_AI", read: (env, input) => readThrough(env, input, { sensitivity: "INTERNAL", budgetContext: { confidential: true, ownBinding: true, providerKey: "workers_ai" } }) },
-  { name: "GEMINI", read: (env, input) => maskedGeminiRead(env, input) },
+  { name: "GEMINI", read: (env, input) => maskedFreeRead(env, input, "google_free") },
 ];
 
 /**
@@ -127,17 +128,24 @@ export const FIRST_READERS: readonly Reader[] = [
  * be read, or the masked text still names a committed LP, Gemini is skipped (an `out` reader), never sent unmasked.
  * The router's own check stays behind it: a marker the mask missed is still refused before any request is formed.
  */
-async function maskedGeminiRead(env: Env, input: Parameters<SeatRead>[1]): Promise<ReadOut> {
+export async function maskedFreeRead(env: Env, input: Parameters<SeatRead>[1], providerKey: "workers_ai" | "google_free", use: "mail" | "chief-draft" = "mail"): Promise<ReadOut> {
+  const chiefDraft = use === "chief-draft";
+  const workers = providerKey === "workers_ai";
+  if (chiefDraft && (workers ? env.WP_OS_CHIEF_WORKERS_AI_FREE_ONLY !== "true" : !credentialConfigured(env, providerKey, { requireOwnCredential: true }))) {
+    return { ok: false, text: "", detail: "the provider does not have a verified free-only configuration for chief drafts", out: true };
+  }
   let masked: ReturnType<typeof maskPrivateInputs>;
   try {
     const committed = await committedLps(env, input.firmScope);
-    if (!committed.readable) return { ok: false, text: "", detail: "masking could not run (the committed-LP records are unreadable); Gemini skipped", out: true };
-    masked = maskPrivateInputs([input.prompt], committed.names);
-    if (committedLpNamedIn(masked.inputs, committed.names)) return { ok: false, text: "", detail: "masking left a committed LP's name; Gemini skipped", out: true };
+    if (!committed.readable) return { ok: false, text: "", detail: "masking could not run (the committed-LP records are unreadable)", out: true };
+    masked = maskPrivateInputs([input.prompt], committed.names, chiefDraft);
+    if (committedLpNamedIn(masked.inputs, committed.names)) return { ok: false, text: "", detail: "masking left a committed LP's name", out: true };
   } catch {
-    return { ok: false, text: "", detail: "masking could not run; Gemini skipped", out: true };
+    return { ok: false, text: "", detail: "masking could not run", out: true };
   }
-  const out = await readThrough(env, { ...input, prompt: masked.inputs[0]! }, { sensitivity: "PUBLIC", budgetContext: { publicModelApproved: true, providerKey: "google_free" } });
+  const out = await readThrough(env, { ...input, prompt: masked.inputs[0]! }, {
+    sensitivity: "PUBLIC", budgetContext: { publicModelApproved: true, providerKey, requireProvider: chiefDraft, ownBinding: chiefDraft && workers },
+  });
   if (!out.ok) return out;
   // A shaped answer is put back value by value, so a restored name can never break the JSON around it.
   if (input.output) {

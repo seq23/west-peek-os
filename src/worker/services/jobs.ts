@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { operatingStopped } from "./chiefControls";
 import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { json } from "../router";
@@ -808,9 +809,9 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
 
   // EMPLOYEE_TASK: the employee does governed work through run_ai, with the job's own budget,
   // data class, capability, and task class applied.
-  let payload: { prompt?: string } = {};
+  let payload: { prompt?: string; session?: string } = {};
   try {
-    payload = JSON.parse(job.payload_json) as { prompt?: string };
+    payload = JSON.parse(job.payload_json) ?? {};
   } catch {
     payload = {};
   }
@@ -820,6 +821,14 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
     job.target_kind === "EMPLOYEE" && job.target_id
       ? (await resolveEmployee(env, job.target_id))?.id ?? job.target_id
       : null;
+
+  if (payload.session === "DAILY_WAKE" && employeeId) {
+    const { openChiefTurn } = await import("./partnerSession");
+    const { sweepIdentity } = await import("./workSweep");
+    const cardId = await openChiefTurn(env, sweepIdentity(job.firm_scope), employeeId, "SCHEDULE",
+      "Start your day. Work from your mandate, your partner’s standing direction and what you can verify this run. Leave a short note with what moved and what needs attention.", job.firm_scope);
+    return { status: "SUCCEEDED", summary: "Filed the daily session for the work sweep.", artifacts: [{ kind: "WORK_CARD", ref_type: "work_card", ref_id: cardId }] };
+  }
 
   const { run } = await runAi(env, {
     purpose: `scheduled job ${job.job_key}: ${job.name}`,
@@ -866,6 +875,7 @@ export async function runJob(
   jobKeyOrId: string,
   opts: { trigger: "SCHEDULED" | "MANUAL"; now?: Date; idempotencyKey?: string } ,
 ): Promise<RunJobResult> {
+  if (await operatingStopped(env)) throw new JobError(409, "operations_paused", "The owner paused West Peek OS agents.");
   const job = await getJob(env, jobKeyOrId);
   if (!job) throw new JobError(404, "not_found");
   const authz = await authorize(env, actor, "job_run.execute", { objectType: "scheduled_job", objectId: job.id });
@@ -1239,8 +1249,12 @@ export async function runDueJobs(
   now: Date,
   opts: { limit?: number } = {},
 ): Promise<Array<{ job_key: string; status: string; summary: string }>> {
+  if (await operatingStopped(env)) return [];
+  // MAIL HELD IN HER PAUSE IS WORKED FIRST after a resume (review of #618, F2).
+  const { replayHeldMail } = await import("./chiefControls");
+  const held = await replayHeldMail(env, undefined, now).catch((err: unknown) => [{ job_key: "held_mail_replay", status: "ERROR", summary: err instanceof Error ? err.message : String(err) }]);
   const limit = opts.limit ?? 1;
-  if (limit === 0) return runDueJobsAll(env, now);
+  if (limit === 0) return [...held, ...await runDueJobsAll(env, now)];
   const dueFirst = (
     await env.WP_OS_DB.prepare(
       // ON_REQUEST has no clock: its next_run_at is NULL by CHECK, and NULL otherwise reads as due.
@@ -1249,9 +1263,9 @@ export async function runDueJobs(
       .bind(now.toISOString(), limit)
       .all<ScheduledJobRow>()
   ).results ?? [];
-  if (dueFirst.length === 0) return runDueJobsAll(env, now);
+  if (dueFirst.length === 0) return [...held, ...await runDueJobsAll(env, now)];
   const systemActor: Actor = { type: "SYSTEM", roles: [], firmScopes: ["west-peek"] };
-  const results: Array<{ job_key: string; status: string; summary: string }> = [];
+  const results: Array<{ job_key: string; status: string; summary: string }> = [...held];
   await serveBriefOnTick(env, now, results);
   await serveArtifactsOnTickSafely(env, now, results);
   // The partner waits ride every tick, a scheduled job due or not: "every 15 minutes" is a promise (22 Nov 2026).
@@ -1311,6 +1325,7 @@ async function serveArtifactsOnTickSafely(env: Env, now: Date, results: Array<{ 
 
 /** The whole-tick behaviour this replaced: sweeps, then every due job. The manual route keeps it. */
 export async function runDueJobsAll(env: Env, now: Date): Promise<Array<{ job_key: string; status: string; summary: string }>> {
+  if (await operatingStopped(env)) return [];
   /*
    * SWEEP BEFORE RUNNING, every tick. `closeAbandonedReports` was already written and correct, but
    * its only caller was the top of the once-daily brief — so a brief that died at 06:00 stayed

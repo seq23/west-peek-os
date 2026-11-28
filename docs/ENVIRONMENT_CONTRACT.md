@@ -15,6 +15,7 @@ PRESENT / MISSING / UNPROVEN (UNPROVEN = cannot be confirmed without credentials
 | `PERPLEXITY_API_KEY` | yes (vault) | P4 live proof (optional provider) | AI provider adapter | MISSING — CREDENTIAL GATE |
 | `OPENROUTER_API_KEY` | yes (vault) | P4 live proof (optional provider) | AI provider adapter | MISSING — CREDENTIAL GATE |
 | `WP_GEMINI_API_KEY` | yes (Worker secret) | West Peek OS's own free Gemini key (6 Nov 2026), own Google Cloud project with no billing account | `providerCredentials.ts` (google_free, free_search, google); falls back to `GEMINI_API_KEY` with a note on the AI page | MISSING — set as a Worker secret |
+| `WP_OS_CHIEF_WORKERS_AI_FREE_ONLY` | no (Worker var) | Chief text drafts on the Workers AI binding | `services/partnerUnderstood.ts` | Leave unset unless Cloudflare enforces the Workers Free cap on the binding's account. Chief drafts fall through to Gemini while unset. |
 | `BRAVE_SEARCH_API_KEY` | yes (Worker secret) | $0 live research, route 2 (5 Nov 2026) | `providers/freeSearch.ts` (Brave Search API, free plan, 20 queries/day) | MISSING — set as a Worker secret |
 | `GOOGLE_OAUTH_CLIENT_ID` | no | P51 calendar + Gmail send | `effects/googleClient.ts` | SET |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | yes (vault) | P51 calendar + Gmail send | `effects/googleClient.ts` | SET |

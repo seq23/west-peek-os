@@ -62,6 +62,8 @@ export interface Env {
    * pattern with EMAIL. Absent means the cheap tier is unavailable, not that anything is broken.
    */
   AI?: { run(model: string, input: Record<string, unknown>): Promise<unknown> };
+  /** Set to "true" only when the Workers AI binding belongs to an account capped by the Workers Free plan. */
+  WP_OS_CHIEF_WORKERS_AI_FREE_ONLY?: string;
   /**
    * The Access service token this firm's own browser authenticates with. Present means a request
    * Access has already vouched for can be mapped onto the read-only browser identity; absent means

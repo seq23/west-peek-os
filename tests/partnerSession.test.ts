@@ -2,13 +2,14 @@ import { replyIntent } from "./helpers/aiShapes";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
-import { openAssignmentCard } from "../src/worker/services/dealIntake";
+import { openAssignmentCard, systemIdentity } from "../src/worker/services/dealIntake";
 import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
 import { parseReplyIntent, type ReplyIntentReader } from "../src/worker/services/replyIntent";
-import { questionEmail, redirectSession, runPartnerSessionCard } from "../src/worker/services/partnerSession";
+import { openChiefTurn, questionEmail, redirectSession, runPartnerSessionCard } from "../src/worker/services/partnerSession";
 import { reportRun } from "../src/worker/ai/subscriptionSeats";
 import { recordPartnerConstraints } from "../src/worker/services/partnerConstraints";
 import { handleRequest } from "../src/worker/index";
+import { PARTNERS } from "../src/shared/registry/partners";
 
 /**
  * EMAILING THE OS FEELS LIKE TYPING TO CLAUDE (14 Nov 2026), steps 2 to 6: an email no fixed door claims becomes ONE
@@ -16,14 +17,20 @@ import { handleRequest } from "../src/worker/index";
  * clear work keeps going, a correction redirects running work, and the partner's memory opens every prompt.
  */
 
-// The session path never calls the router: any runAi call here is a failure of step 3.
 const routerCalls: string[] = [];
+const draftCalls: { providerKey: string; prompt: string; neverPaid: boolean }[] = [];
+let geminiDraft: string | null = null;
 vi.mock("../src/worker/ai/runAi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/worker/ai/runAi")>();
   return {
     ...actual,
-    runAi: async (_env: unknown, input: { purpose: string }) => {
+    runAi: async (_env: unknown, input: import("../src/worker/ai/runAi").RunAiInput) => {
       routerCalls.push(input.purpose);
+      if (input.purpose === "Chief session draft after seat outage") {
+        const providerKey = input.budgetContext?.providerKey ?? "";
+        draftCalls.push({ providerKey, prompt: input.inputs.join("\n"), neverPaid: input.budgetContext?.neverPaid === true });
+        if (providerKey === "google_free" && geminiDraft) return { run: { id: "run_draft", status: "COMPLETED", output_text: geminiDraft } };
+      }
       return { run: { id: `run_${routerCalls.length}`, status: "FAILED", output_text: null, failure_reason: "no model in this test" } };
     },
   };
@@ -74,6 +81,31 @@ describe("step 2 · the email becomes a working session", () => {
 });
 
 describe("step 3 · no stopwatch", () => {
+  it("records a shared block and never queues a session assigned to the wrong chief", async () => {
+    const id = await emailed("Office request", "Draft an outline from the attached material.");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET owner_id = 'aie_wren' WHERE id = ?1").bind(id).run();
+    expect(await runPartnerSessionCard(env, await card(id))).toMatchObject({ finished: false, blocked: true });
+    expect(await runs(id)).toHaveLength(0);
+    const blocked = await env.WP_OS_DB.prepare("SELECT state, block_reason FROM work_card WHERE id = ?1").bind(id).first();
+    expect(blocked).toEqual({ state: "BLOCKED", block_reason: "the_brief_is_missing" });
+  });
+
+  it("accepts the partner's page message with default firm scope and refuses the other partner", async () => {
+    const path = "https://test.local/api/workforce/employees/aie_walker/messages";
+    const message = "Prepare an outline for tomorrow.";
+    const call = (email: string, method: "GET" | "POST") => handleRequest(new Request(path, {
+      method, headers: { "x-wpos-dev-user": email, "content-type": "application/json" },
+      body: method === "POST" ? JSON.stringify({ message }) : undefined,
+    }), env);
+    const otherPartner = PARTNERS.find((partner) => partner.email !== SCOOTER)!;
+    const accepted = await call(SCOOTER, "POST");
+    expect(accepted.status).toBe(202);
+    const { id } = await accepted.json() as { id: string };
+    expect(await (await call(SCOOTER, "GET")).json()).toMatchObject({ messages: [{ id, source: "PAGE", request_text: message }] });
+    expect((await call(otherPartner.email, "GET")).status).toBe(404);
+    expect((await call(otherPartner.email, "POST")).status).toBe(404);
+  });
+
   it("parking a session makes ONE LOCAL_JOB run under the two-hour ceiling, with no deadline and no router call", async () => {
     const id = await emailed("Research", "Find three Memphis angels who back consumer brands.");
     routerCalls.length = 0;
@@ -89,6 +121,51 @@ describe("step 3 · no stopwatch", () => {
     await runPartnerSessionCard(env, await card(id));
     expect(await runs(id)).toHaveLength(1);
     expect(routerCalls).toEqual([]);
+  });
+
+  const seatsOut = { phase: "SESSION", status: "failed", reason: "Neither seat could take the turn.", waits_seconds: 1800, model_unavailable: true, routing: ["Claude Code was out of usage.", "Codex was out of usage."] };
+
+  it("queues a free-route draft for seat review without closing the chief's request", async () => {
+    const id = await openChiefTurn(env, systemIdentity(), "aie_walker", "SCHEDULE", "Sort the $25 community event tickets by section.", "west-peek");
+    const withFreeRoutes = { ...env, WP_OS_CHIEF_WORKERS_AI_FREE_ONLY: "true", WP_GEMINI_API_KEY: "fixture-key" };
+    draftCalls.length = 0;
+    geminiDraft = "Group balcony tickets before floor tickets.";
+    try {
+      await runPartnerSessionCard(env, await card(id));
+      const [first] = await runs(id);
+      expect((await macReports(first!.id, seatsOut)).accepted).toBe(true);
+      expect(await runPartnerSessionCard(withFreeRoutes, await card(id))).toMatchObject({ finished: false, held: true });
+      expect(draftCalls.map((call) => call.providerKey)).toEqual(["workers_ai", "google_free"]);
+      expect(draftCalls.every((call) => call.neverPaid && call.prompt.includes("$25 community event tickets"))).toBe(true);
+      expect((await card(id)).state).toBe("IN_PROGRESS");
+      expect(await notices(id, "DONE")).toHaveLength(0);
+      const page = await handleRequest(new Request("https://test.local/api/workforce/employees/aie_walker/messages", { headers: { "x-wpos-dev-user": SCOOTER } }), env);
+      const { messages } = await page.json() as { messages: { id: string }[] };
+      expect(messages.find((message) => message.id === id)).toMatchObject({
+        source: "SCHEDULE",
+        report: { reply: expect.stringContaining("Gemini prepared a text draft for the next subscription seat to verify.") },
+      });
+      await runPartnerSessionCard(env, await card(id));
+      expect(JSON.parse((await runs(id))[1]!.job_json).fallback_draft).toBe(geminiDraft);
+    } finally {
+      geminiDraft = null;
+    }
+  });
+
+  it("retains and retries the exact request when every model is unavailable", async () => {
+    const request = "Draft notes from the planning discussion.";
+    const id = await emailed("All models out", request);
+    await runPartnerSessionCard(env, await card(id));
+    const [first] = await runs(id);
+    const initialRequest = JSON.parse(first!.job_json).request;
+    expect(initialRequest).toContain(request);
+    await macReports(first!.id, seatsOut);
+    expect(await runPartnerSessionCard(env, await card(id))).toMatchObject({ finished: false, blocked: false, held: true });
+    expect(await notices(id, "DONE")).toHaveLength(0);
+    const session = await env.WP_OS_DB.prepare("SELECT run_count, request_text FROM partner_session WHERE work_card_id = ?1").bind(id).first();
+    expect(session).toEqual({ run_count: 0, request_text: initialRequest });
+    await runPartnerSessionCard(env, await card(id));
+    expect(JSON.parse((await runs(id))[1]!.job_json)).toMatchObject({ request: initialRequest });
   });
 });
 
@@ -166,6 +243,23 @@ describe("step 4 · start the clear parts, ask about the rest", () => {
     expect(numbered.map((x) => x.bullets)).toEqual(six.map((q) => [`What is missing: ${q.why}`, `My best reading: ${q.options[0]}`]));
   });
 
+  it("an ask-first question from a page message is emailed to the chief's partner, never left only on the page (hard stop 11)", async () => {
+    const accepted = await handleRequest(new Request("https://test.local/api/workforce/employees/aie_walker/messages", {
+      method: "POST", headers: { "x-wpos-dev-user": SCOOTER, "content-type": "application/json" },
+      body: JSON.stringify({ message: "Book the venue we talked about for the fixture showcase." }),
+    }), env);
+    const { id } = await accepted.json() as { id: string };
+    await runPartnerSessionCard(env, await card(id));
+    const [first] = await runs(id);
+    await macReports(first!.id, { phase: "SESSION", status: "ok", asks: [
+      { words: "Book the venue", status: "QUESTION", why: "booking commits money, so it is yours to decide", options: ["I hold it and you pay", "skip it"] },
+    ] });
+    await runPartnerSessionCard(env, await card(id));
+    const sent = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'QUESTION' AND sent_to = ?2").bind(id, SCOOTER).first<{ n: number }>();
+    expect(sent!.n).toBe(1);
+    expect((await card(id)).state).toBe("IN_PROGRESS");
+  });
+
   it("a report that asks without options is refused, never emailed as a question", async () => {
     const id = await emailed("Vague", "Handle the usual.");
     await runPartnerSessionCard(env, await card(id));
@@ -227,10 +321,13 @@ describe("step 5 · a correction redirects running work", () => {
     await runPartnerSessionCard(env, await card(id));
     const [first] = await runs(id);
     await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'CLAIMED', claimed_by = ?2, claimed_at = ?3 WHERE id = ?1").bind(first!.id, MAC, new Date().toISOString()).run();
-    const res = await handleRequest(
-      new Request(`https://test.local/api/work-cards/${id}/notes`, { method: "POST", headers: { "x-wpos-dev-user": "sequoia@westpeek.ventures", "content-type": "application/json" }, body: JSON.stringify({ body: "Also build the data room index." }) }),
-      env,
-    );
+    const note = (email: string) => handleRequest(new Request(`https://test.local/api/work-cards/${id}/notes`, {
+      method: "POST", headers: { "x-wpos-dev-user": email, "content-type": "application/json" },
+      body: JSON.stringify({ body: "Also build the data room index." }),
+    }), env);
+    expect((await note(PARTNERS.find((partner) => partner.email !== SCOOTER)!.email)).status).toBe(404);
+    expect((await runs(id)).map((run) => run.status)).toEqual(["CLAIMED"]);
+    const res = await note(SCOOTER);
     expect(res.status).toBe(201);
     const all = await runs(id);
     expect(all.map((r) => r.status)).toEqual(["ABANDONED", "QUEUED"]);

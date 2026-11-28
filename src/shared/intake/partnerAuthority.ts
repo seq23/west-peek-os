@@ -239,7 +239,7 @@ export function authenticationVerdict(
       reason: `the message carries more than one Authentication-Results claiming to be ${TRUSTED_AUTHSERV_ID}, which only happens when somebody is forging one`,
     };
   }
-  if (!withoutComments.toLowerCase().trimStart().startsWith(TRUSTED_AUTHSERV_ID)) {
+  if (withoutComments.split(";")[0]?.trim().toLowerCase() !== TRUSTED_AUTHSERV_ID) {
     return {
       ...NOT_PRESENT,
       reason: `the verdict from ${TRUSTED_AUTHSERV_ID} is not the first in the header, so it is not the one the receiving resolver wrote`,

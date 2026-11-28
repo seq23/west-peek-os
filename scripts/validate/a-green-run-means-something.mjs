@@ -274,12 +274,12 @@ export function checkWorkflow(raw) {
     if (others.length) {
       bad.push(`playwright.yml also triggers on ${others.map((t) => `\`${t}\``).join(", ")} — the trigger list is exactly [workflow_dispatch]; the journeys run only when asked for`);
     }
-    if (/^\s*pull_request(_target)?\s*:/m.test(on)) {
-      bad.push(
-        "playwright.yml is triggered by `pull_request` — the journeys are post-merge by the owner's decision of " +
-          "21 Sep 2026 (a ~5-minute gate, long suites on main); running them on every PR is the ~9 minutes " +
-          "per PR that decision removed",
-      );
+    const pr = /^  pull_request\s*:[\s\S]*?^    paths\s*:/m.test(on);
+    const prRoute = source.split(/\n  chief-messages:\s*\n/)[1] ?? "";
+    if (/^\s*pull_request_target\s*:/m.test(on) || (/^\s*pull_request\s*:/m.test(on) &&
+        (!pr || !prRoute.includes("if: github.event_name == 'pull_request'") ||
+         !prRoute.includes("npm run e2e -- e2e/chief-messages.spec.ts")))) {
+      bad.push("playwright.yml may run only the path-filtered chief message fixture journey on PRs");
     }
   }
   const jobStart = source.indexOf("\n  e2e:");
@@ -291,6 +291,9 @@ export function checkWorkflow(raw) {
   const rest = source.slice(jobStart + 1);
   const nextJob = rest.slice(1).search(/\n {2}[a-z][a-z0-9-]*:\s*\n/);
   const job = nextJob === -1 ? rest : rest.slice(0, nextJob + 1);
+  if (/^  pull_request\s*:/m.test(source) && !job.includes("if: github.event_name == 'workflow_dispatch'")) {
+    bad.push("the full Playwright suite must be restricted to manual dispatch");
+  }
   if (/npm run e2e\s*\|\|/.test(job)) {
     bad.push(
       "the e2e job runs `npm run e2e ||` — a shell `||` cannot tell a `workerd` crash from a wrong " +
@@ -301,7 +304,7 @@ export function checkWorkflow(raw) {
   if (/continue-on-error\s*:\s*true/.test(job)) {
     bad.push("the e2e job sets `continue-on-error: true` — the journeys then cannot fail the build");
   }
-  if (/^\s+if\s*:\s*.*\bpull_request\b/m.test(job) || /^\s+if\s*:\s*github\.event_name\s*[!=]=/m.test(job)) {
+  if (/^\s+if\s*:\s*.*\bpull_request\b/m.test(job) || /^\s+if\s*:\s*github\.event_name\s*[!=]=/m.test(job.replace(/^    if: github\.event_name == 'workflow_dispatch'$/m, ""))) {
     bad.push("the e2e job is conditioned on the event that triggered it — a job that runs only sometimes is a gate only sometimes");
   }
   for (const step of job.split(/\n(?=\s*- )/)) {

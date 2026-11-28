@@ -14,6 +14,8 @@
  */
 
 import { AI_EMPLOYEE_ROSTER } from "../registry/aiEmployees";
+import { PARTNERS } from "../registry/partners";
+import { seatId } from "../intake/emailTriggers";
 
 export interface Deliverer {
   name: string;
@@ -40,6 +42,14 @@ export function chiefOfStaffFor(fullName: string): string {
     (e) => e.role.toLowerCase().startsWith(`${first}'s chief of staff`),
   );
   return seat?.name ?? "Wren";
+}
+
+/** Stable employee id and principal for the two chief sessions. */
+export function chiefSessionFor(employeeId: string | null) {
+  const employee = AI_EMPLOYEE_ROSTER.find((entry) => seatId(entry.name) === employeeId);
+  if (!employee) return null;
+  const principal = PARTNERS.find((partner) => chiefOfStaffFor(partner.fullName) === employee.name);
+  return principal ? { employee, principal } : null;
 }
 
 /**

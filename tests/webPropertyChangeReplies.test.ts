@@ -747,17 +747,14 @@ describe("Scooter's second email (21 Sep 2026): 'Hey Porter! … a spot on the s
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(porterId).run();
   });
 
-  it("a chief of staff's card that reads as a website change is handed to Porter by the general runner, never browsed", async () => {
-    // Simulate the hand-patched shape: kind NULL on Walker's desk with the request text.
-    const chiefId = await openAssignmentCard(env, { subject: "Spot on the site", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "please add a spot on westpeek.ventures for people to sign up", limits: EMAILED_TASK_LIMITS, emlKey: null });
-    // The door already handed it on; undo that to reproduce the defect shape.
-    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'OPEN', kind = NULL WHERE id = ?1").bind(chiefId).run();
+  it("a website request addressed to Walker stays with his session instead of entering the general loop", async () => {
+    const chiefId = await openAssignmentCard(env, { subject: "Spot on the site", partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: "Walker, please add a spot on westpeek.ventures for people to sign up", limits: EMAILED_TASK_LIMITS, emlKey: null });
     const out = await workCard(env, { request: new Request("https://os.joinwestpeek.com/internal/test"), env, identity: sweepIdentity(), params: {} }, chiefId, { maxSteps: 2 });
-    expect(out.finished).toBe(true);
-    expect(out.steps[0]!.action).toBe("assigned");
-    expect((await card(chiefId)).state).toBe("DONE");
+    expect(out).toMatchObject({ finished: false, blocked: false, steps: [] });
+    expect(await card(chiefId)).toMatchObject({ kind: "PARTNER_SESSION", owner_id: "aie_walker", state: "OPEN" });
     const browse = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM browser_task WHERE work_card_id = ?1").bind(chiefId).first<{ n: number }>();
     expect(browse!.n, "no browser task, no permission block").toBe(0);
+    await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'CANCELLED' WHERE id = ?1").bind(chiefId).run();
   });
 
   it("a partner's 'Re: <our subject>' reply answers the block and creates no card, even without our token", async () => {
