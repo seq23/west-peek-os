@@ -1161,6 +1161,32 @@ describe("a partner's reply is permission to continue (owner, 27 Sep 2026)", () 
     expect(said).toMatch(/no side links/);
   });
 
+  it("PREVIEW: changes asked WITH a question while the rebuild is queued are kept and built before any preview, never only an answer on the row (28 Nov 2026, wc_9f7312e4)", async () => {
+    const p = await atPreview("preview queued question");
+    const token = await p.token();
+    const from = sent.length;
+    await replyFrom(SCOOTER, "Please make the inquiry email subject read New inquiry", token);
+    expect((await tickFor(p.id)).summary).toMatch(/Changes after the preview; BUILD queued/);
+    const queued = (await liveJobFor(p.id))!;
+    // His next reply asks a question AND gives changes while that BUILD is still queued (not claimed).
+    await replyFrom(SCOOTER, "Please put the sign-up form at the top. Can the homepage go live on its own?", token);
+    await tickFor(p.id);
+    const note = await env.WP_OS_DB.prepare("SELECT acknowledged_at, response FROM work_card_note WHERE work_card_id = ?1 AND body LIKE '%sign-up form at the top%'").bind(p.id).first<{ acknowledged_at: string | null; response: string | null }>();
+    expect(note?.acknowledged_at, "read, so the sweep does not spin on it").toBeTruthy();
+    expect(note?.response, "kept for the next build, never 'carried into the build' the queued job will not build").toBe(KEPT_FOR_NEXT_BUILD);
+    expect((await liveJobFor(p.id))!.id, "the queued build is left alone").toBe(queued.id);
+    const row = (await readWebPropertyChange(env, p.id))!;
+    const items = [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }];
+    await macReports(p.id, { phase: "BUILD", status: "ok", items, pr_url: row.pr_url, pr_number: 9, changed: true, head_sha: "q-1", check_state: "GREEN", preview_url: "https://p9q.west-peek-ventures.pages.dev" });
+    const out = await tickFor(p.id);
+    expect(out.outcome, out.summary).not.toBe("BLOCKED");
+    expect(out.summary).toMatch(/BUILD queued/);
+    expect(sent.slice(from).filter((m) => m.to === SCOOTER && /preview ready/i.test(m.subject)), "no preview that leaves out his second reply").toHaveLength(0);
+    const again = JSON.parse((await liveJobFor(p.id))!.job_json!) as LocalJobPayload;
+    expect(again.rebuild!.changes, "his second reply is this build's job").toMatch(/sign-up form at the top/);
+    expect(again.rebuild!.changes, "and the first round, never previewed, is still in it").toMatch(/New inquiry/);
+  });
+
   it("ONE ROUND, EVERY REPLY (15 Nov 2026, wc_c548d043): replies while the rebuild is queued or on the Mac are all built before any preview, and the one preview marks every ask, whole", async () => {
     const p = await atPreview("preview round");
     const token = await p.token();
