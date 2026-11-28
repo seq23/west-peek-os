@@ -522,8 +522,8 @@ describe("the v1.0 bar: every built ask says when it is done, and a build that h
     ] });
     await tickFor(id);
     const desc = String((await card(id)).description);
-    expect(desc).toMatch(/BUILD REFUSED.*"the dashboard" is not finished \(a saved note is still there after a reload\)/);
-    expect(desc).toMatch(/"the notes editor" is not finished \(an edit saves\) and "too_big" is not something only the partner can supply/);
+    expect(desc).toMatch(/BUILD REFUSED.*"the dashboard" is not finished \(a saved note is still there after a reload \(the review ruled on it nowhere\)\)/);
+    expect(desc).toMatch(/"the notes editor" is not finished \(an edit saves \(the review ruled on it nowhere\)\) and "too_big" is not something only the partner can supply/);
     expect((await readWebPropertyChange(env, id))!.preview_url ?? null, "the refused build's preview is not recorded").toBeNull();
     expect((await card(id)).state, "a refusal is a failed attempt, never a question").not.toBe("BLOCKED");
     expect(noPreviewTo(from), "no preview reached him").toHaveLength(0);
@@ -597,10 +597,10 @@ describe("a placeholder is counted from the page, and filled in only when materi
   });
 });
 
-describe("a step the partner kept for himself is his, not unfinished work (14 Nov 2026)", () => {
+describe("a step the partner kept for himself is his when the fresh-eyes review rules so, not unfinished work (14 Nov 2026; 28 Nov 2026)", () => {
   beforeAll(ageEarlierCards);
   afterAll(ageEarlierCards);
-  it("a check he reserved in his own words goes to preview; the same shape with words he never wrote is refused", async () => {
+  it("a check the review rules his goes to preview; the same shape ruled not held is refused", async () => {
     /*
      * Scooter's brief: "We will walk the rules before any money view ships." The BUILD did every ask and reported
      * that one check as not met, quoting him; the bar refused it as unfinished and no preview reached him.
@@ -619,14 +619,14 @@ describe("a step the partner kept for himself is his, not unfinished work (14 No
     };
     const pr = (tag: string) => ({ pr_url: "https://github.com/seq23/join-west-peek-main/pull/92", pr_number: 92, branch: `work/wpc-${tag}`, check_state: "GREEN", preview_url: `https://${tag}.west-peek-ventures.pages.dev`, proof: "validate green" });
     const his = await atBuild("held1");
-    await macReports(his, { phase: "BUILD", status: "ok", ...pr("held1"), items: [{ item: "the dashboard", state: "partial", done_when: [{ check: checks[0], met: true }, { check: checks[1], met: false, note: "his own words: 'We will walk the rules before any money view ships'; nothing lands without his yes" }] }] });
+    await macReports(his, { phase: "BUILD", status: "ok", ...pr("held1"), items: [{ item: "the dashboard", state: "partial", done_when: [{ check: checks[0], met: true }, { check: checks[1], met: false, note: "his own words: 'We will walk the rules before any money view ships'; nothing lands without his yes" }] }], review_holds: [{ item: "the dashboard", check: checks[1], held: true, by: "partner", why: "You said you will walk the rules before any money view ships." }] });
     await tickFor(his);
     expect(String((await card(his)).description), "not refused as unfinished").not.toMatch(/BUILD REFUSED/);
     expect((await readWebPropertyChange(env, his))!.preview_url).toBe("https://held1.west-peek-ventures.pages.dev");
     const not = await atBuild("held2");
-    await macReports(not, { phase: "BUILD", status: "ok", ...pr("held2"), items: [{ item: "the dashboard", state: "partial", done_when: [{ check: checks[0], met: true }, { check: checks[1], met: false, note: "his words: 'We will do the money view next month'" }] }] });
+    await macReports(not, { phase: "BUILD", status: "ok", ...pr("held2"), items: [{ item: "the dashboard", state: "partial", done_when: [{ check: checks[0], met: true }, { check: checks[1], met: false, note: "his words: 'We will do the money view next month'" }] }], review_holds: [{ item: "the dashboard", check: checks[1], held: false, why: "he never wrote that; the rules walk-through is not his to hold here" }] });
     await tickFor(not);
-    expect(String((await card(not)).description), "words he never wrote hold nothing").toMatch(/BUILD REFUSED.*walk the cash rules/);
+    expect(String((await card(not)).description), "words he never wrote hold nothing").toMatch(/BUILD REFUSED.*walk the cash rules.*can finish it here/);
     expect((await readWebPropertyChange(env, not))!.preview_url ?? null).toBeNull();
   });
 });

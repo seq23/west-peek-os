@@ -187,7 +187,7 @@ export function buildProblems(input: { items?: readonly DoneItem[] | null; missi
       const r = reviewRuling(input.reviewHolds, i.item, c.check);
       return `${c.check.slice(0, 80)}${r ? (r.held === false ? " (the review: the build can finish it here)" : "") : " (the review ruled on it nowhere)"}`;
     });
-    problems.push(`${what} is not finished (${said.join(", ")})`);
+    problems.push(`${what} is not finished (${said.join(", ")})${by ? ` and "${by.slice(0, 40)}" is not something only the partner can supply` : ""}`);
   }
   return problems;
 }
