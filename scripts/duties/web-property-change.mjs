@@ -73,7 +73,7 @@ import { admittedScripts, keysReallyMissing, visiblePlaceholders, constraintsIn,
 import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
 import { CODEX_BUILD_NOTE, codexExecArgs, codexSeatUsable, finishCodexBuild, soonestReset } from "../lib/codex-seat.mjs";
 import { routeFor, runInOrder } from "../lib/model-roles.mjs";
-import { writeSelfReview } from "../lib/pr-self-review.mjs";
+import { withSelfReviewFixed, writeSelfReview } from "../lib/pr-self-review.mjs";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -1678,6 +1678,20 @@ export async function run(job, ctx) {
     if (!privacy.ok) return { phase, status: "failed", reason: privacy.reason };
     // 23 Nov 2026: THE PR CARRIES ITS SELF-REVIEW AND MUTATION PROOF, written here from the result, every lane, every
     // round. Without them the build stops by name before any check is watched or any preview is emailed.
+    // 28 Nov 2026: refused sections get ONE turn to be written again (`withSelfReviewFixed`); the gate below is unchanged.
+    const repaired = await withSelfReviewFixed(result, async (note) => {
+      rmSync(resultPath, { force: true });
+      const claude = await runModel({ job, prompt: `${prompt}\n\n${note}`, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
+      finishIfCodex(claude, { phase, resultPath, worktree: names.worktree, branch: names.branch, jobDir, progress });
+      writeFileSync(path.join(jobDir, `claude-${phase}-selfreview.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
+      cost = (cost ?? 0) + (costFrom(claude.out) ?? 0);
+      return readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", phase).result;
+    });
+    if (repaired.line) {
+      progress(repaired.line);
+      writeFileSync(resultPath, JSON.stringify(repaired.result, null, 2));
+    }
+    result = repaired.result;
     const selfReview = writeSelfReview({ cwd: names.worktree, number: pr.number, result, run: (cmd, args, opts) => spawnSync(cmd, args, { encoding: "utf8", ...opts }) });
     if (!selfReview.ok) return { phase, status: "failed", reason: `[${selfReview.tag}] ${selfReview.why}`.slice(0, 1500), ...carried };
     const checks = await watchChecks(names.worktree, pr.number, ctx.signal, progress);

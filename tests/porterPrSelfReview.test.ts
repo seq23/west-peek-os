@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { MUTATION_HEADING, SELF_REVIEW_CHECKS, SELF_REVIEW_HEADING, writeSelfReview } from "../scripts/lib/pr-self-review.mjs";
+import { MUTATION_HEADING, SELF_REVIEW_CHECKS, SELF_REVIEW_HEADING, selfReviewProblem, withSelfReviewFixed, writeSelfReview } from "../scripts/lib/pr-self-review.mjs";
 
 /**
  * PORTER'S PR CARRIES ITS SELF-REVIEW AND MUTATION PROOF (23 Nov 2026; topbarz-voting #21 failed its review for
@@ -110,6 +110,62 @@ describe("Porter's PR body carries its self-review and mutation proof", () => {
     const at = (needle: string) => build.indexOf(needle);
     expect(at("writeSelfReview(")).toBeGreaterThan(at("pr = await prFor("));
     expect(at("writeSelfReview(")).toBeLessThan(at("await watchChecks("));
+    expect(build).toMatch(/if \(!selfReview\.ok\) return \{ phase, status: "failed"/);
+  });
+});
+
+/*
+ * 28 Nov 2026, wc_9f7312e4: a 48-minute build with its PR open was failed for "mutation_proof row 3 does not say the
+ * mutation made". The builder gets ONE turn to write the sections again; the gate itself is unchanged.
+ */
+describe("a refused self-review gets one turn to be written again, never a finished build thrown away", () => {
+  const thin = () => ({ ...good(), pr_url: "https://github.com/seq23/join-west-peek-main/pull/44", items: [{ item: "homepage", state: "done" }], mutation_proof: [...good().mutation_proof.slice(0, 1), { fix: "tiles", test: "validate:community-site", went_red: true }] });
+
+  it("asks once with the refusal and its own result; takes only the two sections, and only when they now pass", async () => {
+    const notes: string[] = [];
+    const first = thin();
+    expect(selfReviewProblem(first)).toMatch(/row 2 does not say the mutation made/);
+    const out = await withSelfReviewFixed(first, async (note) => {
+      notes.push(note);
+      return { ...good(), pr_url: "https://evil.example/pull/1", items: [] };
+    });
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatch(/DO NOT EDIT THE WORKTREE/);
+    expect(notes[0]).toMatch(/row 2 does not say the mutation made/);
+    expect(notes[0]).toContain('"pr_url":"https://github.com/seq23/join-west-peek-main/pull/44"');
+    expect(selfReviewProblem(out.result)).toBeNull();
+    expect(out.result.pr_url, "nothing but the two sections is taken from the second turn").toBe("https://github.com/seq23/join-west-peek-main/pull/44");
+    expect(out.result.items).toEqual([{ item: "homepage", state: "done" }]);
+    expect(out.line).toMatch(/wrote it again in one turn and it passes/);
+    // And the writer then passes it.
+    expect(write("body", out.result).out.ok).toBe(true);
+  });
+
+  it("a second turn that is still refused, writes nothing, or throws leaves the original result, which the gate refuses by name", async () => {
+    for (const askAgain of [async () => thin(), async () => null, async () => { throw new Error("model out"); }]) {
+      let calls = 0;
+      const out = await withSelfReviewFixed(thin(), async () => { calls += 1; return askAgain(); });
+      expect(calls).toBe(1);
+      expect(selfReviewProblem(out.result)).toMatch(/row 2/);
+      expect(out.line).toMatch(/did not fix it/);
+      const w = write("body", out.result).out;
+      expect(w.ok).toBe(false);
+      expect(!w.ok && w.tag).toBe("SELF_REVIEW_MISSING");
+    }
+  });
+
+  it("a result that already passes asks nothing", async () => {
+    let calls = 0;
+    const out = await withSelfReviewFixed(good(), async () => { calls += 1; return null; });
+    expect(calls).toBe(0);
+    expect(out.line).toBeNull();
+  });
+
+  it("the BUILD runner gives that turn before the gate, and the gate still stops a refused result", () => {
+    const src = readFileSync(path.join(__dirname, "..", "scripts", "duties", "web-property-change.mjs"), "utf8");
+    const build = src.slice(src.indexOf('if (phase === "BUILD") {'));
+    expect(build.indexOf("await withSelfReviewFixed(")).toBeGreaterThan(build.indexOf("pr = await prFor("));
+    expect(build.indexOf("await withSelfReviewFixed(")).toBeLessThan(build.indexOf("writeSelfReview("));
     expect(build).toMatch(/if \(!selfReview\.ok\) return \{ phase, status: "failed"/);
   });
 });
