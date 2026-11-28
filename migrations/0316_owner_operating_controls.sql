@@ -6,3 +6,5 @@ CREATE TABLE owner_operating_control (
 );
 
 INSERT INTO owner_operating_control (id) VALUES (1);
+
+INSERT OR IGNORE INTO schema_version (migration) VALUES ('0316_owner_operating_controls');
