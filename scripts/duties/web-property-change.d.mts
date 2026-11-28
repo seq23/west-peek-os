@@ -50,6 +50,7 @@ export function reviewAndFix(args: {
 export function firstRunVerdict(run: { hasScript: boolean; exit?: number; out?: string }): { ok: boolean; line: string };
 export function firstRunArgs(previewUrl: string | null | undefined): { args: string[]; envUrl: string };
 export function accountingOf(result: unknown): Array<{ ask: string; how: string; done_when?: string[] }>;
+export function answersOf(result: unknown): Array<{ question: string; answer: string }>;
 export function itemsOf(result: unknown): Array<{ item: string; state: string; note?: string; done_when?: Array<{ check: string; met: boolean; note?: string }>; blocked_by?: string }>;
 /** Spending from an email is a named stop (13 Nov 2026): what in a result would cost money. */
 export const SPEND_STOP: string;

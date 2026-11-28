@@ -356,6 +356,8 @@ export interface LocalJobReport {
   /** 0253 (addendum 6): several asks in one email → one done-line per item, partial completion stated per item. */
   /** v1.0 bar (13 Nov 2026): each item reports its plan line's `done_when` checks; `blocked_by` names what holds an unmet one. */
   items?: Array<{ item: string; state: "done" | "partial" | "not_done"; note?: string; done_when?: Array<{ check: string; met: boolean; note?: string }>; blocked_by?: string }>;
+  /** 28 Nov 2026 (wc_9f7312e4): each question the partner put to us, answered in plain words: the preview leads with them. */
+  answers?: Array<{ question: string; answer: string }>;
   /**
    * "unchanged" (0240, BUILD only): the job asked for a materials check (`refresh`), the Mac re-mapped
    * the folder and read the card's files, and the set is the same one the last build used — so it
@@ -505,6 +507,7 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
      * reached the card. Every entry is carried; `buildProblems` judges them.
      */
     ...(Array.isArray(r.items) ? { items: readItems(r.items) } : {}),
+    ...(Array.isArray(r.answers) ? { answers: readAnswers(r.answers) } : {}),
     /*
      * 14 Nov 2026: THIS READER DROPPED `missing_secrets` AND `vault_lookup` TOO. So the Worker never recorded which keys a
      * build waits on, and the v1.0 bar's exemption ("held by a key only the partner can supply") could never apply: a
@@ -551,6 +554,16 @@ function readItems(v: unknown[]): NonNullable<LocalJobReport["items"]> {
       ...(checks ? { done_when: checks } : {}),
       ...(typeof i.blocked_by === "string" && i.blocked_by.trim() ? { blocked_by: i.blocked_by.trim().slice(0, 40) } : {}),
     };
+  });
+}
+
+/** His questions and the build's answers, each whole; a row missing either half is no answer and is dropped. */
+function readAnswers(v: unknown[]): NonNullable<LocalJobReport["answers"]> {
+  return v.slice(0, 20).flatMap((raw) => {
+    const a = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    const question = typeof a.question === "string" ? a.question.trim().slice(0, 400) : "";
+    const answer = typeof a.answer === "string" ? a.answer.trim().slice(0, 1500) : "";
+    return question && answer ? [{ question, answer }] : [];
   });
 }
 

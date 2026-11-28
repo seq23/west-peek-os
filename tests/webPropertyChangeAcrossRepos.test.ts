@@ -382,6 +382,30 @@ describe("community site + westpeek live in one email, preview first, then land"
 describe("\"preview first\" across two repos", () => {
   let id = "";
 
+  it("a two-repo BUILD's answers to his questions reach the ONE preview email (28 Nov 2026, #610)", async () => {
+    id = await porterCardFrom("banner and footer", `${TWO_REPOS} Send me a preview first.`);
+    await tickFor(id);
+    await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "what the partner asked for", how: "build", done_when: ["it works on the preview"] }], document: "# Plan: banner and footer\n\nboth repos, structure only.", decided: ["structure"], asks: [], publish_ready: true, placeholders: [] });
+    await tickFor(id);
+    const before = blockedTo(SEQUOIA).length;
+    await macReports(id, {
+      phase: "BUILD",
+      status: "ok",
+      pr_url: "x",
+      check_state: "GREEN",
+      items: [{ item: "join-west-peek-main: the banner", state: "done", done_when: [{ check: "it shows", met: true }] }],
+      answers: [{ question: "Tell me how fast a new Luma event appears.", answer: "Within about fifteen minutes of being published." }],
+      parts: [
+        { repo: "join-west-peek-main", pr_url: "https://github.com/seq23/join-west-peek-main/pull/303", pr_number: 303, branch: "work/wpc-banner13", check_state: "GREEN", preview_url: "https://f6a7b8c9.west-peek-community.pages.dev", proof: "shots/community-390.png" },
+        { repo: "westpeek-live", pr_url: "https://github.com/seq23/westpeek-live/pull/90", pr_number: 90, check_state: "GREEN", proof: "shots/live-390.png" },
+      ],
+    });
+    expect((await tickFor(id)).outcome).toBe("BLOCKED");
+    const previews = blockedTo(SEQUOIA).slice(before);
+    expect(previews).toHaveLength(1);
+    expect(previews[0]!.text).toContain('Answered: "Tell me how fast a new Luma event appears." — Within about fifteen minutes of being published.');
+  });
+
   it("GREEN in both repos stops at ONE preview email listing both — a repo with no preview deployment says the PR stands in", async () => {
     id = await porterCardFrom("banner and footer", `${TWO_REPOS} Send me a preview first.`);
     expect((await readWebPropertyChange(env, id))!.preview_only).toBe(1);
