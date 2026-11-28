@@ -3,16 +3,7 @@ import { deliverMail } from "./support/mail";
 import { provisionLocalD1, queryLocalD1 } from "./support/provision";
 import { kindDef } from "../src/shared/deliverables/deliverable";
 
-/**
- * P68 — a partner asks for blog help by email; the finished piece is on her Home (16 Sep 2026).
- *
- * The first half drives the REAL door: an authenticated email from sequoia@ arrives at the local
- * Worker's `email()` handler and Porter opens a BLOG_HELP card on Wren's desk with the modes and
- * topic parsed. The second half is the rendering check: a `blog_help` deliverable — the row the
- * runner writes once the models have answered (unit-proven in tests/blogHelp.test.ts; the local
- * server has no search model) — is filed and Home shows it under Wren's name, with the kind's
- * label and blurb from the shared registry rather than a copy of the words.
- */
+// The mail goes through Wren’s session. Previously filed blog deliverables still render on Home.
 
 const MP = { "x-wpos-dev-user": "sequoia@westpeek.ventures" };
 const TRUSTED = "mx.cloudflare.net";
@@ -21,7 +12,7 @@ const genuine =
   "dmarc=none header.from=westpeek.ventures policy.dmarc=none; " +
   `spf=pass (${TRUSTED}: domain of sequoia@westpeek.ventures designates 2607:f8b0:4864:20::f2e as permitted sender) smtp.mailfrom=sequoia@westpeek.ventures; arc=none`;
 
-test("an emailed blog ask becomes a BLOG_HELP card on Wren's desk, and the finished piece renders on Home", async ({ page, request }) => {
+test("an emailed blog ask reaches Wren’s session and a filed blog deliverable renders on Home", async ({ page, request }) => {
   const marker = `E2E-P68-${Date.now()}`;
   await deliverMail(request, {
     from: "Sequoia Taylor <sequoia@westpeek.ventures>",
@@ -35,11 +26,12 @@ test("an emailed blog ask becomes a BLOG_HELP card on Wren's desk, and the finis
   );
   expect(cards, "one card for the ask").toHaveLength(1);
   expect(cards[0]!.owner_id, "her chief of staff, not a shared queue").toBe("aie_wren");
-  expect(cards[0]!.kind).toBe("BLOG_HELP");
+  expect(cards[0]!.kind).toBe("PARTNER_SESSION");
   expect(cards[0]!.requested_by_email).toBe("sequoia@westpeek.ventures");
-  const ask = JSON.parse(cards[0]!.request_json ?? "{}") as { modes: string[]; topic: string };
-  expect(ask.modes).toEqual(["OUTLINE"]);
-  expect(ask.topic).toContain("hire a recruiter before a CFO");
+  const [session] = queryLocalD1<{ request_text: string }>(
+    `SELECT request_text FROM partner_session WHERE work_card_id = '${cards[0]!.id}'`,
+  );
+  expect(session?.request_text).toContain("hire a recruiter before a CFO");
 
   // The runner's result, as it files it: a blog_help deliverable for her, signed by Wren, keyed
   // to the card so a re-run updates rather than stacks.

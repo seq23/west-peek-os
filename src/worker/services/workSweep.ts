@@ -26,6 +26,7 @@ function isProductionsKind(kind: string | null | undefined): boolean {
 import { replyToRequester } from "./requestReply";
 import { PRODUCTIONS_PARTNER } from "../../shared/registry/partners";
 import { PARTNER_SESSION_KIND, WEB_PROPERTY_CHANGE_KIND } from "../../shared/work/localJobs";
+import { chiefSessionFor } from "../../shared/work/chiefOfStaff";
 import { isTechnicalBlock } from "../../shared/work/blocks";
 
 /**
@@ -264,6 +265,10 @@ export async function announceOutcome(
   outcome: "DONE" | "BLOCKED" | "HANDED_ON",
   detail: string,
 ): Promise<{ emailed: string | null }> {
+  if (card.kind === PARTNER_SESSION_KIND) {
+    const session = await (await import("./partnerSession")).readSession(env, card.id);
+    if (session && session.source !== "EMAIL") return { emailed: null };
+  }
   const who = await employeeName(env, card.owner_id);
   // SCOOTER'S PERSONAL-AGENCY WORK IS TOLD TO SCOOTER. A West Peek Productions card is a duty
   // inside his office (productions.ts); a notice about it on Sequoia's desk would be the wrong
@@ -711,7 +716,7 @@ export async function sweepOnce(
     artifact?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     partnerMessage?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; detail: string }>;
     webPropertyChange?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; held?: boolean; waitUntil?: string; autoResolved?: boolean; questionAnswered?: boolean; detail: string }>;
-    partnerSession?: (env: Env, card: SweepCard) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; held?: boolean; waitUntil?: string; detail: string }>;
+    partnerSession?: (env: Env, card: SweepCard, now: Date) => Promise<{ finished: boolean; blocked: boolean; progressed: boolean; held?: boolean; waitUntil?: string; detail: string }>;
   } = {},
   options: { leaseRenewMs?: number } = {},
 ): Promise<SweepResult> {
@@ -755,7 +760,9 @@ export async function sweepOnce(
 
   // THE DECK COMES FIRST. If the company's deck is queued and not yet read, this attempt does not
   // count and the card is parked until the reader has had a turn; another card gets this tick.
-  const unread = isTlcKind(card.kind) || card.kind === "DECK_REWORK" || isProductionsKind(card.kind) || card.kind === "ROOM_PACKET" || card.kind === "BLOG_HELP" || card.kind === "ARTIFACT" || card.kind === "PARTNER_MESSAGE" || card.kind === WEB_PROPERTY_CHANGE_KIND ? null : await deckStillBeingRead(env, card.title, card.id);
+  const hasTypedExecutor = isProductionsKind(card.kind) || card.kind === WEB_PROPERTY_CHANGE_KIND || card.kind === "BLOG_HELP" || card.kind === "PARTNER_MESSAGE";
+  const chiefTurn = card.kind === PARTNER_SESSION_KIND || (chiefSessionFor(card.owner_id) !== null && !hasTypedExecutor);
+  const unread = chiefTurn || isTlcKind(card.kind) || card.kind === "DECK_REWORK" || isProductionsKind(card.kind) || card.kind === "ROOM_PACKET" || card.kind === "BLOG_HELP" || card.kind === "ARTIFACT" || card.kind === "PARTNER_MESSAGE" || card.kind === WEB_PROPERTY_CHANGE_KIND ? null : await deckStillBeingRead(env, card.title, card.id);
   if (unread) {
     const until = new Date(now.getTime() + DECK_WAIT_MINUTES * 60_000).toISOString();
     await env.WP_OS_DB.prepare(
@@ -791,7 +798,17 @@ export async function sweepOnce(
   // Every kind of card runs inside this one try, so every kind keeps its lease while it works.
   const stopKeepingLease = keepLease(env, card.id, now, options.leaseRenewMs ?? LEASE_RENEW_MS);
   try {
-    if (card.kind === "DECK_REWORK") {
+    if (chiefTurn) {
+      const run = runners.partnerSession ?? (await import("./partnerSession")).runPartnerSessionCard;
+      const out = await run(env, card, now);
+      card.kind = PARTNER_SESSION_KIND;
+      finished = out.finished;
+      blocked = out.blocked;
+      progressed = out.progressed;
+      held = out.held === true;
+      waitUntil = out.waitUntil ?? null;
+      detail = out.detail;
+    } else if (card.kind === "DECK_REWORK") {
       const run = runners.deckRework ?? (await import("./deck")).runDeckRework;
       const out = await run(env, card);
       finished = out.finished;
@@ -834,17 +851,6 @@ export async function sweepOnce(
       waitUntil = out.waitUntil ?? null;
       autoResolved = out.autoResolved === true;
       questionAnswered = out.questionAnswered === true;
-      detail = out.detail;
-    } else if (card.kind === PARTNER_SESSION_KIND) {
-      // A partner's email worked as ONE session on the Mac (14 Nov 2026): a LOCAL_JOB run kept alive by the claimer's
-      // ping, never a router call with a deadline. Held while the Mac has it; see services/partnerSession.ts.
-      const run = runners.partnerSession ?? (await import("./partnerSession")).runPartnerSessionCard;
-      const out = await run(env, card);
-      finished = out.finished;
-      blocked = out.blocked;
-      progressed = out.progressed;
-      held = out.held === true;
-      waitUntil = out.waitUntil ?? null;
       detail = out.detail;
     } else if (card.kind === "PARTNER_MESSAGE") {
       // One named employee tells one named partner something short, composed and filed through

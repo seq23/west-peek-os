@@ -1780,6 +1780,13 @@ export async function handleAddWorkCardNote(ctx: RouteContext): Promise<Response
   const card = await getVisibleWorkCard(ctx.env, ctx.identity!, ctx.params.id!);
   if (!card) return json({ error: "not_found" }, { status: 404 });
 
+  if (card.kind === PARTNER_SESSION_KIND) {
+    const session = await (await import("./partnerSession")).readSession(ctx.env, card.id);
+    if (session?.requested_by !== partnerByFirmUserId(ctx.identity!.id)?.email || !session) {
+      return json({ error: "not_found" }, { status: 404 });
+    }
+  }
+
   // A note on finished work would never be read: the loop only re-reads notes on a card it is
   // still working. Refusing plainly beats accepting it into a void.
   if (!["OPEN", "IN_PROGRESS", "BLOCKED"].includes(card.state)) {

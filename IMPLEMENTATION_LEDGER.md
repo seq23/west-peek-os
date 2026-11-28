@@ -7589,3 +7589,8 @@ Why: the owner asked that the floors above cannot quietly slide. No new employee
 - Golden replay: `tests/floorDrift.test.ts` and `tests/productionsHire.test.ts` hold each floor to its stored best
   example and to the run it was written to catch, on every change in CI. It does not call a model.
 - Before landing: the section was rendered with the review's real numbers and read as she would.
+
+### Chief of staff sessions
+
+- Wren and Walker share the Mac session card for daily wakes, direct authenticated email and messages on their employee pages. The page shows only that partner’s messages and session reports. The session starts with the existing partner practices and profile.
+- Local D1 and fixture reports exercise the queue and response. A live Mac model turn and the broader account and tool dispatcher require separate verification.

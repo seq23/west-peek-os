@@ -19,17 +19,7 @@ import {
 } from "../src/worker/services/blogHelp";
 import { lintExecEmail } from "../src/shared/email/execEmail";
 
-/**
- * BLOG HELP AS A ROUTED REQUEST (16 Sep 2026).
- *
- * The partners are starting blogs. A partner emails os@joinwestpeek.com; Porter reads the ask at
- * the door and marks the card BLOG_HELP with the modes and topic; the sweep hands it to the blog
- * runner, which researches live (every source checked and judged), writes in the partner's voice,
- * files a `blog_help` deliverable on their Home, and emails them ONCE in the busy-executive format.
- * All of it here goes through the real inbound handler, the real sweep and the real runner, with
- * the three model calls and the URL check stubbed.
- */
-
+/** Chief mail keeps the original words. Existing, typed blog cards still render and deliver. */
 let t: TestDb;
 let env: Env;
 const NOW = new Date("2026-09-16T15:00:00.000Z");
@@ -51,6 +41,18 @@ function deliverMail(from: string, subject: string, body: string): Promise<void>
 type Card = { id: string; kind: string | null; owner_id: string; state: string; request_json: string | null; requested_by_email: string | null; description: string };
 async function cardsOwnedBy(owner: string): Promise<Card[]> {
   return (await env.WP_OS_DB.prepare("SELECT id, kind, owner_id, state, request_json, requested_by_email, description FROM work_card WHERE owner_id = ?1 ORDER BY created_at").bind(owner).all<Card>()).results ?? [];
+}
+
+async function markAsLegacyBlog(card: Card, subject: string, body: string) {
+  const ask = parseBlogAsk(subject, body);
+  expect(ask).not.toBeNull();
+  await env.WP_OS_DB.prepare("UPDATE work_card SET kind = 'BLOG_HELP', request_json = ?2 WHERE id = ?1").bind(card.id, JSON.stringify(ask)).run();
+}
+
+async function deliverLegacyBlogFixture(from: string, subject: string, body: string) {
+  await deliverMail(from, subject, body);
+  const cards = await cardsOwnedBy("aie_wren");
+  await markAsLegacyBlog(cards.at(-1)!, subject, body);
 }
 
 function fakeBucket() {
@@ -135,7 +137,7 @@ afterAll(async () => {
   await disposeTestDb(t);
 });
 
-describe("Porter reads the ask at the door", () => {
+describe("Blog asks at the chief’s door", () => {
   it("parses the three phrasings into their modes, and leaves an ordinary request alone", () => {
     expect(parseBlogAsk("Blog", "help me make an outline for a blog post on why early-stage founders should hire a recruiter before a CFO and do research")).toMatchObject({ modes: ["OUTLINE"], topic: "why early-stage founders should hire a recruiter before a CFO" });
     expect(parseBlogAsk("Post", "write a blog post on what LPs get wrong about emerging managers")).toMatchObject({ modes: ["DRAFT"], topic: "what LPs get wrong about emerging managers" });
@@ -148,22 +150,24 @@ describe("Porter reads the ask at the door", () => {
     expect(readBlogAsk('{"modes":["NOPE"]}')).toBeNull();
   });
 
-  it("Sequoia's outline ask lands on Wren as BLOG_HELP / OUTLINE, remembering she asked", async () => {
+  it("Sequoia’s outline ask stays with Wren’s session", async () => {
     await deliverMail("sequoia@westpeek.ventures", "Blog post", "Wren — help me make an outline for a blog post on why early-stage founders should hire a recruiter before a CFO and do research.");
     const cards = await cardsOwnedBy("aie_wren");
     expect(cards).toHaveLength(1);
-    expect(cards[0]!.kind).toBe("BLOG_HELP");
-    expect(readBlogAsk(cards[0]!.request_json)).toMatchObject({ modes: ["OUTLINE"], topic: "why early-stage founders should hire a recruiter before a CFO" });
+    expect(cards[0]!.kind).toBe("PARTNER_SESSION");
+    const session = await env.WP_OS_DB.prepare("SELECT request_text FROM partner_session WHERE work_card_id = ?1").bind(cards[0]!.id).first<string>("request_text");
+    expect(session).toContain("hire a recruiter before a CFO");
+    await markAsLegacyBlog(cards[0]!, "Blog post", session!.split("\n\n")[1]!);
     expect(cards[0]!.requested_by_email).toBe("sequoia@westpeek.ventures");
   });
 
-  it("Scooter's draft ask lands on Walker as BLOG_HELP / DRAFT; his phrase ask as PHRASE", async () => {
+  it("Scooter’s writing asks stay with Walker’s sessions", async () => {
     await deliverMail("scooter@westpeek.ventures", "Post", "write a blog post on what LPs get wrong about emerging managers");
     await deliverMail("scooter@westpeek.ventures", "Authority", "help me come up with a phrase I can repeat across posts to build authority");
     const cards = await cardsOwnedBy("aie_walker");
-    expect(cards.map((c) => c.kind)).toEqual(["BLOG_HELP", "BLOG_HELP"]);
-    expect(readBlogAsk(cards[0]!.request_json)?.modes).toEqual(["DRAFT"]);
-    expect(readBlogAsk(cards[1]!.request_json)?.modes).toEqual(["PHRASE"]);
+    expect(cards.map((c) => c.kind)).toEqual(["PARTNER_SESSION", "PARTNER_SESSION"]);
+    await markAsLegacyBlog(cards[0]!, "Post", "write a blog post on what LPs get wrong about emerging managers");
+    await markAsLegacyBlog(cards[1]!, "Authority", "help me come up with a phrase I can repeat across posts to build authority");
     expect(cards.every((c) => c.requested_by_email === "scooter@westpeek.ventures")).toBe(true);
   });
 
@@ -285,7 +289,7 @@ describe("the runner: research judged, the piece written, filed, one email", () 
   });
 
   it("no source survives for an outline: BLOCKED with the reason, nothing emailed, nothing filed", async () => {
-    await deliverMail("sequoia@westpeek.ventures", "Blog", "outline a blog post on the history of the West Peek mastermind please");
+    await deliverLegacyBlogFixture("sequoia@westpeek.ventures", "Blog", "outline a blog post on the history of the West Peek mastermind please");
     const before = sent.length;
     const out = await sweepOnce(env, new Date(NOW.getTime() + 180_000), {
       blogHelp: (e, card) => runBlogHelpCard(e, card, { search, judge, write: async () => ({ ok: true, text: outlineJson, detail: "ok" }), urlCheck: async () => false, interpret: saidNothing }),
@@ -310,7 +314,7 @@ describe("the runner: research judged, the piece written, filed, one email", () 
   });
 
   it("a search that NEVER RAN fails the attempt instead of asking her for a source or two (1 Oct 2026)", async () => {
-    await deliverMail("sequoia@westpeek.ventures", "Blog again", "outline a blog post on how the mastermind picks its themes please");
+    await deliverLegacyBlogFixture("sequoia@westpeek.ventures", "Blog again", "outline a blog post on how the mastermind picks its themes please");
     const before = sent.length;
     const neverRan: BlogModelCall = async () => ({ ok: false, text: "", detail: "free_only_cannot_serve_protected_work:this call is marked 'search' and needs a paid model" });
     const out = await sweepOnce(env, new Date(NOW.getTime() + 360_000), {
@@ -326,7 +330,7 @@ describe("the runner: research judged, the piece written, filed, one email", () 
   });
 
   it("a JUDGE that could not answer fails the attempt instead of asking her for a source or two (1 Oct 2026)", async () => {
-    await deliverMail("sequoia@westpeek.ventures", "Blog third", "outline a blog post on how the mastermind chooses its members please");
+    await deliverLegacyBlogFixture("sequoia@westpeek.ventures", "Blog third", "outline a blog post on how the mastermind chooses its members please");
     const before = sent.length;
     const judgeDown: BlogModelCall = async () => ({ ok: false, text: "", detail: "free_only_cannot_serve_protected_work:this call is marked 'judgement' and needs a paid model" });
     const out = await sweepOnce(env, new Date(NOW.getTime() + 540_000), {
@@ -340,7 +344,7 @@ describe("the runner: research judged, the piece written, filed, one email", () 
   });
 
   it("a judge that ANSWERED but returned no usable verdicts also fails the attempt, never 'send me a source' (review of #221)", async () => {
-    await deliverMail("sequoia@westpeek.ventures", "Blog fourth", "outline a blog post on how the mastermind handles disagreements please");
+    await deliverLegacyBlogFixture("sequoia@westpeek.ventures", "Blog fourth", "outline a blog post on how the mastermind handles disagreements please");
     const before = sent.length;
     const emptyJudge: BlogModelCall = async () => ({ ok: true, text: "{}", detail: "ok" });
     const out = await sweepOnce(env, new Date(NOW.getTime() + 720_000), {

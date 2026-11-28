@@ -32,39 +32,13 @@ still catches each broken rule.
 monthly note and introduction), `roomPacket.ts` (Parker's packet), `deliverables.ts` (a partner's
 own copy), `blogHelp.ts` (below). Each builds the sections; none touches a transport.
 
-## One plain-words reader (13 Nov 2026)
+## Working with Wren and Walker
 
-Every partner's words, a new email to os@ or a reply on a thread, are read once by `src/worker/services/replyIntent.ts` (`readReplyIntent`): what they mean for the job (go ahead, fix, question, stop, nothing) and where the work goes (answer, route to a named employee, build). The fixed doors still run first (hashtags, deck start, a named site, blog help, a message to pass on). A new email none of them claimed is handed straight to the employee the reader names; otherwise the chief of staff keeps it with the reading on it. The intake banter/question check uses the same reader. It runs at `INTERNAL`, so it never reaches a free or training route (`tests/plainWordsReader.test.ts`). A reader that cannot run changes nothing: the words are carried on as instructions.
+Send your chief an email at `os@joinwestpeek.com` from your verified partner address, or open your chief under Employees and write in the message box. Sequoia’s messages go to Wren. Scooter’s messages go to Walker. Wren leads the West Peek OS team. Walker works for Scooter and reports to Wren.
 
-## Blog help is a routed request
+A direct email, a message from the employee page and each daily wake use the same Mac session. The chief starts with the partner’s saved preferences and holds. The daily wake queues at 10:00 a.m. Central on the existing Workers schedule. Page replies and the daily session’s report are shown on that partner’s employee page. For an email, keep replying on the thread. Questions about one part of the work can be answered while the rest continues.
 
-A partner emails `os@joinwestpeek.com` from their own address (it must authenticate — see
-`src/shared/intake/partnerAuthority.ts`). Porter reads the ask at the door
-(`src/shared/intake/blogHelp.ts`, called from `openAssignmentCard`) and, when it is blog help,
-marks the card `kind = 'BLOG_HELP'` on that partner's chief of staff — Wren for Sequoia, Walker
-for Scooter — with the modes and topic in `work_card.request_json`.
-
-| The partner writes… | Mode | What comes back |
-|---|---|---|
-| "help me make an **outline** for a blog post on X and do **research**" | OUTLINE | a working title + 3 alternates, the one-sentence thesis, a section-by-section spine (what each proves, the 2–3 facts and URLs it leans on), a suggested opening and closing, 5 research notes with URLs |
-| "**write** a blog post on X" / "**draft** the full post" | DRAFT | the full post in the partner's voice, 900–1,400 words unless the ask says "about N words" / "under N words", sources footnoted `[n]` |
-| "a **phrase** I can repeat across posts" / "a **tagline**" / "build **authority**" | PHRASE | 5 candidate signature phrases, why each builds authority, how each recurs (opening line, sign-off, header, refrain), one recommendation |
-
-Modes combine ("outline it and then write it"); a blog ask with no clear verb is an OUTLINE.
-
-**The runner** (`src/worker/services/blogHelp.ts`, dispatched by the employee sweep) researches
-first through the search model, checks every URL is live, and puts every surviving fact to a
-second model that judges it against the brief — the pattern `productions.ts` arrived at. Only
-judged URLs may be cited; anything else the writer offers is stripped and counted. The piece is
-written with the partner's voice cues (name, profile sectors and themes, what they said about the
-last pieces) and West Peek's positioning (`WEST_PEEK_POSITIONING`, read from `docs/COMMUNITY.md`).
-The result is a `blog_help` deliverable — on the partner's Home under their chief of staff, filed
-to Documents as markdown — and ONE email in the shape above. No source for an OUTLINE or DRAFT
-means the card is BLOCKED with the reason and nothing is emailed but the sweep's blocked reply.
-
-Proof: `tests/blogHelp.test.ts` (routing of the three phrasings, each mode with stubbed
-search/judge/writer, the deliverable filed, the email sent once) and `e2e/p68-blog-help.spec.ts`
-(the real email door, and the deliverable rendering on Home).
+Ask in your own words. A request to the chief for a blog draft or a message uses the same session as any other request. Porter’s site and repository work and other specialists’ own work still have their established intake and approval paths. Wednesday prep, Wren’s on-request morning brief, and Walker’s monthly leads note and weekly hire search keep their delivery schedules.
 
 ## A web property change is a routed request worked on her Mac (Plan A, 20 Sep 2026)
 

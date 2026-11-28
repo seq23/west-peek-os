@@ -52,9 +52,9 @@ export async function partnerEmailForCard(env: Env, cardId: string): Promise<str
  * requesting partner's constraints. Never throws — a prompt without the register is worse than one
  * with "none on record", but a run that dies on it is worse still.
  */
-export async function practicesForCard(env: Env, cardId: string, firmScope = "west-peek"): Promise<string> {
+export async function practicesForCard(env: Env, cardId: string, firmScope = "west-peek", requester?: string): Promise<string> {
   try {
-    const email = await partnerEmailForCard(env, cardId);
+    const email = requester ?? (await partnerEmailForCard(env, cardId));
     // 0255 (rule 4): the requesting partner's living profile rides in the same block, for every kind.
     const profile = await profileBlockFor(env, email).catch(() => "");
     // The first read's brief (15 Nov 2026): the same asks, holds and files the Got it told him, for every employee.
