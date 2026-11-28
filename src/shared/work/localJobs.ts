@@ -365,7 +365,7 @@ export interface LocalJobReport {
    * the landing, another job, or a RUNBOOK rule) with the plain why, or not held. Written by the SCRIPT from the review
    * file, never by the builder; `buildProblems` reads it instead of keywords.
    */
-  review_holds?: Array<{ item: string; check: string; held: boolean; by?: string; why?: string }>;
+  review_holds?: Array<{ item: string; check: string; held: boolean; by?: string; why?: string; on_card?: string }>;
   /**
    * "unchanged" (0240, BUILD only): the job asked for a materials check (`refresh`), the Mac re-mapped
    * the folder and read the card's files, and the set is the same one the last build used — so it
@@ -590,6 +590,7 @@ function readReviewHolds(v: unknown[]): NonNullable<LocalJobReport["review_holds
       held: h.held === true,
       ...(typeof h.by === "string" && h.by.trim() ? { by: h.by.trim().slice(0, 20) } : {}),
       ...(typeof h.why === "string" && h.why.trim() ? { why: h.why.trim().slice(0, 500) } : {}),
+      ...(typeof h.on_card === "string" && /^wc_[A-Za-z0-9-]+$/.test(h.on_card.trim()) ? { on_card: h.on_card.trim().slice(0, 64) } : {}),
     };
   });
 }

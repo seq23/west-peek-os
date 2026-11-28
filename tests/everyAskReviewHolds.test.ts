@@ -28,13 +28,21 @@ const HOLDS = [
 describe("the fresh-eyes review rules what holds an unmet check (28 Nov 2026, wc_9f7312e4)", () => {
   it("the refused build of wc_9f7312e4 passes with the review's holds, and 8i is filed as its own job", () => {
     expect(buildProblems({ items: ITEMS, reviewHolds: HOLDS })).toEqual([]);
-    expect(splitOffItems(ITEMS, HOLDS)).toEqual([{ item: I8, words: HOLDS[1]!.why }]);
+    expect(splitOffItems(ITEMS, HOLDS)).toEqual([{ item: I8, words: HOLDS[1]!.why, on_card: null }]);
   });
   it("without the holds the same report is refused on exactly 8h and 8i", () => {
     const p = buildProblems({ items: ITEMS });
     expect(p).toHaveLength(2);
     expect(p[0]).toContain("8h.");
     expect(p[1]).toContain("8i.");
+  });
+  it("an another_job hold that names the open card already carrying it says so, so it is never filed twice", () => {
+    const owned = [HOLDS[0]!, { ...HOLDS[1]!, on_card: "wc_e1d13d5c-4e5f-4678-97a2-6f4fdf63a1a2" }];
+    expect(splitOffItems(ITEMS, owned)).toEqual([{ item: I8, words: HOLDS[1]!.why, on_card: "wc_e1d13d5c-4e5f-4678-97a2-6f4fdf63a1a2" }]);
+    expect(splitOffItems(ITEMS, [HOLDS[0]!, { ...HOLDS[1]!, on_card: "not a card; DROP TABLE" }])[0]!.on_card, "only a card id counts").toBeNull();
+    const v = readReview(JSON.stringify({ findings: [], holds: [{ ...HOLDS[1], on_card: "wc_abc" }, { ...HOLDS[0], on_card: "wc_abc" }] }))!;
+    expect(v.holds[0]!.on_card).toBe("wc_abc");
+    expect(v.holds[1]!.on_card, "only another_job carries a card").toBeUndefined();
   });
   it("a hold excuses only the check it names: one for 8h does not excuse 8i", () => {
     const p = buildProblems({ items: ITEMS, reviewHolds: [HOLDS[0]!] });

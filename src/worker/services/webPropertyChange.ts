@@ -1838,9 +1838,14 @@ export async function applyReport(
       await appendFinding(env, card.id, line);
       return { finished: false, blocked: false, progressed: false, detail: line.slice(0, 600) };
     }
-    // An item the approved answer split off ("its own item after this") is its own site job, filed now, never dropped.
+    // An item the review ruled another job's is its own site job, filed now, never dropped — unless an open card the
+    // review named already carries it (it is named on this card, and nothing is filed twice).
     for (const s of splitOffItems(report.items, report.review_holds).slice(0, 5)) {
-      await deferWork(env, card, row, { ask: s.item, due_at: new Date().toISOString(), words: s.words, site_change: true });
+      const owner = s.on_card && s.on_card !== card.id
+        ? await env.WP_OS_DB.prepare("SELECT id FROM work_card WHERE id = ?1 AND state NOT IN ('DONE', 'CANCELLED') AND merged_into_card_id IS NULL").bind(s.on_card).first<{ id: string }>().catch(() => null)
+        : null;
+      if (owner) await appendFinding(env, card.id, `"${s.item.slice(0, 200)}" is already on open card ${owner.id}; not filed again. The review: ${s.words}`);
+      else await deferWork(env, card, row, { ask: s.item, due_at: new Date().toISOString(), words: `The review: ${s.words}`, site_change: true });
     }
   }
 

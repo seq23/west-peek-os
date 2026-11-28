@@ -18,7 +18,7 @@ describe("an item the review rules another job's is filed as its own job, not re
   it("the real report passes and names the item to file as its own job, with the review's why", () => {
     const holds = [{ item: PRIVACY, check: CHECK, held: true, by: "another_job", why: WHY }];
     expect(buildProblems({ items: items(), reviewHolds: holds })).toEqual([]);
-    expect(splitOffItems(items(), holds)).toEqual([{ item: PRIVACY, words: WHY }]);
+    expect(splitOffItems(items(), holds)).toEqual([{ item: PRIVACY, words: WHY, on_card: null }]);
   });
   it("no ruling, not held, or held by the partner (not another job) files nothing; the first two are refused", () => {
     expect(buildProblems({ items: items() })).toHaveLength(1);

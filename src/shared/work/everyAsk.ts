@@ -126,6 +126,8 @@ export interface ReviewHold {
   held: boolean;
   by?: HoldBy | string | null;
   why?: string | null;
+  /** For `another_job`: the open card that already carries this work (one of the build's OTHER OPEN JOBS). */
+  on_card?: string | null;
 }
 
 const norm = (s: string | null | undefined): string => tokens(s).join(" ");
@@ -146,15 +148,23 @@ export function reviewRuling(holds: readonly ReviewHold[] | null | undefined, it
 
 const heldBy = (h: ReviewHold | null): h is ReviewHold => Boolean(h && h.held === true && (HOLD_BY as readonly string[]).includes(String(h.by ?? "")) && String(h.why ?? "").trim());
 
-/** The BUILD items the review ruled are another job's (another repo, or split off by him or an approved answer): filed as their own site job, never dropped. */
-export function splitOffItems(items: readonly DoneItem[] | null | undefined, holds: readonly ReviewHold[] | null | undefined): Array<{ item: string; words: string }> {
-  const out: Array<{ item: string; words: string }> = [];
+/**
+ * The BUILD items the review ruled are another job's (another repo, or split off by him or an approved answer): filed as
+ * their own site job, never dropped, UNLESS the review named the open card that already carries them (`on_card`; 28 Nov
+ * 2026, wc_9f7312e4: 8h and 8i were already on the Network OS card wc_e1d13d5c, and filing them again opened two
+ * duplicate cards that would have planned and emailed Scooter a second time).
+ */
+export function splitOffItems(items: readonly DoneItem[] | null | undefined, holds: readonly ReviewHold[] | null | undefined): Array<{ item: string; words: string; on_card: string | null }> {
+  const out: Array<{ item: string; words: string; on_card: string | null }> = [];
   for (const i of items ?? []) {
     if (i.state === "done") continue;
     const unmet = (i.done_when ?? []).filter((c) => String(c?.check ?? "").trim() && c.met !== true);
     if (!unmet.length) continue;
     const rulings = unmet.map((c) => reviewRuling(holds, i.item, c.check));
-    if (rulings.every((r) => heldBy(r) && r.by === "another_job")) out.push({ item: String(i.item ?? ""), words: String(rulings[0]!.why).slice(0, 300) });
+    if (rulings.every((r) => heldBy(r) && r.by === "another_job")) {
+      const on = rulings.map((r) => String(r?.on_card ?? "")).find((c) => /^wc_[A-Za-z0-9-]+$/.test(c)) ?? null;
+      out.push({ item: String(i.item ?? ""), words: String(rulings[0]!.why).slice(0, 300), on_card: on });
+    }
   }
   return out;
 }

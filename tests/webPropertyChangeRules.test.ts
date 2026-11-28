@@ -629,6 +629,33 @@ describe("a step the partner kept for himself is his when the fresh-eyes review 
     expect(String((await card(not)).description), "words he never wrote hold nothing").toMatch(/BUILD REFUSED.*walk the cash rules.*can finish it here/);
     expect((await readWebPropertyChange(env, not))!.preview_url ?? null).toBeNull();
   });
+
+  it("work the review rules another open card's is named there and never filed twice; with no card named it is filed as its own job (28 Nov 2026, wc_9f7312e4)", async () => {
+    const BASE = { document: "# Plan\n\nnothing to ask", decided: ["as asked"], asks: [], publish_ready: true };
+    const checks = ["Scooter signs in on the preview", "a Give and Take screen inside Network OS"];
+    const atBuild = async (tag: string): Promise<string> => {
+      const chiefId = await openAssignmentCard(env, { subject: `community split ${tag}`, partnerAddress: SCOOTER, chiefOfStaff: "Walker", raw: `Please build a dashboard on westpeek.ventures where I can sign in and see asks — package: https://drive.google.com/drive/folders/${FOLDER}${tag}`, limits: EMAILED_TASK_LIMITS, emlKey: null });
+      const id = /Handed to Porter as work card (wc_[a-z0-9-]+)/.exec(String((await card(chiefId)).description))![1]!;
+      await tickFor(id);
+      await macReports(id, { phase: "PLAN", status: "ok", accounting: [{ ask: "the dashboard", how: "build", done_when: checks }], ...BASE });
+      await tickFor(id);
+      return id;
+    };
+    const pr = (tag: string) => ({ pr_url: "https://github.com/seq23/join-west-peek-main/pull/93", pr_number: 93, branch: `work/wpc-${tag}`, check_state: "GREEN", preview_url: `https://${tag}.west-peek-ventures.pages.dev`, proof: "validate green" });
+    const items = [{ item: "the dashboard", state: "partial", done_when: [{ check: checks[0], met: true }, { check: checks[1], met: false, note: "another repo" }] }];
+    const filedFrom = async (id: string) => (await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card WHERE substr(description, 1, ?2) = ?1").bind(`Deferred from card ${id}`, `Deferred from card ${id}`.length).first<{ n: number }>())!.n;
+    const owner = await atBuild("split0");
+    const named = await atBuild("split1");
+    await macReports(named, { phase: "BUILD", status: "ok", ...pr("split1"), items, review_holds: [{ item: "the dashboard", check: checks[1], held: true, by: "another_job", why: "The screen lives in Network OS, on its own card.", on_card: owner }] });
+    await tickFor(named);
+    expect(String((await card(named)).description)).not.toMatch(/BUILD REFUSED/);
+    expect(await filedFrom(named), "already on an open card: nothing filed").toBe(0);
+    expect(String((await card(named)).description)).toContain(`is already on open card ${owner}`);
+    const bare = await atBuild("split2");
+    await macReports(bare, { phase: "BUILD", status: "ok", ...pr("split2"), items, review_holds: [{ item: "the dashboard", check: checks[1], held: true, by: "another_job", why: "The screen lives in Network OS." }] });
+    await tickFor(bare);
+    expect(await filedFrom(bare), "no card carries it: filed as its own job, never dropped").toBe(1);
+  });
 });
 
 describe("a plan that is not publish-ready previews first (21 Sep 2026)", () => {
