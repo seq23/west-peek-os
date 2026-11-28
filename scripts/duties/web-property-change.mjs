@@ -74,6 +74,7 @@ import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
 import { CODEX_BUILD_NOTE, codexExecArgs, codexSeatUsable, finishCodexBuild, soonestReset } from "../lib/codex-seat.mjs";
 import { routeFor, runInOrder } from "../lib/model-roles.mjs";
 import { withSelfReviewFixed, writeSelfReview } from "../lib/pr-self-review.mjs";
+import { landLinesNote, parseLandCheck, sortCodes, writeLandLines } from "../lib/pr-land-lines.mjs";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -1514,6 +1515,71 @@ export async function applyPagesEnv(pagesEnv, env, progress, registry = null, op
  * Run one phase. Always returns a report object; never throws for a job-level failure (the
  * claimer reports what comes back). Throws only when the job itself is malformed.
  */
+/**
+ * BEFORE ~/bin/land: ASK land WHAT THE PR LACKS, AND HAVE THE BUILDER WRITE IT (28 Nov 2026, wc_59ef2d40).
+ * `land --check` is read-only (exit 0 nothing to fix | 1 the list | 75 GitHub unread). Lines the builder can write
+ * get ONE short model turn (scripts/lib/pr-land-lines.mjs), are written into the body, and land --check is read
+ * again. A stop only a fresh reviewer clears is named (LAND_NEEDS_REVIEWER), so the sweep never retries it unchanged.
+ * `deps` lets the self-test drive land and the model. Returns `{ ok: true, line }` or `{ ok: false, reason }`.
+ */
+export async function landLinesFirst({ job, names, jobDir, packageDir, attachments, ctx, progress, land }, deps = {}) {
+  const check = deps.check ?? (async () => {
+    try {
+      const { stdout, stderr } = await sh(land, ["--check", String(job.pr.number)], { cwd: names.worktree, env: process.env, timeout: 5 * 60_000, signal: ctx.signal });
+      return { code: 0, out: `${stdout}\n${stderr}` };
+    } catch (err) {
+      return { code: typeof err?.code === "number" ? err.code : 1, out: `${err?.stdout ?? ""}\n${err?.stderr ?? ""}` };
+    }
+  });
+  const turn = deps.turn ?? (async (note, linesPath) => {
+    const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath: linesPath, planText: job.plan?.text ?? null, landOutput: null, mergeSha: null, attachments, extraLines: [] })}\n\n${note}`;
+    writeFileSync(path.join(jobDir, "prompt-LAND-lines.md"), prompt);
+    const phase = "LAND";
+    const resultPath = linesPath;
+    const claude = await runModel({ job, prompt, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
+    finishIfCodex(claude, { phase, resultPath, worktree: names.worktree, branch: names.branch, jobDir, progress });
+    writeFileSync(path.join(jobDir, "claude-LAND-lines.out"), `${claude.out}\n--- stderr ---\n${claude.err}`);
+    try {
+      return JSON.parse(readFileSync(linesPath, "utf8"));
+    } catch {
+      return null;
+    }
+  });
+  const write = deps.write ?? ((lines, codes) => writeLandLines({ cwd: names.worktree, number: job.pr.number, lines, codes, run: (cmd, args, opts) => spawnSync(cmd, args, { encoding: "utf8", ...opts }) }));
+  const tail = (out) => out.trim().split("\n").filter(Boolean).slice(-4).join(" | ").slice(0, 700);
+  const stopFor = (sorted, out) => {
+    if (sorted.other.length) return `land --check stopped on what no description line fixes (${sorted.other.map((c) => c.code).join(", ")}): ${tail(out)}`;
+    if (sorted.reviewer.length) return `NAMED STOP [LAND_NEEDS_REVIEWER] PR #${job.pr.number} is in a review class and waits on a fresh reviewer's PASS (${sorted.reviewer.map((c) => c.code).join(", ")}), which the builder never signs: ${sorted.reviewer[0].why.slice(0, 400)}`;
+    return null;
+  };
+
+  progress(`land --check #${job.pr.number}`);
+  const first = await check();
+  if (first.code === 0) return { ok: true, line: "land --check: nothing to add" };
+  if (first.code === 75) return { ok: false, reason: `land --check could not read PR #${job.pr.number} from GitHub: ${tail(first.out)}` };
+  const { codes } = parseLandCheck(first.out);
+  if (!codes.length) return { ok: false, reason: `land --check stopped without a list: ${tail(first.out)}` };
+  const sorted = sortCodes(codes);
+  if (!sorted.builder.length) return { ok: false, reason: stopFor(sorted, first.out) ?? `land --check: ${tail(first.out)}` };
+
+  const linesPath = path.join(jobDir, "result-LAND-lines.json");
+  rmSync(linesPath, { force: true });
+  progress(`writing ${sorted.builder.map((c) => c.code).join(", ")} for #${job.pr.number}`);
+  const said = await turn(landLinesNote(first.out, linesPath), linesPath);
+  if (!said || typeof said !== "object") return { ok: false, reason: "NAMED STOP [LAND_LINES_MISSING] the builder's pre-land turn wrote no readable result, so the lines land asked for were not written and nothing landed" };
+  if (said.status === "failed") return { ok: false, reason: `NAMED STOP [PRE_LAND_CHECK] before the deploy: ${String(said.reason ?? "the builder found the preview not ready").slice(0, 800)}` };
+  const wrote = write(said.land_lines, sorted.builder);
+  if (!wrote.ok) return { ok: false, reason: `NAMED STOP [${wrote.tag}] ${wrote.why}`.slice(0, 1200) };
+  progress(wrote.line);
+  if (said.pre_land) progress(`before the deploy: ${String(said.pre_land).slice(0, 400)}`);
+
+  const again = await check();
+  if (again.code === 0) return { ok: true, line: wrote.line };
+  const left = sortCodes(parseLandCheck(again.out).codes);
+  if (left.builder.length) return { ok: false, reason: `NAMED STOP [LAND_LINES_REFUSED] land --check still refuses after the lines were written (${left.builder.map((c) => c.code).join(", ")}): ${left.builder[0].why.slice(0, 500)}` };
+  return { ok: false, reason: stopFor(left, again.out) ?? `land --check: ${tail(again.out)}` };
+}
+
 export async function run(job, ctx) {
   const progress = ctx.progress ?? (() => {});
   const phase = job.phase;
@@ -1578,6 +1644,9 @@ export async function run(job, ctx) {
     // deploys where the repo needs it, and refuses rather than guesses.
     const land = path.join(homedir(), "bin", "land");
     if (!existsSync(land)) return { phase, status: "failed", reason: `${land} is not on this Mac` };
+    // 28 Nov 2026 (wc_59ef2d40): THE LINES land READS ARE WRITTEN BEFORE IT RUNS, never discovered by its stop.
+    const lined = await landLinesFirst({ job, names, jobDir, packageDir, attachments, ctx, progress, land });
+    if (!lined.ok) return { phase, status: "failed", reason: lined.reason };
     progress(`landing #${job.pr.number}`);
     try {
       const { stdout, stderr } = await sh(land, [String(job.pr.number ?? "")], { cwd: names.worktree, env: process.env, timeout: 30 * 60_000, signal: ctx.signal });
