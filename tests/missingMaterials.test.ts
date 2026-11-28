@@ -41,7 +41,7 @@ import { buildStepPrompt, parseDecision } from "../src/shared/work/employeeLoop"
  * MISSING MATERIALS AND A REPLY'S FILES, FOR EVERY EMPLOYEE (owner, 23 Sep 2026, migration 0237).
  *
  * Her question: "is he going to send me a list of missing materials and ask me to upload them?" —
- * and then: "all agents do it this way, not just Porter". Proven on a NON-Porter card (Wren's
+ * and then: "all agents do it this way, not just Porter". Proven on a NON-Porter card (Preston's
  * general loop, and a steered chain) and on Porter's web lane:
  *
  *   · THE ASK: a blocked run lists the files it needs; the email asks for each, says where it goes,
@@ -143,7 +143,7 @@ describe("the shared section: one list, one renderer", () => {
   });
 
   it("the general loop tells an employee to list the files it needs, and reads them back from a blocked or finished decision", () => {
-    const prompt = buildStepPrompt({ title: "t", next_action: null, description: null, employee_name: "Wren", employee_role: "Chief of Staff", allows_browser: false, prompt: null, guidance: "", history: [], materials: "FILES THE PARTNER SENT (kept on the card; each opens by name on the card):\n  • logo.svg" }, 3);
+    const prompt = buildStepPrompt({ title: "t", next_action: null, description: null, employee_name: "Preston", employee_role: "Finance & Fund Admin", allows_browser: false, prompt: null, guidance: "", history: [], materials: "FILES THE PARTNER SENT (kept on the card; each opens by name on the card):\n  • logo.svg" }, 3);
     expect(prompt).toMatch(/FILES THE PARTNER SENT/);
     expect(prompt).toMatch(/also list each in\s+missing with where it goes/);
     expect(parseDecision('{"action":"blocked","needs":"the logo","missing":[{"item":"logo","where":"header"}]}')!.missing).toEqual([{ item: "logo", where: "header" }]);
@@ -151,15 +151,14 @@ describe("the shared section: one list, one renderer", () => {
   });
 });
 
-describe("a NON-Porter card: Wren's general loop asks for the files, keeps the reply's file, and finishes naming only what is still missing", () => {
+describe("a specialist card: the general loop asks for the files, keeps the reply's file, and finishes naming only what is still missing", () => {
   let id = "";
 
   it("a blocked run records what it needs, and the email asks for each item with where it goes and how to send it", async () => {
     id = await openAssignmentCard(env, { subject: "LP one-pager", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: "Wren, put together a one-pager on the fund for Thursday's LP meeting.", limits: EMAILED_TASK_LIMITS, emlKey: null });
-    // 14 Nov 2026: an emailed assignment no door claims is a partner session now (tests/partnerSession.test.ts). The
-    // general loop still works every card made on the page or handed to an employee, which is what this suite proves.
     expect((await card(id)).kind, "an emailed ordinary assignment is a partner session").toBe("PARTNER_SESSION");
-    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = NULL WHERE id = ?1").bind(id).run();
+    // Exercise the shared materials flow on a specialist's card.
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = NULL, owner_id = 'aie_preston' WHERE id = ?1").bind(id).run();
     expect((await card(id)).kind, "worked by the general loop from here").toBeNull();
     replies.push('{"action":"blocked","needs":"I need the fund logo and the Q3 letter to build this.","missing":[{"item":"the fund logo (SVG)","where":"the one-pager header"},{"item":"the Q3 LP letter (PDF)","where":"the performance section"}]}');
     const out = await tickFor(id);
@@ -199,7 +198,7 @@ describe("a NON-Porter card: Wren's general loop asks for the files, keeps the r
 
   it("a reply that is ONLY a file still reaches the card, and says what it carried", async () => {
     const other = await openAssignmentCard(env, { subject: "Deck check", partnerAddress: SEQUOIA, chiefOfStaff: "Wren", raw: "Wren, check the deck numbers against the model.", limits: EMAILED_TASK_LIMITS, emlKey: null });
-    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = NULL WHERE id = ?1").bind(other).run();
+    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = NULL, owner_id = 'aie_preston' WHERE id = ?1").bind(other).run();
     replies.push('{"action":"blocked","needs":"Send me the model.","missing":[{"item":"the fund model (XLSX)","where":"the numbers check"}]}');
     await tickFor(other);
     const r = await reply(other, "", { name: "fund-model.xlsx", type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });

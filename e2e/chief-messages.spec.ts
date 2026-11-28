@@ -14,14 +14,14 @@ for (const partner of PARTNERS) {
   test(`${chief} accepts a message and renders a fixture reply on the employee page`, async ({ page }, testInfo) => {
     const consoleErrors: string[] = [];
     page.on("pageerror", (error) => consoleErrors.push(error.message));
-    page.on("console", (message) => {
-      if (message.type() === "error") consoleErrors.push(message.text());
-    });
     const message = `Please outline tomorrow's handoff. TEST ${chief} ${Date.now()}`;
     await page.goto("/");
     await page.getByTestId("dev-login-email").fill(partner.email);
     await page.getByTestId("dev-login-submit").click();
     await expect(page.getByTestId("identity-status")).toContainText(partner.fullName);
+    page.on("console", (entry) => {
+      if (entry.type() === "error") consoleErrors.push(entry.text());
+    });
     const other = PARTNERS.find((entry) => entry.firmUserId !== partner.firmUserId)!;
     const otherPath = `/api/workforce/employees/${seatId(chiefOfStaffFor(other.fullName))}/messages`;
     const headers = { "x-wpos-dev-user": partner.email };

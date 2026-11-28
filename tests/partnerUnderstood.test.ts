@@ -96,9 +96,7 @@ describe("step 1: Got it, in his words", () => {
 describe("step 7: the DONE reply answers every ask", () => {
   it("a report missing an ask sends no DONE and re-parks the card; a full report sends one DONE marking all three", async () => {
     const card = await cardFor("Sensori");
-    // Worked by the general loop here (an emailed card is a partner session now, whose own report carries the asks:
-    // tests/partnerSession.test.ts); this proves the guard every finishing kind passes.
-    await env.WP_OS_DB.prepare("UPDATE work_card SET kind = NULL, lease_until = NULL, waiting_until = NULL WHERE id = ?1").bind(card.id).run();
+    await env.WP_OS_DB.prepare("UPDATE work_card SET lease_until = NULL, waiting_until = NULL WHERE id = ?1").bind(card.id).run();
     // The earlier tick's session run for it is put away with it.
     await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'ABANDONED' WHERE work_card_id = ?1 AND status IN ('QUEUED', 'CLAIMED')").bind(card.id).run();
     // The Northwind card is older and still waiting; park it so the sweep claims Sensori.
@@ -108,9 +106,9 @@ describe("step 7: the DONE reply answers every ask", () => {
     const partial = JSON.stringify({ asks: [{ words: ASK_1, status: "DONE", why: "Real company, on thesis; worth a call." }, { words: ASK_2, status: "IN_PROGRESS", why: "Seed found; Series A still being checked." }] });
     const before = sent.length;
     const first = await sweepOnce(env, new Date(), {
-      general: async (e, _ctx, cardId) => {
-        await e.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE' WHERE id = ?1").bind(cardId).run();
-        return { finished: true, blocked: false, detail: `Sensori is worth a call.\n${partial}`, steps: [{ action: "done", detail: `Sensori is worth a call.\n${partial}` }] };
+      partnerSession: async (e, session) => {
+        await e.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE' WHERE id = ?1").bind(session.id).run();
+        return { finished: true, blocked: false, progressed: false, detail: `Sensori is worth a call.\n${partial}` };
       },
     });
     expect(first.card?.id, first.summary).toBe(card.id);
@@ -121,9 +119,9 @@ describe("step 7: the DONE reply answers every ask", () => {
 
     const full = JSON.stringify({ asks: [{ words: ASK_3, status: "NOT_DONE", why: "Scooter asked to hold intros this week." }] });
     const second = await sweepOnce(env, new Date(), {
-      general: async (e, _ctx, cardId) => {
-        await e.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE' WHERE id = ?1").bind(cardId).run();
-        return { finished: true, blocked: false, detail: `Intro held.\n${full}`, steps: [{ action: "done", detail: `Intro held.\n${full}` }] };
+      partnerSession: async (e, session) => {
+        await e.WP_OS_DB.prepare("UPDATE work_card SET state = 'DONE' WHERE id = ?1").bind(session.id).run();
+        return { finished: true, blocked: false, progressed: false, detail: `Intro held.\n${full}` };
       },
     });
     expect(second.outcome).toBe("DONE");
