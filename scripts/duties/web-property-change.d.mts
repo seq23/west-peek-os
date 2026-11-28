@@ -72,3 +72,13 @@ export function hisFilesBlock(lines: readonly string[]): string;
 
 /** This round's changed files first, then the rest of the PR, unique (18 Nov 2026). */
 export function roundFirst(prFiles: readonly string[] | null | undefined, roundFiles: readonly string[] | null | undefined): string[];
+
+/** Before ~/bin/land: land --check, one builder turn for the lines it lacks, land --check again (28 Nov 2026). */
+export function landLinesFirst(
+  opts: { job: unknown; names: unknown; jobDir: string; packageDir: string; attachments: unknown; ctx: unknown; progress: (line: string) => void; land: string },
+  deps?: {
+    check?: () => Promise<{ code: number; out: string }>;
+    turn?: (note: string, linesPath: string) => Promise<unknown>;
+    write?: (lines: any, codes: any) => { ok: boolean; line?: string; tag?: string; why?: string };
+  },
+): Promise<{ ok: boolean; line?: string; reason?: string }>;

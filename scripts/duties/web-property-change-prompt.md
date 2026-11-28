@@ -451,6 +451,11 @@ job by name and a person looks.
 
 The script has already run `~/bin/land` for the PR and recorded the merge. Your job is the proof.
 
+Before the landing the script asked `land --check` what the PR lacked and, when it lacked lines, gave you one
+short turn to write them (`result-LAND-lines.json`); that turn is done. Every ask in the partner's approving reply
+that belongs to the publish itself (clearing test data he named, a setting carried over) is done in THIS turn, by
+the RUNBOOK's scripts through `needs_runs`, and listed in `items` with done or the reason it is not.
+
 1. From the plan's "live proof" list (or the changed pages), `curl -sI` each live URL and check
    the things the RUNBOOK says to check (nav present, assets 200, no sister hrefs, redirects).
 2. Write `RESULT_PATH`:
