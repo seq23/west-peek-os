@@ -322,6 +322,22 @@ export async function runPartnerMessageCard(
     replyOnThread: await onThreadOf(env, card.id),
   });
 
+  /*
+   * REFUSED AT THE DOOR IS NOT DELIVERED (28 Nov 2026, wc_0afbb4c8). A message to Scooter with the answers his preview
+   * had dropped was refused by the format check ("an /api/ address in the text"); the card still went DONE with
+   * `partner_message.delivered`, and tell-partner printed it as sent. Nothing reached him. A message neither sent nor
+   * held for a preview blocks with the door's reason, so whoever asked sees it was not sent and can say it differently.
+   */
+  if (!mail.sent && !mail.previewed) {
+    const blocked = await blockCard(env, card, {
+      reason: "tried_and_could_not_finish",
+      trying: card.title,
+      employee: employeeRow.name,
+      detail: `The message to ${partner.firstName} was not sent: ${mail.reason}. Try it again, or say it differently.`.slice(0, 600),
+    });
+    return { finished: false, blocked: true, detail: blocked };
+  }
+
   const delivered = await deliver(env, actor, {
     kind: "employee_finding",
     title: `${employeeRow.name} → ${partner.firstName}: ${card.title}`,
