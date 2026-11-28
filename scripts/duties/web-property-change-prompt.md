@@ -188,6 +188,12 @@ is read; a failure means the partner is not sent the preview, and the build is r
 - **"Let me know what is realistic" gets an ESTIMATE first, then the build.** Put the estimate in
   the plan's `document` as its own section ("Realistic: today — items 1, 2; next week — item 3; not
   possible as worded — item 4, nearest version is …") and keep it separate from the done-line.
+- **Every question he put to you is answered in `answers`** (28 Nov 2026, wc_9f7312e4). "Tell me how you
+  would sequence it", "confirm how fast …", "can the tile show …", "what would you reuse, and would anything
+  be paid?": each is one `{ "question": "<his words>", "answer": "<the answer>" }` row in the BUILD result,
+  from every email and reply on the card. `answers` leads what the partner reads; `proof` is never shown to
+  him, so an answer written only in `proof` never reaches him. A question you cannot answer yet still
+  gets a row saying what the answer waits on.
 - **Several asks in one email → one line per item.** Fill `items` in the BUILD/LAND result:
   `[{ "item": "…", "state": "done" | "partial" | "not_done", "note": "…" }]`; partial completion
   is stated per item, never averaged into "done".
@@ -383,11 +389,13 @@ Goal: the change, proven, as a PR — on the branch and worktree in the job cont
    ```json
    { "phase": "BUILD", "status": "ok", "pr_url": "<url>", "pr_number": <n>, "branch": "<branch>",
      "items": [{ "item": "<the ask>", "state": "done", "done_when": [{ "check": "<from the plan>", "met": true, "note": "<how you proved it>" }] }],
+     "answers": [{ "question": "<his question, in his words>", "answer": "<the plain answer, 1-4 sentences>" }],
      "self_review": [{ "check": "abuse", "found": "<what you checked and what you found>" }, "… one row for each of the 8 causes"],
      "mutation_proof": [{ "fix": "<the fix>", "mutation": "<what you undid or broke>", "test": "<the test or script that went red>", "went_red": true }],
      "pages_env": [{ "project": "west-peek-ventures", "name": "RESEND_API_KEY" }],
      "proof": "<validator output summary, screenshot file names, link-check results>",
      "missing_materials": [{ "item": "…", "where": "…" }],
+     "filled_materials": [{ "item": "<exactly as STILL MISSING BEFORE THIS BUILD words it>", "from": "<the file, or the partner's words quoted>" }],
      "missing_secrets": ["GIPHY_API_KEY"],
      "deliverables": ["booth-log.csv", "qr-codes.png"],
      "notes": "<one line>" }
@@ -406,6 +414,10 @@ Goal: the change, proven, as a PR — on the branch and worktree in the job cont
    report one. Where the plan named placeholders, build them as STRUCTURED placeholders (a clearly
    marked block, never invented content) and list them in `proof`. `missing_materials` is what is
    STILL missing after this rebuild — `[]` when everything arrived; the preview email names it.
+   `filled_materials` is what THIS build filled in from real material: each item from STILL MISSING
+   BEFORE THIS BUILD, worded exactly as there, with the file name or the partner's quoted words it
+   came from. The preview email's "Filled in" lists only these, and only when the OS can see that
+   file arrived or those words are his. An item still missing keeps its exact wording.
    If you cannot finish, `{ "phase": "BUILD", "status": "failed", "reason": "<why, for an engineer>" }`
    — the script retries it; after the bound the partner gets ONE email saying what was tried and the
    reply that restarts it. Never `blocked` for a decision: decide, record it, and say so in the PR.
@@ -438,6 +450,11 @@ job by name and a person looks.
 ## Phase LAND
 
 The script has already run `~/bin/land` for the PR and recorded the merge. Your job is the proof.
+
+Before the landing the script asked `land --check` what the PR lacked and, when it lacked lines, gave you one
+short turn to write them (`result-LAND-lines.json`); that turn is done. Every ask in the partner's approving reply
+that belongs to the publish itself (clearing test data he named, a setting carried over) is done in THIS turn, by
+the RUNBOOK's scripts through `needs_runs`, and listed in `items` with done or the reason it is not.
 
 1. From the plan's "live proof" list (or the changed pages), `curl -sI` each live URL and check
    the things the RUNBOOK says to check (nav present, assets 200, no sister hrefs, redirects).

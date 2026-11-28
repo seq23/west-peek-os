@@ -50,6 +50,7 @@ export function reviewAndFix(args: {
 export function firstRunVerdict(run: { hasScript: boolean; exit?: number; out?: string }): { ok: boolean; line: string };
 export function firstRunArgs(previewUrl: string | null | undefined): { args: string[]; envUrl: string };
 export function accountingOf(result: unknown): Array<{ ask: string; how: string; done_when?: string[] }>;
+export function answersOf(result: unknown): Array<{ question: string; answer: string }>;
 export function itemsOf(result: unknown): Array<{ item: string; state: string; note?: string; done_when?: Array<{ check: string; met: boolean; note?: string }>; blocked_by?: string }>;
 /** Spending from an email is a named stop (13 Nov 2026): what in a result would cost money. */
 export const SPEND_STOP: string;
@@ -71,3 +72,13 @@ export function hisFilesBlock(lines: readonly string[]): string;
 
 /** This round's changed files first, then the rest of the PR, unique (18 Nov 2026). */
 export function roundFirst(prFiles: readonly string[] | null | undefined, roundFiles: readonly string[] | null | undefined): string[];
+
+/** Before ~/bin/land: land --check, one builder turn for the lines it lacks, land --check again (28 Nov 2026). */
+export function landLinesFirst(
+  opts: { job: unknown; names: unknown; jobDir: string; packageDir: string; attachments: unknown; ctx: unknown; progress: (line: string) => void; land: string },
+  deps?: {
+    check?: () => Promise<{ code: number; out: string }>;
+    turn?: (note: string, linesPath: string) => Promise<unknown>;
+    write?: (lines: any, codes: any) => { ok: boolean; line?: string; tag?: string; why?: string };
+  },
+): Promise<{ ok: boolean; line?: string; reason?: string }>;

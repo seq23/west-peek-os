@@ -998,6 +998,8 @@ export async function parkPhase(
      * their branch, so words like "together", "same deployment" can be built (that branch merged in).
      */
     other_open_jobs: phase === "BUILD" ? await otherOpenJobsOnRepo(env, card.id, row.target_repo) : [],
+    // #611: the builder names what it filled against this list, word for word — never a diff of two wordings.
+    missing_before: phase === "BUILD" ? await missingFor(env, card.id) : [],
     ...(parts.length ? { parts: parts.map(partPayload) } : {}),
     queue_max_seconds: spec.queueMaxSeconds,
   };
@@ -1249,10 +1251,10 @@ export function refusedNotesThisRound(history: ReadonlyArray<{ phase?: unknown; 
 export function withRefusedNotes(answers: string | null, refused: readonly string[]): string | null {
   const extra = refused.filter((n) => !(answers ?? "").includes(n.slice(0, 120)));
   if (!extra.length) return answers;
-  return [answers ?? "", ...extra.map((n) => `From an earlier try this round: ${n}`)].filter(Boolean).join("\n\n").slice(0, 4000);
+  return [answers ?? "", ...extra.map((n) => `From an earlier try this round: ${n}`)].filter(Boolean).join("\n\n").slice(0, 12000);
 }
 
-async function answersWithRefused(env: Env, cardId: string, report: Pick<LocalJobReport, "notes" | "items">): Promise<string | null> {
+async function answersWithRefused(env: Env, cardId: string, report: Pick<LocalJobReport, "notes" | "items" | "answers">): Promise<string | null> {
   const fresh = await readWebPropertyChange(env, cardId);
   let parsed: unknown = [];
   try {
@@ -1263,8 +1265,15 @@ async function answersWithRefused(env: Env, cardId: string, report: Pick<LocalJo
   return withRefusedNotes(buildAnswersText(report), refusedNotesThisRound(Array.isArray(parsed) ? parsed : []));
 }
 
-export function buildAnswersText(report: Pick<LocalJobReport, "notes" | "items">): string | null {
+export function buildAnswersText(report: Pick<LocalJobReport, "notes" | "items" | "answers">): string | null {
   const lines: string[] = [];
+  /*
+   * HIS QUESTIONS FIRST, EACH WITH ITS ANSWER (28 Nov 2026, wc_9f7312e4). Scooter asked how the build would be
+   * sequenced, how fast a Luma event appears, how the feed is matched, whether a verified-email step fits. The build
+   * answered every one in `proof`; the preview showed the done-lines and none of the answers. They lead, whole.
+   */
+  // One bullet per answer: the preview splits on line breaks, so an answer's own breaks become spaces.
+  for (const a of report.answers ?? []) lines.push(`• Answered: "${a.question.replace(/\s+/g, " ")}" — ${a.answer.replace(/\s+/g, " ")}`);
   for (const i of report.items ?? []) {
     const note = (i.done_when ?? []).map((c) => c.note ?? "").find((n) => n.trim()) ?? i.note ?? "";
     // An item not done always says why (19 Nov 2026, wc_76e6d7ff): "Partly done" alone left the partner guessing.
@@ -1283,7 +1292,7 @@ export function buildAnswersText(report: Pick<LocalJobReport, "notes" | "items">
   }
   const notes = String(report.notes ?? "").replace(/\s*\(cost \$[\d.]+\)\s*$/, "").trim();
   if (notes) lines.push("", notes.slice(0, 2500));
-  return lines.length ? lines.join("\n").slice(0, 4000) : null;
+  return lines.length ? lines.join("\n").slice(0, 12000) : null;
 }
 
 /** "fu_sequoia_taylor" / "sequoia@…" → "Sequoia"; anything else (Porter's own approval) as it is. */
@@ -1917,10 +1926,11 @@ export async function applyReport(
     const before = beforeItems.map((m) => m.item);
     const after = report.missing_materials ? report.missing_materials.map((m) => m.item) : before;
     const since = [row.preview_emailed_at, row.plan_filed_at].filter((x): x is string => Boolean(x)).sort().pop() ?? "";
-    const newFiles = (await attachmentsFor(env, card.id)).some((a) => (a.created_at ?? "") > since);
-    const arrived = newFiles || Boolean(report.materials && row.materials_fingerprint && report.materials !== row.materials_fingerprint);
+    const newFiles = (await attachmentsFor(env, card.id)).filter((a) => (a.created_at ?? "") > since).map((a) => a.filename);
+    const driveChanged = Boolean(report.materials && row.materials_fingerprint && report.materials !== row.materials_fingerprint);
     const hisWords = [row.rebuilt_for ?? "", card.block_answer ?? ""].join("\n");
-    const filled = before.filter((b) => !after.includes(b) && filledBy(b, hisWords, arrived));
+    const { filled, refused } = filledByBuild(before, after, report.filled_materials ?? [], { hisWords, newFiles, driveChanged });
+    if (refused.length) await appendFinding(env, card.id, `Not counted as filled in (the material named for it did not arrive): ${refused.map((r) => `${r.item} (from "${r.from.slice(0, 80)}")`).join("; ")}.`);
     const kept = beforeItems.filter((m) => !after.includes(m.item) && !filled.includes(m.item));
     const visible = report.visible_placeholders ?? [];
     stillMissing = [...(report.missing_materials ?? beforeItems.filter((m) => after.includes(m.item))), ...kept];
@@ -1943,17 +1953,39 @@ export async function applyReport(
 }
 
 /**
- * AN ITEM IS FILLED IN ONLY WHEN MATERIAL FOR IT ARRIVED (15 Nov 2026, wc_c548d043): new files on the card or in the
- * folder, or the partner's own words naming it. A permission ("the client's OK to show results") is never claimed
- * from files: only when his own words name the item AND give the permission.
+ * AN ITEM IS FILLED IN ONLY WHEN THE BUILDER SAYS SO AND THE MATERIAL IT NAMES ARRIVED (#611, 28 Nov 2026).
+ * Replaces `filledBy` (15 Nov 2026, #451), which guessed: an item the build stopped listing counted as filled when
+ * ANY file arrived or half its words appeared in his reply. On wc_9f7312e4 the build reworded Ila Corcoran's
+ * headshot and synopsis, an unrelated give-and-take PDF had arrived, and the preview told Scooter they were
+ * "Filled in" while listing them as still missing. Now meaning is the builder's (it read the files), and the OS
+ * checks only facts: the item is on the card's list, it is not still listed, and the claimed source is a file
+ * that arrived since the last preview, a changed Drive folder, or words he actually wrote. A permission ("the
+ * client's OK") is never filled from a file, only from his words. Pure.
  */
 const PERMISSION = /\b(?:ok|okay|permission|consent|approv\w*|sign[- ]?off|allowed|cleared)\b/i;
-export function filledBy(item: string, hisWords: string, materialArrived: boolean): boolean {
-  const words = hisWords.toLowerCase();
-  const tokens = [...new Set(item.toLowerCase().match(/[a-z][a-z'’]{4,}/g) ?? [])];
-  const named = tokens.length > 0 && tokens.filter((t) => words.includes(t)).length * 2 >= tokens.length;
-  if (PERMISSION.test(item)) return named && PERMISSION.test(hisWords);
-  return materialArrived || named;
+const squash = (t: string): string => t.toLowerCase().replace(/[‘’]/g, "'").replace(/[^a-z0-9'.]+/g, " ").trim();
+export function filledByBuild(
+  before: readonly string[],
+  after: readonly string[],
+  claims: ReadonlyArray<{ item: string; from: string }>,
+  seen: { hisWords: string; newFiles: readonly string[]; driveChanged: boolean },
+): { filled: string[]; refused: Array<{ item: string; from: string }> } {
+  const words = squash(seen.hisWords);
+  const files = seen.newFiles.map((f) => squash(f)).filter(Boolean);
+  const stillListed = new Set(after.map(squash));
+  const filled: string[] = [];
+  const refused: Array<{ item: string; from: string }> = [];
+  for (const claim of claims) {
+    const item = before.find((b) => squash(b) === squash(claim.item));
+    if (!item || stillListed.has(squash(item)) || filled.includes(item)) continue;
+    const from = squash(claim.from).replace(/^"|"$/g, "");
+    const quoted = from.length >= 8 && words.includes(from);
+    const fileArrived = files.some((f) => from.includes(f) || (from.length >= 6 && f.includes(from)));
+    const ok = PERMISSION.test(item) ? quoted && PERMISSION.test(claim.from) : quoted || fileArrived || seen.driveChanged;
+    if (ok) filled.push(item);
+    else refused.push({ item, from: claim.from });
+  }
+  return { filled, refused };
 }
 
 /**
@@ -3043,7 +3075,10 @@ async function applyBuildOfParts(env: Env, card: WebPropertyChangeCard, row: Web
   if (!report.parts?.length) return { finished: false, blocked: false, progressed: false, detail: "BUILD came back without a PR for each repo" };
   const parts = await recordPartReports(env, card.id, report.parts, "BUILD");
   const agg = aggregateParts(parts);
-  await update(env, card.id, { pr_url: agg.pr_url, pr_number: null, branch: null, check_state: agg.check_state, check_green_at: agg.check_green_at, preview_url: agg.preview_url, build_proof: agg.build_proof, check_url: null });
+  // 28 Nov 2026 (#610): a several-repo BUILD carries his questions' answers as one repo's does. Only a build that
+  // rebuilt something reports items or answers; one that re-observed earlier PRs keeps the answers already stored.
+  const answered: { build_answers?: string | null } = report.items?.length || report.answers?.length ? { build_answers: await answersWithRefused(env, card.id, report) } : {};
+  await update(env, card.id, { pr_url: agg.pr_url, pr_number: null, branch: null, check_state: agg.check_state, check_green_at: agg.check_green_at, preview_url: agg.preview_url, build_proof: agg.build_proof, check_url: null, ...("build_answers" in answered ? { build_answers: answered.build_answers ?? null } : {}) });
   await appendFinding(env, card.id, `PRs opened: ${parts.map((p) => `${p.repo} ${p.pr_url ?? "(none yet)"} — checks ${p.check_state ?? "PENDING"}`).join("; ")}.`);
   const blocking = notGreenParts(parts);
   if (agg.check_state !== "GREEN" || blocking.length) {
@@ -3051,7 +3086,7 @@ async function applyBuildOfParts(env: Env, card: WebPropertyChangeCard, row: Web
     await appendFinding(env, card.id, `Not every PR is green, so nothing lands: ${blocking.join("; ")}.`);
     return { finished: false, blocked: false, progressed: false, detail: `not every PR is green, so none lands: ${blocking.join("; ")}` };
   }
-  const fresh: WebPropertyChangeRow = { ...row, pr_url: agg.pr_url, pr_number: null, branch: null, check_state: "GREEN", check_green_at: agg.check_green_at, preview_url: agg.preview_url, build_proof: agg.build_proof };
+  const fresh: WebPropertyChangeRow = { ...row, pr_url: agg.pr_url, pr_number: null, branch: null, check_state: "GREEN", check_green_at: agg.check_green_at, preview_url: agg.preview_url, build_proof: agg.build_proof, ...answered };
   if (needsPreview(fresh) && !fresh.land_approved_at && !fresh.forced_by) {
     const again = await rebuildForKeptWords(env, card, fresh, rules);
     if (again) return again;

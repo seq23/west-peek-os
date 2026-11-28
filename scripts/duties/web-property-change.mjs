@@ -73,7 +73,8 @@ import { admittedScripts, keysReallyMissing, visiblePlaceholders, constraintsIn,
 import { detectUsageLimit } from "../lib/seat-usage-limit.mjs";
 import { CODEX_BUILD_NOTE, codexExecArgs, codexSeatUsable, finishCodexBuild, soonestReset } from "../lib/codex-seat.mjs";
 import { routeFor, runInOrder } from "../lib/model-roles.mjs";
-import { writeSelfReview } from "../lib/pr-self-review.mjs";
+import { withSelfReviewFixed, writeSelfReview } from "../lib/pr-self-review.mjs";
+import { landLinesNote, parseLandCheck, sortCodes, writeLandLines } from "../lib/pr-land-lines.mjs";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -259,6 +260,12 @@ function readResultShape(text, phase) {
       return { result: null, problem: "missing_materials must be a list of { item, where } — both named, so the partner knows what to send and where it goes" };
     }
   }
+  // #611 (28 Nov 2026): what this build filled in is the builder's own claim, each naming the material it came from.
+  if (parsed.filled_materials !== undefined) {
+    if (!Array.isArray(parsed.filled_materials) || parsed.filled_materials.some((m) => !(m && typeof m === "object" && String(m.item ?? "").trim() && String(m.from ?? "").trim()))) {
+      return { result: null, problem: "filled_materials must be a list of { item, from } — the item exactly as STILL MISSING BEFORE THIS BUILD words it, and the file or the partner's words it was filled from" };
+    }
+  }
   if (parsed.assets !== undefined && !(Array.isArray(parsed.assets) && parsed.assets.every((a) => typeof a === "string" && a.trim()))) return { result: null, problem: "assets must be a list of DRIVE_MANIFEST paths" };
   if (parsed.fetch !== undefined && !(Array.isArray(parsed.fetch) && parsed.fetch.every((a) => typeof a === "string" && a.trim()))) return { result: null, problem: "fetch must be a list of DRIVE_MANIFEST paths" };
   return { result: parsed, problem: null };
@@ -403,6 +410,7 @@ export function renderContext(job, paths) {
   }
   lines.push(...rebuildBlock(job));
   lines.push(...otherJobsBlock(job));
+  lines.push(...missingBeforeBlock(job));
   lines.push(...lastRefusalBlock(job));
   if (paths.landOutput) lines.push("", "WHAT ~/bin/land PRINTED:", "```", paths.landOutput.slice(-6000), "```", `MERGE SHA: ${paths.mergeSha ?? "(unknown)"}`);
   return lines.join("\n");
@@ -429,6 +437,23 @@ export function otherJobsBlock(job) {
     "OTHER OPEN JOBS ON THIS REPO (not this card's work unless the partner's words tie them to it):",
     ...jobs.map((j) => `- ${j.card_id}: "${String(j.title ?? "").slice(0, 120)}" — ${j.pr_url ? `PR ${j.pr_url}` : "no PR yet"}${j.branch ? `, branch ${j.branch}` : ""}`),
     "If the partner asks for this change to ship WITH one of them (one preview, together, the same deployment), merge that job's branch into this branch first (git fetch origin <branch>; git merge), resolve conflicts by keeping both changes, rebuild, and say in your summary that this PR now carries both. Otherwise leave them alone.",
+  ];
+}
+
+/**
+ * WHAT WAS STILL MISSING BEFORE THIS BUILD (#611, 28 Nov 2026). The preview told Scooter Ila Corcoran's headshot was
+ * "Filled in" while listing it as still missing: the OS diffed two lists the builder had worded differently and
+ * counted an unrelated PDF as the material. Now the builder sees the card's list, word for word, and says itself
+ * which items it filled and from what. Pure.
+ */
+export function missingBeforeBlock(job) {
+  const items = Array.isArray(job?.missing_before) ? job.missing_before.filter((m) => m && String(m.item ?? "").trim()) : [];
+  if (job?.phase !== "BUILD" || items.length === 0) return [];
+  return [
+    "",
+    "STILL MISSING BEFORE THIS BUILD (the card's list, as the partner was last told it):",
+    ...items.map((m) => `- ${String(m.item).slice(0, 200)}${m.where ? ` — ${String(m.where).slice(0, 160)}` : ""}`),
+    "For EACH item above, in your result: if real material for it is now in the package (a file in DRIVE_MANIFEST or ATTACHMENTS, or the partner's own words giving it) and you built it in, list it in `filled_materials` as { \"item\": \"<the item exactly as written above>\", \"from\": \"<the file name, or his words quoted>\" }. Otherwise copy it into `missing_materials` with the SAME wording. A file about something else never fills an item; never reword an item.",
   ];
 }
 
@@ -1490,6 +1515,71 @@ export async function applyPagesEnv(pagesEnv, env, progress, registry = null, op
  * Run one phase. Always returns a report object; never throws for a job-level failure (the
  * claimer reports what comes back). Throws only when the job itself is malformed.
  */
+/**
+ * BEFORE ~/bin/land: ASK land WHAT THE PR LACKS, AND HAVE THE BUILDER WRITE IT (28 Nov 2026, wc_59ef2d40).
+ * `land --check` is read-only (exit 0 nothing to fix | 1 the list | 75 GitHub unread). Lines the builder can write
+ * get ONE short model turn (scripts/lib/pr-land-lines.mjs), are written into the body, and land --check is read
+ * again. A stop only a fresh reviewer clears is named (LAND_NEEDS_REVIEWER), so the sweep never retries it unchanged.
+ * `deps` lets the self-test drive land and the model. Returns `{ ok: true, line }` or `{ ok: false, reason }`.
+ */
+export async function landLinesFirst({ job, names, jobDir, packageDir, attachments, ctx, progress, land }, deps = {}) {
+  const check = deps.check ?? (async () => {
+    try {
+      const { stdout, stderr } = await sh(land, ["--check", String(job.pr.number)], { cwd: names.worktree, env: process.env, timeout: 5 * 60_000, signal: ctx.signal });
+      return { code: 0, out: `${stdout}\n${stderr}` };
+    } catch (err) {
+      return { code: typeof err?.code === "number" ? err.code : 1, out: `${err?.stdout ?? ""}\n${err?.stderr ?? ""}` };
+    }
+  });
+  const turn = deps.turn ?? (async (note, linesPath) => {
+    const prompt = `${readFileSync(PROMPT_FILE, "utf8")}\n${renderContext(job, { ...names, packageDir, jobDir, resultPath: linesPath, planText: job.plan?.text ?? null, landOutput: null, mergeSha: null, attachments, extraLines: [] })}\n\n${note}`;
+    writeFileSync(path.join(jobDir, "prompt-LAND-lines.md"), prompt);
+    const phase = "LAND";
+    const resultPath = linesPath;
+    const claude = await runModel({ job, prompt, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
+    finishIfCodex(claude, { phase, resultPath, worktree: names.worktree, branch: names.branch, jobDir, progress });
+    writeFileSync(path.join(jobDir, "claude-LAND-lines.out"), `${claude.out}\n--- stderr ---\n${claude.err}`);
+    try {
+      return JSON.parse(readFileSync(linesPath, "utf8"));
+    } catch {
+      return null;
+    }
+  });
+  const write = deps.write ?? ((lines, codes) => writeLandLines({ cwd: names.worktree, number: job.pr.number, lines, codes, run: (cmd, args, opts) => spawnSync(cmd, args, { encoding: "utf8", ...opts }) }));
+  const tail = (out) => out.trim().split("\n").filter(Boolean).slice(-4).join(" | ").slice(0, 700);
+  const stopFor = (sorted, out) => {
+    if (sorted.other.length) return `land --check stopped on what no description line fixes (${sorted.other.map((c) => c.code).join(", ")}): ${tail(out)}`;
+    if (sorted.reviewer.length) return `NAMED STOP [LAND_NEEDS_REVIEWER] PR #${job.pr.number} is in a review class and waits on a fresh reviewer's PASS (${sorted.reviewer.map((c) => c.code).join(", ")}), which the builder never signs: ${sorted.reviewer[0].why.slice(0, 400)}`;
+    return null;
+  };
+
+  progress(`land --check #${job.pr.number}`);
+  const first = await check();
+  if (first.code === 0) return { ok: true, line: "land --check: nothing to add" };
+  if (first.code === 75) return { ok: false, reason: `land --check could not read PR #${job.pr.number} from GitHub: ${tail(first.out)}` };
+  const { codes } = parseLandCheck(first.out);
+  if (!codes.length) return { ok: false, reason: `land --check stopped without a list: ${tail(first.out)}` };
+  const sorted = sortCodes(codes);
+  if (!sorted.builder.length) return { ok: false, reason: stopFor(sorted, first.out) ?? `land --check: ${tail(first.out)}` };
+
+  const linesPath = path.join(jobDir, "result-LAND-lines.json");
+  rmSync(linesPath, { force: true });
+  progress(`writing ${sorted.builder.map((c) => c.code).join(", ")} for #${job.pr.number}`);
+  const said = await turn(landLinesNote(first.out, linesPath), linesPath);
+  if (!said || typeof said !== "object") return { ok: false, reason: "NAMED STOP [LAND_LINES_MISSING] the builder's pre-land turn wrote no readable result, so the lines land asked for were not written and nothing landed" };
+  if (said.status === "failed") return { ok: false, reason: `NAMED STOP [PRE_LAND_CHECK] before the deploy: ${String(said.reason ?? "the builder found the preview not ready").slice(0, 800)}` };
+  const wrote = write(said.land_lines, sorted.builder);
+  if (!wrote.ok) return { ok: false, reason: `NAMED STOP [${wrote.tag}] ${wrote.why}`.slice(0, 1200) };
+  progress(wrote.line);
+  if (said.pre_land) progress(`before the deploy: ${String(said.pre_land).slice(0, 400)}`);
+
+  const again = await check();
+  if (again.code === 0) return { ok: true, line: wrote.line };
+  const left = sortCodes(parseLandCheck(again.out).codes);
+  if (left.builder.length) return { ok: false, reason: `NAMED STOP [LAND_LINES_REFUSED] land --check still refuses after the lines were written (${left.builder.map((c) => c.code).join(", ")}): ${left.builder[0].why.slice(0, 500)}` };
+  return { ok: false, reason: stopFor(left, again.out) ?? `land --check: ${tail(again.out)}` };
+}
+
 export async function run(job, ctx) {
   const progress = ctx.progress ?? (() => {});
   const phase = job.phase;
@@ -1554,6 +1644,9 @@ export async function run(job, ctx) {
     // deploys where the repo needs it, and refuses rather than guesses.
     const land = path.join(homedir(), "bin", "land");
     if (!existsSync(land)) return { phase, status: "failed", reason: `${land} is not on this Mac` };
+    // 28 Nov 2026 (wc_59ef2d40): THE LINES land READS ARE WRITTEN BEFORE IT RUNS, never discovered by its stop.
+    const lined = await landLinesFirst({ job, names, jobDir, packageDir, attachments, ctx, progress, land });
+    if (!lined.ok) return { phase, status: "failed", reason: lined.reason };
     progress(`landing #${job.pr.number}`);
     try {
       const { stdout, stderr } = await sh(land, [String(job.pr.number ?? "")], { cwd: names.worktree, env: process.env, timeout: 30 * 60_000, signal: ctx.signal });
@@ -1662,6 +1755,7 @@ export async function run(job, ctx) {
     if (reviewed.report) return { ...reviewed.report, ...carried };
     result = reviewed.result;
     if (Array.isArray(result.items)) carried.items = itemsOf(result);
+    if (Array.isArray(result.answers)) carried.answers = answersOf(result);
     const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress, registryAllowance(book, secrets), { branch: names.branch });
     // THE SCRIPT OBSERVES THE PR AND ITS CHECKS. The model's pr_url is a claim; gh is the fact.
     let pr;
@@ -1677,6 +1771,20 @@ export async function run(job, ctx) {
     if (!privacy.ok) return { phase, status: "failed", reason: privacy.reason };
     // 23 Nov 2026: THE PR CARRIES ITS SELF-REVIEW AND MUTATION PROOF, written here from the result, every lane, every
     // round. Without them the build stops by name before any check is watched or any preview is emailed.
+    // 28 Nov 2026: refused sections get ONE turn to be written again (`withSelfReviewFixed`); the gate below is unchanged.
+    const repaired = await withSelfReviewFixed(result, async (note) => {
+      rmSync(resultPath, { force: true });
+      const claude = await runModel({ job, prompt: `${prompt}\n\n${note}`, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
+      finishIfCodex(claude, { phase, resultPath, worktree: names.worktree, branch: names.branch, jobDir, progress });
+      writeFileSync(path.join(jobDir, `claude-${phase}-selfreview.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
+      cost = (cost ?? 0) + (costFrom(claude.out) ?? 0);
+      return readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", phase).result;
+    });
+    if (repaired.line) {
+      progress(repaired.line);
+      writeFileSync(resultPath, JSON.stringify(repaired.result, null, 2));
+    }
+    result = repaired.result;
     const selfReview = writeSelfReview({ cwd: names.worktree, number: pr.number, result, run: (cmd, args, opts) => spawnSync(cmd, args, { encoding: "utf8", ...opts }) });
     if (!selfReview.ok) return { phase, status: "failed", reason: `[${selfReview.tag}] ${selfReview.why}`.slice(0, 1500), ...carried };
     const checks = await watchChecks(names.worktree, pr.number, ctx.signal, progress);
@@ -1710,6 +1818,7 @@ export async function run(job, ctx) {
       pages_env_proof: configLines,
       // What is still missing after this rebuild, re-checked against the re-mapped package (0237).
       ...(Array.isArray(result.missing_materials) ? { missing_materials: result.missing_materials } : {}),
+      ...(Array.isArray(result.filled_materials) ? { filled_materials: result.filled_materials } : {}),
       // 15 Nov 2026: what the built pages still SHOW as not done, read from their text (never a class name).
       visible_placeholders: visiblePlaceholders(pageTextsOf(names.worktree)).slice(0, 50),
       ...carried,
@@ -2230,6 +2339,7 @@ async function carriedFacts({ book, secrets, result, runsDone, job, outDir, work
     // #363: the plan's per-ask accounting, as the model wrote it; the Worker holds the plan to it.
     ...(Array.isArray(result?.accounting) ? { accounting: accountingOf(result) } : {}),
     ...(Array.isArray(result?.items) ? { items: itemsOf(result) } : {}),
+    ...(Array.isArray(result?.answers) ? { answers: answersOf(result) } : {}),
   };
 }
 
@@ -2249,6 +2359,19 @@ export function itemsOf(result) {
       ...(Array.isArray(i.done_when) ? { done_when: i.done_when.slice(0, 20).map((c) => ({ check: String(c?.check ?? "").slice(0, 200), met: c?.met === true, ...(c?.note ? { note: String(c.note).slice(0, 300) } : {}) })) } : {}),
       ...(i.blocked_by ? { blocked_by: String(i.blocked_by).slice(0, 40) } : {}),
     }));
+}
+
+/**
+ * HIS QUESTIONS, ANSWERED WHERE HE READS (28 Nov 2026, wc_9f7312e4). Scooter asked six things of Porter ("tell me how
+ * you would sequence the build", "confirm how fast a new Luma event appears", "whether a verified-email step fits").
+ * The build answered all six, in `proof`, which no partner email shows; the preview marked each "Done" and he got no
+ * answer. Each answer is its own `{ question, answer }` row; the preview leads "What you asked, answered" with them.
+ */
+export function answersOf(result) {
+  return (Array.isArray(result?.answers) ? result.answers : [])
+    .filter((a) => a && typeof a === "object" && String(a.question ?? "").trim() && String(a.answer ?? "").trim())
+    .slice(0, 20)
+    .map((a) => ({ question: String(a.question).trim().slice(0, 400), answer: String(a.answer).trim().slice(0, 1500) }));
 }
 
 // ── Several repos (0236) ─────────────────────────────────────────────────────────────────────
@@ -2412,7 +2535,9 @@ async function runSeveral(job, ctx) {
   if (phase === "BUILD") {
     const reports = [];
     const items = [];
+    const answers = [];
     const stillMissing = [];
+    const filledNow = [];
     let anyRebuilt = false;
     for (const p of parts) {
       let proof = "";
@@ -2438,6 +2563,7 @@ async function runSeveral(job, ctx) {
           ({ result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "BUILD"));
         }
         if (Array.isArray(result?.missing_materials)) stillMissing.push(...result.missing_materials);
+        if (Array.isArray(result?.filled_materials)) filledNow.push(...result.filled_materials);
         if (spentReport(phase, claude, result)) return { ...spentReport(phase, claude, result), parts: reports };
         if (!result) return { phase, status: "failed", reason: `BUILD of ${p.repo} ended (claude exit ${claude.code}) but ${problem}`, parts: reports };
         if (result.status !== "ok") return { phase, status: result.status, reason: `${p.repo}: ${String(result.reason).slice(0, 1400)}`, parts: reports };
@@ -2445,6 +2571,7 @@ async function runSeveral(job, ctx) {
         if (reviewed.report) return { ...reviewed.report, reason: `${p.repo}: ${reviewed.report.reason ?? ""}`.slice(0, 1500), parts: reports };
         result = reviewed.result;
         items.push(...itemsOf(result).map((i) => ({ ...i, item: `${p.repo}: ${i.item}`.slice(0, 200) })));
+        answers.push(...answersOf(result));
         const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress, registryAllowance(p.book, p.secrets), { branch: p.names.branch });
         proof = [String(result.proof ?? "").slice(0, 6000), reviewed.line, ...configLines].filter(Boolean).join("\n");
         anyRebuilt = true;
@@ -2477,7 +2604,7 @@ async function runSeveral(job, ctx) {
       proof: reports.map((r) => `── ${r.repo} ──\n${r.proof ?? "(re-observed; built in an earlier run)"}`).join("\n\n"),
       parts: reports,
       // What is still missing after THIS rebuild, across every repo rebuilt (absent when none was).
-      ...(anyRebuilt ? { missing_materials: stillMissing, items } : {}),
+      ...(anyRebuilt ? { missing_materials: stillMissing, filled_materials: filledNow, items, answers } : {}),
       reason: red.length ? `not every PR is green: ${red.map((r) => `${r.repo} ${r.check_state} (${r.pr_url})`).join(", ")}` : undefined,
     };
   }
@@ -2775,6 +2902,12 @@ function selfTest() {
     ["a job with no folder says so and carries no manifest lines", () => { const t = renderContext({ phase: "PLAN", card: { id: "wc", title: "t" }, drive: {}, request: "r", rules: {} }, { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/r" }); return t.includes("DRIVE_FOLDERS: none in the request") && !t.includes("DRIVE_MANIFEST"); }],
     ["the PACKAGE TRUTH rule says: check the manifest, files outweigh documents, follow the one that declares precedence", () => /check DRIVE_MANIFEST\.json/.test(PACKAGE_TRUTH_RULE) && /present outweighs any document saying it is absent/.test(PACKAGE_TRUTH_RULE) && /declares precedence/.test(PACKAGE_TRUTH_RULE) && /never ask/.test(PACKAGE_TRUTH_RULE)],
     ["the prompt file carries the PACKAGE TRUTH rule and the missing-materials and assets fields", () => { const p = readFileSync(PROMPT_FILE, "utf8"); return p.includes("**PACKAGE TRUTH:**") && p.includes("outweighs any document saying it is absent") && p.includes('"missing_materials"') && p.includes('"assets"') && p.includes("RE-MAPPED for this"); }],
+    ["#611: a BUILD is shown the card's missing list word for word, and filled_materials must name the item and what filled it", () =>
+      renderContext({ phase: "BUILD", missing_before: [{ item: "Ila Corcoran's headshot", where: "/episodes" }] }, { branch: "b" }).includes("- Ila Corcoran's headshot — /episodes") &&
+      missingBeforeBlock({ phase: "PLAN", missing_before: [{ item: "x", where: "y" }] }).length === 0 &&
+      missingBeforeBlock({ phase: "BUILD", missing_before: [] }).length === 0 &&
+      readResult(JSON.stringify({ phase: "BUILD", status: "ok", pr_url: "u", items: [], filled_materials: [{ item: "Ila Corcoran's headshot" }] }), "BUILD").result === null &&
+      readResult(JSON.stringify({ phase: "BUILD", status: "ok", pr_url: "u", items: [], filled_materials: "Ila" }), "BUILD").result === null],
     ["missing_materials must name the item AND where it goes; assets and fetch must be paths", () =>
       readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), publish_ready: true, missing_materials: [{ item: "Sengo logo" }] }), "PLAN").result === null &&
       readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), publish_ready: true, missing_materials: [{ item: "Sengo logo", where: "portfolio grid" }], assets: ["logos/a.svg"] }), "PLAN").result?.missing_materials?.[0]?.where === "portfolio grid" &&

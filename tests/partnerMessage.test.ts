@@ -248,6 +248,23 @@ describe("runPartnerMessageCard — the real send door", () => {
     expect(finished.state).toBe("DONE");
   });
 
+  it("a message the send door refuses is BLOCKED with the door's reason, never DONE as delivered (wc_0afbb4c8)", async () => {
+    const sent: Sent[] = [];
+    captureFetch(sent);
+    const card = await makeCard({ ownerId: "aie_walker", resultRecipient: "Scooter", prompt: "the workshops answer", requestedByEmail: SEQUOIA_EMAIL });
+    const out = await runPartnerMessageCard(env, card, {
+      interpret: saidNothing,
+      compose: compose("The Workshops tile reads its events from /api/workshops and shows each one until it ends."),
+    });
+    expect(sent).toHaveLength(0);
+    expect(out.finished).toBe(false);
+    const row = await cardRow(card.id);
+    expect(row.state).toBe("BLOCKED");
+    expect(String(row.block_reason ?? "") + String(row.next_action ?? "") + String(row.block_context ?? "") + String(row.description ?? "")).toMatch(/not sent/);
+    const ev = await env.WP_OS_DB.prepare("SELECT 1 AS x FROM event_record WHERE object_id = ?1 AND event_type = 'partner_message.delivered'").bind(card.id).first();
+    expect(ev).toBeNull();
+  });
+
   it("BLOCKS, and sends nothing, when the named employee does not exist", async () => {
     const card = await makeCard({ ownerId: null, resultRecipient: "Scooter", prompt: "say hi" });
     // Force an owner_id that names nobody real — the shape a hand-edited or malformed card carries.

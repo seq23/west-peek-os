@@ -12,3 +12,4 @@ export function writeSelfReview(opts: {
   result: unknown;
   run: (cmd: string, args: string[], opts: { cwd: string }) => { status: number | null; stdout?: string; stderr?: string };
 }): { ok: true; line: string } | { ok: false; tag: string; why: string };
+export function withSelfReviewFixed<R>(result: R, askAgain: (note: string) => Promise<unknown>): Promise<{ result: R; line: string | null }>;
