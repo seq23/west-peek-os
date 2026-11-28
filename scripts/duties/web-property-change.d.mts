@@ -39,7 +39,7 @@ export const REVIEW_ROUNDS: number;
 export const FIRST_RUN_SCRIPT: string;
 export const FIRST_RUN_SENTINEL: string;
 export type ReviewFinding = { lens: string; finding: string; blocking: boolean };
-export type ReviewHold = { item: string; check: string; held: boolean; by?: string; why?: string };
+export type ReviewHold = { item: string; check: string; held: boolean; by?: string; why?: string; on_card?: string };
 export const HOLD_BY: string[];
 export function readReview(text: string | null | undefined): { findings: ReviewFinding[]; holds: ReviewHold[]; summary: string } | null;
 export function notHeldFindings(holds: ReviewHold[] | null | undefined): ReviewFinding[];

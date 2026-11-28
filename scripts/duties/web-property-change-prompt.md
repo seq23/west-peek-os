@@ -453,7 +453,8 @@ job could not finish it, with `by`:
   own words, or the build put the question to him (in `answers` or the notes) with a recommendation;
 - `"landing"`: only the merge or the live site can meet it (live links, the production host);
 - `"another_job"`: it lives in another repo or system this job cannot change, or he (or an approved answer) sent it
-  to its own item; the OS files it as its own job so it is never dropped;
+  to its own item. When one of the OTHER OPEN JOBS in the context already carries it, add `"on_card": "<its card id>"`
+  and the OS names it there; otherwise the OS files it as its own job, so it is never dropped and never filed twice;
 - `"runbook"`: the repo's RUNBOOK forbids it, and the build did the nearest thing it allows.
 Anything the builder could build, prove or fix in this repo now is `"held": false` — it goes back to the builder.
 Holding something to save the builder work is the failure this review exists to catch.
@@ -462,7 +463,7 @@ Write ONE JSON object to REVIEW_PATH (in the context):
 ```json
 { "summary": "<one line>",
   "findings": [{ "lens": "engineer" | "ux" | "pm", "finding": "<what is wrong and where, specific enough to fix>", "blocking": true }],
-  "holds": [{ "item": "<item, exactly>", "check": "<check, exactly>", "held": true, "by": "partner" | "landing" | "another_job" | "runbook", "why": "<one sentence to him>" }] }
+  "holds": [{ "item": "<item, exactly>", "check": "<check, exactly>", "held": true, "by": "partner" | "landing" | "another_job" | "runbook", "why": "<one sentence to him>", "on_card": "<wc_… only for another_job already on an open card>" }] }
 ```
 `"findings": []` when it is finished; `"holds": []` when every check is met. Blocking findings go back to the builder; after two fix rounds they stop the
 job by name and a person looks.

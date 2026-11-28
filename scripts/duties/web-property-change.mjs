@@ -675,7 +675,8 @@ export function readReview(text) {
         const why = String(h.why ?? "").trim().slice(0, 500);
         // Held only with a known reason and a why the partner can read; anything else is a ruling of NOT held.
         const held = h.held === true && HOLD_BY.includes(by) && Boolean(why);
-        return { item: String(h.item).trim().slice(0, 200), check: String(h.check).trim().slice(0, 200), held, ...(held ? { by } : {}), ...(why ? { why } : {}) };
+        const onCard = String(h.on_card ?? "").trim();
+        return { item: String(h.item).trim().slice(0, 200), check: String(h.check).trim().slice(0, 200), held, ...(held ? { by } : {}), ...(why ? { why } : {}), ...(held && by === "another_job" && /^wc_[A-Za-z0-9-]+$/.test(onCard) ? { on_card: onCard.slice(0, 64) } : {}) };
       });
     return { findings, holds, summary: String(j.summary ?? "").slice(0, 600) };
   } catch {
@@ -2392,7 +2393,7 @@ export function itemsOf(result) {
  */
 /** The review's rulings as the runner wrote them onto the reviewed result (`reviewBuild`); never the builder's own. */
 export function reviewHoldsOf(result) {
-  return (Array.isArray(result?.review_holds) ? result.review_holds : []).slice(0, 60).map((h) => ({ item: String(h?.item ?? "").slice(0, 200), check: String(h?.check ?? "").slice(0, 200), held: h?.held === true, ...(h?.by ? { by: String(h.by).slice(0, 20) } : {}), ...(h?.why ? { why: String(h.why).slice(0, 500) } : {}) }));
+  return (Array.isArray(result?.review_holds) ? result.review_holds : []).slice(0, 60).map((h) => ({ item: String(h?.item ?? "").slice(0, 200), check: String(h?.check ?? "").slice(0, 200), held: h?.held === true, ...(h?.by ? { by: String(h.by).slice(0, 20) } : {}), ...(h?.why ? { why: String(h.why).slice(0, 500) } : {}), ...(h?.on_card ? { on_card: String(h.on_card).slice(0, 64) } : {}) }));
 }
 
 export function answersOf(result) {
