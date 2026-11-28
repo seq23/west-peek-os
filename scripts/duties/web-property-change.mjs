@@ -1662,6 +1662,7 @@ export async function run(job, ctx) {
     if (reviewed.report) return { ...reviewed.report, ...carried };
     result = reviewed.result;
     if (Array.isArray(result.items)) carried.items = itemsOf(result);
+    if (Array.isArray(result.answers)) carried.answers = answersOf(result);
     const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress, registryAllowance(book, secrets), { branch: names.branch });
     // THE SCRIPT OBSERVES THE PR AND ITS CHECKS. The model's pr_url is a claim; gh is the fact.
     let pr;
@@ -2230,6 +2231,7 @@ async function carriedFacts({ book, secrets, result, runsDone, job, outDir, work
     // #363: the plan's per-ask accounting, as the model wrote it; the Worker holds the plan to it.
     ...(Array.isArray(result?.accounting) ? { accounting: accountingOf(result) } : {}),
     ...(Array.isArray(result?.items) ? { items: itemsOf(result) } : {}),
+    ...(Array.isArray(result?.answers) ? { answers: answersOf(result) } : {}),
   };
 }
 
@@ -2249,6 +2251,19 @@ export function itemsOf(result) {
       ...(Array.isArray(i.done_when) ? { done_when: i.done_when.slice(0, 20).map((c) => ({ check: String(c?.check ?? "").slice(0, 200), met: c?.met === true, ...(c?.note ? { note: String(c.note).slice(0, 300) } : {}) })) } : {}),
       ...(i.blocked_by ? { blocked_by: String(i.blocked_by).slice(0, 40) } : {}),
     }));
+}
+
+/**
+ * HIS QUESTIONS, ANSWERED WHERE HE READS (28 Nov 2026, wc_9f7312e4). Scooter asked six things of Porter ("tell me how
+ * you would sequence the build", "confirm how fast a new Luma event appears", "whether a verified-email step fits").
+ * The build answered all six, in `proof`, which no partner email shows; the preview marked each "Done" and he got no
+ * answer. Each answer is its own `{ question, answer }` row; the preview leads "What you asked, answered" with them.
+ */
+export function answersOf(result) {
+  return (Array.isArray(result?.answers) ? result.answers : [])
+    .filter((a) => a && typeof a === "object" && String(a.question ?? "").trim() && String(a.answer ?? "").trim())
+    .slice(0, 20)
+    .map((a) => ({ question: String(a.question).trim().slice(0, 400), answer: String(a.answer).trim().slice(0, 1500) }));
 }
 
 // ── Several repos (0236) ─────────────────────────────────────────────────────────────────────
@@ -2412,6 +2427,7 @@ async function runSeveral(job, ctx) {
   if (phase === "BUILD") {
     const reports = [];
     const items = [];
+    const answers = [];
     const stillMissing = [];
     let anyRebuilt = false;
     for (const p of parts) {
@@ -2445,6 +2461,7 @@ async function runSeveral(job, ctx) {
         if (reviewed.report) return { ...reviewed.report, reason: `${p.repo}: ${reviewed.report.reason ?? ""}`.slice(0, 1500), parts: reports };
         result = reviewed.result;
         items.push(...itemsOf(result).map((i) => ({ ...i, item: `${p.repo}: ${i.item}`.slice(0, 200) })));
+        answers.push(...answersOf(result));
         const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress, registryAllowance(p.book, p.secrets), { branch: p.names.branch });
         proof = [String(result.proof ?? "").slice(0, 6000), reviewed.line, ...configLines].filter(Boolean).join("\n");
         anyRebuilt = true;
@@ -2477,7 +2494,7 @@ async function runSeveral(job, ctx) {
       proof: reports.map((r) => `── ${r.repo} ──\n${r.proof ?? "(re-observed; built in an earlier run)"}`).join("\n\n"),
       parts: reports,
       // What is still missing after THIS rebuild, across every repo rebuilt (absent when none was).
-      ...(anyRebuilt ? { missing_materials: stillMissing, items } : {}),
+      ...(anyRebuilt ? { missing_materials: stillMissing, items, answers } : {}),
       reason: red.length ? `not every PR is green: ${red.map((r) => `${r.repo} ${r.check_state} (${r.pr_url})`).join(", ")}` : undefined,
     };
   }

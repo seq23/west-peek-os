@@ -1249,10 +1249,10 @@ export function refusedNotesThisRound(history: ReadonlyArray<{ phase?: unknown; 
 export function withRefusedNotes(answers: string | null, refused: readonly string[]): string | null {
   const extra = refused.filter((n) => !(answers ?? "").includes(n.slice(0, 120)));
   if (!extra.length) return answers;
-  return [answers ?? "", ...extra.map((n) => `From an earlier try this round: ${n}`)].filter(Boolean).join("\n\n").slice(0, 4000);
+  return [answers ?? "", ...extra.map((n) => `From an earlier try this round: ${n}`)].filter(Boolean).join("\n\n").slice(0, 12000);
 }
 
-async function answersWithRefused(env: Env, cardId: string, report: Pick<LocalJobReport, "notes" | "items">): Promise<string | null> {
+async function answersWithRefused(env: Env, cardId: string, report: Pick<LocalJobReport, "notes" | "items" | "answers">): Promise<string | null> {
   const fresh = await readWebPropertyChange(env, cardId);
   let parsed: unknown = [];
   try {
@@ -1263,8 +1263,14 @@ async function answersWithRefused(env: Env, cardId: string, report: Pick<LocalJo
   return withRefusedNotes(buildAnswersText(report), refusedNotesThisRound(Array.isArray(parsed) ? parsed : []));
 }
 
-export function buildAnswersText(report: Pick<LocalJobReport, "notes" | "items">): string | null {
+export function buildAnswersText(report: Pick<LocalJobReport, "notes" | "items" | "answers">): string | null {
   const lines: string[] = [];
+  /*
+   * HIS QUESTIONS FIRST, EACH WITH ITS ANSWER (28 Nov 2026, wc_9f7312e4). Scooter asked how the build would be
+   * sequenced, how fast a Luma event appears, how the feed is matched, whether a verified-email step fits. The build
+   * answered every one in `proof`; the preview showed the done-lines and none of the answers. They lead, whole.
+   */
+  for (const a of report.answers ?? []) lines.push(`• Answered: "${a.question}" — ${a.answer}`);
   for (const i of report.items ?? []) {
     const note = (i.done_when ?? []).map((c) => c.note ?? "").find((n) => n.trim()) ?? i.note ?? "";
     // An item not done always says why (19 Nov 2026, wc_76e6d7ff): "Partly done" alone left the partner guessing.
@@ -1283,7 +1289,7 @@ export function buildAnswersText(report: Pick<LocalJobReport, "notes" | "items">
   }
   const notes = String(report.notes ?? "").replace(/\s*\(cost \$[\d.]+\)\s*$/, "").trim();
   if (notes) lines.push("", notes.slice(0, 2500));
-  return lines.length ? lines.join("\n").slice(0, 4000) : null;
+  return lines.length ? lines.join("\n").slice(0, 12000) : null;
 }
 
 /** "fu_sequoia_taylor" / "sequoia@…" → "Sequoia"; anything else (Porter's own approval) as it is. */
