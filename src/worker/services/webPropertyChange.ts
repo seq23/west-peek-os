@@ -2662,6 +2662,14 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
    * the finished build rebuilds for them before any preview or landing (`rebuildForKeptWords`).
    */
   const buildOnMac = !atPreview && row.phase === "BUILD" && !!row.current_run_id && (await readRun(env, row.current_run_id))?.status === "CLAIMED";
+  /*
+   * ONE TEST FOR "A BUILD IS CURRENT, SO HIS CHANGES WAIT FOR IT" (28 Nov 2026, wc_9f7312e4). At the preview a rebuild
+   * may be queued (a retry, an owed round): its job is `rebuild.changes`, fixed when it was parked. Scooter's 12:48
+   * reply asked a question AND gave seven changes while one sat queued; the question branch tested `buildOnMac` only,
+   * so his changes went onto the row as an answer ("carried into the build") that the queued job never builds. Every
+   * branch below asks this one question, so a question with changes and changes alone are kept the same way.
+   */
+  const runCurrent = buildOnMac || (atPreview && !!row.current_run_id);
   const reading = answer ? (await readReplyIntent(env, { cardId: card.id, firmScope: card.firm_scope, text: answer }, deps.readIntent)).reading : null;
   let rebuildWith: string | null = null;
   if (answer && (!requester || !card.block_answered_by || card.block_answered_by === requester.firmUserId) && reading?.kind === "REFUSED") {
@@ -2765,8 +2773,8 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
     }
     if (intent?.kind === "QUESTION" || intent?.question) {
       const answered = await answerMidFlowQuestion(env, card, intent.question ?? body, deps.answerQuestion);
-      if (buildOnMac && intent.changes) {
-        // Answered by email just now; his changes wait for the build on the Mac, never vanish beside it.
+      if (runCurrent && intent.changes) {
+        // Answered by email just now; his changes wait for the build that is current, never vanish beside it.
         await ack(KEPT_FOR_NEXT_BUILD);
         continue;
       }
@@ -2776,7 +2784,7 @@ async function heldByRequester(env: Env, card: WebPropertyChangeCard, row: WebPr
       continue;
     }
     const carried = intent?.changes ?? body;
-    if (((atPreview && row.current_run_id) || buildOnMac) && intent && intent.changes) {
+    if (runCurrent && intent && intent.changes) {
       // A build is on the Mac: a rebuild cannot be queued now, so his words wait for it, never vanish.
       await ack(KEPT_FOR_NEXT_BUILD);
       continue;
