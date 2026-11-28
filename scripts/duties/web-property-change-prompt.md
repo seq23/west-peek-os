@@ -191,8 +191,8 @@ is read; a failure means the partner is not sent the preview, and the build is r
 - **Every question he put to you is answered in `answers`** (28 Nov 2026, wc_9f7312e4). "Tell me how you
   would sequence it", "confirm how fast …", "can the tile show …", "what would you reuse, and would anything
   be paid?": each is one `{ "question": "<his words>", "answer": "<the answer>" }` row in the BUILD result,
-  from every email and reply on the card. `answers` is what the partner reads; `proof` is not shown to him,
-  so an answer written only in `proof` or `notes` never reaches him. A question you cannot answer yet still
+  from every email and reply on the card. `answers` leads what the partner reads; `proof` is never shown to
+  him, so an answer written only in `proof` never reaches him. A question you cannot answer yet still
   gets a row saying what the answer waits on.
 - **Several asks in one email → one line per item.** Fill `items` in the BUILD/LAND result:
   `[{ "item": "…", "state": "done" | "partial" | "not_done", "note": "…" }]`; partial completion

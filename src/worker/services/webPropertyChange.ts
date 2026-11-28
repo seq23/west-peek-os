@@ -1270,7 +1270,8 @@ export function buildAnswersText(report: Pick<LocalJobReport, "notes" | "items" 
    * sequenced, how fast a Luma event appears, how the feed is matched, whether a verified-email step fits. The build
    * answered every one in `proof`; the preview showed the done-lines and none of the answers. They lead, whole.
    */
-  for (const a of report.answers ?? []) lines.push(`• Answered: "${a.question}" — ${a.answer}`);
+  // One bullet per answer: the preview splits on line breaks, so an answer's own breaks become spaces.
+  for (const a of report.answers ?? []) lines.push(`• Answered: "${a.question.replace(/\s+/g, " ")}" — ${a.answer.replace(/\s+/g, " ")}`);
   for (const i of report.items ?? []) {
     const note = (i.done_when ?? []).map((c) => c.note ?? "").find((n) => n.trim()) ?? i.note ?? "";
     // An item not done always says why (19 Nov 2026, wc_76e6d7ff): "Partly done" alone left the partner guessing.
@@ -3049,7 +3050,10 @@ async function applyBuildOfParts(env: Env, card: WebPropertyChangeCard, row: Web
   if (!report.parts?.length) return { finished: false, blocked: false, progressed: false, detail: "BUILD came back without a PR for each repo" };
   const parts = await recordPartReports(env, card.id, report.parts, "BUILD");
   const agg = aggregateParts(parts);
-  await update(env, card.id, { pr_url: agg.pr_url, pr_number: null, branch: null, check_state: agg.check_state, check_green_at: agg.check_green_at, preview_url: agg.preview_url, build_proof: agg.build_proof, check_url: null });
+  // 28 Nov 2026 (#610): a several-repo BUILD carries his questions' answers as one repo's does. Only a build that
+  // rebuilt something reports items or answers; one that re-observed earlier PRs keeps the answers already stored.
+  const answered: { build_answers?: string | null } = report.items?.length || report.answers?.length ? { build_answers: await answersWithRefused(env, card.id, report) } : {};
+  await update(env, card.id, { pr_url: agg.pr_url, pr_number: null, branch: null, check_state: agg.check_state, check_green_at: agg.check_green_at, preview_url: agg.preview_url, build_proof: agg.build_proof, check_url: null, ...("build_answers" in answered ? { build_answers: answered.build_answers ?? null } : {}) });
   await appendFinding(env, card.id, `PRs opened: ${parts.map((p) => `${p.repo} ${p.pr_url ?? "(none yet)"} — checks ${p.check_state ?? "PENDING"}`).join("; ")}.`);
   const blocking = notGreenParts(parts);
   if (agg.check_state !== "GREEN" || blocking.length) {
@@ -3057,7 +3061,7 @@ async function applyBuildOfParts(env: Env, card: WebPropertyChangeCard, row: Web
     await appendFinding(env, card.id, `Not every PR is green, so nothing lands: ${blocking.join("; ")}.`);
     return { finished: false, blocked: false, progressed: false, detail: `not every PR is green, so none lands: ${blocking.join("; ")}` };
   }
-  const fresh: WebPropertyChangeRow = { ...row, pr_url: agg.pr_url, pr_number: null, branch: null, check_state: "GREEN", check_green_at: agg.check_green_at, preview_url: agg.preview_url, build_proof: agg.build_proof };
+  const fresh: WebPropertyChangeRow = { ...row, pr_url: agg.pr_url, pr_number: null, branch: null, check_state: "GREEN", check_green_at: agg.check_green_at, preview_url: agg.preview_url, build_proof: agg.build_proof, ...answered };
   if (needsPreview(fresh) && !fresh.land_approved_at && !fresh.forced_by) {
     const again = await rebuildForKeptWords(env, card, fresh, rules);
     if (again) return again;
