@@ -23,6 +23,7 @@ vi.mock("../src/worker/ai/runAi", async (importOriginal) => {
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
 import { openAssignmentCard } from "../src/worker/services/dealIntake";
+import { filledByBuild } from "../src/worker/services/webPropertyChange";
 import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
 import { sweepOnce } from "../src/worker/services/workSweep";
 import { reportRun, type SeatRunRow } from "../src/worker/ai/subscriptionSeats";
@@ -305,10 +306,15 @@ describe("Porter's web lane: the plan asks for the materials, a reply's file rea
     expect(job.attachments.find((a) => a.filename === "ep6-headshot.jpg")!.path).toMatch(new RegExp(`^/api/work-cards/${id}/attachments/ratt_`));
     expect(job.plan!.assets).toEqual(["Ep 1/headshot.jpg", "Brand/maax-bold.otf"]);
     expect(job.drive.folder_id, "BUILD carries the folder so the Mac re-maps it").toBe("1AbCdEfGhIjKlMnOpQr");
+    // #611: the build sees the card's missing list word for word, so it can name what it filled without rewording it.
+    expect(job.missing_before).toEqual([
+      { item: "Ep 6 guest headshot (JPG)", where: "the Ep 6 card on /podcast" },
+      { item: "Ep 7 guest headshot (JPG)", where: "the Ep 7 card on /podcast" },
+    ]);
   });
 
   it("after the rebuild the preview email names ONLY what is still missing", async () => {
-    await macReports({ phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/400", pr_number: 400, check_state: "GREEN", proof: "validate green", missing_materials: [{ item: "Ep 7 guest headshot (JPG)", where: "the Ep 7 card on /podcast" }] });
+    await macReports({ phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/400", pr_number: 400, check_state: "GREEN", proof: "validate green", missing_materials: [{ item: "Ep 7 guest headshot (JPG)", where: "the Ep 7 card on /podcast" }], filled_materials: [{ item: "Ep 6 guest headshot (JPG)", from: "ep6-headshot.jpg" }] });
     const before = (await mailFor(id)).length;
     expect((await tickFor(id)).outcome).toBe("BLOCKED");
     const preview = (await mailFor(id)).slice(before).join("\n\n");
@@ -318,5 +324,37 @@ describe("Porter's web lane: the plan asks for the materials, a reply's file rea
     expect(preview).toMatch(/\*\*Filled in since the plan\*\*\n• Ep \*{0,2}6\*{0,2} guest headshot \(JPG\)\n/);
     expect(preview.split("**Still missing (optional)**")[1], "the Ep 6 headshot arrived by reply and is not named as missing again").not.toMatch(/Ep \*{0,2}6\*{0,2} guest headshot/);
     expect(JSON.parse((await readWebPropertyChange(env, id))!.placeholders_json)).toEqual(["Ep 7 guest headshot (JPG)"]);
+  });
+});
+
+describe("'Filled in' is the builder's checked claim, never a diff of two wordings (#611, 28 Nov 2026)", () => {
+  // wc_9f7312e4: the build reworded Ila's items, an unrelated PDF arrived, and the preview said "Filled in" over "Still missing".
+  const before = ["Ila Corcoran's headshot (square, at least 800x800)", "Ila Corcoran's synopsis (2-3 sentences), and optionally her role and company", "Kimberly Gant's episode link"];
+  const after = ["Ila Corcoran's headshot (square, 800x800 or larger)", "Ila Corcoran's synopsis (2-3 sentences) and her role line"];
+  const seen = { hisWords: "Kimberly is Episode 6: https://www.youtube.com/watch?v=abc123xyz", newFiles: ["give-and-take-build-spec.pdf"], driveChanged: false };
+
+  it("a reworded item with no claim is never filled, even though a file arrived", () => {
+    expect(filledByBuild(before, after, [], seen).filled).toEqual([]);
+  });
+
+  it("a claim from a file that is about something else, or never arrived, is refused and said", () => {
+    const r = filledByBuild(before, after, [{ item: before[0]!, from: "ila-headshot.jpg" }], seen);
+    expect(r.filled).toEqual([]);
+    expect(r.refused).toEqual([{ item: before[0]!, from: "ila-headshot.jpg" }]);
+  });
+
+  it("a claim from his own quoted words, or a file that did arrive, is filled", () => {
+    expect(filledByBuild(before, after, [{ item: "kimberly gant’s episode link", from: '"https://www.youtube.com/watch?v=abc123xyz"' }], seen).filled).toEqual([before[2]]);
+    expect(filledByBuild(before, [], [{ item: before[1]!, from: "the synopsis in give-and-take-build-spec.pdf" }], seen).filled).toEqual([before[1]]);
+  });
+
+  it("an item still listed as missing is never also filled", () => {
+    expect(filledByBuild(before, before, [{ item: before[2]!, from: "https://www.youtube.com/watch?v=abc123xyz" }], seen).filled).toEqual([]);
+  });
+
+  it("a permission is filled only from his words that give it, never from a file or a changed folder", () => {
+    const ok = ["the client's OK to show results for TNTP"];
+    expect(filledByBuild(ok, [], [{ item: ok[0]!, from: "tntp-results.pdf" }], { ...seen, newFiles: ["tntp-results.pdf"], driveChanged: true }).filled).toEqual([]);
+    expect(filledByBuild(ok, [], [{ item: ok[0]!, from: "TNTP said ok to show it" }], { ...seen, hisWords: "TNTP said ok to show it" }).filled).toEqual(ok);
   });
 });

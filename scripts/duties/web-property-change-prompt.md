@@ -395,6 +395,7 @@ Goal: the change, proven, as a PR — on the branch and worktree in the job cont
      "pages_env": [{ "project": "west-peek-ventures", "name": "RESEND_API_KEY" }],
      "proof": "<validator output summary, screenshot file names, link-check results>",
      "missing_materials": [{ "item": "…", "where": "…" }],
+     "filled_materials": [{ "item": "<exactly as STILL MISSING BEFORE THIS BUILD words it>", "from": "<the file, or the partner's words quoted>" }],
      "missing_secrets": ["GIPHY_API_KEY"],
      "deliverables": ["booth-log.csv", "qr-codes.png"],
      "notes": "<one line>" }
@@ -413,6 +414,10 @@ Goal: the change, proven, as a PR — on the branch and worktree in the job cont
    report one. Where the plan named placeholders, build them as STRUCTURED placeholders (a clearly
    marked block, never invented content) and list them in `proof`. `missing_materials` is what is
    STILL missing after this rebuild — `[]` when everything arrived; the preview email names it.
+   `filled_materials` is what THIS build filled in from real material: each item from STILL MISSING
+   BEFORE THIS BUILD, worded exactly as there, with the file name or the partner's quoted words it
+   came from. The preview email's "Filled in" lists only these, and only when the OS can see that
+   file arrived or those words are his. An item still missing keeps its exact wording.
    If you cannot finish, `{ "phase": "BUILD", "status": "failed", "reason": "<why, for an engineer>" }`
    — the script retries it; after the bound the partner gets ONE email saying what was tried and the
    reply that restarts it. Never `blocked` for a decision: decide, record it, and say so in the PR.

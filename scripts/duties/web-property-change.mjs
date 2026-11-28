@@ -259,6 +259,12 @@ function readResultShape(text, phase) {
       return { result: null, problem: "missing_materials must be a list of { item, where } — both named, so the partner knows what to send and where it goes" };
     }
   }
+  // #611 (28 Nov 2026): what this build filled in is the builder's own claim, each naming the material it came from.
+  if (parsed.filled_materials !== undefined) {
+    if (!Array.isArray(parsed.filled_materials) || parsed.filled_materials.some((m) => !(m && typeof m === "object" && String(m.item ?? "").trim() && String(m.from ?? "").trim()))) {
+      return { result: null, problem: "filled_materials must be a list of { item, from } — the item exactly as STILL MISSING BEFORE THIS BUILD words it, and the file or the partner's words it was filled from" };
+    }
+  }
   if (parsed.assets !== undefined && !(Array.isArray(parsed.assets) && parsed.assets.every((a) => typeof a === "string" && a.trim()))) return { result: null, problem: "assets must be a list of DRIVE_MANIFEST paths" };
   if (parsed.fetch !== undefined && !(Array.isArray(parsed.fetch) && parsed.fetch.every((a) => typeof a === "string" && a.trim()))) return { result: null, problem: "fetch must be a list of DRIVE_MANIFEST paths" };
   return { result: parsed, problem: null };
@@ -403,6 +409,7 @@ export function renderContext(job, paths) {
   }
   lines.push(...rebuildBlock(job));
   lines.push(...otherJobsBlock(job));
+  lines.push(...missingBeforeBlock(job));
   lines.push(...lastRefusalBlock(job));
   if (paths.landOutput) lines.push("", "WHAT ~/bin/land PRINTED:", "```", paths.landOutput.slice(-6000), "```", `MERGE SHA: ${paths.mergeSha ?? "(unknown)"}`);
   return lines.join("\n");
@@ -429,6 +436,23 @@ export function otherJobsBlock(job) {
     "OTHER OPEN JOBS ON THIS REPO (not this card's work unless the partner's words tie them to it):",
     ...jobs.map((j) => `- ${j.card_id}: "${String(j.title ?? "").slice(0, 120)}" — ${j.pr_url ? `PR ${j.pr_url}` : "no PR yet"}${j.branch ? `, branch ${j.branch}` : ""}`),
     "If the partner asks for this change to ship WITH one of them (one preview, together, the same deployment), merge that job's branch into this branch first (git fetch origin <branch>; git merge), resolve conflicts by keeping both changes, rebuild, and say in your summary that this PR now carries both. Otherwise leave them alone.",
+  ];
+}
+
+/**
+ * WHAT WAS STILL MISSING BEFORE THIS BUILD (#611, 28 Nov 2026). The preview told Scooter Ila Corcoran's headshot was
+ * "Filled in" while listing it as still missing: the OS diffed two lists the builder had worded differently and
+ * counted an unrelated PDF as the material. Now the builder sees the card's list, word for word, and says itself
+ * which items it filled and from what. Pure.
+ */
+export function missingBeforeBlock(job) {
+  const items = Array.isArray(job?.missing_before) ? job.missing_before.filter((m) => m && String(m.item ?? "").trim()) : [];
+  if (job?.phase !== "BUILD" || items.length === 0) return [];
+  return [
+    "",
+    "STILL MISSING BEFORE THIS BUILD (the card's list, as the partner was last told it):",
+    ...items.map((m) => `- ${String(m.item).slice(0, 200)}${m.where ? ` — ${String(m.where).slice(0, 160)}` : ""}`),
+    "For EACH item above, in your result: if real material for it is now in the package (a file in DRIVE_MANIFEST or ATTACHMENTS, or the partner's own words giving it) and you built it in, list it in `filled_materials` as { \"item\": \"<the item exactly as written above>\", \"from\": \"<the file name, or his words quoted>\" }. Otherwise copy it into `missing_materials` with the SAME wording. A file about something else never fills an item; never reword an item.",
   ];
 }
 
@@ -1725,6 +1749,7 @@ export async function run(job, ctx) {
       pages_env_proof: configLines,
       // What is still missing after this rebuild, re-checked against the re-mapped package (0237).
       ...(Array.isArray(result.missing_materials) ? { missing_materials: result.missing_materials } : {}),
+      ...(Array.isArray(result.filled_materials) ? { filled_materials: result.filled_materials } : {}),
       // 15 Nov 2026: what the built pages still SHOW as not done, read from their text (never a class name).
       visible_placeholders: visiblePlaceholders(pageTextsOf(names.worktree)).slice(0, 50),
       ...carried,
@@ -2443,6 +2468,7 @@ async function runSeveral(job, ctx) {
     const items = [];
     const answers = [];
     const stillMissing = [];
+    const filledNow = [];
     let anyRebuilt = false;
     for (const p of parts) {
       let proof = "";
@@ -2468,6 +2494,7 @@ async function runSeveral(job, ctx) {
           ({ result, problem } = readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", "BUILD"));
         }
         if (Array.isArray(result?.missing_materials)) stillMissing.push(...result.missing_materials);
+        if (Array.isArray(result?.filled_materials)) filledNow.push(...result.filled_materials);
         if (spentReport(phase, claude, result)) return { ...spentReport(phase, claude, result), parts: reports };
         if (!result) return { phase, status: "failed", reason: `BUILD of ${p.repo} ended (claude exit ${claude.code}) but ${problem}`, parts: reports };
         if (result.status !== "ok") return { phase, status: result.status, reason: `${p.repo}: ${String(result.reason).slice(0, 1400)}`, parts: reports };
@@ -2508,7 +2535,7 @@ async function runSeveral(job, ctx) {
       proof: reports.map((r) => `── ${r.repo} ──\n${r.proof ?? "(re-observed; built in an earlier run)"}`).join("\n\n"),
       parts: reports,
       // What is still missing after THIS rebuild, across every repo rebuilt (absent when none was).
-      ...(anyRebuilt ? { missing_materials: stillMissing, items, answers } : {}),
+      ...(anyRebuilt ? { missing_materials: stillMissing, filled_materials: filledNow, items, answers } : {}),
       reason: red.length ? `not every PR is green: ${red.map((r) => `${r.repo} ${r.check_state} (${r.pr_url})`).join(", ")}` : undefined,
     };
   }
@@ -2806,6 +2833,12 @@ function selfTest() {
     ["a job with no folder says so and carries no manifest lines", () => { const t = renderContext({ phase: "PLAN", card: { id: "wc", title: "t" }, drive: {}, request: "r", rules: {} }, { worktree: "/w", branch: "b", packageDir: "/p", jobDir: "/j", resultPath: "/r" }); return t.includes("DRIVE_FOLDERS: none in the request") && !t.includes("DRIVE_MANIFEST"); }],
     ["the PACKAGE TRUTH rule says: check the manifest, files outweigh documents, follow the one that declares precedence", () => /check DRIVE_MANIFEST\.json/.test(PACKAGE_TRUTH_RULE) && /present outweighs any document saying it is absent/.test(PACKAGE_TRUTH_RULE) && /declares precedence/.test(PACKAGE_TRUTH_RULE) && /never ask/.test(PACKAGE_TRUTH_RULE)],
     ["the prompt file carries the PACKAGE TRUTH rule and the missing-materials and assets fields", () => { const p = readFileSync(PROMPT_FILE, "utf8"); return p.includes("**PACKAGE TRUTH:**") && p.includes("outweighs any document saying it is absent") && p.includes('"missing_materials"') && p.includes('"assets"') && p.includes("RE-MAPPED for this"); }],
+    ["#611: a BUILD is shown the card's missing list word for word, and filled_materials must name the item and what filled it", () =>
+      renderContext({ phase: "BUILD", missing_before: [{ item: "Ila Corcoran's headshot", where: "/episodes" }] }, { branch: "b" }).includes("- Ila Corcoran's headshot — /episodes") &&
+      missingBeforeBlock({ phase: "PLAN", missing_before: [{ item: "x", where: "y" }] }).length === 0 &&
+      missingBeforeBlock({ phase: "BUILD", missing_before: [] }).length === 0 &&
+      readResult(JSON.stringify({ phase: "BUILD", status: "ok", pr_url: "u", items: [], filled_materials: [{ item: "Ila Corcoran's headshot" }] }), "BUILD").result === null &&
+      readResult(JSON.stringify({ phase: "BUILD", status: "ok", pr_url: "u", items: [], filled_materials: "Ila" }), "BUILD").result === null],
     ["missing_materials must name the item AND where it goes; assets and fetch must be paths", () =>
       readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), publish_ready: true, missing_materials: [{ item: "Sengo logo" }] }), "PLAN").result === null &&
       readResult(JSON.stringify({ phase: "PLAN", status: "ok", document: "# Plan\n".padEnd(60, "x"), publish_ready: true, missing_materials: [{ item: "Sengo logo", where: "portfolio grid" }], assets: ["logos/a.svg"] }), "PLAN").result?.missing_materials?.[0]?.where === "portfolio grid" &&

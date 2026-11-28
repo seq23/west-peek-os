@@ -163,7 +163,7 @@ describe("\"publish\" with new materials: filled in and published without anothe
     const early = await parkPhase(env, sweepCard, queued, "LAND", rules);
     expect(early.parked).toBe(false);
     expect((early as { reason: string }).reason).toMatch(/no build with the new materials has gone green since/);
-    const job = await macReports(id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/501", pr_number: 501, branch: `work/wpc-${id.slice(3, 11)}`, check_state: "GREEN", preview_url: "https://5e6f7a8b.west-peek-community.pages.dev", materials: "31:bbbb0002", missing_materials: [{ item: "Ep 4 link", where: "episodes" }] });
+    const job = await macReports(id, { phase: "BUILD", status: "ok", items: [{ item: "the ask", state: "done", done_when: [{ check: "it works on the preview", met: true }] }], pr_url: "https://github.com/seq23/join-west-peek-main/pull/501", pr_number: 501, branch: `work/wpc-${id.slice(3, 11)}`, check_state: "GREEN", preview_url: "https://5e6f7a8b.west-peek-community.pages.dev", materials: "31:bbbb0002", missing_materials: [{ item: "Ep 4 link", where: "episodes" }], filled_materials: [{ item: "Sengo logo", from: "Logos/sengo.svg" }] });
     expect(job.refresh, "the Mac was asked to check the materials first").toBe(true);
     expect(job.materials_fingerprint).toBe("30:aaaa0001");
     const landing = await tickFor(id);
