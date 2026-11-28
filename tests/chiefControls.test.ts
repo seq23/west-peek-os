@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PARTNERS } from "../src/shared/registry/partners";
 import { claimRun, parkRun, progressRun, reportRun } from "../src/worker/ai/subscriptionSeats";
 import { handleInboundEmail } from "../src/worker/effects/inboundEmail";
@@ -12,6 +12,7 @@ import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers
 const owner = PARTNERS.find((p) => p.firstName === "Sequoia")!;
 const scooter = PARTNERS.find((p) => p.firstName === "Scooter")!;
 let testDb: TestDb;
+const outbox: Array<{ to: string | string[]; subject: string }> = [];
 let env: ReturnType<typeof makeTestEnv>;
 
 it("rejects an unconfirmed pause before touching storage", async () => {
@@ -56,11 +57,20 @@ function page(user: string, command?: string, contentType = "application/json") 
 describe("West Peek operating controls", () => {
   beforeAll(async () => {
     testDb = await createTestDb();
-    env = makeTestEnv(testDb.db, { WP_OS_DOCUMENTS: testDb.docs, WP_OS_AI_EMAIL_PARTNERS: "enabled" } as Partial<Env>);
+    env = makeTestEnv(testDb.db, { WP_OS_DOCUMENTS: testDb.docs, WP_OS_AI_EMAIL_PARTNERS: "enabled",
+      RESEND_API_KEY: "fixture-not-a-key", WP_OS_EMAIL_SEND: "enabled", WP_OS_EMAIL_FROM: "os@joinwestpeek.com" } as Partial<Env>);
+    // The one transport the confirmations use, faked: every email the tests send is counted here, none leaves.
+    vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url instanceof Request ? url.url : url).startsWith("https://api.resend.com/")) {
+        outbox.push(JSON.parse(String(init?.body ?? "{}")) as { to: string | string[]; subject: string });
+        return new Response(JSON.stringify({ id: `fixture-${outbox.length}` }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("not found", { status: 404 });
+    });
     // No live model in tests: the exact-command fallback reads unless a test hands in a fake reader.
     setControlReader(async () => null);
   });
-  afterAll(async () => { setControlReader(null); if (testDb) await disposeTestDb(testDb); });
+  afterAll(async () => { vi.unstubAllGlobals(); setControlReader(null); if (testDb) await disposeTestDb(testDb); });
 
   it("pauses through confirmed owner action and invalidates a claimed lease even across a fast resume", async () => {
     const input = { seat: "claude_code" as const, purpose: "Fixture answer", prompt: "Fixture", modelAccess: "PUBLIC_MODEL_APPROVED" };
@@ -121,7 +131,7 @@ describe("West Peek operating controls", () => {
   });
 
   const confirmations = async (word: string) => ((await env.WP_OS_DB.prepare(
-    "SELECT payload_json FROM event_record WHERE event_type IN ('operations.control_confirmed', 'operations.control_confirmation_not_sent')",
+    "SELECT payload_json FROM event_record WHERE event_type = 'operations.control_confirmed'",
   ).all<{ payload_json: string }>()).results ?? []).map((r) => JSON.parse(r.payload_json) as { to: string; subject: string; violations?: string[] })
     .filter((m) => m.subject.toLowerCase().includes(word));
 
@@ -132,6 +142,7 @@ describe("West Peek operating controls", () => {
     expect(paused.length).toBeGreaterThan(0);
     expect(paused.at(-1)).toMatchObject({ to: owner.email });
     expect(paused.at(-1)!.violations).toBeUndefined();
+    expect(outbox.some((m) => String(m.to).includes(owner.email) && /paused/i.test(m.subject)), "the confirmation was actually sent").toBe(true);
     await email("resume\n-- \nFixture Owner\nFixture Ventures");
     expect(await operatingStopped(env)).toBe(false);
     expect((await confirmations("resumed")).length).toBeGreaterThan(0);
@@ -235,6 +246,57 @@ describe("West Peek operating controls", () => {
     } finally {
       expect((await page(owner.email, "resume")).status).toBe(200);
     }
+  });
+
+  it("never re-reads a held control on replay: a stop-and-ask email pauses once, and the ask is worked once (recheck R1)", async () => {
+    await env.WP_OS_DB.prepare("UPDATE operating_held_mail SET replayed_at = 'fixture-earlier', outcome = 'FIXTURE' WHERE replayed_at IS NULL OR outcome IS NULL").run();
+    let reads = 0;
+    setControlReader(async () => { reads++; return { operation: "STOP_EVERYTHING", mailbox: null, until: null, also: true }; });
+    try {
+      const pausedMails = () => outbox.filter((m) => /paused/i.test(m.subject)).length;
+      const before = pausedMails();
+      await email("Stop everything, and also tell me what went wrong with the fixture send.");
+      expect(await operatingStopped(env)).toBe(true);
+      const held = (await env.WP_OS_DB.prepare("SELECT eml_key FROM operating_held_mail WHERE replayed_at IS NULL").all<{ eml_key: string }>()).results ?? [];
+      expect(held).toHaveLength(1);
+      expect((await page(owner.email, "resume")).status).toBe(200);
+      const ran = (await runDueJobs(env, new Date())).filter((r) => r.job_key === "held_mail_replay");
+      expect(ran).toEqual([{ job_key: "held_mail_replay", status: "SUCCEEDED", summary: `${held[0]!.eml_key}: WORKED` }]);
+      expect(await operatingStopped(env), "the replay did not pause the firm again").toBe(false);
+      expect(reads, "the control was read once, when it arrived").toBe(1);
+      expect(pausedMails() - before, "one paused email").toBe(1);
+      expect(await env.WP_OS_DB.prepare("SELECT outcome, replayed_at IS NOT NULL AS claimed FROM operating_held_mail WHERE eml_key = ?1").bind(held[0]!.eml_key).first())
+        .toEqual({ outcome: "WORKED", claimed: 1 });
+    } finally {
+      setControlReader(async () => null);
+      await env.WP_OS_DB.prepare("UPDATE owner_operating_control SET stopped = 0 WHERE id = 1").run();
+    }
+  });
+
+  it("recovers a claim a dead Worker left, then puts a twice-dead or unreadable one on her desk (recheck R2)", async () => {
+    await env.WP_OS_DB.prepare("UPDATE operating_held_mail SET replayed_at = 'fixture-earlier', outcome = 'FIXTURE' WHERE replayed_at IS NULL OR outcome IS NULL").run();
+    // A real stored message, held, whose first claim died part way (replayed_at set long ago, no outcome).
+    expect((await page(owner.email, "pause-confirmed")).status).toBe(200);
+    await email("Hey Walker, the fixture venue list please.", { partner: scooter, subject: "Fixture venue list" });
+    expect((await page(owner.email, "resume")).status).toBe(200);
+    const [died] = (await env.WP_OS_DB.prepare("SELECT eml_key FROM operating_held_mail WHERE replayed_at IS NULL").all<{ eml_key: string }>()).results ?? [];
+    const long = "2026-01-01T00:00:00.000Z";
+    await env.WP_OS_DB.prepare("UPDATE operating_held_mail SET replayed_at = ?2, attempts = 1 WHERE eml_key = ?1").bind(died!.eml_key, long).run();
+    // One that died on both tries, and one whose stored copy is gone.
+    await env.WP_OS_DB.prepare("INSERT INTO operating_held_mail (eml_key, replayed_at, attempts) VALUES ('inbound-email/fixture/twice-dead.eml', ?1, 2)").bind(long).run();
+    await env.WP_OS_DB.prepare("INSERT INTO operating_held_mail (eml_key) VALUES ('inbound-email/fixture/missing.eml')").run();
+
+    const ran = (await runDueJobs(env, new Date())).filter((r) => r.job_key === "held_mail_replay").map((r) => [r.summary.split(":")[0], r.status]);
+    expect(ran).toEqual(expect.arrayContaining([
+      [died!.eml_key, "REQUEUED"], [died!.eml_key, "SUCCEEDED"],
+      ["inbound-email/fixture/twice-dead.eml", "FAILED"], ["inbound-email/fixture/missing.eml", "FAILED"],
+    ]));
+    const outcome = async (key: string) => (await env.WP_OS_DB.prepare("SELECT outcome FROM operating_held_mail WHERE eml_key = ?1").bind(key).first<{ outcome: string }>())?.outcome;
+    expect(await outcome(died!.eml_key)).toBe("WORKED");
+    expect(await outcome("inbound-email/fixture/twice-dead.eml")).toMatch(/^FAILED: the door stopped part way 2 times/);
+    expect(await outcome("inbound-email/fixture/missing.eml")).toBe("NOT_FOUND");
+    const desk = (await env.WP_OS_DB.prepare("SELECT dedupe_key FROM notification WHERE dedupe_key LIKE 'held_mail:%'").all<{ dedupe_key: string }>()).results ?? [];
+    expect(desk.map((d) => d.dedupe_key).sort()).toEqual(["held_mail:inbound-email/fixture/missing.eml", "held_mail:inbound-email/fixture/twice-dead.eml"]);
   });
 });
 

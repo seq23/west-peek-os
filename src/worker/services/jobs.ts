@@ -1252,7 +1252,7 @@ export async function runDueJobs(
   if (await operatingStopped(env)) return [];
   // MAIL HELD IN HER PAUSE IS WORKED FIRST after a resume (review of #618, F2).
   const { replayHeldMail } = await import("./chiefControls");
-  const held = await replayHeldMail(env).catch((err: unknown) => [{ job_key: "held_mail_replay", status: "ERROR", summary: err instanceof Error ? err.message : String(err) }]);
+  const held = await replayHeldMail(env, undefined, now).catch((err: unknown) => [{ job_key: "held_mail_replay", status: "ERROR", summary: err instanceof Error ? err.message : String(err) }]);
   const limit = opts.limit ?? 1;
   if (limit === 0) return [...held, ...await runDueJobsAll(env, now)];
   const dueFirst = (

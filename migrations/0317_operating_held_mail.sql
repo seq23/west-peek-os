@@ -5,6 +5,7 @@ CREATE TABLE operating_held_mail (
   route_as_json TEXT,
   held_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   replayed_at TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
   outcome TEXT
 );
 

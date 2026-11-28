@@ -212,37 +212,69 @@ async function confirm(env: Env, what: string, tldr: string, sections: { label: 
  */
 export async function holdMailForResume(env: Env, emlKey: string, routeAs: unknown): Promise<void> {
   await env.WP_OS_DB.prepare(`INSERT INTO operating_held_mail (eml_key, route_as_json) VALUES (?1, ?2)
-    ON CONFLICT(eml_key) DO UPDATE SET replayed_at = NULL, outcome = NULL, route_as_json = excluded.route_as_json`)
+    ON CONFLICT(eml_key) DO UPDATE SET replayed_at = NULL, outcome = NULL, attempts = 0, route_as_json = excluded.route_as_json`)
     .bind(emlKey, routeAs === undefined || routeAs === null ? null : JSON.stringify(routeAs)).run();
   await appendEvent(env, { eventType: "operations.mail_held", actorType: "system", actorId: "inbound_email",
     objectType: "inbound_email", objectId: emlKey.slice(0, 200), payload: { why: "agents paused by the owner" } });
 }
 
 export const HELD_MAIL_PER_TICK = 5;
+/** A claim older than this with no outcome belongs to a Worker that died mid-replay (recheck of #618, R2). */
+export const HELD_CLAIM_STALE_MINUTES = 30;
+/** Claims a message may take before it goes on her desk instead: one first try and one re-queue. */
+export const HELD_MAIL_ATTEMPTS = 2;
+
+type TickResult = { job_key: string; status: string; summary: string };
 
 /** Puts held messages back through the door after a resume. Never runs while paused. */
-export async function replayHeldMail(env: Env, limit = HELD_MAIL_PER_TICK): Promise<Array<{ job_key: string; status: string; summary: string }>> {
+export async function replayHeldMail(env: Env, limit = HELD_MAIL_PER_TICK, now = new Date()): Promise<TickResult[]> {
   if (await operatingStopped(env)) return [];
-  const rows = (await env.WP_OS_DB.prepare("SELECT eml_key, route_as_json FROM operating_held_mail WHERE replayed_at IS NULL ORDER BY held_at ASC LIMIT ?1")
-    .bind(limit).all<{ eml_key: string; route_as_json: string | null }>().catch(() => ({ results: [] as { eml_key: string; route_as_json: string | null }[] }))).results ?? [];
-  const out: Array<{ job_key: string; status: string; summary: string }> = [];
+  const db = env.WP_OS_DB;
+  const { replayStoredMessage, raiseUnreadMail } = await import("../effects/inboundEmail");
+  const out: TickResult[] = [];
+  const desk = (key: string, why: string) => raiseUnreadMail(env, { dedupeKey: `held_mail:${key}`,
+    title: "An email held during the pause could not be worked", body: `Stored as ${key}: ${why}. Open it in the mailbox.`, objectId: key });
+
+  // A CLAIM THAT DIED IS RECOVERED, NEVER LOST: re-queued once, then onto her desk as FAILED.
+  const stale = new Date(now.getTime() - HELD_CLAIM_STALE_MINUTES * 60_000).toISOString();
+  const dead = (await db.prepare("SELECT eml_key, attempts FROM operating_held_mail WHERE replayed_at IS NOT NULL AND outcome IS NULL AND replayed_at < ?1")
+    .bind(stale).all<{ eml_key: string; attempts: number }>()).results ?? [];
+  for (const row of dead) {
+    if (row.attempts < HELD_MAIL_ATTEMPTS) {
+      await db.prepare("UPDATE operating_held_mail SET replayed_at = NULL WHERE eml_key = ?1 AND outcome IS NULL AND replayed_at < ?2").bind(row.eml_key, stale).run();
+      out.push({ job_key: "held_mail_replay", status: "REQUEUED", summary: `${row.eml_key}: the earlier attempt stopped part way` });
+      continue;
+    }
+    const why = `FAILED: the door stopped part way ${row.attempts} times`;
+    const failed = await db.prepare("UPDATE operating_held_mail SET outcome = ?2 WHERE eml_key = ?1 AND outcome IS NULL AND replayed_at < ?3").bind(row.eml_key, why, stale).run();
+    if ((failed.meta?.changes ?? 0) === 1) {
+      await desk(row.eml_key, why);
+      out.push({ job_key: "held_mail_replay", status: "FAILED", summary: `${row.eml_key}: ${why}` });
+    }
+  }
+
+  const rows = (await db.prepare("SELECT eml_key, route_as_json FROM operating_held_mail WHERE replayed_at IS NULL ORDER BY held_at ASC LIMIT ?1")
+    .bind(limit).all<{ eml_key: string; route_as_json: string | null }>()).results ?? [];
   for (const row of rows) {
-    // Claimed atomically, so two ticks never work one message twice.
-    const claim = await env.WP_OS_DB.prepare("UPDATE operating_held_mail SET replayed_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE eml_key = ?1 AND replayed_at IS NULL")
-      .bind(row.eml_key).run();
+    // Claimed atomically with its own stamp, so two ticks never work one message twice and the outcome is written
+    // only by the attempt that still holds the claim (a pause during the replay re-holds it and clears the stamp).
+    const stamp = new Date().toISOString();
+    const claim = await db.prepare("UPDATE operating_held_mail SET replayed_at = ?2, attempts = attempts + 1 WHERE eml_key = ?1 AND replayed_at IS NULL")
+      .bind(row.eml_key, stamp).run();
     if ((claim.meta?.changes ?? 0) !== 1) continue;
-    const { replayStoredMessage, raiseUnreadMail } = await import("../effects/inboundEmail");
     let outcome: string;
     try {
       outcome = await replayStoredMessage(env, row.eml_key, row.route_as_json ? JSON.parse(row.route_as_json) : null) ? "WORKED" : "NOT_FOUND";
     } catch (err) {
       outcome = `FAILED: ${(err instanceof Error ? err.message : String(err)).slice(0, 300)}`;
     }
-    if (outcome !== "WORKED") {
-      await raiseUnreadMail(env, { dedupeKey: `held_mail:${row.eml_key}`, title: "An email held during the pause could not be worked",
-        body: `Stored as ${row.eml_key}: ${outcome}. Open it in the mailbox.`, objectId: row.eml_key });
+    const kept = await db.prepare("UPDATE operating_held_mail SET outcome = ?3 WHERE eml_key = ?1 AND replayed_at = ?2 AND outcome IS NULL")
+      .bind(row.eml_key, stamp, outcome).run();
+    if ((kept.meta?.changes ?? 0) !== 1) {
+      out.push({ job_key: "held_mail_replay", status: "HELD_AGAIN", summary: `${row.eml_key}: held again by a new pause` });
+      continue;
     }
-    await env.WP_OS_DB.prepare("UPDATE operating_held_mail SET outcome = ?2 WHERE eml_key = ?1").bind(row.eml_key, outcome).run();
+    if (outcome !== "WORKED") await desk(row.eml_key, outcome);
     out.push({ job_key: "held_mail_replay", status: outcome === "WORKED" ? "SUCCEEDED" : "FAILED", summary: `${row.eml_key}: ${outcome}` });
   }
   return out;

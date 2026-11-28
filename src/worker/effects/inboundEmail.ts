@@ -299,6 +299,11 @@ export function inboundMessageKey(headers: Headers): string | null {
 }
 
 export interface InboundOptions {
+  /**
+   * A message held in the owner's pause and worked after the resume (chiefControls.ts replayHeldMail). Its control, if
+   * it carried one, was applied when it arrived, so it is never read as a control again (recheck of #618, R1).
+   */
+  replayedFromHold?: boolean;
   /** The RECEIVED email's first line, verbatim, when a person re-reads a stored message and has something to say first. */
   receivedTldr?: string | null;
   /** An earlier note's thread token, so the RECEIVED threads under it in the partner's inbox. */
@@ -456,7 +461,7 @@ export async function replayStoredMessage(env: Env, emlKey: string, routeAs: Rou
   const from = (addressIn(headers.get("from")) ?? headers.get("from") ?? "").trim().toLowerCase();
   const bytes = new TextEncoder().encode(raw);
   const message = { from, to: headers.get("to") ?? INTAKE_MAILBOX, headers, raw: new Blob([bytes as BlobPart]).stream(), rawSize: bytes.byteLength };
-  await oneBigMailAtATime(message.rawSize, () => handleInboundEmailOnce(message, env, routeAs ? { routeAs } : {}));
+  await oneBigMailAtATime(message.rawSize, () => handleInboundEmailOnce(message, env, { replayedFromHold: true, ...(routeAs ? { routeAs } : {}) }));
   return true;
 }
 
@@ -1170,7 +1175,7 @@ async function handleInboundEmailOnce(
   const control = kept.mail ? await applyChiefControlEmail(env, {
     authority,
     words: kept.mail.text,
-    direct: !options.routeAs && !options.replyOnThread && !options.receivedTldr &&
+    direct: !options.replayedFromHold && !options.routeAs && !options.replyOnThread && !options.receivedTldr &&
       !inReplyTo && !references && !/^\s*(?:re|aw|sv|fwd?|fw):/i.test(subject) &&
       !message.headers.has("resent-from") && !/<blockquote\b/i.test(kept.mail.html) &&
       !forwardedOrigin(kept.text ?? "") && kept.mail.files.length === 0,
