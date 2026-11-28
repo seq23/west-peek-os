@@ -337,6 +337,8 @@ export interface RunAiBudgetContext {
   publicModelApproved?: boolean;
   /** Pin a specific provider by provider_key. */
   providerKey?: string;
+  /** The caller owns failover and has checked credentials for this provider only. Requires providerKey. */
+  requireProvider?: boolean;
 }
 
 /**
@@ -1535,6 +1537,8 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
 
   // 4. Provider availability (kill switch / disabled).
   const pinnedKey = input.budgetContext?.providerKey;
+  const strictPin = input.budgetContext?.requireProvider === true;
+  if (strictPin && !pinnedKey) return { run: await blocked("PREFLIGHT_BLOCKED", "required_provider_missing") };
   let candidates: ProviderRow[];
   if (pinnedKey) {
     const pinned = await env.WP_OS_DB.prepare("SELECT * FROM provider_registry WHERE provider_key = ?1")
@@ -1570,7 +1574,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
               .all<ProviderRow>()
           ).results ?? [])
         : [];
-    const seatCanCarryIt = (requiresSearch && searchSeatKeys.size > 0) || seatFirstSeatKeys.length > 0 || freeSearchRows.length > 0;
+    const seatCanCarryIt = !strictPin && ((requiresSearch && searchSeatKeys.size > 0) || seatFirstSeatKeys.length > 0 || freeSearchRows.length > 0);
     const pinUnusable = !pinned || pinned.enabled !== 1 || laneIsStoodDown(pinned, now);
     if (pinUnusable && !seatCanCarryIt && !freeOnlyLadder) {
       return { run: await blocked("PROVIDER_DISABLED", `provider_disabled:${pinnedKey}`) };
@@ -1579,7 +1583,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
       return { run: await blocked("KILL_SWITCHED", `provider_kill_switched:${pinnedKey}`) };
     }
     candidates = !pinUnusable && pinned!.kill_switched !== 1 ? [pinned!] : [];
-    if (requiresSearch && searchSeatKeys.size > 0) {
+    if (!strictPin && requiresSearch && searchSeatKeys.size > 0) {
       // The pin names the paid search lane; the seats that can search stand beside it, so they are
       // candidates for the lead without the pin ever being widened for any other call.
       const seatRows = await env.WP_OS_DB.prepare(
@@ -1589,7 +1593,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
         .all<ProviderRow>();
       candidates = [...candidates, ...(seatRows.results ?? [])];
     }
-    if (seatFirstBesidePin) {
+    if (!strictPin && seatFirstBesidePin) {
       /*
        * A PIN DOES NOT HIDE A SEAT FROM A `seatFirst` CALL (1 Oct 2026). Parker's Room packet pins OpenRouter for its judge and
        * its writer and is named seatFirst, yet outside Free only the pin left OpenRouter as the one candidate, so a free model
@@ -1609,11 +1613,11 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
         candidates = [...candidates, ...seatRows.filter((r) => !have.has(r.id))];
       }
     }
-    if (freeSearchRows.length > 0) {
+    if (!strictPin && freeSearchRows.length > 0) {
       const have = new Set(candidates.map((c) => c.id));
       candidates = [...candidates, ...freeSearchRows.filter((r) => !have.has(r.id))];
     }
-    if (freeOnlyLadder) {
+    if (!strictPin && freeOnlyLadder) {
       /*
        * A PIN DOES NOT HIDE A $0 LANE AT FREE ONLY. Call sites pin a paid lane ("openrouter") for quality; at Free only that
        * pin cannot be paid, so the awake seats and the free lanes stand beside it as candidates. Content safety is not
@@ -3025,7 +3029,7 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
   const outageFallbacks: FallbackOption[] = [];
   for (const source of ordered) {
     const direct = directVendorRouteFor(source.model);
-    if (!direct) continue;
+    if (!direct || (strictPin && direct.providerKey !== pinnedKey)) continue;
     if (!credentialConfigured(env, direct.providerKey)) continue;
     const peerProvider = await env.WP_OS_DB.prepare(
       // THE DIRECT-VENDOR LANE IS THE ONE THAT REFUSED PARKER'S CARD on 17 Sep, so this is the

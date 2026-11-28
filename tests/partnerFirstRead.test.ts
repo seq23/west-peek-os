@@ -2,7 +2,7 @@ import { firstRead } from "./helpers/aiShapes";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
-import { FIRST_READERS, FIRST_READ_WAIT_MINUTES, UNDERSTOOD_OUTPUT, sendUnderstoodReplies, understand, type Reader } from "../src/worker/services/partnerUnderstood";
+import { FIRST_READERS, FIRST_READ_WAIT_MINUTES, UNDERSTOOD_OUTPUT, maskedFreeRead, sendUnderstoodReplies, understand, type Reader } from "../src/worker/services/partnerUnderstood";
 import { jsonSchemaOf } from "../src/worker/ai/structuredOutput";
 import { NO_MODEL_READER } from "../src/shared/intake/inboundRead";
 import { claimNextCard } from "../src/worker/services/workSweep";
@@ -273,6 +273,60 @@ describe("the reader ladder, through the real router", () => {
     const out = await understand(routed({}), { subject: "pipeline", written: "Keep this pipeline studio-only.", read: FIRST_READERS, employeeId: null, firmScope: "west-peek" });
     expect(out.brief.reader).toBe("GEMINI");
     expect(geminiCalls.length - before).toBe(1);
+  });
+
+  it("routes ordinary chief text unchanged and masks actual committed LPs and deal figures in the provider request", async () => {
+    await t.db.prepare("INSERT INTO lp_record (id, legal_name, lp_type, status, created_by) VALUES ('lpr_chief_masked', 'Larkspur Lantern Holdings', 'FAMILY_OFFICE', 'COMMITTED', 'test')").run();
+    const read = (prompt: string) => maskedFreeRead(routed({ WP_GEMINI_API_KEY: "fixture-key" }), { prompt, firmScope: "west-peek", employeeId: null, purpose: "Chief session draft after seat outage" }, "google_free", "chief-draft");
+    try {
+      const everyday = "Group the $25 community event tickets by section.";
+      expect(await read(everyday)).toMatchObject({ ok: true, reader: "GEMINI" });
+      expect(geminiCalls.at(-1)).toContain(everyday);
+      const before = geminiCalls.length;
+      geminiAnswer = () => "Draft for [Investor A].";
+      expect(await read("Summarize the term sheet for Larkspur Lantern Holdings. It calls for a management fee of 1.75%.")).toMatchObject({ ok: true, text: "Draft for Larkspur Lantern Holdings." });
+      expect(geminiCalls.length).toBe(before + 1);
+      expect(geminiCalls.at(-1)).toContain("[Investor A]");
+      expect(geminiCalls.at(-1)).not.toMatch(/Larkspur|term sheet|management fee|1\.75/i);
+    } finally {
+      geminiAnswer = null;
+      await t.db.prepare("DELETE FROM lp_record WHERE id = 'lpr_chief_masked'").run();
+    }
+  });
+
+  it("skips the free lane before dispatch if the LP records could not be read", async () => {
+    const before = geminiCalls.length;
+    const unreadable = routed({ WP_GEMINI_API_KEY: "fixture-key" });
+    unreadable.WP_OS_DB = new Proxy(unreadable.WP_OS_DB, {
+      get(target, key) {
+        if (key === "prepare") return (sql: string) => {
+          if (sql.includes("FROM lp_record r")) throw new Error("fixture DB read outage");
+          return target.prepare(sql);
+        };
+        return Reflect.get(target, key);
+      },
+    });
+    const result = await maskedFreeRead(unreadable, { prompt: "Summarize the notes.", firmScope: "west-peek", employeeId: null, purpose: "Chief session draft after seat outage" }, "google_free", "chief-draft");
+    expect(result).toMatchObject({ ok: false, out: true, detail: expect.stringContaining("unreadable") });
+    expect(geminiCalls).toHaveLength(before);
+  });
+
+  it("requires a verified free-only provider for chief fallback drafts", async () => {
+    const ai = { run: vi.fn(async () => ({ response: "This binding would bill." })) };
+    const input = { prompt: "Draft the event schedule.", firmScope: "west-peek", employeeId: null, purpose: "Chief session draft after seat outage" };
+    const out = await maskedFreeRead(routed({ AI: ai as unknown as Env["AI"] }), input, "workers_ai", "chief-draft");
+    expect(out.ok).toBe(false);
+    expect(ai.run).not.toHaveBeenCalled();
+    const before = geminiCalls.length;
+    expect(await maskedFreeRead(routed({}), input, "google_free", "chief-draft")).toMatchObject({ ok: false, out: true });
+    expect(geminiCalls).toHaveLength(before);
+    const capped = await maskedFreeRead(routed({ AI: ai as unknown as Env["AI"], WP_CHIEF_WORKERS_AI_FREE_ONLY: "true" }), input, "workers_ai", "chief-draft");
+    expect(capped).toMatchObject({ ok: true, reader: "WORKERS_AI" });
+    expect(ai.run).toHaveBeenCalledTimes(1);
+    ai.run.mockRejectedValue(new Error("Workers Free quota exhausted"));
+    const quota = await maskedFreeRead(routed({ AI: ai as unknown as Env["AI"], WP_CHIEF_WORKERS_AI_FREE_ONLY: "true" }), input, "workers_ai", "chief-draft");
+    expect(quota.ok).toBe(false);
+    expect(geminiCalls).toHaveLength(before);
   });
 });
 

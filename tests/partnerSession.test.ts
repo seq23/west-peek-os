@@ -2,10 +2,10 @@ import { replyIntent } from "./helpers/aiShapes";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTestDb, disposeTestDb, makeTestEnv, type TestDb } from "./helpers/db";
 import type { Env } from "../src/worker/env";
-import { openAssignmentCard } from "../src/worker/services/dealIntake";
+import { openAssignmentCard, systemIdentity } from "../src/worker/services/dealIntake";
 import { EMAILED_TASK_LIMITS } from "../src/shared/intake/partnerAuthority";
 import { parseReplyIntent, type ReplyIntentReader } from "../src/worker/services/replyIntent";
-import { questionEmail, redirectSession, runPartnerSessionCard } from "../src/worker/services/partnerSession";
+import { openChiefTurn, questionEmail, redirectSession, runPartnerSessionCard } from "../src/worker/services/partnerSession";
 import { reportRun } from "../src/worker/ai/subscriptionSeats";
 import { recordPartnerConstraints } from "../src/worker/services/partnerConstraints";
 import { handleRequest } from "../src/worker/index";
@@ -17,14 +17,20 @@ import { PARTNERS } from "../src/shared/registry/partners";
  * clear work keeps going, a correction redirects running work, and the partner's memory opens every prompt.
  */
 
-// The session path never calls the router: any runAi call here is a failure of step 3.
 const routerCalls: string[] = [];
+const draftCalls: { providerKey: string; prompt: string; neverPaid: boolean }[] = [];
+let geminiDraft: string | null = null;
 vi.mock("../src/worker/ai/runAi", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/worker/ai/runAi")>();
   return {
     ...actual,
-    runAi: async (_env: unknown, input: { purpose: string }) => {
+    runAi: async (_env: unknown, input: import("../src/worker/ai/runAi").RunAiInput) => {
       routerCalls.push(input.purpose);
+      if (input.purpose === "Chief session draft after seat outage") {
+        const providerKey = input.budgetContext?.providerKey ?? "";
+        draftCalls.push({ providerKey, prompt: input.inputs.join("\n"), neverPaid: input.budgetContext?.neverPaid === true });
+        if (providerKey === "google_free" && geminiDraft) return { run: { id: "run_draft", status: "COMPLETED", output_text: geminiDraft } };
+      }
       return { run: { id: `run_${routerCalls.length}`, status: "FAILED", output_text: null, failure_reason: "no model in this test" } };
     },
   };
@@ -115,6 +121,51 @@ describe("step 3 · no stopwatch", () => {
     await runPartnerSessionCard(env, await card(id));
     expect(await runs(id)).toHaveLength(1);
     expect(routerCalls).toEqual([]);
+  });
+
+  const seatsOut = { phase: "SESSION", status: "failed", reason: "Neither seat could take the turn.", waits_seconds: 1800, model_unavailable: true, routing: ["Claude Code was out of usage.", "Codex was out of usage."] };
+
+  it("queues a free-route draft for seat review without closing the chief's request", async () => {
+    const id = await openChiefTurn(env, systemIdentity(), "aie_walker", "SCHEDULE", "Sort the $25 community event tickets by section.", "west-peek");
+    const withFreeRoutes = { ...env, WP_CHIEF_WORKERS_AI_FREE_ONLY: "true", WP_GEMINI_API_KEY: "fixture-key" };
+    draftCalls.length = 0;
+    geminiDraft = "Group balcony tickets before floor tickets.";
+    try {
+      await runPartnerSessionCard(env, await card(id));
+      const [first] = await runs(id);
+      expect((await macReports(first!.id, seatsOut)).accepted).toBe(true);
+      expect(await runPartnerSessionCard(withFreeRoutes, await card(id))).toMatchObject({ finished: false, held: true });
+      expect(draftCalls.map((call) => call.providerKey)).toEqual(["workers_ai", "google_free"]);
+      expect(draftCalls.every((call) => call.neverPaid && call.prompt.includes("$25 community event tickets"))).toBe(true);
+      expect((await card(id)).state).toBe("IN_PROGRESS");
+      expect(await notices(id, "DONE")).toHaveLength(0);
+      const page = await handleRequest(new Request("https://test.local/api/workforce/employees/aie_walker/messages", { headers: { "x-wpos-dev-user": SCOOTER } }), env);
+      const { messages } = await page.json() as { messages: { id: string }[] };
+      expect(messages.find((message) => message.id === id)).toMatchObject({
+        source: "SCHEDULE",
+        report: { reply: expect.stringContaining("Gemini prepared a text draft for the next subscription seat to verify.") },
+      });
+      await runPartnerSessionCard(env, await card(id));
+      expect(JSON.parse((await runs(id))[1]!.job_json).fallback_draft).toBe(geminiDraft);
+    } finally {
+      geminiDraft = null;
+    }
+  });
+
+  it("retains and retries the exact request when every model is unavailable", async () => {
+    const request = "Draft notes from the planning discussion.";
+    const id = await emailed("All models out", request);
+    await runPartnerSessionCard(env, await card(id));
+    const [first] = await runs(id);
+    const initialRequest = JSON.parse(first!.job_json).request;
+    expect(initialRequest).toContain(request);
+    await macReports(first!.id, seatsOut);
+    expect(await runPartnerSessionCard(env, await card(id))).toMatchObject({ finished: false, blocked: false, held: true });
+    expect(await notices(id, "DONE")).toHaveLength(0);
+    const session = await env.WP_OS_DB.prepare("SELECT run_count, request_text FROM partner_session WHERE work_card_id = ?1").bind(id).first();
+    expect(session).toEqual({ run_count: 0, request_text: initialRequest });
+    await runPartnerSessionCard(env, await card(id));
+    expect(JSON.parse((await runs(id))[1]!.job_json)).toMatchObject({ request: initialRequest });
   });
 });
 

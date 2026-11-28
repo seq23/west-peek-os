@@ -651,6 +651,8 @@ export interface PartnerSessionReport {
   remember: string[];
   /** A spent plan is a wait: seconds until the earlier reset. */
   waits_seconds?: number;
+  model_unavailable?: boolean;
+  routing?: string[];
 }
 
 /**
@@ -694,6 +696,8 @@ export function readPartnerSessionReport(text: string | null | undefined): { rep
     ...(str(r.reply, 12000) ? { reply: str(r.reply, 12000) } : {}),
     remember: (Array.isArray(r.remember) ? r.remember : []).map((x) => str(x, 600)).filter(Boolean).slice(0, 10),
     ...(typeof r.waits_seconds === "number" && Number.isFinite(r.waits_seconds) && r.waits_seconds >= 60 ? { waits_seconds: Math.min(Math.round(r.waits_seconds), 7 * 24 * 60 * 60) } : {}),
+    ...(status === "failed" && r.model_unavailable === true ? { model_unavailable: true } : {}),
+    ...(Array.isArray(r.routing) ? { routing: r.routing.map((line) => str(line, 180)).filter(Boolean).slice(-12) } : {}),
   };
   if (status === "failed") return report.reason ? { report, problem: null } : { report: null, problem: "a failed report must say why" };
   if (asks.length === 0) return { report: null, problem: "an ok session report must account for every ask, and it named none" };

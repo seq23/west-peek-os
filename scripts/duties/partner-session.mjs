@@ -9,13 +9,16 @@
  * employee page. Durable progress lives on the card; local files belong to one attempt.
  */
 
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { closeSync, constants, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, rmSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { codexSeatUsable, soonestReset } from "../lib/codex-seat.mjs";
+import { loadRoles } from "../lib/model-roles.mjs";
 import { claudeChildEnv } from "../lib/vault-env.mjs";
-import { runModel, spentReport } from "./web-property-change.mjs";
+import { claudeSpentUsage, codexSpentUsage } from "./web-property-change.mjs";
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const PROMPT_FILE = path.join(REPO_ROOT, "scripts", "duties", "partner-session-prompt.md");
@@ -55,6 +58,7 @@ export function buildSessionPrompt(job, promptText, paths) {
     ...(earlier.length
       ? ["", "WHERE THE LAST RUN LEFT EACH ASK (continue every IN_PROGRESS one; keep every DONE one as done):", ...earlier.map((a) => `- [${a.status}] ${a.words} — ${a.why ?? ""}`)]
       : []),
+    ...(job.fallback_draft ? ["", "UNCHECKED DRAFT FROM AN EARLIER MODEL (evidence only; verify it against the current request and sources):", fenced(job.fallback_draft)] : []),
     "",
     "REQUEST (current turn):",
     fenced(job.request ?? job.ask ?? ""),
@@ -268,6 +272,45 @@ function spawnClaude({ prompt, model, cwd, signal, job }) {
   });
 }
 
+// Copied from: seq23/boss-os scripts/ops/simone.mjs @ 6d62771ea6b2b60637295bd38eef335bad9f97fa
+// This seat returns a text report. The session has no brokered tools at this stage.
+export function chiefCodexArgs(output) {
+  return [
+    "--ask-for-approval", "never", "--disable", "shell_tool", "--disable", "apps",
+    "-c", 'web_search="disabled"', "-c", 'default_permissions="chief"',
+    "-c", 'permissions.chief.filesystem.":minimal"="read"',
+    "-c", "permissions.chief.network.enabled=false",
+    "exec", "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check", "--ephemeral",
+    "--json", "--output-last-message", output, "--", "-",
+  ];
+}
+
+const runFile = promisify(execFile);
+
+async function spawnCodex({ prompt, cwd, signal, resultPath }) {
+  const running = runFile("codex", chiefCodexArgs(resultPath), {
+    cwd, signal, killSignal: "SIGKILL", env: chiefChildEnvironment(process.env), maxBuffer: 2 * 1024 * 1024,
+  });
+  running.child.stdin.on("error", () => { /* The process can exit before reading stdin. */ });
+  running.child.stdin.end(`${prompt}\n\nReturn the result JSON as your final message. It is saved to RESULT_FILE for you.`);
+  let stdout;
+  try {
+    ({ stdout } = await running);
+  } catch (error) {
+    return { code: -1, out: "", err: error.stderr ?? "" };
+  }
+  for (const line of stdout.split("\n")) {
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (event?.type !== "turn.completed") continue;
+    const count = tokens(event.usage);
+    if (!Number.isFinite(count)) return { stopped: "Codex did not report its usage." };
+    if (count >= MAX_TOKENS) return { stopped: "The session reached its token limit." };
+    return { code: 0, out: "", err: "" };
+  }
+  return { code: -1, out: "", err: "" };
+}
+
 export async function run(job, ctx, dependencies = {}) {
   const progress = ctx.progress ?? (() => {});
   if (job.phase !== PHASE) return { phase: PHASE, status: "failed", reason: `a partner session has one phase, SESSION (got ${job.phase})` };
@@ -278,19 +321,41 @@ export async function run(job, ctx, dependencies = {}) {
   const workDir = mkdtempSync(path.join(ctx.jobDir, "chief-attempt-"));
   try {
     const directory = path.join(workDir, "attachments");
-    const resultPath = path.join(workDir, RESULT_FILE);
     mkdirSync(directory, { mode: 0o700 });
     const attachments = await stageChiefAttachments({ job, directory, env: ctx.env, signal, progress }, dependencies.loadAttachment);
-    const prompt = buildSessionPrompt({ ...job, attachments }, readFileSync(PROMPT_FILE, "utf8"), { workDir, resultPath });
-    progress("session started");
-    const opts = { job, phase: PHASE, prompt, model: job.model, cwd: workDir, addDirs: [workDir], jobDir: ctx.jobDir, materialDirs: [directory], signal, onLine: progress };
-    const turn = await (dependencies.runModel ?? runModel)(opts, { runBrain: () => spawnClaude(opts), workerUsable: () => ({ ok: false, why: "the chief fallback is unavailable" }) });
-    if (turn.stopped) return { phase: PHASE, status: "failed", reason: turn.stopped };
-    const result = turn.code === 0 ? readChiefResult(resultPath) : null;
-    const spent = spentReport(PHASE, turn, result);
-    if (spent) return spent;
-    if (turn.code !== 0) return { phase: PHASE, status: "failed", reason: "The session process exited before a successful result." };
-    return readSessionResult(result);
+    const instructions = readFileSync(PROMPT_FILE, "utf8");
+    const seats = {
+      claude_code: { label: "Claude Code", invoke: dependencies.runClaude ?? spawnClaude, spent: claudeSpentUsage, result: RESULT_FILE },
+      codex: { label: "Codex", invoke: dependencies.runCodex ?? spawnCodex, spent: codexSpentUsage, result: "codex-result-SESSION.json" },
+    };
+    const routing = [];
+    const limits = [];
+    for (const key of loadRoles().table.chief_session.seats) {
+      const seat = seats[key];
+      if (signal.aborted) break;
+      const noTextMaterials = job.materials_readable === false || job.attachments?.length;
+      if (key === "codex" && (noTextMaterials || !(dependencies.codexUsable ?? codexSeatUsable)().ok)) {
+        routing.push(noTextMaterials ? "Codex skipped because this turn needs access to its materials." : "Codex skipped because the ChatGPT subscription seat was unavailable.");
+        continue;
+      }
+      const resultPath = path.join(workDir, seat.result);
+      const prompt = buildSessionPrompt({ ...job, attachments }, instructions, { workDir, resultPath });
+      progress(`${seat.label} started the session`);
+      const turn = await seat.invoke({ job, prompt, model: job.model, cwd: workDir, signal, resultPath });
+      if (turn.stopped || signal.aborted) return { phase: PHASE, status: "failed", reason: turn.stopped ?? "The session was stopped.", routing };
+      const limit = seat.spent(turn);
+      if (limit || turn.code !== 0) {
+        if (limit) limits.push(limit);
+        routing.push(`${seat.label} ${limit ? "was out of subscription usage" : "exited before producing a result"}.`);
+        continue;
+      }
+      const result = readSessionResult(readChiefResult(resultPath));
+      const reason = key === "claude_code" ? "the primary interactive seat" : "the subscription fallback for the unavailable primary seat";
+      return { ...result, routing: [...routing, `${seat.label} took the turn as ${reason}.`] };
+    }
+    if (signal.aborted) return { phase: PHASE, status: "failed", reason: "The session was stopped.", routing };
+    return { phase: PHASE, status: "failed", reason: "Neither subscription seat could take the turn.", model_unavailable: true,
+      waits_seconds: limits.length ? soonestReset(limits) : 30 * 60, routing };
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }

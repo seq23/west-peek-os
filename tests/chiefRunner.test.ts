@@ -2,7 +2,8 @@ import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { attachmentUrl, chiefChildEnvironment, chiefClaudeArgs, readChiefRunBudget, run } from "../scripts/duties/partner-session.mjs";
+import { attachmentUrl, chiefChildEnvironment, chiefClaudeArgs, chiefCodexArgs, readChiefRunBudget, run } from "../scripts/duties/partner-session.mjs";
+import { maskPrivateInputs } from "../src/worker/ai/scrub";
 
 describe("chief runner", () => {
   it("limits the live runner to workspace files and drops ambient credentials", () => {
@@ -19,6 +20,8 @@ describe("chief runner", () => {
     });
     expect(chiefChildEnvironment({ PATH: "/bin", HOME: "/tmp/test", GH_TOKEN: "fixture-only",
       SSH_AUTH_SOCK: "/test/auth.sock", CUSTOM_ACCESS_SECRET: "fixture-only" })).toEqual({ PATH: "/bin", HOME: "/tmp/test" });
+    const codex = chiefCodexArgs("/private/chief-fixture/codex-result.json");
+    expect(codex).toEqual(expect.arrayContaining(["--ignore-user-config", "--ephemeral", "shell_tool", "apps", 'web_search="disabled"', "permissions.chief.network.enabled=false"]));
   });
 
   it("only prepares an authenticated attachment request for its exact origin and card", () => {
@@ -65,7 +68,7 @@ describe("chief runner", () => {
       const ready = new Promise<void>((resolve) => { release = resolve; });
       const attempt = (reply: string) => run({ ...job, attachments }, { jobDir }, {
         loadAttachment,
-        runModel: async ({ cwd, prompt }) => {
+        runClaude: async ({ cwd, prompt }) => {
           await writeFile(join(cwd, "result-SESSION.json"), result(reply));
           if (++arrivals === 2) release();
           await ready;
@@ -91,7 +94,7 @@ describe("chief runner", () => {
       const external = join(jobDir, "outside.json");
       await writeFile(external, result("Fixture private content"));
       const attempt = (write: (target: string) => Promise<void>) => run(job, { jobDir }, {
-        runModel: async ({ cwd }) => {
+        runClaude: async ({ cwd }) => {
           await write(join(cwd, "result-SESSION.json"));
           return exit;
         },
@@ -101,5 +104,55 @@ describe("chief runner", () => {
     } finally {
       await rm(jobDir, { recursive: true, force: true });
     }
+  });
+
+  it("hands the original fund turn to the subscribed Codex seat when Claude is out", async () => {
+    const jobDir = await mkdtemp(join(tmpdir(), "chief-fixture-"));
+    const request = "Summarize the term sheet for Larkspur Lantern Holdings.";
+    const calls: string[] = [];
+    try {
+      const outcome = await run({ ...job, request }, { jobDir }, {
+        codexUsable: () => ({ ok: true }),
+        runClaude: async ({ prompt }) => {
+          expect(prompt).toContain(request);
+          calls.push("Claude");
+          return { code: 1, out: "", err: "Usage limit reached" };
+        },
+        runCodex: async ({ prompt, resultPath }) => {
+          expect(prompt).toContain(request);
+          calls.push("Codex");
+          await writeFile(resultPath, result("Prepared a summary."));
+          return exit;
+        },
+      });
+      expect(calls).toEqual(["Claude", "Codex"]);
+      expect(outcome).toMatchObject({ status: "ok", reply: "Prepared a summary.", routing: [expect.stringContaining("Claude Code"), expect.stringContaining("Codex")] });
+    } finally {
+      await rm(jobDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a turn pending when the subscription is unavailable and refuses to call API-key Codex", async () => {
+    const jobDir = await mkdtemp(join(tmpdir(), "chief-fixture-"));
+    try {
+      const outcome = await run(job, { jobDir }, {
+        codexUsable: () => ({ ok: false }),
+        runClaude: async () => ({ code: 1, out: "", err: "" }),
+        runCodex: async () => { throw new Error("Codex must be on a subscription"); },
+      });
+      expect(outcome).toMatchObject({ status: "failed", model_unavailable: true, waits_seconds: 1800 });
+    } finally {
+      await rm(jobDir, { recursive: true, force: true });
+    }
+  });
+
+  it("masks marked deal figures, restores their meaning and leaves everyday text alone", () => {
+    const everyday = "Sort the $25 event tickets and group the last 8 responses.";
+    expect(maskPrivateInputs([everyday], [], true).inputs).toEqual([everyday]);
+    const fund = "Larkspur Lantern Holdings: the term sheet lists a management fee of 1.75% and post-money of $7.5M.";
+    const masked = maskPrivateInputs([fund], ["Larkspur Lantern Holdings"], true);
+    expect(masked.inputs[0]).not.toMatch(/Larkspur|term sheet|management fee|1\.75|7\.5|post-money/i);
+    expect(masked.restore(masked.inputs[0]!)).toBe(fund);
+    expect(maskPrivateInputs(["Larkspur Lantern Holdings put in $7.5M."], ["Larkspur Lantern Holdings"], true).inputs[0]).not.toMatch(/Larkspur|7\.5/);
   });
 });

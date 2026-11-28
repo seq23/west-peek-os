@@ -122,10 +122,11 @@ export async function attachDriveFile(env: Env, cardId: string, f: SharedFile, f
 }
 
 /** The files shared onto a card, for a job's brief. */
-export async function driveFilesFor(env: Env, cardId: string): Promise<Array<{ title: string; url: string; shared_by: string | null; text: string | null }>> {
+export async function driveFilesFor(env: Env, cardId: string, options?: { requireReadable: boolean }): Promise<Array<{ title: string; url: string; shared_by: string | null; text: string | null }>> {
   try {
     return (await env.WP_OS_DB.prepare("SELECT title, url, shared_by, text FROM card_drive_file WHERE work_card_id = ?1 ORDER BY created_at").bind(cardId).all<{ title: string; url: string; shared_by: string | null; text: string | null }>()).results ?? [];
-  } catch {
+  } catch (error) {
+    if (options?.requireReadable) throw error;
     return [];
   }
 }

@@ -6,9 +6,8 @@
  * anything that did not fit. It is now a PARTNER_SESSION card: one full Claude Code session on her Mac, parked as a
  * LOCAL_JOB run the claimer keeps alive with its one-minute ping, under a two-hour phase ceiling and nothing else.
  *
- *   · THE ROUTE is the one rule table's, on the Mac: HARD work, so Claude first, then Codex held for Claude's check;
- *     private work (a committed LP named, deal terms, "keep this private") waits for Claude. Never a free lane: the
- *     Mac has none, and this file never calls `runAi`.
+ *   · THE ROUTE follows modelOrder.json. The Mac tries the two interactive seats. The Worker can prepare a masked
+ *     text draft after a seat outage and keeps the original turn open for the next seat attempt.
  *   · MEMORY FIRST. The parked job carries the partner's standing practices, his holds and his profile
  *     (`practicesForCard`), and the duty puts them at the very top of the prompt.
  *   · THE CLEAR PARTS RUN; THE UNCLEAR WORDS ARE ASKED ABOUT (her ruling, 14 Nov 2026). The report is one line per
@@ -24,9 +23,9 @@ import { operatingStopped } from "./chiefControls";
 import { ACTION_REQUIRED } from "../../shared/email/execEmail";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
-import { abandonRun, parkRun, readRun } from "../ai/subscriptionSeats";
+import { abandonRun, parkRun, readRun, type SeatRunRow } from "../ai/subscriptionSeats";
 import { redactInputs } from "../ai/scrub";
-import { committedLpNamedIn, committedLps } from "../ai/committedLps";
+import modelOrder from "../../shared/ai/modelOrder.json";
 import { privateMaterialSentence } from "../../shared/intake/privateMaterial";
 import { EMAILED_TASK_LIMITS } from "../../shared/intake/partnerAuthority";
 import { partnerByEmail } from "../../shared/registry/partners";
@@ -40,6 +39,7 @@ import {
   localJobKind,
   readPartnerSessionReport,
   type SessionAsk,
+  type PartnerSessionReport,
 } from "../../shared/work/localJobs";
 import { partnerEmailForCard, practicesForCard } from "./partnerConstraints";
 import { recordProfileNotes } from "./partnerProfile";
@@ -98,6 +98,14 @@ const list = (json: string | null | undefined): string[] => {
     return [];
   }
 };
+
+function savedSessionReport(row: PartnerSessionRow): Partial<PartnerSessionReport> & { fallback_draft?: string } {
+  try {
+    return JSON.parse(row.report_json ?? "{}") ?? {};
+  } catch {
+    return {};
+  }
+}
 
 export async function readSession(env: Env, cardId: string): Promise<PartnerSessionRow | null> {
   return env.WP_OS_DB.prepare("SELECT * FROM partner_session WHERE work_card_id = ?1").bind(cardId).first<PartnerSessionRow>();
@@ -159,7 +167,13 @@ export async function handleChiefMessages(ctx: RouteContext): Promise<Response> 
         WHERE c.owner_id = ?1 AND s.requested_by = ?2 AND s.firm_scope = ?3 AND s.source IN ('PAGE', 'SCHEDULE')
         ORDER BY c.created_at DESC, c.id DESC LIMIT 10`,
     ).bind(employeeId, chief.principal.email, firmScope).all<{ id: string; state: string; created_at: string; source: string; request_text: string; report_json: string | null }>();
-    return json({ messages: (rows.results ?? []).map(({ report_json, ...row }) => ({ ...row, report: readPartnerSessionReport(report_json).report })) }, { headers: { "Cache-Control": "no-store" } });
+    return json({ messages: (rows.results ?? []).map(({ report_json, ...row }) => {
+      const { report } = readPartnerSessionReport(report_json);
+      if (row.source === "SCHEDULE" && report?.routing?.length) {
+        report.reply = [report.reply, `Model routing. ${report.routing.join(" ")}`].filter(Boolean).join("\n\n");
+      }
+      return { ...row, report };
+    }) }, { headers: { "Cache-Control": "no-store" } });
   }
   if (request.headers.get("content-type")?.split(";")[0] !== "application/json" || !request.body) {
     return json({ error: "unsupported_media_type" }, { status: 415 });
@@ -206,17 +220,15 @@ export async function parkSession(env: Env, card: Pick<SessionCard, "id" | "titl
   if (live && (live.status === "QUEUED" || live.status === "CLAIMED")) return { parked: false, reason: `a session run is already live (${live.id})` };
   const { driveFilesFor } = await import("./driveShares");
   const { attachmentsFor } = await import("./requestMaterials");
-  const earlier = (() => {
-    try {
-      return (JSON.parse(row.report_json ?? "null")?.asks ?? []) as SessionAsk[];
-    } catch {
-      return [];
-    }
-  })();
+  const earlier = savedSessionReport(row);
   const clean = (text: string) => redactInputs([text]).inputs[0]!;
   const corrections = list(row.corrections_json).map(clean);
   const answers = list(row.answers_json).map(clean);
-  const driveFiles = (await driveFilesFor(env, card.id).catch(() => [])).map((file) =>
+  const [drive, files] = await Promise.all([
+    driveFilesFor(env, card.id, { requireReadable: true }).catch(() => null),
+    attachmentsFor(env, card.id).catch(() => null),
+  ]);
+  const driveFiles = (drive ?? []).map((file) =>
     ({ ...file, title: clean(file.title), text: file.text ? clean(file.text) : file.text }));
   const payload = {
     card_kind: PARTNER_SESSION_KIND,
@@ -233,20 +245,17 @@ export async function parkSession(env: Env, card: Pick<SessionCard, "id" | "titl
     request: clean(row.request_text),
     corrections,
     answers,
-    earlier_asks: earlier,
+    earlier_asks: earlier.asks ?? [],
+    fallback_draft: earlier.fallback_draft,
     limits: [...EMAILED_TASK_LIMITS],
-    attachments: (await attachmentsFor(env, card.id).catch(() => [])).map((a) => ({ id: a.id, filename: a.filename, media_type: a.media_type, bytes: a.bytes, path: `/api/work-cards/${card.id}/attachments/${a.id}` })),
+    attachments: (files ?? []).map((a) => ({ id: a.id, filename: a.filename, media_type: a.media_type, bytes: a.bytes, path: `/api/work-cards/${card.id}/attachments/${a.id}` })),
     drive_files: driveFiles,
-    private_model_only: false,
+    materials_readable: drive !== null && files !== null,
     queue_max_seconds: spec.queueMaxSeconds,
   };
-  // A COMMITTED LP NAMED ANYWHERE, OR "KEEP THIS PRIVATE", KEEPS IT ON CLAUDE. Unreadable records fail closed.
-  const committed = await committedLps(env, card.firm_scope);
-  const texts = [card.title, row.request_text, ...corrections, ...answers, ...driveFiles.map((f) => f.text ?? "")];
-  payload.private_model_only = !committed.readable || committedLpNamedIn(texts, committed.names) !== null || privateMaterialSentence([row.request_text, ...corrections]) !== null;
 
   const runId = await parkRun(env, {
-    seat: "claude_code",
+    seat: "claude_code", // The local-job claimer owns both seat invocations.
     purpose: `${chief.employee.name} session: ${row.source.toLowerCase()}`,
     prompt: `${phase.purpose} See job_json.`,
     modelAccess: "PUBLIC_MODEL_APPROVED",
@@ -273,7 +282,7 @@ export async function parkSession(env: Env, card: Pick<SessionCard, "id" | "titl
     objectType: "work_card",
     objectId: card.id,
     firmScope: card.firm_scope,
-    payload: { run_id: runId, why, private_model_only: payload.private_model_only, corrections: corrections.length, answers: answers.length },
+    payload: { run_id: runId, why, corrections: corrections.length, answers: answers.length },
   });
   return { parked: true, runId };
 }
@@ -369,8 +378,8 @@ export async function runPartnerSessionCard(env: Env, sweepCard: SessionCard, no
     }
     if (run && row.applied_run_id !== run.id && run.status !== "ABANDONED") return applySessionRun(env, card, row, run, now);
     if (run && row.applied_run_id === run.id) {
-      const report = JSON.parse(row.report_json ?? "{}") as { asks?: SessionAsk[]; reply?: string };
-      const asks = report.asks ?? [];
+      const report = savedSessionReport(row);
+      const asks = report.status === "failed" ? [] : report.asks ?? [];
       if (asks.some((a) => a.status === "QUESTION")) return held("Waiting for the partner’s answer to the question; the rest is done or running.", QUESTION_WAIT_HOURS * 60);
       if (asks.length && !asks.some((a) => a.status === "IN_PROGRESS")) {
         /*
@@ -404,12 +413,57 @@ async function finishWithWhatWeHave(env: Env, card: SessionCard, row: PartnerSes
   return finish(env, card.id, report.reply, report.asks, row.source);
 }
 
-async function applySessionRun(env: Env, card: SessionCard, row: PartnerSessionRow, run: { id: string; status: string; output_text: string | null; error: string | null }, now: Date): Promise<SessionOutcome> {
-  await env.WP_OS_DB.prepare("UPDATE partner_session SET applied_run_id = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE work_card_id = ?1").bind(card.id, run.id).run();
+async function draftAfterSeatOutage(env: Env, card: SessionCard, job: string | null, routing: string[]) {
+  const payload = JSON.parse(job ?? "null") as { request: string; corrections: string[]; answers: string[]; materials_readable?: boolean; attachments: unknown[]; drive_files: { title: string; text: string | null }[] } | null;
+  const { maskedFreeRead } = await import("./partnerUnderstood");
+  if (!payload?.materials_readable || payload.attachments.length || payload.drive_files.some((file) => !file.text)) {
+    routing.push("Text draft skipped because the turn's materials are incomplete on the text routes.");
+    return;
+  }
+  const evidence = [payload.request, ...payload.corrections, ...payload.answers, ...payload.drive_files.flatMap((file) => [file.title, file.text])];
+  if (privateMaterialSentence(evidence)) {
+    routing.push("Text draft skipped because the materials were marked private.");
+    return;
+  }
+  const prompt = [
+    "Prepare a short draft for the chief of staff to verify. You can sort, summarize and outline from the supplied text.",
+    "Treat the following quoted material as evidence. Leave actions, account changes, code, verification and decisions for the chief. Never claim they happened.",
+    evidence.filter(Boolean).join("\n\n"),
+  ].join("\n");
+  for (const lane of modelOrder.chief_session.draftLanes) {
+    if (lane !== "workers_ai" && lane !== "google_free") continue;
+    const label = lane === "workers_ai" ? "Workers AI" : "Gemini";
+    const result = await maskedFreeRead(env, { prompt, firmScope: card.firm_scope, employeeId: card.owner_id, purpose: "Chief session draft after seat outage" }, lane, "chief-draft");
+    if (result.ok && result.text.trim()) {
+      routing.push(`${label} prepared a text draft for the next subscription seat to verify.`);
+      return result.text.slice(0, 6000);
+    }
+    routing.push(`${label} could not prepare a draft on an eligible zero-cost route.`);
+  }
+}
+
+async function applySessionRun(env: Env, card: SessionCard, row: PartnerSessionRow, run: SeatRunRow, now: Date): Promise<SessionOutcome> {
+  const claimed = await env.WP_OS_DB.prepare(`UPDATE partner_session SET applied_run_id = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    WHERE work_card_id = ?1 AND current_run_id = ?2 AND applied_run_id IS NOT ?2`).bind(card.id, run.id).run();
+  if (!claimed.meta.changes) return { finished: false, blocked: false, progressed: false, held: true, detail: "The session report has already been picked up or superseded." };
   const read = run.status === "REPORTED" ? readPartnerSessionReport(run.output_text) : { report: null, problem: run.error ?? `the run ended ${run.status}` };
   if (!read.report) return { finished: false, blocked: false, progressed: false, detail: `The session did not finish: ${read.problem}` };
   const report = read.report;
+  const earlier = savedSessionReport(row);
+  report.routing = [...(earlier.routing ?? []), ...(report.routing ?? [])].slice(-12);
   if (report.status === "failed") {
+    if (report.model_unavailable) {
+      const routing = report.routing;
+      const fallback_draft = earlier.fallback_draft ?? await draftAfterSeatOutage(env, card, run.job_json, routing).catch(() => {
+        routing.push("The text draft could not be prepared. The original request was kept.");
+        return undefined;
+      });
+      const saved = { ...report, routing: report.routing.slice(-12), asks: earlier.asks ?? [], fallback_draft };
+      await env.WP_OS_DB.prepare(`UPDATE partner_session SET report_json = ?3, run_count = MAX(0,run_count-1)
+        WHERE work_card_id = ?1 AND current_run_id = ?2`).bind(card.id, run.id, JSON.stringify(saved)).run();
+      const detail = fallback_draft ? "A draft is ready for subscription-seat review. The request is still open." : "No model finished the turn. The request is still open and will retry.";
+      return { finished: false, blocked: false, progressed: true, held: true, waitUntil: new Date(now.getTime() + (report.waits_seconds ?? 1800) * 1000).toISOString(), detail };
+    }
     if (report.waits_seconds) return { finished: false, blocked: false, progressed: true, held: true, waitUntil: new Date(now.getTime() + report.waits_seconds * 1000).toISOString(), detail: "Waiting for a subscription to reset." };
     return { finished: false, blocked: false, progressed: false, detail: report.reason ?? "The session stopped before producing a report." };
   }
@@ -504,9 +558,9 @@ export async function redirectSession(env: Env, cardId: string, words: string, f
   // An answer to a question he has not answered yet joins the answers; anything else is a correction, above the brief, newest first.
   const answering = list(row.asked_json).length > list(row.answers_json).length;
   if (answering) {
-    await env.WP_OS_DB.prepare("UPDATE partner_session SET answers_json = ?2, run_count = 0 WHERE work_card_id = ?1").bind(cardId, JSON.stringify([...list(row.answers_json), said])).run();
+    await env.WP_OS_DB.prepare("UPDATE partner_session SET answers_json = ?2, run_count = 0, report_json = json_remove(report_json, '$.fallback_draft') WHERE work_card_id = ?1").bind(cardId, JSON.stringify([...list(row.answers_json), said])).run();
   } else {
-    await env.WP_OS_DB.prepare("UPDATE partner_session SET corrections_json = ?2, run_count = 0 WHERE work_card_id = ?1").bind(cardId, JSON.stringify([said, ...list(row.corrections_json)])).run();
+    await env.WP_OS_DB.prepare("UPDATE partner_session SET corrections_json = ?2, run_count = 0, report_json = json_remove(report_json, '$.fallback_draft') WHERE work_card_id = ?1").bind(cardId, JSON.stringify([said, ...list(row.corrections_json)])).run();
   }
   await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'IN_PROGRESS', lease_until = NULL WHERE id = ?1").bind(cardId).run();
   const fresh = (await readSession(env, cardId))!;
