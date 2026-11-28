@@ -1680,10 +1680,10 @@ export async function run(job, ctx) {
     // 28 Nov 2026: refused sections get ONE turn to be written again (`withSelfReviewFixed`); the gate below is unchanged.
     const repaired = await withSelfReviewFixed(result, async (note) => {
       rmSync(resultPath, { force: true });
-      const turn = await runModel({ job, prompt: `${prompt}\n\n${note}`, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
-      finishIfCodex(turn, { phase, resultPath, worktree: names.worktree, branch: names.branch, jobDir, progress });
-      writeFileSync(path.join(jobDir, `claude-${phase}-selfreview.out`), `${turn.out}\n--- stderr ---\n${turn.err}`);
-      cost = (cost ?? 0) + (costFrom(turn.out) ?? 0);
+      const claude = await runModel({ job, prompt: `${prompt}\n\n${note}`, model: job.model, cwd: names.worktree, addDirs: [jobDir, packageDir].filter(existsSync), jobDir, materialDirs: [jobDir, packageDir], signal: ctx.signal, onLine: progress, phase });
+      finishIfCodex(claude, { phase, resultPath, worktree: names.worktree, branch: names.branch, jobDir, progress });
+      writeFileSync(path.join(jobDir, `claude-${phase}-selfreview.out`), `${claude.out}\n--- stderr ---\n${claude.err}`);
+      cost = (cost ?? 0) + (costFrom(claude.out) ?? 0);
       return readResult(existsSync(resultPath) ? readFileSync(resultPath, "utf8") : "", phase).result;
     });
     if (repaired.line) {
