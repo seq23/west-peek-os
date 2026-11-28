@@ -30,7 +30,7 @@ import { EMAILED_TASK_LIMITS } from "../../shared/intake/partnerAuthority";
 import { partnerByEmail } from "../../shared/registry/partners";
 import { chiefSessionFor } from "../../shared/work/chiefOfStaff";
 import { personaPrompt } from "../../shared/registry/aiEmployeePersonas";
-import { PARTNER_ANSWER_MAX } from "../../shared/work/blocks";
+import { BLOCK_PROVIDERS, PARTNER_ANSWER_MAX, type BlockReason } from "../../shared/work/blocks";
 import {
   LOCAL_JOB_RUN_KIND,
   PARTNER_SESSION_KIND,
@@ -45,6 +45,7 @@ import { alreadyTold, replyToRequester } from "./requestReply";
 import type { FirmUserIdentity } from "../auth";
 import { json, type RouteContext } from "../router";
 import { createWorkCardInternal, WorkCardError } from "./workCards";
+import { blockCard } from "./blocks";
 
 /** A session is parked again at most this many times before it reports what it has (a loop is not work). */
 export const MAX_SESSION_RUNS = 6;
@@ -348,7 +349,7 @@ export async function runPartnerSessionCard(env: Env, sweepCard: SessionCard, no
     row = (await readSession(env, card.id))!;
   }
   if (chiefSessionFor(card.owner_id)?.principal.email !== row.requested_by) {
-    return stopSession(env, card.id, "This session needs a verified request from this chief’s partner.");
+    return stopSession(env, card, "the_brief_is_missing", "Open the session from the chief’s employee page or from their partner’s verified email.");
   }
   const held = (detail: string, minutes = 6): SessionOutcome => ({ finished: false, blocked: false, progressed: true, held: true, waitUntil: new Date(now.getTime() + minutes * 60_000).toISOString(), detail });
 
@@ -390,7 +391,7 @@ async function finishWithWhatWeHave(env: Env, card: SessionCard, row: PartnerSes
   } catch {
     report = {};
   }
-  if (!report.asks?.some((ask) => ask.status === "DONE")) return stopSession(env, card.id, `Stopped: ${why}.`);
+  if (!report.asks?.some((ask) => ask.status === "DONE")) return stopSession(env, card, "stopped_part_way", `Stopped: ${why}.`);
   return finish(env, card.id, report.reply, report.asks, row.source);
 }
 
@@ -435,15 +436,18 @@ async function applySessionRun(env: Env, card: SessionCard, row: PartnerSessionR
     return { finished: false, blocked: false, progressed: true, held: true, waitUntil: new Date(now.getTime() + QUESTION_WAIT_HOURS * 3600_000).toISOString(), detail: report.asks.map(askLine).join("\n") };
   }
   if (!report.asks.some((ask) => ask.status === "DONE")) {
-    return stopSession(env, card.id, row.source === "EMAIL" ? report.asks.map(askLine).join("\n") : "Read the session report for what is still open.");
+    return stopSession(env, card, "nothing_good_enough_to_send", row.source === "EMAIL" ? report.asks.map(askLine).join("\n") : "Read the session report for what is still open.");
   }
   return finish(env, card.id, report.reply, report.asks, row.source);
 }
 
-async function stopSession(env: Env, cardId: string, detail: string): Promise<SessionOutcome> {
-  await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'BLOCKED', next_action = ?2 WHERE id = ?1")
-    .bind(cardId, detail.slice(0, 900)).run();
-  return { finished: false, blocked: true, progressed: false, detail };
+async function stopSession(env: Env, card: SessionCard, reason: BlockReason, detail: string): Promise<SessionOutcome> {
+  const chief = chiefSessionFor(card.owner_id);
+  const who = BLOCK_PROVIDERS.find((provider) => provider === chief?.principal.firstName.toUpperCase());
+  const description = await blockCard(env, card, {
+    reason, detail, who, trying: card.title, employee: chief?.employee.name ?? "Your chief of staff",
+  });
+  return { finished: false, blocked: true, progressed: false, detail: description };
 }
 
 /**

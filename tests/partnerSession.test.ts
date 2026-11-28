@@ -75,6 +75,15 @@ describe("step 2 · the email becomes a working session", () => {
 });
 
 describe("step 3 · no stopwatch", () => {
+  it("records a shared block and never queues a session assigned to the wrong chief", async () => {
+    const id = await emailed("Office request", "Draft an outline from the attached material.");
+    await env.WP_OS_DB.prepare("UPDATE work_card SET owner_id = 'aie_wren' WHERE id = ?1").bind(id).run();
+    expect(await runPartnerSessionCard(env, await card(id))).toMatchObject({ finished: false, blocked: true });
+    expect(await runs(id)).toHaveLength(0);
+    const blocked = await env.WP_OS_DB.prepare("SELECT state, block_reason FROM work_card WHERE id = ?1").bind(id).first();
+    expect(blocked).toEqual({ state: "BLOCKED", block_reason: "the_brief_is_missing" });
+  });
+
   it("parking a session makes ONE LOCAL_JOB run under the two-hour ceiling, with no deadline and no router call", async () => {
     const id = await emailed("Research", "Find three Memphis angels who back consumer brands.");
     routerCalls.length = 0;
