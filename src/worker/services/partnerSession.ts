@@ -46,6 +46,7 @@ import type { FirmUserIdentity } from "../auth";
 import { json, type RouteContext } from "../router";
 import { createWorkCardInternal, WorkCardError } from "./workCards";
 import { blockCard } from "./blocks";
+import { actorFromIdentity, HOME_FIRM_SCOPE } from "./authorize";
 
 /** A session is parked again at most this many times before it reports what it has (a loop is not work). */
 export const MAX_SESSION_RUNS = 6;
@@ -144,9 +145,9 @@ export async function handleChiefMessages(ctx: RouteContext): Promise<Response> 
   const { identity, env, request } = ctx;
   const employeeId = ctx.params.id!;
   const chief = chiefSessionFor(employeeId);
-  const firmScope = "west-peek";
+  const firmScope = HOME_FIRM_SCOPE;
   if (!chief || !identity || chief.principal.firmUserId !== identity.id || !identity.roles.includes("MANAGING_PARTNER") ||
-      !identity.authorityScopes.some((scope) => scope.scopeKey === "firm_scope" && scope.scopeValue === firmScope)) {
+      !actorFromIdentity(identity).firmScopes.includes(firmScope)) {
     return json({ error: "not_found" }, { status: 404 });
   }
   if (request.method === "GET") {

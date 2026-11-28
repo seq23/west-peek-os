@@ -84,6 +84,22 @@ describe("step 3 · no stopwatch", () => {
     expect(blocked).toEqual({ state: "BLOCKED", block_reason: "the_brief_is_missing" });
   });
 
+  it("accepts the partner's page message with default firm scope and refuses the other partner", async () => {
+    const path = "https://test.local/api/workforce/employees/aie_walker/messages";
+    const message = "Prepare an outline for tomorrow.";
+    const call = (email: string, method: "GET" | "POST") => handleRequest(new Request(path, {
+      method, headers: { "x-wpos-dev-user": email, "content-type": "application/json" },
+      body: method === "POST" ? JSON.stringify({ message }) : undefined,
+    }), env);
+    const otherPartner = PARTNERS.find((partner) => partner.email !== SCOOTER)!;
+    const accepted = await call(SCOOTER, "POST");
+    expect(accepted.status).toBe(202);
+    const { id } = await accepted.json() as { id: string };
+    expect(await (await call(SCOOTER, "GET")).json()).toMatchObject({ messages: [{ id, source: "PAGE", request_text: message }] });
+    expect((await call(otherPartner.email, "GET")).status).toBe(404);
+    expect((await call(otherPartner.email, "POST")).status).toBe(404);
+  });
+
   it("parking a session makes ONE LOCAL_JOB run under the two-hour ceiling, with no deadline and no router call", async () => {
     const id = await emailed("Research", "Find three Memphis angels who back consumer brands.");
     routerCalls.length = 0;
