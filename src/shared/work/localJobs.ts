@@ -249,6 +249,8 @@ export interface LocalJobPayload {
   last_refusal?: string | null;
   /** 18 Nov 2026: a BUILD hears the other open website jobs on its repo, with their PR and branch, so "ship it together" can be built. */
   other_open_jobs?: Array<{ card_id: string; title: string; pr_url: string | null; branch: string | null }>;
+  /** #611 (28 Nov 2026), BUILD: the card's missing list as the partner was last told it, so the builder names what it filled word for word. */
+  missing_before?: MissingMaterial[];
   /**
    * 23 Sep 2026: ONE JOB OVER SEVERAL REPOS — one entry per repo (migration 0236), in order. Absent
    * (or fewer than two) for a single-repo job, which runs exactly as before. PLAN writes one plan
@@ -417,6 +419,11 @@ export interface LocalJobReport {
    * "nothing is missing any more".
    */
   missing_materials?: MissingMaterial[];
+  /**
+   * #611 (28 Nov 2026), BUILD: what the builder says THIS build filled in, each item worded as `missing_before`
+   * and naming the file or the partner's words it came from. The Worker checks each claim; nothing else is "filled".
+   */
+  filled_materials?: Array<{ item: string; from: string }>;
   /** 15 Nov 2026: placeholder text the built pages still show ("Photo to come"), read by the Mac from the page text. */
   visible_placeholders?: string[];
   /** 0237, PLAN: the DRIVE_MANIFEST paths the build will use; BUILD fetches them. */
@@ -487,6 +494,15 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
     ...(str(r.materials) ? { materials: str(r.materials)!.slice(0, 200) } : {}),
     ...(Array.isArray(r.parts) ? { parts: readPartReports(r.parts) } : {}),
     ...(Array.isArray(r.missing_materials) ? { missing_materials: readMissingMaterials(r.missing_materials) } : {}),
+    ...(Array.isArray(r.filled_materials)
+      ? {
+          filled_materials: r.filled_materials
+            .filter((m): m is Record<string, unknown> => Boolean(m) && typeof m === "object")
+            .map((m) => ({ item: String(m.item ?? "").trim().slice(0, 300), from: String(m.from ?? "").trim().slice(0, 600) }))
+            .filter((m) => m.item && m.from)
+            .slice(0, 50),
+        }
+      : {}),
     ...(Array.isArray(r.visible_placeholders) ? { visible_placeholders: strs(r.visible_placeholders).slice(0, 50) } : {}),
     ...(Array.isArray(r.assets) ? { assets: strs(r.assets) } : {}),
     ...(Array.isArray(r.carried_jobs) ? { carried_jobs: strs(r.carried_jobs).filter((id) => /^wc_[A-Za-z0-9-]+$/.test(id)).slice(0, 5) } : {}),
