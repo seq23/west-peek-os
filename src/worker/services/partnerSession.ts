@@ -15,7 +15,7 @@
  *     ask. A QUESTION ask sends ONE email naming the unclear words with two or three options, and the card is not
  *     blocked: any IN_PROGRESS ask is parked again at once, so the clear work keeps going while he answers.
  *   · A CORRECTION REDIRECTS RUNNING WORK. His reply on the thread abandons the live run (the claimer stops it on its
- *     next ping; a report from an abandoned run is refused) and parks exactly one new run in the same working folder
+ *     next ping; a report from an abandoned run is refused) and parks exactly one new run on the same card
  *     with his words above the brief, and he hears "Changed course: …".
  *   · OUTSIDERS STAY GATED. Every email here goes through `replyToRequester`, which sends to the two partner addresses
  *     only; the session itself has no tool that emails anyone.
@@ -227,7 +227,7 @@ export async function parkSession(env: Env, card: Pick<SessionCard, "id" | "titl
     script: spec.script,
     card: { id: card.id, title: clean(card.title), requested_by: row.requested_by },
     // MEMORY FIRST (step 6): the standing practices, his holds and his profile, read fresh for every run.
-    memory: clean(await practicesForCard(env, card.id, card.firm_scope, chief.principal.email)),
+    memory: await practicesForCard(env, card.id, card.firm_scope, chief.principal.email).then(clean),
     employee: { name: chief.employee.name, persona: personaPrompt(chief.employee.name, chief.employee.role) },
     source: row.source,
     request: clean(row.request_text),
@@ -482,7 +482,7 @@ export function sessionAsksJson(asks: readonly SessionAsk[]): string {
 
 /**
  * HIS REPLY REDIRECTS THE SESSION (step 5). A correction while a run is live abandons it with his words as the reason
- * (the claimer's next ping is refused and it stops the job) and parks exactly one new run in the same working folder,
+ * (the claimer's next ping is refused and it stops the job) and parks exactly one new run on the same card,
  * his words above the brief, and he hears "Changed course: …". A reply while no run is live (his answer to a
  * question he has not answered) is kept as an answer and restarts the session with it, without a "Changed course". Returns what happened, or null when the card is not a live session.
  */

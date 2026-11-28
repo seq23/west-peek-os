@@ -86,7 +86,8 @@ The coverage check applies to mail only. The account dispatcher will consume the
 check when it gains account tools.
 
 The private chief runner enables only file tools and accepts attachment downloads
-from the exact OS origin and assigned card. The run's role, local deadline and CLI
+from the exact OS origin and assigned card. Each attempt uses its own temporary
+files and reads its attachments by ID. The run's role, local deadline and CLI
 usage limits come from the runner. The US Central time zone is used for partner-facing
 reports.
 

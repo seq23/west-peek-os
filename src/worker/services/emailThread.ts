@@ -631,7 +631,7 @@ export async function steerFromReply(
     /*
      * A REPLY ON A LIVE PARTNER SESSION REDIRECTS IT (14 Nov 2026). From the partner who asked: his words are a
      * correction (or the answer to its question). The live run is abandoned with his words as the reason, exactly one
-     * new run is parked in the same working folder with them above the brief, and he hears "Changed course: …".
+     * new run is parked on the same card with those words above the brief, and he hears "Changed course: …".
      * Read before the build door: "no, make it a one-pager instead" steers this session, it does not open a new job.
      */
     const sessionReply =
