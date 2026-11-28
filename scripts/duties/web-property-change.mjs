@@ -656,16 +656,36 @@ export const REVIEW_ROUNDS = 2;
 export const FIRST_RUN_SCRIPT = "first-run";
 export const FIRST_RUN_SENTINEL = "FIRST_RUN OK";
 
-/** The reviewer's file: `{ findings: [{ lens, finding, blocking }] }`. Unreadable → null (the caller names the stop). */
+/**
+ * The reviewer's file: `{ findings: [{ lens, finding, blocking }], holds: [{ item, check, held, by, why }] }`. Unreadable
+ * → null (the caller names the stop). `holds` (28 Nov 2026, wc_9f7312e4) is the review's ruling on every unmet
+ * done-when check in the builder's result: the Worker's v1.0 bar reads it instead of keywords (`everyAsk.ts`).
+ */
+export const HOLD_BY = ["partner", "landing", "another_job", "runbook"];
 export function readReview(text) {
   try {
     const j = JSON.parse(String(text ?? ""));
     if (!j || typeof j !== "object" || !Array.isArray(j.findings)) return null;
     const findings = j.findings.filter((f) => f && typeof f === "object" && String(f.finding ?? "").trim()).map((f) => ({ lens: String(f.lens ?? "").slice(0, 20), finding: String(f.finding).slice(0, 600), blocking: f.blocking === true }));
-    return { findings, summary: String(j.summary ?? "").slice(0, 600) };
+    const holds = (Array.isArray(j.holds) ? j.holds : [])
+      .filter((h) => h && typeof h === "object" && String(h.item ?? "").trim() && String(h.check ?? "").trim())
+      .slice(0, 60)
+      .map((h) => {
+        const by = String(h.by ?? "").trim();
+        const why = String(h.why ?? "").trim().slice(0, 500);
+        // Held only with a known reason and a why the partner can read; anything else is a ruling of NOT held.
+        const held = h.held === true && HOLD_BY.includes(by) && Boolean(why);
+        return { item: String(h.item).trim().slice(0, 200), check: String(h.check).trim().slice(0, 200), held, ...(held ? { by } : {}), ...(why ? { why } : {}) };
+      });
+    return { findings, holds, summary: String(j.summary ?? "").slice(0, 600) };
   } catch {
     return null;
   }
+}
+
+/** A ruling of NOT held is unfinished work the builder can do here: it goes back to the builder like any blocking finding. */
+export function notHeldFindings(holds) {
+  return (holds ?? []).filter((h) => h.held !== true).map((h) => ({ lens: "pm", finding: `Not finished, and nothing outside this job holds it: "${h.item}" — ${h.check}${h.why ? ` (${h.why})` : ""}`.slice(0, 600), blocking: true }));
 }
 
 /** One review turn: a fresh context, its own phase on the rule table (HARD; private stays private). */
@@ -694,9 +714,10 @@ export async function reviewAndFix({ review, rebuild, rounds = REVIEW_ROUNDS, ph
     const r = await review(round);
     if (r.report) return { report: r.report };
     if (!r.verdict) return { report: { phase, status: "failed", reason: "NAMED STOP [REVIEW_UNREADABLE] the fresh-eyes review wrote no readable review file; the build is not shown to the partner unreviewed." } };
-    const blocking = r.verdict.findings.filter((f) => f.blocking);
-    const notes = r.verdict.findings.length - blocking.length;
-    if (blocking.length === 0) return { line: `reviewed with fresh eyes (engineer, UX, PM): ${fixed} fixed${notes ? `, ${notes} note${notes === 1 ? "" : "s"}` : ""}${r.verdict.summary ? ` — ${r.verdict.summary}` : ""}` };
+    const blocking = [...r.verdict.findings.filter((f) => f.blocking), ...notHeldFindings(r.verdict.holds)];
+    const notes = r.verdict.findings.length - r.verdict.findings.filter((f) => f.blocking).length;
+    // The holds of the review that PASSED, against the result it reviewed, are the ones the Worker reads.
+    if (blocking.length === 0) return { line: `reviewed with fresh eyes (engineer, UX, PM): ${fixed} fixed${notes ? `, ${notes} note${notes === 1 ? "" : "s"}` : ""}${r.verdict.summary ? ` — ${r.verdict.summary}` : ""}`, holds: r.verdict.holds ?? [] };
     if (round >= rounds) {
       return { report: { phase, status: "failed", reason: `NAMED STOP [REVIEW_NOT_MET] after ${rounds} fix round${rounds === 1 ? "" : "s"} the review still finds: ${blocking.map((f) => `${f.lens ? `${f.lens}: ` : ""}${f.finding}`).join("; ").slice(0, 1200)}` } };
     }
@@ -835,7 +856,8 @@ async function reviewBuild({ job, base, result, names, jobDir, packageDir, resul
       return {};
     },
   });
-  return out.report ? out : { line: out.line, result: latest };
+  // The review's rulings overwrite anything the builder wrote under that name: only the review rules on holds.
+  return out.report ? out : { line: out.line, result: { ...latest, review_holds: out.holds ?? [] } };
 }
 
 function appendRouteLog(opts, route) {
@@ -1756,6 +1778,7 @@ export async function run(job, ctx) {
     result = reviewed.result;
     if (Array.isArray(result.items)) carried.items = itemsOf(result);
     if (Array.isArray(result.answers)) carried.answers = answersOf(result);
+    carried.review_holds = reviewHoldsOf(result);
     const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress, registryAllowance(book, secrets), { branch: names.branch });
     // THE SCRIPT OBSERVES THE PR AND ITS CHECKS. The model's pr_url is a claim; gh is the fact.
     let pr;
@@ -2367,6 +2390,11 @@ export function itemsOf(result) {
  * The build answered all six, in `proof`, which no partner email shows; the preview marked each "Done" and he got no
  * answer. Each answer is its own `{ question, answer }` row; the preview leads "What you asked, answered" with them.
  */
+/** The review's rulings as the runner wrote them onto the reviewed result (`reviewBuild`); never the builder's own. */
+export function reviewHoldsOf(result) {
+  return (Array.isArray(result?.review_holds) ? result.review_holds : []).slice(0, 60).map((h) => ({ item: String(h?.item ?? "").slice(0, 200), check: String(h?.check ?? "").slice(0, 200), held: h?.held === true, ...(h?.by ? { by: String(h.by).slice(0, 20) } : {}), ...(h?.why ? { why: String(h.why).slice(0, 500) } : {}) }));
+}
+
 export function answersOf(result) {
   return (Array.isArray(result?.answers) ? result.answers : [])
     .filter((a) => a && typeof a === "object" && String(a.question ?? "").trim() && String(a.answer ?? "").trim())
@@ -2536,6 +2564,7 @@ async function runSeveral(job, ctx) {
     const reports = [];
     const items = [];
     const answers = [];
+    const reviewHolds = [];
     const stillMissing = [];
     const filledNow = [];
     let anyRebuilt = false;
@@ -2572,6 +2601,7 @@ async function runSeveral(job, ctx) {
         result = reviewed.result;
         items.push(...itemsOf(result).map((i) => ({ ...i, item: `${p.repo}: ${i.item}`.slice(0, 200) })));
         answers.push(...answersOf(result));
+        reviewHolds.push(...reviewHoldsOf(result).map((h) => ({ ...h, item: `${p.repo}: ${h.item}`.slice(0, 200) })));
         const configLines = await applyPagesEnv(result.pages_env, ctx.env, progress, registryAllowance(p.book, p.secrets), { branch: p.names.branch });
         proof = [String(result.proof ?? "").slice(0, 6000), reviewed.line, ...configLines].filter(Boolean).join("\n");
         anyRebuilt = true;
@@ -2604,7 +2634,7 @@ async function runSeveral(job, ctx) {
       proof: reports.map((r) => `── ${r.repo} ──\n${r.proof ?? "(re-observed; built in an earlier run)"}`).join("\n\n"),
       parts: reports,
       // What is still missing after THIS rebuild, across every repo rebuilt (absent when none was).
-      ...(anyRebuilt ? { missing_materials: stillMissing, filled_materials: filledNow, items, answers } : {}),
+      ...(anyRebuilt ? { missing_materials: stillMissing, filled_materials: filledNow, items, answers, review_holds: reviewHolds } : {}),
       reason: red.length ? `not every PR is green: ${red.map((r) => `${r.repo} ${r.check_state} (${r.pr_url})`).join(", ")}` : undefined,
     };
   }

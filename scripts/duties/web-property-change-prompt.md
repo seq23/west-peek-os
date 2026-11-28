@@ -147,12 +147,14 @@ built ask with no `done_when` is refused by the OS and planned again.
 
 **`items` on every BUILD.** The BUILD result reports each ask against its checks:
 `{ "item": "…", "state": "done", "done_when": [{ "check": "…", "met": true, "note": "how you proved it" }] }`.
-A check not met is refused by the OS, and the build is run again, unless what holds it is something only the
-partner can supply: `"blocked_by": "missing_secret"` (with the key in `missing_secrets`), `"missing_material"`
-(with the file in `missing_materials`), `"partner_dated"` (work they dated themselves), or `"after_land"` (a check
-only the merge can meet, such as the live links: LAND curls them and the DONE email lists them). A check the partner kept
-for himself ("We will walk the rules before any money view ships", "I approve each step") is reported `"met": false`
-with his exact words quoted in its `note`; the OS accepts it as his, not as unfinished work.
+A check not met is refused by the OS, and the build is run again, unless a list proves what holds it
+(`"blocked_by": "missing_secret"` with the key in `missing_secrets`, `"missing_material"` with the file in
+`missing_materials`, `"partner_dated"` for work they dated themselves) or the fresh-eyes review rules it held. Report
+every check honestly, `"met": false` when it is not met, with a `note` saying what holds it: a step the partner kept for
+himself ("We will walk the rules before any money view ships", "I approve each step"), a decision you put to him with
+your recommendation, a check only the merge can meet (the live links: LAND curls them), work in another repo, a
+RUNBOOK never-rule. The review, not you, decides whether that holds it; anything you could have built here is sent
+back to you.
 
 **A first-run script on every BUILD.** Leave (or update) an npm script named `first-run` in the repo's
 package.json, and name it in the RUNBOOK. It plays the partner's first session on the preview URL it is given
@@ -440,11 +442,29 @@ through three lenses:
   dropped, narrowed or deferred; every `done_when` check honestly met; no placeholder the partner did not cause.
 
 A finding is `blocking` when it breaks the Definition of done or leaves an ask unmet; anything else is a note.
-Do not block on taste. Write ONE JSON object to REVIEW_PATH (in the context):
+Do not block on taste.
+
+**Rule on every check the builder did not meet.** For each `done_when` check with `"met": false` in THE BUILDER'S
+RESULT (and each item reported `partial` or `not_done` whose checks are all met: use `"check": "state"`), write one
+`holds` row, copying the item and check text exactly. The OS accepts an unmet check ONLY when you rule it held, and
+it shows him your `why` in the preview email, so write it to him in one plain sentence. `"held": true` only when THIS
+job could not finish it, with `by`:
+- `"partner"`: it needs a decision, answer, file or approval only he can give: he kept the step for himself in his
+  own words, or the build put the question to him (in `answers` or the notes) with a recommendation;
+- `"landing"`: only the merge or the live site can meet it (live links, the production host);
+- `"another_job"`: it lives in another repo or system this job cannot change, or he (or an approved answer) sent it
+  to its own item; the OS files it as its own job so it is never dropped;
+- `"runbook"`: the repo's RUNBOOK forbids it, and the build did the nearest thing it allows.
+Anything the builder could build, prove or fix in this repo now is `"held": false` — it goes back to the builder.
+Holding something to save the builder work is the failure this review exists to catch.
+
+Write ONE JSON object to REVIEW_PATH (in the context):
 ```json
-{ "summary": "<one line>", "findings": [{ "lens": "engineer" | "ux" | "pm", "finding": "<what is wrong and where, specific enough to fix>", "blocking": true }] }
+{ "summary": "<one line>",
+  "findings": [{ "lens": "engineer" | "ux" | "pm", "finding": "<what is wrong and where, specific enough to fix>", "blocking": true }],
+  "holds": [{ "item": "<item, exactly>", "check": "<check, exactly>", "held": true, "by": "partner" | "landing" | "another_job" | "runbook", "why": "<one sentence to him>" }] }
 ```
-`"findings": []` when it is finished. Blocking findings go back to the builder; after two fix rounds they stop the
+`"findings": []` when it is finished; `"holds": []` when every check is met. Blocking findings go back to the builder; after two fix rounds they stop the
 job by name and a person looks.
 
 ## Phase LAND

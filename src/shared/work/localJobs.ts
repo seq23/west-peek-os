@@ -361,6 +361,12 @@ export interface LocalJobReport {
   /** 28 Nov 2026 (wc_9f7312e4): each question the partner put to us, answered in plain words: the preview leads with them. */
   answers?: Array<{ question: string; answer: string }>;
   /**
+   * 28 Nov 2026 (wc_9f7312e4): the fresh-eyes review's ruling on each unmet done-when check — held (by the partner,
+   * the landing, another job, or a RUNBOOK rule) with the plain why, or not held. Written by the SCRIPT from the review
+   * file, never by the builder; `buildProblems` reads it instead of keywords.
+   */
+  review_holds?: Array<{ item: string; check: string; held: boolean; by?: string; why?: string }>;
+  /**
    * "unchanged" (0240, BUILD only): the job asked for a materials check (`refresh`), the Mac re-mapped
    * the folder and read the card's files, and the set is the same one the last build used — so it
    * built nothing. Written by the SCRIPT, never the model.
@@ -524,6 +530,7 @@ export function readLocalJobReport(text: string | null | undefined): { report: L
      */
     ...(Array.isArray(r.items) ? { items: readItems(r.items) } : {}),
     ...(Array.isArray(r.answers) ? { answers: readAnswers(r.answers) } : {}),
+    ...(Array.isArray(r.review_holds) ? { review_holds: readReviewHolds(r.review_holds) } : {}),
     /*
      * 14 Nov 2026: THIS READER DROPPED `missing_secrets` AND `vault_lookup` TOO. So the Worker never recorded which keys a
      * build waits on, and the v1.0 bar's exemption ("held by a key only the partner can supply") could never apply: a
@@ -569,6 +576,20 @@ function readItems(v: unknown[]): NonNullable<LocalJobReport["items"]> {
       ...(typeof i.note === "string" ? { note: i.note.slice(0, 700) } : {}),
       ...(checks ? { done_when: checks } : {}),
       ...(typeof i.blocked_by === "string" && i.blocked_by.trim() ? { blocked_by: i.blocked_by.trim().slice(0, 40) } : {}),
+    };
+  });
+}
+
+/** The review's rulings on unmet checks, entry for entry (a malformed one reads as not held, never as held). */
+function readReviewHolds(v: unknown[]): NonNullable<LocalJobReport["review_holds"]> {
+  return v.slice(0, 60).map((raw) => {
+    const h = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+    return {
+      item: typeof h.item === "string" ? h.item.trim().slice(0, 200) : "",
+      check: typeof h.check === "string" ? h.check.trim().slice(0, 200) : "",
+      held: h.held === true,
+      ...(typeof h.by === "string" && h.by.trim() ? { by: h.by.trim().slice(0, 20) } : {}),
+      ...(typeof h.why === "string" && h.why.trim() ? { why: h.why.trim().slice(0, 500) } : {}),
     };
   });
 }

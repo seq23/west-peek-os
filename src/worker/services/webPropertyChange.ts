@@ -58,7 +58,7 @@ import {
   type LocalJobReport,
   type WebPropertyChangePhase,
 } from "../../shared/work/localJobs";
-import { buildProblems, buildRefusalLine, partnerWrote, planProblems, refusalLine, splitOffItems } from "../../shared/work/everyAsk";
+import { ITEM_STATE, buildProblems, buildRefusalLine, partnerWrote, planProblems, refusalLine, reviewRuling, splitOffItems } from "../../shared/work/everyAsk";
 /** The Mac's spend stop, by its tag (`SPEND_STOP` in scripts/duties/web-property-change.mjs; tests/spendStop.test.ts holds them equal; tests/webPropertyChange.test.ts holds the card). */
 export const SPEND_STOP = "NAMED STOP [SPEND_NEEDS_THE_OWNER]";
 
@@ -1254,7 +1254,7 @@ export function withRefusedNotes(answers: string | null, refused: readonly strin
   return [answers ?? "", ...extra.map((n) => `From an earlier try this round: ${n}`)].filter(Boolean).join("\n\n").slice(0, 12000);
 }
 
-async function answersWithRefused(env: Env, cardId: string, report: Pick<LocalJobReport, "notes" | "items" | "answers">): Promise<string | null> {
+async function answersWithRefused(env: Env, cardId: string, report: Pick<LocalJobReport, "notes" | "items" | "answers" | "review_holds">): Promise<string | null> {
   const fresh = await readWebPropertyChange(env, cardId);
   let parsed: unknown = [];
   try {
@@ -1265,7 +1265,7 @@ async function answersWithRefused(env: Env, cardId: string, report: Pick<LocalJo
   return withRefusedNotes(buildAnswersText(report), refusedNotesThisRound(Array.isArray(parsed) ? parsed : []));
 }
 
-export function buildAnswersText(report: Pick<LocalJobReport, "notes" | "items" | "answers">): string | null {
+export function buildAnswersText(report: Pick<LocalJobReport, "notes" | "items" | "answers" | "review_holds">): string | null {
   const lines: string[] = [];
   /*
    * HIS QUESTIONS FIRST, EACH WITH ITS ANSWER (28 Nov 2026, wc_9f7312e4). Scooter asked how the build would be
@@ -1283,12 +1283,19 @@ export function buildAnswersText(report: Pick<LocalJobReport, "notes" | "items" 
      * the preview said "Done:" over a test name: Scooter's question went unanswered and looked answered. An item whose
      * check is still open says so, and says what it waits on.
      */
-    const open = i.state === "done" ? (i.done_when ?? []).find((c) => c.met === false) : undefined;
-    const afterLand = Boolean(open) && (i.blocked_by === "after_land" || /\b(after (?:the )?(?:merge|landing)|live|production)\b/i.test(open?.check ?? ""));
-    const why = i.state === "done" && !open ? "" : String(open?.check ?? "").trim() || String(i.note ?? "").trim() || ((i.done_when ?? []).find((c) => c.met !== true && c.note?.trim())?.note ?? "");
+    /*
+     * WHAT HOLDS IT, AS THE REVIEW RULED (28 Nov 2026): the label and the why come from the fresh-eyes review's ruling
+     * on the open check (`review_holds`), never from keywords in the check's wording. Every item not done is NAMED to
+     * him with its reason, so nothing the bar let through is a silent drop.
+     */
+    const open = (i.done_when ?? []).find((c) => String(c.check ?? "").trim() && c.met !== true);
+    const ruling = reviewRuling(report.review_holds, i.item, open ? open.check : ITEM_STATE);
+    const held = ruling?.held === true ? String(ruling.by ?? "") : "";
+    const why = i.state === "done" && !open ? "" : (held && String(ruling?.why ?? "").trim()) || String(open?.check ?? "").trim() || String(i.note ?? "").trim() || ((i.done_when ?? []).find((c) => c.met !== true && c.note?.trim())?.note ?? "");
     const said = why ? why.replace(/\bRUNBOOK_FORBIDS:\s*/g, "the site's runbook says ") : note && /\b(?:confirm|answer|estimate|recommend|tell me)\b/i.test(String(i.item)) ? note : "";
-    const label = open ? (afterLand ? "Built on the preview; not answered until it is live, after you approve" : "Partly done") : i.state === "done" ? "Done" : i.state === "partial" ? "Partly done" : "Not done";
-    lines.push(`• ${label}: ${String(i.item).slice(0, 200)}${said ? ` — ${open ? "still to check: " : ""}${said.slice(0, 700)}` : ""}`);
+    const label = held === "landing" ? "Built on the preview; not answered until it is live, after you approve" : held === "partner" ? "Waiting on you" : held === "another_job" ? "Its own job, not in this preview" : open ? "Partly done" : i.state === "done" ? "Done" : i.state === "partial" ? "Partly done" : "Not done";
+    const prefix = open && !held ? "still to check: " : "";
+    lines.push(`• ${label}: ${String(i.item).slice(0, 200)}${said ? ` — ${prefix}${said.slice(0, 700)}` : ""}`);
   }
   const notes = String(report.notes ?? "").replace(/\s*\(cost \$[\d.]+\)\s*$/, "").trim();
   if (notes) lines.push("", notes.slice(0, 2500));
@@ -1819,14 +1826,12 @@ export async function applyReport(
 
   /*
    * THE v1.0 BAR (owner, 13 Nov 2026: "v1.0 final with persistence and veteran UX/UI POV"). An ok BUILD reports every
-   * item against the done-when checks its plan set; one not finished, and not held by something only the partner can
-   * supply, is REFUSED before any of it is applied: no preview email, a failed attempt that says why, retried on the
+   * item against the done-when checks its plan set; one not finished, and not ruled held by the fresh-eyes review (nor
+   * held by a listed key or file), is REFUSED before any of it is applied: no preview email, a failed attempt that says why, retried on the
    * same branch. A several-repo report that rebuilt nothing (every PR re-observed) carries no items and is not judged again.
    */
   if (report.phase === "BUILD" && report.status === "ok" && !(report.parts?.length && report.items === undefined)) {
-    const shared = await (await import("./driveShares")).driveFilesFor(env, card.id);
-    const partnerText = [row.request_text ?? "", row.ask ?? "", ...list(row.answers_json), ...shared.map((f) => f.text ?? "")].join("\n");
-    const problems = buildProblems({ items: report.items, missingSecrets: report.missing_secrets?.length ?? 0, missingMaterials: report.missing_materials?.length ?? 0, partnerText });
+    const problems = buildProblems({ items: report.items, missingSecrets: report.missing_secrets?.length ?? 0, missingMaterials: report.missing_materials?.length ?? 0, reviewHolds: report.review_holds });
     if (problems.length) {
       const line = buildRefusalLine(problems);
       await recordHistory(env, { ...row, run_history_json: (await readWebPropertyChange(env, card.id))?.run_history_json ?? row.run_history_json }, { run_id: run.id, phase: "BUILD", status: "REFUSED", reason: line.slice(0, 1200), notes: refusedNotesOf(report) });
@@ -1834,7 +1839,7 @@ export async function applyReport(
       return { finished: false, blocked: false, progressed: false, detail: line.slice(0, 600) };
     }
     // An item the approved answer split off ("its own item after this") is its own site job, filed now, never dropped.
-    for (const s of splitOffItems(report.items, partnerText).slice(0, 5)) {
+    for (const s of splitOffItems(report.items, report.review_holds).slice(0, 5)) {
       await deferWork(env, card, row, { ask: s.item, due_at: new Date().toISOString(), words: s.words, site_change: true });
     }
   }
