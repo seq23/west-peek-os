@@ -93,6 +93,35 @@ export function selfReviewProblem(result) {
   return null;
 }
 
+/**
+ * ONE TURN TO WRITE THE TWO SECTIONS AGAIN, NEVER A FINISHED BUILD THROWN AWAY FOR THEM (28 Nov 2026, wc_9f7312e4).
+ * Scooter's community rebuild ran 48 minutes, opened its PR and passed its fresh-eyes review, then failed as
+ * "mutation_proof row 3 does not say the mutation made": an attempt spent and the whole build run again for one
+ * field of the report. When the result's sections are refused, the builder is asked ONCE to write the result again
+ * with them fixed (`askAgain(note)` runs that turn and returns the result it wrote, or null). Only `self_review` and
+ * `mutation_proof` are taken from the second result, and only when they now pass; everything else the build
+ * reported stands as it was. Still refused → the original result, which `writeSelfReview` refuses by name as before.
+ */
+export async function withSelfReviewFixed(result, askAgain) {
+  const problem = selfReviewProblem(result);
+  if (!problem) return { result, line: null };
+  const note = [
+    "THE BUILD IS DONE: DO NOT EDIT THE WORKTREE, COMMIT OR PUSH. Its result was refused for one reason only:",
+    `  ${problem}`,
+    "Write RESULT_PATH again: the same result as below, with `self_review` and `mutation_proof` fixed (one self_review row per cause, saying what was checked and found; one mutation_proof row per fix with `fix`, `mutation` (what was undone or broken), `test` (the test that went red) and `went_red: true`, or `covered_by` an earlier row).",
+    `THE RESULT YOU WROTE: ${JSON.stringify(result).slice(0, 12000)}`,
+  ].join("\n");
+  let again = null;
+  try {
+    again = await askAgain(note);
+  } catch {
+    again = null;
+  }
+  const fixed = again && typeof again === "object" ? { ...result, self_review: again.self_review, mutation_proof: again.mutation_proof } : null;
+  if (fixed && !selfReviewProblem(fixed)) return { result: fixed, line: `self-review refused (${problem.slice(0, 120)}); the builder wrote it again in one turn and it passes` };
+  return { result, line: `self-review refused (${problem.slice(0, 120)}); one turn to write it again did not fix it` };
+}
+
 /** The two sections as markdown, from a result `selfReviewProblem` passed. Pure. */
 export function renderSections(result) {
   const byKey = new Map(result.self_review.map((r) => [text(r.check), text(r.found)]));
