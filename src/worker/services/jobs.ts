@@ -1250,8 +1250,11 @@ export async function runDueJobs(
   opts: { limit?: number } = {},
 ): Promise<Array<{ job_key: string; status: string; summary: string }>> {
   if (await operatingStopped(env)) return [];
+  // MAIL HELD IN HER PAUSE IS WORKED FIRST after a resume (review of #618, F2).
+  const { replayHeldMail } = await import("./chiefControls");
+  const held = await replayHeldMail(env).catch((err: unknown) => [{ job_key: "held_mail_replay", status: "ERROR", summary: err instanceof Error ? err.message : String(err) }]);
   const limit = opts.limit ?? 1;
-  if (limit === 0) return runDueJobsAll(env, now);
+  if (limit === 0) return [...held, ...await runDueJobsAll(env, now)];
   const dueFirst = (
     await env.WP_OS_DB.prepare(
       // ON_REQUEST has no clock: its next_run_at is NULL by CHECK, and NULL otherwise reads as due.
@@ -1260,9 +1263,9 @@ export async function runDueJobs(
       .bind(now.toISOString(), limit)
       .all<ScheduledJobRow>()
   ).results ?? [];
-  if (dueFirst.length === 0) return runDueJobsAll(env, now);
+  if (dueFirst.length === 0) return [...held, ...await runDueJobsAll(env, now)];
   const systemActor: Actor = { type: "SYSTEM", roles: [], firmScopes: ["west-peek"] };
-  const results: Array<{ job_key: string; status: string; summary: string }> = [];
+  const results: Array<{ job_key: string; status: string; summary: string }> = [...held];
   await serveBriefOnTick(env, now, results);
   await serveArtifactsOnTickSafely(env, now, results);
   // The partner waits ride every tick, a scheduled job due or not: "every 15 minutes" is a promise (22 Nov 2026).

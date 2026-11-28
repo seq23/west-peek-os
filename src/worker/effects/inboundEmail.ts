@@ -1,5 +1,5 @@
 import type { Env } from "../env";
-import { applyChiefControlEmail, operatingStopped } from "../services/chiefControls";
+import { applyChiefControlEmail, holdMailForResume, operatingStopped } from "../services/chiefControls";
 import { isFirmSelfTest } from "../../shared/intake/firmSelfTest";
 import { isAdminOrWebsiteSubject } from "../../shared/intake/dealOrigin";
 import { appendEvent } from "../events";
@@ -380,7 +380,9 @@ export async function handleInboundEmail(
    * only — the message still goes through the ordinary door below and is kept like any other.
    */
   const sender = message.headers.get("from") ?? message.from;
-  if (!ASSIGNING_PARTNERS.includes((addressIn(sender) ?? "").toLowerCase()) && !await operatingStopped(env)) {
+  // NOT GATED BY THE OWNER'S PAUSE (review of #618, F2): an opt-out, bounce or reply is a record, never agent work,
+  // and a pause that skipped it would let a sequence mail someone who opted out after the resume.
+  if (!ASSIGNING_PARTNERS.includes((addressIn(sender) ?? "").toLowerCase())) {
     const { recordBrandMail } = await import("../services/learningClub");
     await recordBrandMail(env, { from: sender, subject: decodeHeader(message.headers.get("subject") ?? "") }).catch((err) => {
       console.warn("tlc brand mail not recorded", err instanceof Error ? err.message : String(err));
@@ -440,6 +442,21 @@ export async function rerouteStoredMessage(env: Env, input: { emlKey: string | n
   // Not through `oneBigMailAtATime`: the caller holds the turn. A reply that settles a clarification is inside its door,
   // which holds it (taking it again would wait for itself); the clarification sweep takes it before it settles.
   await handleInboundEmailOnce({ from, to: headers.get("to") ?? INTAKE_MAILBOX, headers, raw: new Blob([bytes as BlobPart]).stream(), rawSize: bytes.byteLength }, env, { routeAs: input.routeAs });
+  return true;
+}
+
+/**
+ * WORK A MESSAGE HELD IN THE OWNER'S PAUSE (review of #618, F2), from its stored .eml, through the same door, once
+ * (`operating_held_mail` is the claim). Its route, when it had one, rides along.
+ */
+export async function replayStoredMessage(env: Env, emlKey: string, routeAs: RouteAs | null): Promise<boolean> {
+  const raw = env.WP_OS_DOCUMENTS ? (await (await env.WP_OS_DOCUMENTS.get(emlKey))?.text()) ?? null : null;
+  if (!raw) return false;
+  const headers = headersOfRaw(raw);
+  const from = (addressIn(headers.get("from")) ?? headers.get("from") ?? "").trim().toLowerCase();
+  const bytes = new TextEncoder().encode(raw);
+  const message = { from, to: headers.get("to") ?? INTAKE_MAILBOX, headers, raw: new Blob([bytes as BlobPart]).stream(), rawSize: bytes.byteLength };
+  await oneBigMailAtATime(message.rawSize, () => handleInboundEmailOnce(message, env, routeAs ? { routeAs } : {}));
   return true;
 }
 
@@ -1150,22 +1167,30 @@ async function handleInboundEmailOnce(
     }
   }
 
-  if (kept.mail && await applyChiefControlEmail(env, {
+  const control = kept.mail ? await applyChiefControlEmail(env, {
     authority,
     words: kept.mail.text,
     direct: !options.routeAs && !options.replyOnThread && !options.receivedTldr &&
       !inReplyTo && !references && !/^\s*(?:re|aw|sv|fwd?|fw):/i.test(subject) &&
       !message.headers.has("resent-from") && !/<blockquote\b/i.test(kept.mail.html) &&
       !forwardedOrigin(kept.text ?? "") && kept.mail.files.length === 0,
-  })) {
-    options.onHandled?.({ by: "operating_control", ref: null, detail: "Owner control applied." });
+  }) : { applied: false as const };
+  if (control.applied && !control.alsoAsks) {
+    options.onHandled?.({ by: "operating_control", ref: null, detail: `Owner control applied: ${control.operation}.` });
     return;
   }
   if (await operatingStopped(env)) {
-    await raiseUnreadMail(env, { dedupeKey: `operations_paused:${kept.key ?? subject}`,
-      title: "Mail held while agents are paused", body: "This message was filed for review while West Peek OS agents were paused.",
-      objectId: kept.key ?? "unknown" });
-    options.onHandled?.({ by: "operations_paused", ref: kept.key, detail: "Mail was filed while agents were paused." });
+    // HELD, NEVER ONLY A NOTICE (review of #618, F2): the stored copy is worked through this door after she resumes.
+    if (kept.key) {
+      await holdMailForResume(env, kept.key, options.routeAs ?? null);
+      options.onHandled?.({ by: "operations_paused", ref: kept.key, detail: "Held while agents are paused; worked after the resume." });
+      return;
+    }
+    await raiseUnreadMail(env, { dedupeKey: `operations_paused:${subject}:${sender}`.slice(0, 300),
+      title: "Mail arrived while agents were paused and could not be stored",
+      body: `From ${sender.slice(0, 120)}, subject "${subject.slice(0, 120)}". It could not be kept for after the resume (${kept.failure || "not stored"}); it is still in the mailbox.`,
+      objectId: `${sender}:${subject}`.slice(0, 200) });
+    options.onHandled?.({ by: "operations_paused", ref: null, detail: "Not stored, so it could not be held; on the desk instead." });
     return;
   }
 
