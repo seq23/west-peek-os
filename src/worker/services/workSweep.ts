@@ -760,9 +760,9 @@ export async function sweepOnce(
 
   // THE DECK COMES FIRST. If the company's deck is queued and not yet read, this attempt does not
   // count and the card is parked until the reader has had a turn; another card gets this tick.
-  const hasTypedExecutor = isProductionsKind(card.kind) || card.kind === WEB_PROPERTY_CHANGE_KIND || card.kind === "BLOG_HELP" || card.kind === "PARTNER_MESSAGE";
+  const hasTypedExecutor = isTlcKind(card.kind) || isProductionsKind(card.kind) || card.kind === "DECK_REWORK" || card.kind === "ROOM_PACKET" || card.kind === "ARTIFACT" || card.kind === WEB_PROPERTY_CHANGE_KIND || card.kind === "BLOG_HELP" || card.kind === "PARTNER_MESSAGE";
   const chiefTurn = card.kind === PARTNER_SESSION_KIND || (chiefSessionFor(card.owner_id) !== null && !hasTypedExecutor);
-  const unread = chiefTurn || isTlcKind(card.kind) || card.kind === "DECK_REWORK" || isProductionsKind(card.kind) || card.kind === "ROOM_PACKET" || card.kind === "BLOG_HELP" || card.kind === "ARTIFACT" || card.kind === "PARTNER_MESSAGE" || card.kind === WEB_PROPERTY_CHANGE_KIND ? null : await deckStillBeingRead(env, card.title, card.id);
+  const unread = chiefTurn || hasTypedExecutor ? null : await deckStillBeingRead(env, card.title, card.id);
   if (unread) {
     const until = new Date(now.getTime() + DECK_WAIT_MINUTES * 60_000).toISOString();
     await env.WP_OS_DB.prepare(

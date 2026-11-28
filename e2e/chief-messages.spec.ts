@@ -22,6 +22,11 @@ for (const partner of PARTNERS) {
     await page.getByTestId("dev-login-email").fill(partner.email);
     await page.getByTestId("dev-login-submit").click();
     await expect(page.getByTestId("identity-status")).toContainText(partner.fullName);
+    const other = PARTNERS.find((entry) => entry.firmUserId !== partner.firmUserId)!;
+    const otherPath = `/api/workforce/employees/${seatId(chiefOfStaffFor(other.fullName))}/messages`;
+    const headers = { "x-wpos-dev-user": partner.email };
+    expect((await page.request.get(otherPath, { headers })).status()).toBe(404);
+    expect((await page.request.post(otherPath, { headers, data: { message } })).status()).toBe(404);
     await gotoSurface(page, "Employees");
     await page.getByTestId(`employee-open-${employeeId}`).click();
     const box = page.getByRole("textbox", { name: `Message ${chief}` });

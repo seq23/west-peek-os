@@ -9,6 +9,7 @@ import { questionEmail, redirectSession, runPartnerSessionCard } from "../src/wo
 import { reportRun } from "../src/worker/ai/subscriptionSeats";
 import { recordPartnerConstraints } from "../src/worker/services/partnerConstraints";
 import { handleRequest } from "../src/worker/index";
+import { PARTNERS } from "../src/shared/registry/partners";
 
 /**
  * EMAILING THE OS FEELS LIKE TYPING TO CLAUDE (14 Nov 2026), steps 2 to 6: an email no fixed door claims becomes ONE
@@ -227,10 +228,13 @@ describe("step 5 · a correction redirects running work", () => {
     await runPartnerSessionCard(env, await card(id));
     const [first] = await runs(id);
     await env.WP_OS_DB.prepare("UPDATE subscription_seat_run SET status = 'CLAIMED', claimed_by = ?2, claimed_at = ?3 WHERE id = ?1").bind(first!.id, MAC, new Date().toISOString()).run();
-    const res = await handleRequest(
-      new Request(`https://test.local/api/work-cards/${id}/notes`, { method: "POST", headers: { "x-wpos-dev-user": "sequoia@westpeek.ventures", "content-type": "application/json" }, body: JSON.stringify({ body: "Also build the data room index." }) }),
-      env,
-    );
+    const note = (email: string) => handleRequest(new Request(`https://test.local/api/work-cards/${id}/notes`, {
+      method: "POST", headers: { "x-wpos-dev-user": email, "content-type": "application/json" },
+      body: JSON.stringify({ body: "Also build the data room index." }),
+    }), env);
+    expect((await note(PARTNERS.find((partner) => partner.email !== SCOOTER)!.email)).status).toBe(404);
+    expect((await runs(id)).map((run) => run.status)).toEqual(["CLAIMED"]);
+    const res = await note(SCOOTER);
     expect(res.status).toBe(201);
     const all = await runs(id);
     expect(all.map((r) => r.status)).toEqual(["ABANDONED", "QUEUED"]);

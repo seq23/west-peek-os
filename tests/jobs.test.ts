@@ -4,6 +4,9 @@ import { handleRequest } from "../src/worker/index";
 import type { Env } from "../src/worker/env";
 import type { Actor } from "../src/worker/services/authorize";
 import { computeNextRun, occurrenceKey, runDueJobs, runJob, type ScheduledJobRow } from "../src/worker/services/jobs";
+import { chiefOfStaffFor } from "../src/shared/work/chiefOfStaff";
+import { PARTNERS } from "../src/shared/registry/partners";
+import { seatId } from "../src/shared/intake/emailTriggers";
 
 /**
  * P19 — Governed orchestration + scheduled AI employees (GAP-21, GAP-22).
@@ -79,6 +82,22 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await disposeTestDb(t);
+});
+
+it("files one scheduled session for each chief and their own partner on the default database", async () => {
+  const now = new Date("2026-11-27T16:00:00.000Z");
+  for (const partner of PARTNERS) {
+    const chief = chiefOfStaffFor(partner.fullName);
+    const key = `${chief.toLowerCase()}_daily_wake`;
+    const first = await runJob(env, MP_ACTOR, key, { trigger: "SCHEDULED", now });
+    expect(first.run.status).toBe("SUCCEEDED");
+    expect((await runJob(env, MP_ACTOR, key, { trigger: "SCHEDULED", now })).replayed).toBe(true);
+    const sessions = await t.db.prepare(
+      `SELECT s.requested_by, c.kind FROM partner_session s JOIN work_card c ON c.id = s.work_card_id
+       WHERE c.owner_id = ?1 AND s.source = 'SCHEDULE'`,
+    ).bind(seatId(chief)).all();
+    expect(sessions.results).toEqual([{ requested_by: partner.email, kind: "PARTNER_SESSION" }]);
+  }
 });
 
 describe("schedule arithmetic is pure and testable", () => {

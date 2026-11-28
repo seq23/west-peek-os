@@ -303,14 +303,6 @@ const SOURCES_PER_TICK = 1;
 async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runId: string, now: Date, trigger: "MANUAL" | "SCHEDULED" = "SCHEDULED"): Promise<RunOutcome> {
   const artifacts: RunOutcome["artifacts"] = [];
 
-  if ((job.job_key === "wren_daily_wake" || job.job_key === "walker_daily_wake") && job.target_id) {
-    const { openChiefTurn } = await import("./partnerSession");
-    const { sweepIdentity } = await import("./workSweep");
-    const id = await openChiefTurn(env, sweepIdentity(job.firm_scope), job.target_id, "SCHEDULE",
-      "Start your day. Work from your mandate, your partner’s standing direction and what you can verify this run. Leave a short note with what moved and what needs attention.", job.firm_scope);
-    return { status: "SUCCEEDED", summary: "Filed the daily session for the work sweep.", artifacts: [{ kind: "WORK_CARD", ref_type: "work_card", ref_id: id }] };
-  }
-
   // job_key is checked BEFORE kind. `kind` is a CHECK constraint that cannot be widened in D1:
   // SQLite cannot alter a CHECK in place, job_run holds foreign keys into scheduled_job, and
   // `PRAGMA foreign_keys=OFF` is a no-op inside the transaction D1 wraps a migration in — tried and
@@ -816,9 +808,9 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
 
   // EMPLOYEE_TASK: the employee does governed work through run_ai, with the job's own budget,
   // data class, capability, and task class applied.
-  let payload: { prompt?: string } = {};
+  let payload: { prompt?: string; session?: string } = {};
   try {
-    payload = JSON.parse(job.payload_json) as { prompt?: string };
+    payload = JSON.parse(job.payload_json) ?? {};
   } catch {
     payload = {};
   }
@@ -828,6 +820,14 @@ async function executeJobBody(env: Env, job: ScheduledJobRow, actor: Actor, runI
     job.target_kind === "EMPLOYEE" && job.target_id
       ? (await resolveEmployee(env, job.target_id))?.id ?? job.target_id
       : null;
+
+  if (payload.session === "DAILY_WAKE" && employeeId) {
+    const { openChiefTurn } = await import("./partnerSession");
+    const { sweepIdentity } = await import("./workSweep");
+    const cardId = await openChiefTurn(env, sweepIdentity(job.firm_scope), employeeId, "SCHEDULE",
+      "Start your day. Work from your mandate, your partner’s standing direction and what you can verify this run. Leave a short note with what moved and what needs attention.", job.firm_scope);
+    return { status: "SUCCEEDED", summary: "Filed the daily session for the work sweep.", artifacts: [{ kind: "WORK_CARD", ref_type: "work_card", ref_id: cardId }] };
+  }
 
   const { run } = await runAi(env, {
     purpose: `scheduled job ${job.job_key}: ${job.name}`,
