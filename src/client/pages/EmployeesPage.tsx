@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, useApi, type MeResponse } from "../lib/api";
+import { PREVIEW_PARTNER } from "@shared/registry/partners";
 import { personaFor } from "@shared/registry/aiEmployeePersonas";
 import { chiefSessionFor } from "@shared/work/chiefOfStaff";
 import type { PartnerSessionReport } from "@shared/work/localJobs";
@@ -723,6 +724,49 @@ function HandoffsPanel({ onChanged }: { onChanged: () => void }) {
   );
 }
 
+function OperatingControl() {
+  const path = "/api/workforce/operating-control";
+  const { data, status, reload } = useApi<{ stopped: boolean }>(path);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState("");
+
+  async function update(command: "pause-confirmed" | "resume") {
+    setBusy(true);
+    setProblem("");
+    const response = await api(path, { method: "POST", body: command });
+    setBusy(false);
+    if (response.status === 200) {
+      setConfirming(false);
+      reload();
+    } else {
+      setProblem("Could not update the pause. Try again.");
+    }
+  }
+
+  if (!data) {
+    return status !== null && status !== 200
+      ? <p>Could not check whether agents are paused. <button type="button" onClick={reload}>Try again</button></p>
+      : null;
+  }
+  return (
+    <section aria-label="Agent pause">
+      {data.stopped ? (
+        <p>Agents are paused. <button type="button" disabled={busy} onClick={() => void update("resume")}>Resume agents</button></p>
+      ) : confirming ? (
+        <>
+          <p>Pause all West Peek OS agents?</p>
+          <button type="button" className="btn-danger" disabled={busy} onClick={() => void update("pause-confirmed")}>Confirm pause</button>
+          <button type="button" disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
+        </>
+      ) : (
+        <button type="button" className="btn-danger" onClick={() => setConfirming(true)}>Pause all agents</button>
+      )}
+      {problem && <p role="alert">{problem}</p>}
+    </section>
+  );
+}
+
 export function EmployeesPage({ me }: { me: MeResponse }) {
   const lounge = useApi<LoungeResponse>("/api/workforce/lounge");
   const [department, setDepartment] = useState<string>("ALL");
@@ -832,6 +876,7 @@ export function EmployeesPage({ me }: { me: MeResponse }) {
 
   return (
     <section data-testid="employees-page">
+      {isMp && me.id === PREVIEW_PARTNER.firmUserId && <OperatingControl />}
       <p data-testid="lounge-activation-law" className="muted small">
         {lounge.data.active_count} of {lounge.data.max_active} employed. {lounge.data.activation_law}
       </p>

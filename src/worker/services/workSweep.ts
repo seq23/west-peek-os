@@ -1,4 +1,5 @@
 import { isTlcKind } from "../../shared/tlc/learningClub";
+import { operatingStopped } from "./chiefControls";
 import { PARTNERS, partnerByEmail } from "../../shared/registry/partners";
 import { resolveStaleClarifications } from "./emailRouting";
 import { askHeldShareQuestions } from "./driveShares";
@@ -720,6 +721,7 @@ export async function sweepOnce(
   } = {},
   options: { leaseRenewMs?: number } = {},
 ): Promise<SweepResult> {
+  if (await operatingStopped(env)) return { status: "SUCCEEDED", summary: "Work sweep paused by the owner.", card: null, outcome: "NO_ACTION_NEEDED" };
   await settleAbandonedCards(env, now);
   await settleOrphanedRuns(env, now);
   // NOTHING STAYS STUCK SILENTLY: a block nobody has acted on rings again rather than ageing out.

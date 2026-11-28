@@ -28,6 +28,20 @@ for (const partner of PARTNERS) {
     expect((await page.request.get(otherPath, { headers })).status()).toBe(404);
     expect((await page.request.post(otherPath, { headers, data: { message } })).status()).toBe(404);
     await gotoSurface(page, "Employees");
+    if (chief === "Wren") {
+      await page.getByRole("button", { name: "Pause all agents" }).click();
+      await expect(page.getByText("Pause all West Peek OS agents?")).toBeVisible();
+      await page.getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect(page.getByRole("button", { name: "Pause all agents" })).toBeVisible();
+      await page.getByRole("button", { name: "Pause all agents" }).click();
+      await page.getByRole("button", { name: "Confirm pause" }).click();
+      await expect(page.getByText("Agents are paused.")).toBeVisible();
+      await page.getByRole("region", { name: "Agent pause" }).screenshot({ path: testInfo.outputPath("agent-pause.png") });
+      await page.getByRole("button", { name: "Resume agents" }).click();
+      await expect(page.getByRole("button", { name: "Pause all agents" })).toBeVisible();
+    } else {
+      await expect(page.getByRole("button", { name: "Pause all agents" })).toHaveCount(0);
+    }
     await page.getByTestId(`employee-open-${employeeId}`).click();
     const box = page.getByRole("textbox", { name: `Message ${chief}` });
     await box.fill(message);

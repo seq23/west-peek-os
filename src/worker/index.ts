@@ -85,6 +85,7 @@ import {
   handleReopenApproval,
 } from "./services/approvals";
 import { handleDraftCard, handleWorkCard, handleWriteBrief } from "./services/employeeWork";
+import { handleOperatingControl } from "./services/chiefControls";
 import { handleChiefMessages } from "./services/partnerSession";
 import { handleRetryStoppedCards, handleUnblockWorkCard } from "./services/blocks";
 import { handleHandOffWorkCard, handleTakeBackWorkCard } from "./services/handOff";
@@ -1443,6 +1444,8 @@ const router = new Router()
   // P15 — employee lounge / digital office / performance. Activation stays reserved (P4);
   // only the LOWERING lifecycle moves live here.
   .get("/api/workforce/lounge", handleLounge)
+  .get("/api/workforce/operating-control", handleOperatingControl)
+  .post("/api/workforce/operating-control", handleOperatingControl)
   .get("/api/workforce/employees/:id", handleEmployeeDetail)
   .get("/api/workforce/employees/:id/messages", handleChiefMessages)
   .post("/api/workforce/employees/:id/messages", handleChiefMessages)

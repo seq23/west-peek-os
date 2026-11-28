@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { operatingStopped } from "../services/chiefControls";
 import { appendEvent } from "../events";
 import { EFFECT_TYPE_ACTION_KEYS } from "../../shared/registry/actionTypes";
 import { authorize, type Actor } from "../services/authorize";
@@ -354,6 +355,7 @@ export async function executeExternalEffect(
   requestId: string,
   receiptId: string | undefined,
 ): Promise<EffectExecutionResult> {
+  if (actor.type !== "HUMAN" && await operatingStopped(env)) throw new EffectError(409, "operations_paused", "The owner paused West Peek OS agents.");
   /*
    * A PREVIEW NEVER EXECUTES AN EXTERNAL EFFECT — the second of the two stops that make
    * "no external effects, ever" structural rather than remembered (17 Sep 2026).

@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { operatingStopped } from "../services/chiefControls";
 import { MODEL_ORDER, SEAT_WAIT_CODE, dutyKindOf, isImportantWork, isPrivateWork, ladderFor, orderFreeLanes, orderSeats, rerankFromLog, workClassOf } from "../../shared/ai/seatOrder";
 import { appendEvent } from "../events";
 import type { Actor } from "../services/authorize";
@@ -1314,6 +1315,10 @@ export async function runAi(env: Env, runInput: RunAiInput, deps: RunAiDeps = {}
     await recordAttribution(env, row.id, attribution);
     return row;
   };
+
+  if ((input.aiEmployeeId || input.actor.type !== "HUMAN") && await operatingStopped(env)) {
+    return { run: await blocked("PREFLIGHT_BLOCKED", "operations_paused_by_owner") };
+  }
 
   /*
    * 0a. IMAGES — the gate, and it is not a formality.

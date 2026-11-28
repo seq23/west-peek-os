@@ -70,6 +70,34 @@ Every invocation — including blocked ones — lands in `ai_run` with a unique
    `BLOCKED_DEFERRED` with the reason visible; the deterministic app (work cards,
    approvals, activity) is unaffected.
 
+## Chief session controls
+
+The owner can pause or resume agents from Employees. Pause requires a second click.
+A new, verified email from the owner with the complete body `stop everything` or
+`resume` applies the same control. Mail received during the pause is filed for
+review. The scheduler and work sweep hold their queues, and the seat claimer
+cannot claim work or return a result on a revoked lease.
+
+Wren's additional mailbox permission defaults off. A new, verified owner email
+can include the structured command `{"operation":"cover_mailbox","mailbox":"<address>"}`
+as its full body. Use the owner's mailbox address. An `until` field accepts an ISO
+timestamp with an offset. Coverage lasts 72 hours by default and at most seven days.
+The coverage check applies to mail only. The account dispatcher will consume the
+check when it gains account tools.
+
+The private chief runner enables only file tools and accepts attachment downloads
+from the exact OS origin and assigned card. The run's role, local deadline and CLI
+usage limits come from the runner. The US Central time zone is used for partner-facing
+reports.
+
+The chief GitHub broker requires an owner-reviewed base repository, an isolated
+fork with Actions disabled and separate credentials for the fork and draft PR
+creation. Sign-off reads metadata using the workflow on `main` and writes
+`chief-signoff` to the reviewed head. Chief-commissioned PRs need an independent
+owner-account comment naming the full head. Dispatcher-signed Wren review records
+bind the repository, PR, head and exact review line. Publishing and issuing those
+records require the dispatcher and repository configuration.
+
 ## The spend lever (17 Sep 2026)
 
 One control the owner touches, three positions, named identically to Boss OS —

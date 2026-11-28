@@ -20,10 +20,12 @@
  *   · OUTSIDERS STAY GATED. Every email here goes through `replyToRequester`, which sends to the two partner addresses
  *     only; the session itself has no tool that emails anyone.
  */
+import { operatingStopped } from "./chiefControls";
 import { ACTION_REQUIRED } from "../../shared/email/execEmail";
 import type { Env } from "../env";
 import { appendEvent } from "../events";
 import { abandonRun, parkRun, readRun } from "../ai/subscriptionSeats";
+import { redactInputs } from "../ai/scrub";
 import { committedLpNamedIn, committedLps } from "../ai/committedLps";
 import { privateMaterialSentence } from "../../shared/intake/privateMaterial";
 import { EMAILED_TASK_LIMITS } from "../../shared/intake/partnerAuthority";
@@ -195,6 +197,7 @@ export async function handleChiefMessages(ctx: RouteContext): Promise<Response> 
  * keeps it alive, so there is no per-call deadline anywhere on its path.
  */
 export async function parkSession(env: Env, card: Pick<SessionCard, "id" | "title" | "firm_scope" | "owner_id">, row: PartnerSessionRow, why: string): Promise<{ parked: true; runId: string } | { parked: false; reason: string }> {
+  if (await operatingStopped(env)) return { parked: false, reason: "The owner paused West Peek OS agents." };
   const chief = chiefSessionFor(card.owner_id);
   if (!chief || chief.principal.email !== row.requested_by) return { parked: false, reason: "The session has no verified request from this chief's partner." };
   const spec = localJobKind(PARTNER_SESSION_KIND)!;
@@ -210,9 +213,11 @@ export async function parkSession(env: Env, card: Pick<SessionCard, "id" | "titl
       return [];
     }
   })();
-  const corrections = list(row.corrections_json);
-  const answers = list(row.answers_json);
-  const driveFiles = await driveFilesFor(env, card.id).catch(() => []);
+  const clean = (text: string) => redactInputs([text]).inputs[0]!;
+  const corrections = list(row.corrections_json).map(clean);
+  const answers = list(row.answers_json).map(clean);
+  const driveFiles = (await driveFilesFor(env, card.id).catch(() => [])).map((file) =>
+    ({ ...file, title: clean(file.title), text: file.text ? clean(file.text) : file.text }));
   const payload = {
     card_kind: PARTNER_SESSION_KIND,
     phase: PARTNER_SESSION_PHASE,
@@ -220,12 +225,12 @@ export async function parkSession(env: Env, card: Pick<SessionCard, "id" | "titl
     max_seconds: phase.maxSeconds,
     prompt_file: spec.promptFile,
     script: spec.script,
-    card: { id: card.id, title: card.title, requested_by: row.requested_by },
+    card: { id: card.id, title: clean(card.title), requested_by: row.requested_by },
     // MEMORY FIRST (step 6): the standing practices, his holds and his profile, read fresh for every run.
-    memory: await practicesForCard(env, card.id, card.firm_scope, chief.principal.email),
+    memory: clean(await practicesForCard(env, card.id, card.firm_scope, chief.principal.email)),
     employee: { name: chief.employee.name, persona: personaPrompt(chief.employee.name, chief.employee.role) },
     source: row.source,
-    request: row.request_text,
+    request: clean(row.request_text),
     corrections,
     answers,
     earlier_asks: earlier,
@@ -340,6 +345,9 @@ async function whoWorks(env: Env, ownerId: string | null): Promise<string> {
 
 /** The sweep's runner for a PARTNER_SESSION card. Never calls a model: it parks, holds, or reads what came back. */
 export async function runPartnerSessionCard(env: Env, sweepCard: SessionCard, now: Date = new Date()): Promise<SessionOutcome> {
+  if (await operatingStopped(env)) {
+    return { finished: false, blocked: false, progressed: false, held: true, detail: "The owner paused West Peek OS agents." };
+  }
   const card = (await sessionCard(env, sweepCard.id)) ?? sweepCard;
   let row = await readSession(env, card.id);
   if (!row) {
@@ -403,7 +411,7 @@ async function applySessionRun(env: Env, card: SessionCard, row: PartnerSessionR
   const report = read.report;
   if (report.status === "failed") {
     if (report.waits_seconds) return { finished: false, blocked: false, progressed: true, held: true, waitUntil: new Date(now.getTime() + report.waits_seconds * 1000).toISOString(), detail: "Waiting for a subscription to reset." };
-    return { finished: false, blocked: false, progressed: false, detail: "The session stopped before producing a report." };
+    return { finished: false, blocked: false, progressed: false, detail: report.reason ?? "The session stopped before producing a report." };
   }
   await env.WP_OS_DB.prepare("UPDATE partner_session SET report_json = ?2 WHERE work_card_id = ?1").bind(card.id, JSON.stringify(report)).run();
   // MEMORY THE SESSION ASKED TO KEEP (step 6): every line passes the profile filter (no LP names, deal terms or fund details).

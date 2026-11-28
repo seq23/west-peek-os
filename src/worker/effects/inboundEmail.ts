@@ -1,4 +1,5 @@
 import type { Env } from "../env";
+import { applyChiefControlEmail, operatingStopped } from "../services/chiefControls";
 import { isFirmSelfTest } from "../../shared/intake/firmSelfTest";
 import { isAdminOrWebsiteSubject } from "../../shared/intake/dealOrigin";
 import { appendEvent } from "../events";
@@ -314,7 +315,7 @@ export interface InboundOptions {
 
 /** What a non-card handler in the door did with a message. */
 export interface DoorHandled {
-  by: "tlc_draft_reply" | "tlc_brand_reply" | "tlc_brand_reply_approval" | "tlc_send_pause" | "packet_decision" | "clarification" | "firm_self_test" | "deck_start" | "unparseable";
+  by: "operating_control" | "operations_paused" | "tlc_draft_reply" | "tlc_brand_reply" | "tlc_brand_reply_approval" | "tlc_send_pause" | "packet_decision" | "clarification" | "firm_self_test" | "deck_start" | "unparseable";
   ref: string | null;
   detail: string;
 }
@@ -379,7 +380,7 @@ export async function handleInboundEmail(
    * only — the message still goes through the ordinary door below and is kept like any other.
    */
   const sender = message.headers.get("from") ?? message.from;
-  if (!ASSIGNING_PARTNERS.includes((addressIn(sender) ?? "").toLowerCase())) {
+  if (!ASSIGNING_PARTNERS.includes((addressIn(sender) ?? "").toLowerCase()) && !await operatingStopped(env)) {
     const { recordBrandMail } = await import("../services/learningClub");
     await recordBrandMail(env, { from: sender, subject: decodeHeader(message.headers.get("subject") ?? "") }).catch((err) => {
       console.warn("tlc brand mail not recorded", err instanceof Error ? err.message : String(err));
@@ -419,7 +420,7 @@ export async function handleInboundEmail(
   await finished();
   // RULE 4 (0255): every email from a partner refreshes the "working on now" lines of his profile.
   const partner = addressIn(message.headers.get("from"));
-  if (partner && ASSIGNING_PARTNERS.includes(partner.toLowerCase())) await refreshWorkingOn(env, partner).catch(() => 0);
+  if (partner && ASSIGNING_PARTNERS.includes(partner.toLowerCase()) && !await operatingStopped(env)) await refreshWorkingOn(env, partner).catch(() => 0);
 }
 
 /**
@@ -1147,6 +1148,25 @@ async function handleInboundEmailOnce(
       options.onHandled?.({ by: "unparseable", ref: kept.key, detail: `the mail parser refused it (${parsed.problem}); kept and put on the desk, nothing acted on` });
       return;
     }
+  }
+
+  if (kept.mail && await applyChiefControlEmail(env, {
+    authority,
+    words: kept.mail.text,
+    direct: !options.routeAs && !options.replyOnThread && !options.receivedTldr &&
+      !inReplyTo && !references && !/^\s*(?:re|aw|sv|fwd?|fw):/i.test(subject) &&
+      !message.headers.has("resent-from") && !/<blockquote\b/i.test(kept.mail.html) &&
+      !forwardedOrigin(kept.text ?? "") && kept.mail.files.length === 0,
+  })) {
+    options.onHandled?.({ by: "operating_control", ref: null, detail: "Owner control applied." });
+    return;
+  }
+  if (await operatingStopped(env)) {
+    await raiseUnreadMail(env, { dedupeKey: `operations_paused:${kept.key ?? subject}`,
+      title: "Mail held while agents are paused", body: "This message was filed for review while West Peek OS agents were paused.",
+      objectId: kept.key ?? "unknown" });
+    options.onHandled?.({ by: "operations_paused", ref: kept.key, detail: "Mail was filed while agents were paused." });
+    return;
   }
 
   /*

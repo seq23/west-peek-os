@@ -11,10 +11,11 @@
 
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { claudeChildEnv, strippedNote } from "../lib/vault-env.mjs";
+import { claudeChildEnv } from "../lib/vault-env.mjs";
 import { runModel, spentReport } from "./web-property-change.mjs";
 
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -90,53 +91,144 @@ export function readSessionResult(text) {
 
 // ── The run ──────────────────────────────────────────────────────────────────────────────────
 
-/** Fetch one attached file from the Worker with the Mac's own Access token. */
-async function fetchAttachment(routePath, target, env) {
-  const base = env?.WP_OS_BASE_URL ?? "https://os.joinwestpeek.com";
-  const id = env?.WP_OS_MAC_ACCESS_CLIENT_ID;
-  const secret = env?.WP_OS_MAC_ACCESS_CLIENT_SECRET;
-  if (!id || !secret) throw new Error("WP_OS_MAC_ACCESS_CLIENT_ID / _SECRET are not in the environment");
-  const res = await fetch(`${base}${routePath}`, { headers: { "CF-Access-Client-Id": id, "CF-Access-Client-Secret": secret }, redirect: "error", signal: AbortSignal.timeout(120_000) });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  writeFileSync(target, buf);
-  return buf.length;
+const OS_ORIGIN = "https://os.joinwestpeek.com";
+const MAX_TURNS = 40;
+const MAX_TOKENS = 1_000_000;
+const MAX_SECONDS = 2 * 60 * 60;
+const MAX_ATTACHMENT_BYTES = 30 * 1024 * 1024;
+
+export function attachmentUrl(origin, cardId, routePath) {
+  if (new URL(origin).href !== `${OS_ORIGIN}/` || !/^[a-zA-Z0-9_-]+$/.test(cardId)) {
+    throw new Error("Attachment origin not allowed");
+  }
+  const prefix = `/api/work-cards/${cardId}/attachments/`;
+  if (!routePath.startsWith(prefix) || !/^[a-zA-Z0-9_-]+$/.test(routePath.slice(prefix.length))) {
+    throw new Error("Attachment path not allowed");
+  }
+  return new URL(routePath, OS_ORIGIN);
 }
 
-// Copied from: seq23/boss-os scripts/ops/simone.mjs @ f0c6d9fb9626b74634ca2979b0fe862314a6031c
-// The tool set is explicit because the session receives private material. The dispatcher will supply additional tools.
-function spawnClaude({ prompt, model, cwd, signal, onLine, job }) {
+async function fetchAttachment(cardId, routePath, target, env, signal) {
+  const url = attachmentUrl(env?.WP_OS_BASE_URL ?? OS_ORIGIN, cardId, routePath);
+  const id = env?.WP_OS_MAC_ACCESS_CLIENT_ID;
+  const secret = env?.WP_OS_MAC_ACCESS_CLIENT_SECRET;
+  if (!id || !secret) throw new Error("The Mac's Access credentials are unavailable");
+  const timeout = AbortSignal.timeout(120_000);
+  const res = await fetch(url, {
+    headers: { "CF-Access-Client-Id": id, "CF-Access-Client-Secret": secret },
+    redirect: "error",
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+  });
+  if (!res.ok || !res.body) throw new Error("Attachment unavailable");
+  const reader = res.body.getReader();
+  const chunks = [];
+  let bytes = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    bytes += value.length;
+    if (bytes > MAX_ATTACHMENT_BYTES) {
+      await reader.cancel();
+      throw new Error("Attachment exceeded the allowed size");
+    }
+    chunks.push(value);
+  }
+  writeFileSync(target, Buffer.concat(chunks, bytes), { mode: 0o600, flag: "wx" });
+}
+
+// Copied from: seq23/boss-os scripts/ops/simone.mjs @ 6d62771ea6b2b60637295bd38eef335bad9f97fa
+export function chiefClaudeArgs({ model, cwd, job }) {
+  const root = `/${cwd}`;
+  const result = `${root}/result-SESSION.json`;
+  const settings = {
+    permissions: {
+      allow: [`Read(${root}/**)`, `Edit(${result})`],
+      deny: ["Bash", "WebFetch", "WebSearch", "Agent", "mcp__*"],
+    },
+  };
+  return [
+    "-p", "--name", job.employee.name, "--model", model,
+    "--permission-mode", "dontAsk", "--setting-sources=", "--settings", JSON.stringify(settings),
+    "--strict-mcp-config", "--no-chrome", "--disallowedTools", "mcp__*",
+    "--tools", "Read,Write,Edit",
+    "--max-turns", String(MAX_TURNS), "--no-session-persistence", "--output-format", "stream-json", "--verbose",
+  ];
+}
+
+export function chiefChildEnvironment(env) {
+  const allowed = ["HOME", "USER", "LOGNAME", "PATH", "TMPDIR", "LANG", "LC_ALL"];
+  return Object.fromEntries(Object.entries(env).filter(([name]) => allowed.includes(name)));
+}
+
+function tokens(usage) {
+  if (!Number.isSafeInteger(usage?.input_tokens) || !Number.isSafeInteger(usage?.output_tokens)) return null;
+  return ["input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"]
+    .reduce((total, key) => {
+      const count = usage[key] ?? 0;
+      return Number.isSafeInteger(count) && count >= 0 ? total + count : NaN;
+    }, 0);
+}
+
+export function readChiefRunBudget() {
+  const byMessage = new Map();
+  let total = 0;
+  return (event) => {
+    if (event.type === "assistant" && event.message?.id) {
+      const count = tokens(event.message.usage);
+      if (Number.isFinite(count)) {
+        const before = byMessage.get(event.message.id) ?? 0;
+        if (count > before) {
+          byMessage.set(event.message.id, count);
+          total += count - before;
+        }
+      }
+      if (total >= MAX_TOKENS) return "The session reached its token limit.";
+    }
+    if (event.type !== "result") return null;
+    if (event.subtype === "error_max_turns" || event.num_turns > MAX_TURNS) return "The session reached its turn limit.";
+    if (event.is_error) return null;
+    const count = tokens(event.usage);
+    if (!Number.isFinite(count) || !Number.isSafeInteger(event.num_turns)) return "The session did not report its usage.";
+    return Math.max(total, count) >= MAX_TOKENS ? "The session reached its token limit." : null;
+  };
+}
+
+function spawnClaude({ prompt, model, cwd, signal, job }) {
   return new Promise((resolve) => {
-    const root = `/${cwd}`;
-    const settings = {
-      permissions: {
-        allow: [`Read(${root}/**)`, `Edit(${root}/result-SESSION.json)`],
-        deny: ["Bash", "WebFetch", "WebSearch", "Agent", "mcp__*"],
-      },
-    };
-    const args = [
-      "-p", "--name", job.employee.name, "--model", model,
-      "--permission-mode", "dontAsk", "--setting-sources=", "--settings", JSON.stringify(settings),
-      "--strict-mcp-config", "--disallowedTools", "mcp__*",
-      "--tools", "Read,Write,Edit,Glob,Grep",
-      "--max-turns", "40", "--no-session-persistence", "--output-format", "json",
-    ];
-    let withheld = [];
-    const child = spawn("claude", args, { cwd, stdio: ["pipe", "pipe", "pipe"], env: claudeChildEnv(process.env, (names) => (withheld = names)) });
-    onLine?.(strippedNote(withheld));
+    if (signal.aborted) return resolve({ code: -1, out: "", err: "", stopped: "The session was stopped before it started." });
+    const args = chiefClaudeArgs({ model, cwd, job });
+    const child = spawn("claude", args, { cwd, stdio: ["pipe", "pipe", "pipe"],
+      env: claudeChildEnv(chiefChildEnvironment(process.env)) });
     let out = "";
     let err = "";
-    child.stdout.on("data", (d) => {
-      out += String(d);
-      onLine?.(`claude: ${out.length} bytes`);
+    let stopped;
+    let receivedResult = false;
+    const budget = readChiefRunBudget();
+    const stop = (reason) => {
+      stopped ??= reason;
+      child.kill("SIGKILL");
+    };
+    const onAbort = () => stop("The session ran out of time or its lease was revoked.");
+    signal.addEventListener("abort", onAbort, { once: true });
+    const output = createInterface({ input: child.stdout, crlfDelay: Infinity });
+    output.on("line", (line) => {
+      let event;
+      try { event = JSON.parse(line); } catch { return; }
+      if (!event || typeof event !== "object") return;
+      const limit = budget(event);
+      if (limit) stop(limit);
+      if (event.type === "result") {
+        out = line;
+        receivedResult = event.subtype === "success" && event.is_error === false;
+      }
     });
-    child.stderr.on("data", (d) => (err += String(d)));
-    const onAbort = () => child.kill("SIGKILL");
-    signal?.addEventListener("abort", onAbort, { once: true });
-    child.on("error", (e) => resolve({ code: -1, out, err: `${err}\n${e.message}\n${strippedNote(withheld)}` }));
+    child.stderr.on("data", (d) => { if (err.length < 4096) err = (err + String(d)).slice(0, 4096); });
+    child.stdin.on("error", () => { /* The process can exit before reading stdin. */ });
+    child.on("error", (e) => { err = /^(?:ENOENT|EACCES)$/.test(e.code) ? `spawn claude ${e.code}` : ""; });
     child.on("close", (code) => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve({ code, out, err: code === 0 ? err : `${err}\n${strippedNote(withheld)}` });
+      signal.removeEventListener("abort", onAbort);
+      if (!receivedResult && code === 0) code = -1;
+      resolve({ code, out, err, stopped });
     });
     child.stdin.end(prompt);
   });
@@ -146,27 +238,33 @@ export async function run(job, ctx) {
   const progress = ctx.progress ?? (() => {});
   if (job.phase !== PHASE) return { phase: PHASE, status: "failed", reason: `a partner session has one phase, SESSION (got ${job.phase})` };
   if (!job.employee?.name) return { phase: PHASE, status: "failed", reason: "the session has no chief assigned" };
+  const seconds = Number.isSafeInteger(job.max_seconds) && job.max_seconds > 0 ? Math.min(job.max_seconds, MAX_SECONDS) : MAX_SECONDS;
+  const timeout = AbortSignal.timeout(seconds * 1000);
+  const signal = ctx.signal ? AbortSignal.any([ctx.signal, timeout]) : timeout;
   const workDir = sessionDirFor(job.card?.id);
   const attachmentsDir = path.join(workDir, "attachments");
   const resultPath = path.join(workDir, "result-SESSION.json");
-  mkdirSync(attachmentsDir, { recursive: true });
+  mkdirSync(attachmentsDir, { recursive: true, mode: 0o700 });
   if (existsSync(resultPath)) rmSync(resultPath);
   for (const a of job.attachments ?? []) {
+    if (signal.aborted) break;
     const target = path.join(attachmentsDir, path.basename(String(a.filename ?? a.id)));
     if (existsSync(target)) continue;
     try {
-      await fetchAttachment(a.path, target, ctx.env);
+      await fetchAttachment(job.card.id, a.path, target, ctx.env, signal);
     } catch {
       progress("an attachment could not be loaded");
     }
   }
   const prompt = buildSessionPrompt(job, readFileSync(PROMPT_FILE, "utf8"), { workDir, attachmentsDir, resultPath });
   progress("session started");
-  const opts = { job, phase: PHASE, prompt, model: job.model, cwd: workDir, addDirs: [workDir], jobDir: workDir, materialDirs: [attachmentsDir], signal: ctx.signal, onLine: progress };
-  const turn = await runModel(opts, { runBrain: () => spawnClaude(opts), workerUsable: () => false });
-  const result = existsSync(resultPath) ? readFileSync(resultPath, "utf8") : null;
+  const opts = { job, phase: PHASE, prompt, model: job.model, cwd: workDir, addDirs: [workDir], jobDir: workDir, materialDirs: [attachmentsDir], signal, onLine: progress };
+  const turn = await runModel(opts, { runBrain: () => spawnClaude(opts), workerUsable: () => ({ ok: false, why: "the chief fallback is unavailable" }) });
+  if (turn.stopped) return { phase: PHASE, status: "failed", reason: turn.stopped };
+  const result = turn.code === 0 && existsSync(resultPath) ? readFileSync(resultPath, "utf8") : null;
   const spent = spentReport(PHASE, turn, result);
   if (spent) return spent;
+  if (turn.code !== 0) return { phase: PHASE, status: "failed", reason: "The session process exited before a successful result." };
   return readSessionResult(result);
 }
 

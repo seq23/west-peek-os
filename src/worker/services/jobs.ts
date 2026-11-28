@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { operatingStopped } from "./chiefControls";
 import type { Env } from "../env";
 import type { RouteContext } from "../router";
 import { json } from "../router";
@@ -874,6 +875,7 @@ export async function runJob(
   jobKeyOrId: string,
   opts: { trigger: "SCHEDULED" | "MANUAL"; now?: Date; idempotencyKey?: string } ,
 ): Promise<RunJobResult> {
+  if (await operatingStopped(env)) throw new JobError(409, "operations_paused", "The owner paused West Peek OS agents.");
   const job = await getJob(env, jobKeyOrId);
   if (!job) throw new JobError(404, "not_found");
   const authz = await authorize(env, actor, "job_run.execute", { objectType: "scheduled_job", objectId: job.id });
@@ -1247,6 +1249,7 @@ export async function runDueJobs(
   now: Date,
   opts: { limit?: number } = {},
 ): Promise<Array<{ job_key: string; status: string; summary: string }>> {
+  if (await operatingStopped(env)) return [];
   const limit = opts.limit ?? 1;
   if (limit === 0) return runDueJobsAll(env, now);
   const dueFirst = (
@@ -1319,6 +1322,7 @@ async function serveArtifactsOnTickSafely(env: Env, now: Date, results: Array<{ 
 
 /** The whole-tick behaviour this replaced: sweeps, then every due job. The manual route keeps it. */
 export async function runDueJobsAll(env: Env, now: Date): Promise<Array<{ job_key: string; status: string; summary: string }>> {
+  if (await operatingStopped(env)) return [];
   /*
    * SWEEP BEFORE RUNNING, every tick. `closeAbandonedReports` was already written and correct, but
    * its only caller was the top of the once-daily brief — so a brief that died at 06:00 stayed

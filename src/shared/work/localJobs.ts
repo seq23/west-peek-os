@@ -161,7 +161,7 @@ export const LOCAL_JOB_KINDS: readonly LocalJobKindSpec[] = [
     script: "scripts/duties/partner-session.mjs",
     promptFile: "scripts/duties/partner-session-prompt.md",
     phases: {
-      SESSION: { model: CLAUDE_SEAT_START, maxSeconds: 2 * 60 * 60, purpose: "Work the partner's email as one session: do every clear ask, ask about the unclear words with options, report each ask." },
+      SESSION: { model: CLAUDE_SEAT_START, maxSeconds: 2 * 60 * 60, purpose: "Work the partner request or scheduled wake in one session. Report what was completed and which decisions remain open." },
     },
     queueMaxSeconds: LOCAL_JOB_QUEUE_SECONDS,
   },
