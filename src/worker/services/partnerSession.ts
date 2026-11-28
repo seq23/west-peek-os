@@ -371,7 +371,7 @@ export async function runPartnerSessionCard(env: Env, sweepCard: SessionCard, no
     if (run && row.applied_run_id === run.id) {
       const report = JSON.parse(row.report_json ?? "{}") as { asks?: SessionAsk[]; reply?: string };
       const asks = report.asks ?? [];
-      if (row.source === "EMAIL" && asks.some((a) => a.status === "QUESTION")) return held("Waiting for the partner’s answer to the question; the rest is done or running.", QUESTION_WAIT_HOURS * 60);
+      if (asks.some((a) => a.status === "QUESTION")) return held("Waiting for the partner’s answer to the question; the rest is done or running.", QUESTION_WAIT_HOURS * 60);
       if (asks.length && !asks.some((a) => a.status === "IN_PROGRESS")) {
         /*
          * THE WORK FINISHED AND THE FINAL REPLY WAS HELD BACK (plan step 7's guard, services/partnerUnderstood.ts). No seat
@@ -419,7 +419,9 @@ async function applySessionRun(env: Env, card: SessionCard, row: PartnerSessionR
 
   const questions = report.asks.filter((a) => a.status === "QUESTION");
   const going = report.asks.filter((a) => a.status === "IN_PROGRESS");
-  if (questions.length && row.source === "EMAIL") {
+  // ASKED BY EMAIL FROM EVERY SOURCE (hard stop 11; review of #618, Step 2 gap 3): a question from a page message or a
+  // daily wake goes to the chief's own partner (the verified requester), never only onto the page.
+  if (questions.length) {
     const asked = list(row.asked_json);
     const fresh = questions.filter((q) => !asked.includes(q.words));
     // ONE QUESTION EMAIL PER ROUND (Sequoia, 15 Nov 2026): every unclear item of this round in one numbered email on
@@ -428,7 +430,7 @@ async function applySessionRun(env: Env, card: SessionCard, row: PartnerSessionR
     const cause = `session-question:${await questionRound(env, card.id)}`;
     if (fresh.length && !(await alreadyTold(env, card.id, "QUESTION", cause))) {
       const who = await whoWorks(env, card.owner_id);
-      await replyToRequester(env, card, "BLOCKED", who, fresh.map((q) => `${q.words}: ${q.options.join(" / ")}`).join("\n"), { kind: "QUESTION", cause }, questionEmail(fresh, going));
+      await replyToRequester(env, { ...card, requested_by_email: row.requested_by }, "BLOCKED", who, fresh.map((q) => `${q.words}: ${q.options.join(" / ")}`).join("\n"), { kind: "QUESTION", cause }, questionEmail(fresh, going));
       await env.WP_OS_DB.prepare("UPDATE partner_session SET asked_json = ?2 WHERE work_card_id = ?1").bind(card.id, JSON.stringify([...asked, ...fresh.map((q) => q.words)])).run();
     }
   }
@@ -439,7 +441,7 @@ async function applySessionRun(env: Env, card: SessionCard, row: PartnerSessionR
     if (parked.parked) return { finished: false, blocked: false, progressed: true, held: true, waitUntil: new Date(now.getTime() + 6 * 60_000).toISOString(), detail: "Queued to continue the open requests." };
   }
   // Held for his answer only while a question he was actually sent is unanswered.
-  const waitingOnHim = row.source === "EMAIL" && questions.length > 0 && list((await readSession(env, card.id))?.asked_json).length > list(row.answers_json).length;
+  const waitingOnHim = questions.length > 0 && list((await readSession(env, card.id))?.asked_json).length > list(row.answers_json).length;
   if (waitingOnHim) {
     await env.WP_OS_DB.prepare("UPDATE work_card SET state = 'IN_PROGRESS', next_action = ?2 WHERE id = ?1").bind(card.id, `Waiting for his answer on: ${questions.map((q) => `"${q.words.slice(0, 60)}"`).join(", ")}`.slice(0, 900)).run();
     return { finished: false, blocked: false, progressed: true, held: true, waitUntil: new Date(now.getTime() + QUESTION_WAIT_HOURS * 3600_000).toISOString(), detail: report.asks.map(askLine).join("\n") };

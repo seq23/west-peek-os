@@ -176,7 +176,7 @@ async function centralTime(iso: string): Promise<string> {
   return (await import("./partnerProgress")).centralTime(iso);
 }
 
-/** Her confirmation, sent straight to her (the partner lane is not an agent, so it still goes while agents are paused). */
+/** Her confirmation, sent straight to her through the partner lane, which still goes while agents are paused. */
 async function confirmControl(env: Env, operation: "STOP_EVERYTHING" | "RESUME", now: number): Promise<void> {
   const at = await centralTime(new Date(now).toISOString());
   if (operation === "STOP_EVERYTHING") {
@@ -194,9 +194,10 @@ async function confirmControl(env: Env, operation: "STOP_EVERYTHING" | "RESUME",
 }
 
 async function confirm(env: Env, what: string, tldr: string, sections: { label: string; bullets: string[] }[]): Promise<void> {
-  const { sendPartnerEmail } = await import("./execEmail");
-  const out = await sendPartnerEmail(env, {
-    to: OWNER.email,
+  // Through the one lane every employee's email takes (validate:employee-lane); a partner recipient sends directly.
+  const { sendOrPreview } = await import("./previewApproval");
+  const out = await sendOrPreview(env, {
+    to: OWNER.email, cardAsked: null,
     email: { employee: "Wren", what, tldr, tldrBullets: [], sections, details: null },
     objectType: "owner_operating_control", objectId: "1", firmScope: "west-peek", actorId: "owner_control",
     events: { sent: "operations.control_confirmed", notSent: "operations.control_confirmation_not_sent" },
