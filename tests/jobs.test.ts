@@ -84,8 +84,17 @@ afterAll(async () => {
   await disposeTestDb(t);
 });
 
+it("ships both chief wakes PAUSED, so landing runs no empty daily session (review of #618, F5)", async () => {
+  const wakes = await t.db.prepare("SELECT job_key, status FROM scheduled_job WHERE job_key LIKE '%_daily_wake' ORDER BY job_key").all();
+  expect(wakes.results).toEqual([{ job_key: "walker_daily_wake", status: "PAUSED" }, { job_key: "wren_daily_wake", status: "PAUSED" }]);
+  const ran = await runDueJobs(env, new Date("2026-11-27T16:05:00.000Z"), { limit: 0 });
+  expect(ran.filter((r) => r.job_key.endsWith("_daily_wake"))).toEqual([]);
+});
+
 it("files one scheduled session for each chief and their own partner on the default database", async () => {
   const now = new Date("2026-11-27T16:00:00.000Z");
+  // The owner turns a wake on (it ships PAUSED); from then it files the session.
+  await t.db.prepare("UPDATE scheduled_job SET status = 'ACTIVE' WHERE job_key LIKE '%_daily_wake'").run();
   for (const partner of PARTNERS) {
     const chief = chiefOfStaffFor(partner.fullName);
     const key = `${chief.toLowerCase()}_daily_wake`;

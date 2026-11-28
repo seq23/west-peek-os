@@ -192,6 +192,23 @@ describe("step 4 · start the clear parts, ask about the rest", () => {
     expect(numbered.map((x) => x.bullets)).toEqual(six.map((q) => [`What is missing: ${q.why}`, `My best reading: ${q.options[0]}`]));
   });
 
+  it("an ask-first question from a page message is emailed to the chief's partner, never left only on the page (hard stop 11)", async () => {
+    const accepted = await handleRequest(new Request("https://test.local/api/workforce/employees/aie_walker/messages", {
+      method: "POST", headers: { "x-wpos-dev-user": SCOOTER, "content-type": "application/json" },
+      body: JSON.stringify({ message: "Book the venue we talked about for the fixture showcase." }),
+    }), env);
+    const { id } = await accepted.json() as { id: string };
+    await runPartnerSessionCard(env, await card(id));
+    const [first] = await runs(id);
+    await macReports(first!.id, { phase: "SESSION", status: "ok", asks: [
+      { words: "Book the venue", status: "QUESTION", why: "booking commits money, so it is yours to decide", options: ["I hold it and you pay", "skip it"] },
+    ] });
+    await runPartnerSessionCard(env, await card(id));
+    const sent = await env.WP_OS_DB.prepare("SELECT COUNT(*) AS n FROM work_card_notice WHERE work_card_id = ?1 AND kind = 'QUESTION' AND sent_to = ?2").bind(id, SCOOTER).first<{ n: number }>();
+    expect(sent!.n).toBe(1);
+    expect((await card(id)).state).toBe("IN_PROGRESS");
+  });
+
   it("a report that asks without options is refused, never emailed as a question", async () => {
     const id = await emailed("Vague", "Handle the usual.");
     await runPartnerSessionCard(env, await card(id));

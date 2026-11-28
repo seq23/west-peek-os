@@ -287,8 +287,8 @@ function ChiefMessages({ id, name, active }: { id: string; name: string; active:
       {data?.messages.map((message) => (
         <article className="card" key={message.id}>
           <p className="muted small">{chiefDate.format(new Date(message.created_at))} Central</p>
-          <p>{message.source === "PAGE" ? message.request_text : "Daily session"}</p>
-          {message.report?.reply && <p>{message.report.reply}</p>}
+          <p><strong>{message.source === "PAGE" ? "You" : "Schedule"}:</strong> {message.source === "PAGE" ? message.request_text : "Daily session"}</p>
+          {message.report?.reply && <p><strong>{name}:</strong> {message.report.reply}</p>}
           {message.report?.asks.length ? <ul>{message.report.asks.map((ask, index) => (
             <li key={index}>{ask.words}{ask.why && ` — ${ask.why}`}{ask.options.length > 0 && <ul>{ask.options.map((option) => <li key={option}>{option}</li>)}</ul>}</li>
           ))}</ul> : null}

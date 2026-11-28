@@ -119,3 +119,14 @@ describe("chief draft broker", () => {
     expect(actionsEnabled.published.concat(protectedDiff.published, privatePatch.published)).toEqual([]);
   });
 });
+
+describe("chief-signoff never runs PR code with repo secrets (hard stop 3)", () => {
+  it("checks out main only, so a pull_request_target run never executes the PR's own files", async () => {
+    const { readFileSync } = await import("node:fs");
+    const workflow = readFileSync(new URL("../.github/workflows/chief-signoff.yml", import.meta.url), "utf8");
+    const refs = [...workflow.matchAll(/^\s*ref:\s*(\S+)/gm)].map((m) => m[1]);
+    expect(refs).toEqual(["refs/heads/main"]);
+    expect(workflow).not.toMatch(/github\.event\.pull_request\.head|head_ref|head\.sha/);
+  });
+});
+

@@ -1,4 +1,6 @@
-# The full suite runs on demand. A fixture-only journey checks chief messaging on affected PRs.
+# ON DEMAND ONLY (owner, 2 Oct 2026: build first, test in batches; the merge gate is ci.yml). The full suite runs
+# only on workflow_dispatch. One exception (#618): a fixture-only journey checks chief messaging at 390 px on PRs
+# that touch it.
 name: Playwright
 
 on:
